@@ -2496,7 +2496,10 @@ class PrismSolver:
                     # (step 5, core/state/policy.py). An output-changing policy is taken only with a measured cost;
                     # none is declared yet, so the decision is a refusal that names what was considered.
                     try:
-                        decision = self._state_policy_for(container, target_dtype_str, remaining)
+                        decision = self._state_policy_for(
+                            container, target_dtype_str, remaining,
+                            discrete=not any(d.has_unified_memory for d in profile.devices),
+                            host_bytes=(profile.cpu.ram_mb << 20) if profile.cpu else 0)
                     except RuntimeError as pexc:
                         self._rejected.append((strat_name, float(score), f"KV cache does not fit: {exc}; {pexc}"))
                         continue
@@ -4172,7 +4175,8 @@ class PrismSolver:
         """`_kv_min_tokens` in bytes, at the per-position cost `_compute_kv_cache_plan` uses."""
         return self._kv_min_tokens(container) * self._kv_token_bytes(container, dtype_str)
 
-    def _state_policy_for(self, container, target_dtype: str, room_bytes: int):
+    def _state_policy_for(self, container, target_dtype: str, room_bytes: int, discrete: bool = False,
+                          host_bytes: int = 0):
         """The state engine's policy when the whole cache does not fit (core/state/policy.py): candidates priced from
         the container's declared KV at the minimum the request needs. `pages` at full precision; `offload` only on a
         DISCRETE device (on unified memory the host is the same pool); output-changing ones carry the quality cost the
@@ -4184,6 +4188,11 @@ class PrismSolver:
                  PolicyCandidate("quantize_kv", need // 2, exact=False,
                                  quality_cost=(costs.get("quantize_kv") or {}).get("cost"),
                                  cost_source=(costs.get("quantize_kv") or {}).get("source", ""))]
+        if discrete and need <= int(host_bytes):
+            # the whole cache on the host, one layer's positions on the device at a time, double-buffered so the next
+            # layer's copy overlaps this layer's attention: exact, slower by the copies
+            layers = int(self._kv_declared(container)[1]["layers"])
+            cands.append(PolicyCandidate("offload", 2 * -(-need // layers), exact=True))
         return choose_policy(cands, int(room_bytes))
 
     def _compute_kv_cache_plan(

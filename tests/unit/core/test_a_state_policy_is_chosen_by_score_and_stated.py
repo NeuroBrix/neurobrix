@@ -52,3 +52,20 @@ def test_the_plan_records_its_state_policy_and_says_it(monkeypatch):
     assert p.kv_cache_plan is not None
     assert p.state_policy == "pages" and p.state_policy_reason.startswith("pages: the whole cache fits")
     assert "state policy pages: the whole cache fits" in p.selection_reason
+
+
+def test_offload_is_a_candidate_only_on_a_discrete_device_whose_host_holds_the_cache():
+    """A cache that does not fit the card's room is offloaded (exact: one layer's positions on the device at a time,
+    double-buffered) on a discrete card whose host holds it; never on unified memory, where the host is the same pool,
+    nor when the host cannot hold it — then the rung still refuses, naming what it considered."""
+    from neurobrix.core.prism.solver import PrismSolver
+    from neurobrix.core.state.policy import StatePolicyRefused
+    s = PrismSolver.__new__(PrismSolver)
+    s._kv_min_bytes = lambda c, d: 32 << 20
+    s._kv_declared = lambda c: ("lm", {"layers": 32})
+    d = s._state_policy_for(None, "bfloat16", 4 << 20, discrete=True, host_bytes=1 << 30)
+    assert d.name == "offload", d
+    with pytest.raises(StatePolicyRefused):
+        s._state_policy_for(None, "bfloat16", 4 << 20, discrete=False, host_bytes=1 << 30)
+    with pytest.raises(StatePolicyRefused):
+        s._state_policy_for(None, "bfloat16", 4 << 20, discrete=True, host_bytes=16 << 20)
