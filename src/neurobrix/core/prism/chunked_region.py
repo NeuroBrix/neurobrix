@@ -198,6 +198,11 @@ class Layout:
 class Verdict:
     kind: str
     reason: str = ""
+    #: A local op whose output row reads its input rows within this radius (a same-padded convolution's
+    #: dilation * (kernel - 1) / 2), in rows of its INPUT along the axis. A stretch holding such ops runs on
+    #: slices widened by their accumulated receptive field and keeps each slice's zone of responsibility
+    #: (NIST, exact tile-based inference: halo = half the receptive field) — `RegionPlan.margin`.
+    halo: int = 0
 
 
 _POINTWISE = frozenset("""
@@ -444,6 +449,8 @@ class TokenAxis:
             return self._rule_pad(op, s_in[0], lays[s_in[0]], outs)
         if ty == "convolution":
             return self._rule_conv(op, ins, s_in, lays, outs)
+        if ty in ("upsample_nearest2d", "upsample_nearest1d", "upsample_nearest3d", "pixel_shuffle"):
+            return self._rule_scale(ty, op, s_in[0], lays[s_in[0]], outs)
         if ty == "native_group_norm":
             lay = lays[s_in[0]]
             if s_in != ins[:1] or lay.axis != 0:
@@ -732,9 +739,36 @@ class TokenAxis:
             pad = args[4] if len(args) > 4 and isinstance(args[4], list) else []
             transposed = args[6] if len(args) > 6 else False
             one = lambda xs: (xs[k] if k < len(xs) else (xs[0] if len(xs) == 1 else None))
-            if transposed or w[lay.axis] != 1 or one(stride) not in (1, None) or one(pad) not in (0, None):
-                raise _Mix("a convolution whose kernel spans the axis")
+            dil = args[5] if len(args) > 5 and isinstance(args[5], list) else []
+            kk, d, p = w[lay.axis], one(dil) or 1, one(pad) or 0
+            if transposed or one(stride) not in (1, None) or not isinstance(kk, int):
+                raise _Mix("a convolution whose kernel spans the axis with a stride or transposed")
+            if kk != 1:
+                # a SAME convolution (its padding keeps the extent): output row r reads input rows
+                # r - d*(k-1)/2 .. r + d*(k-1)/2 — local, run on a slice widened by that radius
+                if (d * (kk - 1)) % 2 or p != d * (kk - 1) // 2:
+                    raise _Mix("a convolution whose padding does not keep the axis' extent")
+                return Verdict(SLICE, halo=d * (kk - 1) // 2), {outs[0]: self._carry(outs[0], lay)}
+            if one(pad) not in (0, None):
+                raise _Mix("a pointwise convolution padding the axis")
         return Verdict(SLICE), {outs[0]: self._carry(outs[0], lay)}
+
+    def _rule_scale(self, ty, op, src, lay, outs) -> Tuple[Verdict, Dict[str, Layout]]:
+        """Nearest upsampling and pixel shuffle along a spatial axis: output row r is input row r // c
+        (c the constant factor) — a slice of S keeps mapping to whole output rows, the inner extent
+        times c. Any other placement of the axis (channels, a non-constant factor) mixes."""
+        self._no_s_args(op, allow_lists=True)
+        if lay.axis < 2 or lay.inner is None:
+            raise _Mix(f"{ty} over a non-spatial axis")
+        axis, m, why = self.s_dim(outs[0])
+        if axis is None:
+            raise _Mix(why)
+        if axis != lay.axis:
+            raise _Mix(f"{ty} moves the axis")
+        c = m.div(lay.dim)
+        if c is None or c.atoms or c.coef < 1:
+            raise _Mix(f"{ty} scales the axis by a non-constant factor")
+        return Verdict(SLICE), {outs[0]: Layout(axis, m, lay.inner * Mono(c.coef))}
 
     def _rule_sdpa(self, op, ins, s_in, lays, outs) -> Tuple[Verdict, Dict[str, Layout]]:
         self._no_s_args(op)
@@ -808,6 +842,11 @@ class RegionPlan:
     outputs: List[str] = field(default_factory=list)
     contractions: List[str] = field(default_factory=list)
     layouts: Dict[str, Layout] = field(default_factory=dict)
+    #: The halo of the stretch, in units of S: each slice [a, b) runs on [a - margin, b + margin] (clipped at the
+    #: axis' true ends, where the ops' own padding is the real one) and keeps [a, b) — the accumulated receptive
+    #: field of its local ops (`Verdict.halo` over each op's rows per unit of S), summed exactly and rounded up once:
+    #: the field itself, so the kept rows are exact.
+    margin: int = 0
 
 
 def region_reads(ax: TokenAxis, first: int, last: int) -> Tuple[List[str], Set[str]]:
@@ -840,11 +879,26 @@ def plan_region(ax: TokenAxis, first: int, last: int,
             touched = True
     if not touched:
         return None, "no op in the stretch carries the axis"
+    from fractions import Fraction
+    margin = Fraction(0)          # the receptive field in units of S, summed exactly, rounded up once
+    for i in range(first, last + 1):
+        v = ax.verdicts[i]
+        if not v.halo:
+            continue
+        src = next((t for t in (ax.ops.get(ax.order[i]) or {}).get("input_tensor_ids") or [] if t in ax.layout), None)
+        lay = ax.layout.get(src) if src else None
+        if lay is None or lay.inner is None or lay.inner.atoms or ax.p_of(lay) is None or not ax.p_of(lay).is_one():
+            return None, f"{ax.order[i]} reads rows around its own along an axis folded with another extent"
+        margin += Fraction(v.halo, lay.inner.coef)
+    if margin and any(ax.verdicts[i].kind == CONTRACT for i in range(first, last + 1)):
+        return None, ("a stretch of local ops with a halo holds a contraction: its overlapping slices would "
+                      "count the margin rows twice in the partial sums")
     reads, produced = region_reads(ax, first, last)
     outputs = [t for uid in ax.order[first:last + 1]
                for t in ((ax.ops.get(uid) or {}).get("output_tensor_ids") or [])
                if (ax.readers.get(t) or [-1])[-1] > last or t in ax.graph_outputs or t in protected]
     plan = RegionPlan(ax.sym, first, last, ax.order[first], ax.order[last])
+    plan.margin = math.ceil(margin)
     plan.inputs = reads
     plan.outputs = outputs
     for t in list(reads) + [c for c in carriers if c not in reads]:

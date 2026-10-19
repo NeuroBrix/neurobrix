@@ -229,7 +229,11 @@ class ChunkedPiece:
             names = ex._dag.get("segment_input_names") or []
             ex.load_weights(nbx_path, component)
             try:
+                m = plan.margin if cp.chunked else 0
                 for start, length in (extents if cp.chunked else [(0, total)]):
+                    # the slice read: widened by the stretch's halo, clipped at the axis' true ends
+                    in_start = max(0, start - m)
+                    in_len = min(total, start + length + m) - in_start
                     sub_feed = {}
                     for n in names:
                         tid = self._tid(n)
@@ -243,7 +247,7 @@ class ChunkedPiece:
                             raise RuntimeError(f"chunked piece: pass input {n!r} is neither fed nor made")
                         lay = plan.layouts.get(tid)
                         if cp.chunked and lay is not None and tid in sliced_in:
-                            v = take_slice(v, lay, total, inner[tid], start, length)
+                            v = take_slice(v, lay, total, inner[tid], in_start, in_len)
                         sub_feed[n] = v
                     out = ex.run(sub_feed, *args, **kwargs) or {}
                     meta = ex._dag.get("tensors") or {}
@@ -261,6 +265,8 @@ class ChunkedPiece:
                         elif tid in plan.contractions:
                             done[tid] = own(part)
                         elif cp.chunked and lay is not None:
+                            if m:      # keep the slice's own rows: the margin's rows read padding, not the image
+                                part = take_slice(part, lay, in_len, inner[tid], start - in_start, length)
                             if start == 0:
                                 done[tid] = part.new_empty(whole_shape(part.shape, lay, total, length))
                             put_slice(done[tid], part, lay, total, inner[tid], start, length)
