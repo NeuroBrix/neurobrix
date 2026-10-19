@@ -2155,6 +2155,30 @@ def compare(a) -> int:
     return 0
 
 
+def _derive_job(args):
+    """One (mode, request, rung) derivation in a worker: (\"ok\", (derived, unhandled)), or the refusal by name."""
+    model, hw, mode, rung, req = args
+    try:
+        derived, _plan, _P, unhandled = derive_keys(model, hw, mode, rung, req)
+    except PlanRefused as e:
+        return ("plan_refused", str(e))
+    except SystemExit as e:
+        return ("system_exit", str(e))
+    return ("ok", (list(derived), collections.Counter(unhandled)))
+
+
+def _derive_jobs(model, hw, jobs):
+    """The results of `jobs` in their order — forked workers, one per job up to the machine's cores
+    (`os.cpu_count()`, a capability read from the machine); a single job runs in this process."""
+    args = [(model, hw, mode, rung, req) for mode, _ri, req, rung in jobs]
+    workers = min(len(args), os.cpu_count() or 1)
+    if workers <= 1:
+        return [_derive_job(a) for a in args]
+    import multiprocessing as _mp
+    with _mp.get_context("fork").Pool(workers) as pool:
+        return pool.map(_derive_job, args, chunksize=1)
+
+
 def table(a) -> int:
     """THE census table of the profile's memory class, DERIVED (the owner's red line: the census is a
     derivation from graph.json + the profile through the launcher's key functions, never an execution).
@@ -2198,20 +2222,22 @@ def table(a) -> int:
         container = CC._graph_sha(model)
         rows, refused, notes, keyless = [], [], collections.Counter(), 0
         unrunnable = []                    # (mode, rung): Prism's own refusal — the model does not run there
-        for mode in modes:
-            for ri, req in enumerate(reqs):
-                for rung in rungs:
-                    try:
-                        derived, _plan, _P, unhandled = derive_keys(model, hw, mode, rung, req)
-                    except PlanRefused as e:
+        # The (mode, request, rung) derivations are independent: each runs in a forked worker (the
+        # bound profile and every module state inherited), the results consumed in the loop's own order —
+        # the same rows as one process, in a fraction of the wall (the census is CPU-bound, one core each).
+        jobs = [(mode, ri, req, rung) for mode in modes for ri, req in enumerate(reqs) for rung in rungs]
+        for (mode, ri, req, rung), res in zip(jobs, _derive_jobs(model, hw, jobs)):
+                    kind_, payload = res
+                    if kind_ == "plan_refused":
                         if rung == rungs[-1] and not ri:
-                            unrunnable.append(f"{mode} r{rung}: {e}")
+                            unrunnable.append(f"{mode} r{rung}: {payload}")
                         continue
-                    except SystemExit as e:
+                    if kind_ == "system_exit":
                         if rung != rungs[-1] or ri:
                             continue          # refused below the top rung, or the probe: no key there
-                        refused.append(f"{mode} r{rung} request {ri}: {e}")
+                        refused.append(f"{mode} r{rung} request {ri}: {payload}")
                         continue
+                    derived, unhandled = payload
                     # A NOTE is a key derived from the op's own contract (the weight fixes a matmul's
                     # contraction or a convolution's input channels: the op cannot run otherwise) where
                     # the container's annotation disagrees — the key is the run's, the annotation
