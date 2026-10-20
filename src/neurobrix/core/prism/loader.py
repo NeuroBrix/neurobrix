@@ -11,6 +11,8 @@ from typing import List, Optional, Tuple
 
 from neurobrix.core.prism.structure import (
     PrismProfile,
+    ClusterNode,
+    NodeLink,
     DeviceSpec,
     DeviceBrand,
     InterconnectTopology,
@@ -257,6 +259,15 @@ def load_profile(hardware_id: str) -> PrismProfile:
     if cpu_data:
         cpu_config = CPUConfig.from_yaml_dict(cpu_data)
 
+    # Step 6: optional machines and links; absent = the one-node case (PrismProfile.__post_init__)
+    nodes = [ClusterNode(id=str(n["id"]), device_indices=[int(i) for i in n["devices"]],
+                         cpu=CPUConfig.from_yaml_dict(n["cpu"]) if n.get("cpu") else None)
+             for n in (data.get("nodes") or [])]
+    node_links = [NodeLink(node_a=str(l["between"][0]), node_b=str(l["between"][1]),
+                           bandwidth_gbps=float(l["bandwidth_gbps"]), latency_us=float(l["latency_us"]),
+                           tech=str(l.get("tech", "")))
+                  for l in (data.get("node_links") or [])]
+
     return PrismProfile(
         id=data["id"],
         vendor=data.get("vendor", "unknown"),
@@ -264,4 +275,6 @@ def load_profile(hardware_id: str) -> PrismProfile:
         topology=topology,
         cpu=cpu_config,
         preferred_dtype=data.get("preferred_dtype", None),
+        nodes=nodes,
+        node_links=node_links,
     )

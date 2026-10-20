@@ -460,6 +460,27 @@ class InterconnectTopology:
 # =============================================================================
 
 @dataclass
+class ClusterNode:
+    """One machine of a profile (the state engine's step 6, docs/design/state-engine.md §3.3 point 6): its devices, its
+    host memory, its own working set and state pool. A profile that declares no nodes is ONE node holding every device
+    and the profile's CPU — the single machine is the one-node case, never a special one."""
+    id: str
+    device_indices: List[int]
+    cpu: Optional["CPUConfig"] = None
+
+
+@dataclass
+class NodeLink:
+    """A link between two nodes, its bandwidth and latency as the profile declares them (RING over TCP, RDMA over
+    Thunderbolt 5, ...). No cluster profile exists yet: the list is empty on every profile today."""
+    node_a: str
+    node_b: str
+    bandwidth_gbps: float
+    latency_us: float
+    tech: str = ""
+
+
+@dataclass
 class PrismProfile:
     """
     Complete hardware profile for execution planning.
@@ -472,6 +493,31 @@ class PrismProfile:
     topology: InterconnectTopology = field(default_factory=InterconnectTopology)
     cpu: Optional["CPUConfig"] = None  # CPU config from hardware profile
     preferred_dtype: Optional[str] = None  # Override dtype for memory efficiency
+    # Step 6: the machines and the links between them. Empty = ONE node with every device and `cpu` (__post_init__).
+    nodes: List[ClusterNode] = field(default_factory=list)
+    node_links: List[NodeLink] = field(default_factory=list)
+
+    def __post_init__(self):
+        if not self.nodes:
+            self.nodes = [ClusterNode(id=self.id, device_indices=[d.index for d in self.devices], cpu=self.cpu)]
+        seen = [i for n in self.nodes for i in n.device_indices]
+        missing = sorted({d.index for d in self.devices} - set(seen))
+        twice = sorted({i for i in seen if seen.count(i) > 1})
+        if missing or twice:
+            raise ValueError(f"ZERO FALLBACK: profile {self.id!r}: every device belongs to exactly one node — "
+                             f"unplaced {missing}, in two nodes {twice}")
+        names = {n.id for n in self.nodes}
+        for link in self.node_links:
+            if link.node_a not in names or link.node_b not in names:
+                raise ValueError(f"ZERO FALLBACK: profile {self.id!r}: link {link.node_a}-{link.node_b} names a node "
+                                 f"the profile does not declare ({sorted(names)})")
+
+    def node_of(self, device_index: int) -> ClusterNode:
+        """The node holding `device_index` (every device has exactly one, `__post_init__`)."""
+        for n in self.nodes:
+            if device_index in n.device_indices:
+                return n
+        raise KeyError(f"profile {self.id!r}: device {device_index} is on no node")
 
     @property
     def cpu_memory_gb(self) -> float:
