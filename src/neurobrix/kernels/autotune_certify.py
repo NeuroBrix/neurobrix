@@ -678,6 +678,10 @@ def _matmul_oracle_fn(a, b, bias=None):
     return windowed
 
 
+#: the full-size fp64 arrays the softmax oracle holds per element of its window (z, exp(z), the quotient)
+_SOFTMAX_ORACLE_F64_ARRAYS = 3
+
+
 def _softmax_oracle_fn(x, log: bool):
     """The fp64 oracle of a row softmax (or log-softmax) of x [rows, feat], whole under the cap, row-windowed above."""
     m, n = x.shape[-2], x.shape[-1]
@@ -685,9 +689,16 @@ def _softmax_oracle_fn(x, log: bool):
     def rows(r0, r1):
         z = _f64(x[r0:r1, :])
         z = z - z.max(axis=-1, keepdims=True)
-        return z - np.log(np.exp(z).sum(axis=-1, keepdims=True)) if log else \
-            np.exp(z) / np.exp(z).sum(axis=-1, keepdims=True)
-    wins = _row_windows(m, n, 1)
+        if log:
+            return z - np.log(np.exp(z).sum(axis=-1, keepdims=True))
+        e = np.exp(z)
+        return e / e.sum(axis=-1, keepdims=True)
+    # priced as the fp64 work it does per element — the shifted row, its exponential and the quotient, each a full
+    # fp64 array (`_SOFTMAX_ORACLE_F64_ARRAYS`) — not as one multiply-add: priced at one, a 1 310 720 x 1 024 key
+    # computed its whole oracle on the host (58 GB resident) and read the whole 5.4 GB output back per candidate,
+    # 2.5 h on one key and the certification timed out (2026-10-20); windowed, the candidates are read on the rows
+    # the oracle holds (`device_slices`)
+    wins = _row_windows(m, n, _SOFTMAX_ORACLE_F64_ARRAYS)
     if wins is None:
         return lambda: rows(0, m)
     return lambda: RowWindowedOracle([((r0, r1), rows(r0, r1)) for (r0, r1) in wins], m)
