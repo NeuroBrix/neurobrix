@@ -1281,11 +1281,28 @@ def _writable_buffers(values):
         if not (hasattr(value, "data_ptr") and hasattr(value, "_nbytes")):
             continue
         contiguous = getattr(value, "is_contiguous", None)
+        nbytes = int(value._nbytes)
         if callable(contiguous) and not contiguous() and not _dense(value):
-            return None
-        out.append((int(value.data_ptr()), int(value._nbytes),
-                    getattr(getattr(value, "dtype", None), "name", "?")))
+            if not _dense_broadcast(value):
+                return None
+            # a BROADCAST of a dense buffer (stride 0 on the repeated axes: the attention wrapper's zero / causal bias
+            # read as [B, H, Sq, Sk]) is the bytes it reaches, not its element count's — the span snapshotted and
+            # restored is exactly its buffer (the matrix-unit flash's certification refused it, 2026-10-21)
+            nbytes = (sum((int(n) - 1) * int(st) for n, st in zip(value.shape, value.stride())) + 1) * \
+                int(value.element_size())
+        out.append((int(value.data_ptr()), nbytes, getattr(getattr(value, "dtype", None), "name", "?")))
     return out
+
+
+def _dense_broadcast(value):
+    """A view that repeats a dense buffer along stride-0 axes: its other axes form a gap-free layout (`_dense`)."""
+    kept = [(sh, st) for sh, st in zip(value.shape, value.stride()) if st != 0 and sh != 1]
+    expected = 1
+    for st, sh in sorted((st, sh) for sh, st in kept):
+        if st != expected:
+            return False
+        expected *= sh
+    return any(st == 0 and sh != 1 for sh, st in zip(value.shape, value.stride()))
 
 
 def _dense(value):

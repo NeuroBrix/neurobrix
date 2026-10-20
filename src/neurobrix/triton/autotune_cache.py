@@ -71,6 +71,10 @@ _KERNEL_SITES = (
     ("neurobrix.kernels.ops.baddbmm_op", "baddbmm_kernel"),
     ("neurobrix.kernels.ops.conv2d", "conv2d_forward_kernel"),
     ("neurobrix.kernels.ops.depthwise_conv2d", "depthwise_conv2d_kernel"),
+    # workstream 1: certified per key like the five above (the softmax's module is imported with the wrappers; the
+    # matrix-unit flash's only when an attention takes it — a certification before any attention found no tuner)
+    ("neurobrix.kernels.ops.softmax", "softmax_forward_kernel"),
+    ("neurobrix.kernels.ops.flash_attention_m8n8k4", "flash_attention_m8n8k4_kernel"),
 )
 
 

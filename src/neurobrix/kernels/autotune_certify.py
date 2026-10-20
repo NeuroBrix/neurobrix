@@ -374,7 +374,7 @@ def _key_operands(qual: str, tuner, key: tuple) -> Optional[Dict[str, Any]]:
                 "row_windowed_launch": False}
     if short == "flash_attention_m8n8k4_kernel":
         tq, tk, hd = int(key[0]), int(key[1]), int(key[2])
-        B, H = _FLASH_SYNTH_BATCH_HEADS
+        B, H = _flash_batch_heads(tq, tk, hd, d(0), d(1), d(2))
         ins = [("q", (B, H, tq, hd), d(0)), ("k", (B, H, tk, hd), d(1)), ("v", (B, H, tk, hd), d(2))]
         if d(3) != d(0):
             ins.append(("mask", (B, H, tq, tk), d(3)))
@@ -639,7 +639,9 @@ class RowWindowedOracle:
     def device_slices(self, t):
         """The same row windows, cut on the tensor WHERE IT LIVES (see WindowedOracle)."""
         for (r0, r1), ref in self.blocks:
-            cut = t[r0:r1, :] if len(tuple(t.shape)) == 2 else t[:, r0:r1, :]
+            # the rows are the second-to-last axis whatever the rank (a product's [M, N] or [B, M, N], an
+            # attention's [B, H, Tq, D]: the 4-D output was cut along its heads, 2026-10-21)
+            cut = t[(slice(None),) * (len(tuple(t.shape)) - 2) + (slice(r0, r1), slice(None))]
             yield _materialise(cut), ref
 
 
@@ -686,9 +688,25 @@ def _matmul_oracle_fn(a, b, bias=None):
     return windowed
 
 
-#: (batch, heads) of a synthesised attention: two of each so the grid spans batch and heads as the model's does — the
-#: tile's timing is per query block, the key holds the lengths and the head dim
-_FLASH_SYNTH_BATCH_HEADS = (2, 2)
+def _flash_batch_heads(tq: int, tk: int, hd: int, q, k, v) -> Tuple[int, int]:
+    """(batch, heads) of a synthesised matrix-unit flash: one batch and the fewest heads (a power of two) with which
+    the wrapper's own route (`launch_keys.sdpa_route` at this device's scores budget) takes the flash — the key holds
+    the lengths and the head dim, not the heads, and below the budget the attention takes the math route and never
+    reaches the flash (a 32 768 x 512 key at two heads, 2026-10-21)."""
+    from neurobrix.kernels import launch_keys as LK
+    from neurobrix.kernels import wrappers as W
+    from neurobrix.kernels.nbx_tensor import NBXDtype
+    nbx = {"fp16": NBXDtype.float16, "bf16": NBXDtype.bfloat16, "fp32": NBXDtype.float32}
+    qd, kd, vd = nbx[q], nbx[k], nbx[v]
+    budget = W._sdpa_math_scores_budget_bytes_for(None)
+    rows, chunks = W._sdpa_math_min_chunk_rows(), W._sdpa_math_max_chunks()
+    h = 1
+    while LK.sdpa_route(1, h, tq, tk, hd, hd, budget, rows, chunks,
+                        unit_flash=LK.unit_flash_takes(hd, qd, kd, vd))[0] != "flash":
+        h *= 2
+        if h > (1 << 16):
+            raise ValueError(f"no head count takes the flash route at ({tq}, {tk}, {hd}) — a census defect")
+    return 1, h
 
 
 def _attention_oracle_fn(q, k, v, mask, scale):
@@ -837,8 +855,8 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         # attention wrapper itself (the matrix-unit route it takes for these dtypes and head dim); a mask only where
         # the key's bias dtype is not Q's (the zero bias the wrapper builds otherwise); the fp64 oracle per query row
         tq, tk, hd = int(key[0]), int(key[1]), int(key[2])
-        B, H = _FLASH_SYNTH_BATCH_HEADS
         qd = dts[0] if dts else "fp16"
+        B, H = _flash_batch_heads(tq, tk, hd, qd, dts[1] if len(dts) > 1 else qd, dts[2] if len(dts) > 2 else qd)
         shapes = [((B, H, tq, hd), qd), ((B, H, tk, hd), dts[1] if len(dts) > 1 else qd),
                   ((B, H, tk, hd), dts[2] if len(dts) > 2 else qd), ((B, H, tq, hd), qd)]
         masked = len(dts) > 3 and dts[3] != qd
