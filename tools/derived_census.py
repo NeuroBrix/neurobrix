@@ -935,7 +935,8 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
                 route, rows = LK.sdpa_route(B, H, Tq, Tk, D, Dv, sdpa_budget_bytes, sdpa_min_rows,
                                             sdpa_max_chunks, unit_flash=LK.unit_flash_takes(D, qd, kd, vd))
             if route == "flash":
-                launches = []
+                # on the matrix unit: its certified tile's key; the tl.dot flash forms none (workstream 1)
+                launches = LK.unit_flash_launches(Tq, Tk, D, qd, kd, vd)
             elif route == "chunked":
                 launches = LK.chunked_math_attention_launches(B, H, Hk, Tq, Tk, D, Dv, qd, kd, vd,
                                                              has_native_bf16, rows)

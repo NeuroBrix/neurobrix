@@ -26,6 +26,7 @@ BADDBMM = "neurobrix.kernels.ops.baddbmm_op.baddbmm_kernel"
 CONV2D = "neurobrix.kernels.ops.conv2d.conv2d_forward_kernel"
 DEPTHWISE = "neurobrix.kernels.ops.depthwise_conv2d.depthwise_conv2d_kernel"
 SOFTMAX = "neurobrix.kernels.ops.softmax.softmax_forward_kernel"
+UNIT_FLASH = "neurobrix.kernels.ops.flash_attention_m8n8k4.flash_attention_m8n8k4_kernel"
 
 F32, BF16, F16 = NBXDtype.float32, NBXDtype.bfloat16, NBXDtype.float16
 _HALF = (F16, BF16)
@@ -498,6 +499,17 @@ def unit_flash_takes(D: int, q: NBXDtype, k: NBXDtype, v: NBXDtype) -> bool:
     """The profile's matrix unit runs this attention's flash (`unit_flash`) — the wrappers' route and the derived
     census ask this same function."""
     return unit_flash(D, q, k, v) is not None
+
+
+def unit_flash_launches(Tq: int, Tk: int, D: int, q: NBXDtype, k: NBXDtype, v: NBXDtype) -> List[Launch]:
+    """The flash on the profile's matrix unit (`unit_flash`): its key — the operands' representation on the unit
+    (native / split), the head dim, the query rows' bucket, the keys' bucket and the three dtypes — under which its
+    tile (query rows, keys per step, warps) is certified per key (workstream 1: the profile's hand table of tiles per
+    head dim retired). No key where the unit does not take the attention."""
+    got = unit_flash(D, q, k, v)
+    if got is None:
+        return []
+    return [(UNIT_FLASH, (got[0], int(D), bucket_of("M", Tq), bucket_of("N", Tk), tag(q), tag(k), tag(v)))]
 
 
 def sdpa_route(batch: int, nheads: int, Tq: int, Tk: int, D: int, Dv: int, budget_bytes: int,
