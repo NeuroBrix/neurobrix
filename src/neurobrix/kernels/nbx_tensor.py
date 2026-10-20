@@ -2058,6 +2058,24 @@ class DeviceAllocator:
         return i >= 0 and bases[i] <= ptr < bases[i] + DeviceAllocator._range_size[bases[i]]
 
     @staticmethod
+    def containing(ptr: int):
+        """(base, size) of the live range `ptr` lies in, the NEAREST one: the greatest base at or below `ptr` whose range
+        holds it. In-place expert bindings overlap where two projections share a page; the first range in insertion
+        order resolved a projection to its neighbour's shorter range and a launch read past it (DSV2 triton printed
+        garbage, 2026-10-20). The nearest base is the projection's own binding, which runs to its end. None when no
+        range holds `ptr`. O(log n) plus the ranges walked down past."""
+        ptr = int(ptr)
+        bases = DeviceAllocator._range_bases
+        sizes = DeviceAllocator._range_size
+        i = bisect.bisect_right(bases, ptr) - 1
+        while i >= 0:
+            b = bases[i]
+            if ptr < b + sizes[b]:
+                return b, sizes[b]
+            i -= 1
+        return None
+
+    @staticmethod
     def _range_add(base: int, nbytes: int) -> None:
         """Register a live range for `holds()` — O(log n) insert, kept sorted
         so a launch pays one bisect and never a re-sort."""

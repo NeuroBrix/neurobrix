@@ -702,9 +702,9 @@ def _buffer_for(addr: int, ty: str, extent: Optional[int] = None):
 
 def _containing_allocation(addr: int) -> Tuple[int, int]:
     from neurobrix.kernels.nbx_tensor import DeviceAllocator
-    for base, size in DeviceAllocator._range_size.items():
-        if base <= addr < base + size:
-            return base, size
+    hit = DeviceAllocator.containing(addr)
+    if hit is not None:
+        return hit
     raise RuntimeError(
         f"the triton-ext driver cannot bind pointer 0x{addr:x}: the allocator "
         f"does not record it, so its length is unknown and it cannot be wrapped "
