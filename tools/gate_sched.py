@@ -366,6 +366,30 @@ class Adopted:
         return None if Path(f"/proc/{self.pid}").exists() else self.returncode
 
 
+def take_hold(card: int) -> bool:
+    """Hold the card for this instance: hold_c<card> CREATED EXCLUSIVELY (O_EXCL), so of two schedulers (two gates
+    running at once) that both find a card free, one holds it and the other sees it held — reading the holds and
+    the device alone, two gates placed Qwen3-Omni and DeepSeek-Coder on card 2 one second apart (2026-10-20 08:01)
+    and the second cell died out of memory. False when another holder has it."""
+    try:
+        fd = os.open(str(Path(a.holds) / f"hold_c{card}"), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except FileExistsError:
+        return False
+    with os.fdopen(fd, "w") as fh:
+        fh.write(f"{os.getpid()}\n")
+    return True
+
+
+def drop_hold(card: int) -> None:
+    """Release this instance's hold on the card (never another holder's)."""
+    f = Path(a.holds) / f"hold_c{card}"
+    try:
+        if f.read_text().split()[0] == str(os.getpid()):
+            f.unlink()
+    except (FileNotFoundError, IndexError):
+        pass
+
+
 def main(argv=None):
     global POOL
     configure(build_parser().parse_args(argv))
@@ -414,6 +438,7 @@ def main(argv=None):
             if p.poll() is None:
                 continue
             del running[card]
+            drop_hold(card)
             cls = cmap[card]
             if kind == "gate":
                 if SEEN.get(card):
@@ -435,6 +460,8 @@ def main(argv=None):
         for card, cls in cmap.items():
             if card in running or busy_on_device(card) or (Path(a.holds) / f"hold_c{card}").exists():
                 continue
+            if not take_hold(card):        # another scheduler took it between the reading and now
+                continue
             tc = pick_tc(cls)  # TC work is the absolute priority (inbox 19:51) and short: it goes first on any free card
             if tc:
                 log = open(HERE / f"tc_card{card}.log", "a")
@@ -454,6 +481,8 @@ def main(argv=None):
                 reserved += need
                 say(f"sched gate {cls} {line.split()[0]} card {card} need {need / RM.GIB:.1f} GiB heavy={heavy} "
                     f"reserved {reserved / RM.GIB:.1f} GiB")
+            else:
+                drop_hold(card)              # nothing admissible for this card: the hold goes back
         left = sum(len([l for l in (HERE / f"queue_{c}.txt").read_text().splitlines() if l.strip()])
                    for c in set(cmap.values()))
         if not running and not left:
