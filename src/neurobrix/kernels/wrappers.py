@@ -8415,7 +8415,7 @@ def _flash_m8n8k4(q, k, v, bias, softmax_scale, gqa_groups, tile, has_bias, spli
     zero bias of a call with neither mask nor causality). `split`: the operands carried as hi + lo (the DtypeEngine's
     "split" representation, `launch_keys.unit_flash`), `tile` then a `matrix_unit.fp32_split.flash` row whose
     `block_k` head-dim columns the unit sums before each round-to-nearest add."""
-    from .ops.flash_attention_m8n8k4 import flash_attention_m8n8k4_kernel, flash_layouts, head_parts
+    from .ops.flash_attention_m8n8k4 import flash_attention_m8n8k4_kernel, head_parts
     from .ops.mma_m8n8k4 import UNIT
     from neurobrix.triton.dtype import matrix_unit_split_scale
     batch, nheads, seqlen_q, headdim = q.shape
@@ -8439,8 +8439,7 @@ def _flash_m8n8k4(q, k, v, bias, softmax_scale, gqa_groups, tile, has_bias, spli
         o.stride(0), o.stride(1), o.stride(2),
         nheads, seqlen_q, seqlen_k, seqlen_q_rounded, headdim,
         MB=MB, NS=NS, DA=DA, DB=DB, GQA_GROUPS=gqa_groups, HAS_BIAS=bool(has_bias),
-        SPLIT=bool(split), HI_EXP=hi_exp, LO_SHIFT=lo_shift, KSA=ksa, KSB=ksb, num_warps=tile["warps_m"],
-        **flash_layouts(MB, NS, DA, DB, tile["warps_m"]))
+        SPLIT=bool(split), HI_EXP=hi_exp, LO_SHIFT=lo_shift, KSA=ksa, KSB=ksb, num_warps=tile["warps_m"])
     return o
 
 

@@ -49,11 +49,22 @@ def flash_attention_m8n8k4_kernel(
     MB: gl.constexpr, NS: gl.constexpr, DA: gl.constexpr, DB: gl.constexpr, GQA_GROUPS: gl.constexpr,
     HAS_BIAS: gl.constexpr,
     SPLIT: gl.constexpr, HI_EXP: gl.constexpr, LO_SHIFT: gl.constexpr, KSA: gl.constexpr, KSB: gl.constexpr,
-    LS: gl.constexpr, LOA: gl.constexpr, LOB: gl.constexpr,
-    LAS: gl.constexpr, LAOA: gl.constexpr, LAOB: gl.constexpr,
-    LBK: gl.constexpr, LBVA: gl.constexpr, LBVB: gl.constexpr,
-    GR: gl.constexpr, GV: gl.constexpr, LX: gl.constexpr,
 ):
+    # every layout from the tile's constexprs and the launch's warps, built in the kernel (`flash_layout`): the tile
+    # is then a plain (MB, NS, num_warps) the autotuner can sweep and the certified directory can hold (workstream 1)
+    WM: gl.constexpr = gl.num_warps()
+    LS: gl.constexpr = flash_layout("LS", MB, NS, DA, DB, WM)
+    LOA: gl.constexpr = flash_layout("LOA", MB, NS, DA, DB, WM)
+    LOB: gl.constexpr = flash_layout("LOB", MB, NS, DA, DB, WM)
+    LAS: gl.constexpr = flash_layout("LAS", MB, NS, DA, DB, WM)
+    LAOA: gl.constexpr = flash_layout("LAOA", MB, NS, DA, DB, WM)
+    LAOB: gl.constexpr = flash_layout("LAOB", MB, NS, DA, DB, WM)
+    LBK: gl.constexpr = flash_layout("LBK", MB, NS, DA, DB, WM)
+    LBVA: gl.constexpr = flash_layout("LBVA", MB, NS, DA, DB, WM)
+    LBVB: gl.constexpr = flash_layout("LBVB", MB, NS, DA, DB, WM)
+    GR: gl.constexpr = flash_layout("GR", MB, NS, DA, DB, WM)
+    GV: gl.constexpr = flash_layout("GV", MB, NS, DA, DB, WM)
+    LX: gl.constexpr = flash_layout("LX", MB, NS, DA, DB, WM)
     BM: gl.constexpr = 16 * MB
     BN: gl.constexpr = 16 * NS
     SH: gl.constexpr = gl.SwizzledSharedLayout(1, 1, 1, order=[1, 0])
@@ -327,3 +338,11 @@ def flash_layouts(MB: int, NS: int, DA: int, DB: int, WM: int) -> dict:
         LBK=frag_b_layout(MB, NS, WM, 1), LBVA=frag_b_layout(MB, na, WM, 1), LBVB=frag_b_layout(MB, nb, WM, 1),
         GR=gl.BlockedLayout([1, 8], [8, 4], [WM, 1], [1, 0]),
         GV=gl.BlockedLayout([4, 2], [1, 32], [WM, 1], [1, 0]), LX=p_layout(MB, NS, na, WM))
+
+
+@gluon.constexpr_function
+def flash_layout(name, MB, NS, DA, DB, WM):
+    """One of the kernel's layouts (`flash_layouts`), evaluated at compile time from its constexprs."""
+    def v(x):
+        return getattr(x, "value", x)
+    return flash_layouts(int(v(MB)), int(v(NS)), int(v(DA)), int(v(DB)), int(v(WM)))[str(v(name))]
