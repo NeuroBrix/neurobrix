@@ -71,8 +71,11 @@ _ERR_BAD_ARGUMENT = 4
 
 
 class _MappedView:
-    """The registry's view slot for a buffer over a file mapping: nothing to release (the mapping's owner
-    unmaps it; the MTLBuffer is dropped with the entry)."""
+    """The registry's view slot for a buffer over a file mapping: it keeps the ctypes region the buffer was
+    made from; nothing to release (the mapping's owner unmaps it; the MTLBuffer is dropped with the entry)."""
+
+    def __init__(self, region=None):
+        self.region = region
 
     def release(self):
         pass
@@ -514,15 +517,18 @@ class MetalRuntime:
                 return start
             if entry is not None:                     # a neighbour's buffer starts on this page: cover both
                 end = max(end, start + entry[2])
+        # PyObjC takes the bytes as a buffer object, not an integer: a ctypes array AT the address (no copy —
+        # checked: the buffer's contents() is the mapping's own address)
+        region = (ctypes.c_char * (end - start)).from_address(start)
         buffer = self._device.newBufferWithBytesNoCopy_length_options_deallocator_(
-            start, end - start, self._Metal.MTLResourceStorageModeShared, None)
+            region, end - start, self._Metal.MTLResourceStorageModeShared, None)
         if buffer is None:
             raise RuntimeError(f"ZERO FALLBACK: Metal refused to bind {end - start} bytes of a file mapping at "
                                f"{start:#x} in place (newBufferWithBytesNoCopy returned nil)")
         with self._lock:
             if start not in self._host_buffers:
                 bisect.insort(self._bases, start)
-            self._host_buffers[start] = (buffer, _MappedView(), end - start)
+            self._host_buffers[start] = (buffer, _MappedView(region), end - start)
         return start
 
     # -- copies -------------------------------------------------------------
