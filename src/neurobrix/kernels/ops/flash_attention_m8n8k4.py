@@ -26,6 +26,8 @@ arXiv 2203.03341). The row statistics, the online softmax and the output are tho
 
 import functools
 
+from ._configs import nbx_autotune
+
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 
@@ -36,6 +38,24 @@ from .mma_m8n8k4 import (MMA_ASM, MMA_CONSTRAINTS, acc_rows_cols, bcast_rows, mm
 LOG2E: gl.constexpr = gl.constexpr(1.4426950408889634)
 
 
+def unit_flash_configs():
+    """The tiles the certifier proves per key (workstream 1): 64 or 128 query rows (MB bands of 16), 32 or 64 keys
+    per step (NS), 4 or 8 warps — the six the profile's hand table was chosen from (2026-10-07, flash_tiles4) and the
+    pairs it did not try. MB and the warps decide which rows a program owns (bit-identical); NS sets the online
+    softmax's accumulation order (proven against the fp64 oracle's tolerance)."""
+    import triton
+    return [triton.Config({"MB": mb, "NS": ns}, num_warps=w, num_stages=1)
+            for mb in (4, 8) for ns in (2, 4) for w in (4, 8)]
+
+
+def _prune_unit_flash(configs, named_args, **kwargs):
+    """Each warp owns MB / warps whole 16-row bands: a tile whose bands do not divide among its warps is not built."""
+    keep = [c for c in configs if c.kwargs["MB"] % c.num_warps == 0]
+    return keep or configs[:1]
+
+
+@nbx_autotune(configs=unit_flash_configs(), key=["Q_BUCKET", "K_BUCKET", "headdim", "SPLIT"],
+              prune_configs_by={"early_config_prune": _prune_unit_flash}, cache_results=True)
 @gluon.jit
 def flash_attention_m8n8k4_kernel(
     Q, K, V, Bias, Out, Lse,
@@ -45,7 +65,7 @@ def flash_attention_m8n8k4_kernel(
     stride_vb, stride_vh, stride_vn,
     stride_bb, stride_bh, stride_bm,
     stride_ob, stride_oh, stride_om,
-    nheads, seqlen_q, seqlen_k, seqlen_q_rounded, headdim,
+    nheads, seqlen_q, seqlen_k, seqlen_q_rounded, headdim, Q_BUCKET, K_BUCKET,
     MB: gl.constexpr, NS: gl.constexpr, DA: gl.constexpr, DB: gl.constexpr, GQA_GROUPS: gl.constexpr,
     HAS_BIAS: gl.constexpr,
     SPLIT: gl.constexpr, HI_EXP: gl.constexpr, LO_SHIFT: gl.constexpr, KSA: gl.constexpr, KSB: gl.constexpr,

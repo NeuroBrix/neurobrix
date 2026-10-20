@@ -8429,17 +8429,18 @@ def _flash_m8n8k4(q, k, v, bias, softmax_scale, gqa_groups, tile, has_bias, spli
     from neurobrix.triton.dtype import matrix_unit_split_scale
     batch, nheads, seqlen_q, headdim = q.shape
     seqlen_k = k.shape[2]
-    MB, NS = tile["block_m"] // 16, tile["block_n"] // 16
     DA, DB = head_parts(headdim)
     hi_exp, lo_shift = matrix_unit_split_scale(_matrix_unit())
     ksa = min(tile["block_k"], DA) // UNIT["k"] if split else 1       # instructions per round-to-nearest add
     ksb = min(tile["block_k"], DB) // UNIT["k"] if split and DB else 1
     o = NBXTensor.empty_like(q)
-    seqlen_q_rounded = math.ceil(seqlen_q / (16 * MB)) * 16 * MB
+    # the LSE rows rounded to the largest query tile a candidate takes (the tile is the certified one of this key)
+    seqlen_q_rounded = math.ceil(seqlen_q / 128) * 128
     lse = NBXTensor.empty((batch, nheads, seqlen_q_rounded), dtype=NBXDtype.float32,
                           device=f"cuda:{q._device_idx}" if hasattr(q, '_device_idx') else 'cuda')
     _set_device(q)
-    flash_attention_m8n8k4_kernel[(triton.cdiv(seqlen_q, 16 * MB), batch * nheads)](
+    grid = lambda META: (triton.cdiv(seqlen_q, 16 * META["MB"]), batch * nheads)
+    flash_attention_m8n8k4_kernel[grid](
         q, k, v, bias, o, lse, softmax_scale,
         q.stride(0), q.stride(1), q.stride(2),
         k.stride(0), k.stride(1), k.stride(2),
@@ -8447,8 +8448,8 @@ def _flash_m8n8k4(q, k, v, bias, softmax_scale, gqa_groups, tile, has_bias, spli
         bias.stride(0), bias.stride(1), bias.stride(-2),
         o.stride(0), o.stride(1), o.stride(2),
         nheads, seqlen_q, seqlen_k, seqlen_q_rounded, headdim,
-        MB=MB, NS=NS, DA=DA, DB=DB, GQA_GROUPS=gqa_groups, HAS_BIAS=bool(has_bias),
-        SPLIT=bool(split), HI_EXP=hi_exp, LO_SHIFT=lo_shift, KSA=ksa, KSB=ksb, num_warps=tile["warps_m"])
+        _lk.bucket_of("M", seqlen_q), _lk.bucket_of("N", seqlen_k), DA=DA, DB=DB, GQA_GROUPS=gqa_groups, HAS_BIAS=bool(has_bias),
+        SPLIT=bool(split), HI_EXP=hi_exp, LO_SHIFT=lo_shift, KSA=ksa, KSB=ksb)
     return o
 
 

@@ -501,15 +501,18 @@ def unit_flash_takes(D: int, q: NBXDtype, k: NBXDtype, v: NBXDtype) -> bool:
     return unit_flash(D, q, k, v) is not None
 
 
-def unit_flash_launches(Tq: int, Tk: int, D: int, q: NBXDtype, k: NBXDtype, v: NBXDtype) -> List[Launch]:
-    """The flash on the profile's matrix unit (`unit_flash`): its key — the operands' representation on the unit
-    (native / split), the head dim, the query rows' bucket, the keys' bucket and the three dtypes — under which its
-    tile (query rows, keys per step, warps) is certified per key (workstream 1: the profile's hand table of tiles per
-    head dim retired). No key where the unit does not take the attention."""
+def unit_flash_launches(Tq: int, Tk: int, D: int, q: NBXDtype, k: NBXDtype, v: NBXDtype,
+                        bias: Optional[NBXDtype] = None) -> List[Launch]:
+    """The flash on the profile's matrix unit (`unit_flash`, ops/flash_attention_m8n8k4.py): its autotune key — the
+    query rows' bucket, the keys' bucket, the head dim, the split representation — then, as Triton appends them, the
+    dtypes of its six tensors (Q, K, V, the bias — the mask's, or Q's for the zero / causal bias the wrapper builds —,
+    the output like Q, the fp32 log-sum-exp). Its tile (query rows, keys per step, warps) is certified per key
+    (workstream 1: the profile's hand table of tiles per head dim retired). No key where the unit does not take it."""
     got = unit_flash(D, q, k, v)
     if got is None:
         return []
-    return [(UNIT_FLASH, (got[0], int(D), bucket_of("M", Tq), bucket_of("N", Tk), tag(q), tag(k), tag(v)))]
+    return [(UNIT_FLASH, (bucket_of("M", Tq), bucket_of("N", Tk), int(D), got[0] == "split",
+                          tag(q), tag(k), tag(v), tag(bias if bias is not None else q), tag(q), tag(F32)))]
 
 
 def sdpa_route(batch: int, nheads: int, Tq: int, Tk: int, D: int, Dv: int, budget_bytes: int,
