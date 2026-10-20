@@ -1722,6 +1722,19 @@ class DeviceAllocator:
                     DeviceAllocator._cuda_live_bytes[dev] = live
 
     @staticmethod
+    def bind_mapped(ptr: int, nbytes: int) -> None:
+        """Make `nbytes` of a file mapping at host address `ptr` readable by kernels IN PLACE — on a unified
+        device only (one pool: the GPU reads the mapping's pages, nothing is copied). A discrete device has no
+        such address space: refused by name. Registered in the range table, so `holds()` knows the range."""
+        if _detect_gpu_backend() != "metal":
+            raise RuntimeError(f"ZERO FALLBACK: binding a file mapping in place needs unified memory; backend "
+                               f"{_detect_gpu_backend()!r} copies host experts into device slots")
+        start = _gpu_runtime().bind_mapped(int(ptr), int(nbytes))
+        page = int(os.sysconf("SC_PAGESIZE"))
+        end = -(-(int(ptr) + int(nbytes)) // page) * page
+        DeviceAllocator._range_add(start, max(DeviceAllocator._range_size.get(start, 0), end - start))
+
+    @staticmethod
     def malloc_host_pinned(nbytes: int) -> int:
         """Allocate page-locked host memory. Enables non_blocking H2D DMA.
 

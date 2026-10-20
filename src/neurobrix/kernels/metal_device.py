@@ -69,6 +69,14 @@ _ERR_UNKNOWN_POINTER = 3
 _ERR_BAD_ARGUMENT = 4
 
 
+
+class _MappedView:
+    """The registry's view slot for a buffer over a file mapping: nothing to release (the mapping's owner
+    unmaps it; the MTLBuffer is dropped with the entry)."""
+
+    def release(self):
+        pass
+
 class MetalUnavailableError(RuntimeError):
     """Metal, or its Python bindings, are not usable on this machine.
 
@@ -488,6 +496,34 @@ class MetalRuntime:
             return _ERR_UNKNOWN_POINTER
         entry[1].release()
         return _OK
+
+    def bind_mapped(self, address: int, nbytes: int) -> int:
+        """Make `nbytes` of a file mapping at `address` bindable in place: a shared buffer over the pages that
+        hold them (`newBufferWithBytesNoCopy`, page-aligned as Metal requires), registered so a launch resolves
+        any address inside it to (buffer, offset) like every other allocation (`buffer_for_pointer`). No byte
+        is copied and none is counted against the working set: the pages are the file's, the page cache's
+        to keep or reclaim. The unified expert store reads a routed expert this way, the expert's own pages
+        only (one buffer per expert, never a whole shard: a command buffer keeps resident what it binds).
+        Returns the page base registered; a range already covered returns its base."""
+        page = self._page_size
+        start = int(address) // page * page
+        end = -(-(int(address) + int(nbytes)) // page) * page
+        with self._lock:
+            entry = self._host_buffers.get(start)
+            if entry is not None and start + entry[2] >= end:
+                return start
+            if entry is not None:                     # a neighbour's buffer starts on this page: cover both
+                end = max(end, start + entry[2])
+        buffer = self._device.newBufferWithBytesNoCopy_length_options_deallocator_(
+            start, end - start, self._Metal.MTLResourceStorageModeShared, None)
+        if buffer is None:
+            raise RuntimeError(f"ZERO FALLBACK: Metal refused to bind {end - start} bytes of a file mapping at "
+                               f"{start:#x} in place (newBufferWithBytesNoCopy returned nil)")
+        with self._lock:
+            if start not in self._host_buffers:
+                bisect.insort(self._bases, start)
+            self._host_buffers[start] = (buffer, _MappedView(), end - start)
+        return start
 
     # -- copies -------------------------------------------------------------
 

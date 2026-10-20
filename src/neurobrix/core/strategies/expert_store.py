@@ -107,7 +107,8 @@ def build_expert_store_state(z3: Any, component_name: str, executor: Any, seq: A
     residency = ExpertResidency(n_slots)
     if is_triton:
         from neurobrix.triton.expert_store import NBXExpertStore
-        store = NBXExpertStore(residency, dev_idx, like)
+        store = NBXExpertStore(residency, dev_idx, like,
+                               in_place=holds_expert_files(z3.context.allocations, component_name))
     else:
         import torch
         from neurobrix.core.runtime.graph.expert_store import TorchExpertStore

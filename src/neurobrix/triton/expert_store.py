@@ -47,9 +47,14 @@ def _numel(shape) -> int:
 
 
 class NBXExpertStore:
-    def __init__(self, residency: ExpertResidency, device_idx: int, like):
+    def __init__(self, residency: ExpertResidency, device_idx: int, like, in_place: bool = False):
         self.residency = residency
         self.device_idx = int(device_idx)
+        # In place (supervisor 2026-10-20 01:20 (b)): on a unified device whose routed experts are views of the
+        # container's files (Prism's `expert_files`, `holds_expert_files`), a slot is a POINTER to the expert
+        # where it lies — its pages bound in place (`DeviceAllocator.bind_mapped`), nothing copied, no arena.
+        self.in_place = bool(in_place)
+        self._bound = set()      # (layer, expert) whose pages are bound
         for t in like:
             if not isinstance(t, NBXTensor):
                 raise RuntimeError(
@@ -57,6 +62,14 @@ class NBXExpertStore:
                     "(a quantized expert carries packed weights + scales — not this store's geometry)")
         self._shape = tuple((tuple(t.shape), t._dtype) for t in like)
         DA.set_device(self.device_idx)
+        self._stream = 0
+        self.bytes_in = 0
+        self._inflight = {}
+        self.hosts = {}
+        self._arena = None
+        self.slots = []
+        if self.in_place:
+            return
         # The arena: one allocation for every slot, each projection a 256-byte-aligned view into it.
         proj_bytes = [_aligned(_numel(s) * dtype_size(d)) for s, d in self._shape]
         stride = sum(proj_bytes)
@@ -88,7 +101,10 @@ class NBXExpertStore:
 
     def acquire(self, layer, routed, n_experts: int, host: Callable[[int], Tuple]):
         """(gate, up, down) lists over all `n_experts`, device-resident, for a call routing to `routed`;
-        the compute stream waits for the misses copied now and for the hits a prefetch is still copying."""
+        the compute stream waits for the misses copied now and for the hits a prefetch is still copying.
+        In place: the routed experts' own host views, their pages bound once; nothing is copied."""
+        if self.in_place:
+            return self._acquire_in_place(layer, routed, n_experts, host)
         slots, missed = self.residency.assign(layer, routed)
         for e in slots:
             ev = self._inflight.pop((layer, e), None)
@@ -122,6 +138,29 @@ class NBXExpertStore:
         triples = [self.slots[slots[e]] if e in slots else filler for e in range(int(n_experts))]
         return ([t[0] for t in triples], [t[1] for t in triples], [t[2] for t in triples])
 
+    def _acquire_in_place(self, layer, routed, n_experts: int, host: Callable[[int], Tuple]):
+        views = {}
+        for e in sorted(int(x) for x in routed):
+            src = host(e)
+            for i, s in enumerate(src):
+                if (not isinstance(s, NBXTensor) or (tuple(s.shape), s._dtype) != self._shape[i]
+                        or not s.is_contiguous() or s._device != "cpu"):
+                    raise RuntimeError(
+                        f"ZERO FALLBACK: expert {e} of {layer!r} projection {i} is {type(s).__name__} "
+                        f"{tuple(getattr(s, 'shape', ()))} on {getattr(s, '_device', '?')}; the in-place store "
+                        f"binds contiguous host views of {self._shape[i]} — one geometry per component")
+            if (layer, e) not in self._bound:
+                for s in src:
+                    DA.bind_mapped(s.data_ptr(), s._nbytes)
+                self._bound.add((layer, e))
+                self.residency.misses += 1
+            else:
+                self.residency.hits += 1
+            views[e] = src
+        filler = views[min(views)]
+        triples = [views.get(e, filler) for e in range(int(n_experts))]
+        return ([t[0] for t in triples], [t[1] for t in triples], [t[2] for t in triples])
+
     # ── step 3: the prefetch of the next layer's predicted experts (mirror of the compiled store) ──
     def prefetch_next(self, layer, routed) -> int:
         """Copy ahead, on the store's stream, the experts the previous token routed to at the layer that
@@ -130,7 +169,7 @@ class NBXExpertStore:
         +23 % time on the Triton engine). Called once the call's kernels are
         enqueued: the stream is blocking against the legacy stream, so copies issued after the launch
         run behind it and ahead of the next layer's."""
-        if os.environ.get("NBX_EXPERT_PREFETCH") != "1":
+        if os.environ.get("NBX_EXPERT_PREFETCH") != "1" or self.in_place:
             return 0
         nxt = self.residency.next_layer(layer)
         if nxt is None or nxt not in self.hosts:
@@ -178,8 +217,9 @@ class NBXExpertStore:
             DA.destroy_event(ev)
         self._inflight.clear()
         DA.set_device(self.device_idx)
-        DA.stream_synchronize(self._stream)
-        DA.destroy_stream(self._stream)
+        if self._stream:
+            DA.stream_synchronize(self._stream)
+            DA.destroy_stream(self._stream)
         self._stream = 0
         self.slots = []
         self._arena = None
