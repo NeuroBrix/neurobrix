@@ -78,10 +78,19 @@ def conv2d_forward_kernel(
     BLOCK_SIZE_BHW: tl.constexpr = 64,
     BLOCK_SIZE_INF: tl.constexpr = 32,
     BLOCK_SIZE_OUTF: tl.constexpr = 64,
+    WIDE_OFFSETS: tl.constexpr = True,
 ):
-    bhw_pid = tl.program_id(0).to(tl.int64)
-    outf_pid = tl.program_id(1).to(tl.int64)
-    group_pid = tl.program_id(2).to(tl.int64)
+    # 64-bit offsets only where an operand's extent needs them (`WIDE_OFFSETS`, chosen by the wrapper from the
+    # tensors' extents): 32-bit offsets are exact below 2^31 and the 64-bit ones cost 17 % on Apple's ALUs once the
+    # Metal backend stopped narrowing them (Mac, 2026-10-20, 60 bf16 keys re-proven)
+    if WIDE_OFFSETS:
+        bhw_pid = tl.program_id(0).to(tl.int64)
+        outf_pid = tl.program_id(1).to(tl.int64)
+        group_pid = tl.program_id(2).to(tl.int64)
+    else:
+        bhw_pid = tl.program_id(0)
+        outf_pid = tl.program_id(1)
+        group_pid = tl.program_id(2)
 
     in_group_dim = in_feat_dim // groups
     out_group_dim = out_feat_dim // groups
@@ -111,7 +120,9 @@ def conv2d_forward_kernel(
                 # 6344x6344 tile) faulted with an illegal address, four of four,
                 # 2026-09-20 (register 58's class; the output being small, the
                 # band-streaming that saves the 64 -> 64 convs never engaged).
-                inf_offset = (c + tl.arange(0, BLOCK_SIZE_INF)).to(tl.int64)
+                inf_offset = c + tl.arange(0, BLOCK_SIZE_INF)
+                if WIDE_OFFSETS:
+                    inf_offset = inf_offset.to(tl.int64)
                 ih_offset = h * dilation_height - padding_height + stride_height * oh_offset
                 iw_offset = w * dilation_width - padding_width + stride_width * ow_offset
 

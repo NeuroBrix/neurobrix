@@ -4112,6 +4112,15 @@ def _conv_bias_inplace(output, bias):
     return output
 
 
+def _conv_offsets_wide(*tensors) -> bool:
+    """64-bit offsets in the convolution kernel when an operand's reach (its last element's offset, over its strides)
+    is within a factor of two of 2^31: a masked lane computes an address past the extent (the grid's last block,
+    the padding rows) before its mask drops it, and the factor covers that overshoot. Below it 32-bit offsets are
+    exact and faster (17 % on Apple's ALUs, Mac 2026-10-20)."""
+    reach = max(sum((int(n) - 1) * int(st) for n, st in zip(t.shape, t.stride())) + 1 for t in tensors)
+    return reach >= (1 << 30)
+
+
 def conv2d_wrapper(
     x, weight, bias=None,
     stride=1, padding=0, dilation=1,
@@ -4305,7 +4314,7 @@ def conv2d_wrapper(
         stride_height=stride_h, stride_width=stride_w,
         padding_height=pad_h, padding_width=pad_w,
         dilation_height=dil_h, dilation_width=dil_w,
-        groups=groups, fp16=fp16,
+        groups=groups, fp16=fp16, WIDE_OFFSETS=_conv_offsets_wide(x_c, w_c, output),
     )
 
     if bias is not None:
