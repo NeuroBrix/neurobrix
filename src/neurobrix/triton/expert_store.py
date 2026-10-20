@@ -155,14 +155,19 @@ class NBXExpertStore:
                         f"{tuple(getattr(s, 'shape', ()))} on {getattr(s, '_device', '?')}; the in-place store "
                         f"binds contiguous host views of {self._shape[i]} — one geometry per component")
             if (layer, e) not in self._bound:
+                dev = []
                 for s in src:
                     DA.bind_mapped(s.data_ptr(), s._nbytes)
-                self._bound[(layer, e)] = [s.data_ptr() for s in src]
+                    # the DEVICE view of the bound pages: the pointer tables capture a device address only from a
+                    # device tensor — a host view's address read as zeros (DSV2 triton printed "!!!", 2026-10-20)
+                    dev.append(NBXTensor.from_raw(s.data_ptr(), tuple(s.shape), s._dtype, "cuda", owns_data=False,
+                                                  device_idx=self.device_idx, base=s))
+                self._bound[(layer, e)] = ([s.data_ptr() for s in src], tuple(dev))
                 self.residency.misses += 1
             else:
                 self._bound.move_to_end((layer, e))
                 self.residency.hits += 1
-            views[e] = src
+            views[e] = self._bound[(layer, e)][1]
         self._evict_bound(keep={(layer, e) for e in views})
         filler = views[min(views)]
         triples = [views.get(e, filler) for e in range(int(n_experts))]
@@ -177,7 +182,7 @@ class NBXExpertStore:
         from neurobrix.triton.moe import release_pinned_tables
         release_pinned_tables()
         for key in [k for k in self._bound if k not in keep][:len(self._bound) - cap]:
-            for ptr in self._bound.pop(key):
+            for ptr in self._bound.pop(key)[0]:
                 DA.unbind_mapped(ptr)
 
     # ── step 3: the prefetch of the next layer's predicted experts (mirror of the compiled store) ──
