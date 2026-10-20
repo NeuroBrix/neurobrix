@@ -36,6 +36,7 @@ if TYPE_CHECKING:  # R33: the ATen branch imports it; shared code only annotates
 from neurobrix.core.runtime.tensor_compat import is_torch_tensor
 from neurobrix.core.runtime import liveness as _liveness
 import json
+import mmap
 import time
 
 import os
@@ -2271,10 +2272,17 @@ class GraphExecutor:
             def held_as(sf):
                 return by_nbx[held_dtype(_SF_DTYPE_INFO[sf][1], compute_dtype, "triton")]
 
+            import numpy as _np
+            bases = {}
+
             def build(m, span, key):
-                ptr = ctypes.addressof(ctypes.c_char.from_buffer(m, span.offset))
-                return NBXTensor.from_raw(ptr, span.shape, _SF_DTYPE_INFO[span.dtype][1], device="cpu",
-                                          owns_data=False, base=m)
+                # the shard is mapped read-only (`access` below): its address read without a writable export
+                base = bases.get(id(m))
+                if base is None:
+                    base = bases[id(m)] = _np.frombuffer(m, dtype=_np.uint8).ctypes.data
+                return NBXTensor.from_raw(base + span.offset, span.shape, _SF_DTYPE_INFO[span.dtype][1],
+                                          device="cpu", owns_data=False, base=m)
+            access = mmap.ACCESS_READ
         else:
             import torch
             sf_of = {torch.bfloat16: "BF16", torch.float16: "F16", torch.float32: "F32", torch.float64: "F64"}
@@ -2288,6 +2296,7 @@ class GraphExecutor:
                         if sf in torch_of else sf)
 
             pages = {}
+            access = mmap.ACCESS_COPY
 
             def build(m, span, key):
                 dt = torch_of[span.dtype]
@@ -2295,7 +2304,7 @@ class GraphExecutor:
                 t = torch.frombuffer(m, dtype=dt, count=n, offset=span.offset).view(span.shape)
                 pages[t.data_ptr()] = (m, span.offset, span.nbytes)      # the span behind the view
                 return t
-        views, maps = bind_views(spans, held_as, build)
+        views, maps = bind_views(spans, held_as, build, access)
         self._expert_maps = maps
         if self.mode not in ("triton", "triton_sequential"):
             self._expert_pages = pages

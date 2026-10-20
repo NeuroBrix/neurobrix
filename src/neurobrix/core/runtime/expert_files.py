@@ -102,14 +102,19 @@ class ShardMaps:
     """Each shard mapped once, privately (MAP_PRIVATE: copy-on-write, never written), for the views'
     lifetime. Every view keeps this object alive through its base."""
 
-    def __init__(self):
+    def __init__(self, access: int = mmap.ACCESS_COPY):
         self._maps: Dict[str, mmap.mmap] = {}
+        # ACCESS_COPY (MAP_PRIVATE) where an engine's views must be writable objects (torch.frombuffer); ACCESS_READ
+        # (shared, read-only) where the GPU reads the pages in place: a no-copy Metal buffer over a PRIVATE mapping
+        # made copy-on-write anonymous copies of every page it bound (8 GB of random data bound and read in 5.5 MB
+        # experts: the compressor 0.3 -> 11.7 GB; the same over a read-only mapping: flat, the Mac 2026-10-20)
+        self._access = access
 
     def map(self, shard: str) -> mmap.mmap:
         m = self._maps.get(shard)
         if m is None:
             with open(shard, "rb") as f:
-                m = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_COPY)
+                m = mmap.mmap(f.fileno(), 0, access=self._access)
             self._maps[shard] = m
         return m
 
@@ -137,11 +142,12 @@ def held_dtype(stored, compute, engine: str):
 
 
 def bind_views(spans: Dict[str, ExpertFileSpan], held_as: Callable[[str], str],
-               build: Callable[[mmap.mmap, ExpertFileSpan, str], object]) -> Tuple[Dict[str, object], ShardMaps]:
+               build: Callable[[mmap.mmap, ExpertFileSpan, str], object],
+               access: int = mmap.ACCESS_COPY) -> Tuple[Dict[str, object], ShardMaps]:
     """{key: view} over `spans`. `held_as(stored dtype)` names the dtype the engine would hold the
     weight in; a view is built only where the two are the same (module docstring), else refused by
     name. `build(map, span, key)` is the engine's view constructor."""
-    maps = ShardMaps()
+    maps = ShardMaps(access)
     views: Dict[str, object] = {}
     for key, span in spans.items():
         want = held_as(span.dtype)
