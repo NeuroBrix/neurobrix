@@ -25,6 +25,7 @@ ADDMM = "neurobrix.kernels.ops.matmul.addmm_kernel"
 BADDBMM = "neurobrix.kernels.ops.baddbmm_op.baddbmm_kernel"
 CONV2D = "neurobrix.kernels.ops.conv2d.conv2d_forward_kernel"
 DEPTHWISE = "neurobrix.kernels.ops.depthwise_conv2d.depthwise_conv2d_kernel"
+SOFTMAX = "neurobrix.kernels.ops.softmax.softmax_forward_kernel"
 
 F32, BF16, F16 = NBXDtype.float32, NBXDtype.bfloat16, NBXDtype.float16
 _HALF = (F16, BF16)
@@ -529,7 +530,12 @@ def math_attention_launches(B: int, H: int, Hk: int, Tq: int, Tk: int, D: int, D
     """`_math_attention`: scores = bmm(q as [B*Hk, groups*Tq, D], k^T) — q in its (possibly
     rounded) dtype, k in its own; then p = softmax(scores) cast to v's dtype and bmm(p, v)."""
     M = (H // Hk) * Tq
+    # the scores are the first product's output (fp32 for any half input, on the unit or not): the route's softmax
+    # runs on B * H * Tq rows of Tk columns at that dtype (`wrappers.softmax`, workstream 1)
+    sa, _sb, _pb = bmm_dtypes(q, k, native_bf16, force_accum)
+    scores = matmul_out_dtype(sa, M, True, native_bf16, force_accum)
     return (bmm_launches(M, D, Tk, q, k, native_bf16, force_accum)
+            + softmax_launches(B * H * Tq, Tk, False, scores, scores)
             + bmm_launches(M, Tk, Dv, v, v, native_bf16, force_accum))
 
 
@@ -735,3 +741,18 @@ def conv_launches(x_shape, w_shape, stride, padding, dilation, transposed: bool,
     dh, dw = _n(dilation, 2)
     return conv2d_launches(N, C, H, W, Co, kh, kw, sh, sw, ph, pw, dh, dw, groups, x, w, compute,
                            band_bytes, depthwise_enabled)
+
+
+#: The longest row the single-program softmax holds (a row's padded length in registers); a longer one runs the looped
+#: kernel (`softmax_forward_looped_kernel`, one tile at a time), which forms no autotune key. Moved here from the
+#: wrapper so the wrapper and the census read ONE value.
+SOFTMAX_FUSED_MAX_FEAT = 16384
+
+
+def softmax_launches(rows: int, feat: int, log: bool, x: NBXDtype, out: NBXDtype) -> List[Launch]:
+    """`softmax` / `log_softmax` over a row of `feat` (rows = every other element): the single-program kernel's key —
+    the rows' bucket (`bucket_of("M")`), the row length, the log flag, the input's and the output's dtype — or none
+    when the row takes the looped kernel (workstream 1: rows per program and warps certified per key)."""
+    if feat > SOFTMAX_FUSED_MAX_FEAT or rows < 1:
+        return []
+    return [(SOFTMAX, (bucket_of("M", rows), feat, bool(log), tag(x), tag(out)))]
