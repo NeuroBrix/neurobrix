@@ -111,6 +111,17 @@ def carried(C: Path) -> int:
     return len((yaml.safe_load(f.read_text()) or {}).get("carries") or [])
 
 
+def scope_cells(C: Path) -> set:
+    """(model, mode) of every cell the gate's computed scope holds (scope/queue_<cls>.txt: `model modes timeout`)."""
+    out = set()
+    for q in sorted((C / "scope").glob("queue_*.txt")):
+        for line in q.read_text().splitlines():
+            parts = line.split()
+            if len(parts) >= 2:
+                out.update((parts[0], m) for m in parts[1].split(",") if m)
+    return out
+
+
 def check_carries(tree: Path, C: Path) -> int:
     """Every entry of the gate's carry record, checked by the HARNESS's own reader (`record_carries` of the tree
     under test: the source row exists and is the measurement the entry names) before any card is spent. The
@@ -121,11 +132,19 @@ def check_carries(tree: Path, C: Path) -> int:
         return 0
     import importlib.util
     import yaml
+    asked = {(e["model"], e["mode"]) for e in (yaml.safe_load(f.read_text()) or {}).get("carries") or []}
+    reached = sorted(asked & scope_cells(C))
+    if reached:
+        # A carried record never stands in for a cell this lot reaches (supervisor 2026-10-20 07:25): Qwen3-VL's
+        # long cells were carried from 2026-10-16 through every gate after, step 3 among them — which moved its
+        # decoding flow to one token per step and broke its decode; no gate ran it for four days.
+        raise Refused(f"the carry record {f} names {len(reached)} cell(s) this lot's computed scope reaches — "
+                      f"a carry never survives a lot that reaches the run: "
+                      f"{', '.join(f'{m}/{mo}' for m, mo in reached[:8])}{' ...' if len(reached) > 8 else ''}")
     spec = importlib.util.spec_from_file_location("_gate_harness", tree / "tools" / "regression_matrix.py")
     rm = importlib.util.module_from_spec(spec)
     sys.path[:0] = [str(tree / "tools"), str(tree / "src")]
     spec.loader.exec_module(rm)
-    asked = {(e["model"], e["mode"]) for e in (yaml.safe_load(f.read_text()) or {}).get("carries") or []}
     try:
         got = rm.record_carries(f, asked, str(tree))
     except SystemExit as e:
