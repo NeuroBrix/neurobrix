@@ -1,7 +1,12 @@
 """A halo stretch's slice runs at the rows it READS (its own plus the halo on each side, clipped at the axis' ends):
 the executor and the census take those lengths from one function, so a slice's keys are derived at the length the
 runtime forms them — never at the slice's own length, which no launch of a halo stretch ever has."""
+import sys
+from pathlib import Path
+
 from neurobrix.core.prism.chunked_region import chunk_extents, slice_reads
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
 
 
 def test_a_slice_reads_its_rows_widened_by_the_halo_and_clipped_at_the_ends():
