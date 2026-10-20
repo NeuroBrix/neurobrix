@@ -234,10 +234,28 @@ def need_of(model, modes, card, cls):
     return NEED[key]
 
 
+def others_reserved() -> int:
+    """Host bytes the OTHER schedulers' cells hold reserved: the need each wrote into its card's hold (`take_hold`'s
+    file: "<pid> <need>"; a filler's hold names no need). Each instance summed only its own cells: two gates running
+    at once admitted a Qwen3-VL each, 169 GiB of host apiece, and the kernel killed one (2026-10-20 14:47)."""
+    total = 0
+    for f in Path(a.holds).glob("hold_c*"):
+        try:
+            parts = f.read_text().split()
+        except FileNotFoundError:
+            continue
+        if len(parts) >= 2 and parts[0] != str(os.getpid()):
+            total += int(parts[1])
+    return total
+
+
 def pick_gate(cls, card, reserved):
     mine = HERE / f"queue_{cls}.txt"
-    with open(f"{mine}.lock", "a") as lk:
+    # one admission at a time across every scheduler sharing the holds: a need is read and written under it
+    with open(f"{mine}.lock", "a") as lk, open(Path(a.holds) / ".admission.lock", "a") as adm:
         fcntl.flock(lk, fcntl.LOCK_EX)
+        fcntl.flock(adm, fcntl.LOCK_EX)
+        reserved = reserved + others_reserved()
         lines = [l for l in mine.read_text().splitlines() if l.strip()] if mine.exists() else []
         avail, headroom = RM._mem_available(), int(RM._host_bytes() * RM.HOST_HEADROOM_SHARE)
         for i, line in enumerate(lines):
@@ -249,6 +267,7 @@ def pick_gate(cls, card, reserved):
             if need + headroom > avail or reserved + need + headroom > RM._host_bytes():
                 continue
             mine.write_text("".join(l + "\n" for j, l in enumerate(lines) if j != i))
+            (Path(a.holds) / f"hold_c{card}").write_text(f"{os.getpid()} {int(need)}\n")   # the need, for the others
             return line, need, heavy
     return None
 
