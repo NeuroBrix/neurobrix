@@ -363,6 +363,10 @@ def flash_layouts(MB: int, NS: int, DA: int, DB: int, WM: int) -> dict:
 @gluon.constexpr_function
 def flash_layout(name, MB, NS, DA, DB, WM):
     """One of the kernel's layouts (`flash_layouts`), evaluated at compile time from its constexprs."""
+    # imported here, a local name: the JIT's dependency scan refuses a cached (functools) callable among a constexpr
+    # function's globals ("Unsupported function referenced")
+    from neurobrix.kernels.ops.flash_attention_m8n8k4 import flash_layouts as layouts
+
     def v(x):
         return getattr(x, "value", x)
-    return flash_layouts(int(v(MB)), int(v(NS)), int(v(DA)), int(v(DB)), int(v(WM)))[str(v(name))]
+    return layouts(int(v(MB)), int(v(NS)), int(v(DA)), int(v(DB)), int(v(WM)))[str(v(name))]
