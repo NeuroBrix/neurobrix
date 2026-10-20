@@ -95,6 +95,11 @@ def conv2d_forward_kernel(
     in_group_dim = in_feat_dim // groups
     out_group_dim = out_feat_dim // groups
 
+    # The tile is [OUTF, BHW] with the SPATIAL axis fast: NCHW holds a channel plane contiguous along width, so the
+    # input block is loaded [INF, BHW] and the output stored [OUTF, BHW] along it, and the weight block [OUTF, INF]
+    # steps the small kh*kw stride. Loaded [BHW, INF] and stored [BHW, OUTF], both fast axes stepped a whole channel
+    # plane: the Metal backend gathered them element by element — CogVideoX-2b's VAE 3x3 (9,128,242x362) 109 ms
+    # against 55 ms transposed, same values (max |diff| 0), native 31 ms (Mac, 2026-10-21).
     bhw_offset = bhw_pid * BLOCK_SIZE_BHW + tl.arange(0, BLOCK_SIZE_BHW)
     bh_offset = bhw_offset // out_width
     batch_offset = bh_offset // out_height
@@ -104,45 +109,41 @@ def conv2d_forward_kernel(
     ow_offset = bhw_offset % out_width
 
     input_pointer += (input_batch_stride * batch_offset +
-                      input_in_feat_stride * group_pid * in_group_dim)[:, None]
+                      input_in_feat_stride * group_pid * in_group_dim)[None, :]
     weight_pointer += (weight_out_feat_stride * outf_offset +
-                       weight_out_feat_stride * group_pid * out_group_dim)[None, :]
+                       weight_out_feat_stride * group_pid * out_group_dim)[:, None]
 
-    accum = tl.zeros((BLOCK_SIZE_BHW, BLOCK_SIZE_OUTF), dtype=tl.float32)
+    accum = tl.zeros((BLOCK_SIZE_OUTF, BLOCK_SIZE_BHW), dtype=tl.float32)
 
     for h in range(kernel_height):
         for w in range(kernel_width):
+            ih_offset = h * dilation_height - padding_height + stride_height * oh_offset
+            iw_offset = w * dilation_width - padding_width + stride_width * ow_offset
+            spatial = input_height_stride * ih_offset + input_width_stride * iw_offset
+            spatial_ok = ((batch_offset < batch_dim) &
+                          (ih_offset >= 0) & (ih_offset < in_height) &
+                          (iw_offset >= 0) & (iw_offset < in_width))
             for c in range(0, in_group_dim, BLOCK_SIZE_INF):
-                # 64-bit like every offset above it: `input_in_feat_stride *
-                # inf_offset` is a product of the channel plane (36 000 000
-                # elements at 6000x6000) and the channel index, and past channel
-                # 59 it exceeds 2^31 — the 8x upscaler's last conv (64 -> 3, a
-                # 6344x6344 tile) faulted with an illegal address, four of four,
-                # 2026-09-20 (register 58's class; the output being small, the
-                # band-streaming that saves the 64 -> 64 convs never engaged).
+                # 64-bit like every offset above it when the extents need it: `input_in_feat_stride *
+                # inf_offset` is a product of the channel plane (36 000 000 elements at 6000x6000) and the
+                # channel index, and past channel 59 it exceeds 2^31 — the 8x upscaler's last conv (64 -> 3, a
+                # 6344x6344 tile) faulted with an illegal address, four of four, 2026-09-20 (register 58's
+                # class; the output being small, the band-streaming that saves the 64 -> 64 convs never engaged).
                 inf_offset = c + tl.arange(0, BLOCK_SIZE_INF)
                 if WIDE_OFFSETS:
                     inf_offset = inf_offset.to(tl.int64)
-                ih_offset = h * dilation_height - padding_height + stride_height * oh_offset
-                iw_offset = w * dilation_width - padding_width + stride_width * ow_offset
 
                 curr_inp = (input_pointer +
-                            (input_in_feat_stride * inf_offset)[None, :] +
-                            (input_height_stride * ih_offset)[:, None] +
-                            (input_width_stride * iw_offset)[:, None])
+                            (input_in_feat_stride * inf_offset)[:, None] +
+                            spatial[None, :])
                 curr_wt = (weight_pointer +
-                           (weight_in_feat_stride * inf_offset)[:, None] +
+                           (weight_in_feat_stride * inf_offset)[None, :] +
                            (weight_height_stride * h) +
                            (weight_width_stride * w))
 
-                inp_mask = ((batch_offset < batch_dim)[:, None] &
-                            (inf_offset < in_group_dim)[None, :] &
-                            (ih_offset >= 0)[:, None] &
-                            (ih_offset < in_height)[:, None] &
-                            (iw_offset >= 0)[:, None] &
-                            (iw_offset < in_width)[:, None])
-                wt_mask = ((inf_offset < in_group_dim)[:, None] &
-                           (outf_offset < out_group_dim)[None, :])
+                inp_mask = (inf_offset < in_group_dim)[:, None] & spatial_ok[None, :]
+                wt_mask = ((outf_offset < out_group_dim)[:, None] &
+                           (inf_offset < in_group_dim)[None, :])
 
                 inp_block = tl.load(curr_inp, mask=inp_mask, other=0.0)
                 wt_block = tl.load(curr_wt, mask=wt_mask, other=0.0)
@@ -151,17 +152,17 @@ def conv2d_forward_kernel(
                     inp_block = inp_block.to(tl.float16)
                     wt_block = wt_block.to(tl.float16)
 
-                accum += tl.dot(inp_block, wt_block)
+                accum += tl.dot(wt_block, inp_block)
 
     out_ptr = (output_pointer +
-               (output_batch_stride * batch_offset)[:, None] +
-               (output_out_feat_stride * (group_pid * out_group_dim + outf_offset))[None, :] +
-               (output_height_stride * oh_offset)[:, None] +
-               (output_width_stride * ow_offset)[:, None])
-    out_mask = ((batch_offset < batch_dim)[:, None] &
-                (outf_offset < out_group_dim)[None, :] &
-                (oh_offset < out_height)[:, None] &
-                (ow_offset < out_width)[:, None])
+               (output_batch_stride * batch_offset)[None, :] +
+               (output_out_feat_stride * (group_pid * out_group_dim + outf_offset))[:, None] +
+               (output_height_stride * oh_offset)[None, :] +
+               (output_width_stride * ow_offset)[None, :])
+    out_mask = ((batch_offset < batch_dim)[None, :] &
+                (outf_offset < out_group_dim)[:, None] &
+                (oh_offset < out_height)[None, :] &
+                (ow_offset < out_width)[None, :])
 
     tl.store(out_ptr, accum, mask=out_mask)
 
