@@ -42,7 +42,11 @@ def rms_norm_fp32(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6) -> t
     x_fp32 = x.to(torch.float32)
     variance = x_fp32.pow(2).mean(-1, keepdim=True)
     x_normed = x_fp32 * torch.rsqrt(variance + eps)
-    return x_normed.to(weight.dtype) * weight
+    # the weight is applied IN PLACE on the op's own fresh buffer: the op then holds its input and ONE output, what
+    # Prism prices it at — `* weight` allocated a second full buffer while the normalised one was still alive (Sana
+    # 4K's VAE in halo slices on 16 GB: 2.69 GiB more at custom.rms_norm::24 than its slice was priced, OOM,
+    # 2026-10-20). Same values: one multiply, the same operands.
+    return x_normed.to(weight.dtype).mul_(weight)
 
 
 def routing_upcast_fp32(x: torch.Tensor) -> torch.Tensor:
