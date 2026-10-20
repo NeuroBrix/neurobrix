@@ -531,6 +531,15 @@ class MetalRuntime:
             self._host_buffers[start] = (buffer, _MappedView(region), end - start)
         return start
 
+    def unbind_mapped(self, start: int) -> bool:
+        """Drop the in-place buffer registered at page `start` (`bind_mapped`): its pages are the file's again,
+        nothing holds them resident. A command buffer still running retains the MTLBuffer it bound."""
+        with self._lock:
+            entry = self._host_buffers.pop(int(start), None)
+            if entry is not None:
+                _drop_base(self._bases, int(start))
+        return entry is not None
+
     # -- copies -------------------------------------------------------------
 
     def memcpy(self, dst, src, size, kind=None) -> int:

@@ -1735,6 +1735,14 @@ class DeviceAllocator:
         DeviceAllocator._range_add(start, max(DeviceAllocator._range_size.get(start, 0), end - start))
 
     @staticmethod
+    def unbind_mapped(ptr: int) -> None:
+        """Undo `bind_mapped` for the range starting at `ptr`'s page."""
+        page = int(os.sysconf("SC_PAGESIZE"))
+        start = int(ptr) // page * page
+        _gpu_runtime().unbind_mapped(start)
+        DeviceAllocator._range_del(start)
+
+    @staticmethod
     def malloc_host_pinned(nbytes: int) -> int:
         """Allocate page-locked host memory. Enables non_blocking H2D DMA.
 

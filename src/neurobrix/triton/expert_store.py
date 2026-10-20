@@ -54,7 +54,12 @@ class NBXExpertStore:
         # container's files (Prism's `expert_files`, `holds_expert_files`), a slot is a POINTER to the expert
         # where it lies — its pages bound in place (`DeviceAllocator.bind_mapped`), nothing copied, no arena.
         self.in_place = bool(in_place)
-        self._bound = set()      # (layer, expert) whose pages are bound
+        # (layer, expert) -> its projections' host addresses, least recently routed first. Bounded by the plan's
+        # slot count: a bound expert's pages are resident while a command binds them, so the bound set is the
+        # cache Prism priced — the in-place store never holds more than the copying one (DSV2 triton unbounded,
+        # 2026-10-20: 27 GB of experts bound in the prefill, swap +6.7 GB in 13 s).
+        from collections import OrderedDict
+        self._bound = OrderedDict()
         for t in like:
             if not isinstance(t, NBXTensor):
                 raise RuntimeError(
@@ -152,14 +157,28 @@ class NBXExpertStore:
             if (layer, e) not in self._bound:
                 for s in src:
                     DA.bind_mapped(s.data_ptr(), s._nbytes)
-                self._bound.add((layer, e))
+                self._bound[(layer, e)] = [s.data_ptr() for s in src]
                 self.residency.misses += 1
             else:
+                self._bound.move_to_end((layer, e))
                 self.residency.hits += 1
             views[e] = src
+        self._evict_bound(keep={(layer, e) for e in views})
         filler = views[min(views)]
         triples = [views.get(e, filler) for e in range(int(n_experts))]
         return ([t[0] for t in triples], [t[1] for t in triples], [t[2] for t in triples])
+
+    def _evict_bound(self, keep) -> None:
+        """Unbind the least recently routed experts past the slot count, never one this call reads. The cached
+        pointer tables pin what they address, so they are dropped first (rebuilt by the next call)."""
+        cap = max(int(self.residency.n_slots), len(keep))
+        if len(self._bound) <= cap:
+            return
+        from neurobrix.triton.moe import release_pinned_tables
+        release_pinned_tables()
+        for key in [k for k in self._bound if k not in keep][:len(self._bound) - cap]:
+            for ptr in self._bound.pop(key):
+                DA.unbind_mapped(ptr)
 
     # ── step 3: the prefetch of the next layer's predicted experts (mirror of the compiled store) ──
     def prefetch_next(self, layer, routed) -> int:
