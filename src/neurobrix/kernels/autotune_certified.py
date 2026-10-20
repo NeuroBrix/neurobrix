@@ -433,9 +433,34 @@ def _out_of_tree_backend_hash() -> Optional[str]:
     from triton.compiler.compiler import make_backend
     backend = make_backend(tgt)
     module = (type(backend).__module__ or "")
-    result = None if module.startswith("triton.backends.") else backend.hash()
+    result = None if module.startswith("triton.backends.") else _backend_content_hash(backend)
     _OUT_OF_TREE_HASH[key] = result
     return result
+
+
+def _backend_content_hash(backend) -> str:
+    """The out-of-tree backend's identity from its CONTENT: the bytes of every source file and shared library in its
+    package (and of its plugin library, wherever it lies) and the code-generation gates it declares (`CODEGEN_ENV`,
+    set or unset). triton's own `backend.hash()` folds in FILE DATES (the plugin's mtime, every .py's mtime): it decides
+    when triton recompiles, which a date may well do; a certificate proves a CODE, and a date is not code. The Mac,
+    2026-10-20: the served AppleGPU backend restored byte for byte with `cp -R` moved triton's hash 42ebffa ->
+    62109df8 and no Apple certificate served; byte-identical files keep this identity."""
+    import hashlib
+    import sys as _sys
+    mod = _sys.modules.get(type(backend).__module__)
+    pkg = Path(getattr(mod, "__file__", "") or "").parent
+    h = hashlib.sha256()
+    for name in getattr(type(backend), "CODEGEN_ENV", ()) or ():
+        h.update(f"{name}={name in os.environ}:{os.environ.get(name, '')}".encode())
+    files = sorted(f for f in pkg.rglob("*") if f.is_file() and f.suffix in (".py", ".so", ".dylib")
+                   and "__pycache__" not in f.parts) if pkg.is_dir() else []
+    plugin = getattr(mod, "PLUGIN_LIBRARY", None)
+    if plugin is not None and Path(plugin).is_file() and Path(plugin) not in files:
+        files.append(Path(plugin))
+    for f in files:
+        h.update(str(f.relative_to(pkg) if pkg in f.parents else f.name).encode())
+        h.update(hashlib.sha256(f.read_bytes()).digest())
+    return f"content-{h.hexdigest()[:16]}"
 
 
 def generator_identity() -> Dict[str, Any]:
