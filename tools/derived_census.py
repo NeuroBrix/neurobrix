@@ -866,7 +866,8 @@ _KEYED_KINDS = frozenset({
     "aten::lstm", "aten::_fft_r2c", "aten::_fft_c2r", "aten::linear", "aten::matmul", "aten::stft",
     "aten::istft", "aten::scaled_dot_product_attention", "aten::_scaled_dot_product_attention",
     "aten::_scaled_dot_product_efficient_attention", "aten::_scaled_dot_product_flash_attention",
-    "aten::_scaled_dot_product_flash_attention_for_cpu"})
+    "aten::_scaled_dot_product_flash_attention_for_cpu",
+    "aten::_softmax", "aten::softmax", "aten::_log_softmax", "aten::log_softmax"})
 
 
 def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_bf16,
@@ -942,6 +943,20 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
                 launches = []                     # the vector decode kernel: no autotuned key
             else:
                 launches = LK.math_attention_launches(B, H, Hk, Tq, Tk, D, Dv, qd, kd, vd, has_native_bf16)
+        elif kind in ("aten::_softmax", "aten::softmax", "aten::_log_softmax", "aten::log_softmax"):
+            # `wrappers.softmax` / `log_softmax`: the row is the reduced dim, every other element a row; the output
+            # is allocated like the input (`empty_like`), so both dtypes are the input's as the engine executes it
+            x_s = shape(ins[0])
+            args = (o.get("attributes") or {}).get("args") or []
+            d = args[1] if len(args) > 1 else -1
+            d = d.get("value", -1) if isinstance(d, dict) else d
+            d = int(d) % len(x_s) if x_s else 0
+            feat = x_s[d] if x_s else 1
+            rows = 1
+            for i_, e in enumerate(x_s):
+                if i_ != d:
+                    rows *= e
+            launches = LK.softmax_launches(rows, feat, "log" in kind, dt(ins[0]), dt(ins[0]))
         elif kind == "aten::addmm":
             bias_s, a_s, b_s = shape(ins[0]), shape(ins[1]), shape(ins[2])
             K = _contraction(a_s[-1], b_s[0], ins[1:], o, uid, unhandled)

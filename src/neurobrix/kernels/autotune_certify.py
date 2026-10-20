@@ -372,6 +372,10 @@ def _key_operands(qual: str, tuner, key: tuple) -> Optional[Dict[str, Any]]:
             ins.append(("bias", (B, M, N), d(3, d(0))))
         return {"family": "mm", "inputs": ins, "out": ((B, M, N), out_dt), "mnk": (M, N, K), "batch": B,
                 "row_windowed_launch": False}
+    if short == "softmax_forward_kernel":
+        rows, feat = int(key[0]), int(key[1])
+        return {"family": "softmax", "inputs": [("x", (rows, feat), d(0))], "out": ((rows, feat), out_dt),
+                "mnk": (rows, feat, 1), "batch": 1, "row_windowed_launch": True}
     if short == "conv2d_forward_kernel":
         (n, ci, h, w, co, oh, ow, kh, kw, sh, sw, ph, pw, dh, dw, groups) = [int(v) for v in key[:16]]
         ci_g = ci // max(groups, 1)
@@ -674,6 +678,21 @@ def _matmul_oracle_fn(a, b, bias=None):
     return windowed
 
 
+def _softmax_oracle_fn(x, log: bool):
+    """The fp64 oracle of a row softmax (or log-softmax) of x [rows, feat], whole under the cap, row-windowed above."""
+    m, n = x.shape[-2], x.shape[-1]
+
+    def rows(r0, r1):
+        z = _f64(x[r0:r1, :])
+        z = z - z.max(axis=-1, keepdims=True)
+        return z - np.log(np.exp(z).sum(axis=-1, keepdims=True)) if log else \
+            np.exp(z) / np.exp(z).sum(axis=-1, keepdims=True)
+    wins = _row_windows(m, n, 1)
+    if wins is None:
+        return lambda: rows(0, m)
+    return lambda: RowWindowedOracle([((r0, r1), rows(r0, r1)) for (r0, r1) in wins], m)
+
+
 def _conv_oracle_fn(x, wt, stride, padding, dilation, groups):
     n, ci, h, wd = x.shape
     co, ci_g, kh, kw = wt.shape
@@ -770,6 +789,14 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
             bias = arr(rng, (B, M, N), bias_dt)
             return ((lambda: W.baddbmm_wrapper(to(bias), to(a), to(b))), (_matmul_oracle_fn(a, b, bias) if values else None), "out_ptr")
         return (lambda: W.bmm(to(a), to(b))), (_matmul_oracle_fn(a, b) if values else None), "out_ptr"
+    if short == "softmax_forward_kernel":
+        # (BATCH_BUCKET, feat_dim, log, x, out): the bucket's rows of one row length, through the wrapper itself; the
+        # fp64 oracle per row (row-windowed above the oracle's cap, as a product's)
+        rows, feat, log = int(key[0]), int(key[1]), bool(key[2])
+        _refuse_oversize(card_bytes, [((rows, feat), dts[0] if dts else "fp32"), ((rows, feat), out_dt)], short)
+        x = arr(rng, (rows, feat), dts[0] if dts else "fp32")
+        fn = W.log_softmax if log else W.softmax
+        return (lambda: fn(to(x), -1)), (_softmax_oracle_fn(x, log) if values else None), "output_ptr"
     if short == "conv2d_forward_kernel":
         (n, ci, h, w, co, _oh, _ow, kh, kw, sh, sw, ph, pw, dh, dw, groups) = [int(v) for v in key[:16]]
         _refuse_oversize(card_bytes, [((n, ci, h, w), dts[0] if dts else "fp16"),
