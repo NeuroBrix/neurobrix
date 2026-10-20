@@ -372,6 +372,14 @@ def _key_operands(qual: str, tuner, key: tuple) -> Optional[Dict[str, Any]]:
             ins.append(("bias", (B, M, N), d(3, d(0))))
         return {"family": "mm", "inputs": ins, "out": ((B, M, N), out_dt), "mnk": (M, N, K), "batch": B,
                 "row_windowed_launch": False}
+    if short == "flash_attention_m8n8k4_kernel":
+        tq, tk, hd = int(key[0]), int(key[1]), int(key[2])
+        B, H = _FLASH_SYNTH_BATCH_HEADS
+        ins = [("q", (B, H, tq, hd), d(0)), ("k", (B, H, tk, hd), d(1)), ("v", (B, H, tk, hd), d(2))]
+        if d(3) != d(0):
+            ins.append(("mask", (B, H, tq, tk), d(3)))
+        return {"family": "attention", "inputs": ins, "out": ((B, H, tq, hd), d(0)), "mnk": (tq, hd, 2 * tk),
+                "batch": B * H, "row_windowed_launch": True}
     if short == "softmax_forward_kernel":
         rows, feat = int(key[0]), int(key[1])
         return {"family": "softmax", "inputs": [("x", (rows, feat), d(0))], "out": ((rows, feat), out_dt),
@@ -678,6 +686,30 @@ def _matmul_oracle_fn(a, b, bias=None):
     return windowed
 
 
+#: (batch, heads) of a synthesised attention: two of each so the grid spans batch and heads as the model's does — the
+#: tile's timing is per query block, the key holds the lengths and the head dim
+_FLASH_SYNTH_BATCH_HEADS = (2, 2)
+
+
+def _attention_oracle_fn(q, k, v, mask, scale):
+    """The fp64 oracle of softmax(q k^T * scale + mask) v over [B, H, Tq, D], on query-row windows above the cap
+    (a query row's cost: its Tk scores and their Tk x D products)."""
+    tq, hd = q.shape[-2], q.shape[-1]
+    tk = k.shape[-2]
+
+    def rows(r0, r1):
+        s = np.einsum("bhqd,bhkd->bhqk", _f64(q[..., r0:r1, :]), _f64(k)) * scale
+        if mask is not None:
+            s = s + _f64(mask[..., r0:r1, :])
+        s = s - s.max(axis=-1, keepdims=True)
+        e = np.exp(s)
+        return np.einsum("bhqk,bhkd->bhqd", e / e.sum(axis=-1, keepdims=True), _f64(v))
+    wins = _row_windows(tq, hd, 2 * tk)
+    if wins is None:
+        return lambda: rows(0, tq)
+    return lambda: RowWindowedOracle([((r0, r1), rows(r0, r1)) for (r0, r1) in wins], tq)
+
+
 #: the full-size fp64 arrays the softmax oracle holds per element of its window (z, exp(z), the quotient)
 _SOFTMAX_ORACLE_F64_ARRAYS = 3
 
@@ -800,6 +832,23 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
             bias = arr(rng, (B, M, N), bias_dt)
             return ((lambda: W.baddbmm_wrapper(to(bias), to(a), to(b))), (_matmul_oracle_fn(a, b, bias) if values else None), "out_ptr")
         return (lambda: W.bmm(to(a), to(b))), (_matmul_oracle_fn(a, b) if values else None), "out_ptr"
+    if short == "flash_attention_m8n8k4_kernel":
+        # (Q_BUCKET, K_BUCKET, headdim, split, q, k, v, bias, out, lse): the buckets' top lengths, through the
+        # attention wrapper itself (the matrix-unit route it takes for these dtypes and head dim); a mask only where
+        # the key's bias dtype is not Q's (the zero bias the wrapper builds otherwise); the fp64 oracle per query row
+        tq, tk, hd = int(key[0]), int(key[1]), int(key[2])
+        B, H = _FLASH_SYNTH_BATCH_HEADS
+        qd = dts[0] if dts else "fp16"
+        shapes = [((B, H, tq, hd), qd), ((B, H, tk, hd), dts[1] if len(dts) > 1 else qd),
+                  ((B, H, tk, hd), dts[2] if len(dts) > 2 else qd), ((B, H, tq, hd), qd)]
+        masked = len(dts) > 3 and dts[3] != qd
+        _refuse_oversize(card_bytes, shapes + ([((B, H, tq, tk), dts[3])] if masked else []), short)
+        q, k, v = (arr(rng, sh, dt) for sh, dt in shapes[:3])
+        mask = arr(rng, (B, H, tq, tk), dts[3]) if masked else None
+        scale = 1.0 / float(np.sqrt(hd))
+        return ((lambda: W.scaled_dot_product_attention_wrapper(to(q), to(k), to(v),
+                                                                attn_mask=to(mask) if masked else None)),
+                (_attention_oracle_fn(q, k, v, mask, scale) if values else None), "Out")
     if short == "softmax_forward_kernel":
         # (BATCH_BUCKET, FEAT_BUCKET, log, x, out): the bucket's rows of the padded row length (a length of the class), through the wrapper itself; the
         # fp64 oracle per row (row-windowed above the oracle's cap, as a product's)
