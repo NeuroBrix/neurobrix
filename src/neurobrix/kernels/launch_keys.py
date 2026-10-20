@@ -747,10 +747,18 @@ def conv_launches(x_shape, w_shape, stride, padding, dilation, transposed: bool,
 SOFTMAX_FUSED_MAX_FEAT = 16384
 
 
+def softmax_feat_bucket(feat: int) -> int:
+    """The row length's class in a softmax key: the padded row the program holds (`BLOCK_SIZE_FEAT`, the next power of
+    two) — every config's tile, its register budget and its candidates' pruning are those of the padded row, so one
+    certified entry serves every length that pads to it (keyed by the exact length, a decoder's KV positions made one
+    key per position: 11 504 keys on 16 GB, 2026-10-20)."""
+    return 1 << max(0, int(feat) - 1).bit_length()
+
+
 def softmax_launches(rows: int, feat: int, log: bool, x: NBXDtype, out: NBXDtype) -> List[Launch]:
     """`softmax` / `log_softmax` over a row of `feat` (rows = every other element): the single-program kernel's key —
-    the rows' bucket (`bucket_of("M")`), the row length, the log flag, the input's and the output's dtype — or none
+    the rows' bucket (`bucket_of("M")`), the padded row length (`softmax_feat_bucket`), the log flag, the input's and the output's dtype — or none
     when the row takes the looped kernel (workstream 1: rows per program and warps certified per key)."""
     if feat > SOFTMAX_FUSED_MAX_FEAT or rows < 1:
         return []
-    return [(SOFTMAX, (bucket_of("M", rows), feat, bool(log), tag(x), tag(out)))]
+    return [(SOFTMAX, (bucket_of("M", rows), softmax_feat_bucket(feat), bool(log), tag(x), tag(out)))]

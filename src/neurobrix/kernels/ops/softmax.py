@@ -32,7 +32,7 @@ def _prune_softmax(configs, named_args, **kwargs):
     return keep or configs[:1]
 
 
-@nbx_autotune(configs=_softmax_configs(), key=['BATCH_BUCKET', 'feat_dim', 'log'],
+@nbx_autotune(configs=_softmax_configs(), key=['BATCH_BUCKET', 'FEAT_BUCKET', 'log'],
               prune_configs_by={'early_config_prune': _prune_softmax}, cache_results=True)
 @triton.heuristics({
     'BLOCK_SIZE_FEAT': lambda args: next_power_of_2(args['feat_dim']),
@@ -40,7 +40,7 @@ def _prune_softmax(configs, named_args, **kwargs):
 @triton.jit
 def softmax_forward_kernel(
     input_ptr, output_ptr,
-    batch_dim, feat_dim, BATCH_BUCKET,
+    batch_dim, feat_dim, BATCH_BUCKET, FEAT_BUCKET,
     input_batch_stride, input_feat_stride,
     output_batch_stride, output_feat_stride,
     log: tl.constexpr,

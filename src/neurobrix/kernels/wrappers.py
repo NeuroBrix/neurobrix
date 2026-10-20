@@ -1828,7 +1828,7 @@ def softmax(x, dim: int = -1, half_to_float: bool = False) :
         grid = lambda META: (triton.cdiv(batch_dim, META['BLOCK_SIZE_BATCH']),)
         softmax_forward_kernel[grid](
             x_2d, output_2d,
-            batch_dim, feat_dim, _lk.bucket_of("M", batch_dim),
+            batch_dim, feat_dim, _lk.bucket_of("M", batch_dim), _lk.softmax_feat_bucket(feat_dim),
             x_2d.stride(0), x_2d.stride(1),
             output_2d.stride(0), output_2d.stride(1),
             log=False,
@@ -1855,7 +1855,7 @@ def log_softmax(x, dim: int = -1) :
         grid = lambda META: (triton.cdiv(batch_dim, META['BLOCK_SIZE_BATCH']),)
         softmax_forward_kernel[grid](
             x_2d, output_2d,
-            batch_dim, feat_dim, _lk.bucket_of("M", batch_dim),
+            batch_dim, feat_dim, _lk.bucket_of("M", batch_dim), _lk.softmax_feat_bucket(feat_dim),
             x_2d.stride(0), x_2d.stride(1),
             output_2d.stride(0), output_2d.stride(1),
             log=True,

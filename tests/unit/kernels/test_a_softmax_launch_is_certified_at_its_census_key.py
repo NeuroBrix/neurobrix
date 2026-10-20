@@ -5,9 +5,16 @@ from neurobrix.kernels import launch_keys as LK
 from neurobrix.kernels.ops import softmax as S
 
 
-def test_a_short_row_is_keyed_by_its_rows_bucket_length_log_and_dtypes():
+def test_a_short_row_is_keyed_by_its_rows_bucket_padded_length_log_and_dtypes():
     (kern, key), = LK.softmax_launches(30720, 1500, False, "fp32", "fp32")
-    assert kern == LK.SOFTMAX and key == (LK.bucket_of("M", 30720), 1500, False, "fp32", "fp32")
+    assert kern == LK.SOFTMAX and key == (LK.bucket_of("M", 30720), 2048, False, "fp32", "fp32")
+
+
+def test_every_length_that_pads_to_one_tile_shares_its_key():
+    """A decoder's attention row grows by one position per token: keyed by the exact length it made one key per
+    position (11 504 softmax keys on 16 GB); the program's tile is the padded row, so the class is the padded row."""
+    keys = {LK.softmax_launches(8, n, False, "fp32", "fp32")[0][1] for n in range(1025, 2049)}
+    assert len(keys) == 1 and LK.softmax_feat_bucket(1024) == 1024 and LK.softmax_feat_bucket(1) == 1
 
 
 def test_a_row_past_the_fused_kernel_forms_no_key():

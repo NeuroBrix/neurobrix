@@ -790,7 +790,7 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
             return ((lambda: W.baddbmm_wrapper(to(bias), to(a), to(b))), (_matmul_oracle_fn(a, b, bias) if values else None), "out_ptr")
         return (lambda: W.bmm(to(a), to(b))), (_matmul_oracle_fn(a, b) if values else None), "out_ptr"
     if short == "softmax_forward_kernel":
-        # (BATCH_BUCKET, feat_dim, log, x, out): the bucket's rows of one row length, through the wrapper itself; the
+        # (BATCH_BUCKET, FEAT_BUCKET, log, x, out): the bucket's rows of the padded row length (a length of the class), through the wrapper itself; the
         # fp64 oracle per row (row-windowed above the oracle's cap, as a product's)
         rows, feat, log = int(key[0]), int(key[1]), bool(key[2])
         _refuse_oversize(card_bytes, [((rows, feat), dts[0] if dts else "fp32"), ((rows, feat), out_dt)], short)
