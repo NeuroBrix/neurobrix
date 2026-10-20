@@ -144,10 +144,12 @@ def gemm_row_representative(m_bucket: int, a: NBXDtype, b: NBXDtype) -> Optional
     """The largest row count M whose GEMM launch forms the autotune key of M bucket `m_bucket`: its bucket is
     `m_bucket` (`bucket_of`) and the matrix unit does not take it (`matrix_unit_takes`). A bucket's top is not always
     one: on Volta the class 57..64 of an fp32 GEMM keys M_BUCKET 64, and at 64 itself the split matrix unit takes the
-    GEMM (no key) — a certification synthesising M=64 never reached the autotuner (2026-10-19, 172 keys). None: no
-    row count forms the key."""
+    GEMM (no key) — a certification synthesising M=64 never reached the autotuner (2026-10-19, 172 keys). Every row
+    count down to one is a candidate: a batched GEMM keys its rows however few (`bmm_launches`, no GEMV below five rows
+    as `mm` has) — stopping at five refused every bmm key of buckets 1-4 as a census defect (80 attention keys on the
+    Mac, 2026-10-20). None: no row count forms the key."""
     m = int(m_bucket)
-    while m > 4 and bucket_of("M", m) == m_bucket:
+    while m >= 1 and bucket_of("M", m) == m_bucket:
         if not matrix_unit_takes(a, b, m):
             return m
         m -= 1
