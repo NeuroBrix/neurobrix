@@ -966,6 +966,17 @@ def chunk_extents(total: int, count: int) -> List[Tuple[int, int]]:
     return [(f, min(c, total - f)) for f in range(0, total, c)]
 
 
+def slice_reads(total: int, count: int, margin: int) -> List[Tuple[int, int, int, int]]:
+    """(start, length, read start, read length) of each slice: its own rows (`chunk_extents`) and the rows it READS —
+    widened by the stretch's halo `margin` on each side, clipped at the axis' true ends. The executor runs a slice at
+    its read length, so the census derives a sliced stretch's keys at the same lengths (one function for both)."""
+    out = []
+    for start, length in chunk_extents(total, count):
+        in_start = max(0, start - margin)
+        out.append((start, length, in_start, min(total, start + length + margin) - in_start))
+    return out
+
+
 def pass_graph(graph: Dict[str, Any], cp: ChunkPass) -> Dict[str, Any]:
     """The minimal graph a pass's liveness is walked on (sizing only)."""
     ops = graph.get("ops") or {}

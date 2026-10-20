@@ -1207,12 +1207,13 @@ def sliced_bindings(model: str, comp: str, syms: dict, plan: dict, unhandled) ->
     """[(op uids, binding)] of the stretches the plan runs in slices of a token axis
     (`plan.layer_stream_chunks[comp]`, run by `core/strategies/chunked_piece.ChunkedPiece`): the
     ops of the stretch's SLICED passes (`plan_region` on the graph the executor runs), at each
-    length a slice takes (`chunk_extents` over the slice count — the runtime's own split). A pass
+    length a slice READS (`slice_reads` over the slice count — the runtime's own split, widened by the stretch's
+    halo). A pass
     that does not touch the axis runs once at the request's binding, already derived. One entry
     per binding, its ops every stretch's at it: the component is derived once per length (SANA's
     40 stretches take 4)."""
     from neurobrix.core.prism.chunked_region import (
-        TokenAxis, chunk_extents, plan_region, region_carriers)
+        TokenAxis, plan_region, region_carriers, slice_reads)
     chunks = (plan.get("layer_stream_chunks") or {}).get(comp) or []
     if not chunks:
         return []
@@ -1240,7 +1241,8 @@ def sliced_bindings(model: str, comp: str, syms: dict, plan: dict, unhandled) ->
             continue
         ops_ = {u for cp in rp.passes if cp.chunked for u in cp.ops}
         total = int(syms[sym])
-        for length in sorted({n for _f, n in chunk_extents(total, -(-total // int(ch["slice"])))}):
+        # a slice runs at the length it READS — its rows plus the stretch's halo (`slice_reads`, the executor's own)
+        for length in sorted({n for *_o, _s, n in slice_reads(total, -(-total // int(ch["slice"])), rp.margin)}):
             if length != total:
                 out.setdefault((sym, length), set()).update(ops_)
     return [(ops_, {**syms, sym: length}) for (sym, length), ops_ in sorted(out.items())]

@@ -26,7 +26,7 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set
 
 from neurobrix.core.prism.chunked_region import (
-    TokenAxis, accumulate, chunk_extents, dim_source, own, plan_region, put_slice, region_carriers,
+    TokenAxis, accumulate, dim_source, slice_reads, own, plan_region, put_slice, region_carriers,
     store, take_slice, whole_shape)
 from neurobrix.core.prism.layer_partition import Segment, build_segment_graph
 from neurobrix.core.runtime.graph_executor import output_key
@@ -217,7 +217,7 @@ class ChunkedPiece:
         plan = self._plan
         value = self._symbols(feed)
         total = value(self._sym)
-        extents = chunk_extents(total, -(-total // self._slice))
+        count = -(-total // self._slice)
         inner = {t: (lay.inner.evaluate(value) if lay.inner is not None else None)
                  for t, lay in plan.layouts.items()}
         # what is sliced on the way in: the stretch's inputs and the carriers of its symbols
@@ -230,10 +230,9 @@ class ChunkedPiece:
             ex.load_weights(nbx_path, component)
             try:
                 m = plan.margin if cp.chunked else 0
-                for start, length in (extents if cp.chunked else [(0, total)]):
-                    # the slice read: widened by the stretch's halo, clipped at the axis' true ends
-                    in_start = max(0, start - m)
-                    in_len = min(total, start + length + m) - in_start
+                # each slice READS its rows widened by the stretch's halo, clipped at the axis' true ends
+                for start, length, in_start, in_len in (slice_reads(total, count, m) if cp.chunked
+                                                        else [(0, total, 0, total)]):
                     sub_feed = {}
                     for n in names:
                         tid = self._tid(n)
