@@ -45,3 +45,34 @@ def test_every_keyed_bucket_s_representative_forms_its_key(bound_profile):
 def test_the_volta_fp32_class_below_the_unit_is_certified_at_63(bound_profile):
     from neurobrix.kernels import autotune_certify as A
     assert A._gemm_rows((64, 128, 57, True, False, False, "fp32", "fp32", "fp32", "fp32"), ["fp32"] * 4) == 63
+
+
+
+@pytest.fixture
+def apple_profile(monkeypatch):
+    """The Mac's M ladder keys every row count below five on its own (buckets 1, 2, 3, 4)."""
+    from tests.unit.prism._pinned_machine import APPLE_M4_PRO
+    from neurobrix.kernels import wrappers as W
+    from neurobrix.kernels.ops import _configs as CF
+    W.set_hardware_profile(profile(APPLE_M4_PRO))
+    monkeypatch.setattr(CF, "_ACTIVE_PROFILE", CF.vendor_profile_for_arch("apple-m4-pro"))
+    bound = CF.active_vendor_profile()
+    assert bound.get("compute_capability") == "apple-m4-pro", "the Apple profile is not the one in force"
+    yield bound
+
+
+def test_a_batched_gemm_of_a_few_rows_is_certified_at_its_own_rows(apple_profile):
+    """A decode step's attention is a bmm of one query row per head: `bmm_launches` keys it at M_BUCKET 1 (no GEMV
+    route for a batched GEMM). The representative stopped at five rows and refused those keys as census defects (80
+    on the Mac, 2026-10-20) — red here with the old bound."""
+    from neurobrix.kernels import launch_keys as LK
+    from neurobrix.kernels.nbx_tensor import NBXDtype as D
+    for m in (1, 2, 3, 4):
+        for d in (D.float32, D.bfloat16, D.float16):
+            keys = LK.bmm_launches(m, 128, 128, d, d, native_bf16=True)
+            assert keys, (m, d)
+            mb = keys[0][1][0]
+            assert mb <= 4, (m, mb)
+            r = LK.gemm_row_representative(mb, d, d)
+            assert r is not None and LK.bucket_of("M", r) == mb, (m, mb, r)
+            assert LK.bmm_launches(r, 128, 128, d, d, native_bf16=True)[0][1] == keys[0][1]
