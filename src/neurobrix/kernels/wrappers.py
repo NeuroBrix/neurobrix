@@ -4423,7 +4423,7 @@ def _depthwise_conv2d_dispatch(
         kh=kh, kw=kw,
         stride_h=stride_h, stride_w=stride_w,
         pad_h=pad_h, pad_w=pad_w,
-        fp16=fp16,
+        fp16=fp16, WIDE_OFFSETS=_conv_offsets_wide(x_c, w_c, output),
     )
 
     if bias is not None:

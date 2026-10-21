@@ -64,10 +64,19 @@ def depthwise_conv2d_kernel(
     fp16: tl.constexpr,
     BLOCK_HW: tl.constexpr = 64,
     BLOCK_C: tl.constexpr = 32,
+    WIDE_OFFSETS: tl.constexpr = True,
 ):
-    pid_n = tl.program_id(0).to(tl.int64)
-    pid_c = tl.program_id(1).to(tl.int64)
-    pid_hw = tl.program_id(2).to(tl.int64)
+    # 64-bit offsets only where an operand's extent needs them (`WIDE_OFFSETS`, the wrapper's `_conv_offsets_wide`, as
+    # conv2d): 32-bit offsets are exact below 2^31, and the 64-bit ones are emulated on Apple's ALUs — under the i64 fix of
+    # the Metal backend (b06cbb0d) the fp32 3x3 depthwise (13440 ch, 42x21) ran 8.4 -> 12.5 ms (Mac, 2026-10-21)
+    if WIDE_OFFSETS:
+        pid_n = tl.program_id(0).to(tl.int64)
+        pid_c = tl.program_id(1).to(tl.int64)
+        pid_hw = tl.program_id(2).to(tl.int64)
+    else:
+        pid_n = tl.program_id(0)
+        pid_c = tl.program_id(1)
+        pid_hw = tl.program_id(2)
 
     offs_c = pid_c * BLOCK_C + tl.arange(0, BLOCK_C)
     offs_hw = pid_hw * BLOCK_HW + tl.arange(0, BLOCK_HW)
