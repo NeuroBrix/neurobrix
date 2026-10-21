@@ -17,14 +17,12 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-05T08:45:38+00:00",
+    "date": "2026-10-21T20:07:41+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
      "name": "mps",
-     "backend_hash": "content-3c48a86549cdcefe",
-     "backend_hash_was": "msl-v0.1-42ebffa212f366de",
-     "renamed_because": "served triton_apple_backend (venv-tritonext-adbf6e84) byte-identical to its 15:59 backup outside __pycache__ (diff -rq, 2026-10-20 17:3x); 42ebffa = that install before the 15:59 change, 62109df8 = the same bytes after the 16:22 cp -R restore; content-3c48a86549cdcefe = autotune_certified._backend_content_hash of those bytes"
+     "backend_hash": "content-724cc9e3cf5258b0"
     },
     "shape": [
      13440,
@@ -45,9 +43,9 @@
     ],
     "launches": 1,
     "launch_deviations": [
-     1.293050562723656e-07
+     1.289449470103219e-07
     ],
-    "deviation": 1.293050562723656e-07,
+    "deviation": 1.289449470103219e-07,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -66,29 +64,41 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 8.682791471481323,
-    "second_ms": 8.772770643234253,
-    "candidates": 12,
-    "accepted": 12,
-    "benched": 5,
+    "best_ms": 4.104560242758857,
+    "second_ms": null,
+    "candidates": 1,
+    "accepted": 1,
+    "benched": 1,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.135,
-     "runs": 8.031,
-     "bench": 0.764
+     "oracle": 0.148,
+     "runs": 0.427,
+     "bench": 0.328
     },
     "stability_witness": {
-     "open_ms": 3.4845,
-     "close_ms": 3.4104,
-     "drift": 0.0213,
+     "open_ms": 3.4636,
+     "close_ms": 3.4913,
+     "drift": 0.008,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
       2048,
       2048,
       2048
+     ],
+     "chunk": 4,
+     "brackets": [
+      {
+       "what": "chunk 1 of 1",
+       "open_ms": 3.4636,
+       "close_ms": 3.4913,
+       "drift": 0.008,
+       "attempt": 1,
+       "contenders": 1
+      }
      ]
     },
+    "reproven_from": "triton 3.8.0+git4a15f415 mps content-3c48",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -109,14 +119,12 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-04T03:40:56+00:00",
+    "date": "2026-10-21T20:07:42+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
      "name": "mps",
-     "backend_hash": "content-3c48a86549cdcefe",
-     "backend_hash_was": "msl-v0.1-42ebffa212f366de",
-     "renamed_because": "served triton_apple_backend (venv-tritonext-adbf6e84) byte-identical to its 15:59 backup outside __pycache__ (diff -rq, 2026-10-20 17:3x); 42ebffa = that install before the 15:59 change, 62109df8 = the same bytes after the 16:22 cp -R restore; content-3c48a86549cdcefe = autotune_certified._backend_content_hash of those bytes"
+     "backend_hash": "content-724cc9e3cf5258b0"
     },
     "shape": [
      13440,
@@ -137,9 +145,9 @@
     ],
     "launches": 1,
     "launch_deviations": [
-     1.3288480615461676e-07
+     1.282664761597639e-07
     ],
-    "deviation": 1.3288480615461676e-07,
+    "deviation": 1.282664761597639e-07,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -158,29 +166,41 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 8.707093715667725,
-    "second_ms": 8.791958332061768,
-    "candidates": 12,
-    "accepted": 12,
-    "benched": 5,
+    "best_ms": 4.286472161610921,
+    "second_ms": null,
+    "candidates": 1,
+    "accepted": 1,
+    "benched": 1,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.135,
-     "runs": 10.72,
-     "bench": 0.757
+     "oracle": 0.141,
+     "runs": 0.399,
+     "bench": 0.333
     },
     "stability_witness": {
-     "open_ms": 3.5281,
-     "close_ms": 3.4145,
-     "drift": 0.0322,
+     "open_ms": 3.4011,
+     "close_ms": 3.3161,
+     "drift": 0.025,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
       2048,
       2048,
       2048
+     ],
+     "chunk": 4,
+     "brackets": [
+      {
+       "what": "chunk 1 of 1",
+       "open_ms": 3.4011,
+       "close_ms": 3.3161,
+       "drift": 0.025,
+       "attempt": 1,
+       "contenders": 1
+      }
      ]
     },
+    "reproven_from": "triton 3.8.0+git4a15f415 mps content-3c48",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
