@@ -13,6 +13,7 @@ Formula: Required_VRAM = Weights + Peak_Activations + Overhead
 """
 
 import json
+import os
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Union
 from dataclasses import dataclass
@@ -1233,6 +1234,13 @@ class ActivationProfiler:
                 current_bytes += _held_size(tid)
             peak_bytes = max(peak_bytes, current_bytes)
 
+        # Diagnostic (default off): NBX_PRISM_CURVE_DUMP=<dir> writes this walk op by op — the in-op figure and the
+        # live set after the op — for comparison with an engine's measured live bytes (NBX_NATIVE_LIVE_DUMP_EVERY /
+        # NBX_LIVE_DUMP_EVERY), one file per call.
+        _curve_dir = os.environ.get("NBX_PRISM_CURVE_DUMP")
+        _curve_dump: Optional[List] = [] if _curve_dir else None
+        _peak_live: List = []
+
         # Simulation loop
         for step, op_uid in enumerate(self.execution_order):
             op = self.ops.get(op_uid, {})
@@ -1324,6 +1332,9 @@ class ActivationProfiler:
                 peak_op_uid = op_uid
                 peak_step = step
                 peak_tensor_count = len(live_tensors)
+                if _curve_dump is not None:
+                    _peak_live = sorted(live_tensors.items(), key=lambda kv: -kv[1])[:12]
+            _in_op_dump = in_op
 
             # 3. FREE: Remove all tids whose effective last-use is this op.
             # Uses the precomputed `frees_at` reverse map so the free phase
@@ -1335,6 +1346,21 @@ class ActivationProfiler:
                 if tid in live_tensors:
                     current_bytes -= live_tensors[tid]
                     del live_tensors[tid]
+            if _curve_dump is not None:
+                _curve_dump.append((op_uid, op.get("op_type"), _in_op_dump, current_bytes))
+
+        if _curve_dump is not None:
+            import json as _json
+            _name = str(self.dag.get("component_name") or "component")
+            _path = os.path.join(_curve_dir, f"{_name}.{mode}.{os.getpid()}.{id(_curve_dump)}.jsonl")
+            os.makedirs(_curve_dir, exist_ok=True)
+            with open(_path, "w") as _fh:
+                _fh.write(_json.dumps({"component": _name, "mode": mode, "binding": binding,
+                                       "symbols": {k: (v if isinstance(v, (int, float)) else str(v)) for k, v in symbol_map.items()},
+                                       "widths": widths is not None, "peak_bytes": peak_bytes, "peak_op": peak_op_uid,
+                                       "peak_live": [[t, b, (self.ops.get(next((u for u in self.execution_order if t in (self.ops.get(u) or {}).get("output_tensor_ids", [])), ""), {}) or {}).get("op_type"), last_uses_eff.get(t)] for t, b in _peak_live]}) + "\n")
+                for _u, _k, _i, _l in _curve_dump:
+                    _fh.write(_json.dumps([_u, _k, _i, _l]) + "\n")
 
         # Scan per-op output + workspace to flag overflows for op-level tiling
         overflow_ops = []
