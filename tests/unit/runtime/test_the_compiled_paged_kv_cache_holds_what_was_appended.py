@@ -67,3 +67,21 @@ def test_clear_returns_every_page_and_the_next_request_starts_at_zero():
     cache.clear()
     assert cache.held_bytes() == 0 and cache.get_seq_len() == 0
     _request(cache, 1, 9, 4, g)
+
+
+def test_a_request_of_another_batch_repages_the_cleared_cache():
+    # `neurobrix serve`: one process, requests of any batch (supervisor 2026-10-21 12:15) — the cache re-pages
+    cache = PagedKVCache(_cfg(), 16, False)
+    _request(cache, 1, 40, 10, torch.Generator().manual_seed(0))
+    cache.clear()
+    _request(cache, 2, 37, 30, torch.Generator().manual_seed(1))      # batch 2 after batch 1: exact, page-crossing
+    assert cache.get_seq_len() == 67
+    cache.clear()
+    _request(cache, 1, 20, 5, torch.Generator().manual_seed(2))       # and back
+
+
+def test_a_batch_change_mid_request_is_refused_by_name():
+    cache = PagedKVCache(_cfg(), 16, False)
+    _request(cache, 1, 10, 2, torch.Generator().manual_seed(0))
+    with pytest.raises(RuntimeError, match="mid-request"):
+        cache.update(0, torch.randn(2, 4, 1, 16), torch.randn(2, 4, 1, 8))

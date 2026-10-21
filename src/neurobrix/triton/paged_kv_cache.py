@@ -75,10 +75,16 @@ class PagedTritonKVCache:
         plans) or its cache — granted page by page as sequences grow; a request needing more grows them (`_grow`)."""
         batch = int(k.shape[0])
         if self.pool is not None:
-            if batch != self.batch:
-                raise RuntimeError(f"ZERO FALLBACK: the paged KV cache holds {self.batch} sequences, a request brought "
-                                   f"{batch}")
-            return
+            if batch == self.batch:
+                return
+            if self.length != 0:
+                raise RuntimeError(f"ZERO FALLBACK: the paged KV cache holds {self.batch} sequences mid-request "
+                                   f"({self.length} positions), and a step brought {batch}")
+            # A new request of another batch (`neurobrix serve`: one process, requests of any batch): the cache holds
+            # no position, so it re-pages for the new batch — pools, tables, lengths and block table rebuilt exactly as
+            # at a first prefill. Addresses move: the generation moves once and every replay plan recorded under the
+            # previous one is retired, as `_grow` does (supervisor 2026-10-21 12:15: never refuse what can run).
+            self._repage()
         self.batch, self.device_idx = batch, int(k._device_idx)
         self.capacity = self.initial_cache_len or self.max_cache_len
         num_pages = batch * self.pages_per_sequence
@@ -89,6 +95,25 @@ class PagedTritonKVCache:
             self.k_pools[i], self.v_pools[i] = self._new_pools(num_pages)
             self.lens[i] = NBXTensor.from_numpy(np.zeros((batch,), dtype=np.int32))
         self.block_table_dev = NBXTensor.from_numpy(np.full((batch, self.pages_per_sequence), -1, dtype=np.int32))
+
+    def _repage(self) -> None:
+        """Drop the pools of the previous batch (the cache is empty) so `_ensure` allocates them for the new one."""
+        if self.fence is not None:
+            self.fence.drain(self)
+        for tbl in self.tables:
+            tbl.free()
+        self.pool, self.tables = None, []
+        self.k_pools = [None] * self.num_layers
+        self.v_pools = [None] * self.num_layers
+        self.lens = [None] * self.num_layers
+        self.block_table_dev = None
+        self._published_pages = -1
+        old_gen, uid = self.generation, self._uid
+        self.generation += 1
+        from neurobrix.triton import replay as _replay
+        _replay.drop_plans_by_contribution(
+            lambda c: (isinstance(c, tuple) and len(c) >= 5 and c[0] == "kv_decode_paged"
+                       and c[3] == uid and c[4] == old_gen))
 
     def _new_pools(self, num_pages: int):
         dev = f"cuda:{self.device_idx}"

@@ -49,8 +49,18 @@ class PagedKVCache:
             self.pool = PagePool(batch * self._pages_for(start), self.page_tokens, self.async_release)
             self.tables = [PageTable(self.pool) for _ in range(batch)]
         elif batch != self.batch:
-            raise RuntimeError(f"ZERO FALLBACK: the paged KV cache holds {self.batch} sequences, a request brought "
-                               f"{batch}")
+            if self._seq_len != 0:
+                raise RuntimeError(f"ZERO FALLBACK: the paged KV cache holds {self.batch} sequences mid-request "
+                                   f"({self._seq_len} positions), and a step brought {batch}")
+            # A new request of another batch (`neurobrix serve`): the cache is empty, so it re-pages for the new batch
+            # — pool, tables and per-layer pools rebuilt as at a first prefill (supervisor 2026-10-21 12:15)
+            for t in self.tables:
+                t.free()
+            self.k_pools.clear(); self.v_pools.clear(); self.lens.clear()
+            self.batch = batch
+            start = self.config.initial_cache_len or self.config.max_cache_len
+            self.pool = PagePool(batch * self._pages_for(start), self.page_tokens, self.async_release)
+            self.tables = [PageTable(self.pool) for _ in range(batch)]
 
     def _layer_pools(self, layer_idx: int, device) -> Tuple[torch.Tensor, torch.Tensor]:
         """The layer's pools on its device, extended to the pool's page count (pages added by `grow`)."""

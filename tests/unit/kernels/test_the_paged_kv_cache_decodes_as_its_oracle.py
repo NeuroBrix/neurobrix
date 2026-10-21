@@ -104,3 +104,21 @@ def test_the_cache_holds_its_granted_pages_only_and_clear_returns_them():
     assert cache.held_bytes() == 0 and cache.get_cache_len() == 0
     worst = _request(cache, rng, 1, 32, 8, 128, 50, 4, 2)
     assert worst < BOUND, f"after clear(): relative error {worst:.2e}"
+
+
+def test_a_request_of_another_batch_repages_the_cleared_cache():
+    # `neurobrix serve`: one process, requests of any batch (supervisor 2026-10-21 12:15) — the cache re-pages, the
+    # replay plans of the previous pools retire with their generation
+    if not _has_gpu():
+        pytest.skip("no device")
+    cache = PagedTritonKVCache(num_layers=2, num_kv_heads=2, k_head_dim=64, v_head_dim=64, max_cache_len=4096,
+                               dtype=NBXDtype.float16, page_tokens=64, async_release=False, decode_budget=0)
+    rng = np.random.default_rng(3)
+    assert _request(cache, rng, 1, 16, 2, 64, 70, 3, 2) < BOUND
+    gen = cache.generation
+    cache.clear()
+    worst = _request(cache, rng, 2, 16, 2, 64, 63, 5, 2)             # batch 2 after batch 1, crossing a page
+    assert worst < BOUND, f"after a batch change: relative error {worst:.2e}"
+    assert cache.generation > gen and cache.get_cache_len() == 63 + 5
+    cache.clear()
+    assert _request(cache, rng, 1, 16, 2, 64, 30, 2, 2) < BOUND         # and back
