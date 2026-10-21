@@ -260,6 +260,24 @@ def _force_int(val):
 def _meta_select(x, dim, index):
     return x.select(_tensor_to_int(dim), _tensor_to_int(index))
 
+
+def _meta_slice_scatter(x, src, dim=0, start=None, end=None, step=1):
+    """aten.slice_scatter: a copy of `x` with `src` written where `x[..., start:end:step]` lies (along `dim`) —
+    the functional form of an in-place write into a slice view (Forge `GraphBuilder.write_back_view`: Swin's
+    shifted-window mask `img_mask[:, h, w, :] = cnt`). The slice is `_meta_slice`'s, the same bounds rules."""
+    out = x.clone()
+    _meta_slice(out, dim, start, end, step).copy_(src)
+    return out
+
+
+def _meta_select_scatter(x, src, dim, index):
+    """aten.select_scatter: a copy of `x` with `src` written at `index` along `dim` (the functional form of an
+    in-place write into a select view)."""
+    out = x.clone()
+    d, i = _tensor_to_int(dim), _tensor_to_int(index)
+    out.select(d, i if i >= 0 else out.shape[d] + i).copy_(src)
+    return out
+
 def _meta_clone(x, *args, **kwargs):
     return x.clone()
 
@@ -1035,6 +1053,8 @@ def _build_op_map() -> Dict[str, Callable]:
         "narrow": _meta_narrow,
         "slice": _meta_slice,
         "select": _meta_select,
+        "slice_scatter": _meta_slice_scatter,
+        "select_scatter": _meta_select_scatter,
         "unbind": _meta_unbind,
         # NOTE: split_with_sizes is bound ONCE, in the Split/chunk section
         # below (narrow-based multi-output tuple). A historical
