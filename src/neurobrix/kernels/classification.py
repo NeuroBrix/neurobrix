@@ -114,6 +114,8 @@ _METADATA_OPS = {
     "view", "_unsafe_view", "reshape", "flatten", "squeeze", "unsqueeze",
     "permute", "transpose", "t", "contiguous", "expand", "expand_as",
     "repeat", "narrow", "slice", "select", "split", "chunk", "unbind",
+    # the functional form of an in-place write into a slice / select view (a copy of the base, written)
+    "slice_scatter", "select_scatter",
 
     # Concatenation (memory copy)
     "cat", "stack",
