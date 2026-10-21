@@ -522,11 +522,11 @@ class LayerPartitioner:
             return numel * int(self._widths[tid])
         return self._resolver._compute_size(shape, t, self._compute_dtype_bytes)
 
-    def _axis(self, sym: str):
+    def _axis(self, sym: str, unit: int = 1):
         from neurobrix.core.prism.chunked_region import TokenAxis
-        if sym not in self._axes:
-            self._axes[sym] = TokenAxis(self._dag, sym)
-        return self._axes[sym]
+        if (sym, unit) not in self._axes:
+            self._axes[(sym, unit)] = TokenAxis(self._dag, sym, unit)
+        return self._axes[(sym, unit)]
 
     def _op_symbols(self) -> Dict[str, Any]:
         from neurobrix.core.prism.chunked_region import op_symbols
@@ -559,15 +559,15 @@ class LayerPartitioner:
             reserve = max(reserve, r.peak_bytes)
         return eff, max([reserve] + eff) if eff else reserve
 
-    def _pass_peak(self, cp, sym: str, c: int, chunked: bool) -> int:
-        """The live activations of one pass at slice `c`: its own curve (its ops alone, its targets
-        kept) plus the contiguous slices of the stretch's inputs it is fed."""
+    def _pass_peak(self, cp, sym: str, c: int, chunked: bool, unit: int = 1) -> int:
+        """The live activations of one pass at slice `c` (in units of `unit` of the symbol): its own curve
+        (its ops alone, its targets kept) plus the contiguous slices of the stretch's inputs it is fed."""
         from neurobrix.core.prism.chunked_region import pass_graph
-        key = (tuple(cp.ops), sym, c if chunked else 0)
+        key = (tuple(cp.ops), sym, unit, c if chunked else 0)
         if key not in self._pass_peak_memo:
             sm = dict(self._symbol_map)
             if chunked:
-                sm[sym] = c
+                sm[sym] = c * unit
             sub = LayerPartitioner(pass_graph(self._dag, cp), {}, symbol_map=sm,
                                    compute_dtype_bytes=self._compute_dtype_bytes, widths=self._widths)
             peaks = sub.op_peak_curve()
@@ -605,9 +605,10 @@ class LayerPartitioner:
         # a stretch with a halo runs each slice widened by its margin on both sides (`RegionPlan.margin`, clipped at
         # the axis' ends): what a slice of c holds is what c + 2 * margin holds
         total = sm.get(plan.symbol)
+        total = None if total is None else int(total) // plan.unit
         c = c + 2 * plan.margin if total is None else min(int(total), c + 2 * plan.margin)
         sliced = dict(sm)
-        sliced[plan.symbol] = c
+        sliced[plan.symbol] = c * plan.unit
         worst = 0
         for cp in plan.passes:
             fed = 0
@@ -623,7 +624,7 @@ class LayerPartitioner:
                 for t in reads:
                     if t in plan.layouts and t not in plan.outputs:
                         fed += self._bytes_at(t, sliced)
-            worst = max(worst, self._pass_peak(cp, plan.symbol, c, cp.chunked) + fed)
+            worst = max(worst, self._pass_peak(cp, plan.symbol, c, cp.chunked, plan.unit) + fed)
         return before + outs + acc + worst
 
     def _chunk_regions(self, budget_bytes: int, max_arena_bytes: Optional[int]
@@ -663,10 +664,17 @@ class LayerPartitioner:
                 continue
             best: Optional[_Region] = None
             whys: List[str] = []
-            for sym in syms:
-                got, why = self._new_region(self._axis(sym), h, eff, target, regions)
+            from neurobrix.core.prism.chunked_region import axis_units
+            # every token symbol, and each in the unit its graph divides it by (a window's rows)
+            for sym, unit in [(sy, u) for sy in syms for u in [1] + axis_units(self._dag, sy)]:
+                ax = self._axis(sym, unit)
+                if not ax.fits_units(self._symbol_map):
+                    whys.append(f"{sym} in units of {unit}: the request is not a whole number of the units "
+                                f"{ax.units} its graph divides its symbols by")
+                    continue
+                got, why = self._new_region(ax, h, eff, target, regions)
                 if got is None:
-                    whys.append(f"{sym}: {why}")
+                    whys.append(f"{sym}{'' if unit == 1 else f' in units of {unit}'}: {why}")
                 elif best is None or (got.count, got.peak_bytes) < (best.count, best.peak_bytes):
                     best = got
             if best is None:
@@ -736,7 +744,7 @@ class LayerPartitioner:
         pairs = sorted(((L, R) for L in lefts for R in rights),
                        key=lambda p: (max(before(p[0]), curve[p[1]]), before(p[0]) + curve[p[1]],
                                       p[1] - p[0]))
-        total = int(self._symbol_map[ax.sym])
+        total = int(self._symbol_map[ax.sym]) // ax.unit
         why = f"no seam around {self.order[h]} leaves the stretch under {target / _MB:.1f} MB"
         for L, R in pairs:
             plan, no = plan_region(ax, L, R, protected=self.protected,
@@ -793,13 +801,13 @@ class _Region:
         return self.plan.symbol
 
     def set_slice(self, c: int, peak: int, symbol_map: Dict[str, int]) -> None:
-        total = int(symbol_map[self.symbol])
+        total = int(symbol_map[self.symbol]) // self.plan.unit
         self.slice, self.count, self.peak_bytes = int(c), -(-total // int(c)), int(peak)
 
     def record(self) -> Dict[str, Any]:
         return {"first_op": self.first_op, "last_op": self.last_op, "symbol": self.symbol,
-                "slice": self.slice, "count": self.count, "passes": len(self.plan.passes),
-                "peak_bytes": self.peak_bytes}
+                "unit": self.plan.unit, "slice": self.slice, "count": self.count,
+                "passes": len(self.plan.passes), "peak_bytes": self.peak_bytes}
 
 
 def rewire_arg(arg: Any, rewire: Dict[str, str]) -> Any:
