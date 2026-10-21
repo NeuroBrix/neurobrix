@@ -26,7 +26,7 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set
 
 from neurobrix.core.prism.chunked_region import (
-    TokenAxis, accumulate, dim_source, slice_reads, own, plan_region, put_slice, region_carriers,
+    TokenAxis, accumulate, dim_source, slice_reads, own, plan_region, put_slice, region_carriers, take_slice_cyclic,
     store, take_slice, whole_shape)
 from neurobrix.core.prism.layer_partition import Segment, build_segment_graph
 from neurobrix.core.runtime.graph_executor import output_key
@@ -239,7 +239,7 @@ class ChunkedPiece:
             try:
                 m = plan.margin if cp.chunked else 0
                 # each slice READS its rows widened by the stretch's halo, clipped at the axis' true ends
-                for start, length, in_start, in_len in (slice_reads(total, count, m) if cp.chunked
+                for start, length, in_start, in_len in (slice_reads(total, count, m, plan.cyclic) if cp.chunked
                                                         else [(0, total, 0, total)]):
                     sub_feed = {}
                     for n in names:
@@ -254,7 +254,8 @@ class ChunkedPiece:
                             raise RuntimeError(f"chunked piece: pass input {n!r} is neither fed nor made")
                         lay = plan.layouts.get(tid)
                         if cp.chunked and lay is not None and tid in sliced_in:
-                            v = take_slice(v, lay, total, inner[tid], in_start, in_len)
+                            v = (take_slice_cyclic if plan.cyclic else take_slice)(
+                                v, lay, total, inner[tid], in_start, in_len)
                         sub_feed[n] = v
                     out = ex.run(sub_feed, *args, **kwargs) or {}
                     meta = ex._dag.get("tensors") or {}
