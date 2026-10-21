@@ -67,7 +67,11 @@ IDS = [c[0] for c in OVER]
 # since the Mac's compiled attention writes its scores and Prism prices them (2026-10-15: 16 740.2 -> 18 466.8 MB, one
 # chunk of 22 heads x 4 608 x 4 608 fp32 scores within a tenth of the 18 186 MB device); its Triton graph, which writes
 # none, still sits in the window (16 944.5 MB). Both are streamed on the card (the law cells, both engines).
-WINDOW_MODE = {"Flex.1-alpha": "triton"}
+# PixArt-XL-2-1024-MS and granite-speech-3.3-8b moved the same way when the compiled capacity began subtracting the vendor
+# file's `compiled_private_reserve_mb` on unified memory (Apple: 3 900 MB, MPS's private reserve): PixArt's compiled
+# capacity is 11 198 - 3 900 = 7 298 MB under its 9 634.6 MB text encoder, granite's 18 186 x 0.95 - 3 900 = 13 376.7
+# under 17 151.7 (Dell, 2026-10-21 16:54); their Triton graphs, which hold no private reserve, still sit in the window.
+WINDOW_MODE = {"Flex.1-alpha": "triton", "PixArt-XL-2-1024-MS": "triton", "granite-speech-3.3-8b": "triton"}
 
 
 def _pin_machine(monkeypatch, host_free_mb: int, rung_mb: int) -> None:
@@ -120,9 +124,13 @@ def test_the_largest_component_sits_between_the_rung_and_the_capacity(monkeypatc
     if mode != "compiled":
         _, s_c, seen_c = _plan(model, h, w, refusal_ok=True, mode="compiled")
         over = max(m.total_bytes for m in seen_c.values()) / MB
-        assert over > dev.capacity_mb, (
-            f"{model}: its compiled graph's largest component {over:.1f} MB is no longer over the capacity "
-            f"{dev.capacity_mb:.1f} — the attention scores the device writes are not priced; WINDOW_MODE is stale")
+        # The compiled window is CLOSED, whichever side moved: its component grew over the capacity (Flex: the attention
+        # scores it writes are priced) or its capacity fell under the component (PixArt, granite: the compiled private
+        # reserve). Judged against the COMPILED capacity, the one that engine plans against.
+        cap_c = s_c._prepare_devices(profile(APPLE))[0].capacity_mb
+        assert over > cap_c, (
+            f"{model}: its compiled graph's largest component {over:.1f} MB is no longer over the compiled capacity "
+            f"{cap_c:.1f} — the compiled window is open again; WINDOW_MODE is stale")
     # Over what a WHOLE component may occupy at the rung (`_usable_mb`, the one authority for
     # "does it fit whole") and under the capacity. The bound was the rung itself until 2026-10-04:
     # granite-speech's language model read 16 4xx MB while the transposes of its weights were
