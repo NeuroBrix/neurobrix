@@ -281,7 +281,9 @@ def _call_const(rack: Rack, fn, nparams: int, method: bool, variant: str):
         out["repr"] = show(v) if not _has_opaque(v) else "<opaque>"
     except Touched as exc:
         out["touched"] = str(exc)
-    except Exception as exc:                     # noqa: BLE001 — a raise is a result
+    except (Exception, SystemExit) as exc:       # noqa: BLE001 — a raise is a result, an exit too
+        # a CLI command's body exits (`sys.exit(1)` when no daemon runs): uncaught, it ended the whole probe and the
+        # scope was refused for every lot whose diff reached the CLI (the Mac's pointer slots, 2026-10-20 19:43)
         out["raised"] = f"{type(exc).__name__}: {str(exc)[:160]}"
     finally:
         sys.settrace(None)

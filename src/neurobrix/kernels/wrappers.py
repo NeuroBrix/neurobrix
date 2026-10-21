@@ -7251,6 +7251,9 @@ def constant_pad_nd_wrapper(x, pad_list, value: float = 0.0) :
     if total == 0:
         return output
 
+    from neurobrix.kernels.nbx_tensor import _index_wide, _max_linear_offset
+    _wide = _index_wide(total, _max_linear_offset(x.shape, x.stride()), _max_linear_offset(output.shape, output.stride()))
+
     if ndim >= 4 and pad_len == 4:
         # 4D: use optimized 2D kernel (N,C,H,W)
         batch_channels = 1
@@ -7270,7 +7273,7 @@ def constant_pad_nd_wrapper(x, pad_list, value: float = 0.0) :
             output.stride(-2), output.stride(-1),
             pad_before[-1], pad_before[-2],
             float(value),
-            BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS,
+            BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS, WIDE=_wide,
         )
     elif pad_len == 2:
         batch_size = 1
@@ -7283,7 +7286,7 @@ def constant_pad_nd_wrapper(x, pad_list, value: float = 0.0) :
             in_size, out_size, batch_size,
             pad_before[-1],
             float(value),
-            BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS,
+            BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS, WIDE=_wide,
         )
     else:
         # General N-D constant pad in ONE pass (any dims, a middle temporal dim of a 5-D [B,C,T,H,W] causal pad
@@ -7298,7 +7301,7 @@ def constant_pad_nd_wrapper(x, pad_list, value: float = 0.0) :
             x, output, total,
             *dims_in, *dims_out, *strides, *before,
             float(value),
-            BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS,
+            BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS, WIDE=_wide,
         )
 
     return output
