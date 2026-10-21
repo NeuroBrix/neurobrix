@@ -1626,6 +1626,10 @@ class Model:
             return False
         t0 = time.time()
         cmd = [PY, str(FORGE), "build", "--snapshot-path", str(snap), "--family", self.family, "--overwrite"]
+        if getattr(self.args, "allow_unverified_snapshot", False):
+            # Forge's one opening, said in clear (importer/snapshot.py OPENING): a bare checkpoint the hub cannot
+            # verify — SwinIR's releases live on GitHub, not under the registry's hf_repo (2026-10-21).
+            cmd.append("--allow-unverified-snapshot")
         rc = run(cmd, self.env(tree=False), self.dir / "build.log", self.args.trace_timeout, cwd=str(REPO / "forge"))
         root = Path(self.args.models_root)
         found = None                                   # the builder writes <models-root>/<family>/<name>/model.nbx
@@ -2160,6 +2164,8 @@ def main():
     ap.add_argument("--restore-mbps", type=float, default=10.0,
                     help="the rate cap on a read of the hub's previous object (its store shares the exports' storage)")
     ap.add_argument("--stop-at", default=None, help="stop after this step (e.g. gate)")
+    ap.add_argument("--allow-unverified-snapshot", action="store_true",
+                    help="pass Forge's opening to the build: a snapshot the hub cannot verify (named in clear)")
     ap.add_argument("--vendor-on-diff", action="store_true",
                     help="when the two sequential arms differ (image families): render the request with the vendor's own "
                          "pipeline at the exact prompt/seed/steps/guidance and let the container that reproduces it pass")
