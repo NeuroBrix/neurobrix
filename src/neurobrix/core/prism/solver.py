@@ -3543,6 +3543,7 @@ class PrismSolver:
             peak_op_uid = ""
             peak_step = 0
             activation_profiled = False
+            _kept = None                      # the ActivationProfile the activation figure is kept from
             attn_per_block = 0
             attn_dominates = False
 
@@ -3651,10 +3652,12 @@ class PrismSolver:
                         attention_scratch=self._attention_scratch(profile), conv3d_workspace=self._conv3d_workspace(profile), op_workspace=self._op_workspace(profile),
                             )
                             activation_bytes = ap_tiled.peak_bytes
+                            _kept = ap_tiled
                             peak_op_uid = ap_tiled.peak_op_uid
                             peak_step = ap_tiled.peak_step
                         else:
                             activation_bytes = ap.peak_bytes
+                            _kept = ap
                             peak_op_uid = ap.peak_op_uid
                             peak_step = ap.peak_step
                     else:
@@ -3674,10 +3677,12 @@ class PrismSolver:
                         attention_scratch=self._attention_scratch(profile), conv3d_workspace=self._conv3d_workspace(profile), op_workspace=self._op_workspace(profile),
                             )
                             activation_bytes = ap_tiled.peak_bytes
+                            _kept = ap_tiled
                             peak_op_uid = ap_tiled.peak_op_uid
                             peak_step = ap_tiled.peak_step
                         else:
                             activation_bytes = ap.peak_bytes
+                            _kept = ap
                             peak_op_uid = ap.peak_op_uid
                             peak_step = ap.peak_step
                     activation_profiled = True
@@ -3740,6 +3745,13 @@ class PrismSolver:
             # graph's own declared trace_value and the request; no per-model data.
             activation_bytes = self._scale_activations_to_request(
                 comp, activation_bytes, input_config)
+            if activation_profiled and _kept is not None and _kept.live_before_op:
+                # What is ALREADY live as each op begins, at its largest, on the profile this figure was kept
+                # from (tiling-aware where it was), scaled as the figure is: an op-level tile cuts an op's own
+                # output and workspace, never what earlier ops hold — the floor `_try_op_level_tiling` reads.
+                _op, _live = max(_kept.live_before_op.items(), key=lambda kv: kv[1])
+                self.__dict__.setdefault("_live_floor", {})[comp.name] = (
+                    int(self._scale_activations_to_request(comp, _live, input_config)), _op)
 
             # Add KV cache to activation budget for the LM component
             if needs_kv_cache and lm_component_name and comp.name == lm_component_name:
@@ -7155,6 +7167,19 @@ class PrismSolver:
         for _n, _m in blocking:
             if not _pa.dominated_by_activations(_m.weight_bytes, _m.activation_bytes):
                 return None                  # its WEIGHTS are the problem
+        # A tile cuts an op's own output and workspace; what earlier ops hold when it begins stays whole. Where that
+        # alone is over the room, no band count fits the component (`_compute_memory` records it, tiling-aware):
+        # HAT-S at 2048 px on 16 GB was claimed with 143 convolutions in bands and 126 787 MB of activations, the
+        # window attention's scores whole (2026-10-21).
+        floors = getattr(self, "_live_floor", None) or {}
+        for _n, _m in blocking:
+            live, at = floors.get(_n, (0, ""))
+            if live / (1024 * 1024) > room_mb:
+                self._op_tiling_declined = (
+                    f"{_n}: {live / (1024 * 1024):.0f} MB are live before {at} whatever its bands, over the "
+                    f"{room_mb:.0f} MB the card leaves beside the weights — an op-level tile cuts an op's own "
+                    f"output and workspace, never what earlier ops hold")
+                return None
 
         components = getattr(self, "_neural_components", None)
         input_config = getattr(self, "_input_config", None)
@@ -8460,6 +8485,8 @@ class PrismSolver:
         # Mac's 62 weight-over-rung refusals, 4a3658d7; earlier, P-SANA-4KPX-RUNTIME POINT 9).
         tried = list(self._strategies_tried)
         tried_str = (", ".join(tried) + " - ALL FAILED") if tried else "no strategy was evaluated"
+        if getattr(self, "_op_tiling_declined", None):
+            tried_str += f"\n  op_level_tiling declined: {self._op_tiling_declined}"
         if self._layer_streaming_declined:
             tried_str += f"\n  layer_streaming declined: {self._layer_streaming_declined}"
         for _c, _why in (getattr(self, "_arena_declined", {}) or {}).items():

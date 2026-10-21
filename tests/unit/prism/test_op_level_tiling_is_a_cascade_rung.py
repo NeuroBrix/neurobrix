@@ -217,3 +217,36 @@ def test_the_apple_shape_reaches_the_detector_rather_than_being_screened_out():
     # And it asks about a GPU placement — the question the post-hoc call cannot ask,
     # because by then the component has already been sent to the host.
     assert seen["allocations"]["m"][0] == "cuda:0", seen["allocations"]
+
+
+def _claiming(s):
+    s._neural_components = [object()]
+    s._input_config = None
+    s._target_dtype_str = "float32"
+    s._detect_op_level_tiling_pairs = lambda *a, **k: {"m": object()}
+    s._fresh_devices = lambda devices: [type("D", (), {"components": []})()]
+    return s
+
+
+def test_it_declines_when_what_is_live_before_an_op_is_over_the_room_whatever_its_bands():
+    """A tile cuts an op's own output and workspace; what earlier ops hold when it begins stays whole.
+
+    HAT-S at 2048 px on a 16 GB card (2026-10-21): the detector offered 143 convolutions in bands, the rung
+    claimed the component, and the plan went out at 126 787 MB of activations — the window attention's scores,
+    71 491 MB of them live before `aten.view::149`, cut by nothing. What this cell does if the floor test is
+    removed: the rung claims the component (the detector answers), and the assertion on None fails.
+    """
+    s = _claiming(_solver())
+    s._live_floor = {"m": (int(71491 * _MB), "aten.view::149")}
+    out = s._try_op_level_tiling([("m", _Mem(38, 126787))], {}, [_Dev(16384)], {}, None, None)
+    assert out is None, "a component whose live floor is over the card was claimed"
+    assert "aten.view::149" in s._op_tiling_declined and "71491 MB" in s._op_tiling_declined, s._op_tiling_declined
+
+
+def test_a_floor_under_the_room_still_reaches_the_detector_and_is_claimed():
+    """The floor declines only what no band count can fit: an op whose own footprint overflows (real-esrgan's
+    convolutions at 1024 px) with little live before it is still the detector's to tile."""
+    s = _claiming(_solver())
+    s._live_floor = {"m": (int(2000 * _MB), "aten.convolution::349")}
+    out = s._try_op_level_tiling([("m", _Mem(32, 16400))], {}, [_Dev(16384)], {}, None, None)
+    assert out is not None and out[0]["m"][0] == "cuda:0", out
