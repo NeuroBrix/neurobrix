@@ -217,6 +217,8 @@ For more information: https://neurobrix.es
                                                         'table of the profile and the card\'s memory class, nothing else')
     certify_p.add_argument('--out', default=None, help='write here instead of the engine directory (a contributor draft)')
     certify_p.add_argument('--kernels', default=None, help='only these kernels (short or qualified names, comma-separated)')
+    certify_p.add_argument('--models', default=None, help='only the census rows of these containers (comma-separated '
+                                                        'catalogue names): a re-certification takes the keys it needs first')
     certify_p.add_argument('--limit', type=int, default=None, help='stop after this many shapes')
     certify_p.add_argument('--only-missing', action='store_true', help='skip shapes the directory already certifies')
     certify_p.add_argument('--working-set-mb', type=int, default=None,

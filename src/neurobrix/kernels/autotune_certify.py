@@ -133,7 +133,7 @@ def witnessed_bench(contenders, time_one, witness_ms, spec: Dict[str, Any], labe
 # ---------------------------------------------------------------------------
 # the census: which shapes
 # ---------------------------------------------------------------------------
-def census(vendor: str, profile: str, memory_class: int) -> Dict[str, List[tuple]]:
+def census(vendor: str, profile: str, memory_class: int, models: Optional[List[str]] = None) -> Dict[str, List[tuple]]:
     """{kernel qualname: [key, ...]} from THE census table of this profile and memory class
     (`config/census/<vendor>/<profile>/<class>g.jsonl`, `kernels/census_table.py`) — and from nothing
     else. It used to default to the machine's replay cache (earlier runtime sweeps) or take any census
@@ -145,7 +145,12 @@ def census(vendor: str, profile: str, memory_class: int) -> Dict[str, List[tuple
                            f"else — take the census for {vendor}/{profile} {memory_class} GB first")
     out: Dict[str, List[tuple]] = {}
     seen = set()
+    want = set(models) if models else None
     for row in T.read(path):
+        # `models`: only the rows of these containers — the keys a re-certification needs first (a kernel change
+        # re-sweeps ~7 500 Apple conv keys at ~29 s: the video VAEs' first, the rest after)
+        if want is not None and row.get("model") not in want:
+            continue
         ident = T.key_line(row["kernel"], row["key"])
         if ident in seen:
             continue
@@ -1938,7 +1943,8 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
             out: Optional[str] = None, kernels: Optional[List[str]] = None, limit: Optional[int] = None,
             only_missing: bool = False, seed: int = 20260907, log=None,
             allow_off_protocol: bool = False, reprove_unclocked: bool = False,
-            reprove_generator: bool = False, working_set_mb: Optional[int] = None) -> Dict[str, Any]:
+            reprove_generator: bool = False, working_set_mb: Optional[int] = None,
+            models: Optional[List[str]] = None) -> Dict[str, Any]:
     """Certify every census shape for `profile` on this machine; write the files.
 
     `working_set_mb`: the budget this run may hold — every key is priced by its phases before any
@@ -1988,7 +1994,14 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
     if census_path:
         raise RuntimeError(f"--census {census_path}: REFUSED — the certifier certifies the committed census table of "
                            f"the profile and the card's memory class, and nothing else (the owner's method, 2026-09-28)")
-    shapes = census(vendor, profile, certifying_class)
+    if models:
+        from neurobrix.kernels import census_table as _T
+        _known = {r.get("model") for r in _T.read(_T.table_path(vendor, profile, certifying_class))}
+        _unknown = sorted(set(models) - _known)
+        if _unknown:
+            raise RuntimeError(f"--models {', '.join(_unknown)}: no row of the census table names it — a filter that "
+                               f"matched nothing would certify nothing and report success")
+    shapes = census(vendor, profile, certifying_class, models)
     log(f"[certify] census table {vendor}/{profile} {certifying_class} GB: "
         f"{sum(len(v) for v in shapes.values())} distinct key(s) over {len(shapes)} kernel(s)")
     if kernels:
