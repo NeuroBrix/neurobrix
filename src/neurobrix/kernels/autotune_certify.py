@@ -748,7 +748,10 @@ def _softmax_oracle_fn(x, log: bool):
     # computed its whole oracle on the host (58 GB resident) and read the whole 5.4 GB output back per candidate,
     # 2.5 h on one key and the certification timed out (2026-10-20); windowed, the candidates are read on the rows
     # the oracle holds (`device_slices`)
-    wins = _row_windows(m, n, _SOFTMAX_ORACLE_F64_ARRAYS)
+    # priced in BYTES against the cap (each element's fp64 arrays x 8 bytes): a softmax does a few operations per
+    # element, so a multiply-add count let a 131 072 x 4 096 key run its oracle whole — 17 GB of fp64 on an 18 GB
+    # Apple card, refused by its price (the Mac, 2026-10-21 04:10); its bytes are what bound its memory
+    wins = _row_windows(m, n, _SOFTMAX_ORACLE_F64_ARRAYS * 8)
     if wins is None:
         return lambda: rows(0, m)
     return lambda: RowWindowedOracle([((r0, r1), rows(r0, r1)) for (r0, r1) in wins], m)
