@@ -347,6 +347,14 @@ class CudaDriver(Driver):
         self._check(self.lib.cuModuleGetFunction(ctypes.byref(function), module, name.encode()), f"cuModuleGetFunction({name})")
         self._param_counts[int(function.value)] = _cubin_param_count(binary, name)
         if shared > 48 * 1024:
+            # A compiled kernel asking more shared memory than the device grants a block is a config this device
+            # cannot run: Triton's own CUDA launcher raises OutOfResources here, which the autotuner scores `inf`
+            # and passes. Asked of the driver as is, it failed `cuFuncSetAttribute (1: invalid argument)` and ended
+            # the sweep: the matrix-unit flash at head dim 256 on a V100 (96 KB), 2026-10-22.
+            limit = max_shared_memory_per_block()
+            if limit is not None and shared > limit:
+                from triton.runtime.errors import OutOfResources
+                raise OutOfResources(shared, limit, "shared memory")
             self._check(self.lib.cuFuncSetAttribute(function, self.CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, ctypes.c_int(shared)), "cuFuncSetAttribute")
         return function
 

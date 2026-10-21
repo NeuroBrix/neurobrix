@@ -49,9 +49,21 @@ def unit_flash_configs():
 
 
 def _prune_unit_flash(configs, named_args, **kwargs):
-    """Each warp owns MB / warps whole 16-row bands: a tile whose bands do not divide among its warps is not built."""
+    """Each warp owns MB / warps whole 16-row bands: a tile whose bands do not divide among its warps is not built; nor
+    one whose tiles staged by name (`staged_shared_bytes`) are over the device's shared memory per block — a tile
+    within that figure may still be refused by the compiler's scratch, which the launcher then refuses as Triton's
+    does (`OutOfResources`). None left is refused by name, never answered with the first config."""
+    from neurobrix.kernels.launcher import max_shared_memory_per_block
     keep = [c for c in configs if c.kwargs["MB"] % c.num_warps == 0]
-    return keep or configs[:1]
+    limit = max_shared_memory_per_block()
+    if limit is not None and "headdim" in named_args:
+        da, db = head_parts(int(named_args["headdim"]))
+        split = bool(named_args.get("SPLIT", False))
+        keep = [c for c in keep if staged_shared_bytes(16 * c.kwargs["MB"], 16 * c.kwargs["NS"], da, db, split) <= limit]
+    if not keep:
+        raise ValueError(f"matrix-unit flash: no tile of head dim {named_args.get('headdim')} fits "
+                         f"{limit} bytes of shared memory per block")
+    return keep
 
 
 @nbx_autotune(configs=unit_flash_configs(), key=["Q_BUCKET", "K_BUCKET", "headdim", "SPLIT"],
