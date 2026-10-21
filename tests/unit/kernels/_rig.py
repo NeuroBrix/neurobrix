@@ -82,7 +82,15 @@ def running_backend(triton_version=None) -> dict:
     buys.
     """
     from neurobrix.kernels.autotune_certified import generator_identity
-    ident = dict(generator_identity())
+    # The identity is the RUNNING backend's (its content, since 2026-10-20: the launcher resolves the
+    # active driver). Where no driver comes up — no card visible — the question has no answer on this
+    # machine: the test is skipped with the launcher's own words, never answered with another identity.
+    try:
+        ident = dict(generator_identity())
+    except RuntimeError as exc:
+        if not str(exc).startswith("NeuroBrix launcher:"):
+            raise
+        pytest.skip(f"no running backend to name the generator: {exc}")
     if triton_version is not None:
         ident["triton"] = str(triton_version)
     return ident
