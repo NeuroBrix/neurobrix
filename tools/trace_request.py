@@ -114,12 +114,17 @@ def model_gate(family: str, topology: dict) -> dict:
     family's confirmation section names ({} when the container states none). A key the family does not name is
     refused by name; half a size is refused by `gate_request`."""
     own = ((topology.get("extracted_values") or {}).get("_global") or {}).get("gate")
-    if own is None:
-        return {}
-    if not isinstance(own, dict):
+    if own is not None and not isinstance(own, dict):
         raise ValueError(f"the container's _global.gate is {type(own).__name__} {own!r}, not a mapping of the "
                          f"{family} family's request values")
-    values = {k: v for k, v in own.items() if k != SOURCE}
+    # the family's gate values (config/families/<family>.yml `gate:`), the container's own over them: a video cell
+    # ran its judging request (40-50 steps, hours a cell) where the gate proves rc 0, zero miss and the agreement
+    # (Hocine 2026-10-21 02:47: a gate run lasts at most ten minutes, quality is judged once per model)
+    from neurobrix.core.config import get_family_config
+    values = {k: v for k, v in (get_family_config(family).get("gate") or {}).items() if v is not None}
+    values.update({k: v for k, v in (own or {}).items() if k != SOURCE})
+    if not values:
+        return {}
     fam = confirmation(family)
     unknown = sorted(set(values) - (set(fam) - {"size_fraction"}))
     if unknown:

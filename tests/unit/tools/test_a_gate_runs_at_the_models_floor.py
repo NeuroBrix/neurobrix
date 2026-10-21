@@ -81,9 +81,12 @@ def test_the_gate_request_carries_the_models_floor(cache):
     assert "--source" not in gate and not any("measured" in str(a) for a in gate)
 
 
-def test_a_model_stating_no_gate_is_gated_at_its_judging_request(cache):
+def test_a_model_stating_no_gate_is_gated_at_its_family_s_gate_values(cache):
+    """A video container states no gate value: its cell runs the family's (config/families/video.yml `gate:`, Hocine
+    2026-10-21 02:47), never its judging request — 40-50 steps, hours a cell."""
     cache(_topo(conf={"steps": 10, "source": ["judging"]}))
-    assert T.gate_request(MODEL, "video") == T.derived_request(MODEL, "video")
+    gate, judging = T.gate_request(MODEL, "video"), T.derived_request(MODEL, "video")
+    assert _flag(judging, "--steps") == "10" and _flag(gate, "--steps") == "2"
 
 
 def test_an_unknown_gate_key_and_half_a_size_are_refused(cache):
@@ -107,5 +110,6 @@ def test_the_census_covers_the_gate_request_beside_the_judging_one(cache):
     cache(_topo(gate={"steps": 1, "num_frames": 9, "source": SRC}))
     reqs = CC.census_requests(MODEL, "video", [], None)
     assert reqs == [T.derived_request(MODEL, "video"), T.gate_request(MODEL, "video")]
-    cache(_topo())
-    assert CC.census_requests(MODEL, "video", [], None) == [T.derived_request(MODEL, "video")]
+    cache(_topo())                      # no container value: the family's gate request beside the judging one
+    assert CC.census_requests(MODEL, "video", [], None) == [T.derived_request(MODEL, "video"),
+                                                            T.gate_request(MODEL, "video")]

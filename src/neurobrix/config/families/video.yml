@@ -79,6 +79,14 @@ census:
     width: 1280
 
 # Confirmation request (tools/regression_matrix.py)
+gate:
+  # The request a GATE cell runs (tools/trace_request.gate_request; the validation regime, Hocine 2026-10-13 and
+  # 2026-10-21 02:47): a gate proves rc 0, zero certified miss and the arms' agreement, not quality — two steps run
+  # every op of the denoising loop (its first step and a step that reads the scheduler's state) and the classifier-
+  # free guidance's branches. Quality is judged once per model and branch at the confirmation request below.
+  # A model's container states its own gate values over these (extracted_values._global.gate, with its source).
+  steps: 2
+
 confirmation:
   # The smallest request that still judges a video model (the owner's method, 2026-09-28): four
   # steps run every op of the loop; half the container's size, away from the trace.
