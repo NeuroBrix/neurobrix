@@ -22,5 +22,5 @@ def test_the_executor_and_the_census_read_the_same_function():
     import inspect
     from neurobrix.core.strategies import chunked_piece
     import derived_census
-    assert "slice_reads(" in inspect.getsource(chunked_piece.ChunkedPiece.run)
+    assert "slice_reads(" in inspect.getsource(chunked_piece.ChunkedPiece._run_pass)   # the pass loop
     assert "slice_reads(" in inspect.getsource(derived_census.sliced_bindings)
