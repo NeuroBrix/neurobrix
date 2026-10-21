@@ -117,6 +117,7 @@ class LayerStreamingStrategy(ExecutionStrategy):
         self._non_block: Dict[str, set] = {}
         #: Per streamed component, the tids each piece's ops produce, in piece order.
         self._produced: Dict[str, List[set]] = {}
+        self._last_read: Dict[str, Dict[str, int]] = {}   # component -> {input name: last piece reading it}
 
     # -- segment executors -------------------------------------------------
 
@@ -480,10 +481,16 @@ class LayerStreamingStrategy(ExecutionStrategy):
                 f"layer_streaming: '{component_name}' protects {orphan[:3]} on its base and "
                 f"no piece produces it, so none can keep it for the base's readers")
 
+        if component_name not in self._last_read:          # once: the pieces' graphs are fixed
+            self._last_read[component_name] = {
+                n: i for i, p in enumerate(pieces) for n in ((p._dag or {}).get("segment_input_names") or [])}
+        last_read = self._last_read[component_name]
+        final = {output_key(tensors.get(t), t) for t in declared} | set(declared)
+
         capture: Dict[str, Any] = {}
         base._pieces_capture = capture        # rebuilt every run: a decode step reads its own
         values: Dict[str, Any] = dict(inputs or {})
-        for seg_exec, produced in zip(pieces, produced_by):
+        for i, (seg_exec, produced) in enumerate(zip(pieces, produced_by)):
             sub = seg_exec._dag
             needed = sub.get("segment_input_names") or []
             feed = {n: _piece_input(values, n) for n in needed}
@@ -525,6 +532,11 @@ class LayerStreamingStrategy(ExecutionStrategy):
                       f"kept={sorted(kept & produced)[:4]}",
                       flush=True)
             values.update(out)
+            # A value no later piece reads is released after its last reader, as the whole run frees a
+            # tensor after its last use: held to the end, every seam the component crossed stayed beside
+            # the pieces Prism priced without it (its live curve frees it).
+            for n in [n for n, j in last_read.items() if j == i and n in values and n not in final]:
+                del values[n]
 
         # The component's declared outputs, keyed as a whole run keys them (`output_name`,
         # else the tid) — not the last piece's dict, which holds only what the last piece
