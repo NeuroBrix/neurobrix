@@ -27,8 +27,11 @@ REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / "tools"))
 import derived_census as D  # noqa: E402
 
+# A decoding plan carries its KV cache (step 3, 2026-10-18: `lm_facts.decoder_cache_from_plan` refuses a decoder
+# without one, and the derivation with it, `_decoder_sites`) — the LM's geometry here is the stub's.
 PLAN = {"components": [{"name": "vpm", "dtype": "bfloat16"}, {"name": "resampler", "dtype": "bfloat16"},
-                       {"name": "llm", "dtype": "bfloat16"}]}
+                       {"name": "llm", "dtype": "bfloat16"}],
+        "kv_cache": {"max_cache_len": 64, "dtype": "bfloat16", "num_kv_heads": 4}}
 SDPA = (123456, 4, 5)
 
 
