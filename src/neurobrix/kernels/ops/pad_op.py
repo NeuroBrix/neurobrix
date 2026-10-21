@@ -21,10 +21,13 @@ def constant_pad_2d_kernel(
     pad_left, pad_top,
     pad_value,
     BLOCK_SIZE: tl.constexpr,
+    WIDE: tl.constexpr = True,
 ):
     """Constant pad for 4D tensors (N,C,H,W). Most common case."""
-    pid = tl.program_id(0).to(tl.int64)
-    offsets = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
+    if WIDE:
+        offsets = tl.program_id(0).to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
+    else:
+        offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 32-bit below 2^30 (`_index_wide`): Apple emulates 64-bit % and //
     mask = offsets < total
 
     # Decompose flat index into (n*c, h, w)
@@ -56,10 +59,13 @@ def constant_pad_1d_kernel(
     pad_left,
     pad_value,
     BLOCK_SIZE: tl.constexpr,
+    WIDE: tl.constexpr = True,
 ):
     """Constant pad for 2D/3D tensors along last dim."""
-    pid = tl.program_id(0).to(tl.int64)
-    offsets = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
+    if WIDE:
+        offsets = tl.program_id(0).to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
+    else:
+        offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 32-bit below 2^30 (`_index_wide`): Apple emulates 64-bit % and //
     mask = offsets < total
 
     out_idx = offsets % out_size
@@ -85,12 +91,15 @@ def constant_pad_nd_kernel(
     pb0, pb1, pb2, pb3, pb4,
     pad_value,
     BLOCK_SIZE: tl.constexpr,
+    WIDE: tl.constexpr = True,
 ):
     """Constant pad of up to 5 dims in ONE pass: each output element maps to its input element (any dim padded,
     a middle one included) or to `pad_value`. Dims a tensor lacks are given extent 1 and pad 0 by the wrapper, so one
     kernel serves 1-D to 5-D. The input is read through its strides (xs*); the output is written contiguous."""
-    pid = tl.program_id(0).to(tl.int64)
-    offsets = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    if WIDE:
+        offsets = tl.program_id(0).to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    else:
+        offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 32-bit below 2^30 (`_index_wide`): Apple emulates 64-bit % and //
     mask = offsets < total
     o4 = offsets % out4
     t = offsets // out4

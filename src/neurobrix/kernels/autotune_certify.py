@@ -133,7 +133,7 @@ def witnessed_bench(contenders, time_one, witness_ms, spec: Dict[str, Any], labe
 # ---------------------------------------------------------------------------
 # the census: which shapes
 # ---------------------------------------------------------------------------
-def census(vendor: str, profile: str, memory_class: int) -> Dict[str, List[tuple]]:
+def census(vendor: str, profile: str, memory_class: int, models: Optional[List[str]] = None) -> Dict[str, List[tuple]]:
     """{kernel qualname: [key, ...]} from THE census table of this profile and memory class
     (`config/census/<vendor>/<profile>/<class>g.jsonl`, `kernels/census_table.py`) — and from nothing
     else. It used to default to the machine's replay cache (earlier runtime sweeps) or take any census
@@ -145,7 +145,12 @@ def census(vendor: str, profile: str, memory_class: int) -> Dict[str, List[tuple
                            f"else — take the census for {vendor}/{profile} {memory_class} GB first")
     out: Dict[str, List[tuple]] = {}
     seen = set()
+    want = set(models) if models else None
     for row in T.read(path):
+        # `models`: only the rows of these containers — the keys a re-certification needs first (a kernel change
+        # re-sweeps ~7 500 Apple conv keys at ~29 s: the video VAEs' first, the rest after)
+        if want is not None and row.get("model") not in want:
+            continue
         ident = T.key_line(row["kernel"], row["key"])
         if ident in seen:
             continue
@@ -475,6 +480,19 @@ def price_key(qual: str, tuner, key: tuple, unified: bool = True) -> Optional[Di
             deviation = kept + kept // 8 * (4 + 8)                       # the windows' readback and cast
         return {"draws": draws, "device": device, "oracle": oracle, "deviation": deviation,
                 "peak": draws + device + max(oracle, deviation)}
+    if ops["family"] == "softmax":
+        # `_softmax_oracle_fn`: per row window, the window cast to float64 plus the fp64 arrays it computes
+        # (`_SOFTMAX_ORACLE_F64_ARRAYS`), the windows' results kept (`RowWindowedOracle`); whole under the cap.
+        # Priced with the mm and conv families: without it a softmax key read the conv geometry and every Apple
+        # softmax certification failed on 'geometry' before its first launch (Mac, 2026-10-21).
+        m, n, _ = ops["mnk"]
+        wins = _row_windows(m, n, _SOFTMAX_ORACLE_F64_ARRAYS * 8)          # the oracle's own windows (bytes)
+        rows = m if wins is None else wins[0][1] - wins[0][0]
+        kept = (m if wins is None else len(wins) * rows) * n * 8           # the windows' fp64 results (whole: all)
+        oracle = kept + rows * n * 8 * (1 + _SOFTMAX_ORACLE_F64_ARRAYS)
+        deviation = kept + kept // 8 * (4 + 8)                             # the windows' readback and cast
+        return {"draws": draws, "device": device, "oracle": oracle, "deviation": deviation,
+                "peak": draws + device + max(oracle, deviation)}
     n, ci, h, w, co, oh, ow, ci_g, kh, kw, ph, pw = ops["geometry"]
     ew = sum(E(shape) for name, shape, _ in ops["inputs"] if name == "w")
     wins = _conv_windows(n, oh, ow, ci_g, co, kh, kw)
@@ -750,7 +768,7 @@ def _softmax_oracle_fn(x, log: bool):
     # the oracle holds (`device_slices`)
     # priced in BYTES against the cap (each element's fp64 arrays x 8 bytes): a softmax does a few operations per
     # element, so a multiply-add count let a 131 072 x 4 096 key run its oracle whole — 17 GB of fp64 on an 18 GB
-    # Apple card, refused by its price (the Mac, 2026-10-21 04:10); its bytes are what bound its memory
+    # Apple card, refused by its price (the Mac, 2026-10-21 04:10); its bytes are what bound its memory (Dell 8d7aad8dc)
     wins = _row_windows(m, n, _SOFTMAX_ORACLE_F64_ARRAYS * 8)
     if wins is None:
         return lambda: rows(0, m)
@@ -2046,7 +2064,8 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
             out: Optional[str] = None, kernels: Optional[List[str]] = None, limit: Optional[int] = None,
             only_missing: bool = False, seed: int = 20260907, log=None,
             allow_off_protocol: bool = False, reprove_unclocked: bool = False,
-            reprove_generator: bool = False, working_set_mb: Optional[int] = None) -> Dict[str, Any]:
+            reprove_generator: bool = False, working_set_mb: Optional[int] = None,
+            models: Optional[List[str]] = None, skip_proven_since: Optional[str] = None) -> Dict[str, Any]:
     """Certify every census shape for `profile` on this machine; write the files.
 
     `working_set_mb`: the budget this run may hold — every key is priced by its phases before any
@@ -2096,7 +2115,14 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
     if census_path:
         raise RuntimeError(f"--census {census_path}: REFUSED — the certifier certifies the committed census table of "
                            f"the profile and the card's memory class, and nothing else (the owner's method, 2026-09-28)")
-    shapes = census(vendor, profile, certifying_class)
+    if models:
+        from neurobrix.kernels import census_table as _T
+        _known = {r.get("model") for r in _T.read(_T.table_path(vendor, profile, certifying_class))}
+        _unknown = sorted(set(models) - _known)
+        if _unknown:
+            raise RuntimeError(f"--models {', '.join(_unknown)}: no row of the census table names it — a filter that "
+                               f"matched nothing would certify nothing and report success")
+    shapes = census(vendor, profile, certifying_class, models)
     log(f"[certify] census table {vendor}/{profile} {certifying_class} GB: "
         f"{sum(len(v) for v in shapes.values())} distinct key(s) over {len(shapes)} kernel(s)")
     if kernels:
@@ -2114,7 +2140,7 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
     try:
         return _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, reprove_unclocked,
                              reprove_generator, certifying_device, certifying_class, budget_bytes,
-                             floor_bytes, rng, summary, log, writer, bench)
+                             floor_bytes, rng, summary, log, writer, bench, skip_proven_since)
     finally:
         writer.flush_all()
 
@@ -2161,7 +2187,7 @@ class _BoundedWriter:
 
 def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, reprove_unclocked,
                   reprove_generator, certifying_device, certifying_class, budget_bytes, floor_bytes,
-                  rng, summary, log, writer, bench):
+                  rng, summary, log, writer, bench, skip_proven_since=None):
     done = 0
     attempts = 0
     for qual, keys in shapes.items():
@@ -2178,6 +2204,12 @@ def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, re
             path = C.file_for(vendor, profile, qual, dtype, root=root)
             entries = _file_entries(per_dtype, dtype, path)
             ktext = C.key_repr(key)
+            if skip_proven_since is not None:
+                # resume a sweep: a key this card's class re-proved at or after the given time (ISO, UTC like the
+                # proofs) is done — a stopped re-sweep restarts where it was instead of from the first key
+                _e = C.entry_for_memory_class(entries.get(ktext), certifying_class)
+                if _e and str(_e.get("proof", {}).get("date", "")) >= skip_proven_since:
+                    continue
             if (only_missing or reprove_unclocked or reprove_generator) and C.entry_covers(
                     entries, ktext, certifying_class, need_clock=reprove_unclocked,
                     need_generator=C.proof_backend({"backend": _backend()}) if reprove_generator else None):
