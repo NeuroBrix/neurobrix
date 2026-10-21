@@ -130,7 +130,8 @@ def cmd_autotune(args) -> int:
                               working_set_mb=getattr(args, "working_set_mb", None),
                               allow_off_protocol=getattr(args, "allow_off_protocol_clock", False),
                               models=[m for m in (getattr(args, "models", None) or "").split(",") if m] or None,
-                              skip_proven_since=getattr(args, "skip_proven_since", None))
+                              skip_proven_since=getattr(args, "skip_proven_since", None),
+                              skip_keys=getattr(args, "skip_keys", None))
         except RuntimeError as exc:
             print(f"ERROR: {exc}")
             return 1
