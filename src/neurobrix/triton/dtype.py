@@ -770,9 +770,10 @@ class TritonDtypeEngine:
         """The dtype the partials of a contraction split over its reduced axis are summed in
         (`contraction_accumulator_dtype`), for a partial of `dtype` — the stitch of a stretch run
         in slices (`core/strategies/chunked_piece`) asks the engine, never the pass dtype. The
-        twin of `DtypeEngine.accumulation_dtype` (R30)."""
+        twin of `DtypeEngine.accumulation_dtype` (R30). `dtype` is what the partial hands: an
+        NBXTensor's `.dtype` is its triton.language dtype, parsed as the module parses any dtype."""
         from neurobrix.kernels.nbx_tensor import parse_dtype
-        return parse_dtype(contraction_accumulator_dtype(NBXDtype(dtype).name))
+        return parse_dtype(contraction_accumulator_dtype(parse_dtype(dtype).name))
 
     def set_precision_contract(self, safe: bool, fp32_op_uids=(), narrow_op_uids=()) -> None:
         """The component's precision contract (core/runtime/precision_contract):
