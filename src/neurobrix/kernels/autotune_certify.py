@@ -1944,7 +1944,7 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
             only_missing: bool = False, seed: int = 20260907, log=None,
             allow_off_protocol: bool = False, reprove_unclocked: bool = False,
             reprove_generator: bool = False, working_set_mb: Optional[int] = None,
-            models: Optional[List[str]] = None) -> Dict[str, Any]:
+            models: Optional[List[str]] = None, skip_proven_since: Optional[str] = None) -> Dict[str, Any]:
     """Certify every census shape for `profile` on this machine; write the files.
 
     `working_set_mb`: the budget this run may hold — every key is priced by its phases before any
@@ -2019,7 +2019,7 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
     try:
         return _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, reprove_unclocked,
                              reprove_generator, certifying_device, certifying_class, budget_bytes,
-                             floor_bytes, rng, summary, log, writer, bench)
+                             floor_bytes, rng, summary, log, writer, bench, skip_proven_since)
     finally:
         writer.flush_all()
 
@@ -2066,7 +2066,7 @@ class _BoundedWriter:
 
 def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, reprove_unclocked,
                   reprove_generator, certifying_device, certifying_class, budget_bytes, floor_bytes,
-                  rng, summary, log, writer, bench):
+                  rng, summary, log, writer, bench, skip_proven_since=None):
     done = 0
     attempts = 0
     for qual, keys in shapes.items():
@@ -2083,6 +2083,12 @@ def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, re
             path = C.file_for(vendor, profile, qual, dtype, root=root)
             entries = _file_entries(per_dtype, dtype, path)
             ktext = C.key_repr(key)
+            if skip_proven_since is not None:
+                # resume a sweep: a key this card's class re-proved at or after the given time (ISO, UTC like the
+                # proofs) is done — a stopped re-sweep restarts where it was instead of from the first key
+                _e = C.entry_for_memory_class(entries.get(ktext), certifying_class)
+                if _e and str(_e.get("proof", {}).get("date", "")) >= skip_proven_since:
+                    continue
             if (only_missing or reprove_unclocked or reprove_generator) and C.entry_covers(
                     entries, ktext, certifying_class, need_clock=reprove_unclocked,
                     need_generator=C.proof_backend({"backend": _backend()}) if reprove_generator else None):
