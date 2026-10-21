@@ -425,6 +425,9 @@ class ExecutionPlan:
     # "symbol", "slice", "count", "passes", "peak_bytes"}, ...]. The streaming strategy runs each
     # such segment slice by slice at the planned `slice`; empty for every other plan.
     layer_stream_chunks: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
+    # The streamed components whose values between pieces wait on the host (`Partition.swapped`):
+    # the strategy parks every value the next piece does not read (`LayerStreamingStrategy._run_pieces`).
+    layer_stream_swapped: List[str] = field(default_factory=list)
     # Op-level tiling — per-component plan emitted when a single op's
     # output+workspace exceeds the assigned GPU's safe VRAM budget. Picked
     # up by RuntimeExecutor to wire op_uid interceptors on the component's
@@ -2189,6 +2192,7 @@ class PrismSolver:
         # Every rung starts unsliced: `solve` re-enters here down the unified ladder, and a slicing
         # the previous rung kept must not reach this rung's first pass before its cheaper cuts.
         self._token_split = False
+        self._swap_values = False
         candidates = self._evaluate_all_strategies(
             strategies, sorted_components, component_memory, devices, shard_sizes, profile, container
         )
@@ -2206,6 +2210,11 @@ class PrismSolver:
         if _sliced is not None:
             candidates, component_memory, input_config, devices = _sliced
             sorted_components = sorted(component_memory.items(), key=lambda x: -x[1].total_bytes)
+        else:
+            _parked = self._park_values_between_pieces(candidates, strategies, sorted_components,
+                                                       component_memory, devices, shard_sizes, profile, container)
+            if _parked is not None:
+                candidates = _parked
 
         # When NBX_FORCE_STRATEGY is set and the strategy cannot fit, the
         # rest of solve() would fall through to fp32 fallback or the final
@@ -2589,6 +2598,11 @@ class PrismSolver:
             plan.layer_stream_moe = dict(getattr(self, "_layer_stream_moe", None) or {})
             plan.layer_stream_chunks = {name: [dict(c) for c in part.chunks]
                                         for name, part in _parts.items() if part.chunks}
+            plan.layer_stream_swapped = sorted(name for name, part in _parts.items() if part.swapped)
+            if plan.layer_stream_swapped:
+                plan.selection_reason = (
+                    f"{plan.selection_reason} — {', '.join(plan.layer_stream_swapped)}: the values between "
+                    f"pieces wait on the host, each piece holding only what it reads and makes")
             if plan.layer_stream_chunks:
                 plan.selection_reason = (
                     f"{plan.selection_reason} — {', '.join(sorted(plan.layer_stream_chunks))} run "
@@ -3543,6 +3557,7 @@ class PrismSolver:
             peak_op_uid = ""
             peak_step = 0
             activation_profiled = False
+            _kept = None                      # the ActivationProfile the activation figure is kept from
             attn_per_block = 0
             attn_dominates = False
 
@@ -3651,10 +3666,12 @@ class PrismSolver:
                         attention_scratch=self._attention_scratch(profile), conv3d_workspace=self._conv3d_workspace(profile), op_workspace=self._op_workspace(profile),
                             )
                             activation_bytes = ap_tiled.peak_bytes
+                            _kept = ap_tiled
                             peak_op_uid = ap_tiled.peak_op_uid
                             peak_step = ap_tiled.peak_step
                         else:
                             activation_bytes = ap.peak_bytes
+                            _kept = ap
                             peak_op_uid = ap.peak_op_uid
                             peak_step = ap.peak_step
                     else:
@@ -3674,10 +3691,12 @@ class PrismSolver:
                         attention_scratch=self._attention_scratch(profile), conv3d_workspace=self._conv3d_workspace(profile), op_workspace=self._op_workspace(profile),
                             )
                             activation_bytes = ap_tiled.peak_bytes
+                            _kept = ap_tiled
                             peak_op_uid = ap_tiled.peak_op_uid
                             peak_step = ap_tiled.peak_step
                         else:
                             activation_bytes = ap.peak_bytes
+                            _kept = ap
                             peak_op_uid = ap.peak_op_uid
                             peak_step = ap.peak_step
                     activation_profiled = True
@@ -3740,6 +3759,13 @@ class PrismSolver:
             # graph's own declared trace_value and the request; no per-model data.
             activation_bytes = self._scale_activations_to_request(
                 comp, activation_bytes, input_config)
+            if activation_profiled and _kept is not None and _kept.live_before_op:
+                # What is ALREADY live as each op begins, at its largest, on the profile this figure was kept
+                # from (tiling-aware where it was), scaled as the figure is: an op-level tile cuts an op's own
+                # output and workspace, never what earlier ops hold — the floor `_try_op_level_tiling` reads.
+                _op, _live = max(_kept.live_before_op.items(), key=lambda kv: kv[1])
+                self.__dict__.setdefault("_live_floor", {})[comp.name] = (
+                    int(self._scale_activations_to_request(comp, _live, input_config)), _op)
 
             # Add KV cache to activation budget for the LM component
             if needs_kv_cache and lm_component_name and comp.name == lm_component_name:
@@ -4044,9 +4070,11 @@ class PrismSolver:
             for _sid, _spec in syms.items():
                 if not isinstance(_spec, dict) or _sid not in used_by_tensors:
                     continue          # no tensor carries it: the peak is at trace
-                _t = _spec.get("trace_value")
-                _m = _map.get(_sid)
-                if isinstance(_m, int) and isinstance(_t, int) and _m != _t:
+                # The profiler walked the graph at `_map`: a symbol it binds is followed whatever its value — a
+                # post-loop decoder's batch bound by the flow to the request's 1 equals its trace's 1, and scaling it
+                # by the guidance-doubled `batch_size` priced Sana 4K's VAE at twice its walk (39 520 MB for 19 760,
+                # 2026-10-22). Only a symbol the map leaves unbound is sized at its trace and scaled here.
+                if isinstance(_map.get(_sid), int):
                     bound_to_request.add(_sid)
         except Exception as _e:
             # Said, not swallowed: without this set the scaler would double every
@@ -6666,6 +6694,35 @@ class PrismSolver:
         self._token_split = False
         return None
 
+    def _park_values_between_pieces(self, candidates, strategies, sorted_components, component_memory, devices,
+                                    shard_sizes, profile, container):
+        """The rung after the token-axis slices: the values between a streamed component's pieces wait on the
+        host (`LayerPartitioner._greedy_swapped`), each piece holding only its weights, the inputs it reads and
+        what it produces. Tried only when no plan holds the request on the accelerator otherwise — a parked
+        value crosses the host link twice — and kept only where a streamed component IS parked and the plan then
+        holds; a declined attempt puts the rung state back, so a plan that places today does not change."""
+        if any(self._holds_on_accelerator(c) for c in candidates):
+            return None
+        import copy
+        saved = {k: copy.deepcopy(self.__dict__[k]) for k in self._RUNG_STATE if k in self.__dict__}
+        absent = [k for k in self._RUNG_STATE if k not in self.__dict__]
+        self._swap_values = True
+        parked = self._evaluate_all_strategies(
+            strategies, sorted_components, component_memory, self._prepare_devices(profile), shard_sizes,
+            profile, container)
+        parked_any = any(getattr(p, "swapped", False)
+                         for p in (self.__dict__.get("_layer_stream_partitions") or {}).values())
+        if parked_any and any(self._holds_on_accelerator(c) for c in parked):
+            logging.getLogger(__name__).info(
+                "Prism: no plan holds the request on the accelerator otherwise; the values between a streamed "
+                "component's pieces wait on the host")
+            return parked
+        self.__dict__.update(saved)
+        for k in absent:
+            self.__dict__.pop(k, None)
+        self._swap_values = False
+        return None
+
     def _guidance_loop(self, input_config, container, neural_components):
         """The loop components a guidance split runs one branch per pass, or [] when the request
         runs no guidance batch (`_split_guidance_batch`'s conditions, ONE reading for both)."""
@@ -7148,13 +7205,40 @@ class PrismSolver:
             self._op_tiling_declined = arena_refused[0]
             return None                      # every component is held whole: one arena each
         room_mb = effective_mb - total_weights_mb
+        # The room a component's activations have is the card less the weights resident WHILE IT RUNS — the flow's
+        # release schedule (`core/flow/residency`, the rule the flow releases by); a flow with no stated schedule, or
+        # serve mode, holds every component (the total above).
+        from neurobrix.core.flow.residency import resident_beside
+        _topology = self._flow_topology(container)
+        _serve = bool(getattr(self, "_serve_mode", False))
+        _by_name = dict(sorted_comps)
 
-        blocking = [(n, m) for n, m in sorted_comps if m.activation_mb > room_mb]
+        def room_of(name: str) -> float:
+            beside = resident_beside(_topology, name, _serve)
+            if beside is None:
+                return room_mb
+            held = _by_name[name].weight_mb + sum(_by_name[b].weight_mb for b in beside if b in _by_name)
+            return effective_mb - held
+
+        blocking = [(n, m) for n, m in sorted_comps if m.activation_mb > room_of(n)]
         if not blocking:
             return None                      # nothing overflows: a whole-component rung wins
         for _n, _m in blocking:
             if not _pa.dominated_by_activations(_m.weight_bytes, _m.activation_bytes):
                 return None                  # its WEIGHTS are the problem
+        # A tile cuts an op's own output and workspace; what earlier ops hold when it begins stays whole. Where that
+        # alone is over the room, no band count fits the component (`_compute_memory` records it, tiling-aware):
+        # HAT-S at 2048 px on 16 GB was claimed with 143 convolutions in bands and 126 787 MB of activations, the
+        # window attention's scores whole (2026-10-21).
+        floors = getattr(self, "_live_floor", None) or {}
+        for _n, _m in blocking:
+            live, at = floors.get(_n, (0, ""))
+            if live / (1024 * 1024) > room_of(_n):
+                self._op_tiling_declined = (
+                    f"{_n}: {live / (1024 * 1024):.0f} MB are live before {at} whatever its bands, over the "
+                    f"{room_of(_n):.0f} MB the card leaves beside the weights resident while it runs — an op-level "
+                    f"tile cuts an op's own output and workspace, never what earlier ops hold")
+                return None
 
         components = getattr(self, "_neural_components", None)
         input_config = getattr(self, "_input_config", None)
@@ -7602,7 +7686,8 @@ class PrismSolver:
                         f"is not this one")
                 _cutter = LayerPartitioner(graph, _piece_sizes, symbol_map=_sizing[0],
                                            compute_dtype_bytes=_sizing[1], widths=_sizing[2],
-                                           token_split=bool(getattr(self, "_token_split", False)))
+                                           token_split=bool(getattr(self, "_token_split", False)),
+                                           swap_values=bool(getattr(self, "_swap_values", False)))
                 # One piece's weights are one arena: bounded by the device's largest allocation, in
                 # the partitioner's stored bytes (the arena holds them at the device's cost multiplier).
                 # And a piece CHANGE holds the outgoing arena where the pool parks it beside the
@@ -8460,6 +8545,8 @@ class PrismSolver:
         # Mac's 62 weight-over-rung refusals, 4a3658d7; earlier, P-SANA-4KPX-RUNTIME POINT 9).
         tried = list(self._strategies_tried)
         tried_str = (", ".join(tried) + " - ALL FAILED") if tried else "no strategy was evaluated"
+        if getattr(self, "_op_tiling_declined", None):
+            tried_str += f"\n  op_level_tiling declined: {self._op_tiling_declined}"
         if self._layer_streaming_declined:
             tried_str += f"\n  layer_streaming declined: {self._layer_streaming_declined}"
         for _c, _why in (getattr(self, "_arena_declined", {}) or {}).items():
@@ -8692,6 +8779,8 @@ def plan_record(plan: "ExecutionPlan") -> dict:
         rec["batch_split_components"] = {k: dict(v) for k, v in plan.batch_split_components.items()}
     if getattr(plan, "layer_stream_chunks", None):
         rec["layer_stream_chunks"] = {k: [dict(c) for c in v] for k, v in plan.layer_stream_chunks.items()}
+    if getattr(plan, "layer_stream_swapped", None):
+        rec["layer_stream_swapped"] = list(plan.layer_stream_swapped)
     if plan.host_footprint:
         rec["host_footprint"] = dict(plan.host_footprint)
     if plan.unified_rungs_tried:

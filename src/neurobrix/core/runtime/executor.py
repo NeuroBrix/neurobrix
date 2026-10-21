@@ -1164,6 +1164,8 @@ class RuntimeExecutor:
                 getattr(self.plan, "layer_stream_moe", None) or {}),
             layer_chunks=dict(
                 getattr(self.plan, "layer_stream_chunks", None) or {}),
+            layer_swapped=frozenset(
+                getattr(self.plan, "layer_stream_swapped", None) or ()),
             mode=self.mode,
         )
 

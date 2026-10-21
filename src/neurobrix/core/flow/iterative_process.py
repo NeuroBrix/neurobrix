@@ -287,8 +287,11 @@ class IterativeProcessHandler(FlowHandler):
 
             # Unload weights immediately. Pre_loop components run once
             # per request, so force-unload even in eager mode to free
-            # VRAM for the main loop. Matches the triton path.
-            self._unload_component(comp_name, force=True)
+            # VRAM for the main loop. Matches the triton path. The schedule is
+            # `core/flow/residency`'s — the one Prism prices each component's room by.
+            from neurobrix.core.flow.residency import released_after_run
+            if released_after_run(self.ctx.pkg.topology, comp_name):
+                self._unload_component(comp_name, force=True)
 
     def _tokenizer_config_with_flags(self, encoder_name: str, tokenizer_name: str) -> Dict[str, Any]:
         """Tokenizer extracted_values augmented with runtime text-conditioning
@@ -1061,8 +1064,8 @@ class IterativeProcessHandler(FlowHandler):
         # Release loop + pre_loop component weights to free VRAM for VAE
         # Force-unload even in eager mode — within a single request, non-active
         # components must yield memory. They reload on the next request.
-        pre_loop = self.ctx.pkg.topology.get("flow", {}).get("pre_loop", [])
-        for comp_name in list(loop_components) + pre_loop:
+        from neurobrix.core.flow.residency import released_before_post_loop
+        for comp_name in released_before_post_loop(self.ctx.pkg.topology, list(loop_components)):
             self._unload_component(comp_name, force=True)
 
         # Get state variable for validation

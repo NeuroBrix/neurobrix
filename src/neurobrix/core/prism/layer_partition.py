@@ -89,6 +89,10 @@ class Partition:
     #: segment of its own: {"first_op", "last_op", "symbol", "slice", "count", "passes",
     #: "peak_bytes"}. Empty when every piece runs whole — every plan before this brick.
     chunks: List[Dict[str, Any]] = field(default_factory=list)
+    #: The values between pieces wait on the HOST (`LayerPartitioner._greedy_swapped`): a piece holds on
+    #: the device its weights, the inputs it reads and what it produces; the strategy parks every other
+    #: value (`LayerStreamingStrategy._run_pieces`). False: every value stays on the device.
+    swapped: bool = False
 
     @property
     def fits(self) -> bool:
@@ -107,8 +111,12 @@ class LayerPartitioner:
                  symbol_map: Optional[Dict[str, int]] = None,
                  compute_dtype_bytes: Optional[int] = None,
                  widths: Optional[Dict[str, int]] = None,
-                 token_split: bool = False):
+                 token_split: bool = False, swap_values: bool = False):
         self._dag = graph
+        # Whether a refusal on what the pieces hold may be answered by parking the values between pieces
+        # on the host (`_greedy_swapped`). The solver turns it on only once the cuts that move nothing
+        # have refused: a parked value crosses the host link twice.
+        self._swap = bool(swap_values)
         # Whether a refusal on the activations may be answered by running a stretch of the graph in
         # slices of a token axis (`_chunk_regions`). The solver turns it on only once the cuts that
         # cost nothing — between ops, and the guidance branches one pass each — have refused: a
@@ -350,8 +358,18 @@ class LayerPartitioner:
         self._regions_used = None
         part = self._greedy_on(self.live_activation_curve(), budget_bytes, max_arena_bytes,
                                peaks=self.op_peak_curve())
-        if part.fits or not self._token_split or self._resolver is None:
+        if part.fits or not (self._token_split or self._swap):
             return part
+        if not self._token_split or self._resolver is None:      # the slices need the request's resolver
+            parked = self._greedy_swapped(budget_bytes, max_arena_bytes)
+            if not parked.fits:
+                parked.refusal = f"{part.refusal} Nor with the values between pieces parked on the host: {parked.refusal}"
+            return parked
+        if self._swap:
+            parked = self._greedy_swapped(budget_bytes, max_arena_bytes)
+            if parked.fits:
+                return parked
+            part.refusal = f"{part.refusal} Nor with the values between pieces parked on the host: {parked.refusal}"
         regions, why = self._chunk_regions(budget_bytes, max_arena_bytes)
         if regions is None:
             part.refusal = (f"{part.refusal} Nor does running a stretch of it in slices of a token "
@@ -367,6 +385,93 @@ class LayerPartitioner:
             again.refusal = (f"{part.refusal} Running {len(regions)} stretch(es) in slices of a token "
                              f"axis still refuses: {again.refusal}")
         return again
+
+    def _value_intervals(self) -> Tuple[Dict[str, int], Dict[str, int], Dict[str, int]]:
+        """({tid: index of the op that produces it}, {tid: index of its last use}, {tid: bytes}) of every
+        activation — the liveness of `_walk_liveness` (the profiler's rule) as intervals."""
+        from neurobrix.core.prism.profiler import ZERO_ALLOC_OP_TYPES
+        last = self._last_use()
+        prod: Dict[str, int] = {}
+        size: Dict[str, int] = {}
+        for i, uid in enumerate(self.order):
+            op = self.ops.get(uid) or {}
+            zero = op.get("op_type") in ZERO_ALLOC_OP_TYPES
+            for tid in op.get("output_tensor_ids") or []:
+                t = self.tensors.get(tid)
+                if t is None or t.get("is_parameter") or tid in prod:
+                    continue
+                prod[tid] = i
+                size[tid] = 0 if zero else self._activation_bytes(tid, t)
+        for tid in self._dag.get("input_tensor_ids") or []:
+            t = self.tensors.get(tid)
+            if t is not None and not t.get("is_parameter") and tid not in size:
+                prod[tid] = -1
+                size[tid] = self._activation_bytes(tid, t)
+        return prod, last, size
+
+    def _greedy_swapped(self, budget_bytes: int, max_arena_bytes: Optional[int] = None) -> Partition:
+        """The cut when the values between pieces wait on the HOST: a piece holds on the device its
+        weights, every input it reads that an earlier piece (or the caller) produced — uploaded when it
+        starts, held to its end — and the tensors it produces while they live (their in-op figure: an
+        op's inputs not yet freed beside its outputs). Everything else is parked
+        (`LayerStreamingStrategy._run_pieces`, the same rule). A piece grows while that sum fits;
+        one op that cannot fit alone is refused by name. SwapAdvisor's swap plan, decided before the
+        run from the dataflow graph (Huang et al., ASPLOS 2020), at the granularity of a piece."""
+        outputs = set(self._dag.get("output_tensor_ids") or [])
+        prod, last, size = self._value_intervals()
+        n = len(self.order)
+        segments: List[Segment] = []
+        peak_resident = peak_live = total = 0
+        s = 0
+        while s < n:
+            names: Set[str] = set()
+            wbytes = 0
+            inputs: Set[str] = set()
+            in_bytes = 0
+            active: Dict[str, int] = {}
+            act_bytes = 0
+            run_peak = 0
+            e = -1
+            for i in range(s, n):
+                op = self.ops.get(self.order[i]) or {}
+                op_names = names | self._op_weight_names(self.order[i])
+                op_w = wbytes + sum(self._bytes_for(m) for m in op_names - names)
+                new_in = [t for t in dict.fromkeys(op.get("input_tensor_ids") or [])
+                          if t in size and prod.get(t, -1) < s and t not in inputs]
+                op_in = in_bytes + sum(size[t] for t in new_in)
+                outs = [t for t in op.get("output_tensor_ids") or [] if t in size and t not in active]
+                in_op = act_bytes + sum(size[t] for t in outs)
+                need = op_w + op_in + max(run_peak, in_op)
+                arena_over = max_arena_bytes is not None and op_w > max_arena_bytes
+                if need > budget_bytes or arena_over:
+                    if i == s:
+                        return Partition(
+                            segments=[], total_weight_bytes=0, peak_resident_bytes=0,
+                            peak_live_bytes=0, swapped=True,
+                            refusal=(f"op {self.order[i]!r} holds {need / _MB:.1f} MB on its own with the values "
+                                     f"between pieces parked (weights {op_w / _MB:.1f}, the inputs it reads "
+                                     f"{op_in / _MB:.1f}, its live set {in_op / _MB:.1f}), over the "
+                                     f"{budget_bytes / _MB:.1f} MB budget"
+                                     + (f" (its weights over the device's largest allocation, "
+                                        f"{max_arena_bytes / _MB:.1f} MB)" if arena_over else "")))
+                    break
+                names, wbytes, in_bytes, run_peak = op_names, op_w, op_in, max(run_peak, in_op)
+                inputs.update(new_in)
+                for t in outs:
+                    active[t] = size[t]
+                act_bytes = in_op
+                for t in [t for t in active if last.get(t, -1) <= i and t not in outputs]:
+                    act_bytes -= active.pop(t)
+                e = i
+            segments.append(Segment(index=len(segments), first_op=self.order[s], last_op=self.order[e],
+                                    op_count=e - s + 1, weight_names=names, weight_bytes=wbytes,
+                                    live_bytes_at_exit=act_bytes))
+            total += wbytes
+            peak_resident = max(peak_resident, wbytes + in_bytes + run_peak)
+            peak_live = max(peak_live, in_bytes + run_peak)
+            s = e + 1
+        return Partition(segments=segments, total_weight_bytes=total, peak_resident_bytes=peak_resident,
+                         peak_live_bytes=peak_live, swapped=True)
 
     def _greedy_on(self, curve: List[int], budget_bytes: int, max_arena_bytes: Optional[int] = None,
                    regions: Sequence["_Region"] = (), reserve: Optional[int] = None,

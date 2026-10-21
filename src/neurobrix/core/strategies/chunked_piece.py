@@ -79,6 +79,11 @@ class ChunkedPiece:
         return self._holder._dag
 
     @property
+    def device(self) -> Any:
+        """The device the piece runs on: its holder's."""
+        return getattr(self._holder, "device", None)
+
+    @property
     def _weights(self) -> Any:
         return getattr(self._holder, "_weights", None)
 

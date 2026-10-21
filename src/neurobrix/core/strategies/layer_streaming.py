@@ -490,9 +490,20 @@ class LayerStreamingStrategy(ExecutionStrategy):
         capture: Dict[str, Any] = {}
         base._pieces_capture = capture        # rebuilt every run: a decode step reads its own
         values: Dict[str, Any] = dict(inputs or {})
+        # The values between the pieces wait on the host (Prism `layer_stream_swapped`): before each piece, what it
+        # reads comes to its device and every other value — the declared outputs excepted — is parked. The rule
+        # Prism's `LayerPartitioner._greedy_swapped` priced: a piece holds its weights, its inputs and what it makes.
+        swapped = component_name in (getattr(self.context, "layer_swapped", None) or ())
         for i, (seg_exec, produced) in enumerate(zip(pieces, produced_by)):
             sub = seg_exec._dag
             needed = sub.get("segment_input_names") or []
+            if swapped:
+                from neurobrix.core.strategies.value_parking import to_device, to_host
+                dev = getattr(seg_exec, "device", None)
+                reads = set(needed)
+                for n in list(values):
+                    values[n] = to_device(values[n], dev) if n in reads else (
+                        values[n] if n in final else to_host(values[n]))
             feed = {n: _piece_input(values, n) for n in needed}
             missing = [n for n, v in feed.items() if v is _ABSENT]
             if missing:
