@@ -54,6 +54,7 @@ def strided_copy_kernel(
     stride_ptr,    # GPU pointer → NDIM int64 stride values (source)
     BLOCK_SIZE: tl.constexpr,
     NDIM: tl.constexpr,
+    WIDE: tl.constexpr = True,
 ):
     """Copy strided src → contiguous dst. Dimensions are unrolled at
     compile time via the NDIM constexpr; shape/strides are loaded from
@@ -70,8 +71,10 @@ def strided_copy_kernel(
         NDIM:        Rank of the tensors (constexpr; triggers
                      specialisation + kernel cache entry).
     """
-    pid = tl.program_id(0).to(tl.int64)
-    offsets = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
+    if WIDE:
+        offsets = tl.program_id(0).to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
+    else:
+        offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
 
     # Decompose the flat offset into multi-dim indices, walking dims
@@ -87,6 +90,9 @@ def strided_copy_kernel(
         dim = NDIM - 1 - i
         d = tl.load(shape_ptr + dim)
         s = tl.load(stride_ptr + dim)
+        if not WIDE:
+            d = d.to(tl.int32)
+            s = s.to(tl.int32)
         idx = remaining % d
         remaining = remaining // d
         src_offsets = src_offsets + idx * s
@@ -103,6 +109,7 @@ def strided_scatter_kernel(
     stride_ptr,    # GPU pointer → NDIM int64 stride values (destination)
     BLOCK_SIZE: tl.constexpr,
     NDIM: tl.constexpr,
+    WIDE: tl.constexpr = True,
 ):
     """Scatter contiguous src → strided dst. Inverse of
     `strided_copy_kernel`. Same N-D specialisation strategy.
@@ -117,8 +124,10 @@ def strided_scatter_kernel(
         BLOCK_SIZE:  Elements per thread block.
         NDIM:        Rank of the tensors (constexpr).
     """
-    pid = tl.program_id(0).to(tl.int64)
-    offsets = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
+    if WIDE:
+        offsets = tl.program_id(0).to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
+    else:
+        offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
 
     remaining = offsets
@@ -127,6 +136,9 @@ def strided_scatter_kernel(
         dim = NDIM - 1 - i
         d = tl.load(shape_ptr + dim)
         s = tl.load(stride_ptr + dim)
+        if not WIDE:
+            d = d.to(tl.int32)
+            s = s.to(tl.int32)
         idx = remaining % d
         remaining = remaining // d
         dst_offsets = dst_offsets + idx * s
@@ -144,6 +156,7 @@ def strided_copy_nd_kernel(
     dst_stride_ptr,   # GPU pointer → NDIM int64 destination strides
     BLOCK_SIZE: tl.constexpr,
     NDIM: tl.constexpr,
+    WIDE: tl.constexpr = True,
     SATURATE_F16: tl.constexpr = False,
 ):
     """Copy strided src → strided dst, casting on the store.
@@ -155,8 +168,10 @@ def strided_copy_nd_kernel(
     of `copy_kernel`, the same expression, so a cast through this kernel
     is bit-identical to a cast through `copy_kernel` after `contiguous()`.
     """
-    pid = tl.program_id(0).to(tl.int64)
-    offsets = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
+    if WIDE:
+        offsets = tl.program_id(0).to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
+    else:
+        offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
 
     remaining = offsets
@@ -167,6 +182,10 @@ def strided_copy_nd_kernel(
         d = tl.load(shape_ptr + dim)
         ss = tl.load(src_stride_ptr + dim)
         ds = tl.load(dst_stride_ptr + dim)
+        if not WIDE:
+            d = d.to(tl.int32)
+            ss = ss.to(tl.int32)
+            ds = ds.to(tl.int32)
         idx = remaining % d
         remaining = remaining // d
         src_offsets = src_offsets + idx * ss

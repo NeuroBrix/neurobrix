@@ -2660,7 +2660,8 @@ def _copy_nd(src: 'NBXTensor', dst: 'NBXTensor'):
     strided_copy_nd_kernel[(triton.cdiv(n, BLOCK),)](
         src, dst, n, shape_buf, src_stride_buf, dst_stride_buf,
         BLOCK_SIZE=BLOCK, NDIM=ndim,
-        SATURATE_F16=_saturating_cast(src._dtype, dst._dtype))
+        SATURATE_F16=_saturating_cast(src._dtype, dst._dtype),
+        WIDE=_index_wide(n, _max_linear_offset(shape, sst), _max_linear_offset(shape, dst_st)))
 
 
 def _upload_int64_array(values, device_idx: int) -> 'NBXTensor':
@@ -2752,6 +2753,17 @@ def _upload_index_array(values, device_idx: int, max_offset: int) -> 'NBXTensor'
     return buf
 
 
+def _index_wide(n_elements: int, *max_offsets: int) -> bool:
+    """64-bit index arithmetic in the strided kernels (`WIDE`) when the element count or an operand's largest offset
+    is within a factor of two of 2^31 (a masked lane forms an offset past the extent before its mask drops it; the
+    factor covers it). Below it the 32-bit path computes the same offsets. The kernels' flat offset was made 64-bit
+    from the program id for tensors past 2^31 elements, and that promoted every `%` and `//` of every copy back to
+    64-bit — emulated on Apple's GPU: the (1,128,9,242,362) bf16 permute copy of a VAE conv3d ran 84 ms (4.8 GB/s)
+    against 8.3 ms (48 GB/s) at 32 bits, same bytes (Mac, 2026-10-21); the narrow metadata of `_upload_index_array`
+    had stopped mattering."""
+    return max([int(n_elements)] + [abs(int(b)) for b in max_offsets]) >= (1 << 30)
+
+
 def _max_linear_offset(shape, strides) -> int:
     """The largest offset `strided_copy_kernel` can address from this shape
     and these strides — what the index arithmetic must be wide enough for."""
@@ -2839,6 +2851,7 @@ def _strided_copy(src: 'NBXTensor', dst: 'NBXTensor'):
         shape_buf, stride_buf,
         BLOCK_SIZE=BLOCK,
         NDIM=ndim,
+        WIDE=_index_wide(n, _bound),
     )
 
 
@@ -2875,6 +2888,7 @@ def _strided_scatter(src: 'NBXTensor', dst: 'NBXTensor'):
         shape_buf, stride_buf,
         BLOCK_SIZE=BLOCK,
         NDIM=ndim,
+        WIDE=_index_wide(n, _bound),
     )
 
 
