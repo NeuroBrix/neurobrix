@@ -180,6 +180,151 @@ def mono_of(node: Any, sym: str) -> Optional[Mono]:
     return Mono(1, {"expr:" + _canon(node): 1})
 
 
+def _poly_of(node: Any, units: Dict[str, int]) -> Optional[Dict[Tuple[Tuple[str, int], ...], int]]:
+    """The dimension as a polynomial with each symbol t of `units` replaced by `units[t] * T` (T keeps the
+    key `sym:<t>`; a symbol `units` does not name is itself):
+    {atoms: integer coefficient}, atoms a sorted tuple of (key, exponent), () the constant. Python's
+    arithmetic, read exactly: a floor division or a modulo by an integer m resolves only when m divides
+    every coefficient but the constant's — then floor((m*X + c) / m) = X + floor(c / m) and
+    (m*X + c) % m = c % m for every integer X. None for anything else (a real, a division by an
+    expression, a remainder that depends on U)."""
+    def const(c: int) -> Dict:
+        return {(): int(c)} if c else {}
+
+    def add(x: Dict, y: Dict, sign: int = 1) -> Dict:
+        out = dict(x)
+        for k, v in y.items():
+            out[k] = out.get(k, 0) + sign * v
+            if not out[k]:
+                del out[k]
+        return out
+
+    def mul(x: Dict, y: Dict) -> Dict:
+        out: Dict = {}
+        for ka, va in x.items():
+            for kb, vb in y.items():
+                d = dict(ka)
+                for key, e in kb:
+                    d[key] = d.get(key, 0) + e
+                k = tuple(sorted(d.items()))
+                out[k] = out.get(k, 0) + va * vb
+                if not out[k]:
+                    del out[k]
+        return out
+
+    def divisor(x: Optional[Dict]) -> Optional[int]:
+        if x is None or any(k for k in x) or not x:
+            return None
+        return int(x[()])
+
+    def walk(n: Any) -> Optional[Dict]:
+        if isinstance(n, bool):
+            return None
+        if isinstance(n, int):
+            return const(n)
+        if isinstance(n, str):
+            return {(("sym:" + n, 1),): units.get(n, 1)}
+        if not isinstance(n, dict):
+            return None
+        t = n.get("type")
+        sid = _symbol_id(n)
+        if sid is not None:
+            base = {(("sym:" + sid, 1),): units.get(sid, 1)}
+            off = n.get("offset", 0)
+            return add(base, const(off)) if isinstance(off, int) else None
+        if t in ("const", "scalar") or (t is None and "value" in n):
+            v = n.get("value")
+            return const(v) if isinstance(v, int) and not isinstance(v, bool) else None
+        if not any(mentions(n, t) for t in units):
+            return {(("expr:" + _canon(n), 1),): 1}
+        if t == "neg":
+            x = walk(n.get("operand", n.get("left")))
+            return None if x is None else {k: -v for k, v in x.items()}
+        if t == "product":
+            out = const(1)
+            for f in n.get("factors") or []:
+                x = walk(f)
+                if x is None:
+                    return None
+                out = mul(out, x)
+            return out
+        if t in ("add", "sub", "mul", "floordiv", "mod"):
+            x, y = walk(n.get("left")), walk(n.get("right"))
+            if x is None or y is None:
+                return None
+            if t == "add":
+                return add(x, y)
+            if t == "sub":
+                return add(x, y, -1)
+            if t == "mul":
+                return mul(x, y)
+            m = divisor(y)
+            if not m or any(v % m for k, v in x.items() if k):
+                return None
+            c = x.get((), 0)
+            if t == "mod":
+                return const(c % m)
+            return add({k: v // m for k, v in x.items() if k}, const(c // m))
+        return None
+
+    return walk(node)
+
+
+def mono_of_unit(node: Any, sym: str, units: Optional[Dict[str, int]]) -> Optional[Mono]:
+    """`mono_of` with the symbols of `units` read in their units (`_poly_of`): the one term the dimension's
+    polynomial must be, or None. No units: `mono_of`."""
+    if not units:
+        return mono_of(node, sym)
+    poly = _poly_of(node, units)
+    if poly is None or len(poly) != 1:
+        return None
+    (atoms, coef), = poly.items()
+    return Mono(coef, dict(atoms)) if coef else None
+
+
+def symbol_units(graph: Dict[str, Any]) -> Dict[str, int]:
+    """{symbol: the least common multiple of every integer the graph floor-divides or reduces an expression of
+    it by} — the units every symbol is read in when one axis is sliced in units (`TokenAxis`): HAT's height and
+    width both come in windows of 16, and the inner extent of its window view is s2 // 16 * 16, which only a
+    reading of s2 in its own units relates to s2. A reading in units holds only where the symbol's value is a
+    multiple of its unit: the planner checks it at the request, the runtime at every run (`TokenAxis.scaled`)."""
+    syms = ((graph.get("symbolic_context") or {}).get("symbols") or {})
+    out: Dict[str, int] = {}
+    for sid in syms:
+        got = axis_units(graph, sid)
+        if got:
+            out[sid] = got[0]
+    return out
+
+
+def axis_units(graph: Dict[str, Any], sym: str) -> List[int]:
+    """The units an axis can be sliced in beyond 1: the least common multiple of every integer the graph's
+    extents and size lists floor-divide or reduce an expression of `sym` by (HAT's window partition views
+    its height `s1` as (s1 // 16, 16): its rows come in windows of 16, and a slice of whole windows keeps
+    every such view exact). [] when the graph divides `sym` by nothing."""
+    found: Set[int] = set()
+
+    def walk(n: Any) -> None:
+        if isinstance(n, dict):
+            if n.get("type") in ("floordiv", "mod") and isinstance(n.get("right"), int) \
+                    and not isinstance(n.get("right"), bool) and n["right"] > 1 and mentions(n.get("left"), sym):
+                found.add(int(n["right"]))
+            for k, v in n.items():
+                if k != "trace":
+                    walk(v)
+        elif isinstance(n, list):
+            for v in n:
+                walk(v)
+
+    for t in (graph.get("tensors") or {}).values():
+        walk((t or {}).get("symbolic_shape"))
+    for op in (graph.get("ops") or {}).values():
+        walk(((op or {}).get("attributes") or {}).get("args"))
+    if not found:
+        return []
+    return [math.lcm(*sorted(found))]
+
+
 # ---------------------------------------------------------------------------------------------
 # Layouts and verdicts
 # ---------------------------------------------------------------------------------------------
@@ -270,9 +415,17 @@ def _norm_dim(d: Any, rank: int) -> Optional[int]:
 class TokenAxis:
     """The layout of one symbol across a whole graph, and every op's verdict for it."""
 
-    def __init__(self, graph: Dict[str, Any], sym: str):
+    def __init__(self, graph: Dict[str, Any], sym: str, unit: int = 1):
         self.graph = graph
         self.sym = sym
+        #: The axis is sliced in units of `unit` of the symbol (`axis_units`): S stands for symbol / unit, and
+        #: every symbol the graph divides is read in its own unit (`symbol_units`, `mono_of_unit`) so a view's
+        #: extents relate exactly. 1: the symbols themselves, no reading in units.
+        self.unit = int(unit)
+        self.units: Dict[str, int] = {}
+        if self.unit > 1:
+            self.units = dict(symbol_units(graph))
+            self.units[sym] = self.unit
         self.S = Mono(1, {"sym:" + sym: 1})
         self.tensors: Dict[str, Any] = graph.get("tensors") or {}
         self.ops: Dict[str, Any] = graph.get("ops") or {}
@@ -310,7 +463,7 @@ class TokenAxis:
 
     def monos(self, tid: str) -> Optional[List[Optional[Mono]]]:
         if tid not in self._dims_memo:
-            self._dims_memo[tid] = [mono_of(d, self.sym) for d in self.dims(tid)]
+            self._dims_memo[tid] = [mono_of_unit(d, self.sym, self.units) for d in self.dims(tid)]
         return self._dims_memo[tid]
 
     def s_dim(self, tid: str) -> Tuple[Optional[int], Optional[Mono], str]:
@@ -328,7 +481,26 @@ class TokenAxis:
         axis, m, _ = self.s_dim(tid)
         if axis is not None and m == self.S:
             return Layout(axis, m, ONE)
+        if axis is not None and self.unit > 1 and m == Mono(self.unit) * self.S:
+            # the symbol's own rows, in units of `unit`: row r is unit r // unit, the remainder inner
+            return Layout(axis, m, Mono(self.unit))
         return None
+
+    def scaled(self, symbol: Callable[[str], int]) -> Callable[[str], int]:
+        """The reader a monomial of this axis is evaluated with: each symbol in its unit (`self.units`), refused by
+        name where its value is not a whole number of them — the reading in units would not be the graph's."""
+        def value(sid: str) -> int:
+            v, unit = int(symbol(sid)), self.units.get(sid, 1)
+            q, r = divmod(v, unit)
+            if r:
+                raise RuntimeError(f"chunked region: symbol {sid} = {v} is not a whole number of its units of {unit} "
+                                   f"(the graph's views of it in units would not hold)")
+            return q
+        return value
+
+    def fits_units(self, symbol_map: Dict[str, int]) -> bool:
+        """Whether every symbol this axis reads in units is a whole number of them at `symbol_map`."""
+        return all(int(symbol_map.get(t, 0)) % u == 0 for t, u in self.units.items() if t in symbol_map)
 
     def p_of(self, lay: Layout) -> Optional[Mono]:
         if lay.inner is None:
@@ -449,6 +621,8 @@ class TokenAxis:
             return self._rule_pad(op, s_in[0], lays[s_in[0]], outs)
         if ty == "convolution":
             return self._rule_conv(op, ins, s_in, lays, outs)
+        if ty == "im2col":
+            return self._rule_im2col(op, ins, s_in, lays, outs)
         if ty in ("upsample_nearest2d", "upsample_nearest1d", "upsample_nearest3d", "pixel_shuffle"):
             return self._rule_scale(ty, op, s_in[0], lays[s_in[0]], outs)
         if ty == "native_group_norm":
@@ -643,7 +817,10 @@ class TokenAxis:
             if not isinstance(d, int) or isinstance(d, bool):
                 raise _Mix(f"{ty} along an unknown dimension")
             if lay.axis == d % rank:
-                raise _Mix(f"{ty} along the axis")
+                # `x[0:]` along the axis — start 0, no end short of the extent (aten records Python's
+                # open end as the int64 maximum), step 1 — is the whole axis: an identity, carried
+                if not (ty == "slice" and self._whole_slice(args, op)):
+                    raise _Mix(f"{ty} along the axis")
             self._no_s_args(op)
             return Verdict(SLICE), {t: self._carry(t, lay) for t in outs if self.carries(t)}
         dims = self._dim_arg(op, rank)
@@ -656,6 +833,18 @@ class TokenAxis:
             raise _Mix(f"{ty} over the axis")
         self._no_s_args(op)
         return Verdict(SLICE), {t: self._carry(t, lay) for t in outs if self.carries(t)}
+
+    @staticmethod
+    def _whole_slice(args: List[Any], op: Dict[str, Any]) -> bool:
+        """Whether aten.slice(x, dim, start, end, step) takes every row: start 0 (or absent), end absent or at
+        least the int64 maximum Python's open end is recorded as, step 1 (or absent)."""
+        def num(i: int, default: Any) -> Any:
+            v = args[i] if len(args) > i else default
+            if isinstance(v, dict) and "value" in v:
+                v = v["value"]
+            return default if v is None else v
+        start, end, step = num(2, 0), num(3, None), num(4, 1)
+        return start == 0 and step == 1 and (end is None or (isinstance(end, int) and end >= 2 ** 63 - 1))
 
     def _rule_cat(self, ty, op, s_in, lays, outs) -> Tuple[Verdict, Dict[str, Layout]]:
         args = self._args(op)
@@ -753,6 +942,49 @@ class TokenAxis:
                 raise _Mix("a pointwise convolution padding the axis")
         return Verdict(SLICE), {outs[0]: self._carry(outs[0], lay)}
 
+    def _rule_im2col(self, op, ins, s_in, lays, outs) -> Tuple[Verdict, Dict[str, Layout]]:
+        """Unfold of [N, C, H, W] into [N, C*kh*kw, L], L = out_h * out_w, along a spatial axis read in units
+        of the op's stride: output row j reads input rows j*s - p .. j*s - p + d*(k-1), so when one unit of the
+        axis is one stride (the input's inner extent along it is s) and the windows tile the extent
+        (d*(k-1) + 1 - 2p == s: out = in / s), output unit j reads input unit j widened by p rows on each side —
+        local, run on a slice widened by that halo (HAT's overlapping cross-attention: k 24, s 16, p 4).
+        Anything else — a stride that is not the unit, windows that do not tile, the axis on channels — mixes."""
+        x = ins[0]
+        if s_in != [x]:
+            raise _Mix("an unfold with S outside its input")
+        lay = lays[x]
+        self._no_s_args(op, allow_lists=True)
+        if lay.axis not in (2, 3) or lay.inner is None:
+            raise _Mix("an unfold over a non-spatial axis")
+        args = self._args(op)
+        k = lay.axis - 2
+
+        def at(i: int) -> Optional[int]:
+            xs = args[i] if len(args) > i and isinstance(args[i], list) else []
+            v = xs[k] if k < len(xs) else (xs[0] if len(xs) == 1 else None)
+            return v if isinstance(v, int) and not isinstance(v, bool) else None
+        kk, d, p, st = at(1), at(2), at(3), at(4)
+        P = self.p_of(lay)
+        if None in (kk, d, p, st) or P is None or not P.is_one() or lay.inner.atoms or lay.inner.coef != st:
+            raise _Mix("an unfold whose stride is not one unit of the axis")
+        if d * (kk - 1) + 1 - 2 * p != st or d * (kk - 1) - p - (st - 1) != p:
+            raise _Mix("an unfold whose windows do not tile the axis' extent")
+        out = outs[0]
+        b, m, why = self.s_dim(out)
+        if b is None:
+            raise _Mix(why)
+        if b != 2:
+            raise _Mix("an unfold whose windows' axis is not its output's last")
+        if lay.axis == 2:
+            inner = m.div(self.S)
+            if inner is None:
+                raise _Mix("an unfold whose window count is not the axis times the width")
+        else:
+            inner = ONE
+            if m.div(self.S) is None:
+                raise _Mix("an unfold whose window count does not hold the axis")
+        return Verdict(SLICE, halo=p), {out: Layout(b, m, inner)}
+
     def _rule_scale(self, ty, op, src, lay, outs) -> Tuple[Verdict, Dict[str, Layout]]:
         """Nearest upsampling and pixel shuffle along a spatial axis: output row r is input row r // c
         (c the constant factor) — a slice of S keeps mapping to whole output rows, the inner extent
@@ -847,6 +1079,8 @@ class RegionPlan:
     #: field of its local ops (`Verdict.halo` over each op's rows per unit of S), summed exactly and rounded up once:
     #: the field itself, so the kept rows are exact.
     margin: int = 0
+    #: The axis' unit (`TokenAxis.unit`): a slice of c is c * unit of the symbol.
+    unit: int = 1
 
 
 def region_reads(ax: TokenAxis, first: int, last: int) -> Tuple[List[str], Set[str]]:
@@ -897,7 +1131,7 @@ def plan_region(ax: TokenAxis, first: int, last: int,
     outputs = [t for uid in ax.order[first:last + 1]
                for t in ((ax.ops.get(uid) or {}).get("output_tensor_ids") or [])
                if (ax.readers.get(t) or [-1])[-1] > last or t in ax.graph_outputs or t in protected]
-    plan = RegionPlan(ax.sym, first, last, ax.order[first], ax.order[last])
+    plan = RegionPlan(ax.sym, first, last, ax.order[first], ax.order[last], unit=ax.unit)
     plan.margin = math.ceil(margin)
     plan.inputs = reads
     plan.outputs = outputs

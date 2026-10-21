@@ -48,9 +48,13 @@ class ChunkedPiece:
         self._make = make_executor
         self._sym = str(chunk["symbol"])
         self._slice = int(chunk["slice"])
-        if self._slice < 1:
-            raise ValueError(f"chunked piece: slice {self._slice} of {self._sym}")
-        self._axis = axis if axis is not None else TokenAxis(dag, self._sym)
+        # the axis' unit (a window's rows): a slice of c is c * unit of the symbol; a plan before units is 1
+        self._unit = int(chunk.get("unit", 1))
+        if self._slice < 1 or self._unit < 1:
+            raise ValueError(f"chunked piece: slice {self._slice} of {self._sym} in units of {self._unit}")
+        self._axis = axis if axis is not None else TokenAxis(dag, self._sym, self._unit)
+        if self._axis.unit != self._unit:
+            raise ValueError(f"chunked piece: the axis is in units of {self._axis.unit}, the plan's of {self._unit}")
         index = {u: i for i, u in enumerate(self._axis.order)}
         missing = [u for u in (chunk["first_op"], chunk["last_op"]) if u not in index]
         if missing:
@@ -216,9 +220,13 @@ class ChunkedPiece:
             raise RuntimeError("chunked piece: run before load_weights")
         plan = self._plan
         value = self._symbols(feed)
-        total = value(self._sym)
+        rows = value(self._sym)
+        total, rest = divmod(rows, self._unit)
+        if rest:
+            raise RuntimeError(f"chunked piece: {self._sym} = {rows} is not a whole number of its units of "
+                               f"{self._unit} — the graph's own views of it in units would not hold either")
         count = -(-total // self._slice)
-        inner = {t: (lay.inner.evaluate(value) if lay.inner is not None else None)
+        inner = {t: (lay.inner.evaluate(self._axis.scaled(value)) if lay.inner is not None else None)
                  for t, lay in plan.layouts.items()}
         # what is sliced on the way in: the stretch's inputs and the carriers of its symbols
         sliced_in = set(plan.inputs) | {t for t in plan.layouts if t not in plan.outputs}
