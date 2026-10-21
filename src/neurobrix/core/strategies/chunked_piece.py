@@ -61,6 +61,10 @@ class ChunkedPiece:
         self._passes: Optional[List[Any]] = None
         self._plan = None
         self._last_run: Dict[str, Any] = {}
+        # contraction tid -> (accumulator dtype, store dtype): the dtype the engine gives the op's
+        # output unpinned, read from its first partial; where the accumulator is wider, the op is
+        # pinned at the accumulator's width on its pass (`GraphExecutor.pin_fp32_ops`)
+        self._sums: Dict[str, Any] = {}
         self._loaded = False
         self._nbx = None
 
@@ -173,6 +177,9 @@ class ChunkedPiece:
         for cp in plan.passes:
             sub = build_segment_graph(self._full, seg, pass_ops=cp.ops, outputs=cp.targets)
             ex = self._make(sub, self._holder)
+            pins = self._pins_of(cp, plan, sub)
+            if pins:
+                ex.pin_fp32_ops(pins)
             if self._interceptors:
                 ex.register_triton_interceptors(self._interceptors)
             for tid in self._protected:
@@ -180,6 +187,16 @@ class ChunkedPiece:
                     ex.protect_tensor_id(tid)
             passes.append(ex)
         self._plan, self._passes = plan, passes
+
+    def _pins_of(self, cp: Any, plan: Any, graph: Dict[str, Any]) -> Set[str]:
+        """The producers of the contractions this chunked pass sums whose partial the engine gives
+        narrower than its accumulator (learned at the first partial, `_sums`)."""
+        if not cp.chunked:
+            return set()
+        wide = {t for t in cp.targets if t in plan.contractions
+                and t in self._sums and self._sums[t][0] != self._sums[t][1]}
+        return {u for u, op in (graph.get("ops") or {}).items()
+                if wide.intersection(op.get("output_tensor_ids") or ())}
 
     def _tid(self, name: str) -> str:
         """The graph tensor a fed name stands for: a seam tid as is, a component input under
@@ -223,57 +240,15 @@ class ChunkedPiece:
         # what is sliced on the way in: the stretch's inputs and the carriers of its symbols
         sliced_in = set(plan.inputs) | {t for t in plan.layouts if t not in plan.outputs}
         done: Dict[str, Any] = {}          # tid -> whole value (contraction sums, assembled outputs)
-        dtypes: Dict[str, Any] = {}        # contraction tid -> (accumulator dtype, store dtype)
         nbx_path, component = self._nbx
         for cp, ex in zip(plan.passes, self._passes):
             names = ex._dag.get("segment_input_names") or []
             ex.load_weights(nbx_path, component)
             try:
-                m = plan.margin if cp.chunked else 0
-                # each slice READS its rows widened by the stretch's halo, clipped at the axis' true ends
-                for start, length, in_start, in_len in (slice_reads(total, count, m) if cp.chunked
-                                                        else [(0, total, 0, total)]):
-                    sub_feed = {}
-                    for n in names:
-                        tid = self._tid(n)
-                        if n in done:
-                            v = done[n]
-                        elif tid in done:
-                            v = done[tid]
-                        elif n in feed:
-                            v = feed[n]
-                        else:
-                            raise RuntimeError(f"chunked piece: pass input {n!r} is neither fed nor made")
-                        lay = plan.layouts.get(tid)
-                        if cp.chunked and lay is not None and tid in sliced_in:
-                            v = take_slice(v, lay, total, inner[tid], in_start, in_len)
-                        sub_feed[n] = v
-                    out = ex.run(sub_feed, *args, **kwargs) or {}
-                    meta = ex._dag.get("tensors") or {}
-                    for tid in cp.targets:
-                        key = output_key(meta.get(tid), tid)
-                        if key not in out:
-                            raise RuntimeError(f"chunked piece: pass did not return {key!r}")
-                        part = out[key]
-                        lay = plan.layouts.get(tid)
-                        if tid in plan.contractions and cp.chunked:
-                            # summed in the engine's accumulator, stored once in the op's own dtype
-                            if tid not in dtypes:
-                                dtypes[tid] = (ex.accumulation_dtype(part.dtype), part.dtype)
-                            done[tid] = accumulate(done.get(tid), part, dtypes[tid][0])
-                        elif tid in plan.contractions:
-                            done[tid] = own(part)
-                        elif cp.chunked and lay is not None:
-                            if m:      # keep the slice's own rows: the margin's rows read padding, not the image
-                                part = take_slice(part, lay, in_len, inner[tid], start - in_start, length)
-                            if start == 0:
-                                done[tid] = part.new_empty(whole_shape(part.shape, lay, total, length))
-                            put_slice(done[tid], part, lay, total, inner[tid], start, length)
-                        else:
-                            done[tid] = own(part)
-                for tid in cp.targets:
-                    if tid in dtypes:
-                        done[tid] = store(done[tid], dtypes.pop(tid)[1])
+                while self._run_pass(cp, ex, names, feed, done, total, count, inner, sliced_in,
+                                     args, kwargs):
+                    for tid in cp.targets:        # pinned at the accumulator's width: the pass again
+                        done.pop(tid, None)
             finally:
                 ex.unload_weights()
         self._last_run = {t: done[t] for t in plan.outputs if t in done}
@@ -284,3 +259,62 @@ class ChunkedPiece:
                 raise RuntimeError(f"chunked piece: the stretch did not make its output {tid!r}")
             result[output_key(meta.get(tid), tid)] = done[tid]
         return result
+
+    def _run_pass(self, cp: Any, ex: Any, names: Sequence[str], feed: Dict[str, Any],
+                  done: Dict[str, Any], total: int, count: int, inner: Dict[str, Any],
+                  sliced_in: Set[str], args: Any, kwargs: Any) -> bool:
+        """One pass over its slices, its targets written into `done`. True when the pass must run
+        again: a contraction's first partial came narrower than the engine's accumulator, and its
+        producer is now pinned at the accumulator's width (`GraphExecutor.pin_fp32_ops`) — a
+        partial rounded once per slice would sum to what the whole op, rounding once, does not."""
+        plan = self._plan
+        m = plan.margin if cp.chunked else 0
+        # each slice READS its rows widened by the stretch's halo, clipped at the axis' true ends
+        for start, length, in_start, in_len in (slice_reads(total, count, m) if cp.chunked
+                                                else [(0, total, 0, total)]):
+            sub_feed = {}
+            for n in names:
+                tid = self._tid(n)
+                if n in done:
+                    v = done[n]
+                elif tid in done:
+                    v = done[tid]
+                elif n in feed:
+                    v = feed[n]
+                else:
+                    raise RuntimeError(f"chunked piece: pass input {n!r} is neither fed nor made")
+                lay = plan.layouts.get(tid)
+                if cp.chunked and lay is not None and tid in sliced_in:
+                    v = take_slice(v, lay, total, inner[tid], in_start, in_len)
+                sub_feed[n] = v
+            out = ex.run(sub_feed, *args, **kwargs) or {}
+            meta = ex._dag.get("tensors") or {}
+            for tid in cp.targets:
+                key = output_key(meta.get(tid), tid)
+                if key not in out:
+                    raise RuntimeError(f"chunked piece: pass did not return {key!r}")
+                part = out[key]
+                lay = plan.layouts.get(tid)
+                if tid in plan.contractions and cp.chunked:
+                    # summed in the engine's accumulator, stored once in the op's own dtype
+                    if tid not in self._sums:
+                        self._sums[tid] = (ex.accumulation_dtype(part.dtype), part.dtype)
+                        pins = self._pins_of(cp, plan, ex._dag)
+                        if pins:
+                            ex.pin_fp32_ops(pins)
+                            return True
+                    done[tid] = accumulate(done.get(tid), part, self._sums[tid][0])
+                elif tid in plan.contractions:
+                    done[tid] = own(part)
+                elif cp.chunked and lay is not None:
+                    if m:      # keep the slice's own rows: the margin's rows read padding, not the image
+                        part = take_slice(part, lay, in_len, inner[tid], start - in_start, length)
+                    if start == 0:
+                        done[tid] = part.new_empty(whole_shape(part.shape, lay, total, length))
+                    put_slice(done[tid], part, lay, total, inner[tid], start, length)
+                else:
+                    done[tid] = own(part)
+        for tid in cp.targets:
+            if tid in plan.contractions and cp.chunked:
+                done[tid] = store(done[tid], self._sums[tid][1])
+        return False

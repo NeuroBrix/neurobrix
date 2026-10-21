@@ -315,6 +315,9 @@ class GraphExecutor:
     #: conservative contract: GLM-4.1V streamed, same tokens, logits off from whole (30.3190 vs
     #: 30.3169 at step 0) while whole run twice was identical. None: resolve as a component.
     _contract_from = None
+    #: Ops a plan pins at the accumulator width (`pin_fp32_ops`): computed in fp32 with an fp32
+    #: output in every mode, merged into the contract `precision_contract` hands every engine.
+    _plan_fp32_pins: frozenset = frozenset()
     #: The executor whose COMPONENT state this one loads under: the runtime resolution the
     #: runtime sets per request (`set_runtime_resolution`, on the component's executor only) and
     #: the component handler the factory attaches to it. A `layer_streaming` piece is built by the
@@ -1448,11 +1451,16 @@ class GraphExecutor:
         ONE entry every engine's resolve site goes through — compiled and sequential at graph
         load, triton and triton-sequential at compile."""
         if self._contract_from is not None:
-            return self._contract_from.precision_contract(compute_dtype, supports_op_pins)
-        from neurobrix.core.runtime.precision_contract import resolve
-        return resolve(getattr(self, "_cache_path", None), self._component_name,
-                       getattr(self, "_dag", None), compute_dtype=compute_dtype,
-                       supports_op_pins=supports_op_pins)
+            safe, pins, narrow = self._contract_from.precision_contract(compute_dtype, supports_op_pins)
+        else:
+            from neurobrix.core.runtime.precision_contract import resolve
+            safe, pins, narrow = resolve(getattr(self, "_cache_path", None), self._component_name,
+                                         getattr(self, "_dag", None), compute_dtype=compute_dtype,
+                                         supports_op_pins=supports_op_pins)
+        plan = self._plan_fp32_pins
+        if not plan:
+            return safe, pins, narrow
+        return safe, frozenset(pins) | plan, frozenset(narrow) - plan
 
     def _resolve_fp16_activation_policy(self, compute_dtype) -> tuple:
         """(activations_fp16_safe, fp32_op_uids, narrow_op_uids) for the DtypeEngine — the
@@ -5848,6 +5856,27 @@ class GraphExecutor:
             raise RuntimeError(f"accumulation_dtype: the {self.mode} executor holds no DtypeEngine")
         return self._dtype_engine.accumulation_dtype(dtype)
 
+    def pin_fp32_ops(self, uids) -> None:
+        """From the next run on, the ops `uids` compute in fp32 and keep an fp32 output, in every
+        mode — the precision contract's island semantics, set by a plan rather than a calibration
+        record. Asked by a stretch run in slices (`core/strategies/chunked_piece`): the partial of a
+        contraction over the sliced axis is produced at the accumulator's width, so the slices are
+        summed unrounded and the sum is stored once, as the whole op rounds once. Compiled and
+        triton rebuild their sequence with the pins; triton-sequential resolves them at each run;
+        sequential casts through the same DtypeEngine (`amp_cast_inputs` / `amp_cast_result`)."""
+        new = frozenset(uids) - self._plan_fp32_pins
+        if not new:
+            return
+        self._plan_fp32_pins = self._plan_fp32_pins | new
+        if self._dtype_engine is not None:
+            self._activations_fp16_safe, self._fp32_op_uids, self._narrow_op_uids = \
+                self._resolve_fp16_activation_policy(self._dtype_engine.compute_dtype)
+            self._dtype_engine.set_precision_contract(
+                self._activations_fp16_safe, self._fp32_op_uids, self._narrow_op_uids)
+            self._interceptors_dirty = True          # compiled: rebuilt with the pins
+        if getattr(self, "_triton_seq", None) is not None:
+            self._drop_triton_sequence()
+
     def tensors_of_last_run(self, tids) -> Dict[str, Any]:
         """The tensors named by `tids` as this executor's LAST run left them, read where its
         engine keeps them: the triton sequence's arena, the triton op-by-op capture, or the
@@ -6121,6 +6150,18 @@ class GraphExecutor:
         if hasattr(self, "_tritonseq_captured"):
             self._tritonseq_captured = {}
 
+    def _drop_triton_sequence(self) -> None:
+        """Release the compiled Triton sequence: its arena (NBXTensor slots) after a device sync,
+        so `__del__` -> free_cuda cannot race an async kernel still reading the memory, and its
+        recorded replay plans (slabs + captured graphs), which the weak registry does not. The
+        next triton run compiles anew (`_ensure_triton_compiled`)."""
+        from neurobrix.kernels.nbx_tensor import DeviceAllocator as _DA
+        _DA.sync_device()
+        self._triton_seq._arena.clear_all()  # type: ignore[attr-defined]
+        from neurobrix.triton.replay import retire_sequence_plans
+        retire_sequence_plans(self._triton_seq)
+        self._triton_seq = None
+
     def unload_weights(self) -> None:
         """
         Unload all weights from GPU to free memory.
@@ -6149,16 +6190,7 @@ class GraphExecutor:
         # Sync before releasing NBXTensor Python refs so __del__ → free_cuda
         # can't race an async kernel still reading the memory (UAF).
         if hasattr(self, '_triton_seq') and self._triton_seq is not None:
-            from neurobrix.kernels.nbx_tensor import DeviceAllocator as _DA
-            _DA.sync_device()
-            self._triton_seq._arena.clear_all()  # type: ignore[attr-defined]
-            _seq = self._triton_seq
-            if _seq is not None:
-                # Release the sequence's recorded replay plans (slabs +
-                # captured graphs) with it — the weak registry does not.
-                from neurobrix.triton.replay import retire_sequence_plans
-                retire_sequence_plans(_seq)
-            self._triton_seq = None
+            self._drop_triton_sequence()
 
         # Step 1c: Drop the triton_sequential per-run capture (holds NBXTensor
         # refs to the last run's outputs + persistent tids — e.g. the image-AR
