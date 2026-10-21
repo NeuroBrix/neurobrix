@@ -1790,7 +1790,7 @@ rms_norm._nbx_widens_on_load = False
 # bounded-tile looped kernel; rows at or under it keep the proven
 # single-tile kernel byte-for-byte. Same capped-tile idiom as
 # argmax_wrapper's TILE_N = min(next_power_of_2(N), 4096) (FlagGems).
-_SOFTMAX_MAX_FUSED_FEAT = 16384
+_SOFTMAX_MAX_FUSED_FEAT = _lk.SOFTMAX_FUSED_MAX_FEAT     # one value with the census (launch_keys)
 _SOFTMAX_LOOPED_TILE = 4096
 
 
@@ -1823,15 +1823,15 @@ def softmax(x, dim: int = -1, half_to_float: bool = False) :
     if feat_dim > _SOFTMAX_MAX_FUSED_FEAT:
         _launch_looped_softmax(x_2d, output_2d, batch_dim, feat_dim, log=False)
     else:
-        _bsb = _batch_block(batch_dim, feat_dim)
-        grid = (triton.cdiv(batch_dim, _bsb),)
+        # rows per program and warps: the certified configuration of this key (workstream 1), the row's bucket from
+        # the launcher's own `bucket_of` — the key the derived census forms (`launch_keys.softmax_launches`)
+        grid = lambda META: (triton.cdiv(batch_dim, META['BLOCK_SIZE_BATCH']),)
         softmax_forward_kernel[grid](
             x_2d, output_2d,
-            batch_dim, feat_dim,
+            batch_dim, feat_dim, _lk.bucket_of("M", batch_dim), _lk.softmax_feat_bucket(feat_dim),
             x_2d.stride(0), x_2d.stride(1),
             output_2d.stride(0), output_2d.stride(1),
             log=False,
-            num_warps=4,
         )
     return output_2d.view_as(x_perm).movedim(-1, dim)
 
@@ -1850,15 +1850,15 @@ def log_softmax(x, dim: int = -1) :
     if feat_dim > _SOFTMAX_MAX_FUSED_FEAT:
         _launch_looped_softmax(x_2d, output_2d, batch_dim, feat_dim, log=True)
     else:
-        _bsb = _batch_block(batch_dim, feat_dim)
-        grid = (triton.cdiv(batch_dim, _bsb),)
+        # rows per program and warps: the certified configuration of this key (workstream 1), the row's bucket from
+        # the launcher's own `bucket_of` — the key the derived census forms (`launch_keys.softmax_launches`)
+        grid = lambda META: (triton.cdiv(batch_dim, META['BLOCK_SIZE_BATCH']),)
         softmax_forward_kernel[grid](
             x_2d, output_2d,
-            batch_dim, feat_dim,
+            batch_dim, feat_dim, _lk.bucket_of("M", batch_dim), _lk.softmax_feat_bucket(feat_dim),
             x_2d.stride(0), x_2d.stride(1),
             output_2d.stride(0), output_2d.stride(1),
             log=True,
-            num_warps=4,
         )
     return output_2d.view_as(x_perm).movedim(-1, dim)
 

@@ -4,17 +4,43 @@ import triton
 import triton.language as tl
 from triton import next_power_of_2
 
-from ._configs import batch_block_heuristic
+from ._configs import nbx_autotune
 
 
+def _softmax_configs():
+    """The candidates the certifier proves (workstream 1, Hocine 2026-10-19 18:55): rows per program x warps. The
+    one the kernel ran before certification is among them (1 row, 4 warps for a row of 64 or more; up to 128 rows for
+    a short row) — a certified winner equal to it changes no bit. Rows per program partition independent rows and change
+    no bit; the warps split a row's reduction and can (V100, 4096 columns: 0.001 % of the elements)."""
+    return [triton.Config({'BLOCK_SIZE_BATCH': rows}, num_warps=warps)
+            for rows in (1, 2, 4, 8, 16, 32, 64, 128) for warps in (1, 2, 4, 8)]
+
+
+def _prune_softmax(configs, named_args, **kwargs):
+    """A program holds rows x the padded row: at most what the kernel already holds for ONE row — the longest row it
+    accepts (`launch_keys.SOFTMAX_FUSED_MAX_FEAT`, beyond which the looped kernel runs) — and at most the backend's
+    reduce-tile cap (`nbx_tensor.reduce_tile_max`, the profile's, where the lowering refuses beyond); never more rows
+    than exist. (The cap alone is far above the register budget on CUDA: 128 rows of a 2048-padded row compiled for
+    minutes per candidate, 2026-10-20.)"""
+    from neurobrix.kernels.nbx_tensor import reduce_tile_max
+    from neurobrix.kernels.launch_keys import SOFTMAX_FUSED_MAX_FEAT
+    feat = next_power_of_2(int(named_args['feat_dim']))
+    rows = int(named_args['batch_dim'])
+    budget = min(reduce_tile_max(), SOFTMAX_FUSED_MAX_FEAT)
+    keep = [c for c in configs
+            if c.kwargs['BLOCK_SIZE_BATCH'] * feat <= max(budget, feat) and c.kwargs['BLOCK_SIZE_BATCH'] <= max(1, rows)]
+    return keep or configs[:1]
+
+
+@nbx_autotune(configs=_softmax_configs(), key=['BATCH_BUCKET', 'FEAT_BUCKET', 'log'],
+              prune_configs_by={'early_config_prune': _prune_softmax}, cache_results=True)
 @triton.heuristics({
-    'BLOCK_SIZE_BATCH': batch_block_heuristic,
     'BLOCK_SIZE_FEAT': lambda args: next_power_of_2(args['feat_dim']),
 })
 @triton.jit
 def softmax_forward_kernel(
     input_ptr, output_ptr,
-    batch_dim, feat_dim,
+    batch_dim, feat_dim, BATCH_BUCKET, FEAT_BUCKET,
     input_batch_stride, input_feat_stride,
     output_batch_stride, output_feat_stride,
     log: tl.constexpr,

@@ -377,6 +377,10 @@ def _key_operands(qual: str, tuner, key: tuple) -> Optional[Dict[str, Any]]:
             ins.append(("bias", (B, M, N), d(3, d(0))))
         return {"family": "mm", "inputs": ins, "out": ((B, M, N), out_dt), "mnk": (M, N, K), "batch": B,
                 "row_windowed_launch": False}
+    if short == "softmax_forward_kernel":
+        rows, feat = int(key[0]), int(key[1])
+        return {"family": "softmax", "inputs": [("x", (rows, feat), d(0))], "out": ((rows, feat), out_dt),
+                "mnk": (rows, feat, 1), "batch": 1, "row_windowed_launch": True}
     if short == "conv2d_forward_kernel":
         (n, ci, h, w, co, oh, ow, kh, kw, sh, sw, ph, pw, dh, dw, groups) = [int(v) for v in key[:16]]
         ci_g = ci // max(groups, 1)
@@ -466,6 +470,19 @@ def price_key(qual: str, tuner, key: tuple, unified: bool = True) -> Optional[Di
                 kept = len(wins_b) * B * rows * N * 8
                 oracle = kept + per_win
             deviation = kept + kept // 8 * (4 + 8)                       # the windows' readback and cast
+        return {"draws": draws, "device": device, "oracle": oracle, "deviation": deviation,
+                "peak": draws + device + max(oracle, deviation)}
+    if ops["family"] == "softmax":
+        # `_softmax_oracle_fn`: per row window, the window cast to float64 plus the fp64 arrays it computes
+        # (`_SOFTMAX_ORACLE_F64_ARRAYS`), the windows' results kept (`RowWindowedOracle`); whole under the cap.
+        # Priced with the mm and conv families: without it a softmax key read the conv geometry and every Apple
+        # softmax certification failed on 'geometry' before its first launch (Mac, 2026-10-21).
+        m, n, _ = ops["mnk"]
+        wins = _row_windows(m, n, _SOFTMAX_ORACLE_F64_ARRAYS * 8)          # the oracle's own windows (bytes)
+        rows = m if wins is None else wins[0][1] - wins[0][0]
+        kept = (m if wins is None else len(wins) * rows) * n * 8           # the windows' fp64 results (whole: all)
+        oracle = kept + rows * n * 8 * (1 + _SOFTMAX_ORACLE_F64_ARRAYS)
+        deviation = kept + kept // 8 * (4 + 8)                             # the windows' readback and cast
         return {"draws": draws, "device": device, "oracle": oracle, "deviation": deviation,
                 "peak": draws + device + max(oracle, deviation)}
     n, ci, h, w, co, oh, ow, ci_g, kh, kw, ph, pw = ops["geometry"]
@@ -679,6 +696,35 @@ def _matmul_oracle_fn(a, b, bias=None):
     return windowed
 
 
+#: the full-size fp64 arrays the softmax oracle holds per element of its window (z, exp(z), the quotient)
+_SOFTMAX_ORACLE_F64_ARRAYS = 3
+
+
+def _softmax_oracle_fn(x, log: bool):
+    """The fp64 oracle of a row softmax (or log-softmax) of x [rows, feat], whole under the cap, row-windowed above."""
+    m, n = x.shape[-2], x.shape[-1]
+
+    def rows(r0, r1):
+        z = _f64(x[r0:r1, :])
+        z = z - z.max(axis=-1, keepdims=True)
+        if log:
+            return z - np.log(np.exp(z).sum(axis=-1, keepdims=True))
+        e = np.exp(z)
+        return e / e.sum(axis=-1, keepdims=True)
+    # priced as the fp64 work it does per element — the shifted row, its exponential and the quotient, each a full
+    # fp64 array (`_SOFTMAX_ORACLE_F64_ARRAYS`) — not as one multiply-add: priced at one, a 1 310 720 x 1 024 key
+    # computed its whole oracle on the host (58 GB resident) and read the whole 5.4 GB output back per candidate,
+    # 2.5 h on one key and the certification timed out (2026-10-20); windowed, the candidates are read on the rows
+    # the oracle holds (`device_slices`)
+    # priced in BYTES against the cap (each element's fp64 arrays x 8 bytes): a softmax does a few operations per
+    # element, so a multiply-add count let a 131 072 x 4 096 key run its oracle whole — 17 GB of fp64 on an 18 GB
+    # Apple card, refused by its price (the Mac, 2026-10-21 04:10); its bytes are what bound its memory (Dell 8d7aad8dc)
+    wins = _row_windows(m, n, _SOFTMAX_ORACLE_F64_ARRAYS * 8)
+    if wins is None:
+        return lambda: rows(0, m)
+    return lambda: RowWindowedOracle([((r0, r1), rows(r0, r1)) for (r0, r1) in wins], m)
+
+
 def _conv_oracle_fn(x, wt, stride, padding, dilation, groups):
     n, ci, h, wd = x.shape
     co, ci_g, kh, kw = wt.shape
@@ -775,6 +821,14 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
             bias = arr(rng, (B, M, N), bias_dt)
             return ((lambda: W.baddbmm_wrapper(to(bias), to(a), to(b))), (_matmul_oracle_fn(a, b, bias) if values else None), "out_ptr")
         return (lambda: W.bmm(to(a), to(b))), (_matmul_oracle_fn(a, b) if values else None), "out_ptr"
+    if short == "softmax_forward_kernel":
+        # (BATCH_BUCKET, FEAT_BUCKET, log, x, out): the bucket's rows of the padded row length (a length of the class), through the wrapper itself; the
+        # fp64 oracle per row (row-windowed above the oracle's cap, as a product's)
+        rows, feat, log = int(key[0]), int(key[1]), bool(key[2])
+        _refuse_oversize(card_bytes, [((rows, feat), dts[0] if dts else "fp32"), ((rows, feat), out_dt)], short)
+        x = arr(rng, (rows, feat), dts[0] if dts else "fp32")
+        fn = W.log_softmax if log else W.softmax
+        return (lambda: fn(to(x), -1)), (_softmax_oracle_fn(x, log) if values else None), "output_ptr"
     if short == "conv2d_forward_kernel":
         (n, ci, h, w, co, _oh, _ow, kh, kw, sh, sw, ph, pw, dh, dw, groups) = [int(v) for v in key[:16]]
         _refuse_oversize(card_bytes, [((n, ci, h, w), dts[0] if dts else "fp16"),
