@@ -239,7 +239,7 @@ its engine commit.
 | deepseek-moe-16b-chat | native | 16g | per card | works | 2026-10-16, a4b86fcd2 | 118.3 | 79.8 | 96.6 | 1.26 | 10 | 455.0 | 87.0 | `--prompt Explain in three sentences why the sky is blue and the sunset red. --max-tokens 3` |
 | deepseek-moe-16b-chat | native | 32g | per card | works | 2026-10-21, 4ae17f326 | 135.0 | 102.1 | 106.3 | 1.97 | 52 | 302.8 | 79.0 | `--prompt Explain in three sentences why the sky is blue and the sunset red. --max-tokens 3` |
 | deepseek-moe-16b-chat | triton | 16g | per card | works | 2026-10-16, a4b86fcd2 | 203.4 | 172.8 | 191.1 | 1.35 | 11 | 554.9 | 176.5 | `--prompt Explain in three sentences why the sky is blue and the sunset red. --max-tokens 3` |
-| deepseek-moe-16b-chat | triton | 32g | per card | works | 2026-10-21, 4ae17f326 | 160.1 | 140.2 | 144.0 | 2.28 | 54 | 555.3 | 137.3 | `--prompt Explain in three sentences why the sky is blue and the sunset red. --max-tokens 3` |
+| deepseek-moe-16b-chat | triton | 32g | per card | works | 2026-10-21, 7d1b2aea5 | 221.0 | 196.0 | 202.9 | 1.75 | 55 | 555.3 | 137.3 | `--prompt Explain in three sentences why the sky is blue and the sunset red. --max-tokens 3` |
 | deepseek-moe-16b-chat | triton-sequential | 16g | per card | works | 2026-10-08, 13142b2e | 329.9 |  | 319.5 |  | 2 | 501.5 | 329.9 | `--prompt Explain in three sentences why the sky is blue and the sunset red. --max-tokens 3` |
 | deepseek-moe-16b-chat | triton-sequential | 32g | per card | works | 2026-10-08, 13142b2e | 330.5 |  | 320.2 |  | 3 | 521.9 | 330.5 | `--prompt Explain in three sentences why the sky is blue and the sunset red. --max-tokens 3` |
 | granite-3.1-1b-a400m-instruct | native | 16g | one plan, two cards | works | 2026-10-13, 83f6db35 | 23.6 | 12.9 | 16.3 | 4.02 | 8 | 16.6 | 16.0 | `--prompt Explain in three sentences why the sky is blue and the sunset red. --max-tokens 3` |
@@ -265,7 +265,7 @@ its engine commit.
 | mochi-1-preview | native | 16g | per card | works | 2026-10-16, a4b86fcd2 | 203.1 | 87.9 | 176.1 |  | 2 | 172.9 | 172.9 | `--prompt a red apple rolling slowly across a wooden table --seed 42 --steps 4 --num-frames` |
 | mochi-1-preview | native | 32g | per card | not judged | 2026-10-21, 4ae17f326 | 116.8 | 53.9 | 100.6 |  | 6 | 118.5 | 116.2 | `--prompt a red apple rolling slowly across a wooden table --seed 42 --steps 2 --num-frames` |
 | mochi-1-preview | triton | 16g | per card | not judged | 2026-10-17, 99c7a29e4 | 654.6 | 245.8 | 639.5 |  | 3 | 343.9 | 343.9 | `--prompt a red apple rolling slowly across a wooden table --seed 42 --steps 4 --num-frames` |
-| mochi-1-preview | triton | 32g | per card | not judged | 2026-10-21, 4ae17f326 | 226.5 | 132.0 | 210.5 |  | 6 | 383.8 | 226.1 | `--prompt a red apple rolling slowly across a wooden table --seed 42 --steps 2 --num-frames` |
+| mochi-1-preview | triton | 32g | per card | not judged | 2026-10-21, 7d1b2aea5 | 224.2 | 126.7 | 207.7 |  | 7 | 383.8 | 224.2 | `--prompt a red apple rolling slowly across a wooden table --seed 42 --steps 2 --num-frames` |
 | mochi-1-preview | triton-sequential | 16g | per card | broken | 2026-10-08, 13142b2e | 248.8 |  | 236.7 |  | 2 | 361.5 | 248.8 | `--prompt a red apple rolling slowly across a wooden table --seed 42 --steps 4 --height 160` |
 | mochi-1-preview | triton-sequential | 32g | per card | broken | 2026-10-08, 13142b2e | 241.6 |  | 229.1 |  | 1 | 241.6 | 241.6 | `--prompt a red apple rolling slowly across a wooden table --seed 42 --steps 4 --height 160` |
 | openaudio-s1-mini | native | 16g | one plan, two cards | works | 2026-10-13, 83f6db35 | 36.2 | 16.4 | 29.9 |  | 8 | 33.3 | 30.2 | `--prompt The quick brown fox jumps over the lazy dog. --seed 42` |
@@ -283,7 +283,7 @@ its engine commit.
 | parakeet-tdt-1.1b | native | 16g | one plan, two cards | works | 2026-10-13, 83f6db35 | 12.8 | 8.1 | 8.5 |  | 1 | 12.8 | 12.8 | `--audio jfk_11s.wav` |
 | parakeet-tdt-1.1b | native | 32g | one plan, two cards | works | 2026-10-21, 4b22fdf5a | 13.9 | 9.1 | 9.6 |  | 1 | 13.9 | 13.9 | `--audio jfk_11s.wav` |
 | parakeet-tdt-1.1b | triton | 16g | one plan, two cards | works | 2026-10-13, 83f6db35 | 14.2 | 9.2 | 10.8 |  | 1 | 14.2 | 14.2 | `--audio jfk_11s.wav` |
-| parakeet-tdt-1.1b | triton | 32g | one plan, two cards | works | 2026-10-21, 7d1b2aea5 | 23.1 | 16.2 | 16.0 |  | 1 | 23.1 | 23.1 | `--audio jfk_11s.wav` |
+| parakeet-tdt-1.1b | triton | 32g | one plan, two cards | works | 2026-10-21, 4b22fdf5a | 15.8 | 10.1 | 11.9 |  | 1 | 15.8 | 15.8 | `--audio jfk_11s.wav` |
 | parakeet-tdt-1.1b | triton-sequential | 16g | one plan, two cards | works | 2026-10-09, 8b139631 | 12.7 |  | 9.6 |  | 1 | 12.7 | 12.7 | `--audio jfk_11s.wav` |
 | parakeet-tdt-1.1b | triton-sequential | 32g | one plan, two cards | works | 2026-10-09, 8b139631 | 13.5 |  | 10.4 |  | 1 | 13.5 | 13.5 | `--audio jfk_11s.wav` |
 | real-esrgan-x2 | triton | 16g | per card | works | 2026-09-29, debd3017 | 6.2 |  | 3.4 |  | 1 | 6.2 | 6.2 | `--input-image apple_448.png` |
@@ -299,7 +299,7 @@ its engine commit.
 | real-esrgan-x8 | triton-sequential | 16g | per card | works | 2026-09-29, debd3017 | 9.8 |  | 4.9 |  | 1 | 9.8 | 9.8 | `--input-image apple_448.png` |
 | real-esrgan-x8 | triton-sequential | 32g | per card | works | 2026-09-29, 0fb39138 | 9.1 |  | 4.4 |  | 1 | 9.1 | 9.1 | `--input-image apple_448.png` |
 | swin2SR-classical-sr-x2-64 | native | 16g | one plan, two cards | works | 2026-10-13, 83f6db35 | 8.4 | 3.6 | 4.5 |  | 1 | 8.4 | 8.4 | `--input-image apple_448.png` |
-| swin2SR-classical-sr-x2-64 | native | 32g | one plan, two cards | works | 2026-10-21, 4ae17f326 | 8.6 | 3.7 | 4.5 |  | 2 | 8.2 | 8.2 | `--input-image apple_448.png` |
+| swin2SR-classical-sr-x2-64 | native | 32g | one plan, two cards | works | 2026-10-21, 4b22fdf5a | 8.7 | 3.8 | 4.5 |  | 1 | 8.7 | 8.7 | `--input-image apple_448.png` |
 | swin2SR-classical-sr-x2-64 | triton | 16g | one plan, two cards | works | 2026-10-13, 83f6db35 | 8.4 | 2.8 | 5.5 |  | 1 | 8.4 | 8.4 | `--input-image apple_448.png` |
 | swin2SR-classical-sr-x2-64 | triton | 32g | one plan, two cards | works | 2026-10-21, 7d1b2aea5 | 13.7 | 5.4 | 8.5 |  | 1 | 13.7 | 13.7 | `--input-image apple_448.png` |
 | swin2SR-classical-sr-x2-64 | triton-sequential | 16g | one plan, two cards | works | 2026-10-09, 8b139631 | 7.7 |  | 5.1 |  | 1 | 7.7 | 7.7 | `--input-image apple_448.png` |
