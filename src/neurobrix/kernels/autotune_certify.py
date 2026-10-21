@@ -467,6 +467,19 @@ def price_key(qual: str, tuner, key: tuple, unified: bool = True) -> Optional[Di
             deviation = kept + kept // 8 * (4 + 8)                       # the windows' readback and cast
         return {"draws": draws, "device": device, "oracle": oracle, "deviation": deviation,
                 "peak": draws + device + max(oracle, deviation)}
+    if ops["family"] == "softmax":
+        # `_softmax_oracle_fn`: per row window, the window cast to float64 plus the fp64 arrays it computes
+        # (`_SOFTMAX_ORACLE_F64_ARRAYS`), every window's result kept (`RowWindowedOracle`); whole under the cap.
+        # Priced with the mm and conv families: without it a softmax key read the conv geometry and every Apple
+        # softmax certification failed on 'geometry' before its first launch (Mac, 2026-10-21).
+        m, n, _ = ops["mnk"]
+        wins = _row_windows(m, n, _SOFTMAX_ORACLE_F64_ARRAYS)
+        rows = m if wins is None else wins[0][1] - wins[0][0]
+        kept = 8 * e_out
+        oracle = kept + rows * n * 8 * (1 + _SOFTMAX_ORACLE_F64_ARRAYS)
+        deviation = kept + e_out * (4 + 8)                                 # the windows' readback and cast
+        return {"draws": draws, "device": device, "oracle": oracle, "deviation": deviation,
+                "peak": draws + device + max(oracle, deviation)}
     n, ci, h, w, co, oh, ow, ci_g, kh, kw, ph, pw = ops["geometry"]
     ew = sum(E(shape) for name, shape, _ in ops["inputs"] if name == "w")
     wins = _conv_windows(n, oh, ow, ci_g, co, kh, kw)
