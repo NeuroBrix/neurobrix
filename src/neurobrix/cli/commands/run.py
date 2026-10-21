@@ -667,6 +667,7 @@ def cmd_run(args):
     print("\n[4/4] Preparing inputs...")
 
     inputs = {}
+    upscale_orig_hw = None
     if args.prompt:
         inputs["global.prompt"] = args.prompt
     if getattr(args, 'audio', None):
@@ -712,9 +713,11 @@ def cmd_run(args):
             _img = inputs.get("global.image")
             print(f"   [Inputs] image clip {tuple(getattr(_img, 'shape', ()))} from num_frames={num_frames!r} "
                   f"(request {getattr(args, 'num_frames', None)!r}, container {cached_defaults.get('num_frames')!r})", flush=True)
-        # Upscaler metadata key, not a runtime input (the dedicated
-        # `nbx upscale` path owns the exact-size crop on this side).
-        inputs.pop("_upscale_orig_hw", None)
+        # Upscaler metadata, not a runtime input: the image's size before the window pad, handed to the save
+        # (`output_dispatch.save_image`, the crop every entry point shares — `nbx upscale` and the server pass it
+        # too). Dropped here until 2026-10-21, `run` saved the pad's mirrored rows: HAT-S at 150x100 returned
+        # 640x448 with the apple's reflection under it, not 600x400.
+        upscale_orig_hw = inputs.pop("_upscale_orig_hw", None)
 
     if getattr(args, 'input_video', None):
         # Video understanding input — the video variant of the build's
@@ -967,7 +970,7 @@ def cmd_run(args):
 
     # Binary-output families (image, video, audio-wav, multimodal-image)
     output_path = resolve_output_path(args.output, args.model, family, mode)
-    saved = save_output(outputs, output_path, family, executor, pkg, mode=mode)
+    saved = save_output(outputs, output_path, family, executor, pkg, mode=mode, orig_hw=upscale_orig_hw)
 
     print(f"\n{'='*70}")
     print(f"SAVED: {saved}")
