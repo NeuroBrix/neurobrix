@@ -183,6 +183,10 @@ def output_dtype(tuner, key: tuple) -> str:
     if not dts:
         return "any"
     names = [n for n in getattr(tuner, "arg_names", []) if n.endswith("_ptr") or n.endswith("_pointer")]
+    if not names:
+        # a kernel whose pointers carry no suffix (the m8n8k4 flash: Q, K, V, Bias, Out, Lse) leads with its tensors:
+        # read without it, the log-sum-exp's fp32 was taken for the fp16 output and set the tolerance (2026-10-21)
+        names = list(getattr(tuner, "arg_names", []))[:len(dts)]
     for i, name in enumerate(names):
         low = name.lower()
         if i < len(dts) and (low.startswith(("out", "c_", "output", "y_")) or low in ("c_ptr", "out_ptr", "output_pointer")):
