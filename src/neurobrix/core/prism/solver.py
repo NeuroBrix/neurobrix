@@ -2193,6 +2193,7 @@ class PrismSolver:
         # the previous rung kept must not reach this rung's first pass before its cheaper cuts.
         self._token_split = False
         self._swap_values = False
+        self._later_rung_refusals = {}
         candidates = self._evaluate_all_strategies(
             strategies, sorted_components, component_memory, devices, shard_sizes, profile, container
         )
@@ -2225,6 +2226,8 @@ class PrismSolver:
         if forced and not candidates:
             _why = (f"\n  layer_streaming declined: {self._layer_streaming_declined}"
                     if self._layer_streaming_declined else "")
+            for _rung, _w in (getattr(self, "_later_rung_refusals", {}) or {}).items():
+                _why += f"\n  layer_streaming with {_rung} declined: {_w}"
             raise RuntimeError(
                 f"ZERO FALLBACK: NBX_FORCE_STRATEGY={forced} cannot fit "
                 f"the model on the given hardware profile. Remove the env "
@@ -3282,6 +3285,17 @@ class PrismSolver:
                 proxy_uids.add(uid)
         return proxy_uids
 
+    def _pixel_shuffle_chain_proxy_uids_of_the_engine(self, graph: Dict) -> set:
+        """The expand / clone / view uids of every `expand -> clone -> view -> pixel_shuffle` chain the TilingEngine
+        intercepts (`OpLevelTilingEngine._detect_pixel_shuffle_broadcast_chains`, the detector the runtime wires its
+        proxies from), never a replica of it."""
+        from types import SimpleNamespace
+        from neurobrix.core.module.tiling_engine import OpLevelTilingEngine
+        out = set()
+        for spec in OpLevelTilingEngine._detect_pixel_shuffle_broadcast_chains(SimpleNamespace(_dag=graph)) or []:
+            out.update(spec[k] for k in ("expand_uid", "clone_uid", "view_uid") if spec.get(k))
+        return out
+
     def _identify_pixel_shuffle_chain_proxy_uids(self, graph: Dict):
         """Identify expand/clone/view op_uids that are part of an
         `expand → clone → view → pixel_shuffle` chain that
@@ -3629,9 +3643,14 @@ class PrismSolver:
                         # views or sentinel proxies at runtime — see
                         # tiling_engine.py:_detect_pixel_shuffle_broadcast_chains
                         # and the BroadcastClonePyroxy interceptor wiring).
-                        f2a_uids = self._identify_pixel_shuffle_chain_proxy_uids(
-                            comp.graph
-                        )
+                        # The chain's proxies avoid the allocation only where the TilingEngine's interceptor
+                        # wraps an NBXTensor (the Triton engines): on a torch tensor (compiled, sequential) its
+                        # clone is a real `clone(contiguous)` (tiling_engine `_clone_proxy`). Priced at zero for
+                        # every engine, Sana 4K's VAE peaked IN aten.clone::5 at 24 928 MB on the sequential
+                        # engine for an in-op figure of 13 066 (2026-10-22). The chains are the TilingEngine's own
+                        # detection (`_detect_pixel_shuffle_broadcast_chains`): one function for both.
+                        f2a_uids = (self._pixel_shuffle_chain_proxy_uids_of_the_engine(comp.graph)
+                                    if _engine_of(getattr(self, "_mode", "compiled")) == "triton" else set())
                         # S5 gate: include chain intermediates in
                         # zero_alloc so Prism's cascade accepts
                         # single_gpu on 16g and routes VAE to GPU
@@ -3659,9 +3678,15 @@ class PrismSolver:
                                 widths=widths,
                                 # The fused-upsample proxies and the broadcast
                                 # chain's expand/clone/view CARRY their input to
-                                # their consumer: its buffer lives until then.
-                                # The residual-chain sentinels carry nothing.
-                                source_holding_uids=fusion_uids | f2a_uids,
+                                # their consumer: its buffer lives until then. A
+                                # residual chain writes its result IN PLACE into the
+                                # chain's base (`[S5_CHAIN_OK] ... pre=post`), so each
+                                # chain op's output lives in its input's buffer, the
+                                # base held to the chain's end. Priced as carrying
+                                # nothing, the base was freed at its last direct reader:
+                                # Sana 4K's VAE walked 13 066 MB where the Triton run
+                                # held 28 930 (2026-10-22).
+                                source_holding_uids=fusion_uids | f2a_uids | chain_uids,
                                 in_place_weight_reads=_in_place,
                         attention_scratch=self._attention_scratch(profile), conv3d_workspace=self._conv3d_workspace(profile), op_workspace=self._op_workspace(profile),
                             )
@@ -6686,6 +6711,8 @@ class PrismSolver:
                 "stretches of a streamed component run in slices of a token axis",
                 " and the guidance branches one pass each" if self._cfg_split else "")
             return sliced, memory, request, sliced_devices
+        self.__dict__.setdefault("_later_rung_refusals", {})["token-axis slices"] = str(
+            self.__dict__.get("_layer_streaming_declined") or "no streamed component was sliced")
         self.__dict__.update(saved)
         for k in absent:
             self.__dict__.pop(k, None)
@@ -6707,6 +6734,7 @@ class PrismSolver:
         saved = {k: copy.deepcopy(self.__dict__[k]) for k in self._RUNG_STATE if k in self.__dict__}
         absent = [k for k in self._RUNG_STATE if k not in self.__dict__]
         self._swap_values = True
+        self._token_split = True              # with the stretches in slices too: the rung before this one declined alone
         parked = self._evaluate_all_strategies(
             strategies, sorted_components, component_memory, self._prepare_devices(profile), shard_sizes,
             profile, container)
@@ -6717,10 +6745,13 @@ class PrismSolver:
                 "Prism: no plan holds the request on the accelerator otherwise; the values between a streamed "
                 "component's pieces wait on the host")
             return parked
+        self.__dict__.setdefault("_later_rung_refusals", {})["values parked on the host"] = str(
+            self.__dict__.get("_layer_streaming_declined") or "no streamed component was parked")
         self.__dict__.update(saved)
         for k in absent:
             self.__dict__.pop(k, None)
         self._swap_values = False
+        self._token_split = False
         return None
 
     def _guidance_loop(self, input_config, container, neural_components):
@@ -8549,6 +8580,9 @@ class PrismSolver:
             tried_str += f"\n  op_level_tiling declined: {self._op_tiling_declined}"
         if self._layer_streaming_declined:
             tried_str += f"\n  layer_streaming declined: {self._layer_streaming_declined}"
+        # the rungs after the first pass put the solver's state back when they decline: their own reasons, kept
+        for _rung, _why in (getattr(self, "_later_rung_refusals", {}) or {}).items():
+            tried_str += f"\n  layer_streaming with {_rung} declined: {_why}"
         for _c, _why in (getattr(self, "_arena_declined", {}) or {}).items():
             tried_str += f"\n  not held whole: {_why}"
         _why_by_rung = getattr(self, "_tiling_declined_by_rung", {}) or {}

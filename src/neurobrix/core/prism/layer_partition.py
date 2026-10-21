@@ -253,10 +253,14 @@ class LayerPartitioner:
         self._op_peak_memo = list(during)
 
     def _op_weight_names(self, op_uid: str) -> Set[str]:
+        """The weights an op reads from the container's shards. A parameter the graph EMBEDS (`constant: True`, its
+        bytes in graph.json — HAT's RGB `mean`) is loaded with the graph by every executor
+        (`GraphExecutor._load_constants_from_graph`), never from a shard: named as a segment's weight, the compiled
+        engine's host footprint refused the only piece that read it (\"all absent from the weights index\", 2026-10-22)."""
         names: Set[str] = set()
         for tid in (self.ops.get(op_uid) or {}).get("input_tensor_ids") or []:
             t = self.tensors.get(tid)
-            if t is not None and t.get("is_parameter"):
+            if t is not None and t.get("is_parameter") and not t.get("constant"):
                 names.add(t.get("weight_name") or tid)
         return names
 
@@ -375,6 +379,15 @@ class LayerPartitioner:
             part.refusal = (f"{part.refusal} Nor does running a stretch of it in slices of a token "
                             f"axis: {why}.")
             return part
+        if self._swap:
+            again = self._greedy_swapped(budget_bytes, max_arena_bytes, regions)
+            if again.fits:
+                self._regions_used = (regions, max(r.peak_bytes for r in regions))
+                again.chunks = [r.record() for r in regions]
+            else:
+                again.refusal = (f"{part.refusal} Running {len(regions)} stretch(es) in slices of a token axis with the "
+                                 f"values between pieces parked still refuses: {again.refusal}")
+            return again
         eff, reserve = self._effective_curve(regions)
         again = self._greedy_on(self.live_activation_curve(), budget_bytes, max_arena_bytes, regions,
                                 reserve, peaks=eff)
@@ -386,30 +399,46 @@ class LayerPartitioner:
                              f"axis still refuses: {again.refusal}")
         return again
 
-    def _value_intervals(self) -> Tuple[Dict[str, int], Dict[str, int], Dict[str, int]]:
-        """({tid: index of the op that produces it}, {tid: index of its last use}, {tid: bytes}) of every
-        activation — the liveness of `_walk_liveness` (the profiler's rule) as intervals."""
-        from neurobrix.core.prism.profiler import ZERO_ALLOC_OP_TYPES
-        last = self._last_use()
+    def _value_intervals(self) -> Tuple[Dict[str, int], Dict[str, int], Dict[str, int], Dict[str, str]]:
+        """({tid: index of the op that produces it}, {tid: index of its last use}, {tid: bytes}, {view tid: the
+        activation whose buffer it lives in}) of every activation — the liveness of `_walk_liveness` (the profiler's
+        rule) as intervals, a VIEW of an activation held as its root's buffer: no bytes of its own, the root's last
+        use extended to the view's (counted as a buffer of its own, a parked piece read HAT-S's 6 912 MB
+        `aten.view::10` twice, 2026-10-22)."""
+        from neurobrix.core.prism.profiler import VIEW_OP_TYPES, ZERO_ALLOC_OP_TYPES
+        last = dict(self._last_use())
         prod: Dict[str, int] = {}
         size: Dict[str, int] = {}
+        root: Dict[str, str] = {}
         for i, uid in enumerate(self.order):
             op = self.ops.get(uid) or {}
             zero = op.get("op_type") in ZERO_ALLOC_OP_TYPES
+            ins = op.get("input_tensor_ids") or []
+            base = None
+            if op.get("op_type") in VIEW_OP_TYPES and ins and ins[0] in size:
+                base = root.get(ins[0], ins[0])
             for tid in op.get("output_tensor_ids") or []:
                 t = self.tensors.get(tid)
                 if t is None or t.get("is_parameter") or tid in prod:
                     continue
                 prod[tid] = i
-                size[tid] = 0 if zero else self._activation_bytes(tid, t)
+                if base is not None:
+                    root[tid] = base
+                    size[tid] = 0
+                else:
+                    size[tid] = 0 if zero else self._activation_bytes(tid, t)
         for tid in self._dag.get("input_tensor_ids") or []:
             t = self.tensors.get(tid)
             if t is not None and not t.get("is_parameter") and tid not in size:
                 prod[tid] = -1
                 size[tid] = self._activation_bytes(tid, t)
-        return prod, last, size
+        for tid, r in root.items():
+            if last.get(tid, -1) > last.get(r, -1):
+                last[r] = last[tid]
+        return prod, last, size, root
 
-    def _greedy_swapped(self, budget_bytes: int, max_arena_bytes: Optional[int] = None) -> Partition:
+    def _greedy_swapped(self, budget_bytes: int, max_arena_bytes: Optional[int] = None,
+                        regions: Sequence["_Region"] = ()) -> Partition:
         """The cut when the values between pieces wait on the HOST: a piece holds on the device its
         weights, every input it reads that an earlier piece (or the caller) produced — uploaded when it
         starts, held to its end — and the tensors it produces while they live (their in-op figure: an
@@ -418,12 +447,32 @@ class LayerPartitioner:
         one op that cannot fit alone is refused by name. SwapAdvisor's swap plan, decided before the
         run from the dataflow graph (Huang et al., ASPLOS 2020), at the granularity of a piece."""
         outputs = set(self._dag.get("output_tensor_ids") or [])
-        prod, last, size = self._value_intervals()
+        prod, last, size, root = self._value_intervals()
         n = len(self.order)
         segments: List[Segment] = []
         peak_resident = peak_live = total = 0
+        starts = {r.first: r for r in regions}
         s = 0
         while s < n:
+            region = starts.get(s)
+            if region is not None:
+                # a stretch run in slices is ONE piece, priced parked (`_region_peak`: the buffers it reads, its outputs,
+                # its accumulators and its worst pass)
+                rw = sum(self._bytes_for(m) for m in region.weight_names)
+                if rw + region.peak_bytes > budget_bytes:
+                    return Partition(segments=[], total_weight_bytes=0, peak_resident_bytes=0, peak_live_bytes=0,
+                                     swapped=True,
+                                     refusal=(f"the stretch {region.first_op!r}..{region.last_op!r} holds "
+                                              f"{(rw + region.peak_bytes) / _MB:.1f} MB in slices of {region.slice} "
+                                              f"with the values between pieces parked, over the {budget_bytes / _MB:.1f} MB budget"))
+                segments.append(Segment(index=len(segments), first_op=region.first_op, last_op=region.last_op,
+                                        op_count=region.last - region.first + 1, weight_names=set(region.weight_names),
+                                        weight_bytes=rw, live_bytes_at_exit=0))
+                total += rw
+                peak_resident = max(peak_resident, rw + region.peak_bytes)
+                peak_live = max(peak_live, region.peak_bytes)
+                s = region.last + 1
+                continue
             names: Set[str] = set()
             wbytes = 0
             inputs: Set[str] = set()
@@ -433,11 +482,13 @@ class LayerPartitioner:
             run_peak = 0
             e = -1
             for i in range(s, n):
+                if i in starts and i > s:
+                    break                      # a stretch starts: the plain piece ends before it
                 op = self.ops.get(self.order[i]) or {}
                 op_names = names | self._op_weight_names(self.order[i])
                 op_w = wbytes + sum(self._bytes_for(m) for m in op_names - names)
-                new_in = [t for t in dict.fromkeys(op.get("input_tensor_ids") or [])
-                          if t in size and prod.get(t, -1) < s and t not in inputs]
+                reads = dict.fromkeys(root.get(t, t) for t in op.get("input_tensor_ids") or [])
+                new_in = [t for t in reads if t in size and prod.get(t, -1) < s and t not in inputs]
                 op_in = in_bytes + sum(size[t] for t in new_in)
                 outs = [t for t in op.get("output_tensor_ids") or [] if t in size and t not in active]
                 in_op = act_bytes + sum(size[t] for t in outs)
@@ -651,12 +702,27 @@ class LayerPartitioner:
                      default=0)
         return max([one_op] + [sum(self._bytes_for(n) for n in r.weight_names) for r in regions])
 
+    def _parked_op_curve(self) -> List[int]:
+        """What each op holds when the values between pieces wait on the host and it is a piece of its own: the
+        buffers it reads (each view's root once) and the outputs it makes — the least any parked cut can give it."""
+        if getattr(self, "_parked_curve_memo", None) is None:
+            prod, last, size, root = self._value_intervals()
+            out: List[int] = []
+            for i, uid in enumerate(self.order):
+                op = self.ops.get(uid) or {}
+                reads = {root.get(t, t) for t in op.get("input_tensor_ids") or [] if root.get(t, t) in size}
+                outs = {t for t in op.get("output_tensor_ids") or [] if t in size}
+                out.append(sum(size[t] for t in reads | outs))
+            self._parked_curve_memo = out
+        return list(self._parked_curve_memo)
+
     def _effective_curve(self, regions: Sequence["_Region"]) -> Tuple[List[int], int]:
         """What each op holds while it runs (`op_peak_curve`) with these stretches sliced, and the
         peak to reserve. Inside a stretch the live set is its sliced peak (`_Region.peak_bytes`);
         outside, the op's own figure — the stretch hands out exactly the tensors the whole ops
-        would."""
-        eff = list(self.op_peak_curve())
+        would. Values parked on the host (`swap_values` with `token_split`): the op's figure as a piece of its
+        own (`_parked_op_curve`)."""
+        eff = list(self._parked_op_curve() if (self._swap and self._token_split) else self.op_peak_curve())
         reserve = 0
         for r in regions:
             for i in range(r.first, r.last + 1):
@@ -703,8 +769,14 @@ class LayerPartitioner:
         slice's activations plus the slices of the inputs it reads that carry the axis (a
         contiguous copy each, a broadcast's too)."""
         sm = self._symbol_map
-        curve = self.live_activation_curve()
-        before = curve[plan.first - 1] if plan.first > 0 else 0
+        if self._swap and self._token_split:
+            # the values between pieces wait on the host: before it, the stretch holds the buffers it READS, brought
+            # whole to the device (each view's root once), never what else is live (`LayerStreamingStrategy._run_pieces`)
+            _prod, _last, size, root = self._value_intervals()
+            before = sum(size.get(r, 0) for r in {root.get(t, t) for t in plan.inputs})
+        else:
+            curve = self.live_activation_curve()
+            before = curve[plan.first - 1] if plan.first > 0 else 0
         outs = sum(self._bytes_at(t, sm) for t in plan.outputs if t not in plan.contractions)
         acc = sum(self._accumulator_bytes(t, sm) for t in plan.contractions)
         # a stretch with a halo runs each slice widened by its margin on both sides (`RegionPlan.margin`, clipped at
@@ -844,11 +916,41 @@ class LayerPartitioner:
                     low = v
             return out
 
-        lefts = record_lows(range(lo, span_lo - 1, -1), before)
-        rights = record_lows(range(hi, span_hi + 1), lambda i: curve[i])
-        pairs = sorted(((L, R) for L in lefts for R in rights),
-                       key=lambda p: (max(before(p[0]), curve[p[1]]), before(p[0]) + curve[p[1]],
-                                      p[1] - p[0]))
+        if self._swap and self._token_split:
+            # Parked on the host, a seam carries only what crosses it: the buffers produced before the stretch that it
+            # reads (brought whole to the device) and the outputs read after it (assembled whole). Both are read from the
+            # value intervals without planning the stretch; the three seams each side that let the least cross are
+            # planned (`plan_region`, priced by `_region_peak`), nearest first among equals.
+            prod_, last_, size_, root_ = self._value_intervals()
+
+            def cross_in(L: int) -> int:
+                seen = set()
+                for i in range(L, hi + 1):
+                    for t in (self.ops.get(self.order[i]) or {}).get("input_tensor_ids") or []:
+                        r = root_.get(t, t)
+                        if r in size_ and prod_.get(r, -1) < L:
+                            seen.add(r)
+                return sum(size_[r] for r in seen)
+
+            def cross_out(R: int) -> int:
+                seen = set()
+                for i in range(lo, R + 1):
+                    for t in (self.ops.get(self.order[i]) or {}).get("output_tensor_ids") or []:
+                        if t in size_ and last_.get(t, -1) > R:
+                            seen.add(t)
+                # an output crossing out is ASSEMBLED whole by the stitch: a broadcast view's full extent, not its 0
+                return sum(self._activation_bytes(t, self.tensors[t]) for t in seen)
+            cin = {L: cross_in(L) for L in range(lo, max(span_lo, lo - 64) - 1, -1)}
+            cout = {R: cross_out(R) for R in range(hi, min(span_hi, hi + 64) + 1)}
+            lefts = sorted(cin, key=lambda L: (cin[L], lo - L))[:3]
+            rights = sorted(cout, key=lambda R: (cout[R], R - hi))[:3]
+            pairs = sorted(((L, R) for L in lefts for R in rights), key=lambda p: (cin[p[0]] + cout[p[1]], p[1] - p[0]))
+        else:
+            lefts = record_lows(range(lo, span_lo - 1, -1), before)
+            rights = record_lows(range(hi, span_hi + 1), lambda i: curve[i])
+            pairs = sorted(((L, R) for L in lefts for R in rights),
+                           key=lambda p: (max(before(p[0]), curve[p[1]]), before(p[0]) + curve[p[1]],
+                                          p[1] - p[0]))
         total = int(self._symbol_map[ax.sym]) // ax.unit
         why = f"no seam around {self.order[h]} leaves the stretch under {target / _MB:.1f} MB"
         for L, R in pairs:

@@ -1237,9 +1237,11 @@ def sliced_bindings(model: str, comp: str, syms: dict, plan: dict, unhandled) ->
         if sym not in syms:
             unhandled[f"{comp}: sliced stretch {ch['first_op']}..{ch['last_op']}: {sym} unbound"] += 1
             continue
-        if sym not in axes:
-            axes[sym] = TokenAxis(g, sym)
-        ax = axes[sym]
+        # the axis in the unit the plan read it in (a window's rows: `chunk["unit"]`, the partitioner's `_axis`)
+        unit = int(ch.get("unit") or 1)
+        if (sym, unit) not in axes:
+            axes[(sym, unit)] = TokenAxis(g, sym, unit)
+        ax = axes[(sym, unit)]
         if ch["first_op"] not in ax.index or ch["last_op"] not in ax.index:
             unhandled[f"{comp}: sliced stretch {ch['first_op']}..{ch['last_op']} is not in the "
                       f"graph the executor runs"] += 1
@@ -1256,11 +1258,14 @@ def sliced_bindings(model: str, comp: str, syms: dict, plan: dict, unhandled) ->
         made = {t: u for u in ax.order[lo:hi + 1] for t in (g["ops"][u].get("output_tensor_ids") or ())}
         producers = {made[t] for t in rp.contractions if t in made}
         ops_ = {u: u in producers for cp in rp.passes if cp.chunked for u in cp.ops}
-        total = int(syms[sym])
-        # a slice runs at the length it READS — its rows plus the stretch's halo (`slice_reads`, the executor's own)
-        for length in sorted({n for *_o, _s, n in slice_reads(total, -(-total // int(ch["slice"])), rp.margin)}):
+        # counted in the axis' unit as the executor counts it (`ChunkedPiece.run`: rows // unit), a slice runs at the
+        # length it READS — its rows plus the stretch's halo, round the axis when it shifts cyclically (`slice_reads`,
+        # the executor's own) — and binds the symbol at that length times the unit
+        total = int(syms[sym]) // unit
+        for length in sorted({n for *_o, _s, n in slice_reads(total, -(-total // int(ch["slice"])), rp.margin,
+                                                               getattr(rp, "cyclic", False))}):
             if length != total:
-                out.setdefault((sym, length), {}).update(ops_)
+                out.setdefault((sym, length * unit), {}).update(ops_)
     return [(ops_, {**syms, sym: length}) for (sym, length), ops_ in sorted(out.items())]
 
 
