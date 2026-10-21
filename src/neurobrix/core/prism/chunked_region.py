@@ -348,6 +348,9 @@ class Verdict:
     #: slices widened by their accumulated receptive field and keeps each slice's zone of responsibility
     #: (NIST, exact tile-based inference: halo = half the receptive field) — `RegionPlan.margin`.
     halo: int = 0
+    #: A cyclic shift along the axis (`aten.roll`): its halo is read ROUND the axis' ends — a slice at either end
+    #: reads the rows the roll brings in from the other end, never padding (`RegionPlan.cyclic`, `slice_reads`).
+    cyclic: bool = False
 
 
 _POINTWISE = frozenset("""
@@ -623,6 +626,8 @@ class TokenAxis:
             return self._rule_conv(op, ins, s_in, lays, outs)
         if ty == "im2col":
             return self._rule_im2col(op, ins, s_in, lays, outs)
+        if ty == "roll":
+            return self._rule_roll(op, s_in[0], lays[s_in[0]], outs)
         if ty in ("upsample_nearest2d", "upsample_nearest1d", "upsample_nearest3d", "pixel_shuffle"):
             return self._rule_scale(ty, op, s_in[0], lays[s_in[0]], outs)
         if ty == "native_group_norm":
@@ -985,6 +990,28 @@ class TokenAxis:
                 raise _Mix("an unfold whose window count does not hold the axis")
         return Verdict(SLICE, halo=p), {out: Layout(b, m, inner)}
 
+    def _rule_roll(self, op, src, lay, outs) -> Tuple[Verdict, Dict[str, Layout]]:
+        """aten.roll(x, shifts, dims): along any dimension but the axis it is per slice; along the axis output row r
+        is input row (r - s) mod extent — local with a halo of |s| rows, read cyclically (Swin's shifted windows roll
+        the image by half a window, then back). A roll over the flattened tensor (no dims) mixes."""
+        args = self._args(op)
+        shifts = args[1] if len(args) > 1 else None
+        dims = args[2] if len(args) > 2 else None
+        if isinstance(shifts, int):
+            shifts = [shifts]
+        if isinstance(dims, int):
+            dims = [dims]
+        if not isinstance(shifts, list) or not isinstance(dims, list) or not dims or len(dims) != len(shifts):
+            raise _Mix("a roll over the flattened tensor")
+        rank = len(self.dims(src))
+        along = [sh for sh, d in zip(shifts, dims) if isinstance(d, int) and d % rank == lay.axis]
+        out = {outs[0]: self._carry(outs[0], lay)}
+        if not along:
+            return Verdict(SLICE), out
+        if lay.inner is None or not all(isinstance(sh, int) and not isinstance(sh, bool) for sh in along):
+            raise _Mix("a roll along the axis by an amount the graph does not fix")
+        return Verdict(SLICE, halo=abs(sum(along)), cyclic=True), out
+
     def _rule_scale(self, ty, op, src, lay, outs) -> Tuple[Verdict, Dict[str, Layout]]:
         """Nearest upsampling and pixel shuffle along a spatial axis: output row r is input row r // c
         (c the constant factor) — a slice of S keeps mapping to whole output rows, the inner extent
@@ -1081,6 +1108,8 @@ class RegionPlan:
     margin: int = 0
     #: The axis' unit (`TokenAxis.unit`): a slice of c is c * unit of the symbol.
     unit: int = 1
+    #: The stretch holds a cyclic shift along the axis: every slice reads its margin ROUND the axis' ends.
+    cyclic: bool = False
 
 
 def region_reads(ax: TokenAxis, first: int, last: int) -> Tuple[List[str], Set[str]]:
@@ -1124,6 +1153,10 @@ def plan_region(ax: TokenAxis, first: int, last: int,
         if lay is None or lay.inner is None or lay.inner.atoms or ax.p_of(lay) is None or not ax.p_of(lay).is_one():
             return None, f"{ax.order[i]} reads rows around its own along an axis folded with another extent"
         margin += Fraction(v.halo, lay.inner.coef)
+    cyclic = any(ax.verdicts[i].cyclic for i in range(first, last + 1))
+    if cyclic and any(ax.verdicts[i].halo and not ax.verdicts[i].cyclic for i in range(first, last + 1)):
+        return None, ("a stretch holding a cyclic shift and a zero-padded local op: its slices would read round the "
+                      "axis' ends where the padded op reads zeros")
     if margin and any(ax.verdicts[i].kind == CONTRACT for i in range(first, last + 1)):
         return None, ("a stretch of local ops with a halo holds a contraction: its overlapping slices would "
                       "count the margin rows twice in the partial sums")
@@ -1133,6 +1166,7 @@ def plan_region(ax: TokenAxis, first: int, last: int,
                if (ax.readers.get(t) or [-1])[-1] > last or t in ax.graph_outputs or t in protected]
     plan = RegionPlan(ax.sym, first, last, ax.order[first], ax.order[last], unit=ax.unit)
     plan.margin = math.ceil(margin)
+    plan.cyclic = cyclic
     plan.inputs = reads
     plan.outputs = outputs
     for t in list(reads) + [c for c in carriers if c not in reads]:
@@ -1200,12 +1234,17 @@ def chunk_extents(total: int, count: int) -> List[Tuple[int, int]]:
     return [(f, min(c, total - f)) for f in range(0, total, c)]
 
 
-def slice_reads(total: int, count: int, margin: int) -> List[Tuple[int, int, int, int]]:
+def slice_reads(total: int, count: int, margin: int, cyclic: bool = False) -> List[Tuple[int, int, int, int]]:
     """(start, length, read start, read length) of each slice: its own rows (`chunk_extents`) and the rows it READS —
-    widened by the stretch's halo `margin` on each side, clipped at the axis' true ends. The executor runs a slice at
-    its read length, so the census derives a sliced stretch's keys at the same lengths (one function for both)."""
+    widened by the stretch's halo `margin` on each side, clipped at the axis' true ends; ROUND them when the stretch
+    shifts cyclically (`RegionPlan.cyclic`: the read start may be negative or the read run past the end, taken modulo
+    the axis by `take_slice_cyclic`), one slice then reading the axis as it is. The executor runs a slice at its read
+    length, so the census derives a sliced stretch's keys at the same lengths (one function for both)."""
     out = []
     for start, length in chunk_extents(total, count):
+        if cyclic and count > 1:
+            out.append((start, length, start - margin, length + 2 * margin))
+            continue
         in_start = max(0, start - margin)
         out.append((start, length, in_start, min(total, start + length + margin) - in_start))
     return out
@@ -1241,6 +1280,28 @@ def take_slice(x: Any, lay: Layout, total: int, inner: Optional[int], start: int
     pre, post = shape[:a], shape[a + 1:]
     v = x.reshape(*pre, p, total, inner, *post).narrow(a + 1, start, length).contiguous()
     return v.reshape(*pre, p * length * inner, *post)
+
+
+def take_slice_cyclic(x: Any, lay: Layout, total: int, inner: Optional[int], start: int, length: int) -> Any:
+    """`take_slice` of the rows [start, start + length) taken modulo the axis' extent: a read that runs off either
+    end continues from the other (a cyclic stretch's margin, `slice_reads`)."""
+    if 0 <= start and start + length <= total:
+        return take_slice(x, lay, total, inner, start, length)
+    if inner is None:                       # a broadcast is the same along the axis
+        return take_slice(x, lay, total, inner, 0, length)
+    pieces, at, left = [], start % total, length
+    while left > 0:
+        n = min(left, total - at)
+        pieces.append((take_slice(x, lay, total, inner, at, n), n))
+        left -= n
+        at = 0
+    first, n0 = pieces[0]
+    whole = first.new_empty(whole_shape(first.shape, lay, length, n0))
+    off = 0
+    for part, n in pieces:
+        put_slice(whole, part, lay, length, inner, off, n)
+        off += n
+    return whole
 
 
 def put_slice(full: Any, part: Any, lay: Layout, total: int, inner: int, start: int, length: int) -> None:
