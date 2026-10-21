@@ -3965,6 +3965,30 @@ def _conv3d_via_conv2d(x, weight, bias, stride, padding, dilation, groups):
         x = constant_pad_nd_wrapper(x, [0, 0, 0, 0, pt, pt], 0.0)
     Tp = x.shape[2]
     T_out = (Tp - dt * (kt - 1) - 1) // st + 1
+    if st == 1:
+        # Every temporal tap read and written IN PLACE: the tap's frames x[b, :, start:start+T_out] permuted to
+        # [T_out, Cin, H, W] are a strided view the conv kernel reads through its strides, and its result goes through
+        # a [T_out, Cout, Ho, Wo] view of the [B, Cout, T_out, Ho, Wo] output. The two permute copies per tap were 65 %
+        # of a VAE conv3d (1,128,9,242,362: 525 of 810 ms; 9 ms each once the copy kernel indexed in 32 bits, Mac
+        # 2026-10-21). The first tap writes the output; each later one writes a tap buffer added to it.
+        Ho = (H + 2 * ph - dh * (kh - 1) - 1) // sh + 1
+        Wo = (W + 2 * pw - dw * (kw - 1) - 1) // sw + 1
+        out_dt = _NBX_COMPUTE_DTYPE if _NBX_COMPUTE_DTYPE is not None else x.dtype
+        out = None
+        for kti in range(kt):
+            start = kti * dt
+            w2 = weight[:, :, kti:kti + 1].contiguous().reshape(Cout, Cin_g, kh, kw)
+            tap = NBXTensor.empty((B, Cout, T_out, Ho, Wo), device=x.device, dtype=out_dt)
+            for b in range(B):
+                x2 = x[b][:, start:start + T_out].permute(1, 0, 2, 3)
+                conv2d_wrapper(x2, w2, None, (sh, sw), (ph, pw), (dh, dw), False, 0, groups,
+                               out=tap[b].permute(1, 0, 2, 3))
+            out = tap if out is None else out + tap
+            tap = None
+        if bias is not None:
+            out = out + bias.reshape(1, Cout, 1, 1, 1)
+        return out
+
     out = None
     _ef = _NBX_CONV3D_EAGER_FREE_BYTES  # #37 size-gated eager-free threshold
     for kti in range(kt):
@@ -4121,10 +4145,17 @@ def _conv_offsets_wide(*tensors) -> bool:
     return reach >= (1 << 30)
 
 
+def _conv_reads_strided(x) -> bool:
+    """True when the implicit-GEMM conv kernel can read `x` through its strides in place: four non-negative strides
+    with the width innermost (a permuted or sliced view of a channel-plane layout). Anything else is copied."""
+    st = x.stride()
+    return len(st) == 4 and all(int(v) >= 0 for v in st) and (int(st[3]) == 1 or int(x.shape[3]) == 1)
+
+
 def conv2d_wrapper(
     x, weight, bias=None,
     stride=1, padding=0, dilation=1,
-    transposed=False, output_padding=0, groups=1,
+    transposed=False, output_padding=0, groups=1, out=None,
 ) :
     """Convolution forward. Handles both 1D (3D tensors) and 2D (4D tensors).
     Routes to conv1d_wrapper for 3D inputs, and to conv_transpose_wrapper when
@@ -4227,7 +4258,10 @@ def conv2d_wrapper(
     if w_nbx != w_to:
         weight = weight.to(w_to)
 
-    x_c = x.contiguous()
+    # The implicit GEMM reads the input through its four strides, so a strided view goes in where it lies (a conv3d's
+    # temporal slice permuted to [T, C, H, W]: its copy was 85 ms of a 235 ms VAE conv3d, Mac 2026-10-21); the
+    # depthwise, band and matrix-unit routes take a contiguous copy, as before.
+    x_c = x.contiguous() if not x.is_contiguous() and not _conv_reads_strided(x) else x
     # A weight the loader stored KRSC (`conv.weight_layout`) is read where it lies: the kernel
     # takes the weight's four strides; copied back to KCRS it would lose what the layout gains.
     w_c = weight if _lk.is_krsc_weight(weight) else weight.contiguous()
@@ -4259,11 +4293,13 @@ def conv2d_wrapper(
     _route = _lk.conv2d_route(N, in_c, out_c, out_h, out_w, dil_h, dil_w, groups, out_nbx_dtype,
                               _ts.conv2d_band_bytes(),
                               depthwise_enabled=os.environ.get("NBX_DEPTHWISE_DISABLE", "0") != "1")
+    if out is not None and _route in ("depthwise", "band"):
+        raise RuntimeError(f"conv2d out=: the {_route} route writes its own result — refused")
     if _route == "depthwise":
         if _NBX_CONV2D_TRACE:
             print(f"[CONV2D] DEPTHWISE path (g={groups})", flush=True)
         return _depthwise_conv2d_dispatch(
-            x_c, w_c, bias,
+            x_c.contiguous(), w_c, bias,
             N, in_c, in_h, in_w, out_h, out_w,
             kh, kw, stride_h, stride_w, pad_h, pad_w,
             out_dtype,
@@ -4273,16 +4309,28 @@ def conv2d_wrapper(
         if _NBX_CONV2D_TRACE:
             print(f"[CONV2D] BAND-STREAM triggered (out > {_ts.conv2d_band_bytes()/1024/1024/1024:.1f}GiB)", flush=True)
         return _conv2d_band_streamed(
-            x_c, w_c, bias,
+            x_c.contiguous(), w_c, bias,
             N, in_c, in_h, in_w, out_c, out_h, out_w,
             kh, kw, stride_h, stride_w, pad_h, pad_w, dil_h, dil_w,
             groups, out_dtype, out_dtype_bytes,
         )
 
-    output = NBXTensor.empty((N, out_c, out_h, out_w), device=x.device, dtype=out_dtype)
+    if out is not None:
+        # the caller's own [N, out_c, out_h, out_w] view (any strides) receives the result: a conv3d writes each temporal
+        # tap straight into its [B, C, T, H, W] layout instead of a contiguous result permuted after
+        if (tuple(out.shape) != (N, out_c, out_h, out_w) or bias is not None
+                or (out._dtype != out_dtype and out.dtype != out_dtype)):
+            raise RuntimeError(f"conv2d out=: a {tuple(out.shape)} {out._dtype} view for a ({N}, {out_c}, {out_h}, "
+                               f"{out_w}) {out_dtype} result{' with a bias' if bias is not None else ''} — refused")
+        output = out
+    else:
+        output = NBXTensor.empty((N, out_c, out_h, out_w), device=x.device, dtype=out_dtype)
 
     if _lk.matrix_unit_native(x_c.nbx_dtype, w_c.nbx_dtype, N * out_h * out_w):
         # The implicit GEMM on the profile's matrix unit (ops/conv2d_m8n8k4.py), bias fused; no autotune key.
+        x_c = x_c.contiguous()
+        if out is not None:
+            raise RuntimeError("conv2d out=: the matrix-unit route writes a contiguous result — refused")
         _conv2d_m8n8k4(x_c, w_c, bias, output, N, in_c, in_h, in_w, out_c, out_h, out_w, kh, kw,
                        stride_h, stride_w, pad_h, pad_w, dil_h, dil_w, groups)
         return output
