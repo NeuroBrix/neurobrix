@@ -123,9 +123,15 @@ def test_the_plan_records_the_split_and_prices_the_encoder_per_pass(monkeypatch)
     args = create_parser().parse_args(["run", "--model", "Wan2.1-VACE-1.3B", *derived_request("Wan2.1-VACE-1.3B"), "--compiled"])
     ic = request_input_config(args, man, man.get("family"), c.cache_path)
     topo = json.loads((root / "topology.json").read_text())
-    topo["extracted_values"]["transformer"]["vace_control_conditioning"]["items_per_pass"] = 1
+    # both cases stated here: the container itself declares items_per_pass since its single write (2026-10-18),
+    # so the request as cached is already the split one — the whole case removes the declaration
+    vcc = topo["extracted_values"]["transformer"]["vace_control_conditioning"]
+    whole_topo = json.loads(json.dumps(topo))
+    whole_topo["extracted_values"]["transformer"]["vace_control_conditioning"].pop("items_per_pass", None)
+    vcc["items_per_pass"] = 1
     split_ic = dataclasses.replace(ic, flow=FlowBindings(topo, root, "Wan2.1-VACE-1.3B-split-test"))
-    whole = PrismSolver().solve_smart(c, profile(APPLE_M4_PRO), ic, mode="compiled")
+    whole_ic = dataclasses.replace(ic, flow=FlowBindings(whole_topo, root, "Wan2.1-VACE-1.3B-whole-test"))
+    whole = PrismSolver().solve_smart(c, profile(APPLE_M4_PRO), whole_ic, mode="compiled")
     split = PrismSolver().solve_smart(c, profile(APPLE_M4_PRO), split_ic, mode="compiled")
     assert whole.batch_split_components == {}
     assert split.batch_split_components == {"vae_encoder": {"fed": 2, "per_pass": 1}}
