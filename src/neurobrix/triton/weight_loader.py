@@ -16,7 +16,9 @@ across native and triton modes.
 """
 
 import math
+import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, Optional, Set
 
@@ -27,6 +29,8 @@ from neurobrix.kernels.nbx_tensor import (
     _set_device, float32_to_bf16_bits,
 )
 from .memory_pool import ComponentArena
+# The loader's worker count — one figure for every loader and for Prism's host estimate (torch-free).
+from neurobrix.core.workspace import io_workers
 # The absent-weight rule lives beside the container format it guards (torch-free), one rule for
 # both engines' loaders and binds and for the validator.
 from neurobrix.nbx.weight_presence import (   # noqa: F401 — re-exported for this engine's callers
@@ -51,6 +55,69 @@ def is_block_key(key: str) -> bool:
     all read (`GraphExecutor.consumed_in_loader_space`, `load_flow_read_weights`,
     `PrismSolver._try_layer_streaming`)."""
     return bool(_BLOCK_RE.search(key))
+
+
+# One tensor at a time, read and cast by `io_workers()` threads: a shard read by one `f.read` and
+# cast by one numpy loop ran at 0.40 GB/s (cold) / 0.52 GB/s (warm) on Wan2.2-I2V-A14B's fp32
+# shards over the RDMA cache; split across 8 workers, 1.4-1.7 / 2.7 GB/s, the same bytes
+# (V100 rack, 2026-10-21). Both `os.preadv` and numpy's casting loop release the GIL. The tensor
+# in flight is still ONE, as Prism's triton host estimate prices it (`host_footprint`:
+# TRITON_COPIES_PER_TENSOR x the largest tensor) — the work on it is what is shared.
+_IO_POOL: Optional[tuple] = None      # (pid, workers, pool): a forked child builds its own
+_PAGE = os.sysconf("SC_PAGE_SIZE")
+
+
+def _io_pool():
+    """(workers, pool) of this process — read once from `io_workers()`."""
+    global _IO_POOL
+    if _IO_POOL is None or _IO_POOL[0] != os.getpid():
+        workers = io_workers()
+        _IO_POOL = (os.getpid(), workers,
+                    ThreadPoolExecutor(max_workers=workers, thread_name_prefix="nbx-weight-io"))
+    return _IO_POOL[1], _IO_POOL[2]
+
+
+def _spans(n: int, unit: int, align: int):
+    """[start, end) element spans of an n-element run, one per worker, each a multiple of `align`
+    elements; a run under one page per worker stays whole (a split costs more than it shares)."""
+    workers = _io_pool()[0]
+    if workers < 2 or n * unit < workers * _PAGE:
+        return [(0, n)]
+    step = -(-n // workers)
+    step = -(-step // align) * align
+    return [(a, min(a + step, n)) for a in range(0, n, step)]
+
+
+def _read_bytes(fd: int, offset: int, nbytes: int) -> np.ndarray:
+    """nbytes of the file at offset, read by the loader's workers into one buffer (page-aligned
+    spans; `preadv` may return short, so each span reads until it is full)."""
+    buf = np.empty(nbytes, dtype=np.uint8)
+    view = memoryview(buf)
+
+    def _one(span):
+        a, b = span
+        while a < b:
+            got = os.preadv(fd, [view[a:b]], offset + a)
+            if got <= 0:
+                raise RuntimeError(f"weight read: {nbytes} bytes at offset {offset} of fd {fd} ended "
+                                   f"{b - a} bytes short (file truncated?)")
+            a += got
+
+    list(_io_pool()[1].map(_one, _spans(nbytes, 1, _PAGE)))
+    return buf
+
+
+def _cast(arr: np.ndarray, want) -> np.ndarray:
+    """`arr.astype(want)`, C-contiguous, the elements split across the loader's workers."""
+    src = np.ascontiguousarray(arr).reshape(-1)
+    out = np.empty(arr.shape, dtype=want)
+    flat = out.reshape(-1)
+
+    def _one(span):
+        np.copyto(flat[span[0]:span[1]], src[span[0]:span[1]], casting="unsafe")
+
+    list(_io_pool()[1].map(_one, _spans(src.size, src.itemsize, 1)))
+    return out
 
 
 # safetensors dtype → (numpy dtype for reading, NBXDtype, bytes per element)
@@ -413,7 +480,7 @@ def _load_to_pinned_cpu(
         raw_u16 = np.frombuffer(raw, dtype=np.uint16).reshape(shape)
         if target_dtype == NBXDtype.float16:
             u32 = raw_u16.astype(np.uint32) << 16
-            arr = np.ascontiguousarray(u32.view(np.float32)).astype(np.float16)
+            arr = _cast(u32.view(np.float32), np.float16)
         else:
             arr = np.ascontiguousarray(raw_u16)
     else:
@@ -465,7 +532,7 @@ def _load_to_pinned_cpu(
     }
     want = _NUMPY_FOR.get(target_dtype)
     if want is not None and arr.dtype != want:
-        arr = np.ascontiguousarray(arr.astype(want))
+        arr = _cast(arr, want)
 
     # Allocate pinned host memory and copy in (kind=0 = H2H).
     dst = NBXTensor.empty_cpu(shape, target_dtype, pinned=True)
@@ -547,8 +614,7 @@ def _load_shard_into_arenas(
             np_dtype, nbx_dtype, elem_size = dtype_info
 
             # Read raw bytes from file
-            f.seek(data_offset + start)
-            raw = f.read(nbytes)
+            raw = _read_bytes(f.fileno(), data_offset + start, nbytes)
 
             # Determine target dtype after remap — the one rule, `stored_dtype_in_compute`
             target_dtype = stored_dtype_in_compute(nbx_dtype, compute_dtype)
@@ -606,7 +672,7 @@ def _load_shard_into_arenas(
                 arr = np.ascontiguousarray(arr)
                 if upcast_this:
                     # Native fp16 → fp32 widening (exact, no precision loss).
-                    arr = np.ascontiguousarray(arr.astype(np.float32))
+                    arr = _cast(arr, np.float32)
                     final_dtype = NBXDtype.float32
                 elif (nbx_dtype == NBXDtype.float32
                       and target_dtype == NBXDtype.float16):
@@ -616,7 +682,7 @@ def _load_shard_into_arenas(
                     # WeightLoader(torch_dtype=fp16) does this implicitly;
                     # triton needs to do it explicitly so arena sizing
                     # and the kernel-side dtype agree.
-                    arr = np.ascontiguousarray(arr.astype(np.float16))
+                    arr = _cast(arr, np.float16)
                     final_dtype = NBXDtype.float16
                 elif (nbx_dtype == NBXDtype.float32
                       and target_dtype == NBXDtype.bfloat16):

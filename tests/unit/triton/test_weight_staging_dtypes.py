@@ -116,6 +116,8 @@ def test_an_unconvertible_pair_refuses_instead_of_overflowing(monkeypatch):
         return out.astype(np.float64) if out.dtype == np.float16 else out
 
     monkeypatch.setattr(wl.np, "ascontiguousarray", sabotage)
+    # The loader's cast (`_cast`, shared by its I/O workers) converting nothing: the pair escapes.
+    monkeypatch.setattr(wl, "_cast", lambda arr, want: arr)
     with pytest.raises(RuntimeError, match="would overflow"):
         _load_to_pinned_cpu(np.zeros(256, np.float16).tobytes(), (256,),
                             NBXDtype.float16, NBXDtype.float16)
