@@ -51,3 +51,15 @@ def test_a_missing_role_or_file_is_refused_not_guessed(atelier, monkeypatch, tmp
 def test_an_environment_variable_overrides_a_role(atelier, monkeypatch, tmp_path):
     monkeypatch.setenv("NBX_ATELIER_TMP", str(tmp_path / "other"))
     assert A.root("tmp") == tmp_path / "other"
+
+
+def test_an_interpreter_is_resolved_at_use_not_at_import(atelier):
+    """A tool names its interpreter at import (`interpreter("forge")`); a machine that declares no such environment
+    imports it and is refused only when a run uses it (the Mac collected 19 tool tests as errors, 2026-10-23).
+    Injection (seen red): `interpreter` resolving at construction -> red."""
+    import os
+    py = A.interpreter("forge")                       # this machine declares no forge python
+    with pytest.raises(A.AtelierUndeclared, match="forge"):
+        os.fspath(py)
+    assert os.fspath(A.interpreter("engine")) == "/venvs/engine/bin/python"
+    assert str(A.interpreter("engine")) + " -V" == "/venvs/engine/bin/python -V"

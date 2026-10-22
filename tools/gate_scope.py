@@ -59,7 +59,7 @@ import gate_scope_code as C                    # noqa: E402
 import gate_scope_index as GI                  # noqa: E402
 
 SCRATCH = Path(os.environ.get("NBX_GATE_SCOPE_SCRATCH") or _atelier.tmp("gate_scope"))
-PYTHON = os.environ.get("NEUROBRIX_PYTHON", _atelier.python("engine"))
+PYTHON = os.environ.get("NEUROBRIX_PYTHON") or _atelier.interpreter("engine")
 CFG_PATH = TOOLS / "gate_scope.yml"
 CACHE = _atelier.root("cache")
 MARK = "@@GATE_SCOPE_PROBE@@"
