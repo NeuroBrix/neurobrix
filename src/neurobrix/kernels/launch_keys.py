@@ -27,6 +27,7 @@ CONV2D = "neurobrix.kernels.ops.conv2d.conv2d_forward_kernel"
 DEPTHWISE = "neurobrix.kernels.ops.depthwise_conv2d.depthwise_conv2d_kernel"
 SOFTMAX = "neurobrix.kernels.ops.softmax.softmax_forward_kernel"
 UNIT_FLASH = "neurobrix.kernels.ops.flash_attention_m8n8k4.flash_attention_m8n8k4_kernel"
+FLASH = "neurobrix.kernels.ops.flash_attention.flash_attention_certified_kernel"
 
 F32, BF16, F16 = NBXDtype.float32, NBXDtype.bfloat16, NBXDtype.float16
 _HALF = (F16, BF16)
@@ -392,6 +393,35 @@ def _pow2(n: int) -> bool:
     return n > 0 and (n & (n - 1)) == 0
 
 
+def flash_any_head_dim() -> bool:
+    """The arch's profile MEASURED the tl.dot flash kernel correct at every head dim (`flash.any_head_dim_correct`):
+    a head dim that is not a power of two runs in the kernel's power-of-two head-dim block, the columns past it masked
+    to zero on load (`EVEN_HEADDIM` False), so it routes like a power of two — on the device's scores budget — instead
+    of on `sdpa.non_pow2_head_scores_bytes` to the math attention, which writes the scores. An arch that has not
+    measured it keeps the math route."""
+    from neurobrix.kernels.ops._configs import active_vendor_profile
+    return ((active_vendor_profile().get("flash") or {}).get("any_head_dim_correct")) is True
+
+
+def flash_tiles_certified() -> bool:
+    """The tl.dot flash's tile is certified per key (workstream 1) where the profile declares no hand table of tiles
+    (`sdpa_thresholds`); a profile that declares one launches its rows as before."""
+    from neurobrix.kernels.ops._configs import active_vendor_profile
+    return not active_vendor_profile().get("sdpa_thresholds")
+
+
+def flash_launches(Tq: int, Tk: int, D: int, q: NBXDtype, k: NBXDtype, v: NBXDtype,
+                   bias: Optional[NBXDtype] = None) -> List[Launch]:
+    """The tl.dot flash where its tile is certified (`flash_tiles_certified`): its autotune key — the query rows'
+    bucket, the keys' bucket, the head dim — then, as Triton appends them, the dtypes of its seven tensors (Q, K, V, the
+    bias — the mask's, or Q's for the zero / causal bias the wrapper builds —, the output like Q, the fp32 log-sum-exp
+    and its fp32 scratch). No key where the profile's hand table chooses the tile."""
+    if not flash_tiles_certified():
+        return []
+    return [(FLASH, (bucket_of("M", Tq), bucket_of("N", Tk), int(D),
+                     tag(q), tag(k), tag(v), tag(bias if bias is not None else q), tag(q), tag(F32), tag(F32)))]
+
+
 def sdpa_chunk_rows(bound: int, batch: int, nheads: int, Tq: int, Tk: int,
                     min_chunk_rows: int, max_chunks: int) -> int:
     """Query rows per chunk that keep each chunk's fp32 scores within `bound`, aligned to the
@@ -521,13 +551,13 @@ def sdpa_route(batch: int, nheads: int, Tq: int, Tk: int, D: int, Dv: int, budge
     """The attention route: ("math", 0), ("chunked", rows) or ("flash", 0). Math when forced or
     when the value head dim differs; else by the fp32 scores' size against the executing device's
     budget — a non-power-of-two head dim routes on `sdpa.non_pow2_head_scores_bytes` (config/
-    tiling.yml) when the arch declares none;
+    tiling.yml) when the arch declares none and has not measured the flash at every head dim (`flash_any_head_dim`);
     over the bound, flash when the profile's matrix unit takes it (`unit_flash_takes`: the
     deterministic m8n8k4 kernel), else chunked when the rows fit the arch's ceiling; otherwise flash."""
     if force_math or Dv != D:
         return ("math", 0)
     scores = _ts.sdpa_scores_bytes(batch, nheads, Tq, Tk)
-    bound = _ts.sdpa_scores_bound(budget_bytes, _pow2(D))
+    bound = _ts.sdpa_scores_bound(budget_bytes, _pow2(D) or flash_any_head_dim())
     if scores <= bound:
         return ("math", 0)
     if unit_flash:

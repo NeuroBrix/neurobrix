@@ -9061,6 +9061,38 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
             o = nan_to_num_wrapper(o, nan=0.0, posinf=0.0, neginf=0.0)
         return o
 
+    # The tl.dot flash with its tile CERTIFIED per key (workstream 1, roadmap C3) where the profile declares no hand
+    # table of tiles (`launch_keys.flash_tiles_certified`): the autotuned handle of the same kernel, keyed on the
+    # buckets of the query rows and the keys and on the head dim (`launch_keys.flash_launches`, the census's key);
+    # the log-sum-exp and its scratch are sized for the tallest candidate tile, so every candidate's rows fit.
+    if _lk.flash_tiles_certified():
+        from .ops.flash_attention import flash_attention_certified_kernel, flash_configs
+        o = NBXTensor.empty_like(q)
+        _rows_top = max(c.kwargs["BLOCK_M"] for c in flash_configs())
+        seqlen_q_rounded = math.ceil(seqlen_q / _rows_top) * _rows_top
+        _dev = f"cuda:{q._device_idx}" if hasattr(q, "_device_idx") else "cuda"
+        lse = NBXTensor.empty((batch, nheads, seqlen_q_rounded), dtype=NBXDtype.float32, device=_dev)
+        tmp = NBXTensor.empty((batch, nheads, seqlen_q_rounded), dtype=NBXDtype.float32, device=_dev)
+        _set_device(q)
+        flash_attention_certified_kernel[lambda META: (triton.cdiv(seqlen_q, META["BLOCK_M"]), batch * nheads)](
+            q, k, v, bias,
+            o, lse, tmp,
+            softmax_scale,
+            q.stride(0), q.stride(1), q.stride(2),
+            k.stride(0), k.stride(1), k.stride(2),
+            v.stride(0), v.stride(1), v.stride(2),
+            bias.stride(0), bias.stride(1), bias.stride(-2),
+            o.stride(0), o.stride(1), o.stride(2),
+            nheads, seqlen_q, seqlen_k, seqlen_q_rounded, headdim,
+            _bucket_of("M", seqlen_q), _bucket_of("N", seqlen_k),
+            BIAS_TYPE=bias_type,
+            BLOCK_HEADDIM=BLOCK_HEADDIM,
+            GQA_GROUPS=gqa_groups,
+        )
+        if attn_mask is not None:
+            o = nan_to_num_wrapper(o, nan=0.0, posinf=0.0, neginf=0.0)
+        return o
+
     # Output allocation. seqlen_q_rounded must align with actual BLOCK_M.
     o = NBXTensor.empty_like(q)
     seqlen_q_rounded = math.ceil(seqlen_q / BLOCK_M) * BLOCK_M

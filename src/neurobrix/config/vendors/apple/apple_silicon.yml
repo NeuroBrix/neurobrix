@@ -151,38 +151,8 @@ block_sizes:
   dequant_gemv:
     min_programs: 80
 
-# SDPA block-size thresholds. Schema documented in volta.yml. Decode first.
-# Every tile here is sized for 32 KB of threadgroup memory, so they are
-# smaller than the Volta equivalents at the same head_dim.
-sdpa_thresholds:
-  - seqlen_q_le: 16
-    head_dim_ge: 256
-    block_m: 16
-    block_n: 16
-    num_warps: 4
-  - seqlen_q_le: 16
-    block_m: 16
-    block_n: 32
-    num_warps: 4
-  - head_dim_ge: 256
-    block_m: 16
-    block_n: 16
-    num_warps: 4
-  - head_dim_ge: 128
-    block_m: 32
-    block_n: 32
-    num_warps: 4
-  # MEASURED 2026-09-06: 32x32, not 32x64. The Metal backend's attention
-  # lowering is validated at head_dim 64 for a 32x32 tile only; a 32x64 tile
-  # has no template and falls to a generic path that cannot lower an
-  # attention kernel at all, so the whole op refuses. Both tiles fit the
-  # 32 KB threadgroup budget — this is not a memory choice, it is the shape
-  # the hardware's compiler actually implements, which is exactly what a
-  # hardware profile is for.
-  - head_dim_lt: 128
-    block_m: 32
-    block_n: 32
-    num_warps: 4
+# sdpa_thresholds RETIRED (roadmap C3, 2026-10-22): the tl.dot flash's tile is certified per key by autotune
+# certify (`launch_keys.flash_tiles_certified`), not read from a hand table.
 
 memory:
   # 32 KB of threadgroup memory per threadgroup (Apple GPU family 7+).
