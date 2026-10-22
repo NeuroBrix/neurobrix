@@ -31,6 +31,7 @@ Usage:
 """
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import json
 import os
@@ -125,7 +126,7 @@ def scan_contractions(cache: Path):
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--cache", default=os.path.expanduser("~/.neurobrix/ca" + "che"))
+    ap.add_argument("--cache", default=str(_atelier.root("cache")))
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args()
     found = scan(Path(a.cache))

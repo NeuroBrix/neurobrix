@@ -46,6 +46,10 @@ Usage:
 """
 from __future__ import annotations
 
+import sys as _sys_atelier
+from pathlib import Path as _Path_atelier
+_sys_atelier.path.insert(0, str(_Path_atelier(__file__).resolve().parents[2] / "tools"))
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import json
 import os
@@ -270,7 +274,7 @@ def _run_venv_script(args, arm_env, tag, outdir, py, script, argv) -> dict:
 
 def run_once_fwhisper(args, arm_env, tag, outdir) -> dict:
     py = arm_env.get("FW_PYTHON",
-                     os.path.expanduser("~/venvs/fwhisper/bin/python"))
+                     _atelier.python("oracle"))
     model = arm_env.get("FW_MODEL") or sys.exit("fwhisper arm needs FW_MODEL")
     return _run_venv_script(
         args, arm_env, tag, outdir, py, _FW_SCRIPT,
@@ -283,7 +287,7 @@ def run_once_transformers(args, arm_env, tag, outdir) -> dict:
     traced FROM (S2 addendum 2026-08-30). fp16, greedy, chrono on
     generate alone."""
     py = arm_env.get("TF_PYTHON",
-                     os.path.expanduser("~/bench_venvs/diffusers/bin/python"))
+                     _atelier.python("competitors"))
     model = arm_env.get("TF_MODEL") or sys.exit("transformers arm needs TF_MODEL")
     return _run_venv_script(
         args, arm_env, tag, outdir, py, _TF_SCRIPT,
@@ -292,7 +296,7 @@ def run_once_transformers(args, arm_env, tag, outdir) -> dict:
 
 def run_once_oaiwhisper(args, arm_env, tag, outdir) -> dict:
     py = arm_env.get("OAIW_PYTHON",
-                     os.path.expanduser("~/venvs/oaiwhisper/bin/python"))
+                     str(_atelier.root("venvs") / "oaiwhisper" / "bin" / "python"))
     model = arm_env.get("OAIW_MODEL") or sys.exit(
         "oaiwhisper arm needs OAIW_MODEL")
     return _run_venv_script(
@@ -302,7 +306,7 @@ def run_once_oaiwhisper(args, arm_env, tag, outdir) -> dict:
 
 def run_once_nemo(args, arm_env, tag, outdir) -> dict:
     py = arm_env.get("NEMO_PYTHON",
-                     os.path.expanduser("~/venvs/nemo/bin/python"))
+                     str(_atelier.root("venvs") / "nemo" / "bin" / "python"))
     model = arm_env.get("NEMO_MODEL", "nvidia/parakeet-tdt-1.1b")
     return _run_venv_script(
         args, arm_env, tag, outdir, py, _NEMO_SCRIPT, [model, args.audio])

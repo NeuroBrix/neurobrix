@@ -14,6 +14,10 @@ Usage:
 
 Output: Detailed breakdown of DtypeEngine overhead per wrapper type.
 """
+import sys as _sys_atelier
+from pathlib import Path as _Path_atelier
+_sys_atelier.path.insert(0, str(_Path_atelier(__file__).resolve().parents[1] / "tools"))
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import sys
 import os
 import time
@@ -261,7 +265,7 @@ def run_benchmark(model_name: str, hardware: str, steps: int, prompt: str):
     torch.manual_seed(42)
     torch.cuda.manual_seed_all(42)
 
-    profile_dir = Path("/home/mlops/NeuroBrix_System/benchmarks/traces")
+    profile_dir = (Path(__file__).resolve().parents[1] / "benchmarks/traces")
     profile_dir.mkdir(parents=True, exist_ok=True)
 
     with torch.profiler.profile(
@@ -348,7 +352,7 @@ def _save_output(outputs, filename):
         if output_tensor is not None:
             from torchvision.utils import save_image
             img = output_tensor.float().clamp(0, 1)
-            path = Path("/home/mlops/NeuroBrix_System") / filename
+            path = _atelier.tmp(filename)
             save_image(img, str(path))
             print(f"  Output saved: {path}")
     except Exception:
@@ -383,7 +387,7 @@ def main():
     results = run_benchmark(args.model, args.hardware, args.steps, args.prompt)
 
     # Save results as JSON
-    results_path = Path("/home/mlops/NeuroBrix_System/benchmarks/results")
+    results_path = (Path(__file__).resolve().parents[1] / "benchmarks/results")
     results_path.mkdir(parents=True, exist_ok=True)
     out_file = results_path / f"dtype_overhead_{args.model}_{args.steps}steps.json"
     with open(out_file, "w") as f:

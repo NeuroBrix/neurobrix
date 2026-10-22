@@ -51,6 +51,10 @@ Usage:
 """
 from __future__ import annotations
 
+import sys as _sys_atelier
+from pathlib import Path as _Path_atelier
+_sys_atelier.path.insert(0, str(_Path_atelier(__file__).resolve().parents[2] / "tools"))
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import json
 import os
@@ -339,7 +343,7 @@ def run_once_vllm(args, arm_env: dict, tag: str, outdir: Path) -> dict:
     ~/venvs/vllm073/bin/python), optional VLLM_DTYPE (default
     float16 — Volta has no bf16)."""
     py = arm_env.get("VLLM_PYTHON",
-                     os.path.expanduser("~/venvs/vllm073/bin/python"))
+                     str(_atelier.root("venvs") / "vllm073" / "bin" / "python"))
     model = arm_env.get("VLLM_MODEL")
     if not model:
         raise SystemExit("vllm arm needs VLLM_MODEL=<hf-id-or-path>")

@@ -38,6 +38,7 @@ Usage:
 """
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import collections
 import json
@@ -105,7 +106,7 @@ def compare(nbx: Path, installed_root: Path, tolerance: float = TOLERANCE) -> di
 def refuse_regression(nbx, model_name: str, cache_root=None,
                       allow_shrink: bool = False) -> dict:
     nbx = Path(nbx)
-    root = Path(cache_root or (Path.home() / ".neurobrix" / "cache")) / model_name
+    root = Path(cache_root or (_atelier.root("cache"))) / model_name
     report = compare(nbx, root)
     if not report["baseline"]:
         print(f"   [regression gate] {report['note']}")

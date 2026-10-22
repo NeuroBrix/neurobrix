@@ -4,7 +4,7 @@ A snapshot is downloaded ONCE, into the configured snapshots root, and the build
 toolchain and the vendor tools both read it THERE. Until 2026-09-17 the profilers
 did this instead:
 
-    local_path = Path("/home/mlops/hf_snapshots/Sana_1600M_1024px_MultiLing")
+    local_path = _atelier.root("hf_snapshots") / Path("Sana_1600M_1024px_MultiLing")
     model_id = str(local_path) if local_path.exists() else "Efficient-Large-Model/..."
 
 — a literal path, and "otherwise try Hub", which downloads a second copy into
@@ -17,6 +17,10 @@ with the directory it looked in, and there is no Hub branch to fall through to.
 """
 from __future__ import annotations
 
+import sys as _sys_atelier
+from pathlib import Path as _Path_atelier
+_sys_atelier.path.insert(0, str(_Path_atelier(__file__).resolve().parents[1] / "tools"))
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import os
 from pathlib import Path
 

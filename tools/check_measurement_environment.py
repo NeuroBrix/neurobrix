@@ -15,6 +15,7 @@ produces a wrong one.
 """
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import importlib.util
 import os
 import re
@@ -353,8 +354,8 @@ _CACHE_VARS = ("TRITON_CACHE_DIR", "NEUROBRIX_REPLAY_CACHE")
 #: The shared defaults. Pointing a measurement at these is the same as not
 #: setting them.
 _SHARED_DEFAULTS = (
-    Path.home() / ".triton" / "cache",
-    Path.home() / ".neurobrix" / "replay_cache",
+    _atelier.root("triton_cache") / "cache",
+    _atelier.root("engine_home") / "replay_cache",
 )
 
 

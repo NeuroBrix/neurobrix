@@ -17,6 +17,7 @@ Regenerable by this CLI; a port (Metal, ROCm) replays the inputs and compares.
 """
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import json
 import os
@@ -29,8 +30,8 @@ import numpy as np
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
-OUT_DEFAULT = REPO / "validation_outputs" / "kernel_reference_bank"
-TRACE = "/tmp/nbx_bank_launch_trace.tsv"
+OUT_DEFAULT = _atelier.root("campaigns") / "kernel_reference_bank"
+TRACE = str(_atelier.tmp("nbx_bank_launch_trace.tsv"))
 os.environ["NBX_LAUNCH_TRACE"] = TRACE      # read once by the launcher at import: arm it first
 
 

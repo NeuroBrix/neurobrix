@@ -22,6 +22,10 @@ Weights/snapshots come from the NAS per the S3 disk policy
 (upscaler_weights row field; HF_HOME exported by the parent).
 """
 
+import sys as _sys_atelier
+from pathlib import Path as _Path_atelier
+_sys_atelier.path.insert(0, str(_Path_atelier(__file__).resolve().parents[2] / "tools"))
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import hashlib
 import json
@@ -122,7 +126,7 @@ def run_swinir(row: dict, n: int, repo: Path, media_dir: Path) -> dict:
     import torch
     from PIL import Image
 
-    repo_dir = Path.home() / "hf_snapshots" / "vendor_repos" / "SwinIR"
+    repo_dir = _atelier.root("hf_snapshots") / "vendor_repos" / "SwinIR"
     _sys.path.insert(0, str(repo_dir))
     from models.network_swinir import SwinIR
 

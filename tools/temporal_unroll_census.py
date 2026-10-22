@@ -40,6 +40,7 @@ Usage:
 """
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import collections
 import json
@@ -169,7 +170,7 @@ def census(root: Path, second_point: Path | None):
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--root", default=os.environ.get(
-        "NEUROBRIX_CACHE", str(Path.home() / ".neurobrix" / "cache")))
+        "NEUROBRIX_CACHE", str(_atelier.root("cache"))))
     ap.add_argument("--second-point", default=None,
                     help="a second trace tree (e.g. .cache/graphs) for MEASURED lines")
     ap.add_argument("--threshold", type=float, default=0.90,

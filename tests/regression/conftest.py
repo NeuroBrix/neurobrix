@@ -12,6 +12,10 @@ skipped by default and explicitly included when desired:
 """
 from __future__ import annotations
 
+import sys as _sys_atelier
+from pathlib import Path as _Path_atelier
+_sys_atelier.path.insert(0, str(_Path_atelier(__file__).resolve().parents[2] / "tools"))
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import json
 import os
 import subprocess
@@ -31,7 +35,7 @@ def speaker_the_artefact_requires(model: str) -> str:
     return _brick(model, CACHE_ROOT)
 
 
-CACHE_ROOT = Path(os.path.expanduser("~/.neurobrix/cache"))
+CACHE_ROOT = _atelier.root("cache")
 
 
 def pytest_configure(config):

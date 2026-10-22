@@ -20,6 +20,10 @@ Usage:
 """
 from __future__ import annotations
 
+import sys as _sys_atelier
+from pathlib import Path as _Path_atelier
+_sys_atelier.path.insert(0, str(_Path_atelier(__file__).resolve().parents[2] / "tools"))
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse, json, os, statistics, subprocess, sys, time
 from pathlib import Path
 
@@ -111,13 +115,13 @@ def _run_pip_arm(args, arm_env, tag, outdir, py, script):
 
 def run_once_kokoro(args, arm_env, tag, outdir):
     py = arm_env.get("KOKORO_PYTHON",
-                     os.path.expanduser("~/venvs/kokoro/bin/python"))
+                     str(_atelier.root("venvs") / "kokoro" / "bin" / "python"))
     return _run_pip_arm(args, arm_env, tag, outdir, py, _KOKORO_SCRIPT)
 
 
 def run_once_chatterbox(args, arm_env, tag, outdir):
     py = arm_env.get("CB_PYTHON",
-                     os.path.expanduser("~/venvs/chatterbox/bin/python"))
+                     str(_atelier.root("venvs") / "chatterbox" / "bin" / "python"))
     return _run_pip_arm(args, arm_env, tag, outdir, py, _CHATTERBOX_SCRIPT)
 
 
