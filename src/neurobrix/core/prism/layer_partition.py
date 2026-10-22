@@ -253,14 +253,10 @@ class LayerPartitioner:
         self._op_peak_memo = list(during)
 
     def _op_weight_names(self, op_uid: str) -> Set[str]:
-        """The weights an op reads from the container's shards. A parameter the graph EMBEDS (`constant: True`, its
-        bytes in graph.json — HAT's RGB `mean`) is loaded with the graph by every executor
-        (`GraphExecutor._load_constants_from_graph`), never from a shard: named as a segment's weight, the compiled
-        engine's host footprint refused the only piece that read it (\"all absent from the weights index\", 2026-10-22)."""
         names: Set[str] = set()
         for tid in (self.ops.get(op_uid) or {}).get("input_tensor_ids") or []:
             t = self.tensors.get(tid)
-            if t is not None and t.get("is_parameter") and not t.get("constant"):
+            if t is not None and t.get("is_parameter"):
                 names.add(t.get("weight_name") or tid)
         return names
 
@@ -365,6 +361,8 @@ class LayerPartitioner:
         if part.fits or not (self._token_split or self._swap):
             return part
         if not self._token_split or self._resolver is None:      # the slices need the request's resolver
+            if not self._swap:
+                return part                    # slices asked for, no resolver bound: the refusal as it was
             parked = self._greedy_swapped(budget_bytes, max_arena_bytes)
             if not parked.fits:
                 parked.refusal = f"{part.refusal} Nor with the values between pieces parked on the host: {parked.refusal}"

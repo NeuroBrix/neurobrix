@@ -2810,7 +2810,16 @@ class PrismSolver:
         a load the loader does not pin for is per tensor whether streamed or not."""
         from neurobrix.core.workspace import io_workers, pinned_uploads_in_flight
         parts = getattr(self, "_layer_stream_partitions", None) or {}
-        return {"streamed_loads": {name: [set(seg.weight_names) for seg in parts[name].segments]
+        # A parameter the graph EMBEDS (`constant: True`, its bytes in graph.json — HAT's RGB `mean`) is loaded with the
+        # graph by every executor, never from a shard: a segment reading only that is no load (the footprint refused it as
+        # reading "another key space", 2026-10-22). The partition keeps pricing it as it did: its cuts do not move.
+        comps = {getattr(c, "name", None): c for c in (getattr(self, "_neural_components", None) or [])}
+
+        def embedded(name):
+            g = getattr(comps.get(name), "graph", None) or {}
+            return {t.get("weight_name") or tid for tid, t in (g.get("tensors") or {}).items()
+                    if t.get("is_parameter") and t.get("constant")}
+        return {"streamed_loads": {name: [set(seg.weight_names) - embedded(name) for seg in parts[name].segments]
                                    for name in (plan.layer_stream_plan or ())},
                 "load_workers": io_workers(), "pinned_in_flight": pinned_uploads_in_flight()}
 
@@ -3678,15 +3687,9 @@ class PrismSolver:
                                 widths=widths,
                                 # The fused-upsample proxies and the broadcast
                                 # chain's expand/clone/view CARRY their input to
-                                # their consumer: its buffer lives until then. A
-                                # residual chain writes its result IN PLACE into the
-                                # chain's base (`[S5_CHAIN_OK] ... pre=post`), so each
-                                # chain op's output lives in its input's buffer, the
-                                # base held to the chain's end. Priced as carrying
-                                # nothing, the base was freed at its last direct reader:
-                                # Sana 4K's VAE walked 13 066 MB where the Triton run
-                                # held 28 930 (2026-10-22).
-                                source_holding_uids=fusion_uids | f2a_uids | chain_uids,
+                                # their consumer: its buffer lives until then.
+                                # The residual-chain sentinels carry nothing.
+                                source_holding_uids=fusion_uids | f2a_uids,
                                 in_place_weight_reads=_in_place,
                         attention_scratch=self._attention_scratch(profile), conv3d_workspace=self._conv3d_workspace(profile), op_workspace=self._op_workspace(profile),
                             )
