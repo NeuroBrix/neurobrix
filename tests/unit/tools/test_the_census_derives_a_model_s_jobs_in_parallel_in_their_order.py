@@ -24,7 +24,7 @@ def _fake_derive_keys(model, hw, mode, rung, req):
         raise DC.PlanRefused(f"{mode} r{rung} refused")
     if rung == 5:
         raise SystemExit(f"{mode} r{rung} not derivable")
-    return ([(f"op{rung}", "kern", f"({mode}, {rung})")], None, None, {f"NOTE {mode}": rung})
+    return ([(f"op{rung}", "kern", f"({mode}, {rung})")], {"strategy": f"plan r{rung}"}, None, {f"NOTE {mode}": rung})
 
 
 def test_the_parallel_results_are_the_serial_results_in_the_jobs_order(monkeypatch):
@@ -34,7 +34,8 @@ def test_the_parallel_results_are_the_serial_results_in_the_jobs_order(monkeypat
     # (the platform default on macOS; red there before this line, KeyError on the fake mode)
     par = DC._derive_jobs("m", "hw", jobs, start_method="fork")
     ser = [DC._derive_job(("m", "hw", mode, rung, req)) for mode, _ri, req, rung in jobs]
-    assert par == ser
+    # the results and the plan each was derived from; what each process executed and read differs by process
+    assert [(r[0], r[1], r[2]["plan"]) for r in par] == [(r[0], r[1], r[2]["plan"]) for r in ser]
     assert [r[0] for r in par[:7]] == ["ok", "ok", "plan_refused", "ok", "system_exit", "ok", "ok"]
     assert par[0][1][0] == [("op1", "kern", "(triton, 1)")]
 
@@ -47,6 +48,7 @@ def test_the_workers_are_what_the_free_memory_holds_not_the_cores(monkeypatch):
     from neurobrix.core import host_memory as HM
     from neurobrix.core.prism import memory_budget as MB
     monkeypatch.setattr(DC.os, "cpu_count", lambda: 12)
+    monkeypatch.setattr(DC.os, "getloadavg", lambda: (0.0, 0.0, 0.0))
     monkeypatch.setattr(MB, "memory_ladder_mb", lambda: [4096, 8192, 16384])
     def free(mb):
         monkeypatch.setattr(HM, "memory_state", lambda: types.SimpleNamespace(available_mb=mb))
@@ -57,4 +59,17 @@ def test_the_workers_are_what_the_free_memory_holds_not_the_cores(monkeypatch):
     free(100_000)                                      # memory to spare: the cores, then the jobs
     assert DC._workers_memory_holds(20, 1 << 20) == 12 and DC._workers_memory_holds(3, 1 << 20) == 3
     free(None)
+    assert DC._workers_memory_holds(20, 1 << 20) == 1
+
+
+def test_the_workers_are_the_cores_the_machine_is_not_running_on(monkeypatch):
+    """Eight census processes each starting a worker per core held ~300 derivations on 48 cores and a plan outran its
+    explanation's timeout (2026-10-22). Red if the cores alone decide, whatever the machine already runs."""
+    import types
+    from neurobrix.core import host_memory as HM
+    monkeypatch.setattr(DC.os, "cpu_count", lambda: 12)
+    monkeypatch.setattr(HM, "memory_state", lambda: types.SimpleNamespace(available_mb=1_000_000))
+    monkeypatch.setattr(DC.os, "getloadavg", lambda: (9.6, 9.0, 8.0))
+    assert DC._workers_memory_holds(20, 1 << 20) == 3
+    monkeypatch.setattr(DC.os, "getloadavg", lambda: (40.0, 40.0, 40.0))
     assert DC._workers_memory_holds(20, 1 << 20) == 1
