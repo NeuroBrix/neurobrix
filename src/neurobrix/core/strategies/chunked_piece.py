@@ -27,8 +27,9 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Set
 
 from neurobrix.core.prism.chunked_region import (
     TokenAxis, accumulate, dim_source, slice_reads, own, plan_region, put_slice, region_carriers, take_slice_cyclic,
-    store, take_slice, whole_shape)
+    sliced_reads, store, take_slice, whole_shape)
 from neurobrix.core.prism.layer_partition import Segment, build_segment_graph
+from neurobrix.core.strategies.value_parking import to_device
 from neurobrix.core.runtime.graph_executor import output_key
 
 
@@ -165,6 +166,16 @@ class ChunkedPiece:
         # the device for the rest of the run: HAT-S at 2048 px on 32 GB, four stretches' 2 304 MB outputs beside the
         # ninth piece (2026-10-22).
         self._last_run = {}
+
+    def sliced_input_names(self) -> Set[str]:
+        """The fed names this stretch reads only in slices (`chunked_region.sliced_reads`): with the values between
+        pieces parked, the strategy leaves them on the host and each pass uploads its slice."""
+        if not self._chunk.get("host_reads"):
+            return set()                  # the plan keeps this stretch's inputs whole on the device
+        if self._plan is None:
+            self._build()
+        tids = sliced_reads(self._plan, self._axis.ops)
+        return {n for n in (self._dag.get("segment_input_names") or []) if self._tid(n) in tids}
 
     def tensors_of_last_run(self, tids: Sequence[str]) -> Dict[str, Any]:
         return {t: self._last_run[t] for t in tids if t in self._last_run}
@@ -305,7 +316,8 @@ class ChunkedPiece:
                 if cp.chunked and lay is not None and tid in sliced_in:
                     v = (take_slice_cyclic if plan.cyclic else take_slice)(
                         v, lay, total, inner[tid], in_start, in_len)
-                sub_feed[n] = v
+                # an input kept on the host (`sliced_input_names`) comes to the pass's device a slice at a time
+                sub_feed[n] = to_device(v, getattr(ex, "device", None))
             out = ex.run(sub_feed, *args, **kwargs) or {}
             meta = ex._dag.get("tensors") or {}
             for tid in cp.targets:

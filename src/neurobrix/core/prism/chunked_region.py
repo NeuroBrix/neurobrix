@@ -1265,6 +1265,26 @@ def evaluate_inner(lay: Layout, symbol: Callable[[str], int]) -> int:
     return lay.inner.evaluate(symbol)
 
 
+def sliced_reads(plan: "RegionPlan", ops: Dict[str, Any]) -> Set[str]:
+    """The stretch's inputs it reads ONLY in slices: they carry the axis (a layout), are no output of it, and no pass
+    that runs whole reads them. With the values between pieces parked on the host, such an input stays there and
+    each pass uploads its slice (`ChunkedPiece._run_pass`): Prism prices its slices, never the whole
+    (`LayerPartitioner._region_peak`), and the strategy does not bring it to the device
+    (`LayerStreamingStrategy._run_pieces`). HAT-L at 2048 px on 16 GB: its last stretch read the long skips whole,
+    15.3 GB at a slice of one window row against 14.1 GB (2026-10-22)."""
+    whole: Set[str] = set()
+    for cp in plan.passes:
+        if cp.chunked:
+            continue
+        made: Set[str] = set()
+        for uid in cp.ops:
+            op = ops.get(uid) or {}
+            whole.update(t for t in op.get("input_tensor_ids") or [] if t not in made)
+            made.update(op.get("output_tensor_ids") or [])
+    outs = set(plan.outputs)
+    return {t for t in plan.inputs if t in plan.layouts and t not in outs and t not in whole}
+
+
 def take_slice(x: Any, lay: Layout, total: int, inner: Optional[int], start: int, length: int) -> Any:
     """The slice [start, start+length) of the axis of a WHOLE tensor `x`, contiguous. A broadcast
     (`inner` None) is constant along the axis: its first extent at `length` is the slice —

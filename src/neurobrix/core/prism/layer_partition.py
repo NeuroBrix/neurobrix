@@ -36,6 +36,8 @@ reported with its arithmetic rather than approximated.
 
 from __future__ import annotations
 
+import os
+
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
 
@@ -111,8 +113,12 @@ class LayerPartitioner:
                  symbol_map: Optional[Dict[str, int]] = None,
                  compute_dtype_bytes: Optional[int] = None,
                  widths: Optional[Dict[str, int]] = None,
-                 token_split: bool = False, swap_values: bool = False):
+                 token_split: bool = False, swap_values: bool = False, beyond_walls: bool = False):
         self._dag = graph
+        # Whether a stretch may enclose its same-axis neighbour and keep its slice-only inputs on the host
+        # (`_new_region`, `_fit_slice`): the solver's last stretch rung, after the parked rung declined —
+        # every plan the cuts before it make is the one it was.
+        self._beyond = bool(beyond_walls)
         # Whether a refusal on what the pieces hold may be answered by parking the values between pieces
         # on the host (`_greedy_swapped`). The solver turns it on only once the cuts that move nothing
         # have refused: a parked value crosses the host link twice.
@@ -414,6 +420,12 @@ class LayerPartitioner:
         rule) as intervals, a VIEW of an activation held as its root's buffer: no bytes of its own, the root's last
         use extended to the view's (counted as a buffer of its own, a parked piece read HAT-S's 6 912 MB
         `aten.view::10` twice, 2026-10-22)."""
+        # a function of the graph, the request and the protected ids alone: computed once per protected set (the
+        # region search asked it 2 031 times for HAT-L at 2048 px, 425 of a 574 s plan, 2026-10-22)
+        memo_key = frozenset(self.protected)
+        memo = self.__dict__.setdefault("_intervals_memo", {})
+        if memo_key in memo:
+            return memo[memo_key]
         from neurobrix.core.prism.profiler import VIEW_OP_TYPES, ZERO_ALLOC_OP_TYPES
         last = dict(self._last_use())
         prod: Dict[str, int] = {}
@@ -444,6 +456,7 @@ class LayerPartitioner:
         for tid, r in root.items():
             if last.get(tid, -1) > last.get(r, -1):
                 last[r] = last[tid]
+        memo[memo_key] = (prod, last, size, root)
         return prod, last, size, root
 
     def _greedy_swapped(self, budget_bytes: int, max_arena_bytes: Optional[int] = None,
@@ -771,7 +784,7 @@ class LayerPartitioner:
         acc = contraction_accumulator_bytes(width)
         return numel * (2 * acc + (acc if acc != width else 0))
 
-    def _region_peak(self, ax, plan, c: int) -> int:
+    def _region_peak(self, ax, plan, c: int, host: bool = False) -> int:
         """What a stretch run in slices of `c` holds at its worst: everything live before it (held
         until its last pass), its outputs assembled whole, each contraction's accumulator and the
         sum that replaces it (`_accumulator_bytes`, its store included), and the worst pass — its
@@ -781,8 +794,12 @@ class LayerPartitioner:
         if self._swap and self._token_split:
             # the values between pieces wait on the host: before it, the stretch holds the buffers it READS, brought
             # whole to the device (each view's root once), never what else is live (`LayerStreamingStrategy._run_pieces`)
+            # — and of those, an input read only in slices stays on the host, its slices uploaded pass by pass
+            # (`chunked_region.sliced_reads`; counted in `fed` below)
+            from neurobrix.core.prism.chunked_region import sliced_reads
             _prod, _last, size, root = self._value_intervals()
-            before = sum(size.get(r, 0) for r in {root.get(t, t) for t in plan.inputs})
+            on_host = sliced_reads(plan, self.ops) if host else set()
+            before = sum(size.get(r, 0) for r in {root.get(t, t) for t in plan.inputs if t not in on_host})
         else:
             curve = self.live_activation_curve()
             before = curve[plan.first - 1] if plan.first > 0 else 0
@@ -840,62 +857,110 @@ class LayerPartitioner:
                 return regions, ""
             owner = next((r for r in regions if r.first <= h <= r.last), None)
             if owner is not None:
-                c = self._largest_slice(owner.axis, owner.plan, target, owner.slice - 1)
+                c, host = self._fit_slice(owner.axis, owner.plan, target, owner.slice - 1, owner.host_reads,
+                                          host_only=None if self._beyond else False)
                 if c is None:
                     return None, (f"the stretch {owner.first_op!r}..{owner.last_op!r} peaks at "
                                   f"{self._region_peak(owner.axis, owner.plan, 1) / _MB:.1f} MB in "
                                   f"slices of one {owner.symbol}, over the {target / _MB:.1f} MB its "
                                   f"activations may hold")
-                owner.set_slice(c, self._region_peak(owner.axis, owner.plan, c), self._symbol_map)
+                owner.host_reads = host
+                owner.set_slice(c, self._region_peak(owner.axis, owner.plan, c, host), self._symbol_map)
                 continue
             best: Optional[_Region] = None
             whys: List[str] = []
             from neurobrix.core.prism.chunked_region import axis_units
             # every token symbol, and each in the unit its graph divides it by (a window's rows)
-            for sym, unit in [(sy, u) for sy in syms for u in [1] + axis_units(self._dag, sy)]:
-                ax = self._axis(sym, unit)
-                if not ax.fits_units(self._symbol_map):
-                    whys.append(f"{sym} in units of {unit}: the request is not a whole number of the units "
-                                f"{ax.units} its graph divides its symbols by")
+            units_memo = self.__dict__.setdefault("_axis_units_memo", {})
+            for sy in syms:
+                if sy not in units_memo:
+                    units_memo[sy] = axis_units(self._dag, sy)
+            # the neighbours as walls first; enclosing one only where no stretch fits without it (`_new_region`): the
+            # cut that changes the least, as every rung of the ladder is tried after the cheaper ones
+            # and a stretch's inputs whole on the device before the host holds them (`_fit_slice`)
+            for absorb, host_ok in ((False, False), (False, True), (True, False), (True, True)):
+                if (absorb or host_ok) and not self._beyond:
                     continue
-                got, why = self._new_region(ax, h, eff, target, regions)
-                if got is None:
-                    whys.append(f"{sym}{'' if unit == 1 else f' in units of {unit}'}: {why}")
-                elif best is None or (got.count, got.peak_bytes) < (best.count, best.peak_bytes):
-                    best = got
+                if host_ok and not (self._swap and self._token_split):
+                    continue
+                for sym, unit in [(sy, u) for sy in syms for u in [1] + units_memo[sy]]:
+                    ax = self._axis(sym, unit)
+                    if not ax.fits_units(self._symbol_map):
+                        if not absorb:
+                            whys.append(f"{sym} in units of {unit}: the request is not a whole number of the units "
+                                        f"{ax.units} its graph divides its symbols by")
+                        continue
+                    got, why = self._new_region(ax, h, eff, target, regions, absorb=absorb, host_ok=host_ok)
+                    if got is None:
+                        whys.append(f"{sym}{'' if unit == 1 else f' in units of {unit}'}"
+                                    f"{', its neighbours enclosed' if absorb else ''}"
+                                    f"{', its slice-only inputs on the host' if host_ok else ''}: {why}")
+                    elif best is None or (got.count, got.peak_bytes) < (best.count, best.peak_bytes):
+                        best = got
+                if best is not None:
+                    break
             if best is None:
                 return None, (f"{self.order[h]!r} holds {eff[h] / _MB:.1f} MB of activations "
                               f"against {target / _MB:.1f} MB — " + "; ".join(whys))
+            # a neighbour the new stretch contains whole is absorbed (`_new_region`): its ops run in the new one's slices
+            regions[:] = [r for r in regions if not (best.first <= r.first and r.last <= best.last)]
             regions.append(best)
             regions.sort(key=lambda r: r.first)
 
-    def _largest_slice(self, ax, plan, target: int, upper: int) -> Optional[int]:
+    def _fit_slice(self, ax, plan, target: int, upper: int, host_first: bool = False,
+                   host_only: Optional[bool] = None) -> Tuple[Optional[int], bool]:
+        """(the largest slice that fits, whether its slice-only inputs stay on the host). With the values between pieces
+        parked, a stretch's inputs read only in slices may stay on the host, each pass uploading its slice — taken only
+        where no slice fits with them whole on the device: the host copy and the uploads cost time a stretch that fits
+        does not need (HAT-S at 2048 px on 16 GB ran 1.7x slower with every stretch reading from the host, 2026-10-22)."""
+        if host_only is not None:      # the region search's stage asks one way only
+            if host_only:
+                return ((self._largest_slice(ax, plan, target, upper, host=True), True)
+                        if self._swap and self._token_split else (None, False))
+            return self._largest_slice(ax, plan, target, upper), False
+        if not host_first:
+            c = self._largest_slice(ax, plan, target, upper)
+            if c is not None or not (self._swap and self._token_split):
+                return c, False
+        if self._swap and self._token_split:
+            return self._largest_slice(ax, plan, target, upper, host=True), True
+        return None, False
+
+    def _largest_slice(self, ax, plan, target: int, upper: int, host: bool = False) -> Optional[int]:
         """The largest slice in [1, upper] whose stretch peak is at most `target`, or None."""
-        if upper < 1 or self._region_peak(ax, plan, 1) > target:
+        if upper < 1 or self._region_peak(ax, plan, 1, host) > target:
             return None
         lo, hi = 1, upper
         while lo < hi:
             mid = (lo + hi + 1) // 2
-            if self._region_peak(ax, plan, mid) <= target:
+            if self._region_peak(ax, plan, mid, host) <= target:
                 lo = mid
             else:
                 hi = mid - 1
         return lo
 
-    def _new_region(self, ax, h: int, eff: List[int], target: int, regions: Sequence["_Region"]
-                    ) -> Tuple[Optional["_Region"], str]:
+    def _new_region(self, ax, h: int, eff: List[int], target: int, regions: Sequence["_Region"],
+                    absorb: bool = True, host_ok: bool = True) -> Tuple[Optional["_Region"], str]:
         """A stretch around op `h` run in slices of `ax.sym`: the ops over the target around it
         (none may mix the axis), widened to the seams where the least is live — before its first op
         and after its last — among the ops that do not mix the axis either."""
         from neurobrix.core.prism.chunked_region import MIX, plan_region, region_carriers
         if ax.verdicts[h].kind == MIX:
             return None, f"{self.order[h]} mixes the axis ({ax.verdicts[h].reason})"
+        # An existing stretch on THIS axis is no wall: a seam may enclose it whole, and the two run as one, in one
+        # slicing — what passed between them never exists whole (HAT-L at 2048 px on 16 GB: the stretch making the
+        # overlapping-window cross attention's unfolded K and V stopped at the attention's own stretch, and handed
+        # them out whole, 15 840 MB, 2026-10-22). A seam inside one is refused (below); another axis' stretch is a wall.
         taken: Set[int] = set()
         for r in regions:
-            taken.update(range(r.first, r.last + 1))
+            if not absorb or r.axis.sym != ax.sym or r.axis.unit != ax.unit:
+                taken.update(range(r.first, r.last + 1))
 
         def free(i: int) -> bool:
             return 0 <= i < len(self.order) and i not in taken and ax.verdicts[i].kind != MIX
+
+        def cuts_one(L: int, R: int) -> bool:
+            return any((r.first < L <= r.last) or (r.first <= R < r.last) for r in regions)
 
         lo = hi = h
         while free(lo - 1) and eff[lo - 1] > target:
@@ -949,8 +1014,10 @@ class LayerPartitioner:
                             seen.add(t)
                 # an output crossing out is ASSEMBLED whole by the stitch: a broadcast view's full extent, not its 0
                 return sum(self._activation_bytes(t, self.tensors[t]) for t in seen)
-            cin = {L: cross_in(L) for L in range(lo, max(span_lo, lo - 64) - 1, -1)}
-            cout = {R: cross_out(R) for R in range(hi, min(span_hi, hi + 64) + 1)}
+            ends_l = [r.first for r in regions if span_lo <= r.first <= lo]
+            ends_r = [r.last for r in regions if hi <= r.last <= span_hi]
+            cin = {L: cross_in(L) for L in list(range(lo, max(span_lo, lo - 64) - 1, -1)) + ends_l}
+            cout = {R: cross_out(R) for R in list(range(hi, min(span_hi, hi + 64) + 1)) + ends_r}
             lefts = sorted(cin, key=lambda L: (cin[L], lo - L))[:3]
             rights = sorted(cout, key=lambda R: (cout[R], R - hi))[:3]
             pairs = sorted(((L, R) for L in lefts for R in rights), key=lambda p: (cin[p[0]] + cout[p[1]], p[1] - p[0]))
@@ -963,22 +1030,25 @@ class LayerPartitioner:
         total = int(self._symbol_map[ax.sym]) // ax.unit
         why = f"no seam around {self.order[h]} leaves the stretch under {target / _MB:.1f} MB"
         for L, R in pairs:
+            if cuts_one(L, R):
+                continue
             plan, no = plan_region(ax, L, R, protected=self.protected,
                                    carriers=region_carriers(self._dag, self.order[L:R + 1],
                                                             self._op_symbols()))
             if plan is None:
                 why = no
                 continue
-            c = self._largest_slice(ax, plan, target, total - 1)
+            c, host = self._fit_slice(ax, plan, target, total - 1, host_only=host_ok)
             if c is None:
                 why = (f"{self.order[L]}..{self.order[R]} peaks at "
-                       f"{self._region_peak(ax, plan, 1) / _MB:.1f} MB in slices of one")
+                       f"{self._region_peak(ax, plan, 1, self._swap and self._token_split) / _MB:.1f} MB in slices of one")
                 continue
             names: Set[str] = set()
             for uid in self.order[L:R + 1]:
                 names |= self._op_weight_names(uid)
             reg = _Region(axis=ax, plan=plan, weight_names=names)
-            reg.set_slice(c, self._region_peak(ax, plan, c), self._symbol_map)
+            reg.host_reads = host
+            reg.set_slice(c, self._region_peak(ax, plan, c, host), self._symbol_map)
             return reg, ""
         return None, why
 
@@ -995,6 +1065,9 @@ class _Region:
     slice: int = 0
     count: int = 0
     peak_bytes: int = 0
+    #: the inputs it reads only in slices stay on the host, each pass uploading its slice (`chunked_region.sliced_reads`)
+    #: — chosen only where no slice fits with them whole on the device (`LayerPartitioner._fit_slice`)
+    host_reads: bool = False
 
     @property
     def first(self) -> int:
@@ -1023,7 +1096,7 @@ class _Region:
     def record(self) -> Dict[str, Any]:
         return {"first_op": self.first_op, "last_op": self.last_op, "symbol": self.symbol,
                 "unit": self.plan.unit, "slice": self.slice, "count": self.count,
-                "passes": len(self.plan.passes), "peak_bytes": self.peak_bytes}
+                "passes": len(self.plan.passes), "peak_bytes": self.peak_bytes, "host_reads": self.host_reads}
 
 
 def rewire_arg(arg: Any, rewire: Dict[str, str]) -> Any:

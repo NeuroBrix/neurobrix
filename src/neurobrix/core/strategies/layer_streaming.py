@@ -500,7 +500,10 @@ class LayerStreamingStrategy(ExecutionStrategy):
             if swapped:
                 from neurobrix.core.strategies.value_parking import to_device, to_host
                 dev = getattr(seg_exec, "device", None)
-                reads = set(needed)
+                # a sliced stretch reads some of its inputs only in slices: those stay on the host, each pass
+                # uploading its slice (`ChunkedPiece.sliced_input_names`, the rule Prism prices)
+                by_slice = set(seg_exec.sliced_input_names()) if hasattr(seg_exec, "sliced_input_names") else set()
+                reads = set(needed) - by_slice
                 for n in list(values):
                     values[n] = to_device(values[n], dev) if n in reads else (
                         values[n] if n in final else to_host(values[n]))
