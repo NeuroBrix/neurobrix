@@ -273,13 +273,19 @@ def test_drop_ops_removes_every_planned_entry_touching_the_stretch():
 
 @pytest.mark.parametrize("mode", ["sequential", "compiled"])
 def test_a_contraction_s_slices_are_summed_in_the_engine_s_accumulator(mode, monkeypatch):
-    """The partials of K^T V (bf16, as the pass computes them on a card) are summed in the dtype the pass
-    executor's DtypeEngine names (`accumulation_dtype`: float32 for a half partial) and stored once
-    in the partial's own dtype — never summed at the pass dtype, which rounds once per slice where
-    the whole op rounds once.
+    """K^T V computes in bf16 on the pass, as on a card. Its first partial comes at bf16, narrower than the
+    accumulator the pass executor's DtypeEngine names (`accumulation_dtype`: float32 for a half partial),
+    so its producer is pinned at that width (`GraphExecutor.pin_fp32_ops`) and the pass runs again: every
+    partial summed is unrounded float32, and the sum is stored once in the op's own bf16 — as the whole
+    op, accumulating inside and rounding once. A partial rounded at bf16 before the sum rounds once per
+    slice: one value of 200 off by 0.096 (one bf16 step at that magnitude) against the whole run.
 
-    Injection (seen red, then restored green, 2026-10-05): `ChunkedPiece.run` takes the partial's
-    dtype as the accumulator instead of asking the executor -> the accumulator assertion red."""
+    Injections (seen red, then restored green):
+      2026-10-05: `ChunkedPiece.run` takes the partial's dtype as the accumulator instead of asking the
+        executor -> the accumulator assertion red.
+      2026-10-21: no pin (`_pins_of` returns nothing) -> bf16 partials summed -> the partial-dtype
+        assertion red in both engines; before the pin existed the value assertion was red in
+        sequential (max 0.0957 > 0.05)."""
     from neurobrix.core.dtype import engine as DE
     from neurobrix.core.strategies import chunked_piece as CP
     # placed as on a card: the host's fp32 rule would leave no half partial to sum
@@ -314,9 +320,9 @@ def test_a_contraction_s_slices_are_summed_in_the_engine_s_accumulator(mode, mon
     want = whole.run({"hidden_states": x})
     got = _streamed(mode, _chunk(2)).execute_component(COMPONENT, "loop", {"hidden_states": x})
     assert seen["acc"], "the stitch summed no contraction"
-    assert {p for p, _ in seen["acc"]} == {torch.bfloat16}, seen["acc"]
+    assert {p for p, _ in seen["acc"]} == {torch.float32}, seen["acc"]
     assert {d for _, d in seen["acc"]} == {torch.float32}, seen["acc"]
-    assert seen["store"] and {s for _, s in seen["store"]} == {torch.bfloat16}, seen["store"]
+    assert seen["store"] and set(seen["store"]) == {(torch.float32, torch.bfloat16)}, seen["store"]
     assert got["sample"].dtype == want["sample"].dtype == torch.bfloat16
     torch.testing.assert_close(got["sample"].float(), want["sample"].float(), rtol=5e-2, atol=5e-2)
 
@@ -327,3 +333,114 @@ def _half_graph_of(make, name):
     for t in g["tensors"].values():
         t["dtype"] = name
     return g
+
+
+def _cuda() -> bool:
+    try:
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
+
+
+def _on_card(monkeypatch, half):
+    """The test's graph and weights in `half` on card 0, for the Triton modes."""
+    from neurobrix.kernels.nbx_tensor import NBXTensor
+    card = lambda t: NBXTensor.from_numpy(t.to(torch.float16).numpy()).to_cuda()
+    monkeypatch.setitem(globals(), "WEIGHTS", {w: card(v) for w, v in WEIGHTS.items()})
+    monkeypatch.setattr(sys.modules[__name__], "_graph", lambda _g=_graph: _half_graph_of(_g, half))
+
+    def ex(m):
+        e = _CpuExecutor(family="image", vendor="nvidia", arch="volta", device="cuda:0",
+                         dtype=half, mode=m)
+        e.load_graph_from_dict(_graph())
+        return e
+    monkeypatch.setattr(sys.modules[__name__], "_executor", ex)
+    return ex, card
+
+
+@pytest.mark.skipif(not _cuda(), reason="the Triton modes live on a card")
+@pytest.mark.parametrize("mode", ["triton", "triton_sequential"])
+def test_the_triton_stitch_sums_at_the_accumulator_and_stores_the_op_s_own_dtype(mode, monkeypatch):
+    """The same stitch in the two Triton modes (R30), fp16 on the card: every partial summed is at the
+    accumulator's width the TritonDtypeEngine names (`accumulation_dtype`, which reads the triton.language
+    dtype an NBXTensor hands), the sum is stored once in the dtype the engine gave the op unpinned, and
+    the piece answers what the whole stretch answers. (On V100 fp16 this graph's K^T V comes fp32
+    already — the matmul store rule — so no pin is needed; the pin itself is held below.)
+
+    Injection (seen red, then restored green, 2026-10-21): `accumulation_dtype` on `NBXDtype(dtype)`
+    as on main -> "triton.language.float32 is not a valid NBXDtype" at the first partial, both modes."""
+    from neurobrix.core.strategies import chunked_piece as CP
+    from neurobrix.kernels.nbx_tensor import parse_dtype
+    name = lambda d: parse_dtype(d).name
+    seen = {"acc": [], "store": []}
+    real_acc, real_store = CP.accumulate, CP.store
+
+    def acc(a, part, dtype):
+        seen["acc"].append((name(part.dtype), name(dtype)))
+        return real_acc(a, part, dtype)
+
+    def store(a, dtype):
+        out = real_store(a, dtype)
+        seen["store"].append((name(a.dtype), name(out.dtype)))
+        return out
+    monkeypatch.setattr(CP, "accumulate", acc)
+    monkeypatch.setattr(CP, "store", store)
+    ex, card = _on_card(monkeypatch, "float16")
+    whole = ex(mode)
+    whole.load_weights(None, COMPONENT)
+    whole.run({"hidden_states": card(torch.randn(B, T_TRACE, D))})
+    kv = whole.tensors_of_last_run(["aten.bmm::0::out_0"]).get("aten.bmm::0::out_0")
+    x = torch.randn(B, 4 * T_TRACE + 1, D)
+    want = whole.run({"hidden_states": card(x)})["sample"].numpy().astype("float64")
+    got = _streamed(mode, _chunk(2)).execute_component(COMPONENT, "loop", {"hidden_states": card(x)})["sample"]
+    assert seen["acc"], "the stitch summed no contraction"
+    assert set(seen["acc"]) == {("float32", "float32")}, seen["acc"]     # the partial at the accumulator
+    if kv is not None:                                                  # stored in the op's own dtype
+        assert {s for _, s in seen["store"]} == {name(kv.dtype)}, (seen["store"], kv.dtype)
+    import numpy as np
+    np.testing.assert_allclose(got.numpy().astype("float64"), want, rtol=5e-2, atol=5e-2)
+
+
+@pytest.mark.parametrize("mode", ["sequential", "compiled", "triton", "triton_sequential"])
+def test_a_pinned_op_computes_and_keeps_fp32_from_the_next_run(mode, monkeypatch):
+    """`GraphExecutor.pin_fp32_ops` in every mode: the op's output, half before, is fp32 from the next
+    run on — compiled and triton rebuild their sequence with the pin, triton-sequential and
+    sequential resolve it through the contract (`precision_contract`) at the run.
+
+    Injection (seen red, then restored green, 2026-10-21): `precision_contract` returns the resolved
+    contract without the plan's pins -> the output stays half in the four modes."""
+    from neurobrix.core.dtype import engine as DE
+    if mode.startswith("triton"):
+        if not _cuda():
+            pytest.skip("the Triton modes live on a card")
+        ex, card = _on_card(monkeypatch, "float16")
+        half, x = "float16", card(torch.randn(B, T_TRACE, D))
+        from neurobrix.kernels.nbx_tensor import parse_dtype
+        name = lambda d: parse_dtype(d).name
+    else:
+        monkeypatch.setattr(DE, "compute_dtype_for_placement", lambda device, dtype: dtype)
+        weights = {w: v.to(torch.bfloat16) for w, v in WEIGHTS.items()}
+        monkeypatch.setitem(globals(), "WEIGHTS", weights)
+        monkeypatch.setattr(sys.modules[__name__], "_graph", lambda _g=_graph: _half_graph_of(_g, "bfloat16"))
+
+        def ex(m):
+            e = _CpuExecutor(family="image", vendor="nvidia", arch="volta", device="cpu",
+                             dtype="bfloat16", mode=m)
+            e.load_graph_from_dict(_graph())
+            return e
+        half, x = "bfloat16", torch.randn(B, T_TRACE, D).to(torch.bfloat16)
+        name = lambda d: str(d).replace("torch.", "")
+    q = FIRST + "::out_0"                 # an elementwise op: half under the half compute dtype
+    e = ex(mode)
+    e.protect_tensor_id(q)
+    e.load_weights(None, COMPONENT)
+    e.run({"hidden_states": x})
+    before = e.tensors_of_last_run([q])[q]
+    assert name(before.dtype) == half, before.dtype
+    e.pin_fp32_ops({FIRST})
+    e.run({"hidden_states": x})
+    after = e.tensors_of_last_run([q])[q]
+    assert name(after.dtype) == "float32", after.dtype
+    to64 = (lambda t: t.numpy().astype("float64")) if mode.startswith("triton") else (lambda t: t.double().numpy())
+    import numpy as np
+    np.testing.assert_allclose(to64(after), to64(before), rtol=2e-2, atol=2e-2)

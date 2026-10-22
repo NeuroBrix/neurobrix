@@ -49,3 +49,19 @@ def test_a_stretch_the_executed_graph_plans_otherwise_is_named(monkeypatch):
     miss = collections.Counter()
     D.sliced_bindings("M", "c", {"s0": 2, "s1": 11}, _plan(5, first="aten.nothing::0"), miss)
     assert any("not in the graph the executor runs" in k for k in miss), miss
+
+
+def test_a_contraction_s_producer_is_derived_pinned_on_its_sliced_pass(monkeypatch):
+    """The runtime computes a contraction's partial at the accumulator's width on its sliced pass
+    (`ChunkedPiece._pins_of` -> `GraphExecutor.pin_fp32_ops`), so the census derives that op's launch
+    as an island; its reader, fed the sum stored back in the op's own dtype, is derived as it is.
+
+    Injection (seen red, then restored green, 2026-10-21): `producers` emptied -> K^T V derived
+    unpinned, the key a certified-only run of a half stretch would miss."""
+    monkeypatch.setattr(D, "runtime_graph", lambda model, comp: G._graph())
+    got = D.sliced_bindings("M", "c", {"s0": 2, "s1": 11}, _plan(5), collections.Counter())
+    assert got
+    for ops, _b in got:
+        assert ops["aten.bmm::0"] is True, ops       # K^T V: the contraction over the tokens
+        assert ops["aten.bmm::1"] is False, ops      # q @ kv reads the stored sum
+        assert not any(p for u, p in ops.items() if u != "aten.bmm::0"), ops

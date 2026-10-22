@@ -108,9 +108,11 @@ def prompt_tokens(model: str, prompt: str) -> int:
 def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dict,
                      has_native_bf16: bool, sdpa_budget_bytes: int, sdpa_min_rows: int,
                      sdpa_max_chunks: int, unhandled: collections.Counter, tiling=None,
-                     tiled_tf=None, decode_kv=None):
+                     tiled_tf=None, decode_kv=None, pins=frozenset()):
     """[(op uid, kernel qual, key tuple)] for one component at one symbol binding. `tiling` is
     the plan's `TilingView` for the component (its op-level tiling, empty when it has none).
+    `pins`: ops a sliced pass runs at the accumulator's width (`sliced_bindings`), launched as a
+    contract island — their own operands only, the widths downstream unchanged.
 
     A component holding a VALUE-DERIVED axis (`value_axes`) is derived at every key class of
     that axis over its envelope at this binding: the ops outside the axis's cone once, the
@@ -119,7 +121,7 @@ def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dic
     from neurobrix.kernels import census as _census
     g = runtime_graph(model, comp)
     args = (model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_bytes, sdpa_min_rows,
-            sdpa_max_chunks, unhandled, tiling, tiled_tf, decode_kv)
+            sdpa_max_chunks, unhandled, tiling, tiled_tf, decode_kv, frozenset(pins))
     axes = value_axes(model, comp)
     if not axes:
         return _derive_at(*args)
@@ -266,8 +268,8 @@ def _triton_fp64() -> bool:
 
 
 def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_bytes, sdpa_min_rows,
-               sdpa_max_chunks, unhandled, tiling=None, tiled_tf=None, decode_kv=None, skip=(),
-               only=None, axis_values=None, axes=()):
+               sdpa_max_chunks, unhandled, tiling=None, tiled_tf=None, decode_kv=None, pins=frozenset(),
+               skip=(), only=None, axis_values=None, axes=()):
     """`derive_component`'s body at one binding — and, when `axis_values` names value-derived
     axes, at those extents (`only`: the ops to derive, `skip`: the ops not to)."""
     from neurobrix.core.prism import runtime_widths as RW
@@ -296,6 +298,16 @@ def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_
         # annotation contradicts itself is not derivable as a whole — named, never guessed.
         unhandled[f"component not derivable, annotation contradicts its trace — {e}"] += 1
         return []
+    # A sliced pass's pins (`GraphExecutor.pin_fp32_ops`) are islands on their own launches only: the
+    # stitch stores the contraction's sum back in the op's unpinned dtype, so the widths pass above
+    # (every reader of the sum) runs on the component's contract as it is.
+    # Pinned only where the partial comes half, as the stitch pins (narrower than its accumulator).
+    pins = frozenset(u for u in pins if any(rt.get(t) in ("float16", "bfloat16")
+                                           for t in ops[u].get("output_tensor_ids") or ()))
+    if pins:
+        import dataclasses as _dc
+        contract = _dc.replace(contract, fp32_op_uids=frozenset(contract.fp32_op_uids) | pins,
+                               narrow_op_uids=frozenset(contract.narrow_op_uids) - pins)
     dt0 = lambda tid: NBXDtype[rt[tid]] if rt.get(tid) in NBXDtype.__members__ else NBXDtype[{"float16": "float16", "float32": "float32", "bfloat16": "bfloat16"}[rt[tid]]]
     from neurobrix.triton import tiling_sizes as _TS
     conv_band_bytes = _TS.conv2d_band_bytes()
@@ -1229,8 +1241,8 @@ def sliced_bindings(model: str, comp: str, syms: dict, plan: dict, unhandled) ->
     length a slice READS (`slice_reads` over the slice count — the runtime's own split, widened by the stretch's
     halo). A pass
     that does not touch the axis runs once at the request's binding, already derived. One entry
-    per binding, its ops every stretch's at it: the component is derived once per length (SANA's
-    40 stretches take 4)."""
+    per binding, its ops every stretch's at it ({op uid: pinned at the accumulator's width}): the
+    component is derived once per length (SANA's 40 stretches take 4)."""
     from neurobrix.core.prism.chunked_region import (
         TokenAxis, plan_region, region_carriers, slice_reads)
     chunks = (plan.get("layer_stream_chunks") or {}).get(comp) or []
@@ -1258,12 +1270,16 @@ def sliced_bindings(model: str, comp: str, syms: dict, plan: dict, unhandled) ->
                       f"{'no pass: ' + why if rp is None else str(len(rp.passes)) + ' passes'} on "
                       f"the graph the executor runs, the plan {ch['passes']}"] += 1
             continue
-        ops_ = {u for cp in rp.passes if cp.chunked for u in cp.ops}
+        # {op uid: pinned} — a contraction's producer on a sliced pass computes its partial at the
+        # accumulator's width (`ChunkedPiece._pins_of`); an fp32 partial is unchanged by the pin
+        made = {t: u for u in ax.order[lo:hi + 1] for t in (g["ops"][u].get("output_tensor_ids") or ())}
+        producers = {made[t] for t in rp.contractions if t in made}
+        ops_ = {u: u in producers for cp in rp.passes if cp.chunked for u in cp.ops}
         total = int(syms[sym])
         # a slice runs at the length it READS — its rows plus the stretch's halo (`slice_reads`, the executor's own)
         for length in sorted({n for *_o, _s, n in slice_reads(total, -(-total // int(ch["slice"])), rp.margin)}):
             if length != total:
-                out.setdefault((sym, length), set()).update(ops_)
+                out.setdefault((sym, length), {}).update(ops_)
     return [(ops_, {**syms, sym: length}) for (sym, length), ops_ in sorted(out.items())]
 
 
@@ -2118,7 +2134,8 @@ def derive_keys(model: str, hardware: str, mode: str, rung, request: list):
                 for uid, q_, key in derive_component(a.model, comp, c["dtype"], a.mode, b_,
                                                     prof.has_native_bf16, budget, min_rows,
                                                     max_chunks, unhandled, tiling=view,
-                                                    tiled_tf=tiled_tf):
+                                                    tiled_tf=tiled_tf,
+                                                    pins=frozenset(u for u, p in ops_.items() if p)):
                     if uid in ops_:
                         derived.add((uid, q_, C.key_repr(key)))
     defaults = json.loads((CACHE / a.model / "runtime" / "defaults.json").read_text()) \
