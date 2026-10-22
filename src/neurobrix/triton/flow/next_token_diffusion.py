@@ -111,6 +111,29 @@ def special_token_id(tok, name: str) -> Optional[int]:
     return int(ids[0]) if ids and len(ids) == 1 else None
 
 
+def control_token_ids(tok, defaults: Dict[str, Any]):
+    """(speech start, speech end, speech diffusion, eos, the valid next tokens) — every id resolved from the tokenizer
+    and the defaults, refused by name when one cannot be. The valid tokens are the rows the flow's constrained logits
+    project on (`_generate_kv`: last hidden @ their embedding rows): ONE rule for the flow and the derived census."""
+    def _require(nm: str, val: Optional[int]) -> int:
+        if val is None:
+            raise RuntimeError(f"ZERO FALLBACK: could not resolve {nm} token id from tokenizer/defaults.")
+        return int(val)
+
+    speech_start_id = _require("speech_start", special_token_id(tok, SPEECH_START_TOKEN))
+    speech_end_id = _require("speech_end", special_token_id(tok, SPEECH_END_TOKEN))
+    speech_diffusion_id = _require("speech_diffusion", special_token_id(tok, SPEECH_DIFFUSION_TOKEN))
+    _eos = defaults.get("eos_token_id")
+    if _eos is None:
+        _eos = special_token_id(tok, "<|endoftext|>")
+    eos_token_id = _require("eos", _eos)
+    valid: List[int] = [speech_start_id, speech_end_id, speech_diffusion_id, eos_token_id]
+    bos_token_id = defaults.get("bos_token_id")
+    if bos_token_id is not None:
+        valid.append(int(bos_token_id))
+    return speech_start_id, speech_end_id, speech_diffusion_id, eos_token_id, valid
+
+
 def speaker_prompt_ids(tok, prompt: str, speech_start_id: int) -> List[int]:
     """The LM's prompt context: the speaker instruction around `prompt`, closed by the speech
     start token. The flow prefills it; the derived census keys its length from here."""
@@ -168,26 +191,8 @@ class TritonNextTokenDiffusionEngine:
             raise RuntimeError("ZERO FALLBACK: next_token_diffusion requires a tokenizer module.")
 
         # ── special token ids (no hardcode: resolved from tokenizer/defaults) ──
-        def tid(name: str) -> Optional[int]:
-            return special_token_id(tok, name)
-
-        def _require(nm: str, val: Optional[int]) -> int:
-            if val is None:
-                raise RuntimeError(f"ZERO FALLBACK: could not resolve {nm} token id from tokenizer/defaults.")
-            return int(val)
-
-        speech_start_id = _require("speech_start", tid(SPEECH_START_TOKEN))
-        speech_end_id = _require("speech_end", tid(SPEECH_END_TOKEN))
-        speech_diffusion_id = _require("speech_diffusion", tid(SPEECH_DIFFUSION_TOKEN))
-        _eos = defaults.get("eos_token_id")
-        if _eos is None:
-            _eos = tid("<|endoftext|>")
-        eos_token_id = _require("eos", _eos)
-        bos_token_id = defaults.get("bos_token_id")
-
-        valid_token_ids: List[int] = [speech_start_id, speech_end_id, speech_diffusion_id, eos_token_id]
-        if bos_token_id is not None:
-            valid_token_ids.append(int(bos_token_id))
+        speech_start_id, speech_end_id, speech_diffusion_id, eos_token_id, valid_token_ids = \
+            control_token_ids(tok, defaults)
         valid_arr = np.array(valid_token_ids, dtype=np.int64)
 
         # ── generation / diffusion params (data-driven) ──

@@ -1599,6 +1599,11 @@ def extent_sites(model: str, topo: dict, defaults: dict, plan: dict, prompt: str
         def decode(n, lm=lm, kvp=kvp):
             return [(lm, {"__decode__": {"len": n, "dtype": kvp["dtype"].name,
                                          "heads": kvp["num_kv_heads"]}})]
+        # every step projects the last hidden, in fp32, on the embedding rows of the valid next tokens
+        # (`_generate_kv`: [1, H] @ [H, n_valid], the flow's own `control_token_ids`)
+        n_valid = len(NTD.control_token_ids(tok, defaults)[4])
+        prefill.flow_launches = decode.flow_launches = _flow_logits(model, lm, (n_valid, dim, "float32"),
+                                                                     has_native_bf16)
         sites.append((f"{lm} prompt prefill", P, P, prefill))
         lo = P + 1
         if cfg != 1.0:
@@ -1618,8 +1623,18 @@ def extent_sites(model: str, topo: dict, defaults: dict, plan: dict, prompt: str
     # over the WHOLE context every step — the chat-templated prompt around the modality span
     # (`tokenize_around_span`) with the vision tokens spliced in: L0 .. L0 + max_tokens - 1.
     if flow.get("type") == "vlm" and image_path and prompt:
-        sites.extend(_vlm_sites(model, topo, defaults, plan, image_path, prompt, max_tokens_req,
-                                has_native_bf16, sdpa))
+        _new = _vlm_sites(model, topo, defaults, plan, image_path, prompt, max_tokens_req, has_native_bf16, sdpa)
+        # the flow's own logits after every LM step (`vlm._compute_logits`: the head's weight, cast to the hidden's
+        # dtype, over the last position) — the head component the topology names; a VLM without one ties the
+        # embedding, which no container here does: refused by name rather than guessed
+        _v = topo["flow"]["vlm"]
+        if not _v.get("head_component"):
+            raise SystemExit(f"{model}: a VLM with no head component — the tied-embedding logits are not derived")
+        _rows = _head_rows(model, None, _v["head_component"])
+        _fl = _flow_logits(model, _v["lm_component"], (_rows[0], _rows[1], None), has_native_bf16)
+        for _site in _new:
+            _site[3].flow_launches = _fl
+        sites.extend(_new)
     # encoder_decoder (triton/flow/encoder_decoder.py `_decode_one_window`): the decoder runs ONE
     # token per step on the encoder's frames — its self-attentions through the KV cache (step 1 a
     # prefill of one token, then the cache's 2 .. max_tokens - 1), its cross-attentions native
@@ -1689,6 +1704,36 @@ class _Stub:
     """The attributes the frontend helpers read from a flow context — nothing else."""
     def __init__(self, **kw):
         self.__dict__.update(kw)
+
+
+def _flow_logits(model, lm, rows, has_native_bf16):
+    """What a flow launches itself after its LM, every step: its logits — the LM's last position [1, H] times the
+    `rows` [V, H] weight transposed, through `matmul_wrapper` (M = 1: the GEMV), the weight cast to the hidden's dtype
+    first (`vlm._compute_logits` / `audio_llm._compute_logits` `_proj`, `next_token_diffusion._generate_kv` in fp32) —
+    keyed at the dtypes the LM's step gives its output. `rows`: (V, H, the dtype both operands take, or None for the
+    LM output's own). A chain carries it as `flow_launches`; the extent loop asks it after the LM's derivation."""
+    from neurobrix.kernels import launch_keys as _LK
+    from neurobrix.kernels.nbx_tensor import NBXDtype
+    out_tid = raw_graph(model, lm)["output_tensor_ids"][0]
+    V, H, fixed = rows
+
+    def launches(comp, dts):
+        if comp != lm:
+            return []
+        dt = NBXDtype[fixed] if fixed else NBXDtype[dts[out_tid]]
+        return [(None, q_, key) for q_, key in _LK.mm_launches(1, int(H), int(V), dt, dt, has_native_bf16)]
+    return launches
+
+
+def _head_rows(model, _unused, head):
+    """(V, H) of the weight a flow's logits read from a head component: its first 2-D parameter, the flow's own rule
+    (it projects on the head executor's first 2-D weight)."""
+    g = raw_graph(model, head)
+    for t, m in g["tensors"].items():
+        shp = m.get("shape") or []
+        if t.startswith("param::") and len(shp) == 2:
+            return int(shp[0]), int(shp[1])
+    raise SystemExit(f"{model}: {head} holds no 2-D weight — the flow's logits have nothing to read")
 
 
 def _encoder_decoder_sites(model, topo, defaults, plan, has_native_bf16):
@@ -2108,10 +2153,14 @@ def derive_extents(model, mode, topo, defaults, plan, has_native_bf16, sdpa, unh
                                 for sid, i in ((g.get("symbolic_context") or {})
                                                .get("symbols") or {}).items()}
                         d["dtype"] = NBXDtype[str(d["dtype"]).replace("torch.", "")]
+                        _dts = {}
                         launches = derive_component(model, comp, dtypes[comp], mode, syms,
                                                     has_native_bf16, *sdpa, unhandled, tiling=view,
-                                                    tiled_tf=tiled_tf, decode_kv=d)
+                                                    tiled_tf=tiled_tf, decode_kv=d, out_dtypes=_dts)
                         keys |= set(launches)
+                        _fl = getattr(chain, "flow_launches", None)
+                        if _fl is not None:
+                            keys |= set(_fl(comp, _dts))
                         continue
                     inputs = dict(feed(outs) if callable(feed) else feed)
                     kv = inputs.pop("__kv__", None)

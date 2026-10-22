@@ -371,7 +371,9 @@ def _get_embed_weight(ctx, comp_name):
     """Get TOKEN embedding weight for weight-tied logits (`tied_embedding_name`)."""
     executor = ctx.executors.get(comp_name)
     if executor is not None and hasattr(executor, '_weights'):
-        name = tied_embedding_name({k: tuple(w.shape) for k, w in executor._weights.items()})
+        # every weight by name, a shape where it has one (an entry without one is no embedding: its name is seen,
+        # its rows never compared — the whisper decoder holds such entries, 2026-10-22 gate)
+        name = tied_embedding_name({k: tuple(getattr(w, "shape", ()) or ()) for k, w in executor._weights.items()})
         return None if name is None else executor._weights[name]
     return None
 
