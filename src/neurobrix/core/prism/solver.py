@@ -4095,12 +4095,14 @@ class PrismSolver:
             for _sid, _spec in syms.items():
                 if not isinstance(_spec, dict) or _sid not in used_by_tensors:
                     continue          # no tensor carries it: the peak is at trace
-                # The profiler walked the graph at `_map`: a symbol it binds is followed whatever its value — a
-                # post-loop decoder's batch bound by the flow to the request's 1 equals its trace's 1, and scaling it
-                # by the guidance-doubled `batch_size` priced Sana 4K's VAE at twice its walk (39 520 MB for 19 760,
-                # 2026-10-22). Only a symbol the map leaves unbound is sized at its trace and scaled here.
-                if isinstance(_map.get(_sid), int):
+                _t = _spec.get("trace_value")
+                _m = _map.get(_sid)
+                if isinstance(_m, int) and isinstance(_t, int) and _m != _t:
                     bound_to_request.add(_sid)
+            # a symbol the request's FLOW binds (`FlowBindings.overrides`: a VACE control pair, an encoder's length) is
+            # followed by the profiler whatever its value — equal to its trace, it was scaled again here
+            if getattr(input_config, "flow", None) is not None:
+                bound_to_request.update(input_config.flow.overrides(graph, input_config))
         except Exception as _e:
             # Said, not swallowed: without this set the scaler would double every
             # dimension the profiler resolved, and a silent fallback here is the
@@ -4146,6 +4148,15 @@ class PrismSolver:
             actual = getattr(input_config, attr, None)
             if actual in (None, 0):
                 continue
+            # The guidance batch is the LOOP's (`flow_bindings`: the CFG engine batches [uncond, cond] for the loop
+            # components and nothing else; an iterative flow encodes the negative prompt as a pass of its own and decodes
+            # the one guided latent). A component outside the loop is scaled against the request's own batch: against the
+            # doubled one, Sana 4K's VAE was priced at twice its walk (39 520 MB for 19 760, 2026-10-22).
+            if attr == "batch_size" and getattr(input_config, "guidance_passes", None):
+                _flow = getattr(getattr(input_config, "flow", None), "flow", None) or {}
+                if (_flow.get("type") == "iterative_process"
+                        and getattr(comp, "name", None) not in ((_flow.get("loop") or {}).get("components") or [])):
+                    actual = int(actual) // int(input_config.guidance_passes)
             # Put the request into the SYMBOL's unit before dividing. A model
             # with a VAE declares its spatial symbols in latent rows/columns:
             # measured 2026-09-17, Sana-1600M declares height/width with a trace
