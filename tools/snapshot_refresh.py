@@ -29,7 +29,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "tools"))
 import repo_env  # noqa: E402
 
-PY = _atelier.python("forge")
+PY = _atelier.interpreter("forge")
 FORGE = REPO / "forge" / "forge.py"
 
 
