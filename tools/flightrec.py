@@ -57,11 +57,24 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "tools"))
 
 
+REC_DIR = None      # set by a test; otherwise rec_dir() reads the workshop
+FSCK_FILE = None
+
+
 def rec_dir() -> Path:
-    """The flight records' directory: the machine's run register (`docs/internal/_atelier.md` §2, `registres/runs/`),
-    never the repository (they were `<repo>/.flightrec/`); refused by name where atelier.json declares no register."""
+    """The flight records' directory: `NBX_FLIGHTREC_DIR` when given (the role override atelier.py allows), else the
+    machine's run register (`docs/internal/_atelier.md` §2, `registres/runs/flightrec/`), never the repository (they
+    were `<repo>/.flightrec/`); refused by name where atelier.json declares no register."""
+    if REC_DIR is not None:
+        return Path(REC_DIR)
+    if os.environ.get("NBX_FLIGHTREC_DIR"):
+        return Path(os.environ["NBX_FLIGHTREC_DIR"])
     from atelier import registre
     return registre("runs", "flightrec")
+
+
+def fsck_file() -> Path:
+    return Path(FSCK_FILE) if FSCK_FILE is not None else rec_dir() / "fsck.json"
 BOOT_ID_FILE = Path("/proc/sys/kernel/random/boot_id")
 
 
@@ -174,9 +187,9 @@ def fsck_verdict(force: bool = False) -> dict:
     exists for the current boot id (a power cut is a boot boundary, so a clean
     verdict holds until the next one), else measured now and recorded."""
     boot = current_boot_id()
-    if not force and (rec_dir() / "fsck.json").exists():
+    if not force and fsck_file().exists():
         try:
-            rec = json.loads((rec_dir() / "fsck.json").read_text())
+            rec = json.loads(fsck_file().read_text())
             if rec.get("boot_id") == boot and "clean" in rec:
                 return rec
         except (json.JSONDecodeError, OSError):
@@ -185,7 +198,7 @@ def fsck_verdict(force: bool = False) -> dict:
     rec = {"boot_id": boot, "clean": code == 0, "exit_code": code,
            "checked_iso": time.strftime("%Y-%m-%d %H:%M:%S"), "report": out}
     rec_dir().mkdir(parents=True, exist_ok=True)
-    write_record((rec_dir() / "fsck.json"), rec)
+    write_record(fsck_file(), rec)
     return rec
 
 
