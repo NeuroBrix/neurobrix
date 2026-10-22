@@ -390,7 +390,7 @@ def main() -> int:
     ap.add_argument("--cells", default=os.path.join(REPO, "benchmarks", "harness",
                                                     "vendor_cells.yml"))
     ap.add_argument("--out", required=True)
-    ap.add_argument("--src", default="/home/mlops/nbx_converge_mac/src")
+    ap.add_argument("--src", default=str(Path(__file__).resolve().parents[1] / "src"))
     ap.add_argument("--mode", default="triton", choices=["triton", "compiled"])
     ap.add_argument("--family", default=None)
     ap.add_argument("--id", dest="cell_id", default=None)

@@ -16,6 +16,7 @@ component metadata and the shard sizes.
 
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import datetime
 import json
@@ -24,7 +25,7 @@ import sys
 import traceback
 from pathlib import Path
 
-CACHE = Path.home() / "Mounts" / "Super-NeuroBrix-Cache"
+CACHE = _atelier.root("cache")
 
 
 def main() -> int:

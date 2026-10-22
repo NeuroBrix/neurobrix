@@ -136,7 +136,7 @@ def main() -> int:
     ap.add_argument("--model", default="DeepSeek-Coder-V2-Lite-Instruct")
     ap.add_argument("--ollama-tag", default="deepseek-coder-v2:16b")
     ap.add_argument("--ollama-host", default="http://127.0.0.1:11434")
-    ap.add_argument("--src", default="/home/mlops/nbx_converge_mac/src")
+    ap.add_argument("--src", default=str(Path(__file__).resolve().parents[1] / "src"))
     ap.add_argument("--mode", default="triton",
                     choices=["triton", "compiled", "sequential", "triton_sequential"])
     ap.add_argument("--max-tokens", type=int, default=48)

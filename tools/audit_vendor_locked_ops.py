@@ -28,6 +28,7 @@ gate on the catalogue.
 
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import collections
 import json
@@ -100,7 +101,7 @@ def _lock(op: str) -> str | None:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--cache", default=str(Path.home() / ".neurobrix" / "cache"))
+    ap.add_argument("--cache", default=str(_atelier.root("cache")))
     ap.add_argument("--json", dest="json_out", default=None)
     args = ap.parse_args()
 

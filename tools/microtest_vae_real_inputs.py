@@ -15,13 +15,14 @@ If all wrappers are bit-exact on real inputs too, the bug is elsewhere
 op-uid_interceptors and the kernel that doesn't fire in standalone
 wrapper invocation).
 """
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 from pathlib import Path
 import sys
 
-ROOT = Path("/home/mlops/NeuroBrix_System")
-DUMP_DIR = ROOT / "validation_outputs/p_sana_4kpx_runtime/audit_spaghetti_2026_05_05/vae_op_input_dumps"
-OUT_MD = ROOT / "validation_outputs/p_sana_4kpx_runtime/audit_spaghetti_2026_05_05/microtest_vae_real_inputs_report.md"
+ROOT = Path(__file__).resolve().parents[1]
+DUMP_DIR = _atelier.root("campaigns") / "p_sana_4kpx_runtime/audit_spaghetti_2026_05_05/vae_op_input_dumps"
+OUT_MD = _atelier.root("campaigns") / "p_sana_4kpx_runtime/audit_spaghetti_2026_05_05/microtest_vae_real_inputs_report.md"
 
 sys.path.insert(0, str(ROOT / "src"))
 

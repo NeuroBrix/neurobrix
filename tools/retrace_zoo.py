@@ -33,6 +33,7 @@ Steps per model (state in <out>/<model>/state.json, each idempotent):
 """
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import shlex
 import argparse
 import hashlib
@@ -55,15 +56,15 @@ repo_env.load()
 # Forge moves onto the engine environment behind the executed graph gate (2026-09-26, queue
 # item 7), and that gate is this tool run with Forge's python switched — a literal here would
 # have made the switch a code edit instead of a measurement.
-PY = os.environ.get("NBX_FORGE_PYTHON", "/home/mlops/ml/venv/bin/python")
+PY = os.environ.get("NBX_FORGE_PYTHON", _atelier.python("forge"))
 # The ENGINE's interpreter for the two gate arms — the stack the rack serves with. Read through
 # one door (`NBX_PYTHON`, the name `certify_the_catalogue.py` already reads) so a stack switch
 # moves every tool at once; the toolchain keeps its own venv (2026-09-20, the torch 2.14 /
 # triton 3.8 switch: the directory is stamped 3.8.0 and the gate serves it only to that compiler).
 ENGINE_PY = os.environ.get("NBX_PYTHON", PY)
 FORGE = REPO / "forge" / "forge.py"
-CACHE = Path.home() / ".neurobrix" / "cache"
-VENDOR_PY = "/home/mlops/bench_venvs/diffusers/bin/python"       # the vendor pipelines' own venv (torch under tools/, never under src/)
+CACHE = _atelier.root("cache")
+VENDOR_PY = _atelier.python("competitors")       # the vendor pipelines' own venv (torch under tools/, never under src/)
 # A model's hub entry is read from the LIVE registry, matched by the `hf_repo` its build-toolchain
 # registry entry names (`hub_entry`). The frozen map this tool read before (retrace_2026_09_07/
 # hub_map.json) went stale as entries were renamed to their maker's repository: parakeet-tdt-1.1b's
@@ -72,8 +73,8 @@ VENDOR_PY = "/home/mlops/bench_venvs/diffusers/bin/python"       # the vendor pi
 # A container with no hub entry is a NEW publication: its org, name, category, license, tags
 # and description are WRITTEN here (the owner's word of 2026-09-07 00:26 for swin2SR-x2), never
 # deduced by the tool — a model with neither a hub entry nor a written line is refused by name.
-NEW_ENTRIES = REPO / "validation_outputs" / "retrace_2026_09_07" / "new_entries.json"
-FAMILIES = REPO / "validation_outputs" / "retrace_2026_09_07" / "families.json"
+NEW_ENTRIES = _atelier.root("campaigns") / "retrace_2026_09_07" / "new_entries.json"
+FAMILIES = _atelier.root("campaigns") / "retrace_2026_09_07" / "families.json"
 ANNOTATION_KEYS = {"symbolic_shape"}       # the only tensor fields the closed defect touches
 # Trace-time provenance, not the artifact's semantics: the card the trace ran on and its memory
 # figures. A retrace on another card must not fail the gate for them (hat-l: 25,632 such fields,
@@ -854,7 +855,7 @@ def stream_under_probe(url: str, dest: Path, mbps: float, logfile: Path, probe_e
 # The exports whose storage the hub's object store shares, as mounted on this machine. A path
 # the probe cannot see is a probe failure, never a green: `/home/mlops/models` was listed here
 # until 06:30 UTC on 2026-09-07 and does not exist — the models export mounts under the repo.
-SHARED_STORAGE_EXPORTS = (str(REPO / "models"), str(Path.home() / ".neurobrix" / "cache"), "/home/mlops/hf_snapshots")
+SHARED_STORAGE_EXPORTS = (str(REPO / "models"), str(_atelier.root("cache")), str(_atelier.root("hf_snapshots")))
 
 
 def hub_store_health(url: str = HUB_STORE_HEALTH, timeout: float = 10.0, probe_seconds: float = 2.0):
@@ -1361,7 +1362,7 @@ class Model:
         # request names (the campaign's bound), and the vendor must render the same one.
         steps = _opt("--steps", gen.get("num_inference_steps"))
         guidance = _opt("--guidance", gen.get("guidance_scale"))
-        snap = next((root / nm for root in (Path("/home/mlops/hf_snapshots"), Path.home() / ".cache" / "neurobrix" / "hf_snapshots")
+        snap = next((root / nm for root in (_atelier.root("hf_snapshots"),)
                      for nm in self.snapshot_names() if (root / nm).is_dir()), None)
         if prompt is None or snap is None:
             return {"error": "no prompt in the request or no snapshot on this machine"}
@@ -1567,7 +1568,7 @@ class Model:
         the format's index file present, no partial file, and — for a repository the
         re-download tool touched — the toolchain's completion marker."""
         snap_logs = Path(self.args.out) / "snap"
-        for root in (Path("/home/mlops/hf_snapshots"), Path.home() / ".cache" / "neurobrix" / "hf_snapshots"):
+        for root in (_atelier.root("hf_snapshots"),):
             for nm in self.snapshot_names():
                 p = root / nm
                 if not (p.is_dir() and any(p.iterdir())):
@@ -2144,12 +2145,12 @@ def main():
     ap.add_argument("--models", required=True)
     ap.add_argument("--gpu", default=None, help="the card(s) to pin: an ordinal or a comma list (a two-card trace)")
     ap.add_argument("--src", default=None, help="the engine source tree the runs use (PYTHONPATH)")
-    ap.add_argument("--out", default=str(REPO / "validation_outputs" / "retrace_2026_09_07"))
-    ap.add_argument("--models-root", default="/home/mlops/nbx_builds", help="where forge build writes the .nbx (root fs, not the export)")
-    ap.add_argument("--tmp", default="/home/mlops/nbx_tmp", help="TMPDIR for the build staging (root fs)")
-    ap.add_argument("--backup", default=str(Path.home() / ".neurobrix" / "backups" / "retrace_2026_09_07"))
+    ap.add_argument("--out", default=str(_atelier.root("campaigns") / "retrace_2026_09_07"))
+    ap.add_argument("--models-root", default=str(_atelier.tmp("retrace_builds")), help="where forge build writes the .nbx (root fs, not the export)")
+    ap.add_argument("--tmp", default=str(_atelier.tmp("retrace_tmp")), help="TMPDIR for the build staging (root fs)")
+    ap.add_argument("--backup", default=str(_atelier.root("tmp") / "retrace_backup"))
     ap.add_argument("--extra", default="", help="extra request args for the family protocol")
-    ap.add_argument("--stage", default="/home/mlops/nbx/stage/retrace_install",
+    ap.add_argument("--stage", default=str(_atelier.tmp("retrace_install")),
                     help="where a built .nbx is extracted for Forge's single write (root fs, never the cache)")
     ap.add_argument("--writer-src", default=None,
                     help="the engine source tree Forge's single writer runs its gate with (default: --src)")

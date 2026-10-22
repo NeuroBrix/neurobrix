@@ -27,6 +27,7 @@ them.
 
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import datetime
 import hashlib
@@ -57,9 +58,8 @@ QUADRATIC_ARMS = ("triton-sequential",)
 
 def clear_caches() -> list:
     """The three caches, before every run — the locked measurement protocol."""
-    home = Path(os.path.expanduser("~"))
     cleared = []
-    for path in (home / ".cache" / "triton_msl", home / ".triton" / "cache"):
+    for path in (p for p in (_atelier.optional_root("triton_msl_cache"), _atelier.root("triton_cache") / "cache") if p):
         if path.exists():
             shutil.rmtree(path, ignore_errors=True)
             cleared.append(str(path))
