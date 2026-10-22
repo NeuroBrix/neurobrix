@@ -3746,6 +3746,27 @@ class NBXTensor:
             return self.view(*shape)
         return self.contiguous().view(*shape)
 
+    def unflatten(self, dim: int, sizes) -> 'NBXTensor':
+        """Split ONE dim into `sizes` (their product its extent), as torch's `unflatten` does: a pure
+        view on any strides — the split dim walks memory at its own stride, so its parts walk it at
+        that stride times the sizes after them. `reshape` makes a non-contiguous tensor contiguous
+        first: a sliced stretch's reading of a strided input copied the WHOLE input for every slice
+        (HAT-S at 2048 px, q/k/v views of the 6 912 MB qkv, 3 x 2 304 MB per pass, 2026-10-22)."""
+        dim = dim % self.ndim
+        sizes = [int(v) for v in sizes]
+        prod = 1
+        for v in sizes:
+            prod *= v
+        if prod != int(self._shape[dim]):
+            raise ValueError(f"unflatten: sizes {sizes} do not make extent {self._shape[dim]} of dim {dim}")
+        st, inner = [], int(self._strides[dim])
+        for v in reversed(sizes):
+            st.append(inner)
+            inner *= v
+        shape = tuple(self._shape[:dim]) + tuple(sizes) + tuple(self._shape[dim + 1:])
+        strides = tuple(self._strides[:dim]) + tuple(reversed(st)) + tuple(self._strides[dim + 1:])
+        return self.as_strided(shape, strides)
+
     def merge_dims(self, d0: int, d1: int) -> 'NBXTensor':
         """Merge two ADJACENT dims into one — as a pure view when the
         strides allow it, else via reshape (which materialises).

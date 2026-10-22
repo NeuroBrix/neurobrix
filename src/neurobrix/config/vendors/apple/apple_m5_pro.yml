@@ -257,6 +257,11 @@ memory:
   # shared with everything else on the machine, so parking is far less
   # polite here than on a discrete card. Halved accordingly.
   alloc_pool_parked_cap_fraction: 0.25
+  # Allocator pool: the most a smallest-fit hit may hand out beyond its request (fraction of the request,
+  # kernels/nbx_tensor.DeviceAllocator._pool_fit_slack; Prism's piece-change price reads the same value).
+  # 1.0 = the former fixed 2x, kept as validated: on unified memory a refused fit parks the block beside a
+  # new allocation, no driver refusal flushing it (discrete cards declare 0.0, volta.yml 2026-10-22).
+  alloc_pool_fit_slack_fraction: 1.0
 
   # Triton deferred-free queue policy. Unified memory means a free returns
   # pages to the whole system, so the cliff is lower than on a discrete GPU.

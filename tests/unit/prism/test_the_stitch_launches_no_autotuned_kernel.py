@@ -1,7 +1,7 @@
 """The stitch that joins a sliced stretch launches no autotuned kernel: it holds no key of the census.
 
 A stretch run in slices of a token axis (`core/strategies/chunked_piece.ChunkedPiece.run`) executes
-ops graph.json does not carry: the slice taken of each input (`take_slice`: reshape, narrow,
+ops graph.json does not carry: the slice taken of each input (`take_slice`: unflatten, narrow,
 contiguous), the slice written into the whole output (`put_slice`: view, narrow, copy_), the copy an
 arena cannot overwrite (`own`: new_empty, copy_) and the sum of a contraction's partials
 (`accumulate` / `store`: new_empty, copy_, to, +). The census derives keys from graph.json
@@ -41,7 +41,8 @@ STITCH = (CR.take_slice, CR.put_slice, CR.own, CR.accumulate, CR.store)
 # The ATen kind each tensor method of the stitch dispatches in the compiled engine.
 ATEN_OF = {"reshape": "aten::reshape", "narrow": "aten::narrow", "contiguous": "aten::clone",
            "view": "aten::view", "copy_": "aten::copy_", "new_empty": "aten::new_empty",
-           "to": "aten::_to_copy", "__add__": "aten::add"}
+           "to": "aten::_to_copy", "__add__": "aten::add",
+           "unflatten": "aten::view"}     # torch implements unflatten as a view (an axis split)
 
 
 def _tree(fn):

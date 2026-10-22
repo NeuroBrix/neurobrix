@@ -160,6 +160,11 @@ class ChunkedPiece:
             ex.unload_weights()
         self._holder.unload_weights()
         self._loaded = False
+        # What the last run kept is read BEFORE the unload (`tensors_of_last_run`, the executor's contract: the
+        # unload drops the arena and the capture both). Kept past it, every sliced stretch held its assembled output on
+        # the device for the rest of the run: HAT-S at 2048 px on 32 GB, four stretches' 2 304 MB outputs beside the
+        # ninth piece (2026-10-22).
+        self._last_run = {}
 
     def tensors_of_last_run(self, tids: Sequence[str]) -> Dict[str, Any]:
         return {t: self._last_run[t] for t in tids if t in self._last_run}

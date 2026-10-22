@@ -306,6 +306,8 @@ class CompiledOpResolver:
                        "upsample_nearest1d", "upsample_linear1d",
                        "_upsample_nearest_exact2d", "_upsample_nearest_exact1d"):
             return self._make_upsample(op_name)
+        if op_name == "roll":
+            return self._make_roll()
         if op_name == "as_strided":
             return self._make_as_strided()
         if op_name == "unfold_backward":
@@ -317,6 +319,38 @@ class CompiledOpResolver:
     # ========================================================================
     # SPECIAL OP FACTORIES
     # ========================================================================
+
+    def _make_roll(self) -> Callable:
+        """`torch.roll` into ONE output: every rolled dim's blocks copied from the input straight into their places
+        (per dim the tail [n-s, n) lands at [0, s), the head at [s, n)). `torch.roll` over several dims rolls one dim
+        after the other and holds an intermediate beside its input and output — HAT-S at 2048 px on 16 GB, the
+        shifted-window roll held three 2 304 MB maps where its price holds two (2026-10-22). The Triton engine's
+        `roll_wrapper` does the same, by its own code (R30)."""
+        from itertools import product
+
+        def roll_one_output(x, shifts, dims=()):
+            shifts = [shifts] if isinstance(shifts, int) else list(shifts)
+            dims = [dims] if isinstance(dims, int) else list(dims or ())
+            if not dims:
+                return torch.roll(x, shifts)          # the flattened roll: one dim, no intermediate
+            moves = []
+            for shift, dim in zip(shifts, dims):
+                dim = dim % x.dim()
+                n = int(x.shape[dim])
+                k = int(shift) % n
+                if k:
+                    moves.append([(dim, n - k, 0, k), (dim, 0, k, n - k)])
+            if not moves:
+                return x.clone()
+            out = torch.empty_like(x, memory_format=torch.contiguous_format)
+            for blocks in product(*moves):
+                src, dst = x, out
+                for dim, frm, to, length in blocks:
+                    src = src.narrow(dim, frm, length)
+                    dst = dst.narrow(dim, to, length)
+                dst.copy_(src)
+            return out
+        return roll_one_output
 
     def _make_lift_fresh(self, attrs: Dict[str, Any]) -> Callable:
         """

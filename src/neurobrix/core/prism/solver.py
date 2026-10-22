@@ -1581,6 +1581,17 @@ class PrismSolver:
                       .get("memory", {}) or {}).get("alloc_pool_parked_cap_fraction", 0.0) or 0.0)
         return frac * float(spec.memory_mb) if frac > 0 else math.inf
 
+    @staticmethod
+    def _pool_fit_slack(dev: "DeviceState") -> float:
+        """The most the Triton allocator's pool hands out beyond a request, as a fraction of it — the
+        allocator's own reading (`DeviceAllocator._pool_fit_slack`) of the arch yml's
+        `memory.alloc_pool_fit_slack_fraction`: exact-size hits only where it is absent."""
+        from neurobrix.core.config.loader import get_vendor_config
+        spec = dev.spec
+        brand = getattr(spec, "brand", None)
+        return max(0.0, float((get_vendor_config(getattr(brand, "value", brand), spec.architecture)
+                               .get("memory", {}) or {}).get("alloc_pool_fit_slack_fraction", 0.0) or 0.0))
+
     def _arena_door(self, container, strat_name: str, allocs, devices, component_memory) -> Optional[str]:
         """Why the plan `strat_name` proposes asks some device for one arena over its largest
         allocation, or None. A component counts when it is held WHOLE on one accelerator: allocated
@@ -7575,6 +7586,7 @@ class PrismSolver:
         _normalized: Dict[str, Any] = {}
         _cap_mb = self._max_allocation_mb(target)
         _parked_mb = self._parked_cap_mb(target, profile)
+        _fit_slack = None if _parked_mb is None else self._pool_fit_slack(target)
 
         def _no(reason: str, crowded: bool = False, comp: Optional[str] = None):
             return None, reason, (crowded, comp)
@@ -7741,7 +7753,7 @@ class PrismSolver:
                 _arena_cap = None if _cap_mb is None else int(_cap_mb * _mb / _mult)
                 _parked_cap = None if _parked_mb is None else _parked_mb * _mb / _mult
                 part = _cutter.partition(segment_budget, max_arena_bytes=_arena_cap,
-                                         parked_cap_bytes=_parked_cap)
+                                         parked_cap_bytes=_parked_cap, pool_fit_slack=_fit_slack)
                 if part.fits and len(part.segments) < 2 and comp_name not in promoted:
                     # ONE piece. A component is streamed because the whole rungs cannot hold it
                     # (`_whole_component_mb` over the usable rung — the arena's activation figure);
@@ -7757,7 +7769,8 @@ class PrismSolver:
                     # it, and a bigger rung refused what a smaller one planned (Ming-Lite-Omni-1.5's
                     # vision tower on the Mac's profile: 12 288 refused, 11 264 planned).
                     _halves = _cutter.partition(int(part.peak_live_bytes + (part.total_weight_bytes + 1) // 2),
-                                                max_arena_bytes=_arena_cap, parked_cap_bytes=_parked_cap)
+                                                max_arena_bytes=_arena_cap, parked_cap_bytes=_parked_cap,
+                                                pool_fit_slack=_fit_slack)
                     if not (_halves.fits and len(_halves.segments) >= 2):
                         return _no(f"'{comp_name}' fits in ONE segment of {segment_budget / _mb:.0f} MB and "
                                    f"cannot be cut in two (" + (_halves.refusal or "one piece") + ")",

@@ -131,12 +131,12 @@ def test_the_cut_holds_every_change_with_the_parked_arena():
     greedy = LayerPartitioner(g).partition(budget)
     assert greedy.fits and _changes(greedy.segments, math.inf) > budget, \
         ([s.weight_bytes / MB for s in greedy.segments], _changes(greedy.segments, math.inf) / MB)
-    priced = LayerPartitioner(g).partition(budget, parked_cap_bytes=math.inf)
+    priced = LayerPartitioner(g).partition(budget, parked_cap_bytes=math.inf, pool_fit_slack=1.0)
     assert priced.fits and _changes(priced.segments, math.inf) <= budget, \
         ([s.weight_bytes / MB for s in priced.segments], _changes(priced.segments, math.inf) / MB)
     assert priced.peak_resident_bytes <= budget
     # a cap below the outgoing piece: it is freed to the driver, nothing parks, the greedy cut stands
-    capped = LayerPartitioner(g).partition(budget, parked_cap_bytes=5 * MB)
+    capped = LayerPartitioner(g).partition(budget, parked_cap_bytes=5 * MB, pool_fit_slack=1.0)
     assert [s.weight_bytes for s in capped.segments] == [s.weight_bytes for s in greedy.segments]
 
 
@@ -170,7 +170,7 @@ def test_the_change_search_does_not_step_past_the_cuts_floor():
     greedy = lp.partition(1021 * MB)
     assert [s.weight_bytes // MB for s in greedy.segments] == [21, 19]
     assert _changes(greedy.segments, math.inf) == 1040 * MB
-    priced = LayerPartitioner(g).partition(1021 * MB, parked_cap_bytes=math.inf)
+    priced = LayerPartitioner(g).partition(1021 * MB, parked_cap_bytes=math.inf, pool_fit_slack=1.0)
     assert priced.fits, priced.refusal
     assert [s.weight_bytes // MB for s in priced.segments] == [20, 20]
     assert _changes(priced.segments, math.inf) <= 1021 * MB and priced.peak_resident_bytes <= 1021 * MB

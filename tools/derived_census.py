@@ -2332,7 +2332,7 @@ def table(a) -> int:
                         continue
                     for uid, q_, key in sorted(derived, key=lambda t: (t[1], t[2], t[0] or "")):
                         rows.append({"model": model, "container": container, "mode": mode,
-                                     "rungs_mb": [int(rung)], "ops": [uid], "kernel": q_, "key": key,
+                                     "rungs_mb": [int(rung)] if rung is not None else None, "ops": [uid], "kernel": q_, "key": key,
                                      "dtype": T.dtypes_of(key), "tool": f"derived_census {rev}"})
         if not rows and not refused and not keyless and not unrunnable:
             refused.append("every request, mode and rung derived no key and placed no keyless op — not the "

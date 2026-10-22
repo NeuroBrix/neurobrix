@@ -130,6 +130,7 @@ class LayerPartitioner:
         self._pass_peak_memo: Dict[Tuple[Tuple[str, ...], str, int], int] = {}
         self._regions_used: Optional[Tuple[List["_Region"], int]] = None
         self.tensors: Dict[str, Any] = graph.get("tensors") or {}
+        self._weight_views: Optional[Dict[str, Tuple[str, List[str]]]] = None
         # Activations are sized AT THE REQUEST when the caller gives the request's symbol map: the
         # profiler's resolver (symbolic_shape at the request's symbols) and its compute-dtype rule,
         # the same numbers Prism's placement estimate uses. Without it a tensor's `shape` is the
@@ -254,10 +255,14 @@ class LayerPartitioner:
 
     def _op_weight_names(self, op_uid: str) -> Set[str]:
         names: Set[str] = set()
+        if self._weight_views is None:
+            self._weight_views = weight_views(self._dag)
         for tid in (self.ops.get(op_uid) or {}).get("input_tensor_ids") or []:
-            t = self.tensors.get(tid)
-            if t is not None and t.get("is_parameter"):
-                names.add(t.get("weight_name") or tid)
+            # a view of weights alone is made in the reading piece from its weights (`weight_views`)
+            for root in (self._weight_views[tid][1] if tid in self._weight_views else [tid]):
+                t = self.tensors.get(root)
+                if t is not None and t.get("is_parameter"):
+                    names.add(t.get("weight_name") or root)
         return names
 
     def _bytes_for(self, name: str, tid_hint: Optional[str] = None) -> int:
@@ -272,7 +277,8 @@ class LayerPartitioner:
     # -- the partition ----------------------------------------------------
 
     def partition(self, budget_bytes: int, max_arena_bytes: Optional[int] = None,
-                  parked_cap_bytes: Optional[float] = None) -> Partition:
+                  parked_cap_bytes: Optional[float] = None,
+                  pool_fit_slack: Optional[float] = None) -> Partition:
         """The cut `_greedy` takes, held to `budget_bytes` at every piece CHANGE as well when the
         allocator parks a freed arena (`parked_cap_bytes`; None: it parks nothing the next load
         cannot take back, the plan is the greedy one).
@@ -280,7 +286,8 @@ class LayerPartitioner:
         A piece's arena freed into the Triton allocator's pool stays allocated, parked, when it is
         at most the pool's cap (`DeviceAllocator.free`, `memory.alloc_pool_parked_cap_fraction` of
         the device; `math.inf` where the cap is unbounded), and the next piece's arena takes it back
-        only when it lies in [w, 2w] of that request (`_pool_take`). A discrete card's driver
+        only when it lies in [w, (1 + s) w] of that request (`_pool_take`; s = `pool_fit_slack`, the profile's
+        `memory.alloc_pool_fit_slack_fraction`, required with `parked_cap_bytes`). A discrete card's driver
         refuses an allocation it cannot serve and the pool is flushed and the request retried; a
         unified device serves it beside the parked block. So at each change — the step's
         wrap-around included, the last piece to the first — the device holds the incoming arena,
@@ -298,13 +305,16 @@ class LayerPartitioner:
         that would cross it lands ON it. Janus-Pro-7B's language model at the Mac's 4096 rung
         (triton-sequential) stepped from 1 508 to 1 427 MB, under its 1 461 MB floor, and was
         refused, where every cut from 1 461 to 1 470 MB fits every change at 1 439 MB."""
+        if parked_cap_bytes is not None and pool_fit_slack is None:
+            raise ValueError("LayerPartitioner.partition: parked_cap_bytes given without pool_fit_slack — the pool's "
+                             "take-back rule is the profile's memory.alloc_pool_fit_slack_fraction")
         part = self._greedy(budget_bytes, max_arena_bytes)
         if parked_cap_bytes is None or not part.fits:
             return part
         cut_at = budget_bytes
         floor = self._cut_floor()
         while True:
-            change = self._change_peak(part.segments, parked_cap_bytes)
+            change = self._change_peak(part.segments, parked_cap_bytes, pool_fit_slack)
             over = change - budget_bytes
             if over <= 0:
                 part.peak_resident_bytes = max(part.peak_resident_bytes, change)
@@ -336,17 +346,18 @@ class LayerPartitioner:
         return (max(peaks) if peaks else 0) + one_op
 
     @staticmethod
-    def _change_peak(segments: List[Segment], parked_cap_bytes: float) -> int:
+    def _change_peak(segments: List[Segment], parked_cap_bytes: float, pool_fit_slack: float) -> int:
         """The most a piece change holds: the incoming arena, the outgoing one when the pool parks
         it (at most `parked_cap_bytes`) and the incoming request does not take it back (it lies in
-        [w, 2w] of that request), and the activations live across the cut — every consecutive
-        pair, the last piece to the first included. One piece: no change."""
+        [w, (1 + pool_fit_slack) w] of that request, `DeviceAllocator._pool_take`), and the activations
+        live across the cut — every consecutive pair, the last piece to the first included. One
+        piece: no change."""
         if len(segments) < 2:
             return 0
         peak = 0
         for i, out in enumerate(segments):
             inc = segments[(i + 1) % len(segments)]
-            taken_back = inc.weight_bytes <= out.weight_bytes <= 2 * inc.weight_bytes
+            taken_back = inc.weight_bytes <= out.weight_bytes <= (1.0 + pool_fit_slack) * inc.weight_bytes
             parked = out.weight_bytes if (out.weight_bytes <= parked_cap_bytes and not taken_back) else 0
             peak = max(peak, inc.weight_bytes + parked + out.live_bytes_at_exit)
         return peak
@@ -1089,6 +1100,40 @@ def is_seam_tensor(meta: Optional[Dict[str, Any]]) -> bool:
     return bool((meta or {}).get("seam_alias_of"))
 
 
+def weight_views(graph: Dict[str, Any]) -> Dict[str, Tuple[str, List[str]]]:
+    """{tensor id: (its producing op, the parameters it is a view of)} for every VIEW of weights alone
+    (`profiler.VIEW_OP_TYPES` reading only parameters or such views — a linear's `aten::t`, a weight's
+    `view`). Such a value is never a seam's: each piece that reads it makes it itself from the weight
+    it loads (`build_segment_graph`), and the partitioner counts that weight for the reading op
+    (`LayerPartitioner._op_weight_names`). Carried across a seam it outlived the weights its piece
+    unloaded — HAT-S at 2048 px on 16 GB: the next piece's addmm read a linear's transposed weight at
+    an address its piece had freed (2026-10-22)."""
+    from neurobrix.core.prism.profiler import VIEW_OP_TYPES
+    tensors = graph.get("tensors") or {}
+    ops = graph.get("ops") or {}
+    out: Dict[str, Tuple[str, List[str]]] = {}
+    for uid in graph.get("execution_order") or []:
+        op = ops.get(uid) or {}
+        if op.get("op_type") not in VIEW_OP_TYPES:
+            continue
+        ins = list(op.get("input_tensor_ids") or [])
+        if not ins:
+            continue
+        roots: List[str] = []
+        for t in ins:
+            if (tensors.get(t) or {}).get("is_parameter"):
+                roots.append(t)
+            elif t in out:
+                roots.extend(out[t][1])
+            else:
+                roots = []
+                break
+        if roots:
+            for t in op.get("output_tensor_ids") or []:
+                out[t] = (uid, roots)
+    return out
+
+
 def build_segment_graph(graph: Dict[str, Any], segment: Segment,
                         order_index: Optional[Dict[str, int]] = None,
                         pass_ops: Optional[Sequence[str]] = None,
@@ -1119,6 +1164,33 @@ def build_segment_graph(graph: Dict[str, Any], segment: Segment,
     first = order_index[segment.first_op]
     last = order_index[segment.last_op]
     inside = list(pass_ops) if pass_ops is not None else order[first:last + 1]
+    # A view of weights alone read here and made before: made here as well, from the weight this piece loads
+    # (`weight_views`), its producers first in graph order.
+    views = weight_views(graph)
+    made_here = {t for u in inside for t in ((ops.get(u) or {}).get("output_tensor_ids") or [])}
+    remake: Set[str] = set()
+    pending = [t for u in inside for t in ((ops.get(u) or {}).get("input_tensor_ids") or [])
+               if t in views and t not in made_here]
+    while pending:
+        t = pending.pop()
+        uid = views[t][0]
+        if uid in remake:
+            continue
+        remake.add(uid)
+        pending.extend(i for i in ((ops.get(uid) or {}).get("input_tensor_ids") or []) if i in views)
+    if remake:
+        inside = [u for u in order if u in remake and u not in inside] + inside
+    # ...and one no op here reads is not made here: its readers make it (it would load a weight for nothing).
+    component_outs = set(graph.get("output_tensor_ids") or [])
+    while True:
+        read_here = {t for u in inside for t in ((ops.get(u) or {}).get("input_tensor_ids") or [])}
+        idle = [u for u in inside
+                if (ops.get(u) or {}).get("output_tensor_ids")
+                and all(t in views and t not in read_here and t not in component_outs
+                        for t in (ops.get(u) or {}).get("output_tensor_ids"))]
+        if not idle:
+            break
+        inside = [u for u in inside if u not in idle]
 
     produced_here: Set[str] = set()
     for op_uid in inside:
@@ -1141,7 +1213,7 @@ def build_segment_graph(graph: Dict[str, Any], segment: Segment,
     for op_uid in order[last + 1:]:
         read_later.update((ops.get(op_uid) or {}).get("input_tensor_ids") or [])
     seg_outputs = [tid for tid in produced_here
-                   if tid in read_later or tid in component_outputs]
+                   if (tid in read_later and tid not in views) or tid in component_outputs]
     if outputs is not None:
         stray = [t for t in outputs if t not in produced_here]
         if stray:

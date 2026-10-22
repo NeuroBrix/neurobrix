@@ -5029,17 +5029,28 @@ def roll_wrapper(x, shifts, dims=None):
     if isinstance(dims, int):
         dims = [dims]
 
-    result = x.contiguous()
+    # Every rolled dim at once, written into ONE output: per dim the tail [n-s, n) lands at [0, s) and the head
+    # [0, n-s) at [s, n), so the result is 2^k blocks copied from x (read by its strides, `copy_`) into their places.
+    # Rolling one dim after the other made a whole intermediate per dim beside its input and output — HAT-S at 2048
+    # px on 16 GB: the window shift's second dim held three 2 304 MB maps where the op's price holds two (2026-10-22).
+    from itertools import product
+    moves = []
     for shift, dim in zip(shifts, dims):
-        dim = dim % result.ndim
-        n = result.shape[dim]
+        dim = dim % x.ndim
+        n = int(x.shape[dim])
         s = int(shift) % n
-        if s == 0:
-            continue
-        tail = result.narrow(dim, n - s, s)
-        head = result.narrow(dim, 0, n - s)
-        result = NBXTensor.cat([tail, head], dim=dim).contiguous()
-    return result
+        if s:
+            moves.append([(dim, n - s, 0, s), (dim, 0, s, n - s)])     # (dim, from, to, length)
+    if not moves:
+        return x.contiguous()
+    out = NBXTensor.empty(tuple(x.shape), device=x.device, dtype=x.dtype)
+    for blocks in product(*moves):
+        src, dst = x, out
+        for dim, frm, to, length in blocks:
+            src = src.narrow(dim, frm, length)
+            dst = dst.narrow(dim, to, length)
+        dst.copy_(src)
+    return out
 
 
 def flip_wrapper(x, dims) :

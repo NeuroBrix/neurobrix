@@ -3884,7 +3884,7 @@ class TritonSequence:
                                         if arena_t is not None and hasattr(arena_t, '_data_ptr'):
                                             ptr_to_tid.setdefault(arena_t._data_ptr,
                                                 self._slot_to_tid.get(slot_idx, f"slot::{slot_idx}"))
-                                for i, t in enumerate(big_tensors[:10]):
+                                for i, t in enumerate(big_tensors):
                                     refs = _gc_h.get_referrers(t)
                                     refs_summary = []
                                     for r in refs[:5]:

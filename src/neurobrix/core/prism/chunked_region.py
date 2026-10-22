@@ -1278,7 +1278,8 @@ def take_slice(x: Any, lay: Layout, total: int, inner: Optional[int], start: int
     if p * total * inner != shape[a]:
         raise RuntimeError(f"chunked region: extent {shape[a]} on axis {a} is not P*{total}*{inner}")
     pre, post = shape[:a], shape[a + 1:]
-    v = x.reshape(*pre, p, total, inner, *post).narrow(a + 1, start, length).contiguous()
+    # the axis split as a VIEW (`unflatten`, both engines' tensors): only the slice is copied, never the whole input
+    v = x.unflatten(a, (p, total, inner)).narrow(a + 1, start, length).contiguous()
     return v.reshape(*pre, p * length * inner, *post)
 
 

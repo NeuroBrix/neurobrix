@@ -35,6 +35,32 @@ from .compiled_ops import CompiledOpResolver
 # is exactly the string-parsing this design exists to avoid.
 from neurobrix.kernels.oom_advice import annotate as _oom_annotate
 
+
+def _live_dump_on_oom(err, arena, tid_of_slot) -> None:
+    """`NBX_LIVE_DUMP_ON_OOM=1`, the Triton engine's door (triton/sequence.py) on this engine: at a refused
+    allocation, every CUDA tensor of 100 MB or more alive in the process — its arena tensor id when a slot holds it
+    (else ORPHAN), shape, bytes, the storage it views and what refers to it. Off by default; diagnosis only."""
+    if os.environ.get("NBX_LIVE_DUMP_ON_OOM") != "1" or "out of memory" not in str(err):
+        return
+    import gc
+    slot_ptr = {}
+    for s, t in enumerate(arena or ()):
+        if isinstance(t, torch.Tensor) and t.is_cuda:
+            slot_ptr.setdefault(t.untyped_storage().data_ptr(), []).append(tid_of_slot.get(s, f"slot{s}"))
+    seen = 0
+    for o in gc.get_objects():
+        if not (isinstance(o, torch.Tensor) and o.is_cuda):
+            continue
+        st = o.untyped_storage()
+        if st.nbytes() < 100 * 1024 * 1024:
+            continue
+        refs = [type(r).__name__ + (f"[len={len(r)}]" if hasattr(r, "__len__") else "") for r in gc.get_referrers(o)][:6]
+        print(f"[LIVE_TORCH] {(slot_ptr.get(st.data_ptr()) or ['ORPHAN'])[0]} shape={tuple(o.shape)} "
+              f"storage={st.nbytes() / 2**20:.0f}MB ptr={st.data_ptr()} referrers={refs}", flush=True)
+        seen += 1
+    print(f"[LIVE_TORCH] {seen} tensor(s) of 100 MB or more; allocated {torch.cuda.memory_allocated() / 2**20:.0f} MB",
+          flush=True)
+
 # TEMP diagnostic state for _maybe_dump_tid_native (CompiledSequence has
 # __slots__, so per-instance dump state lives in this module-level dict
 # keyed by id(self)).
@@ -3592,6 +3618,7 @@ class CompiledSequence:
                                 arena[kill_slot] = None
                             continue
                     else:
+                        _live_dump_on_oom(e, locals().get('arena'), getattr(self, '_tid_of_slot', None) or {})
                         raise RuntimeError(_oom_annotate(
                         f"Failed at op {op.op_uid} ({op.op_type}): {e}", e)) from e
                 else:
@@ -3617,6 +3644,7 @@ class CompiledSequence:
                         print(f"[FAIL-CTX] op={op.op_uid} resolver_bound={_rb} "
                               f"resolver_is={id(self._shape_resolver)} "
                               f"re-resolved_args={_ras}", flush=True)
+                    _live_dump_on_oom(e, locals().get('arena'), getattr(self, '_tid_of_slot', None) or {})
                     raise RuntimeError(_oom_annotate(
                         f"Failed at op {op.op_uid} ({op.op_type}): {e}", e)) from e
 
@@ -3992,9 +4020,11 @@ class CompiledSequence:
                                     arena[kill_slot] = None
                                 continue
                         else:
+                            _live_dump_on_oom(e, locals().get('arena'), getattr(self, '_tid_of_slot', None) or {})
                             raise RuntimeError(_oom_annotate(
                         f"Failed at op {op.op_uid} ({op.op_type}): {e}", e)) from e
                     else:
+                        _live_dump_on_oom(e, locals().get('arena'), getattr(self, '_tid_of_slot', None) or {})
                         raise RuntimeError(_oom_annotate(
                         f"Failed at op {op.op_uid} ({op.op_type}): {e}", e)) from e
             else:
@@ -4094,9 +4124,11 @@ class CompiledSequence:
                                     arena[kill_slot] = None
                                 continue
                         else:
+                            _live_dump_on_oom(e, locals().get('arena'), getattr(self, '_tid_of_slot', None) or {})
                             raise RuntimeError(_oom_annotate(
                         f"Failed at op {op.op_uid} ({op.op_type}): {e}", e)) from e
                     else:
+                        _live_dump_on_oom(e, locals().get('arena'), getattr(self, '_tid_of_slot', None) or {})
                         raise RuntimeError(_oom_annotate(
                         f"Failed at op {op.op_uid} ({op.op_type}): {e}", e)) from e
 
