@@ -363,8 +363,9 @@ def model_inventory() -> List[Dict[str, str | int]]:
 
 #: Files the battery's cells feed to models and which git does NOT carry: the audio
 #: reference every voice-cloning and STT cell reads, and the tiny image the upscaler
-#: family is fed. They live in the repository root and are ignored by design.
-REQUIRED_ASSETS = ("test_speech_ref.wav", "test_upscale_input.png")
+#: family is fed. They live in `tests/assets/` (docs/internal/_atelier.md v3: the test inputs, never the repository
+#: root) and are ignored by design.
+REQUIRED_ASSETS = ("tests/assets/test_speech_ref.wav", "tests/assets/test_upscale_input.png")
 
 #: The tree this run executes from. A module-level name so a test can point the door at a
 #: tree it built, which is the only way to prove the hook is WIRED and not merely correct
@@ -402,7 +403,7 @@ def pytest_collection_modifyitems(config, items):
             "   A battery run from here would spend hours of cards to report a missing "
             "file as a model failure (2026-09-05: 30 red cells of 33, all of them this).\n"
             "   Copy them in from the working tree before launching:\n"
-            + "".join(f"     cp ~/NeuroBrix_System/{a} {root}/\n" for a in missing),
+            + "".join(f"     install -D ~/NeuroBrix_System/{a} {root}/{a}\n" for a in missing),
             returncode=2)
     if config.getoption("--runslow"):
         return
