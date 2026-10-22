@@ -2195,6 +2195,18 @@ def after_key_failure(exc: BaseException, summary: Dict[str, Any], key_text: str
     return False
 
 
+def census_tuners(shapes) -> Dict[str, Any]:
+    """{kernel qual: its Autotuner} for every kernel the census names, its module loaded first: a kernel module the
+    wrappers import lazily (inside the call that launches it) is not in the process until a launch, and
+    `autotune_cache._autotuners` only sees what is loaded — every key of `gemv_vec_kernel` read "not an autotuner"
+    and was skipped (2026-10-22)."""
+    import importlib
+    from neurobrix.triton import autotune_cache as atc
+    for qual in shapes:
+        importlib.import_module(qual.rsplit(".", 1)[0])
+    return {qual: t for qual, t in atc._autotuners()}
+
+
 def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[str] = None, bench=None,
             out: Optional[str] = None, kernels: Optional[List[str]] = None, limit: Optional[int] = None,
             only_missing: bool = False, seed: int = 20260907, log=None,
@@ -2259,6 +2271,7 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
             raise RuntimeError(f"--models {', '.join(_unknown)}: no row of the census table names it — a filter that "
                                f"matched nothing would certify nothing and report success")
     shapes = census(vendor, profile, certifying_class, models)
+    tuners = census_tuners(shapes)
     log(f"[certify] census table {vendor}/{profile} {certifying_class} GB: "
         f"{sum(len(v) for v in shapes.values())} distinct key(s) over {len(shapes)} kernel(s)")
     if kernels:
