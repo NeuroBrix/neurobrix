@@ -34,11 +34,13 @@ class _Item:
 
 def test_a_tree_with_both_assets_is_not_refused(tmp_path):
     for a in B.REQUIRED_ASSETS:
+        (tmp_path / a).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / a).write_bytes(b"\x00")
     assert B.refuse_a_tree_without_its_ignored_assets(tmp_path) == []
 
 
 def test_the_missing_ones_are_named(tmp_path):
+    (tmp_path / B.REQUIRED_ASSETS[0]).parent.mkdir(parents=True, exist_ok=True)
     (tmp_path / B.REQUIRED_ASSETS[0]).write_bytes(b"\x00")
     assert B.refuse_a_tree_without_its_ignored_assets(tmp_path) == [B.REQUIRED_ASSETS[1]]
     assert sorted(B.refuse_a_tree_without_its_ignored_assets(tmp_path / "nowhere")) == \
@@ -54,7 +56,7 @@ def test_the_hook_refuses_and_says_what_to_copy(tmp_path, monkeypatch):
     assert "missing asset" in said, said
     for a in B.REQUIRED_ASSETS:
         assert a in said, f"{a} must be named: {said}"
-    assert "cp " in said, "the refusal names the command that satisfies it"
+    assert "install -D " in said, "the refusal names the command that satisfies it"
     assert "30 red cells" in said, "and what it cost the day it was learned"
 
 
