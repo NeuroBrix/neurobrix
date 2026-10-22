@@ -237,7 +237,7 @@ cells:
       ref: "Real-ESRGAN (vendor weights + vendor forward)"
       precision: "float32"
     request:
-      input_image: test_upscale_input.png
+      input_image: tests/assets/test_upscale_input.png
     gate:
       kind: deterministic_output
       read_from: >
@@ -268,7 +268,7 @@ cells:
       venv: /home/mlops/venvs/fwhisper
       precision: "float16 (CTranslate2), same precision as ours"
     request:
-      audio: test_speech_ref.wav
+      audio: tests/assets/test_speech_ref.wav
       decode: "greedy — beam 1, temperature 0, on both arms"
     gate:
       kind: deterministic_output
@@ -291,7 +291,7 @@ cells:
       ref: "mistralai/Voxtral-Mini-3B-2507"
       precision: "float16"
     request:
-      audio: test_speech_ref.wav
+      audio: tests/assets/test_speech_ref.wav
     gate:
       kind: deterministic_output
       read_from: "greedy decode — no stochastic draw in the audio projector or the decode"
@@ -338,7 +338,7 @@ cells:
       precision: "float16"
     request:
       prompt: "Describe this image in one sentence."
-      input_image: test_upscale_input.png
+      input_image: tests/assets/test_upscale_input.png
     gate:
       kind: deterministic_output
       read_from: "greedy decode — the vision tower is feed-forward, the decode draws nothing"
@@ -361,7 +361,7 @@ cells:
       precision: "float16"
     request:
       prompt: "Describe this image in one sentence."
-      input_image: test_upscale_input.png
+      input_image: tests/assets/test_upscale_input.png
     gate:
       kind: deterministic_output
       read_from: >
