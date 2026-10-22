@@ -24,7 +24,6 @@ Verdicts: **IDENTICAL** (every graph and the topology hash equal) · **CACHE_NEW
 | PixArt-XL-2-1024-MS | PixArt/PixArt-XL-1024 | CACHE_NEWER | 2026-09-21T12:16:03 | 2026-09-07T20:20:40 | 2026-09-12T16:45:25 | text_encoder: 6994c1d8 → 15a73eec; transformer: 3b5aecee → 59ae2464; vae: 791a0080 → 7823fe3b; topology.json: 3e1b2fd9 → c74d4933 | retrace gate PASS 2026-09-21 (no corrupted dim in the old container; 09-07 gate: new vs vendor 41.35 dB) (…/retrace/PixArt-XL-2-1024-MS/state.json) |
 | Qwen3-30B-A3B-Thinking-2507 | Qwen/Qwen3-30B-A3B-Thinking | IDENTICAL | 2026-06-08T18:34:42 | 2026-06-08T18:34:42 | 2026-09-18T01:28:59 | — | — |
 | Qwen3-Coder-30B-A3B-Instruct | Qwen/Qwen3-Coder-30B-A3B-Instruct | IDENTICAL | 2026-07-13T10:48:48 | 2026-07-13T10:48:48 | 2026-09-19T02:35:23 | — | — |
-| Qwen3-Coder-30B-A3B-Instruct-int4g128 | — | NOT_ON_HUB | 2026-07-13T10:48:48 | ? | ? | — | — |
 | Qwen3-Omni-30B-A3B-Instruct | qwen/qwen3-omni-30b-a3b-instruct | CACHE_NEWER | 2026-09-21T15:18:54 | 2026-08-19T02:51:04 | 2026-09-19T23:02:50 | code2wav: 18515aab → a8c82e5c; talker.code_predictor.model.codec_embedding: 443df6db → 4d511fce; talker.code_predictor: ce549a05 → 7378643f; talker.codec_head: 50206723 → 9aaabd64; talker.hidden_projection: 800ac24e → 4ec690c6; talker.model.codec_embedding: f0a25b3d → d9f19726; talker.model: a5f7a58e → ff821717; talker.text_projection: fdeb2c6a → f943c7f2; thinker.audio_tower: 944163f1 → 77e8df1b; thinker.lm_head: b31889ec → 5f2c1d54; thinker.model: 839db43c → fe13d574; thinker.visual: ffb2171d → 397dce86; topology.json: af261bca → 4401e361 | — |
 | Qwen3-VL-30B-A3B-Thinking | qwen/qwen3-vl-30b-a3b-thinking | IDENTICAL | 2026-07-24T10:11:59 | 2026-07-24T10:11:59 | 2026-09-19T17:20:37 | — | — |
 | Real-ESRGAN-x4 | xinntao/Real-ESRGAN-x4 | IDENTICAL | 2026-08-29T21:48:19 | 2026-08-29T21:48:19 | 2026-09-18T20:52:27 | — | — |
@@ -34,7 +33,6 @@ Verdicts: **IDENTICAL** (every graph and the topology hash equal) · **CACHE_NEW
 | Sana_1600M_4Kpx_BF16 | NVlabs/Sana-1600M-4Kpx-BF16 | IDENTICAL | 2026-04-30T17:26:17 | 2026-05-20T17:37:48 | 2026-09-22T02:53:35 | — | — |
 | TinyLlama-1.1B-Chat | TinyLlama/TinyLlama-1.1B-Chat | IDENTICAL | 2026-07-27T15:06:46 | 2026-07-27T15:06:46 | 2026-09-18T01:39:02 | — | — |
 | TinyLlama-1.1B-Chat-v1.0 | — | NOT_ON_HUB | 2026-07-27T15:06:46 | ? | ? | — | — |
-| TinyLlama-1.1B-Chat-v1.0-int4g128 | — | NOT_ON_HUB | 2026-07-27T15:06:46 | ? | ? | — | — |
 | TinyLlama-1.1B-Chat-v1.0.pre-G-backup | — | NOT_ON_HUB | 2026-04-30T15:49:20 | ? | ? | — | — |
 | VibeVoice-1.5B | microsoft/VibeVoice-1.5B | IDENTICAL | 2026-09-07T10:15:20 | 2026-09-07T10:15:20 | 2026-09-18T06:12:15 | — | — |
 | Voxtral-Mini-3B-2507 | mistralai/Voxtral-Mini-3B | IDENTICAL | 2026-09-07T13:14:28 | 2026-09-07T13:14:28 | 2026-09-18T02:48:38 | — | — |
@@ -271,15 +269,6 @@ Verdicts: **IDENTICAL** (every graph and the topology hash equal) · **CACHE_NEW
 | manifest.json | 2fa9ea97fb38209fc71a9b775e012fa429cef94fa50bb4cebbcc6badcd13373a | 2fa9ea97fb38209fc71a9b775e012fa429cef94fa50bb4cebbcc6badcd13373a |
 | topology.json | 1f1f11f31f44c03c7da7b20f3df54dc872d0ddc05119591f56250de45ef9ed9c | 1f1f11f31f44c03c7da7b20f3df54dc872d0ddc05119591f56250de45ef9ed9c |
 
-### Qwen3-Coder-30B-A3B-Instruct-int4g128
-
-| member | cache | hub |
-|---|---|---|
-| components/lm_head/graph.json | bbf62f6429c3345f8d83a68c201e56f19c68494ec015978889399c9dc7a8ad7f | — |
-| components/model/graph.json | ff6df5a31dd054324ee5a5574694c6eabbfeefa14e19b28b212b2d7ff2148ae2 | — |
-| manifest.json | 54c0e8ada77bfa95c4cd7033b1f6d184b233ce99683d001b512d02eea7cb8c47 | — |
-| topology.json | 1f1f11f31f44c03c7da7b20f3df54dc872d0ddc05119591f56250de45ef9ed9c | — |
-
 ### Qwen3-Omni-30B-A3B-Instruct (qwen/qwen3-omni-30b-a3b-instruct)
 
 | member | cache | hub |
@@ -373,15 +362,6 @@ Verdicts: **IDENTICAL** (every graph and the topology hash equal) · **CACHE_NEW
 | components/lm_head/graph.json | f6a2170b3cd6ec1ec14998ec338329fce91b11534e8f4efd1b64a1ea8d8b1cc1 | — |
 | components/model/graph.json | 216de8015962750bb343ef297c654dc7c569b25c146b34eeeff09cad1e53e3a7 | — |
 | manifest.json | 27f1c2af87943e0c7767fafb9064cdbc1e1653511c589893f99ebd0cb84d42dc | — |
-| topology.json | 7cfa94aa43041cd1c24da45cfe71bfb678fc5628a86c05105ffaa568bcbd3b7f | — |
-
-### TinyLlama-1.1B-Chat-v1.0-int4g128
-
-| member | cache | hub |
-|---|---|---|
-| components/lm_head/graph.json | f6a2170b3cd6ec1ec14998ec338329fce91b11534e8f4efd1b64a1ea8d8b1cc1 | — |
-| components/model/graph.json | 216de8015962750bb343ef297c654dc7c569b25c146b34eeeff09cad1e53e3a7 | — |
-| manifest.json | a0e83e64a0d6c080a48aa27807fb95857585bc3a129ff6b950ec1083d97d15fb | — |
 | topology.json | 7cfa94aa43041cd1c24da45cfe71bfb678fc5628a86c05105ffaa568bcbd3b7f | — |
 
 ### TinyLlama-1.1B-Chat-v1.0.pre-G-backup

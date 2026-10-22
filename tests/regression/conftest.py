@@ -158,21 +158,6 @@ KNOWN_FAILURES: List[Tuple[str, str | None, str]] = [
     # ------------------------------------------------------------------
 
     # ------------------------------------------------------------------
-    # Weight-encoding variants on the compiled engine — a DECLARED
-    # capability gate, not a breakage: the engine refuses with
-    # "UNSUPPORTED PATH: component stores its weights with encoding
-    # 'int4-g128-asym', which the compiled engine does not execute. Run
-    # this build with --triton" (graph_executor.py:1163). Recorded as
-    # xfail so the matrix stays honest about which mode is unblocked;
-    # the ::triton cells run normally. Workstream named by the engine
-    # message: compiled-mode encoded-weight execution.
-    # ------------------------------------------------------------------
-    ("Qwen3-Coder-30B-A3B-Instruct-int4g128", "native",
-     "Capability gate: int4-g128-asym weights are not executed by the compiled engine (graph_executor.py:1163) — run with --triton. Workstream: compiled-mode encoded-weight execution."),
-    ("TinyLlama-1.1B-Chat-v1.0-int4g128", "native",
-     "Capability gate: int4-g128-asym weights are not executed by the compiled engine — run with --triton. Workstream: compiled-mode encoded-weight execution."),
-
-    # ------------------------------------------------------------------
     # Triton audio — genuine runtime blockers on the --triton path.
     # Native paths for these all PASS (Batch 1 harness extension landed
     # flow-aware CLI dispatch).  What remains is per-family Triton work.
