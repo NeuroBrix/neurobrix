@@ -79,13 +79,13 @@ LLM_TEMPERATURE = 0.0
 IMAGE_PROMPT = "a red apple on a wooden table"
 
 # Shared audio asset used for STT inputs and TTS reference voices.
-AUDIO_REF = REPO / "test_speech_ref.wav"
+AUDIO_REF = REPO / "tests" / "assets" / "test_speech_ref.wav"
 
 # Small (64x64 RGB, window_size-safe) image fed to `nbx upscale` for the
 # upscaler family. Deliberately tiny: the project logo (1983x1536) OOMs
 # at x4/x8 (52 GiB conv allocation), which would leave upscaler cells
 # red for a sizing artefact unrelated to the dispatch under test.
-IMAGE_REF = REPO / "test_upscale_input.png"
+IMAGE_REF = REPO / "tests" / "assets" / "test_upscale_input.png"
 
 # Flow types that consume an audio file as the ONLY input (pure STT:
 # Whisper encoder_decoder, Parakeet rnnt).  audio_llm is deliberately NOT
