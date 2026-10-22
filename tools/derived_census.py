@@ -108,8 +108,9 @@ def prompt_tokens(model: str, prompt: str) -> int:
 def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dict,
                      has_native_bf16: bool, sdpa_budget_bytes: int, sdpa_min_rows: int,
                      sdpa_max_chunks: int, unhandled: collections.Counter, tiling=None,
-                     tiled_tf=None, decode_kv=None, pins=frozenset()):
-    """[(op uid, kernel qual, key tuple)] for one component at one symbol binding. `tiling` is
+                     tiled_tf=None, decode_kv=None, pins=frozenset(), out_dtypes=None):
+    """[(op uid, kernel qual, key tuple)] for one component at one symbol binding (`out_dtypes`, when given, filled
+    with every tensor's runtime dtype at that binding). `tiling` is
     the plan's `TilingView` for the component (its op-level tiling, empty when it has none).
     `pins`: ops a sliced pass runs at the accumulator's width (`sliced_bindings`), launched as a
     contract island — their own operands only, the widths downstream unchanged.
@@ -124,7 +125,7 @@ def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dic
             sdpa_max_chunks, unhandled, tiling, tiled_tf, decode_kv, frozenset(pins))
     axes = value_axes(model, comp)
     if not axes:
-        return _derive_at(*args)
+        return _derive_at(*args, out_dtypes=out_dtypes)
     groups = []
     try:
         shape0 = _shape_fn(g, comp, symbols, {}, {})
@@ -138,9 +139,9 @@ def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dic
         # an axis with no derivable envelope: the component is derived at the trace's extents
         # and the model refused by name (a partial table would certify a partial model)
         unhandled[f"{comp}: value-derived axis not classed — {e}"] += 1
-        return _derive_at(*args)
+        return _derive_at(*args, out_dtypes=out_dtypes)
     cone_ops = set().union(*(ax.cone_ops for grp in axes for ax in grp))
-    out = set(_derive_at(*args, skip=cone_ops))
+    out = set(_derive_at(*args, skip=cone_ops, out_dtypes=out_dtypes))
     for bounded in groups:
         ops_ = set().union(*(ax.cone_ops for ax, _l, _h in bounded))
         found = set()
@@ -309,7 +310,7 @@ def _triton_fp64() -> bool:
 
 def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_bytes, sdpa_min_rows,
                sdpa_max_chunks, unhandled, tiling=None, tiled_tf=None, decode_kv=None, pins=frozenset(),
-               skip=(), only=None, axis_values=None, axes=()):
+               skip=(), only=None, axis_values=None, axes=(), out_dtypes=None):
     """`derive_component`'s body at one binding — and, when `axis_values` names value-derived
     axes, at those extents (`only`: the ops to derive, `skip`: the ops not to)."""
     from neurobrix.core.prism import runtime_widths as RW
@@ -334,12 +335,14 @@ def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_
         rt = RW.runtime_dtypes(g, cdtype, engine, has_native_bf16=has_native_bf16,
                                attention_operands=attention_operand_alignment(active_vendor_profile()),
                                contract=contract, stores_fp64=_triton_fp64(), tiling=tiling, shape_of=shape,
-                               casts=op_casts)
+                               casts=op_casts, operand_reads=_cache_reads(ops, decode_kv))
     except AnnotationContradiction as e:
         # The width pass reads the shapes too (the matmul store rule reads M): a component whose
         # annotation contradicts itself is not derivable as a whole — named, never guessed.
         unhandled[f"component not derivable, annotation contradicts its trace — {e}"] += 1
         return []
+    if out_dtypes is not None:
+        out_dtypes.update(rt)          # every tensor's runtime dtype at this binding: what a flow reads after it
     # A sliced pass's pins (`GraphExecutor.pin_fp32_ops`) are islands on their own launches only: the
     # stitch stores the contraction's sum back in the op's unpinned dtype, so the widths pass above
     # (every reader of the sum) runs on the component's contract as it is.
@@ -392,6 +395,25 @@ def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_
             unhandled[f"{KEYLESS}{kind}"] += 1
         for q_, key in launches:
             out.append((uid, q_, key))
+    return out
+
+
+def _cache_reads(ops: dict, decode_kv) -> dict:
+    """{SDPA uid: {its key and value tensors: the KV cache's dtype}} at a decode step: the KV interceptor
+    (triton/kv_cache.py `intercept`) hands each self-attention the cache's keys and values, in the cache's dtype —
+    the width pass then aligns the attention's operands as the wrapper does (`launch_keys.sdpa_operand_dtypes`) and
+    its output, and every op downstream, takes the dtype the run gives it (whisper-large's out-projection reads fp16 at
+    decode, fp32 at the prefill: the walk, 2026-10-22). A prefill, or no decode, reads what the graph wrote."""
+    if decode_kv is None or decode_kv.get("prefill") or "dtype" not in decode_kv:
+        return {}
+    kvd = getattr(decode_kv["dtype"], "name", str(decode_kv["dtype"]).replace("torch.", ""))
+    out = {}
+    for uid, o in ops.items():
+        if o.get("op_type") not in _SDPA_KINDS or ("uids" in decode_kv and uid not in decode_kv["uids"]):
+            continue
+        ins = o.get("input_tensor_ids") or []
+        if len(ins) >= 3:
+            out[uid] = {ins[1]: kvd, ins[2]: kvd}
     return out
 
 
@@ -924,6 +946,11 @@ _INERT_AXES = {}         # {(model, comp): [the axes no autotuned kernel reads]}
 
 # The op kinds `_op_launches` keys — the one list: an op of any other kind launches no autotuned
 # kernel, and a value-derived axis whose descendants hold none of these moves no key.
+#: every SDPA spelling the graphs carry: each reaches `scaled_dot_product_attention_wrapper`
+_SDPA_KINDS = frozenset({"aten::scaled_dot_product_attention", "aten::_scaled_dot_product_attention",
+                         "aten::_scaled_dot_product_efficient_attention", "aten::_scaled_dot_product_flash_attention",
+                         "aten::_scaled_dot_product_flash_attention_for_cpu"})
+
 _KEYED_KINDS = frozenset({
     "aten::native_layer_norm", "aten::layer_norm", "custom::rms_norm", "aten::rms_norm",
     "aten::mm", "aten::bmm", "aten::addmm", "aten::baddbmm", "aten::mv", "aten::addmv", "aten::convolution", "aten::conv1d",
@@ -957,10 +984,7 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
             # addmv(input [N], mat [N, K], vec [K]) -> `addmv_wrapper`
             (N, K) = shape(ins[1])
             launches = LK.addmv_launches(N, K, dt(ins[1]), dt(ins[2]), dt(ins[0]), has_native_bf16)
-        elif kind in ("aten::scaled_dot_product_attention", "aten::_scaled_dot_product_attention",
-                      "aten::_scaled_dot_product_efficient_attention",
-                      "aten::_scaled_dot_product_flash_attention",
-                      "aten::_scaled_dot_product_flash_attention_for_cpu"):
+        elif kind in _SDPA_KINDS:
             # every SDPA spelling reaches `scaled_dot_product_attention_wrapper` with (q, k, v)
             # first (dispatch.py: the fused-backend spellings through `_meta_sdpa_efficient`)
             q, k, v = (shape(t) for t in ins[:3])
@@ -1408,7 +1432,7 @@ class _Shape:
 
 def run_at_inputs(model: str, comp: str, cdtype: str, mode: str, inputs: dict, has_native_bf16: bool,
                   sdpa: tuple, unhandled: collections.Counter, tiling=None, tiled_tf=None,
-                  decode_kv=None):
+                  decode_kv=None, out_dtypes=None):
     """(launches, {output tensor id: shape}) of one component fed `inputs` {input name: shape}:
     its symbols bound by the RUNTIME's binder from those shapes (`bind_from_inputs`), its keys
     derived, its outputs' shapes resolved at that binding — what the next stage of a flow reads."""
@@ -1419,7 +1443,7 @@ def run_at_inputs(model: str, comp: str, cdtype: str, mode: str, inputs: dict, h
     res.bind_from_inputs(feed, list(feed), g.get("tensors") or {})
     syms = dict(res.bindings)
     launches = derive_component(model, comp, cdtype, mode, syms, has_native_bf16, *sdpa, unhandled,
-                                tiling=tiling, tiled_tf=tiled_tf, decode_kv=decode_kv)
+                                tiling=tiling, tiled_tf=tiled_tf, decode_kv=decode_kv, out_dtypes=out_dtypes)
     outs = {}
     for ax in [a for grp in value_axes(model, comp) for a in grp] + _INERT_AXES[(model, comp)]:
         if ax.outputs and not ax.refused:
@@ -1601,7 +1625,7 @@ def extent_sites(model: str, topo: dict, defaults: dict, plan: dict, prompt: str
     # prefill of one token, then the cache's 2 .. max_tokens - 1), its cross-attentions native
     # (`decoder_self_attention_plan`, the flow's own split).
     if flow.get("type") == "encoder_decoder":
-        sites.extend(_encoder_decoder_sites(model, topo, defaults, plan))
+        sites.extend(_encoder_decoder_sites(model, topo, defaults, plan, has_native_bf16))
     # audio_llm (triton/flow/audio_llm.py): the recording's features through the forward stages
     # (the frontend's own preprocessing choice and fit), their embeddings between the declared
     # prefix and suffix ids, then the language model over the WHOLE context every step — its
@@ -1667,7 +1691,7 @@ class _Stub:
         self.__dict__.update(kw)
 
 
-def _encoder_decoder_sites(model, topo, defaults, plan):
+def _encoder_decoder_sites(model, topo, defaults, plan, has_native_bf16):
     from neurobrix.core.flow.decoder_kv import decoder_self_attention_plan
     from neurobrix.core.runtime.decode_bound import decode_bound
     stages = (topo.get("flow") or {}).get("stages") or []
@@ -1691,6 +1715,26 @@ def _encoder_decoder_sites(model, topo, defaults, plan):
         kv = ({"prefill": True, "uids": self_uids} if n == 1 else
               {"len": n, "dtype": dtype, "heads": kvp["num_heads"], "uids": self_uids})
         return [(dec, {ids_in: [1, 1], enc_in: list(frames), "__kv__": kv})]
+    dec_stage = next(st for st in stages if st.get("component") == dec)
+    if dec_stage.get("logits_source", "embed_weight_tied") == "embed_weight_tied":
+        # the flow's weight-tied logits (triton/flow/encoder_decoder.py `_compute_logits`): the last position's hidden
+        # state [1, H] @ the token embedding transposed, through `mm` — at M = 1, the GEMV; the embedding by the flow's
+        # own rule (`tied_embedding_name`), both operands at the dtypes the decoder's step gives them
+        from neurobrix.kernels import launch_keys as _LK
+        from neurobrix.kernels.nbx_tensor import NBXDtype
+        from neurobrix.triton.flow.encoder_decoder import tied_embedding_name
+        gdec = raw_graph(model, dec)
+        params = {t[len("param::"):]: m.get("shape") for t, m in gdec["tensors"].items() if t.startswith("param::")}
+        emb = tied_embedding_name(params)
+        out_tid = gdec["output_tensor_ids"][0]
+
+        def logits(comp, dts):
+            if comp != dec or emb is None:
+                return []
+            V, H = params[emb]
+            return [(None, q_, key) for q_, key in _LK.mm_launches(1, int(H), int(V), NBXDtype[dts[out_tid]],
+                                                                    NBXDtype[dts[f"param::{emb}"]], has_native_bf16)]
+        step.flow_launches = logits
     return [(f"{dec} self-attention KV length", 1, int(mt) - 1, step)]
 
 
@@ -2076,10 +2120,16 @@ def derive_extents(model, mode, topo, defaults, plan, has_native_bf16, sdpa, unh
                     if kv is not None and "dtype" in kv:
                         from neurobrix.kernels.nbx_tensor import NBXDtype
                         kv = dict(kv, dtype=NBXDtype[str(kv["dtype"]).replace("torch.", "")])
+                    _dts = {}
                     launches, outs = run_at_inputs(model, comp, dtypes[comp], mode, inputs,
                                                    has_native_bf16, sdpa, unhandled, tiling=view,
-                                                   tiled_tf=tiled_tf, decode_kv=kv)
+                                                   tiled_tf=tiled_tf, decode_kv=kv, out_dtypes=_dts)
                     keys |= set(launches)
+                    # what the FLOW launches itself after this component, at this step (`flow_launches`: the
+                    # weight-tied logits of an encoder-decoder), read from the component's runtime dtypes
+                    _fl = getattr(chain, "flow_launches", None)
+                    if _fl is not None:
+                        keys |= set(_fl(comp, _dts))
                 found.update(keys)
                 seen[n] = frozenset((q_, k) for _u, q_, k in keys)
             return seen[n]

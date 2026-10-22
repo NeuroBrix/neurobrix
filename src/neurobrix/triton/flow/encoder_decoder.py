@@ -353,23 +353,26 @@ def _get_component_output(ctx, comp_name) -> Optional[NBXTensor]:
     return None
 
 
-def _get_embed_weight(ctx, comp_name):
-    """Get TOKEN embedding weight for weight-tied logits.
+def tied_embedding_name(shapes):
+    """The weight the weight-tied logits read, from {weight name: shape} in the component's order: the first name holding
+    `token_embed` (NeuroTax), else the 2-D `embed` weight with the most rows; None when there is none. One rule for the
+    flow (`_get_embed_weight`) and the derived census (`tools/derived_census._encoder_decoder_sites`)."""
+    for key in shapes:
+        if "token_embed" in key:
+            return key
+    best = None
+    for key, shp in shapes.items():
+        if "embed" in key and len(shp) == 2 and (best is None or shp[0] > shapes[best][0]):
+            best = key
+    return best
 
-    NeuroTax standard: token_embed.weight (token embeddings).
-    """
+
+def _get_embed_weight(ctx, comp_name):
+    """Get TOKEN embedding weight for weight-tied logits (`tied_embedding_name`)."""
     executor = ctx.executors.get(comp_name)
     if executor is not None and hasattr(executor, '_weights'):
-        for key in executor._weights:
-            if "token_embed" in key:
-                return executor._weights[key]
-        best = None
-        for key in executor._weights:
-            if "embed" in key and executor._weights[key].ndim == 2:
-                w = executor._weights[key]
-                if best is None or w.shape[0] > best.shape[0]:
-                    best = w
-        return best
+        name = tied_embedding_name({k: tuple(w.shape) for k, w in executor._weights.items()})
+        return None if name is None else executor._weights[name]
     return None
 
 
