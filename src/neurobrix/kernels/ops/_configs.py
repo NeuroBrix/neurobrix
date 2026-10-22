@@ -786,13 +786,22 @@ def row_program_configs() -> List[triton.Config]:
 
 
 def prune_row_programs(configs, named_args, **kwargs):
-    """A program holds rows x the padded row: at most the backend's reduce-tile cap (`nbx_tensor.reduce_tile_max`, the
-    profile's, where the lowering refuses beyond) or one row whatever its length; never more rows than exist."""
+    """A program holds rows x the padded row: one row whatever its length, more only while the tile stays within the
+    backend's reduce-tile cap (`nbx_tensor.reduce_tile_max`, where the lowering refuses beyond) AND within the
+    registers of one block (`memory.max_registers_per_block` of the profile: an fp32 element a register) — a tile past
+    them spills and its compile alone ran tens of minutes per config (the first norm certification, 2026-10-22: no key
+    done in 94 min on two cards); never more rows than exist."""
     from neurobrix.kernels.nbx_tensor import reduce_tile_max
+    from neurobrix.kernels.wrappers import _arch_param
+    regs = _arch_param("memory", "max_registers_per_block", None)
+    if regs is None:
+        raise RuntimeError("ZERO FALLBACK: the hardware profile declares no memory.max_registers_per_block — the row "
+                           "programs' tile has no bound")
     feat = triton.next_power_of_2(int(named_args['feat_dim']))
     rows = int(named_args['batch_dim'])
+    cap = min(reduce_tile_max(), int(regs))
     keep = [c for c in configs
-            if c.kwargs['BLOCK_SIZE_BATCH'] * feat <= max(reduce_tile_max(), feat)
+            if c.kwargs['BLOCK_SIZE_BATCH'] * feat <= max(cap, feat)
             and c.kwargs['BLOCK_SIZE_BATCH'] <= max(1, rows)]
     return keep or configs[:1]
 
