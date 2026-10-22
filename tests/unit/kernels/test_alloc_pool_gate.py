@@ -213,7 +213,7 @@ def test_parked_cap_evicts_largest_first_and_never_parks_an_over_cap_block():
         nt._gpu_runtime, nt._active_backend = saved  # type: ignore
 
 
-def test_a_fit_hands_out_no_more_slack_than_the_profile_allows():
+def test_a_fit_hands_out_no_more_slack_than_the_profile_allows(monkeypatch):
     """HAT-S at 2048 px on a 16 GB V100 (2026-10-22): its 2 304 MB conv output took the freed 4 096 MB mask's
     parked block (the old fixed 2x bound), 1 792 MB held that no plan priced, and the next tile found no room.
     The bound is the profile's `memory.alloc_pool_fit_slack_fraction`; with no profile, exact-size hits only.
@@ -231,7 +231,9 @@ def test_a_fit_hands_out_no_more_slack_than_the_profile_allows():
         assert DeviceAllocator._pool_take(dev, 2304) == 0x2000        # 2600: 12.8 % slack, within 25 %
         assert DeviceAllocator._pool_take(dev, 2304) is None          # the 4096 block stays parked
         DeviceAllocator._pool_slack_frac.clear()
-        assert DeviceAllocator._pool_fit_slack(dev) == 0.0            # no profile in a bare process: exact only
+        import neurobrix.kernels.wrappers as W
+        monkeypatch.setattr(W, "get_hardware_profile", lambda: None)   # whatever an earlier test left bound
+        assert DeviceAllocator._pool_fit_slack(dev) == 0.0            # no profile: exact only
 
 
 if __name__ == "__main__":
