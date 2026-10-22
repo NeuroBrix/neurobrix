@@ -539,17 +539,17 @@ def _tiled_conv2d_spatial_torch(
         if in_clamped_end <= in_clamped_start:
             continue
 
-        in_band = input_tensor[:, :, in_clamped_start:in_clamped_end, :]
-        if in_band.dtype != out_dtype:
-            in_band = in_band.to(out_dtype)
-        in_band = in_band.contiguous()
-
+        view = input_tensor[:, :, in_clamped_start:in_clamped_end, :]
         if pad_top_real > 0 or pad_bot_real > 0 or pad_w > 0:
-            in_band = F.pad(
-                in_band,
-                (pad_w, pad_w, pad_top_real, pad_bot_real),
-                mode="constant", value=0.0,
-            )
+            # ONE band buffer, padded: the slice copied (and cast) straight into its interior. A contiguous copy then
+            # F.pad held two input bands where the band's price holds one (HAT-L at 2048 px on 16 GB, 2026-10-22).
+            hb, wb = int(view.shape[2]), int(view.shape[3])
+            in_band = view.new_zeros((view.shape[0], view.shape[1], hb + pad_top_real + pad_bot_real, wb + 2 * pad_w),
+                                     dtype=out_dtype)
+            in_band[:, :, pad_top_real:pad_top_real + hb, pad_w:pad_w + wb].copy_(view)
+        else:
+            in_band = view.to(out_dtype).contiguous()
+        del view
 
         conv_band = F.conv2d(
             in_band, weight, bias=None,
@@ -710,13 +710,18 @@ def _tiled_conv2d_spatial_nbx(
         # flat indexing that assumes contiguous and read wrong memory
         # otherwise. The torch backend (`_tiled_conv2d_spatial_torch`)
         # already enforces contiguity at this point.
-        in_band = input_tensor[:, :, in_clamped_start:in_clamped_end, :].contiguous()
+        view = input_tensor[:, :, in_clamped_start:in_clamped_end, :]
         if pad_top_real > 0 or pad_bot_real > 0 or pad_w > 0:
-            # constant_pad_nd_wrapper: pad_list per F.pad convention
-            # (last-dim-first): [W_left, W_right, H_top, H_bot]
-            in_band = constant_pad_nd_wrapper(
-                in_band, [pad_w, pad_w, pad_top_real, pad_bot_real], value=0.0,
-            )
+            # ONE band buffer, padded: the slice copied by its strides straight into its interior (`copy_`). A
+            # contiguous copy then constant_pad_nd held two input bands where the band's price holds one (HAT-L at
+            # 2048 px on 16 GB, 2026-10-22).
+            hb, wb = int(view.shape[2]), int(view.shape[3])
+            in_band = NBXTensor.zeros((int(view.shape[0]), int(view.shape[1]), hb + pad_top_real + pad_bot_real,
+                                       wb + 2 * pad_w), dtype=view.dtype, device=view.device)
+            in_band.narrow(2, pad_top_real, hb).narrow(3, pad_w, wb).copy_(view)
+        else:
+            in_band = view.contiguous()
+        del view
 
         conv_band = conv2d_wrapper(
             in_band, weight, None,

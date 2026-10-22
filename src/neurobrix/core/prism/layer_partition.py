@@ -36,6 +36,8 @@ reported with its arithmetic rather than approximated.
 
 from __future__ import annotations
 
+import os
+
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
 
@@ -414,6 +416,12 @@ class LayerPartitioner:
         rule) as intervals, a VIEW of an activation held as its root's buffer: no bytes of its own, the root's last
         use extended to the view's (counted as a buffer of its own, a parked piece read HAT-S's 6 912 MB
         `aten.view::10` twice, 2026-10-22)."""
+        # a function of the graph, the request and the protected ids alone: computed once per protected set (the
+        # region search asked it 2 031 times for HAT-L at 2048 px, 425 of a 574 s plan, 2026-10-22)
+        memo_key = frozenset(self.protected)
+        memo = self.__dict__.setdefault("_intervals_memo", {})
+        if memo_key in memo:
+            return memo[memo_key]
         from neurobrix.core.prism.profiler import VIEW_OP_TYPES, ZERO_ALLOC_OP_TYPES
         last = dict(self._last_use())
         prod: Dict[str, int] = {}
@@ -444,6 +452,7 @@ class LayerPartitioner:
         for tid, r in root.items():
             if last.get(tid, -1) > last.get(r, -1):
                 last[r] = last[tid]
+        memo[memo_key] = (prod, last, size, root)
         return prod, last, size, root
 
     def _greedy_swapped(self, budget_bytes: int, max_arena_bytes: Optional[int] = None,
@@ -781,8 +790,12 @@ class LayerPartitioner:
         if self._swap and self._token_split:
             # the values between pieces wait on the host: before it, the stretch holds the buffers it READS, brought
             # whole to the device (each view's root once), never what else is live (`LayerStreamingStrategy._run_pieces`)
+            # — and of those, an input read only in slices stays on the host, its slices uploaded pass by pass
+            # (`chunked_region.sliced_reads`; counted in `fed` below)
+            from neurobrix.core.prism.chunked_region import sliced_reads
             _prod, _last, size, root = self._value_intervals()
-            before = sum(size.get(r, 0) for r in {root.get(t, t) for t in plan.inputs})
+            on_host = sliced_reads(plan, self.ops)
+            before = sum(size.get(r, 0) for r in {root.get(t, t) for t in plan.inputs if t not in on_host})
         else:
             curve = self.live_activation_curve()
             before = curve[plan.first - 1] if plan.first > 0 else 0
@@ -852,7 +865,11 @@ class LayerPartitioner:
             whys: List[str] = []
             from neurobrix.core.prism.chunked_region import axis_units
             # every token symbol, and each in the unit its graph divides it by (a window's rows)
-            for sym, unit in [(sy, u) for sy in syms for u in [1] + axis_units(self._dag, sy)]:
+            units_memo = self.__dict__.setdefault("_axis_units_memo", {})
+            for sy in syms:
+                if sy not in units_memo:
+                    units_memo[sy] = axis_units(self._dag, sy)
+            for sym, unit in [(sy, u) for sy in syms for u in [1] + units_memo[sy]]:
                 ax = self._axis(sym, unit)
                 if not ax.fits_units(self._symbol_map):
                     whys.append(f"{sym} in units of {unit}: the request is not a whole number of the units "
@@ -866,6 +883,8 @@ class LayerPartitioner:
             if best is None:
                 return None, (f"{self.order[h]!r} holds {eff[h] / _MB:.1f} MB of activations "
                               f"against {target / _MB:.1f} MB — " + "; ".join(whys))
+            # a neighbour the new stretch contains whole is absorbed (`_new_region`): its ops run in the new one's slices
+            regions[:] = [r for r in regions if not (best.first <= r.first and r.last <= best.last)]
             regions.append(best)
             regions.sort(key=lambda r: r.first)
 
@@ -890,12 +909,20 @@ class LayerPartitioner:
         from neurobrix.core.prism.chunked_region import MIX, plan_region, region_carriers
         if ax.verdicts[h].kind == MIX:
             return None, f"{self.order[h]} mixes the axis ({ax.verdicts[h].reason})"
+        # An existing stretch on THIS axis is no wall: a seam may enclose it whole, and the two run as one, in one
+        # slicing — what passed between them never exists whole (HAT-L at 2048 px on 16 GB: the stretch making the
+        # overlapping-window cross attention's unfolded K and V stopped at the attention's own stretch, and handed
+        # them out whole, 15 840 MB, 2026-10-22). A seam inside one is refused (below); another axis' stretch is a wall.
         taken: Set[int] = set()
         for r in regions:
-            taken.update(range(r.first, r.last + 1))
+            if r.axis.sym != ax.sym or r.axis.unit != ax.unit:
+                taken.update(range(r.first, r.last + 1))
 
         def free(i: int) -> bool:
             return 0 <= i < len(self.order) and i not in taken and ax.verdicts[i].kind != MIX
+
+        def cuts_one(L: int, R: int) -> bool:
+            return any((r.first < L <= r.last) or (r.first <= R < r.last) for r in regions)
 
         lo = hi = h
         while free(lo - 1) and eff[lo - 1] > target:
@@ -949,8 +976,10 @@ class LayerPartitioner:
                             seen.add(t)
                 # an output crossing out is ASSEMBLED whole by the stitch: a broadcast view's full extent, not its 0
                 return sum(self._activation_bytes(t, self.tensors[t]) for t in seen)
-            cin = {L: cross_in(L) for L in range(lo, max(span_lo, lo - 64) - 1, -1)}
-            cout = {R: cross_out(R) for R in range(hi, min(span_hi, hi + 64) + 1)}
+            ends_l = [r.first for r in regions if span_lo <= r.first <= lo]
+            ends_r = [r.last for r in regions if hi <= r.last <= span_hi]
+            cin = {L: cross_in(L) for L in list(range(lo, max(span_lo, lo - 64) - 1, -1)) + ends_l}
+            cout = {R: cross_out(R) for R in list(range(hi, min(span_hi, hi + 64) + 1)) + ends_r}
             lefts = sorted(cin, key=lambda L: (cin[L], lo - L))[:3]
             rights = sorted(cout, key=lambda R: (cout[R], R - hi))[:3]
             pairs = sorted(((L, R) for L in lefts for R in rights), key=lambda p: (cin[p[0]] + cout[p[1]], p[1] - p[0]))
@@ -963,6 +992,8 @@ class LayerPartitioner:
         total = int(self._symbol_map[ax.sym]) // ax.unit
         why = f"no seam around {self.order[h]} leaves the stretch under {target / _MB:.1f} MB"
         for L, R in pairs:
+            if cuts_one(L, R):
+                continue
             plan, no = plan_region(ax, L, R, protected=self.protected,
                                    carriers=region_carriers(self._dag, self.order[L:R + 1],
                                                             self._op_symbols()))
