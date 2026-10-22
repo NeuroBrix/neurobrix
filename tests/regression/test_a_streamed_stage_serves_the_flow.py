@@ -41,9 +41,9 @@ LONG = ("Listen carefully to the recording and write down, word for word, exactl
 
 # (model, extra CLI args, prompt)
 FLOWS = [
-    ("granite-speech-3.3-8b", ["--audio", "test_speech_ref.wav"], SHORT),
-    ("granite-speech-3.3-8b", ["--audio", "test_speech_ref.wav"], LONG),
-    ("GLM-4.1V-9B-Thinking", ["--input-image", "test_upscale_input.png"], "Describe the image."),
+    ("granite-speech-3.3-8b", ["--audio", "tests/assets/test_speech_ref.wav"], SHORT),
+    ("granite-speech-3.3-8b", ["--audio", "tests/assets/test_speech_ref.wav"], LONG),
+    ("GLM-4.1V-9B-Thinking", ["--input-image", "tests/assets/test_upscale_input.png"], "Describe the image."),
 ]
 CELLS = ([(m, a, p, e) for m, a, p in FLOWS for e in ("triton", "triton-sequential")]
          # R30: the compiled flows read the base the same way, through the native loader.
