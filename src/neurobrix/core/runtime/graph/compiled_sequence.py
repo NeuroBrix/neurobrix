@@ -627,7 +627,8 @@ class CompiledSequence:
 
         # Phase -0.5: Eliminate aten::t on weight tensors (pre-transpose at bind time)
         # Removes ~5K ops/token for LLMs (weight.t() before every mm)
-        self._eliminate_weight_transpose_ops(tensors, ops_metadata, execution_order)
+        self._eliminate_weight_transpose_ops(tensors, ops_metadata, execution_order,
+            returned=set(self.dag.get("output_tensor_ids") or []))
 
         # Phase -0.4: const_fold partition (optim Phase 2). The shared
         # planner annotated dag["_optim_const_fold"] at the load hook;
@@ -1042,6 +1043,7 @@ class CompiledSequence:
         tensors: Dict[str, Any],
         ops_metadata: Dict[str, Any],
         execution_order: List[str],
+        *, returned: set,
     ) -> None:
         """
         Remove aten::t ops on weight tensors by pre-transposing at bind time.
@@ -1118,6 +1120,14 @@ class CompiledSequence:
 
             # Skip MoE expert weights — moe_fused_dispatch() transposes them at runtime
             if root_tid in moe_weight_ids:
+                continue
+
+            # A transpose the graph RETURNS is kept: its output is a value the caller reads (a streamed piece's
+            # seam), and the rewire would leave nothing under its id — the rule Prism prices by
+            # (`profiler.weight_transposes_read_in_place`: "and that the graph does not return"). HAT-S at 2048 px
+            # on 16 GB, its pieces cut between a linear's weight transpose and its matmul: the next piece found
+            # no aten.t::0::out_0 (2026-10-22).
+            if out_tids[0] in returned:
                 continue
 
             out_tid = out_tids[0]

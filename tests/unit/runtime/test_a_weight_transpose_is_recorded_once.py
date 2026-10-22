@@ -37,7 +37,7 @@ def _compile_twice(cls):
         seq = cls.__new__(cls)
         seq._pretranspose_weights = set()
         # A streamed piece recompiles from its segment graph: the op table is shared, the order is fresh.
-        seq._eliminate_weight_transpose_ops(tensors, ops, list(order))
+        seq._eliminate_weight_transpose_ops(tensors, ops, list(order), returned=set())
         shapes.append(list(tensors["param::w"]["shape"]))
         assert "param::w" in seq._pretranspose_weights
     return shapes, tensors

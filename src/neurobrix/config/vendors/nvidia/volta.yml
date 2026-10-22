@@ -395,6 +395,13 @@ memory:
   # the pool's contribution to the driver watermark (measured +3.4 GB on
   # the xlong int4 row unbounded). 0 = unbounded.
   alloc_pool_parked_cap_fraction: 0.50
+  # Allocator pool: the most a smallest-fit hit may hand out BEYOND its request, as a fraction of the
+  # request (kernels/nbx_tensor.DeviceAllocator._pool_fit_slack). The surplus stays held, unusable, while
+  # the tensor lives, and no plan prices it. At the former fixed 2x, HAT-S at 2048 px on a 16 GB card gave
+  # a 2 304 MB conv output a parked 4 096 MB block and its next tile OOMed (2026-10-22). Exact-size hits
+  # only: PixArt-Sigma 1024 triton measured the same (30 s wall, driver peak 11 799 MB) at 0.25 and at 0.0,
+  # its 455 fits at 0.25 becoming exact hits at 0.0 (NBX_ALLOC_STATS, 2026-10-22).
+  alloc_pool_fit_slack_fraction: 0.0
   # Per-DEVICE cap: budget = min(bytes above, fraction x device memory_mb
   # from the Prism profile). The auto profile (config/hardware/default.yml,
   # generated from nvidia-smi memory.total) records memory_mb 16384 for

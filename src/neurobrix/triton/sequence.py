@@ -619,7 +619,8 @@ class TritonSequence:
         # Phase -0.5: Eliminate aten::t on weight tensors (pre-transpose at
         # bind time). Mirrors CompiledSequence._eliminate_weight_transpose_ops.
         # Removes ~154 ops/step for TinyLlama (one `t` before every weight `mm`).
-        self._eliminate_weight_transpose_ops(tensors, ops_by_uid, exec_order)
+        self._eliminate_weight_transpose_ops(tensors, ops_by_uid, exec_order,
+            returned=set(self.dag.get("output_tensor_ids") or []))
 
         # Phase -0.4: Eliminate dead causal-mask chains (ones→tril→logical_not
         # →where→SDPA.attn_mask). The triton flash kernel handles causality
@@ -1040,6 +1041,7 @@ class TritonSequence:
         tensors: Dict[str, Any],
         ops_metadata: Dict[str, Any],
         execution_order: List[str],
+        *, returned: set,
     ) -> None:
         """Remove aten::t on weight tensors by pre-transposing at bind time.
 
@@ -1118,6 +1120,14 @@ class TritonSequence:
 
             # Skip MoE expert weights — moe_fused_dispatch transposes at runtime.
             if root_tid in moe_weight_ids:
+                continue
+
+            # A transpose the graph RETURNS is kept: its output is a value the caller reads (a streamed piece's
+            # seam), and the rewire would leave nothing under its id — the rule Prism prices by
+            # (`profiler.weight_transposes_read_in_place`: "and that the graph does not return"). HAT-S at 2048 px
+            # on 16 GB, its pieces cut between a linear's weight transpose and its matmul: the next piece found
+            # no aten.t::0::out_0 (2026-10-22).
+            if out_tids[0] in returned:
                 continue
 
             out_tid = out_tids[0]

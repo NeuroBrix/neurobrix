@@ -409,6 +409,7 @@ def _fused_upsample_conv2d_torch(
         if avail_after_halo < actual_band_h:
             actual_band_h = avail_after_halo
         output[:, :, oh_start:oh_start + actual_band_h, :] = conv_band[:, :, halo_top // sh_st:halo_top // sh_st + actual_band_h, :]
+        del pre_band, up_band, conv_band   # released before the next band allocates its own (as the NBX twin)
 
     if bias is not None:
         output += bias.view(1, -1, 1, 1)
@@ -570,6 +571,7 @@ def _tiled_conv2d_spatial_torch(
         if avail_after_halo < actual_band_h:
             actual_band_h = avail_after_halo
         output[:, :, oh_start:oh_start + actual_band_h, :] = conv_band[:, :, halo_top // sh_st:halo_top // sh_st + actual_band_h, :]
+        del in_band, conv_band       # released before the next band allocates its own (as the NBX twin)
 
     if bias is not None:
         output += bias.view(1, -1, 1, 1)
@@ -685,7 +687,7 @@ def _tiled_conv2d_spatial_nbx(
     """
     from neurobrix.kernels.nbx_tensor import NBXTensor
     from neurobrix.kernels.wrappers import (
-        conv2d_wrapper, add as nbx_add, constant_pad_nd_wrapper,
+        conv2d_wrapper, constant_pad_nd_wrapper, _conv_bias_inplace,
     )
 
     N, in_c, IH, IW = input_tensor.shape
@@ -734,8 +736,13 @@ def _tiled_conv2d_spatial_nbx(
         # Bias add inside band — see _fused_upsample_conv2d_nbx for rationale
         # (avoids 8 GiB bias broadcast materialization on Sana 4Kpx).
         if bias is not None:
-            conv_band = nbx_add(conv_band, bias.view(1, -1, 1, 1))
+            # In place, as every conv wrapper adds its bias (`_conv_bias_inplace`): an out-of-place add held a
+            # second band beside the first, which Prism's band price does not hold.
+            _conv_bias_inplace(conv_band, bias)
         output[:, :, oh_start:oh_start + actual_band_h, :] = conv_band[:, :, skip:skip + actual_band_h, :]
+        # Released before the next band allocates its own: held, the previous band's input and output stood beside
+        # the next band's (HAT-S at 2048 px on 16 GB: the second 1 153 MB band of conv::2 found no room, 2026-10-22).
+        del in_band, conv_band
     return output
 
 
@@ -754,7 +761,7 @@ def _fused_upsample_conv2d_nbx(
     """
     from neurobrix.kernels.nbx_tensor import NBXTensor
     from neurobrix.kernels.wrappers import (
-        upsample_nearest2d_wrapper, conv2d_wrapper, add as nbx_add,
+        upsample_nearest2d_wrapper, conv2d_wrapper, _conv_bias_inplace,
     )
 
     sh_st, sw_st = _pair(stride)
@@ -846,8 +853,9 @@ def _fused_upsample_conv2d_nbx(
         # (8 GiB broadcast on Sana 4Kpx 4096×4096 fp16). Mathematically
         # identical (bias is per-channel, applies element-wise on H,W).
         if bias is not None:
-            conv_band = nbx_add(conv_band, bias.view(1, -1, 1, 1))
+            _conv_bias_inplace(conv_band, bias)     # in place, as every conv wrapper adds its bias
         output[:, :, oh_start:oh_start + actual_band_h, :] = conv_band[:, :, skip:skip + actual_band_h, :]
+        del pre_band, up_band, conv_band           # released before the next band allocates its own
 
     return output
 

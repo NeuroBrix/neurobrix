@@ -145,6 +145,10 @@ memory:
   # the pool's contribution to the driver watermark (measured +3.4 GB on
   # the xlong int4 row unbounded). 0 = unbounded.
   alloc_pool_parked_cap_fraction: 0.50
+  # Allocator pool: the most a smallest-fit hit may hand out beyond its request (fraction of the request,
+  # kernels/nbx_tensor.DeviceAllocator._pool_fit_slack): the surplus is held unpriced while the tensor lives.
+  # Exact-size hits only, as measured on Volta (volta.yml, 2026-10-22).
+  alloc_pool_fit_slack_fraction: 0.0
 
   # Triton deferred-free queue policy (audit #2 F1, P-TRITON-LIVE-SET).
   # PRESSURE-SENSITIVE: always drain at `cliff` (throughput ceiling — no

@@ -54,7 +54,7 @@ class _PoolState:
 
     FIELDS = ("_pool_free", "_pool_alloc_size", "_pool_enabled", "_pool_cached_bytes",
               "_pool_cached_peak", "_pool_stats", "_cuda_ptr_size", "_cuda_ptr_device",
-              "_cuda_live_bytes", "_cuda_peak_bytes", "_pool_cap_bytes")
+              "_cuda_live_bytes", "_cuda_peak_bytes", "_pool_cap_bytes", "_pool_slack_frac")
 
     def __enter__(self):
         self.saved = {f: getattr(DeviceAllocator, f) for f in self.FIELDS}
@@ -105,6 +105,7 @@ def test_free_list_accounting_tracks_bytes_hits_and_slack():
     with _PoolState():
         _reinit(None)
         dev = 0
+        DeviceAllocator._pool_slack_frac[dev] = 1.0   # pinned: a fit may hand out up to twice its request
         # Three blocks "allocated" (bookkeeping only) and returned to the pool.
         for ptr, nbytes in ((0x1000, 1024), (0x2000, 4096), (0x3000, 6000)):
             DeviceAllocator._cuda_ptr_size[ptr] = nbytes
@@ -121,7 +122,7 @@ def test_free_list_accounting_tracks_bytes_hits_and_slack():
         assert st["fit"] == 1 and st["slack_total"] == 1000 and st["slack_max"] == 1000
         assert DeviceAllocator._pool_alloc_size[0x3000] == 6000
         assert DeviceAllocator._pool_cached_bytes[dev] == 1024
-        # Miss: nothing >= 3000 within 2x.
+        # Miss: nothing >= 3000 within its slack (2x here).
         assert DeviceAllocator._pool_take(dev, 3000) is None
         assert st["miss"] == 1
         # Peak unchanged by takes.
@@ -210,6 +211,27 @@ def test_parked_cap_evicts_largest_first_and_never_parks_an_over_cap_block():
             assert DeviceAllocator._pool_cached_bytes[dev] == 5000
     finally:
         nt._gpu_runtime, nt._active_backend = saved  # type: ignore
+
+
+def test_a_fit_hands_out_no_more_slack_than_the_profile_allows():
+    """HAT-S at 2048 px on a 16 GB V100 (2026-10-22): its 2 304 MB conv output took the freed 4 096 MB mask's
+    parked block (the old fixed 2x bound), 1 792 MB held that no plan priced, and the next tile found no room.
+    The bound is the profile's `memory.alloc_pool_fit_slack_fraction`; with no profile, exact-size hits only.
+    Injection (seen red, 2026-10-22): the bound back to `nbytes * 2` -> the first assertion fails."""
+    with _PoolState():
+        _reinit(None)
+        dev = 0
+        for ptr, nbytes in ((0x1000, 4096), (0x2000, 2600)):
+            DeviceAllocator._cuda_ptr_size[ptr] = nbytes
+            DeviceAllocator._cuda_ptr_device[ptr] = dev
+            DeviceAllocator.free_cuda(ptr)
+        DeviceAllocator._pool_slack_frac[dev] = 0.125
+        assert DeviceAllocator._pool_take(dev, 2304) is None          # 4096 and 2600 both over 12.5 % slack
+        DeviceAllocator._pool_slack_frac[dev] = 0.25
+        assert DeviceAllocator._pool_take(dev, 2304) == 0x2000        # 2600: 12.8 % slack, within 25 %
+        assert DeviceAllocator._pool_take(dev, 2304) is None          # the 4096 block stays parked
+        DeviceAllocator._pool_slack_frac.clear()
+        assert DeviceAllocator._pool_fit_slack(dev) == 0.0            # no profile in a bare process: exact only
 
 
 if __name__ == "__main__":

@@ -543,6 +543,11 @@ class LayerStreamingStrategy(ExecutionStrategy):
                       f"kept={sorted(kept & produced)[:4]}",
                       flush=True)
             values.update(out)
+            # `values` is now the only holder of what this piece made: kept bound to the end of the next piece's run,
+            # this piece's own result dict held every output on the device beside it, the ones parked on the host
+            # included (HAT-S at 2048 px on 16 GB: piece 1 held piece 0's 4 096 MB attention mask and two 2 304 MB maps
+            # the plan had parked, 2026-10-22).
+            del out, feed
             # A value no later piece reads is released after its last reader, as the whole run frees a
             # tensor after its last use: held to the end, every seam the component crossed stayed beside
             # the pieces Prism priced without it (its live curve frees it).

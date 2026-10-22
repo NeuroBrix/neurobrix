@@ -48,3 +48,35 @@ def test_the_fused_upsample_conv_equals_upsample_then_conv_on_the_device(sh):
                                                   False, (0, 0), 1, 4)).float().cpu().numpy()
     assert got.shape == ref.shape
     assert np.abs(got - ref).max() < 1e-3, np.abs(got - ref).max()
+
+
+def test_a_biased_tiled_conv_holds_one_band_beside_its_output():
+    """The band's bias is added IN PLACE (`_conv_bias_inplace`, as every conv wrapper adds it) and a band's buffers
+    are released before the next band allocates: Prism's band price holds the full output and ONE band. HAT-S at
+    2048 px on a 16 GB V100 (2026-10-22): the out-of-place bias add and the previous band's buffers stood beside the
+    next band, and conv::2's second 1 153 MB band found no room. Injection (seen red, 2026-10-22): the out-of-place
+    `add` back -> the peak assertion fails; the bias left out -> the value assertion fails."""
+    from neurobrix.kernels.nbx_tensor import DeviceAllocator as DA
+    rng = np.random.default_rng(5)
+    x = rng.standard_normal((1, 8, 256, 64)).astype(np.float32)
+    w = (rng.standard_normal((16, 8, 3, 3)) * 0.2).astype(np.float32)
+    b = rng.standard_normal(16).astype(np.float32)
+    ref = torch.nn.functional.conv2d(torch.from_numpy(x), torch.from_numpy(w), torch.from_numpy(b),
+                                     padding=(1, 1)).numpy()
+    xn, wn, bn = _nbx(x), _nbx(w), _nbx(b)
+    tf = 4
+    out_bytes = 16 * 256 * 64 * 4
+    band_out = 16 * (256 // tf + 2) * 64 * 4                       # a band's conv output, its halo rows included
+    band_in = 8 * (256 // tf + 4) * (64 + 2) * 4                   # a band's padded input
+    _tiled_conv2d_spatial_nbx(xn, wn, bn, 1, 1, 1, 1, 1, 1, 1, tf)   # warm: a first launch may sweep its configs
+    dev = DA.get_device()
+    DA._pool_flush(dev)
+    base = DA._cuda_live_bytes.get(dev, 0)
+    DA._cuda_peak_bytes[dev] = base
+    got_t = _tiled_conv2d_spatial_nbx(xn, wn, bn, 1, 1, 1, 1, 1, 1, 1, tf)
+    peak = DA._cuda_peak_bytes.get(dev, 0) - base
+    got = nbx_to_torch(got_t).float().cpu().numpy()
+    assert np.abs(got - ref).max() < 1e-3, np.abs(got - ref).max()
+    # one band's work (its input copied then padded, the conv's own buffers, its output) beside the full output:
+    # measured 1.09 MB over the output here; the previous band and an out-of-place bias add beside it, 1.63 MB
+    assert peak <= out_bytes + 3 * (band_in + band_out), (peak, out_bytes, band_in, band_out)

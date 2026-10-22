@@ -1088,6 +1088,7 @@ class DeviceAllocator:
     # the device's total memory (ONE cudaMemGetInfo at the first free on
     # that device, never in the hot path afterwards).
     _pool_cap_bytes: Dict[int, int] = {}
+    _pool_slack_frac: Dict[int, float] = {}
 
     # Deferred-queue reclaimers (P-TRITON-LIVE-SET). The triton hot loops
     # register their deferred dead-tensor queues here. Since 2026-10-11 the
@@ -1340,8 +1341,9 @@ class DeviceAllocator:
             st["exact"] += 1
             DeviceAllocator._pool_cached_bytes[dev] = DeviceAllocator._pool_cached_bytes.get(dev, 0) - nbytes
             return ptr
-        # Smallest-fit ≥ nbytes, capped at 2× to avoid catastrophic waste.
-        max_acceptable = nbytes * 2
+        # Smallest-fit ≥ nbytes, its slack bounded by the profile (`_pool_fit_slack`): a larger block's
+        # surplus is held, unusable, as long as the tensor lives, and no plan prices it.
+        max_acceptable = nbytes + int(nbytes * DeviceAllocator._pool_fit_slack(dev))
         for sz in sorted(per_dev.keys()):
             if sz >= nbytes and sz <= max_acceptable and per_dev[sz]:
                 ptr = per_dev[sz].pop()
@@ -1360,6 +1362,28 @@ class DeviceAllocator:
                 return ptr
         st["miss"] += 1
         return None
+
+    @staticmethod
+    def _pool_fit_slack(dev: int) -> float:
+        """The most a smallest-fit hit may hand out beyond its request, as a fraction of the request:
+        `memory.alloc_pool_fit_slack_fraction` (arch yml), resolved once per device. The surplus of a
+        larger block stays held while its tensor lives and no plan prices it: at 2x, HAT-S at 2048 px
+        on a 16 GB V100 gave its 2 304 MB conv output the freed 4 096 MB attention mask's block, and the
+        next 1 153 MB tile found no room the plan had left (2026-10-22). No profile yet, or no key:
+        exact-size hits only (0.0, not cached until the profile exists)."""
+        frac = DeviceAllocator._pool_slack_frac.get(dev)
+        if frac is not None:
+            return frac
+        try:
+            from neurobrix.kernels.wrappers import get_hardware_profile, _arch_memory_param
+            prof = get_hardware_profile()
+            if prof is None or not getattr(prof, "devices", None):
+                return 0.0
+            frac = max(0.0, float(_arch_memory_param("alloc_pool_fit_slack_fraction", 0.0)))
+        except Exception:
+            return 0.0
+        DeviceAllocator._pool_slack_frac[dev] = frac
+        return frac
 
     @staticmethod
     def _pool_parked_cap(dev: int) -> int:
