@@ -19,9 +19,9 @@ def test_a_key_the_card_holds_is_drawn_at_its_class_top():
     assert A._softmax_shape(1024, 256, CARD, "fp32", "fp32", "softmax") == (1024, 256)
 
 
-def test_a_key_over_the_card_is_drawn_at_the_longest_row_of_its_class_that_fits():
+def test_a_key_over_the_card_is_drawn_at_the_shortest_row_of_its_class():
     rows, feat = A._softmax_shape(2097152, 1024, CARD, "fp32", "fp32", "softmax")
-    assert rows == 2097152 and softmax_feat_bucket(feat) == 1024 and rows * feat * 8 <= CARD * 0.95, (rows, feat)
+    assert rows == 2097152 and feat == 513 and softmax_feat_bucket(feat) == 1024, (rows, feat)
 
 
 def test_a_key_no_row_of_its_class_fits_is_refused_by_name():

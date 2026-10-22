@@ -302,7 +302,7 @@ def _softmax_shape(rows: int, feat: int, card_bytes, in_dt: str, out_dt: str, wh
     """The (rows, row length) a softmax key is synthesised at. The key carries the row length's CLASS
     (`launch_keys.softmax_feat_bucket`: the padded row, every length of (feat/2, feat] forms it) and the rows
     (`bucket_of("M")`). At the class's top the draw is the key's whole; where the card cannot hold it in and out
-    within the capacity Prism plans against (`PRISM_DEFAULTS["safety_margin"]`), it is drawn at the longest row
+    within the capacity Prism plans against (`PRISM_DEFAULTS["safety_margin"]`), it is drawn at the shortest row
     that still forms the key, as a GEMM key is drawn at its representative (`_gemm_rows`) — a key a plan forms
     fits that capacity by construction. HAT-L at 2048 px on 16 GB: its sliced stretch forms softmax 2 097 152 rows
     of 576 (the overlapping window's 24 x 24 keys), class 1 024 — 16 GiB at the class's top, the class's whole
@@ -316,10 +316,13 @@ def _softmax_shape(rows: int, feat: int, card_bytes, in_dt: str, out_dt: str, wh
     usable = int(int(card_bytes) * float(PRISM_DEFAULTS["safety_margin"]))
     if rows * feat * per_elem <= usable:
         return rows, feat
-    longest = usable // max(rows * per_elem, 1)
-    if longest < 1 or softmax_feat_bucket(longest) != feat:
+    # the SHORTEST row of the class: every config's tile, register budget and pruning are the padded row's, so it
+    # stands for the class as well as any, and leaves the sweep its own buffers (drawn at the longest that fit,
+    # 2 097 152 x 972, in and out took 15.2 GiB and the sweep's next 256 MB found no room, 2026-10-22)
+    shortest = feat // 2 + 1 if feat > 1 else 1
+    if softmax_feat_bucket(shortest) != feat or rows * shortest * per_elem > usable:
         raise KeyTooLargeForClass(rows * feat * per_elem, int(card_bytes), what)
-    return rows, int(longest)
+    return rows, int(shortest)
 
 
 def _refuse_oversize(card_bytes, specs, what: str) -> None:
