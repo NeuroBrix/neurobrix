@@ -8,14 +8,20 @@ where mat is [N, M], vec is [M], self is broadcastable to [N].
 import triton
 import triton.language as tl
 
+from ._configs import nbx_autotune, addmv_configs, prune_addmv
 
+
+# rows, reduction tile, warps: the certified configuration of the key (workstream 1, small-M GEMM), the key the derived
+# census forms (`launch_keys.addmv_launches`)
+@nbx_autotune(configs=addmv_configs(), key=['N_BUCKET', 'M_BUCKET'],
+              prune_configs_by={'early_config_prune': prune_addmv}, cache_results=True)
 @triton.jit
 def addmv_kernel(
     A_ptr,
     B_ptr,
     inp_ptr,
     out_ptr,
-    N, M,
+    N, M, N_BUCKET, M_BUCKET,
     alpha,
     beta,
     stride_an, stride_am,

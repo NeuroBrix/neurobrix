@@ -926,7 +926,7 @@ _INERT_AXES = {}         # {(model, comp): [the axes no autotuned kernel reads]}
 # kernel, and a value-derived axis whose descendants hold none of these moves no key.
 _KEYED_KINDS = frozenset({
     "aten::native_layer_norm", "aten::layer_norm", "custom::rms_norm", "aten::rms_norm",
-    "aten::mm", "aten::bmm", "aten::addmm", "aten::baddbmm", "aten::convolution", "aten::conv1d",
+    "aten::mm", "aten::bmm", "aten::addmm", "aten::baddbmm", "aten::mv", "aten::addmv", "aten::convolution", "aten::conv1d",
     "aten::lstm", "aten::_fft_r2c", "aten::_fft_c2r", "aten::linear", "aten::matmul", "aten::stft",
     "aten::istft", "aten::scaled_dot_product_attention", "aten::_scaled_dot_product_attention",
     "aten::_scaled_dot_product_efficient_attention", "aten::_scaled_dot_product_flash_attention",
@@ -949,6 +949,14 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
         elif kind == "aten::bmm":
             (_, M, K), (_, _, N) = shape(ins[0]), shape(ins[1])
             launches = LK.bmm_launches(M, K, N, dt(ins[0]), dt(ins[1]), has_native_bf16)
+        elif kind == "aten::mv":
+            # mv(mat [N, K], vec [K]) -> `mv_wrapper`
+            (N, K) = shape(ins[0])
+            launches = LK.mv_launches(N, K, dt(ins[0]), dt(ins[1]), has_native_bf16)
+        elif kind == "aten::addmv":
+            # addmv(input [N], mat [N, K], vec [K]) -> `addmv_wrapper`
+            (N, K) = shape(ins[1])
+            launches = LK.addmv_launches(N, K, dt(ins[1]), dt(ins[2]), dt(ins[0]), has_native_bf16)
         elif kind in ("aten::scaled_dot_product_attention", "aten::_scaled_dot_product_attention",
                       "aten::_scaled_dot_product_efficient_attention",
                       "aten::_scaled_dot_product_flash_attention",

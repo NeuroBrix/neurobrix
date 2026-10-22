@@ -797,6 +797,68 @@ def prune_row_programs(configs, named_args, **kwargs):
     return keep or configs[:1]
 
 
+def gemv_vec_configs() -> List[triton.Config]:
+    """The candidates the certifier proves for the SIMT GEMV (`gemv_vec_kernel`, the decode projection of every
+    language model — workstream 1, small-M GEMM): output rows per program x K chunk x warps x stages. The tiles it
+    ran before it was certified are among them (8 x 256, 4 warps, 1 stage; Apple's 8 x 128). Every config reduces all
+    of K inside one program in a fixed chunk order — no split-K, no atomics: the chunk width moves the summation
+    order and so can move bits, rows per program cannot."""
+    return [triton.Config({'BLOCK_N': bn, 'BLOCK_K': bk}, num_warps=w, num_stages=st)
+            for bn in (4, 8, 16, 32) for bk in (128, 256, 512, 1024) for w in (2, 4, 8) for st in (1, 2)]
+
+
+def prune_gemv_vec(configs, named_args, **kwargs):
+    """A program's tile is BLOCK_N x BLOCK_K: at most the backend's reduce-tile cap (`nbx_tensor.reduce_tile_max`,
+    where its lowering refuses beyond — Metal's 1024-thread threadgroup) and, on a backend that stages the reduce one
+    element per thread, a K chunk within the program's threads (`nbx_tensor.reduced_extent_max`); never a chunk wider
+    than K's next power of two nor more rows than N's but the smallest candidate."""
+    from neurobrix.kernels.nbx_tensor import reduce_tile_max, reduced_extent_max
+    cap = reduce_tile_max()
+    k = triton.next_power_of_2(int(named_args['K']))
+    n = triton.next_power_of_2(int(named_args['N']))
+    bk_min = min(c.kwargs['BLOCK_K'] for c in configs)
+    bn_min = min(c.kwargs['BLOCK_N'] for c in configs)
+    keep = [c for c in configs
+            if c.kwargs['BLOCK_N'] * c.kwargs['BLOCK_K'] <= cap
+            and c.kwargs['BLOCK_K'] <= max(k, bk_min) and c.kwargs['BLOCK_N'] <= max(n, bn_min)]
+    keep = [c for c in keep if reduced_extent_max(c.num_warps) is None
+            or c.kwargs['BLOCK_K'] <= reduced_extent_max(c.num_warps)]
+    if not keep:
+        raise ValueError(f"ZERO FALLBACK: no GEMV tile fits the backend's reduce tile of {cap} (N={named_args['N']}, "
+                         f"K={named_args['K']})")
+    return keep
+
+
+def addmv_configs() -> List[triton.Config]:
+    """The candidates the certifier proves for `addmv_kernel` (the decode projection WITH a bias, `addmm` at M <= 4):
+    output rows x reduction tile x warps. The kernel keeps a BLOCK_N x BLOCK_M fp32 accumulator and reduces it after
+    the loop. The tiles it ran before (64 x 256, 4 warps; Apple's 8 x 128 at 32 warps) are among them."""
+    return [triton.Config({'BLOCK_N': bn, 'BLOCK_M': bm}, num_warps=w)
+            for bn in (8, 16, 32, 64) for bm in (128, 256, 512) for w in (4, 8, 32)]
+
+
+def prune_addmv(configs, named_args, **kwargs):
+    """The accumulator tile BLOCK_N x BLOCK_M within the backend's reduce-tile cap (`reduce_tile_max`), never a tile
+    wider than M's next power of two nor more rows than N's but the smallest candidate; on a backend that stages the
+    reduce one element per thread, a reduction tile within the program's threads (`nbx_tensor.reduced_extent_max`;
+    Metal, measured 2026-09-07: 64 x 256 against a 128-thread group refused)."""
+    from neurobrix.kernels.nbx_tensor import reduce_tile_max, reduced_extent_max
+    cap = reduce_tile_max()
+    m = triton.next_power_of_2(int(named_args['M']))
+    n = triton.next_power_of_2(int(named_args['N']))
+    bm_min = min(c.kwargs['BLOCK_M'] for c in configs)
+    bn_min = min(c.kwargs['BLOCK_N'] for c in configs)
+    keep = [c for c in configs
+            if c.kwargs['BLOCK_N'] * c.kwargs['BLOCK_M'] <= cap
+            and c.kwargs['BLOCK_M'] <= max(m, bm_min) and c.kwargs['BLOCK_N'] <= max(n, bn_min)]
+    keep = [c for c in keep if reduced_extent_max(c.num_warps) is None
+            or c.kwargs['BLOCK_M'] <= reduced_extent_max(c.num_warps)]
+    if not keep:
+        raise ValueError(f"ZERO FALLBACK: no addmv tile fits the backend's reduce tile of {cap} (N={named_args['N']}, "
+                         f"M={named_args['M']})")
+    return keep
+
+
 def batch_block_heuristic(args: Dict) -> int:
     """Heuristic for batch block size in softmax/norm kernels.
 

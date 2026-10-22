@@ -36,13 +36,19 @@ of K reduced inside it in fixed chunk order, no atomics.
 import triton
 import triton.language as tl
 
+from ._configs import nbx_autotune, gemv_vec_configs, prune_gemv_vec
 
+
+# rows per program, K chunk, warps, stages: the certified configuration of the key (workstream 1, small-M GEMM), the
+# key the derived census forms (`launch_keys.mv_launches`)
+@nbx_autotune(configs=gemv_vec_configs(), key=['N_BUCKET', 'K_BUCKET'],
+              prune_configs_by={'early_config_prune': prune_gemv_vec}, cache_results=True)
 @triton.jit
 def gemv_vec_kernel(
     A_ptr,          # [N, K] weights, row-major (pre-transposed), fp16
     B_ptr,          # [K] activation (fp32 on Volta via the AMP upcast)
     C_ptr,          # [N] out
-    N, K,
+    N, K, N_BUCKET, K_BUCKET,
     stride_an, stride_am,
     stride_bm,
     stride_cn,

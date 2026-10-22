@@ -168,26 +168,22 @@ def test_no_declared_tile_exceeds_the_threadgroup_this_device_reports():
                     f"threadgroup")
 
 
-#: The three tiles the engine reads from the profile, and for each one WHICH
-#: extent is the one being reduced. The kernels stage that reduce one element
-#: per thread, so it is that extent — not the tile's area — that cannot exceed
-#: the threadgroup. Named per tile because it differs per kernel: argmax scans
-#: a row, mv reduces along BLOCK_M, gemv_vec along BLOCK_K.
+#: The tiles the engine reads from the profile, and for each one WHICH extent is the one being reduced. The kernels
+#: stage that reduce one element per thread, so it is that extent — not the tile's area — that cannot exceed the
+#: threadgroup: argmax scans a row. The GEMV and mv tiles left the profile for the certifier (workstream 1, the tile is
+#: the certified configuration of the key); the same rule is their configs' prune (`nbx_tensor.reduced_extent_max`).
 _REDUCED_EXTENT = {
     "argmax": "tile_n",
-    "mv": "block_m",
-    "gemv_vec": "block_k",
 }
 
 
 @pytest.mark.skipif(_device() is None, reason="not an Apple device")
 @pytest.mark.parametrize("tile_name", sorted(_REDUCED_EXTENT))
 def test_every_profile_declares_the_tiles_the_engine_reads(tile_name):
-    """A silent profile is not a neutral profile for these three.
+    """A silent profile is not a neutral profile for the tiles it reads.
 
-    Absent, each key falls back to the module default — 4096/4 warps for
-    argmax, 256/4 for mv, 8x256/4 for gemv_vec — which asks 4096, 256 and 2048
-    elements of 128 threads. On a backend that stages the reduce one element
+    Absent, the key falls back to the module default — 4096/4 warps for
+    argmax — which asks 4096 elements of 128 threads. On a backend that stages the reduce one element
     per thread that is a REFUSAL, not a slow path. So the profile that says
     nothing is the profile that makes these kernels refuse, and the omission
     has to be a red test rather than a quiet inheritance.

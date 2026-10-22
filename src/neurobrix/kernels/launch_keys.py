@@ -29,6 +29,8 @@ SOFTMAX = "neurobrix.kernels.ops.softmax.softmax_forward_kernel"
 UNIT_FLASH = "neurobrix.kernels.ops.flash_attention_m8n8k4.flash_attention_m8n8k4_kernel"
 LAYER_NORM = "neurobrix.kernels.ops.layernorm.layer_norm_forward_kernel"
 RMS_NORM = "neurobrix.kernels.ops.rmsnorm.rms_norm_forward_kernel"
+GEMV_VEC = "neurobrix.kernels.ops.gemv_vec.gemv_vec_kernel"
+ADDMV = "neurobrix.kernels.ops.addmv_op.addmv_kernel"
 
 F32, BF16, F16 = NBXDtype.float32, NBXDtype.bfloat16, NBXDtype.float16
 _HALF = (F16, BF16)
@@ -166,13 +168,30 @@ def matrix_unit_native(a: NBXDtype, b: NBXDtype, M: int) -> bool:
     return matrix_unit_operands(a, b, M) == ("native", "native")
 
 
+def mv_launches(N: int, K: int, mat: NBXDtype, vec: NBXDtype, native_bf16: bool,
+                force_accum: bool = False) -> List[Launch]:
+    """`mv_wrapper` on a [N, K] matrix and a [K] vector: the SIMT GEMV's key — the N and K buckets, then the dtype
+    tags of the matrix, the vector and the output (`matmul_out_dtype` of the matrix at one row)."""
+    out = matmul_out_dtype(mat, 1, False, native_bf16, force_accum)
+    return [(GEMV_VEC, (bucket_of("N", N), bucket_of("K", K), tag(mat), tag(vec), tag(out)))]
+
+
+def addmv_launches(N: int, K: int, mat: NBXDtype, vec: NBXDtype, bias: NBXDtype, native_bf16: bool,
+                   force_accum: bool = False) -> List[Launch]:
+    """`addmv_wrapper` on a [N, K] matrix, a [K] vector and a [N] bias: the key — the N and K buckets (K the kernel's
+    `M`), then the dtype tags of the matrix, the vector, the bias and the output (`matmul_out_dtype` at one row)."""
+    out = matmul_out_dtype(mat, 1, False, native_bf16, force_accum)
+    return [(ADDMV, (bucket_of("N", N), bucket_of("M", K), tag(mat), tag(vec), tag(bias), tag(out)))]
+
+
 def mm_launches(M: int, K: int, N: int, a: NBXDtype, b: NBXDtype, native_bf16: bool,
                 force_accum: bool = False) -> List[Launch]:
-    """`mm` (and `mm_epilogue`): M <= 4 runs per-row GEMV (no autotuned kernel); otherwise one
-    key — row bands above 2^31 output elements keep the whole shape's M bucket."""
-    if M <= 4:
-        return []
+    """`mm` (and `mm_epilogue`): M <= 4 runs one GEMV per row on the operands as `mm_dtypes` casts them (the weight
+    transposed to [N, K], each activation row the vector) — one key; otherwise one key — row bands above 2^31 output
+    elements keep the whole shape's M bucket."""
     a, b, promote_a, promote_b = mm_dtypes(a, b, native_bf16, force_accum)
+    if M <= 4:
+        return mv_launches(N, K, b, a, native_bf16, force_accum)
     if matrix_unit_takes(a, b, M):
         return []
     out = matmul_out_dtype(a, M, promote_a, native_bf16, force_accum)
@@ -185,7 +204,10 @@ def addmm_launches(M: int, K: int, N: int, a: NBXDtype, b: NBXDtype, bias: NBXDt
     """`addmm` on a 2-D activation (an N-D one is flattened to (numel/K, K) first): M <= 4 runs
     per-row addmv; a [N] / [1, N] bias (`bias_row`) on the matrix unit has no key; otherwise one key."""
     a, b, bias, promote_a, promote_b, _ = addmm_dtypes(a, b, bias, native_bf16, force_accum)
-    if M <= 4 or (bias_row and matrix_unit_takes(a, b, M)):
+    if M <= 4:
+        # one addmv per row on the operands as cast, the weight transposed to [N, K], the bias its row or the shared one
+        return addmv_launches(N, K, b, a, bias, native_bf16, force_accum)
+    if bias_row and matrix_unit_takes(a, b, M):
         return []
     out = matmul_out_dtype(a, M, promote_a, native_bf16, force_accum)
     ieee = (not native_bf16) and out == F32
@@ -254,7 +276,7 @@ def row_breakpoints(lo: int, hi: int) -> List[int]:
 
 def matmul_route(a_rank: int, b_rank: int) -> str:
     """`matmul_wrapper`'s route by operand ranks (torch.matmul semantics): "mm" (2-D x 2-D), "bmm"
-    (3-D x 3-D), "mv" (2-D x 1-D, the SIMT GEMV — no autotuned kernel), "batched" (N-D x 2-D:
+    (3-D x 3-D), "mv" (2-D x 1-D, the SIMT GEMV), "batched" (N-D x 2-D:
     the leading dims folded into bmm's batch), "general" (N-D x N-D: both batches collapsed)."""
     if a_rank == 2 and b_rank == 2:
         return "mm"
@@ -277,7 +299,7 @@ def matmul_launches(a_shape, b_shape, a: NBXDtype, b: NBXDtype, native_bf16: boo
     if route == "mm":
         return mm_launches(a_shape[0], a_shape[1], b_shape[1], a, b, native_bf16, force_accum)
     if route == "mv":
-        return []
+        return mv_launches(a_shape[0], a_shape[1], a, b, native_bf16, force_accum)
     return bmm_launches(a_shape[-2], a_shape[-1], b_shape[-1], a, b, native_bf16, force_accum)
 
 

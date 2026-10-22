@@ -239,7 +239,6 @@ from .ops.logical_not import logical_not_forward_kernel
 from .ops.conv1d import conv1d_forward_kernel
 from .ops.lerp import lerp_tensor_forward_kernel, lerp_scalar_head_kernel, lerp_scalar_tail_kernel
 from .ops.dot_op import dot_kernel_small, dot_kernel_partial, dot_kernel_reduce
-from .ops.mv_op import mv_kernel
 from .ops.flip_op import flip_1d_kernel, flip_strided_kernel
 from .ops.cat_op import cat_copy_kernel_4
 from .ops.fill_op import fill_kernel
@@ -484,10 +483,6 @@ def _reduction_tile(M):
     """(grid, block_m, block_n) for a full-row reduction gridded on M."""
     bm, bn = _clamp_reduce_tile(_RED_BM, _RED_BN)
     return (triton.cdiv(M, bm),), bm, bn
-_MV_BN, _MV_BM = 64, 256                  # mv / addmv  (BLOCK_N rows, BLOCK_M reduction tile)
-                                          # the default; `block_sizes.mv` in the
-                                          # hardware profile overrides it — see
-                                          # _mv_tile()
 _TRIU_MBS, _TRIU_NBS = 64, 512            # triu / tril 2D
 _TRIU_BATCH_BS, _TRIU_MN_BS = 32, 1024    # triu / tril batch
 _CONV_BHW, _CONV_OUTF, _CONV_INF = 64, 64, 32  # conv2d
@@ -1978,12 +1973,6 @@ def _dequant_gemv_block_n(N: int) -> int:
     return bn
 
 
-# The adopted GEMV tile (2026-08-24, pinned protocol): BLOCK_N=8 rows per
-# program, BLOCK_K=256 per chunk, 4 warps. Every profile that does not say
-# otherwise gets exactly this, so no measured configuration moves.
-_GEMV_VEC_TILE = {"block_n": 8, "block_k": 256, "num_warps": 4}
-
-
 # The argmax row tile: a power-of-two cap on the vocabulary row a single
 # program scans, and the warp count that scans it. 4096 with Triton's default
 # 4 warps is what every architecture used before this became readable.
@@ -2063,59 +2052,6 @@ def _argmax_tile() -> tuple:
     except Exception:
         pass
     return cap, warps
-
-
-def _mv_tile() -> tuple:
-    """`(BLOCK_N, BLOCK_M, num_warps)` for the mv / addmv kernels, from
-    `block_sizes.mv` in config/vendors/<vendor>/<arch>.yml.
-
-    Companion to `_gemv_vec_tile`, and the same reasoning: the kernel keeps a
-    BLOCK_N x BLOCK_M accumulator and reduces it along its rows, so a backend
-    that stages that reduce one element per thread cannot take a tile wider
-    than the threadgroup — and here the threadgroup is `num_warps * 32`, which
-    is why the warp count belongs to the tile rather than beside it. Absent
-    key / no profile -> the module defaults, so no measured architecture
-    moves.
-    """
-    bn, bm, warps = _MV_BN, _MV_BM, 4
-    try:
-        from .ops._configs import active_vendor_profile
-        cfg = (active_vendor_profile().get("block_sizes", {}) or {}).get("mv")
-        if isinstance(cfg, dict):
-            bn = int(cfg.get("block_n") or bn)
-            bm = int(cfg.get("block_m") or bm)
-            warps = int(cfg.get("num_warps") or warps)
-    except Exception:
-        pass
-    return bn, bm, warps
-
-
-def _gemv_vec_tile() -> dict:
-    """The GEMV row-group tile for the executing hardware, from
-    `block_sizes.gemv_vec` in config/vendors/<vendor>/<arch>.yml.
-
-    It was three integers written in this function with environment
-    overrides, which is a hardware parameter living in code — and the day a
-    backend could not run the adopted one there was nowhere to say so. The
-    kernel reduces a BLOCK_N x BLOCK_K tile along its rows, and a backend that
-    stages that reduce one element per thread cannot take a tile wider than
-    its threadgroup; that is a property of the hardware and its compiler, and
-    this is where such properties are written.
-
-    Absent key / no profile / loader failure -> the adopted values, so every
-    architecture that has not been measured keeps the kernel it had.
-    """
-    tile = dict(_GEMV_VEC_TILE)
-    try:
-        from .ops._configs import active_vendor_profile
-        cfg = (active_vendor_profile().get("block_sizes", {}) or {}).get("gemv_vec")
-        if isinstance(cfg, dict):
-            for key in tile:
-                if cfg.get(key):
-                    tile[key] = int(cfg[key])
-    except Exception:
-        pass
-    return tile
 
 
 def _mm_quantized(a, qt, _epilogue: int = 0):
@@ -4998,17 +4934,12 @@ def dot_wrapper(x, y) :
 def mv_wrapper(mat, vec) :
     """Matrix-vector multiply: out[i] = sum_j(mat[i, j] * vec[j]).
 
-    The SIMT gemv_vec kernel (ops/gemv_vec.py) is the DEFAULT
-    (ADOPTED 2026-08-24: locked pinned protocol, interleaved arms,
-    n=5, no overlap, outputs byte-identical at all three contexts —
-    short +7.1%, 4,164 +6.4%, ~8,300 +6.1%; judged config
-    BN=8/BK=512/W=4). Its (BLOCK_N,) per-chunk-reduced accumulator
-    replaces the incumbent FlagGems kernel's (64, 256) fp32 register
-    tile (64 KB/CTA, spill class). NBX_MV_VEC=0 restores the
-    incumbent. Deterministic both ways (all of K inside one program,
-    fixed order — no split-K atomics, the GemLite pattern refused).
+    The SIMT gemv_vec kernel (ops/gemv_vec.py, adopted 2026-08-24 over the FlagGems mv kernel: its (BLOCK_N,)
+    per-chunk-reduced accumulator, all of K inside one program in fixed order — no split-K atomics). Its tile —
+    rows per program, K chunk, warps, stages — is the certified configuration of the key (workstream 1, small-M
+    GEMM): the N and K buckets from the launcher's own `bucket_of` and the dtypes of its tensors, the key the derived
+    census forms (`launch_keys.mv_launches`).
     """
-    import os as _os_mv
     # A wrapper that copies whatever it is given cannot honour a caller that took care not to
     # give it a copy. The gemv kernels take the matrix's two strides and the vector's one; what
     # they need is K-contiguous ROWS (stride(1) == 1: the pre-transposed weight layout, where
@@ -5018,35 +4949,16 @@ def mv_wrapper(mat, vec) :
         mat = mat.contiguous()          # justified: the kernel's rows must be K-contiguous
     if vec.stride(0) == 0:
         vec = vec.contiguous()          # justified: a broadcast vector has no stride to walk
-    N, M = mat.shape
+    N, K = mat.shape
     out = NBXTensor.empty(N, device=mat.device, dtype=_matmul_out_dtype(mat))
     _set_device(mat)
-    if _os_mv.environ.get("NBX_MV_VEC", "1") != "0":
-        from .ops.gemv_vec import gemv_vec_kernel
-        tile = _gemv_vec_tile()
-        BN = int(_os_mv.environ.get("NBX_MVV_BN", tile["block_n"]))
-        BK = int(_os_mv.environ.get("NBX_MVV_BK", tile["block_k"]))
-        W = int(_os_mv.environ.get("NBX_MVV_WARPS", tile["num_warps"]))
-        gemv_vec_kernel[(triton.cdiv(N, BN),)](
-            mat, vec, out,
-            N, M,
-            mat.stride(0), mat.stride(1),
-            vec.stride(0),
-            out.stride(0),
-            BLOCK_N=BN, BLOCK_K=BK,
-            num_warps=W, num_stages=1,
-        )
-        return out
-    _mv_bn, _mv_bm, _mv_warps = _mv_tile()
-    grid = (triton.cdiv(N, _mv_bn),)
-    mv_kernel[grid](
+    from .ops.gemv_vec import gemv_vec_kernel
+    gemv_vec_kernel[lambda META: (triton.cdiv(N, META['BLOCK_N']),)](
         mat, vec, out,
-        N, M,
+        N, K, _bucket_of("N", N), _bucket_of("K", K),
         mat.stride(0), mat.stride(1),
         vec.stride(0),
         out.stride(0),
-        BLOCK_M=_mv_bm, BLOCK_N=_mv_bn,
-        num_warps=_mv_warps,
     )
     return out
 
@@ -5354,19 +5266,17 @@ def addmv_wrapper(
     input = input.contiguous()
     N, M = mat.shape
     out = NBXTensor.empty(N, device=mat.device, dtype=_matmul_out_dtype(mat))
-    _mv_bn, _mv_bm, _mv_warps = _mv_tile()
-    grid = (triton.cdiv(N, _mv_bn),)
     _set_device(mat)
-    addmv_kernel[grid](
+    # rows, reduction tile, warps: the certified configuration of the key (workstream 1, small-M GEMM) — the N and M
+    # buckets and the dtypes of its tensors, the key the derived census forms (`launch_keys.addmv_launches`)
+    addmv_kernel[lambda META: (triton.cdiv(N, META['BLOCK_N']),)](
         mat, vec, input, out,
-        N, M,
+        N, M, _bucket_of("N", N), _bucket_of("M", M),
         alpha, beta,
         mat.stride(0), mat.stride(1),
         vec.stride(0),
         input.stride(0),
         out.stride(0),
-        BLOCK_M=_mv_bm, BLOCK_N=_mv_bn,
-        num_warps=_mv_warps,
     )
     return out
 

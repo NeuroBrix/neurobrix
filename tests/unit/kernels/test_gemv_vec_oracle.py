@@ -10,8 +10,7 @@ GB/token of fp16 weight reads (lm_head alone 26%).
 Five proofs (the family rule): float64 correctness on the real
 shapes + ragged K; determinism x3; masked tail (K not a BLOCK_K
 multiple contributes exactly its elements); COUNTED route activation
-(the env actually reaches the kernel; off by default during
-judgment); mixed-dtype contract (fp16 weights x fp32 activation — the
+(every mv reaches the kernel); mixed-dtype contract (fp16 weights x fp32 activation — the
 Volta AMP shape).
 
 Runnable two ways:
@@ -21,7 +20,6 @@ Runnable two ways:
 from __future__ import annotations
 
 import ctypes
-import os as _os
 
 try:
     import pytest
@@ -76,11 +74,7 @@ def _mk(N, K, seed=0):
 
 
 def _run_vec(mat, vec):
-    _os.environ["NBX_MV_VEC"] = "1"
-    try:
-        return W.mv_wrapper(mat, vec)
-    finally:
-        _os.environ.pop("NBX_MV_VEC", None)
+    return W.mv_wrapper(mat, vec)
 
 
 # The five real call sites + ragged-K edges.
@@ -142,9 +136,9 @@ def test_gemv_vec_masked_tail_inert() -> None:
     assert o1 == o2, "tail bytes leaked into the reduction"
 
 
-def test_gemv_vec_route_activation_counted() -> None:
-    """COUNTED three states (ADOPTED default, 2026-08-24 verdict):
-    default routes to gemv_vec; NBX_MV_VEC=0 restores the incumbent."""
+def test_every_mv_launches_gemv_vec() -> None:
+    """COUNTED: every mv reaches gemv_vec_kernel — its one kernel since the FlagGems mv kernel and the env switch that
+    restored it were removed (workstream 1: the tile is the certified configuration of the key)."""
     if not _has_gpu():
         pytest.skip("no GPU")
     from neurobrix.kernels.ops import gemv_vec as G
@@ -161,16 +155,9 @@ def test_gemv_vec_route_activation_counted() -> None:
     G.gemv_vec_kernel = Counting()
     try:
         mat, vec = _mk(512, 2048, seed=3)
-        _run_vec(mat, vec)          # "1": armed
-        assert calls["n"] == 1, "armed env did not reach gemv_vec_kernel"
-        W.mv_wrapper(mat, vec)      # default (unset): ADOPTED -> vec
-        assert calls["n"] == 2, "default did not route to gemv_vec"
-        _os.environ["NBX_MV_VEC"] = "0"
-        try:
-            W.mv_wrapper(mat, vec)  # kill switch -> incumbent
-        finally:
-            _os.environ.pop("NBX_MV_VEC", None)
-        assert calls["n"] == 2, "kill switch '0' did not restore the incumbent"
+        W.mv_wrapper(mat, vec)
+        W.mv_wrapper(mat, vec)
+        assert calls["n"] == 2, "an mv did not reach gemv_vec_kernel"
     finally:
         G.gemv_vec_kernel = orig
 
