@@ -867,7 +867,7 @@ _KEYED_KINDS = frozenset({
     "aten::istft", "aten::scaled_dot_product_attention", "aten::_scaled_dot_product_attention",
     "aten::_scaled_dot_product_efficient_attention", "aten::_scaled_dot_product_flash_attention",
     "aten::_scaled_dot_product_flash_attention_for_cpu",
-    "aten::_softmax", "aten::softmax", "aten::_log_softmax", "aten::log_softmax"})
+    "aten::_softmax", "aten::softmax", "aten::_safe_softmax", "aten::_log_softmax", "aten::log_softmax"})
 
 
 def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_bf16,
@@ -945,7 +945,9 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
                 launches = []                     # the vector decode kernel: no autotuned key
             else:
                 launches = LK.math_attention_launches(B, H, Hk, Tq, Tk, D, Dv, qd, kd, vd, has_native_bf16)
-        elif kind in ("aten::_softmax", "aten::softmax", "aten::_log_softmax", "aten::log_softmax"):
+        elif kind in ("aten::_softmax", "aten::softmax", "aten::_safe_softmax", "aten::_log_softmax", "aten::log_softmax"):
+            # `_safe_softmax` runs the same wrapper (`kernels/dispatch.py`: "_safe_softmax": w.softmax): its key too —
+            # left out, Ming-Lite's vision softmax missed in the certified-only W1+Apple gate (2026-10-22)
             # `wrappers.softmax` / `log_softmax`: the row is the reduced dim, every other element a row; the output
             # is allocated like the input (`empty_like`), so both dtypes are the input's as the engine executes it
             x_s = shape(ins[0])

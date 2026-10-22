@@ -4329,10 +4329,14 @@ def conv2d_wrapper(
     if _lk.matrix_unit_native(x_c.nbx_dtype, w_c.nbx_dtype, N * out_h * out_w):
         # The implicit GEMM on the profile's matrix unit (ops/conv2d_m8n8k4.py), bias fused; no autotune key.
         x_c = x_c.contiguous()
-        if out is not None:
-            raise RuntimeError("conv2d out=: the matrix-unit route writes a contiguous result — refused")
-        _conv2d_m8n8k4(x_c, w_c, bias, output, N, in_c, in_h, in_w, out_c, out_h, out_w, kh, kw,
+        # The matrix-unit kernel writes a contiguous result: a caller's strided view (a conv3d tap's frames in their
+        # [B, C, T, H, W] layout) receives it by one copy. Refused instead, every CUDA video model whose conv3d runs
+        # its taps through here failed at its first convolution (6 gate cells, 2026-10-22).
+        dest = output if out is None else NBXTensor.empty((N, out_c, out_h, out_w), device=x.device, dtype=out_dtype)
+        _conv2d_m8n8k4(x_c, w_c, bias, dest, N, in_c, in_h, in_w, out_c, out_h, out_w, kh, kw,
                        stride_h, stride_w, pad_h, pad_w, dil_h, dil_w, groups)
+        if out is not None:
+            out.copy_(dest)
         return output
 
     # The key's `fp16` flag names an fp16 INPUT. It compared `x.dtype` — the Triton element type —

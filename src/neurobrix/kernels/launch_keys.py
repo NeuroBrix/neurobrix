@@ -747,8 +747,12 @@ def conv_launches(x_shape, w_shape, stride, padding, dilation, transposed: bool,
         T_out = (T + 2 * pt - dt * (kt - 1) - 1) // st + 1
         if T_out <= 0:
             return []
-        return conv2d_launches(B * T_out, Cin, H, W, Cout, kh, kw, sh, sw, ph, pw, dh, dw, groups,
-                               x, w, compute, band_bytes, depthwise_enabled)
+        # temporal stride 1: every tap read and written in place, ONE conv2d per batch sample over its frames
+        # [T_out, Cin, H, W] (`wrappers.conv3d_wrapper`, the taps-in-place path) — the key's batch is T_out; other
+        # strides: the frames of every sample stacked, [B*T_out, Cin, H, W]. Keyed B*T_out for both, a guidance-batch
+        # conv3d (SANA-Video's patch embed, B=2) formed a key the census never derived (W1+Apple gate, 2026-10-22).
+        return conv2d_launches(T_out if st == 1 else B * T_out, Cin, H, W, Cout, kh, kw, sh, sw, ph, pw, dh, dw,
+                               groups, x, w, compute, band_bytes, depthwise_enabled)
     N, C, H, W = x_shape
     Co, Cg, kh, kw = w_shape
     sh, sw = _n(stride, 2)
