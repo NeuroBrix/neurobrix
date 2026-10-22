@@ -2459,7 +2459,7 @@ def _plan_digests(model, hw, jobs) -> list:
     peak = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
     peak = int(peak) if sys.platform == "darwin" else int(peak) * 1024
     workers = _workers_memory_holds(len(args) - 1, peak)
-    with ThreadPoolExecutor(max(1, workers)) as ex:
+    with _host_hold(HOLDS, max(1, workers) * peak), ThreadPoolExecutor(max(1, workers)) as ex:
         return [first] + list(ex.map(_plan_job, args[1:]))
 
 
@@ -2496,6 +2496,46 @@ def _peak_rss_bytes() -> int:
     return int(peak) if sys.platform == "darwin" else int(peak) * 1024
 
 
+HOLDS = None   # the holds ledger the gate schedulers share (`table --holds`); None: the census holds the machine alone
+
+
+def _held_by_others(holds) -> int:
+    """Host bytes the OTHER holders of the shared ledger reserve: each file "<pid> <bytes>" — a gate scheduler's
+    `hold_c<card>` names its cell's need (`gate_sched.pick_gate`), a census's `hold_host_<pid>` its workers'
+    (`_host_hold`); a hold naming no bytes (a card held by a certifier) reserves none. A reservation is counted
+    whole even where its cell already resides in the free memory read beside it: the census errs on fewer workers."""
+    if holds is None:
+        return 0
+    total = 0
+    for f in list(Path(holds).glob("hold_c*")) + list(Path(holds).glob("hold_host_*")):
+        try:
+            parts = f.read_text().split()
+        except FileNotFoundError:
+            continue
+        if len(parts) >= 2 and parts[0].isdigit() and parts[0] != str(os.getpid()) and parts[1].isdigit():
+            total += int(parts[1])
+    return total
+
+
+class _host_hold:
+    """The census's own reservation in the ledger while its workers run (`hold_host_<pid>`: "<pid> <bytes>"), so a
+    gate scheduler admitting a cell counts it (`gate_sched.others_reserved`); removed on every exit."""
+
+    def __init__(self, holds, nbytes: int):
+        self.f = None if holds is None else Path(holds) / f"hold_host_{os.getpid()}"
+        self.nbytes = int(nbytes)
+
+    def __enter__(self):
+        if self.f is not None:
+            self.f.write_text(f"{os.getpid()} {self.nbytes}\n")
+        return self
+
+    def __exit__(self, *exc):
+        if self.f is not None:
+            self.f.unlink(missing_ok=True)
+        return False
+
+
 def _workers_memory_holds(n_jobs: int, worker_bytes: int) -> int:
     """How many derivation workers the machine holds at once: the cores (`os.cpu_count()`), and the free host
     memory read as Prism reads it (`core.host_memory`, rounded DOWN to the memory ladder's rung,
@@ -2505,14 +2545,17 @@ def _workers_memory_holds(n_jobs: int, worker_bytes: int) -> int:
     memory runs one derivation at a time.
     The cores are those the machine is not already running on (`os.getloadavg`, the last minute): eight census
     processes each starting a worker per core held ~300 derivations on 48 cores, and mochi's plans outran their
-    explanation's timeout (2026-10-22 17:3x, the c1norms census)."""
+    explanation's timeout (2026-10-22 17:3x, the c1norms census).
+    The free memory is what the gate cells sharing the ledger have not reserved (`_held_by_others`): a census
+    started beside a gate saw the memory a just-admitted Qwen3-30B had reserved but not yet taken, and the kernel
+    killed the cell (2026-10-23 00:10:30, 247 GiB held)."""
     from neurobrix.core.host_memory import memory_state
     from neurobrix.core.prism.memory_budget import rung_down_mb
     cores = max(1, (os.cpu_count() or 1) - int(os.getloadavg()[0]))
     free = memory_state().available_mb
     if free is None or worker_bytes <= 0:
         return 1
-    held = int((rung_down_mb(free) << 20) // worker_bytes)
+    held = max(0, (rung_down_mb(free) << 20) - _held_by_others(HOLDS)) // worker_bytes
     return max(1, min(n_jobs, cores, held))
 
 
@@ -2541,7 +2584,7 @@ def _derive_jobs(model, hw, jobs, start_method=None):
     workers = _workers_memory_holds(len(rest), worker_bytes)
     print(f"[derive] {model}: {len(args)} derivation(s), {i} measured alone, then {workers} at a time (cores, free "
           f"memory at its rung, one worker measured at {worker_bytes >> 20} MB)", flush=True)
-    with ctx.Pool(workers) as pool:
+    with _host_hold(HOLDS, workers * worker_bytes), ctx.Pool(workers) as pool:
         return results + pool.map(_derive_job, rest, chunksize=1)
 
 
@@ -2557,6 +2600,10 @@ def table(a) -> int:
     for the probe, is no key there (the census's own rule); at the top rung it refuses the model."""
     import certified_census as CC
     from neurobrix.kernels import census_table as T
+    global HOLDS
+    HOLDS = a.holds
+    print(f"[derived table] host memory shared through the holds ledger {a.holds}" if a.holds else
+          "[derived table] no holds ledger (--holds): the census reserves no host memory and counts no one's", flush=True)
     hw = a.hardware
     cls = CC.census_memory_class(hw)
     rungs = CC.rungs_for(hw) if a.rungs == "ladder" else [int(x) for x in a.rungs.split(",") if x.strip()]
@@ -2688,6 +2735,9 @@ def main(argv=None) -> int:
     t.add_argument("--modes", default="triton,triton-sequential")
     t.add_argument("--rungs", default="ladder", help="'ladder' (the class's rungs) or a comma-separated list of MB")
     t.add_argument("--logs", required=True, help="where a tiling probe's resized input lands")
+    t.add_argument("--holds", default=None,
+                   help="the holds ledger the gate schedulers share (gate_sched --holds): the census reads their "
+                        "reserved host bytes before sizing its workers and writes its own (hold_host_<pid>)")
     t.add_argument("--only-moved", action="store_true",
                    help="derive only the models whose input record (the table's <cls>g.inputs.jsonl) moved: their "
                         "container, a plan, a unit of code the derivation executed or a file it read; the others' "

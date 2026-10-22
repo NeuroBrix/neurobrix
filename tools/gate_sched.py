@@ -237,9 +237,10 @@ def need_of(model, modes, card, cls):
 def others_reserved() -> int:
     """Host bytes the OTHER schedulers' cells hold reserved: the need each wrote into its card's hold (`take_hold`'s
     file: "<pid> <need>"; a filler's hold names no need). Each instance summed only its own cells: two gates running
-    at once admitted a Qwen3-VL each, 169 GiB of host apiece, and the kernel killed one (2026-10-20 14:47)."""
+    at once admitted a Qwen3-VL each, 169 GiB of host apiece, and the kernel killed one (2026-10-20 14:47). A census
+    beside the gate writes its workers' bytes as `hold_host_<pid>` (`derived_census._host_hold`)."""
     total = 0
-    for f in Path(a.holds).glob("hold_c*"):
+    for f in list(Path(a.holds).glob("hold_c*")) + list(Path(a.holds).glob("hold_host_*")):   # a census's too
         try:
             parts = f.read_text().split()
         except FileNotFoundError:
