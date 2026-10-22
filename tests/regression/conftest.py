@@ -169,8 +169,6 @@ KNOWN_FAILURES: List[Tuple[str, str | None, str]] = [
     # ------------------------------------------------------------------
     ("Qwen3-Coder-30B-A3B-Instruct-int4g128", "native",
      "Capability gate: int4-g128-asym weights are not executed by the compiled engine (graph_executor.py:1163) — run with --triton. Workstream: compiled-mode encoded-weight execution."),
-    ("Qwen3-Coder-30B-A3B-Instruct-int4g128-ffnonly", "native",
-     "Capability gate: int4-g128-asym weights are not executed by the compiled engine — run with --triton. Workstream: compiled-mode encoded-weight execution."),
     ("TinyLlama-1.1B-Chat-v1.0-int4g128", "native",
      "Capability gate: int4-g128-asym weights are not executed by the compiled engine — run with --triton. Workstream: compiled-mode encoded-weight execution."),
 

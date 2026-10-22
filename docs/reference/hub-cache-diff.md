@@ -25,7 +25,6 @@ Verdicts: **IDENTICAL** (every graph and the topology hash equal) · **CACHE_NEW
 | Qwen3-30B-A3B-Thinking-2507 | Qwen/Qwen3-30B-A3B-Thinking | IDENTICAL | 2026-06-08T18:34:42 | 2026-06-08T18:34:42 | 2026-09-18T01:28:59 | — | — |
 | Qwen3-Coder-30B-A3B-Instruct | Qwen/Qwen3-Coder-30B-A3B-Instruct | IDENTICAL | 2026-07-13T10:48:48 | 2026-07-13T10:48:48 | 2026-09-19T02:35:23 | — | — |
 | Qwen3-Coder-30B-A3B-Instruct-int4g128 | — | NOT_ON_HUB | 2026-07-13T10:48:48 | ? | ? | — | — |
-| Qwen3-Coder-30B-A3B-Instruct-int4g128-ffnonly | Qwen/Qwen3-Coder-30B-A3B-Instruct-int4g128-ffnonly | IDENTICAL | 2026-07-13T10:48:48 | 2026-07-13T10:48:48 | 2026-09-19T22:52:51 | — | — |
 | Qwen3-Omni-30B-A3B-Instruct | qwen/qwen3-omni-30b-a3b-instruct | CACHE_NEWER | 2026-09-21T15:18:54 | 2026-08-19T02:51:04 | 2026-09-19T23:02:50 | code2wav: 18515aab → a8c82e5c; talker.code_predictor.model.codec_embedding: 443df6db → 4d511fce; talker.code_predictor: ce549a05 → 7378643f; talker.codec_head: 50206723 → 9aaabd64; talker.hidden_projection: 800ac24e → 4ec690c6; talker.model.codec_embedding: f0a25b3d → d9f19726; talker.model: a5f7a58e → ff821717; talker.text_projection: fdeb2c6a → f943c7f2; thinker.audio_tower: 944163f1 → 77e8df1b; thinker.lm_head: b31889ec → 5f2c1d54; thinker.model: 839db43c → fe13d574; thinker.visual: ffb2171d → 397dce86; topology.json: af261bca → 4401e361 | — |
 | Qwen3-VL-30B-A3B-Thinking | qwen/qwen3-vl-30b-a3b-thinking | IDENTICAL | 2026-07-24T10:11:59 | 2026-07-24T10:11:59 | 2026-09-19T17:20:37 | — | — |
 | Real-ESRGAN-x4 | xinntao/Real-ESRGAN-x4 | IDENTICAL | 2026-08-29T21:48:19 | 2026-08-29T21:48:19 | 2026-09-18T20:52:27 | — | — |
@@ -280,15 +279,6 @@ Verdicts: **IDENTICAL** (every graph and the topology hash equal) · **CACHE_NEW
 | components/model/graph.json | ff6df5a31dd054324ee5a5574694c6eabbfeefa14e19b28b212b2d7ff2148ae2 | — |
 | manifest.json | 54c0e8ada77bfa95c4cd7033b1f6d184b233ce99683d001b512d02eea7cb8c47 | — |
 | topology.json | 1f1f11f31f44c03c7da7b20f3df54dc872d0ddc05119591f56250de45ef9ed9c | — |
-
-### Qwen3-Coder-30B-A3B-Instruct-int4g128-ffnonly (Qwen/Qwen3-Coder-30B-A3B-Instruct-int4g128-ffnonly)
-
-| member | cache | hub |
-|---|---|---|
-| components/lm_head/graph.json | bbf62f6429c3345f8d83a68c201e56f19c68494ec015978889399c9dc7a8ad7f | bbf62f6429c3345f8d83a68c201e56f19c68494ec015978889399c9dc7a8ad7f |
-| components/model/graph.json | ff6df5a31dd054324ee5a5574694c6eabbfeefa14e19b28b212b2d7ff2148ae2 | ff6df5a31dd054324ee5a5574694c6eabbfeefa14e19b28b212b2d7ff2148ae2 |
-| manifest.json | f8903116ae25bc734a8c2b71da0abdbbe050d8d2a96519383a5e3b4b5c61e73e | f8903116ae25bc734a8c2b71da0abdbbe050d8d2a96519383a5e3b4b5c61e73e |
-| topology.json | 1f1f11f31f44c03c7da7b20f3df54dc872d0ddc05119591f56250de45ef9ed9c | 1f1f11f31f44c03c7da7b20f3df54dc872d0ddc05119591f56250de45ef9ed9c |
 
 ### Qwen3-Omni-30B-A3B-Instruct (qwen/qwen3-omni-30b-a3b-instruct)
 

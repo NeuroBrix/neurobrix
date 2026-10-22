@@ -302,43 +302,6 @@ rows:
 
   # ================= PROBE ROWS (internal iteration only) =================
 
-  - id: llm_moe_qwen3coder_int4
-    family: llm
-    metric_class: tokens
-    reference: true
-    checkpoint: Qwen/Qwen3-Coder-30B-A3B-Instruct
-    neurobrix_model: Qwen3-Coder-30B-A3B-Instruct-int4g128-ffnonly
-    # Quantized-tier PROOF ROW (E7): the 30B-A3B class on ONE
-    # V100-32G via the int4-g128 weight-encoding variant. CANONICAL
-    # ARTIFACT = ffn-only (experts int4, attention projections fp16):
-    # the full attn+ffn variant measured +9.26% relative ppl (below
-    # the sourced RTN class) while ffn-only measures +3.53% — in the
-    # published band; the Qwen3 attention fragility is measured, not
-    # assumed. Fairness =
-    # SAME quantization class: the ollama column runs their Q4_K_M
-    # (qwen3-coder:30b default pull), never their fp16. The fp16
-    # NeuroBrix column stays documented from its own multi-GPU
-    # measurements (57G does not fit one card — the row note IS the
-    # capability headline). Kernel ceiling compass: ~147 tok/s
-    # (2 GB activated int4 / 294 GB/s effective GEMV bandwidth).
-    ollama_pull: qwen3-coder:30b
-    prompt: "Write a Python function that reverses a string."
-    max_new_tokens: 128
-    env:
-      # P-REPLAY-KV-DECODE closure config (2026-08-17): frozen-plan
-      # replay on the decode graph. NOT a drift class — every bucket is
-      # verify-first byte-gated against the normal path in-process, and
-      # the cross-run byte gate (32-tok and 250-tok incl. a bucket
-      # boundary) matched the replay-off output exactly (ce0c22a3 /
-      # 250-tok pair in models/_agents/archives/dell/validation_outputs_pre_2026_09_01/replay_kv_decode_2026_08_17).
-      NBX_TRITON_REPLAY: "1"
-      NBX_REPLAY_KV_DECODE: "1"
-      # Phase 4b adoption (2026-08-17): per-bucket CUDA-graph launch of
-      # the frozen plan. A/B measured on this row: 4.86 -> 5.78 tok/s
-      # (+18.8%), answers byte-identical (sha 0456f422 x5 both arms).
-      NBX_REPLAY_GRAPH: "1"
-    columns: [ollama, neurobrix_triton]
-
   - id: llm_dense_tinyllama
     family: llm
     metric_class: tokens
