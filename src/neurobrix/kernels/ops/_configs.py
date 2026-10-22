@@ -775,6 +775,28 @@ def reduction_feat_tile(args: Dict) -> int:
     return min(next_power_of_2(args['feat_dim']), REDUCTION_FEAT_TILE)
 
 
+def row_program_configs() -> List[triton.Config]:
+    """The candidates the certifier proves for a row kernel holding its whole padded row (softmax, layer norm, RMS
+    norm — workstream 1, Hocine 2026-10-19 18:55): rows per program x warps. The configuration such a kernel ran before
+    it was certified is among them (`batch_block_heuristic`: 1 row for a row of 64 or more, up to 128 rows for a short
+    one; 4 warps) — a certified winner equal to it changes no bit. Rows per program partition independent rows and
+    change no bit; the warps split a row's reduction and can."""
+    return [triton.Config({'BLOCK_SIZE_BATCH': rows}, num_warps=warps)
+            for rows in (1, 2, 4, 8, 16, 32, 64, 128) for warps in (1, 2, 4, 8)]
+
+
+def prune_row_programs(configs, named_args, **kwargs):
+    """A program holds rows x the padded row: at most the backend's reduce-tile cap (`nbx_tensor.reduce_tile_max`, the
+    profile's, where the lowering refuses beyond) or one row whatever its length; never more rows than exist."""
+    from neurobrix.kernels.nbx_tensor import reduce_tile_max
+    feat = triton.next_power_of_2(int(named_args['feat_dim']))
+    rows = int(named_args['batch_dim'])
+    keep = [c for c in configs
+            if c.kwargs['BLOCK_SIZE_BATCH'] * feat <= max(reduce_tile_max(), feat)
+            and c.kwargs['BLOCK_SIZE_BATCH'] <= max(1, rows)]
+    return keep or configs[:1]
+
+
 def batch_block_heuristic(args: Dict) -> int:
     """Heuristic for batch block size in softmax/norm kernels.
 

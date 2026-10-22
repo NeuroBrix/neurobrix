@@ -4,18 +4,21 @@ import triton
 import triton.language as tl
 from triton import next_power_of_2
 
-from ._configs import batch_block_heuristic
+from ._configs import nbx_autotune, row_program_configs, prune_row_programs
 
 
+# rows per program and warps: the certified configuration of the key (workstream 1), the key the derived census forms
+# (`launch_keys.layer_norm_launches`)
+@nbx_autotune(configs=row_program_configs(), key=['BATCH_BUCKET', 'FEAT_BUCKET', 'scale_by_weight', 'add_bias', 'save_stats'],
+              prune_configs_by={'early_config_prune': prune_row_programs}, cache_results=True)
 @triton.heuristics({
-    'BLOCK_SIZE_BATCH': batch_block_heuristic,
     'BLOCK_SIZE_FEAT': lambda args: next_power_of_2(args['feat_dim']),
 })
 @triton.jit
 def layer_norm_forward_kernel(
     input_ptr, weight_ptr, bias_ptr,
     mean_ptr, inv_std_ptr, output_ptr,
-    batch_dim, feat_dim,
+    batch_dim, feat_dim, BATCH_BUCKET, FEAT_BUCKET,
     input_batch_stride, input_feat_stride,
     output_batch_stride, output_feat_stride,
     eps,

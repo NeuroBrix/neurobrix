@@ -27,6 +27,8 @@ CONV2D = "neurobrix.kernels.ops.conv2d.conv2d_forward_kernel"
 DEPTHWISE = "neurobrix.kernels.ops.depthwise_conv2d.depthwise_conv2d_kernel"
 SOFTMAX = "neurobrix.kernels.ops.softmax.softmax_forward_kernel"
 UNIT_FLASH = "neurobrix.kernels.ops.flash_attention_m8n8k4.flash_attention_m8n8k4_kernel"
+LAYER_NORM = "neurobrix.kernels.ops.layernorm.layer_norm_forward_kernel"
+RMS_NORM = "neurobrix.kernels.ops.rmsnorm.rms_norm_forward_kernel"
 
 F32, BF16, F16 = NBXDtype.float32, NBXDtype.bfloat16, NBXDtype.float16
 _HALF = (F16, BF16)
@@ -783,3 +785,31 @@ def softmax_launches(rows: int, feat: int, log: bool, x: NBXDtype, out: NBXDtype
     if feat > SOFTMAX_FUSED_MAX_FEAT or rows < 1:
         return []
     return [(SOFTMAX, (bucket_of("M", rows), softmax_feat_bucket(feat), bool(log), tag(x), tag(out)))]
+
+
+def layer_norm_launches(rows: int, feat: int, has_weight: bool, has_bias: bool, x: NBXDtype,
+                        w: Optional[NBXDtype], b: Optional[NBXDtype], out: NBXDtype) -> List[Launch]:
+    """`wrappers.native_layer_norm` over rows of `feat` (the normalized extent; every other element a row): the key —
+    the rows' bucket (`bucket_of("M")`), the padded row (`softmax_feat_bucket`: the program holds the next power of
+    two, one certified entry per padding), the weight and bias flags (a bias without a weight is not applied, as the
+    wrapper reads it), the statistics always saved — then the dtype tags of its tensor arguments in order: input,
+    weight (the input standing in when there is none), bias (likewise), mean and inverse deviation (fp32), output."""
+    if rows < 1 or feat < 1:
+        return []
+    bias = bool(has_bias and has_weight)
+    wt = w if has_weight else x
+    bt = b if bias else x
+    return [(LAYER_NORM, (bucket_of("M", rows), softmax_feat_bucket(feat), bool(has_weight), bias, True,
+                          tag(x), tag(wt), tag(bt), tag(F32), tag(F32), tag(out)))]
+
+
+def rms_norm_launches(rows: int, feat: int, has_weight: bool, x: NBXDtype, w: Optional[NBXDtype],
+                      out: NBXDtype) -> List[Launch]:
+    """`wrappers.rms_norm` over rows of `feat` (the last dim): the key — the rows' bucket, the padded row, the weight
+    flag, the protected fp16 store (`nbx_tensor._saturating_cast` from fp32, the kernel's accumulator, to the output's
+    dtype) — then the dtype tags of input, weight (the input standing in when there is none), output."""
+    if rows < 1 or feat < 1:
+        return []
+    from neurobrix.kernels.nbx_tensor import _saturating_cast
+    return [(RMS_NORM, (bucket_of("M", rows), softmax_feat_bucket(feat), bool(has_weight),
+                        bool(_saturating_cast(F32, out)), tag(x), tag(w if has_weight else x), tag(out)))]

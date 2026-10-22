@@ -1688,20 +1688,20 @@ def native_layer_norm(x, normalized_shape, weight, bias, eps=1e-5):
     has_weight = weight is not None
     has_bias = bias is not None and has_weight
 
-    _bsb = _batch_block(batch_dim, feat_dim)
-    grid = (triton.cdiv(batch_dim, _bsb),)
+    # rows per program and warps: the certified configuration of this key (workstream 1), the rows' bucket from the
+    # launcher's own `bucket_of` — the key the derived census forms (`launch_keys.layer_norm_launches`)
+    grid = lambda META: (triton.cdiv(batch_dim, META['BLOCK_SIZE_BATCH']),)
     _set_device(x_2d)
     layer_norm_forward_kernel[grid](
         x_2d, weight if has_weight else x_2d, bias if has_bias else x_2d,
         mean, inv_std, output_2d,
-        batch_dim, feat_dim,
+        batch_dim, feat_dim, _lk.bucket_of("M", batch_dim), _lk.softmax_feat_bucket(feat_dim),
         x_2d.stride(0), x_2d.stride(1),
         output_2d.stride(0), output_2d.stride(1),
         eps,
         scale_by_weight=has_weight,
         add_bias=has_bias,
         save_stats=True,
-        num_warps=4,
     )
     return output_2d.view_as(x), mean, inv_std
 
@@ -1755,18 +1755,18 @@ def rms_norm(x, weight, eps=1e-6, epsilon=None, out_dtype=None):
 
     has_weight = weight is not None
 
-    _bsb = _batch_block(batch_dim, feat_dim)
-    grid = (triton.cdiv(batch_dim, _bsb),)
+    # rows per program and warps: the certified configuration of this key (workstream 1) — the key the derived census
+    # forms (`launch_keys.rms_norm_launches`)
+    grid = lambda META: (triton.cdiv(batch_dim, META['BLOCK_SIZE_BATCH']),)
     rms_norm_forward_kernel[grid](
         x_2d, weight if has_weight else x_2d,
         output_2d,
-        batch_dim, feat_dim,
+        batch_dim, feat_dim, _lk.bucket_of("M", batch_dim), _lk.softmax_feat_bucket(feat_dim),
         x_2d.stride(0), x_2d.stride(1),
         output_2d.stride(0), output_2d.stride(1),
         eps,
         scale_by_weight=has_weight,
         SATURATE_F16=_nbx_saturating_cast(NBXDtype.float32, out_dt),
-        num_warps=4,
     )
     return output_2d.view_as(x)
 

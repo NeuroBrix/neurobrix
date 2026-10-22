@@ -259,6 +259,46 @@ def _shape_fn(g: dict, comp: str, symbols: dict, carried: dict, axis_values: dic
     return shape
 
 
+_NORM_KINDS = ("aten::native_layer_norm", "aten::layer_norm", "custom::rms_norm", "aten::rms_norm")
+
+
+def _tensor_arg(args, i):
+    """The tensor id at argument position `i`, or None when that argument is absent or no tensor."""
+    a = args[i] if len(args) > i else None
+    return a.get("tensor_id") if isinstance(a, dict) and a.get("type") == "tensor" else None
+
+
+def _prod(xs) -> int:
+    out = 1
+    for e in xs:
+        out *= int(e)
+    return out
+
+
+def _chain_band_rows(ops, chain, shape) -> list:
+    """The rows each band of a band-streamed residual chain hands its rms_norm (`kernels/ops/residual_chain.py`): the
+    band's input height (`tiling_sizes.residual_chain_bands`, the loop's own geometry) through the chain's convs in
+    graph order, each with its own kernel, stride, padding and dilation as the graph holds them, times the batch and
+    the width they leave."""
+    from neurobrix.core.module.tiling_sizes import residual_chain_bands
+    _, tf, halo, uids = chain
+    convs = [u for u in uids if (ops.get(u) or {}).get("op_type") == "aten::convolution"]
+    if not convs:
+        return []
+    x_s = shape(ops[convs[0]]["input_tensor_ids"][0])
+    rows = set()
+    for b in residual_chain_bands(x_s[2], tf, halo):
+        h, w = b[3] - b[2], x_s[3]
+        for u in convs:
+            at = ops[u].get("attributes") or {}
+            k = shape(ops[u]["input_tensor_ids"][1])
+            st, pd, dl = at.get("stride", [1, 1]), at.get("padding", [0, 0]), at.get("dilation", [1, 1])
+            h = (h + 2 * pd[0] - dl[0] * (k[2] - 1) - 1) // st[0] + 1
+            w = (w + 2 * pd[1] - dl[1] * (k[3] - 1) - 1) // st[1] + 1
+        rows.add(int(x_s[0]) * h * w)
+    return sorted(rows)
+
+
 def _triton_fp64() -> bool:
     """The Triton branch's fp64 on the hardware profile this census bound
     (`wrappers.set_hardware_profile`; refused when none is bound)."""
@@ -290,9 +330,11 @@ def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_
         # The census is bound to its target's profile (the active one): its alignment is that profile's.
         from neurobrix.kernels.ops._configs import active_vendor_profile
         from neurobrix.triton.dtype import attention_operand_alignment
+        op_casts = {}
         rt = RW.runtime_dtypes(g, cdtype, engine, has_native_bf16=has_native_bf16,
                                attention_operands=attention_operand_alignment(active_vendor_profile()),
-                               contract=contract, stores_fp64=_triton_fp64(), tiling=tiling, shape_of=shape)
+                               contract=contract, stores_fp64=_triton_fp64(), tiling=tiling, shape_of=shape,
+                               casts=op_casts)
     except AnnotationContradiction as e:
         # The width pass reads the shapes too (the matmul store rule reads M): a component whose
         # annotation contradicts itself is not derivable as a whole — named, never guessed.
@@ -323,10 +365,19 @@ def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_
         # operand to fp32 before the wrapper — weights included — whatever the op's class.
         dt = (lambda tid: NBXDtype.float32 if dt0(tid).name in ("float16", "bfloat16") else dt0(tid)) \
             if (half and uid in contract.fp32_op_uids) else dt0
+        tf_u = (tiled_tf or {}).get(uid)
+        if isinstance(tf_u, tuple) and tf_u[0] == "chain" and kind in ("custom::rms_norm", "aten::rms_norm"):
+            tf_u = ("chain_rows", _chain_band_rows(ops, tf_u, shape))
+        if kind in _NORM_KINDS:
+            # an AMP fp32 op: the dtype engine's wrap casts its half operands to fp32 before the wrapper (and the
+            # triton-sequential one leaves custom::rms_norm alone) — the operands as the KERNEL receives them,
+            # `runtime_widths`' own casts, the rule the engine runs
+            _c = dict(op_casts.get(uid, ()))
+            dt = (lambda tid, _c=_c, _d=dt: NBXDtype[_c[tid]] if tid in _c else _d(tid))
         try:
             launches = _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_bf16,
                                     sdpa_budget_bytes, sdpa_min_rows, sdpa_max_chunks, conv_band_bytes,
-                                    unhandled, (tiled_tf or {}).get(uid), decode_kv)
+                                    unhandled, tf_u, decode_kv)
         except AnnotationContradiction as e:
             unhandled[f"annotation contradicts its trace — {str(e).split(' dim ')[0]}"] += 1
             continue
@@ -874,6 +925,7 @@ _INERT_AXES = {}         # {(model, comp): [the axes no autotuned kernel reads]}
 # The op kinds `_op_launches` keys — the one list: an op of any other kind launches no autotuned
 # kernel, and a value-derived axis whose descendants hold none of these moves no key.
 _KEYED_KINDS = frozenset({
+    "aten::native_layer_norm", "aten::layer_norm", "custom::rms_norm", "aten::rms_norm",
     "aten::mm", "aten::bmm", "aten::addmm", "aten::baddbmm", "aten::convolution", "aten::conv1d",
     "aten::lstm", "aten::_fft_r2c", "aten::_fft_c2r", "aten::linear", "aten::matmul", "aten::stft",
     "aten::istft", "aten::scaled_dot_product_attention", "aten::_scaled_dot_product_attention",
@@ -957,6 +1009,32 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
                 launches = []                     # the vector decode kernel: no autotuned key
             else:
                 launches = LK.math_attention_launches(B, H, Hk, Tq, Tk, D, Dv, qd, kd, vd, has_native_bf16)
+        elif kind in ("aten::native_layer_norm", "aten::layer_norm"):
+            # `wrappers.native_layer_norm` (`layer_norm_wrapper` calls it): the normalized extent is the product of
+            # `normalized_shape`, every other element a row; weight and bias by their argument positions (an absent
+            # one is no tensor); the output allocated like the input as the kernel receives it
+            x_s = shape(ins[0])
+            args = (o.get("attributes") or {}).get("args") or []
+            ns = args[1] if len(args) > 1 else None
+            ns = ns.get("value") if isinstance(ns, dict) else ns
+            k = len(ns) if isinstance(ns, (list, tuple)) else 1
+            w_t, b_t = _tensor_arg(args, 2), _tensor_arg(args, 3)
+            launches = LK.layer_norm_launches(_prod(x_s[:len(x_s) - k]), _prod(x_s[len(x_s) - k:]),
+                                              w_t is not None, b_t is not None, dt(ins[0]),
+                                              dt(w_t) if w_t else None, dt(b_t) if b_t else None, dt(ins[0]))
+        elif kind in ("custom::rms_norm", "aten::rms_norm"):
+            # `wrappers.rms_norm` over the last dim; the output at the op's stored dtype (the dtype engine passes it
+            # as `out_dtype`) — and, inside a band-streamed residual chain, once per band at the band's own rows
+            # (`residual_chain`: the chain's convs on the band plus its halo, then rms_norm on their output)
+            x_s = shape(ins[0])
+            feat = x_s[-1] if x_s else 1
+            w_t = _tensor_arg((o.get("attributes") or {}).get("args") or [], 1)
+            row_sets = (tile_factor[1] if isinstance(tile_factor, tuple) and tile_factor[0] == "chain_rows"
+                        else [int(_prod(x_s[:-1]))])
+            launches = []
+            for rows in row_sets:
+                launches += LK.rms_norm_launches(int(rows), feat, w_t is not None, dt(ins[0]),
+                                                 dt(w_t) if w_t else None, dt(ins[0]))
         elif kind in ("aten::_softmax", "aten::softmax", "aten::_safe_softmax", "aten::_log_softmax", "aten::log_softmax"):
             # `_safe_softmax` runs the same wrapper (`kernels/dispatch.py`: "_safe_softmax": w.softmax): its key too —
             # left out, Ming-Lite's vision softmax missed in the certified-only W1+Apple gate (2026-10-22)
@@ -1014,7 +1092,7 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
                 # A conv of a band-streamed residual chain (`band_streamed_chain_nbx`): conv2d_wrapper on each band,
                 # the band plus its halo rows — one launch set per distinct band input height.
                 from neurobrix.core.module.tiling_sizes import residual_chain_bands
-                _, tf_, halo_ = tile_factor
+                tf_, halo_ = tile_factor[1], tile_factor[2]
                 heights = sorted({b[3] - b[2] for b in residual_chain_bands(x_s[2], tf_, halo_)})
                 launches = []
                 for h_in in heights:
@@ -1302,7 +1380,8 @@ def plan_tiling(plan: dict, comp: str):
     tiled_tf = {**{f[1]: int(f[2]) for f in fus}, **{t[0]: int(t[1]) for t in til}}
     # A band-streamed residual chain: each of its convs runs on every band (the band plus its halo rows), so each
     # derives at every band input height (`tiling_sizes.residual_chain_bands`, the loop's own geometry).
-    tiled_tf.update({u: ("chain", int(tf), int(halo)) for uids, tf, halo, _h in ot.get("residual_chains", []) for u in uids})
+    tiled_tf.update({u: ("chain", int(tf), int(halo), tuple(uids)) for uids, tf, halo, _h in ot.get("residual_chains", [])
+                     for u in uids})
     return view, tiled_tf
 
 

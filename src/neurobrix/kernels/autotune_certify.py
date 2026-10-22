@@ -389,6 +389,17 @@ def _key_operands(qual: str, tuner, key: tuple) -> Optional[Dict[str, Any]]:
         rows, feat = int(key[0]), int(key[1])
         return {"family": "softmax", "inputs": [("x", (rows, feat), d(0))], "out": ((rows, feat), out_dt),
                 "mnk": (rows, feat, 1), "batch": 1, "row_windowed_launch": True}
+    if short in ("layer_norm_forward_kernel", "rms_norm_forward_kernel"):
+        # (BATCH_BUCKET, FEAT_BUCKET, scale_by_weight, [add_bias, save_stats | SATURATE_F16], dtypes...): the rows, the
+        # padded row (its top: the longest row of the class), the weight (and bias) the flags name
+        rows, feat = int(key[0]), int(key[1])
+        ins = [("x", (rows, feat), d(0))]
+        if bool(key[2]):
+            ins.append(("w", (feat,), d(1)))
+        if short == "layer_norm_forward_kernel" and bool(key[2]) and bool(key[3]):
+            ins.append(("b", (feat,), d(2)))
+        return {"family": "rownorm", "inputs": ins, "out": ((rows, feat), out_dt),
+                "mnk": (rows, feat, 1), "batch": 1, "row_windowed_launch": True}
     if short == "conv2d_forward_kernel":
         (n, ci, h, w, co, oh, ow, kh, kw, sh, sw, ph, pw, dh, dw, groups) = [int(v) for v in key[:16]]
         ci_g = ci // max(groups, 1)
@@ -480,7 +491,7 @@ def price_key(qual: str, tuner, key: tuple, unified: bool = True) -> Optional[Di
             deviation = kept + kept // 8 * (4 + 8)                       # the windows' readback and cast
         return {"draws": draws, "device": device, "oracle": oracle, "deviation": deviation,
                 "peak": draws + device + max(oracle, deviation)}
-    if ops["family"] == "softmax":
+    if ops["family"] in ("softmax", "rownorm"):
         # `_softmax_oracle_fn`: per row window, the window cast to float64 plus the fp64 arrays it computes
         # (`_SOFTMAX_ORACLE_F64_ARRAYS`), the windows' results kept (`RowWindowedOracle`); whole under the cap.
         # Priced with the mm and conv families: without it a softmax key read the conv geometry and every Apple
@@ -775,6 +786,32 @@ def _softmax_oracle_fn(x, log: bool):
     return lambda: RowWindowedOracle([((r0, r1), rows(r0, r1)) for (r0, r1) in wins], m)
 
 
+def _rownorm_oracle_fn(x, w, b, layer: bool):
+    """The fp64 oracle of a row layer norm (eps 1e-5, `native_layer_norm`'s default) or RMS norm (eps 1e-6, `rms_norm`'s)
+    of x [rows, feat] with its weight and bias, whole under the cap, row-windowed above — priced as the softmax's
+    (`_SOFTMAX_ORACLE_F64_ARRAYS` fp64 arrays per element: the row, its centred or squared values, the result)."""
+    m, n = x.shape[-2], x.shape[-1]
+    wf = None if w is None else _f64(w)
+    bf = None if b is None else _f64(b)
+
+    def rows(r0, r1):
+        z = _f64(x[r0:r1, :])
+        if layer:
+            z = z - z.mean(axis=-1, keepdims=True)
+            z = z / np.sqrt((z * z).mean(axis=-1, keepdims=True) + 1e-5)
+        else:
+            z = z / np.sqrt((z * z).mean(axis=-1, keepdims=True) + 1e-6)
+        if wf is not None:
+            z = z * wf
+        if bf is not None:
+            z = z + bf
+        return z
+    wins = _row_windows(m, n, _SOFTMAX_ORACLE_F64_ARRAYS * 8)
+    if wins is None:
+        return lambda: rows(0, m)
+    return lambda: RowWindowedOracle([((r0, r1), rows(r0, r1)) for (r0, r1) in wins], m)
+
+
 def _conv_oracle_fn(x, wt, stride, padding, dilation, groups):
     n, ci, h, wd = x.shape
     co, ci_g, kh, kw = wt.shape
@@ -888,6 +925,22 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         return ((lambda: W.scaled_dot_product_attention_wrapper(to(q), to(k), to(v),
                                                                 attn_mask=to(mask) if masked else None)),
                 (_attention_oracle_fn(q, k, v, mask, scale) if values else None), "Out")
+    if short in ("layer_norm_forward_kernel", "rms_norm_forward_kernel"):
+        # the row norms through their wrappers (`native_layer_norm`, `rms_norm`), the padded row at its top, eps the
+        # wrappers' own default; the fp64 oracle per row (row-windowed above the oracle's cap, as a softmax's)
+        rows, feat, has_w = int(key[0]), int(key[1]), bool(key[2])
+        ln = short == "layer_norm_forward_kernel"
+        has_b = ln and has_w and bool(key[3])
+        x_dt = dts[0] if dts else "fp32"
+        _refuse_oversize(card_bytes, [((rows, feat), x_dt), ((rows, feat), out_dt)], short)
+        x = arr(rng, (rows, feat), x_dt)
+        w = arr(rng, (feat,), dts[1]) if has_w else None
+        b = arr(rng, (feat,), dts[2]) if has_b else None
+        if ln:
+            run = lambda: W.native_layer_norm(to(x), [feat], to(w) if has_w else None, to(b) if has_b else None)[0]
+        else:
+            run = lambda: W.rms_norm(to(x), to(w) if has_w else None)
+        return run, (_rownorm_oracle_fn(x, w, b, ln) if values else None), "output_ptr"
     if short == "softmax_forward_kernel":
         # (BATCH_BUCKET, FEAT_BUCKET, log, x, out): the bucket's rows of the padded row length (a length of the class), through the wrapper itself; the
         # fp64 oracle per row (row-windowed above the oracle's cap, as a product's)
