@@ -131,10 +131,25 @@ def test_the_plan_records_the_split_and_prices_the_encoder_per_pass(monkeypatch)
     vcc["items_per_pass"] = 1
     split_ic = dataclasses.replace(ic, flow=FlowBindings(topo, root, "Wan2.1-VACE-1.3B-split-test"))
     whole_ic = dataclasses.replace(ic, flow=FlowBindings(whole_topo, root, "Wan2.1-VACE-1.3B-whole-test"))
-    whole = PrismSolver().solve_smart(c, profile(APPLE_M4_PRO), whole_ic, mode="compiled")
-    split = PrismSolver().solve_smart(c, profile(APPLE_M4_PRO), split_ic, mode="compiled")
+    def solve(input_config):
+        # the encoder's priced bytes, as the solver computes them (`_compute_memory`)
+        s, priced = PrismSolver(), {}
+        compute = s._compute_memory
+        def spy(*a, **k):
+            out = compute(*a, **k)
+            if isinstance(out, dict) and "vae_encoder" in out:
+                priced["vae_encoder"] = out["vae_encoder"].total_bytes
+            return out
+        s._compute_memory = spy
+        return s.solve_smart(c, profile(APPLE_M4_PRO), input_config, mode="compiled"), priced["vae_encoder"]
+    whole, whole_bytes = solve(whole_ic)
+    split, split_bytes = solve(split_ic)
     assert whole.batch_split_components == {}
     assert split.batch_split_components == {"vae_encoder": {"fed": 2, "per_pass": 1}}
     assert "batch_split_components" in plan_record(split) and any("passes" in l and "vae_encoder" in l for l in explain_plan(split).split("\n"))
-    w_sched = whole.component_stream["vae_encoder"]["schedule"]; s_sched = split.component_stream["vae_encoder"]["schedule"]
-    assert max(s_sched) > max(w_sched), (w_sched, s_sched)       # one item per pass: longer exact chunks fit the rung
+    # One item per pass prices under the stacked pair. Re-stated 2026-10-22 on the measurement: the cell had pinned the
+    # encoder streamed in chunks because it was priced at the guidance-doubled batch (33 300.7 MB); the encoder is not
+    # inside the guided loop, and Metal MEASURED it whole at this request in passes of one item, its pool at 15 762 MB
+    # (Mac 04:46; CUDA 24 395 MB at its gate's request, Dell 04:15) — priced 16 704.0 MB once the guidance batch is
+    # undone outside the loop. So the split's price is judged, not a streaming schedule that no longer exists.
+    assert split_bytes < whole_bytes, (split_bytes, whole_bytes)
