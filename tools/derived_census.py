@@ -2316,10 +2316,13 @@ def _workers_memory_holds(n_jobs: int, worker_bytes: int) -> int:
     `memory_budget.rung_down_mb`) over what one worker measured it takes (`worker_bytes`). A derivation holds a whole
     graph: on 24 GB of unified memory the cores were no memory bound, and the census started a worker per core until
     the Mac panicked three times (2026-10-20 00:27, 00:42, 00:54, WindowServer watchdog, 21 swap files). Unread
-    memory runs one derivation at a time."""
+    memory runs one derivation at a time.
+    The cores are those the machine is not already running on (`os.getloadavg`, the last minute): eight census
+    processes each starting a worker per core held ~300 derivations on 48 cores, and mochi's plans outran their
+    explanation's timeout (2026-10-22 17:3x, the c1norms census)."""
     from neurobrix.core.host_memory import memory_state
     from neurobrix.core.prism.memory_budget import rung_down_mb
-    cores = os.cpu_count() or 1
+    cores = max(1, (os.cpu_count() or 1) - int(os.getloadavg()[0]))
     free = memory_state().available_mb
     if free is None or worker_bytes <= 0:
         return 1
