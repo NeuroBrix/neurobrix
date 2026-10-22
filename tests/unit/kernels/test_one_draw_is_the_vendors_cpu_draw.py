@@ -60,7 +60,9 @@ def test_the_normals_are_the_vendors_within_one_ulp(seed, n):
     # ATen's transcendentals are Sleef's vectorised kernels (sinf/cosf u35: up to 3.5 ulp); ours are
     # float64 rounded once. Measured 2026-10-13: at most 3 ulp, 98.8 % within 1, 61.5 % bit-equal.
     assert not _far(ref, ours).any(), f"seed {seed} n {n}: {int(_far(ref, ours).sum())} values beyond 4 ulp and the floor"
-    if n >= 2048:
+    # the statistics are those of ATen's VECTORISED fill (x86 AVX2/AVX-512, `normal_fill_16`); its scalar fill (ARM:
+    # 79 % within 1 ulp, 48 % bit-equal, the Mac 2026-10-22) is held by the bound above alone
+    if n >= 2048 and torch.backends.cpu.get_cpu_capability() in ("AVX2", "AVX512"):
         assert float((ulps <= 1).mean()) >= 0.98, "98 % of the values are within 1 ulp of the vendor's"
         assert float((ulps == 0).mean()) >= 0.55, "the uniform stream is exact: most values are bit-equal"
 
