@@ -695,32 +695,9 @@ def conv2d_launches(N: int, in_c: int, in_h: int, in_w: int, out_c: int, kh: int
 
 
 def tiled_conv2d_bands(IH: int, out_h: int, kh: int, sh: int, dh: int, pad_h: int, tile_factor: int):
-    """The bands of Prism's op-level tiled conv (`_tiled_conv2d_spatial_nbx`, real halo): per band
-    (oh_start, oh_end, in_start, in_end, pad_top, pad_bot, skip) — the output rows, the input
-    rows read (clamped), the image-edge padding added, the band's leading conv rows to skip.
-    The image-edge padding is `max(0, -read_start)` alone: `read_start` already carries -pad_h
-    (P-NBX-TILED-CONV2D-SMALL-SCALE 2026-05-14 — adding pad_h again on the edge bands shifted the
-    first and last bands by pad_h rows, cos near 0 against F.conv2d at kh >= 3, pad_h >= 1)."""
-    tf = max(1, int(tile_factor))
-    band_oh = (out_h + tf - 1) // tf
-    # The halo in input rows, rounded up to a whole number of strides: the band's first conv row
-    # must be an output row, so the rows skipped on the read side are halo // stride. At stride 1
-    # this is the halo it always was; at stride 2 a 1-row halo misaligned every internal band by
-    # half an output row (found by this function's test, 2026-09-29 — Prism tiles strided convs).
-    halo_h = -(-((kh - 1) * dh // 2) // sh) * sh
-    bands = []
-    for oh_start in range(0, out_h, band_oh):
-        oh_end = min(oh_start + band_oh, out_h)
-        halo_top = 0 if oh_start == 0 else halo_h
-        halo_bot = 0 if oh_end == out_h else halo_h
-        read_start = oh_start * sh - pad_h - halo_top
-        read_end = (oh_end - 1) * sh + dh * (kh - 1) + 1 - pad_h + halo_bot
-        start, end = max(0, read_start), min(IH, read_end)
-        if end <= start:
-            continue
-        bands.append((oh_start, oh_end, start, end, max(0, -read_start), max(0, read_end - IH),
-                      halo_top // sh))
-    return bands
+    """The bands of Prism's op-level tiled conv — `tiling_sizes.tiled_conv2d_bands`, the one cut the run, the census
+    and Prism's price of the band read."""
+    return _ts.tiled_conv2d_bands(IH, out_h, kh, sh, dh, pad_h, tile_factor)
 
 
 def tiled_conv2d_launches(N: int, in_c: int, IH: int, IW: int, out_c: int, kh: int, kw: int,

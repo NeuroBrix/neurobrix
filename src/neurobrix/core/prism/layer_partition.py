@@ -113,8 +113,13 @@ class LayerPartitioner:
                  symbol_map: Optional[Dict[str, int]] = None,
                  compute_dtype_bytes: Optional[int] = None,
                  widths: Optional[Dict[str, int]] = None,
-                 token_split: bool = False, swap_values: bool = False, beyond_walls: bool = False):
+                 token_split: bool = False, swap_values: bool = False, beyond_walls: bool = False,
+                 op_extra: Optional[Dict[str, int]] = None):
         self._dag = graph
+        # {op uid: bytes} an op holds WHILE it runs beside its inputs and outputs, priced by the solver at the request
+        # (`PrismSolver._conv_band_bytes`: a band-streamed conv's largest band — its input buffer and output — beside
+        # its whole output): added to that op's figure on the op peak curve, as the activation walk adds it.
+        self._op_extra = dict(op_extra or {})
         # Whether a stretch may enclose its same-axis neighbour and keep its slice-only inputs on the host
         # (`_new_region`, `_fit_slice`): the solver's last stretch rung, after the parked rung declined —
         # every plan the cuts before it make is the one it was.
@@ -247,7 +252,7 @@ class LayerPartitioner:
                 if t is not None and not t.get("is_parameter") and tid not in alive:
                     alive[tid] = 0 if zero else self._activation_bytes(tid, t)
                     live += alive[tid]
-            during.append(before if op.get("op_type") in VIEW_OP_TYPES else live)
+            during.append((before if op.get("op_type") in VIEW_OP_TYPES else live) + self._op_extra.get(op_uid, 0))
             # Every tensor dead after this op: its inputs at their last use and its own outputs
             # no op reads.
             for tid in list(op.get("input_tensor_ids") or []) + list(op.get("output_tensor_ids") or []):
@@ -514,7 +519,8 @@ class LayerPartitioner:
                 op_in = in_bytes + sum(size[t] for t in new_in)
                 outs = [t for t in op.get("output_tensor_ids") or [] if t in size and t not in active]
                 in_op = act_bytes + sum(size[t] for t in outs)
-                need = op_w + op_in + max(run_peak, in_op)
+                extra = self._op_extra.get(self.order[i], 0)      # what the op holds beside them while it runs
+                need = op_w + op_in + max(run_peak, in_op + extra)
                 arena_over = max_arena_bytes is not None and op_w > max_arena_bytes
                 if need > budget_bytes or arena_over:
                     if i == s:
@@ -523,12 +529,12 @@ class LayerPartitioner:
                             peak_live_bytes=0, swapped=True,
                             refusal=(f"op {self.order[i]!r} holds {need / _MB:.1f} MB on its own with the values "
                                      f"between pieces parked (weights {op_w / _MB:.1f}, the inputs it reads "
-                                     f"{op_in / _MB:.1f}, its live set {in_op / _MB:.1f}), over the "
+                                     f"{op_in / _MB:.1f}, its live set {(in_op + extra) / _MB:.1f}), over the "
                                      f"{budget_bytes / _MB:.1f} MB budget"
                                      + (f" (its weights over the device's largest allocation, "
                                         f"{max_arena_bytes / _MB:.1f} MB)" if arena_over else "")))
                     break
-                names, wbytes, in_bytes, run_peak = op_names, op_w, op_in, max(run_peak, in_op)
+                names, wbytes, in_bytes, run_peak = op_names, op_w, op_in, max(run_peak, in_op + extra)
                 inputs.update(new_in)
                 for t in outs:
                     active[t] = size[t]
@@ -734,7 +740,7 @@ class LayerPartitioner:
                 op = self.ops.get(uid) or {}
                 reads = {root.get(t, t) for t in op.get("input_tensor_ids") or [] if root.get(t, t) in size}
                 outs = {t for t in op.get("output_tensor_ids") or [] if t in size}
-                out.append(sum(size[t] for t in reads | outs))
+                out.append(sum(size[t] for t in reads | outs) + self._op_extra.get(uid, 0))
             self._parked_curve_memo = out
         return list(self._parked_curve_memo)
 

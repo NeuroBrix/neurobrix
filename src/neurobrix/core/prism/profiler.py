@@ -961,6 +961,23 @@ class ActivationProfiler:
             batch *= int(d)
         return int(attention_scratch(batch, heads, int(q[-2]), int(v[-2])))
 
+    def tiled_conv_band_bytes(self, op: Dict[str, Any], symbol_map: Dict[str, int], widths, dtype_bytes: int,
+                              factor: int) -> int:
+        """What a 2-D convolution run in `factor` bands holds beside its input and whole output
+        (`tiling_sizes.tiled_conv2d_band_bytes`), at the request's shapes: the band's input copied at the conv's output
+        width (the wrappers cast the band to the output's dtype) and the band's output at that width. One rule for the
+        activation walk and the layer partitioner (`LayerPartitioner(op_extra=...)`)."""
+        from neurobrix.core.module.tiling_sizes import tiled_conv2d_band_bytes
+        x_tid, w_tid = op["input_tensor_ids"][0], op["input_tensor_ids"][1]
+        out_tid = op["output_tensor_ids"][0]
+        x_shape = self._resolve_shape(self.tensors.get(x_tid, {}), symbol_map)
+        w_shape = self._resolve_shape(self.tensors.get(w_tid, {}), symbol_map)
+        width = (widths[out_tid] if widths is not None and out_tid in widths
+                 else self._compute_size([1], self.tensors.get(out_tid, {}), dtype_bytes))
+        attrs = op.get("attributes") or {}
+        return int(tiled_conv2d_band_bytes(x_shape, w_shape, attrs["stride"], attrs["padding"], attrs["dilation"],
+                                           int(factor), int(width), int(width)))
+
     def estimate_peak_memory(
         self,
         input_config: Optional[InputConfig] = None,
@@ -979,9 +996,15 @@ class ActivationProfiler:
         handed_inputs: bool = False,
         conv3d_workspace=None,
         op_workspace=None,
+        tiled_convs: Optional[Dict[str, int]] = None,
     ) -> ActivationProfile:
         """
         Simulate execution to find peak activation memory.
+
+        `tiled_convs`: {conv uid: band factor} — the 2-D convolutions the plan runs band by band (op-level tiling,
+        `PrismSolver._standalone_conv_tiles`): while such a conv runs it holds, beside its input and its whole output,
+        its largest band's input rows copied into one buffer and the band's output (`tiling_sizes.
+        tiled_conv2d_band_bytes`, both engines), added to its in-op figure.
 
         `conv3d_workspace(x_shape, w_shape, attrs, x_width, out_width) -> bytes`: what the engine's 3-D convolution
         holds BESIDE its input and its output while it runs — cuDNN's workspace as the vendor file states it
@@ -1319,6 +1342,9 @@ class ActivationProfiler:
                     out_width = ((widths[out_tid0] if widths is not None else self._compute_size([1], self.tensors.get(out_tid0, {}), dtype_bytes))
                                  if out_tid0 else 0)
                     in_op += int(op_workspace(op.get("op_type"), x_shape, x_width, out_width))
+            # a band-streamed 2-D conv: its largest band's input buffer and output, beside the whole output
+            if tiled_convs and op_uid in tiled_convs and not op_is_zero_alloc:
+                in_op += self.tiled_conv_band_bytes(op, symbol_map, widths, dtype_bytes, tiled_convs[op_uid])
             # the operand copies the engine's precision wrapper makes while the op runs (`ExecutedWidths.casts`)
             for cast_tid, cast_width in (op_casts.get(op_uid, ()) if not op_is_zero_alloc else ()):
                 n_cast = 1

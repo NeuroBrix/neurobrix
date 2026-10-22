@@ -155,6 +155,62 @@ def conv2d_band_rows(N: int, out_c: int, out_h: int, out_w: int, out_bytes: int,
     return (out_h + tile_factor - 1) // tile_factor, row_bytes
 
 
+def tiled_conv2d_bands(IH: int, out_h: int, kh: int, sh: int, dh: int, pad_h: int, tile_factor: int):
+    """The bands of Prism's op-level tiled conv (real halo): per band (oh_start, oh_end, in_start, in_end, pad_top,
+    pad_bot, skip) — the output rows, the input rows read (clamped), the image-edge padding added, the band's leading
+    conv rows to skip. ONE cut for the run (`kernels/ops/fused_upsample_conv._tiled_conv2d_spatial_nbx` and its torch
+    twin), the derived census (`launch_keys.tiled_conv2d_launches`) and Prism's price of the band
+    (`tiled_conv2d_band_bytes`). The image-edge padding is `max(0, -read_start)` alone: `read_start` already carries
+    -pad_h (P-NBX-TILED-CONV2D-SMALL-SCALE 2026-05-14). The halo is rounded up to a whole number of strides: the band's
+    first conv row must be an output row (at stride 2 a 1-row halo misaligned every internal band, 2026-09-29)."""
+    tf = max(1, int(tile_factor))
+    band_oh = (out_h + tf - 1) // tf
+    halo_h = -(-((kh - 1) * dh // 2) // sh) * sh
+    bands = []
+    for oh_start in range(0, out_h, band_oh):
+        oh_end = min(oh_start + band_oh, out_h)
+        halo_top = 0 if oh_start == 0 else halo_h
+        halo_bot = 0 if oh_end == out_h else halo_h
+        read_start = oh_start * sh - pad_h - halo_top
+        read_end = (oh_end - 1) * sh + dh * (kh - 1) + 1 - pad_h + halo_bot
+        start, end = max(0, read_start), min(IH, read_end)
+        if end <= start:
+            continue
+        bands.append((oh_start, oh_end, start, end, max(0, -read_start), max(0, read_end - IH),
+                      halo_top // sh))
+    return bands
+
+
+def tiled_conv2d_band_bytes(x_shape: Sequence[int], w_shape: Sequence[int], stride, padding, dilation,
+                            tile_factor: int, in_bytes: int, out_bytes: int) -> int:
+    """What a tiled 2-D conv holds BESIDE its input and its whole output while its largest band runs: the band's input
+    rows copied into one buffer at the conv's compute width `in_bytes` (padded by the image-edge rows, and by pad_w on
+    both sides whenever any padding applies — one buffer, the slice copied into its interior) and the band's output at
+    `out_bytes`, before it is copied into the whole output (`kernels/ops/fused_upsample_conv._tiled_conv2d_spatial_*`,
+    both engines). Unpriced, HAT-L x4 at 2048 px on a 16 GB card ran out of memory asking a band's 482 MiB beside the
+    1 446 MiB band input (2026-10-22)."""
+    N, C, IH, IW = (int(v) for v in x_shape)
+    O, _cg, kh, kw = (int(v) for v in w_shape)
+    sh, sw = _pair(stride)
+    ph, pw = _pair(padding)
+    dh, dw = _pair(dilation)
+    out_h = (IH + 2 * ph - dh * (kh - 1) - 1) // sh + 1
+    out_w = (IW + 2 * pw - dw * (kw - 1) - 1) // sw + 1
+    worst = 0
+    for o0, o1, start, end, pt, pb, _skip in tiled_conv2d_bands(IH, out_h, kh, sh, dh, ph, tile_factor):
+        padded = pt > 0 or pb > 0 or pw > 0
+        rows_in = end - start + pt + pb
+        width_in = IW + 2 * pw if padded else IW
+        worst = max(worst, N * C * rows_in * width_in * int(in_bytes) + N * O * (o1 - o0) * out_w * int(out_bytes))
+    return worst
+
+
+def _pair(v) -> Tuple[int, int]:
+    if isinstance(v, (list, tuple)):
+        return (int(v[0]), int(v[-1]))
+    return (int(v), int(v))
+
+
 # --- attention: the scores bound, the chunk rows, the device budget -------------------------------
 
 #: The math route's scores are fp32: four bytes a score (the width of the dtype, not a size choice).
@@ -185,6 +241,23 @@ def sdpa_chunk_rows(bound: int, batch: int, nheads: int, Tq: int, Tk: int,
     if rows >= min_chunk_rows and -(-Tq // rows) <= max_chunks:
         return rows
     return 0
+
+
+def sdpa_chunk_plan(bound: int, batch: int, nheads: int, Tq: int, Tk: int,
+                    min_chunk_rows: int) -> Tuple[int, int]:
+    """(slices per chunk, query rows per chunk) that keep each chunk's fp32 scores within `bound`: the rows as many as
+    fit with one (batch, head) slice, a multiple of the arch's row block (`memory.sdpa_math_min_chunk_rows`) or the
+    whole query; then as many slices as fit beside them. Every slice and every query row is its own softmax, so any
+    such cut is exact. (batch x nheads, Tq) when the whole scores fit; (0, 0) when one slice of one row block exceeds
+    `bound`."""
+    slices = batch * nheads
+    if sdpa_scores_bytes(batch, nheads, Tq, Tk) <= bound:
+        return slices, Tq
+    per_row = Tk * _SCORES_BYTES
+    rows = min(Tq, (bound // per_row) // min_chunk_rows * min_chunk_rows) if min_chunk_rows else 0
+    if rows <= 0:
+        return 0, 0
+    return max(1, min(slices, bound // (rows * per_row))), rows
 
 
 def sdpa_device_scores_budget(base_bytes: int, device_fraction: float, device_memory_mb) -> int:

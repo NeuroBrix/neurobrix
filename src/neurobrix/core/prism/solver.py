@@ -2840,6 +2840,30 @@ class PrismSolver:
                                    for name in (plan.layer_stream_plan or ())},
                 "load_workers": io_workers(), "pinned_in_flight": pinned_uploads_in_flight()}
 
+    def _standalone_conv_tiles(self, graph, overflow_ops, pair_convs, card_bytes) -> Dict[str, int]:
+        """{conv uid: band factor} of the 2-D convolutions op-level tiling runs band by band on a card of `card_bytes`:
+        every overflowing conv (`ActivationProfile.overflow_ops`) a fusion pair did not take (`pair_convs`), but a
+        depthwise one (the cuDNN workspace estimator overshoots them — tiled, they diverged on 16 GB, per-op bit-diff
+        2026-05-13) and one whose input is not rank 4 (the spatial band wrappers tile [B, C, H, W] only: a conv3d or
+        a conv1d runs native); the factor `tiling_sizes.conv_band_factor` of its workspace and output. ONE decision for
+        the price (`_compute_memory`) and the plan (`_detect_op_level_tiling_pairs`).
+        `NBX_S5_SKIP_CONV_TILE=1` (diagnostic) tiles none."""
+        import os as _os_skipc
+        if _os_skipc.environ.get("NBX_S5_SKIP_CONV_TILE") == "1":
+            return {}
+        ops = graph.get("ops", {})
+        out: Dict[str, int] = {}
+        for op_uid, op_type, out_b, ws_b, _in_tids in overflow_ops:
+            if op_uid in pair_convs or "convolution" not in op_type:
+                continue
+            _in_shapes = (ops.get(op_uid) or {}).get("input_shapes", [])
+            if len(_in_shapes) >= 2 and len(_in_shapes[1]) == 4 and int(_in_shapes[1][1]) == 1:
+                continue                                    # depthwise
+            if _in_shapes and _in_shapes[0] is not None and len(_in_shapes[0]) != 4:
+                continue                                    # not a 2-D conv
+            out[op_uid] = _ts.conv_band_factor(ws_b + out_b, out_b, card_bytes)
+        return out
+
     def _detect_op_level_tiling_pairs(
         self, container, components, allocations, profile, input_config,
         target_dtype_str: str,
@@ -2915,7 +2939,7 @@ class PrismSolver:
             has_chains = bool(
                 self._identify_residual_chain_specs(comp.graph, input_config)
             )
-            if not ap.overflow_ops and not has_chains:
+            if not ap.overflow_ops and not has_chains and not (getattr(self, "_conv_tiles", None) or {}).get(comp.name):
                 # THE FIGURE A STRATEGY IS GATED ON IS THE FIGURE THE PLAN EXECUTES UNDER.
                 # `_compute_memory` prices this component's residual adds IN PLACE whenever it
                 # has candidates — also when nothing overflows, its in-place-only pass — and the
@@ -3036,55 +3060,17 @@ class PrismSolver:
                 plan.add_upsample_conv_fusion(uid, conv_uid, tile_factor)
                 seen_pair_convs.add(conv_uid)
 
-            # Standalone conv overflow (no upsample to fuse) — tile spatially
-            # so cuDNN workspace stays bounded per band. Skip convs already
-            # picked up by a fusion pair above.
-            for op_uid, op_type, out_b, ws_b, in_tids in ap.overflow_ops:
-                if op_uid in seen_pair_convs:
-                    continue
-                if "convolution" not in op_type:
-                    continue  # only conv tiling implemented for now
-                # Skip tiling for depthwise convolutions: the cuDNN
-                # workspace estimator overshoots them (depthwise
-                # actually needs a tiny workspace — kh*kw per channel),
-                # so they get tile-flagged here even though they don't
-                # need to be tiled. Tiling these convs introduces a
-                # numerical divergence on 16g specifically (where they
-                # trigger; on 32g the budget threshold is higher and
-                # they pass through native).
-                # Detection: depthwise weight shape is [out_c, 1, kh,
-                # kw] (in_channels_per_group == 1).
-                # Diagnosed factually 2026-05-13 via per-op bit-diff:
-                # transformer block depthwise convs (block.X.ffn.conv_
-                # depth) were the first divergent ops on 16g.
-                _op_data = ops.get(op_uid, {})
-                _in_shapes = _op_data.get("input_shapes", [])
-                if (len(_in_shapes) >= 2 and len(_in_shapes[1]) == 4
-                        and int(_in_shapes[1][1]) == 1):
-                    # Depthwise — skip tiling.
-                    continue
-                # The spatial band-streaming wrappers (tiled_conv2d_spatial /
-                # _pair) are rank-4 ONLY — they tile a 2D conv [B, C, H, W].
-                # Any other input rank crashes at dispatch:
-                #   - 5D conv3d (CogVideoX VAE): 'too many values to unpack'
-                #     in _tiled_conv2d_spatial_torch (waits on the 5D tiling
-                #     workstream; runs native, fits at proof sizes, OOMs visibly).
-                #   - 3D conv1d (Kokoro iSTFTNet vocoder noise_convs / the audio
-                #     decoders generally): _pair reads stride[1] on a 1-element
-                #     stride list -> IndexError. A 1D audio conv is never a
-                #     2D-spatial overflow anyway — it runs native (small).
-                # Only 2D convs (rank-4 input) get spatial tiling.
-                if (_in_shapes and _in_shapes[0] is not None
-                        and len(_in_shapes[0]) != 4):
-                    continue
-                # Diagnostic gate: NBX_S5_SKIP_CONV_TILE=1 skips all
-                # remaining standalone convolution tiling.
-                import os as _os_skipc
-                if _os_skipc.environ.get("NBX_S5_SKIP_CONV_TILE") == "1":
-                    continue
-                # tile_factor: same formula as fusion path but without the
-                # upsample term (no intermediate to absorb).
-                plan.add_tiled_op(op_uid, op_type, _ts.conv_band_factor(ws_b + out_b, out_b, comp_vram))
+            # Standalone conv overflow (no upsample to fuse) — tiled spatially so the workspace stays bounded per
+            # band; the convs a fusion pair took are skipped. The decision PRICED with the component
+            # (`_compute_memory`: the band each tiled conv holds is in its in-op figure and in the layer partition's
+            # op curve) is carried by the plan, by the same rule.
+            # A conv this card's scan tiles and the price did not (its weights read as resident here) keeps its tiling,
+            # as before the price knew bands; a priced conv keeps the priced factor.
+            _tiles = self._standalone_conv_tiles(comp.graph, ap.overflow_ops, seen_pair_convs, comp_vram)
+            _tiles.update((getattr(self, "_conv_tiles", None) or {}).get(comp.name) or {})
+            for op_uid, factor in _tiles.items():
+                if op_uid not in seen_pair_convs:
+                    plan.add_tiled_op(op_uid, ops[op_uid]["op_type"], factor)
 
             # Custom rms_norm tiling — rms_norm normalizes along the last
             # (channel) dim, so each H row is independent. Tile by H bands
@@ -3659,6 +3645,9 @@ class PrismSolver:
                         dict(ap.symbol_map or {}), int(dtype_bytes), dict(widths or {}))
                     # Second pass (tiling-aware) only when first pass found
                     # overflow_ops AND we have a real budget to reason about.
+                    # this request's decision only: a component priced again starts with no tiled conv
+                    self.__dict__.setdefault("_conv_tiles", {})[comp.name] = {}
+                    self.__dict__.setdefault("_conv_band_bytes", {})[comp.name] = {}
                     if smallest_gpu_bytes > 0 and ap.overflow_ops:
                         fusion_uids = self._identify_fusion_upsample_uids(
                             comp.graph, ap.overflow_ops, input_config,
@@ -3685,6 +3674,21 @@ class PrismSolver:
                             comp.graph, input_config
                         )
                         zero_uids = fusion_uids | f2a_uids | chain_uids
+                        # The standalone convs op-level tiling runs band by band (the fusion pairs' convs excepted:
+                        # each pair's conv is its upsample's one consumer) — decided HERE, once, and carried to the
+                        # plan (`_detect_op_level_tiling_pairs`); each holds its largest band beside its whole output,
+                        # priced in its in-op figure and in the layer partition's op curve (`_conv_band_bytes`).
+                        _cons = {t: u for u, o in (comp.graph.get("ops") or {}).items()
+                                 for t in (o.get("input_tensor_ids") or [])}
+                        _pair_convs = {_cons.get(t) for u in fusion_uids
+                                       for t in ((comp.graph.get("ops") or {}).get(u) or {}).get("output_tensor_ids", [])}
+                        conv_tiles = self._standalone_conv_tiles(comp.graph, ap.overflow_ops, _pair_convs,
+                                                                 smallest_gpu_bytes)
+                        self.__dict__.setdefault("_conv_tiles", {})[comp.name] = dict(conv_tiles)
+                        _gops = comp.graph.get("ops") or {}
+                        self.__dict__.setdefault("_conv_band_bytes", {})[comp.name] = {
+                            u: profiler.tiled_conv_band_bytes(_gops[u], dict(ap.symbol_map or {}), widths, dtype_bytes, f)
+                            for u, f in conv_tiles.items()}
                         # In-place residual adds: detected statically by the
                         # same liveness logic the runtime engine uses. The
                         # add's output buffer = one input's buffer at runtime
@@ -3695,7 +3699,7 @@ class PrismSolver:
                         inplace_adds = self._identify_inplace_add_candidates_static(
                             comp.graph, input_config=input_config
                         )
-                        if zero_uids or inplace_adds:
+                        if zero_uids or inplace_adds or conv_tiles:
                             ap_tiled = profiler.estimate_peak_memory(
                                 input_config=input_config,
                                 dtype_bytes=dtype_bytes,
@@ -3709,6 +3713,7 @@ class PrismSolver:
                                 source_holding_uids=fusion_uids | f2a_uids,
                                 in_place_weight_reads=_in_place,
                         attention_scratch=self._attention_scratch(profile), conv3d_workspace=self._conv3d_workspace(profile), op_workspace=self._op_workspace(profile),
+                                tiled_convs=conv_tiles,
                             )
                             activation_bytes = ap_tiled.peak_bytes
                             _kept = ap_tiled
@@ -3734,6 +3739,7 @@ class PrismSolver:
                                 widths=widths,
                                 in_place_weight_reads=_in_place,
                         attention_scratch=self._attention_scratch(profile), conv3d_workspace=self._conv3d_workspace(profile), op_workspace=self._op_workspace(profile),
+                                tiled_convs=conv_tiles,
                             )
                             activation_bytes = ap_tiled.peak_bytes
                             _kept = ap_tiled
@@ -7753,6 +7759,7 @@ class PrismSolver:
                         f"is not this one")
                 _cutter = LayerPartitioner(graph, _piece_sizes, symbol_map=_sizing[0],
                                            compute_dtype_bytes=_sizing[1], widths=_sizing[2],
+                                           op_extra=(getattr(self, "_conv_band_bytes", None) or {}).get(comp_name),
                                            token_split=bool(getattr(self, "_token_split", False)),
                                            swap_values=bool(getattr(self, "_swap_values", False)),
                                            beyond_walls=bool(getattr(self, "_regions_beyond_walls", False)))
