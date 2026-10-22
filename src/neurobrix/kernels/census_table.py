@@ -175,6 +175,53 @@ def replace_model(path: Path, model: str, rows: Iterable[Dict], keyless_ops: int
     return len(old) - len(kept), len(rows)
 
 
+def inputs_path(path: Path) -> Path:
+    """The table's input record beside it (`<cls>g.inputs.jsonl`): one line per model, what its rows were
+    derived FROM — the plan of every derivation, the code the derivation executed and the files it read, each
+    with its hash (tools/derived_census.py `table --only-moved` re-derives a model only where one moved)."""
+    return path.with_name(path.name[:-len(".jsonl")] + ".inputs.jsonl")
+
+
+def read_inputs(path: Path) -> Dict[str, Dict]:
+    """{model: its input record} of the table at `path`; a missing record file is none."""
+    ip = inputs_path(path)
+    if not ip.exists():
+        return {}
+    out = {}
+    for n, line in enumerate(ip.read_text(encoding="utf-8").splitlines(), 1):
+        if line.strip():
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{ip}:{n}: not an input record ({exc})") from exc
+            out[rec["model"]] = rec
+    return out
+
+
+def replace_inputs(path: Path, model: str, record: Dict) -> None:
+    """The model's input record replaced, every other model's kept, under the TABLE's lock (the rows and their
+    record are written by the same writers), atomically."""
+    if record.get("model") != model:
+        raise ValueError(f"replace_inputs({model!r}) was handed the record of {record.get('model')!r}")
+    ip = inputs_path(path)
+    with locked(path):
+        recs = read_inputs(path)
+        recs[model] = record
+        fd, tmp = tempfile.mkstemp(dir=str(ip.parent), prefix=ip.name, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                for m in sorted(recs):
+                    fh.write(json.dumps(recs[m], sort_keys=True) + "\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, ip)
+        except BaseException:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+            raise
+
+
 class EmptyCensus(ValueError):
     """A model's rows would be replaced by none."""
 

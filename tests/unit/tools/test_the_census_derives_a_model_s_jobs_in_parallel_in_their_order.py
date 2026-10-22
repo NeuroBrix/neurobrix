@@ -24,7 +24,7 @@ def _fake_derive_keys(model, hw, mode, rung, req):
         raise DC.PlanRefused(f"{mode} r{rung} refused")
     if rung == 5:
         raise SystemExit(f"{mode} r{rung} not derivable")
-    return ([(f"op{rung}", "kern", f"({mode}, {rung})")], None, None, {f"NOTE {mode}": rung})
+    return ([(f"op{rung}", "kern", f"({mode}, {rung})")], {"strategy": f"plan r{rung}"}, None, {f"NOTE {mode}": rung})
 
 
 def test_the_parallel_results_are_the_serial_results_in_the_jobs_order(monkeypatch):
@@ -34,7 +34,8 @@ def test_the_parallel_results_are_the_serial_results_in_the_jobs_order(monkeypat
     # (the platform default on macOS; red there before this line, KeyError on the fake mode)
     par = DC._derive_jobs("m", "hw", jobs, start_method="fork")
     ser = [DC._derive_job(("m", "hw", mode, rung, req)) for mode, _ri, req, rung in jobs]
-    assert par == ser
+    # the results and the plan each was derived from; what each process executed and read differs by process
+    assert [(r[0], r[1], r[2]["plan"]) for r in par] == [(r[0], r[1], r[2]["plan"]) for r in ser]
     assert [r[0] for r in par[:7]] == ["ok", "ok", "plan_refused", "ok", "system_exit", "ok", "ok"]
     assert par[0][1][0] == [("op1", "kern", "(triton, 1)")]
 

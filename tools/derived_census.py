@@ -2198,16 +2198,103 @@ def compare(a) -> int:
     return 0
 
 
+#: where this run's tiling probes land (`table --logs`): a path the record never carries (`_norm_logs`)
+_LOGS: list = []
+
+
+def _norm_logs(obj):
+    """`obj` with this run's logs directory written `<logs>`: a plan or a request that names a probe's input names
+    it under whichever --logs the census was given, and the scope compares what was derived, not where."""
+    import json as _j
+    text = _j.dumps(obj, sort_keys=True, default=str)
+    for d in _LOGS:
+        text = text.replace(d, "<logs>")
+    return _j.loads(text)
+
+
+#: The plan record's fields priced FROM THE EXPLAINING PROCESS ITSELF: `host_footprint` holds its `resident` term,
+#: what the planning process holds when Prism prices, "passed in measured" (core/prism/host_footprint.py) — it
+#: moves from one explanation to the next (TinyLlama, 2026-10-22: 171 057 152 then 171 933 696 bytes). The
+#: derivation reads none of them (tests/unit/census/test_the_census_scope_is_what_the_rows_are_derived_from.py
+#: derives with them removed), so the digest leaves them out; any other field of the record is hashed.
+ROOM_FIELDS = ("host_footprint",)
+
+
+def _plan_digest(plan=None, refused: str = "") -> str:
+    """The hash of one derivation's plan record — or of the refusal that stood in its place."""
+    import census_inputs as CI
+    if refused:
+        return "refused:" + CI.digest(_norm_logs(refused))
+    return CI.digest(_norm_logs({k: v for k, v in plan.items() if k not in ROOM_FIELDS}))
+
+
+def _job_id(mode, ri, req, rung) -> str:
+    import census_inputs as CI
+    return f"{mode}|{ri}|r{rung}|{CI.digest(_norm_logs(list(req)))}"
+
+
 def _derive_job(args):
-    """One (mode, request, rung) derivation in a worker: (\"ok\", (derived, unhandled)), or the refusal by name."""
+    """One (mode, request, rung) derivation in a worker: ("ok", (derived, unhandled), inputs), or the refusal by
+    name with its inputs — `inputs` what the derivation was derived FROM (census_inputs: the plan's hash, the
+    code it executed, the files it read)."""
+    import census_inputs as CI
+    model, hw, mode, rung, req = args
+    CI.reset()
+    try:
+        derived, plan, _P, unhandled = derive_keys(model, hw, mode, rung, req)
+    except PlanRefused as e:
+        return ("plan_refused", str(e), {"plan": _plan_digest(refused=str(e)), **CI.take()})
+    except SystemExit as e:
+        return ("system_exit", str(e), {"plan": _plan_digest(refused=str(e)), **CI.take()})
+    return ("ok", (list(derived), collections.Counter(unhandled)), {"plan": _plan_digest(plan), **CI.take()})
+
+
+def _plan_job(args) -> str:
+    """One derivation's plan digest, explained again in the current tree (the scope's plan check)."""
     model, hw, mode, rung, req = args
     try:
-        derived, _plan, _P, unhandled = derive_keys(model, hw, mode, rung, req)
+        return _plan_digest(plan_record(model, req, mode, hw, rung))
     except PlanRefused as e:
-        return ("plan_refused", str(e))
+        return _plan_digest(refused=str(e))
     except SystemExit as e:
-        return ("system_exit", str(e))
-    return ("ok", (list(derived), collections.Counter(unhandled)))
+        return _plan_digest(refused=str(e))
+
+
+def _plan_digests(model, hw, jobs) -> list:
+    """The plan digest of every (mode, request, rung) job, in order: the first explained alone and priced (the
+    explaining subprocess's peak resident size, `RUSAGE_CHILDREN`), the rest as many at a time as the cores and the
+    free memory hold (`_workers_memory_holds`)."""
+    import resource
+    from concurrent.futures import ThreadPoolExecutor
+    args = [(model, hw, mode, rung, req) for mode, _ri, req, rung in jobs]
+    if not args:
+        return []
+    first = _plan_job(args[0])
+    peak = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
+    peak = int(peak) if sys.platform == "darwin" else int(peak) * 1024
+    workers = _workers_memory_holds(len(args) - 1, peak)
+    with ThreadPoolExecutor(max(1, workers)) as ex:
+        return [first] + list(ex.map(_plan_job, args[1:]))
+
+
+def _moved(model, hw, rec, container, jobs) -> str:
+    """Why `model`'s rows must be derived again — '' when its record says they are what this tree would derive:
+    the same container, the same jobs, no executed unit of code and no read file moved, the same plan per job."""
+    import census_inputs as CI
+    if rec is None:
+        return "no input record"
+    if rec.get("container") != container:
+        return f"container {rec.get('container')} -> {container}"
+    ids = [_job_id(*j) for j in jobs]
+    if sorted(ids) != sorted(rec.get("jobs") or {}):
+        return "its (mode, request, rung) jobs changed"
+    why = CI.static_move(rec)
+    if why:
+        return why
+    for jid, dig in zip(ids, _plan_digests(model, hw, jobs)):
+        if rec["jobs"][jid] != dig:
+            return f"plan {jid.rsplit('|', 1)[0]} moved"
+    return ""
 
 
 def _derive_job_priced(args):
@@ -2311,6 +2398,11 @@ def table(a) -> int:
                          text=True).stdout.strip() or "unknown"
     worst = 0
     Path(a.logs).mkdir(parents=True, exist_ok=True)     # a tiling probe's resized input lands here
+    import census_inputs as CI
+    _LOGS[:] = sorted({str(Path(a.logs)), str(Path(a.logs).resolve())}, key=len, reverse=True)
+    CI.OUTPUTS[:] = [str(path), str(T.inputs_path(path)), str(Path(a.logs))]
+    CI.install()                       # what every model's rows are derived FROM, measured from here on
+    recs = T.read_inputs(path) if a.only_moved else {}
     for model in models:
         fam = CC._family(model)
         reqs = CC.census_requests(model, fam, [], None)
@@ -2324,8 +2416,20 @@ def table(a) -> int:
         # bound profile and every module state inherited), the results consumed in the loop's own order —
         # the same rows as one process, in a fraction of the wall (the census is CPU-bound, one core each).
         jobs = [(mode, ri, req, rung) for mode in modes for ri, req in enumerate(reqs) for rung in rungs]
+        if a.only_moved:
+            why = _moved(model, hw, recs.get(model), container, jobs)
+            if not why:
+                r_ = recs[model]
+                print(f"[derived table] {model}: unchanged, its rows kept — the {len(r_['jobs'])} plan(s), "
+                      f"{len(r_['units'])} unit(s) of code executed and {len(r_['files'])} file(s) read that they "
+                      f"were derived from are this tree's", flush=True)
+                continue
+            print(f"[derived scope] {model}: derived again — {why}", flush=True)
+        measured, plans = [], {}
         for (mode, ri, req, rung), res in zip(jobs, _derive_jobs(model, hw, jobs)):
-                    kind_, payload = res
+                    kind_, payload, inp = res
+                    measured.append(inp)
+                    plans[_job_id(mode, ri, req, rung)] = inp["plan"]
                     if kind_ == "plan_refused":
                         if rung == rungs[-1] and not ri:
                             unrunnable.append(f"{mode} r{rung}: {payload}")
@@ -2365,6 +2469,9 @@ def table(a) -> int:
                 print(f"   {line}")
             continue
         removed, _ = T.replace_model(path, model, rows, keyless_ops=0 if rows else max(keyless, len(unrunnable)))
+        units, files = CI.units_and_files(CI.merge(measured + [CI.take()]))
+        T.replace_inputs(path, model, {"model": model, "container": container, "jobs": plans, "units": units,
+                                       "files": files, "tool": f"derived_census {rev}"})
         written = len({(r["mode"], r["kernel"], r["key"]) for r in rows})
         print(f"[derived table] {model}: {written} row(s) written ({removed} replaced; {keyless} keyless op(s) "
               f"placed) into {path.name} "
@@ -2392,6 +2499,10 @@ def main(argv=None) -> int:
     t.add_argument("--modes", default="triton,triton-sequential")
     t.add_argument("--rungs", default="ladder", help="'ladder' (the class's rungs) or a comma-separated list of MB")
     t.add_argument("--logs", required=True, help="where a tiling probe's resized input lands")
+    t.add_argument("--only-moved", action="store_true",
+                   help="derive only the models whose input record (the table's <cls>g.inputs.jsonl) moved: their "
+                        "container, a plan, a unit of code the derivation executed or a file it read; the others' "
+                        "rows are kept and said unchanged")
     a = ap.parse_args(argv)
     return table(a) if a.cmd == "table" else compare(a)
 
