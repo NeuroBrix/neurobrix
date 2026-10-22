@@ -30,6 +30,18 @@ def _ulps_apart(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     return np.abs(ai - bi)
 
 
+#: An absolute floor beside the 4-ulp bound: where ATen draws through its SCALAR float32 normal fill (every value on
+#: ARM, the Mac 2026-10-22), the error is the Box-Muller intermediate's — absolute, at the radius' magnitude, which a
+#: hundred million draws keep under 8 — so a value near 0 drifts many of its own ulp (measured there: at most 2.0e-6
+#: over 100 000 draws). 4 ulp of 8.0 in float32.
+ABS_FLOOR = 4 * float(np.spacing(np.float32(8.0)))
+
+
+def _far(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """The values neither within 4 ulp of the vendor's nor within the absolute floor of it."""
+    return (_ulps_apart(a, b) > 4) & (np.abs(a.astype(np.float64) - b.astype(np.float64)) > ABS_FLOOR)
+
+
 @pytest.mark.parametrize("seed", [0, 1, 42, 123456789, 2**31 - 1, 2**32 + 7])
 def test_the_word_stream_is_torchs(seed):
     g = torch.Generator("cpu").manual_seed(seed)
@@ -47,7 +59,7 @@ def test_the_normals_are_the_vendors_within_one_ulp(seed, n):
     ulps = _ulps_apart(ref, ours)
     # ATen's transcendentals are Sleef's vectorised kernels (sinf/cosf u35: up to 3.5 ulp); ours are
     # float64 rounded once. Measured 2026-10-13: at most 3 ulp, 98.8 % within 1, 61.5 % bit-equal.
-    assert int(ulps.max()) <= 4, f"seed {seed} n {n}: {int((ulps > 4).sum())} values further than 4 ulp"
+    assert not _far(ref, ours).any(), f"seed {seed} n {n}: {int(_far(ref, ours).sum())} values beyond 4 ulp and the floor"
     if n >= 2048:
         assert float((ulps <= 1).mean()) >= 0.98, "98 % of the values are within 1 ulp of the vendor's"
         assert float((ulps == 0).mean()) >= 0.55, "the uniform stream is exact: most values are bit-equal"
@@ -57,20 +69,20 @@ def test_the_normals_are_the_vendors_within_one_ulp(seed, n):
 def test_fewer_than_sixteen_values_take_the_scalar_path(n):
     ref = torch.randn(n, generator=torch.Generator("cpu").manual_seed(42)).numpy()
     ours = MT19937(42).randn(n)
-    assert int(_ulps_apart(ref, ours).max()) <= 4, (ref, ours)
+    assert not _far(ref, ours).any(), (ref, ours)
     # and the stream continues where torch's does: a 16-block after a scalar draw
     g = torch.Generator("cpu").manual_seed(7)
     ref2 = torch.cat([torch.randn(3, generator=g), torch.randn(32, generator=g)]).numpy()
     m = MT19937(7)
     ours2 = np.concatenate([m.randn(3), m.randn(32)])
-    assert int(_ulps_apart(ref2, ours2).max()) <= 4
+    assert not _far(ref2, ours2).any()
 
 
 @pytest.mark.parametrize("n", [33, 1000, 21 * 60 * 104])
 def test_a_tail_is_recomputed_from_fresh_uniforms(n):
     ref = torch.randn(n, generator=torch.Generator("cpu").manual_seed(42)).numpy()
     ours = MT19937(42).randn(n)
-    assert int(_ulps_apart(ref, ours).max()) <= 4
+    assert not _far(ref, ours).any()
 
 
 def test_one_seed_one_draw_and_a_shape_reshapes_the_same_stream():
