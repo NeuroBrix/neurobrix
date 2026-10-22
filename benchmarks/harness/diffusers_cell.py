@@ -14,6 +14,10 @@ Fairness contract (backends.yml `diffusers.volta_notes`):
   row on BOTH columns; per-request seeded CUDA Generator.
 """
 
+import sys as _sys_atelier
+from pathlib import Path as _Path_atelier
+_sys_atelier.path.insert(0, str(_Path_atelier(__file__).resolve().parents[2] / "tools"))
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import hashlib
 import json
@@ -27,7 +31,7 @@ def load_pipeline(row: dict):
     from diffusers import DiffusionPipeline
 
     ckpt = row.get("diffusers_checkpoint") or row["checkpoint"]
-    snap = Path.home() / "hf_snapshots" / ckpt.split("/")[-1]
+    snap = _atelier.root("hf_snapshots") / ckpt.split("/")[-1]
     src = str(snap if snap.exists() else ckpt)
 
     t0 = time.perf_counter()

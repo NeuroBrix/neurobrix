@@ -11,6 +11,10 @@ Usage:
 
 Compares: NeuroBrix compiled mode vs HuggingFace diffusers (native pipeline)
 """
+import sys as _sys_atelier
+from pathlib import Path as _Path_atelier
+_sys_atelier.path.insert(0, str(_Path_atelier(__file__).resolve().parents[1] / "tools"))
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import sys
 import os
 import sys
@@ -70,7 +74,7 @@ def run_sana_hf(steps: int, prompt: str, warmup: bool = True):
         torch.cuda.synchronize()
         t_warmup = time.perf_counter() - t0
         print(f"[HF WARMUP] {t_warmup:.2f}s")
-        image.save("/home/mlops/NeuroBrix_System/benchmark_hf_warmup.png")
+        image.save(_atelier.tmp("benchmark_hf_warmup.png"))
     else:
         t_warmup = 0.0
 
@@ -87,13 +91,13 @@ def run_sana_hf(steps: int, prompt: str, warmup: bool = True):
     torch.cuda.synchronize()
     t_hot = time.perf_counter() - t0
     print(f"[HF HOT] {t_hot:.2f}s")
-    image.save("/home/mlops/NeuroBrix_System/benchmark_hf_hot.png")
+    image.save(_atelier.tmp("benchmark_hf_hot.png"))
 
     # Profiled run
     print("\n[HF PROFILER] Capturing CUDA trace...")
     torch.manual_seed(42)
 
-    profile_dir = Path("/home/mlops/NeuroBrix_System/benchmarks/traces")
+    profile_dir = (Path(__file__).resolve().parents[1] / "benchmarks/traces")
     profile_dir.mkdir(parents=True, exist_ok=True)
 
     with torch.profiler.profile(
@@ -166,7 +170,7 @@ def main():
 
     results = run_sana_hf(args.steps, args.prompt)
 
-    results_path = Path("/home/mlops/NeuroBrix_System/benchmarks/results")
+    results_path = (Path(__file__).resolve().parents[1] / "benchmarks/results")
     results_path.mkdir(parents=True, exist_ok=True)
     out_file = results_path / f"hf_baseline_sana_{args.steps}steps.json"
     with open(out_file, "w") as f:

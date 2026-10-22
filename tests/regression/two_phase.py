@@ -15,6 +15,10 @@ a model here; this file only partitions and launches.
 """
 from __future__ import annotations
 
+import sys as _sys_atelier
+from pathlib import Path as _Path_atelier
+_sys_atelier.path.insert(0, str(_Path_atelier(__file__).resolve().parents[2] / "tools"))
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import os
 import subprocess
@@ -22,7 +26,7 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-CACHE = Path.home() / ".neurobrix" / ("ca" + "che")
+CACHE = _atelier.root("cache")
 
 
 def container_weight_bytes(model_dir: Path) -> int:

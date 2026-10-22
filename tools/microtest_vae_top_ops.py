@@ -20,18 +20,19 @@ diff_dag_cross_variant_report.md, rel_ratio extreme):
 
 No NeuroBrix code modification. Pure consumer of public wrappers.
 """
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import json
 import sys
 from pathlib import Path
 
-ROOT = Path("/home/mlops/NeuroBrix_System")
+ROOT = Path(__file__).resolve().parents[1]
 VAE_GRAPH = (ROOT / ".." / ".." / "home/mlops/.neurobrix/cache/"
              "Sana_1600M_4Kpx_BF16/components/vae/graph.json").resolve()
 # Direct path
-VAE_GRAPH = Path("/home/mlops/.neurobrix/cache/Sana_1600M_4Kpx_BF16"
+VAE_GRAPH = (_atelier.root("cache") / "Sana_1600M_4Kpx_BF16"
                  "/components/vae/graph.json")
-OUT_DIR = ROOT / "validation_outputs/p_sana_4kpx_runtime/audit_spaghetti_2026_05_05"
+OUT_DIR = _atelier.root("campaigns") / "p_sana_4kpx_runtime/audit_spaghetti_2026_05_05"
 OUT_MD = OUT_DIR / "microtest_vae_top_ops_report.md"
 
 sys.path.insert(0, str(ROOT / "src"))

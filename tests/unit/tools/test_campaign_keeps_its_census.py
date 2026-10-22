@@ -34,6 +34,8 @@ def store(tmp_path, monkeypatch):
     home = tmp_path / "home"
     (home / ".neurobrix" / "replay_cache").mkdir(parents=True)
     monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+    # the engine's home is the workshop's role `engine_home` (tools/atelier.py), named here for the fake one
+    monkeypatch.setenv("NBX_ATELIER_ENGINE_HOME", str(home / ".neurobrix"))
     monkeypatch.setattr(sweep, "CACHES", ())        # nothing else to remove here
     out = tmp_path / "campaign"
     out.mkdir()

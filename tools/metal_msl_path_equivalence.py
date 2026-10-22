@@ -36,6 +36,7 @@ R33 preserved — no torch anywhere in this tool.
 
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import ctypes
 import ctypes.util
@@ -218,7 +219,7 @@ def main() -> int:
     std_flag = info.metal_std_flag
 
     out_dir = Path(args.out_dir) if args.out_dir else (
-        REPO_ROOT / "validation_outputs" / "metal_first_light_2026_09_05")
+        _atelier.root("campaigns") / "metal_first_light_2026_09_05")
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"device          : {runtime.device_name}")

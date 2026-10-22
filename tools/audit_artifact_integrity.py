@@ -25,6 +25,7 @@ enough.
 """
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import hashlib
 import json
@@ -36,7 +37,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 REGISTRY = "https://neurobrix.es"
-CACHE = Path.home() / ".neurobrix" / "cache"
+CACHE = _atelier.root("cache")
 REQUIRED_CACHE_ENTRIES = ("manifest.json", "topology.json", "components")
 # A file last written within this long before a boot was in flight close enough
 # to the outage to be suspect. Heuristic, deliberately generous: it selects what

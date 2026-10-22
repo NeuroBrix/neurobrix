@@ -14,12 +14,13 @@ Reads the campaign's own JSON so a number cannot be retyped wrong.
 """
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import collections
 import json
 import sys
 from pathlib import Path
 
-MEASURED = Path("validation_outputs/unroll_census_20260912/measured.json")
+MEASURED = (_atelier.root("campaigns") / "unroll_census_20260912/measured.json")
 # The container cache has ONE door (`core.paths.cache_dir`), which reads
 # NEUROBRIX_CACHE, then ~/.neurobrix/paths.json, then the default. A literal here is a
 # SECOND answer to a question that already has one: on 2026-09-22 this file sent a
@@ -65,7 +66,7 @@ def main() -> int:
               f"{r['ops_per_chunk']:.2f} | **{r['verdict']}** |")
 
     # The inferred lines, and exactly what they rest on.
-    anchor = Path("/home/mlops/nbx/stage/unroll_measure/T9/"
+    anchor = (_atelier.root("tmp") / "unroll_measure/T9/"
                   "Wan2.1-VACE-1.3B-diffusers/vae_encoder/graph.json")
     if not anchor.exists():
         print("\n(no measured anchor graph at k=3 — inferred lines not rendered)")

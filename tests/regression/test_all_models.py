@@ -34,6 +34,10 @@ Usage
 """
 from __future__ import annotations
 
+import sys as _sys_atelier
+from pathlib import Path as _Path_atelier
+_sys_atelier.path.insert(0, str(_Path_atelier(__file__).resolve().parents[2] / "tools"))
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import json
 import os
 import re
@@ -47,7 +51,7 @@ import pytest
 
 
 REPO = Path(__file__).resolve().parents[2]
-CACHE_DIR = Path.home() / ".neurobrix" / "cache"
+CACHE_DIR = _atelier.root("cache")
 GOLDEN_DIR = Path(__file__).parent / "golden"
 GOLDEN_DIR.mkdir(parents=True, exist_ok=True)
 

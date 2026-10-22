@@ -36,6 +36,10 @@ instead; unset the mask to run the suite.
 """
 from __future__ import annotations
 
+import sys as _sys_atelier
+from pathlib import Path as _Path_atelier
+_sys_atelier.path.insert(0, str(_Path_atelier(__file__).resolve().parents[2] / "tools"))
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import json
 import os
 import subprocess
@@ -49,7 +53,7 @@ import pytest
 # =2 places on cuda:0 with the visible card's own profile (register entry 79).
 
 REPO = Path(__file__).resolve().parents[2]
-CACHE = Path.home() / ".neurobrix" / "cache"
+CACHE = _atelier.root("cache")
 OFF_TRACE_HW = (448, 448)  # the committed bench asset's size
 # A RECTANGULAR off-trace size, multiples of every family window (8, 16).
 # The square 448 is structurally blind to any H<->W confusion: nH == nW,
