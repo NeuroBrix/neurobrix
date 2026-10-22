@@ -47,7 +47,7 @@ def _empty_one_loose_object(r: Path) -> Path:
 def test_clean_repository_lets_run_launch(repo):
     assert F.cmd_run(_run_args(["true"])) == 0
     assert F.fsck_verdict()["clean"] is True
-    assert [p for p in F.REC_DIR.glob("*.json") if p.name != "fsck.json"], "the job's record was written"
+    assert [p for p in F.rec_dir().glob("*.json") if p.name != "fsck.json"], "the job's record was written"
 
 
 def test_empty_loose_object_refuses_run_and_writes_no_record(repo, capsys):
@@ -55,7 +55,7 @@ def test_empty_loose_object_refuses_run_and_writes_no_record(repo, capsys):
     assert F.cmd_run(_run_args(["true"])) == F.FSCK_REFUSED
     err = capsys.readouterr().err
     assert "REPOSITORY CORRUPT: RESUME REFUSED" in err and "is empty" in err
-    assert not [p for p in F.REC_DIR.glob("*.json") if p.name != "fsck.json"], "no job record on a refusal"
+    assert not [p for p in F.rec_dir().glob("*.json") if p.name != "fsck.json"], "no job record on a refusal"
 
 
 def test_verdict_is_measured_once_per_boot_and_again_on_a_new_boot(repo, monkeypatch):
@@ -89,10 +89,10 @@ def test_hook_prints_the_corruption_first(repo, capsys):
 
 
 def _record(status, boot=None, pid=None):
-    F.REC_DIR.mkdir(exist_ok=True)
+    F.rec_dir().mkdir(exist_ok=True)
     rec = {"id": "r1", "label": "t", "status": status, "boot_id": boot or F.current_boot_id(),
            "pid": pid or 1}
-    F.write_record(F.REC_DIR / "r1.json", rec)
+    F.write_record(F.rec_dir() / "r1.json", rec)
 
 
 def test_wait_fires_only_on_done(repo, monkeypatch):
