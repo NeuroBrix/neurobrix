@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-PY = _atelier.python("forge")
+PY = _atelier.interpreter("forge")
 OUT = _atelier.root("campaigns") / "retrace_2026_09_07"
 PROGRESS = OUT / "snap" / "progress.log"
 ALIAS = {"Sana-1600M-MultiLing": "Sana_1600M_1024px_MultiLing"}

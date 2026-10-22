@@ -56,7 +56,7 @@ repo_env.load()
 # Forge moves onto the engine environment behind the executed graph gate (2026-09-26, queue
 # item 7), and that gate is this tool run with Forge's python switched — a literal here would
 # have made the switch a code edit instead of a measurement.
-PY = os.environ.get("NBX_FORGE_PYTHON", _atelier.python("forge"))
+PY = os.environ.get("NBX_FORGE_PYTHON") or _atelier.interpreter("forge")
 # The ENGINE's interpreter for the two gate arms — the stack the rack serves with. Read through
 # one door (`NBX_PYTHON`, the name `certify_the_catalogue.py` already reads) so a stack switch
 # moves every tool at once; the toolchain keeps its own venv (2026-09-20, the torch 2.14 /
@@ -64,7 +64,7 @@ PY = os.environ.get("NBX_FORGE_PYTHON", _atelier.python("forge"))
 ENGINE_PY = os.environ.get("NBX_PYTHON", PY)
 FORGE = REPO / "forge" / "forge.py"
 CACHE = _atelier.root("cache")
-VENDOR_PY = _atelier.python("competitors")       # the vendor pipelines' own venv (torch under tools/, never under src/)
+VENDOR_PY = _atelier.interpreter("competitors")       # the vendor pipelines' own venv (torch under tools/, never under src/)
 # A model's hub entry is read from the LIVE registry, matched by the `hf_repo` its build-toolchain
 # registry entry names (`hub_entry`). The frozen map this tool read before (retrace_2026_09_07/
 # hub_map.json) went stale as entries were renamed to their maker's repository: parakeet-tdt-1.1b's

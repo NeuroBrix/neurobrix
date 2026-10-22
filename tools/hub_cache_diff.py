@@ -58,7 +58,7 @@ HUB_MAP = _atelier.root("campaigns") / "retrace_2026_09_07" / "hub_map.json"
 NEW_ENTRIES = _atelier.root("campaigns") / "retrace_2026_09_07" / "new_entries.json"
 COMPARED_SUFFIXES = ("graph.json",)                 # the identity the engine runs
 ALSO_READ = ("topology.json", "manifest.json")      # the contract and the build time
-TOOLCHAIN_PY = _atelier.python("forge")
+TOOLCHAIN_PY = _atelier.interpreter("forge")
 FORGE = REPO / "forge" / "forge.py"
 
 
