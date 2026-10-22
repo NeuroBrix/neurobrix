@@ -46,6 +46,7 @@ Usage:
 """
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import json
 import re
@@ -60,8 +61,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "tools"))
 from container_renames import current_name  # noqa: E402
-CACHE = Path(os.environ.get("NEUROBRIX_CACHE", Path.home() / ".neurobrix" / "cache"))
-PY = os.environ.get("NBX_PYTHON", "/home/mlops/ml/venv/bin/python")
+CACHE = Path(os.environ.get("NEUROBRIX_CACHE") or _atelier.root("cache"))
+PY = os.environ.get("NBX_PYTHON", _atelier.python("forge"))
 
 #: hub slug (lowercased) -> local container directory. ONLY where the two names
 #: genuinely differ. Each line is a decision someone made by reading both names,
@@ -271,8 +272,8 @@ def _rig_busy() -> int:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--snapshot", type=Path,
-                    default=REPO / "validation_outputs" / "certified_catalogue_2026_09_10" / "hub_snapshot.txt")
-    ap.add_argument("--campaigns", type=Path, default=Path("/home/mlops/nbx/campaigns"))
+                    default=_atelier.root("campaigns") / "certified_catalogue_2026_09_10" / "hub_snapshot.txt")
+    ap.add_argument("--campaigns", type=Path, default=_atelier.root("campaigns"))
     ap.add_argument("--plan", action="store_true", help="print the order and stop; runs nothing")
     ap.add_argument("--profile", default="volta")
     ap.add_argument("--budget", type=int, default=28800, help="seconds of rig time available")
@@ -373,7 +374,7 @@ def main() -> int:
               f"like every other campaign: {why}", file=sys.stderr)
         return 1
 
-    out = args.out or (REPO / "validation_outputs" /
+    out = args.out or (_atelier.root("campaigns") /
                        f"catalogue_meet_{time.strftime('%Y%m%d_%H%M')}")
     out.mkdir(parents=True, exist_ok=True)
     sha = subprocess.run(["git", "-C", str(REPO), "rev-parse", "--short", "HEAD"],

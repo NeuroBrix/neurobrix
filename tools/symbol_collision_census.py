@@ -50,6 +50,7 @@ Usage:
 """
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import collections
 import json
@@ -132,7 +133,7 @@ def census_one(path: Path, show_all: bool = False) -> tuple:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--root", default=os.environ.get(
-        "NEUROBRIX_CACHE", str(Path.home() / ".neurobrix" / "cache")))
+        "NEUROBRIX_CACHE", str(_atelier.root("cache"))))
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     ap.add_argument("--all", action="store_true",
                     help="also list the batch-at-1 axes, which are a deliberate choice")

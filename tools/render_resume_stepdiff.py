@@ -27,6 +27,7 @@ it works on both engines without importing torch here.
 
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import hashlib
 import json
@@ -35,7 +36,7 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-OUT = REPO / "validation_outputs" / "render_resume_stepdiff"
+OUT = _atelier.root("campaigns") / "render_resume_stepdiff"
 
 
 def _install(tag: str):

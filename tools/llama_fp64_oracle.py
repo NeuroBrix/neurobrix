@@ -15,6 +15,7 @@ and are widened by the exact shift (bf16 is the top 16 bits of an fp32).
 
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import json
 import os
@@ -131,8 +132,7 @@ def forward(model: Shard, head: Shard, ids: np.ndarray, cfg: dict,
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", default=os.path.expanduser(
-        "~/.neurobrix/cache/TinyLlama-1.1B-Chat-v1.0"))
+    ap.add_argument("--model", default=str(_atelier.root("cache") / "TinyLlama-1.1B-Chat-v1.0"))
     ap.add_argument("--ids", required=True, help=".npy of token ids")
     ap.add_argument("--length", type=int, default=0,
                     help="truncate the ids to this many tokens (0 = all)")

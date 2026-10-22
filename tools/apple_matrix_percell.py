@@ -6,6 +6,7 @@ plan (`--explain-plan` prints "planned memory N MB"); run the 3 modes if it fits
 bench_would_swap remains the runtime guard. The estimate is Prism's, calibrated
 on the fused graph — not a constant.
 """
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import subprocess, sys, re, json, os, time
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -41,7 +42,7 @@ MODELS = [
 MARGIN = 1.25  # need headroom; bench_would_swap is the hard guard
 
 def main():
-    out_dir = Path("validation_outputs/apple_matrix_percell_2026_09_16")
+    out_dir = (_atelier.root("campaigns") / "apple_matrix_percell_2026_09_16")
     out_dir.mkdir(parents=True, exist_ok=True)
     rows = []
     for model, flag, val, kind in MODELS:

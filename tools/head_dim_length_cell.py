@@ -44,6 +44,7 @@ them: a number nobody can read in its dated file is not a number.
 
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import datetime
 import hashlib
@@ -57,7 +58,7 @@ import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-CACHE = Path(os.path.expanduser("~")) / ".neurobrix" / "cache"
+CACHE = _atelier.root("cache")
 
 ARMS = ("compiled", "sequential", "triton", "triton-sequential")
 ORACLE_ARM = "sequential"          # ATen op-by-op: the reference path

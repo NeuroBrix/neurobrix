@@ -26,6 +26,7 @@ tools/r33_sys_modules_probe.py — torch in sys.modules at exit, the first
 import path when it is there, the run's exit code and the output's sha.
 `--src <dir>` puts a frozen worktree's src on the probe's PYTHONPATH.
 """
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import shlex
 import argparse
 import hashlib
@@ -82,7 +83,7 @@ NBX_CMD = nbx_cmd()          # a LIST: `python -m neurobrix` where the rig's bin
 from neurobrix.core.paths import cache_dir as _cache_dir
 CACHE = _cache_dir()
 ASSETS = REPO / "benchmarks" / "assets"
-OUT_DEFAULT = REPO / "validation_outputs" / "precision_zoo_2026_09_05"
+OUT_DEFAULT = _atelier.root("campaigns") / "precision_zoo_2026_09_05"
 
 # Family-level request inputs the calibration section cannot carry (media).
 _MEDIA = {

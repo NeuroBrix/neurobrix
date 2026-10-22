@@ -13,11 +13,12 @@ Full rule: docs/reference/a-frozen-dimension-is-read-from-the-arguments.md
 """
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import json
 import sys
 from pathlib import Path
 
-CACHE = Path.home() / ".neurobrix" / "cache"
+CACHE = _atelier.root("cache")
 
 #: Ops whose arguments carry SIZES. Anything else takes no sizes and proves
 #: nothing: `aten::permute` takes a permutation order, and flagging it produced

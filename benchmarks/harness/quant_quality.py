@@ -26,6 +26,10 @@ greedy shas for the reference then come from its own multi-GPU
 config (--reference-gpu '').
 """
 
+import sys as _sys_atelier
+from pathlib import Path as _Path_atelier
+_sys_atelier.path.insert(0, str(_Path_atelier(__file__).resolve().parents[2] / "tools"))
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import hashlib
 import json
@@ -82,7 +86,7 @@ def measure_ppl(model_name: str, gpu: str, hardware: str,
     row clause's RELATIVE delta is exact; absolute ppl includes the
     model's own prompt template, noted in the report."""
     import os
-    out_dir = Path("/tmp/claude-quantppl")
+    out_dir = _atelier.tmp("quantppl")
     out_dir.mkdir(exist_ok=True)
     windows, corpus_sha = _corpus_text_windows(n_windows, window_len * 4)
     total_nll, total_tok = 0.0, 0
