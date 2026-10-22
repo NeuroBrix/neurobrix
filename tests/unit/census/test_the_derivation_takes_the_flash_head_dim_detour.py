@@ -70,8 +70,12 @@ def _sdpa_launches(D_, budget):
 
 def test_no_scores_budget_routes_the_padded_call_to_math(unmeasured_arch, tl_dot_gemms):
     launches, unhandled = _sdpa_launches(512, 0)
-    keys = [k for _, k in launches]
-    assert len(keys) == 2, keys
+    # the math route's two products, and its softmax over the scores' rows (an autotuned kernel since the
+    # softmax certification, keyed by its padded row)
+    keys = [k for q, k in launches if q.endswith("baddbmm_kernel")]
+    soft = [k for q, k in launches if "softmax" in q]
+    assert len(keys) == 2 and len(soft) == 1 and len(launches) == 3, launches
+    assert soft[0][:2] == (3072, LK.softmax_feat_bucket(3072)), soft
     b = LK.bucket_of
     assert keys[0][:3] == (b("M", 3072), b("N", 3072), b("K", 513))
     assert keys[1][:3] == (b("M", 3072), b("N", 513), b("K", 3072))
@@ -85,6 +89,8 @@ def test_a_budget_that_admits_the_scores_keeps_the_true_head_dim(tl_dot_gemms):
 
 
 def test_a_dim_the_detour_leaves_alone_stays_flash_without_a_budget_over_its_bound():
-    # head dim 64 (power of two, under 128): no detour; no budget -> flash, no launch
+    # head dim 64 (power of two, under 128): no detour; no budget -> flash: the matrix-unit flash's one key
+    # (certified since workstream 1), no product of the math route
     launches, _ = _sdpa_launches(64, 0)
-    assert launches == []
+    assert len(launches) == 1 and launches[0][0].endswith("flash_attention_m8n8k4_kernel"), launches
+    assert launches[0][1][2] == 64, launches

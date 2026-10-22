@@ -1790,7 +1790,7 @@ rms_norm._nbx_widens_on_load = False
 # bounded-tile looped kernel; rows at or under it keep the proven
 # single-tile kernel byte-for-byte. Same capped-tile idiom as
 # argmax_wrapper's TILE_N = min(next_power_of_2(N), 4096) (FlagGems).
-_SOFTMAX_MAX_FUSED_FEAT = 16384
+_SOFTMAX_MAX_FUSED_FEAT = _lk.SOFTMAX_FUSED_MAX_FEAT     # one value with the census (launch_keys)
 _SOFTMAX_LOOPED_TILE = 4096
 
 
@@ -1823,15 +1823,15 @@ def softmax(x, dim: int = -1, half_to_float: bool = False) :
     if feat_dim > _SOFTMAX_MAX_FUSED_FEAT:
         _launch_looped_softmax(x_2d, output_2d, batch_dim, feat_dim, log=False)
     else:
-        _bsb = _batch_block(batch_dim, feat_dim)
-        grid = (triton.cdiv(batch_dim, _bsb),)
+        # rows per program and warps: the certified configuration of this key (workstream 1), the row's bucket from
+        # the launcher's own `bucket_of` — the key the derived census forms (`launch_keys.softmax_launches`)
+        grid = lambda META: (triton.cdiv(batch_dim, META['BLOCK_SIZE_BATCH']),)
         softmax_forward_kernel[grid](
             x_2d, output_2d,
-            batch_dim, feat_dim,
+            batch_dim, feat_dim, _lk.bucket_of("M", batch_dim), _lk.softmax_feat_bucket(feat_dim),
             x_2d.stride(0), x_2d.stride(1),
             output_2d.stride(0), output_2d.stride(1),
             log=False,
-            num_warps=4,
         )
     return output_2d.view_as(x_perm).movedim(-1, dim)
 
@@ -1850,15 +1850,15 @@ def log_softmax(x, dim: int = -1) :
     if feat_dim > _SOFTMAX_MAX_FUSED_FEAT:
         _launch_looped_softmax(x_2d, output_2d, batch_dim, feat_dim, log=True)
     else:
-        _bsb = _batch_block(batch_dim, feat_dim)
-        grid = (triton.cdiv(batch_dim, _bsb),)
+        # rows per program and warps: the certified configuration of this key (workstream 1), the row's bucket from
+        # the launcher's own `bucket_of` — the key the derived census forms (`launch_keys.softmax_launches`)
+        grid = lambda META: (triton.cdiv(batch_dim, META['BLOCK_SIZE_BATCH']),)
         softmax_forward_kernel[grid](
             x_2d, output_2d,
-            batch_dim, feat_dim,
+            batch_dim, feat_dim, _lk.bucket_of("M", batch_dim), _lk.softmax_feat_bucket(feat_dim),
             x_2d.stride(0), x_2d.stride(1),
             output_2d.stride(0), output_2d.stride(1),
             log=True,
-            num_warps=4,
         )
     return output_2d.view_as(x_perm).movedim(-1, dim)
 
@@ -3965,6 +3965,30 @@ def _conv3d_via_conv2d(x, weight, bias, stride, padding, dilation, groups):
         x = constant_pad_nd_wrapper(x, [0, 0, 0, 0, pt, pt], 0.0)
     Tp = x.shape[2]
     T_out = (Tp - dt * (kt - 1) - 1) // st + 1
+    if st == 1:
+        # Every temporal tap read and written IN PLACE: the tap's frames x[b, :, start:start+T_out] permuted to
+        # [T_out, Cin, H, W] are a strided view the conv kernel reads through its strides, and its result goes through
+        # a [T_out, Cout, Ho, Wo] view of the [B, Cout, T_out, Ho, Wo] output. The two permute copies per tap were 65 %
+        # of a VAE conv3d (1,128,9,242,362: 525 of 810 ms; 9 ms each once the copy kernel indexed in 32 bits, Mac
+        # 2026-10-21). The first tap writes the output; each later one writes a tap buffer added to it.
+        Ho = (H + 2 * ph - dh * (kh - 1) - 1) // sh + 1
+        Wo = (W + 2 * pw - dw * (kw - 1) - 1) // sw + 1
+        out_dt = _NBX_COMPUTE_DTYPE if _NBX_COMPUTE_DTYPE is not None else x.dtype
+        out = None
+        for kti in range(kt):
+            start = kti * dt
+            w2 = weight[:, :, kti:kti + 1].contiguous().reshape(Cout, Cin_g, kh, kw)
+            tap = NBXTensor.empty((B, Cout, T_out, Ho, Wo), device=x.device, dtype=out_dt)
+            for b in range(B):
+                x2 = x[b][:, start:start + T_out].permute(1, 0, 2, 3)
+                conv2d_wrapper(x2, w2, None, (sh, sw), (ph, pw), (dh, dw), False, 0, groups,
+                               out=tap[b].permute(1, 0, 2, 3))
+            out = tap if out is None else out + tap
+            tap = None
+        if bias is not None:
+            out = out + bias.reshape(1, Cout, 1, 1, 1)
+        return out
+
     out = None
     _ef = _NBX_CONV3D_EAGER_FREE_BYTES  # #37 size-gated eager-free threshold
     for kti in range(kt):
@@ -4121,10 +4145,17 @@ def _conv_offsets_wide(*tensors) -> bool:
     return reach >= (1 << 30)
 
 
+def _conv_reads_strided(x) -> bool:
+    """True when the implicit-GEMM conv kernel can read `x` through its strides in place: four non-negative strides
+    with the width innermost (a permuted or sliced view of a channel-plane layout). Anything else is copied."""
+    st = x.stride()
+    return len(st) == 4 and all(int(v) >= 0 for v in st) and (int(st[3]) == 1 or int(x.shape[3]) == 1)
+
+
 def conv2d_wrapper(
     x, weight, bias=None,
     stride=1, padding=0, dilation=1,
-    transposed=False, output_padding=0, groups=1,
+    transposed=False, output_padding=0, groups=1, out=None,
 ) :
     """Convolution forward. Handles both 1D (3D tensors) and 2D (4D tensors).
     Routes to conv1d_wrapper for 3D inputs, and to conv_transpose_wrapper when
@@ -4227,7 +4258,10 @@ def conv2d_wrapper(
     if w_nbx != w_to:
         weight = weight.to(w_to)
 
-    x_c = x.contiguous()
+    # The implicit GEMM reads the input through its four strides, so a strided view goes in where it lies (a conv3d's
+    # temporal slice permuted to [T, C, H, W]: its copy was 85 ms of a 235 ms VAE conv3d, Mac 2026-10-21); the
+    # depthwise, band and matrix-unit routes take a contiguous copy, as before.
+    x_c = x.contiguous() if not x.is_contiguous() and not _conv_reads_strided(x) else x
     # A weight the loader stored KRSC (`conv.weight_layout`) is read where it lies: the kernel
     # takes the weight's four strides; copied back to KCRS it would lose what the layout gains.
     w_c = weight if _lk.is_krsc_weight(weight) else weight.contiguous()
@@ -4259,11 +4293,13 @@ def conv2d_wrapper(
     _route = _lk.conv2d_route(N, in_c, out_c, out_h, out_w, dil_h, dil_w, groups, out_nbx_dtype,
                               _ts.conv2d_band_bytes(),
                               depthwise_enabled=os.environ.get("NBX_DEPTHWISE_DISABLE", "0") != "1")
+    if out is not None and _route in ("depthwise", "band"):
+        raise RuntimeError(f"conv2d out=: the {_route} route writes its own result — refused")
     if _route == "depthwise":
         if _NBX_CONV2D_TRACE:
             print(f"[CONV2D] DEPTHWISE path (g={groups})", flush=True)
         return _depthwise_conv2d_dispatch(
-            x_c, w_c, bias,
+            x_c.contiguous(), w_c, bias,
             N, in_c, in_h, in_w, out_h, out_w,
             kh, kw, stride_h, stride_w, pad_h, pad_w,
             out_dtype,
@@ -4273,18 +4309,34 @@ def conv2d_wrapper(
         if _NBX_CONV2D_TRACE:
             print(f"[CONV2D] BAND-STREAM triggered (out > {_ts.conv2d_band_bytes()/1024/1024/1024:.1f}GiB)", flush=True)
         return _conv2d_band_streamed(
-            x_c, w_c, bias,
+            x_c.contiguous(), w_c, bias,
             N, in_c, in_h, in_w, out_c, out_h, out_w,
             kh, kw, stride_h, stride_w, pad_h, pad_w, dil_h, dil_w,
             groups, out_dtype, out_dtype_bytes,
         )
 
-    output = NBXTensor.empty((N, out_c, out_h, out_w), device=x.device, dtype=out_dtype)
+    if out is not None:
+        # the caller's own [N, out_c, out_h, out_w] view (any strides) receives the result: a conv3d writes each temporal
+        # tap straight into its [B, C, T, H, W] layout instead of a contiguous result permuted after
+        if (tuple(out.shape) != (N, out_c, out_h, out_w) or bias is not None
+                or (out._dtype != out_dtype and out.dtype != out_dtype)):
+            raise RuntimeError(f"conv2d out=: a {tuple(out.shape)} {out._dtype} view for a ({N}, {out_c}, {out_h}, "
+                               f"{out_w}) {out_dtype} result{' with a bias' if bias is not None else ''} — refused")
+        output = out
+    else:
+        output = NBXTensor.empty((N, out_c, out_h, out_w), device=x.device, dtype=out_dtype)
 
     if _lk.matrix_unit_native(x_c.nbx_dtype, w_c.nbx_dtype, N * out_h * out_w):
         # The implicit GEMM on the profile's matrix unit (ops/conv2d_m8n8k4.py), bias fused; no autotune key.
-        _conv2d_m8n8k4(x_c, w_c, bias, output, N, in_c, in_h, in_w, out_c, out_h, out_w, kh, kw,
+        x_c = x_c.contiguous()
+        # The matrix-unit kernel writes a contiguous result: a caller's strided view (a conv3d tap's frames in their
+        # [B, C, T, H, W] layout) receives it by one copy. Refused instead, every CUDA video model whose conv3d runs
+        # its taps through here failed at its first convolution (6 gate cells, 2026-10-22).
+        dest = output if out is None else NBXTensor.empty((N, out_c, out_h, out_w), device=x.device, dtype=out_dtype)
+        _conv2d_m8n8k4(x_c, w_c, bias, dest, N, in_c, in_h, in_w, out_c, out_h, out_w, kh, kw,
                        stride_h, stride_w, pad_h, pad_w, dil_h, dil_w, groups)
+        if out is not None:
+            out.copy_(dest)
         return output
 
     # The key's `fp16` flag names an fp16 INPUT. It compared `x.dtype` — the Triton element type —
@@ -4375,7 +4427,7 @@ def _depthwise_conv2d_dispatch(
         kh=kh, kw=kw,
         stride_h=stride_h, stride_w=stride_w,
         pad_h=pad_h, pad_w=pad_w,
-        fp16=fp16,
+        fp16=fp16, WIDE_OFFSETS=_conv_offsets_wide(x_c, w_c, output),
     )
 
     if bias is not None:
@@ -7262,6 +7314,9 @@ def constant_pad_nd_wrapper(x, pad_list, value: float = 0.0) :
     if total == 0:
         return output
 
+    from neurobrix.kernels.nbx_tensor import _index_wide, _max_linear_offset
+    _wide = _index_wide(total, _max_linear_offset(x.shape, x.stride()), _max_linear_offset(output.shape, output.stride()))
+
     if ndim >= 4 and pad_len == 4:
         # 4D: use optimized 2D kernel (N,C,H,W)
         batch_channels = 1
@@ -7281,7 +7336,7 @@ def constant_pad_nd_wrapper(x, pad_list, value: float = 0.0) :
             output.stride(-2), output.stride(-1),
             pad_before[-1], pad_before[-2],
             float(value),
-            BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS,
+            BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS, WIDE=_wide,
         )
     elif pad_len == 2:
         batch_size = 1
@@ -7294,7 +7349,7 @@ def constant_pad_nd_wrapper(x, pad_list, value: float = 0.0) :
             in_size, out_size, batch_size,
             pad_before[-1],
             float(value),
-            BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS,
+            BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS, WIDE=_wide,
         )
     else:
         # General N-D constant pad in ONE pass (any dims, a middle temporal dim of a 5-D [B,C,T,H,W] causal pad
@@ -7309,7 +7364,7 @@ def constant_pad_nd_wrapper(x, pad_list, value: float = 0.0) :
             x, output, total,
             *dims_in, *dims_out, *strides, *before,
             float(value),
-            BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS,
+            BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS, WIDE=_wide,
         )
 
     return output
@@ -8435,22 +8490,23 @@ def _flash_m8n8k4(q, k, v, bias, softmax_scale, gqa_groups, tile, has_bias, spli
     zero bias of a call with neither mask nor causality). `split`: the operands carried as hi + lo (the DtypeEngine's
     "split" representation, `launch_keys.unit_flash`), `tile` then a `matrix_unit.fp32_split.flash` row whose
     `block_k` head-dim columns the unit sums before each round-to-nearest add."""
-    from .ops.flash_attention_m8n8k4 import flash_attention_m8n8k4_kernel, flash_layouts, head_parts
+    from .ops.flash_attention_m8n8k4 import flash_attention_m8n8k4_kernel, head_parts
     from .ops.mma_m8n8k4 import UNIT
     from neurobrix.triton.dtype import matrix_unit_split_scale
     batch, nheads, seqlen_q, headdim = q.shape
     seqlen_k = k.shape[2]
-    MB, NS = tile["block_m"] // 16, tile["block_n"] // 16
     DA, DB = head_parts(headdim)
     hi_exp, lo_shift = matrix_unit_split_scale(_matrix_unit())
     ksa = min(tile["block_k"], DA) // UNIT["k"] if split else 1       # instructions per round-to-nearest add
     ksb = min(tile["block_k"], DB) // UNIT["k"] if split and DB else 1
     o = NBXTensor.empty_like(q)
-    seqlen_q_rounded = math.ceil(seqlen_q / (16 * MB)) * 16 * MB
+    # the LSE rows rounded to the largest query tile a candidate takes (the tile is the certified one of this key)
+    seqlen_q_rounded = math.ceil(seqlen_q / 128) * 128
     lse = NBXTensor.empty((batch, nheads, seqlen_q_rounded), dtype=NBXDtype.float32,
                           device=f"cuda:{q._device_idx}" if hasattr(q, '_device_idx') else 'cuda')
     _set_device(q)
-    flash_attention_m8n8k4_kernel[(triton.cdiv(seqlen_q, 16 * MB), batch * nheads)](
+    grid = lambda META: (triton.cdiv(seqlen_q, 16 * META["MB"]), batch * nheads)
+    flash_attention_m8n8k4_kernel[grid](
         q, k, v, bias, o, lse, softmax_scale,
         q.stride(0), q.stride(1), q.stride(2),
         k.stride(0), k.stride(1), k.stride(2),
@@ -8458,9 +8514,8 @@ def _flash_m8n8k4(q, k, v, bias, softmax_scale, gqa_groups, tile, has_bias, spli
         bias.stride(0), bias.stride(1), bias.stride(-2),
         o.stride(0), o.stride(1), o.stride(2),
         nheads, seqlen_q, seqlen_k, seqlen_q_rounded, headdim,
-        MB=MB, NS=NS, DA=DA, DB=DB, GQA_GROUPS=gqa_groups, HAS_BIAS=bool(has_bias),
-        SPLIT=bool(split), HI_EXP=hi_exp, LO_SHIFT=lo_shift, KSA=ksa, KSB=ksb, num_warps=tile["warps_m"],
-        **flash_layouts(MB, NS, DA, DB, tile["warps_m"]))
+        _lk.bucket_of("M", seqlen_q), _lk.bucket_of("N", seqlen_k), DA=DA, DB=DB, GQA_GROUPS=gqa_groups, HAS_BIAS=bool(has_bias),
+        SPLIT=bool(split), HI_EXP=hi_exp, LO_SHIFT=lo_shift, KSA=ksa, KSB=ksb)
     return o
 
 

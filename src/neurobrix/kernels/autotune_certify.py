@@ -133,7 +133,7 @@ def witnessed_bench(contenders, time_one, witness_ms, spec: Dict[str, Any], labe
 # ---------------------------------------------------------------------------
 # the census: which shapes
 # ---------------------------------------------------------------------------
-def census(vendor: str, profile: str, memory_class: int) -> Dict[str, List[tuple]]:
+def census(vendor: str, profile: str, memory_class: int, models: Optional[List[str]] = None) -> Dict[str, List[tuple]]:
     """{kernel qualname: [key, ...]} from THE census table of this profile and memory class
     (`config/census/<vendor>/<profile>/<class>g.jsonl`, `kernels/census_table.py`) — and from nothing
     else. It used to default to the machine's replay cache (earlier runtime sweeps) or take any census
@@ -145,7 +145,12 @@ def census(vendor: str, profile: str, memory_class: int) -> Dict[str, List[tuple
                            f"else — take the census for {vendor}/{profile} {memory_class} GB first")
     out: Dict[str, List[tuple]] = {}
     seen = set()
+    want = set(models) if models else None
     for row in T.read(path):
+        # `models`: only the rows of these containers — the keys a re-certification needs first (a kernel change
+        # re-sweeps ~7 500 Apple conv keys at ~29 s: the video VAEs' first, the rest after)
+        if want is not None and row.get("model") not in want:
+            continue
         ident = T.key_line(row["kernel"], row["key"])
         if ident in seen:
             continue
@@ -372,6 +377,18 @@ def _key_operands(qual: str, tuner, key: tuple) -> Optional[Dict[str, Any]]:
             ins.append(("bias", (B, M, N), d(3, d(0))))
         return {"family": "mm", "inputs": ins, "out": ((B, M, N), out_dt), "mnk": (M, N, K), "batch": B,
                 "row_windowed_launch": False}
+    if short == "flash_attention_m8n8k4_kernel":
+        tq, tk, hd = int(key[0]), int(key[1]), int(key[2])
+        B, H = _flash_batch_heads(tq, tk, hd, d(0), d(1), d(2))
+        ins = [("q", (B, H, tq, hd), d(0)), ("k", (B, H, tk, hd), d(1)), ("v", (B, H, tk, hd), d(2))]
+        if d(3) != d(0):
+            ins.append(("mask", (B, H, tq, tk), d(3)))
+        return {"family": "attention", "inputs": ins, "out": ((B, H, tq, hd), d(0)), "mnk": (tq, hd, 2 * tk),
+                "batch": B * H, "row_windowed_launch": True}
+    if short == "softmax_forward_kernel":
+        rows, feat = int(key[0]), int(key[1])
+        return {"family": "softmax", "inputs": [("x", (rows, feat), d(0))], "out": ((rows, feat), out_dt),
+                "mnk": (rows, feat, 1), "batch": 1, "row_windowed_launch": True}
     if short == "conv2d_forward_kernel":
         (n, ci, h, w, co, oh, ow, kh, kw, sh, sw, ph, pw, dh, dw, groups) = [int(v) for v in key[:16]]
         ci_g = ci // max(groups, 1)
@@ -461,6 +478,19 @@ def price_key(qual: str, tuner, key: tuple, unified: bool = True) -> Optional[Di
                 kept = len(wins_b) * B * rows * N * 8
                 oracle = kept + per_win
             deviation = kept + kept // 8 * (4 + 8)                       # the windows' readback and cast
+        return {"draws": draws, "device": device, "oracle": oracle, "deviation": deviation,
+                "peak": draws + device + max(oracle, deviation)}
+    if ops["family"] == "softmax":
+        # `_softmax_oracle_fn`: per row window, the window cast to float64 plus the fp64 arrays it computes
+        # (`_SOFTMAX_ORACLE_F64_ARRAYS`), the windows' results kept (`RowWindowedOracle`); whole under the cap.
+        # Priced with the mm and conv families: without it a softmax key read the conv geometry and every Apple
+        # softmax certification failed on 'geometry' before its first launch (Mac, 2026-10-21).
+        m, n, _ = ops["mnk"]
+        wins = _row_windows(m, n, _SOFTMAX_ORACLE_F64_ARRAYS * 8)          # the oracle's own windows (bytes)
+        rows = m if wins is None else wins[0][1] - wins[0][0]
+        kept = (m if wins is None else len(wins) * rows) * n * 8           # the windows' fp64 results (whole: all)
+        oracle = kept + rows * n * 8 * (1 + _SOFTMAX_ORACLE_F64_ARRAYS)
+        deviation = kept + kept // 8 * (4 + 8)                             # the windows' readback and cast
         return {"draws": draws, "device": device, "oracle": oracle, "deviation": deviation,
                 "peak": draws + device + max(oracle, deviation)}
     n, ci, h, w, co, oh, ow, ci_g, kh, kw, ph, pw = ops["geometry"]
@@ -627,7 +657,9 @@ class RowWindowedOracle:
     def device_slices(self, t):
         """The same row windows, cut on the tensor WHERE IT LIVES (see WindowedOracle)."""
         for (r0, r1), ref in self.blocks:
-            cut = t[r0:r1, :] if len(tuple(t.shape)) == 2 else t[:, r0:r1, :]
+            # the rows are the second-to-last axis whatever the rank (a product's [M, N] or [B, M, N], an
+            # attention's [B, H, Tq, D]: the 4-D output was cut along its heads, 2026-10-21)
+            cut = t[(slice(None),) * (len(tuple(t.shape)) - 2) + (slice(r0, r1), slice(None))]
             yield _materialise(cut), ref
 
 
@@ -672,6 +704,75 @@ def _matmul_oracle_fn(a, b, bias=None):
             blocks.append(((r0, r1), r))
         return RowWindowedOracle(blocks, m)
     return windowed
+
+
+def _flash_batch_heads(tq: int, tk: int, hd: int, q, k, v) -> Tuple[int, int]:
+    """(batch, heads) of a synthesised matrix-unit flash: one batch and the fewest heads (a power of two) with which
+    the wrapper's own route (`launch_keys.sdpa_route` at this device's scores budget) takes the flash — the key holds
+    the lengths and the head dim, not the heads, and below the budget the attention takes the math route and never
+    reaches the flash (a 32 768 x 512 key at two heads, 2026-10-21)."""
+    from neurobrix.kernels import launch_keys as LK
+    from neurobrix.kernels import wrappers as W
+    from neurobrix.kernels.nbx_tensor import NBXDtype
+    nbx = {"fp16": NBXDtype.float16, "bf16": NBXDtype.bfloat16, "fp32": NBXDtype.float32}
+    qd, kd, vd = nbx[q], nbx[k], nbx[v]
+    budget = W._sdpa_math_scores_budget_bytes_for(None)
+    rows, chunks = W._sdpa_math_min_chunk_rows(), W._sdpa_math_max_chunks()
+    h = 1
+    while LK.sdpa_route(1, h, tq, tk, hd, hd, budget, rows, chunks,
+                        unit_flash=LK.unit_flash_takes(hd, qd, kd, vd))[0] != "flash":
+        h *= 2
+        if h > (1 << 16):
+            raise ValueError(f"no head count takes the flash route at ({tq}, {tk}, {hd}) — a census defect")
+    return 1, h
+
+
+def _attention_oracle_fn(q, k, v, mask, scale):
+    """The fp64 oracle of softmax(q k^T * scale + mask) v over [B, H, Tq, D], on query-row windows above the cap
+    (a query row's cost: its Tk scores and their Tk x D products)."""
+    tq, hd = q.shape[-2], q.shape[-1]
+    tk = k.shape[-2]
+
+    def rows(r0, r1):
+        s = np.einsum("bhqd,bhkd->bhqk", _f64(q[..., r0:r1, :]), _f64(k)) * scale
+        if mask is not None:
+            s = s + _f64(mask[..., r0:r1, :])
+        s = s - s.max(axis=-1, keepdims=True)
+        e = np.exp(s)
+        return np.einsum("bhqk,bhkd->bhqd", e / e.sum(axis=-1, keepdims=True), _f64(v))
+    wins = _row_windows(tq, hd, 2 * tk)
+    if wins is None:
+        return lambda: rows(0, tq)
+    return lambda: RowWindowedOracle([((r0, r1), rows(r0, r1)) for (r0, r1) in wins], tq)
+
+
+#: the full-size fp64 arrays the softmax oracle holds per element of its window (z, exp(z), the quotient)
+_SOFTMAX_ORACLE_F64_ARRAYS = 3
+
+
+def _softmax_oracle_fn(x, log: bool):
+    """The fp64 oracle of a row softmax (or log-softmax) of x [rows, feat], whole under the cap, row-windowed above."""
+    m, n = x.shape[-2], x.shape[-1]
+
+    def rows(r0, r1):
+        z = _f64(x[r0:r1, :])
+        z = z - z.max(axis=-1, keepdims=True)
+        if log:
+            return z - np.log(np.exp(z).sum(axis=-1, keepdims=True))
+        e = np.exp(z)
+        return e / e.sum(axis=-1, keepdims=True)
+    # priced as the fp64 work it does per element — the shifted row, its exponential and the quotient, each a full
+    # fp64 array (`_SOFTMAX_ORACLE_F64_ARRAYS`) — not as one multiply-add: priced at one, a 1 310 720 x 1 024 key
+    # computed its whole oracle on the host (58 GB resident) and read the whole 5.4 GB output back per candidate,
+    # 2.5 h on one key and the certification timed out (2026-10-20); windowed, the candidates are read on the rows
+    # the oracle holds (`device_slices`)
+    # priced in BYTES against the cap (each element's fp64 arrays x 8 bytes): a softmax does a few operations per
+    # element, so a multiply-add count let a 131 072 x 4 096 key run its oracle whole — 17 GB of fp64 on an 18 GB
+    # Apple card, refused by its price (the Mac, 2026-10-21 04:10); its bytes are what bound its memory (Dell 8d7aad8dc)
+    wins = _row_windows(m, n, _SOFTMAX_ORACLE_F64_ARRAYS * 8)
+    if wins is None:
+        return lambda: rows(0, m)
+    return lambda: RowWindowedOracle([((r0, r1), rows(r0, r1)) for (r0, r1) in wins], m)
 
 
 def _conv_oracle_fn(x, wt, stride, padding, dilation, groups):
@@ -770,6 +871,31 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
             bias = arr(rng, (B, M, N), bias_dt)
             return ((lambda: W.baddbmm_wrapper(to(bias), to(a), to(b))), (_matmul_oracle_fn(a, b, bias) if values else None), "out_ptr")
         return (lambda: W.bmm(to(a), to(b))), (_matmul_oracle_fn(a, b) if values else None), "out_ptr"
+    if short == "flash_attention_m8n8k4_kernel":
+        # (Q_BUCKET, K_BUCKET, headdim, split, q, k, v, bias, out, lse): the buckets' top lengths, through the
+        # attention wrapper itself (the matrix-unit route it takes for these dtypes and head dim); a mask only where
+        # the key's bias dtype is not Q's (the zero bias the wrapper builds otherwise); the fp64 oracle per query row
+        tq, tk, hd = int(key[0]), int(key[1]), int(key[2])
+        qd = dts[0] if dts else "fp16"
+        B, H = _flash_batch_heads(tq, tk, hd, qd, dts[1] if len(dts) > 1 else qd, dts[2] if len(dts) > 2 else qd)
+        shapes = [((B, H, tq, hd), qd), ((B, H, tk, hd), dts[1] if len(dts) > 1 else qd),
+                  ((B, H, tk, hd), dts[2] if len(dts) > 2 else qd), ((B, H, tq, hd), qd)]
+        masked = len(dts) > 3 and dts[3] != qd
+        _refuse_oversize(card_bytes, shapes + ([((B, H, tq, tk), dts[3])] if masked else []), short)
+        q, k, v = (arr(rng, sh, dt) for sh, dt in shapes[:3])
+        mask = arr(rng, (B, H, tq, tk), dts[3]) if masked else None
+        scale = 1.0 / float(np.sqrt(hd))
+        return ((lambda: W.scaled_dot_product_attention_wrapper(to(q), to(k), to(v),
+                                                                attn_mask=to(mask) if masked else None)),
+                (_attention_oracle_fn(q, k, v, mask, scale) if values else None), "Out")
+    if short == "softmax_forward_kernel":
+        # (BATCH_BUCKET, FEAT_BUCKET, log, x, out): the bucket's rows of the padded row length (a length of the class), through the wrapper itself; the
+        # fp64 oracle per row (row-windowed above the oracle's cap, as a product's)
+        rows, feat, log = int(key[0]), int(key[1]), bool(key[2])
+        _refuse_oversize(card_bytes, [((rows, feat), dts[0] if dts else "fp32"), ((rows, feat), out_dt)], short)
+        x = arr(rng, (rows, feat), dts[0] if dts else "fp32")
+        fn = W.log_softmax if log else W.softmax
+        return (lambda: fn(to(x), -1)), (_softmax_oracle_fn(x, log) if values else None), "output_ptr"
     if short == "conv2d_forward_kernel":
         (n, ci, h, w, co, _oh, _ow, kh, kw, sh, sw, ph, pw, dh, dw, groups) = [int(v) for v in key[:16]]
         _refuse_oversize(card_bytes, [((n, ci, h, w), dts[0] if dts else "fp16"),
@@ -1938,7 +2064,9 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
             out: Optional[str] = None, kernels: Optional[List[str]] = None, limit: Optional[int] = None,
             only_missing: bool = False, seed: int = 20260907, log=None,
             allow_off_protocol: bool = False, reprove_unclocked: bool = False,
-            reprove_generator: bool = False, working_set_mb: Optional[int] = None) -> Dict[str, Any]:
+            reprove_generator: bool = False, working_set_mb: Optional[int] = None,
+            models: Optional[List[str]] = None, skip_proven_since: Optional[str] = None,
+            skip_keys: Optional[str] = None) -> Dict[str, Any]:
     """Certify every census shape for `profile` on this machine; write the files.
 
     `working_set_mb`: the budget this run may hold — every key is priced by its phases before any
@@ -1988,7 +2116,14 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
     if census_path:
         raise RuntimeError(f"--census {census_path}: REFUSED — the certifier certifies the committed census table of "
                            f"the profile and the card's memory class, and nothing else (the owner's method, 2026-09-28)")
-    shapes = census(vendor, profile, certifying_class)
+    if models:
+        from neurobrix.kernels import census_table as _T
+        _known = {r.get("model") for r in _T.read(_T.table_path(vendor, profile, certifying_class))}
+        _unknown = sorted(set(models) - _known)
+        if _unknown:
+            raise RuntimeError(f"--models {', '.join(_unknown)}: no row of the census table names it — a filter that "
+                               f"matched nothing would certify nothing and report success")
+    shapes = census(vendor, profile, certifying_class, models)
     log(f"[certify] census table {vendor}/{profile} {certifying_class} GB: "
         f"{sum(len(v) for v in shapes.values())} distinct key(s) over {len(shapes)} kernel(s)")
     if kernels:
@@ -2006,7 +2141,8 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
     try:
         return _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, reprove_unclocked,
                              reprove_generator, certifying_device, certifying_class, budget_bytes,
-                             floor_bytes, rng, summary, log, writer, bench)
+                             floor_bytes, rng, summary, log, writer, bench, skip_proven_since,
+                             _read_skip_keys(skip_keys))
     finally:
         writer.flush_all()
 
@@ -2051,9 +2187,27 @@ class _BoundedWriter:
             self.flush(path)
 
 
+def _read_skip_keys(path: Optional[str]):
+    """{(kernel qualname, key repr)} from a file of `<qualname> <key repr>` lines — the keys a resumed sweep has done
+    (when a re-proof since has re-dated every entry, a date cannot tell them apart). None without a file; a missing file
+    is refused by name."""
+    if not path:
+        return None
+    p = Path(path)
+    if not p.exists():
+        raise RuntimeError(f"--skip-keys {path}: no such file")
+    out = set()
+    for line in p.read_text().splitlines():
+        line = line.strip()
+        if line:
+            qual, _, key = line.partition(" ")
+            out.add((qual, key))
+    return out
+
+
 def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, reprove_unclocked,
                   reprove_generator, certifying_device, certifying_class, budget_bytes, floor_bytes,
-                  rng, summary, log, writer, bench):
+                  rng, summary, log, writer, bench, skip_proven_since=None, skip_keys=None):
     done = 0
     attempts = 0
     for qual, keys in shapes.items():
@@ -2070,6 +2224,14 @@ def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, re
             path = C.file_for(vendor, profile, qual, dtype, root=root)
             entries = _file_entries(per_dtype, dtype, path)
             ktext = C.key_repr(key)
+            if skip_keys and (qual, ktext) in skip_keys:
+                continue                      # listed done by the caller (a resumed sweep: `--skip-keys`)
+            if skip_proven_since is not None:
+                # resume a sweep: a key this card's class re-proved at or after the given time (ISO, UTC like the
+                # proofs) is done — a stopped re-sweep restarts where it was instead of from the first key
+                _e = C.entry_for_memory_class(entries.get(ktext), certifying_class)
+                if _e and str(_e.get("proof", {}).get("date", "")) >= skip_proven_since:
+                    continue
             if (only_missing or reprove_unclocked or reprove_generator) and C.entry_covers(
                     entries, ktext, certifying_class, need_clock=reprove_unclocked,
                     need_generator=C.proof_backend({"backend": _backend()}) if reprove_generator else None):

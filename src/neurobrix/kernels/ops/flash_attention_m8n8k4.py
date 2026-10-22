@@ -26,6 +26,8 @@ arXiv 2203.03341). The row statistics, the online softmax and the output are tho
 
 import functools
 
+from ._configs import nbx_autotune
+
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 
@@ -36,6 +38,36 @@ from .mma_m8n8k4 import (MMA_ASM, MMA_CONSTRAINTS, acc_rows_cols, bcast_rows, mm
 LOG2E: gl.constexpr = gl.constexpr(1.4426950408889634)
 
 
+def unit_flash_configs():
+    """The tiles the certifier proves per key (workstream 1): 64 or 128 query rows (MB bands of 16), 32 or 64 keys
+    per step (NS), 4 or 8 warps — the six the profile's hand table was chosen from (2026-10-07, flash_tiles4) and the
+    pairs it did not try. MB and the warps decide which rows a program owns (bit-identical); NS sets the online
+    softmax's accumulation order (proven against the fp64 oracle's tolerance)."""
+    import triton
+    return [triton.Config({"MB": mb, "NS": ns}, num_warps=w, num_stages=1)
+            for mb in (4, 8) for ns in (2, 4) for w in (4, 8)]
+
+
+def _prune_unit_flash(configs, named_args, **kwargs):
+    """Each warp owns MB / warps whole 16-row bands: a tile whose bands do not divide among its warps is not built; nor
+    one whose tiles staged by name (`staged_shared_bytes`) are over the device's shared memory per block — a tile
+    within that figure may still be refused by the compiler's scratch, which the launcher then refuses as Triton's
+    does (`OutOfResources`). None left is refused by name, never answered with the first config."""
+    from neurobrix.kernels.launcher import max_shared_memory_per_block
+    keep = [c for c in configs if c.kwargs["MB"] % c.num_warps == 0]
+    limit = max_shared_memory_per_block()
+    if limit is not None and "headdim" in named_args:
+        da, db = head_parts(int(named_args["headdim"]))
+        split = bool(named_args.get("SPLIT", False))
+        keep = [c for c in keep if staged_shared_bytes(16 * c.kwargs["MB"], 16 * c.kwargs["NS"], da, db, split) <= limit]
+    if not keep:
+        raise ValueError(f"matrix-unit flash: no tile of head dim {named_args.get('headdim')} fits "
+                         f"{limit} bytes of shared memory per block")
+    return keep
+
+
+@nbx_autotune(configs=unit_flash_configs(), key=["Q_BUCKET", "K_BUCKET", "headdim", "SPLIT"],
+              prune_configs_by={"early_config_prune": _prune_unit_flash}, cache_results=True)
 @gluon.jit
 def flash_attention_m8n8k4_kernel(
     Q, K, V, Bias, Out, Lse,
@@ -45,15 +77,26 @@ def flash_attention_m8n8k4_kernel(
     stride_vb, stride_vh, stride_vn,
     stride_bb, stride_bh, stride_bm,
     stride_ob, stride_oh, stride_om,
-    nheads, seqlen_q, seqlen_k, seqlen_q_rounded, headdim,
+    nheads, seqlen_q, seqlen_k, seqlen_q_rounded, headdim, Q_BUCKET, K_BUCKET,
     MB: gl.constexpr, NS: gl.constexpr, DA: gl.constexpr, DB: gl.constexpr, GQA_GROUPS: gl.constexpr,
     HAS_BIAS: gl.constexpr,
     SPLIT: gl.constexpr, HI_EXP: gl.constexpr, LO_SHIFT: gl.constexpr, KSA: gl.constexpr, KSB: gl.constexpr,
-    LS: gl.constexpr, LOA: gl.constexpr, LOB: gl.constexpr,
-    LAS: gl.constexpr, LAOA: gl.constexpr, LAOB: gl.constexpr,
-    LBK: gl.constexpr, LBVA: gl.constexpr, LBVB: gl.constexpr,
-    GR: gl.constexpr, GV: gl.constexpr, LX: gl.constexpr,
 ):
+    # every layout from the tile's constexprs and the launch's warps, built in the kernel (`flash_layout`): the tile
+    # is then a plain (MB, NS, num_warps) the autotuner can sweep and the certified directory can hold (workstream 1)
+    WM: gl.constexpr = gl.num_warps()
+    LS: gl.constexpr = flash_layout("LS", MB, NS, DA, DB, WM)
+    LOA: gl.constexpr = flash_layout("LOA", MB, NS, DA, DB, WM)
+    LOB: gl.constexpr = flash_layout("LOB", MB, NS, DA, DB, WM)
+    LAS: gl.constexpr = flash_layout("LAS", MB, NS, DA, DB, WM)
+    LAOA: gl.constexpr = flash_layout("LAOA", MB, NS, DA, DB, WM)
+    LAOB: gl.constexpr = flash_layout("LAOB", MB, NS, DA, DB, WM)
+    LBK: gl.constexpr = flash_layout("LBK", MB, NS, DA, DB, WM)
+    LBVA: gl.constexpr = flash_layout("LBVA", MB, NS, DA, DB, WM)
+    LBVB: gl.constexpr = flash_layout("LBVB", MB, NS, DA, DB, WM)
+    GR: gl.constexpr = flash_layout("GR", MB, NS, DA, DB, WM)
+    GV: gl.constexpr = flash_layout("GV", MB, NS, DA, DB, WM)
+    LX: gl.constexpr = flash_layout("LX", MB, NS, DA, DB, WM)
     BM: gl.constexpr = 16 * MB
     BN: gl.constexpr = 16 * NS
     SH: gl.constexpr = gl.SwizzledSharedLayout(1, 1, 1, order=[1, 0])
@@ -327,3 +370,15 @@ def flash_layouts(MB: int, NS: int, DA: int, DB: int, WM: int) -> dict:
         LBK=frag_b_layout(MB, NS, WM, 1), LBVA=frag_b_layout(MB, na, WM, 1), LBVB=frag_b_layout(MB, nb, WM, 1),
         GR=gl.BlockedLayout([1, 8], [8, 4], [WM, 1], [1, 0]),
         GV=gl.BlockedLayout([4, 2], [1, 32], [WM, 1], [1, 0]), LX=p_layout(MB, NS, na, WM))
+
+
+@gluon.constexpr_function
+def flash_layout(name, MB, NS, DA, DB, WM):
+    """One of the kernel's layouts (`flash_layouts`), evaluated at compile time from its constexprs."""
+    # imported here, a local name: the JIT's dependency scan refuses a cached (functools) callable among a constexpr
+    # function's globals ("Unsupported function referenced")
+    from neurobrix.kernels.ops.flash_attention_m8n8k4 import flash_layouts as layouts
+
+    def v(x):
+        return getattr(x, "value", x)
+    return layouts(int(v(MB)), int(v(NS)), int(v(DA)), int(v(DB)), int(v(WM)))[str(v(name))]
