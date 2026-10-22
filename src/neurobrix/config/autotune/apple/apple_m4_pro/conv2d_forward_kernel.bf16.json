@@ -636689,15 +636689,16 @@
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
      "BLOCK_SIZE_OUTF": 32,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_INF": 16,
+     "SPATIAL_FAST": true
     },
     "num_warps": 2,
-    "num_stages": 2,
+    "num_stages": 1,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-21T17:58:04+00:00",
+    "date": "2026-10-22T00:49:02+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
@@ -636728,9 +636729,9 @@
     ],
     "launches": 1,
     "launch_deviations": [
-     0.002730011245198505
+     0.0026972044084817358
     ],
-    "deviation": 0.002730011245198505,
+    "deviation": 0.0026972044084817358,
     "tolerance": 0.04,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-89 cols 0-89; batch 81 rows 35-124 cols 163-252; batch 161 rows 71-160 cols 327-416) of 162x160x416",
     "machine": {
@@ -636749,21 +636750,21 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 373.6239929199219,
-    "second_ms": null,
-    "candidates": 1,
-    "accepted": 1,
-    "benched": 1,
+    "best_ms": 390.052490234375,
+    "second_ms": 391.3956604003906,
+    "candidates": 64,
+    "accepted": 64,
+    "benched": 52,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.051,
-     "runs": 0.512,
-     "bench": 3.233
+     "oracle": 0.053,
+     "runs": 41.052,
+     "bench": 231.66
     },
     "stability_witness": {
-     "open_ms": 3.4171,
-     "close_ms": 3.4106,
-     "drift": 0.0019,
+     "open_ms": 3.3869,
+     "close_ms": 3.4201,
+     "drift": 0.0098,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
@@ -636774,16 +636775,119 @@
      "chunk": 4,
      "brackets": [
       {
-       "what": "chunk 1 of 1",
-       "open_ms": 3.4171,
-       "close_ms": 3.4106,
-       "drift": 0.0019,
+       "what": "chunk 1 of 13",
+       "open_ms": 3.5568,
+       "close_ms": 3.3738,
+       "drift": 0.0515,
        "attempt": 1,
-       "contenders": 1
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 13",
+       "open_ms": 3.4701,
+       "close_ms": 3.4559,
+       "drift": 0.0041,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 13",
+       "open_ms": 3.4423,
+       "close_ms": 3.2836,
+       "drift": 0.0461,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 4 of 13",
+       "open_ms": 3.4514,
+       "close_ms": 3.567,
+       "drift": 0.0335,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 5 of 13",
+       "open_ms": 3.4092,
+       "close_ms": 3.5302,
+       "drift": 0.0355,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 6 of 13",
+       "open_ms": 3.3764,
+       "close_ms": 3.3954,
+       "drift": 0.0056,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 7 of 13",
+       "open_ms": 3.4173,
+       "close_ms": 3.3178,
+       "drift": 0.0291,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 8 of 13",
+       "open_ms": 3.4957,
+       "close_ms": 3.4152,
+       "drift": 0.023,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 9 of 13",
+       "open_ms": 3.3763,
+       "close_ms": 3.3989,
+       "drift": 0.0067,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 10 of 13",
+       "open_ms": 3.5024,
+       "close_ms": 3.3758,
+       "drift": 0.0362,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 11 of 13",
+       "open_ms": 3.4422,
+       "close_ms": 3.4683,
+       "drift": 0.0076,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 12 of 13",
+       "open_ms": 3.4177,
+       "close_ms": 3.4067,
+       "drift": 0.0032,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 13 of 13",
+       "open_ms": 3.4728,
+       "close_ms": 3.4028,
+       "drift": 0.0201,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.3869,
+       "close_ms": 3.4201,
+       "drift": 0.0098,
+       "attempt": 1,
+       "contenders": 2
       }
      ]
     },
-    "reproven_from": "triton 3.8.0+git4a15f415 mps content-3c48",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -636795,17 +636899,18 @@
   "(162, 96, 185, 185, 96, 92, 92, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')": {
    "config": {
     "kwargs": {
-     "BLOCK_SIZE_BHW": 64,
-     "BLOCK_SIZE_OUTF": 64,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16,
+     "SPATIAL_FAST": true
     },
-    "num_warps": 4,
-    "num_stages": 2,
+    "num_warps": 2,
+    "num_stages": 1,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-21T17:58:08+00:00",
+    "date": "2026-10-22T00:49:43+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
@@ -636836,9 +636941,9 @@
     ],
     "launches": 1,
     "launch_deviations": [
-     0.0027911275304337976
+     0.0029050336384436478
     ],
-    "deviation": 0.0027911275304337976,
+    "deviation": 0.0029050336384436478,
     "tolerance": 0.04,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-89 cols 0-89; batch 81 rows 1-90 cols 1-90; batch 161 rows 3-92 cols 3-92) of 162x92x92",
     "machine": {
@@ -636857,21 +636962,21 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 79.66983032226562,
-    "second_ms": null,
-    "candidates": 1,
-    "accepted": 1,
-    "benched": 1,
+    "best_ms": 58.43220901489258,
+    "second_ms": 61.7452507019043,
+    "candidates": 64,
+    "accepted": 64,
+    "benched": 38,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.068,
-     "runs": 0.34,
-     "bench": 0.88
+     "oracle": 0.071,
+     "runs": 9.45,
+     "bench": 28.299
     },
     "stability_witness": {
-     "open_ms": 3.374,
-     "close_ms": 3.4338,
-     "drift": 0.0177,
+     "open_ms": 3.506,
+     "close_ms": 3.379,
+     "drift": 0.0362,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
@@ -636882,16 +636987,95 @@
      "chunk": 4,
      "brackets": [
       {
-       "what": "chunk 1 of 1",
-       "open_ms": 3.374,
-       "close_ms": 3.4338,
-       "drift": 0.0177,
+       "what": "chunk 1 of 10",
+       "open_ms": 3.4253,
+       "close_ms": 3.4549,
+       "drift": 0.0087,
        "attempt": 1,
-       "contenders": 1
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 10",
+       "open_ms": 3.454,
+       "close_ms": 3.3681,
+       "drift": 0.0248,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 10",
+       "open_ms": 3.4617,
+       "close_ms": 3.5073,
+       "drift": 0.0132,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 4 of 10",
+       "open_ms": 3.4398,
+       "close_ms": 3.3802,
+       "drift": 0.0173,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 5 of 10",
+       "open_ms": 3.3414,
+       "close_ms": 3.4435,
+       "drift": 0.0306,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 6 of 10",
+       "open_ms": 3.4081,
+       "close_ms": 3.4144,
+       "drift": 0.0019,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 7 of 10",
+       "open_ms": 3.3524,
+       "close_ms": 3.5265,
+       "drift": 0.052,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 8 of 10",
+       "open_ms": 3.4343,
+       "close_ms": 3.3759,
+       "drift": 0.017,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 9 of 10",
+       "open_ms": 3.3564,
+       "close_ms": 3.4707,
+       "drift": 0.0341,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 10 of 10",
+       "open_ms": 3.4969,
+       "close_ms": 3.4385,
+       "drift": 0.0167,
+       "attempt": 1,
+       "contenders": 2
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.506,
+       "close_ms": 3.379,
+       "drift": 0.0362,
+       "attempt": 1,
+       "contenders": 2
       }
      ]
     },
-    "reproven_from": "triton 3.8.0+git4a15f415 mps content-3c48",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -636904,16 +637088,17 @@
    "config": {
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
-     "BLOCK_SIZE_OUTF": 64,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16,
+     "SPATIAL_FAST": true
     },
-    "num_warps": 4,
-    "num_stages": 1,
+    "num_warps": 2,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-21T17:58:13+00:00",
+    "date": "2026-10-22T00:51:37+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
@@ -636944,9 +637129,9 @@
     ],
     "launches": 1,
     "launch_deviations": [
-     0.002715476570381369
+     0.0028460023467204868
     ],
-    "deviation": 0.002715476570381369,
+    "deviation": 0.0028460023467204868,
     "tolerance": 0.04,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-89 cols 0-89; batch 81 rows 47-136 cols 47-136; batch 161 rows 95-184 cols 95-184) of 162x184x184",
     "machine": {
@@ -636965,21 +637150,21 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 289.3477478027344,
-    "second_ms": null,
-    "candidates": 1,
-    "accepted": 1,
-    "benched": 1,
+    "best_ms": 195.47637939453125,
+    "second_ms": 201.10537719726562,
+    "candidates": 64,
+    "accepted": 64,
+    "benched": 34,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.054,
-     "runs": 0.368,
-     "bench": 2.539
+     "oracle": 0.053,
+     "runs": 31.579,
+     "bench": 80.244
     },
     "stability_witness": {
-     "open_ms": 3.5155,
-     "close_ms": 3.3764,
-     "drift": 0.0396,
+     "open_ms": 3.3552,
+     "close_ms": 3.4504,
+     "drift": 0.0284,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
@@ -636990,16 +637175,87 @@
      "chunk": 4,
      "brackets": [
       {
-       "what": "chunk 1 of 1",
-       "open_ms": 3.5155,
-       "close_ms": 3.3764,
-       "drift": 0.0396,
+       "what": "chunk 1 of 9",
+       "open_ms": 3.4914,
+       "close_ms": 3.3917,
+       "drift": 0.0286,
        "attempt": 1,
-       "contenders": 1
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 9",
+       "open_ms": 3.4023,
+       "close_ms": 3.4844,
+       "drift": 0.0241,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 9",
+       "open_ms": 3.4429,
+       "close_ms": 3.3347,
+       "drift": 0.0314,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 4 of 9",
+       "open_ms": 3.3781,
+       "close_ms": 3.3446,
+       "drift": 0.0099,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 5 of 9",
+       "open_ms": 3.461,
+       "close_ms": 3.4395,
+       "drift": 0.0062,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 6 of 9",
+       "open_ms": 3.4483,
+       "close_ms": 3.488,
+       "drift": 0.0115,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 7 of 9",
+       "open_ms": 3.4258,
+       "close_ms": 3.4301,
+       "drift": 0.0013,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 8 of 9",
+       "open_ms": 3.4428,
+       "close_ms": 3.363,
+       "drift": 0.0232,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 9 of 9",
+       "open_ms": 3.3813,
+       "close_ms": 3.339,
+       "drift": 0.0125,
+       "attempt": 1,
+       "contenders": 2
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.3552,
+       "close_ms": 3.4504,
+       "drift": 0.0284,
+       "attempt": 1,
+       "contenders": 2
       }
      ]
     },
-    "reproven_from": "triton 3.8.0+git4a15f415 mps content-3c48",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -637012,16 +637268,17 @@
    "config": {
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
-     "BLOCK_SIZE_OUTF": 64,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16,
+     "SPATIAL_FAST": true
     },
-    "num_warps": 4,
-    "num_stages": 1,
+    "num_warps": 2,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-21T17:58:18+00:00",
+    "date": "2026-10-22T00:52:31+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
@@ -637052,9 +637309,9 @@
     ],
     "launches": 1,
     "launch_deviations": [
-     0.0028343432830111384
+     0.002801806258554598
     ],
-    "deviation": 0.0028343432830111384,
+    "deviation": 0.002801806258554598,
     "tolerance": 0.04,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-89 cols 0-89; batch 81 rows 9-98 cols 9-98; batch 161 rows 19-108 cols 19-108) of 162x108x108",
     "machine": {
@@ -637073,21 +637330,21 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 115.48383331298828,
-    "second_ms": null,
-    "candidates": 1,
-    "accepted": 1,
-    "benched": 1,
+    "best_ms": 77.14424896240234,
+    "second_ms": 78.33187866210938,
+    "candidates": 64,
+    "accepted": 64,
+    "benched": 38,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.074,
-     "runs": 0.166,
-     "bench": 1.176
+     "oracle": 0.071,
+     "runs": 12.63,
+     "bench": 37.962
     },
     "stability_witness": {
-     "open_ms": 3.5601,
-     "close_ms": 3.521,
-     "drift": 0.011,
+     "open_ms": 3.4077,
+     "close_ms": 3.4265,
+     "drift": 0.0055,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
@@ -637098,16 +637355,95 @@
      "chunk": 4,
      "brackets": [
       {
-       "what": "chunk 1 of 1",
-       "open_ms": 3.5601,
-       "close_ms": 3.521,
-       "drift": 0.011,
+       "what": "chunk 1 of 10",
+       "open_ms": 3.4603,
+       "close_ms": 3.3652,
+       "drift": 0.0275,
        "attempt": 1,
-       "contenders": 1
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 10",
+       "open_ms": 3.3752,
+       "close_ms": 3.4417,
+       "drift": 0.0197,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 10",
+       "open_ms": 3.4422,
+       "close_ms": 3.4094,
+       "drift": 0.0095,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 4 of 10",
+       "open_ms": 3.4801,
+       "close_ms": 3.3581,
+       "drift": 0.035,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 5 of 10",
+       "open_ms": 3.3652,
+       "close_ms": 3.4634,
+       "drift": 0.0292,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 6 of 10",
+       "open_ms": 3.4478,
+       "close_ms": 3.3822,
+       "drift": 0.019,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 7 of 10",
+       "open_ms": 3.3261,
+       "close_ms": 3.4082,
+       "drift": 0.0247,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 8 of 10",
+       "open_ms": 3.4388,
+       "close_ms": 3.3961,
+       "drift": 0.0124,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 9 of 10",
+       "open_ms": 3.4684,
+       "close_ms": 3.4226,
+       "drift": 0.0132,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 10 of 10",
+       "open_ms": 3.3311,
+       "close_ms": 3.4575,
+       "drift": 0.0379,
+       "attempt": 1,
+       "contenders": 2
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.4077,
+       "close_ms": 3.4265,
+       "drift": 0.0055,
+       "attempt": 1,
+       "contenders": 2
       }
      ]
     },
-    "reproven_from": "triton 3.8.0+git4a15f415 mps content-3c48",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -637120,16 +637456,17 @@
    "config": {
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
-     "BLOCK_SIZE_OUTF": 64,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16,
+     "SPATIAL_FAST": true
     },
-    "num_warps": 4,
-    "num_stages": 1,
+    "num_warps": 2,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-21T17:58:25+00:00",
+    "date": "2026-10-22T00:55:07+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
@@ -637160,9 +637497,9 @@
     ],
     "launches": 1,
     "launch_deviations": [
-     0.0026623074656040757
+     0.0028191369444105032
     ],
-    "deviation": 0.0026623074656040757,
+    "deviation": 0.0028191369444105032,
     "tolerance": 0.04,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-89 cols 0-89; batch 81 rows 63-152 cols 63-152; batch 161 rows 127-216 cols 127-216) of 162x216x216",
     "machine": {
@@ -637181,21 +637518,21 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 393.77801513671875,
-    "second_ms": null,
-    "candidates": 1,
-    "accepted": 1,
-    "benched": 1,
+    "best_ms": 266.9090270996094,
+    "second_ms": 271.769287109375,
+    "candidates": 64,
+    "accepted": 64,
+    "benched": 34,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.054,
-     "runs": 0.498,
-     "bench": 3.407
+     "oracle": 0.053,
+     "runs": 43.211,
+     "bench": 109.52
     },
     "stability_witness": {
-     "open_ms": 3.5874,
-     "close_ms": 3.3821,
-     "drift": 0.0572,
+     "open_ms": 3.4808,
+     "close_ms": 3.4021,
+     "drift": 0.0226,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
@@ -637206,16 +637543,87 @@
      "chunk": 4,
      "brackets": [
       {
-       "what": "chunk 1 of 1",
-       "open_ms": 3.5874,
-       "close_ms": 3.3821,
-       "drift": 0.0572,
+       "what": "chunk 1 of 9",
+       "open_ms": 3.5079,
+       "close_ms": 3.4988,
+       "drift": 0.0026,
        "attempt": 1,
-       "contenders": 1
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 9",
+       "open_ms": 3.4377,
+       "close_ms": 3.5014,
+       "drift": 0.0185,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 9",
+       "open_ms": 3.479,
+       "close_ms": 3.4638,
+       "drift": 0.0044,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 4 of 9",
+       "open_ms": 3.4967,
+       "close_ms": 3.3851,
+       "drift": 0.0319,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 5 of 9",
+       "open_ms": 3.3696,
+       "close_ms": 3.4818,
+       "drift": 0.0333,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 6 of 9",
+       "open_ms": 3.4323,
+       "close_ms": 3.4491,
+       "drift": 0.0049,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 7 of 9",
+       "open_ms": 3.4529,
+       "close_ms": 3.346,
+       "drift": 0.031,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 8 of 9",
+       "open_ms": 3.4536,
+       "close_ms": 3.3535,
+       "drift": 0.029,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 9 of 9",
+       "open_ms": 3.4283,
+       "close_ms": 3.4396,
+       "drift": 0.0033,
+       "attempt": 1,
+       "contenders": 2
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.4808,
+       "close_ms": 3.4021,
+       "drift": 0.0226,
+       "attempt": 1,
+       "contenders": 2
       }
      ]
     },
-    "reproven_from": "triton 3.8.0+git4a15f415 mps content-3c48",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -637228,16 +637636,17 @@
    "config": {
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
-     "BLOCK_SIZE_OUTF": 64,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16,
+     "SPATIAL_FAST": true
     },
-    "num_warps": 4,
+    "num_warps": 2,
     "num_stages": 1,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-21T17:58:30+00:00",
+    "date": "2026-10-22T00:56:09+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
@@ -637268,9 +637677,9 @@
     ],
     "launches": 1,
     "launch_deviations": [
-     0.002769562846531646
+     0.0027762321755258248
     ],
-    "deviation": 0.002769562846531646,
+    "deviation": 0.0027762321755258248,
     "tolerance": 0.04,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-89 cols 0-89; batch 81 rows 13-102 cols 13-102; batch 161 rows 27-116 cols 27-116) of 162x116x116",
     "machine": {
@@ -637289,21 +637698,21 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 132.03182983398438,
-    "second_ms": null,
-    "candidates": 1,
-    "accepted": 1,
-    "benched": 1,
+    "best_ms": 89.6813735961914,
+    "second_ms": 90.04241943359375,
+    "candidates": 64,
+    "accepted": 64,
+    "benched": 38,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.065,
-     "runs": 0.179,
-     "bench": 1.278
+     "oracle": 0.07,
+     "runs": 14.362,
+     "bench": 43.563
     },
     "stability_witness": {
-     "open_ms": 3.3696,
-     "close_ms": 3.3726,
-     "drift": 0.0009,
+     "open_ms": 3.3903,
+     "close_ms": 3.4384,
+     "drift": 0.0142,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
@@ -637314,16 +637723,95 @@
      "chunk": 4,
      "brackets": [
       {
-       "what": "chunk 1 of 1",
-       "open_ms": 3.3696,
-       "close_ms": 3.3726,
-       "drift": 0.0009,
+       "what": "chunk 1 of 10",
+       "open_ms": 3.4688,
+       "close_ms": 3.501,
+       "drift": 0.0093,
        "attempt": 1,
-       "contenders": 1
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 10",
+       "open_ms": 3.3621,
+       "close_ms": 3.4498,
+       "drift": 0.0261,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 10",
+       "open_ms": 3.3578,
+       "close_ms": 3.4457,
+       "drift": 0.0262,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 4 of 10",
+       "open_ms": 3.4484,
+       "close_ms": 3.3682,
+       "drift": 0.0232,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 5 of 10",
+       "open_ms": 3.3715,
+       "close_ms": 3.4385,
+       "drift": 0.0199,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 6 of 10",
+       "open_ms": 3.4167,
+       "close_ms": 3.4317,
+       "drift": 0.0044,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 7 of 10",
+       "open_ms": 3.4664,
+       "close_ms": 3.3935,
+       "drift": 0.021,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 8 of 10",
+       "open_ms": 3.3625,
+       "close_ms": 3.3358,
+       "drift": 0.0079,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 9 of 10",
+       "open_ms": 3.3947,
+       "close_ms": 3.4823,
+       "drift": 0.0258,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 10 of 10",
+       "open_ms": 3.4362,
+       "close_ms": 3.3986,
+       "drift": 0.011,
+       "attempt": 1,
+       "contenders": 2
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.3903,
+       "close_ms": 3.4384,
+       "drift": 0.0142,
+       "attempt": 1,
+       "contenders": 2
       }
      ]
     },
-    "reproven_from": "triton 3.8.0+git4a15f415 mps content-3c48",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -637336,16 +637824,17 @@
    "config": {
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
-     "BLOCK_SIZE_OUTF": 64,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16,
+     "SPATIAL_FAST": true
     },
-    "num_warps": 4,
+    "num_warps": 2,
     "num_stages": 1,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-21T17:58:39+00:00",
+    "date": "2026-10-22T00:59:09+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
@@ -637376,9 +637865,9 @@
     ],
     "launches": 1,
     "launch_deviations": [
-     0.002728190977873188
+     0.0026612827187103352
     ],
-    "deviation": 0.002728190977873188,
+    "deviation": 0.0026612827187103352,
     "tolerance": 0.04,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-89 cols 0-89; batch 81 rows 71-160 cols 71-160; batch 161 rows 143-232 cols 143-232) of 162x232x232",
     "machine": {
@@ -637397,21 +637886,21 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 457.135986328125,
-    "second_ms": null,
-    "candidates": 1,
-    "accepted": 1,
-    "benched": 1,
+    "best_ms": 308.377197265625,
+    "second_ms": 309.4643859863281,
+    "candidates": 64,
+    "accepted": 64,
+    "benched": 34,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.055,
-     "runs": 0.575,
-     "bench": 3.893
+     "oracle": 0.053,
+     "runs": 49.726,
+     "bench": 125.964
     },
     "stability_witness": {
-     "open_ms": 3.4595,
-     "close_ms": 3.6143,
-     "drift": 0.0447,
+     "open_ms": 3.4225,
+     "close_ms": 3.3694,
+     "drift": 0.0155,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
@@ -637422,16 +637911,87 @@
      "chunk": 4,
      "brackets": [
       {
-       "what": "chunk 1 of 1",
-       "open_ms": 3.4595,
-       "close_ms": 3.6143,
-       "drift": 0.0447,
+       "what": "chunk 1 of 9",
+       "open_ms": 3.5283,
+       "close_ms": 3.39,
+       "drift": 0.0392,
        "attempt": 1,
-       "contenders": 1
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 9",
+       "open_ms": 3.3438,
+       "close_ms": 3.3565,
+       "drift": 0.0038,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 9",
+       "open_ms": 3.4283,
+       "close_ms": 3.4254,
+       "drift": 0.0009,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 4 of 9",
+       "open_ms": 3.3782,
+       "close_ms": 3.4427,
+       "drift": 0.0191,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 5 of 9",
+       "open_ms": 3.4283,
+       "close_ms": 3.5545,
+       "drift": 0.0368,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 6 of 9",
+       "open_ms": 3.5209,
+       "close_ms": 3.3872,
+       "drift": 0.038,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 7 of 9",
+       "open_ms": 3.429,
+       "close_ms": 3.3674,
+       "drift": 0.018,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 8 of 9",
+       "open_ms": 3.3631,
+       "close_ms": 3.471,
+       "drift": 0.0321,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 9 of 9",
+       "open_ms": 3.4285,
+       "close_ms": 3.3957,
+       "drift": 0.0096,
+       "attempt": 1,
+       "contenders": 2
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.4225,
+       "close_ms": 3.3694,
+       "drift": 0.0155,
+       "attempt": 1,
+       "contenders": 2
       }
      ]
     },
-    "reproven_from": "triton 3.8.0+git4a15f415 mps content-3c48",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -637444,16 +638004,17 @@
    "config": {
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
-     "BLOCK_SIZE_OUTF": 64,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16,
+     "SPATIAL_FAST": true
     },
-    "num_warps": 4,
-    "num_stages": 2,
+    "num_warps": 2,
+    "num_stages": 1,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-21T17:58:47+00:00",
+    "date": "2026-10-22T01:01:22+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
@@ -637484,9 +638045,9 @@
     ],
     "launches": 1,
     "launch_deviations": [
-     0.0027973373885961978
+     0.0027154145698333517
     ],
-    "deviation": 0.0027973373885961978,
+    "deviation": 0.0027154145698333517,
     "tolerance": 0.04,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-89 cols 0-89; batch 81 rows 21-110 cols 21-110; batch 161 rows 43-132 cols 43-132) of 162x132x132",
     "machine": {
@@ -637505,21 +638066,21 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 366.1518859863281,
-    "second_ms": null,
-    "candidates": 1,
-    "accepted": 1,
-    "benched": 1,
+    "best_ms": 171.27720642089844,
+    "second_ms": 177.8839111328125,
+    "candidates": 64,
+    "accepted": 64,
+    "benched": 30,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.065,
-     "runs": 0.635,
-     "bench": 3.113
+     "oracle": 0.069,
+     "runs": 63.075,
+     "bench": 65.881
     },
     "stability_witness": {
-     "open_ms": 3.5309,
-     "close_ms": 3.3644,
-     "drift": 0.0472,
+     "open_ms": 3.4698,
+     "close_ms": 3.4438,
+     "drift": 0.0075,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
@@ -637530,16 +638091,79 @@
      "chunk": 4,
      "brackets": [
       {
-       "what": "chunk 1 of 1",
-       "open_ms": 3.5309,
-       "close_ms": 3.3644,
-       "drift": 0.0472,
+       "what": "chunk 1 of 8",
+       "open_ms": 3.3847,
+       "close_ms": 3.3883,
+       "drift": 0.0011,
        "attempt": 1,
-       "contenders": 1
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 8",
+       "open_ms": 3.3481,
+       "close_ms": 3.4509,
+       "drift": 0.0307,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 8",
+       "open_ms": 3.4476,
+       "close_ms": 3.4771,
+       "drift": 0.0086,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 4 of 8",
+       "open_ms": 3.4813,
+       "close_ms": 3.483,
+       "drift": 0.0005,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 5 of 8",
+       "open_ms": 3.4467,
+       "close_ms": 3.4664,
+       "drift": 0.0057,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 6 of 8",
+       "open_ms": 3.4433,
+       "close_ms": 3.371,
+       "drift": 0.021,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 7 of 8",
+       "open_ms": 3.3796,
+       "close_ms": 3.5096,
+       "drift": 0.0384,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 8 of 8",
+       "open_ms": 3.4386,
+       "close_ms": 3.5049,
+       "drift": 0.0193,
+       "attempt": 1,
+       "contenders": 2
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.4698,
+       "close_ms": 3.4438,
+       "drift": 0.0075,
+       "attempt": 1,
+       "contenders": 2
       }
      ]
     },
-    "reproven_from": "triton 3.8.0+git4a15f415 mps content-3c48",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -637552,16 +638176,17 @@
    "config": {
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
-     "BLOCK_SIZE_OUTF": 64,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16,
+     "SPATIAL_FAST": true
     },
-    "num_warps": 4,
-    "num_stages": 1,
+    "num_warps": 2,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-21T17:59:06+00:00",
+    "date": "2026-10-22T01:08:36+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
@@ -637592,9 +638217,9 @@
     ],
     "launches": 1,
     "launch_deviations": [
-     0.0026969803500244355
+     0.0026978654757730965
     ],
-    "deviation": 0.0026969803500244355,
+    "deviation": 0.0026978654757730965,
     "tolerance": 0.04,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-89 cols 0-89; batch 81 rows 87-176 cols 87-176; batch 161 rows 175-264 cols 175-264) of 162x264x264",
     "machine": {
@@ -637613,21 +638238,21 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 1321.251953125,
-    "second_ms": null,
-    "candidates": 1,
-    "accepted": 1,
-    "benched": 1,
+    "best_ms": 629.989501953125,
+    "second_ms": 638.2063598632812,
+    "candidates": 64,
+    "accepted": 64,
+    "benched": 31,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.055,
-     "runs": 1.693,
-     "bench": 10.882
+     "oracle": 0.052,
+     "runs": 162.859,
+     "bench": 265.859
     },
     "stability_witness": {
-     "open_ms": 3.4722,
-     "close_ms": 3.3813,
-     "drift": 0.0262,
+     "open_ms": 3.4439,
+     "close_ms": 3.4758,
+     "drift": 0.0093,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
@@ -637638,16 +638263,79 @@
      "chunk": 4,
      "brackets": [
       {
-       "what": "chunk 1 of 1",
-       "open_ms": 3.4722,
-       "close_ms": 3.3813,
-       "drift": 0.0262,
+       "what": "chunk 1 of 8",
+       "open_ms": 3.5338,
+       "close_ms": 3.5427,
+       "drift": 0.0025,
        "attempt": 1,
-       "contenders": 1
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 8",
+       "open_ms": 3.4624,
+       "close_ms": 3.4399,
+       "drift": 0.0065,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 8",
+       "open_ms": 3.4533,
+       "close_ms": 3.5028,
+       "drift": 0.0143,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 4 of 8",
+       "open_ms": 3.4935,
+       "close_ms": 3.3811,
+       "drift": 0.0322,
+       "attempt": 2,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 5 of 8",
+       "open_ms": 3.5133,
+       "close_ms": 3.4092,
+       "drift": 0.0296,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 6 of 8",
+       "open_ms": 3.4223,
+       "close_ms": 3.4391,
+       "drift": 0.0049,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 7 of 8",
+       "open_ms": 3.4293,
+       "close_ms": 3.3423,
+       "drift": 0.0254,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 8 of 8",
+       "open_ms": 3.4194,
+       "close_ms": 3.4453,
+       "drift": 0.0076,
+       "attempt": 1,
+       "contenders": 3
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.4439,
+       "close_ms": 3.4758,
+       "drift": 0.0093,
+       "attempt": 1,
+       "contenders": 2
       }
      ]
     },
-    "reproven_from": "triton 3.8.0+git4a15f415 mps content-3c48",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -637925,17 +638613,18 @@
   "(162, 96, 64, 64, 192, 64, 64, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')": {
    "config": {
     "kwargs": {
-     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_BHW": 64,
      "BLOCK_SIZE_OUTF": 64,
-     "BLOCK_SIZE_INF": 32
+     "BLOCK_SIZE_INF": 16,
+     "SPATIAL_FAST": true
     },
-    "num_warps": 2,
-    "num_stages": 1,
+    "num_warps": 4,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-21T17:59:07+00:00",
+    "date": "2026-10-22T01:08:49+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
@@ -637966,9 +638655,9 @@
     ],
     "launches": 1,
     "launch_deviations": [
-     0.0019928288526973583
+     0.003028560718697034
     ],
-    "deviation": 0.0019928288526973583,
+    "deviation": 0.003028560718697034,
     "tolerance": 0.04,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-64 cols 0-64; batch 81 rows 0-64 cols 0-64; batch 161 rows 0-64 cols 0-64) of 162x64x64",
     "machine": {
@@ -637987,21 +638676,21 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 8.962156057357788,
-    "second_ms": null,
-    "candidates": 1,
-    "accepted": 1,
-    "benched": 1,
+    "best_ms": 9.118916749954224,
+    "second_ms": 9.306302070617676,
+    "candidates": 64,
+    "accepted": 64,
+    "benched": 57,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.008,
-     "runs": 0.046,
-     "bench": 0.339
+     "oracle": 0.009,
+     "runs": 1.743,
+     "bench": 10.545
     },
     "stability_witness": {
-     "open_ms": 3.4647,
-     "close_ms": 3.3782,
-     "drift": 0.025,
+     "open_ms": 3.4623,
+     "close_ms": 3.4989,
+     "drift": 0.0105,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
@@ -638012,16 +638701,135 @@
      "chunk": 4,
      "brackets": [
       {
-       "what": "chunk 1 of 1",
-       "open_ms": 3.4647,
-       "close_ms": 3.3782,
-       "drift": 0.025,
+       "what": "chunk 1 of 15",
+       "open_ms": 3.4335,
+       "close_ms": 3.4233,
+       "drift": 0.003,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 15",
+       "open_ms": 3.3683,
+       "close_ms": 3.4918,
+       "drift": 0.0367,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 15",
+       "open_ms": 3.4779,
+       "close_ms": 3.4605,
+       "drift": 0.005,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 4 of 15",
+       "open_ms": 3.4678,
+       "close_ms": 3.4643,
+       "drift": 0.001,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 5 of 15",
+       "open_ms": 3.4702,
+       "close_ms": 3.4034,
+       "drift": 0.0192,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 6 of 15",
+       "open_ms": 3.4465,
+       "close_ms": 3.4584,
+       "drift": 0.0035,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 7 of 15",
+       "open_ms": 3.434,
+       "close_ms": 3.3704,
+       "drift": 0.0185,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 8 of 15",
+       "open_ms": 3.3694,
+       "close_ms": 3.4359,
+       "drift": 0.0197,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 9 of 15",
+       "open_ms": 3.4303,
+       "close_ms": 3.5625,
+       "drift": 0.0385,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 10 of 15",
+       "open_ms": 3.4087,
+       "close_ms": 3.3912,
+       "drift": 0.0051,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 11 of 15",
+       "open_ms": 3.3592,
+       "close_ms": 3.4825,
+       "drift": 0.0367,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 12 of 15",
+       "open_ms": 3.4397,
+       "close_ms": 3.5528,
+       "drift": 0.0329,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 13 of 15",
+       "open_ms": 3.4204,
+       "close_ms": 3.4424,
+       "drift": 0.0064,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 14 of 15",
+       "open_ms": 3.4493,
+       "close_ms": 3.4185,
+       "drift": 0.0089,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 15 of 15",
+       "open_ms": 3.4806,
+       "close_ms": 3.4933,
+       "drift": 0.0037,
        "attempt": 1,
        "contenders": 1
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.4623,
+       "close_ms": 3.4989,
+       "drift": 0.0105,
+       "attempt": 1,
+       "contenders": 2
       }
      ]
     },
-    "reproven_from": "triton 3.8.0+git4a15f415 mps content-3c48",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -638033,9 +638841,10 @@
   "(162, 96, 66, 66, 192, 64, 64, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')": {
    "config": {
     "kwargs": {
-     "BLOCK_SIZE_BHW": 64,
-     "BLOCK_SIZE_OUTF": 32,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_INF": 32,
+     "SPATIAL_FAST": true
     },
     "num_warps": 2,
     "num_stages": 1,
@@ -638043,7 +638852,7 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-21T17:59:08+00:00",
+    "date": "2026-10-22T01:09:27+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
@@ -638074,9 +638883,9 @@
     ],
     "launches": 1,
     "launch_deviations": [
-     0.0028863544205082895
+     0.0027373170390553557
     ],
-    "deviation": 0.0028863544205082895,
+    "deviation": 0.0027373170390553557,
     "tolerance": 0.04,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-63 cols 0-63; batch 81 rows 0-63 cols 0-63; batch 161 rows 1-64 cols 1-64) of 162x64x64",
     "machine": {
@@ -638095,21 +638904,21 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 45.03970718383789,
-    "second_ms": null,
-    "candidates": 1,
-    "accepted": 1,
-    "benched": 1,
+    "best_ms": 44.93070983886719,
+    "second_ms": 45.150123596191406,
+    "candidates": 64,
+    "accepted": 64,
+    "benched": 58,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.047,
-     "runs": 0.083,
-     "bench": 0.62
+     "oracle": 0.045,
+     "runs": 5.228,
+     "bench": 31.45
     },
     "stability_witness": {
-     "open_ms": 3.6908,
-     "close_ms": 3.433,
-     "drift": 0.0699,
+     "open_ms": 3.3347,
+     "close_ms": 3.3227,
+     "drift": 0.0036,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
@@ -638120,16 +638929,135 @@
      "chunk": 4,
      "brackets": [
       {
-       "what": "chunk 1 of 1",
-       "open_ms": 3.6908,
-       "close_ms": 3.433,
-       "drift": 0.0699,
+       "what": "chunk 1 of 15",
+       "open_ms": 3.4353,
+       "close_ms": 3.4102,
+       "drift": 0.0073,
        "attempt": 1,
-       "contenders": 1
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 15",
+       "open_ms": 3.3648,
+       "close_ms": 3.4025,
+       "drift": 0.0112,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 15",
+       "open_ms": 3.4821,
+       "close_ms": 3.4358,
+       "drift": 0.0133,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 4 of 15",
+       "open_ms": 3.4681,
+       "close_ms": 3.4123,
+       "drift": 0.0161,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 5 of 15",
+       "open_ms": 3.3887,
+       "close_ms": 3.4914,
+       "drift": 0.0303,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 6 of 15",
+       "open_ms": 3.4434,
+       "close_ms": 3.483,
+       "drift": 0.0115,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 7 of 15",
+       "open_ms": 3.4069,
+       "close_ms": 3.5364,
+       "drift": 0.038,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 8 of 15",
+       "open_ms": 3.4142,
+       "close_ms": 3.3956,
+       "drift": 0.0055,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 9 of 15",
+       "open_ms": 3.4403,
+       "close_ms": 3.4197,
+       "drift": 0.006,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 10 of 15",
+       "open_ms": 3.3514,
+       "close_ms": 3.4435,
+       "drift": 0.0275,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 11 of 15",
+       "open_ms": 3.3618,
+       "close_ms": 3.4838,
+       "drift": 0.0363,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 12 of 15",
+       "open_ms": 3.4413,
+       "close_ms": 3.4468,
+       "drift": 0.0016,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 13 of 15",
+       "open_ms": 3.4787,
+       "close_ms": 3.3297,
+       "drift": 0.0428,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 14 of 15",
+       "open_ms": 3.3324,
+       "close_ms": 3.4179,
+       "drift": 0.0257,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 15 of 15",
+       "open_ms": 3.4342,
+       "close_ms": 3.5204,
+       "drift": 0.0251,
+       "attempt": 1,
+       "contenders": 2
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.3347,
+       "close_ms": 3.3227,
+       "drift": 0.0036,
+       "attempt": 1,
+       "contenders": 2
       }
      ]
     },
-    "reproven_from": "triton 3.8.0+git4a15f415 mps content-3c48",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -638143,15 +639071,16 @@
     "kwargs": {
      "BLOCK_SIZE_BHW": 32,
      "BLOCK_SIZE_OUTF": 64,
-     "BLOCK_SIZE_INF": 32
+     "BLOCK_SIZE_INF": 32,
+     "SPATIAL_FAST": true
     },
     "num_warps": 2,
-    "num_stages": 1,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-21T17:59:10+00:00",
+    "date": "2026-10-22T01:10:00+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
@@ -638182,9 +639111,9 @@
     ],
     "launches": 1,
     "launch_deviations": [
-     0.0034584757019356593
+     0.003534052580648233
     ],
-    "deviation": 0.0034584757019356593,
+    "deviation": 0.003534052580648233,
     "tolerance": 0.04,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-80 cols 0-190; batch 81 rows 0-80 cols 9-199; batch 161 rows 0-80 cols 18-208) of 162x80x208",
     "machine": {
@@ -638203,21 +639132,21 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 33.37937545776367,
-    "second_ms": null,
-    "candidates": 1,
-    "accepted": 1,
-    "benched": 1,
+    "best_ms": 35.701499938964844,
+    "second_ms": 40.59199905395508,
+    "candidates": 64,
+    "accepted": 64,
+    "benched": 57,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.024,
-     "runs": 0.149,
-     "bench": 0.55
+     "oracle": 0.029,
+     "runs": 6.896,
+     "bench": 24.951
     },
     "stability_witness": {
-     "open_ms": 3.4879,
-     "close_ms": 3.4097,
-     "drift": 0.0224,
+     "open_ms": 3.3823,
+     "close_ms": 3.4127,
+     "drift": 0.009,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
@@ -638228,16 +639157,135 @@
      "chunk": 4,
      "brackets": [
       {
-       "what": "chunk 1 of 1",
-       "open_ms": 3.4879,
-       "close_ms": 3.4097,
-       "drift": 0.0224,
+       "what": "chunk 1 of 15",
+       "open_ms": 3.5644,
+       "close_ms": 3.4507,
+       "drift": 0.0319,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 15",
+       "open_ms": 3.4135,
+       "close_ms": 3.344,
+       "drift": 0.0204,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 15",
+       "open_ms": 3.3748,
+       "close_ms": 3.4345,
+       "drift": 0.0177,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 4 of 15",
+       "open_ms": 3.3831,
+       "close_ms": 3.4587,
+       "drift": 0.0223,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 5 of 15",
+       "open_ms": 3.4916,
+       "close_ms": 3.4255,
+       "drift": 0.0189,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 6 of 15",
+       "open_ms": 3.429,
+       "close_ms": 3.5006,
+       "drift": 0.0209,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 7 of 15",
+       "open_ms": 3.4816,
+       "close_ms": 3.4068,
+       "drift": 0.0215,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 8 of 15",
+       "open_ms": 3.4764,
+       "close_ms": 3.4684,
+       "drift": 0.0023,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 9 of 15",
+       "open_ms": 3.4815,
+       "close_ms": 3.4105,
+       "drift": 0.0204,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 10 of 15",
+       "open_ms": 3.4685,
+       "close_ms": 3.3693,
+       "drift": 0.0286,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 11 of 15",
+       "open_ms": 3.4074,
+       "close_ms": 3.368,
+       "drift": 0.0116,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 12 of 15",
+       "open_ms": 3.3288,
+       "close_ms": 3.4224,
+       "drift": 0.0281,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 13 of 15",
+       "open_ms": 3.4398,
+       "close_ms": 3.3469,
+       "drift": 0.027,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 14 of 15",
+       "open_ms": 3.3347,
+       "close_ms": 3.4733,
+       "drift": 0.0416,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 15 of 15",
+       "open_ms": 3.3852,
+       "close_ms": 3.3661,
+       "drift": 0.0056,
        "attempt": 1,
        "contenders": 1
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.3823,
+       "close_ms": 3.4127,
+       "drift": 0.009,
+       "attempt": 1,
+       "contenders": 2
       }
      ]
     },
-    "reproven_from": "triton 3.8.0+git4a15f415 mps content-3c48",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -638249,17 +639297,18 @@
   "(162, 96, 80, 80, 192, 80, 80, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')": {
    "config": {
     "kwargs": {
-     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_BHW": 64,
      "BLOCK_SIZE_OUTF": 64,
-     "BLOCK_SIZE_INF": 32
+     "BLOCK_SIZE_INF": 32,
+     "SPATIAL_FAST": true
     },
-    "num_warps": 2,
-    "num_stages": 1,
+    "num_warps": 4,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-21T17:59:11+00:00",
+    "date": "2026-10-22T01:10:16+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
@@ -638290,9 +639339,9 @@
     ],
     "launches": 1,
     "launch_deviations": [
-     0.0024343933324013213
+     0.003569952802348139
     ],
-    "deviation": 0.0024343933324013213,
+    "deviation": 0.003569952802348139,
     "tolerance": 0.04,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-80 cols 0-80; batch 81 rows 0-80 cols 0-80; batch 161 rows 0-80 cols 0-80) of 162x80x80",
     "machine": {
@@ -638311,21 +639360,21 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 14.89914608001709,
-    "second_ms": null,
-    "candidates": 1,
-    "accepted": 1,
-    "benched": 1,
+    "best_ms": 14.312250137329102,
+    "second_ms": 15.177687644958496,
+    "candidates": 64,
+    "accepted": 64,
+    "benched": 57,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.01,
-     "runs": 0.064,
-     "bench": 0.381
+     "runs": 2.325,
+     "bench": 12.722
     },
     "stability_witness": {
-     "open_ms": 3.4398,
-     "close_ms": 3.4428,
-     "drift": 0.0009,
+     "open_ms": 3.3502,
+     "close_ms": 3.3549,
+     "drift": 0.0014,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
@@ -638336,16 +639385,135 @@
      "chunk": 4,
      "brackets": [
       {
-       "what": "chunk 1 of 1",
-       "open_ms": 3.4398,
-       "close_ms": 3.4428,
-       "drift": 0.0009,
+       "what": "chunk 1 of 15",
+       "open_ms": 3.3959,
+       "close_ms": 3.3807,
+       "drift": 0.0045,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 15",
+       "open_ms": 3.3975,
+       "close_ms": 3.478,
+       "drift": 0.0237,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 15",
+       "open_ms": 3.4144,
+       "close_ms": 3.4275,
+       "drift": 0.0038,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 4 of 15",
+       "open_ms": 3.4169,
+       "close_ms": 3.4601,
+       "drift": 0.0126,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 5 of 15",
+       "open_ms": 3.4631,
+       "close_ms": 3.4274,
+       "drift": 0.0103,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 6 of 15",
+       "open_ms": 3.4575,
+       "close_ms": 3.4593,
+       "drift": 0.0005,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 7 of 15",
+       "open_ms": 3.448,
+       "close_ms": 3.4925,
+       "drift": 0.0129,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 8 of 15",
+       "open_ms": 3.3645,
+       "close_ms": 3.3781,
+       "drift": 0.0041,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 9 of 15",
+       "open_ms": 3.3712,
+       "close_ms": 3.3504,
+       "drift": 0.0062,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 10 of 15",
+       "open_ms": 3.4486,
+       "close_ms": 3.3726,
+       "drift": 0.022,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 11 of 15",
+       "open_ms": 3.416,
+       "close_ms": 3.4729,
+       "drift": 0.0166,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 12 of 15",
+       "open_ms": 3.483,
+       "close_ms": 3.4971,
+       "drift": 0.004,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 13 of 15",
+       "open_ms": 3.4598,
+       "close_ms": 3.4925,
+       "drift": 0.0094,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 14 of 15",
+       "open_ms": 3.436,
+       "close_ms": 3.4142,
+       "drift": 0.0064,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 15 of 15",
+       "open_ms": 3.3869,
+       "close_ms": 3.481,
+       "drift": 0.0278,
        "attempt": 1,
        "contenders": 1
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.3502,
+       "close_ms": 3.3549,
+       "drift": 0.0014,
+       "attempt": 1,
+       "contenders": 2
       }
      ]
     },
-    "reproven_from": "triton 3.8.0+git4a15f415 mps content-3c48",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -638357,9 +639525,10 @@
   "(162, 96, 82, 210, 192, 80, 208, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')": {
    "config": {
     "kwargs": {
-     "BLOCK_SIZE_BHW": 64,
-     "BLOCK_SIZE_OUTF": 32,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_INF": 32,
+     "SPATIAL_FAST": true
     },
     "num_warps": 2,
     "num_stages": 2,
@@ -638367,7 +639536,7 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-21T17:59:14+00:00",
+    "date": "2026-10-22T01:12:32+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
@@ -638398,9 +639567,9 @@
     ],
     "launches": 1,
     "launch_deviations": [
-     0.002751235111336808
+     0.0027045343839495165
     ],
-    "deviation": 0.002751235111336808,
+    "deviation": 0.0027045343839495165,
     "tolerance": 0.04,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-63 cols 0-63; batch 81 rows 8-71 cols 72-135; batch 161 rows 17-80 cols 145-208) of 162x80x208",
     "machine": {
@@ -638419,21 +639588,21 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 184.4290008544922,
-    "second_ms": null,
-    "candidates": 1,
-    "accepted": 1,
-    "benched": 1,
+    "best_ms": 179.2810821533203,
+    "second_ms": 181.27516174316406,
+    "candidates": 64,
+    "accepted": 64,
+    "benched": 58,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.049,
-     "runs": 0.264,
-     "bench": 1.721
+     "oracle": 0.045,
+     "runs": 18.655,
+     "bench": 115.749
     },
     "stability_witness": {
-     "open_ms": 3.5745,
-     "close_ms": 3.4051,
-     "drift": 0.0474,
+     "open_ms": 3.355,
+     "close_ms": 3.4542,
+     "drift": 0.0296,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
@@ -638444,16 +639613,135 @@
      "chunk": 4,
      "brackets": [
       {
-       "what": "chunk 1 of 1",
-       "open_ms": 3.5745,
-       "close_ms": 3.4051,
-       "drift": 0.0474,
+       "what": "chunk 1 of 15",
+       "open_ms": 3.5907,
+       "close_ms": 3.4501,
+       "drift": 0.0392,
        "attempt": 1,
-       "contenders": 1
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 15",
+       "open_ms": 3.399,
+       "close_ms": 3.4998,
+       "drift": 0.0297,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 15",
+       "open_ms": 3.4601,
+       "close_ms": 3.3664,
+       "drift": 0.0271,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 4 of 15",
+       "open_ms": 3.3815,
+       "close_ms": 3.3309,
+       "drift": 0.015,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 5 of 15",
+       "open_ms": 3.3757,
+       "close_ms": 3.4511,
+       "drift": 0.0223,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 6 of 15",
+       "open_ms": 3.5032,
+       "close_ms": 3.3829,
+       "drift": 0.0343,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 7 of 15",
+       "open_ms": 3.3589,
+       "close_ms": 3.4519,
+       "drift": 0.0277,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 8 of 15",
+       "open_ms": 3.4681,
+       "close_ms": 3.4272,
+       "drift": 0.0118,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 9 of 15",
+       "open_ms": 3.4027,
+       "close_ms": 3.4299,
+       "drift": 0.008,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 10 of 15",
+       "open_ms": 3.4832,
+       "close_ms": 3.3961,
+       "drift": 0.025,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 11 of 15",
+       "open_ms": 3.422,
+       "close_ms": 3.3653,
+       "drift": 0.0166,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 12 of 15",
+       "open_ms": 3.3922,
+       "close_ms": 3.5363,
+       "drift": 0.0425,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 13 of 15",
+       "open_ms": 3.3596,
+       "close_ms": 3.4298,
+       "drift": 0.0209,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 14 of 15",
+       "open_ms": 3.4254,
+       "close_ms": 3.4023,
+       "drift": 0.0067,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 15 of 15",
+       "open_ms": 3.4223,
+       "close_ms": 3.3754,
+       "drift": 0.0137,
+       "attempt": 1,
+       "contenders": 2
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.355,
+       "close_ms": 3.4542,
+       "drift": 0.0296,
+       "attempt": 1,
+       "contenders": 2
       }
      ]
     },
-    "reproven_from": "triton 3.8.0+git4a15f415 mps content-3c48",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -638467,7 +639755,8 @@
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
      "BLOCK_SIZE_OUTF": 32,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_INF": 16,
+     "SPATIAL_FAST": true
     },
     "num_warps": 2,
     "num_stages": 1,
@@ -638475,7 +639764,7 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-21T17:59:16+00:00",
+    "date": "2026-10-22T01:13:28+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
@@ -638506,9 +639795,9 @@
     ],
     "launches": 1,
     "launch_deviations": [
-     0.002700046966362242
+     0.0026920486160699145
     ],
-    "deviation": 0.002700046966362242,
+    "deviation": 0.0026920486160699145,
     "tolerance": 0.04,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-63 cols 0-63; batch 81 rows 8-71 cols 8-71; batch 161 rows 17-80 cols 17-80) of 162x80x80",
     "machine": {
@@ -638527,21 +639816,21 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 70.84466552734375,
-    "second_ms": null,
-    "candidates": 1,
-    "accepted": 1,
-    "benched": 1,
+    "best_ms": 71.04425048828125,
+    "second_ms": 72.86737823486328,
+    "candidates": 64,
+    "accepted": 64,
+    "benched": 58,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.049,
-     "runs": 0.118,
-     "bench": 0.816
+     "oracle": 0.044,
+     "runs": 7.651,
+     "bench": 47.125
     },
     "stability_witness": {
-     "open_ms": 3.4704,
-     "close_ms": 3.5018,
-     "drift": 0.0091,
+     "open_ms": 3.4647,
+     "close_ms": 3.4508,
+     "drift": 0.004,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
@@ -638552,16 +639841,135 @@
      "chunk": 4,
      "brackets": [
       {
-       "what": "chunk 1 of 1",
-       "open_ms": 3.4704,
-       "close_ms": 3.5018,
-       "drift": 0.0091,
+       "what": "chunk 1 of 15",
+       "open_ms": 3.4027,
+       "close_ms": 3.4432,
+       "drift": 0.0119,
        "attempt": 1,
-       "contenders": 1
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 15",
+       "open_ms": 3.4253,
+       "close_ms": 3.4671,
+       "drift": 0.0122,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 15",
+       "open_ms": 3.3958,
+       "close_ms": 3.4582,
+       "drift": 0.0184,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 4 of 15",
+       "open_ms": 3.4661,
+       "close_ms": 3.4398,
+       "drift": 0.0076,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 5 of 15",
+       "open_ms": 3.357,
+       "close_ms": 3.4459,
+       "drift": 0.0265,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 6 of 15",
+       "open_ms": 3.505,
+       "close_ms": 3.422,
+       "drift": 0.0237,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 7 of 15",
+       "open_ms": 3.365,
+       "close_ms": 3.4637,
+       "drift": 0.0293,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 8 of 15",
+       "open_ms": 3.5027,
+       "close_ms": 3.3704,
+       "drift": 0.0378,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 9 of 15",
+       "open_ms": 3.3367,
+       "close_ms": 3.4298,
+       "drift": 0.0279,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 10 of 15",
+       "open_ms": 3.4688,
+       "close_ms": 3.354,
+       "drift": 0.0331,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 11 of 15",
+       "open_ms": 3.5427,
+       "close_ms": 3.5459,
+       "drift": 0.0009,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 12 of 15",
+       "open_ms": 3.4959,
+       "close_ms": 3.3881,
+       "drift": 0.0308,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 13 of 15",
+       "open_ms": 3.3633,
+       "close_ms": 3.4857,
+       "drift": 0.0364,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 14 of 15",
+       "open_ms": 3.4846,
+       "close_ms": 3.3571,
+       "drift": 0.0366,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 15 of 15",
+       "open_ms": 3.3491,
+       "close_ms": 3.4663,
+       "drift": 0.035,
+       "attempt": 1,
+       "contenders": 2
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.4647,
+       "close_ms": 3.4508,
+       "drift": 0.004,
+       "attempt": 1,
+       "contenders": 2
       }
      ]
     },
-    "reproven_from": "triton 3.8.0+git4a15f415 mps content-3c48",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -638574,16 +639982,17 @@
    "config": {
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
-     "BLOCK_SIZE_OUTF": 64,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16,
+     "SPATIAL_FAST": true
     },
-    "num_warps": 4,
+    "num_warps": 2,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-21T17:59:17+00:00",
+    "date": "2026-10-22T01:13:44+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
@@ -638614,9 +640023,9 @@
     ],
     "launches": 1,
     "launch_deviations": [
-     0.0033628185404823135
+     0.003705206659730294
     ],
-    "deviation": 0.0033628185404823135,
+    "deviation": 0.003705206659730294,
     "tolerance": 0.04,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-92 cols 0-92; batch 81 rows 0-92 cols 0-92; batch 161 rows 0-92 cols 0-92) of 162x92x92",
     "machine": {
@@ -638635,21 +640044,21 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 23.40137481689453,
-    "second_ms": null,
-    "candidates": 1,
-    "accepted": 1,
-    "benched": 1,
+    "best_ms": 19.964624404907227,
+    "second_ms": 20.184207916259766,
+    "candidates": 64,
+    "accepted": 64,
+    "benched": 41,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.015,
-     "runs": 0.087,
-     "bench": 0.434
+     "oracle": 0.014,
+     "runs": 4.14,
+     "bench": 11.458
     },
     "stability_witness": {
-     "open_ms": 3.5672,
-     "close_ms": 3.364,
-     "drift": 0.0569,
+     "open_ms": 3.3366,
+     "close_ms": 3.3971,
+     "drift": 0.0181,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
@@ -638660,16 +640069,103 @@
      "chunk": 4,
      "brackets": [
       {
-       "what": "chunk 1 of 1",
-       "open_ms": 3.5672,
-       "close_ms": 3.364,
-       "drift": 0.0569,
+       "what": "chunk 1 of 11",
+       "open_ms": 3.5407,
+       "close_ms": 3.4434,
+       "drift": 0.0275,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 11",
+       "open_ms": 3.4394,
+       "close_ms": 3.371,
+       "drift": 0.0199,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 11",
+       "open_ms": 3.3362,
+       "close_ms": 3.358,
+       "drift": 0.0065,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 4 of 11",
+       "open_ms": 3.3322,
+       "close_ms": 3.3336,
+       "drift": 0.0004,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 5 of 11",
+       "open_ms": 3.3894,
+       "close_ms": 3.4461,
+       "drift": 0.0167,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 6 of 11",
+       "open_ms": 3.4246,
+       "close_ms": 3.4649,
+       "drift": 0.0118,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 7 of 11",
+       "open_ms": 3.4213,
+       "close_ms": 3.5547,
+       "drift": 0.039,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 8 of 11",
+       "open_ms": 3.4054,
+       "close_ms": 3.414,
+       "drift": 0.0025,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 9 of 11",
+       "open_ms": 3.3851,
+       "close_ms": 3.3732,
+       "drift": 0.0035,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 10 of 11",
+       "open_ms": 3.3228,
+       "close_ms": 3.342,
+       "drift": 0.0058,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 11 of 11",
+       "open_ms": 3.3472,
+       "close_ms": 3.4503,
+       "drift": 0.0308,
        "attempt": 1,
        "contenders": 1
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.3366,
+       "close_ms": 3.3971,
+       "drift": 0.0181,
+       "attempt": 1,
+       "contenders": 2
       }
      ]
     },
-    "reproven_from": "triton 3.8.0+git4a15f415 mps content-3c48",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -638681,17 +640177,18 @@
   "(162, 96, 94, 94, 192, 92, 92, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')": {
    "config": {
     "kwargs": {
-     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_BHW": 32,
      "BLOCK_SIZE_OUTF": 64,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_INF": 32,
+     "SPATIAL_FAST": true
     },
-    "num_warps": 4,
-    "num_stages": 1,
+    "num_warps": 2,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-21T17:59:19+00:00",
+    "date": "2026-10-22T01:14:44+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
@@ -638722,9 +640219,9 @@
     ],
     "launches": 1,
     "launch_deviations": [
-     0.0027230363870705816
+     0.002661099972243921
     ],
-    "deviation": 0.0027230363870705816,
+    "deviation": 0.002661099972243921,
     "tolerance": 0.04,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-63 cols 0-63; batch 81 rows 14-77 cols 14-77; batch 161 rows 29-92 cols 29-92) of 162x92x92",
     "machine": {
@@ -638743,21 +640240,21 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 111.23429107666016,
-    "second_ms": null,
-    "candidates": 1,
-    "accepted": 1,
-    "benched": 1,
+    "best_ms": 94.1395034790039,
+    "second_ms": 95.2177505493164,
+    "candidates": 64,
+    "accepted": 64,
+    "benched": 40,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.049,
-     "runs": 0.161,
-     "bench": 1.127
+     "oracle": 0.046,
+     "runs": 14.326,
+     "bench": 44.726
     },
     "stability_witness": {
-     "open_ms": 3.4025,
-     "close_ms": 3.3766,
-     "drift": 0.0076,
+     "open_ms": 3.4555,
+     "close_ms": 3.4735,
+     "drift": 0.0052,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
@@ -638768,16 +640265,95 @@
      "chunk": 4,
      "brackets": [
       {
-       "what": "chunk 1 of 1",
-       "open_ms": 3.4025,
-       "close_ms": 3.3766,
-       "drift": 0.0076,
+       "what": "chunk 1 of 10",
+       "open_ms": 3.5287,
+       "close_ms": 3.3543,
+       "drift": 0.0494,
        "attempt": 1,
-       "contenders": 1
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 10",
+       "open_ms": 3.3385,
+       "close_ms": 3.3825,
+       "drift": 0.0132,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 10",
+       "open_ms": 3.5047,
+       "close_ms": 3.4512,
+       "drift": 0.0153,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 4 of 10",
+       "open_ms": 3.4477,
+       "close_ms": 3.373,
+       "drift": 0.0217,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 5 of 10",
+       "open_ms": 3.4351,
+       "close_ms": 3.4265,
+       "drift": 0.0025,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 6 of 10",
+       "open_ms": 3.3508,
+       "close_ms": 3.4537,
+       "drift": 0.0307,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 7 of 10",
+       "open_ms": 3.4376,
+       "close_ms": 3.4328,
+       "drift": 0.0014,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 8 of 10",
+       "open_ms": 3.3973,
+       "close_ms": 3.4702,
+       "drift": 0.0215,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 9 of 10",
+       "open_ms": 3.4465,
+       "close_ms": 3.4731,
+       "drift": 0.0077,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 10 of 10",
+       "open_ms": 3.4441,
+       "close_ms": 3.4096,
+       "drift": 0.01,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.4555,
+       "close_ms": 3.4735,
+       "drift": 0.0052,
+       "attempt": 1,
+       "contenders": 2
       }
      ]
     },
-    "reproven_from": "triton 3.8.0+git4a15f415 mps content-3c48",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -688620,17 +690196,18 @@
   "(20, 384, 20, 52, 768, 20, 52, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')": {
    "config": {
     "kwargs": {
-     "BLOCK_SIZE_BHW": 64,
-     "BLOCK_SIZE_OUTF": 64,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_OUTF": 128,
+     "BLOCK_SIZE_INF": 32,
+     "SPATIAL_FAST": true
     },
     "num_warps": 4,
-    "num_stages": 2,
+    "num_stages": 1,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-21T17:59:20+00:00",
+    "date": "2026-10-22T01:14:53+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
@@ -688661,9 +690238,9 @@
     ],
     "launches": 1,
     "launch_deviations": [
-     0.0021064404045863143
+     0.00205777104259854
     ],
-    "deviation": 0.0021064404045863143,
+    "deviation": 0.00205777104259854,
     "tolerance": 0.04,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-20 cols 0-47; batch 10 rows 0-20 cols 2-49; batch 19 rows 0-20 cols 5-52) of 20x20x52",
     "machine": {
@@ -688682,21 +690259,21 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 3.3075034817059836,
-    "second_ms": null,
-    "candidates": 1,
-    "accepted": 1,
-    "benched": 1,
+    "best_ms": 2.918762812247643,
+    "second_ms": 2.936785239439744,
+    "candidates": 64,
+    "accepted": 64,
+    "benched": 47,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.009,
-     "runs": 0.02,
-     "bench": 0.324
+     "runs": 1.143,
+     "bench": 7.516
     },
     "stability_witness": {
-     "open_ms": 3.3996,
-     "close_ms": 3.3618,
-     "drift": 0.0111,
+     "open_ms": 3.3741,
+     "close_ms": 3.3721,
+     "drift": 0.0006,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
@@ -688707,16 +690284,111 @@
      "chunk": 4,
      "brackets": [
       {
-       "what": "chunk 1 of 1",
-       "open_ms": 3.3996,
-       "close_ms": 3.3618,
-       "drift": 0.0111,
+       "what": "chunk 1 of 12",
+       "open_ms": 3.3987,
+       "close_ms": 3.3424,
+       "drift": 0.0166,
        "attempt": 1,
-       "contenders": 1
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 12",
+       "open_ms": 3.3518,
+       "close_ms": 3.3371,
+       "drift": 0.0044,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 12",
+       "open_ms": 3.3677,
+       "close_ms": 3.3794,
+       "drift": 0.0035,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 4 of 12",
+       "open_ms": 3.4219,
+       "close_ms": 3.3639,
+       "drift": 0.017,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 5 of 12",
+       "open_ms": 3.4019,
+       "close_ms": 3.4048,
+       "drift": 0.0008,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 6 of 12",
+       "open_ms": 3.4247,
+       "close_ms": 3.435,
+       "drift": 0.003,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 7 of 12",
+       "open_ms": 3.4137,
+       "close_ms": 3.3899,
+       "drift": 0.007,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 8 of 12",
+       "open_ms": 3.3917,
+       "close_ms": 3.3965,
+       "drift": 0.0014,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 9 of 12",
+       "open_ms": 3.438,
+       "close_ms": 3.4741,
+       "drift": 0.0105,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 10 of 12",
+       "open_ms": 3.357,
+       "close_ms": 3.3775,
+       "drift": 0.0061,
+       "attempt": 2,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 11 of 12",
+       "open_ms": 3.3746,
+       "close_ms": 3.3611,
+       "drift": 0.004,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 12 of 12",
+       "open_ms": 3.4462,
+       "close_ms": 3.4141,
+       "drift": 0.0093,
+       "attempt": 1,
+       "contenders": 3
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.3741,
+       "close_ms": 3.3721,
+       "drift": 0.0006,
+       "attempt": 1,
+       "contenders": 2
       }
      ]
     },
-    "reproven_from": "triton 3.8.0+git4a15f415 mps content-3c48",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -690947,16 +692619,17 @@
    "config": {
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
-     "BLOCK_SIZE_OUTF": 64,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16,
+     "SPATIAL_FAST": true
     },
-    "num_warps": 4,
-    "num_stages": 2,
+    "num_warps": 2,
+    "num_stages": 1,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-21T17:59:21+00:00",
+    "date": "2026-10-22T01:14:58+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
@@ -690987,9 +692660,9 @@
     ],
     "launches": 1,
     "launch_deviations": [
-     0.0021883548365461
+     0.002457651112835798
     ],
-    "deviation": 0.0021883548365461,
+    "deviation": 0.002457651112835798,
     "tolerance": 0.04,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -691008,21 +692681,21 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 0.30076944364441766,
-    "second_ms": null,
-    "candidates": 1,
-    "accepted": 1,
-    "benched": 1,
+    "best_ms": 0.2699227383397273,
+    "second_ms": 0.36462890659458935,
+    "candidates": 64,
+    "accepted": 64,
+    "benched": 12,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.001,
-     "runs": 0.003,
-     "bench": 0.452
+     "runs": 0.175,
+     "bench": 3.483
     },
     "stability_witness": {
-     "open_ms": 3.4322,
-     "close_ms": 3.4229,
-     "drift": 0.0027,
+     "open_ms": 3.4117,
+     "close_ms": 3.4214,
+     "drift": 0.0028,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
@@ -691033,16 +692706,39 @@
      "chunk": 4,
      "brackets": [
       {
-       "what": "chunk 1 of 1",
-       "open_ms": 3.4322,
-       "close_ms": 3.4229,
-       "drift": 0.0027,
+       "what": "chunk 1 of 3",
+       "open_ms": 3.382,
+       "close_ms": 3.3985,
+       "drift": 0.0049,
        "attempt": 1,
-       "contenders": 1
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 3",
+       "open_ms": 3.4462,
+       "close_ms": 3.4648,
+       "drift": 0.0054,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 3",
+       "open_ms": 3.4302,
+       "close_ms": 3.4825,
+       "drift": 0.0152,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.4117,
+       "close_ms": 3.4214,
+       "drift": 0.0028,
+       "attempt": 1,
+       "contenders": 2
       }
      ]
     },
-    "reproven_from": "triton 3.8.0+git4a15f415 mps content-3c48",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -691054,17 +692750,18 @@
   "(21, 16, 22, 54, 384, 20, 52, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')": {
    "config": {
     "kwargs": {
-     "BLOCK_SIZE_BHW": 64,
-     "BLOCK_SIZE_OUTF": 64,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16,
+     "SPATIAL_FAST": true
     },
-    "num_warps": 4,
-    "num_stages": 2,
+    "num_warps": 2,
+    "num_stages": 1,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-21T17:59:21+00:00",
+    "date": "2026-10-22T01:15:03+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
@@ -691095,9 +692792,9 @@
     ],
     "launches": 1,
     "launch_deviations": [
-     0.002936218113780975
+     0.002715598017609231
     ],
-    "deviation": 0.002936218113780975,
+    "deviation": 0.002715598017609231,
     "tolerance": 0.04,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -691116,21 +692813,21 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 1.3225472251574197,
-    "second_ms": null,
-    "candidates": 1,
-    "accepted": 1,
-    "benched": 1,
+    "best_ms": 1.1765514682320988,
+    "second_ms": 1.184454768044608,
+    "candidates": 64,
+    "accepted": 64,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.103,
-     "runs": 0.045,
-     "bench": 0.335
+     "oracle": 0.108,
+     "runs": 3.089,
+     "bench": 2.574
     },
     "stability_witness": {
-     "open_ms": 3.4783,
-     "close_ms": 3.4278,
-     "drift": 0.0145,
+     "open_ms": 3.4722,
+     "close_ms": 3.458,
+     "drift": 0.0041,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
@@ -691141,16 +692838,47 @@
      "chunk": 4,
      "brackets": [
       {
-       "what": "chunk 1 of 1",
-       "open_ms": 3.4783,
-       "close_ms": 3.4278,
-       "drift": 0.0145,
+       "what": "chunk 1 of 4",
+       "open_ms": 3.5202,
+       "close_ms": 3.458,
+       "drift": 0.0177,
        "attempt": 1,
-       "contenders": 1
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 4",
+       "open_ms": 3.4128,
+       "close_ms": 3.4049,
+       "drift": 0.0023,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 4",
+       "open_ms": 3.4025,
+       "close_ms": 3.4642,
+       "drift": 0.0182,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 4 of 4",
+       "open_ms": 3.4649,
+       "close_ms": 3.4385,
+       "drift": 0.0076,
+       "attempt": 1,
+       "contenders": 2
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.4722,
+       "close_ms": 3.458,
+       "drift": 0.0041,
+       "attempt": 1,
+       "contenders": 2
       }
      ]
     },
-    "reproven_from": "triton 3.8.0+git4a15f415 mps content-3c48",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -693069,17 +694797,18 @@
   "(21, 384, 20, 52, 1152, 20, 52, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')": {
    "config": {
     "kwargs": {
-     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_BHW": 32,
      "BLOCK_SIZE_OUTF": 64,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_INF": 32,
+     "SPATIAL_FAST": true
     },
-    "num_warps": 4,
+    "num_warps": 2,
     "num_stages": 1,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-21T17:59:22+00:00",
+    "date": "2026-10-22T01:15:12+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
@@ -693110,9 +694839,9 @@
     ],
     "launches": 1,
     "launch_deviations": [
-     0.002558938829564249
+     0.0020862591087945563
     ],
-    "deviation": 0.002558938829564249,
+    "deviation": 0.0020862591087945563,
     "tolerance": 0.04,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-20 cols 0-38; batch 10 rows 0-20 cols 7-45; batch 20 rows 0-20 cols 14-52) of 21x20x52",
     "machine": {
@@ -693131,21 +694860,21 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 4.975932359695435,
-    "second_ms": null,
-    "candidates": 1,
-    "accepted": 1,
-    "benched": 1,
+    "best_ms": 4.326833301120335,
+    "second_ms": 4.557453215122223,
+    "candidates": 64,
+    "accepted": 64,
+    "benched": 45,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.011,
-     "runs": 0.239,
-     "bench": 0.33
+     "runs": 1.523,
+     "bench": 7.05
     },
     "stability_witness": {
-     "open_ms": 3.4626,
-     "close_ms": 3.4318,
-     "drift": 0.0089,
+     "open_ms": 3.3835,
+     "close_ms": 3.3802,
+     "drift": 0.001,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
@@ -693156,16 +694885,111 @@
      "chunk": 4,
      "brackets": [
       {
-       "what": "chunk 1 of 1",
-       "open_ms": 3.4626,
-       "close_ms": 3.4318,
-       "drift": 0.0089,
+       "what": "chunk 1 of 12",
+       "open_ms": 3.3834,
+       "close_ms": 3.3348,
+       "drift": 0.0144,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 12",
+       "open_ms": 3.3937,
+       "close_ms": 3.3561,
+       "drift": 0.0111,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 12",
+       "open_ms": 3.338,
+       "close_ms": 3.5104,
+       "drift": 0.0517,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 4 of 12",
+       "open_ms": 3.4189,
+       "close_ms": 3.4061,
+       "drift": 0.0037,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 5 of 12",
+       "open_ms": 3.4396,
+       "close_ms": 3.4675,
+       "drift": 0.0081,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 6 of 12",
+       "open_ms": 3.4341,
+       "close_ms": 3.4417,
+       "drift": 0.0022,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 7 of 12",
+       "open_ms": 3.3948,
+       "close_ms": 3.4567,
+       "drift": 0.0182,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 8 of 12",
+       "open_ms": 3.464,
+       "close_ms": 3.4933,
+       "drift": 0.0085,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 9 of 12",
+       "open_ms": 3.4088,
+       "close_ms": 3.3873,
+       "drift": 0.0063,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 10 of 12",
+       "open_ms": 3.3941,
+       "close_ms": 3.3783,
+       "drift": 0.0046,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 11 of 12",
+       "open_ms": 3.374,
+       "close_ms": 3.3532,
+       "drift": 0.0062,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 12 of 12",
+       "open_ms": 3.3473,
+       "close_ms": 3.425,
+       "drift": 0.0232,
        "attempt": 1,
        "contenders": 1
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.3835,
+       "close_ms": 3.3802,
+       "drift": 0.001,
+       "attempt": 1,
+       "contenders": 2
       }
      ]
     },
-    "reproven_from": "triton 3.8.0+git4a15f415 mps content-3c48",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -693177,17 +695001,18 @@
   "(21, 384, 20, 52, 384, 20, 52, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')": {
    "config": {
     "kwargs": {
-     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_BHW": 32,
      "BLOCK_SIZE_OUTF": 64,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_INF": 32,
+     "SPATIAL_FAST": true
     },
-    "num_warps": 4,
+    "num_warps": 2,
     "num_stages": 1,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-21T17:59:23+00:00",
+    "date": "2026-10-22T01:15:21+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
@@ -693218,9 +695043,9 @@
     ],
     "launches": 1,
     "launch_deviations": [
-     0.0021946233928739063
+     0.0031959708831602158
     ],
-    "deviation": 0.0021946233928739063,
+    "deviation": 0.0031959708831602158,
     "tolerance": 0.04,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-20 cols 0-52; batch 10 rows 0-20 cols 0-52; batch 20 rows 0-20 cols 0-52) of 21x20x52",
     "machine": {
@@ -693239,21 +695064,21 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 2.001466655731201,
-    "second_ms": null,
-    "candidates": 1,
-    "accepted": 1,
-    "benched": 1,
+    "best_ms": 1.7871344685554504,
+    "second_ms": 1.8187281688054402,
+    "candidates": 64,
+    "accepted": 64,
+    "benched": 49,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.008,
-     "runs": 0.01,
-     "bench": 0.317
+     "oracle": 0.006,
+     "runs": 0.607,
+     "bench": 7.424
     },
     "stability_witness": {
-     "open_ms": 3.5569,
-     "close_ms": 3.411,
-     "drift": 0.041,
+     "open_ms": 3.3911,
+     "close_ms": 3.4633,
+     "drift": 0.0213,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
@@ -693264,16 +695089,119 @@
      "chunk": 4,
      "brackets": [
       {
-       "what": "chunk 1 of 1",
-       "open_ms": 3.5569,
-       "close_ms": 3.411,
-       "drift": 0.041,
+       "what": "chunk 1 of 13",
+       "open_ms": 3.4994,
+       "close_ms": 3.4004,
+       "drift": 0.0283,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 13",
+       "open_ms": 3.4258,
+       "close_ms": 3.4319,
+       "drift": 0.0018,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 13",
+       "open_ms": 3.4204,
+       "close_ms": 3.4632,
+       "drift": 0.0125,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 4 of 13",
+       "open_ms": 3.4348,
+       "close_ms": 3.4075,
+       "drift": 0.0079,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 5 of 13",
+       "open_ms": 3.4266,
+       "close_ms": 3.4077,
+       "drift": 0.0055,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 6 of 13",
+       "open_ms": 3.3562,
+       "close_ms": 3.3595,
+       "drift": 0.001,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 7 of 13",
+       "open_ms": 3.3707,
+       "close_ms": 3.3436,
+       "drift": 0.0081,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 8 of 13",
+       "open_ms": 3.3517,
+       "close_ms": 3.3609,
+       "drift": 0.0028,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 9 of 13",
+       "open_ms": 3.3617,
+       "close_ms": 3.3558,
+       "drift": 0.0018,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 10 of 13",
+       "open_ms": 3.3532,
+       "close_ms": 3.3565,
+       "drift": 0.001,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 11 of 13",
+       "open_ms": 3.4992,
+       "close_ms": 3.4347,
+       "drift": 0.0184,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 12 of 13",
+       "open_ms": 3.4473,
+       "close_ms": 3.456,
+       "drift": 0.0025,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 13 of 13",
+       "open_ms": 3.4223,
+       "close_ms": 3.4368,
+       "drift": 0.0043,
        "attempt": 1,
        "contenders": 1
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.3911,
+       "close_ms": 3.4633,
+       "drift": 0.0213,
+       "attempt": 1,
+       "contenders": 2
       }
      ]
     },
-    "reproven_from": "triton 3.8.0+git4a15f415 mps content-3c48",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -693503,17 +695431,18 @@
   "(21, 384, 22, 54, 384, 20, 52, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')": {
    "config": {
     "kwargs": {
-     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_BHW": 32,
      "BLOCK_SIZE_OUTF": 64,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_INF": 32,
+     "SPATIAL_FAST": true
     },
-    "num_warps": 4,
-    "num_stages": 2,
+    "num_warps": 2,
+    "num_stages": 1,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-21T17:59:23+00:00",
+    "date": "2026-10-22T01:15:32+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
@@ -693544,9 +695473,9 @@
     ],
     "launches": 1,
     "launch_deviations": [
-     0.003010252949815054
+     0.0030405278438502964
     ],
-    "deviation": 0.003010252949815054,
+    "deviation": 0.0030405278438502964,
     "tolerance": 0.04,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-20 cols 0-22; batch 10 rows 0-20 cols 15-37; batch 20 rows 0-20 cols 30-52) of 21x20x52",
     "machine": {
@@ -693565,21 +695494,21 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 12.673861185709635,
-    "second_ms": null,
-    "candidates": 1,
-    "accepted": 1,
-    "benched": 1,
+    "best_ms": 10.692874908447266,
+    "second_ms": 10.815847078959147,
+    "candidates": 64,
+    "accepted": 64,
+    "benched": 45,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.033,
-     "runs": 0.024,
-     "bench": 0.37
+     "oracle": 0.03,
+     "runs": 1.513,
+     "bench": 9.187
     },
     "stability_witness": {
-     "open_ms": 3.4649,
-     "close_ms": 3.4276,
-     "drift": 0.0108,
+     "open_ms": 3.4572,
+     "close_ms": 3.4153,
+     "drift": 0.0121,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
@@ -693590,16 +695519,111 @@
      "chunk": 4,
      "brackets": [
       {
-       "what": "chunk 1 of 1",
-       "open_ms": 3.4649,
-       "close_ms": 3.4276,
-       "drift": 0.0108,
+       "what": "chunk 1 of 12",
+       "open_ms": 3.3551,
+       "close_ms": 3.4769,
+       "drift": 0.0363,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 12",
+       "open_ms": 3.3833,
+       "close_ms": 3.3344,
+       "drift": 0.0144,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 12",
+       "open_ms": 3.3804,
+       "close_ms": 3.4411,
+       "drift": 0.018,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 4 of 12",
+       "open_ms": 3.4634,
+       "close_ms": 3.4541,
+       "drift": 0.0027,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 5 of 12",
+       "open_ms": 3.4889,
+       "close_ms": 3.4188,
+       "drift": 0.0201,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 6 of 12",
+       "open_ms": 3.4656,
+       "close_ms": 3.4245,
+       "drift": 0.0119,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 7 of 12",
+       "open_ms": 3.5136,
+       "close_ms": 3.4701,
+       "drift": 0.0124,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 8 of 12",
+       "open_ms": 3.3903,
+       "close_ms": 3.3492,
+       "drift": 0.0121,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 9 of 12",
+       "open_ms": 3.3209,
+       "close_ms": 3.3146,
+       "drift": 0.0019,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 10 of 12",
+       "open_ms": 3.3691,
+       "close_ms": 3.3731,
+       "drift": 0.0012,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 11 of 12",
+       "open_ms": 3.3642,
+       "close_ms": 3.3632,
+       "drift": 0.0003,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 12 of 12",
+       "open_ms": 3.3752,
+       "close_ms": 3.4493,
+       "drift": 0.0219,
        "attempt": 1,
        "contenders": 1
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.4572,
+       "close_ms": 3.4153,
+       "drift": 0.0121,
+       "attempt": 1,
+       "contenders": 2
       }
      ]
     },
-    "reproven_from": "triton 3.8.0+git4a15f415 mps content-3c48",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -740843,9 +742867,9 @@
   "(40, 384, 16, 16, 384, 16, 16, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')": {
    "config": {
     "kwargs": {
-     "BLOCK_SIZE_BHW": 64,
-     "BLOCK_SIZE_OUTF": 32,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_INF": 32
     },
     "num_warps": 2,
     "num_stages": 1,
@@ -740853,7 +742877,7 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-21T17:59:24+00:00",
+    "date": "2026-10-22T01:15:41+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
@@ -740884,9 +742908,9 @@
     ],
     "launches": 1,
     "launch_deviations": [
-     0.0028703178019938037
+     0.0027914251792302185
     ],
-    "deviation": 0.0028703178019938037,
+    "deviation": 0.0027914251792302185,
     "tolerance": 0.04,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -740905,21 +742929,21 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 1.0476089715957642,
-    "second_ms": null,
-    "candidates": 1,
-    "accepted": 1,
-    "benched": 1,
+    "best_ms": 0.9597490075088683,
+    "second_ms": 0.990376041829586,
+    "candidates": 64,
+    "accepted": 64,
+    "benched": 42,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.023,
-     "runs": 0.024,
-     "bench": 0.353
+     "oracle": 0.024,
+     "runs": 1.445,
+     "bench": 7.108
     },
     "stability_witness": {
-     "open_ms": 3.5202,
-     "close_ms": 3.3811,
-     "drift": 0.0395,
+     "open_ms": 3.399,
+     "close_ms": 3.3628,
+     "drift": 0.0107,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
@@ -740930,16 +742954,103 @@
      "chunk": 4,
      "brackets": [
       {
-       "what": "chunk 1 of 1",
-       "open_ms": 3.5202,
-       "close_ms": 3.3811,
-       "drift": 0.0395,
+       "what": "chunk 1 of 11",
+       "open_ms": 3.4809,
+       "close_ms": 3.4067,
+       "drift": 0.0213,
        "attempt": 1,
-       "contenders": 1
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 11",
+       "open_ms": 3.3288,
+       "close_ms": 3.3579,
+       "drift": 0.0087,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 11",
+       "open_ms": 3.3278,
+       "close_ms": 3.4172,
+       "drift": 0.0269,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 4 of 11",
+       "open_ms": 3.36,
+       "close_ms": 3.3624,
+       "drift": 0.0007,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 5 of 11",
+       "open_ms": 3.3239,
+       "close_ms": 3.384,
+       "drift": 0.0181,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 6 of 11",
+       "open_ms": 3.4551,
+       "close_ms": 3.4584,
+       "drift": 0.0009,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 7 of 11",
+       "open_ms": 3.4735,
+       "close_ms": 3.4281,
+       "drift": 0.0131,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 8 of 11",
+       "open_ms": 3.5127,
+       "close_ms": 3.4948,
+       "drift": 0.0051,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 9 of 11",
+       "open_ms": 3.4254,
+       "close_ms": 3.4522,
+       "drift": 0.0078,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 10 of 11",
+       "open_ms": 3.4326,
+       "close_ms": 3.4647,
+       "drift": 0.0094,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 11 of 11",
+       "open_ms": 3.4418,
+       "close_ms": 3.4259,
+       "drift": 0.0046,
+       "attempt": 1,
+       "contenders": 2
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.399,
+       "close_ms": 3.3628,
+       "drift": 0.0107,
+       "attempt": 1,
+       "contenders": 2
       }
      ]
     },
-    "reproven_from": "triton 3.8.0+git4a15f415 mps content-3c48",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -740953,15 +743064,16 @@
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
      "BLOCK_SIZE_OUTF": 64,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_INF": 32,
+     "SPATIAL_FAST": true
     },
     "num_warps": 4,
-    "num_stages": 2,
+    "num_stages": 1,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-21T17:59:24+00:00",
+    "date": "2026-10-22T01:15:49+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
@@ -740992,9 +743104,9 @@
     ],
     "launches": 1,
     "launch_deviations": [
-     0.002202267229370739
+     0.002198727518673559
     ],
-    "deviation": 0.002202267229370739,
+    "deviation": 0.002198727518673559,
     "tolerance": 0.04,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-20 cols 0-20; batch 20 rows 0-20 cols 0-20; batch 39 rows 0-20 cols 0-20) of 40x20x20",
     "machine": {
@@ -741013,21 +743125,21 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 1.4834660468278107,
-    "second_ms": null,
-    "candidates": 1,
-    "accepted": 1,
-    "benched": 1,
+    "best_ms": 1.3450652837753296,
+    "second_ms": 1.3525574741692379,
+    "candidates": 64,
+    "accepted": 64,
+    "benched": 49,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.003,
-     "runs": 0.005,
-     "bench": 0.324
+     "runs": 0.31,
+     "bench": 7.601
     },
     "stability_witness": {
-     "open_ms": 3.4299,
-     "close_ms": 3.5398,
-     "drift": 0.0321,
+     "open_ms": 3.3713,
+     "close_ms": 3.3746,
+     "drift": 0.001,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
@@ -741038,16 +743150,119 @@
      "chunk": 4,
      "brackets": [
       {
-       "what": "chunk 1 of 1",
-       "open_ms": 3.4299,
-       "close_ms": 3.5398,
-       "drift": 0.0321,
+       "what": "chunk 1 of 13",
+       "open_ms": 3.413,
+       "close_ms": 3.3771,
+       "drift": 0.0105,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 13",
+       "open_ms": 3.3762,
+       "close_ms": 3.3977,
+       "drift": 0.0064,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 13",
+       "open_ms": 3.3704,
+       "close_ms": 3.4054,
+       "drift": 0.0104,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 4 of 13",
+       "open_ms": 3.3856,
+       "close_ms": 3.4785,
+       "drift": 0.0275,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 5 of 13",
+       "open_ms": 3.455,
+       "close_ms": 3.4364,
+       "drift": 0.0054,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 6 of 13",
+       "open_ms": 3.4341,
+       "close_ms": 3.4561,
+       "drift": 0.0064,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 7 of 13",
+       "open_ms": 3.449,
+       "close_ms": 3.4308,
+       "drift": 0.0053,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 8 of 13",
+       "open_ms": 3.4594,
+       "close_ms": 3.4514,
+       "drift": 0.0023,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 9 of 13",
+       "open_ms": 3.4587,
+       "close_ms": 3.3896,
+       "drift": 0.02,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 10 of 13",
+       "open_ms": 3.3668,
+       "close_ms": 3.3813,
+       "drift": 0.0043,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 11 of 13",
+       "open_ms": 3.3246,
+       "close_ms": 3.3618,
+       "drift": 0.0112,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 12 of 13",
+       "open_ms": 3.3781,
+       "close_ms": 3.3671,
+       "drift": 0.0032,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 13 of 13",
+       "open_ms": 3.4015,
+       "close_ms": 3.3654,
+       "drift": 0.0106,
        "attempt": 1,
        "contenders": 1
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.3713,
+       "close_ms": 3.3746,
+       "drift": 0.001,
+       "attempt": 1,
+       "contenders": 2
       }
      ]
     },
-    "reproven_from": "triton 3.8.0+git4a15f415 mps content-3c48",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -741060,16 +743275,17 @@
    "config": {
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
-     "BLOCK_SIZE_OUTF": 64,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16,
+     "SPATIAL_FAST": true
     },
-    "num_warps": 4,
-    "num_stages": 2,
+    "num_warps": 2,
+    "num_stages": 1,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-21T17:59:24+00:00",
+    "date": "2026-10-22T01:15:57+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
@@ -741100,9 +743316,9 @@
     ],
     "launches": 1,
     "launch_deviations": [
-     0.0021642486385442423
+     0.0026809501163867545
     ],
-    "deviation": 0.0021642486385442423,
+    "deviation": 0.0026809501163867545,
     "tolerance": 0.04,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-20 cols 0-52; batch 20 rows 0-20 cols 0-52; batch 39 rows 0-20 cols 0-52) of 40x20x52",
     "machine": {
@@ -741121,21 +743337,21 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 3.477295463735407,
-    "second_ms": null,
-    "candidates": 1,
-    "accepted": 1,
-    "benched": 1,
+    "best_ms": 3.1299097140630088,
+    "second_ms": 3.2175764044125876,
+    "candidates": 64,
+    "accepted": 64,
+    "benched": 44,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.006,
-     "runs": 0.014,
-     "bench": 0.323
+     "runs": 0.758,
+     "bench": 6.505
     },
     "stability_witness": {
-     "open_ms": 3.381,
-     "close_ms": 3.3587,
-     "drift": 0.0066,
+     "open_ms": 3.4265,
+     "close_ms": 3.4363,
+     "drift": 0.0028,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
@@ -741146,16 +743362,103 @@
      "chunk": 4,
      "brackets": [
       {
-       "what": "chunk 1 of 1",
-       "open_ms": 3.381,
-       "close_ms": 3.3587,
-       "drift": 0.0066,
+       "what": "chunk 1 of 11",
+       "open_ms": 3.6138,
+       "close_ms": 3.4587,
+       "drift": 0.0429,
        "attempt": 1,
-       "contenders": 1
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 11",
+       "open_ms": 3.4758,
+       "close_ms": 3.4508,
+       "drift": 0.0072,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 11",
+       "open_ms": 3.4338,
+       "close_ms": 3.4486,
+       "drift": 0.0043,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 4 of 11",
+       "open_ms": 3.4791,
+       "close_ms": 3.4221,
+       "drift": 0.0164,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 5 of 11",
+       "open_ms": 3.5105,
+       "close_ms": 3.3497,
+       "drift": 0.0458,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 6 of 11",
+       "open_ms": 3.3908,
+       "close_ms": 3.3767,
+       "drift": 0.0042,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 7 of 11",
+       "open_ms": 3.5564,
+       "close_ms": 3.3828,
+       "drift": 0.0488,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 8 of 11",
+       "open_ms": 3.4894,
+       "close_ms": 3.3736,
+       "drift": 0.0332,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 9 of 11",
+       "open_ms": 3.4875,
+       "close_ms": 3.3782,
+       "drift": 0.0314,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 10 of 11",
+       "open_ms": 3.4706,
+       "close_ms": 3.4364,
+       "drift": 0.0099,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 11 of 11",
+       "open_ms": 3.4304,
+       "close_ms": 3.4376,
+       "drift": 0.0021,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.4265,
+       "close_ms": 3.4363,
+       "drift": 0.0028,
+       "attempt": 1,
+       "contenders": 2
       }
      ]
     },
-    "reproven_from": "triton 3.8.0+git4a15f415 mps content-3c48",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -741167,17 +743470,18 @@
   "(40, 384, 23, 23, 384, 23, 23, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')": {
    "config": {
     "kwargs": {
-     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_BHW": 32,
      "BLOCK_SIZE_OUTF": 64,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_INF": 32,
+     "SPATIAL_FAST": true
     },
     "num_warps": 4,
-    "num_stages": 2,
+    "num_stages": 1,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-21T17:59:25+00:00",
+    "date": "2026-10-22T01:16:14+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
@@ -741208,9 +743512,9 @@
     ],
     "launches": 1,
     "launch_deviations": [
-     0.0022619089142104326
+     0.0022679043278044505
     ],
-    "deviation": 0.0022619089142104326,
+    "deviation": 0.0022679043278044505,
     "tolerance": 0.04,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-23 cols 0-23; batch 20 rows 0-23 cols 0-23; batch 39 rows 0-23 cols 0-23) of 40x23x23",
     "machine": {
@@ -741229,21 +743533,21 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 1.9243854105472564,
-    "second_ms": null,
-    "candidates": 1,
-    "accepted": 1,
-    "benched": 1,
+    "best_ms": 1.646322462869727,
+    "second_ms": 1.6634722203016281,
+    "candidates": 64,
+    "accepted": 64,
+    "benched": 19,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.004,
-     "runs": 0.243,
-     "bench": 0.34
+     "oracle": 0.003,
+     "runs": 13.58,
+     "bench": 3.156
     },
     "stability_witness": {
-     "open_ms": 3.4103,
-     "close_ms": 3.3985,
-     "drift": 0.0034,
+     "open_ms": 3.3795,
+     "close_ms": 3.3977,
+     "drift": 0.0054,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
@@ -741254,16 +743558,55 @@
      "chunk": 4,
      "brackets": [
       {
-       "what": "chunk 1 of 1",
-       "open_ms": 3.4103,
-       "close_ms": 3.3985,
-       "drift": 0.0034,
+       "what": "chunk 1 of 5",
+       "open_ms": 3.5385,
+       "close_ms": 3.4199,
+       "drift": 0.0335,
        "attempt": 1,
-       "contenders": 1
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 5",
+       "open_ms": 3.382,
+       "close_ms": 3.3182,
+       "drift": 0.0189,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 5",
+       "open_ms": 3.3625,
+       "close_ms": 3.3589,
+       "drift": 0.0011,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 4 of 5",
+       "open_ms": 3.349,
+       "close_ms": 3.3978,
+       "drift": 0.0146,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 5 of 5",
+       "open_ms": 3.3962,
+       "close_ms": 3.3653,
+       "drift": 0.0091,
+       "attempt": 1,
+       "contenders": 3
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.3795,
+       "close_ms": 3.3977,
+       "drift": 0.0054,
+       "attempt": 1,
+       "contenders": 2
       }
      ]
     },
-    "reproven_from": "triton 3.8.0+git4a15f415 mps content-3c48",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
