@@ -780,7 +780,7 @@ class LayerPartitioner:
         acc = contraction_accumulator_bytes(width)
         return numel * (2 * acc + (acc if acc != width else 0))
 
-    def _region_peak(self, ax, plan, c: int) -> int:
+    def _region_peak(self, ax, plan, c: int, host: bool = False) -> int:
         """What a stretch run in slices of `c` holds at its worst: everything live before it (held
         until its last pass), its outputs assembled whole, each contraction's accumulator and the
         sum that replaces it (`_accumulator_bytes`, its store included), and the worst pass — its
@@ -794,7 +794,7 @@ class LayerPartitioner:
             # (`chunked_region.sliced_reads`; counted in `fed` below)
             from neurobrix.core.prism.chunked_region import sliced_reads
             _prod, _last, size, root = self._value_intervals()
-            on_host = sliced_reads(plan, self.ops)
+            on_host = sliced_reads(plan, self.ops) if host else set()
             before = sum(size.get(r, 0) for r in {root.get(t, t) for t in plan.inputs if t not in on_host})
         else:
             curve = self.live_activation_curve()
@@ -853,13 +853,14 @@ class LayerPartitioner:
                 return regions, ""
             owner = next((r for r in regions if r.first <= h <= r.last), None)
             if owner is not None:
-                c = self._largest_slice(owner.axis, owner.plan, target, owner.slice - 1)
+                c, host = self._fit_slice(owner.axis, owner.plan, target, owner.slice - 1, owner.host_reads)
                 if c is None:
                     return None, (f"the stretch {owner.first_op!r}..{owner.last_op!r} peaks at "
                                   f"{self._region_peak(owner.axis, owner.plan, 1) / _MB:.1f} MB in "
                                   f"slices of one {owner.symbol}, over the {target / _MB:.1f} MB its "
                                   f"activations may hold")
-                owner.set_slice(c, self._region_peak(owner.axis, owner.plan, c), self._symbol_map)
+                owner.host_reads = host
+                owner.set_slice(c, self._region_peak(owner.axis, owner.plan, c, host), self._symbol_map)
                 continue
             best: Optional[_Region] = None
             whys: List[str] = []
@@ -869,17 +870,28 @@ class LayerPartitioner:
             for sy in syms:
                 if sy not in units_memo:
                     units_memo[sy] = axis_units(self._dag, sy)
-            for sym, unit in [(sy, u) for sy in syms for u in [1] + units_memo[sy]]:
-                ax = self._axis(sym, unit)
-                if not ax.fits_units(self._symbol_map):
-                    whys.append(f"{sym} in units of {unit}: the request is not a whole number of the units "
-                                f"{ax.units} its graph divides its symbols by")
+            # the neighbours as walls first; enclosing one only where no stretch fits without it (`_new_region`): the
+            # cut that changes the least, as every rung of the ladder is tried after the cheaper ones
+            # and a stretch's inputs whole on the device before the host holds them (`_fit_slice`)
+            for absorb, host_ok in ((False, False), (False, True), (True, False), (True, True)):
+                if host_ok and not (self._swap and self._token_split):
                     continue
-                got, why = self._new_region(ax, h, eff, target, regions)
-                if got is None:
-                    whys.append(f"{sym}{'' if unit == 1 else f' in units of {unit}'}: {why}")
-                elif best is None or (got.count, got.peak_bytes) < (best.count, best.peak_bytes):
-                    best = got
+                for sym, unit in [(sy, u) for sy in syms for u in [1] + units_memo[sy]]:
+                    ax = self._axis(sym, unit)
+                    if not ax.fits_units(self._symbol_map):
+                        if not absorb:
+                            whys.append(f"{sym} in units of {unit}: the request is not a whole number of the units "
+                                        f"{ax.units} its graph divides its symbols by")
+                        continue
+                    got, why = self._new_region(ax, h, eff, target, regions, absorb=absorb, host_ok=host_ok)
+                    if got is None:
+                        whys.append(f"{sym}{'' if unit == 1 else f' in units of {unit}'}"
+                                    f"{', its neighbours enclosed' if absorb else ''}"
+                                    f"{', its slice-only inputs on the host' if host_ok else ''}: {why}")
+                    elif best is None or (got.count, got.peak_bytes) < (best.count, best.peak_bytes):
+                        best = got
+                if best is not None:
+                    break
             if best is None:
                 return None, (f"{self.order[h]!r} holds {eff[h] / _MB:.1f} MB of activations "
                               f"against {target / _MB:.1f} MB — " + "; ".join(whys))
@@ -888,21 +900,40 @@ class LayerPartitioner:
             regions.append(best)
             regions.sort(key=lambda r: r.first)
 
-    def _largest_slice(self, ax, plan, target: int, upper: int) -> Optional[int]:
+    def _fit_slice(self, ax, plan, target: int, upper: int, host_first: bool = False,
+                   host_only: Optional[bool] = None) -> Tuple[Optional[int], bool]:
+        """(the largest slice that fits, whether its slice-only inputs stay on the host). With the values between pieces
+        parked, a stretch's inputs read only in slices may stay on the host, each pass uploading its slice — taken only
+        where no slice fits with them whole on the device: the host copy and the uploads cost time a stretch that fits
+        does not need (HAT-S at 2048 px on 16 GB ran 1.7x slower with every stretch reading from the host, 2026-10-22)."""
+        if host_only is not None:      # the region search's stage asks one way only
+            if host_only:
+                return ((self._largest_slice(ax, plan, target, upper, host=True), True)
+                        if self._swap and self._token_split else (None, False))
+            return self._largest_slice(ax, plan, target, upper), False
+        if not host_first:
+            c = self._largest_slice(ax, plan, target, upper)
+            if c is not None or not (self._swap and self._token_split):
+                return c, False
+        if self._swap and self._token_split:
+            return self._largest_slice(ax, plan, target, upper, host=True), True
+        return None, False
+
+    def _largest_slice(self, ax, plan, target: int, upper: int, host: bool = False) -> Optional[int]:
         """The largest slice in [1, upper] whose stretch peak is at most `target`, or None."""
-        if upper < 1 or self._region_peak(ax, plan, 1) > target:
+        if upper < 1 or self._region_peak(ax, plan, 1, host) > target:
             return None
         lo, hi = 1, upper
         while lo < hi:
             mid = (lo + hi + 1) // 2
-            if self._region_peak(ax, plan, mid) <= target:
+            if self._region_peak(ax, plan, mid, host) <= target:
                 lo = mid
             else:
                 hi = mid - 1
         return lo
 
-    def _new_region(self, ax, h: int, eff: List[int], target: int, regions: Sequence["_Region"]
-                    ) -> Tuple[Optional["_Region"], str]:
+    def _new_region(self, ax, h: int, eff: List[int], target: int, regions: Sequence["_Region"],
+                    absorb: bool = True, host_ok: bool = True) -> Tuple[Optional["_Region"], str]:
         """A stretch around op `h` run in slices of `ax.sym`: the ops over the target around it
         (none may mix the axis), widened to the seams where the least is live — before its first op
         and after its last — among the ops that do not mix the axis either."""
@@ -915,7 +946,7 @@ class LayerPartitioner:
         # them out whole, 15 840 MB, 2026-10-22). A seam inside one is refused (below); another axis' stretch is a wall.
         taken: Set[int] = set()
         for r in regions:
-            if r.axis.sym != ax.sym or r.axis.unit != ax.unit:
+            if not absorb or r.axis.sym != ax.sym or r.axis.unit != ax.unit:
                 taken.update(range(r.first, r.last + 1))
 
         def free(i: int) -> bool:
@@ -1000,16 +1031,17 @@ class LayerPartitioner:
             if plan is None:
                 why = no
                 continue
-            c = self._largest_slice(ax, plan, target, total - 1)
+            c, host = self._fit_slice(ax, plan, target, total - 1, host_only=host_ok)
             if c is None:
                 why = (f"{self.order[L]}..{self.order[R]} peaks at "
-                       f"{self._region_peak(ax, plan, 1) / _MB:.1f} MB in slices of one")
+                       f"{self._region_peak(ax, plan, 1, self._swap and self._token_split) / _MB:.1f} MB in slices of one")
                 continue
             names: Set[str] = set()
             for uid in self.order[L:R + 1]:
                 names |= self._op_weight_names(uid)
             reg = _Region(axis=ax, plan=plan, weight_names=names)
-            reg.set_slice(c, self._region_peak(ax, plan, c), self._symbol_map)
+            reg.host_reads = host
+            reg.set_slice(c, self._region_peak(ax, plan, c, host), self._symbol_map)
             return reg, ""
         return None, why
 
@@ -1026,6 +1058,9 @@ class _Region:
     slice: int = 0
     count: int = 0
     peak_bytes: int = 0
+    #: the inputs it reads only in slices stay on the host, each pass uploading its slice (`chunked_region.sliced_reads`)
+    #: — chosen only where no slice fits with them whole on the device (`LayerPartitioner._fit_slice`)
+    host_reads: bool = False
 
     @property
     def first(self) -> int:
@@ -1054,7 +1089,7 @@ class _Region:
     def record(self) -> Dict[str, Any]:
         return {"first_op": self.first_op, "last_op": self.last_op, "symbol": self.symbol,
                 "unit": self.plan.unit, "slice": self.slice, "count": self.count,
-                "passes": len(self.plan.passes), "peak_bytes": self.peak_bytes}
+                "passes": len(self.plan.passes), "peak_bytes": self.peak_bytes, "host_reads": self.host_reads}
 
 
 def rewire_arg(arg: Any, rewire: Dict[str, str]) -> Any:

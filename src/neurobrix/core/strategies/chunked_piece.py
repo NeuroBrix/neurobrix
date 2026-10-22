@@ -170,6 +170,8 @@ class ChunkedPiece:
     def sliced_input_names(self) -> Set[str]:
         """The fed names this stretch reads only in slices (`chunked_region.sliced_reads`): with the values between
         pieces parked, the strategy leaves them on the host and each pass uploads its slice."""
+        if not self._chunk.get("host_reads"):
+            return set()                  # the plan keeps this stretch's inputs whole on the device
         if self._plan is None:
             self._build()
         tids = sliced_reads(self._plan, self._axis.ops)

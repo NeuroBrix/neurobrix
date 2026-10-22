@@ -33,7 +33,7 @@ def test_a_new_stretch_encloses_the_neighbour_on_its_axis():
     existing = _Region(axis=ax, plan=plan, weight_names=set())
     existing.set_slice(1, p._region_peak(ax, plan, 1), p._symbol_map)
     eff, _ = p._effective_curve([existing])
-    got, why = p._new_region(ax, hot, eff, 1 << 62, [existing])
+    got, why = p._new_region(ax, hot, eff, 1 << 62, [existing], absorb=True, host_ok=False)
     assert got is not None, why
     # the seam before the existing stretch holds less than any after it: the new stretch starts there, enclosing it
     assert got.first <= left <= got.last, (order[got.first], order[got.last], order[left])
