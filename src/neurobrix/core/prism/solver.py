@@ -2225,6 +2225,12 @@ class PrismSolver:
         else:
             _parked = self._park_values_between_pieces(candidates, strategies, sorted_components,
                                                        component_memory, devices, shard_sizes, profile, container)
+            if _parked is None:
+                # the last stretch rung: a stretch encloses its same-axis neighbour and keeps the inputs it reads
+                # only in slices on the host (HAT-L at 2048 px on 16 GB, 2026-10-22)
+                _parked = self._park_values_between_pieces(candidates, strategies, sorted_components,
+                                                           component_memory, devices, shard_sizes, profile,
+                                                           container, beyond_walls=True)
             if _parked is not None:
                 candidates = _parked
 
@@ -6747,7 +6753,7 @@ class PrismSolver:
         return None
 
     def _park_values_between_pieces(self, candidates, strategies, sorted_components, component_memory, devices,
-                                    shard_sizes, profile, container):
+                                    shard_sizes, profile, container, beyond_walls: bool = False):
         """The rung after the token-axis slices: the values between a streamed component's pieces wait on the
         host (`LayerPartitioner._greedy_swapped`), each piece holding only its weights, the inputs it reads and
         what it produces. Tried only when no plan holds the request on the accelerator otherwise — a parked
@@ -6760,6 +6766,7 @@ class PrismSolver:
         absent = [k for k in self._RUNG_STATE if k not in self.__dict__]
         self._swap_values = True
         self._token_split = True              # with the stretches in slices too: the rung before this one declined alone
+        self._regions_beyond_walls = beyond_walls
         parked = self._evaluate_all_strategies(
             strategies, sorted_components, component_memory, self._prepare_devices(profile), shard_sizes,
             profile, container)
@@ -6770,13 +6777,16 @@ class PrismSolver:
                 "Prism: no plan holds the request on the accelerator otherwise; the values between a streamed "
                 "component's pieces wait on the host")
             return parked
-        self.__dict__.setdefault("_later_rung_refusals", {})["values parked on the host"] = str(
+        rung = ("values parked on the host, stretches enclosing their neighbours and reading from the host"
+                if beyond_walls else "values parked on the host")
+        self.__dict__.setdefault("_later_rung_refusals", {})[rung] = str(
             self.__dict__.get("_layer_streaming_declined") or "no streamed component was parked")
         self.__dict__.update(saved)
         for k in absent:
             self.__dict__.pop(k, None)
         self._swap_values = False
         self._token_split = False
+        self._regions_beyond_walls = False
         return None
 
     def _guidance_loop(self, input_config, container, neural_components):
@@ -7744,7 +7754,8 @@ class PrismSolver:
                 _cutter = LayerPartitioner(graph, _piece_sizes, symbol_map=_sizing[0],
                                            compute_dtype_bytes=_sizing[1], widths=_sizing[2],
                                            token_split=bool(getattr(self, "_token_split", False)),
-                                           swap_values=bool(getattr(self, "_swap_values", False)))
+                                           swap_values=bool(getattr(self, "_swap_values", False)),
+                                           beyond_walls=bool(getattr(self, "_regions_beyond_walls", False)))
                 # One piece's weights are one arena: bounded by the device's largest allocation, in
                 # the partitioner's stored bytes (the arena holds them at the device's cost multiplier).
                 # And a piece CHANGE holds the outgoing arena where the pool parks it beside the

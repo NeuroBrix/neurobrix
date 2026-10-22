@@ -113,8 +113,12 @@ class LayerPartitioner:
                  symbol_map: Optional[Dict[str, int]] = None,
                  compute_dtype_bytes: Optional[int] = None,
                  widths: Optional[Dict[str, int]] = None,
-                 token_split: bool = False, swap_values: bool = False):
+                 token_split: bool = False, swap_values: bool = False, beyond_walls: bool = False):
         self._dag = graph
+        # Whether a stretch may enclose its same-axis neighbour and keep its slice-only inputs on the host
+        # (`_new_region`, `_fit_slice`): the solver's last stretch rung, after the parked rung declined —
+        # every plan the cuts before it make is the one it was.
+        self._beyond = bool(beyond_walls)
         # Whether a refusal on what the pieces hold may be answered by parking the values between pieces
         # on the host (`_greedy_swapped`). The solver turns it on only once the cuts that move nothing
         # have refused: a parked value crosses the host link twice.
@@ -853,7 +857,8 @@ class LayerPartitioner:
                 return regions, ""
             owner = next((r for r in regions if r.first <= h <= r.last), None)
             if owner is not None:
-                c, host = self._fit_slice(owner.axis, owner.plan, target, owner.slice - 1, owner.host_reads)
+                c, host = self._fit_slice(owner.axis, owner.plan, target, owner.slice - 1, owner.host_reads,
+                                          host_only=None if self._beyond else False)
                 if c is None:
                     return None, (f"the stretch {owner.first_op!r}..{owner.last_op!r} peaks at "
                                   f"{self._region_peak(owner.axis, owner.plan, 1) / _MB:.1f} MB in "
@@ -874,6 +879,8 @@ class LayerPartitioner:
             # cut that changes the least, as every rung of the ladder is tried after the cheaper ones
             # and a stretch's inputs whole on the device before the host holds them (`_fit_slice`)
             for absorb, host_ok in ((False, False), (False, True), (True, False), (True, True)):
+                if (absorb or host_ok) and not self._beyond:
+                    continue
                 if host_ok and not (self._swap and self._token_split):
                     continue
                 for sym, unit in [(sy, u) for sy in syms for u in [1] + units_memo[sy]]:
