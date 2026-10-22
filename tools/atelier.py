@@ -131,3 +131,19 @@ class Interpreter(os.PathLike):
 
 def interpreter(name: str) -> Interpreter:
     return Interpreter(name)
+
+
+if __name__ == "__main__":
+    # For the shell chains (the Mac's tools/mac/*.sh): `atelier.py root <role>`, `python <name>`, `writable <path>`,
+    # `campaign <name> [part...]`, `registre <kind> [part...]` print the path or stop with the named refusal (rc 2).
+    import sys
+    cmd, *args = sys.argv[1:] or ["?"]
+    fns = {"root": root, "python": python, "writable": writable, "campaign": campaign, "registre": registre,
+           "tmp": tmp, "optional_root": optional_root}
+    if cmd not in fns:
+        sys.exit(f"usage: atelier.py {{{','.join(fns)}}} <args>")
+    try:
+        print(fns[cmd](*args) or "")
+    except (OutsideTheAtelier, AtelierUndeclared) as e:
+        print(f"REFUSED: {e}", file=sys.stderr)
+        sys.exit(2)
