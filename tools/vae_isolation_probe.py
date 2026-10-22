@@ -31,6 +31,7 @@ Usage:
     python tools/vae_isolation_probe.py --capture            # phase A
     python tools/vae_isolation_probe.py --vae-only-decode    # phase B'
 """
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import json
 import os
@@ -38,8 +39,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path("/home/mlops/NeuroBrix_System")
-OUT_DIR = ROOT / "validation_outputs/p_sana_4kpx_runtime/audit_spaghetti_2026_05_05"
+ROOT = Path(__file__).resolve().parents[1]
+OUT_DIR = _atelier.root("campaigns") / "p_sana_4kpx_runtime/audit_spaghetti_2026_05_05"
 DUMP_PATH = OUT_DIR / "vae_isolation_input.pt"
 SEQ_PNG = OUT_DIR / "vae_isolation_seq_decode.png"
 TRI_PNG = OUT_DIR / "vae_isolation_tri_decode.png"

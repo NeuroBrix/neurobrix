@@ -25,6 +25,7 @@ Sources, all on disk, none inferred:
 """
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import json
 import re
@@ -34,11 +35,11 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 # The literal path segments below are real directories on the Mac and are NOT
 # translated; only the identifier is.
-WORKSHOP = Path.home() / "Workspace" / "nbx-atelier" / "campagnes"
+WORKSHOP = _atelier.root("campaigns")
 
 
 def _records() -> list[Path]:
-    out = list((REPO / "validation_outputs").glob("hub_E_*/records.json"))
+    out = list(_atelier.root("campaigns").glob("hub_E_*/records.json"))
     out += list(WORKSHOP.glob("*/records.json"))
     # A campaign that runs one model per call writes one level deeper.
     out += list(WORKSHOP.glob("*/*/records.json"))
@@ -49,7 +50,7 @@ def _deferred_sizes() -> dict:
     """Model -> (GB on disk, weights MB, largest component MB) from the
     deferred register's tables. Read, not retyped."""
     sizes = {}
-    for reg in (REPO / "validation_outputs").glob("hub_E_deferred_*/REGISTRE.md"):
+    for reg in _atelier.root("campaigns").glob("hub_E_deferred_*/REGISTRE.md"):
         for line in reg.read_text().splitlines():
             m = re.match(r"\|\s*`([^`]+)`\s*\|\s*\w+\s*\|\s*([\d.]+)\s*\|"
                          r"\s*([\d.]+)\s*\|\s*([\d.]+)\s*\|", line)

@@ -68,6 +68,7 @@ R34 preserved — nothing here is keyed on a model name.
 
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import importlib
 import json
@@ -713,7 +714,7 @@ def main() -> int:
 
     stamp = datetime.now().strftime("%Y_%m_%d")
     out_dir = Path(args.out_dir) if args.out_dir else (
-        REPO_ROOT / "validation_outputs" / f"metal_first_light_{stamp}")
+        _atelier.root("campaigns") / f"metal_first_light_{stamp}")
 
     import triton
     import triton_msl

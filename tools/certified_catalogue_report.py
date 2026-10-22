@@ -37,6 +37,7 @@ Usage:
 """
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import json
 import re
@@ -203,7 +204,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--campaigns", type=Path,
-                    default=Path("/home/mlops/nbx/campaigns"))
+                    default=_atelier.root("campaigns"))
     args = ap.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
 

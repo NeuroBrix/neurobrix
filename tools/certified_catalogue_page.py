@@ -9,6 +9,7 @@ hand-copied table is a table that goes stale silently.
 
 Usage:  python tools/certified_catalogue_page.py /path/to/out.html
 """
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import html
 import sys
 from pathlib import Path
@@ -18,9 +19,9 @@ import certified_catalogue_report as R
 
 OUT = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("volta_ledger.html")
 REPO = Path(__file__).resolve().parents[1]
-snap = REPO / "validation_outputs" / "certified_catalogue_2026_09_10" / "hub_snapshot.txt"
+snap = _atelier.root("campaigns") / "certified_catalogue_2026_09_10" / "hub_snapshot.txt"
 hub = R._hub(snap)
-cells = R._campaign_cells(Path("/home/mlops/nbx/campaigns"))
+cells = R._campaign_cells(_atelier.root("campaigns"))
 total, per_file = R._certified_totals()
 by_name = {n.lower(): c for n, c in cells.items()}
 for r in hub:

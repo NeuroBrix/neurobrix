@@ -12,12 +12,13 @@ keys, the certifier measures the configs itself).
 """
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import json
 import os
 from pathlib import Path
 
-MACHINE_CACHE = Path.home() / ".neurobrix" / "replay_cache"
+MACHINE_CACHE = _atelier.root("engine_home") / "replay_cache"
 CACHE_FILE = "autotune_configs_cuda-70.json"
 
 

@@ -33,6 +33,7 @@ CPU only: every probe runs with CUDA_VISIBLE_DEVICES='' and reads the shared cac
 """
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import ast
 import copy
@@ -57,10 +58,10 @@ sys.path.insert(0, str(TOOLS))
 import gate_scope_code as C                    # noqa: E402
 import gate_scope_index as GI                  # noqa: E402
 
-SCRATCH = Path(os.environ.get("NBX_GATE_SCOPE_SCRATCH", "/home/mlops/nbx/tmp/gate_scope"))
-PYTHON = os.environ.get("NEUROBRIX_PYTHON", "/home/mlops/venvs/nbx_t214/bin/python")
+SCRATCH = Path(os.environ.get("NBX_GATE_SCOPE_SCRATCH") or _atelier.tmp("gate_scope"))
+PYTHON = os.environ.get("NEUROBRIX_PYTHON", _atelier.python("engine"))
 CFG_PATH = TOOLS / "gate_scope.yml"
-CACHE = Path.home() / ".neurobrix" / ("ca" + "che")
+CACHE = _atelier.root("cache")
 MARK = "@@GATE_SCOPE_PROBE@@"
 DIMENSIONS = ("op", "dtype", "flow", "record", "mode", "planner")
 

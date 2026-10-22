@@ -53,6 +53,7 @@ the number (that is the whole finding), so a different card is not a defence.
 """
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import glob
 import json
@@ -235,7 +236,7 @@ def main() -> int:
                          "(e.g. the fix's commit time)")
     a = ap.parse_args()
 
-    logs = a.logs or sorted(set(glob.glob("validation_outputs/**/scheduler*.log",
+    logs = a.logs or sorted(set(glob.glob(str(_atelier.root("campaigns") / "**" / "scheduler*.log"),
                                           recursive=True)))
     if not logs:
         print("no scheduler log found — nothing to audit", file=sys.stderr)

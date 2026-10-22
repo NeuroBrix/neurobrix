@@ -47,6 +47,7 @@ is stated rather than averaged away.
 
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import datetime
 import hashlib
@@ -71,9 +72,9 @@ BASE_ENV = {"NBX_FORCE_RAND_SEED": "1234"}
 # results across runs on 2026-09-06 — so the tool clears them itself before
 # every process rather than trusting the shell that launched it, and records
 # in RESULTS.md that it did.
-_CACHE_DIRS = (Path.home() / ".cache" / "triton_msl",
-               Path.home() / ".triton" / "cache")
-_CACHE_GLOB = (Path.home() / ".neurobrix" / "replay_cache", "autotune_configs_*.json")
+_CACHE_DIRS = tuple(_p for _p in (_atelier.optional_root("triton_msl_cache"),
+               _atelier.root("triton_cache") / "cache") if _p)
+_CACHE_GLOB = (_atelier.root("engine_home") / "replay_cache", "autotune_configs_*.json")
 
 
 def clear_caches() -> list:

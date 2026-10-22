@@ -15,6 +15,10 @@ Usage:
 
 from __future__ import annotations
 
+import sys as _sys_atelier
+from pathlib import Path as _Path_atelier
+_sys_atelier.path.insert(0, str(_Path_atelier(__file__).resolve().parents[2] / "tools"))
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import json
 import os
@@ -29,10 +33,10 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
 
-VLLM_BIN = Path.home() / "bench_venvs" / "vllm073" / "bin"
-OLLAMA_MODELS = Path.home() / "bench_assets" / "ollama_models"
-GGUF = Path.home() / "bench_assets" / "gguf"
-SNAPSHOTS = Path.home() / "hf_snapshots"
+VLLM_BIN = _atelier.root("venvs") / "vllm073" / "bin"
+OLLAMA_MODELS = _atelier.root("bench_assets") / "ollama_models"
+GGUF = _atelier.root("bench_assets") / "gguf"
+SNAPSHOTS = _atelier.root("hf_snapshots")
 VLLM_PORT = 8077
 OLLAMA_PORT = 11435
 
@@ -340,7 +344,7 @@ def cell_neurobrix_media(row: dict, gpu: int, n: int, triton: bool,
     """
     import hashlib
     mclass = row["metric_class"]
-    media_dir = (REPO / "validation_outputs" /
+    media_dir = (_atelier.root("campaigns") /
                  f"bench_reference_{log_dir.name}" / row["id"])
     media_dir.mkdir(parents=True, exist_ok=True)
     ext = {"image": "png", "video": "mp4", "omni": "wav"}.get(mclass, "txt")
@@ -426,7 +430,7 @@ def cell_neurobrix(row: dict, gpu: int, n: int, triton: bool,
         # no on-disk artifact to inspect. Every request's answer text
         # is hashed into the JSON; request r0's full text (2000-char
         # R29 bound) lands in the media tree.
-        media_dir = (REPO / "validation_outputs" /
+        media_dir = (_atelier.root("campaigns") /
                      f"bench_reference_{log_dir.name}" / row["id"])
         media_dir.mkdir(parents=True, exist_ok=True)
         eng = ("triton" if triton else "pytorch") + (
@@ -486,7 +490,7 @@ def cell_neurobrix(row: dict, gpu: int, n: int, triton: bool,
         _stop_daemon(proc)
 
 
-DIFFUSERS_BIN = Path.home() / "bench_venvs" / "diffusers" / "bin"
+DIFFUSERS_BIN = _atelier.root("venvs") / "diffusers" / "bin"
 
 
 def cell_subprocess_venv(row: dict, gpu: int | None, n: int, script: str,
@@ -503,7 +507,7 @@ def cell_subprocess_venv(row: dict, gpu: int | None, n: int, script: str,
         raise FileNotFoundError(
             f"pinned venv python missing: {python_bin} — install per "
             f"benchmarks/config/backends.yml before running this column")
-    media_dir = (REPO / "validation_outputs" /
+    media_dir = (_atelier.root("campaigns") /
                  f"bench_reference_{log_dir.name}" / row["id"])
     media_dir.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, **_gpu_env(gpu), **(extra_env or {})}
@@ -529,13 +533,13 @@ def cell_diffusers(row: dict, gpu: int | None, n: int,
     # its own dated venv, recorded by the cell's pins block
     # (sana_video / diffusers036 is the first user — R16 2026-09-01).
     venv = row.get("diffusers_venv")
-    python_bin = (Path.home() / "bench_venvs" / venv / "bin" / "python"
+    python_bin = (_atelier.root("venvs") / venv / "bin" / "python"
                   if venv else DIFFUSERS_BIN / "python")
     return cell_subprocess_venv(
         row, gpu, n, "diffusers_cell.py", python_bin, log_dir)
 
 
-MINICPMO_BIN = Path.home() / "bench_venvs" / "minicpmo_vendor" / "bin"
+MINICPMO_BIN = _atelier.root("venvs") / "minicpmo_vendor" / "bin"
 
 
 def cell_vendor(row: dict, gpu: int | None, n: int,
@@ -558,9 +562,9 @@ def cell_vendor_upscaler(row: dict, gpu: int | None, n: int,
     # row's pinned venv (`upscaler_venv` — basicsr version conflicts
     # force per-stack venvs, S3 R16 synthesis). HF snapshots ride the
     # NAS per the S3 disk policy.
-    python_bin = (Path.home() / "bench_venvs" / row["upscaler_venv"]
+    python_bin = (_atelier.root("venvs") / row["upscaler_venv"]
                   / "bin" / "python")
-    nas = Path.home() / "hf_snapshots"
+    nas = _atelier.root("hf_snapshots")
     extra_env = {"HF_HOME": str(nas / "hf_home"),
                  "HUGGINGFACE_HUB_CACHE": str(nas / "hf_home" / "hub")}
     return cell_subprocess_venv(row, gpu, n, "upscaler_cell.py",

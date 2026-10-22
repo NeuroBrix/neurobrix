@@ -20,6 +20,7 @@ module and both expressions' values. Read-only over the graphs; no model is run.
 """
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import json
 import os
@@ -123,7 +124,7 @@ def scan_graph(graph: dict):
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--cache", default=os.path.expanduser("~/.neurobrix/ca" + "che"))
+    ap.add_argument("--cache", default=str(_atelier.root("cache")))
     ap.add_argument("--models", default=None)
     ap.add_argument("--json", default=None)
     a = ap.parse_args()
