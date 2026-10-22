@@ -221,6 +221,7 @@ For more information: https://neurobrix.es
                                                         'catalogue names): a re-certification takes the keys it needs first')
     certify_p.add_argument('--skip-proven-since', default=None, help='skip a key this card\'s class proved at or after '
                                                                    'this ISO time (UTC, like the proofs): resume a stopped sweep')
+    certify_p.add_argument('--skip-keys', default=None, help='a file of "<kernel qualname> <key repr>" lines: keys a resumed sweep has done')
     certify_p.add_argument('--limit', type=int, default=None, help='stop after this many shapes')
     certify_p.add_argument('--only-missing', action='store_true', help='skip shapes the directory already certifies')
     certify_p.add_argument('--working-set-mb', type=int, default=None,

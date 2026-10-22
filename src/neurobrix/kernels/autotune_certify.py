@@ -2065,7 +2065,8 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
             only_missing: bool = False, seed: int = 20260907, log=None,
             allow_off_protocol: bool = False, reprove_unclocked: bool = False,
             reprove_generator: bool = False, working_set_mb: Optional[int] = None,
-            models: Optional[List[str]] = None, skip_proven_since: Optional[str] = None) -> Dict[str, Any]:
+            models: Optional[List[str]] = None, skip_proven_since: Optional[str] = None,
+            skip_keys: Optional[str] = None) -> Dict[str, Any]:
     """Certify every census shape for `profile` on this machine; write the files.
 
     `working_set_mb`: the budget this run may hold — every key is priced by its phases before any
@@ -2140,7 +2141,8 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
     try:
         return _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, reprove_unclocked,
                              reprove_generator, certifying_device, certifying_class, budget_bytes,
-                             floor_bytes, rng, summary, log, writer, bench, skip_proven_since)
+                             floor_bytes, rng, summary, log, writer, bench, skip_proven_since,
+                             _read_skip_keys(skip_keys))
     finally:
         writer.flush_all()
 
@@ -2185,9 +2187,27 @@ class _BoundedWriter:
             self.flush(path)
 
 
+def _read_skip_keys(path: Optional[str]):
+    """{(kernel qualname, key repr)} from a file of `<qualname> <key repr>` lines — the keys a resumed sweep has done
+    (when a re-proof since has re-dated every entry, a date cannot tell them apart). None without a file; a missing file
+    is refused by name."""
+    if not path:
+        return None
+    p = Path(path)
+    if not p.exists():
+        raise RuntimeError(f"--skip-keys {path}: no such file")
+    out = set()
+    for line in p.read_text().splitlines():
+        line = line.strip()
+        if line:
+            qual, _, key = line.partition(" ")
+            out.add((qual, key))
+    return out
+
+
 def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, reprove_unclocked,
                   reprove_generator, certifying_device, certifying_class, budget_bytes, floor_bytes,
-                  rng, summary, log, writer, bench, skip_proven_since=None):
+                  rng, summary, log, writer, bench, skip_proven_since=None, skip_keys=None):
     done = 0
     attempts = 0
     for qual, keys in shapes.items():
@@ -2204,6 +2224,8 @@ def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, re
             path = C.file_for(vendor, profile, qual, dtype, root=root)
             entries = _file_entries(per_dtype, dtype, path)
             ktext = C.key_repr(key)
+            if skip_keys and (qual, ktext) in skip_keys:
+                continue                      # listed done by the caller (a resumed sweep: `--skip-keys`)
             if skip_proven_since is not None:
                 # resume a sweep: a key this card's class re-proved at or after the given time (ISO, UTC like the
                 # proofs) is done — a stopped re-sweep restarts where it was instead of from the first key
