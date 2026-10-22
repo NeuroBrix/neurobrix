@@ -56,7 +56,7 @@ CAMPAIGNS = [
     # numbers are comparable among themselves, not with a cell that had the rig.
     (_atelier.root("campaigns") / "2026_09_12_night_catalogue"),
 ]
-PY_BIN = _atelier.python("forge")
+PY_BIN = _atelier.interpreter("forge")
 
 #: What changed after the 2026-09-11 pass, each with the artefact that proves it.
 #: A line here OVERRIDES the pass's verdict and says why; nothing is edited into

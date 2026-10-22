@@ -103,3 +103,31 @@ def optional_root(role: str):
         return root(role)
     except AtelierUndeclared:
         return None
+
+
+class Interpreter(os.PathLike):
+    """The interpreter of environment `name`, resolved when it is USED (as a path, a string or an argv element), not
+    when a tool is imported: a machine without that environment (the Mac has no Forge python, by design) imports and
+    collects every tool, and only a run that needs the interpreter is refused, by name."""
+
+    def __init__(self, name: str):
+        self.name = name
+
+    def __fspath__(self) -> str:
+        return python(self.name)
+
+    def __str__(self) -> str:
+        return python(self.name)
+
+    def __repr__(self) -> str:
+        return f"Interpreter({self.name!r})"
+
+    def __add__(self, other):
+        return str(self) + other
+
+    def __radd__(self, other):
+        return other + str(self)
+
+
+def interpreter(name: str) -> Interpreter:
+    return Interpreter(name)
