@@ -161,21 +161,26 @@ def split_frozen(rows: list) -> tuple:
 
 def rungs_for(hardware: str) -> list:
     """Every rung of the commercial ladder up to the profile's card capacity (Hocine's tiling
-    standard, 2026-09-21): the tile is a function of the rung, so a census that runs at every
-    rung records every conv key family a user of this card model can meet, whatever the room
-    reads when they run; a change of the budget rule never asks for a new census."""
+    standard, 2026-09-21), the capacity itself when the ladder does not name it, then None — THE
+    PROFILE'S OWN BUDGET, the plan with no door: the tile is a function of the rung, so a census that
+    runs at every rung records every conv key family a user of this card model can meet, whatever the
+    room reads when they run; a change of the budget rule never asks for a new census.
+
+    The capacity: the Mac's M4 Pro (17.8 GB) plans above the ladder's 16 384 — CogVideoX-5b-I2V's
+    guidance is split at every ladder rung and not at the card's own, so the run asked addmm at
+    M=480 and the table held M=240 only (2026-10-14). None: a dedicated card with the whole of it
+    free plans at the budget Prism derives from the profile (`memory_budget.budget_mb`: its capacity
+    less the runtime's own context), which is under the nominal capacity the door would impose and
+    no rung of the ladder — Wan2.2-I2V-A14B on the 32 GB V100 at the gate's request kept its guidance
+    batch with the door at 32 768 MB (cross-attention softmax rows 393 216) where the card itself
+    splits it (196 608 rows), and the W1 replay missed that key (2026-10-22)."""
     from neurobrix.core.prism.loader import load_profile
     from neurobrix.core.prism.memory_budget import memory_ladder_mb
     cap = max(int(d.memory_mb) for d in load_profile(hardware).devices)
     rungs = [r for r in memory_ladder_mb() if r <= cap]
-    # THE PROFILE'S OWN RUNG: a run with the whole card free plans at the card's capacity, which the
-    # commercial ladder names only when the card is a commercial size. The Mac's M4 Pro (17.8 GB) plans
-    # above the ladder's 16384: CogVideoX-5b-I2V's guidance is split at every ladder rung and not at
-    # the card's own budget, so the run asked addmm at M=480 and the table held M=240 only
-    # (2026-10-14). The capacity is appended when the ladder does not reach it.
     if cap not in rungs:
         rungs.append(cap)
-    return rungs
+    return rungs + [None]
 
 
 def record_lines(path: Path) -> list:

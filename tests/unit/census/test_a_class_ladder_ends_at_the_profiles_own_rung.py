@@ -8,9 +8,13 @@ at every rung up to 16 384 and not at 18 227, so the run asked `addmm (480, 3072
 derived table held M=240 only (the Mac, 2026-10-14 06:18; reproduced on the CPU with its profile:
 the row at 18 227 is the run's key).
 
+And it ends at None, the plan with no door: the budget a dedicated card derives from its profile (capacity
+less the runtime's own context) is under the nominal capacity the door imposes — Wan2.2-I2V-A14B on the 32 GB V100
+splits its guidance there and not at 32 768 (2026-10-22).
+
 What this test does if the code is wrong: the M4 cell fails when the capacity is not appended
 (red before this change); the V100 cell fails if a commercial capacity were appended twice or the
-ladder below it changed.
+ladder below it changed; every cell fails without the closing None (seen red, 2026-10-22).
 
 Run: PYTHONPATH=src python -m pytest tests/unit/census/test_a_class_ladder_ends_at_the_profiles_own_rung.py
 """
@@ -34,11 +38,11 @@ def _profile(monkeypatch, memory_mb):
 
 def test_a_card_above_the_ladders_rung_gets_its_own_rung_last(monkeypatch):
     _profile(monkeypatch, 18227)
-    assert CC.rungs_for("auto-apple-m4-pro-18g") == [4096, 6144, 8192, 11264, 12288, 16384, 18227]
+    assert CC.rungs_for("auto-apple-m4-pro-18g") == [4096, 6144, 8192, 11264, 12288, 16384, 18227, None]
 
 
 def test_a_commercial_card_keeps_the_ladder_unchanged(monkeypatch):
     _profile(monkeypatch, 16384)
-    assert CC.rungs_for("v100-16g") == [4096, 6144, 8192, 11264, 12288, 16384]
+    assert CC.rungs_for("v100-16g") == [4096, 6144, 8192, 11264, 12288, 16384, None]
     _profile(monkeypatch, 32768)
-    assert CC.rungs_for("v100-32g") == [4096, 6144, 8192, 11264, 12288, 16384, 24576, 32768]
+    assert CC.rungs_for("v100-32g") == [4096, 6144, 8192, 11264, 12288, 16384, 24576, 32768, None]

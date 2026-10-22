@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **A model runs certified at the budget a card actually plans with** (census): the census's memory ladder ends with the profile's own budget (the plan with no imposed rung — a dedicated card's capacity less the runtime's context), not only at the card's nominal capacity, which no card holds; Wan2.2-I2V-A14B splits its guidance batch there, and its cross-attention softmax key was missing under `--certified-only`.
 - **A video model's stride-1 conv3d runs certified at any batch** (census, `kernels/launch_keys.conv_launches`): taps in place launch one conv2d per batch sample over that sample's frames, and the census now keys it at those frames, not at every sample's frames stacked; SANA-Video under classifier-free guidance missed its patch-embed key under `--certified-only`.
 - **A model whose attention uses `aten::_safe_softmax` runs certified** (census): its softmax key is derived like any softmax's; Ming-Lite-Omni's vision tower missed it under `--certified-only`.
 - **A conv3d's tap reaches the matrix-unit conv route on CUDA** (`kernels/wrappers.py` conv2d `out=`): the route computes into a contiguous buffer and copies it into the caller's strided view; it refused the view, and every CUDA video model whose conv3d runs its taps in place failed at its first convolution under Triton (Wan2.1-T2V, VACE, Wan2.1-I2V, Wan2.2-I2V, mochi, Open-Sora).
