@@ -685,6 +685,21 @@ def price_key(qual: str, tuner, key: tuple, unified: bool = True) -> Optional[Di
         deviation = kept + kept // 8 * (4 + 8)                             # the windows' readback and cast
         return {"draws": draws, "device": device, "oracle": oracle, "deviation": deviation,
                 "peak": draws + device + max(oracle, deviation)}
+    if ops["family"] == "attention":
+        # `_attention_oracle_fn`: per query-row window, q's rows, k and v whole and the window's scores in float64
+        # (scores, their exp and the quotient), the window's result kept (`RowWindowedOracle`); whole under the cap.
+        # Priced with the other families: without it a flash key read the conv geometry and every Apple flash
+        # certification failed on 'geometry' before its first launch (C3, Mac 2026-10-23).
+        q = next(shape for name, shape, _ in ops["inputs"] if name == "q")
+        k = next(shape for name, shape, _ in ops["inputs"] if name == "k")
+        bh, tq, hd, tk = q[0] * q[1], q[2], q[3], k[2]
+        wins = _row_windows(tq, hd, 2 * tk)
+        rows = tq if wins is None else wins[0][1] - wins[0][0]
+        kept = bh * tq * hd * 8
+        oracle = kept + bh * (rows * hd + 2 * tk * hd + 3 * rows * tk) * 8
+        deviation = kept + kept // 8 * (4 + 8)
+        return {"draws": draws, "device": device, "oracle": oracle, "deviation": deviation,
+                "peak": draws + device + max(oracle, deviation)}
     n, ci, h, w, co, oh, ow, ci_g, kh, kw, ph, pw = ops["geometry"]
     ew = sum(E(shape) for name, shape, _ in ops["inputs"] if name == "w")
     wins = _conv_windows(n, oh, ow, ci_g, co, kh, kw)
