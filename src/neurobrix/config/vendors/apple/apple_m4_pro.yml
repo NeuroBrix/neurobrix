@@ -584,8 +584,15 @@ tiling:
 # kernel on the device; through the wrapper, bf16 against float64, D 128 at 2048-4608 tokens is 4.3-5.2e-03
 # with the detour off and 3.2-3.9e-03 with it on. The detour sent D 128 to the math path at 0.62-0.68 TFLOP/s;
 # the flash kernel runs it at 2.65-3.17 (D 256: 0.94 -> 1.39).
+# Every head dim, MEASURED 2026-10-23 04:5x on this chip and stack (triton-ext b06cbb0d + i64, Triton 3.8): the 33-case
+# attention correctness oracle passes with this flag on (non-power-of-two dims 96, 127, 129, 160, 192, 255 then take the
+# flash in its power-of-two head-dim block, the extra columns masked to zero); at Allegro's head dim (96, bf16, 2 x 24
+# heads, 2048 tokens) the flash runs in 24.5 ms against 120.5 ms on the math route it took (4.9x), float64 error 5.7e-4
+# vs 4.6e-4, outputs 2e-3 apart (bf16). Above the 2 GiB scores bound the route was already the flash (4096 and 8192
+# tokens: identical outputs and times).
 flash:
   pow2_head_dim_correct: true
+  any_head_dim_correct: true
 
 # Convolution weight storage order (launch_keys.conv_weight_layout). KRSC: the loader writes every
 # 3x3-class conv weight channels-innermost, once, and the conv kernel reads it in place.
