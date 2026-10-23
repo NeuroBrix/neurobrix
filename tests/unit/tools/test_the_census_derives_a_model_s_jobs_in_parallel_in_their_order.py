@@ -151,3 +151,31 @@ def test_the_room_keeps_the_scheduler_s_headroom(monkeypatch, tmp_path):
     (tmp_path / "hold_c2").write_text(f"{os.getppid()} {133 << 30}\n")
     monkeypatch.setattr(DC, "HOLDS", tmp_path)
     assert DC._workers_memory_holds(100, 2 << 30) == 35
+    assert DC._workers_memory_holds(60, 2 << 30) == 48                        # rung 96 GiB / 2 GiB, under 119 GiB
+
+
+def test_the_census_writes_its_progress_end_and_failure(tmp_path, monkeypatch):
+    """Red line of work 2 (Hocine 2026-10-23): a census writes its progress to its record at most every 10 min, each
+    model written, its end and a failure. Red if a forced note is not written, a non-forced one is written inside the
+    interval, or the record is not the file named."""
+    rec = tmp_path / "RUN.md"
+    monkeypatch.setitem(DC._PROGRESS, "file", str(rec))
+    monkeypatch.setitem(DC._PROGRESS, "label", "nvidia/volta hw")
+    monkeypatch.setitem(DC._PROGRESS, "last", 0.0)
+    DC._note("m: 1/4 derivation(s)")                  # first: the interval since 0 has passed
+    DC._note("m: 2/4 derivation(s)")                  # inside the interval: not written
+    DC._note("m: 12 row(s) written (1/1 model(s))", force=True)
+    lines = rec.read_text().splitlines()
+    assert [l.split(" ", 3)[3].rsplit(" ", 3)[0] for l in lines] == ["m: 1/4 derivation(s)",
+                                                                     "m: 12 row(s) written (1/1 model(s))"], lines
+
+
+def test_a_fresh_worker_returns_its_result_and_raises_its_failure():
+    """The one-job worker is a process and a pipe, no pool (a pool replacing its worker from its handler thread hung a
+    forked child on the queue's lock). Red if the result or the failure does not cross."""
+    import multiprocessing as mp
+    import pytest
+    ctx = mp.get_context("fork")
+    assert DC._run_fresh(ctx, abs, -3) == 3
+    with pytest.raises(ZeroDivisionError):
+        DC._run_fresh(ctx, (lambda x: 1 // x), 0)
