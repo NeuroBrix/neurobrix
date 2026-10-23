@@ -178,6 +178,10 @@ _MAY_OMIT = {
         "caching-allocator settings at all; on ROCm expandable segments are vendor-gated per "
         "release and architecture (pytorch/pytorch#192814 unskips its tests only on ROCm 10.0+, "
         "pytorch/pytorch#184880), so CDNA declares it once a plan is proven under it",
+    "autotune.buckets.elements":
+        "optional by contract (kernels/autotune_bucket.ladder_for): the element-wise classes are a ladder MEASURED "
+        "per architecture (volta.yml's comment names the measurement); a profile that has not measured it keys "
+        "the element count on its own `default` ladder — more classes, each certified, none wrong",
 }
 _MAY_OMIT.update({f"matrix_unit.{k}": (
     "optional by contract (kernels/ops/_configs.matrix_unit): only an arch whose matrix unit Triton does "

@@ -457,10 +457,10 @@ def _bf16_to_fp16_inplace(ptr: int, numel: int, device_idx: int):
     dst = NBXTensor(ptr, flat, strides, NBXDtype.float16, 'cuda',
                     owns_data=False, device_idx=device_idx)
 
-    BLOCK = 1024
-    grid = (triton.cdiv(numel, BLOCK),)
     _set_device(src)
-    bf16_to_fp16_kernel[grid](src, dst, numel, BLOCK=BLOCK, num_warps=4)
+    from neurobrix.kernels.ops.elementwise_launch import ew_meta, ew_grid
+    m = ew_meta(numel)          # the certified tile of the count's class, as every element-wise launch
+    bf16_to_fp16_kernel[ew_grid(numel, m)](src, dst, numel, BLOCK=m['BLOCK_SIZE'], num_warps=m['num_warps'])
 
 
 def _load_to_pinned_cpu(

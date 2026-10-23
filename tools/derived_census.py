@@ -395,7 +395,27 @@ def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_
             unhandled[f"{KEYLESS}{kind}"] += 1
         for q_, key in launches:
             out.append((uid, q_, key))
+    out += _elementwise_rows(g, ops, shape, skip, only, LK)
     return out
+
+
+def _elementwise_rows(g, ops, shape, skip, only, LK) -> list:
+    """The element-wise classes this binding can launch (`launch_keys.elementwise_classes`): every class up to the
+    most elements one tensor of the derived ops holds — read on each op's inputs and outputs (activations, weights,
+    the values a flow reads after it), attributed to the op holding it."""
+    largest, at = 0, None
+    for uid in g["execution_order"]:
+        if uid in skip or (only is not None and uid not in only):
+            continue
+        o = ops[uid]
+        for tid in list(o.get("input_tensor_ids") or ()) + list(o.get("output_tensor_ids") or ()):
+            try:
+                n = _prod(shape(tid))
+            except (AnnotationContradiction, NegativeExtent):   # refused by name where its op is keyed; sizes none
+                continue
+            if n > largest:
+                largest, at = n, uid
+    return [(at, q_, key) for q_, key in LK.elementwise_classes(largest)] if at is not None else []
 
 
 def _cache_reads(ops: dict, decode_kv) -> dict:

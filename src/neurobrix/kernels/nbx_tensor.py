@@ -2738,13 +2738,21 @@ def _copy_nd(src: 'NBXTensor', dst: 'NBXTensor'):
     shape_buf = _upload_int64_array(shape, dst._device_idx)
     src_stride_buf = _upload_int64_array(sst, dst._device_idx)
     dst_stride_buf = _upload_int64_array(dst_st, dst._device_idx)
-    BLOCK = 1024
+    _m = _ew_meta(n)                 # the certified tile of the count's class (ops/elementwise_launch.py)
+    BLOCK = _m['BLOCK_SIZE']
     _set_device(dst)
     strided_copy_nd_kernel[(triton.cdiv(n, BLOCK),)](
         src, dst, n, shape_buf, src_stride_buf, dst_stride_buf,
-        BLOCK_SIZE=BLOCK, NDIM=ndim,
+        BLOCK_SIZE=BLOCK, num_warps=_m['num_warps'], NDIM=ndim,
         SATURATE_F16=_saturating_cast(src._dtype, dst._dtype),
         WIDE=_index_wide(n, _max_linear_offset(shape, sst), _max_linear_offset(shape, dst_st)))
+
+
+def _ew_meta(n: int) -> dict:
+    """An element-wise launch's certified tile and warps (`ops/elementwise_launch.ew_meta`), imported at use: that
+    module resolves through an autotuner that allocates its scratch here."""
+    from neurobrix.kernels.ops.elementwise_launch import ew_meta
+    return ew_meta(n)
 
 
 def _upload_int64_array(values, device_idx: int) -> 'NBXTensor':
@@ -2926,13 +2934,14 @@ def _strided_copy(src: 'NBXTensor', dst: 'NBXTensor'):
     shape_buf = _upload_index_array(src._shape, src._device_idx, _bound)
     stride_buf = _upload_index_array(src._strides, src._device_idx, _bound)
 
-    BLOCK = 1024
+    _m = _ew_meta(n)                 # the certified tile of the count's class (ops/elementwise_launch.py)
+    BLOCK = _m['BLOCK_SIZE']
     grid = (triton.cdiv(n, BLOCK),)
     _set_device(src)
     strided_copy_kernel[grid](
         src, dst, n,
         shape_buf, stride_buf,
-        BLOCK_SIZE=BLOCK,
+        BLOCK_SIZE=BLOCK, num_warps=_m['num_warps'],
         NDIM=ndim,
         WIDE=_index_wide(n, _bound),
     )
@@ -2963,13 +2972,14 @@ def _strided_scatter(src: 'NBXTensor', dst: 'NBXTensor'):
     shape_buf = _upload_index_array(dst._shape, dst._device_idx, _bound)
     stride_buf = _upload_index_array(dst._strides, dst._device_idx, _bound)
 
-    BLOCK = 1024
+    _m = _ew_meta(n)                 # the certified tile of the count's class (ops/elementwise_launch.py)
+    BLOCK = _m['BLOCK_SIZE']
     grid = (triton.cdiv(n, BLOCK),)
     _set_device(src)
     strided_scatter_kernel[grid](
         src, dst, n,
         shape_buf, stride_buf,
-        BLOCK_SIZE=BLOCK,
+        BLOCK_SIZE=BLOCK, num_warps=_m['num_warps'],
         NDIM=ndim,
         WIDE=_index_wide(n, _bound),
     )
@@ -2988,19 +2998,20 @@ def _fill_constant(t: 'NBXTensor', value) -> 'NBXTensor':
     from neurobrix.kernels.ops.fill_op import fill_kernel
 
     n = t._numel
-    BLOCK = 1024
+    _m = _ew_meta(n)                 # the certified tile of the count's class (ops/elementwise_launch.py)
+    BLOCK = _m['BLOCK_SIZE']
     if not t.is_contiguous():
         # Flat 1-D indexing assumes contiguous storage; on a strided view it
         # would write the wrong addresses. Fill a contiguous temp, then scatter
         # into the view's strided positions.
         tmp = NBXTensor.empty(t._shape, t._dtype, f"cuda:{t._device_idx}")
         _set_device(tmp)
-        fill_kernel[(triton.cdiv(n, BLOCK),)](tmp, value, n, BLOCK_SIZE=BLOCK)
+        fill_kernel[(triton.cdiv(n, BLOCK),)](tmp, value, n, BLOCK_SIZE=BLOCK, num_warps=_m['num_warps'])
         _strided_scatter(tmp, t)
         return t
     grid = (triton.cdiv(n, BLOCK),)
     _set_device(t)
-    fill_kernel[grid](t, value, n, BLOCK_SIZE=BLOCK)
+    fill_kernel[grid](t, value, n, BLOCK_SIZE=BLOCK, num_warps=_m['num_warps'])
     return t
 
 
@@ -4339,8 +4350,9 @@ class NBXTensor:
             import triton
             src = self.contiguous()
             _set_device(src)
-            copy_kernel[(triton.cdiv(n, 1024),)](src, new, n,
-                                                 BLOCK_SIZE=1024,
+            _m = _ew_meta(n)                     # the certified tile of the count's class (ops/elementwise_launch.py)
+            copy_kernel[(triton.cdiv(n, _m['BLOCK_SIZE']),)](src, new, n,
+                                                 BLOCK_SIZE=_m['BLOCK_SIZE'], num_warps=_m['num_warps'],
                                                  SATURATE_F16=_sat)
         return new
 
@@ -4485,7 +4497,8 @@ class NBXTensor:
                 max_total = max(totals)
                 if max_total == 0:
                     continue
-                BLOCK = 1024
+                _m = _ew_meta(max_total)                 # the certified tile of the count's class (ops/elementwise_launch.py)
+                BLOCK = _m['BLOCK_SIZE']
                 grid = (triton.cdiv(max_total, BLOCK), len(batch))
                 _set_device(out)
                 cat_copy_kernel_4[grid](
@@ -4495,7 +4508,7 @@ class NBXTensor:
                     dim_size_out, dim_prod_post,
                     offsets[0], offsets[1], offsets[2], offsets[3],
                     totals[0], totals[1], totals[2], totals[3],
-                    BLOCK_X=BLOCK,
+                    BLOCK_X=BLOCK, num_warps=_m['num_warps'],
                 )
                 dim_offset = off
 

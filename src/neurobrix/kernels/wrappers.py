@@ -306,8 +306,8 @@ from .ops.repeat_interleave import repeat_interleave_tensor_kernel
 _TL_DTYPE = {NBXDtype.float16: triton.language.float16, NBXDtype.bfloat16: triton.language.bfloat16,
              NBXDtype.float32: triton.language.float32, NBXDtype.float64: triton.language.float64}
 
-_EW_BLOCK = 1024
-_EW_WARPS = 4
+# An element-wise launch's tile and warps: its element count's class, certified (`ops/elementwise_launch.py`).
+from .ops.elementwise_launch import ew_meta as _ew_meta, ew_grid as _ew_grid
 
 
 # ---------------------------------------------------------------------------
@@ -443,8 +443,8 @@ def get_activations_fp16_safe() -> bool:
 
 
 def _1d_grid(n_elements):
-    """Grid for element-wise (memory-bound) kernels. Fixed BLOCK_SIZE=1024."""
-    return (triton.cdiv(n_elements, _EW_BLOCK),)
+    """Grid for element-wise (memory-bound) kernels, at the certified tile of the count's class (`_ew_meta`)."""
+    return _ew_grid(n_elements, _ew_meta(n_elements))
 
 
 def _batch_block(batch_dim, feat_dim):
@@ -780,7 +780,7 @@ def relu(x, out=None) :
     # see `OpLevelTilingEngine._detect_inplace_unary_candidates`.
     output = out if out is not None else NBXTensor.empty_like(x)
     _set_device(x)
-    relu_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    relu_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
 
@@ -795,7 +795,7 @@ def silu(x, out=None) :
     # see `OpLevelTilingEngine._detect_inplace_unary_candidates`.
     output = out if out is not None else NBXTensor.empty_like(x)
     _set_device(x)
-    silu_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    silu_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
 
@@ -812,7 +812,7 @@ def gelu(x, approximate: str = 'none', out=None) :
     _set_device(x)
     gelu_forward_kernel[_1d_grid(x.numel())](
         x, output, x.numel(), approximate=(approximate == 'tanh'),
-        BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        **_ew_meta(x.numel()))
     return output
 
 
@@ -820,7 +820,7 @@ def sigmoid_wrapper(x) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
-    sigmoid_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    sigmoid_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
 
@@ -828,7 +828,7 @@ def tanh_wrapper(x) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
-    tanh_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    tanh_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
 
@@ -836,7 +836,7 @@ def hardsigmoid(x) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
-    hardsigmoid_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    hardsigmoid_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
 
@@ -851,7 +851,7 @@ def hardswish(x, out=None) :
     # see `OpLevelTilingEngine._detect_inplace_unary_candidates`.
     output = out if out is not None else NBXTensor.empty_like(x)
     _set_device(x)
-    hardswish_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    hardswish_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
 
@@ -868,7 +868,7 @@ def leaky_relu(x, negative_slope: float = 0.01, out=None) :
     _set_device(x)
     leaky_relu_forward_kernel[_1d_grid(x.numel())](
         x, output, x.numel(), negative_slope,
-        BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        **_ew_meta(x.numel()))
     return output
 
 
@@ -883,7 +883,7 @@ def elu(x, alpha: float = 1.0, out=None) :
     # see `OpLevelTilingEngine._detect_inplace_unary_candidates`.
     output = out if out is not None else NBXTensor.empty_like(x)
     _set_device(x)
-    elu_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), alpha, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    elu_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), alpha, **_ew_meta(x.numel()))
     return output
 
 
@@ -898,7 +898,7 @@ def mish(x, out=None) :
     # see `OpLevelTilingEngine._detect_inplace_unary_candidates`.
     output = out if out is not None else NBXTensor.empty_like(x)
     _set_device(x)
-    mish_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    mish_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
 
@@ -906,7 +906,7 @@ def selu_wrapper(x) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
-    selu_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    selu_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
 
@@ -918,7 +918,7 @@ def neg(x) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
-    neg_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    neg_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
 
@@ -932,7 +932,7 @@ def exp(x) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
-    exp_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    exp_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
 
@@ -940,7 +940,7 @@ def sin(x) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
-    sin_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    sin_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
 
@@ -948,7 +948,7 @@ def cos(x) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
-    cos_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    cos_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
 
@@ -969,7 +969,7 @@ def rsqrt(x) :
     x = _promote_int_unary(x).contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
-    rsqrt_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    rsqrt_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
 
@@ -977,7 +977,7 @@ def sqrt_wrapper(x) :
     x = _promote_int_unary(x).contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
-    sqrt_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    sqrt_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
 
@@ -996,7 +996,7 @@ def abs_wrapper(x) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
-    abs_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    abs_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
 
@@ -1004,7 +1004,7 @@ def log_wrapper(x) :
     x = _promote_int_unary(x).contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
-    log_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    log_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
 
@@ -1012,7 +1012,7 @@ def reciprocal(x) :
     x = _promote_int_unary(x).contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
-    reciprocal_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    reciprocal_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
 
@@ -1039,7 +1039,7 @@ def pow_wrapper(x, exponent) :
         _int_exp = int(_e) if (_e == int(_e) and 1 <= abs(_e) <= 8) else 0
         pow_forward_kernel[_1d_grid(x.numel())](
             x, output, x.numel(), _e,
-            BLOCK_SIZE=_EW_BLOCK, INT_EXP=_int_exp, num_warps=_EW_WARPS)
+            **_ew_meta(x.numel()), INT_EXP=_int_exp)
         return output
     if (not x_is_t) and e_is_t:
         # scalar ** tensor = exp(exponent · ln(scalar))
@@ -1072,7 +1072,7 @@ def clamp(x, min_val=None, max_val=None) :
     clamp_forward_kernel[_1d_grid(x.numel())](
         x, output, x.numel(), _min, _max,
         has_min=(min_val is not None), has_max=(max_val is not None),
-        BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        **_ew_meta(x.numel()))
     return output
 
 
@@ -1080,7 +1080,7 @@ def erf(x) :
     x = _promote_int_unary(x).contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
-    erf_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    erf_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
 
@@ -1088,7 +1088,7 @@ def floor_wrapper(x):
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
-    floor_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    floor_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
 
@@ -1096,7 +1096,7 @@ def ceil_wrapper(x):
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
-    ceil_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    ceil_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
 
@@ -1202,7 +1202,7 @@ def _int_divide(a, b, floor):
     output = NBXTensor.empty_like(a)
     n = output.numel()
     if n:
-        int_div_kernel[_1d_grid(n)](a, b, output, n, FLOOR=floor, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        int_div_kernel[_1d_grid(n)](a, b, output, n, FLOOR=floor, **_ew_meta(n))
     return output
 
 
@@ -1232,7 +1232,7 @@ def round_wrapper(x):
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
-    round_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    round_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
 
@@ -1240,7 +1240,7 @@ def trunc_wrapper(x):
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
-    trunc_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    trunc_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
 
@@ -1248,7 +1248,7 @@ def copy_to(x, dtype: object) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x, dtype=dtype)
     _set_device(x)
-    copy_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    copy_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
 
@@ -1318,29 +1318,29 @@ def add(a, b, alpha: float = 1.0) :
         _set_device(a)
         add_bias_broadcast_kernel[_1d_grid(n)](
             a, b, output, n, feat_dim, alpha,
-            BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+            **_ew_meta(n))
         return output
 
     sc = _prepare_scalar_strided(a, b)
     if sc is not None:
         x, scalar, output, n, shp, x_st, ndim = sc
         add_scalar_strided_nd_kernel[_1d_grid(n)](x, output, n, float(scalar) * alpha, shp, x_st,
-                                                  BLOCK_SIZE=_EW_BLOCK, NDIM=ndim, num_warps=_EW_WARPS)
+                                                  **_ew_meta(n), NDIM=ndim)
         return output
     strided = _prepare_binary_strided(a, b)
     if strided[0] is not None:
         a, b, output, n, shp, a_st, b_st, ndim = strided
         add_strided_nd_kernel[_1d_grid(n)](a, b, output, n, alpha, shp, a_st, b_st,
-                                           BLOCK_SIZE=_EW_BLOCK, NDIM=ndim, num_warps=_EW_WARPS)
+                                           **_ew_meta(n), NDIM=ndim)
         return output
     _, a, b = strided
     a, b, output, n, dev_ctx, scalar = _prepare_binary(a, b)
     if scalar == "dev":
-        add_scalar_dev_kernel[_1d_grid(n)](a, b, output, n, float(alpha), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        add_scalar_dev_kernel[_1d_grid(n)](a, b, output, n, float(alpha), **_ew_meta(n))
     elif scalar:
-        add_scalar_kernel[_1d_grid(n)](a, output, n, float(b) * alpha, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        add_scalar_kernel[_1d_grid(n)](a, output, n, float(b) * alpha, **_ew_meta(n))
     else:
-        add_forward_kernel[_1d_grid(n)](a, b, output, n, alpha, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        add_forward_kernel[_1d_grid(n)](a, b, output, n, alpha, **_ew_meta(n))
     return output
 
 
@@ -1402,7 +1402,7 @@ def add_inplace_nbx(target, other, alpha: float = 1.0):
     _set_device(target)
     add_forward_kernel[_1d_grid(n)](
         target, other, target, n, alpha,
-        BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        **_ew_meta(n))
     return target
 
 
@@ -1465,23 +1465,23 @@ def mul(a, b) :
     if sc is not None:
         x, scalar, output, n, shp, x_st, ndim = sc
         mul_scalar_strided_nd_kernel[_1d_grid(n)](x, output, n, float(scalar), shp, x_st,
-                                                  BLOCK_SIZE=_EW_BLOCK, NDIM=ndim, num_warps=_EW_WARPS)
+                                                  **_ew_meta(n), NDIM=ndim)
         return output
     strided = _prepare_binary_strided(a, b)
     if strided[0] is not None:
         a, b, output, n, shp, a_st, b_st, ndim = strided
         mul_strided_nd_kernel[_1d_grid(n)](a, b, output, n, shp, a_st, b_st,
-                                           BLOCK_SIZE=_EW_BLOCK, NDIM=ndim, num_warps=_EW_WARPS)
+                                           **_ew_meta(n), NDIM=ndim)
         return output
     _, a, b = strided
     a, b, output, n, dev_ctx, scalar = _prepare_binary(a, b)
     if scalar == "dev":
-        mul_scalar_dev_kernel[_1d_grid(n)](a, b, output, n, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        mul_scalar_dev_kernel[_1d_grid(n)](a, b, output, n, **_ew_meta(n))
     elif scalar:
         # Contract: tensor is always `a`, scalar is always `b`
-        mul_scalar_kernel[_1d_grid(n)](a, output, n, float(b), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        mul_scalar_kernel[_1d_grid(n)](a, output, n, float(b), **_ew_meta(n))
     else:
-        mul_forward_kernel[_1d_grid(n)](a, b, output, n, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        mul_forward_kernel[_1d_grid(n)](a, b, output, n, **_ew_meta(n))
     return output
 
 
@@ -1514,16 +1514,16 @@ def div(a, b, rounding_mode=None) :
     if strided[0] is not None:
         a, b, output, n, shp, a_st, b_st, ndim = strided
         div_strided_nd_kernel[_1d_grid(n)](a, b, output, n, shp, a_st, b_st,
-                                           BLOCK_SIZE=_EW_BLOCK, NDIM=ndim, num_warps=_EW_WARPS)
+                                           **_ew_meta(n), NDIM=ndim)
         return output
     _, a, b = strided
     a, b, output, n, dev_ctx, scalar = _prepare_binary(a, b)
     if scalar == "dev":
-        div_scalar_dev_kernel[_1d_grid(n)](a, b, output, n, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        div_scalar_dev_kernel[_1d_grid(n)](a, b, output, n, **_ew_meta(n))
     elif scalar:
-        div_scalar_kernel[_1d_grid(n)](a, output, n, float(b), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        div_scalar_kernel[_1d_grid(n)](a, output, n, float(b), **_ew_meta(n))
     else:
-        div_forward_kernel[_1d_grid(n)](a, b, output, n, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        div_forward_kernel[_1d_grid(n)](a, b, output, n, **_ew_meta(n))
     return output
 
 
@@ -1534,16 +1534,16 @@ def sub(a, b, alpha: float = 1.0) :
     if strided[0] is not None:
         a, b, output, n, shp, a_st, b_st, ndim = strided
         sub_strided_nd_kernel[_1d_grid(n)](a, b, output, n, alpha, shp, a_st, b_st,
-                                           BLOCK_SIZE=_EW_BLOCK, NDIM=ndim, num_warps=_EW_WARPS)
+                                           **_ew_meta(n), NDIM=ndim)
         return output
     _, a, b = strided
     a, b, output, n, dev_ctx, scalar = _prepare_binary(a, b)
     if scalar == "dev":
-        add_scalar_dev_kernel[_1d_grid(n)](a, b, output, n, -float(alpha), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        add_scalar_dev_kernel[_1d_grid(n)](a, b, output, n, -float(alpha), **_ew_meta(n))
     elif scalar:
-        add_scalar_kernel[_1d_grid(n)](a, output, n, -float(b) * alpha, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        add_scalar_kernel[_1d_grid(n)](a, output, n, -float(b) * alpha, **_ew_meta(n))
     else:
-        sub_forward_kernel[_1d_grid(n)](a, b, output, n, alpha, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        sub_forward_kernel[_1d_grid(n)](a, b, output, n, alpha, **_ew_meta(n))
     return output
 
 
@@ -1551,7 +1551,7 @@ def rsub(a, b) :
     """Reverse subtraction: b - a."""
     a, _, _, n, dev_ctx, _ = _prepare_binary(a, a)  # just prepare a
     output = NBXTensor.empty_like(a)
-    rsub_forward_kernel[_1d_grid(n)](a, output, n, float(_to_scalar(b)), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    rsub_forward_kernel[_1d_grid(n)](a, output, n, float(_to_scalar(b)), **_ew_meta(n))
     return output
 
 
@@ -1566,7 +1566,7 @@ def where_wrapper(cond, x, y) :
         cond, x, y = cond.contiguous(), x.contiguous(), y.contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(cond)
-    where_forward_kernel[_1d_grid(x.numel())](cond, x, y, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    where_forward_kernel[_1d_grid(x.numel())](cond, x, y, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
 
@@ -1576,9 +1576,9 @@ def maximum_wrapper(a, b) :
         b, scalar = _to_scalar(b), True
     if scalar:
         # scalar maximum: clamp_min
-        clamp_min_forward_kernel[_1d_grid(n)](a, output, n, float(b), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        clamp_min_forward_kernel[_1d_grid(n)](a, output, n, float(b), **_ew_meta(n))
     else:
-        maximum_forward_kernel[_1d_grid(n)](a, b, output, n, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        maximum_forward_kernel[_1d_grid(n)](a, b, output, n, **_ew_meta(n))
     return output
 
 
@@ -1587,10 +1587,10 @@ def minimum_wrapper(a, b) :
     if scalar == "dev":  # off the timestep hot path: host extract, exact old behavior
         b, scalar = _to_scalar(b), True
     if not scalar:
-        minimum_forward_kernel[_1d_grid(n)](a, b, output, n, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        minimum_forward_kernel[_1d_grid(n)](a, b, output, n, **_ew_meta(n))
     else:
         # scalar minimum: clamp(max=b)
-        clamp_forward_kernel[_1d_grid(n)](a, output, n, 0.0, float(b), has_min=False, has_max=True, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        clamp_forward_kernel[_1d_grid(n)](a, output, n, 0.0, float(b), has_min=False, has_max=True, **_ew_meta(n))
     return output
 
 
@@ -1607,7 +1607,7 @@ def masked_fill(x, mask, value: float) :
     _set_device(x)
     masked_fill_forward_kernel[_1d_grid(x.numel())](
     x, mask, output, x.numel(), float(value),
-    BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    **_ew_meta(x.numel()))
     return output
 
 
@@ -1618,45 +1618,45 @@ def masked_fill(x, mask, value: float) :
 def gt(a, b) :
     a, b, output, n, dev_ctx, scalar = _prepare_comparison(a, b)
     if scalar:
-        gt_scalar_kernel[_1d_grid(n)](a, output, n, float(b), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        gt_scalar_kernel[_1d_grid(n)](a, output, n, float(b), **_ew_meta(n))
     else:
-        gt_forward_kernel[_1d_grid(n)](a, b, output, n, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        gt_forward_kernel[_1d_grid(n)](a, b, output, n, **_ew_meta(n))
     return output
 
 
 def ge(a, b) :
     a, b, output, n, dev_ctx, scalar = _prepare_comparison(a, b)
     if scalar:
-        ge_scalar_kernel[_1d_grid(n)](a, output, n, float(b), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        ge_scalar_kernel[_1d_grid(n)](a, output, n, float(b), **_ew_meta(n))
     else:
-        ge_forward_kernel[_1d_grid(n)](a, b, output, n, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        ge_forward_kernel[_1d_grid(n)](a, b, output, n, **_ew_meta(n))
     return output
 
 
 def lt(a, b) :
     a, b, output, n, dev_ctx, scalar = _prepare_comparison(a, b)
     if scalar:
-        lt_scalar_kernel[_1d_grid(n)](a, output, n, float(b), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        lt_scalar_kernel[_1d_grid(n)](a, output, n, float(b), **_ew_meta(n))
     else:
-        lt_forward_kernel[_1d_grid(n)](a, b, output, n, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        lt_forward_kernel[_1d_grid(n)](a, b, output, n, **_ew_meta(n))
     return output
 
 
 def eq(a, b) :
     a, b, output, n, dev_ctx, scalar = _prepare_comparison(a, b)
     if scalar:
-        eq_scalar_kernel[_1d_grid(n)](a, output, n, float(b), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        eq_scalar_kernel[_1d_grid(n)](a, output, n, float(b), **_ew_meta(n))
     else:
-        eq_forward_kernel[_1d_grid(n)](a, b, output, n, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        eq_forward_kernel[_1d_grid(n)](a, b, output, n, **_ew_meta(n))
     return output
 
 
 def ne(a, b) :
     a, b, output, n, dev_ctx, scalar = _prepare_comparison(a, b)
     if scalar:
-        ne_scalar_kernel[_1d_grid(n)](a, output, n, float(b), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        ne_scalar_kernel[_1d_grid(n)](a, output, n, float(b), **_ew_meta(n))
     else:
-        ne_forward_kernel[_1d_grid(n)](a, b, output, n, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        ne_forward_kernel[_1d_grid(n)](a, b, output, n, **_ew_meta(n))
     return output
 
 
@@ -3027,10 +3027,9 @@ def bf16_to_fp16_gpu(src: NBXTensor) -> NBXTensor:
     N = src.numel()
     dst = NBXTensor.empty(src._shape, NBXDtype.float16,
                           device=f"cuda:{src._device_idx}")
-    BLOCK = 1024
-    grid = (triton.cdiv(N, BLOCK),)
     _set_device(src)
-    bf16_to_fp16_kernel[grid](src, dst, N, BLOCK=BLOCK, num_warps=4)
+    _m = _ew_meta(N)
+    bf16_to_fp16_kernel[_ew_grid(N, _m)](src, dst, N, BLOCK=_m['BLOCK_SIZE'], num_warps=_m['num_warps'])
     return dst
 
 
@@ -3307,7 +3306,7 @@ def glu_wrapper(x, dim: int = -1, act_func: str = 'sigmoid') :
     _set_device(x1)
     glu_forward_kernel[_1d_grid(x1.numel())](
         x1, x2, output, x1.numel(), act_func,
-        BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        **_ew_meta(x1.numel()))
     return output
 
 
@@ -3318,9 +3317,9 @@ def glu_wrapper(x, dim: int = -1, act_func: str = 'sigmoid') :
 def le(a, b) :
     a, b, output, n, dev_ctx, scalar = _prepare_comparison(a, b)
     if scalar:
-        le_scalar_kernel[_1d_grid(n)](a, output, n, float(b), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        le_scalar_kernel[_1d_grid(n)](a, output, n, float(b), **_ew_meta(n))
     else:
-        le_forward_kernel[_1d_grid(n)](a, b, output, n, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        le_forward_kernel[_1d_grid(n)](a, b, output, n, **_ew_meta(n))
     return output
 
 
@@ -3330,7 +3329,7 @@ def softplus_wrapper(x, beta: float = 1.0, threshold: float = 20.0) :
     _set_device(x)
     softplus_forward_kernel[_1d_grid(x.numel())](
         x, output, x.numel(), beta, threshold,
-        BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        **_ew_meta(x.numel()))
     return output
 
 
@@ -3341,7 +3340,7 @@ def dropout_wrapper(x, p: float = 0.5, train: bool = False) :
         x = x.contiguous()
         output = NBXTensor.empty_like(x)
         _set_device(x)
-        dropout_inference_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        dropout_inference_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
         return output
     raise NotImplementedError("Training dropout with Triton RNG not implemented yet")
 
@@ -3353,9 +3352,9 @@ def remainder_wrapper(a, b) :
     if scalar == "dev":  # off the timestep hot path: host extract, exact old behavior
         b, scalar = _to_scalar(b), True
     if scalar:
-        remainder_scalar_kernel[_1d_grid(n)](a, output, n, float(b), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        remainder_scalar_kernel[_1d_grid(n)](a, output, n, float(b), **_ew_meta(n))
     else:
-        remainder_forward_kernel[_1d_grid(n)](a, b, output, n, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        remainder_forward_kernel[_1d_grid(n)](a, b, output, n, **_ew_meta(n))
     return output
 
 
@@ -3420,7 +3419,7 @@ def upsample_nearest2d_wrapper(
     output = NBXTensor.empty((N, C, OH, OW), device=x.device, dtype=x.dtype)
     total_threads = OH * OW
     grid = (
-        triton.cdiv(total_threads, _EW_BLOCK),
+        triton.cdiv(total_threads, _ew_meta(total_threads)['BLOCK_SIZE']),
         triton.cdiv(N * C, 4),
     )
     _set_device(output)
@@ -3428,7 +3427,7 @@ def upsample_nearest2d_wrapper(
     upsample_nearest2d_kernel[grid](
         output, x, N, C, OH, OW, IH, IW, s_n, s_c, s_h, s_w,
         reciprocal_scale_h, reciprocal_scale_w,
-        BLOCK_SIZE=_EW_BLOCK,
+        **_ew_meta(total_threads),
     )
     return output
 
@@ -3533,12 +3532,12 @@ def index_select_wrapper(x, dim: int, index) :
         total = outer * index_len * inner
         if total > 0:
             from .ops.index_select import index_select_mid_kernel
-            BLOCK = 1024
             _set_device(x)
-            index_select_mid_kernel[(triton.cdiv(total, BLOCK),)](
+            _m = _ew_meta(total)
+            index_select_mid_kernel[_ew_grid(total, _m)](
                 x, out, outer, N, inner, index, index_len,
                 *fault_channel(INDEX_SELECT_OOB, out),
-                BLOCK=BLOCK)
+                BLOCK=_m['BLOCK_SIZE'], num_warps=_m['num_warps'])
         return out
     x = x.contiguous()
     N = inp_shape[dim]
@@ -4063,8 +4062,9 @@ def _conv_bias_inplace(output, bias):
     hw = int(output.shape[-2]) * int(output.shape[-1])
     c = int(output.shape[1])
     _set_device(output)
-    conv2d_bias_inplace_kernel[((n + 1023) // 1024,)](
-        output, bias_c.contiguous(), n, hw, c, BLOCK=1024, num_warps=4)
+    _m = _ew_meta(n)
+    conv2d_bias_inplace_kernel[_ew_grid(n, _m)](
+        output, bias_c.contiguous(), n, hw, c, BLOCK=_m['BLOCK_SIZE'], num_warps=_m['num_warps'])
     return output
 
 
@@ -4553,7 +4553,7 @@ def exp2_wrapper(x) :
     x = _promote_int_unary(x).contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
-    exp2_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    exp2_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
 
@@ -4561,7 +4561,7 @@ def tan_wrapper(x) :
     x = _promote_int_unary(x).contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
-    tan_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    tan_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
 
@@ -4569,7 +4569,7 @@ def celu_wrapper(x, alpha: float = 1.0) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
-    celu_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), alpha, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    celu_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), alpha, **_ew_meta(x.numel()))
     return output
 
 
@@ -4577,7 +4577,7 @@ def log_sigmoid_wrapper(x) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
-    log_sigmoid_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    log_sigmoid_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
 
@@ -4585,7 +4585,7 @@ def isfinite_wrapper(x) :
     x = x.contiguous()
     output = NBXTensor.empty(x.shape, dtype=NBXDtype.bool_, device=x.device)
     _set_device(x)
-    isfinite_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    isfinite_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
 
@@ -4593,7 +4593,7 @@ def isinf_wrapper(x) :
     x = x.contiguous()
     output = NBXTensor.empty(x.shape, dtype=NBXDtype.bool_, device=x.device)
     _set_device(x)
-    isinf_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    isinf_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
 
@@ -4601,7 +4601,7 @@ def isnan_wrapper(x) :
     x = x.contiguous()
     output = NBXTensor.empty(x.shape, dtype=NBXDtype.bool_, device=x.device)
     _set_device(x)
-    isnan_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    isnan_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
 
@@ -4613,7 +4613,7 @@ def nan_to_num_wrapper(x, nan: float = 0.0,
     _set_device(x)
     nan_to_num_forward_kernel[_1d_grid(x.numel())](
         x, output, x.numel(), nan, posinf, neginf,
-        BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        **_ew_meta(x.numel()))
     return output
 
 
@@ -4623,7 +4623,7 @@ def threshold_wrapper(x, threshold: float, value: float) :
     _set_device(x)
     threshold_forward_kernel[_1d_grid(x.numel())](
         x, output, x.numel(), threshold, value,
-        BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        **_ew_meta(x.numel()))
     return output
 
 
@@ -4643,7 +4643,7 @@ def addcdiv_wrapper(input, tensor1,
     _set_device(input)
     addcdiv_forward_kernel[_1d_grid(input.numel())](
         input, tensor1, tensor2, output, input.numel(), value,
-        BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        **_ew_meta(input.numel()))
     return output
 
 
@@ -4655,7 +4655,7 @@ def addcmul_wrapper(input, tensor1,
     _set_device(input)
     addcmul_forward_kernel[_1d_grid(input.numel())](
         input, tensor1, tensor2, output, input.numel(), value,
-        BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        **_ew_meta(input.numel()))
     return output
 
 
@@ -4761,7 +4761,7 @@ def bitwise_and_wrapper(a, b) :
         # kernel, reading a.numel() elements past its 1-element allocation
         # (out-of-bounds, undefined values).
         b = NBXTensor.empty_like(a).fill_(b)
-    bitwise_and_forward_kernel[_1d_grid(n)](a, b, output, n, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    bitwise_and_forward_kernel[_1d_grid(n)](a, b, output, n, **_ew_meta(n))
     return output
 
 
@@ -4773,7 +4773,7 @@ def bitwise_or_wrapper(a, b) :
     if scalar:
         # Scalar operand: materialize (see bitwise_and_wrapper).
         b = NBXTensor.empty_like(a).fill_(b)
-    bitwise_or_forward_kernel[_1d_grid(n)](a, b, output, n, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    bitwise_or_forward_kernel[_1d_grid(n)](a, b, output, n, **_ew_meta(n))
     return output
 
 
@@ -4789,7 +4789,7 @@ def bitwise_not_wrapper(x) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
-    bitwise_not_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    bitwise_not_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
 
@@ -4805,7 +4805,7 @@ def logical_and_wrapper(a, b) :
     if scalar:
         # Scalar operand: materialize (see bitwise_and_wrapper).
         b = NBXTensor.empty_like(a).fill_(b)
-    logical_and_forward_kernel[_1d_grid(n)](a, b, output, n, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    logical_and_forward_kernel[_1d_grid(n)](a, b, output, n, **_ew_meta(n))
     return output
 
 
@@ -4815,7 +4815,7 @@ def logical_or_wrapper(a, b) :
     if scalar:
         # Scalar operand: materialize (see bitwise_and_wrapper).
         b = NBXTensor.empty_like(a).fill_(b)
-    logical_or_forward_kernel[_1d_grid(n)](a, b, output, n, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    logical_or_forward_kernel[_1d_grid(n)](a, b, output, n, **_ew_meta(n))
     return output
 
 
@@ -4823,7 +4823,7 @@ def logical_not_wrapper(x) :
     x = x.contiguous()
     output = NBXTensor.empty(x.shape, dtype=NBXDtype.bool_, device=x.device)
     _set_device(x)
-    logical_not_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    logical_not_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
 
@@ -4882,17 +4882,17 @@ def lerp_wrapper(input, end, weight) :
         _set_device(input)
         lerp_tensor_forward_kernel[_1d_grid(input.numel())](
             input, end, weight, output, input.numel(),
-            BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+            **_ew_meta(input.numel()))
     elif abs(weight) < 0.5:
         _set_device(input)
         lerp_scalar_head_kernel[_1d_grid(input.numel())](
             input, end, output, input.numel(), float(weight),
-            BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+            **_ew_meta(input.numel()))
     else:
         _set_device(input)
         lerp_scalar_tail_kernel[_1d_grid(input.numel())](
             input, end, output, input.numel(), float(weight),
-            BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+            **_ew_meta(input.numel()))
     return output
 
 
@@ -5027,7 +5027,7 @@ def flip_wrapper(x, dims) :
             _set_device(result)
             flip_1d_kernel[_1d_grid(result.numel())](
                 result, output, result.numel(),
-                BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+                **_ew_meta(result.numel()))
             result = output
         else:
             output = NBXTensor.empty_like(result)
@@ -5037,12 +5037,12 @@ def flip_wrapper(x, dims) :
             stride_dim = 1
             for i in range(dim + 1, result.ndim):
                 stride_dim *= result.shape[i]
-            grid = (triton.cdiv(n_elements, _EW_BLOCK),)
+            grid = _1d_grid(n_elements)
             _set_device(result)
             flip_strided_kernel[grid](
                 result, output, n_elements,
                 dim_size, stride_dim, stride_dim,
-                BLOCK_SIZE=_EW_BLOCK)
+                **_ew_meta(n_elements))
             result = output
     return result
 
@@ -5291,7 +5291,7 @@ def mse_loss_wrapper(input, target,
         _set_device(input)
         mse_loss_none_kernel[_1d_grid(input.numel())](
             input, target, output, input.numel(),
-            BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+            **_ew_meta(input.numel()))
         return output
 
     M = input.numel()
@@ -5564,7 +5564,7 @@ def gather_wrapper(input, dim: int, index) :
         inp_stride_outer, inp_stride_inner,
         out_stride_outer, out_stride_dim, out_stride_inner,
         outer_size, dim_size, inner_size,
-        BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS,
+        **_ew_meta(N),
     )
     return out
 
@@ -5657,7 +5657,7 @@ def scatter_wrapper(input, dim: int, index,
         index.stride(0) if dim > 0 else 0, index.stride(dim), index.stride(-1) if dim < index.ndim - 1 else 0,
         out.stride(0) if dim > 0 else 0, out.stride(-1) if dim < out.ndim - 1 else 0,
         outer_size, dim_size, inner_size,
-        BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS,
+        **_ew_meta(N),
     )
     return out
 
@@ -5690,7 +5690,7 @@ def scatter_add_wrapper(input, dim: int, index,
         index.stride(0) if dim > 0 else 0, index.stride(dim), index.stride(-1) if dim < index.ndim - 1 else 0,
         out.stride(0) if dim > 0 else 0, out.stride(-1) if dim < out.ndim - 1 else 0,
         outer_size, dim_size, inner_size,
-        BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS,
+        **_ew_meta(N),
     )
     return out
 
@@ -5740,11 +5740,11 @@ def scatter_reduce_wrapper(input, dim: int, index,
 
     _set_device(out)
     if reduce == "sum" or reduce == "add":
-        scatter_add_kernel[_1d_grid(N)](*stride_args, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        scatter_add_kernel[_1d_grid(N)](*stride_args, **_ew_meta(N))
     elif reduce == "amax":
-        scatter_reduce_amax_kernel[_1d_grid(N)](*stride_args, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        scatter_reduce_amax_kernel[_1d_grid(N)](*stride_args, **_ew_meta(N))
     elif reduce == "amin":
-        scatter_reduce_amin_kernel[_1d_grid(N)](*stride_args, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        scatter_reduce_amin_kernel[_1d_grid(N)](*stride_args, **_ew_meta(N))
     else:
         raise RuntimeError(f"[--triton] scatter_reduce mode '{reduce}' not implemented")
 
@@ -5785,14 +5785,15 @@ def index_add_wrapper(x, dim: int, index,
     # (outer, dest, inner-tile) output cell, ascending-j sequential
     # fp32 fold, zero atomics, no sort dependency. See
     # ops/index_add.py for the rationale and state-of-the-art notes.
-    n_inner_tiles = (inner_size + _EW_BLOCK - 1) // _EW_BLOCK
+    _inner = _ew_meta(inner_size)
+    n_inner_tiles = (inner_size + _inner['BLOCK_SIZE'] - 1) // _inner['BLOCK_SIZE']
     grid = (outer_size * inp_shape_dim * n_inner_tiles,)
     _set_device(x)
     index_add_gather_kernel[grid](
         x, source, index, out,
         dim_size, inp_shape_dim, inner_size, alpha,
         src_stride_outer, src_stride_dim, src_stride_inner,
-        INNER_BLOCK=_EW_BLOCK, num_warps=_EW_WARPS,
+        INNER_BLOCK=_inner['BLOCK_SIZE'], num_warps=_inner['num_warps'],
     )
     return out
 
@@ -5971,7 +5972,7 @@ def index_put_wrapper(x, indices, values, accumulate: bool = False):
         *fault_channel(INDEX_PUT_OOB, out),
         VAL_SCALAR=val_scalar,
         ACCUMULATE=bool(accumulate),
-        BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS,
+        **_ew_meta(N),
     )
     return out
 
@@ -6278,11 +6279,10 @@ def sort_wrapper(x, dim: int = -1,
     arr_in = x.contiguous().clone()
     indices_in = NBXTensor.empty((m, n), dtype=NBXDtype.int64,
                                  device=x.device)
-    _IDX_BLOCK = 1024
     _set_device(indices_in)
     for b in range(m):
-        arange_kernel[(triton.cdiv(n, _IDX_BLOCK),)](
-            indices_in[b], 0, 1, n, BLOCK_SIZE=_IDX_BLOCK)
+        arange_kernel[_1d_grid(n)](
+            indices_in[b], 0, 1, n, **_ew_meta(n))
     arr_out = NBXTensor.empty_like(arr_in)
     indices_out = NBXTensor.empty_like(indices_in)
 
@@ -6351,13 +6351,13 @@ def pixel_shuffle_wrapper(x, upscale_factor: int) :
     x = x.contiguous()
     output = NBXTensor.empty((N, C_out, OH, OW), device=x.device, dtype=x.dtype)
     total = N * C_out * OH * OW
-    grid = (triton.cdiv(total, _EW_BLOCK),)
+    grid = _1d_grid(total)
     _set_device(x)
     pixel_shuffle_kernel[grid](
         x, output, total,
         C_out, H, W, r, OH, OW,
         *x.stride(), *output.stride(),
-        BLOCK_SIZE=_EW_BLOCK)
+        **_ew_meta(total))
     return output
 
 
@@ -6403,13 +6403,13 @@ def _pixel_shuffle_broadcast_aware(proxy, upscale_factor: int):
     output = NBXTensor.empty((N, C_out, OH, OW),
                              device=view.device, dtype=view.dtype)
     total = N * C_out * OH * OW
-    grid = (triton.cdiv(total, _EW_BLOCK),)
+    grid = _1d_grid(total)
     _set_device(view)
     pixel_shuffle_broadcast_aware_kernel[grid](
         view, output, total,
         C_out, OH, OW, r, bcast,
         *view.stride(), *output.stride(),
-        BLOCK_SIZE=_EW_BLOCK)
+        **_ew_meta(total))
     return output
 
 
@@ -6422,13 +6422,13 @@ def pixel_unshuffle_wrapper(x, downscale_factor: int) :
     x = x.contiguous()
     output = NBXTensor.empty((N, C_out, OH, OW), device=x.device, dtype=x.dtype)
     total = N * C_out * OH * OW
-    grid = (triton.cdiv(total, _EW_BLOCK),)
+    grid = _1d_grid(total)
     _set_device(x)
     pixel_unshuffle_kernel[grid](
         x, output, total,
         C, IH, IW, r, C_out, OH, OW,
         *x.stride(), *output.stride(),
-        BLOCK_SIZE=_EW_BLOCK)
+        **_ew_meta(total))
     return output
 
 
@@ -6478,14 +6478,14 @@ def adaptive_avg_pool2d_wrapper(x, output_size) :
         OH, OW = output_size
     output = NBXTensor.empty((N, C, OH, OW), device=x.device, dtype=x.dtype)
     total = N * C * OH * OW
-    grid = (triton.cdiv(total, _EW_BLOCK),)
+    grid = _1d_grid(total)
     x_c = x.contiguous()
     _set_device(x_c)
     adaptive_avg_pool2d_kernel[grid](
         x_c, output, total,
         IH, IW, OH, OW,
         *x_c.stride(),
-        BLOCK_SIZE=_EW_BLOCK)
+        **_ew_meta(total))
     return output
 
 
@@ -6526,7 +6526,7 @@ def logical_xor_wrapper(a, b) :
     a, b, output, n, dev_ctx, scalar = _prepare_comparison(a, b)
     if scalar:
         b = NBXTensor.empty_like(a).fill_(b)
-    logical_xor_kernel[_1d_grid(n)](a, b, output, n, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    logical_xor_kernel[_1d_grid(n)](a, b, output, n, **_ew_meta(n))
     return output
 
 
@@ -6536,11 +6536,11 @@ def bitwise_left_shift_wrapper(a, b) :
     if isinstance(b, NBXTensor):
         b = b.contiguous()
         _set_device(a)
-        bitwise_left_shift_kernel[_1d_grid(a.numel())](a, b, output, a.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        bitwise_left_shift_kernel[_1d_grid(a.numel())](a, b, output, a.numel(), **_ew_meta(a.numel()))
     else:
         from .ops.bitwise_left_shift import bitwise_left_shift_scalar_kernel
         _set_device(a)
-        bitwise_left_shift_scalar_kernel[_1d_grid(a.numel())](a, output, a.numel(), int(b), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        bitwise_left_shift_scalar_kernel[_1d_grid(a.numel())](a, output, a.numel(), int(b), **_ew_meta(a.numel()))
     return output
 
 
@@ -6550,11 +6550,11 @@ def bitwise_right_shift_wrapper(a, b) :
     if isinstance(b, NBXTensor):
         b = b.contiguous()
         _set_device(a)
-        bitwise_right_shift_kernel[_1d_grid(a.numel())](a, b, output, a.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        bitwise_right_shift_kernel[_1d_grid(a.numel())](a, b, output, a.numel(), **_ew_meta(a.numel()))
     else:
         from .ops.bitwise_right_shift import bitwise_right_shift_scalar_kernel
         _set_device(a)
-        bitwise_right_shift_scalar_kernel[_1d_grid(a.numel())](a, output, a.numel(), int(b), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        bitwise_right_shift_scalar_kernel[_1d_grid(a.numel())](a, output, a.numel(), int(b), **_ew_meta(a.numel()))
     return output
 
 
@@ -6644,7 +6644,7 @@ def clamp_min_wrapper(x, min_val) :
     if isinstance(min_val, NBXTensor):
         min_val = min_val.item()
     _set_device(x)
-    clamp_min_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), float(min_val), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    clamp_min_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), float(min_val), **_ew_meta(x.numel()))
     return output
 
 
@@ -6801,14 +6801,14 @@ def upsample_nearest3d_wrapper(
     output = NBXTensor.empty((N, C, OD, OH, OW), device=x.device, dtype=x.dtype)
     total_threads = OD * OH * OW
     grid = (
-        triton.cdiv(total_threads, _EW_BLOCK),
+        triton.cdiv(total_threads, _ew_meta(total_threads)['BLOCK_SIZE']),
         triton.cdiv(N * C, 4),
     )
     _set_device(output)
     upsample_nearest3d_kernel[grid](
         output, x, N, C, OD, OH, OW, ID, IH, IW,
         reciprocal_scale_d, reciprocal_scale_h, reciprocal_scale_w,
-        BLOCK_SIZE=_EW_BLOCK,
+        **_ew_meta(total_threads),
     )
     return output
 
@@ -6998,7 +6998,7 @@ def rand_wrapper(*args, **kwargs) :
         return output
     seed = _draw_seed()
     _set_device(output)
-    rand_kernel[_1d_grid(n)](output, n, seed, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    rand_kernel[_1d_grid(n)](output, n, seed, **_ew_meta(n))
     return output
 
 
@@ -7021,7 +7021,7 @@ def randn_wrapper(*args, **kwargs) :
         return output
     seed = _draw_seed()
     _set_device(output)
-    randn_kernel[_1d_grid(n)](output, n, seed, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    randn_kernel[_1d_grid(n)](output, n, seed, **_ew_meta(n))
     return output
 
 
@@ -7039,7 +7039,7 @@ def rand_like_wrapper(x, **kwargs) :
         return output
     seed = _draw_seed()
     _set_device(output)
-    rand_kernel[_1d_grid(n)](output, n, seed, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    rand_kernel[_1d_grid(n)](output, n, seed, **_ew_meta(n))
     return output
 
 
@@ -7060,7 +7060,7 @@ def randn_like_wrapper(x, **kwargs) :
         return output
     seed = _draw_seed()
     _set_device(output)
-    randn_kernel[_1d_grid(n)](output, n, seed, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    randn_kernel[_1d_grid(n)](output, n, seed, **_ew_meta(n))
     return output
 
 
@@ -7087,7 +7087,7 @@ def normal_wrapper(*args, **kwargs) :
             return output
         seed = _draw_seed()
         _set_device(output)
-        randn_kernel[_1d_grid(n)](output, n, seed, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        randn_kernel[_1d_grid(n)](output, n, seed, **_ew_meta(n))
     # Transform N(0,1) → N(mean, std)
     if std != 1.0:
         output.mul_(std)
@@ -7105,7 +7105,7 @@ def uniform_wrapper(x, low: float = 0.0, high: float = 1.0,
     if n == 0:
         return x
     seed = _draw_seed()
-    rand_kernel[_1d_grid(n)](x, n, seed, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    rand_kernel[_1d_grid(n)](x, n, seed, **_ew_meta(n))
     # Transform [0,1) → [low, high)
     if high - low != 1.0:
         x.mul_(high - low)
@@ -7125,7 +7125,7 @@ def bernoulli_wrapper(x, p: float = 0.5, **kwargs) :
     if n == 0:
         return output
     seed = _draw_seed()
-    rand_kernel[_1d_grid(n)](temp, n, seed, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    rand_kernel[_1d_grid(n)](temp, n, seed, **_ew_meta(n))
     # Compare with probability: if rand < p → 1.0, else → 0.0
     # If x is the probability tensor, compare temp < x
     if x.is_floating_point():
@@ -7161,7 +7161,7 @@ def multinomial_wrapper(x, num_samples: int,
         gumbel = NBXTensor.empty_like(probs)
         n = gumbel.numel()
         seed = _draw_seed()
-        rand_kernel[_1d_grid(n)](gumbel, n, seed, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        rand_kernel[_1d_grid(n)](gumbel, n, seed, **_ew_meta(n))
         gumbel = clamp(gumbel, min_val=1e-10)
         gumbel = neg(log_wrapper(neg(log_wrapper(gumbel))))
         log_probs = clamp(log_wrapper(probs), min_val=-1e30)
@@ -7174,7 +7174,7 @@ def multinomial_wrapper(x, num_samples: int,
             gumbel = NBXTensor.empty_like(probs)
             n = gumbel.numel()
             seed = _draw_seed()
-            rand_kernel[_1d_grid(n)](gumbel, n, seed, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+            rand_kernel[_1d_grid(n)](gumbel, n, seed, **_ew_meta(n))
             gumbel = clamp(gumbel, min_val=1e-10)
             gumbel = neg(log_wrapper(neg(log_wrapper(gumbel))))
             log_probs = clamp(log_wrapper(probs), min_val=-1e30)
@@ -7242,7 +7242,7 @@ def constant_pad_nd_wrapper(x, pad_list, value: float = 0.0) :
             output.stride(-2), output.stride(-1),
             pad_before[-1], pad_before[-2],
             float(value),
-            BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS, WIDE=_wide,
+            **_ew_meta(total), WIDE=_wide,
         )
     elif pad_len == 2:
         batch_size = 1
@@ -7255,7 +7255,7 @@ def constant_pad_nd_wrapper(x, pad_list, value: float = 0.0) :
             in_size, out_size, batch_size,
             pad_before[-1],
             float(value),
-            BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS, WIDE=_wide,
+            **_ew_meta(total), WIDE=_wide,
         )
     else:
         # General N-D constant pad in ONE pass (any dims, a middle temporal dim of a 5-D [B,C,T,H,W] causal pad
@@ -7270,7 +7270,7 @@ def constant_pad_nd_wrapper(x, pad_list, value: float = 0.0) :
             x, output, total,
             *dims_in, *dims_out, *strides, *before,
             float(value),
-            BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS, WIDE=_wide,
+            **_ew_meta(total), WIDE=_wide,
         )
 
     return output
@@ -9134,7 +9134,7 @@ def angle_wrapper(x) :
                               device=real.device)
         _set_device(real)
         n = real.numel()
-        atan2_kernel[_1d_grid(n)](imag, real, out, n, BLOCK_SIZE=_EW_BLOCK)
+        atan2_kernel[_1d_grid(n)](imag, real, out, n, **_ew_meta(n))
         return out
     else:
         # Real input: angle is 0 where x >= 0, pi where x < 0. Not on the
@@ -9214,15 +9214,15 @@ def _triton_fft_rows(x_real, x_imag, inverse: bool) -> tuple:
     total = rows * N
     _set_device(xr)
     bit_reverse_rows_kernel[_1d_grid(total)](xr, xi, out_real, out_imag, N, total, log2n,
-                                             BLOCK_SIZE=_EW_BLOCK)
+                                             **_ew_meta(total))
     pairs = rows * (N // 2)
     for stage in range(1, log2n + 1):
         fft_stage_rows_kernel[_1d_grid(pairs)](out_real, out_imag, N, pairs, stage,
-                                               INVERSE=inverse, BLOCK_SIZE=_EW_BLOCK)
+                                               INVERSE=inverse, **_ew_meta(pairs))
     if inverse:
         # 1/N through the house scale kernel (an NBXTensor has no torch-style in-place
         # multiply — found by the 2026-09-05 bit gate).
-        scale_kernel[_1d_grid(total)](out_real, out_imag, total, 1.0 / N, BLOCK_SIZE=_EW_BLOCK)
+        scale_kernel[_1d_grid(total)](out_real, out_imag, total, 1.0 / N, **_ew_meta(total))
     return out_real.reshape(orig_shape), out_imag.reshape(orig_shape)
 
 
@@ -9246,7 +9246,7 @@ def _dft_rfft_matrices(N, N_bins, ref):
     nsin_mat = NBXTensor.empty((N_bins, N), dtype=NBXDtype.float32, device=ref.device)
     total = N_bins * N
     dft_rfft_matrix_kernel[_1d_grid(total)](
-        cos_mat, nsin_mat, N_bins, N, 2.0 * math.pi / N, BLOCK_SIZE=_EW_BLOCK)
+        cos_mat, nsin_mat, N_bins, N, 2.0 * math.pi / N, **_ew_meta(total))
     return cos_mat, nsin_mat
 
 
@@ -9260,7 +9260,7 @@ def _idft_c2r_matrices(N, N_bins, ref):
     total = N_bins * N
     idft_c2r_matrix_kernel[_1d_grid(total)](
         C, S, N_bins, N, 2.0 * math.pi / N, 1.0 / N,
-        1 if (N % 2 == 0) else 0, BLOCK_SIZE=_EW_BLOCK)
+        1 if (N % 2 == 0) else 0, **_ew_meta(total))
     return C, S
 
 

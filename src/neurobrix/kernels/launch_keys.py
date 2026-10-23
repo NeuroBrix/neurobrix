@@ -27,6 +27,7 @@ CONV2D = "neurobrix.kernels.ops.conv2d.conv2d_forward_kernel"
 DEPTHWISE = "neurobrix.kernels.ops.depthwise_conv2d.depthwise_conv2d_kernel"
 SOFTMAX = "neurobrix.kernels.ops.softmax.softmax_forward_kernel"
 SOFTMAX_LOOPED = "neurobrix.kernels.ops.softmax.softmax_forward_looped_kernel"
+ELEMENTWISE = "neurobrix.kernels.ops.elementwise_launch.ew_launch_kernel"
 UNIT_FLASH = "neurobrix.kernels.ops.flash_attention_m8n8k4.flash_attention_m8n8k4_kernel"
 LAYER_NORM = "neurobrix.kernels.ops.layernorm.layer_norm_forward_kernel"
 RMS_NORM = "neurobrix.kernels.ops.rmsnorm.rms_norm_forward_kernel"
@@ -815,3 +816,26 @@ def rms_norm_launches(rows: int, feat: int, has_weight: bool, x: NBXDtype, w: Op
     from neurobrix.kernels.nbx_tensor import _saturating_cast
     return [(RMS_NORM, (bucket_of("M", rows), softmax_feat_bucket(feat), bool(has_weight),
                         bool(_saturating_cast(F32, out)), tag(x), tag(w if has_weight else x), tag(out)))]
+
+
+def elementwise_classes(largest: int) -> List[Launch]:
+    """Every element-wise class (`ops/elementwise_launch.ew_bucket`: the profile's `elements` ladder, else its
+    `default`) a component can launch: each class whose floor is at most `largest`, the most elements any tensor of
+    the component holds — an element-wise launch writes or reads at most one tensor's elements (an op's output, a
+    copy, a cast, a weight converted at load). Keyed as the shared copy is (`ew_launch_kernel`: the class's top and
+    its two fp32 operands)."""
+    from neurobrix.kernels.autotune_bucket import ladder_for
+    largest = max(1, int(largest))
+    out, prev = [], 0
+    for bound, step in ladder_for("elements"):
+        hi = largest if bound is None else min(bound, largest)
+        top = -(-(prev + 1) // step) * step
+        while prev < hi and top - step < hi:
+            out.append((ELEMENTWISE, (top, "fp32", "fp32")))
+            top += step
+            if bound is not None and top > bound:
+                break
+        if bound is None or largest <= bound:
+            break
+        prev = bound
+    return out

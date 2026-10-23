@@ -101,5 +101,19 @@ def ladder_for(dim: str, profile: Optional[Dict[str, Any]] = None) -> Ladder:
     return [(None, 1)]        # no target bound: the census's own door, unchanged
 
 
+def class_floor(dim: str, top: int, profile: Optional[Dict[str, Any]] = None) -> int:
+    """The fewest `dim` that form the class whose top is `top` (`bucket_of`'s inverse floor): the row holding `top`,
+    one past the class below it (its top minus the row's step) or past the previous row's bound."""
+    t = int(top)
+    if t <= 0:
+        return t
+    prev = 0
+    for bound, step in ladder_for(dim, profile):
+        if bound is None or t <= bound:
+            return max(prev + 1, t - step + 1)
+        prev = bound
+    return max(prev + 1, t - ladder_for(dim, profile)[-1][1] + 1)
+
+
 def bucket_of(dim: str, value: int, profile: Optional[Dict[str, Any]] = None) -> int:
     return bucket(value, ladder_for(dim, profile))

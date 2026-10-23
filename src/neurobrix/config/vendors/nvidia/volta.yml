@@ -262,6 +262,16 @@ autotune:
       - {up_to: 1048576, step: 131072}
       - {up_to: 2097152, step: 262144}
       - {up_to: null, step: 524288}
+    # elements — an element-wise launch's element count (`kernels/ops/elementwise_launch.py`): FOUR classes. Measured
+    # 2026-10-23 on V100-SXM2 (campaigns/2026_10_12_mq25_gate/stable/c1rest/ew_bench.json, 8 operations x fp32/fp16 x
+    # 15 tiles x warps): at or under 65 536 elements the launch dominates (13 us whatever the tile); at 1 M the
+    # copy's best is within 2.4 % (mean) of each operation's own; at 16 M within 0.3 % (max 1.4 %). The class is
+    # certified at its floor (`autotune_bucket.class_floor`): 1, 65 537, 1 048 577 and 16 777 217 elements.
+    elements:
+      - {up_to: 65536, step: 65536}
+      - {up_to: 1048576, step: 1048576}
+      - {up_to: 16777216, step: 16777216}
+      - {up_to: null, step: 68719476736}
     default:
       - {up_to: 64, step: 1}
       - {up_to: 256, step: 16}
