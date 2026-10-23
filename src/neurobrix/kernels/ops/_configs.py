@@ -878,10 +878,17 @@ def row_reduce_configs() -> List[triton.Config]:
 
 def prune_row_reduce(configs, named_args, **kwargs):
     """No more rows than exist, no tile wider than the padded row (it only masks), and a rows x tile block within the
-    backend's reduce-tile cap (`nbx_tensor.reduce_tile_max`) and its per-thread bound (`reduced_extent_max`)."""
+    backend's reduce-tile cap (`nbx_tensor.reduce_tile_max`), the registers of one block (`memory.max_registers_per_
+    block`: an fp32 element a register — a 128 x 4 096 block spilled and ptxas took minutes per candidate, the c1rest
+    certification, 2026-10-23 17:57) and the per-thread bound (`reduced_extent_max`)."""
     from neurobrix.kernels.nbx_tensor import reduce_tile_max, reduced_extent_max
+    from neurobrix.kernels.wrappers import _arch_param
+    regs = _arch_param("memory", "max_registers_per_block", None)
+    if regs is None:
+        raise RuntimeError("ZERO FALLBACK: the hardware profile declares no memory.max_registers_per_block — the row "
+                           "reductions' block has no bound")
     rows, feat = int(named_args['batch_dim']), next_power_of_2(max(1, int(named_args['feat_dim'])))
-    cap = reduce_tile_max()
+    cap = min(reduce_tile_max(), int(regs))
     keep = []
     for c in configs:
         r, t = c.kwargs['BLOCK_SIZE_BATCH'], c.kwargs['BLOCK_SIZE_FEAT']

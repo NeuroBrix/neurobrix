@@ -59,3 +59,16 @@ def test_the_values_are_the_reduction(red, shape, dim):
     got = getattr(W, _FN[red])(_t(a, F32), dim).to("cpu").numpy()
     want = {"mean": np.mean, "sum": np.sum, "amax": np.max}[red](a.astype(np.float64), axis=dim)
     assert np.allclose(got, want, rtol=1e-4, atol=1e-3)
+
+
+def test_a_candidate_block_stays_within_one_block_s_registers(monkeypatch):
+    """A 128 x 4 096 block spilled and ptxas took minutes per candidate (2026-10-23): the candidates of a long row
+    stay within `memory.max_registers_per_block` fp32 elements (V100's 65 536). Red if the bound is not applied."""
+    from neurobrix.kernels.ops import _configs as K
+    from neurobrix.kernels import wrappers as W
+    regs = 65536
+    real = W._arch_param
+    monkeypatch.setattr(W, "_arch_param", lambda sec, key, default: regs if key == "max_registers_per_block"
+                        else real(sec, key, default))
+    keep = K.prune_row_reduce(K.row_reduce_configs(), {"batch_dim": 100000, "feat_dim": 65536})
+    assert keep and all(c.kwargs["BLOCK_SIZE_BATCH"] * c.kwargs["BLOCK_SIZE_FEAT"] <= regs for c in keep)
