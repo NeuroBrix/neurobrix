@@ -980,7 +980,7 @@ _KEYED_KINDS = frozenset({
     "aten::_scaled_dot_product_efficient_attention", "aten::_scaled_dot_product_flash_attention",
     "aten::_scaled_dot_product_flash_attention_for_cpu",
     "aten::_softmax", "aten::softmax", "aten::_safe_softmax", "aten::_log_softmax", "aten::log_softmax",
-    "aten::native_group_norm", "aten::group_norm"})
+    "aten::native_group_norm", "aten::group_norm", "aten::mean", "aten::sum", "aten::amax"})
 
 
 def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_bf16,
@@ -1076,6 +1076,27 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
             launches = LK.layer_norm_launches(_prod(x_s[:len(x_s) - k]), _prod(x_s[len(x_s) - k:]),
                                               w_t is not None, b_t is not None, dt(ins[0]),
                                               dt(w_t) if w_t else None, dt(b_t) if b_t else None, dt(ins[0]))
+        elif kind in ("aten::mean", "aten::sum", "aten::amax"):
+            # `wrappers.mean_wrapper` / `sum_wrapper` / `amax_wrapper`: the reduced elements (one dim, a list flattened
+            # by `_reduce_over_dims`, or every element when `dim` is absent) a row, every other element a row's index;
+            # the input cast first to the `dtype` keyword (mean, sum) as `_reduction_dtype` reads it
+            x_s = shape(ins[0])
+            args = (o.get("attributes") or {}).get("args") or []
+            kw = (o.get("attributes") or {}).get("kwargs") or {}
+            d_ = args[1] if len(args) > 1 else kw.get("dim")
+            d_ = d_.get("value") if isinstance(d_, dict) else d_
+            nd = len(x_s)
+            dims = list(range(nd)) if d_ is None or d_ == [] else [int(v) % max(1, nd) for v in
+                                                                   (d_ if isinstance(d_, (list, tuple)) else [d_])]
+            feat = _prod([x_s[i] for i in sorted(set(dims))]) if nd else 1
+            rows = _prod(x_s) // max(1, feat) if nd else 1
+            xd = dt(ins[0])
+            if kind != "aten::amax":
+                want = args[3] if len(args) > 3 else kw.get("dtype")
+                want = want.get("value") if isinstance(want, dict) else want
+                if want is not None:
+                    xd = NBXDtype[str(want).replace("torch.", "")]
+            launches = LK.row_reduce_launches(kind.split("::")[1], rows, feat, xd)
         elif kind in ("aten::native_group_norm", "aten::group_norm"):
             # `wrappers.group_norm_wrapper` (`native_group_norm_wrapper` forwards to it): N and C the input's first two
             # dims, every other its spatial extent; the groups and the weight and bias by their argument positions

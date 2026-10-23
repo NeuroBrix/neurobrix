@@ -29,6 +29,9 @@ SOFTMAX = "neurobrix.kernels.ops.softmax.softmax_forward_kernel"
 SOFTMAX_LOOPED = "neurobrix.kernels.ops.softmax.softmax_forward_looped_kernel"
 ELEMENTWISE = "neurobrix.kernels.ops.elementwise_launch.ew_launch_kernel"
 GROUP_NORM = "neurobrix.kernels.ops.groupnorm.group_norm_forward_kernel"
+ROW_REDUCE = {"mean": "neurobrix.kernels.ops.mean.mean_forward_kernel",
+              "sum": "neurobrix.kernels.ops.sum.sum_forward_kernel",
+              "amax": "neurobrix.kernels.ops.amax.amax_forward_kernel"}
 UNIT_FLASH = "neurobrix.kernels.ops.flash_attention_m8n8k4.flash_attention_m8n8k4_kernel"
 LAYER_NORM = "neurobrix.kernels.ops.layernorm.layer_norm_forward_kernel"
 RMS_NORM = "neurobrix.kernels.ops.rmsnorm.rms_norm_forward_kernel"
@@ -854,3 +857,14 @@ def group_norm_launches(N: int, C: int, HxW: int, groups: int, has_weight: bool,
     return [(GROUP_NORM, (bucket_of("M", N * groups), softmax_feat_bucket(hidden), bool(has_weight), bool(has_bias),
                           tag(x), tag(x), tag(w if has_weight else x), tag(b if has_bias else x),
                           tag(F32), tag(F32)))]
+
+
+def row_reduce_launches(kind: str, rows: int, feat: int, x: NBXDtype) -> List[Launch]:
+    """`wrappers.mean_wrapper` / `sum_wrapper` / `amax_wrapper` over rows of `feat` (the reduced elements: one dim, a
+    list flattened by `_reduce_over_dims`, or all of them; every other element a row): the key — the rows' bucket
+    (`bucket_of("M")`), the padded row (`softmax_feat_bucket`) — then the input's dtype tag (after the `dtype` keyword's
+    cast) and the output's: fp32 for mean and sum (cast after), the input's for amax."""
+    if rows < 1 or feat < 1:
+        return []
+    out = x if kind == "amax" else F32
+    return [(ROW_REDUCE[kind], (bucket_of("M", rows), softmax_feat_bucket(feat), tag(x), tag(out)))]

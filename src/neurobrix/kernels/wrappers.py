@@ -3131,14 +3131,14 @@ def mean_wrapper(x, dim=None, keepdim=False, dtype=None) :
         x_2d = x_perm.reshape(batch_dim, feat_dim)
 
     output = NBXTensor.empty(batch_dim, dtype=NBXDtype.float32, device=x.device)
-    _bsb = _batch_block(batch_dim, feat_dim)
-    grid = (triton.cdiv(batch_dim, _bsb),)
+    # rows per program, the feature tile and the warps: the certified configuration of this key (chantier 1), the
+    # key the derived census forms (`launch_keys.row_reduce_launches`)
+    grid = lambda META: (triton.cdiv(batch_dim, META['BLOCK_SIZE_BATCH']),)
     _set_device(x_2d)
     mean_forward_kernel[grid](
         x_2d, output,
-        batch_dim, feat_dim,
+        batch_dim, feat_dim, _lk.bucket_of("M", batch_dim), _lk.softmax_feat_bucket(feat_dim),
         x_2d.stride(0), x_2d.stride(1),
-        num_warps=4,
     )
 
     if dim is None:
@@ -3214,14 +3214,14 @@ def sum_wrapper(x, dim=None, keepdim=False, dtype=None) :
         x_2d = x_perm.reshape(batch_dim, feat_dim)
 
     output = NBXTensor.empty(batch_dim, dtype=NBXDtype.float32, device=x.device)
-    _bsb = _batch_block(batch_dim, feat_dim)
-    grid = (triton.cdiv(batch_dim, _bsb),)
+    # rows per program, the feature tile and the warps: the certified configuration of this key (chantier 1), the
+    # key the derived census forms (`launch_keys.row_reduce_launches`)
+    grid = lambda META: (triton.cdiv(batch_dim, META['BLOCK_SIZE_BATCH']),)
     _set_device(x_2d)
     sum_forward_kernel[grid](
         x_2d, output,
-        batch_dim, feat_dim,
+        batch_dim, feat_dim, _lk.bucket_of("M", batch_dim), _lk.softmax_feat_bucket(feat_dim),
         x_2d.stride(0), x_2d.stride(1),
-        num_warps=4,
     )
 
     if dim is None:
@@ -3271,14 +3271,14 @@ def amax_wrapper(x, dim=None, keepdim=False) :
         x_2d = x_perm.reshape(batch_dim, feat_dim)
 
     output = NBXTensor.empty(batch_dim, dtype=x.dtype, device=x.device)
-    _bsb = _batch_block(batch_dim, feat_dim)
-    grid = (triton.cdiv(batch_dim, _bsb),)
+    # rows per program, the feature tile and the warps: the certified configuration of this key (chantier 1), the
+    # key the derived census forms (`launch_keys.row_reduce_launches`)
+    grid = lambda META: (triton.cdiv(batch_dim, META['BLOCK_SIZE_BATCH']),)
     _set_device(x_2d)
     amax_forward_kernel[grid](
         x_2d, output,
-        batch_dim, feat_dim,
+        batch_dim, feat_dim, _lk.bucket_of("M", batch_dim), _lk.softmax_feat_bucket(feat_dim),
         x_2d.stride(0), x_2d.stride(1),
-        num_warps=4,
     )
 
     if dim is None:

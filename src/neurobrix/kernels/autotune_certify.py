@@ -446,6 +446,11 @@ def _key_operands(qual: str, tuner, key: tuple) -> Optional[Dict[str, Any]]:
             ins.append(("b", (feat,), d(2)))
         return {"family": "rownorm", "inputs": ins, "out": ((rows, feat), out_dt),
                 "mnk": (rows, feat, 1), "batch": 1, "row_windowed_launch": True}
+    if short in ("mean_forward_kernel", "sum_forward_kernel", "amax_forward_kernel"):
+        # (BATCH_BUCKET, FEAT_BUCKET, x, out): rows of the padded row (its top, else the shortest of the class)
+        rows, feat = int(key[0]), int(key[1])
+        return {"family": "softmax", "inputs": [("x", (rows, feat), d(0))], "out": ((rows,), out_dt),
+                "mnk": (rows, feat, 1), "batch": 1, "row_windowed_launch": True}
     if short == "group_norm_forward_kernel":
         # (PROG_BUCKET, HIDDEN_BUCKET, scale_by_weight, add_bias, dtypes...): one group per program, one channel per
         # group (the chunk walks the group's extent whatever its channels), the per-channel weight and bias
@@ -918,6 +923,20 @@ def _rownorm_oracle_fn(x, w, b, layer: bool):
     return lambda: RowWindowedOracle([((r0, r1), rows(r0, r1)) for (r0, r1) in wins], m)
 
 
+def _row_reduce_oracle_fn(x, red: str):
+    """The fp64 oracle of a row reduction (mean, sum or max) of x [rows, feat]: rows a window at a time."""
+    m, n = x.shape[-2], x.shape[-1]
+    op = {"mean": np.mean, "sum": np.sum, "amax": np.max}[red]
+
+    def run():
+        out = np.empty(m, dtype=np.float64)
+        step = max(1, ORACLE_MAX_MACS // (8 * max(1, n)))      # a window of ORACLE_MAX_MACS bytes in fp64
+        for r0 in range(0, m, step):
+            out[r0:r0 + step] = op(_f64(x[r0:r0 + step, :]), axis=-1)
+        return out
+    return run
+
+
 def _groupnorm_oracle_fn(x, w, b):
     """The fp64 oracle of a group norm of x [groups, extent] (one channel per group: eps 1e-5, `group_norm_wrapper`'s
     default) with its per-group weight and bias — the row norm's, the affine per row; row-windowed above the cap."""
@@ -1084,6 +1103,17 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         return ((lambda: W.scaled_dot_product_attention_wrapper(to(q), to(k), to(v),
                                                                 attn_mask=to(mask) if masked else None)),
                 (_attention_oracle_fn(q, k, v, mask, scale) if values else None), "Out")
+    if short in ("mean_forward_kernel", "sum_forward_kernel", "amax_forward_kernel"):
+        # through the wrappers over the last dim (`mean_wrapper`, `sum_wrapper`, `amax_wrapper`), rows of the padded row
+        # (`_softmax_shape`); the fp64 oracle of each row's reduction (its window cast whole, row-windowed above the cap)
+        rows, feat = int(key[0]), int(key[1])
+        x_dt = dts[0] if dts else "fp32"
+        rows, feat = _softmax_shape(rows, feat, card_bytes, x_dt, x_dt, short)
+        _refuse_oversize(card_bytes, [((rows, feat), x_dt), ((rows,), out_dt)], short)
+        x = arr(rng, (rows, feat), x_dt)
+        red = short.split("_")[0]
+        fn = {"mean": W.mean_wrapper, "sum": W.sum_wrapper, "amax": W.amax_wrapper}[red]
+        return (lambda: fn(to(x), -1)), (_row_reduce_oracle_fn(x, red) if values else None), "output_ptr"
     if short == "group_norm_forward_kernel":
         # through the wrapper (`group_norm_wrapper`, eps its default): N = 1, one channel per group, the groups the
         # programs' bucket, the group's extent the padded class (at its top where the card holds it, else at the
