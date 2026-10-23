@@ -915,7 +915,14 @@ def set_launch_recorder(fn) -> None:
 
 
 def launch(kernel, grid, *args, **kwargs):
-    """The one entry point: `launch(kernel, grid, *args, **constexprs_and_options)`."""
+    """The one entry point: `launch(kernel, grid, *args, **constexprs_and_options)`.
+
+    A grid with no program launches nothing, as Triton's own launchers do (`gridX * gridY * gridZ > 0`): an
+    element-wise op on an empty tensor (numel 0 -> cdiv(0, BLOCK) = 0 programs) computes nothing, and its tensors may
+    hold no buffer at all — a backend whose driver refuses a null pointer (triton-ext on Metal) refused the whole run
+    for it (Qwen3-VL-30B-A3B-Thinking triton, an add over a (0, 2048) tensor, Mac 2026-10-23)."""
+    if not callable(grid) and 0 in tuple(int(g) for g in grid):
+        return None
     prep, bound_args = prepare(kernel, args, kwargs)
     if _TRACE:
         with open(_TRACE, "a") as fh:
@@ -923,6 +930,8 @@ def launch(kernel, grid, *args, **kwargs):
     if callable(grid):
         grid = grid(bound_args)
     grid = tuple(int(g) for g in grid) + (1,) * (3 - len(grid))
+    if 0 in grid:
+        return None
     runtime = [(name, ty) for name, ty in prep.signature.items()
                if ty != "constexpr"]
     params = [_pack_param(ty, bound_args[name]) for name, ty in runtime]
