@@ -1860,13 +1860,31 @@ def compute(pairs: list, gate_dir: Path, cfg: dict, prunes=(), log=print) -> dic
             slot_units = sorted({d for (d, pn) in set(pa) & set(pb) if pa[(d, pn)] != pb[(d, pn)]} - changed_ids)
             units = list(ch["units"]) + [("chg", "(constant slot)", u) for u in slot_units
                                          if u in old.reached() or u in new.reached()]
-            judged = []
+            todo = []
             for kind, f, uid in units:
                 if uid not in reached and f != "(constant slot)":
                     if cls == next(iter(cfg["classes"])):
                         pr["units"].append({"unit": uid, "kind": kind, "verdict": "unreached"})
                     continue
-                judged.append((kind, uid, J.judge(kind, uid)))
+                todo.append((kind, uid))
+            # each changed unit is judged on its own (its probes are processes of their own): judged side by side,
+            # the verdicts read in the units' order — one at a time, a lot that changed 140 wrapper launches held
+            # the four cards idle for 40 min and more while its scope probed them one by one (c1restlot, 2026-10-23)
+            # progress written as it goes (red line of work 2): every 10 min at most, the units judged so far
+            import threading as _th
+            done, last, lock = [0], [time.time()], _th.Lock()
+
+            def _progress(_f, cls=cls, n=len(todo)):
+                with lock:
+                    done[0] += 1
+                    if time.time() - last[0] >= 600 or done[0] == n:
+                        last[0] = time.time()
+                        log(f"  {cls}: {done[0]}/{n} unit(s) judged ({round(time.time() - t0)} s)")
+            with ThreadPoolExecutor(max_workers=cfg["limits"]["judge_jobs"]) as ex:
+                futs = [(kind, uid, ex.submit(J.judge, kind, uid)) for kind, uid in todo]
+                for _k, _u, fu in futs:
+                    fu.add_done_callback(_progress)
+                judged = [(kind, uid, fu.result()) for kind, uid, fu in futs]
             for kind, uid, v in judged:
                 if v["cells"] and kind == "chg":
                     w = J.callers_probed(uid)
