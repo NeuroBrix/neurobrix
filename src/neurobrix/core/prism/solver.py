@@ -1304,7 +1304,7 @@ class PrismSolver:
             return int(n * int(x_width) * f)
         return vendor_table
 
-    def _conv3d_workspace(self, profile):
+    def _conv3d_workspace(self, profile, compute_dtype=None):
         """(x_shape, w_shape, attrs, x_width, out_width) -> the bytes a 3-D convolution holds beside its input and
         output while it runs, by the engine this plan is for: the compiled engine's cuDNN workspace as the vendor file
         states it (core/prism/op_workspace.py, read at the first conv3d priced), the Triton engines' own temporal
@@ -1322,14 +1322,17 @@ class PrismSolver:
                                             attrs.get("dilation", 1), int(x_width), int(out_width))
             return triton_folds
         from neurobrix.core.prism.attention_scratch import vendor_memory
-        from neurobrix.core.prism.op_workspace import conv3d_workspace_fraction
+        from neurobrix.core.prism.op_workspace import conv3d_workspace_fraction, conv3d_dtype
         memory = vendor_memory(min(profile.devices, key=lambda d: d.memory_mb))
 
         def cudnn(x_shape, w_shape, attrs, x_width, out_width):
+            # the fraction of the dtype the conv runs in (a table where the vendor file states one per dtype)
             n = 1
             for d in x_shape:
                 n *= int(d)
-            return int(n * int(x_width) * conv3d_workspace_fraction(memory))
+            per_dtype = isinstance(memory.get("compiled_conv3d_workspace_input_fraction"), dict)
+            dt = conv3d_dtype(x_width, compute_dtype) if per_dtype else None
+            return int(n * int(x_width) * conv3d_workspace_fraction(memory, dt))
         return cudnn
 
     def _assign_attention_budgets(self, plan, profile) -> None:
@@ -3649,7 +3652,7 @@ class PrismSolver:
                         # unfloored map.
                         placement_floor=True,
                         in_place_weight_reads=_in_place,
-                        attention_scratch=self._attention_scratch(profile), conv3d_workspace=self._conv3d_workspace(profile), op_workspace=self._op_workspace(profile),
+                        attention_scratch=self._attention_scratch(profile), conv3d_workspace=self._conv3d_workspace(profile, comp_dtype_str), op_workspace=self._op_workspace(profile),
                     )
                     self.__dict__.setdefault("_output_elements", {})[comp.name] = int(ap.output_elements)
                     # The request's symbols, compute width AND each activation's runtime width, for
@@ -3708,7 +3711,7 @@ class PrismSolver:
                                 # The residual-chain sentinels carry nothing.
                                 source_holding_uids=fusion_uids | f2a_uids,
                                 in_place_weight_reads=_in_place,
-                        attention_scratch=self._attention_scratch(profile), conv3d_workspace=self._conv3d_workspace(profile), op_workspace=self._op_workspace(profile),
+                        attention_scratch=self._attention_scratch(profile), conv3d_workspace=self._conv3d_workspace(profile, comp_dtype_str), op_workspace=self._op_workspace(profile),
                             )
                             activation_bytes = ap_tiled.peak_bytes
                             _kept = ap_tiled
@@ -3733,7 +3736,7 @@ class PrismSolver:
                                 inplace_adds=inplace_adds,
                                 widths=widths,
                                 in_place_weight_reads=_in_place,
-                        attention_scratch=self._attention_scratch(profile), conv3d_workspace=self._conv3d_workspace(profile), op_workspace=self._op_workspace(profile),
+                        attention_scratch=self._attention_scratch(profile), conv3d_workspace=self._conv3d_workspace(profile, comp_dtype_str), op_workspace=self._op_workspace(profile),
                             )
                             activation_bytes = ap_tiled.peak_bytes
                             _kept = ap_tiled
@@ -5426,7 +5429,7 @@ class PrismSolver:
                                                  comp_dtype, profile, seams=seams if kind == "next" else None)
                 peaks[(kind, length)] = int(prof.estimate_peak_memory(
                     input_config=cic, dtype_bytes=dtype_bytes, widths=widths,
-                    attention_scratch=self._attention_scratch(profile), conv3d_workspace=self._conv3d_workspace(profile), op_workspace=self._op_workspace(profile), handed_inputs=True).peak_bytes)
+                    attention_scratch=self._attention_scratch(profile), conv3d_workspace=self._conv3d_workspace(profile, comp_dtype), op_workspace=self._op_workspace(profile), handed_inputs=True).peak_bytes)
             return peaks[(kind, length)]
 
         def chunk_out(kind: str, length: int) -> int:
@@ -5542,7 +5545,7 @@ class PrismSolver:
                 tile_cost = int(tprof.estimate_peak_memory(
                     input_config=tic, dtype_bytes=dtype_bytes, widths=widths,
                     attention_scratch=self._attention_scratch(getattr(self, "_profile", None)),
-                    conv3d_workspace=self._conv3d_workspace(getattr(self, "_profile", None)),
+                    conv3d_workspace=self._conv3d_workspace(getattr(self, "_profile", None), comp_dtype),
                     op_workspace=self._op_workspace(getattr(self, "_profile", None))).peak_bytes)
         finally:
             self._input_config = saved_ic

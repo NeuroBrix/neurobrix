@@ -162,3 +162,28 @@ def test_a_vendor_that_states_no_conv3d_workspace_is_refused_by_name():
     assert conv3d_workspace_fraction(vendor_memory_of("apple", "apple_m4_pro")) == 1.0
     with pytest.raises(KeyError, match="compiled_conv3d_workspace_input_fraction"):
         conv3d_workspace_fraction({})
+
+
+def test_a_conv3d_workspace_stated_per_dtype_is_priced_at_the_conv_s_dtype(monkeypatch):
+    """bf16 and fp16 share a width and not a workspace (V100's compiled conv3d at Open-Sora-v2's VAE op: 1.47 x its
+    input in fp16, 24 x in bf16 — im2col; 2026-10-23): a vendor file may state the fraction per dtype, and the 2-byte
+    conv is priced at its component's half dtype. Red if the table is read without the dtype (a bf16 VAE priced at the
+    fp16 figure — Open-Sora's 9.28 GB where MPS held 17), or a dtype the table lacks is priced instead of refused."""
+    import pytest
+    from types import SimpleNamespace
+    from neurobrix.core.prism import PrismSolver
+    from neurobrix.core.prism import attention_scratch as AS
+    from neurobrix.core.prism.op_workspace import conv3d_workspace_fraction, conv3d_dtype
+    table = {"compiled_conv3d_workspace_input_fraction": {"float16": 1.5, "bfloat16": 24.0, "float32": 0.02}}
+    assert conv3d_workspace_fraction(table, "bfloat16") == 24.0 and conv3d_workspace_fraction(table, "float16") == 1.5
+    with pytest.raises(KeyError, match="float64"):
+        conv3d_workspace_fraction(table, "float64")
+    assert conv3d_dtype(2, "bfloat16") == "bfloat16" and conv3d_dtype(4, "bfloat16") == "float32"
+    monkeypatch.setattr(AS, "vendor_memory", lambda dev: table)
+    S = PrismSolver(); S._mode = "compiled"
+    prof = SimpleNamespace(devices=[SimpleNamespace(memory_mb=16384, architecture="x", brand="y", index=0)])
+    x = [1, 4, 6, 8, 8]
+    n = 1 * 4 * 6 * 8 * 8
+    assert S._conv3d_workspace(prof, "bfloat16")(x, [4, 4, 3, 3, 3], {}, 2, 2) == int(n * 2 * 24.0)
+    assert S._conv3d_workspace(prof, "float16")(x, [4, 4, 3, 3, 3], {}, 2, 2) == int(n * 2 * 1.5)
+    assert S._conv3d_workspace(prof, "bfloat16")(x, [4, 4, 3, 3, 3], {}, 4, 4) == int(n * 4 * 0.02)

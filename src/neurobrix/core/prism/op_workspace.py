@@ -9,12 +9,39 @@ from __future__ import annotations
 from typing import Any, Dict
 
 
-def conv3d_workspace_fraction(memory: Dict[str, Any]) -> float:
+#: the dtype a convolution input of this many bytes per element runs in, where the width alone names it; a 2-byte
+#: input runs in its component's half dtype (`conv3d_workspace_fraction(dtype=)`)
+_WIDTH_DTYPE = {4: "float32", 8: "float64"}
+
+
+def conv3d_dtype(x_width: int, compute_dtype: Any) -> str:
+    """The dtype name a 3-D convolution reading `x_width`-byte elements runs in: fp32 / fp64 by width; a 2-byte input
+    in its component's half compute dtype (bf16 and fp16 share the width and not the workspace: V100's compiled conv3d
+    took 1.5-2 x its input in fp16 and 24 x in bf16, which it lowers to im2col, 2026-10-23)."""
+    if int(x_width) in _WIDTH_DTYPE:
+        return _WIDTH_DTYPE[int(x_width)]
+    name = str(compute_dtype).replace("torch.", "").replace("NBXDtype.", "")
+    if int(x_width) == 2 and name in ("float16", "bfloat16"):
+        return name
+    raise ValueError(f"ZERO FALLBACK: a 3-D convolution reads {x_width}-byte elements under a {name!r} compute dtype — "
+                     f"no dtype names that width")
+
+
+def conv3d_workspace_fraction(memory: Dict[str, Any], dtype: str = None) -> float:
+    """The vendor file's fraction: one number for every dtype, or a table {dtype name: fraction} (float16, bfloat16,
+    float32...) where the workspace depends on it — then the convolution's dtype is required and a dtype the table does
+    not name is refused by name."""
     if "compiled_conv3d_workspace_input_fraction" not in memory:
         raise KeyError("ZERO FALLBACK: the vendor file states no memory.compiled_conv3d_workspace_input_fraction — the "
                        "workspace its compiled conv3d takes beside its input and output; a plan holding a 3-D "
                        "convolution cannot be priced on it")
-    f = float(memory["compiled_conv3d_workspace_input_fraction"])
+    v = memory["compiled_conv3d_workspace_input_fraction"]
+    if isinstance(v, dict):
+        if dtype is None or dtype not in v:
+            raise KeyError(f"ZERO FALLBACK: memory.compiled_conv3d_workspace_input_fraction is stated per dtype "
+                           f"({sorted(v)}) and names no {dtype!r} — the workspace of a {dtype} conv3d is not measured")
+        v = v[dtype]
+    f = float(v)
     if f < 0:
         raise ValueError(f"ZERO FALLBACK: memory.compiled_conv3d_workspace_input_fraction is {f}; a workspace is >= 0")
     return f
