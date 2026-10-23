@@ -397,7 +397,37 @@ def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_
         for q_, key in launches:
             out.append((uid, q_, key))
     out += _elementwise_rows(g, ops, shape, skip, only, LK)
+    out += _widening_check_rows(g, ops, shape, dt, skip, only, LK)
     return out
+
+
+def _widening_check_rows(g, ops, shape, dt, skip, only, LK) -> list:
+    """The magnitude check an integer tensor divided by a float runs on a backend with no fp64
+    (`wrappers._int_division_widening_dtype`: amax of |x| in fp32 over the whole tensor, one row): keyed at each such
+    division (`aten::floor_divide`, `aten::div` with a floor or trunc rounding mode), for its integer operand(s)."""
+    if _triton_fp64():
+        return []
+    rows = []
+    for uid in g["execution_order"]:
+        if uid in skip or (only is not None and uid not in only):
+            continue
+        o = ops[uid]
+        kind = o["op_type"]
+        a_ = (o.get("attributes") or {})
+        mode = (a_.get("kwargs") or {}).get("rounding_mode")
+        mode = mode.get("value") if isinstance(mode, dict) else mode
+        if not (kind == "aten::floor_divide" or (kind == "aten::div" and mode in ("floor", "trunc"))):
+            continue
+        ins = list(o.get("input_tensor_ids") or ())
+        from neurobrix.kernels.nbx_tensor import _FLOATING_DTYPES
+        ints = [t for t in ins if dt(t) not in _FLOATING_DTYPES]
+        if not ints or len(ints) == len(ins):            # all integer: divided in the integers, no widening
+            continue
+        for t in ints:
+            n = _prod(shape(t))
+            if n > 0:
+                rows += [(uid, q_, key) for q_, key in LK.row_reduce_launches("amax", 1, n, LK.F32)]
+    return rows
 
 
 def _elementwise_rows(g, ops, shape, skip, only, LK) -> list:

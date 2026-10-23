@@ -17,6 +17,9 @@ certified directory keys. This proves it BY NAME, on both engines:
 The stitch's own method calls are read from its source too, so a stitch that starts calling
 another method is walked without editing this file.
 
+Two autotuned kernels are keyed by the census whatever ops reach them (chantier 1, 2026-10-23): the element-wise
+classes and the integer division's magnitude check — named in the test.
+
 Injection (seen red, then restored green — STATE.md of the op_tiler campaign, 2026-10-05):
 `add_forward_kernel` wrapped in `triton.autotune` -> the Triton test names it.
 """
@@ -130,5 +133,9 @@ def test_the_triton_stitch_launches_no_autotuned_kernel():
     kernels = _launches(_stitch_methods())
     # not vacuous: the copy and the sum are reached
     assert {"strided_copy_nd_kernel", "add_forward_kernel"} <= set(kernels), sorted(kernels)
-    tuned = sorted(n for n, k in kernels.items() if isinstance(k, Autotuner))
+    # keyed by the census without the stitch's ops: every element-wise class up to the component's largest tensor
+    # (`launch_keys.elementwise_classes` — a slice copied, written or summed is at most a tensor of the graph), and the
+    # integer division's magnitude check on a backend with no fp64 (`_widening_check_rows`, keyed at the division)
+    keyed_anyway = {"ew_launch_kernel", "amax_forward_kernel"}
+    tuned = sorted(n for n, k in kernels.items() if isinstance(k, Autotuner) and n not in keyed_anyway)
     assert not tuned, f"the stitch reaches autotuned kernels the census cannot key: {tuned}"
