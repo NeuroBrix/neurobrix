@@ -285,17 +285,23 @@ class WitnessDrift(RuntimeError):
 
 
 class KeyTooLargeForClass(RuntimeError):
-    """The key's operands alone exceed the certifying card: refused BEFORE a value is drawn.
+    """The key's operands and output exceed what the certifying card holds: refused BEFORE a value is drawn.
 
     The census can record a shape its class never forms (a plan tiles before it — see
     `oversize_for_class`). It used to be discovered only when the device allocation failed,
     AFTER the host had drawn every operand in float64: on 2026-09-26 a 16 GB certifier held
     65 GB of host memory and a 32 GB one 52 GB, for an hour, on keys asking 37 GiB of a
-    31.7 GiB card, with 30 GB of the host left for everything else."""
+    31.7 GiB card, with 30 GB of the host left for everything else.
 
-    def __init__(self, asked: int, card: int, what: str):
-        super().__init__(f"the key's operands ask {asked} bytes of a {card}-byte card ({what})")
-        self.asked, self.card = asked, card
+    `usable` is the capacity the door compares against — the card's bytes at the share Prism plans
+    against (`PRISM_DEFAULTS["safety_margin"]`); a key no plan of the class can form is one no run of it
+    presents."""
+
+    def __init__(self, asked: int, card: int, what: str, usable: Optional[int] = None):
+        self.asked, self.card = int(asked), int(card)
+        self.usable = int(usable) if usable is not None else self.card
+        super().__init__(f"the key's operands and output ask {self.asked} bytes of the {self.usable} bytes a "
+                         f"{self.card}-byte card plans against ({what})")
 
 
 def _softmax_shape(rows: int, feat: int, card_bytes, in_dt: str, out_dt: str, what: str) -> Tuple[int, int]:
@@ -345,13 +351,64 @@ def _ew_count(top: int, card_bytes, dt: str, what: str) -> int:
 
 
 def _refuse_oversize(card_bytes, specs, what: str) -> None:
-    """`specs`: (shape, dtype) of every operand AND the output, at their device widths, against
-    a DISCRETE card. Checked before any draw. A unified-memory device is `_refuse_unified`'s."""
+    """`specs`: (shape, dtype) of every operand AND the output, at their device widths, against the capacity of
+    a DISCRETE card that Prism plans against (`PRISM_DEFAULTS["safety_margin"]`, as `_softmax_shape` and
+    `_ew_count` draw their keys) — never the card's whole bytes: Sana 4K's 16g rms_norm key (16 252 928 rows of
+    128 fp32, in and out 7.75 GiB each, 15.5 GiB of a 16 GiB card) passed a door at the whole card, then failed its
+    output's allocation at every pass with 7.9 GB free (2026-10-23). Checked before any draw. A unified-memory
+    device is `_refuse_unified`'s."""
     if card_bytes is None:
         return
+    from neurobrix.core.config.system import PRISM_DEFAULTS
     asked = sum(int(np.prod(shape, dtype=np.int64)) * _isz.itemsize(_isz.from_autotune_key(dt)) for shape, dt in specs)
-    if asked > card_bytes:
-        raise KeyTooLargeForClass(asked, int(card_bytes), what)
+    usable = int(int(card_bytes) * float(PRISM_DEFAULTS["safety_margin"]))
+    if asked > usable:
+        raise KeyTooLargeForClass(asked, int(card_bytes), what, usable=usable)
+
+
+def refused_path(vendor: str, profile: str, memory_class: int, root: Optional[Path] = None) -> Path:
+    """The class's register of keys refused by size (`refused.<cls>g.jsonl`), in the certified directory beside the
+    proofs, committed by the same checkpointer; one line per (kernel, key)."""
+    return C.file_for(vendor, profile, "x", "x", root=root).parent / f"refused.{int(memory_class)}g.jsonl"
+
+
+def read_refused(path: Path) -> Dict[Tuple[str, str], Dict[str, Any]]:
+    """{(kernel qual, key repr): its refusal}; an absent register is an empty one. A line that does not parse is
+    refused by name — a register that silently dropped a line would retry, or skip, the wrong key."""
+    out: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    if not path.exists():
+        return out
+    for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            r = json.loads(line)
+            out[(r["kernel"], r["key"])] = r
+        except (ValueError, KeyError) as exc:
+            raise ValueError(f"{path}:{n}: not a refusal line ({exc}): {line[:120]}") from exc
+    return out
+
+
+def record_refusal(path: Path, qual: str, ktext: str, asked: int, usable: int, card: int, reason: str) -> None:
+    """The refusal written (replacing the key's earlier one), atomically and under a lock: certifiers of one class
+    run on several cards at once."""
+    import fcntl
+    import tempfile
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(str(path) + ".lock", "a") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        try:
+            rows = read_refused(path)
+            rows[(qual, ktext)] = {"kernel": qual, "key": ktext, "asked_bytes": int(asked), "usable_bytes": int(usable),
+                                   "card_bytes": int(card), "reason": reason,
+                                   "date": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")}
+            fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name, suffix=".tmp")
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                for k in sorted(rows):
+                    fh.write(json.dumps(rows[k], sort_keys=True) + "\n")
+            os.replace(tmp, path)
+        finally:
+            fcntl.flock(lk, fcntl.LOCK_UN)
 
 
 def _refuse_unified(qual: str, tuner, key: tuple, card_bytes) -> None:
@@ -2303,8 +2360,10 @@ def after_key_failure(exc: BaseException, summary: Dict[str, Any], key_text: str
     if big is not None:
         asked, card = big
         summary["oversize"] = summary.get("oversize", 0) + 1
+        usable = getattr(exc, "usable", card)
         log(f"[certify] TOO LARGE FOR THIS CLASS at {key_text}: the key's tensors ask "
-            f"{asked / 2**30:.1f} GiB of a {card / 2**30:.1f} GiB card. No entry is owed — a run "
+            f"{asked / 2**30:.1f} GiB of the {usable / 2**30:.1f} GiB a {card / 2**30:.1f} GiB card plans against. "
+            f"No entry is owed — a run "
             f"of this class never forms this key, because the plan tiles before it. The CENSUS "
             f"recorded a shape this class cannot reach; that is where it is fixed.")
         return False
@@ -2481,6 +2540,13 @@ def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, re
                   rng, summary, log, writer, bench, skip_proven_since=None, skip_keys=None):
     done = 0
     attempts = 0
+    # keys this class refused by size: a pass that only fills what is missing does not draw them again while the
+    # bound they were refused at holds (Sana 4K's two 16g rms keys were retried, and failed, at every pass)
+    from neurobrix.core.config.system import PRISM_DEFAULTS
+    card_bytes = int(certifying_device["memory_mb"]) * 2**20
+    usable_now = int(card_bytes * float(PRISM_DEFAULTS["safety_margin"]))
+    refusals = refused_path(vendor, profile, certifying_class, root=root)
+    refused = read_refused(refusals)
     for qual, keys in shapes.items():
         tuner = tuners.get(qual)
         if tuner is None:
@@ -2509,6 +2575,10 @@ def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, re
                 continue                      # certified FOR THIS CARD's memory class already (and, with
                                               # --reprove-unclocked, at a recorded clock; with
                                               # --reprove-generator, under the running code generator)
+            _r = refused.get((qual, ktext))
+            if only_missing and _r is not None and int(_r.get("usable_bytes", -1)) == usable_now:
+                summary["refused_known"] = summary.get("refused_known", 0) + 1
+                continue                      # refused by size at this very bound: named in the register, not owed
             # RE-PROVE, NOT RE-SWEEP (the owner, 2026-09-29 01:37): a certificate this class holds under
             # another code generator keeps its configuration — proven again here by the oracle and one
             # timing under the witness. A sweep only where that configuration fails the oracle, or where
@@ -2558,6 +2628,10 @@ def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, re
             except Exception as exc:
                 _release_between_keys()
                 log(f"[certify] {C.kernel_short(qual)} {dtype} {C.describe_key(tuner, key)}: FAILED — {exc}")
+                _big = oversize_for_class(exc)
+                if _big is not None:
+                    record_refusal(refusals, qual, ktext, _big[0], getattr(exc, "usable", usable_now), _big[1],
+                                   str(exc)[:300])
                 if after_key_failure(exc, summary, ktext, log):
                     summary["seconds"] = round(time.time() - summary["started"], 1)
                     return summary                    # a poisoned context: stop, say it, exit non-zero
