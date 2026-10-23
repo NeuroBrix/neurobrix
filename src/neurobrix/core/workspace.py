@@ -85,6 +85,29 @@ def apply_host_mmap_threshold() -> None:
         raise RuntimeError(f"mallopt(M_MMAP_THRESHOLD, {n}) refused by glibc")
 
 
+_huge_pages_set = False
+
+
+def apply_host_huge_pages() -> None:
+    """Tell numpy whether its large arrays may ask for transparent huge pages (`io.host_huge_pages`,
+    config/system.yml), once per process: a weight loader's read and cast buffers are numpy arrays, and a
+    huge-page request on a fragmented host compacts memory synchronously (measured figures beside the
+    value). numpy's own switch (`_set_madvise_hugepage`, the in-process form of NUMPY_MADVISE_HUGEPAGE);
+    where numpy never madvises (not Linux) the switch changes nothing."""
+    global _huge_pages_set
+    if _huge_pages_set:
+        return
+    _huge_pages_set = True
+    cfg = yaml.safe_load(SYSTEM_YML.read_text()) or {}
+    v = (cfg.get("io") or {}).get("host_huge_pages")
+    if not isinstance(v, bool):
+        raise RuntimeError(
+            f"ZERO FALLBACK: no host huge-page policy is configured: {SYSTEM_YML} under "
+            f"`io.host_huge_pages` (got {v!r}).")
+    from numpy._core import multiarray as _ma
+    _ma._set_madvise_hugepage(v)
+
+
 class SnapshotNotPresent(Exception):
     """A snapshot is not in the configured root, and nothing fetches it here."""
 

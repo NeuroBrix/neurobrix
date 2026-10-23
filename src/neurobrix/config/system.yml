@@ -54,6 +54,16 @@ io:
   # nbx/campaigns/2026_10_10_stageb_peak loadexp/stepexp; MALLOC_ARENA_MAX 1 or 2 changed nothing).
   host_mmap_threshold_bytes: 1048576
 
+  # Linux only: may numpy back an array over 4 MiB with transparent huge pages (madvise MADV_HUGEPAGE,
+  # numpy's default on kernels >= 4.6, https://numpy.org/doc/stable/reference/global_state.html)?
+  # With the kernel's THP defrag at `madvise` (Ubuntu's default) each first touch of such an array may
+  # compact memory synchronously; under a page cache full of weight shards it does not return: Qwen3-VL-30B's
+  # Triton load sat 30 min in `__alloc_pages_direct_compact` -> `compact_zone` (2 460 s of system time, RSS
+  # frozen at 29 GB, 184 GB of page cache, compact_stall 4.9 M of which 85 % failed; V100 rack 2026-10-23
+  # 03:00-03:40). Same pathology: https://github.com/bscott711/bioimaging/pull/13 (30 GB of arrays 101 s ->
+  # 15 s opted out), https://github.com/golang/go/issues/61718.
+  host_huge_pages: false
+
   # Non-blocking uploads one compiled-loader worker keeps outstanding before it waits for the oldest
   # (core/io/weight_loader.py `_load_with_pinned_dma`). A pinned block goes back to PyTorch's host cache
   # only once its copy is done, and that cache never gives memory back: unbounded, deepseek-moe
