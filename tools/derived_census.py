@@ -1019,7 +1019,8 @@ _KEYED_KINDS = frozenset({
     "aten::_scaled_dot_product_efficient_attention", "aten::_scaled_dot_product_flash_attention",
     "aten::_scaled_dot_product_flash_attention_for_cpu",
     "aten::_softmax", "aten::softmax", "aten::_safe_softmax", "aten::_log_softmax", "aten::log_softmax",
-    "aten::native_group_norm", "aten::group_norm", "aten::mean", "aten::sum", "aten::amax"})
+    "aten::native_group_norm", "aten::group_norm", "aten::mean", "aten::sum", "aten::amax",
+    "aten::_weight_norm", "custom::moe_fused"})
 
 
 def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_bf16,
@@ -1136,6 +1137,36 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
                 if want is not None:
                     xd = NBXDtype[str(want).replace("torch.", "")]
             launches = LK.row_reduce_launches(kind.split("::")[1], rows, feat, xd)
+        elif kind == "aten::_weight_norm":
+            # the meta-op (`dispatch._meta_weight_norm`): v * g / ||v|| over every dim but `dim`, the norm a sum of
+            # v * v reduced one dim at a time (keepdim), in v's dtype — each a row reduction of its own
+            v_s = list(shape(ins[0]))
+            args = (o.get("attributes") or {}).get("args") or []
+            d_ = args[2] if len(args) > 2 else ((o.get("attributes") or {}).get("kwargs") or {}).get("dim", 0)
+            d_ = d_.get("value") if isinstance(d_, dict) else d_
+            nd = len(v_s)
+            d_ = int(d_ or 0) % nd if nd else 0
+            launches = []
+            for rd in range(nd):
+                if rd == d_:
+                    continue
+                feat = int(v_s[rd])
+                launches += LK.row_reduce_launches("sum", _prod(v_s) // max(1, feat), feat, dt(ins[0]))
+                v_s[rd] = 1
+        elif kind == "custom::moe_fused":
+            # the fused MoE layer (`triton/moe.execute_moe_fused`): its router's top-k weights renormalised by a sum
+            # over top_k (fp32, unless the graph hands the weights in — a blend) and the experts' outputs combined by
+            # a sum over top_k of [tokens, top_k, hidden] in the hidden states' dtype (`_fused_moe_pass`,
+            # `_expert_store_grouped_pass`)
+            a_ = o.get("attributes") or {}
+            h_s = shape(a_["hidden_states_tid"])
+            K_ = int(h_s[-1])
+            M_ = _prod(h_s) // max(1, K_)
+            top_k = int(a_["top_k"])
+            launches = []
+            if a_.get("norm_topk_prob") and "topk_weights_tid" not in a_:
+                launches += LK.row_reduce_launches("sum", M_, top_k, NBXDtype.float32)
+            launches += LK.row_reduce_launches("sum", M_ * K_, top_k, dt(a_["hidden_states_tid"]))
         elif kind in ("aten::native_group_norm", "aten::group_norm"):
             # `wrappers.group_norm_wrapper` (`native_group_norm_wrapper` forwards to it): N and C the input's first two
             # dims, every other its spatial extent; the groups and the weight and bias by their argument positions
