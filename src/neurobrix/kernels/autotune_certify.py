@@ -412,7 +412,7 @@ def _key_operands(qual: str, tuner, key: tuple) -> Optional[Dict[str, Any]]:
             ins.append(("mask", (B, H, tq, tk), d(3)))
         return {"family": "attention", "inputs": ins, "out": ((B, H, tq, hd), d(0)), "mnk": (tq, hd, 2 * tk),
                 "batch": B * H, "row_windowed_launch": True}
-    if short == "softmax_forward_kernel":
+    if short in ("softmax_forward_kernel", "softmax_forward_looped_kernel"):
         rows, feat = int(key[0]), int(key[1])
         return {"family": "softmax", "inputs": [("x", (rows, feat), d(0))], "out": ((rows, feat), out_dt),
                 "mnk": (rows, feat, 1), "batch": 1, "row_windowed_launch": True}
@@ -1022,7 +1022,7 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         else:
             run = lambda: W.rms_norm(to(x), to(w) if has_w else None)
         return run, (_rownorm_oracle_fn(x, w, b, ln) if values else None), "output_ptr"
-    if short == "softmax_forward_kernel":
+    if short in ("softmax_forward_kernel", "softmax_forward_looped_kernel"):
         # (BATCH_BUCKET, FEAT_BUCKET, log, x, out): the bucket's rows of the padded row length (a length of the class), through the wrapper itself; the
         # fp64 oracle per row (row-windowed above the oracle's cap, as a product's)
         rows, feat, log = int(key[0]), int(key[1]), bool(key[2])

@@ -83,10 +83,29 @@ def softmax_forward_kernel(
              mask=batch_mask[:, None] & feat_mask[None, :])
 
 
+def _looped_softmax_configs():
+    """The candidates the certifier proves for the looped kernel (chantier 1): the tile a row is scanned by x warps.
+    The one it ran before certification is among them (4 096 columns, 4 warps) — a certified winner equal to it changes
+    no bit; another tile or warp count changes the order of a row's running max and sum."""
+    return [triton.Config({'TILE_FEAT': tile}, num_warps=warps)
+            for tile in (1024, 2048, 4096, 8192, 16384) for warps in (2, 4, 8)]
+
+
+def _prune_looped_softmax(configs, named_args, **kwargs):
+    """A tile no wider than the backend's reduce-tile cap (`nbx_tensor.reduce_tile_max`, the profile's, where the
+    lowering refuses beyond) nor than the padded row it scans (a wider tile only masks)."""
+    from neurobrix.kernels.nbx_tensor import reduce_tile_max
+    cap = min(reduce_tile_max(), next_power_of_2(int(named_args['feat_dim'])))
+    keep = [c for c in configs if c.kwargs['TILE_FEAT'] <= cap]
+    return keep or configs[:1]
+
+
+@nbx_autotune(configs=_looped_softmax_configs(), key=['BATCH_BUCKET', 'FEAT_BUCKET', 'log'],
+              prune_configs_by={'early_config_prune': _prune_looped_softmax}, cache_results=True)
 @triton.jit
 def softmax_forward_looped_kernel(
     input_ptr, output_ptr,
-    feat_dim,
+    feat_dim, BATCH_BUCKET, FEAT_BUCKET,
     input_batch_stride, input_feat_stride,
     output_batch_stride, output_feat_stride,
     log: tl.constexpr,

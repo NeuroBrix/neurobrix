@@ -17,8 +17,16 @@ def test_every_length_that_pads_to_one_tile_shares_its_key():
     assert len(keys) == 1 and LK.softmax_feat_bucket(1024) == 1024 and LK.softmax_feat_bucket(1) == 1
 
 
-def test_a_row_past_the_fused_kernel_forms_no_key():
-    assert LK.softmax_launches(8, LK.SOFTMAX_FUSED_MAX_FEAT + 1, False, "fp32", "fp32") == []
+def test_a_row_past_the_fused_kernel_forms_the_looped_kernel_s_key():
+    """Chantier 1: the looped kernel is certified too — a long row forms its key, keyed as the fused one's."""
+    (kernel, key), = LK.softmax_launches(8, LK.SOFTMAX_FUSED_MAX_FEAT + 1, False, "fp32", "fp32")
+    assert kernel == LK.SOFTMAX_LOOPED and key[1] == 2 * LK.SOFTMAX_FUSED_MAX_FEAT
+
+
+def test_the_looped_candidates_stay_under_the_cap_and_the_row():
+    keep = S._prune_looped_softmax(S._looped_softmax_configs(), {"feat_dim": 20000})
+    assert keep and all(c.kwargs["TILE_FEAT"] <= 32768 for c in keep)
+    assert any(c.kwargs["TILE_FEAT"] == 4096 and c.num_warps == 4 for c in keep)   # the tile it ran before
 
 
 def test_the_candidates_hold_at_most_one_longest_row_and_never_more_rows_than_exist():

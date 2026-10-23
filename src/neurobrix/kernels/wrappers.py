@@ -1786,19 +1786,15 @@ rms_norm._nbx_widens_on_load = False
 # single-tile kernel byte-for-byte. Same capped-tile idiom as
 # argmax_wrapper's TILE_N = min(next_power_of_2(N), 4096) (FlagGems).
 _SOFTMAX_MAX_FUSED_FEAT = _lk.SOFTMAX_FUSED_MAX_FEAT     # one value with the census (launch_keys)
-_SOFTMAX_LOOPED_TILE = 4096
-
-
 def _launch_looped_softmax(x_2d, output_2d, batch_dim, feat_dim, log: bool):
-    """Launch the bounded-tile online softmax — one program per row."""
+    """Launch the bounded-tile online softmax — one program per row; its tile and warps the certified configuration
+    of this key (chantier 1), the key the derived census forms (`launch_keys.softmax_launches`)."""
     softmax_forward_looped_kernel[(batch_dim,)](
         x_2d, output_2d,
-        feat_dim,
+        feat_dim, _lk.bucket_of("M", batch_dim), _lk.softmax_feat_bucket(feat_dim),
         x_2d.stride(0), x_2d.stride(1),
         output_2d.stride(0), output_2d.stride(1),
         log=log,
-        TILE_FEAT=_SOFTMAX_LOOPED_TILE,
-        num_warps=4,
     )
 
 

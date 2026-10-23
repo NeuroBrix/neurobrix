@@ -26,6 +26,7 @@ BADDBMM = "neurobrix.kernels.ops.baddbmm_op.baddbmm_kernel"
 CONV2D = "neurobrix.kernels.ops.conv2d.conv2d_forward_kernel"
 DEPTHWISE = "neurobrix.kernels.ops.depthwise_conv2d.depthwise_conv2d_kernel"
 SOFTMAX = "neurobrix.kernels.ops.softmax.softmax_forward_kernel"
+SOFTMAX_LOOPED = "neurobrix.kernels.ops.softmax.softmax_forward_looped_kernel"
 UNIT_FLASH = "neurobrix.kernels.ops.flash_attention_m8n8k4.flash_attention_m8n8k4_kernel"
 LAYER_NORM = "neurobrix.kernels.ops.layernorm.layer_norm_forward_kernel"
 RMS_NORM = "neurobrix.kernels.ops.rmsnorm.rms_norm_forward_kernel"
@@ -764,7 +765,7 @@ def conv_launches(x_shape, w_shape, stride, padding, dilation, transposed: bool,
 
 
 #: The longest row the single-program softmax holds (a row's padded length in registers); a longer one runs the looped
-#: kernel (`softmax_forward_looped_kernel`, one tile at a time), which forms no autotune key. Moved here from the
+#: kernel (`softmax_forward_looped_kernel`, one tile at a time, keyed as the single-program one). Moved here from the
 #: wrapper so the wrapper and the census read ONE value.
 SOFTMAX_FUSED_MAX_FEAT = 16384
 
@@ -779,11 +780,13 @@ def softmax_feat_bucket(feat: int) -> int:
 
 def softmax_launches(rows: int, feat: int, log: bool, x: NBXDtype, out: NBXDtype) -> List[Launch]:
     """`softmax` / `log_softmax` over a row of `feat` (rows = every other element): the single-program kernel's key —
-    the rows' bucket (`bucket_of("M")`), the padded row length (`softmax_feat_bucket`), the log flag, the input's and the output's dtype — or none
-    when the row takes the looped kernel (workstream 1: rows per program and warps certified per key)."""
-    if feat > SOFTMAX_FUSED_MAX_FEAT or rows < 1:
+    the rows' bucket (`bucket_of("M")`), the padded row length (`softmax_feat_bucket`), the log flag, the input's and the output's dtype;
+    a row longer than the single program holds (`SOFTMAX_FUSED_MAX_FEAT`) the looped kernel's, keyed alike (workstream
+    1: rows per program and warps certified per key; chantier 1: the looped kernel's tile and warps)."""
+    if rows < 1:
         return []
-    return [(SOFTMAX, (bucket_of("M", rows), softmax_feat_bucket(feat), bool(log), tag(x), tag(out)))]
+    kernel = SOFTMAX_LOOPED if feat > SOFTMAX_FUSED_MAX_FEAT else SOFTMAX
+    return [(kernel, (bucket_of("M", rows), softmax_feat_bucket(feat), bool(log), tag(x), tag(out)))]
 
 
 def layer_norm_launches(rows: int, feat: int, has_weight: bool, has_bias: bool, x: NBXDtype,
