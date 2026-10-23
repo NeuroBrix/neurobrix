@@ -27,7 +27,7 @@ def test_a_scheduler_counts_the_host_the_other_schedulers_cells_reserved(tmp_pat
     """Two gates admitted a Qwen3-VL each (169 GiB of host apiece) and the kernel killed one (2026-10-20 14:47):
     each summed only its own cells. A hold names its cell's need; every scheduler adds the others'."""
     monkeypatch.setattr(S, "a", SimpleNamespace(holds=str(tmp_path)), raising=False)
-    (tmp_path / "hold_c0").write_text("999999 181786361856\n")       # another scheduler's cell, 169.3 GiB
+    (tmp_path / "hold_c0").write_text(f"{os.getppid()} 181786361856\n")  # another (live) scheduler's cell, 169.3 GiB
     (tmp_path / "hold_c1").write_text("888888\n")                    # a filler: no need named
     (tmp_path / "hold_c2").write_text(f"{os.getpid()} 1000\n")       # ours: counted in our own sum already
     assert S.others_reserved() == 181786361856
