@@ -89,14 +89,14 @@ def test_the_workers_leave_what_the_gate_cells_reserved_and_say_their_own(monkey
     monkeypatch.setattr(DC.os, "cpu_count", lambda: 12)
     monkeypatch.setattr(DC.os, "getloadavg", lambda: (0.0, 0.0, 0.0))
     monkeypatch.setattr(MB, "memory_ladder_mb", lambda: [4096, 8192, 16384])
-    monkeypatch.setattr(HM, "memory_state", lambda: types.SimpleNamespace(available_mb=20_000))   # rung 16 GiB
+    monkeypatch.setattr(HM, "memory_state", lambda: types.SimpleNamespace(available_mb=20_000, total_mb=20_000))
     (tmp_path / "hold_c3").write_text(f"{os.getppid()} {12 << 30}\n")          # a gate cell (a live process): 12 GiB
     (tmp_path / "hold_c1").write_text("c1gemv-final 4242\n")                   # a certifier's card: no bytes
     (tmp_path / "hold_host_999999").write_text(f"999999 {64 << 30}\n")       # another census: in the free memory already
     monkeypatch.setattr(DC, "HOLDS", None)
     assert DC._workers_memory_holds(20, 2 << 30) == 8                          # no ledger: 16 GiB / 2 GiB
     monkeypatch.setattr(DC, "HOLDS", tmp_path)
-    assert DC._workers_memory_holds(20, 2 << 30) == 2                          # (16 - 12) GiB / 2 GiB
+    assert DC._workers_memory_holds(20, 2 << 30) == 3                          # min(16, 19.5 - 12) GiB / 2 GiB
     mine = tmp_path / f"hold_host_{os.getpid()}"
     with DC._host_hold(tmp_path, 4 << 30):
         assert mine.read_text().split() == [str(os.getpid()), str(4 << 30)]
@@ -115,3 +115,21 @@ def test_a_hold_whose_process_is_gone_reserves_nothing(tmp_path):
     (tmp_path / "hold_c2").write_text(f"{gone.pid} {40 << 30}\n")
     (tmp_path / "hold_c3").write_text(f"{os.getppid()} {12 << 30}\n")
     assert DC._held_by_others(tmp_path) == 12 << 30
+
+
+def test_a_running_gate_cell_is_not_counted_twice(monkeypatch, tmp_path):
+    """A gate cell's reservation is already partly inside the free memory read: the census's room is the free memory
+    bounded by what the reservations leave of the TOTAL, not the free memory minus the reservations. Counting both made
+    a census beside a gate derive Qwen3-30B one job at a time into its 3 h timeout (2026-10-23). 251 GB machine, a
+    132 GiB cell running (100 GB free): 119 GiB of room, not none. Red if the reservation is subtracted from the free."""
+    import os
+    import types
+    from neurobrix.core import host_memory as HM
+    from neurobrix.core.prism import memory_budget as MB
+    monkeypatch.setattr(DC.os, "cpu_count", lambda: 64)
+    monkeypatch.setattr(DC.os, "getloadavg", lambda: (0.0, 0.0, 0.0))
+    monkeypatch.setattr(MB, "memory_ladder_mb", lambda: [65536, 98304, 131072])
+    monkeypatch.setattr(HM, "memory_state", lambda: types.SimpleNamespace(available_mb=100_000, total_mb=257_000))
+    (tmp_path / "hold_c3").write_text(f"{os.getppid()} {132 << 30}\n")
+    monkeypatch.setattr(DC, "HOLDS", tmp_path)
+    assert DC._workers_memory_holds(60, 2 << 30) == 48                        # rung 96 GiB / 2 GiB, under 119 GiB

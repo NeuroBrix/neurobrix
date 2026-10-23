@@ -2656,10 +2656,18 @@ def _workers_memory_holds(n_jobs: int, worker_bytes: int) -> int:
     from neurobrix.core.host_memory import memory_state
     from neurobrix.core.prism.memory_budget import rung_down_mb
     cores = max(1, (os.cpu_count() or 1) - int(os.getloadavg()[0]))
-    free = memory_state().available_mb
+    state = memory_state()
+    free = state.available_mb
     if free is None or worker_bytes <= 0:
         return 1
-    held = max(0, (rung_down_mb(free) << 20) - _held_by_others(HOLDS)) // worker_bytes
+    # the gate cells' reservations are claims on the machine's WHOLE memory, part of which they already hold inside
+    # the free figure read here: the room is the free memory, bounded by what the reservations leave of the total —
+    # subtracting them from the free memory too counted every running cell twice, and a census beside a gate ran
+    # Qwen3-30B's 20 derivations one at a time into its 3 h timeout (2026-10-23 09:50 -> 12:25, 47 of 98 tables)
+    room = rung_down_mb(free) << 20
+    if getattr(state, "total_mb", None):              # unread on a host that does not report it: the free alone
+        room = min(room, (int(state.total_mb) << 20) - _held_by_others(HOLDS))
+    held = max(0, room) // worker_bytes
     return max(1, min(n_jobs, cores, held))
 
 
