@@ -28,6 +28,7 @@ DEPTHWISE = "neurobrix.kernels.ops.depthwise_conv2d.depthwise_conv2d_kernel"
 SOFTMAX = "neurobrix.kernels.ops.softmax.softmax_forward_kernel"
 SOFTMAX_LOOPED = "neurobrix.kernels.ops.softmax.softmax_forward_looped_kernel"
 ELEMENTWISE = "neurobrix.kernels.ops.elementwise_launch.ew_launch_kernel"
+GROUP_NORM = "neurobrix.kernels.ops.groupnorm.group_norm_forward_kernel"
 UNIT_FLASH = "neurobrix.kernels.ops.flash_attention_m8n8k4.flash_attention_m8n8k4_kernel"
 LAYER_NORM = "neurobrix.kernels.ops.layernorm.layer_norm_forward_kernel"
 RMS_NORM = "neurobrix.kernels.ops.rmsnorm.rms_norm_forward_kernel"
@@ -839,3 +840,17 @@ def elementwise_classes(largest: int) -> List[Launch]:
             break
         prev = bound
     return out
+
+
+def group_norm_launches(N: int, C: int, HxW: int, groups: int, has_weight: bool, has_bias: bool, x: NBXDtype,
+                        w: Optional[NBXDtype], b: Optional[NBXDtype]) -> List[Launch]:
+    """`wrappers.group_norm_wrapper` (one program per batch x group, the group's channel x spatial extent walked in
+    chunks): the key — the programs' bucket (`bucket_of("M")`), the group's padded extent (`softmax_feat_bucket`),
+    the weight and bias flags — then the dtype tags of its tensor arguments in order: input, output (the input's),
+    weight and bias (the input standing in for an absent one), mean and inverse deviation (fp32)."""
+    if N < 1 or C < 1 or HxW < 1 or groups < 1:
+        return []
+    hidden = (C // groups) * HxW
+    return [(GROUP_NORM, (bucket_of("M", N * groups), softmax_feat_bucket(hidden), bool(has_weight), bool(has_bias),
+                          tag(x), tag(x), tag(w if has_weight else x), tag(b if has_bias else x),
+                          tag(F32), tag(F32)))]

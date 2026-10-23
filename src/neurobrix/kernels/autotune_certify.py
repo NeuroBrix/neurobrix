@@ -446,6 +446,17 @@ def _key_operands(qual: str, tuner, key: tuple) -> Optional[Dict[str, Any]]:
             ins.append(("b", (feat,), d(2)))
         return {"family": "rownorm", "inputs": ins, "out": ((rows, feat), out_dt),
                 "mnk": (rows, feat, 1), "batch": 1, "row_windowed_launch": True}
+    if short == "group_norm_forward_kernel":
+        # (PROG_BUCKET, HIDDEN_BUCKET, scale_by_weight, add_bias, dtypes...): one group per program, one channel per
+        # group (the chunk walks the group's extent whatever its channels), the per-channel weight and bias
+        rows, feat = int(key[0]), int(key[1])
+        ins = [("x", (rows, feat), d(0))]
+        if bool(key[2]):
+            ins.append(("w", (rows,), d(2)))
+        if bool(key[3]):
+            ins.append(("b", (rows,), d(3)))
+        return {"family": "rownorm", "inputs": ins, "out": ((rows, feat), out_dt),
+                "mnk": (rows, feat, 1), "batch": 1, "row_windowed_launch": True}
     if short == "ew_launch_kernel":
         # (N_BUCKET, fp32, fp32): the element-wise class's copy at its top, else at its floor (`_ew_count`)
         n = int(key[0])
@@ -907,6 +918,28 @@ def _rownorm_oracle_fn(x, w, b, layer: bool):
     return lambda: RowWindowedOracle([((r0, r1), rows(r0, r1)) for (r0, r1) in wins], m)
 
 
+def _groupnorm_oracle_fn(x, w, b):
+    """The fp64 oracle of a group norm of x [groups, extent] (one channel per group: eps 1e-5, `group_norm_wrapper`'s
+    default) with its per-group weight and bias — the row norm's, the affine per row; row-windowed above the cap."""
+    m, n = x.shape[-2], x.shape[-1]
+    wf = None if w is None else _f64(w)[:, None]
+    bf = None if b is None else _f64(b)[:, None]
+
+    def rows(r0, r1):
+        z = _f64(x[r0:r1, :])
+        z = z - z.mean(axis=-1, keepdims=True)
+        z = z / np.sqrt((z * z).mean(axis=-1, keepdims=True) + 1e-5)
+        if wf is not None:
+            z = z * wf[r0:r1]
+        if bf is not None:
+            z = z + bf[r0:r1]
+        return z
+    wins = _row_windows(m, n, _SOFTMAX_ORACLE_F64_ARRAYS * 8)
+    if wins is None:
+        return lambda: rows(0, m)
+    return lambda: RowWindowedOracle([((r0, r1), rows(r0, r1)) for (r0, r1) in wins], m)
+
+
 def _conv_oracle_fn(x, wt, stride, padding, dilation, groups):
     n, ci, h, wd = x.shape
     co, ci_g, kh, kw = wt.shape
@@ -1051,6 +1084,21 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         return ((lambda: W.scaled_dot_product_attention_wrapper(to(q), to(k), to(v),
                                                                 attn_mask=to(mask) if masked else None)),
                 (_attention_oracle_fn(q, k, v, mask, scale) if values else None), "Out")
+    if short == "group_norm_forward_kernel":
+        # through the wrapper (`group_norm_wrapper`, eps its default): N = 1, one channel per group, the groups the
+        # programs' bucket, the group's extent the padded class (at its top where the card holds it, else at the
+        # shortest that forms it, `_softmax_shape`); the fp64 oracle per group (row-windowed above the cap)
+        rows, feat = int(key[0]), int(key[1])
+        x_dt = dts[0] if dts else "fp32"
+        rows, feat = _softmax_shape(rows, feat, card_bytes, x_dt, x_dt, short)
+        has_w, has_b = bool(key[2]), bool(key[3])
+        _refuse_oversize(card_bytes, [((rows, feat), x_dt), ((rows, feat), x_dt)], short)
+        x = arr(rng, (rows, feat), x_dt)
+        w = arr(rng, (rows,), dts[2]) if has_w else None
+        b = arr(rng, (rows,), dts[3]) if has_b else None
+        run = lambda: W.group_norm_wrapper(to(x).view(1, rows, feat), rows, to(w) if has_w else None,
+                                           to(b) if has_b else None)[0].view(rows, feat)
+        return run, (_groupnorm_oracle_fn(x, w, b) if values else None), "Y"
     if short in ("layer_norm_forward_kernel", "rms_norm_forward_kernel"):
         # the row norms through their wrappers (`native_layer_norm`, `rms_norm`), the padded row at its top, eps the
         # wrappers' own default; the fp64 oracle per row (row-windowed above the oracle's cap, as a softmax's)

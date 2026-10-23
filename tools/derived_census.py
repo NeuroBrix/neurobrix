@@ -260,7 +260,8 @@ def _shape_fn(g: dict, comp: str, symbols: dict, carried: dict, axis_values: dic
     return shape
 
 
-_NORM_KINDS = ("aten::native_layer_norm", "aten::layer_norm", "custom::rms_norm", "aten::rms_norm")
+_NORM_KINDS = ("aten::native_layer_norm", "aten::layer_norm", "custom::rms_norm", "aten::rms_norm",
+               "aten::native_group_norm", "aten::group_norm")
 
 
 def _tensor_arg(args, i):
@@ -978,7 +979,8 @@ _KEYED_KINDS = frozenset({
     "aten::istft", "aten::scaled_dot_product_attention", "aten::_scaled_dot_product_attention",
     "aten::_scaled_dot_product_efficient_attention", "aten::_scaled_dot_product_flash_attention",
     "aten::_scaled_dot_product_flash_attention_for_cpu",
-    "aten::_softmax", "aten::softmax", "aten::_safe_softmax", "aten::_log_softmax", "aten::log_softmax"})
+    "aten::_softmax", "aten::softmax", "aten::_safe_softmax", "aten::_log_softmax", "aten::log_softmax",
+    "aten::native_group_norm", "aten::group_norm"})
 
 
 def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_bf16,
@@ -1074,6 +1076,21 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
             launches = LK.layer_norm_launches(_prod(x_s[:len(x_s) - k]), _prod(x_s[len(x_s) - k:]),
                                               w_t is not None, b_t is not None, dt(ins[0]),
                                               dt(w_t) if w_t else None, dt(b_t) if b_t else None, dt(ins[0]))
+        elif kind in ("aten::native_group_norm", "aten::group_norm"):
+            # `wrappers.group_norm_wrapper` (`native_group_norm_wrapper` forwards to it): N and C the input's first two
+            # dims, every other its spatial extent; the groups and the weight and bias by their argument positions
+            # (native: input, weight, bias, N, C, HxW, groups, eps; group_norm: input, groups, weight, bias, eps)
+            x_s = shape(ins[0])
+            args = (o.get("attributes") or {}).get("args") or []
+            native = kind == "aten::native_group_norm"
+            g_ = args[6 if native else 1] if len(args) > (6 if native else 1) else None
+            g_ = g_.get("value") if isinstance(g_, dict) else g_
+            w_t, b_t = _tensor_arg(args, 1 if native else 2), _tensor_arg(args, 2 if native else 3)
+            if not isinstance(g_, int):
+                unhandled[f"group norm with no literal group count — {uid}"] += 1
+                return []
+            launches = LK.group_norm_launches(x_s[0], x_s[1], _prod(x_s[2:]), g_, w_t is not None, b_t is not None,
+                                              dt(ins[0]), dt(w_t) if w_t else None, dt(b_t) if b_t else None)
         elif kind in ("custom::rms_norm", "aten::rms_norm"):
             # `wrappers.rms_norm` over the last dim; the output at the op's stored dtype (the dtype engine passes it
             # as `out_dtype`) — and, inside a band-streamed residual chain, once per band at the band's own rows

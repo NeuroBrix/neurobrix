@@ -3452,23 +3452,18 @@ def group_norm_wrapper(x, num_groups: int, weight, bias, eps=1e-5):
 
     grid = (N * num_groups,)
     _set_device(x)
-    # BLOCK_SIZE: chunk along hidden_size = group_size*HxW. Cap at 16384
-    # (= 16K elements per chunk → 64 KB at fp32, 32 KB at fp16) so the
-    # per-program tile stays under SMEM regardless of dtype, and well
-    # under Triton's 2^20 numel ceiling. The kernel loops over chunks
-    # so any hidden_size works (PixArt VAE 1024×1024: hidden up to ~4M
-    # spread across many chunks).
+    # the chunk along hidden = group_size * HxW and the warps: the certified configuration of this key (chantier 1),
+    # the key the derived census forms (`launch_keys.group_norm_launches`)
     hidden = group_size * HxW
-    block_size = min(16384, triton.next_power_of_2(min(hidden, 16384)))
     group_norm_forward_kernel[grid](
         x, y,
         weight if weight is not None else x,
         bias if bias is not None else x,
         mean, rstd,
         group_size, C, HxW, num_groups, eps,
+        _lk.bucket_of("M", N * num_groups), _lk.softmax_feat_bucket(hidden),
         scale_by_weight=(weight is not None),
         add_bias=(bias is not None),
-        BLOCK_SIZE=block_size,
     )
     return y, mean, rstd
 

@@ -21,8 +21,30 @@ under Triton's 2^20 numel ceiling on every architecture.
 
 import triton
 import triton.language as tl
+from triton import next_power_of_2
+
+from ._configs import nbx_autotune
 
 
+def _group_norm_configs():
+    """The candidates the certifier proves (chantier 1): the chunk a group is walked by x warps. The one the kernel ran
+    before certification (the group's padded extent capped at 16 384, 4 warps) is among them."""
+    return [triton.Config({'BLOCK_SIZE': block}, num_warps=warps)
+            for block in (1024, 2048, 4096, 8192, 16384) for warps in (2, 4, 8, 16)]
+
+
+def _prune_group_norm(configs, named_args, **kwargs):
+    """A chunk no wider than the backend's reduce-tile cap (`nbx_tensor.reduce_tile_max`) nor than the group's padded
+    extent (a wider chunk only masks)."""
+    from neurobrix.kernels.nbx_tensor import reduce_tile_max
+    hidden = int(named_args['group_size']) * int(named_args['HW'])
+    cap = min(reduce_tile_max(), next_power_of_2(max(1, hidden)))
+    keep = [c for c in configs if c.kwargs['BLOCK_SIZE'] <= cap]
+    return keep or sorted(configs, key=lambda c: c.kwargs['BLOCK_SIZE'])[:1]
+
+
+@nbx_autotune(configs=_group_norm_configs(), key=['PROG_BUCKET', 'HIDDEN_BUCKET', 'scale_by_weight', 'add_bias'],
+              prune_configs_by={'early_config_prune': _prune_group_norm}, cache_results=True)
 @triton.jit
 def group_norm_forward_kernel(
     X,                              # input pointer, shape (N, C, HW)
@@ -36,9 +58,11 @@ def group_norm_forward_kernel(
     HW,                             # spatial size = H * W (or H * W * D)
     num_groups,                     # total groups
     eps,
+    PROG_BUCKET,                    # the programs' (batch x groups) bucket: the key
+    HIDDEN_BUCKET,                  # the group's padded extent: the key
     scale_by_weight: tl.constexpr,
     add_bias: tl.constexpr,
-    BLOCK_SIZE: tl.constexpr,       # chunk size along hidden_size, ≤ 16384
+    BLOCK_SIZE: tl.constexpr,       # chunk size along hidden_size: the certified configuration
 ):
     """One program handles one (batch, group) pair. Spatial dimension is
     walked in BLOCK_SIZE chunks so the per-program tile stays bounded
