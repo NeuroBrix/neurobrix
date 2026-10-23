@@ -150,7 +150,8 @@ def cmd_autotune(args) -> int:
                 print(f"GATE: {path}: {problems[0]}")
         unreachable = summary.get("unreachable", 0)
         print(f"[certify] {summary['certified']} shape(s) certified, {summary['excluded_configs']} config(s) excluded, "
-              f"{summary['failed']} failed, {unreachable} unreachable; "
+              f"{summary['failed']} failed, {unreachable} unreachable, {summary.get('oversize', 0)} too large for the "
+              f"class (named in its refusal register), {summary.get('refused_known', 0)} refused before at this bound; "
               f"directory gate: {'every file re-reads' if not bad else f'{bad} file(s) refused'}")
         if unreachable:
             # Said in clear, and NOT folded into the exit code. The census
