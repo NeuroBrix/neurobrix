@@ -128,6 +128,15 @@ class Interpreter(os.PathLike):
     def __radd__(self, other):
         return other + str(self)
 
+    def __eq__(self, other):
+        # compared as the path it resolves to: a tool's `PY == "/…/bin/python"` reads the interpreter, not the object
+        if isinstance(other, (str, os.PathLike)):
+            return str(self) == os.fspath(other)
+        return NotImplemented
+
+    def __hash__(self):
+        return hash(str(self))
+
 
 def interpreter(name: str) -> Interpreter:
     return Interpreter(name)
