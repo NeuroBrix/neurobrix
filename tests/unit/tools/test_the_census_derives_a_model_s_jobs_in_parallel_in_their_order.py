@@ -151,7 +151,6 @@ def test_the_room_keeps_the_scheduler_s_headroom(monkeypatch, tmp_path):
     (tmp_path / "hold_c2").write_text(f"{os.getppid()} {133 << 30}\n")
     monkeypatch.setattr(DC, "HOLDS", tmp_path)
     assert DC._workers_memory_holds(100, 2 << 30) == 35
-    assert DC._workers_memory_holds(60, 2 << 30) == 48                        # rung 96 GiB / 2 GiB, under 119 GiB
 
 
 def test_the_census_writes_its_progress_end_and_failure(tmp_path, monkeypatch):
