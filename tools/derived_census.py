@@ -2515,9 +2515,22 @@ def _held_by_others(holds) -> int:
             parts = f.read_text().split()
         except FileNotFoundError:
             continue
-        if len(parts) >= 2 and parts[0].isdigit() and parts[0] != str(os.getpid()) and parts[1].isdigit():
+        if (len(parts) >= 2 and parts[0].isdigit() and parts[0] != str(os.getpid()) and parts[1].isdigit()
+                and _alive(int(parts[0]))):
             total += int(parts[1])
     return total
+
+
+def _alive(pid: int) -> bool:
+    """Whether the process a hold names still runs: a holder killed before it removed its hold (a census writer
+    stopped by signal, 2026-10-23 07:46) reserves nothing."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 class _host_hold:

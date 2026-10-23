@@ -90,7 +90,7 @@ def test_the_workers_leave_what_the_gate_cells_reserved_and_say_their_own(monkey
     monkeypatch.setattr(DC.os, "getloadavg", lambda: (0.0, 0.0, 0.0))
     monkeypatch.setattr(MB, "memory_ladder_mb", lambda: [4096, 8192, 16384])
     monkeypatch.setattr(HM, "memory_state", lambda: types.SimpleNamespace(available_mb=20_000))   # rung 16 GiB
-    (tmp_path / "hold_c3").write_text(f"{os.getpid() + 1} {12 << 30}\n")       # a gate cell: 12 GiB reserved
+    (tmp_path / "hold_c3").write_text(f"{os.getppid()} {12 << 30}\n")          # a gate cell (a live process): 12 GiB
     (tmp_path / "hold_c1").write_text("c1gemv-final 4242\n")                   # a certifier's card: no bytes
     (tmp_path / "hold_host_999999").write_text(f"999999 {64 << 30}\n")       # another census: in the free memory already
     monkeypatch.setattr(DC, "HOLDS", None)
@@ -102,3 +102,16 @@ def test_the_workers_leave_what_the_gate_cells_reserved_and_say_their_own(monkey
         assert mine.read_text().split() == [str(os.getpid()), str(4 << 30)]
         assert DC._held_by_others(tmp_path) == 12 << 30                        # its own hold is not another's
     assert not mine.exists()
+
+
+def test_a_hold_whose_process_is_gone_reserves_nothing(tmp_path):
+    """A census writer killed before it removed its hold left 26 GB reserved (2026-10-23 07:46). Red if a dead
+    holder's bytes are still counted."""
+    import os
+    import subprocess
+    import sys as _sys
+    gone = subprocess.Popen([_sys.executable, "-c", "pass"])
+    gone.wait()
+    (tmp_path / "hold_c2").write_text(f"{gone.pid} {40 << 30}\n")
+    (tmp_path / "hold_c3").write_text(f"{os.getppid()} {12 << 30}\n")
+    assert DC._held_by_others(tmp_path) == 12 << 30
