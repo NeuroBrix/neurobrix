@@ -132,7 +132,7 @@ memory:
   # and norms run in one kernel pass with no full-size intermediate: none observed in the per-op live probes of the Wan
   # and mochi causal-VAE chunks on V100 (2026-10-17, nbx/tmp/stream_tri_mem.py). An empty table: nothing beyond the price.
   compiled_op_workspace: {}
-  # The compiled engine's allocator retention (core/prism/solver.py `_heap_retention`): null — CUDA's caching
+  # The compiled engine's allocator retention (core/runtime/graph/compiled_sequence.py `_release_from`, `_kill`): null — CUDA's caching
   # allocator splits its segments and reuses a freed block for any request that fits a free range; the V100 per-op
   # trace of Open-Sora-v2's VAE (native, 2026-10-23, campaigns/2026_10_12_mq25_gate/stable/opensora_apple) held the
   # live set within 0.38 GB at every op, nothing retained beyond it.
