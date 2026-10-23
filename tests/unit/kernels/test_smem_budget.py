@@ -182,6 +182,11 @@ _MAY_OMIT = {
         "optional by contract (kernels/autotune_bucket.ladder_for): the element-wise classes are a ladder MEASURED "
         "per architecture (volta.yml's comment names the measurement); a profile that has not measured it keys "
         "the element count on its own `default` ladder — more classes, each certified, none wrong",
+    "memory.compiled_allocator_retention":
+        "stated as a table where the compiled allocator keeps the heaps it frees (Apple: dedicated_heap_min_bytes, "
+        "round_bytes) and as null where it reuses freed memory (NVIDIA): the reference's null leaf is the other "
+        "profiles' table; AMD states it once a compiled plan runs there (core/runtime/graph/compiled_sequence.py refuses "
+        "a vendor file that states nothing)",
 }
 _MAY_OMIT.update({f"matrix_unit.{k}": (
     "optional by contract (kernels/ops/_configs.matrix_unit): only an arch whose matrix unit Triton does "
