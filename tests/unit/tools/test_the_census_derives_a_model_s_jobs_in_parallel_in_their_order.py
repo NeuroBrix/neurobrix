@@ -80,7 +80,8 @@ def test_the_workers_leave_what_the_gate_cells_reserved_and_say_their_own(monkey
     not yet taken, and the kernel killed the cell (2026-10-23 00:10:30). The workers are what the free memory holds
     LESS the other holders' reservations in the shared ledger (a gate's `hold_c<card>` "<pid> <bytes>"; a certifier's
     hold naming no bytes reserves none), and the census writes its own `hold_host_<pid>` while they run, removed on
-    exit. Red if the ledger is not read (8 workers, not 2), or if the census's hold is not written or not removed."""
+    exit; another census's hold is not subtracted (its workers are in the free memory read). Red if the ledger is not
+    read (8 workers, not 2), if another census is subtracted too (1, not 2), or if the hold is not written or removed."""
     import os
     import types
     from neurobrix.core import host_memory as HM
@@ -91,6 +92,7 @@ def test_the_workers_leave_what_the_gate_cells_reserved_and_say_their_own(monkey
     monkeypatch.setattr(HM, "memory_state", lambda: types.SimpleNamespace(available_mb=20_000))   # rung 16 GiB
     (tmp_path / "hold_c3").write_text(f"{os.getpid() + 1} {12 << 30}\n")       # a gate cell: 12 GiB reserved
     (tmp_path / "hold_c1").write_text("c1gemv-final 4242\n")                   # a certifier's card: no bytes
+    (tmp_path / "hold_host_999999").write_text(f"999999 {64 << 30}\n")       # another census: in the free memory already
     monkeypatch.setattr(DC, "HOLDS", None)
     assert DC._workers_memory_holds(20, 2 << 30) == 8                          # no ledger: 16 GiB / 2 GiB
     monkeypatch.setattr(DC, "HOLDS", tmp_path)

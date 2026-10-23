@@ -2500,14 +2500,17 @@ HOLDS = None   # the holds ledger the gate schedulers share (`table --holds`); N
 
 
 def _held_by_others(holds) -> int:
-    """Host bytes the OTHER holders of the shared ledger reserve: each file "<pid> <bytes>" — a gate scheduler's
-    `hold_c<card>` names its cell's need (`gate_sched.pick_gate`), a census's `hold_host_<pid>` its workers'
-    (`_host_hold`); a hold naming no bytes (a card held by a certifier) reserves none. A reservation is counted
-    whole even where its cell already resides in the free memory read beside it: the census errs on fewer workers."""
+    """Host bytes the gate cells of the shared ledger reserve: each `hold_c<card>` "<pid> <bytes>" names its cell's
+    need (`gate_sched.pick_gate`); a hold naming no bytes (a card held by a certifier) reserves none. A reservation
+    is counted whole even where its cell already resides in the free memory read beside it: the census errs on
+    fewer workers. Another census's `hold_host_<pid>` is NOT subtracted: its workers already sit in the free memory
+    read beside it, and counting both made eight census writers starve each other to one worker apiece (the cband
+    census, 2026-10-23 05:28: Qwen3-Coder's 14 derivations one at a time, where 13 ran at once the evening before).
+    The gates count it (`gate_sched.others_reserved`) — a cell admitted beside a census is what the hold protects."""
     if holds is None:
         return 0
     total = 0
-    for f in list(Path(holds).glob("hold_c*")) + list(Path(holds).glob("hold_host_*")):
+    for f in Path(holds).glob("hold_c*"):
         try:
             parts = f.read_text().split()
         except FileNotFoundError:
