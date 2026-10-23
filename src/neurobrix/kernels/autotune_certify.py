@@ -298,6 +298,33 @@ class KeyTooLargeForClass(RuntimeError):
         self.asked, self.card = asked, card
 
 
+def _softmax_shape(rows: int, feat: int, card_bytes, in_dt: str, out_dt: str, what: str) -> Tuple[int, int]:
+    """The (rows, row length) a softmax key is synthesised at. The key carries the row length's CLASS
+    (`launch_keys.softmax_feat_bucket`: the padded row, every length of (feat/2, feat] forms it) and the rows
+    (`bucket_of("M")`). At the class's top the draw is the key's whole; where the card cannot hold it in and out
+    within the capacity Prism plans against (`PRISM_DEFAULTS["safety_margin"]`), it is drawn at the shortest row
+    that still forms the key, as a GEMM key is drawn at its representative (`_gemm_rows`) — a key a plan forms
+    fits that capacity by construction. HAT-L at 2048 px on 16 GB: its sliced stretch forms softmax 2 097 152 rows
+    of 576 (the overlapping window's 24 x 24 keys), class 1 024 — 16 GiB at the class's top, the class's whole
+    nominal bytes, against 9.0 GiB at the run's own length (2026-10-22). No length of the class fitting is refused
+    by name."""
+    if card_bytes is None:
+        return rows, feat
+    from neurobrix.core.config.system import PRISM_DEFAULTS
+    from neurobrix.kernels.launch_keys import softmax_feat_bucket
+    per_elem = _isz.itemsize(_isz.from_autotune_key(in_dt)) + _isz.itemsize(_isz.from_autotune_key(out_dt))
+    usable = int(int(card_bytes) * float(PRISM_DEFAULTS["safety_margin"]))
+    if rows * feat * per_elem <= usable:
+        return rows, feat
+    # the SHORTEST row of the class: every config's tile, register budget and pruning are the padded row's, so it
+    # stands for the class as well as any, and leaves the sweep its own buffers (drawn at the longest that fit,
+    # 2 097 152 x 972, in and out took 15.2 GiB and the sweep's next 256 MB found no room, 2026-10-22)
+    shortest = feat // 2 + 1 if feat > 1 else 1
+    if softmax_feat_bucket(shortest) != feat or rows * shortest * per_elem > usable:
+        raise KeyTooLargeForClass(rows * feat * per_elem, int(card_bytes), what)
+    return rows, int(shortest)
+
+
 def _refuse_oversize(card_bytes, specs, what: str) -> None:
     """`specs`: (shape, dtype) of every operand AND the output, at their device widths, against
     a DISCRETE card. Checked before any draw. A unified-memory device is `_refuse_unified`'s."""
@@ -892,6 +919,7 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         # (BATCH_BUCKET, FEAT_BUCKET, log, x, out): the bucket's rows of the padded row length (a length of the class), through the wrapper itself; the
         # fp64 oracle per row (row-windowed above the oracle's cap, as a product's)
         rows, feat, log = int(key[0]), int(key[1]), bool(key[2])
+        rows, feat = _softmax_shape(rows, feat, card_bytes, dts[0] if dts else "fp32", out_dt, short)
         _refuse_oversize(card_bytes, [((rows, feat), dts[0] if dts else "fp32"), ((rows, feat), out_dt)], short)
         x = arr(rng, (rows, feat), dts[0] if dts else "fp32")
         fn = W.log_softmax if log else W.softmax
