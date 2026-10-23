@@ -354,7 +354,15 @@ def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_
         import dataclasses as _dc
         contract = _dc.replace(contract, fp32_op_uids=frozenset(contract.fp32_op_uids) | pins,
                                narrow_op_uids=frozenset(contract.narrow_op_uids) - pins)
-    dt0 = lambda tid: NBXDtype[rt[tid]] if rt.get(tid) in NBXDtype.__members__ else NBXDtype[{"float16": "float16", "float32": "float32", "bfloat16": "bfloat16"}[rt[tid]]]
+    def dt0(tid):
+        # a runtime dtype name as NBXDtype spells it: `bool` is `bool_` (a Python keyword) — read once a keyed op could
+        # take a mask (a sum of a bool mask: chatterbox, 2026-10-23); any other name not an NBXDtype is refused by name
+        n = rt[tid]
+        if n in NBXDtype.__members__:
+            return NBXDtype[n]
+        if n + "_" in NBXDtype.__members__:
+            return NBXDtype[n + "_"]
+        raise KeyError(f"runtime dtype {n!r} of {tid} is no NBXDtype")
     from neurobrix.triton import tiling_sizes as _TS
     conv_band_bytes = _TS.conv2d_band_bytes()
     out = []
