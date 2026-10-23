@@ -178,6 +178,11 @@ _MAY_OMIT = {
         "caching-allocator settings at all; on ROCm expandable segments are vendor-gated per "
         "release and architecture (pytorch/pytorch#192814 unskips its tests only on ROCm 10.0+, "
         "pytorch/pytorch#184880), so CDNA declares it once a plan is proven under it",
+    "memory.compiled_allocator_retention":
+        "stated as a table where the compiled allocator keeps the heaps it frees (Apple: dedicated_heap_min_bytes, "
+        "round_bytes) and as null where it reuses freed memory (NVIDIA): the reference's null leaf is the other "
+        "profiles' table; AMD states it once a compiled plan runs there (core/runtime/graph/compiled_sequence.py refuses "
+        "a vendor file that states nothing)",
 }
 _MAY_OMIT.update({f"matrix_unit.{k}": (
     "optional by contract (kernels/ops/_configs.matrix_unit): only an arch whose matrix unit Triton does "
