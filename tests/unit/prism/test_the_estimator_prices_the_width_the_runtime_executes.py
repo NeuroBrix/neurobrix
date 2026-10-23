@@ -654,3 +654,30 @@ def test_a_profile_with_no_device_prices_agreeing_operands_and_refuses_disagreei
     assert sdpa_operand_dtypes(D.float16, D.float16, D.float16, alignment=word)[0] == D.float16
     with _pt.raises(ValueError, match="has no device"):
         sdpa_operand_dtypes(D.float16, D.float16, D.float32, alignment=word)
+
+
+def test_a_decode_attention_reads_its_keys_and_values_at_the_cache_dtype():
+    """`operand_reads`: at a decode step the KV interceptor hands the self-attention the cache's keys and values (the
+    cache's dtype, fp16) where this step's projections wrote fp32 (an M <= 4 GEMV stores fp32): the operands disagree,
+    the attention aligns them as the wrapper does (narrowest) and writes fp16 — and the projection after it reads fp16
+    (whisper-large's out-projection at decode, the walk 2026-10-22). Without the reads the pass said fp32 throughout.
+    Injection: the reads ignored -> red."""
+    T = {"q": _t([1, 2, 1, 4]), "k": _t([1, 2, 1, 4]), "v": _t([1, 2, 1, 4]), "o": _t([1, 2, 1, 4]),
+         "x": _t([1, 2, 1, 4])}
+    O = [_op("sdpa::0", "aten::scaled_dot_product_attention", ["q", "k", "v"], ["o"]),
+         _op("relu::0", "aten::relu", ["o"], ["x"])]
+    T.update({"input::q": _t([1, 2, 1, 4], dtype="float32", is_input=True)})
+    O.insert(0, _op("clone::0", "aten::clone", ["input::q"], ["q"]))
+    T.update({"input::k": _t([1, 2, 1, 4], dtype="float32", is_input=True),
+              "input::v": _t([1, 2, 1, 4], dtype="float32", is_input=True)})
+    O.insert(1, _op("clone::1", "aten::clone", ["input::k"], ["k"]))
+    O.insert(2, _op("clone::2", "aten::clone", ["input::v"], ["v"]))
+    dag = _dag(T, O, ["input::q", "input::k", "input::v"], ["x"])
+    plain = runtime_dtypes(dag, "float32", "triton", attention_operands="narrowest", has_native_bf16=False,
+                           stores_fp64=False, contract=NONE)
+    assert plain["o"] == "float32"
+    read = runtime_dtypes(dag, "float32", "triton", attention_operands="narrowest", has_native_bf16=False,
+                          stores_fp64=False, contract=NONE,
+                          operand_reads={"sdpa::0": {"k": "float16", "v": "float16"}})
+    assert read["o"] == "float16" and read["x"] == "float16"
+    assert read["k"] == "float32"            # the projection still writes fp32: the cache is what the attention reads

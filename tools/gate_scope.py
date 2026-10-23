@@ -1785,7 +1785,12 @@ def class_constants(tree: Tree, uids: set, hw: str) -> dict:
     tree.K = {}
     tree.reset_program()
     cand = call_candidates(tree, uids) | {u for u in uids if u in tree.units}
-    K, refused, envs = gate_constants(tree, cand, hw, global_writers(tree))
+    # the global writers are read with no constant bound (K empty, just above): one figure per tree, whatever the
+    # class — computed once (it canonicalizes every unit of the tree: 4 x 12 min of the HAT lot's 50 min scope)
+    gw = tree.__dict__.get("_global_writers_unbound")
+    if gw is None:
+        gw = tree._global_writers_unbound = global_writers(tree)
+    K, refused, envs = gate_constants(tree, cand, hw, gw)
     tree.K = K
     tree.reset_program()
     return {"K": K, "refused": refused, "env": envs}

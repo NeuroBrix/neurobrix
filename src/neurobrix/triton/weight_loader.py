@@ -30,7 +30,7 @@ from neurobrix.kernels.nbx_tensor import (
 )
 from .memory_pool import ComponentArena
 # The loader's worker count — one figure for every loader and for Prism's host estimate (torch-free).
-from neurobrix.core.workspace import io_workers
+from neurobrix.core.workspace import io_workers, apply_host_mmap_threshold, apply_host_huge_pages
 # The absent-weight rule lives beside the container format it guards (torch-free), one rule for
 # both engines' loaders and binds and for the validator.
 from neurobrix.nbx.weight_presence import (   # noqa: F401 — re-exported for this engine's callers
@@ -215,6 +215,10 @@ def load_component_weights(
             the hardware profile's `conv.weight_layout` and the graph's readers
             (`launch_keys.krsc_conv_weights`). None stores every weight in its file order.
     """
+    # The host read and cast buffers: given back to the OS when freed, and never a huge-page request that a
+    # fragmented host answers by compacting memory (config/system.yml `io`; the compiled loader does the same).
+    apply_host_mmap_threshold()
+    apply_host_huge_pages()
     comp_dir = Path(cache_path) / "components" / component
     weights_dir = comp_dir / "weights"
 

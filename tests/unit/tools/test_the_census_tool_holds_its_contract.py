@@ -216,7 +216,7 @@ def test_an_interrupted_census_leaves_a_report_that_says_so(tmp_path, monkeypatc
 
 def _table_args(tmp_path, **kw):
     a = dict(hardware=PROFILE, rungs="4096", modes="triton", models="A", table="nvidia/volta",
-             logs=str(tmp_path / "logs"))
+             logs=str(tmp_path / "logs"), only_moved=False)
     a.update(kw)
     return SimpleNamespace(**a)
 

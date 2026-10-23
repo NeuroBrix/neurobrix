@@ -347,8 +347,12 @@ def runtime_dtypes(dag: Dict[str, Any], compute_dtype: str, engine: str, *,
                    tiling: Optional[TilingView] = None,
                    shape_of: Optional[Callable[[str], List[int]]] = None,
                    casts: Optional[Dict[str, List[Tuple[str, str]]]] = None,
-                   seams: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
-    """{tensor_id: dtype name at runtime}; `casts`, when given, is filled with each op's operand casts
+                   seams: Optional[Mapping[str, str]] = None,
+                   operand_reads: Optional[Mapping[str, Mapping[str, str]]] = None) -> Dict[str, str]:
+    """{tensor_id: dtype name at runtime}; `operand_reads`: {op uid: {input tid: the dtype the op READS it at}} where
+    the runtime hands an op another buffer than the graph's producer wrote — a decode step's self-attention reads its
+    keys and values from the KV cache, in the cache's dtype (`core/flow/decoder_kv`), not from this step's projections.
+    `casts`, when given, is filled with each op's operand casts
     ({uid: [(tensor id, dtype name)]}, `_Rules.operand_casts`). `seams`: {seam input tid: the dtype its producer
     runs at}, from the caller that priced the producing graph — a seam enters in that dtype; absent, its traced
     one. `shape_of(tid)` answers a tensor's shape at the
@@ -421,6 +425,10 @@ def runtime_dtypes(dag: Dict[str, Any], compute_dtype: str, engine: str, *,
             if t not in out:
                 raise ValueError(f"runtime_widths: op {uid} reads {t!r} before any op produced it")
         result = None
+        seen = out
+        if operand_reads and uid in operand_reads:
+            seen = dict(out)
+            seen.update(operand_reads[uid])
         for tid in outs:
             name = traced(tid)
             if name not in _FLOAT and name not in _COMPLEX:
@@ -430,10 +438,10 @@ def runtime_dtypes(dag: Dict[str, Any], compute_dtype: str, engine: str, *,
                 out[tid] = rule.complex_dtype(name)
                 continue
             if result is None:
-                result = rule.op_dtype(uid, op, ins, out)
+                result = rule.op_dtype(uid, op, ins, seen)
             out[tid] = result
         if casts is not None:
-            made = rule.operand_casts(uid, op, ins, out)
+            made = rule.operand_casts(uid, op, ins, seen)
             if made:
                 casts[uid] = made
     if engine in ATEN_ENGINES and not stores_fp64:

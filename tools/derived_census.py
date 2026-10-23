@@ -108,8 +108,9 @@ def prompt_tokens(model: str, prompt: str) -> int:
 def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dict,
                      has_native_bf16: bool, sdpa_budget_bytes: int, sdpa_min_rows: int,
                      sdpa_max_chunks: int, unhandled: collections.Counter, tiling=None,
-                     tiled_tf=None, decode_kv=None, pins=frozenset()):
-    """[(op uid, kernel qual, key tuple)] for one component at one symbol binding. `tiling` is
+                     tiled_tf=None, decode_kv=None, pins=frozenset(), out_dtypes=None):
+    """[(op uid, kernel qual, key tuple)] for one component at one symbol binding (`out_dtypes`, when given, filled
+    with every tensor's runtime dtype at that binding). `tiling` is
     the plan's `TilingView` for the component (its op-level tiling, empty when it has none).
     `pins`: ops a sliced pass runs at the accumulator's width (`sliced_bindings`), launched as a
     contract island — their own operands only, the widths downstream unchanged.
@@ -124,7 +125,7 @@ def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dic
             sdpa_max_chunks, unhandled, tiling, tiled_tf, decode_kv, frozenset(pins))
     axes = value_axes(model, comp)
     if not axes:
-        return _derive_at(*args)
+        return _derive_at(*args, out_dtypes=out_dtypes)
     groups = []
     try:
         shape0 = _shape_fn(g, comp, symbols, {}, {})
@@ -138,9 +139,9 @@ def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dic
         # an axis with no derivable envelope: the component is derived at the trace's extents
         # and the model refused by name (a partial table would certify a partial model)
         unhandled[f"{comp}: value-derived axis not classed — {e}"] += 1
-        return _derive_at(*args)
+        return _derive_at(*args, out_dtypes=out_dtypes)
     cone_ops = set().union(*(ax.cone_ops for grp in axes for ax in grp))
-    out = set(_derive_at(*args, skip=cone_ops))
+    out = set(_derive_at(*args, skip=cone_ops, out_dtypes=out_dtypes))
     for bounded in groups:
         ops_ = set().union(*(ax.cone_ops for ax, _l, _h in bounded))
         found = set()
@@ -259,6 +260,46 @@ def _shape_fn(g: dict, comp: str, symbols: dict, carried: dict, axis_values: dic
     return shape
 
 
+_NORM_KINDS = ("aten::native_layer_norm", "aten::layer_norm", "custom::rms_norm", "aten::rms_norm")
+
+
+def _tensor_arg(args, i):
+    """The tensor id at argument position `i`, or None when that argument is absent or no tensor."""
+    a = args[i] if len(args) > i else None
+    return a.get("tensor_id") if isinstance(a, dict) and a.get("type") == "tensor" else None
+
+
+def _prod(xs) -> int:
+    out = 1
+    for e in xs:
+        out *= int(e)
+    return out
+
+
+def _chain_band_rows(ops, chain, shape) -> list:
+    """The rows each band of a band-streamed residual chain hands its rms_norm (`kernels/ops/residual_chain.py`): the
+    band's input height (`tiling_sizes.residual_chain_bands`, the loop's own geometry) through the chain's convs in
+    graph order, each with its own kernel, stride, padding and dilation as the graph holds them, times the batch and
+    the width they leave."""
+    from neurobrix.core.module.tiling_sizes import residual_chain_bands
+    _, tf, halo, uids = chain
+    convs = [u for u in uids if (ops.get(u) or {}).get("op_type") == "aten::convolution"]
+    if not convs:
+        return []
+    x_s = shape(ops[convs[0]]["input_tensor_ids"][0])
+    rows = set()
+    for b in residual_chain_bands(x_s[2], tf, halo):
+        h, w = b[3] - b[2], x_s[3]
+        for u in convs:
+            at = ops[u].get("attributes") or {}
+            k = shape(ops[u]["input_tensor_ids"][1])
+            st, pd, dl = at.get("stride", [1, 1]), at.get("padding", [0, 0]), at.get("dilation", [1, 1])
+            h = (h + 2 * pd[0] - dl[0] * (k[2] - 1) - 1) // st[0] + 1
+            w = (w + 2 * pd[1] - dl[1] * (k[3] - 1) - 1) // st[1] + 1
+        rows.add(int(x_s[0]) * h * w)
+    return sorted(rows)
+
+
 def _triton_fp64() -> bool:
     """The Triton branch's fp64 on the hardware profile this census bound
     (`wrappers.set_hardware_profile`; refused when none is bound)."""
@@ -269,7 +310,7 @@ def _triton_fp64() -> bool:
 
 def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_bytes, sdpa_min_rows,
                sdpa_max_chunks, unhandled, tiling=None, tiled_tf=None, decode_kv=None, pins=frozenset(),
-               skip=(), only=None, axis_values=None, axes=()):
+               skip=(), only=None, axis_values=None, axes=(), out_dtypes=None):
     """`derive_component`'s body at one binding — and, when `axis_values` names value-derived
     axes, at those extents (`only`: the ops to derive, `skip`: the ops not to)."""
     from neurobrix.core.prism import runtime_widths as RW
@@ -290,14 +331,18 @@ def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_
         # The census is bound to its target's profile (the active one): its alignment is that profile's.
         from neurobrix.kernels.ops._configs import active_vendor_profile
         from neurobrix.triton.dtype import attention_operand_alignment
+        op_casts = {}
         rt = RW.runtime_dtypes(g, cdtype, engine, has_native_bf16=has_native_bf16,
                                attention_operands=attention_operand_alignment(active_vendor_profile()),
-                               contract=contract, stores_fp64=_triton_fp64(), tiling=tiling, shape_of=shape)
+                               contract=contract, stores_fp64=_triton_fp64(), tiling=tiling, shape_of=shape,
+                               casts=op_casts, operand_reads=_cache_reads(ops, decode_kv))
     except AnnotationContradiction as e:
         # The width pass reads the shapes too (the matmul store rule reads M): a component whose
         # annotation contradicts itself is not derivable as a whole — named, never guessed.
         unhandled[f"component not derivable, annotation contradicts its trace — {e}"] += 1
         return []
+    if out_dtypes is not None:
+        out_dtypes.update(rt)          # every tensor's runtime dtype at this binding: what a flow reads after it
     # A sliced pass's pins (`GraphExecutor.pin_fp32_ops`) are islands on their own launches only: the
     # stitch stores the contraction's sum back in the op's unpinned dtype, so the widths pass above
     # (every reader of the sum) runs on the component's contract as it is.
@@ -323,10 +368,19 @@ def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_
         # operand to fp32 before the wrapper — weights included — whatever the op's class.
         dt = (lambda tid: NBXDtype.float32 if dt0(tid).name in ("float16", "bfloat16") else dt0(tid)) \
             if (half and uid in contract.fp32_op_uids) else dt0
+        tf_u = (tiled_tf or {}).get(uid)
+        if isinstance(tf_u, tuple) and tf_u[0] == "chain" and kind in ("custom::rms_norm", "aten::rms_norm"):
+            tf_u = ("chain_rows", _chain_band_rows(ops, tf_u, shape))
+        if kind in _NORM_KINDS:
+            # an AMP fp32 op: the dtype engine's wrap casts its half operands to fp32 before the wrapper (and the
+            # triton-sequential one leaves custom::rms_norm alone) — the operands as the KERNEL receives them,
+            # `runtime_widths`' own casts, the rule the engine runs
+            _c = dict(op_casts.get(uid, ()))
+            dt = (lambda tid, _c=_c, _d=dt: NBXDtype[_c[tid]] if tid in _c else _d(tid))
         try:
             launches = _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_bf16,
                                     sdpa_budget_bytes, sdpa_min_rows, sdpa_max_chunks, conv_band_bytes,
-                                    unhandled, (tiled_tf or {}).get(uid), decode_kv)
+                                    unhandled, tf_u, decode_kv)
         except AnnotationContradiction as e:
             unhandled[f"annotation contradicts its trace — {str(e).split(' dim ')[0]}"] += 1
             continue
@@ -341,6 +395,25 @@ def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_
             unhandled[f"{KEYLESS}{kind}"] += 1
         for q_, key in launches:
             out.append((uid, q_, key))
+    return out
+
+
+def _cache_reads(ops: dict, decode_kv) -> dict:
+    """{SDPA uid: {its key and value tensors: the KV cache's dtype}} at a decode step: the KV interceptor
+    (triton/kv_cache.py `intercept`) hands each self-attention the cache's keys and values, in the cache's dtype —
+    the width pass then aligns the attention's operands as the wrapper does (`launch_keys.sdpa_operand_dtypes`) and
+    its output, and every op downstream, takes the dtype the run gives it (whisper-large's out-projection reads fp16 at
+    decode, fp32 at the prefill: the walk, 2026-10-22). A prefill, or no decode, reads what the graph wrote."""
+    if decode_kv is None or decode_kv.get("prefill") or "dtype" not in decode_kv:
+        return {}
+    kvd = getattr(decode_kv["dtype"], "name", str(decode_kv["dtype"]).replace("torch.", ""))
+    out = {}
+    for uid, o in ops.items():
+        if o.get("op_type") not in _SDPA_KINDS or ("uids" in decode_kv and uid not in decode_kv["uids"]):
+            continue
+        ins = o.get("input_tensor_ids") or []
+        if len(ins) >= 3:
+            out[uid] = {ins[1]: kvd, ins[2]: kvd}
     return out
 
 
@@ -873,8 +946,14 @@ _INERT_AXES = {}         # {(model, comp): [the axes no autotuned kernel reads]}
 
 # The op kinds `_op_launches` keys — the one list: an op of any other kind launches no autotuned
 # kernel, and a value-derived axis whose descendants hold none of these moves no key.
+#: every SDPA spelling the graphs carry: each reaches `scaled_dot_product_attention_wrapper`
+_SDPA_KINDS = frozenset({"aten::scaled_dot_product_attention", "aten::_scaled_dot_product_attention",
+                         "aten::_scaled_dot_product_efficient_attention", "aten::_scaled_dot_product_flash_attention",
+                         "aten::_scaled_dot_product_flash_attention_for_cpu"})
+
 _KEYED_KINDS = frozenset({
-    "aten::mm", "aten::bmm", "aten::addmm", "aten::baddbmm", "aten::convolution", "aten::conv1d",
+    "aten::native_layer_norm", "aten::layer_norm", "custom::rms_norm", "aten::rms_norm",
+    "aten::mm", "aten::bmm", "aten::addmm", "aten::baddbmm", "aten::mv", "aten::addmv", "aten::convolution", "aten::conv1d",
     "aten::lstm", "aten::_fft_r2c", "aten::_fft_c2r", "aten::linear", "aten::matmul", "aten::stft",
     "aten::istft", "aten::scaled_dot_product_attention", "aten::_scaled_dot_product_attention",
     "aten::_scaled_dot_product_efficient_attention", "aten::_scaled_dot_product_flash_attention",
@@ -897,10 +976,15 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
         elif kind == "aten::bmm":
             (_, M, K), (_, _, N) = shape(ins[0]), shape(ins[1])
             launches = LK.bmm_launches(M, K, N, dt(ins[0]), dt(ins[1]), has_native_bf16)
-        elif kind in ("aten::scaled_dot_product_attention", "aten::_scaled_dot_product_attention",
-                      "aten::_scaled_dot_product_efficient_attention",
-                      "aten::_scaled_dot_product_flash_attention",
-                      "aten::_scaled_dot_product_flash_attention_for_cpu"):
+        elif kind == "aten::mv":
+            # mv(mat [N, K], vec [K]) -> `mv_wrapper`
+            (N, K) = shape(ins[0])
+            launches = LK.mv_launches(N, K, dt(ins[0]), dt(ins[1]), has_native_bf16)
+        elif kind == "aten::addmv":
+            # addmv(input [N], mat [N, K], vec [K]) -> `addmv_wrapper`
+            (N, K) = shape(ins[1])
+            launches = LK.addmv_launches(N, K, dt(ins[1]), dt(ins[2]), dt(ins[0]), has_native_bf16)
+        elif kind in _SDPA_KINDS:
             # every SDPA spelling reaches `scaled_dot_product_attention_wrapper` with (q, k, v)
             # first (dispatch.py: the fused-backend spellings through `_meta_sdpa_efficient`)
             q, k, v = (shape(t) for t in ins[:3])
@@ -959,6 +1043,32 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
                 launches = []                     # the vector decode kernel: no autotuned key
             else:
                 launches = LK.math_attention_launches(B, H, Hk, Tq, Tk, D, Dv, qd, kd, vd, has_native_bf16)
+        elif kind in ("aten::native_layer_norm", "aten::layer_norm"):
+            # `wrappers.native_layer_norm` (`layer_norm_wrapper` calls it): the normalized extent is the product of
+            # `normalized_shape`, every other element a row; weight and bias by their argument positions (an absent
+            # one is no tensor); the output allocated like the input as the kernel receives it
+            x_s = shape(ins[0])
+            args = (o.get("attributes") or {}).get("args") or []
+            ns = args[1] if len(args) > 1 else None
+            ns = ns.get("value") if isinstance(ns, dict) else ns
+            k = len(ns) if isinstance(ns, (list, tuple)) else 1
+            w_t, b_t = _tensor_arg(args, 2), _tensor_arg(args, 3)
+            launches = LK.layer_norm_launches(_prod(x_s[:len(x_s) - k]), _prod(x_s[len(x_s) - k:]),
+                                              w_t is not None, b_t is not None, dt(ins[0]),
+                                              dt(w_t) if w_t else None, dt(b_t) if b_t else None, dt(ins[0]))
+        elif kind in ("custom::rms_norm", "aten::rms_norm"):
+            # `wrappers.rms_norm` over the last dim; the output at the op's stored dtype (the dtype engine passes it
+            # as `out_dtype`) — and, inside a band-streamed residual chain, once per band at the band's own rows
+            # (`residual_chain`: the chain's convs on the band plus its halo, then rms_norm on their output)
+            x_s = shape(ins[0])
+            feat = x_s[-1] if x_s else 1
+            w_t = _tensor_arg((o.get("attributes") or {}).get("args") or [], 1)
+            row_sets = (tile_factor[1] if isinstance(tile_factor, tuple) and tile_factor[0] == "chain_rows"
+                        else [int(_prod(x_s[:-1]))])
+            launches = []
+            for rows in row_sets:
+                launches += LK.rms_norm_launches(int(rows), feat, w_t is not None, dt(ins[0]),
+                                                 dt(w_t) if w_t else None, dt(ins[0]))
         elif kind in ("aten::_softmax", "aten::softmax", "aten::_safe_softmax", "aten::_log_softmax", "aten::log_softmax"):
             # `_safe_softmax` runs the same wrapper (`kernels/dispatch.py`: "_safe_softmax": w.softmax): its key too —
             # left out, Ming-Lite's vision softmax missed in the certified-only W1+Apple gate (2026-10-22)
@@ -1016,7 +1126,7 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
                 # A conv of a band-streamed residual chain (`band_streamed_chain_nbx`): conv2d_wrapper on each band,
                 # the band plus its halo rows — one launch set per distinct band input height.
                 from neurobrix.core.module.tiling_sizes import residual_chain_bands
-                _, tf_, halo_ = tile_factor
+                tf_, halo_ = tile_factor[1], tile_factor[2]
                 heights = sorted({b[3] - b[2] for b in residual_chain_bands(x_s[2], tf_, halo_)})
                 launches = []
                 for h_in in heights:
@@ -1304,7 +1414,8 @@ def plan_tiling(plan: dict, comp: str):
     tiled_tf = {**{f[1]: int(f[2]) for f in fus}, **{t[0]: int(t[1]) for t in til}}
     # A band-streamed residual chain: each of its convs runs on every band (the band plus its halo rows), so each
     # derives at every band input height (`tiling_sizes.residual_chain_bands`, the loop's own geometry).
-    tiled_tf.update({u: ("chain", int(tf), int(halo)) for uids, tf, halo, _h in ot.get("residual_chains", []) for u in uids})
+    tiled_tf.update({u: ("chain", int(tf), int(halo), tuple(uids)) for uids, tf, halo, _h in ot.get("residual_chains", [])
+                     for u in uids})
     return view, tiled_tf
 
 
@@ -1323,7 +1434,7 @@ class _Shape:
 
 def run_at_inputs(model: str, comp: str, cdtype: str, mode: str, inputs: dict, has_native_bf16: bool,
                   sdpa: tuple, unhandled: collections.Counter, tiling=None, tiled_tf=None,
-                  decode_kv=None):
+                  decode_kv=None, out_dtypes=None):
     """(launches, {output tensor id: shape}) of one component fed `inputs` {input name: shape}:
     its symbols bound by the RUNTIME's binder from those shapes (`bind_from_inputs`), its keys
     derived, its outputs' shapes resolved at that binding — what the next stage of a flow reads."""
@@ -1334,7 +1445,7 @@ def run_at_inputs(model: str, comp: str, cdtype: str, mode: str, inputs: dict, h
     res.bind_from_inputs(feed, list(feed), g.get("tensors") or {})
     syms = dict(res.bindings)
     launches = derive_component(model, comp, cdtype, mode, syms, has_native_bf16, *sdpa, unhandled,
-                                tiling=tiling, tiled_tf=tiled_tf, decode_kv=decode_kv)
+                                tiling=tiling, tiled_tf=tiled_tf, decode_kv=decode_kv, out_dtypes=out_dtypes)
     outs = {}
     for ax in [a for grp in value_axes(model, comp) for a in grp] + _INERT_AXES[(model, comp)]:
         if ax.outputs and not ax.refused:
@@ -1490,6 +1601,11 @@ def extent_sites(model: str, topo: dict, defaults: dict, plan: dict, prompt: str
         def decode(n, lm=lm, kvp=kvp):
             return [(lm, {"__decode__": {"len": n, "dtype": kvp["dtype"].name,
                                          "heads": kvp["num_kv_heads"]}})]
+        # every step projects the last hidden, in fp32, on the embedding rows of the valid next tokens
+        # (`_generate_kv`: [1, H] @ [H, n_valid], the flow's own `control_token_ids`)
+        n_valid = len(NTD.control_token_ids(tok, defaults)[4])
+        prefill.flow_launches = decode.flow_launches = _flow_logits(model, lm, (n_valid, dim, "float32"),
+                                                                     has_native_bf16)
         sites.append((f"{lm} prompt prefill", P, P, prefill))
         lo = P + 1
         if cfg != 1.0:
@@ -1509,14 +1625,24 @@ def extent_sites(model: str, topo: dict, defaults: dict, plan: dict, prompt: str
     # over the WHOLE context every step — the chat-templated prompt around the modality span
     # (`tokenize_around_span`) with the vision tokens spliced in: L0 .. L0 + max_tokens - 1.
     if flow.get("type") == "vlm" and image_path and prompt:
-        sites.extend(_vlm_sites(model, topo, defaults, plan, image_path, prompt, max_tokens_req,
-                                has_native_bf16, sdpa))
+        _new = _vlm_sites(model, topo, defaults, plan, image_path, prompt, max_tokens_req, has_native_bf16, sdpa)
+        # the flow's own logits after every LM step (`vlm._compute_logits`: the head's weight, cast to the hidden's
+        # dtype, over the last position) — the head component the topology names; a VLM without one ties the
+        # embedding, which no container here does: refused by name rather than guessed
+        _v = topo["flow"]["vlm"]
+        if not _v.get("head_component"):
+            raise SystemExit(f"{model}: a VLM with no head component — the tied-embedding logits are not derived")
+        _rows = _head_rows(model, None, _v["head_component"])
+        _fl = _flow_logits(model, _v["lm_component"], (_rows[0], _rows[1], None), has_native_bf16)
+        for _site in _new:
+            _site[3].flow_launches = _fl
+        sites.extend(_new)
     # encoder_decoder (triton/flow/encoder_decoder.py `_decode_one_window`): the decoder runs ONE
     # token per step on the encoder's frames — its self-attentions through the KV cache (step 1 a
     # prefill of one token, then the cache's 2 .. max_tokens - 1), its cross-attentions native
     # (`decoder_self_attention_plan`, the flow's own split).
     if flow.get("type") == "encoder_decoder":
-        sites.extend(_encoder_decoder_sites(model, topo, defaults, plan))
+        sites.extend(_encoder_decoder_sites(model, topo, defaults, plan, has_native_bf16))
     # audio_llm (triton/flow/audio_llm.py): the recording's features through the forward stages
     # (the frontend's own preprocessing choice and fit), their embeddings between the declared
     # prefix and suffix ids, then the language model over the WHOLE context every step — its
@@ -1582,7 +1708,37 @@ class _Stub:
         self.__dict__.update(kw)
 
 
-def _encoder_decoder_sites(model, topo, defaults, plan):
+def _flow_logits(model, lm, rows, has_native_bf16):
+    """What a flow launches itself after its LM, every step: its logits — the LM's last position [1, H] times the
+    `rows` [V, H] weight transposed, through `matmul_wrapper` (M = 1: the GEMV), the weight cast to the hidden's dtype
+    first (`vlm._compute_logits` / `audio_llm._compute_logits` `_proj`, `next_token_diffusion._generate_kv` in fp32) —
+    keyed at the dtypes the LM's step gives its output. `rows`: (V, H, the dtype both operands take, or None for the
+    LM output's own). A chain carries it as `flow_launches`; the extent loop asks it after the LM's derivation."""
+    from neurobrix.kernels import launch_keys as _LK
+    from neurobrix.kernels.nbx_tensor import NBXDtype
+    out_tid = raw_graph(model, lm)["output_tensor_ids"][0]
+    V, H, fixed = rows
+
+    def launches(comp, dts):
+        if comp != lm:
+            return []
+        dt = NBXDtype[fixed] if fixed else NBXDtype[dts[out_tid]]
+        return [(None, q_, key) for q_, key in _LK.mm_launches(1, int(H), int(V), dt, dt, has_native_bf16)]
+    return launches
+
+
+def _head_rows(model, _unused, head):
+    """(V, H) of the weight a flow's logits read from a head component: its first 2-D parameter, the flow's own rule
+    (it projects on the head executor's first 2-D weight)."""
+    g = raw_graph(model, head)
+    for t, m in g["tensors"].items():
+        shp = m.get("shape") or []
+        if t.startswith("param::") and len(shp) == 2:
+            return int(shp[0]), int(shp[1])
+    raise SystemExit(f"{model}: {head} holds no 2-D weight — the flow's logits have nothing to read")
+
+
+def _encoder_decoder_sites(model, topo, defaults, plan, has_native_bf16):
     from neurobrix.core.flow.decoder_kv import decoder_self_attention_plan
     from neurobrix.core.runtime.decode_bound import decode_bound
     stages = (topo.get("flow") or {}).get("stages") or []
@@ -1606,6 +1762,26 @@ def _encoder_decoder_sites(model, topo, defaults, plan):
         kv = ({"prefill": True, "uids": self_uids} if n == 1 else
               {"len": n, "dtype": dtype, "heads": kvp["num_heads"], "uids": self_uids})
         return [(dec, {ids_in: [1, 1], enc_in: list(frames), "__kv__": kv})]
+    dec_stage = next(st for st in stages if st.get("component") == dec)
+    if dec_stage.get("logits_source", "embed_weight_tied") == "embed_weight_tied":
+        # the flow's weight-tied logits (triton/flow/encoder_decoder.py `_compute_logits`): the last position's hidden
+        # state [1, H] @ the token embedding transposed, through `mm` — at M = 1, the GEMV; the embedding by the flow's
+        # own rule (`tied_embedding_name`), both operands at the dtypes the decoder's step gives them
+        from neurobrix.kernels import launch_keys as _LK
+        from neurobrix.kernels.nbx_tensor import NBXDtype
+        from neurobrix.triton.flow.encoder_decoder import tied_embedding_name
+        gdec = raw_graph(model, dec)
+        params = {t[len("param::"):]: m.get("shape") for t, m in gdec["tensors"].items() if t.startswith("param::")}
+        emb = tied_embedding_name(params)
+        out_tid = gdec["output_tensor_ids"][0]
+
+        def logits(comp, dts):
+            if comp != dec or emb is None:
+                return []
+            V, H = params[emb]
+            return [(None, q_, key) for q_, key in _LK.mm_launches(1, int(H), int(V), NBXDtype[dts[out_tid]],
+                                                                    NBXDtype[dts[f"param::{emb}"]], has_native_bf16)]
+        step.flow_launches = logits
     return [(f"{dec} self-attention KV length", 1, int(mt) - 1, step)]
 
 
@@ -1979,10 +2155,14 @@ def derive_extents(model, mode, topo, defaults, plan, has_native_bf16, sdpa, unh
                                 for sid, i in ((g.get("symbolic_context") or {})
                                                .get("symbols") or {}).items()}
                         d["dtype"] = NBXDtype[str(d["dtype"]).replace("torch.", "")]
+                        _dts = {}
                         launches = derive_component(model, comp, dtypes[comp], mode, syms,
                                                     has_native_bf16, *sdpa, unhandled, tiling=view,
-                                                    tiled_tf=tiled_tf, decode_kv=d)
+                                                    tiled_tf=tiled_tf, decode_kv=d, out_dtypes=_dts)
                         keys |= set(launches)
+                        _fl = getattr(chain, "flow_launches", None)
+                        if _fl is not None:
+                            keys |= set(_fl(comp, _dts))
                         continue
                     inputs = dict(feed(outs) if callable(feed) else feed)
                     kv = inputs.pop("__kv__", None)
@@ -1991,10 +2171,16 @@ def derive_extents(model, mode, topo, defaults, plan, has_native_bf16, sdpa, unh
                     if kv is not None and "dtype" in kv:
                         from neurobrix.kernels.nbx_tensor import NBXDtype
                         kv = dict(kv, dtype=NBXDtype[str(kv["dtype"]).replace("torch.", "")])
+                    _dts = {}
                     launches, outs = run_at_inputs(model, comp, dtypes[comp], mode, inputs,
                                                    has_native_bf16, sdpa, unhandled, tiling=view,
-                                                   tiled_tf=tiled_tf, decode_kv=kv)
+                                                   tiled_tf=tiled_tf, decode_kv=kv, out_dtypes=_dts)
                     keys |= set(launches)
+                    # what the FLOW launches itself after this component, at this step (`flow_launches`: the
+                    # weight-tied logits of an encoder-decoder), read from the component's runtime dtypes
+                    _fl = getattr(chain, "flow_launches", None)
+                    if _fl is not None:
+                        keys |= set(_fl(comp, _dts))
                 found.update(keys)
                 seen[n] = frozenset((q_, k) for _u, q_, k in keys)
             return seen[n]
@@ -2200,16 +2386,103 @@ def compare(a) -> int:
     return 0
 
 
+#: where this run's tiling probes land (`table --logs`): a path the record never carries (`_norm_logs`)
+_LOGS: list = []
+
+
+def _norm_logs(obj):
+    """`obj` with this run's logs directory written `<logs>`: a plan or a request that names a probe's input names
+    it under whichever --logs the census was given, and the scope compares what was derived, not where."""
+    import json as _j
+    text = _j.dumps(obj, sort_keys=True, default=str)
+    for d in _LOGS:
+        text = text.replace(d, "<logs>")
+    return _j.loads(text)
+
+
+#: The plan record's fields priced FROM THE EXPLAINING PROCESS ITSELF: `host_footprint` holds its `resident` term,
+#: what the planning process holds when Prism prices, "passed in measured" (core/prism/host_footprint.py) — it
+#: moves from one explanation to the next (TinyLlama, 2026-10-22: 171 057 152 then 171 933 696 bytes). The
+#: derivation reads none of them (tests/unit/census/test_the_census_scope_is_what_the_rows_are_derived_from.py
+#: derives with them removed), so the digest leaves them out; any other field of the record is hashed.
+ROOM_FIELDS = ("host_footprint",)
+
+
+def _plan_digest(plan=None, refused: str = "") -> str:
+    """The hash of one derivation's plan record — or of the refusal that stood in its place."""
+    import census_inputs as CI
+    if refused:
+        return "refused:" + CI.digest(_norm_logs(refused))
+    return CI.digest(_norm_logs({k: v for k, v in plan.items() if k not in ROOM_FIELDS}))
+
+
+def _job_id(mode, ri, req, rung) -> str:
+    import census_inputs as CI
+    return f"{mode}|{ri}|r{rung}|{CI.digest(_norm_logs(list(req)))}"
+
+
 def _derive_job(args):
-    """One (mode, request, rung) derivation in a worker: (\"ok\", (derived, unhandled)), or the refusal by name."""
+    """One (mode, request, rung) derivation in a worker: ("ok", (derived, unhandled), inputs), or the refusal by
+    name with its inputs — `inputs` what the derivation was derived FROM (census_inputs: the plan's hash, the
+    code it executed, the files it read)."""
+    import census_inputs as CI
+    model, hw, mode, rung, req = args
+    CI.reset()
+    try:
+        derived, plan, _P, unhandled = derive_keys(model, hw, mode, rung, req)
+    except PlanRefused as e:
+        return ("plan_refused", str(e), {"plan": _plan_digest(refused=str(e)), **CI.take()})
+    except SystemExit as e:
+        return ("system_exit", str(e), {"plan": _plan_digest(refused=str(e)), **CI.take()})
+    return ("ok", (list(derived), collections.Counter(unhandled)), {"plan": _plan_digest(plan), **CI.take()})
+
+
+def _plan_job(args) -> str:
+    """One derivation's plan digest, explained again in the current tree (the scope's plan check)."""
     model, hw, mode, rung, req = args
     try:
-        derived, _plan, _P, unhandled = derive_keys(model, hw, mode, rung, req)
+        return _plan_digest(plan_record(model, req, mode, hw, rung))
     except PlanRefused as e:
-        return ("plan_refused", str(e))
+        return _plan_digest(refused=str(e))
     except SystemExit as e:
-        return ("system_exit", str(e))
-    return ("ok", (list(derived), collections.Counter(unhandled)))
+        return _plan_digest(refused=str(e))
+
+
+def _plan_digests(model, hw, jobs) -> list:
+    """The plan digest of every (mode, request, rung) job, in order: the first explained alone and priced (the
+    explaining subprocess's peak resident size, `RUSAGE_CHILDREN`), the rest as many at a time as the cores and the
+    free memory hold (`_workers_memory_holds`)."""
+    import resource
+    from concurrent.futures import ThreadPoolExecutor
+    args = [(model, hw, mode, rung, req) for mode, _ri, req, rung in jobs]
+    if not args:
+        return []
+    first = _plan_job(args[0])
+    peak = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
+    peak = int(peak) if sys.platform == "darwin" else int(peak) * 1024
+    workers = _workers_memory_holds(len(args) - 1, peak)
+    with _host_hold(HOLDS, max(1, workers) * peak), ThreadPoolExecutor(max(1, workers)) as ex:
+        return [first] + list(ex.map(_plan_job, args[1:]))
+
+
+def _moved(model, hw, rec, container, jobs) -> str:
+    """Why `model`'s rows must be derived again — '' when its record says they are what this tree would derive:
+    the same container, the same jobs, no executed unit of code and no read file moved, the same plan per job."""
+    import census_inputs as CI
+    if rec is None:
+        return "no input record"
+    if rec.get("container") != container:
+        return f"container {rec.get('container')} -> {container}"
+    ids = [_job_id(*j) for j in jobs]
+    if sorted(ids) != sorted(rec.get("jobs") or {}):
+        return "its (mode, request, rung) jobs changed"
+    why = CI.static_move(rec)
+    if why:
+        return why
+    for jid, dig in zip(ids, _plan_digests(model, hw, jobs)):
+        if rec["jobs"][jid] != dig:
+            return f"plan {jid.rsplit('|', 1)[0]} moved"
+    return ""
 
 
 def _derive_job_priced(args):
@@ -2225,20 +2498,82 @@ def _peak_rss_bytes() -> int:
     return int(peak) if sys.platform == "darwin" else int(peak) * 1024
 
 
+HOLDS = None   # the holds ledger the gate schedulers share (`table --holds`); None: the census holds the machine alone
+
+
+def _held_by_others(holds) -> int:
+    """Host bytes the gate cells of the shared ledger reserve: each `hold_c<card>` "<pid> <bytes>" names its cell's
+    need (`gate_sched.pick_gate`); a hold naming no bytes (a card held by a certifier) reserves none. A reservation
+    is counted whole even where its cell already resides in the free memory read beside it: the census errs on
+    fewer workers. Another census's `hold_host_<pid>` is NOT subtracted: its workers already sit in the free memory
+    read beside it, and counting both made eight census writers starve each other to one worker apiece (the cband
+    census, 2026-10-23 05:28: Qwen3-Coder's 14 derivations one at a time, where 13 ran at once the evening before).
+    The gates count it (`gate_sched.others_reserved`) — a cell admitted beside a census is what the hold protects."""
+    if holds is None:
+        return 0
+    total = 0
+    for f in Path(holds).glob("hold_c*"):
+        try:
+            parts = f.read_text().split()
+        except FileNotFoundError:
+            continue
+        if (len(parts) >= 2 and parts[0].isdigit() and parts[0] != str(os.getpid()) and parts[1].isdigit()
+                and _alive(int(parts[0]))):
+            total += int(parts[1])
+    return total
+
+
+def _alive(pid: int) -> bool:
+    """Whether the process a hold names still runs: a holder killed before it removed its hold (a census writer
+    stopped by signal, 2026-10-23 07:46) reserves nothing."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+class _host_hold:
+    """The census's own reservation in the ledger while its workers run (`hold_host_<pid>`: "<pid> <bytes>"), so a
+    gate scheduler admitting a cell counts it (`gate_sched.others_reserved`); removed on every exit."""
+
+    def __init__(self, holds, nbytes: int):
+        self.f = None if holds is None else Path(holds) / f"hold_host_{os.getpid()}"
+        self.nbytes = int(nbytes)
+
+    def __enter__(self):
+        if self.f is not None:
+            self.f.write_text(f"{os.getpid()} {self.nbytes}\n")
+        return self
+
+    def __exit__(self, *exc):
+        if self.f is not None:
+            self.f.unlink(missing_ok=True)
+        return False
+
+
 def _workers_memory_holds(n_jobs: int, worker_bytes: int) -> int:
     """How many derivation workers the machine holds at once: the cores (`os.cpu_count()`), and the free host
     memory read as Prism reads it (`core.host_memory`, rounded DOWN to the memory ladder's rung,
     `memory_budget.rung_down_mb`) over what one worker measured it takes (`worker_bytes`). A derivation holds a whole
     graph: on 24 GB of unified memory the cores were no memory bound, and the census started a worker per core until
     the Mac panicked three times (2026-10-20 00:27, 00:42, 00:54, WindowServer watchdog, 21 swap files). Unread
-    memory runs one derivation at a time."""
+    memory runs one derivation at a time.
+    The cores are those the machine is not already running on (`os.getloadavg`, the last minute): eight census
+    processes each starting a worker per core held ~300 derivations on 48 cores, and mochi's plans outran their
+    explanation's timeout (2026-10-22 17:3x, the c1norms census).
+    The free memory is what the gate cells sharing the ledger have not reserved (`_held_by_others`): a census
+    started beside a gate saw the memory a just-admitted Qwen3-30B had reserved but not yet taken, and the kernel
+    killed the cell (2026-10-23 00:10:30, 247 GiB held)."""
     from neurobrix.core.host_memory import memory_state
     from neurobrix.core.prism.memory_budget import rung_down_mb
-    cores = os.cpu_count() or 1
+    cores = max(1, (os.cpu_count() or 1) - int(os.getloadavg()[0]))
     free = memory_state().available_mb
     if free is None or worker_bytes <= 0:
         return 1
-    held = int((rung_down_mb(free) << 20) // worker_bytes)
+    held = max(0, (rung_down_mb(free) << 20) - _held_by_others(HOLDS)) // worker_bytes
     return max(1, min(n_jobs, cores, held))
 
 
@@ -2267,7 +2602,7 @@ def _derive_jobs(model, hw, jobs, start_method=None):
     workers = _workers_memory_holds(len(rest), worker_bytes)
     print(f"[derive] {model}: {len(args)} derivation(s), {i} measured alone, then {workers} at a time (cores, free "
           f"memory at its rung, one worker measured at {worker_bytes >> 20} MB)", flush=True)
-    with ctx.Pool(workers) as pool:
+    with _host_hold(HOLDS, workers * worker_bytes), ctx.Pool(workers) as pool:
         return results + pool.map(_derive_job, rest, chunksize=1)
 
 
@@ -2283,6 +2618,10 @@ def table(a) -> int:
     for the probe, is no key there (the census's own rule); at the top rung it refuses the model."""
     import certified_census as CC
     from neurobrix.kernels import census_table as T
+    global HOLDS
+    HOLDS = a.holds
+    print(f"[derived holds] host memory shared through the holds ledger {a.holds}" if a.holds else
+          "[derived holds] no holds ledger (--holds): the census reserves no host memory and counts no one's", flush=True)
     hw = a.hardware
     cls = CC.census_memory_class(hw)
     rungs = CC.rungs_for(hw) if a.rungs == "ladder" else [int(x) for x in a.rungs.split(",") if x.strip()]
@@ -2313,6 +2652,11 @@ def table(a) -> int:
                          text=True).stdout.strip() or "unknown"
     worst = 0
     Path(a.logs).mkdir(parents=True, exist_ok=True)     # a tiling probe's resized input lands here
+    import census_inputs as CI
+    _LOGS[:] = sorted({str(Path(a.logs)), str(Path(a.logs).resolve())}, key=len, reverse=True)
+    CI.OUTPUTS[:] = [str(path), str(T.inputs_path(path)), str(Path(a.logs))]
+    CI.install()                       # what every model's rows are derived FROM, measured from here on
+    recs = T.read_inputs(path) if a.only_moved else {}
     for model in models:
         fam = CC._family(model)
         reqs = CC.census_requests(model, fam, [], None)
@@ -2326,8 +2670,20 @@ def table(a) -> int:
         # bound profile and every module state inherited), the results consumed in the loop's own order —
         # the same rows as one process, in a fraction of the wall (the census is CPU-bound, one core each).
         jobs = [(mode, ri, req, rung) for mode in modes for ri, req in enumerate(reqs) for rung in rungs]
+        if a.only_moved:
+            why = _moved(model, hw, recs.get(model), container, jobs)
+            if not why:
+                r_ = recs[model]
+                print(f"[derived table] {model}: unchanged, its rows kept — the {len(r_['jobs'])} plan(s), "
+                      f"{len(r_['units'])} unit(s) of code executed and {len(r_['files'])} file(s) read that they "
+                      f"were derived from are this tree's", flush=True)
+                continue
+            print(f"[derived scope] {model}: derived again — {why}", flush=True)
+        measured, plans = [], {}
         for (mode, ri, req, rung), res in zip(jobs, _derive_jobs(model, hw, jobs)):
-                    kind_, payload = res
+                    kind_, payload, inp = res
+                    measured.append(inp)
+                    plans[_job_id(mode, ri, req, rung)] = inp["plan"]
                     if kind_ == "plan_refused":
                         if rung == rungs[-1] and not ri:
                             unrunnable.append(f"{mode} r{rung}: {payload}")
@@ -2367,6 +2723,9 @@ def table(a) -> int:
                 print(f"   {line}")
             continue
         removed, _ = T.replace_model(path, model, rows, keyless_ops=0 if rows else max(keyless, len(unrunnable)))
+        units, files = CI.units_and_files(CI.merge(measured + [CI.take()]))
+        T.replace_inputs(path, model, {"model": model, "container": container, "jobs": plans, "units": units,
+                                       "files": files, "tool": f"derived_census {rev}"})
         written = len({(r["mode"], r["kernel"], r["key"]) for r in rows})
         print(f"[derived table] {model}: {written} row(s) written ({removed} replaced; {keyless} keyless op(s) "
               f"placed) into {path.name} "
@@ -2394,6 +2753,13 @@ def main(argv=None) -> int:
     t.add_argument("--modes", default="triton,triton-sequential")
     t.add_argument("--rungs", default="ladder", help="'ladder' (the class's rungs) or a comma-separated list of MB")
     t.add_argument("--logs", required=True, help="where a tiling probe's resized input lands")
+    t.add_argument("--holds", default=None,
+                   help="the holds ledger the gate schedulers share (gate_sched --holds): the census reads their "
+                        "reserved host bytes before sizing its workers and writes its own (hold_host_<pid>)")
+    t.add_argument("--only-moved", action="store_true",
+                   help="derive only the models whose input record (the table's <cls>g.inputs.jsonl) moved: their "
+                        "container, a plan, a unit of code the derivation executed or a file it read; the others' "
+                        "rows are kept and said unchanged")
     a = ap.parse_args(argv)
     return table(a) if a.cmd == "table" else compare(a)
 

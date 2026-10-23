@@ -476,6 +476,26 @@ def reduce_tile_max() -> int:
         "the largest 2-D reduction tile it stages correctly")
 
 
+# Whether a backend's lowering stages a 2-D reduce ONE ELEMENT PER THREAD along the reduced extent: then that extent of
+# a tile cannot exceed the threads of the program that reduces it (its warps x the backend's threads per warp). Metal,
+# measured 2026-09-07: the GEMV's 8 x 256 at 4 warps and the mv's 64 x 256 at 4 warps refused, naming the numbers
+# (tests/unit/config/test_apple_profiles_agree_with_the_device.py held those tiles in the profile until the certifier
+# chose them; the rule is the kernels' prune now, `ops/_configs.prune_gemv_vec` / `prune_addmv`). cuda/hip reduce many
+# elements per thread in registers.
+_BACKEND_REDUCE_PER_THREAD = {"cuda": False, "hip": False, "metal": True}
+_BACKEND_THREADS_PER_WARP = {"cuda": 32, "hip": 64, "metal": 32}
+
+
+def reduced_extent_max(num_warps: int) -> Optional[int]:
+    """The largest reduced extent a program of `num_warps` stages on this backend, or None when its lowering bounds
+    none (it reduces many elements per thread)."""
+    if not _backend_capability(_BACKEND_REDUCE_PER_THREAD, "_BACKEND_REDUCE_PER_THREAD",
+                               "whether it stages a 2-D reduce one element per thread"):
+        return None
+    return int(num_warps) * int(_backend_capability(_BACKEND_THREADS_PER_WARP, "_BACKEND_THREADS_PER_WARP",
+                                                    "its threads per warp"))
+
+
 def _backend_capability(table, name: str, what: str) -> bool:
     """One row of one capability table, or a refusal naming both."""
     backend = _detect_gpu_backend()

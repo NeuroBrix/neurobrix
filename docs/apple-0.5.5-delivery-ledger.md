@@ -152,7 +152,6 @@ so they cannot be resident; resident cost = one streamed block):**
 - orpheus-3b-0.1-ft — 14.1 GB
 - orpheus-3b-0.1-ft-snac — 14.2 GB
 - granite-speech-3.3-8b — 16.1 GB
-- Qwen3-Coder-30B-A3B-Instruct-int4g128-ffnonly — 17.2 GB
 - Wan2.1-VACE-1.3B-diffusers — 18.3 GB
 - GLM-4.1V-9B-Thinking — 19.2 GB
 - PixArt-Sigma-XL-2-1024-MS — 20.3 GB

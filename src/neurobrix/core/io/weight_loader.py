@@ -62,7 +62,8 @@ WEIGHTS_INDEX_PATTERNS = [
 # safetensors loading is I/O-bound, threading helps significantly
 # The configured count (core.workspace.io_workers: $NBX_IO_WORKERS, else system.yml io.num_workers)
 from neurobrix.core.workspace import (
-    io_workers as _io_workers, apply_host_mmap_threshold, pinned_uploads_in_flight as _pinned_in_flight)
+    io_workers as _io_workers, apply_host_mmap_threshold, apply_host_huge_pages,
+    pinned_uploads_in_flight as _pinned_in_flight)
 PARALLEL_SHARD_WORKERS = _io_workers()
 #: Non-blocking uploads one loader worker keeps outstanding (`_load_with_pinned_dma`, system.yml
 #: io.pinned_uploads_in_flight): the pinned host bytes of a load are bounded by workers x this.
@@ -106,6 +107,7 @@ class WeightLoader:
         """
         # Each tensor's host temporaries are freed as the next is read: they must go back to the OS.
         apply_host_mmap_threshold()
+        apply_host_huge_pages()     # and a fragmented host never compacts under them
         self.nbx_path = Path(nbx_path)
         if not self.nbx_path.exists():
             raise FileNotFoundError(

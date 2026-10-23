@@ -58,6 +58,14 @@ GRID = {
     "conv2d_band_rows": [(n, c, h, w, ob, band)
                          for n in (1, 2) for c in (3, 64, 512) for h in (1, 64, 1024, 8192)
                          for w in (64, 8192) for ob in (2, 4) for band in (GiB, 4 * GiB)],
+    "tiled_conv2d_bands": [(ih, oh, kh, sh, dh, ph, tf) for ih, oh, kh, sh, ph in
+                           ((2048, 2048, 3, 1, 1), (2048, 1024, 3, 2, 1), (64, 64, 1, 1, 0), (513, 257, 5, 2, 2))
+                           for dh in (1, 2) for tf in (1, 2, 3, 8)],
+    "tiled_conv2d_band_bytes": [(x, w, s, p, d, tf, ib, ob)
+                                for x in ([1, 180, 2048, 2048], [2, 64, 513, 257], [1, 3, 64, 64])
+                                for w in ([60, 180, 3, 3], [64, 64, 1, 1], [16, 3, 5, 5]) if True
+                                for s in (1, 2, [1, 2]) for p in (0, 1, [2, 1]) for d in (1,)
+                                for tf in (1, 2, 4) for ib, ob in ((2, 2), (4, 4), (2, 4))],
     "sdpa_scores_bytes": [(b, h, tq, tk) for b in (1, 2) for h in (8, 32) for tq in (1, 4096)
                           for tk in (1, 4096, 65536)],
     "sdpa_scores_bound": [(b, p) for b in (0, GiB, 2 * GiB) for p in (True, False)],
@@ -65,6 +73,9 @@ GRID = {
                         for bound in (0, GiB, 2 * GiB) for b in (1, 2) for h in (8, 32)
                         for tq in (1024, 16384) for tk in (4096, 65536)
                         for mr in (0, 128) for mc in (0, 16, 64)],
+    "sdpa_chunk_plan": [(bound, b, h, tq, tk, mr)
+                        for bound in (0, GiB, 2 * GiB) for b in (1, 2) for h in (8, 32)
+                        for tq in (1024, 16384) for tk in (4096, 65536) for mr in (0, 16, 128)],
     "sdpa_device_scores_budget": [(b, f, m) for b in (0, GiB, 2 * GiB) for f in (0.0, 0.07, 0.5)
                                   for m in (None, 16384, 32768)],
     "op_budget_fraction": [()],

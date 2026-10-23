@@ -28,6 +28,10 @@ DEPTHWISE = "neurobrix.kernels.ops.depthwise_conv2d.depthwise_conv2d_kernel"
 SOFTMAX = "neurobrix.kernels.ops.softmax.softmax_forward_kernel"
 UNIT_FLASH = "neurobrix.kernels.ops.flash_attention_m8n8k4.flash_attention_m8n8k4_kernel"
 FLASH = "neurobrix.kernels.ops.flash_attention.flash_attention_certified_kernel"
+LAYER_NORM = "neurobrix.kernels.ops.layernorm.layer_norm_forward_kernel"
+RMS_NORM = "neurobrix.kernels.ops.rmsnorm.rms_norm_forward_kernel"
+GEMV_VEC = "neurobrix.kernels.ops.gemv_vec.gemv_vec_kernel"
+ADDMV = "neurobrix.kernels.ops.addmv_op.addmv_kernel"
 
 F32, BF16, F16 = NBXDtype.float32, NBXDtype.bfloat16, NBXDtype.float16
 _HALF = (F16, BF16)
@@ -165,13 +169,30 @@ def matrix_unit_native(a: NBXDtype, b: NBXDtype, M: int) -> bool:
     return matrix_unit_operands(a, b, M) == ("native", "native")
 
 
+def mv_launches(N: int, K: int, mat: NBXDtype, vec: NBXDtype, native_bf16: bool,
+                force_accum: bool = False) -> List[Launch]:
+    """`mv_wrapper` on a [N, K] matrix and a [K] vector: the SIMT GEMV's key — the N and K buckets, then the dtype
+    tags of the matrix, the vector and the output (`matmul_out_dtype` of the matrix at one row)."""
+    out = matmul_out_dtype(mat, 1, False, native_bf16, force_accum)
+    return [(GEMV_VEC, (bucket_of("N", N), bucket_of("K", K), tag(mat), tag(vec), tag(out)))]
+
+
+def addmv_launches(N: int, K: int, mat: NBXDtype, vec: NBXDtype, bias: NBXDtype, native_bf16: bool,
+                   force_accum: bool = False) -> List[Launch]:
+    """`addmv_wrapper` on a [N, K] matrix, a [K] vector and a [N] bias: the key — the N and K buckets (K the kernel's
+    `M`), then the dtype tags of the matrix, the vector, the bias and the output (`matmul_out_dtype` at one row)."""
+    out = matmul_out_dtype(mat, 1, False, native_bf16, force_accum)
+    return [(ADDMV, (bucket_of("N", N), bucket_of("M", K), tag(mat), tag(vec), tag(bias), tag(out)))]
+
+
 def mm_launches(M: int, K: int, N: int, a: NBXDtype, b: NBXDtype, native_bf16: bool,
                 force_accum: bool = False) -> List[Launch]:
-    """`mm` (and `mm_epilogue`): M <= 4 runs per-row GEMV (no autotuned kernel); otherwise one
-    key — row bands above 2^31 output elements keep the whole shape's M bucket."""
-    if M <= 4:
-        return []
+    """`mm` (and `mm_epilogue`): M <= 4 runs one GEMV per row on the operands as `mm_dtypes` casts them (the weight
+    transposed to [N, K], each activation row the vector) — one key; otherwise one key — row bands above 2^31 output
+    elements keep the whole shape's M bucket."""
     a, b, promote_a, promote_b = mm_dtypes(a, b, native_bf16, force_accum)
+    if M <= 4:
+        return mv_launches(N, K, b, a, native_bf16, force_accum)
     if matrix_unit_takes(a, b, M):
         return []
     out = matmul_out_dtype(a, M, promote_a, native_bf16, force_accum)
@@ -184,7 +205,10 @@ def addmm_launches(M: int, K: int, N: int, a: NBXDtype, b: NBXDtype, bias: NBXDt
     """`addmm` on a 2-D activation (an N-D one is flattened to (numel/K, K) first): M <= 4 runs
     per-row addmv; a [N] / [1, N] bias (`bias_row`) on the matrix unit has no key; otherwise one key."""
     a, b, bias, promote_a, promote_b, _ = addmm_dtypes(a, b, bias, native_bf16, force_accum)
-    if M <= 4 or (bias_row and matrix_unit_takes(a, b, M)):
+    if M <= 4:
+        # one addmv per row on the operands as cast, the weight transposed to [N, K], the bias its row or the shared one
+        return addmv_launches(N, K, b, a, bias, native_bf16, force_accum)
+    if bias_row and matrix_unit_takes(a, b, M):
         return []
     out = matmul_out_dtype(a, M, promote_a, native_bf16, force_accum)
     ieee = (not native_bf16) and out == F32
@@ -253,7 +277,7 @@ def row_breakpoints(lo: int, hi: int) -> List[int]:
 
 def matmul_route(a_rank: int, b_rank: int) -> str:
     """`matmul_wrapper`'s route by operand ranks (torch.matmul semantics): "mm" (2-D x 2-D), "bmm"
-    (3-D x 3-D), "mv" (2-D x 1-D, the SIMT GEMV — no autotuned kernel), "batched" (N-D x 2-D:
+    (3-D x 3-D), "mv" (2-D x 1-D, the SIMT GEMV), "batched" (N-D x 2-D:
     the leading dims folded into bmm's batch), "general" (N-D x N-D: both batches collapsed)."""
     if a_rank == 2 and b_rank == 2:
         return "mm"
@@ -276,7 +300,7 @@ def matmul_launches(a_shape, b_shape, a: NBXDtype, b: NBXDtype, native_bf16: boo
     if route == "mm":
         return mm_launches(a_shape[0], a_shape[1], b_shape[1], a, b, native_bf16, force_accum)
     if route == "mv":
-        return []
+        return mv_launches(a_shape[0], a_shape[1], a, b, native_bf16, force_accum)
     return bmm_launches(a_shape[-2], a_shape[-1], b_shape[-1], a, b, native_bf16, force_accum)
 
 
@@ -701,32 +725,9 @@ def conv2d_launches(N: int, in_c: int, in_h: int, in_w: int, out_c: int, kh: int
 
 
 def tiled_conv2d_bands(IH: int, out_h: int, kh: int, sh: int, dh: int, pad_h: int, tile_factor: int):
-    """The bands of Prism's op-level tiled conv (`_tiled_conv2d_spatial_nbx`, real halo): per band
-    (oh_start, oh_end, in_start, in_end, pad_top, pad_bot, skip) — the output rows, the input
-    rows read (clamped), the image-edge padding added, the band's leading conv rows to skip.
-    The image-edge padding is `max(0, -read_start)` alone: `read_start` already carries -pad_h
-    (P-NBX-TILED-CONV2D-SMALL-SCALE 2026-05-14 — adding pad_h again on the edge bands shifted the
-    first and last bands by pad_h rows, cos near 0 against F.conv2d at kh >= 3, pad_h >= 1)."""
-    tf = max(1, int(tile_factor))
-    band_oh = (out_h + tf - 1) // tf
-    # The halo in input rows, rounded up to a whole number of strides: the band's first conv row
-    # must be an output row, so the rows skipped on the read side are halo // stride. At stride 1
-    # this is the halo it always was; at stride 2 a 1-row halo misaligned every internal band by
-    # half an output row (found by this function's test, 2026-09-29 — Prism tiles strided convs).
-    halo_h = -(-((kh - 1) * dh // 2) // sh) * sh
-    bands = []
-    for oh_start in range(0, out_h, band_oh):
-        oh_end = min(oh_start + band_oh, out_h)
-        halo_top = 0 if oh_start == 0 else halo_h
-        halo_bot = 0 if oh_end == out_h else halo_h
-        read_start = oh_start * sh - pad_h - halo_top
-        read_end = (oh_end - 1) * sh + dh * (kh - 1) + 1 - pad_h + halo_bot
-        start, end = max(0, read_start), min(IH, read_end)
-        if end <= start:
-            continue
-        bands.append((oh_start, oh_end, start, end, max(0, -read_start), max(0, read_end - IH),
-                      halo_top // sh))
-    return bands
+    """The bands of Prism's op-level tiled conv — `tiling_sizes.tiled_conv2d_bands`, the one cut the run, the census
+    and Prism's price of the band read."""
+    return _ts.tiled_conv2d_bands(IH, out_h, kh, sh, dh, pad_h, tile_factor)
 
 
 def tiled_conv2d_launches(N: int, in_c: int, IH: int, IW: int, out_c: int, kh: int, kw: int,
@@ -813,3 +814,31 @@ def softmax_launches(rows: int, feat: int, log: bool, x: NBXDtype, out: NBXDtype
     if feat > SOFTMAX_FUSED_MAX_FEAT or rows < 1:
         return []
     return [(SOFTMAX, (bucket_of("M", rows), softmax_feat_bucket(feat), bool(log), tag(x), tag(out)))]
+
+
+def layer_norm_launches(rows: int, feat: int, has_weight: bool, has_bias: bool, x: NBXDtype,
+                        w: Optional[NBXDtype], b: Optional[NBXDtype], out: NBXDtype) -> List[Launch]:
+    """`wrappers.native_layer_norm` over rows of `feat` (the normalized extent; every other element a row): the key —
+    the rows' bucket (`bucket_of("M")`), the padded row (`softmax_feat_bucket`: the program holds the next power of
+    two, one certified entry per padding), the weight and bias flags (a bias without a weight is not applied, as the
+    wrapper reads it), the statistics always saved — then the dtype tags of its tensor arguments in order: input,
+    weight (the input standing in when there is none), bias (likewise), mean and inverse deviation (fp32), output."""
+    if rows < 1 or feat < 1:
+        return []
+    bias = bool(has_bias and has_weight)
+    wt = w if has_weight else x
+    bt = b if bias else x
+    return [(LAYER_NORM, (bucket_of("M", rows), softmax_feat_bucket(feat), bool(has_weight), bias, True,
+                          tag(x), tag(wt), tag(bt), tag(F32), tag(F32), tag(out)))]
+
+
+def rms_norm_launches(rows: int, feat: int, has_weight: bool, x: NBXDtype, w: Optional[NBXDtype],
+                      out: NBXDtype) -> List[Launch]:
+    """`wrappers.rms_norm` over rows of `feat` (the last dim): the key — the rows' bucket, the padded row, the weight
+    flag, the protected fp16 store (`nbx_tensor._saturating_cast` from fp32, the kernel's accumulator, to the output's
+    dtype) — then the dtype tags of input, weight (the input standing in when there is none), output."""
+    if rows < 1 or feat < 1:
+        return []
+    from neurobrix.kernels.nbx_tensor import _saturating_cast
+    return [(RMS_NORM, (bucket_of("M", rows), softmax_feat_bucket(feat), bool(has_weight),
+                        bool(_saturating_cast(F32, out)), tag(x), tag(w if has_weight else x), tag(out)))]

@@ -416,6 +416,26 @@ def _key_operands(qual: str, tuner, key: tuple) -> Optional[Dict[str, Any]]:
         rows, feat = int(key[0]), int(key[1])
         return {"family": "softmax", "inputs": [("x", (rows, feat), d(0))], "out": ((rows, feat), out_dt),
                 "mnk": (rows, feat, 1), "batch": 1, "row_windowed_launch": True}
+    if short in ("layer_norm_forward_kernel", "rms_norm_forward_kernel"):
+        # (BATCH_BUCKET, FEAT_BUCKET, scale_by_weight, [add_bias, save_stats | SATURATE_F16], dtypes...): the rows, the
+        # padded row (its top: the longest row of the class), the weight (and bias) the flags name
+        rows, feat = int(key[0]), int(key[1])
+        ins = [("x", (rows, feat), d(0))]
+        if bool(key[2]):
+            ins.append(("w", (feat,), d(1)))
+        if short == "layer_norm_forward_kernel" and bool(key[2]) and bool(key[3]):
+            ins.append(("b", (feat,), d(2)))
+        return {"family": "rownorm", "inputs": ins, "out": ((rows, feat), out_dt),
+                "mnk": (rows, feat, 1), "batch": 1, "row_windowed_launch": True}
+    if short in ("gemv_vec_kernel", "addmv_kernel"):
+        # (N_BUCKET, K_BUCKET | M_BUCKET, dtypes...): the matrix [N, K] at the buckets' tops (a bucket's top forms it),
+        # the vector [K], the bias [N] for addmv
+        N, K = int(key[0]), int(key[1])
+        ins = [("mat", (N, K), d(0)), ("vec", (K,), d(1))]
+        if short == "addmv_kernel":
+            ins.append(("bias", (N,), d(2)))
+        return {"family": "gemv", "inputs": ins, "out": ((N,), out_dt), "mnk": (1, N, K), "batch": 1,
+                "row_windowed_launch": False}
     if short == "conv2d_forward_kernel":
         (n, ci, h, w, co, oh, ow, kh, kw, sh, sw, ph, pw, dh, dw, groups) = [int(v) for v in key[:16]]
         ci_g = ci // max(groups, 1)
@@ -507,7 +527,16 @@ def price_key(qual: str, tuner, key: tuple, unified: bool = True) -> Optional[Di
             deviation = kept + kept // 8 * (4 + 8)                       # the windows' readback and cast
         return {"draws": draws, "device": device, "oracle": oracle, "deviation": deviation,
                 "peak": draws + device + max(oracle, deviation)}
-    if ops["family"] == "softmax":
+    if ops["family"] == "gemv":
+        # `_gemv_oracle_fn`: the matrix's rows cast to float64 a block at a time (`_gemv_oracle_rows`), the vector in
+        # float64, the whole fp64 result kept
+        _, N, K = ops["mnk"]
+        rows = _gemv_oracle_rows(N, K)
+        oracle = N * 8 + rows * K * 8 + K * 8
+        deviation = N * 8 + N * (4 + 8)
+        return {"draws": draws, "device": device, "oracle": oracle, "deviation": deviation,
+                "peak": draws + device + max(oracle, deviation)}
+    if ops["family"] in ("softmax", "rownorm"):
         # `_softmax_oracle_fn`: per row window, the window cast to float64 plus the fp64 arrays it computes
         # (`_SOFTMAX_ORACLE_F64_ARRAYS`), the windows' results kept (`RowWindowedOracle`); whole under the cap.
         # Priced with the mm and conv families: without it a softmax key read the conv geometry and every Apple
@@ -802,6 +831,53 @@ def _softmax_oracle_fn(x, log: bool):
     return lambda: RowWindowedOracle([((r0, r1), rows(r0, r1)) for (r0, r1) in wins], m)
 
 
+def _gemv_oracle_rows(n: int, k: int) -> int:
+    """The matrix rows the GEMV oracle casts to float64 at once: all of them under a third of the oracle's cap in
+    bytes (`ORACLE_MAX_MACS`, read as the softmax's windows read it), else that third's worth of rows."""
+    return max(1, min(n, int(ORACLE_MAX_MACS / 3 // max(1, k * 8))))
+
+
+def _gemv_oracle_fn(mat, vec, bias=None):
+    """The fp64 oracle of mat [N, K] @ vec [K] (+ bias [N]): every output row, the matrix cast a block of rows at a
+    time (`_gemv_oracle_rows`) so a vocabulary head is never one float64 copy."""
+    n, k = mat.shape
+    rows = _gemv_oracle_rows(n, k)
+
+    def run():
+        v = _f64(vec)
+        out = np.empty(n, dtype=np.float64)
+        for r0 in range(0, n, rows):
+            out[r0:r0 + rows] = _f64(mat[r0:r0 + rows]) @ v
+        return out if bias is None else out + _f64(bias)
+    return run
+
+
+def _rownorm_oracle_fn(x, w, b, layer: bool):
+    """The fp64 oracle of a row layer norm (eps 1e-5, `native_layer_norm`'s default) or RMS norm (eps 1e-6, `rms_norm`'s)
+    of x [rows, feat] with its weight and bias, whole under the cap, row-windowed above — priced as the softmax's
+    (`_SOFTMAX_ORACLE_F64_ARRAYS` fp64 arrays per element: the row, its centred or squared values, the result)."""
+    m, n = x.shape[-2], x.shape[-1]
+    wf = None if w is None else _f64(w)
+    bf = None if b is None else _f64(b)
+
+    def rows(r0, r1):
+        z = _f64(x[r0:r1, :])
+        if layer:
+            z = z - z.mean(axis=-1, keepdims=True)
+            z = z / np.sqrt((z * z).mean(axis=-1, keepdims=True) + 1e-5)
+        else:
+            z = z / np.sqrt((z * z).mean(axis=-1, keepdims=True) + 1e-6)
+        if wf is not None:
+            z = z * wf
+        if bf is not None:
+            z = z + bf
+        return z
+    wins = _row_windows(m, n, _SOFTMAX_ORACLE_F64_ARRAYS * 8)
+    if wins is None:
+        return lambda: rows(0, m)
+    return lambda: RowWindowedOracle([((r0, r1), rows(r0, r1)) for (r0, r1) in wins], m)
+
+
 def _conv_oracle_fn(x, wt, stride, padding, dilation, groups):
     n, ci, h, wd = x.shape
     co, ci_g, kh, kw = wt.shape
@@ -882,6 +958,21 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
             return (lambda: W.mm(to(a), to(b))), (_matmul_oracle_fn(a, b) if values else None), "c_ptr"
         bias = arr(rng, (N,), dts[2] if len(dts) > 2 else "fp16")
         return ((lambda: W.addmm(to(bias), to(a), to(b))), (_matmul_oracle_fn(a, b, bias[None, :]) if values else None), "c_ptr")
+    if short in ("gemv_vec_kernel", "addmv_kernel"):
+        # through the wrappers (`mv_wrapper`, `addmv_wrapper`) at the buckets' tops; the fp64 oracle by row blocks
+        N, K = int(key[0]), int(key[1])
+        mat_dt, vec_dt = (dts[0] if dts else "fp16"), (dts[1] if len(dts) > 1 else "fp32")
+        sizes = [((N, K), mat_dt), ((K,), vec_dt), ((N,), out_dt)]
+        if short == "addmv_kernel":
+            sizes.append(((N,), dts[2] if len(dts) > 2 else out_dt))
+        _refuse_oversize(card_bytes, sizes, short)
+        mat = arr(rng, (N, K), mat_dt)
+        vec = arr(rng, (K,), vec_dt)
+        if short == "gemv_vec_kernel":
+            return (lambda: W.mv_wrapper(to(mat), to(vec))), (_gemv_oracle_fn(mat, vec) if values else None), "C_ptr"
+        bias = arr(rng, (N,), dts[2] if len(dts) > 2 else out_dt)
+        return ((lambda: W.addmv_wrapper(to(bias), to(mat), to(vec))),
+                (_gemv_oracle_fn(mat, vec, bias) if values else None), "out_ptr")
     if short == "baddbmm_kernel":
         M, N, K = _gemm_rows(key, dts), int(key[1]), int(key[2])
         has_bias = bool(key[5]) if len(key) > 5 and isinstance(key[5], bool) else False
@@ -915,6 +1006,22 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         return ((lambda: W.scaled_dot_product_attention_wrapper(to(q), to(k), to(v),
                                                                 attn_mask=to(mask) if masked else None)),
                 (_attention_oracle_fn(q, k, v, mask, scale) if values else None), "Out")
+    if short in ("layer_norm_forward_kernel", "rms_norm_forward_kernel"):
+        # the row norms through their wrappers (`native_layer_norm`, `rms_norm`), the padded row at its top, eps the
+        # wrappers' own default; the fp64 oracle per row (row-windowed above the oracle's cap, as a softmax's)
+        rows, feat, has_w = int(key[0]), int(key[1]), bool(key[2])
+        ln = short == "layer_norm_forward_kernel"
+        has_b = ln and has_w and bool(key[3])
+        x_dt = dts[0] if dts else "fp32"
+        _refuse_oversize(card_bytes, [((rows, feat), x_dt), ((rows, feat), out_dt)], short)
+        x = arr(rng, (rows, feat), x_dt)
+        w = arr(rng, (feat,), dts[1]) if has_w else None
+        b = arr(rng, (feat,), dts[2]) if has_b else None
+        if ln:
+            run = lambda: W.native_layer_norm(to(x), [feat], to(w) if has_w else None, to(b) if has_b else None)[0]
+        else:
+            run = lambda: W.rms_norm(to(x), to(w) if has_w else None)
+        return run, (_rownorm_oracle_fn(x, w, b, ln) if values else None), "output_ptr"
     if short == "softmax_forward_kernel":
         # (BATCH_BUCKET, FEAT_BUCKET, log, x, out): the bucket's rows of the padded row length (a length of the class), through the wrapper itself; the
         # fp64 oracle per row (row-windowed above the oracle's cap, as a product's)
@@ -2088,6 +2195,18 @@ def after_key_failure(exc: BaseException, summary: Dict[str, Any], key_text: str
     return False
 
 
+def census_tuners(shapes) -> Dict[str, Any]:
+    """{kernel qual: its Autotuner} for every kernel the census names, its module loaded first: a kernel module the
+    wrappers import lazily (inside the call that launches it) is not in the process until a launch, and
+    `autotune_cache._autotuners` only sees what is loaded — every key of `gemv_vec_kernel` read "not an autotuner"
+    and was skipped (2026-10-22)."""
+    import importlib
+    from neurobrix.triton import autotune_cache as atc
+    for qual in shapes:
+        importlib.import_module(qual.rsplit(".", 1)[0])
+    return {qual: t for qual, t in atc._autotuners()}
+
+
 def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[str] = None, bench=None,
             out: Optional[str] = None, kernels: Optional[List[str]] = None, limit: Optional[int] = None,
             only_missing: bool = False, seed: int = 20260907, log=None,
@@ -2152,6 +2271,7 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
             raise RuntimeError(f"--models {', '.join(_unknown)}: no row of the census table names it — a filter that "
                                f"matched nothing would certify nothing and report success")
     shapes = census(vendor, profile, certifying_class, models)
+    tuners = census_tuners(shapes)
     log(f"[certify] census table {vendor}/{profile} {certifying_class} GB: "
         f"{sum(len(v) for v in shapes.values())} distinct key(s) over {len(shapes)} kernel(s)")
     if kernels:
