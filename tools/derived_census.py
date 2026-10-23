@@ -372,10 +372,11 @@ def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_
         tf_u = (tiled_tf or {}).get(uid)
         if isinstance(tf_u, tuple) and tf_u[0] == "chain" and kind in ("custom::rms_norm", "aten::rms_norm"):
             tf_u = ("chain_rows", _chain_band_rows(ops, tf_u, shape))
-        if kind in _NORM_KINDS:
-            # an AMP fp32 op: the dtype engine's wrap casts its half operands to fp32 before the wrapper (and the
-            # triton-sequential one leaves custom::rms_norm alone) — the operands as the KERNEL receives them,
-            # `runtime_widths`' own casts, the rule the engine runs
+        if op_casts.get(uid):
+            # an op the dtype engine wraps (an AMP fp32 op: a norm, a softmax...): its half operands cast to fp32 before
+            # the wrapper (and the triton-sequential one leaves custom::rms_norm alone) — the operands as the KERNEL
+            # receives them, `runtime_widths`' own casts, the rule the engine runs. Read for the norms only, a softmax
+            # was keyed at its stored bf16 where the run hands it fp32 (canary-qwen-2.5b on Apple, 2026-10-23)
             _c = dict(op_casts.get(uid, ()))
             dt = (lambda tid, _c=_c, _d=dt: NBXDtype[_c[tid]] if tid in _c else _d(tid))
         try:
