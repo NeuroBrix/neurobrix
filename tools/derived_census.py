@@ -2602,8 +2602,8 @@ def table(a) -> int:
     from neurobrix.kernels import census_table as T
     global HOLDS
     HOLDS = a.holds
-    print(f"[derived table] host memory shared through the holds ledger {a.holds}" if a.holds else
-          "[derived table] no holds ledger (--holds): the census reserves no host memory and counts no one's", flush=True)
+    print(f"[derived holds] host memory shared through the holds ledger {a.holds}" if a.holds else
+          "[derived holds] no holds ledger (--holds): the census reserves no host memory and counts no one's", flush=True)
     hw = a.hardware
     cls = CC.census_memory_class(hw)
     rungs = CC.rungs_for(hw) if a.rungs == "ladder" else [int(x) for x in a.rungs.split(",") if x.strip()]
