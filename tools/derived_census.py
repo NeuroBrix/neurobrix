@@ -428,7 +428,7 @@ def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_
         try:
             launches = _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_bf16,
                                     sdpa_budget_bytes, sdpa_min_rows, sdpa_max_chunks, conv_band_bytes,
-                                    unhandled, tf_u, decode_kv)
+                                    unhandled, tf_u, decode_kv, loaded_dt=dt0)
         except AnnotationContradiction as e:
             unhandled[f"annotation contradicts its trace — {str(e).split(' dim ')[0]}"] += 1
             continue
@@ -1063,8 +1063,10 @@ _KEYED_KINDS = frozenset({
 
 def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_bf16,
                  sdpa_budget_bytes, sdpa_min_rows, sdpa_max_chunks, conv_band_bytes, unhandled,
-                 tile_factor=None, decode_kv=None):
-    """The launches of one op; None when the op launches no autotuned kernel."""
+                 tile_factor=None, decode_kv=None, loaded_dt=None):
+    """The launches of one op; None when the op launches no autotuned kernel. `loaded_dt(tid)`: a tensor's runtime
+    dtype as its producer or loader holds it, before an island's casts — the dtype of what an op reads by name rather
+    than receives as an operand (the fused MoE's expert weights)."""
     from neurobrix.kernels.nbx_tensor import NBXDtype
     if kind not in _KEYED_KINDS:
         return None
@@ -1194,8 +1196,10 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
         elif kind == "custom::moe_fused":
             # the fused MoE layer (`triton/moe.execute_moe_fused`): its router's top-k weights renormalised by a sum
             # over top_k (fp32, unless the graph hands the weights in — a blend) and the experts' outputs combined by
-            # a sum over top_k of [tokens, top_k, hidden] in the hidden states' dtype (`_fused_moe_pass`,
-            # `_expert_store_grouped_pass`)
+            # a sum over top_k of [tokens, top_k, hidden] in the EXPERT WEIGHTS' dtype: `execute_moe_fused` casts the
+            # hidden states to the weights' dtype before its passes (`_fused_moe_pass`, `_expert_store_grouped_pass`),
+            # and the weights are read by name, never cast by an island — deepseek-moe-16b-chat's island handed its
+            # hidden states in fp32, the combine ran fp16 and the census had keyed it fp32 (the c1restlot gate, 2026-10-23)
             a_ = o.get("attributes") or {}
             h_s = shape(a_["hidden_states_tid"])
             K_ = int(h_s[-1])
@@ -1204,7 +1208,7 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
             launches = []
             if a_.get("norm_topk_prob") and "topk_weights_tid" not in a_:
                 launches += LK.row_reduce_launches("sum", M_, top_k, NBXDtype.float32)
-            launches += LK.row_reduce_launches("sum", M_ * K_, top_k, dt(a_["hidden_states_tid"]))
+            launches += LK.row_reduce_launches("sum", M_ * K_, top_k, (loaded_dt or dt)(a_["expert_gate_weight_ids"][0]))
         elif kind in ("aten::native_group_norm", "aten::group_norm"):
             # `wrappers.group_norm_wrapper` (`native_group_norm_wrapper` forwards to it): N and C the input's first two
             # dims, every other its spatial extent; the groups and the weight and bias by their argument positions
