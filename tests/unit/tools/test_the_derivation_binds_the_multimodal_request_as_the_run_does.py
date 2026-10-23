@@ -59,7 +59,7 @@ def census_hardware(monkeypatch):
     yield prof
 
 
-def _request_sites(model):
+def _request_sites(model, cache_len=None):
     """The census's own request for `model`, parsed by the CLI's parser, through `extent_sites`
     at a plan naming every component in fp16 (the dtypes only feed the chain's outputs)."""
     import json
@@ -72,6 +72,8 @@ def _request_sites(model):
     defaults = json.loads((root / "runtime" / "defaults.json").read_text())
     args = create_parser().parse_args(["run", "--model", model, *derived_request(model), "--triton"])
     plan = {"components": [{"name": c, "dtype": "float16"} for c in topo["components"]]}
+    if cache_len is not None:       # the decoder's cache the plan sizes (since every decoding flow decodes on it, 3d3daa99)
+        plan["kv_cache"] = {"max_cache_len": int(cache_len), "dtype": "float16"}
     return topo, D.extent_sites(model, topo, defaults, plan, args.prompt, None, args.max_tokens,
                                 args.input_image)
 
@@ -82,14 +84,17 @@ def _request_sites(model):
 ])
 def test_the_vlm_request_is_bound_by_its_contract(census_hardware, model, contract, vis_rows, n_modal, L0, lm,
                                                  embeds):
-    topo, sites = _request_sites(model)
+    topo, sites = _request_sites(model, cache_len=L0 + 32)   # a prefill leaves the cache one position to decode into
     assert D.vlm_contract(model, topo) == contract
     by_name = {s[0]: s for s in sites}
-    assert set(by_name) == {"vision tower and projection", f"{lm} context"}, list(by_name)
-    _n, lo, hi, chain = by_name[f"{lm} context"]
-    assert (lo, hi) == (L0, L0 + 32 - 1)                 # the walk's context, 32 tokens
+    # the decoder on its KV cache (3d3daa99): its prefill over the prompt lengths up to the cache's reach, then decode
+    assert set(by_name) == {"vision tower and projection", f"{lm} prefill (prompt lengths)",
+                            f"{lm} decode KV length"}, list(by_name)
+    _n, lo, hi, chain = by_name[f"{lm} prefill (prompt lengths)"]
+    assert (lo, hi) == (L0, L0 + 32 - 1)                 # the request's context up to the planned cache's reach
     (comp, feed), = chain(lo)
     assert comp == lm
+    feed = {k: v for k, v in feed.items() if not k.startswith("__")}
     H = feed["inputs_embeds"][-1]
     assert feed["inputs_embeds"] == [1, lo, H]
     assert feed[embeds] == [n_modal, H]

@@ -2680,6 +2680,53 @@ def _workers_memory_holds(n_jobs: int, worker_bytes: int) -> int:
     return max(1, min(n_jobs, cores, held))
 
 
+_PROGRESS = {"file": None, "label": "", "last": 0.0}
+#: how often, at most, a running census writes its progress to its record (the red line of work 2: every 10 min)
+PROGRESS_EVERY_S = 600
+
+
+def _note(msg: str, force: bool = False) -> None:
+    """One line of progress, end or failure in the census's record (`table --record`, the campaign journal): forced
+    for a model written, the end or a failure; otherwise at most every PROGRESS_EVERY_S seconds."""
+    import time
+    f = _PROGRESS["file"]
+    if f is None:
+        return
+    now = time.time()
+    if not force and now - _PROGRESS["last"] < PROGRESS_EVERY_S:
+        return
+    _PROGRESS["last"] = now
+    stamp = time.strftime("%Y-%m-%d %H:%M:%S %Z")
+    with open(f, "a") as fh:
+        fh.write(f"census {_PROGRESS['label']} {msg} {stamp}\n")
+
+
+def _run_fresh(ctx, fn, arg):
+    """`fn(arg)` in a fresh process of `ctx`, its result through a pipe — no pool, so no pool thread holds a lock while
+    a worker is forked (a `Pool(1, maxtasksperchild=1)` replaced its worker from its handler thread and a forked
+    child hung on the queue's lock: the census's own test froze in two suites, 2026-10-23)."""
+    parent, child = ctx.Pipe(duplex=False)
+    p = ctx.Process(target=_fresh_child, args=(child, fn, arg))
+    p.start()
+    child.close()
+    try:
+        ok, value = parent.recv()
+    finally:
+        p.join()
+    if not ok:
+        raise value
+    return value
+
+
+def _fresh_child(conn, fn, arg):
+    try:
+        conn.send((True, fn(arg)))
+    except BaseException as e:          # carried to the parent and raised there, by name
+        conn.send((False, e))
+    finally:
+        conn.close()
+
+
 def _derive_jobs(model, hw, jobs, start_method=None):
     """The results of `jobs` in their order. Jobs run ONE at a time, each in a fresh worker that reports its own peak
     resident size, until one DERIVES (a refusal measures nothing: Qwen3-30B's first job, refused, priced a worker at
@@ -2691,14 +2738,14 @@ def _derive_jobs(model, hw, jobs, start_method=None):
     import multiprocessing as _mp
     ctx = _mp.get_context(start_method)
     results, worker_bytes, i = [], 0, 0
-    with ctx.Pool(1, maxtasksperchild=1) as pool:          # a fresh process per job: its peak is that job's
-        while i < len(args):
-            res, peak = pool.apply(_derive_job_priced, (args[i],))
-            results.append(res)
-            worker_bytes = max(worker_bytes, peak)
-            i += 1
-            if res[0] == "ok":
-                break
+    while i < len(args):                                    # a fresh process per job: its peak is that job's
+        res, peak = _run_fresh(ctx, _derive_job_priced, args[i])
+        results.append(res)
+        worker_bytes = max(worker_bytes, peak)
+        i += 1
+        _note(f"{model}: {i}/{len(args)} derivation(s)")
+        if res[0] == "ok":
+            break
     rest = args[i:]
     if not rest:
         return results
@@ -2706,7 +2753,10 @@ def _derive_jobs(model, hw, jobs, start_method=None):
     print(f"[derive] {model}: {len(args)} derivation(s), {i} measured alone, then {workers} at a time (cores, free "
           f"memory at its rung, one worker measured at {worker_bytes >> 20} MB)", flush=True)
     with _host_hold(HOLDS, workers * worker_bytes), ctx.Pool(workers) as pool:
-        return results + pool.map(_derive_job, rest, chunksize=1)
+        for res in pool.imap(_derive_job, rest, chunksize=1):      # in the jobs' order, progress as they land
+            results.append(res)
+            _note(f"{model}: {len(results)}/{len(args)} derivation(s)")
+    return results
 
 
 def table(a) -> int:
@@ -2833,10 +2883,12 @@ def table(a) -> int:
         print(f"[derived table] {model}: {written} row(s) written ({removed} replaced; {keyless} keyless op(s) "
               f"placed) into {path.name} "
               f"({len(reqs)} request(s) x {len(modes)} mode(s) x {len(rungs)} rung(s))", flush=True)
+        _note(f"{model}: {written} row(s) written ({models.index(model) + 1}/{len(models)} model(s))", force=True)
         for line in unrunnable:
             print(f"   does not run on this class, by Prism's own refusal — no key: {line}")
         for why, n in notes.most_common():
             print(f"   derived from the op's contract, the annotation named: {n} x {why}")
+    _note(f"DONE {len(models)} model(s), worst rc {worst}", force=True)
     return worst
 
 
@@ -2856,6 +2908,9 @@ def main(argv=None) -> int:
     t.add_argument("--modes", default="triton,triton-sequential")
     t.add_argument("--rungs", default="ladder", help="'ladder' (the class's rungs) or a comma-separated list of MB")
     t.add_argument("--logs", required=True, help="where a tiling probe's resized input lands")
+    t.add_argument("--record", default=None,
+                   help="the campaign journal (RUN.md) the census writes its progress to (every 10 min at most, each "
+                        "model written, its end and a failure)")
     t.add_argument("--holds", default=None,
                    help="the holds ledger the gate schedulers share (gate_sched --holds): the census reads their "
                         "reserved host bytes before sizing its workers and writes its own (hold_host_<pid>)")
@@ -2864,7 +2919,15 @@ def main(argv=None) -> int:
                         "container, a plan, a unit of code the derivation executed or a file it read; the others' "
                         "rows are kept and said unchanged")
     a = ap.parse_args(argv)
-    return table(a) if a.cmd == "table" else compare(a)
+    if a.cmd != "table":
+        return compare(a)
+    _PROGRESS["file"] = a.record
+    _PROGRESS["label"] = f"{a.table} {a.hardware}"
+    try:
+        return table(a)
+    except BaseException as e:
+        _note(f"FAILED: {type(e).__name__}: {str(e)[:200]}", force=True)
+        raise
 
 
 if __name__ == "__main__":
