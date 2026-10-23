@@ -309,6 +309,41 @@ def _triton_fp64() -> bool:
     return profile_triton_stores_fp64(get_hardware_profile())
 
 
+#: the width pass's results per derivation process: {pass key: [(the signatures it read, its widths, its casts)]}
+_WIDTHS: dict = {}
+
+
+def _widths_at(key, shape, compute):
+    """`compute(shape_of, casts)` — the width pass at this binding — or the result of an earlier binding that read
+    the same facts of every tensor it asked about (`runtime_widths.binding_signature`): the pass reads a binding
+    ONLY through `shape_of`, so equal answers give equal widths, exactly. The pass was 76 % of a Qwen3-Coder
+    derivation job (py-spy, 2026-10-23), recomputed at each of ~1 200 prompt lengths of one bisection, where it
+    reads M <= 4 and an empty extent and nothing more. Returns copies: callers own what they get."""
+    from neurobrix.core.prism.runtime_widths import binding_signature
+    for asked, rt, casts in _WIDTHS.get(key, ()):
+        if all(binding_signature(shape(t)) == sig for t, sig in asked):
+            return dict(rt), {u: list(v) for u, v in casts.items()}
+    asked = {}
+
+    def recorded(tid):
+        sh = shape(tid)
+        asked.setdefault(tid, binding_signature(sh))
+        return sh
+
+    casts = {}
+    rt = compute(recorded, casts)
+    _WIDTHS.setdefault(key, []).append((list(asked.items()), dict(rt), {u: list(v) for u, v in casts.items()}))
+    return rt, casts
+
+
+def _tiling_key(tiling):
+    return None if tiling is None else (tuple(sorted(tiling.fusion_convs.items())), frozenset(tiling.tiled_ops))
+
+
+def _reads_key(reads: dict):
+    return tuple(sorted((u, tuple(sorted((t, str(d)) for t, d in m.items()))) for u, m in reads.items()))
+
+
 def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_bytes, sdpa_min_rows,
                sdpa_max_chunks, unhandled, tiling=None, tiled_tf=None, decode_kv=None, pins=frozenset(),
                skip=(), only=None, axis_values=None, axes=(), out_dtypes=None):
@@ -332,11 +367,14 @@ def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_
         # The census is bound to its target's profile (the active one): its alignment is that profile's.
         from neurobrix.kernels.ops._configs import active_vendor_profile
         from neurobrix.triton.dtype import attention_operand_alignment
-        op_casts = {}
-        rt = RW.runtime_dtypes(g, cdtype, engine, has_native_bf16=has_native_bf16,
-                               attention_operands=attention_operand_alignment(active_vendor_profile()),
-                               contract=contract, stores_fp64=_triton_fp64(), tiling=tiling, shape_of=shape,
-                               casts=op_casts, operand_reads=_cache_reads(ops, decode_kv))
+        reads = _cache_reads(ops, decode_kv)
+        align, fp64 = attention_operand_alignment(active_vendor_profile()), _triton_fp64()
+        rt, op_casts = _widths_at(
+            (model, comp, str(cdtype), engine, bool(has_native_bf16), str(align), bool(fp64), _tiling_key(tiling),
+             _reads_key(reads)), shape,
+            lambda shape_of, casts: RW.runtime_dtypes(
+                g, cdtype, engine, has_native_bf16=has_native_bf16, attention_operands=align, contract=contract,
+                stores_fp64=fp64, tiling=tiling, shape_of=shape_of, casts=casts, operand_reads=reads))
     except AnnotationContradiction as e:
         # The width pass reads the shapes too (the matmul store rule reads M): a component whose
         # annotation contradicts itself is not derivable as a whole — named, never guessed.
@@ -2624,6 +2662,9 @@ def _peak_rss_bytes() -> int:
     return int(peak) if sys.platform == "darwin" else int(peak) * 1024
 
 
+#: how often, at most, a model's running derivation workers wait before the room is asked again
+ROOM_EVERY_S = 30
+
 HOLDS = None   # the holds ledger the gate schedulers share (`table --holds`); None: the census holds the machine alone
 
 
@@ -2674,13 +2715,19 @@ class _host_hold:
             self.f.write_text(f"{os.getpid()} {self.nbytes}\n")
         return self
 
+    def set(self, nbytes: int) -> None:
+        """The reservation moved with the workers running."""
+        if int(nbytes) != self.nbytes:
+            self.nbytes = int(nbytes)
+            self.__enter__()
+
     def __exit__(self, *exc):
         if self.f is not None:
             self.f.unlink(missing_ok=True)
         return False
 
 
-def _workers_memory_holds(n_jobs: int, worker_bytes: int) -> int:
+def _workers_memory_holds(n_jobs: int, worker_bytes: int, running: int = 0) -> int:
     """How many derivation workers the machine holds at once: the cores (`os.cpu_count()`), and the free host
     memory read as Prism reads it (`core.host_memory`, rounded DOWN to the memory ladder's rung,
     `memory_budget.rung_down_mb`) over what one worker measured it takes (`worker_bytes`). A derivation holds a whole
@@ -2692,14 +2739,19 @@ def _workers_memory_holds(n_jobs: int, worker_bytes: int) -> int:
     explanation's timeout (2026-10-22 17:3x, the c1norms census).
     The free memory is what the gate cells sharing the ledger have not reserved (`_held_by_others`): a census
     started beside a gate saw the memory a just-admitted Qwen3-30B had reserved but not yet taken, and the kernel
-    killed the cell (2026-10-23 00:10:30, 247 GiB held)."""
+    killed the cell (2026-10-23 00:10:30, 247 GiB held).
+    `running`: workers of this model already started — the answer is then how many MORE to start (none is a valid
+    answer), their memory counted as not yet taken whatever its age (a young worker has not grown to its peak in
+    the free figure; a grown one is counted twice: the error is fewer workers). Asked again as the room moves: a
+    pool sized once at the start of Qwen3-Coder, while a gate held 207 GiB, ran its 13 derivations one at a time
+    for hours after the gate had ended (2026-10-23 21:34 -> 23:10)."""
     from neurobrix.core.host_memory import memory_state
     from neurobrix.core.prism.memory_budget import rung_down_mb
-    cores = max(1, (os.cpu_count() or 1) - int(os.getloadavg()[0]))
+    cores = max(0 if running else 1, (os.cpu_count() or 1) - int(os.getloadavg()[0]))
     state = memory_state()
     free = state.available_mb
     if free is None or worker_bytes <= 0:
-        return 1
+        return 0 if running else 1
     # the gate cells' reservations are claims on the machine's WHOLE memory, part of which they already hold inside
     # the free figure read here: the room is the free memory, bounded by what the reservations leave of the total —
     # subtracting them from the free memory too counted every running cell twice, and a census beside a gate ran
@@ -2713,8 +2765,9 @@ def _workers_memory_holds(n_jobs: int, worker_bytes: int) -> int:
         from regression_matrix import HOST_SHARE
         total = int(state.total_mb) << 20
         room = min(room, int(total * HOST_SHARE) - _held_by_others(HOLDS))
-    held = max(0, room) // worker_bytes
-    return max(1, min(n_jobs, cores, held))
+    held = max(0, room - running * worker_bytes) // worker_bytes
+    more = min(n_jobs, cores, held)
+    return max(1, more) if running == 0 else max(0, more)
 
 
 _PROGRESS = {"file": None, "label": "", "last": 0.0}
@@ -2768,7 +2821,8 @@ def _derive_jobs(model, hw, jobs, start_method=None):
     """The results of `jobs` in their order. Jobs run ONE at a time, each in a fresh worker that reports its own peak
     resident size, until one DERIVES (a refusal measures nothing: Qwen3-30B's first job, refused, priced a worker at
     67 MB, the Mac, 2026-10-20 01:50); the largest peak seen prices one worker of THIS model. The rest run in workers,
-    as many as the cores AND the free memory hold (`_workers_memory_holds`). The workers start the PLATFORM's way
+    as many as the cores AND the free memory hold (`_workers_memory_holds`), asked again before every start and
+    at least every ROOM_EVERY_S while they run, so a room that frees mid-model is used. The workers start the PLATFORM's way
     (multiprocessing's default: fork on Linux, spawn on macOS, where a fork after the Objective-C runtime started
     crashes the child): `derive_keys` binds the hardware profile itself on every call."""
     args = [(model, hw, mode, rung, req) for mode, _ri, req, rung in jobs]
@@ -2786,13 +2840,41 @@ def _derive_jobs(model, hw, jobs, start_method=None):
     rest = args[i:]
     if not rest:
         return results
-    workers = _workers_memory_holds(len(rest), worker_bytes)
-    print(f"[derive] {model}: {len(args)} derivation(s), {i} measured alone, then {workers} at a time (cores, free "
-          f"memory at its rung, one worker measured at {worker_bytes >> 20} MB)", flush=True)
-    with _host_hold(HOLDS, workers * worker_bytes), ctx.Pool(workers) as pool:
-        for res in pool.imap(_derive_job, rest, chunksize=1):      # in the jobs' order, progress as they land
-            results.append(res)
-            _note(f"{model}: {len(results)}/{len(args)} derivation(s)")
+    from multiprocessing.connection import wait as _wait
+    running, done, nxt = {}, {}, 0                    # pipe -> (job index, process); index -> result
+    try:
+        with _host_hold(HOLDS, 0) as hold:
+            while nxt < len(rest) or running:
+                # the room asked again before every start, and at least every ROOM_EVERY_S while workers run
+                more = _workers_memory_holds(len(rest) - nxt, worker_bytes, running=len(running)) if nxt < len(rest) else 0
+                for _ in range(more):
+                    parent, child = ctx.Pipe(duplex=False)
+                    proc = ctx.Process(target=_fresh_child, args=(child, _derive_job, rest[nxt]))
+                    proc.start()
+                    child.close()
+                    running[parent] = (nxt, proc)
+                    nxt += 1
+                hold.set(len(running) * worker_bytes)
+                if more:                                # said when workers start, not as each ends
+                    shown = len(running)
+                    print(f"[derive] {model}: {len(args)} derivation(s), {i} measured alone, {shown} running now, "
+                          f"{len(rest) - nxt} waiting (cores, free memory at its rung, one worker measured at "
+                          f"{worker_bytes >> 20} MB; the room asked again as it moves)", flush=True)
+                for conn in _wait(list(running), timeout=ROOM_EVERY_S):
+                    j, proc = running.pop(conn)
+                    ok, value = conn.recv()
+                    proc.join()
+                    conn.close()
+                    if not ok:
+                        raise value
+                    done[j] = value
+                    _note(f"{model}: {i + len(done)}/{len(args)} derivation(s)")
+    finally:
+        for conn, (_j, proc) in running.items():      # a job that failed stops the model: its siblings with it
+            proc.kill()
+            proc.join()
+            conn.close()
+    results.extend(done[j] for j in range(len(rest)))
     return results
 
 

@@ -224,6 +224,21 @@ def plan_time_contract(cache_path, component_name: str, dag: Optional[Dict[str, 
                              f"calibration {record.graph_signature}")
 
 
+def binding_signature(shape) -> Tuple:
+    """What the width rules read of a tensor's shape at a binding, and nothing more: `_Rules.rows` feeds only
+    `mm_store`'s "M <= 4" (no M for a tensor without dims), `_Rules.first_nonempty` only whether an extent is 0.
+    Two bindings whose every queried tensor has the same signature give the same widths — the census memoises the
+    pass on it across the hundreds of extent probes of one derivation (tools/derived_census.py `_widths_at`;
+    the pass was 76 % of a Qwen3-Coder job, py-spy 2026-10-23). A rule that reads more of a shape extends this."""
+    sh = [int(d) for d in shape]
+    if not sh:
+        return ()
+    m = 1
+    for d in sh[:-1]:
+        m *= d
+    return (m <= 4, any(d == 0 for d in sh))
+
+
 @dataclass(frozen=True)
 class TilingView:
     """The op-level tiling plan as far as the widths care. `fusion_convs` maps each fused
