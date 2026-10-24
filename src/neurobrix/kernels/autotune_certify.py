@@ -1208,8 +1208,11 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         q, k, v = (arr(rng, sh, dt) for sh, dt in shapes[:3])
         mask = arr(rng, (B, H, tq, tk), dts[3]) if masked else None
         scale = 1.0 / float(np.sqrt(hd))
+        # K is drawn (B, H, tk, hd), never transposed: said, because where tk == hd its layout cannot be read from its
+        # shape and the wrapper refuses to guess (four Apple flash keys, 64 x 64 and 128 x 128, 2026-10-24)
         return ((lambda: W.scaled_dot_product_attention_wrapper(to(q), to(k), to(v),
-                                                                attn_mask=to(mask) if masked else None)),
+                                                                attn_mask=to(mask) if masked else None,
+                                                                k_pre_transposed=False)),
                 (_attention_oracle_fn(q, k, v, mask, scale) if values else None), "Out")
     if short in ("mean_forward_kernel", "sum_forward_kernel", "amax_forward_kernel"):
         # through the wrappers over the last dim (`mean_wrapper`, `sum_wrapper`, `amax_wrapper`), rows of the padded row
