@@ -1180,6 +1180,13 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
                 want = want.get("value") if isinstance(want, dict) else want
                 if want is not None:
                     xd = NBXDtype[str(want).replace("torch.", "")]
+            if kind == "aten::sum" and xd.name.startswith("complex"):
+                # a complex sum reduces its real view (`sum_wrapper`: view_as_real, the appended [., 2] axis kept):
+                # the real and imaginary parts are rows of their own, in the part's dtype — Wan's rotary grid
+                # (aten.sum::4, [1, 30, 1, 21] complex over its last dim) launched 60 rows where the census keyed 30
+                # (the c1restlot2 gate, 2026-10-24)
+                rows *= 2
+                xd = NBXDtype.float64 if xd.name == "complex128" else NBXDtype.float32
             launches = LK.row_reduce_launches("sum" if kind == "aten::norm" else kind.split("::")[1], rows, feat, xd)
         elif kind == "aten::_weight_norm":
             # the meta-op (`dispatch._meta_weight_norm`): v * g / ||v|| over every dim but `dim`, the norm a sum of
