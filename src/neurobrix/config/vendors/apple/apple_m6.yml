@@ -205,6 +205,14 @@ memory:
   # refused by name on this device until the Mac's ceiling bisection of the op alone (T = 4, 8, 16) writes the value.
   compiled_op_workspace:
     aten::linalg_vector_norm: 0.01   # MEASURED 2026-10-18 on the M4 Pro (MPS, torch 2.14): the op alone, fp32 (1,96,T,512,512), dim 1, ceiling bisection: 0.01 x input at T 8 and 16 (a fixed ~650 MB floor at T 4)
+  # The compiled engine's allocator retention (core/runtime/graph/compiled_sequence.py `_release_from`, `_kill`): MPS gives a tensor of at
+  # least kXLargeHeap / 2 = 512 MiB a dedicated heap (OVERSIZE), rounded up to kRoundLarge = 2 MiB, and keeps it
+  # cached once freed, serving only a later tensor that fits in it; cached heaps return only through garbage
+  # collection above the low watermark (aten/src/ATen/mps/MPSAllocator.h). Measured: Open-Sora-v2's VAE decode, live
+  # 0.5-3.8 GB while the driver climbed to 21.2 GB as the upsampled tensors grew (the Mac, 2026-10-23 14:57).
+  compiled_allocator_retention:
+    dedicated_heap_min_bytes: 536870912
+    round_bytes: 2097152
   compiled_sdpa_scores_device_fraction: 0.1     # provenance: chosen 2026-10-15 under the plan's activation headroom; the Mac measures it
   # MPS runs asynchronously: a chunk's freed scores stay unusable until the GPU has run the command that used them, so
   # chunks enqueued without a wait are all alive at once (the Mac, 2026-10-15 08:01: Allegro 720x1280, 672 chunks of

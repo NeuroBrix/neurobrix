@@ -396,7 +396,7 @@ class CompiledSequence:
 
     __slots__ = (
         'dag', 'op_resolver', 'device', 'dtype',
-        '_ops', '_arena',
+        '_ops', '_arena', '_release_from',
         '_tensor_id_to_slot', '_slot_to_tensor_id',
         '_weight_tensor_ids', '_input_tensor_ids', '_output_tensor_ids',
         '_num_weights', '_num_inputs', '_num_intermediates',
@@ -473,6 +473,25 @@ class CompiledSequence:
                                               narrow_op_uids=narrow_op_uids,
                                               hardware=hardware,
                                               attention_budget=attention_budget)
+
+        # The device allocator's retention (`memory.compiled_allocator_retention` of its vendor file): a tensor of at
+        # least this many bytes holds a heap of its own that the allocator keeps cached once freed and reuses only for
+        # a tensor that fits inside it (MPS's OVERSIZE heaps, MPSAllocator.h), so an op stream whose tensors grow
+        # (a decoder's upsampling) holds every step's heap at once: Open-Sora-v2's VAE on MPS held 21.2 GB of driver
+        # memory for 3.8 GB live (the Mac, 2026-10-23). The engine gives such a heap back when it frees such a
+        # tensor — the device synchronised (its frees are still in flight until its queue has run) and its cache
+        # emptied — so what the device holds is what the plan priced: the live set. None: an allocator that reuses
+        # freed memory for any request (CUDA's), or no device named (the executor's tests).
+        self._release_from: Optional[int] = None
+        if hardware is not None and device.type != "cpu":
+            from neurobrix.core.prism.attention_scratch import vendor_memory_of
+            _mem = vendor_memory_of(*hardware)
+            if "compiled_allocator_retention" not in _mem:
+                raise KeyError(f"ZERO FALLBACK: {hardware[0]}/{hardware[1]}'s vendor file states no "
+                               f"memory.compiled_allocator_retention — whether its allocator keeps the heaps it frees "
+                               f"(null when it reuses freed memory for any request)")
+            _ret = _mem["compiled_allocator_retention"]
+            self._release_from = int(_ret["dedicated_heap_min_bytes"]) if _ret else None
 
         # Compilation outputs
         self._ops: List[CompiledOp] = []
@@ -3599,8 +3618,7 @@ class CompiledSequence:
                     else:
                         for s in op.output_slots:
                             arena[s] = None
-                        for kill_slot in op.kill_slots:
-                            arena[kill_slot] = None
+                        self._kill(arena, op.kill_slots)
                         continue
                 elif _has_none_arg(args):
                     # None inside list args (e.g. index(t, [None])) — MoE-related
@@ -3614,8 +3632,7 @@ class CompiledSequence:
                         else:
                             for s in op.output_slots:
                                 arena[s] = None
-                            for kill_slot in op.kill_slots:
-                                arena[kill_slot] = None
+                            self._kill(arena, op.kill_slots)
                             continue
                     else:
                         _live_dump_on_oom(e, locals().get('arena'), getattr(self, '_tid_of_slot', None) or {})
@@ -3898,8 +3915,7 @@ class CompiledSequence:
             # FREE DEAD TENSORS - Critical for memory management
             # These slots are no longer needed after this op
             # Setting to None allows Python GC to release GPU memory
-            for kill_slot in op.kill_slots:
-                arena[kill_slot] = None
+            self._kill(arena, op.kill_slots)
 
         # NaN-guard summary at end of execution (verbose mode only)
         if nan_guard_triggers:
@@ -3978,8 +3994,7 @@ class CompiledSequence:
             if args and args[0] is None:
                 for s in op.output_slots:
                     arena[s] = None
-                for kill_slot in op.kill_slots:
-                    arena[kill_slot] = None
+                self._kill(arena, op.kill_slots)
                 continue
 
             # ── FAST PATH: No device transfer needed (99%+ of ops) ──
@@ -4002,8 +4017,7 @@ class CompiledSequence:
                         else:
                             for s in op.output_slots:
                                 arena[s] = None
-                            for kill_slot in op.kill_slots:
-                                arena[kill_slot] = None
+                            self._kill(arena, op.kill_slots)
                             continue
                     elif _has_none_arg(args):
                         has_none_in_list = any(
@@ -4016,8 +4030,7 @@ class CompiledSequence:
                             else:
                                 for s in op.output_slots:
                                     arena[s] = None
-                                for kill_slot in op.kill_slots:
-                                    arena[kill_slot] = None
+                                self._kill(arena, op.kill_slots)
                                 continue
                         else:
                             _live_dump_on_oom(e, locals().get('arena'), getattr(self, '_tid_of_slot', None) or {})
@@ -4106,8 +4119,7 @@ class CompiledSequence:
                         else:
                             for s in op.output_slots:
                                 arena[s] = None
-                            for kill_slot in op.kill_slots:
-                                arena[kill_slot] = None
+                            self._kill(arena, op.kill_slots)
                             continue
                     elif _has_none_arg(args):
                         has_none_in_list = any(
@@ -4120,8 +4132,7 @@ class CompiledSequence:
                             else:
                                 for s in op.output_slots:
                                     arena[s] = None
-                                for kill_slot in op.kill_slots:
-                                    arena[kill_slot] = None
+                                self._kill(arena, op.kill_slots)
                                 continue
                         else:
                             _live_dump_on_oom(e, locals().get('arena'), getattr(self, '_tid_of_slot', None) or {})
@@ -4174,8 +4185,24 @@ class CompiledSequence:
                     else:
                         arena[s] = None
 
-            for kill_slot in op.kill_slots:
-                arena[kill_slot] = None
+            self._kill(arena, op.kill_slots)
+
+    def _kill(self, arena, slots) -> None:
+        """Free an op's dead tensors; where the device's allocator keeps the heaps of large tensors
+        (`self._release_from`), a freed tensor that held one gives its heap back to the device."""
+        release = False
+        if self._release_from is not None:
+            for s in slots:
+                t = arena[s]
+                if isinstance(t, torch.Tensor) and t.untyped_storage().nbytes() >= self._release_from:
+                    release = True
+                    break
+        for s in slots:
+            arena[s] = None
+        if release:
+            from neurobrix.core.device_utils import device_sync, device_empty_cache
+            device_sync(str(self.device))
+            device_empty_cache(str(self.device))
 
     def gather_outputs(self, output_ids: Optional[List[str]] = None) -> Dict[str, torch.Tensor]:
         """Gather output tensors from the arena."""
