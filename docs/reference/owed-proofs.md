@@ -4840,3 +4840,14 @@ segment is the 16 GB of swap the matrix guard killed at 19:29:58.
 host bytes dropped) and Prism's pricing of a streamed segment at the segment plus its largest
 tensor's transient (the Dell, peer 20:00 CEST); the same probe on the Mac after the patch, its
 footprint back at the start figure after unload, is the landing criterion agreed.
+
+## 2026-10-24 — owed by whoever holds the device: the element-wise ladder per architecture
+
+`autotune.buckets.elements` (the four classes of an element-wise launch's element count: <= 65 536, <= 1 M, <= 16 M,
+above) is MEASURED on nvidia/volta (V100-SXM2, 2026-10-23, the c1rest campaign's `ew_bench.json`) and on
+apple/apple_m4_pro (2026-10-24, the Mac's `ew_ladder_2026_10_24`: within 4.0 % max / 1.6 % median of each count's best
+at >= 2 ms, inside the chip's noise). Every other profile carries the same four rows WITH that source and no
+measurement of its own: nvidia/ampere, nvidia/hopper, amd/cdna, cdna2, cdna3, and the Apple profiles other than
+m4_pro. Owed, per architecture, by the first machine that holds one: the shared copy's configs at counts 4 096 to
+268 M (3 points per octave), each class's config certified at its floor against each count's best; the ladder moves
+where a class loses more than the device's noise band.
