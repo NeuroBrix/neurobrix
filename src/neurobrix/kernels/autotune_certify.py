@@ -423,9 +423,18 @@ def _unified_padded_row(qual: str, tuner, key: tuple, card_bytes, short: str) ->
     bound is the phase price, so it was called with no card and drew every softmax at its top; the Mac's census on
     00e31765 refused HAT-L's 1 572 864 - 2 621 440 rows of 1 024 at 21-27 GB of a 19 GB card while the shortest row of
     the class (513) holds them (2026-10-24 07:18). The key filed is the census's; only the drawn row length moves."""
-    if card_bytes is None or short not in _PADDED_ROW:
+    if card_bytes is None or short not in _PADDED_ROW + ("ew_launch_kernel",):
         return key
     pr = price_key(qual, tuner, key)
+    if short == "ew_launch_kernel":
+        # `_ew_count`'s rule on the phase price: the class's top where it fits, else its floor. The open class's key is
+        # its label (68 719 476 736 elements on the four-row ladder), no count a run reaches: priced there, every Apple
+        # profile refused it at 2 TB and canary / granite-speech missed it under certified-only (2026-10-24 13:43)
+        if pr is None or pr["peak"] <= card_bytes:
+            return key
+        from neurobrix.kernels.autotune_bucket import class_floor
+        return (class_floor("elements", int(key[0])),) + tuple(key[1:])
+
     if pr is None or pr["peak"] <= card_bytes:
         return key
     from neurobrix.kernels.launch_keys import softmax_feat_bucket
@@ -505,7 +514,7 @@ def _key_operands(qual: str, tuner, key: tuple) -> Optional[Dict[str, Any]]:
             ins.append(("bias", (B, M, N), d(3, d(0))))
         return {"family": "mm", "inputs": ins, "out": ((B, M, N), out_dt), "mnk": (M, N, K), "batch": B,
                 "row_windowed_launch": False}
-    if short == "flash_attention_m8n8k4_kernel":
+    if short in ("flash_attention_m8n8k4_kernel", "flash_attention_certified_kernel"):
         tq, tk, hd = int(key[0]), int(key[1]), int(key[2])
         B, H = _flash_batch_heads(tq, tk, hd, d(0), d(1), d(2))
         ins = [("q", (B, H, tq, hd), d(0)), ("k", (B, H, tk, hd), d(1)), ("v", (B, H, tk, hd), d(2))]
@@ -1106,6 +1115,7 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
             return NBXTensor.from_numpy(bits, dtype=NBXDtype.bfloat16).permute(0, 3, 1, 2)
         return NBXTensor.from_numpy(bits).permute(0, 3, 1, 2)
     out_dt = C.output_dtype(tuner, key) if card_bytes is not None else None   # sized only to refuse
+    ew_top = int(key[0]) if short == "ew_launch_kernel" else None    # the class the copy files under, whatever is drawn
     if unified:
         key = _unified_padded_row(qual, tuner, key, card_bytes, short)
         _refuse_unified(qual, tuner, key, card_bytes)
@@ -1128,8 +1138,8 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         # an element-wise result is each element's alone, so no tile moves a bit
         import triton
         from neurobrix.kernels.ops.elementwise_launch import ew_launch_kernel as _ew
-        top = int(key[0])
-        n = _ew_count(top, card_bytes, dts[0] if dts else "fp32", short)
+        top = ew_top
+        n = _ew_count(int(key[0]), card_bytes, dts[0] if dts else "fp32", short)
         x = arr(rng, (n,), dts[0] if dts else "fp32")
 
         def run_ew():
@@ -1169,7 +1179,7 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
             bias = arr(rng, (B, M, N), bias_dt)
             return ((lambda: W.baddbmm_wrapper(to(bias), to(a), to(b))), (_matmul_oracle_fn(a, b, bias) if values else None), "out_ptr")
         return (lambda: W.bmm(to(a), to(b))), (_matmul_oracle_fn(a, b) if values else None), "out_ptr"
-    if short == "flash_attention_m8n8k4_kernel":
+    if short in ("flash_attention_m8n8k4_kernel", "flash_attention_certified_kernel"):
         # (Q_BUCKET, K_BUCKET, headdim, split, q, k, v, bias, out, lse): the buckets' top lengths, through the
         # attention wrapper itself (the matrix-unit route it takes for these dtypes and head dim); a mask only where
         # the key's bias dtype is not Q's (the zero bias the wrapper builds otherwise); the fp64 oracle per query row
