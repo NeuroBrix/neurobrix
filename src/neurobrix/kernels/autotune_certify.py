@@ -411,6 +411,31 @@ def record_refusal(path: Path, qual: str, ktext: str, asked: int, usable: int, c
             fcntl.flock(lk, fcntl.LOCK_UN)
 
 
+#: the kernels whose key carries a padded row length (`launch_keys.softmax_feat_bucket`), drawn at the class's top where
+#: the card holds it and else at the shortest row that forms the key (`_softmax_shape`)
+_PADDED_ROW = ("softmax_forward_kernel", "softmax_forward_looped_kernel", "mean_forward_kernel", "sum_forward_kernel",
+               "amax_forward_kernel", "group_norm_forward_kernel")
+
+
+def _unified_padded_row(qual: str, tuner, key: tuple, card_bytes, short: str) -> tuple:
+    """On a unified-memory device, the key a padded-row kernel is DRAWN at: the class's top where its phase price fits
+    the card, else the shortest row that forms the key — `_softmax_shape`'s rule, which a unified device skipped: its
+    bound is the phase price, so it was called with no card and drew every softmax at its top; the Mac's census on
+    00e31765 refused HAT-L's 1 572 864 - 2 621 440 rows of 1 024 at 21-27 GB of a 19 GB card while the shortest row of
+    the class (513) holds them (2026-10-24 07:18). The key filed is the census's; only the drawn row length moves."""
+    if card_bytes is None or short not in _PADDED_ROW:
+        return key
+    pr = price_key(qual, tuner, key)
+    if pr is None or pr["peak"] <= card_bytes:
+        return key
+    from neurobrix.kernels.launch_keys import softmax_feat_bucket
+    feat = int(key[1])
+    shortest = feat // 2 + 1 if feat > 1 else 1
+    if softmax_feat_bucket(shortest) != feat:
+        return key                              # no shorter row forms the key: priced, and refused, at its top
+    return (key[0], shortest) + tuple(key[2:])
+
+
 def _refuse_unified(qual: str, tuner, key: tuple, card_bytes) -> None:
     """On a device whose memory IS the host's, the host copies live in the same pool as the
     device buffers (a conv sized at 3 GB of device bytes took the Mac's certifier past 14 GB,
@@ -1082,6 +1107,7 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         return NBXTensor.from_numpy(bits).permute(0, 3, 1, 2)
     out_dt = C.output_dtype(tuner, key) if card_bytes is not None else None   # sized only to refuse
     if unified:
+        key = _unified_padded_row(qual, tuner, key, card_bytes, short)
         _refuse_unified(qual, tuner, key, card_bytes)
         card_bytes = None                       # the phase price is the bound on a unified device
     if short in ("matmul_kernel", "addmm_kernel"):
