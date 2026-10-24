@@ -4,7 +4,7 @@ component does (`core/prism/work.py`), how many times the request runs it, and t
 
   compute    per use, on the device the plan places the component on: a roofline,
              max(flops / matmul throughput at the compute dtype, (weight + activation bytes) / memory bandwidth);
-             on the host: flops / host throughput
+             on the host: the same roofline against the host's GEMM throughput and memory bandwidth
   movement   what the strategy moves: every component's weights loaded once over the host link; a strategy that
              streams weights per use (zero3, layer_streaming) moves them every use; one that loads on demand per phase
              (the lazy strategies) once per phase; cpu_streaming reads them from storage every use
@@ -41,6 +41,7 @@ class DeviceFacts:
 @dataclass(frozen=True)
 class HostFacts:
     matmul_flops: float                     # host FLOP/s (float32 GEMM)
+    memory_bps: float                       # host memory bandwidth, bytes/s (a copy in host memory)
     storage_bps: Optional[float] = None     # sequential read of a weight file, bytes/s
 
 
@@ -56,10 +57,12 @@ def device_facts(measured: Optional[Mapping[str, Any]], where: str) -> DeviceFac
 
 
 def host_facts(measured: Optional[Mapping[str, Any]]) -> HostFacts:
-    if not measured or "host_matmul_gflops" not in measured:
-        raise MissingFact("host: no measured `host_matmul_gflops` on the hardware profile (tools/profile_facts.py)")
+    for key in ("host_matmul_gflops", "host_memory_gbps"):
+        if not measured or key not in measured:
+            raise MissingFact(f"host: no measured `{key}` on the hardware profile (tools/profile_facts.py)")
     s = measured.get("storage_read_gbps")
     return HostFacts(matmul_flops=float(measured["host_matmul_gflops"]) * 1e9,
+                     memory_bps=float(measured["host_memory_gbps"]) * 1e9,
                      storage_bps=float(s) * 1e9 if s is not None else None)
 
 
@@ -94,7 +97,7 @@ def plan_seconds(strategy: str, allocations: Mapping[str, Any], works: Mapping[s
         if dev.startswith("cpu"):
             if host is None:
                 raise MissingFact(f"{comp} is placed on the host and the host's facts are not measured")
-            total += n * w.flops / host.matmul_flops
+            total += n * max(w.flops / host.matmul_flops, (w.weight_bytes + w.activation_bytes) / host.memory_bps)
             if strategy in STORAGE_EVERY_USE:
                 if host.storage_bps is None:
                     raise MissingFact("cpu_streaming needs the measured storage read bandwidth")

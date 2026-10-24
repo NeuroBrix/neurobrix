@@ -9,6 +9,7 @@ timer (`launcher.do_bench`), the device allocator's copies — never a vendor li
   h2d_gbps / d2h_gbps     a copy from page-locked host memory to the card and back
   h2d_pageable_gbps       the same from ordinary host memory (what a loader without staging pays)
   host_matmul_gflops      a float32 GEMM on the host through numpy's BLAS, the machine's thread setting
+  host_memory_gbps        a copy of a 1 GiB array in host memory, (read + write) bytes / time
   storage_read_gbps       a sequential read of a file the caller names (a weight shard of the cache)
 
 Writes `<out>/facts_card<N>.json` and prints the YAML block to copy into the hardware profile, each value with its
@@ -102,6 +103,19 @@ def host_matmul_gflops() -> float:
     return 2.0 * n ** 3 / best / 1e9
 
 
+def host_memory_gbps() -> float:
+    import numpy as np
+    src = np.ones(COPY_BYTES, dtype=np.uint8)
+    dst = np.empty_like(src)
+    np.copyto(dst, src)
+    best = float("inf")
+    for _ in range(3):
+        t0 = time.perf_counter()
+        np.copyto(dst, src)
+        best = min(best, time.perf_counter() - t0)
+    return 2.0 * COPY_BYTES / best / 1e9
+
+
 def storage_read_gbps(path: Path) -> float:
     size = path.stat().st_size
     fd = os.open(str(path), os.O_RDONLY)
@@ -127,7 +141,7 @@ def main(argv=None) -> int:
     os.environ["NEUROBRIX_REPLAY_CACHE"] = str(out / "replay_cache")
     facts = {"card": a.card, "date": time.strftime("%Y-%m-%d %H:%M:%S %Z"),
              "matmul_tflops": {d: matmul_tflops(d) for d in ("float16", "float32")}, **copies(),
-             "host_matmul_gflops": host_matmul_gflops()}
+             "host_matmul_gflops": host_matmul_gflops(), "host_memory_gbps": host_memory_gbps()}
     if a.storage_file is not None:
         facts["storage_read_gbps"] = storage_read_gbps(a.storage_file)
         facts["storage_file"] = str(a.storage_file)
@@ -138,7 +152,8 @@ def main(argv=None) -> int:
     print(f"measured:\n  source: \"{src}\"\n  matmul_tflops: {{float16: {facts['matmul_tflops']['float16']['best']:.1f}, "
           f"float32: {facts['matmul_tflops']['float32']['best']:.1f}}}\n  memory_gbps: {facts['memory_gbps']:.0f}\n"
           f"  h2d_gbps: {facts['h2d_gbps']:.1f}\n  d2h_gbps: {facts['d2h_gbps']:.1f}\n"
-          f"  h2d_pageable_gbps: {facts['h2d_pageable_gbps']:.1f}\n  host_matmul_gflops: {facts['host_matmul_gflops']:.0f}")
+          f"  h2d_pageable_gbps: {facts['h2d_pageable_gbps']:.1f}\n  host_matmul_gflops: {facts['host_matmul_gflops']:.0f}\n"
+          f"  host_memory_gbps: {facts['host_memory_gbps']:.0f}")
     return 0
 
 

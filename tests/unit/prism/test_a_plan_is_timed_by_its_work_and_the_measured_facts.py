@@ -11,7 +11,7 @@ from neurobrix.core.prism import time_estimate as T
 from neurobrix.core.prism.work import Work
 
 GPU = T.DeviceFacts(matmul_flops={"float16": 100e12}, memory_bps=900e9, h2d_bps=12e9)
-HOST = T.HostFacts(matmul_flops=1e12, storage_bps=2e9)
+HOST = T.HostFacts(matmul_flops=1e12, memory_bps=100e9, storage_bps=2e9)
 
 
 def test_one_use_is_the_roofline_of_its_flops_and_bytes():
@@ -31,7 +31,10 @@ def test_streaming_weights_every_use_costs_what_the_host_link_moves():
     assert whole == pytest.approx(20 * use + 1.0)                                  # 20 uses + one load
     assert zero3 == pytest.approx(20 * use + 20 * 1.0)                             # the weights cross every use
     host = T.plan_seconds("cpu_execution", {"transformer": "cpu"}, works, uses, {}, HOST, "float16")
-    assert host == pytest.approx(20 * 1.0) and whole < zero3
+    assert host == pytest.approx(20 * 1.0) and whole < zero3                        # 1e12 flops at 1 TFLOP/s: compute-bound
+    heavy = {"transformer": Work(flops=int(1e9), weight_bytes=int(200e9), activation_bytes=0)}
+    assert T.plan_seconds("cpu_execution", {"transformer": "cpu"}, heavy, {"transformer": 1}, {}, HOST,
+                          "float16") == pytest.approx(2.0)                          # 200 GB at 100 GB/s: memory-bound
 
 
 def test_a_fact_the_profile_does_not_carry_is_refused():
@@ -39,6 +42,8 @@ def test_a_fact_the_profile_does_not_carry_is_refused():
         T.device_facts(None, "cuda:0")
     with pytest.raises(T.MissingFact, match="bfloat16"):
         T.compute_seconds(Work(1, 1, 1), GPU, "bfloat16")
+    with pytest.raises(T.MissingFact, match="host_memory_gbps"):
+        T.host_facts({"host_matmul_gflops": 700})
     with pytest.raises(T.MissingFact, match="not measured"):
         T.plan_seconds("single_gpu", {"c": "cuda:1"}, {"c": Work(1, 1, 1)}, {}, {"cuda:0": GPU}, HOST, "float16")
 

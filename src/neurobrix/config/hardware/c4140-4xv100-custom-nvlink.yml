@@ -4,6 +4,10 @@
 id: c4140-4xv100-custom-nvlink
 vendor: dell
 preferred_dtype: float16
+host_measured:
+  source: "measured 2026-10-24 22:38:27 CEST on the rack, alone (tools/profile_facts.py; the shard read over the NFS/RDMA mount)"
+  host_matmul_gflops: 761
+  storage_read_gbps: 0.93
 summary:
   total_gpus: 4
   total_vram_gb: 96
@@ -19,6 +23,13 @@ devices:
   - float16
   architecture: volta
   pcie_version: '3.0'
+  measured:
+    source: "measured 2026-10-24 22:38:01 CEST on card 0 of the rack, alone (tools/profile_facts.py)"
+    matmul_tflops: {float16: 42.3, float32: 13.5}
+    memory_gbps: 789
+    h2d_gbps: 8.1
+    d2h_gbps: 3.7
+    h2d_pageable_gbps: 4.6
 - index: 1
   brand: nvidia
   model: Tesla V100-SXM2-16GB
@@ -29,6 +40,13 @@ devices:
   - float16
   architecture: volta
   pcie_version: '3.0'
+  measured:
+    source: "measured 2026-10-24 22:38:01 CEST on card 0 of the rack, alone (tools/profile_facts.py)"
+    matmul_tflops: {float16: 42.3, float32: 13.5}
+    memory_gbps: 789
+    h2d_gbps: 8.1
+    d2h_gbps: 3.7
+    h2d_pageable_gbps: 4.6
 - index: 2
   brand: nvidia
   model: Tesla V100-SXM2-32GB
@@ -39,6 +57,13 @@ devices:
   - float16
   architecture: volta
   pcie_version: '3.0'
+  measured:
+    source: "measured 2026-10-24 22:38:27 CEST on card 3 of the rack, alone (tools/profile_facts.py)"
+    matmul_tflops: {float16: 41.7, float32: 13.5}
+    memory_gbps: 779
+    h2d_gbps: 8.2
+    d2h_gbps: 3.7
+    h2d_pageable_gbps: 4.7
 - index: 3
   brand: nvidia
   model: Tesla V100-SXM2-32GB
@@ -49,6 +74,13 @@ devices:
   - float16
   architecture: volta
   pcie_version: '3.0'
+  measured:
+    source: "measured 2026-10-24 22:38:27 CEST on card 3 of the rack, alone (tools/profile_facts.py)"
+    matmul_tflops: {float16: 41.7, float32: 13.5}
+    memory_gbps: 779
+    h2d_gbps: 8.2
+    d2h_gbps: 3.7
+    h2d_pageable_gbps: 4.7
 interconnect:
   groups:
   - index: 0
