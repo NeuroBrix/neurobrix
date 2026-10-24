@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Five catalogue entries carry their unique names** (one model = one name, 2026-10-24): `SwinIR-001_classicalSR_DF2K_s64w8_SwinIR-M_x2`, `SwinIR-001_classicalSR_DIV2K_s48w8_SwinIR-M_x4`, `HAT-HAT-S_SRx4`, `HAT-HAT-L_SRx4_ImageNet-pretrain` and `s1-mini` replace the download-time names in the census tables, the plan-identical list and the benchmark rows; the containers are the same bytes under their names.
 - **A temporally streamed decoder no longer runs out of memory on Apple GPUs** (compiled engine): at each of the stream's own boundaries the device gives back the heaps its allocator kept for the slices that died there (mochi-1-preview's VAE held 19.8 GB of device memory for 7 GB live); devices whose allocator reuses freed memory (CUDA) are untouched.
 - **Flash attention runs every head dimension on Apple GPUs** (Metal), where the profile states it was measured correct (`flash.any_head_dim_correct`); every NVIDIA and AMD route is unchanged.
 - **Element-wise operations are classed by their element count on every architecture**: each vendor profile declares its own element ladder (measured on V100 and on the M4 Pro, carried with its source elsewhere), and a profile without one is refused instead of being given the dimension ladder, which made tens of thousands of classes on Apple.

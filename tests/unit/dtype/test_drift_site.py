@@ -65,7 +65,7 @@ def test_a_dtype_disagreement_is_a_policy_site_not_a_kernel_site(tmp_path):
 
 
 def test_an_integer_origin_is_a_discrete_decision_named_with_the_float_deviation_before_it(tmp_path):
-    """openaudio-s1-mini, 2026-09-06: the first over-bound op was a slice of int64 codes in the
+    """s1-mini, 2026-09-06: the first over-bound op was a slice of int64 codes in the
     quantizer (rel_dev 0.34) while every float op before it stayed under 0.01 — a code that
     flipped on a sub-bound distance, not a kernel to read. The report says so and names the
     largest float deviation before the flip."""

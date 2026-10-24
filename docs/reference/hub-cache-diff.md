@@ -48,7 +48,7 @@ Verdicts: **IDENTICAL** (every graph and the topology hash equal) · **CACHE_NEW
 | hat-l-x4 | XPixelGroup/HAT-L-x4 | CACHE_NEWER | 2026-09-20T23:13:20 | 2026-09-07T03:43:22 | 2026-09-19T22:22:27 | model: ecff17c5 → 81dac1cf; topology.json: fba4db08 → bc377cdb | retrace gate PASS 2026-09-21 (…/retrace/hat-l-x4/state.json) |
 | hat-s-x4 | XPixelGroup/HAT-S-x4 | HUB_OBJECT_CORRUPT: object 55653412 bytes (record 54654466), first bytes b'\x00\x00\x00\x00' | 2026-09-20T23:22:49 | ? | 2026-09-21T19:53:34 | — | retrace gate PASS 2026-09-21 (…/retrace/hat-s-x4/state.json); the hub object is corrupt (55.65 MB of zeros) |
 | mochi-1-preview | genmo/Mochi-1-preview | IDENTICAL | 2026-07-07T15:17:36 | 2026-07-07T15:17:36 | 2026-09-19T17:01:54 | — | — |
-| openaudio-s1-mini | fishaudio/OpenAudio-S1-Mini | IDENTICAL | 2026-06-05T02:39:46 | 2026-06-05T02:39:46 | 2026-08-05T13:53:20 | — | — |
+| s1-mini | fishaudio/OpenAudio-S1-Mini | IDENTICAL | 2026-06-05T02:39:46 | 2026-06-05T02:39:46 | 2026-08-05T13:53:20 | — | — |
 | orpheus-3b-0.1-ft | — | NOT_ON_HUB | 2026-05-24T01:23:42 | ? | ? | — | — |
 | orpheus-3b-0.1-ft-snac | canopylabs/Orpheus-3B | CACHE_NEWER | 2026-06-20T02:06:27 | 2026-06-08T12:34:19 | 2026-09-03T22:54:29 | codec.decoder: 8d2e23ea → a1417bf6; model: 23a684c8 → 64e9da69 | — |
 | parakeet-tdt-1.1b | nvidia/Parakeet-TDT-1.1B | IDENTICAL | 2026-09-07T07:31:28 | 2026-09-07T07:31:28 | 2026-09-19T02:16:19 | — | — |
@@ -516,7 +516,7 @@ Verdicts: **IDENTICAL** (every graph and the topology hash equal) · **CACHE_NEW
 | manifest.json | 513fe56b8212600e6ea634da25b76e3275363e9b3d7ad4dd663fd52d26086110 | 513fe56b8212600e6ea634da25b76e3275363e9b3d7ad4dd663fd52d26086110 |
 | topology.json | 8153dc460718718f711c1ef782af5f433d861d3c6366e6fe3983ece15a18cb97 | 8153dc460718718f711c1ef782af5f433d861d3c6366e6fe3983ece15a18cb97 |
 
-### openaudio-s1-mini (fishaudio/OpenAudio-S1-Mini)
+### s1-mini (fishaudio/OpenAudio-S1-Mini)
 
 | member | cache | hub |
 |---|---|---|
