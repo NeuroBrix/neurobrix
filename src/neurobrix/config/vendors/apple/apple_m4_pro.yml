@@ -408,6 +408,16 @@ autotune:
       - {up_to_ms: 5.0, pct: 5.08}
       - {up_to_ms: null, pct: 14.77}
   buckets:
+    # elements — an element-wise launch's element count (`kernels/ops/elementwise_launch.py`), NEVER the `default`
+    # dimension ladder (`autotune_bucket.ladder_for` refuses it). MEASURED on THIS chip 2026-10-24 (apple_m4_pro, the
+    # Mac's campaign ew_ladder_2026_10_24: the shared copy's 15 configs, fp32, 49 counts 4 096..268 435 456): volta's
+    # four rows hold — at >= 2 ms each class's config, certified at its floor, is within 4.0 % max / 1.6 % median of
+    # each count's best, inside the chip's noise bands; below 2 ms every config times at the launch.
+    elements:
+      - {up_to: 65536, step: 65536}
+      - {up_to: 1048576, step: 1048576}
+      - {up_to: 16777216, step: 16777216}
+      - {up_to: null, step: 68719476736}
     default:
       - {up_to: 64, step: 1}
       - {up_to: 256, step: 16}

@@ -259,6 +259,16 @@ tiling:
 
 autotune:
   buckets:
+    # elements — an element-wise launch's element count (`kernels/ops/elementwise_launch.py`), NEVER the `default`
+    # dimension ladder (`autotune_bucket.ladder_for` refuses it). NOT measured on this architecture (no such device on
+    # either machine): the four classes measured on V100-SXM2 2026-10-23 (nvidia/volta.yml, launch-bound under 65 536
+    # elements, bandwidth classes above) and confirmed on apple_m4_pro 2026-10-24 — the measurement on this
+    # architecture is owed (docs/reference/owed-proofs.md, "element-wise ladder per architecture").
+    elements:
+      - {up_to: 65536, step: 65536}
+      - {up_to: 1048576, step: 1048576}
+      - {up_to: 16777216, step: 16777216}
+      - {up_to: null, step: 68719476736}
     default:
       - {up_to: 64, step: 1}
       - {up_to: 256, step: 16}
