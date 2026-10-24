@@ -3455,7 +3455,7 @@ class CompiledSequence:
         # (every op once in that pass) — the per-step differential for a
         # decode divergence located at step k. Without it: first pass only.
         _pass_sel = _os_d.environ.get("NBX_DUMP_TIDS_PASS")
-        if _pass_sel is not None and state.get("pass", 0) != int(_pass_sel):
+        if _pass_sel not in (None, "all") and state.get("pass", 0) != int(_pass_sel):
             return
         # Dedup by op_uid, NOT tid: CompiledSequence reuses arena slots, so many
         # distinct ops share one slot → one tid. Keying by tid silently dropped
@@ -3487,7 +3487,7 @@ class CompiledSequence:
                               flush=True)
                         return
                     rec.update({"component": self.dag.get("component_name", "?"),
-                                "tid": tid, "op_uid": op.op_uid,
+                                "pass": state.get("pass", 0), "tid": tid, "op_uid": op.op_uid,
                                 "op_type": op.op_type})
                     state["records"].append(rec)
                     # The append above is in-memory only; the JSONL write is
@@ -3538,7 +3538,7 @@ class CompiledSequence:
                 except Exception:
                     _bn = None
             new_record = {
-                "component": self.dag.get("component_name", "?"),
+                "component": self.dag.get("component_name", "?"), "pass": state.get("pass", 0),
                 "tid": tid, "op_uid": op.op_uid, "op_type": op.op_type,
                 "shape": list(tensor.shape), "dtype": str(tensor.dtype),
                 "head10": head, "last_pos10": last, "l2_norm": norm,
