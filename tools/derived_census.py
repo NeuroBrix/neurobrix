@@ -1058,7 +1058,7 @@ _KEYED_KINDS = frozenset({
     "aten::_scaled_dot_product_flash_attention_for_cpu",
     "aten::_softmax", "aten::softmax", "aten::_safe_softmax", "aten::_log_softmax", "aten::log_softmax",
     "aten::native_group_norm", "aten::group_norm", "aten::mean", "aten::sum", "aten::amax",
-    "aten::_weight_norm", "custom::moe_fused"})
+    "aten::_weight_norm", "aten::norm", "custom::moe_fused"})
 
 
 def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_bf16,
@@ -1156,14 +1156,18 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
             launches = LK.layer_norm_launches(_prod(x_s[:len(x_s) - k]), _prod(x_s[len(x_s) - k:]),
                                               w_t is not None, b_t is not None, dt(ins[0]),
                                               dt(w_t) if w_t else None, dt(b_t) if b_t else None, dt(ins[0]))
-        elif kind in ("aten::mean", "aten::sum", "aten::amax"):
+        elif kind in ("aten::mean", "aten::sum", "aten::amax", "aten::norm"):
             # `wrappers.mean_wrapper` / `sum_wrapper` / `amax_wrapper`: the reduced elements (one dim, a list flattened
             # by `_reduce_over_dims`, or every element when `dim` is absent) a row, every other element a row's index;
-            # the input cast first to the `dtype` keyword (mean, sum) as `_reduction_dtype` reads it
+            # the input cast first to the `dtype` keyword (mean, sum) as `_reduction_dtype` reads it. `aten::norm`
+            # (`wrappers.norm_wrapper`, p = 2: sqrt(sum(x * x, dim))) is the same sum of its input's dtype, its dim the
+            # THIRD argument (self, p, dim, keepdim) — it was placed keyless and openaudio-s1-mini's codec norm
+            # (1 536 rows of 8 192, fp16) missed in the c1restlot2 gate (2026-10-24)
             x_s = shape(ins[0])
             args = (o.get("attributes") or {}).get("args") or []
             kw = (o.get("attributes") or {}).get("kwargs") or {}
-            d_ = args[1] if len(args) > 1 else kw.get("dim")
+            _di = 2 if kind == "aten::norm" else 1
+            d_ = args[_di] if len(args) > _di else kw.get("dim")
             d_ = d_.get("value") if isinstance(d_, dict) else d_
             nd = len(x_s)
             dims = list(range(nd)) if d_ is None or d_ == [] else [int(v) % max(1, nd) for v in
@@ -1171,12 +1175,12 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
             feat = _prod([x_s[i] for i in sorted(set(dims))]) if nd else 1
             rows = _prod(x_s) // max(1, feat) if nd else 1
             xd = dt(ins[0])
-            if kind != "aten::amax":
+            if kind in ("aten::mean", "aten::sum"):
                 want = args[3] if len(args) > 3 else kw.get("dtype")
                 want = want.get("value") if isinstance(want, dict) else want
                 if want is not None:
                     xd = NBXDtype[str(want).replace("torch.", "")]
-            launches = LK.row_reduce_launches(kind.split("::")[1], rows, feat, xd)
+            launches = LK.row_reduce_launches("sum" if kind == "aten::norm" else kind.split("::")[1], rows, feat, xd)
         elif kind == "aten::_weight_norm":
             # the meta-op (`dispatch._meta_weight_norm`): v * g / ||v|| over every dim but `dim`, the norm a sum of
             # v * v reduced one dim at a time (keepdim), in v's dtype — each a row reduction of its own

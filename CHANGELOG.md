@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **An L2 norm runs a certified configuration** (`aten::norm`, the audio codecs' weight norm): the census keys the sum it is computed with, which it had counted as launching no tuned kernel (openaudio-s1-mini).
 - **A mixture-of-experts layer's combine runs a certified configuration in every precision island** (`tools/derived_census.py`): the census keys the sum over the selected experts at the experts' weight dtype, the dtype the fused layer computes it in, instead of the dtype of the hidden states an island hands it (deepseek-moe-16b-chat).
 - **A census uses memory that frees while a model derives** (`tools/derived_census.py`): a model's derivation workers are re-counted before every start and at least every 30 s, instead of once per model, so a census started beside a gate no longer runs a model one derivation at a time after the gate has ended. The width pass of one derivation is reused across the prompt lengths of its bisection where the binding reads the same, with identical rows.
 - **A census reports its progress as it goes** (`tools/derived_census.py table --record <journal>`): each model written, its end, a failure, and its progress at most every 10 minutes while it derives; a one-job worker is a process and a pipe instead of a single-worker pool, which could hang a forked worker on the pool's queue lock.
