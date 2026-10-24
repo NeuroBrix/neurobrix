@@ -514,7 +514,7 @@ def _key_operands(qual: str, tuner, key: tuple) -> Optional[Dict[str, Any]]:
             ins.append(("bias", (B, M, N), d(3, d(0))))
         return {"family": "mm", "inputs": ins, "out": ((B, M, N), out_dt), "mnk": (M, N, K), "batch": B,
                 "row_windowed_launch": False}
-    if short == "flash_attention_m8n8k4_kernel":
+    if short in ("flash_attention_m8n8k4_kernel", "flash_attention_certified_kernel"):
         tq, tk, hd = int(key[0]), int(key[1]), int(key[2])
         B, H = _flash_batch_heads(tq, tk, hd, d(0), d(1), d(2))
         ins = [("q", (B, H, tq, hd), d(0)), ("k", (B, H, tk, hd), d(1)), ("v", (B, H, tk, hd), d(2))]
@@ -1179,7 +1179,7 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
             bias = arr(rng, (B, M, N), bias_dt)
             return ((lambda: W.baddbmm_wrapper(to(bias), to(a), to(b))), (_matmul_oracle_fn(a, b, bias) if values else None), "out_ptr")
         return (lambda: W.bmm(to(a), to(b))), (_matmul_oracle_fn(a, b) if values else None), "out_ptr"
-    if short == "flash_attention_m8n8k4_kernel":
+    if short in ("flash_attention_m8n8k4_kernel", "flash_attention_certified_kernel"):
         # (Q_BUCKET, K_BUCKET, headdim, split, q, k, v, bias, out, lse): the buckets' top lengths, through the
         # attention wrapper itself (the matrix-unit route it takes for these dtypes and head dim); a mask only where
         # the key's bias dtype is not Q's (the zero bias the wrapper builds otherwise); the fp64 oracle per query row

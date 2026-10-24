@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Flash attention runs every head dimension on Apple GPUs** (Metal), where the profile states it was measured correct (`flash.any_head_dim_correct`); every NVIDIA and AMD route is unchanged.
 - **Element-wise operations are classed by their element count on every architecture**: each vendor profile declares its own element ladder (measured on V100 and on the M4 Pro, carried with its source elsewhere), and a profile without one is refused instead of being given the dimension ladder, which made tens of thousands of classes on Apple.
 - **A sum over complex values runs a certified configuration** (the rotary grid of the Wan video models): the census keys it on the real and imaginary rows the sum actually reduces.
 - **An L2 norm runs a certified configuration** (`aten::norm`, the audio codecs' weight norm): the census keys the sum it is computed with, which it had counted as launching no tuned kernel (openaudio-s1-mini).
