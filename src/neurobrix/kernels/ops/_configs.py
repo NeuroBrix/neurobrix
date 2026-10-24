@@ -868,6 +868,36 @@ def prune_addmv(configs, named_args, **kwargs):
     return keep
 
 
+def row_reduce_configs() -> List[triton.Config]:
+    """The candidates the certifier proves for a looped row reduction (sum, mean, amax — chantier 1): rows per program x
+    the feature tile the row is walked by x warps. What such a kernel ran before it was certified is among them
+    (`batch_block_heuristic` rows, `reduction_feat_tile` tile, 4 warps)."""
+    return [triton.Config({'BLOCK_SIZE_BATCH': rows, 'BLOCK_SIZE_FEAT': tile}, num_warps=warps)
+            for rows in (1, 2, 4, 8, 16, 32, 64, 128) for tile in (64, 256, 1024, 4096) for warps in (2, 4, 8)]
+
+
+def prune_row_reduce(configs, named_args, **kwargs):
+    """No more rows than exist, no tile wider than the padded row (it only masks), and a rows x tile block within the
+    backend's reduce-tile cap (`nbx_tensor.reduce_tile_max`), the registers of one block (`memory.max_registers_per_
+    block`: an fp32 element a register — a 128 x 4 096 block spilled and ptxas took minutes per candidate, the c1rest
+    certification, 2026-10-23 17:57) and the per-thread bound (`reduced_extent_max`)."""
+    from neurobrix.kernels.nbx_tensor import reduce_tile_max, reduced_extent_max
+    from neurobrix.kernels.wrappers import _arch_param
+    regs = _arch_param("memory", "max_registers_per_block", None)
+    if regs is None:
+        raise RuntimeError("ZERO FALLBACK: the hardware profile declares no memory.max_registers_per_block — the row "
+                           "reductions' block has no bound")
+    rows, feat = int(named_args['batch_dim']), next_power_of_2(max(1, int(named_args['feat_dim'])))
+    cap = min(reduce_tile_max(), int(regs))
+    keep = []
+    for c in configs:
+        r, t = c.kwargs['BLOCK_SIZE_BATCH'], c.kwargs['BLOCK_SIZE_FEAT']
+        per = reduced_extent_max(c.num_warps)
+        if r <= max(1, rows) and t <= max(64, feat) and r * t <= cap and (per is None or t <= per):
+            keep.append(c)
+    return keep or [min(configs, key=lambda c: c.kwargs['BLOCK_SIZE_BATCH'] * c.kwargs['BLOCK_SIZE_FEAT'])]
+
+
 def batch_block_heuristic(args: Dict) -> int:
     """Heuristic for batch block size in softmax/norm kernels.
 

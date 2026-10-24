@@ -30,12 +30,15 @@ def _meta_resolve_log(msg):
 _OP_MAP: Optional[Dict[str, Callable]] = None
 
 
-_EW_BLOCK = 1024
+def _ew(n):
+    """An element-wise launch's certified tile and warps (`ops/elementwise_launch.ew_meta`)."""
+    from neurobrix.kernels.ops.elementwise_launch import ew_meta
+    return ew_meta(n)
 
 
 def _1d_grid_fixed(n):
-    """Grid for element-wise kernels. Fixed BLOCK_SIZE=1024."""
-    return (triton.cdiv(n, _EW_BLOCK),)
+    """Grid for element-wise kernels at the certified tile of the count's class."""
+    return (triton.cdiv(n, _ew(n)['BLOCK_SIZE']),)
 
 
 def _tensor_to_int(val):
@@ -573,7 +576,7 @@ def _create_ones(*args, **kwargs):
     n = out.numel()
     if n > 0:
         _set_device(out)
-        fill_kernel[_1d_grid_fixed(n)](out, 1.0, n, BLOCK_SIZE=_EW_BLOCK)
+        fill_kernel[_1d_grid_fixed(n)](out, 1.0, n, **_ew(n))
     return out
 
 
@@ -603,7 +606,7 @@ def _create_full(*args, **kwargs):
     n = out.numel()
     if n > 0:
         _set_device(out)
-        fill_kernel[_1d_grid_fixed(n)](out, float(fill_value), n, BLOCK_SIZE=_EW_BLOCK)
+        fill_kernel[_1d_grid_fixed(n)](out, float(fill_value), n, **_ew(n))
     return out
 
 
@@ -615,7 +618,7 @@ def _create_scalar_tensor(value=0, **kwargs):
     device = kwargs.get('device', 'cuda')
     out = NBXTensor.empty((1,), dtype=dtype, device=device or 'cuda')
     _set_device(out)
-    fill_kernel[(1,)](out, float(value) if value is not None else 0.0, 1, BLOCK_SIZE=_EW_BLOCK)
+    fill_kernel[(1,)](out, float(value) if value is not None else 0.0, 1, **_ew(1))
     return out
 
 
@@ -664,7 +667,7 @@ def _create_ones_like(x, *, dtype=None, layout=None, device=None,
     n = out.numel()
     if n > 0:
         _set_device(out)
-        fill_kernel[(triton.cdiv(n, _EW_BLOCK),)](out, 1.0, n, BLOCK_SIZE=_EW_BLOCK)
+        fill_kernel[_1d_grid_fixed(n)](out, 1.0, n, **_ew(n))
     return out
 
 
@@ -682,7 +685,7 @@ def _create_full_like(x, fill_value, *, dtype=None, layout=None, device=None,
     n = out.numel()
     if n > 0:
         _set_device(out)
-        fill_kernel[(triton.cdiv(n, _EW_BLOCK),)](out, float(fill_value), n, BLOCK_SIZE=_EW_BLOCK)
+        fill_kernel[_1d_grid_fixed(n)](out, float(fill_value), n, **_ew(n))
     return out
 
 

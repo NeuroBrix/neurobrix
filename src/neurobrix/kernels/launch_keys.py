@@ -26,6 +26,12 @@ BADDBMM = "neurobrix.kernels.ops.baddbmm_op.baddbmm_kernel"
 CONV2D = "neurobrix.kernels.ops.conv2d.conv2d_forward_kernel"
 DEPTHWISE = "neurobrix.kernels.ops.depthwise_conv2d.depthwise_conv2d_kernel"
 SOFTMAX = "neurobrix.kernels.ops.softmax.softmax_forward_kernel"
+SOFTMAX_LOOPED = "neurobrix.kernels.ops.softmax.softmax_forward_looped_kernel"
+ELEMENTWISE = "neurobrix.kernels.ops.elementwise_launch.ew_launch_kernel"
+GROUP_NORM = "neurobrix.kernels.ops.groupnorm.group_norm_forward_kernel"
+ROW_REDUCE = {"mean": "neurobrix.kernels.ops.mean.mean_forward_kernel",
+              "sum": "neurobrix.kernels.ops.sum.sum_forward_kernel",
+              "amax": "neurobrix.kernels.ops.amax.amax_forward_kernel"}
 UNIT_FLASH = "neurobrix.kernels.ops.flash_attention_m8n8k4.flash_attention_m8n8k4_kernel"
 LAYER_NORM = "neurobrix.kernels.ops.layernorm.layer_norm_forward_kernel"
 RMS_NORM = "neurobrix.kernels.ops.rmsnorm.rms_norm_forward_kernel"
@@ -764,7 +770,7 @@ def conv_launches(x_shape, w_shape, stride, padding, dilation, transposed: bool,
 
 
 #: The longest row the single-program softmax holds (a row's padded length in registers); a longer one runs the looped
-#: kernel (`softmax_forward_looped_kernel`, one tile at a time), which forms no autotune key. Moved here from the
+#: kernel (`softmax_forward_looped_kernel`, one tile at a time, keyed as the single-program one). Moved here from the
 #: wrapper so the wrapper and the census read ONE value.
 SOFTMAX_FUSED_MAX_FEAT = 16384
 
@@ -779,11 +785,13 @@ def softmax_feat_bucket(feat: int) -> int:
 
 def softmax_launches(rows: int, feat: int, log: bool, x: NBXDtype, out: NBXDtype) -> List[Launch]:
     """`softmax` / `log_softmax` over a row of `feat` (rows = every other element): the single-program kernel's key —
-    the rows' bucket (`bucket_of("M")`), the padded row length (`softmax_feat_bucket`), the log flag, the input's and the output's dtype — or none
-    when the row takes the looped kernel (workstream 1: rows per program and warps certified per key)."""
-    if feat > SOFTMAX_FUSED_MAX_FEAT or rows < 1:
+    the rows' bucket (`bucket_of("M")`), the padded row length (`softmax_feat_bucket`), the log flag, the input's and the output's dtype;
+    a row longer than the single program holds (`SOFTMAX_FUSED_MAX_FEAT`) the looped kernel's, keyed alike (workstream
+    1: rows per program and warps certified per key; chantier 1: the looped kernel's tile and warps)."""
+    if rows < 1:
         return []
-    return [(SOFTMAX, (bucket_of("M", rows), softmax_feat_bucket(feat), bool(log), tag(x), tag(out)))]
+    kernel = SOFTMAX_LOOPED if feat > SOFTMAX_FUSED_MAX_FEAT else SOFTMAX
+    return [(kernel, (bucket_of("M", rows), softmax_feat_bucket(feat), bool(log), tag(x), tag(out)))]
 
 
 def layer_norm_launches(rows: int, feat: int, has_weight: bool, has_bias: bool, x: NBXDtype,
@@ -812,3 +820,51 @@ def rms_norm_launches(rows: int, feat: int, has_weight: bool, x: NBXDtype, w: Op
     from neurobrix.kernels.nbx_tensor import _saturating_cast
     return [(RMS_NORM, (bucket_of("M", rows), softmax_feat_bucket(feat), bool(has_weight),
                         bool(_saturating_cast(F32, out)), tag(x), tag(w if has_weight else x), tag(out)))]
+
+
+def elementwise_classes(largest: int) -> List[Launch]:
+    """Every element-wise class (`ops/elementwise_launch.ew_bucket`: the profile's `elements` ladder, else its
+    `default`) a component can launch: each class whose floor is at most `largest`, the most elements any tensor of
+    the component holds — an element-wise launch writes or reads at most one tensor's elements (an op's output, a
+    copy, a cast, a weight converted at load). Keyed as the shared copy is (`ew_launch_kernel`: the class's top and
+    its two fp32 operands)."""
+    from neurobrix.kernels.autotune_bucket import ladder_for
+    largest = max(1, int(largest))
+    out, prev = [], 0
+    for bound, step in ladder_for("elements"):
+        hi = largest if bound is None else min(bound, largest)
+        top = -(-(prev + 1) // step) * step
+        while prev < hi and top - step < hi:
+            out.append((ELEMENTWISE, (top, "fp32", "fp32")))
+            top += step
+            if bound is not None and top > bound:
+                break
+        if bound is None or largest <= bound:
+            break
+        prev = bound
+    return out
+
+
+def group_norm_launches(N: int, C: int, HxW: int, groups: int, has_weight: bool, has_bias: bool, x: NBXDtype,
+                        w: Optional[NBXDtype], b: Optional[NBXDtype]) -> List[Launch]:
+    """`wrappers.group_norm_wrapper` (one program per batch x group, the group's channel x spatial extent walked in
+    chunks): the key — the programs' bucket (`bucket_of("M")`), the group's padded extent (`softmax_feat_bucket`),
+    the weight and bias flags — then the dtype tags of its tensor arguments in order: input, output (the input's),
+    weight and bias (the input standing in for an absent one), mean and inverse deviation (fp32)."""
+    if N < 1 or C < 1 or HxW < 1 or groups < 1:
+        return []
+    hidden = (C // groups) * HxW
+    return [(GROUP_NORM, (bucket_of("M", N * groups), softmax_feat_bucket(hidden), bool(has_weight), bool(has_bias),
+                          tag(x), tag(x), tag(w if has_weight else x), tag(b if has_bias else x),
+                          tag(F32), tag(F32)))]
+
+
+def row_reduce_launches(kind: str, rows: int, feat: int, x: NBXDtype) -> List[Launch]:
+    """`wrappers.mean_wrapper` / `sum_wrapper` / `amax_wrapper` over rows of `feat` (the reduced elements: one dim, a
+    list flattened by `_reduce_over_dims`, or all of them; every other element a row): the key — the rows' bucket
+    (`bucket_of("M")`), the padded row (`softmax_feat_bucket`) — then the input's dtype tag (after the `dtype` keyword's
+    cast) and the output's: fp32 for mean and sum (cast after), the input's for amax."""
+    if rows < 1 or feat < 1:
+        return []
+    out = x if kind == "amax" else F32
+    return [(ROW_REDUCE[kind], (bucket_of("M", rows), softmax_feat_bucket(feat), tag(x), tag(out)))]

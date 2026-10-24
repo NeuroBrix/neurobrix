@@ -1,19 +1,17 @@
-"""Max reduction — pure @triton.jit kernel, the row walked in tiles of at most REDUCTION_FEAT_TILE."""
+"""Max reduction — pure @triton.jit kernel, the row walked in tiles of the certified width."""
 
 import triton
 import triton.language as tl
 
-from ._configs import batch_block_heuristic, reduction_feat_tile
+from ._configs import nbx_autotune, row_reduce_configs, prune_row_reduce
 
 
-@triton.heuristics({
-    'BLOCK_SIZE_BATCH': batch_block_heuristic,
-    'BLOCK_SIZE_FEAT': reduction_feat_tile,
-})
+@nbx_autotune(configs=row_reduce_configs(), key=['BATCH_BUCKET', 'FEAT_BUCKET'],
+              prune_configs_by={'early_config_prune': prune_row_reduce}, cache_results=True)
 @triton.jit
 def amax_forward_kernel(
     input_ptr, output_ptr,
-    batch_dim, feat_dim,
+    batch_dim, feat_dim, BATCH_BUCKET, FEAT_BUCKET,
     input_batch_stride, input_feat_stride,
     BLOCK_SIZE_BATCH: tl.constexpr,
     BLOCK_SIZE_FEAT: tl.constexpr,

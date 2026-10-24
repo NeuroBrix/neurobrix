@@ -128,7 +128,7 @@ def decode_sequences(topology: Mapping[str, Any], defaults: Mapping[str, Any],
     flow = topology.get("flow") or {}
     kind = flow.get("type")
     if kind == "tts_llm":
-        from neurobrix.core.cfg.engine import guidance_cascade
+        from neurobrix.core.guidance_cascade import guidance_cascade
         if family is None:
             raise RuntimeError("ZERO FALLBACK: a tts_llm decode counts its sequences through the CFG cascade, "
                                "which needs the container's family (manifest) — none was given.")

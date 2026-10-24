@@ -325,6 +325,25 @@ def _softmax_shape(rows: int, feat: int, card_bytes, in_dt: str, out_dt: str, wh
     return rows, int(shortest)
 
 
+def _ew_count(top: int, card_bytes, dt: str, what: str) -> int:
+    """The elements an element-wise class is certified at: its top where the card holds the copy's in and out within
+    the capacity Prism plans against (`PRISM_DEFAULTS["safety_margin"]`), else its floor (`autotune_bucket.class_floor`,
+    the fewest that form it — the open class's top is no count a run reaches); a floor that does not fit is refused
+    by name."""
+    if card_bytes is None:
+        return top
+    from neurobrix.core.config.system import PRISM_DEFAULTS
+    from neurobrix.kernels.autotune_bucket import class_floor
+    per = 2 * _isz.itemsize(_isz.from_autotune_key(dt))
+    usable = int(int(card_bytes) * float(PRISM_DEFAULTS["safety_margin"]))
+    if top * per <= usable:
+        return top
+    floor = class_floor("elements", top)
+    if floor * per > usable:
+        raise KeyTooLargeForClass(floor * per, int(card_bytes), what)
+    return floor
+
+
 def _refuse_oversize(card_bytes, specs, what: str) -> None:
     """`specs`: (shape, dtype) of every operand AND the output, at their device widths, against
     a DISCRETE card. Checked before any draw. A unified-memory device is `_refuse_unified`'s."""
@@ -437,7 +456,7 @@ def _key_operands(qual: str, tuner, key: tuple) -> Optional[Dict[str, Any]]:
             ins.append(("mask", (B, H, tq, tk), d(3)))
         return {"family": "attention", "inputs": ins, "out": ((B, H, tq, hd), d(0)), "mnk": (tq, hd, 2 * tk),
                 "batch": B * H, "row_windowed_launch": True}
-    if short == "softmax_forward_kernel":
+    if short in ("softmax_forward_kernel", "softmax_forward_looped_kernel"):
         rows, feat = int(key[0]), int(key[1])
         return {"family": "softmax", "inputs": [("x", (rows, feat), d(0))], "out": ((rows, feat), out_dt),
                 "mnk": (rows, feat, 1), "batch": 1, "row_windowed_launch": True}
@@ -452,6 +471,27 @@ def _key_operands(qual: str, tuner, key: tuple) -> Optional[Dict[str, Any]]:
             ins.append(("b", (feat,), d(2)))
         return {"family": "rownorm", "inputs": ins, "out": ((rows, feat), out_dt),
                 "mnk": (rows, feat, 1), "batch": 1, "row_windowed_launch": True}
+    if short in ("mean_forward_kernel", "sum_forward_kernel", "amax_forward_kernel"):
+        # (BATCH_BUCKET, FEAT_BUCKET, x, out): rows of the padded row (its top, else the shortest of the class)
+        rows, feat = int(key[0]), int(key[1])
+        return {"family": "softmax", "inputs": [("x", (rows, feat), d(0))], "out": ((rows,), out_dt),
+                "mnk": (rows, feat, 1), "batch": 1, "row_windowed_launch": True}
+    if short == "group_norm_forward_kernel":
+        # (PROG_BUCKET, HIDDEN_BUCKET, scale_by_weight, add_bias, dtypes...): one group per program, one channel per
+        # group (the chunk walks the group's extent whatever its channels), the per-channel weight and bias
+        rows, feat = int(key[0]), int(key[1])
+        ins = [("x", (rows, feat), d(0))]
+        if bool(key[2]):
+            ins.append(("w", (rows,), d(2)))
+        if bool(key[3]):
+            ins.append(("b", (rows,), d(3)))
+        return {"family": "rownorm", "inputs": ins, "out": ((rows, feat), out_dt),
+                "mnk": (rows, feat, 1), "batch": 1, "row_windowed_launch": True}
+    if short == "ew_launch_kernel":
+        # (N_BUCKET, fp32, fp32): the element-wise class's copy at its top, else at its floor (`_ew_count`)
+        n = int(key[0])
+        return {"family": "elementwise", "inputs": [("x", (n,), d(0))], "out": ((n,), out_dt), "mnk": (n, 1, 1),
+                "batch": 1, "row_windowed_launch": False}
     if short in ("gemv_vec_kernel", "addmv_kernel"):
         # (N_BUCKET, K_BUCKET | M_BUCKET, dtypes...): the matrix [N, K] at the buckets' tops (a bucket's top forms it),
         # the vector [K], the bias [N] for addmv
@@ -561,6 +601,11 @@ def price_key(qual: str, tuner, key: tuple, unified: bool = True) -> Optional[Di
         deviation = N * 8 + N * (4 + 8)
         return {"draws": draws, "device": device, "oracle": oracle, "deviation": deviation,
                 "peak": draws + device + max(oracle, deviation)}
+    if ops["family"] == "elementwise":
+        # identity: the draw cast to float64 is the oracle, the result read back and cast beside it
+        n = ops["mnk"][0]
+        return {"draws": draws, "device": device, "oracle": n * 8, "deviation": n * 8 + n * (4 + 8),
+                "peak": draws + device + n * 8 + n * (4 + 8)}
     if ops["family"] in ("softmax", "rownorm"):
         # `_softmax_oracle_fn`: per row window, the window cast to float64 plus the fp64 arrays it computes
         # (`_SOFTMAX_ORACLE_F64_ARRAYS`), the windows' results kept (`RowWindowedOracle`); whole under the cap.
@@ -903,6 +948,42 @@ def _rownorm_oracle_fn(x, w, b, layer: bool):
     return lambda: RowWindowedOracle([((r0, r1), rows(r0, r1)) for (r0, r1) in wins], m)
 
 
+def _row_reduce_oracle_fn(x, red: str):
+    """The fp64 oracle of a row reduction (mean, sum or max) of x [rows, feat]: rows a window at a time."""
+    m, n = x.shape[-2], x.shape[-1]
+    op = {"mean": np.mean, "sum": np.sum, "amax": np.max}[red]
+
+    def run():
+        out = np.empty(m, dtype=np.float64)
+        step = max(1, ORACLE_MAX_MACS // (8 * max(1, n)))      # a window of ORACLE_MAX_MACS bytes in fp64
+        for r0 in range(0, m, step):
+            out[r0:r0 + step] = op(_f64(x[r0:r0 + step, :]), axis=-1)
+        return out
+    return run
+
+
+def _groupnorm_oracle_fn(x, w, b):
+    """The fp64 oracle of a group norm of x [groups, extent] (one channel per group: eps 1e-5, `group_norm_wrapper`'s
+    default) with its per-group weight and bias — the row norm's, the affine per row; row-windowed above the cap."""
+    m, n = x.shape[-2], x.shape[-1]
+    wf = None if w is None else _f64(w)[:, None]
+    bf = None if b is None else _f64(b)[:, None]
+
+    def rows(r0, r1):
+        z = _f64(x[r0:r1, :])
+        z = z - z.mean(axis=-1, keepdims=True)
+        z = z / np.sqrt((z * z).mean(axis=-1, keepdims=True) + 1e-5)
+        if wf is not None:
+            z = z * wf[r0:r1]
+        if bf is not None:
+            z = z + bf[r0:r1]
+        return z
+    wins = _row_windows(m, n, _SOFTMAX_ORACLE_F64_ARRAYS * 8)
+    if wins is None:
+        return lambda: rows(0, m)
+    return lambda: RowWindowedOracle([((r0, r1), rows(r0, r1)) for (r0, r1) in wins], m)
+
+
 def _conv_oracle_fn(x, wt, stride, padding, dilation, groups):
     n, ci, h, wd = x.shape
     co, ci_g, kh, kw = wt.shape
@@ -984,6 +1065,22 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
             return (lambda: W.mm(to(a), to(b))), (_matmul_oracle_fn(a, b) if values else None), "c_ptr"
         bias = arr(rng, (N,), dts[2] if len(dts) > 2 else "fp16")
         return ((lambda: W.addmm(to(bias), to(a), to(b))), (_matmul_oracle_fn(a, b, bias[None, :]) if values else None), "c_ptr")
+    if short == "ew_launch_kernel":
+        # the class's shared copy (`ops/elementwise_launch.py`) launched itself — no wrapper reaches it but `ew_meta` —
+        # at the class's top where the card holds it, else at its floor (`_ew_count`); its oracle is the draw itself:
+        # an element-wise result is each element's alone, so no tile moves a bit
+        import triton
+        from neurobrix.kernels.ops.elementwise_launch import ew_launch_kernel as _ew
+        top = int(key[0])
+        n = _ew_count(top, card_bytes, dts[0] if dts else "fp32", short)
+        x = arr(rng, (n,), dts[0] if dts else "fp32")
+
+        def run_ew():
+            xd = to(x)
+            y = NBXTensor.empty_like(xd)
+            _ew[lambda META: (triton.cdiv(n, META['BLOCK_SIZE']),)](xd, y, n, top)
+            return y
+        return run_ew, ((lambda: np.asarray(x, dtype=np.float64)) if values else None), "y_ptr"
     if short in ("gemv_vec_kernel", "addmv_kernel"):
         # through the wrappers (`mv_wrapper`, `addmv_wrapper`) at the buckets' tops; the fp64 oracle by row blocks
         N, K = int(key[0]), int(key[1])
@@ -1032,6 +1129,32 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         return ((lambda: W.scaled_dot_product_attention_wrapper(to(q), to(k), to(v),
                                                                 attn_mask=to(mask) if masked else None)),
                 (_attention_oracle_fn(q, k, v, mask, scale) if values else None), "Out")
+    if short in ("mean_forward_kernel", "sum_forward_kernel", "amax_forward_kernel"):
+        # through the wrappers over the last dim (`mean_wrapper`, `sum_wrapper`, `amax_wrapper`), rows of the padded row
+        # (`_softmax_shape`); the fp64 oracle of each row's reduction (its window cast whole, row-windowed above the cap)
+        rows, feat = int(key[0]), int(key[1])
+        x_dt = dts[0] if dts else "fp32"
+        rows, feat = _softmax_shape(rows, feat, card_bytes, x_dt, x_dt, short)
+        _refuse_oversize(card_bytes, [((rows, feat), x_dt), ((rows,), out_dt)], short)
+        x = arr(rng, (rows, feat), x_dt)
+        red = short.split("_")[0]
+        fn = {"mean": W.mean_wrapper, "sum": W.sum_wrapper, "amax": W.amax_wrapper}[red]
+        return (lambda: fn(to(x), -1)), (_row_reduce_oracle_fn(x, red) if values else None), "output_ptr"
+    if short == "group_norm_forward_kernel":
+        # through the wrapper (`group_norm_wrapper`, eps its default): N = 1, one channel per group, the groups the
+        # programs' bucket, the group's extent the padded class (at its top where the card holds it, else at the
+        # shortest that forms it, `_softmax_shape`); the fp64 oracle per group (row-windowed above the cap)
+        rows, feat = int(key[0]), int(key[1])
+        x_dt = dts[0] if dts else "fp32"
+        rows, feat = _softmax_shape(rows, feat, card_bytes, x_dt, x_dt, short)
+        has_w, has_b = bool(key[2]), bool(key[3])
+        _refuse_oversize(card_bytes, [((rows, feat), x_dt), ((rows, feat), x_dt)], short)
+        x = arr(rng, (rows, feat), x_dt)
+        w = arr(rng, (rows,), dts[2]) if has_w else None
+        b = arr(rng, (rows,), dts[3]) if has_b else None
+        run = lambda: W.group_norm_wrapper(to(x).view(1, rows, feat), rows, to(w) if has_w else None,
+                                           to(b) if has_b else None)[0].view(rows, feat)
+        return run, (_groupnorm_oracle_fn(x, w, b) if values else None), "Y"
     if short in ("layer_norm_forward_kernel", "rms_norm_forward_kernel"):
         # the row norms through their wrappers (`native_layer_norm`, `rms_norm`), the padded row at its top, eps the
         # wrappers' own default; the fp64 oracle per row (row-windowed above the oracle's cap, as a softmax's)
@@ -1048,7 +1171,7 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         else:
             run = lambda: W.rms_norm(to(x), to(w) if has_w else None)
         return run, (_rownorm_oracle_fn(x, w, b, ln) if values else None), "output_ptr"
-    if short == "softmax_forward_kernel":
+    if short in ("softmax_forward_kernel", "softmax_forward_looped_kernel"):
         # (BATCH_BUCKET, FEAT_BUCKET, log, x, out): the bucket's rows of the padded row length (a length of the class), through the wrapper itself; the
         # fp64 oracle per row (row-windowed above the oracle's cap, as a product's)
         rows, feat, log = int(key[0]), int(key[1]), bool(key[2])

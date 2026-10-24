@@ -260,7 +260,8 @@ def _shape_fn(g: dict, comp: str, symbols: dict, carried: dict, axis_values: dic
     return shape
 
 
-_NORM_KINDS = ("aten::native_layer_norm", "aten::layer_norm", "custom::rms_norm", "aten::rms_norm")
+_NORM_KINDS = ("aten::native_layer_norm", "aten::layer_norm", "custom::rms_norm", "aten::rms_norm",
+               "aten::native_group_norm", "aten::group_norm")
 
 
 def _tensor_arg(args, i):
@@ -308,6 +309,41 @@ def _triton_fp64() -> bool:
     return profile_triton_stores_fp64(get_hardware_profile())
 
 
+#: the width pass's results per derivation process: {pass key: [(the signatures it read, its widths, its casts)]}
+_WIDTHS: dict = {}
+
+
+def _widths_at(key, shape, compute):
+    """`compute(shape_of, casts)` — the width pass at this binding — or the result of an earlier binding that read
+    the same facts of every tensor it asked about (`runtime_widths.binding_signature`): the pass reads a binding
+    ONLY through `shape_of`, so equal answers give equal widths, exactly. The pass was 76 % of a Qwen3-Coder
+    derivation job (py-spy, 2026-10-23), recomputed at each of ~1 200 prompt lengths of one bisection, where it
+    reads M <= 4 and an empty extent and nothing more. Returns copies: callers own what they get."""
+    from neurobrix.core.prism.runtime_widths import binding_signature
+    for asked, rt, casts in _WIDTHS.get(key, ()):
+        if all(binding_signature(shape(t)) == sig for t, sig in asked):
+            return dict(rt), {u: list(v) for u, v in casts.items()}
+    asked = {}
+
+    def recorded(tid):
+        sh = shape(tid)
+        asked.setdefault(tid, binding_signature(sh))
+        return sh
+
+    casts = {}
+    rt = compute(recorded, casts)
+    _WIDTHS.setdefault(key, []).append((list(asked.items()), dict(rt), {u: list(v) for u, v in casts.items()}))
+    return rt, casts
+
+
+def _tiling_key(tiling):
+    return None if tiling is None else (tuple(sorted(tiling.fusion_convs.items())), frozenset(tiling.tiled_ops))
+
+
+def _reads_key(reads: dict):
+    return tuple(sorted((u, tuple(sorted((t, str(d)) for t, d in m.items()))) for u, m in reads.items()))
+
+
 def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_bytes, sdpa_min_rows,
                sdpa_max_chunks, unhandled, tiling=None, tiled_tf=None, decode_kv=None, pins=frozenset(),
                skip=(), only=None, axis_values=None, axes=(), out_dtypes=None):
@@ -331,11 +367,14 @@ def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_
         # The census is bound to its target's profile (the active one): its alignment is that profile's.
         from neurobrix.kernels.ops._configs import active_vendor_profile
         from neurobrix.triton.dtype import attention_operand_alignment
-        op_casts = {}
-        rt = RW.runtime_dtypes(g, cdtype, engine, has_native_bf16=has_native_bf16,
-                               attention_operands=attention_operand_alignment(active_vendor_profile()),
-                               contract=contract, stores_fp64=_triton_fp64(), tiling=tiling, shape_of=shape,
-                               casts=op_casts, operand_reads=_cache_reads(ops, decode_kv))
+        reads = _cache_reads(ops, decode_kv)
+        align, fp64 = attention_operand_alignment(active_vendor_profile()), _triton_fp64()
+        rt, op_casts = _widths_at(
+            (model, comp, str(cdtype), engine, bool(has_native_bf16), str(align), bool(fp64), _tiling_key(tiling),
+             _reads_key(reads)), shape,
+            lambda shape_of, casts: RW.runtime_dtypes(
+                g, cdtype, engine, has_native_bf16=has_native_bf16, attention_operands=align, contract=contract,
+                stores_fp64=fp64, tiling=tiling, shape_of=shape_of, casts=casts, operand_reads=reads))
     except AnnotationContradiction as e:
         # The width pass reads the shapes too (the matmul store rule reads M): a component whose
         # annotation contradicts itself is not derivable as a whole — named, never guessed.
@@ -353,7 +392,15 @@ def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_
         import dataclasses as _dc
         contract = _dc.replace(contract, fp32_op_uids=frozenset(contract.fp32_op_uids) | pins,
                                narrow_op_uids=frozenset(contract.narrow_op_uids) - pins)
-    dt0 = lambda tid: NBXDtype[rt[tid]] if rt.get(tid) in NBXDtype.__members__ else NBXDtype[{"float16": "float16", "float32": "float32", "bfloat16": "bfloat16"}[rt[tid]]]
+    def dt0(tid):
+        # a runtime dtype name as NBXDtype spells it: `bool` is `bool_` (a Python keyword) — read once a keyed op could
+        # take a mask (a sum of a bool mask: chatterbox, 2026-10-23); any other name not an NBXDtype is refused by name
+        n = rt[tid]
+        if n in NBXDtype.__members__:
+            return NBXDtype[n]
+        if n + "_" in NBXDtype.__members__:
+            return NBXDtype[n + "_"]
+        raise KeyError(f"runtime dtype {n!r} of {tid} is no NBXDtype")
     from neurobrix.triton import tiling_sizes as _TS
     conv_band_bytes = _TS.conv2d_band_bytes()
     out = []
@@ -371,16 +418,17 @@ def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_
         tf_u = (tiled_tf or {}).get(uid)
         if isinstance(tf_u, tuple) and tf_u[0] == "chain" and kind in ("custom::rms_norm", "aten::rms_norm"):
             tf_u = ("chain_rows", _chain_band_rows(ops, tf_u, shape))
-        if kind in _NORM_KINDS:
-            # an AMP fp32 op: the dtype engine's wrap casts its half operands to fp32 before the wrapper (and the
-            # triton-sequential one leaves custom::rms_norm alone) — the operands as the KERNEL receives them,
-            # `runtime_widths`' own casts, the rule the engine runs
+        if op_casts.get(uid):
+            # an op the dtype engine wraps (an AMP fp32 op: a norm, a softmax...): its half operands cast to fp32 before
+            # the wrapper (and the triton-sequential one leaves custom::rms_norm alone) — the operands as the KERNEL
+            # receives them, `runtime_widths`' own casts, the rule the engine runs. Read for the norms only, a softmax
+            # was keyed at its stored bf16 where the run hands it fp32 (canary-qwen-2.5b on Apple, 2026-10-23)
             _c = dict(op_casts.get(uid, ()))
             dt = (lambda tid, _c=_c, _d=dt: NBXDtype[_c[tid]] if tid in _c else _d(tid))
         try:
             launches = _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_bf16,
                                     sdpa_budget_bytes, sdpa_min_rows, sdpa_max_chunks, conv_band_bytes,
-                                    unhandled, tf_u, decode_kv)
+                                    unhandled, tf_u, decode_kv, loaded_dt=dt0)
         except AnnotationContradiction as e:
             unhandled[f"annotation contradicts its trace — {str(e).split(' dim ')[0]}"] += 1
             continue
@@ -395,7 +443,57 @@ def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_
             unhandled[f"{KEYLESS}{kind}"] += 1
         for q_, key in launches:
             out.append((uid, q_, key))
+    out += _elementwise_rows(g, ops, shape, skip, only, LK)
+    out += _widening_check_rows(g, ops, shape, dt, skip, only, LK)
     return out
+
+
+def _widening_check_rows(g, ops, shape, dt, skip, only, LK) -> list:
+    """The magnitude check an integer tensor divided by a float runs on a backend with no fp64
+    (`wrappers._int_division_widening_dtype`: amax of |x| in fp32 over the whole tensor, one row): keyed at each such
+    division (`aten::floor_divide`, `aten::div` with a floor or trunc rounding mode), for its integer operand(s)."""
+    if _triton_fp64():
+        return []
+    rows = []
+    for uid in g["execution_order"]:
+        if uid in skip or (only is not None and uid not in only):
+            continue
+        o = ops[uid]
+        kind = o["op_type"]
+        a_ = (o.get("attributes") or {})
+        mode = (a_.get("kwargs") or {}).get("rounding_mode")
+        mode = mode.get("value") if isinstance(mode, dict) else mode
+        if not (kind == "aten::floor_divide" or (kind == "aten::div" and mode in ("floor", "trunc"))):
+            continue
+        ins = list(o.get("input_tensor_ids") or ())
+        from neurobrix.kernels.nbx_tensor import _FLOATING_DTYPES
+        ints = [t for t in ins if dt(t) not in _FLOATING_DTYPES]
+        if not ints or len(ints) == len(ins):            # all integer: divided in the integers, no widening
+            continue
+        for t in ints:
+            n = _prod(shape(t))
+            if n > 0:
+                rows += [(uid, q_, key) for q_, key in LK.row_reduce_launches("amax", 1, n, LK.F32)]
+    return rows
+
+
+def _elementwise_rows(g, ops, shape, skip, only, LK) -> list:
+    """The element-wise classes this binding can launch (`launch_keys.elementwise_classes`): every class up to the
+    most elements one tensor of the derived ops holds — read on each op's inputs and outputs (activations, weights,
+    the values a flow reads after it), attributed to the op holding it."""
+    largest, at = 0, None
+    for uid in g["execution_order"]:
+        if uid in skip or (only is not None and uid not in only):
+            continue
+        o = ops[uid]
+        for tid in list(o.get("input_tensor_ids") or ()) + list(o.get("output_tensor_ids") or ()):
+            try:
+                n = _prod(shape(tid))
+            except (AnnotationContradiction, NegativeExtent):   # refused by name where its op is keyed; sizes none
+                continue
+            if n > largest:
+                largest, at = n, uid
+    return [(at, q_, key) for q_, key in LK.elementwise_classes(largest)] if at is not None else []
 
 
 def _cache_reads(ops: dict, decode_kv) -> dict:
@@ -958,13 +1056,17 @@ _KEYED_KINDS = frozenset({
     "aten::istft", "aten::scaled_dot_product_attention", "aten::_scaled_dot_product_attention",
     "aten::_scaled_dot_product_efficient_attention", "aten::_scaled_dot_product_flash_attention",
     "aten::_scaled_dot_product_flash_attention_for_cpu",
-    "aten::_softmax", "aten::softmax", "aten::_safe_softmax", "aten::_log_softmax", "aten::log_softmax"})
+    "aten::_softmax", "aten::softmax", "aten::_safe_softmax", "aten::_log_softmax", "aten::log_softmax",
+    "aten::native_group_norm", "aten::group_norm", "aten::mean", "aten::sum", "aten::amax",
+    "aten::_weight_norm", "aten::norm", "custom::moe_fused"})
 
 
 def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_bf16,
                  sdpa_budget_bytes, sdpa_min_rows, sdpa_max_chunks, conv_band_bytes, unhandled,
-                 tile_factor=None, decode_kv=None):
-    """The launches of one op; None when the op launches no autotuned kernel."""
+                 tile_factor=None, decode_kv=None, loaded_dt=None):
+    """The launches of one op; None when the op launches no autotuned kernel. `loaded_dt(tid)`: a tensor's runtime
+    dtype as its producer or loader holds it, before an island's casts — the dtype of what an op reads by name rather
+    than receives as an operand (the fused MoE's expert weights)."""
     from neurobrix.kernels.nbx_tensor import NBXDtype
     if kind not in _KEYED_KINDS:
         return None
@@ -1054,6 +1156,85 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
             launches = LK.layer_norm_launches(_prod(x_s[:len(x_s) - k]), _prod(x_s[len(x_s) - k:]),
                                               w_t is not None, b_t is not None, dt(ins[0]),
                                               dt(w_t) if w_t else None, dt(b_t) if b_t else None, dt(ins[0]))
+        elif kind in ("aten::mean", "aten::sum", "aten::amax", "aten::norm"):
+            # `wrappers.mean_wrapper` / `sum_wrapper` / `amax_wrapper`: the reduced elements (one dim, a list flattened
+            # by `_reduce_over_dims`, or every element when `dim` is absent) a row, every other element a row's index;
+            # the input cast first to the `dtype` keyword (mean, sum) as `_reduction_dtype` reads it. `aten::norm`
+            # (`wrappers.norm_wrapper`, p = 2: sqrt(sum(x * x, dim))) is the same sum of its input's dtype, its dim the
+            # THIRD argument (self, p, dim, keepdim) — it was placed keyless and openaudio-s1-mini's codec norm
+            # (1 536 rows of 8 192, fp16) missed in the c1restlot2 gate (2026-10-24)
+            x_s = shape(ins[0])
+            args = (o.get("attributes") or {}).get("args") or []
+            kw = (o.get("attributes") or {}).get("kwargs") or {}
+            _di = 2 if kind == "aten::norm" else 1
+            d_ = args[_di] if len(args) > _di else kw.get("dim")
+            d_ = d_.get("value") if isinstance(d_, dict) else d_
+            nd = len(x_s)
+            dims = list(range(nd)) if d_ is None or d_ == [] else [int(v) % max(1, nd) for v in
+                                                                   (d_ if isinstance(d_, (list, tuple)) else [d_])]
+            feat = _prod([x_s[i] for i in sorted(set(dims))]) if nd else 1
+            rows = _prod(x_s) // max(1, feat) if nd else 1
+            xd = dt(ins[0])
+            if kind in ("aten::mean", "aten::sum"):
+                want = args[3] if len(args) > 3 else kw.get("dtype")
+                want = want.get("value") if isinstance(want, dict) else want
+                if want is not None:
+                    xd = NBXDtype[str(want).replace("torch.", "")]
+            if kind == "aten::sum" and xd.name.startswith("complex"):
+                # a complex sum reduces its real view (`sum_wrapper`: view_as_real, the appended [., 2] axis kept):
+                # the real and imaginary parts are rows of their own, in the part's dtype — Wan's rotary grid
+                # (aten.sum::4, [1, 30, 1, 21] complex over its last dim) launched 60 rows where the census keyed 30
+                # (the c1restlot2 gate, 2026-10-24)
+                rows *= 2
+                xd = NBXDtype.float64 if xd.name == "complex128" else NBXDtype.float32
+            launches = LK.row_reduce_launches("sum" if kind == "aten::norm" else kind.split("::")[1], rows, feat, xd)
+        elif kind == "aten::_weight_norm":
+            # the meta-op (`dispatch._meta_weight_norm`): v * g / ||v|| over every dim but `dim`, the norm a sum of
+            # v * v reduced one dim at a time (keepdim), in v's dtype — each a row reduction of its own
+            v_s = list(shape(ins[0]))
+            args = (o.get("attributes") or {}).get("args") or []
+            d_ = args[2] if len(args) > 2 else ((o.get("attributes") or {}).get("kwargs") or {}).get("dim", 0)
+            d_ = d_.get("value") if isinstance(d_, dict) else d_
+            nd = len(v_s)
+            d_ = int(d_ or 0) % nd if nd else 0
+            launches = []
+            for rd in range(nd):
+                if rd == d_:
+                    continue
+                feat = int(v_s[rd])
+                launches += LK.row_reduce_launches("sum", _prod(v_s) // max(1, feat), feat, dt(ins[0]))
+                v_s[rd] = 1
+        elif kind == "custom::moe_fused":
+            # the fused MoE layer (`triton/moe.execute_moe_fused`): its router's top-k weights renormalised by a sum
+            # over top_k (fp32, unless the graph hands the weights in — a blend) and the experts' outputs combined by
+            # a sum over top_k of [tokens, top_k, hidden] in the EXPERT WEIGHTS' dtype: `execute_moe_fused` casts the
+            # hidden states to the weights' dtype before its passes (`_fused_moe_pass`, `_expert_store_grouped_pass`),
+            # and the weights are read by name, never cast by an island — deepseek-moe-16b-chat's island handed its
+            # hidden states in fp32, the combine ran fp16 and the census had keyed it fp32 (the c1restlot gate, 2026-10-23)
+            a_ = o.get("attributes") or {}
+            h_s = shape(a_["hidden_states_tid"])
+            K_ = int(h_s[-1])
+            M_ = _prod(h_s) // max(1, K_)
+            top_k = int(a_["top_k"])
+            launches = []
+            if a_.get("norm_topk_prob") and "topk_weights_tid" not in a_:
+                launches += LK.row_reduce_launches("sum", M_, top_k, NBXDtype.float32)
+            launches += LK.row_reduce_launches("sum", M_ * K_, top_k, (loaded_dt or dt)(a_["expert_gate_weight_ids"][0]))
+        elif kind in ("aten::native_group_norm", "aten::group_norm"):
+            # `wrappers.group_norm_wrapper` (`native_group_norm_wrapper` forwards to it): N and C the input's first two
+            # dims, every other its spatial extent; the groups and the weight and bias by their argument positions
+            # (native: input, weight, bias, N, C, HxW, groups, eps; group_norm: input, groups, weight, bias, eps)
+            x_s = shape(ins[0])
+            args = (o.get("attributes") or {}).get("args") or []
+            native = kind == "aten::native_group_norm"
+            g_ = args[6 if native else 1] if len(args) > (6 if native else 1) else None
+            g_ = g_.get("value") if isinstance(g_, dict) else g_
+            w_t, b_t = _tensor_arg(args, 1 if native else 2), _tensor_arg(args, 2 if native else 3)
+            if not isinstance(g_, int):
+                unhandled[f"group norm with no literal group count — {uid}"] += 1
+                return []
+            launches = LK.group_norm_launches(x_s[0], x_s[1], _prod(x_s[2:]), g_, w_t is not None, b_t is not None,
+                                              dt(ins[0]), dt(w_t) if w_t else None, dt(b_t) if b_t else None)
         elif kind in ("custom::rms_norm", "aten::rms_norm"):
             # `wrappers.rms_norm` over the last dim; the output at the op's stored dtype (the dtype engine passes it
             # as `out_dtype`) — and, inside a band-streamed residual chain, once per band at the band's own rows
@@ -2496,6 +2677,9 @@ def _peak_rss_bytes() -> int:
     return int(peak) if sys.platform == "darwin" else int(peak) * 1024
 
 
+#: how often, at most, a model's running derivation workers wait before the room is asked again
+ROOM_EVERY_S = 30
+
 HOLDS = None   # the holds ledger the gate schedulers share (`table --holds`); None: the census holds the machine alone
 
 
@@ -2546,13 +2730,19 @@ class _host_hold:
             self.f.write_text(f"{os.getpid()} {self.nbytes}\n")
         return self
 
+    def set(self, nbytes: int) -> None:
+        """The reservation moved with the workers running."""
+        if int(nbytes) != self.nbytes:
+            self.nbytes = int(nbytes)
+            self.__enter__()
+
     def __exit__(self, *exc):
         if self.f is not None:
             self.f.unlink(missing_ok=True)
         return False
 
 
-def _workers_memory_holds(n_jobs: int, worker_bytes: int) -> int:
+def _workers_memory_holds(n_jobs: int, worker_bytes: int, running: int = 0) -> int:
     """How many derivation workers the machine holds at once: the cores (`os.cpu_count()`), and the free host
     memory read as Prism reads it (`core.host_memory`, rounded DOWN to the memory ladder's rung,
     `memory_budget.rung_down_mb`) over what one worker measured it takes (`worker_bytes`). A derivation holds a whole
@@ -2564,44 +2754,143 @@ def _workers_memory_holds(n_jobs: int, worker_bytes: int) -> int:
     explanation's timeout (2026-10-22 17:3x, the c1norms census).
     The free memory is what the gate cells sharing the ledger have not reserved (`_held_by_others`): a census
     started beside a gate saw the memory a just-admitted Qwen3-30B had reserved but not yet taken, and the kernel
-    killed the cell (2026-10-23 00:10:30, 247 GiB held)."""
+    killed the cell (2026-10-23 00:10:30, 247 GiB held).
+    `running`: workers of this model already started — the answer is then how many MORE to start (none is a valid
+    answer), their memory counted as not yet taken whatever its age (a young worker has not grown to its peak in
+    the free figure; a grown one is counted twice: the error is fewer workers). Asked again as the room moves: a
+    pool sized once at the start of Qwen3-Coder, while a gate held 207 GiB, ran its 13 derivations one at a time
+    for hours after the gate had ended (2026-10-23 21:34 -> 23:10)."""
     from neurobrix.core.host_memory import memory_state
     from neurobrix.core.prism.memory_budget import rung_down_mb
-    cores = max(1, (os.cpu_count() or 1) - int(os.getloadavg()[0]))
-    free = memory_state().available_mb
+    cores = max(0 if running else 1, (os.cpu_count() or 1) - int(os.getloadavg()[0]))
+    state = memory_state()
+    free = state.available_mb
     if free is None or worker_bytes <= 0:
-        return 1
-    held = max(0, (rung_down_mb(free) << 20) - _held_by_others(HOLDS)) // worker_bytes
-    return max(1, min(n_jobs, cores, held))
+        return 0 if running else 1
+    # the gate cells' reservations are claims on the machine's WHOLE memory, part of which they already hold inside
+    # the free figure read here: the room is the free memory, bounded by what the reservations leave of the total —
+    # subtracting them from the free memory too counted every running cell twice, and a census beside a gate ran
+    # Qwen3-30B's 20 derivations one at a time into its 3 h timeout (2026-10-23 09:50 -> 12:25, 47 of 98 tables)
+    room = rung_down_mb(free) << 20
+    if getattr(state, "total_mb", None):              # unread on a host that does not report it: the free alone
+        # within the share of the host the gate scheduler lets its cells hold (`regression_matrix.HOST_SHARE`: the
+        # rest is the kernel's, the page cache's and the cells' own over-run), less the reservations: a census that
+        # used the whole of total - reservations left Qwen3-Coder's admitted 133 GiB cell no margin and the kernel
+        # killed it (2026-10-23 20:46, 242 GiB held)
+        from regression_matrix import HOST_SHARE
+        total = int(state.total_mb) << 20
+        room = min(room, int(total * HOST_SHARE) - _held_by_others(HOLDS))
+    held = max(0, room - running * worker_bytes) // worker_bytes
+    more = min(n_jobs, cores, held)
+    return max(1, more) if running == 0 else max(0, more)
+
+
+_PROGRESS = {"file": None, "label": "", "last": 0.0}
+#: how often, at most, a running census writes its progress to its record (the red line of work 2: every 10 min)
+PROGRESS_EVERY_S = 600
+
+
+def _note(msg: str, force: bool = False) -> None:
+    """One line of progress, end or failure in the census's record (`table --record`, the campaign journal): forced
+    for a model written, the end or a failure; otherwise at most every PROGRESS_EVERY_S seconds."""
+    import time
+    f = _PROGRESS["file"]
+    if f is None:
+        return
+    now = time.time()
+    if not force and now - _PROGRESS["last"] < PROGRESS_EVERY_S:
+        return
+    _PROGRESS["last"] = now
+    stamp = time.strftime("%Y-%m-%d %H:%M:%S %Z")
+    with open(f, "a") as fh:
+        fh.write(f"census {_PROGRESS['label']} {msg} {stamp}\n")
+
+
+def _run_fresh(ctx, fn, arg):
+    """`fn(arg)` in a fresh process of `ctx`, its result through a pipe — no pool, so no pool thread holds a lock while
+    a worker is forked (a `Pool(1, maxtasksperchild=1)` replaced its worker from its handler thread and a forked
+    child hung on the queue's lock: the census's own test froze in two suites, 2026-10-23)."""
+    parent, child = ctx.Pipe(duplex=False)
+    p = ctx.Process(target=_fresh_child, args=(child, fn, arg))
+    p.start()
+    child.close()
+    try:
+        ok, value = parent.recv()
+    finally:
+        p.join()
+    if not ok:
+        raise value
+    return value
+
+
+def _fresh_child(conn, fn, arg):
+    try:
+        conn.send((True, fn(arg)))
+    except BaseException as e:          # carried to the parent and raised there, by name
+        conn.send((False, e))
+    finally:
+        conn.close()
 
 
 def _derive_jobs(model, hw, jobs, start_method=None):
     """The results of `jobs` in their order. Jobs run ONE at a time, each in a fresh worker that reports its own peak
     resident size, until one DERIVES (a refusal measures nothing: Qwen3-30B's first job, refused, priced a worker at
     67 MB, the Mac, 2026-10-20 01:50); the largest peak seen prices one worker of THIS model. The rest run in workers,
-    as many as the cores AND the free memory hold (`_workers_memory_holds`). The workers start the PLATFORM's way
+    as many as the cores AND the free memory hold (`_workers_memory_holds`), asked again before every start and
+    at least every ROOM_EVERY_S while they run, so a room that frees mid-model is used. The workers start the PLATFORM's way
     (multiprocessing's default: fork on Linux, spawn on macOS, where a fork after the Objective-C runtime started
     crashes the child): `derive_keys` binds the hardware profile itself on every call."""
     args = [(model, hw, mode, rung, req) for mode, _ri, req, rung in jobs]
     import multiprocessing as _mp
     ctx = _mp.get_context(start_method)
     results, worker_bytes, i = [], 0, 0
-    with ctx.Pool(1, maxtasksperchild=1) as pool:          # a fresh process per job: its peak is that job's
-        while i < len(args):
-            res, peak = pool.apply(_derive_job_priced, (args[i],))
-            results.append(res)
-            worker_bytes = max(worker_bytes, peak)
-            i += 1
-            if res[0] == "ok":
-                break
+    while i < len(args):                                    # a fresh process per job: its peak is that job's
+        res, peak = _run_fresh(ctx, _derive_job_priced, args[i])
+        results.append(res)
+        worker_bytes = max(worker_bytes, peak)
+        i += 1
+        _note(f"{model}: {i}/{len(args)} derivation(s)")
+        if res[0] == "ok":
+            break
     rest = args[i:]
     if not rest:
         return results
-    workers = _workers_memory_holds(len(rest), worker_bytes)
-    print(f"[derive] {model}: {len(args)} derivation(s), {i} measured alone, then {workers} at a time (cores, free "
-          f"memory at its rung, one worker measured at {worker_bytes >> 20} MB)", flush=True)
-    with _host_hold(HOLDS, workers * worker_bytes), ctx.Pool(workers) as pool:
-        return results + pool.map(_derive_job, rest, chunksize=1)
+    from multiprocessing.connection import wait as _wait
+    running, done, nxt = {}, {}, 0                    # pipe -> (job index, process); index -> result
+    try:
+        with _host_hold(HOLDS, 0) as hold:
+            while nxt < len(rest) or running:
+                # the room asked again before every start, and at least every ROOM_EVERY_S while workers run
+                more = _workers_memory_holds(len(rest) - nxt, worker_bytes, running=len(running)) if nxt < len(rest) else 0
+                for _ in range(more):
+                    parent, child = ctx.Pipe(duplex=False)
+                    proc = ctx.Process(target=_fresh_child, args=(child, _derive_job, rest[nxt]))
+                    proc.start()
+                    child.close()
+                    running[parent] = (nxt, proc)
+                    nxt += 1
+                hold.set(len(running) * worker_bytes)
+                if more:                                # said when workers start, not as each ends
+                    shown = len(running)
+                    print(f"[derive] {model}: {len(args)} derivation(s), {i} measured alone, {shown} running now, "
+                          f"{len(rest) - nxt} waiting (cores, free memory at its rung, one worker measured at "
+                          f"{worker_bytes >> 20} MB; the room asked again as it moves)", flush=True)
+                for conn in _wait(list(running), timeout=ROOM_EVERY_S):
+                    j, proc = running.pop(conn)
+                    ok, value = conn.recv()
+                    proc.join()
+                    conn.close()
+                    if not ok:
+                        raise value
+                    done[j] = value
+                    _note(f"{model}: {i + len(done)}/{len(args)} derivation(s)")
+    finally:
+        for conn, (_j, proc) in running.items():      # a job that failed stops the model: its siblings with it
+            proc.kill()
+            proc.join()
+            conn.close()
+    results.extend(done[j] for j in range(len(rest)))
+    return results
 
 
 def table(a) -> int:
@@ -2728,10 +3017,12 @@ def table(a) -> int:
         print(f"[derived table] {model}: {written} row(s) written ({removed} replaced; {keyless} keyless op(s) "
               f"placed) into {path.name} "
               f"({len(reqs)} request(s) x {len(modes)} mode(s) x {len(rungs)} rung(s))", flush=True)
+        _note(f"{model}: {written} row(s) written ({models.index(model) + 1}/{len(models)} model(s))", force=True)
         for line in unrunnable:
             print(f"   does not run on this class, by Prism's own refusal — no key: {line}")
         for why, n in notes.most_common():
             print(f"   derived from the op's contract, the annotation named: {n} x {why}")
+    _note(f"DONE {len(models)} model(s), worst rc {worst}", force=True)
     return worst
 
 
@@ -2751,6 +3042,9 @@ def main(argv=None) -> int:
     t.add_argument("--modes", default="triton,triton-sequential")
     t.add_argument("--rungs", default="ladder", help="'ladder' (the class's rungs) or a comma-separated list of MB")
     t.add_argument("--logs", required=True, help="where a tiling probe's resized input lands")
+    t.add_argument("--record", default=None,
+                   help="the campaign journal (RUN.md) the census writes its progress to (every 10 min at most, each "
+                        "model written, its end and a failure)")
     t.add_argument("--holds", default=None,
                    help="the holds ledger the gate schedulers share (gate_sched --holds): the census reads their "
                         "reserved host bytes before sizing its workers and writes its own (hold_host_<pid>)")
@@ -2759,7 +3053,15 @@ def main(argv=None) -> int:
                         "container, a plan, a unit of code the derivation executed or a file it read; the others' "
                         "rows are kept and said unchanged")
     a = ap.parse_args(argv)
-    return table(a) if a.cmd == "table" else compare(a)
+    if a.cmd != "table":
+        return compare(a)
+    _PROGRESS["file"] = a.record
+    _PROGRESS["label"] = f"{a.table} {a.hardware}"
+    try:
+        return table(a)
+    except BaseException as e:
+        _note(f"FAILED: {type(e).__name__}: {str(e)[:200]}", force=True)
+        raise
 
 
 if __name__ == "__main__":
