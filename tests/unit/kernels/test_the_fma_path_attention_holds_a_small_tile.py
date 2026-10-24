@@ -40,7 +40,7 @@ def test_volta_states_its_fma_tile_and_matrix_archs_do_not():
 def test_every_sdpa_row_of_every_profile_states_its_warps():
     """The launch reads a matching row's num_warps and refuses a row without one (supervisor 2026-10-08
     00:05: never Triton's hidden default), so every row of every vendor profile states it. Hopper keeps
-    its declared 8 (not measured here); the M4 Pro's head_dim-128 row was measured at 8 (2026-10-07)."""
+    its declared 8 (not measured here); the Apple profiles declare no table since C3 (certified tiles)."""
     missing = [f"{y.relative_to(VENDORS.parent)}:{i}"
                for y in sorted(VENDORS.parent.glob("*/*.yml"))
                for i, r in enumerate(yaml.safe_load(y.read_text()).get("sdpa_thresholds") or [])
@@ -48,8 +48,9 @@ def test_every_sdpa_row_of_every_profile_states_its_warps():
     assert not missing, missing
     hopper = yaml.safe_load((VENDORS / "hopper.yml").read_text())["sdpa_thresholds"]
     assert {r["num_warps"] for r in hopper} == {8}
-    m4 = yaml.safe_load((VENDORS.parent / "apple" / "apple_m4_pro.yml").read_text())["sdpa_thresholds"]
-    assert [r["num_warps"] for r in m4 if r.get("head_dim_ge") == 128 and "seqlen_q_le" not in r] == [8]
+    # the Apple profiles retired their table (roadmap C3): the flash's tile is certified per key there
+    assert not [y.name for y in sorted((VENDORS.parent / "apple").glob("*.yml"))
+                if yaml.safe_load(y.read_text()).get("sdpa_thresholds")]
 
 
 def test_the_launch_meta_is_what_the_matching_row_states(monkeypatch):

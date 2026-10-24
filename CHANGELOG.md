@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Flash attention runs every head dimension on Apple GPUs** (Metal), where the profile states it was measured correct (`flash.any_head_dim_correct`); every NVIDIA and AMD route is unchanged.
 - **A sum over complex values runs a certified configuration** (the rotary grid of the Wan video models): the census keys it on the real and imaginary rows the sum actually reduces.
 - **An L2 norm runs a certified configuration** (`aten::norm`, the audio codecs' weight norm): the census keys the sum it is computed with, which it had counted as launching no tuned kernel (openaudio-s1-mini).
 - **On unified memory (Apple), a long-row softmax, sum, mean, max or group norm key is certified at the shortest row of its class when its longest does not fit** — as on discrete cards; four HAT-L 2048 px softmax keys the Mac's certifier refused now fit its card.

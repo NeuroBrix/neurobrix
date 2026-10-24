@@ -86,6 +86,8 @@ capability is what removes it. Related to the `triton/flow` stage work that stil
 `core/flow/stages/` for VibeVoice's DDPM, a documented temporary violation of R33 that this
 chantier is the natural moment to close.
 
+**C3 — Flash attention on Metal for every head dim, certified.** Today the Triton branch takes the flash route on Apple only for power-of-two head dims, with the hand-written `sdpa_thresholds` tiles, never certified; a non-power-of-two head dim (Allegro, 96) routes on the 2 GiB scores bound to the chunked math attention, which writes the scores — Allegro's transformer, 28 min of its 3 738 s at 720p. The native branch is PyTorch's MPS SDPA, which has no flash kernel (pytorch/pytorch#179294) and stays the vendor reference. The work: (1) every head dim takes the flash, zero-padded to the kernel's head-dim block, chosen by measurement, rather than routed to math; (2) the flash's tiles certified per key on Metal by autotune certify (workstream 1's mechanism), the Apple `sdpa_thresholds` table retired; (3) the emitted MSL checked to run both products on the matrix unit (triton-ext's AppleGPU DotPlan emits `simdgroup_multiply_accumulate`). Design and speed references, not dependencies: Metal FlashAttention (philipturner/metal-flash-attention, MIT; ccv's C++ port used by Draw Things) and MLX's `mx.fast.scaled_dot_product_attention`. *Unlocks:* Allegro and every long-sequence DiT/video model on Apple at flash speed, and the scores' bytes gone from Prism's price.
+
 ## Phase 4 — Optimization: benchmarks first, then the kill
 
 **Method before work.** A reproducible benchmark harness on well-known

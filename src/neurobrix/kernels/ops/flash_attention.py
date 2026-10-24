@@ -272,3 +272,36 @@ def flash_attention_forward_kernel(
             tl.store(out_ptrs, acc_o, mask=offs_m[:, None] < seqlen_q)
         else:
             tl.store(out_ptrs, acc_o, mask=(offs_m[:, None] < seqlen_q) & (offs_d[None, :] < headdim))
+
+
+def flash_configs():
+    """The tiles the certifier proves per key (workstream 1) where the profile declares no hand table of tiles
+    (`launch_keys.flash_tiles_certified`): query rows x keys per step x warps. The backend's own bounds prune them
+    (`_prune_flash`); the fp64 oracle and the stability witness decide among the rest."""
+    return [triton.Config({"BLOCK_M": m, "BLOCK_N": n}, num_warps=w, num_stages=1)
+            for m in (16, 32, 64, 128) for n in (16, 32, 64) for w in (2, 4, 8)]
+
+
+def _prune_flash(configs, named_args, **kwargs):
+    """A tile under the backend's smallest correct attention tile (`fa_min_tile`), or whose [BLOCK_M, BLOCK_N] scores
+    tile is over the largest 2-D reduction the backend stages (`reduce_tile_max`: the row max and row sum reduce it),
+    is not built. None left is refused by name, never answered with the first config."""
+    from neurobrix.kernels.nbx_tensor import fa_min_tile, reduce_tile_max
+    floor, most = fa_min_tile(), reduce_tile_max()
+    keep = [c for c in configs if min(c.kwargs["BLOCK_M"], c.kwargs["BLOCK_N"]) >= floor
+            and c.kwargs["BLOCK_M"] * c.kwargs["BLOCK_N"] <= most]
+    if not keep:
+        raise ValueError(f"flash: no tile at or above {floor} with a scores tile within {most} elements")
+    return keep
+
+
+def _flash_certified():
+    from ._configs import nbx_autotune
+    # The same kernel; its tile from the certified directory, keyed on the query rows' bucket, the keys' bucket
+    # (CACHE_KEY_SEQLEN_Q / _K, which the kernel body never reads) and the head dim.
+    return nbx_autotune(configs=flash_configs(), key=["CACHE_KEY_SEQLEN_Q", "CACHE_KEY_SEQLEN_K", "headdim"],
+                        prune_configs_by={"early_config_prune": _prune_flash},
+                        cache_results=True)(flash_attention_forward_kernel)
+
+
+flash_attention_certified_kernel = _flash_certified()
