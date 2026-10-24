@@ -45,6 +45,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import threading
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -147,6 +148,50 @@ def change_pairs(repo: Path, base=None, head=None, rng=None, commits=None) -> li
 # the probe (tools/gate_scope_probe.py) — the tree's own code, run on this rack's profile, no card
 # =============================================================================================================
 
+class _ProbeServers:
+    """Probe processes that import the engine once (`gate_scope_probe.py --serve`) and fork a child per request, kept
+    per (tree, class, rack) and handed to one caller at a time — the judges run side by side, each takes an idle server
+    or starts one. A server that dies or answers nothing is refused by name with what it printed."""
+    _idle: dict = {}
+    _lock = threading.Lock()
+    MARK = "@@GATE_SCOPE_SERVE@@"
+
+    @classmethod
+    def ask(cls, req: dict, env: dict) -> dict:
+        key = json.dumps({k: req.get(k) for k in ("src", "hw", "rack")}, sort_keys=True)
+        with cls._lock:
+            pool = cls._idle.setdefault(key, [])
+            srv = pool.pop() if pool else None
+        if srv is None or srv.poll() is not None:
+            srv = subprocess.Popen([PYTHON, str(TOOLS / "gate_scope_probe.py"), "--serve"], stdin=subprocess.PIPE,
+                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env,
+                                   cwd=str(SCRATCH))
+            cls._send(srv, {"src": req["src"], "hw": req["hw"], "rack": req.get("rack")})
+            first = cls._answer(srv, req)
+            if "error" in first:
+                srv.kill()
+                return first
+        cls._send(srv, {"jobs": req["jobs"]})
+        out = cls._answer(srv, req)
+        with cls._lock:
+            cls._idle.setdefault(key, []).append(srv)
+        return out
+
+    @staticmethod
+    def _send(srv, obj) -> None:
+        srv.stdin.write(json.dumps(obj) + "\n")
+        srv.stdin.flush()
+
+    @classmethod
+    def _answer(cls, srv, req) -> dict:
+        seen = []
+        for line in srv.stdout:
+            if line.startswith(cls.MARK):
+                return json.loads(line[len(cls.MARK):])
+            seen.append(line)
+        raise SystemExit(f"REFUSED: the probe server for {Path(req['src']).parent.name} ended: {''.join(seen)[-600:]}")
+
+
 def probe(tree: Path, hw, jobs: list, cfg: dict, rack: bool = True) -> dict:
     """Run probe jobs inside one tree (cached by tree, class and jobs)."""
     req = {"src": str(tree / "src"), "hw": hw, "jobs": jobs}
@@ -160,12 +205,7 @@ def probe(tree: Path, hw, jobs: list, cfg: dict, rack: bool = True) -> dict:
     for k in cfg.get("env_unset", []):
         env.pop(k, None)
     env.update(CUDA_VISIBLE_DEVICES="", PYTHONPATH=str(tree / "src"), PYTHONNOUSERSITE="1")
-    p = subprocess.run([PYTHON, str(TOOLS / "gate_scope_probe.py")], input=json.dumps(req), capture_output=True,
-                       text=True, env=env, cwd=str(SCRATCH))
-    if MARK not in p.stdout:
-        err = (p.stdout + p.stderr).strip()[-600:]
-        raise SystemExit(f"REFUSED: the probe failed in {tree.name}: {err}")
-    out = json.loads(p.stdout.rsplit(MARK, 1)[1])
+    out = _ProbeServers.ask(req, env)
     if "error" in out and len(out) == 1:
         raise SystemExit(f"REFUSED: the probe refused in {tree.name}: {out['error']}")
     cf.parent.mkdir(parents=True, exist_ok=True)
@@ -176,6 +216,17 @@ def probe(tree: Path, hw, jobs: list, cfg: dict, rack: bool = True) -> dict:
 # =============================================================================================================
 # one tree: index, units, the reach of each mode
 # =============================================================================================================
+
+class _Reached:
+    """A mode's reach read back from its file: the reached units and their witnesses, all the judges read of it."""
+
+    def __init__(self, reached: dict):
+        self.reached = reached
+
+
+#: this tool's own code, part of every reach file's key (a change of the analysis computes the reach again)
+_TOOL_HASH = hashlib.sha256(b"".join((TOOLS / f).read_bytes() for f in ("gate_scope.py", "gate_scope_code.py"))).hexdigest()[:16]
+
 
 class Tree:
     def __init__(self, repo: Path, sha: str, cfg: dict):
@@ -237,6 +288,16 @@ class Tree:
                 vals = {k: x for k, x in vals.items() if k not in live}
                 nonnull = {k: x for k, x in nonnull.items() if k not in live}
             self.argv_consts[mode] = dict(vals, **{k: f"<{len(set(map(repr, x)))} values>" for k, x in nonnull.items()})
+            # a mode's reach is a function of the tree, the mode's argv constants and this tool's own code: kept on
+            # disk by them, a gate reuses the reach its base tree had as the previous gate's head (the reach was
+            # most of a scope's 30-70 min, computed again at every gate for the same trees)
+            rkey = hashlib.sha256(json.dumps([self.sha, mode, self.cfg["entry"], sorted(map(repr, vals.items())),
+                                              sorted((k, sorted(map(repr, x))) for k, x in nonnull.items()),
+                                              _TOOL_HASH], sort_keys=True).encode()).hexdigest()[:24]
+            rfile = SCRATCH / "reach" / f"{self.sha[:12]}_{rkey}.json"
+            if rfile.is_file():
+                self.reach[mode] = _Reached(json.loads(rfile.read_text()))
+                continue
 
             folds = {}                                   # (unit, the slots of its class) -> its fold
 
@@ -304,6 +365,10 @@ class Tree:
                     break
                 R, fold_for = R2, f2
             self.reach[mode] = R
+            rfile.parent.mkdir(parents=True, exist_ok=True)
+            tmp = rfile.with_suffix(f".{os.getpid()}.tmp")
+            tmp.write_text(json.dumps(dict(R.reached)))
+            tmp.replace(rfile)
 
     def reached(self) -> set:
         out = set()
