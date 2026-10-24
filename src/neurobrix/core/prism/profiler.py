@@ -52,6 +52,9 @@ class InputConfig:
     # The tokens the request asks the decoder for (`--max-tokens`): a run's KV floor and pre-sizing estimate are this
     # request's, not the package's declared ceiling (runtime/defaults.json max_tokens). None: the package's.
     max_tokens: Optional[int] = None
+    # The request's denoising steps (`--steps`, else the container's `num_inference_steps`): how many times a flow's
+    # loop runs its components, read by Prism's time estimate (core/prism/time_estimate.py). None: not stated.
+    steps: Optional[int] = None
     dtype: Optional[str] = None
     vae_scale: Optional[int] = None
     # Video (5D) runtime dims — None for image/LLM models. latent_T is
