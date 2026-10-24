@@ -3436,10 +3436,12 @@ class TritonSequence:
             # e.g. all custom.rms_norm outputs across the network).
             if filters and not any(f in tid or f in op.op_uid for f in filters):
                 continue
-            # NBX_DUMP_TIDS_PASS=<k>: only pass k (mirror of the compiled dump).
+            # NBX_DUMP_TIDS_PASS=<k>: only pass k (mirror of the compiled dump); `all`: every pass, each record
+            # tagged with its pass — a component run several times (a vendor-tiled VAE's tiles) is compared tile by
+            # tile (`neurobrix drift`), never tile 1 of one engine against another tile of the other.
             _pass_sel = _os_d.environ.get("NBX_DUMP_TIDS_PASS")
             _cur_pass = getattr(self, "_dump_pass", 0)
-            if _pass_sel is not None and _cur_pass != int(_pass_sel):
+            if _pass_sel not in (None, "all") and _cur_pass != int(_pass_sel):
                 continue
             _key = (_cur_pass, op.op_uid) if _pass_sel is not None else tid
             if _key in self._dump_seen:
@@ -3452,6 +3454,7 @@ class TritonSequence:
             try:
                 new_record = {
                     "component": self.dag.get("component_name", "?"),
+                    "pass": _cur_pass,
                     "tid": tid,
                     "op_uid": op.op_uid,
                     "op_type": op.op_type,

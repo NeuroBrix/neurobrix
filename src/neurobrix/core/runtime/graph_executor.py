@@ -3803,7 +3803,7 @@ class GraphExecutor:
                     if _td_filters and not any(
                             f in _ot or f in op_uid for f in _td_filters):
                         continue
-                    if _td_pass_sel is not None and _td_pass != int(_td_pass_sel):
+                    if _td_pass_sel not in (None, "all") and _td_pass != int(_td_pass_sel):
                         continue
                     _td_key = (_td_pass, op_uid, _ot) if _td_pass_sel is not None else _ot
                     if _td_key in self._seq_dump_seen:
@@ -3817,6 +3817,7 @@ class GraphExecutor:
                         from neurobrix.triton.sequence import TritonSequence as _TS
                         _rec = {
                             "component": self._component_name,
+                            "pass": _td_pass,
                             "tid": _ot,
                             "op_uid": op_uid,
                             "op_type": op_type,
@@ -5679,11 +5680,20 @@ class GraphExecutor:
             _filters_ds = [f for f in _os_ds.environ.get(
                 "NBX_DUMP_TIDS_FILTER", "").split(",") if f]
             _ot_ds = op_data.get("op_type", "unknown")
+            # the pass this component's run is (its first op opens one): every record tagged with it, and
+            # NBX_DUMP_TIDS_PASS=<k> keeps pass k only, as the other three dumps do (`all`: every pass)
+            _eo_ds = (self._dag or {}).get("execution_order") or ()
+            if _eo_ds and op_uid == _eo_ds[0]:
+                self._ds_dump_pass = getattr(self, "_ds_dump_pass", -1) + 1
+            _pass_ds = max(0, getattr(self, "_ds_dump_pass", 0))
+            _sel_ds = _os_ds.environ.get("NBX_DUMP_TIDS_PASS")
             for idx, tid in enumerate(output_tensor_ids):
                 _t = current_outputs[idx]
                 if not is_torch_tensor(_t):
                     continue
                 if _filters_ds and not any(f in tid or f in op_uid for f in _filters_ds):
+                    continue
+                if _sel_ds not in (None, "all") and _pass_ds != int(_sel_ds):
                     continue
                 try:
                     _flat = _t.detach().reshape(-1)
@@ -5742,7 +5752,7 @@ class GraphExecutor:
                             _bn = None
                     with open(_dpath_ds, "a") as _f:
                         _json_ds.dump({"engine": "sequential", "record": {
-                            "tid": tid, "op_uid": op_uid, "op_type": _ot_ds,
+                            "pass": _pass_ds, "tid": tid, "op_uid": op_uid, "op_type": _ot_ds,
                             "component": self._component_name,
                             "shape": list(_t.shape), "dtype": str(_t.dtype),
                             "is_complex": bool(_t.is_complex()),
