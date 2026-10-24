@@ -26,7 +26,7 @@ def _solver(tmp_path, flow):
     (tmp_path / "topology.json").write_text(json.dumps({"flow": flow}))
     s = PrismSolver.__new__(PrismSolver)
     s._neural_components = [NS(name="transformer", graph=DAG)]
-    return s, NS(cache_path=str(tmp_path))
+    return s, NS(cache_path=tmp_path)                       # a Path, as NBXContainer.cache_path is
 
 
 def _profile(measured):
@@ -44,6 +44,28 @@ def test_a_plan_that_streams_its_weights_every_step_is_slower_than_the_resident_
     assert set(t) == {"single_gpu", "zero3"} and all(isinstance(v, float) for v in t.values())
     load = 32 * 32 * 2 / 12e9                                   # the weight over the host link, once
     assert t["zero3"] - t["single_gpu"] > 2.9 * load            # three more crossings over four steps
+
+
+def test_a_generating_flow_counts_the_package_s_declared_tokens_when_the_request_states_none(tmp_path):
+    gen = {"order": ["transformer"], "generation": {"lm_component": "transformer"}}
+    s, container = _solver(tmp_path, gen)
+    t = s._estimate_times(RANKED, container, InputConfig(), _profile(MEASURED), "float16")
+    assert all(isinstance(v, str) and "token count" in v for v in t.values())           # nothing declared: named
+    (tmp_path / "runtime").mkdir()
+    (tmp_path / "runtime" / "defaults.json").write_text(json.dumps({"max_tokens": 8}))
+    t = s._estimate_times(RANKED, container, InputConfig(), _profile(MEASURED), "float16")
+    assert all(isinstance(v, float) for v in t.values())                                 # the package's 8 tokens
+    asked = s._estimate_times(RANKED, container, InputConfig(max_tokens=16), _profile(MEASURED), "float16")
+    assert asked["zero3"] > t["zero3"]                                                   # the request's bound wins
+
+
+def test_the_plan_carries_its_estimates(tmp_path):
+    from neurobrix.core.prism.solver import ExecutionPlan, plan_record, explain_plan
+    plan = ExecutionPlan(components={}, target_dtype="float16", total_memory_mb=1.0, strategy="single_gpu",
+                         component_memory={}, estimated_s=2.5, time_estimates={"single_gpu": 2.5, "zero3": 9.0})
+    rec = plan_record(plan)
+    assert rec["estimated_s"] == 2.5 and rec["time_estimates"] == {"single_gpu": 2.5, "zero3": 9.0}
+    assert "estimated       2.5 s  (single_gpu=2.5s  zero3=9s)" in explain_plan(plan)
 
 
 def test_a_loop_without_a_step_count_is_named_not_timed(tmp_path):
