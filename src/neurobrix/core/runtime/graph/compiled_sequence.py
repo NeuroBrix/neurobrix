@@ -19,6 +19,8 @@ Based on:
 
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union, TYPE_CHECKING
+
+from neurobrix.core.module.temporal_stream_runner import STATE_OUT_PREFIX
 import copy
 import os
 import re
@@ -3618,7 +3620,7 @@ class CompiledSequence:
                     else:
                         for s in op.output_slots:
                             arena[s] = None
-                        self._kill(arena, op.kill_slots)
+                        self._kill(arena, op.kill_slots, op.op_uid)
                         continue
                 elif _has_none_arg(args):
                     # None inside list args (e.g. index(t, [None])) — MoE-related
@@ -3632,7 +3634,7 @@ class CompiledSequence:
                         else:
                             for s in op.output_slots:
                                 arena[s] = None
-                            self._kill(arena, op.kill_slots)
+                            self._kill(arena, op.kill_slots, op.op_uid)
                             continue
                     else:
                         _live_dump_on_oom(e, locals().get('arena'), getattr(self, '_tid_of_slot', None) or {})
@@ -3915,7 +3917,7 @@ class CompiledSequence:
             # FREE DEAD TENSORS - Critical for memory management
             # These slots are no longer needed after this op
             # Setting to None allows Python GC to release GPU memory
-            self._kill(arena, op.kill_slots)
+            self._kill(arena, op.kill_slots, op.op_uid)
 
         # NaN-guard summary at end of execution (verbose mode only)
         if nan_guard_triggers:
@@ -3994,7 +3996,7 @@ class CompiledSequence:
             if args and args[0] is None:
                 for s in op.output_slots:
                     arena[s] = None
-                self._kill(arena, op.kill_slots)
+                self._kill(arena, op.kill_slots, op.op_uid)
                 continue
 
             # ── FAST PATH: No device transfer needed (99%+ of ops) ──
@@ -4017,7 +4019,7 @@ class CompiledSequence:
                         else:
                             for s in op.output_slots:
                                 arena[s] = None
-                            self._kill(arena, op.kill_slots)
+                            self._kill(arena, op.kill_slots, op.op_uid)
                             continue
                     elif _has_none_arg(args):
                         has_none_in_list = any(
@@ -4030,7 +4032,7 @@ class CompiledSequence:
                             else:
                                 for s in op.output_slots:
                                     arena[s] = None
-                                self._kill(arena, op.kill_slots)
+                                self._kill(arena, op.kill_slots, op.op_uid)
                                 continue
                         else:
                             _live_dump_on_oom(e, locals().get('arena'), getattr(self, '_tid_of_slot', None) or {})
@@ -4119,7 +4121,7 @@ class CompiledSequence:
                         else:
                             for s in op.output_slots:
                                 arena[s] = None
-                            self._kill(arena, op.kill_slots)
+                            self._kill(arena, op.kill_slots, op.op_uid)
                             continue
                     elif _has_none_arg(args):
                         has_none_in_list = any(
@@ -4132,7 +4134,7 @@ class CompiledSequence:
                             else:
                                 for s in op.output_slots:
                                     arena[s] = None
-                                self._kill(arena, op.kill_slots)
+                                self._kill(arena, op.kill_slots, op.op_uid)
                                 continue
                         else:
                             _live_dump_on_oom(e, locals().get('arena'), getattr(self, '_tid_of_slot', None) or {})
@@ -4185,13 +4187,19 @@ class CompiledSequence:
                     else:
                         arena[s] = None
 
-            self._kill(arena, op.kill_slots)
+            self._kill(arena, op.kill_slots, op.op_uid)
 
-    def _kill(self, arena, slots) -> None:
-        """Free an op's dead tensors; where the device's allocator keeps the heaps of large tensors
-        (`self._release_from`), a freed tensor that held one gives its heap back to the device."""
+    def _kill(self, arena, slots, op_uid: Optional[str] = None) -> None:
+        """Free an op's dead tensors; where the device's allocator keeps the heaps it frees (`self._release_from`), a
+        freed tensor that held a heap of its own gives it back to the device — and so does a temporal stream's own
+        boundary (a state output, `temporal_stream_runner.STATE_OUT_PREFIX`), whatever the size of what died: the
+        stream frees many mid-size slices whose heaps the allocator keeps part-occupied, under the dedicated-heap
+        size. mochi-1-preview's VAE on MPS held 19.8 GB of driver memory for 7.0 GB live at its 32nd stream boundary
+        (the Mac, 2026-10-23 20:17)."""
         release = False
-        if self._release_from is not None:
+        if self._release_from is not None and op_uid is not None and op_uid.startswith(STATE_OUT_PREFIX):
+            release = True
+        if self._release_from is not None and not release:
             for s in slots:
                 t = arena[s]
                 if isinstance(t, torch.Tensor) and t.untyped_storage().nbytes() >= self._release_from:
