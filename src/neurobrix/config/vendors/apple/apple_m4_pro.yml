@@ -440,6 +440,18 @@ autotune:
       - {up_to_ms: 5.0, pct: 5.08}
       - {up_to_ms: null, pct: 14.77}
   buckets:
+    # elements — an element-wise launch's element count (`kernels/ops/elementwise_launch.py`): FOUR classes, volta's
+    # rows, measured on THIS chip 2026-10-24 (the shared copy's 15 tiles x warps, fp32, three counts per octave from
+    # 4 096 to 268 435 456, each class certified at its floor): at 2 ms and above the class's configuration is within
+    # 4.0 % (max) / 1.6 % (median) of each count's best — inside this chip's noise floor (5.1 % at 2-5 ms, 14.8 %
+    # above); below 2 ms every candidate times at the launch (0.18-0.21 ms under 65 536 elements), no verdict. Octave
+    # classes (18) measured 3.6 % max: no gain beyond the noise. Without these rows the element count fell to
+    # `default` (a dimension ladder): 27 868 classes on this profile's census.
+    elements:
+      - {up_to: 65536, step: 65536}
+      - {up_to: 1048576, step: 1048576}
+      - {up_to: 16777216, step: 16777216}
+      - {up_to: null, step: 68719476736}
     default:
       - {up_to: 64, step: 1}
       - {up_to: 256, step: 16}
