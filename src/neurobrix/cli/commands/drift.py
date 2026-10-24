@@ -59,7 +59,9 @@ def cmd_drift(args) -> int:
     for name, flags, dump in arms:
         if dump.exists():
             dump.unlink()
-        env = {**os.environ, "NBX_DUMP_TIDS": str(dump)}
+        # every pass of every component, each record tagged with its pass: a component run more than once (tiles,
+        # steps) is compared pass by pass on both arms (`core.dtype.drift.load_dump`)
+        env = {**os.environ, "NBX_DUMP_TIDS": str(dump), "NBX_DUMP_TIDS_PASS": os.environ.get("NBX_DUMP_TIDS_PASS", "all")}
         output = out / f"{name}_output"
         cmd = nbx + ["run", "--model", args.model] + request + flags + ["--output", str(output)]
         log = out / f"{name}.log"
