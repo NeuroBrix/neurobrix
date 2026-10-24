@@ -20,6 +20,7 @@ Run: PYTHONPATH=src python -m pytest tests/unit/tools/test_flightrec_records_the
 """
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -28,6 +29,14 @@ TOOL = Path(__file__).resolve().parents[3] / "tools" / "flightrec.py"
 
 
 def _run(tmp_path: Path, log: Path, *cmd):
+    # the repository's fsck verdict for THIS boot, recorded clean in the test's own register: the recorder measures it
+    # once per boot (`fsck_verdict`, its own test file test_flightrec_fsck_gate.py), and its records live in the
+    # register since 063a1fa5d — unseeded, every case here ran a whole `git fsck --full` of the repository (minutes)
+    rec = tmp_path / "rec"
+    rec.mkdir(parents=True, exist_ok=True)
+    boot = Path("/proc/sys/kernel/random/boot_id")
+    (rec / "fsck.json").write_text(json.dumps({"boot_id": boot.read_text().strip() if boot.exists() else "unknown",
+                                               "clean": True, "exit_code": 0, "checked_iso": "seeded", "report": ""}))
     return subprocess.run(
         [sys.executable, str(TOOL), "run", "--label", "test-recording",
          "--log", str(log), "--"] + list(cmd),

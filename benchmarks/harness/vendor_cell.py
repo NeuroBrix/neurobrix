@@ -15,6 +15,10 @@ Families implemented:
           backends.yml). Metric: wall prompt→wav.
 """
 
+import sys as _sys_atelier
+from pathlib import Path as _Path_atelier
+_sys_atelier.path.insert(0, str(_Path_atelier(__file__).resolve().parents[2] / "tools"))
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import hashlib
 import json
@@ -28,7 +32,7 @@ def run_stt(row: dict, n: int, repo: Path, media_dir: Path) -> dict:
     import transformers
     from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
 
-    snap = Path.home() / "hf_snapshots" / row["checkpoint"].split("/")[-1]
+    snap = _atelier.root("hf_snapshots") / row["checkpoint"].split("/")[-1]
     src = str(snap if snap.exists() else row["checkpoint"])
     audio_path = repo / row["audio"]
 
@@ -93,7 +97,7 @@ def run_omni_voice(row: dict, n: int, repo: Path,
     import transformers
     from transformers import AutoModel, AutoTokenizer
 
-    snap = Path.home() / "hf_snapshots" / row["checkpoint"].split("/")[-1]
+    snap = _atelier.root("hf_snapshots") / row["checkpoint"].split("/")[-1]
     src = str(snap if snap.exists() else row["checkpoint"])
 
     t0 = time.perf_counter()

@@ -17,6 +17,7 @@ pause; partial files resume where they stopped.
 """
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import os
 import subprocess
@@ -28,7 +29,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "tools"))
 import repo_env  # noqa: E402
 
-PY = "/home/mlops/ml/venv/bin/python"
+PY = _atelier.interpreter("forge")
 FORGE = REPO / "forge" / "forge.py"
 
 
@@ -104,8 +105,8 @@ def _download_under_probe(repo: str, args, fh, note) -> int:
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--repos", required=True, help="comma-separated org/name")
-    ap.add_argument("--dest", default="/home/mlops/hf_snapshots", help="the export, never the root fs")
-    ap.add_argument("--log", default=str(REPO / "validation_outputs" / "retrace_2026_09_07" / "snap"))
+    ap.add_argument("--dest", default=str(_atelier.root("hf_snapshots")), help="the export, never the root fs")
+    ap.add_argument("--log", default=str(_atelier.root("campaigns") / "retrace_2026_09_07" / "snap"))
     ap.add_argument("--max-workers", type=int, default=1, help="download streams; 1 on the shared export")
     ap.add_argument("--probe-seconds", type=float, default=5.0,
                     help="an `ls` of the export slower than this, before a repository or during its download, = the export is under pressure: stop, by name")

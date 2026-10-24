@@ -36,13 +36,14 @@ op type is the order of work.
 """
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import json
 import os
 import sys
 from pathlib import Path
 
-CACHE = Path(os.environ.get("NEUROBRIX_CACHE_DIR") or (Path.home() / ".neurobrix" / "cache"))
+CACHE = Path(os.environ.get("NEUROBRIX_CACHE_DIR") or _atelier.root("cache"))
 
 
 def derived(v: int) -> dict:

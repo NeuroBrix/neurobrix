@@ -34,6 +34,10 @@ Usage
 """
 from __future__ import annotations
 
+import sys as _sys_atelier
+from pathlib import Path as _Path_atelier
+_sys_atelier.path.insert(0, str(_Path_atelier(__file__).resolve().parents[2] / "tools"))
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import json
 import os
 import re
@@ -47,7 +51,7 @@ import pytest
 
 
 REPO = Path(__file__).resolve().parents[2]
-CACHE_DIR = Path.home() / ".neurobrix" / "cache"
+CACHE_DIR = _atelier.root("cache")
 GOLDEN_DIR = Path(__file__).parent / "golden"
 GOLDEN_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -75,13 +79,13 @@ LLM_TEMPERATURE = 0.0
 IMAGE_PROMPT = "a red apple on a wooden table"
 
 # Shared audio asset used for STT inputs and TTS reference voices.
-AUDIO_REF = REPO / "test_speech_ref.wav"
+AUDIO_REF = REPO / "tests" / "assets" / "test_speech_ref.wav"
 
 # Small (64x64 RGB, window_size-safe) image fed to `nbx upscale` for the
 # upscaler family. Deliberately tiny: the project logo (1983x1536) OOMs
 # at x4/x8 (52 GiB conv allocation), which would leave upscaler cells
 # red for a sizing artefact unrelated to the dispatch under test.
-IMAGE_REF = REPO / "test_upscale_input.png"
+IMAGE_REF = REPO / "tests" / "assets" / "test_upscale_input.png"
 
 # Flow types that consume an audio file as the ONLY input (pure STT:
 # Whisper encoder_decoder, Parakeet rnnt).  audio_llm is deliberately NOT

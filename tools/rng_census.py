@@ -19,6 +19,7 @@ component none of those name is `None` — the guard refuses to claim it ran.
 """
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import json
 import sys
 from pathlib import Path
@@ -26,7 +27,7 @@ from typing import Dict, Optional
 
 RNG_OPS = {"aten::rand", "aten::randn", "aten::rand_like", "aten::randn_like", "aten::normal",
            "aten::bernoulli", "aten::poisson", "aten::exponential", "aten::uniform"}
-CACHE = Path.home() / ".neurobrix" / "cache"
+CACHE = _atelier.root("cache")
 
 
 def rng_ops_of(graph_path: Path) -> Dict[str, int]:

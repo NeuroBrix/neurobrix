@@ -26,7 +26,10 @@ FIELDS = ("head10", "last_pos10")
 
 
 def load_dump(path) -> Tuple[Dict[Tuple[str, str], dict], List[Tuple[str, str]]]:
-    """Records keyed by (component, tid), in file order, first write kept."""
+    """Records keyed by (component, tid) — the component tagged with its pass ("vae_encoder#3") when the record names
+    one above 0 — in file order, first write kept. A component run several times (a vendor-tiled VAE's 30 tiles) is
+    then matched pass by pass: keyed by its tid alone, the oracle's dump of every tile met the engine's first, and the
+    walk compared different tiles (the Mac, Allegro-TI2V, 2026-10-24)."""
     recs: Dict[Tuple[str, str], dict] = {}
     order: List[Tuple[str, str]] = []
     with open(path) as fh:
@@ -42,7 +45,10 @@ def load_dump(path) -> Tuple[Dict[Tuple[str, str], dict], List[Tuple[str, str]]]
             tid = r.get("tid")
             if tid is None:
                 continue
-            key = (str(r.get("component", "?")), str(tid))
+            comp = str(r.get("component", "?"))
+            if int(r.get("pass") or 0) > 0:
+                comp = f"{comp}#{int(r['pass'])}"
+            key = (comp, str(tid))
             if key in recs:
                 continue
             recs[key] = r

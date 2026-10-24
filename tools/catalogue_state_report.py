@@ -30,6 +30,7 @@ Usage: python tools/catalogue_state_report.py > docs/reference/catalogue-state.m
 """
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import json
 import re
 import subprocess
@@ -39,9 +40,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from container_renames import by_current_name, current_name  # noqa: E402
 
-REPO = Path("/home/mlops/NeuroBrix_System")
-MEET = REPO / "validation_outputs/catalogue_meet_20260911/meet.json"
-TABLE = Path("/home/mlops/nbx/campaigns/prepared/CAMPAIGN_TABLE.md")
+REPO = Path(__file__).resolve().parents[1]
+MEET = _atelier.root("campaigns") / "catalogue_meet_20260911/meet.json"
+TABLE = (_atelier.root("campaigns") / "prepared/CAMPAIGN_TABLE.md")
 #: Paired certified-directory campaigns read DIRECTLY from their cells, after the
 #: hand-kept table above. Each entry is a directory holding `proof*/<model>/
 #: result.json` as `precision_zoo_campaign.py run --env-ab NBX_AUTOTUNE_CERTIFIED=off
@@ -53,9 +54,9 @@ CAMPAIGNS = [
     # 2026-09-12 night: one model per card, four cards in parallel, other cards
     # busy — the record of every cell says so (its flightrec note), and the
     # numbers are comparable among themselves, not with a cell that had the rig.
-    Path("/home/mlops/nbx/campaigns/2026_09_12_night_catalogue"),
+    (_atelier.root("campaigns") / "2026_09_12_night_catalogue"),
 ]
-PY_BIN = "/home/mlops/ml/venv/bin/python"
+PY_BIN = _atelier.interpreter("forge")
 
 #: What changed after the 2026-09-11 pass, each with the artefact that proves it.
 #: A line here OVERRIDES the pass's verdict and says why; nothing is edited into
@@ -585,7 +586,7 @@ def census(tool: str, *args) -> str:
         return ""
 
 
-CENSUS_CACHE = REPO / "validation_outputs" / "catalogue_state_census.json"
+CENSUS_CACHE = _atelier.root("campaigns") / "catalogue_state_census.json"
 
 
 def blind_axes(from_cache: bool = False) -> dict:

@@ -31,6 +31,7 @@ toolchain's own `replace`/`publish` command, paced (`--upload-mbps`).
 """
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import shlex
 import argparse
 import hashlib
@@ -52,12 +53,12 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "tools"))
 import repo_env  # noqa: E402
 
-CACHE = Path.home() / ".neurobrix" / ("ca" + "che")
-HUB_MAP = REPO / "validation_outputs" / "retrace_2026_09_07" / "hub_map.json"
-NEW_ENTRIES = REPO / "validation_outputs" / "retrace_2026_09_07" / "new_entries.json"
+CACHE = _atelier.root("cache")
+HUB_MAP = _atelier.root("campaigns") / "retrace_2026_09_07" / "hub_map.json"
+NEW_ENTRIES = _atelier.root("campaigns") / "retrace_2026_09_07" / "new_entries.json"
 COMPARED_SUFFIXES = ("graph.json",)                 # the identity the engine runs
 ALSO_READ = ("topology.json", "manifest.json")      # the contract and the build time
-TOOLCHAIN_PY = "/home/mlops/ml/venv/bin/python"
+TOOLCHAIN_PY = _atelier.interpreter("forge")
 FORGE = REPO / "forge" / "forge.py"
 
 
@@ -593,8 +594,8 @@ def main() -> int:
     ap.add_argument("--markdown", type=Path, help="the tracked page to write (the other machine reads it)")
     ap.add_argument("--verified", type=Path, help="JSON: container name -> pointer to its judged proof; only these may be published")
     ap.add_argument("--publish", action="store_true", help="publish every CACHE_NEWER + verified container through the toolchain")
-    ap.add_argument("--builds-root", type=Path, default=Path("/home/mlops/nbx/builds"))
-    ap.add_argument("--stage", type=Path, default=Path("/home/mlops/nbx/stage/hub_diff"), help="where a cache container is re-packed when no staged .nbx exists")
+    ap.add_argument("--builds-root", type=Path, default=_atelier.tmp("builds"))
+    ap.add_argument("--stage", type=Path, default=_atelier.tmp("hub_diff"), help="where a cache container is re-packed when no staged .nbx exists")
     ap.add_argument("--upload-mbps", type=float, default=10.0)
     ap.add_argument("--self-test", type=Path, help="run the range parser on a local .nbx and compare with zipfile")
     ap.add_argument("--verify-all", action="store_true", help="read EVERY member of every hub object and verify it by checksum against the cache container (its source)")

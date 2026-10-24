@@ -33,6 +33,12 @@ Ladder = Sequence[Tuple[Optional[int], int]]
 
 _PARSED: Dict[str, Ladder] = {}
 
+#: Dimensions that are NOT a tensor dimension and never take the profile's `default` ladder: an element-wise launch's
+#: element count is classed by the launch-overhead and bandwidth regimes (four classes on volta and apple_m4_pro), and
+#: answered by the dimension ladder it became 27 868 classes on apple_m4_pro (the Mac's census, 2026-10-24 12:26) —
+#: five days of certification for one launch tile. A profile without its own ladder for one of these is refused.
+NO_DEFAULT = frozenset({"elements"})
+
 
 def parse_ladder(rows: Any) -> Ladder:
     """Parsed once per distinct row list: the key of every launch reads the ladder (32 616
@@ -82,6 +88,12 @@ def ladder_for(dim: str, profile: Optional[Dict[str, Any]] = None) -> Ladder:
     bound = bool(profile)
     spec = ((profile or {}).get("autotune") or {}).get("buckets") or {}
     rows = spec.get(dim) if isinstance(spec, dict) else None
+    if rows is None and dim in NO_DEFAULT and bound:
+        raise RuntimeError(
+            f"ZERO FALLBACK: the bound hardware profile {(profile or {}).get('architecture') or '<unnamed>'!r} declares "
+            f"no autotune.buckets.{dim} ladder, and {dim!r} never takes the `default` dimension ladder (an element "
+            f"count's classes are its launch-overhead and bandwidth regimes, not dimension steps). Add the measured "
+            f"ladder, with its source, to its vendor YAML (see nvidia/volta.yml).")
     if rows is None:
         rows = spec.get("default") if isinstance(spec, dict) else None
     if rows:

@@ -21,6 +21,7 @@ fails, so a chain stops on a degenerate artefact instead of recording it.
 """
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import json
 import subprocess
@@ -56,7 +57,7 @@ def stt(path: str, language=None, model="base") -> dict:
         "t=' '.join(s.text.strip() for s in segs)\n"
         "print(json.dumps({'text':t,'language':info.language,'duration':info.duration}))\n"
     )
-    r = subprocess.run(["/home/mlops/venvs/fwhisper/bin/python", "-c", code], capture_output=True, text=True)
+    r = subprocess.run([_atelier.python("oracle"), "-c", code], capture_output=True, text=True)
     if r.returncode != 0:
         return {"error": r.stderr.strip()[-400:]}
     return json.loads(r.stdout.strip().splitlines()[-1])

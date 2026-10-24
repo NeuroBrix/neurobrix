@@ -17,6 +17,7 @@ ratio explodes while saying nothing about the result's quality.
 
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import datetime
 import importlib.util
@@ -29,8 +30,8 @@ from pathlib import Path
 
 import numpy as np
 
-_CACHES = (Path.home() / ".cache" / "triton_msl",
-           Path.home() / ".triton" / "cache")
+_CACHES = tuple(_p for _p in (_atelier.optional_root("triton_msl_cache"),
+           _atelier.root("triton_cache") / "cache") if _p)
 
 
 def clear_caches() -> list:
@@ -39,7 +40,7 @@ def clear_caches() -> list:
         if path.exists():
             shutil.rmtree(path, ignore_errors=True)
         cleared.append(str(path))
-    replay = Path.home() / ".neurobrix" / "replay_cache"
+    replay = _atelier.root("engine_home") / "replay_cache"
     if replay.exists():
         for f in replay.glob("autotune_configs_*.json"):
             f.unlink()

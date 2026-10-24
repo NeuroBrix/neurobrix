@@ -37,6 +37,7 @@ warm. `--cold-autotune` reproduces the difference on purpose.
 
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import collections
 import json
@@ -195,8 +196,8 @@ def main() -> int:
 
     if args.cold_autotune:
         import shutil
-        for cache in (Path.home() / ".triton" / "cache",
-                      Path.home() / ".neurobrix" / "autotune"):
+        for cache in (_atelier.root("triton_cache") / "cache",
+                      _atelier.root("engine_home") / "autotune"):
             if cache.exists():
                 shutil.rmtree(cache, ignore_errors=True)
                 print(f"[cold] cleared {cache}")

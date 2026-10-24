@@ -30,6 +30,7 @@ The three caches go before every run, so no warm artifact crosses trees.
 """
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import datetime
 import hashlib
@@ -42,10 +43,10 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-CACHES = [
-    Path.home() / ".cache/triton_msl",
-    Path.home() / ".triton/cache",
-]
+CACHES = [_p for _p in [
+    _atelier.optional_root("triton_msl_cache"),
+    _atelier.root("triton_cache") / "cache",
+] if _p]
 AUTOTUNE_GLOB = "autotune_configs_*.json"
 DEFAULT_MODEL = "TinyLlama-1.1B-Chat-v1.0"
 DEFAULT_PROMPT = "Explain in one short paragraph why the sky appears blue."
@@ -57,7 +58,7 @@ def _clear_caches() -> list[str]:
         if c.exists():
             shutil.rmtree(c, ignore_errors=True)
         cleared.append(str(c))
-    rc = Path.home() / ".neurobrix/replay_cache"
+    rc = _atelier.root("engine_home") / "replay_cache"
     if rc.exists():
         for f in rc.glob(AUTOTUNE_GLOB):
             f.unlink(missing_ok=True)

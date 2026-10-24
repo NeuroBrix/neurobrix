@@ -12,7 +12,7 @@ makes such interruptions *visible and resumable*:
              -- python3 benchmarks/harness/run_bench.py --row ...
 
      A flight record (JSON, fsync'ed so it survives the outage) is
-     written to .flightrec/ BEFORE the child starts, and updated with
+     written to the run register BEFORE the child starts, and updated with
      the exit status when the child finishes.
 
   2. At every session start, `check --hook` scans the records. A record
@@ -38,7 +38,7 @@ makes such interruptions *visible and resumable*:
      and a killed or failed job never does.
 
 Commands: run, status, check [--hook], clear <id>|--all-stale, fsck, wait <id>.
-Stdlib only; records live in <repo>/.flightrec/ (gitignored).
+Stdlib only; records live in the run register, <registres>/runs/flightrec/ (atelier.json).
 """
 
 import argparse
@@ -54,7 +54,27 @@ import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-REC_DIR = REPO / ".flightrec"
+sys.path.insert(0, str(REPO / "tools"))
+
+
+REC_DIR = None      # set by a test; otherwise rec_dir() reads the workshop
+FSCK_FILE = None
+
+
+def rec_dir() -> Path:
+    """The flight records' directory: `NBX_FLIGHTREC_DIR` when given (the role override atelier.py allows), else the
+    machine's run register (`docs/internal/_atelier.md` §2, `registres/runs/flightrec/`), never the repository (they
+    were `<repo>/.flightrec/`); refused by name where atelier.json declares no register."""
+    if REC_DIR is not None:
+        return Path(REC_DIR)
+    if os.environ.get("NBX_FLIGHTREC_DIR"):
+        return Path(os.environ["NBX_FLIGHTREC_DIR"])
+    from atelier import registre
+    return registre("runs", "flightrec")
+
+
+def fsck_file() -> Path:
+    return Path(FSCK_FILE) if FSCK_FILE is not None else rec_dir() / "fsck.json"
 BOOT_ID_FILE = Path("/proc/sys/kernel/random/boot_id")
 
 
@@ -88,9 +108,9 @@ def write_record(path: Path, record: dict) -> None:
 
 def load_records() -> list:
     records = []
-    if not REC_DIR.is_dir():
+    if not rec_dir().is_dir():
         return records
-    for p in sorted(REC_DIR.glob("*.json")):
+    for p in sorted(rec_dir().glob("*.json")):
         try:
             rec = json.loads(p.read_text())
             rec["_path"] = str(p)
@@ -148,7 +168,6 @@ def resume_block(rec: dict, cause: str) -> str:
     return "\n".join(lines)
 
 
-FSCK_FILE = REC_DIR / "fsck.json"
 FSCK_REFUSED = 3
 
 
@@ -168,9 +187,9 @@ def fsck_verdict(force: bool = False) -> dict:
     exists for the current boot id (a power cut is a boot boundary, so a clean
     verdict holds until the next one), else measured now and recorded."""
     boot = current_boot_id()
-    if not force and FSCK_FILE.exists():
+    if not force and fsck_file().exists():
         try:
-            rec = json.loads(FSCK_FILE.read_text())
+            rec = json.loads(fsck_file().read_text())
             if rec.get("boot_id") == boot and "clean" in rec:
                 return rec
         except (json.JSONDecodeError, OSError):
@@ -178,8 +197,8 @@ def fsck_verdict(force: bool = False) -> dict:
     code, out = run_git_fsck()
     rec = {"boot_id": boot, "clean": code == 0, "exit_code": code,
            "checked_iso": time.strftime("%Y-%m-%d %H:%M:%S"), "report": out}
-    REC_DIR.mkdir(exist_ok=True)
-    write_record(FSCK_FILE, rec)
+    rec_dir().mkdir(parents=True, exist_ok=True)
+    write_record(fsck_file(), rec)
     return rec
 
 
@@ -229,10 +248,10 @@ def cmd_run(args) -> int:
     if not verdict["clean"]:
         print(fsck_block(verdict), file=sys.stderr, flush=True)
         return FSCK_REFUSED
-    REC_DIR.mkdir(exist_ok=True)
+    rec_dir().mkdir(parents=True, exist_ok=True)
     label_slug = re.sub(r"[^a-zA-Z0-9]+", "-", args.label).strip("-")[:60]
     rec_id = time.strftime("%Y%m%d_%H%M%S") + "_" + label_slug
-    path = REC_DIR / f"{rec_id}.json"
+    path = rec_dir() / f"{rec_id}.json"
     record = {
         "id": rec_id,
         "label": args.label,

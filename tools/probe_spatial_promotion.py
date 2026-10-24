@@ -32,6 +32,7 @@ Usage:
 """
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import collections
 import copy
@@ -41,7 +42,7 @@ import sys
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
-CACHE = pathlib.Path.home() / ".neurobrix" / "cache"
+CACHE = _atelier.root("cache")
 
 CONTROL = ("Sana_1600M_4Kpx_BF16", "vae")
 SHAPE_OPS = ("aten::view", "aten::_unsafe_view", "aten::reshape",

@@ -398,21 +398,56 @@ def job_opmap(j: dict) -> dict:
     return {"table": out, "keys": keys}
 
 
-def main() -> int:
-    if os.environ.get("CUDA_VISIBLE_DEVICES", None) != "":
-        print(json.dumps({"error": "REFUSED: a probe runs with no card visible (CUDA_VISIBLE_DEVICES='')"}))
-        return 2
-    req = json.load(sys.stdin)
+def _setup(req):
+    """(root, rack) of a request: the tree's source and its rack, set up once (the engine imported with it)."""
     root = os.path.realpath(req["src"])
-    rack = None
-    if req.get("rack"):
-        try:
-            rack = Rack(req["rack"], req["hw"], root)
-        except Exception as exc:                 # noqa: BLE001 — a rack that cannot be set up is named
-            print(json.dumps({"error": f"rack setup: {type(exc).__name__}: {exc}"[:400]}))
-            return 3
+    rack = Rack(req["rack"], req["hw"], root) if req.get("rack") else None
+    return root, rack
+
+
+def serve() -> int:
+    """`--serve`: one probe process per (tree, class, rack) that imports the engine ONCE and forks a child per request
+    (one JSON line on stdin each, the first one setting the tree up) — every job still runs in a process of its own,
+    its state gone with it, without paying the engine's import again (a probe process spent nearly all its time in
+    that import: c1restlot's scope, ~930 probes in 42 min, 2026-10-23). Each answer is one line on stdout."""
+    if os.environ.get("CUDA_VISIBLE_DEVICES", None) != "":
+        print(json.dumps({"error": "REFUSED: a probe runs with no card visible (CUDA_VISIBLE_DEVICES='')"}), flush=True)
+        return 2
+    first = json.loads(sys.stdin.readline())
+    try:
+        _root, rack = _setup(first)
+    except Exception as exc:                     # noqa: BLE001 — a rack that cannot be set up is named
+        print(MARK_SERVE + json.dumps({"error": f"rack setup: {type(exc).__name__}: {exc}"[:400]}), flush=True)
+        return 3
+    print(MARK_SERVE + json.dumps({"ready": True}), flush=True)
+    for line in sys.stdin:
+        req = json.loads(line)
+        r, w = os.pipe()
+        pid = os.fork()
+        if pid == 0:                             # the job's own process
+            os.close(r)
+            try:
+                out = _run_jobs(rack, req["jobs"])
+                data = json.dumps(out, default=repr).encode()
+            except BaseException as exc:         # noqa: BLE001
+                data = json.dumps({"error": f"{type(exc).__name__}: {exc}"[:400]}).encode()
+            with os.fdopen(w, "wb") as fh:
+                fh.write(data)
+            os._exit(0)
+        os.close(w)
+        with os.fdopen(r, "rb") as fh:
+            data = fh.read()
+        os.waitpid(pid, 0)
+        print(MARK_SERVE + (data.decode() or json.dumps({"error": "the job's process wrote nothing"})), flush=True)
+    return 0
+
+
+MARK_SERVE = "@@GATE_SCOPE_SERVE@@"
+
+
+def _run_jobs(rack, jobs) -> dict:
     out = {}
-    for j in req["jobs"]:
+    for j in jobs:
         k = j["kind"]
         try:
             if k == "const":
@@ -427,6 +462,22 @@ def main() -> int:
                 out[j["id"]] = {"error": f"unknown job kind {k!r}"}
         except Exception as exc:                 # noqa: BLE001
             out[j["id"]] = {"error": f"{type(exc).__name__}: {exc}"[:300]}
+    return out
+
+
+def main() -> int:
+    if len(sys.argv) > 1 and sys.argv[1] == "--serve":
+        return serve()
+    if os.environ.get("CUDA_VISIBLE_DEVICES", None) != "":
+        print(json.dumps({"error": "REFUSED: a probe runs with no card visible (CUDA_VISIBLE_DEVICES='')"}))
+        return 2
+    req = json.load(sys.stdin)
+    try:
+        _root, rack = _setup(req)
+    except Exception as exc:                     # noqa: BLE001 — a rack that cannot be set up is named
+        print(json.dumps({"error": f"rack setup: {type(exc).__name__}: {exc}"[:400]}))
+        return 3
+    out = _run_jobs(rack, req["jobs"])
     sys.stdout.flush()
     print("\n@@GATE_SCOPE_PROBE@@" + json.dumps(out, default=repr))
     return 0

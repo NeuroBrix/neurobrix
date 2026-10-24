@@ -4,6 +4,7 @@ image/audio runner does not cover. Same gate (Prism's planned memory vs
 available_mb), same three modes, artefacts written to disk for R29 judgment:
 a TTS wav is judged by passing it back through an STT; an LLM text is read.
 """
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import json, os, re, subprocess, sys, time
 from pathlib import Path
 
@@ -54,10 +55,10 @@ def run_one(model, prompt, ext, mode, out_dir, timeout=1200):
 
 
 def main():
-    out_dir = Path("validation_outputs/apple_matrix_percell_2026_09_16/outputs")
+    out_dir = (_atelier.root("campaigns") / "apple_matrix_percell_2026_09_16/outputs")
     out_dir.mkdir(parents=True, exist_ok=True)
     rows = []
-    res_path = Path("validation_outputs/apple_matrix_percell_2026_09_16/prompt_rows.json")
+    res_path = (_atelier.root("campaigns") / "apple_matrix_percell_2026_09_16/prompt_rows.json")
     for model, prompt, ext in MODELS:
         avail = available_mb(); need = prism_need_mb(model, prompt)
         if need is not None and need * MARGIN > avail:

@@ -28,6 +28,7 @@ shared bug in the kernel cannot hide inside its own reference.
 
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import datetime
 import json
@@ -45,10 +46,10 @@ import numpy as np
 # measured 2026-09-06, identical code giving different suite results — so the
 # tool clears them itself rather than trusting the shell that invoked it, and
 # says so in the file it writes.
-_CACHES = (
-    Path.home() / ".cache" / "triton_msl",
-    Path.home() / ".triton" / "cache",
-)
+_CACHES = tuple(_p for _p in (
+    _atelier.optional_root("triton_msl_cache"),
+    _atelier.root("triton_cache") / "cache",
+) if _p)
 
 
 def clear_caches() -> list:
@@ -59,7 +60,7 @@ def clear_caches() -> list:
         if path.exists():
             shutil.rmtree(path, ignore_errors=True)
         cleared.append(str(path))
-    replay = Path.home() / ".neurobrix" / "replay_cache"
+    replay = _atelier.root("engine_home") / "replay_cache"
     for name in ("autotune_configs_", "autotune_exclusions_"):
         for f in replay.glob(f"{name}*.json"):
             if name == "autotune_configs_":

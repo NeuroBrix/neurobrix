@@ -18,6 +18,7 @@ what the chosen strategy promises to hold, and what the disk allowed.
 
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import datetime
 import hashlib
@@ -30,10 +31,10 @@ import sys
 import time
 from pathlib import Path
 
-MOUNT = Path.home() / "Mounts" / "Super-NeuroBrix-Cache"
-CACHE = Path.home() / ".neurobrix" / "cache"
+MOUNT = _atelier.root("cache")
+CACHE = _atelier.root("cache")
 REPO = Path(__file__).resolve().parents[1]
-CACHES = (Path.home() / ".cache" / "triton_msl", Path.home() / ".triton" / "cache")
+CACHES = tuple(_p for _p in (_atelier.optional_root("triton_msl_cache"), _atelier.root("triton_cache") / "cache") if _p)
 
 ARMS = ("compiled", "triton", "triton-sequential")
 
@@ -116,7 +117,7 @@ def clear_caches() -> None:
     survive the campaign that demanded them. Certifying shapes nobody asked
     for is the alternative, and it is the wrong one.
     """
-    rc = Path.home() / ".neurobrix" / "replay_cache"
+    rc = _atelier.root("engine_home") / "replay_cache"
     if CENSUS_KEEP is not None and rc.exists():
         for f in rc.glob("autotune_configs_*.json"):
             keep = CENSUS_KEEP / f.name

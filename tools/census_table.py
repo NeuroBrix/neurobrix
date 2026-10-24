@@ -30,6 +30,7 @@ Nothing here runs a model or touches a device.
 """
 from __future__ import annotations
 
+import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import hashlib
 import json
@@ -40,7 +41,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
 
-CACHE = Path.home() / ".neurobrix" / ("ca" "che")
+CACHE = _atelier.root("cache")
 MODES = ("triton-sequential", "triton")   # longest first: "triton" is a suffix of the other
 
 
