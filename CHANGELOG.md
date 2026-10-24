@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Element-wise operations are classed by their element count on every architecture**: each vendor profile declares its own element ladder (measured on V100 and on the M4 Pro, carried with its source elsewhere), and a profile without one is refused instead of being given the dimension ladder, which made tens of thousands of classes on Apple.
 - **A sum over complex values runs a certified configuration** (the rotary grid of the Wan video models): the census keys it on the real and imaginary rows the sum actually reduces.
 - **An L2 norm runs a certified configuration** (`aten::norm`, the audio codecs' weight norm): the census keys the sum it is computed with, which it had counted as launching no tuned kernel (openaudio-s1-mini).
 - **A mixture-of-experts layer's combine runs a certified configuration in every precision island** (`tools/derived_census.py`): the census keys the sum over the selected experts at the experts' weight dtype, the dtype the fused layer computes it in, instead of the dtype of the hidden states an island hands it (deepseek-moe-16b-chat).
