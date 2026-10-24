@@ -27,3 +27,36 @@ def test_a_key_over_the_card_is_drawn_at_the_shortest_row_of_its_class():
 def test_a_key_no_row_of_its_class_fits_is_refused_by_name():
     with pytest.raises(A.KeyTooLargeForClass):
         A._softmax_shape(25165824, 1024, CARD, "fp32", "fp32", "softmax")
+
+
+# On a UNIFIED-memory device the bound is the key's phase price (`_refuse_unified`) and `_softmax_shape` was called
+# with no card, so every padded-row key was drawn and priced at its class's top: the Mac's census on 00e31765 refused
+# HAT-L's 1 572 864 - 2 621 440 rows of 1 024 at 21-27 GB of a 19 GB card (2026-10-24 07:18). Injection: the unified
+# branch without `_unified_padded_row` -> the second case is refused, red.
+SOFTMAX = "neurobrix.kernels.ops.softmax.softmax_forward_kernel"
+UNIFIED = 19 * 1024 ** 3
+
+
+@pytest.fixture
+def fp32_out(monkeypatch):
+    monkeypatch.setattr(A.C, "output_dtype", lambda tuner, key: "fp32")
+
+
+def test_on_unified_memory_a_key_whose_top_fits_is_drawn_at_its_top(fp32_out):
+    key = (4096, 1024, False, "fp32", "fp32")
+    assert A._unified_padded_row(SOFTMAX, None, key, UNIFIED, "softmax_forward_kernel") == key
+
+
+def test_on_unified_memory_a_key_over_the_card_is_drawn_at_the_shortest_row(fp32_out):
+    key = (1572864, 1024, False, "fp32", "fp32")
+    assert A.price_key(SOFTMAX, None, key)["peak"] > UNIFIED                       # its top: over the card
+    drawn = A._unified_padded_row(SOFTMAX, None, key, UNIFIED, "softmax_forward_kernel")
+    assert drawn[0] == 1572864 and drawn[1] == 513 and softmax_feat_bucket(drawn[1]) == 1024, drawn
+    A._refuse_unified(SOFTMAX, None, drawn, UNIFIED)                               # the shortest row: held
+
+
+def test_on_unified_memory_a_key_no_row_of_its_class_holds_is_still_refused(fp32_out):
+    key = (25165824, 1024, False, "fp32", "fp32")
+    drawn = A._unified_padded_row(SOFTMAX, None, key, UNIFIED, "softmax_forward_kernel")
+    with pytest.raises(A.KeyTooLargeForClass):
+        A._refuse_unified(SOFTMAX, None, drawn, UNIFIED)
