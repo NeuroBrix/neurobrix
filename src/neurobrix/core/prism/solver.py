@@ -6865,20 +6865,19 @@ class PrismSolver:
             uses = TE.uses_per_request(flow, getattr(input_config, "steps", None), tokens)
         except TE.MissingFact as exc:
             return {name: f"not estimated: {exc}" for _s, name, _a, _d in ranked}
-        works, runs = {}, {}
+        works, runs, prompt = {}, {}, {}
         for comp in getattr(self, "_neural_components", []) or []:
             prof = ActivationProfiler(comp.graph)
             kind, n = uses.get(comp.name, ("once", 1))
             w = component_work(prof, prof.build_symbol_map(input_config))
-            if kind == "token":
+            if kind == "token":                               # the prompt pass once, then one token per run
                 one = copy.copy(input_config)
                 one.seq_len = 1
-                w = w + component_work(prof, prof.build_symbol_map(one)).times(n)
-                n = 1
+                prompt[comp.name], w = w, component_work(prof, prof.build_symbol_map(one))
             works[comp.name], runs[comp.name] = w, n
         for _s, name, allocs, _d in ranked:
             try:
-                out[name] = float(TE.plan_seconds(name, allocs, works, runs, devices, host, str(dtype)))
+                out[name] = float(TE.plan_seconds(name, allocs, works, runs, devices, host, str(dtype), prompt=prompt))
             except TE.MissingFact as exc:
                 out[name] = f"not estimated: {exc}"
         return out

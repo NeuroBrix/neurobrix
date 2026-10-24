@@ -37,6 +37,15 @@ def test_streaming_weights_every_use_costs_what_the_host_link_moves():
                           "float16") == pytest.approx(2.0)                          # 200 GB at 100 GB/s: memory-bound
 
 
+def test_a_generating_component_loads_its_weights_once_and_runs_its_prompt_pass_once():
+    token = {"lm": Work(flops=int(1e9), weight_bytes=int(12e9), activation_bytes=0)}       # one token: memory-bound
+    first = {"lm": Work(flops=int(100e12), weight_bytes=int(12e9), activation_bytes=0)}    # the prompt: 1 s of compute
+    t = T.plan_seconds("single_gpu", {"lm": "cuda:0"}, token, {"lm": 32}, {"cuda:0": GPU}, HOST, "float16", prompt=first)
+    assert t == pytest.approx(32 * 12e9 / 900e9 + 1.0 + 1.0)                          # 32 tokens + prompt + ONE load
+    z = T.plan_seconds("zero3", {"lm": "zero3:cuda:0"}, token, {"lm": 32}, {"cuda:0": GPU}, HOST, "float16", prompt=first)
+    assert z == pytest.approx(32 * 12e9 / 900e9 + 1.0 + 33 * 1.0)                     # zero3: a crossing per pass
+
+
 def test_a_fact_the_profile_does_not_carry_is_refused():
     with pytest.raises(T.MissingFact, match="no `measured:`"):
         T.device_facts(None, "cuda:0")

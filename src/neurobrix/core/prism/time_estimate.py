@@ -84,32 +84,36 @@ def _device_of(alloc: Any) -> str:
 
 def plan_seconds(strategy: str, allocations: Mapping[str, Any], works: Mapping[str, Work], uses: Mapping[str, int],
                  devices: Mapping[str, DeviceFacts], host: Optional[HostFacts], dtype: str,
-                 phases: Optional[Mapping[str, int]] = None) -> float:
+                 phases: Optional[Mapping[str, int]] = None, prompt: Optional[Mapping[str, Work]] = None) -> float:
     """The plan's estimated seconds for the request. `devices`: {device string ("cuda:0"): its facts}; `uses`: {component:
     runs per request}; `phases`: {component: phases that load it} for the strategies that load per phase (1 when
-    absent)."""
+    absent); `prompt`: {component: the work of its one prompt pass} for a generating component whose `works` entry is
+    the work of ONE token — the prompt pass runs once more, over the same loaded weights."""
     total = 0.0
     for comp, alloc in allocations.items():
         if comp not in works:
             continue
         w, n = works[comp], int(uses.get(comp, 1))
+        first = (prompt or {}).get(comp)                      # the prompt pass, one more use of the same weights
+        passes = n + (1 if first is not None else 0)
         dev = _device_of(alloc)
         if dev.startswith("cpu"):
             if host is None:
                 raise MissingFact(f"{comp} is placed on the host and the host's facts are not measured")
-            total += n * max(w.flops / host.matmul_flops, (w.weight_bytes + w.activation_bytes) / host.memory_bps)
+            roof = lambda x: max(x.flops / host.matmul_flops, (x.weight_bytes + x.activation_bytes) / host.memory_bps)
+            total += n * roof(w) + (roof(first) if first is not None else 0.0)
             if strategy in STORAGE_EVERY_USE:
                 if host.storage_bps is None:
                     raise MissingFact("cpu_streaming needs the measured storage read bandwidth")
-                total += n * w.weight_bytes / host.storage_bps
+                total += passes * w.weight_bytes / host.storage_bps
             continue
         if dev not in devices:
             raise MissingFact(f"{comp} is placed on {dev!r}, whose facts are not measured")
         f = devices[dev]
-        total += n * compute_seconds(w, f, dtype)
-        loads = n if strategy in STREAM_EVERY_USE else (int((phases or {}).get(comp, 1))
-                                                        if strategy in LOAD_PER_PHASE else 1)
-        total += loads * w.weight_bytes / f.h2d_bps
+        total += n * compute_seconds(w, f, dtype) + (compute_seconds(first, f, dtype) if first is not None else 0.0)
+        loads = passes if strategy in STREAM_EVERY_USE else (int((phases or {}).get(comp, 1))
+                                                             if strategy in LOAD_PER_PHASE else 1)
+        total += loads * w.weight_bytes / f.h2d_bps              # the weights cross once per load, never per token
     return total
 
 
