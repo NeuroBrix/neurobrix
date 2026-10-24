@@ -123,40 +123,8 @@ block_sizes:
   dequant_gemv:
     min_programs: 80
 
-# SDPA block-size thresholds. Schema documented in volta.yml. Decode first.
-# Every tile here is sized for 32 KB of threadgroup memory, so they are
-# smaller than the Volta equivalents at the same head_dim.
-sdpa_thresholds:
-  - seqlen_q_le: 16
-    head_dim_ge: 256
-    block_m: 16
-    block_n: 16
-    num_warps: 4
-  - seqlen_q_le: 16
-    block_m: 16
-    block_n: 32
-    num_warps: 4
-  - head_dim_ge: 256
-    block_m: 16
-    block_n: 16
-    num_warps: 4
-  # MEASURED 2026-10-07 23:51 on adbf6e84 (flash tile probe, bf16, 2048-4608 tokens): 8 warps
-  # on this tile run at 4.18-4.32 TFLOP/s against 2.93-3.05 at 4, exact to fp64 within bf16.
-  - head_dim_ge: 128
-    block_m: 32
-    block_n: 32
-    num_warps: 8
-  # MEASURED 2026-09-06: 32x32, not 32x64. The Metal backend's attention
-  # lowering is validated at head_dim 64 for a 32x32 tile only; a 32x64 tile
-  # has no template and falls to a generic path that cannot lower an
-  # attention kernel at all, so the whole op refuses. Both tiles fit the
-  # 32 KB threadgroup budget — this is not a memory choice, it is the shape
-  # the hardware's compiler actually implements, which is exactly what a
-  # hardware profile is for.
-  - head_dim_lt: 128
-    block_m: 32
-    block_n: 32
-    num_warps: 4
+# sdpa_thresholds RETIRED (roadmap C3, 2026-10-22): the tl.dot flash's tile is certified per key by autotune
+# certify (`launch_keys.flash_tiles_certified`), not read from a hand table.
 
 memory:
   # 32 KB of threadgroup memory per threadgroup (Apple GPU family 7+).
@@ -440,6 +408,16 @@ autotune:
       - {up_to_ms: 5.0, pct: 5.08}
       - {up_to_ms: null, pct: 14.77}
   buckets:
+    # elements — an element-wise launch's element count (`kernels/ops/elementwise_launch.py`), NEVER the `default`
+    # dimension ladder (`autotune_bucket.ladder_for` refuses it). MEASURED on THIS chip 2026-10-24 (apple_m4_pro, the
+    # Mac's campaign ew_ladder_2026_10_24: the shared copy's 15 configs, fp32, 49 counts 4 096..268 435 456): volta's
+    # four rows hold — at >= 2 ms each class's config, certified at its floor, is within 4.0 % max / 1.6 % median of
+    # each count's best, inside the chip's noise bands; below 2 ms every config times at the launch.
+    elements:
+      - {up_to: 65536, step: 65536}
+      - {up_to: 1048576, step: 1048576}
+      - {up_to: 16777216, step: 16777216}
+      - {up_to: null, step: 68719476736}
     default:
       - {up_to: 64, step: 1}
       - {up_to: 256, step: 16}
@@ -589,8 +567,15 @@ tiling:
 # kernel on the device; through the wrapper, bf16 against float64, D 128 at 2048-4608 tokens is 4.3-5.2e-03
 # with the detour off and 3.2-3.9e-03 with it on. The detour sent D 128 to the math path at 0.62-0.68 TFLOP/s;
 # the flash kernel runs it at 2.65-3.17 (D 256: 0.94 -> 1.39).
+# Every head dim, MEASURED 2026-10-23 04:5x on this chip and stack (triton-ext b06cbb0d + i64, Triton 3.8): the 33-case
+# attention correctness oracle passes with this flag on (non-power-of-two dims 96, 127, 129, 160, 192, 255 then take the
+# flash in its power-of-two head-dim block, the extra columns masked to zero); at Allegro's head dim (96, bf16, 2 x 24
+# heads, 2048 tokens) the flash runs in 24.5 ms against 120.5 ms on the math route it took (4.9x), float64 error 5.7e-4
+# vs 4.6e-4, outputs 2e-3 apart (bf16). Above the 2 GiB scores bound the route was already the flash (4096 and 8192
+# tokens: identical outputs and times).
 flash:
   pow2_head_dim_correct: true
+  any_head_dim_correct: true
 
 # Convolution weight storage order (launch_keys.conv_weight_layout). KRSC: the loader writes every
 # 3x3-class conv weight channels-innermost, once, and the conv kernel reads it in place.

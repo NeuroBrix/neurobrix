@@ -75,6 +75,8 @@ _KERNEL_SITES = (
     # matrix-unit flash's only when an attention takes it — a certification before any attention found no tuner)
     ("neurobrix.kernels.ops.softmax", "softmax_forward_kernel"),
     ("neurobrix.kernels.ops.flash_attention_m8n8k4", "flash_attention_m8n8k4_kernel"),
+    # C3: the tl.dot flash's tile, certified where the profile declares no hand table (`sdpa_thresholds`)
+    ("neurobrix.kernels.ops.flash_attention", "flash_attention_certified_kernel"),
 )
 
 
