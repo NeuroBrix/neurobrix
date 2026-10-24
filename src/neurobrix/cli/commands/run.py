@@ -348,6 +348,7 @@ def request_input_config(args, manifest: dict, family, cache_path):
         width=width,
         seq_len=seq_len,
         max_tokens=request_decode_bound(args, cached_defaults),
+        steps=(getattr(args, "steps", None) or cached_defaults.get("num_inference_steps")),
         flow=_flow,
         guidance_passes=guidance_passes,
         mode=resolve_mode(family, args),

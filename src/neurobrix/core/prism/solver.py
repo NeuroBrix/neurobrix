@@ -2546,6 +2546,19 @@ class PrismSolver:
             chosen_devices = strat_devices
             self._selection_reason = self._explain_choice(
                 strat_name, score, ranked, profile)
+            # Point B (docs/design/prism-time-score.md), step 3: every ranked candidate's estimated time beside
+            # today's score — said, never deciding yet; nothing when the profile carries no measured facts
+            self._time_estimates = self._estimate_times(ranked, container, input_config, profile, target_dtype_str)
+            if self._time_estimates:
+                _t = self._time_estimates
+                _best = min((v, k) for k, v in _t.items() if isinstance(v, float)) if any(
+                    isinstance(v, float) for v in _t.values()) else None
+                _mine = _t.get(strat_name)
+                if _best and isinstance(_mine, float) and _mine <= _best[0] * 1.01:
+                    _best = (_mine, strat_name)          # a tie within 1 % is today's choice, never a change
+                self._selection_reason += ("; estimated " + (f"{_mine:.3g} s" if isinstance(_mine, float)
+                                                             else str(_mine)) +
+                                           (f", fastest by estimate {_best[1]} {_best[0]:.3g} s" if _best else ""))
             break
 
         if allocations is None:
@@ -6821,6 +6834,48 @@ class PrismSolver:
                 score = self._score_strategy(strategy_name, allocations, profile)
                 candidates.append((score, strategy_name, allocations, used_devices))
         return candidates
+
+    def _estimate_times(self, ranked, container, input_config, profile, dtype: str) -> Dict[str, Any]:
+        """{strategy: estimated seconds for the request, or why it cannot be estimated} for every ranked candidate
+        (`core/prism/time_estimate.py`); {} when no device of the profile carries measured facts."""
+        from neurobrix.core.prism import time_estimate as TE
+        from neurobrix.core.prism.work import component_work
+        if not any(getattr(d, "measured", None) for d in profile.devices):
+            return {}
+        devices = {}
+        for d in profile.devices:
+            if getattr(d, "measured", None):
+                f = TE.device_facts(d.measured, f"device {d.index}")
+                for prefix in ("cuda", "mps", "hip", "xpu"):
+                    devices[f"{prefix}:{d.index}"] = f
+        try:
+            host = TE.host_facts(getattr(profile, "host_measured", None))
+        except TE.MissingFact:
+            host = None
+        flow = self._flow_topology(container).get("flow") or {}
+        out: Dict[str, Any] = {}
+        try:
+            uses = TE.uses_per_request(flow, getattr(input_config, "steps", None),
+                                       getattr(input_config, "max_tokens", None))
+        except TE.MissingFact as exc:
+            return {name: f"not estimated: {exc}" for _s, name, _a, _d in ranked}
+        works, runs = {}, {}
+        for comp in getattr(self, "_neural_components", []) or []:
+            prof = ActivationProfiler(comp.graph)
+            kind, n = uses.get(comp.name, ("once", 1))
+            w = component_work(prof, prof.build_symbol_map(input_config))
+            if kind == "token":
+                one = copy.copy(input_config)
+                one.seq_len = 1
+                w = w + component_work(prof, prof.build_symbol_map(one)).times(n)
+                n = 1
+            works[comp.name], runs[comp.name] = w, n
+        for _s, name, allocs, _d in ranked:
+            try:
+                out[name] = float(TE.plan_seconds(name, allocs, works, runs, devices, host, str(dtype)))
+            except TE.MissingFact as exc:
+                out[name] = f"not estimated: {exc}"
+        return out
 
     def _explain_choice(self, chosen: str, chosen_score: float,
                         ranked: List, profile: "PrismProfile") -> str:
