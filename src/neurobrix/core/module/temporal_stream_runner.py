@@ -70,9 +70,14 @@ def materialize_state(x: Any, dim: int, start: int, end: int, step: int = 1, *re
 materialize_state.self_manages_dtype = True        # a copy keeps its source's dtype; no AMP rule applies
 
 
+#: the op uid of a temporal stream's state outputs (`stream.state_out::<k>`): the stream's own boundary, where a
+#: chunk's state is copied out and what the chunk before it produced is dead
+STATE_OUT_PREFIX = "stream.state_out::"
+
+
 def state_interceptors(decl: Dict[str, Any]) -> Dict[str, Any]:
     """The interceptors a chunk executor runs its state outputs through: {op uid: materialize_state}."""
-    return {f"stream.state_out::{k}": materialize_state for k in range(len(decl["states"]))}
+    return {f"{STATE_OUT_PREFIX}{k}": materialize_state for k in range(len(decl["states"]))}
 
 
 def _key(t_meta: Dict[str, Any], tid: str) -> str:

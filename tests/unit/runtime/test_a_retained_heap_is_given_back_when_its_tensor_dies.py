@@ -47,3 +47,20 @@ def test_a_small_free_or_a_reusing_allocator_releases_nothing(monkeypatch):
 def test_the_vendor_files_state_the_retention():
     assert vendor_memory_of("apple", "apple_m4_pro")["compiled_allocator_retention"]["dedicated_heap_min_bytes"] == 1 << 29
     assert vendor_memory_of("nvidia", "volta")["compiled_allocator_retention"] is None
+
+
+# A temporal stream's own boundary (a state output, `stream.state_out::<k>`) gives the retained heaps back whatever
+# the size of what died there: mochi-1-preview's VAE on MPS freed mid-size slices whose heaps stayed part-occupied,
+# 19.8 GB of driver memory for 7.0 GB live at its 32nd boundary (the Mac, 2026-10-23 20:17). Never on CUDA (null).
+# Injection: `_kill` without the boundary rule -> the first case sees no call, red.
+def test_a_stream_boundary_gives_the_heaps_back(monkeypatch):
+    seen = _calls(monkeypatch)
+    _seq(1 << 20)._kill([torch.empty(16, dtype=torch.uint8)], (0,), "stream.state_out::3")
+    assert [k for k, _ in seen] == ["sync", "empty"]
+
+
+def test_a_stream_boundary_on_a_reusing_allocator_or_another_op_releases_nothing(monkeypatch):
+    seen = _calls(monkeypatch)
+    _seq(None)._kill([torch.empty(16, dtype=torch.uint8)], (0,), "stream.state_out::3")
+    _seq(1 << 20)._kill([torch.empty(16, dtype=torch.uint8)], (0,), "aten.convolution::31")
+    assert seen == []
