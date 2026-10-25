@@ -30,9 +30,14 @@ def _score(name, devices=("cuda:0",)):
 
 
 def test_the_ranks_never_cross_whatever_the_penalties():
-    order = ["single_gpu", "component_placement", "op_level_tiling", "zero3", "layer_streaming", "cpu_execution"]
+    order = ["single_gpu", "component_placement", "op_level_tiling", "zero3", "cpu_execution"]
     scores = [_score(n) for n in order]
     assert scores == sorted(scores, reverse=True), dict(zip(order, scores))
+    # the host-link rank: zero3's PCIe penalty (200 on a profile whose reference bandwidth is PCIe) stays inside the
+    # rank's window — today's score order among them (layer_streaming 50 over a penalised zero3) survives, the
+    # estimate decides when the profile carries facts
+    for n in ("zero3", "layer_streaming", "lazy_sequential", "component_placement_lazy"):
+        assert S.RANK_BASE[4] - S.RANK_FLOOR_SPAN <= _score(n) < S.RANK_BASE[3] - S.RANK_FLOOR_SPAN, (n, _score(n))
     # D1 / D5 (the supervisor, 16:02) against the measurement (16:20): on one card lazy_sequential's plan IS the expert
     # store (Qwen3-30B: dense 2.3 GB resident, 128 experts a layer on the host, the gate's 174 s) and zero3 would stream
     # 56 GB per token (754 s estimated): the host-link strategies share ONE rank and the estimate decides among them
