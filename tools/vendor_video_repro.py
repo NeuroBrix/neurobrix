@@ -56,6 +56,9 @@ def main() -> int:
                          "vendor PNG taken straight from the array is compared across a lossy "
                          "boundary only one side crossed (measured: 36.6 dB of the gap).")
     ap.add_argument("--no-offload", action="store_true")
+    ap.add_argument("--vae-tiling", action="store_true",
+                    help="call the VAE's enable_tiling(), as the vendor's model card does for a VAE that decodes tiled only "
+                         "(Allegro: 'Decoding without tiling has not been implemented yet')")
     a = ap.parse_args()
 
     dtype = getattr(torch, a.dtype)
@@ -68,6 +71,8 @@ def main() -> int:
         vae_cls = getattr(diffusers, json.load(f)["_class_name"])
     vae = vae_cls.from_pretrained(a.snapshot, subfolder="vae", torch_dtype=torch.float32)
     pipe = pipe_cls.from_pretrained(a.snapshot, vae=vae, torch_dtype=dtype)
+    if a.vae_tiling:
+        pipe.vae.enable_tiling()
     if a.no_offload:
         pipe = pipe.to("cuda")
     else:
