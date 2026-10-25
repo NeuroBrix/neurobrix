@@ -1,7 +1,7 @@
 """`aten::norm` launches a sum: `wrappers.norm_wrapper` (p = 2) is sqrt(sum(x * x, dim)), so its key is the sum's
 over `dim` — the op's THIRD argument (self, p, dim, keepdim) — in its input's dtype.
 
-The census placed aten::norm keyless: openaudio-s1-mini's codec norm (1 536 rows of 8 192, fp16 in) was absent from
+The census placed aten::norm keyless: s1-mini's codec norm (1 536 rows of 8 192, fp16 in) was absent from
 the table and the c1restlot2 gate's triton cell stopped on it (2026-10-24); the gate before had stopped earlier in the
 same cell, on another missing sum, and hid it.
 

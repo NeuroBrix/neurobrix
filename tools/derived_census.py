@@ -1163,7 +1163,7 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
             # by `_reduce_over_dims`, or every element when `dim` is absent) a row, every other element a row's index;
             # the input cast first to the `dtype` keyword (mean, sum) as `_reduction_dtype` reads it. `aten::norm`
             # (`wrappers.norm_wrapper`, p = 2: sqrt(sum(x * x, dim))) is the same sum of its input's dtype, its dim the
-            # THIRD argument (self, p, dim, keepdim) — it was placed keyless and openaudio-s1-mini's codec norm
+            # THIRD argument (self, p, dim, keepdim) — it was placed keyless and s1-mini's codec norm
             # (1 536 rows of 8 192, fp16) missed in the c1restlot2 gate (2026-10-24)
             x_s = shape(ins[0])
             args = (o.get("attributes") or {}).get("args") or []
