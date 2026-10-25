@@ -21,13 +21,14 @@ Runs under the diffusers_video bench venv (torch is allowed under tools/).
       --latents ours.npy --out vendor_first_frame.png
 """
 import argparse
+import os
 import json
 import time
 from pathlib import Path
 
 import numpy as np
 import torch
-from diffusers import AutoencoderKLWan, WanPipeline
+import diffusers
 from PIL import Image
 
 
@@ -58,17 +59,21 @@ def main() -> int:
     a = ap.parse_args()
 
     dtype = getattr(torch, a.dtype)
-    # Wan's VAE is trained in fp32 and the model card keeps it there; only the
-    # transformer takes the reduced dtype. Read from the vendor, not chosen.
-    vae = AutoencoderKLWan.from_pretrained(a.snapshot, subfolder="vae",
-                                           torch_dtype=torch.float32)
-    pipe = WanPipeline.from_pretrained(a.snapshot, vae=vae, torch_dtype=dtype)
+    # The pipeline and VAE classes are the snapshot's own (model_index.json, vae/config.json `_class_name`) — one
+    # tool for every video vendor (Wan, Allegro, CogVideoX, ...), never a class chosen by model name. The VAE stays in
+    # fp32: Wan's model card keeps it there, and a 3D decoder in fp16 is the first place an oracle would lie.
+    with open(os.path.join(a.snapshot, "model_index.json")) as f:
+        pipe_cls = getattr(diffusers, json.load(f)["_class_name"])
+    with open(os.path.join(a.snapshot, "vae", "config.json")) as f:
+        vae_cls = getattr(diffusers, json.load(f)["_class_name"])
+    vae = vae_cls.from_pretrained(a.snapshot, subfolder="vae", torch_dtype=torch.float32)
+    pipe = pipe_cls.from_pretrained(a.snapshot, vae=vae, torch_dtype=dtype)
     if a.no_offload:
         pipe = pipe.to("cuda")
     else:
         pipe.enable_model_cpu_offload()
 
-    gen = torch.Generator(device="cuda").manual_seed(a.seed)
+    gen = torch.Generator(device="cpu").manual_seed(a.seed)      # the seed convention: the CPU stream (seed-convention.md)
     extra = {}
     if a.latents:
         arr = np.load(a.latents)
@@ -87,7 +92,6 @@ def main() -> int:
         first = (np.clip(first, 0.0, 1.0) * 255.0).round().astype(np.uint8)
     Image.fromarray(first).save(a.out)
     if a.frames_dir:
-        import os
         os.makedirs(a.frames_dir, exist_ok=True)
         for i, f in enumerate(frames):
             fr = f if f.dtype == np.uint8 else (np.clip(f, 0.0, 1.0) * 255).round().astype(np.uint8)
