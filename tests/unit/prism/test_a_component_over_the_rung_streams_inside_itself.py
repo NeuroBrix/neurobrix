@@ -99,15 +99,29 @@ def _plan(model, mode):
 
 # ───────────────── the five, on the Mac's profile ─────────────────
 
+def _rung_below_the_largest_component(monkeypatch, model, mode) -> int:
+    """The highest ladder rung under the model's largest whole component (its cost at the top rung): the rung at
+    which that component streams inside itself and nothing smaller is asked of the cut."""
+    from neurobrix.core.prism.memory_budget import memory_ladder_mb
+    no_door(monkeypatch)
+    p, s = _plan(model, mode)
+    dev = s._prepare_devices(profile(APPLE_M4_PRO))[0]
+    c = NBXContainer.load(str(container_root(model)))
+    whole = max(s._whole_component_mb(c, n, m, dev) for n, m in p.component_memory.items())
+    below = [r for r in memory_ladder_mb() if r < whole]
+    assert below, (model, whole)
+    return below[-1]
+
+
 @pytest.mark.parametrize("mode", MODES)
 @pytest.mark.parametrize("model", STREAMED)
 def test_under_a_rung_below_its_largest_component_the_component_streams_inside_itself(monkeypatch, model, mode):
-    """The rung imposed through the door is 8 192 MB: under the budget law of 2026-10-25 (the margin is the
-    allocator's reserve, no longer a 12 % hedge) these transformers fit the 16 384 rung whole per phase and plan
-    lazy_sequential there, rightly; the rule this cell holds — a component over the rung streams inside itself,
-    never a refusal — is proven at a rung their largest component exceeds."""
+    """Under the budget law of 2026-10-25 (the margin is the allocator's reserve, no longer a 12 % hedge) these
+    transformers fit the 16 384 rung whole per phase and plan lazy_sequential there, rightly; the rule this cell
+    holds — a component over the rung streams inside itself, never a refusal — is proven at the ladder rung just
+    under the model's largest whole component (CogVideoX-5b 13 455 MB -> 12 288; Allegro-TI2V 11 586 -> 11 264)."""
     pin_host(monkeypatch, 24576, 18186, "the Mac's idle reading, its profile's capacity")
-    impose_rung(monkeypatch, 8192)
+    impose_rung(monkeypatch, _rung_below_the_largest_component(monkeypatch, model, mode))
     p, s = _plan(model, mode)
     usable = s._usable_mb(s._prepare_devices(profile(APPLE_M4_PRO))[0])
     if mode == "compiled" and p.strategy != "layer_streaming":

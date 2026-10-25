@@ -103,10 +103,11 @@ def test_a_component_the_container_does_not_declare_has_no_dtype():
 
 # ───────────────────── MiniCPM on the Mac: the refusal is honest ─────────────────────
 
-def _plan_mac(monkeypatch):
+def _plan_mac(monkeypatch, rung: int = 12288):
     # Since 2026-10-25 (the owner, 15:16) the idle pool is the budget and MiniCPM's decode phase fits it whole;
-    # the streaming cells below are proven at the 12 288 rung imposed through the door, where the LM does not fit.
-    monkeypatch.setenv("NBX_PRISM_BUDGET_MB", "12288")
+    # the streaming cell is proven at the 12 288 rung imposed through the door, where the LM does not fit; the
+    # decode-phase cell at 16 384, where the decode phase fits and the whole model does not.
+    monkeypatch.setenv("NBX_PRISM_BUDGET_MB", str(rung))
     pin_host(monkeypatch, 24576, 18186, "the Mac, idle")
     monkeypatch.delenv("NBX_FORCE_STRATEGY", raising=False)
     s = PrismSolver()
@@ -138,7 +139,7 @@ def test_the_decode_phase_holds_the_LM_its_head_and_the_speech_leg_and_no_tower(
     beside the LM: the SUM of every component (18 119 MB here) counted 1 872 MB no moment holds. The
     decode phase — the LM, its head, every speech component — is what the check holds, and the pair
     alone (the first form of this cell, 16 516 MB with a phantom transposed head) is under it."""
-    _, _, s, seen, c = _plan_mac(monkeypatch)
+    _, _, s, seen, c = _plan_mac(monkeypatch, rung=16384)
     flow = s._flow_topology(c)["flow"]
     vlm, speech = flow["vlm"], set(flow["speech"]["components"].values())
     towers = {vlm[k] for k in ("vision_component", "vision_projection_component",

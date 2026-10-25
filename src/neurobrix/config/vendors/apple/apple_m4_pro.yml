@@ -591,13 +591,15 @@ conv:
 # capacity: an offload's relief here is 0, its price the copy. storage_read_gbps is not measured: the only shards in
 # reach are on the NAS over Wi-Fi (~9 MB/s), which would measure the link (the estimate refuses cpu_streaming by name).
 measured:
-  source: "measured 2026-10-25 05:16:38 CET on the M4 Pro (card 0), alone, the Windows VM off (tools/profile_facts.py)"
-  matmul_tflops: {float16: 6.0, float32: 5.2}
-  memory_gbps: 224
-  h2d_gbps: 58.4
-  d2h_gbps: 65.1
-  h2d_pageable_gbps: 65.3
+  # the 05:16 run measured float16 6.0 / float32 5.2, 224, 58.4, 65.1, 65.3 — within 3 % of this one, which adds the
+  # bf16 GEMM the compute dtype of this device needs (the time estimate refused every accelerator strategy without it)
+  source: "measured 2026-10-25 18:37:27 CET on the M4 Pro (card 0), alone, the Windows VM off (tools/profile_facts.py --dtypes float16,float32,bfloat16)"
+  matmul_tflops: {float16: 6.0, float32: 5.3, bfloat16: 5.9}
+  memory_gbps: 230
+  h2d_gbps: 59.3
+  d2h_gbps: 66.1
+  h2d_pageable_gbps: 66.3
 host_measured:
-  source: "measured 2026-10-25 05:16:38 CET on the M4 Pro host, alone (tools/profile_facts.py)"
-  host_matmul_gflops: 2962
-  host_memory_gbps: 131
+  source: "measured 2026-10-25 18:37:27 CET on the M4 Pro host, alone (tools/profile_facts.py)"
+  host_matmul_gflops: 3125
+  host_memory_gbps: 132

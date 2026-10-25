@@ -19,8 +19,20 @@ def test_a_unified_pool_plans_at_its_declared_figure_less_the_engines_measured_b
     assert dev.recommended_mb == 18186 and dev.capacity_mb == 18186 - base, (dev.recommended_mb, dev.capacity_mb, base)
 
 
-def test_a_dedicated_card_plans_at_its_declared_figure(monkeypatch):
+def test_a_dedicated_card_plans_at_its_declared_figure_less_its_own_context(monkeypatch):
     pin_dedicated_card(monkeypatch, 16151, 306, "an idle V100-16GB")
     pin_host(monkeypatch, 257530, 200000, "an idle rack host")
     dev = PrismSolver()._prepare_devices(profile(V100_16GB))[0]
-    assert dev.capacity_mb == V100_16GB["devices"][0]["memory_mb"] == 16384, dev.capacity_mb
+    # the law: the card's figure (the driver's total, 16 151 on this SKU) less the runtime's own context (306)
+    assert dev.recommended_mb == 16384 and dev.capacity_mb == 16151 - 306, (dev.recommended_mb, dev.capacity_mb)
+    assert dev.capacity_mb == dev.budget_mb, "one figure every rung plans against"
+
+
+def test_under_the_census_door_every_figure_a_rung_reads_is_the_rung(monkeypatch):
+    """CogVideoX-5b's 13 455 MB transformer was held whole on an imposed 8 192 MB rung (2026-10-25): the rungs
+    read `capacity_mb` / `free_mb` (the declared pool) while only `budget_mb` carried the rung."""
+    pin_host(monkeypatch, 24576, 18186, "the Mac, idle")
+    monkeypatch.setenv("NBX_PRISM_BUDGET_MB", "8192")
+    dev = PrismSolver()._prepare_devices(profile(APPLE_M4_PRO))[0]
+    assert dev.capacity_mb == dev.budget_mb == dev.free_mb == 8192, (dev.capacity_mb, dev.budget_mb, dev.free_mb)
+    assert dev.recommended_mb == 18186

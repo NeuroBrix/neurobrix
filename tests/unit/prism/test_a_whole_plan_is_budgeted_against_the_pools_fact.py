@@ -45,6 +45,6 @@ def test_prepare_devices_reads_the_driver_for_a_discrete_card(monkeypatch):
     s = _solver()
     devs = s._prepare_devices(_Profile())
     assert devs[0].capacity_mb == 32000.0
-    assert devs[0].free_mb == 9000.0, "the device state must carry the driver's reading"
+    assert devs[0].free_mb == 32000.0, "what others hold is the door's business, not the plan's room (2026-10-25)"
     assert devs[0].live_free_mb == 9000.0, "the door carries the moment"
     assert s._effective_capacity_mb(devs[0]) == 32000.0, "the budget is the card's fact"

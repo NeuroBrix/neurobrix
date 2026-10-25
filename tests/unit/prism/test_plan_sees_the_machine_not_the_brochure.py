@@ -102,9 +102,11 @@ def test_a_unified_device_is_planned_against_its_declared_pool_and_keeps_the_rea
 def test_a_discrete_device_is_not_constrained_by_host_pressure(monkeypatch):
     """On a discrete card the two pools are disjoint: a busy host does not
     shrink VRAM, and pretending it does would refuse plans that fit."""
+    from tests.unit.prism._pinned_machine import pin_dedicated_card
+    pin_dedicated_card(monkeypatch, 18186, 0, "a dedicated card of the device's declared size, nothing on it")
     state = MemoryState(total_mb=24576, available_mb=512, source="test")
     devices = _prepare(monkeypatch, _spec(unified=False), state)
-    assert devices[0].capacity_mb == 18186
+    assert devices[0].capacity_mb == devices[0].budget_mb == 18186, (devices[0].capacity_mb, devices[0].budget_mb)
 
 
 def test_a_free_machine_leaves_the_device_figure_alone(monkeypatch):
@@ -118,7 +120,9 @@ def test_an_unmeasurable_machine_does_not_silently_use_the_brochure(monkeypatch,
     state = MemoryState(source="no reader for platform 'plan9'")
     with caplog.at_level("WARNING"):
         devices = _prepare(monkeypatch, _spec(unified=True), state)
-    assert devices[0].capacity_mb == 18186
+    # the law for a pool that cannot be read: the free figure (here the declared capacity, nothing better known)
+    # rounded DOWN onto the ladder — the safe side, never the brochure's figure whole (2026-10-25)
+    assert devices[0].capacity_mb == 16384, devices[0].capacity_mb
     assert any("could not be measured" in r.getMessage()
                for r in caplog.records), (
         "falling back to the recommendation without saying so is the defect "

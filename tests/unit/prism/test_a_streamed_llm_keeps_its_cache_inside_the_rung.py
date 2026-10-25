@@ -147,9 +147,8 @@ def test_a_served_llm_on_a_shared_card_sizes_its_cache_on_the_rung_not_the_capac
     # Since 2026-10-25 (the owner, 15:16) the other process's 3 000 MB do not shrink the budget — the card's
     # declared capacity sizes the plan and the moment is the execution door, which names the hold when the
     # plan does not fit what is free now. The bound below is the same: cache + activations inside the rung.
-    free_now = 16151 - 3000 - 306
-    if p.total_memory_mb > free_now:
-        assert p.execution_door and "free" in p.execution_door, (p.total_memory_mb, free_now, p.execution_door)
+    # (the door itself — the plan's bytes on the card against what is free now — is pinned in
+    # test_a_unified_plan_fits_its_host_side_in_the_free_memory.py and test_a_whole_plan_is_budgeted_against_the_pools_fact.py)
     kv_est = s._estimate_kv_cache_bytes(c, s._target_dtype_str)
     floor = sum(m.activation_bytes - (kv_est if n == s._lm_component_name else 0)
                 for n, m in p.component_memory.items())

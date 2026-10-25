@@ -301,14 +301,14 @@ class DeviceState:
     - On H100 (supports FP8): Block could cost 0.5X MB
     """
     device_string: str
-    capacity_mb: float
+    capacity_mb: float                 # the law's budget for this device (`_prepare_devices`): what a plan may hold
     used_mb: float = 0.0
     #: What the MACHINE holds on this card outside this plan — the driver's
     #: free reading subtracted from the capacity at `_prepare_devices`. Kept
     #: apart from `used_mb`, which is the plan's own accounting and is reset
     #: by every fresh copy a strategy tests against; the machine's figure is
     #: not the plan's to reset.
-    external_used_mb: float = 0.0
+    external_used_mb: float = 0.0      # 0 since 2026-10-25: what others hold is the execution door's business
     components: List[str] = field(default_factory=list)
     spec: Optional[DeviceSpec] = None
     #: What the DEVICE recommends, before the machine's real availability is
@@ -2685,6 +2685,13 @@ class PrismSolver:
         self._component_dtypes = component_dtypes
 
         # Step 7: Build plan
+        if chosen_strategy == "op_level_tiling" and getattr(self, "_op_tiling_priced", None):
+            # the tiled components at the figures the rung priced them at (`_tiled_peak_bytes`): the plan's memory,
+            # its host footprint and its door read what the TilingEngine will hold, not the untiled peak
+            import dataclasses as _dc
+            component_memory = {n: (_dc.replace(m, activation_bytes=self._op_tiling_priced[n][0],
+                                                peak_op_uid=self._op_tiling_priced[n][1])
+                                    if n in self._op_tiling_priced else m) for n, m in component_memory.items()}
         plan = self._build_plan(allocations, component_memory, devices, component_dtypes, profile, chosen_strategy)
         plan.kv_cache_plan = kv_cache_plan
         _sp = getattr(self, "_state_policy", None) if kv_cache_plan is not None else None
@@ -3980,7 +3987,7 @@ class PrismSolver:
             return json.load(f)
 
     def _activation_widths(self, comp, container, profiler, input_config,
-                           compute_dtype: str, profile, seams=None) -> Dict[str, int]:
+                           compute_dtype: str, profile, seams=None, tiling=None) -> Dict[str, int]:
         """{tensor_id: bytes per element} this component's activations are EXECUTED at,
         under the engine this plan is for (`self._mode`) — core/prism/runtime_widths.
 
@@ -4025,7 +4032,7 @@ class PrismSolver:
         symbol_map = profiler.build_symbol_map(input_config, placement_floor=True)
         return runtime_widths(
             comp.graph, compute_dtype, self._mode, has_native_bf16=native_bf16,
-            attention_operands=operands, contract=contract, stores_fp64=stores_fp64, tiling=None,
+            attention_operands=operands, contract=contract, stores_fp64=stores_fp64, tiling=tiling,
             shape_of=lambda tid: profiler._resolve_shape(tensors[tid], symbol_map), seams=seams)
 
     def _graph_as_executed(self, comp, container):
@@ -4658,8 +4665,9 @@ class PrismSolver:
                 # (memory.compiled_private_reserve_mb): never in a component's price, so it is taken off the room before
                 # any schedule is chosen. Absent = none declared (0).
                 if getattr(self, "_mode", None) and not str(self._mode).startswith("triton"):
-                    from neurobrix.core.config.loader import get_vendor_config
-                    _res = ((get_vendor_config(dev.brand.value, dev.architecture).get("memory") or {})
+                    from neurobrix.core.config.loader import vendor_config_for_device
+                    _res = ((vendor_config_for_device(dev.brand.value, dev.architecture, dev.compute_capability,
+                                                      model=getattr(dev, "name", None)).get("memory") or {})
                             .get("compiled_private_reserve_mb") or 0)
                     capacity = max(0.0, capacity - float(_res))
                 # A lower rung imposed by solve() when the plan's host side did not fit the reading.
@@ -4683,22 +4691,22 @@ class PrismSolver:
             # another process holds becomes `used_mb`, so `free_mb` is the
             # reading the ladder rounds and the picker compares. Unreadable
             # (no runtime, a CPU host) → the recommendation alone, as before.
-            used = 0.0
-            if not dev.has_unified_memory:
-                try:
-                    from neurobrix.kernels.nbx_tensor import DeviceAllocator
-                    free_live = DeviceAllocator.free_memory_mb(dev.index)
-                except Exception:
-                    free_live = None
-                if free_live is not None:
-                    used = max(0.0, capacity - free_live)
             reading = self._device_reading(dev, capacity, host, profile)
             note = _describe_budget(reading)
             logging.getLogger(__name__).info("%s: memory budget — %s", dev.get_device_string(), note)
+            # ONE figure every rung plans against: the law's budget for this device (`memory_budget.budget_mb` —
+            # a dedicated card less the runtime's own context, a unified pool's declared figure less the engine's
+            # base, the census rung when the door imposes one), never above the capacity. `capacity_mb` and
+            # `budget_mb` used to differ — the declared pool here, the rung there — and every rung that read
+            # `capacity_mb` or `free_mb` planned past the imposed rung: CogVideoX-5b's 13 455 MB transformer held
+            # whole on an 8 192 MB rung (2026-10-25). What another process holds of the card is no longer taken
+            # off the budget either (`external_used_mb` was capacity less the live free reading): the moment is the
+            # execution door (the owner, 15:16), never the plan's size.
+            budget = float(_capped_budget_mb(reading, capacity))
             devices.append(DeviceState(
                 device_string=dev.get_device_string(),
-                capacity_mb=capacity,
-                external_used_mb=used,
+                capacity_mb=budget,
+                external_used_mb=0.0,
                 # A BUDGET CAN NEVER EXCEED THE CAPACITY IT BUDGETS. The law rounds a
                 # reading onto the commercial ladder, and the nearest rung can sit ABOVE
                 # the device: a V100-16GB reads capacity 15 564.8 MB (16 384 x 0.95) and
@@ -4710,7 +4718,7 @@ class PrismSolver:
                 # e55e5c9e capped the UNIFIED reading by capacity. This is the same
                 # invariant one level out, where it holds for every device kind: the ladder
                 # may round a reading, it may not round it past the hardware.
-                budget_mb=float(_capped_budget_mb(reading, capacity)),
+                budget_mb=budget,
                 tile_rung_mb=int(_tile_rung_mb(reading)),
                 budget_note=note,
                 spec=dev,
@@ -6784,7 +6792,7 @@ class PrismSolver:
         "_stream_declined",
         "_host_device_tilings", "_host_device_overflow", "_host_device_card", "_tiling_declined",
         "_tiling_declined_by_rung", "_arena_declined", "_tiling_rung_figure", "_input_config",
-        "_output_elements", "_op_tiling_declined", "_op_tiling_plans", "_op_tiling_from_rung",
+        "_output_elements", "_op_tiling_declined", "_op_tiling_plans", "_op_tiling_from_rung", "_op_tiling_priced",
         "_layer_stream_partitions", "_layer_stream_graphs", "_layer_stream_moe",
         "_layer_stream_tilings", "_layer_stream_window_bytes", "_layer_stream_kv_reserve_bytes",
         "_layer_stream_constant_bytes", "_lifecycle_transient", "_request_sizing",
@@ -7522,28 +7530,36 @@ class PrismSolver:
             return self._decline("op_level_tiling", f"the card leaves no room after its margin ({largest.capacity_mb:.0f} MB less {self._margin_mb(largest.capacity_mb)} MB)")
 
         total_weights_mb = sum(m.weight_mb for _, m in sorted_comps)
-        if total_weights_mb >= effective_mb:
-            return self._decline("op_level_tiling", f"the weights alone ({total_weights_mb:.0f} MB) do not fit the room ({effective_mb:.0f} MB): tiling cuts activations, not weights")
-        arena_refused = [r for r in (self._arena_over_allocation(container, n, m, largest)
-                                     for n, m in sorted_comps) if r]
-        if arena_refused:
-            self._op_tiling_declined = arena_refused[0]
-            return self._decline("op_level_tiling", str(arena_refused[0]))
-        room_mb = effective_mb - total_weights_mb
-        # The room a component's activations have is the card less the weights resident WHILE IT RUNS — the flow's
-        # release schedule (`core/flow/residency`, the rule the flow releases by); a flow with no stated schedule, or
-        # serve mode, holds every component (the total above).
+        # The weights this rung must hold are the ones resident WHILE EACH COMPONENT RUNS — the flow's release
+        # schedule (`core/flow/residency`, the rule both engines' flows release by: a pre-loop component unloaded
+        # after its run, the loop ones before the post-loop stage); a flow with no stated schedule, or serve mode,
+        # holds every component at once. The rung used to demand every component's weights resident TOGETHER
+        # ("the weights alone do not fit the room") and so refused Sana 4K's tiled VAE on the Mac's 11 021 MB room
+        # for 11 411 MB of weights of which 303 run beside the VAE (the Mac, 2026-10-25 17:56 / 18:06).
         from neurobrix.core.flow.residency import resident_beside
         _topology = self._flow_topology(container)
         _serve = bool(getattr(self, "_serve_mode", False))
         _by_name = dict(sorted_comps)
 
-        def room_of(name: str) -> float:
+        def held_of(name: str) -> float:
             beside = resident_beside(_topology, name, _serve)
             if beside is None:
-                return room_mb
-            held = _by_name[name].weight_mb + sum(_by_name[b].weight_mb for b in beside if b in _by_name)
-            return effective_mb - held
+                return total_weights_mb
+            return _by_name[name].weight_mb + sum(_by_name[b].weight_mb for b in beside if b in _by_name)
+
+        _heaviest = max((n for n, _ in sorted_comps), key=held_of)
+        if held_of(_heaviest) >= effective_mb:
+            _with = ("alone" if held_of(_heaviest) == total_weights_mb and len(sorted_comps) == 1 else
+                     f"resident while {_heaviest} runs")
+            return self._decline("op_level_tiling", f"the weights {_with} ({held_of(_heaviest):.0f} MB) do not fit the room ({effective_mb:.0f} MB): tiling cuts activations, not weights")
+        arena_refused = [r for r in (self._arena_over_allocation(container, n, m, largest)
+                                     for n, m in sorted_comps) if r]
+        if arena_refused:
+            self._op_tiling_declined = arena_refused[0]
+            return self._decline("op_level_tiling", str(arena_refused[0]))
+
+        def room_of(name: str) -> float:
+            return effective_mb - held_of(name)
 
         blocking = [(n, m) for n, m in sorted_comps if m.activation_mb > room_of(n)]
         if not blocking:
@@ -7600,6 +7616,24 @@ class PrismSolver:
             self._op_tiling_declined = "the detector found no tileable op in " + ", ".join(n for n, _ in blocking if n not in plans)
             return self._decline("op_level_tiling", self._op_tiling_declined)
 
+        # The plan the detector offers is PRICED before it is claimed: the component's peak with every fused
+        # upsample a proxy, every fused and standalone conv in bands, the chains streamed and the adds in place —
+        # the profile `_compute_memory` keeps, under the plan's own view of the widths. A rung that claimed the
+        # floor alone handed the footprint a 27.6 GB VAE on an 11 GB room and the solve descended for nothing
+        # (Sana 4K on the Mac, 2026-10-25 18:5x: accepted here, declined by its host side two rungs later).
+        priced = {}
+        for n, _m in blocking:
+            peak_b, at = self._tiled_peak_bytes(container, n, plans[n], profile, input_config)
+            room = room_of(n)
+            if peak_b / (1024 * 1024) > room:
+                pl = plans[n]
+                self._op_tiling_declined = (
+                    f"{n}: tiled as the detector offers ({len(pl.fusion_pairs)} fused pairs, {len(pl.tiled_ops)} tiled ops, "
+                    f"{len(pl.residual_chains)} chains), its activations still hold {peak_b / (1024 * 1024):.0f} MB at {at} "
+                    f"over the {room:.0f} MB room")
+                return self._decline("op_level_tiling", self._op_tiling_declined)
+            priced[n] = (int(peak_b), str(at))
+        self._op_tiling_priced = priced
         self._op_tiling_plans = plans
         allocations = {}
         fresh = self._fresh_devices(devices)
@@ -7608,6 +7642,39 @@ class PrismSolver:
             allocations[comp_name] = (largest.device_string, shard_map)
             fresh[0].components.append(comp_name)
         return allocations, fresh
+
+    def _tiled_peak_bytes(self, container, comp_name: str, tplan, profile, input_config):
+        """A component's activation peak UNDER an op-level tiling plan, at the request: the profiler's figure with
+        the plan's fused upsamples priced as the proxies they become, its fused and standalone convolutions in
+        their bands, the TilingEngine's residual chains streamed and the adds it runs in place — the figures the
+        runtime holds (`_compute_memory` keeps the same profile for the plan's memory) — under the widths the
+        plan's own tiling view gives. Returns (bytes, the op the peak sits at)."""
+        from neurobrix.core.prism.profiler import ActivationProfiler
+        from neurobrix.core.prism.memory_estimator import get_dtype_bytes_per_element
+        from neurobrix.core.prism.runtime_widths import TilingView
+        from neurobrix.core.prism.host_footprint import engine_of
+        comp = next(c for c in (getattr(self, "_neural_components", None) or []) if c.name == comp_name)
+        comp_dtype = (getattr(self, "_component_dtypes", None) or {}).get(comp_name) or self._target_dtype_str
+        dtype_bytes = get_dtype_bytes_per_element(comp_dtype)
+        profiler = ActivationProfiler(comp.graph)
+        engine = engine_of(getattr(self, "_mode", "compiled"))
+        fusion = {u for u, _c, _f in tplan.fusion_pairs}
+        # a fused pair's conv reads its upsample through the proxy (zero-alloc, source-holding) and writes its whole
+        # output band by band: priced as the whole output it fills; the band factors apply to the STANDALONE tiled ops
+        # (`_standalone_conv_tiles`, the convs `_compute_memory` prices in bands) — the same split as there
+        tiled = {uid: f for uid, t, f in tplan.tiled_ops if "convolution" in str(t)}
+        f2a = self._pixel_shuffle_chain_proxy_uids_of_the_engine(comp.graph) if engine == "triton" else set()
+        chains = set(self._identify_residual_chain_proxy_uids(comp.graph, input_config) or ())
+        inplace = self._identify_inplace_add_candidates_static(comp.graph, input_config=input_config)
+        widths = self._activation_widths(comp, container, profiler, input_config, comp_dtype, profile,
+                                         tiling=TilingView.from_plan(tplan))
+        ap = profiler.estimate_peak_memory(
+            input_config=input_config, dtype_bytes=dtype_bytes, zero_alloc_uids=fusion | f2a | chains,
+            inplace_adds=inplace, widths=widths, source_holding_uids=fusion | f2a,
+            in_place_weight_reads=(engine == "triton"), attention_scratch=self._attention_scratch(profile),
+            conv3d_workspace=self._conv3d_workspace(profile), op_workspace=self._op_workspace(profile),
+            tiled_convs=tiled)
+        return int(self._scale_activations_to_request(comp, ap.peak_bytes, input_config)), str(ap.peak_op_uid or "")
 
     def _try_layer_streaming(
         self, sorted_comps, comp_mem, devices, shard_sizes, profile, container
