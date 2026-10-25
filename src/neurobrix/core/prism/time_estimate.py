@@ -175,7 +175,20 @@ def plan_seconds(strategy: str, allocations: Mapping[str, Any], works: Mapping[s
     return total
 
 
-def uses_per_request(flow: Mapping[str, Any], steps: Optional[int], tokens: Optional[int]) -> Dict[str, tuple]:
+def resolve_flow_name(name: str, components) -> str:
+    """The container component a flow names: the exact name, else the one component whose name ends with
+    `.<name>` (the flow of GLM-4.1V names `language_model`, the component is `model.language_model`: the executor
+    resolves by that suffix, graph_executor `key.endswith("." + leaf)`). Ambiguity or no match: the name as given
+    (the caller then prices the component the flow names, or nothing)."""
+    names = list(components or [])
+    if name in names:
+        return name
+    hits = [c for c in names if c.endswith("." + name)]
+    return hits[0] if len(hits) == 1 else name
+
+
+def uses_per_request(flow: Mapping[str, Any], steps: Optional[int], tokens: Optional[int],
+                     components=None) -> Dict[str, tuple]:
     """{component: (kind, runs)} for a request, read from the container's flow (topology.json) — never from a family:
     a component of an iterative process's loop runs `steps` times ("loop"); the flow's language model and its head
     (`generation.lm_component` / `head_component`) and a stage executed "autoregressive" run once at the prompt and
@@ -193,6 +206,12 @@ def uses_per_request(flow: Mapping[str, Any], steps: Optional[int], tokens: Opti
     gen = flow.get("generation") or {}
     token_comps = [c for c in (gen.get("lm_component"), gen.get("head_component")) if c]
     token_comps += [s["component"] for s in (flow.get("stages") or []) if s.get("execution") == "autoregressive"]
+    # the flow names components as the executor resolves them (a `.<name>` suffix): GLM-4.1V's `language_model` is
+    # `model.language_model` — unresolved, its per-token weight reloads went unpriced and layer_streaming estimated 2.5 s
+    token_comps = [resolve_flow_name(c, components) for c in token_comps]
+    for comp in list(out):
+        if comp not in (components or out) and resolve_flow_name(comp, components) != comp:
+            out[resolve_flow_name(comp, components)] = out.pop(comp)
     if token_comps:
         if not tokens:
             raise MissingFact(f"the flow generates with {token_comps} and the request names no token count")

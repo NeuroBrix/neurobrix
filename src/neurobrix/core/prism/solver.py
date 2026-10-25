@@ -6967,7 +6967,8 @@ class PrismSolver:
         # the same source that sizes the cache (an image, video or audio request carries no text bound by construction)
         tokens = getattr(input_config, "max_tokens", None) or (self._read_defaults(container) or {}).get("max_tokens")
         try:
-            uses = TE.uses_per_request(flow, getattr(input_config, "steps", None), tokens)
+            uses = TE.uses_per_request(flow, getattr(input_config, "steps", None), tokens,
+                                       components=[c.name for c in (getattr(self, "_neural_components", []) or [])])
         except TE.MissingFact as exc:
             return {name: f"not estimated: {exc}" for _s, name, _a, _d in ranked}
         works, runs, prompt = {}, {}, {}

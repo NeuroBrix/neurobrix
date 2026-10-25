@@ -129,3 +129,16 @@ def test_plan_seconds_adds_the_link_term_when_links_are_given():
     with_link = TE.plan_seconds("block_scatter", {"model": "fgp:cuda:0,cuda:1"}, works, {"model": 1}, devices, None,
                                 "float16", links={("cuda:0", "cuda:1"): 300e9})
     assert with_link == pytest.approx(base + 1.0)
+
+
+def test_the_uses_follow_the_flow_s_names_as_the_executor_resolves_them():
+    """GLM-4.1V-9B: the flow names `language_model`, the component is `model.language_model`; unresolved, the LM
+    counted once and every streaming plan estimated 2.5 s (prism_choices_2026_10_25_after.tsv, 16:30)."""
+    flow = {"order": ["model.visual", "model.language_model", "lm_head"],
+            "generation": {"lm_component": "language_model", "head_component": "lm_head"}}
+    uses = TE.uses_per_request(flow, None, 32, components=["model.visual", "model.language_model", "lm_head"])
+    assert uses["model.language_model"] == ("token", 32) and uses["lm_head"] == ("token", 32)
+    assert uses["model.visual"] == ("once", 1) and "language_model" not in uses
+    # an exact name stays exact; an ambiguous suffix is left as named (nothing invented)
+    assert TE.resolve_flow_name("lm_head", ["a.lm_head", "lm_head"]) == "lm_head"
+    assert TE.resolve_flow_name("x", ["a.x", "b.x"]) == "x"
