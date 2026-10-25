@@ -451,6 +451,10 @@ class ExecutionPlan:
     #: so the plan states its margin rather than leaving a reader to discover it.
     margin_mb: Optional[int] = None
     margin_reason: Optional[str] = None
+    #: the execution door's verdict for the moment the plan was taken (`memory_budget.execution_door`): the pool holds
+    #: less than the plan places on it. A dry run (--explain-plan, the census) prints it beside the plan; the run raises it
+    #: before loading anything. None when the door is open or no live reading was taken.
+    execution_door: Optional[str] = None
     #: A streamed plan's device bytes at its worst moment — what stays resident beside the segments
     #: (whole components, graph constants, flow-read weights, the KV reserve) plus the largest
     #: segment's weights and the activations alive while it runs. None for a plan that holds its
@@ -1976,7 +1980,7 @@ class PrismSolver:
         fp = plan.host_footprint or {}
         need_mb = (int(fp.get("total_bytes", 0)) - int(fp.get("resident_bytes", 0))) / (1 << 20)
         if host.measured and need_mb > float(host.available_mb):
-            raise RuntimeError(
+            plan.execution_door = (
                 f"ZERO FALLBACK: the plan ({plan.strategy}) needs {need_mb:.0f} MB of the unified pool and "
                 f"{float(host.available_mb):.0f} MB are free now ({getattr(host, 'source', '')}); the plan is sized by "
                 f"the pool's declared {pool_mb:.0f} MB and is not traded for a slower one — free the memory (another "
@@ -2817,7 +2821,8 @@ class PrismSolver:
                      source=str(getattr(_d, "budget_note", "") or ""))
             _why = _door(_r, float(_d.used_mb))
             if _why:
-                raise RuntimeError(f"{_d.device_string}: {_why}")
+                plan.execution_door = f"{_d.device_string}: {_why}"
+                break
         _from_rung = getattr(self, "_op_tiling_from_rung", None)
         if _from_rung:
             plan.runtime_op_tiling = {**(plan.runtime_op_tiling or {}), **_from_rung}
@@ -7127,7 +7132,12 @@ class PrismSolver:
             raise RuntimeError(f"ZERO FALLBACK: strategy {strategy_name!r} has no rank in STRATEGY_RANK — "
                                "a strategy is placed in the physical order before it can be scored")
         _in_rank = [BASE_SCORES.get(n, 500) for n, r in STRATEGY_RANK.items() if r == rank]
-        score = RANK_BASE[rank] + min(RANK_FLOOR_SPAN, (base - min(_in_rank)) * 0.1)
+        _span = float(max(_in_rank) - min(_in_rank))
+        # today's order inside the rank, spread over the rank's window so that the penalties below (a lazy load's
+        # 20 points a component, zero3's PCIe share) order within it and never invert it: without measured facts
+        # lazy_sequential (300) stays above layer_streaming (50) for a model of several components (the Mac, 17:18)
+        offset = ((base - min(_in_rank)) / _span) * (RANK_FLOOR_SPAN - 9.0) if _span > 0 else 0.0
+        score = RANK_BASE[rank] + offset
         rank_floor = RANK_BASE[rank] - RANK_FLOOR_SPAN
 
         # Count unique devices used
@@ -9055,6 +9065,7 @@ def plan_record(plan: "ExecutionPlan") -> dict:
            "estimated_s": plan.estimated_s,
            "time_estimates": dict(plan.time_estimates or {}),
            "refused": [{"strategy": n, "score": float(sc), "why": why} for n, sc, why in (plan.rejected or [])],
+           "execution_door": getattr(plan, "execution_door", None),
            "planned_memory_mb": float(plan.total_memory_mb), "cpu_ram_mb": int(plan.cpu_ram_mb or 0),
            "device_window_mb": (float(plan.device_window_mb) if plan.device_window_mb is not None else None),
            "deferred_drain_cliffs": dict(getattr(plan, "deferred_drain_cliffs", None) or {}),
@@ -9122,6 +9133,8 @@ def explain_plan(plan: "ExecutionPlan") -> str:
         lines.append("candidates      none recorded")
     for name, sc, why in plan.rejected:
         lines.append(f"refused         {name} (scored {sc:.0f}): {why}")
+    if getattr(plan, "execution_door", None):
+        lines.append(f"door            would refuse NOW: {plan.execution_door}")
     lines.append(f"planned memory  {plan.total_memory_mb:.0f} MB on the cards"
                  + (f", {plan.cpu_ram_mb} MB of host RAM budget" if plan.cpu_ram_mb else ""))
     if plan.host_footprint:

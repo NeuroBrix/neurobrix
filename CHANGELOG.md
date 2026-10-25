@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **A dry `--explain-plan` prints the plan and the door's verdict** ("would refuse now: …") instead of refusing; the refusal fires when the run executes.
+- **A device's measured facts are read from its chip's vendor file first** (the file whose declared compute capability is the device's, as the kernels resolve it), then the architecture's: the Apple M4 Pro's facts live in `apple_m4_pro.yml`, not in `apple_silicon.yml`, and the time estimate found none.
 - **On a unified-memory machine the plan's whole host side is budgeted by the installed RAM the profile declares** (less the engine's measured base), never by the free memory of the moment; a reading too low for the plan refuses by name at the door. On the Mac, HAT-L (157 MB of weights) had planned layer streaming beside another run and a resident plan a minute later.
 - **The time estimate prices an expert store's per-token traffic** (the experts a token reads crossing the host link at every use; the prompt's set once): Qwen3-30B-A3B estimated 15 s where the gate measured 174 s.
 - **The op-level tiling rung says why it declines, every time** (`--explain-plan`'s refused list): Sana 4K on 16 GB holds 15.8 GB live before a view, over the room beside its weights — a tile cuts an op's own output, never what earlier ops hold; on 32 GB no component overflows the room it runs in.

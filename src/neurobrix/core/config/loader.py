@@ -106,6 +106,39 @@ class UnsupportedArchitectureError(FileNotFoundError):
 
 
 @lru_cache(maxsize=16)
+def vendor_config_for_device(vendor: str, architecture: Optional[str], compute_capability: Optional[str]) -> Dict[str, Any]:
+    """The vendor file that describes ONE device, by the rule the kernels resolve their active profile with
+    (`kernels/ops/_configs.py`, the shared-memory budget): the file whose declared `compute_capability` equals the
+    device's, else one whose `compute_capability_matches` prefixes it, else the same major family of a dotted
+    capability, else the architecture's file. The Apple M4 Pro reports `apple-m4-pro` and its facts live in the CHIP
+    file `apple/apple_m4_pro.yml`, not in the family file `apple_silicon.yml` (the Mac, 2026-10-25 17:20: the time
+    estimate found no measured facts there)."""
+    import yaml
+    wanted = str(compute_capability or "").strip().lower()
+    exact = family = None
+    if wanted:
+        for path in sorted((CONFIG_ROOT / "vendors" / vendor).glob("*.yml")):
+            try:
+                cfg = yaml.safe_load(path.read_text()) or {}
+            except Exception:  # noqa: BLE001 — an unreadable vendor file is not this device's
+                continue
+            declared = str(cfg.get("compute_capability", "")).strip().lower()
+            if declared and declared == wanted:
+                exact = cfg
+                break
+            if family is None and (
+                    any(wanted.startswith(str(m).strip().lower()) for m in (cfg.get("compute_capability_matches") or []))
+                    or (declared and "." in declared and "." in wanted and declared.split(".")[0] == wanted.split(".")[0])):
+                family = cfg
+    if exact is not None:
+        return exact
+    if family is not None:
+        return family
+    if not architecture:
+        raise UnsupportedArchitectureError(f"no vendor file describes {vendor!r} (compute capability {wanted or '?'}) and the device names no architecture")
+    return get_vendor_config(vendor, str(architecture))
+
+
 def get_vendor_config(vendor: str, architecture: str) -> Dict[str, Any]:
     """
     Load vendor/architecture configuration.

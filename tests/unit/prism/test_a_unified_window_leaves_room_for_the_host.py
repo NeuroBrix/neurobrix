@@ -68,5 +68,5 @@ def test_the_ledger_admits_what_prism_accepted(monkeypatch):
     total = p.host_footprint["total_bytes"] >> 20
     pool = PrismSolver()._unified_host_pool_mb(profile(APPLE_M4_PRO))
     assert total <= pool, (p.strategy, p.device_window_mb, total, pool)
-    with pytest.raises(RuntimeError, match="are free now"):
-        _plan(monkeypatch, MACHINE_FREE_MB)
+    busy = _plan(monkeypatch, MACHINE_FREE_MB)
+    assert busy.strategy == p.strategy and busy.execution_door and "are free now" in busy.execution_door

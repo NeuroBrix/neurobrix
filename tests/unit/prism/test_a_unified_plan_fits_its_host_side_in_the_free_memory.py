@@ -24,16 +24,12 @@ def _plan(monkeypatch, model, free):
 def test_the_plan_is_the_same_under_every_free_reading_or_the_door_refuses(monkeypatch, model):
     plans = {}
     for free in READINGS:
-        try:
-            p = _plan(monkeypatch, model, free)
-        except RuntimeError as e:
-            assert "are free now" in str(e) and "declared" in str(e), (model, free, str(e)[:200])
-            plans[free] = ("door", None)
-            continue
+        p = _plan(monkeypatch, model, free)                                # the plan is always returned
         fp = p.host_footprint or {}
         need = (int(fp.get("total_bytes", 0)) - int(fp.get("resident_bytes", 0))) / 2**20
         plans[free] = (p.strategy, int(need))
-        assert need <= free, (model, free, p.strategy, int(need))        # the door let it through: it fits now
-    accepted = {v for v in plans.values() if v[0] != "door"}
-    assert len(accepted) == 1, (model, plans)                              # ONE plan, whatever the reading
-    assert plans[20000][0] != "door", (model, plans)                       # an idle machine runs it
+        if need > free:                                                      # the door says so, the plan stands
+            assert p.execution_door and "are free now" in p.execution_door and "declared" in p.execution_door, (model, free)
+        else:
+            assert not p.execution_door, (model, free, p.execution_door)
+    assert len(set(plans.values())) == 1, (model, plans)                    # ONE plan, whatever the reading

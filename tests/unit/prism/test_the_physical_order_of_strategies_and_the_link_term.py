@@ -195,3 +195,12 @@ def test_an_expert_store_s_per_token_traffic_is_priced_on_the_host_link():
     with_prompt = TE.plan_seconds("lazy_sequential", {"model": "cuda:0"}, {"model": tok}, {"model": 32}, devices, None,
                                   "float16", prompt={"model": prm})
     assert with_prompt == pytest.approx(lazy + 4 * 2**30 / 8.1e9)
+
+
+def test_without_facts_a_lazy_plan_of_several_components_still_outranks_layer_streaming():
+    """The Mac, 17:18: on a profile without measured facts the MoE LLMs (lazy_sequential = the expert store) fell to
+    layer_streaming — the lazy penalty (20 points a component) had pushed lazy under layer_streaming inside the rank."""
+    s = S.PrismSolver.__new__(S.PrismSolver)
+    three = {"model": "cuda:0", "lm_head": "cuda:0", "vision": "cuda:0"}
+    assert s._score_strategy("lazy_sequential", three, _NoTopology()) > s._score_strategy("layer_streaming", three, _NoTopology())
+    assert s._score_strategy("component_placement_lazy", three, _NoTopology()) > s._score_strategy("layer_streaming", three, _NoTopology())

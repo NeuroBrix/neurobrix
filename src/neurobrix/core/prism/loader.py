@@ -210,12 +210,14 @@ def _vendor_block(d_data: dict, block: str) -> Optional[dict]:
     profile is auto-generated (the Mac's `auto-apple-m4-pro-18g`, untracked) keeps its measured facts with their
     source under git all the same (point B, 2026-10-25). None when the vendor file has no such block or no vendor file
     describes the architecture: nothing is invented."""
-    from neurobrix.core.config.loader import get_vendor_config, UnsupportedArchitectureError
+    from neurobrix.core.config.loader import vendor_config_for_device, UnsupportedArchitectureError
     brand, arch = d_data.get("brand", "nvidia"), d_data.get("architecture")
-    if not arch:
+    cc = d_data.get("compute_capability")
+    if not arch and not cc:
         return None
     try:
-        return (get_vendor_config(str(brand), str(arch)) or {}).get(block)
+        # the device's own vendor file, by the kernels' rule: the chip file (compute capability) before the family
+        return (vendor_config_for_device(str(brand), arch, cc) or {}).get(block)
     except UnsupportedArchitectureError:
         return None
 
