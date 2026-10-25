@@ -584,3 +584,20 @@ flash:
 # 3.31); 1x1 is the same memory either way.
 conv:
   weight_layout: KRSC
+
+# The machine's measured facts, read by Prism's time estimate (docs/design/prism-time-score.md §1) whenever the device
+# profile carries none — this Mac's hardware profile is auto-generated (default-9f169c79), so the architecture's vendor
+# file holds them. On unified memory h2d / d2h are copies WITHIN the one pool (~1/4 of the device copy) and free no
+# capacity: an offload's relief here is 0, its price the copy. storage_read_gbps is not measured: the only shards in
+# reach are on the NAS over Wi-Fi (~9 MB/s), which would measure the link (the estimate refuses cpu_streaming by name).
+measured:
+  source: "measured 2026-10-25 05:16:38 CET on the M4 Pro (card 0), alone, the Windows VM off (tools/profile_facts.py)"
+  matmul_tflops: {float16: 6.0, float32: 5.2}
+  memory_gbps: 224
+  h2d_gbps: 58.4
+  d2h_gbps: 65.1
+  h2d_pageable_gbps: 65.3
+host_measured:
+  source: "measured 2026-10-25 05:16:38 CET on the M4 Pro host, alone (tools/profile_facts.py)"
+  host_matmul_gflops: 2962
+  host_memory_gbps: 131
