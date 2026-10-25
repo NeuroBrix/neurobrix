@@ -1011,9 +1011,8 @@ class TritonDtypeEngine:
           * compute dtype fp16: only under the precision contract — the per-component
             `_NBX_ACTIVATIONS_FP16_SAFE` flag (read at call time, so an engine compiled
             before the flag was applied still sees it) or `force_cast_back` (the op is in
-            the record's narrow set). The fp16 cast is the single-tensor one it always
-            was: a tuple result keeps the dtypes its kernel wrote (the fp16 contract is
-            held byte-identical by decision, 2026-09-28).
+            the record's narrow set). Every floating tensor of the result is cast, a tuple included (the single-tensor cast of
+            2026-09-28 kept a half graph's norm tuples fp32 on this branch; aligned 2026-10-25).
         """
         compute = self.compute_dtype
         cname = compute.name
@@ -1028,11 +1027,12 @@ class TritonDtypeEngine:
             if amp_fp32_output_dtype(cname, gname, _w._NBX_ACTIVATIONS_FP16_SAFE,
                                      force_cast_back, traced) != cname:
                 return result          # fp16 without the contract, or a non-bf16 graph: fp32
-            if compute == NBXDtype.bfloat16:
-                return _cast_floats_to(result, compute)
-            if _is_float_tensor(result) and _get_nbx_dtype(result) != compute:
-                result = result.to(compute)
-            return result
+            # every floating tensor of the result, a `native_*_norm` tuple included — the compiled engine's
+            # `_to_compute_dtype` / half-IO norms under the contract. The fp16 cast was the single-tensor one
+            # (a tuple kept its kernel's dtypes, 2026-09-28): a half graph's layer norms then stored fp32 on this
+            # branch and spread it through the whole encoder (whisper: 1 283 of 1 545 outputs; the owner, 2026-10-25
+            # 20:36: a half-stored graph is served half everywhere except islands, on both engines).
+            return _cast_floats_to(result, compute)
 
         def cast_back_func(*args, **kwargs):
             if widens:

@@ -1906,7 +1906,8 @@ def _matmul_out_dtype(a, M: int = 1, force_fp32: bool = False):
     dt = a.nbx_dtype if hasattr(a, 'nbx_dtype') else a.dtype
     # The decision is `launch_keys.matmul_out_dtype` — the one the derived census computes keys
     # with (NBX_FORCE_FP32_ACCUM first, then the hardware gate, then the M / force_fp32 gate).
-    return _lk.matmul_out_dtype(dt, M, force_fp32, _NBX_HAS_NATIVE_BF16, NBX_FORCE_FP32_ACCUM)
+    return _lk.matmul_out_dtype(dt, M, force_fp32, _NBX_HAS_NATIVE_BF16, NBX_FORCE_FP32_ACCUM,
+                                contract_half=bool(_NBX_ACTIVATIONS_FP16_SAFE))
 
 
 def _apply_matmul_epilogue(c, epilogue_code: int):

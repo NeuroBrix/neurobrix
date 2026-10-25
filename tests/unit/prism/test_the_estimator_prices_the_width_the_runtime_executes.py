@@ -522,18 +522,20 @@ def _norm_tuple(graph="float32"):
                         ["y", "mu", "rs"])], ["input::x"], ["y"], graph=graph)
 
 
-def test_under_fp16_a_tuple_norm_output_keeps_the_fp32_its_kernel_wrote():
-    """triton/dtype.py `cast_back`: under fp16 the cast back to C is the single-tensor one — a
-    TUPLE result (native_layer_norm, native_group_norm) keeps the fp32 its kernel wrote from the
-    fp32 inputs, narrow set, safe flag or neither (the fp16 contract held byte-identical by
-    decision 2026-09-28). Measured by the census walk 2026-09-29: Kokoro's albert projections
-    and PixArt's VAE attention read the norm's output in fp32 while this pass said fp16.
-    Under bf16 on a bf16 graph every float of the tuple comes back to C. Injection: the tuple
-    clause removed from `amp_fp32_out` -> 'float16' under the narrow set, RED."""
+def test_under_fp16_a_tuple_norm_output_follows_the_contract_like_a_tensor():
+    """triton/dtype.py `cast_back`: under fp16 every floating tensor of the result comes back to C when the
+    contract says so (the safe flag or the narrow set) — a TUPLE result (native_layer_norm, native_group_norm)
+    included, as on the compiled engine (half-IO norms under the contract). Until 2026-10-25 the fp16 cast was
+    the single-tensor one (decision 2026-09-28) and a half graph's norms stored fp32 on this branch, spreading
+    fp32 through whisper's whole encoder (1 283 of 1 545 outputs wider than the compiled engine's); the owner
+    (20:36): a half-stored graph is served half everywhere except islands, on both engines. Without the
+    contract the tuple keeps the fp32 its kernel wrote. Injection: the tuple rule back in `amp_fp32_out` ->
+    'float32' under the narrow set, RED."""
     narrow = PrecisionContract(True, frozenset(), frozenset({"ln::0"}))
     for eng in ("triton", "triton_sequential"):
-        for k in (NONE, narrow, PrecisionContract(True, frozenset(), frozenset())):
-            assert _w(_norm_tuple(), eng, contract=k)["y"] == "float32", (eng, k)
+        assert _w(_norm_tuple(), eng, contract=NONE)["y"] == "float32", eng
+        for k in (narrow, PrecisionContract(True, frozenset(), frozenset())):
+            assert _w(_norm_tuple(), eng, contract=k)["y"] == "float16", (eng, k)
         assert _w(_norm_tuple("bfloat16"), eng, c="bfloat16", bf16=True)["y"] == "bfloat16"
     # the single-tensor norm still narrows under the contract
     assert _w(_block(), contract=narrow.__class__(True, frozenset(), frozenset({"rms::0"})))[

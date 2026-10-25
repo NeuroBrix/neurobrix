@@ -56,13 +56,19 @@ def _widest(a: NBXDtype, b: NBXDtype) -> NBXDtype:
 
 
 def matmul_out_dtype(dt: NBXDtype, M: int, force_fp32: bool, native_bf16: bool,
-                     force_accum: bool = False) -> NBXDtype:
+                     force_accum: bool = False, contract_half: bool = False) -> NBXDtype:
     """The store dtype of mm/bmm/addmm/mv/addmv (see `wrappers._matmul_out_dtype` for the why):
     fp32 for any half input under NBX_FORCE_FP32_ACCUM; fp32 for fp16 on hardware without native
-    bf16; fp32 for a half input when M <= 4 or when forced; otherwise the input dtype."""
+    bf16 UNLESS the component's precision contract holds (`contract_half`: the calibration measured
+    its activations fp16-safe — the compiled branch stores fp16 there, `_FP16_GEMM_OPS` under the
+    contract, and a half graph is served half on both engines, the owner 2026-10-25 20:36); fp32
+    for a half input when M <= 4 or when forced, on hardware without native bf16 and no contract;
+    otherwise the input dtype. An island's GEMM reaches here with fp32 operands and stores fp32."""
     half = dt in _HALF
     if force_accum and half:
         return F32
+    if dt == F16 and contract_half:
+        return F16
     if dt == F16 and not native_bf16:
         return F32
     # ONE precision contract (the owner, 2026-10-25 15:26): on hardware that computes bf16 natively a half input

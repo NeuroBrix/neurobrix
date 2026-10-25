@@ -233,9 +233,14 @@ def test_the_fp16_contract_is_unchanged_in_the_triton_wrapper(flag):
     assert _out(NBXDtype.float16, "rms_norm", _norm).nbx_dtype == NBXDtype.float16
     assert _out(NBXDtype.float16, "layer_norm", _widening).nbx_dtype == NBXDtype.float16
     assert _out(NBXDtype.float16, "div", _norm).nbx_dtype == NBXDtype.float16
-    # ... and its single-tensor cast, as it always was: a tuple keeps its kernel's dtypes
+    # ... every float of a tuple result too (a half-IO norm under the contract, as on the compiled engine;
+    # the single-tensor cast of 2026-09-28 kept the tuple fp32 — aligned 2026-10-25, the owner 20:36)
+    out = _out(NBXDtype.float16, "native_layer_norm", _native_norm)
+    assert [o.nbx_dtype for o in out] == [NBXDtype.float16] * 3
+    flag(False)                                  # and without the contract the tuple keeps its kernel's fp32
     out = _out(NBXDtype.float16, "native_layer_norm", _native_norm)
     assert [o.nbx_dtype for o in out] == [NBXDtype.float32] * 3
+    flag(True)
     flag(False)                                  # the narrow set alone: fp16
     assert _out(NBXDtype.float16, "rms_norm", _norm,
                 safe=False, narrow_op_uids={"op::0"}).nbx_dtype == NBXDtype.float16

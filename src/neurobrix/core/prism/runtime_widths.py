@@ -593,7 +593,8 @@ class _Rules:
         # the store is the launcher's own rule (`launch_keys.matmul_out_dtype`), called — never a second copy
         from neurobrix.kernels import launch_keys as _lk
         from neurobrix.kernels.nbx_tensor import NBXDtype as _D
-        return _lk.matmul_out_dtype(_D[a_eff], int(m) if m is not None else 1, bool(force), bool(self.native_bf16)).name
+        return _lk.matmul_out_dtype(_D[a_eff], int(m) if m is not None else 1, bool(force), bool(self.native_bf16),
+                                    contract_half=bool(self.contract.safe)).name
 
     def rows(self, tid: str) -> Optional[int]:
         sh = self.shape_of(tid)
@@ -678,12 +679,10 @@ class _TritonRules(_Rules):
         # PixArt's VAE attention read the norm's output in fp32.
         # The op's traced output dtype is the floor of the cast back: the vendor's own fp32
         # island in a half graph is narrowed by the narrow set only, never by the flag.
-        r = _tdt.amp_fp32_output_dtype(self.c, self.graph_dtype, self.contract.safe, narrowed,
-                                       _tdt.traced_output_dtype_name(op))
-        if (self.c == "float16" and op is not None
-                and len(op.get("output_tensor_ids") or []) > 1):
-            return "float32"
-        return r
+        # a tuple result (a `native_*_norm`) is cast back like a tensor since 2026-10-25 (`_cast_floats_to` in the
+        # fp32-internal wrap under fp16 too): no tuple rule
+        return _tdt.amp_fp32_output_dtype(self.c, self.graph_dtype, self.contract.safe, narrowed,
+                                          _tdt.traced_output_dtype_name(op))
 
     def op_dtype(self, uid, op, ins, w) -> str:
         c = self.c
