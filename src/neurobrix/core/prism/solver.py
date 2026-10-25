@@ -2447,7 +2447,7 @@ class PrismSolver:
             score, strat_name, strat_allocs, strat_devices = best
 
             if strat_name in self._host_declined:
-                self._rejected.append((strat_name, float(score), "its host side overshot the free memory"))
+                self._rejected.append((strat_name, float(score), "its host side overshot the pool the profile declares (installed RAM less the engine's measured base), at this rung"))
                 continue
 
             # THE ARENA DOOR, one for every strategy: a component held whole on one accelerator

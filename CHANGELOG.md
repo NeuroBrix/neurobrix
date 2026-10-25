@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **A strategy declined for its host side on unified memory says what it overshot**: the pool the profile declares (installed RAM less the engine's measured base), no longer "the free memory".
 - **The op-level tiling rung prices the plan it offers before it claims it** (every fused upsample a proxy, the standalone convolutions in bands, the chains streamed, the adds in place, under the plan's own widths) and carries that figure into the plan; a refusal names what the tiled component still holds and at which op. It used to claim a plan on its live floor alone, and the plan's host side then sent the solve down the ladder two rungs later.
 - **One figure every planning rung reads**: a device's capacity IS the budget law's answer for it (a dedicated card less the runtime's own context, a unified pool's declared figure less the engine's measured base, the census rung when one is imposed) — the rungs that read the device's capacity or free figure planned past an imposed rung (a 13 455 MB transformer held whole on an 8 192 MB rung) and took what another process held off the plan's room, which is the execution door's business.
 - **The compiled engine's private reserve is read from the device's chip file** (the same resolution as its measured facts), no longer from the architecture family file alone.

@@ -143,10 +143,13 @@ def test_the_largest_component_sits_between_the_rung_and_the_capacity(monkeypatc
     # granite-speech's language model read 16 4xx MB while the transposes of its weights were
     # priced as activations (profiler.weight_transposes_read_in_place); it is 16 374.4 MB, 9.6 MB under the
     # 16 384 rung and 1 301 MB over its usable part — still a component no whole rung holds.
+    # Since 2026-10-25 the device has ONE planning figure (capacity_mb == budget_mb == the rung here); the
+    # device's own declared figure is `recommended_mb` — the scenario is a component the DEVICE could hold that
+    # the rung cannot, streamed on the card.
     usable = s._usable_mb(dev)
-    assert usable < largest < dev.capacity_mb, (
+    assert usable < largest < dev.recommended_mb, (
         f"{model}: largest component {largest:.1f} MB is not strictly between the usable part "
-        f"{usable:.1f} of the rung {rung} and the capacity {dev.capacity_mb:.1f} — the scenario "
+        f"{usable:.1f} of the rung {rung} and the device's figure {dev.recommended_mb:.1f} — the scenario "
         f"these cells judge is not the one planned")
 
 
@@ -237,6 +240,12 @@ def test_a_dedicated_card_cuts_the_boundaries_pinned_here(monkeypatch, mode):
                 segments have that much less room: still 3, each seam earlier:
                 [embedding::0, view::187] [moe_fused::block.9, view::367] [moe_fused::block.18, rms_norm::81]
                 The compiled engine has no queue and its cut did not move.
+      2026-10-25 (one figure every rung reads): the dedicated card's budget is the driver's total less the
+                runtime's own context (16 151 - 306 = 15 845 MB; the 0.95 coefficient gone), 280 MB more
+                than the 15 565 the coefficient left: the COMPILED cut gains a block and lands where the
+                triton cut of 2026-10-04 stood, both seams on block boundaries:
+                [embedding::0, view::227] [moe_fused::block.11, view::427] [moe_fused::block.21, rms_norm::81]
+                The triton cut (net of the drain cliff) did not move.
 
     Reaches `_try_layer_streaming` for real: the rung is attempted (its partition is left on the
     solver) and `lazy_sequential` then outscores it. A retrace of this container moves these op
@@ -255,8 +264,8 @@ def test_a_dedicated_card_cuts_the_boundaries_pinned_here(monkeypatch, mode):
     # widths, release-candidate-1, 2026-09-28): activations the engine keeps in fp32 cost 4 bytes, the
     # segments shrink to fit the same usable rung. Two segments before, cut under the compute dtype's
     # 2 bytes; the solver's own note on this card already read three.
-    pinned = {"compiled": [["aten.embedding::0", "aten.split_with_sizes::35"],
-                           ["aten.slice::502", "aten.view::427"],
+    pinned = {"compiled": [["aten.embedding::0", "aten.view::227"],
+                           ["moe_fused::block.11", "aten.view::427"],
                            ["moe_fused::block.21", "custom.rms_norm::81"]],
               "triton": [["aten.embedding::0", "aten.view::187"],
                          ["moe_fused::block.9", "aten.view::367"],
