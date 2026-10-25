@@ -25,6 +25,9 @@ STREAM_EVERY_USE = frozenset({"zero3", "layer_streaming"})
 LOAD_PER_PHASE = frozenset({"component_placement_lazy", "lazy_sequential", "single_gpu_lifecycle"})
 #: strategies that read a component's weights from storage at every use
 STORAGE_EVERY_USE = frozenset({"cpu_streaming"})
+#: strategies that hold every weight of a component on the accelerators: no expert store, no per-use expert traffic
+RESIDENT_STRATEGIES = frozenset({"single_gpu", "single_gpu_lifecycle", "component_placement", "block_scatter",
+                                 "pipeline_parallel", "weight_sharding", "op_level_tiling"})
 
 
 class MissingFact(KeyError):
@@ -170,6 +173,12 @@ def plan_seconds(strategy: str, allocations: Mapping[str, Any], works: Mapping[s
         loads = passes if strategy in STREAM_EVERY_USE else (int((phases or {}).get(comp, 1))
                                                              if strategy in LOAD_PER_PHASE else 1)
         total += loads * w.weight_bytes / f.h2d_bps              # the weights cross once per load, never per token
+        if strategy not in RESIDENT_STRATEGIES:
+            # an expert store: the routed experts a use reads cross the host link at every use (per token for a
+            # generating component, the prompt's set once) — unpriced, Qwen3-30B estimated 15 s against 174 s measured
+            total += n * w.expert_bytes_per_use / f.h2d_bps
+            if first is not None:
+                total += first.expert_bytes_per_use / f.h2d_bps
     if links is not None:
         total += link_seconds(strategy, allocations, works, uses, links)
     return total

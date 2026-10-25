@@ -142,3 +142,56 @@ def test_the_uses_follow_the_flow_s_names_as_the_executor_resolves_them():
     # an exact name stays exact; an ambiguous suffix is left as named (nothing invented)
     assert TE.resolve_flow_name("lm_head", ["a.lm_head", "lm_head"]) == "lm_head"
     assert TE.resolve_flow_name("x", ["a.x", "b.x"]) == "x"
+
+
+def test_the_tiling_rung_says_why_it_declines_sana_4k_on_16gb(monkeypatch):
+    """D3 (the supervisor, 16:02 / 16:53), from the table: Sana_1600M_4Kpx_BF16 on a V100-16GB, weights 11.7 GB,
+    the VAE's activations 23.7 GB. The rung declined in silence (op_level_tiling absent from the candidates, nothing in
+    refused). Now every exit of `_try_op_level_tiling` records its reason: here the VAE holds 15 808 MB live before
+    `aten.view::95` whatever its bands — an op-level tile cuts an op's own output, never what earlier ops hold — over
+    the 11 885 MB the card leaves beside the weights. The next step is the region cut (activation architecture, step
+    C), named, not pretended."""
+    from neurobrix.core.prism.solver import ComponentMemory, DeviceState
+    MB = 2**20
+    s = S.PrismSolver.__new__(S.PrismSolver)
+    s.oom_reserve_mb = 3072
+    s._live_floor = {"vae": (15808 * MB, "aten.view::95")}
+    s._neural_components = []
+    monkeypatch.setattr(s, "_arena_over_allocation", lambda *a, **k: None)
+    monkeypatch.setattr(s, "_flow_topology", lambda c: {})
+    from neurobrix.core.flow import residency as _res
+    monkeypatch.setattr(_res, "resident_beside", lambda topo, name, serve: [])   # Sana's flow releases the others
+    vae = ComponentMemory("vae", 607 * MB, 23712 * MB, 1216 * MB, peak_op_uid="aten.pixel_shuffle::4", activation_profiled=True)
+    tr = ComponentMemory("transformer", 6121 * MB, 979 * MB, 355 * MB, activation_profiled=True)
+    te = ComponentMemory("text_encoder", 4986 * MB, 166 * MB, 258 * MB, activation_profiled=True)
+    devs = [DeviceState(device_string="cuda:0", capacity_mb=15564.0)]
+    out = s._try_op_level_tiling([("vae", vae), ("transformer", tr), ("text_encoder", te)], None, devs, {}, None, None)
+    assert out is None
+    why = s._declined["op_level_tiling"]
+    assert "15808 MB are live before aten.view::95" in why and "never what earlier ops hold" in why, why
+    # and on a 32 GB card nothing overflows the room a component runs in: a whole-component rung serves it
+    s2 = S.PrismSolver.__new__(S.PrismSolver); s2.oom_reserve_mb = 3072; s2._live_floor = {}; s2._neural_components = []
+    monkeypatch.setattr(s2, "_arena_over_allocation", lambda *a, **k: None)
+    monkeypatch.setattr(s2, "_flow_topology", lambda c: {})
+    assert s2._try_op_level_tiling([("vae", vae), ("transformer", tr), ("text_encoder", te)], None,
+                                   [DeviceState(device_string="cuda:0", capacity_mb=31130.0)], {}, None, None) is None
+    assert "no component's activation overflows" in s2._declined["op_level_tiling"]
+
+
+def test_an_expert_store_s_per_token_traffic_is_priced_on_the_host_link():
+    """D4 (the supervisor, 16:53): Qwen3-30B-A3B as an expert store (48 routed layers x 8 of 128 experts of 9 MB a token)
+    estimated 15 s against 174 s measured — the experts a token reads were not priced. Now they cross the host link at
+    every use for every non-resident strategy; a resident plan (the whole model on the cards) pays nothing."""
+    per_token = 48 * 8 * 9 * 2**20
+    tok = Work(flops=0, weight_bytes=0, activation_bytes=0, output_bytes=0, expert_bytes_per_use=per_token)
+    devices = {"cuda:0": _facts()}
+    lazy = TE.plan_seconds("lazy_sequential", {"model": "cuda:0"}, {"model": tok}, {"model": 32}, devices, None, "float16")
+    assert lazy == pytest.approx(32 * per_token / 8.1e9)
+    resident = TE.plan_seconds("block_scatter", {"model": "fgp:cuda:0,cuda:1"}, {"model": tok}, {"model": 32},
+                               {"cuda:0": _facts(), "cuda:1": _facts()}, None, "float16")
+    assert resident == 0.0
+    # the prompt pass reads the experts its tokens touch, once
+    prm = Work(expert_bytes_per_use=4 * 2**30)
+    with_prompt = TE.plan_seconds("lazy_sequential", {"model": "cuda:0"}, {"model": tok}, {"model": 32}, devices, None,
+                                  "float16", prompt={"model": prm})
+    assert with_prompt == pytest.approx(lazy + 4 * 2**30 / 8.1e9)

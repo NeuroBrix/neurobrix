@@ -38,13 +38,19 @@ class Work:
     #: the bytes of the graph's output tensors at the request: what crosses a device boundary when the component's
     #: result (or, inside a transformer, its residual stream of the same width) is consumed on another device
     output_bytes: int = 0
+    #: the routed experts one use of the component READS when its experts live off the card (an expert store):
+    #: `top_k` experts per routed layer for a token, every expert the prompt's tokens touch for the prompt pass —
+    #: set by the solver from the component's expert topology; 0 for a dense component or a resident one
+    expert_bytes_per_use: int = 0
 
     def __add__(self, other: "Work") -> "Work":
         return Work(self.flops + other.flops, self.weight_bytes + other.weight_bytes,
-                    self.activation_bytes + other.activation_bytes, self.output_bytes + other.output_bytes)
+                    self.activation_bytes + other.activation_bytes, self.output_bytes + other.output_bytes,
+                    self.expert_bytes_per_use + other.expert_bytes_per_use)
 
     def times(self, n: int) -> "Work":
-        return Work(self.flops * n, self.weight_bytes * n, self.activation_bytes * n, self.output_bytes * n)
+        return Work(self.flops * n, self.weight_bytes * n, self.activation_bytes * n, self.output_bytes * n,
+                    self.expert_bytes_per_use * n)
 
 
 def _numel(shape: List[int]) -> int:

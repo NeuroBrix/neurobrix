@@ -1924,6 +1924,11 @@ class PrismSolver:
                 raise refusal
         if not descends or not plan.host_footprint:
             return plan
+        # THE POOL'S FACT (the owner, 2026-10-25 15:16): on a unified machine the whole host side of a plan must fit
+        # the installed RAM the profile declares, less the engine's measured base — never the moment's free reading,
+        # which moved HAT-L (157 MB of weights) to layer_streaming beside another run and back to single_gpu a minute
+        # later (the Mac, 16:56). The moment's reading is the execution door after the loop.
+        pool_mb = self._unified_host_pool_mb(profile)
         while True:
             fp = plan.host_footprint
             # What the plan adds to the pool: the process's resident memory — what it holds NOW, read by
@@ -1931,7 +1936,7 @@ class PrismSolver:
             need_mb = (int(fp.get("total_bytes", 0)) - int(fp.get("resident_bytes", 0))) / (1 << 20)
             rung = min(d.budget_mb for d in self._prepare_devices(profile) if d.spec.has_unified_memory)
             tried.append((int(rung), plan.strategy, int(need_mb)))
-            if need_mb <= float(host.available_mb):
+            if need_mb <= pool_mb:
                 break
             # The SAME rung first, without this strategy: a lower rung shrinks the device window, never
             # an eager load, so an eager plan overshot by its loading overshoots at every rung (VibeVoice-
@@ -1966,6 +1971,16 @@ class PrismSolver:
                      int(rung), need_mb, host.available_mb, lower[-1])
             plan = below
         plan.unified_rungs_tried = tried
+        # THE EXECUTION DOOR for the unified pool: the plan sized by the facts runs only if the pool is free enough
+        # NOW; what holds it is said, and the plan is never traded for a slower one (`memory_budget.execution_door`).
+        fp = plan.host_footprint or {}
+        need_mb = (int(fp.get("total_bytes", 0)) - int(fp.get("resident_bytes", 0))) / (1 << 20)
+        if host.measured and need_mb > float(host.available_mb):
+            raise RuntimeError(
+                f"ZERO FALLBACK: the plan ({plan.strategy}) needs {need_mb:.0f} MB of the unified pool and "
+                f"{float(host.available_mb):.0f} MB are free now ({getattr(host, 'source', '')}); the plan is sized by "
+                f"the pool's declared {pool_mb:.0f} MB and is not traded for a slower one — free the memory (another "
+                f"process holds it) or plan under a smaller profile")
         return plan
 
     def _solve_at_rung(
@@ -4531,6 +4546,22 @@ class PrismSolver:
             return DeviceReading(kind="device", capacity_mb=float(dev.memory_mb), free_mb=float(capacity),
                                  measured=False, source=f"no reading: {type(exc).__name__}")
 
+    def _unified_host_pool_mb(self, profile) -> float:
+        """The whole pool a plan may fill on a unified machine: the profile's installed RAM less the engine's
+        measured base for this mode (`cpu.runtime_base_mb`), a fact of the profile; without an installed figure,
+        the device's declared capacity. Never the moment's free reading."""
+        installed = float(getattr(getattr(profile, "cpu", None), "ram_mb", 0) or 0)
+        base = 0.0
+        try:
+            from neurobrix.core.prism.host_footprint import engine_of
+            base = float(((getattr(profile.cpu, "runtime_base_mb", None) or {}).get(engine_of(self._mode))
+                          if profile.cpu and getattr(self, "_mode", None) else 0) or 0)
+        except Exception:  # noqa: BLE001 — no measured base: nothing subtracted, nothing invented
+            base = 0.0
+        if installed <= 0:
+            installed = float(max((d.memory_mb for d in profile.devices), default=0))
+        return max(0.0, installed - base)
+
     def _host_budget_mb(self, profile) -> float:
         """Host RAM through the same law: the free reading rounded down onto the ladder; without a
         reading, the installed figure rounded down (never the raw figure, never a fraction of it)."""
@@ -4556,6 +4587,9 @@ class PrismSolver:
             if installed <= 0 or any(d.has_unified_memory for d in devices):
                 return float(door)
             return float(rung_down_mb(installed))
+        if any(getattr(d, "has_unified_memory", False) for d in (getattr(profile, "devices", None) or [])):
+            # a unified machine: the host pool is the declared one (the fact); the moment is the door (solve_smart)
+            return float(rung_down_mb(self._unified_host_pool_mb(profile)))
         figure = min(r.free_mb, installed) if (r.measured and installed > 0) else (r.free_mb if r.measured else installed)
         return float(rung_down_mb(figure))
 
@@ -6980,6 +7014,14 @@ class PrismSolver:
                 one = copy.copy(input_config)
                 one.seq_len = 1
                 prompt[comp.name], w = w, component_work(prof, prof.build_symbol_map(one))
+            # a routed component served off the card reads its experts over the host link at every use
+            topo = (getattr(self, "_expert_topology", None) or {}).get(comp.name)
+            if topo is not None and getattr(topo, "layers", None):
+                per_token = sum(int(l.top_k) * int(l.expert_bytes) for l in topo.layers)
+                w.expert_bytes_per_use = per_token
+                if comp.name in prompt:
+                    plen = int(getattr(input_config, "seq_len", 0) or 0)
+                    prompt[comp.name].expert_bytes_per_use = min(int(topo.routed_bytes), plen * per_token) if plen else int(topo.routed_bytes)
             works[comp.name], runs[comp.name] = w, n
         # The device links, from the profile's interconnect (and its stated PCIe fallback): bytes/s per pair.
         links = {}
@@ -7449,20 +7491,20 @@ class PrismSolver:
         from neurobrix.core.prism import plan_advice as _pa
 
         if not devices:
-            return None
+            return self._decline("op_level_tiling", "no device")
         largest = devices[0]
         effective_mb = largest.capacity_mb - self._margin_mb(largest.capacity_mb)
         if effective_mb <= 0:
-            return None
+            return self._decline("op_level_tiling", f"the card leaves no room after its margin ({largest.capacity_mb:.0f} MB less {self._margin_mb(largest.capacity_mb)} MB)")
 
         total_weights_mb = sum(m.weight_mb for _, m in sorted_comps)
         if total_weights_mb >= effective_mb:
-            return None                      # weights alone do not fit: another rung
+            return self._decline("op_level_tiling", f"the weights alone ({total_weights_mb:.0f} MB) do not fit the room ({effective_mb:.0f} MB): tiling cuts activations, not weights")
         arena_refused = [r for r in (self._arena_over_allocation(container, n, m, largest)
                                      for n, m in sorted_comps) if r]
         if arena_refused:
             self._op_tiling_declined = arena_refused[0]
-            return None                      # every component is held whole: one arena each
+            return self._decline("op_level_tiling", str(arena_refused[0]))
         room_mb = effective_mb - total_weights_mb
         # The room a component's activations have is the card less the weights resident WHILE IT RUNS — the flow's
         # release schedule (`core/flow/residency`, the rule the flow releases by); a flow with no stated schedule, or
@@ -7481,10 +7523,10 @@ class PrismSolver:
 
         blocking = [(n, m) for n, m in sorted_comps if m.activation_mb > room_of(n)]
         if not blocking:
-            return None                      # nothing overflows: a whole-component rung wins
+            return self._decline("op_level_tiling", "no component's activation overflows the room it runs in: a whole-component rung serves it")
         for _n, _m in blocking:
             if not _pa.dominated_by_activations(_m.weight_bytes, _m.activation_bytes):
-                return None                  # its WEIGHTS are the problem
+                return self._decline("op_level_tiling", f"{_n}: its weights ({_m.weight_mb:.0f} MB), not its activations ({_m.activation_mb:.0f} MB), overflow: tiling cannot help")
         # A tile cuts an op's own output and workspace; what earlier ops hold when it begins stays whole. Where that
         # alone is over the room, no band count fits the component (`_compute_memory` records it, tiling-aware):
         # HAT-S at 2048 px on 16 GB was claimed with 143 convolutions in bands and 126 787 MB of activations, the
@@ -7497,7 +7539,7 @@ class PrismSolver:
                     f"{_n}: {live / (1024 * 1024):.0f} MB are live before {at} whatever its bands, over the "
                     f"{room_of(_n):.0f} MB the card leaves beside the weights resident while it runs — an op-level "
                     f"tile cuts an op's own output and workspace, never what earlier ops hold")
-                return None
+                return self._decline("op_level_tiling", str(self._op_tiling_declined))
 
         components = getattr(self, "_neural_components", None)
         input_config = getattr(self, "_input_config", None)
@@ -7506,7 +7548,7 @@ class PrismSolver:
             self._op_tiling_declined = (
                 "the solver did not stash the components or the target dtype, so the "
                 "detector could not be asked")
-            return None
+            return self._decline("op_level_tiling", str(self._op_tiling_declined))
 
         # The hypothetical placement: every component on the accelerator. This is
         # the question the post-hoc call cannot ask, because by then the answer has
@@ -7524,14 +7566,15 @@ class PrismSolver:
             # looks for DOES exist (3 upsample -> single-consumer-conv pairs, and
             # conv::349 is fed by upsample_nearest2d::2) and the rung still declined.
             self._op_tiling_declined = f"the detector raised {type(e).__name__}: {e}"
-            return None
+            return self._decline("op_level_tiling", self._op_tiling_declined)
         if not plans:
             self._op_tiling_declined = untiled_reason(blocking, components)
-            return None
+            return self._decline("op_level_tiling", self._op_tiling_declined)
 
         # Only claim the components the detector can actually tile.
         if any(n not in plans for n, _ in blocking):
-            return None
+            self._op_tiling_declined = "the detector found no tileable op in " + ", ".join(n for n, _ in blocking if n not in plans)
+            return self._decline("op_level_tiling", self._op_tiling_declined)
 
         self._op_tiling_plans = plans
         allocations = {}

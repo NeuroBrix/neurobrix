@@ -9,8 +9,9 @@ machine's reading, so three replay rounds never admitted the cell. The resident 
 macOS — the process's HIGH-WATER mark: the same process read at least 12 288 MB free (it planned that
 rung, base 0), so at the reading it held at most 15 500 - 12 288 = 3 212 MB, not 5 025.
 
-The machine is pinned as the Mac's figures give it: the machine's reading 15 500 MB, the process holding
-3 200 MB now (so it reads 12 300 MB free itself) after a 5 025 MB high-water mark. No card.
+The machine is pinned as the Mac's figures give it: the process holding 3 200 MB now after a 5 025 MB high-water mark;
+since 2026-10-25 the plan is sized by the declared pool, so the cells pin an idle machine (21 000 MB free) and the busy
+reading of 2026-10-04 (15 500 MB) is the door's case. No card.
 """
 import json
 import resource
@@ -29,15 +30,18 @@ HELD_NOW_MB = 3200                # what the planning process holds when it read
 HIGH_WATER_MB = 5025              # its high-water mark: the Mac's plan record's resident
 
 
-def _pin_the_mac(monkeypatch):
+IDLE_FREE_MB = 21000              # an idle Mac: the plan sized by the declared pool runs (the door is open)
+
+
+def _pin_the_mac(monkeypatch, machine_free_mb=MACHINE_FREE_MB):
     no_door(monkeypatch)
-    pin_host(monkeypatch, 24576, MACHINE_FREE_MB - HELD_NOW_MB, "the Mac, 2026-10-04 20:25, read in-process")
+    pin_host(monkeypatch, 24576, machine_free_mb - HELD_NOW_MB, "the Mac, 2026-10-04 20:25, read in-process")
     monkeypatch.setattr(sys, "platform", "darwin")
     monkeypatch.setattr(HF, "process_footprint_now", lambda: HELD_NOW_MB << 20)
     monkeypatch.setattr(resource, "getrusage", lambda who: SimpleNamespace(ru_maxrss=HIGH_WATER_MB << 20))
 
 
-def _plan(monkeypatch):
+def _plan(monkeypatch, machine_free_mb=IDLE_FREE_MB):
     from neurobrix.cli import create_parser
     from neurobrix.cli.commands.run import request_input_config
     root = container_root(MODEL)                          # absent: a skip that names it
@@ -46,7 +50,7 @@ def _plan(monkeypatch):
     args = create_parser().parse_args(["run", "--model", MODEL, "--prompt", "Write a quicksort in Python.",
                                        "--max-tokens", "32", "--triton"])
     ic = request_input_config(args, man, man.get("family"), root)
-    _pin_the_mac(monkeypatch)
+    _pin_the_mac(monkeypatch, machine_free_mb)
     return PrismSolver().solve_smart(c, profile(APPLE_M4_PRO), ic, mode="triton")
 
 
@@ -56,7 +60,13 @@ def test_the_resident_term_is_what_the_process_holds_now(monkeypatch):
 
 
 def test_the_ledger_admits_what_prism_accepted(monkeypatch):
-    """The ledger's need is the whole host side against the machine's reading."""
+    """The plan's whole host side fits the pool the profile DECLARES (the budget law of 2026-10-25); the moment's
+    reading is the door: the same plan under the Mac's busy reading of 2026-10-04 (15 500 MB free) is refused by
+    name instead of being traded for a slower rung."""
+    import pytest
     p = _plan(monkeypatch)
     total = p.host_footprint["total_bytes"] >> 20
-    assert total <= MACHINE_FREE_MB, (p.strategy, p.device_window_mb, total, p.unified_rungs_tried)
+    pool = PrismSolver()._unified_host_pool_mb(profile(APPLE_M4_PRO))
+    assert total <= pool, (p.strategy, p.device_window_mb, total, pool)
+    with pytest.raises(RuntimeError, match="are free now"):
+        _plan(monkeypatch, MACHINE_FREE_MB)
