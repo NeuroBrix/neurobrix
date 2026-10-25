@@ -204,6 +204,22 @@ def _parse_interconnect(data: dict) -> InterconnectTopology:
     )
 
 
+def _vendor_block(d_data: dict, block: str) -> Optional[dict]:
+    """A device's `measured:` / the machine's `host_measured:` block read from the TRACKED vendor file of its
+    architecture (config/vendors/<brand>/<architecture>.yml) when the hardware profile carries none — a machine whose
+    profile is auto-generated (the Mac's `auto-apple-m4-pro-18g`, untracked) keeps its measured facts with their
+    source under git all the same (point B, 2026-10-25). None when the vendor file has no such block or no vendor file
+    describes the architecture: nothing is invented."""
+    from neurobrix.core.config.loader import get_vendor_config, UnsupportedArchitectureError
+    brand, arch = d_data.get("brand", "nvidia"), d_data.get("architecture")
+    if not arch:
+        return None
+    try:
+        return (get_vendor_config(str(brand), str(arch)) or {}).get(block)
+    except UnsupportedArchitectureError:
+        return None
+
+
 def load_profile(hardware_id: str) -> PrismProfile:
     """
     Load hardware profile from YAML file.
@@ -248,7 +264,7 @@ def load_profile(hardware_id: str) -> PrismProfile:
             unified_memory=d_data.get("unified_memory"),
             # None when the profile is silent: no single-allocation limit below the device's memory.
             max_allocation_mb=d_data.get("max_allocation_mb"),
-            measured=d_data.get("measured"),
+            measured=d_data.get("measured") or _vendor_block(d_data, "measured"),
         ))
 
     # Parse Interconnect Topology
@@ -276,7 +292,8 @@ def load_profile(hardware_id: str) -> PrismProfile:
         topology=topology,
         cpu=cpu_config,
         preferred_dtype=data.get("preferred_dtype", None),
-        host_measured=data.get("host_measured"),
+        host_measured=data.get("host_measured") or next((_vendor_block(d, "host_measured") for d in data.get("devices", [])
+                                                          if _vendor_block(d, "host_measured")), None),
         nodes=nodes,
         node_links=node_links,
     )
