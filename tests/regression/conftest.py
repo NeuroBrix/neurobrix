@@ -156,7 +156,7 @@ KNOWN_FAILURES: List[Tuple[str, str | None, str]] = [
     # 15 failed / 54 passed / 39 skipped in 1:31:39). Eight entries were
     # removed because the run PASSED them — Janus-Pro-7B::triton,
     # Kokoro-82M::triton, VibeVoice-1.5B (both modes), hat-l-x4::triton,
-    # hat-s-x4::triton, openaudio-s1-mini::triton, orpheus-3b-0.1-ft
+    # hat-s-x4::triton, s1-mini::triton, orpheus-3b-0.1-ft
     # (both modes), parakeet-tdt-1.1b::triton. Every entry below either
     # FAILED in that run or was not exercised by it (slow families).
     # ------------------------------------------------------------------

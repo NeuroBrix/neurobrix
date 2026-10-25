@@ -248,6 +248,7 @@ def load_profile(hardware_id: str) -> PrismProfile:
             unified_memory=d_data.get("unified_memory"),
             # None when the profile is silent: no single-allocation limit below the device's memory.
             max_allocation_mb=d_data.get("max_allocation_mb"),
+            measured=d_data.get("measured"),
         ))
 
     # Parse Interconnect Topology
@@ -275,6 +276,7 @@ def load_profile(hardware_id: str) -> PrismProfile:
         topology=topology,
         cpu=cpu_config,
         preferred_dtype=data.get("preferred_dtype", None),
+        host_measured=data.get("host_measured"),
         nodes=nodes,
         node_links=node_links,
     )

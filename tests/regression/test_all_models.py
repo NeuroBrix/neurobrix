@@ -192,7 +192,7 @@ def _cli_inputs_for(family: str, flow: str, gen_type: str,
                                         canary-qwen, granite-speech:
                                         audio-conditioned LLM)
       flow in TTS_WITH_REF_FLOWS      → --prompt + --audio reference voice
-                                        (chatterbox, openaudio-s1-mini)
+                                        (chatterbox, s1-mini)
       everything else                 → --prompt (Kokoro/VibeVoice TTS,
                                         diffusion image/video)
     """

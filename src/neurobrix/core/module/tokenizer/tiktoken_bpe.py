@@ -4,7 +4,7 @@ PyTiktoken — pure-Python, stdlib-only replacement for the ``tiktoken`` library
 
 Zero Outsider workstream (R34): the NeuroBrix runtime engine must not import any
 vendor ML library at inference time. ``tiktoken`` is the byte-level BPE
-tokenizer used by openaudio-s1-mini (and other fish-speech / Qwen2-derived
+tokenizer used by s1-mini (and other fish-speech / Qwen2-derived
 models). This module reproduces its ``encode`` / ``decode`` behaviour bit for
 bit using only the Python standard library.
 
@@ -25,9 +25,9 @@ Algorithm (standard tiktoken byte-level BPE):
    pair whose merged bytes have the lowest rank, until no mergeable pair
    remains. The resulting pieces map directly to ids via ``mergeable_ranks``.
 
-Resolved pre-tokenizer pattern for openaudio-s1-mini
+Resolved pre-tokenizer pattern for s1-mini
 ----------------------------------------------------
-openaudio-s1-mini's text tokenizer carries exactly 151643 base ranks — the
+s1-mini's text tokenizer carries exactly 151643 base ranks — the
 Qwen2 BPE fingerprint — with semantic / control special tokens appended from
 rank 151643 upward. The source-true Qwen2 pre-tokenizer pattern is the GPT-4
 (cl100k) pattern with the digit clause ``\p{N}{1,3}`` reduced to a single
@@ -219,7 +219,7 @@ def _translate_pattern(pat: str) -> str:
 
 
 # Source-true Qwen2 pre-tokenizer pattern (cl100k with single \p{N}). See the
-# module docstring for why this is the resolved openaudio-s1-mini pat_str.
+# module docstring for why this is the resolved s1-mini pat_str.
 PAT_STR = (
     r"""(?i:'s|'t|'re|'ve|'m|'ll|'d)"""
     r"""|[^\r\n\p{L}\p{N}]?\p{L}+"""

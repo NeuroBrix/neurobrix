@@ -5,7 +5,7 @@ classes, all of one class — a stage whose length the flow learns only from VAL
 
 * chatterbox 32 misses (16 GB): its vocoder's walk (`census.walk_extent`) was wired, but the
   census tool only walked when asked (`--walk-extents`), and the catalogue census never asked;
-* openaudio-s1-mini 26 misses (16 GB): the DualAR flow decoded its codec at the one frame count
+* s1-mini 26 misses (16 GB): the DualAR flow decoded its codec at the one frame count
   the shadow's draws happened to reach;
 * orpheus-3b-0.1-ft 22 misses (32 GB), every one in its SNAC codec: the shadow's draws fall
   below `audio_token_start`, no frame survives the filter, and the codec NEVER ran — its census
