@@ -760,14 +760,35 @@ STRATEGY_RANK = {
     "single_gpu": 1, "single_gpu_lifecycle": 1,                                   # resident, one device
     "component_placement": 2, "block_scatter": 2, "pipeline_parallel": 2, "weight_sharding": 2,   # resident, spread
     "op_level_tiling": 3,                                                          # resident, the overflowing ops cut
-    "zero3": 4, "component_placement_lazy": 4, "lazy_sequential": 4,              # weights cross the host link again,
-                                                                                   # per use or per phase: the estimate decides
-    "layer_streaming": 5,                                                          # weights re-read per layer per token
+    "zero3": 4,                                                                    # weights streamed through the card per use
+                                                                                   # (the routed component as an expert store)
+    "component_placement_lazy": 5, "lazy_sequential": 5, "layer_streaming": 5,     # weights re-read per phase or per token:
+                                                                                   # streaming (the supervisor, 16:02, D1/D5)
     "cpu_execution": 6, "cpu_streaming": 6,                                        # host compute
 }
 RANK_BASE = {1: 1000.0, 2: 800.0, 3: 600.0, 4: 400.0, 5: 200.0, 6: 10.0}
 #: a rank's floor: no penalty takes a strategy below it, so a rank never crosses the one beneath
 RANK_FLOOR_SPAN = 99.0
+
+
+def candidate_order(name: str, score: float, estimates) -> tuple:
+    """The order the solver takes its candidates in: the physical rank first, the measured time inside the rank
+    (a candidate the profile's facts could not estimate comes after the estimated ones of its rank), today's score
+    last. Lower sorts first."""
+    est = (estimates or {}).get(name)
+    return (STRATEGY_RANK.get(name, 9), est if isinstance(est, float) else float("inf"), -float(score))
+
+
+def untiled_reason(blocking, components) -> str:
+    """Why the op-level tiling rung cannot claim these components: the TilingEngine bands convolutions and rms_norm
+    only, and the op at each component's activation peak is named — never a silent decline."""
+    kinds = []
+    for n, m in blocking:
+        comp = next((c for c in components if getattr(c, "name", None) == n), None)
+        op = ((getattr(comp, "graph", None) or {}).get("ops") or {}).get(getattr(m, "peak_op_uid", ""), {}) if comp else {}
+        kinds.append(f"{n}: peak at {getattr(m, 'peak_op_uid', '') or '?'} ({op.get('op_type', 'unknown op')})")
+    return ("the TilingEngine bands convolutions and rms_norm only and none of the overflowing ops is one — "
+            + "; ".join(kinds) + " — no tiled implementation exists for that op, so the rung cannot claim it")
 
 
 class PrismSolver:
@@ -2363,11 +2384,7 @@ class PrismSolver:
         self._time_estimates = self._estimate_times(ranked, container, input_config, profile, target_dtype_str)
         if self._time_estimates:
             _te = self._time_estimates
-            def _order(c):
-                score, name = c[0], c[1]
-                est = _te.get(name)
-                return (STRATEGY_RANK.get(name, 9), est if isinstance(est, float) else float("inf"), -score)
-            ranked = sorted(candidates, key=_order)
+            ranked = sorted(candidates, key=lambda c: candidate_order(c[1], c[0], _te))
         self._candidates = [(name, float(score)) for score, name, _, _ in ranked]
         self._rejected = []
         self._state_policy = None
@@ -7485,14 +7502,7 @@ class PrismSolver:
             self._op_tiling_declined = f"the detector raised {type(e).__name__}: {e}"
             return None
         if not plans:
-            kinds = []
-            for n, m in blocking:
-                comp = next((c for c in components if c.name == n), None)
-                op = ((getattr(comp, "graph", None) or {}).get("ops") or {}).get(getattr(m, "peak_op_uid", ""), {}) if comp else {}
-                kinds.append(f"{n}: peak at {m.peak_op_uid or '?'} ({op.get('op_type', 'unknown op')})")
-            self._op_tiling_declined = (
-                "the TilingEngine bands convolutions and rms_norm only and none of the overflowing ops is one — "
-                + "; ".join(kinds) + " — no tiled implementation exists for that op, so the rung cannot claim it")
+            self._op_tiling_declined = untiled_reason(blocking, components)
             return None
 
         # Only claim the components the detector can actually tile.

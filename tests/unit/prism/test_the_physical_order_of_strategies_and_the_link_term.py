@@ -33,10 +33,48 @@ def test_the_ranks_never_cross_whatever_the_penalties():
     order = ["single_gpu", "component_placement", "op_level_tiling", "zero3", "layer_streaming", "cpu_execution"]
     scores = [_score(n) for n in order]
     assert scores == sorted(scores, reverse=True), dict(zip(order, scores))
-    # inside rank 4 the per-use and per-phase reloads are ordered by the estimate at solve time; here, by score
-    assert _score("lazy_sequential") > _score("layer_streaming")
-    assert _score("op_level_tiling") > _score("lazy_sequential") > _score("zero3") >= S.RANK_BASE[4] - S.RANK_FLOOR_SPAN
-    assert _score("zero3") > _score("layer_streaming") > _score("cpu_execution")
+    # D1 / D5 (the supervisor, 16:02, from prism_choices_2026_10_25.tsv): on one card Qwen3-30B-A3B took
+    # lazy_sequential (260) over zero3 with its expert store (11); re-reading the weights per phase IS streaming
+    assert _score("zero3") > _score("lazy_sequential") >= S.RANK_BASE[5] - S.RANK_FLOOR_SPAN
+    assert _score("lazy_sequential") > _score("cpu_execution") and _score("layer_streaming") > _score("cpu_execution")
+    # D3: Sana_1600M_4Kpx_BF16 (weights 11.4 GB, activation 23 GB) took layer_streaming / lazy_sequential over tiling
+    assert _score("op_level_tiling") > _score("lazy_sequential") and _score("op_level_tiling") > _score("layer_streaming")
+    assert _score("op_level_tiling") > _score("zero3")
+    # a zero3 penalty never takes it under the lazy rank
+    assert _score("zero3") >= S.RANK_BASE[4] - S.RANK_FLOOR_SPAN > S.RANK_BASE[5] + S.RANK_FLOOR_SPAN
+
+
+def test_the_estimate_decides_inside_a_rank_never_across():
+    """D4: the profiles carry measured facts; inside the resident-spread rank the faster plan wins, and a slower
+    resident plan still beats a faster streaming one."""
+    est = {"block_scatter": 15.3, "pipeline_parallel": 9.0, "lazy_sequential": 6.3, "zero3": 386.0}
+    order = sorted([("block_scatter", 796.0), ("pipeline_parallel", 700.0), ("lazy_sequential", 301.0), ("zero3", 301.0)],
+                   key=lambda c: S.candidate_order(c[0], c[1], est))
+    assert [n for n, _ in order] == ["pipeline_parallel", "block_scatter", "zero3", "lazy_sequential"]
+    # not estimated: after the estimated ones of its rank, never out of its rank
+    order2 = sorted([("block_scatter", 796.0), ("pipeline_parallel", 700.0)],
+                    key=lambda c: S.candidate_order(c[0], c[1], {"block_scatter": "not estimated: x", "pipeline_parallel": 9.0}))
+    assert [n for n, _ in order2] == ["pipeline_parallel", "block_scatter"]
+
+
+def test_a_declining_strategy_records_why_once():
+    """D2: block_scatter, pipeline_parallel and component_placement declined mochi, Wan2.2-I2V-A14B and Qwen3-Omni on
+    four cards with an empty refused(why) in the table."""
+    s = S.PrismSolver.__new__(S.PrismSolver)
+    assert s._decline("block_scatter", "vae whole (21214 MB with its activation) fits no card beside the scattered blocks") is None
+    assert s._decline("block_scatter", "a later reason") is None
+    assert s._declined == {"block_scatter": "vae whole (21214 MB with its activation) fits no card beside the scattered blocks"}
+
+
+def test_the_tiling_rung_names_the_op_it_cannot_band():
+    """D3: Sana 4K's transformer overflows at an op the TilingEngine has no band for; the rung says which."""
+    class _C:
+        name = "transformer"
+        graph = {"ops": {"aten.bmm::7": {"op_type": "aten::bmm"}}}
+    class _M:
+        peak_op_uid = "aten.bmm::7"
+    why = S.untiled_reason([("transformer", _M())], [_C()])
+    assert "transformer: peak at aten.bmm::7 (aten::bmm)" in why and "no tiled implementation" in why
 
 
 def test_a_strategy_without_a_rank_is_refused_not_scored():
