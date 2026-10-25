@@ -65,7 +65,11 @@ def matmul_out_dtype(dt: NBXDtype, M: int, force_fp32: bool, native_bf16: bool,
         return F32
     if dt == F16 and not native_bf16:
         return F32
-    if half and (M <= 4 or force_fp32):
+    # ONE precision contract (the owner, 2026-10-25 15:26): on hardware that computes bf16 natively a half input
+    # stores half — decode rows (M <= 4) and the batched attention GEMM (force_fp32) included; fp32 is stored only
+    # for an island or where the hardware has no native half path (above). The compiled branch stores bf16 there
+    # (`_wrap_lower_precision`); the Triton branch stored fp32 and spread it (2 017 policy sites on Sana, the Mac).
+    if half and (M <= 4 or force_fp32) and not native_bf16:
         return F32
     return dt
 

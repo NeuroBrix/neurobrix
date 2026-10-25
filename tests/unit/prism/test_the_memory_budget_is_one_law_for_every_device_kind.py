@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.core.prism.memory_budget import (DeviceReading, budget_mb, describe, host_budget_mb,
+from neurobrix.core.prism.memory_budget import (DeviceReading, budget_mb, describe, execution_door, host_budget_mb,
                                                 is_shared, memory_ladder_mb, rung_down_mb, tile_rung_mb)
 
 
@@ -51,21 +51,30 @@ def test_an_idle_dedicated_card_is_used_whole_less_its_own_context():
         assert tile_rung_mb(r) == cap, describe(r)         # the card's nominal rung sizes the tile
 
 
-def test_a_dedicated_card_partly_held_by_another_process_is_the_remainder_rounded_down():
+def test_a_dedicated_card_partly_held_by_another_process_is_still_budgeted_by_its_fact():
+    """The owner, 2026-10-25 15:16: the budget is the pool's declared fact; what another process holds is the DOOR
+    at execution (`execution_door`), never a smaller budget — a plan is the same from one run to the next."""
     r = DeviceReading(kind="device", capacity_mb=32768, free_mb=31700 - 1396, held_by_others_mb=1396, own_context_mb=400)
-    assert is_shared(r)
-    assert budget_mb(r) == 24 * 1024, describe(r)
-    assert tile_rung_mb(r) == 24 * 1024
+    assert is_shared(r)                                   # the wording still says what holds it
+    assert budget_mb(r) == 32768 - 400, describe(r)
+    assert tile_rung_mb(r) == 32768
+    assert execution_door(r, 32768 - 400) and "1396 MB held by other processes" in execution_door(r, 32768 - 400)
+    assert execution_door(r, 20000) is None               # fits what is free now: the door is open
 
 
-def test_a_display_makes_a_card_shared_whatever_it_holds():
+def test_a_display_is_named_at_the_door_not_subtracted_from_the_budget():
     r = DeviceReading(kind="device", capacity_mb=16384, free_mb=15700, display_active=True)
-    assert is_shared(r) and budget_mb(r) == 12 * 1024, describe(r)
+    assert is_shared(r) and budget_mb(r) == 16384, describe(r)
+    assert "a display on it" in execution_door(r, 16000)
 
 
-def test_unified_memory_is_the_hosts_free_reading_rounded_down():
-    r = DeviceReading(kind="device", capacity_mb=18186, free_mb=10099, unified=True)
-    assert is_shared(r) and budget_mb(r) == 8 * 1024 and tile_rung_mb(r) == 8 * 1024, describe(r)
+def test_unified_memory_is_budgeted_by_the_pools_declared_figure_not_the_moment():
+    """Janus-Pro-7B on the Mac, 2026-10-25: 0.3 GB less free at a rung edge moved the plan to layer_streaming."""
+    for free in (17236, 16902, 10099):
+        r = DeviceReading(kind="device", capacity_mb=18186, free_mb=free, unified=True)
+        assert is_shared(r) and budget_mb(r) == 18186 and tile_rung_mb(r) == 16 * 1024, describe(r)
+    assert execution_door(DeviceReading(kind="device", capacity_mb=18186, free_mb=10099, unified=True), 15689)
+    assert execution_door(DeviceReading(kind="device", capacity_mb=18186, free_mb=16902, unified=True), 15689) is None
 
 
 def test_a_reading_that_could_not_be_taken_is_the_shared_side():
@@ -85,7 +94,7 @@ def test_the_solver_budgets_a_hand_built_device_state_by_the_same_law():
     idle = DeviceState(device_string="cuda:0", capacity_mb=16384.0)
     assert s._effective_capacity_mb(idle) == 16384.0            # dedicated: whole (a state carries no context figure)
     held = DeviceState(device_string="cuda:1", capacity_mb=32768.0, external_used_mb=1396.0)
-    assert s._effective_capacity_mb(held) == 24 * 1024          # shared: free 31 372 rounds down
+    assert s._effective_capacity_mb(held) == 32768.0             # held by another process: the door, not the budget
 
 
 def test_the_door_names_the_rung_for_a_census(monkeypatch):

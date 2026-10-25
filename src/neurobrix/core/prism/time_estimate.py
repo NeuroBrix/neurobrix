@@ -82,9 +82,65 @@ def _device_of(alloc: Any) -> str:
     return dev.split(",")[0].strip()
 
 
+def _devices_of(alloc: Any) -> list:
+    """Every device string an allocation spans, in order (a `fgp:`/`tp:` list, a shard map's devices, or one device)."""
+    out = []
+    parts = alloc if isinstance(alloc, tuple) else (alloc,)
+    for p in parts:
+        if isinstance(p, str):
+            d = p
+            for prefix in ("zero3:", "fgp:", "tp:"):
+                if d.startswith(prefix):
+                    d = d[len(prefix):]
+                    break
+            for x in d.split(","):
+                x = x.strip()
+                if x and x not in out:
+                    out.append(x)
+        elif isinstance(p, dict):
+            for x in p.values():
+                if isinstance(x, str) and x not in out:
+                    out.append(x)
+    return out
+
+
+def link_seconds(strategy: str, allocations: Mapping[str, Any], works: Mapping[str, Work], uses: Mapping[str, int],
+                 links: Mapping[tuple, float]) -> float:
+    """The device-to-device term (docs/design/prism-fastest-plan-that-fits.md §2c): for every boundary a plan crosses,
+    the bytes crossing per use divided by the link's measured bandwidth (`links`: {(a, b): bytes/s}, both orders, from
+    the profile's `interconnect` or its stated `pcie_fallback` — never a literal). Inside a scattered component
+    (`fgp:` / `tp:` over n devices) the residual stream crosses n-1 boundaries per use at the component's output width;
+    between two components placed on different devices the producer's output crosses once per use of the consumer.
+    `weight_sharding` moves partial sums per sliced GEMM per step: not derived yet, refused by name."""
+    if strategy == "weight_sharding":
+        raise MissingFact("weight_sharding's partial sums per sliced GEMM are not derived yet: no link term")
+    total = 0.0
+    prev_dev, prev_comp = None, None
+    for comp, alloc in allocations.items():
+        devs = [d for d in _devices_of(alloc) if not d.startswith("cpu")]
+        w, n = works.get(comp), int(uses.get(comp, 1))
+        if w is None or not devs:
+            prev_dev, prev_comp = (devs[-1] if devs else None), comp
+            continue
+        for a, b in zip(devs, devs[1:]):                      # the boundaries inside a scattered component
+            total += n * w.output_bytes / _link(links, a, b)
+        if prev_dev is not None and prev_dev != devs[0] and prev_comp in works:
+            total += n * works[prev_comp].output_bytes / _link(links, prev_dev, devs[0])
+        prev_dev, prev_comp = devs[-1], comp
+    return total
+
+
+def _link(links: Mapping[tuple, float], a: str, b: str) -> float:
+    bps = links.get((a, b)) or links.get((b, a))
+    if not bps:
+        raise MissingFact(f"no measured bandwidth between {a} and {b} on the hardware profile (interconnect / pcie_fallback)")
+    return float(bps)
+
+
 def plan_seconds(strategy: str, allocations: Mapping[str, Any], works: Mapping[str, Work], uses: Mapping[str, int],
                  devices: Mapping[str, DeviceFacts], host: Optional[HostFacts], dtype: str,
-                 phases: Optional[Mapping[str, int]] = None, prompt: Optional[Mapping[str, Work]] = None) -> float:
+                 phases: Optional[Mapping[str, int]] = None, prompt: Optional[Mapping[str, Work]] = None,
+                 links: Optional[Mapping[tuple, float]] = None) -> float:
     """The plan's estimated seconds for the request. `devices`: {device string ("cuda:0"): its facts}; `uses`: {component:
     runs per request}; `phases`: {component: phases that load it} for the strategies that load per phase (1 when
     absent); `prompt`: {component: the work of its one prompt pass} for a generating component whose `works` entry is
@@ -114,6 +170,8 @@ def plan_seconds(strategy: str, allocations: Mapping[str, Any], works: Mapping[s
         loads = passes if strategy in STREAM_EVERY_USE else (int((phases or {}).get(comp, 1))
                                                              if strategy in LOAD_PER_PHASE else 1)
         total += loads * w.weight_bytes / f.h2d_bps              # the weights cross once per load, never per token
+    if links is not None:
+        total += link_seconds(strategy, allocations, works, uses, links)
     return total
 
 

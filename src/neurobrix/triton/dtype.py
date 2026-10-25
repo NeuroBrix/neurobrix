@@ -836,6 +836,19 @@ class TritonDtypeEngine:
             return self._wrap_creation_fill(func)
         if op_name == "where":
             return self._wrap_where_saturate(func)
+        if (op_name in _SELF_MANAGED_OPS and op_name in AMP_FP16_OPS
+                and self.compute_dtype == NBXDtype.bfloat16 and self.has_native_bf16):
+            # ONE precision contract (the owner, 2026-10-25 15:26): self-management covers the LAUNCH (the in-kernel
+            # promotion `launch_keys.mm_dtypes` and its kin decide), not the operands' dtype nor the store. On hardware
+            # that computes bf16 natively the compiled branch casts a GEMM's or a conv's float operands to bf16
+            # (`_wrap_lower_precision`); the Triton wrapper took them as they came, so an island's fp32 output stayed
+            # fp32 through every self-managed op after it (2 017 policy sites on Sana's transformer, the Mac, 06:40).
+            # An island — the trace's or the calibration's (returned above) — keeps fp32. Under fp16 compute without
+            # native bf16 nothing changes: the in-kernel widening IS the compiled branch's fp32-internal rule there.
+            from neurobrix.core.dtype.traced_island import is_traced_fp32_island
+            if is_traced_fp32_island(op_record, self.graph_dtype):
+                return self._wrap_fp32(func)
+            return self._wrap_lower_precision(func)
         if op_name in _SELF_MANAGED_OPS:
             return func
 

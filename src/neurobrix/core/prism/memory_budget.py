@@ -91,40 +91,68 @@ def _door_mb() -> Optional[int]:
     return int(v) if v else None
 
 
+def sized_by_the_moment(r: DeviceReading) -> bool:
+    """The pools whose budget is still the FREE reading rounded onto the ladder: host RAM (no profile states what a
+    plan may hold of it) and a device whose facts could not be read at all. Every device pool with a declared capacity
+    — dedicated, unified, a display on it, another process on it — is budgeted by that fact (the owner, 2026-10-25
+    15:16: a plan must be reproducible from one run to the next; the moment's free reading is the DOOR at execution,
+    `execution_door`, never the budget). Until then a unified pool's budget was its free memory rounded down, and
+    Janus-Pro-7B on the Mac moved from a resident plan to layer_streaming (six times slower) for 0.3 GB less free
+    at a rung edge (2026-10-25 14:56)."""
+    return r.kind == "host" or not r.measured
+
+
 def budget_mb(r: DeviceReading) -> int:
-    """What a plan may be budgeted against on this pool."""
+    """What a plan may be budgeted against on this pool: the pool's declared capacity less the runtime's own context
+    (a fact of the profile and of this process), or — host RAM and an unreadable device — the free reading rounded
+    down onto the ladder."""
     door = _door_mb()
     if door is not None:
         return door
-    if is_shared(r):
+    if sized_by_the_moment(r):
         return rung_down_mb(r.free_mb)
     return int(max(0.0, r.capacity_mb - r.own_context_mb))
 
 
 def tile_rung_mb(r: DeviceReading) -> int:
-    """The rung a tiled component sizes its tile from: a dedicated card's own nominal rung
-    (the card whole), a shared pool's free rung."""
+    """The rung a tiled component sizes its tile from: a device pool's own nominal rung (its declared capacity),
+    a host's or an unreadable device's free rung."""
     door = _door_mb()
     if door is not None:
         return door
-    if is_shared(r):
+    if sized_by_the_moment(r):
         return rung_down_mb(r.free_mb)
     return rung_down_mb(r.capacity_mb)
+
+
+def execution_door(r: DeviceReading, planned_mb: float) -> Optional[str]:
+    """The door the moment's reading keeps: a plan sized by the pool's facts that does not fit what is FREE now is
+    refused by name — what holds the memory is said — never traded for a slower plan. None when the reading is no
+    live one (a census shadow, an unreadable device) or the plan fits."""
+    if _door_mb() is not None or r.kind != "device" or not r.measured or planned_mb <= r.free_mb:
+        return None
+    holder = (f"{r.held_by_others_mb:.0f} MB held by other processes" if r.held_by_others_mb > 0
+              else "a display on it" if r.display_active
+              else "the pool is shared with the host" if r.unified
+              else "the device's free memory is below its declared capacity")
+    return (f"ZERO FALLBACK: the plan places {planned_mb:.0f} MB on this pool and {r.free_mb:.0f} MB are free now "
+            f"({holder}); the plan is sized by the pool's declared {r.capacity_mb:.0f} MB and is not traded for a "
+            f"slower one — free the memory or plan under a smaller profile" + (f" [{r.source}]" if r.source else ""))
 
 
 def describe(r: DeviceReading) -> str:
     door = _door_mb()
     if door is not None:
         return f"budget {door} MB by the NBX_PRISM_BUDGET_MB door"
-    if is_shared(r):
-        why = ("host RAM" if r.kind == "host" else "unified memory" if r.unified
-               else "a display on it" if r.display_active
-               else f"{r.held_by_others_mb:.0f} MB held by other processes" if r.held_by_others_mb > 0
-               else "sharing could not be read")
-        return (f"shared ({why}): free {r.free_mb:.0f} MB rounds down to the {rung_down_mb(r.free_mb)} MB rung"
+    if sized_by_the_moment(r):
+        why = "host RAM" if r.kind == "host" else "sharing could not be read"
+        return (f"sized by the moment ({why}): free {r.free_mb:.0f} MB rounds down to the {rung_down_mb(r.free_mb)} MB rung"
                 + (f" [{r.source}]" if r.source else ""))
-    return (f"dedicated: the card whole, {r.capacity_mb:.0f} MB less its own context {r.own_context_mb:.0f} MB "
-            f"= {budget_mb(r)} MB; tile rung {tile_rung_mb(r)} MB" + (f" [{r.source}]" if r.source else ""))
+    kind = ("unified pool" if r.unified else "a display on it" if r.display_active
+            else f"{r.held_by_others_mb:.0f} MB held by other processes" if r.held_by_others_mb > 0 else "dedicated")
+    return (f"{kind}: the pool's declared {r.capacity_mb:.0f} MB less its own context {r.own_context_mb:.0f} MB "
+            f"= {budget_mb(r)} MB; tile rung {tile_rung_mb(r)} MB; free now {r.free_mb:.0f} MB (the door)"
+            + (f" [{r.source}]" if r.source else ""))
 
 
 # ----------------------------------------------------------------------------- readings

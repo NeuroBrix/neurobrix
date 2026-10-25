@@ -583,18 +583,17 @@ class _Rules:
         meta = self.tensors.get(tid) or {}
         return bool(meta.get("constant") and meta.get("constant_data") and not meta.get("is_computable"))
 
-    def mm_store(self, a: str, b: str, m: Optional[int]) -> str:
+    def mm_store(self, a: str, b: str, m: Optional[int], force: bool = False) -> str:
         """The Triton mm/addmm store dtype — `mm` operand alignment (wrappers.py:2178-2224)
         then `_matmul_out_dtype` (:1798-1861): fp32 if either operand is fp32; fp16 on
         hardware without native bf16 -> fp32; a half with M <= 4 -> fp32; else the half."""
         if "float32" in (a, b) or "float64" in (a, b):
             return "float32"
         a_eff = "bfloat16" if "bfloat16" in (a, b) else a      # :2217-2224 widest of the halves
-        if a_eff == "float16" and not self.native_bf16:
-            return "float32"
-        if m is not None and m <= 4:
-            return "float32"
-        return a_eff
+        # the store is the launcher's own rule (`launch_keys.matmul_out_dtype`), called — never a second copy
+        from neurobrix.kernels import launch_keys as _lk
+        from neurobrix.kernels.nbx_tensor import NBXDtype as _D
+        return _lk.matmul_out_dtype(_D[a_eff], int(m) if m is not None else 1, bool(force), bool(self.native_bf16)).name
 
     def rows(self, tid: str) -> Optional[int]:
         sh = self.shape_of(tid)
@@ -750,6 +749,11 @@ class _TritonRules(_Rules):
             return self._copies(fl, "float32")
         if name in _tdt.AMP_SCALAR_FILL_OPS or name in _tdt.AMP_CREATION_FILL_OPS or name == "where":
             return []
+        if (name in _tdt._SELF_MANAGED_OPS and name in _tdt.AMP_FP16_OPS and c == "bfloat16"
+                and self.native_bf16):
+            if is_traced_fp32_island(op, self.graph_dtype):
+                return self._copies(fl, "float32")
+            return self._copies(fl, c)                              # the one precision contract: operands at C
         if name in _tdt._SELF_MANAGED_OPS:
             return self._aligned(name, fl, ins)
         if not self.half:
@@ -794,6 +798,13 @@ class _TritonRules(_Rules):
         if name == "where":
             # `where_wrapper` allocates `empty_like(x)` (wrappers.py:1491-1504).
             return self.first(fl) or self.default(op, fl)
+        if (name in _tdt._SELF_MANAGED_OPS and name in _tdt.AMP_FP16_OPS and c == "bfloat16"
+                and self.native_bf16):
+            # the one precision contract: a self-managed GEMM / conv under native bf16 takes its operands at C
+            # (`_wrap_lower_precision`) and stores by the launcher's rule — an island keeps fp32 (handled above)
+            if is_traced_fp32_island(op, self.graph_dtype):
+                return "float32"
+            return self._lower_precision(uid, op, name, [(t, c, z) for t, _d, z in fl], ins)
         if name in _tdt._SELF_MANAGED_OPS:                                  # :551-552
             return self._self_managed(uid, op, name, fl, ins)
         if not self.half:                                                   # :555-556
@@ -830,7 +841,8 @@ class _TritonRules(_Rules):
         if name in ("upsample_nearest1d", "upsample_nearest2d", "upsample_nearest3d"):
             return self.first(fl) or self.default(op, fl)      # wrappers.py:3375-3425
         if name == "bmm":
-            return "float32"                                   # wrappers.py:2389 force_fp32
+            a, b = (fl + [(None, self.c, False)] * 2)[:2]
+            return self.mm_store(a[1], b[1], None, force=True)   # wrappers.py:2389 force_fp32, through the one rule
         if name in ("mm", "mm_epilogue"):
             a, b = (fl + [(None, self.c, False)] * 2)[:2]
             return self.mm_store(a[1], b[1], self.rows(ins[0]))

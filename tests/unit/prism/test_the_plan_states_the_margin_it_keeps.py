@@ -62,22 +62,20 @@ def test_the_flat_reserve_still_wins_on_a_small_card():
     assert _solver()._margin_mb(SMALL) == 3072
 
 
-def test_the_margin_covers_the_measured_spread_on_a_large_card():
-    """12% of 32501 is 3900 MB, over the reserve: the margin follows the card."""
-    m = _solver()._margin_mb(LARGE)
-    assert m == int(LARGE * 0.12) == 3900, m
-    assert m > 3072, "an absolute reserve is short of a proportional variance here"
+def test_the_margin_is_the_reserve_on_a_large_card_too():
+    """Since 2026-10-25 the budget is the pool's fact, not a volatile reading: no spread to hedge."""
+    assert _solver()._margin_mb(LARGE) == 3072
+
+
+def test_a_vendor_measured_plan_reserve_wins_over_the_default():
+    s = _solver(); s._vendor_plan_reserve_mb = 1024
+    assert s._margin_mb(LARGE) == 1024
 
 
 def test_the_margin_is_never_below_the_flat_reserve():
     """A tiny card must not end up with a tinier margin than the reserve."""
     for cap in (2048, 8192, SMALL, LARGE, 81559):
         assert _solver()._margin_mb(cap) >= 3072, cap
-
-
-def test_the_volatility_is_the_measured_one_and_survives_a_bare_solver():
-    assert PrismSolver.reading_volatility == 0.12
-    assert _solver().reading_volatility == 0.12
 
 
 def test_the_plan_says_what_it_held_back():

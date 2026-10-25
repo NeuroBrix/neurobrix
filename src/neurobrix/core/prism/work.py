@@ -35,13 +35,16 @@ class Work:
     flops: int = 0
     weight_bytes: int = 0
     activation_bytes: int = 0
+    #: the bytes of the graph's output tensors at the request: what crosses a device boundary when the component's
+    #: result (or, inside a transformer, its residual stream of the same width) is consumed on another device
+    output_bytes: int = 0
 
     def __add__(self, other: "Work") -> "Work":
         return Work(self.flops + other.flops, self.weight_bytes + other.weight_bytes,
-                    self.activation_bytes + other.activation_bytes)
+                    self.activation_bytes + other.activation_bytes, self.output_bytes + other.output_bytes)
 
     def times(self, n: int) -> "Work":
-        return Work(self.flops * n, self.weight_bytes * n, self.activation_bytes * n)
+        return Work(self.flops * n, self.weight_bytes * n, self.activation_bytes * n, self.output_bytes * n)
 
 
 def _numel(shape: List[int]) -> int:
@@ -126,4 +129,6 @@ def component_work(profiler, symbol_map: Dict[str, int], widths: Optional[Mappin
         if not view:
             for t in outs:
                 w.activation_bytes += size(t)
+    graph_outs = list((getattr(profiler, "dag", None) or {}).get("output_tensor_ids") or [])
+    w.output_bytes = sum(size(t) for t in graph_outs if t in tensors)
     return w

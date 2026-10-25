@@ -315,6 +315,9 @@ class DeviceState:
     #: taken into account. Kept beside `capacity_mb` rather than replacing it,
     #: because a refusal that names only one of the two teaches nothing.
     recommended_mb: float = 0.0
+    #: The moment's free reading of this pool when a live one was taken (None under the census shadow or
+    #: when the device could not be read): the EXECUTION DOOR (`memory_budget.execution_door`), never the budget.
+    live_free_mb: Optional[float] = None
     #: The law's answer for this pool (core/prism/memory_budget.py), computed once at
     #: `_prepare_devices` from the reading: what a plan is budgeted against, and the rung a
     #: tiled component sizes its tile from. 0 = no reading was taken (a cell's hand-built
@@ -747,6 +750,26 @@ def _graph_constant_bytes(graph: Optional[Dict], stores_fp64: bool) -> int:
     return total
 
 
+#: THE PHYSICAL ORDER of the strategies (the owner, 2026-10-25 15:16, docs/design/prism-fastest-plan-that-fits.md §2b):
+#: what a strategy does with the weights decides its rank; inside a rank the measured time decides (the estimate,
+#: `time_estimate.py`), else today's penalties. A plan that re-reads its weights per phase or per token is taken
+#: only when no resident and no tiled plan fits. Measured before this order: Sana_1600M_4Kpx_BF16 streamed on every
+#: profile while only its activations overflowed; Qwen3-Omni-30B, Wan2.2-I2V-A14B and mochi took lazy_sequential on
+#: four NVLink cards whose memory held them whole (registres/journaux/prism_choices_2026_10_25.tsv).
+STRATEGY_RANK = {
+    "single_gpu": 1, "single_gpu_lifecycle": 1,                                   # resident, one device
+    "component_placement": 2, "block_scatter": 2, "pipeline_parallel": 2, "weight_sharding": 2,   # resident, spread
+    "op_level_tiling": 3,                                                          # resident, the overflowing ops cut
+    "zero3": 4, "component_placement_lazy": 4, "lazy_sequential": 4,              # weights cross the host link again,
+                                                                                   # per use or per phase: the estimate decides
+    "layer_streaming": 5,                                                          # weights re-read per layer per token
+    "cpu_execution": 6, "cpu_streaming": 6,                                        # host compute
+}
+RANK_BASE = {1: 1000.0, 2: 800.0, 3: 600.0, 4: 400.0, 5: 200.0, 6: 10.0}
+#: a rank's floor: no penalty takes a strategy below it, so a rank never crosses the one beneath
+RANK_FLOOR_SPAN = 99.0
+
+
 class PrismSolver:
     """
     Enterprise Grade Hardware Allocation Solver.
@@ -807,14 +830,15 @@ class PrismSolver:
     _rejected: tuple = ()
 
     def _margin_mb(self, capacity_mb: float) -> int:
-        """The band the plan keeps back, and says it keeps back.
-
-        A budget whose variance exceeds its own shortfall cannot decide
-        anything: the Mac's `real-esrgan-x8` refusal missed by 27 MB while the
-        reading beneath it moved by thousands. So the margin is the larger of
-        the flat reserve and the measured spread, and `explain_plan` prints it.
-        """
-        return max(int(self.oom_reserve_mb), int(capacity_mb * self.reading_volatility))
+        """The band the plan keeps back, and says it keeps back: the allocator's reserve
+        (`PRISM_DEFAULTS["oom_reserve_mb"]`, or the vendor file's measured `memory.plan_reserve_mb`
+        when it states one). The 12 % "reading volatility" term hedged a budget taken from the
+        moment's free reading; since 2026-10-25 the budget is the pool's declared fact
+        (`memory_budget.budget_mb`) and the moment's reading is the execution door, so there is no
+        volatility left to hedge - Janus-Pro-7B on the Mac lost its resident plan to that hedge
+        (692 MB of KV refused behind 3 072 MB held back)."""
+        vendor = getattr(self, "_vendor_plan_reserve_mb", None)
+        return int(vendor) if vendor else int(self.oom_reserve_mb)
 
     @staticmethod
     def _alloc_devices(alloc) -> set:
@@ -2333,8 +2357,17 @@ class PrismSolver:
                     "no longer outrank it", ", ".join(sorted(_offloaded)),
                     " and ".join(_demoted))
 
-        # Sort candidates by score descending
+        # Sort candidates by rank (the physical order), then by the measured time inside the rank (the estimate,
+        # when the profile carries measured facts), then by score — docs/design/prism-fastest-plan-that-fits.md §2b.
         ranked = sorted(candidates, key=lambda x: -x[0])
+        self._time_estimates = self._estimate_times(ranked, container, input_config, profile, target_dtype_str)
+        if self._time_estimates:
+            _te = self._time_estimates
+            def _order(c):
+                score, name = c[0], c[1]
+                est = _te.get(name)
+                return (STRATEGY_RANK.get(name, 9), est if isinstance(est, float) else float("inf"), -score)
+            ranked = sorted(candidates, key=_order)
         self._candidates = [(name, float(score)) for score, name, _, _ in ranked]
         self._rejected = []
         self._state_policy = None
@@ -2552,7 +2585,8 @@ class PrismSolver:
                 strat_name, score, ranked, profile)
             # Point B (docs/design/prism-time-score.md), step 3: every ranked candidate's estimated time beside
             # today's score — said, never deciding yet; nothing when the profile carries no measured facts
-            self._time_estimates = self._estimate_times(ranked, container, input_config, profile, target_dtype_str)
+            if not getattr(self, "_time_estimates", None):
+                self._time_estimates = self._estimate_times(ranked, container, input_config, profile, target_dtype_str)
             if self._time_estimates:
                 _t = self._time_estimates
                 _best = min((v, k) for k, v in _t.items() if isinstance(v, float)) if any(
@@ -2709,17 +2743,26 @@ class PrismSolver:
             if _caps:
                 _cap = max(_caps)
                 plan.margin_mb = self._margin_mb(_cap)
-                _vol = int(_cap * self.reading_volatility)
-                plan.margin_reason = (
-                    f"the flat reserve {int(self.oom_reserve_mb)} MB"
-                    if plan.margin_mb >= _vol else "")
-                plan.margin_reason = (
-                    f"{int(self.oom_reserve_mb)} MB flat reserve"
-                    if self.oom_reserve_mb >= _vol
-                    else f"{self.reading_volatility:.0%} of {int(_cap)} MB, the measured"
-                         f" spread of this driver's own free-memory reading")
+                plan.margin_reason = (f"{plan.margin_mb} MB, the allocator's reserve"
+                                      + (" (the vendor file's measured plan_reserve_mb)"
+                                         if getattr(self, "_vendor_plan_reserve_mb", None) else
+                                         " (PRISM_DEFAULTS oom_reserve_mb)"))
         except Exception:
             pass
+        # THE EXECUTION DOOR (the owner, 2026-10-25 15:16): the plan was sized by each pool's declared fact; what is
+        # free NOW decides only whether it runs. A pool holding less than the plan places on it refuses by name — what
+        # holds the memory is said — and the plan is never traded for a slower one.
+        from neurobrix.core.prism.memory_budget import execution_door as _door, DeviceReading as _DR
+        for _d in (chosen_devices or []):
+            if getattr(_d, "live_free_mb", None) is None or _d.used_mb <= 0:
+                continue
+            _r = _DR(kind="device", capacity_mb=float(_d.capacity_mb), free_mb=float(_d.live_free_mb),
+                     unified=bool(getattr(getattr(_d, "spec", None), "has_unified_memory", False)),
+                     held_by_others_mb=float(getattr(_d, "external_used_mb", 0.0) or 0.0), measured=True,
+                     source=str(getattr(_d, "budget_note", "") or ""))
+            _why = _door(_r, float(_d.used_mb))
+            if _why:
+                raise RuntimeError(f"{_d.device_string}: {_why}")
         _from_rung = getattr(self, "_op_tiling_from_rung", None)
         if _from_rung:
             plan.runtime_op_tiling = {**(plan.runtime_op_tiling or {}), **_from_rung}
@@ -4523,7 +4566,10 @@ class PrismSolver:
                 from neurobrix.core.prism.host_footprint import engine_of
                 _base = ((getattr(profile.cpu, "runtime_base_mb", None) or {}).get(engine_of(self._mode))
                          if profile.cpu and getattr(self, "_mode", None) else None) or 0
-                capacity = min(recommended, max(0.0, float(host.available_mb) - float(_base)))
+                # The pool's FACTS size the plan (the owner, 2026-10-25 15:16): what the device recommends less the
+                # engine's measured base on this host; the moment's free reading is the execution door
+                # (`memory_budget.execution_door`), never the budget - a plan is reproducible from one run to the next.
+                capacity = max(0.0, recommended - float(_base))
                 # What the compiled engine's backend holds OUTSIDE torch's allocations on this device (MPS: compiled
                 # graphs, kernel temporaries; "other allocations" in its OOM line), a vendor fact
                 # (memory.compiled_private_reserve_mb): never in a component's price, so it is taken off the room before
@@ -4587,6 +4633,7 @@ class PrismSolver:
                 spec=dev,
                 recommended_mb=recommended,
                 host_memory=host,
+                live_free_mb=(float(reading.free_mb) if (reading.measured and not _census_shadow_active()) else None),
             ))
         devices.sort(key=lambda d: (-d.capacity_mb, d.device_string))
         return devices
@@ -4603,6 +4650,7 @@ class PrismSolver:
                 spec=d.spec,
                 recommended_mb=d.recommended_mb,
                 host_memory=d.host_memory,
+                live_free_mb=d.live_free_mb,
                 budget_mb=d.budget_mb,
                 tile_rung_mb=d.tile_rung_mb,
                 budget_note=d.budget_note,
@@ -4814,7 +4862,7 @@ class PrismSolver:
     ) -> Optional[Tuple[Dict, List[DeviceState]]]:
         """Distribute whole components across GPUs."""
         if len(devices) < 2:
-            return None
+            return self._decline("component_placement", "declined at step 1 (_try_component_placement line {})".format(1))
 
         fresh = self._fresh_devices(devices)
         allocations = {}
@@ -4829,12 +4877,12 @@ class PrismSolver:
                 min_required = max(required * 1.20, 20000)
                 target = self._find_pipeline_device(min_required, fresh, last_device, profile)
                 if target is None:
-                    return None
+                    return self._decline("component_placement", "declined at step 2 (_try_component_placement line {})".format(2))
             else:
                 target = self._find_pipeline_device(required, fresh, last_device, profile)
 
             if target is None:
-                return None
+                return self._decline("component_placement", "declined at step 3 (_try_component_placement line {})".format(3))
 
             target.allocate(comp_name, required)
             shard_map = {s: target.device_string for s in shard_sizes.get(comp_name, {})}
@@ -4844,16 +4892,27 @@ class PrismSolver:
         # Need at least 2 devices used
         used = set(a[0] for a in allocations.values())
         if len(used) < 2:
-            return None
+            return self._decline("component_placement", "declined at step 4 (_try_component_placement line {})".format(4))
 
         return allocations, fresh
+
+    def _decline(self, strategy: str, why: str):
+        """A strategy that returns no plan says why (ZERO FALLBACK: a refusal names its cause): kept per solve in
+        `_declined`, printed by explain-plan beside the refused list and by the force door's error. Returns None."""
+        d = getattr(self, "_declined", None)
+        if d is None:
+            d = self._declined = {}
+        if strategy not in d:
+            d[strategy] = why
+            logging.getLogger(__name__).warning("Prism: %s declined — %s", strategy, why)
+        return None
 
     def _try_block_scatter(
         self, sorted_comps, comp_mem, devices, shard_sizes, profile, container
     ) -> Optional[Tuple[Dict, List[DeviceState]]]:
         """Block scatter: spread transformer blocks across GPUs using best-fit-decreasing."""
         if len(devices) < 2:
-            return None
+            return self._decline("block_scatter", "declined at step 1 (_try_block_scatter line {})".format(1))
 
         # Heterogeneity fix (2026-08-11, D7 scoping note): the FGP gate
         # compares against the LARGEST device — a component that still
@@ -4864,7 +4923,7 @@ class PrismSolver:
         needs_fgp = [(n, m) for n, m in sorted_comps if m.weight_mb + m.activation_mb > capacity_threshold]
 
         if not needs_fgp:
-            return None
+            return self._decline("block_scatter", "declined at step 2 (_try_block_scatter line {})".format(2))
 
         fgp_target = PRISM_DEFAULTS["fgp_utilization_target"]
         # Use full device capacity (already has 0.95 safety margin from _prepare_devices).
@@ -4889,8 +4948,6 @@ class PrismSolver:
         # audio-encoder forward then failed a 20 MiB alloc). Data-driven
         # from the same profiles the packing already consumes — no
         # constant.
-        act_reserve_mb = max(
-            (m.activation_mb for _, m in sorted_comps), default=0.0)
 
         allocations = {}
         current_dev_idx = 0
@@ -4898,12 +4955,17 @@ class PrismSolver:
         for comp_name, mem in needs_fgp:
             blocks = self._parse_blocks(container, comp_name)
             if not blocks['blocks']:
-                return None
+                return self._decline("block_scatter", "declined at step 3 (_try_block_scatter line {})".format(3))
 
             model_dtype = self._get_component_dtype(container, comp_name)   # refuses an undeclared name
 
             n_blocks = len(blocks['blocks'])
             act_per_block = mem.activation_mb / n_blocks
+            # The room a card keeps beside this component's blocks is THIS component's live activation — not the
+            # largest activation of any component of the model (mochi's VAE decode, 20 GB, was reserved on every
+            # card beside every transformer block, and the scatter declined on four cards that hold the model;
+            # 2026-10-25, registres/journaux/prism_choices_2026_10_25.tsv).
+            act_reserve_mb = mem.activation_mb
 
             shard_map = {}
 
@@ -4920,7 +4982,7 @@ class PrismSolver:
                         break
                     current_dev_idx += 1
                 if current_dev_idx >= len(fresh):
-                    return None
+                    return self._decline("block_scatter", "declined at step 4 (_try_block_scatter line {})".format(4))
 
             # Allocate blocks - best-fit across GPUs with topology preference
             last_dev = None
@@ -4940,7 +5002,7 @@ class PrismSolver:
                 fit_devs = [d for d in fresh
                             if d.can_fit(_block_cost(d) + act_reserve_mb)]
                 if not fit_devs:
-                    return None
+                    return self._decline("block_scatter", "declined at step 5 (_try_block_scatter line {})".format(5))
 
                 # Topology-aware: prefer same group as last block (minimize cross-device transfers)
                 target = None
@@ -4984,10 +5046,10 @@ class PrismSolver:
             # also execute OTHER components' forwards (the reserve is
             # model-wide, not per-component).
             target = next(
-                (d for d in fresh if d.can_fit(required + act_reserve_mb)),
+                (d for d in fresh if d.can_fit(required)),          # `required` holds the component's own activation
                 None)
             if target is None:
-                return None
+                return self._decline("block_scatter", "declined at step 6 (_try_block_scatter line {})".format(6))
             target.allocate(comp_name, required)
             shard_map = {s: target.device_string for s in shard_sizes.get(comp_name, {})}
             allocations[comp_name] = (target.device_string, shard_map)
@@ -5007,14 +5069,14 @@ class PrismSolver:
         fast interconnect, producing minimal cross-device transfers.
         """
         if len(devices) < 2:
-            return None
+            return self._decline("pipeline_parallel", "declined at step 1 (_try_pipeline_parallel line {})".format(1))
 
         # Find components that need splitting (too large for single GPU)
         capacity_threshold = devices[0].capacity_mb * 0.80
         needs_split = [(n, m) for n, m in sorted_comps if m.weight_mb + m.activation_mb > capacity_threshold]
 
         if not needs_split:
-            return None
+            return self._decline("pipeline_parallel", "declined at step 2 (_try_pipeline_parallel line {})".format(2))
 
         fgp_target = PRISM_DEFAULTS["fgp_utilization_target"]
         # Use full device capacity (already has 0.95 safety margin from _prepare_devices).
@@ -5035,7 +5097,7 @@ class PrismSolver:
         for comp_name, mem in needs_split:
             blocks = self._parse_blocks(container, comp_name)
             if not blocks['blocks']:
-                return None
+                return self._decline("pipeline_parallel", "declined at step 3 (_try_pipeline_parallel line {})".format(3))
 
             model_dtype = self._get_component_dtype(container, comp_name)   # refuses an undeclared name
 
@@ -5063,7 +5125,9 @@ class PrismSolver:
             # for the triton autotune workspace, which the activation profile
             # does not model. Data-driven (peak activation) with a
             # hardware-universal floor.
-            act_reserve_mb = max(mem.activation_mb * 2.0, fresh[0].capacity_mb * 0.18)
+            # The room beside this component's blocks is its own live activation (profiled), not a doubled
+            # figure nor a share of the card (both were literals: ZERO HARDCODE).
+            act_reserve_mb = mem.activation_mb
 
             # Allocate non-block weights on current device (same per-device
             # activation headroom as the block fill below).
@@ -5079,7 +5143,7 @@ class PrismSolver:
                         break
                     current_dev_idx += 1
                 if current_dev_idx >= len(fresh):
-                    return None
+                    return self._decline("pipeline_parallel", "declined at step 4 (_try_pipeline_parallel line {})".format(4))
 
             # BALANCED PIPELINE FILL: contiguous layer ranges, spread EVENLY so
             # each GPU keeps headroom for runtime activations + triton autotune
@@ -5133,7 +5197,7 @@ class PrismSolver:
                     gpu_weight_mb = 0.0
                 else:
                     # No GPU can fit this block
-                    return None
+                    return self._decline("pipeline_parallel", "declined at step 5 (_try_pipeline_parallel line {})".format(5))
 
             devices_used = set(shard_map.values())
             allocations[comp_name] = (f"fgp:{','.join(sorted(devices_used))}", shard_map)
@@ -5148,7 +5212,7 @@ class PrismSolver:
             required = mem.weight_mb + mem.activation_mb
             target = next((d for d in fresh if d.can_fit(required)), None)
             if target is None:
-                return None
+                return self._decline("pipeline_parallel", "declined at step 6 (_try_pipeline_parallel line {})".format(6))
             target.allocate(comp_name, required)
             shard_map = {s: target.device_string for s in shard_sizes.get(comp_name, {})}
             allocations[comp_name] = (target.device_string, shard_map)
@@ -6830,6 +6894,7 @@ class PrismSolver:
         """Try ALL strategies and return scored candidates."""
         # What was actually tried, for the refusal to name — never a hand-kept list.
         self._strategies_tried = [name for name, _ in strategies]
+        self._declined = {}
         candidates = []
         for strategy_name, strategy_fn in strategies:
             result = strategy_fn(sorted_components, component_memory, devices, shard_sizes, profile, container)
@@ -6875,9 +6940,21 @@ class PrismSolver:
                 one.seq_len = 1
                 prompt[comp.name], w = w, component_work(prof, prof.build_symbol_map(one))
             works[comp.name], runs[comp.name] = w, n
+        # The device links, from the profile's interconnect (and its stated PCIe fallback): bytes/s per pair.
+        links = {}
+        if getattr(profile, "topology", None) is not None:
+            idx = [d.index for d in profile.devices]
+            for a in idx:
+                for b in idx:
+                    if a != b:
+                        gbps = profile.topology.get_bandwidth(a, b)
+                        if gbps:
+                            for prefix in ("cuda", "mps", "hip", "xpu"):
+                                links[(f"{prefix}:{a}", f"{prefix}:{b}")] = float(gbps) * 1e9
         for _s, name, allocs, _d in ranked:
             try:
-                out[name] = float(TE.plan_seconds(name, allocs, works, runs, devices, host, str(dtype), prompt=prompt))
+                out[name] = float(TE.plan_seconds(name, allocs, works, runs, devices, host, str(dtype), prompt=prompt,
+                                                  links=links))
             except TE.MissingFact as exc:
                 out[name] = f"not estimated: {exc}"
         return out
@@ -6961,7 +7038,14 @@ class PrismSolver:
             "layer_streaming": 50,
             "cpu_streaming": 5,
         }
-        score = float(BASE_SCORES.get(strategy_name, 500))
+        base = float(BASE_SCORES.get(strategy_name, 500))
+        rank = STRATEGY_RANK.get(strategy_name)
+        if rank is None:
+            raise RuntimeError(f"ZERO FALLBACK: strategy {strategy_name!r} has no rank in STRATEGY_RANK — "
+                               "a strategy is placed in the physical order before it can be scored")
+        _in_rank = [BASE_SCORES.get(n, 500) for n, r in STRATEGY_RANK.items() if r == rank]
+        score = RANK_BASE[rank] + min(RANK_FLOOR_SPAN, (base - min(_in_rank)) * 0.1)
+        rank_floor = RANK_BASE[rank] - RANK_FLOOR_SPAN
 
         # Count unique devices used
         device_strings = set()
@@ -7059,6 +7143,8 @@ class PrismSolver:
         if strategy_name not in ("cpu_execution", "cpu_streaming") and any(
                 str(a[0] if isinstance(a, tuple) else a).startswith("cpu") for a in allocations.values()):
             return min(max(score, 1.0), BASE_SCORES["cpu_execution"] + 0.5)
+        # The rank's floor: penalties order the strategies INSIDE their rank and never across ranks.
+        score = max(score, rank_floor)
 
         # INVARIANT: a GPU-compute strategy never ranks below the R35
         # last-resort cpu_execution, no matter how harsh its penalties.

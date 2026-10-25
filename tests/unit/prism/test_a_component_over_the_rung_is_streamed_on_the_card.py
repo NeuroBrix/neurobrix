@@ -31,7 +31,9 @@ strictly between the rung and the capacity. If a retrace ever moves a component 
 window, the precondition says so instead of the verdict cells passing or failing for the wrong
 reason.
 
-Rounding the reading down onto the ladder is NOT touched: it is what makes a plan reproducible.
+Since 2026-10-25 (the owner, 15:16) the budget is the pool's DECLARED figure and the moment's reading is the
+execution door: each cell pins the machine by the pool it declares (the device's `memory_mb` set to the figure the
+case was measured at), not by a free reading.
 """
 from __future__ import annotations
 
@@ -72,6 +74,11 @@ IDS = [c[0] for c in OVER]
 # capacity is 11 198 - 3 900 = 7 298 MB under its 9 634.6 MB text encoder, granite's 18 186 x 0.95 - 3 900 = 13 376.7
 # under 17 151.7 (Dell, 2026-10-21 16:54); their Triton graphs, which hold no private reserve, still sit in the window.
 WINDOW_MODE = {"Flex.1-alpha": "triton", "PixArt-XL-2-1024-MS": "triton", "granite-speech-3.3-8b": "triton"}
+
+
+def _spec(pool_mb: int) -> dict:
+    """The Mac's profile with the pool the case was measured at as its DECLARED figure (the budget law of 2026-10-25)."""
+    return {**APPLE, "devices": [{**APPLE["devices"][0], "memory_mb": int(pool_mb)}]}
 
 
 def _pin_machine(monkeypatch, host_free_mb: int, rung_mb: int) -> None:
@@ -117,17 +124,17 @@ def test_the_largest_component_sits_between_the_rung_and_the_capacity(monkeypatc
                                                                      host_free, rung):
     _pin_machine(monkeypatch, host_free, rung)
     mode = WINDOW_MODE.get(model, "compiled")
-    _, s, seen = _plan(model, h, w, refusal_ok=True, mode=mode)
-    dev = s._prepare_devices(profile(APPLE))[0]
+    _, s, seen = _plan(model, h, w, spec=_spec(host_free), refusal_ok=True, mode=mode)
+    dev = s._prepare_devices(profile(_spec(host_free)))[0]
     largest = max(m.total_bytes for m in seen.values()) / MB
     assert dev.budget_mb == rung, f"the door did not impose the rung: {dev.budget_mb}"
     if mode != "compiled":
-        _, s_c, seen_c = _plan(model, h, w, refusal_ok=True, mode="compiled")
+        _, s_c, seen_c = _plan(model, h, w, spec=_spec(host_free), refusal_ok=True, mode="compiled")
         over = max(m.total_bytes for m in seen_c.values()) / MB
         # The compiled window is CLOSED, whichever side moved: its component grew over the capacity (Flex: the attention
         # scores it writes are priced) or its capacity fell under the component (PixArt, granite: the compiled private
         # reserve). Judged against the COMPILED capacity, the one that engine plans against.
-        cap_c = s_c._prepare_devices(profile(APPLE))[0].capacity_mb
+        cap_c = s_c._prepare_devices(profile(_spec(host_free)))[0].capacity_mb
         assert over > cap_c, (
             f"{model}: its compiled graph's largest component {over:.1f} MB is no longer over the compiled capacity "
             f"{cap_c:.1f} — the compiled window is open again; WINDOW_MODE is stale")
@@ -150,7 +157,7 @@ def test_the_largest_component_sits_between_the_rung_and_the_capacity(monkeypatc
 def test_a_component_over_the_rung_is_streamed_on_the_card(monkeypatch, model, h, w, host_free, rung,
                                                             mode):
     _pin_machine(monkeypatch, host_free, rung)
-    p, _, _ = _plan(model, h, w, mode=mode)
+    p, _, _ = _plan(model, h, w, spec=_spec(host_free), mode=mode)
     assert p.strategy == "layer_streaming", (
         f"{model} planned {p.strategy!r} with a component over the {rung} MB rung that the "
         f"device holds; that overhang is what layer_streaming is for")
@@ -176,7 +183,7 @@ def test_and_its_segments_are_cut_against_the_usable_rung_not_the_capacity(monke
     old reserve, the PixArt and Flex cells go RED (the plan is refused); with no reserve at all,
     every cell goes RED (peak over the usable rung)."""
     _pin_machine(monkeypatch, host_free, rung)
-    p, s, seen = _plan(model, h, w, mode=mode)
+    p, s, seen = _plan(model, h, w, spec=_spec(host_free), mode=mode)
     parts = getattr(s, "_layer_stream_partitions", None) or {}
     assert p.layer_stream_plan and parts, f"{model}: no streamed component in the plan"
     # What sits beside the segments is what the FLOW holds with them — the solver's own helper
@@ -186,7 +193,7 @@ def test_and_its_segments_are_cut_against_the_usable_rung_not_the_capacity(monke
                                          list(seen.items()), set(parts))
     for name, part in parts.items():
         peak = (part.peak_resident_bytes + beside) / MB
-        assert peak <= s._usable_mb(s._prepare_devices(profile(APPLE))[0]), (
+        assert peak <= s._usable_mb(s._prepare_devices(profile(_spec(host_free)))[0]), (
             f"{model}.{name}: {len(part.segments)} segments peak at {peak:.1f} MB with what stays "
             f"resident beside them, over the usable part of the {rung} MB rung the plan is budgeted at")
 
