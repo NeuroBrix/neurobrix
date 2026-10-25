@@ -852,6 +852,10 @@ class TritonDtypeEngine:
             return self._wrap_fp32_internal_compute_dtype_output(func, traced=traced)
 
         if op_name in AMP_FP16_OPS:
+            # The trace's own fp32 island — the compiled engine's rule, one predicate (R30).
+            from neurobrix.core.dtype.traced_island import is_traced_fp32_island
+            if is_traced_fp32_island(op_record, self.graph_dtype):
+                return self._wrap_fp32(func)
             if self.compute_dtype == NBXDtype.float16 and op_name in _FP16_NEED_FP32:
                 # div is in _FP16_NEED_FP32 (FP16 op needing fp32 protection
                 # on V100, epsilon underflow). Same uniform cast-back wrap —
