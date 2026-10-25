@@ -4862,7 +4862,7 @@ class PrismSolver:
     ) -> Optional[Tuple[Dict, List[DeviceState]]]:
         """Distribute whole components across GPUs."""
         if len(devices) < 2:
-            return self._decline("component_placement", "declined at step 1 (_try_component_placement line {})".format(1))
+            return self._decline("component_placement", "one device only: nothing to spread over")
 
         fresh = self._fresh_devices(devices)
         allocations = {}
@@ -4877,12 +4877,12 @@ class PrismSolver:
                 min_required = max(required * 1.20, 20000)
                 target = self._find_pipeline_device(min_required, fresh, last_device, profile)
                 if target is None:
-                    return self._decline("component_placement", "declined at step 2 (_try_component_placement line {})".format(2))
+                    return self._decline("component_placement", f"{comp_name} ({min_required:.0f} MB with its activation and the attention headroom) fits no card whole" + " — free per card: " + ", ".join(f"{d.device_string} {d.free_mb:.0f} MB" for d in fresh))
             else:
                 target = self._find_pipeline_device(required, fresh, last_device, profile)
 
             if target is None:
-                return self._decline("component_placement", "declined at step 3 (_try_component_placement line {})".format(3))
+                return self._decline("component_placement", f"{comp_name} ({required:.0f} MB with its activation) fits no card whole" + " — free per card: " + ", ".join(f"{d.device_string} {d.free_mb:.0f} MB" for d in fresh))
 
             target.allocate(comp_name, required)
             shard_map = {s: target.device_string for s in shard_sizes.get(comp_name, {})}
@@ -4892,7 +4892,7 @@ class PrismSolver:
         # Need at least 2 devices used
         used = set(a[0] for a in allocations.values())
         if len(used) < 2:
-            return self._decline("component_placement", "declined at step 4 (_try_component_placement line {})".format(4))
+            return self._decline("component_placement", "every component landed on one card: that is single_gpu, not a placement")
 
         return allocations, fresh
 
@@ -4912,7 +4912,7 @@ class PrismSolver:
     ) -> Optional[Tuple[Dict, List[DeviceState]]]:
         """Block scatter: spread transformer blocks across GPUs using best-fit-decreasing."""
         if len(devices) < 2:
-            return self._decline("block_scatter", "declined at step 1 (_try_block_scatter line {})".format(1))
+            return self._decline("block_scatter", "one device only: nothing to spread over")
 
         # Heterogeneity fix (2026-08-11, D7 scoping note): the FGP gate
         # compares against the LARGEST device — a component that still
@@ -4923,7 +4923,7 @@ class PrismSolver:
         needs_fgp = [(n, m) for n, m in sorted_comps if m.weight_mb + m.activation_mb > capacity_threshold]
 
         if not needs_fgp:
-            return self._decline("block_scatter", "declined at step 2 (_try_block_scatter line {})".format(2))
+            return self._decline("block_scatter", "every component fits a card whole: nothing to scatter")
 
         fgp_target = PRISM_DEFAULTS["fgp_utilization_target"]
         # Use full device capacity (already has 0.95 safety margin from _prepare_devices).
@@ -4955,7 +4955,7 @@ class PrismSolver:
         for comp_name, mem in needs_fgp:
             blocks = self._parse_blocks(container, comp_name)
             if not blocks['blocks']:
-                return self._decline("block_scatter", "declined at step 3 (_try_block_scatter line {})".format(3))
+                return self._decline("block_scatter", f"{comp_name}: no repeating block structure found in its weights (nothing to scatter block by block)")
 
             model_dtype = self._get_component_dtype(container, comp_name)   # refuses an undeclared name
 
@@ -4982,7 +4982,7 @@ class PrismSolver:
                         break
                     current_dev_idx += 1
                 if current_dev_idx >= len(fresh):
-                    return self._decline("block_scatter", "declined at step 4 (_try_block_scatter line {})".format(4))
+                    return self._decline("block_scatter", f"{comp_name}: its non-block weights ({blocks['non_block_mb']:.0f} MB) beside its activation ({act_reserve_mb:.0f} MB) fit no card" + " — free per card: " + ", ".join(f"{d.device_string} {d.free_mb:.0f} MB" for d in fresh))
 
             # Allocate blocks - best-fit across GPUs with topology preference
             last_dev = None
@@ -5002,7 +5002,7 @@ class PrismSolver:
                 fit_devs = [d for d in fresh
                             if d.can_fit(_block_cost(d) + act_reserve_mb)]
                 if not fit_devs:
-                    return self._decline("block_scatter", "declined at step 5 (_try_block_scatter line {})".format(5))
+                    return self._decline("block_scatter", f"{comp_name}: block {block_num} ({_block_cost(fresh[0]):.0f} MB) beside the component's activation ({act_reserve_mb:.0f} MB) fits no card" + " — free per card: " + ", ".join(f"{d.device_string} {d.free_mb:.0f} MB" for d in fresh))
 
                 # Topology-aware: prefer same group as last block (minimize cross-device transfers)
                 target = None
@@ -5049,7 +5049,7 @@ class PrismSolver:
                 (d for d in fresh if d.can_fit(required)),          # `required` holds the component's own activation
                 None)
             if target is None:
-                return self._decline("block_scatter", "declined at step 6 (_try_block_scatter line {})".format(6))
+                return self._decline("block_scatter", f"{comp_name} whole ({required:.0f} MB with its activation) fits no card beside the scattered blocks" + " — free per card: " + ", ".join(f"{d.device_string} {d.free_mb:.0f} MB" for d in fresh))
             target.allocate(comp_name, required)
             shard_map = {s: target.device_string for s in shard_sizes.get(comp_name, {})}
             allocations[comp_name] = (target.device_string, shard_map)
@@ -5069,14 +5069,14 @@ class PrismSolver:
         fast interconnect, producing minimal cross-device transfers.
         """
         if len(devices) < 2:
-            return self._decline("pipeline_parallel", "declined at step 1 (_try_pipeline_parallel line {})".format(1))
+            return self._decline("pipeline_parallel", "one device only: nothing to spread over")
 
         # Find components that need splitting (too large for single GPU)
         capacity_threshold = devices[0].capacity_mb * 0.80
         needs_split = [(n, m) for n, m in sorted_comps if m.weight_mb + m.activation_mb > capacity_threshold]
 
         if not needs_split:
-            return self._decline("pipeline_parallel", "declined at step 2 (_try_pipeline_parallel line {})".format(2))
+            return self._decline("pipeline_parallel", "every component fits a card whole: nothing to scatter")
 
         fgp_target = PRISM_DEFAULTS["fgp_utilization_target"]
         # Use full device capacity (already has 0.95 safety margin from _prepare_devices).
@@ -5097,7 +5097,7 @@ class PrismSolver:
         for comp_name, mem in needs_split:
             blocks = self._parse_blocks(container, comp_name)
             if not blocks['blocks']:
-                return self._decline("pipeline_parallel", "declined at step 3 (_try_pipeline_parallel line {})".format(3))
+                return self._decline("pipeline_parallel", f"{comp_name}: no repeating block structure found in its weights (nothing to scatter block by block)")
 
             model_dtype = self._get_component_dtype(container, comp_name)   # refuses an undeclared name
 
@@ -5143,7 +5143,7 @@ class PrismSolver:
                         break
                     current_dev_idx += 1
                 if current_dev_idx >= len(fresh):
-                    return self._decline("pipeline_parallel", "declined at step 4 (_try_pipeline_parallel line {})".format(4))
+                    return self._decline("pipeline_parallel", f"{comp_name}: its non-block weights fit no card in the order the cards were filled" + " — free per card: " + ", ".join(f"{d.device_string} {d.free_mb:.0f} MB" for d in fresh))
 
             # BALANCED PIPELINE FILL: contiguous layer ranges, spread EVENLY so
             # each GPU keeps headroom for runtime activations + triton autotune
@@ -5197,7 +5197,7 @@ class PrismSolver:
                     gpu_weight_mb = 0.0
                 else:
                     # No GPU can fit this block
-                    return self._decline("pipeline_parallel", "declined at step 5 (_try_pipeline_parallel line {})".format(5))
+                    return self._decline("pipeline_parallel", f"{comp_name}: block {block_num} fits no card after the cards before it were filled in order (the pipeline keeps its blocks in sequence)" + " — free per card: " + ", ".join(f"{d.device_string} {d.free_mb:.0f} MB" for d in fresh))
 
             devices_used = set(shard_map.values())
             allocations[comp_name] = (f"fgp:{','.join(sorted(devices_used))}", shard_map)
@@ -5212,7 +5212,7 @@ class PrismSolver:
             required = mem.weight_mb + mem.activation_mb
             target = next((d for d in fresh if d.can_fit(required)), None)
             if target is None:
-                return self._decline("pipeline_parallel", "declined at step 6 (_try_pipeline_parallel line {})".format(6))
+                return self._decline("pipeline_parallel", f"{comp_name} whole ({required:.0f} MB with its activation) fits no card beside the pipelined blocks" + " — free per card: " + ", ".join(f"{d.device_string} {d.free_mb:.0f} MB" for d in fresh))
             target.allocate(comp_name, required)
             shard_map = {s: target.device_string for s in shard_sizes.get(comp_name, {})}
             allocations[comp_name] = (target.device_string, shard_map)
@@ -7485,9 +7485,14 @@ class PrismSolver:
             self._op_tiling_declined = f"the detector raised {type(e).__name__}: {e}"
             return None
         if not plans:
+            kinds = []
+            for n, m in blocking:
+                comp = next((c for c in components if c.name == n), None)
+                op = ((getattr(comp, "graph", None) or {}).get("ops") or {}).get(getattr(m, "peak_op_uid", ""), {}) if comp else {}
+                kinds.append(f"{n}: peak at {m.peak_op_uid or '?'} ({op.get('op_type', 'unknown op')})")
             self._op_tiling_declined = (
-                "the detector returned no tileable op for the blocking component(s) "
-                + ", ".join(n for n, _ in blocking))
+                "the TilingEngine bands convolutions and rms_norm only and none of the overflowing ops is one — "
+                + "; ".join(kinds) + " — no tiled implementation exists for that op, so the rung cannot claim it")
             return None
 
         # Only claim the components the detector can actually tile.
@@ -8721,7 +8726,7 @@ class PrismSolver:
             loading_mode=loading_mode,
             selection_reason=getattr(self, "_selection_reason", ""),
             candidates=list(getattr(self, "_candidates", [])),
-            rejected=list(getattr(self, "_rejected", [])),
+            rejected=list(getattr(self, "_rejected", [])) + [(n, 0.0, "declined: " + why) for n, why in (getattr(self, "_declined", {}) or {}).items()],
             estimated_s=(lambda t: t if isinstance(t, float) else None)(
                 dict(getattr(self, "_time_estimates", {}) or {}).get(strategy)),
             time_estimates=dict(getattr(self, "_time_estimates", {}) or {}),

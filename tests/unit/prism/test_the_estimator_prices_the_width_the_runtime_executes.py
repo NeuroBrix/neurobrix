@@ -234,7 +234,10 @@ def test_the_matmul_store_reads_the_hardware_and_m():
     upcasts fp16 mm to fp32 unless the contract says otherwise (engine.py:695-732)."""
     assert _w(_mm(8), bf16=False)["o"] == "float32"
     assert _w(_mm(8), bf16=True)["o"] == "float16"
-    assert _w(_mm(2), bf16=True)["o"] == "float32"
+    # the one precision contract (2026-10-25 15:26): on native-bf16 hardware a decode row stores the half too;
+    # fp32 is kept where the hardware has no native half path (above) or for an island
+    assert _w(_mm(2), bf16=True)["o"] == "float16"
+    assert _w(_mm(2), bf16=False)["o"] == "float32"
     assert _w(_mm(8), c="bfloat16", bf16=True)["o"] == "bfloat16"
     assert _w(_mm(8), "compiled", bf16=True)["o"] == "float32"
     assert _w(_mm(8), "compiled", contract=PrecisionContract(True, frozenset(), frozenset()))["o"] == "float16"
