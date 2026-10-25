@@ -344,6 +344,28 @@ def _reads_key(reads: dict):
     return tuple(sorted((u, tuple(sorted((t, str(d)) for t, d in m.items()))) for u, m in reads.items()))
 
 
+def traced_island_uids(ops: dict, graph_dtype, cdtype) -> frozenset:
+    """The ops `TritonDtypeEngine.wrap_op` wraps fp32 for the TRACE's own fp32 island (core/dtype/traced_island,
+    2026-10-25) — in wrap_op's order: under a half compute dtype, an op that is no self-managed wrapper, in the
+    AMP_FP16 class, whose traced floating inputs and output are all float32 inside a half graph. The wrap is the one a
+    contract island gets (`_wrap_fp32`: every float operand cast to fp32, `_NBX_COMPUTE_DTYPE` fp32 for the call), so
+    the launcher forms the same keys for both — the key derivation reads them through one set. Allegro-TI2V's
+    conditioning conv and CogVideoX's (aten.convolution, traced fp32 in a float16 graph) were keyed half here while
+    the launcher formed depthwise_conv2d_kernel fp32 (chain52, 2026-10-25 08:25; the Apple class alike)."""
+    if cdtype not in ("float16", "bfloat16"):
+        return frozenset()
+    from neurobrix.core.dtype.traced_island import is_traced_fp32_island
+    from neurobrix.triton import dtype as _tdt
+    out = set()
+    for uid, op in ops.items():
+        name = op.get("op_type", "").split("::")[-1].split(".")[0]
+        if name in _tdt._SELF_MANAGED_OPS or name not in _tdt.AMP_FP16_OPS:
+            continue
+        if is_traced_fp32_island(op, graph_dtype):
+            out.add(uid)
+    return frozenset(out)
+
+
 def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_bytes, sdpa_min_rows,
                sdpa_max_chunks, unhandled, tiling=None, tiled_tf=None, decode_kv=None, pins=frozenset(),
                skip=(), only=None, axis_values=None, axes=(), out_dtypes=None):
@@ -392,6 +414,13 @@ def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_
         import dataclasses as _dc
         contract = _dc.replace(contract, fp32_op_uids=frozenset(contract.fp32_op_uids) | pins,
                                narrow_op_uids=frozenset(contract.narrow_op_uids) - pins)
+    # The trace's own fp32 islands: the same wrap as a contract island, read by the key derivation through the same
+    # set (the width pass above already states their widths and casts by the engines' rule; it is not re-run).
+    traced = traced_island_uids(ops, g.get("torch_dtype"), str(cdtype))
+    if traced:
+        import dataclasses as _dc
+        contract = _dc.replace(contract, fp32_op_uids=frozenset(contract.fp32_op_uids) | traced,
+                               narrow_op_uids=frozenset(contract.narrow_op_uids) - traced)
     def dt0(tid):
         # a runtime dtype name as NBXDtype spells it: `bool` is `bool_` (a Python keyword) — read once a keyed op could
         # take a mask (a sum of a bool mask: chatterbox, 2026-10-23); any other name not an NBXDtype is refused by name
