@@ -51,6 +51,7 @@ from neurobrix.core.prism.memory_estimator import get_dtype_bytes_per_element
 from neurobrix.core.prism.layer_partition import is_seam_tensor
 from neurobrix.kernels.classification import canonical_aten
 from neurobrix.triton import dtype as _tdt
+from neurobrix.core.dtype.traced_island import is_traced_fp32_island   # the engines' one predicate
 from neurobrix.triton.weight_loader import stored_dtype_in_compute
 from neurobrix.core.dtype import itemsize as _itemsize
 
@@ -756,6 +757,8 @@ class _TritonRules(_Rules):
         if name in _tdt.AMP_FP32_OPS:
             return self._copies(fl, "float32")
         if name in _tdt.AMP_FP16_OPS:
+            if is_traced_fp32_island(op, self.graph_dtype):
+                return self._copies(fl, "float32")                      # `_wrap_fp32`'s casts
             if c == "float16" and name in _tdt._FP16_NEED_FP32:
                 return self._copies(fl, "float32")
             return self._copies(fl, c)
@@ -803,6 +806,8 @@ class _TritonRules(_Rules):
                 r = _wider(r, self.first(fl) or r)
             return r
         if name in _tdt.AMP_FP16_OPS:                                       # :566-573
+            if is_traced_fp32_island(op, self.graph_dtype):
+                return "float32"            # the trace's own fp32 island: `_wrap_fp32`, fp32 compute and store
             if c == "float16" and name in _tdt._FP16_NEED_FP32:
                 return self.amp_fp32_out(op)
             return self._lower_precision(uid, op, name, fl, ins)
@@ -946,6 +951,8 @@ class _AtenRules(_Rules):
         if name in ATEN_AMP_FP32_OPS:
             return to(c) if (contract and name in ATEN_FP32_OPS_HALF_IO) else to("float32")
         if name in ATEN_AMP_FP16_OPS:
+            if is_traced_fp32_island(op, self.graph_dtype):                 # compile_op's rule: `_make_fp32_wrapper`
+                return to("float32")
             if c == "float16" and name in ATEN_FP16_NEED_FP32:
                 if contract and (name in ATEN_FP16_GEMM_OPS or uid in self.contract.narrow_op_uids):
                     return to(c)
@@ -1009,6 +1016,8 @@ class _AtenRules(_Rules):
                 return _tdt.amp_fp32_output_dtype(
                     c, self.graph_dtype, False, contract and uid in self.contract.narrow_op_uids)
             if name in ATEN_AMP_FP16_OPS:                                   # :754-791
+                if is_traced_fp32_island(op, self.graph_dtype):
+                    return "float32"        # the trace's own fp32 island: `_make_fp32_wrapper`, fp32 kept
                 if c == "float16" and name in ATEN_FP16_NEED_FP32:
                     if contract and name in ATEN_FP16_GEMM_OPS:
                         return c
