@@ -26,9 +26,22 @@ def _gpu():
         return False
 
 
+def _bind_executing_profile(monkeypatch):
+    """The executing hardware profile handed to the wrappers as the CLI does before a request (and as the certifier
+    does): when the replay cache lacks the census's amax key, the autotuner's row-reduce prune reads
+    `memory.max_registers_per_block` from it and refuses without one (ZERO FALLBACK — the red of 2026-10-25, three
+    runs on main a182a3f6 while the key was absent; a sweep found the key bounded once the profile was there)."""
+    from neurobrix.core.prism import load_profile
+    from neurobrix.core.prism.autodetect import get_or_create_default_profile
+    from neurobrix.kernels import wrappers as W
+    monkeypatch.setattr(W, "_NBX_HW_PROFILE", W._NBX_HW_PROFILE)   # restored after the test
+    W.set_hardware_profile(load_profile(get_or_create_default_profile()))
+
+
 @pytest.mark.skipif(not _gpu(), reason="needs a GPU")
-def test_census_observes_nbx_outputs():
+def test_census_observes_nbx_outputs(monkeypatch):
     from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator
+    _bind_executing_profile(monkeypatch)
     c = cal.RangeCensus()
     a = np.array([[1.0, -7.5], [3.0, 0.5]], dtype=np.float32)
     c.observe("aten.add::0", NBXTensor.from_numpy(a))
