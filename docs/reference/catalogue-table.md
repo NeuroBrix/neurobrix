@@ -11,6 +11,7 @@ every cell read from an artefact, never typed (public columns, 2026-10-24):
 | HF revision | the commit the container's manifest records; a container built before revisions were recorded says so and names HF's `main` on the day the table was built |
 | weights sha256 | the LFS sha256 Hugging Face serves for each weight file at the revision, digested as the sha256 of the sorted `"<file> <sha256>"` lines; the vendor's single file's sha256 when the weight is released outside Hugging Face; verified against the local snapshot file by file (`verify_snapshots`) |
 | container sha256 | sha256 of the served `model.nbx` |
+| weights verified | the snapshot folder checked file by file on 2026-10-24: every weight file HF serves at the revision present locally with its sha256 equal to the LFS sha256 (`n/n files = LFS @revision`); a container built before revisions were recorded is compared with HF's `main` of that day; a vendor file released outside HF equals the manifest's sha256; the two repositories that also ship the same weights in another format (a single-file redistribution, flax/bin twins) name the file not kept |
 
 The table holds no local path: where a machine keeps its snapshots, its cache entries and its served containers is that
 machine's own record (the full table, with those columns, lives in its private `docs/internal/catalogue.tsv` and a dated
