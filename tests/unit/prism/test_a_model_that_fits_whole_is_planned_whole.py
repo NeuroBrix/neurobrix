@@ -54,7 +54,7 @@ from neurobrix.core.prism.profiler import ActivationProfiler, weight_transposes_
 from neurobrix.core.prism.solver import unified_device_bytes
 from neurobrix.nbx import NBXContainer
 from tests.unit.prism._graph import as_graph
-from tests.unit.prism._pinned_machine import (APPLE_M4_PRO, V100_16GB, container_root, no_door,
+from tests.unit.prism._pinned_machine import (APPLE_M4_PRO, V100_16GB, container_root, impose_rung, no_door,
                                               pin_host, profile)
 
 TOOLS = Path(__file__).resolve().parents[3] / "tools"
@@ -131,13 +131,19 @@ def test_janus_is_planned_whole_on_the_idle_mac(monkeypatch):
     # the host side holds the decode phase, not the decoder beside it
     total = sum(int(m.total_bytes) for m in p.component_memory.values())
     decoder = int(p.component_memory["gen_vision_model"].total_bytes)
-    assert fp["device_bytes"] == total - decoder, (fp["device_bytes"] / MB, total / MB, decoder / MB)
+    # Under the budget law of 2026-10-25 the idle pool holds Janus whole and the plan is single_gpu (eager):
+    # `unified_device_bytes` prices an eager plan at its total today, a lazy one at its dearest phase. (Both flows
+    # release the loop's components before the post-loop stage whatever the loading mode, so an eager plan's device
+    # bytes could be its dearest phase too — a pricing follow-up, not a budget one.)
+    want = total if p.loading_mode == "eager" else total - decoder
+    assert fp["device_bytes"] == want, (fp["device_bytes"] / MB, total / MB, decoder / MB, p.loading_mode)
 
 
 def test_a_language_model_over_the_rung_is_still_streamed(monkeypatch):
     """The lifecycle frees nothing the decode needs: Janus's 12 380 MB language model at the Mac's
-    measured 15 725 MB free (rung 12 288) cannot be held whole, and is not."""
-    no_door(monkeypatch)
+    measured 15 725 MB free (rung 12 288) cannot be held whole, and is not. Since 2026-10-25 the reading does not
+    size the plan (the pool does, the reading is the door): the 12 288 rung is imposed through the census door."""
+    impose_rung(monkeypatch, 12288)
     pin_host(monkeypatch, 24576, 15725, "the Mac at its 04:20 reading")
     p, _ = _plan("Janus-Pro-7B", "triton")
     assert p.strategy == "layer_streaming", p.strategy

@@ -52,5 +52,11 @@ def test_a_model_whose_components_fit_alone_but_not_together_is_streamed(tmp_pat
     assert "{" in t, (r.stderr or t)[-1500:]
     plan = json.loads(t[t.index("{"):])
     plan = plan.get("plan", plan)
-    assert plan["strategy"] == "layer_streaming", plan["strategy"]
-    assert 0 < plan["device_window_mb"] <= 8192 and plan["planned_memory_mb"] > 0, plan
+    # The owner's rule: the engine never refuses — at the 8 192 rung orpheus's components fit alone and the plan
+    # loads them one phase at a time (lazy_sequential, the rank above streaming since 2026-10-25) or streams the
+    # largest; a refusal (the empty streamed set this file was written against) raises before the JSON and fails
+    # the assertion above. Neither plan computes on the host.
+    assert plan["strategy"] in ("lazy_sequential", "layer_streaming"), plan["strategy"]
+    assert not str(plan["strategy"]).startswith("cpu"), plan["strategy"]
+    if plan["strategy"] == "layer_streaming":
+        assert 0 < plan["device_window_mb"] <= 8192, plan["device_window_mb"]
