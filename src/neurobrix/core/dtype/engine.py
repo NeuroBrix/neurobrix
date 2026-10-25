@@ -18,6 +18,8 @@ ZERO SEMANTIC: No model/family knowledge. Only tensor dtype math.
 """
 import os
 import torch
+
+from neurobrix.core.dtype.traced_island import is_traced_fp32_island
 from typing import Callable, Optional, Dict, Any, FrozenSet
 
 from neurobrix.core.dtype.config import device_supports_fp64, parse_dtype, strip_aten_prefix
@@ -903,6 +905,11 @@ class DtypeEngine:
                 # wins over every contract, on any hardware.
                 if op_uid is not None and op_uid in self.fp32_op_uids:
                     return self._make_fp32_wrapper(func)
+                # The trace's own fp32 island (core/dtype/traced_island): an op the vendor
+                # computed in fp32 inside a half graph keeps fp32 on ANY hardware — bf16's
+                # range is no answer to the precision the trace kept (Sana's Gemma rotary).
+                if is_traced_fp32_island(attrs, _dtype_name(self.graph_dtype)):
+                    return self._make_fp32_wrapper(func)
                 # fp16 hardware: certain FP16 ops need fp32 for numerical safety.
                 # bf16 hardware: all FP16 ops run clean (bf16 range = fp32 range).
                 if self.compute_dtype == torch.float16 and op_name in _FP16_NEED_FP32:
@@ -1380,7 +1387,8 @@ class DtypeEngine:
             # to prevent the fp16 store overflow. bf16 is safe (same exponent as fp32).
             # Same two exceptions as compile_op: the vendor's per-op fp32 pin,
             # and the declared-safe matmul contract.
-            pinned = op_uid is not None and op_uid in self.fp32_op_uids
+            pinned = ((op_uid is not None and op_uid in self.fp32_op_uids)
+                      or is_traced_fp32_island(op_record, _dtype_name(self.graph_dtype)))   # compile_op's rule
             gemm_ok = (op_name in _FP16_GEMM_OPS and contract and not pinned)
             if pinned or (self.compute_dtype == torch.float16
                           and op_name in _FP16_NEED_FP32 and not gemm_ok):
