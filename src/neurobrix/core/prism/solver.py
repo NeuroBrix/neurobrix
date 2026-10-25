@@ -830,9 +830,13 @@ class PrismSolver:
     - Automatic strategy selection with fallbacks
     """
 
-    def __init__(self, safety_margin: float = 0.95, overhead_factor: float = 0.05):
+    def __init__(self, overhead_factor: float = 0.05):
         prism_defaults = get_prism_defaults()
-        self.safety_margin = prism_defaults.get("safety_margin", safety_margin)
+        # `safety_margin` (0.95, config/system.yml) multiplied every device's capacity before the budget law and
+        # its reserves — a coefficient hedging what the measured reserve (`_margin_mb`, the runtime's own context in
+        # `memory_budget.budget_mb`) already hedges, 909 MB of the Mac's pool and 819 MB of a V100-16GB taken from
+        # every plan (the Mac, 2026-10-25 18:10: 17 277 where the device declares 18 186). The budget is the pool's
+        # declared figure less MEASURED facts (the owner, 15:16); the coefficient is gone.
         self.overhead_factor = overhead_factor
         # Driver/library overhead reserve. Value + empirical derivation:
         # PRISM_DEFAULTS["oom_reserve_mb"] (config/system.py). Where it is READ today (2026-09-24):
@@ -4622,7 +4626,7 @@ class PrismSolver:
         host = memory_state()
         devices = []
         for dev in profile.devices:
-            recommended = dev.memory_mb * self.safety_margin
+            recommended = float(dev.memory_mb)          # the device's declared figure, no coefficient
             capacity = recommended
             # A census SHADOW carries the machine's plan, not the room's — the same rule
             # `_device_reading` already applies one call later. Without it the shadow's
@@ -9072,8 +9076,8 @@ def plan_record(plan: "ExecutionPlan") -> dict:
     rec = {"strategy": plan.strategy, "loading_mode": plan.loading_mode, "dtype": plan.target_dtype,
            "why": plan.selection_reason or None,
            "candidates": [{"strategy": n, "score": float(sc)} for n, sc in (plan.candidates or [])],
-           "estimated_s": plan.estimated_s,
-           "time_estimates": dict(plan.time_estimates or {}),
+           "estimated_s": getattr(plan, "estimated_s", None),
+           "time_estimates": dict(getattr(plan, "time_estimates", None) or {}),
            "refused": [{"strategy": n, "score": float(sc), "why": why} for n, sc, why in (plan.rejected or [])],
            "execution_door": getattr(plan, "execution_door", None),
            "planned_memory_mb": float(plan.total_memory_mb), "cpu_ram_mb": int(plan.cpu_ram_mb or 0),

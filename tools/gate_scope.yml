@@ -66,7 +66,10 @@ planner:
   # what the plan record says ABOUT the choice (why, what it beat, what it refused, the rungs it searched) — never
   # what runs. Every key of core/prism/solver.plan_record is in plan_fields or here
   # (tests/unit/tools/test_the_gate_compares_every_decision_the_plan_carries.py).
-  explanation_fields: [why, candidates, refused, unified_rungs_tried, stream_declined]
+  # estimated_s / time_estimates: what the estimator SAYS about the choice; execution_door: the moment's free
+  # reading against the plan at planning time (the plan stands, the door fires at execution) — none of it runs.
+  explanation_fields: [why, candidates, refused, unified_rungs_tried, stream_declined, estimated_s, time_estimates,
+                       execution_door]
   # what the planning process measures of itself, and the fields that add it (source: core/prism/host_footprint.py,
   # `resident_bytes` "what the planning process holds when it prices (the caller measures it)", summed into
   # `total_bytes`): it moves with any change to the process, never with the plan

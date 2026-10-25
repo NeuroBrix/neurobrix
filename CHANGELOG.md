@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **A device's planning capacity is its declared figure**: the 0.95 coefficient (`safety_margin`) that shaved every card and pool before the budget law is gone — 909 MB of the Mac's unified pool and 819 MB of a V100-16GB were taken from every plan on top of the measured reserves.
+- **`tools/profile_facts.py --dtypes` measures the GEMM throughput at bfloat16 too** (drawn float32, cast on the device): a bf16 profile without `matmul_tflops.bfloat16` had no time estimate for any accelerator strategy.
 - **A device detected with no compute capability resolves its chip's vendor file by its model name** ("Apple M4 Pro" -> `apple-m4-pro`, the string the Metal backend and the census already form, now one function): on the Mac's generated profile the M4 Pro's measured facts were never read, so no plan carried a time estimate and the unified budget was sized by the moment (PixArt lost its resident plan to lifecycle).
 - **Without measured facts the order inside a physical rank is today's base order, whatever the model's component count**: a penalty separates strategies of one base and never takes one under the next (Janus's seven components had pushed lazy_sequential under layer_streaming on Metal; Ming, Qwen3-Omni, CogVideoX-5b, Flex.1 and VACE the same).
 - **A dry `--explain-plan` prints the plan and the door's verdict** ("would refuse now: …") instead of refusing; the refusal fires when the run executes.

@@ -40,16 +40,20 @@ def _sync():
 
 
 def matmul_tflops(dtype: str) -> dict:
+    """The GEMM throughput at `dtype`. numpy draws float16 and float32; bfloat16 (no numpy dtype) is drawn float32
+    and cast on the device by the engine's own cast (`NBXTensor.to`), so the measured kernel is the bf16 matmul a
+    bf16 plan launches — the time estimate reads `matmul_tflops.<compute dtype>` and refuses by name without it
+    (the Mac, 2026-10-25 18:10: no estimate on 88 of 98 Metal plans for want of this figure)."""
     import numpy as np
     from neurobrix.kernels import launcher as L
     from neurobrix.kernels import wrappers as W
     from neurobrix.kernels.nbx_tensor import NBXTensor
-    npd = {"float16": np.float16, "float32": np.float32}[dtype]
+    npd = {"float16": np.float16, "float32": np.float32, "bfloat16": np.float32}[dtype]
     rng = np.random.default_rng(0)
     per = {}
     for n in GEMM_SIZES:
-        a = NBXTensor.from_numpy(np.ascontiguousarray((rng.standard_normal((n, n)) * 0.1).astype(npd))).to_cuda(0)
-        b = NBXTensor.from_numpy(np.ascontiguousarray((rng.standard_normal((n, n)) * 0.1).astype(npd))).to_cuda(0)
+        a = NBXTensor.from_numpy(np.ascontiguousarray((rng.standard_normal((n, n)) * 0.1).astype(npd))).to_cuda(0).to(dtype)
+        b = NBXTensor.from_numpy(np.ascontiguousarray((rng.standard_normal((n, n)) * 0.1).astype(npd))).to_cuda(0).to(dtype)
         ms = float(L.do_bench(lambda: W.mm(a, b), warmup=50, rep=200))
         per[n] = 2.0 * n * n * n / (ms * 1e-3) / 1e12
         del a, b
@@ -135,12 +139,16 @@ def main(argv=None) -> int:
     ap.add_argument("--card", required=True, help="the card measured (as the profile indexes it)")
     ap.add_argument("--out", required=True, type=Path, help="where the facts are written (an atelier root)")
     ap.add_argument("--storage-file", type=Path, default=None, help="a file to read for the storage bandwidth")
+    ap.add_argument("--dtypes", default="float16,float32",
+                    help="the GEMM dtypes measured; add bfloat16 on hardware that computes it natively (the profile's "
+                         "has_native_bf16: Apple M-series, Ampere and later) — the plan's compute dtype must be among them")
     a = ap.parse_args(argv)
+    dtypes = tuple(d.strip() for d in a.dtypes.split(",") if d.strip())
     out = writable(a.out)
     out.mkdir(parents=True, exist_ok=True)
     os.environ["NEUROBRIX_REPLAY_CACHE"] = str(out / "replay_cache")
     facts = {"card": a.card, "date": time.strftime("%Y-%m-%d %H:%M:%S %Z"),
-             "matmul_tflops": {d: matmul_tflops(d) for d in ("float16", "float32")}, **copies(),
+             "matmul_tflops": {d: matmul_tflops(d) for d in dtypes}, **copies(),
              "host_matmul_gflops": host_matmul_gflops(), "host_memory_gbps": host_memory_gbps()}
     if a.storage_file is not None:
         facts["storage_read_gbps"] = storage_read_gbps(a.storage_file)
@@ -149,8 +157,8 @@ def main(argv=None) -> int:
     src = f"measured {facts['date']} on card {a.card} (tools/profile_facts.py)"
     print(json.dumps(facts, indent=1))
     print("\n# the hardware profile's block, each value with its source")
-    print(f"measured:\n  source: \"{src}\"\n  matmul_tflops: {{float16: {facts['matmul_tflops']['float16']['best']:.1f}, "
-          f"float32: {facts['matmul_tflops']['float32']['best']:.1f}}}\n  memory_gbps: {facts['memory_gbps']:.0f}\n"
+    _mm = ", ".join(f"{d}: {facts['matmul_tflops'][d]['best']:.1f}" for d in dtypes)
+    print(f"measured:\n  source: \"{src}\"\n  matmul_tflops: {{{_mm}}}\n  memory_gbps: {facts['memory_gbps']:.0f}\n"
           f"  h2d_gbps: {facts['h2d_gbps']:.1f}\n  d2h_gbps: {facts['d2h_gbps']:.1f}\n"
           f"  h2d_pageable_gbps: {facts['h2d_pageable_gbps']:.1f}\n  host_matmul_gflops: {facts['host_matmul_gflops']:.0f}\n"
           f"  host_memory_gbps: {facts['host_memory_gbps']:.0f}")

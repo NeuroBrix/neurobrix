@@ -44,7 +44,6 @@ APPLE = "default-9f169c79"          # the Mac's generated profile, carried here 
 
 def _solver():
     s = PrismSolver.__new__(PrismSolver)
-    s.safety_margin = 0.95
     return s
 
 

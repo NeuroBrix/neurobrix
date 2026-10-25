@@ -42,7 +42,7 @@ def test_prepare_devices_reads_the_driver_for_a_discrete_card(monkeypatch):
         kind="device", capacity_mb=32000.0, free_mb=9000.0, held_by_others_mb=23000.0, measured=True, source="test"))
     monkeypatch.setattr(S, "memory_state", lambda: type("M", (), {"measured": False, "available_mb": 0, "source": "test", "describe": lambda self: "test"})())
     monkeypatch.setattr(S, "_census_shadow_active", lambda: False)
-    s = _solver(); s.safety_margin = 1.0
+    s = _solver()
     devs = s._prepare_devices(_Profile())
     assert devs[0].capacity_mb == 32000.0
     assert devs[0].free_mb == 9000.0, "the device state must carry the driver's reading"

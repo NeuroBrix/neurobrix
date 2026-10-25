@@ -5,7 +5,8 @@ The Mac (2026-10-03 22:00): orpheus-3b-0.1-ft triton on a 24 GB unified host wit
 "layer_streaming declined: no room for a single segment: ... beside the streamed []", every
 whole-component strategy rejected on the KV budget: a refusal where the owner's rule says the engine
 streams. Reproduced here with the Mac's profile (_pinned_machine.APPLE_M4_PRO, its default-9f169c79) and the
-host reader set to 8 400 MB available; no card.
+host reader set to 8 400 MB available; no card. Since 2026-10-25 (the owner, 15:16) the reading no longer sizes
+the plan (it is the execution door), so the room is imposed through the census door at the 8 192 rung.
 
 What would this file do if the code were wrong? The empty streamed set kept -> no plan, RED.
 """
@@ -40,7 +41,7 @@ DRIVER = textwrap.dedent("""
 
 def test_a_model_whose_components_fit_alone_but_not_together_is_streamed(tmp_path):
     installed_container(MODEL)
-    env = {**os.environ, "CUDA_VISIBLE_DEVICES": "", "NBX_CENSUS": "1", "NBX_CENSUS_DEVICES": "1",
+    env = {**os.environ, "CUDA_VISIBLE_DEVICES": "", "NBX_CENSUS": "1", "NBX_CENSUS_DEVICES": "1", "NBX_PRISM_BUDGET_MB": "8192",
            "PYTHONPATH": f"{REPO / 'src'}:{REPO}", "PYTHONNOUSERSITE": "1"}
     import yaml
     from tests.unit.prism._pinned_machine import APPLE_M4_PRO
@@ -52,4 +53,4 @@ def test_a_model_whose_components_fit_alone_but_not_together_is_streamed(tmp_pat
     plan = json.loads(t[t.index("{"):])
     plan = plan.get("plan", plan)
     assert plan["strategy"] == "layer_streaming", plan["strategy"]
-    assert 0 < plan["device_window_mb"] < 8400 < plan["planned_memory_mb"] + 8400
+    assert 0 < plan["device_window_mb"] <= 8192 and plan["planned_memory_mb"] > 0, plan

@@ -1,4 +1,13 @@
-"""A plan is sized on what the machine HAS, not on what the device recommends.
+"""A plan is sized on the pool the machine DECLARES; the moment's reading is the door.
+
+The law since 2026-10-25 (the owner, 15:16): the plan is sized by the pool's DECLARED figure less the engine's
+measured base — never by the moment's free reading; the reading is the EXECUTION DOOR (`execution_door`), which
+refuses by name what the plan does not fit at run time, and a census rung imposed through NBX_PRISM_BUDGET_MB
+replaces the pool. The scenarios below keep their machine and their readings; where a cell relied on the reading
+to shrink the budget, the rung is now imposed through the door, the reading kept for what it is.
+
+History (the rule this file first pinned, 2026-09-10): a plan sized on what the machine HAS, not on what the device
+recommends.
 
 `recommendedMaxWorkingSetSize` is a static property of the device. It does not
 move when another process holds a third of the machine, and on unified memory
@@ -45,7 +54,6 @@ class _Profile:
 def _prepare(monkeypatch, spec, state):
     monkeypatch.setattr(solver_mod, "memory_state", lambda: state)
     inst = solver_mod.PrismSolver.__new__(solver_mod.PrismSolver)
-    inst.safety_margin = 1.0
     return solver_mod.PrismSolver._prepare_devices(inst, _Profile([spec]))
 
 
@@ -80,14 +88,15 @@ def test_an_unreadable_platform_says_so_instead_of_inventing_a_number(monkeypatc
 # What the planner does with it
 # ---------------------------------------------------------------------------
 
-def test_a_unified_device_is_planned_against_what_is_free(monkeypatch):
+def test_a_unified_device_is_planned_against_its_declared_pool_and_keeps_the_reading_for_the_door(monkeypatch):
+    """10 099 MB free of a 18 186 MB pool: the plan is sized on the pool (no engine base declared here), the
+    reading stays on the device for the door. Before 2026-10-25 the capacity followed the reading (10 099)."""
     state = MemoryState(total_mb=24576, available_mb=10099, swap_used_mb=5566,
                         swap_total_mb=7168, source="test")
     devices = _prepare(monkeypatch, _spec(unified=True), state)
-    assert devices[0].capacity_mb == 10099, (
-        "a unified device planned against the brochure is how a render gets "
-        "killed at step 3 of 20")
+    assert devices[0].capacity_mb == 18186, devices[0].capacity_mb
     assert devices[0].recommended_mb == 18186, "the device's own figure is lost"
+    assert devices[0].host_memory is not None and devices[0].host_memory.available_mb == 10099, "the door's figure is lost"
 
 
 def test_a_discrete_device_is_not_constrained_by_host_pressure(monkeypatch):
@@ -123,7 +132,7 @@ def test_a_fresh_copy_keeps_both_numbers(monkeypatch):
     devices = _prepare(monkeypatch, _spec(unified=True), state)
     inst = solver_mod.PrismSolver.__new__(solver_mod.PrismSolver)
     fresh = solver_mod.PrismSolver._fresh_devices(inst, devices)
-    assert fresh[0].capacity_mb == 10099
+    assert fresh[0].capacity_mb == 18186
     assert fresh[0].recommended_mb == 18186
     assert fresh[0].host_memory is devices[0].host_memory
 
@@ -139,8 +148,8 @@ def test_the_refusal_names_the_device_figure_and_the_real_one(monkeypatch):
     devices = _prepare(monkeypatch, _spec(unified=True), state)
     inst = solver_mod.PrismSolver.__new__(solver_mod.PrismSolver)
     verdict = solver_mod.PrismSolver._memory_verdict(inst, devices)
-    assert "18186 MB recommended" in verdict
-    assert "10099 MB actually usable" in verdict
+    assert "18186 MB" in verdict, verdict
+    assert "10099 MB free" in verdict, verdict
     assert "prl_vm_app 8615 MB" in verdict, (
         "the refusal must name what is holding the memory, or the user cannot "
         "act on it")

@@ -28,7 +28,6 @@ from tests.unit.prism._pinned_machine import V100_16GB, profile as pinned_profil
 
 def _solver():
     s = PrismSolver.__new__(PrismSolver)
-    s.safety_margin = 0.95
     return s
 
 
@@ -66,13 +65,14 @@ def _budget(monkeypatch, *, available_mb, door=None):
     return float(by_name[want].budget_mb)
 
 
-def test_without_the_door_the_unified_budget_tracks_the_ambient():
-    """The ordinary run reads what is actually free — the behaviour the census
-    must NOT inherit (and did, as the coin toss)."""
+def test_without_the_door_the_unified_budget_is_the_declared_pool_whatever_the_ambient():
+    """Since 2026-10-25 (the owner, 15:16) the ordinary run is budgeted by the pool's declared figure too; the
+    reading is the execution door. Before, this cell asserted `tight < loose` — the coin toss the census had to
+    be walled from; the wall (the door below) stays, the coin is gone."""
     with pytest.MonkeyPatch.context() as mp:
         tight = _budget(mp, available_mb=6000)
         loose = _budget(mp, available_mb=20000)
-    assert tight < loose, (tight, loose)
+    assert tight == loose, (tight, loose)
 
 
 def test_the_door_fixes_the_unified_budget_regardless_of_the_ambient():

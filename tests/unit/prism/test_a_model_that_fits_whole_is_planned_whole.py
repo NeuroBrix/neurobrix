@@ -120,8 +120,11 @@ def test_janus_is_planned_whole_on_the_idle_mac(monkeypatch):
     lm = max(p.components, key=lambda n: s._whole_component_mb(c, n, p.component_memory[n], dev)
              if n in p.component_memory else 0.0)
     room = s._rung_part_mb(dev) - s._whole_component_mb(c, lm, p.component_memory[lm], dev)
-    assert s._deferred_drain_floor_mb(dev) <= room < s._deferred_drain_mb(dev), (room, lm)
-    assert cliff == int(room * MB), (cliff / MB, room, lm)
+    # Since 2026-10-25 the margin is the allocator's reserve alone, and the room the language model leaves
+    # (1 726 MB on the pinned Mac) exceeds the profile's cliff: the plan then drains at the profile's figure —
+    # cliff = min(profile cliff, room), `_assign_drain_cliffs`.
+    assert s._deferred_drain_floor_mb(dev) <= room, (room, lm)
+    assert cliff == int(min(room, s._deferred_drain_mb(dev)) * MB), (cliff / MB, room, s._deferred_drain_mb(dev), lm)
     assert all(a.deferred_drain_cliff_bytes == cliff for a in p.components.values() if a.device == dev_name)
     fp = p.host_footprint
     assert (fp["total_bytes"] - fp["resident_bytes"]) / MB <= 18186

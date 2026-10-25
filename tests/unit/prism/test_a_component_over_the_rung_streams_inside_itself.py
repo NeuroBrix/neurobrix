@@ -101,9 +101,13 @@ def _plan(model, mode):
 
 @pytest.mark.parametrize("mode", MODES)
 @pytest.mark.parametrize("model", STREAMED)
-def test_at_the_top_rung_the_component_streams_inside_itself(monkeypatch, model, mode):
+def test_under_a_rung_below_its_largest_component_the_component_streams_inside_itself(monkeypatch, model, mode):
+    """The rung imposed through the door is 8 192 MB: under the budget law of 2026-10-25 (the margin is the
+    allocator's reserve, no longer a 12 % hedge) these transformers fit the 16 384 rung whole per phase and plan
+    lazy_sequential there, rightly; the rule this cell holds — a component over the rung streams inside itself,
+    never a refusal — is proven at a rung their largest component exceeds."""
     pin_host(monkeypatch, 24576, 18186, "the Mac's idle reading, its profile's capacity")
-    impose_rung(monkeypatch, 16384)
+    impose_rung(monkeypatch, 8192)
     p, s = _plan(model, mode)
     usable = s._usable_mb(s._prepare_devices(profile(APPLE_M4_PRO))[0])
     if mode == "compiled" and p.strategy != "layer_streaming":
@@ -134,12 +138,22 @@ OWED_BUSY = {}
 
 @pytest.mark.parametrize("model", [pytest.param(m, marks=pytest.mark.xfail(strict=True, reason=OWED_BUSY[m]))
                                    if m in OWED_BUSY else m for m in STREAMED])
-def test_on_the_busy_mac_the_plan_streams_at_the_rung_its_reading_gives(monkeypatch, model):
-    """~12 000 MB free: no door, the unified descent from the reading's own rung."""
+def test_on_the_busy_mac_the_plan_is_the_idle_plan_and_the_reading_is_the_door(monkeypatch, model):
+    """~12 000 MB free, no door: since 2026-10-25 (the owner, 15:16) the reading does not size the plan — the
+    busy machine gets the idle machine's plan, and the door refuses it by name when its host side does not fit
+    the memory free. Before: the unified descent from the reading's own rung (layer_streaming here)."""
     no_door(monkeypatch)
+    pin_host(monkeypatch, 24576, 18186, "the Mac, idle")
+    idle, _ = _plan(model, "triton")
     pin_host(monkeypatch, 24576, 12000, "the Mac with ~12 GB free")
-    p, _ = _plan(model, "triton")
-    assert p.strategy == "layer_streaming", f"{model} planned {p.strategy!r}"
+    busy, _ = _plan(model, "triton")
+    assert busy.strategy == idle.strategy, (model, busy.strategy, idle.strategy)
+    fp = busy.host_footprint or {}
+    need = (int(fp.get("total_bytes", 0)) - int(fp.get("resident_bytes", 0))) / 2**20
+    if need > 12000:
+        assert busy.execution_door and "free" in busy.execution_door, (model, need, busy.execution_door)
+    else:
+        assert not busy.execution_door, (model, need, busy.execution_door)
 
 
 def test_a_vlm_priced_at_its_image_is_held_on_the_device(monkeypatch):

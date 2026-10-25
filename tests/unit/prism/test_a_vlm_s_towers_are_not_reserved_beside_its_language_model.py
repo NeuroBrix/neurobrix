@@ -108,10 +108,11 @@ def test_a_served_streamed_tower_reserves_the_head_and_speech_leg(monkeypatch):
 
 def test_minicpm_streamed_lm_is_cut_beside_its_decode_phase_only(monkeypatch):
     """The container: MiniCPM-o-4_5 on the Mac's profile, its LM streamed — what is reserved beside
-    its segments is its head and its speech leg, never the vision and audio towers."""
+    its segments is its head and its speech leg, never the vision and audio towers. The LM is streamed at the
+    12 288 rung imposed through the door (since 2026-10-25 the idle pool holds the decode phase whole)."""
     pin_host(monkeypatch, 24576, 18186, "the Mac, idle")
     monkeypatch.delenv("NBX_FORCE_STRATEGY", raising=False)
-    monkeypatch.delenv("NBX_PRISM_BUDGET_MB", raising=False)
+    monkeypatch.setenv("NBX_PRISM_BUDGET_MB", "12288")
     s = PrismSolver()
     seen = {}
     real = s._compute_memory

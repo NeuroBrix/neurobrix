@@ -104,7 +104,9 @@ def test_a_component_the_container_does_not_declare_has_no_dtype():
 # ───────────────────── MiniCPM on the Mac: the refusal is honest ─────────────────────
 
 def _plan_mac(monkeypatch):
-    no_door(monkeypatch)
+    # Since 2026-10-25 (the owner, 15:16) the idle pool is the budget and MiniCPM's decode phase fits it whole;
+    # the streaming cells below are proven at the 12 288 rung imposed through the door, where the LM does not fit.
+    monkeypatch.setenv("NBX_PRISM_BUDGET_MB", "12288")
     pin_host(monkeypatch, 24576, 18186, "the Mac, idle")
     monkeypatch.delenv("NBX_FORCE_STRATEGY", raising=False)
     s = PrismSolver()

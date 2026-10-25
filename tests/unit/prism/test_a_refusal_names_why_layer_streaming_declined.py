@@ -106,9 +106,11 @@ def test_minicpm_on_the_idle_mac_is_streamed_not_refused(monkeypatch):
     rule — the engine never refuses — holds since a-streamed-plan-states-its-window: the largest
     component is streamed. (Since the vlm flow declared its phases, 2026-10-04, the whole plan passes
     the KV check at 16 384 and is turned away by its host side, the memory free; the rung below
-    streams.)"""
+    streams.) Since 2026-10-25 (the owner, 15:16) the plan is sized by the declared pool, not the reading: on the
+    idle Mac's 18 186 MB pool the decode phase fits and the plan is whole; the streaming rule is proven at the
+    12 288 rung imposed through the door, where the LM does not fit."""
     pin_host(monkeypatch, 24576, 18186, "the Mac, idle")
-    monkeypatch.delenv("NBX_PRISM_BUDGET_MB", raising=False)
+    impose_rung(monkeypatch, 12288)
     monkeypatch.delenv("NBX_FORCE_STRATEGY", raising=False)
     plan = PrismSolver().solve_smart(NBXContainer.load(str(container_root("MiniCPM-o-4_5"))), profile(APPLE_M4_PRO),
                                      InputConfig(batch_size=1), mode="triton")
