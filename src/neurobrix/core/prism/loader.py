@@ -213,11 +213,11 @@ def _vendor_block(d_data: dict, block: str) -> Optional[dict]:
     from neurobrix.core.config.loader import vendor_config_for_device, UnsupportedArchitectureError
     brand, arch = d_data.get("brand", "nvidia"), d_data.get("architecture")
     cc = d_data.get("compute_capability")
-    if not arch and not cc:
+    if not arch and not cc and not d_data.get("model"):
         return None
     try:
         # the device's own vendor file, by the kernels' rule: the chip file (compute capability) before the family
-        return (vendor_config_for_device(str(brand), arch, cc) or {}).get(block)
+        return (vendor_config_for_device(str(brand), arch, cc, model=d_data.get("model")) or {}).get(block)
     except UnsupportedArchitectureError:
         return None
 

@@ -610,7 +610,8 @@ def _bind_target(hardware: Optional[str], profile: Optional[dict]) -> None:
         # 163 840) — the exact defect this function was written to close, still open for
         # every non-CUDA brand. The profile is resolved WITHOUT a target
         # (`vendor_profile_for_arch`), which is why that door exists.
-        model = str(dev.get("model") or "").strip().lower().replace(" ", "-")
+        from neurobrix.core.config.loader import device_arch_string
+        model = device_arch_string(dev.get("model"))
         if not model:
             raise RuntimeError(
                 "census: the hardware profile's device names no model, so no vendor profile "

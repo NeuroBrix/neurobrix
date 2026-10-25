@@ -354,7 +354,8 @@ class MetalRuntime:
         for Apple. The rule is one line of string handling, and the profile
         matches it by prefix (`config/vendors/apple/apple_silicon.yml`).
         """
-        return str(self._device.name()).lower().replace(" ", "-")
+        from neurobrix.core.config.loader import device_arch_string   # the one rule; torch-free (R33)
+        return device_arch_string(self._device.name())
 
     @property
     def has_unified_memory(self) -> bool:

@@ -13,17 +13,17 @@ V = {"measured": {"source": "test", "matmul_tflops": {"float16": 1.0, "float32":
 
 def test_the_vendor_file_supplies_the_blocks_a_profile_lacks(monkeypatch):
     import neurobrix.core.config.loader as CL
-    monkeypatch.setattr(CL, "vendor_config_for_device", lambda vendor, arch, cc: dict(V))
+    monkeypatch.setattr(CL, "vendor_config_for_device", lambda vendor, arch, cc, **kw: dict(V))
     p = L.load_profile("test_profile")                      # the committed test profile carries no measured block
     assert p.devices[0].measured == V["measured"] and p.host_measured == V["host_measured"]
 
 
 def test_a_profile_s_own_block_wins_and_a_vendor_without_one_gives_none(monkeypatch):
     import neurobrix.core.config.loader as CL
-    monkeypatch.setattr(CL, "vendor_config_for_device", lambda vendor, arch, cc: {"measured": {"source": "vendor"}})
+    monkeypatch.setattr(CL, "vendor_config_for_device", lambda vendor, arch, cc, **kw: {"measured": {"source": "vendor"}})
     p = L.load_profile("v100-16g")                          # carries its own measured block (the rack's, 2026-10-24)
     assert p.devices[0].measured["source"] != "vendor" and "matmul_tflops" in p.devices[0].measured
-    monkeypatch.setattr(CL, "vendor_config_for_device", lambda vendor, arch, cc: {})
+    monkeypatch.setattr(CL, "vendor_config_for_device", lambda vendor, arch, cc, **kw: {})
     assert L.load_profile("test_profile").devices[0].measured is None
     assert L.load_profile("test_profile").host_measured is None
 
@@ -44,3 +44,21 @@ def test_the_chip_file_is_read_before_the_family_file(tmp_path, monkeypatch):
     assert (_vendor_block(dev, "measured") or {}).get("memory_gbps") == 224
     family = {"brand": "apple", "architecture": "apple_silicon", "compute_capability": "apple-m9"}
     assert _vendor_block(family, "measured") is None                       # the family file carries none: nothing invented
+    # The Mac's GENERATED profile (default-9f169c79, 17:37): autodetect writes compute_capability "0.0" for every
+    # non-NVIDIA device; the chip file is found by the arch string of the model name ("Apple M4 Pro" -> "apple-m4-pro",
+    # the Metal backend's own rule). Seen red 2026-10-25 (None: no estimate on 0 of 98 Metal plans).
+    generated = {"brand": "apple", "architecture": "apple_silicon", "compute_capability": "0.0", "model": "Apple M4 Pro"}
+    assert (_vendor_block(generated, "measured") or {}).get("memory_gbps") == 224
+    assert CL.device_arch_string("Apple M4 Pro") == "apple-m4-pro"
+
+
+def test_the_mac_s_generated_profile_reads_the_m4_pro_s_measured_facts():
+    """The pinned Mac profile (`_pinned_machine.APPLE_M4_PRO`, the generated entry as it is: compute_capability "0.0",
+    model "Apple M4 Pro") loads with the chip file's `measured:` block (config/vendors/apple/apple_m4_pro.yml, measured
+    2026-10-25 05:16 on the M4 Pro) — the time estimate's facts, and the pool's reservation the budget law reads. Seen
+    red 2026-10-25 17:37 (measured None, estimated_s None on 98/98, PixArt's single_gpu lost to lifecycle on a budget
+    sized by the moment)."""
+    from tests.unit.prism._pinned_machine import APPLE_M4_PRO, profile
+    p = profile(APPLE_M4_PRO)
+    assert p.devices[0].measured and p.devices[0].measured.get("memory_gbps"), p.devices[0].measured
+    assert p.host_measured and p.host_measured.get("host_memory_gbps"), p.host_measured

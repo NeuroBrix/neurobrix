@@ -7136,9 +7136,18 @@ class PrismSolver:
         # today's order inside the rank, spread over the rank's window so that the penalties below (a lazy load's
         # 20 points a component, zero3's PCIe share) order within it and never invert it: without measured facts
         # lazy_sequential (300) stays above layer_streaming (50) for a model of several components (the Mac, 17:18)
-        offset = ((base - min(_in_rank)) / _span) * (RANK_FLOOR_SPAN - 9.0) if _span > 0 else 0.0
+        def _offset(b: float) -> float:
+            return ((b - min(_in_rank)) / _span) * (RANK_FLOOR_SPAN - 9.0) if _span > 0 else 0.0
+        offset = _offset(base)
         score = RANK_BASE[rank] + offset
         rank_floor = RANK_BASE[rank] - RANK_FLOOR_SPAN
+        # Without measured facts the order inside a rank is today's base order and nothing else: a penalty below
+        # separates strategies of ONE base and never takes one under the next base beneath it. The spread alone did
+        # not hold it: Janus's 7 components cost lazy_sequential 140 points and it fell under layer_streaming (324
+        # against 400; the Mac, 2026-10-25 17:37, Ming, Qwen3-Omni, CogVideoX-5b, Flex.1, VACE the same) — the tie
+        # without facts falls on the plan that re-reads the LEAST (the owner, 17:40).
+        _below = [b for b in _in_rank if b < base]
+        base_floor = RANK_BASE[rank] + _offset(max(_below)) + 1.0 if _below else rank_floor
 
         # Count unique devices used
         device_strings = set()
@@ -7236,8 +7245,9 @@ class PrismSolver:
         if strategy_name not in ("cpu_execution", "cpu_streaming") and any(
                 str(a[0] if isinstance(a, tuple) else a).startswith("cpu") for a in allocations.values()):
             return min(max(score, 1.0), BASE_SCORES["cpu_execution"] + 0.5)
-        # The rank's floor: penalties order the strategies INSIDE their rank and never across ranks.
-        score = max(score, rank_floor)
+        # The rank's floor: penalties order the strategies INSIDE their rank and never across ranks — nor across
+        # the bases inside the rank (`base_floor`).
+        score = max(score, rank_floor, base_floor)
 
         # INVARIANT: a GPU-compute strategy never ranks below the R35
         # last-resort cpu_execution, no matter how harsh its penalties.

@@ -204,3 +204,10 @@ def test_without_facts_a_lazy_plan_of_several_components_still_outranks_layer_st
     three = {"model": "cuda:0", "lm_head": "cuda:0", "vision": "cuda:0"}
     assert s._score_strategy("lazy_sequential", three, _NoTopology()) > s._score_strategy("layer_streaming", three, _NoTopology())
     assert s._score_strategy("component_placement_lazy", three, _NoTopology()) > s._score_strategy("layer_streaming", three, _NoTopology())
+    # Janus-Pro-7B: 7 components — 140 points of lazy penalty took lazy_sequential (324) under layer_streaming (400)
+    # on Metal (the Mac, 17:37). Without facts the base order of the rank holds whatever the component count.
+    seven = {f"c{i}": "cuda:0" for i in range(7)}
+    lazy, cpl = s._score_strategy("lazy_sequential", seven, _NoTopology()), s._score_strategy("component_placement_lazy", seven, _NoTopology())
+    z3, ls = s._score_strategy("zero3", seven, _NoTopology()), s._score_strategy("layer_streaming", seven, _NoTopology())
+    assert cpl > lazy > z3 > ls, (cpl, lazy, z3, ls)
+    assert all(S.RANK_BASE[4] - S.RANK_FLOOR_SPAN <= v <= S.RANK_BASE[4] + S.RANK_FLOOR_SPAN for v in (cpl, lazy, z3, ls))
