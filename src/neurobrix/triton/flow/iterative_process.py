@@ -818,7 +818,8 @@ class TritonIterativeProcessHandler:
                     # un-guided single forward (batch 1).
                     import os as _os_dit
                     _dd = _os_dit.environ.get("NBX_DUMP_DIT")
-                    if _dd and step_idx == 0 and self._is_loop_component(comp_name):
+                    _dd_step = int(_os_dit.environ.get("NBX_DUMP_DIT_STEP", "0"))   # R30 mirror of the core selector
+                    if _dd and step_idx == _dd_step and self._is_loop_component(comp_name):
                         import numpy as _np_dit
 
                         def _np_of(_t):
@@ -898,6 +899,18 @@ class TritonIterativeProcessHandler:
                     # mirror of core/flow/iterative_process.py.
                     _gate_loop_state_finite(current_state, step_idx,
                                             timestep, comp_name)
+
+                    # Full per-step latent dump (NBX_DUMP_STEP_LATENTS=<dir>): R30 mirror of the core flow's,
+                    # as numpy .npz (R33 forbids torch.save here) — the state after the step and the prediction
+                    # the scheduler stepped with, to locate the first diverging step between the two engines.
+                    _dsl = os.environ.get("NBX_DUMP_STEP_LATENTS")
+                    if _dsl:
+                        import numpy as _np_sl
+                        os.makedirs(_dsl, exist_ok=True)
+                        _tv = float(timestep.item() if isinstance(timestep, NBXTensor) else timestep)
+                        _np_sl.savez(os.path.join(_dsl, f"step_{step_idx:03d}.npz"),
+                                     latent=current_state.float().numpy(), velocity=model_output.float().numpy(),
+                                     timestep=_np_sl.asarray([_tv]))
 
                     self.ctx.variable_resolver.set(state_key, current_state)
             self._checkpoint_save(_ckpt, step_idx, num_steps, state_key, driver)
