@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **`neurobrix autotune certify --only-missing` counts a certificate proven under a retired code generator as missing**, as the runtime does (it serves only the running generator's); such a key is re-proven instead of being skipped while its launches go unserved. **The diagnostic noise pin (`NBX_FORCE_RAND_SEED`) drives the compiled engine's Euler ancestral scheduler too**, so a pinned cross-engine drift compares kernels past the first stochastic step.
 - **Five catalogue entries carry their unique names** (one model = one name, 2026-10-24): `SwinIR-001_classicalSR_DF2K_s64w8_SwinIR-M_x2`, `SwinIR-001_classicalSR_DIV2K_s48w8_SwinIR-M_x4`, `HAT-HAT-S_SRx4`, `HAT-HAT-L_SRx4_ImageNet-pretrain` and `s1-mini` replace the download-time names in the census tables, the plan-identical list and the benchmark rows; the containers are the same bytes under their names.
 - **A temporally streamed decoder no longer runs out of memory on Apple GPUs** (compiled engine): at each of the stream's own boundaries the device gives back the heaps its allocator kept for the slices that died there (mochi-1-preview's VAE held 19.8 GB of device memory for 7 GB live); devices whose allocator reuses freed memory (CUDA) are untouched.
 - **Flash attention runs every head dimension on Apple GPUs** (Metal), where the profile states it was measured correct (`flash.any_head_dim_correct`); every NVIDIA and AMD route is unchanged.

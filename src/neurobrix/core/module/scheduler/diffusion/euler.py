@@ -446,7 +446,14 @@ class EulerAncestralDiscreteScheduler(DiffusionSchedulerBase):
             # randn_tensor semantics (a torch.Generator is device-bound; on a
             # multi-device plan the sample may live elsewhere).
             from neurobrix.kernels import rng_stream
-            if rng_stream.active() and not _aseed:
+            from neurobrix.kernels.rng_pin import pinned_seed, pinned_normal
+            if pinned_seed() is not None:
+                # The diagnostic pin (NBX_FORCE_RAND_SEED, kernels/rng_pin) is a contract of BOTH engines: the Triton
+                # scheduler draws its ancestral noise from it (randn_like_wrapper), so this one does too, in the same
+                # order and shape — a pinned cross-engine drift that parted at the second step's input (Allegro-TI2V on
+                # Metal, 2026-10-25) was this draw, not a kernel.
+                noise = torch.from_numpy(pinned_normal(tuple(sample.shape))).to(device=sample.device, dtype=_out_dtype)
+            elif rng_stream.active() and not _aseed:
                 # A seeded run: the step's noise is the run stream's next draw (kernels/rng_stream), the same
                 # values the Triton scheduler adds — the vendor's one generator, continued.
                 noise = torch.from_numpy(rng_stream.next_normal(tuple(sample.shape))).to(

@@ -2623,12 +2623,11 @@ def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, re
                 _e = C.entry_for_memory_class(entries.get(ktext), certifying_class)
                 if _e and str(_e.get("proof", {}).get("date", "")) >= skip_proven_since:
                     continue
-            if (only_missing or reprove_unclocked or reprove_generator) and C.entry_covers(
-                    entries, ktext, certifying_class, need_clock=reprove_unclocked,
-                    need_generator=C.proof_backend({"backend": _backend()}) if reprove_generator else None):
-                continue                      # certified FOR THIS CARD's memory class already (and, with
-                                              # --reprove-unclocked, at a recorded clock; with
-                                              # --reprove-generator, under the running code generator)
+            if C.coverage_asked(entries, ktext, certifying_class, only_missing, reprove_unclocked, reprove_generator,
+                                C.proof_backend({"backend": _backend()})):
+                continue                      # certified FOR THIS CARD's memory class already, under the running
+                                              # code generator (the one the runtime serves; --only-missing asks it
+                                              # too), and, with --reprove-unclocked, at a recorded clock
             _r = refused.get((qual, ktext))
             if only_missing and _r is not None and int(_r.get("usable_bytes", -1)) == usable_now:
                 summary["refused_known"] = summary.get("refused_known", 0) + 1

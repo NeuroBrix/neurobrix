@@ -613,6 +613,19 @@ def entry_covers(entries: Dict[str, Dict[str, Any]], ktext: str, cls: Optional[i
     return True
 
 
+def coverage_asked(entries: Dict[str, Dict[str, Any]], ktext: str, cls: Optional[int], only_missing: bool,
+                   reprove_unclocked: bool, reprove_generator: bool, running_generator: Optional[str]) -> bool:
+    """The certifier's one question before a key: is it covered already, for what the flags ask? `--only-missing`
+    asks for a certification THE RUNTIME SERVES — the running code generator's (`entry_for_generator`): an entry
+    proven under a retired generator is not served, so it is missing, not present (the Mac, 2026-10-25 02:43: 17
+    addmm fp32 entries under a retired generator counted present and withheld HAT's cells). `--reprove-unclocked`
+    adds the clock; `--reprove-generator` asks the same generator question and re-proves the stored configuration."""
+    if not (only_missing or reprove_unclocked or reprove_generator):
+        return False
+    return entry_covers(entries, ktext, cls, need_clock=reprove_unclocked,
+                        need_generator=running_generator if (only_missing or reprove_generator) else None)
+
+
 def file_certification(entries: Dict[str, Dict[str, Any]], ktext: str, cert: Dict[str, Any]) -> None:
     """Place a fresh certification in a file's entries by the class its proof
     names: the primary slot when the key is new or the class is the primary's,
