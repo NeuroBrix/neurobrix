@@ -389,6 +389,10 @@ class ExecutionPlan:
     # prints them; a plan that names only its winner cannot be audited.
     candidates: List[Tuple[str, float]] = field(default_factory=list)
     rejected: List[Tuple[str, float, str]] = field(default_factory=list)
+    # Point B (docs/design/prism-time-score.md): the chosen plan's estimated seconds for the request and every ranked
+    # candidate's ({strategy: seconds, or why it was not estimated}); empty when the profile carries no measured facts.
+    estimated_s: Optional[float] = None
+    time_estimates: Dict[str, Any] = field(default_factory=dict)
     kv_cache_plan: Optional[KVCachePlan] = None
     # The state engine's policy for the decode cache (core/state/policy.py, step 5): its name and why, recorded with
     # the plan and printed in the selection reason; None when the flow decodes nothing.
@@ -2546,6 +2550,19 @@ class PrismSolver:
             chosen_devices = strat_devices
             self._selection_reason = self._explain_choice(
                 strat_name, score, ranked, profile)
+            # Point B (docs/design/prism-time-score.md), step 3: every ranked candidate's estimated time beside
+            # today's score — said, never deciding yet; nothing when the profile carries no measured facts
+            self._time_estimates = self._estimate_times(ranked, container, input_config, profile, target_dtype_str)
+            if self._time_estimates:
+                _t = self._time_estimates
+                _best = min((v, k) for k, v in _t.items() if isinstance(v, float)) if any(
+                    isinstance(v, float) for v in _t.values()) else None
+                _mine = _t.get(strat_name)
+                if _best and isinstance(_mine, float) and _mine <= _best[0] * 1.01:
+                    _best = (_mine, strat_name)          # a tie within 1 % is today's choice, never a change
+                self._selection_reason += ("; estimated " + (f"{_mine:.3g} s" if isinstance(_mine, float)
+                                                             else str(_mine)) +
+                                           (f", fastest by estimate {_best[1]} {_best[0]:.3g} s" if _best else ""))
             break
 
         if allocations is None:
@@ -6822,6 +6839,49 @@ class PrismSolver:
                 candidates.append((score, strategy_name, allocations, used_devices))
         return candidates
 
+    def _estimate_times(self, ranked, container, input_config, profile, dtype: str) -> Dict[str, Any]:
+        """{strategy: estimated seconds for the request, or why it cannot be estimated} for every ranked candidate
+        (`core/prism/time_estimate.py`); {} when no device of the profile carries measured facts."""
+        from neurobrix.core.prism import time_estimate as TE
+        from neurobrix.core.prism.work import component_work
+        if not any(getattr(d, "measured", None) for d in profile.devices):
+            return {}
+        devices = {}
+        for d in profile.devices:
+            if getattr(d, "measured", None):
+                f = TE.device_facts(d.measured, f"device {d.index}")
+                for prefix in ("cuda", "mps", "hip", "xpu"):
+                    devices[f"{prefix}:{d.index}"] = f
+        try:
+            host = TE.host_facts(getattr(profile, "host_measured", None))
+        except TE.MissingFact:
+            host = None
+        flow = self._flow_topology(container).get("flow") or {}
+        out: Dict[str, Any] = {}
+        # the request's token bound when it states one; else the package's declared max_tokens (runtime/defaults.json) —
+        # the same source that sizes the cache (an image, video or audio request carries no text bound by construction)
+        tokens = getattr(input_config, "max_tokens", None) or (self._read_defaults(container) or {}).get("max_tokens")
+        try:
+            uses = TE.uses_per_request(flow, getattr(input_config, "steps", None), tokens)
+        except TE.MissingFact as exc:
+            return {name: f"not estimated: {exc}" for _s, name, _a, _d in ranked}
+        works, runs, prompt = {}, {}, {}
+        for comp in getattr(self, "_neural_components", []) or []:
+            prof = ActivationProfiler(comp.graph)
+            kind, n = uses.get(comp.name, ("once", 1))
+            w = component_work(prof, prof.build_symbol_map(input_config))
+            if kind == "token":                               # the prompt pass once, then one token per run
+                one = copy.copy(input_config)
+                one.seq_len = 1
+                prompt[comp.name], w = w, component_work(prof, prof.build_symbol_map(one))
+            works[comp.name], runs[comp.name] = w, n
+        for _s, name, allocs, _d in ranked:
+            try:
+                out[name] = float(TE.plan_seconds(name, allocs, works, runs, devices, host, str(dtype), prompt=prompt))
+            except TE.MissingFact as exc:
+                out[name] = f"not estimated: {exc}"
+        return out
+
     def _explain_choice(self, chosen: str, chosen_score: float,
                         ranked: List, profile: "PrismProfile") -> str:
         """One line saying why this strategy won, and what it beat.
@@ -8576,6 +8636,9 @@ class PrismSolver:
             selection_reason=getattr(self, "_selection_reason", ""),
             candidates=list(getattr(self, "_candidates", [])),
             rejected=list(getattr(self, "_rejected", [])),
+            estimated_s=(lambda t: t if isinstance(t, float) else None)(
+                dict(getattr(self, "_time_estimates", {}) or {}).get(strategy)),
+            time_estimates=dict(getattr(self, "_time_estimates", {}) or {}),
             cpu_ram_mb=profile.cpu.ram_mb if profile.cpu else 0,
         )
 
@@ -8821,6 +8884,8 @@ def plan_record(plan: "ExecutionPlan") -> dict:
     rec = {"strategy": plan.strategy, "loading_mode": plan.loading_mode, "dtype": plan.target_dtype,
            "why": plan.selection_reason or None,
            "candidates": [{"strategy": n, "score": float(sc)} for n, sc in (plan.candidates or [])],
+           "estimated_s": plan.estimated_s,
+           "time_estimates": dict(plan.time_estimates or {}),
            "refused": [{"strategy": n, "score": float(sc), "why": why} for n, sc, why in (plan.rejected or [])],
            "planned_memory_mb": float(plan.total_memory_mb), "cpu_ram_mb": int(plan.cpu_ram_mb or 0),
            "device_window_mb": (float(plan.device_window_mb) if plan.device_window_mb is not None else None),
@@ -8879,6 +8944,9 @@ def explain_plan(plan: "ExecutionPlan") -> str:
     """
     lines = [f"strategy        {plan.strategy}   (loading: {plan.loading_mode}, dtype: {plan.target_dtype})"]
     lines.append(f"why             {plan.selection_reason or 'no reason recorded — the solver did not score this plan'}")
+    if plan.time_estimates:
+        lines.append("estimated       " + (f"{plan.estimated_s:.3g} s" if plan.estimated_s is not None else "not estimated")
+                     + "  (" + "  ".join(f"{n}={v:.3g}s" if isinstance(v, float) else f"{n}=?" for n, v in plan.time_estimates.items()) + ")")
     if plan.candidates:
         lines.append("candidates      " + "  ".join(f"{n}={sc:.0f}" for n, sc in plan.candidates)
                      + "   (every strategy that fitted, best first, by estimated throughput)")

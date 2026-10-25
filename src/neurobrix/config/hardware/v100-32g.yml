@@ -4,6 +4,11 @@
 id: v100-32g
 vendor: nvidia
 preferred_dtype: float16
+host_measured:
+  source: "measured 2026-10-24 22:38:27 CEST on the rack, alone, the host memory bandwidth 2026-10-25 after chain48 (tools/profile_facts.py; the shard read over the NFS/RDMA mount)"
+  host_memory_gbps: 11
+  host_matmul_gflops: 761
+  storage_read_gbps: 0.93
 summary:
   total_gpus: 1
   total_vram_gb: 32
@@ -19,6 +24,13 @@ devices:
   - float16
   architecture: volta
   pcie_version: '3.0'
+  measured:
+    source: "measured 2026-10-24 22:38:27 CEST on card 3 of the rack, alone (tools/profile_facts.py)"
+    matmul_tflops: {float16: 41.7, float32: 13.5}
+    memory_gbps: 779
+    h2d_gbps: 8.2
+    d2h_gbps: 3.7
+    h2d_pageable_gbps: 4.7
 interconnect:
   groups: []
 pcie_fallback:

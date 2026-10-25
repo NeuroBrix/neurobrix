@@ -9,7 +9,7 @@ VENDORLESS: nvidia/amd/intel → cuda/hip/xpu device strings
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Dict, Optional, Set, TYPE_CHECKING
+from typing import Any, List, Dict, Optional, Set, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from neurobrix.core.prism.cpu_config import CPUConfig
@@ -275,6 +275,9 @@ class DeviceSpec:
     # M4 Pro whose working set is 18 186 MB). One arena is one allocation, so no segment, component or tile
     # buffer may be planned above it. None = the profile does not say: no limit below `memory_mb` (a CUDA card).
     max_allocation_mb: Optional[int] = None
+    # The device's MEASURED facts (`tools/profile_facts.py`: matmul_tflops per dtype, memory_gbps, h2d_gbps, ...), with
+    # their `source`, read by Prism's time estimate (`core/prism/time_estimate.py`). None: not measured.
+    measured: Optional[Dict[str, Any]] = None
 
     @property
     def memory_class_gb(self) -> Optional[int]:
@@ -492,6 +495,8 @@ class PrismProfile:
     devices: List[DeviceSpec]
     topology: InterconnectTopology = field(default_factory=InterconnectTopology)
     cpu: Optional["CPUConfig"] = None  # CPU config from hardware profile
+    # The host's MEASURED facts (`tools/profile_facts.py`: host_matmul_gflops, storage_read_gbps), with their `source`.
+    host_measured: Optional[Dict[str, Any]] = None
     preferred_dtype: Optional[str] = None  # Override dtype for memory efficiency
     # Step 6: the machines and the links between them. Empty = ONE node with every device and `cpu` (__post_init__).
     nodes: List[ClusterNode] = field(default_factory=list)
