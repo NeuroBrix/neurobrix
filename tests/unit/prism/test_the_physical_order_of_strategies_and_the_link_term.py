@@ -33,9 +33,10 @@ def test_the_ranks_never_cross_whatever_the_penalties():
     order = ["single_gpu", "component_placement", "op_level_tiling", "zero3", "layer_streaming", "cpu_execution"]
     scores = [_score(n) for n in order]
     assert scores == sorted(scores, reverse=True), dict(zip(order, scores))
-    # D1 / D5 (the supervisor, 16:02, from prism_choices_2026_10_25.tsv): on one card Qwen3-30B-A3B took
-    # lazy_sequential (260) over zero3 with its expert store (11); re-reading the weights per phase IS streaming
-    assert _score("zero3") > _score("lazy_sequential") >= S.RANK_BASE[5] - S.RANK_FLOOR_SPAN
+    # D1 / D5 (the supervisor, 16:02) against the measurement (16:20): on one card lazy_sequential's plan IS the expert
+    # store (Qwen3-30B: dense 2.3 GB resident, 128 experts a layer on the host, the gate's 174 s) and zero3 would stream
+    # 56 GB per token (754 s estimated): the host-link strategies share ONE rank and the estimate decides among them
+    assert S.STRATEGY_RANK["zero3"] == S.STRATEGY_RANK["lazy_sequential"] == S.STRATEGY_RANK["layer_streaming"]
     assert _score("lazy_sequential") > _score("cpu_execution") and _score("layer_streaming") > _score("cpu_execution")
     # D3: Sana_1600M_4Kpx_BF16 (weights 11.4 GB, activation 23 GB) took layer_streaming / lazy_sequential over tiling
     assert _score("op_level_tiling") > _score("lazy_sequential") and _score("op_level_tiling") > _score("layer_streaming")
@@ -47,14 +48,18 @@ def test_the_ranks_never_cross_whatever_the_penalties():
 def test_the_estimate_decides_inside_a_rank_never_across():
     """D4: the profiles carry measured facts; inside the resident-spread rank the faster plan wins, and a slower
     resident plan still beats a faster streaming one."""
-    est = {"block_scatter": 15.3, "pipeline_parallel": 9.0, "lazy_sequential": 6.3, "zero3": 386.0}
-    order = sorted([("block_scatter", 796.0), ("pipeline_parallel", 700.0), ("lazy_sequential", 301.0), ("zero3", 301.0)],
-                   key=lambda c: S.candidate_order(c[0], c[1], est))
-    assert [n for n, _ in order] == ["pipeline_parallel", "block_scatter", "zero3", "lazy_sequential"]
+    est = {"block_scatter": 15.3, "pipeline_parallel": 9.0, "lazy_sequential": 15.3, "zero3": 754.1}
+    order = S.order_candidates([(796.0, "block_scatter"), (700.0, "pipeline_parallel"), (301.0, "lazy_sequential"), (401.0, "zero3")], est)
+    assert [n for _, n in order] == ["pipeline_parallel", "block_scatter", "lazy_sequential", "zero3"]   # Qwen3-30B on one card: lazy, not zero3
+    # a tie within 1 % keeps today's order (the score): DeepSeek on four cards, pipeline_parallel 5.1 s = block_scatter 5.1 s
+    tie = S.order_candidates([(817.0, "pipeline_parallel"), (802.0, "block_scatter")], {"pipeline_parallel": 5.1, "block_scatter": 5.1})
+    assert [n for _, n in tie] == ["pipeline_parallel", "block_scatter"]
     # not estimated: after the estimated ones of its rank, never out of its rank
-    order2 = sorted([("block_scatter", 796.0), ("pipeline_parallel", 700.0)],
-                    key=lambda c: S.candidate_order(c[0], c[1], {"block_scatter": "not estimated: x", "pipeline_parallel": 9.0}))
-    assert [n for n, _ in order2] == ["pipeline_parallel", "block_scatter"]
+    order2 = S.order_candidates([(796.0, "block_scatter"), (700.0, "pipeline_parallel")], {"block_scatter": "not estimated: x", "pipeline_parallel": 9.0})
+    assert [n for _, n in order2] == ["pipeline_parallel", "block_scatter"]
+    # without any estimate the ranks still hold and the score orders inside them
+    none = S.order_candidates([(301.0, "lazy_sequential"), (401.0, "zero3"), (1000.0, "single_gpu")], {})
+    assert [n for _, n in none] == ["single_gpu", "zero3", "lazy_sequential"]
 
 
 def test_a_declining_strategy_records_why_once():

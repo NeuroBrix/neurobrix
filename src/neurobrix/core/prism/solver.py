@@ -760,13 +760,15 @@ STRATEGY_RANK = {
     "single_gpu": 1, "single_gpu_lifecycle": 1,                                   # resident, one device
     "component_placement": 2, "block_scatter": 2, "pipeline_parallel": 2, "weight_sharding": 2,   # resident, spread
     "op_level_tiling": 3,                                                          # resident, the overflowing ops cut
-    "zero3": 4,                                                                    # weights streamed through the card per use
-                                                                                   # (the routed component as an expert store)
-    "component_placement_lazy": 5, "lazy_sequential": 5, "layer_streaming": 5,     # weights re-read per phase or per token:
-                                                                                   # streaming (the supervisor, 16:02, D1/D5)
+    # the weights cross the host link again — zero3 streams blocks per use, lazy_sequential loads a component per phase
+    # (its routed component as an expert store: Qwen3-30B's 48 x 128 experts on the host, dense 2.3 GB resident, the
+    # gate's 174 s), layer_streaming re-reads per layer per token: ONE rank, the measured time decides (the estimate:
+    # Qwen3-30B on one V100, zero3 754 s against lazy_sequential 15.3 s — a fixed order among them would have cost 4-50x
+    # on every routed model, measured 2026-10-25 16:20, prism_choices_2026_10_25_after.tsv)
+    "zero3": 4, "component_placement_lazy": 4, "lazy_sequential": 4, "layer_streaming": 4,
     "cpu_execution": 6, "cpu_streaming": 6,                                        # host compute
 }
-RANK_BASE = {1: 1000.0, 2: 800.0, 3: 600.0, 4: 400.0, 5: 200.0, 6: 10.0}
+RANK_BASE = {1: 1000.0, 2: 800.0, 3: 600.0, 4: 400.0, 5: 200.0, 6: 10.0}   # rank 5 is free: host compute is 6
 #: a rank's floor: no penalty takes a strategy below it, so a rank never crosses the one beneath
 RANK_FLOOR_SPAN = 99.0
 
@@ -777,6 +779,26 @@ def candidate_order(name: str, score: float, estimates) -> tuple:
     last. Lower sorts first."""
     est = (estimates or {}).get(name)
     return (STRATEGY_RANK.get(name, 9), est if isinstance(est, float) else float("inf"), -float(score))
+
+
+def order_candidates(candidates, estimates, tie: float = 0.01):
+    """`candidates`: (score, name, ...) tuples. Grouped by physical rank; inside a rank the estimated time decides,
+    and estimates within `tie` of the rank's best keep today's score order (a tie is today's choice, never a change);
+    an unestimated candidate follows the estimated ones of its rank."""
+    by_score = sorted(candidates, key=lambda c: -float(c[0]))
+    out = []
+    for rank in sorted({STRATEGY_RANK.get(c[1], 9) for c in by_score}):
+        group = [c for c in by_score if STRATEGY_RANK.get(c[1], 9) == rank]
+        ests = {c[1]: (estimates or {}).get(c[1]) for c in group}
+        known = [v for v in ests.values() if isinstance(v, float)]
+        if not known:
+            out.extend(group)
+            continue
+        best = min(known)
+        out.extend(sorted(group, key=lambda c: (0 if isinstance(ests[c[1]], float) and ests[c[1]] <= best * (1 + tie)
+                                                else 1 if isinstance(ests[c[1]], float) else 2,
+                                                ests[c[1]] if isinstance(ests[c[1]], float) and ests[c[1]] > best * (1 + tie) else 0.0)))
+    return out
 
 
 def untiled_reason(blocking, components) -> str:
@@ -2380,11 +2402,12 @@ class PrismSolver:
 
         # Sort candidates by rank (the physical order), then by the measured time inside the rank (the estimate,
         # when the profile carries measured facts), then by score — docs/design/prism-fastest-plan-that-fits.md §2b.
-        ranked = sorted(candidates, key=lambda x: -x[0])
+        ranked = order_candidates(candidates, {})
         self._time_estimates = self._estimate_times(ranked, container, input_config, profile, target_dtype_str)
         if self._time_estimates:
-            _te = self._time_estimates
-            ranked = sorted(candidates, key=lambda c: candidate_order(c[1], c[0], _te))
+            ranked = order_candidates(candidates, self._time_estimates)
+        else:
+            ranked = order_candidates(candidates, {})
         self._candidates = [(name, float(score)) for score, name, _, _ in ranked]
         self._rejected = []
         self._state_policy = None
