@@ -428,9 +428,9 @@ def serve() -> int:
             os.close(r)
             try:
                 out = _run_jobs(rack, req["jobs"])
-                data = json.dumps(out, default=repr).encode()
+                data = json.dumps({"pid": os.getpid(), "out": out}, default=repr).encode()
             except BaseException as exc:         # noqa: BLE001
-                data = json.dumps({"error": f"{type(exc).__name__}: {exc}"[:400]}).encode()
+                data = json.dumps({"pid": os.getpid(), "out": {"error": f"{type(exc).__name__}: {exc}"[:400]}}).encode()
             with os.fdopen(w, "wb") as fh:
                 fh.write(data)
             os._exit(0)
@@ -438,11 +438,38 @@ def serve() -> int:
         with os.fdopen(r, "rb") as fh:
             data = fh.read()
         os.waitpid(pid, 0)
-        print(MARK_SERVE + (data.decode() or json.dumps({"error": "the job's process wrote nothing"})), flush=True)
+        print(MARK_SERVE + json.dumps(_answer_of(data, pid)), flush=True)
     return 0
 
 
 MARK_SERVE = "@@GATE_SCOPE_SERVE@@"
+
+
+def _answer_of(data: bytes, pid: int) -> dict:
+    """The job process's own answer among what the pipe carried. A probed function that FORKS and lets its child
+    return (the serving daemon's `os.fork()`, reached by a constant probe on 2026-10-25) sends two answers down the
+    pipe — the job's and its child's, the same JSON twice, read as "Extra data" by one `json.loads` and the scope
+    refused. Each answer carries the pid that wrote it; only the forked job's counts, by pid."""
+    text = data.decode(errors="replace")
+    docs, pos, dec = [], 0, json.JSONDecoder()
+    while pos < len(text):
+        while pos < len(text) and text[pos].isspace():
+            pos += 1
+        if pos >= len(text):
+            break
+        try:
+            doc, end = dec.raw_decode(text, pos)
+        except json.JSONDecodeError:
+            return {"error": f"the job's process wrote something that is not an answer: {text[pos:pos + 160]!r}"}
+        docs.append(doc); pos = end
+    if not docs:
+        return {"error": "the job's process wrote nothing"}
+    mine = [d for d in docs if isinstance(d, dict) and d.get("pid") == pid]
+    if not mine:
+        return {"error": f"no answer from the job's process (pid {pid}); {len(docs)} answer(s) from others: a probed function forked"}
+    if len(docs) > 1:
+        mine[0]["out"].setdefault("_forked", f"{len(docs) - 1} other process(es) answered too: a probed function forked")
+    return mine[0]["out"]
 
 
 def _run_jobs(rack, jobs) -> dict:
