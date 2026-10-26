@@ -283,11 +283,19 @@ def _complete_measured_fields(path: Path) -> None:
     with open(path) as f:
         data = yaml.safe_load(f) or {}
     cpu = data.get("cpu")
-    if not isinstance(cpu, dict) or "runtime_base_mb" in cpu:
+    if not isinstance(cpu, dict):
         return
-    cpu["runtime_base_mb"] = _measure_runtime_base_mb()
+    added = {}
+    if "runtime_base_mb" not in cpu:
+        added["runtime_base_mb"] = _measure_runtime_base_mb()
+    # a hybrid CPU's core classes (2026-10-26: the profile is the one source of the host's threads)
+    if "performance_cores" not in cpu and platform.system() == "Darwin" and cpu.get("architecture") == "arm64":
+        added.update({k: v for k, v in _detect_cpu_darwin().items() if k in ("performance_cores", "efficiency_cores")})
+    if not added:
+        return
+    cpu.update(added)
     _write_profile_atomically(path, data)
-    print(f"   [Auto-detect] Measured the engine base into {path.name}: {cpu['runtime_base_mb']}")
+    print(f"   [Auto-detect] Completed {path.name}: {added}")
 
 
 def get_or_create_default_profile() -> str:
@@ -660,6 +668,12 @@ def _detect_cpu_darwin() -> Dict[str, Any]:
     # Core counts
     cores = _sysctl_int("hw.physicalcpu") or 1
     threads = _sysctl_int("hw.logicalcpu") or cores
+    # A hybrid CPU's core classes (Apple silicon: perflevel0 = performance, perflevel1 = efficiency)
+    perf_levels = _sysctl_int("hw.nperflevels") or 1
+    hybrid = {}
+    if perf_levels >= 2:
+        hybrid = {"performance_cores": _sysctl_int("hw.perflevel0.physicalcpu"),
+                  "efficiency_cores": _sysctl_int("hw.perflevel1.physicalcpu")}
 
     # RAM
     memsize = _sysctl_int("hw.memsize")
@@ -686,6 +700,7 @@ def _detect_cpu_darwin() -> Dict[str, Any]:
         "ram_mb": ram_mb,
         "architecture": arch,
         "features": features,
+        **{k: v for k, v in hybrid.items() if v},
     }
 
 

@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import pytest
 
+from types import SimpleNamespace
+
 from neurobrix.core.prism import solver as S
 from neurobrix.core.prism import time_estimate as TE
 from neurobrix.core.prism.work import Work
@@ -20,7 +22,8 @@ from neurobrix.core.prism.work import Work
 
 class _NoTopology:
     topology = None
-    cpu = None
+    # zero3's host side reads the profile's cores (no fallback since 2026-10-26); 4 = the old implicit default
+    cpu = SimpleNamespace(cores=4, compute_threads=4)
 
 
 def _score(name, devices=("cuda:0",)):

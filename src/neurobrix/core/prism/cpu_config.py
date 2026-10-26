@@ -34,10 +34,20 @@ class CPUConfig:
     # engine ({"compiled": MB, "triton": MB}, autodetect). Prism's host estimate adds it to the planning
     # process's own resident memory. Absent on a profile nobody measured: the estimate says so.
     runtime_base_mb: Dict[str, int] = field(default_factory=dict)
+    # A hybrid CPU's two core classes (Apple silicon: performance + efficiency, `hw.perflevel0/1.physicalcpu`), when the
+    # profile declares them; None on a CPU of one class.
+    performance_cores: Optional[int] = None
+    efficiency_cores: Optional[int] = None
 
     @property
     def ram_gb(self) -> float:
         return self.ram_mb / 1024
+
+    @property
+    def compute_threads(self) -> int:
+        """The host's compute threads: the performance cores of a hybrid CPU (an efficiency core in a parallel region
+        holds every other thread at its barrier), else the physical cores."""
+        return int(self.performance_cores or self.cores)
 
     @classmethod
     def from_yaml_dict(cls, cpu_dict: dict) -> "CPUConfig":
@@ -58,6 +68,8 @@ class CPUConfig:
             architecture=cpu_dict["architecture"],
             features=cpu_dict.get("features", []),
             runtime_base_mb=dict(cpu_dict.get("runtime_base_mb") or {}),
+            performance_cores=cpu_dict.get("performance_cores"),
+            efficiency_cores=cpu_dict.get("efficiency_cores"),
         )
 
 
@@ -99,52 +111,30 @@ def strategy_involves_cpu(strategy: str, device_count: int) -> bool:
 
 def apply_thread_config(cpu: CPUConfig, involves_cpu: bool, mode: str = "compiled") -> None:
     """
-    Set the host thread configuration from the CPU profile, for the engine
-    that runs: the ATen branch's thread pool (torch) on the compiled /
-    sequential engines, the OpenMP pool the Triton CPU backend reads on the
-    Triton engines (R33: no torch on that path).
+    Set the host's thread configuration from the CPU profile — the ONE source (the owner's rule 1, 2026-10-26): every
+    variable a compute library reads (OMP_NUM_THREADS, MKL_NUM_THREADS, TRITON_CPU_MAX_THREADS) and, on the ATen
+    branch, torch's own pools. Applied whatever the plan: the host loads, converts and tokenizes on every plan, and a
+    value left by anything else (an import-time `os.cpu_count()`, an inherited environment) is overwritten.
 
-    Physical cores for intra-op (avoids hyperthreading contention).
-    cores//4 (capped at 4) for inter-op parallelism.
-
-    Only applies when CPU is involved in compute (offload or CPU-only).
-    ZERO HARDCODE: cores from profile, not os.cpu_count().
+    Intra-op: `cpu.compute_threads` (the performance cores of a hybrid CPU, else the physical cores); inter-op:
+    a quarter of them, at most 4. `involves_cpu` stays in the signature for the callers; it no longer gates.
     """
-    if not involves_cpu:
-        return
-
-    intra_threads = cpu.cores
-    inter_threads = max(1, min(4, cpu.cores // 4))
-
+    intra_threads = cpu.compute_threads
+    inter_threads = max(1, min(4, intra_threads // 4))
+    import os
+    for var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "TRITON_CPU_MAX_THREADS"):
+        os.environ[var] = str(intra_threads)
     if mode in ("triton", "triton_sequential"):
-        import os
-        for var in ("OMP_NUM_THREADS", "TRITON_CPU_MAX_THREADS"):
-            os.environ.setdefault(var, str(intra_threads))
-        logger.info(f"[CPU] Threads: {intra_threads} (physical cores) for the Triton CPU backend — {cpu.model}")
+        logger.info(f"[CPU] Threads: {intra_threads} from the profile for the Triton CPU backend — {cpu.model}")
         return
     import torch  # the ATen branch's thread pool
-    try:
-        torch.set_num_threads(intra_threads)
-    except RuntimeError:
-        # Already initialized — log but don't crash
-        logger.debug(
-            f"torch.set_num_threads({intra_threads}) failed — "
-            f"PyTorch threading already initialized"
-        )
-        return
-
+    torch.set_num_threads(intra_threads)
     try:
         torch.set_num_interop_threads(inter_threads)
     except RuntimeError:
-        logger.debug(
-            f"torch.set_num_interop_threads({inter_threads}) failed — "
-            f"PyTorch interop threading already initialized"
-        )
-
-    logger.info(
-        f"[CPU] Threads: intra={intra_threads} (physical cores), "
-        f"inter={inter_threads} — {cpu.model}"
-    )
+        # torch refuses a second interop setting once its pool has run (a process that already computed)
+        logger.debug(f"torch.set_num_interop_threads({inter_threads}) refused: the interop pool already ran")
+    logger.info(f"[CPU] Threads: intra={intra_threads}, inter={inter_threads} from the profile — {cpu.model}")
 
 
 def apply_dnnl_isa(cpu: CPUConfig) -> None:

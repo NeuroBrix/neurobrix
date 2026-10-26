@@ -44,7 +44,7 @@ def setter(monkeypatch):
 def _setup(monkeypatch, mode, plan):
     ex = RuntimeExecutor.__new__(RuntimeExecutor)
     ex.mode, ex.plan, ex._is_setup = mode, plan, False
-    for name in ("_optimize_cpu_threading", "_setup_modules", "_setup_executors", "_init_strategy"):
+    for name in ("_setup_modules", "_setup_executors", "_init_strategy"):
         monkeypatch.setattr(ex, name, lambda: None)
     ex.setup()
 
@@ -53,7 +53,7 @@ def test_the_compiled_setup_applies_the_vendors_allocator_before_the_executors(m
     order = []
     ex = RuntimeExecutor.__new__(RuntimeExecutor)
     ex.mode, ex.plan, ex._is_setup = "compiled", _plan(V100), False
-    for name in ("_optimize_cpu_threading", "_setup_modules", "_init_strategy"):
+    for name in ("_setup_modules", "_init_strategy"):
         monkeypatch.setattr(ex, name, lambda: None)
     monkeypatch.setattr(ex, "_setup_executors", lambda: order.append(list(setter)))
     ex.setup()
