@@ -345,6 +345,9 @@ memory:
   compiled_allocator_settings: "expandable_segments:True"
   max_shared_memory_per_block: 98304    # 96 KB (Volta opt-in)
   max_registers_per_block: 65536
+  # NVIDIA CUDA C++ Programming Guide, Technical Specifications per Compute Capability: "Maximum number of 32-bit
+  # registers per thread: 255" (7.x, 8.x, 9.x). Bounds a program's elements per thread (the row programs' prune).
+  max_registers_per_thread: 255
   warp_size: 32
   # SDPA deterministic-routing budget (P-TRITON-MOE-DETERMINISM-RESIDUAL).
   # The Dao-AILab flash Triton kernel is non-deterministic on pre-Ampere

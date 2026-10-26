@@ -27,9 +27,11 @@ def _prune_softmax(configs, named_args, **kwargs):
     feat = next_power_of_2(int(named_args['feat_dim']))
     rows = int(named_args['batch_dim'])
     budget = min(reduce_tile_max(), SOFTMAX_FUSED_MAX_FEAT)
+    from ._configs import fits_thread_registers
     keep = [c for c in configs
-            if c.kwargs['BLOCK_SIZE_BATCH'] * feat <= max(budget, feat) and c.kwargs['BLOCK_SIZE_BATCH'] <= max(1, rows)]
-    return keep or configs[:1]
+            if c.kwargs['BLOCK_SIZE_BATCH'] * feat <= max(budget, feat) and c.kwargs['BLOCK_SIZE_BATCH'] <= max(1, rows)
+            and fits_thread_registers(c.kwargs['BLOCK_SIZE_BATCH'] * feat, c.num_warps)]
+    return keep or [max(configs, key=lambda c: c.num_warps)]
 
 
 @nbx_autotune(configs=_softmax_configs(), key=['BATCH_BUCKET', 'FEAT_BUCKET', 'log'],

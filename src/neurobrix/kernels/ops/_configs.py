@@ -785,6 +785,22 @@ def row_program_configs() -> List[triton.Config]:
             for rows in (1, 2, 4, 8, 16, 32, 64, 128) for warps in (1, 2, 4, 8)]
 
 
+def fits_thread_registers(elements: int, num_warps: int) -> bool:
+    """Whether a program holding `elements` (rows x padded row) over `num_warps` warps keeps at most the profile's
+    `memory.max_registers_per_thread` elements per thread (an element a register, as the block bound counts it). A
+    profile that declares no per-thread bound (Apple: its lowering's own bound is `reduced_extent_max`) bounds
+    nothing here. Measured 2026-10-26: one warp over a 16 384-wide fp16 row (512 elements a thread) compiled for
+    over 30 minutes in LLVM and stalled the certification of the fp16 contract's softmax keys."""
+    from neurobrix.kernels.wrappers import _arch_param
+    per = _arch_param("memory", "max_registers_per_thread", None)
+    if per is None:
+        return True
+    warp = _arch_param("memory", "warp_size", None)
+    if warp is None:
+        raise RuntimeError("ZERO FALLBACK: the profile declares memory.max_registers_per_thread but no memory.warp_size")
+    return int(elements) <= int(per) * int(warp) * int(num_warps)
+
+
 def prune_row_programs(configs, named_args, **kwargs):
     """A program holds rows x the padded row: one row whatever its length, more only while the tile stays within the
     backend's reduce-tile cap (`nbx_tensor.reduce_tile_max`, where the lowering refuses beyond) AND within the
@@ -802,8 +818,9 @@ def prune_row_programs(configs, named_args, **kwargs):
     cap = min(reduce_tile_max(), int(regs))
     keep = [c for c in configs
             if c.kwargs['BLOCK_SIZE_BATCH'] * feat <= max(cap, feat)
-            and c.kwargs['BLOCK_SIZE_BATCH'] <= max(1, rows)]
-    return keep or configs[:1]
+            and c.kwargs['BLOCK_SIZE_BATCH'] <= max(1, rows)
+            and fits_thread_registers(c.kwargs['BLOCK_SIZE_BATCH'] * feat, c.num_warps)]
+    return keep or [max(configs, key=lambda c: c.num_warps)]
 
 
 def gemv_vec_configs() -> List[triton.Config]:

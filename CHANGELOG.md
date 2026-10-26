@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`neurobrix autotune certify --keys <file>`** certifies exactly the keys a coverage check found missing (one `<kernel>::<key>` per line), without a census table.
 
 ### Fixed
+- **A row kernel's candidates stay within the registers of one thread** (`memory.max_registers_per_thread`, declared for NVIDIA): a one-warp program over a 16 384-wide fp16 row compiled for over half an hour and stalled certification.
 - **The derived census mirrors the launch where the fp16 contract meets the matrix unit, the LSTM and a batched linear**: attention scores stored fp16 on the unit, an LSTM's projections and steps under the contract, and a batched linear's store all keyed fp32 where the run forms fp16 (found by comparing the census with a real launch, op by op).
 - **The certifier forms a key under the fp16 precision contract when only that context forms it** (an fp16 GEMM storing fp16 on hardware without native bf16), and the proof records the context: 178 such keys of the census were read as unreachable.
 - **The derived census keys a GEMM's store as the launch does under the fp16 contract** (`launch_keys.*_launches` take the component's contract): on the aligned Triton branch 17 gate cells had refused their fp16 keys as uncertified while the census still held fp32 ones.
