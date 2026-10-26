@@ -7362,7 +7362,10 @@ class PrismSolver:
             base_zero3_penalty = 200.0 / max(pcie_factor, 0.5)  # Better PCIe = less penalty
 
             # CPU cores adjustment: more cores = faster CPU-side compute
-            cpu_cores = profile.cpu.cores if profile.cpu else 4
+            if not profile.cpu:
+                raise RuntimeError("ZERO FALLBACK: the hardware profile declares no cpu: section — zero3's host "
+                                   "side cannot be priced without its cores")
+            cpu_cores = profile.cpu.cores
             core_factor = min(cpu_cores / 16.0, 2.0)  # Normalize to 16-core baseline, cap at 2x
             base_zero3_penalty /= max(core_factor, 0.5)  # More cores = less penalty
 
