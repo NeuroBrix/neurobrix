@@ -2113,14 +2113,34 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
         # and a reader six months from now could not redo the check.
         #
         # What is measured and not written does not exist.
-        with warnings.catch_warnings(record=True) as _caught:
-            warnings.simplefilter("always")
-            call()
-            fell_back = [str(w.message).splitlines()[0][:120] for w in _caught
-                         if "fall back to CPU" in str(w.message)
-                         or "Metal compilation failed" in str(w.message)]
+        # The other context a wrapper reads: the component's fp16 precision contract
+        # (`wrappers._NBX_ACTIVATIONS_FP16_SAFE`, the calibration's verdict) — under it an fp16 GEMM
+        # stores fp16 on hardware without native bf16 (`launch_keys.matmul_out_dtype(contract_half)`),
+        # and the census keys such a component's GEMMs so. The key does not name the flag: it is
+        # tried off first (the plain context), then on — the context that forms THIS key is the one
+        # certified, and the proof says which (2026-10-26: 178 fp16-store keys read unreachable with
+        # the flag never set, the census right and the certifier blind to the contract).
+        _prev_safe = W.get_activations_fp16_safe()
+        for _contract in (False, True):
+            W.set_activations_fp16_safe(_contract)
+            try:
+                with warnings.catch_warnings(record=True) as _caught:
+                    warnings.simplefilter("always")
+                    call()
+                    fell_back = [str(w.message).splitlines()[0][:120] for w in _caught
+                                 if "fall back to CPU" in str(w.message)
+                                 or "Metal compilation failed" in str(w.message)]
+                state["contract"] = _contract
+                break
+            except UnreachableCensusKey:
+                if _contract or "config" in state:
+                    raise
     finally:
         W.set_compute_dtype(_prev_dt)
+        try:
+            W.set_activations_fp16_safe(_prev_safe)
+        except NameError:
+            pass
         tuner.run = saved_run
         tuner.nargs = None
     if "config" not in state:
@@ -2128,6 +2148,7 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
     proof = {"date": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
              "engine_version": _engine_version(), "backend": _backend(), "shape": list(key),
              "launches": int(state.get("launches", 1)),
+             "fp16_contract": bool(state.get("contract", False)),   # the context the key was formed under
              "launch_deviations": [float(d) for d in state.get("launch_deviations", [state.get("deviation")])],
              "deviation": state["deviation"], "tolerance": tolerance, "oracle": state.get("oracle", ORACLE), "machine": _machine(),
              "best_ms": state["best_ms"], "second_ms": state["second_ms"], "candidates": state["candidates"],

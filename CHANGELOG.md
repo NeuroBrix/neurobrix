@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **The certifier forms a key under the fp16 precision contract when only that context forms it** (an fp16 GEMM storing fp16 on hardware without native bf16), and the proof records the context: 178 such keys of the census were read as unreachable.
 - **The derived census keys a GEMM's store as the launch does under the fp16 contract** (`launch_keys.*_launches` take the component's contract): on the aligned Triton branch 17 gate cells had refused their fp16 keys as uncertified while the census still held fp32 ones.
 - **A half-stored graph is served half on the Triton branch too** (the owner, 2026-10-25): under the fp16 precision contract the Triton GEMMs store fp16 as the compiled engine does (fp32 was stored on every card without native bf16, whatever the calibration said) and a norm's tuple result is cast back like a tensor — whisper's encoder stored 1 283 of 1 545 outputs wider on the Triton branch than on the compiled one; the width model mirrors both. Islands (traced or calibrated) keep fp32; without a contract nothing moves.
 - **A strategy declined for its host side on unified memory says what it overshot**: the pool the profile declares (installed RAM less the engine's measured base), no longer "the free memory".
