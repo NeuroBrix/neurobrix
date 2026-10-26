@@ -330,7 +330,7 @@ def matmul_launches(a_shape, b_shape, a: NBXDtype, b: NBXDtype, native_bf16: boo
 # ---------------------------------------------------------------------------------------------
 
 def lstm_launches(B: int, T: int, I: int, H: int, num_layers: int, bidirectional: bool,
-                  x: NBXDtype, native_bf16: bool, contract_half: bool = False) -> List[Launch]:
+                  x: NBXDtype, native_bf16: bool) -> List[Launch]:
     """`lstm_wrapper` -> `_lstm_run_direction`, per layer and direction: the input projection
     x[B,T,I] @ W_ih^T (matmul's N-D x 2-D route: `bmm` over B batches of [T, I]), then one
     h[B,H] @ W_hh^T `mm` per step. The weights and the initial state are cast to the input's
@@ -345,16 +345,15 @@ def lstm_launches(B: int, T: int, I: int, H: int, num_layers: int, bidirectional
     for layer in range(int(num_layers)):
         first_fwd = None
         for d in range(nd):
-            out += bmm_launches(T, I if layer == 0 else H * nd, 4 * H, layer_in, x, native_bf16,
-                                contract_half=contract_half)
-            wx = bmm_out(T, layer_in, x, native_bf16, contract_half=contract_half)
+            out += bmm_launches(T, I if layer == 0 else H * nd, 4 * H, layer_in, x, native_bf16)   # never the contract
+            wx = bmm_out(T, layer_in, x, native_bf16)
             h, seen, first = x, set(), None
             for _step in range(max(int(T), 0)):
                 if h in seen:
                     break
                 seen.add(h)
-                out += mm_launches(B, H, 4 * H, h, x, native_bf16, contract_half=contract_half)
-                h = _widest(_widest(wx, mm_out(B, h, x, native_bf16, contract_half=contract_half)), x)
+                out += mm_launches(B, H, 4 * H, h, x, native_bf16)          # the recurrence: never the contract
+                h = _widest(_widest(wx, mm_out(B, h, x, native_bf16)), x)
                 first = h if first is None else first
             if d == 0:
                 first_fwd = first if first is not None else x

@@ -9584,7 +9584,23 @@ def _lstm_run_direction(x, w_ih_t, w_hh_t, b_ih, b_hh, h, c, hidden, reverse):
         i=sigmoid(g[:H]); f=sigmoid(g[H:2H]); g_=tanh(g[2H:3H]); o=sigmoid(g[3H:])
         c = f*c + i*g_;  h = o*tanh(c)
     mm/bmm accumulate in fp32 (Triton tl.dot) → matches cuDNN's fp16 math.
+
+    The fp16 precision contract does NOT reach the recurrence: the calibration that grants it observed the graph's
+    ops, and an LSTM is ONE graph op whose internal products it never saw — their state is carried through T steps,
+    and fp16 stores there drift the recurrence (Kokoro-82M's predictor, 2026-10-26: the speech became gibberish under
+    the contract, correct with it off inside this function only). The products run under the conservative store.
     """
+    global _NBX_ACTIVATIONS_FP16_SAFE
+    _contract = _NBX_ACTIVATIONS_FP16_SAFE
+    _NBX_ACTIVATIONS_FP16_SAFE = False
+    try:
+        return _lstm_run_direction_steps(x, w_ih_t, w_hh_t, b_ih, b_hh, h, c, hidden, reverse)
+    finally:
+        _NBX_ACTIVATIONS_FP16_SAFE = _contract
+
+
+def _lstm_run_direction_steps(x, w_ih_t, w_hh_t, b_ih, b_hh, h, c, hidden, reverse):
+    """`_lstm_run_direction`'s body, under the conservative store."""
     T = x.shape[1]
     H = hidden
     Wx = matmul_wrapper(x, w_ih_t)                       # [B, T, 4H]

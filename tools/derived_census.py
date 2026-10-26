@@ -1369,7 +1369,7 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
                 T_, B_, I_ = x_s
             H_ = shape(ins[1])[-1]
             launches = LK.lstm_launches(B_, T_, I_, H_, int(val(4)), bool(val(7)), dt(ins[0]),
-                                        has_native_bf16, contract_half=contract.safe)
+                                        has_native_bf16)
         elif kind in ("aten::_fft_r2c", "aten::_fft_c2r"):
             # _fft_r2c(x, dim, normalization, onesided); _fft_c2r(x, dim, normalization,
             # last_dim_size) — the transform over one dim, every other dim flattened into M
