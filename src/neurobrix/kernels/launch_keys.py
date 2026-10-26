@@ -262,7 +262,11 @@ def mm_out(M: int, a: NBXDtype, b: NBXDtype, native_bf16: bool, force_accum: boo
 
 
 def bmm_out(M: int, a: NBXDtype, b: NBXDtype, native_bf16: bool, force_accum: bool = False, contract_half: bool = False) -> NBXDtype:
-    """The dtype `bmm` stores for these operands."""
+    """The dtype `bmm` stores for these operands: on the matrix unit the operands are taken as they are in memory
+    (no widening, `wrappers.bmm`'s unit branch), elsewhere as `bmm_dtypes` widens them — under the fp16 contract the
+    two differ (fp16 on the unit, fp32 off it on hardware without native bf16)."""
+    if matrix_unit_takes(a, b, M):
+        return matmul_out_dtype(a, M, True, native_bf16, force_accum, contract_half)
     a, b, _ = bmm_dtypes(a, b, native_bf16, force_accum)
     return matmul_out_dtype(a, M, True, native_bf16, force_accum, contract_half)
 
@@ -326,7 +330,7 @@ def matmul_launches(a_shape, b_shape, a: NBXDtype, b: NBXDtype, native_bf16: boo
 # ---------------------------------------------------------------------------------------------
 
 def lstm_launches(B: int, T: int, I: int, H: int, num_layers: int, bidirectional: bool,
-                  x: NBXDtype, native_bf16: bool) -> List[Launch]:
+                  x: NBXDtype, native_bf16: bool, contract_half: bool = False) -> List[Launch]:
     """`lstm_wrapper` -> `_lstm_run_direction`, per layer and direction: the input projection
     x[B,T,I] @ W_ih^T (matmul's N-D x 2-D route: `bmm` over B batches of [T, I]), then one
     h[B,H] @ W_hh^T `mm` per step. The weights and the initial state are cast to the input's
@@ -341,15 +345,16 @@ def lstm_launches(B: int, T: int, I: int, H: int, num_layers: int, bidirectional
     for layer in range(int(num_layers)):
         first_fwd = None
         for d in range(nd):
-            out += bmm_launches(T, I if layer == 0 else H * nd, 4 * H, layer_in, x, native_bf16)
-            wx = bmm_out(T, layer_in, x, native_bf16)
+            out += bmm_launches(T, I if layer == 0 else H * nd, 4 * H, layer_in, x, native_bf16,
+                                contract_half=contract_half)
+            wx = bmm_out(T, layer_in, x, native_bf16, contract_half=contract_half)
             h, seen, first = x, set(), None
             for _step in range(max(int(T), 0)):
                 if h in seen:
                     break
                 seen.add(h)
-                out += mm_launches(B, H, 4 * H, h, x, native_bf16)
-                h = _widest(_widest(wx, mm_out(B, h, x, native_bf16)), x)
+                out += mm_launches(B, H, 4 * H, h, x, native_bf16, contract_half=contract_half)
+                h = _widest(_widest(wx, mm_out(B, h, x, native_bf16, contract_half=contract_half)), x)
                 first = h if first is None else first
             if d == 0:
                 first_fwd = first if first is not None else x
@@ -615,10 +620,10 @@ def math_attention_launches(B: int, H: int, Hk: int, Tq: int, Tk: int, D: int, D
     """`_math_attention`: scores = bmm(q as [B*Hk, groups*Tq, D], k^T) — q in its (possibly
     rounded) dtype, k in its own; then p = softmax(scores) cast to v's dtype and bmm(p, v)."""
     M = (H // Hk) * Tq
-    # the scores are the first product's output (fp32 for any half input, on the unit or not): the route's softmax
-    # runs on B * H * Tq rows of Tk columns at that dtype (`wrappers.softmax`, workstream 1)
-    sa, _sb, _pb = bmm_dtypes(q, k, native_bf16, force_accum)
-    scores = matmul_out_dtype(sa, M, True, native_bf16, force_accum, contract_half)
+    # the scores are the first product's output (`bmm_out`: on the matrix unit the operands as they are in memory,
+    # elsewhere widened — fp32 for any half input without the fp16 contract, fp16 on the unit under it): the route's
+    # softmax runs on B * H * Tq rows of Tk columns at that dtype (`wrappers.softmax`, workstream 1)
+    scores = bmm_out(M, q, k, native_bf16, force_accum, contract_half)
     return (bmm_launches(M, D, Tk, q, k, native_bf16, force_accum, contract_half)
             + softmax_launches(B * H * Tq, Tk, False, scores, scores)
             + bmm_launches(M, Tk, Dv, v, v, native_bf16, force_accum, contract_half))

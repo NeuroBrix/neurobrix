@@ -868,7 +868,9 @@ class _TritonRules(_Rules):
                 return self.mm_store(c, c, self.rows(ins[0]))
             if name == "matmul" and ranks == [2, 2]:
                 return self.mm_store(c, c, self.rows(ins[0]))
-            return "float32"
+            # every batched form -> bmm (force_fp32): the one store rule, which stores fp16 under the fp16 contract
+            # (2026-10-26: a hard "float32" here priced chatterbox's cond_enc attention operands wider than the run)
+            return self.mm_store(c, c, None, force=True)
         if name in _MATMUL_OTHER:
             return "float32"
         return c
