@@ -18,13 +18,8 @@ from neurobrix.kernels import wrappers as w
 def _cpu_sort(tensor: NBXTensor, descending: bool = False):
     """Sort via CPU numpy. For top-p sampling (once per token, ~1ms)."""
     n = tensor.numel()
-    elem_size = 2 if tensor._dtype in (NBXDtype.float16, NBXDtype.bfloat16) else 4
-    buf = (_ctypes.c_char * (n * elem_size))()
-    DeviceAllocator.memcpy(_ctypes.addressof(buf), tensor.data_ptr(),
-                           n * elem_size, kind=2)  # D2H
-
-    np_dt = np.float16 if tensor._dtype == NBXDtype.float16 else np.float32
-    arr = np.frombuffer(buf, dtype=np_dt).reshape(tensor.shape).copy()
+    # the tensor's own dtype, bf16 decoded exactly (a bf16 row read as float32 was garbage)
+    arr = _decode_float(_host_bytes(tensor, n), tensor._dtype).reshape(tensor.shape)
 
     if descending:
         indices = np.argsort(-arr, axis=-1, kind='stable')
@@ -41,6 +36,42 @@ def _cpu_sort(tensor: NBXTensor, descending: bool = False):
 # =============================================================================
 # Config (pure Python — shared with native mode)
 # =============================================================================
+
+
+def _host_bytes(tensor, n: int) -> bytes:
+    """The first `n` elements of a device tensor, copied to the host as raw bytes at the tensor's own width."""
+    import ctypes as _ct
+    from neurobrix.kernels.nbx_tensor import DeviceAllocator as _DA
+    width = {NBXDtype.float32: 4, NBXDtype.float16: 2, NBXDtype.bfloat16: 2}.get(tensor._dtype)
+    if width is None:
+        raise TypeError(f"ZERO FALLBACK: the sampler reads float logits; {tensor._dtype} is none")
+    buf = (_ct.c_char * (n * width))()
+    _DA.memcpy(_ct.addressof(buf), tensor.data_ptr(), n * width, 2)  # D2H
+    return bytes(buf)
+
+
+def _decode_float(raw: bytes, dtype) -> "np.ndarray":
+    """Raw float bytes at `dtype` -> a float32 array (bf16 widened by its 16 high bits, exactly)."""
+    if dtype == NBXDtype.float32:
+        return np.frombuffer(raw, dtype=np.float32).copy()
+    if dtype == NBXDtype.float16:
+        return np.frombuffer(raw, dtype=np.float16).astype(np.float32)
+    if dtype == NBXDtype.bfloat16:
+        return (np.frombuffer(raw, dtype=np.uint16).astype(np.uint32) << 16).view(np.float32).copy()
+    raise TypeError(f"ZERO FALLBACK: no float decoding for {dtype}")
+
+
+def _encode_float(arr: "np.ndarray", dtype) -> "np.ndarray":
+    """A float32 array -> a contiguous array at `dtype`'s bits (bf16 rounded to nearest even), ready for a H2D copy."""
+    a = np.ascontiguousarray(arr, dtype=np.float32)
+    if dtype == NBXDtype.float32:
+        return a
+    if dtype == NBXDtype.float16:
+        return a.astype(np.float16)
+    if dtype == NBXDtype.bfloat16:
+        u = a.view(np.uint32)
+        return ((u + 0x7FFF + ((u >> 16) & 1)) >> 16).astype(np.uint16)
+    raise TypeError(f"ZERO FALLBACK: no float encoding for {dtype}")
 
 class SamplerConfig:
     """Config validation for LLM samplers."""
@@ -190,13 +221,12 @@ class CombinedSampler:
                                n * 8, 2)  # D2H
         ids = np.frombuffer(bytes(buf), dtype=np.int64)
 
-        # Read logits to CPU, apply penalty, write back
+        # Read logits to CPU at THEIR dtype (fp32, or the compute dtype a half head stores under the fp16 contract —
+        # 2026-10-26: orpheus's lm_head stored fp16 logits and the fp32-sized copy read past them, CUDA error 1),
+        # apply the penalty in fp32, write back at the same dtype.
         vocab = logits.shape[-1]
-        logits_bytes = vocab * 4  # float32
-        lbuf = (ctypes.c_char * logits_bytes)()
-        DeviceAllocator.memcpy(ctypes.addressof(lbuf), logits.data_ptr(),
-                               logits_bytes, 2)  # D2H
-        logits_np = np.frombuffer(bytes(lbuf), dtype=np.float32).copy()
+        raw = _host_bytes(logits, vocab)
+        logits_np = _decode_float(raw, logits._dtype)
 
         for token_id in set(ids.tolist()):
             if 0 <= token_id < vocab:
@@ -210,8 +240,8 @@ class CombinedSampler:
         # call coerces to a 32-bit C int → the 64-bit host address is truncated
         # → invalid src pointer → segfault. (The D2H reads above already wrap
         # both ends, which is why only this H2D write crashed.)
-        DeviceAllocator.memcpy(logits.data_ptr(), logits_np.ctypes.data,
-                               logits_bytes, 1)  # H2D
+        out = _encode_float(logits_np, logits._dtype)
+        DeviceAllocator.memcpy(logits.data_ptr(), out.ctypes.data, out.nbytes, 1)  # H2D
         return logits
 
     def _shift_mask_right(self, mask: NBXTensor) -> NBXTensor:
