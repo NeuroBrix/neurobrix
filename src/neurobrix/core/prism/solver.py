@@ -4574,8 +4574,15 @@ class PrismSolver:
                           if profile.cpu and getattr(self, "_mode", None) else 0) or 0)
         except Exception:  # noqa: BLE001 — no measured base: nothing subtracted, nothing invented
             base = 0.0
+        # The device's declared working set bounds the pool: the system keeps its own share of the installed RAM
+        # (the Mac M4 Pro: 24 576 MB installed, 18 186 MB declared; at 24 403 MB MiniCPM-o-4_5 planned 20 852 MB
+        # under triton that the door refused at every reading this machine has, 2026-10-26).
+        declared = float(max((getattr(d, "memory_mb", 0) or 0 for d in profile.devices if getattr(d, "has_unified_memory", False)),
+                             default=0) or 0)
         if installed <= 0:
             installed = float(max((d.memory_mb for d in profile.devices), default=0))
+        if declared > 0:
+            installed = min(installed, declared)
         return max(0.0, installed - base)
 
     def _host_budget_mb(self, profile) -> float:
