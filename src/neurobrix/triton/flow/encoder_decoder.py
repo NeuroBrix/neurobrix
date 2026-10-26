@@ -436,8 +436,11 @@ def _sample_token_nbx(logits, temperature, generated_ids=None, repetition_penalt
     else:
         last_logits_tensor = logits
 
-    # Transfer to CPU via numpy for sampling
-    last_logits_np = _to_numpy(last_logits_tensor)
+    # Transfer to CPU via numpy for sampling: read at its width once, then penalty, rules, temperature and draw in fp32
+    # whatever the head stored, as vLLM (the owner, 2026-10-26 19:21) — never computed in half.
+    if isinstance(last_logits_tensor, NBXTensor) and last_logits_tensor._dtype != NBXDtype.float32:
+        last_logits_tensor = last_logits_tensor.to(NBXDtype.float32)   # bf16 has no numpy type: widened on the device
+    last_logits_np = np.array(_to_numpy(last_logits_tensor), dtype=np.float32, copy=True)
 
     if last_logits_np.ndim > 1:
         last_logits_np = last_logits_np[0]  # First batch

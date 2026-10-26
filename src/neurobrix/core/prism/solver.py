@@ -456,7 +456,7 @@ class ExecutionPlan:
     #: before loading anything. None when the door is open or no live reading was taken.
     execution_door: Optional[str] = None
     #: when the machine was busy at planning time and the plan was RE-SOLVED on the memory free now (`solve_smart`):
-    #: {"from": the plan the facts gave, "from_mb", "held_by_others_mb"}; None when the facts' plan ran
+    #: {"from": the plan the facts gave, "free_now_mb", "held_by_others_mb"}; None when the facts' plan ran
     busy_replan: Optional[Dict[str, Any]] = None
     #: A streamed plan's device bytes at its worst moment — what stays resident beside the segments
     #: (whole components, graph constants, flow-read weights, the KV reserve) plus the largest
@@ -1942,9 +1942,13 @@ class PrismSolver:
         pool_mb = self._unified_host_pool_mb(profile)
         while True:
             fp = plan.host_footprint
-            # What the plan adds to the pool: the process's resident memory — what it holds NOW, read by
-            # host_footprint.process_footprint_now, never a high-water mark — is already out of the reading.
-            need_mb = (int(fp.get("total_bytes", 0)) - int(fp.get("resident_bytes", 0))) / (1 << 20)
+            # The pool is a FACT that holds no NeuroBrix process (the installed RAM less the system's share measured
+            # calm, less the engine's base), so the plan's WHOLE host side goes against it — the process's resident
+            # memory included — less the base the pool already took off (`base_bytes` is a term of `total_bytes`).
+            # It subtracted the resident instead: the base counted twice, the resident never, and on a profile with
+            # no measured base (the M4 Pro) a lazy_sequential plan of 18 006 MB was accepted on a 17 582 MB pool
+            # (2026-10-26). The moment's reading, which excludes what the process holds, is the door below.
+            need_mb = (int(fp.get("total_bytes", 0)) - int(fp.get("base_bytes", 0))) / (1 << 20)
             rung = min(d.budget_mb for d in self._prepare_devices(profile) if d.spec.has_unified_memory)
             tried.append((int(rung), plan.strategy, int(need_mb)))
             if need_mb <= pool_mb:
@@ -3356,7 +3360,11 @@ class PrismSolver:
         if not caps and host_free is None:
             return plan                      # nothing live to re-plan on: the door stands as it was said
         first = (plan.strategy, float(plan.total_memory_mb or 0.0))
-        self._busy_caps, self._busy_host_pool_mb = caps, host_free
+        # The host pool is set against a plan's whole host side, the process's resident memory included; the free
+        # reading excludes what this process already holds, so that is given back to it (`_unified_host_pool_mb`).
+        resident_mb = int((plan.host_footprint or {}).get("resident_bytes", 0)) / (1 << 20)
+        self._busy_caps = caps
+        self._busy_host_pool_mb = None if host_free is None else host_free + resident_mb
         try:
             busy = self.solve(container, profile, input_config, serve_mode=serve_mode, mode=mode)
         except RuntimeError as refusal:
@@ -3368,12 +3376,13 @@ class PrismSolver:
         if getattr(busy, "execution_door", None):
             raise RuntimeError(f"{door}\nRe-planned on the memory free now (machine busy: {held:.0f} MB taken by "
                                f"other applications) — the smaller plan does not fit either: {busy.execution_door}")
-        note = (f"machine busy: {held:.0f} MB taken by other applications — plan {first[0]} ({first[1]:.0f} MB) -> "
-                f"{busy.strategy} ({float(busy.total_memory_mb or 0.0):.0f} MB) on the memory free now")
+        free_now = host_free if host_free is not None else min(caps.values())
+        note = (f"machine busy: {held:.0f} MB taken by other applications — plan {first[0]} does not fit the "
+                f"{free_now:.0f} MB free now; running {busy.strategy} instead (slower)")
         logging.getLogger(__name__).warning("Prism: %s", note)
         print(f"   [Prism] {note}")
         busy.selection_reason = f"{note}; {busy.selection_reason}"
-        busy.busy_replan = {"from": first[0], "from_mb": first[1], "held_by_others_mb": held}
+        busy.busy_replan = {"from": first[0], "free_now_mb": free_now, "held_by_others_mb": held}
         return busy
 
     def _busy_readings(self, profile):
@@ -4608,7 +4617,8 @@ class PrismSolver:
             # this path did not, so the two halves of the same law disagreed.
             # On a machine planning under its OWN profile the two figures agree and nothing
             # moves; a busy machine still lowers, which is the 2026-09-10 repair.
-            declared_host = float(getattr(getattr(profile, "cpu", None), "ram_mb", 0) or 0)
+            declared_host = self._less_the_system_share(
+                profile, float(getattr(getattr(profile, "cpu", None), "ram_mb", 0) or 0))
             if declared_host > 0 and declared_host < free:
                 free = declared_host
             # AND never more than the device itself can hold. On unified memory the device's
@@ -4625,7 +4635,12 @@ class PrismSolver:
             # is the 2026-09-10 repair, and `min` preserves that.
             if capacity > 0:
                 free = min(free, float(capacity))
-            return DeviceReading(kind="device", capacity_mb=float(dev.memory_mb), free_mb=free, unified=True,
+            # The pool a plan is budgeted against (`memory_budget.budget_mb` reads `capacity_mb`): the declared working
+            # set, never above what the system leaves of the installed RAM — the same figure as the host pool's.
+            pool = float(dev.memory_mb)
+            if declared_host > 0:
+                pool = min(pool, declared_host)
+            return DeviceReading(kind="device", capacity_mb=pool, free_mb=min(free, pool), unified=True,
                                  measured=bool(getattr(host, "measured", False)), source=str(getattr(host, "source", "")))
         try:
             r = read_device_sharing(dev.index)
@@ -4637,6 +4652,17 @@ class PrismSolver:
         except Exception as exc:  # noqa: BLE001 — a reading that cannot be taken is a shared pool, said
             return DeviceReading(kind="device", capacity_mb=float(dev.memory_mb), free_mb=float(capacity),
                                  measured=False, source=f"no reading: {type(exc).__name__}")
+
+    @staticmethod
+    def _less_the_system_share(profile, installed: float) -> float:
+        """The installed RAM less the system's own share MEASURED calm (`host_measured.system_share_mb`: installed less
+        the calm available memory, tools/profile_facts.py) — the OS and its resident apps hold it whatever the run. ONE
+        figure for both halves of a unified pool: the device reading (`_device_reading`) and the host pool
+        (`_unified_host_pool_mb`). With the share off the host pool only, the device budget stayed at the declared
+        18 186 MB on the M4 Pro and Prism accepted a lazy_sequential plan whose host side (18 562 MB) overran the
+        17 582 MB pool (2026-10-26). Absent: nothing measured, nothing taken; no installed figure: 0 stays 0."""
+        share = float(((getattr(profile, "host_measured", None) or {}).get("system_share_mb")) or 0)
+        return installed - share if (share > 0 and installed > 0) else installed
 
     def _unified_host_pool_mb(self, profile) -> float:
         """The whole pool a plan may fill on a unified machine: the profile's installed RAM less the engine's
@@ -4661,14 +4687,13 @@ class PrismSolver:
         # the calm available memory, tools/profile_facts.py) — the OS and its resident apps hold it whatever the run
         # does; without it the door decided by luck at the calm-free edge (Ming 16 462 MB and Qwen3-VL 16 648 MB of
         # host side against 16 711-17 506 MB calm free on the Mac, 2026-10-26). Absent: nothing measured, nothing taken.
-        share = float(((getattr(profile, "host_measured", None) or {}).get("system_share_mb")) or 0)
-        if share > 0 and installed > 0:
-            installed = installed - share
+        installed = self._less_the_system_share(profile, installed)
         if declared > 0:
             installed = min(installed, declared)
         busy = getattr(self, "_busy_host_pool_mb", None)
         if busy is not None:
-            return min(max(0.0, installed - base), float(busy))   # a busy machine: what is free now (`solve_smart`)
+            # a busy machine: what is free now, less the engine's measured base it has yet to hold (`solve_smart`)
+            return max(0.0, min(installed, float(busy)) - base)
         return max(0.0, installed - base)
 
     def _host_budget_mb(self, profile) -> float:
@@ -4752,7 +4777,11 @@ class PrismSolver:
                 # The pool's FACTS size the plan (the owner, 2026-10-25 15:16): what the device recommends less the
                 # engine's measured base on this host; the moment's free reading is the execution door
                 # (`memory_budget.execution_door`), never the budget - a plan is reproducible from one run to the next.
-                capacity = max(0.0, recommended - float(_base))
+                # The pool is the declared working set within what the system leaves of the installed RAM
+                # (`_less_the_system_share`), the host pool's own figure.
+                _ram = float(getattr(getattr(profile, "cpu", None), "ram_mb", 0) or 0)
+                _pool = min(recommended, self._less_the_system_share(profile, _ram)) if _ram > 0 else recommended
+                capacity = max(0.0, _pool - float(_base))
                 # What the compiled engine's backend holds OUTSIDE torch's allocations on this device (MPS: compiled
                 # graphs, kernel temporaries; "other allocations" in its OOM line), a vendor fact
                 # (memory.compiled_private_reserve_mb): never in a component's price, so it is taken off the room before

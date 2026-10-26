@@ -20,7 +20,8 @@ def _solve(spec, mode):
 def _check_busy(p, free_mb):
     assert p.busy_replan is not None, (p.strategy, p.execution_door)
     assert not p.execution_door, p.execution_door
-    assert "machine busy" in p.selection_reason and "->" in p.selection_reason, p.selection_reason
+    assert "machine busy" in p.selection_reason and "free now" in p.selection_reason, p.selection_reason
+    assert abs(p.busy_replan["free_now_mb"] - free_mb) <= 1, (p.busy_replan, free_mb)
 
 
 def test_a_shared_v100_is_replanned_on_what_is_free(monkeypatch):

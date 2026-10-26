@@ -60,6 +60,10 @@ def _sample_token_nbx(
     the compute that produced the logits stayed on the Triton path.
     """
     last = logits[:, -1, :] if logits.ndim == 3 else logits  # [1, V]
+    # Penalty, temperature, softmax and draw in fp32 whatever the head stored, as vLLM (the owner, 2026-10-26 19:21):
+    # the row is read at its width once, never computed in half (a fp16 row divided by a small temperature overflows).
+    if last._dtype != NBXDtype.float32:
+        last = last.to(NBXDtype.float32)
 
     if repetition_penalty != 1.0 and generated_ids:
         # Faithful mirror of the core per-id scaling, on a tiny [1,V]

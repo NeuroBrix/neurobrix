@@ -60,13 +60,18 @@ def test_the_resident_term_is_what_the_process_holds_now(monkeypatch):
 
 
 def test_the_ledger_admits_what_prism_accepted(monkeypatch):
-    """The plan's whole host side fits the pool the profile DECLARES (the budget law of 2026-10-25); the moment's
-    reading is the door: the same plan under the Mac's busy reading of 2026-10-04 (15 500 MB free) is refused by
-    name instead of being traded for a slower rung."""
+    """The plan's whole host side — what the process holds included — fits the pool the profile DECLARES less the
+    system's measured share (the budget law of 2026-10-25, the share of 2026-10-26); under the Mac's busy reading of
+    2026-10-04 (15 500 MB free) the plan runs as it is if its host side fits what is free, else the machine is
+    re-planned on it and said (the owner, 2026-10-26 19:21) — never a door left shut while a plan fits."""
     import pytest
     p = _plan(monkeypatch)
     total = p.host_footprint["total_bytes"] >> 20
     pool = PrismSolver()._unified_host_pool_mb(profile(APPLE_M4_PRO))
     assert total <= pool, (p.strategy, p.device_window_mb, total, pool)
     busy = _plan(monkeypatch, MACHINE_FREE_MB)
-    assert busy.strategy == p.strategy and busy.execution_door and "are free now" in busy.execution_door
+    assert not busy.execution_door, busy.execution_door
+    if busy.busy_replan is None:
+        assert busy.strategy == p.strategy, (busy.strategy, p.strategy)
+    else:
+        assert busy.busy_replan["from"] == p.strategy and "machine busy" in busy.selection_reason, busy.busy_replan

@@ -22,9 +22,8 @@ was not.
 WHAT THIS DOES NOT CHANGE
 -------------------------
 A machine planning under its OWN profile: the declared figure and the live reading describe
-the same machine, so the bound is inert. A BUSY machine still lowers below the declaration —
-that is the 2026-09-10 repair for a render accepted at `single_gpu` and killed at step 3 of
-20, and it is pinned below so this fix cannot undo it.
+the same machine, so the bound is inert. A BUSY machine lowers the door's free reading, never the budget (the owner, 2026-10-25 15:16),
+and is re-planned on what is free by `solve_smart` (2026-10-26 19:21) — pinned below.
 """
 from __future__ import annotations
 
@@ -89,13 +88,16 @@ def test_the_budget_is_the_same_on_a_small_host_and_a_huge_one():
     assert big == enough, (big, enough)
 
 
-def test_a_busy_machine_still_lowers_below_the_declaration():
-    """The 2026-09-10 repair, pinned so this fix cannot undo it: the bound is a CEILING,
-    not a replacement. A machine with less free than the profile declares plans on less."""
+def test_a_busy_reading_lowers_the_door_never_the_budget():
+    """Since 2026-10-25 15:16 the budget is the pool's fact and the moment's reading is the door: a machine with less
+    free than the profile declares keeps its budget and reads less free; the re-plan on a busy machine is
+    `solve_smart`'s (test_a_busy_machine_is_replanned_not_refused). Before, the reading lowered the budget itself
+    (the 2026-09-10 repair this replaced)."""
     profile = _apple_profile()
-    tight = _unified_device(profile, host_available_mb=6_000).budget_mb
-    declared = _unified_device(profile, host_available_mb=int(profile.cpu.ram_mb)).budget_mb
-    assert tight < declared, (tight, declared)
+    tight = _unified_device(profile, host_available_mb=6_000)
+    declared = _unified_device(profile, host_available_mb=int(profile.cpu.ram_mb))
+    assert tight.budget_mb == declared.budget_mb, (tight.budget_mb, declared.budget_mb)
+    assert tight.live_free_mb < declared.live_free_mb, (tight.live_free_mb, declared.live_free_mb)
 
 
 def test_the_bound_is_inert_for_a_machine_reading_its_own_profile():
@@ -115,12 +117,14 @@ def test_the_bound_is_inert_for_a_machine_reading_its_own_profile():
         assert with_profile == without
 
 
-def test_the_capacity_is_untouched():
-    """Only the READING the law is applied to moves; `capacity_mb` is the 2026-09-10 path
-    and keeps its own meaning."""
+def test_the_capacity_is_the_declared_working_set_within_what_the_system_leaves():
+    """`capacity_mb` is the device's declared working set, never above the installed RAM less the system's measured
+    share (`host_measured.system_share_mb`, 2026-10-26) — the host pool's own figure; no 0.95 (34171d6c)."""
     profile = _apple_profile()
     d = _unified_device(profile, host_available_mb=251_000)
-    assert d.capacity_mb == pytest.approx(profile.devices[0].memory_mb * 0.95, rel=1e-6)
+    share = float(((getattr(profile, "host_measured", None) or {}).get("system_share_mb")) or 0)
+    want = min(float(profile.devices[0].memory_mb), float(profile.cpu.ram_mb) - share)
+    assert d.capacity_mb == pytest.approx(want, rel=1e-6), (d.capacity_mb, want)
 
 
 # ─────────── and never more than the DEVICE can hold ───────────
@@ -145,7 +149,7 @@ def test_both_bounds_are_needed_and_neither_alone_is_enough():
     machine's free RAM through while it is below capacity. Pinned together."""
     profile = _apple_profile()
     declared = float(profile.cpu.ram_mb)
-    cap = float(profile.devices[0].memory_mb) * 0.95
+    cap = float(profile.devices[0].memory_mb)
     assert declared > cap, (
         "this profile no longer has more system RAM than GPU capacity, so it cannot "
         "distinguish the two bounds — pick another fixture")

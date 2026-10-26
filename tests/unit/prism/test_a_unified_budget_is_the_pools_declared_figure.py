@@ -16,6 +16,14 @@ from neurobrix.core.prism import solver as S
 from tests.unit.prism._pinned_machine import APPLE_M4_PRO, profile
 
 
+def _pool(spec):
+    """The declared working set within what the system leaves of the installed RAM (its share measured calm,
+    `host_measured.system_share_mb`, 2026-10-26): the one figure both halves of a unified pool read."""
+    share = float((getattr(profile(spec), "host_measured", None) or {}).get("system_share_mb") or 0)
+    assert share > 0, "the M4 Pro's chip file carries its measured share (2026-10-26)"
+    return min(float(spec["devices"][0]["memory_mb"]), float(spec["cpu"]["ram_mb"]) - share)
+
+
 @pytest.mark.parametrize("free", [11581, 13000, 10380, 17236, 16902])
 def test_the_budget_is_the_declared_figure_whatever_is_free(monkeypatch, free):
     st = HM.MemoryState(available_mb=free, source="the Mac's reading")
@@ -23,7 +31,7 @@ def test_the_budget_is_the_declared_figure_whatever_is_free(monkeypatch, free):
     monkeypatch.setattr(S, "_census_shadow_active", lambda: False)
     solver = S.PrismSolver()
     devs = solver._prepare_devices(profile(APPLE_M4_PRO))
-    declared = APPLE_M4_PRO["devices"][0]["memory_mb"]           # no coefficient since 2026-10-25
+    declared = _pool(APPLE_M4_PRO)                               # no coefficient since 2026-10-25
     assert devs[0].budget_mb == pytest.approx(declared), (free, devs[0].budget_mb)
     assert devs[0].live_free_mb == free                      # the door carries the moment
 
@@ -38,6 +46,6 @@ def test_the_engine_s_measured_base_comes_off_the_declared_figure(monkeypatch):
         return dataclasses.replace(base, cpu=dataclasses.replace(base.cpu, runtime_base_mb=mb))
     solver = S.PrismSolver()
     solver._mode = "triton"
-    declared = APPLE_M4_PRO["devices"][0]["memory_mb"]           # no coefficient since 2026-10-25
+    declared = _pool(APPLE_M4_PRO)                               # no coefficient since 2026-10-25
     assert solver._prepare_devices(with_base({"triton": 1500}))[0].budget_mb == pytest.approx(declared - 1500)
     assert solver._prepare_devices(with_base({}))[0].budget_mb == pytest.approx(declared)

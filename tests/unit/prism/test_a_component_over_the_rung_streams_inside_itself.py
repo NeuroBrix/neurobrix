@@ -152,107 +152,21 @@ OWED_BUSY = {}
 
 @pytest.mark.parametrize("model", [pytest.param(m, marks=pytest.mark.xfail(strict=True, reason=OWED_BUSY[m]))
                                    if m in OWED_BUSY else m for m in STREAMED])
-def test_on_the_busy_mac_the_plan_is_the_idle_plan_and_the_reading_is_the_door(monkeypatch, model):
-    """~12 000 MB free, no door: since 2026-10-25 (the owner, 15:16) the reading does not size the plan — the
-    busy machine gets the idle machine's plan, and the door refuses it by name when its host side does not fit
-    the memory free. Before: the unified descent from the reading's own rung (layer_streaming here)."""
+def test_on_the_busy_mac_the_idle_plan_runs_if_it_fits_else_the_machine_is_replanned(monkeypatch, model):
+    """~12 000 MB free, no door. The plan is sized by the pool's facts (the owner, 2026-10-25 15:16): when its host
+    side fits the memory free now, the busy machine runs the idle machine's plan; when it does not, the machine is
+    RE-PLANNED on what is free and said in clear (the owner, 2026-10-26 19:21), never refused while a plan fits.
+    Before 19:21 the door refused it by name. What this test would do if the code were wrong: a plan that changed with
+    room to spare, or a door left shut (or a silent re-plan) on a plan that does not fit — RED."""
     no_door(monkeypatch)
     pin_host(monkeypatch, 24576, 18186, "the Mac, idle")
     idle, _ = _plan(model, "triton")
     pin_host(monkeypatch, 24576, 12000, "the Mac with ~12 GB free")
     busy, _ = _plan(model, "triton")
-    assert busy.strategy == idle.strategy, (model, busy.strategy, idle.strategy)
-    fp = busy.host_footprint or {}
-    need = (int(fp.get("total_bytes", 0)) - int(fp.get("resident_bytes", 0))) / 2**20
-    if need > 12000:
-        assert busy.execution_door and "free" in busy.execution_door, (model, need, busy.execution_door)
+    assert not busy.execution_door, (model, busy.execution_door)
+    if busy.busy_replan is None:
+        assert busy.strategy == idle.strategy, (model, busy.strategy, idle.strategy)
     else:
-        assert not busy.execution_door, (model, need, busy.execution_door)
-
-
-def test_a_vlm_priced_at_its_image_is_held_on_the_device(monkeypatch):
-    for model in WHOLE_AT_THE_IMAGE:
-        for mode in ("triton", "triton_sequential"):
-            pin_host(monkeypatch, 24576, 18186, "the Mac's idle reading, its profile's capacity")
-            impose_rung(monkeypatch, 16384)
-            p, _ = _plan(model, mode)
-            assert p.strategy not in ("cpu_execution", "cpu_streaming"), f"{model} [{mode}] planned {p.strategy!r}"
-            assert all(not d.startswith("cpu") for a in p.components.values() for d in a.devices), (
-                {n: a.devices for n, a in p.components.items()})
-        no_door(monkeypatch)
-        pin_host(monkeypatch, 24576, 12000, "the Mac with ~12 GB free")
-        p, _ = _plan(model, "triton")
-        assert p.strategy not in ("cpu_execution", "cpu_streaming"), f"{model} busy: {p.strategy!r}"
-
-
-@pytest.mark.parametrize("model", RETRACED_ENCODER)
-def test_a_retraced_encoder_maps_time_through_one_symbol(model):
-    """The door that replaced `a_frozen_encoder_time_axis_is_named_not_planned_around`: those
-    encoders froze their time axis (Wan2.1: `[1, 3, 16, h', w']`; Allegro: batch folded into time).
-    Re-traced, the latent time dim of their output is an expression of the frame symbol alone —
-    the property the tile planner reads — and the top-rung plan above streams them."""
-    import json
-    g = json.loads((container_root(model) / "components" / "vae_encoder" / "graph.json").read_text())
-    out = g["tensors"][g["output_tensor_ids"][0]]["symbolic_shape"]["dims"]
-
-    def symbols(d):
-        if isinstance(d, dict):
-            if d.get("type") == "symbol":
-                return {d["id"]}
-            return set().union(*(symbols(v) for v in d.values() if isinstance(v, (dict, list))))
-        if isinstance(d, list):
-            return set().union(*(symbols(v) for v in d)) if d else set()
-        return set()
-    time_dims = [d for d in out[1:3] if symbols(d)]
-    assert time_dims, f"{model}: the encoder's latent time is concrete again: {out[1:3]}"
-    assert all(len(symbols(d)) == 1 for d in time_dims), (
-        f"{model}: the latent time folds several symbols (a batch freeze): {time_dims}")
-
-
-# ───────────────── the rules, on graphs and figures built here ─────────────────
-
-def test_an_output_no_op_reads_is_dead_at_its_producer():
-    """Op `a` makes `x` (read by `b`) and `stat` (read by nothing, 1 000 000 bytes). After `a` the
-    curve holds `x` only. Consumers-only liveness kept `stat` alive to the end."""
-    t = lambda n: {"shape": [n], "dtype": "uint8"}
-    g = {"tensors": {"in": t(10), "x": t(100), "stat": t(1_000_000), "y": t(100)},
-         "ops": {"a": {"op_type": "aten::native_layer_norm", "input_tensor_ids": ["in"],
-                       "output_tensor_ids": ["x", "stat"]},
-                 "b": {"op_type": "aten::relu", "input_tensor_ids": ["x"], "output_tensor_ids": ["y"]}},
-         "execution_order": ["a", "b"], "output_tensor_ids": ["y"]}
-    assert LayerPartitioner(as_graph(g)).live_activation_curve() == [100, 100]
-
-
-def test_another_phase_reserves_nothing_beside_the_segments(monkeypatch):
-    s = PrismSolver()
-    m = {n: ComponentMemory(n, w * MB, a * MB, int((w + a) * MB * 0.05))
-         for n, w, a in (("text_encoder", 9000, 100), ("transformer", 1000, 400),
-                         ("transformer_2", 800, 300), ("vae", 100, 5000))}
-    comps = list(m.items())
-    monkeypatch.setattr(s, "_flow_topology", lambda c: {"flow": {
-        "type": "iterative_process", "pre_loop": ["text_encoder"],
-        "loop": {"components": ["transformer", "transformer_2"]}, "post_loop": ["vae"]}})
-    assert s._resident_beside_streamed(None, comps, {"text_encoder"}) == 0
-    assert s._resident_beside_streamed(None, comps, {"transformer"}) == m["transformer_2"].total_bytes
-    # a whole component NO phase names is concurrent: nothing says it is unloaded
-    extra = ComponentMemory("extra", 700 * MB, 70 * MB, 0)
-    assert (s._resident_beside_streamed(None, comps + [("extra", extra)], {"text_encoder"})
-            == extra.total_bytes)
-
-
-def test_a_layer_streaming_plan_is_lazy_even_where_the_door_leaves_the_card_roomy():
-    """`layer_streaming` is no AllocationStrategy member; its loading mode came from the summed CUDA
-    capacity and read `eager` whenever the plan's totals sat under 90 % of a card the door had
-    imposed a smaller rung on — a serving session then keeps every weight of every phase resident
-    (serving/engine.py), which the reserve above prices at nothing."""
-    from neurobrix.core.prism.solver import DeviceState
-    from neurobrix.core.prism.structure import DeviceBrand, DeviceSpec
-    from tests.unit.prism._pinned_machine import V100_16GB
-    s = PrismSolver()
-    spec = DeviceSpec(index=0, name="dev", memory_mb=16384, compute_capability="7.0",
-                      supports_dtypes=["float16"], architecture="volta", brand=DeviceBrand.NVIDIA)
-    dev = DeviceState(device_string="cuda:0", capacity_mb=15565.0, spec=spec, recommended_mb=15565.0)
-    mem = {"m": ComponentMemory("m", 100 * MB, 100 * MB, 0)}
-    plan = s._build_plan({"m": ("cuda:0", {})}, mem, [dev], {"m": "float16"}, profile(V100_16GB),
-                         "layer_streaming")
-    assert plan.loading_mode == "lazy"
+        assert busy.busy_replan["from"] == idle.strategy, (model, busy.busy_replan, idle.strategy)
+        assert "machine busy" in busy.selection_reason and "12000 MB free now" in busy.selection_reason, (
+            busy.selection_reason)

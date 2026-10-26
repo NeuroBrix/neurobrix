@@ -16,7 +16,11 @@ def test_a_unified_pool_plans_at_its_declared_figure_less_the_engines_measured_b
     s = PrismSolver(); s._mode = "triton"
     dev = s._prepare_devices(profile(APPLE_M4_PRO))[0]
     base = (APPLE_M4_PRO.get("cpu", {}).get("runtime_base_mb") or {}).get("triton", 0)
-    assert dev.recommended_mb == 18186 and dev.capacity_mb == 18186 - base, (dev.recommended_mb, dev.capacity_mb, base)
+    # the declared working set within what the system leaves of the installed RAM (its measured share, 2026-10-26)
+    share = float((getattr(profile(APPLE_M4_PRO), "host_measured", None) or {}).get("system_share_mb") or 0)
+    assert share > 0, "the M4 Pro's chip file carries its measured share (2026-10-26)"
+    pool = min(18186, 24576 - share)
+    assert dev.recommended_mb == 18186 and dev.capacity_mb == pool - base, (dev.recommended_mb, dev.capacity_mb, base)
 
 
 def test_a_dedicated_card_plans_at_its_declared_figure_less_its_own_context(monkeypatch):

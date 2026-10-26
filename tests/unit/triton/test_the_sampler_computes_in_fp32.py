@@ -24,3 +24,15 @@ def test_the_sampler_receives_fp32_logits(dt):
     except Exception:
         pass                                  # what follows the draw is not this test's business
     assert seen and seen[0] == NBXDtype.float32, seen
+
+
+@pytest.mark.parametrize("dt", [NBXDtype.float16, NBXDtype.bfloat16])
+@pytest.mark.parametrize("helper", ["audio_llm", "encoder_decoder"])
+def test_the_flow_samplers_draw_in_fp32(dt, helper):
+    """The flows' own samplers (audio_llm's, which vlm also draws with, and the encoder-decoder's): a half row whose
+    largest logit divided by the temperature is past the half range (70 / 1e-3 = 70 000 > 65 504) — in half it becomes
+    inf, the softmax NaN and the draw garbage; in fp32 the draw is the argmax, token 7."""
+    import importlib
+    mod = importlib.import_module(f"neurobrix.triton.flow.{helper}")
+    logits = NBXTensor.from_numpy((np.arange(8, dtype=np.float32) * 10).reshape(1, 8)).to("cuda").to(dt)
+    assert [mod._sample_token_nbx(logits, 1e-3) for _ in range(4)] == [7, 7, 7, 7]
