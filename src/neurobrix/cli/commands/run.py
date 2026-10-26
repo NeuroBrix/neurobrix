@@ -933,6 +933,15 @@ def cmd_run(args):
     # The run's four timings on one parseable line (core/runtime/run_timings.py),
     # read by the gate harness into each row.
     print(run_timings.format_line(run_timings.measured()), flush=True)
+    # The run's device peak (rule 3: every gate cell writes it to the register), each engine through its own allocator.
+    if execution_mode in ("compiled", "sequential"):
+        import torch
+        _peak = (max(torch.cuda.max_memory_reserved(d) for d in range(torch.cuda.device_count()))
+                 if torch.cuda.is_available() else None)
+    else:
+        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        _peak = DeviceAllocator.peak_device_bytes()
+    print(run_timings.format_peak(None if _peak is None else _peak / 2**20), flush=True)
 
     # 7. Save output — DATA-DRIVEN by family YAML output_format
     family = pkg.manifest.get("family")

@@ -108,3 +108,14 @@ def test_every_decoding_flow_reaches_the_emit_site_on_both_engines():
         assert "decode_progress.emit(" in text, rel
     for rel in ("core/flow/audio_llm.py", "triton/flow/audio_llm.py"):
         assert "decode_progress.record(" in (SRC / "neurobrix" / rel).read_text(), rel
+
+
+def test_the_peak_line_round_trips_and_says_na():
+    """Rule 3 (2026-10-26): every run states its device peak on its own line; producer and parser are one pair.
+    What this test would do if the code were wrong: a peak lost or invented — RED."""
+    from neurobrix.core.runtime import run_timings as rt
+    assert rt.parse_peak("x\n" + rt.format_peak(14290.4) + "\n") == 14290.0
+    assert rt.parse_peak(rt.format_peak(None)) is None
+    import pytest
+    with pytest.raises(ValueError, match="no \\[Peak\\] line"):
+        rt.parse_peak("[Timings] load_s=1.0")

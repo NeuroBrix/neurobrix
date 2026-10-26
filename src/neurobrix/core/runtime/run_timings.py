@@ -165,3 +165,24 @@ def parse_line(text: str) -> Optional[dict]:
         else:
             row[k] = float(v)
     return row
+
+
+# The run's DEVICE memory peak, on its own line (the Timings line keeps its fields; old logs keep parsing):
+#     [Peak] device_mb=<MB|na>
+# the most any one device held at once during the run, as its engine's allocator counted it from the driver (the
+# Triton DeviceAllocator's live driver bytes, pool cache included; torch's max_memory_reserved) — `na` where the
+# engine's backend keeps no such count. Rule 3 of 2026-10-26: every gate cell writes its peak to the register.
+PEAK_TAG = "[Peak]"
+_PEAK_LINE = re.compile(re.escape(PEAK_TAG) + r" device_mb=(\S+)", re.M)
+
+
+def format_peak(device_mb) -> str:
+    return f"{PEAK_TAG} device_mb={NA if device_mb is None else f'{float(device_mb):.0f}'}"
+
+
+def parse_peak(text: str):
+    """The LAST peak line's device MB (float), None for `na`; raises when the log holds no peak line at all."""
+    found = _PEAK_LINE.findall(text)
+    if not found:
+        raise ValueError(f"no {PEAK_TAG} line in the log")
+    return None if found[-1] == NA else float(found[-1])

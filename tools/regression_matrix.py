@@ -130,6 +130,14 @@ def timings_of(log: Path) -> dict:
         return row
     if parsed is not None:
         row.update({TIMING_ROW_FIELDS[k]: v for k, v in parsed.items()})
+    # the run's device peak (rule 3, 2026-10-26: every cell writes its peak to the register), its own `[Peak]` line;
+    # a tree older than the line, or a run that died before it, is said in `peak_error`, never guessed
+    row["device_peak_mb"] = None
+    try:
+        from neurobrix.core.runtime.run_timings import parse_peak
+        row["device_peak_mb"] = parse_peak(text)
+    except (ImportError, ValueError) as e:
+        row["peak_error"] = str(e)[:200]
     return row
 
 

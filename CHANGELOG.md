@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Every run states its device memory peak** on its own `[Peak] device_mb=` line, beside the timings, for both engines (`na` where the device's allocator keeps no count).
 - **`neurobrix autotune certify --keys <file>`** certifies exactly the keys a coverage check found missing (one `<kernel>::<key>` per line), without a census table.
 
 ### Fixed
