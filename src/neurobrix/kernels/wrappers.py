@@ -9590,13 +9590,12 @@ def _lstm_run_direction(x, w_ih_t, w_hh_t, b_ih, b_hh, h, c, hidden, reverse):
     and fp16 stores there drift the recurrence (Kokoro-82M's predictor, 2026-10-26: the speech became gibberish under
     the contract, correct with it off inside this function only). The products run under the conservative store.
     """
-    global _NBX_ACTIVATIONS_FP16_SAFE
-    _contract = _NBX_ACTIVATIONS_FP16_SAFE
-    _NBX_ACTIVATIONS_FP16_SAFE = False
+    _contract = get_activations_fp16_safe()
+    set_activations_fp16_safe(False)
     try:
         return _lstm_run_direction_steps(x, w_ih_t, w_hh_t, b_ih, b_hh, h, c, hidden, reverse)
     finally:
-        _NBX_ACTIVATIONS_FP16_SAFE = _contract
+        set_activations_fp16_safe(_contract)
 
 
 def _lstm_run_direction_steps(x, w_ih_t, w_hh_t, b_ih, b_hh, h, c, hidden, reverse):
