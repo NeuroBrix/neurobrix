@@ -116,5 +116,5 @@ stubs:
 limits:
   points: 400000          # points of one unit's domain in one probe
   walk: 400               # units one reverse walk visits before it falls back
-  plan_jobs: 12           # explain-plan processes at once (CPU only)
-  judge_jobs: 12          # changed units judged at once (their probes are CPU processes)
+  plan_jobs: 49           # explain-plan processes at once (CPU only): one per catalogue model (the supervisor, 2026-10-26 23:40: the scope parallel per model)
+  judge_jobs: 48          # changed units judged at once, one forked process each (and its own probe servers); 48 of the rack's 80 cores (the supervisor, 2026-10-26 23:40: the scope on one core took 13-22 min)
