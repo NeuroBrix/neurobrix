@@ -122,6 +122,12 @@ class TritonGenerator:
         elif logits.ndim != 2:
             raise ValueError(f"Expected logits [batch, vocab] or [batch, seq, vocab], "
                              f"got {logits.shape}")
+        # The sampler computes in fp32 from end to end — penalties, temperature, sort, draw — as vLLM does
+        # (`logits.to(torch.float32)` before any processing; the owner, 2026-10-26 19:21): the logits are read at
+        # their width ONCE here, whatever the head stored (fp16 under the precision contract, bf16 on bf16
+        # hardware), and never re-encoded in half. Cost: vocab x 4 bytes per step.
+        if logits._dtype != NBXDtype.float32:
+            logits = logits.to(NBXDtype.float32)
 
         # Build context IDs for repetition penalty
         all_context = self._prompt_ids + self._state.generated_tokens

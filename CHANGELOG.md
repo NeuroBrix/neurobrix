@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`neurobrix autotune certify --keys <file>`** certifies exactly the keys a coverage check found missing (one `<kernel>::<key>` per line), without a census table.
 
 ### Fixed
+- **A busy machine is re-planned, not refused**: when other applications hold part of the memory a plan was sized for, Prism re-plans on what is free now and says so ("machine busy: X MB taken by other applications, plan A -> plan B"); it refuses, naming the shortfall, only when no plan fits. The door also reads what an on-demand or streamed plan really holds on the card (its dearest component as held, or its window).
+- **The unified pool leaves the system its measured share** (`host_measured.system_share_mb`, measured calm by `tools/profile_facts.py --system-share`): the door no longer decides by luck at the edge of the calm free memory.
+- **The Triton sampler computes in fp32 from end to end**: the logits are widened once before penalties, temperature, sorting and the draw, whatever dtype the head stored.
 - **Decode rows keep their fp32 store under the fp16 contract**: storing a language model's decode products fp16 drifted MiniCPM-o-4_5's text into repeated punctuation and VibeVoice-1.5B's speech into the wrong words on the Triton branch.
 - **An LSTM's recurrence stays outside the fp16 precision contract** (set through the flag's own setter): the calibration observes the LSTM as one op and never its internal products; storing them fp16 drifted Kokoro-82M's speech into gibberish on the Triton branch.
 - **The Triton sampler reads and writes logits at their own dtype**: the repetition penalty copied them as fp32, so an fp16 or bf16 head (a half graph under the precision contract) failed with a CUDA error; bf16 rows were also decoded wrongly by the sort helper.

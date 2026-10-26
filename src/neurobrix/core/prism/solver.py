@@ -455,6 +455,9 @@ class ExecutionPlan:
     #: less than the plan places on it. A dry run (--explain-plan, the census) prints it beside the plan; the run raises it
     #: before loading anything. None when the door is open or no live reading was taken.
     execution_door: Optional[str] = None
+    #: when the machine was busy at planning time and the plan was RE-SOLVED on the memory free now (`solve_smart`):
+    #: {"from": the plan the facts gave, "from_mb", "held_by_others_mb"}; None when the facts' plan ran
+    busy_replan: Optional[Dict[str, Any]] = None
     #: A streamed plan's device bytes at its worst moment — what stays resident beside the segments
     #: (whole components, graph constants, flow-read weights, the KV reserve) plus the largest
     #: segment's weights and the activations alive while it runs. None for a plan that holds its
@@ -2823,14 +2826,38 @@ class PrismSolver:
         # free NOW decides only whether it runs. A pool holding less than the plan places on it refuses by name — what
         # holds the memory is said — and the plan is never traded for a slower one.
         from neurobrix.core.prism.memory_budget import execution_door as _door, DeviceReading as _DR
+        def _on_demand_peak_mb(_d) -> float:
+            """A plan that loads on demand holds ONE component at a time on `_d`: the dearest of them as it holds it
+            — a `zero3:` component its resident part and its activations (its blocks stream), an expert store its
+            dense part and cache (`_held_component_mb`), any other its whole cost."""
+            best = 0.0
+            for _n, _a in plan.components.items():
+                if _d.device_string not in (_a.devices or []) or _n not in plan.component_memory:
+                    continue
+                _m = plan.component_memory[_n]
+                if str(_a.strategy) == "zero3":
+                    _c = float(_a.resident_weight_mb or 0.0) + self._live_activation_mb(_m)
+                else:
+                    _c = self._held_component_mb(container, _n, _m, _d, _a)
+                best = max(best, _c)
+            return best
         for _d in (chosen_devices or []):
-            if getattr(_d, "live_free_mb", None) is None or _d.used_mb <= 0:
+            # what the plan holds on this device at once: its placement, or — a plan that loads on demand places
+            # nothing up front (used 0) — its dearest phase (`_peak_loaded_bytes`); the door read nothing for those
+            # and a lazy plan ran into a card another process held (found with the busy-machine re-plan, 2026-10-26)
+            if plan.device_window_mb is not None:
+                # a streamed plan holds its WINDOW on the card (segments + what stays beside them, the figure it was
+                # cut against) — never every component it lists, which it never holds at once
+                _planned = float(plan.device_window_mb)
+            else:
+                _planned = float(_d.used_mb) if _d.used_mb > 0 else _on_demand_peak_mb(_d)
+            if getattr(_d, "live_free_mb", None) is None or _planned <= 0:
                 continue
             _r = _DR(kind="device", capacity_mb=float(_d.capacity_mb), free_mb=float(_d.live_free_mb),
                      unified=bool(getattr(getattr(_d, "spec", None), "has_unified_memory", False)),
                      held_by_others_mb=float(getattr(_d, "external_used_mb", 0.0) or 0.0), measured=True,
                      source=str(getattr(_d, "budget_note", "") or ""))
-            _why = _door(_r, float(_d.used_mb))
+            _why = _door(_r, _planned)
             if _why:
                 plan.execution_door = f"{_d.device_string}: {_why}"
                 break
@@ -3315,8 +3342,57 @@ class PrismSolver:
 
     def solve_smart(self, container, profile, input_config=None, serve_mode: bool = False,
                     mode: str = "compiled"):
-        """Backward compatibility alias for solve()."""
-        return self.solve(container, profile, input_config, serve_mode=serve_mode, mode=mode)
+        """The plan sized by the pool's facts; and when the machine is busy NOW (the execution door: what is free is
+        below what that plan places), the plan RE-SOLVED on what is really free — the owner, 2026-10-26 19:21: a user
+        who opened a browser gets a slower plan that runs, said in clear ("machine busy: X MB taken by other
+        applications, plan A -> plan B"), never a refusal while a plan fits, never a run that swaps. Only when no plan
+        fits the free memory is the request refused, naming the shortfall. The re-plan never reaches a census shadow
+        (its readings are the profile's) nor an imposed rung (`NBX_PRISM_BUDGET_MB`)."""
+        plan = self.solve(container, profile, input_config, serve_mode=serve_mode, mode=mode)
+        door = getattr(plan, "execution_door", None)
+        if not door:
+            return plan
+        caps, host_free, held = self._busy_readings(profile)
+        if not caps and host_free is None:
+            return plan                      # nothing live to re-plan on: the door stands as it was said
+        first = (plan.strategy, float(plan.total_memory_mb or 0.0))
+        self._busy_caps, self._busy_host_pool_mb = caps, host_free
+        try:
+            busy = self.solve(container, profile, input_config, serve_mode=serve_mode, mode=mode)
+        except RuntimeError as refusal:
+            raise RuntimeError(
+                f"{door}\nRe-planned on the memory free now (machine busy: {held:.0f} MB taken by other "
+                f"applications) — no plan fits it either:\n{str(refusal).splitlines()[0]}") from refusal
+        finally:
+            self._busy_caps, self._busy_host_pool_mb = None, None
+        if getattr(busy, "execution_door", None):
+            raise RuntimeError(f"{door}\nRe-planned on the memory free now (machine busy: {held:.0f} MB taken by "
+                               f"other applications) — the smaller plan does not fit either: {busy.execution_door}")
+        note = (f"machine busy: {held:.0f} MB taken by other applications — plan {first[0]} ({first[1]:.0f} MB) -> "
+                f"{busy.strategy} ({float(busy.total_memory_mb or 0.0):.0f} MB) on the memory free now")
+        logging.getLogger(__name__).warning("Prism: %s", note)
+        print(f"   [Prism] {note}")
+        busy.selection_reason = f"{note}; {busy.selection_reason}"
+        busy.busy_replan = {"from": first[0], "from_mb": first[1], "held_by_others_mb": held}
+        return busy
+
+    def _busy_readings(self, profile):
+        """({device: MB free now}, the host's MB free now for a unified pool or None, MB held by others) — the
+        readings a busy machine is re-planned on: each device's live free figure (`_prepare_devices`, the door's own
+        reading) and, on unified memory, the host's available memory (`host_memory.memory_state`). Empty under a
+        census shadow or an imposed rung: those readings are the profile's, never the moment's."""
+        if _census_shadow_active() or os.environ.get("NBX_PRISM_BUDGET_MB"):
+            return {}, None, 0.0
+        devs = self._prepare_devices(profile)
+        caps = {d.device_string: float(d.live_free_mb) for d in devs if getattr(d, "live_free_mb", None) is not None}
+        held = sum(max(0.0, float(d.budget_mb) - float(d.live_free_mb)) for d in devs
+                   if getattr(d, "live_free_mb", None) is not None)
+        host = memory_state()
+        unified = any(getattr(d, "has_unified_memory", False) for d in (profile.devices or []))
+        host_free = float(host.available_mb) if (unified and getattr(host, "measured", False)) else None
+        if host_free is not None:
+            held = max(held, self._unified_host_pool_mb(profile) - host_free)
+        return caps, host_free, held
 
     # =========================================================================
     # MEMORY COMPUTATION - Full Intelligence
@@ -4581,8 +4657,18 @@ class PrismSolver:
                              default=0) or 0)
         if installed <= 0:
             installed = float(max((d.memory_mb for d in profile.devices), default=0))
+        # The system's own share of the installed RAM, MEASURED calm (`host_measured.system_share_mb`: installed less
+        # the calm available memory, tools/profile_facts.py) — the OS and its resident apps hold it whatever the run
+        # does; without it the door decided by luck at the calm-free edge (Ming 16 462 MB and Qwen3-VL 16 648 MB of
+        # host side against 16 711-17 506 MB calm free on the Mac, 2026-10-26). Absent: nothing measured, nothing taken.
+        share = float(((getattr(profile, "host_measured", None) or {}).get("system_share_mb")) or 0)
+        if share > 0 and installed > 0:
+            installed = installed - share
         if declared > 0:
             installed = min(installed, declared)
+        busy = getattr(self, "_busy_host_pool_mb", None)
+        if busy is not None:
+            return min(max(0.0, installed - base), float(busy))   # a busy machine: what is free now (`solve_smart`)
         return max(0.0, installed - base)
 
     def _host_budget_mb(self, profile) -> float:
@@ -4710,6 +4796,9 @@ class PrismSolver:
             # off the budget either (`external_used_mb` was capacity less the live free reading): the moment is the
             # execution door (the owner, 15:16), never the plan's size.
             budget = float(_capped_budget_mb(reading, capacity))
+            _busy = (getattr(self, "_busy_caps", None) or {}).get(dev.get_device_string())
+            if _busy is not None:
+                budget = min(budget, float(_busy))      # a busy machine re-planned on what is free now (`solve_smart`)
             devices.append(DeviceState(
                 device_string=dev.get_device_string(),
                 capacity_mb=budget,

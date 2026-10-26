@@ -107,6 +107,26 @@ def host_matmul_gflops() -> float:
     return 2.0 * n ** 3 / best / 1e9
 
 
+def system_share_mb(readings: int = 30, every_s: float = 10.0) -> dict:
+    """The system's own share of the installed RAM: installed less the CALM available memory (median of `readings`
+    taken `every_s` apart through `core.host_memory.memory_state`, the reading the planner and its door use). Taken on
+    an idle machine — no run, no copy — it is what the OS and its resident applications hold whatever a run does;
+    the unified pool is bounded by it (`PrismSolver._unified_host_pool_mb`)."""
+    import statistics
+    from neurobrix.core.host_memory import memory_state
+    vals, total = [], None
+    for i in range(int(readings)):
+        st = memory_state()
+        if not st.measured or not st.total_mb:
+            raise RuntimeError(f"the host memory cannot be read here ({st.source}): no share is measured")
+        vals.append(float(st.available_mb)); total = float(st.total_mb)
+        if i + 1 < readings:
+            time.sleep(every_s)
+    calm = statistics.median(vals)
+    return {"installed_mb": total, "calm_available_mb": calm, "min_mb": min(vals), "max_mb": max(vals),
+            "system_share_mb": int(round(total - calm))}
+
+
 def host_memory_gbps() -> float:
     import numpy as np
     src = np.ones(COPY_BYTES, dtype=np.uint8)
@@ -139,6 +159,8 @@ def main(argv=None) -> int:
     ap.add_argument("--card", required=True, help="the card measured (as the profile indexes it)")
     ap.add_argument("--out", required=True, type=Path, help="where the facts are written (an atelier root)")
     ap.add_argument("--storage-file", type=Path, default=None, help="a file to read for the storage bandwidth")
+    ap.add_argument("--system-share", action="store_true",
+                    help="also measure the system's share of the RAM (30 calm readings, 5 min; unified-memory hosts)")
     ap.add_argument("--dtypes", default="float16,float32",
                     help="the GEMM dtypes measured; add bfloat16 on hardware that computes it natively (the profile's "
                          "has_native_bf16: Apple M-series, Ampere and later) — the plan's compute dtype must be among them")
@@ -150,6 +172,8 @@ def main(argv=None) -> int:
     facts = {"card": a.card, "date": time.strftime("%Y-%m-%d %H:%M:%S %Z"),
              "matmul_tflops": {d: matmul_tflops(d) for d in dtypes}, **copies(),
              "host_matmul_gflops": host_matmul_gflops(), "host_memory_gbps": host_memory_gbps()}
+    if a.system_share:
+        facts["system_share"] = system_share_mb()
     if a.storage_file is not None:
         facts["storage_read_gbps"] = storage_read_gbps(a.storage_file)
         facts["storage_file"] = str(a.storage_file)
