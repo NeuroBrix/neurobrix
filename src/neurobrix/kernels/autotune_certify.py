@@ -133,6 +133,32 @@ def witnessed_bench(contenders, time_one, witness_ms, spec: Dict[str, Any], labe
 # ---------------------------------------------------------------------------
 # the census: which shapes
 # ---------------------------------------------------------------------------
+def keys_file(path: str) -> Dict[str, List[tuple]]:
+    """{kernel qualname: [key, ...]} from a file of "<qualname>::<key repr>" lines — the keys a coverage check found
+    missing or a launch record formed (`kernels/census.record`'s format): certified exactly, no census table read
+    (the supervisor, 2026-10-26 12:35: the coverage check's list suffices). An empty file, a malformed line or a
+    kernel the certifier has no tuner for is refused by name: a list that certified nothing must not read green."""
+    import ast
+    out: Dict[str, List[tuple]] = {}
+    lines = [l.strip() for l in open(path) if l.strip()]
+    if not lines:
+        raise RuntimeError(f"--keys {path}: the file names no key — nothing would be certified")
+    for n, line in enumerate(lines, 1):
+        qual, sep, key = line.partition("::")
+        if not sep or not qual or not key:
+            raise RuntimeError(f"--keys {path}:{n}: {line!r} is not '<kernel qualname>::<key repr>'")
+        try:
+            k = ast.literal_eval(key)
+        except (ValueError, SyntaxError) as exc:
+            raise RuntimeError(f"--keys {path}:{n}: the key {key!r} does not parse ({exc})") from exc
+        if not isinstance(k, tuple):
+            raise RuntimeError(f"--keys {path}:{n}: the key {key!r} is not a tuple")
+        out.setdefault(qual, [])
+        if k not in out[qual]:
+            out[qual].append(k)
+    return out
+
+
 def census(vendor: str, profile: str, memory_class: int, models: Optional[List[str]] = None) -> Dict[str, List[tuple]]:
     """{kernel qualname: [key, ...]} from THE census table of this profile and memory class
     (`config/census/<vendor>/<profile>/<class>g.jsonl`, `kernels/census_table.py`) — and from nothing
@@ -2470,7 +2496,7 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
             allow_off_protocol: bool = False, reprove_unclocked: bool = False,
             reprove_generator: bool = False, working_set_mb: Optional[int] = None,
             models: Optional[List[str]] = None, skip_proven_since: Optional[str] = None,
-            skip_keys: Optional[str] = None) -> Dict[str, Any]:
+            skip_keys: Optional[str] = None, keys_path: Optional[str] = None) -> Dict[str, Any]:
     """Certify every census shape for `profile` on this machine; write the files.
 
     `working_set_mb`: the budget this run may hold — every key is priced by its phases before any
@@ -2527,7 +2553,7 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
         if _unknown:
             raise RuntimeError(f"--models {', '.join(_unknown)}: no row of the census table names it — a filter that "
                                f"matched nothing would certify nothing and report success")
-    shapes = census(vendor, profile, certifying_class, models)
+    shapes = keys_file(keys_path) if keys_path else census(vendor, profile, certifying_class, models)
     tuners = census_tuners(shapes)
     log(f"[certify] census table {vendor}/{profile} {certifying_class} GB: "
         f"{sum(len(v) for v in shapes.values())} distinct key(s) over {len(shapes)} kernel(s)")
