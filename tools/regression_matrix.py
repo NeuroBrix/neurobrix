@@ -1268,7 +1268,12 @@ def cmd_judge(a) -> int:
     """Record the OUTSIDE judgment of one cell (R29): the instrument and what it saw, and the verdict."""
     if a.verdict not in ("works", "broken") and not a.verdict.startswith("not-runnable-here("):
         raise SystemExit("verdict: works | broken | not-runnable-here(<reason>)")
-    rec = {"model": a.model, "mode": a.mode, "judged": a.judged, "verdict": a.verdict,
+    # The judgment is of ONE output: the sha256 of the cell's latest row, the key the gate tally reads (a pair judged
+    # once does not judge the next output of that pair — the supervisor, 2026-10-26 23:20).
+    row = next((r for r in load_rows(Path(a.out)) if r["model"] == current_name(a.model) and r["mode"] == a.mode), None)
+    if row is None or not row.get("sha256"):
+        raise SystemExit(f"judge: no row with an output sha256 for {a.model}:{a.mode} under {a.out} — nothing to judge")
+    rec = {"model": a.model, "mode": a.mode, "sha256": row["sha256"], "judged": a.judged, "verdict": a.verdict,
            "date": time.strftime("%Y-%m-%d %H:%M %Z")}
     append_jsonl(Path(a.out) / "judgments.jsonl", rec)
     print(json.dumps(rec))

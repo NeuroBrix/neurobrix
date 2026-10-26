@@ -113,18 +113,21 @@ def test_the_tally_names_the_unjudged_pairs_without_counting_them_red(tmp_path, 
     gate = tmp_path / "gate"
     (gate / "gate2").mkdir(parents=True)
     (gate / "gate2" / "gate_32g.list").write_text("A native,triton\n")
-    row = lambda m, mode, rc: {"model": m, "mode": mode, "rc": rc, "wall_s": 10, "date": "2026-10-14T10:00:00Z"}  # noqa: E731
+    row = lambda m, mode, rc: {"model": m, "mode": mode, "rc": rc, "wall_s": 10, "date": "2026-10-14T10:00:00Z",  # noqa: E731
+                               "sha256": f"{m}-{mode}"}
     _matrix(tmp_path, "gate", "32g", rows=[row("A", "native", 0), row("A", "triton", 0)])
     _matrix(tmp_path, "base", "32g", rows=[row("A", "native", 0), row("A", "triton", 0)])
     tree = tmp_path / "tree" / "docs" / "reference"
     tree.mkdir(parents=True)
     (tree / "known-cause-reds.32g.yml").write_text("reds: []\n")
-    (tree / "judgments.jsonl").write_text(json.dumps({"model": "A", "mode": "native", "class": "32g", "verdict": "works",
-                                                       "judged": "seen", "date": "2026-10-12 18:55 CEST", "source": "x"}) + "\n")
+    # a judgment names the OUTPUT it judged (its sha256), since 2026-10-26 23:20
+    (tree / "artefact-judgments.jsonl").write_text(json.dumps({"model": "A", "mode": "native", "sha256": "A-native",
+                                                               "verdict": "works", "judged": "seen",
+                                                               "date": "2026-10-12 18:55 CEST"}) + "\n")
     rc = gate_tally.main(["--gate", str(gate), "--base", str(tmp_path / "base"), "--tree", str(tmp_path / "tree"), "--classes", "32g"])
     out = capsys.readouterr().out
     assert rc == 0, out
-    assert "2 ran clean (rc 0, zero miss) / 0 red" in out and "judged 1 / not judged 1" in out and "NOT JUDGED A:triton" in out
+    assert "2 ran clean (rc 0, zero miss) / 0 red" in out and "judged by sha 1 / not judged 1" in out and "NOT JUDGED A:triton" in out
 
 
 def test_a_base_gate_without_its_timeouts_is_refused_before_any_scope(tmp_path):
