@@ -1941,6 +1941,10 @@ def compute(pairs: list, gate_dir: Path, cfg: dict, prunes=(), log=print) -> dic
         reached = {u for _, _, u in ch["units"] if u in old.reached() or u in new.reached()}
         changed_ids = {u for _, _, u in ch["units"]}
         for cls, hw in cfg["classes"].items():
+            if cls not in cells.gated:
+                # no row of this class in the gate, no cell of it queued (said above): judging its units decides
+                # nothing — gate ebm's scope spent over an hour on 16g units for a 32g-only gate (2026-10-27)
+                continue
             ks = {t.sha: class_constants(t, reached | set(data_u), hw) for t in (old, new)}
             J = Judge(old, new, cells, cls, changed_ids, cfg)
             # a constant parameter slot whose constant differs between the trees changes its function, though its
