@@ -48,7 +48,8 @@ import subprocess
 import threading
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
+import multiprocessing
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from pathlib import Path
 
 import yaml
@@ -209,7 +210,9 @@ def probe(tree: Path, hw, jobs: list, cfg: dict, rack: bool = True) -> dict:
     if "error" in out and len(out) == 1:
         raise SystemExit(f"REFUSED: the probe refused in {tree.name}: {out['error']}")
     cf.parent.mkdir(parents=True, exist_ok=True)
-    cf.write_text(json.dumps(out))
+    tmp = cf.with_suffix(f".{os.getpid()}.part")         # judged in processes: two may write one key — atomically
+    tmp.write_text(json.dumps(out))
+    os.replace(tmp, cf)
     return out
 
 
@@ -1721,7 +1724,9 @@ def explain_plan(tree: Tree, hw: str, argv: list, cfg: dict) -> dict:
         lines = [x for x in (p.stderr or p.stdout).strip().splitlines() if x.strip()]
         out = {"error": f"rc={p.returncode}: " + (lines[-1][:300] if lines else "")}
     cf.parent.mkdir(parents=True, exist_ok=True)
-    cf.write_text(json.dumps(out))
+    tmp = cf.with_suffix(f".{os.getpid()}.part")         # judged in processes: two may write one key — atomically
+    tmp.write_text(json.dumps(out))
+    os.replace(tmp, cf)
     return out
 
 
@@ -1862,6 +1867,25 @@ def class_constants(tree: Tree, uids: set, hw: str) -> dict:
     return {"K": K, "refused": refused, "env": envs}
 
 
+_JUDGE = None
+
+
+def _judge_child() -> None:
+    """A forked judging process: the probe servers it inherited belong to the parent — it starts its own."""
+    _ProbeServers._idle = {}
+    _ProbeServers._lock = threading.Lock()
+
+
+def _judge_in_child(kind, uid):
+    """One unit's verdict in a judging process, with what the judgment wrote on the judge (`compute` merges it)."""
+    J = _JUDGE
+    before = {k: len(v) for k, v in J.probed.items()}
+    plan_before = set(J.plan_cells)
+    v = J.judge(kind, uid)
+    probed = {k: list(lines[before.get(k, 0):]) for k, lines in J.probed.items() if len(lines) > before.get(k, 0)}
+    return v, probed, set(J.plan_cells) - plan_before
+
+
 def compute(pairs: list, gate_dir: Path, cfg: dict, prunes=(), log=print) -> dict:
     newest = tree_of(REPO, pairs[-1][1])
     cells = Cells(gate_dir, cfg, newest / "src")
@@ -1945,11 +1969,25 @@ def compute(pairs: list, gate_dir: Path, cfg: dict, prunes=(), log=print) -> dic
                     if time.time() - last[0] >= 600 or done[0] == n:
                         last[0] = time.time()
                         log(f"  {cls}: {done[0]}/{n} unit(s) judged ({round(time.time() - t0)} s)")
-            with ThreadPoolExecutor(max_workers=cfg["limits"]["judge_jobs"]) as ex:
-                futs = [(kind, uid, ex.submit(J.judge, kind, uid)) for kind, uid in todo]
+            # in PROCESSES, forked once the trees are analysed (each child inherits the analysis; the judging is pure
+            # Python, so threads held ONE core: gate_scope.py at 101 % of 80 for 13-22 min a scope, the supervisor
+            # 2026-10-26 23:40). What a judgment writes on the judge — the code its probes executed, the plan cells —
+            # comes back with its verdict and is merged here, in the units' order.
+            global _JUDGE
+            _JUDGE = J
+            with ProcessPoolExecutor(max_workers=cfg["limits"]["judge_jobs"], initializer=_judge_child,
+                                     mp_context=multiprocessing.get_context("fork")) as ex:
+                futs = [(kind, uid, ex.submit(_judge_in_child, kind, uid)) for kind, uid in todo]
                 for _k, _u, fu in futs:
                     fu.add_done_callback(_progress)
-                judged = [(kind, uid, fu.result()) for kind, uid, fu in futs]
+                judged = []
+                for kind, uid, fu in futs:
+                    v, probed, plan_cells = fu.result()
+                    for key, lines in probed.items():
+                        J.probed.setdefault(key, []).extend(lines)
+                    J.plan_cells |= plan_cells
+                    judged.append((kind, uid, v))
+            _JUDGE = None
             for kind, uid, v in judged:
                 if v["cells"] and kind == "chg":
                     w = J.callers_probed(uid)
