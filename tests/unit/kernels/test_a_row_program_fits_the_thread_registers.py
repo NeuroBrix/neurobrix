@@ -20,7 +20,7 @@ def volta():
 def test_a_wide_row_keeps_only_the_warps_its_registers_hold(volta):
     kept = S._prune_softmax(S._softmax_configs(), {"feat_dim": 16384, "batch_dim": 15360})
     assert {(c.kwargs["BLOCK_SIZE_BATCH"], c.num_warps) for c in kept} == {(1, 4), (1, 8)}
-    assert C.fits_thread_registers(16384, 2) and not C.fits_thread_registers(16384, 1)
+    assert C.fits_thread_registers(16384, 4) and not C.fits_thread_registers(16384, 2)   # 128 vs 256 elements a thread
 
 
 def test_a_short_row_keeps_its_candidates(volta):
