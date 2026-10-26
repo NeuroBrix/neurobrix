@@ -186,60 +186,60 @@ def matrix_unit_native(a: NBXDtype, b: NBXDtype, M: int) -> bool:
 
 
 def mv_launches(N: int, K: int, mat: NBXDtype, vec: NBXDtype, native_bf16: bool,
-                force_accum: bool = False) -> List[Launch]:
+                force_accum: bool = False, contract_half: bool = False) -> List[Launch]:
     """`mv_wrapper` on a [N, K] matrix and a [K] vector: the SIMT GEMV's key — the N and K buckets, then the dtype
     tags of the matrix, the vector and the output (`matmul_out_dtype` of the matrix at one row)."""
-    out = matmul_out_dtype(mat, 1, False, native_bf16, force_accum)
+    out = matmul_out_dtype(mat, 1, False, native_bf16, force_accum, contract_half)
     return [(GEMV_VEC, (bucket_of("N", N), bucket_of("K", K), tag(mat), tag(vec), tag(out)))]
 
 
 def addmv_launches(N: int, K: int, mat: NBXDtype, vec: NBXDtype, bias: NBXDtype, native_bf16: bool,
-                   force_accum: bool = False) -> List[Launch]:
+                   force_accum: bool = False, contract_half: bool = False) -> List[Launch]:
     """`addmv_wrapper` on a [N, K] matrix, a [K] vector and a [N] bias: the key — the N and K buckets (K the kernel's
     `M`), then the dtype tags of the matrix, the vector, the bias and the output (`matmul_out_dtype` at one row)."""
-    out = matmul_out_dtype(mat, 1, False, native_bf16, force_accum)
+    out = matmul_out_dtype(mat, 1, False, native_bf16, force_accum, contract_half)
     return [(ADDMV, (bucket_of("N", N), bucket_of("M", K), tag(mat), tag(vec), tag(bias), tag(out)))]
 
 
 def mm_launches(M: int, K: int, N: int, a: NBXDtype, b: NBXDtype, native_bf16: bool,
-                force_accum: bool = False) -> List[Launch]:
+                force_accum: bool = False, contract_half: bool = False) -> List[Launch]:
     """`mm` (and `mm_epilogue`): M <= 4 runs one GEMV per row on the operands as `mm_dtypes` casts them (the weight
     transposed to [N, K], each activation row the vector) — one key; otherwise one key — row bands above 2^31 output
     elements keep the whole shape's M bucket."""
     a, b, promote_a, promote_b = mm_dtypes(a, b, native_bf16, force_accum)
     if M <= 4:
-        return mv_launches(N, K, b, a, native_bf16, force_accum)
+        return mv_launches(N, K, b, a, native_bf16, force_accum, contract_half)
     if matrix_unit_takes(a, b, M):
         return []
-    out = matmul_out_dtype(a, M, promote_a, native_bf16, force_accum)
+    out = matmul_out_dtype(a, M, promote_a, native_bf16, force_accum, contract_half)
     ieee = (not native_bf16) and out == F32
     return [(MATMUL, (bucket_of("M", M), N, K, ieee, promote_b, tag(a), tag(b), tag(out)))]
 
 
 def addmm_launches(M: int, K: int, N: int, a: NBXDtype, b: NBXDtype, bias: NBXDtype,
-                   native_bf16: bool, force_accum: bool = False, bias_row: bool = True) -> List[Launch]:
+                   native_bf16: bool, force_accum: bool = False, contract_half: bool = False, bias_row: bool = True) -> List[Launch]:
     """`addmm` on a 2-D activation (an N-D one is flattened to (numel/K, K) first): M <= 4 runs
     per-row addmv; a [N] / [1, N] bias (`bias_row`) on the matrix unit has no key; otherwise one key."""
     a, b, bias, promote_a, promote_b, _ = addmm_dtypes(a, b, bias, native_bf16, force_accum)
     if M <= 4:
         # one addmv per row on the operands as cast, the weight transposed to [N, K], the bias its row or the shared one
-        return addmv_launches(N, K, b, a, bias, native_bf16, force_accum)
+        return addmv_launches(N, K, b, a, bias, native_bf16, force_accum, contract_half)
     if bias_row and matrix_unit_takes(a, b, M):
         return []
-    out = matmul_out_dtype(a, M, promote_a, native_bf16, force_accum)
+    out = matmul_out_dtype(a, M, promote_a, native_bf16, force_accum, contract_half)
     ieee = (not native_bf16) and out == F32
     return [(ADDMM, (bucket_of("M", M), N, K, ieee, promote_b, tag(a), tag(b), tag(bias), tag(out)))]
 
 
 def bmm_launches(M: int, K: int, N: int, a: NBXDtype, b: NBXDtype, native_bf16: bool,
-                 force_accum: bool = False) -> List[Launch]:
+                 force_accum: bool = False, contract_half: bool = False) -> List[Launch]:
     """`bmm`: always one batched launch through `baddbmm_kernel` (HAS_BIAS False, the output
     passed as the bias pointer), every dim bucketed, the output fp32 for any half input; on the matrix unit
     (M > 4, operands taken as they are in memory, before the widening) no key."""
     if matrix_unit_takes(a, b, M):
         return []
     a, b, promote_b = bmm_dtypes(a, b, native_bf16, force_accum)
-    out = matmul_out_dtype(a, M, True, native_bf16, force_accum)
+    out = matmul_out_dtype(a, M, True, native_bf16, force_accum, contract_half)
     ieee = (not native_bf16) and out == F32
     return [(BADDBMM, (bucket_of("M", M), bucket_of("N", N), bucket_of("K", K),
                        ieee, promote_b, False, tag(a), tag(b), tag(out), tag(out)))]
@@ -255,16 +255,16 @@ def baddbmm_launches(M: int, K: int, N: int, a: NBXDtype, b: NBXDtype, bias: NBX
                        True, False, True, tag(a), tag(b), tag(a), tag(bias)))]
 
 
-def mm_out(M: int, a: NBXDtype, b: NBXDtype, native_bf16: bool, force_accum: bool = False) -> NBXDtype:
+def mm_out(M: int, a: NBXDtype, b: NBXDtype, native_bf16: bool, force_accum: bool = False, contract_half: bool = False) -> NBXDtype:
     """The dtype `mm` stores for these operands (its launch or its per-row GEMV alike)."""
     a, b, promote_a, _ = mm_dtypes(a, b, native_bf16, force_accum)
-    return matmul_out_dtype(a, M, promote_a, native_bf16, force_accum)
+    return matmul_out_dtype(a, M, promote_a, native_bf16, force_accum, contract_half)
 
 
-def bmm_out(M: int, a: NBXDtype, b: NBXDtype, native_bf16: bool, force_accum: bool = False) -> NBXDtype:
+def bmm_out(M: int, a: NBXDtype, b: NBXDtype, native_bf16: bool, force_accum: bool = False, contract_half: bool = False) -> NBXDtype:
     """The dtype `bmm` stores for these operands."""
     a, b, _ = bmm_dtypes(a, b, native_bf16, force_accum)
-    return matmul_out_dtype(a, M, True, native_bf16, force_accum)
+    return matmul_out_dtype(a, M, True, native_bf16, force_accum, contract_half)
 
 
 def row_breakpoints(lo: int, hi: int) -> List[int]:
@@ -309,15 +309,15 @@ def matmul_route(a_rank: int, b_rank: int) -> str:
 
 
 def matmul_launches(a_shape, b_shape, a: NBXDtype, b: NBXDtype, native_bf16: bool,
-                    force_accum: bool = False) -> List[Launch]:
+                    force_accum: bool = False, contract_half: bool = False) -> List[Launch]:
     """`matmul_wrapper` (and `linear_wrapper`, which calls it with the transposed weight): the
     launch of the route `matmul_route` names — bmm's key carries no batch."""
     route = matmul_route(len(a_shape), len(b_shape))
     if route == "mm":
-        return mm_launches(a_shape[0], a_shape[1], b_shape[1], a, b, native_bf16, force_accum)
+        return mm_launches(a_shape[0], a_shape[1], b_shape[1], a, b, native_bf16, force_accum, contract_half)
     if route == "mv":
-        return mv_launches(a_shape[0], a_shape[1], a, b, native_bf16, force_accum)
-    return bmm_launches(a_shape[-2], a_shape[-1], b_shape[-1], a, b, native_bf16, force_accum)
+        return mv_launches(a_shape[0], a_shape[1], a, b, native_bf16, force_accum, contract_half)
+    return bmm_launches(a_shape[-2], a_shape[-1], b_shape[-1], a, b, native_bf16, force_accum, contract_half)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -611,27 +611,27 @@ def sdpa_route(batch: int, nheads: int, Tq: int, Tk: int, D: int, Dv: int, budge
 
 def math_attention_launches(B: int, H: int, Hk: int, Tq: int, Tk: int, D: int, Dv: int,
                             q: NBXDtype, k: NBXDtype, v: NBXDtype, native_bf16: bool,
-                            force_accum: bool = False) -> List[Launch]:
+                            force_accum: bool = False, contract_half: bool = False) -> List[Launch]:
     """`_math_attention`: scores = bmm(q as [B*Hk, groups*Tq, D], k^T) — q in its (possibly
     rounded) dtype, k in its own; then p = softmax(scores) cast to v's dtype and bmm(p, v)."""
     M = (H // Hk) * Tq
     # the scores are the first product's output (fp32 for any half input, on the unit or not): the route's softmax
     # runs on B * H * Tq rows of Tk columns at that dtype (`wrappers.softmax`, workstream 1)
     sa, _sb, _pb = bmm_dtypes(q, k, native_bf16, force_accum)
-    scores = matmul_out_dtype(sa, M, True, native_bf16, force_accum)
-    return (bmm_launches(M, D, Tk, q, k, native_bf16, force_accum)
+    scores = matmul_out_dtype(sa, M, True, native_bf16, force_accum, contract_half)
+    return (bmm_launches(M, D, Tk, q, k, native_bf16, force_accum, contract_half)
             + softmax_launches(B * H * Tq, Tk, False, scores, scores)
-            + bmm_launches(M, Tk, Dv, v, v, native_bf16, force_accum))
+            + bmm_launches(M, Tk, Dv, v, v, native_bf16, force_accum, contract_half))
 
 
 def chunked_math_attention_launches(B: int, H: int, Hk: int, Tq: int, Tk: int, D: int, Dv: int,
                                     q: NBXDtype, k: NBXDtype, v: NBXDtype, native_bf16: bool,
-                                    rows: int, force_accum: bool = False) -> List[Launch]:
+                                    rows: int, force_accum: bool = False, contract_half: bool = False) -> List[Launch]:
     """`_math_attention_chunked`: the math route over query-row chunks of `rows`, the last one the
     remainder — each chunk forms its own pair of keys."""
     out: List[Launch] = []
     for c in {min(rows, Tq)} | ({Tq % rows} if Tq % rows else set()):
-        out += math_attention_launches(B, H, Hk, c, Tk, D, Dv, q, k, v, native_bf16, force_accum)
+        out += math_attention_launches(B, H, Hk, c, Tk, D, Dv, q, k, v, native_bf16, force_accum, contract_half)
     return out
 
 

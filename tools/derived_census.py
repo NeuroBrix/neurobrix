@@ -1103,18 +1103,18 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
         if kind in ("aten::mm",):
             (M, K), (Kb, N) = shape(ins[0]), shape(ins[1])
             K = _contraction(K, Kb, ins, o, uid, unhandled)
-            launches = LK.mm_launches(M, K, N, dt(ins[0]), dt(ins[1]), has_native_bf16)
+            launches = LK.mm_launches(M, K, N, dt(ins[0]), dt(ins[1]), has_native_bf16, contract_half=contract.safe)
         elif kind == "aten::bmm":
             (_, M, K), (_, _, N) = shape(ins[0]), shape(ins[1])
-            launches = LK.bmm_launches(M, K, N, dt(ins[0]), dt(ins[1]), has_native_bf16)
+            launches = LK.bmm_launches(M, K, N, dt(ins[0]), dt(ins[1]), has_native_bf16, contract_half=contract.safe)
         elif kind == "aten::mv":
             # mv(mat [N, K], vec [K]) -> `mv_wrapper`
             (N, K) = shape(ins[0])
-            launches = LK.mv_launches(N, K, dt(ins[0]), dt(ins[1]), has_native_bf16)
+            launches = LK.mv_launches(N, K, dt(ins[0]), dt(ins[1]), has_native_bf16, contract_half=contract.safe)
         elif kind == "aten::addmv":
             # addmv(input [N], mat [N, K], vec [K]) -> `addmv_wrapper`
             (N, K) = shape(ins[1])
-            launches = LK.addmv_launches(N, K, dt(ins[1]), dt(ins[2]), dt(ins[0]), has_native_bf16)
+            launches = LK.addmv_launches(N, K, dt(ins[1]), dt(ins[2]), dt(ins[0]), has_native_bf16, contract_half=contract.safe)
         elif kind in _SDPA_KINDS:
             # every SDPA spelling reaches `scaled_dot_product_attention_wrapper` with (q, k, v)
             # first (dispatch.py: the fused-backend spellings through `_meta_sdpa_efficient`)
@@ -1169,11 +1169,11 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
                             or LK.flash_launches(Tq, Tk, D, qd, kd, vd, _bias_dt))
             elif route == "chunked":
                 launches = LK.chunked_math_attention_launches(B, H, Hk, Tq, Tk, D, Dv, qd, kd, vd,
-                                                             has_native_bf16, rows)
+                                                             has_native_bf16, rows, contract_half=contract.safe)
             elif Tq == 1 and LK.decode_vec_takes(D, Dv, mask_n, Tk):
                 launches = []                     # the vector decode kernel: no autotuned key
             else:
-                launches = LK.math_attention_launches(B, H, Hk, Tq, Tk, D, Dv, qd, kd, vd, has_native_bf16)
+                launches = LK.math_attention_launches(B, H, Hk, Tq, Tk, D, Dv, qd, kd, vd, has_native_bf16, contract_half=contract.safe)
         elif kind in ("aten::native_layer_norm", "aten::layer_norm"):
             # `wrappers.native_layer_norm` (`layer_norm_wrapper` calls it): the normalized extent is the product of
             # `normalized_shape`, every other element a row; weight and bias by their argument positions (an absent
@@ -1302,7 +1302,8 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
             for d in a_s[:-1]:
                 M *= d
             launches = LK.addmm_launches(M, K, b_s[-1], dt(ins[1]), dt(ins[2]), dt(ins[0]), has_native_bf16,
-                                         bias_row=len(bias_s) == 1 or (len(bias_s) == 2 and bias_s[0] == 1))
+                                         bias_row=len(bias_s) == 1 or (len(bias_s) == 2 and bias_s[0] == 1),
+                                         contract_half=contract.safe)
         elif kind in ("aten::convolution", "aten::conv1d"):
             at = o.get("attributes") or {}
             x_s, w_s = shape(ins[0]), shape(ins[1])
@@ -1395,7 +1396,7 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
             if C_ is not None and not (ad == bd == NBXDtype.float32 and uid in contract.fp32_op_uids):
                 ad = C_ if ad.name in ("float16", "bfloat16", "float32") else ad
                 bd = C_ if bd.name in ("float16", "bfloat16", "float32") else bd
-            launches = LK.matmul_launches(a_s, b_s, ad, bd, has_native_bf16)
+            launches = LK.matmul_launches(a_s, b_s, ad, bd, has_native_bf16, contract_half=contract.safe)
         elif kind == "aten::baddbmm":
             # baddbmm(input, batch1, batch2): an AMP_FP16 op — `_wrap_lower_precision` casts every
             # float operand (the bias included) to a half compute dtype; an fp32 island's operands

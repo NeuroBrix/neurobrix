@@ -82,3 +82,23 @@ def test_the_small_m_addmm_launch_is_its_key(monkeypatch, M, K, N, a_dt, b_dt, b
     nb, fa = _flags()
     want = LK.addmm_launches(M, K, N, a_dt, b_dt, bias_dt, nb, fa)
     assert seen == [want[0][1]] and want[0][0] == LK.ADDMV, (seen, want)
+
+
+@pytest.mark.parametrize("M,K,N", [(3, 4096, 512), (1, 2048, 32000)])
+def test_under_the_fp16_contract_the_small_m_launch_and_its_key_store_fp16(monkeypatch, M, K, N):
+    """The derived census's key function takes the component's contract (`contract_half`), as the launch does
+    through the active flag: under it an fp16 GEMM stores fp16 on hardware without native bf16 (the aligned Triton
+    branch, 2026-10-26). Seen red on e5aa3894: the census keyed fp32 stores while the runtime launched fp16 ones —
+    17 gate cells refused their keys (KeyNotCertified)."""
+    from neurobrix.kernels.ops.gemv_vec import gemv_vec_kernel as K_
+    seen = _capture(monkeypatch, K_)
+    monkeypatch.setattr(W, "_NBX_ACTIVATIONS_FP16_SAFE", True)
+    a, b = _t((M, K), F16), _t((K, N), F16)
+    with pytest.raises(_Launched):
+        W.mm(a, b)
+    nb, fa = _flags()
+    want = LK.mm_launches(M, K, N, F16, F16, nb, fa, contract_half=True)
+    assert seen == [want[0][1]] and want[0][0] == LK.GEMV_VEC, (seen, want)
+    if not nb:
+        assert want[0][1][-1] == LK.tag(F16), want                 # the store tag: fp16 under the contract on Volta
+        assert LK.mm_launches(M, K, N, F16, F16, nb, fa)[0][1][-1] == LK.tag(F32)   # and fp32 without it
