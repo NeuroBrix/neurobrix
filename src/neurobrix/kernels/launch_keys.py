@@ -67,7 +67,11 @@ def matmul_out_dtype(dt: NBXDtype, M: int, force_fp32: bool, native_bf16: bool,
     half = dt in _HALF
     if force_accum and half:
         return F32
-    if dt == F16 and contract_half:
+    # the contract lifts the store for the product rows the calibration observed — a graph op's prefill or spatial
+    # rows; a decode row (M <= 4) keeps the fp32 store that catches decode-loop drift (below): stored fp16 there,
+    # MiniCPM-o-4_5 decoded "The!!!!!" and VibeVoice-1.5B said "Thank you." (gate tha3, 2026-10-26; both correct
+    # with the decode rows conservative, bisected on a card)
+    if dt == F16 and contract_half and M > 4:
         return F16
     if dt == F16 and not native_bf16:
         return F32

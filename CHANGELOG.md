@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`neurobrix autotune certify --keys <file>`** certifies exactly the keys a coverage check found missing (one `<kernel>::<key>` per line), without a census table.
 
 ### Fixed
+- **Decode rows keep their fp32 store under the fp16 contract**: storing a language model's decode products fp16 drifted MiniCPM-o-4_5's text into repeated punctuation and VibeVoice-1.5B's speech into the wrong words on the Triton branch.
 - **An LSTM's recurrence stays outside the fp16 precision contract**: the calibration observes the LSTM as one op and never its internal products; storing them fp16 drifted Kokoro-82M's speech into gibberish on the Triton branch.
 - **The Triton sampler reads and writes logits at their own dtype**: the repetition penalty copied them as fp32, so an fp16 or bf16 head (a half graph under the precision contract) failed with a CUDA error; bf16 rows were also decoded wrongly by the sort helper.
 - **A row kernel's candidates stay within the registers of one thread** (`memory.max_registers_per_thread`, declared for NVIDIA): a one-warp program over a 16 384-wide fp16 row compiled for over half an hour and stalled certification.

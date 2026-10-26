@@ -100,5 +100,6 @@ def test_under_the_fp16_contract_the_small_m_launch_and_its_key_store_fp16(monke
     want = LK.mm_launches(M, K, N, F16, F16, nb, fa, contract_half=True)
     assert seen == [want[0][1]] and want[0][0] == LK.GEMV_VEC, (seen, want)
     if not nb:
-        assert want[0][1][-1] == LK.tag(F16), want                 # the store tag: fp16 under the contract on Volta
-        assert LK.mm_launches(M, K, N, F16, F16, nb, fa)[0][1][-1] == LK.tag(F32)   # and fp32 without it
+        # a decode row (M <= 4) keeps the fp32 store under the contract (decode-loop drift, gate tha3, 2026-10-26)
+        assert want[0][1][-1] == LK.tag(F32), want
+        assert LK.matmul_out_dtype(F16, 64, False, nb, False, True) == F16      # a prefill row stores fp16 under it
