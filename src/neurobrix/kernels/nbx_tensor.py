@@ -1168,6 +1168,12 @@ class DeviceAllocator:
         return dev.value
 
     @staticmethod
+    def peak_device_bytes():
+        """The most one device held at once since the process started, as this allocator counted it from the driver
+        (live driver bytes, the pool's cache included); None where the backend keeps no such count."""
+        return max(DeviceAllocator._cuda_peak_bytes.values()) if DeviceAllocator._cuda_peak_bytes else None
+
+    @staticmethod
     def device_count() -> int:
         """How many GPUs this process can see. 0 if there is no runtime.
 
