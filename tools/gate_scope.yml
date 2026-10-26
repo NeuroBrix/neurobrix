@@ -89,6 +89,10 @@ gate:
   lists: "gate2/gate_{cls}.list"
   rows: "gate/matrix_{cls}"
   timeouts: "timeouts.txt"
+  # A replayed cell slower than this many times its base row (same cell, same class) is RED: a gate that only reads
+  # rc and outputs let a 2-20x slowdown of every Triton cell through (db94d33d, 2026-10-25). Source: the supervisor,
+  # 2026-10-26 23:20.
+  slower_than_base_red: 1.5
 
 # Tools in the import closure of a cell's harness: a change there reaches every cell.
 harness: [tools/regression_matrix.py]

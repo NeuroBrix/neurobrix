@@ -9,10 +9,11 @@ is MISSING (an error, never a pass). A red is named; a carried red is accepted o
 per-class record (docs/reference/known-cause-reds.<cls>.yml) names it. The tally compares against the committed
 reference, never against itself.
 
-Quality (rule 2): every wanted (model, mode) is read against the committed judgments record
-(--judgments, default <tree>/docs/reference/judgments.jsonl, tools/judgments.py) and the gate's own
-<gate>/gate/matrix_<cls>/judgments.jsonl; the pairs no judgment covers are NAMED ("NOT JUDGED"). A judgment is made
-once, outside the gate, so a missing one is named, not counted as a red.
+Quality (rule 2): every wanted cell's OUTPUT (its row's sha256) is read against the committed judgments record
+(--judgments, default <tree>/docs/reference/artefact-judgments.jsonl) and the gate's own
+<gate>/gate/matrix_<cls>/judgments.jsonl (regression_matrix.py judge writes the sha); an output no judgment names is
+NAMED ("NOT JUDGED"), an output judged other than works is RED. Time: a replayed cell slower than
+`gate.slower_than_base_red` times its base row (tools/gate_scope.yml) is RED (the supervisor, 2026-10-26 23:20).
 
     gate_tally.py --gate <campaign gate dir> --base <base gate dir> --tree <tree> --classes 32g [--scope <dir>]
 Exit 1 on a red, a missing scope cell, a never-measured cell, or a carried red without a known cause.
@@ -68,7 +69,9 @@ def known(path, cls):
 
 
 def judgments(paths):
-    """{(model, mode): judgment} — the latest per pair over the committed record and the gate's own files."""
+    """{output sha256: judgment} — the latest per OUTPUT over the committed record and the gate's own files. A judgment
+    names the sha of what was looked at; one without a sha judged an output nobody can name, and judges nothing here
+    (the supervisor, 2026-10-26 23:20: a pair judged once let every later output of that pair pass as judged)."""
     out = {}
     for p in paths:
         p = Path(p)
@@ -79,12 +82,26 @@ def judgments(paths):
                 j = json.loads(l)
             except ValueError:
                 continue
-            if not all(k in j for k in ("model", "mode", "verdict", "date")):
+            sha, date = j.get("sha256"), j.get("date") or j.get("run_date") or ""
+            if not sha or j.get("verdict") in (None, "not judged"):
                 continue
-            k = (j["model"], j["mode"])
-            if k not in out or j["date"] >= out[k]["date"]:
-                out[k] = j
+            if sha not in out or date >= out[sha]["_date"]:
+                out[sha] = dict(j, _date=date)
     return out
+
+
+def seconds(r):
+    return r.get("exec_s"), r.get("wall_s")
+
+
+def slower(r, b, factor):
+    """`(new, base, field)` when the row is over `factor` times its base on the same field — exec_s when both rows carry
+    it (the compute, without the disk), else wall_s; None otherwise or when either row has no time."""
+    for i, field in ((0, "exec_s"), (1, "wall_s")):
+        n, o = seconds(r)[i], seconds(b)[i]
+        if n is not None and o is not None:
+            return (n, o, field) if o > 0 and float(n) > factor * float(o) else None
+    return None
 
 
 def cell(r):
@@ -111,18 +128,31 @@ def tally(a) -> int:
                 rows[k] = r
                 overlaid += 1
         base = latest_rows(f"{a.base}/{lay['rows'].format(cls=cls)}")
+        if not base:
+            # an empty or mis-named base compares nothing and every cell passes its time check: refused by name
+            print(f"{cls}: REFUSED — the base {a.base}/{lay['rows'].format(cls=cls)} holds no rows")
+            return 2
         kn = known(f"{a.tree}/docs/reference/known-cause-reds.{cls}.yml", cls)
         scope = scope_cells(f"{a.scope}/queue_{cls}.txt") if a.scope else None
-        judged = judgments([a.judgments or f"{a.tree}/docs/reference/judgments.jsonl",
+        judged = judgments([a.judgments or f"{a.tree}/docs/reference/artefact-judgments.jsonl",
                             f"{rows_dir}/judgments.jsonl"])
+        factor = float(lay["slower_than_base_red"])
         green, red, carried_g, carried_r, missing, never, unjudged = 0, [], 0, [], [], [], []
         for m, ms in sorted(want.items()):
             for x in ms:
-                if (m, x) not in judged:
-                    unjudged.append(f"{m}:{x}")
+                out = rows.get((m, x)) or base.get((m, x))
+                j = judged.get((out or {}).get("sha256") or "")
+                if out is not None and out.get("rc") == 0 and j is None:
+                    unjudged.append(f"{m}:{x} sha {str(out.get('sha256'))[:12]}")
                 if (m, x) in rows:
                     r = rows[(m, x)]
-                    if r["rc"] == 0:
+                    slow = slower(r, base[(m, x)], factor) if (m, x) in base else None
+                    if r["rc"] == 0 and j is not None and j["verdict"] != "works":
+                        red.append(f"{m}:{x} {cell(r)} output {r['sha256'][:12]} JUDGED {j['verdict']}: {j.get('judged', '')[:100]}")
+                    elif r["rc"] == 0 and slow:
+                        red.append(f"{m}:{x} {cell(r)} SLOWER {slow[0]:.1f}s vs base {slow[1]:.1f}s ({slow[2]}, "
+                                   f"over {factor}x; base {base[(m, x)].get('date', '')[:16]})")
+                    elif r["rc"] == 0:
                         green += 1
                     else:   # a replayed red stays red; the record's cause is printed beside it, the decision is the supervisor's
                         cause = kn.get((m, x, cls))
@@ -150,7 +180,7 @@ def tally(a) -> int:
               f"missing {len(missing)}; never measured {len(never)}"
               + (f"; scope cells {len(scope)}" if scope is not None else "; scope not given")
               + (f"; overlay rows {overlaid}" if a.overlay else "")
-              + f"; judged {n_want - len(unjudged)} / not judged {len(unjudged)}")
+              + f"; outputs judged by sha {n_want - len(unjudged)} / not judged {len(unjudged)}")
         for s in red:
             print("  RED", s)
         for s in carried_r:
@@ -175,7 +205,7 @@ def build_parser():
     # for the same cell, so the tally judges the tree that lands, not the one the delta started from
     ap.add_argument("--overlay", default=None)
     ap.add_argument("--tree", required=True, help="the tree whose committed records name the carried reds and the judgments")
-    ap.add_argument("--judgments", default=None, help="the committed judgments record (default <tree>/docs/reference/judgments.jsonl)")
+    ap.add_argument("--judgments", default=None, help="the committed per-output judgments record (default <tree>/docs/reference/artefact-judgments.jsonl)")
     ap.add_argument("--classes", default="32g")
     ap.add_argument("--modes", default="native,triton")
     return ap
