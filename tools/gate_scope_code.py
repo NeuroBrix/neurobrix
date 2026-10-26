@@ -1187,6 +1187,12 @@ class Program:
         sn = self.self_name(uid)
         if isinstance(expr, ast.Name) and sn and expr.id == sn:
             return self.owner(uid)
+        if getattr(self, "_sites_busy", False) and not self._slots_done:
+            # The call sites are being built and the slot types are built FROM them: the receiver is untyped here,
+            # and `targets` answers with every method of that name — wider, never narrower (gate tha4's scope died
+            # on the re-entry when a commit touching a module global made `gate_constants` ask for the sites first,
+            # 2026-10-26). The answers given meanwhile are forgotten once the sites are built (`sites`).
+            return None
         self._ensure_slots()
         return self.vtype(uid, expr)
 
