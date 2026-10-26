@@ -2287,25 +2287,23 @@
   "(114688, 144, 144, False, False, 'fp32', 'fp32', 'fp32', 'fp32')": {
    "config": {
     "kwargs": {
-     "BLOCK_M": 64,
-     "BLOCK_N": 64,
+     "BLOCK_M": 32,
+     "BLOCK_N": 32,
      "BLOCK_K": 32,
      "GROUP_M": 8
     },
-    "num_warps": 4,
-    "num_stages": 3,
+    "num_warps": 2,
+    "num_stages": 1,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-03T19:12:07+00:00",
+    "date": "2026-10-26T04:42:10+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
      "name": "mps",
-     "backend_hash": "content-3c48a86549cdcefe",
-     "backend_hash_was": "msl-v0.1-42ebffa212f366de",
-     "renamed_because": "served triton_apple_backend (venv-tritonext-adbf6e84) byte-identical to its 15:59 backup outside __pycache__ (diff -rq, 2026-10-20 17:3x); 42ebffa = that install before the 15:59 change, 62109df8 = the same bytes after the 16:22 cp -R restore; content-3c48a86549cdcefe = autotune_certified._backend_content_hash of those bytes"
+     "backend_hash": "content-724cc9e3cf5258b0"
     },
     "shape": [
      114688,
@@ -2320,9 +2318,9 @@
     ],
     "launches": 1,
     "launch_deviations": [
-     4.2648518321198725e-07
+     4.772858292397718e-07
     ],
-    "deviation": 4.2648518321198725e-07,
+    "deviation": 4.772858292397718e-07,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 row window(s) of the output (rows 0-32150; rows 41269-73419; rows 82538-114688) of 114688 rows",
     "machine": {
@@ -2341,30 +2339,72 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 3.2236250097101387,
-    "second_ms": null,
-    "candidates": 1,
-    "accepted": 1,
-    "benched": 1,
+    "best_ms": 2.898726156779698,
+    "second_ms": 2.9076220308031355,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.049,
-     "runs": 0.096,
-     "bench": 0.338
+     "oracle": 0.041,
+     "runs": 1.052,
+     "bench": 2.455
     },
     "stability_witness": {
-     "open_ms": 3.7324,
-     "close_ms": 3.6234,
-     "drift": 0.0292,
+     "open_ms": 3.5109,
+     "close_ms": 3.4062,
+     "drift": 0.0298,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
       2048,
       2048,
       2048
+     ],
+     "chunk": 4,
+     "brackets": [
+      {
+       "what": "chunk 1 of 4",
+       "open_ms": 3.4261,
+       "close_ms": 3.555,
+       "drift": 0.0376,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 4",
+       "open_ms": 3.4035,
+       "close_ms": 3.4568,
+       "drift": 0.0157,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 4",
+       "open_ms": 3.4155,
+       "close_ms": 3.4041,
+       "drift": 0.0033,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 4 of 4",
+       "open_ms": 3.4161,
+       "close_ms": 3.4575,
+       "drift": 0.0121,
+       "attempt": 1,
+       "contenders": 2
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.5109,
+       "close_ms": 3.4062,
+       "drift": 0.0298,
+       "attempt": 1,
+       "contenders": 2
+      }
      ]
     },
-    "reproven_from": "triton 3.8.0+git4a15f415 mps msl-v0.1-b1c",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -2476,14 +2516,12 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-03T19:11:58+00:00",
+    "date": "2026-10-26T04:41:42+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
      "name": "mps",
-     "backend_hash": "content-3c48a86549cdcefe",
-     "backend_hash_was": "msl-v0.1-42ebffa212f366de",
-     "renamed_because": "served triton_apple_backend (venv-tritonext-adbf6e84) byte-identical to its 15:59 backup outside __pycache__ (diff -rq, 2026-10-20 17:3x); 42ebffa = that install before the 15:59 change, 62109df8 = the same bytes after the 16:22 cp -R restore; content-3c48a86549cdcefe = autotune_certified._backend_content_hash of those bytes"
+     "backend_hash": "content-724cc9e3cf5258b0"
     },
     "shape": [
      114688,
@@ -2498,9 +2536,9 @@
     ],
     "launches": 1,
     "launch_deviations": [
-     6.179926870365225e-07
+     6.247971269605465e-07
     ],
-    "deviation": 6.179926870365225e-07,
+    "deviation": 6.247971269605465e-07,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 row window(s) of the output (rows 0-20576; rows 47056-67632; rows 94112-114688) of 114688 rows",
     "machine": {
@@ -2519,30 +2557,72 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 6.42327086130778,
-    "second_ms": null,
-    "candidates": 1,
-    "accepted": 1,
-    "benched": 1,
+    "best_ms": 5.560625008174351,
+    "second_ms": 5.634410721915109,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.041,
-     "runs": 0.086,
-     "bench": 0.354
+     "oracle": 0.036,
+     "runs": 1.046,
+     "bench": 2.827
     },
     "stability_witness": {
-     "open_ms": 3.6715,
-     "close_ms": 3.5698,
-     "drift": 0.0277,
+     "open_ms": 3.4197,
+     "close_ms": 3.4661,
+     "drift": 0.0136,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
       2048,
       2048,
       2048
+     ],
+     "chunk": 4,
+     "brackets": [
+      {
+       "what": "chunk 1 of 4",
+       "open_ms": 3.4601,
+       "close_ms": 3.4204,
+       "drift": 0.0115,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 4",
+       "open_ms": 3.3983,
+       "close_ms": 3.4325,
+       "drift": 0.0101,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 4",
+       "open_ms": 3.4023,
+       "close_ms": 3.4888,
+       "drift": 0.0254,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 4 of 4",
+       "open_ms": 3.5581,
+       "close_ms": 3.4471,
+       "drift": 0.0312,
+       "attempt": 1,
+       "contenders": 2
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.4197,
+       "close_ms": 3.4661,
+       "drift": 0.0136,
+       "attempt": 1,
+       "contenders": 2
+      }
      ]
     },
-    "reproven_from": "triton 3.8.0+git4a15f415 mps msl-v0.1-b1c",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -2560,19 +2640,17 @@
      "GROUP_M": 8
     },
     "num_warps": 4,
-    "num_stages": 4,
+    "num_stages": 1,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-03T19:11:58+00:00",
+    "date": "2026-10-26T04:41:45+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
      "name": "mps",
-     "backend_hash": "content-3c48a86549cdcefe",
-     "backend_hash_was": "msl-v0.1-42ebffa212f366de",
-     "renamed_because": "served triton_apple_backend (venv-tritonext-adbf6e84) byte-identical to its 15:59 backup outside __pycache__ (diff -rq, 2026-10-20 17:3x); 42ebffa = that install before the 15:59 change, 62109df8 = the same bytes after the 16:22 cp -R restore; content-3c48a86549cdcefe = autotune_certified._backend_content_hash of those bytes"
+     "backend_hash": "content-724cc9e3cf5258b0"
     },
     "shape": [
      114688,
@@ -2587,9 +2665,9 @@
     ],
     "launches": 1,
     "launch_deviations": [
-     8.413931234119962e-07
+     7.668027690760894e-07
     ],
-    "deviation": 8.413931234119962e-07,
+    "deviation": 7.668027690760894e-07,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 row window(s) of the output (rows 0-10288; rows 52200-62488; rows 104400-114688) of 114688 rows",
     "machine": {
@@ -2608,30 +2686,64 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 10.946208000183105,
-    "second_ms": null,
-    "candidates": 1,
-    "accepted": 1,
-    "benched": 1,
+    "best_ms": 8.733854055404663,
+    "second_ms": 8.793406009674072,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 9,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.031,
-     "runs": 0.061,
-     "bench": 0.372
+     "oracle": 0.024,
+     "runs": 0.568,
+     "bench": 2.252
     },
     "stability_witness": {
-     "open_ms": 3.779,
-     "close_ms": 3.7817,
-     "drift": 0.0007,
+     "open_ms": 3.4055,
+     "close_ms": 3.4139,
+     "drift": 0.0025,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
       2048,
       2048,
       2048
+     ],
+     "chunk": 4,
+     "brackets": [
+      {
+       "what": "chunk 1 of 3",
+       "open_ms": 3.5454,
+       "close_ms": 3.425,
+       "drift": 0.034,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 3",
+       "open_ms": 3.3994,
+       "close_ms": 3.3896,
+       "drift": 0.0029,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 3",
+       "open_ms": 3.4851,
+       "close_ms": 3.373,
+       "drift": 0.0321,
+       "attempt": 1,
+       "contenders": 1
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.4055,
+       "close_ms": 3.4139,
+       "drift": 0.0025,
+       "attempt": 1,
+       "contenders": 2
+      }
      ]
     },
-    "reproven_from": "triton 3.8.0+git4a15f415 mps msl-v0.1-b1c",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -2732,25 +2844,23 @@
   "(114688, 360, 180, False, False, 'fp32', 'fp32', 'fp32', 'fp32')": {
    "config": {
     "kwargs": {
-     "BLOCK_M": 32,
-     "BLOCK_N": 128,
+     "BLOCK_M": 64,
+     "BLOCK_N": 64,
      "BLOCK_K": 32,
      "GROUP_M": 8
     },
     "num_warps": 4,
-    "num_stages": 3,
+    "num_stages": 1,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-03T19:11:59+00:00",
+    "date": "2026-10-26T04:41:47+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
      "name": "mps",
-     "backend_hash": "content-3c48a86549cdcefe",
-     "backend_hash_was": "msl-v0.1-42ebffa212f366de",
-     "renamed_because": "served triton_apple_backend (venv-tritonext-adbf6e84) byte-identical to its 15:59 backup outside __pycache__ (diff -rq, 2026-10-20 17:3x); 42ebffa = that install before the 15:59 change, 62109df8 = the same bytes after the 16:22 cp -R restore; content-3c48a86549cdcefe = autotune_certified._backend_content_hash of those bytes"
+     "backend_hash": "content-724cc9e3cf5258b0"
     },
     "shape": [
      114688,
@@ -2765,9 +2875,9 @@
     ],
     "launches": 1,
     "launch_deviations": [
-     5.336595597159681e-07
+     5.748499640339722e-07
     ],
-    "deviation": 5.336595597159681e-07,
+    "deviation": 5.748499640339722e-07,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 row window(s) of the output (rows 0-10288; rows 52200-62488; rows 104400-114688) of 114688 rows",
     "machine": {
@@ -2786,30 +2896,40 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 12.444847424825033,
-    "second_ms": null,
-    "candidates": 1,
-    "accepted": 1,
-    "benched": 1,
+    "best_ms": 10.290472030639648,
+    "second_ms": 18.810812950134277,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 2,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.032,
-     "runs": 0.099,
-     "bench": 0.381
+     "oracle": 0.028,
+     "runs": 1.064,
+     "bench": 0.529
     },
     "stability_witness": {
-     "open_ms": 3.6141,
-     "close_ms": 3.7355,
-     "drift": 0.0336,
+     "open_ms": 3.448,
+     "close_ms": 3.4162,
+     "drift": 0.0092,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
       2048,
       2048,
       2048
+     ],
+     "chunk": 4,
+     "brackets": [
+      {
+       "what": "chunk 1 of 1",
+       "open_ms": 3.448,
+       "close_ms": 3.4162,
+       "drift": 0.0092,
+       "attempt": 1,
+       "contenders": 2
+      }
      ]
     },
-    "reproven_from": "triton 3.8.0+git4a15f415 mps msl-v0.1-b1c",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -2827,19 +2947,17 @@
      "GROUP_M": 8
     },
     "num_warps": 4,
-    "num_stages": 4,
+    "num_stages": 1,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-03T19:12:09+00:00",
+    "date": "2026-10-26T04:42:14+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
      "name": "mps",
-     "backend_hash": "content-3c48a86549cdcefe",
-     "backend_hash_was": "msl-v0.1-42ebffa212f366de",
-     "renamed_because": "served triton_apple_backend (venv-tritonext-adbf6e84) byte-identical to its 15:59 backup outside __pycache__ (diff -rq, 2026-10-20 17:3x); 42ebffa = that install before the 15:59 change, 62109df8 = the same bytes after the 16:22 cp -R restore; content-3c48a86549cdcefe = autotune_certified._backend_content_hash of those bytes"
+     "backend_hash": "content-724cc9e3cf5258b0"
     },
     "shape": [
      114688,
@@ -2854,9 +2972,9 @@
     ],
     "launches": 1,
     "launch_deviations": [
-     5.421560418369878e-07
+     5.234738339307669e-07
     ],
-    "deviation": 5.421560418369878e-07,
+    "deviation": 5.234738339307669e-07,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 row window(s) of the output (rows 0-10716; rows 51986-62702; rows 103972-114688) of 114688 rows",
     "machine": {
@@ -2875,30 +2993,72 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 8.234062433242798,
-    "second_ms": null,
-    "candidates": 1,
-    "accepted": 1,
-    "benched": 1,
+    "best_ms": 6.578569491704305,
+    "second_ms": 6.583513816197713,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.04,
-     "runs": 0.109,
-     "bench": 0.358
+     "oracle": 0.033,
+     "runs": 1.129,
+     "bench": 2.744
     },
     "stability_witness": {
-     "open_ms": 3.7841,
-     "close_ms": 3.6866,
-     "drift": 0.0257,
+     "open_ms": 3.3966,
+     "close_ms": 3.4217,
+     "drift": 0.0074,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
       2048,
       2048,
       2048
+     ],
+     "chunk": 4,
+     "brackets": [
+      {
+       "what": "chunk 1 of 4",
+       "open_ms": 3.4047,
+       "close_ms": 3.4229,
+       "drift": 0.0053,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 4",
+       "open_ms": 3.4732,
+       "close_ms": 3.4811,
+       "drift": 0.0023,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 4",
+       "open_ms": 3.4076,
+       "close_ms": 3.4594,
+       "drift": 0.0152,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 4 of 4",
+       "open_ms": 3.4054,
+       "close_ms": 3.4385,
+       "drift": 0.0097,
+       "attempt": 1,
+       "contenders": 2
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.3966,
+       "close_ms": 3.4217,
+       "drift": 0.0074,
+       "attempt": 1,
+       "contenders": 2
+      }
      ]
     },
-    "reproven_from": "triton 3.8.0+git4a15f415 mps msl-v0.1-b1c",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -2916,19 +3076,17 @@
      "GROUP_M": 8
     },
     "num_warps": 4,
-    "num_stages": 4,
+    "num_stages": 1,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-03T19:12:00+00:00",
+    "date": "2026-10-26T04:41:52+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
      "name": "mps",
-     "backend_hash": "content-3c48a86549cdcefe",
-     "backend_hash_was": "msl-v0.1-42ebffa212f366de",
-     "renamed_because": "served triton_apple_backend (venv-tritonext-adbf6e84) byte-identical to its 15:59 backup outside __pycache__ (diff -rq, 2026-10-20 17:3x); 42ebffa = that install before the 15:59 change, 62109df8 = the same bytes after the 16:22 cp -R restore; content-3c48a86549cdcefe = autotune_certified._backend_content_hash of those bytes"
+     "backend_hash": "content-724cc9e3cf5258b0"
     },
     "shape": [
      114688,
@@ -2943,9 +3101,9 @@
     ],
     "launches": 1,
     "launch_deviations": [
-     4.562093473205478e-07
+     5.127322467117074e-07
     ],
-    "deviation": 4.562093473205478e-07,
+    "deviation": 5.127322467117074e-07,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 row window(s) of the output (rows 0-6858; rows 53915-60773; rows 107830-114688) of 114688 rows",
     "machine": {
@@ -2964,30 +3122,64 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 16.885666847229004,
-    "second_ms": null,
-    "candidates": 1,
-    "accepted": 1,
-    "benched": 1,
+    "best_ms": 14.77314567565918,
+    "second_ms": 14.87485408782959,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 12,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.03,
-     "runs": 0.096,
-     "bench": 0.409
+     "oracle": 0.027,
+     "runs": 1.202,
+     "bench": 3.305
     },
     "stability_witness": {
-     "open_ms": 3.6184,
-     "close_ms": 3.5903,
-     "drift": 0.0077,
+     "open_ms": 3.443,
+     "close_ms": 3.411,
+     "drift": 0.0093,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
       2048,
       2048,
       2048
+     ],
+     "chunk": 4,
+     "brackets": [
+      {
+       "what": "chunk 1 of 3",
+       "open_ms": 3.4659,
+       "close_ms": 3.4053,
+       "drift": 0.0175,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 3",
+       "open_ms": 3.4386,
+       "close_ms": 3.4043,
+       "drift": 0.01,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 3",
+       "open_ms": 3.4428,
+       "close_ms": 3.4291,
+       "drift": 0.004,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.443,
+       "close_ms": 3.411,
+       "drift": 0.0093,
+       "attempt": 1,
+       "contenders": 2
+      }
      ]
     },
-    "reproven_from": "triton 3.8.0+git4a15f415 mps msl-v0.1-b1c",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -20173,6 +20365,248 @@
      ]
     },
     "reproven_from": "triton 3.8.0+git4a15f415 mps content-3c48",
+    "built": {
+     "gpu": true,
+     "how": "no backend compilation fallback was raised during the certifying run",
+     "fallback": null
+    }
+   },
+   "excluded": []
+  },
+  "(320, 2240, 2240, False, False, 'fp32', 'fp32', 'fp32', 'fp32')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_M": 64,
+     "BLOCK_N": 64,
+     "BLOCK_K": 32,
+     "GROUP_M": 8
+    },
+    "num_warps": 4,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-10-26T04:44:32+00:00",
+    "engine_version": "0.5.4",
+    "backend": {
+     "triton": "3.8.0+git4a15f415",
+     "name": "mps",
+     "backend_hash": "content-724cc9e3cf5258b0"
+    },
+    "shape": [
+     320,
+     2240,
+     2240,
+     false,
+     false,
+     "fp32",
+     "fp32",
+     "fp32",
+     "fp32"
+    ],
+    "launches": 1,
+    "launch_deviations": [
+     1.7484576987380238e-06
+    ],
+    "deviation": 1.7484576987380238e-06,
+    "tolerance": 0.0001,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 1 row window(s) of the output (rows 0-320) of 320 rows",
+    "machine": {
+     "hostname": "MacBook-Pro.local",
+     "platform": "macOS-27.0.1-arm64-arm-64bit",
+     "python": "3.12.0",
+     "hardware_profile": "auto-apple-m4-pro-18g",
+     "has_native_bf16": true,
+     "target": "mps-apple-m4-pro",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": null,
+      "name": "Apple M4 Pro",
+      "memory_mb": 18186,
+      "unified": true
+     },
+     "clocks_mhz": null
+    },
+    "best_ms": 1.1760429628193378,
+    "second_ms": 1.2299687378108501,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 10,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.013,
+     "runs": 0.083,
+     "bench": 2.022
+    },
+    "stability_witness": {
+     "open_ms": 3.3863,
+     "close_ms": 3.3962,
+     "drift": 0.0029,
+     "tolerance": 0.08,
+     "kernel": "matmul",
+     "shape": [
+      2048,
+      2048,
+      2048
+     ],
+     "chunk": 4,
+     "brackets": [
+      {
+       "what": "chunk 1 of 3",
+       "open_ms": 3.5787,
+       "close_ms": 3.3735,
+       "drift": 0.0573,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 3",
+       "open_ms": 3.4161,
+       "close_ms": 3.3792,
+       "drift": 0.0108,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 3",
+       "open_ms": 3.4174,
+       "close_ms": 3.439,
+       "drift": 0.0063,
+       "attempt": 1,
+       "contenders": 2
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.3863,
+       "close_ms": 3.3962,
+       "drift": 0.0029,
+       "attempt": 1,
+       "contenders": 2
+      }
+     ]
+    },
+    "built": {
+     "gpu": true,
+     "how": "no backend compilation fallback was raised during the certifying run",
+     "fallback": null
+    }
+   },
+   "excluded": []
+  },
+  "(320, 2240, 2304, False, False, 'fp32', 'fp32', 'fp32', 'fp32')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_M": 64,
+     "BLOCK_N": 64,
+     "BLOCK_K": 32,
+     "GROUP_M": 8
+    },
+    "num_warps": 4,
+    "num_stages": 1,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-10-26T04:44:35+00:00",
+    "engine_version": "0.5.4",
+    "backend": {
+     "triton": "3.8.0+git4a15f415",
+     "name": "mps",
+     "backend_hash": "content-724cc9e3cf5258b0"
+    },
+    "shape": [
+     320,
+     2240,
+     2304,
+     false,
+     false,
+     "fp32",
+     "fp32",
+     "fp32",
+     "fp32"
+    ],
+    "launches": 1,
+    "launch_deviations": [
+     2.2321418527932595e-06
+    ],
+    "deviation": 2.2321418527932595e-06,
+    "tolerance": 0.0001,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 1 row window(s) of the output (rows 0-320) of 320 rows",
+    "machine": {
+     "hostname": "MacBook-Pro.local",
+     "platform": "macOS-27.0.1-arm64-arm-64bit",
+     "python": "3.12.0",
+     "hardware_profile": "auto-apple-m4-pro-18g",
+     "has_native_bf16": true,
+     "target": "mps-apple-m4-pro",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": null,
+      "name": "Apple M4 Pro",
+      "memory_mb": 18186,
+      "unified": true
+     },
+     "clocks_mhz": null
+    },
+    "best_ms": 1.1946066092042362,
+    "second_ms": 1.2937277873357138,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 11,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.014,
+     "runs": 0.08,
+     "bench": 2.12
+    },
+    "stability_witness": {
+     "open_ms": 3.4112,
+     "close_ms": 3.4106,
+     "drift": 0.0002,
+     "tolerance": 0.08,
+     "kernel": "matmul",
+     "shape": [
+      2048,
+      2048,
+      2048
+     ],
+     "chunk": 4,
+     "brackets": [
+      {
+       "what": "chunk 1 of 3",
+       "open_ms": 3.4961,
+       "close_ms": 3.4149,
+       "drift": 0.0232,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 3",
+       "open_ms": 3.4104,
+       "close_ms": 3.409,
+       "drift": 0.0004,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 3",
+       "open_ms": 3.4287,
+       "close_ms": 3.4844,
+       "drift": 0.0163,
+       "attempt": 1,
+       "contenders": 3
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.4112,
+       "close_ms": 3.4106,
+       "drift": 0.0002,
+       "attempt": 1,
+       "contenders": 2
+      }
+     ]
+    },
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -38174,6 +38608,902 @@
    },
    "excluded": []
   },
+  "(57344, 144, 144, False, False, 'fp32', 'fp32', 'fp32', 'fp32')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_M": 32,
+     "BLOCK_N": 32,
+     "BLOCK_K": 32,
+     "GROUP_M": 8
+    },
+    "num_warps": 2,
+    "num_stages": 1,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-10-26T04:42:17+00:00",
+    "engine_version": "0.5.4",
+    "backend": {
+     "triton": "3.8.0+git4a15f415",
+     "name": "mps",
+     "backend_hash": "content-724cc9e3cf5258b0"
+    },
+    "shape": [
+     57344,
+     144,
+     144,
+     false,
+     false,
+     "fp32",
+     "fp32",
+     "fp32",
+     "fp32"
+    ],
+    "launches": 1,
+    "launch_deviations": [
+     4.0115889770079874e-07
+    ],
+    "deviation": 4.0115889770079874e-07,
+    "tolerance": 0.0001,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 1 row window(s) of the output (rows 0-57344) of 57344 rows",
+    "machine": {
+     "hostname": "MacBook-Pro.local",
+     "platform": "macOS-27.0.1-arm64-arm-64bit",
+     "python": "3.12.0",
+     "hardware_profile": "auto-apple-m4-pro-18g",
+     "has_native_bf16": true,
+     "target": "mps-apple-m4-pro",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": null,
+      "name": "Apple M4 Pro",
+      "memory_mb": 18186,
+      "unified": true
+     },
+     "clocks_mhz": null
+    },
+    "best_ms": 1.6195433235168457,
+    "second_ms": 1.640998254219691,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 11,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.029,
+     "runs": 0.586,
+     "bench": 2.016
+    },
+    "stability_witness": {
+     "open_ms": 3.4134,
+     "close_ms": 3.4184,
+     "drift": 0.0015,
+     "tolerance": 0.08,
+     "kernel": "matmul",
+     "shape": [
+      2048,
+      2048,
+      2048
+     ],
+     "chunk": 4,
+     "brackets": [
+      {
+       "what": "chunk 1 of 3",
+       "open_ms": 3.4426,
+       "close_ms": 3.398,
+       "drift": 0.013,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 3",
+       "open_ms": 3.4437,
+       "close_ms": 3.4419,
+       "drift": 0.0005,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 3",
+       "open_ms": 3.4304,
+       "close_ms": 3.4339,
+       "drift": 0.001,
+       "attempt": 1,
+       "contenders": 3
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.4134,
+       "close_ms": 3.4184,
+       "drift": 0.0015,
+       "attempt": 1,
+       "contenders": 2
+      }
+     ]
+    },
+    "built": {
+     "gpu": true,
+     "how": "no backend compilation fallback was raised during the certifying run",
+     "fallback": null
+    }
+   },
+   "excluded": []
+  },
+  "(57344, 144, 288, False, False, 'fp32', 'fp32', 'fp32', 'fp32')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_M": 32,
+     "BLOCK_N": 32,
+     "BLOCK_K": 32,
+     "GROUP_M": 8
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-10-26T04:42:20+00:00",
+    "engine_version": "0.5.4",
+    "backend": {
+     "triton": "3.8.0+git4a15f415",
+     "name": "mps",
+     "backend_hash": "content-724cc9e3cf5258b0"
+    },
+    "shape": [
+     57344,
+     144,
+     288,
+     false,
+     false,
+     "fp32",
+     "fp32",
+     "fp32",
+     "fp32"
+    ],
+    "launches": 1,
+    "launch_deviations": [
+     7.689706046996213e-07
+    ],
+    "deviation": 7.689706046996213e-07,
+    "tolerance": 0.0001,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 row window(s) of the output (rows 0-16075; rows 20634-36709; rows 41269-57344) of 57344 rows",
+    "machine": {
+     "hostname": "MacBook-Pro.local",
+     "platform": "macOS-27.0.1-arm64-arm-64bit",
+     "python": "3.12.0",
+     "hardware_profile": "auto-apple-m4-pro-18g",
+     "has_native_bf16": true,
+     "target": "mps-apple-m4-pro",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": null,
+      "name": "Apple M4 Pro",
+      "memory_mb": 18186,
+      "unified": true
+     },
+     "clocks_mhz": null
+    },
+    "best_ms": 2.383018210530281,
+    "second_ms": 2.4134374856948853,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 11,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.028,
+     "runs": 0.486,
+     "bench": 1.972
+    },
+    "stability_witness": {
+     "open_ms": 3.3815,
+     "close_ms": 3.4055,
+     "drift": 0.0071,
+     "tolerance": 0.08,
+     "kernel": "matmul",
+     "shape": [
+      2048,
+      2048,
+      2048
+     ],
+     "chunk": 4,
+     "brackets": [
+      {
+       "what": "chunk 1 of 3",
+       "open_ms": 3.5284,
+       "close_ms": 3.3783,
+       "drift": 0.0425,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 3",
+       "open_ms": 3.3862,
+       "close_ms": 3.4252,
+       "drift": 0.0115,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 3",
+       "open_ms": 3.4459,
+       "close_ms": 3.414,
+       "drift": 0.0093,
+       "attempt": 1,
+       "contenders": 3
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.3815,
+       "close_ms": 3.4055,
+       "drift": 0.0071,
+       "attempt": 1,
+       "contenders": 2
+      }
+     ]
+    },
+    "built": {
+     "gpu": true,
+     "how": "no backend compilation fallback was raised during the certifying run",
+     "fallback": null
+    }
+   },
+   "excluded": []
+  },
+  "(57344, 180, 180, False, False, 'fp32', 'fp32', 'fp32', 'fp32')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_M": 32,
+     "BLOCK_N": 128,
+     "BLOCK_K": 32,
+     "GROUP_M": 8
+    },
+    "num_warps": 4,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-10-26T04:41:53+00:00",
+    "engine_version": "0.5.4",
+    "backend": {
+     "triton": "3.8.0+git4a15f415",
+     "name": "mps",
+     "backend_hash": "content-724cc9e3cf5258b0"
+    },
+    "shape": [
+     57344,
+     180,
+     180,
+     false,
+     false,
+     "fp32",
+     "fp32",
+     "fp32",
+     "fp32"
+    ],
+    "launches": 1,
+    "launch_deviations": [
+     4.709300311218462e-07
+    ],
+    "deviation": 4.709300311218462e-07,
+    "tolerance": 0.0001,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 1 row window(s) of the output (rows 0-57344) of 57344 rows",
+    "machine": {
+     "hostname": "MacBook-Pro.local",
+     "platform": "macOS-27.0.1-arm64-arm-64bit",
+     "python": "3.12.0",
+     "hardware_profile": "auto-apple-m4-pro-18g",
+     "has_native_bf16": true,
+     "target": "mps-apple-m4-pro",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": null,
+      "name": "Apple M4 Pro",
+      "memory_mb": 18186,
+      "unified": true
+     },
+     "clocks_mhz": null
+    },
+    "best_ms": 3.638579498637806,
+    "second_ms": 4.2104860411749945,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 4,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.035,
+     "runs": 0.847,
+     "bench": 0.579
+    },
+    "stability_witness": {
+     "open_ms": 3.4335,
+     "close_ms": 3.4072,
+     "drift": 0.0077,
+     "tolerance": 0.08,
+     "kernel": "matmul",
+     "shape": [
+      2048,
+      2048,
+      2048
+     ],
+     "chunk": 4,
+     "brackets": [
+      {
+       "what": "chunk 1 of 1",
+       "open_ms": 3.4335,
+       "close_ms": 3.4072,
+       "drift": 0.0077,
+       "attempt": 1,
+       "contenders": 4
+      }
+     ]
+    },
+    "built": {
+     "gpu": true,
+     "how": "no backend compilation fallback was raised during the certifying run",
+     "fallback": null
+    }
+   },
+   "excluded": []
+  },
+  "(57344, 180, 360, False, False, 'fp32', 'fp32', 'fp32', 'fp32')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_M": 64,
+     "BLOCK_N": 64,
+     "BLOCK_K": 32,
+     "GROUP_M": 8
+    },
+    "num_warps": 4,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-10-26T04:41:56+00:00",
+    "engine_version": "0.5.4",
+    "backend": {
+     "triton": "3.8.0+git4a15f415",
+     "name": "mps",
+     "backend_hash": "content-724cc9e3cf5258b0"
+    },
+    "shape": [
+     57344,
+     180,
+     360,
+     false,
+     false,
+     "fp32",
+     "fp32",
+     "fp32",
+     "fp32"
+    ],
+    "launches": 1,
+    "launch_deviations": [
+     7.348440786336208e-07
+    ],
+    "deviation": 7.348440786336208e-07,
+    "tolerance": 0.0001,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 row window(s) of the output (rows 0-10288; rows 23528-33816; rows 47056-57344) of 57344 rows",
+    "machine": {
+     "hostname": "MacBook-Pro.local",
+     "platform": "macOS-27.0.1-arm64-arm-64bit",
+     "python": "3.12.0",
+     "hardware_profile": "auto-apple-m4-pro-18g",
+     "has_native_bf16": true,
+     "target": "mps-apple-m4-pro",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": null,
+      "name": "Apple M4 Pro",
+      "memory_mb": 18186,
+      "unified": true
+     },
+     "clocks_mhz": null
+    },
+    "best_ms": 4.6363019943237305,
+    "second_ms": 4.718463480472565,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 10,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.023,
+     "runs": 0.452,
+     "bench": 2.022
+    },
+    "stability_witness": {
+     "open_ms": 3.4161,
+     "close_ms": 3.4218,
+     "drift": 0.0017,
+     "tolerance": 0.08,
+     "kernel": "matmul",
+     "shape": [
+      2048,
+      2048,
+      2048
+     ],
+     "chunk": 4,
+     "brackets": [
+      {
+       "what": "chunk 1 of 3",
+       "open_ms": 3.4631,
+       "close_ms": 3.5043,
+       "drift": 0.0119,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 3",
+       "open_ms": 3.3787,
+       "close_ms": 3.4081,
+       "drift": 0.0087,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 3",
+       "open_ms": 3.4464,
+       "close_ms": 3.4022,
+       "drift": 0.0128,
+       "attempt": 1,
+       "contenders": 2
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.4161,
+       "close_ms": 3.4218,
+       "drift": 0.0017,
+       "attempt": 1,
+       "contenders": 2
+      }
+     ]
+    },
+    "built": {
+     "gpu": true,
+     "how": "no backend compilation fallback was raised during the certifying run",
+     "fallback": null
+    }
+   },
+   "excluded": []
+  },
+  "(57344, 288, 144, False, False, 'fp32', 'fp32', 'fp32', 'fp32')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_M": 32,
+     "BLOCK_N": 32,
+     "BLOCK_K": 32,
+     "GROUP_M": 8
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-10-26T04:42:23+00:00",
+    "engine_version": "0.5.4",
+    "backend": {
+     "triton": "3.8.0+git4a15f415",
+     "name": "mps",
+     "backend_hash": "content-724cc9e3cf5258b0"
+    },
+    "shape": [
+     57344,
+     288,
+     144,
+     false,
+     false,
+     "fp32",
+     "fp32",
+     "fp32",
+     "fp32"
+    ],
+    "launches": 1,
+    "launch_deviations": [
+     4.684882425220878e-07
+    ],
+    "deviation": 4.684882425220878e-07,
+    "tolerance": 0.0001,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 row window(s) of the output (rows 0-16075; rows 20634-36709; rows 41269-57344) of 57344 rows",
+    "machine": {
+     "hostname": "MacBook-Pro.local",
+     "platform": "macOS-27.0.1-arm64-arm-64bit",
+     "python": "3.12.0",
+     "hardware_profile": "auto-apple-m4-pro-18g",
+     "has_native_bf16": true,
+     "target": "mps-apple-m4-pro",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": null,
+      "name": "Apple M4 Pro",
+      "memory_mb": 18186,
+      "unified": true
+     },
+     "clocks_mhz": null
+    },
+    "best_ms": 2.536894432703654,
+    "second_ms": 2.5440444628397625,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.034,
+     "runs": 1.008,
+     "bench": 2.442
+    },
+    "stability_witness": {
+     "open_ms": 3.4324,
+     "close_ms": 3.4169,
+     "drift": 0.0045,
+     "tolerance": 0.08,
+     "kernel": "matmul",
+     "shape": [
+      2048,
+      2048,
+      2048
+     ],
+     "chunk": 4,
+     "brackets": [
+      {
+       "what": "chunk 1 of 4",
+       "open_ms": 3.4627,
+       "close_ms": 3.4338,
+       "drift": 0.0083,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 4",
+       "open_ms": 3.4123,
+       "close_ms": 3.4005,
+       "drift": 0.0035,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 4",
+       "open_ms": 3.4147,
+       "close_ms": 3.4441,
+       "drift": 0.0086,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 4 of 4",
+       "open_ms": 3.5131,
+       "close_ms": 3.4677,
+       "drift": 0.0129,
+       "attempt": 1,
+       "contenders": 2
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.4324,
+       "close_ms": 3.4169,
+       "drift": 0.0045,
+       "attempt": 1,
+       "contenders": 2
+      }
+     ]
+    },
+    "built": {
+     "gpu": true,
+     "how": "no backend compilation fallback was raised during the certifying run",
+     "fallback": null
+    }
+   },
+   "excluded": []
+  },
+  "(57344, 360, 180, False, False, 'fp32', 'fp32', 'fp32', 'fp32')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_M": 32,
+     "BLOCK_N": 128,
+     "BLOCK_K": 32,
+     "GROUP_M": 8
+    },
+    "num_warps": 4,
+    "num_stages": 1,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-10-26T04:41:59+00:00",
+    "engine_version": "0.5.4",
+    "backend": {
+     "triton": "3.8.0+git4a15f415",
+     "name": "mps",
+     "backend_hash": "content-724cc9e3cf5258b0"
+    },
+    "shape": [
+     57344,
+     360,
+     180,
+     false,
+     false,
+     "fp32",
+     "fp32",
+     "fp32",
+     "fp32"
+    ],
+    "launches": 1,
+    "launch_deviations": [
+     5.498217260255981e-07
+    ],
+    "deviation": 5.498217260255981e-07,
+    "tolerance": 0.0001,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 row window(s) of the output (rows 0-10288; rows 23528-33816; rows 47056-57344) of 57344 rows",
+    "machine": {
+     "hostname": "MacBook-Pro.local",
+     "platform": "macOS-27.0.1-arm64-arm-64bit",
+     "python": "3.12.0",
+     "hardware_profile": "auto-apple-m4-pro-18g",
+     "has_native_bf16": true,
+     "target": "mps-apple-m4-pro",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": null,
+      "name": "Apple M4 Pro",
+      "memory_mb": 18186,
+      "unified": true
+     },
+     "clocks_mhz": null
+    },
+    "best_ms": 5.476363113948277,
+    "second_ms": 5.480160645076206,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 5,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.031,
+     "runs": 0.946,
+     "bench": 1.312
+    },
+    "stability_witness": {
+     "open_ms": 3.4205,
+     "close_ms": 3.4323,
+     "drift": 0.0035,
+     "tolerance": 0.08,
+     "kernel": "matmul",
+     "shape": [
+      2048,
+      2048,
+      2048
+     ],
+     "chunk": 4,
+     "brackets": [
+      {
+       "what": "chunk 1 of 2",
+       "open_ms": 3.4427,
+       "close_ms": 3.3945,
+       "drift": 0.014,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 2",
+       "open_ms": 3.4154,
+       "close_ms": 3.4448,
+       "drift": 0.0086,
+       "attempt": 1,
+       "contenders": 1
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.4205,
+       "close_ms": 3.4323,
+       "drift": 0.0035,
+       "attempt": 1,
+       "contenders": 2
+      }
+     ]
+    },
+    "built": {
+     "gpu": true,
+     "how": "no backend compilation fallback was raised during the certifying run",
+     "fallback": null
+    }
+   },
+   "excluded": []
+  },
+  "(57344, 432, 144, False, False, 'fp32', 'fp32', 'fp32', 'fp32')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_M": 64,
+     "BLOCK_N": 64,
+     "BLOCK_K": 32,
+     "GROUP_M": 8
+    },
+    "num_warps": 4,
+    "num_stages": 1,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-10-26T04:42:25+00:00",
+    "engine_version": "0.5.4",
+    "backend": {
+     "triton": "3.8.0+git4a15f415",
+     "name": "mps",
+     "backend_hash": "content-724cc9e3cf5258b0"
+    },
+    "shape": [
+     57344,
+     432,
+     144,
+     false,
+     false,
+     "fp32",
+     "fp32",
+     "fp32",
+     "fp32"
+    ],
+    "launches": 1,
+    "launch_deviations": [
+     4.753449913190305e-07
+    ],
+    "deviation": 4.753449913190305e-07,
+    "tolerance": 0.0001,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 row window(s) of the output (rows 0-10716; rows 23314-34030; rows 46628-57344) of 57344 rows",
+    "machine": {
+     "hostname": "MacBook-Pro.local",
+     "platform": "macOS-27.0.1-arm64-arm-64bit",
+     "python": "3.12.0",
+     "hardware_profile": "auto-apple-m4-pro-18g",
+     "has_native_bf16": true,
+     "target": "mps-apple-m4-pro",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": null,
+      "name": "Apple M4 Pro",
+      "memory_mb": 18186,
+      "unified": true
+     },
+     "clocks_mhz": null
+    },
+    "best_ms": 3.4106212095780806,
+    "second_ms": 3.6638999700546266,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 2,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.033,
+     "runs": 1.031,
+     "bench": 0.4
+    },
+    "stability_witness": {
+     "open_ms": 3.4563,
+     "close_ms": 3.4255,
+     "drift": 0.0089,
+     "tolerance": 0.08,
+     "kernel": "matmul",
+     "shape": [
+      2048,
+      2048,
+      2048
+     ],
+     "chunk": 4,
+     "brackets": [
+      {
+       "what": "chunk 1 of 1",
+       "open_ms": 3.4563,
+       "close_ms": 3.4255,
+       "drift": 0.0089,
+       "attempt": 1,
+       "contenders": 2
+      }
+     ]
+    },
+    "built": {
+     "gpu": true,
+     "how": "no backend compilation fallback was raised during the certifying run",
+     "fallback": null
+    }
+   },
+   "excluded": []
+  },
+  "(57344, 540, 180, False, False, 'fp32', 'fp32', 'fp32', 'fp32')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_M": 64,
+     "BLOCK_N": 64,
+     "BLOCK_K": 32,
+     "GROUP_M": 8
+    },
+    "num_warps": 4,
+    "num_stages": 1,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-10-26T04:42:00+00:00",
+    "engine_version": "0.5.4",
+    "backend": {
+     "triton": "3.8.0+git4a15f415",
+     "name": "mps",
+     "backend_hash": "content-724cc9e3cf5258b0"
+    },
+    "shape": [
+     57344,
+     540,
+     180,
+     false,
+     false,
+     "fp32",
+     "fp32",
+     "fp32",
+     "fp32"
+    ],
+    "launches": 1,
+    "launch_deviations": [
+     5.394186314659379e-07
+    ],
+    "deviation": 5.394186314659379e-07,
+    "tolerance": 0.0001,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 row window(s) of the output (rows 0-6858; rows 25243-32101; rows 50486-57344) of 57344 rows",
+    "machine": {
+     "hostname": "MacBook-Pro.local",
+     "platform": "macOS-27.0.1-arm64-arm-64bit",
+     "python": "3.12.0",
+     "hardware_profile": "auto-apple-m4-pro-18g",
+     "has_native_bf16": true,
+     "target": "mps-apple-m4-pro",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": null,
+      "name": "Apple M4 Pro",
+      "memory_mb": 18186,
+      "unified": true
+     },
+     "clocks_mhz": null
+    },
+    "best_ms": 7.545925045013428,
+    "second_ms": 7.959216594696045,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 3,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.028,
+     "runs": 1.049,
+     "bench": 0.574
+    },
+    "stability_witness": {
+     "open_ms": 3.5935,
+     "close_ms": 3.4458,
+     "drift": 0.0411,
+     "tolerance": 0.08,
+     "kernel": "matmul",
+     "shape": [
+      2048,
+      2048,
+      2048
+     ],
+     "chunk": 4,
+     "brackets": [
+      {
+       "what": "chunk 1 of 1",
+       "open_ms": 3.5935,
+       "close_ms": 3.4458,
+       "drift": 0.0411,
+       "attempt": 1,
+       "contenders": 3
+      }
+     ]
+    },
+    "built": {
+     "gpu": true,
+     "how": "no backend compilation fallback was raised during the certifying run",
+     "fallback": null
+    }
+   },
+   "excluded": []
+  },
   "(576, 1024, 4096, False, False, 'fp32', 'fp32', 'bf16', 'fp32')": {
    "config": {
     "kwargs": {
@@ -42860,6 +44190,240 @@
    },
    "excluded": []
   },
+  "(65536, 144, 144, False, False, 'fp32', 'fp32', 'fp32', 'fp32')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_M": 32,
+     "BLOCK_N": 32,
+     "BLOCK_K": 32,
+     "GROUP_M": 8
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-10-26T04:42:28+00:00",
+    "engine_version": "0.5.4",
+    "backend": {
+     "triton": "3.8.0+git4a15f415",
+     "name": "mps",
+     "backend_hash": "content-724cc9e3cf5258b0"
+    },
+    "shape": [
+     65536,
+     144,
+     144,
+     false,
+     false,
+     "fp32",
+     "fp32",
+     "fp32",
+     "fp32"
+    ],
+    "launches": 1,
+    "launch_deviations": [
+     4.0219565252672934e-07
+    ],
+    "deviation": 4.0219565252672934e-07,
+    "tolerance": 0.0001,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 1 row window(s) of the output (rows 0-65536) of 65536 rows",
+    "machine": {
+     "hostname": "MacBook-Pro.local",
+     "platform": "macOS-27.0.1-arm64-arm-64bit",
+     "python": "3.12.0",
+     "hardware_profile": "auto-apple-m4-pro-18g",
+     "has_native_bf16": true,
+     "target": "mps-apple-m4-pro",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": null,
+      "name": "Apple M4 Pro",
+      "memory_mb": 18186,
+      "unified": true
+     },
+     "clocks_mhz": null
+    },
+    "best_ms": 1.787454529242082,
+    "second_ms": 1.7963730096817017,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 10,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.031,
+     "runs": 0.677,
+     "bench": 1.911
+    },
+    "stability_witness": {
+     "open_ms": 3.4512,
+     "close_ms": 3.4113,
+     "drift": 0.0116,
+     "tolerance": 0.08,
+     "kernel": "matmul",
+     "shape": [
+      2048,
+      2048,
+      2048
+     ],
+     "chunk": 4,
+     "brackets": [
+      {
+       "what": "chunk 1 of 3",
+       "open_ms": 3.4537,
+       "close_ms": 3.4183,
+       "drift": 0.0103,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 3",
+       "open_ms": 3.4056,
+       "close_ms": 3.4013,
+       "drift": 0.0013,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 3",
+       "open_ms": 3.4564,
+       "close_ms": 3.4225,
+       "drift": 0.0098,
+       "attempt": 1,
+       "contenders": 2
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.4512,
+       "close_ms": 3.4113,
+       "drift": 0.0116,
+       "attempt": 1,
+       "contenders": 2
+      }
+     ]
+    },
+    "built": {
+     "gpu": true,
+     "how": "no backend compilation fallback was raised during the certifying run",
+     "fallback": null
+    }
+   },
+   "excluded": []
+  },
+  "(65536, 144, 288, False, False, 'fp32', 'fp32', 'fp32', 'fp32')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_M": 64,
+     "BLOCK_N": 32,
+     "BLOCK_K": 32,
+     "GROUP_M": 8
+    },
+    "num_warps": 2,
+    "num_stages": 1,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-10-26T04:42:30+00:00",
+    "engine_version": "0.5.4",
+    "backend": {
+     "triton": "3.8.0+git4a15f415",
+     "name": "mps",
+     "backend_hash": "content-724cc9e3cf5258b0"
+    },
+    "shape": [
+     65536,
+     144,
+     288,
+     false,
+     false,
+     "fp32",
+     "fp32",
+     "fp32",
+     "fp32"
+    ],
+    "launches": 1,
+    "launch_deviations": [
+     7.243329812186351e-07
+    ],
+    "deviation": 7.243329812186351e-07,
+    "tolerance": 0.0001,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 row window(s) of the output (rows 0-16075; rows 24730-40805; rows 49461-65536) of 65536 rows",
+    "machine": {
+     "hostname": "MacBook-Pro.local",
+     "platform": "macOS-27.0.1-arm64-arm-64bit",
+     "python": "3.12.0",
+     "hardware_profile": "auto-apple-m4-pro-18g",
+     "has_native_bf16": true,
+     "target": "mps-apple-m4-pro",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": null,
+      "name": "Apple M4 Pro",
+      "memory_mb": 18186,
+      "unified": true
+     },
+     "clocks_mhz": null
+    },
+    "best_ms": 2.7987469945635115,
+    "second_ms": 2.8507886954716275,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 7,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.027,
+     "runs": 0.495,
+     "bench": 1.421
+    },
+    "stability_witness": {
+     "open_ms": 3.4381,
+     "close_ms": 3.4295,
+     "drift": 0.0025,
+     "tolerance": 0.08,
+     "kernel": "matmul",
+     "shape": [
+      2048,
+      2048,
+      2048
+     ],
+     "chunk": 4,
+     "brackets": [
+      {
+       "what": "chunk 1 of 2",
+       "open_ms": 3.4997,
+       "close_ms": 3.4069,
+       "drift": 0.0265,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 2",
+       "open_ms": 3.3784,
+       "close_ms": 3.4044,
+       "drift": 0.0077,
+       "attempt": 1,
+       "contenders": 3
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.4381,
+       "close_ms": 3.4295,
+       "drift": 0.0025,
+       "attempt": 1,
+       "contenders": 2
+      }
+     ]
+    },
+    "built": {
+     "gpu": true,
+     "how": "no backend compilation fallback was raised during the certifying run",
+     "fallback": null
+    }
+   },
+   "excluded": []
+  },
   "(65536, 1536, 1536, False, False, 'fp32', 'fp32', 'bf16', 'fp32')": {
    "config": {
     "kwargs": {
@@ -43277,6 +44841,135 @@
        "open_ms": 3.4329,
        "close_ms": 3.4882,
        "drift": 0.0161,
+       "attempt": 1,
+       "contenders": 2
+      }
+     ]
+    },
+    "built": {
+     "gpu": true,
+     "how": "no backend compilation fallback was raised during the certifying run",
+     "fallback": null
+    }
+   },
+   "excluded": []
+  },
+  "(65536, 288, 144, False, False, 'fp32', 'fp32', 'fp32', 'fp32')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_M": 64,
+     "BLOCK_N": 64,
+     "BLOCK_K": 32,
+     "GROUP_M": 8
+    },
+    "num_warps": 4,
+    "num_stages": 1,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-10-26T04:42:33+00:00",
+    "engine_version": "0.5.4",
+    "backend": {
+     "triton": "3.8.0+git4a15f415",
+     "name": "mps",
+     "backend_hash": "content-724cc9e3cf5258b0"
+    },
+    "shape": [
+     65536,
+     288,
+     144,
+     false,
+     false,
+     "fp32",
+     "fp32",
+     "fp32",
+     "fp32"
+    ],
+    "launches": 1,
+    "launch_deviations": [
+     4.3633070759916455e-07
+    ],
+    "deviation": 4.3633070759916455e-07,
+    "tolerance": 0.0001,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 row window(s) of the output (rows 0-16075; rows 24730-40805; rows 49461-65536) of 65536 rows",
+    "machine": {
+     "hostname": "MacBook-Pro.local",
+     "platform": "macOS-27.0.1-arm64-arm-64bit",
+     "python": "3.12.0",
+     "hardware_profile": "auto-apple-m4-pro-18g",
+     "has_native_bf16": true,
+     "target": "mps-apple-m4-pro",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": null,
+      "name": "Apple M4 Pro",
+      "memory_mb": 18186,
+      "unified": true
+     },
+     "clocks_mhz": null
+    },
+    "best_ms": 2.931044871990497,
+    "second_ms": 2.9369315760476247,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.033,
+     "runs": 1.011,
+     "bench": 2.454
+    },
+    "stability_witness": {
+     "open_ms": 3.3929,
+     "close_ms": 3.4486,
+     "drift": 0.0164,
+     "tolerance": 0.08,
+     "kernel": "matmul",
+     "shape": [
+      2048,
+      2048,
+      2048
+     ],
+     "chunk": 4,
+     "brackets": [
+      {
+       "what": "chunk 1 of 4",
+       "open_ms": 3.4458,
+       "close_ms": 3.4102,
+       "drift": 0.0103,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 4",
+       "open_ms": 3.3971,
+       "close_ms": 3.4132,
+       "drift": 0.0047,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 4",
+       "open_ms": 3.4274,
+       "close_ms": 3.4373,
+       "drift": 0.0029,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 4 of 4",
+       "open_ms": 3.4264,
+       "close_ms": 3.4289,
+       "drift": 0.0007,
+       "attempt": 1,
+       "contenders": 2
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.3929,
+       "close_ms": 3.4486,
+       "drift": 0.0164,
        "attempt": 1,
        "contenders": 2
       }
@@ -52916,25 +54609,23 @@
   "(81920, 180, 180, False, False, 'fp32', 'fp32', 'fp32', 'fp32')": {
    "config": {
     "kwargs": {
-     "BLOCK_M": 64,
-     "BLOCK_N": 64,
+     "BLOCK_M": 32,
+     "BLOCK_N": 32,
      "BLOCK_K": 32,
      "GROUP_M": 8
     },
-    "num_warps": 4,
-    "num_stages": 3,
+    "num_warps": 2,
+    "num_stages": 1,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-03T19:12:05+00:00",
+    "date": "2026-10-26T04:42:02+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
      "name": "mps",
-     "backend_hash": "content-3c48a86549cdcefe",
-     "backend_hash_was": "msl-v0.1-42ebffa212f366de",
-     "renamed_because": "served triton_apple_backend (venv-tritonext-adbf6e84) byte-identical to its 15:59 backup outside __pycache__ (diff -rq, 2026-10-20 17:3x); 42ebffa = that install before the 15:59 change, 62109df8 = the same bytes after the 16:22 cp -R restore; content-3c48a86549cdcefe = autotune_certified._backend_content_hash of those bytes"
+     "backend_hash": "content-724cc9e3cf5258b0"
     },
     "shape": [
      81920,
@@ -52949,9 +54640,9 @@
     ],
     "launches": 1,
     "launch_deviations": [
-     5.318982896214978e-07
+     6.446233853374736e-07
     ],
-    "deviation": 5.318982896214978e-07,
+    "deviation": 6.446233853374736e-07,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 row window(s) of the output (rows 0-20576; rows 30672-51248; rows 61344-81920) of 81920 rows",
     "machine": {
@@ -52970,30 +54661,40 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 4.691151022911072,
-    "second_ms": null,
-    "candidates": 1,
-    "accepted": 1,
-    "benched": 1,
+    "best_ms": 4.271254645453559,
+    "second_ms": 5.079744875431061,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 4,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.039,
-     "runs": 0.072,
-     "bench": 0.338
+     "oracle": 0.035,
+     "runs": 0.924,
+     "bench": 0.602
     },
     "stability_witness": {
-     "open_ms": 3.6241,
-     "close_ms": 3.6107,
-     "drift": 0.0037,
+     "open_ms": 3.4349,
+     "close_ms": 3.42,
+     "drift": 0.0043,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
       2048,
       2048,
       2048
+     ],
+     "chunk": 4,
+     "brackets": [
+      {
+       "what": "chunk 1 of 1",
+       "open_ms": 3.4349,
+       "close_ms": 3.42,
+       "drift": 0.0043,
+       "attempt": 1,
+       "contenders": 4
+      }
      ]
     },
-    "reproven_from": "triton 3.8.0+git4a15f415 mps msl-v0.1-b1c",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -53759,19 +55460,17 @@
      "GROUP_M": 8
     },
     "num_warps": 4,
-    "num_stages": 3,
+    "num_stages": 1,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-03T19:12:07+00:00",
+    "date": "2026-10-26T04:42:06+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
      "name": "mps",
-     "backend_hash": "content-3c48a86549cdcefe",
-     "backend_hash_was": "msl-v0.1-42ebffa212f366de",
-     "renamed_because": "served triton_apple_backend (venv-tritonext-adbf6e84) byte-identical to its 15:59 backup outside __pycache__ (diff -rq, 2026-10-20 17:3x); 42ebffa = that install before the 15:59 change, 62109df8 = the same bytes after the 16:22 cp -R restore; content-3c48a86549cdcefe = autotune_certified._backend_content_hash of those bytes"
+     "backend_hash": "content-724cc9e3cf5258b0"
     },
     "shape": [
      81920,
@@ -53786,9 +55485,9 @@
     ],
     "launches": 1,
     "launch_deviations": [
-     4.816480425013651e-07
+     5.809657295690202e-07
     ],
-    "deviation": 4.816480425013651e-07,
+    "deviation": 5.809657295690202e-07,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 row window(s) of the output (rows 0-6858; rows 37531-44389; rows 75062-81920) of 81920 rows",
     "machine": {
@@ -53807,30 +55506,64 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 12.61269442240397,
-    "second_ms": null,
-    "candidates": 1,
-    "accepted": 1,
-    "benched": 1,
+    "best_ms": 10.604888916015625,
+    "second_ms": 10.674583117167154,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 12,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.03,
-     "runs": 0.091,
-     "bench": 0.389
+     "oracle": 0.027,
+     "runs": 1.122,
+     "bench": 2.849
     },
     "stability_witness": {
-     "open_ms": 3.7113,
-     "close_ms": 3.6844,
-     "drift": 0.0072,
+     "open_ms": 3.4039,
+     "close_ms": 3.4829,
+     "drift": 0.0232,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
       2048,
       2048,
       2048
+     ],
+     "chunk": 4,
+     "brackets": [
+      {
+       "what": "chunk 1 of 3",
+       "open_ms": 3.4273,
+       "close_ms": 3.4114,
+       "drift": 0.0046,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 3",
+       "open_ms": 3.3875,
+       "close_ms": 3.4339,
+       "drift": 0.0137,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 3",
+       "open_ms": 3.4571,
+       "close_ms": 3.4243,
+       "drift": 0.0095,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.4039,
+       "close_ms": 3.4829,
+       "drift": 0.0232,
+       "attempt": 1,
+       "contenders": 2
+      }
      ]
     },
-    "reproven_from": "triton 3.8.0+git4a15f415 mps msl-v0.1-b1c",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -56093,6 +57826,127 @@
    },
    "excluded": []
   },
+  "(9728, 128, 2240, False, False, 'fp32', 'fp32', 'fp32', 'fp32')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_M": 64,
+     "BLOCK_N": 64,
+     "BLOCK_K": 32,
+     "GROUP_M": 8
+    },
+    "num_warps": 4,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-10-26T04:44:37+00:00",
+    "engine_version": "0.5.4",
+    "backend": {
+     "triton": "3.8.0+git4a15f415",
+     "name": "mps",
+     "backend_hash": "content-724cc9e3cf5258b0"
+    },
+    "shape": [
+     9728,
+     128,
+     2240,
+     false,
+     false,
+     "fp32",
+     "fp32",
+     "fp32",
+     "fp32"
+    ],
+    "launches": 1,
+    "launch_deviations": [
+     2.0744200468562136e-06
+    ],
+    "deviation": 2.0744200468562136e-06,
+    "tolerance": 0.0001,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 row window(s) of the output (rows 0-2325; rows 3701-6026; rows 7403-9728) of 9728 rows",
+    "machine": {
+     "hostname": "MacBook-Pro.local",
+     "platform": "macOS-27.0.1-arm64-arm-64bit",
+     "python": "3.12.0",
+     "hardware_profile": "auto-apple-m4-pro-18g",
+     "has_native_bf16": true,
+     "target": "mps-apple-m4-pro",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": null,
+      "name": "Apple M4 Pro",
+      "memory_mb": 18186,
+      "unified": true
+     },
+     "clocks_mhz": null
+    },
+    "best_ms": 2.18162007892833,
+    "second_ms": 2.185303224457635,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 11,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.026,
+     "runs": 0.114,
+     "bench": 1.983
+    },
+    "stability_witness": {
+     "open_ms": 3.39,
+     "close_ms": 3.4214,
+     "drift": 0.0092,
+     "tolerance": 0.08,
+     "kernel": "matmul",
+     "shape": [
+      2048,
+      2048,
+      2048
+     ],
+     "chunk": 4,
+     "brackets": [
+      {
+       "what": "chunk 1 of 3",
+       "open_ms": 3.4613,
+       "close_ms": 3.4145,
+       "drift": 0.0135,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 3",
+       "open_ms": 3.3919,
+       "close_ms": 3.4089,
+       "drift": 0.005,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 3",
+       "open_ms": 3.4463,
+       "close_ms": 3.3677,
+       "drift": 0.0228,
+       "attempt": 1,
+       "contenders": 3
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.39,
+       "close_ms": 3.4214,
+       "drift": 0.0092,
+       "attempt": 1,
+       "contenders": 2
+      }
+     ]
+    },
+    "built": {
+     "gpu": true,
+     "how": "no backend compilation fallback was raised during the certifying run",
+     "fallback": null
+    }
+   },
+   "excluded": []
+  },
   "(9728, 13824, 5120, False, False, 'fp32', 'fp32', 'bf16', 'fp32')": {
    "config": {
     "kwargs": {
@@ -56459,6 +58313,135 @@
        "open_ms": 3.3266,
        "close_ms": 3.3148,
        "drift": 0.0035,
+       "attempt": 1,
+       "contenders": 2
+      }
+     ]
+    },
+    "built": {
+     "gpu": true,
+     "how": "no backend compilation fallback was raised during the certifying run",
+     "fallback": null
+    }
+   },
+   "excluded": []
+  },
+  "(9728, 2240, 2240, False, False, 'fp32', 'fp32', 'fp32', 'fp32')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_M": 64,
+     "BLOCK_N": 64,
+     "BLOCK_K": 32,
+     "GROUP_M": 8
+    },
+    "num_warps": 4,
+    "num_stages": 1,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-10-26T04:44:42+00:00",
+    "engine_version": "0.5.4",
+    "backend": {
+     "triton": "3.8.0+git4a15f415",
+     "name": "mps",
+     "backend_hash": "content-724cc9e3cf5258b0"
+    },
+    "shape": [
+     9728,
+     2240,
+     2240,
+     false,
+     false,
+     "fp32",
+     "fp32",
+     "fp32",
+     "fp32"
+    ],
+    "launches": 1,
+    "launch_deviations": [
+     2.4152695766742693e-06
+    ],
+    "deviation": 2.4152695766742693e-06,
+    "tolerance": 0.0001,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 row window(s) of the output (rows 0-132; rows 4798-4930; rows 9596-9728) of 9728 rows",
+    "machine": {
+     "hostname": "MacBook-Pro.local",
+     "platform": "macOS-27.0.1-arm64-arm-64bit",
+     "python": "3.12.0",
+     "hardware_profile": "auto-apple-m4-pro-18g",
+     "has_native_bf16": true,
+     "target": "mps-apple-m4-pro",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": null,
+      "name": "Apple M4 Pro",
+      "memory_mb": 18186,
+      "unified": true
+     },
+     "clocks_mhz": null
+    },
+    "best_ms": 20.090999603271484,
+    "second_ms": 20.290374755859375,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.026,
+     "runs": 0.422,
+     "bench": 4.2
+    },
+    "stability_witness": {
+     "open_ms": 3.4873,
+     "close_ms": 3.4153,
+     "drift": 0.0207,
+     "tolerance": 0.08,
+     "kernel": "matmul",
+     "shape": [
+      2048,
+      2048,
+      2048
+     ],
+     "chunk": 4,
+     "brackets": [
+      {
+       "what": "chunk 1 of 4",
+       "open_ms": 3.4965,
+       "close_ms": 3.4075,
+       "drift": 0.0254,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 4",
+       "open_ms": 3.3915,
+       "close_ms": 3.4371,
+       "drift": 0.0134,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 4",
+       "open_ms": 3.3979,
+       "close_ms": 3.3985,
+       "drift": 0.0002,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 4 of 4",
+       "open_ms": 3.4172,
+       "close_ms": 3.4051,
+       "drift": 0.0035,
+       "attempt": 1,
+       "contenders": 2
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.4873,
+       "close_ms": 3.4153,
+       "drift": 0.0207,
        "attempt": 1,
        "contenders": 2
       }
