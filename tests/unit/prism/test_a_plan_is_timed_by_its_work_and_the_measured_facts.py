@@ -72,3 +72,22 @@ def test_a_request_runs_a_loop_per_step_a_language_model_per_token_and_the_rest_
     assert T.uses_per_request(asr, None, 5)["model.decoder"] == ("token", 5)
     with pytest.raises(T.MissingFact, match="step count"):
         T.uses_per_request(diffusion, None, None)
+
+
+def test_a_triton_load_crosses_the_link_at_the_pageable_rate():
+    """The Triton loader uploads a component it loads whole from its decoded numpy buffer — pageable memory — so its
+    load crosses at the measured `h2d_pageable_gbps`, not the page-locked rate (the profile field no code read,
+    audit of 2026-10-26); a streamed component's blocks wait in pinned memory and keep the pinned rate. What this test
+    would do if the code were wrong: the same seconds for both engines — RED."""
+    from neurobrix.core.prism.work import Work
+    facts = T.device_facts({"matmul_tflops": {"float16": 42.3}, "memory_gbps": 789, "h2d_gbps": 8.0,
+                            "h2d_pageable_gbps": 4.0}, "cuda:0")
+    w = {"model": Work(flops=0.0, weight_bytes=8e9, activation_bytes=0.0)}
+    args = ("single_gpu", {"model": "cuda:0"}, w, {"model": 1}, {"cuda:0": facts}, None, "float16")
+    # the same compute either way; the upload 8 GB / 8 GB/s pinned against 8 GB / 4 GB/s pageable: one second apart
+    assert abs(T.plan_seconds(*args, engine="triton") - T.plan_seconds(*args, engine="compiled") - 1.0) < 1e-6
+    no_pageable = T.device_facts({"matmul_tflops": {"float16": 42.3}, "memory_gbps": 789, "h2d_gbps": 8.0}, "cuda:0")
+    import pytest
+    with pytest.raises(T.MissingFact, match="h2d_pageable_gbps"):
+        T.plan_seconds("single_gpu", {"model": "cuda:0"}, w, {"model": 1}, {"cuda:0": no_pageable}, None, "float16",
+                       engine="triton")

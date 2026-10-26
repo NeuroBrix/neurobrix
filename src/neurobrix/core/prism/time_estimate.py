@@ -39,6 +39,7 @@ class DeviceFacts:
     matmul_flops: Mapping[str, float]       # FLOP/s per compute dtype ("float16", "float32", ...)
     memory_bps: float                       # device memory bandwidth, bytes/s
     h2d_bps: float                          # host -> device, page-locked, bytes/s
+    h2d_pageable_bps: Optional[float] = None  # host -> device from pageable memory, bytes/s (`h2d_pageable_gbps`)
 
 
 @dataclass(frozen=True)
@@ -53,8 +54,10 @@ def device_facts(measured: Optional[Mapping[str, Any]], where: str) -> DeviceFac
     if not measured:
         raise MissingFact(f"{where}: no `measured:` facts on the hardware profile (tools/profile_facts.py)")
     try:
+        pageable = measured.get("h2d_pageable_gbps")
         return DeviceFacts(matmul_flops={k: float(v) * 1e12 for k, v in measured["matmul_tflops"].items()},
-                           memory_bps=float(measured["memory_gbps"]) * 1e9, h2d_bps=float(measured["h2d_gbps"]) * 1e9)
+                           memory_bps=float(measured["memory_gbps"]) * 1e9, h2d_bps=float(measured["h2d_gbps"]) * 1e9,
+                           h2d_pageable_bps=float(pageable) * 1e9 if pageable is not None else None)
     except KeyError as exc:
         raise MissingFact(f"{where}: the measured facts lack {exc.args[0]!r}") from exc
 
@@ -143,7 +146,7 @@ def _link(links: Mapping[tuple, float], a: str, b: str) -> float:
 def plan_seconds(strategy: str, allocations: Mapping[str, Any], works: Mapping[str, Work], uses: Mapping[str, int],
                  devices: Mapping[str, DeviceFacts], host: Optional[HostFacts], dtype: str,
                  phases: Optional[Mapping[str, int]] = None, prompt: Optional[Mapping[str, Work]] = None,
-                 links: Optional[Mapping[tuple, float]] = None) -> float:
+                 links: Optional[Mapping[tuple, float]] = None, engine: Optional[str] = None) -> float:
     """The plan's estimated seconds for the request. `devices`: {device string ("cuda:0"): its facts}; `uses`: {component:
     runs per request}; `phases`: {component: phases that load it} for the strategies that load per phase (1 when
     absent); `prompt`: {component: the work of its one prompt pass} for a generating component whose `works` entry is
@@ -172,7 +175,17 @@ def plan_seconds(strategy: str, allocations: Mapping[str, Any], works: Mapping[s
         total += n * compute_seconds(w, f, dtype) + (compute_seconds(first, f, dtype) if first is not None else 0.0)
         loads = passes if strategy in STREAM_EVERY_USE else (int((phases or {}).get(comp, 1))
                                                              if strategy in LOAD_PER_PHASE else 1)
-        total += loads * w.weight_bytes / f.h2d_bps              # the weights cross once per load, never per token
+        # the weights cross once per load, never per token, at the rate of the memory they leave: the Triton loader
+        # uploads a component it loads whole straight from its decoded numpy buffer — pageable memory
+        # (triton/weight_loader.py, memcpy kind=1 from `arr.ctypes.data`) — while a streamed component's blocks wait in
+        # page-locked host memory (cudaMallocHost) and the compiled loader stages through pinned buffers
+        upload = f.h2d_bps
+        if engine == "triton" and strategy not in STREAM_EVERY_USE:
+            if f.h2d_pageable_bps is None:
+                raise MissingFact(f"{dev}: the Triton engine uploads from pageable memory and the profile carries no "
+                                  f"measured `h2d_pageable_gbps` (tools/profile_facts.py)")
+            upload = f.h2d_pageable_bps
+        total += loads * w.weight_bytes / upload
         if strategy not in RESIDENT_STRATEGIES:
             # an expert store: the routed experts a use reads cross the host link at every use (per token for a
             # generating component, the prompt's set once) — unpriced, Qwen3-30B estimated 15 s against 174 s measured

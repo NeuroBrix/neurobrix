@@ -7185,8 +7185,9 @@ class PrismSolver:
                                 links[(f"{prefix}:{a}", f"{prefix}:{b}")] = float(gbps) * 1e9
         for _s, name, allocs, _d in ranked:
             try:
+                from neurobrix.core.prism.host_footprint import engine_of
                 out[name] = float(TE.plan_seconds(name, allocs, works, runs, devices, host, str(dtype), prompt=prompt,
-                                                  links=links))
+                                                  links=links, engine=engine_of(getattr(self, "_mode", "compiled"))))
             except TE.MissingFact as exc:
                 out[name] = f"not estimated: {exc}"
         return out

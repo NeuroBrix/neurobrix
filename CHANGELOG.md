@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Prism's time estimate prices the Triton engine's weight upload at the measured pageable rate**: the Triton loader uploads a component it loads whole from pageable memory, so its load time was underestimated by the pinned rate (1.8x on a V100).
 - **Every run states its device memory peak** on its own `[Peak] device_mb=` line, beside the timings, for both engines (`na` where the device's allocator keeps no count).
 - **`neurobrix autotune certify --keys <file>`** certifies exactly the keys a coverage check found missing (one `<kernel>::<key>` per line), without a census table.
 
