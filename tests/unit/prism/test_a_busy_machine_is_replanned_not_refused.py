@@ -42,3 +42,18 @@ def test_no_room_for_any_plan_is_refused_naming_the_shortfall(monkeypatch):
     pin_host(monkeypatch, 24576, 300, "the Mac with 300 MB free")
     with pytest.raises(RuntimeError, match="no plan fits|does not fit"):
         _solve(APPLE_M4_PRO, "triton")
+
+
+def test_a_dry_explain_plan_is_the_facts_plan_whatever_the_moment(monkeypatch):
+    """--explain-plan (replan=False) prints the plan of the pool's facts with the moment said beside it, so a table of
+    plans taken on a loaded machine is the idle machine's table (the Mac's 4-job table re-planned 7 cells it read as
+    busy, 2026-10-26 23:27). What this test would do if the code were wrong: a re-planned plan, or no door said — RED."""
+    no_door(monkeypatch)
+    c = NBXContainer.load(str(container_root(MODEL)))
+    ic = InputConfig(batch_size=1, height=384, width=384)
+    pin_host(monkeypatch, 24576, 18186, "the Mac, idle")
+    idle = PrismSolver().solve_smart(c, profile(APPLE_M4_PRO), ic, mode="triton", replan=False)
+    pin_host(monkeypatch, 24576, 9000, "the Mac with ~9 GB free")
+    dry = PrismSolver().solve_smart(c, profile(APPLE_M4_PRO), ic, mode="triton", replan=False)
+    assert dry.busy_replan is None and dry.strategy == idle.strategy, (dry.strategy, idle.strategy)
+    assert dry.execution_door and "free now" in dry.execution_door, dry.execution_door

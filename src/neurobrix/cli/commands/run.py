@@ -614,7 +614,8 @@ def cmd_run(args):
     solver = PrismSolver()
     # The mode reaches Prism: `layer_streaming` cuts the graph the EXECUTOR will run, and
     # the two branches rewrite it differently before running.
-    execution_plan = solver.solve_smart(container, hw_profile, input_config, mode=execution_mode)
+    execution_plan = solver.solve_smart(container, hw_profile, input_config, mode=execution_mode,
+                                        replan=not getattr(args, "explain_plan", False))
     # The execution door (the owner, 2026-10-25): a plan sized by the pool's facts whose pool holds less NOW is
     # refused by name here, before anything is loaded; a dry run (--explain-plan) prints the plan and the door's verdict.
     if getattr(execution_plan, "execution_door", None) and not getattr(args, "explain_plan", False):

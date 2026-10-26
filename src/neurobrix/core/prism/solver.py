@@ -3345,7 +3345,7 @@ class PrismSolver:
         return shape_of
 
     def solve_smart(self, container, profile, input_config=None, serve_mode: bool = False,
-                    mode: str = "compiled"):
+                    mode: str = "compiled", replan: bool = True):
         """The plan sized by the pool's facts; and when the machine is busy NOW (the execution door: what is free is
         below what that plan places), the plan RE-SOLVED on what is really free — the owner, 2026-10-26 19:21: a user
         who opened a browser gets a slower plan that runs, said in clear ("machine busy: X MB taken by other
@@ -3354,7 +3354,10 @@ class PrismSolver:
         (its readings are the profile's) nor an imposed rung (`NBX_PRISM_BUDGET_MB`)."""
         plan = self.solve(container, profile, input_config, serve_mode=serve_mode, mode=mode)
         door = getattr(plan, "execution_door", None)
-        if not door:
+        if not door or not replan:
+            # `replan=False` (a dry --explain-plan): the plan of the pool's FACTS, the moment said beside it — a table
+            # of plans is reproducible on a loaded machine (the Mac's 4-job table read its own workers as other
+            # applications and re-planned 7 cells, 2026-10-26 23:27)
             return plan
         caps, host_free, held = self._busy_readings(profile)
         if not caps and host_free is None:
@@ -6970,6 +6973,10 @@ class PrismSolver:
         memory = self._compute_memory(
             container, neural_components, split_ic, target_dtype_str,
             profile=profile, component_dtypes=component_dtypes)
+        # the vendor's declared cuts hold at every request, the split pass's included (`_solve_at_rung` applies them
+        # to its own memory): without them CogVideoX-5b-I2V's VAE was priced whole, 69 705 MB, the moment a busy
+        # Mac took this path, and the plan's door refused 86 230 MB (the Mac, 2026-10-26 23:27)
+        self._declared_streams(container, memory, profile)
         ranked = sorted(memory.items(), key=lambda x: -x[1].total_bytes)
         split_devices = self._prepare_devices(profile)
         split = self._evaluate_all_strategies(
@@ -9340,7 +9347,8 @@ def explain_plan(plan: "ExecutionPlan") -> str:
     for name, sc, why in plan.rejected:
         lines.append(f"refused         {name} (scored {sc:.0f}): {why}")
     if getattr(plan, "execution_door", None):
-        lines.append(f"door            would refuse NOW: {plan.execution_door}")
+        lines.append(f"door            the memory free NOW is below this plan — a run re-plans on it (refused only if "
+                     f"no plan fits): {plan.execution_door}")
     lines.append(f"planned memory  {plan.total_memory_mb:.0f} MB on the cards"
                  + (f", {plan.cpu_ram_mb} MB of host RAM budget" if plan.cpu_ram_mb else ""))
     if plan.host_footprint:
