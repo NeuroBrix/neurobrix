@@ -7749,11 +7749,10 @@ def _arch_param(section: str, key: str, default):
     if not devices:
         return default
     try:
-        from neurobrix.core.config.loader import get_vendor_config
+        from neurobrix.core.config.loader import vendor_param
         _brand = devices[0].brand
         _vendor = getattr(_brand, "value", _brand)
-        cfg = get_vendor_config(_vendor, devices[0].architecture)
-        return cfg.get(section, {}).get(key, default)
+        return vendor_param(_vendor, devices[0].architecture, section, key, default)
     except Exception:
         return default
 

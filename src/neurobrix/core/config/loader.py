@@ -12,6 +12,7 @@ Usage:
     nvidia_config = get_vendor_config("nvidia", "volta")
 """
 
+import copy
 import os
 import yaml
 from pathlib import Path
@@ -218,8 +219,34 @@ def get_vendor_config(vendor: str, architecture: str) -> Dict[str, Any]:
             f"and unmeasured."
         )
 
-    with open(config_path) as f:
-        return yaml.safe_load(f)
+    # A copy of the file parsed ONCE per process: the vendor files do not change while an engine runs, and this
+    # reader sits under per-op paths (kernels/wrappers._arch_param, read by every attention launch). Parsed at every
+    # call it cost whisper-large's Triton decode 4.9 s a token instead of 0.13 (2026-10-26).
+    return copy.deepcopy(_parsed_vendor_file(str(config_path)))
+
+
+@lru_cache(maxsize=64)
+def _parsed_vendor_file(path: str) -> Dict[str, Any]:
+    """One vendor file, parsed once per process. Never handed out: callers get a copy (`get_vendor_config`) or one
+    leaf value (`vendor_param`), so no caller can alter what the next one reads."""
+    with open(path) as f:
+        return yaml.safe_load(f) or {}
+
+
+_ABSENT = object()
+
+
+def vendor_param(vendor: str, architecture: str, section: str, key: str, default):
+    """One `<section>.<key>` value of a vendor file, without copying the file — the per-op readers' entry
+    (kernels/wrappers._arch_param). `default` when the section or the key is absent; a mapping or list value comes
+    back as a copy. Raises like `get_vendor_config` when no file describes the architecture."""
+    path = CONFIG_ROOT / "vendors" / vendor / f"{architecture}.yml"
+    if not path.exists():
+        get_vendor_config(vendor, architecture)          # the refusal that names the missing profile
+    value = (_parsed_vendor_file(str(path)).get(section) or {}).get(key, _ABSENT)
+    if value is _ABSENT:
+        return default
+    return copy.deepcopy(value) if isinstance(value, (dict, list)) else value
 
 
 def list_families() -> list:
