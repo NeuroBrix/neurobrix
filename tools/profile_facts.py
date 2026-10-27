@@ -11,11 +11,11 @@ timer (`launcher.do_bench`), the device allocator's copies — never a vendor li
   host_matmul_gflops      a float32 GEMM on the host through numpy's BLAS, the machine's thread setting
   host_memory_gbps        a copy of a 1 GiB array in host memory, (read + write) bytes / time
   storage_read_gbps       a sequential read of a file the caller names (a weight shard of the cache)
-  weight_load_gbps        the ENGINE'S OWN LOADER on a component the caller names (`--weights <model>:<component>`,
-                          about `--weights-gb` of its block weights): bytes landed / time, per engine (triton,
-                          compiled), to the card ("device") and to host memory ("host": the host-held path of zero3
-                          and the expert stores), cold (the shards' pages evicted first, posix_fadvise DONTNEED) and
-                          warm (the same load again). A load is read + decode + convert + land — the cost a plan
+  weight_load_gbps        the ENGINE'S OWN LOADER on components the caller names (`--weights <model>:<component>,...`,
+                          about `--weights-gb` of each one's block weights): bytes landed / time, per engine (triton,
+                          compiled), per STORED dtype (what the loader converts from), to the card ("device") and to
+                          host memory ("host": the host-held path of zero3 and the expert stores), cold (the shards'
+                          pages evicted first, posix_fadvise DONTNEED) and warm (the same load again). A load is read + decode + convert + land — the cost a plan
                           pays, which a bare copy rate (h2d_gbps) is not (the rule-13 proof, 2026-10-27: Wan2.2 lazy
                           loads 123-173 s, Qwen3-30B 294-447 s, against estimates at the H2D rate)
 
@@ -198,6 +198,20 @@ def block_keys(root: Path, comp: str, gb: float):
     return keys, stored, used
 
 
+def stored_dtype(shards, keys) -> str:
+    """The safetensors dtype holding most of `keys`' stored bytes ("BF16", "F32", "F16") — a loader's rate depends on
+    what it converts from (bf16 widened on the card, fp32 narrowed by numpy, fp16 as is)."""
+    from neurobrix.triton.weight_loader import _read_header
+    want, by = set(keys), {}
+    for sh in shards:
+        h, _ = _read_header(str(sh))
+        for k, v in h.items():
+            if k in want:
+                a, b = v["data_offsets"]
+                by[v["dtype"]] = by.get(v["dtype"], 0) + b - a
+    return max(by, key=by.get)
+
+
 def weight_load_gbps(spec: str, gb: float) -> dict:
     """{engine: {"device"|"host": {"cold": GB/s, "warm": GB/s}}} — the engine's own loader on `model:component` of
     the cache, its first block weights up to `gb` GB (stored), bytes LANDED (device or host) per second."""
@@ -205,9 +219,10 @@ def weight_load_gbps(spec: str, gb: float) -> dict:
     model, comp = spec.split(":", 1)
     root = cache_dir() / model
     keys, stored, used = block_keys(root, comp, gb)
+    dtype = stored_dtype(used, keys)
     only = set(keys)
     rel = {f"components/{comp}/weights/{sh.name}": "cpu" for sh in used}
-    out = {"model": model, "component": comp, "stored_bytes": stored, "weights": len(keys)}
+    out = {"model": model, "component": comp, "stored_bytes": stored, "weights": len(keys), "dtype": dtype}
 
     def timed(load):
         t0 = time.perf_counter()
@@ -261,7 +276,8 @@ def main(argv=None) -> int:
     ap.add_argument("--out", required=True, type=Path, help="where the facts are written (an atelier root)")
     ap.add_argument("--storage-file", type=Path, default=None, help="a file to read for the storage bandwidth")
     ap.add_argument("--weights", default=None,
-                    help="model:component of the cache whose block weights the engines' loaders load (weight_load_gbps)")
+                    help="model:component[,model:component...] of the cache whose block weights the engines' loaders "
+                         "load (weight_load_gbps), one per stored dtype a plan meets (bf16, fp32, fp16)")
     ap.add_argument("--weights-gb", type=float, default=4.0, help="how many stored GB of them")
     ap.add_argument("--system-share", action="store_true",
                     help="also measure the system's share of the RAM (30 calm readings, 5 min; unified-memory hosts)")
@@ -282,7 +298,11 @@ def main(argv=None) -> int:
         facts["storage_read_gbps"] = storage_read_gbps(a.storage_file)
         facts["storage_file"] = str(a.storage_file)
     if a.weights is not None:
-        facts["weight_load_gbps"] = weight_load_gbps(a.weights, a.weights_gb)
+        # {engine: {stored dtype: {device|host: {cold, warm}}}}, one measured component per stored dtype named
+        runs = [weight_load_gbps(spec.strip(), a.weights_gb) for spec in a.weights.split(",") if spec.strip()]
+        facts["weight_load_gbps"] = {e: {r["dtype"]: r[e] for r in runs} for e in ("triton", "compiled")}
+        facts["weight_load_sources"] = [{k: r[k] for k in ("model", "component", "dtype", "stored_bytes", "weights")}
+                                        for r in runs]
     (out / f"facts_card{a.card}.json").write_text(json.dumps(facts, indent=1))
     src = f"measured {facts['date']} on card {a.card} (tools/profile_facts.py)"
     print(json.dumps(facts, indent=1))
@@ -294,10 +314,14 @@ def main(argv=None) -> int:
           f"  host_memory_gbps: {facts['host_memory_gbps']:.0f}")
     if "weight_load_gbps" in facts:
         wl = facts["weight_load_gbps"]
-        print(f"  weight_load_gbps:  # {wl['model']}:{wl['component']}, {wl['stored_bytes'] / 1e9:.1f} GB stored")
+        srcs = ", ".join(f"{r['model']}:{r['component']} {r['dtype']} {r['stored_bytes'] / 1e9:.1f} GB"
+                         for r in facts["weight_load_sources"])
+        print(f"  weight_load_gbps:  # the engines' loaders, GB/s landed — {srcs}")
         for engine in ("triton", "compiled"):
-            print(f"    {engine}: {{" + ", ".join(f"{w}: {{cold: {v['cold']:.2f}, warm: {v['warm']:.2f}}}"
-                                         for w, v in wl[engine].items()) + "}")
+            print(f"    {engine}:")
+            for dt, ws in wl[engine].items():
+                print(f"      {dt}: {{" + ", ".join(f"{w}: {{cold: {v['cold']:.2f}, warm: {v['warm']:.2f}}}"
+                                             for w, v in ws.items()) + "}")
     return 0
 
 

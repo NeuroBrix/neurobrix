@@ -37,3 +37,16 @@ def test_a_component_without_shards_is_refused_by_name(tmp_path):
     (tmp_path / "components" / "x" / "weights").mkdir(parents=True)
     with pytest.raises(SystemExit, match="no shard under"):
         PF.block_keys(tmp_path, "x", 1.0)
+
+
+def test_the_rate_is_keyed_by_the_dtype_holding_most_of_the_bytes(tmp_path):
+    w = tmp_path / "components" / "c" / "weights"
+    w.mkdir(parents=True)
+    header, off = {}, 0
+    for name, dt, n in (("block.0.a", "F32", 4000), ("block.0.b", "BF16", 1000)):
+        header[name] = {"dtype": dt, "shape": [n // (4 if dt == "F32" else 2)], "data_offsets": [off, off + n]}
+        off += n
+    raw = json.dumps(header).encode()
+    (w / "shard_000.safetensors").write_bytes(struct.pack("<Q", len(raw)) + raw + b"\0" * off)
+    assert PF.stored_dtype([w / "shard_000.safetensors"], ["block.0.a", "block.0.b"]) == "F32"
+    assert PF.stored_dtype([w / "shard_000.safetensors"], ["block.0.b"]) == "BF16"
