@@ -997,6 +997,8 @@ class ActivationProfiler:
         in_place_weight_reads: bool = False,
         attention_scratch=None,
         handed_inputs: bool = False,
+        deferred_inputs: Optional[frozenset] = None,
+        parked_outputs: Optional[frozenset] = None,
         conv3d_workspace=None,
         op_workspace=None,
         tiled_convs: Optional[Dict[str, int]] = None,
@@ -1016,6 +1018,10 @@ class ActivationProfiler:
 
         `handed_inputs`: the graph's `input::` tensors are its run's (`GraphExecutor._consumed_input_tids`), live
         before its first op and freed at their last use. False: they are its caller's, priced by the caller.
+        `deferred_inputs`: of those handed inputs, the ones the run binds only right before the first op that reads
+        them (a temporal stream's states parked on the host, `GraphExecutor` ParkedTensor): live from that op.
+        `parked_outputs`: graph outputs copied to the host by the op that makes them (a stream's state outputs,
+        `temporal_stream_runner.park_state`): on the card while that op runs, gone after it.
 
         `attention_scratch(batch, heads, Tq, Tk) -> bytes`: the scores an attention op writes WHILE it runs on a device
         whose compiled attention writes them (core/prism/attention_scratch.py; None elsewhere — the memory-efficient
@@ -1217,9 +1223,17 @@ class ActivationProfiler:
         from neurobrix.core.prism.runtime_widths import ExecutedWidths
         op_casts = widths.casts if isinstance(widths, ExecutedWidths) else {}
 
+        deferred_at: Dict[str, List[str]] = {}
         if handed_inputs:
             for tid in self.dag.get("input_tensor_ids", []):
                 if not str(tid).startswith("input::") or tid in live_tensors:
+                    continue
+                if deferred_inputs and tid in deferred_inputs:
+                    first = next((u for u in self.execution_order
+                                  if tid in (self.ops.get(u, {}).get("input_tensor_ids") or ())), None)
+                    if first is None:
+                        raise KeyError(f"ZERO FALLBACK: deferred input {tid!r}: no op of this graph reads it")
+                    deferred_at.setdefault(first, []).append(tid)
                     continue
                 tensor_meta = self.tensors.get(tid, {})
                 shape = self._resolve_shape(tensor_meta, symbol_map)
@@ -1270,6 +1284,17 @@ class ActivationProfiler:
         # Simulation loop
         for step, op_uid in enumerate(self.execution_order):
             op = self.ops.get(op_uid, {})
+            for tid in deferred_at.get(op_uid, ()):     # a parked input, bound right before its first reader
+                shape = self._resolve_shape(self.tensors.get(tid, {}), symbol_map)
+                if widths is not None:
+                    numel = 1
+                    for dim in shape:
+                        numel *= dim
+                    size = numel * widths[tid]
+                else:
+                    size = self._compute_size(shape, self.tensors.get(tid, {}), dtype_bytes)
+                live_tensors[tid] = size
+                current_bytes += size
             live_before_op[op_uid] = current_bytes
 
             # 1. ALLOCATE: Add output tensors
@@ -1375,6 +1400,9 @@ class ActivationProfiler:
                 if tid in live_tensors:
                     current_bytes -= live_tensors[tid]
                     del live_tensors[tid]
+            for tid in output_tids:
+                if parked_outputs and tid in parked_outputs and tid in live_tensors:
+                    current_bytes -= live_tensors.pop(tid)     # copied to the host by the op that made it
             if _curve_dump is not None:
                 _curve_dump.append((op_uid, op.get("op_type"), _in_op_dump, current_bytes))
 

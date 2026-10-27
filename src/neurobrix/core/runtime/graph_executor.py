@@ -35,6 +35,7 @@ if TYPE_CHECKING:  # R33: the ATen branch imports it; shared code only annotates
     import torch
 from neurobrix.core.runtime.tensor_compat import is_torch_tensor
 from neurobrix.core.runtime import liveness as _liveness
+from neurobrix.core.module.temporal_stream_runner import ParkedTensor
 import json
 import mmap
 import time
@@ -298,6 +299,7 @@ class GraphExecutor:
     # Inputs a caller hands over to each run (see `__init__`): none unless the caller declares them — a class
     # default, immutable, so an executor made without `__init__` (a test double) means the same.
     _consumed_input_tids: frozenset = frozenset()
+    _parked_inputs: Dict[str, Any] = {}     # {tid: ParkedTensor} of the run in flight (`_run_triton`), never mutated here
 
     #: Whether this executor serves the FLOW's by-name reads (the token embedding, the head,
     #: the norms, outside the graph) — so its load keeps every non-block key. False for a
@@ -3107,6 +3109,22 @@ class GraphExecutor:
                 m.pop(tid, None)
                 m.pop(name, None)
 
+    def _parked_first_readers(self, tids, order, ops) -> Dict[str, List[str]]:
+        """{op uid: [tensor id]}: where each parked input (`temporal_stream_runner.ParkedTensor`) comes back to the
+        card — right before the first op of `order` that reads it, as the plan prices it (`deferred_inputs`)."""
+        at: Dict[str, List[str]] = {}
+        left = set(tids)
+        for uid in order:
+            if not left:
+                break
+            hit = left.intersection((ops.get(uid) or {}).get("input_tensor_ids") or ())
+            for t in sorted(hit):
+                at.setdefault(uid, []).append(t)
+            left -= hit
+        if left:
+            raise KeyError(f"ZERO FALLBACK: no op of {self._component_name} reads its parked input {sorted(left)[0]!r}")
+        return at
+
     def _graph_input_tids(self, tensors_meta: dict) -> list:
         """`input::` tensor ids of the current DAG, cached.
 
@@ -3165,6 +3183,7 @@ class GraphExecutor:
         # op). Universal for any model with synthesis rules (PixArt,
         # Sana, Flex, SANA-Video, future diffusion).
         input_map = {}
+        parked: Dict[str, Any] = {}
         tensors_meta = self._dag.get("tensors", {})
         for tid in self._graph_input_tids(tensors_meta):
             input_name = tid[7:]
@@ -3180,7 +3199,9 @@ class GraphExecutor:
                 value = cur
             if value is None:
                 continue
-            if isinstance(value, NBXTensor):
+            if isinstance(value, ParkedTensor):
+                parked[tid] = value         # bound at its first reader by the engine
+            elif isinstance(value, NBXTensor):
                 input_map[tid] = value
             elif hasattr(value, 'data_ptr'):
                 # Cross-device safety. InputSynthesizer falls back to
@@ -3269,6 +3290,7 @@ class GraphExecutor:
                 input_map[tid] = val.unsqueeze(_cands[0])
         value = val = None              # the loops' last input, held by this frame otherwise
         self._drop_handed_inputs()
+        self._parked_inputs = parked
 
         if self.mode == "triton_sequential":
             raw_outputs, num_ops = self._run_triton_sequential(
@@ -3360,9 +3382,13 @@ class GraphExecutor:
         else:
             self._triton_seq.bind_weights(self._weights)
         self._triton_seq.bind_inputs(input_map)
-        self._triton_seq.bind_symbols(input_map)
+        parked, self._parked_inputs = self._parked_inputs, {}
+        if parked:
+            self._triton_seq.defer_inputs({tid: v.upload for tid, v in parked.items()})
+        self._triton_seq.bind_symbols({**input_map, **parked})     # a parked input's shape binds as any other's
         self._triton_seq.update_seq_dependent_constants()
         self._drop_handed_inputs(input_map)
+        parked = None
 
         effective_skip_kills = bool(skip_kills) if skip_kills is not None else False
         self._triton_seq.run(skip_kills=effective_skip_kills, pre_op_callback=cb)
@@ -3425,10 +3451,12 @@ class GraphExecutor:
         # Symbol resolver for symbolic shapes
         sym_ctx = self._dag.get("symbolic_context", {})
         sym_resolver = SymbolResolver(sym_ctx) if sym_ctx else None
+        parked, self._parked_inputs = self._parked_inputs, {}
         if sym_resolver:
-            sym_resolver.bind_from_inputs(input_map,
+            sym_resolver.bind_from_inputs({**input_map, **parked},     # a parked input's shape binds as any other's
                                           self._dag.get("input_tensor_ids", []),
                                           tensors)
+        parked_at = self._parked_first_readers(parked, exec_order, ops_meta) if parked else {}
         # The dispatcher resolves keyword attributes itself: a symbolic one evaluates through
         # this resolver (a scalar slot), never dropped as an unknown attribute.
         dispatcher.symbol_resolver = sym_resolver
@@ -3569,6 +3597,8 @@ class GraphExecutor:
             op_data = ops_meta.get(op_uid)
             if op_data is None:
                 continue
+            for _ptid in parked_at.get(op_uid, ()):     # a parked input comes back right before its first reader
+                store.update(dispatcher.bind_inputs({_ptid: parked.pop(_ptid).upload()}, tensors))
 
             if cb is not None:
                 try:
@@ -4329,8 +4359,8 @@ class GraphExecutor:
             else:
                 ctx.inputs[input_name] = val
 
-            # Collect tensors for symbolic shape binding
-            if is_torch_tensor(val):
+            # Collect tensors for symbolic shape binding (a parked input's shape binds as any other's)
+            if is_torch_tensor(val) or isinstance(val, ParkedTensor):
                 tensor_inputs[input_name] = val
             elif isinstance(val, dict):
                 tensor_inputs[input_name] = val
@@ -4808,10 +4838,15 @@ class GraphExecutor:
         import os as _os_nat
         _native_per = int(_os_nat.environ.get("NBX_NATIVE_LIVE_DUMP_EVERY", "0") or "0")
 
+        _parked = {n: v for n, v in self._ctx.inputs.items() if isinstance(v, ParkedTensor)}
+        _parked_at = self._parked_first_readers([f"input::{n}" for n in _parked], execution_order, ops) if _parked else {}
         for i, op_uid in enumerate(execution_order):
             # Read op_data DIRECTLY - no transformation
             op_data = ops[op_uid]
             op_type = op_data["op_type"]
+            for _ptid in _parked_at.get(op_uid, ()):     # a parked input comes back right before its first reader
+                _pn = _ptid[len("input::"):]
+                self._ctx.inputs[_pn] = self._native_entry(_pn, _parked.pop(_pn).upload())
 
             try:
                 # Execute op on default stream
@@ -4905,6 +4940,19 @@ class GraphExecutor:
             total_time_ms=0,  # Computed in run()
         )
 
+    def _native_entry(self, input_name: str, value):
+        """An input as the native engines take it at the component's entry: at the resolver's dtype
+        (`tensor_resolver.get_input_dtype`), on the executor's device."""
+        expected = TensorResolver(self._ctx).get_input_dtype(input_name)
+        if expected is not None and self._dtype_engine is not None and expected.is_floating_point:
+            expected = self._dtype_engine.storage_dtype(expected)
+        if expected is not None and value.dtype != expected:
+            value = value.to(expected)
+        # Move input to executor's device (critical for FGP/multi-device)
+        if str(value.device) != str(self.device):
+            value = value.to(self.device)
+        return value
+
     def _execute_compiled_graph(self) -> ExecutionStats:
         """
         Execute via CompiledSequence (Zero-Overhead Mode).
@@ -4984,6 +5032,7 @@ class GraphExecutor:
         # CRITICAL: Apply same dtype conversion as sequential mode (_prepare_execution)
         # Prism dtype (self.dtype) is source of truth for floating-point inputs
         input_map = {}
+        parked: Dict[str, Any] = {}
         assert self._ctx is not None
         for tid in self._graph_input_tids(tensors):
             input_name = tid[7:]  # Strip "input::"
@@ -5016,20 +5065,17 @@ class GraphExecutor:
             # used to narrow every float value to the compute dtype on its own, after the rule had
             # already been applied, and undid it (an fp32 timestep read back 2048 for 2049,
             # 2026-10-18).
-            if is_torch_tensor(value):
-                expected = TensorResolver(self._ctx).get_input_dtype(input_name)
-                if expected is not None and self._dtype_engine is not None and expected.is_floating_point:
-                    expected = self._dtype_engine.storage_dtype(expected)
-                if expected is not None and value.dtype != expected:
-                    value = value.to(expected)
-                # Move input to executor's device (critical for FGP/multi-device)
-                if str(value.device) != str(self.device):
-                    value = value.to(self.device)
-                input_map[tid] = value
+            if isinstance(value, ParkedTensor):
+                # bound at its first reader, through the same entry rule
+                parked[tid] = (lambda v=value, n=input_name: self._native_entry(n, v.upload()))
+            elif is_torch_tensor(value):
+                input_map[tid] = self._native_entry(input_name, value)
 
         assert self._compiled_seq is not None
         self._compiled_seq.bind_inputs(input_map)
-        value = None                    # the loop's last input, held by this frame otherwise
+        if parked:
+            self._compiled_seq.defer_inputs(parked)
+        value = parked = None           # the loop's last input, held by this frame otherwise
         self._drop_handed_inputs(input_map, self._ctx.inputs)
 
         # Bind symbolic shape resolver to CompiledSequence

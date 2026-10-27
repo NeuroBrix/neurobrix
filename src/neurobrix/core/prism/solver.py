@@ -5870,29 +5870,37 @@ class PrismSolver:
                 raise RuntimeError(f"ZERO FALLBACK: {comp_name}'s state {moved[0][0]} enters the next chunk as "
                                    f"{moved[0][1]} and leaves it as {moved[0][2]}: its chunks do not carry one dtype")
         peaks: Dict[tuple, int] = {}
+        # Parked (strategy D, Hocine 2026-10-27 11:01): between two chunks each state waits in host memory and comes
+        # back right before the op that first reads it (`GraphExecutor` ParkedTensor) — live on the card from that
+        # op, never the whole chunk; and copied out to the host, it no longer exists twice beside the chunk's output.
+        parked_inputs = frozenset(f"input::{s['name']}" for s in decl["states"])
 
-        def peak(kind: str, length: int) -> int:
-            if (kind, length) not in peaks:
+        def peak(kind: str, length: int, parked: bool = False) -> int:
+            if (kind, length, parked) not in peaks:
                 dag = decl["dags"][kind]
                 prof = ActivationProfiler(dag)
                 cic = dataclasses.replace(ic, chunk_frames=int(length))
                 widths = self._activation_widths(SimpleNamespace(name=comp_name, graph=dag), container, prof, cic,
                                                  comp_dtype, profile, seams=seams if kind == "next" else None)
-                peaks[(kind, length)] = int(prof.estimate_peak_memory(
+                deferred = frozenset(t for t in parked_inputs if t in dag["tensors"]) if parked else None
+                outs = {dag["tensors"][t].get("output_name"): t for t in dag.get("output_tensor_ids", [])}
+                parked_out = frozenset(outs[s["name"]] for s in decl["states"] if s["name"] in outs) if parked else None
+                peaks[(kind, length, parked)] = int(prof.estimate_peak_memory(
                     input_config=cic, dtype_bytes=dtype_bytes, widths=widths,
-                    attention_scratch=self._attention_scratch(profile), conv3d_workspace=self._conv3d_workspace(profile), op_workspace=self._op_workspace(profile), handed_inputs=True).peak_bytes)
-            return peaks[(kind, length)]
+                    attention_scratch=self._attention_scratch(profile), conv3d_workspace=self._conv3d_workspace(profile), op_workspace=self._op_workspace(profile), handed_inputs=True,
+                    deferred_inputs=deferred, parked_outputs=parked_out).peak_bytes)
+            return peaks[(kind, length, parked)]
 
         def chunk_out(kind: str, length: int) -> int:
             return tensor_bytes(clip, decl["output"]) * _ts.output_frames(decl, kind, length) // max(
                 1, _ts.clip_output_frames(clip, decl, smap))
 
-        def cost(sched) -> int:
-            per = [(peak("first" if i == 0 else "next", n), chunk_out("first" if i == 0 else "next", n))
+        def cost(sched, parked: bool = False) -> int:
+            per = [(peak("first" if i == 0 else "next", n, parked), chunk_out("first" if i == 0 else "next", n))
                    for i, n in enumerate(sched)]
-            c = held + max(max(p, y + 2 * states) for p, y in per)
+            c = held + max(max(p, y + (1 if parked else 2) * states) for p, y in per)
             if os.environ.get("NBX_PRISM_STREAM_DIAG") == "1":
-                print(f"[PRISM-STREAM-DIAG] {comp_name}: schedule {sched} held {held / 2**20:,.0f} MB, states "
+                print(f"[PRISM-STREAM-DIAG] {comp_name}: schedule {sched}{' parked' if parked else ''} held {held / 2**20:,.0f} MB, states "
                       f"{states / 2**20:,.0f} MB, chunk peaks {[round(p / 2**20) for p, _ in per]} MB -> "
                       f"{c / 2**20:,.0f} MB", flush=True)
             return c
@@ -5907,11 +5915,16 @@ class PrismSolver:
         if _driver is not None:
             _ratio, _limit = _driver
             fits_cost = (lambda c, r=_ratio, L=_limit: c * r <= L)
+        # the states stay on the card when a chunk fits so (no transfer); parked only when nothing fits otherwise
+        parked = False
         sched = _ts.choose(decl, frames, lambda sc: fits_cost(cost(sc)))
+        if sched is None and decl["states"]:
+            parked = True
+            sched = _ts.choose(decl, frames, lambda sc: fits_cost(cost(sc, True)))
         if sched is None:
             least = _ts.exact_schedule(decl, frames, 1)
             declined[comp_name] = (f"no exact chunk of its {frames} frames fits the card (the shortest chunks need "
-                                   f"{cost(least) / 2**20:,.0f} MB)" if least else
+                                   f"{cost(least, parked) / 2**20:,.0f} MB, states parked on the host)" if least else
                                    f"no exact schedule of its {frames} frames")
             return None
         bad = _ts.broken(decl, sched)
@@ -5921,7 +5934,7 @@ class PrismSolver:
         vc = decl.get("vendor_chunks")
         spec = {"schedule": list(sched), "frames": frames, "reference": "vendor" if vc else "clip",
                 "source": (vc or {}).get("source") or "derived from the clip graph (Forge temporal_stream)",
-                "activation_bytes": cost(sched), "states": len(decl["states"])}
+                "activation_bytes": cost(sched, parked), "states": len(decl["states"]), "park_states": parked}
         if room_bytes is not None and not fits_cost(spec["activation_bytes"]):
             declined[comp_name] = (f"its vendor's chunks {sched} need {spec['activation_bytes'] / 2**20:,.0f} MB, "
                                    f"over what the rung leaves it")
@@ -6016,6 +6029,7 @@ class PrismSolver:
                 "tiled_activation_bytes": cost, "tile_extent": tile}
         if stream_spec is not None:
             spec["tile_stream"] = stream_spec["schedule"]
+            spec["tile_stream_park"] = bool(stream_spec.get("park_states"))
         return spec
 
     def _run_dtype(self, comp_name: str) -> str:
@@ -9593,7 +9607,8 @@ def explain_plan(plan: "ExecutionPlan") -> str:
         lines.append(f"component tiling {name}: {short}")
     for name, spec in (getattr(plan, "component_stream", None) or {}).items():
         lines.append(f"temporal stream {name}: chunks {spec.get('schedule')} of {spec.get('frames')} frames, "
-                     f"reference {spec.get('reference')}, {spec.get('states')} states")
+                     f"reference {spec.get('reference')}, {spec.get('states')} states"
+                     + (" parked on the host between chunks" if spec.get("park_states") else ""))
     for name, why in (getattr(plan, "stream_declined", None) or {}).items():
         lines.append(f"temporal stream {name}: not run — {why}")
     if not plan.runtime_op_tiling and not plan.component_tiling:

@@ -3059,6 +3059,27 @@ class TritonSequence:
                     tensor = transfer_tensor(tensor, self.device_idx)
                 self._arena[slot] = tensor
 
+    def defer_inputs(self, providers) -> None:
+        """Bind each input of `providers` ({tensor id: () -> tensor}) only right before the FIRST op that reads it, for
+        the next run alone. A temporal stream's carried states, parked on the host between two chunks, come back to the
+        device one at a time at their reader instead of all at the chunk's start (`core/module/temporal_stream_runner`
+        ParkedTensor; mochi-1-preview's VAE carried ~5 GB of them through every chunk, 2026-10-27). An input no op reads,
+        or one this graph does not hold, is refused by name."""
+        at = {}
+        for tid, provide in providers.items():
+            slot = self._tid_to_slot.get(tid)
+            if slot is None:
+                raise KeyError(f"ZERO FALLBACK: defer_inputs: {tid!r} is not a tensor of this graph")
+            first = next((i for i, op in enumerate(self._ops) if slot in (op.all_input_slots or ())), None)
+            if first is None:
+                raise KeyError(f"ZERO FALLBACK: defer_inputs: no op reads {tid!r}")
+            at.setdefault(first, []).append((tid, provide))
+        self._deferred_at = at
+
+    def _bind_deferred(self, op_idx: int) -> None:
+        for tid, provide in self._deferred_at.pop(op_idx, ()):
+            self.bind_inputs({tid: provide()})   # the cast and the device move every input gets
+
     def bind_symbols(self, inputs: dict):
         """Bind symbolic shapes from actual input tensors."""
         if self._symbol_resolver:
@@ -3176,6 +3197,8 @@ class TritonSequence:
                     self._inv_replay_noted = True
                     print(f"[Replay] declined for {self.dag.get('component_name')}: it keeps an invariant state "
                           f"(state engine step 4), which a frozen launch plan cannot refill", flush=True)
+            elif _replay.ENABLED and getattr(self, "_deferred_at", None):
+                pass        # a parked input binds at its first reader; a frozen plan launches with every input bound
             elif _replay.ENABLED and (not self._is_multi_device
                                       or _replay.MULTIDEV_PROOF):
                 if _replay.maybe_run(self, skip_kills, pre_op_callback):
@@ -3210,6 +3233,7 @@ class TritonSequence:
                     _inv.release()
                 raise
             finally:
+                self._deferred_at = None    # a parked input not bound by this run is never bound by the next
                 # the loops name each op for the keys it forms (census `set_op`); once the sequence
                 # returns, a key a flow forms between components is charged to no op
                 from neurobrix.kernels import census as _key_census
@@ -3676,7 +3700,10 @@ class TritonSequence:
         from neurobrix.kernels import census as _key_census
         _key_ops = _key_census.recording()
         _skip = getattr(self, "_run_skip", None)
+        _defer = getattr(self, "_deferred_at", None)
         for op_idx, op in enumerate(self._ops):
+            if _defer and op_idx in _defer:
+                self._bind_deferred(op_idx)     # a parked input comes back right before its first reader
             if _skip is not None and _skip[op_idx]:
                 continue                    # an invariant op: its outputs are the kept state's
             if _key_ops:
@@ -4423,7 +4450,10 @@ class TritonSequence:
         from neurobrix.kernels import census as _key_census
         _key_ops = _key_census.recording()
         _skip = getattr(self, "_run_skip", None)
+        _defer = getattr(self, "_deferred_at", None)
         for op_idx, op in enumerate(self._ops):
+            if _defer and op_idx in _defer:
+                self._bind_deferred(op_idx)     # a parked input comes back right before its first reader
             if _key_ops:
                 _key_census.set_op(op.op_uid)     # every key this op forms is recorded with it
             if _watch_slot >= 0 and arena[_watch_slot] is not _watch_ref:

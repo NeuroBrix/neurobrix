@@ -70,14 +70,58 @@ def materialize_state(x: Any, dim: int, start: int, end: int, step: int = 1, *re
 materialize_state.self_manages_dtype = True        # a copy keeps its source's dtype; no AMP rule applies
 
 
+class ParkedTensor:
+    """A tensor waiting in host memory between two runs (strategy D, Hocine 2026-10-27 11:01): a temporal stream's
+    state, copied to pinned host memory by the op that makes it and handed to the next chunk, whose engine binds it
+    right before the first op that reads it (`GraphExecutor`, the sequences' `defer_inputs`) — on the card from that
+    op only, as the plan prices it (`ActivationProfiler.estimate_peak_memory` parked_outputs / deferred_inputs).
+    mochi-1-preview's VAE carries 38 states, 5 GB at 480x848, beside chunks of 6 GB.
+
+    It carries the shape and dtype a symbol binding reads, and comes back to its device ONCE (`upload`): a second
+    upload is refused by name, never a stale copy."""
+
+    __slots__ = ("_host", "shape", "dtype", "_device")
+
+    def __init__(self, t: Any):
+        if _is_nbx(t):
+            self._host = t.to_cpu(pinned=t._device == "cuda")
+            self._device = getattr(t, "_device_idx", 0) if t._device == "cuda" else None
+        else:
+            import torch
+            self._host = torch.empty(tuple(t.shape), dtype=t.dtype, pin_memory=t.is_cuda)
+            self._host.copy_(t)
+            self._device = t.device
+        self.shape = tuple(t.shape)
+        self.dtype = t.dtype
+
+    def upload(self) -> Any:
+        h, self._host = self._host, None
+        if h is None:
+            raise RuntimeError("ZERO FALLBACK: a parked tensor is uploaded once; this one already was")
+        if _is_nbx(h):
+            return h if self._device is None else h.to_cuda(self._device)
+        return h.to(self._device)
+
+
+def park_state(x: Any, dim: int, start: int, end: int, step: int = 1, *rest, **kwargs) -> ParkedTensor:
+    """A state's suffix slice, copied to the host where it is produced (`materialize_state`, then `ParkedTensor`):
+    its device copy lives while this op runs only."""
+    return ParkedTensor(materialize_state(x, dim, start, end, step, *rest, **kwargs))
+
+
+park_state.self_manages_dtype = True
+
+
 #: the op uid of a temporal stream's state outputs (`stream.state_out::<k>`): the stream's own boundary, where a
 #: chunk's state is copied out and what the chunk before it produced is dead
 STATE_OUT_PREFIX = "stream.state_out::"
 
 
-def state_interceptors(decl: Dict[str, Any]) -> Dict[str, Any]:
-    """The interceptors a chunk executor runs its state outputs through: {op uid: materialize_state}."""
-    return {f"{STATE_OUT_PREFIX}{k}": materialize_state for k in range(len(decl["states"]))}
+def state_interceptors(decl: Dict[str, Any], park: bool = False) -> Dict[str, Any]:
+    """The interceptors a chunk executor runs its state outputs through: {op uid: materialize_state}, or park_state
+    when the plan parks the states on the host (`park_states` in its stream spec)."""
+    f = park_state if park else materialize_state
+    return {f"{STATE_OUT_PREFIX}{k}": f for k in range(len(decl["states"]))}
 
 
 def _key(t_meta: Dict[str, Any], tid: str) -> str:
@@ -138,7 +182,9 @@ def run_stream(decl: Dict[str, Any], schedule: List[int], x: Any, input_name: st
         missing = [s["name"] for s in decl["states"] if s["name"] not in result]
         if missing:
             raise KeyError(f"temporal stream: chunk {i} returned no state {missing[0]!r}")
-        states = {s["name"]: _copy(result[s["name"]]) for s in decl["states"]}
+        # a parked state is already on the host, out of the run's memory; a state on the card is copied out of it
+        states = {s["name"]: (result[s["name"]] if isinstance(result[s["name"]], ParkedTensor)
+                              else _copy(result[s["name"]])) for s in decl["states"]}
         del result, y
         if release is not None:
             release(kind)

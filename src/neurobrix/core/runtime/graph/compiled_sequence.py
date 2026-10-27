@@ -407,6 +407,7 @@ class CompiledSequence:
         '_is_multi_device',  # FGP: True when weights span multiple devices
         '_persistent_tensor_ids',  # Protected from liveness GC (e.g., hidden states for LLM)
         '_consumed_input_tids',  # inputs handed over to the run: freed at their last use, not protected
+        '_deferred_at',  # {op index: [(tid, provider)]}: parked inputs bound right before their first reader
         '_config_constants',  # profile.json architectural ints, protected from value-matched shape rewrites
         '_op_interceptors',  # Op interceptors for KV cache (maps op_type -> interceptor)
         '_op_uid_interceptors',  # Fine-grained per-op_uid interceptors for op-level tiling
@@ -539,6 +540,7 @@ class CompiledSequence:
         # op instance, e.g. only aten.convolution::62 for Sana 4Kpx fusion).
         # Checked BEFORE op_type interceptors so a per-uid hook wins.
         self._op_uid_interceptors: Dict[str, Callable] = {}
+        self._deferred_at = None
         # The graph's recorded K/V layout per attention op (filled at compile;
         # see GraphExecutor._mark_sdpa_k_layout). It is a slot like every
         # other piece of per-instance state on this class — assigning an
@@ -3310,6 +3312,27 @@ class CompiledSequence:
         if slot is not None:
             self._arena[slot] = tensor
 
+    def defer_inputs(self, providers) -> None:
+        """Bind each input of `providers` ({tensor id: () -> tensor}) only right before the FIRST op that reads it, for
+        the next run alone. A temporal stream's carried states, parked on the host between two chunks, come back to the
+        device one at a time at their reader instead of all at the chunk's start (`core/module/temporal_stream_runner`
+        ParkedTensor; mochi-1-preview's VAE carried ~5 GB of them through every chunk, 2026-10-27). An input no op reads,
+        or one this graph does not hold, is refused by name."""
+        at = {}
+        for tid, provide in providers.items():
+            slot = self._tensor_id_to_slot.get(tid)
+            if slot is None:
+                raise KeyError(f"ZERO FALLBACK: defer_inputs: {tid!r} is not a tensor of this graph")
+            first = next((i for i, op in enumerate(self._ops) if slot in (op.all_input_slots or ())), None)
+            if first is None:
+                raise KeyError(f"ZERO FALLBACK: defer_inputs: no op reads {tid!r}")
+            at.setdefault(first, []).append((tid, provide))
+        self._deferred_at = at
+
+    def _bind_deferred(self, op_idx: int) -> None:
+        for tid, provide in self._deferred_at.pop(op_idx, ()):
+            self.bind_tensor(tid, provide())
+
     def bind_symbols(self, resolver) -> None:
         """
         Bind the symbolic shape resolver for runtime symbol resolution.
@@ -3388,6 +3411,8 @@ class CompiledSequence:
                 if inv is not None:
                     inv.release()
                 raise
+            finally:
+                self._deferred_at = None    # a parked input not bound by this run is never bound by the next
             if inv is not None and skip is None:
                 inv.end(arena)
             if census is not None:
@@ -3588,7 +3613,10 @@ class CompiledSequence:
         # NaN-guard counters for summary (only if verbose)
         nan_guard_triggers = [] if nan_guard_verbose else None
 
+        _defer = getattr(self, "_deferred_at", None)
         for op_idx, op in enumerate(self._ops):
+            if _defer and op_idx in _defer:
+                self._bind_deferred(op_idx)     # a parked input comes back right before its first reader
             if skip is not None and skip[op_idx]:
                 continue                    # an invariant op: its outputs are the kept state's
             # Resolve args via pre-compiled closures (no isinstance!)
@@ -3977,7 +4005,10 @@ class CompiledSequence:
         # single-device backend there is no selection to make, and asking
         # torch for one it was not built with raises.
         set_torch_device(_current_device_idx)
+        _defer = getattr(self, "_deferred_at", None)
         for op_idx, op in enumerate(self._ops):
+            if _defer and op_idx in _defer:
+                self._bind_deferred(op_idx)     # a parked input comes back right before its first reader
             if pre_op_callback is not None:
                 pre_op_callback(op_idx, op)
             if skip is not None and skip[op_idx]:

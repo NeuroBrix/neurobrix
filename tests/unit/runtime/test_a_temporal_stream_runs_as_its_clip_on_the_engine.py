@@ -227,3 +227,77 @@ def test_a_handed_state_is_freed_at_its_last_use(mode, device):
     alive = sorted(k for k, r in refs.items() if r() is not None)
     assert not alive, f"{mode}: {len(alive)} handed input(s) still alive once the run returned, e.g. {alive[:3]}"
     assert result
+
+
+@pytest.mark.parametrize("mode,device", MODES)
+@pytest.mark.parametrize("model,comp,shape,schedule", CASES, ids=[f"{m}/{c}" for m, c, _, _ in CASES])
+def test_the_engine_runs_the_parked_stream_as_the_clip(model, comp, shape, schedule, mode, device):
+    """States PARKED on the host between chunks (strategy D, Hocine 2026-10-27 11:01; the plan's `park_states`): each
+    state is copied to the host by the op that makes it (`park_state`) and comes back to the card right before the
+    first op of the next chunk that reads it (`ParkedTensor`, the sequences' `defer_inputs`). The stream must still
+    be the clip. Red if a parked state is bound to the wrong tensor, never bound (the run reads nothing there), or
+    bound after its reader."""
+    container, decl = _case(model, comp)
+    clip_dag = json.loads((container / "components" / comp / "graph.json").read_text())
+    whole = _executor(container, comp, clip_dag, mode, device)
+    whole.load_weights(str(container), comp)
+    from neurobrix.core.module.temporal_stream_runner import ParkedTensor, handed_inputs, state_interceptors
+    pieces = {k: LayerStreamingStrategy._piece_executor(whole, decl["dags"][k], comp, whole,
+                                                        consumed_inputs=handed_inputs(decl["dags"][k]))
+              for k in ("first", "next")}
+    for p in pieces.values():
+        p.register_op_uid_interceptors(state_interceptors(decl, park=True))
+        p.load_weights(str(container), comp)
+    input_name = clip_dag["tensors"][decl["input"]]["input_name"]
+    out_name = clip_dag["tensors"][decl["output"]].get("output_name") or decl["output"]
+    torch.manual_seed(0)
+    x = _input(torch.randn(shape, dtype=torch.float32), mode, device)
+    ref = _host(whole.run({input_name: x})[out_name])
+    parked = []
+
+    def run_first(inputs):
+        out = pieces["first"].run(inputs)
+        parked.extend(type(out[s["name"]]) is ParkedTensor for s in decl["states"])
+        return out
+    got = _host(run_stream(decl, schedule, x, input_name, run_first, pieces["next"].run))
+    assert parked and all(parked), "the first chunk's states did not leave the run parked on the host"
+    rel = float((got - ref).abs().max() / ref.abs().max())
+    assert rel < BOUND, f"{model}/{comp} {mode}: the parked stream differs from the clip by {rel:.2e}"
+
+
+def test_a_parked_state_comes_back_at_its_first_reader():
+    """The compiled sequence binds each parked state right before the FIRST op that reads it (`defer_inputs`), never
+    at the chunk's start — where Prism prices it (`deferred_inputs`). Red if the states are bound with the chunk (no
+    deferred binding at all) or at another op than their first reader."""
+    container, decl = _case("Wan2.1-T2V-1.3B", "vae")
+    from neurobrix.core.module.temporal_stream_runner import handed_inputs, state_interceptors
+    from neurobrix.core.runtime.graph.compiled_sequence import CompiledSequence
+    clip_dag = json.loads((container / "components" / "vae" / "graph.json").read_text())
+    whole = _executor(container, "vae", clip_dag, "compiled", "cpu")
+    whole.load_weights(str(container), "vae")
+    pieces = {k: LayerStreamingStrategy._piece_executor(whole, decl["dags"][k], "vae", whole,
+                                                        consumed_inputs=handed_inputs(decl["dags"][k]))
+              for k in ("first", "next")}
+    for p in pieces.values():
+        p.register_op_uid_interceptors(state_interceptors(decl, park=True))
+        p.load_weights(str(container), "vae")
+    out = pieces["first"].run({"z": torch.randn(1, 16, 2, 4, 4)})
+    ins = {s["name"]: out[s["name"]] for s in decl["states"]}
+    ins["z"] = torch.randn(1, 16, 1, 4, 4)
+    seen = []
+    real = CompiledSequence._bind_deferred
+
+    def spy(self, op_idx):
+        seen.extend((op_idx, tid) for tid, _ in self._deferred_at.get(op_idx, ()))
+        return real(self, op_idx)
+    CompiledSequence._bind_deferred = spy
+    try:
+        pieces["next"].run(ins)
+    finally:
+        CompiledSequence._bind_deferred = real
+    seq = pieces["next"]._compiled_seq
+    want = set()
+    for s in decl["states"]:
+        slot = seq._tensor_id_to_slot[f"input::{s['name']}"]
+        want.add((next(i for i, op in enumerate(seq._ops) if slot in (op.all_input_slots or ())), f"input::{s['name']}"))
+    assert set(seen) == want and len(seen) == len(want), (sorted(set(seen) ^ want)[:4], len(seen), len(want))

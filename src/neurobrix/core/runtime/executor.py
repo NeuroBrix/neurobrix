@@ -1407,6 +1407,9 @@ class RuntimeExecutor:
         from neurobrix.core.strategies.layer_streaming import LayerStreamingStrategy
         cache_path = ensure_extracted(Path(self._nbx_path_str))
         memo = self.__dict__.setdefault("_stream_runtime", {})
+        park = bool(spec.get("park_states"))
+        if memo.get(comp_name, (None, None, park))[2] != park:
+            memo.pop(comp_name)                 # the pieces were built for the other state placement
         if comp_name not in memo:
             decl = _ts.load(cache_path, comp_name)
             if decl is None:
@@ -1419,9 +1422,9 @@ class RuntimeExecutor:
                       for k in ("first", "next")}
             for p in pieces.values():
                 # each state copied where it is produced, so its source frees at its last consumer
-                p.register_op_uid_interceptors(state_interceptors(decl))
-            memo[comp_name] = (decl, pieces)
-        decl, pieces = memo[comp_name]
+                p.register_op_uid_interceptors(state_interceptors(decl, park))
+            memo[comp_name] = (decl, pieces, park)
+        decl, pieces, _ = memo[comp_name]
         params = getattr(executor, "_weight_loading_params", None) or {}
         for p in pieces.values():
             p.load_weights(params.get("nbx_path", self._nbx_path_str), comp_name, params.get("shard_map"))
@@ -1460,7 +1463,7 @@ class RuntimeExecutor:
             raise RuntimeError(f"ZERO FALLBACK: '{comp_name}' tiles one input, {input_name!r}; the run gives "
                                f"{sorted(comp_inputs)}")
         if spec.get("tile_stream"):
-            stream_spec = dict(spec, schedule=list(spec["tile_stream"]))
+            stream_spec = dict(spec, schedule=list(spec["tile_stream"]), park_states=spec.get("tile_stream_park"))
 
             def run_tile(tile):
                 return self._run_temporal_stream(comp_name, executor, {input_name: tile}, stream_spec)
