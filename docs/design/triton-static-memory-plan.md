@@ -66,7 +66,7 @@ One plan per (sequence, shape bucket) — the bucket the replay already keys by 
 
 1-2 days for the engine side and its proof on CUDA, the Mac's Metal proof in parallel.
 
-## First implementation and what it taught (2026-10-27 23:40, the Dell)
+## First implementation and what it taught (2026-10-27 22:4x, the Dell)
 
 Branch triton-static-memory-plan: `DeviceAllocator` records / plans per (op, k-th allocation of the op), the single-device
 hot loop names its op and drains each op while recording, a bucket is planned after `PLAN_RECORDS` recorded runs whose
@@ -83,3 +83,10 @@ What it cannot do as recorded, and the next cut:
   the graph tensors is computed statically (the same `assign_offsets` Prism prices with), and only the wrappers' own
   temporaries (declared per op in `core/prism/op_workspace.py`) stay with the allocator. An allocation whose size the
   static plan did not derive is refused by name — that is the contract the price needs.
+
+Agreed with the Mac (2026-10-27 22:48): the static plan before the first run is the cut. Metal: an address inside an
+allocation already resolves to its (MTLBuffer, offset) (`metal_device.buffer_for_pointer`), so a workspace slice works
+as is; ONE workspace may exceed the device's largest allocation (`maxBufferLength`, the profile's `max_allocation_mb`):
+the plan splits into workspaces each within it (intervals placed per workspace; a single tensor over it refused by
+name) and Prism prices the same split; Metal has one queue, so a reused offset is ordered without a sync, as on one
+CUDA stream.
