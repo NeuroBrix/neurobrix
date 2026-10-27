@@ -113,6 +113,7 @@ class LayerStreamingStrategy(ExecutionStrategy):
     def __init__(self, context, strategy_name: str):
         super().__init__(context, strategy_name)
         self._segment_executors: Dict[str, List[Any]] = {}
+        self._installed_pieces: Dict[str, List[Any]] = {}   # the pieces `install_for_executor` runs, per component
         self._installed: set = set()
         self._cut_verified: set = set()
         self._non_block: Dict[str, set] = {}
@@ -495,6 +496,9 @@ class LayerStreamingStrategy(ExecutionStrategy):
         # reads comes to its device and every other value — the declared outputs excepted — is parked. The rule
         # Prism's `LayerPartitioner._greedy_swapped` priced: a piece holds its weights, its inputs and what it makes.
         swapped = component_name in (getattr(self.context, "layer_swapped", None) or ())
+        # The pieces Prism holds between the component's runs (`layer_stream_resident`): loaded at the first run, kept
+        # loaded until the component is released (`uninstall_for_executor`); the others load and unload around each run.
+        held = (getattr(self.context, "layer_resident", None) or {}).get(component_name) or frozenset()
         for i, (seg_exec, produced) in enumerate(zip(pieces, produced_by)):
             sub = seg_exec._dag
             needed = sub.get("segment_input_names") or []
@@ -519,7 +523,8 @@ class LayerStreamingStrategy(ExecutionStrategy):
                 seg_exec.protect_tensor_id(tid)
             # This piece's weights, and only this piece's: the executor asks its own dag
             # what it consumes.
-            seg_exec.load_weights(nbx_path, component_name)
+            if i not in held or not getattr(seg_exec, "_weights_loaded", False):
+                seg_exec.load_weights(nbx_path, component_name)
             _reset_segment_peak(seg_exec)
             try:
                 out = seg_exec.run(feed, *args, **kwargs) or {}
@@ -527,9 +532,10 @@ class LayerStreamingStrategy(ExecutionStrategy):
                 print(f"   [{component_name}] segment {sub.get('segment_index')} computed: "
                       f"{_segment_memory_line(seg_exec)}", flush=True)
             finally:
-                # Released before the next piece loads. This is the residency the plan was
-                # budgeted against.
-                seg_exec.unload_weights()
+                # Released before the next piece loads — a held piece excepted. This is the residency the plan
+                # was budgeted against.
+                if i not in held:
+                    seg_exec.unload_weights()
             lost = sorted(t for t in protected & produced if t not in capture)
             if lost:
                 raise RuntimeError(
@@ -571,6 +577,15 @@ class LayerStreamingStrategy(ExecutionStrategy):
             result[key] = values[key]
         return result
 
+    def uninstall_for_executor(self, component_name: str, executor) -> None:
+        """The component is released (`RuntimeExecutor._unload_component_weights`): its held pieces
+        (`layer_stream_resident`) release their weights with it. The segmentation stays installed — the next load
+        finds it (`install_for_executor` is idempotent) and the held pieces load again at their first run."""
+        for seg_exec in [*(self._segment_executors.get(component_name) or ()),
+                         *(self._installed_pieces.get(component_name) or ())]:
+            if getattr(seg_exec, "_weights_loaded", False):
+                seg_exec.unload_weights()
+
     def install_for_executor(self, component_name: str, executor) -> bool:
         """Make this component's own executor run segment by segment.
 
@@ -595,6 +610,7 @@ class LayerStreamingStrategy(ExecutionStrategy):
         self._installed.add(component_name)
 
         segments = self._build_segment_executors(component_name)
+        self._installed_pieces[component_name] = segments
 
         # The base executor's constants are now dead, and they are not small.
         #
