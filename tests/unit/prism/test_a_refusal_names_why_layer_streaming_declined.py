@@ -66,23 +66,22 @@ def _refusal(monkeypatch, rung, force):
 
 
 @pytest.mark.parametrize("mode", ["compiled", "triton"])
-def test_pixart_at_2048x1024_batch_2_on_the_pinned_mac_is_refused_from_the_single_site_naming_the_vae(monkeypatch, mode):
-    """Until 2026-10-17 this request planned under layer_streaming: the VAE took its vendor's tiled decode. That
-    declaration is retired (decision 20:08: a vendor declaration is the vendor's reference cut or none — PixArt's model
-    card decodes whole), and the VAE's mid-block attention couples space, so no exact cut exists; at batch 2 its
-    activations peak at 5,120 MB against this pinned Mac's 3,768 MB rung, and the host as pinned (11,198 MB free)
-    cannot hold the CPU rungs either. The exact ladder is exhausted, so Prism refuses from its ONE site, naming the
-    component and the figure — in both engines. A wrong cut is never the way down."""
+def test_pixart_at_2048x1024_batch_2_on_the_pinned_mac_slices_its_vae_from_its_group_norms(monkeypatch, mode):
+    """Until 2026-10-27 this request was refused from the single site naming the VAE: its group norms read the whole
+    image, so no stretch of it could be sliced, and at batch 2 its activations peak at 5,120 MB against this pinned
+    Mac's 3,768 MB rung. The exact two-pass tiled norm (step 2, the supervisor's decision 2026-10-27 11:15: statistics
+    over the whole input, each slice normalised with them) makes a group norm a stretch's FIRST op: the VAE's stretches
+    from its norms now run in slices along the image's axes, the mid-block attention whole. Both engines plan it; a
+    stretch that started anywhere but a norm or ran through one would be a wrong cut (`layer_partition`'s grow rule)."""
     pin_host(monkeypatch, 24576, 11198, "the Mac's reading")
     impose_rung(monkeypatch, 4096)
     monkeypatch.delenv("NBX_FORCE_STRATEGY", raising=False)
-    with pytest.raises(RuntimeError) as err:
-        PrismSolver().solve_smart(NBXContainer.load(str(container_root("PixArt-XL-2-1024-MS"))),
+    p = PrismSolver().solve_smart(NBXContainer.load(str(container_root("PixArt-XL-2-1024-MS"))),
                                   profile(APPLE_M4_PRO), InputConfig(batch_size=2, height=2048, width=1024), mode=mode)
-    text = str(err.value)
-    assert "This model cannot run on this machine" in text, text[:300]
-    assert "cpu_streaming" in text.split("ALL FAILED")[0], "the ladder was not descended to the CPU"
-    assert "'vae'" in text and "MB" in text, text[-600:]
+    assert p.strategy == "layer_streaming", p.strategy
+    stretches = (getattr(p, "layer_stream_chunks", None) or {}).get("vae") or []
+    assert stretches, "the VAE runs whole: its activations do not fit the rung"
+    assert all(str(s["first_op"]).startswith("aten.native_group_norm::") for s in stretches), stretches
 
 
 def test_a_forced_streaming_refusal_says_why_it_declined(monkeypatch):
