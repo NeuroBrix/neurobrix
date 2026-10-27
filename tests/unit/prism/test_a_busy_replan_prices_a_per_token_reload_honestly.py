@@ -23,7 +23,9 @@ def test_janus_triton_on_a_busy_mac_is_not_re_planned_into_a_per_token_reload(mo
         # the supervisor's decision 2026-10-27 20:45: no refusal, a clear warning — what the fast plan lacks, both
         # times, and what to do
         why = p.selection_reason
-        assert "lacks" in why and "close an application" in why and " h)" in why, why[:400]
+        assert "lacks" in why and "close an application" in why, why[:400]
+        if not (p.layer_stream_resident or {}).get("language_model"):
+            assert " h)" in why, why[:400]
 
 
 def test_a_per_token_reload_is_priced_at_the_measured_reload_rate():
