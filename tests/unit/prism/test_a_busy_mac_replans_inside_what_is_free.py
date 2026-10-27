@@ -119,3 +119,21 @@ def test_a_lazy_plan_that_fits_its_phases_stays_lazy(monkeypatch):
     c, ic = _input_config("Janus-Pro-7B", "triton")
     p = PrismSolver().solve_smart(c, profile(V100_16GB), ic, mode="triton")
     assert p.strategy == "lazy_sequential", p.strategy
+
+
+def test_weight_sharding_never_divides_activations(monkeypatch):
+    """Four V100-16GB: Sana_1600M_4Kpx's VAE (one weight file, ~20 GB of activations) was placed whole on one card by
+    weight_sharding, its activations divided by the card count (the 4-card coverage, 2026-10-27: a 16 GB rms_norm no
+    card runs). Sharding splits weight files, never an op's activations: the plan streams the VAE instead. RED before."""
+    import copy
+    from tests.unit.prism._pinned_machine import V100_16GB, pin_dedicated_card, profile
+    from tests.unit.prism.test_a_component_over_the_rung_streams_inside_itself import _input_config
+    from neurobrix.core.prism import PrismSolver
+    four = copy.deepcopy(V100_16GB); four["id"] = "scenario-4xv100-16gb"
+    four["devices"] = [dict(V100_16GB["devices"][0], index=i) for i in range(4)]
+    no_door(monkeypatch)
+    pin_host(monkeypatch, 257530, 200000, "an idle rack host")
+    pin_dedicated_card(monkeypatch, 16151, 306, "four idle V100-16GB")
+    c, ic = _input_config("Sana_1600M_4Kpx_BF16", "triton")
+    p = PrismSolver().solve_smart(c, profile(four), ic, mode="triton")
+    assert p.strategy != "weight_sharding", p.strategy

@@ -5546,6 +5546,13 @@ class PrismSolver:
 
             model_dtype = self._get_component_dtype(container, comp_name)   # refuses an undeclared name
 
+            # Sharding distributes WEIGHT FILES; a component held in fewer than two cannot be split by it, and no file
+            # split moves an op's activations off the card that runs it (Sana_1600M_4Kpx's VAE, one file and 20 GB of
+            # activations, was placed whole on one card of 16 GB under the 4-card profile, its activations "divided" by
+            # 4 — the 4-card coverage, 2026-10-27, met a 16 GB rms_norm no card can run)
+            if len(shard_sizes.get(comp_name, {}) or {}) < 2:
+                return None
+
             # Determine if attention dominates (for smarter sharding)
             attn_per_block_mb = mem.attention_per_block_bytes / (1024 * 1024) if mem.attention_dominates else 0
 
@@ -5554,7 +5561,9 @@ class PrismSolver:
             for n in range(2, len(available) + 1):
                 cost_mult = available[0].get_cost_multiplier(model_dtype)
                 weight_per_gpu = (mem.weight_mb * cost_mult) / n
-                act_per_gpu = (attn_per_block_mb / n) if attn_per_block_mb > 0 else (mem.activation_mb / n)
+                # the weights divide across the n cards; the activations do not — every card that runs an op holds
+                # that op's activations (an attention-dominated component holds one block's at a time)
+                act_per_gpu = attn_per_block_mb if attn_per_block_mb > 0 else mem.activation_mb
                 overhead = (weight_per_gpu + act_per_gpu) * 0.1 if act_per_gpu > 0 else 0
                 per_gpu_total = weight_per_gpu + act_per_gpu + overhead
 
