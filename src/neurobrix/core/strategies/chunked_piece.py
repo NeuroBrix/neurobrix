@@ -226,7 +226,9 @@ class ChunkedPiece:
         def norm_slice(x, weight, bias, n, c, hw, group, eps, *rest, **kw):
             mean, rstd = self._norm_stats[uid]
             return group_norm_apply(x, weight, bias, int(group), mean, rstd)
-        norm_slice.self_manages_dtype = True
+        # the compiled engine's norm returns its fp32 output itself; on the Triton engine the DtypeEngine wraps the
+        # interceptor as it wraps the op it replaces (its operand casts and its output contract)
+        norm_slice.self_manages_dtype = not str(getattr(self._holder, "mode", "")).startswith("triton")
         return norm_slice
 
     def _pins_of(self, cp: Any, plan: Any, graph: Dict[str, Any]) -> Set[str]:

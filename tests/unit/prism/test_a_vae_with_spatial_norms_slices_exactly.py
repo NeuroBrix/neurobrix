@@ -46,3 +46,38 @@ def test_a_sliced_group_norm_with_whole_statistics_is_the_whole_norm(shape, grou
 def test_a_value_parked_on_the_host_leaves_metal():
     v = torch.ones(4, device="mps")
     assert to_host(v).device.type == "cpu"
+
+
+def _cuda():
+    try:
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
+
+
+@pytest.mark.skipif(not _cuda(), reason="the Triton engine needs a device")
+@pytest.mark.parametrize("shape,group,dtype", [((3, 64, 24, 20), 32, "float32"), ((2, 32, 5, 12, 16), 8, "float16"),
+                                               ((1, 128, 3, 60, 106), 32, "float16")])
+def test_the_triton_engine_slices_its_group_norm_as_its_whole_norm(shape, group, dtype):
+    """The Triton twin (`kernels/wrappers.group_norm_statistics` / `group_norm_apply`): the slices normalised with the
+    whole input's statistics are the engine's own whole group norm (`native_group_norm_wrapper`), to its fp32 noise.
+    Red if the statistics are a slice's, a slice is written at another place, or the affine reads another channel."""
+    import numpy as np
+    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from neurobrix.kernels.wrappers import native_group_norm_wrapper
+    rng = np.random.default_rng(0)
+    xs = (rng.standard_normal(shape) * 3 + 1).astype(dtype)
+    w = rng.standard_normal(shape[1]).astype(dtype)
+    b = rng.standard_normal(shape[1]).astype(dtype)
+    up = lambda a: NBXTensor.from_numpy(np.ascontiguousarray(a)).to_cuda(0)
+    n, c = shape[0], shape[1]
+    hw = int(np.prod(shape[2:]))
+    ref = native_group_norm_wrapper(up(xs), up(w), up(b), n, c, hw, group, 1e-6)[0].numpy().astype(np.float64)
+    mean, rstd = norm_statistics(up(xs), group, 1e-6)
+    H = shape[-2]
+    parts = [group_norm_apply(up(xs[..., a:a + 7, :]), up(w), up(b), group, mean, rstd)[0].numpy().astype(np.float64)
+             for a in range(0, H, 7)]
+    got = np.concatenate(parts, axis=-2)
+    tol = 1e-5 if dtype == "float32" else 2e-3
+    err = float(np.abs(got - ref).max() / np.abs(ref).max())
+    assert err < tol, f"relative error {err:.2e}"
