@@ -612,6 +612,10 @@ host_measured:
   source: "measured 2026-10-25 18:37:27 CET on the M4 Pro host, alone (tools/profile_facts.py)"
   host_matmul_gflops: 3125
   host_memory_gbps: 132
+  # what the loader takes to RELOAD a streamed piece's weights onto the device (container read through the page cache,
+  # decode, bf16->fp16 conversion, upload), measured on Janus-Pro-7B triton 2026-10-27 19:0x on stable f8def0b9: the
+  # language model's 2 segments (13.8 GB together, fp16) re-read 716 times in 2 348 s -> 3.28 s per 6.9 GB segment
+  weight_reload_gbps: 2.1
   # the system's own share of the installed RAM, measured calm by the Mac 2026-10-26 17:50-17:55 (no run, no copy, VM
   # off; 30 readings 10 s apart via core/host_memory.memory_state, median available 17 582 of 24 576 MB; atelier
   # campagnes/2026_09_22_apple/results/system_share_2026_10_26/MEASURE.md)

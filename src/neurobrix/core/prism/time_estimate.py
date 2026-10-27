@@ -47,6 +47,10 @@ class HostFacts:
     matmul_flops: float                     # host FLOP/s (float32 GEMM)
     memory_bps: float                       # host memory bandwidth, bytes/s (a copy in host memory)
     storage_bps: Optional[float] = None     # sequential read of a weight file, bytes/s
+    #: what the loader really takes to RELOAD a streamed piece's weights onto the device, bytes/s — read from the
+    #: container (page cache), decode, convert to the device dtype, upload (`weight_reload_gbps`, measured): a strategy that
+    #: re-reads a generating component's weights every token pays it at every reload after the first
+    reload_bps: Optional[float] = None
 
 
 def device_facts(measured: Optional[Mapping[str, Any]], where: str) -> DeviceFacts:
@@ -67,9 +71,11 @@ def host_facts(measured: Optional[Mapping[str, Any]]) -> HostFacts:
         if not measured or key not in measured:
             raise MissingFact(f"host: no measured `{key}` on the hardware profile (tools/profile_facts.py)")
     s = measured.get("storage_read_gbps")
+    r = measured.get("weight_reload_gbps")
     return HostFacts(matmul_flops=float(measured["host_matmul_gflops"]) * 1e9,
                      memory_bps=float(measured["host_memory_gbps"]) * 1e9,
-                     storage_bps=float(s) * 1e9 if s is not None else None)
+                     storage_bps=float(s) * 1e9 if s is not None else None,
+                     reload_bps=float(r) * 1e9 if r is not None else None)
 
 
 def compute_seconds(work: Work, facts: DeviceFacts, dtype: str) -> float:
@@ -185,7 +191,13 @@ def plan_seconds(strategy: str, allocations: Mapping[str, Any], works: Mapping[s
                 raise MissingFact(f"{dev}: the Triton engine uploads from pageable memory and the profile carries no "
                                   f"measured `h2d_pageable_gbps` (tools/profile_facts.py)")
             upload = f.h2d_pageable_bps
-        total += loads * w.weight_bytes / upload
+        if strategy in STREAM_EVERY_USE and loads > 1 and host is not None and host.reload_bps:
+            # the first load uploads; every later one RELOADS — the loader goes back to the container, decodes, converts
+            # and uploads again (`weight_reload_gbps`): Janus-Pro-7B's language model streamed per token on the Mac,
+            # priced at the page-locked rate 169 s, ran 716 reloads at ~2.1 GB/s (2026-10-27)
+            total += w.weight_bytes / upload + (loads - 1) * w.weight_bytes / host.reload_bps
+        else:
+            total += loads * w.weight_bytes / upload
         if strategy not in RESIDENT_STRATEGIES:
             # an expert store: the routed experts a use reads cross the host link at every use (per token for a
             # generating component, the prompt's set once) — unpriced, Qwen3-30B estimated 15 s against 174 s measured
