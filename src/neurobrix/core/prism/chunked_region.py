@@ -44,6 +44,11 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
 
 FREE, SLICE, CONTRACT, MIX = "free", "slice", "contract", "mix"
+#: A group norm over the axis: its statistics read every row of its input, then each output row is its input row's.
+#: It runs on slices only as the FIRST op a stretch reads whole from outside: the statistics are taken once over that
+#: whole input (`group_norm_stats`, fp32, a fixed summation order), and every slice is normalised with them — the
+#: two passes of an exact tiled norm (the supervisor's decision 2026-10-27 11:15, "Tiled VAE"'s synchronisation point).
+NORM = "norm"
 
 
 # ---------------------------------------------------------------------------------------------
@@ -337,6 +342,10 @@ class Layout:
     axis: int
     dim: Mono
     inner: Optional[Mono]
+    #: Rows a padding added along the axis (`lo + hi`): the tensor's extent is `dim`'s plus them. Only a convolution
+    #: that consumes them back (no padding of its own, a kernel of `pad + 1` rows) may read such a tensor; it is never
+    #: a region's input or output (`plan_region`), so no slice of it is ever taken or put.
+    pad: int = 0
 
 
 @dataclass
@@ -547,7 +556,7 @@ class TokenAxis:
             for t in outs:
                 if not self.carries(t):
                     continue
-                if v.kind in (SLICE, FREE) and t in lays:
+                if v.kind in (SLICE, FREE, NORM) and t in lays:
                     self.layout[t] = lays[t]
                     continue
                 src = self._source(t)
@@ -595,6 +604,8 @@ class TokenAxis:
         if not s_in:
             return self._rule_born(ty, op, s_out)
         lays = {t: self.layout[t] for t in s_in}
+        if any(lays[t].pad for t in s_in) and ty != "convolution":
+            raise _Mix(f"{ty} reads a tensor padded along the axis (only the convolution eating the padding may)")
         if ty in _POINTWISE or ty == "custom::rms_norm" or ty == "native_layer_norm" \
                 or ty == "_native_batch_norm_legit_no_training":
             return self._rule_pointwise(ty, op, ins, outs, lays)
@@ -632,9 +643,17 @@ class TokenAxis:
             return self._rule_scale(ty, op, s_in[0], lays[s_in[0]], outs)
         if ty == "native_group_norm":
             lay = lays[s_in[0]]
-            if s_in != ins[:1] or lay.axis != 0:
+            if s_in != ins[:1]:
+                raise _Mix("group norm with S in its affine parameters")
+            if lay.axis == 0:
+                return Verdict(SLICE), {t: self._carry(t, lay) for t in s_out}
+            p_lay = self.p_of(lay) if lay.inner is not None else None
+            if lay.axis < 2 or lay.inner is None or lay.inner.atoms or p_lay is None or not p_lay.is_one():
                 raise _Mix("group norm over the axis")
-            return Verdict(SLICE), {t: self._carry(t, lay) for t in s_out}
+            # Over the axis (a VAE's norm reads H x W): a synchronisation point — statistics over the whole input,
+            # then row-local. Its mean / rstd outputs carry no S; only the normalised output is sliced.
+            outs_s = [t for t in s_out if t == outs[0]]
+            return Verdict(NORM, reason="group norm over the axis"), {t: self._carry(t, lay) for t in outs_s}
         if ty in _SDPA:
             return self._rule_sdpa(op, ins, s_in, lays, outs)
         raise _Mix(f"{ty} has no token-axis rule")
@@ -913,7 +932,18 @@ class TokenAxis:
         rank = len(self.dims(src))
         j = rank - 1 - lay.axis
         if 2 * j + 1 < len(pads) and (pads[2 * j] != 0 or pads[2 * j + 1] != 0):
-            raise _Mix("padding along the axis")
+            # A padding along the axis feeding a convolution that eats it back (a VAE's replicate-padded 3x3x3): the
+            # pair is ONE same-extent stencil. On a slice the padding pads the slice's own ends; inside the axis those
+            # rows are wrong exactly as a same convolution's zero rows are, within the halo the conv declares — the
+            # slice's margin discards them; at the axis' true ends the slice IS the end and the padding is exact.
+            lo, hi = pads[2 * j], pads[2 * j + 1]
+            if lay.pad or lo != hi or lo < 0 or lay.inner is None:
+                raise _Mix("padding along the axis")
+            self._no_s_args(op, allow_lists=True)
+            rest = [i for i, t in enumerate(self.dims(outs[0])) if i != lay.axis and mentions(t, self.sym)]
+            if rest:
+                raise _Mix(f"padding along the axis of {outs[0]}, which carries S elsewhere too")
+            return Verdict(SLICE), {outs[0]: Layout(lay.axis, lay.dim, lay.inner, pad=lo + hi)}
         self._no_s_args(op)
         return Verdict(SLICE), {outs[0]: self._carry(outs[0], lay)}
 
@@ -937,6 +967,14 @@ class TokenAxis:
             kk, d, p = w[lay.axis], one(dil) or 1, one(pad) or 0
             if transposed or one(stride) not in (1, None) or not isinstance(kk, int):
                 raise _Mix("a convolution whose kernel spans the axis with a stride or transposed")
+            if lay.pad:
+                # the convolution of a padded tensor: a VALID kernel eating the padding back keeps the extent
+                if p != 0 or d * (kk - 1) != lay.pad:
+                    raise _Mix("a convolution that does not eat its input's padding back along the axis")
+                axis_o, m_o, why = self.s_dim(outs[0])
+                if axis_o is None or m_o != lay.dim:
+                    raise _Mix(why or f"{outs[0]}'s S dimension is not its padded input's")
+                return Verdict(SLICE, halo=lay.pad // 2), {outs[0]: Layout(axis_o, m_o, lay.inner)}
             if kk != 1:
                 # a SAME convolution (its padding keeps the extent): output row r reads input rows
                 # r - d*(k-1)/2 .. r + d*(k-1)/2 — local, run on a slice widened by that radius
@@ -1110,6 +1148,8 @@ class RegionPlan:
     unit: int = 1
     #: The stretch holds a cyclic shift along the axis: every slice reads its margin ROUND the axis' ends.
     cyclic: bool = False
+    #: The group norms over the axis the stretch runs on slices: {op uid: its input, read whole} (`NORM`).
+    norms: Dict[str, str] = field(default_factory=dict)
 
 
 def region_reads(ax: TokenAxis, first: int, last: int) -> Tuple[List[str], Set[str]]:
@@ -1138,8 +1178,20 @@ def plan_region(ax: TokenAxis, first: int, last: int,
         v = ax.verdicts[i]
         if v.kind == MIX:
             return None, f"{ax.order[i]} mixes the axis ({v.reason})"
-        if v.kind in (SLICE, CONTRACT):
+        if v.kind in (SLICE, CONTRACT, NORM):
             touched = True
+    # A group norm over the axis runs on slices only when the stretch reads its input whole from outside: its
+    # statistics are then taken once over that input (`group_norm_stats`) before the slices.
+    produced_here = {t for i in range(first, last + 1)
+                     for t in ((ax.ops.get(ax.order[i]) or {}).get("output_tensor_ids") or [])}
+    norms: Dict[str, str] = {}
+    for i in range(first, last + 1):
+        if ax.verdicts[i].kind == NORM:
+            src = ((ax.ops.get(ax.order[i]) or {}).get("input_tensor_ids") or [None])[0]
+            if src in produced_here:
+                return None, (f"{ax.order[i]} normalises over the axis a tensor the stretch makes itself: its "
+                              f"statistics need the whole of it, so the stretch must start at the norm")
+            norms[ax.order[i]] = src
     if not touched:
         return None, "no op in the stretch carries the axis"
     from fractions import Fraction
@@ -1167,6 +1219,7 @@ def plan_region(ax: TokenAxis, first: int, last: int,
     plan = RegionPlan(ax.sym, first, last, ax.order[first], ax.order[last], unit=ax.unit)
     plan.margin = math.ceil(margin)
     plan.cyclic = cyclic
+    plan.norms = norms
     plan.inputs = reads
     plan.outputs = outputs
     for t in list(reads) + [c for c in carriers if c not in reads]:

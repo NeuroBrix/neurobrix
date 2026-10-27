@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **A video decoder streamed in temporal chunks can park its causal states in host memory**: when a chunk does not fit the card with its states, each state leaves for the host as soon as it is made and comes back right before the op that first reads it, in every engine (both PyTorch engines and both Triton engines); the plan does it only when nothing fits otherwise. mochi-1-preview's Triton decode now plans on a single 16 GB card.
+- **The Triton engine slices a group-normalised decoder in space exactly too**: the statistics of each group norm are taken once over the whole input and every slice is normalised with them, as the PyTorch engine does.
 - **Spreading a model's weights over several cards no longer assumes its activations spread too**: a component whose activations alone exceed one card is streamed, never placed whole on a card it overflows (Sana 4K's VAE on four 16 GB cards).
 - **A plan that loads components on demand fits the parts the model holds together**: a language model, its output head and the vision outputs waiting for it must fit the card together; MiniCPM-o-4_5 on a 16 GB card no longer runs out of memory loading its head, and Janus-Pro-7B keeps its faster plan.
 - **The hardware profile records each card's memory as the runtime sees it** (its allocator's total and the runtime's own context), so plans derived without a card match the plans a real run makes.

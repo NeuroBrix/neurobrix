@@ -9673,3 +9673,38 @@ def lstm_wrapper(input_, hx, params, has_biases=True, num_layers=1,
 
 
 lstm_wrapper.self_manages_dtype = True
+
+
+def group_norm_statistics(x, num_groups: int, eps: float):
+    """(mean, rstd) [N, G] fp32 of `x` [N, C, ...] over each group — the first pass of an exact tiled group norm
+    (`core/strategies/tiled_norm.py`), over the WHOLE input, without its normalised tensor."""
+    from .ops.group_norm_tiled import group_norm_stats_kernel, TILED_NORM_BLOCK, TILED_NORM_WARPS
+    x = x.contiguous()
+    N, C = int(x.shape[0]), int(x.shape[1])
+    if C % int(num_groups):
+        raise ValueError(f"tiled group norm: {C} channels in {num_groups} groups")
+    HW = x.numel() // (N * C)
+    mean = NBXTensor.empty((N, int(num_groups)), dtype=NBXDtype.float32, device=x.device)
+    rstd = NBXTensor.empty((N, int(num_groups)), dtype=NBXDtype.float32, device=x.device)
+    _set_device(x)
+    group_norm_stats_kernel[(N * int(num_groups),)](x, mean, rstd, C // int(num_groups), C, HW, int(num_groups),
+                                                     float(eps), BLOCK_SIZE=TILED_NORM_BLOCK, num_warps=TILED_NORM_WARPS)
+    return mean, rstd
+
+
+def group_norm_apply(x, weight, bias, num_groups: int, mean, rstd):
+    """`aten::native_group_norm`'s three outputs for a slice `x` given the whole input's statistics — the second pass;
+    the output in `x`'s dtype, as the engine's group norm writes it (`group_norm_wrapper`)."""
+    from .ops.group_norm_tiled import group_norm_apply_kernel, TILED_NORM_BLOCK, TILED_NORM_WARPS
+    x = x.contiguous()
+    N, C = int(x.shape[0]), int(x.shape[1])
+    HW = x.numel() // (N * C)
+    if mean._device != "cuda" or getattr(mean, "_device_idx", None) != getattr(x, "_device_idx", None):
+        mean, rstd = mean.to_cuda(x._device_idx), rstd.to_cuda(x._device_idx)
+    y = NBXTensor.empty_like(x)
+    _set_device(x)
+    group_norm_apply_kernel[(N * int(num_groups),)](
+        x, y, weight if weight is not None else x, bias if bias is not None else x, mean, rstd,
+        C // int(num_groups), C, HW, int(num_groups), scale_by_weight=weight is not None, add_bias=bias is not None,
+        BLOCK_SIZE=TILED_NORM_BLOCK, num_warps=TILED_NORM_WARPS)
+    return y, mean, rstd

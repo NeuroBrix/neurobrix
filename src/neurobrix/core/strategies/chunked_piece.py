@@ -30,6 +30,7 @@ from neurobrix.core.prism.chunked_region import (
     sliced_reads, store, take_slice, whole_shape)
 from neurobrix.core.prism.layer_partition import Segment, build_segment_graph
 from neurobrix.core.strategies.value_parking import to_device
+from neurobrix.core.strategies.tiled_norm import group_norm_apply, norm_statistics
 from neurobrix.core.runtime.graph_executor import output_key
 
 
@@ -72,6 +73,9 @@ class ChunkedPiece:
         self._sums: Dict[str, Any] = {}
         self._loaded = False
         self._nbx = None
+        # {norm op uid: (mean, rstd)} of the run in flight — the statistics of a group norm over the axis, taken once
+        # over its whole input before the slices (`norm_statistics`) and read by its interceptor on every slice
+        self._norm_stats: Dict[str, Any] = {}
 
     # -- the surface a piece shows its strategy ------------------------------------------------
 
@@ -210,8 +214,22 @@ class ChunkedPiece:
             for tid in self._protected:
                 if tid in cp.targets:
                     ex.protect_tensor_id(tid)
+            norms = {u: self._norm_interceptor(u) for u in plan.norms if u in cp.ops}
+            if norms:
+                ex.register_op_uid_interceptors(norms)
             passes.append(ex)
         self._plan, self._passes = plan, passes
+
+    def _norm_interceptor(self, uid: str) -> Callable[..., Any]:
+        """`aten::native_group_norm` on a slice, normalised with the WHOLE input's statistics (`_norm_stats[uid]`).
+        Returns what the op returns — (out, mean, rstd), the output in fp32 as the engine's fp32-class norm gives it."""
+        def norm_slice(x, weight, bias, n, c, hw, group, eps, *rest, **kw):
+            mean, rstd = self._norm_stats[uid]
+            return group_norm_apply(x, weight, bias, int(group), mean, rstd)
+        # the compiled engine's norm returns its fp32 output itself; on the Triton engine the DtypeEngine wraps the
+        # interceptor as it wraps the op it replaces (its operand casts and its output contract)
+        norm_slice.self_manages_dtype = not str(getattr(self._holder, "mode", "")).startswith("triton")
+        return norm_slice
 
     def _pins_of(self, cp: Any, plan: Any, graph: Dict[str, Any]) -> Set[str]:
         """The producers of the contractions this chunked pass sums whose partial the engine gives
@@ -266,6 +284,18 @@ class ChunkedPiece:
         count = -(-total // self._slice)
         inner = {t: (lay.inner.evaluate(self._axis.scaled(value)) if lay.inner is not None else None)
                  for t, lay in plan.layouts.items()}
+        # a group norm over the axis: its statistics over its WHOLE input, once, before any slice (the first of the two
+        # passes of an exact tiled norm; the second is each slice normalised with them)
+        self._norm_stats = {}
+        by_tid = {self._tid(n): n for n in feed}
+        for uid, src in plan.norms.items():
+            if src not in by_tid:
+                raise RuntimeError(f"chunked piece: the norm {uid} reads {src}, which this stretch is not fed whole")
+            op = self._axis.ops.get(uid) or {}
+            scalars = [a.get("value") for a in ((op.get("attributes") or {}).get("args") or [])
+                       if a.get("type") == "scalar"]
+            group, eps = int(scalars[-2]), float(scalars[-1])
+            self._norm_stats[uid] = norm_statistics(feed[by_tid[src]], group, eps)
         # what is sliced on the way in: the stretch's inputs and the carriers of its symbols
         sliced_in = set(plan.inputs) | {t for t in plan.layouts if t not in plan.outputs}
         done: Dict[str, Any] = {}          # tid -> whole value (contraction sums, assembled outputs)
@@ -281,6 +311,7 @@ class ChunkedPiece:
             finally:
                 ex.unload_weights()
         self._last_run = {t: done[t] for t in plan.outputs if t in done}
+        self._norm_stats = {}
         meta = self._dag.get("tensors") or {}
         result = {}
         for tid in self._dag.get("output_tensor_ids") or []:
