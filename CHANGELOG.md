@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **A busy machine's re-plan of a model that had to run in float32 no longer retries half precision first**.
-- **Prism ranks plans by what loading really costs**: a load is priced at the engine's measured loader rate (per stored dtype, to the card or to host memory, cold then warm) instead of a bare copy rate, a reloaded piece at the measured reload rate, and a two-expert video model's steps are counted once between its experts.
+- **Prism ranks plans by what loading really costs** (including the components a plan holds in host memory and streams): a load is priced at the engine's measured loader rate (per stored dtype, to the card or to host memory, cold then warm) instead of a bare copy rate, a reloaded piece at the measured reload rate, and a two-expert video model's steps are counted once between its experts.
 - **Large models whose weights are held in host memory load much faster on the Triton engine**: those weights now share one page-locked block instead of one allocation each, and their bf16 conversion runs on the loader's worker threads.
 - **A language model spread over several cards decodes under the Triton engine**: each layer's KV cache pages now live on the card that runs the layer; they all lived on the first card, and a layer on another card read them there (Ming-Lite-Omni-1.5 on four 16 GB cards stopped at its first decoded token).
 - **A multi-card plan no longer counts on memory the run's own context will take**: a card the process had not touched yet was budgeted at its whole memory, and the plan then placed more on it than the run gets once its context exists there; plans made on the machine now match the plans derived without a card.

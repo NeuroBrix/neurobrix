@@ -217,14 +217,15 @@ def plan_seconds(strategy: str, allocations: Mapping[str, Any], works: Mapping[s
         st = (stored or {}).get(comp)
         if st is None:
             raise MissingFact(f"{comp}: the weights index states no stored dtype the loader rate is read for")
-        shards = getattr(alloc, "shard_map", None) or {}
-        host_held = how in HOST_HELD or strategy == "zero3" or (shards and all(str(v).startswith("cpu")
-                                                                                 for v in shards.values()))
+        # host-held: the plan's zero3 placement — the component's strategy, or its device written `zero3:<card>` (how a
+        # lazy plan states the component it streams from host memory, Qwen3-30B's expert store, Wan2.2's ratchet)
+        dev_str = alloc[0] if isinstance(alloc, tuple) else str(alloc)
+        host_held = how in HOST_HELD or strategy == "zero3" or str(dev_str).startswith("zero3:")
         if host_held:
-            # the blocks land in page-locked host memory once, then cross the host link from there at every use that
-            # streams them (zero3; an expert store's routed experts are priced per use below)
+            # the blocks land in page-locked host memory once; then, a ratchet streams the blocks beyond what the card
+            # keeps at every pass, an expert store only the routed experts a use reads (priced per use below)
             total += w.weight_bytes / _loader_bps(f, engine, st, "host", "cold", dev)
-            if strategy in STREAM_EVERY_USE or how == "zero3":
+            if not w.expert_bytes_per_use:
                 resident = float(getattr(alloc, "resident_weight_mb", 0.0) or 0.0) * 2 ** 20
                 total += passes * max(0.0, w.weight_bytes - resident) / f.h2d_bps
         elif strategy in STREAM_EVERY_USE:

@@ -116,3 +116,25 @@ def test_a_reloaded_piece_pays_the_loader_at_every_use_after_the_first():
     t = T.plan_seconds("layer_streaming", {"lm": "cuda:0"}, w, {"lm": 10}, {"cuda:0": facts}, host, "float16",
                        engine="triton", stored=ST)
     assert abs(t - use - (8e9 / 2e9 + 9 * 8e9 / 1e9)) < 1e-6
+
+
+def test_a_lazy_plan_s_host_held_component_lands_in_host_memory_then_streams():
+    """A lazy plan states the component it streams from host memory as `zero3:<card>` (Wan2.2's ratchet, Qwen3-30B's
+    expert store): it lands in page-locked host memory at the loader's HOST rate, then — a ratchet — its blocks cross
+    the pinned link at every pass; an expert store crosses only its routed experts (priced per use). The rule-13
+    tables (2026-10-27): priced as a device load, Qwen3-30B's lazy plan was estimated 124 s for 432-494 s measured.
+    What this test would do if the code were wrong: the same seconds as a plain device load — RED."""
+    facts = T.device_facts({"matmul_tflops": {"float16": 42.3}, "memory_gbps": 789, "h2d_gbps": 8.0,
+                            "weight_load_gbps": {"triton": {"BF16": {"device": {"cold": 2.0, "warm": 2.0},
+                                                                     "host": {"cold": 0.5, "warm": 0.5}}}}}, "cuda:0")
+    w = {"model": Work(flops=0.0, weight_bytes=8e9, activation_bytes=0.0)}
+    args = (w, {"model": 2}, {"cuda:0": facts}, None, "float16")
+    use = 2 * 8e9 / 789e9
+    plain = T.plan_seconds("lazy_sequential", {"model": ("cuda:0", {})}, *args, engine="triton", stored=ST)
+    held = T.plan_seconds("lazy_sequential", {"model": ("zero3:cuda:0", {})}, *args, engine="triton", stored=ST)
+    assert abs(plain - use - 8e9 / 2e9) < 1e-6
+    assert abs(held - use - (8e9 / 0.5e9 + 2 * 8e9 / 8e9)) < 1e-6
+    store = {"model": Work(flops=0.0, weight_bytes=8e9, activation_bytes=0.0, expert_bytes_per_use=int(1e9))}
+    routed = T.plan_seconds("lazy_sequential", {"model": ("zero3:cuda:0", {})}, store, {"model": 2}, {"cuda:0": facts},
+                            None, "float16", engine="triton", stored=ST)
+    assert abs(routed - use - (8e9 / 0.5e9 + 2 * 1e9 / 8e9)) < 1e-6
