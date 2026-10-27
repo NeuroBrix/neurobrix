@@ -4843,6 +4843,13 @@ class PrismSolver:
             _busy = (getattr(self, "_busy_caps", None) or {}).get(dev.get_device_string())
             if _busy is not None:
                 budget = min(budget, float(_busy))      # a busy machine re-planned on what is free now (`solve_smart`)
+            # The rung a tiled or streamed component sizes its pieces from follows a rung LOWERED below the facts — the
+            # unified descent or a busy re-plan: left at the device's nominal rung, mochi-1-preview's VAE kept its
+            # [1,2,2] temporal chunks down to the 4 096 MB rung and the busy re-plan refused where 1-frame chunks ran
+            # (the Mac, 2026-10-27 01:21). The facts' plan keeps the device's own rung.
+            _tile_rung = int(_tile_rung_mb(reading))
+            if _busy is not None or getattr(self, "_unified_rung_cap_mb", None):
+                _tile_rung = min(_tile_rung, int(rung_down_mb(budget)))
             devices.append(DeviceState(
                 device_string=dev.get_device_string(),
                 capacity_mb=budget,
@@ -4859,7 +4866,7 @@ class PrismSolver:
                 # invariant one level out, where it holds for every device kind: the ladder
                 # may round a reading, it may not round it past the hardware.
                 budget_mb=budget,
-                tile_rung_mb=int(_tile_rung_mb(reading)),
+                tile_rung_mb=_tile_rung,
                 budget_note=note,
                 spec=dev,
                 recommended_mb=recommended,
