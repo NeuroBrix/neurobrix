@@ -4612,8 +4612,20 @@ class PrismSolver:
         except Exception:  # noqa: BLE001
             shadow = False
         if shadow:
-            return DeviceReading(kind="device", capacity_mb=float(dev.memory_mb), free_mb=float(dev.memory_mb),
-                                 source="census shadow: the profile's capacity")
+            if dev.has_unified_memory:
+                return DeviceReading(kind="device", capacity_mb=float(dev.memory_mb), free_mb=float(dev.memory_mb),
+                                     source="census shadow: the profile's capacity")
+            # a dedicated card in the shadow: the card AS A RUN READS IT, from the profile's measured runtime facts —
+            # the plan the census derives keys from is the plan the run makes (rule 4: the coverage check's plan)
+            total, ctx = getattr(dev, "runtime_total_mb", None), getattr(dev, "runtime_context_mb", None)
+            if total is None or ctx is None:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: the census shadow plans {dev.get_device_string()} as a run reads it, and the profile "
+                    f"carries no measured runtime_total_mb / runtime_context_mb for it (the profile is generated with them "
+                    f"by autodetect on the machine; a run reads them live)")
+            return DeviceReading(kind="device", capacity_mb=float(total), free_mb=float(total) - float(ctx),
+                                 own_context_mb=float(ctx), measured=True,
+                                 source="census shadow: the profile's measured runtime total and context")
         if dev.has_unified_memory:
             free = float(host.available_mb) if getattr(host, "measured", False) else float(capacity)
             # A plan taken under a PROFILE may not assume more host memory than that profile

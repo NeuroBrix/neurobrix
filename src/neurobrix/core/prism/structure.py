@@ -278,6 +278,13 @@ class DeviceSpec:
     # The device's MEASURED facts (`tools/profile_facts.py`: matmul_tflops per dtype, memory_gbps, h2d_gbps, ...), with
     # their `source`, read by Prism's time estimate (`core/prism/time_estimate.py`). None: not measured.
     measured: Optional[Dict[str, Any]] = None
+    # A dedicated card as the RUNTIME sees it, measured when the profile is generated (autodetect): the total its
+    # allocator reports (cudaMemGetInfo: 16 151 MB on a V100-SXM2-16GB whose nvidia-smi total is 16 384) and the
+    # runtime's own context on it. A run reads both live; the census shadow, which reads nothing, plans against them
+    # (`_device_reading`) — before, it planned the nominal 16 384 against the run's 15 845 and the coverage check missed
+    # the band keys the real plan forms (Sana 4K triton 16g, gate ebm, 2026-10-27). None: not measured.
+    runtime_total_mb: Optional[int] = None
+    runtime_context_mb: Optional[int] = None
 
     @property
     def memory_class_gb(self) -> Optional[int]:

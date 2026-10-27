@@ -266,6 +266,8 @@ def load_profile(hardware_id: str) -> PrismProfile:
             unified_memory=d_data.get("unified_memory"),
             # None when the profile is silent: no single-allocation limit below the device's memory.
             max_allocation_mb=d_data.get("max_allocation_mb"),
+            runtime_total_mb=d_data.get("runtime_total_mb"),
+            runtime_context_mb=d_data.get("runtime_context_mb"),
             measured=d_data.get("measured") or _vendor_block(d_data, "measured"),
         ))
 

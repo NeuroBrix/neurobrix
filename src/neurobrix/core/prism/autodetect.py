@@ -982,11 +982,13 @@ def _parse_nvidia_smi() -> List[Dict[str, Any]]:
         dtypes = _NVIDIA_DTYPE_MAP.get(cc_major, ["float32", "float16"])
         pcie_ver = _detect_pcie_version_sysfs(pci_bus)
 
+        runtime = _runtime_card_facts(idx)
         devices.append({
             "index": idx,
             "brand": "nvidia",
             "model": name,
             "memory_mb": mem_mb,
+            **runtime,
             "compute_capability": cc,
             "supports_dtypes": dtypes,
             "architecture": arch,
@@ -2468,6 +2470,21 @@ def _board_of(index: int, rows: Dict[int, Dict[str, Any]]) -> "Optional[int]":
         if row["uuid"] == entry or row["uuid"].startswith(entry):
             return board
     return None
+
+
+def _runtime_card_facts(index: int) -> dict:
+    """{runtime_total_mb, runtime_context_mb} of a dedicated card as the engine's runtime sees it — the total its
+    allocator reports (cudaMemGetInfo) and this process's own context on it (`device_sharing`) — or {} when the runtime
+    cannot answer (the census shadow then refuses the card by name). Read through the engine's allocator, never torch."""
+    try:
+        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        total = DeviceAllocator.device_total_bytes(index)
+        facts = device_sharing(index)
+        if total is None or total <= 0 or not facts or facts.get("own_context_mb") is None:
+            return {}
+        return {"runtime_total_mb": int(total // (1024 * 1024)), "runtime_context_mb": int(round(facts["own_context_mb"]))}
+    except Exception:  # noqa: BLE001 — no runtime here: the facts are absent, said by the shadow's refusal
+        return {}
 
 
 def device_sharing(index: int):
