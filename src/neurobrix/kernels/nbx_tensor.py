@@ -1433,6 +1433,14 @@ class DeviceAllocator:
             cap = 0
             if frac > 0:
                 total = DeviceAllocator.device_total_bytes(dev)
+                # A rung imposed on the plan (`NBX_PRISM_BUDGET_MB`, the census and the rung proofs) is the device the
+                # plan was sized for: the pool parks a fraction of IT, as it would on a card of that size — measured
+                # 2026-10-27, mochi-1-preview triton at the 8 GB rung on a 32 GB card parked its 9 GB text encoder
+                # arena (cap 16 GB) and peaked at 22.6 GB where a card of 8 GB would have freed it
+                from neurobrix.core.prism.memory_budget import _door_mb
+                door = _door_mb()
+                if door is not None and total > 0:
+                    total = min(total, int(door) << 20)
                 if total > 0:
                     cap = int(total * frac)
         except Exception:
