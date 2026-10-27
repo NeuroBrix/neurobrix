@@ -622,11 +622,18 @@ def run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Path
     return row
 
 
+#: The hardware profile every cell of this run names (`run --hardware`), or None: the profile autodetect reads off
+#: the visible cards (every gate). A pass that proves a CLASS on cards of another (the 16 GB class on the rack's four
+#: cards, two of them 32 GB: the supervisor, 2026-10-27 07:30) names the class's profile; the row records it.
+HARDWARE: Optional[str] = None
+
+
 def cell_argv(model: str, mode: str, art, req: list = None) -> list:
     """The argv of a cell's `python -m neurobrix` — ONE definition, the one `_run_cell` launches and the one
     the computed gate scope (tools/gate_scope.py) parses with the engine's own parser."""
     req = cell_request(model) if req is None else req
-    return ["run", "--model", model, *req, *MODES[mode], "--certified-only", "--output", str(art)]
+    hw = ["--hardware", HARDWARE] if HARDWARE else []
+    return ["run", "--model", model, *req, *MODES[mode], *hw, "--certified-only", "--output", str(art)]
 
 
 def _run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Path) -> dict:
@@ -1024,6 +1031,8 @@ def parse_cells(spec: str) -> set:
 
 
 def cmd_run(a) -> int:
+    global HARDWARE
+    HARDWARE = getattr(a, "hardware", None)
     if getattr(a, "gate_lists", None):
         refuse_a_partial_gate(a.gate_lists)
         off = [m.strip() for m in a.modes.split(",") if m.strip() and m.strip() not in GATE_MODES]
@@ -1421,6 +1430,8 @@ def main() -> int:
                    help="the request every cell makes: gate (the model's floor, the default) or judging (the request "
                         "its quality is judged at, the container's confirmation values; never a gate, its own --out)")
     r.add_argument("--timeout", type=int, default=900)
+    r.add_argument("--hardware", default=None, metavar="PROFILE",
+                   help="the hardware profile every cell names (`neurobrix run --hardware`); absent: autodetect")
     r.add_argument("--defer-after", type=float, default=None, metavar="SECONDS",
                    help="a cell the host cannot take for this long leaves the run without a row, named DEFERRED, "
                         f"and the run ends {DEFERRED_RC} (never for a gate: a gate needs every row)")

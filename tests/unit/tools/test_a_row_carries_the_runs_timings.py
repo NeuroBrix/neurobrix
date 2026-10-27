@@ -62,3 +62,19 @@ def test_a_row_carries_the_runs_device_peak(tmp_path):
     log.write_text("[Timings] load_s=1.000 ttft_s=2.000 tpot_ms=na tok_s=na tokens=na first=output\n")
     r = RM.timings_of(log)
     assert r["device_peak_mb"] is None and "no [Peak] line" in r["peak_error"]
+
+
+def test_a_run_names_its_hardware_profile_only_when_asked():
+    """`run --hardware`: every cell names the profile (a class proven on another machine's cards: the 16 GB class on
+    four cards, 2026-10-27); absent, the argv every gate launches is unchanged (autodetect)."""
+    import regression_matrix as RM
+    RM.HARDWARE = None
+    plain = RM.cell_argv("whisper-large", "native", "/x/a.txt")
+    assert "--hardware" not in plain
+    RM.HARDWARE = "c4140-4xv100-16GB-nvlink"
+    try:
+        argv = RM.cell_argv("whisper-large", "native", "/x/a.txt")
+    finally:
+        RM.HARDWARE = None
+    assert argv[argv.index("--hardware") + 1] == "c4140-4xv100-16GB-nvlink"
+    assert [a for a in argv if a not in ("--hardware", "c4140-4xv100-16GB-nvlink")] == plain
