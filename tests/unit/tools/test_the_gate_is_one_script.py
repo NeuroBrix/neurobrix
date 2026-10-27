@@ -245,3 +245,23 @@ def test_a_carry_record_is_checked_by_the_harness_before_any_card(tmp_path):
     entry["engine"] = "7a5fab71"
     (C / "gate" / "carries.yml").write_text(yaml.safe_dump({"carries": [entry]}))
     assert gate_run.check_carries(ROOT, C) == 1
+
+
+def test_a_manual_prune_reaches_the_scope_tool_with_its_reason(tmp_path):
+    """The supervisor's representatives (2026-10-27 16:30): a cell the gate does not replay by decision is the scope
+    tool's manual prune (cls:model:mode:reason, carried with its reason). Red if gate_run drops it: the scope then
+    selects the cell and the gate replays it."""
+    B = tmp_path / "base"
+    (B / "gate2").mkdir(parents=True)
+    (B / "gate2" / "gate_32g.list").write_text("A native,triton\n")
+    (B / "gate" / "matrix_32g").mkdir(parents=True)
+    (B / "timeouts.txt").write_text("A 600\n")
+    ident = tmp_path / "plan-identical.txt"
+    ident.write_text("A\n")
+    prune = "32g:A:triton:same architecture as B, replayed after the tag"
+    a = gate_run.build_parser().parse_args([
+        "--campaign", str(tmp_path / "c"), "--tree", str(ROOT), "--base-gate", str(B), "--plan-identical", str(ident),
+        "--run-md", str(tmp_path / "RUN.md"), "--holds", str(tmp_path / "h"), "--hardware", "rig",
+        "--class-split-mib", "24576", "--heavy-share", "0.25", "--need-workers", "1", "--prune", prune, "--plan"])
+    scope = next(cmd for name, cmd, *_ in gate_run.steps(a) if name == "scope")
+    assert scope[scope.index("--prune") + 1] == prune, scope

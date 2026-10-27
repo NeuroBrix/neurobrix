@@ -169,7 +169,8 @@ def steps(a) -> list:
     env = dict(os.environ, PYTHONNOUSERSITE="1", NEUROBRIX_PYTHON=py, NBX_PYTHON=py)
     return [
         ("scope", [py, str(W / "tools" / "gate_scope.py"), "--base", base_sha, "--head", head, "--gate-dir", str(B),
-                   "--out", str(scope)], dict(env, CUDA_VISIBLE_DEVICES="", PYTHONPATH=str(W / "src")), W),
+                   "--out", str(scope)] + sum((["--prune", x] for x in a.prune), []),
+         dict(env, CUDA_VISIBLE_DEVICES="", PYTHONPATH=str(W / "src")), W),
         ("split", identical, scope, None),
         ("sched", [py, str(HERE / "gate_sched.py"), "--gate2", str(C / "gate2"), "--gate", str(rows_root(C)), "--tree", str(W),
                    "--run-md", str(a.run_md), "--holds", str(a.holds), "--hardware", a.hardware, "--class-split-mib",
@@ -281,6 +282,10 @@ def build_parser():
     ap.add_argument("--need-workers", type=int, required=True)
     ap.add_argument("--peak-rows", action="append", default=[])
     ap.add_argument("--label", default="gate")
+    # the scope tool's manual prunes, passed through (cls:model:mode:reason): a cell the gate does not replay by a
+    # decision, its reason carried in scope.json and carried.tsv (the representatives of the supervisor's 2026-10-27
+    # 16:30 plan: one model per architecture, the others carried and replayed after the tag)
+    ap.add_argument("--prune", action="append", default=[])
     ap.add_argument("--scope-timeout", type=int, default=7200)
     ap.add_argument("--python", default=os.environ.get("NEUROBRIX_PYTHON") or os.environ.get("NBX_PYTHON") or sys.executable)
     ap.add_argument("--plan", action="store_true", help="print the steps, run nothing")
