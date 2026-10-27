@@ -2839,8 +2839,20 @@ class PrismSolver:
                 if _d.device_string not in (_a.devices or []) or _n not in plan.component_memory:
                     continue
                 _m = plan.component_memory[_n]
+                _tile = (getattr(plan, "component_tiling", None) or {}).get(_n)
+                _stream = (getattr(plan, "component_stream", None) or {}).get(_n)
                 if str(_a.strategy) == "zero3":
                     _c = float(_a.resident_weight_mb or 0.0) + self._live_activation_mb(_m)
+                elif _tile is not None:
+                    # a tiled component holds one tile beside its weights, as the plan priced it
+                    # (`_peak_loaded_bytes`, `_tiled_component_mb`): mochi native's VAE on an idle V100-16GB was
+                    # read whole, 21 214 MB, and the door refused the plan the planner had accepted (gate ebm 16g,
+                    # 2026-10-27 01:35)
+                    _c = self._tiled_component_mb(container, _n, _m, _d, _tile)
+                elif _stream is not None:
+                    # a temporally streamed component holds its weights and one chunk's activations
+                    _c = (_m.weight_mb * _d.get_cost_multiplier(self._get_component_dtype(container, _n))
+                          + float(_stream["activation_bytes"]) / (1024 * 1024))
                 else:
                     _c = self._held_component_mb(container, _n, _m, _d, _a)
                 best = max(best, _c)
