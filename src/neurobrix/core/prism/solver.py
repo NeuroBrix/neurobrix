@@ -8560,9 +8560,13 @@ class PrismSolver:
         return allocations, devices
 
     def _reentered_components(self, container) -> set:
-        """The components the request runs more than once (`time_estimate.uses_per_request`: a loop's per step, a
-        generating component's per token, plus its prompt pass) — the ones whose pieces are worth holding between runs.
-        Empty when the flow cannot say (a loop or a generation with no step or token count)."""
+        """The components the request runs once per generated TOKEN (`time_estimate.uses_per_request`: the flow's
+        language model and head, an autoregressive stage) — the ones whose pieces are held between runs: a few hundred MB
+        short of the rung, every piece reloaded per token cost Janus-Pro-7B an hour for a 41 s plan. A denoiser run per
+        step is not held yet: on Metal mochi-1-preview's transformer held in 61 pieces saved 6 % of the estimate and
+        entered its VAE with 1.2 GB more driver memory than the plain cut, and the VAE's stream ran out of memory (the
+        Mac, 2026-10-27 23:47) — the per-piece cost is not measured, so the plain cut stays where the gain is a few
+        steps. Empty when the flow cannot say (a generation with no token count)."""
         from neurobrix.core.prism import time_estimate as TE
         ic = getattr(self, "_input_config", None)
         tokens = getattr(ic, "max_tokens", None) or (self._read_defaults(container) or {}).get("max_tokens")
@@ -8572,7 +8576,7 @@ class PrismSolver:
                                                                              or [])])
         except TE.MissingFact:
             return set()
-        return {name for name, (kind, n) in uses.items() if kind == "token" or int(n) > 1}
+        return {name for name, (kind, _n) in uses.items() if kind == "token"}
 
     def _output_bytes(self, container) -> int:
         """What the run's output boundary holds on the host: the largest graph output among the

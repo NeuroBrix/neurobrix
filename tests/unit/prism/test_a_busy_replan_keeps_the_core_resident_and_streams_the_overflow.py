@@ -38,3 +38,13 @@ def test_a_component_run_once_keeps_the_plain_cut(monkeypatch):
     p, _ = _plan("Janus-Pro-7B", "triton")
     once = [c for c in (p.layer_stream_resident or {}) if c != "language_model"]
     assert not once, once
+
+
+def test_a_denoiser_run_per_step_keeps_the_plain_cut(monkeypatch):
+    """mochi-1-preview's transformer (2 steps) held in 61 pieces on the calm Mac entered its VAE with 1.2 GB more driver
+    memory than the plain cut and the VAE's stream ran out of memory (2026-10-27 23:47): only a per-token component is
+    held, until the per-piece cost is measured."""
+    no_door(monkeypatch)
+    pin_host(monkeypatch, 24576, 17582, "the calm Mac (its measured system share)")
+    p, _ = _plan("mochi-1-preview", "compiled")
+    assert not (p.layer_stream_resident or {}), p.layer_stream_resident
