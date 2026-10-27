@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`neurobrix autotune certify --keys <file>`** certifies exactly the keys a coverage check found missing (one `<kernel>::<key>` per line), without a census table.
 
 ### Fixed
+- **A busy machine's re-plan of a model that had to run in float32 no longer retries half precision first**.
 - **Prism ranks plans by what loading really costs**: a load is priced at the engine's measured loader rate (per stored dtype, to the card or to host memory, cold then warm) instead of a bare copy rate, a reloaded piece at the measured reload rate, and a two-expert video model's steps are counted once between its experts.
 - **Large models whose weights are held in host memory load much faster on the Triton engine**: those weights now share one page-locked block instead of one allocation each, and their bf16 conversion runs on the loader's worker threads.
 - **A language model spread over several cards decodes under the Triton engine**: each layer's KV cache pages now live on the card that runs the layer; they all lived on the first card, and a layer on another card read them there (Ming-Lite-Omni-1.5 on four 16 GB cards stopped at its first decoded token).

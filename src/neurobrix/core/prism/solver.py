@@ -2183,6 +2183,12 @@ class PrismSolver:
         # and the genuine all-fp32 fallback below).
         target_dtype = self._resolve_dtype(container, profile)
         target_dtype_str = str(target_dtype).split('.')[-1]
+        # A busy re-plan of a plan that fell back to float32 (`solve_smart`) starts where that solve settled: the dtype
+        # that just failed is never re-tried, and every figure it takes (the KV reserve, the cuts) is a float32 one.
+        _settled = bool(getattr(self, "_settled_fp32", False)) and self._try_fp32_fallback(container, profile)
+        self._fell_back_fp32 = _settled
+        if _settled:
+            target_dtype_str = "float32"
         self._target_dtype_str = target_dtype_str
 
         # Step 1.5: Resolve PER-COMPONENT dtype for the memory estimate.
@@ -2228,7 +2234,7 @@ class PrismSolver:
         # Step 2: Compute memory requirements (tiling-aware via profile)
         component_memory = self._compute_memory(
             container, neural_components, input_config, target_dtype_str,
-            profile=profile, component_dtypes=component_dtypes,
+            profile=profile, component_dtypes=None if _settled else component_dtypes,
         )
         # A component whose vendor's own reference runs in temporal chunks runs so at every request: its
         # activations are one chunk's (`_declared_streams`).
@@ -2424,6 +2430,7 @@ class PrismSolver:
         if not candidates:
             if self._try_fp32_fallback(container, profile):
                 target_dtype_str = "float32"
+                self._fell_back_fp32 = True
                 # And the SOLVER's record of it: the strategies re-evaluated below (layer
                 # streaming's KV reserve) read `self._target_dtype_str`, which stayed at the
                 # dtype that had just failed — the cache reserved at half its fp32 bytes.
@@ -3424,6 +3431,7 @@ class PrismSolver:
         resident_mb = int((plan.host_footprint or {}).get("resident_bytes", 0)) / (1 << 20)
         self._busy_caps = caps
         self._busy_host_pool_mb = None if host_free is None else host_free + resident_mb
+        self._settled_fp32 = bool(getattr(self, "_fell_back_fp32", False))
         try:
             busy = self.solve(container, profile, input_config, serve_mode=serve_mode, mode=mode)
         except RuntimeError as refusal:
@@ -3431,7 +3439,7 @@ class PrismSolver:
                 f"{door}\nRe-planned on the memory free now (machine busy: {held:.0f} MB taken by other "
                 f"applications) — no plan fits it either:\n{str(refusal).splitlines()[0]}") from refusal
         finally:
-            self._busy_caps, self._busy_host_pool_mb = None, None
+            self._busy_caps, self._busy_host_pool_mb, self._settled_fp32 = None, None, False
         if getattr(busy, "execution_door", None):
             raise RuntimeError(f"{door}\nRe-planned on the memory free now (machine busy: {held:.0f} MB taken by "
                                f"other applications) — the smaller plan does not fit either: {busy.execution_door}")
