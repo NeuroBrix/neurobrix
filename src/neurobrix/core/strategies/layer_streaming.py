@@ -536,6 +536,12 @@ class LayerStreamingStrategy(ExecutionStrategy):
                 # was budgeted against.
                 if i not in held:
                     seg_exec.unload_weights()
+                else:
+                    # A held piece keeps its weights and nothing of its run: its arena keeps its slots — inputs,
+                    # intermediates, outputs — to the next run, and 33 held pieces of mochi-1-preview's transformer held
+                    # 4.5 GB of them beside 10.8 GB of weights, MPS out of memory at the 27th (the Mac, 2026-10-27 23:26).
+                    # Its outputs are `out` (taken into `values` below), so the arena's references go now.
+                    seg_exec.release_run_tensors()
             lost = sorted(t for t in protected & produced if t not in capture)
             if lost:
                 raise RuntimeError(
