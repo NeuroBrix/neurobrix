@@ -37,3 +37,19 @@ def test_a_busy_mac_plans_inside_the_reading_or_names_the_shortfall(monkeypatch,
         return
     assert not p.execution_door, p.execution_door
     assert _need(p) <= 14500, (p.strategy, int(_need(p)))
+
+
+def test_an_idle_v100_16gb_plans_cogvideox_i2v_with_the_vendor_cuts(monkeypatch):
+    """The same defect on an IDLE V100-16GB (gate ebm 16g, 2026-10-27 00:59: CogVideoX-5b-I2V triton rc1 in 29 s): the
+    16g plan takes the one-guidance-branch-per-pass path, its VAE was priced whole (109 641 MB with the door reading what
+    a lazy plan holds) and the execution door refused a machine with nothing else on it. RED on 4651eedd."""
+    from tests.unit.prism._pinned_machine import V100_16GB, pin_dedicated_card, profile
+    from tests.unit.prism.test_a_component_over_the_rung_streams_inside_itself import _input_config
+    from neurobrix.core.prism import PrismSolver
+    no_door(monkeypatch)
+    pin_host(monkeypatch, 257530, 200000, "an idle rack host")
+    pin_dedicated_card(monkeypatch, 16151, 306, "an idle V100-16GB")
+    c, ic = _input_config("CogVideoX-5b-I2V", "triton")
+    p = PrismSolver().solve_smart(c, profile(V100_16GB), ic, mode="triton")
+    assert not p.execution_door, p.execution_door
+    assert p.component_memory["vae"].activation_bytes < 10 * 2**30
