@@ -114,8 +114,19 @@ def tree_of(repo: Path, sha: str, scratch: Path = SCRATCH) -> Path:
         if not (hw_dst / y.name).exists():
             shutil.copy2(y, hw_dst / y.name)
     (tmp / ".complete").write_text(sha + "\n")
+    # two scopes (one per class) extract the same tree at once (gate final, 2026-10-27: the 16g scope died on
+    # "Directory not empty" after removing the tree the 32g one had just completed): a COMPLETE tree is never
+    # removed — whoever finishes second keeps the first one's and discards its own; only an incomplete leftover goes
+    if (d / ".complete").is_file():
+        shutil.rmtree(tmp, ignore_errors=True)
+        return d
     shutil.rmtree(d, ignore_errors=True)
-    os.replace(tmp, d)
+    try:
+        os.replace(tmp, d)
+    except OSError:
+        if not (d / ".complete").is_file():
+            raise
+        shutil.rmtree(tmp, ignore_errors=True)
     return d
 
 
