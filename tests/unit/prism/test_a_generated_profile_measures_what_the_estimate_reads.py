@@ -1,11 +1,12 @@
-"""S2 (the supervisor, 2026-10-27 22:20): a machine whose GENERATED profile and architecture vendor file state no
-measured facts is measured at its first launch (`autodetect.ensure_measured_facts`, through `facts_probe`, the measuring
-tool's own primitives) instead of planned without a time estimate — the device facts, the host facts, and the engine's
-loader rate for each stored dtype the model holds — written once into that profile with their source.
+"""S2 (the supervisor, 2026-10-27 22:20 and the decision of 23:00): a machine whose GENERATED profile and architecture
+vendor file state no measured facts is probed at its first launch (`autodetect.ensure_measured_facts`, through
+`facts_probe`, the measuring tool's own primitives) for the device and host facts; the engine's LOADER rate is measured
+by the loader itself at its first real load (`note_loader_rate`), cold then warm — until then Prism ranks without an
+estimate and says so.
 
-What each test would do if the code were wrong: a generated profile left unmeasured (red); a committed profile
-written (red); a fact the profile or its vendor file already states measured again (red); a loader rate measured for
-another engine than the run's (red)."""
+What each test would do if the code were wrong: a generated profile left unprobed (red); a committed profile written
+(red); a fact the profile or its vendor file already states measured again (red); a loader rate kept after its warm
+reading, or written for a load too small to time (red)."""
 from __future__ import annotations
 
 import json
@@ -28,12 +29,6 @@ def hw(tmp_path, monkeypatch):
                         {"memory_gbps": 500.0, "h2d_gbps": 10.0, "d2h_gbps": 9.0, "h2d_pageable_gbps": 5.0})
     monkeypatch.setattr(P, "host_matmul_gflops", lambda *a, **k: CALLS.append(("hmm",)) or 300.0)
     monkeypatch.setattr(P, "host_memory_gbps", lambda *a, **k: CALLS.append(("hmem",)) or 20.0)
-
-    def loads(root, comp, gb, engines):
-        CALLS.append(("load", comp, tuple(engines)))
-        return {"dtype": "BF16", "stored_bytes": int(gb * 1e9), "weights": 3,
-                **{e: {"device": {"cold": 1.0, "warm": 2.0}, "host": {"cold": 0.5, "warm": 0.6}} for e in engines}}
-    monkeypatch.setattr(P, "weight_load_gbps", loads)
     return tmp_path
 
 
@@ -41,48 +36,44 @@ def _profile(hw, name, device):
     (hw / f"{name}.yml").write_text(yaml.safe_dump({"id": name, "devices": [device, dict(device)]}))
 
 
-def _model(tmp_path):
-    c = tmp_path / "model"
-    (c / "components" / "lm").mkdir(parents=True, exist_ok=True)
-    (c / "components" / "lm" / "weights_index.json").write_text(json.dumps(
-        {"tensors": {"w": {"dtype": "bfloat16", "size_bytes": 10}}}))
-    return c
-
-
 DEV = {"brand": "nvidia", "model": "Unknown-Card", "architecture": "unknownarch", "supports_dtypes": ["float16", "float32"]}
 
 
-def test_a_generated_profile_without_facts_is_measured_once_and_written(hw, tmp_path):
+def test_a_generated_profile_without_facts_is_probed_once_and_written(hw):
     _profile(hw, "default-abc", DEV)
-    added = A.ensure_measured_facts("default-abc", _model(tmp_path), "triton")
-    assert set(added) == {"measured", "host_measured", "weight_load_gbps"}
+    assert set(A.ensure_measured_facts("default-abc")) == {"measured", "host_measured"}
     data = yaml.safe_load((hw / "default-abc.yml").read_text())
     for d in data["devices"]:
-        m = d["measured"]
-        assert m["matmul_tflops"] == {"float16": 10.0, "float32": 10.0} and m["h2d_gbps"] == 10.0
-        assert m["weight_load_gbps"]["triton"]["BF16"]["host"]["cold"] == 0.5 and "compiled" not in m["weight_load_gbps"]
-        assert "first launch" in m["source"]
+        assert d["measured"]["matmul_tflops"] == {"float16": 10.0, "float32": 10.0} and d["measured"]["h2d_gbps"] == 10.0
+        assert "first launch" in d["measured"]["source"] and "weight_load_gbps" not in d["measured"]
     assert data["host_measured"]["host_memory_gbps"] == 20
-    assert ("load", "lm", ("triton",)) in CALLS
     CALLS.clear()
-    assert A.ensure_measured_facts("default-abc", _model(tmp_path), "triton") == {}
-    assert CALLS == [], f"measured again: {CALLS}"
-    A.ensure_measured_facts("default-abc", _model(tmp_path), "compiled")
-    assert CALLS == [("load", "lm", ("compiled",))], CALLS
+    assert A.ensure_measured_facts("default-abc") == {} and CALLS == []
 
 
 def test_a_committed_profile_is_never_written(hw, tmp_path):
     _profile(hw, "c4140-something", DEV)
     before = (hw / "c4140-something.yml").read_text()
-    assert A.ensure_measured_facts("c4140-something", _model(tmp_path), "triton") == {}
+    assert A.ensure_measured_facts("c4140-something") == {}
+    assert not A.note_loader_rate("c4140-something", "triton", "bfloat16", "device", 1 << 30, 1.0, "m:c")
     assert (hw / "c4140-something.yml").read_text() == before and CALLS == []
 
 
-def test_what_the_vendor_file_states_is_not_measured_again(hw, tmp_path):
-    """A V100 (volta.yml states the device facts and the rack's loader rates): only the host facts, which volta.yml
-    does not state, are measured."""
+def test_what_the_vendor_file_states_is_not_probed_again(hw):
+    """A V100 (volta.yml states the device facts): only the host facts, which volta.yml does not state, are probed."""
     _profile(hw, "default-v100", {"brand": "nvidia", "model": "Tesla V100-SXM2-16GB", "architecture": "volta",
                                   "compute_capability": "7.0", "supports_dtypes": ["float16", "float32"]})
-    added = A.ensure_measured_facts("default-v100", _model(tmp_path), "triton")
-    assert set(added) == {"host_measured"}, added
-    assert not any(c[0] in ("mm", "copies", "load") for c in CALLS), CALLS
+    assert set(A.ensure_measured_facts("default-v100")) == {"host_measured"}
+    assert not any(c[0] in ("mm", "copies") for c in CALLS), CALLS
+
+
+def test_the_loader_measures_itself_cold_then_warm_then_stops(hw):
+    _profile(hw, "default-abc", DEV)
+    A.ensure_measured_facts("default-abc")
+    assert not A.note_loader_rate("default-abc", "triton", "bfloat16", "device", 1 << 20, 0.01, "m:c"), "too small"
+    assert A.note_loader_rate("default-abc", "triton", "bfloat16", "device", 2 * 10 ** 9, 2.0, "m:c")
+    assert A.note_loader_rate("default-abc", "triton", "bfloat16", "device", 4 * 10 ** 9, 2.0, "m:c")
+    assert not A.note_loader_rate("default-abc", "triton", "bfloat16", "device", 4 * 10 ** 9, 1.0, "m:c")
+    d = yaml.safe_load((hw / "default-abc.yml").read_text())["devices"][1]["measured"]
+    assert d["weight_load_gbps"]["triton"]["BF16"]["device"] == {"cold": 1.0, "warm": 2.0}
+    assert d["matmul_tflops"]["float16"] == 10.0, "the probe's facts kept beside the loader's"

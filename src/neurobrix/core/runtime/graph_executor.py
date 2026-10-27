@@ -2334,6 +2334,16 @@ class GraphExecutor:
                                "expert file — nothing to give back, and nothing should have been copied from it")
         drop_pages(*span)
 
+    def _note_loader_rate(self, engine: str, nbx_path, component: str, where: str, landed: int,
+                          seconds: float) -> None:
+        """The loader's own measurement of this load, handed to the active generated profile (`autodetect.
+        note_loader_rate`, S2): Prism's estimate reads it from the next plan on."""
+        from neurobrix.core.prism import autodetect as _ad
+        stored = _ad.stored_major(nbx_path, component)
+        if stored is not None:
+            _ad.note_loader_rate(_ad.ACTIVE_HARDWARE_ID, engine, stored, where, int(landed), float(seconds),
+                                 f"{Path(str(nbx_path)).name}:{component}")
+
     def _load_weights_native(self, nbx_path, component, shard_map, only=None):
         """Load weights as torch.Tensor (native mode)."""
         # Capability gate (unsupported-path doctrine): encoded-weight
@@ -2368,6 +2378,7 @@ class GraphExecutor:
             self.consumed_weight_names(), nbx_path, component)
         _only, _taken = self._borrow(_only) if only is None else (_only, {})
         _only, _mapped = self._split_expert_files(_only, only)
+        _t_load = time.perf_counter()
         with WeightLoader(nbx_path) as loader:
             if shard_map:
                 loaded = loader.load_component_with_shard_map(
@@ -2375,6 +2386,16 @@ class GraphExecutor:
             else:
                 loaded = loader.load_component(
                     component, self.device, torch_dtype, only=_only)
+        if only is None:
+            # the loader measures itself (S2): the bytes it landed and the time, written into a generated profile
+            import torch as _torch_l
+            if _torch_l.cuda.is_available():
+                _torch_l.cuda.synchronize()
+            _on_host = str(self.device).startswith("cpu") or (bool(shard_map) and all(
+                str(v).startswith("cpu") for v in shard_map.values()))
+            self._note_loader_rate("compiled", nbx_path, component, "host" if _on_host else "device",
+                                   sum(t.numel() * t.element_size() for t in loaded.values() if hasattr(t, "numel")),
+                                   time.perf_counter() - _t_load)
         if _mapped:
             loaded.update(self._expert_file_views(nbx_path, component, _mapped, torch_dtype))
         if only is not None:
@@ -2442,10 +2463,18 @@ class GraphExecutor:
         # one copy on the device, the base's, whose arenas outlive every piece's run.
         _only, _taken = self._borrow(_only) if only is None else (_only, {})
         _only, _mapped = self._split_expert_files(_only, only)
+        _t_load = time.perf_counter()
         loaded = load_component_weights(
             nbx_path, component, device_idx, compute_dtype,
             shard_map=shard_map, only=_only,
             krsc=self._krsc_loader_keys(_only) if only is None else None)
+        if only is None:
+            # the loader measures itself (S2): the bytes it landed and the time, written into a generated profile
+            DeviceAllocator.sync_device()
+            _host = bool(shard_map) and all(str(v).startswith("cpu") for v in shard_map.values())
+            self._note_loader_rate("triton", nbx_path, component, "host" if _host else "device",
+                                   sum(t.nbytes() for k, t in loaded.items() if k != "_arenas"),
+                                   time.perf_counter() - _t_load)
         if _mapped:
             loaded.update(self._expert_file_views(nbx_path, component, _mapped, compute_dtype))
         if only is not None:

@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **A new machine measures what Prism's time estimate needs at its first launch**: when the generated hardware profile and the architecture's vendor file state no measured facts, the first run measures the card, the host and the engine's weight-loading rate for the model's stored dtypes (seconds), and writes them into the generated profile.
+- **A new machine measures what Prism's time estimate needs**: when the generated hardware profile and the architecture's vendor file state no measured facts, the first run probes the card and the host in seconds, and the engine's weight loader records its own rate at its first real loads; until then plans are ranked without a time estimate, and the explanation says so.
 - **A video decoder streamed in temporal chunks can park its causal states in host memory**: when a chunk does not fit the card with its states, each state leaves for the host as soon as it is made and comes back right before the op that first reads it, in every engine (both PyTorch engines and both Triton engines); the plan does it only when nothing fits otherwise. mochi-1-preview's Triton decode now plans on a single 16 GB card.
 - **The Triton engine slices a group-normalised decoder in space exactly too**: the statistics of each group norm are taken once over the whole input and every slice is normalised with them, as the PyTorch engine does.
 - **Spreading a model's weights over several cards no longer assumes its activations spread too**: a component whose activations alone exceed one card is streamed, never placed whole on a card it overflows (Sana 4K's VAE on four 16 GB cards).

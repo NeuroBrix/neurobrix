@@ -2532,9 +2532,27 @@ def device_sharing(index: int):
 # ---------------------------------------------------------------------------------------------------------------------
 # First-launch facts (the supervisor's S2, 2026-10-27 22:20): what the time estimate reads, measured where it runs
 # ---------------------------------------------------------------------------------------------------------------------
-#: the quick first-launch measurement (`facts_probe`): one GEMM size, 256 MB copies, half a GB of a component's weights
+#: the quick first-launch probe (`facts_probe`): one GEMM size, 256 MB copies
 FIRST_LAUNCH = {"gemm_sizes": (4096,), "gemm_warmup": 10, "gemm_rep": 30, "copy_bytes": 256 << 20, "copy_reps": 5,
-                "host_gemm_n": 2048, "host_copy_bytes": 256 << 20, "load_gb": 0.5}
+                "host_gemm_n": 2048, "host_copy_bytes": 256 << 20}
+#: a load smaller than this is not a loader rate (its fixed costs dominate)
+LOADER_RATE_MIN_BYTES = 256 << 20
+#: the hardware profile this process runs under (set by the run once it resolved it): the one its loaders write into
+ACTIVE_HARDWARE_ID: Optional[str] = None
+
+
+def stored_major(cache_path, component: str) -> Optional[str]:
+    """The floating dtype most of `component`'s stored bytes are in (its weights index), or None."""
+    import json as _json
+    index = Path(cache_path) / "components" / component / "weights_index.json"
+    if not index.exists():
+        return None
+    by: Dict[str, int] = {}
+    for v in (_json.loads(index.read_text()).get("tensors") or {}).values():
+        d = str(v.get("dtype", "")) if isinstance(v, dict) else ""
+        if d in _STORED:
+            by[d] = by.get(d, 0) + int(v.get("size_bytes") or 0)
+    return max(by, key=by.get) if by else None
 _STORED = {"bfloat16": "BF16", "float32": "F32", "float16": "F16"}
 
 
@@ -2558,12 +2576,13 @@ def _major_stored_dtypes(cache_path: Path) -> Dict[str, Tuple[str, int]]:
     return out
 
 
-def ensure_measured_facts(hardware_id: str, cache_path: Optional[Path] = None, engine: Optional[str] = None) -> dict:
-    """Measure, ONCE, on a GENERATED profile (`default-*`), what Prism's time estimate reads and neither the profile nor
-    its architecture's tracked vendor file states — the device facts, the host facts, and the engine's loader rate for
-    each stored dtype the model `cache_path` holds — and write them into that profile with their source. A committed
-    profile is never written (its facts are the measuring tool's, `tools/profile_facts.py`); a census shadow (no card)
-    measures nothing. Returns what was added."""
+def ensure_measured_facts(hardware_id: str) -> dict:
+    """Measure, ONCE, on a GENERATED profile (`default-*`), the device and host facts Prism's time estimate reads that
+    neither the profile nor its architecture's tracked vendor file states (the quick probe), and write them with their
+    source. The engine's LOADER rate is not probed here: the loader measures itself at its first real load
+    (`note_loader_rate`) — until then Prism ranks without an estimate and says so (the supervisor's decision S2,
+    2026-10-27 23:00). A committed profile is never written; a census shadow (no card) measures nothing. Returns what
+    was added."""
     if not str(hardware_id).startswith("default"):
         return {}
     try:
@@ -2603,17 +2622,6 @@ def ensure_measured_facts(hardware_id: str, cache_path: Optional[Path] = None, e
                                  "host_matmul_gflops": round(P.host_matmul_gflops(q["host_gemm_n"])),
                                  "host_memory_gbps": round(P.host_memory_gbps(q["host_copy_bytes"]))}
         added["host_measured"] = ["host_matmul_gflops", "host_memory_gbps"]
-    if cache_path is not None and engine is not None:
-        have = ((first.get("weight_load_gbps") or {}).get(engine) or {})
-        for st, (comp, _n) in sorted(_major_stored_dtypes(cache_path).items()):
-            if st in have:
-                continue
-            r = P.weight_load_gbps(Path(cache_path), comp, q["load_gb"], engines=(engine,))
-            first.setdefault("weight_load_gbps", {}).setdefault(engine, {})[r["dtype"]] = r[engine]
-            first.setdefault("weight_load_source", []).append(
-                f"{engine} {r['dtype']}: measured {stamp} at the first launch, {Path(cache_path).name}:{comp}, "
-                f"{r['stored_bytes'] / 1e9:.2f} GB stored (autodetect, facts_probe.weight_load_gbps)")
-            added.setdefault("weight_load_gbps", []).append(f"{engine}.{r['dtype']}")
     if not added:
         return {}
     same = devices[0].get("model")
@@ -2623,3 +2631,43 @@ def ensure_measured_facts(hardware_id: str, cache_path: Optional[Path] = None, e
     _write_profile_atomically(path, data)
     print(f"   [Auto-detect] measured on this machine and written into {path.name}: {added}")
     return added
+
+
+def note_loader_rate(hardware_id: Optional[str], engine: str, stored: str, where: str, landed_bytes: int, seconds: float,
+                     what: str) -> bool:
+    """The engine's loader measured ITSELF at a real load (`GraphExecutor`'s loaders): `landed_bytes` of weights stored
+    as `stored` (a weights-index dtype name) landed on the card or in host memory (`where`) in `seconds`. Written, on a
+    GENERATED profile only, where neither it nor the vendor file states that rate: the first load as `cold`, a later
+    one as `warm`. True when written."""
+    if not hardware_id or not str(hardware_id).startswith("default") or seconds <= 0 \
+            or landed_bytes < LOADER_RATE_MIN_BYTES:
+        return False
+    st = _STORED.get(str(stored), str(stored))
+    path = HARDWARE_DIR / f"{hardware_id}.yml"
+    if not path.exists():
+        return False
+    from neurobrix.core.prism.loader import _vendor_block
+    import time as _time
+    data = yaml.safe_load(path.read_text()) or {}
+    devices = data.get("devices") or []
+    if not devices:
+        return False
+    measured = dict(devices[0].get("measured") or _vendor_block(devices[0], "measured") or {})
+    rates = ((measured.get("weight_load_gbps") or {}).get(engine) or {}).get(st, {}).get(where) or {}
+    state = "cold" if "cold" not in rates else ("warm" if "warm" not in rates else None)
+    if state is None:
+        return False
+    gbps = round(landed_bytes / seconds / 1e9, 3)
+    tree = measured.setdefault("weight_load_gbps", {}).setdefault(engine, {}).setdefault(st, {})
+    tree.setdefault(where, {})[state] = gbps
+    measured.setdefault("weight_load_source", []).append(
+        f"{engine} {st} {where} {state}: {gbps} GB/s measured by the loader itself at a real load "
+        f"{_time.strftime('%Y-%m-%d %H:%M:%S %Z')}, {what}, {landed_bytes / 1e9:.2f} GB landed")
+    same = devices[0].get("model")
+    for d in devices:
+        if d.get("model") == same:
+            d["measured"] = dict(measured)
+    _write_profile_atomically(path, data)
+    print(f"   [Auto-detect] the {engine} loader measured itself: {st} to the {where} ({state}) {gbps} GB/s, "
+          f"written into {path.name}")
+    return True
