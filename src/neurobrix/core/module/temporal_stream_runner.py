@@ -81,6 +81,9 @@ class ParkedTensor:
     upload is refused by name, never a stale copy."""
 
     __slots__ = ("_host", "shape", "dtype", "_device")
+    #: the device bytes it holds — none: an engine's arena that retires the slot it sat in (the Triton loops' deferred
+    #: frees count `_nbytes`) frees nothing on the card for it
+    _nbytes = 0
 
     def __init__(self, t: Any):
         if _is_nbx(t):
