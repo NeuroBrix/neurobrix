@@ -1736,6 +1736,22 @@ class PrismSolver:
             return float(mem.activation_mb) * float(get_prism_defaults()["triton_arena_activation_factor"])
         return float(mem.activation_mb)
 
+    def _held_as_planned_mb(self, container, comp_name: str, mem: "ComponentMemory", dev: "DeviceState",
+                            alloc: "ComponentAllocation", tiling=None, stream=None) -> float:
+        """What a component the plan loads on demand holds on `dev` while it is loaded, AS THE PLAN PLACES IT: a zero3
+        component its resident part and its activations (its blocks stream), a tiled one its weights and one tile
+        (`_tiled_component_mb`), a temporally streamed one its weights and one chunk, an expert store its dense part
+        and cache (`_held_component_mb`), any other its whole cost. The ONE figure the execution door and the lazy
+        plan's phase check read."""
+        if str(alloc.strategy) == "zero3":
+            return float(alloc.resident_weight_mb or 0.0) + self._live_activation_mb(mem)
+        if tiling is not None:
+            return self._tiled_component_mb(container, comp_name, mem, dev, tiling)
+        if stream is not None:
+            return (mem.weight_mb * dev.get_cost_multiplier(self._get_component_dtype(container, comp_name))
+                    + float(stream["activation_bytes"]) / (1024 * 1024))
+        return self._held_component_mb(container, comp_name, mem, dev, alloc)
+
     def _held_component_mb(self, container, comp_name: str, mem: "ComponentMemory", dev: "DeviceState",
                            alloc: "ComponentAllocation") -> float:
         """What a component the plan places on `dev` holds there: an expert store its dense part and its expert cache
@@ -2838,23 +2854,12 @@ class PrismSolver:
             for _n, _a in plan.components.items():
                 if _d.device_string not in (_a.devices or []) or _n not in plan.component_memory:
                     continue
-                _m = plan.component_memory[_n]
-                _tile = (getattr(plan, "component_tiling", None) or {}).get(_n)
-                _stream = (getattr(plan, "component_stream", None) or {}).get(_n)
-                if str(_a.strategy) == "zero3":
-                    _c = float(_a.resident_weight_mb or 0.0) + self._live_activation_mb(_m)
-                elif _tile is not None:
-                    # a tiled component holds one tile beside its weights, as the plan priced it
-                    # (`_peak_loaded_bytes`, `_tiled_component_mb`): mochi native's VAE on an idle V100-16GB was
-                    # read whole, 21 214 MB, and the door refused the plan the planner had accepted (gate ebm 16g,
-                    # 2026-10-27 01:35)
-                    _c = self._tiled_component_mb(container, _n, _m, _d, _tile)
-                elif _stream is not None:
-                    # a temporally streamed component holds its weights and one chunk's activations
-                    _c = (_m.weight_mb * _d.get_cost_multiplier(self._get_component_dtype(container, _n))
-                          + float(_stream["activation_bytes"]) / (1024 * 1024))
-                else:
-                    _c = self._held_component_mb(container, _n, _m, _d, _a)
+                # as the plan holds it (a tiled component its tile, a streamed one a chunk, zero3 its resident part):
+                # mochi native's tiled VAE on an idle V100-16GB was read whole, 21 214 MB, and the door refused the
+                # plan the planner had accepted (gate ebm 16g, 2026-10-27 01:35)
+                _c = self._held_as_planned_mb(container, _n, plan.component_memory[_n], _d, _a,
+                                              tiling=(getattr(plan, "component_tiling", None) or {}).get(_n),
+                                              stream=(getattr(plan, "component_stream", None) or {}).get(_n))
                 best = max(best, _c)
             return best
         for _d in (chosen_devices or []):
@@ -5611,6 +5616,46 @@ class PrismSolver:
             if result is None:
                 return None
             allocations[comp_name] = result
+
+        # THE FLOW'S PHASES on a dedicated card: each component was placed alone against the usable part, but the flow
+        # holds some together (a language model and its head while it decodes, `core/flow/base.resident_together`).
+        # The dearest phase, every component as the plan holds it, must fit the same part. Unchecked on a card,
+        # MiniCPM-o-4_5 triton on a V100-16GB planned its decode phase at 15 477 MB (model 14 218 + head 1 259) against
+        # a 14 321 MB part and died loading the head (gate ebm 16g, 2026-10-27; zero3 ran it before 83b1c3d9).
+        # A unified device reads its phases in the host-side check (`_peak_loaded_bytes`).
+        mem_of = dict(sorted_comps)
+        for dev in devices:
+            if getattr(getattr(dev, "spec", None), "has_unified_memory", False):
+                continue
+            # an allocation here is (device string, shard map): "cuda:0" a component held on the card, "zero3:cuda:0"
+            # one whose blocks stream (it holds its activations); any other form (an expert store, shards) has its
+            # resident part settled only when the plan is built — the phases are then not judged here
+            costs, judged = {}, True
+            for n, a in allocations.items():
+                where = a[0] if isinstance(a, tuple) else str(a)
+                if where == dev.device_string:
+                    tiling, stream = (self._component_tiling or {}).get(n), (self._component_stream or {}).get(n)
+                    if tiling is not None:
+                        held = self._tiled_component_mb(container, n, mem_of[n], dev, tiling)
+                    elif stream is not None:
+                        held = (mem_of[n].weight_mb * dev.get_cost_multiplier(self._get_component_dtype(container, n))
+                                + float(stream["activation_bytes"]) / (1024 * 1024))
+                    else:
+                        held = self._whole_component_mb(container, n, mem_of[n], dev)
+                    costs[n] = int(held * 1024 * 1024)
+                elif where == f"zero3:{dev.device_string}":
+                    costs[n] = int(self._live_activation_mb(mem_of[n]) * 1024 * 1024)
+                elif dev.device_string in where:
+                    judged = False
+            if not judged or len(costs) < 2:
+                continue
+            peak_mb = self._phase_peak(container, costs) / (1024 * 1024)
+            room = self._usable_mb(dev)
+            if peak_mb > room:
+                logging.getLogger(__name__).info(
+                    "Prism: lazy_sequential declined on %s — the flow's dearest phase holds %.0f MB (its components "
+                    "as placed) over the %.0f MB usable part", dev.device_string, peak_mb, room)
+                return None
 
         return allocations, fresh
 

@@ -87,3 +87,20 @@ def test_an_idle_v100_32gb_runs_mochi_triton_past_the_door(monkeypatch):
     c, ic = _input_config("mochi-1-preview", "triton")
     p = PrismSolver().solve_smart(c, profile(v32), ic, mode="triton")
     assert not p.execution_door, p.execution_door
+
+
+def test_a_lazy_plan_fits_its_dearest_phase_on_a_dedicated_card(monkeypatch):
+    """MiniCPM-o-4_5 triton on an idle V100-16GB (gate ebm 16g, 2026-10-27 01:14: OOM loading the head): lazy_sequential
+    placed each component alone against the usable part, but the flow holds the language model and its head together
+    while it decodes — 14 218 + 1 259 MB over a 14 321 MB part, a phase nothing compared to the card. The lazy plan now
+    declines and zero3 (its plan before 83b1c3d9) takes it; proven on card 1 through the entry point (rc 0, the apple
+    described). RED on 4651eedd."""
+    from tests.unit.prism._pinned_machine import V100_16GB, pin_dedicated_card, profile
+    from tests.unit.prism.test_a_component_over_the_rung_streams_inside_itself import _input_config
+    from neurobrix.core.prism import PrismSolver
+    no_door(monkeypatch)
+    pin_host(monkeypatch, 257530, 200000, "an idle rack host")
+    pin_dedicated_card(monkeypatch, 16151, 306, "an idle V100-16GB")
+    c, ic = _input_config("MiniCPM-o-4_5", "triton")
+    p = PrismSolver().solve_smart(c, profile(V100_16GB), ic, mode="triton")
+    assert p.strategy != "lazy_sequential", p.strategy
