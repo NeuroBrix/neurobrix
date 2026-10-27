@@ -266,6 +266,13 @@ def weight_load_gbps(spec: str, gb: float) -> dict:
         return load
     for engine, make in (("triton", triton), ("compiled", compiled)):
         out[engine] = {}
+        # one small load first, never timed: the engine's context, its conversion kernels' compilation and its pools
+        # belong to the process, not to the load (the first triton bf16 load measured 0.01 GB/s cold without it)
+        keep = only
+        only = set(keys[:4])
+        make(False)()
+        make(True)()
+        only = keep
         for where in ("device", "host"):
             _evict(used)
             cold = timed(make(where == "host"))
