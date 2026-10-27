@@ -69,3 +69,21 @@ def test_the_door_reads_a_tiled_component_at_its_tile(monkeypatch):
     c, ic = _input_config("mochi-1-preview", "compiled")
     p = PrismSolver().solve_smart(c, profile(V100_16GB), ic, mode="compiled")
     assert not p.execution_door, p.execution_door
+
+
+def test_an_idle_v100_32gb_runs_mochi_triton_past_the_door(monkeypatch):
+    """Gate ebm 32g, 2026-10-27 02:05: mochi-1-preview triton rc1 in 27 s on an idle V100-32GB, the door refusing
+    '36 441 MB on this pool' — green in tha3/tha4 before the busy-machine lot. The same door reading as the 16g native
+    cell (a component read whole instead of as the plan holds it). RED on 4651eedd."""
+    import copy
+    from tests.unit.prism._pinned_machine import V100_16GB, pin_dedicated_card, profile
+    from tests.unit.prism.test_a_component_over_the_rung_streams_inside_itself import _input_config
+    from neurobrix.core.prism import PrismSolver
+    v32 = copy.deepcopy(V100_16GB); v32["id"] = "scenario-v100-32gb"
+    v32["devices"][0].update(model="Tesla V100-SXM2-32GB", memory_mb=32768)
+    no_door(monkeypatch)
+    pin_host(monkeypatch, 257530, 200000, "an idle rack host")
+    pin_dedicated_card(monkeypatch, 32501, 306, "an idle V100-32GB")
+    c, ic = _input_config("mochi-1-preview", "triton")
+    p = PrismSolver().solve_smart(c, profile(v32), ic, mode="triton")
+    assert not p.execution_door, p.execution_door
