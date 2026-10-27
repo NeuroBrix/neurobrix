@@ -74,3 +74,15 @@ def test_an_empty_base_is_refused_by_name(tmp_path, capsys):
     (tmp_path / "empty").mkdir()
     assert _tally(tmp_path, gate, tmp_path / "empty", [_works("aa")]) == 2
     assert "holds no rows" in capsys.readouterr().out
+
+
+def test_the_time_compared_is_the_compute_not_the_loads():
+    """Gate ebm (2026-10-27): Wan2.2-I2V-A14B triton loaded in 186 s instead of 74 (four cells reading the shared storage
+    at once) while its compute fell from 72 to 65 s; exec_s, which holds the in-request loads, called it 1.75x slower.
+    The tally compares the load-free compute (ttft, plus the decode for a generation)."""
+    base = {"ttft_s": 72.0, "first_output": "output", "exec_s": 138.0}
+    slow_load = {"ttft_s": 65.0, "first_output": "output", "exec_s": 241.0}
+    assert T.slower(slow_load, base, 1.5) is None
+    gen_base = {"ttft_s": 30.0, "first_output": "token", "tokens": 32, "tpot_ms": 854.0}
+    gen_slow = {"ttft_s": 38.0, "first_output": "token", "tokens": 32, "tpot_ms": 1591.0}
+    assert T.slower(gen_slow, gen_base, 1.5)[2] == "compute_s"

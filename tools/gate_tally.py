@@ -90,15 +90,25 @@ def judgments(paths):
     return out
 
 
-def seconds(r):
-    return r.get("exec_s"), r.get("wall_s")
+def compute_s(r):
+    """A run's compute seconds, the load spans removed (core/runtime/run_timings: `ttft_s` excludes every load): the
+    output's ttft for a run without tokens, ttft + (tokens - 1) x tpot for a generation; None when the row has no
+    timings line. Gate ebm (2026-10-27): four cells at once reading the shared storage tripled Wan2.2-I2V's load
+    (74 -> 186 s) while its compute fell (72 -> 65 s); exec_s, which holds the in-request loads, called it a regression."""
+    t = r.get("ttft_s")
+    if t is None:
+        return None
+    if r.get("first_output") == "token" and r.get("tokens") and r.get("tpot_ms") is not None:
+        return float(t) + (int(r["tokens"]) - 1) * float(r["tpot_ms"]) / 1000.0
+    return float(t)
 
 
 def slower(r, b, factor):
-    """`(new, base, field)` when the row is over `factor` times its base on the same field — exec_s when both rows carry
-    it (the compute, without the disk), else wall_s; None otherwise or when either row has no time."""
-    for i, field in ((0, "exec_s"), (1, "wall_s")):
-        n, o = seconds(r)[i], seconds(b)[i]
+    """`(new, base, field)` when the row is over `factor` times its base on the same measure — the compute seconds
+    when both rows carry them (loads removed: storage contention is not the engine's speed), else exec_s, else wall_s;
+    None otherwise or when either row has no time."""
+    for field, get in (("compute_s", compute_s), ("exec_s", lambda x: x.get("exec_s")), ("wall_s", lambda x: x.get("wall_s"))):
+        n, o = get(r), get(b)
         if n is not None and o is not None:
             return (n, o, field) if o > 0 and float(n) > factor * float(o) else None
     return None
