@@ -151,8 +151,7 @@ def storage_read_gbps(path: Path) -> float:
     size = path.stat().st_size
     fd = os.open(str(path), os.O_RDONLY)
     try:
-        if hasattr(os, "posix_fadvise"):
-            os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)        # cold: not the page cache
+        _drop_cache(fd, os.fstat(fd).st_size)        # cold: not the page cache
         t0 = time.perf_counter()
         while os.read(fd, 64 << 20):
             pass
@@ -161,11 +160,37 @@ def storage_read_gbps(path: Path) -> float:
         os.close(fd)
 
 
+def _drop_cache(fd: int, size: int) -> None:
+    """Drop a file's pages from the OS page cache: posix_fadvise(DONTNEED) where it exists (Linux); on macOS, which has
+    no posix_fadvise, msync(MS_INVALIDATE) over a shared read-only mapping of the file (measured on the M4 Pro
+    2026-10-27: a shard read at 21 GB/s warm reads at 6.5 GB/s, the SSD's own rate, right after)."""
+    if hasattr(os, "posix_fadvise"):
+        os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+        return
+    import ctypes
+    import mmap as _mmap
+    libc = ctypes.CDLL(None)
+    libc.mmap.restype = ctypes.c_void_p
+    libc.mmap.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_long]
+    libc.msync.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
+    libc.munmap.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+    if size <= 0:
+        return
+    addr = libc.mmap(None, size, _mmap.PROT_READ, _mmap.MAP_SHARED, fd, 0)
+    if addr in (None, ctypes.c_void_p(-1).value):
+        raise OSError(f"mmap of fd {fd} failed: cannot drop its pages from the cache")
+    try:
+        if libc.msync(addr, size, 2):          # MS_INVALIDATE
+            raise OSError(f"msync(MS_INVALIDATE) failed on fd {fd}")
+    finally:
+        libc.munmap(addr, size)
+
+
 def _evict(paths) -> None:
     for p in paths:
         fd = os.open(str(p), os.O_RDONLY)
         try:
-            os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+            _drop_cache(fd, os.fstat(fd).st_size)
         finally:
             os.close(fd)
 
