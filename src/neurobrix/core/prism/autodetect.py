@@ -2527,3 +2527,99 @@ def device_sharing(index: int):
                 "total_mb": r["total_mb"], "free_mb": r["total_mb"] - r["used_mb"], "source": "nvidia-smi"}
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return None
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# First-launch facts (the supervisor's S2, 2026-10-27 22:20): what the time estimate reads, measured where it runs
+# ---------------------------------------------------------------------------------------------------------------------
+#: the quick first-launch measurement (`facts_probe`): one GEMM size, 256 MB copies, half a GB of a component's weights
+FIRST_LAUNCH = {"gemm_sizes": (4096,), "gemm_warmup": 10, "gemm_rep": 30, "copy_bytes": 256 << 20, "copy_reps": 5,
+                "host_gemm_n": 2048, "host_copy_bytes": 256 << 20, "load_gb": 0.5}
+_STORED = {"bfloat16": "BF16", "float32": "F32", "float16": "F16"}
+
+
+def _major_stored_dtypes(cache_path: Path) -> Dict[str, Tuple[str, int]]:
+    """{safetensors dtype: (the largest component stored mostly in it, its bytes)} from the weights indexes."""
+    import json as _json
+    out: Dict[str, Tuple[str, int]] = {}
+    for index in sorted((Path(cache_path) / "components").glob("*/weights_index.json")):
+        by: Dict[str, int] = {}
+        for v in (_json.loads(index.read_text()).get("tensors") or {}).values():
+            d = str(v.get("dtype", "")) if isinstance(v, dict) else ""
+            if d in _STORED:
+                by[d] = by.get(d, 0) + int(v.get("size_bytes") or 0)
+        if not by:
+            continue
+        major = max(by, key=by.get)
+        total = sum(by.values())
+        st = _STORED[major]
+        if st not in out or total > out[st][1]:
+            out[st] = (index.parent.name, total)
+    return out
+
+
+def ensure_measured_facts(hardware_id: str, cache_path: Optional[Path] = None, engine: Optional[str] = None) -> dict:
+    """Measure, ONCE, on a GENERATED profile (`default-*`), what Prism's time estimate reads and neither the profile nor
+    its architecture's tracked vendor file states — the device facts, the host facts, and the engine's loader rate for
+    each stored dtype the model `cache_path` holds — and write them into that profile with their source. A committed
+    profile is never written (its facts are the measuring tool's, `tools/profile_facts.py`); a census shadow (no card)
+    measures nothing. Returns what was added."""
+    if not str(hardware_id).startswith("default"):
+        return {}
+    try:
+        from neurobrix.kernels import census as _census
+        if _census.active():
+            return {}
+    except Exception:  # noqa: BLE001 — no census module: a run
+        pass
+    path = HARDWARE_DIR / f"{hardware_id}.yml"
+    if not path.exists():
+        return {}
+    from neurobrix.core.prism.loader import _vendor_block
+    from neurobrix.core.prism import facts_probe as P
+    import time as _time
+    data = yaml.safe_load(path.read_text()) or {}
+    devices = data.get("devices") or []
+    if not devices:
+        return {}
+    stamp = _time.strftime("%Y-%m-%d %H:%M:%S %Z")
+    added: Dict[str, Any] = {}
+    q = FIRST_LAUNCH
+
+    def measured_of(d):
+        return dict(d.get("measured") or _vendor_block(d, "measured") or {})
+
+    first = measured_of(devices[0])
+    if not first:
+        dtypes = [t for t in (devices[0].get("supports_dtypes") or []) if t in ("float16", "float32", "bfloat16")]
+        first = {"source": f"measured {stamp} at the first launch on this machine (autodetect, quick: one GEMM size, "
+                           f"{q['copy_bytes'] >> 20} MB copies; tools/profile_facts.py measures the full set)",
+                 "matmul_tflops": {t: round(P.matmul_tflops(t, q["gemm_sizes"], q["gemm_warmup"], q["gemm_rep"])["best"], 1)
+                                   for t in dtypes},
+                 **{k: round(v, 1) for k, v in P.copies(q["copy_bytes"], q["copy_reps"]).items()}}
+        added["measured"] = sorted(k for k in first if k != "source")
+    if not (data.get("host_measured") or _vendor_block(devices[0], "host_measured")):
+        data["host_measured"] = {"source": f"measured {stamp} at the first launch on this machine (autodetect, quick)",
+                                 "host_matmul_gflops": round(P.host_matmul_gflops(q["host_gemm_n"])),
+                                 "host_memory_gbps": round(P.host_memory_gbps(q["host_copy_bytes"]))}
+        added["host_measured"] = ["host_matmul_gflops", "host_memory_gbps"]
+    if cache_path is not None and engine is not None:
+        have = ((first.get("weight_load_gbps") or {}).get(engine) or {})
+        for st, (comp, _n) in sorted(_major_stored_dtypes(cache_path).items()):
+            if st in have:
+                continue
+            r = P.weight_load_gbps(Path(cache_path), comp, q["load_gb"], engines=(engine,))
+            first.setdefault("weight_load_gbps", {}).setdefault(engine, {})[r["dtype"]] = r[engine]
+            first.setdefault("weight_load_source", []).append(
+                f"{engine} {r['dtype']}: measured {stamp} at the first launch, {Path(cache_path).name}:{comp}, "
+                f"{r['stored_bytes'] / 1e9:.2f} GB stored (autodetect, facts_probe.weight_load_gbps)")
+            added.setdefault("weight_load_gbps", []).append(f"{engine}.{r['dtype']}")
+    if not added:
+        return {}
+    same = devices[0].get("model")
+    for d in devices:                                 # the cards of the same model share what card 0 measured
+        if d.get("model") == same:
+            d["measured"] = dict(first)
+    _write_profile_atomically(path, data)
+    print(f"   [Auto-detect] measured on this machine and written into {path.name}: {added}")
+    return added

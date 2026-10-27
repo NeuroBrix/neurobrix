@@ -595,11 +595,13 @@ def cmd_run(args):
 
     # 2. Prism Allocation
     print("\n[2/4] Solving hardware allocation...")
-    if args.hardware:
-        hw_profile = load_profile(args.hardware)
-    else:
-        hardware_id = get_or_create_default_profile()
-        hw_profile = load_profile(hardware_id)
+    hardware_id = args.hardware or get_or_create_default_profile()
+    # A generated profile measures, once, what Prism's time estimate reads and neither it nor its vendor file states —
+    # the device and host facts, this engine's loader rate for the stored dtypes this model holds (S2, 2026-10-27)
+    from neurobrix.core.prism.autodetect import ensure_measured_facts
+    from neurobrix.core.prism.host_footprint import engine_of
+    ensure_measured_facts(hardware_id, container._cache_path, engine_of(execution_mode))
+    hw_profile = load_profile(hardware_id)
     print(f"   Profile: {hw_profile.id} ({hw_profile.total_vram_gb:.1f} GB)")
 
     # Build InputConfig for activation profiling

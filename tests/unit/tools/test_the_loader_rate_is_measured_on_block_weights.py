@@ -35,7 +35,7 @@ def test_the_measured_set_is_block_weights_up_to_the_budget(tmp_path):
 
 def test_a_component_without_shards_is_refused_by_name(tmp_path):
     (tmp_path / "components" / "x" / "weights").mkdir(parents=True)
-    with pytest.raises(SystemExit, match="no shard under"):
+    with pytest.raises(RuntimeError, match="no shard under"):
         PF.block_keys(tmp_path, "x", 1.0)
 
 

@@ -37,81 +37,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from atelier import writable  # noqa: E402
 
-GEMM_SIZES = (2048, 4096, 8192)
-COPY_BYTES = 1 << 30
-
-
-def _sync():
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator
-    DeviceAllocator.device_synchronize()
-
-
-def matmul_tflops(dtype: str) -> dict:
-    """The GEMM throughput at `dtype`. numpy draws float16 and float32; bfloat16 (no numpy dtype) is drawn float32
-    and cast on the device by the engine's own cast (`NBXTensor.to`), so the measured kernel is the bf16 matmul a
-    bf16 plan launches — the time estimate reads `matmul_tflops.<compute dtype>` and refuses by name without it
-    (the Mac, 2026-10-25 18:10: no estimate on 88 of 98 Metal plans for want of this figure)."""
-    import numpy as np
-    from neurobrix.kernels import launcher as L
-    from neurobrix.kernels import wrappers as W
-    from neurobrix.kernels.nbx_tensor import NBXTensor
-    npd = {"float16": np.float16, "float32": np.float32, "bfloat16": np.float32}[dtype]
-    rng = np.random.default_rng(0)
-    per = {}
-    for n in GEMM_SIZES:
-        a = NBXTensor.from_numpy(np.ascontiguousarray((rng.standard_normal((n, n)) * 0.1).astype(npd))).to_cuda(0).to(dtype)
-        b = NBXTensor.from_numpy(np.ascontiguousarray((rng.standard_normal((n, n)) * 0.1).astype(npd))).to_cuda(0).to(dtype)
-        ms = float(L.do_bench(lambda: W.mm(a, b), warmup=50, rep=200))
-        per[n] = 2.0 * n * n * n / (ms * 1e-3) / 1e12
-        del a, b
-    return {"best": max(per.values()), "per_size": per}
-
-
-def _timed_copies(dst: int, src: int, nbytes: int, kind: int, reps: int) -> float:
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator
-    DeviceAllocator.memcpy(dst, src, nbytes, kind)
-    _sync()
-    t0 = time.perf_counter()
-    for _ in range(reps):
-        DeviceAllocator.memcpy(dst, src, nbytes, kind)
-    _sync()
-    return (time.perf_counter() - t0) / reps
-
-
-def copies() -> dict:
-    import numpy as np
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator
-    n = COPY_BYTES
-    d0, d1 = DeviceAllocator.malloc_cuda(n), DeviceAllocator.malloc_cuda(n)
-    h = DeviceAllocator.malloc_host_pinned(n)
-    pageable = np.ones(n, dtype=np.uint8)
-    try:
-        t_dd = _timed_copies(d1, d0, n, 3, 20)
-        t_hd = _timed_copies(d0, h, n, 1, 10)
-        t_dh = _timed_copies(h, d0, n, 2, 10)
-        t_pd = _timed_copies(d0, pageable.ctypes.data, n, 1, 5)
-    finally:
-        DeviceAllocator.free_cuda(d0)
-        DeviceAllocator.free_cuda(d1)
-        DeviceAllocator.free_host_pinned(h)
-    g = lambda b, t: b / t / 1e9                                                    # noqa: E731
-    return {"memory_gbps": g(2 * n, t_dd), "h2d_gbps": g(n, t_hd), "d2h_gbps": g(n, t_dh),
-            "h2d_pageable_gbps": g(n, t_pd)}
-
-
-def host_matmul_gflops() -> float:
-    import numpy as np
-    n = 4096
-    rng = np.random.default_rng(0)
-    a = rng.standard_normal((n, n), dtype=np.float32)
-    b = rng.standard_normal((n, n), dtype=np.float32)
-    a @ b
-    best = float("inf")
-    for _ in range(3):
-        t0 = time.perf_counter()
-        a @ b
-        best = min(best, time.perf_counter() - t0)
-    return 2.0 * n ** 3 / best / 1e9
+# The measuring primitives are the engine's own (core/prism/facts_probe.py): one code for this tool's full measurement
+# and for a machine's first launch (the supervisor's S2, 2026-10-27).
+from neurobrix.core.prism.facts_probe import (  # noqa: E402
+    block_keys, copies, host_matmul_gflops, host_memory_gbps, matmul_tflops, storage_read_gbps, stored_dtype)
+from neurobrix.core.prism import facts_probe as _probe  # noqa: E402
 
 
 def system_share_mb(readings: int = 30, every_s: float = 10.0) -> dict:
@@ -134,151 +64,15 @@ def system_share_mb(readings: int = 30, every_s: float = 10.0) -> dict:
             "system_share_mb": int(round(total - calm))}
 
 
-def host_memory_gbps() -> float:
-    import numpy as np
-    src = np.ones(COPY_BYTES, dtype=np.uint8)
-    dst = np.empty_like(src)
-    np.copyto(dst, src)
-    best = float("inf")
-    for _ in range(3):
-        t0 = time.perf_counter()
-        np.copyto(dst, src)
-        best = min(best, time.perf_counter() - t0)
-    return 2.0 * COPY_BYTES / best / 1e9
-
-
-def storage_read_gbps(path: Path) -> float:
-    size = path.stat().st_size
-    fd = os.open(str(path), os.O_RDONLY)
-    try:
-        if hasattr(os, "posix_fadvise"):
-            os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)        # cold: not the page cache
-        t0 = time.perf_counter()
-        while os.read(fd, 64 << 20):
-            pass
-        return size / (time.perf_counter() - t0) / 1e9
-    finally:
-        os.close(fd)
-
-
-def _evict(paths) -> None:
-    for p in paths:
-        fd = os.open(str(p), os.O_RDONLY)
-        try:
-            os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
-        finally:
-            os.close(fd)
-
-
-def block_keys(root: Path, comp: str, gb: float):
-    """(keys, stored bytes, shard files) — the component's first block weights, in shard order, up to `gb` GB stored.
-    Refuses a component with no shard or no block weight by name."""
-    from neurobrix.triton.weight_loader import _read_header, is_block_key
-    wdir = root / "components" / comp / "weights"
-    shards = sorted(wdir.glob("*.safetensors"))
-    if not shards:
-        raise SystemExit(f"--weights {root.name}:{comp}: no shard under {wdir}")
-    keys, stored, used = [], 0, []
-    for sh in shards:
-        header, _ = _read_header(str(sh))
-        for k, info in header.items():
-            if k == "__metadata__" or not is_block_key(k):
-                continue
-            a, b = info["data_offsets"]
-            keys.append(k)
-            stored += b - a
-            if sh not in used:
-                used.append(sh)
-            if stored >= gb * 1e9:
-                break
-        if stored >= gb * 1e9:
-            break
-    if not keys:
-        raise SystemExit(f"--weights {root.name}:{comp}: the component holds no block weight to load")
-    return keys, stored, used
-
-
-def stored_dtype(shards, keys) -> str:
-    """The safetensors dtype holding most of `keys`' stored bytes ("BF16", "F32", "F16") — a loader's rate depends on
-    what it converts from (bf16 widened on the card, fp32 narrowed by numpy, fp16 as is)."""
-    from neurobrix.triton.weight_loader import _read_header
-    want, by = set(keys), {}
-    for sh in shards:
-        h, _ = _read_header(str(sh))
-        for k, v in h.items():
-            if k in want:
-                a, b = v["data_offsets"]
-                by[v["dtype"]] = by.get(v["dtype"], 0) + b - a
-    return max(by, key=by.get)
-
-
 def weight_load_gbps(spec: str, gb: float) -> dict:
-    """{engine: {"device"|"host": {"cold": GB/s, "warm": GB/s}}} — the engine's own loader on `model:component` of
-    the cache, its first block weights up to `gb` GB (stored), bytes LANDED (device or host) per second."""
+    """The engines' loaders on `model:component` of the cache (`facts_probe.weight_load_gbps`), named."""
     from neurobrix.core.paths import cache_dir
     model, comp = spec.split(":", 1)
-    root = cache_dir() / model
-    keys, stored, used = block_keys(root, comp, gb)
-    dtype = stored_dtype(used, keys)
-    only = set(keys)
-    rel = {f"components/{comp}/weights/{sh.name}": "cpu" for sh in used}
-    out = {"model": model, "component": comp, "stored_bytes": stored, "weights": len(keys), "dtype": dtype}
-
-    def timed(load):
-        t0 = time.perf_counter()
-        landed = load()
-        return landed / (time.perf_counter() - t0) / 1e9
-
-    from neurobrix.kernels.nbx_tensor import NBXDtype, DeviceAllocator
-    from neurobrix.triton.weight_loader import load_component_weights
-
-    def triton(host):
-        def load():
-            w = load_component_weights(str(root), comp, 0, NBXDtype.float16, only=only,
-                                       shard_map=rel if host else None)
-            DeviceAllocator.sync_device()
-            n = sum(t.nbytes() for k, t in w.items() if k != "_arenas")
-            del w
-            return n
-        return load
-    import torch
-    from neurobrix.core.io import WeightLoader
-    # the compiled engine's device as torch names it on this machine (a CUDA card, or the Apple GPU)
-    tdev = "cuda:0" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else None)
-    if tdev is None:
-        raise SystemExit("weight_load_gbps: no accelerator torch can see for the compiled engine's device load")
-
-    def tsync():
-        torch.cuda.synchronize() if tdev.startswith("cuda") else torch.mps.synchronize()
-
-    def compiled(host):
-        def load():
-            with WeightLoader(str(root)) as ld:
-                w = ld.load_component(comp, "cpu" if host else tdev, torch.float16, only=only)
-            if host:
-                # the compiled engine's host-held path pins what it loads (core/strategies/zero3.py,
-                # lazy_sequential.py: `tensor.contiguous().pin_memory()`) — a mapped view not yet read is no load
-                w = {k: t.contiguous().pin_memory() for k, t in w.items()}
-            tsync()
-            n = sum(t.numel() * t.element_size() for t in w.values())
-            del w
-            return n
-        return load
-    for engine, make in (("triton", triton), ("compiled", compiled)):
-        out[engine] = {}
-        # one small load first, never timed: the engine's context, its conversion kernels' compilation and its pools
-        # belong to the process, not to the load (the first triton bf16 load measured 0.01 GB/s cold without it)
-        keep = only
-        only = set(keys[:4])
-        make(False)()
-        make(True)()
-        only = keep
-        for where in ("device", "host"):
-            _evict(used)
-            cold = timed(make(where == "host"))
-            warm = timed(make(where == "host"))
-            out[engine][where] = {"cold": round(cold, 3), "warm": round(warm, 3)}
-    return out
+    try:
+        r = _probe.weight_load_gbps(cache_dir() / model, comp, gb)
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
+    return {"model": model, "component": comp, **r}
 
 
 def main(argv=None) -> int:
