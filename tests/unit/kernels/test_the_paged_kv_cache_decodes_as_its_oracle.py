@@ -122,3 +122,47 @@ def test_a_request_of_another_batch_repages_the_cleared_cache():
     assert cache.generation > gen and cache.get_cache_len() == 63 + 5
     cache.clear()
     assert _request(cache, rng, 1, 16, 2, 64, 30, 2, 2) < BOUND         # and back
+
+
+def _two_devices() -> bool:
+    try:
+        return DeviceAllocator.device_count() >= 2
+    except Exception:
+        return False
+
+
+@pytest.mark.skipif(not _two_devices(), reason="needs two devices")
+@pytest.mark.parametrize("prompt,steps,budget", [(100, 4, 8), (63, 5, 0)])     # the second crosses a page mid-decode
+def test_a_decoder_spread_over_two_cards_decodes_each_layer_on_its_own(prompt, steps, budget):
+    """A plan that spreads the decoder over cards (pipeline_parallel) runs each layer's attention on that layer's
+    card: its pages, length and block table must live there. One device for the whole cache made layer 1, on the
+    second card, read pages on the first — Ming-Lite-Omni-1.5 triton on four V100-16GB, an illegal memory access at
+    its first decode (2026-10-27). Red with one device: the fault, or the refusal of a K arriving elsewhere."""
+    b, h, h_kv, d, layers = 1, 16, 2, 64, 2
+    cache = PagedTritonKVCache(num_layers=layers, num_kv_heads=h_kv, k_head_dim=d, v_head_dim=d, max_cache_len=4096,
+                               dtype=NBXDtype.float16, page_tokens=64, async_release=False, decode_budget=budget)
+    rng = np.random.default_rng(5)
+    scale = 1.0 / np.sqrt(d)
+
+    def on(dev, x):
+        DeviceAllocator.set_device(dev)
+        return _t(x)
+    ks = [rng.standard_normal((b, h_kv, prompt, d)).astype(np.float16) for _ in range(layers)]
+    vs = [rng.standard_normal((b, h_kv, prompt, d)).astype(np.float16) for _ in range(layers)]
+    for li in range(layers):
+        cache.prefill(li, on(li, ks[li]), on(li, vs[li]))
+    worst = 0.0
+    for _ in range(steps):
+        for li in range(layers):
+            kn = rng.standard_normal((b, h_kv, 1, d)).astype(np.float16)
+            vn = rng.standard_normal((b, h_kv, 1, d)).astype(np.float16)
+            q = rng.standard_normal((b, h, 1, d)).astype(np.float16)
+            ks[li] = np.concatenate([ks[li], kn], axis=2)
+            vs[li] = np.concatenate([vs[li], vn], axis=2)
+            out = cache.decode(li, on(li, q), on(li, kn), on(li, vn), scale, 32)
+            assert out._device_idx == li
+            got = _d2h(out).astype(np.float64).reshape(b, h, d)
+            worst = max(worst, float(np.abs(got - _oracle(q[:, :, 0], ks[li], vs[li], scale)).max()
+                                     / np.abs(_oracle(q[:, :, 0], ks[li], vs[li], scale)).max()))
+    assert worst < BOUND, f"relative error {worst:.2e} against float64"
+    assert cache.layer_device == [0, 1]
