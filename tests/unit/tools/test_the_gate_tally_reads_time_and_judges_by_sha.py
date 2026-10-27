@@ -86,3 +86,12 @@ def test_the_time_compared_is_the_compute_not_the_loads():
     gen_base = {"ttft_s": 30.0, "first_output": "token", "tokens": 32, "tpot_ms": 854.0}
     gen_slow = {"ttft_s": 38.0, "first_output": "token", "tokens": 32, "tpot_ms": 1591.0}
     assert T.slower(gen_slow, gen_base, 1.5)[2] == "compute_s"
+
+
+def test_a_failed_base_row_has_no_time_to_compare(tmp_path):
+    base = _gate(tmp_path / "base", [("m", "triton", 1.0, "aa")])
+    import json as _j
+    rows = tmp_path / "base" / "gate" / "matrix_32g" / "rows_card0.jsonl"
+    r = _j.loads(rows.read_text()); r["rc"] = 1; rows.write_text(_j.dumps(r) + "\n")
+    gate = _gate(tmp_path / "g", [("m", "triton", 100.0, "aa")])
+    assert _tally(tmp_path, gate, base, [_works("aa")]) == 0

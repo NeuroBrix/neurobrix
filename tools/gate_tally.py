@@ -156,7 +156,10 @@ def tally(a) -> int:
                     unjudged.append(f"{m}:{x} sha {str(out.get('sha256'))[:12]}")
                 if (m, x) in rows:
                     r = rows[(m, x)]
-                    slow = slower(r, base[(m, x)], factor) if (m, x) in base else None
+                    # a base that FAILED has no time to compare (gate final 16g, 2026-10-27: CogVideoX-I2V's 405 s
+                    # "slower" than ebm's 29 s refusal at the door)
+                    b_row = base.get((m, x))
+                    slow = slower(r, b_row, factor) if b_row is not None and b_row.get("rc") == 0 else None
                     if r["rc"] == 0 and j is not None and j["verdict"] != "works":
                         red.append(f"{m}:{x} {cell(r)} output {r['sha256'][:12]} JUDGED {j['verdict']}: {j.get('judged', '')[:100]}")
                     elif r["rc"] == 0 and slow:
