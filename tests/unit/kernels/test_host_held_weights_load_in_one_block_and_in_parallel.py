@@ -48,5 +48,5 @@ def test_host_weights_share_one_pinned_block_that_outlives_the_load():
     for r, t in zip(raws, ts):
         want = (r.astype(np.uint32) << 16).view(np.float32).astype(np.float16)
         assert np.array_equal(t.numpy().view(np.uint16), want.view(np.uint16))
-    del ts
+    del ts, t                       # the loop above left the last weight bound to `t`
     assert len(DeviceAllocator._host_pinned_ptr_size) == before, "the block outlived its last weight"
