@@ -331,6 +331,7 @@ autotune:
       - {up_to: null, step: 131072}
 
 memory:
+  compiled_stream_driver_over_price: null   # not measured on this device (C1, 2026-10-27): a stream chunk is priced at its tensors
   # The compiled engine's torch caching allocator (core/runtime/torch_allocator.py), applied once
   # per process before a weight loads; the Triton engine never reads it. Expandable segments make
   # the bytes Prism prices the bytes the card hands out: under fixed segments Wan2.1-I2V-14B

@@ -127,6 +127,15 @@ block_sizes:
 # certify (`launch_keys.flash_tiles_certified`), not read from a hand table.
 
 memory:
+  # What the DRIVER holds for a temporal-stream chunk on the compiled engine, as a multiple of the chunk's PRICE (the
+  # profiler's figure), per component family (the container's component name): MPS's heaps kept across the chunk's
+  # ops and its other allocations are inside it, so the chunk is checked against the device limit less the engine's
+  # base, the private reserve not taken again (decision C1, the supervisor 2026-10-27 07:30). MEASURED 2026-10-26
+  # 23:4x on the M4 Pro (torch 2.14.0, macOS 27.0.1): mochi-1-preview native at 480x848x25, VAE chunks [1,1,1,1,1]
+  # priced 10 159 MB, driver peak 17 714 MB (a 1 ms sampler of torch.mps.driver_allocated_memory), the run green;
+  # results/heap_slack_2026_10_26/MEASURE.md. A family not listed is priced at its tensors (the door covers it).
+  compiled_stream_driver_over_price:
+    vae: {ratio: 1.744, source: "M4 Pro 2026-10-26: mochi-1-preview VAE 1-frame chunk, driver 17714 MB / price 10159 MB"}
   # 32 KB of threadgroup memory per threadgroup (Apple GPU family 7+).
   # The single most binding difference from every NVIDIA profile here.
   # MEASURED 2026-09-05 on an M4 Pro: `MTLDevice.maxThreadgroupMemoryLength()`

@@ -5702,6 +5702,30 @@ class PrismSolver:
         self.__dict__.setdefault("_tiling_declined_by_rung", {}).setdefault(rung, {})[comp_name] = why
         self.__dict__.setdefault("_tiling_rung_figure", {})[rung] = (card, float(usable_mb))
 
+    def _stream_driver_limit(self, comp_name: str):
+        """(ratio, limit bytes) when the compiled engine's device declares a measured driver/price ratio for this
+        component's family (`memory.compiled_stream_driver_over_price`): the limit is the device's declared memory
+        less the engine's measured base on this host. None otherwise (another engine, no unified/GPU device, a vendor
+        that declares null or no row for the family): the chunk is priced at its tensors, as before."""
+        if str(getattr(self, "_mode", "compiled")).startswith("triton"):
+            return None
+        profile = getattr(self, "_profile", None)
+        devs = [d for d in (getattr(profile, "devices", None) or []) if getattr(d, "memory_mb", 0)]
+        if not devs:
+            return None
+        dev = devs[0]
+        from neurobrix.core.config.loader import vendor_config_for_device
+        mem = (vendor_config_for_device(dev.brand.value, dev.architecture, dev.compute_capability,
+                                        model=getattr(dev, "name", None)).get("memory") or {})
+        table = mem.get("compiled_stream_driver_over_price")
+        row = (table or {}).get(comp_name)
+        if not row:
+            return None
+        ratio = float(row["ratio"] if isinstance(row, dict) else row)
+        base = float(((getattr(profile.cpu, "runtime_base_mb", None) or {}).get("compiled")
+                      if getattr(profile, "cpu", None) else 0) or 0)
+        return ratio, int((float(dev.memory_mb) - base) * 1024 * 1024)
+
     def _stream_declaration(self, container, comp_name: str):
         """The component's temporal stream declaration with its two graphs (`temporal_stream.load`), read once per
         solve; None when the container carries none."""
@@ -5827,6 +5851,14 @@ class PrismSolver:
 
         fits_cost = (room_bytes if callable(room_bytes) else
                      (lambda c: c <= room_bytes) if room_bytes is not None else (lambda c: True))
+        # Decision C1 (the supervisor, 2026-10-27 07:30): on the compiled engine a chunk holds on the device what its
+        # DRIVER holds — its price times the family's measured driver/price ratio (the vendor file's
+        # memory.compiled_stream_driver_over_price, the allocator's heaps and other allocations inside it) — checked
+        # against the device's own limit less the engine's base, the private reserve not taken again.
+        _driver = self._stream_driver_limit(comp_name) if room_bytes is not None else None
+        if _driver is not None:
+            _ratio, _limit = _driver
+            fits_cost = (lambda c, r=_ratio, L=_limit: c * r <= L)
         sched = _ts.choose(decl, frames, lambda sc: fits_cost(cost(sc)))
         if sched is None:
             least = _ts.exact_schedule(decl, frames, 1)
