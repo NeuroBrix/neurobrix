@@ -3436,8 +3436,16 @@ class PrismSolver:
             raise RuntimeError(f"{door}\nRe-planned on the memory free now (machine busy: {held:.0f} MB taken by "
                                f"other applications) — the smaller plan does not fit either: {busy.execution_door}")
         free_now = host_free if host_free is not None else min(caps.values())
-        note = (f"machine busy: {held:.0f} MB taken by other applications — plan {first[0]} does not fit the "
-                f"{free_now:.0f} MB free now; running {busy.strategy} instead (slower)")
+        # The supervisor's decision 2026-10-27 20:45 (Janus-Pro-7B triton, 300 MB short): no refusal, a CLEAR warning —
+        # what the fast plan lacks, both plans' honest times, and what the user can do about it.
+        _fp = plan.host_footprint or {}
+        _need = (int(_fp.get("total_bytes", 0)) - int(_fp.get("resident_bytes", 0))) / (1 << 20)
+        _short = max(0.0, _need - float(free_now))
+        _t = lambda x: (f"~{x:,.0f} s" if x < 3600 else f"~{x / 3600:.1f} h") if x is not None else "not estimated"
+        note = (f"machine busy: {held:.0f} MB taken by other applications — the fast plan {first[0]} "
+                f"({_t(getattr(plan, 'estimated_s', None))}) lacks {_short:,.0f} MB of the {free_now:.0f} MB free now; "
+                f"running {busy.strategy} instead ({_t(getattr(busy, 'estimated_s', None))}); close an application to "
+                f"get the fast plan back")
         logging.getLogger(__name__).warning("Prism: %s", note)
         print(f"   [Prism] {note}")
         busy.selection_reason = f"{note}; {busy.selection_reason}"
