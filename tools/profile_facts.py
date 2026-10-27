@@ -11,6 +11,13 @@ timer (`launcher.do_bench`), the device allocator's copies — never a vendor li
   host_matmul_gflops      a float32 GEMM on the host through numpy's BLAS, the machine's thread setting
   host_memory_gbps        a copy of a 1 GiB array in host memory, (read + write) bytes / time
   storage_read_gbps       a sequential read of a file the caller names (a weight shard of the cache)
+  weight_load_gbps        the ENGINE'S OWN LOADER on a component the caller names (`--weights <model>:<component>`,
+                          about `--weights-gb` of its block weights): bytes landed / time, per engine (triton,
+                          compiled), to the card ("device") and to host memory ("host": the host-held path of zero3
+                          and the expert stores), cold (the shards' pages evicted first, posix_fadvise DONTNEED) and
+                          warm (the same load again). A load is read + decode + convert + land — the cost a plan
+                          pays, which a bare copy rate (h2d_gbps) is not (the rule-13 proof, 2026-10-27: Wan2.2 lazy
+                          loads 123-173 s, Qwen3-30B 294-447 s, against estimates at the H2D rate)
 
 Writes `<out>/facts_card<N>.json` and prints the YAML block to copy into the hardware profile, each value with its
 source line. The autotuner's replay cache is redirected into `<out>` (`NEUROBRIX_REPLAY_CACHE`): a size the directory
@@ -154,11 +161,108 @@ def storage_read_gbps(path: Path) -> float:
         os.close(fd)
 
 
+def _evict(paths) -> None:
+    for p in paths:
+        fd = os.open(str(p), os.O_RDONLY)
+        try:
+            os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+        finally:
+            os.close(fd)
+
+
+def block_keys(root: Path, comp: str, gb: float):
+    """(keys, stored bytes, shard files) — the component's first block weights, in shard order, up to `gb` GB stored.
+    Refuses a component with no shard or no block weight by name."""
+    from neurobrix.triton.weight_loader import _read_header, is_block_key
+    wdir = root / "components" / comp / "weights"
+    shards = sorted(wdir.glob("*.safetensors"))
+    if not shards:
+        raise SystemExit(f"--weights {root.name}:{comp}: no shard under {wdir}")
+    keys, stored, used = [], 0, []
+    for sh in shards:
+        header, _ = _read_header(str(sh))
+        for k, info in header.items():
+            if k == "__metadata__" or not is_block_key(k):
+                continue
+            a, b = info["data_offsets"]
+            keys.append(k)
+            stored += b - a
+            if sh not in used:
+                used.append(sh)
+            if stored >= gb * 1e9:
+                break
+        if stored >= gb * 1e9:
+            break
+    if not keys:
+        raise SystemExit(f"--weights {root.name}:{comp}: the component holds no block weight to load")
+    return keys, stored, used
+
+
+def weight_load_gbps(spec: str, gb: float) -> dict:
+    """{engine: {"device"|"host": {"cold": GB/s, "warm": GB/s}}} — the engine's own loader on `model:component` of
+    the cache, its first block weights up to `gb` GB (stored), bytes LANDED (device or host) per second."""
+    from neurobrix.core.paths import cache_dir
+    model, comp = spec.split(":", 1)
+    root = cache_dir() / model
+    keys, stored, used = block_keys(root, comp, gb)
+    only = set(keys)
+    rel = {f"components/{comp}/weights/{sh.name}": "cpu" for sh in used}
+    out = {"model": model, "component": comp, "stored_bytes": stored, "weights": len(keys)}
+
+    def timed(load):
+        t0 = time.perf_counter()
+        landed = load()
+        return landed / (time.perf_counter() - t0) / 1e9
+
+    from neurobrix.kernels.nbx_tensor import NBXDtype, DeviceAllocator
+    from neurobrix.triton.weight_loader import load_component_weights
+
+    def triton(host):
+        def load():
+            w = load_component_weights(str(root), comp, 0, NBXDtype.float16, only=only,
+                                       shard_map=rel if host else None)
+            DeviceAllocator.sync_device()
+            n = sum(t.nbytes() for k, t in w.items() if k != "_arenas")
+            del w
+            return n
+        return load
+    import torch
+    from neurobrix.core.io import WeightLoader
+    # the compiled engine's device as torch names it on this machine (a CUDA card, or the Apple GPU)
+    tdev = "cuda:0" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else None)
+    if tdev is None:
+        raise SystemExit("weight_load_gbps: no accelerator torch can see for the compiled engine's device load")
+
+    def tsync():
+        torch.cuda.synchronize() if tdev.startswith("cuda") else torch.mps.synchronize()
+
+    def compiled(host):
+        def load():
+            with WeightLoader(str(root)) as ld:
+                w = ld.load_component(comp, "cpu" if host else tdev, torch.float16, only=only)
+            tsync()
+            n = sum(t.numel() * t.element_size() for t in w.values())
+            del w
+            return n
+        return load
+    for engine, make in (("triton", triton), ("compiled", compiled)):
+        out[engine] = {}
+        for where in ("device", "host"):
+            _evict(used)
+            cold = timed(make(where == "host"))
+            warm = timed(make(where == "host"))
+            out[engine][where] = {"cold": round(cold, 3), "warm": round(warm, 3)}
+    return out
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--card", required=True, help="the card measured (as the profile indexes it)")
     ap.add_argument("--out", required=True, type=Path, help="where the facts are written (an atelier root)")
     ap.add_argument("--storage-file", type=Path, default=None, help="a file to read for the storage bandwidth")
+    ap.add_argument("--weights", default=None,
+                    help="model:component of the cache whose block weights the engines' loaders load (weight_load_gbps)")
+    ap.add_argument("--weights-gb", type=float, default=4.0, help="how many stored GB of them")
     ap.add_argument("--system-share", action="store_true",
                     help="also measure the system's share of the RAM (30 calm readings, 5 min; unified-memory hosts)")
     ap.add_argument("--dtypes", default="float16,float32",
@@ -177,6 +281,8 @@ def main(argv=None) -> int:
     if a.storage_file is not None:
         facts["storage_read_gbps"] = storage_read_gbps(a.storage_file)
         facts["storage_file"] = str(a.storage_file)
+    if a.weights is not None:
+        facts["weight_load_gbps"] = weight_load_gbps(a.weights, a.weights_gb)
     (out / f"facts_card{a.card}.json").write_text(json.dumps(facts, indent=1))
     src = f"measured {facts['date']} on card {a.card} (tools/profile_facts.py)"
     print(json.dumps(facts, indent=1))
@@ -186,6 +292,12 @@ def main(argv=None) -> int:
           f"  h2d_gbps: {facts['h2d_gbps']:.1f}\n  d2h_gbps: {facts['d2h_gbps']:.1f}\n"
           f"  h2d_pageable_gbps: {facts['h2d_pageable_gbps']:.1f}\n  host_matmul_gflops: {facts['host_matmul_gflops']:.0f}\n"
           f"  host_memory_gbps: {facts['host_memory_gbps']:.0f}")
+    if "weight_load_gbps" in facts:
+        wl = facts["weight_load_gbps"]
+        print(f"  weight_load_gbps:  # {wl['model']}:{wl['component']}, {wl['stored_bytes'] / 1e9:.1f} GB stored")
+        for engine in ("triton", "compiled"):
+            print(f"    {engine}: {{" + ", ".join(f"{w}: {{cold: {v['cold']:.2f}, warm: {v['warm']:.2f}}}"
+                                         for w, v in wl[engine].items()) + "}")
     return 0
 
 
