@@ -10,7 +10,12 @@ import pytest
 from neurobrix.core.prism import time_estimate as T
 from neurobrix.core.prism.work import Work
 
-GPU = T.DeviceFacts(matmul_flops={"float16": 100e12}, memory_bps=900e9, h2d_bps=12e9)
+#: the engine's loader measured at the copy rate here, so a load costs what the host link moves (12 GB/s)
+LOADER = {"BF16": {"device": {"cold": 12.0, "warm": 12.0}, "host": {"cold": 12.0, "warm": 12.0}}}
+#: every component these plans name, stored in bf16 (the key the loader rate is read for)
+ST = {c: "bfloat16" for c in ("transformer", "lm", "model", "c")}
+GPU = T.DeviceFacts(matmul_flops={"float16": 100e12}, memory_bps=900e9, h2d_bps=12e9,
+                    load_rates={"compiled": LOADER, "triton": LOADER})
 HOST = T.HostFacts(matmul_flops=1e12, memory_bps=100e9, storage_bps=2e9)
 
 
@@ -24,26 +29,26 @@ def test_one_use_is_the_roofline_of_its_flops_and_bytes():
 def test_streaming_weights_every_use_costs_what_the_host_link_moves():
     works = {"transformer": Work(flops=int(1e12), weight_bytes=int(12e9), activation_bytes=0)}
     uses = {"transformer": 20}
-    whole = T.plan_seconds("single_gpu", {"transformer": "cuda:0"}, works, uses, {"cuda:0": GPU}, HOST, "float16")
-    zero3 = T.plan_seconds("zero3", {"transformer": "zero3:cuda:0"}, works, uses, {"cuda:0": GPU}, HOST, "float16")
+    whole = T.plan_seconds("single_gpu", {"transformer": "cuda:0"}, works, uses, {"cuda:0": GPU}, HOST, "float16", stored=ST)
+    zero3 = T.plan_seconds("zero3", {"transformer": "zero3:cuda:0"}, works, uses, {"cuda:0": GPU}, HOST, "float16", stored=ST)
     use = T.compute_seconds(works["transformer"], GPU, "float16")                  # 12 GB at 900 GB/s: memory-bound
     assert use == pytest.approx(12e9 / 900e9)
     assert whole == pytest.approx(20 * use + 1.0)                                  # 20 uses + one load
-    assert zero3 == pytest.approx(20 * use + 20 * 1.0)                             # the weights cross every use
-    host = T.plan_seconds("cpu_execution", {"transformer": "cpu"}, works, uses, {}, HOST, "float16")
+    assert zero3 == pytest.approx(20 * use + 1.0 + 20 * 1.0)                       # land in host memory once, cross every use
+    host = T.plan_seconds("cpu_execution", {"transformer": "cpu"}, works, uses, {}, HOST, "float16", stored=ST)
     assert host == pytest.approx(20 * 1.0) and whole < zero3                        # 1e12 flops at 1 TFLOP/s: compute-bound
     heavy = {"transformer": Work(flops=int(1e9), weight_bytes=int(200e9), activation_bytes=0)}
     assert T.plan_seconds("cpu_execution", {"transformer": "cpu"}, heavy, {"transformer": 1}, {}, HOST,
-                          "float16") == pytest.approx(2.0)                          # 200 GB at 100 GB/s: memory-bound
+                          "float16", stored=ST) == pytest.approx(2.0)                          # 200 GB at 100 GB/s: memory-bound
 
 
 def test_a_generating_component_loads_its_weights_once_and_runs_its_prompt_pass_once():
     token = {"lm": Work(flops=int(1e9), weight_bytes=int(12e9), activation_bytes=0)}       # one token: memory-bound
     first = {"lm": Work(flops=int(100e12), weight_bytes=int(12e9), activation_bytes=0)}    # the prompt: 1 s of compute
-    t = T.plan_seconds("single_gpu", {"lm": "cuda:0"}, token, {"lm": 32}, {"cuda:0": GPU}, HOST, "float16", prompt=first)
+    t = T.plan_seconds("single_gpu", {"lm": "cuda:0"}, token, {"lm": 32}, {"cuda:0": GPU}, HOST, "float16", prompt=first, stored=ST)
     assert t == pytest.approx(32 * 12e9 / 900e9 + 1.0 + 1.0)                          # 32 tokens + prompt + ONE load
-    z = T.plan_seconds("zero3", {"lm": "zero3:cuda:0"}, token, {"lm": 32}, {"cuda:0": GPU}, HOST, "float16", prompt=first)
-    assert z == pytest.approx(32 * 12e9 / 900e9 + 1.0 + 33 * 1.0)                     # zero3: a crossing per pass
+    z = T.plan_seconds("zero3", {"lm": "zero3:cuda:0"}, token, {"lm": 32}, {"cuda:0": GPU}, HOST, "float16", prompt=first, stored=ST)
+    assert z == pytest.approx(32 * 12e9 / 900e9 + 1.0 + 1.0 + 33 * 1.0)               # zero3: one landing, a crossing per pass
 
 
 def test_a_fact_the_profile_does_not_carry_is_refused():
@@ -54,7 +59,7 @@ def test_a_fact_the_profile_does_not_carry_is_refused():
     with pytest.raises(T.MissingFact, match="host_memory_gbps"):
         T.host_facts({"host_matmul_gflops": 700})
     with pytest.raises(T.MissingFact, match="not measured"):
-        T.plan_seconds("single_gpu", {"c": "cuda:1"}, {"c": Work(1, 1, 1)}, {}, {"cuda:0": GPU}, HOST, "float16")
+        T.plan_seconds("single_gpu", {"c": "cuda:1"}, {"c": Work(1, 1, 1)}, {}, {"cuda:0": GPU}, HOST, "float16", stored=ST)
 
 
 def test_a_request_runs_a_loop_per_step_a_language_model_per_token_and_the_rest_once():
@@ -74,20 +79,40 @@ def test_a_request_runs_a_loop_per_step_a_language_model_per_token_and_the_rest_
         T.uses_per_request(diffusion, None, None)
 
 
-def test_a_triton_load_crosses_the_link_at_the_pageable_rate():
-    """The Triton loader uploads a component it loads whole from its decoded numpy buffer — pageable memory — so its
-    load crosses at the measured `h2d_pageable_gbps`, not the page-locked rate (the profile field no code read,
-    audit of 2026-10-26); a streamed component's blocks wait in pinned memory and keep the pinned rate. What this test
-    would do if the code were wrong: the same seconds for both engines — RED."""
-    from neurobrix.core.prism.work import Work
+def test_a_load_is_priced_at_the_engine_s_own_measured_loader_rate():
+    """A load is the engine's LOADER — read, decode, convert, land — at its measured rate (`weight_load_gbps`,
+    tools/profile_facts.py), cold the first time and warm after; never a bare copy rate. The rule-13 proof (V100 rack,
+    2026-10-27): Wan2.2-I2V-A14B loaded in 123-173 s, Qwen3-30B-A3B in 294-447 s, against estimates at the H2D rate.
+    What this test would do if the code were wrong: a load at h2d_gbps gives 1 s for both engines — RED; a profile
+    without the fact estimated anyway — RED."""
     facts = T.device_facts({"matmul_tflops": {"float16": 42.3}, "memory_gbps": 789, "h2d_gbps": 8.0,
-                            "h2d_pageable_gbps": 4.0}, "cuda:0")
+                            "weight_load_gbps": {"triton": {"BF16": {"device": {"cold": 2.0, "warm": 4.0}}},
+                                                 "compiled": {"BF16": {"device": {"cold": 1.0, "warm": 2.0}}}}}, "cuda:0")
     w = {"model": Work(flops=0.0, weight_bytes=8e9, activation_bytes=0.0)}
     args = ("single_gpu", {"model": "cuda:0"}, w, {"model": 1}, {"cuda:0": facts}, None, "float16")
-    # the same compute either way; the upload 8 GB / 8 GB/s pinned against 8 GB / 4 GB/s pageable: one second apart
-    assert abs(T.plan_seconds(*args, engine="triton") - T.plan_seconds(*args, engine="compiled") - 1.0) < 1e-6
-    no_pageable = T.device_facts({"matmul_tflops": {"float16": 42.3}, "memory_gbps": 789, "h2d_gbps": 8.0}, "cuda:0")
-    import pytest
-    with pytest.raises(T.MissingFact, match="h2d_pageable_gbps"):
-        T.plan_seconds("single_gpu", {"model": "cuda:0"}, w, {"model": 1}, {"cuda:0": no_pageable}, None, "float16",
-                       engine="triton")
+    # the same compute either way; the load 8 GB at 2 GB/s (triton, cold) against 8 GB at 1 GB/s (compiled, cold)
+    assert abs(T.plan_seconds(*args, engine="compiled", stored=ST) - T.plan_seconds(*args, engine="triton", stored=ST) - 4.0) < 1e-6
+    # a component loaded in two phases: once cold, once warm
+    two = T.plan_seconds("lazy_sequential", {"model": "cuda:0"}, w, {"model": 1}, {"cuda:0": facts}, None, "float16",
+                         phases={"model": 2}, engine="triton", stored=ST)
+    assert abs(two - T.plan_seconds(*args, engine="triton", stored=ST) - 8e9 / 4e9) < 1e-6
+    bare = T.device_facts({"matmul_tflops": {"float16": 42.3}, "memory_gbps": 789, "h2d_gbps": 8.0}, "cuda:0")
+    with pytest.raises(T.MissingFact, match="weight_load_gbps.triton.BF16.device.cold"):
+        T.plan_seconds("single_gpu", {"model": "cuda:0"}, w, {"model": 1}, {"cuda:0": bare}, None, "float16",
+                       engine="triton", stored=ST)
+
+
+def test_a_reloaded_piece_pays_the_loader_at_every_use_after_the_first():
+    """layer_streaming reloads a piece from the container at every use: the first at the loader's cold rate, the next
+    ones at the measured reload rate when the profile states one (`weight_reload_gbps`), else the loader's warm rate."""
+    facts = T.device_facts({"matmul_tflops": {"float16": 42.3}, "memory_gbps": 789, "h2d_gbps": 8.0,
+                            "weight_load_gbps": {"triton": {"BF16": {"device": {"cold": 2.0, "warm": 4.0}}}}}, "cuda:0")
+    w = {"lm": Work(flops=0.0, weight_bytes=8e9, activation_bytes=0.0)}
+    t = T.plan_seconds("layer_streaming", {"lm": "cuda:0"}, w, {"lm": 10}, {"cuda:0": facts}, None, "float16",
+                       engine="triton", stored=ST)
+    use = 10 * 8e9 / 789e9                                                            # ten memory-bound uses
+    assert abs(t - use - (8e9 / 2e9 + 9 * 8e9 / 4e9)) < 1e-6
+    host = T.HostFacts(matmul_flops=1e12, memory_bps=100e9, reload_bps=1e9)
+    t = T.plan_seconds("layer_streaming", {"lm": "cuda:0"}, w, {"lm": 10}, {"cuda:0": facts}, host, "float16",
+                       engine="triton", stored=ST)
+    assert abs(t - use - (8e9 / 2e9 + 9 * 8e9 / 1e9)) < 1e-6

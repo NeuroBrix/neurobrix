@@ -53,6 +53,16 @@ devices:
     h2d_gbps: 8.1
     d2h_gbps: 3.7
     h2d_pageable_gbps: 4.6
+    # the engines' loaders, GB/s landed — measured 2026-10-27 21:57-21:59 CET on the rack, card 0, alone (tools/profile_facts.py --weights, loader-rates-tool 4ee138b0 on the loader of 93b01e1c): Qwen3-30B-A3B:model BF16, Wan2.2-I2V-A14B:transformer F32, Sana_1600M:transformer F16, 3 GB each, cold = pages evicted (posix_fadvise DONTNEED)
+    weight_load_gbps:
+      triton:
+        BF16: {device: {cold: 0.95, warm: 1.39}, host: {cold: 0.42, warm: 0.53}}
+        F32: {device: {cold: 0.87, warm: 0.93}, host: {cold: 0.57, warm: 0.71}}
+        F16: {device: {cold: 1.14, warm: 1.81}, host: {cold: 0.73, warm: 0.99}}
+      compiled:
+        BF16: {device: {cold: 0.92, warm: 1.6}, host: {cold: 0.6, warm: 1.56}}
+        F32: {device: {cold: 1.3, warm: 1.53}, host: {cold: 0.68, warm: 2.46}}
+        F16: {device: {cold: 2.56, warm: 3.28}, host: {cold: 0.7, warm: 5.77}}
 - index: 1
   brand: nvidia
   model: Tesla V100-SXM2-16GB
@@ -72,6 +82,16 @@ devices:
     h2d_gbps: 8.1
     d2h_gbps: 3.7
     h2d_pageable_gbps: 4.6
+    # the engines' loaders, GB/s landed — measured 2026-10-27 21:57-21:59 CET on the rack, card 0, alone (tools/profile_facts.py --weights, loader-rates-tool 4ee138b0 on the loader of 93b01e1c): Qwen3-30B-A3B:model BF16, Wan2.2-I2V-A14B:transformer F32, Sana_1600M:transformer F16, 3 GB each, cold = pages evicted (posix_fadvise DONTNEED)
+    weight_load_gbps:
+      triton:
+        BF16: {device: {cold: 0.95, warm: 1.39}, host: {cold: 0.42, warm: 0.53}}
+        F32: {device: {cold: 0.87, warm: 0.93}, host: {cold: 0.57, warm: 0.71}}
+        F16: {device: {cold: 1.14, warm: 1.81}, host: {cold: 0.73, warm: 0.99}}
+      compiled:
+        BF16: {device: {cold: 0.92, warm: 1.6}, host: {cold: 0.6, warm: 1.56}}
+        F32: {device: {cold: 1.3, warm: 1.53}, host: {cold: 0.68, warm: 2.46}}
+        F16: {device: {cold: 2.56, warm: 3.28}, host: {cold: 0.7, warm: 5.77}}
 - index: 2
   brand: nvidia
   model: Tesla V100-SXM2-32GB
@@ -91,6 +111,16 @@ devices:
     h2d_gbps: 8.2
     d2h_gbps: 3.7
     h2d_pageable_gbps: 4.7
+    # the engines' loaders, GB/s landed — measured 2026-10-27 21:57-21:59 CET on the rack, card 2, alone (tools/profile_facts.py --weights, loader-rates-tool 4ee138b0 on the loader of 93b01e1c): Qwen3-30B-A3B:model BF16, Wan2.2-I2V-A14B:transformer F32, Sana_1600M:transformer F16, 3 GB each, cold = pages evicted (posix_fadvise DONTNEED)
+    weight_load_gbps:
+      triton:
+        BF16: {device: {cold: 1.06, warm: 1.7}, host: {cold: 0.44, warm: 0.64}}
+        F32: {device: {cold: 0.87, warm: 1.11}, host: {cold: 0.59, warm: 0.7}}
+        F16: {device: {cold: 1.17, warm: 1.92}, host: {cold: 0.73, warm: 0.96}}
+      compiled:
+        BF16: {device: {cold: 1.01, warm: 1.8}, host: {cold: 0.64, warm: 1.66}}
+        F32: {device: {cold: 1.33, warm: 1.24}, host: {cold: 0.61, warm: 2.5}}
+        F16: {device: {cold: 2.92, warm: 3.38}, host: {cold: 0.72, warm: 5.88}}
 - index: 3
   brand: nvidia
   model: Tesla V100-SXM2-32GB
@@ -110,6 +140,16 @@ devices:
     h2d_gbps: 8.2
     d2h_gbps: 3.7
     h2d_pageable_gbps: 4.7
+    # the engines' loaders, GB/s landed — measured 2026-10-27 21:57-21:59 CET on the rack, card 2, alone (tools/profile_facts.py --weights, loader-rates-tool 4ee138b0 on the loader of 93b01e1c): Qwen3-30B-A3B:model BF16, Wan2.2-I2V-A14B:transformer F32, Sana_1600M:transformer F16, 3 GB each, cold = pages evicted (posix_fadvise DONTNEED)
+    weight_load_gbps:
+      triton:
+        BF16: {device: {cold: 1.06, warm: 1.7}, host: {cold: 0.44, warm: 0.64}}
+        F32: {device: {cold: 0.87, warm: 1.11}, host: {cold: 0.59, warm: 0.7}}
+        F16: {device: {cold: 1.17, warm: 1.92}, host: {cold: 0.73, warm: 0.96}}
+      compiled:
+        BF16: {device: {cold: 1.01, warm: 1.8}, host: {cold: 0.64, warm: 1.66}}
+        F32: {device: {cold: 1.33, warm: 1.24}, host: {cold: 0.61, warm: 2.5}}
+        F16: {device: {cold: 2.92, warm: 3.38}, host: {cold: 0.72, warm: 5.88}}
 interconnect:
   groups:
   - index: 0

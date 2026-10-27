@@ -96,7 +96,11 @@ def test_a_strategy_without_a_rank_is_refused_not_scored():
 
 
 def _facts():
-    return TE.DeviceFacts(matmul_flops={"float16": 42e12}, memory_bps=789e9, h2d_bps=8.1e9)
+    # the loader measured at the copy rate: a load costs what the link moves, as these figures were set before the
+    # loader rates were measured (`weight_load_gbps`, 2026-10-27)
+    rate = {"device": {"cold": 8.1, "warm": 8.1}, "host": {"cold": 8.1, "warm": 8.1}}
+    return TE.DeviceFacts(matmul_flops={"float16": 42e12}, memory_bps=789e9, h2d_bps=8.1e9,
+                          load_rates={"compiled": {"F16": rate}, "triton": {"F16": rate}})
 
 
 def test_the_link_term_prices_a_boundary_by_the_profile_s_bandwidth():
@@ -128,9 +132,9 @@ def test_a_pair_the_profile_does_not_price_refuses_by_name():
 def test_plan_seconds_adds_the_link_term_when_links_are_given():
     works = {"model": Work(flops=0, weight_bytes=0, activation_bytes=0, output_bytes=300e9)}
     devices = {"cuda:0": _facts(), "cuda:1": _facts()}
-    base = TE.plan_seconds("block_scatter", {"model": "fgp:cuda:0,cuda:1"}, works, {"model": 1}, devices, None, "float16")
+    base = TE.plan_seconds("block_scatter", {"model": "fgp:cuda:0,cuda:1"}, works, {"model": 1}, devices, None, "float16", stored={"model": "float16"})
     with_link = TE.plan_seconds("block_scatter", {"model": "fgp:cuda:0,cuda:1"}, works, {"model": 1}, devices, None,
-                                "float16", links={("cuda:0", "cuda:1"): 300e9})
+                                "float16", links={("cuda:0", "cuda:1"): 300e9}, stored={"model": "float16"})
     assert with_link == pytest.approx(base + 1.0)
 
 
@@ -188,15 +192,15 @@ def test_an_expert_store_s_per_token_traffic_is_priced_on_the_host_link():
     per_token = 48 * 8 * 9 * 2**20
     tok = Work(flops=0, weight_bytes=0, activation_bytes=0, output_bytes=0, expert_bytes_per_use=per_token)
     devices = {"cuda:0": _facts()}
-    lazy = TE.plan_seconds("lazy_sequential", {"model": "cuda:0"}, {"model": tok}, {"model": 32}, devices, None, "float16")
+    lazy = TE.plan_seconds("lazy_sequential", {"model": "cuda:0"}, {"model": tok}, {"model": 32}, devices, None, "float16", stored={"model": "float16"})
     assert lazy == pytest.approx(32 * per_token / 8.1e9)
     resident = TE.plan_seconds("block_scatter", {"model": "fgp:cuda:0,cuda:1"}, {"model": tok}, {"model": 32},
-                               {"cuda:0": _facts(), "cuda:1": _facts()}, None, "float16")
+                               {"cuda:0": _facts(), "cuda:1": _facts()}, None, "float16", stored={"model": "float16"})
     assert resident == 0.0
     # the prompt pass reads the experts its tokens touch, once
     prm = Work(expert_bytes_per_use=4 * 2**30)
     with_prompt = TE.plan_seconds("lazy_sequential", {"model": "cuda:0"}, {"model": tok}, {"model": 32}, devices, None,
-                                  "float16", prompt={"model": prm})
+                                  "float16", prompt={"model": prm}, stored={"model": "float16"})
     assert with_prompt == pytest.approx(lazy + 4 * 2**30 / 8.1e9)
 
 

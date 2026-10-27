@@ -17,13 +17,21 @@ DAG = {"tensors": {"x": {"shape": [1, 64, 32], "dtype": "float16"},
                    "y": {"shape": [1, 64, 32], "dtype": "float16"}},
        "ops": {"mm": {"op_type": "aten::matmul", "input_tensor_ids": ["x", "w"], "output_tensor_ids": ["y"]}},
        "execution_order": ["mm"]}
-MEASURED = {"matmul_tflops": {"float16": 100.0}, "memory_gbps": 900.0, "h2d_gbps": 12.0}
+#: the engines' loaders measured at the copy rate here: a load costs what the link moves (12 GB/s), as before the loader
+#: rates were measured (`weight_load_gbps`, 2026-10-27)
+_LOADER = {"F16": {"device": {"cold": 12.0, "warm": 12.0}, "host": {"cold": 12.0, "warm": 12.0}}}
+MEASURED = {"matmul_tflops": {"float16": 100.0}, "memory_gbps": 900.0, "h2d_gbps": 12.0,
+            "weight_load_gbps": {"compiled": _LOADER, "triton": _LOADER}}
 RANKED = [(1000.0, "single_gpu", {"transformer": "cuda:0"}, [0]),
           (300.0, "zero3", {"transformer": "zero3:cuda:0"}, [0])]
 
 
 def _solver(tmp_path, flow):
     (tmp_path / "topology.json").write_text(json.dumps({"flow": flow}))
+    # the weights index the loader rate is keyed by (the component's stored dtype)
+    (tmp_path / "components" / "transformer").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "components" / "transformer" / "weights_index.json").write_text(json.dumps(
+        {"tensors": {"w": {"dtype": "float16", "size_bytes": 2048}}}))
     s = PrismSolver.__new__(PrismSolver)
     s._neural_components = [NS(name="transformer", graph=DAG)]
     return s, NS(cache_path=tmp_path)                       # a Path, as NBXContainer.cache_path is

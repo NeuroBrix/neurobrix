@@ -40,6 +40,9 @@ class DeviceFacts:
     memory_bps: float                       # device memory bandwidth, bytes/s
     h2d_bps: float                          # host -> device, page-locked, bytes/s
     h2d_pageable_bps: Optional[float] = None  # host -> device from pageable memory, bytes/s (`h2d_pageable_gbps`)
+    #: the engine's own LOADER, GB landed/s (`weight_load_gbps`, tools/profile_facts.py): {engine: {stored dtype ("BF16",
+    #: "F32", "F16"): {"device"|"host": {"cold": GB/s, "warm": GB/s}}}} — read + decode + convert + land; None: not measured
+    load_rates: Optional[Mapping[str, Any]] = None
 
 
 @dataclass(frozen=True)
@@ -61,7 +64,8 @@ def device_facts(measured: Optional[Mapping[str, Any]], where: str) -> DeviceFac
         pageable = measured.get("h2d_pageable_gbps")
         return DeviceFacts(matmul_flops={k: float(v) * 1e12 for k, v in measured["matmul_tflops"].items()},
                            memory_bps=float(measured["memory_gbps"]) * 1e9, h2d_bps=float(measured["h2d_gbps"]) * 1e9,
-                           h2d_pageable_bps=float(pageable) * 1e9 if pageable is not None else None)
+                           h2d_pageable_bps=float(pageable) * 1e9 if pageable is not None else None,
+                           load_rates=measured.get("weight_load_gbps"))
     except KeyError as exc:
         raise MissingFact(f"{where}: the measured facts lack {exc.args[0]!r}") from exc
 
@@ -76,6 +80,28 @@ def host_facts(measured: Optional[Mapping[str, Any]]) -> HostFacts:
                      memory_bps=float(measured["host_memory_gbps"]) * 1e9,
                      storage_bps=float(s) * 1e9 if s is not None else None,
                      reload_bps=float(r) * 1e9 if r is not None else None)
+
+
+#: a component's allocation strategies whose weights land in HOST memory (pinned) and reach the card from there
+HOST_HELD = frozenset({"zero3", "expert_store"})
+
+
+#: a weights index's dtype name -> the safetensors name the loader rates are keyed by
+STORED_AS = {"bfloat16": "BF16", "float32": "F32", "float16": "F16"}
+
+
+def _loader_bps(f: DeviceFacts, engine: Optional[str], stored: Optional[str], where: str, state: str,
+                dev: str) -> float:
+    """The engine's measured loader rate for weights stored as `stored`, to `where` ("device" | "host") in `state`
+    ("cold" | "warm"), bytes/s."""
+    eng = engine or "compiled"
+    st = STORED_AS.get(str(stored), str(stored))
+    try:
+        return float(f.load_rates[eng][st][where][state]) * 1e9
+    except (TypeError, KeyError) as exc:
+        raise MissingFact(f"{dev}: no measured `weight_load_gbps.{eng}.{st}.{where}.{state}` on the hardware profile — "
+                          f"a load is read + decode + convert + land, not a bare copy (tools/profile_facts.py "
+                          f"--weights)") from exc
 
 
 def compute_seconds(work: Work, facts: DeviceFacts, dtype: str) -> float:
@@ -152,11 +178,13 @@ def _link(links: Mapping[tuple, float], a: str, b: str) -> float:
 def plan_seconds(strategy: str, allocations: Mapping[str, Any], works: Mapping[str, Work], uses: Mapping[str, int],
                  devices: Mapping[str, DeviceFacts], host: Optional[HostFacts], dtype: str,
                  phases: Optional[Mapping[str, int]] = None, prompt: Optional[Mapping[str, Work]] = None,
-                 links: Optional[Mapping[tuple, float]] = None, engine: Optional[str] = None) -> float:
+                 links: Optional[Mapping[tuple, float]] = None, engine: Optional[str] = None,
+                 stored: Optional[Mapping[str, str]] = None) -> float:
     """The plan's estimated seconds for the request. `devices`: {device string ("cuda:0"): its facts}; `uses`: {component:
     runs per request}; `phases`: {component: phases that load it} for the strategies that load per phase (1 when
     absent); `prompt`: {component: the work of its one prompt pass} for a generating component whose `works` entry is
-    the work of ONE token — the prompt pass runs once more, over the same loaded weights."""
+    the work of ONE token — the prompt pass runs once more, over the same loaded weights; `stored`: {component: the
+    dtype most of its weights are stored in} (the weights index), which the loader rate is read for."""
     total = 0.0
     for comp, alloc in allocations.items():
         if comp not in works:
@@ -181,23 +209,33 @@ def plan_seconds(strategy: str, allocations: Mapping[str, Any], works: Mapping[s
         total += n * compute_seconds(w, f, dtype) + (compute_seconds(first, f, dtype) if first is not None else 0.0)
         loads = passes if strategy in STREAM_EVERY_USE else (int((phases or {}).get(comp, 1))
                                                              if strategy in LOAD_PER_PHASE else 1)
-        # the weights cross once per load, never per token, at the rate of the memory they leave: the Triton loader
-        # uploads a component it loads whole straight from its decoded numpy buffer — pageable memory
-        # (triton/weight_loader.py, memcpy kind=1 from `arr.ctypes.data`) — while a streamed component's blocks wait in
-        # page-locked host memory (cudaMallocHost) and the compiled loader stages through pinned buffers
-        upload = f.h2d_bps
-        if engine == "triton" and strategy not in STREAM_EVERY_USE:
-            if f.h2d_pageable_bps is None:
-                raise MissingFact(f"{dev}: the Triton engine uploads from pageable memory and the profile carries no "
-                                  f"measured `h2d_pageable_gbps` (tools/profile_facts.py)")
-            upload = f.h2d_pageable_bps
-        if strategy in STREAM_EVERY_USE and loads > 1 and host is not None and host.reload_bps:
-            # the first load uploads; every later one RELOADS — the loader goes back to the container, decodes, converts
-            # and uploads again (`weight_reload_gbps`): Janus-Pro-7B's language model streamed per token on the Mac,
-            # priced at the page-locked rate 169 s, ran 716 reloads at ~2.1 GB/s (2026-10-27)
-            total += w.weight_bytes / upload + (loads - 1) * w.weight_bytes / host.reload_bps
+        # A load is the engine's LOADER — read (storage or the page cache), decode, convert to the device dtype, land —
+        # at its measured rate (`weight_load_gbps`), never a bare copy: the rule-13 proof (V100 rack, 2026-10-27) loaded
+        # Wan2.2-I2V-A14B in 123-173 s and Qwen3-30B-A3B in 294-447 s against estimates at the H2D copy rate, and so
+        # could not rank what a request really waits for. The first load is cold, a later one finds the page cache warm.
+        how = getattr(alloc, "strategy", None) or strategy
+        st = (stored or {}).get(comp)
+        if st is None:
+            raise MissingFact(f"{comp}: the weights index states no stored dtype the loader rate is read for")
+        shards = getattr(alloc, "shard_map", None) or {}
+        host_held = how in HOST_HELD or strategy == "zero3" or (shards and all(str(v).startswith("cpu")
+                                                                                 for v in shards.values()))
+        if host_held:
+            # the blocks land in page-locked host memory once, then cross the host link from there at every use that
+            # streams them (zero3; an expert store's routed experts are priced per use below)
+            total += w.weight_bytes / _loader_bps(f, engine, st, "host", "cold", dev)
+            if strategy in STREAM_EVERY_USE or how == "zero3":
+                resident = float(getattr(alloc, "resident_weight_mb", 0.0) or 0.0) * 2 ** 20
+                total += passes * max(0.0, w.weight_bytes - resident) / f.h2d_bps
+        elif strategy in STREAM_EVERY_USE:
+            # a piece reloaded from the container at every use after the first (layer_streaming): at the measured
+            # reload rate when the profile states one (`weight_reload_gbps`, the Janus case on the Mac), else the
+            # loader's warm rate to the device
+            again = host.reload_bps if (host is not None and host.reload_bps) else _loader_bps(f, engine, st, "device", "warm", dev)
+            total += w.weight_bytes / _loader_bps(f, engine, st, "device", "cold", dev) + (passes - 1) * w.weight_bytes / again
         else:
-            total += loads * w.weight_bytes / upload
+            total += w.weight_bytes / _loader_bps(f, engine, st, "device", "cold", dev) + \
+                (loads - 1) * w.weight_bytes / _loader_bps(f, engine, st, "device", "warm", dev)
         if strategy not in RESIDENT_STRATEGIES:
             # an expert store: the routed experts a use reads cross the host link at every use (per token for a
             # generating component, the prompt's set once) — unpriced, Qwen3-30B estimated 15 s against 174 s measured
@@ -237,6 +275,15 @@ def uses_per_request(flow: Mapping[str, Any], steps: Optional[int], tokens: Opti
             raise MissingFact(f"the flow loops over {loop} and the request names no step count")
         for comp in loop:
             out[comp] = ("loop", int(steps))
+        if (flow.get("generation") or {}).get("boundary_ratio") and len(loop) >= 2:
+            # A dual denoiser (Wan2.2-A14B's two experts, `core/flow/iterative_process._setup_dual_denoiser`): EACH step
+            # runs ONE expert, the high-noise one above the boundary, the low-noise one below — `steps` uses between
+            # them, not `steps` each (the rule-13 proof priced Wan2.2's layer_streaming at twice its reloads, 2026-10-27).
+            # Every term of a plan's time is linear in an expert's uses and the experts are alike, so the split is read
+            # as even: the sum (the steps) is exact, and so is each expert's one cold load while both run.
+            k = len(loop)
+            for i, comp in enumerate(loop):
+                out[comp] = ("loop", int(steps) // k + (1 if i < int(steps) % k else 0))
     gen = flow.get("generation") or {}
     token_comps = [c for c in (gen.get("lm_component"), gen.get("head_component")) if c]
     token_comps += [s["component"] for s in (flow.get("stages") or []) if s.get("execution") == "autoregressive"]

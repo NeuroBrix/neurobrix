@@ -7380,7 +7380,8 @@ class PrismSolver:
             try:
                 from neurobrix.core.prism.host_footprint import engine_of
                 out[name] = float(TE.plan_seconds(name, allocs, works, runs, devices, host, str(dtype), prompt=prompt,
-                                                  links=links, engine=engine_of(getattr(self, "_mode", "compiled"))))
+                                                  links=links, engine=engine_of(getattr(self, "_mode", "compiled")),
+                                                  stored=self._stored_dtype_major(container)))
             except TE.MissingFact as exc:
                 out[name] = f"not estimated: {exc}"
         return out
@@ -8543,6 +8544,28 @@ class PrismSolver:
         if not family or not elements:
             return 0
         return int(elements) * host_bytes_per_output_element(family)
+
+    def _stored_dtype_major(self, container) -> Dict[str, str]:
+        """{component: the floating dtype most of its weights' bytes are stored in} (the weights index) — what its
+        load converts from, the key of the measured loader rate (`time_estimate._loader_bps`). Read once per solve."""
+        memo = self.__dict__.setdefault("_stored_major", {})
+        base = getattr(container, "cache_path", None)
+        if base is None:
+            return {}
+        if str(base) not in memo:
+            import json as _json
+            from pathlib import Path as _P
+            out: Dict[str, str] = {}
+            for index in (_P(base) / "components").glob("*/weights_index.json"):
+                by: Dict[str, int] = {}
+                for v in (_json.loads(index.read_text()).get("tensors") or {}).values():
+                    d = str(v.get("dtype", "")) if isinstance(v, dict) else ""
+                    if d.startswith(("float", "bfloat")):
+                        by[d] = by.get(d, 0) + int(v.get("size_bytes") or 0)
+                if by:
+                    out[index.parent.name] = max(by, key=by.get)
+            memo[str(base)] = out
+        return memo[str(base)]
 
     def _stored_dtypes_by_component(self, container) -> Dict[str, set]:
         """Per-component {stored floating dtypes} from the weights index (what a load converts FROM)."""
