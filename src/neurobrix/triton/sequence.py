@@ -3059,6 +3059,84 @@ class TritonSequence:
                     tensor = transfer_tensor(tensor, self.device_idx)
                 self._arena[slot] = tensor
 
+    # -- the static memory plan (S4, docs/design/triton-static-memory-plan.md) -----------------------------------------
+    #: runs RECORDED per shape bucket before its plan is built: an op whose allocations differ between them (a decode
+    #: step's split count, an expert store's routed sizes) is left to the allocator, the others are planned
+    PLAN_RECORDS = 2
+
+    def _plan_key(self):
+        res = getattr(self, "_symbol_resolver", None)
+        bound = tuple(sorted(getattr(res, "_bindings", {}).items())) if res is not None else ()
+        shapes = []
+        for t in self._input_ids:
+            slot = self._tid_to_slot.get(t)
+            v = self._arena[slot] if slot is not None else None
+            shapes.append(tuple(v.shape) if v is not None and hasattr(v, "shape") else None)
+        return bound, tuple(shapes)
+
+    def _plan_release_ws(self) -> None:
+        ws = self.__dict__.pop("_plan_ws", None)
+        if ws is not None:
+            DeviceAllocator.plan_release(ws[1])
+            DeviceAllocator.sync_device()
+            DeviceAllocator.free_cuda(ws[1])
+
+    def _plan_begin(self):
+        """'record' or 'planned' for this run, or None (no static plan: NBX_STATIC_PLAN unset, a multi-device run)."""
+        if os.environ.get("NBX_STATIC_PLAN") != "1" or self._is_multi_device:
+            return None
+        plans = self.__dict__.setdefault("_mem_plans", {})
+        key = self._plan_key()
+        self._plan_cur = key
+        st = plans.setdefault(key, {"traces": []})
+        if "table" in st:
+            ws = self.__dict__.get("_plan_ws")
+            if ws is None or ws[0] != key:
+                self._plan_release_ws()
+                self._plan_ws = (key, DeviceAllocator.malloc_cuda(st["size"]), st["size"])
+            DeviceAllocator.plan_apply(self.device_idx, st["table"], self._plan_ws[1], st["size"])
+            return "planned"
+        DeviceAllocator.plan_record(self.device_idx)
+        return "record"
+
+    def _plan_end(self, ok: bool) -> None:
+        mode, self._plan_mode = getattr(self, "_plan_mode", None), None
+        if mode is None:
+            return
+        trace = DeviceAllocator._plan_trace
+        DeviceAllocator.plan_stop()
+        if mode != "record" or not ok or trace is None:
+            return
+        st = self._mem_plans[self._plan_cur]
+        st["traces"].append([(r[0], r[1], r[2], r[4]) for r in trace if r[0] >= 0])
+        if len(st["traces"]) < self.PLAN_RECORDS:
+            return
+        from neurobrix.core.prism.memory_plan import assign_offsets
+        by_op = []
+        for tr in st["traces"]:
+            ops = {}
+            for op, k, n, freed in tr:
+                ops.setdefault(op, []).append((k, n, freed))
+            by_op.append(ops)
+        rows = []
+        for op, allocs in by_op[0].items():
+            same = all([(k, n) for k, n, _ in o.get(op, [])] == [(k, n) for k, n, _ in allocs] for o in by_op[1:])
+            if not same:
+                continue                       # this op's allocations move between runs: the allocator serves them
+            for i, (k, n, freed) in enumerate(allocs):
+                ends = [o[op][i][2] for o in by_op]
+                if any(e is None for e in ends):
+                    continue                   # outlives a run (an output, a kept state): never a workspace slice
+                rows.append((op, k, n, max(ends)))
+        offsets, size = assign_offsets([(op, end, n) for op, _k, n, end in rows])
+        st["table"] = {(op, k): (n, off) for (op, k, n, _e), off in zip(rows, offsets)}
+        st["size"] = size
+        st.pop("traces")
+        if os.environ.get("NBX_STATIC_PLAN_DIAG") == "1":
+            live = sum(n for _o, _k, n, _e in rows)
+            print(f"[StaticPlan] {self.dag.get('component_name')}: {len(rows)} allocations planned in "
+                  f"{size / 2**20:.0f} MB (their sum {live / 2**20:.0f} MB)", flush=True)
+
     def defer_inputs(self, providers) -> None:
         """Bind each input of `providers` ({tensor id: () -> tensor}) only right before the FIRST op that reads it, for
         the next run alone. A temporal stream's carried states, parked on the host between two chunks, come back to the
@@ -3225,7 +3303,13 @@ class TritonSequence:
                 if self._is_multi_device:
                     self._run_multi_device(skip_kills, pre_op_callback)
                 else:
-                    self._run_single_device(skip_kills, pre_op_callback)
+                    self._plan_mode = self._plan_begin()
+                    _plan_ok = False
+                    try:
+                        self._run_single_device(skip_kills, pre_op_callback)
+                        _plan_ok = True
+                    finally:
+                        self._plan_end(_plan_ok)
                 if _inv is not None and self._run_skip is None:
                     _inv.end(self._arena)
             except BaseException:
@@ -3701,7 +3785,13 @@ class TritonSequence:
         _key_ops = _key_census.recording()
         _skip = getattr(self, "_run_skip", None)
         _defer = getattr(self, "_deferred_at", None)
+        _plan_on = getattr(self, "_plan_mode", None) is not None
+        # a recording run frees what dies at the op it dies (the queue drained each op, a stream-ordered hand-back
+        # under the pool): the recorded lifetimes are the tensors' own, never the queue's
+        _plan_rec = getattr(self, "_plan_mode", None) == "record"
         for op_idx, op in enumerate(self._ops):
+            if _plan_on:
+                DeviceAllocator.plan_at_op(op_idx)
             if _defer and op_idx in _defer:
                 self._bind_deferred(op_idx)     # a parked input comes back right before its first reader
             if _skip is not None and _skip[op_idx]:
@@ -4306,7 +4396,7 @@ class TritonSequence:
             # throughput cost, which the pressure gate confines to the case
             # where the alternative is OOM.
             _drain_now = (_deferred_bytes >= _drain_cliff
-                          or len(_deferred) >= _drain_count_limit)
+                          or len(_deferred) >= _drain_count_limit or _plan_rec)
             _pressure = False
             # Under the allocator pool the pressure probe has no object: a
             # pressure drain parks dead blocks in the free-list (no driver

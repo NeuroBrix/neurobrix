@@ -6214,6 +6214,7 @@ class GraphExecutor:
         from neurobrix.kernels.nbx_tensor import DeviceAllocator as _DA
         _DA.sync_device()
         self._triton_seq._arena.clear_all()  # type: ignore[attr-defined]
+        self._triton_seq._plan_release_ws()   # the static memory plan's workspace goes with its sequence
         from neurobrix.triton.replay import retire_sequence_plans
         retire_sequence_plans(self._triton_seq)
         self._triton_seq = None

@@ -65,3 +65,21 @@ One plan per (sequence, shape bucket) — the bucket the replay already keys by 
 ## Estimate
 
 1-2 days for the engine side and its proof on CUDA, the Mac's Metal proof in parallel.
+
+## First implementation and what it taught (2026-10-27 23:40, the Dell)
+
+Branch triton-static-memory-plan: `DeviceAllocator` records / plans per (op, k-th allocation of the op), the single-device
+hot loop names its op and drains each op while recording, a bucket is planned after `PLAN_RECORDS` recorded runs whose
+allocations agree op by op (an op whose allocations move between runs is left to the allocator), the workspace goes
+with its sequence (`_drop_triton_sequence`). Behind `NBX_STATIC_PLAN=1` while it is proven. TinyLlama triton on card 3:
+output byte-identical with and without, 260 decode allocations planned.
+
+What it cannot do as recorded, and the next cut:
+* a component run ONCE per request (a VAE, a text encoder) never reaches a planned run, and the gate's 2-step video
+  requests run their transformers twice — the recorded plan helps loops and decodes, not the components whose
+  activations dominate (mochi's 8 GB Triton wall is its transformer segments AND its VAE);
+* so the plan must exist BEFORE the first run: the graph outputs' sizes are known once the symbols bind and their
+  widths are the ones Prism already derives for the engine (`core/prism/runtime_widths.ExecutedWidths`) — the plan of
+  the graph tensors is computed statically (the same `assign_offsets` Prism prices with), and only the wrappers' own
+  temporaries (declared per op in `core/prism/op_workspace.py`) stay with the allocator. An allocation whose size the
+  static plan did not derive is refused by name — that is the contract the price needs.
