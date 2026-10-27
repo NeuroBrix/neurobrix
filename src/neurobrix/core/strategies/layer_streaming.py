@@ -56,7 +56,8 @@ def _reset_segment_peak(seg_exec) -> None:
         return
     import torch
     if torch.cuda.is_available():
-        torch.cuda.reset_peak_memory_stats(int(dev.split(":")[1]) if ":" in dev else torch.cuda.current_device())
+        from neurobrix.core.runtime.graph_executor import _reset_cuda_peak
+        _reset_cuda_peak(dev)                 # the run's peak kept before the counter restarts
 
 
 def _segment_memory_line(seg_exec) -> str:

@@ -938,7 +938,8 @@ def cmd_run(args):
     # The run's device peak (rule 3: every gate cell writes it to the register), each engine through its own allocator.
     if execution_mode in ("compiled", "sequential"):
         import torch
-        _peak = (max(torch.cuda.max_memory_reserved(d) for d in range(torch.cuda.device_count()))
+        from neurobrix.core.runtime.graph_executor import process_peak_reserved
+        _peak = (max(process_peak_reserved(d) for d in range(torch.cuda.device_count()))
                  if torch.cuda.is_available() else None)
     else:
         from neurobrix.kernels.nbx_tensor import DeviceAllocator

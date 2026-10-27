@@ -537,7 +537,8 @@ class Zero3Strategy(ExecutionStrategy):
                     f"peak_vram={peak_mb:.1f}MB live_vram={live_mb:.1f}MB "
                     f"blocks_cached={len(state['gpu_cache'])}"
                 )
-                torch.cuda.reset_peak_memory_stats(dev_idx)
+                from neurobrix.core.runtime.graph_executor import _reset_cuda_peak
+                _reset_cuda_peak(f"cuda:{dev_idx}")      # the run's peak kept before the counter restarts
         resident = state['resident']
         for bidx in list(state['gpu_cache'].keys()):
             if bidx not in resident:

@@ -197,15 +197,31 @@ def _save_inputs_if_asked(component: str, inputs: Dict[str, Any], mode: str) -> 
         except Exception as exc:                                       # noqa: BLE001
             print(f"[save-inputs] {component} ({mode}) {name}: NOT saved ({type(exc).__name__}: {exc})", flush=True)
 
+#: the most each card held (torch's reserved bytes) before a component's reset of the peak counter: the RUN's peak is
+#: the max of these and the counter's last reading (`process_peak_reserved`)
+_RESERVED_PEAK_BEFORE_RESET: Dict[int, int] = {}
+
+
 def _reset_cuda_peak(device) -> None:
     """Restart CUDA's peak counter once a compiled component is loaded: its release then states the component's own
-    worst op (a whole-component plan prints no segment line)."""
+    worst op (a whole-component plan prints no segment line). The counter's reading so far is kept first: the run's
+    [Peak] line read only the LAST component's peak (Flex.1-alpha native: 792 MB said, 12 466 MB held by its
+    transformer, the lot gate's registers, 2026-10-27)."""
     dev = str(device or "")
     if not dev.startswith("cuda"):
         return
     import torch
     if torch.cuda.is_available():
-        torch.cuda.reset_peak_memory_stats(int(dev.split(":")[1]) if ":" in dev else torch.cuda.current_device())
+        idx = int(dev.split(":")[1]) if ":" in dev else torch.cuda.current_device()
+        _RESERVED_PEAK_BEFORE_RESET[idx] = max(_RESERVED_PEAK_BEFORE_RESET.get(idx, 0),
+                                               int(torch.cuda.max_memory_reserved(idx)))
+        torch.cuda.reset_peak_memory_stats(idx)
+
+
+def process_peak_reserved(idx: int) -> int:
+    """The most card `idx` held (torch's reserved bytes) over the whole process, across the components' resets."""
+    import torch
+    return max(_RESERVED_PEAK_BEFORE_RESET.get(idx, 0), int(torch.cuda.max_memory_reserved(idx)))
 
 
 def _left_after_release(device, mode) -> str:
