@@ -13,6 +13,26 @@ summary:
   total_gpus: 4
   total_vram_gb: 96
   topology: Multi-GPU
+# cpu: the rack's own, measured by autodetect on this machine (default-ff6008b7, 2026-10-27); the cores size the host
+# threads and zero3's host side (a profile without them is refused by name since cpu-threads-from-profile 7d9fb978)
+cpu:
+  model: Intel(R) Xeon(R) Gold 6230 CPU @ 2.10GHz
+  cores: 40
+  threads: 80
+  ram_mb: 257530
+  architecture: x86_64
+  features:
+  - fma
+  - sse4_1
+  - sse4_2
+  - avx
+  - f16c
+  - avx2
+  - avx512f
+  - avx512_vnni
+  runtime_base_mb:
+    compiled: 803
+    triton: 207
 devices:
 - index: 0
   brand: nvidia
