@@ -2839,8 +2839,13 @@ class PrismSolver:
                                           and not (isinstance(spec, dict) and spec.get("stream"))})
         plan.tiling_exactness = {cn: dict(v) for cn, v in (getattr(self, "_tiling_exactness", {}) or {}).items()
                                  if cn in plan.components}
+        # A component the layer-streaming rung runs in sliced stretches is run by its pieces over its WHOLE graph —
+        # what that rung priced; a temporal stream left by an earlier rung would run its chunk graphs whole instead
+        # (mochi-1-preview native at an 8 GB rung, 2026-10-27: the plan sliced the VAE along H/W at 7.4 GB and the run
+        # took the stream's 1-frame chunks whole, OOM at aten.convolution::33).
+        _sliced = set(getattr(plan, "layer_stream_chunks", None) or {})
         plan.component_stream = {cn: dict(v) for cn, v in (getattr(self, "_component_stream", {}) or {}).items()
-                                 if cn in plan.components}
+                                 if cn in plan.components and cn not in _sliced}
         plan.stream_declined = {cn: str(v) for cn, v in (getattr(self, "_stream_declined", {}) or {}).items()
                                 if cn in plan.components and cn not in plan.component_stream}
         self._assign_drain_cliffs(container, plan, devices)

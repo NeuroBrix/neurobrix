@@ -950,7 +950,7 @@ class LayerPartitioner:
         """A stretch around op `h` run in slices of `ax.sym`: the ops over the target around it
         (none may mix the axis), widened to the seams where the least is live — before its first op
         and after its last — among the ops that do not mix the axis either."""
-        from neurobrix.core.prism.chunked_region import MIX, plan_region, region_carriers
+        from neurobrix.core.prism.chunked_region import MIX, NORM, plan_region, region_carriers
         if ax.verdicts[h].kind == MIX:
             return None, f"{self.order[h]} mixes the axis ({ax.verdicts[h].reason})"
         # An existing stretch on THIS axis is no wall: a seam may enclose it whole, and the two run as one, in one
@@ -965,18 +965,26 @@ class LayerPartitioner:
         def free(i: int) -> bool:
             return 0 <= i < len(self.order) and i not in taken and ax.verdicts[i].kind != MIX
 
+        # A group norm over the axis (`NORM`) runs on slices only as the stretch's FIRST op, its input read whole from
+        # outside: growing backward a stretch takes one and stops there; growing forward it stops before one.
+        def back(i: int, at: int) -> bool:
+            return free(i) and ax.verdicts[at].kind != NORM
+
+        def fwd(i: int) -> bool:
+            return free(i) and ax.verdicts[i].kind != NORM
+
         def cuts_one(L: int, R: int) -> bool:
             return any((r.first < L <= r.last) or (r.first <= R < r.last) for r in regions)
 
         lo = hi = h
-        while free(lo - 1) and eff[lo - 1] > target:
+        while back(lo - 1, lo) and eff[lo - 1] > target:
             lo -= 1
-        while free(hi + 1) and eff[hi + 1] > target:
+        while fwd(hi + 1) and eff[hi + 1] > target:
             hi += 1
         span_lo, span_hi = lo, hi
-        while free(span_lo - 1):
+        while back(span_lo - 1, span_lo):
             span_lo -= 1
-        while free(span_hi + 1):
+        while fwd(span_hi + 1):
             span_hi += 1
         curve = self.live_activation_curve()
 

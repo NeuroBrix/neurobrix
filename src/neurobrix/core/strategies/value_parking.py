@@ -17,8 +17,14 @@ def _index(device: Optional[str]) -> int:
 def to_host(value: Any) -> Any:
     """`value` on the host (itself when it already is, or is no tensor)."""
     if hasattr(value, "to_cpu") and hasattr(value, "is_cuda"):          # NBXTensor
-        return value.to_cpu(pinned=True) if value.is_cuda else value
-    if hasattr(value, "is_cuda") and hasattr(value, "to") and getattr(value, "is_cuda", False):   # torch.Tensor
+        on_device = value.is_cuda or str(getattr(value, "_device", "cpu")) not in ("cpu", "")
+        return value.to_cpu(pinned=True) if on_device else value
+    # torch.Tensor on ANY accelerator: `is_cuda` is False on MPS, and a value "parked" by it stayed in Metal's pool —
+    # mochi-1-preview's VAE at an 8 GB rung held three whole 2 981 MB maps on the device the plan had put on the host
+    # (the Mac, 2026-10-27 12:06)
+    dev = getattr(value, "device", None)
+    kind = getattr(dev, "type", None) or str(dev or "cpu").split(":", 1)[0]
+    if hasattr(value, "to") and dev is not None and kind != "cpu":
         return value.to("cpu")
     return value
 
