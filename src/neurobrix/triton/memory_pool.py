@@ -126,3 +126,39 @@ class ComponentArena:
         # remain a no-op in that case.
         if getattr(self, '_base_ptr', 0):
             self.free()
+
+
+class HostPinnedArena:
+    """One page-locked host block for a component's host-held weights (zero3's block weights, an expert store's
+    routed experts), sub-allocated like `ComponentArena`. A pinned allocation per weight cost Qwen3-30B-A3B 18 864
+    page-locking calls — about 40 % of a 447 s load (py-spy, V100 rack, 2026-10-27); one block costs one. Each
+    weight holds the arena as its `base`, so the block is released when the last of them is."""
+
+    ALIGNMENT = 256
+
+    def __init__(self, total_bytes: int):
+        self._base_ptr = 0
+        self._total = (int(total_bytes) + self.ALIGNMENT - 1) & ~(self.ALIGNMENT - 1)
+        self._offset = 0
+        if self._total:
+            self._base_ptr = DeviceAllocator.malloc_host_pinned(self._total)
+
+    def alloc(self, nbytes: int) -> int:
+        if nbytes == 0:
+            return 0
+        aligned = (int(nbytes) + self.ALIGNMENT - 1) & ~(self.ALIGNMENT - 1)
+        if self._offset + aligned > self._total:
+            raise RuntimeError(f"HostPinnedArena: {nbytes} bytes asked, {self._offset}/{self._total} used — the "
+                               f"sizing pass and the load disagree on a host weight's bytes")
+        ptr = self._base_ptr + self._offset
+        self._offset += aligned
+        return ptr
+
+    @property
+    def used(self) -> int:
+        return self._offset
+
+    def __del__(self):
+        if getattr(self, "_base_ptr", 0):
+            DeviceAllocator.free_host_pinned(self._base_ptr)
+            self._base_ptr = 0

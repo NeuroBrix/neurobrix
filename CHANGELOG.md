@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`neurobrix autotune certify --keys <file>`** certifies exactly the keys a coverage check found missing (one `<kernel>::<key>` per line), without a census table.
 
 ### Fixed
+- **Large models whose weights are held in host memory load much faster on the Triton engine**: those weights now share one page-locked block instead of one allocation each, and their bf16 conversion runs on the loader's worker threads.
 - **A language model spread over several cards decodes under the Triton engine**: each layer's KV cache pages now live on the card that runs the layer; they all lived on the first card, and a layer on another card read them there (Ming-Lite-Omni-1.5 on four 16 GB cards stopped at its first decoded token).
 - **A multi-card plan no longer counts on memory the run's own context will take**: a card the process had not touched yet was budgeted at its whole memory, and the plan then placed more on it than the run gets once its context exists there; plans made on the machine now match the plans derived without a card.
 - **A busy machine with a guided video model is re-planned within its memory**: the re-plan that runs one guidance branch per pass kept the vendor's VAE tiling, instead of pricing the VAE whole and refusing. `--explain-plan` shows the plan the machine's facts give, with the memory free at that moment beside it, so a table of plans is reproducible.

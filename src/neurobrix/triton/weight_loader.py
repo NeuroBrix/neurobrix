@@ -28,7 +28,7 @@ from neurobrix.kernels.nbx_tensor import (
     NBXTensor, NBXDtype, DeviceAllocator, _contiguous_strides, dtype_size,
     _set_device, float32_to_bf16_bits,
 )
-from .memory_pool import ComponentArena
+from .memory_pool import ComponentArena, HostPinnedArena
 # The loader's worker count — one figure for every loader and for Prism's host estimate (torch-free).
 from neurobrix.core.workspace import io_workers, apply_host_mmap_threshold, apply_host_huge_pages
 # The absent-weight rule lives beside the container format it guards (torch-free), one rule for
@@ -105,6 +105,22 @@ def _read_bytes(fd: int, offset: int, nbytes: int) -> np.ndarray:
 
     list(_io_pool()[1].map(_one, _spans(nbytes, 1, _PAGE)))
     return buf
+
+
+def _bf16_bits_to_half(u16: np.ndarray) -> np.ndarray:
+    """bf16 bits (uint16) to float16, exactly as `(bits << 16).view(float32).astype(float16)`, the elements split
+    across the loader's workers — the widening ran on one thread for every host-held bf16 weight (a third of
+    Qwen3-30B-A3B's 447 s load, py-spy 2026-10-27)."""
+    src = np.ascontiguousarray(u16).reshape(-1)
+    out = np.empty(u16.shape, dtype=np.float16)
+    flat = out.reshape(-1)
+
+    def _one(span):
+        a, b = span
+        np.copyto(flat[a:b], (src[a:b].astype(np.uint32) << 16).view(np.float32), casting="unsafe")
+
+    list(_io_pool()[1].map(_one, _spans(src.size, src.itemsize, 1)))
+    return out
 
 
 def _cast(arr: np.ndarray, want) -> np.ndarray:
@@ -303,6 +319,7 @@ def load_component_weights(
     # path. We then decide globally whether to upcast.
     dev_bytes_regular: Dict[int, int] = {}
     dev_bytes_upcast: Dict[int, int] = {}
+    host_bytes = 0          # the host-held weights' bytes, in their target dtype: ONE pinned block (HostPinnedArena)
 
     for shard_path, header, _ in shard_headers:
         # All weights in a shard FILE share the file's target device under
@@ -321,6 +338,8 @@ def load_component_weights(
             if all_cpu_component:
                 if _BLOCK_RE.search(key):
                     cpu_weights.add(key)
+                    host_bytes += (_target_nbytes(info, compute_dtype) + HostPinnedArena.ALIGNMENT - 1) \
+                        & ~(HostPinnedArena.ALIGNMENT - 1)
                     continue
                 # Non-block → GPU sizing continues below.
                 target_dev = device_idx
@@ -373,15 +392,16 @@ def load_component_weights(
     for dev, total in dev_bytes.items():
         arenas[dev] = ComponentArena(total, dev)
 
-    # Phase 3: Load tensors into arenas (GPU) or CPU pinned buffers.
+    # Phase 3: Load tensors into arenas (GPU) or the one pinned host block.
     weights: Dict[str, NBXTensor] = {}
+    host_arena = HostPinnedArena(host_bytes) if host_bytes else None
 
     for shard_path, header, data_offset in shard_headers:
         _load_shard_into_arenas(
             shard_path, header, data_offset,
             weights, device_idx, compute_dtype,
             weight_device, arenas, cpu_weights,
-            upcast_effective=upcast_effective, only=only, krsc=krsc)
+            upcast_effective=upcast_effective, only=only, krsc=krsc, host_arena=host_arena)
 
     # Store arenas on the dict so they stay alive (prevent GC of GPU memory)
     weights['_arenas'] = arenas  # type: ignore
@@ -468,6 +488,7 @@ def _load_to_pinned_cpu(
     shape: tuple,
     source_dtype: NBXDtype,
     target_dtype: NBXDtype,
+    host_arena: Optional[HostPinnedArena] = None,
 ) -> NBXTensor:
     """Decode safetensors raw bytes into a pinned-host NBXTensor.
 
@@ -483,8 +504,7 @@ def _load_to_pinned_cpu(
         # is fp16.
         raw_u16 = np.frombuffer(raw, dtype=np.uint16).reshape(shape)
         if target_dtype == NBXDtype.float16:
-            u32 = raw_u16.astype(np.uint32) << 16
-            arr = _cast(u32.view(np.float32), np.float16)
+            arr = _bf16_bits_to_half(raw_u16)
         else:
             arr = np.ascontiguousarray(raw_u16)
     else:
@@ -538,8 +558,14 @@ def _load_to_pinned_cpu(
     if want is not None and arr.dtype != want:
         arr = _cast(arr, want)
 
-    # Allocate pinned host memory and copy in (kind=0 = H2H).
-    dst = NBXTensor.empty_cpu(shape, target_dtype, pinned=True)
+    # Pinned host memory: a slice of the component's one block when the load sized it, else its own block.
+    if host_arena is not None:
+        from neurobrix.kernels.nbx_tensor import dtype_size as _dsize
+        ptr = host_arena.alloc((math.prod(shape) if shape else 1) * _dsize(target_dtype))
+        dst = NBXTensor(ptr, tuple(shape), _contiguous_strides(tuple(shape)), target_dtype, 'cpu',
+                        owns_data=False, device_idx=0, base=host_arena, pinned=True)
+    else:
+        dst = NBXTensor.empty_cpu(shape, target_dtype, pinned=True)
 
     # The copy is sized from the SOURCE and the buffer from the TARGET, so a
     # dtype pair nobody converted is a write past the end of a cudaMallocHost
@@ -583,6 +609,7 @@ def _load_shard_into_arenas(
     upcast_effective: bool = False,
     only: Optional[Set[str]] = None,
     krsc: Optional[Set[str]] = None,
+    host_arena: Optional[HostPinnedArena] = None,
 ) -> None:
     """Load tensors from one shard, sub-allocating from arenas.
 
@@ -629,7 +656,7 @@ def _load_shard_into_arenas(
             # etc.) but the final NBXTensor is CPU-backed.
             if key in cpu_weights:
                 weights[key] = _load_to_pinned_cpu(
-                    raw, shape, nbx_dtype, target_dtype)
+                    raw, shape, nbx_dtype, target_dtype, host_arena)
                 continue
 
             # Bind-time fp16→fp32 upcast for pre-Ampere overflow protection.
