@@ -10,6 +10,7 @@ Algorithm: Best-Fit-Decreasing with Activation-Aware Memory Estimation
 """
 
 import copy
+import dataclasses
 import json
 import logging
 import math
@@ -4713,6 +4714,15 @@ class PrismSolver:
                 r = DeviceReading(kind="device", capacity_mb=float(dev.memory_mb), free_mb=r.free_mb or float(dev.memory_mb),
                                   display_active=r.display_active, held_by_others_mb=r.held_by_others_mb,
                                   own_context_mb=r.own_context_mb, measured=r.measured, source=r.source)
+            # A card this process has not touched yet holds no context of ours, and the run creates one there the
+            # moment it places anything on it: the profile's measured runtime context (the figure the census shadow
+            # reads). Read as 0, every card but the first was budgeted 306 MB over what the run gets — the 4-card
+            # pass (2026-10-27) planned Qwen3-30B-A3B triton weight_sharding at 15 867 MB per V100-16GB the shadow
+            # (15 845 MB usable) refuses.
+            ctx = getattr(dev, "runtime_context_mb", None)
+            if ctx is not None and r.measured and r.own_context_mb < float(ctx):
+                missing = float(ctx) - r.own_context_mb
+                r = dataclasses.replace(r, own_context_mb=float(ctx), free_mb=max(0.0, r.free_mb - missing))
             return r
         except Exception as exc:  # noqa: BLE001 — a reading that cannot be taken is a shared pool, said
             return DeviceReading(kind="device", capacity_mb=float(dev.memory_mb), free_mb=float(capacity),
