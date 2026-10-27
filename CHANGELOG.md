@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **A plan that loads components on demand fits the parts the model holds together**: a language model and its output head decoding at once must fit the card together; MiniCPM-o-4_5 on a 16 GB card no longer runs out of memory loading its head.
+- **A plan that loads components on demand fits the parts the model holds together**: a language model, its output head and the vision outputs waiting for it must fit the card together; MiniCPM-o-4_5 on a 16 GB card no longer runs out of memory loading its head, and Janus-Pro-7B keeps its faster plan.
 - **The hardware profile records each card's memory as the runtime sees it** (its allocator's total and the runtime's own context), so plans derived without a card match the plans a real run makes.
 - **A model whose plan tiles or streams a component is no longer refused on an idle card**: the execution check read that component whole instead of one tile or one chunk, as the plan holds it.
 - **Prism's time estimate prices the Triton engine's weight upload at the measured pageable rate**: the Triton loader uploads a component it loads whole from pageable memory, so its load time was underestimated by the pinned rate (1.8x on a V100).

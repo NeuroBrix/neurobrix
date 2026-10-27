@@ -1736,6 +1736,39 @@ class PrismSolver:
             return float(mem.activation_mb) * float(get_prism_defaults()["triton_arena_activation_factor"])
         return float(mem.activation_mb)
 
+    def _phase_peak_carried_mb(self, container, costs: Dict[str, int]) -> float:
+        """The dearest phase of the flow (`_flow_phases`, its towers first, the decode last), each with its components
+        as placed (`costs`, bytes) AND the graph outputs of the components of the phases BEFORE it, which the flow keeps
+        until a later phase consumes them (a VLM's tower outputs wait for the language model's splice: 296 MB live on
+        MiniCPM-o-4_5 when its language model loads, 2026-10-27). In MB. Without phases: the sum."""
+        phases = self._flow_phases(container)
+        if not phases:
+            return sum(costs.values()) / (1024 * 1024)
+        named = set().union(*phases)
+        loose = sum(c for n, c in costs.items() if n not in named)
+        carried, best, seen = 0, 0, set()
+        for ph in phases:
+            best = max(best, loose + sum(costs.get(n, 0) for n in ph) + carried)
+            for n in ph - seen:
+                carried += self._component_output_bytes(n)
+            seen |= ph
+        return best / (1024 * 1024)
+
+    def _component_output_bytes(self, name: str) -> int:
+        """The bytes of a component's graph outputs at this request (`work.component_work`'s `output_bytes`)."""
+        cache = self.__dict__.setdefault("_output_bytes_cache", {})
+        if name not in cache:
+            from neurobrix.core.prism.profiler import ActivationProfiler
+            from neurobrix.core.prism.work import component_work
+            comp = next((c for c in (getattr(self, "_neural_components", None) or []) if c.name == name), None)
+            ic = getattr(self, "_input_config", None)
+            if comp is None or ic is None:
+                cache[name] = 0
+            else:
+                prof = ActivationProfiler(comp.graph)
+                cache[name] = int(component_work(prof, prof.build_symbol_map(ic)).output_bytes)
+        return cache[name]
+
     def _held_as_planned_mb(self, container, comp_name: str, mem: "ComponentMemory", dev: "DeviceState",
                             alloc: "ComponentAllocation", tiling=None, stream=None) -> float:
         """What a component the plan loads on demand holds on `dev` while it is loaded, AS THE PLAN PLACES IT: a zero3
@@ -5649,12 +5682,18 @@ class PrismSolver:
                     judged = False
             if not judged or len(costs) < 2:
                 continue
-            peak_mb = self._phase_peak(container, costs) / (1024 * 1024)
-            room = self._usable_mb(dev)
+            peak_mb = self._phase_peak_carried_mb(container, costs)
+            # the card's budget less the smallest drain the Triton hot loop keeps (`_deferred_drain_floor_mb`, 0 under
+            # compiled): both facts. Measured 2026-10-27 on an idle V100-16GB (budget 15 845, floor 256 -> 15 589):
+            # MiniCPM-o-4_5 decode phase 15 477 + 296 MB of tower outputs carried = 15 773 (the run needed ~15 859:
+            # OOM) declines; Janus-Pro-7B's 15 034 (the run held 14 717) stays lazy. The single-component part
+            # (`_usable_mb`, 12 670) declined Janus too and made it 3.7x slower under zero3.
+            room = float(dev.budget_mb) - self._deferred_drain_floor_mb(dev)
             if peak_mb > room:
                 logging.getLogger(__name__).info(
                     "Prism: lazy_sequential declined on %s — the flow's dearest phase holds %.0f MB (its components "
-                    "as placed) over the %.0f MB usable part", dev.device_string, peak_mb, room)
+                    "as placed, the outputs carried into it) over the card's %.0f MB less the drain floor",
+                    dev.device_string, peak_mb, room)
                 return None
 
         return allocations, fresh

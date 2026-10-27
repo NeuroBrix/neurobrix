@@ -104,3 +104,18 @@ def test_a_lazy_plan_fits_its_dearest_phase_on_a_dedicated_card(monkeypatch):
     c, ic = _input_config("MiniCPM-o-4_5", "triton")
     p = PrismSolver().solve_smart(c, profile(V100_16GB), ic, mode="triton")
     assert p.strategy != "lazy_sequential", p.strategy
+
+
+def test_a_lazy_plan_that_fits_its_phases_stays_lazy(monkeypatch):
+    """Janus-Pro-7B triton on an idle V100-16GB: its decode phase (15 034 MB priced; the run held 14 717 MB, measured on
+    card 1 2026-10-27) fits the card's budget less the drain floor (15 589). The phase check compared it to the
+    single-component usable part (12 670) and sent it to zero3, 3.7x slower (final gate 16g). It stays lazy."""
+    from tests.unit.prism._pinned_machine import V100_16GB, pin_dedicated_card, profile
+    from tests.unit.prism.test_a_component_over_the_rung_streams_inside_itself import _input_config
+    from neurobrix.core.prism import PrismSolver
+    no_door(monkeypatch)
+    pin_host(monkeypatch, 257530, 200000, "an idle rack host")
+    pin_dedicated_card(monkeypatch, 16151, 306, "an idle V100-16GB")
+    c, ic = _input_config("Janus-Pro-7B", "triton")
+    p = PrismSolver().solve_smart(c, profile(V100_16GB), ic, mode="triton")
+    assert p.strategy == "lazy_sequential", p.strategy
