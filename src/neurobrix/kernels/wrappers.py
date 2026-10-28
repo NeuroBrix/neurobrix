@@ -769,8 +769,40 @@ def _prepare_comparison(a, b):
 # ACTIVATION WRAPPERS
 # ===========================================================================
 
-def relu(x, out=None) :
+def _dense_span(x):
+    """`x` as the flat run of memory its elements fill when it is DENSE in some order of its dims (a permute of a
+    contiguous tensor: its strides, sorted, are the contiguous strides of its shape so permuted), else None."""
+    shape, stride = tuple(x.shape), tuple(x.stride())
+    expect = 1
+    for i in sorted((i for i in range(len(shape)) if shape[i] != 1), key=lambda i: stride[i]):
+        if stride[i] != expect:
+            return None
+        expect *= shape[i]
+    return x.as_strided((x.numel(),), (1,))
+
+
+def _flat_unary(x, kernel, out=None):
+    """An element-wise kernel over `x`'s elements, its output laid out as `x` is. A dense input in another order of
+    its dims (a permute's output) is read where it lies and the result takes its strides, as ATen's element-wise ops
+    keep a dense layout; a contiguous copy of it first cost one input-sized buffer the graph never priced
+    (mochi-1-preview's VAE: a 3 GB silu input, 2026-10-28). `out` (a caller that proved the input dies here) keeps the
+    contiguous path."""
+    if out is None and not x.is_contiguous():
+        span = _dense_span(x)
+        if span is not None:
+            n = span.numel()
+            res = NBXTensor.empty_like(span)
+            _set_device(span)
+            kernel[_1d_grid(n)](span, res, n, **_ew_meta(n))
+            return res.as_strided(tuple(x.shape), tuple(x.stride()))
     x = x.contiguous()
+    output = out if out is not None else NBXTensor.empty_like(x)
+    _set_device(x)
+    kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
+    return output
+
+
+def relu(x, out=None) :
     # `out` lets a caller that has PROVED this tensor's input dies here
     # write the result into the input's own buffer. These kernels are
     # strictly element-wise with matched offsets -- one load at
@@ -778,14 +810,10 @@ def relu(x, out=None) :
     # cross-lane read -- so one pointer passed twice is correct by
     # construction, not by luck. The liveness proof is the caller's:
     # see `OpLevelTilingEngine._detect_inplace_unary_candidates`.
-    output = out if out is not None else NBXTensor.empty_like(x)
-    _set_device(x)
-    relu_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
-    return output
+    return _flat_unary(x, relu_forward_kernel, out)
 
 
 def silu(x, out=None) :
-    x = x.contiguous()
     # `out` lets a caller that has PROVED this tensor's input dies here
     # write the result into the input's own buffer. These kernels are
     # strictly element-wise with matched offsets -- one load at
@@ -793,10 +821,7 @@ def silu(x, out=None) :
     # cross-lane read -- so one pointer passed twice is correct by
     # construction, not by luck. The liveness proof is the caller's:
     # see `OpLevelTilingEngine._detect_inplace_unary_candidates`.
-    output = out if out is not None else NBXTensor.empty_like(x)
-    _set_device(x)
-    silu_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
-    return output
+    return _flat_unary(x, silu_forward_kernel, out)
 
 
 def gelu(x, approximate: str = 'none', out=None) :
@@ -817,31 +842,18 @@ def gelu(x, approximate: str = 'none', out=None) :
 
 
 def sigmoid_wrapper(x) :
-    x = x.contiguous()
-    output = NBXTensor.empty_like(x)
-    _set_device(x)
-    sigmoid_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
-    return output
+    return _flat_unary(x, sigmoid_forward_kernel)
 
 
 def tanh_wrapper(x) :
-    x = x.contiguous()
-    output = NBXTensor.empty_like(x)
-    _set_device(x)
-    tanh_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
-    return output
+    return _flat_unary(x, tanh_forward_kernel)
 
 
 def hardsigmoid(x) :
-    x = x.contiguous()
-    output = NBXTensor.empty_like(x)
-    _set_device(x)
-    hardsigmoid_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
-    return output
+    return _flat_unary(x, hardsigmoid_forward_kernel)
 
 
 def hardswish(x, out=None) :
-    x = x.contiguous()
     # `out` lets a caller that has PROVED this tensor's input dies here
     # write the result into the input's own buffer. These kernels are
     # strictly element-wise with matched offsets -- one load at
@@ -849,10 +861,7 @@ def hardswish(x, out=None) :
     # cross-lane read -- so one pointer passed twice is correct by
     # construction, not by luck. The liveness proof is the caller's:
     # see `OpLevelTilingEngine._detect_inplace_unary_candidates`.
-    output = out if out is not None else NBXTensor.empty_like(x)
-    _set_device(x)
-    hardswish_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
-    return output
+    return _flat_unary(x, hardswish_forward_kernel, out)
 
 
 def leaky_relu(x, negative_slope: float = 0.01, out=None) :
@@ -888,7 +897,6 @@ def elu(x, alpha: float = 1.0, out=None) :
 
 
 def mish(x, out=None) :
-    x = x.contiguous()
     # `out` lets a caller that has PROVED this tensor's input dies here
     # write the result into the input's own buffer. These kernels are
     # strictly element-wise with matched offsets -- one load at
@@ -896,18 +904,11 @@ def mish(x, out=None) :
     # cross-lane read -- so one pointer passed twice is correct by
     # construction, not by luck. The liveness proof is the caller's:
     # see `OpLevelTilingEngine._detect_inplace_unary_candidates`.
-    output = out if out is not None else NBXTensor.empty_like(x)
-    _set_device(x)
-    mish_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
-    return output
+    return _flat_unary(x, mish_forward_kernel, out)
 
 
 def selu_wrapper(x) :
-    x = x.contiguous()
-    output = NBXTensor.empty_like(x)
-    _set_device(x)
-    selu_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
-    return output
+    return _flat_unary(x, selu_forward_kernel)
 
 
 # ===========================================================================
@@ -915,11 +916,7 @@ def selu_wrapper(x) :
 # ===========================================================================
 
 def neg(x) :
-    x = x.contiguous()
-    output = NBXTensor.empty_like(x)
-    _set_device(x)
-    neg_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
-    return output
+    return _flat_unary(x, neg_forward_kernel)
 
 
 def exp(x) :
@@ -937,19 +934,11 @@ def exp(x) :
 
 
 def sin(x) :
-    x = x.contiguous()
-    output = NBXTensor.empty_like(x)
-    _set_device(x)
-    sin_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
-    return output
+    return _flat_unary(x, sin_forward_kernel)
 
 
 def cos(x) :
-    x = x.contiguous()
-    output = NBXTensor.empty_like(x)
-    _set_device(x)
-    cos_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
-    return output
+    return _flat_unary(x, cos_forward_kernel)
 
 
 def _promote_int_unary(x):
@@ -3924,7 +3913,10 @@ def _conv3d_via_conv2d(x, weight, bias, stride, padding, dilation, groups):
                 x2 = x[b][:, start:start + T_out].permute(1, 0, 2, 3)
                 conv2d_wrapper(x2, w2, None, (sh, sw), (ph, pw), (dh, dw), False, 0, groups,
                                out=tap[b].permute(1, 0, 2, 3))
-            out = tap if out is None else out + tap
+            # each later tap added INTO the sum (the same add kernel, the same order: the same bits): `out + tap` held
+            # the old sum, the tap and the new sum at once — three output-sized buffers where the plan priced one
+            # (mochi-1-preview's VAE at the 8 GB rung, 1.5 GB each, 2026-10-28)
+            out = tap if out is None else add_inplace_nbx(out, tap)
             tap = None
         if bias is not None:
             out = out + bias.reshape(1, Cout, 1, 1, 1)
@@ -4584,11 +4576,7 @@ def celu_wrapper(x, alpha: float = 1.0) :
 
 
 def log_sigmoid_wrapper(x) :
-    x = x.contiguous()
-    output = NBXTensor.empty_like(x)
-    _set_device(x)
-    log_sigmoid_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
-    return output
+    return _flat_unary(x, log_sigmoid_forward_kernel)
 
 
 def isfinite_wrapper(x) :
@@ -7427,56 +7415,67 @@ def reflection_pad3d_wrapper(x, pad_list) :
     return _reflect_pad_axis(out, -3, df, db)
 
 
-def _replicate_pad_axis(out, axis, before, after):
-    """Replicate the edge slice `before`/`after` times along `axis` and cat.
-
-    R33-pure: narrow + expand + NBXTensor.cat — no new Triton kernel (same
-    decomposition discipline as reflection_pad2d_wrapper). Replication repeats
-    the EDGE element (PyTorch `replicate`), unlike reflection which mirrors the
-    interior — so a left pad of p is the first slice broadcast p times, a right
-    pad of p is the last slice broadcast p times.
-    """
-    if before <= 0 and after <= 0:
-        return out
-    L = out.shape[axis]
-    parts = []
-    if before > 0:
-        shp = list(out.shape); shp[axis] = before
-        parts.append(out.narrow(axis, 0, 1).expand(*shp).contiguous())
-    parts.append(out)
-    if after > 0:
-        shp = list(out.shape); shp[axis] = after
-        parts.append(out.narrow(axis, L - 1, 1).expand(*shp).contiguous())
-    return NBXTensor.cat(parts, dim=axis).contiguous()
+def _replication_pad_last(x, pad_list, n_axes: int):
+    """Replication pad (PyTorch `replicate`) of the last `n_axes` dims, `pad_list` in torch's last-dim-first order
+    ([W_left, W_right, H_top, H_bot, D_front, D_back]), in ONE pass over the output with the input read through its
+    strides (`replication_pad_nd_kernel`). The former narrow + expand + cat held a contiguous copy of the input and one
+    output-sized tensor per padded axis: on mochi-1-preview's VAE (3 GB activations) up to three of them beside the
+    result, priced by no plan (2026-10-28)."""
+    from .ops.pad_op import replication_pad_nd_kernel
+    from neurobrix.kernels.nbx_tensor import _index_wide, _max_linear_offset
+    pads = ([int(v) for v in pad_list] + [0] * (2 * n_axes))[:2 * n_axes]
+    ndim = len(x.shape)
+    if ndim > 5 or ndim < n_axes:
+        raise NotImplementedError(f"replication pad of {n_axes} dims on a {ndim}-D input: the one-pass kernel takes "
+                                  f"{n_axes} to 5 dims")
+    before = [0] * ndim
+    for k in range(n_axes):
+        before[ndim - 1 - k] = pads[2 * k]
+    out_shape = list(x.shape)
+    for k in range(n_axes):
+        out_shape[ndim - 1 - k] += pads[2 * k] + pads[2 * k + 1]
+    output = NBXTensor.empty(out_shape, dtype=x.dtype, device=x.device)
+    total = output.numel()
+    if total == 0:
+        return output
+    _wide = _index_wide(total, _max_linear_offset(x.shape, x.stride()),
+                        _max_linear_offset(output.shape, output.stride()))
+    pad5 = 5 - ndim
+    _set_device(x)
+    replication_pad_nd_kernel[_1d_grid(total)](
+        x, output, total,
+        *([1] * pad5 + list(x.shape)), *([1] * pad5 + out_shape),
+        *([0] * pad5 + [x.stride(i) for i in range(ndim)]), *([0] * pad5 + before),
+        **_ew_meta(total), WIDE=_wide,
+    )
+    return output
 
 
 def replication_pad1d_wrapper(x, pad_list) :
-    """Replication pad 1D (last dim) — F.pad(mode='replicate'). R33-pure
-    narrow+expand+cat (no new kernel)."""
-    pad_list = [int(v) for v in pad_list]
-    left, right = (pad_list + [0, 0])[:2]
-    return _replicate_pad_axis(x.contiguous(), -1, left, right)
+    """Replication pad 1D (last dim) — F.pad(mode='replicate'), one pass (`_replication_pad_last`)."""
+    return _replication_pad_last(x, pad_list, 1)
 
 
 def replication_pad2d_wrapper(x, pad_list) :
-    """Replication pad 2D (last two dims) — F.pad(mode='replicate'). R33-pure."""
-    pad_list = [int(v) for v in pad_list]
-    # torch convention: last-dim-first → [W_left, W_right, H_top, H_bot]
-    wl, wr, ht, hb = (pad_list + [0, 0, 0, 0])[:4]
-    out = _replicate_pad_axis(x.contiguous(), -1, wl, wr)
-    return _replicate_pad_axis(out, -2, ht, hb)
+    """Replication pad 2D (last two dims) — F.pad(mode='replicate'), one pass (`_replication_pad_last`)."""
+    return _replication_pad_last(x, pad_list, 2)
 
 
 def replication_pad3d_wrapper(x, pad_list) :
-    """Replication pad 3D (last three dims) — F.pad(mode='replicate'). R33-pure
-    narrow+expand+cat (no new kernel). Used by the Mochi / 5D-video VAE decoder
-    edge pad on [B, C, D, H, W]."""
-    pad_list = [int(v) for v in pad_list]
-    # torch convention: [W_left, W_right, H_top, H_bot, D_front, D_back]
-    wl, wr, ht, hb, df, db = (pad_list + [0, 0, 0, 0, 0, 0])[:6]
-    out = _replicate_pad_axis(x.contiguous(), -1, wl, wr)
-    out = _replicate_pad_axis(out, -2, ht, hb)
-    return _replicate_pad_axis(out, -3, df, db)
+    """Replication pad 3D (last three dims) — F.pad(mode='replicate'), one pass (`_replication_pad_last`). Used by
+    the Mochi / 5D-video VAE decoder edge pad on [B, C, D, H, W]."""
+    return _replication_pad_last(x, pad_list, 3)
+    _wide = _index_wide(total, _max_linear_offset(x.shape, x.stride()),
+                        _max_linear_offset(output.shape, output.stride()))
+    pad5 = 5 - ndim
+    _set_device(x)
+    replication_pad_nd_kernel[_1d_grid(total)](
+        x, output, total,
+        *([1] * pad5 + list(x.shape)), *([1] * pad5 + out_shape),
+        *([0] * pad5 + [x.stride(i) for i in range(ndim)]), *([0] * pad5 + before),
+        **_ew_meta(total), WIDE=_wide,
+    )
+    return output
 
 
 # ===========================================================================
