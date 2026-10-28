@@ -76,10 +76,13 @@ def matmul_out_dtype(dt: NBXDtype, M: int, force_fp32: bool, native_bf16: bool,
     if dt == F16 and not native_bf16:
         return F32
     # ONE precision contract (the owner, 2026-10-25 15:26): on hardware that computes bf16 natively a half input
-    # stores half — decode rows (M <= 4) and the batched attention GEMM (force_fp32) included; fp32 is stored only
-    # for an island or where the hardware has no native half path (above). The compiled branch stores bf16 there
-    # (`_wrap_lower_precision`); the Triton branch stored fp32 and spread it (2 017 policy sites on Sana, the Mac).
-    if half and (M <= 4 or force_fp32) and not native_bf16:
+    # stores half — the batched attention GEMM (force_fp32) included; fp32 is stored only for an island or where the
+    # hardware has no native half path (above). The compiled branch stores bf16 there (`_wrap_lower_precision`); the
+    # Triton branch stored fp32 and spread it (2 017 policy sites on Sana, the Mac). A DECODE ROW (M <= 4) keeps its
+    # fp32 store on every hardware: stored half on the M4 Pro (native bf16), whisper-large-v3-turbo's Triton decoder
+    # drifted from its first tokens ("Sierrachan... lateral lateral...", stable f8def0b9 -> 58b39d7e; bisected on the
+    # Mac 2026-10-28 to d4809a47, this hunk alone) — the same drift the fp16 decode rows showed (MiniCPM-o "The!!!!!").
+    if half and (M <= 4 or (force_fp32 and not native_bf16)):
         return F32
     return dt
 
