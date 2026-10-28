@@ -5782,12 +5782,12 @@ class PrismSolver:
         self.__dict__.setdefault("_tiling_rung_figure", {})[rung] = (card, float(usable_mb))
 
     def _stream_driver_limit(self, comp_name: str):
-        """(ratio, limit bytes) when the compiled engine's device declares a measured driver/price ratio for this
-        component's family (`memory.compiled_stream_driver_over_price`): the limit is the device's declared memory
-        less the engine's measured base on this host. None otherwise (another engine, no unified/GPU device, a vendor
-        that declares null or no row for the family): the chunk is priced at its tensors, as before."""
-        if str(getattr(self, "_mode", "compiled")).startswith("triton"):
-            return None
+        """(ratio, limit bytes) when the engine's device declares a measured driver/price ratio for this component's
+        family (`memory.<engine>_stream_driver_over_price`, compiled or triton): the limit is the device's declared
+        memory — or the imposed rung — less the engine's measured base on this host. None otherwise (no unified/GPU
+        device, a vendor that declares null or no row for the family): the chunk is priced at its tensors."""
+        from neurobrix.core.prism.host_footprint import engine_of
+        engine = engine_of(getattr(self, "_mode", "compiled"))
         profile = getattr(self, "_profile", None)
         devs = [d for d in (getattr(profile, "devices", None) or []) if getattr(d, "memory_mb", 0)]
         if not devs:
@@ -5796,14 +5796,24 @@ class PrismSolver:
         from neurobrix.core.config.loader import vendor_config_for_device
         mem = (vendor_config_for_device(dev.brand.value, dev.architecture, dev.compute_capability,
                                         model=getattr(dev, "name", None)).get("memory") or {})
-        table = mem.get("compiled_stream_driver_over_price")
+        # ONE rule for both engines (decision C1, extended to the Triton engine by the supervisor 2026-10-28 11:20):
+        # each engine's own measured ratio, `<engine>_stream_driver_over_price`. Without it on the Triton engine,
+        # mochi-1-preview's VAE at an imposed 8 GB rung streamed 1-frame chunks priced 5 701 MB that held 9 334 MB of
+        # the M4 Pro, where the compiled engine — priced by its ratio — sliced the VAE and held the rung.
+        table = mem.get(f"{engine}_stream_driver_over_price")
         row = (table or {}).get(comp_name)
         if not row:
             return None
         ratio = float(row["ratio"] if isinstance(row, dict) else row)
-        base = float(((getattr(profile.cpu, "runtime_base_mb", None) or {}).get("compiled")
+        base = float(((getattr(profile.cpu, "runtime_base_mb", None) or {}).get(engine)
                       if getattr(profile, "cpu", None) else 0) or 0)
-        return ratio, int((float(dev.memory_mb) - base) * 1024 * 1024)
+        # the device the plan is held to: its declared memory, or the rung an imposed budget makes it
+        # (`NBX_PRISM_BUDGET_MB`, the census and the rung proofs: the allocator is held to that card)
+        limit_mb = float(dev.memory_mb)
+        imposed = os.environ.get("NBX_PRISM_BUDGET_MB")
+        if imposed:
+            limit_mb = min(limit_mb, float(imposed))
+        return ratio, int((limit_mb - base) * 1024 * 1024)
 
     def _stream_declaration(self, container, comp_name: str):
         """The component's temporal stream declaration with its two graphs (`temporal_stream.load`), read once per

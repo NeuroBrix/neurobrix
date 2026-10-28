@@ -136,6 +136,11 @@ memory:
   # results/heap_slack_2026_10_26/MEASURE.md. A family not listed is priced at its tensors (the door covers it).
   compiled_stream_driver_over_price:
     vae: {ratio: 1.744, source: "M4 Pro 2026-10-26: mochi-1-preview VAE 1-frame chunk, driver 17714 MB / price 10159 MB"}
+  # the Triton engine's chunk, the same rule (decision C1 extended, the supervisor 2026-10-28 11:20): measured
+  # on the M4 Pro 2026-10-28 09:5x — mochi-1-preview Triton at an imposed 8 GB rung, VAE 1-frame chunks parked:
+  # device peak 9 334 MB for a priced chunk of 5 701 MB (stable 58b39d7e + S4b flush, results/s4b_2026_10_28)
+  triton_stream_driver_over_price:
+    vae: {ratio: 1.637, source: "M4 Pro 2026-10-28: mochi-1-preview Triton VAE 1-frame chunk parked, device peak 9334 MB / price 5701 MB"}
   # 32 KB of threadgroup memory per threadgroup (Apple GPU family 7+).
   # The single most binding difference from every NVIDIA profile here.
   # MEASURED 2026-09-05 on an M4 Pro: `MTLDevice.maxThreadgroupMemoryLength()`

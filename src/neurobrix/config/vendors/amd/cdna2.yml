@@ -100,6 +100,7 @@ sdpa_thresholds:
 # benefits from larger tiles on MI300.
 memory:
   compiled_stream_driver_over_price: null   # not measured on this device (C1, 2026-10-27): a stream chunk is priced at its tensors
+  triton_stream_driver_over_price: null
   # The compiled engine's torch caching allocator (core/runtime/torch_allocator.py; the measured
   # case is in nvidia/volta.yml). ROCm's build of that allocator implements expandable segments on
   # HIP's virtual-memory API (hipMemCreate / hipMemMap: c10/cuda/CUDACachingAllocator.cpp, the
