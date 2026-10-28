@@ -251,6 +251,9 @@ class ComponentMemory:
     activation_profiled: bool = False
     attention_per_block_bytes: int = 0
     attention_dominates: bool = False
+    # The KV cache inside `activation_bytes` (the language model's): one allocation the state engine makes once,
+    # never the arena's per-op activations — `_live_activation_mb` keeps it out of the arena factor.
+    kv_bytes: int = 0
 
     @property
     def total_bytes(self) -> int:
@@ -1902,7 +1905,10 @@ class PrismSolver:
         no measurement of the factor exists on them, and a factor applied where it was not
         measured is a guess wearing a number."""
         if str(getattr(self, "_mode", "compiled")).startswith("triton"):
-            return float(mem.activation_mb) * float(get_prism_defaults()["triton_arena_activation_factor"])
+            # the KV cache inside the figure is one allocation made once, not the arena's activations
+            kv_mb = int(getattr(mem, "kv_bytes", 0) or 0) / (1024 * 1024)
+            return ((float(mem.activation_mb) - kv_mb) * float(get_prism_defaults()["triton_arena_activation_factor"])
+                    + kv_mb)
         return float(mem.activation_mb)
 
     def _phase_peak_carried_mb(self, container, costs: Dict[str, int]) -> float:
@@ -4340,6 +4346,7 @@ class PrismSolver:
                     int(self._scale_activations_to_request(comp, _live, input_config)), _op)
 
             # Add KV cache to activation budget for the LM component
+            kv_estimate = 0
             if needs_kv_cache and lm_component_name and comp.name == lm_component_name:
                 kv_estimate = self._estimate_kv_cache_bytes(container, target_dtype_str)
                 activation_bytes += kv_estimate
@@ -4350,7 +4357,7 @@ class PrismSolver:
                     comp, activation_bytes, manifest, target_dtype_str, activation_profiled
                 )
 
-            overhead_bytes = int((weight_bytes + activation_bytes) * self.overhead_factor)
+            overhead_bytes = self._overhead_bytes(weight_bytes, activation_bytes, activation_profiled)
 
             result[comp.name] = ComponentMemory(
                 component_name=comp.name,
@@ -4362,9 +4369,20 @@ class PrismSolver:
                 activation_profiled=activation_profiled,
                 attention_per_block_bytes=attn_per_block,
                 attention_dominates=attn_dominates,
+                kv_bytes=int(kv_estimate),
             )
 
         return result
+
+    def _overhead_bytes(self, weight_bytes: int, activation_bytes: int, profiled: bool) -> int:
+        """The buffer added beside a component's weights and activations: none where the activation figure is the
+        walk of the live set op by op (`activation_profiled`) — the weights are counted exactly from the index, and the
+        walk holds what the run holds: Janus-Pro-7B triton whole on a V100-16GB peaked 14 151 MB for 14 100 of weights +
+        activations (rack, 2026-10-28), the compiled engine's per-op V100 trace of Open-Sora-v2's VAE stayed within
+        0.38 GB of the walk at every op (2026-10-23). The `overhead_factor` stays on a figure nobody walked."""
+        if profiled:
+            return 0
+        return int((weight_bytes + activation_bytes) * self.overhead_factor)
 
     def _read_defaults(self, container) -> Optional[Dict]:
         """Read defaults.json from cache."""
@@ -6330,7 +6348,8 @@ class PrismSolver:
                         f"request: {self._tiling_declined.get(name)}")
                 self._component_tiling[name] = spec
                 mem.activation_bytes = int(spec["tiled_activation_bytes"])
-                mem.overhead_bytes = int((mem.weight_bytes + mem.activation_bytes) * self.overhead_factor)
+                mem.overhead_bytes = self._overhead_bytes(mem.weight_bytes, mem.activation_bytes,
+                                                          mem.activation_profiled)
                 continue
             decl = self._stream_declaration(container, name)
             if decl is None or not decl.get("vendor_chunks"):
@@ -6342,7 +6361,7 @@ class PrismSolver:
                     f"schedule of them is read for this request: {self._stream_declined.get(name)}")
             self._component_stream[name] = spec
             mem.activation_bytes = int(spec["activation_bytes"])
-            mem.overhead_bytes = int((mem.weight_bytes + mem.activation_bytes) * self.overhead_factor)
+            mem.overhead_bytes = self._overhead_bytes(mem.weight_bytes, mem.activation_bytes, mem.activation_profiled)
 
     def _tile_only_if_exact(self, comp_name: str, graph: Dict[str, Any], profile_j: Dict[str, Any],
                             full_act: int, rung_mb: int):
@@ -6424,7 +6443,7 @@ class PrismSolver:
             part = int(int(tile_rung_mb) * 1024 * 1024 * self.whole_component_fraction)
             weights = int(mem.weight_bytes)
             stream = self._temporal_stream(container, comp_name,
-                                           lambda c: (c + weights) * (1.0 + self.overhead_factor) <= part)
+                                           lambda c: c + weights + self._overhead_bytes(weights, c, mem.activation_profiled) <= part)
             if stream is not None:
                 streams[comp_name] = stream
                 return {"stream": True, "tiled_activation_bytes": int(stream["activation_bytes"]),
@@ -7069,7 +7088,8 @@ class PrismSolver:
                 # a chunk is the component held whole at the chunk's activations: the whole rule decides
                 # (the rung's whole part, the Triton arena's factor, the device's largest allocation)
                 m = _dc.replace(mem, activation_bytes=int(activation),
-                                overhead_bytes=int((mem.weight_bytes + activation) * self.overhead_factor))
+                                overhead_bytes=self._overhead_bytes(mem.weight_bytes, int(activation),
+                                                                    mem.activation_profiled))
                 return self._holds_whole(container, comp_name, m, largest)
             stream = self._temporal_stream(container, comp_name, held_whole_at)
             if stream is not None:
