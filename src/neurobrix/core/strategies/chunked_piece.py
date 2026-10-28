@@ -33,6 +33,27 @@ from neurobrix.core.strategies.value_parking import to_device
 from neurobrix.core.strategies.tiled_norm import group_norm_apply, norm_statistics
 from neurobrix.core.runtime.graph_executor import output_key
 
+import time
+
+#: [bytes, seconds] the slices cut from HOST tensors moved through this process — the engine's own measure of the
+#: host slab rate the time estimate prices (`time_estimate.HostFacts.slab_bps`, the profile's `host_slab_gbps`): a
+#: probe outside the run does not reproduce it (the engine's take_slice on host tensors runs at 23-76 GB/s alone on the
+#: M4 Pro and 3.06 GB/s inside the sliced mochi run, 2026-10-28), so the run measures it and the first-launch writer
+#: records it (`host_slab_gbps()`)
+HOST_SLAB = [0, 0.0]
+
+
+def host_slab_gbps():
+    """The measured host slab rate of this process's sliced runs, GB/s, or None before any host cut."""
+    return HOST_SLAB[0] / HOST_SLAB[1] / 1e9 if HOST_SLAB[1] > 0 else None
+
+
+def _nbytes(t) -> int:
+    try:
+        return int(t.numel()) * int(t.element_size())
+    except Exception:  # noqa: BLE001 — an NBXTensor
+        return int(getattr(t, "_nbytes", 0) or 0)
+
 
 class ChunkedPiece:
     """One piece of a streamed component, run in slices of `chunk["symbol"]`."""
@@ -329,6 +350,8 @@ class ChunkedPiece:
         partial rounded once per slice would sum to what the whole op, rounding once, does not."""
         plan = self._plan
         m = plan.margin if cp.chunked else 0
+        sliced_from_host = any(str(getattr(feed.get(n), "device", "")).startswith("cpu") for n in names
+                               if self._tid(n) in sliced_in)
         # each slice READS its rows widened by the stretch's halo, clipped at the axis' true ends
         for start, length, in_start, in_len in (slice_reads(total, count, m, plan.cyclic) if cp.chunked
                                                 else [(0, total, 0, total)]):
@@ -345,8 +368,13 @@ class ChunkedPiece:
                     raise RuntimeError(f"chunked piece: pass input {n!r} is neither fed nor made")
                 lay = plan.layouts.get(tid)
                 if cp.chunked and lay is not None and tid in sliced_in:
+                    _host = str(getattr(v, "device", "")).startswith("cpu")
+                    _t0 = time.perf_counter() if _host else 0.0
                     v = (take_slice_cyclic if plan.cyclic else take_slice)(
                         v, lay, total, inner[tid], in_start, in_len)
+                    if _host:
+                        HOST_SLAB[0] += _nbytes(v)
+                        HOST_SLAB[1] += time.perf_counter() - _t0
                 # an input kept on the host (`sliced_input_names`) comes to the pass's device a slice at a time
                 sub_feed[n] = to_device(v, getattr(ex, "device", None))
             out = ex.run(sub_feed, *args, **kwargs) or {}
@@ -373,7 +401,11 @@ class ChunkedPiece:
                         part = take_slice(part, lay, in_len, inner[tid], start - in_start, length)
                     if start == 0:
                         done[tid] = part.new_empty(whole_shape(part.shape, lay, total, length))
+                    _t0 = time.perf_counter() if sliced_from_host else 0.0
                     put_slice(done[tid], part, lay, total, inner[tid], start, length)
+                    if sliced_from_host:           # a host-read stretch's assembly, priced with its cuts
+                        HOST_SLAB[0] += _nbytes(part)
+                        HOST_SLAB[1] += time.perf_counter() - _t0
                 else:
                     done[tid] = own(part)
         for tid in cp.targets:
