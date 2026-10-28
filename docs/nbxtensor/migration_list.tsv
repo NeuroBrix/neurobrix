@@ -1,0 +1,48 @@
+# path	symbol	destination in nbxtensor (DESIGN.md section 3)
+triton/arena.py	*	memory
+triton/cpu_backend.py	*	backend/cpu
+triton/device_transfer.py	*	memory/transfer
+triton/dtype.py	promote_func	dtype/promotion
+triton/expert_store.py	_numel	shape (Tensor.numel)
+triton/itemsize.py	*	dtype: the one table reader
+triton/launcher_contract.py	*	backend
+triton/memory_pool.py	*	memory
+triton/metal_backend.py	*	backend/metal
+triton/moe.py	release_pinned_tables	memory/host
+triton/replay.py	SlabAllocator	memory (one allocator family)
+triton/replay.py	malloc	memory (one allocator family)
+triton/replay.py	malloc_cuda	memory (one allocator family)
+triton/replay_graph.py	*	backend: graph capture primitive (the engine keeps FrozenPlan)
+triton/triton_ext_driver.py	*	backend/metal
+triton/weight_loader.py	_bf16_bits_to_half	dtype/convert
+triton/weight_loader.py	_target_nbytes	dtype (itemsize x numel)
+triton/weight_loader.py	_bf16_to_fp16_inplace	dtype/convert
+triton/weight_loader.py	_load_to_pinned_cpu	memory/host + io/safetensors
+triton/weight_loader.py	_load_shard_into_arenas	io/safetensors
+kernels/autotune_bucket.py	*	ops/autotune
+kernels/autotune_certified.py	*	ops/autotune
+kernels/autotune_certify.py	f32_to_bf16_bits	dtype/convert
+kernels/autotune_certify.py	bf16_bits_to_f32	dtype/convert
+kernels/autotune_refusals.py	*	ops/autotune
+kernels/census.py	_shadow_malloc	memory (shadow hook of the allocator; census stays engine)
+kernels/dispatch.py	*	ops: the op table (its view rule goes to shape/)
+kernels/launch_keys.py	*	ops: launch decisions as pure functions
+kernels/launcher.py	*	backend: kernel launcher
+kernels/metal_device.py	*	memory/metal + backend/metal
+kernels/mt_randn.py	*	random
+kernels/nbx_tensor.py	*	tensor + memory + backend (split in M2)
+kernels/oom_advice.py	*	memory
+kernels/quantized_tensor.py	*	quant
+kernels/rng_pin.py	*	random
+kernels/rng_stream.py	*	random
+kernels/screen_oracle.py	*	ops/autotune
+kernels/seeded_draw.py	*	random
+kernels/wrappers.py	*	ops (split by op family in M2)
+core/prism/memory_estimator.py	get_dtype_bytes_per_element	dtype/itemsize (delete, import it)
+core/prism/solver.py	_arena_mb	M3: memory/ops cost declaration
+core/prism/solver.py	_arena_over_allocation	M3: memory/ops cost declaration
+core/prism/solver.py	_store_arena_over_allocation	M3: memory/ops cost declaration
+core/prism/solver.py	_arena_door	M3: memory/ops cost declaration
+core/prism/solver.py	_scan_bf16_fp16_safety	dtype/convert (range safety; the policy stays in the DtypeEngine)
+core/prism/work.py	_numel	shape (Tensor.numel)
+kernels/ops/	*	ops: every kernel file

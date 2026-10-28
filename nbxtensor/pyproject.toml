@@ -1,0 +1,24 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "nbxtensor"
+version = "0.0.0"
+description = "An inference-first tensor library, torch-free: planned memory, Triton kernels that declare their cost, CUDA / Apple Metal / CPU backends."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+authors = [{ name = "NeuroBrix" }]
+# The core needs only these. torch is NEVER a core dependency.
+dependencies = ["numpy", "triton"]
+
+[project.optional-dependencies]
+# Hand-off to and from torch tensors, for users who mix both (nbxtensor.interop.torch).
+torch = ["torch"]
+# The benchmark harness compares against torch eager and torch.compile.
+bench = ["torch"]
+test = ["pytest"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/nbxtensor"]
