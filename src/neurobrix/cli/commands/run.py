@@ -596,11 +596,11 @@ def cmd_run(args):
     # 2. Prism Allocation
     print("\n[2/4] Solving hardware allocation...")
     hardware_id = args.hardware or get_or_create_default_profile()
-    # A generated profile measures, once, what Prism's time estimate reads and neither it nor its vendor file states —
-    # the device and host facts, this engine's loader rate for the stored dtypes this model holds (S2, 2026-10-27)
-    from neurobrix.core.prism.autodetect import ensure_measured_facts
-    from neurobrix.core.prism.host_footprint import engine_of
-    ensure_measured_facts(hardware_id, container._cache_path, engine_of(execution_mode))
+    # A generated profile measures, once, the device and host facts Prism's time estimate reads and neither it nor its
+    # vendor file states; the loader's rate is measured by the loader itself at its first real load (S2, 2026-10-27)
+    from neurobrix.core.prism import autodetect as _autodetect
+    _autodetect.ensure_measured_facts(hardware_id)
+    _autodetect.ACTIVE_HARDWARE_ID = hardware_id       # the profile this run's loaders measure themselves into
     hw_profile = load_profile(hardware_id)
     print(f"   Profile: {hw_profile.id} ({hw_profile.total_vram_gb:.1f} GB)")
 
@@ -916,6 +916,10 @@ def cmd_run(args):
             if DeviceAllocator.device_count() > 0:
                 DeviceAllocator.device_synchronize()
 
+    _sampled_peak = None
+    if execution_mode in ("compiled", "sequential"):
+        from neurobrix.core.device_utils import sampled_device_peak
+        _sampled_peak = sampled_device_peak()      # MPS keeps no peak counter: its driver is read through the run
     try:
         _drain_device()
         t_exec_start = time.time()
@@ -938,8 +942,9 @@ def cmd_run(args):
     # The run's device peak (rule 3: every gate cell writes it to the register), each engine through its own allocator.
     if execution_mode in ("compiled", "sequential"):
         import torch
-        _peak = (max(torch.cuda.max_memory_reserved(d) for d in range(torch.cuda.device_count()))
-                 if torch.cuda.is_available() else None)
+        from neurobrix.core.runtime.graph_executor import process_peak_reserved
+        _peak = (max(process_peak_reserved(d) for d in range(torch.cuda.device_count()))
+                 if torch.cuda.is_available() else (_sampled_peak.stop() if _sampled_peak is not None else None))
     else:
         from neurobrix.kernels.nbx_tensor import DeviceAllocator
         _peak = DeviceAllocator.peak_device_bytes()

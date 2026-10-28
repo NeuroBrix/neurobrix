@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **A new machine measures what Prism's time estimate needs at its first launch**: when the generated hardware profile and the architecture's vendor file state no measured facts, the first run measures the card, the host and the engine's weight-loading rate for the model's stored dtypes (seconds), and writes them into the generated profile.
+- **A new machine measures what Prism's time estimate needs**: when the generated hardware profile and the architecture's vendor file state no measured facts, the first run probes the card and the host in seconds, and the engine's weight loader records its own rate at its first real loads; until then plans are ranked without a time estimate, and the explanation says so.
 - **A video decoder streamed in temporal chunks can park its causal states in host memory**: when a chunk does not fit the card with its states, each state leaves for the host as soon as it is made and comes back right before the op that first reads it, in every engine (both PyTorch engines and both Triton engines); the plan does it only when nothing fits otherwise. mochi-1-preview's Triton decode now plans on a single 16 GB card.
 - **The Triton engine slices a group-normalised decoder in space exactly too**: the statistics of each group norm are taken once over the whole input and every slice is normalised with them, as the PyTorch engine does.
 - **Spreading a model's weights over several cards no longer assumes its activations spread too**: a component whose activations alone exceed one card is streamed, never placed whole on a card it overflows (Sana 4K's VAE on four 16 GB cards).
@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`neurobrix autotune certify --keys <file>`** certifies exactly the keys a coverage check found missing (one `<kernel>::<key>` per line), without a census table.
 
 ### Fixed
+- **The Triton engine reuses freed GPU memory for requests of other sizes**: its allocator now splits and merges freed blocks, so less memory sits idle and fewer allocations reach the driver.
+- **The PyTorch engine's reported memory peak is the whole run's**: it showed only the last component's peak.
+- **A run sized for a smaller memory rung parks freed memory as a card of that size would** (the Triton allocator's pool cap), so a proof at an imposed rung measures what that card would hold.
 - **A busy machine's re-plan of a model that had to run in float32 no longer retries half precision first**.
 - **Prism ranks plans by what loading really costs** (including the components a plan holds in host memory and streams): a load is priced at the engine's measured loader rate (per stored dtype, to the card or to host memory, cold then warm) instead of a bare copy rate, a reloaded piece at the measured reload rate, and a two-expert video model's steps are counted once between its experts.
 - **Large models whose weights are held in host memory load much faster on the Triton engine**: those weights now share one page-locked block instead of one allocation each, and their bf16 conversion runs on the loader's worker threads.
