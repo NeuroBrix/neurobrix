@@ -1261,6 +1261,13 @@ class DeviceAllocator:
             DeviceAllocator._plan_trace.append([DeviceAllocator._plan_op, DeviceAllocator._plan_k, int(nbytes), ptr,
                                                 None])
             DeviceAllocator._plan_k += 1
+    # A rung imposed on the plan (`NBX_PRISM_BUDGET_MB`: the census, the rung proofs) is the card the plan was sized
+    # for, and the allocator holds to it as to a card of that size: a malloc that would carry the bytes it holds from
+    # the driver (live and pooled) past the rung less the runtime's own context is refused as such a card refuses it,
+    # and takes the same path (the pool flushed, the malloc retried, then a named OOM). device -> bytes, None: no rung.
+    # Measured 2026-10-28: mochi-1-preview triton at the 8 GB rung on a 32 GB card held 10.8 GB — 5.5-6.2 GB live and
+    # 3.0-3.7 GB of pooled free blocks no refused malloc ever asked back.
+    _rung_limit_bytes: Dict[int, Optional[int]] = {}
     _pool_slack_frac: Dict[int, float] = {}
 
     # Deferred-queue reclaimers (P-TRITON-LIVE-SET). The triton hot loops
@@ -1742,7 +1749,30 @@ class DeviceAllocator:
         return DeviceAllocator._alloc_epoch
 
     @staticmethod
-    def malloc_cuda(nbytes: int, dev_idx: Optional[int] = None) -> int:
+    def _rung_limit(dev: int) -> Optional[int]:
+        """The bytes this process may hold from the driver on `dev` under an imposed rung: the rung less what the
+        runtime holds outside the allocator's own blocks (its context), read once from the driver; None: no rung."""
+        if dev in DeviceAllocator._rung_limit_bytes:
+            return DeviceAllocator._rung_limit_bytes[dev]
+        door = os.environ.get("NBX_PRISM_BUDGET_MB")
+        limit = None
+        if door:
+            free_b, total_b = DeviceAllocator.mem_get_info(dev)
+            context = max(0, int(total_b) - int(free_b) - DeviceAllocator._cuda_live_bytes.get(dev, 0))
+            limit = max(0, (int(door) << 20) - context)
+        DeviceAllocator._rung_limit_bytes[dev] = limit
+        return limit
+
+    @staticmethod
+    def _driver_malloc(ptr_obj, nbytes: int, dev: int) -> int:
+        """The runtime's malloc, or the refusal a card of the imposed rung gives (cudaErrorMemoryAllocation, 2)."""
+        limit = DeviceAllocator._rung_limit(dev)
+        if limit is not None and DeviceAllocator._cuda_live_bytes.get(dev, 0) + int(nbytes) > limit:
+            return 2
+        return getattr(_gpu_runtime(), _active_backend()["malloc"])(ctypes.byref(ptr_obj), ctypes.c_size_t(nbytes))
+
+    @staticmethod
+    def malloc_cuda(nbytes: int, dev_idx: Optional[int] = None, pooled: bool = True) -> int:
         """Allocate GPU memory.
 
         Default path: synchronous cudaMalloc. The stream-ordered allocator
@@ -1766,6 +1796,12 @@ class DeviceAllocator:
         pool/accounting bookkeeping. The caller MUST guarantee the
         runtime current device equals dev_idx (cudaMalloc allocates on
         the current device). None (default) keeps the internal query.
+
+        pooled=False: a block that never enters the pool — taken from the driver (a refusal still flushes the pool and
+        retries) and handed straight back to it when freed. A component's weight arena (`ComponentArena`): large and
+        held for a whole component or segment; pooled, the small tensors that outlive it split it once freed and pin
+        it whole (mochi-1-preview triton at the 8 GB rung, 2026-10-28: 3 553 MB of freed blocks held by ~19 MB of
+        live tensors refused the transformer's 5.2 GB segment).
         """
         if nbytes == 0:
             return 0
@@ -1791,7 +1827,7 @@ class DeviceAllocator:
                 return ptr
 
         # Pool fast path
-        if DeviceAllocator._pool_enabled:
+        if DeviceAllocator._pool_enabled and pooled:
             ptr = DeviceAllocator._pool_take(dev, nbytes)
             if ptr is not None:
                 # alloc size: exact-size hit reuses nbytes; smallest-fit
@@ -1818,8 +1854,7 @@ class DeviceAllocator:
         ptr_obj = ctypes.c_void_p()
         rt = _gpu_runtime()
         backend = _active_backend()
-        ret = getattr(rt, backend["malloc"])(
-            ctypes.byref(ptr_obj), ctypes.c_size_t(nbytes))
+        ret = DeviceAllocator._driver_malloc(ptr_obj, nbytes, dev)
 
         # No reclaim-and-retry of the hot loops' deferred dead-tensor queues here
         # (ZERO FALLBACK, 2026-10-11). That rescue drained the queue on a refused
@@ -1837,8 +1872,7 @@ class DeviceAllocator:
             DeviceAllocator.clear_last_error()   # a refused call must not poison the next one
             freed = DeviceAllocator._pool_flush(dev)
             if freed > 0:
-                ret = getattr(rt, backend["malloc"])(
-                    ctypes.byref(ptr_obj), ctypes.c_size_t(nbytes))
+                ret = DeviceAllocator._driver_malloc(ptr_obj, nbytes, dev)
 
         # Pre-allocation OOM-recovery (independent of pool): trigger a
         # cycle-collecting gc.collect() then retry. Sana 4Kpx triton
@@ -1850,8 +1884,7 @@ class DeviceAllocator:
             DeviceAllocator.clear_last_error()   # a refused call must not poison the next one
             import gc as _gc_oom
             _gc_oom.collect()
-            ret = getattr(rt, backend["malloc"])(
-                ctypes.byref(ptr_obj), ctypes.c_size_t(nbytes))
+            ret = DeviceAllocator._driver_malloc(ptr_obj, nbytes, dev)
 
         if ret != 0:
             DeviceAllocator.clear_last_error()   # a refused call must not poison the next one
@@ -1882,7 +1915,10 @@ class DeviceAllocator:
                 f"[device cuda:{dev} live_tracked={live_now/1024/1024:.0f}MB "
                 f"pool_cached={pool_total/1024/1024:.0f}MB ({pool_count} blocks) "
                 f"driver_free={driver_free/1024/1024:.0f}MB / "
-                f"driver_total={driver_total/1024/1024:.0f}MB]",
+                f"driver_total={driver_total/1024/1024:.0f}MB]"
+                + (f" under the imposed rung: {DeviceAllocator._rung_limit_bytes[dev]/1024/1024:.0f}MB this process may "
+                   f"hold (NBX_PRISM_BUDGET_MB less the runtime's context)"
+                   if DeviceAllocator._rung_limit_bytes.get(dev) is not None else ""),
                 requested=nbytes, device_idx=dev, live=live_now,
                 pool_cached=pool_total, pool_blocks=pool_count,
                 driver_free=driver_free if driver_total else None,
@@ -1891,7 +1927,7 @@ class DeviceAllocator:
         DeviceAllocator._cuda_ptr_size[p] = nbytes
         DeviceAllocator._range_add(p, nbytes)
         DeviceAllocator._cuda_ptr_device[p] = dev
-        if DeviceAllocator._pool_enabled:
+        if DeviceAllocator._pool_enabled and pooled:
             DeviceAllocator._pool_segment_new(dev, p, nbytes)
         DeviceAllocator._cuda_ptr_epoch[p] = DeviceAllocator._alloc_epoch
         live = DeviceAllocator._cuda_live_bytes.get(dev, 0) + nbytes

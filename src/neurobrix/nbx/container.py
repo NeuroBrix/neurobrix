@@ -78,6 +78,11 @@ class ComponentData:
     weight_paths: List[str] = field(default_factory=list)
     profile: Optional[Dict[str, Any]] = None  # profile.json with trace-time values
     attributes: Optional[Dict[str, Any]] = None  # runtime.json attributes (state_channels, etc.)
+    # weights_index.json: each stored tensor's dtype and bytes, what the loaders read and land. Prism prices a
+    # component's weights from it (`solver._consumed_weight_bytes`); without it the price fell back to the graph's
+    # traced dtypes — mochi-1-preview's text encoder, stored F32 and traced in fp16, priced at 5 502 MB for the
+    # 9 083 MB the Triton loader lands at fp16 (2026-10-28).
+    weights_index: Optional[Dict[str, Any]] = None
 
     @property
     def is_neural(self) -> bool:
@@ -611,6 +616,9 @@ class NBXContainer:
             if n.startswith(f"{prefix}weights/") and n.endswith(".safetensors")
         ]
 
+        index_path = f"{prefix}weights_index.json"
+        weights_index = json.loads(zf.read(index_path).decode("utf-8")) if index_path in file_list else None
+
         # Create ComponentData (attributes=None here, loaded from cache later)
         self._components[comp_name] = ComponentData(
             name=comp_name,
@@ -620,6 +628,7 @@ class NBXContainer:
             weight_paths=weight_paths,
             profile=profile,
             attributes=None,
+            weights_index=weights_index,
         )
 
     def _load_components_from_cache(self, cache_path: Path) -> None:
@@ -709,6 +718,11 @@ class NBXContainer:
                 rel_path = weight_file.relative_to(cache_path).as_posix()
                 weight_paths.append(rel_path)
 
+        weights_index = None
+        if (comp_dir / "weights_index.json").exists():
+            with open(comp_dir / "weights_index.json") as f:
+                weights_index = json.load(f)
+
         # Create ComponentData
         self._components[comp_name] = ComponentData(
             name=comp_name,
@@ -718,6 +732,7 @@ class NBXContainer:
             weight_paths=weight_paths,
             profile=profile,
             attributes=attributes,
+            weights_index=weights_index,
         )
 
     # =========================================================================

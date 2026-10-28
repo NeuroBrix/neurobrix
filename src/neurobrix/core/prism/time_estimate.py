@@ -43,6 +43,9 @@ class DeviceFacts:
     #: the engine's own LOADER, GB landed/s (`weight_load_gbps`, tools/profile_facts.py): {engine: {stored dtype ("BF16",
     #: "F32", "F16"): {"device"|"host": {"cold": GB/s, "warm": GB/s}}}} — read + decode + convert + land; None: not measured
     load_rates: Optional[Mapping[str, Any]] = None
+    #: the weight bandwidth a decode step's matrix-vector product reaches on each ENGINE (`gemv_gbps`,
+    #: core/prism/facts_probe.py): {engine: {dtype: GB/s}}; None: not measured
+    gemv_rates: Optional[Mapping[str, Any]] = None
 
 
 @dataclass(frozen=True)
@@ -69,7 +72,7 @@ def device_facts(measured: Optional[Mapping[str, Any]], where: str) -> DeviceFac
         return DeviceFacts(matmul_flops={k: float(v) * 1e12 for k, v in measured["matmul_tflops"].items()},
                            memory_bps=float(measured["memory_gbps"]) * 1e9, h2d_bps=float(measured["h2d_gbps"]) * 1e9,
                            h2d_pageable_bps=float(pageable) * 1e9 if pageable is not None else None,
-                           load_rates=measured.get("weight_load_gbps"))
+                           load_rates=measured.get("weight_load_gbps"), gemv_rates=measured.get("gemv_gbps"))
     except KeyError as exc:
         raise MissingFact(f"{where}: the measured facts lack {exc.args[0]!r}") from exc
 
@@ -115,6 +118,21 @@ def compute_seconds(work: Work, facts: DeviceFacts, dtype: str) -> float:
     if dtype not in facts.matmul_flops:
         raise MissingFact(f"no measured matmul throughput at {dtype!r} (measured: {sorted(facts.matmul_flops)})")
     return max(work.flops / facts.matmul_flops[dtype], (work.weight_bytes + work.activation_bytes) / facts.memory_bps)
+
+
+def decode_seconds(work: Work, facts: DeviceFacts, dtype: str, engine: Optional[str], dev: str) -> float:
+    """One generated token of a component: weight-bound, its weights streamed at the bandwidth the ENGINE's decode
+    product reaches (`gemv_gbps`), not the device's copy bandwidth — the Triton engine on the M4 Pro reaches ~1/15 of
+    it (Janus-Pro-7B: 41-47 s estimated, 445 s measured, the Mac 2026-10-27 23:02)."""
+    eng = engine or "compiled"
+    try:
+        gemv = float(facts.gemv_rates[eng][dtype]) * 1e9
+    except (TypeError, KeyError) as exc:
+        raise MissingFact(f"{dev}: no measured `gemv_gbps.{eng}.{dtype}` on the hardware profile — a decode streams "
+                          f"its weights at what the engine's matrix-vector product reaches (tools/profile_facts.py)") from exc
+    if dtype not in facts.matmul_flops:
+        raise MissingFact(f"no measured matmul throughput at {dtype!r} (measured: {sorted(facts.matmul_flops)})")
+    return max(work.flops / facts.matmul_flops[dtype], work.weight_bytes / gemv + work.activation_bytes / facts.memory_bps)
 
 
 def _device_of(alloc: Any) -> str:
@@ -185,12 +203,14 @@ def plan_seconds(strategy: str, allocations: Mapping[str, Any], works: Mapping[s
                  devices: Mapping[str, DeviceFacts], host: Optional[HostFacts], dtype: str,
                  phases: Optional[Mapping[str, int]] = None, prompt: Optional[Mapping[str, Work]] = None,
                  links: Optional[Mapping[tuple, float]] = None, engine: Optional[str] = None,
-                 stored: Optional[Mapping[str, str]] = None) -> float:
+                 stored: Optional[Mapping[str, str]] = None, held: Optional[Mapping[str, float]] = None) -> float:
     """The plan's estimated seconds for the request. `devices`: {device string ("cuda:0"): its facts}; `uses`: {component:
     runs per request}; `phases`: {component: phases that load it} for the strategies that load per phase (1 when
     absent); `prompt`: {component: the work of its one prompt pass} for a generating component whose `works` entry is
     the work of ONE token — the prompt pass runs once more, over the same loaded weights; `stored`: {component: the
-    dtype most of its weights are stored in} (the weights index), which the loader rate is read for."""
+    dtype most of its weights are stored in} (the weights index), which the loader rate is read for; `held`: {component:
+    the fraction of its weights a streaming strategy keeps loaded between uses} (`LayerPartitioner.hybrid`) — loaded
+    once, only the rest reloaded at every later use."""
     total = 0.0
     for comp, alloc in allocations.items():
         if comp not in works:
@@ -212,7 +232,11 @@ def plan_seconds(strategy: str, allocations: Mapping[str, Any], works: Mapping[s
         if dev not in devices:
             raise MissingFact(f"{comp} is placed on {dev!r}, whose facts are not measured")
         f = devices[dev]
-        total += n * compute_seconds(w, f, dtype) + (compute_seconds(first, f, dtype) if first is not None else 0.0)
+        if first is not None:
+            # a generating component: one prompt pass, then `n` weight-bound tokens at the engine's decode bandwidth
+            total += n * decode_seconds(w, f, dtype, engine, dev) + compute_seconds(first, f, dtype)
+        else:
+            total += n * compute_seconds(w, f, dtype)
         loads = passes if strategy in STREAM_EVERY_USE else (int((phases or {}).get(comp, 1))
                                                              if strategy in LOAD_PER_PHASE else 1)
         # A load is the engine's LOADER — read (storage or the page cache), decode, convert to the device dtype, land —
@@ -239,7 +263,9 @@ def plan_seconds(strategy: str, allocations: Mapping[str, Any], works: Mapping[s
             # reload rate when the profile states one (`weight_reload_gbps`, the Janus case on the Mac), else the
             # loader's warm rate to the device
             again = host.reload_bps if (host is not None and host.reload_bps) else _loader_bps(f, engine, st, "device", "warm", dev)
-            total += w.weight_bytes / _loader_bps(f, engine, st, "device", "cold", dev) + (passes - 1) * w.weight_bytes / again
+            # the pieces held between uses (`held`, S5 2026-10-27) load once: only the rest is reloaded
+            moved = w.weight_bytes * (1.0 - float((held or {}).get(comp, 0.0)))
+            total += w.weight_bytes / _loader_bps(f, engine, st, "device", "cold", dev) + (passes - 1) * moved / again
         else:
             total += w.weight_bytes / _loader_bps(f, engine, st, "device", "cold", dev) + \
                 (loads - 1) * w.weight_bytes / _loader_bps(f, engine, st, "device", "warm", dev)

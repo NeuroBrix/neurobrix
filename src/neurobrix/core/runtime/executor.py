@@ -40,7 +40,8 @@ from neurobrix.core.runtime.tensor_compat import is_tensor as _is_tensor, is_tor
 
 from neurobrix.core.prism.structure import names_accelerator as _names_accelerator
 from neurobrix.core.prism.host_footprint import engine_of
-from neurobrix.core.runtime.torch_allocator import configure_torch_allocator, configure_memory_fraction
+from neurobrix.core.runtime.torch_allocator import (configure_torch_allocator, configure_memory_fraction,
+                                                    bound_to_imposed_rung)
 from neurobrix.core.runtime.phase_trace import load_span
 
 
@@ -288,7 +289,7 @@ class RuntimeExecutor:
         if engine_of(self.mode) == "compiled":
             # before any executor loads a weight (core/runtime/torch_allocator.py)
             configure_torch_allocator(self.plan)
-            configure_memory_fraction(self.plan)
+            bound_to_imposed_rung(self.plan, declared=configure_memory_fraction(self.plan))
         self._setup_modules()
         self._setup_executors()
         self._init_strategy()
@@ -1079,6 +1080,8 @@ class RuntimeExecutor:
                     expert_cache_mb = float(getattr(alloc, 'expert_cache_mb', 0.0))
                     # expert_store on a unified device: the experts are mapped from the files
                     expert_files = bool(getattr(alloc, 'expert_files', False))
+                    # expert_store on several cards (S3): {card: {"blocks", "cache_mb", "experts"}} held whole there
+                    expert_cards = {k: dict(v) for k, v in (getattr(alloc, 'expert_cards', None) or {}).items()}
                 elif isinstance(alloc, tuple) and len(alloc) >= 2:
                     device, shard_map = alloc[0], alloc[1]
                     dtype = alloc[2] if len(alloc) > 2 else None
@@ -1086,6 +1089,7 @@ class RuntimeExecutor:
                     resident_weight_mb = 0.0
                     expert_cache_mb = 0.0
                     expert_files = False
+                    expert_cards = {}
                 else:
                     device = str(alloc)
                     shard_map = {}
@@ -1094,6 +1098,7 @@ class RuntimeExecutor:
                     resident_weight_mb = 0.0
                     expert_cache_mb = 0.0
                     expert_files = False
+                    expert_cards = {}
                 # Store all allocation info including dtype and strategy
                 allocations[comp_name] = {
                     'device': device,
@@ -1103,6 +1108,7 @@ class RuntimeExecutor:
                     'resident_weight_mb': resident_weight_mb,
                     'expert_cache_mb': expert_cache_mb,
                     'expert_files': expert_files,
+                    'expert_cards': expert_cards,
                 }
 
         # Get loading_mode from Prism plan (DATA-DRIVEN)
@@ -1128,6 +1134,8 @@ class RuntimeExecutor:
                 getattr(self.plan, "layer_stream_chunks", None) or {}),
             layer_swapped=frozenset(
                 getattr(self.plan, "layer_stream_swapped", None) or ()),
+            layer_resident={k: frozenset(v) for k, v in
+                            (getattr(self.plan, "layer_stream_resident", None) or {}).items()},
             mode=self.mode,
         )
 

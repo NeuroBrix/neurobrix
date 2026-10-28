@@ -2576,7 +2576,7 @@ def _major_stored_dtypes(cache_path: Path) -> Dict[str, Tuple[str, int]]:
     return out
 
 
-def ensure_measured_facts(hardware_id: str) -> dict:
+def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None) -> dict:
     """Measure, ONCE, on a GENERATED profile (`default-*`), the device and host facts Prism's time estimate reads that
     neither the profile nor its architecture's tracked vendor file states (the quick probe), and write them with their
     source. The engine's LOADER rate is not probed here: the loader measures itself at its first real load
@@ -2617,6 +2617,10 @@ def ensure_measured_facts(hardware_id: str) -> dict:
                                    for t in dtypes},
                  **{k: round(v, 1) for k, v in P.copies(q["copy_bytes"], q["copy_reps"]).items()}}
         added["measured"] = sorted(k for k in first if k != "source")
+    if engine is not None and engine not in (first.get("gemv_gbps") or {}):
+        dtypes = [t for t in (devices[0].get("supports_dtypes") or []) if t in ("float16", "float32", "bfloat16")]
+        first.setdefault("gemv_gbps", {})[engine] = {t: P.gemv_gbps(t, engine) for t in dtypes}
+        added["gemv_gbps"] = [engine]
     if not (data.get("host_measured") or _vendor_block(devices[0], "host_measured")):
         data["host_measured"] = {"source": f"measured {stamp} at the first launch on this machine (autodetect, quick)",
                                  "host_matmul_gflops": round(P.host_matmul_gflops(q["host_gemm_n"])),

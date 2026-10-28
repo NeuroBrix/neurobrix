@@ -52,12 +52,10 @@ def _reset_segment_peak(seg_exec) -> None:
     """The compiled branch on CUDA counts its peak from the segment's start, so the line says THIS segment's worst
     op: an allocator keeps what that op needed, and the figures at the end cannot tell it from a fragmented cache."""
     dev = str(getattr(seg_exec, "device", "") or "")
-    if str(getattr(seg_exec, "mode", "")).startswith("triton") or not dev.startswith("cuda"):
+    if str(getattr(seg_exec, "mode", "")).startswith("triton"):
         return
-    import torch
-    if torch.cuda.is_available():
-        from neurobrix.core.runtime.graph_executor import _reset_cuda_peak
-        _reset_cuda_peak(dev)                 # the run's peak kept before the counter restarts
+    from neurobrix.core.runtime.graph_executor import _reset_cuda_peak
+    _reset_cuda_peak(dev)                     # the run's peak kept before the counter restarts (none kept on MPS)
 
 
 def _segment_memory_line(seg_exec) -> str:
@@ -77,16 +75,14 @@ def _segment_memory_line(seg_exec) -> str:
         idx = int(dev.split(":")[1]) if ":" in dev else 0
         return (f"device live {DA._cuda_live_bytes.get(idx, 0) / 2**20:.0f} MB, "
                 f"pool cached {DA._pool_cached_bytes.get(idx, 0) / 2**20:.0f} MB")
-    import torch
-    if dev.startswith("cuda") and torch.cuda.is_available():
-        idx = int(dev.split(":")[1]) if ":" in dev else torch.cuda.current_device()
-        return (f"device allocated {torch.cuda.memory_allocated(idx) / 2**20:.0f} MB, "
-                f"reserved {torch.cuda.memory_reserved(idx) / 2**20:.0f} MB, "
-                f"peak allocated {torch.cuda.max_memory_allocated(idx) / 2**20:.0f} MB")
-    if dev.startswith("mps") and hasattr(torch, "mps"):
-        return (f"device allocated {torch.mps.current_allocated_memory() / 2**20:.0f} MB, "
-                f"driver {torch.mps.driver_allocated_memory() / 2**20:.0f} MB")
-    return f"no device allocator figures on {dev or 'this device'}"
+    from neurobrix.core.device_utils import device_allocator_figures
+    f = device_allocator_figures(dev or None)
+    if "allocated_mb" not in f:
+        return f"no device allocator figures on {dev or 'this device'}"
+    if "reserved_mb" in f:
+        return (f"device allocated {f['allocated_mb']:.0f} MB, reserved {f['reserved_mb']:.0f} MB, "
+                f"peak allocated {f['peak_allocated_mb']:.0f} MB")
+    return f"device allocated {f['allocated_mb']:.0f} MB, driver {f['driver_mb']:.0f} MB"
 
 class LayerStreamingStrategy(ExecutionStrategy):
     """One segment resident at a time, inside a single component."""
@@ -113,6 +109,7 @@ class LayerStreamingStrategy(ExecutionStrategy):
     def __init__(self, context, strategy_name: str):
         super().__init__(context, strategy_name)
         self._segment_executors: Dict[str, List[Any]] = {}
+        self._installed_pieces: Dict[str, List[Any]] = {}   # the pieces `install_for_executor` runs, per component
         self._installed: set = set()
         self._cut_verified: set = set()
         self._non_block: Dict[str, set] = {}
@@ -241,12 +238,24 @@ class LayerStreamingStrategy(ExecutionStrategy):
         # resolved values is the only way to guarantee a segment runs under
         # exactly the contract its component runs under: same family, same
         # vendor and arch, same device, same dtype, same mode.
+        subs = [build_segment_graph(dag, Segment(index=index, first_op=first_op, last_op=last_op,
+                                                 op_count=order_index[last_op] - order_index[first_op] + 1),
+                                    order_index)
+                for index, (first_op, last_op) in enumerate(bounds)]
+        # Each piece takes over the values it is the LAST piece to read (`GraphExecutor._consumed_input_tids`), and
+        # frees each at its last use inside it, as the whole run does and as Prism's live curve prices it. Handed
+        # nothing, a piece held every value it received to its end beside the strategy's own reference: mochi-1-preview
+        # native at the 8 GB rung peaked each transformer piece above its price by what it received (+719 / +219 /
+        # +408 MB for 782 / 283 / 472 MB received, 2026-10-28). The component's declared outputs and the tensors its
+        # base protects are never handed over.
+        kept = set(dag.get("output_tensor_ids") or ()) | set(getattr(base, "_persistent_tensor_ids", None) or ())
+        last_reader = {n: i for i, sub in enumerate(subs) for n in (sub.get("segment_input_names") or [])}
         executors = []
-        for index, (first_op, last_op) in enumerate(bounds):
-            seg = Segment(index=index, first_op=first_op, last_op=last_op,
-                          op_count=order_index[last_op] - order_index[first_op] + 1)
-            executors.append(self._piece_executor(base, build_segment_graph(dag, seg, order_index),
-                                                  component_name, base))
+        for index, sub in enumerate(subs):
+            handed = frozenset(f"input::{n}" for n in (sub.get("segment_input_names") or [])
+                               if last_reader[n] == index and n not in kept
+                               and f"input::{n}" in (sub.get("input_tensor_ids") or ()))
+            executors.append(self._piece_executor(base, sub, component_name, base, consumed_inputs=handed))
         pieces = self._slice_stretches(component_name, base, dag, bounds, executors)
         self._forward_op_level_tiling(component_name, base, pieces)
         return pieces
@@ -495,6 +504,9 @@ class LayerStreamingStrategy(ExecutionStrategy):
         # reads comes to its device and every other value — the declared outputs excepted — is parked. The rule
         # Prism's `LayerPartitioner._greedy_swapped` priced: a piece holds its weights, its inputs and what it makes.
         swapped = component_name in (getattr(self.context, "layer_swapped", None) or ())
+        # The pieces Prism holds between the component's runs (`layer_stream_resident`): loaded at the first run, kept
+        # loaded until the component is released (`uninstall_for_executor`); the others load and unload around each run.
+        held = (getattr(self.context, "layer_resident", None) or {}).get(component_name) or frozenset()
         for i, (seg_exec, produced) in enumerate(zip(pieces, produced_by)):
             sub = seg_exec._dag
             needed = sub.get("segment_input_names") or []
@@ -515,11 +527,16 @@ class LayerStreamingStrategy(ExecutionStrategy):
                     f"layer_streaming: segment {sub.get('segment_index')} "
                     f"of '{component_name}' needs {missing[:3]} and "
                     f"nothing before it produced them")
+            # what this piece takes over leaves `values` now: the piece holds the only reference and frees it at its
+            # last use (`_build_segment_executors`)
+            for tid in getattr(seg_exec, "_consumed_input_tids", None) or ():
+                values.pop(tid[len("input::"):], None)
             for tid in protected & produced:
                 seg_exec.protect_tensor_id(tid)
             # This piece's weights, and only this piece's: the executor asks its own dag
             # what it consumes.
-            seg_exec.load_weights(nbx_path, component_name)
+            if i not in held or not getattr(seg_exec, "_weights_loaded", False):
+                seg_exec.load_weights(nbx_path, component_name)
             _reset_segment_peak(seg_exec)
             try:
                 out = seg_exec.run(feed, *args, **kwargs) or {}
@@ -527,9 +544,16 @@ class LayerStreamingStrategy(ExecutionStrategy):
                 print(f"   [{component_name}] segment {sub.get('segment_index')} computed: "
                       f"{_segment_memory_line(seg_exec)}", flush=True)
             finally:
-                # Released before the next piece loads. This is the residency the plan was
-                # budgeted against.
-                seg_exec.unload_weights()
+                # Released before the next piece loads — a held piece excepted. This is the residency the plan
+                # was budgeted against.
+                if i not in held:
+                    seg_exec.unload_weights()
+                else:
+                    # A held piece keeps its weights and nothing of its run: its arena keeps its slots — inputs,
+                    # intermediates, outputs — to the next run, and 33 held pieces of mochi-1-preview's transformer held
+                    # 4.5 GB of them beside 10.8 GB of weights, MPS out of memory at the 27th (the Mac, 2026-10-27 23:26).
+                    # Its outputs are `out` (taken into `values` below), so the arena's references go now.
+                    seg_exec.release_run_tensors()
             lost = sorted(t for t in protected & produced if t not in capture)
             if lost:
                 raise RuntimeError(
@@ -571,6 +595,15 @@ class LayerStreamingStrategy(ExecutionStrategy):
             result[key] = values[key]
         return result
 
+    def uninstall_for_executor(self, component_name: str, executor) -> None:
+        """The component is released (`RuntimeExecutor._unload_component_weights`): its held pieces
+        (`layer_stream_resident`) release their weights with it. The segmentation stays installed — the next load
+        finds it (`install_for_executor` is idempotent) and the held pieces load again at their first run."""
+        for seg_exec in [*(self._segment_executors.get(component_name) or ()),
+                         *(self._installed_pieces.get(component_name) or ())]:
+            if getattr(seg_exec, "_weights_loaded", False):
+                seg_exec.unload_weights()
+
     def install_for_executor(self, component_name: str, executor) -> bool:
         """Make this component's own executor run segment by segment.
 
@@ -595,6 +628,7 @@ class LayerStreamingStrategy(ExecutionStrategy):
         self._installed.add(component_name)
 
         segments = self._build_segment_executors(component_name)
+        self._installed_pieces[component_name] = segments
 
         # The base executor's constants are now dead, and they are not small.
         #

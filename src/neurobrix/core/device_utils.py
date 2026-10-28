@@ -152,6 +152,43 @@ def device_memory_stats(device: Optional[str] = None) -> Dict[str, float]:
     return empty
 
 
+def device_allocator_figures(device: Optional[str]) -> Dict[str, float]:
+    """What the ATen branch's allocator on `device` reports, in MB, under the names it keeps: CUDA `allocated_mb`,
+    `reserved_mb`, `peak_allocated_mb`; MPS `allocated_mb`, `driver_mb` (no reserved pool, no peak). Empty where the
+    device has no torch allocator (the CPU, a process without torch). The diagnostic lines read only the keys present."""
+    torch = aten()
+    if device is None or torch is None:
+        return {}
+    kind, _ = _parse_device(device)
+    mb = 1024 * 1024
+    if kind == "cuda" and torch.cuda.is_available():
+        idx = torch.device(device).index
+        idx = torch.cuda.current_device() if idx is None else idx
+        return {"allocated_mb": torch.cuda.memory_allocated(idx) / mb,
+                "reserved_mb": torch.cuda.memory_reserved(idx) / mb,
+                "peak_allocated_mb": torch.cuda.max_memory_allocated(idx) / mb}
+    if kind == "mps" and hasattr(torch, "mps"):
+        return {"allocated_mb": torch.mps.current_allocated_memory() / mb,
+                "driver_mb": torch.mps.driver_allocated_memory() / mb}
+    return {}
+
+
+def device_reset_peak(device: Optional[str]) -> Optional[Tuple[int, int]]:
+    """Restart the ATen allocator's peak counters on `device`: (device index, the reserved peak in bytes before the
+    restart), or None where the allocator keeps no peak (MPS, the CPU, a process without torch)."""
+    torch = aten()
+    if device is None or torch is None:
+        return None
+    kind, _ = _parse_device(device)
+    if kind != "cuda" or not torch.cuda.is_available():
+        return None
+    idx = torch.device(device).index
+    idx = torch.cuda.current_device() if idx is None else idx
+    peak = int(torch.cuda.max_memory_reserved(idx))
+    torch.cuda.reset_peak_memory_stats(idx)
+    return idx, peak
+
+
 def device_multinomial(probs, num_samples: int = 1):
     """
     torch.multinomial with MPS workaround (ATen branch only).

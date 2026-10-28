@@ -180,3 +180,45 @@ def configure_torch_allocator(plan: Any) -> Optional[str]:
     print(f"   [Allocator] compiled engine: torch caching allocator {value} "
           f"(vendor profile memory.{PROFILE_KEY})")
     return value
+
+
+def bound_to_imposed_rung(plan: Any, declared: Optional[float] = None) -> Optional[float]:
+    """Under a rung imposed on the plan (`NBX_PRISM_BUDGET_MB`: the census, the rung proofs), bound each accelerator's
+    torch pool as a card of that size bounds it: the rung less what the runtime holds outside torch's pool (its
+    context), as a fraction of the device (`set_per_process_memory_fraction`), the declared fraction kept when tighter.
+    torch then gives its cached blocks back on a refusal and retries, as it does on such a card; unbounded, it kept
+    them on the larger card beneath and the run's peak said more than the rung it was planned for (mochi-1-preview
+    native at the 8 GB rung on a 32 GB card: 8 708 MB reserved, 2026-10-28). Returns the fraction set, or None."""
+    door = os.environ.get("NBX_PRISM_BUDGET_MB")
+    if not door:
+        return None
+    import torch
+    devices = sorted({str(d) for alloc in (getattr(plan, "components", None) or {}).values()
+                      for d in (getattr(alloc, "devices", None) or []) if not str(d).startswith("cpu")})
+    fraction = None
+    for dev in devices:
+        d = torch.device(dev)
+        backend = getattr(torch, d.type, None)
+        if backend is not None and hasattr(backend, "mem_get_info"):
+            free_b, total_b = backend.mem_get_info(d)
+            context = max(0, int(total_b) - int(free_b) - int(backend.memory_reserved(d)))
+        elif backend is not None and hasattr(backend, "recommended_max_memory"):
+            total_b, context = int(backend.recommended_max_memory()), 0
+        else:
+            raise RuntimeError(f"ZERO FALLBACK: an imposed rung bounds torch's pool on {dev} and torch.{d.type} "
+                               f"reports no memory to bound it against")
+        fraction = max(0.0, ((int(door) << 20) - context) / float(total_b))
+        if declared is not None:
+            fraction = min(fraction, float(declared))
+        fn = getattr(backend, "set_per_process_memory_fraction", None)
+        if fn is None:
+            raise RuntimeError(f"ZERO FALLBACK: an imposed rung bounds torch's pool on {dev} and torch.{d.type} has "
+                               f"no set_per_process_memory_fraction")
+        import inspect
+        if "device" in inspect.signature(fn).parameters:
+            fn(fraction, device=d)
+        else:
+            fn(fraction)
+        print(f"   [Allocator] compiled engine: torch pool bounded at the imposed rung on {dev}: {door} MB less the "
+              f"runtime's {context >> 20} MB context ({fraction:.4f} of the device)")
+    return fraction

@@ -236,7 +236,9 @@ _SHADOW_RANGES: Dict[int, int] = {}
 _SHADOW_BASES: List[int] = []
 
 
-def _shadow_malloc(nbytes: int, dev_idx: Optional[int] = None) -> int:
+def _shadow_malloc(nbytes: int, dev_idx: Optional[int] = None, pooled: bool = True) -> int:
+    """`DeviceAllocator.malloc_cuda` in a shadow, its signature kept whole (`pooled`: a weight arena asks for a block
+    outside the pool; a shadow has no pool and answers the same address either way)."""
     ptr = _SHADOW_PTR[0]
     _SHADOW_PTR[0] += (int(nbytes) + 255) // 256 * 256 + 256
     _SHADOW_RANGES[ptr] = int(nbytes)
@@ -500,6 +502,12 @@ def install(hardware: Optional[str] = None, hardware_profile: Optional[dict] = N
 
     T.item = _item
     T.numpy = _numpy
+
+    # A host copy of a strided view reads its bytes (`NBXTensor._contiguous_cpu`, numpy over the pointer): in a shadow a
+    # value parked on the host is a shadow address, never memory to read — a piece sliced along a token axis takes its
+    # slice of a host-parked value so, and mochi-1-preview's 8 GB census died there (segmentation fault, 2026-10-28).
+    # The shadow answers the copy as it answers every value: a fresh host tensor of the shape and dtype, unread.
+    T._contiguous_cpu = lambda self: T.empty_cpu(self._shape, self._dtype, pinned=self._pinned)
     if hasattr(T, "tolist"):
         T.tolist = _tolist
 

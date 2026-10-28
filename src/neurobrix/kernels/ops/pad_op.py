@@ -119,3 +119,41 @@ def constant_pad_nd_kernel(
     src = i0 * xs0 + i1 * xs1 + i2 * xs2 + i3 * xs3 + i4 * xs4
     val = tl.load(x_ptr + src, mask=mask & inside, other=pad_value)
     tl.store(output_ptr + offsets, val, mask=mask)
+
+
+@triton.jit
+def replication_pad_nd_kernel(
+    x_ptr, output_ptr,
+    total,
+    in0, in1, in2, in3, in4,
+    out0, out1, out2, out3, out4,
+    xs0, xs1, xs2, xs3, xs4,
+    pb0, pb1, pb2, pb3, pb4,
+    BLOCK_SIZE: tl.constexpr,
+    WIDE: tl.constexpr = True,
+):
+    """Replication pad of up to 5 dims in ONE pass (PyTorch `replicate`): each output element reads the input element
+    at its position clamped into the input, so a padded border repeats the edge. The twin of `constant_pad_nd_kernel`,
+    the same index map with a clamp where that one masks; the input is read through its strides, the output written
+    contiguous."""
+    if WIDE:
+        offsets = tl.program_id(0).to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    else:
+        offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 32-bit below 2^30 (`_index_wide`)
+    mask = offsets < total
+    o4 = offsets % out4
+    t = offsets // out4
+    o3 = t % out3
+    t = t // out3
+    o2 = t % out2
+    t = t // out2
+    o1 = t % out1
+    o0 = t // out1
+    i0 = tl.minimum(tl.maximum(o0 - pb0, 0), in0 - 1)
+    i1 = tl.minimum(tl.maximum(o1 - pb1, 0), in1 - 1)
+    i2 = tl.minimum(tl.maximum(o2 - pb2, 0), in2 - 1)
+    i3 = tl.minimum(tl.maximum(o3 - pb3, 0), in3 - 1)
+    i4 = tl.minimum(tl.maximum(o4 - pb4, 0), in4 - 1)
+    src = i0 * xs0 + i1 * xs1 + i2 * xs2 + i3 * xs3 + i4 * xs4
+    val = tl.load(x_ptr + src, mask=mask)
+    tl.store(output_ptr + offsets, val, mask=mask)

@@ -95,7 +95,7 @@ ALLOWED: dict[str, tuple[str, str]] = {
          "backend through a blocking `.to(device)` -- so there is nothing "
          "outstanding to synchronise. Same reason as the :700 sync; it was "
          "filed as open by mistake and re-adjudicated."),
-    'neurobrix/core/strategies/zero3.py::if not self.exec_device.startswith("cuda"):':
+    'neurobrix/core/strategies/zero3.py::if not self.exec_device.startswith("cuda") and not unified_store:':
         ("prism",
          "not a vendor branch in vendorless code: it guards the ELSE of "
          "`if is_triton`, and that else-branch IS CUDA machinery -- it calls "
@@ -107,7 +107,27 @@ ALLOWED: dict[str, tuple[str, str]] = {
          "already refuses to SELECT zero3 on a unified device (cafaf799 -- "
          "zero3's offload frees nothing where the pools are the same memory). "
          "Refusing by name beats an AttributeError three calls later, which is "
-         "how Sana 4Kpx compiled died on mps (2026-09-21)."),
+         "how Sana 4Kpx compiled died on mps (2026-09-21). Since the unified "
+         "expert store (`expert_files`) its dense part sits on the device and "
+         "its store copies on the device's one queue, so that one form passes "
+         "without CUDA machinery."),
+    'neurobrix/core/strategies/zero3.py::if self.exec_device.startswith("cuda"):':
+        ("prism",
+         "the transfer stream: `torch.cuda.Stream` on the next line, inside the "
+         "torch branch the guard above restricts to CUDA or a unified expert "
+         "store. A unified store copies on the device's one queue (no stream), "
+         "so the only device it skips needs none."),
+    'neurobrix/core/strategies/zero3.py::on_cuda = self.exec_device.startswith("cuda")':
+        ("prism",
+         "the same torch branch: `torch.cuda.set_device` before a block's "
+         "upload. A unified expert store's device has one queue and no current "
+         "device to set, so skipping it there is the correct path."),
+    'neurobrix/core/prism/host_footprint.py::return str(plan.components[name].device).startswith(("cuda", "hip"))':
+        ("prism",
+         "prices the pinned staging copy the loader makes, and mirrors the "
+         "loader's own test word for word (`is_cuda` in weight_loader.py, "
+         "allowed above): a device the loader does not pin for holds no pinned "
+         "copy, so the price follows the loader on every backend."),
 }
 
 # A guard that is WRONG on hardware it excludes, recorded with what it costs.

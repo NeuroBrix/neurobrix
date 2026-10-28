@@ -72,6 +72,8 @@ class StrategyContext:
     layer_chunks: Dict[str, Any] = field(default_factory=dict)
     # Streamed components whose values between pieces wait on the host (Prism `layer_stream_swapped`).
     layer_swapped: Any = frozenset()
+    # component -> indices of its pieces held loaded between the component's runs (Prism `layer_stream_resident`).
+    layer_resident: Dict[str, Any] = field(default_factory=dict)
 
     # Execution mode: "compiled" | "triton" | "triton_sequential". Drives
     # get_strategy()'s pytorch-vs-triton dispatch so the triton branch can
