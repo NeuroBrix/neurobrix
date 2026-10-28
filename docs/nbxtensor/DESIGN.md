@@ -63,7 +63,18 @@ Apple MLX, tinygrad, Hugging Face candle. (vLLM did not: it is built on torch.)
    against torch eager and `torch.compile`, per device (V100 16/32 GB, M4 Pro).
    "Faster than torch" is claimed only cell by cell, measured.
 10. **A public API, documented.** Exported names are the API; everything else
-    is `_private`. A new export comes with its docstring and its test.
+    is `_private`. A new export comes with its docstring and its test. The
+    README is written for developers who will use nbxtensor, and every code
+    example in it is executed by a test, so the README cannot lie.
+11. **An API a Rust core can implement later** (Hocine, 28/10 20:53). Version 1
+    is Python; version 2 will be a Rust core behind the SAME Python API
+    (PyO3 + maturin wheels, as tokenizers, safetensors, polars and
+    pydantic-core did), usable from Rust and C as well. So the v1 API uses
+    plain data at its edges (dtypes, shapes, strides, device ids, byte
+    counts, op descriptions as data), never Python-only behaviour that a Rust
+    core could not reproduce: no monkey-patching, no duck-typed inputs, no
+    dynamic attributes, no state hidden in module globals. Triton kernels stay
+    Triton in v2; Rust would launch them precompiled.
 
 ## 3. Layout
 
@@ -105,7 +116,19 @@ shape ops (`view`, `reshape`, `permute`, slicing), `nbxtensor.device`,
 `.cost(...)`, `nbxtensor.capture` / `replay`, `nbxtensor.random`.
 The exact names are fixed in M2 by the agents and reviewed by the supervisor.
 
-## 5. Distribution
+## 5. Version 2 in Rust (after the stable)
+
+Decided by Hocine on 28/10 20:53: v1 is Python and is finished first
+(grouped, tested, published, the engine on it, the stable released). The Rust
+rewrite of the core is the following project. Expected gain, to be measured by
+the M4 benchmark before anything is ported: the host cost of each launch
+(tensor metadata, allocator, argument packing — microseconds in Rust against
+the current Python path), no GIL for loading and planning, memory safety in the
+allocator and the view rule, and a library usable without Python. Not gained:
+GPU time (kernels stay Triton). Candidates, in order the benchmark will
+confirm: tensor metadata, allocators and the memory planner, the launcher.
+
+## 6. Distribution
 
 Developed in `nbxtensor/` of the NeuroBrix repository on branch `nbxtensor`,
 installed by the engine as a path dependency. Extracted to its own repository
