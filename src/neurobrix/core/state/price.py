@@ -48,6 +48,12 @@ def kv_token_bytes(entry: Mapping[str, Any], dtype: str, sequences: int) -> int:
             * _itemsize.itemsize(dtype) * int(sequences))
 
 
+#: the prompt positions a cache is sized for beside the generated tokens when the package declares no `prompt_margin`
+#: (runtime/defaults.json) — ONE figure for the cache's price and for the language model's prefill pass
+#: (`flow_bindings.FlowBindings.prompt_prefill_length`)
+DEFAULT_PROMPT_MARGIN = 128
+
+
 def kv_min_tokens(max_tokens: int, prompt_margin: int, serve: bool) -> int:
     """The fewest cached positions a plan is accepted with: one turn (max_tokens + margin), two when serving;
     64 when the container declares no max_tokens."""
