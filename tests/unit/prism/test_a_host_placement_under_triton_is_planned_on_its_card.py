@@ -64,7 +64,7 @@ def _stub(mode="triton"):
     # The whole figure (`_whole_usable_mb`, merge-queue-25 option B) is the same card here: these
     # cells judge the host rung's sizing, not the drain the plan leaves beside a whole component.
     s._whole_usable_mb = lambda d: 14_000.0
-    s._live_activation_mb = lambda m: m.activation_mb
+    s._live_activation_mb = lambda m, dev=None: m.activation_mb
     s._whole_component_mb = lambda c, n, m, d: m.weight_mb + m.activation_mb
     s._spatial_component_tiling = lambda c, n, m, r, dev=None: (
         {"tiled_activation_bytes": 4_000 * 2 ** 20} if n == "vae" else None)

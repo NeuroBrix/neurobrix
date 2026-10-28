@@ -132,7 +132,7 @@ def vendor_config_for_device(vendor: str, architecture: Optional[str], compute_c
     if wanted or by_model:
         for path in sorted((CONFIG_ROOT / "vendors" / vendor).glob("*.yml")):
             try:
-                cfg = yaml.safe_load(path.read_text()) or {}
+                cfg = _parsed_vendor_file(str(path))   # parsed once per process, never edited (copied below)
             except Exception:  # noqa: BLE001 — an unreadable vendor file is not this device's
                 continue
             declared = str(cfg.get("compute_capability", "")).strip().lower()
@@ -145,9 +145,9 @@ def vendor_config_for_device(vendor: str, architecture: Optional[str], compute_c
                     or (declared and "." in declared and "." in wanted and declared.split(".")[0] == wanted.split(".")[0])):
                 family = cfg
     if exact is not None:
-        return exact
+        return copy.deepcopy(exact)          # the parse is shared: a caller never edits it
     if family is not None:
-        return family
+        return copy.deepcopy(family)
     if not architecture:
         raise UnsupportedArchitectureError(f"no vendor file describes {vendor!r} (compute capability {wanted or '?'}) and the device names no architecture")
     return get_vendor_config(vendor, str(architecture))

@@ -1494,7 +1494,13 @@ class PrismSolver:
         math budget) wrote its 731 MB of scores beside a piece cut to the card's edge and ran out of memory (2026-10-28)."""
         from neurobrix.core.prism.host_footprint import engine_of
         if engine_of(getattr(self, "_mode", "compiled")) == "triton":
-            return self._triton_attention_scratch(profile, dtype)
+            # one per profile and dtype: a temporal stream's search prices every chunk it tries through it, and each
+            # build reads every device's vendor file
+            cache = self.__dict__.setdefault("_triton_scratch_by", {})
+            key = (id(profile), str(dtype))
+            if key not in cache or cache[key][0] is not profile:
+                cache[key] = (profile, self._triton_attention_scratch(profile, dtype))
+            return cache[key][1]
         found = self._attention_budget(profile)
         if found is None:
             return None
@@ -1512,22 +1518,33 @@ class PrismSolver:
         # the route the wrappers take on EACH card the plan may run on (`wrappers._sdpa_math_scores_budget_bytes_for`:
         # the executing device's budget, `tiling_sizes.sdpa_math_scores_budget`), priced at the dearest of them: on a
         # rack of 16 and 32 GB cards an attention between the two budgets runs the math route on the larger one
+        from neurobrix.core.config.loader import vendor_config_for_device
+        from neurobrix.kernels.ops._configs import matrix_unit
         routes = []
         for device in profile.devices:
             memory = vendor_memory(device)
+            brand = getattr(getattr(device, "brand", None), "value", getattr(device, "brand", None))
+            # the matrix unit of THIS device's vendor file, read once (never the planning process's own profile)
+            unit = matrix_unit(vendor_config_for_device(brand, device.architecture,
+                                                        getattr(device, "compute_capability", None),
+                                                        model=getattr(device, "name", None)))
             routes.append((_ts.sdpa_math_scores_budget(int(memory.get("sdpa_math_max_scores_bytes") or 0),
                                                        float(memory.get("sdpa_math_scores_device_fraction") or 0.0),
                                                        device.memory_mb),
-                           int(memory.get("sdpa_math_min_chunk_rows") or 0), int(memory.get("sdpa_math_max_chunks") or 0)))
+                           int(memory.get("sdpa_math_min_chunk_rows") or 0), int(memory.get("sdpa_math_max_chunks") or 0),
+                           unit))
         # `dtype`: the dtype the component runs at (`_run_dtype`, the DtypeEngine's resolution the executor receives)
         width = _itemsize.itemsize(dtype)               # an unknown dtype is refused by name
         unit_dtype = NBXDtype[dtype]
+        takes = {}                                      # (device route, head dim) -> the unit runs its flash
 
         def scratch(b, h, tq, tk, D, Dv):
-            unit = _lk.unit_flash_takes(D, unit_dtype, unit_dtype, unit_dtype)
             worst = 0
-            for budget, min_rows, max_chunks in routes:
-                route, rows = _lk.sdpa_route(b, h, tq, tk, D, Dv, budget, min_rows, max_chunks, unit_flash=unit)
+            for i, (budget, min_rows, max_chunks, unit) in enumerate(routes):
+                if (i, D) not in takes:
+                    takes[(i, D)] = _lk.unit_flash_takes(D, unit_dtype, unit_dtype, unit_dtype, unit)
+                route, rows = _lk.sdpa_route(b, h, tq, tk, D, Dv, budget, min_rows, max_chunks,
+                                             unit_flash=takes[(i, D)])
                 if route == "flash":
                     continue
                 n = tq if route == "math" else rows
