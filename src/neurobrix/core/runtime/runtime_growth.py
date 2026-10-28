@@ -38,10 +38,23 @@ def load(model: Optional[str], engine: str, architecture: str) -> Optional[float
     return None if value is None else float(value)
 
 
-def untracked_mb(devices) -> Dict[int, float]:
-    """{device index: MB the driver reports used that the Triton allocator does not hold} for `devices`."""
+def untracked_mb(devices, unified: bool = False) -> Dict[int, float]:
+    """{device index: MB the runtime holds that the Triton allocator does not} for `devices`.
+
+    A discrete card: the driver's used bytes (`mem_get_info`) less the allocator's live bytes.
+    A UNIFIED device (Apple): no driver reading serves — Metal's `mem_get_info` answers the allocator's own count (its
+    `currentAllocatedSize` is cumulative, never coming down: kernels/metal_device.py, measured 2026-09-05), so the
+    difference would read 0 whatever the runtime grew. What the runtime grows there (the kernels' pipeline states and
+    libraries, the command buffers) lands in the process's physical footprint (`host_footprint.process_footprint_now`,
+    what the unified memory guard counts): the reading is that footprint less the allocator's live bytes on every
+    device, one figure for the one pool, read alike before the executor and at the run's end."""
     from neurobrix.kernels.nbx_tensor import DeviceAllocator as DA
     out = {}
+    if unified:
+        from neurobrix.core.prism.host_footprint import process_footprint_now
+        live = sum(DA._cuda_live_bytes.get(int(d), 0) for d in devices)
+        pool = (process_footprint_now() - live) / (1024 * 1024)
+        return {int(d): pool for d in devices}
     for d in devices:
         free_b, total_b = DA.mem_get_info(d)
         out[int(d)] = (int(total_b) - int(free_b) - DA._cuda_live_bytes.get(int(d), 0)) / (1024 * 1024)

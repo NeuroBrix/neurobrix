@@ -905,13 +905,14 @@ def cmd_run(args):
     # What the runtime itself grows to during the run, outside every allocator (core/runtime/runtime_growth.py): read
     # before the executor exists and at the run's end, on the Triton engine with accelerators; recorded per model.
     _growth = None
-    if execution_mode != "compiled" and getattr(hw_profile, "devices", None) and not any(
-            getattr(d, "has_unified_memory", False) for d in hw_profile.devices):
+    if execution_mode != "compiled" and getattr(hw_profile, "devices", None):
         from neurobrix.kernels.nbx_tensor import DeviceAllocator as _DAg
         from neurobrix.core.runtime import runtime_growth as _rg
         _gdevs = list(range(_DAg.device_count()))
+        # a unified device's runtime grows in the process's footprint (runtime_growth.untracked_mb)
+        _gunified = any(getattr(d, "has_unified_memory", False) for d in hw_profile.devices)
         if _gdevs:
-            _growth = (_rg, _gdevs, _rg.untracked_mb(_gdevs))
+            _growth = (_rg, _gdevs, _rg.untracked_mb(_gdevs, unified=_gunified), _gunified)
     executor = RuntimeExecutor(pkg, execution_plan, mode=execution_mode)
 
     def _drain_device():
@@ -962,9 +963,9 @@ def cmd_run(args):
     print(run_timings.format_peak(None if _peak is None else _peak / 2**20), flush=True)
     if _growth is not None:
         from neurobrix.core.runtime.precision_contract import registry_model_name as _rmn
-        _rg, _gdevs, _before = _growth
+        _rg, _gdevs, _before, _gunified = _growth
         _grown = _rg.record(_rmn(cache_path), "triton", hw_profile.devices[0].architecture, _before,
-                            _rg.untracked_mb(_gdevs))
+                            _rg.untracked_mb(_gdevs, unified=_gunified))
         if _grown is not None:
             print(f"[RuntimeGrowth] the triton runtime grew {_grown:.0f} MB outside the allocator during this run "
                   f"(recorded for Prism)", flush=True)
