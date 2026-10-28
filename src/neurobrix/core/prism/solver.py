@@ -1286,21 +1286,11 @@ class PrismSolver:
             if taken:
                 cards[card] = {"blocks": [taken[-1].block, taken[0].block], "cache_mb": float(math.ceil(mb)),
                                "experts": sum(l.n_experts for l in taken)}
-        # The HOME card's cache, too, holds whole blocks where it can, keeping the floor (the widest top_k experts) for
-        # the blocks left on the host: a block held whole never misses, a cache shared by every block does (the Dell's
-        # 4 V100 run 2026-10-28 05:09: 7.9 ms per home-cache layer per token against 2.3 ms for a held one).
-        floor_mb = max(l.top_k * l.expert_bytes for l in topo.layers) / mib * mult
-        home, mb = [], 0.0
-        while layers:
-            one = layers[-1].n_experts * layers[-1].expert_bytes / mib * mult
-            if len(layers) > 1 and mb + one + floor_mb > alloc.expert_cache_mb:
-                break
-            if len(layers) == 1 and mb + one > alloc.expert_cache_mb:
-                break
-            home.append(layers.pop()); mb += one
-        if home:
-            cards[alloc.device] = {"blocks": [home[-1].block, home[0].block], "cache_mb": float(math.ceil(mb)),
-                                   "experts": sum(l.n_experts for l in home)}
+        # The HOME card keeps its whole room as the cache of the blocks left on the host: holding whole blocks there
+        # (07303c80) shrank that cache 444 -> 60 slots and the Dell's 4 V100 decode went 381 -> 468 ms (2026-10-28
+        # 05:56) — a held block saves its misses but costs the cache what the routing reuses, and the routing's reuse
+        # curve (hit rate vs slots per layer) is not a measured fact yet. Until it is, no block is held on the home.
+        mb = 0.0
         if not cards:
             return
         alloc.expert_cards = cards

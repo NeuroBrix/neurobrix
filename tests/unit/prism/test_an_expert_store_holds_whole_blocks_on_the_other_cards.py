@@ -38,11 +38,9 @@ def test_four_cards_hold_whole_blocks_of_experts_and_the_plan_is_faster(monkeypa
     assert reserve is not None and 0 < reserve < 2048, reserve       # the MoE op's own activations, not the model's
     for card, held in others.items():
         assert held["cache_mb"] + reserve <= s._usable_mb(devs[card]), (card, held)
-    # the home card holds whole blocks too where its cache can, keeping the floor for the blocks left on the host
-    assert store.device in cards, (store.device, cards)
-    floor = max(l.top_k * l.expert_bytes for l in s._expert_topology["model"].layers) / 2 ** 20
-    assert store.expert_cache_mb + 1 >= floor or sum(c["experts"] for c in cards.values()) == sum(
-        l.n_experts for l in s._expert_topology["model"].layers), (store.expert_cache_mb, floor)
+    # the home card keeps its whole room as the cache of the blocks left on the host (the reuse curve is unmeasured:
+    # holding blocks there cost the Dell's decode 381 -> 468 ms, 2026-10-28)
+    assert store.device not in cards, (store.device, cards)
     blocks = [b for c in cards.values() for b in range(c["blocks"][0], c["blocks"][1] + 1)]
     assert len(blocks) == len(set(blocks)), cards                     # no block on two cards
     assert p.estimated_s is not None and p.estimated_s < BEFORE_S[mode], (p.estimated_s, p.selection_reason[-300:])
