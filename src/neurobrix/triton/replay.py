@@ -53,44 +53,29 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator
 
-ENABLED = os.environ.get("NBX_TRITON_REPLAY") == "1"
+# THE ENGINE REPLAYS BY DEFAULT (the supervisor's order 2026-10-28 08:20, S3): a sequence that runs again with the same
+# signature is measured, recorded, VERIFIED byte-equal against the normal path, and only then replayed; every sequence it
+# cannot vouch for is refused BY NAME once (`_decline`) and keeps the normal path. No environment switch: what decides is
+# the sequence's own eligibility and the verification. Measured on the rack (V100, 2026-10-28): TinyLlama-1.1B triton 120
+# tokens at a ~600-word prompt 96.6 -> 17.2 ms a token, Qwen3-30B-A3B on 4 cards 383 -> 278 ms, texts byte-identical.
+ENABLED = True
 
-# A RECORDED PLAN DOES NOT OUTLIVE ITS PROCESS, and enabling this for a single
-# request pays for something nothing will read.
-#
-# Plans live on the sequence object (`seq.__dict__["_replay_plans"]`), so they
-# are reused across the decode steps of ONE generation and discarded at exit.
-# The only thing this module writes to disk is the slab SIZE cache
-# (`_store_slab_size`); there is no plan serialiser and no loader.
-#
-# Measured on an M4 Pro, TinyLlama-1.1B, 120 tokens, byte-identical output in
-# every arm (2026-09-18):
-#
-#     short prompt (~6 tok)     plain  19.71 s   replay  21.20 s   +7.6%
-#     long prompt (~480 tok)    plain 282.05 s   replay 2257.70 s  +8.0x
-#
-# and within the long run replay DID engage — 87.5% of sequence runs took the
-# fast path — so the cost is not a failure to replay. It is what recording and
-# replaying cost at that context, and it is paid again by the next process.
-#
-# This is opt-in and OFF by default, which is the right default and is left
-# alone. The note below exists so that turning it on for a one-shot request is a
-# visible choice rather than a silent 8x.
-def _one_shot_note() -> None:
-    """Say once, on stderr, that a recorded plan will not outlive this process."""
-    global _SAID_ONE_SHOT
-    if not ENABLED or _SAID_ONE_SHOT:
-        return
-    _SAID_ONE_SHOT = True
-    import sys as _sys
-    print("[replay] recording is ON. The plan lives in THIS process only — "
-          "nothing is written to disk and the next process records again. "
-          "Measured cost on one request: +7.6% at a short prompt, 8.0x at ~480 "
-          "tokens of context. Worth it for a process that serves many requests; "
-          "not for one.", file=_sys.stderr, flush=True)
+# A RECORDED PLAN DOES NOT OUTLIVE ITS PROCESS: plans live on the sequence object (`seq.__dict__["_replay_plans"]`),
+# reused across the steps of one generation and discarded with the sequence (`retire_sequence_plans`). The only thing
+# written to disk is the slab SIZE cache (`_store_slab_size`). The M4 Pro's 8.0x at ~480 tokens of context (2026-09-18)
+# was measured before the paged KV decode replayed — every decode step then re-recorded; on the rack at a ~600-word
+# prompt the replay is 5.6x FASTER (2026-10-28, above).
 
 
-_SAID_ONE_SHOT = False
+def _decline(seq, reason: str) -> None:
+    """A sequence the replay cannot vouch for, said once per sequence and reason; it keeps the normal path."""
+    said = seq.__dict__.setdefault("_replay_declined", set())
+    if reason in said:
+        return None
+    said.add(reason)
+    comp = str((getattr(seq, "dag", None) or {}).get("component_name", "?"))
+    print(f"[Replay] {comp}: not replayed — {reason}; the normal path runs", flush=True)
+    return None
 
 # Multi-device replay is LOCKED by default and this flag is how the lock is
 # exercised for its equivalence proof — it is not a feature switch.
@@ -166,6 +151,10 @@ _SETDEV = "d"     # (device_idx,) — the card the following actions run on.
                   # replay runs every recorded launch on whatever card happens
                   # to be current: silently wrong, not an error. One of the two
                   # reasons multi-device was locked out of replay.
+_SYNC = "y"       # (device_idx,) — a device synchronisation the recorded run made (`transfer_tensor` waits for the
+                  # source card before a peer copy: the copy is not ordered after another card's kernels). Replayed
+                  # without it, a held expert's card read a buffer still being written: error 700 that
+                  # CUDA_LAUNCH_BLOCKING hid (Qwen3-30B-A3B tail replay, 2026-10-28).
 _H2D = "h"        # (dst, host_snapshot: bytes) — the recorded host
                   # source is transient (probe 5: a dangling 16-B host
                   # staging pointer at replay); the plan owns a byte
@@ -485,6 +474,8 @@ def _drop_plan(plans: dict, sig) -> None:
     plan = _plan_of(plans.pop(sig, None))
     if plan is not None:
         plan.slab.retire()   # deferred: frees once carved tensors die
+        for _o in (getattr(plan, "other_slabs", None) or {}).values():
+            _o.retire()      # the other cards' slabs (a held expert's card) go with it
         if plan.graph is not None:
             try:
                 plan.graph.destroy()
@@ -514,6 +505,34 @@ def drop_plans_by_contribution(pred) -> int:
             _drop_plan(plans, sig)
             dropped += 1
     return dropped
+
+
+def release_idle_slabs(dev: int) -> int:
+    """A malloc refused on `dev` after the pool's flush (`DeviceAllocator.malloc_cuda`): every recorded plan holding a
+    slab on `dev` between its runs is retired — a slab carries no live tensor between two runs of its sequence, it is
+    cached memory exactly as the pool's free blocks are, and the plan Prism priced runs each component's activations,
+    not a frozen copy of another's beside them. The sequence measures and records again at its next run. Returns the
+    bytes released at once (a slab whose carved outputs are still alive frees when they die)."""
+    freed = 0
+    for seq in list(_PLAN_SEQS):
+        plans = seq.__dict__.get("_replay_plans")
+        if not plans:
+            continue
+        for sig in list(plans):
+            plan = _plan_of(plans[sig])
+            if plan is None or (plan.slab.dev_idx != dev and dev not in (getattr(plan, "other_slabs", None) or {})):
+                continue
+            slabs = [plan.slab] + list((getattr(plan, "other_slabs", None) or {}).values())
+            now = sum(sl.size for sl in slabs if sl.dev_idx == dev and not sl.allocs)
+            _drop_plan(plans, sig)
+            freed += now
+            comp = str((getattr(seq, "dag", None) or {}).get("component_name", "?"))
+            print(f"[Replay] {comp}: a recorded plan's slab released on device {dev} ({now / 2**20:.0f} MB at once) — "
+                  f"an allocation there needed the room; it records again at its next run", flush=True)
+    return freed
+
+
+DeviceAllocator._idle_reclaimers.append(release_idle_slabs)
 
 
 def retire_sequence_plans(seq) -> int:
@@ -757,6 +776,15 @@ def _install_seams() -> None:
 
     DeviceAllocator.memset_cuda = staticmethod(memset_cuda)
 
+    orig_sync = DeviceAllocator.sync_device
+
+    def sync_device(*a, **kw):
+        if STATE.recording:
+            STATE.records.append((_SYNC, (int(DeviceAllocator.get_device()),)))
+        return orig_sync(*a, **kw)
+
+    DeviceAllocator.sync_device = staticmethod(sync_device)
+
     orig_item = NBXTensor.item
 
     def item(self):
@@ -775,14 +803,20 @@ def _install_seams() -> None:
 class FrozenPlan:
     __slots__ = ("records", "slab", "arena_snapshot", "frozen_inputs",
                  "launches", "actions", "output_slots", "scan_limit",
-                 "graph", "graph_disabled")
+                 "graph", "graph_disabled", "extra_scan", "other_slabs", "_crosses", "scan_slots")
 
     def __init__(self, records: List[Tuple[str, tuple]],
                  slab: SlabAllocator,
                  arena_list: List[Optional[NBXTensor]],
                  input_slots: Tuple[int, ...],
-                 scan_limit: Optional[int] = None) -> None:
+                 scan_limit: Optional[int] = None,
+                 extra_scan: Tuple[int, ...] = (),
+                 scan_slots: Optional[Tuple[int, ...]] = None) -> None:
         self.records = records
+        # the weight/input slots a SEGMENT's ops read (a decode step replayed in segments): its scan visits only those —
+        # nine segments scanning every weight slot cost more a token than they saved (2026-10-28). None: the whole
+        # bound region, as a whole-run plan always did.
+        self.scan_slots = scan_slots
         self.slab = slab  # strong ref pins the slab for the plan's life
         self.arena_snapshot = list(arena_list)
         self.frozen_inputs: Dict[int, NBXTensor] = {}
@@ -805,6 +839,12 @@ class FrozenPlan:
         # source).
         self.scan_limit = (len(arena_list) if scan_limit is None
                           else scan_limit)
+        # Intermediate slots a plan READS that it does not produce: a tail recorded after a head that runs directly
+        # (`TritonSequence._run_expert_tail`) reads the head's outputs, which land at new addresses every step — copied
+        # into the frozen buffers like an input.
+        self.extra_scan: Tuple[int, ...] = tuple(s for s in extra_scan if s >= self.scan_limit)
+        # the slabs of the OTHER cards the plan allocated on (held experts' cards): pinned for the plan's life
+        self.other_slabs: Dict[int, "SlabAllocator"] = {}
         # Phase 4b: lazily captured CUDA graph of the action list
         # (opt-in NBX_REPLAY_GRAPH=1, A/B-gated adoption). A capture
         # failure disables the graph for this bucket only — direct
@@ -825,9 +865,12 @@ class FrozenPlan:
         # indexed per-slot form cost ~19k Arena.__getitem__ per decode
         # token on the 30B row (2026-08-23 host profile).
         from itertools import islice
-        for slot, (frozen, new) in enumerate(
-                islice(zip(self.arena_snapshot, arena._slots),
-                       self.scan_limit)):
+        if self.scan_slots is not None:
+            _snap, _cur = self.arena_snapshot, arena._slots
+            pairs = ((sl, (_snap[sl], _cur[sl])) for sl in self.scan_slots)
+        else:
+            pairs = enumerate(islice(zip(self.arena_snapshot, arena._slots), self.scan_limit))
+        for slot, (frozen, new) in pairs:
             if frozen is None or new is None or new is frozen:
                 continue
             if (tuple(new.shape) != tuple(frozen.shape)
@@ -850,6 +893,21 @@ class FrozenPlan:
                     f"{getattr(new, '_device_idx', '?')} frozen_ptr="
                     f"{frozen.data_ptr():#x} new_ptr={new.data_ptr():#x}"
                 ) from e
+        for slot in self.extra_scan:
+            frozen, new = self.arena_snapshot[slot], arena._slots[slot]
+            if frozen is None or new is None or new is frozen:
+                continue
+            if (tuple(new.shape) != tuple(frozen.shape)
+                    or new.nbx_dtype != frozen.nbx_dtype):
+                raise RuntimeError(
+                    f"ZERO FALLBACK: replay boundary slot {slot}: {tuple(new.shape)}/{new.nbx_dtype} vs frozen "
+                    f"{tuple(frozen.shape)}/{frozen.nbx_dtype} — the bucket signature should have caught this")
+            _scan_copied += 1
+            DeviceAllocator.set_device(frozen._device_idx)
+            if new.is_contiguous() and frozen.is_contiguous():
+                DeviceAllocator.memcpy(frozen.data_ptr(), new.data_ptr(), frozen._nbytes, 3)
+            else:
+                frozen.copy_(new)       # a view on either side: copied element by element, its layout kept
         if os.environ.get("NBX_REPLAY_GRAPH_DUMP") == "1":
             import ctypes as _cs
             vals = []
@@ -861,7 +919,11 @@ class FrozenPlan:
                     vals.append((s, list(b)))
             print(f"[Replay][SCAN] copied={_scan_copied} "
                   f"small_inputs={vals}", flush=True)
-        if (os.environ.get("NBX_REPLAY_GRAPH") == "1"
+        # A plan that crosses cards (an expert store's card-held tail) replays one graph per stretch on one card
+        # (`replay_graph.SegmentedPlan`), the engine's choice: its direct replay is ~1 850 Python-driven launches a
+        # token (Qwen3-30B-A3B on 4 V100, 2026-10-28: ~60 ms of a 184 ms token for a few ms of kernels).
+        _segmented = self.crosses_cards() or self.scan_slots is not None     # a segment of a step: graphs too
+        if ((os.environ.get("NBX_REPLAY_GRAPH") == "1" or _segmented)
                 and not self.graph_disabled):
             # Full-list capture. The launch is bracketed by device-wide
             # syncs (CapturedPlan.launch): the input-scan copies are
@@ -896,12 +958,18 @@ class FrozenPlan:
                                   if t == _H2D else r))
                                 for t, r in self.records[-16:]]
                         print(f"[Replay][GRAPH] tail16={tail}", flush=True)
-                    self.graph = CapturedPlan(
-                        recs, getattr(self.slab, "dev_idx", None))
-                    print(f"[Replay][GRAPH] bucket captured: "
-                          f"{self.graph.launches} launches as one CUDA "
-                          f"graph ({cut}/{len(self.records)} actions "
-                          f"in-graph)")
+                    if _segmented:
+                        from neurobrix.triton.replay_graph import SegmentedPlan
+                        self.graph = SegmentedPlan(recs, getattr(self.slab, "dev_idx", None))
+                        print(f"[Replay][GRAPH] bucket captured: {self.graph.launches} launches as "
+                              f"{self.graph.stretches} CUDA graphs, one per stretch on one card")
+                    else:
+                        self.graph = CapturedPlan(
+                            recs, getattr(self.slab, "dev_idx", None))
+                        print(f"[Replay][GRAPH] bucket captured: "
+                              f"{self.graph.launches} launches as one CUDA "
+                              f"graph ({cut}/{len(self.records)} actions "
+                              f"in-graph)")
                 self.graph.launch()
             except Exception as e:
                 if getattr(e, "executed", False):
@@ -949,6 +1017,15 @@ class FrozenPlan:
                                    frozen._nbytes, 3)
             arena[slot] = fresh
 
+    def crosses_cards(self) -> bool:
+        """The recorded actions switch to a card other than the plan's own (`_SETDEV`)."""
+        try:
+            return self._crosses
+        except AttributeError:
+            own = getattr(self.slab, "dev_idx", None)
+            self._crosses = any(tag == _SETDEV and rec[0] != own for tag, rec in self.records)
+            return self._crosses
+
     def _direct_actions(self, records=None) -> None:
         """Phase 4a direct C-launcher replay of the action list."""
         if records is None:
@@ -967,6 +1044,13 @@ class FrozenPlan:
                                *flat)
                 elif tag == _MEMCPY:
                     DeviceAllocator.memcpy(*rec)
+                elif tag == _SYNC:
+                    _cur = DeviceAllocator.get_device()
+                    if _cur != rec[0]:
+                        DeviceAllocator.set_device(rec[0])
+                    DeviceAllocator.sync_device()
+                    if _cur != rec[0]:
+                        DeviceAllocator.set_device(_cur)
                 elif tag == _H2D:
                     import ctypes
                     dst, snap = rec
@@ -1015,15 +1099,19 @@ def _output_hashes(seq) -> Dict[str, str]:
 
 
 def signature(seq) -> Optional[tuple]:
-    if getattr(seq, "_is_multi_device", False) and not MULTIDEV_PROOF:
-        return None
+    # A tail replayed after a head that runs directly (`TritonSequence._run_expert_tail`): the sequence is multi-device
+    # for its head's host experts only, the tail's ops run on their own cards and its cross-card copies are recorded.
+    if (getattr(seq, "_is_multi_device", False) and not MULTIDEV_PROOF
+            and not getattr(seq, "_tail_replay", False)):
+        return _decline(seq, "its ops run on several cards and a multi-device replay is not proven bit-identical yet "
+                             "(only an expert store's card-held tail is)")
     # Stage-driven sequences (the VibeVoice tokenizers the next_token_diffusion
     # flow marks — formerly the core/flow/stages/ calling convention) live outside the standard
     # flow contract: five falsified byte-divergence mechanisms on the
     # VibeVoice tokenizers (2026-08-13 adjudication log) put them
     # behind the capability gate until the residual is root-caused.
     if getattr(seq, "_replay_ineligible", False):
-        return None
+        return _decline(seq, "a stage-driven sequence (outside the standard flow contract)")
     # STATEFUL interceptors (KV-cache attention class) advance internal
     # state per call while the sequence's input signature stays
     # constant — a recorded step would bake one cache length and replay
@@ -1044,12 +1132,14 @@ def signature(seq) -> Optional[tuple]:
                     hasattr(owner, "replay_signature")
                     and hasattr(owner, "replay_advance")
                     and hasattr(owner, "replay_restore")):
-                return None
+                return _decline(seq, f"interceptor {getattr(func, '__qualname__', func)!r} keeps a state it does not "
+                                     f"register with the replay (replay_signature/advance/restore)")
             by_owner.setdefault(id(owner), (owner, []))[1].append(func)
         for owner, funcs in by_owner.values():
             s = owner.replay_signature(funcs)
             if s is None:
-                return None
+                return _decline(seq, f"{type(owner).__name__} gives no replay signature for this step (a prefill, or a "
+                                     f"position scalar its launches bake)")
             contrib.append(s)
             owners.append(owner)
     seq.__dict__["_replay_state_owners"] = owners
@@ -1066,7 +1156,7 @@ def signature(seq) -> Optional[tuple]:
             for op in seq._ops)
         seq._replay_has_nondet = nondet
     if nondet:
-        return None
+        return _decline(seq, "an in-graph random op draws from host-advanced generator state a recorded launch freezes")
     parts: List[Any] = []
     for s in _input_slot_range(seq):
         t = seq._arena[s]
@@ -1087,6 +1177,8 @@ def signature(seq) -> Optional[tuple]:
     # (measure/record/verify again) instead of replaying stale extents.
     parts.append(tuple(contrib))
     parts.append(bool(getattr(seq, "_activations_fp16_safe", False)))
+    # a decode step replayed in segments (`TritonSequence._expert_segments`): one plan per segment
+    parts.append(getattr(seq, "_replay_segment", None))
     sig = tuple(parts)
     if os.environ.get("NBX_REPLAY_SIG_DIAG") == "1":
         prev = seq.__dict__.get("_sig_diag_prev")
@@ -1240,14 +1332,17 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
     plan machine directly: the B1 stabilizer stays OFF (the recording
     slab is the address-pinning authority) and the interceptor
     registration contract in signature() decides eligibility."""
-    _one_shot_note()
     if os.environ.get("NBX_REPLAY_TUPLE_CENSUS") == "1":
         _install_seams()
         if os.environ.get("NBX_REPLAY_KV_DECODE") == "1":
             _stabilize_tick(seq)
         _census_tick(seq)
         return False
-    if not ENABLED or pre_op_callback is not None:
+    if not ENABLED:
+        return False
+    if pre_op_callback is not None:
+        _decline(seq, "a per-op callback runs beside its ops (a zero3 ratchet, a calibration), which a frozen launch "
+                      "plan cannot call")
         return False
     _seed_autotune_once()
     sig = signature(seq)
@@ -1306,8 +1401,9 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
                               f"normal={nor[:8].tolist()}", flush=True)
             return True
         state.replay(seq._arena)
-        for o in owners:
-            o.replay_advance()
+        if getattr(seq, "_replay_advances", True):     # a head segment's launches advanced its own layers only
+            for o in owners:
+                o.replay_advance()
         n_r = seq.__dict__.setdefault("_replay_count", {})
         n_r[sig] = n_r.get(sig, 0) + 1
         if n_r[sig] % 50 == 1:
@@ -1330,14 +1426,31 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
         # from the NORMAL path (correct by construction). One doubled
         # step per bucket per process.
         plan = state[1]
+        # a tail's boundary slots (the head's outputs it reads) die inside the tail: kept here, put back for the normal
+        # re-run below, which reads them as the replay did
+        _boundary = {sl: seq._arena[sl] for sl in plan.extra_scan}
+        _tail = bool(getattr(seq, "_tail_replay", False))
+        if _tail and any(not hasattr(o, "replay_lens_snapshot")
+                         or not hasattr(getattr(o, "cache", o), "replay_lens_snapshot") for o in owners):
+            plans[sig] = "UNREPLAYABLE"
+            print("[Replay] tail declined: a state owner cannot rewind exactly what the tail advanced", flush=True)
+            seq._run_single_device(skip_kills, None)
+            return True
+        _snaps = [(o, o.replay_lens_snapshot()) for o in owners] if _tail else []
         plan.replay(seq._arena)
         replayed = _output_hashes(seq)
         # Registration contract: rewind the replayed pass's
         # non-idempotent device writes (e.g. KV position counters) so
         # the normal re-run below operates on the SAME state — it then
         # advances host+device consistently itself.
-        for o in owners:
-            o.replay_restore()
+        if _tail:
+            for o, sn in _snaps:
+                o.replay_lens_restore(sn)
+        else:
+            for o in owners:
+                o.replay_restore()
+        for sl, t in _boundary.items():
+            seq._arena[sl] = t
         seq._run_single_device(skip_kills, None)
         normal = _output_hashes(seq)
         if replayed == normal:
@@ -1347,6 +1460,8 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
             _mem_diag("post-verify")
         else:
             plan.slab.retire()
+            for _o in plan.other_slabs.values():
+                _o.retire()
             if plan.graph is not None:
                 # The verify pass may have captured the CUDA graph —
                 # release exec/graph/staging/stream with the rejected
@@ -1379,11 +1494,16 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
         STATE.live = 0
         STATE.high_water = 0
         STATE.measured = {}
+        STATE.live_by_dev, STATE.high_water_by_dev = {}, {}
         try:
             seq._run_single_device(skip_kills, None)
         finally:
             STATE.measuring = False
         plans[sig] = ("MEASURED", STATE.high_water, 1)
+        # every OTHER card the run allocated on gets its own slab at recording (a held expert's card, S3): served from
+        # the sequence's card's slab, its tensors had addresses on the wrong card (an illegal access at replay)
+        seq.__dict__.setdefault("_replay_dev_hw", {})[sig] = {
+            d: b for d, b in STATE.high_water_by_dev.items() if d != seq.device_idx and b > 0}
         _mem_diag("post-measure")
         return True
 
@@ -1400,11 +1520,20 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
         plans[sig] = "UNREPLAYABLE"
         return False
 
+    try:
+        others = {d: SlabAllocator(int(b), d)
+                  for d, b in (seq.__dict__.get("_replay_dev_hw", {}).get(sig) or {}).items()}
+    except Exception as e:
+        print(f"[Replay] slab alloc failed on another card: {e} — bucket keeps the normal path")
+        slab.retire()
+        plans[sig] = "UNREPLAYABLE"
+        return False
     STATE.recording = True
     _arm_launch_recorder(True)
     STATE.records = []
     STATE.broken = None
     STATE.slab = slab
+    STATE.slabs = dict(others)
     failed: Optional[BaseException] = None
     try:
         seq._run_single_device(skip_kills, None)
@@ -1414,6 +1543,7 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
         STATE.recording = False
         _arm_launch_recorder(False)
         STATE.slab = None
+        STATE.slabs = {}
         records = STATE.records
         STATE.records = []
 
@@ -1421,6 +1551,8 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
         reason = STATE.broken or f"exception: {failed}"
         shortfall = slab.shortfall
         slab.retire()  # deferred: frees only after carved tensors die
+        for _o in others.values():
+            _o.retire()
         if failed is None and shortfall > 0 and attempt < 2:
             # Data-driven retry: the failed attempt measured the exact
             # extra bytes needed.
@@ -1438,9 +1570,17 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
             seq._run_single_device(skip_kills, None)
         return True
 
+    _skip, _lim = getattr(seq, "_run_skip", None), seq._num_weights + seq._num_inputs
+    _read = None
+    if _skip is not None and getattr(seq, "_tail_replay", False):
+        _read = tuple(sorted({sl for i, op in enumerate(seq._ops) if not _skip[i]
+                              for sl in (op.all_input_slots or ()) if sl < _lim}))
     plan = FrozenPlan(records, slab, list(seq._arena),
                       tuple(_input_slot_range(seq)),
-                      scan_limit=seq._num_weights + seq._num_inputs)
+                      scan_limit=_lim,
+                      extra_scan=tuple(getattr(seq, "_replay_extra_scan", ()) or ()),
+                      scan_slots=_read)
+    plan.other_slabs = others
     plan.output_slots = tuple(
         s for s in (seq._tid_to_slot.get(tid)
                     for tid in seq.dag.get("output_tensor_ids") or [])

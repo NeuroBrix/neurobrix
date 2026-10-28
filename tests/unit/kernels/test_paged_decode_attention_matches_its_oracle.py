@@ -151,3 +151,32 @@ def test_the_append_writes_exactly_the_slots_the_mapping_names():
         written[p, pos] = True
     by_slot = got.transpose(0, 2, 1, 3)                    # [page, position, head, D]
     assert np.isnan(by_slot[~written]).all(), "the append wrote a slot the mapping does not name"
+
+
+def test_a_launch_sized_at_an_earlier_length_still_reads_every_position():
+    """A replayed decode re-launches the kernel with the arguments its recorded step had: the length the host passed
+    then (`max_seq_len`) is stale while the device's `seq_lens` has grown. The split count only moves every
+    PAGED_DECODE_SPLIT_POSITIONS positions, so the read must size its splits from the device lengths — sized from the
+    stale figure, the newest positions fell past the last split and a replayed TinyLlama stopped attending to them
+    (2026-10-28). Red on a kernel that takes the split length from the host."""
+    from neurobrix.kernels.ops.paged_decode_attn import PAGED_DECODE_SPLIT_POSITIONS, PAGED_DECODE_MAX_SPLITS
+    import math
+    block_n, page_tokens, h, h_kv, d = 64, 64, 8, 2, 64
+
+    def split_of(n):
+        return max(1, min(math.ceil(max(n, 1) / PAGED_DECODE_SPLIT_POSITIONS), PAGED_DECODE_MAX_SPLITS))
+
+    def covered(n):                         # what a split length sized at `n` covers
+        s = split_of(n)
+        return s * math.ceil(math.ceil(n / s) / block_n) * block_n
+
+    T = 200                                    # a plan recorded early, one split, re-launched as the length grows
+    stale = next(n for n in range(T - 1, 0, -1) if split_of(n) == split_of(T) and covered(n) < T)
+    kpool, vpool, table, ks, vs = _paged([T], h_kv, d, page_tokens, 3)
+    q = np.random.default_rng(4).standard_normal((1, h, d)).astype(np.float16)
+    out = W.paged_decode_attention(_t(q.reshape(1, h, 1, d)), _t(kpool), _t(vpool), _t(table),
+                                   _t(np.asarray([T], dtype=np.int32)), 1.0 / np.sqrt(d), stale, block_n)
+    got = _d2h(out).astype(np.float64).reshape(1, h, d)
+    ref = _ref(q, ks, vs, 1.0 / np.sqrt(d))
+    err = float(np.abs(got - ref).max() / np.abs(ref).max())
+    assert err < BOUND, f"sized at {stale} for {T} positions: relative error {err:.2e} — the newest positions unread"

@@ -3193,12 +3193,7 @@ class GraphExecutor:
         from neurobrix.kernels.nbx_tensor import NBXTensor, parse_dtype, DeviceAllocator
 
         start = _time.perf_counter()
-        if isinstance(self.device, str):
-            device_idx = int(self.device.split(':')[1]) if ':' in self.device else 0
-        elif hasattr(self.device, 'index') and isinstance(self.device.index, int):
-            device_idx = self.device.index
-        else:
-            device_idx = 0
+        device_idx = self._triton_device_index()
 
         DeviceAllocator.set_device(device_idx)
         DeviceAllocator.ensure_triton_device(device_idx)
@@ -4228,6 +4223,14 @@ class GraphExecutor:
             self._op_followers[key] = op
         if triton is not None:
             self._triton_followers[key] = triton
+
+    def _triton_device_index(self) -> int:
+        """The card index the Triton engine runs this executor's sequence on (its `device`)."""
+        if isinstance(self.device, str):
+            return int(self.device.split(':')[1]) if ':' in self.device else 0
+        if hasattr(self.device, 'index') and isinstance(self.device.index, int):
+            return self.device.index
+        return 0
 
     def _ensure_triton_compiled(self, device_idx: int):
         """Compile triton sequence and bind weights (once).

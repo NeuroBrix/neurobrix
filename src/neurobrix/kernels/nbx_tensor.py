@@ -1103,6 +1103,9 @@ class DeviceAllocator:
     _POOL_SPLIT_MIN = 1 << 20
     _pool_alloc_size: Dict[int, int] = {}            # ptr -> ALLOCATED nbytes (may exceed requested when smallest-fit is bigger)
     _pool_enabled: bool = False                      # set by _maybe_init_pool() from env
+    #: Callables `(dev) -> bytes released` the engine registers for memory it caches outside the pool (a recorded
+    #: replay plan's slab, `triton/replay.release_idle_slabs`), called on a malloc refused after the pool's flush.
+    _idle_reclaimers: list = []
     # Pool observability (NBX_ALLOC_STATS=1 prints it at exit): bytes
     # parked in the free-list per device (+ peak), hit/miss counters,
     # and the smallest-fit SLACK (allocated − requested) — the pool's
@@ -1704,6 +1707,17 @@ class DeviceAllocator:
             freed = DeviceAllocator._pool_flush(dev)
             if freed > 0:
                 ret = DeviceAllocator._driver_malloc(ptr_obj, nbytes, dev)
+
+        # The engine's other cached memory, released the same way: a recorded replay plan's slab between two runs of
+        # its sequence (`triton/replay.release_idle_slabs`), freed through the pool, flushed, retried once.
+        if ret != 0 and DeviceAllocator._idle_reclaimers:
+            DeviceAllocator.clear_last_error()   # a refused call must not poison the next one
+            got = sum(int(r(dev) or 0) for r in list(DeviceAllocator._idle_reclaimers))
+            if got > 0:
+                if DeviceAllocator._pool_enabled:
+                    DeviceAllocator._pool_flush(dev)
+                ret = getattr(rt, backend["malloc"])(
+                    ctypes.byref(ptr_obj), ctypes.c_size_t(nbytes))
 
         # Pre-allocation OOM-recovery (independent of pool): trigger a
         # cycle-collecting gc.collect() then retry. Sana 4Kpx triton

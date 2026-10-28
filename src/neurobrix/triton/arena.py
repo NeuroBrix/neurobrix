@@ -4,15 +4,24 @@ Memory layout: [weights | inputs | intermediates]
 All slots hold NBXTensor. Zero torch dependency.
 """
 
+from operator import is_ as _is
+
+
 class Arena:
     """O(1) tensor storage via integer-indexed list."""
 
-    __slots__ = ('_slots', '_num_weights', '_num_inputs')
+    __slots__ = ('_slots', '_num_weights', '_num_inputs', 'epoch', 'views')
 
     def __init__(self, size: int, num_weights: int = 0, num_inputs: int = 0):
         self._slots: list = [None] * size
         self._num_weights = num_weights
         self._num_inputs = num_inputs
+        # bumped whenever the weight slots may have been dropped or replaced (`clear_all`, `restore_from`): a bind
+        # memoized against an older epoch binds again (`TritonSequence.bind_weights`)
+        self.epoch = 0
+        # {tensor id: (source weight, its view)}: the views a bind derives from weights (a pre-transposed weight), one
+        # per source object so a re-bind of the same weights hands the same views back; dropped with the weights
+        self.views = {}
 
     def __getitem__(self, idx: int):
         return self._slots[idx]
@@ -36,7 +45,14 @@ class Arena:
             raise ValueError(
                 f"arena restore length mismatch: snapshot "
                 f"{len(snapshot)} vs arena {len(self._slots)}")
+        # The epoch moves only when the weight slots really change: a replayed step restores the very weight objects
+        # its bind put there, and an epoch bumped regardless made every next step re-bind them all (~20k weights,
+        # 24 ms a token on Qwen3-30B-A3B's expert-store decode, 2026-10-28). Identity, compared at C level.
+        nw = self._num_weights
+        same = all(map(_is, snapshot[:nw], self._slots[:nw]))
         self._slots[:] = snapshot
+        if not same:
+            self.epoch += 1
 
     def clear_intermediates(self):
         """Free intermediate slots (keep weights + inputs)."""
@@ -55,3 +71,5 @@ class Arena:
         """Clear all tensors."""
         for i in range(len(self._slots)):
             self._slots[i] = None
+        self.views.clear()
+        self.epoch += 1

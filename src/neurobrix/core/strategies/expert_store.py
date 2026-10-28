@@ -117,6 +117,12 @@ def build_expert_store_state(z3: Any, component_name: str, executor: Any, seq: A
                                           if holds_expert_files(z3.context.allocations, component_name) else None))
     seq._expert_store = store
     executor._expert_store = store
+    # the decode's routing, recorded once per model as its reuse curve (core/runtime/routing_reuse.py), read by Prism
+    from neurobrix.core.runtime import routing_reuse as _rr
+    _model = executor._registry_model_name() if hasattr(executor, "_registry_model_name") else None
+    if _model and _rr.load(_model, component_name) is None:
+        _n_exp = max(len(ids[0]) for ids in layers.values())
+        store.trace = _rr.ExpertTrace(_model, component_name, top_k, _n_exp)
     holders = _hold_experts_on_cards(z3, component_name, executor, seq, is_triton, layers)
 
     state: Dict[str, Any] = {

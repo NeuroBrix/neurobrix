@@ -32,6 +32,7 @@ Ladder = Sequence[Tuple[Optional[int], int]]
 
 
 _PARSED: Dict[str, Ladder] = {}
+_BY_ID: Dict[int, Tuple[Any, Ladder]] = {}
 
 #: Dimensions that are NOT a tensor dimension and never take the profile's `default` ladder: an element-wise launch's
 #: element count is classed by the launch-overhead and bandwidth regimes (four classes on volta and apple_m4_pro), and
@@ -43,13 +44,18 @@ NO_DEFAULT = frozenset({"elements"})
 def parse_ladder(rows: Any) -> Ladder:
     """Parsed once per distinct row list: the key of every launch reads the ladder (32 616
     parses in one chatterbox shadow, 2026-09-22)."""
+    # the profile hands the same row list on every call: answered by its identity first (the `repr` key below, built
+    # per call, was itself the cost — 2 of 40 decode-step samples of Qwen3-30B-A3B, 2026-10-28); the list is kept so
+    # its id is never reused by another
+    hit = _BY_ID.get(id(rows))
+    if hit is not None and hit[0] is rows:
+        return hit[1]
     memo = repr(rows)
     got = _PARSED.get(memo)
-    if got is not None:
-        return got
-    out = _parse_ladder(rows)
-    _PARSED[memo] = out
-    return out
+    if got is None:
+        got = _PARSED[memo] = _parse_ladder(rows)
+    _BY_ID[id(rows)] = (rows, got)
+    return got
 
 
 def _parse_ladder(rows: Any) -> Ladder:

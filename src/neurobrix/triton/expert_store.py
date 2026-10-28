@@ -50,6 +50,7 @@ class NBXExpertStore:
     def __init__(self, residency: ExpertResidency, device_idx: int, like, in_place: bool = False):
         self.residency = residency
         self.device_idx = int(device_idx)
+        self.trace = None     # an ExpertTrace (core/runtime/routing_reuse.py) the store notes each decode call into
         # In place (supervisor 2026-10-20 01:20 (b)): on a unified device whose routed experts are views of the
         # container's files (Prism's `expert_files`, `holds_expert_files`), a slot is a POINTER to the expert
         # where it lies — its pages bound in place (`DeviceAllocator.bind_mapped`), nothing copied, no arena.
@@ -108,6 +109,8 @@ class NBXExpertStore:
         """(gate, up, down) lists over all `n_experts`, device-resident, for a call routing to `routed`;
         the compute stream waits for the misses copied now and for the hits a prefetch is still copying.
         In place: the routed experts' own host views, their pages bound once; nothing is copied."""
+        if self.trace is not None:
+            self.trace.note(layer, routed)      # the routing reuse curve (core/runtime/routing_reuse.py)
         if self.in_place:
             return self._acquire_in_place(layer, routed, n_experts, host)
         slots, missed = self.residency.assign(layer, routed)
@@ -235,6 +238,9 @@ class NBXExpertStore:
         return f"[expert store] {self.residency.summary()} bytes_in={self.bytes_in / 1e9:.2f} GB"
 
     def release(self) -> None:
+        if self.trace is not None:
+            self.trace.write(f"recorded by the triton expert store's decode ({self.residency.summary()})")
+            self.trace = None
         if self.residency.hits or self.residency.misses:
             print(f"   {self.summary()}", flush=True)
         for ev in self._inflight.values():

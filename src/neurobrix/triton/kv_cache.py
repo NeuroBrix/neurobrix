@@ -298,8 +298,6 @@ class TritonAttentionInterceptor:
                 return None
         if self._is_prefill:
             return None
-        if os.environ.get("NBX_REPLAY_KV_DECODE") != "1":
-            return None
         return self.cache.replay_key(int(os.environ.get("NBX_KV_BUCKET", "256")))
 
     def skip_positions(self, n: int) -> None:
@@ -320,6 +318,14 @@ class TritonAttentionInterceptor:
         replayed pass wrote (identical inputs -> idempotent k/v/mask
         writes; only the counter increment needs undoing)."""
         self.cache.replay_restore()
+
+    def replay_lens_snapshot(self):
+        """The cache's own per-layer device lengths, for a tail replay's exact rewind (`replay.maybe_run`); the
+        cache must provide it — a cache without one makes the tail decline."""
+        return self.cache.replay_lens_snapshot()
+
+    def replay_lens_restore(self, snap):
+        self.cache.replay_lens_restore(snap)
 
 
 # Phase 1 opt-in cleanup: mark the interceptor's underlying function

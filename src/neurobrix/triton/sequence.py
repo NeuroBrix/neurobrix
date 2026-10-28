@@ -439,6 +439,8 @@ class TritonSequence:
     #: zero3 ratchet, `core/strategies/expert_store.py`); the MoE closures read it per call.
     _expert_store = None
     _expert_cards = None      # {layer key: (card, (gate, up, down))} held whole on other cards (S3)
+    _replay_segment = None    # the segment of a decode step replayed in segments (`_expert_segments`), in its signature
+    _replay_advances = True   # this replayed run mirrors the step's advance onto the host's state owners
 
     def __init__(self, dag: dict, device_idx: int = 0,
                  compute_dtype: NBXDtype = NBXDtype.float16,
@@ -2373,6 +2375,17 @@ class TritonSequence:
         for op in self._ops:
             if not op.weight_input_slots:
                 continue
+            if op.op_type == "custom::moe_fused":
+                # A fused MoE op places its own compute (`execute_moe_fused` runs on its hidden state's card, a block
+                # an expert store holds on another card on that card): its routed experts — pinned host tensors under
+                # zero3 or an expert store — do not choose its device. Read as its device, a host expert's placeholder
+                # index (0) sent every home-card MoE call's hidden state to card 0 and back (Qwen3-30B-A3B, 4 V100,
+                # 437 -> 420 ms per token, 2026-10-28). They still make the sequence multi-device: only that loop calls
+                # the zero3 ratchet that builds the expert store.
+                if any(getattr(arena[ws], '_device', 'cuda') == 'cpu' for ws in op.weight_input_slots
+                       if arena[ws] is not None):
+                    has_cpu_weight = True
+                continue
             best_dev = None
             best_numel = -1
             for ws in op.weight_input_slots:
@@ -2474,10 +2487,21 @@ class TritonSequence:
             if slot is None:
                 continue
             if tensor_id in self._pretranspose_weights and tensor.ndim == 2:
-                tensor = tensor.t()
+                tensor = self._transposed_view(tensor_id, tensor)
             self._arena[slot] = tensor
             modified.append(slot)
         return modified
+
+    def _transposed_view(self, tid: str, tensor: NBXTensor) -> NBXTensor:
+        """The `.t()` view of a weight whose aten::t was eliminated, ONE per source tensor (kept in the arena, dropped
+        with its weights): binding the same weight again hands the same view back, so a replayed step's restored
+        arena is recognised as the bound one (`Arena.restore_from`). A fresh view at every bind or zero3 rebind made
+        each restore look like new weights and re-bound all ~20k of Qwen3-30B-A3B's, 24 ms a token (2026-10-28)."""
+        views = self._arena.views
+        held = views.get(tid)
+        if held is None or held[0] is not tensor:
+            held = views[tid] = (tensor, tensor.t())
+        return held[1]
 
     def recompute_op_devices_for_slots(self, modified_slots: List[int]) -> None:
         """Patch per-op device flags after a partial arena rebind.
@@ -3008,6 +3032,18 @@ class TritonSequence:
 
     def bind_weights(self, weights: Dict[str, NBXTensor]):
         """Bind weight tensors to arena slots, then compute per-op devices."""
+        # The same weights as the last bind (the same dict, the same tensor objects): every slot already holds them
+        # or what a zero3 ratchet installed in their place (it re-installs a block before that block's first op), the
+        # folded constants and the per-op devices are this bind's. A decode step re-bound all of it per token — ~20k
+        # weights of Qwen3-30B-A3B's expert store, 16.5 ms per call, before a single op ran (2026-10-28).
+        sig = (id(self._arena), self._arena.epoch, id(weights), len(weights), hash(tuple(map(id, weights.values()))))
+        if sig == getattr(self, "_bound_sig", None) and self._compiled:
+            return
+        self._bound_sig = None
+        self._bind_weights(weights)
+        self._bound_sig = sig
+
+    def _bind_weights(self, weights: Dict[str, NBXTensor]):
         # A fresh weight bind invalidates every cached seq-dependent-constant
         # original: they are NBXTensor views into the PREVIOUS bind's
         # component arena, which is explicitly freed when weights unload
@@ -3045,7 +3081,7 @@ class TritonSequence:
                 # Pre-transpose weights whose aten::t was eliminated.
                 # .t() is a stride-only view (no copy) on NBXTensor.
                 if tid in self._pretranspose_weights and tensor.ndim == 2:
-                    tensor = tensor.t()
+                    tensor = self._transposed_view(tid, tensor)
                 self._arena[self._tid_to_slot[tid]] = tensor
             elif tid in consumers:
                 unbound.append((tid, consumers[tid]))
@@ -3091,6 +3127,112 @@ class TritonSequence:
                     from neurobrix.triton.device_transfer import transfer_tensor
                     tensor = transfer_tensor(tensor, self.device_idx)
                 self._arena[slot] = tensor
+
+    def _expert_tail_cut(self):
+        """(cut, boundary slots) for a decode step whose expert store serves its FIRST layers and whose later layers'
+        experts other cards hold whole (S3): the ops before `cut` — up to the last fused MoE op the store serves, whose
+        routing is read back to the host every call — run directly; the ops from `cut` on make no host decision and
+        replay as one recorded plan. Boundary slots: what the tail reads that it does not produce (the head's outputs),
+        copied into the plan's frozen buffers at every replay. None: no tail, or a tail without a held layer."""
+        if "_tail_cut_memo" in self.__dict__:
+            return self._tail_cut_memo
+        held = self._expert_cards or {}
+        meta = self.dag.get("ops") or {}
+
+        def key(op):
+            ids = ((meta.get(op.op_uid) or {}).get("attributes") or {}).get("expert_gate_weight_ids") or []
+            return ids[0] if ids else None
+        moe = [(i, key(op)) for i, op in enumerate(self._ops) if op.op_type == "custom::moe_fused"]
+        store = [i for i, k in moe if k not in held]
+        res = None
+        if store and any(k in held for i, k in moe if i > store[-1]):
+            cut = store[-1] + 1
+            # diagnostic: start the replayed tail later (a bisection of what a recorded tail does not reproduce)
+            if os.environ.get("NBX_REPLAY_TAIL_FROM"):
+                cut = max(cut, int(os.environ["NBX_REPLAY_TAIL_FROM"]))
+            base = self._num_weights + self._num_inputs
+            produced, boundary = set(), set()
+            for op in self._ops[cut:]:
+                boundary.update(sl for sl in op.all_input_slots if sl >= base and sl not in produced)
+                produced.update(op.output_slots)
+            res = (cut, tuple(sorted(boundary)))
+            print(f"[Replay] {self.dag.get('component_name')}: expert tail from op {cut} of {len(self._ops)} "
+                  f"({sum(1 for i, k in moe if i >= cut)} held MoE ops), {len(res[1])} boundary slots", flush=True)
+        self._tail_cut_memo = res
+        return res
+
+    def _expert_segments(self):
+        """The decode step of an expert-store sequence with a card-held tail, as segments in op order: each store-served
+        fused MoE op alone, run directly (its routing is read back to the host and its misses copied, every call); every
+        stretch between two of them, and the tail, replayed (`replay.maybe_run`, a plan per segment). Each replayed
+        segment carries its boundary slots — what it reads and does not produce — scanned like inputs at every replay.
+        [(kind, first op, end op, boundary slots, skip mask)], kind in direct | replay | tail; None without a tail."""
+        if "_segments_memo" in self.__dict__:
+            return self._segments_memo
+        res = None
+        tc = self._expert_tail_cut()
+        if tc is not None:
+            cut, tail_boundary = tc
+            held = self._expert_cards or {}
+            meta = self.dag.get("ops") or {}
+            n = len(self._ops)
+            base = self._num_weights + self._num_inputs
+            store = []
+            for i, op in enumerate(self._ops[:cut]):
+                if op.op_type == "custom::moe_fused":
+                    ids = ((meta.get(op.op_uid) or {}).get("attributes") or {}).get("expert_gate_weight_ids") or []
+                    if (ids[0] if ids else None) not in held:
+                        store.append(i)
+            spans, a = [], 0
+            for i in store:
+                if i > a:
+                    spans.append(("replay", a, i))
+                spans.append(("direct", i, i + 1))
+                a = i + 1
+            if cut > a:
+                spans.append(("replay", a, cut))
+            res = []
+            for kind, a, b in spans:
+                boundary = ()
+                if kind == "replay":
+                    produced, bnd = set(), set()
+                    for op in self._ops[a:b]:
+                        bnd.update(sl for sl in op.all_input_slots if sl >= base and sl not in produced)
+                        produced.update(op.output_slots)
+                    boundary = tuple(sorted(bnd))
+                res.append((kind, a, b, boundary, [not (a <= i < b) for i in range(n)]))
+            res.append(("tail", cut, n, tail_boundary, [i < cut for i in range(n)]))
+            print(f"[Replay] {self.dag.get('component_name')}: the decode step in {len(res)} segments — "
+                  f"{sum(1 for r in res if r[0] == 'direct')} store-served MoE ops direct, "
+                  f"{sum(1 for r in res if r[0] != 'direct')} replayed", flush=True)
+        self._segments_memo = res
+        return res
+
+    def _run_expert_tail(self, skip_kills, pre_op_callback) -> None:
+        """One decode step of an expert-store sequence with a card-held tail (`_expert_segments`): the store-served MoE
+        ops run directly (with the zero3 ratchet's callback), every other stretch and the tail through the replay
+        machinery (measured, recorded, verified, then replayed). Only the tail mirrors the step's advance onto the
+        host's state owners (`_replay_advances`): a head stretch's replayed launches advance its own layers' device
+        counters exactly as its direct run does. A segment the replay declines runs directly."""
+        from neurobrix.kernels import wrappers as _w
+        try:
+            for idx, (kind, a, b, boundary, skip) in enumerate(self._expert_segments()):
+                self._run_skip = skip
+                if kind == "direct":
+                    self._run_multi_device(skip_kills, pre_op_callback)
+                    continue
+                self._tail_replay, self._replay_extra_scan = True, boundary
+                self._replay_segment, self._replay_advances = idx, kind == "tail"
+                # each replayed segment is a run of its own for the per-run caches: a rotary table widened once per
+                # run would be read by a recorded segment at another segment's address of the recorded step (stale
+                # at replay); emptied, the segment widens its own and the recording captures it
+                _w.begin_run()
+                if not _replay.maybe_run(self, skip_kills, None):
+                    self._run_multi_device(skip_kills, pre_op_callback)
+        finally:
+            self._run_skip = None
+            self._tail_replay = False
+            self._replay_segment, self._replay_advances = None, True
 
     def defer_inputs(self, providers) -> None:
         """Bind each input of `providers` ({tensor id: () -> tensor}) only right before the FIRST op that reads it, for
@@ -3215,7 +3357,7 @@ class TritonSequence:
                   f"live={DeviceAllocator._cuda_live_bytes.get(self.device_idx, 0) / 2**20:.0f}MB "
                   f"pool={DeviceAllocator._pool_cached_bytes.get(self.device_idx, 0) / 2**20:.0f}MB", flush=True)
         try:
-            # Phase 4a frozen-plan replay (opt-in NBX_TRITON_REPLAY=1):
+            # Phase 4a frozen-plan replay (the engine's default, `replay.ENABLED`):
             # 1st run per bucket = warmup (autotune fires), 2nd =
             # recording, 3rd+ = direct C-launcher replay. Handled runs
             # return here; every ineligible case falls through to the
@@ -3232,6 +3374,11 @@ class TritonSequence:
                           f"(state engine step 4), which a frozen launch plan cannot refill", flush=True)
             elif _replay.ENABLED and getattr(self, "_deferred_at", None):
                 pass        # a parked input binds at its first reader; a frozen plan launches with every input bound
+            elif (_replay.ENABLED
+                  and getattr(self, "_expert_store", None) is not None and self._is_multi_device
+                  and self._expert_tail_cut() is not None):
+                self._run_expert_tail(skip_kills, pre_op_callback)
+                return
             elif _replay.ENABLED and (not self._is_multi_device
                                       or _replay.MULTIDEV_PROOF):
                 if _replay.maybe_run(self, skip_kills, pre_op_callback):

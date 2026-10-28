@@ -73,7 +73,7 @@ def paged_decode_attn_split_kernel(
     opart_ptr,       # [B*H_q, SPLIT, D_v] fp32 partial outputs
     mpart_ptr,       # [B*H_q, SPLIT] fp32 running max per split
     lpart_ptr,       # [B*H_q, SPLIT] fp32 sum-of-exp per split
-    seg_len,         # positions per split, a multiple of BLOCK_N
+    n_seqs,          # B: the split's length is read from the device's lengths, never passed (see below)
     page_tokens,     # positions per page, a multiple of BLOCK_N
     sm_scale,
     H_Q,
@@ -102,6 +102,16 @@ def paged_decode_attn_split_kernel(
     q = _round_q(tl.load(q_ptr + pid_q * stride_qh + offs_d, mask=mask_d, other=0.0), Q_TO, Q_SATURATE)
 
     T_b = tl.load(seq_lens_ptr + b).to(tl.int32)
+    # Positions per split, read from the DEVICE lengths: the longest sequence over the grid's splits, in whole tiles
+    # — the host's figure from the same lengths, so the same value at every step. Passed as a scalar it was frozen into
+    # a replayed decode's launch: the split count only moves every PAGED_DECODE_SPLIT_POSITIONS positions, the length
+    # every token, and a replayed TinyLlama stopped attending to its newest positions (2026-10-28).
+    longest = tl.load(seq_lens_ptr).to(tl.int32)
+    for i in range(1, n_seqs):
+        longest = tl.maximum(longest, tl.load(seq_lens_ptr + i).to(tl.int32))
+    longest = tl.maximum(longest, 1)
+    n_split = tl.num_programs(1)
+    seg_len = tl.cdiv(tl.cdiv(longest, n_split), BLOCK_N) * BLOCK_N
     seg_start = (pid_s * seg_len).to(tl.int32)   # 32-bit loop bounds (the Metal lowering refuses a 64-bit scf.for bound)
     seg_end = tl.minimum(seg_start + seg_len, T_b).to(tl.int32)
 
