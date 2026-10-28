@@ -31,11 +31,18 @@ def test_four_cards_hold_whole_blocks_of_experts_and_the_plan_is_faster(monkeypa
     store = p.components["model"]
     assert store.strategy == "expert_store", store.strategy
     cards = store.expert_cards
-    assert len(cards) >= 2 and store.device not in cards, cards
+    others = {c: v for c, v in cards.items() if c != store.device}
+    assert len(others) >= 2, cards
     devs = {d.device_string: d for d in s._prepare_devices(prof)}
-    reserve = s._live_activation_mb(p.component_memory["model"])
-    for card, held in cards.items():
+    reserve = s._moe_op_reserve_mb("model", s._expert_topology["model"].layers)
+    assert reserve is not None and 0 < reserve < 2048, reserve       # the MoE op's own activations, not the model's
+    for card, held in others.items():
         assert held["cache_mb"] + reserve <= s._usable_mb(devs[card]), (card, held)
+    # the home card holds whole blocks too where its cache can, keeping the floor for the blocks left on the host
+    assert store.device in cards, (store.device, cards)
+    floor = max(l.top_k * l.expert_bytes for l in s._expert_topology["model"].layers) / 2 ** 20
+    assert store.expert_cache_mb + 1 >= floor or sum(c["experts"] for c in cards.values()) == sum(
+        l.n_experts for l in s._expert_topology["model"].layers), (store.expert_cache_mb, floor)
     blocks = [b for c in cards.values() for b in range(c["blocks"][0], c["blocks"][1] + 1)]
     assert len(blocks) == len(set(blocks)), cards                     # no block on two cards
     assert p.estimated_s is not None and p.estimated_s < BEFORE_S[mode], (p.estimated_s, p.selection_reason[-300:])
@@ -76,4 +83,4 @@ def test_a_card_with_no_room_for_one_block_takes_none(monkeypatch):
     p = PrismSolver().solve_smart(c, load_profile("c4140-4xv100-16GB-nvlink"), ic, mode="compiled")
     assert p.busy_replan, "the facts' plan put blocks on the busy card and the door did not see it"
     cards = p.components["model"].expert_cards
-    assert "cuda:3" not in cards and len(cards) >= 2, cards
+    assert "cuda:3" not in cards and len([c for c in cards if c != p.components["model"].device]) >= 2, cards
