@@ -78,6 +78,8 @@ GRID = {
                         for tq in (1024, 16384) for tk in (4096, 65536) for mr in (0, 16, 128)],
     "sdpa_device_scores_budget": [(b, f, m) for b in (0, GiB, 2 * GiB) for f in (0.0, 0.07, 0.5)
                                   for m in (None, 16384, 32768)],
+    "sdpa_math_scores_budget": [(b, f, m) for b in (0, GiB, 2 * GiB) for f in (0.0, 0.07, 0.5)
+                                for m in (None, 16384, 32768)],
     "op_budget_fraction": [()],
     "op_budget_bytes": [(c, r) for c in _CARDS for r in (0, 300 * MB, 9 * GiB)],
     "conv_band_factor": [(t, k, c) for t in _BYTES for k in (0, GiB, 9 * GiB) for c in _CARDS],

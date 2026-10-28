@@ -8880,6 +8880,11 @@ class PrismSolver:
                 _cutter = LayerPartitioner(graph, _piece_sizes, symbol_map=_sizing[0],
                                            compute_dtype_bytes=_sizing[1], widths=_sizing[2],
                                            op_extra=_extra or None,
+                                           # the allocator's hold over the walked activations, the device's measured
+                                           # fact, as a component held whole is priced (`_live_activation_mb`)
+                                           activation_factor=(self._triton_arena_factor(target)
+                                                              if str(getattr(self, "_mode", "compiled")).startswith("triton")
+                                                              else 1.0),
                                            token_split=bool(getattr(self, "_token_split", False)),
                                            swap_values=bool(getattr(self, "_swap_values", False)),
                                            beyond_walls=bool(getattr(self, "_regions_beyond_walls", False)))
