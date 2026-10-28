@@ -1138,6 +1138,63 @@ class DeviceAllocator:
     _plan_size: int = 0
     _plan_workspaces: Dict[int, int] = {}          # every live workspace: base -> bytes (a planned tensor's free is a no-op)
 
+    # S4b, the plan BEFORE the first run (no recording run): each op's graph outputs are known before it runs — their
+    # element counts at the bound symbols and the op that last reads them (the compiled liveness) — not their width,
+    # which the dtype engine decides as the op runs. An allocation an op makes whose bytes are one of its outputs'
+    # element counts times a float width takes a slice of the workspace at the lowest offset free of every slice still
+    # held; a slice is held until its pointer is FREED (never on the graph's word alone: a view keeps its base alive),
+    # so the plan can only place, never corrupt. What finds no candidate or no room goes to the pool.
+    _static_dev: Optional[int] = None
+    _static_base: int = 0
+    _static_size: int = 0
+    _static_cands: Optional[Dict[int, list]] = None   # op -> [[numel, last op, taken], ...]
+    _static_live: Dict[int, Tuple[int, int, int]] = {}  # ptr -> (offset, end, last op)
+    _static_hits: int = 0
+    _static_miss: int = 0
+
+    @staticmethod
+    def plan_static_begin(dev: int, base: int, size: int, cands: Dict[int, list]) -> None:
+        """Run with the outputs of each op ({op: [[numel, last op, False], ...]}) placed in [base, base + size)."""
+        DeviceAllocator._static_dev, DeviceAllocator._static_base = dev, int(base)
+        DeviceAllocator._static_size, DeviceAllocator._static_cands = int(size), cands
+        DeviceAllocator._static_live = {}
+        DeviceAllocator._static_hits = DeviceAllocator._static_miss = 0
+        DeviceAllocator._plan_workspaces[int(base)] = int(size)
+        DeviceAllocator._plan_op = -1
+
+    @staticmethod
+    def plan_static_stop() -> Tuple[int, int]:
+        """(allocations placed, allocations the pool served) of the run; the placement ends."""
+        out = (DeviceAllocator._static_hits, DeviceAllocator._static_miss)
+        DeviceAllocator._static_cands, DeviceAllocator._static_dev = None, None
+        DeviceAllocator._static_live = {}
+        return out
+
+    @staticmethod
+    def _static_place(nbytes: int) -> Optional[int]:
+        cands = DeviceAllocator._static_cands.get(DeviceAllocator._plan_op)
+        if not cands:
+            return None
+        cand = next((c for c in cands if not c[2] and c[0] > 0 and nbytes % c[0] == 0
+                     and nbytes // c[0] in (1, 2, 4, 8)), None)
+        if cand is None:
+            DeviceAllocator._static_miss += 1
+            return None
+        size = (int(nbytes) + 255) & ~255
+        at = 0
+        for lo, hi, _last in sorted(DeviceAllocator._static_live.values()):
+            if at + size <= lo:
+                break
+            at = max(at, hi)
+        if at + size > DeviceAllocator._static_size:
+            DeviceAllocator._static_miss += 1
+            return None
+        cand[2] = True
+        ptr = DeviceAllocator._static_base + at
+        DeviceAllocator._static_live[ptr] = (at, at + size, cand[1])
+        DeviceAllocator._static_hits += 1
+        return ptr
+
     @staticmethod
     def plan_at_op(op_idx: int) -> None:
         """The hot loop is about to run op `op_idx`: its allocations are counted from 0."""
@@ -1709,6 +1766,12 @@ class DeviceAllocator:
                         f"{key[0]} and the run asks {nbytes}: this bucket's allocations are not the ones recorded")
                 return DeviceAllocator._plan_base + entry[1]
 
+        # S4b: an op's output placed in the workspace before the run (`_static_place`)
+        if DeviceAllocator._static_cands is not None and dev == DeviceAllocator._static_dev:
+            ptr = DeviceAllocator._static_place(int(nbytes))
+            if ptr is not None:
+                return ptr
+
         # Pool fast path
         if DeviceAllocator._pool_enabled:
             ptr = DeviceAllocator._pool_take(dev, nbytes)
@@ -1727,6 +1790,13 @@ class DeviceAllocator:
                 # from the driver's POV). Peak unchanged.
                 return ptr
 
+        # S4b: under the static plan the device never GROWS while the pool parks freed blocks — they go back to the
+        # driver first, so the device's peak is what is alive, not what is alive plus what was once freed (HAT-L x4 on
+        # the M4 Pro: 10 688 MB of driver for a 7 046 MB pool peak and 80 misses — the parked blocks above the live set
+        # were the whole excess over the native engine's 10 113 MB)
+        if (DeviceAllocator._static_cands is not None and dev == DeviceAllocator._static_dev
+                and DeviceAllocator._pool_enabled):
+            DeviceAllocator._pool_flush(dev)
         ptr_obj = ctypes.c_void_p()
         rt = _gpu_runtime()
         backend = _active_backend()
@@ -1840,6 +1910,7 @@ class DeviceAllocator:
         DeviceAllocator._maybe_init_pool()
         # a slice of the static memory plan's workspace: its bytes are the workspace's, reused in stream order
         if DeviceAllocator._plan_workspaces and DeviceAllocator._in_workspace(ptr):
+            DeviceAllocator._static_live.pop(ptr, None)      # S4b: its slice is free for the next placement
             return
         if DeviceAllocator._plan_trace is not None:
             row = DeviceAllocator._plan_trace_live.pop(ptr, None)

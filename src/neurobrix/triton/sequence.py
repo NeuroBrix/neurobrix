@@ -215,8 +215,16 @@ def _watermark_sample(path: str, op_idx: int, op, arena, deferred_bytes) -> None
     except Exception as e:                                   # said, never silent
         print(f"[LIVE_WATERMARK_TRACE error] {e}", flush=True)
 
-@dataclass(frozen=True)
 
+def _static_width(dtype) -> int:
+    """Bytes per element of a dtype name or NBXDtype as the static plan sizes an output (`_plan_static_begin`): the
+    float widths by name; anything unnamed sizes at 4 (fp32, the widest float the engine stores an activation in)."""
+    name = str(getattr(dtype, "name", dtype) or "").replace("torch.", "").lower()
+    return {"float16": 2, "bfloat16": 2, "half": 2, "float32": 4, "float": 4, "float64": 8, "int64": 8,
+            "int32": 4, "int8": 1, "uint8": 1, "bool": 1}.get(name, 4)
+
+
+@dataclass(frozen=True)
 class TensorSlot:
     """Reference to a tensor in the arena by index."""
     slot: int
@@ -3085,6 +3093,8 @@ class TritonSequence:
         """'record' or 'planned' for this run, or None (no static plan: NBX_STATIC_PLAN unset, a multi-device run)."""
         if os.environ.get("NBX_STATIC_PLAN") != "1" or self._is_multi_device:
             return None
+        if os.environ.get("NBX_STATIC_PLAN_MODE", "graph") == "graph":
+            return self._plan_static_begin()
         plans = self.__dict__.setdefault("_mem_plans", {})
         key = self._plan_key()
         self._plan_cur = key
@@ -3099,9 +3109,77 @@ class TritonSequence:
         DeviceAllocator.plan_record(self.device_idx)
         return "record"
 
+    def _plan_static_begin(self):
+        """S4b — the plan before the FIRST run, from the graph alone (no recording run): every op's outputs that die in
+        the run (the compiled liveness: the op that kills their slot; a protected slot — a weight, a kept input, a graph
+        output, a captured tensor — never dies and is left to the allocator), their element counts at the bound
+        symbols. The workspace is the most such bytes alive at once (`memory_plan.lower_bound`) at the widest width an
+        output may take (the traced one or the compute width, whichever is wider), capped at the device's largest
+        allocation; the allocator places each output as it is allocated (`DeviceAllocator.plan_static_begin`)."""
+        from neurobrix.core.prism.memory_plan import lower_bound
+        key = self._plan_key()
+        plans = self.__dict__.setdefault("_static_plans", {})
+        st = plans.get(key)
+        if st is None:
+            res = getattr(self, "_symbol_resolver", None)
+            tensors = self.dag.get("tensors", {}) or {}
+            dies = {}
+            for op_idx, op in enumerate(self._ops):
+                for sl in op.kill_slots:
+                    dies[sl] = op_idx
+            slot_to_tid = {sl: t for t, sl in self._tid_to_slot.items()}
+            cands, intervals = {}, []
+            for op_idx, op in enumerate(self._ops):
+                for sl in op.output_slots:
+                    last = dies.get(sl)
+                    if last is None or last < op_idx:
+                        continue
+                    meta = tensors.get(slot_to_tid.get(sl, ""), {}) or {}
+                    try:
+                        numel = 1
+                        for d in meta.get("shape") or []:
+                            numel *= int(res.resolve(d)) if res is not None else int(d)
+                    except Exception:  # noqa: BLE001 — an extent not bound here: that output is the allocator's
+                        continue
+                    width = max(_static_width(meta.get("dtype")), _static_width(getattr(self, "_compute_dtype", None)))
+                    cands.setdefault(op_idx, []).append([numel, last, False])
+                    intervals.append((op_idx, last, numel * width))
+            size = lower_bound(intervals)
+            st = plans[key] = {"cands": cands, "size": int(size)}
+            if os.environ.get("NBX_STATIC_PLAN_DIAG") == "1":
+                big = sorted(intervals, key=lambda t: -t[2])[:3]
+                print(f"[StaticPlan] {self.dag.get('component_name')}: {sum(len(v) for v in cands.values())} outputs "
+                      f"placed from the graph in a {size / 2**20:.0f} MB workspace (largest {big})", flush=True)
+        if not st["size"] or not st["cands"]:
+            return None
+        ws = self.__dict__.get("_plan_ws")
+        if ws is None or ws[0] != key:
+            self._plan_release_ws()
+            # ONE allocation: a device grants a single buffer only up to its largest (Metal's maxBufferLength) — a
+            # workspace the device refuses is halved until granted; what no longer fits goes to the pool
+            size = st["size"]
+            while True:
+                try:
+                    self._plan_ws = (key, DeviceAllocator.malloc_cuda(size), size)
+                    break
+                except Exception:  # noqa: BLE001 — the device's refusal of one buffer this large
+                    size //= 2
+                    if size < (256 << 20):
+                        return None
+            st["size"] = size
+        cands = {op: [[n, last, False] for n, last, _t in v] for op, v in st["cands"].items()}
+        DeviceAllocator.plan_static_begin(self.device_idx, self._plan_ws[1], st["size"], cands)
+        return "static"
+
     def _plan_end(self, ok: bool) -> None:
         mode, self._plan_mode = getattr(self, "_plan_mode", None), None
         if mode is None:
+            return
+        if mode == "static":
+            hits, miss = DeviceAllocator.plan_static_stop()
+            if os.environ.get("NBX_STATIC_PLAN_DIAG") == "1":
+                print(f"[StaticPlan] {self.dag.get('component_name')}: {hits} allocations placed in the workspace, "
+                      f"{miss} served by the pool", flush=True)
             return
         trace = DeviceAllocator._plan_trace
         DeviceAllocator.plan_stop()
@@ -3788,7 +3866,7 @@ class TritonSequence:
         _plan_on = getattr(self, "_plan_mode", None) is not None
         # a recording run frees what dies at the op it dies (the queue drained each op, a stream-ordered hand-back
         # under the pool): the recorded lifetimes are the tensors' own, never the queue's
-        _plan_rec = getattr(self, "_plan_mode", None) == "record"
+        _plan_rec = getattr(self, "_plan_mode", None) in ("record", "static")
         for op_idx, op in enumerate(self._ops):
             if _plan_on:
                 DeviceAllocator.plan_at_op(op_idx)
