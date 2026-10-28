@@ -22,6 +22,7 @@ from typing import Any, Dict, Tuple
 _SOURCE = "nbxtensor/dtype/dtypes.yml"
 _TABLE = Path(__file__).resolve().parent / "dtypes.yml"
 _TORCH_PREFIX = "torch."
+_KINDS = ("float", "int", "uint", "bool", "complex")
 
 
 @functools.lru_cache(maxsize=1)
@@ -51,6 +52,9 @@ def _tables() -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]], Dic
         if not isinstance(bits, int) or bits <= 0 or bits % 8:
             raise ValueError(f"ZERO FALLBACK: {_SOURCE} gives dtype {name!r} {bits!r} bits — a dense "
                              f"dtype is a whole number of bytes")
+        if entry.get("kind") not in _KINDS:
+            raise ValueError(f"ZERO FALLBACK: {_SOURCE} gives dtype {name!r} kind {entry.get('kind')!r} — one of "
+                             f"{', '.join(_KINDS)}")
     for name, entry in packed.items():
         for key in ("bits", "group_size", "scale_dtype", "min_dtype"):
             if key not in entry:
@@ -98,6 +102,11 @@ def known_dtypes() -> Tuple[str, ...]:
 def itemsize(dtype: Any) -> int:
     """Bytes per element of `dtype`, refused by name when the table does not carry it."""
     return _dense_entry(dtype)[1]["bits"] // 8
+
+
+def kind(dtype: Any) -> str:
+    """The class of `dtype`: float, int, uint, bool or complex (the table's `kind`)."""
+    return _dense_entry(dtype)[1]["kind"]
 
 
 def itemsize_table() -> Dict[str, int]:

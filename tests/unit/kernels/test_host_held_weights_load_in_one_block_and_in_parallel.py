@@ -11,7 +11,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from neurobrix.triton.weight_loader import _bf16_bits_to_half
+from nbxtensor.dtype.convert import bf16_bits_to_f16
+from neurobrix.triton.weight_loader import _split_across_workers
 
 
 def test_the_parallel_widening_is_the_old_formula_bit_for_bit():
@@ -19,7 +20,7 @@ def test_the_parallel_widening_is_the_old_formula_bit_for_bit():
     bits = rng.integers(0, 2 ** 16, size=3_000_001, dtype=np.uint64).astype(np.uint16)   # every class: nan, inf, subnormal
     bits[:4] = [0x7F80, 0xFF80, 0x7FC0, 0x0001]
     old = (bits.astype(np.uint32) << 16).view(np.float32).astype(np.float16)
-    new = _bf16_bits_to_half(bits)
+    new = _split_across_workers(bits, np.empty(bits.shape, dtype=np.float16), bf16_bits_to_f16)
     assert new.dtype == np.float16
     assert np.array_equal(old.view(np.uint16), new.reshape(-1).view(np.uint16))
 

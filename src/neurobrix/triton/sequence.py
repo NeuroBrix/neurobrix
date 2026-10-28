@@ -3700,7 +3700,7 @@ class TritonSequence:
         top half of an fp32) because numpy's 2-byte void carrier cannot be
         read as numbers.
         """
-        from neurobrix.kernels.nbx_tensor import bf16_carrier_to_float32
+        from nbxtensor.dtype.convert import bf16_bits_to_f32
         import numpy as _np_r
         raw_dir, _, raw_csv = spec.partition(":")
         filters = [f for f in raw_csv.split(",") if f]
@@ -3718,7 +3718,8 @@ class TritonSequence:
             if os.path.exists(fn):
                 continue
             try:
-                _np_r.save(fn, bf16_carrier_to_float32(tensor.numpy()))
+                _host = tensor.numpy()
+                _np_r.save(fn, bf16_bits_to_f32(_host) if tensor.nbx_dtype == NBXDtype.bfloat16 else _host)
                 print(f"[NBX_DUMP_RAW triton] {tid} {list(tensor.shape)} "
                       f"-> {fn}", flush=True)
             except Exception as e:

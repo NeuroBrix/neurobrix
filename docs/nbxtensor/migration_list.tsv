@@ -2,8 +2,6 @@
 triton/arena.py	*	memory
 triton/cpu_backend.py	*	backend/cpu
 triton/device_transfer.py	*	memory/transfer
-triton/dtype.py	promote_func	dtype/promotion
-triton/expert_store.py	_numel	shape (Tensor.numel)
 triton/launcher_contract.py	*	backend
 triton/memory_pool.py	*	memory
 triton/metal_backend.py	*	backend/metal
@@ -13,7 +11,6 @@ triton/replay.py	malloc	memory (one allocator family)
 triton/replay.py	malloc_cuda	memory (one allocator family)
 triton/replay_graph.py	*	backend: graph capture primitive (the engine keeps FrozenPlan)
 triton/triton_ext_driver.py	*	backend/metal
-triton/weight_loader.py	_bf16_bits_to_half	dtype/convert
 triton/weight_loader.py	_target_nbytes	dtype (itemsize x numel)
 triton/weight_loader.py	_bf16_to_fp16_inplace	dtype/convert
 triton/weight_loader.py	_load_to_pinned_cpu	memory/host + io/safetensors
@@ -43,5 +40,4 @@ core/prism/solver.py	_arena_over_allocation	M3: memory/ops cost declaration
 core/prism/solver.py	_store_arena_over_allocation	M3: memory/ops cost declaration
 core/prism/solver.py	_arena_door	M3: memory/ops cost declaration
 core/prism/solver.py	_scan_bf16_fp16_safety	dtype/convert (range safety; the policy stays in the DtypeEngine)
-core/prism/work.py	_numel	shape (Tensor.numel)
 kernels/ops/	*	ops: every kernel file
