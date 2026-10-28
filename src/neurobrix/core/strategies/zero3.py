@@ -287,6 +287,25 @@ class Zero3Strategy(ExecutionStrategy):
         if not self.exec_device.startswith(_ZERO3_GPU_PREFIXES):
             return
         self._install(component_name, executor)
+        self._prepare_expert_store(component_name, executor)
+
+    def _prepare_expert_store(self, component_name: str, executor: Any) -> None:
+        """An expert store's setup — the sequence the engine runs compiled, the store built, the blocks other cards
+        hold copied there, the dense part primed — is the component becoming ready: done HERE, inside the weight
+        load (`RuntimeExecutor._ensure_weights_loaded`, a load span), never at the first op of the first request.
+        Qwen3-30B-A3B triton on 4 V100 (2026-10-28): 7.7 s of copies onto the cards and 3.4 s of compile sat in the
+        19 s time to first token. A sequence that does not exist before its first pass (triton-sequential's per-pass
+        weight view) is built there, as before."""
+        alloc = self.context.allocations.get(component_name)
+        if not (isinstance(alloc, dict) and alloc.get('strategy') == "expert_store"):
+            return
+        if self._ratchet.get(component_name) is not None:
+            return
+        if getattr(executor, 'mode', None) == "triton" and hasattr(executor, '_ensure_triton_compiled'):
+            executor._ensure_triton_compiled(executor._triton_device_index())
+        state = self._build_ratchet_state(component_name, executor)
+        if state is not None and not state['primed']:
+            self._ratchet_prime(state, component_name)
 
     # ------------------------------------------------------------------
     # Ratchet state + install
