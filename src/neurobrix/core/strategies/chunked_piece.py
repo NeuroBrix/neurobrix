@@ -332,6 +332,12 @@ class ChunkedPiece:
             finally:
                 ex.unload_weights()
         self._last_run = {t: done[t] for t in plan.outputs if t in done}
+        if HOST_SLAB[1] > 0:
+            # the rate this process measured, handed to the first-launch writer (a generated profile, once)
+            from neurobrix.core.prism import autodetect as _ad
+            if _ad.note_host_slab_rate(getattr(_ad, "ACTIVE_HARDWARE_ID", None), int(HOST_SLAB[0]),
+                                       float(HOST_SLAB[1]), f"{self._nbx[1]} sliced stretches"):
+                HOST_SLAB[0], HOST_SLAB[1] = 0, 0.0
         self._norm_stats = {}
         meta = self._dag.get("tensors") or {}
         result = {}

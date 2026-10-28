@@ -2637,6 +2637,41 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None) -> dic
     return added
 
 
+#: below this many bytes a sliced run's host cuts say too little to write the rate (the loader's own floor, in kind)
+HOST_SLAB_MIN_BYTES = 1 << 30
+
+
+def note_host_slab_rate(hardware_id: Optional[str], moved_bytes: int, seconds: float, what: str) -> bool:
+    """The engine measured ITSELF the host slab rate inside a sliced run (`chunked_piece.HOST_SLAB`: the bytes a
+    host-read stretch cuts from host tensors and assembles, over their time) — the rate the time estimate prices such a
+    stretch at (`host_slab_gbps`); a probe outside the run does not reproduce it (23-76 GB/s alone vs 3.06 GB/s inside
+    mochi's sliced run on the M4 Pro, 2026-10-28). Written into the host_measured block of a GENERATED profile only,
+    where neither it nor the vendor file states the rate, once `HOST_SLAB_MIN_BYTES` moved. True when written."""
+    if not hardware_id or not str(hardware_id).startswith("default") or seconds <= 0 \
+            or moved_bytes < HOST_SLAB_MIN_BYTES:
+        return False
+    path = HARDWARE_DIR / f"{hardware_id}.yml"
+    if not path.exists():
+        return False
+    from neurobrix.core.prism.loader import _vendor_block
+    import time as _time
+    data = yaml.safe_load(path.read_text()) or {}
+    devices = data.get("devices") or []
+    host = dict(data.get("host_measured") or {})
+    vendor_host = (_vendor_block(devices[0], "host_measured") or {}) if devices else {}
+    if host.get("host_slab_gbps") is not None or vendor_host.get("host_slab_gbps") is not None:
+        return False
+    gbps = round(moved_bytes / seconds / 1e9, 3)
+    host["host_slab_gbps"] = gbps
+    host.setdefault("host_slab_source", f"measured by the engine itself in a sliced run "
+                                       f"{_time.strftime('%Y-%m-%d %H:%M:%S %Z')}, {what}, "
+                                       f"{moved_bytes / 1e9:.2f} GB in {seconds:.2f} s")
+    data["host_measured"] = host
+    _write_profile_atomically(path, data)
+    print(f"   [Auto-detect] the engine measured its host slab rate: {gbps} GB/s, written into {path.name}")
+    return True
+
+
 def note_loader_rate(hardware_id: Optional[str], engine: str, stored: str, where: str, landed_bytes: int, seconds: float,
                      what: str) -> bool:
     """The engine's loader measured ITSELF at a real load (`GraphExecutor`'s loaders): `landed_bytes` of weights stored
