@@ -26,7 +26,14 @@ from neurobrix.core.prism import InputConfig, PrismSolver
 from neurobrix.core.prism.solver import PlanNotComputable, _graph_constant_bytes
 from neurobrix.nbx import NBXContainer
 from tests.unit.prism._pinned_machine import (APPLE_M4_PRO, V100_16GB, container_root, no_door,
-                                              pin_host, pin_shared_card, profile)
+                                              pin_host, pin_no_calibration, pin_shared_card, profile)
+
+
+@pytest.fixture(autouse=True)
+def _no_machine_calibration(monkeypatch):
+    """Every cell plans without the machine's calibration store (`pin_no_calibration`): a record there moves the
+    compiled widths, and this file went red on the rack only (2026-10-28)."""
+    pin_no_calibration(monkeypatch)
 
 MB = 1024 * 1024
 LLMS = ["DeepSeek-Coder-V2-Lite-Instruct", "Qwen3-Coder-30B-A3B-Instruct"]
@@ -175,6 +182,11 @@ def test_after_the_fp32_fallback_the_reserve_and_the_plan_read_fp32(monkeypatch)
     the dtype that just failed, as they must."""
     no_door(monkeypatch)
     pin_host(monkeypatch, 24576, 18186, "the Mac, idle")
+    # the planning process's own resident memory, pinned: it enters the plan's host side, and after the file's earlier
+    # cells loaded their containers the rack's test process held enough to fire the execution door — a busy re-plan
+    # this stub of the fallback (it sets no dtype) was never meant to reach; red in file order on the rack only
+    import neurobrix.core.prism.host_footprint as _HF
+    monkeypatch.setattr(_HF, "process_footprint_now", lambda: 200 << 20)
     s = PrismSolver()
     calls = {"n": 0}
     real_eval = s._evaluate_all_strategies
