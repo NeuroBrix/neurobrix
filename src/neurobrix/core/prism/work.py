@@ -15,7 +15,7 @@ EXECUTED at (`core.prism.runtime_widths`) replace the traced ones where the call
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Collection, Dict, List, Mapping, Optional
 
 _PRODUCTS = frozenset({"aten::mm", "aten::addmm", "aten::bmm", "aten::baddbmm", "aten::matmul", "aten::linear"})
 _CONVS = frozenset({"aten::convolution", "aten::_convolution", "aten::conv1d", "aten::conv2d", "aten::conv3d"})
@@ -84,9 +84,9 @@ def op_flops(kind: str, ins: List[List[int]], outs: List[List[int]], attrs: Mapp
 
 
 def component_work(profiler, symbol_map: Dict[str, int], widths: Optional[Mapping[str, int]] = None,
-                   default_dtype_bytes: int = 2) -> Work:
+                   default_dtype_bytes: int = 2, ops: Optional[Collection[str]] = None) -> Work:
     """The work of one run of the profiler's graph at `symbol_map`. `widths`: {tensor id: bytes per element} as the
-    engine executes it, where the caller has it."""
+    engine executes it, where the caller has it. `ops`: only these op uids (a stretch of the graph), else every op."""
     tensors = profiler.tensors
     shapes: Dict[str, List[int]] = {}
 
@@ -110,6 +110,8 @@ def component_work(profiler, symbol_map: Dict[str, int], widths: Optional[Mappin
     weights_seen = set()
     aliases = set()                                          # views of a weight: the weight, read once already
     for uid in profiler.execution_order:
+        if ops is not None and uid not in ops:
+            continue
         op = profiler.ops.get(uid) or {}
         ins = [t for t in (op.get("input_tensor_ids") or []) if t in tensors]
         outs = [t for t in (op.get("output_tensor_ids") or []) if t in tensors]

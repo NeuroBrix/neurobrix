@@ -1110,7 +1110,11 @@ class _Region:
     def record(self) -> Dict[str, Any]:
         return {"first_op": self.first_op, "last_op": self.last_op, "symbol": self.symbol,
                 "unit": self.plan.unit, "slice": self.slice, "count": self.count,
-                "passes": len(self.plan.passes), "peak_bytes": self.peak_bytes, "host_reads": self.host_reads}
+                "passes": len(self.plan.passes), "peak_bytes": self.peak_bytes, "host_reads": self.host_reads,
+                # what each slice recomputes beside the rows it keeps, and the norms read whole once: the time the
+                # slicing adds (`PrismSolver._estimate_times`)
+                "margin": int(self.plan.margin), "cyclic": bool(self.plan.cyclic),
+                "norm_inputs": sorted(self.plan.norms.values())}
 
 
 def rewire_arg(arg: Any, rewire: Dict[str, str]) -> Any:
