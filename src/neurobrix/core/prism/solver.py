@@ -2993,6 +2993,24 @@ class PrismSolver:
             if _why:
                 plan.execution_door = f"{_d.device_string}: {_why}"
                 break
+        # The cards an expert store holds whole blocks on (`_spread_experts`) are not the plan's devices, and hold its
+        # blocks' experts and the live activations of their MoE ops: the same door, card by card.
+        _cards = {c: v for _a in plan.components.values() for c, v in (_a.expert_cards or {}).items()}
+        if _cards and not plan.execution_door:
+            _by = {d.device_string: d for d in self._prepare_devices(profile)}
+            for _c, _v in sorted(_cards.items()):
+                _d = _by.get(_c)
+                if _d is None or getattr(_d, "live_free_mb", None) is None:
+                    continue
+                _owner = next(n for n, a in plan.components.items() if _c in (a.expert_cards or {}))
+                _planned = float(_v["cache_mb"]) + self._live_activation_mb(plan.component_memory[_owner])
+                _r = _DR(kind="device", capacity_mb=float(_d.capacity_mb), free_mb=float(_d.live_free_mb),
+                         unified=False, held_by_others_mb=float(getattr(_d, "external_used_mb", 0.0) or 0.0),
+                         measured=True, source=str(getattr(_d, "budget_note", "") or ""))
+                _why = _door(_r, _planned)
+                if _why:
+                    plan.execution_door = f"{_c} (experts of blocks {_v['blocks']}): {_why}"
+                    break
         _from_rung = getattr(self, "_op_tiling_from_rung", None)
         if _from_rung:
             plan.runtime_op_tiling = {**(plan.runtime_op_tiling or {}), **_from_rung}

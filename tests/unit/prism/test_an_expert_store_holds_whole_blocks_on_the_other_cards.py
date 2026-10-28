@@ -56,3 +56,24 @@ def test_the_cards_travel_with_the_plan(tmp_path):
                          strategy="lazy_sequential")
     plan.save(tmp_path / "plan.json")
     assert ExecutionPlan.load(tmp_path / "plan.json").components["model"].expert_cards == cards
+
+
+def test_a_card_with_no_room_for_one_block_takes_none(monkeypatch):
+    """Card 3 read with 1 000 MB free NOW, under one block's experts (1 152 MB at fp16) (another process holds the rest): the facts' plan puts blocks there, the
+    execution door sees it (an expert card is not one of the plan's devices) and the busy re-plan — on what is free
+    now — gives card 3 no block while the others still hold theirs (at 1 500 MB free it takes one block, 1 152 MB)."""
+    import neurobrix.core.prism.solver as solver_mod
+    from neurobrix.core.prism.memory_budget import DeviceReading
+    from neurobrix.kernels.nbx_tensor import DeviceAllocator
+    no_door(monkeypatch)
+    pin_host(monkeypatch, 257530, 200000, "an idle rack host")
+    free = {0: 15845, 1: 15845, 2: 15845, 3: 1000}
+    monkeypatch.setattr(solver_mod, "read_device_sharing", lambda i: DeviceReading(
+        kind="device", capacity_mb=16151, free_mb=free[i], own_context_mb=306, measured=True,
+        source="injected: card 3 held by another process"))
+    monkeypatch.setattr(DeviceAllocator, "free_memory_mb", staticmethod(lambda i: free[i]))
+    c, ic = _input_config(MODEL, "compiled")
+    p = PrismSolver().solve_smart(c, load_profile("c4140-4xv100-16GB-nvlink"), ic, mode="compiled")
+    assert p.busy_replan, "the facts' plan put blocks on the busy card and the door did not see it"
+    cards = p.components["model"].expert_cards
+    assert "cuda:3" not in cards and len(cards) >= 2, cards
