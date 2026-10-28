@@ -95,6 +95,9 @@ class Partition:
     #: the device its weights, the inputs it reads and what it produces; the strategy parks every other
     #: value (`LayerStreamingStrategy._run_pieces`). False: every value stays on the device.
     swapped: bool = False
+    #: The pieces held loaded BETWEEN the component's runs (`LayerPartitioner.hybrid`), by index: loaded at its first
+    #: run, released with the component. Every other piece streams through the window. Empty: every piece streams.
+    resident: List[int] = field(default_factory=list)
 
     @property
     def fits(self) -> bool:
@@ -341,6 +344,61 @@ class LayerPartitioner:
                     f"to make room refuses: " + again.refusal)
                 return again
             part = again
+
+    def hybrid(self, budget_bytes: int, max_arena_bytes: Optional[int] = None,
+               parked_cap_bytes: Optional[float] = None,
+               pool_fit_slack: Optional[float] = None, max_pieces: int = 64) -> Partition:
+        """The cut for a component the flow RE-ENTERS (a language model per token, a denoiser per step): the pieces the
+        budget holds beside the streaming window stay loaded between runs (`Partition.resident`), and only the rest is
+        reloaded at every run. Of the cuts `_greedy` takes at the plain cut's budget and at each halving of its weight
+        part down to the cut's floor, the one that reloads the fewest bytes per run (then the fewest pieces); the plain
+        cut, every piece streamed, when none holds a piece. At the worst moment the device holds the held pieces, the
+        largest streamed piece — or a streamed change with the outgoing arena parked (`_change_peak`) — and the
+        activations' peak, all within `budget_bytes`. Janus-Pro-7B's language model on the busy Mac (16 732 MB free):
+        two pieces both re-read per token, 716 reloads in 38 min, where 190 MB was missing (2026-10-27).
+        A cut that runs stretches in slices or parks values on the host is kept as it is."""
+        plain = self.partition(budget_bytes, max_arena_bytes, parked_cap_bytes, pool_fit_slack)
+        if not plain.fits or len(plain.segments) < 2 or plain.chunks or plain.swapped:
+            return plain
+        best, best_streamed = plain, plain.total_weight_bytes
+        floor = self._cut_floor()
+        cut = budget_bytes
+        while True:
+            live = plain.peak_live_bytes
+            cut = live + (cut - live) // 2
+            if cut < floor:
+                break
+            part = self._greedy(cut, max_arena_bytes)
+            if not part.fits or part.chunks or part.swapped or len(part.segments) > max_pieces:
+                break
+            held, peak = self._held_pieces(part, budget_bytes, parked_cap_bytes, pool_fit_slack)
+            streamed = part.total_weight_bytes - sum(part.segments[i].weight_bytes for i in held)
+            if held and (streamed < best_streamed
+                         or (streamed == best_streamed and len(part.segments) < len(best.segments))):
+                part.resident, part.peak_resident_bytes = sorted(held), peak
+                best, best_streamed = part, streamed
+        self._regions_used = None
+        return best
+
+    def _held_pieces(self, part: Partition, budget_bytes: int, parked_cap_bytes: Optional[float],
+                     pool_fit_slack: Optional[float]) -> Tuple[Set[int], int]:
+        """The pieces of `part` held between runs — the largest first, each while the device still holds the held
+        ones, the streamed window and the activations within `budget_bytes` — and that peak."""
+        segs = part.segments
+        live = part.peak_live_bytes
+
+        def peak(held: Set[int]) -> int:
+            streamed = [s for i, s in enumerate(segs) if i not in held]
+            window = (max(s.weight_bytes for s in streamed) + live) if streamed else live
+            if parked_cap_bytes is not None and len(streamed) > 1:
+                window = max(window, self._change_peak(streamed, parked_cap_bytes, pool_fit_slack))
+            return sum(segs[i].weight_bytes for i in held) + window
+
+        held: Set[int] = set()
+        for i in sorted(range(len(segs)), key=lambda i: -segs[i].weight_bytes):
+            if peak(held | {i}) <= budget_bytes:
+                held.add(i)
+        return held, peak(held)
 
     def _cut_floor(self) -> int:
         """The lowest cut the greedy can take: the activations' peak (reserved in every piece) plus

@@ -436,6 +436,9 @@ class ExecutionPlan:
     # The streamed components whose values between pieces wait on the host (`Partition.swapped`):
     # the strategy parks every value the next piece does not read (`LayerStreamingStrategy._run_pieces`).
     layer_stream_swapped: List[str] = field(default_factory=list)
+    # component -> the indices of its pieces held loaded between the component's runs (`Partition.resident`,
+    # `LayerPartitioner.hybrid`): a re-entered component streams only the pieces the rung cannot hold beside the window.
+    layer_stream_resident: Dict[str, List[int]] = field(default_factory=dict)
     # Op-level tiling — per-component plan emitted when a single op's
     # output+workspace exceeds the assigned GPU's safe VRAM budget. Picked
     # up by RuntimeExecutor to wire op_uid interceptors on the component's
@@ -2804,6 +2807,14 @@ class PrismSolver:
             plan.layer_stream_chunks = {name: [dict(c) for c in part.chunks]
                                         for name, part in _parts.items() if part.chunks}
             plan.layer_stream_swapped = sorted(name for name, part in _parts.items() if part.swapped)
+            plan.layer_stream_resident = {name: list(part.resident) for name, part in _parts.items() if part.resident}
+            for _rn, _held in plan.layer_stream_resident.items():
+                _p = _parts[_rn]
+                _kept = sum(_p.segments[i].weight_bytes for i in _held)
+                plan.selection_reason = (
+                    f"{plan.selection_reason} — {_rn}: {len(_held)} of {len(_p.segments)} pieces "
+                    f"({_kept / 2 ** 20:,.0f} MB) held between runs, "
+                    f"{(_p.total_weight_bytes - _kept) / 2 ** 20:,.0f} MB streamed per run")
             if plan.layer_stream_swapped:
                 plan.selection_reason = (
                     f"{plan.selection_reason} — {', '.join(plan.layer_stream_swapped)}: the values between "
@@ -3823,6 +3834,8 @@ class PrismSolver:
             comp_dtype_str = (component_dtypes or {}).get(
                 comp.name, target_dtype_str)
             dtype_mult = compute_dtype_factor(source_dtype, comp_dtype_str)
+            # the same stored -> executed factor sizes this component's streamed pieces (`_try_layer_streaming_against`)
+            self.__dict__.setdefault("_weight_dtype_mult", {})[comp.name] = dtype_mult
             if os.environ.get("NBX_DTYPE_RESOLVE_DIAG"):
                 # Default-off diagnostic (rules/debugging-and-known-issues.md): the two
                 # strings that decide the weight multiplier, printed where they are USED.
@@ -7384,12 +7397,19 @@ class PrismSolver:
                         if gbps:
                             for prefix in ("cuda", "mps", "hip", "xpu"):
                                 links[(f"{prefix}:{a}", f"{prefix}:{b}")] = float(gbps) * 1e9
+        # the share of a streamed component's weights the layer_streaming candidate holds between runs (`Partition.resident`):
+        # loaded once, never reloaded — as a fraction of its stored bytes, applied to the work's weight bytes
+        held = {}
+        for _cn, _p in (getattr(self, "_layer_stream_partitions", None) or {}).items():
+            if _p.resident and _p.total_weight_bytes:
+                held[_cn] = sum(_p.segments[i].weight_bytes for i in _p.resident) / _p.total_weight_bytes
         for _s, name, allocs, _d in ranked:
             try:
                 from neurobrix.core.prism.host_footprint import engine_of
                 out[name] = float(TE.plan_seconds(name, allocs, works, runs, devices, host, str(dtype), prompt=prompt,
                                                   links=links, engine=engine_of(getattr(self, "_mode", "compiled")),
-                                                  stored=self._stored_dtype_major(container)))
+                                                  stored=self._stored_dtype_major(container),
+                                                  held=held if name == "layer_streaming" else None))
             except TE.MissingFact as exc:
                 out[name] = f"not estimated: {exc}"
         return out
@@ -8153,7 +8173,12 @@ class PrismSolver:
         if not graphs:
             return _decline("no component carries a graph to cut")
 
-        sizes_by_comp = self._weight_sizes_by_component(container)
+        # A piece holds its weights as the engine LANDS them, the stored bytes times the factor the component's weights
+        # are priced at (`_compute_memory`'s `dtype_mult`): mochi-1-preview's text encoder, stored F32 and run in fp16,
+        # was cut against its stored bytes, twice what its pieces hold — three pieces where two hold (2026-10-28).
+        _wmult = self.__dict__.get("_weight_dtype_mult") or {}
+        sizes_by_comp = {name: ({k: int(v * _wmult[name]) for k, v in sizes.items()} if name in _wmult else sizes)
+                         for name, sizes in self._weight_sizes_by_component(container).items()}
 
         allocations: Dict[str, Tuple[str, Dict[str, str]]] = {}
         partitions = {}
@@ -8458,12 +8483,20 @@ class PrismSolver:
                         f"'{comp_name}' cannot be cut into segments of {segment_budget / _mb:.0f} MB: "
                         + part.refusal, crowded=part.peak_live_bytes < budget_bytes - constant_bytes,
                         comp=comp_name)
+                if comp_name in _reentered:
+                    # Re-entered every token or step: the pieces the rung holds beside the window stay loaded and
+                    # only the rest is reloaded per run (S5, 2026-10-27) — a cut that holds none is the plain one.
+                    _held = _cutter.hybrid(segment_budget, max_arena_bytes=_arena_cap,
+                                           parked_cap_bytes=_parked_cap, pool_fit_slack=_fit_slack)
+                    if _held.fits and _held.resident:
+                        part = _held
                 partitions[comp_name] = part
                 fingerprints[comp_name] = graph_fingerprint(graph)
                 orders[comp_name] = list(graph.get("execution_order") or [])
             return (partitions, fingerprints, moe_declared, resident_beside, constant_bytes,
                     flow_read_bytes, kv_bytes, kv_in_window), None, (False, None)
 
+        _reentered = self._reentered_components(container)
         promoted: List[str] = []
         unstreamable: set = set()      # promoted, then found unable to stream: kept whole again
         _sized = self.__dict__.get("_request_sizing", {})
@@ -8532,6 +8565,25 @@ class PrismSolver:
         self._layer_stream_window_bytes = int(resident_beside + constant_bytes + flow_read_bytes + kv_bytes
                                               + max(p_.peak_resident_bytes for p_ in partitions.values()))
         return allocations, devices
+
+    def _reentered_components(self, container) -> set:
+        """The components the request runs once per generated TOKEN (`time_estimate.uses_per_request`: the flow's
+        language model and head, an autoregressive stage) — the ones whose pieces are held between runs: a few hundred MB
+        short of the rung, every piece reloaded per token cost Janus-Pro-7B an hour for a 41 s plan. A denoiser run per
+        step is not held yet: on Metal mochi-1-preview's transformer held in 61 pieces saved 6 % of the estimate and
+        entered its VAE with 1.2 GB more driver memory than the plain cut, and the VAE's stream ran out of memory (the
+        Mac, 2026-10-27 23:47) — the per-piece cost is not measured, so the plain cut stays where the gain is a few
+        steps. Empty when the flow cannot say (a generation with no token count)."""
+        from neurobrix.core.prism import time_estimate as TE
+        ic = getattr(self, "_input_config", None)
+        tokens = getattr(ic, "max_tokens", None) or (self._read_defaults(container) or {}).get("max_tokens")
+        try:
+            uses = TE.uses_per_request(self._flow_topology(container).get("flow") or {}, getattr(ic, "steps", None),
+                                       tokens, components=[c.name for c in (getattr(self, "_neural_components", [])
+                                                                             or [])])
+        except TE.MissingFact:
+            return set()
+        return {name for name, (kind, _n) in uses.items() if kind == "token"}
 
     def _output_bytes(self, container) -> int:
         """What the run's output boundary holds on the host: the largest graph output among the
@@ -9545,6 +9597,8 @@ def plan_record(plan: "ExecutionPlan") -> dict:
         rec["layer_stream_chunks"] = {k: [dict(c) for c in v] for k, v in plan.layer_stream_chunks.items()}
     if getattr(plan, "layer_stream_swapped", None):
         rec["layer_stream_swapped"] = list(plan.layer_stream_swapped)
+    if getattr(plan, "layer_stream_resident", None):
+        rec["layer_stream_resident"] = {k: list(v) for k, v in plan.layer_stream_resident.items()}
     if plan.host_footprint:
         rec["host_footprint"] = dict(plan.host_footprint)
     if plan.unified_rungs_tried:

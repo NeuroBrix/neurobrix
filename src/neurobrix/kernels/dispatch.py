@@ -153,10 +153,54 @@ def _resolve_view_shape(x, shape):
     return shape
 
 
+def _view_strides(old_shape, old_strides, new_shape):
+    """The strides `new_shape` takes as a VIEW of a tensor laid out as (`old_shape`, `old_strides`), or None when no
+    view exists — ATen's own rule (aten/src/ATen/TensorUtils.cpp `computeStride`): the old dims are walked in chunks of
+    contiguous runs, and a new dim must fall inside one chunk."""
+    numel = 1
+    for d in old_shape:
+        numel *= d
+    if numel == 0 or not old_shape:
+        return None
+    new_strides = [0] * len(new_shape)
+    view_d = len(new_shape) - 1
+    chunk_base = old_strides[-1]
+    tensor_numel = view_numel = 1
+    for tensor_d in range(len(old_shape) - 1, -1, -1):
+        tensor_numel *= old_shape[tensor_d]
+        if tensor_d == 0 or (old_shape[tensor_d - 1] != 1
+                             and old_strides[tensor_d - 1] != tensor_numel * chunk_base):
+            while view_d >= 0 and (view_numel < tensor_numel or new_shape[view_d] == 1):
+                new_strides[view_d] = view_numel * chunk_base
+                view_numel *= new_shape[view_d]
+                view_d -= 1
+            if view_numel != tensor_numel:
+                return None
+            if tensor_d > 0:
+                chunk_base = old_strides[tensor_d - 1]
+                tensor_numel = view_numel = 1
+    return new_strides if view_d == -1 else None
+
+
 def _meta_view(x, shape):
+    """The graph's aten.view: a VIEW whenever ATen's would be one (`_view_strides`), a strided input included — the
+    graph was traced under ATen, where this op copies nothing. `NBXTensor.view` copies a non-contiguous input, and
+    mochi-1-preview's VAE held a 3 GB copy per permute -> view the graph never priced (8 GB rung, 2026-10-28)."""
     if isinstance(shape, (list, tuple)):
-        return x.view(*_resolve_view_shape(x, shape))
-    return x.view(shape)
+        shape = tuple(_resolve_view_shape(x, shape))
+    else:
+        shape = (shape,)
+    if not x.is_contiguous():
+        if -1 in shape:
+            known = 1
+            for s in shape:
+                if s != -1:
+                    known *= s
+            shape = tuple(x.numel() // known if s == -1 else s for s in shape)
+        strides = _view_strides(tuple(x.shape), tuple(x.stride()), shape)
+        if strides is not None:
+            return x.as_strided(shape, tuple(strides))
+    return x.view(*shape)
 
 def _meta_reshape(x, shape):
     if isinstance(shape, (list, tuple)):

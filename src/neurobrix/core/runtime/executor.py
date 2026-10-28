@@ -40,7 +40,8 @@ from neurobrix.core.runtime.tensor_compat import is_tensor as _is_tensor, is_tor
 
 from neurobrix.core.prism.structure import names_accelerator as _names_accelerator
 from neurobrix.core.prism.host_footprint import engine_of
-from neurobrix.core.runtime.torch_allocator import configure_torch_allocator, configure_memory_fraction
+from neurobrix.core.runtime.torch_allocator import (configure_torch_allocator, configure_memory_fraction,
+                                                    bound_to_imposed_rung)
 from neurobrix.core.runtime.phase_trace import load_span
 
 
@@ -288,7 +289,7 @@ class RuntimeExecutor:
         if engine_of(self.mode) == "compiled":
             # before any executor loads a weight (core/runtime/torch_allocator.py)
             configure_torch_allocator(self.plan)
-            configure_memory_fraction(self.plan)
+            bound_to_imposed_rung(self.plan, declared=configure_memory_fraction(self.plan))
         self._setup_modules()
         self._setup_executors()
         self._init_strategy()
@@ -1128,6 +1129,8 @@ class RuntimeExecutor:
                 getattr(self.plan, "layer_stream_chunks", None) or {}),
             layer_swapped=frozenset(
                 getattr(self.plan, "layer_stream_swapped", None) or ()),
+            layer_resident={k: frozenset(v) for k, v in
+                            (getattr(self.plan, "layer_stream_resident", None) or {}).items()},
             mode=self.mode,
         )
 
