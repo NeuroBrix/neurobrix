@@ -81,6 +81,11 @@ def itemsize(dtype: Any) -> int:
     return _dense_entry(dtype)[1]["bits"] // 8
 
 
+def kind(dtype: Any) -> str:
+    """The class of `dtype`: float, int, uint, bool or complex (the table's `kind`)."""
+    return _dense_entry(dtype)[1]["kind"]
+
+
 def itemsize_table() -> Dict[str, int]:
     """{name: bytes per element} over every dense dtype (a copy: the caller may not edit the table)."""
     return {name: entry["bits"] // 8 for name, entry in _tables()[0].items()}
