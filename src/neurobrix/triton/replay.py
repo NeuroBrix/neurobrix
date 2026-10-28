@@ -166,6 +166,10 @@ _SETDEV = "d"     # (device_idx,) — the card the following actions run on.
                   # replay runs every recorded launch on whatever card happens
                   # to be current: silently wrong, not an error. One of the two
                   # reasons multi-device was locked out of replay.
+_SYNC = "y"       # (device_idx,) — a device synchronisation the recorded run made (`transfer_tensor` waits for the
+                  # source card before a peer copy: the copy is not ordered after another card's kernels). Replayed
+                  # without it, a held expert's card read a buffer still being written: error 700 that
+                  # CUDA_LAUNCH_BLOCKING hid (Qwen3-30B-A3B tail replay, 2026-10-28).
 _H2D = "h"        # (dst, host_snapshot: bytes) — the recorded host
                   # source is transient (probe 5: a dangling 16-B host
                   # staging pointer at replay); the plan owns a byte
@@ -754,6 +758,15 @@ def _install_seams() -> None:
 
     DeviceAllocator.memset_cuda = staticmethod(memset_cuda)
 
+    orig_sync = DeviceAllocator.sync_device
+
+    def sync_device(*a, **kw):
+        if STATE.recording:
+            STATE.records.append((_SYNC, (int(DeviceAllocator.get_device()),)))
+        return orig_sync(*a, **kw)
+
+    DeviceAllocator.sync_device = staticmethod(sync_device)
+
     orig_item = NBXTensor.item
 
     def item(self):
@@ -772,13 +785,14 @@ def _install_seams() -> None:
 class FrozenPlan:
     __slots__ = ("records", "slab", "arena_snapshot", "frozen_inputs",
                  "launches", "actions", "output_slots", "scan_limit",
-                 "graph", "graph_disabled")
+                 "graph", "graph_disabled", "extra_scan", "other_slabs")
 
     def __init__(self, records: List[Tuple[str, tuple]],
                  slab: SlabAllocator,
                  arena_list: List[Optional[NBXTensor]],
                  input_slots: Tuple[int, ...],
-                 scan_limit: Optional[int] = None) -> None:
+                 scan_limit: Optional[int] = None,
+                 extra_scan: Tuple[int, ...] = ()) -> None:
         self.records = records
         self.slab = slab  # strong ref pins the slab for the plan's life
         self.arena_snapshot = list(arena_list)
@@ -802,6 +816,12 @@ class FrozenPlan:
         # source).
         self.scan_limit = (len(arena_list) if scan_limit is None
                           else scan_limit)
+        # Intermediate slots a plan READS that it does not produce: a tail recorded after a head that runs directly
+        # (`TritonSequence._run_expert_tail`) reads the head's outputs, which land at new addresses every step — copied
+        # into the frozen buffers like an input.
+        self.extra_scan: Tuple[int, ...] = tuple(s for s in extra_scan if s >= self.scan_limit)
+        # the slabs of the OTHER cards the plan allocated on (held experts' cards): pinned for the plan's life
+        self.other_slabs: Dict[int, "SlabAllocator"] = {}
         # Phase 4b: lazily captured CUDA graph of the action list
         # (opt-in NBX_REPLAY_GRAPH=1, A/B-gated adoption). A capture
         # failure disables the graph for this bucket only — direct
@@ -847,6 +867,21 @@ class FrozenPlan:
                     f"{getattr(new, '_device_idx', '?')} frozen_ptr="
                     f"{frozen.data_ptr():#x} new_ptr={new.data_ptr():#x}"
                 ) from e
+        for slot in self.extra_scan:
+            frozen, new = self.arena_snapshot[slot], arena._slots[slot]
+            if frozen is None or new is None or new is frozen:
+                continue
+            if (tuple(new.shape) != tuple(frozen.shape)
+                    or new.nbx_dtype != frozen.nbx_dtype):
+                raise RuntimeError(
+                    f"ZERO FALLBACK: replay boundary slot {slot}: {tuple(new.shape)}/{new.nbx_dtype} vs frozen "
+                    f"{tuple(frozen.shape)}/{frozen.nbx_dtype} — the bucket signature should have caught this")
+            _scan_copied += 1
+            DeviceAllocator.set_device(frozen._device_idx)
+            if new.is_contiguous() and frozen.is_contiguous():
+                DeviceAllocator.memcpy(frozen.data_ptr(), new.data_ptr(), frozen._nbytes, 3)
+            else:
+                frozen.copy_(new)       # a view on either side: copied element by element, its layout kept
         if os.environ.get("NBX_REPLAY_GRAPH_DUMP") == "1":
             import ctypes as _cs
             vals = []
@@ -964,6 +999,13 @@ class FrozenPlan:
                                *flat)
                 elif tag == _MEMCPY:
                     DeviceAllocator.memcpy(*rec)
+                elif tag == _SYNC:
+                    _cur = DeviceAllocator.get_device()
+                    if _cur != rec[0]:
+                        DeviceAllocator.set_device(rec[0])
+                    DeviceAllocator.sync_device()
+                    if _cur != rec[0]:
+                        DeviceAllocator.set_device(_cur)
                 elif tag == _H2D:
                     import ctypes
                     dst, snap = rec
@@ -1012,7 +1054,10 @@ def _output_hashes(seq) -> Dict[str, str]:
 
 
 def signature(seq) -> Optional[tuple]:
-    if getattr(seq, "_is_multi_device", False) and not MULTIDEV_PROOF:
+    # A tail replayed after a head that runs directly (`TritonSequence._run_expert_tail`): the sequence is multi-device
+    # for its head's host experts only, the tail's ops run on their own cards and its cross-card copies are recorded.
+    if (getattr(seq, "_is_multi_device", False) and not MULTIDEV_PROOF
+            and not getattr(seq, "_tail_replay", False)):
         return None
     # Stage-driven sequences (the VibeVoice tokenizers the next_token_diffusion
     # flow marks — formerly the core/flow/stages/ calling convention) live outside the standard
@@ -1327,14 +1372,31 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
         # from the NORMAL path (correct by construction). One doubled
         # step per bucket per process.
         plan = state[1]
+        # a tail's boundary slots (the head's outputs it reads) die inside the tail: kept here, put back for the normal
+        # re-run below, which reads them as the replay did
+        _boundary = {sl: seq._arena[sl] for sl in plan.extra_scan}
+        _tail = bool(getattr(seq, "_tail_replay", False))
+        if _tail and any(not hasattr(o, "replay_lens_snapshot")
+                         or not hasattr(getattr(o, "cache", o), "replay_lens_snapshot") for o in owners):
+            plans[sig] = "UNREPLAYABLE"
+            print("[Replay] tail declined: a state owner cannot rewind exactly what the tail advanced", flush=True)
+            seq._run_single_device(skip_kills, None)
+            return True
+        _snaps = [(o, o.replay_lens_snapshot()) for o in owners] if _tail else []
         plan.replay(seq._arena)
         replayed = _output_hashes(seq)
         # Registration contract: rewind the replayed pass's
         # non-idempotent device writes (e.g. KV position counters) so
         # the normal re-run below operates on the SAME state — it then
         # advances host+device consistently itself.
-        for o in owners:
-            o.replay_restore()
+        if _tail:
+            for o, sn in _snaps:
+                o.replay_lens_restore(sn)
+        else:
+            for o in owners:
+                o.replay_restore()
+        for sl, t in _boundary.items():
+            seq._arena[sl] = t
         seq._run_single_device(skip_kills, None)
         normal = _output_hashes(seq)
         if replayed == normal:
@@ -1344,6 +1406,8 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
             _mem_diag("post-verify")
         else:
             plan.slab.retire()
+            for _o in plan.other_slabs.values():
+                _o.retire()
             if plan.graph is not None:
                 # The verify pass may have captured the CUDA graph —
                 # release exec/graph/staging/stream with the rejected
@@ -1376,11 +1440,16 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
         STATE.live = 0
         STATE.high_water = 0
         STATE.measured = {}
+        STATE.live_by_dev, STATE.high_water_by_dev = {}, {}
         try:
             seq._run_single_device(skip_kills, None)
         finally:
             STATE.measuring = False
         plans[sig] = ("MEASURED", STATE.high_water, 1)
+        # every OTHER card the run allocated on gets its own slab at recording (a held expert's card, S3): served from
+        # the sequence's card's slab, its tensors had addresses on the wrong card (an illegal access at replay)
+        seq.__dict__.setdefault("_replay_dev_hw", {})[sig] = {
+            d: b for d, b in STATE.high_water_by_dev.items() if d != seq.device_idx and b > 0}
         _mem_diag("post-measure")
         return True
 
@@ -1397,11 +1466,20 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
         plans[sig] = "UNREPLAYABLE"
         return False
 
+    try:
+        others = {d: SlabAllocator(int(b), d)
+                  for d, b in (seq.__dict__.get("_replay_dev_hw", {}).get(sig) or {}).items()}
+    except Exception as e:
+        print(f"[Replay] slab alloc failed on another card: {e} — bucket keeps the normal path")
+        slab.retire()
+        plans[sig] = "UNREPLAYABLE"
+        return False
     STATE.recording = True
     _arm_launch_recorder(True)
     STATE.records = []
     STATE.broken = None
     STATE.slab = slab
+    STATE.slabs = dict(others)
     failed: Optional[BaseException] = None
     try:
         seq._run_single_device(skip_kills, None)
@@ -1411,6 +1489,7 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
         STATE.recording = False
         _arm_launch_recorder(False)
         STATE.slab = None
+        STATE.slabs = {}
         records = STATE.records
         STATE.records = []
 
@@ -1418,6 +1497,8 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
         reason = STATE.broken or f"exception: {failed}"
         shortfall = slab.shortfall
         slab.retire()  # deferred: frees only after carved tensors die
+        for _o in others.values():
+            _o.retire()
         if failed is None and shortfall > 0 and attempt < 2:
             # Data-driven retry: the failed attempt measured the exact
             # extra bytes needed.
@@ -1437,7 +1518,9 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
 
     plan = FrozenPlan(records, slab, list(seq._arena),
                       tuple(_input_slot_range(seq)),
-                      scan_limit=seq._num_weights + seq._num_inputs)
+                      scan_limit=seq._num_weights + seq._num_inputs,
+                      extra_scan=tuple(getattr(seq, "_replay_extra_scan", ()) or ()))
+    plan.other_slabs = others
     plan.output_slots = tuple(
         s for s in (seq._tid_to_slot.get(tid)
                     for tid in seq.dag.get("output_tensor_ids") or [])

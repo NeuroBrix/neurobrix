@@ -321,6 +321,14 @@ class TritonAttentionInterceptor:
         writes; only the counter increment needs undoing)."""
         self.cache.replay_restore()
 
+    def replay_lens_snapshot(self):
+        """The cache's own per-layer device lengths, for a tail replay's exact rewind (`replay.maybe_run`); the
+        cache must provide it — a cache without one makes the tail decline."""
+        return self.cache.replay_lens_snapshot()
+
+    def replay_lens_restore(self, snap):
+        self.cache.replay_lens_restore(snap)
+
 
 # Phase 1 opt-in cleanup: mark the interceptor's underlying function
 # as self-managing dtype. TritonSequence._compile_op walks

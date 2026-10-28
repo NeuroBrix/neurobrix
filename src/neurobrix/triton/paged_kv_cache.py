@@ -312,6 +312,31 @@ class PagedTritonKVCache:
         if self.pool is not None:
             self._write_lens(self.length)
 
+    def replay_lens_snapshot(self):
+        """Every layer's device lengths as they are now (a host copy): a tail-replay verify (`replay.maybe_run`) rewinds
+        exactly what its replay advanced — `replay_restore` writes the host length to EVERY layer, which also rewound
+        the head's layers that ran directly and had already advanced (their next step then overwrote a position)."""
+        import ctypes as _c
+        if self.pool is None:
+            return None
+        snap = []
+        for i in range(self.num_layers):
+            if self.lens[i] is None:
+                snap.append(None)
+                continue
+            b = (_c.c_int32 * self.batch)()
+            DeviceAllocator.set_device(self.layer_device[i])
+            DeviceAllocator.memcpy(_c.addressof(b), self.lens[i].data_ptr(), 4 * self.batch, 2)
+            snap.append(np.frombuffer(bytes(b), dtype=np.int32).copy())
+        return snap
+
+    def replay_lens_restore(self, snap) -> None:
+        if snap is None:
+            return
+        for i, arr in enumerate(snap):
+            if arr is not None:
+                self._write_in_place(self.lens[i], arr)
+
     def replay_position_diag(self):
         """(device length of layer 0's first sequence, host length), or None."""
         import ctypes as _c

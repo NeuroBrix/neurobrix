@@ -3115,6 +3115,61 @@ class TritonSequence:
                     tensor = transfer_tensor(tensor, self.device_idx)
                 self._arena[slot] = tensor
 
+    def _expert_tail_cut(self):
+        """(cut, boundary slots) for a decode step whose expert store serves its FIRST layers and whose later layers'
+        experts other cards hold whole (S3): the ops before `cut` — up to the last fused MoE op the store serves, whose
+        routing is read back to the host every call — run directly; the ops from `cut` on make no host decision and
+        replay as one recorded plan. Boundary slots: what the tail reads that it does not produce (the head's outputs),
+        copied into the plan's frozen buffers at every replay. None: no tail, or a tail without a held layer."""
+        if "_tail_cut_memo" in self.__dict__:
+            return self._tail_cut_memo
+        held = self._expert_cards or {}
+        meta = self.dag.get("ops") or {}
+
+        def key(op):
+            ids = ((meta.get(op.op_uid) or {}).get("attributes") or {}).get("expert_gate_weight_ids") or []
+            return ids[0] if ids else None
+        moe = [(i, key(op)) for i, op in enumerate(self._ops) if op.op_type == "custom::moe_fused"]
+        store = [i for i, k in moe if k not in held]
+        res = None
+        if store and any(k in held for i, k in moe if i > store[-1]):
+            cut = store[-1] + 1
+            # diagnostic: start the replayed tail later (a bisection of what a recorded tail does not reproduce)
+            if os.environ.get("NBX_REPLAY_TAIL_FROM"):
+                cut = max(cut, int(os.environ["NBX_REPLAY_TAIL_FROM"]))
+            base = self._num_weights + self._num_inputs
+            produced, boundary = set(), set()
+            for op in self._ops[cut:]:
+                boundary.update(sl for sl in op.all_input_slots if sl >= base and sl not in produced)
+                produced.update(op.output_slots)
+            res = (cut, tuple(sorted(boundary)))
+            print(f"[Replay] {self.dag.get('component_name')}: expert tail from op {cut} of {len(self._ops)} "
+                  f"({sum(1 for i, k in moe if i >= cut)} held MoE ops), {len(res[1])} boundary slots", flush=True)
+        self._tail_cut_memo = res
+        return res
+
+    def _run_expert_tail(self, skip_kills, pre_op_callback) -> None:
+        """One decode step as a head run directly (its store-served MoE layers, the zero3 ratchet's callback) and a
+        tail through the replay machinery (`replay.maybe_run`: measured, recorded, verified, then replayed), the tail's
+        boundary slots scanned like inputs (`FrozenPlan.extra_scan`). A tail the replay declines runs directly."""
+        cut, boundary = self._expert_tail_cut()
+        n = len(self._ops)
+        try:
+            self._run_skip = [i >= cut for i in range(n)]
+            self._run_multi_device(skip_kills, pre_op_callback)
+            self._run_skip = [i < cut for i in range(n)]
+            self._tail_replay, self._replay_extra_scan = True, boundary
+            # the tail is a run of its own for the per-run caches: a rotary table the head widened once per run would
+            # be read by the recorded tail at the head's address of the recorded step (stale at replay); emptied, the
+            # tail widens its own and the recording captures it
+            from neurobrix.kernels import wrappers as _w
+            _w.begin_run()
+            if not _replay.maybe_run(self, skip_kills, None):
+                self._run_multi_device(skip_kills, pre_op_callback)
+        finally:
+            self._run_skip = None
+            self._tail_replay = False
+
     def defer_inputs(self, providers) -> None:
         """Bind each input of `providers` ({tensor id: () -> tensor}) only right before the FIRST op that reads it, for
         the next run alone. A temporal stream's carried states, parked on the host between two chunks, come back to the
@@ -3255,6 +3310,11 @@ class TritonSequence:
                           f"(state engine step 4), which a frozen launch plan cannot refill", flush=True)
             elif _replay.ENABLED and getattr(self, "_deferred_at", None):
                 pass        # a parked input binds at its first reader; a frozen plan launches with every input bound
+            elif (_replay.ENABLED and os.environ.get("NBX_REPLAY_EXPERT_TAIL") == "1"
+                  and getattr(self, "_expert_store", None) is not None and self._is_multi_device
+                  and self._expert_tail_cut() is not None):
+                self._run_expert_tail(skip_kills, pre_op_callback)
+                return
             elif _replay.ENABLED and (not self._is_multi_device
                                       or _replay.MULTIDEV_PROOF):
                 if _replay.maybe_run(self, skip_kills, pre_op_callback):
