@@ -117,6 +117,7 @@ def build_expert_store_state(z3: Any, component_name: str, executor: Any, seq: A
                                           if holds_expert_files(z3.context.allocations, component_name) else None))
     seq._expert_store = store
     executor._expert_store = store
+    holders = _hold_experts_on_cards(z3, component_name, executor, seq, is_triton, layers)
 
     state: Dict[str, Any] = {
         'seq': seq,
@@ -136,6 +137,7 @@ def build_expert_store_state(z3: Any, component_name: str, executor: Any, seq: A
         'streamed': [],
         'fresh_pass': False,
         'expert_store': store,
+        'held_experts': holders,
     }
     z3._ratchet[component_name] = state
     z3._prefetch_block(state, -1, is_triton)
@@ -149,7 +151,69 @@ def build_expert_store_state(z3: Any, component_name: str, executor: Any, seq: A
     return state
 
 
+def _hold_experts_on_cards(z3: Any, component_name: str, executor: Any, seq: Any, is_triton: bool,
+                           layers: Dict[str, Any]) -> list:
+    """The routed experts of the blocks Prism holds WHOLE on other cards (`ComponentAllocation.expert_cards`, S3),
+    copied once onto those cards and published as `_expert_cards` {layer key: (card, (gate, up, down))} on the
+    sequence and the executor: their fused op runs on that card (`moe_fused_dispatch`, the compiled MoE closure,
+    triton-sequential). Each layer's block is read as Prism reads it (`expert_topology._block_of`, the first gate
+    weight); a block Prism holds on a card with no routed layer of this graph is refused by name. Returns the holders."""
+    cards = (z3.context.allocations.get(component_name) or {}).get('expert_cards') or {}
+    seq._expert_cards = executor._expert_cards = None
+    if not cards:
+        return []
+    from neurobrix.core.prism.expert_topology import _block_of
+    from neurobrix.core.device_utils import _parse_device
+    tensors = (getattr(executor, '_dag', None) or {}).get('tensors') or {}
+    owner: Dict[int, str] = {}
+    for card, spec in cards.items():
+        first, last = (int(b) for b in spec['blocks'])
+        for b in range(first, last + 1):
+            owner[b] = card
+    per_card: Dict[str, Dict[str, list]] = {}
+    covered = set()
+    for key, (g, u, d) in layers.items():
+        b = _block_of(key, tensors)
+        card = owner.get(b)
+        if card is None:
+            continue
+        covered.add(b)
+        trips = []
+        for e in range(len(g)):
+            t = z3._snapshot_cpu_originals(executor, {0: {'weight_tensor_ids': [g[e], u[e], d[e]]}})
+            trips.append((t[g[e]], t[u[e]], t[d[e]]))
+        per_card.setdefault(card, {})[key] = trips
+    missing = sorted(set(owner) - covered)
+    if missing:
+        raise RuntimeError(
+            f"ZERO FALLBACK: the plan holds blocks {missing} of {component_name} on "
+            f"{sorted({owner[b] for b in missing})} and its executed graph routes no layer of them — the plan and "
+            f"the graph disagree")
+    held: Dict[str, Any] = {}
+    holders = []
+    for card, lay in sorted(per_card.items()):
+        if is_triton:
+            from neurobrix.triton.expert_store import NBXHeldExperts
+            holder = NBXHeldExperts(_parse_device(card)[1], lay)
+        else:
+            from neurobrix.core.runtime.graph.expert_store import TorchHeldExperts
+            holder = TorchHeldExperts(card, lay)
+        holders.append(holder)
+        for key in lay:
+            held[key] = (card, holder.layers[key])
+        print(f"[ExpertStore] {component_name}: blocks {cards[card]['blocks']} — {len(lay)} routed layers, every "
+              f"expert — held on {card}: {holder.bytes / _MIB:.0f} MB (plan {cards[card]['cache_mb']:.0f} MB)",
+              flush=True)
+    seq._expert_cards = executor._expert_cards = held
+    return holders
+
+
 def release_expert_store(state: Dict[str, Any]) -> None:
+    for holder in state.get('held_experts') or ():
+        holder.release()
+    for holder in (state.get('seq'), state.get('executor')):
+        if holder is not None and getattr(holder, '_expert_cards', None):
+            holder._expert_cards = None
     store = state.get('expert_store')
     if store is None:
         return

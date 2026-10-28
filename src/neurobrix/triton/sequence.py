@@ -438,6 +438,7 @@ class TritonSequence:
     #: The component's expert store when its plan names `expert_store` (set and cleared by the
     #: zero3 ratchet, `core/strategies/expert_store.py`); the MoE closures read it per call.
     _expert_store = None
+    _expert_cards = None      # {layer key: (card, (gate, up, down))} held whole on other cards (S3)
 
     def __init__(self, dag: dict, device_idx: int = 0,
                  compute_dtype: NBXDtype = NBXDtype.float16,
@@ -2208,6 +2209,38 @@ class TritonSequence:
                       f"hs_slot={_hs_slot} "
                       f"hs_ptr={0 if _h0 is None else _h0.data_ptr():#x}",
                       file=_sys_md.stderr, flush=True)
+            _held = _seq._expert_cards.get(_layer_key) if _seq._expert_cards else None
+            if _held is not None:
+                # A block whose experts another card holds whole (S3, `expert_store._hold_experts_on_cards`): the
+                # hidden state and the routing cross to that card, the op runs there against resident weights (no
+                # store), and its result comes back to the hidden state's card.
+                from neurobrix.triton.device_transfer import transfer_tensor as _xfer_card
+                from neurobrix.core.device_utils import _parse_device as _pd
+                _card = _pd(_held[0])[1]
+                _hs = arena[_hs_slot]
+                if _hs is None:
+                    raise RuntimeError(f"MoE fused: hidden_states is None ({op_uid})")
+                _home = _hs._device_idx
+
+                def _to_card(t):
+                    if t is None or t._device_idx == _card:
+                        return t
+                    return _xfer_card(t, _card)
+                _hg, _hu, _hd = _held[1]
+                _out = _moe_exec(
+                    gate_scores=None if _gs_slot is None else _to_card(arena[_gs_slot]),
+                    hidden_states=_to_card(_hs),
+                    gate_weights=_hg, up_weights=_hu, down_weights=_hd,
+                    top_k=_k, num_experts=_ne, norm_topk_prob=_norm,
+                    cache_key=_cache_key,
+                    topk_indices=None if _ti_slot is None else _to_card(arena[_ti_slot]),
+                    topk_weights=None if _tw_slot is None else _to_card(arena[_tw_slot]),
+                    weights_per_call=False,
+                    expert_store=None,
+                    expert_layer=_layer_key,
+                )
+                DeviceAllocator.set_device(_home)
+                return _out if _out._device_idx == _home else _xfer_card(_out, _home)
             if _stacked_attrs is not None:
                 from neurobrix.core.runtime.graph.moe_fusion import expert_weight_lists as _ewl
                 _st = _stacked_attrs["stacked_experts"]

@@ -303,6 +303,7 @@ class GraphExecutor:
     # Inputs a caller hands over to each run (see `__init__`): none unless the caller declares them — a class
     # default, immutable, so an executor made without `__init__` (a test double) means the same.
     _consumed_input_tids: frozenset = frozenset()
+    _expert_cards = None      # {layer key: (card, (gate, up, down))} held whole on other cards (S3)
     _parked_inputs: Dict[str, Any] = {}     # {tid: ParkedTensor} of the run in flight (`_run_triton`), never mutated here
 
     #: Whether this executor serves the FLOW's by-name reads (the token embedding, the head,
@@ -4152,6 +4153,31 @@ class GraphExecutor:
             per_call = False
 
         cache_key = f"triton_seq_{idx_tid if blended else attrs['gate_scores_tid']}"
+        _layer = None if attrs.get("stacked_experts") else attrs["expert_gate_weight_ids"][0]
+        _held = (self._expert_cards or {}).get(_layer) if _layer is not None else None
+        if _held is not None:
+            # A block whose experts another card holds whole (S3, `expert_store._hold_experts_on_cards`): the op runs
+            # on that card against them (no store), its inputs crossing there and its result coming back.
+            from neurobrix.triton.device_transfer import transfer_tensor
+            from neurobrix.kernels.nbx_tensor import DeviceAllocator
+            from neurobrix.core.device_utils import _parse_device
+            card = _parse_device(_held[0])[1]
+            hidden = store.get(attrs["hidden_states_tid"])
+            home = hidden._device_idx
+
+            def _to_card(t):
+                return t if t is None or t._device_idx == card else transfer_tensor(t, card)
+            out = execute_moe_fused(
+                gate_scores=None if blended else _to_card(store.get(attrs["gate_scores_tid"])),
+                hidden_states=_to_card(hidden),
+                gate_weights=_held[1][0], up_weights=_held[1][1], down_weights=_held[1][2],
+                top_k=attrs["top_k"], num_experts=attrs["num_experts"],
+                norm_topk_prob=attrs.get("norm_topk_prob", True), cache_key=cache_key,
+                topk_indices=_to_card(store.get(idx_tid)) if blended else None,
+                topk_weights=_to_card(store.get(w_tid)) if blended else None,
+                weights_per_call=False, expert_store=None, expert_layer=_layer)
+            DeviceAllocator.set_device(home)
+            return out if out._device_idx == home else transfer_tensor(out, home)
         return execute_moe_fused(
             gate_scores=None if blended else store.get(attrs["gate_scores_tid"]),
             hidden_states=store.get(attrs["hidden_states_tid"]),
