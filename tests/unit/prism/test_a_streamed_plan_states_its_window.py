@@ -28,7 +28,7 @@ def test_a_streamed_plan_states_a_window_inside_its_rung():
     # generated `default-ff6008b7` is gitignored, absent from a worktree and from every other
     # machine (register 102), where this cell failed on an empty stdout (2026-10-12).
     env = {**os.environ, "CUDA_VISIBLE_DEVICES": "", "NBX_CENSUS": "1", "NBX_CENSUS_DEVICES": "1",
-           "NBX_FORCE_STRATEGY": "layer_streaming", "NBX_PRISM_BUDGET_MB": "1024",
+           "NBX_FORCE_STRATEGY": "layer_streaming", "NBX_PRISM_BUDGET_MB": "2048",
            "PYTHONPATH": str(REPO / "src"), "PYTHONNOUSERSITE": "1"}
     r = subprocess.run([sys.executable, "-m", "neurobrix", "run", "--model", MODEL, "--prompt", "hi",
                         "--max-tokens", "4", "--triton", "--hardware", "v100-16g",
@@ -39,7 +39,9 @@ def test_a_streamed_plan_states_a_window_inside_its_rung():
     plan = plan.get("plan", plan)
     assert plan["strategy"] == "layer_streaming", plan["strategy"]
     w = plan["device_window_mb"]
-    assert w is not None and 0 < w <= 1024 < plan["planned_memory_mb"], (w, plan["planned_memory_mb"])
+    # a 2 048 MB rung: the volta file's measured Triton runtime growth (911 MB, the envelope for a model this store has
+    # not measured) comes off the rung too, and 1 024 left no room for any segment (2026-10-28)
+    assert w is not None and 0 < w <= 2048 < plan["planned_memory_mb"], (w, plan["planned_memory_mb"])
     # The 1 024 MB rung less the profile's drain cliff leaves no room for a segment (942 - 1 907 on a
     # V100-16GB): the cut is taken against the rung less the drain floor, and the plan states the
     # cliff its card then drains at — at least the floor, under the profile's (merge-queue-25).

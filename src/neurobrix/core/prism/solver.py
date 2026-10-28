@@ -1590,6 +1590,20 @@ class PrismSolver:
         kv = int(getattr(getattr(plan, "kv_cache_plan", None), "memory_bytes", 0) or 0)
         return self._phase_peak(container, totals, outliving=kv, owner=self._lm_component_name)
 
+    def _peak_loaded_weight_bytes(self, container, plan, profile) -> Optional[int]:
+        """The weights the dearest phase of a plan that loads on demand holds on a unified device (the KV cache that
+        outlives its owner beside them, `_phase_peak`) — what a load's tensors in flight sit beside (`host_footprint`);
+        None for any other plan (streamed, eager, or a discrete card), whose load and peak keep their sum."""
+        if (not any(d.has_unified_memory for d in profile.devices) or plan.loading_mode != "lazy"
+                or getattr(plan, "device_window_mb", None) is not None or getattr(plan, "layer_stream_plan", None)):
+            return None
+        weights = {n: int(m.weight_bytes) for n, m in plan.component_memory.items()}
+        for n, a in plan.components.items():
+            if a.strategy == "expert_store" and n in weights:
+                weights[n] = int((a.resident_weight_mb + a.expert_cache_mb) * 1024 * 1024)
+        kv = int(getattr(getattr(plan, "kv_cache_plan", None), "memory_bytes", 0) or 0)
+        return self._phase_peak(container, weights, outliving=kv, owner=self._lm_component_name)
+
     @property
     def whole_component_fraction(self) -> float:
         """PRISM_DEFAULTS["whole_component_fraction"], read where it is used — a property, so a
@@ -1679,6 +1693,33 @@ class PrismSolver:
         brand = getattr(spec, "brand", None)
         return (get_vendor_config(getattr(brand, "value", brand), spec.architecture)
                 .get("memory", {}) or {})
+
+    def _runtime_growth(self, spec) -> Tuple[float, str]:
+        """(MB, words): what the engine's runtime holds on an accelerator beyond the context read when the plan starts,
+        grown during a run — the kernels' modules and the local memory the driver reserves for them as they load,
+        outside every allocator. The vendor file's measured `memory.<engine>_runtime_growth_mb`; unmeasured: 0, said.
+        Measured 2026-10-28 on V100-SXM2 (triton): the bytes no allocator holds went from the 312 MB context to
+        1 223 MB in Wan2.2-I2V-A14B's run and 1 055 MB in Sana 4K's; their streamed pieces, cut to the card less the
+        context alone, ran out of memory by that growth (lot gate 2026-10-28)."""
+        from neurobrix.core.prism.host_footprint import engine_of
+        engine = engine_of(getattr(self, "_mode", "compiled"))
+        brand = getattr(spec, "brand", None)
+        arch = getattr(spec, "architecture", None)
+        if arch is None or str(spec.get_device_string()).startswith("cpu"):
+            return 0.0, ""
+        from neurobrix.core.runtime import runtime_growth
+        measured = runtime_growth.load(getattr(self, "_growth_model", None), engine, arch)
+        if measured is not None:
+            return measured, (f"less the {engine} runtime's growth during this model's run, {measured:.0f} MB "
+                              f"(measured, engine store)")
+        from neurobrix.core.config.loader import get_vendor_config
+        memory = (get_vendor_config(getattr(brand, "value", brand), arch).get("memory", {}) or {})
+        key = f"{engine}_runtime_growth_mb"
+        value = memory.get(key)
+        if value is None:
+            return 0.0, f"the {engine} runtime's growth during a run is not measured on {arch} ({key}): not priced"
+        return float(value), (f"less the {engine} runtime's measured growth during a run, {float(value):.0f} MB "
+                              f"({key}, the device's envelope: this model's own growth is not measured yet)")
 
     def _read_drain(self, dev: "DeviceState", reading) -> float:
         """One drain figure of `dev` in MB through `reading(memory) -> bytes`; 0 where there is no
@@ -2202,6 +2243,10 @@ class PrismSolver:
         # transform the graph differently before running it and a boundary must name an op the
         # executor will still have. Default "compiled" keeps every existing caller's behaviour.
         self._mode = str(mode or "compiled")
+        # the model whose measured runtime growth the budget reads (`_runtime_growth`, core/runtime/runtime_growth.py)
+        from neurobrix.core.runtime.precision_contract import registry_model_name as _rmn
+        _cp = getattr(container, "cache_path", None)
+        self._growth_model = _rmn(_cp) if _cp else None
         # THE PROFILE THE PLAN IS FOR — what every hardware-dependent price reads (the tile
         # lattice), never the planning process's active profile (stage B P3).
         self._planned_profile = profile
@@ -3169,7 +3214,8 @@ class PrismSolver:
             _base, _itemsize.itemsize_table(), is_block_key, self._stored_dtypes_by_component(container),
             resident_bytes=process_footprint_now(), output_bytes=self._output_bytes(container),
             device_bytes=unified_device_bytes(plan, profile, self._peak_loaded_bytes(container, plan, devices)),
-            file_backed=self._file_backed_experts(plan, profile), **self._streamed_loads(plan))
+            file_backed=self._file_backed_experts(plan, profile),
+            device_weight_bytes=self._peak_loaded_weight_bytes(container, plan, profile), **self._streamed_loads(plan))
 
         # Step 7.10: the routed working set, STATED beside the plan's figures (expert_topology.py) —
         # the dense part, the experts a token reads, an expert cache on the profile's standard rung.
@@ -5102,6 +5148,11 @@ class PrismSolver:
             # off the budget either (`external_used_mb` was capacity less the live free reading): the moment is the
             # execution door (the owner, 15:16), never the plan's size.
             budget = float(_capped_budget_mb(reading, capacity))
+            # What the runtime itself grows to on the card during a run, beyond the context read at the plan's entry:
+            # the engine's measured fact (`_runtime_growth`); stated in the budget's note, said when unmeasured.
+            _growth, _gnote = self._runtime_growth(dev)
+            budget = max(0.0, budget - _growth)
+            note = f"{note}; {_gnote}" if _gnote else note
             _busy = (getattr(self, "_busy_caps", None) or {}).get(dev.get_device_string())
             if _busy is not None:
                 budget = min(budget, float(_busy))      # a busy machine re-planned on what is free now (`solve_smart`)

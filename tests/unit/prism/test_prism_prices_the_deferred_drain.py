@@ -59,8 +59,11 @@ def test_the_usable_part_of_a_card_is_net_of_the_drain_under_triton_only(monkeyp
     assert cliff > 0
     assert s_c._deferred_drain_mb(dev_c) == 0.0, "the compiled engine has no deferred queue to price"
     assert s_t._deferred_drain_mb(dev_t) == pytest.approx(cliff)
-    assert s_t._usable_mb(dev_t) == pytest.approx(s_c._usable_mb(dev_c) - cliff), (
+    # each engine's budget holds its own runtime's growth (`PrismSolver._runtime_growth`: the Triton one measured on
+    # this device, the compiled one not): the drain is what the Triton part leaves out of ITS rung part
+    assert s_t._usable_mb(dev_t) == pytest.approx(s_t._rung_part_mb(dev_t) - cliff), (
         "the Triton plan does not leave the drain cliff out of what one component may hold")
+    assert s_c._usable_mb(dev_c) == pytest.approx(s_c._rung_part_mb(dev_c))
 
 
 def test_the_door_that_pins_the_runs_cliff_pins_its_price(monkeypatch):
@@ -116,8 +119,8 @@ def test_a_component_whole_beside_a_smaller_queue_stays_whole_and_the_plan_drain
     s_c, dev_c = _card(monkeypatch, "compiled")
     s_t, dev_t = _card(monkeypatch, "triton")
     cliff, floor = _cliff_mb(dev_t), _floor_mb(dev_t)
-    part = s_c._usable_mb(dev_c)                        # the rung's part, no queue under compiled
-    assert s_t._rung_part_mb(dev_t) == pytest.approx(part)
+    part = s_t._rung_part_mb(dev_t)                     # the Triton rung's part (its budget holds its runtime's growth)
+    assert s_c._usable_mb(dev_c) == pytest.approx(s_c._rung_part_mb(dev_c))   # no queue under compiled
     room = (cliff + floor) / 2                          # between the floor and the profile's cliff
     mem = _component_of_whole(s_t, dev_t, part - room)
     placed = _place(s_t, dev_t, mem)

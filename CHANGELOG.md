@@ -30,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`neurobrix autotune certify --keys <file>`** certifies exactly the keys a coverage check found missing (one `<kernel>::<key>` per line), without a census table.
 
 ### Fixed
+- **Large video and image models no longer run out of memory on 16 GB cards on the Triton engine**: Prism now keeps room for what the runtime itself grows to on the card during a run (measured on V100: up to 0.9 GB beyond its starting context), learned per model after its first run, and the Triton allocator gives freed blocks back before the card grows. Sana 4K and Wan2.2-I2V on a 16 GB V100: back to their judged outputs.
+- **Janus-Pro-7B on an idle Mac is planned whole again**: loading a model is no longer priced as if it happened at the same moment as its heaviest compute.
 - **The cardless key census runs plans that stream a component in slices**: it no longer stops on a weight arena taken outside the allocator pool, nor on a slice taken from a value parked in host memory.
 - **The Triton engine holds less beside a video decoder's convolutions**: a graph view of a permuted tensor stays a view, activations keep the layout of a permuted input, the replication pad runs in one pass, and a 3-D convolution adds its temporal taps in place.
 - **A replayed decode step attends to every position it holds**: the paged decode attention sizes its splits from the lengths on the device, so a step replayed from a recorded plan no longer ignores the positions written since the plan was recorded (opt-in replay of the decode; a 1.1B model now decodes 6 times faster under it with the same text).

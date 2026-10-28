@@ -101,7 +101,8 @@ def host_footprint(plan, key_sizes: Mapping[str, Mapping[str, int]],
                    resident_bytes: int = 0, output_bytes: int = 0, device_bytes: int = 0,
                    streamed_loads: Optional[Mapping[str, Sequence[Collection[str]]]] = None,
                    load_workers: int = 0, pinned_in_flight: int = 0,
-                   file_backed: Optional[Mapping[str, Collection[str]]] = None) -> Dict:
+                   file_backed: Optional[Mapping[str, Collection[str]]] = None,
+                   device_weight_bytes: Optional[int] = None) -> Dict:
     """The host bytes `plan` holds on `engine`: {total, resident, base, steady (+ per component), transient}.
 
     key_sizes    {component: {weight key: stored bytes}}  (the weights index)
@@ -118,6 +119,11 @@ def host_footprint(plan, key_sizes: Mapping[str, Mapping[str, int]],
                  (core.workspace), required when a component is streamed on the compiled engine
     file_backed  {component: weight keys} its loads never read: an expert store's routed experts, mapped
                  from the container's files on a unified device; every one must be sized by the index
+    device_weight_bytes  on a unified device under a plan that loads on demand: the weights its dearest phase holds
+                 (the KV cache that outlives its owner included). A Triton load's tensors in flight sit beside the
+                 weights already landed, never beside the activations of the compute that follows the load, so the
+                 load and the peak are priced as the larger of the two — Janus-Pro-7B triton on the idle Mac held
+                 14 151 MB of device at its peak where the sum priced 1 600 MB of copies beside it (2026-10-28)
     """
     if engine not in ENGINES:
         raise ValueError(f"ZERO FALLBACK: no host rules for engine {engine!r} (known: {ENGINES})")
@@ -242,8 +248,12 @@ def host_footprint(plan, key_sizes: Mapping[str, Mapping[str, int]],
         transient = TRITON_COPIES_PER_TENSOR * max(
             (n for ks in key_sizes.values() for n in ks.values()), default=0)
     base = int(base_mb) << 20 if base_mb is not None else 0
+    if engine == "triton" and device_weight_bytes is not None:
+        loaded_or_peak = max(int(device_bytes), int(device_weight_bytes) + transient)
+    else:
+        loaded_or_peak = int(device_bytes) + transient
     return {"engine": engine,
-            "total_bytes": int(resident_bytes) + base + steady_bytes + transient + int(output_bytes) + int(device_bytes),
+            "total_bytes": int(resident_bytes) + base + steady_bytes + loaded_or_peak + int(output_bytes),
             "resident_bytes": int(resident_bytes), "output_bytes": int(output_bytes), "device_bytes": int(device_bytes),
             "base_bytes": base, "base_measured": base_mb is not None,
             "steady_bytes": steady_bytes, "steady": steady, "transient_bytes": transient,

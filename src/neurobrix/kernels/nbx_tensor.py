@@ -1685,6 +1685,14 @@ class DeviceAllocator:
                 # from the driver's POV). Peak unchanged.
                 return ptr
 
+        # The device never GROWS while the pool parks freed blocks: they go back to the driver first, so the device
+        # holds what is alive, not what is alive plus what was once freed and split (the S4a pool cuts its segments
+        # for later small blocks, and a refused malloc's flush can then return none of them whole). Sana_1600M_4Kpx
+        # triton on a V100-16GB, lot 2026-10-28: 4.5 GB of parked blocks in 12 split segments beside 9.4 GB alive
+        # refused the VAE's 2.96 GB convolution; the Mac measured the same rule on HAT-L x4 (10 688 -> 8 913 MB, bit-
+        # equal, 77258825).
+        if DeviceAllocator._pool_enabled and pooled:
+            DeviceAllocator._pool_flush(dev)
         ptr_obj = ctypes.c_void_p()
         rt = _gpu_runtime()
         backend = _active_backend()

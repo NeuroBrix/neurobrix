@@ -103,7 +103,13 @@ def test_a_lazy_plan_fits_its_dearest_phase_on_a_dedicated_card(monkeypatch):
     pin_dedicated_card(monkeypatch, 16151, 306, "an idle V100-16GB")
     c, ic = _input_config("MiniCPM-o-4_5", "triton")
     p = PrismSolver().solve_smart(c, profile(V100_16GB), ic, mode="triton")
-    assert p.strategy != "lazy_sequential", p.strategy
+    # The OOM was the language model held WHOLE beside its head. Since S5 (f8e80496) a lazy plan may run its language
+    # model inside zero3 instead, holding its activations and a window: that phase fits, and so it ran — lot gate
+    # e6afb83d 16g, 2026-10-28: lazy_sequential, rc 0, the judged sha 35d48303, device peak 14 408 MB (zero3 15 056
+    # before). What must never come back is the whole language model in a lazy plan on this card.
+    if p.strategy == "lazy_sequential":
+        assert p.components["llm.model"].strategy == "zero3", (p.components["llm.model"].strategy,
+                                                               p.components["llm.model"].device)
 
 
 def test_a_lazy_plan_that_fits_its_phases_stays_lazy(monkeypatch):

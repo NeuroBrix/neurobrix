@@ -271,7 +271,9 @@ def test_a_dedicated_card_cuts_the_boundaries_pinned_here(monkeypatch, mode):
     # widths, release-candidate-1, 2026-09-28): activations the engine keeps in fp32 cost 4 bytes, the
     # segments shrink to fit the same usable rung. Two segments before, cut under the compute dtype's
     # 2 bytes; the solver's own note on this card already read three.
-    held = {"compiled": list(range(1, 10)), "triton": list(range(1, 9))}
+    # triton: eight pieces held, 0-7 since the Triton budget holds its runtime's growth (911 MB measured on V100,
+    # 2026-10-28) — the piece the smaller room leaves out moved from 0 to 8
+    held = {"compiled": list(range(1, 10)), "triton": list(range(0, 8))}
     assert list(cut) == ["model"] and len(cut["model"]) == 27, cut
     assert cut["model"][:2] == [["aten.embedding::0", "aten.view::27"], ["moe_fused::block.1", "aten.view::47"]], cut
     assert cut["model"][-1][1] == "custom.rms_norm::81", cut["model"][-1]

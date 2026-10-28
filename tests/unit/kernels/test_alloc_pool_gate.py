@@ -218,10 +218,27 @@ def test_parked_cap_evicts_whole_segments_largest_first_and_never_parks_an_over_
         assert DeviceAllocator._pool_stats["evictions"] == 1
         assert DeviceAllocator._pool_stats["evicted_bytes"] == 6 * MiB
         assert DeviceAllocator._cuda_live_bytes[dev] == 5 * MiB     # the evicted segment left the driver
-        # A segment larger than the whole cap is never parked: straight back to the driver.
+        # A segment larger than the whole cap is never parked: straight back to the driver. The device grows for it,
+        # so the parked 3 + 2 MiB go back to the driver first (no parked block survives a device growth).
         DeviceAllocator.free_cuda(DeviceAllocator.malloc_cuda(20 * MiB))
-        assert drv.freed == [6 * MiB, 20 * MiB]
-        assert DeviceAllocator._pool_cached_bytes[dev] == 5 * MiB
+        assert sorted(drv.freed[1:3]) == [2 * MiB, 3 * MiB] and drv.freed[0] == 6 * MiB and drv.freed[3] == 20 * MiB
+        assert DeviceAllocator._pool_cached_bytes[dev] == 0
+
+
+def test_no_parked_block_survives_a_device_growth(monkeypatch):
+    """A malloc the pool cannot serve grows the device; every parked block goes back to the driver first, so the device
+    holds what is alive, not what is alive plus what was once freed and split (Sana_1600M_4Kpx triton on a V100-16GB,
+    lot 2026-10-28: 4.5 GB parked in 12 split segments beside 9.4 GB alive refused a 2.96 GB convolution)."""
+    with _PoolState():
+        _reinit(None)
+        drv = _with_driver(monkeypatch)
+        dev = 0
+        DeviceAllocator._pool_cap_bytes[dev] = 1 << 40
+        a = DeviceAllocator.malloc_cuda(4 * MiB)
+        DeviceAllocator.free_cuda(a)
+        assert DeviceAllocator._pool_cached_bytes[dev] == 4 * MiB and drv.freed == []
+        DeviceAllocator.malloc_cuda(8 * MiB)                  # the pool cannot serve it: the device grows
+        assert drv.freed == [4 * MiB] and DeviceAllocator._pool_cached_bytes[dev] == 0
 
 
 def test_a_fit_hands_out_less_than_the_split_threshold_of_slack(monkeypatch):
