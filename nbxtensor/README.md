@@ -18,9 +18,11 @@ nbxtensor is built for that case.
 - **One table of facts.** One dtype table, one view rule, one conversion
   per pair of dtypes, one capability table per backend — declared, never guessed.
 - **Backends:** NVIDIA CUDA, Apple Metal (through triton-ext), CPU.
-- **No torch in the core.** torch appears only in the optional interop module
-  and in the benchmark harness, which measures nbxtensor against torch eager
-  and `torch.compile`, kernel by kernel and model by model.
+- **No torch, ever.** nbxtensor never imports torch, not even optionally.
+  Exchange with any tensor library goes through the DLPack protocol
+  (`__dlpack__`, `from_dlpack`), so a torch user writes `torch.from_dlpack(t)`
+  on their side. The benchmarks against torch eager and `torch.compile` live
+  outside the library (`benchmarks/nbxtensor_vs_torch/` in the NeuroBrix repository).
 
 nbxtensor is extracted from NeuroBrix, the universal inference engine whose
 Triton engine is its first client. It lives in `nbxtensor/` of the NeuroBrix

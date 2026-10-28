@@ -1,9 +1,10 @@
 """The nbxtensor library stands alone: it imports neither the engine nor torch.
 
 A library that imports `neurobrix` cannot be published on its own, and one
-that imports torch is not a replacement for torch. The only torch allowed is
-the optional interop module (`nbxtensor/interop/torch.py`) and the benchmark
-harness (`nbxtensor/bench/`), which compares against torch by definition.
+that imports torch is not a replacement for torch. No exception, not even an
+optional interop module (Hocine, 28/10/2026 20:33): exchange goes through
+DLPack, imported by the other side. The torch comparison harness lives
+outside the library, in benchmarks/nbxtensor_vs_torch/.
 
 Parsed with `ast`, not grepped: a docstring mentioning torch is not an import.
 """
@@ -16,7 +17,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[3]
 LIB = REPO / "nbxtensor" / "src" / "nbxtensor"
 
-TORCH_ALLOWED = {"interop/torch.py"}
+TORCH_ALLOWED: frozenset = frozenset()   # empty, and it stays empty
 
 
 def _imports(path: Path):
@@ -50,6 +51,6 @@ def test_the_library_imports_no_engine():
     assert not bad, "nbxtensor must not import the engine: " + "; ".join(bad)
 
 
-def test_the_library_imports_no_torch_outside_interop():
+def test_the_library_imports_no_torch_at_all():
     bad = _offenders("torch", TORCH_ALLOWED)
     assert not bad, "nbxtensor must not import torch: " + "; ".join(bad)

@@ -46,13 +46,20 @@ Apple MLX, tinygrad, Hugging Face candle. (vLLM did not: it is built on torch.)
    planner (greedy-by-size over known lifetimes) as a first-class API. Device
    facts the library needs (allocator envelope, runtime growth, bandwidths)
    are MEASURED by the library and refused by name when absent.
-6. **Zero torch in the core.** torch only in `nbxtensor/interop/torch.py`
-   (optional) and `nbxtensor/bench/`.
+6. **Zero torch, everywhere in the library.** nbxtensor never imports or
+   uses torch, not even as an optional dependency (Hocine, 28/10 20:33).
+   Exchange with other tensor libraries goes through DLPack: nbxtensor
+   implements `__dlpack__` / `__dlpack_device__` and `from_dlpack(any
+   producer)`; the other side imports itself. The engine's current hand-off
+   helpers (`nbx_to_torch`, `nbx_dtype_to_torch`, `set_torch_device` in
+   kernels/nbx_tensor.py) NEVER move into nbxtensor: they stay in the engine
+   until DLPack replaces them. The comparison against torch is a separate
+   harness outside the library (`benchmarks/nbxtensor_vs_torch/`).
 7. **Zero hardcode, zero fallback** (inherited from the engine).
 8. **A move changes no behaviour.** A module moves with its tests; the move
    proves identical outputs (sha) on the representative set and a green
    no-card coverage. No kernel is rewritten during a move.
-9. **Benchmarks are part of the library.** Kernel level and model level,
+9. **Benchmarks go with the library, outside it.** Kernel level and model level,
    against torch eager and `torch.compile`, per device (V100 16/32 GB, M4 Pro).
    "Faster than torch" is claimed only cell by cell, measured.
 10. **A public API, documented.** Exported names are the API; everything else
@@ -78,9 +85,10 @@ nbxtensor/                     # own pyproject, own README/LICENSE; future own r
     random/     seeded streams and torch-free draws
     quant/      QuantizedTensor
     io/         safetensors -> NBXTensor primitives (the engine keeps its loading policy)
-    interop/    numpy, dlpack; torch (optional)
-  bench/        kernel and model benchmarks against torch eager and torch.compile
+    interop/    numpy and DLPack (the only exchange protocol; never torch)
   tools/        scatter_scan.py
+benchmarks/nbxtensor_vs_torch/   OUTSIDE the library: imports both nbxtensor and torch
+                            to measure one against the other
 ```
 
 What stays in the engine: Prism, the DtypeEngine's policy (AMP op sets,

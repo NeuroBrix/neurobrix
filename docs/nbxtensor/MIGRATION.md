@@ -18,7 +18,10 @@ Freeze first: every in-flight fix lands on lot-2026-10-28 and is merged into
 Move module by module into `nbxtensor/src/nbxtensor/<area>/` with `git mv`
 (history kept), rewrite the imports in the same commit, no re-export shim.
 Order: dtype + itemsize (the one table), random, quant, backend, memory,
-ops (directory as is; wrappers.py as is), then nbx_tensor.py itself.
+ops (directory as is; wrappers.py as is), then nbx_tensor.py itself —
+WITHOUT its torch hand-off helpers (nbx_to_torch, nbx_dtype_to_torch,
+set_torch_device, torch_device_str), which stay in the engine
+(R-NBXT 6) until DLPack replaces them.
 Per commit: unit suites + boundary guards green. Per area: no-card coverage
 green + representative set identical. The scatter list shrinks commit by commit.
 **Exit:** `kernels/` keeps only engine files (census, classification,
@@ -42,7 +45,7 @@ within the measured allocator envelope, printed per cell; migration_list.tsv
 empty.
 
 ## M4 — benchmarks against torch (cards busy during M1-M3)
-Mac writes `nbxtensor/bench/` first (kernel level: the census shapes; model
+Mac writes `benchmarks/nbxtensor_vs_torch/` first (outside the library) (kernel level: the census shapes; model
 level: the gate cells), then both machines run it: torch eager,
 torch.compile, nbxtensor, per device. Runs ALONE on the machine (no other
 process). **Exit:** a table per device, kernel and model, with the gaps

@@ -10,14 +10,12 @@ readme = "README.md"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.10"
 authors = [{ name = "NeuroBrix" }]
-# The core needs only these. torch is NEVER a core dependency.
+# numpy and triton only. torch is never a dependency, not even an optional one:
+# nbxtensor never imports torch (R-NBXT 6). Exchange with any other tensor
+# library goes through DLPack, which the OTHER library imports.
 dependencies = ["numpy", "triton"]
 
 [project.optional-dependencies]
-# Hand-off to and from torch tensors, for users who mix both (nbxtensor.interop.torch).
-torch = ["torch"]
-# The benchmark harness compares against torch eager and torch.compile.
-bench = ["torch"]
 test = ["pytest"]
 
 [tool.hatch.build.targets.wheel]

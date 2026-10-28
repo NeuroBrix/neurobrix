@@ -15,4 +15,7 @@ and reported apart; median of N with N and spread printed; outputs compared
 Output: one TSV per device and level under `nbxtensor/bench/results/`, and a
 markdown summary naming every cell where nbxtensor loses.
 
+This harness lives OUTSIDE the nbxtensor library on purpose: it imports
+torch to measure against it, and nbxtensor never imports torch (R-NBXT 6).
+
 Status: M4 — the harness is written by the Mac agent.
