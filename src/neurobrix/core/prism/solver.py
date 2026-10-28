@@ -7390,9 +7390,58 @@ class PrismSolver:
                 out[name] = float(TE.plan_seconds(name, allocs, works, runs, devices, host, str(dtype), prompt=prompt,
                                                   links=links, engine=engine_of(getattr(self, "_mode", "compiled")),
                                                   stored=self._stored_dtype_major(container)))
+                if name == "layer_streaming":
+                    out[name] += self._sliced_stretch_seconds(allocs, runs, devices, host, str(dtype))
             except TE.MissingFact as exc:
                 out[name] = f"not estimated: {exc}"
         return out
+
+    def _sliced_stretch_seconds(self, allocs, runs, devices, host, dtype: str) -> float:
+        """What running stretches in slices adds to a layer-streaming plan (`Partition.chunks`), per use of each component
+        that runs them: (1) each slice recomputes its halo — the stretch's own work (`component_work` over its ops)
+        times the share its slices read beyond their rows (`slice_reads`), at the device's roofline; (2) a stretch whose
+        inputs wait on the host cuts its slices from host tensors and assembles its outputs (`host_moved_bytes`), at the
+        host's measured slab rate (`host_slab_gbps`) — refused by name without it. Measured on mochi-1-preview's VAE at an
+        8 GB rung on the M4 Pro (the Mac, 2026-10-28, results/s6_price_2026_10_28/MEASURE.md): the halo +2.7 s, the two
+        host-read stretches +3.3 / +3.6 s of cuts and assembly; MPS convolutions on slabs run as fast as whole."""
+        from neurobrix.core.prism import time_estimate as TE
+        from neurobrix.core.prism.chunked_region import slice_reads
+        from neurobrix.core.prism.profiler import ActivationProfiler
+        from neurobrix.core.prism.work import component_work
+        total_s = 0.0
+        comps = {c.name: c for c in (getattr(self, "_neural_components", None) or [])}
+        for comp_name, part in (getattr(self, "_layer_stream_partitions", None) or {}).items():
+            if not part.chunks or comp_name not in comps:
+                continue
+            dev = TE._device_of(allocs.get(comp_name)) if comp_name in allocs else None
+            if dev not in devices:
+                raise TE.MissingFact(f"{comp_name} runs sliced stretches on {dev!r}, whose facts are not measured")
+            sizing = (self.__dict__.get("_request_sizing") or {}).get(comp_name)
+            if sizing is None:
+                raise TE.MissingFact(f"{comp_name}: no activation sizing at this request to price its slices")
+            graph = comps[comp_name].graph
+            order = list(graph.get("execution_order") or [])
+            at = {u: i for i, u in enumerate(order)}
+            prof = ActivationProfiler(graph)
+            smap = sizing[0]
+            per_use = 0.0
+            for c in part.chunks:
+                ops = set(order[at[c["first_op"]]: at[c["last_op"]] + 1]) if c["first_op"] in at else set()
+                total = int(smap.get(c["symbol"], 0)) // max(1, int(c["unit"]))
+                if not ops or total <= 0:
+                    continue
+                reads = slice_reads(total, int(c["count"]), int(c.get("margin", 0)), bool(c.get("cyclic")))
+                widen = sum(r[3] for r in reads) / total - 1.0
+                w = component_work(prof, smap, widths=sizing[2] or None, ops=ops)
+                per_use += widen * TE.compute_seconds(w, devices[dev], dtype)
+                moved = int(c.get("host_moved_bytes", 0) or 0)
+                if moved:
+                    if host is None or not host.slab_bps:
+                        raise TE.MissingFact(f"{comp_name} cuts sliced stretches from host tensors and the profile "
+                                             f"carries no measured `host_slab_gbps`")
+                    per_use += moved * (1.0 + widen) / host.slab_bps
+            total_s += per_use * int(runs.get(comp_name, 1))
+        return total_s
 
     def _explain_choice(self, chosen: str, chosen_score: float,
                         ranked: List, profile: "PrismProfile") -> str:

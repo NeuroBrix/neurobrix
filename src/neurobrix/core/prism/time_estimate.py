@@ -54,6 +54,10 @@ class HostFacts:
     #: container (page cache), decode, convert to the device dtype, upload (`weight_reload_gbps`, measured): a strategy that
     #: re-reads a generating component's weights every token pays it at every reload after the first
     reload_bps: Optional[float] = None
+    #: what a sliced stretch whose inputs wait on the host moves through host memory per second — its slices cut from
+    #: the host tensors and its outputs assembled (`host_slab_gbps`, measured in situ: mochi's VAE at an 8 GB rung on
+    #: the M4 Pro, the Mac's diagnosis 4b 2026-10-28)
+    slab_bps: Optional[float] = None
 
 
 def device_facts(measured: Optional[Mapping[str, Any]], where: str) -> DeviceFacts:
@@ -76,10 +80,12 @@ def host_facts(measured: Optional[Mapping[str, Any]]) -> HostFacts:
             raise MissingFact(f"host: no measured `{key}` on the hardware profile (tools/profile_facts.py)")
     s = measured.get("storage_read_gbps")
     r = measured.get("weight_reload_gbps")
+    sl = measured.get("host_slab_gbps")
     return HostFacts(matmul_flops=float(measured["host_matmul_gflops"]) * 1e9,
                      memory_bps=float(measured["host_memory_gbps"]) * 1e9,
                      storage_bps=float(s) * 1e9 if s is not None else None,
-                     reload_bps=float(r) * 1e9 if r is not None else None)
+                     reload_bps=float(r) * 1e9 if r is not None else None,
+                     slab_bps=float(sl) * 1e9 if sl is not None else None)
 
 
 #: a component's allocation strategies whose weights land in HOST memory (pinned) and reach the card from there
