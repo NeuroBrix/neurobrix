@@ -58,6 +58,14 @@ class ExpertResidency:
     def __len__(self) -> int:
         return len(self._lru)
 
+    def reset(self) -> None:
+        """Every slot free again, the map empty: another residency (the card's, for decode tokens) filled the slots
+        since this one's last call, so none of its entries says what a slot holds any more."""
+        self._lru.clear()
+        self._free = list(range(self.n_slots - 1, -1, -1))
+        self._prefetched.clear()
+        self.last_routed = {}
+
     def slot_of(self, layer: Hashable, expert: int) -> Optional[int]:
         return self._lru.get((layer, int(expert)))
 

@@ -27,7 +27,7 @@ link, once), not overlap.
 from __future__ import annotations
 
 import os
-from typing import Callable, List, Tuple
+from typing import Callable, Dict, List, Tuple
 
 from neurobrix.core.runtime.expert_residency import ExpertResidency
 from neurobrix.kernels.nbx_tensor import DeviceAllocator as DA, NBXDtype, NBXTensor, dtype_size
@@ -74,6 +74,7 @@ class NBXExpertStore:
         self.hosts = {}
         self._arena = None
         self.slots = []
+        self.device_decode = False    # the residency on the card for a decode token (`enable_device_decode`)
         if self.in_place:
             return
         # The arena: one allocation for every slot, each projection a 256-byte-aligned view into it.
@@ -96,6 +97,118 @@ class NBXExpertStore:
         self._inflight = {}      # (layer, expert) -> the event of its prefetch copy
         self.hosts = {}          # layer -> host expert reader, registered by its call
 
+    # ── the residency on the card, for a decode token (`kernels/ops/moe_device_residency.py`) ──
+    def enable_device_decode(self, layer_index: Dict, n_experts: int) -> None:
+        """Arms the store's residency ON THE CARD for one-token calls: a slot map per (layer, expert), each slot's
+        owner and last-use stamp, a clock, the slots' fixed pointer tables, and (filled per layer at its first call)
+        the device-visible addresses of every host expert. `layer_index`: {layer key: index} of the component's
+        store-served layers. The host residency and this one never both hold the slots: whichever runs after the
+        other first takes the other's state (`_sync_device_from_host`, `_host_takes_over`)."""
+        import numpy as np
+        L, E, S = len(layer_index), int(n_experts), int(self.residency.n_slots)
+        DA.set_device(self.device_idx)
+        dev = f"cuda:{self.device_idx}"
+        self.layer_index, self.n_experts = dict(layer_index), E
+        self._slot_of = NBXTensor.from_numpy(np.full(L * E, -1, dtype=np.int32)).to(dev)
+        self._owner = NBXTensor.from_numpy(np.full(S, -1, dtype=np.int32)).to(dev)
+        self._stamp = NBXTensor.from_numpy(np.full(S, -1, dtype=np.int64)).to(dev)
+        self._clock = NBXTensor.from_numpy(np.zeros(1, dtype=np.int64)).to(dev)
+        self._slot_tabs = tuple(NBXTensor.from_numpy(np.array([self.slots[k][i].data_ptr() for k in range(S)],
+                                                              dtype=np.int64)).to(dev) for i in range(3))
+        self._host_np = np.zeros((3, L * E), dtype=np.int64)
+        self._host_tabs = None
+        self._host_layers = set()
+        self._dev_valid = False       # the card's map reflects the slots' contents
+        self._host_dirty = False      # the card's residency moved the slots since the host's last call
+        self.device_decode = True
+
+    def _host_tables_for(self, layer, host: Callable[[int], Tuple]) -> None:
+        if layer in self._host_layers:
+            return
+        li = self.layer_index[layer]
+        for e in range(self.n_experts):
+            for i, t in enumerate(host(e)):
+                if (not isinstance(t, NBXTensor) or t._device != "cpu" or not t.is_contiguous()
+                        or (tuple(t.shape), t._dtype) != self._shape[i] or not t.is_pinned):
+                    raise RuntimeError(
+                        f"ZERO FALLBACK: expert {e} of {layer!r} projection {i} is not a contiguous page-locked host "
+                        f"expert of {self._shape[i]} — the card reads its misses from page-locked host memory")
+                self._host_np[i, li * self.n_experts + e] = t.data_ptr()
+        DA.set_device(self.device_idx)
+        self._host_tabs = tuple(NBXTensor.from_numpy(self._host_np[i]).to(f"cuda:{self.device_idx}") for i in range(3))
+        self._host_layers.add(layer)
+
+    def _sync_device_from_host(self) -> None:
+        """The card's map rebuilt from the host residency (its LRU order becomes the stamps), after every host
+        prefetch still copying has landed: the card then sees exactly which expert each slot holds."""
+        import numpy as np
+        for (key, ev) in list(self._inflight.items()):
+            DA.stream_wait_event(0, ev, flags=0)
+            DA.destroy_event(ev)
+        self._inflight = {}
+        L, E, S = len(self.layer_index), self.n_experts, self.residency.n_slots
+        slot_of = np.full(L * E, -1, dtype=np.int32)
+        owner = np.full(S, -1, dtype=np.int32)
+        stamp = np.full(S, -1, dtype=np.int64)
+        n = 0
+        for (layer, e), slot in self.residency._lru.items():
+            li = self.layer_index.get(layer)
+            if li is None:
+                continue
+            slot_of[li * E + int(e)] = slot
+            owner[slot] = li * E + int(e)
+            stamp[slot] = n
+            n += 1
+        DA.set_device(self.device_idx)
+        for dst, src in ((self._slot_of, slot_of), (self._owner, owner), (self._stamp, stamp),
+                         (self._clock, np.array([n], dtype=np.int64))):
+            DA.memcpy(dst.data_ptr(), src.ctypes.data, src.nbytes, 1)
+        self._dev_valid = True
+
+    def _host_takes_over(self) -> None:
+        """The host residency resumes after the card's: what the card put in the slots is not in the host's map, so
+        the host starts from empty slots (its next calls miss and copy), and the card's map is rebuilt from the host's
+        at its next call."""
+        if self._host_dirty:
+            self.residency.reset()
+            self._host_dirty = False
+        self._dev_valid = False
+
+    def decode_on_card(self, layer, flat_indices, flat_scores, hidden, host, top_k: int, K: int, N_gate: int):
+        """One token through a store-served layer with the residency on the card: assign the routed experts' slots
+        (misses evicting the least recently used), copy the misses from page-locked host memory, run the half decode
+        band through the slots' pointer table. No host decision: every launch is the same at every token."""
+        import triton as _tr
+        from types import SimpleNamespace
+        from neurobrix.kernels.ops.moe_device_residency import expert_slot_assign_kernel, expert_miss_copy_kernel
+        from neurobrix.triton.moe import _moe_decode_vec_half_pass
+        self._host_tables_for(layer, host)
+        if not self._dev_valid:
+            self._sync_device_from_host()
+        dev = self.device_idx
+        DA.set_device(dev)
+        DA.ensure_triton_device(dev)
+        S = self.residency.n_slots
+        base = self.layer_index[layer] * self.n_experts
+        slot_ids = NBXTensor.empty((top_k,), dtype=NBXDtype.int64, device=f"cuda:{dev}")
+        miss = NBXTensor.empty((top_k,), dtype=NBXDtype.int64, device=f"cuda:{dev}")
+        ids = flat_indices if flat_indices._dtype == NBXDtype.int64 else flat_indices.to(NBXDtype.int64)
+        expert_slot_assign_kernel[(1,)](ids, self._slot_of, self._owner, self._stamp, self._clock, slot_ids, miss,
+                                        base, S, TOP_K=top_k, BLOCK_S=_tr.next_power_of_2(S), num_warps=4)
+        n = [_numel(sh) for sh, _d in self._shape]
+        bf16 = self._shape[0][1] == NBXDtype.bfloat16
+        CH = 4096
+        expert_miss_copy_kernel[(top_k, 3, _tr.cdiv(max(n), CH))](
+            miss, slot_ids, *self._host_tabs, *self._slot_tabs, base, n[0], n[1], n[2], BLOCK=CH, W_BF16=bf16,
+            num_warps=4)
+        s0 = self.slots[0]
+        tables = SimpleNamespace(
+            gate_ptrs={dev: self._slot_tabs[0]}, up_ptrs={dev: self._slot_tabs[1]}, down_ptrs={dev: self._slot_tabs[2]},
+            gate_stride_bk={dev: s0[0].stride(1)}, gate_stride_bn={dev: s0[0].stride(0)},
+            down_stride_bk={dev: s0[2].stride(1)}, down_stride_bn={dev: s0[2].stride(0)})
+        self._host_dirty = True
+        return _moe_decode_vec_half_pass(hidden, tables, dev, slot_ids, flat_scores, top_k, K, N_gate, bf16)
+
     @property
     def slot_bytes(self) -> int:
         return sum(t._nbytes for t in self.slots[0]) if self.slots else 0
@@ -106,11 +219,22 @@ class NBXExpertStore:
         return self._arena._nbytes if self._arena is not None else 0
 
     def acquire(self, layer, routed, n_experts: int, host: Callable[[int], Tuple]):
+        """The host residency's call (a prompt's tokens, or any call the card's residency does not serve). With the
+        card's residency armed, the card's slot map is rewritten from the host's at the end of the call: a replayed
+        decode step runs no Python, so the map it reads must already say what the host just put in the slots."""
+        out = self._acquire(layer, routed, n_experts, host)
+        if self.device_decode:
+            self._sync_device_from_host()
+        return out
+
+    def _acquire(self, layer, routed, n_experts: int, host: Callable[[int], Tuple]):
         """(gate, up, down) lists over all `n_experts`, device-resident, for a call routing to `routed`;
         the compute stream waits for the misses copied now and for the hits a prefetch is still copying.
         In place: the routed experts' own host views, their pages bound once; nothing is copied."""
         if self.trace is not None:
             self.trace.note(layer, routed)      # the routing reuse curve (core/runtime/routing_reuse.py)
+        if self.device_decode:
+            self._host_takes_over()
         if self.in_place:
             return self._acquire_in_place(layer, routed, n_experts, host)
         slots, missed = self.residency.assign(layer, routed)
@@ -208,6 +332,14 @@ class NBXExpertStore:
         return self.prefetch(nxt, experts, self.hosts[nxt], protect)
 
     def prefetch(self, layer, experts, host: Callable[[int], Tuple], protect) -> int:
+        n = self._prefetch(layer, experts, host, protect)
+        if self.device_decode and n:
+            self._sync_device_from_host()
+        return n
+
+    def _prefetch(self, layer, experts, host: Callable[[int], Tuple], protect) -> int:
+        if self.device_decode:
+            self._host_takes_over()
         slots = self.residency.reserve(layer, experts, protect)
         if not slots:
             return 0

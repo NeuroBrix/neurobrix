@@ -3145,8 +3145,10 @@ class TritonSequence:
         moe = [(i, key(op)) for i, op in enumerate(self._ops) if op.op_type == "custom::moe_fused"]
         store = [i for i, k in moe if k not in held]
         res = None
-        if store and any(k in held for i, k in moe if i > store[-1]):
-            cut = store[-1] + 1
+        on_card = bool(getattr(self._expert_store, "device_decode", False))
+        if on_card or (store and any(k in held for i, k in moe if i > store[-1])):
+            # a store whose decode residency runs on the card makes no host decision: the whole step replays
+            cut = 0 if on_card else store[-1] + 1
             # diagnostic: start the replayed tail later (a bisection of what a recorded tail does not reproduce)
             if os.environ.get("NBX_REPLAY_TAIL_FROM"):
                 cut = max(cut, int(os.environ["NBX_REPLAY_TAIL_FROM"]))
@@ -3383,6 +3385,9 @@ class TritonSequence:
                                       or _replay.MULTIDEV_PROOF):
                 if _replay.maybe_run(self, skip_kills, pre_op_callback):
                     return
+            elif _replay.ENABLED:
+                _replay._decline(self, "its ops run on several devices (host-held weights or several cards) and a "
+                                       "multi-device replay is proven only for an expert store's card-held tail")
             if _parked is not None:
                 # The executor skipped bind_weights on the strength of
                 # would_replay(); replay then declined (or was disabled
