@@ -305,7 +305,22 @@ def bench(inst, dev, res, warmup, reps, compile_modes) -> list:
                    tolerance="" if tol is None else tol, peak_mb=f"{peak:.3f}", peak_how=how,
                    note=ref_note or ("" if tol is not None else f"no floating dtype to bound ({od}): exact match asked"))
         rows.append(row)
+        _release(dev)
     return rows
+
+
+def _release(dev):
+    """Give back what a contender's allocator caches before the next one runs: on unified memory torch's MPS cache and
+    the Triton allocator's pool are the host's memory too, and holding both across 1 692 instances pressed the Mac."""
+    import gc
+    gc.collect()
+    if dev.cuda:
+        dev.torch.cuda.empty_cache()
+    else:
+        dev.torch.mps.empty_cache()
+    from neurobrix.kernels.nbx_tensor import DeviceAllocator
+    dev.nbx_sync()
+    DeviceAllocator.empty_cache_pool()
 
 
 def main(argv=None) -> int:
