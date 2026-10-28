@@ -2373,6 +2373,17 @@ class TritonSequence:
         for op in self._ops:
             if not op.weight_input_slots:
                 continue
+            if op.op_type == "custom::moe_fused":
+                # A fused MoE op places its own compute (`execute_moe_fused` runs on its hidden state's card, a block
+                # an expert store holds on another card on that card): its routed experts — pinned host tensors under
+                # zero3 or an expert store — do not choose its device. Read as its device, a host expert's placeholder
+                # index (0) sent every home-card MoE call's hidden state to card 0 and back (Qwen3-30B-A3B, 4 V100,
+                # 437 -> 420 ms per token, 2026-10-28). They still make the sequence multi-device: only that loop calls
+                # the zero3 ratchet that builds the expert store.
+                if any(getattr(arena[ws], '_device', 'cuda') == 'cpu' for ws in op.weight_input_slots
+                       if arena[ws] is not None):
+                    has_cpu_weight = True
+                continue
             best_dev = None
             best_numel = -1
             for ws in op.weight_input_slots:
@@ -3008,6 +3019,18 @@ class TritonSequence:
 
     def bind_weights(self, weights: Dict[str, NBXTensor]):
         """Bind weight tensors to arena slots, then compute per-op devices."""
+        # The same weights as the last bind (the same dict, the same tensor objects): every slot already holds them
+        # or what a zero3 ratchet installed in their place (it re-installs a block before that block's first op), the
+        # folded constants and the per-op devices are this bind's. A decode step re-bound all of it per token — ~20k
+        # weights of Qwen3-30B-A3B's expert store, 16.5 ms per call, before a single op ran (2026-10-28).
+        sig = (id(self._arena), self._arena.epoch, id(weights), len(weights), hash(tuple(map(id, weights.values()))))
+        if sig == getattr(self, "_bound_sig", None) and self._compiled:
+            return
+        self._bound_sig = None
+        self._bind_weights(weights)
+        self._bound_sig = sig
+
+    def _bind_weights(self, weights: Dict[str, NBXTensor]):
         # A fresh weight bind invalidates every cached seq-dependent-constant
         # original: they are NBXTensor views into the PREVIOUS bind's
         # component arena, which is explicitly freed when weights unload

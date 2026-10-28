@@ -7,12 +7,15 @@ All slots hold NBXTensor. Zero torch dependency.
 class Arena:
     """O(1) tensor storage via integer-indexed list."""
 
-    __slots__ = ('_slots', '_num_weights', '_num_inputs')
+    __slots__ = ('_slots', '_num_weights', '_num_inputs', 'epoch')
 
     def __init__(self, size: int, num_weights: int = 0, num_inputs: int = 0):
         self._slots: list = [None] * size
         self._num_weights = num_weights
         self._num_inputs = num_inputs
+        # bumped whenever the weight slots may have been dropped or replaced (`clear_all`, `restore_from`): a bind
+        # memoized against an older epoch binds again (`TritonSequence.bind_weights`)
+        self.epoch = 0
 
     def __getitem__(self, idx: int):
         return self._slots[idx]
@@ -37,6 +40,7 @@ class Arena:
                 f"arena restore length mismatch: snapshot "
                 f"{len(snapshot)} vs arena {len(self._slots)}")
         self._slots[:] = snapshot
+        self.epoch += 1
 
     def clear_intermediates(self):
         """Free intermediate slots (keep weights + inputs)."""
@@ -55,3 +59,4 @@ class Arena:
         """Clear all tensors."""
         for i in range(len(self._slots)):
             self._slots[i] = None
+        self.epoch += 1
