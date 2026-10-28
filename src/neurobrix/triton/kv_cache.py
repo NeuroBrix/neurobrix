@@ -298,8 +298,6 @@ class TritonAttentionInterceptor:
                 return None
         if self._is_prefill:
             return None
-        if os.environ.get("NBX_REPLAY_KV_DECODE") != "1":
-            return None
         return self.cache.replay_key(int(os.environ.get("NBX_KV_BUCKET", "256")))
 
     def skip_positions(self, n: int) -> None:

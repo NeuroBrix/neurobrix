@@ -53,44 +53,29 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator
 
-ENABLED = os.environ.get("NBX_TRITON_REPLAY") == "1"
+# THE ENGINE REPLAYS BY DEFAULT (the supervisor's order 2026-10-28 08:20, S3): a sequence that runs again with the same
+# signature is measured, recorded, VERIFIED byte-equal against the normal path, and only then replayed; every sequence it
+# cannot vouch for is refused BY NAME once (`_decline`) and keeps the normal path. No environment switch: what decides is
+# the sequence's own eligibility and the verification. Measured on the rack (V100, 2026-10-28): TinyLlama-1.1B triton 120
+# tokens at a ~600-word prompt 96.6 -> 17.2 ms a token, Qwen3-30B-A3B on 4 cards 383 -> 278 ms, texts byte-identical.
+ENABLED = True
 
-# A RECORDED PLAN DOES NOT OUTLIVE ITS PROCESS, and enabling this for a single
-# request pays for something nothing will read.
-#
-# Plans live on the sequence object (`seq.__dict__["_replay_plans"]`), so they
-# are reused across the decode steps of ONE generation and discarded at exit.
-# The only thing this module writes to disk is the slab SIZE cache
-# (`_store_slab_size`); there is no plan serialiser and no loader.
-#
-# Measured on an M4 Pro, TinyLlama-1.1B, 120 tokens, byte-identical output in
-# every arm (2026-09-18):
-#
-#     short prompt (~6 tok)     plain  19.71 s   replay  21.20 s   +7.6%
-#     long prompt (~480 tok)    plain 282.05 s   replay 2257.70 s  +8.0x
-#
-# and within the long run replay DID engage — 87.5% of sequence runs took the
-# fast path — so the cost is not a failure to replay. It is what recording and
-# replaying cost at that context, and it is paid again by the next process.
-#
-# This is opt-in and OFF by default, which is the right default and is left
-# alone. The note below exists so that turning it on for a one-shot request is a
-# visible choice rather than a silent 8x.
-def _one_shot_note() -> None:
-    """Say once, on stderr, that a recorded plan will not outlive this process."""
-    global _SAID_ONE_SHOT
-    if not ENABLED or _SAID_ONE_SHOT:
-        return
-    _SAID_ONE_SHOT = True
-    import sys as _sys
-    print("[replay] recording is ON. The plan lives in THIS process only — "
-          "nothing is written to disk and the next process records again. "
-          "Measured cost on one request: +7.6% at a short prompt, 8.0x at ~480 "
-          "tokens of context. Worth it for a process that serves many requests; "
-          "not for one.", file=_sys.stderr, flush=True)
+# A RECORDED PLAN DOES NOT OUTLIVE ITS PROCESS: plans live on the sequence object (`seq.__dict__["_replay_plans"]`),
+# reused across the steps of one generation and discarded with the sequence (`retire_sequence_plans`). The only thing
+# written to disk is the slab SIZE cache (`_store_slab_size`). The M4 Pro's 8.0x at ~480 tokens of context (2026-09-18)
+# was measured before the paged KV decode replayed — every decode step then re-recorded; on the rack at a ~600-word
+# prompt the replay is 5.6x FASTER (2026-10-28, above).
 
 
-_SAID_ONE_SHOT = False
+def _decline(seq, reason: str) -> None:
+    """A sequence the replay cannot vouch for, said once per sequence and reason; it keeps the normal path."""
+    said = seq.__dict__.setdefault("_replay_declined", set())
+    if reason in said:
+        return None
+    said.add(reason)
+    comp = str((getattr(seq, "dag", None) or {}).get("component_name", "?"))
+    print(f"[Replay] {comp}: not replayed — {reason}; the normal path runs", flush=True)
+    return None
 
 # Multi-device replay is LOCKED by default and this flag is how the lock is
 # exercised for its equivalence proof — it is not a feature switch.
@@ -489,6 +474,8 @@ def _drop_plan(plans: dict, sig) -> None:
     plan = _plan_of(plans.pop(sig, None))
     if plan is not None:
         plan.slab.retire()   # deferred: frees once carved tensors die
+        for _o in (getattr(plan, "other_slabs", None) or {}).values():
+            _o.retire()      # the other cards' slabs (a held expert's card) go with it
         if plan.graph is not None:
             try:
                 plan.graph.destroy()
@@ -518,6 +505,34 @@ def drop_plans_by_contribution(pred) -> int:
             _drop_plan(plans, sig)
             dropped += 1
     return dropped
+
+
+def release_idle_slabs(dev: int) -> int:
+    """A malloc refused on `dev` after the pool's flush (`DeviceAllocator.malloc_cuda`): every recorded plan holding a
+    slab on `dev` between its runs is retired — a slab carries no live tensor between two runs of its sequence, it is
+    cached memory exactly as the pool's free blocks are, and the plan Prism priced runs each component's activations,
+    not a frozen copy of another's beside them. The sequence measures and records again at its next run. Returns the
+    bytes released at once (a slab whose carved outputs are still alive frees when they die)."""
+    freed = 0
+    for seq in list(_PLAN_SEQS):
+        plans = seq.__dict__.get("_replay_plans")
+        if not plans:
+            continue
+        for sig in list(plans):
+            plan = _plan_of(plans[sig])
+            if plan is None or (plan.slab.dev_idx != dev and dev not in (getattr(plan, "other_slabs", None) or {})):
+                continue
+            slabs = [plan.slab] + list((getattr(plan, "other_slabs", None) or {}).values())
+            now = sum(sl.size for sl in slabs if sl.dev_idx == dev and not sl.allocs)
+            _drop_plan(plans, sig)
+            freed += now
+            comp = str((getattr(seq, "dag", None) or {}).get("component_name", "?"))
+            print(f"[Replay] {comp}: a recorded plan's slab released on device {dev} ({now / 2**20:.0f} MB at once) — "
+                  f"an allocation there needed the room; it records again at its next run", flush=True)
+    return freed
+
+
+DeviceAllocator._idle_reclaimers.append(release_idle_slabs)
 
 
 def retire_sequence_plans(seq) -> int:
@@ -1058,14 +1073,15 @@ def signature(seq) -> Optional[tuple]:
     # for its head's host experts only, the tail's ops run on their own cards and its cross-card copies are recorded.
     if (getattr(seq, "_is_multi_device", False) and not MULTIDEV_PROOF
             and not getattr(seq, "_tail_replay", False)):
-        return None
+        return _decline(seq, "its ops run on several cards and a multi-device replay is not proven bit-identical yet "
+                             "(only an expert store's card-held tail is)")
     # Stage-driven sequences (the VibeVoice tokenizers the next_token_diffusion
     # flow marks — formerly the core/flow/stages/ calling convention) live outside the standard
     # flow contract: five falsified byte-divergence mechanisms on the
     # VibeVoice tokenizers (2026-08-13 adjudication log) put them
     # behind the capability gate until the residual is root-caused.
     if getattr(seq, "_replay_ineligible", False):
-        return None
+        return _decline(seq, "a stage-driven sequence (outside the standard flow contract)")
     # STATEFUL interceptors (KV-cache attention class) advance internal
     # state per call while the sequence's input signature stays
     # constant — a recorded step would bake one cache length and replay
@@ -1086,12 +1102,14 @@ def signature(seq) -> Optional[tuple]:
                     hasattr(owner, "replay_signature")
                     and hasattr(owner, "replay_advance")
                     and hasattr(owner, "replay_restore")):
-                return None
+                return _decline(seq, f"interceptor {getattr(func, '__qualname__', func)!r} keeps a state it does not "
+                                     f"register with the replay (replay_signature/advance/restore)")
             by_owner.setdefault(id(owner), (owner, []))[1].append(func)
         for owner, funcs in by_owner.values():
             s = owner.replay_signature(funcs)
             if s is None:
-                return None
+                return _decline(seq, f"{type(owner).__name__} gives no replay signature for this step (a prefill, or a "
+                                     f"position scalar its launches bake)")
             contrib.append(s)
             owners.append(owner)
     seq.__dict__["_replay_state_owners"] = owners
@@ -1108,7 +1126,7 @@ def signature(seq) -> Optional[tuple]:
             for op in seq._ops)
         seq._replay_has_nondet = nondet
     if nondet:
-        return None
+        return _decline(seq, "an in-graph random op draws from host-advanced generator state a recorded launch freezes")
     parts: List[Any] = []
     for s in _input_slot_range(seq):
         t = seq._arena[s]
@@ -1282,14 +1300,17 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
     plan machine directly: the B1 stabilizer stays OFF (the recording
     slab is the address-pinning authority) and the interceptor
     registration contract in signature() decides eligibility."""
-    _one_shot_note()
     if os.environ.get("NBX_REPLAY_TUPLE_CENSUS") == "1":
         _install_seams()
         if os.environ.get("NBX_REPLAY_KV_DECODE") == "1":
             _stabilize_tick(seq)
         _census_tick(seq)
         return False
-    if not ENABLED or pre_op_callback is not None:
+    if not ENABLED:
+        return False
+    if pre_op_callback is not None:
+        _decline(seq, "a per-op callback runs beside its ops (a zero3 ratchet, a calibration), which a frozen launch "
+                      "plan cannot call")
         return False
     _seed_autotune_once()
     sig = signature(seq)

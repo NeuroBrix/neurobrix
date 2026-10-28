@@ -3293,7 +3293,7 @@ class TritonSequence:
                   f"live={DeviceAllocator._cuda_live_bytes.get(self.device_idx, 0) / 2**20:.0f}MB "
                   f"pool={DeviceAllocator._pool_cached_bytes.get(self.device_idx, 0) / 2**20:.0f}MB", flush=True)
         try:
-            # Phase 4a frozen-plan replay (opt-in NBX_TRITON_REPLAY=1):
+            # Phase 4a frozen-plan replay (the engine's default, `replay.ENABLED`):
             # 1st run per bucket = warmup (autotune fires), 2nd =
             # recording, 3rd+ = direct C-launcher replay. Handled runs
             # return here; every ineligible case falls through to the
@@ -3310,7 +3310,7 @@ class TritonSequence:
                           f"(state engine step 4), which a frozen launch plan cannot refill", flush=True)
             elif _replay.ENABLED and getattr(self, "_deferred_at", None):
                 pass        # a parked input binds at its first reader; a frozen plan launches with every input bound
-            elif (_replay.ENABLED and os.environ.get("NBX_REPLAY_EXPERT_TAIL") == "1"
+            elif (_replay.ENABLED
                   and getattr(self, "_expert_store", None) is not None and self._is_multi_device
                   and self._expert_tail_cut() is not None):
                 self._run_expert_tail(skip_kills, pre_op_callback)
