@@ -99,6 +99,9 @@ sdpa_thresholds:
 # distinction needs a separate cdna3.yml when the picker actually
 # benefits from larger tiles on MI300.
 memory:
+  # the Triton arena's hold over the walked activations, while a component runs whole: not measured on this device —
+  # a Triton plan here is refused by name (`PrismSolver._live_activation_mb`)
+  triton_arena_activation_factor: null
   compiled_stream_driver_over_price: null   # not measured on this device (C1, 2026-10-27): a stream chunk is priced at its tensors
   # The compiled engine's torch caching allocator (core/runtime/torch_allocator.py; the measured
   # case is in nvidia/volta.yml). ROCm's build of that allocator implements expandable segments on

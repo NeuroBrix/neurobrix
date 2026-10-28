@@ -127,6 +127,14 @@ block_sizes:
 # certify (`launch_keys.flash_tiles_certified`), not read from a hand table.
 
 memory:
+  # What the Triton arena holds while a component runs WHOLE, as a multiple of the walked activation figure (the live set
+  # op by op), read by `PrismSolver._live_activation_mb`. MEASURED 2026-10-28 19:03 on this Mac, after S4a (split and
+  # coalesce) and S4b (no parked block survives a device growth): HAT-L x4 triton at the judged request through the entry
+  # point (prism-load-overlap 07df503b + 2449cc2e), NBX_LIVE_WATERMARK_TRACE every op: allocator live peak 7 579 MB at
+  # aten._softmax::6 = weights 157 + live tensors 3 882 + the pool's parked blocks 3 540, for a walk of 6 215 MB:
+  # (7 579 - 157) / 6 215 = 1.19. The live tensors alone are 0.62x the walk: the excess is the pool's parking.
+  # Output bit-equal to the judged artefact (7ab1111f). Native on the same request: 10 113 MB (sampled MPS driver).
+  triton_arena_activation_factor: 1.19
   # What the DRIVER holds for a temporal-stream chunk on the compiled engine, as a multiple of the chunk's PRICE (the
   # profiler's figure), per component family (the container's component name): MPS's heaps kept across the chunk's
   # ops and its other allocations are inside it, so the chunk is checked against the device limit less the engine's

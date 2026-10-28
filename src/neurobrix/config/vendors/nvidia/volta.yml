@@ -340,6 +340,13 @@ memory:
   # Flex.1-alpha 716, Janus-Pro-7B 588, deepseek-moe-16b 574, CogVideoX-5b-I2V 250, Allegro 128, mochi 100,
   # Qwen3-VL-30B 88, HAT-L 67 MB.
   triton_runtime_growth_mb: 911
+  # What the Triton arena holds while a component runs WHOLE, as a multiple of the walked activation figure (the live set
+  # op by op): the pool's parked blocks and the deferred frees sit beside the live tensors. Read by
+  # `PrismSolver._live_activation_mb` (the whole, zero3 and tiling-trigger tests). MEASURED on this card before S4a/S4b:
+  # CogVideoX-5b's VAE tile ~1.3x (2026-09, 24 GB compiled, 31 GB+ triton for the same tile); mochi-1-preview's whole
+  # VAE at 85 frames 320x576, profiled 24 561 MB, died at 25 202 MB live asking 8 493 MB more: >= 1.35x (2026-09-26,
+  # card 2). The larger of the two.
+  triton_arena_activation_factor: 1.35
   # the compiled engine's: not measured on this device
   compiled_runtime_growth_mb: null
   # The compiled engine's torch caching allocator (core/runtime/torch_allocator.py), applied once

@@ -137,6 +137,9 @@ block_sizes:
 # certify (`launch_keys.flash_tiles_certified`), not read from a hand table.
 
 memory:
+  # the Triton arena's hold over the walked activations, while a component runs whole: not measured on this device —
+  # a Triton plan here is refused by name (`PrismSolver._live_activation_mb`)
+  triton_arena_activation_factor: null
   compiled_stream_driver_over_price: null   # not measured on this device (C1, 2026-10-27): a stream chunk is priced at its tensors
   # 32 KB of threadgroup memory per threadgroup (Apple GPU family 7+).
   # The single most binding difference from every NVIDIA profile here.

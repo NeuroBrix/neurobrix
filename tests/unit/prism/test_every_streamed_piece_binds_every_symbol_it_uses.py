@@ -69,7 +69,9 @@ CASES = [
 SWEEP = ["Open-Sora-v2", "DeepSeek-Coder-V2-Lite-Instruct",
          "Qwen3-30B-A3B-Thinking-2507", "Qwen3-Coder-30B-A3B-Instruct", "Qwen3-Omni-30B-A3B-Instruct",
          "Qwen3-VL-30B-A3B-Thinking", "deepseek-moe-16b-chat", "granite-speech-3.3-8b"]
-RUNGS = [4096, 8192, 16384]
+# 6 GB (the ladder's rung): the Qwen3-30B-A3B pair holds its expert store from 7 680 MB up once no 5 % buffer sits on
+# its walked figure (2026-10-28), and streams at 6 144-7 168 MB.
+RUNGS = [4096, 6144, 8192, 16384]
 # A container whose defaults declare no request is given one explicitly — without it the plan
 # refuses before streaming is tried and the cell proves nothing. Open-Sora-v2's 2026-09-13 build
 # declares no resolution (Forge dd2fa21 adds the vendor's); its traced extent is used here.
