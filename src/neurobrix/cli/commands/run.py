@@ -916,6 +916,10 @@ def cmd_run(args):
             if DeviceAllocator.device_count() > 0:
                 DeviceAllocator.device_synchronize()
 
+    _sampled_peak = None
+    if execution_mode in ("compiled", "sequential"):
+        from neurobrix.core.device_utils import sampled_device_peak
+        _sampled_peak = sampled_device_peak()      # MPS keeps no peak counter: its driver is read through the run
     try:
         _drain_device()
         t_exec_start = time.time()
@@ -940,7 +944,7 @@ def cmd_run(args):
         import torch
         from neurobrix.core.runtime.graph_executor import process_peak_reserved
         _peak = (max(process_peak_reserved(d) for d in range(torch.cuda.device_count()))
-                 if torch.cuda.is_available() else None)
+                 if torch.cuda.is_available() else (_sampled_peak.stop() if _sampled_peak is not None else None))
     else:
         from neurobrix.kernels.nbx_tensor import DeviceAllocator
         _peak = DeviceAllocator.peak_device_bytes()
