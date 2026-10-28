@@ -157,6 +157,10 @@ def test_a_component_that_fits_whole_is_never_the_one_streamed(monkeypatch, band
     _, hi = band
     _, s, seen, _ = _solve(int(hi) + 64, monkeypatch, mode)
     dev = s._prepare_devices(profile(APPLE))[0]
+    if seen[COMP].overhead_bytes == 0 and mode == "compiled":
+        # no buffer on a walked figure (2026-10-28) and no arena factor under compiled: the total IS the whole cost,
+        # so there is nothing to tell apart on this engine; the Triton cell keeps the law (its arena factor)
+        pytest.skip("under compiled the total is the whole cost: no figure between them")
     assert seen[COMP].total_mb > s._usable_mb(dev), (
         "precondition: at this rung the component's total must exceed the usable figure, or the "
         "cell cannot tell the whole cost from the total")

@@ -87,7 +87,7 @@ def _floor_mb(dev) -> float:
 def _component_of_whole(s_t, dev_t, whole_target):
     """A synthetic component whose whole cost on `dev_t` is `whole_target` MB (the arena factor
     read from the solver, never written here)."""
-    factor = s_t._live_activation_mb(SimpleNamespace(activation_mb=1.0))
+    factor = s_t._live_activation_mb(SimpleNamespace(activation_mb=1.0), dev_t)
     act = 1024.0
     weight = whole_target - act * factor
     mem = SimpleNamespace(weight_mb=weight, activation_mb=act, total_mb=weight + act,

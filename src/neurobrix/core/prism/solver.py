@@ -1199,7 +1199,8 @@ class PrismSolver:
             for n, m in plan.component_memory.items():
                 a = plan.components.get(n)
                 if a is not None and a.strategy in ("zero3", "expert_store"):
-                    c = int(self._live_activation_mb(m) * mib) + int(m.overhead_bytes) + granted.get(n, 0)
+                    c = (int(self._live_activation_mb(m, by_name.get(a.device, dev)) * mib) + int(m.overhead_bytes)
+                         + granted.get(n, 0))
                     if a.strategy == "expert_store" and _device_is_unified(a.device, profile):
                         # its graph constants, loaded beside it (`_place_component` Strategy 2.5)
                         c += int(self._graph_constants_mb(container, n, by_name.get(a.device) or dev) * mib)
@@ -1890,7 +1891,7 @@ class PrismSolver:
         return (self._whole_component_mb(container, comp_name, mem, dev) <= usable
                 and self._arena_over_allocation(container, comp_name, mem, dev) is None)
 
-    def _live_activation_mb(self, mem: "ComponentMemory") -> float:
+    def _live_activation_mb(self, mem: "ComponentMemory", dev: Optional["DeviceState"] = None) -> float:
         """A component's activation AS THE ARENA HOLDS IT while the component runs WHOLE on a
         device: the profiled peak under the compiled engine's caching allocator, times
         the planned device's measured `memory.triton_arena_activation_factor` under the triton modes
@@ -1908,22 +1909,24 @@ class PrismSolver:
         if str(getattr(self, "_mode", "compiled")).startswith("triton"):
             # the KV cache inside the figure is one allocation made once, not the arena's activations
             kv_mb = int(getattr(mem, "kv_bytes", 0) or 0) / (1024 * 1024)
-            return (float(mem.activation_mb) - kv_mb) * self._triton_arena_factor() + kv_mb
+            return (float(mem.activation_mb) - kv_mb) * self._triton_arena_factor(dev) + kv_mb
         return float(mem.activation_mb)
 
-    def _triton_arena_factor(self) -> float:
-        """The Triton arena's hold over the walked activations while a component runs whole, as the planned profile's
-        vendor file measured it (`memory.triton_arena_activation_factor`, per device: the smallest device's, the one a
-        whole component is judged on first). Unmeasured (null or absent): the plan is refused by name — a factor
-        carried from another device is a guess wearing a number."""
-        profile = getattr(self, "_planned_profile", None)
-        devices = [d for d in (getattr(profile, "devices", None) or [])
-                   if not str(getattr(d, "device_string", "")).startswith("cpu")]
-        if not devices:
-            raise PlanNotComputable("the Triton arena's factor is read from the planned profile's device, and this "
-                                    "plan has no accelerator in its profile")
+    def _triton_arena_factor(self, on: Optional["DeviceState"] = None) -> float:
+        """The Triton arena's hold over the walked activations while a component runs whole, as the vendor file of the
+        device it is judged on measured it (`memory.triton_arena_activation_factor`): `on`'s, else the planned
+        profile's smallest device (the one a whole component is judged on first). Unmeasured (null or absent): the
+        plan is refused by name — a factor carried from another device is a guess wearing a number."""
         from neurobrix.core.config.loader import vendor_config_for_device
-        dev = min(devices, key=lambda d: d.memory_mb)
+        dev = getattr(on, "spec", None)
+        if dev is None:
+            profile = getattr(self, "_planned_profile", None)
+            devices = [d for d in (getattr(profile, "devices", None) or [])
+                       if not str(getattr(d, "device_string", "")).startswith("cpu")]
+            if not devices:
+                raise PlanNotComputable("the Triton arena's factor is read from the vendor file of the device a "
+                                        "component is judged on, and this plan names no accelerator")
+            dev = min(devices, key=lambda d: d.memory_mb)
         brand = getattr(getattr(dev, "brand", None), "value", getattr(dev, "brand", None))
         value = ((vendor_config_for_device(brand, dev.architecture, getattr(dev, "compute_capability", None),
                                            model=getattr(dev, "name", None)).get("memory") or {})
@@ -1981,7 +1984,7 @@ class PrismSolver:
         and cache (`_held_component_mb`), any other its whole cost. The ONE figure the execution door and the lazy
         plan's phase check read."""
         if str(alloc.strategy) == "zero3":
-            return float(alloc.resident_weight_mb or 0.0) + self._live_activation_mb(mem)
+            return float(alloc.resident_weight_mb or 0.0) + self._live_activation_mb(mem, dev)
         if tiling is not None:
             return self._tiled_component_mb(container, comp_name, mem, dev, tiling)
         if stream is not None:
@@ -2000,7 +2003,7 @@ class PrismSolver:
             return self._whole_component_mb(container, comp_name, mem, dev)
         consts = (self._graph_constants_mb(container, comp_name, dev)
                   if getattr(getattr(dev, "spec", None), "has_unified_memory", False) else 0.0)
-        return (float(alloc.resident_weight_mb) + float(alloc.expert_cache_mb) + self._live_activation_mb(mem)
+        return (float(alloc.resident_weight_mb) + float(alloc.expert_cache_mb) + self._live_activation_mb(mem, dev)
                 + consts)
 
     def _whole_component_mb(self, container, comp_name: str, mem: "ComponentMemory",
@@ -2009,7 +2012,7 @@ class PrismSolver:
         component's dtype, plus its activations as the arena holds them (`_live_activation_mb`).
         The figure `_usable_mb` is compared to."""
         return (mem.weight_mb * dev.get_cost_multiplier(self._get_component_dtype(container, comp_name))
-                + self._live_activation_mb(mem))
+                + self._live_activation_mb(mem, dev))
 
     def _effective_capacity_mb(self, dev: "DeviceState") -> float:
         """What a whole plan may be budgeted against on `dev`: `dev.budget_mb`, the memory law's
@@ -7060,7 +7063,7 @@ class PrismSolver:
             # DeepSeek-Coder-V2-Lite's 1 080 MB of RoPE tables beside a store granted to the byte.
             consts_mb = self._graph_constants_mb(container, comp_name, largest)
             store = self._expert_store_budget(comp_name, real_weight,
-                                              usable - self._live_activation_mb(mem) - consts_mb, cost_mult)
+                                              usable - self._live_activation_mb(mem, largest) - consts_mb, cost_mult)
             cap = self._max_allocation_mb(largest)
             if store is not None and (cap is None or store[0] <= cap):
                 dense_mb, floor_mb, _ = self._expert_store_floor(comp_name, real_weight, cost_mult)
@@ -7078,7 +7081,7 @@ class PrismSolver:
         # it then dies in zero3's CUDA machinery before an op runs
         # (Sana 4Kpx compiled on mps, torch.cuda.set_device, 2026-09-21).
         # Selection consults the same device door the budget does.
-        if (self._live_activation_mb(mem) <= usable
+        if (self._live_activation_mb(mem, largest) <= usable
                 and not _device_is_unified(largest.device_string, profile)):
             shard_map = {s: "cpu" for s in shard_sizes.get(comp_name, {})}
             return (f"zero3:{largest.device_string}", shard_map)
@@ -7174,7 +7177,7 @@ class PrismSolver:
             store = self.__dict__.setdefault("_host_device_overflow", {})
             prev = store.get("a component's host placement")
             comps = dict(prev[2]) if prev else {}
-            comps[comp_name] = self._live_activation_mb(mem)
+            comps[comp_name] = self._live_activation_mb(mem, largest)
             store["a component's host placement"] = (largest.device_string, usable, comps)
             self._snapshot_tiling_declines("a component's host placement", comps)
             return None
@@ -8155,7 +8158,7 @@ class PrismSolver:
         overflow: Dict[str, float] = {}
         for comp_name, mem in sorted_comps:
             whole = (self._whole_component_mb(container, comp_name, mem, largest) if unified
-                     else self._live_activation_mb(mem))
+                     else self._live_activation_mb(mem, largest))
             if whole <= whole_usable:
                 continue
             tiling = self._spatial_component_tiling(

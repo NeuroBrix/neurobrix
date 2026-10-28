@@ -73,7 +73,9 @@ IDS = [c[0] for c in OVER]
 # file's `compiled_private_reserve_mb` on unified memory (Apple: 3 900 MB, MPS's private reserve): PixArt's compiled
 # capacity is 11 198 - 3 900 = 7 298 MB under its 9 634.6 MB text encoder, granite's 18 186 x 0.95 - 3 900 = 13 376.7
 # under 17 151.7 (Dell, 2026-10-21 16:54); their Triton graphs, which hold no private reserve, still sit in the window.
-WINDOW_MODE = {"Flex.1-alpha": "triton", "PixArt-XL-2-1024-MS": "triton", "granite-speech-3.3-8b": "triton"}
+# granite-speech-3.3-8b came back into the compiled window when the 5 % buffer left the walked figures (2026-10-28,
+# janus-kv-once-overhead-measured: 16 335 MB under the compiled capacity 16 384): its case is constructed on that graph.
+WINDOW_MODE = {"Flex.1-alpha": "triton", "PixArt-XL-2-1024-MS": "triton"}
 
 
 def _spec(pool_mb: int) -> dict:
