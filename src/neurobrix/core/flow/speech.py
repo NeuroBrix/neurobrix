@@ -26,7 +26,7 @@ leg mirrors the vendor pipeline op-for-op:
        flow never writes files)
 
 Sampling runs on the shared seeded CPU fp64 draw frontier
-(kernels/seeded_draw.py) — ONE code path for both engines (R30); the
+(nbxtensor/random/seeded_draw.py) — ONE code path for both engines (R30); the
 triton mirror consumes the same module.
 
 Every quantity is read from topology.flow.speech / pkg.defaults — no
@@ -38,7 +38,7 @@ from typing import Any, Dict, List, Optional
 
 import torch
 
-from neurobrix.kernels.seeded_draw import SeededDrawStream
+from nbxtensor.random.seeded_draw import SeededDrawStream
 from .table_gather import gather_rows
 
 

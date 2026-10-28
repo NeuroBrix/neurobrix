@@ -1,4 +1,4 @@
-"""`NBX_FORCE_RAND_SEED` (kernels/rng_pin) is a diagnostic contract of BOTH engines: under it the Euler ancestral
+"""`NBX_FORCE_RAND_SEED` (nbxtensor/random/rng_pin) is a diagnostic contract of BOTH engines: under it the Euler ancestral
 schedulers of the compiled and the Triton engine add the SAME noise at a step, so a pinned cross-engine drift past the
 first stochastic step compares kernels, not two noise streams. The Mac, 2026-10-25 02:43: the pinned 2-step drift of
 Allegro-TI2V parted exactly at the transformer's second-step input (-413 700 vs -455 092) — the Triton scheduler drew
@@ -10,7 +10,7 @@ its noise differs from the pinned draw and the first assertion fails. Injection 
 import numpy as np
 import pytest
 
-from neurobrix.kernels import rng_pin
+from nbxtensor.random import rng_pin
 
 CFG = {"num_train_timesteps": 1000, "beta_start": 0.00085, "beta_end": 0.012, "beta_schedule": "scaled_linear",
        "prediction_type": "epsilon", "timestep_spacing": "linspace"}

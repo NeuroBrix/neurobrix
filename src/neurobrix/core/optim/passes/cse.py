@@ -40,7 +40,7 @@ those tids hold. Three exclusions, each with its evidence:
 
 2. RANDOM DRAWS ARE NEVER VALUE-NUMBERED. Two identical `randn` ops
    draw different values by design. Worse, under `NBX_FORCE_RAND_SEED`
-   every draw comes from ONE sequential stream (kernels/rng_pin.py), so
+   every draw comes from ONE sequential stream (nbxtensor/random/rng_pin.py), so
    merging two draws changes the draw COUNT and shifts every later
    draw — breaking the seeded battery baselines.
 

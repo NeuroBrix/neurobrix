@@ -10,7 +10,7 @@ real bound — but it has a blind spot that no campaign row will ever reach: a
 pinned latent is OUR latent handed to THEM, so the stream that produced it is
 never itself under test. Since the Triton branch draws its noise from our own
 kernel (`kernels/ops/rand_op.py::randn_kernel`, seeded by
-`kernels/rng_stream.py`), the justness of that stream is proved by nothing.
+`nbxtensor/random/rng_stream.py`), the justness of that stream is proved by nothing.
 
 This tool proves it once, separately, and STATISTICALLY — not pixel to pixel,
 because there is no reference stream to be pixel-equal to. It is an engine
@@ -82,7 +82,7 @@ def draw(n: int, run_seed: int, count: int, device: str) -> list:
     Consumption order is the contract: draw i is the (i+1)-th stochastic draw a
     run makes, exactly as a flow handler would consume it.
     """
-    from neurobrix.kernels import rng_stream
+    from nbxtensor.random import rng_stream
     from neurobrix.kernels.wrappers import randn_wrapper
 
     rng_stream.set_run_seed(run_seed)
@@ -96,7 +96,7 @@ def draw(n: int, run_seed: int, count: int, device: str) -> list:
 
 def seed_sequence(run_seed: int, count: int) -> list:
     """The per-draw seeds a run would use, drawn from the stream itself."""
-    from neurobrix.kernels import rng_stream
+    from nbxtensor.random import rng_stream
 
     rng_stream.set_run_seed(run_seed)
     seeds = [rng_stream.next_seed() for _ in range(count)]
@@ -200,7 +200,7 @@ def main() -> int:
     report = {
         "tool": "noise_stream_validation",
         "when": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "under_test": "kernels/rng_stream.py + kernels/ops/rand_op.py::randn_kernel",
+        "under_test": "nbxtensor/random/rng_stream.py + kernels/ops/rand_op.py::randn_kernel",
         "n_per_draw": a.n, "draws": a.draws, "run_seed": a.seed,
         "sigma": SIGMA, "bounds": b,
         "results": results,

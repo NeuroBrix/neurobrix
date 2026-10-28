@@ -23,7 +23,7 @@ Zero torch, zero device state: pure Python integers.
 THE ONE DRAW (owner, 2026-10-13 02:05): a model's initial noise is ONE draw, data-driven (the run's
 seed), identical between the compiled and the Triton branch and to the vendor at equal seed. Both
 engines take it from `init_draw(shape)` below — the vendor's CPU draw reproduced torch-free
-(`kernels/mt_randn.py`: MT19937 + ATen's normal_fill, within 4 ulp of `torch.randn(generator=cpu)`)
+(`nbxtensor/random/mt_randn.py`: MT19937 + ATen's normal_fill, within 4 ulp of `torch.randn(generator=cpu)`)
 — as the first draw of the run's seeded stream, then the next for every further `init: randn`
 variable, in consumption order. The per-draw Philox seeds above still serve the Triton random
 kernels of the hot loop (scheduler noise); the compiled branch's scheduler draws keep its generator.
@@ -59,7 +59,7 @@ def _mt():
     if _RUN_SEED is None:
         raise RuntimeError("rng_stream: a draw while inactive: the run has no seed")
     if _MT is None:
-        from neurobrix.kernels.mt_randn import MT19937
+        from nbxtensor.random.mt_randn import MT19937
         _MT = MT19937(_RUN_SEED)
     return _MT
 
@@ -86,13 +86,13 @@ def next_uniform(shape):
 
 def init_draw(shape):
     """The run's next initial-noise draw as a float32 numpy array of `shape` — the vendor's CPU draw for
-    the run's seed (`kernels/mt_randn.MT19937`), the same bytes in both engines. Refused when no seed is
+    the run's seed (`nbxtensor/random/mt_randn.MT19937`), the same bytes in both engines. Refused when no seed is
     armed: a seedless run draws unseeded in each engine (the historical behaviour), and that is said."""
     global _MT
     if _RUN_SEED is None:
         raise RuntimeError("rng_stream.init_draw() called while inactive: the run has no seed")
     if _MT is None:
-        from neurobrix.kernels.mt_randn import MT19937
+        from nbxtensor.random.mt_randn import MT19937
         _MT = MT19937(_RUN_SEED)
     shape = tuple(int(x) for x in shape)
     n = 1

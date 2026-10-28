@@ -197,7 +197,7 @@ class NativeATenDispatcher:
         # initial and scheduler noise, as the vendor pipeline's single
         # generator); a run with none (seedless) keeps torch's global stream.
         if base_name in ("randn_like", "rand_like", "randn", "rand"):
-            from neurobrix.kernels.rng_pin import (
+            from nbxtensor.random.rng_pin import (
                 pinned_seed, pinned_normal, pinned_uniform)
             from neurobrix.core.runtime.graph import run_generator
             kw = self._extract_kwargs(attributes)

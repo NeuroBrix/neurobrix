@@ -14,7 +14,7 @@ the global stream equals, element for element, the first frame of the
 2026-10-04, 86 400 of 86 400) — the correlated-injection class the
 resolver's docstring records for the scheduler noise.
 
-This module is the ATen mirror of `kernels/rng_stream` (the Triton branch,
+This module is the ATen mirror of `nbxtensor/random/rng_stream` (the Triton branch,
 where every draw — graph op, initial noise, scheduler — already comes from
 one stream): the executor arms it once per request with the resolver's
 generator, and the graph's random ops draw from it. Draws follow diffusers'
@@ -53,9 +53,9 @@ def draw(op_name: str, shape: Sequence[int], dtype: torch.dtype,
     `op_name` is one of DRAW_OPS; anything else is refused by name."""
     if op_name not in DRAW_OPS:
         raise ValueError(f"run_generator.draw: {op_name!r} is not one of {DRAW_OPS}")
-    # A seeded run: the vendor's CPU stream, continued (kernels/rng_stream) — the same values the Triton branch
+    # A seeded run: the vendor's CPU stream, continued (nbxtensor/random/rng_stream) — the same values the Triton branch
     # draws for the same op, in the same order.
-    from neurobrix.kernels import rng_stream
+    from nbxtensor.random import rng_stream
     if rng_stream.active():
         arr = (rng_stream.next_uniform(shape) if op_name in UNIFORM_OPS else rng_stream.next_normal(shape))
         return torch.from_numpy(arr).to(device=device, dtype=dtype)

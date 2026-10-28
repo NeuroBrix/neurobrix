@@ -6948,20 +6948,20 @@ def _draw_seed() -> int:
 
     Run-scoped stream when armed (reproducible, --seed-driven; the Triton
     mirror of the compiled engine's run-scoped generator — see
-    kernels/rng_stream.py), else the historical unseeded fallback. The
+    nbxtensor/random/rng_stream.py), else the historical unseeded fallback. The
     NBX_FORCE_RAND_SEED pin (rng_pin) is checked by the callers BEFORE any
     kernel draw and keeps precedence over this stream.
     """
-    from . import rng_stream
+    from nbxtensor.random import rng_stream
     if rng_stream.active():
         return rng_stream.next_seed()
     return __import__("random").randint(0, 2**31 - 1)
 
 
 def _stream_draw(kind, shape, dtype, device):
-    """A seeded run's draw (kernels/rng_stream: the vendor's CPU stream, continued in consumption order — the same
+    """A seeded run's draw (nbxtensor/random/rng_stream: the vendor's CPU stream, continued in consumption order — the same
     values the compiled branch draws), as an NBXTensor of `dtype` on `device`; None when the run has no seed."""
-    from . import rng_stream
+    from nbxtensor.random import rng_stream
     if not rng_stream.active():
         return None
     arr = rng_stream.next_normal(shape) if kind == "normal" else rng_stream.next_uniform(shape)
@@ -6976,7 +6976,7 @@ def _stream_draw(kind, shape, dtype, device):
 def rand_wrapper(*args, **kwargs) :
     """rand(size, ...) → uniform [0, 1) via Triton kernel."""
     from .ops.rand_op import rand_kernel
-    from .rng_pin import pinned_seed, pinned_uniform
+    from nbxtensor.random.rng_pin import pinned_seed, pinned_uniform
     # ATen signature: rand(SymInt[] size, ...)
     size = args[0] if args else kwargs.get('size', [])
     if isinstance(size, NBXTensor):
@@ -7044,7 +7044,7 @@ def rand_like_wrapper(x, **kwargs) :
 def randn_like_wrapper(x, **kwargs) :
     """randn_like(tensor) → standard normal N(0,1) same shape/dtype/device."""
     from .ops.rand_op import randn_kernel
-    from .rng_pin import pinned_seed, pinned_normal
+    from nbxtensor.random.rng_pin import pinned_seed, pinned_normal
     dtype = kwargs.get('dtype', x.dtype)
     device = kwargs.get('device', x.device)
     if pinned_seed() is not None:

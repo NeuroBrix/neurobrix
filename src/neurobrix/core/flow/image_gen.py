@@ -156,7 +156,7 @@ class ImageGenLeg:
         # engines consume the same CPU fp32 array, so they start from
         # bit-identical noise — RNG provenance can never explain a
         # cross-engine divergence.
-        from neurobrix.kernels.seeded_draw import seeded_gaussian
+        from nbxtensor.random.seeded_draw import seeded_gaussian
         latents = torch.from_numpy(
             seeded_gaussian(seed, (1, lat_ch, h_lat, w_lat))
         ).to(device=device, dtype=dtype)

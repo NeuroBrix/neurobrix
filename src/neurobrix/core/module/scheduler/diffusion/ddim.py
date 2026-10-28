@@ -244,9 +244,9 @@ class DDIMScheduler(DiffusionSchedulerBase):
 
         # Add noise if eta > 0
         if self.eta > 0:
-            from neurobrix.kernels import rng_stream
+            from nbxtensor.random import rng_stream
             if rng_stream.active():
-                # A seeded run: the run stream's next draw (kernels/rng_stream), the Triton scheduler's same values.
+                # A seeded run: the run stream's next draw (nbxtensor/random/rng_stream), the Triton scheduler's same values.
                 noise = torch.from_numpy(rng_stream.next_normal(tuple(sample.shape))).to(
                     device=sample.device, dtype=sample.dtype)
             else:

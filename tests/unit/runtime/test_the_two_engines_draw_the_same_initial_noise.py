@@ -1,5 +1,5 @@
 """The compiled and the Triton branch draw the SAME initial noise for a seeded run — the vendor's CPU
-draw, torch-free, from the shared run stream (`kernels/rng_stream.init_draw`, `kernels/mt_randn.py`).
+draw, torch-free, from the shared run stream (`nbxtensor/random/rng_stream.init_draw`, `nbxtensor/random/mt_randn.py`).
 
 The owner's rule, 2026-10-13 02:05: one draw, data-driven, identical between branches and to the
 vendor at equal seed. Until now the compiled branch drew `torch.randn` on a device generator and the
@@ -23,8 +23,8 @@ import numpy as np
 import pytest
 
 from neurobrix.core.runtime.resolution.variable_resolver import VariableResolver
-from neurobrix.kernels import rng_stream
-from neurobrix.kernels.mt_randn import mt_randn
+from nbxtensor.random import rng_stream
+from nbxtensor.random.mt_randn import mt_randn
 
 SPEC = {"type": "tensor", "role": "state_tensor",
         "resolver": {"method": "allocate", "init": "randn",

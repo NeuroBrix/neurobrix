@@ -39,7 +39,7 @@ from typing import Any, Dict, List
 import numpy as np
 import torch
 
-from neurobrix.kernels.seeded_draw import SeededDrawStream, seeded_gaussian
+from nbxtensor.random.seeded_draw import SeededDrawStream, seeded_gaussian
 
 
 def _require(block: Dict[str, Any], key: str, where: str):

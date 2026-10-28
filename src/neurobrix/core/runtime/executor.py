@@ -298,7 +298,7 @@ class RuntimeExecutor:
     def _arm_random_streams(self, inputs: Dict[str, Any], merged_defaults: Dict[str, Any]) -> None:
         """Arm the run's random streams, once per request, in EVERY mode.
 
-        The shared run stream (`kernels/rng_stream`, torch-free) carries the request's seed
+        The shared run stream (`nbxtensor/random/rng_stream`, torch-free) carries the request's seed
         (`global.seed`, else the container's default) for both engines: THE ONE DRAW (owner
         2026-10-13) — every seeded `init: randn` variable is the vendor's CPU draw from it,
         the same bytes in the compiled and the Triton branch — and, in the Triton branch,
@@ -311,7 +311,7 @@ class RuntimeExecutor:
         run's sampling generator (graph/run_generator), the stream the scheduler noise comes
         from, never from a second stream on the same seed. A seedless request keeps the
         unseeded draw in each engine, as before."""
-        from neurobrix.kernels import rng_stream
+        from nbxtensor.random import rng_stream
         rng_stream.set_run_seed(self.run_seed(inputs, merged_defaults))
         if self.mode not in ("triton", "triton_sequential"):
             from neurobrix.core.runtime.graph import run_generator

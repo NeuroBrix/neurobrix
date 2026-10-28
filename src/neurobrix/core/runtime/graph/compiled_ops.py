@@ -255,7 +255,7 @@ class CompiledOpResolver:
         # ── NATIVE MODE: special handlers for complex ATen signatures ──
         # [PINNED NOISE] R30 mirror of the sequential dispatcher's block and
         # the triton rand wrappers: under NBX_FORCE_RAND_SEED all engines
-        # draw from ONE shared numpy RandomState (kernels/rng_pin.py), so a
+        # draw from ONE shared numpy RandomState (nbxtensor/random/rng_pin.py), so a
         # stochastic vocoder (s3gen CFM + NSF/SineGen source) is reproducible
         # per engine and draw-coupled across engines. The compiled path was
         # the uncovered side (MiniCPM-o HiFT pin rows, 2026-08-02). Default
@@ -429,7 +429,7 @@ class CompiledOpResolver:
         aten_fn = getattr(torch.ops.aten, op_name)
 
         def pinned_rand(*args, **kwargs):
-            from neurobrix.kernels.rng_pin import (
+            from nbxtensor.random.rng_pin import (
                 pinned_seed, pinned_normal, pinned_uniform)
             from neurobrix.core.runtime.graph import run_generator
             if is_like and args and isinstance(args[0], torch.Tensor):

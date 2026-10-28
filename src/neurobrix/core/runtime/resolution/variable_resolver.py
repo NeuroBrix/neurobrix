@@ -121,7 +121,7 @@ class VariableResolver:
                       resolver_node: Dict[str, Any]):
         """The Triton branch's `allocate`: NBXTensor end-to-end. The random
         inits are drawn by the house random kernels from the branch's own
-        run-scoped seeded stream (`kernels/rng_stream`, armed by the flow
+        run-scoped seeded stream (`nbxtensor/random/rng_stream`, armed by the flow
         from the same data-driven seed) — never torch's generator (R33).
         The engines' noise streams are therefore distinct by construction;
         each is reproducible per (seed, draw order)."""
@@ -148,9 +148,9 @@ class VariableResolver:
                 if tuple(arr.shape) == tuple(shape):
                     return NBXTensor.from_numpy(np.ascontiguousarray(arr)).to(dt)
             # THE ONE DRAW (owner 2026-10-13): the seeded run's initial noise is the shared run stream's
-            # draw (`kernels/rng_stream.init_draw`, the vendor's CPU draw), the same bytes as the compiled
+            # draw (`nbxtensor/random/rng_stream.init_draw`, the vendor's CPU draw), the same bytes as the compiled
             # branch; the house randn kernel serves a seedless run and the hot loop's own draws.
-            from neurobrix.kernels import rng_stream as _rng
+            from nbxtensor.random import rng_stream as _rng
             if _rng.active():
                 # from_numpy lands on the process's card (the Triton branch's one device); the dtype
                 # follows the variable's declared one.
@@ -402,8 +402,8 @@ class VariableResolver:
                         return _ft.to(dtype=dtype, device=self.device)
                 # THE ONE DRAW (owner 2026-10-13): a seeded run draws its initial noise from the shared
                 # run stream — the vendor's CPU draw, torch-free, the same bytes the Triton branch
-                # draws (`kernels/rng_stream.init_draw`); a seedless run keeps torch's unseeded draw.
-                from neurobrix.kernels import rng_stream as _rng
+                # draws (`nbxtensor/random/rng_stream.init_draw`); a seedless run keeps torch's unseeded draw.
+                from nbxtensor.random import rng_stream as _rng
                 if _rng.active():
                     _t = torch.from_numpy(_rng.init_draw(shape_tuple)).to(device=self.device, dtype=dtype)
                 elif self.defaults.get("seed") is not None:

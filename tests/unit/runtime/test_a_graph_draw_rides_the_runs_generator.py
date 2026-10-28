@@ -6,7 +6,7 @@ stochastic scheduler step. The ATen branch drew the initial and scheduler noise 
 generator (`VariableResolver.sampling_generator`) but a graph's own `aten::randn_like` from
 torch's GLOBAL generator, seeded with the same seed: the two streams re-emit one sequence, so a
 traced posterior draw equalled the first frame of the initial noise, element for element. The
-Triton branch never had the defect (`kernels/rng_stream` serves every draw). The executor now
+Triton branch never had the defect (`nbxtensor/random/rng_stream` serves every draw). The executor now
 arms `core/runtime/graph/run_generator` with the resolver's generator for the ATen modes, and
 both ATen dispatch sites (compiled `CompiledOpResolver`, sequential `NativeATenDispatcher`)
 draw from it.

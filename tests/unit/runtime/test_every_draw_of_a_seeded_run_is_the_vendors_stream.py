@@ -1,4 +1,4 @@
-"""Every draw of a seeded run is the vendor's CPU stream, continued, in both engines (kernels/rng_stream).
+"""Every draw of a seeded run is the vendor's CPU stream, continued, in both engines (nbxtensor/random/rng_stream).
 
 The vendor threads one generator through every draw of a run: the image encoder's posterior sample, the initial
 noise, each ancestral step's noise. Measured 2026-10-14: Allegro-TI2V at its gate request rendered the same clip in
@@ -23,8 +23,8 @@ import numpy as np
 import pytest
 import torch
 
-from neurobrix.kernels import rng_stream
-from neurobrix.kernels.mt_randn import MT19937
+from nbxtensor.random import rng_stream
+from nbxtensor.random.mt_randn import MT19937
 
 CFG = {"num_train_timesteps": 1000, "beta_start": 0.0001, "beta_end": 0.02, "beta_schedule": "linear",
        "prediction_type": "epsilon", "timestep_spacing": "linspace", "steps_offset": 0}

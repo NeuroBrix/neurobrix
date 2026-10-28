@@ -3,7 +3,7 @@ engines (R33-pure).
 
 Mirror of core/flow/speech_cfm.py over the SAME flow.speech contract and
 the SAME component graphs — NBXTensor end-to-end, zero torch (R33). The
-engines share BOTH seeded frontiers (kernels/seeded_draw.py): the codec
+engines share BOTH seeded frontiers (nbxtensor/random/seeded_draw.py): the codec
 draws (draw_chattts) and the CFM initial noise (seeded_gaussian) come
 from one CPU fp64/np source, so codes and latents are byte-coupled
 across engines; only the per-op numeric field differs (the Ming
@@ -35,7 +35,7 @@ import numpy as np
 
 from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
 from neurobrix.kernels import wrappers as w
-from neurobrix.kernels.seeded_draw import SeededDrawStream, seeded_gaussian
+from nbxtensor.random.seeded_draw import SeededDrawStream, seeded_gaussian
 from neurobrix.triton.device_transfer import needs_move, transfer_tensor
 from neurobrix.triton.flow.speech import _require, _from_np_on
 

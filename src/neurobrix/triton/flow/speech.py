@@ -3,7 +3,7 @@
 Mirror of core/flow/speech.py over the SAME flow.speech contract and the
 SAME component graphs — NBXTensor end-to-end, zero torch (R33). The two
 engines share ONE seeded CPU fp64 draw frontier
-(kernels/seeded_draw.py): identical seeds, identical draws, identical
+(nbxtensor/random/seeded_draw.py): identical seeds, identical draws, identical
 codec frames whenever probabilities agree (R30 by construction).
 
 Structure is the compiled leg's, section for section:
@@ -32,7 +32,7 @@ import numpy as np
 
 from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
 from neurobrix.kernels import wrappers as w
-from neurobrix.kernels.seeded_draw import SeededDrawStream
+from nbxtensor.random.seeded_draw import SeededDrawStream
 from neurobrix.triton.device_transfer import needs_move, transfer_tensor
 
 

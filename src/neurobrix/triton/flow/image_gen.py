@@ -3,7 +3,7 @@
 Mirror of core/flow/image_gen.py over the SAME flow.image_gen contract
 and the SAME component graphs — NBXTensor end-to-end, zero torch (R33).
 The two engines share ONE seeded CPU fp32 gaussian frontier
-(kernels/seeded_draw.py:seeded_gaussian): identical seed, identical
+(nbxtensor/random/seeded_draw.py:seeded_gaussian): identical seed, identical
 initial latents, so the engines can only diverge through kernel
 numerics (R30 by construction).
 
@@ -31,7 +31,7 @@ from typing import Any, Dict
 import numpy as np
 
 from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator
-from neurobrix.kernels.seeded_draw import seeded_gaussian
+from nbxtensor.random.seeded_draw import seeded_gaussian
 from neurobrix.triton.device_transfer import needs_move, transfer_tensor
 
 

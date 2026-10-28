@@ -1,4 +1,4 @@
-"""ONE draw for both engines, torch-free, the vendor's CPU draw (kernels/mt_randn.py).
+"""ONE draw for both engines, torch-free, the vendor's CPU draw (nbxtensor/random/mt_randn.py).
 
 The owner's rule, 2026-10-13: a model's initial noise is one draw, data-driven, identical between
 the compiled and the Triton branch and to the vendor at equal seed. Three verdicts of 2026-10-13
@@ -19,7 +19,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from neurobrix.kernels.mt_randn import MT19937, mt_randn
+from nbxtensor.random.mt_randn import MT19937, mt_randn
 
 torch = pytest.importorskip("torch")
 
