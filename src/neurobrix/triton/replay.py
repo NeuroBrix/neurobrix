@@ -800,7 +800,7 @@ def _install_seams() -> None:
 class FrozenPlan:
     __slots__ = ("records", "slab", "arena_snapshot", "frozen_inputs",
                  "launches", "actions", "output_slots", "scan_limit",
-                 "graph", "graph_disabled", "extra_scan", "other_slabs")
+                 "graph", "graph_disabled", "extra_scan", "other_slabs", "_crosses")
 
     def __init__(self, records: List[Tuple[str, tuple]],
                  slab: SlabAllocator,
@@ -908,7 +908,11 @@ class FrozenPlan:
                     vals.append((s, list(b)))
             print(f"[Replay][SCAN] copied={_scan_copied} "
                   f"small_inputs={vals}", flush=True)
-        if (os.environ.get("NBX_REPLAY_GRAPH") == "1"
+        # A plan that crosses cards (an expert store's card-held tail) replays one graph per stretch on one card
+        # (`replay_graph.SegmentedPlan`), the engine's choice: its direct replay is ~1 850 Python-driven launches a
+        # token (Qwen3-30B-A3B on 4 V100, 2026-10-28: ~60 ms of a 184 ms token for a few ms of kernels).
+        _segmented = self.crosses_cards()
+        if ((os.environ.get("NBX_REPLAY_GRAPH") == "1" or _segmented)
                 and not self.graph_disabled):
             # Full-list capture. The launch is bracketed by device-wide
             # syncs (CapturedPlan.launch): the input-scan copies are
@@ -943,12 +947,18 @@ class FrozenPlan:
                                   if t == _H2D else r))
                                 for t, r in self.records[-16:]]
                         print(f"[Replay][GRAPH] tail16={tail}", flush=True)
-                    self.graph = CapturedPlan(
-                        recs, getattr(self.slab, "dev_idx", None))
-                    print(f"[Replay][GRAPH] bucket captured: "
-                          f"{self.graph.launches} launches as one CUDA "
-                          f"graph ({cut}/{len(self.records)} actions "
-                          f"in-graph)")
+                    if _segmented:
+                        from neurobrix.triton.replay_graph import SegmentedPlan
+                        self.graph = SegmentedPlan(recs, getattr(self.slab, "dev_idx", None))
+                        print(f"[Replay][GRAPH] bucket captured: {self.graph.launches} launches as "
+                              f"{self.graph.stretches} CUDA graphs, one per stretch on one card")
+                    else:
+                        self.graph = CapturedPlan(
+                            recs, getattr(self.slab, "dev_idx", None))
+                        print(f"[Replay][GRAPH] bucket captured: "
+                              f"{self.graph.launches} launches as one CUDA "
+                              f"graph ({cut}/{len(self.records)} actions "
+                              f"in-graph)")
                 self.graph.launch()
             except Exception as e:
                 if getattr(e, "executed", False):
@@ -995,6 +1005,15 @@ class FrozenPlan:
             DeviceAllocator.memcpy(fresh.data_ptr(), frozen.data_ptr(),
                                    frozen._nbytes, 3)
             arena[slot] = fresh
+
+    def crosses_cards(self) -> bool:
+        """The recorded actions switch to a card other than the plan's own (`_SETDEV`)."""
+        try:
+            return self._crosses
+        except AttributeError:
+            own = getattr(self.slab, "dev_idx", None)
+            self._crosses = any(tag == _SETDEV and rec[0] != own for tag, rec in self.records)
+            return self._crosses
 
     def _direct_actions(self, records=None) -> None:
         """Phase 4a direct C-launcher replay of the action list."""

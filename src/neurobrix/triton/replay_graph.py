@@ -248,3 +248,75 @@ class CapturedPlan:
         if self.stream.value:
             api.stream_destroy(self.stream)
             self.stream = ctypes.c_void_p()
+
+
+class SegmentedPlan:
+    """A multi-card plan's action list as one CUDA graph per stretch of actions on one card (S3, 2026-10-28).
+
+    A plan recorded across cards (an expert store's card-held tail: each layer's attention on the home card, its MoE
+    op on the card that holds the block, the hidden state crossing by a peer copy) switches cards with a recorded
+    SETDEV and orders the crossings with recorded device syncs. Each maximal stretch of kernels, copies and memsets
+    between two of those is captured on ITS card (`CapturedPlan`, bracketed by that card's syncs, so a peer copy it
+    issues has landed before the next stretch starts); the SETDEVs and syncs between stretches run directly. The order
+    is the recorded order and every stretch completes before the next begins — the direct replay's semantics, one
+    graph launch per stretch instead of one Python-driven launch per kernel."""
+
+    __slots__ = ("steps", "launches", "stretches")
+
+    def __init__(self, records: List[Tuple[str, tuple]], dev_idx) -> None:
+        self.steps: List[Tuple[str, object]] = []
+        self.launches = 0
+        cur = dev_idx
+        run: List[Tuple[str, tuple]] = []
+
+        def close():
+            if run:
+                plan = CapturedPlan(list(run), cur)
+                self.steps.append(("g", (cur, plan)))
+                self.launches += plan.launches
+                run.clear()
+        try:
+            for tag, rec in records:
+                if tag == "d":
+                    if rec[0] == cur:
+                        continue            # already this card: the stretch goes on (each graph sets its own card)
+                    close()
+                    cur = rec[0]
+                    self.steps.append(("d", rec[0]))
+                elif tag == "y":
+                    close()
+                    self.steps.append(("y", rec[0]))
+                elif tag in ("k", "m", "h", "s"):
+                    run.append((tag, rec))
+                else:
+                    raise GraphReplayError(f"action {tag!r} has no graph form")
+            close()
+        except BaseException:
+            self.destroy()
+            raise
+        self.stretches = sum(1 for t, _ in self.steps if t == "g")
+
+    def launch(self) -> None:
+        for tag, val in self.steps:
+            if tag == "g":
+                dev, plan = val
+                if dev is not None:
+                    DeviceAllocator.set_device(dev)
+                    DeviceAllocator.ensure_triton_device(dev)
+                plan.launch()
+            elif tag == "d":
+                DeviceAllocator.set_device(val)
+                DeviceAllocator.ensure_triton_device(val)
+            else:
+                cur = DeviceAllocator.get_device()
+                if cur != val:
+                    DeviceAllocator.set_device(val)
+                DeviceAllocator.sync_device()
+                if cur != val:
+                    DeviceAllocator.set_device(cur)
+
+    def destroy(self) -> None:
+        for tag, val in self.steps:
+            if tag == "g":
+                val[1].destroy()
+        self.steps = []
