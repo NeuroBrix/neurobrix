@@ -1,0 +1,129 @@
+key	op_type	shapes	dtypes	sites	contender	status	first_ms	median_ms	p10_ms	p90_ms	n	rel_err	tolerance	peak_mb	peak_how	note
+b1366baeb5d890d3	aten::bitwise_and	[[1, 1, 512, 1], [1, 1, 1, 512]]	bool,bool	1	torch_eager	ok	209.852	0.2298	0.2281	0.2585	20	0.000e+00		0.000	sampled driver	no floating dtype to bound (bool): exact match asked
+b1366baeb5d890d3	aten::bitwise_and	[[1, 1, 512, 1], [1, 1, 1, 512]]	bool,bool	1	torch_compile[default]	ok	881.771	0.1790	0.1655	0.2378	20	0.000e+00		0.000	sampled driver	no floating dtype to bound (bool): exact match asked
+b1366baeb5d890d3	aten::bitwise_and	[[1, 1, 512, 1], [1, 1, 1, 512]]	bool,bool	1	torch_compile[max-autotune]	ok	40.735	0.4125	0.1725	0.4902	20	0.000e+00		0.000	sampled driver	no floating dtype to bound (bool): exact match asked
+b1366baeb5d890d3	aten::bitwise_and	[[1, 1, 512, 1], [1, 1, 1, 512]]	bool,bool	1	nbxtensor	ok	860.162	0.8737	0.7695	1.4814	20	0.000e+00		0.750	DeviceAllocator peak, pool emptied	no floating dtype to bound (uint8): exact match asked
+c416c4c8881ae204	aten::mm	[[512, 4096], [4096, 4096]]	float32,bfloat16	213	torch_eager	ok	54.832	3.4687	3.3342	3.6087	20	1.798e-03	0.06	0.000	sampled driver	
+c416c4c8881ae204	aten::mm	[[512, 4096], [4096, 4096]]	float32,bfloat16	213	torch_compile[default]	ok	45.814	3.5966	3.4328	3.7647	20	1.798e-03	0.06	0.000	sampled driver	
+c416c4c8881ae204	aten::mm	[[512, 4096], [4096, 4096]]	float32,bfloat16	213	torch_compile[max-autotune]	ok	44.485	3.5652	3.4207	3.7138	20	1.798e-03	0.06	0.000	sampled driver	
+c416c4c8881ae204	aten::mm	[[512, 4096], [4096, 4096]]	float32,bfloat16	213	nbxtensor	ok	8.896	4.3504	4.1238	4.6693	20	3.347e-03	0.06	8.000	DeviceAllocator peak, pool emptied	
+6a54fff17ef39ab2	aten::bmm	[[64, 512, 64], [64, 64, 512]]	bfloat16,bfloat16	72	torch_eager	ok	5.822	0.5723	0.5495	0.6721	20	3.232e-03	0.06	0.250	sampled driver	
+6a54fff17ef39ab2	aten::bmm	[[64, 512, 64], [64, 64, 512]]	bfloat16,bfloat16	72	torch_compile[default]	ok	3.764	0.6056	0.5811	0.6815	20	3.232e-03	0.06	0.000	sampled driver	
+6a54fff17ef39ab2	aten::bmm	[[64, 512, 64], [64, 64, 512]]	bfloat16,bfloat16	72	torch_compile[max-autotune]	ok	0.766	0.5997	0.5785	0.6981	20	3.232e-03	0.06	0.000	sampled driver	
+6a54fff17ef39ab2	aten::bmm	[[64, 512, 64], [64, 64, 512]]	bfloat16,bfloat16	72	nbxtensor	ok	56.367	1.5072	1.4082	1.7029	20	3.232e-03	0.06	0.000	DeviceAllocator peak, pool emptied	
+e9c77a8e1ef068da	aten::_softmax	[[1, 64, 512, 512]]	float32	48	torch_eager	ok	8.161	0.7992	0.7690	2.2440	20	2.912e-07	0.002	0.000	sampled driver	
+e9c77a8e1ef068da	aten::_softmax	[[1, 64, 512, 512]]	float32	48	torch_compile[default]	ok	1.163	0.9723	0.8810	1.1515	20	2.912e-07	0.002	0.000	sampled driver	
+e9c77a8e1ef068da	aten::_softmax	[[1, 64, 512, 512]]	float32	48	torch_compile[max-autotune]	ok	1.033	0.8723	0.7836	1.0542	20	2.912e-07	0.002	0.000	sampled driver	
+e9c77a8e1ef068da	aten::_softmax	[[1, 64, 512, 512]]	float32	48	nbxtensor	ok	8.231	2.1454	2.0155	2.5253	20	1.781e-07	0.002	64.000	DeviceAllocator peak, pool emptied	
+8a518117511cb4ad	aten::bmm	[[64, 512, 512], [64, 512, 64]]	float32,bfloat16	48	torch_eager	ok	30.346	0.6598	0.6073	2.0948	20	1.714e-03	0.06	0.000	sampled driver	
+8a518117511cb4ad	aten::bmm	[[64, 512, 512], [64, 512, 64]]	float32,bfloat16	48	torch_compile[default]	ok	0.768	0.6303	0.6129	0.7105	20	1.714e-03	0.06	0.000	sampled driver	
+8a518117511cb4ad	aten::bmm	[[64, 512, 512], [64, 512, 64]]	float32,bfloat16	48	torch_compile[max-autotune]	ok	0.774	0.6410	0.6153	0.7302	20	1.714e-03	0.06	0.000	sampled driver	
+8a518117511cb4ad	aten::bmm	[[64, 512, 512], [64, 512, 64]]	float32,bfloat16	48	nbxtensor	ok	6.195	2.6611	2.4834	3.2327	20	3.219e-03	0.06	0.000	DeviceAllocator peak, pool emptied	
+315b96b472d1c01c	aten::mm	[[512, 4096], [4096, 4096]]	bfloat16,bfloat16	75	torch_eager	ok	15.617	3.2247	3.0661	3.4040	20	3.149e-03	0.06	0.000	sampled driver	
+315b96b472d1c01c	aten::mm	[[512, 4096], [4096, 4096]]	bfloat16,bfloat16	75	torch_compile[default]	ok	3.353	3.3016	3.1292	3.5165	20	3.149e-03	0.06	0.000	sampled driver	
+315b96b472d1c01c	aten::mm	[[512, 4096], [4096, 4096]]	bfloat16,bfloat16	75	torch_compile[max-autotune]	ok	3.442	3.2697	3.0908	3.4561	20	3.149e-03	0.06	0.000	sampled driver	
+315b96b472d1c01c	aten::mm	[[512, 4096], [4096, 4096]]	bfloat16,bfloat16	75	nbxtensor	ok	4.187	3.9498	3.7810	4.1029	20	3.149e-03	0.06	0.000	DeviceAllocator peak, pool emptied	
+2858c5f2c285575f	aten::mm	[[512, 4096], [4096, 10240]]	float32,bfloat16	142	torch_eager	ok	11.118	7.9145	7.8718	8.0028	20	1.543e-03	0.06	0.000	sampled driver	
+2858c5f2c285575f	aten::mm	[[512, 4096], [4096, 10240]]	float32,bfloat16	142	torch_compile[default]	ok	7.998	7.9252	7.8936	8.0343	20	1.543e-03	0.06	0.000	sampled driver	
+2858c5f2c285575f	aten::mm	[[512, 4096], [4096, 10240]]	float32,bfloat16	142	torch_compile[max-autotune]	ok	8.060	8.3067	8.2550	8.3850	20	1.543e-03	0.06	0.000	sampled driver	
+2858c5f2c285575f	aten::mm	[[512, 4096], [4096, 10240]]	float32,bfloat16	142	nbxtensor	ok	11.504	9.7112	9.4621	9.8956	20	3.064e-03	0.06	0.000	DeviceAllocator peak, pool emptied	
+7bd28959614e1543	aten::mm	[[512, 10240], [10240, 4096]]	float32,bfloat16	72	torch_eager	ok	23.087	8.2099	8.1135	8.3571	20	1.602e-03	0.06	16.000	sampled driver	
+7bd28959614e1543	aten::mm	[[512, 10240], [10240, 4096]]	float32,bfloat16	72	torch_compile[default]	ok	8.288	8.6771	8.1920	8.9293	20	1.602e-03	0.06	0.000	sampled driver	
+7bd28959614e1543	aten::mm	[[512, 10240], [10240, 4096]]	float32,bfloat16	72	torch_compile[max-autotune]	ok	8.669	8.8020	8.6316	9.1683	20	1.602e-03	0.06	0.000	sampled driver	
+7bd28959614e1543	aten::mm	[[512, 10240], [10240, 4096]]	float32,bfloat16	72	nbxtensor	ok	14.087	9.7885	9.5548	10.0059	20	3.798e-03	0.06	0.000	DeviceAllocator peak, pool emptied	
+af429fcbb4717842	custom::rms_norm	[[1, 512, 4096], [4096]]	bfloat16,float32	98	torch_eager	ok	7.330	0.6349	0.5974	0.7684	20	2.442e-03	0.06	0.000	sampled driver	
+af429fcbb4717842	custom::rms_norm	[[1, 512, 4096], [4096]]	bfloat16,float32	98	torch_compile[default]	ok	0.730	0.6699	0.6255	0.8464	20	2.442e-03	0.06	0.000	sampled driver	
+af429fcbb4717842	custom::rms_norm	[[1, 512, 4096], [4096]]	bfloat16,float32	98	torch_compile[max-autotune]	ok	0.727	0.6918	0.6478	0.8787	20	2.442e-03	0.06	0.000	sampled driver	
+af429fcbb4717842	custom::rms_norm	[[1, 512, 4096], [4096]]	bfloat16,float32	98	nbxtensor	refused										ValueError: amp_fp32_output_dtype: under bfloat16 compute the output follows the component's graph dtype, and None is none of ['bfloat16', 'float16', 'float32', 'float64'] — the container's graph.json `torch_dtype` must state it
+da211119d1443796	aten::addmm	[[2304], [2, 256], [256, 2304]]	bfloat16,bfloat16,bfloat16	2	torch_eager	ok	5.374	0.1452	0.1313	0.2538	20	2.259e-03	0.06	0.000	sampled driver	
+da211119d1443796	aten::addmm	[[2304], [2, 256], [256, 2304]]	bfloat16,bfloat16,bfloat16	2	torch_compile[default]	ok	0.219	0.1540	0.1445	0.1958	20	2.259e-03	0.06	0.000	sampled driver	
+da211119d1443796	aten::addmm	[[2304], [2, 256], [256, 2304]]	bfloat16,bfloat16,bfloat16	2	torch_compile[max-autotune]	ok	0.179	0.1658	0.1474	0.2512	20	2.259e-03	0.06	0.000	sampled driver	
+da211119d1443796	aten::addmm	[[2304], [2, 256], [256, 2304]]	bfloat16,bfloat16,bfloat16	2	nbxtensor	ok	9.585	1.3826	1.1854	1.7091	20	6.156e-08	0.06	0.000	DeviceAllocator peak, pool emptied	
+55c6f63ab3da5bdc	aten::addmm	[[2304], [2, 2304], [2304, 2304]]	bfloat16,bfloat16,bfloat16	2	torch_eager	ok	4.873	0.1823	0.1695	0.2118	20	2.086e-03	0.06	0.000	sampled driver	
+55c6f63ab3da5bdc	aten::addmm	[[2304], [2, 2304], [2304, 2304]]	bfloat16,bfloat16,bfloat16	2	torch_compile[default]	ok	0.380	0.2053	0.1844	0.2922	20	2.086e-03	0.06	0.000	sampled driver	
+55c6f63ab3da5bdc	aten::addmm	[[2304], [2, 2304], [2304, 2304]]	bfloat16,bfloat16,bfloat16	2	torch_compile[max-autotune]	ok	0.277	0.2005	0.1860	0.2401	20	2.086e-03	0.06	0.000	sampled driver	
+55c6f63ab3da5bdc	aten::addmm	[[2304], [2, 2304], [2304, 2304]]	bfloat16,bfloat16,bfloat16	2	nbxtensor	ok	8.312	2.3916	2.2707	2.6518	20	6.152e-08	0.06	0.000	DeviceAllocator peak, pool emptied	
+44fee833c3b49628	aten::addmm	[[13824], [2, 2304], [2304, 13824]]	bfloat16,bfloat16,bfloat16	2	torch_eager	ok	5.188	0.4477	0.4183	0.7470	20	2.460e-03	0.06	0.000	sampled driver	
+44fee833c3b49628	aten::addmm	[[13824], [2, 2304], [2304, 13824]]	bfloat16,bfloat16,bfloat16	2	torch_compile[default]	ok	0.565	0.4308	0.4112	0.5099	20	2.460e-03	0.06	0.000	sampled driver	
+44fee833c3b49628	aten::addmm	[[13824], [2, 2304], [2304, 13824]]	bfloat16,bfloat16,bfloat16	2	torch_compile[max-autotune]	ok	0.643	0.4426	0.4237	0.6404	20	2.460e-03	0.06	0.000	sampled driver	
+44fee833c3b49628	aten::addmm	[[13824], [2, 2304], [2304, 13824]]	bfloat16,bfloat16,bfloat16	2	nbxtensor	ok	14.558	7.7161	7.5181	8.3849	20	8.731e-08	0.06	60.750	DeviceAllocator peak, pool emptied	
+ce761272518bca25	aten::convolution	[[20, 4, 90, 160], [2304, 4, 2, 2], [2304]]	bfloat16,bfloat16,bfloat16	5	torch_eager	ok	11.759	3.0955	3.0519	3.1600	20	2.283e-03	0.06	2.016	sampled driver	
+ce761272518bca25	aten::convolution	[[20, 4, 90, 160], [2304, 4, 2, 2], [2304]]	bfloat16,bfloat16,bfloat16	5	torch_compile[default]	ok	13.799	3.0639	3.0187	3.2670	20	2.283e-03	0.06	1024.000	sampled driver	
+ce761272518bca25	aten::convolution	[[20, 4, 90, 160], [2304, 4, 2, 2], [2304]]	bfloat16,bfloat16,bfloat16	5	torch_compile[max-autotune]	ok	13.679	3.2358	3.0554	4.0811	20	2.283e-03	0.06	0.000	sampled driver	
+ce761272518bca25	aten::convolution	[[20, 4, 90, 160], [2304, 4, 2, 2], [2304]]	bfloat16,bfloat16,bfloat16	5	nbxtensor	ok	1236.886	55.9213	53.1298	57.8523	20	4.541e-03	0.06	316.406	DeviceAllocator peak, pool emptied	
+2fb3f6f3caa3377e	aten::addmm	[[2304], [1024, 4096], [4096, 2304]]	bfloat16,bfloat16,bfloat16	1	torch_eager	ok	15.936	3.4260	3.3815	3.4821	20	3.092e-03	0.06	0.000	sampled driver	
+2fb3f6f3caa3377e	aten::addmm	[[2304], [1024, 4096], [4096, 2304]]	bfloat16,bfloat16,bfloat16	1	torch_compile[default]	ok	3.682	3.4231	3.3763	3.4825	20	3.092e-03	0.06	0.000	sampled driver	
+2fb3f6f3caa3377e	aten::addmm	[[2304], [1024, 4096], [4096, 2304]]	bfloat16,bfloat16,bfloat16	1	torch_compile[max-autotune]	ok	3.592	3.4080	3.3767	3.5149	20	3.092e-03	0.06	0.000	sampled driver	
+2fb3f6f3caa3377e	aten::addmm	[[2304], [1024, 4096], [4096, 2304]]	bfloat16,bfloat16,bfloat16	1	nbxtensor	ok	33.786	3.9652	3.9148	4.2424	20	3.092e-03	0.06	0.000	DeviceAllocator peak, pool emptied	
+373c7f7094b27eec	aten::addmm	[[2304], [1024, 2304], [2304, 2304]]	bfloat16,bfloat16,bfloat16	65	torch_eager	ok	6.012	2.0899	2.0251	2.2166	20	3.147e-03	0.06	0.000	sampled driver	
+373c7f7094b27eec	aten::addmm	[[2304], [1024, 2304], [2304, 2304]]	bfloat16,bfloat16,bfloat16	65	torch_compile[default]	ok	2.352	2.0689	2.0280	2.1946	20	3.147e-03	0.06	0.000	sampled driver	
+373c7f7094b27eec	aten::addmm	[[2304], [1024, 2304], [2304, 2304]]	bfloat16,bfloat16,bfloat16	65	torch_compile[max-autotune]	ok	2.327	2.1278	2.0528	2.4434	20	3.147e-03	0.06	0.000	sampled driver	
+373c7f7094b27eec	aten::addmm	[[2304], [1024, 2304], [2304, 2304]]	bfloat16,bfloat16,bfloat16	65	nbxtensor	ok	6.931	2.6661	2.5292	2.8518	20	3.147e-03	0.06	0.000	DeviceAllocator peak, pool emptied	
+c556e083d54da11a	aten::native_layer_norm	[[2, 36000, 2304]]	bfloat16	130	torch_eager	ok	22.287	3.3890	3.3516	3.4578	20	2.602e-03	0.06	1.000	sampled driver	
+c556e083d54da11a	aten::native_layer_norm	[[2, 36000, 2304]]	bfloat16	130	torch_compile[default]	ok	12.092	3.4664	3.3931	3.7997	20	2.602e-03	0.06	0.000	sampled driver	
+c556e083d54da11a	aten::native_layer_norm	[[2, 36000, 2304]]	bfloat16	130	torch_compile[max-autotune]	ok	14.694	3.4258	3.4075	3.4906	20	2.602e-03	0.06	0.000	sampled driver	
+c556e083d54da11a	aten::native_layer_norm	[[2, 36000, 2304]]	bfloat16	130	nbxtensor	refused										ValueError: amp_fp32_output_dtype: under bfloat16 compute the output follows the component's graph dtype, and None is none of ['bfloat16', 'float16', 'float32', 'float64'] — the container's graph.json `torch_dtype` must state it
+ab9858a94c2be4eb	aten::addmm	[[2304], [72000, 2304], [2304, 2304]]	bfloat16,float32,bfloat16	192	torch_eager	ok	225.975	181.0256	180.3382	190.2897	20	2.191e-03	0.06	1418.000	sampled driver	
+ab9858a94c2be4eb	aten::addmm	[[2304], [72000, 2304], [2304, 2304]]	bfloat16,float32,bfloat16	192	torch_compile[default]	ok	216.619	181.2449	180.3064	191.2828	20	2.191e-03	0.06	640.000	sampled driver	
+ab9858a94c2be4eb	aten::addmm	[[2304], [72000, 2304], [2304, 2304]]	bfloat16,float32,bfloat16	192	torch_compile[max-autotune]	ok	218.969	182.3063	180.8659	195.9446	20	2.191e-03	0.06	0.000	sampled driver	
+ab9858a94c2be4eb	aten::addmm	[[2304], [72000, 2304], [2304, 2304]]	bfloat16,float32,bfloat16	192	nbxtensor	ok	205.389	151.2087	149.9215	152.9137	20	3.286e-03	0.06	632.812	DeviceAllocator peak, pool emptied	
+8f86bf074cbbc5fa	aten::addmm	[[2304], [72000, 2304], [2304, 2304]]	bfloat16,bfloat16,bfloat16	192	torch_eager	ok	192.971	162.5332	157.4494	167.1764	20	2.881e-03	0.06	390.000	sampled driver	
+8f86bf074cbbc5fa	aten::addmm	[[2304], [72000, 2304], [2304, 2304]]	bfloat16,bfloat16,bfloat16	192	torch_compile[default]	ok	195.484	157.7548	157.4259	163.2943	20	2.881e-03	0.06	0.000	sampled driver	
+8f86bf074cbbc5fa	aten::addmm	[[2304], [72000, 2304], [2304, 2304]]	bfloat16,bfloat16,bfloat16	192	torch_compile[max-autotune]	ok	164.969	157.8632	157.4038	163.0887	20	2.881e-03	0.06	0.000	sampled driver	
+8f86bf074cbbc5fa	aten::addmm	[[2304], [72000, 2304], [2304, 2304]]	bfloat16,bfloat16,bfloat16	192	nbxtensor	ok	196.357	135.7944	132.9298	136.5185	20	2.881e-03	0.06	316.406	DeviceAllocator peak, pool emptied	
+649a131f2b9ab4d0	aten::addmm	[[9216], [72000, 2304], [2304, 9216]]	bfloat16,float32,bfloat16	64	torch_eager	ok	1772.341	733.7930	715.5477	775.8755	20	2.304e-03	0.06	7770.000	sampled driver	
+649a131f2b9ab4d0	aten::addmm	[[9216], [72000, 2304], [2304, 9216]]	bfloat16,float32,bfloat16	64	torch_compile[default]	ok	12299.287	727.5690	708.3258	748.7179	20	2.304e-03	0.06	5210.000	sampled driver	
+649a131f2b9ab4d0	aten::addmm	[[9216], [72000, 2304], [2304, 9216]]	bfloat16,float32,bfloat16	64	torch_compile[max-autotune]	ok	14173.595	756.1256	711.0626	818.6089	20	2.304e-03	0.06	2650.000	sampled driver	
+649a131f2b9ab4d0	aten::addmm	[[9216], [72000, 2304], [2304, 9216]]	bfloat16,float32,bfloat16	64	nbxtensor	ok	630.519	564.9879	553.4450	577.9125	20	3.318e-03	0.06	1582.031	DeviceAllocator peak, pool emptied	
+20336c04e9f77e20	aten::addmm	[[2304], [72000, 9216], [9216, 2304]]	bfloat16,bfloat16,bfloat16	64	torch_eager	ok	3453.964	549.7936	547.2795	575.3570	20	2.819e-03	0.06	642.000	sampled driver	
+20336c04e9f77e20	aten::addmm	[[2304], [72000, 9216], [9216, 2304]]	bfloat16,bfloat16,bfloat16	64	torch_compile[default]	ok	585.137	555.1713	547.6902	576.3008	20	2.819e-03	0.06	0.000	sampled driver	
+20336c04e9f77e20	aten::addmm	[[2304], [72000, 9216], [9216, 2304]]	bfloat16,bfloat16,bfloat16	64	torch_compile[max-autotune]	ok	650.339	549.6467	547.1202	561.5129	20	2.819e-03	0.06	0.000	sampled driver	
+20336c04e9f77e20	aten::addmm	[[2304], [72000, 9216], [9216, 2304]]	bfloat16,bfloat16,bfloat16	64	nbxtensor	ok	584.720	545.9857	535.3665	558.7710	20	2.819e-03	0.06	0.000	DeviceAllocator peak, pool emptied	
+2d70884249879c00	aten::addmm	[[16], [72000, 2304], [2304, 16]]	bfloat16,float32,bfloat16	2	torch_eager	ok	329.744	9.3167	9.0946	9.8097	20	1.768e-03	0.06	78.000	sampled driver	
+2d70884249879c00	aten::addmm	[[16], [72000, 2304], [2304, 16]]	bfloat16,float32,bfloat16	2	torch_compile[default]	ok	11.393	10.1350	9.9320	10.6246	20	1.768e-03	0.06	0.000	sampled driver	
+2d70884249879c00	aten::addmm	[[16], [72000, 2304], [2304, 16]]	bfloat16,float32,bfloat16	2	torch_compile[max-autotune]	ok	10.191	9.5328	9.3121	10.2214	20	1.768e-03	0.06	0.000	sampled driver	
+2d70884249879c00	aten::addmm	[[16], [72000, 2304], [2304, 16]]	bfloat16,float32,bfloat16	2	nbxtensor	ok	129.197	26.8809	24.5903	32.2872	20	3.046e-03	0.06	0.000	DeviceAllocator peak, pool emptied	
+4751fd0513a005df	aten::convolution	[[10, 4, 90, 160], [4, 4, 1, 1], [4]]	bfloat16,bfloat16,bfloat16	2	torch_eager	ok	56.314	0.4205	0.2143	0.5265	20	1.956e-03	0.06	0.016	sampled driver	
+4751fd0513a005df	aten::convolution	[[10, 4, 90, 160], [4, 4, 1, 1], [4]]	bfloat16,bfloat16,bfloat16	2	torch_compile[default]	ok	0.661	0.2221	0.2049	0.3166	20	1.956e-03	0.06	0.000	sampled driver	
+4751fd0513a005df	aten::convolution	[[10, 4, 90, 160], [4, 4, 1, 1], [4]]	bfloat16,bfloat16,bfloat16	2	torch_compile[max-autotune]	ok	0.316	0.2017	0.1849	0.2420	20	1.956e-03	0.06	0.000	sampled driver	
+4751fd0513a005df	aten::convolution	[[10, 4, 90, 160], [4, 4, 1, 1], [4]]	bfloat16,bfloat16,bfloat16	2	nbxtensor	ok	22497.609	0.7136	0.6586	0.8006	20	2.934e-03	0.06	0.000	DeviceAllocator peak, pool emptied	
+bf86a5ea30f997d6	aten::convolution	[[10, 4, 90, 160], [512, 4, 3, 3], [512]]	bfloat16,bfloat16,bfloat16	2	torch_eager	ok	995.122	1.8351	1.7713	1.9144	20	2.151e-03	0.06	2.016	sampled driver	
+bf86a5ea30f997d6	aten::convolution	[[10, 4, 90, 160], [512, 4, 3, 3], [512]]	bfloat16,bfloat16,bfloat16	2	torch_compile[default]	ok	9.499	1.8008	1.7622	1.8589	20	2.151e-03	0.06	0.000	sampled driver	
+bf86a5ea30f997d6	aten::convolution	[[10, 4, 90, 160], [512, 4, 3, 3], [512]]	bfloat16,bfloat16,bfloat16	2	torch_compile[max-autotune]	ok	5.470	1.9577	1.7637	3.0747	20	2.151e-03	0.06	0.000	sampled driver	
+bf86a5ea30f997d6	aten::convolution	[[10, 4, 90, 160], [512, 4, 3, 3], [512]]	bfloat16,bfloat16,bfloat16	2	nbxtensor	ok	57331.488	24.3756	23.6383	25.4072	20	4.293e-03	0.06	140.625	DeviceAllocator peak, pool emptied	
+3fe30aa422b51228	aten::convolution	[[1, 512, 10, 90, 160], [512, 512, 3, 1, 1], [512]]	bfloat16,bfloat16,bfloat16	2	torch_eager	ok	59.993	40.8324	40.7611	40.9982	20	3.477e-03	0.06	0.000	sampled driver	
+3fe30aa422b51228	aten::convolution	[[1, 512, 10, 90, 160], [512, 512, 3, 1, 1], [512]]	bfloat16,bfloat16,bfloat16	2	torch_compile[default]	ok	46.557	42.0356	40.8654	42.5022	20	3.477e-03	0.06	0.000	sampled driver	
+3fe30aa422b51228	aten::convolution	[[1, 512, 10, 90, 160], [512, 512, 3, 1, 1], [512]]	bfloat16,bfloat16,bfloat16	2	torch_compile[max-autotune]	ok	54.645	42.3150	41.9729	43.2468	20	3.477e-03	0.06	0.000	sampled driver	
+3fe30aa422b51228	aten::convolution	[[1, 512, 10, 90, 160], [512, 512, 3, 1, 1], [512]]	bfloat16,bfloat16,bfloat16	2	nbxtensor	ok	11617.672	146.7619	141.9080	155.4888	20	8.576e-03	0.06	450.000	DeviceAllocator peak, pool emptied	
+4e4c382526335d5f	aten::native_group_norm	[[10, 512, 90, 160], [512], [512]]	bfloat16,float32,float32	20	torch_eager	ok	8.436	4.4643	4.3035	4.6953	20	2.461e-03	0.06	0.000	sampled driver	
+4e4c382526335d5f	aten::native_group_norm	[[10, 512, 90, 160], [512], [512]]	bfloat16,float32,float32	20	torch_compile[default]	ok	4.600	4.4853	4.2995	4.6023	20	2.461e-03	0.06	0.000	sampled driver	
+4e4c382526335d5f	aten::native_group_norm	[[10, 512, 90, 160], [512], [512]]	bfloat16,float32,float32	20	torch_compile[max-autotune]	ok	4.982	4.4545	4.3186	4.5537	20	2.461e-03	0.06	0.000	sampled driver	
+4e4c382526335d5f	aten::native_group_norm	[[10, 512, 90, 160], [512], [512]]	bfloat16,float32,float32	20	nbxtensor	ok	1628.147	5.6300	5.3622	6.0088	20	2.891e-03	0.06	0.000	DeviceAllocator peak, pool emptied	
+8236d587e35d3608	aten::convolution	[[10, 512, 90, 160], [512, 512, 3, 3], [512]]	float32,bfloat16,bfloat16	28	torch_eager	ok	121.654	99.4544	99.2532	99.7667	20	1.642e-03	0.06	0.016	sampled driver	
+8236d587e35d3608	aten::convolution	[[10, 512, 90, 160], [512, 512, 3, 3], [512]]	float32,bfloat16,bfloat16	28	torch_compile[default]	ok	99.794	97.1121	96.9935	97.4972	20	1.642e-03	0.06	0.000	sampled driver	
+8236d587e35d3608	aten::convolution	[[10, 512, 90, 160], [512, 512, 3, 3], [512]]	float32,bfloat16,bfloat16	28	torch_compile[max-autotune]	ok	105.708	96.9938	96.7856	97.2752	20	1.642e-03	0.06	0.000	sampled driver	
+8236d587e35d3608	aten::convolution	[[10, 512, 90, 160], [512, 512, 3, 3], [512]]	float32,bfloat16,bfloat16	28	nbxtensor	ok	82073.047	166.5893	165.2391	181.9545	20	5.176e-03	0.06	140.625	DeviceAllocator peak, pool emptied	
+648941f704ed1dec	aten::native_group_norm	[[1, 512, 12, 90, 160], [512], [512]]	bfloat16,float32,float32	40	torch_eager	ok	1536.790	5.0154	4.9527	5.1055	20	2.562e-03	0.06	0.000	sampled driver	
+648941f704ed1dec	aten::native_group_norm	[[1, 512, 12, 90, 160], [512], [512]]	bfloat16,float32,float32	40	torch_compile[default]	ok	7.263	5.1018	5.0375	5.3276	20	2.562e-03	0.06	0.000	sampled driver	
+648941f704ed1dec	aten::native_group_norm	[[1, 512, 12, 90, 160], [512], [512]]	bfloat16,float32,float32	40	torch_compile[max-autotune]	ok	8.884	5.0185	4.9984	5.0402	20	2.562e-03	0.06	0.000	sampled driver	
+648941f704ed1dec	aten::native_group_norm	[[1, 512, 12, 90, 160], [512], [512]]	bfloat16,float32,float32	40	nbxtensor	ok	1169.838	8.6647	8.1115	8.8250	20	2.690e-03	0.06	0.000	DeviceAllocator peak, pool emptied	
+e083a4f711acec43	aten::convolution	[[1, 512, 12, 90, 160], [512, 512, 3, 1, 1], [512]]	float32,bfloat16,bfloat16	56	torch_eager	ok	140.341	59.6821	51.2888	75.3216	20	1.869e-03	0.06	0.000	sampled driver	
+e083a4f711acec43	aten::convolution	[[1, 512, 12, 90, 160], [512, 512, 3, 1, 1], [512]]	float32,bfloat16,bfloat16	56	torch_compile[default]	ok	65.741	75.3799	59.7051	83.1227	20	1.869e-03	0.06	0.000	sampled driver	
+e083a4f711acec43	aten::convolution	[[1, 512, 12, 90, 160], [512, 512, 3, 1, 1], [512]]	float32,bfloat16,bfloat16	56	torch_compile[max-autotune]	ok	75.499	70.9693	64.6527	75.8705	20	1.869e-03	0.06	0.000	sampled driver	
+e083a4f711acec43	aten::convolution	[[1, 512, 12, 90, 160], [512, 512, 3, 1, 1], [512]]	float32,bfloat16,bfloat16	56	nbxtensor	ok	216.088	161.2870	154.4445	181.5103	20	8.131e-03	0.06	450.000	DeviceAllocator peak, pool emptied	
+872aace1b9156957	aten::native_group_norm	[[10, 512, 14400], [512], [512]]	bfloat16,float32,float32	2	torch_eager	ok	6.704	4.5788	4.3525	4.7599	20	2.764e-03	0.06	0.000	sampled driver	
+872aace1b9156957	aten::native_group_norm	[[10, 512, 14400], [512], [512]]	bfloat16,float32,float32	2	torch_compile[default]	ok	6.177	4.3304	4.2677	4.4626	20	2.764e-03	0.06	0.000	sampled driver	
+872aace1b9156957	aten::native_group_norm	[[10, 512, 14400], [512], [512]]	bfloat16,float32,float32	2	torch_compile[max-autotune]	ok	6.169	4.4177	4.3596	4.5384	20	2.764e-03	0.06	0.000	sampled driver	
+872aace1b9156957	aten::native_group_norm	[[10, 512, 14400], [512], [512]]	bfloat16,float32,float32	2	nbxtensor	ok	8.685	6.2806	6.0001	6.6629	20	3.079e-03	0.06	140.625	DeviceAllocator peak, pool emptied	
+5349fa654ed6f7fe	aten::mm	[[144000, 512], [512, 512]]	float32,bfloat16	9	torch_eager	ok	35.679	19.5990	19.3006	19.8098	20	1.667e-03	0.06	32.000	sampled driver	
+5349fa654ed6f7fe	aten::mm	[[144000, 512], [512, 512]]	float32,bfloat16	9	torch_compile[default]	ok	20.135	20.0423	19.3282	20.5666	20	1.667e-03	0.06	0.000	sampled driver	
+5349fa654ed6f7fe	aten::mm	[[144000, 512], [512, 512]]	float32,bfloat16	9	torch_compile[max-autotune]	ok	27.361	20.2121	19.4232	22.3945	20	1.667e-03	0.06	0.000	sampled driver	
+5349fa654ed6f7fe	aten::mm	[[144000, 512], [512, 512]]	float32,bfloat16	9	nbxtensor	ok	38121.625	24.2043	23.6841	26.0333	20	2.956e-03	0.06	281.250	DeviceAllocator peak, pool emptied	
+541ef757226706c1	aten::addmm	[[512], [144000, 512], [512, 512]]	bfloat16,bfloat16,bfloat16	3	torch_eager	ok	69.607	40.0347	39.8183	40.4607	20	2.689e-03	0.06	158.000	sampled driver	
+541ef757226706c1	aten::addmm	[[512], [144000, 512], [512, 512]]	bfloat16,bfloat16,bfloat16	3	torch_compile[default]	ok	40.948	40.1443	39.8379	40.4242	20	2.689e-03	0.06	0.000	sampled driver	
+541ef757226706c1	aten::addmm	[[512], [144000, 512], [512, 512]]	bfloat16,bfloat16,bfloat16	3	torch_compile[max-autotune]	ok	40.301	40.3943	39.9865	43.6861	20	2.689e-03	0.06	0.000	sampled driver	
+541ef757226706c1	aten::addmm	[[512], [144000, 512], [512, 512]]	bfloat16,bfloat16,bfloat16	3	nbxtensor	ok	38552.956	19.4166	18.7115	20.2060	20	2.689e-03	0.06	140.625	DeviceAllocator peak, pool emptied	
+8b19fdb78021069c	aten::convolution	[[10, 512, 180, 320], [512, 512, 3, 3], [512]]	bfloat16,bfloat16,bfloat16	2	torch_eager	ok	405.875	350.1716	341.4417	423.7212	20	2.333e-03	0.06	0.016	sampled driver	
+8b19fdb78021069c	aten::convolution	[[10, 512, 180, 320], [512, 512, 3, 3], [512]]	bfloat16,bfloat16,bfloat16	2	torch_compile[default]	ok	357.025	371.5096	342.5401	401.4259	20	2.333e-03	0.06	0.000	sampled driver	
+8b19fdb78021069c	aten::convolution	[[10, 512, 180, 320], [512, 512, 3, 3], [512]]	bfloat16,bfloat16,bfloat16	2	torch_compile[max-autotune]	ok	362.014	342.0598	341.2940	345.7357	20	2.333e-03	0.06	0.000	sampled driver	
+8b19fdb78021069c	aten::convolution	[[10, 512, 180, 320], [512, 512, 3, 3], [512]]	bfloat16,bfloat16,bfloat16	2	nbxtensor	ok	304475.247	625.8742	614.1089	646.8495	20	4.648e-03	0.06	0.000	DeviceAllocator peak, pool emptied	
