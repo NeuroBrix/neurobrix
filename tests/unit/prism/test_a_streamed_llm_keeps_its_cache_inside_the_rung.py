@@ -26,7 +26,14 @@ from neurobrix.core.prism import InputConfig, PrismSolver
 from neurobrix.core.prism.solver import PlanNotComputable, _graph_constant_bytes
 from neurobrix.nbx import NBXContainer
 from tests.unit.prism._pinned_machine import (APPLE_M4_PRO, V100_16GB, container_root, no_door,
-                                              pin_host, pin_shared_card, profile)
+                                              pin_host, pin_no_calibration, pin_shared_card, profile)
+
+
+@pytest.fixture(autouse=True)
+def _no_machine_calibration(monkeypatch):
+    """Every cell plans without the machine's calibration store (`pin_no_calibration`): a record there moves the
+    compiled widths, and this file went red on the rack only (2026-10-28)."""
+    pin_no_calibration(monkeypatch)
 
 MB = 1024 * 1024
 LLMS = ["DeepSeek-Coder-V2-Lite-Instruct", "Qwen3-Coder-30B-A3B-Instruct"]

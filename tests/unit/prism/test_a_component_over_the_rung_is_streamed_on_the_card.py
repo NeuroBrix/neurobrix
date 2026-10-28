@@ -42,7 +42,7 @@ import pytest
 from neurobrix.core.prism import InputConfig, PrismSolver
 from neurobrix.nbx import NBXContainer
 from tests.unit.prism._pinned_machine import (APPLE_M4_PRO, V100_16GB, container_root, impose_rung,
-                                              no_door, pin_dedicated_card, pin_host, profile)
+                                              no_door, pin_dedicated_card, pin_host, pin_no_calibration, profile)
 
 # The machine each cell plans for is BUILT here (register 102): the Mac's profile and reading, a
 # dedicated V100-16GB — never a profile id or a cache path this machine happens to have.
@@ -259,6 +259,7 @@ def test_a_dedicated_card_cuts_the_boundaries_pinned_here(monkeypatch, mode):
     no_door(monkeypatch)
     pin_host(monkeypatch, 257530, 200000, "an idle rack host")
     pin_dedicated_card(monkeypatch, 16151, 306, "this rack's V100-16GB card 0 as measured")
+    pin_no_calibration(monkeypatch)
     p, s, _ = _plan("DeepSeek-Coder-V2-Lite-Instruct", None, None, spec=V100_16GB, mode=mode)
     dev = s._prepare_devices(profile(V100_16GB))[0]
     assert dev.budget_mb == dev.capacity_mb, (
