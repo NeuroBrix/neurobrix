@@ -25,7 +25,7 @@ import pytest
 def test_the_loop_bound_is_cast_to_int32():
     """Structural: the value feeding the range() is narrowed. Asserted on the
     source so it holds for the shapes no runtime test exercises."""
-    import neurobrix.kernels.ops.repeat_interleave as R
+    import nbxtensor.ops.repeat_interleave as R
 
     src = Path(R.__file__).read_text()
     assert ".to(tl.int32)" in src, (

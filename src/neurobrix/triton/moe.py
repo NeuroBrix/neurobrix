@@ -363,7 +363,7 @@ def moe_align_block_size(topk_ids_flat, block_size, num_experts, device_idx):
     """
     import triton as _tr
     from neurobrix.kernels.nbx_tensor import _set_device
-    from neurobrix.kernels.ops.moe_align import (
+    from nbxtensor.ops.moe_align import (
         moe_align_stage1_kernel, moe_align_stage2_kernel,
         moe_align_stage3_kernel)
 
@@ -1029,7 +1029,7 @@ def _moe_decode_vec_pass(hidden_states, tables, dev, flat_indices,
     """
     import os as _os_dv
     import triton as _tr
-    from neurobrix.kernels.ops.moe_decode_vec import (
+    from nbxtensor.ops.moe_decode_vec import (
         moe_gateup_vec_kernel, moe_down_combine_vec_kernel,
         moe_down_split_vec_kernel, moe_part_reduce_kernel)
     from neurobrix.kernels.nbx_tensor import _set_device
@@ -1106,7 +1106,7 @@ def _moe_decode_vec_half_pass(hidden_states, tables, dev, flat_indices, flat_sco
     projection with the expert axis on the grid writing router-weighted partials, their fixed-order sum. hidden [1, K]
     -> [1, K] in hidden's dtype."""
     import triton as _tr
-    from neurobrix.kernels.ops.moe_decode_vec import (
+    from nbxtensor.ops.moe_decode_vec import (
         moe_gateup_vec_half_kernel, moe_down_split_vec_half_kernel, moe_part_reduce_kernel)
     from neurobrix.kernels.nbx_tensor import _set_device
 

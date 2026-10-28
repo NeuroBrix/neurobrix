@@ -30,7 +30,7 @@ def paged_params(num_kv_heads, k_head_dim, v_head_dim, dtype, hardware, kv_plan)
                            "size and release rule are read from that card's vendor file")
     from neurobrix.core.config.loader import get_vendor_config
     from neurobrix.core.state.price import paged_cache_params
-    from neurobrix.kernels.ops.paged_decode_attn import PAGED_DECODE_TILE_CANDIDATES
+    from nbxtensor.ops.paged_decode_attn import PAGED_DECODE_TILE_CANDIDATES
     dtype_name = str(dtype).replace("torch.", "")
     return paged_cache_params(num_kv_heads, k_head_dim, v_head_dim, dtype_name,
                               get_vendor_config(*hardware).get("memory"),

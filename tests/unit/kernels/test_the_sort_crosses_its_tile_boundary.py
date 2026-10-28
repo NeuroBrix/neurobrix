@@ -84,7 +84,7 @@ def test_the_scatter_does_not_spin_on_other_programs():
     import ast
     import inspect
 
-    from neurobrix.kernels.ops import sort_op
+    from nbxtensor.ops import sort_op
 
     tree = ast.parse(inspect.getsource(sort_op))
     scatter = next((f for f in ast.walk(tree)

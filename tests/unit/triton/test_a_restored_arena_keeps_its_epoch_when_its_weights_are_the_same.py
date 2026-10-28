@@ -1,7 +1,7 @@
 """A replayed step restores the arena from its snapshot; the arena's epoch — which makes the next bind re-bind every
 weight — moves only when the restored weight slots are other objects than the bound ones (S3, 2026-10-28: an epoch
 bumped at every restore re-bound ~20k weights, 24 ms a token, on Qwen3-30B-A3B's decode). No card."""
-from neurobrix.triton.arena import Arena
+from nbxtensor.memory.arena import Arena
 
 
 def test_the_same_weights_keep_the_epoch_and_other_weights_move_it():

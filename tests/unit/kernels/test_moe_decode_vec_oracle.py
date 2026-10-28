@@ -305,7 +305,7 @@ def test_moe_vec_dsplit_three_state() -> None:
     the pass's function-local import re-reads them at every call."""
     if not _has_gpu():
         pytest.skip("no GPU")
-    import neurobrix.kernels.ops.moe_decode_vec as KOPS
+    import nbxtensor.ops.moe_decode_vec as KOPS
 
     counts = {"split": 0, "reduce": 0, "fused": 0}
 

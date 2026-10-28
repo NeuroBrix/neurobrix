@@ -26,8 +26,8 @@ from ._configs import (arch_smem_budget, configs_within_smem_budget,
                        nbx_autotune)
 import triton.language as tl
 
-from ._autotune_policy import maybe_pin_single, is_matmul_pinned
-from ._common import sigmoid, tanh_fn
+from nbxtensor.ops._autotune_policy import maybe_pin_single, is_matmul_pinned
+from nbxtensor.ops._common import sigmoid, tanh_fn
 
 # Vertical-fusion epilogue codes (fusion_vertical pass, EXACT gate).
 # 0 = none, 1 = silu, 2 = gelu exact, 3 = gelu tanh. The epilogue is a

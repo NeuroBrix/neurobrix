@@ -588,7 +588,7 @@ def matrix_unit() -> dict:
     mu = dict(active_vendor_profile().get("matrix_unit") or {})
     if not mu:
         return mu
-    from .mma_m8n8k4 import UNIT
+    from nbxtensor.ops.mma_m8n8k4 import UNIT
     if mu.get("shape") != UNIT["shape"]:
         raise ValueError(f"hardware profile: matrix_unit.shape {mu.get('shape')!r} has no kernel "
                          f"(this engine builds {UNIT['shape']!r})")

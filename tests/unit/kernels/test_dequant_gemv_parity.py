@@ -106,7 +106,7 @@ def _run_family(x_np, w_np, block_n=None):
     occupancy rule adapts it at small N)."""
     import triton
     from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator
-    from neurobrix.kernels.ops.dequant_gemv import (
+    from nbxtensor.ops.dequant_gemv import (
         BLOCK_K, BLOCK_N, NUM_WARPS, dequant_int4_kernel,
         dequant_gemv_int4_kernel, gemv_ref_kernel)
     from neurobrix.kernels.nbx_tensor import NBXDtype

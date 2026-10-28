@@ -11,6 +11,8 @@ import ast
 from pathlib import Path
 
 SRC = Path(__file__).resolve().parents[3] / "src" / "neurobrix"
+#: the tensor library's sources, where the kernels move (M1): scanned with the engine's
+LIB = Path(__file__).resolve().parents[3] / "nbxtensor" / "src" / "nbxtensor"
 
 
 def _is_jit(dec: ast.expr) -> bool:
@@ -40,7 +42,7 @@ def bare_returns(root: Path = SRC) -> dict[str, list[tuple[str, int]]]:
 
 
 def test_no_bare_return_in_any_triton_jit_body():
-    found = bare_returns()
+    found = {**bare_returns(SRC), **{f"nbxtensor/{k}": v for k, v in bare_returns(LIB).items()}}
     assert not found, (
         "bare `return` inside a @triton.jit body (unstructured control flow, no lowering "
         "on every backend) — replace the exit by a mask on the loads and stores:\n"

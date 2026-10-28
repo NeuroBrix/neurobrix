@@ -31,8 +31,8 @@ from ._configs import nbx_autotune
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 
-from .matmul_m8n8k4 import _bcast_cols, _bcast_rows, _pow2, hi_lo, split_exponent
-from .mma_m8n8k4 import (MMA_ASM, MMA_CONSTRAINTS, acc_rows_cols, bcast_rows, mma_k4, row_layout_rows, row_max,
+from nbxtensor.ops.matmul_m8n8k4 import _bcast_cols, _bcast_rows, _pow2, hi_lo, split_exponent
+from nbxtensor.ops.mma_m8n8k4 import (MMA_ASM, MMA_CONSTRAINTS, acc_rows_cols, bcast_rows, mma_k4, row_layout_rows, row_max,
                          row_sum, stage_k_inner, stage_k_outer)
 
 LOG2E: gl.constexpr = gl.constexpr(1.4426950408889634)
@@ -328,7 +328,7 @@ def _mma_frag(fa, sb, b_row0, acc, MB: gl.constexpr, NB: gl.constexpr, LA: gl.co
 def p_layout(MB: int, NS: int, NBO: int, WM: int):
     """P as [MB, 2, 8, 4, BN/4] = (mb, mi3, mi, k, j): the k-step index j in registers, then exactly
     frag_a_layout(MB, NBO, WM, 1)'s bases."""
-    from .mma_m8n8k4 import _bits
+    from nbxtensor.ops.mma_m8n8k4 import _bits
     def e(d, x):
         v = [0] * 5
         v[d] = x
@@ -362,7 +362,7 @@ def head_parts(headdim: int):
 @functools.lru_cache(maxsize=None)
 def flash_layouts(MB: int, NS: int, DA: int, DB: int, WM: int) -> dict:
     """Every layout the kernel takes, for MB 16-row bands over WM warps (WN = 1)."""
-    from .mma_m8n8k4 import acc_layout, frag_a_layout, frag_b_layout
+    from nbxtensor.ops.mma_m8n8k4 import acc_layout, frag_a_layout, frag_b_layout
     na, nb = DA // 16, max(DB // 16, 1)
     return dict(
         LS=acc_layout(MB, NS, WM, 1), LOA=acc_layout(MB, na, WM, 1), LOB=acc_layout(MB, nb, WM, 1),

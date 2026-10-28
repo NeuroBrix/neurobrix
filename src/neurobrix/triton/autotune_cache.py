@@ -151,7 +151,8 @@ def _autotuners() -> Iterator[Tuple[str, object]]:
             seen.add(id(obj))
             yield f"{mod_name}.{attr}", obj
     for mod_name, mod in list(sys.modules.items()):
-        if not mod_name.startswith("neurobrix.kernels.ops.") or mod is None:
+        # the kernel files: the library's (`nbxtensor.ops`) and the engine's still to move (`neurobrix.kernels.ops`)
+        if not mod_name.startswith(("nbxtensor.ops.", "neurobrix.kernels.ops.")) or mod is None:
             continue
         for attr, obj in list(vars(mod).items()):
             if isinstance(obj, Autotuner) and id(obj) not in seen:

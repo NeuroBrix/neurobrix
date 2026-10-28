@@ -13,7 +13,7 @@ the second bind run, or a bind skipped after a clear / a replaced weight (red); 
 from types import SimpleNamespace
 
 from neurobrix.kernels import autotune_bucket as AB
-from neurobrix.triton.arena import Arena
+from nbxtensor.memory.arena import Arena
 from neurobrix.triton.sequence import TritonSequence
 
 

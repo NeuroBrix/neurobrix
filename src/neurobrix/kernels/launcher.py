@@ -2067,11 +2067,12 @@ _installed = False
 #: The package whose kernels this launcher owns. A kernel defined anywhere else —
 #: torch's in-tree Triton ops, a third-party library's — is launched by Triton's own
 #: path: this engine's allocator never handed out its memory and has no claim on it.
-_OWN_PACKAGE = "neurobrix"
+#: the packages whose kernels this launcher runs: the engine's, and the tensor library's (nbxtensor, where the kernels move)
+_OWN_PACKAGES = ("neurobrix", "nbxtensor")
 
 
 def _is_ours(jit_fn) -> bool:
-    """True when this JITFunction was defined inside the engine.
+    """True when this JITFunction was defined inside the engine or its tensor library.
 
     Read from the function's own module, which is the authority: a kernel's home is
     where it was written, not a name we maintain a list of. An unreadable module is
@@ -2083,7 +2084,7 @@ def _is_ours(jit_fn) -> bool:
     module = getattr(fn, "__module__", None) or getattr(jit_fn, "__module__", None)
     if not isinstance(module, str):
         return False
-    return module == _OWN_PACKAGE or module.startswith(_OWN_PACKAGE + ".")
+    return any(module == p or module.startswith(p + ".") for p in _OWN_PACKAGES)
 
 
 def install(force: Optional[bool] = None) -> bool:

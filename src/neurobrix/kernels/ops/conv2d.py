@@ -18,7 +18,7 @@ import triton
 from ._configs import nbx_autotune
 import triton.language as tl
 
-from ._autotune_policy import maybe_pin_single, is_conv2d_pinned
+from nbxtensor.ops._autotune_policy import maybe_pin_single, is_conv2d_pinned
 
 
 # Volta-viable conv2d autotune subspace.

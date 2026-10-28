@@ -20,8 +20,8 @@ import torch
 
 triton = pytest.importorskip("triton")
 
-from neurobrix.kernels.ops.cat_op import cat_copy_kernel_4
-from neurobrix.kernels.ops.stack_op import stack_copy_kernel
+from nbxtensor.ops.cat_op import cat_copy_kernel_4
+from nbxtensor.ops.stack_op import stack_copy_kernel
 
 BIG = 2 ** 31 + 4096
 SMALL = 4096

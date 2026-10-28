@@ -614,7 +614,7 @@ def _extract_creation_args(args, kwargs):
 def _create_ones(*args, **kwargs):
     """aten::ones — fill with 1.0 via Triton fill kernel."""
     from neurobrix.kernels.nbx_tensor import NBXTensor
-    from neurobrix.kernels.ops.fill_op import fill_kernel
+    from nbxtensor.ops.fill_op import fill_kernel
     size, dtype, device = _extract_creation_args(args, kwargs)
     out = NBXTensor.empty(size, dtype=dtype, device=device or 'cuda')
     n = out.numel()
@@ -641,7 +641,7 @@ def _create_empty(*args, **kwargs):
 def _create_full(*args, **kwargs):
     """aten::full — fill with arbitrary value via Triton fill kernel."""
     from neurobrix.kernels.nbx_tensor import NBXTensor
-    from neurobrix.kernels.ops.fill_op import fill_kernel
+    from nbxtensor.ops.fill_op import fill_kernel
     size = args[0] if args else kwargs.get('size', ())
     fill_value = args[1] if len(args) > 1 else kwargs.get('fill_value', 0)
     dtype = kwargs.get('dtype')
@@ -657,7 +657,7 @@ def _create_full(*args, **kwargs):
 def _create_scalar_tensor(value=0, **kwargs):
     """aten::scalar_tensor — single-element tensor."""
     from neurobrix.kernels.nbx_tensor import NBXTensor
-    from neurobrix.kernels.ops.fill_op import fill_kernel
+    from nbxtensor.ops.fill_op import fill_kernel
     dtype = kwargs.get('dtype')
     device = kwargs.get('device', 'cuda')
     out = NBXTensor.empty((1,), dtype=dtype, device=device or 'cuda')
@@ -673,7 +673,7 @@ def _create_arange(start_or_end, end=None, step=1, *, dtype=None,
     Reference: FlagGems ops/arange.py — uses triton arange_func kernel.
     """
     from neurobrix.kernels.nbx_tensor import NBXTensor
-    from neurobrix.kernels.ops.arange_op import arange_kernel
+    from nbxtensor.ops.arange_op import arange_kernel
     import math
     if end is None:
         start, end = 0, start_or_end
@@ -706,7 +706,7 @@ def _create_zeros_like(x, *, dtype=None, layout=None, device=None,
 def _create_ones_like(x, *, dtype=None, layout=None, device=None,
                       pin_memory=None, **kwargs):
     from neurobrix.kernels.nbx_tensor import NBXTensor
-    from neurobrix.kernels.ops.fill_op import fill_kernel
+    from nbxtensor.ops.fill_op import fill_kernel
     out = NBXTensor.empty_like(x, dtype=dtype, device=device)
     n = out.numel()
     if n > 0:
@@ -724,7 +724,7 @@ def _create_empty_like(x, *, dtype=None, layout=None, device=None,
 def _create_full_like(x, fill_value, *, dtype=None, layout=None, device=None,
                       pin_memory=None, **kwargs):
     from neurobrix.kernels.nbx_tensor import NBXTensor
-    from neurobrix.kernels.ops.fill_op import fill_kernel
+    from nbxtensor.ops.fill_op import fill_kernel
     out = NBXTensor.empty_like(x, dtype=dtype, device=device)
     n = out.numel()
     if n > 0:
@@ -747,8 +747,8 @@ def _create_linspace(start, end, steps, *, dtype=None, layout=None,
     for that lone element, so it is special-cased through fill_kernel.
     """
     from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
-    from neurobrix.kernels.ops.linspace_op import linspace_kernel
-    from neurobrix.kernels.ops.fill_op import fill_kernel
+    from nbxtensor.ops.linspace_op import linspace_kernel
+    from nbxtensor.ops.fill_op import fill_kernel
     steps = int(steps)
     start = float(start)
     end = float(end)

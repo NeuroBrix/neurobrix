@@ -141,7 +141,7 @@ def _run_fused(x_np, packed, scales, mins, K, N):
     import triton
     from neurobrix.kernels.nbx_tensor import (NBXTensor, NBXDtype,
                                               DeviceAllocator)
-    from neurobrix.kernels.ops.dequant_gemv import (
+    from nbxtensor.ops.dequant_gemv import (
         BLOCK_K, BLOCK_N, NUM_WARPS, dequant_gemv_int4_kernel)
     x = _nbx(x_np)
     wq, sc, mn = _nbx(packed), _nbx(scales), _nbx(mins)
@@ -204,7 +204,7 @@ def test_dequant_weights_match_float64(K, N) -> None:
     import triton
     from neurobrix.kernels.nbx_tensor import (NBXTensor, NBXDtype,
                                               DeviceAllocator)
-    from neurobrix.kernels.ops.dequant_gemv import (
+    from nbxtensor.ops.dequant_gemv import (
         BLOCK_K, BLOCK_N, NUM_WARPS, dequant_int4_kernel)
     rng = np.random.default_rng(K + N)
     w = (rng.standard_normal((K, N)) * 0.05).astype(np.float16)

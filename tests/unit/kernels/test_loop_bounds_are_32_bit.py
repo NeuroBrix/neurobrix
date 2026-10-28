@@ -12,7 +12,19 @@ RED; restored, green.
 import re
 from pathlib import Path
 
-OPS = Path(__file__).resolve().parents[3] / "src/neurobrix/kernels/ops"
+#: the kernel files: the engine's still to move and the tensor library's (nbxtensor/ops, M1)
+OPS_DIRS = (Path(__file__).resolve().parents[3] / "src" / "neurobrix" / "kernels" / "ops",
+            Path(__file__).resolve().parents[3] / "nbxtensor" / "src" / "nbxtensor" / "ops")
+
+
+def _ops_files(pattern="*.py"):
+    return sorted((p for d in OPS_DIRS for p in d.glob(pattern)), key=lambda p: p.name)
+
+
+def _op_file(name):
+    found = [d / name for d in OPS_DIRS if (d / name).exists()]
+    assert len(found) == 1, (name, found)
+    return found[0]
 
 
 def loop_bounds_from_program_ids(src: str):
@@ -38,7 +50,7 @@ def loop_bounds_from_program_ids(src: str):
 
 def test_no_loop_bound_is_a_64_bit_program_id_value():
     hits = []
-    for f in sorted(OPS.glob("*.py")):
+    for f in _ops_files():
         for line, args, bad in loop_bounds_from_program_ids(f.read_text(encoding="utf-8")):
             hits.append(f"{f.name}:{line}: {args} — {bad}")
     assert not hits, ("loop bounds derived from a 64-bit program id (the Metal lowering refuses them): narrow the "

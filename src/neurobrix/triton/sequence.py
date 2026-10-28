@@ -29,7 +29,7 @@ from neurobrix.kernels.nbx_tensor import (
 from neurobrix.kernels.wrappers import (
     deferred_drain_policy, _DEFERRED_DRAIN_FLOOR_DEFAULT)
 
-from .arena import Arena
+from nbxtensor.memory.arena import Arena
 from .symbols import SymbolResolver, impossible_extent_context
 from .dtype import TritonDtypeEngine
 from . import replay as _replay

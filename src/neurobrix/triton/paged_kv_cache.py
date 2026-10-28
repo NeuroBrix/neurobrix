@@ -247,7 +247,7 @@ class PagedTritonKVCache:
         import triton
         from neurobrix.kernels import wrappers as W
         from neurobrix.kernels.nbx_tensor import _set_device
-        from neurobrix.kernels.ops.paged_decode_attn import paged_kv_append_step_kernel, paged_lens_advance_kernel
+        from nbxtensor.ops.paged_decode_attn import paged_kv_append_step_kernel, paged_lens_advance_kernel
         if int(k.shape[2]) != 1:
             raise RuntimeError(f"PagedTritonKVCache.decode: {int(k.shape[2])} new positions — a decode step brings one")
         new_len = self.length + 1
@@ -294,7 +294,7 @@ class PagedTritonKVCache:
         position must lie in a page already reserved (a replayed step runs no host code, so it grants no page). The key
         carries the split count (the read's grid) and the pools' identity (uid, generation): a growth reallocates them
         and retires every plan recorded against the old addresses."""
-        from neurobrix.kernels.ops.paged_decode_attn import PAGED_DECODE_SPLIT_POSITIONS, PAGED_DECODE_MAX_SPLITS
+        from nbxtensor.ops.paged_decode_attn import PAGED_DECODE_SPLIT_POSITIONS, PAGED_DECODE_MAX_SPLITS
         if self.pool is None or not self.tables:
             return None
         nxt = self.length + 1

@@ -82,6 +82,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 OPS_PKG = "neurobrix.kernels.ops"
 OPS_DIR = REPO_ROOT / "src" / "neurobrix" / "kernels" / "ops"
+#: the tensor library's kernel files (nbxtensor/ops, M1), scanned with the engine's
+LIB_OPS_DIR = REPO_ROOT / "nbxtensor" / "src" / "nbxtensor" / "ops"
 
 # Pipeline stages, in the order triton-msl declares them. `_STAGE_ORDER`
 # is what `--through` truncates and what failure attribution reports.
@@ -265,7 +267,7 @@ def discover_kernels():
     sys.path.insert(0, str(REPO_ROOT / "src"))
     kernels, import_failures, seen_ids = [], [], set()
 
-    for path in sorted(OPS_DIR.glob("*.py")):
+    for path in sorted([*OPS_DIR.glob("*.py"), *LIB_OPS_DIR.glob("*.py")], key=lambda p: p.name):
         if path.name == "__init__.py":
             continue
         mod_name = f"{OPS_PKG}.{path.stem}"
@@ -760,7 +762,7 @@ def main() -> int:
         "target": f"{target.backend}/{target.arch}",
         "through": args.through,
         "target_source": target_source,
-        "py_files_scanned": len(sorted(OPS_DIR.glob("*.py"))),
+        "py_files_scanned": len([*OPS_DIR.glob("*.py"), *LIB_OPS_DIR.glob("*.py")]),
         "modules_with_kernels": len({k["module"] for k in kernels}),
         "kernels_found": len(kernels),
         "metal_toolchain_present": bool(

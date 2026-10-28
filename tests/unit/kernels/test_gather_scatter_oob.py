@@ -44,9 +44,9 @@ import sys
 import pytest
 
 from neurobrix.kernels import nbx_tensor as nt
-from neurobrix.kernels.ops.embedding import embedding_kernel, EMBEDDING_OOB
-from neurobrix.kernels.ops.index_put_op import index_put_kernel, INDEX_PUT_OOB
-from neurobrix.kernels.ops.index_select import index_select_kernel, INDEX_SELECT_OOB
+from nbxtensor.ops.embedding import embedding_kernel, EMBEDDING_OOB
+from nbxtensor.ops.index_put_op import index_put_kernel, INDEX_PUT_OOB
+from nbxtensor.ops.index_select import index_select_kernel, INDEX_SELECT_OOB
 
 _KERNELS = {
     "index_select": (index_select_kernel, "N", INDEX_SELECT_OOB),

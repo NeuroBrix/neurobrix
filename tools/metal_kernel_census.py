@@ -62,9 +62,10 @@ def clear_caches() -> list:
 
 def library_kernels() -> list:
     """Every `@triton.jit` kernel in the ops library, read from the source."""
-    root = REPO_ROOT / "src" / "neurobrix" / "kernels" / "ops"
+    roots = (REPO_ROOT / "src" / "neurobrix" / "kernels" / "ops",       # the engine's kernel files still to move
+             REPO_ROOT / "nbxtensor" / "src" / "nbxtensor" / "ops")       # and the tensor library's (M1)
     found = []
-    for f in sorted(root.rglob("*.py")):
+    for root, f in sorted(((r, f) for r in roots for f in r.rglob("*.py")), key=lambda rf: rf[1].name):
         try:
             tree = ast.parse(f.read_text())
         except (SyntaxError, OSError):

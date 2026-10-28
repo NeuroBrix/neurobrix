@@ -159,7 +159,7 @@ class TritonAttentionInterceptor:
                 "ZERO FALLBACK: a decode step's attention carries a mask over the cache the paged KV read does not "
                 f"apply ({tuple(attn_mask.shape)}); the paged cache reads each sequence's own length")
         import math
-        from neurobrix.kernels.ops.paged_decode_attn import PAGED_DECODE_JUDGED_TILE
+        from nbxtensor.ops.paged_decode_attn import PAGED_DECODE_JUDGED_TILE
         s = float(scale) if scale is not None else 1.0 / math.sqrt(int(q.shape[-1]))
         return self.cache.decode(layer_idx, q, k, v, s, PAGED_DECODE_JUDGED_TILE, q_round=self.cache.dtype)
 

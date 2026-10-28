@@ -29,7 +29,7 @@ import triton
 from ._configs import nbx_autotune
 import triton.language as tl
 
-from ._autotune_policy import maybe_pin_single, is_depthwise_conv2d_pinned
+from nbxtensor.ops._autotune_policy import maybe_pin_single, is_depthwise_conv2d_pinned
 
 
 _DEPTHWISE_CONV2D_CONFIGS = [

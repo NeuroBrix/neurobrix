@@ -20,7 +20,7 @@ def test_slots_follow_the_lru_and_hold_the_routed_experts():
     import ctypes
     import triton
     from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
-    from neurobrix.kernels.ops.moe_device_residency import expert_slot_assign_kernel, expert_miss_copy_kernel
+    from nbxtensor.ops.moe_device_residency import expert_slot_assign_kernel, expert_miss_copy_kernel
     rng = np.random.default_rng(3)
     L, E, S, K, n = 3, 16, 10, 4, 1000                     # n elements per projection
     dev = "cuda:0"

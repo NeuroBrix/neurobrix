@@ -107,53 +107,53 @@ def _autotune_headroom_guard(launch):
 
 # === Activations ===
 
-from .ops.relu import relu_forward_kernel
-from .ops.silu import silu_forward_kernel
-from .ops.gelu import gelu_forward_kernel
-from .ops.sigmoid import sigmoid_forward_kernel
-from .ops.tanh import tanh_forward_kernel
-from .ops.hardsigmoid import hardsigmoid_forward_kernel
-from .ops.hardswish import hardswish_forward_kernel
-from .ops.leaky_relu import leaky_relu_forward_kernel
-from .ops.elu import elu_forward_kernel
-from .ops.mish import mish_forward_kernel
-from .ops.selu import selu_forward_kernel
+from nbxtensor.ops.relu import relu_forward_kernel
+from nbxtensor.ops.silu import silu_forward_kernel
+from nbxtensor.ops.gelu import gelu_forward_kernel
+from nbxtensor.ops.sigmoid import sigmoid_forward_kernel
+from nbxtensor.ops.tanh import tanh_forward_kernel
+from nbxtensor.ops.hardsigmoid import hardsigmoid_forward_kernel
+from nbxtensor.ops.hardswish import hardswish_forward_kernel
+from nbxtensor.ops.leaky_relu import leaky_relu_forward_kernel
+from nbxtensor.ops.elu import elu_forward_kernel
+from nbxtensor.ops.mish import mish_forward_kernel
+from nbxtensor.ops.selu import selu_forward_kernel
 
 # === Unary element-wise ===
 
-from .ops.neg import neg_forward_kernel
-from .ops.exp import exp_forward_kernel
-from .ops.sin import sin_forward_kernel
-from .ops.cos import cos_forward_kernel
-from .ops.rsqrt import rsqrt_forward_kernel
-from .ops.sqrt import sqrt_forward_kernel
-from .ops.abs import abs_forward_kernel
-from .ops.log import log_forward_kernel
-from .ops.reciprocal import reciprocal_forward_kernel
-from .ops.pow import pow_forward_kernel
-from .ops.clamp import clamp_forward_kernel
-from .ops.erf import erf_forward_kernel
-from .ops.copy import copy_forward_kernel
+from nbxtensor.ops.neg import neg_forward_kernel
+from nbxtensor.ops.exp import exp_forward_kernel
+from nbxtensor.ops.sin import sin_forward_kernel
+from nbxtensor.ops.cos import cos_forward_kernel
+from nbxtensor.ops.rsqrt import rsqrt_forward_kernel
+from nbxtensor.ops.sqrt import sqrt_forward_kernel
+from nbxtensor.ops.abs import abs_forward_kernel
+from nbxtensor.ops.log import log_forward_kernel
+from nbxtensor.ops.reciprocal import reciprocal_forward_kernel
+from nbxtensor.ops.pow import pow_forward_kernel
+from nbxtensor.ops.clamp import clamp_forward_kernel
+from nbxtensor.ops.erf import erf_forward_kernel
+from nbxtensor.ops.copy import copy_forward_kernel
 
 # === Binary element-wise ===
 
-from .ops.add import add_forward_kernel, add_scalar_kernel, add_scalar_dev_kernel, add_bias_broadcast_kernel
-from .ops.binary_strided import add_strided_nd_kernel, mul_strided_nd_kernel, sub_strided_nd_kernel, div_strided_nd_kernel, add_scalar_strided_nd_kernel, mul_scalar_strided_nd_kernel
-from .ops.mul import mul_forward_kernel, mul_scalar_kernel, mul_scalar_dev_kernel
-from .ops.div import div_forward_kernel, div_scalar_kernel, div_scalar_dev_kernel, int_div_kernel
-from .ops.sub import sub_forward_kernel, rsub_forward_kernel
-from .ops.where import where_forward_kernel
-from .ops.maximum import maximum_forward_kernel
-from .ops.minimum import minimum_forward_kernel
-from .ops.masked_fill import masked_fill_forward_kernel
+from nbxtensor.ops.add import add_forward_kernel, add_scalar_kernel, add_scalar_dev_kernel, add_bias_broadcast_kernel
+from nbxtensor.ops.binary_strided import add_strided_nd_kernel, mul_strided_nd_kernel, sub_strided_nd_kernel, div_strided_nd_kernel, add_scalar_strided_nd_kernel, mul_scalar_strided_nd_kernel
+from nbxtensor.ops.mul import mul_forward_kernel, mul_scalar_kernel, mul_scalar_dev_kernel
+from nbxtensor.ops.div import div_forward_kernel, div_scalar_kernel, div_scalar_dev_kernel, int_div_kernel
+from nbxtensor.ops.sub import sub_forward_kernel, rsub_forward_kernel
+from nbxtensor.ops.where import where_forward_kernel
+from nbxtensor.ops.maximum import maximum_forward_kernel
+from nbxtensor.ops.minimum import minimum_forward_kernel
+from nbxtensor.ops.masked_fill import masked_fill_forward_kernel
 
 # === Comparisons ===
 
-from .ops.gt import gt_forward_kernel, gt_scalar_kernel
-from .ops.ge import ge_forward_kernel, ge_scalar_kernel
-from .ops.lt import lt_forward_kernel, lt_scalar_kernel
-from .ops.eq import eq_forward_kernel, eq_scalar_kernel
-from .ops.ne import ne_forward_kernel, ne_scalar_kernel
+from nbxtensor.ops.gt import gt_forward_kernel, gt_scalar_kernel
+from nbxtensor.ops.ge import ge_forward_kernel, ge_scalar_kernel
+from nbxtensor.ops.lt import lt_forward_kernel, lt_scalar_kernel
+from nbxtensor.ops.eq import eq_forward_kernel, eq_scalar_kernel
+from nbxtensor.ops.ne import ne_forward_kernel, ne_scalar_kernel
 
 # === Normalization ===
 
@@ -167,16 +167,16 @@ from .ops.softmax import softmax_forward_kernel, softmax_forward_looped_kernel
 # === Matmul ===
 
 from .ops.matmul import matmul_kernel, addmm_kernel
-from .ops._autotune_policy import NBX_FORCE_FP32_ACCUM
+from nbxtensor.ops._autotune_policy import NBX_FORCE_FP32_ACCUM
 
 # === Fused MoE ===
 
-from .ops.fused_moe import fused_moe_kernel, silu_and_mul_kernel, silu_mul_split_kernel
-from .ops.dtype_convert import bf16_to_fp16_kernel
+from nbxtensor.ops.fused_moe import fused_moe_kernel, silu_and_mul_kernel, silu_mul_split_kernel
+from nbxtensor.ops.dtype_convert import bf16_to_fp16_kernel
 
 # === Embedding ===
 
-from .ops.embedding import embedding_kernel, EMBEDDING_OOB
+from nbxtensor.ops.embedding import embedding_kernel, EMBEDDING_OOB
 
 # === Reductions ===
 
@@ -186,117 +186,117 @@ from .ops.amax import amax_forward_kernel
 
 # === GLU ===
 
-from .ops.glu import glu_forward_kernel
+from nbxtensor.ops.glu import glu_forward_kernel
 
 # === New kernels (Phase 2) ===
 
-from .ops.le import le_forward_kernel, le_scalar_kernel
-from .ops.softplus import softplus_forward_kernel
-from .ops.dropout import dropout_inference_kernel
-from .ops.upsample_nearest2d import upsample_nearest2d_kernel
+from nbxtensor.ops.le import le_forward_kernel, le_scalar_kernel
+from nbxtensor.ops.softplus import softplus_forward_kernel
+from nbxtensor.ops.dropout import dropout_inference_kernel
+from nbxtensor.ops.upsample_nearest2d import upsample_nearest2d_kernel
 from .ops.groupnorm import group_norm_forward_kernel
-from .ops.index_select import index_select_kernel, INDEX_SELECT_OOB
-from .ops.triu import triu_kernel, triu_batch_kernel
-from .ops.tril import tril_kernel, tril_batch_kernel
-from .ops.argmax import argmax_kernel_1, argmax_kernel_2, argmax_kernel_inner
-from .ops.argmin import argmin_kernel_1, argmin_kernel_2, argmin_kernel
+from nbxtensor.ops.index_select import index_select_kernel, INDEX_SELECT_OOB
+from nbxtensor.ops.triu import triu_kernel, triu_batch_kernel
+from nbxtensor.ops.tril import tril_kernel, tril_batch_kernel
+from nbxtensor.ops.argmax import argmax_kernel_1, argmax_kernel_2, argmax_kernel_inner
+from nbxtensor.ops.argmin import argmin_kernel_1, argmin_kernel_2, argmin_kernel
 from .ops.conv2d import conv2d_forward_kernel
 from .ops.depthwise_conv2d import depthwise_conv2d_kernel
-from .ops.batch_norm import batch_norm_forward_kernel
-from .ops.cumsum import scan_part_sum_kernel, add_base_sum_kernel
-from .ops.scatter_op import scatter_kernel, scatter_add_kernel, scatter_reduce_amax_kernel, scatter_reduce_amin_kernel
-from .ops.gather_op import gather_kernel
-from .ops.avg_pool2d import avg_pool2d_forward_kernel
-from .ops.max_pool2d import max_pool2d_forward_kernel
-from .ops.max_pool3d import max_pool3d_forward_kernel
-from .ops.cross_entropy import cross_entropy_loss_forward_kernel
+from nbxtensor.ops.batch_norm import batch_norm_forward_kernel
+from nbxtensor.ops.cumsum import scan_part_sum_kernel, add_base_sum_kernel
+from nbxtensor.ops.scatter_op import scatter_kernel, scatter_add_kernel, scatter_reduce_amax_kernel, scatter_reduce_amin_kernel
+from nbxtensor.ops.gather_op import gather_kernel
+from nbxtensor.ops.avg_pool2d import avg_pool2d_forward_kernel
+from nbxtensor.ops.max_pool2d import max_pool2d_forward_kernel
+from nbxtensor.ops.max_pool3d import max_pool3d_forward_kernel
+from nbxtensor.ops.cross_entropy import cross_entropy_loss_forward_kernel
 
 # === Simple element-wise (Phase 3) ===
 
-from .ops.exp2 import exp2_forward_kernel
-from .ops.tan import tan_forward_kernel
-from .ops.celu import celu_forward_kernel
-from .ops.log_sigmoid import log_sigmoid_forward_kernel
-from .ops.isfinite import isfinite_forward_kernel
-from .ops.isinf import isinf_forward_kernel
-from .ops.isnan import isnan_forward_kernel
-from .ops.nan_to_num import nan_to_num_forward_kernel
-from .ops.threshold import threshold_forward_kernel
-from .ops.floor import floor_forward_kernel, ceil_forward_kernel, round_forward_kernel, trunc_forward_kernel
+from nbxtensor.ops.exp2 import exp2_forward_kernel
+from nbxtensor.ops.tan import tan_forward_kernel
+from nbxtensor.ops.celu import celu_forward_kernel
+from nbxtensor.ops.log_sigmoid import log_sigmoid_forward_kernel
+from nbxtensor.ops.isfinite import isfinite_forward_kernel
+from nbxtensor.ops.isinf import isinf_forward_kernel
+from nbxtensor.ops.isnan import isnan_forward_kernel
+from nbxtensor.ops.nan_to_num import nan_to_num_forward_kernel
+from nbxtensor.ops.threshold import threshold_forward_kernel
+from nbxtensor.ops.floor import floor_forward_kernel, ceil_forward_kernel, round_forward_kernel, trunc_forward_kernel
 
 # === Phase 4: Remaining kernels ===
 
-from .ops.addcdiv import addcdiv_forward_kernel
-from .ops.addcmul import addcmul_forward_kernel
-from .ops.all_reduce import all_kernel_mid, all_kernel_result, all_kernel_dim
-from .ops.any_reduce import any_kernel_mid, any_kernel_result, any_kernel_dim
-from .ops.bitwise_and import bitwise_and_forward_kernel
-from .ops.bitwise_or import bitwise_or_forward_kernel
-from .ops.bitwise_not import bitwise_not_forward_kernel
-from .ops.logical_and import logical_and_forward_kernel
-from .ops.logical_or import logical_or_forward_kernel
-from .ops.logical_not import logical_not_forward_kernel
-from .ops.conv1d import conv1d_forward_kernel
-from .ops.lerp import lerp_tensor_forward_kernel, lerp_scalar_head_kernel, lerp_scalar_tail_kernel
-from .ops.dot_op import dot_kernel_small, dot_kernel_partial, dot_kernel_reduce
-from .ops.flip_op import flip_1d_kernel, flip_strided_kernel
-from .ops.cat_op import cat_copy_kernel_4
-from .ops.fill_op import fill_kernel
-from .ops.arange_op import arange_kernel
-from .ops.prod import prod_kernel_mid, prod_kernel_result, prod_kernel
-from .ops.min_reduce import min_kernel_mid, min_kernel_result, min_kernel
-from .ops.max_reduce import max_kernel_mid, max_kernel_result, max_kernel
+from nbxtensor.ops.addcdiv import addcdiv_forward_kernel
+from nbxtensor.ops.addcmul import addcmul_forward_kernel
+from nbxtensor.ops.all_reduce import all_kernel_mid, all_kernel_result, all_kernel_dim
+from nbxtensor.ops.any_reduce import any_kernel_mid, any_kernel_result, any_kernel_dim
+from nbxtensor.ops.bitwise_and import bitwise_and_forward_kernel
+from nbxtensor.ops.bitwise_or import bitwise_or_forward_kernel
+from nbxtensor.ops.bitwise_not import bitwise_not_forward_kernel
+from nbxtensor.ops.logical_and import logical_and_forward_kernel
+from nbxtensor.ops.logical_or import logical_or_forward_kernel
+from nbxtensor.ops.logical_not import logical_not_forward_kernel
+from nbxtensor.ops.conv1d import conv1d_forward_kernel
+from nbxtensor.ops.lerp import lerp_tensor_forward_kernel, lerp_scalar_head_kernel, lerp_scalar_tail_kernel
+from nbxtensor.ops.dot_op import dot_kernel_small, dot_kernel_partial, dot_kernel_reduce
+from nbxtensor.ops.flip_op import flip_1d_kernel, flip_strided_kernel
+from nbxtensor.ops.cat_op import cat_copy_kernel_4
+from nbxtensor.ops.fill_op import fill_kernel
+from nbxtensor.ops.arange_op import arange_kernel
+from nbxtensor.ops.prod import prod_kernel_mid, prod_kernel_result, prod_kernel
+from nbxtensor.ops.min_reduce import min_kernel_mid, min_kernel_result, min_kernel
+from nbxtensor.ops.max_reduce import max_kernel_mid, max_kernel_result, max_kernel
 from .ops.baddbmm_op import baddbmm_kernel
 from .ops.addmv_op import addmv_kernel
-from .ops.mse_loss import mse_loss_partial_kernel, mse_loss_reduce_kernel, mse_loss_none_kernel
-from .ops.nllloss import nll_loss_forward_kernel
-from .ops.std import std_map_kernel, std_reduce_kernel, std_dim_kernel
-from .ops.var import var_kernel_1, var_kernel_2, var_welford_kernel
-from .ops.index_add import index_add_gather_kernel
-from .ops.index_put_op import index_put_kernel, INDEX_PUT_OOB
-from .ops.sort_op import (radix_sort_histogram_kernel,
+from nbxtensor.ops.mse_loss import mse_loss_partial_kernel, mse_loss_reduce_kernel, mse_loss_none_kernel
+from nbxtensor.ops.nllloss import nll_loss_forward_kernel
+from nbxtensor.ops.std import std_map_kernel, std_reduce_kernel, std_dim_kernel
+from nbxtensor.ops.var import var_kernel_1, var_kernel_2, var_welford_kernel
+from nbxtensor.ops.index_add import index_add_gather_kernel
+from nbxtensor.ops.index_put_op import index_put_kernel, INDEX_PUT_OOB
+from nbxtensor.ops.sort_op import (radix_sort_histogram_kernel,
                           radix_sort_scatter_kernel,
                           radix_sort_tile_counts_kernel,
                           radix_sort_tile_prefix_kernel)
 
 # === Phase 5: RoPE, spatial, RNG, remaining ===
 
-from .ops.rope import rope_forward_kernel
-from .ops.pixel_shuffle import (
+from nbxtensor.ops.rope import rope_forward_kernel
+from nbxtensor.ops.pixel_shuffle import (
     pixel_shuffle_kernel,
     pixel_shuffle_broadcast_aware_kernel,
 )
-from .ops.pixel_unshuffle import pixel_unshuffle_kernel
-from .ops.upsample_bilinear2d import upsample_bilinear2d_kernel
-from .ops.adaptive_avg_pool2d import adaptive_avg_pool2d_kernel
-from .ops.conv_depthwise2d import conv_depthwise2d_kernel
-from .ops.scaled_softmax import scaled_softmax_kernel
-from .ops.vector_norm import (
+from nbxtensor.ops.pixel_unshuffle import pixel_unshuffle_kernel
+from nbxtensor.ops.upsample_bilinear2d import upsample_bilinear2d_kernel
+from nbxtensor.ops.adaptive_avg_pool2d import adaptive_avg_pool2d_kernel
+from nbxtensor.ops.conv_depthwise2d import conv_depthwise2d_kernel
+from nbxtensor.ops.scaled_softmax import scaled_softmax_kernel
+from nbxtensor.ops.vector_norm import (
     l2_norm_kernel, l1_norm_kernel, linf_norm_kernel, l0_norm_kernel, lp_norm_kernel,
     l2_norm_pass1_kernel, l2_norm_pass2_kernel,
     linf_norm_pass1_kernel, linf_norm_pass2_kernel,
 )
-from .ops.addr import addr_kernel
-from .ops.logical_xor import logical_xor_kernel
-from .ops.bitwise_left_shift import bitwise_left_shift_kernel
-from .ops.bitwise_right_shift import bitwise_right_shift_kernel
-from .ops.rand_op import rand_kernel, randn_kernel
-from .ops.clamp_min import clamp_min_forward_kernel
-from .ops.conv_transpose2d import conv_transpose2d_kernel
-from .ops.cummax import scan_part_max_kernel
-from .ops.cummin import scan_part_min_kernel
-from .ops.count_nonzero import count_nonzero_kernel
-from .ops.trace_op import trace_kernel
-from .ops.linspace_op import linspace_kernel
-from .ops.full_op import full_kernel
-from .ops.stack_op import stack_copy_kernel
-from .ops.repeat_op import repeat_1d_kernel
+from nbxtensor.ops.addr import addr_kernel
+from nbxtensor.ops.logical_xor import logical_xor_kernel
+from nbxtensor.ops.bitwise_left_shift import bitwise_left_shift_kernel
+from nbxtensor.ops.bitwise_right_shift import bitwise_right_shift_kernel
+from nbxtensor.ops.rand_op import rand_kernel, randn_kernel
+from nbxtensor.ops.clamp_min import clamp_min_forward_kernel
+from nbxtensor.ops.conv_transpose2d import conv_transpose2d_kernel
+from nbxtensor.ops.cummax import scan_part_max_kernel
+from nbxtensor.ops.cummin import scan_part_min_kernel
+from nbxtensor.ops.count_nonzero import count_nonzero_kernel
+from nbxtensor.ops.trace_op import trace_kernel
+from nbxtensor.ops.linspace_op import linspace_kernel
+from nbxtensor.ops.full_op import full_kernel
+from nbxtensor.ops.stack_op import stack_copy_kernel
+from nbxtensor.ops.repeat_op import repeat_1d_kernel
 
 # === Phase 6: Video + Audio ops ===
 
-from .ops.upsample_nearest3d import upsample_nearest3d_kernel
-from .ops.weight_norm import weight_norm_kernel_first, weight_norm_kernel_last
-from .ops.repeat_interleave import repeat_interleave_tensor_kernel
+from nbxtensor.ops.upsample_nearest3d import upsample_nearest3d_kernel
+from nbxtensor.ops.weight_norm import weight_norm_kernel_first, weight_norm_kernel_last
+from nbxtensor.ops.repeat_interleave import repeat_interleave_tensor_kernel
 
 
 # ---------------------------------------------------------------------------
@@ -1099,7 +1099,7 @@ def grid_sampler_2d_wrapper(inp, grid, interpolation_mode=0,
     Qwen-VL pos-embed adaptation uses bicubic+border+align_corners=False);
     ZERO FALLBACK on the rest. fp32 coordinate math and accumulation
     (ATen opmath), output cast back to the input dtype."""
-    from .ops.grid_sampler import grid_sampler_2d_kernel
+    from nbxtensor.ops.grid_sampler import grid_sampler_2d_kernel
 
     interpolation_mode = int(interpolation_mode)
     padding_mode = int(padding_mode)
@@ -1928,7 +1928,7 @@ def _dequant_gemv_block_n(N: int) -> int:
     the pinned BLOCK_N (prior behavior). Large-N grids that already
     meet the target are untouched.
     """
-    from neurobrix.kernels.ops.dequant_gemv import BLOCK_N
+    from nbxtensor.ops.dequant_gemv import BLOCK_N
     global _DEQUANT_GEMV_MIN_PROGRAMS
     if _DEQUANT_GEMV_MIN_PROGRAMS is None:
         target = 0
@@ -2052,7 +2052,7 @@ def _mm_quantized(a, qt, _epilogue: int = 0):
     the dense path (a's dtype).
     """
     import triton as _tr
-    from neurobrix.kernels.ops.dequant_gemv import (
+    from nbxtensor.ops.dequant_gemv import (
         BLOCK_K, BLOCK_N, NUM_WARPS, GROUP_SIZE, PACK,
         dequant_gemv_int4_kernel, dequant_int4_kernel)
     if not qt.transposed:
@@ -2117,7 +2117,7 @@ def _gemm_m8n8k4(a, b, bias, c, alpha, beta, promote_bias, epilogue, tile, bias_
     """C = A @ B (+ beta * bias, alpha scaling) on the m8n8k4 matrix unit (ops/matmul_m8n8k4.py). 2-D or batched
     3-D operands: `a` row-major per batch, `b` walked by its strides, `bias` None or broadcast by `bias_strides`
     (batch, row, column; default a [N] / [1, N] row). The batch runs on grid axis 1, chunked at _GRID_Z_MAX."""
-    from .ops.matmul_m8n8k4 import matmul_m8n8k4_kernel, mm_layouts
+    from nbxtensor.ops.matmul_m8n8k4 import matmul_m8n8k4_kernel, mm_layouts
     batched = a.ndim == 3
     Z = a.shape[0] if batched else 1
     M, K = a.shape[-2:]
@@ -2797,7 +2797,7 @@ def invoke_fused_moe_wna16(
     in-register dequant — byte-gated vs fused_moe_fp32b_kernel).
     Same launch contract as invoke_fused_moe; _MOE_BK (32) divides the
     quant group (128) so a K-tile never crosses a group boundary."""
-    from neurobrix.kernels.ops.fused_moe import fused_moe_wna16_kernel
+    from nbxtensor.ops.fused_moe import fused_moe_wna16_kernel
     M = hidden_states.shape[0]
     num_valid_tokens = topk_weights.shape[0]
     EM = sorted_token_ids.shape[0]
@@ -3351,7 +3351,7 @@ def dropout_wrapper(x, p: float = 0.5, train: bool = False) :
 
 def remainder_wrapper(a, b) :
     """Remainder (modulo): a % b."""
-    from .ops.remainder import remainder_forward_kernel, remainder_scalar_kernel
+    from nbxtensor.ops.remainder import remainder_forward_kernel, remainder_scalar_kernel
     a, b, output, n, dev_ctx, scalar = _prepare_binary(a, b)
     if scalar == "dev":  # off the timestep hot path: host extract, exact old behavior
         b, scalar = _to_scalar(b), True
@@ -3530,7 +3530,7 @@ def index_select_wrapper(x, dim: int, index) :
         out = NBXTensor.empty(out_shape, dtype=x.dtype, device=x.device)
         total = outer * index_len * inner
         if total > 0:
-            from .ops.index_select import index_select_mid_kernel
+            from nbxtensor.ops.index_select import index_select_mid_kernel
             _set_device(x)
             _m = _ew_meta(total)
             index_select_mid_kernel[_ew_grid(total, _m)](
@@ -4313,7 +4313,7 @@ def _conv2d_m8n8k4(x, w, bias, out, N, in_c, in_h, in_w, out_c, out_h, out_w, kh
                    groups):
     """conv2d as an implicit GEMM on the m8n8k4 matrix unit: M = N*OH*OW, N = OC/groups, K = (IC/groups)*KH*KW in
     the contiguous weight's own order (read in place); groups on grid axis 1; the profile's `mm` tile."""
-    from .ops.conv2d_m8n8k4 import conv2d_m8n8k4_kernel, conv_layouts
+    from nbxtensor.ops.conv2d_m8n8k4 import conv2d_m8n8k4_kernel, conv_layouts
     M, OG, CG = N * out_h * out_w, out_c // groups, in_c // groups
     tile = _matrix_unit_mm_tile(M, OG, _matrix_unit())
     MB, NB = tile["block_m"] // 16, tile["block_n"] // 16
@@ -5809,7 +5809,7 @@ def nonzero_1d_wrapper(mask) -> "NBXTensor":
     (the host-boundary sync every data-dependent-shape op requires),
     narrowed to [n] (a leading-dim narrow of a contiguous buffer stays
     contiguous — no guard needed)."""
-    from .ops.nonzero import nonzero_1d_kernel
+    from nbxtensor.ops.nonzero import nonzero_1d_kernel
     assert mask.ndim == 1, f"nonzero_1d expects 1-D, got {mask.ndim}-D"
     m = mask.contiguous()
     n = int(m.shape[0])
@@ -5832,7 +5832,7 @@ def bucketize_wrapper(x, boundaries, out_int32: bool = False,
     are decode-control scale (one per temporal frame / packed segment),
     so the O(n_boundaries) scan is exact, branch-free and
     bit-reproducible."""
-    from .ops.bucketize import bucketize_kernel
+    from nbxtensor.ops.bucketize import bucketize_kernel
     xc = x.contiguous()
     bc = boundaries.contiguous()
     n = 1
@@ -6221,7 +6221,7 @@ def sort_wrapper(x, dim: int = -1,
     For the exclusive prefix sum step, we use our Triton cumsum kernel
     uses Triton radix sort kernels.
     """
-    from .ops.sort_op import (
+    from nbxtensor.ops.sort_op import (
         convert_to_uint_preserve_order,
         radix_sort_histogram_kernel,
         radix_sort_tile_counts_kernel,
@@ -6536,7 +6536,7 @@ def bitwise_left_shift_wrapper(a, b) :
         _set_device(a)
         bitwise_left_shift_kernel[_1d_grid(a.numel())](a, b, output, a.numel(), **_ew_meta(a.numel()))
     else:
-        from .ops.bitwise_left_shift import bitwise_left_shift_scalar_kernel
+        from nbxtensor.ops.bitwise_left_shift import bitwise_left_shift_scalar_kernel
         _set_device(a)
         bitwise_left_shift_scalar_kernel[_1d_grid(a.numel())](a, output, a.numel(), int(b), **_ew_meta(a.numel()))
     return output
@@ -6550,7 +6550,7 @@ def bitwise_right_shift_wrapper(a, b) :
         _set_device(a)
         bitwise_right_shift_kernel[_1d_grid(a.numel())](a, b, output, a.numel(), **_ew_meta(a.numel()))
     else:
-        from .ops.bitwise_right_shift import bitwise_right_shift_scalar_kernel
+        from nbxtensor.ops.bitwise_right_shift import bitwise_right_shift_scalar_kernel
         _set_device(a)
         bitwise_right_shift_scalar_kernel[_1d_grid(a.numel())](a, output, a.numel(), int(b), **_ew_meta(a.numel()))
     return output
@@ -6657,7 +6657,7 @@ def topk_wrapper(x, k: int, dim: int = -1,
                  largest: bool = True, sorted: bool = True):
     """Top-k via 2-stage Triton pipeline. Stage 1: per-chunk top-k. Stage 2: merge via bitonic sort.
     Triton kernels + NBXTensor allocation."""
-    from .ops.topk import topk_stage1_kernel, topk_stage2_kernel
+    from nbxtensor.ops.topk import topk_stage1_kernel, topk_stage2_kernel
     import math as _math
 
     if dim < 0:
@@ -6975,7 +6975,7 @@ def _stream_draw(kind, shape, dtype, device):
 
 def rand_wrapper(*args, **kwargs) :
     """rand(size, ...) → uniform [0, 1) via Triton kernel."""
-    from .ops.rand_op import rand_kernel
+    from nbxtensor.ops.rand_op import rand_kernel
     from nbxtensor.random.rng_pin import pinned_seed, pinned_uniform
     # ATen signature: rand(SymInt[] size, ...)
     size = args[0] if args else kwargs.get('size', [])
@@ -7002,7 +7002,7 @@ def rand_wrapper(*args, **kwargs) :
 
 def randn_wrapper(*args, **kwargs) :
     """randn(size, ...) → standard normal N(0,1) via Triton kernel."""
-    from .ops.rand_op import randn_kernel
+    from nbxtensor.ops.rand_op import randn_kernel
     size = args[0] if args else kwargs.get('size', [])
     if isinstance(size, NBXTensor):
         size = size.tolist()
@@ -7025,7 +7025,7 @@ def randn_wrapper(*args, **kwargs) :
 
 def rand_like_wrapper(x, **kwargs) :
     """rand_like(tensor) → uniform [0, 1) same shape/dtype/device."""
-    from .ops.rand_op import rand_kernel
+    from nbxtensor.ops.rand_op import rand_kernel
     dtype = kwargs.get('dtype', x.dtype)
     device = kwargs.get('device', x.device)
     drawn = _stream_draw("uniform", x.shape, kwargs.get('dtype', x._dtype), device)
@@ -7043,7 +7043,7 @@ def rand_like_wrapper(x, **kwargs) :
 
 def randn_like_wrapper(x, **kwargs) :
     """randn_like(tensor) → standard normal N(0,1) same shape/dtype/device."""
-    from .ops.rand_op import randn_kernel
+    from nbxtensor.ops.rand_op import randn_kernel
     from nbxtensor.random.rng_pin import pinned_seed, pinned_normal
     dtype = kwargs.get('dtype', x.dtype)
     device = kwargs.get('device', x.device)
@@ -7064,7 +7064,7 @@ def randn_like_wrapper(x, **kwargs) :
 
 def normal_wrapper(*args, **kwargs) :
     """normal(mean, std, size) → N(mean, std) via Triton randn + transform."""
-    from .ops.rand_op import randn_kernel
+    from nbxtensor.ops.rand_op import randn_kernel
     # ATen: normal(float mean, float std, SymInt[] size, ...)
     mean = float(args[0]) if len(args) > 0 else kwargs.get('mean', 0.0)
     std = float(args[1]) if len(args) > 1 else kwargs.get('std', 1.0)
@@ -7097,7 +7097,7 @@ def normal_wrapper(*args, **kwargs) :
 def uniform_wrapper(x, low: float = 0.0, high: float = 1.0,
                     **kwargs) :
     """uniform_(tensor, low, high) → fill with uniform [low, high)."""
-    from .ops.rand_op import rand_kernel
+    from nbxtensor.ops.rand_op import rand_kernel
     x = _ensure_cuda(x).contiguous()
     n = x.numel()
     if n == 0:
@@ -7114,7 +7114,7 @@ def uniform_wrapper(x, low: float = 0.0, high: float = 1.0,
 
 def bernoulli_wrapper(x, p: float = 0.5, **kwargs) :
     """bernoulli(tensor) → 0/1 values based on probabilities."""
-    from .ops.rand_op import rand_kernel
+    from nbxtensor.ops.rand_op import rand_kernel
     x = _ensure_cuda(x)
     output = NBXTensor.empty_like(x)
     # Generate uniform random values
@@ -7141,7 +7141,7 @@ def multinomial_wrapper(x, num_samples: int,
     Uses Gumbel-max trick: argmax(log(probs) + Gumbel) = categorical sample.
     Gumbel noise = -log(-log(uniform)).
     """
-    from .ops.rand_op import rand_kernel
+    from nbxtensor.ops.rand_op import rand_kernel
     x = _ensure_cuda(x)
     # Normalize probabilities
     probs = x.float()
@@ -7191,7 +7191,7 @@ def multinomial_wrapper(x, num_samples: int,
 
 def constant_pad_nd_wrapper(x, pad_list, value: float = 0.0) :
     """constant_pad_nd via Triton kernel."""
-    from .ops.pad_op import constant_pad_2d_kernel, constant_pad_1d_kernel, constant_pad_nd_kernel
+    from nbxtensor.ops.pad_op import constant_pad_2d_kernel, constant_pad_1d_kernel, constant_pad_nd_kernel
     x = _ensure_cuda(x).contiguous()
 
     ndim = x.ndim
@@ -7421,7 +7421,7 @@ def _replication_pad_last(x, pad_list, n_axes: int):
     strides (`replication_pad_nd_kernel`). The former narrow + expand + cat held a contiguous copy of the input and one
     output-sized tensor per padded axis: on mochi-1-preview's VAE (3 GB activations) up to three of them beside the
     result, priced by no plan (2026-10-28)."""
-    from .ops.pad_op import replication_pad_nd_kernel
+    from nbxtensor.ops.pad_op import replication_pad_nd_kernel
     from neurobrix.kernels.nbx_tensor import _index_wide, _max_linear_offset
     pads = ([int(v) for v in pad_list] + [0] * (2 * n_axes))[:2 * n_axes]
     ndim = len(x.shape)
@@ -7495,7 +7495,7 @@ def unfold_backward_wrapper(grad_in, input_sizes, dim, size, step) :
     [..lead.., N_frames, size] back into the original signal [..lead.., L] (L on
     `dim`), summing overlapping positions. This is the iSTFT overlap-add.
     R33-pure (one @triton.jit scatter-add kernel)."""
-    from .ops.unfold_op import unfold_backward_1d_kernel
+    from nbxtensor.ops.unfold_op import unfold_backward_1d_kernel
     grad_in = _ensure_cuda(grad_in).contiguous()
     if isinstance(dim, (list, tuple)):
         dim = dim[0]
@@ -7534,7 +7534,7 @@ def im2col_wrapper(x, kernel_size, dilation, padding, stride):
     reads the padding halo via boundary-masked tl.load (no F.pad). Drives HAT's
     OCAB overlapping-window cross-attention (P-TRITON-IM2COL-KERNEL).
     """
-    from .ops.im2col import im2col_kernel
+    from nbxtensor.ops.im2col import im2col_kernel
 
     def _pair(v):
         return tuple(v) if isinstance(v, (list, tuple)) else (v, v)
@@ -8124,7 +8124,7 @@ def paged_kv_append(new, pool, slot_mapping):
     new [N_tok, H_kv, D] (any float dtype, last dim contiguous) · pool [num_pages, H_kv, page_tokens, D] · slot_mapping
     [N_tok] int32 (core/state/pages.PageTable.slots: page * page_tokens + position in page). Cast to the pool's dtype on
     store. Returns the pool."""
-    from .ops.paged_decode_attn import paged_kv_append_kernel
+    from nbxtensor.ops.paged_decode_attn import paged_kv_append_kernel
     n_tok, h_kv, d = (int(x) for x in new.shape)
     if tuple(pool.shape[1:2]) != (h_kv,) or int(pool.shape[3]) != d:
         raise ValueError(f"paged_kv_append: new {list(new.shape)} does not fit the pool {list(pool.shape)}")
@@ -8155,9 +8155,9 @@ def paged_decode_attention(q, k_pool, v_pool, block_table, seq_lens, softmax_sca
     caller from its page tables, never from the device) · block_n: the position tile, one of
     PAGED_DECODE_TILE_CANDIDATES dividing page_tokens · q_round: the dtype Q is read in (the cache's), rounded on load
     as `_decode_attn_vec` does; the output is written in it. Output [B, H, 1, D_v] in q_round, else q's dtype."""
-    from .ops.paged_decode_attn import (paged_decode_attn_split_kernel, PAGED_DECODE_TILE_CANDIDATES,
+    from nbxtensor.ops.paged_decode_attn import (paged_decode_attn_split_kernel, PAGED_DECODE_TILE_CANDIDATES,
                                         PAGED_DECODE_SPLIT_POSITIONS, PAGED_DECODE_MAX_SPLITS)
-    from .ops.flash_decode import flash_decode_reduce_kernel
+    from nbxtensor.ops.flash_decode import flash_decode_reduce_kernel
     batch, nheads, tq, headdim = (int(x) for x in q.shape)
     num_pages, nheads_k, page_tokens, d_k = (int(x) for x in k_pool.shape)
     d_v = int(v_pool.shape[3])
@@ -8229,8 +8229,8 @@ def _decode_attn_vec(q, k, v, bias, softmax_scale,
     contract) · bias flat [T_k] or None.
     """
     import os as _os_dv
-    from .ops.decode_attn_vec import decode_attn_vec_split_kernel
-    from .ops.flash_decode import flash_decode_reduce_kernel
+    from nbxtensor.ops.decode_attn_vec import decode_attn_vec_split_kernel
+    from nbxtensor.ops.flash_decode import flash_decode_reduce_kernel
     groups = nheads // nheads_k
     BHq = batch * nheads
     D_v = v.shape[3]
@@ -8268,7 +8268,7 @@ def _decode_attn_vec(q, k, v, bias, softmax_scale,
     if _os_dv.environ.get("NBX_DV_GROUPED", "0") == "1":
         # One KV head per program: K/V loaded once, reused across the
         # GQA group from registers (see the grouped kernel's docstring).
-        from .ops.decode_attn_vec import decode_attn_vec_grouped_kernel
+        from nbxtensor.ops.decode_attn_vec import decode_attn_vec_grouped_kernel
         decode_attn_vec_grouped_kernel[(batch * nheads_k, split)](
             q2, k, v,
             bias if bias is not None else q2,
@@ -8328,7 +8328,7 @@ def _flash_decode(q, k, v, bias, softmax_scale,
     few BLOCK_N chunks to amortise its prologue.
     """
     import os as _os_fd2
-    from .ops.flash_decode import (flash_decode_split_kernel,
+    from nbxtensor.ops.flash_decode import (flash_decode_split_kernel,
                                    flash_decode_reduce_kernel)
     groups = nheads // nheads_k
     BH = batch * nheads_k
@@ -8404,7 +8404,7 @@ def _flash_m8n8k4(q, k, v, bias, softmax_scale, gqa_groups, tile, has_bias, spli
     "split" representation, `launch_keys.unit_flash`), `tile` then a `matrix_unit.fp32_split.flash` row whose
     `block_k` head-dim columns the unit sums before each round-to-nearest add."""
     from .ops.flash_attention_m8n8k4 import flash_attention_m8n8k4_kernel, head_parts
-    from .ops.mma_m8n8k4 import UNIT
+    from nbxtensor.ops.mma_m8n8k4 import UNIT
     from neurobrix.triton.dtype import matrix_unit_split_scale
     batch, nheads, seqlen_q, headdim = q.shape
     seqlen_k = k.shape[2]
@@ -9166,7 +9166,7 @@ def angle_wrapper(x) :
 
     if x.is_complex():
         # Complex: atan2(imag, real) element-wise (libdevice, fp32).
-        from .ops.atan2 import atan2_kernel
+        from nbxtensor.ops.atan2 import atan2_kernel
         real = x.real.contiguous()
         imag = x.imag.contiguous()
         out = NBXTensor.empty(tuple(real.shape), dtype=NBXDtype.float32,
@@ -9239,7 +9239,7 @@ def _triton_fft_rows(x_real, x_imag, inverse: bool) -> tuple:
     is thousands of frames, so thousands of launches per stage: chatterbox's census
     walk spent every py-spy sample inside that loop (2026-09-28), and every live
     Triton run through `aten::stft` paid the same per-frame cost."""
-    from .ops.fft_op import bit_reverse_rows_kernel, fft_stage_rows_kernel, scale_kernel
+    from nbxtensor.ops.fft_op import bit_reverse_rows_kernel, fft_stage_rows_kernel, scale_kernel
 
     N = x_real.shape[-1]
     assert N > 0 and (N & (N - 1)) == 0, f"FFT size must be power of 2, got {N}"
@@ -9279,7 +9279,7 @@ def _dft_rfft_matrices(N, N_bins, ref):
     """cos[k,n] and -sin[k,n] rfft basis matrices [N_bins, N] (R33-pure kernel).
     Allocated on `ref`'s device."""
     import math
-    from .ops.dft import dft_rfft_matrix_kernel
+    from nbxtensor.ops.dft import dft_rfft_matrix_kernel
     _set_device(ref)
     cos_mat = NBXTensor.empty((N_bins, N), dtype=NBXDtype.float32, device=ref.device)
     nsin_mat = NBXTensor.empty((N_bins, N), dtype=NBXDtype.float32, device=ref.device)
@@ -9292,7 +9292,7 @@ def _dft_rfft_matrices(N, N_bins, ref):
 def _idft_c2r_matrices(N, N_bins, ref):
     """irfft basis matrices [N_bins, N]: real_out = X_real @ C + X_imag @ S."""
     import math
-    from .ops.dft import idft_c2r_matrix_kernel
+    from nbxtensor.ops.dft import idft_c2r_matrix_kernel
     _set_device(ref)
     C = NBXTensor.empty((N_bins, N), dtype=NBXDtype.float32, device=ref.device)
     S = NBXTensor.empty((N_bins, N), dtype=NBXDtype.float32, device=ref.device)
@@ -9690,7 +9690,7 @@ lstm_wrapper.self_manages_dtype = True
 def group_norm_statistics(x, num_groups: int, eps: float):
     """(mean, rstd) [N, G] fp32 of `x` [N, C, ...] over each group — the first pass of an exact tiled group norm
     (`core/strategies/tiled_norm.py`), over the WHOLE input, without its normalised tensor."""
-    from .ops.group_norm_tiled import group_norm_stats_kernel, TILED_NORM_BLOCK, TILED_NORM_WARPS
+    from nbxtensor.ops.group_norm_tiled import group_norm_stats_kernel, TILED_NORM_BLOCK, TILED_NORM_WARPS
     x = x.contiguous()
     N, C = int(x.shape[0]), int(x.shape[1])
     if C % int(num_groups):
@@ -9707,7 +9707,7 @@ def group_norm_statistics(x, num_groups: int, eps: float):
 def group_norm_apply(x, weight, bias, num_groups: int, mean, rstd):
     """`aten::native_group_norm`'s three outputs for a slice `x` given the whole input's statistics — the second pass;
     the output in `x`'s dtype, as the engine's group norm writes it (`group_norm_wrapper`)."""
-    from .ops.group_norm_tiled import group_norm_apply_kernel, TILED_NORM_BLOCK, TILED_NORM_WARPS
+    from nbxtensor.ops.group_norm_tiled import group_norm_apply_kernel, TILED_NORM_BLOCK, TILED_NORM_WARPS
     x = x.contiguous()
     N, C = int(x.shape[0]), int(x.shape[1])
     HW = x.numel() // (N * C)

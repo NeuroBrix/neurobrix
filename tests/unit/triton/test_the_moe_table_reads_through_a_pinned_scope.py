@@ -26,7 +26,7 @@ from neurobrix.kernels.nbx_tensor import (  # noqa: E402
     NBXDtype, NBXTensor, bf16_carrier_to_float32,
 )
 from neurobrix.kernels.launcher import launch  # noqa: E402
-from neurobrix.kernels.ops.fused_moe import fused_moe_kernel  # noqa: E402
+from nbxtensor.ops.fused_moe import fused_moe_kernel  # noqa: E402
 
 E, TOP_K, K, N = 32, 8, 1024, 512
 BM, BN, BK = 16, 64, 32

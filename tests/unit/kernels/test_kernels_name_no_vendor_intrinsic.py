@@ -27,16 +27,28 @@ import pathlib
 
 import pytest
 
-OPS = pathlib.Path(__file__).resolve().parents[3] / "src" / "neurobrix" / "kernels" / "ops"
+#: the kernel files: the engine's still to move and the tensor library's (nbxtensor/ops, M1)
+OPS_DIRS = (pathlib.Path(__file__).resolve().parents[3] / "src" / "neurobrix" / "kernels" / "ops",
+            pathlib.Path(__file__).resolve().parents[3] / "nbxtensor" / "src" / "nbxtensor" / "ops")
+
+
+def _ops_files(pattern="*.py"):
+    return sorted((p for d in OPS_DIRS for p in d.glob(pattern)), key=lambda p: p.name)
+
+
+def _op_file(name):
+    found = [d / name for d in OPS_DIRS if (d / name).exists()]
+    assert len(found) == 1, (name, found)
+    return found[0]
 
 
 def test_no_ops_kernel_calls_the_cuda_device_library():
     offenders = []
-    for f in sorted(OPS.rglob("*.py")):
+    for f in _ops_files("**/*.py"):
         text = f.read_text()
         for n, line in enumerate(text.splitlines(), 1):
             if "tl.extra.cuda.libdevice." in line and not line.lstrip().startswith("#"):
-                offenders.append(f"{f.relative_to(OPS.parent.parent.parent)}:{n}: {line.strip()[:90]}")
+                offenders.append(f"{f}:{n}: {line.strip()[:90]}")
     assert not offenders, (
         "these kernels call NVIDIA's device library and cannot compile on any "
         "other backend:\n  " + "\n  ".join(offenders))
@@ -45,4 +57,4 @@ def test_no_ops_kernel_calls_the_cuda_device_library():
 @pytest.mark.parametrize("name", ["pow", "floor", "atan2", "vector_norm"])
 def test_the_replaced_kernels_still_exist(name):
     """Guard against a 'fix' that deletes the op rather than porting it."""
-    assert (OPS / f"{name}.py").exists()
+    assert _op_file(f"{name}.py").exists()

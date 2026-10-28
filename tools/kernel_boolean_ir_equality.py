@@ -78,6 +78,12 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 OPS = REPO / "src" / "neurobrix" / "kernels" / "ops"
+#: the tensor library's kernel files (nbxtensor/ops, M1): a file is read from whichever holds it
+LIB_OPS = REPO / "nbxtensor" / "src" / "nbxtensor" / "ops"
+
+
+def _op_path(name):
+    return OPS / name if (OPS / name).exists() else LIB_OPS / name
 
 # The commit that carried the nineteen edits; its parent is the "before".
 EDIT_COMMIT = "30c695c"
@@ -300,7 +306,7 @@ def main() -> int:
                 ["git", "-C", str(REPO), "show", f"{EDIT_COMMIT}^:{rel}"],
                 capture_output=True, text=True, check=True,
             ).stdout
-            after_src = (OPS / filename).read_text()
+            after_src = _op_path(filename).read_text()
             if before_src == after_src:
                 failures.append(f"{filename}: before and after are the SAME TEXT — "
                                 f"{EDIT_COMMIT} did not touch this file, the spec is wrong")
@@ -333,7 +339,7 @@ def main() -> int:
         # source and read as silence afterwards. The IR comparison is immune —
         # a cached artefact carries the same TTIR the codegen produced — which
         # is a second reason to test structure rather than diagnostics.
-        botched = (OPS / "weight_norm.py").read_text().replace(
+        botched = _op_path("weight_norm.py").read_text().replace(
             "mask = (col_offset < N) & row_mask",
             "mask = col_offset < N & row_mask",
         )
@@ -345,7 +351,7 @@ def main() -> int:
             spec = SPEC["weight_norm.py"][0]
             try:
                 ir_botched = _ttir(mod_botched, spec[0], spec[1], spec[2], target)
-                ir_good = _ttir(_load((OPS / "weight_norm.py").read_text(),
+                ir_good = _ttir(_load(_op_path("weight_norm.py").read_text(),
                                       "_good_weight_norm", tmp),
                                 spec[0], spec[1], spec[2], target)
             except Exception as exc:

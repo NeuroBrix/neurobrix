@@ -212,7 +212,7 @@ def paged_kv_cache(kv_params: Dict[str, Any], kv_plan):
     file (the derivation the compiled engine takes too)."""
     from neurobrix.core.state.price import paged_cache_params
     from neurobrix.kernels.ops._configs import active_vendor_profile
-    from neurobrix.kernels.ops.paged_decode_attn import PAGED_DECODE_TILE_CANDIDATES
+    from nbxtensor.ops.paged_decode_attn import PAGED_DECODE_TILE_CANDIDATES
     from neurobrix.triton.paged_kv_cache import PagedTritonKVCache
     tokens, async_release = paged_cache_params(
         kv_params["num_kv_heads"], kv_params["k_head_dim"], kv_params["v_head_dim"], kv_params["dtype"].name,

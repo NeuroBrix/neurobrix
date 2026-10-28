@@ -180,7 +180,7 @@ class NBXExpertStore:
         band through the slots' pointer table. No host decision: every launch is the same at every token."""
         import triton as _tr
         from types import SimpleNamespace
-        from neurobrix.kernels.ops.moe_device_residency import expert_slot_assign_kernel, expert_miss_copy_kernel
+        from nbxtensor.ops.moe_device_residency import expert_slot_assign_kernel, expert_miss_copy_kernel
         from neurobrix.triton.moe import _moe_decode_vec_half_pass
         self._host_tables_for(layer, host)
         if not self._dev_valid:

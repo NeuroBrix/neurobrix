@@ -2835,7 +2835,7 @@ def _copy_nd(src: 'NBXTensor', dst: 'NBXTensor'):
     of floats per element that `copy_kernel` already handles).
     """
     import triton
-    from neurobrix.kernels.ops.strided_copy import strided_copy_nd_kernel
+    from nbxtensor.ops.strided_copy import strided_copy_nd_kernel
 
     if tuple(src._shape) != tuple(dst._shape):
         src = src.expand(*dst._shape)
@@ -3009,7 +3009,7 @@ def _strided_copy(src: 'NBXTensor', dst: 'NBXTensor'):
     without a hardcoded ceiling.
     """
     import triton
-    from neurobrix.kernels.ops.strided_copy import strided_copy_kernel
+    from nbxtensor.ops.strided_copy import strided_copy_kernel
 
     # Complex tensors are stored interleaved [real, imag], but Triton sees the
     # data_ptr as a plain float (no complex dtype). The strided kernel would copy
@@ -3076,7 +3076,7 @@ def _strided_scatter(src: 'NBXTensor', dst: 'NBXTensor'):
     consistency and to future-proof any emerging cache layouts.
     """
     import triton
-    from neurobrix.kernels.ops.strided_copy import strided_scatter_kernel
+    from nbxtensor.ops.strided_copy import strided_scatter_kernel
 
     ndim = dst.ndim
     if ndim > _MAX_NDIM:
@@ -3113,7 +3113,7 @@ def _fill_constant(t: 'NBXTensor', value) -> 'NBXTensor':
     if t._nbytes == 0:
         return t
     import triton
-    from neurobrix.kernels.ops.fill_op import fill_kernel
+    from nbxtensor.ops.fill_op import fill_kernel
 
     n = t._numel
     _m = _ew_meta(n)                 # the certified tile of the count's class (ops/elementwise_launch.py)
@@ -4464,7 +4464,7 @@ class NBXTensor:
             _copy_nd(self, new)
             return new
         if n > 0:
-            from neurobrix.kernels.ops.copy_op import copy_kernel
+            from nbxtensor.ops.copy_op import copy_kernel
             import triton
             src = self.contiguous()
             _set_device(src)
@@ -4587,7 +4587,7 @@ class NBXTensor:
         else:
             # General case: use cat_copy_kernel which handles dim offsets
             import triton
-            from neurobrix.kernels.ops.cat_op import cat_copy_kernel_4
+            from nbxtensor.ops.cat_op import cat_copy_kernel_4
 
             dim_size_out = out_shape[dim]
             # Product of dims after cat dim

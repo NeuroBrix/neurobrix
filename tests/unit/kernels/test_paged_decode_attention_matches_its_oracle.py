@@ -23,7 +23,7 @@ import pytest
 
 from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
 from neurobrix.kernels import wrappers as W
-from neurobrix.kernels.ops.paged_decode_attn import PAGED_DECODE_TILE_CANDIDATES
+from nbxtensor.ops.paged_decode_attn import PAGED_DECODE_TILE_CANDIDATES
 
 # fp16 K/V, fp32 accumulation over a few thousand positions: a correct kernel sits at a few 1e-4 relative (the
 # contiguous vector decode kernel's oracle bound, tests/unit/kernels/test_decode_vec_oracle.py).
@@ -159,7 +159,7 @@ def test_a_launch_sized_at_an_earlier_length_still_reads_every_position():
     PAGED_DECODE_SPLIT_POSITIONS positions, so the read must size its splits from the device lengths — sized from the
     stale figure, the newest positions fell past the last split and a replayed TinyLlama stopped attending to them
     (2026-10-28). Red on a kernel that takes the split length from the host."""
-    from neurobrix.kernels.ops.paged_decode_attn import PAGED_DECODE_SPLIT_POSITIONS, PAGED_DECODE_MAX_SPLITS
+    from nbxtensor.ops.paged_decode_attn import PAGED_DECODE_SPLIT_POSITIONS, PAGED_DECODE_MAX_SPLITS
     import math
     block_n, page_tokens, h, h_kv, d = 64, 64, 8, 2, 64
 

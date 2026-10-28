@@ -20,7 +20,7 @@ Pure @triton.jit, no tl.dot (sm_70: the vector kernel's measured structure), one
 import triton
 import triton.language as tl
 
-from neurobrix.kernels.ops.decode_attn_vec import _round_q
+from nbxtensor.ops.decode_attn_vec import _round_q
 
 
 # The position tiles the paged read is compiled for: powers of two, each dividing the largest, so a page sized from the

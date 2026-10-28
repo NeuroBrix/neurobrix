@@ -462,7 +462,7 @@ def _bf16_to_fp16_inplace(ptr: int, numel: int, device_idx: int):
     Creates typed NBXTensor wrappers around the raw pointer for Triton.
     """
     import triton
-    from neurobrix.kernels.ops.dtype_convert import bf16_to_fp16_kernel
+    from nbxtensor.ops.dtype_convert import bf16_to_fp16_kernel
 
     DeviceAllocator.set_device(device_idx)
     DeviceAllocator.ensure_triton_device(device_idx)

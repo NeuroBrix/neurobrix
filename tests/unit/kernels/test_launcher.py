@@ -67,7 +67,7 @@ def _torch_verdict(stdout: str) -> str:
 
 def test_launch_is_byte_identical_to_upstream_on_a_house_kernel():
     from neurobrix.kernels.launcher import launch
-    from neurobrix.kernels.ops.fft_op import scale_kernel
+    from nbxtensor.ops.fft_op import scale_kernel
     rng = np.random.default_rng(7)
     n = 3001                                              # a masked tail
     r0, i0 = rng.standard_normal(n).astype(np.float32), rng.standard_normal(n).astype(np.float32)
@@ -87,7 +87,7 @@ import sys
 import numpy as np
 from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator
 from neurobrix.kernels.launcher import launch
-from neurobrix.kernels.ops.fft_op import scale_kernel
+from nbxtensor.ops.fft_op import scale_kernel
 DeviceAllocator.set_device(0)
 n = 2048
 r = NBXTensor.from_numpy(np.arange(n, dtype=np.float32)); i = NBXTensor.from_numpy(np.ones(n, dtype=np.float32))
@@ -128,7 +128,7 @@ def test_our_binder_returns_triton_s_triple_on_a_real_kernel():
     from triton.compiler import make_backend
     from triton.runtime.jit import create_function_from_signature
     from neurobrix.kernels.launcher import nbx_binder, target
-    from neurobrix.kernels.ops.fused_moe import fused_moe_kernel
+    from nbxtensor.ops.fused_moe import fused_moe_kernel
     import triton.language as tl
     backend = make_backend(target())
     theirs_fn = create_function_from_signature(fused_moe_kernel.signature, fused_moe_kernel.params, backend)
@@ -175,7 +175,7 @@ print("torch" in sys.modules)
 
 def test_do_bench_returns_quantiles_in_milliseconds():
     from neurobrix.kernels.launcher import do_bench
-    from neurobrix.kernels.ops.fft_op import scale_kernel
+    from nbxtensor.ops.fft_op import scale_kernel
     n = 4096
     r, i = _nbx(np.ones(n, dtype=np.float32)), _nbx(np.ones(n, dtype=np.float32))
     q = do_bench(lambda: scale_kernel[(4,)](r, i, n, 1.0, BLOCK_SIZE=1024), warmup=2, rep=5, quantiles=(0.5, 0.2, 0.8))
@@ -191,7 +191,7 @@ def test_a_recorder_sees_every_launch_and_its_record_replays():
     path without anything being wrong (measured 2026-09-08 on TinyLlama at a locked
     clock: 71.9 ms per token against 7.1)."""
     from neurobrix.kernels.launcher import active_driver, launch, set_launch_recorder
-    from neurobrix.kernels.ops.fft_op import scale_kernel
+    from nbxtensor.ops.fft_op import scale_kernel
     rng = np.random.default_rng(11)
     n = 2048
     r0 = rng.standard_normal(n).astype(np.float32)

@@ -39,7 +39,7 @@ def capture_fft(rng, out):
     latent defect — a torch-style `mul_` on an NBXTensor — fixed separately)."""
     from neurobrix.kernels.nbx_tensor import NBXTensor
     from neurobrix.kernels.wrappers import _triton_fft_forward, _set_device, _1d_grid, _EW_BLOCK
-    from neurobrix.kernels.ops import fft_op
+    from nbxtensor.ops import fft_op
     for N in (256, 1024, 4096):
         xr = _nbx((rng.standard_normal((2, N))).astype(np.float32))
         xi = _nbx((rng.standard_normal((2, N))).astype(np.float32))
@@ -88,9 +88,9 @@ def capture_fused_moe(rng, out):
     import triton
     import triton.language as tl
     from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
-    from neurobrix.kernels.ops.fused_moe import (fused_moe_kernel, fused_moe_wna16_kernel,
+    from nbxtensor.ops.fused_moe import (fused_moe_kernel, fused_moe_wna16_kernel,
                                                  fused_moe_fp32b_kernel)
-    from neurobrix.kernels.ops.dequant_gemv import dequant_int4_kernel
+    from nbxtensor.ops.dequant_gemv import dequant_int4_kernel
     from neurobrix.triton.moe import moe_align_block_size
     from tests.unit.kernels.test_fused_moe_wna16_parity import (_quantize, _ptr_table, GROUP, PACK,
                                                                 BLOCK_M, BLOCK_N, BLOCK_K, GROUP_M, WARPS)

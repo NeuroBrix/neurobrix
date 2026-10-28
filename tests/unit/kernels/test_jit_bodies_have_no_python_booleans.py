@@ -53,7 +53,19 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-OPS = Path(__file__).resolve().parents[3] / "src" / "neurobrix" / "kernels" / "ops"
+#: the kernel files: the engine's still to move and the tensor library's (nbxtensor/ops, M1)
+OPS_DIRS = (Path(__file__).resolve().parents[3] / "src" / "neurobrix" / "kernels" / "ops",
+            Path(__file__).resolve().parents[3] / "nbxtensor" / "src" / "nbxtensor" / "ops")
+
+
+def _ops_files(pattern="*.py"):
+    return sorted((p for d in OPS_DIRS for p in d.glob(pattern)), key=lambda p: p.name)
+
+
+def _op_file(name):
+    found = [d / name for d in OPS_DIRS if (d / name).exists()]
+    assert len(found) == 1, (name, found)
+    return found[0]
 
 
 def _jit_functions(tree):
@@ -65,7 +77,7 @@ def _jit_functions(tree):
 
 def test_no_boolean_operator_produces_a_value_in_a_kernel():
     offenders = []
-    for path in sorted(OPS.glob("*.py")):
+    for path in _ops_files():
         tree = ast.parse(path.read_text(), filename=str(path))
         for fn in _jit_functions(tree):
             in_test = set()
@@ -91,7 +103,7 @@ def test_the_scalar_constexpr_tests_are_left_alone():
     boolean operator in an `if` on constexpr values is legitimate, and some
     exist — if this count reaches zero the test above has started over-reaching."""
     kept = 0
-    for path in sorted(OPS.glob("*.py")):
+    for path in _ops_files():
         tree = ast.parse(path.read_text(), filename=str(path))
         for fn in _jit_functions(tree):
             for node in ast.walk(fn):
@@ -113,7 +125,7 @@ def test_the_where_condition_is_cast_not_borrowed():
     — TTIR identical to the pre-edit kernel. `cond != 0` promotes the literal to
     i32 and buys an `arith.extsi` on every element, on the kernel 39 of the 56
     local containers reach. Both are correct; one is not neutral."""
-    src = (OPS / "where.py").read_text()
+    src = _op_file("where.py").read_text()
     assert "tl.where(cond.to(tl.int1)" in src, (
         "where.py must cast the loaded condition with `.to(tl.int1)`. Handing "
         "tl.where a uint8 warns today and raises later; comparing it against a "

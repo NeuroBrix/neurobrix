@@ -23,13 +23,25 @@ one line restored to the cast-after form made this RED; restored, green.
 import re
 from pathlib import Path
 
-OPS = Path(__file__).resolve().parents[3] / "src/neurobrix/kernels/ops"
+#: the kernel files: the engine's still to move and the tensor library's (nbxtensor/ops, M1)
+OPS_DIRS = (Path(__file__).resolve().parents[3] / "src" / "neurobrix" / "kernels" / "ops",
+            Path(__file__).resolve().parents[3] / "nbxtensor" / "src" / "nbxtensor" / "ops")
+
+
+def _ops_files(pattern="*.py"):
+    return sorted((p for d in OPS_DIRS for p in d.glob(pattern)), key=lambda p: p.name)
+
+
+def _op_file(name):
+    found = [d / name for d in OPS_DIRS if (d / name).exists()]
+    assert len(found) == 1, (name, found)
+    return found[0]
 INT32_FORM = re.compile(r"^\s*\w+ = \(?pid\w* \* (BLOCK_SIZE|BLOCK) \+ tl\.arange\(0, (BLOCK_SIZE|BLOCK)\)\)?(\.to\(tl\.int64\))?\s*(#.*)?$", re.M)
 
 
 def test_no_flat_offset_is_computed_in_int32():
     hits = []
-    for f in sorted(OPS.glob("*.py")):
+    for f in _ops_files():
         for m in INT32_FORM.finditer(f.read_text(encoding="utf-8")):
             hits.append(f"{f.name}: {m.group(0).strip()}")
     assert not hits, ("flat offsets whose product is computed in int32 — it wraps past 2^31 elements; write "
@@ -55,7 +67,7 @@ def test_every_program_id_is_widened_at_its_source():
     coming back. Injection: one `tl.program_id(0)` restored in
     groupnorm.py made this RED; restored, green."""
     hits = []
-    for f in sorted(OPS.glob("*.py")):
+    for f in _ops_files():
         for m in PROGRAM_ID_INT32.finditer(f.read_text(encoding="utf-8")):
             hits.append(f"{f.name}: {m.group(0)}")
     assert not hits, ("program ids read in int32 — every offset derived from them wraps past 2^31; write "

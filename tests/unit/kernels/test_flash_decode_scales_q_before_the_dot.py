@@ -45,7 +45,7 @@ def _owns_its_cache(tmp_path, monkeypatch):
 
 
 def _kernel_source() -> str:
-    import neurobrix.kernels.ops.flash_decode as fd
+    import nbxtensor.ops.flash_decode as fd
     return Path(fd.__file__).read_text()
 
 

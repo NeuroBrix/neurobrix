@@ -322,10 +322,10 @@ def test_a_broadcast_or_strided_binary_operand_is_read_by_its_strides(op):
     """A conv bias (C,) over an (N, C, H, W) image, an adaLN vector (B, 1, D) over (B, S, D),
     and a transposed operand: the strided kernels read them in place — no expand+contiguous
     transient, no copy launched — with the bytes of the flat kernel on materialised operands."""
-    from neurobrix.kernels.ops.add import add_forward_kernel
-    from neurobrix.kernels.ops.mul import mul_forward_kernel
-    from neurobrix.kernels.ops.sub import sub_forward_kernel
-    from neurobrix.kernels.ops.div import div_forward_kernel
+    from nbxtensor.ops.add import add_forward_kernel
+    from nbxtensor.ops.mul import mul_forward_kernel
+    from nbxtensor.ops.sub import sub_forward_kernel
+    from nbxtensor.ops.div import div_forward_kernel
     rng = np.random.default_rng(8)
     fn = {"add": W.add, "mul": W.mul, "sub": W.sub, "div": W.div}[op]
     cases = [
@@ -440,8 +440,8 @@ def test_a_strided_tensor_with_a_host_scalar_is_read_by_its_strides(op):
     """`1 + scale` on a chunk of the adaLN vector — a (2, 1, 48) slice of (2, 6, 48) — used to be
     copied contiguous first; the strided scalar kernel reads it in place, with the flat scalar
     kernel's bytes. A scalar on the left is normalised the same way."""
-    from neurobrix.kernels.ops.add import add_scalar_kernel
-    from neurobrix.kernels.ops.mul import mul_scalar_kernel
+    from nbxtensor.ops.add import add_scalar_kernel
+    from nbxtensor.ops.mul import mul_scalar_kernel
     rng = np.random.default_rng(15)
     base = rng.standard_normal((2, 6, 48)).astype(np.float16)
     chunk = NBXTensor.from_numpy(base)[:, 2:3, :]                    # strides (288, 48, 1), not dense
