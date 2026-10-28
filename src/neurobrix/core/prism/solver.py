@@ -1274,7 +1274,13 @@ class PrismSolver:
             for card in (a.expert_cards or {}):
                 placed[card] = placed.get(card, 0.0) + float(a.expert_cards[card]["cache_mb"]) + reserve_mb
             placed[a.device] = placed.get(a.device, 0.0) + float(a.memory_mb or 0.0)
-        room = {d.device_string: self._usable_mb(d) - placed.get(d.device_string, 0.0) - reserve_mb for d in others}
+        # A card no component runs on holds an arena of exact bytes and its MoE ops' temporaries, freed as each op
+        # returns (`triton/sequence.py`, the held-card branch): its room is the card's budget. The whole-component
+        # fraction and the deferred drain price a SEQUENCE running there, and only a card that runs one pays them —
+        # the rack's 4 V100 (2026-10-28 08:25) peaked at 12 703 MB on card 3 for 12 672 MB held, 3.4-4.3 GB idle a card.
+        runs = {a.device for a in plan.components.values()}
+        room = {d.device_string: (self._usable_mb(d) if d.device_string in runs else self._effective_capacity_mb(d))
+                - placed.get(d.device_string, 0.0) - reserve_mb for d in others}
         layers = sorted(topo.layers, key=lambda l: l.block)
         cards: Dict[str, Dict[str, Any]] = {}
         for card in sorted(room, key=lambda c: -room[c]):

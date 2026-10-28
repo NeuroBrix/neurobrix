@@ -42,8 +42,15 @@ def test_four_cards_hold_whole_blocks_of_experts_and_the_plan_is_faster(monkeypa
     devs = {d.device_string: d for d in s._prepare_devices(prof)}
     reserve = s._moe_op_reserve_mb("model", s._expert_topology["model"].layers)
     assert reserve is not None and 0 < reserve < 2048, reserve       # the MoE op's own activations, not the model's
+    one_block = max(l.n_experts * l.expert_bytes for l in s._expert_topology["model"].layers) / 2 ** 20 \
+        * s._expert_mult["model"]
     for card, held in others.items():
-        assert held["cache_mb"] + reserve <= s._usable_mb(devs[card]), (card, held)
+        # a card that runs no sequence holds an arena of exact bytes and its MoE op's temporaries: its room is the
+        # card's budget, not a component's fraction of it less a drain queue that never forms there (the rack's 4 V100,
+        # 2026-10-28 08:25: card 3 peaked at 12 703 MB for 12 672 MB held, 3.4 GB of it idle; cards 0-1 4.3 GB)
+        room = s._effective_capacity_mb(devs[card]) - reserve
+        assert held["cache_mb"] <= room, (card, held, room)
+        assert room - held["cache_mb"] < one_block, (card, held["cache_mb"], room)   # filled: one more block fits not
     # the home card keeps its whole room as the cache of the blocks left on the host (the reuse curve is unmeasured:
     # holding blocks there cost the Dell's decode 381 -> 468 ms, 2026-10-28)
     if store.device in cards:      # held there only where the curve says the cache left misses less
