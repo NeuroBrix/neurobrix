@@ -4753,21 +4753,21 @@ class PrismSolver:
         """The KV bytes a strategy is priced for before the cache is sized (core/state/price.py): max_tokens + margin
         positions, else the declared window, at the compute dtype, across every sequence. 0 when the flow decodes
         nothing. The cache itself is sized later by `_compute_kv_cache_plan`, within the remaining budget."""
-        from neurobrix.core.state.price import kv_estimate_tokens
+        from neurobrix.core.state.price import kv_estimate_tokens, DEFAULT_PROMPT_MARGIN
         declared = self._kv_declared(container)
         if declared is None:
             return 0
         defaults = self._read_defaults(container) or {}
-        tokens = kv_estimate_tokens(declared[1], self._request_max_tokens(defaults), defaults.get("prompt_margin", 128))
+        tokens = kv_estimate_tokens(declared[1], self._request_max_tokens(defaults), defaults.get("prompt_margin", DEFAULT_PROMPT_MARGIN))
         return tokens * self._kv_token_bytes(container, target_dtype_str)
 
     def _kv_min_tokens(self, container) -> int:
         """The fewest cache positions a plan is accepted with (core/state/price.kv_min_tokens): one turn, two when
         serving, 64 without max_tokens. One authority: `_try_layer_streaming` reserves at least this beside its
         segments, or the plan it cuts is refused."""
-        from neurobrix.core.state.price import kv_min_tokens
+        from neurobrix.core.state.price import kv_min_tokens, DEFAULT_PROMPT_MARGIN
         defaults = self._read_defaults(container) or {}
-        return kv_min_tokens(self._request_max_tokens(defaults), defaults.get("prompt_margin", 128),
+        return kv_min_tokens(self._request_max_tokens(defaults), defaults.get("prompt_margin", DEFAULT_PROMPT_MARGIN),
                              bool(self._serve_requested))
 
     def _request_max_tokens(self, defaults) -> int:
@@ -4812,14 +4812,14 @@ class PrismSolver:
         """The decode cache, sized from the container's declared KV state (core/state/price.py) within the remaining
         budget: as many positions as it affords, bounded by the request (run) or the declared window (serve), never
         beyond the window. None when the flow decodes nothing; refused by name below the minimum. ZERO FALLBACK."""
-        from neurobrix.core.state.price import kv_cache_size
+        from neurobrix.core.state.price import kv_cache_size, DEFAULT_PROMPT_MARGIN
         declared = self._kv_declared(container)
         if declared is None:
             return None
         decoder, entry = declared
         defaults = self._read_defaults(container) or {}
         per_token_bytes = self._kv_token_bytes(container, target_dtype)
-        size = kv_cache_size(entry, per_token_bytes, defaults.get("max_tokens") or 0, defaults.get("prompt_margin", 128),
+        size = kv_cache_size(entry, per_token_bytes, defaults.get("max_tokens") or 0, defaults.get("prompt_margin", DEFAULT_PROMPT_MARGIN),
                              bool(getattr(self, "_serve_mode", False)), remaining_vram_bytes,
                              floor_max_tokens=self._request_max_tokens(defaults))
         return KVCachePlan(
