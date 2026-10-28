@@ -15,12 +15,9 @@ Usage:
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
-
-if TYPE_CHECKING:  # R33: the ATen branch imports it; this brick serves both engines
-    import torch
 
 
 def diffusion_max_length(topology: dict, encoder_name: str, tokenizer_vals: dict):
@@ -73,16 +70,17 @@ class TextProcessor:
         arr = np.ascontiguousarray(np.asarray(ids, dtype=np.int64))
         if arr.ndim == 1:
             arr = arr[None, :]
+        # the one seam that turns a host array into the executing engine's container (R33: this brick imports no
+        # torch; the ATen branch's conversion lives in that seam)
+        from neurobrix.core.runtime.resolution.variable_resolver import to_engine_container
+        t = to_engine_container(arr, self._mode)
         if self._mode in ("triton", "triton_sequential"):
-            from neurobrix.kernels.nbx_tensor import NBXTensor
-            t = NBXTensor.from_numpy(arr)
             if isinstance(device, str) and ":" in device:
                 idx = int(device.split(":")[1])
                 if idx != t._device_idx:
                     t = t.to_cuda(idx)
             return t
-        import torch
-        return torch.from_numpy(arr).to(device)
+        return t.to(device)
 
     # =========================================================================
     # PUBLIC API
@@ -123,7 +121,7 @@ class TextProcessor:
         device: str,
         is_unconditional: bool = False,
         chat_mode: Optional[bool] = None,
-    ) -> torch.Tensor:
+    ) -> Any:
         """
         Tokenize prompt using the data-driven priority cascade.
 
@@ -202,7 +200,7 @@ class TextProcessor:
         prompt: str,
         device: str,
         encoder_name: str = "text_encoder",
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+    ) -> Tuple[Any, Optional[Any]]:
         """
         Tokenize prompt for diffusion models (iterative_process flow).
 
@@ -276,7 +274,7 @@ class TextProcessor:
         device: str,
         encoder_name: str = "text_encoder",
         negative_prompt: str = "",
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[Any, Any]:
         """
         Tokenize negative/unconditional prompt for CFG.
 

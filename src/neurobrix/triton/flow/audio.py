@@ -3,11 +3,11 @@
 Ported from core/flow/audio.py. Dispatches stage execution to
 model-specific handlers. All tensor ops via NBXTensor + kernel wrappers.
 
-Audio preprocessing (mel spectrogram, FFT) is a boundary operation:
-it uses the AudioInputProcessor which internally uses torch/torchaudio.
-Output is converted to NBXTensor at the boundary.
-
-No torch imports in this file.
+Every tensor this flow handles is an NBXTensor, or a host numpy array made one
+on arrival (`_nbx`): the tokenizers and the phonemizer give numpy, the shared
+TextProcessor returns NBXTensor on this branch, the audio frontend
+(`triton/audio_frontend.py`) computes its features with numpy. A value of any
+other kind is refused by name (R33: no torch at import or at execution).
 """
 
 import time
@@ -207,9 +207,9 @@ class TritonAudioEngine:
                 topology=self.ctx.pkg.topology,
                 variable_resolver=self.ctx.variable_resolver,
             )
-            input_ids_torch, attention_mask_torch = tp.tokenize_for_diffusion(prompt, device)
-            input_ids = _torch_to_nbx(input_ids_torch)
-            attention_mask = _torch_to_nbx(attention_mask_torch) if attention_mask_torch is not None else None
+            input_ids, attention_mask = tp.tokenize_for_diffusion(prompt, device)
+            input_ids = _nbx(input_ids, "the tokenized prompt")
+            attention_mask = _nbx(attention_mask, "its attention mask") if attention_mask is not None else None
 
         self.ctx.variable_resolver.resolved["global.input_ids"] = input_ids
         self.ctx.variable_resolver.resolved["input_ids"] = input_ids
@@ -311,18 +311,17 @@ class TritonAudioEngine:
         connections_all = self.ctx.pkg.topology.get("connections", [])
 
         def _resolve(iname):
-            # Accept NBXTensor (frame inputs from upstream triton components) AND
-            # torch boundary tensors (e.g. the voicepack style vector) — convert
-            # the latter to NBXTensor so all chunking stays NBX-pure.
+            # NBXTensor: the frame inputs from upstream triton components, the numpy voicepack's style vector
+            # (bound as NBXTensor by triton/audio_frontend.py) — all chunking stays NBX-pure.
             for c in connections_all:
                 if c.get("to") == f"{comp_name}.{iname}":
                     v = resolved.get(c.get("from"))
                     if _is_tensor(v):
-                        return _torch_to_nbx(v)
+                        return _nbx(v, c.get("from"))
             for key in (f"global.{iname}", iname, f"{comp_name}.{iname}"):
                 v = resolved.get(key)
                 if _is_tensor(v):
-                    return _torch_to_nbx(v)
+                    return _nbx(v, key)
             return None
 
         actual_input = _resolve(graph_input_name)
@@ -449,21 +448,25 @@ class TritonAudioEngine:
 # -----------------------------------------------------------------
 
 def _is_tensor(val) -> bool:
-    """Check if val is any tensor type (NBXTensor or torch.Tensor)."""
+    """A tensor this branch holds: an NBXTensor. A device tensor of another library (shape, dtype and device: what a
+    torch tensor carries) is refused by name, never skipped and never converted (R33)."""
     if isinstance(val, NBXTensor):
         return True
-    return hasattr(val, 'shape') and hasattr(val, 'dtype') and hasattr(val, 'device')
+    if hasattr(val, 'shape') and hasattr(val, 'dtype') and hasattr(val, 'device'):
+        _nbx(val, "a resolved value")
+    return False
 
 
-def _torch_to_nbx(tensor) -> NBXTensor:
-    """Convert torch.Tensor to NBXTensor at the boundary.
-
-    This is the ONLY place torch is used — at the preprocessing boundary.
-    """
-    if isinstance(tensor, NBXTensor):
-        return tensor
-    arr = tensor.detach().cpu().numpy()
-    return NBXTensor.from_numpy(arr)
+def _nbx(value, what: str) -> NBXTensor:
+    """`value` as an NBXTensor: itself, or a numpy array made one. Anything else — a torch tensor above all — is
+    refused by name: the Triton branch never converts a foreign tensor (R33, at execution as at import)."""
+    if isinstance(value, NBXTensor):
+        return value
+    if isinstance(value, np.ndarray):
+        return NBXTensor.from_numpy(np.ascontiguousarray(value))
+    raise TypeError(f"R33: {what} reached the Triton audio flow as a {type(value).__module__}."
+                    f"{type(value).__name__}, not an NBXTensor or a numpy array — the producer must hand this "
+                    f"branch its own container")
 
 
 def _get_component_input_shape(ctx, comp_name) -> Optional[Tuple[int, ...]]:
