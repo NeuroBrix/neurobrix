@@ -1,7 +1,7 @@
 """The dtype table's reader for the PyTorch branch — Prism, the core executors, the DtypeEngine.
 
-Every width a dtype has is read from `config/dtypes.yml` through this module (PyTorch branch) or
-its twin `neurobrix/triton/itemsize.py` (Triton branch: NBXTensor, the wrappers, the launch keys,
+Every width a dtype has is read from the one table `nbxtensor/dtype/dtypes.yml` through this module (PyTorch branch) or
+its twin `nbxtensor.dtype.itemsize` (the library, which the Triton branch reads: NBXTensor, the wrappers, the launch keys,
 the certifier). The engines share no compute code, so each keeps its own copy; the two are held
 equal entry by entry by `tests/unit/dtype/test_the_two_itemsize_readers_are_one.py`.
 
@@ -18,7 +18,7 @@ import functools
 from enum import Enum
 from typing import Any, Dict, Tuple
 
-_SOURCE = "config/dtypes.yml"
+_SOURCE = "nbxtensor/dtype/dtypes.yml"
 _TORCH_PREFIX = "torch."
 
 

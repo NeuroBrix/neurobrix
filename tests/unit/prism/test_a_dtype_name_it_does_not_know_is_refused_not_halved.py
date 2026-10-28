@@ -25,7 +25,7 @@ import pytest
 from neurobrix.core.dtype.itemsize import itemsize_table
 from neurobrix.core.paths import cache_dir
 
-BYTES_MAP = itemsize_table()   # the one table (config/dtypes.yml), read through the PyTorch reader
+BYTES_MAP = itemsize_table()   # the one table (dtypes.yml), read through the PyTorch reader
 from neurobrix.core.prism.memory_estimator import (
     compute_dtype_factor, get_dtype_bytes_per_element)
 

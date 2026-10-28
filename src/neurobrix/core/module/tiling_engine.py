@@ -1130,7 +1130,7 @@ class OpLevelTilingEngine:
 
         def _inplace_unary(x, *args, **kwargs):
             # Bytes at the tensor's own width (torch and NBXTensor both answer
-            # `element_size()`; NBXTensor's reads triton/itemsize.py) — no
+            # `element_size()`; NBXTensor's reads nbxtensor.dtype.itemsize) — no
             # guessed width, no swallowed error.
             _n = 1
             for _d in x.shape:

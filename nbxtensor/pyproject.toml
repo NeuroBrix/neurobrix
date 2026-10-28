@@ -10,10 +10,10 @@ readme = "README.md"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.10"
 authors = [{ name = "NeuroBrix" }]
-# numpy and triton only. torch is never a dependency, not even an optional one:
+# numpy, triton and pyyaml (the dtype table is a YAML file) only. torch is never a dependency, not even an optional one:
 # nbxtensor never imports torch (R-NBXT 6). Exchange with any other tensor
 # library goes through DLPack, which the OTHER library imports.
-dependencies = ["numpy", "triton"]
+dependencies = ["numpy", "triton", "pyyaml"]
 
 [project.optional-dependencies]
 test = ["pytest"]

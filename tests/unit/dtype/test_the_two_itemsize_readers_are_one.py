@@ -1,7 +1,7 @@
-"""Every dtype width lives in ONE table, `config/dtypes.yml`, read by two mirror readers.
+"""Every dtype width lives in ONE table, `dtypes.yml`, read by two mirror readers.
 
 `neurobrix/core/dtype/itemsize.py` serves the PyTorch branch (Prism, the core executors, the
-DtypeEngine); `neurobrix/triton/itemsize.py` serves the Triton branch (NBXTensor, the wrappers, the
+DtypeEngine); `nbxtensor.dtype.itemsize` (the library) serves the Triton branch (NBXTensor, the wrappers, the
 launch keys, the certifier, the Triton loaders). The engines share no compute code, so each keeps
 its own copy. This file holds them to four things:
 
@@ -26,7 +26,7 @@ from pathlib import Path
 import pytest
 
 from neurobrix.core.dtype import itemsize as CORE
-from neurobrix.triton import itemsize as TRITON
+from nbxtensor.dtype import itemsize as TRITON
 
 _SRC = Path(__file__).resolve().parents[3] / "src"
 
@@ -55,7 +55,9 @@ def _names():
 
 
 def test_the_two_readers_carry_the_same_functions():
-    assert _public(CORE) == _public(TRITON), _public(CORE) ^ _public(TRITON)
+    # `dtype_table`: the whole table, handed out by its owner (the library) to feed the engine's reader — not a reader
+    lib = _public(TRITON) - {"dtype_table"}
+    assert _public(CORE) == lib, _public(CORE) ^ lib
 
 
 def test_the_two_readers_read_the_same_table():
@@ -162,7 +164,7 @@ def test_the_old_narrowed_constant_widths_are_reproduced(reader):
 def test_the_live_readers_answer_from_the_table():
     """The re-pointed readers, read live: NBXTensor's sizes and the engines' attention widths."""
     from neurobrix.kernels.nbx_tensor import NBXDtype, dtype_size
-    from neurobrix.triton import itemsize as triton_itemsize
+    from nbxtensor.dtype import itemsize as triton_itemsize
     for m in NBXDtype:
         assert dtype_size(m) == OLD_TABLES["kernels.nbx_tensor._DTYPE_SIZES"][m.name], m
         # nbx_tensor keeps its own widths (library boundary); the table is held equal to them.
@@ -185,16 +187,16 @@ def test_an_unknown_dtype_is_refused_by_name(reader, name):
                  lambda: reader.representation_bytes(name, 8)):
         with pytest.raises(ValueError) as e:
             call()
-        assert repr(name) in str(e.value) and "config/dtypes.yml" in str(e.value), str(e.value)
+        assert repr(name) in str(e.value) and "dtypes.yml" in str(e.value), str(e.value)
 
 
 @pytest.mark.parametrize("reader", [CORE, TRITON], ids=["core", "triton"])
 def test_an_unknown_code_or_key_is_refused_by_name(reader):
-    with pytest.raises(ValueError, match="'C64'.*config/dtypes.yml"):
+    with pytest.raises(ValueError, match="'C64'.*dtypes.yml"):
         reader.from_safetensors("C64")
-    with pytest.raises(ValueError, match="'fp8'.*config/dtypes.yml"):
+    with pytest.raises(ValueError, match="'fp8'.*dtypes.yml"):
         reader.from_autotune_key("fp8")
-    with pytest.raises(TypeError, match="config/dtypes.yml"):
+    with pytest.raises(TypeError, match="dtypes.yml"):
         reader.itemsize(4)
     with pytest.raises(ValueError, match="packed encoding"):
         reader.itemsize("int4-g128-asym")
@@ -203,7 +205,7 @@ def test_an_unknown_code_or_key_is_refused_by_name(reader):
 # ───────────────────── (d) the Triton copy is torch-free and numpy-free ─────────────────────
 
 def test_the_triton_reader_imports_no_torch_no_numpy():
-    probe = ("import sys; import neurobrix.triton.itemsize as T; T.itemsize('float16'); "
+    probe = ("import sys; import nbxtensor.dtype.itemsize as T; T.itemsize('float16'); "
              "T.representation_bytes('int4-g128-asym', 256); "
              "print('torch' in sys.modules, 'numpy' in sys.modules)")
     out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, timeout=60,
@@ -214,5 +216,4 @@ def test_the_triton_reader_imports_no_torch_no_numpy():
     imported = {(n.module or "") if isinstance(n, ast.ImportFrom) else a.name
                 for n in ast.walk(tree) if isinstance(n, (ast.Import, ast.ImportFrom))
                 for a in n.names}
-    assert imported <= {"__future__", "functools", "enum", "typing",
-                        "neurobrix.core.config.loader"}, imported
+    assert imported <= {"__future__", "copy", "functools", "enum", "pathlib", "typing", "yaml"}, imported

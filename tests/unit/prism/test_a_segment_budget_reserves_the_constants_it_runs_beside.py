@@ -86,7 +86,7 @@ def test_an_unknown_constant_dtype_is_REFUSED_not_assumed():
     """ZERO FALLBACK. A dtype assumed at 4 bytes under-reserves by exactly the amount that
     matters, and silently — the failure mode this whole file exists to remove."""
     for stores_fp64 in (False, True):
-        with pytest.raises(ValueError, match=r"unknown dtype .*float4.*config/dtypes.yml"):
+        with pytest.raises(ValueError, match=r"unknown dtype .*float4.*dtypes.yml"):
             _graph_constant_bytes({"tensors": {"t": {
                 "constant": True, "constant_data": "eA==", "shape": [4, 4],
                 "dtype": "float4"}}}, stores_fp64)

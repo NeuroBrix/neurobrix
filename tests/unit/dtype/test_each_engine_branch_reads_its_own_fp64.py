@@ -178,7 +178,7 @@ def test_both_engines_hold_every_dtype_at_the_same_width(stores_fp64):
 def test_the_triton_engine_stores_every_enum_member_the_table_carries(stores_fp64):
     """Every NBXDtype member the table carries comes back as a member, `bool_` included: its enum name
     is Python's keyword escape, not the table's name (mq24 Allegro triton, `unknown dtype 'bool_'`)."""
-    from neurobrix.triton import itemsize
+    from nbxtensor.dtype import itemsize
     from neurobrix.triton.dtype import TritonDtypeEngine
     tri = TritonDtypeEngine(NBXDtype.float16, stores_fp64=stores_fp64)
     carried = [m for m in NBXDtype if itemsize.canonical_name(m) in itemsize.known_dtypes()]
@@ -291,7 +291,7 @@ def test_a_compiled_serve_does_not_read_the_triton_surface():
 
 def test_the_compiled_price_reads_the_compiled_branch_s_own_ceiling(monkeypatch):
     """The ATen rules narrow through `core.dtype.itemsize.storage_dtype`, the compiled branch's own
-    reader of config/dtypes.yml, never the Triton branch's (Dell 22:43, R30): a change to the
+    reader of dtypes.yml, never the Triton branch's (Dell 22:43, R30): a change to the
     compiled reader moves the compiled price and only it."""
     from neurobrix.core.dtype import itemsize as core_itemsize
     from neurobrix.core.prism.runtime_widths import conservative_contract, runtime_dtypes

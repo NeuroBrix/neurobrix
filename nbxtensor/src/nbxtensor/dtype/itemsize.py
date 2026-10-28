@@ -1,32 +1,50 @@
-"""The dtype table's reader for the Triton branch — NBXTensor, the wrappers, the launch keys, the
-certifier, the Triton loaders.
+"""The dtype table and its reader — the ONE place a dtype's width is written (`dtypes.yml`, beside this module).
 
-Every width a dtype has is read from `config/dtypes.yml` through this module (Triton branch) or
-its twin `neurobrix/core/dtype/itemsize.py` (PyTorch branch: Prism, the core executors, the
-DtypeEngine). The engines share no compute code, so each keeps its own copy; the two are held
-equal entry by entry by `tests/unit/dtype/test_the_two_itemsize_readers_are_one.py`.
+Every width a dtype has is read from `dtypes.yml` through this module. NeuroBrix's Triton engine reads it here; its
+PyTorch branch keeps its own reader (`neurobrix/core/dtype/itemsize.py`) fed by this same table (`dtype_table`), the two
+held equal entry by entry by the engine's `tests/unit/dtype/test_the_two_itemsize_readers_are_one.py`.
 
-R33: torch-free and numpy-free, at import and at execution (the test above proves it).
+Torch-free and numpy-free, at import and at execution.
 
-A dtype is named as the code passes it today: a name ("float16"), a torch spelling
-("torch.float16", as graph.json writes some), or an enum member read by its NAME (NBXDtype is an
-IntEnum, and `str()` of one is its bare number on Python 3.11+ — never parsed). A name the table
-does not carry is refused by name, never given a width.
+A dtype is named as the code passes it today: a name ("float16"), a torch spelling ("torch.float16", as a traced
+graph writes some — read as text, torch is never imported), or an enum member read by its NAME (NBXDtype is an IntEnum,
+and `str()` of one is its bare number on Python 3.11+ — never parsed). A name the table does not carry is refused by
+name, never given a width.
 """
 from __future__ import annotations
 
+import copy
 import functools
+from pathlib import Path
 from enum import Enum
 from typing import Any, Dict, Tuple
 
-_SOURCE = "config/dtypes.yml"
+_SOURCE = "nbxtensor/dtype/dtypes.yml"
+_TABLE = Path(__file__).resolve().parent / "dtypes.yml"
 _TORCH_PREFIX = "torch."
 
 
 @functools.lru_cache(maxsize=1)
+def _raw_table() -> Dict[str, Any]:
+    import yaml
+    if not _TABLE.is_file():
+        raise FileNotFoundError(f"ZERO FALLBACK: the dtype table is not found: {_TABLE}")
+    table = yaml.safe_load(_TABLE.read_text()) or {}
+    for section in ("dtypes", "packed"):
+        if not isinstance(table.get(section), dict):
+            raise KeyError(f"ZERO FALLBACK: {_TABLE} carries no {section!r} section")
+    return table
+
+
+def dtype_table() -> Dict[str, Any]:
+    """The whole table as written (`dtypes`, `packed`, and every other section), a copy: the reader a client keeps of
+    its own is fed from here, never from a second file."""
+    return copy.deepcopy(_raw_table())
+
+
+@functools.lru_cache(maxsize=1)
 def _tables() -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]], Dict[str, str], Dict[str, str]]:
-    from neurobrix.core.config.loader import get_dtype_table
-    table = get_dtype_table()
+    table = _raw_table()
     dense, packed = dict(table["dtypes"]), dict(table["packed"])
     for name, entry in dense.items():
         bits = entry.get("bits")

@@ -2905,7 +2905,7 @@ class GraphExecutor:
         import base64, io, zipfile
         import numpy as np
         from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, parse_dtype
-        from neurobrix.triton import itemsize as _isz
+        from nbxtensor.dtype import itemsize as _isz
 
         shape = tuple(tdata.get("shape", []))
         dtype_str = tdata.get("dtype", "float32").replace("torch.", "")

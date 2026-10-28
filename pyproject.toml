@@ -42,6 +42,9 @@ dependencies = [
     # transitively via torch) for compute, numpy as CPU glue, and pure
     # container / config / file-I/O infra. NO vendor model/tokenizer/codec/DSP
     # library is a runtime dependency (those moved to the `adapter` extra below).
+    # The tensor library the Triton engine is built on (nbxtensor/, this repository): a path dependency until it
+    # is published on its own (docs/nbxtensor/MIGRATION.md, M6)
+    "nbxtensor @ {root:uri}/nbxtensor",
     # Core compute
     "torch>=2.1.0",
     "numpy>=1.24.0",
@@ -94,6 +97,9 @@ Changelog = "https://github.com/NeuroBrix/neurobrix/blob/main/CHANGELOG.md"
 
 [project.scripts]
 neurobrix = "neurobrix.cli:main"
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/neurobrix"]

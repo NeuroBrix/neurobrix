@@ -13,7 +13,7 @@ Rules (from PyTorch AT_FORALL_FP32 / AT_FORALL_LOWER_PRECISION_FP):
 from typing import Callable, FrozenSet, Optional
 
 from neurobrix.kernels.nbx_tensor import NBXDtype, NBXTensor
-from neurobrix.triton import itemsize as _itemsize
+from nbxtensor.dtype import itemsize as _itemsize
 
 
 # ============================================================================

@@ -33,7 +33,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import numpy as np
 
 from neurobrix.kernels import autotune_certified as C
-from neurobrix.triton import itemsize as _isz
+from nbxtensor.dtype import itemsize as _isz
 
 ORACLE = "fp64: the op in float64 (numpy), the reference bank's definition"
 # The whole oracle of a convolution is computed when it costs at most this many multiply-adds;
