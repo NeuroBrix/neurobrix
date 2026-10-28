@@ -2867,6 +2867,26 @@ def invoke_silu_and_mul(input_tensor, M, N):
     return output
 
 
+def _row_matrix(t):
+    """`t` as an (M, N) matrix over its last dim, WITHOUT a copy when its rows are evenly strided — the last dim
+    unit-stride and every leading dim mergeable into one row axis, as a split of a fused projection's last dim is (the
+    gate and up halves of a SwiGLU: (B, S, N) views of a (B, S, 2N) buffer, row stride 2N). A copy otherwise. The
+    kernels reading it take its row stride. Copied unconditionally, the two halves of mochi-1-preview's (2, 7 950,
+    16 384) fp32 projection cost 2 x 497 MB the graph never priced, and its transformer overran the 8 GB rung by
+    them (2026-10-28)."""
+    shape, stride = tuple(t.shape), tuple(t.stride())
+    n = shape[-1] if shape else 1
+    m = 1
+    for d in shape[:-1]:
+        m *= d
+    if len(shape) >= 2 and (stride[-1] == 1 or n == 1):
+        dims = [i for i in range(len(shape) - 1) if shape[i] != 1]
+        if all(stride[a] == stride[b] * shape[b] for a, b in zip(dims, dims[1:])):
+            row = stride[dims[-1]] if dims else n
+            return t.as_strided((m, n), (row, 1))
+    return t.contiguous().view(m, n)
+
+
 def swiglu_fused_wrapper(gate, up):
     """Fused SwiGLU with split gate/up tensors: silu(gate) * up.
 
@@ -2892,23 +2912,17 @@ def swiglu_fused_wrapper(gate, up):
         if up.dtype != widest:
             up = up.to(widest)
 
-    gate_c = gate.contiguous()
-    up_c = up.contiguous()
-    orig_shape = gate_c.shape
-    N = orig_shape[-1]
-    M = 1
-    for d in orig_shape[:-1]:
-        M *= d
-
-    gate2d = gate_c.view(M, N)
-    up2d = up_c.view(M, N)
-    output = NBXTensor.empty((M, N), dtype=gate_c._dtype,
-                             device=f"cuda:{gate_c._device_idx}")
+    orig_shape = gate.shape
+    gate2d = _row_matrix(gate)
+    up2d = _row_matrix(up)
+    M, N = gate2d.shape
+    output = NBXTensor.empty((M, N), dtype=gate2d._dtype,
+                             device=f"cuda:{gate2d._device_idx}")
 
     BLOCK_M = 16
     BLOCK_N = min(triton.next_power_of_2(N), 1024)
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
-    _set_device(gate_c)
+    _set_device(gate2d)
 
     silu_mul_split_kernel[grid](
         gate2d, up2d, output,

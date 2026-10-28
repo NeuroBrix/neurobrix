@@ -3834,6 +3834,8 @@ class PrismSolver:
             comp_dtype_str = (component_dtypes or {}).get(
                 comp.name, target_dtype_str)
             dtype_mult = compute_dtype_factor(source_dtype, comp_dtype_str)
+            # the same stored -> executed factor sizes this component's streamed pieces (`_try_layer_streaming_against`)
+            self.__dict__.setdefault("_weight_dtype_mult", {})[comp.name] = dtype_mult
             if os.environ.get("NBX_DTYPE_RESOLVE_DIAG"):
                 # Default-off diagnostic (rules/debugging-and-known-issues.md): the two
                 # strings that decide the weight multiplier, printed where they are USED.
@@ -8171,7 +8173,12 @@ class PrismSolver:
         if not graphs:
             return _decline("no component carries a graph to cut")
 
-        sizes_by_comp = self._weight_sizes_by_component(container)
+        # A piece holds its weights as the engine LANDS them, the stored bytes times the factor the component's weights
+        # are priced at (`_compute_memory`'s `dtype_mult`): mochi-1-preview's text encoder, stored F32 and run in fp16,
+        # was cut against its stored bytes, twice what its pieces hold — three pieces where two hold (2026-10-28).
+        _wmult = self.__dict__.get("_weight_dtype_mult") or {}
+        sizes_by_comp = {name: ({k: int(v * _wmult[name]) for k, v in sizes.items()} if name in _wmult else sizes)
+                         for name, sizes in self._weight_sizes_by_component(container).items()}
 
         allocations: Dict[str, Tuple[str, Dict[str, str]]] = {}
         partitions = {}

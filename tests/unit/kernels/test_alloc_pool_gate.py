@@ -54,7 +54,8 @@ class _PoolState:
 
     FIELDS = ("_pool_free", "_pool_alloc_size", "_pool_enabled", "_pool_cached_bytes",
               "_pool_cached_peak", "_pool_stats", "_cuda_ptr_size", "_cuda_ptr_device",
-              "_cuda_live_bytes", "_cuda_peak_bytes", "_pool_cap_bytes", "_pool_slack_frac")
+              "_cuda_live_bytes", "_cuda_peak_bytes", "_pool_cap_bytes", "_pool_slack_frac",
+              "_blocks", "_pool_sizes", "_range_size", "_range_bases", "_cuda_ptr_epoch")
 
     def __enter__(self):
         self.saved = {f: getattr(DeviceAllocator, f) for f in self.FIELDS}
@@ -101,32 +102,64 @@ def test_pool_is_on_by_default_and_zero_disables_it():
         assert _reinit("0") is False
 
 
-def test_free_list_accounting_tracks_bytes_hits_and_slack():
+MiB = 1 << 20
+
+
+class _FakeDriver:
+    """Disjoint ranges handed out and taken back, so the pool's segments are real ones (S4a, 2026-10-27: blocks are
+    slices of driver segments; a pointer the driver never issued is refused)."""
+    def __init__(self):
+        self.next, self.live, self.freed = 1 << 32, {}, []
+
+    def cudaMalloc(self, out, size):
+        p = self.next
+        self.next += size.value + (2 * MiB)
+        self.live[p] = size.value
+        out._obj.value = p
+        return 0
+
+    def cudaFree(self, ptr):
+        assert ptr.value in self.live, f"the driver never issued {ptr.value:#x}"
+        self.freed.append(self.live.pop(ptr.value))
+        return 0
+
+
+def _with_driver(monkeypatch):
+    import neurobrix.kernels.nbx_tensor as nt
+    drv = _FakeDriver()
+    monkeypatch.setattr(nt, "_gpu_runtime", lambda: drv)
+    monkeypatch.setattr(nt, "_active_backend", lambda: {"malloc": "cudaMalloc", "free": "cudaFree"})
+    monkeypatch.setattr(DeviceAllocator, "get_device", staticmethod(lambda: 0))
+    monkeypatch.setattr(DeviceAllocator, "_rung_limit_bytes", {0: None})
+    return drv
+
+
+def test_free_list_accounting_tracks_bytes_hits_and_splits(monkeypatch):
     with _PoolState():
         _reinit(None)
+        drv = _with_driver(monkeypatch)
         dev = 0
-        DeviceAllocator._pool_slack_frac[dev] = 1.0   # pinned: a fit may hand out up to twice its request
-        # Three blocks "allocated" (bookkeeping only) and returned to the pool.
-        for ptr, nbytes in ((0x1000, 1024), (0x2000, 4096), (0x3000, 6000)):
-            DeviceAllocator._cuda_ptr_size[ptr] = nbytes
-            DeviceAllocator._cuda_ptr_device[ptr] = dev
-            DeviceAllocator.free_cuda(ptr)
-        assert DeviceAllocator._pool_cached_bytes[dev] == 1024 + 4096 + 6000
-        assert DeviceAllocator._pool_cached_peak[dev] == 1024 + 4096 + 6000
-        # Exact hit.
-        assert DeviceAllocator._pool_take(dev, 4096) == 0x2000
+        DeviceAllocator._pool_cap_bytes[dev] = 1 << 40
+        ptrs = [DeviceAllocator.malloc_cuda(n) for n in (1 * MiB, 4 * MiB, 6 * MiB)]
+        for p in ptrs:
+            DeviceAllocator.free_cuda(p)
+        assert DeviceAllocator._pool_cached_bytes[dev] == 11 * MiB
+        assert DeviceAllocator._pool_cached_peak[dev] == 11 * MiB
         st = DeviceAllocator._pool_stats
-        assert st["exact"] == 1 and DeviceAllocator._pool_cached_bytes[dev] == 1024 + 6000
-        # Smallest-fit (5000 -> the 6000 block; slack 1000).
-        assert DeviceAllocator._pool_take(dev, 5000) == 0x3000
-        assert st["fit"] == 1 and st["slack_total"] == 1000 and st["slack_max"] == 1000
-        assert DeviceAllocator._pool_alloc_size[0x3000] == 6000
-        assert DeviceAllocator._pool_cached_bytes[dev] == 1024
-        # Miss: nothing >= 3000 within its slack (2x here).
-        assert DeviceAllocator._pool_take(dev, 3000) is None
-        assert st["miss"] == 1
-        # Peak unchanged by takes.
-        assert DeviceAllocator._pool_cached_peak[dev] == 1024 + 4096 + 6000
+        # Exact hit.
+        assert DeviceAllocator._pool_take(dev, 4 * MiB) == ptrs[1]
+        assert st["exact"] == 1 and DeviceAllocator._pool_cached_bytes[dev] == 7 * MiB
+        # Smallest block that holds it, split: 5 MiB from the 6 MiB segment, 1 MiB left free beside it.
+        assert DeviceAllocator._pool_take(dev, 5 * MiB) == ptrs[2]
+        assert st["fit"] == 1 and st["slack_total"] == 0
+        assert DeviceAllocator._pool_alloc_size[ptrs[2]] == 5 * MiB
+        assert DeviceAllocator._pool_cached_bytes[dev] == 2 * MiB
+        # Miss: no free block holds 3 MiB.
+        misses = st["miss"]
+        assert DeviceAllocator._pool_take(dev, 3 * MiB) is None
+        assert st["miss"] == misses + 1
+        # Peak unchanged by takes; nothing went back to the driver.
+        assert DeviceAllocator._pool_cached_peak[dev] == 11 * MiB and drv.freed == []
 
 
 def test_autotune_headroom_guard_retries_once_then_gives_up():
@@ -167,78 +200,51 @@ def test_autotune_headroom_guard_retries_once_then_gives_up():
             DeviceAllocator._oom_reclaim_hooks = saved[2]
 
 
-def test_parked_cap_evicts_largest_first_and_never_parks_an_over_cap_block():
-    import neurobrix.kernels.nbx_tensor as nt
-
-    freed = []
-
-    class _RT:
-        def cudaFree(self, ptr):
-            freed.append(ptr.value)
-            return 0
-
-    saved = (nt._gpu_runtime, nt._active_backend)
-    try:
-        nt._gpu_runtime = lambda: _RT()  # type: ignore
-        nt._active_backend = lambda: {"free": "cudaFree"}  # type: ignore
-        with _PoolState():
-            _reinit(None)
-            dev = 0
-            DeviceAllocator._pool_cap_bytes[dev] = 10_000  # pinned: no profile in a bare process
-            for ptr, nbytes in ((0x1000, 6000), (0x2000, 3000)):
-                DeviceAllocator._cuda_ptr_size[ptr] = nbytes
-                DeviceAllocator._cuda_ptr_device[ptr] = dev
-                DeviceAllocator._cuda_live_bytes[dev] = DeviceAllocator._cuda_live_bytes.get(dev, 0) + nbytes
-                DeviceAllocator.free_cuda(ptr)
-            assert DeviceAllocator._pool_cached_bytes[dev] == 9000 and freed == []
-            # A 2000-byte push would park 11000 > cap → evict the largest (6000) first.
-            DeviceAllocator._cuda_ptr_size[0x3000] = 2000
-            DeviceAllocator._cuda_ptr_device[0x3000] = dev
-            DeviceAllocator._cuda_live_bytes[dev] += 2000
-            DeviceAllocator.free_cuda(0x3000)
-            assert freed == [0x1000]
-            assert DeviceAllocator._pool_cached_bytes[dev] == 5000  # 3000 + 2000 parked
-            assert DeviceAllocator._pool_stats["evictions"] == 1
-            assert DeviceAllocator._pool_stats["evicted_bytes"] == 6000
-            assert DeviceAllocator._cuda_live_bytes[dev] == 5000  # the evicted block left the driver
-            assert 0x1000 not in DeviceAllocator._cuda_ptr_size
-            # A block larger than the whole cap is never parked: straight to the driver.
-            DeviceAllocator._cuda_ptr_size[0x4000] = 20_000
-            DeviceAllocator._cuda_ptr_device[0x4000] = dev
-            DeviceAllocator._cuda_live_bytes[dev] += 20_000
-            DeviceAllocator.free_cuda(0x4000)
-            assert freed == [0x1000, 0x4000]
-            assert DeviceAllocator._pool_cached_bytes[dev] == 5000
-    finally:
-        nt._gpu_runtime, nt._active_backend = saved  # type: ignore
-
-
-def test_a_fit_hands_out_no_more_slack_than_the_profile_allows(monkeypatch):
-    """HAT-S at 2048 px on a 16 GB V100 (2026-10-22): its 2 304 MB conv output took the freed 4 096 MB mask's
-    parked block (the old fixed 2x bound), 1 792 MB held that no plan priced, and the next tile found no room.
-    The bound is the profile's `memory.alloc_pool_fit_slack_fraction`; with no profile, exact-size hits only.
-    Injection (seen red, 2026-10-22): the bound back to `nbytes * 2` -> the first assertion fails."""
+def test_parked_cap_evicts_whole_segments_largest_first_and_never_parks_an_over_cap_block(monkeypatch):
     with _PoolState():
         _reinit(None)
+        drv = _with_driver(monkeypatch)
         dev = 0
-        for ptr, nbytes in ((0x1000, 4096), (0x2000, 2600)):
-            DeviceAllocator._cuda_ptr_size[ptr] = nbytes
-            DeviceAllocator._cuda_ptr_device[ptr] = dev
-            DeviceAllocator.free_cuda(ptr)
-        DeviceAllocator._pool_slack_frac[dev] = 0.125
-        assert DeviceAllocator._pool_take(dev, 2304) is None          # 4096 and 2600 both over 12.5 % slack
-        DeviceAllocator._pool_slack_frac[dev] = 0.25
-        assert DeviceAllocator._pool_take(dev, 2304) == 0x2000        # 2600: 12.8 % slack, within 25 %
-        assert DeviceAllocator._pool_take(dev, 2304) is None          # the 4096 block stays parked
-        DeviceAllocator._pool_slack_frac.clear()
-        import neurobrix.kernels.wrappers as W
-        monkeypatch.setattr(W, "get_hardware_profile", lambda: None)   # whatever an earlier test left bound
-        assert DeviceAllocator._pool_fit_slack(dev) == 0.0            # no profile: exact only
+        DeviceAllocator._pool_cap_bytes[dev] = 10 * MiB
+        a, b, c = (DeviceAllocator.malloc_cuda(6 * MiB), DeviceAllocator.malloc_cuda(3 * MiB),
+                   DeviceAllocator.malloc_cuda(2 * MiB))
+        DeviceAllocator.free_cuda(a)
+        DeviceAllocator.free_cuda(b)
+        assert DeviceAllocator._pool_cached_bytes[dev] == 9 * MiB and drv.freed == []
+        # The 2 MiB segment freed would park 11 MiB > cap: the largest wholly free segment (6 MiB) leaves first.
+        DeviceAllocator.free_cuda(c)
+        assert drv.freed == [6 * MiB]
+        assert DeviceAllocator._pool_cached_bytes[dev] == 5 * MiB
+        assert DeviceAllocator._pool_stats["evictions"] == 1
+        assert DeviceAllocator._pool_stats["evicted_bytes"] == 6 * MiB
+        assert DeviceAllocator._cuda_live_bytes[dev] == 5 * MiB     # the evicted segment left the driver
+        # A segment larger than the whole cap is never parked: straight back to the driver.
+        DeviceAllocator.free_cuda(DeviceAllocator.malloc_cuda(20 * MiB))
+        assert drv.freed == [6 * MiB, 20 * MiB]
+        assert DeviceAllocator._pool_cached_bytes[dev] == 5 * MiB
+
+
+def test_a_fit_hands_out_less_than_the_split_threshold_of_slack(monkeypatch):
+    """HAT-S at 2048 px on a 16 GB V100 (2026-10-22): its 2 304 MB conv output took the freed 4 096 MB mask's
+    parked block whole, 1 792 MB held that no plan priced. Since S4a a block is split whenever what is left reaches
+    `_POOL_SPLIT_MIN`, so a fit hands out less than that: the remainder stays free for the next request."""
+    with _PoolState():
+        _reinit(None)
+        _with_driver(monkeypatch)
+        dev = 0
+        DeviceAllocator._pool_cap_bytes[dev] = 1 << 40
+        big = DeviceAllocator.malloc_cuda(4 * MiB)
+        DeviceAllocator.free_cuda(big)
+        got = DeviceAllocator._pool_take(dev, 2304 * 1024)               # 2.25 MiB of 4: 1.75 MiB split off
+        assert got == big and DeviceAllocator._pool_alloc_size[got] == 2304 * 1024
+        assert DeviceAllocator._pool_cached_bytes[dev] == 4 * MiB - 2304 * 1024
+        small = DeviceAllocator.malloc_cuda(2560 * 1024)
+        DeviceAllocator.free_cuda(small)
+        got = DeviceAllocator._pool_take(dev, 2 * MiB)                   # 0.5 MiB left: under the threshold
+        assert DeviceAllocator._pool_stats["slack_max"] < DeviceAllocator._POOL_SPLIT_MIN, DeviceAllocator._pool_stats
 
 
 if __name__ == "__main__":
     test_pool_is_on_by_default_and_zero_disables_it()
-    test_free_list_accounting_tracks_bytes_hits_and_slack()
     test_autotune_headroom_guard_retries_once_then_gives_up()
-    test_parked_cap_evicts_largest_first_and_never_parks_an_over_cap_block()
     print("OK 4/4")

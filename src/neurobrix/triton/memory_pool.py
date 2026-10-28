@@ -71,7 +71,8 @@ class ComponentArena:
         self._offset = 0
 
         DeviceAllocator.set_device(device_idx)
-        self._base_ptr = DeviceAllocator.malloc_cuda(self._total)
+        # never pooled: once freed, its bytes go back to the driver whole (DeviceAllocator.malloc_cuda `pooled`)
+        self._base_ptr = DeviceAllocator.malloc_cuda(self._total, pooled=False)
         if self._base_ptr == 0 and self._total > 0:
             raise RuntimeError(
                 f"ComponentArena: failed to allocate {self._total / 1e9:.2f} GB "

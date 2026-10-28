@@ -242,12 +242,24 @@ class LayerStreamingStrategy(ExecutionStrategy):
         # resolved values is the only way to guarantee a segment runs under
         # exactly the contract its component runs under: same family, same
         # vendor and arch, same device, same dtype, same mode.
+        subs = [build_segment_graph(dag, Segment(index=index, first_op=first_op, last_op=last_op,
+                                                 op_count=order_index[last_op] - order_index[first_op] + 1),
+                                    order_index)
+                for index, (first_op, last_op) in enumerate(bounds)]
+        # Each piece takes over the values it is the LAST piece to read (`GraphExecutor._consumed_input_tids`), and
+        # frees each at its last use inside it, as the whole run does and as Prism's live curve prices it. Handed
+        # nothing, a piece held every value it received to its end beside the strategy's own reference: mochi-1-preview
+        # native at the 8 GB rung peaked each transformer piece above its price by what it received (+719 / +219 /
+        # +408 MB for 782 / 283 / 472 MB received, 2026-10-28). The component's declared outputs and the tensors its
+        # base protects are never handed over.
+        kept = set(dag.get("output_tensor_ids") or ()) | set(getattr(base, "_persistent_tensor_ids", None) or ())
+        last_reader = {n: i for i, sub in enumerate(subs) for n in (sub.get("segment_input_names") or [])}
         executors = []
-        for index, (first_op, last_op) in enumerate(bounds):
-            seg = Segment(index=index, first_op=first_op, last_op=last_op,
-                          op_count=order_index[last_op] - order_index[first_op] + 1)
-            executors.append(self._piece_executor(base, build_segment_graph(dag, seg, order_index),
-                                                  component_name, base))
+        for index, sub in enumerate(subs):
+            handed = frozenset(f"input::{n}" for n in (sub.get("segment_input_names") or [])
+                               if last_reader[n] == index and n not in kept
+                               and f"input::{n}" in (sub.get("input_tensor_ids") or ()))
+            executors.append(self._piece_executor(base, sub, component_name, base, consumed_inputs=handed))
         pieces = self._slice_stretches(component_name, base, dag, bounds, executors)
         self._forward_op_level_tiling(component_name, base, pieces)
         return pieces
@@ -519,6 +531,10 @@ class LayerStreamingStrategy(ExecutionStrategy):
                     f"layer_streaming: segment {sub.get('segment_index')} "
                     f"of '{component_name}' needs {missing[:3]} and "
                     f"nothing before it produced them")
+            # what this piece takes over leaves `values` now: the piece holds the only reference and frees it at its
+            # last use (`_build_segment_executors`)
+            for tid in getattr(seg_exec, "_consumed_input_tids", None) or ():
+                values.pop(tid[len("input::"):], None)
             for tid in protected & produced:
                 seg_exec.protect_tensor_id(tid)
             # This piece's weights, and only this piece's: the executor asks its own dag
