@@ -22,7 +22,11 @@ HALF = {"input_dtypes": ["bfloat16", "bfloat16"], "output_dtypes": ["bfloat16"]}
 def test_the_store_rule_keeps_half_on_native_bf16_and_fp32_without_it():
     from neurobrix.kernels.launch_keys import matmul_out_dtype
     from neurobrix.kernels.nbx_tensor import NBXDtype as D
-    assert matmul_out_dtype(D.bfloat16, 1, True, True) == D.bfloat16        # decode row, forced: still bf16 natively
+    # a decode row keeps fp32 on every hardware: stored bf16 on the M4 Pro, whisper-large-v3-turbo's Triton decoder
+    # drifted from its first tokens (bisected to d4809a47, 2026-10-28); the forced attention GEMM stays bf16 natively
+    assert matmul_out_dtype(D.bfloat16, 1, True, True) == D.float32
+    assert matmul_out_dtype(D.bfloat16, 1, False, True) == D.float32
+    assert matmul_out_dtype(D.bfloat16, 64, True, True) == D.bfloat16
     assert matmul_out_dtype(D.bfloat16, 4096, False, True) == D.bfloat16
     assert matmul_out_dtype(D.float16, 1, True, False) == D.float32         # V100: fp16 stores fp32 (overflow)
     assert matmul_out_dtype(D.float16, 4096, False, False) == D.float32
