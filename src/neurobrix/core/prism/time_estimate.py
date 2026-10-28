@@ -179,12 +179,14 @@ def plan_seconds(strategy: str, allocations: Mapping[str, Any], works: Mapping[s
                  devices: Mapping[str, DeviceFacts], host: Optional[HostFacts], dtype: str,
                  phases: Optional[Mapping[str, int]] = None, prompt: Optional[Mapping[str, Work]] = None,
                  links: Optional[Mapping[tuple, float]] = None, engine: Optional[str] = None,
-                 stored: Optional[Mapping[str, str]] = None) -> float:
+                 stored: Optional[Mapping[str, str]] = None, held: Optional[Mapping[str, float]] = None) -> float:
     """The plan's estimated seconds for the request. `devices`: {device string ("cuda:0"): its facts}; `uses`: {component:
     runs per request}; `phases`: {component: phases that load it} for the strategies that load per phase (1 when
     absent); `prompt`: {component: the work of its one prompt pass} for a generating component whose `works` entry is
     the work of ONE token — the prompt pass runs once more, over the same loaded weights; `stored`: {component: the
-    dtype most of its weights are stored in} (the weights index), which the loader rate is read for."""
+    dtype most of its weights are stored in} (the weights index), which the loader rate is read for; `held`: {component:
+    the fraction of its weights a streaming strategy keeps loaded between uses} (`LayerPartitioner.hybrid`) — loaded
+    once, only the rest reloaded at every later use."""
     total = 0.0
     for comp, alloc in allocations.items():
         if comp not in works:
@@ -233,7 +235,9 @@ def plan_seconds(strategy: str, allocations: Mapping[str, Any], works: Mapping[s
             # reload rate when the profile states one (`weight_reload_gbps`, the Janus case on the Mac), else the
             # loader's warm rate to the device
             again = host.reload_bps if (host is not None and host.reload_bps) else _loader_bps(f, engine, st, "device", "warm", dev)
-            total += w.weight_bytes / _loader_bps(f, engine, st, "device", "cold", dev) + (passes - 1) * w.weight_bytes / again
+            # the pieces held between uses (`held`, S5 2026-10-27) load once: only the rest is reloaded
+            moved = w.weight_bytes * (1.0 - float((held or {}).get(comp, 0.0)))
+            total += w.weight_bytes / _loader_bps(f, engine, st, "device", "cold", dev) + (passes - 1) * moved / again
         else:
             total += w.weight_bytes / _loader_bps(f, engine, st, "device", "cold", dev) + \
                 (loads - 1) * w.weight_bytes / _loader_bps(f, engine, st, "device", "warm", dev)

@@ -246,6 +246,12 @@ def test_a_dedicated_card_cuts_the_boundaries_pinned_here(monkeypatch, mode):
                 triton cut of 2026-10-04 stood, both seams on block boundaries:
                 [embedding::0, view::227] [moe_fused::block.11, view::427] [moe_fused::block.21, rms_norm::81]
                 The triton cut (net of the drain cliff) did not move.
+      2026-10-27 (S5, a re-entered component holds the pieces the rung keeps beside the window): the model runs
+                once per token, so it is cut per block (27 pieces, the plain cut's weight part halved down to
+                one block) and the pieces the usable rung holds beside the streamed window stay loaded between
+                tokens — compiled pieces 1-9 held (10 400 MB), triton 1-8 (9 244 MB, net of the drain cliff); 20.2 / 21.4 GB
+                streamed per token instead of 30.6 GB:
+                [embedding::0, view::27] [moe_fused::block.1, view::47] ... [moe_fused::block.26, rms_norm::81]
 
     Reaches `_try_layer_streaming` for real: the rung is attempted (its partition is left on the
     solver) and `lazy_sequential` then outscores it. A retrace of this container moves these op
@@ -264,10 +270,8 @@ def test_a_dedicated_card_cuts_the_boundaries_pinned_here(monkeypatch, mode):
     # widths, release-candidate-1, 2026-09-28): activations the engine keeps in fp32 cost 4 bytes, the
     # segments shrink to fit the same usable rung. Two segments before, cut under the compute dtype's
     # 2 bytes; the solver's own note on this card already read three.
-    pinned = {"compiled": [["aten.embedding::0", "aten.view::227"],
-                           ["moe_fused::block.11", "aten.view::427"],
-                           ["moe_fused::block.21", "custom.rms_norm::81"]],
-              "triton": [["aten.embedding::0", "aten.view::187"],
-                         ["moe_fused::block.9", "aten.view::367"],
-                         ["moe_fused::block.18", "custom.rms_norm::81"]]}
-    assert cut == {"model": pinned[mode]}, cut
+    held = {"compiled": list(range(1, 10)), "triton": list(range(1, 9))}
+    assert list(cut) == ["model"] and len(cut["model"]) == 27, cut
+    assert cut["model"][:2] == [["aten.embedding::0", "aten.view::27"], ["moe_fused::block.1", "aten.view::47"]], cut
+    assert cut["model"][-1][1] == "custom.rms_norm::81", cut["model"][-1]
+    assert parts["model"].resident == held[mode], parts["model"].resident

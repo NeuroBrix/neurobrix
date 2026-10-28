@@ -1128,6 +1128,8 @@ class RuntimeExecutor:
                 getattr(self.plan, "layer_stream_chunks", None) or {}),
             layer_swapped=frozenset(
                 getattr(self.plan, "layer_stream_swapped", None) or ()),
+            layer_resident={k: frozenset(v) for k, v in
+                            (getattr(self.plan, "layer_stream_resident", None) or {}).items()},
             mode=self.mode,
         )
 

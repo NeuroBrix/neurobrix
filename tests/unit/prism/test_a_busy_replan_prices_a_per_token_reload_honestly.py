@@ -16,11 +16,16 @@ def test_janus_triton_on_a_busy_mac_is_not_re_planned_into_a_per_token_reload(mo
     # say what streaming costs — the measured run took 2 348 s for 716 reloads; the estimate must be of that order,
     # never the 169 s the page-locked price gave
     if p.strategy == "layer_streaming":
-        assert p.estimated_s is not None and p.estimated_s > 0.5 * 2348 * 577 / 716, (p.estimated_s, p.selection_reason[:300])
+        # every piece reloaded per token: the measured order; pieces held between tokens (S5,
+        # test_a_busy_replan_keeps_the_core_resident_and_streams_the_overflow) reload only the rest, priced there
+        if not (p.layer_stream_resident or {}).get("language_model"):
+            assert p.estimated_s is not None and p.estimated_s > 0.5 * 2348 * 577 / 716, (p.estimated_s, p.selection_reason[:300])
         # the supervisor's decision 2026-10-27 20:45: no refusal, a clear warning — what the fast plan lacks, both
         # times, and what to do
         why = p.selection_reason
-        assert "lacks" in why and "close an application" in why and " h)" in why, why[:400]
+        assert "lacks" in why and "close an application" in why, why[:400]
+        if not (p.layer_stream_resident or {}).get("language_model"):
+            assert " h)" in why, why[:400]
 
 
 def test_a_per_token_reload_is_priced_at_the_measured_reload_rate():
