@@ -2485,10 +2485,21 @@ class TritonSequence:
             if slot is None:
                 continue
             if tensor_id in self._pretranspose_weights and tensor.ndim == 2:
-                tensor = tensor.t()
+                tensor = self._transposed_view(tensor_id, tensor)
             self._arena[slot] = tensor
             modified.append(slot)
         return modified
+
+    def _transposed_view(self, tid: str, tensor: NBXTensor) -> NBXTensor:
+        """The `.t()` view of a weight whose aten::t was eliminated, ONE per source tensor (kept in the arena, dropped
+        with its weights): binding the same weight again hands the same view back, so a replayed step's restored
+        arena is recognised as the bound one (`Arena.restore_from`). A fresh view at every bind or zero3 rebind made
+        each restore look like new weights and re-bound all ~20k of Qwen3-30B-A3B's, 24 ms a token (2026-10-28)."""
+        views = self._arena.views
+        held = views.get(tid)
+        if held is None or held[0] is not tensor:
+            held = views[tid] = (tensor, tensor.t())
+        return held[1]
 
     def recompute_op_devices_for_slots(self, modified_slots: List[int]) -> None:
         """Patch per-op device flags after a partial arena rebind.
@@ -3068,7 +3079,7 @@ class TritonSequence:
                 # Pre-transpose weights whose aten::t was eliminated.
                 # .t() is a stride-only view (no copy) on NBXTensor.
                 if tid in self._pretranspose_weights and tensor.ndim == 2:
-                    tensor = tensor.t()
+                    tensor = self._transposed_view(tid, tensor)
                 self._arena[self._tid_to_slot[tid]] = tensor
             elif tid in consumers:
                 unbound.append((tid, consumers[tid]))
