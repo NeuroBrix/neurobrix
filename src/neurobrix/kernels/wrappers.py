@@ -8166,7 +8166,6 @@ def paged_decode_attention(q, k_pool, v_pool, block_table, seq_lens, softmax_sca
     # never starts inside a tile.
     longest = max(int(max_seq_len), 1)
     split = max(1, min(int(triton.cdiv(longest, PAGED_DECODE_SPLIT_POSITIONS)), PAGED_DECODE_MAX_SPLITS))
-    seg_len = int(triton.cdiv(int(triton.cdiv(longest, split)), block_n)) * block_n
 
     q2 = q.reshape(bhq, headdim)
     dev = f"cuda:{q._device_idx}"
@@ -8182,7 +8181,7 @@ def paged_decode_attention(q, k_pool, v_pool, block_table, seq_lens, softmax_sca
     paged_decode_attn_split_kernel[(bhq, split)](
         q2, k_pool, v_pool, block_table, seq_lens,
         opart, mpart, lpart,
-        seg_len, page_tokens, float(softmax_scale), nheads,
+        batch, page_tokens, float(softmax_scale), nheads,
         q2.stride(0),
         k_pool.stride(0), k_pool.stride(1), k_pool.stride(2),
         v_pool.stride(0), v_pool.stride(1), v_pool.stride(2),

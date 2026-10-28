@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`neurobrix autotune certify --keys <file>`** certifies exactly the keys a coverage check found missing (one `<kernel>::<key>` per line), without a census table.
 
 ### Fixed
+- **A replayed decode step attends to every position it holds**: the paged decode attention sizes its splits from the lengths on the device, so a step replayed from a recorded plan no longer ignores the positions written since the plan was recorded (opt-in replay of the decode; a 1.1B model now decodes 6 times faster under it with the same text).
 - **The Triton engine reuses freed GPU memory for requests of other sizes**: its allocator now splits and merges freed blocks, so less memory sits idle and fewer allocations reach the driver.
 - **The PyTorch engine's reported memory peak is the whole run's**: it showed only the last component's peak.
 - **A run sized for a smaller memory rung parks freed memory as a card of that size would** (the Triton allocator's pool cap), so a proof at an imposed rung measures what that card would hold.
