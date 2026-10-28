@@ -1079,6 +1079,8 @@ class RuntimeExecutor:
                     expert_cache_mb = float(getattr(alloc, 'expert_cache_mb', 0.0))
                     # expert_store on a unified device: the experts are mapped from the files
                     expert_files = bool(getattr(alloc, 'expert_files', False))
+                    # expert_store on several cards (S3): {card: {"blocks", "cache_mb", "experts"}} held whole there
+                    expert_cards = {k: dict(v) for k, v in (getattr(alloc, 'expert_cards', None) or {}).items()}
                 elif isinstance(alloc, tuple) and len(alloc) >= 2:
                     device, shard_map = alloc[0], alloc[1]
                     dtype = alloc[2] if len(alloc) > 2 else None
@@ -1086,6 +1088,7 @@ class RuntimeExecutor:
                     resident_weight_mb = 0.0
                     expert_cache_mb = 0.0
                     expert_files = False
+                    expert_cards = {}
                 else:
                     device = str(alloc)
                     shard_map = {}
@@ -1094,6 +1097,7 @@ class RuntimeExecutor:
                     resident_weight_mb = 0.0
                     expert_cache_mb = 0.0
                     expert_files = False
+                    expert_cards = {}
                 # Store all allocation info including dtype and strategy
                 allocations[comp_name] = {
                     'device': device,
@@ -1103,6 +1107,7 @@ class RuntimeExecutor:
                     'resident_weight_mb': resident_weight_mb,
                     'expert_cache_mb': expert_cache_mb,
                     'expert_files': expert_files,
+                    'expert_cards': expert_cards,
                 }
 
         # Get loading_mode from Prism plan (DATA-DRIVEN)

@@ -150,3 +150,45 @@ class TorchExpertStore:
         self.slots = []
         self._inflight.clear()
         self.residency.clear()
+
+
+class TorchHeldExperts:
+    """The routed experts of whole blocks held on ANOTHER card (S3, Prism's `ComponentAllocation.expert_cards`), the
+    compiled engine's twin of `triton/expert_store.NBXHeldExperts`: every expert of each held layer copied once into
+    one buffer on that card, each projection a view of it, so the layer's fused op runs there against resident weights
+    (its hidden state crosses to the card and back). `layers` maps a layer key to its host expert triples."""
+
+    def __init__(self, device: "torch.device", layers):
+        self.device = torch.device(device)
+        align = 256
+        total = 0
+        for key, triples in layers.items():
+            for trip in triples:
+                for t in trip:
+                    if not isinstance(t, torch.Tensor) or t.device.type != "cpu" or not t.is_contiguous():
+                        raise RuntimeError(
+                            f"ZERO FALLBACK: an expert of {key!r} held on {self.device} is {type(t).__name__} on "
+                            f"{getattr(t, 'device', '?')}; the card is filled from contiguous host experts")
+                    total += -(-t.numel() * t.element_size() // align) * align
+        self._buf = torch.empty(total, dtype=torch.uint8, device=self.device)
+        self.layers = {}
+        off = 0
+        for key, triples in layers.items():
+            g, u, d = [], [], []
+            for trip in triples:
+                views = []
+                for t in trip:
+                    n = t.numel() * t.element_size()
+                    v = self._buf[off:off + n].view(t.dtype).view(t.shape)
+                    v.copy_(t)
+                    views.append(v)
+                    off += -(-n // align) * align
+                g.append(views[0]); u.append(views[1]); d.append(views[2])
+            self.layers[key] = (g, u, d)
+        from neurobrix.core.device_utils import device_sync
+        device_sync(str(self.device))
+        self.bytes = total
+
+    def release(self) -> None:
+        self.layers = {}
+        self._buf = None

@@ -420,6 +420,7 @@ class CompiledSequence:
         '_const_fold_sig',  # identity signature of the partition's external inputs at last fold
         '_loader_consumers',  # container weights an op reads -> first reader, checked at every bind
         '_expert_store',  # TorchExpertStore under the `expert_store` strategy (set by the zero3 ratchet), else None
+        '_expert_cards',  # {layer key: (card, (gate, up, down))} held whole on other cards (S3), else None
         '_invariant',     # core/state/invariant.InvariantState of the declared invariant inputs (state engine step 4), else None
         '_inv_skip',      # its per-op skip flags, else None
     )
@@ -456,6 +457,7 @@ class CompiledSequence:
         """
         self.dag = dag
         self._expert_store = None
+        self._expert_cards = None
         # Architectural integer constants (profile.json config) — protected
         # from every value-matched rewrite of a shape list (see the guards).
         self._config_constants: set = set(config_constants or ())
@@ -2246,6 +2248,23 @@ class CompiledSequence:
                 _gv, _uv, _dv = _ewl(_stacked_attrs, _lut.get)
             else:
                 _gv = _uv = _dv = None
+            # A block whose experts another card holds whole (S3, `expert_store._hold_experts_on_cards`): its
+            # experts are the card's resident lists, the hidden state and the routing cross to that card, and the
+            # result comes back to the hidden state's device.
+            _home = None
+            _held = (_seq._expert_cards.get(_layer_key)
+                     if _layer_key is not None and _seq._expert_cards else None)
+            if _held is not None:
+                _gv, _uv, _dv = _held[1]
+                _card_dev = _gv[0].device
+                if hidden_states.device != _card_dev:
+                    _home = hidden_states.device
+                    hidden_states = hidden_states.to(_card_dev)
+                    if gate_scores is not None:
+                        gate_scores = gate_scores.to(_card_dev)
+                    if pre_indices is not None:
+                        pre_indices = pre_indices.to(_card_dev)
+                        pre_scores = pre_scores.to(_card_dev)
 
             # DTYPE CONTRACT: resolve weight dtype once, cache for all subsequent calls
             w_dtype = _cached_w_dtype[0]
@@ -2404,6 +2423,8 @@ class CompiledSequence:
                 # previous token routed to at the next layer (core/runtime/expert_residency.py)
                 _store.prefetch_next(_layer_key, _routed)
             _dnat("result_final", output)
+            if _home is not None:
+                output = output.to(_home)
             # Restore original shape if input was 3D
             if len(orig_shape) == 3:
                 output = output.reshape(orig_shape)

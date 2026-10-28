@@ -248,3 +248,49 @@ class NBXExpertStore:
         self.slots = []
         self._arena = None
         self.residency.clear()
+
+
+class NBXHeldExperts:
+    """The routed experts of whole blocks held on ANOTHER card (S3, Prism's `ComponentAllocation.expert_cards`): every
+    expert of each held layer copied once, at the store's build, into one arena on that card — each projection a
+    256-byte-aligned view, the store's own layout — so the layer's fused op runs there against resident weights (its
+    hidden state crosses to the card and back, `moe_fused_dispatch`). `layers` maps a layer key to its host expert
+    triples [(gate, up, down)] in expert order."""
+
+    def __init__(self, device_idx: int, layers):
+        self.device_idx = int(device_idx)
+        self.layers = {}
+        shapes = {}
+        total = 0
+        for key, triples in layers.items():
+            for trip in triples:
+                for t in trip:
+                    if not isinstance(t, NBXTensor) or t._device != "cpu" or not t.is_contiguous():
+                        raise RuntimeError(
+                            f"ZERO FALLBACK: an expert of {key!r} held on card {self.device_idx} is "
+                            f"{type(t).__name__} on {getattr(t, '_device', '?')}; the card is filled from contiguous "
+                            f"host experts")
+                    total += _aligned(t._nbytes)
+            shapes[key] = triples
+        DA.set_device(self.device_idx)
+        # one allocation per card: it lives as long as the component's store
+        self._arena = NBXTensor.empty((total,), dtype=NBXDtype.uint8, device=f"cuda:{self.device_idx}")
+        off = self._arena.data_ptr()
+        for key, triples in shapes.items():
+            g, u, d = [], [], []
+            for trip in triples:
+                views = []
+                for t in trip:
+                    v = NBXTensor.from_raw(off, tuple(t.shape), t._dtype, "cuda", owns_data=False,
+                                           device_idx=self.device_idx, base=self._arena)
+                    DA.memcpy(v.data_ptr(), t.data_ptr(), t._nbytes, 1)
+                    views.append(v)
+                    off += _aligned(t._nbytes)
+                g.append(views[0]); u.append(views[1]); d.append(views[2])
+            self.layers[key] = (g, u, d)
+        DA.sync_device()
+        self.bytes = total
+
+    def release(self) -> None:
+        self.layers = {}
+        self._arena = None
