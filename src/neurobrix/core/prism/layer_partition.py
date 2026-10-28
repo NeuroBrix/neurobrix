@@ -753,6 +753,15 @@ class LayerPartitioner:
 
     # -- stretches run in slices of a token axis --------------------------
 
+    def _host_moved_bytes(self, plan) -> int:
+        """What a stretch whose inputs wait on the host moves through host memory at the request: the inputs it reads in
+        slices, cut from their host tensors (`ChunkedPiece._run_pass` take_slice), and its outputs assembled whole
+        (put_slice) — the term the slicing adds to such a stretch's time (the Mac's diagnosis 4b, 2026-10-28: 2.4-2.9 s of
+        cuts and 0.5-1.3 s of assembly per host-read stretch of mochi's VAE, against 0.1 s on the device)."""
+        from neurobrix.core.prism.chunked_region import sliced_reads
+        return int(sum(self._bytes_at(t, self._symbol_map) for t in sliced_reads(plan, self.ops))
+                   + sum(self._bytes_at(t, self._symbol_map) for t in plan.outputs if t in self.tensors))
+
     def _bytes_at(self, tid: str, symbol_map: Dict[str, int]) -> int:
         """One activation's bytes at `symbol_map` (the request's, or a slice's)."""
         t = self.tensors.get(tid) or {}
@@ -930,6 +939,7 @@ class LayerPartitioner:
                                   f"activations may hold")
                 owner.host_reads = host
                 owner.set_slice(c, self._region_peak(owner.axis, owner.plan, c, host), self._symbol_map)
+                owner.host_moved_bytes = self._host_moved_bytes(owner.plan) if host else 0
                 continue
             best: Optional[_Region] = None
             whys: List[str] = []
@@ -1121,6 +1131,7 @@ class LayerPartitioner:
             reg = _Region(axis=ax, plan=plan, weight_names=names)
             reg.host_reads = host
             reg.set_slice(c, self._region_peak(ax, plan, c, host), self._symbol_map)
+            reg.host_moved_bytes = self._host_moved_bytes(reg.plan) if host else 0
             return reg, ""
         return None, why
 
@@ -1140,6 +1151,8 @@ class _Region:
     #: the inputs it reads only in slices stay on the host, each pass uploading its slice (`chunked_region.sliced_reads`)
     #: — chosen only where no slice fits with them whole on the device (`LayerPartitioner._fit_slice`)
     host_reads: bool = False
+    #: with `host_reads`: the bytes its slices cut from host tensors and its outputs assembled (`_host_moved_bytes`)
+    host_moved_bytes: int = 0
 
     @property
     def first(self) -> int:
@@ -1168,7 +1181,12 @@ class _Region:
     def record(self) -> Dict[str, Any]:
         return {"first_op": self.first_op, "last_op": self.last_op, "symbol": self.symbol,
                 "unit": self.plan.unit, "slice": self.slice, "count": self.count,
-                "passes": len(self.plan.passes), "peak_bytes": self.peak_bytes, "host_reads": self.host_reads}
+                "passes": len(self.plan.passes), "peak_bytes": self.peak_bytes, "host_reads": self.host_reads,
+                # what each slice recomputes beside the rows it keeps, and the norms read whole once: the time the
+                # slicing adds (`PrismSolver._estimate_times`)
+                "margin": int(self.plan.margin), "cyclic": bool(self.plan.cyclic),
+                "host_moved_bytes": int(self.host_moved_bytes),
+                "norm_inputs": sorted(self.plan.norms.values())}
 
 
 def rewire_arg(arg: Any, rewire: Dict[str, str]) -> Any:

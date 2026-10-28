@@ -632,6 +632,12 @@ host_measured:
   # decode, bf16->fp16 conversion, upload), measured on Janus-Pro-7B triton 2026-10-27 19:0x on stable f8def0b9: the
   # language model's 2 segments (13.8 GB together, fp16) re-read 716 times in 2 348 s -> 3.28 s per 6.9 GB segment
   weight_reload_gbps: 2.1
+  # what a sliced stretch whose inputs wait on the host moves through host memory per second (its slices cut from the
+  # host tensors + its outputs assembled), measured IN SITU by the Mac 2026-10-28 05:12-05:16 on stable 58b39d7e
+  # (mochi-1-preview native at an imposed 8 GB rung, per-call timing inside each pass, synced): the two host-read
+  # stretches moved 9.9 GiB each (halo included) in 3.61 s and 3.32 s of take_slice + put_slice -> 3.06 GB/s
+  # (atelier results/s6_price_2026_10_28/MEASURE.md, diagnosis 4b)
+  host_slab_gbps: 3.06
   # the system's own share of the installed RAM, measured calm by the Mac 2026-10-26 17:50-17:55 (no run, no copy, VM
   # off; 30 readings 10 s apart via core/host_memory.memory_state, median available 17 582 of 24 576 MB; atelier
   # campagnes/2026_09_22_apple/results/system_share_2026_10_26/MEASURE.md)
