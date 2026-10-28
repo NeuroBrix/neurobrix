@@ -179,6 +179,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **Prism times a plan that runs part of a model in slices more honestly**: the extra work at the slices' edges and the copies through host memory are counted, so a sliced plan is no longer preferred when it is in fact slower.
+- **A mixture-of-experts model whose experts partly live in host memory decodes without asking the host at every layer**: which experts sit in the card's cache, and the copy of the missing ones, are decided on the card, so the whole decode step replays. Qwen3-30B-A3B on four 16 GB V100: 102 -> 87 ms a token, same text.
 - **A mixture-of-experts decode step whose first layers are served from host memory replays the rest of those layers too**: only the expert layers whose experts must be fetched from the host still run step by step. Qwen3-30B-A3B on four 16 GB V100: about 5 ms less a token in steady decode, same text.
 - **A replayed decode step no longer re-binds its weights**: the weights a step restores are recognised as the ones already bound. Qwen3-30B-A3B on four 16 GB V100: 132 -> 104 ms a token, same text.
 - **Mixture-of-experts models with half-precision experts decode faster on the Triton engine**: one generated token through a routed layer takes a matrix-vector path instead of the batched-prompt one, about five times faster per layer on a V100.

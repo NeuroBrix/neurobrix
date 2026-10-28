@@ -733,6 +733,28 @@ def execute_moe_fused(
     flat_scores = scores.reshape(-1).to(w_dtype)       # [M * top_k]
     _dump("flat_scores", flat_scores)
 
+    if (expert_store is not None and M == 1 and getattr(expert_store, "device_decode", False)
+            and expert_store.trace is None and expert_layer in expert_store.layer_index):
+        # One token through a store-served layer: the residency runs on the card (`NBXExpertStore.decode_on_card`) —
+        # no routing read back, no host decision, the same launches at every token (the step replays).
+        _h = (gate_weights, up_weights, down_weights)
+        sdev = expert_store.device_idx
+        if sdev != act_dev:
+            DeviceAllocator.set_device(sdev)
+            DeviceAllocator.ensure_triton_device(sdev)
+            hidden_states = _xfer(hidden_states, sdev)
+            flat_scores = _xfer(flat_scores, sdev)
+            flat_indices = _xfer(flat_indices, sdev)
+        output = expert_store.decode_on_card(expert_layer, flat_indices, flat_scores, hidden_states,
+                                             lambda e, _h=_h: (_h[0][e], _h[1][e], _h[2][e]), top_k, K, N_gate)
+        if sdev != act_dev:
+            output = _xfer(output, act_dev)
+        if len(orig_shape) == 3:
+            output = output.reshape(orig_shape)
+        DeviceAllocator.set_device(act_dev)
+        DeviceAllocator.ensure_triton_device(act_dev)
+        return output
+
     _prefetch_routed = None
     if expert_store is not None:
         # The experts this call routes to, read once on the host; the store copies the misses

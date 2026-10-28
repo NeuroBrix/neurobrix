@@ -124,6 +124,12 @@ def build_expert_store_state(z3: Any, component_name: str, executor: Any, seq: A
         _n_exp = max(len(ids[0]) for ids in layers.values())
         store.trace = _rr.ExpertTrace(_model, component_name, top_k, _n_exp)
     holders = _hold_experts_on_cards(z3, component_name, executor, seq, is_triton, layers)
+    # A decode token's residency on the card (`NBXExpertStore.enable_device_decode`): half-precision experts copied
+    # into slots (not bound in place), once the routing's reuse curve is recorded (the trace reads the routing back).
+    from neurobrix.kernels.nbx_tensor import NBXDtype as _D
+    if (is_triton and not store.in_place and store.trace is None
+            and getattr(like[0], "_dtype", None) in (_D.float16, _D.bfloat16)):
+        store.enable_device_decode({k: i for i, k in enumerate(layers)}, widest)
 
     state: Dict[str, Any] = {
         'seq': seq,
