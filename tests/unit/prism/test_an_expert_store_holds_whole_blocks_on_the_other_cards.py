@@ -8,7 +8,7 @@ import pytest
 
 from neurobrix.core.prism import PrismSolver
 from neurobrix.core.prism.loader import load_profile
-from tests.unit.prism._pinned_machine import V100_16GB, pin_dedicated_card, pin_host, profile
+from tests.unit.prism._pinned_machine import V100_16GB, pin_dedicated_card, pin_host, pin_no_calibration, profile
 from tests.unit.prism.test_a_component_over_the_rung_streams_inside_itself import _input_config, no_door
 
 MODEL = "Qwen3-30B-A3B-Thinking-2507"
@@ -24,6 +24,7 @@ def _solve(monkeypatch, prof, mode):
                                                                          (64.0, 0.93), (96.0, 0.96)])
     pin_host(monkeypatch, 257530, 200000, "an idle rack host")
     pin_dedicated_card(monkeypatch, 16151, 306, "the rack's V100-16GB cards as measured")
+    pin_no_calibration(monkeypatch)
     c, ic = _input_config(MODEL, mode)
     s = PrismSolver()
     return s.solve_smart(c, prof, ic, mode=mode, replan=False), s

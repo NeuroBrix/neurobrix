@@ -251,25 +251,34 @@ def price_working_set(topologies: Dict[str, ExpertTopology], weight_bytes: Dict[
 
 
 def routing_reuse(cache_path, component: str) -> Optional[List[Tuple[float, float]]]:
-    """The routing's reuse curve of a routed component, a measured fact of the MODEL carried by its artifact: the
-    `routing_reuse` section of components/<component>/profile.json — `{"hit_by_slots_per_layer": {slots: hit rate},
-    "source": ...}`, the share of a store layer's routed experts found in an LRU cache of that many slots per layer,
-    recorded from a decode (the Dell, Qwen3-30B-A3B, 2026-10-28: 8 -> 0.30, 16 -> 0.53, 32 -> 0.74, 64 -> 0.93,
-    96 -> 0.96). [(slots, hit)] ascending, or None when the artifact states none (the price then refuses by name)."""
+    """The routing's reuse curve of a routed component — {slots per layer: hit rate}, the share of a store layer's routed
+    experts an LRU cache of that many slots per layer finds, recorded from a decode (the Dell, Qwen3-30B-A3B,
+    2026-10-28: 8 -> 0.30, 16 -> 0.53, 32 -> 0.74, 64 -> 0.93, 96 -> 0.96). Read as the calibration record is
+    (`precision_contract.load_calibration`): the ARTIFACT's own section first (components/<component>/profile.json
+    `routing_reuse.hit_by_slots_per_layer`, embedded by Forge), else the ENGINE STORE beside the calibration records
+    (`<calibration STORE_ROOT>/<model>/<component>.routing_reuse.json` `curve`, written by the expert store at the end
+    of a decode, `core/runtime/routing_reuse`). [(slots, hit)] ascending, or None when neither states one (the price
+    then refuses by name). Card-less tests pin the store empty (`_pinned_machine.pin_no_calibration`)."""
     import json
     from pathlib import Path
     if cache_path is None:
         return None
+    curve = None
     f = Path(cache_path) / "components" / component / "profile.json"
-    if not f.exists():
-        return None
-    sec = (json.loads(f.read_text()) or {}).get("routing_reuse") or {}
-    curve = sec.get("hit_by_slots_per_layer") or {}
+    if f.exists():
+        curve = ((json.loads(f.read_text()) or {}).get("routing_reuse") or {}).get("hit_by_slots_per_layer")
+        src = f
+    if not curve:
+        from neurobrix.core.dtype.calibration import STORE_ROOT
+        from neurobrix.core.runtime.precision_contract import registry_model_name
+        src = Path(STORE_ROOT) / str(registry_model_name(cache_path)) / f"{component}.routing_reuse.json"
+        if src.exists():
+            curve = (json.loads(src.read_text()) or {}).get("curve")
     if not curve:
         return None
     pts = sorted((float(k), float(v)) for k, v in curve.items())
     if any(not 0.0 <= h <= 1.0 for _, h in pts):
-        raise ValueError(f"ZERO FALLBACK: {f}: routing_reuse hit rates outside [0, 1]: {pts}")
+        raise ValueError(f"ZERO FALLBACK: {src}: routing_reuse hit rates outside [0, 1]: {pts}")
     return pts
 
 

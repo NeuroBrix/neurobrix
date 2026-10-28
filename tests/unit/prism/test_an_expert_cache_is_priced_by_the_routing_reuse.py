@@ -9,7 +9,7 @@ import pytest
 import neurobrix.core.prism.expert_topology as ET
 from neurobrix.core.prism import PrismSolver
 from neurobrix.core.prism.loader import load_profile
-from tests.unit.prism._pinned_machine import pin_dedicated_card, pin_host
+from tests.unit.prism._pinned_machine import pin_dedicated_card, pin_host, pin_no_calibration
 from tests.unit.prism.test_a_component_over_the_rung_streams_inside_itself import _input_config, no_door
 
 MODEL = "Qwen3-30B-A3B-Thinking-2507"
@@ -20,6 +20,7 @@ def _solve(monkeypatch, curve):
     no_door(monkeypatch)
     pin_host(monkeypatch, 257530, 200000, "an idle rack host")
     pin_dedicated_card(monkeypatch, 16151, 306, "the rack's V100-16GB cards as measured")
+    pin_no_calibration(monkeypatch)
     monkeypatch.setattr(ET, "routing_reuse", lambda cache_path, comp: curve)
     c, ic = _input_config(MODEL, "triton")
     s = PrismSolver()
@@ -51,3 +52,19 @@ def test_without_the_curve_the_plan_says_what_it_lacks(monkeypatch):
     p, _ = _solve(monkeypatch, None)
     assert p.estimated_s is None and "routing's reuse curve" in p.selection_reason, p.selection_reason[-300:]
     assert p.components["model"].device not in p.components["model"].expert_cards
+
+
+def test_the_curve_is_read_from_the_engine_store_as_the_calibration_is(monkeypatch, tmp_path):
+    """No artifact section: the engine store's `<model>/<component>.routing_reuse.json` (the format the expert store
+    writes at the end of a decode, core/runtime/routing_reuse) — the store pinned to a directory this test writes."""
+    import json
+    import neurobrix.core.dtype.calibration as calibration
+    import neurobrix.core.runtime.precision_contract as pc
+    monkeypatch.setattr(calibration, "STORE_ROOT", tmp_path)
+    monkeypatch.setattr(pc, "registry_model_name", lambda cache_path: "SomeMoE")
+    (tmp_path / "SomeMoE").mkdir()
+    (tmp_path / "SomeMoE" / "model.routing_reuse.json").write_text(json.dumps({"curve": {"8": 0.3, "64": 0.93}}))
+    art = tmp_path / "artifact"
+    (art / "components" / "model").mkdir(parents=True)
+    assert ET.routing_reuse(art, "model") == [(8.0, 0.3), (64.0, 0.93)]
+    assert ET.routing_reuse(art, "other") is None

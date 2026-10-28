@@ -108,6 +108,16 @@ def pin_dedicated_card(monkeypatch, driver_total_mb: int, own_context_mb: int, w
     monkeypatch.setattr(DeviceAllocator, "free_memory_mb", staticmethod(lambda _index: free))
 
 
+def pin_no_calibration(monkeypatch) -> None:
+    """The engine's calibration store (`~/.neurobrix/calibration`, `core/dtype/calibration.STORE_ROOT`) read as EMPTY:
+    a record there narrows the compiled branch's precision contract at plan time (`runtime_widths.plan_time_contract`)
+    and moves a plan by the machine it runs on — DeepSeek-Coder-V2-Lite's compiled lm_head priced 886 MB on the rack
+    (a record in its store) and 1 772 MB on the Mac (none), the same test on the same container (2026-10-28). The
+    records an ARTIFACT carries (its profile.json) still apply: they travel with the container."""
+    import neurobrix.core.dtype.calibration as calibration
+    monkeypatch.setattr(calibration, "STORE_ROOT", Path("/nonexistent-calibration-store"))
+
+
 def impose_rung(monkeypatch, rung_mb) -> None:
     monkeypatch.setenv("NBX_PRISM_BUDGET_MB", str(int(rung_mb)))
 
