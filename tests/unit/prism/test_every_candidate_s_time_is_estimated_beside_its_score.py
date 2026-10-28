@@ -21,7 +21,9 @@ DAG = {"tensors": {"x": {"shape": [1, 64, 32], "dtype": "float16"},
 #: rates were measured (`weight_load_gbps`, 2026-10-27)
 _LOADER = {"F16": {"device": {"cold": 12.0, "warm": 12.0}, "host": {"cold": 12.0, "warm": 12.0}}}
 MEASURED = {"matmul_tflops": {"float16": 100.0}, "memory_gbps": 900.0, "h2d_gbps": 12.0,
-            "weight_load_gbps": {"compiled": _LOADER, "triton": _LOADER}}
+            "weight_load_gbps": {"compiled": _LOADER, "triton": _LOADER},
+            # the decode product at the device bandwidth here: a token costs what it did before it was measured
+            "gemv_gbps": {"compiled": {"float16": 900.0}, "triton": {"float16": 900.0}}}
 RANKED = [(1000.0, "single_gpu", {"transformer": "cuda:0"}, [0]),
           (300.0, "zero3", {"transformer": "zero3:cuda:0"}, [0])]
 

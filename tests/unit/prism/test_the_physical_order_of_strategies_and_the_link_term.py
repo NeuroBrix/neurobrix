@@ -100,7 +100,8 @@ def _facts():
     # loader rates were measured (`weight_load_gbps`, 2026-10-27)
     rate = {"device": {"cold": 8.1, "warm": 8.1}, "host": {"cold": 8.1, "warm": 8.1}}
     return TE.DeviceFacts(matmul_flops={"float16": 42e12}, memory_bps=789e9, h2d_bps=8.1e9,
-                          load_rates={"compiled": {"F16": rate}, "triton": {"F16": rate}})
+                          load_rates={"compiled": {"F16": rate}, "triton": {"F16": rate}},
+                          gemv_rates={"compiled": {"float16": 789.0}, "triton": {"float16": 789.0}})
 
 
 def test_the_link_term_prices_a_boundary_by_the_profile_s_bandwidth():

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Prism prices a generated token at what the engine's decode product reaches**: the hardware profile records, per engine and dtype, the bandwidth a matrix-vector product measured on the card streams its weights at (`gemv_gbps`, measured by `tools/profile_facts.py` and at a new machine's first launch), and a decoding component's per-token time reads it instead of the device's copy bandwidth; a profile without it is refused by name.
 - **A new machine measures what Prism's time estimate needs**: when the generated hardware profile and the architecture's vendor file state no measured facts, the first run probes the card and the host in seconds, and the engine's weight loader records its own rate at its first real loads; until then plans are ranked without a time estimate, and the explanation says so.
 - **A video decoder streamed in temporal chunks can park its causal states in host memory**: when a chunk does not fit the card with its states, each state leaves for the host as soon as it is made and comes back right before the op that first reads it, in every engine (both PyTorch engines and both Triton engines); the plan does it only when nothing fits otherwise. mochi-1-preview's Triton decode now plans on a single 16 GB card.
 - **The Triton engine slices a group-normalised decoder in space exactly too**: the statistics of each group norm are taken once over the whole input and every slice is normalised with them, as the PyTorch engine does.

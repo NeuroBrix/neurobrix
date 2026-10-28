@@ -96,7 +96,9 @@ def main(argv=None) -> int:
     os.environ["NEUROBRIX_REPLAY_CACHE"] = str(out / "replay_cache")
     facts = {"card": a.card, "date": time.strftime("%Y-%m-%d %H:%M:%S %Z"),
              "matmul_tflops": {d: matmul_tflops(d) for d in dtypes}, **copies(),
-             "host_matmul_gflops": host_matmul_gflops(), "host_memory_gbps": host_memory_gbps()}
+             "host_matmul_gflops": host_matmul_gflops(), "host_memory_gbps": host_memory_gbps(),
+             # the decode product's weight bandwidth on each engine (Prism prices a generated token at it)
+             "gemv_gbps": {e: {d: _probe.gemv_gbps(d, e) for d in dtypes} for e in ("triton", "compiled")}}
     if a.system_share:
         facts["system_share"] = system_share_mb()
     if a.storage_file is not None:
@@ -117,6 +119,8 @@ def main(argv=None) -> int:
           f"  h2d_gbps: {facts['h2d_gbps']:.1f}\n  d2h_gbps: {facts['d2h_gbps']:.1f}\n"
           f"  h2d_pageable_gbps: {facts['h2d_pageable_gbps']:.1f}\n  host_matmul_gflops: {facts['host_matmul_gflops']:.0f}\n"
           f"  host_memory_gbps: {facts['host_memory_gbps']:.0f}")
+    print("  gemv_gbps:\n" + "\n".join(f"    {e}: {{" + ", ".join(f"{d}: {v}" for d, v in by.items()) + "}"
+                                        for e, by in facts["gemv_gbps"].items()))
     if "weight_load_gbps" in facts:
         wl = facts["weight_load_gbps"]
         srcs = ", ".join(f"{r['model']}:{r['component']} {r['dtype']} {r['stored_bytes'] / 1e9:.1f} GB"
