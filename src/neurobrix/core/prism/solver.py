@@ -1893,9 +1893,10 @@ class PrismSolver:
     def _live_activation_mb(self, mem: "ComponentMemory") -> float:
         """A component's activation AS THE ARENA HOLDS IT while the component runs WHOLE on a
         device: the profiled peak under the compiled engine's caching allocator, times
-        `PRISM_DEFAULTS["triton_arena_activation_factor"]` under the triton modes.
+        the planned device's measured `memory.triton_arena_activation_factor` under the triton modes
+        (`_triton_arena_factor`), the KV cache inside the figure apart.
 
-        Measured where it is applied and nowhere further: ~1.3x on CogVideoX-5b's VAE tile
+        On the V100 (volta.yml), measured before S4a/S4b: ~1.3x on CogVideoX-5b's VAE tile
         (2026-09, the tiling call site budgets tiles by it) and 1.35x on mochi-1-preview's whole
         VAE at 85 frames 320x576 (profiled 24 561 MB, placed whole on a 32 GB card by the bare
         figure, dead at 25 202 MB live asking 8 493 MB more — 2026-09-26). Read by the three
@@ -1907,9 +1908,34 @@ class PrismSolver:
         if str(getattr(self, "_mode", "compiled")).startswith("triton"):
             # the KV cache inside the figure is one allocation made once, not the arena's activations
             kv_mb = int(getattr(mem, "kv_bytes", 0) or 0) / (1024 * 1024)
-            return ((float(mem.activation_mb) - kv_mb) * float(get_prism_defaults()["triton_arena_activation_factor"])
-                    + kv_mb)
+            return (float(mem.activation_mb) - kv_mb) * self._triton_arena_factor() + kv_mb
         return float(mem.activation_mb)
+
+    def _triton_arena_factor(self) -> float:
+        """The Triton arena's hold over the walked activations while a component runs whole, as the planned profile's
+        vendor file measured it (`memory.triton_arena_activation_factor`, per device: the smallest device's, the one a
+        whole component is judged on first). Unmeasured (null or absent): the plan is refused by name — a factor
+        carried from another device is a guess wearing a number."""
+        profile = getattr(self, "_planned_profile", None)
+        devices = [d for d in (getattr(profile, "devices", None) or [])
+                   if not str(getattr(d, "device_string", "")).startswith("cpu")]
+        if not devices:
+            raise PlanNotComputable("the Triton arena's factor is read from the planned profile's device, and this "
+                                    "plan has no accelerator in its profile")
+        from neurobrix.core.config.loader import vendor_config_for_device
+        dev = min(devices, key=lambda d: d.memory_mb)
+        brand = getattr(getattr(dev, "brand", None), "value", getattr(dev, "brand", None))
+        value = ((vendor_config_for_device(brand, dev.architecture, getattr(dev, "compute_capability", None),
+                                           model=getattr(dev, "name", None)).get("memory") or {})
+                 .get("triton_arena_activation_factor"))
+        if value is None:
+            raise PlanNotComputable(
+                f"{getattr(getattr(dev, 'brand', None), 'value', getattr(dev, 'brand', '?'))}/{dev.architecture}: its "
+                f"vendor file states no measured memory.triton_arena_activation_factor (what the Triton arena holds "
+                f"over the walked activations while a component runs whole), so no Triton plan is priced on it. "
+                f"Measure it: a whole component through the entry point with NBX_LIVE_WATERMARK_TRACE, (allocator live "
+                f"peak - weights) / the walk.")
+        return float(value)
 
     def _phase_peak_carried_mb(self, container, costs: Dict[str, int]) -> float:
         """The dearest phase of the flow (`_flow_phases`, its towers first, the decode last), each with its components

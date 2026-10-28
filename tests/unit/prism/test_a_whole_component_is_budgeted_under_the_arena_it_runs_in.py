@@ -120,7 +120,6 @@ def test_the_vae_is_planned_at_the_width_the_card_measured(monkeypatch):
         getattr(plan, "component_stream", None) or {}), (plan.component_tiling, plan.component_stream)
 
 
-def test_the_factor_is_data_with_its_provenance():
-    from neurobrix.core.config.system import get_prism_defaults
-    d = get_prism_defaults()
-    assert 1.0 < float(d["triton_arena_activation_factor"]) <= 2.0, d
+def test_the_factor_is_the_cards_measured_fact():
+    from neurobrix.core.prism.attention_scratch import vendor_memory_of
+    assert 1.0 < float(vendor_memory_of("nvidia", "volta")["triton_arena_activation_factor"]) <= 2.0
