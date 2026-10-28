@@ -215,8 +215,16 @@ def _watermark_sample(path: str, op_idx: int, op, arena, deferred_bytes) -> None
     except Exception as e:                                   # said, never silent
         print(f"[LIVE_WATERMARK_TRACE error] {e}", flush=True)
 
-@dataclass(frozen=True)
 
+def _static_width(dtype) -> int:
+    """Bytes per element of a dtype name or NBXDtype as the static plan sizes an output (`_plan_static_begin`): the
+    float widths by name; anything unnamed sizes at 4 (fp32, the widest float the engine stores an activation in)."""
+    name = str(getattr(dtype, "name", dtype) or "").replace("torch.", "").lower()
+    return {"float16": 2, "bfloat16": 2, "half": 2, "float32": 4, "float": 4, "float64": 8, "int64": 8,
+            "int32": 4, "int8": 1, "uint8": 1, "bool": 1}.get(name, 4)
+
+
+@dataclass(frozen=True)
 class TensorSlot:
     """Reference to a tensor in the arena by index."""
     slot: int
@@ -3059,6 +3067,201 @@ class TritonSequence:
                     tensor = transfer_tensor(tensor, self.device_idx)
                 self._arena[slot] = tensor
 
+    # -- the static memory plan (S4, docs/design/triton-static-memory-plan.md) -----------------------------------------
+    #: runs RECORDED per shape bucket before its plan is built: an op whose allocations differ between them (a decode
+    #: step's split count, an expert store's routed sizes) is left to the allocator, the others are planned
+    PLAN_RECORDS = 2
+
+    def _plan_key(self):
+        res = getattr(self, "_symbol_resolver", None)
+        bound = tuple(sorted(getattr(res, "_bindings", {}).items())) if res is not None else ()
+        shapes = []
+        for t in self._input_ids:
+            slot = self._tid_to_slot.get(t)
+            v = self._arena[slot] if slot is not None else None
+            shapes.append(tuple(v.shape) if v is not None and hasattr(v, "shape") else None)
+        return bound, tuple(shapes)
+
+    def _plan_release_ws(self) -> None:
+        ws = self.__dict__.pop("_plan_ws", None)
+        if ws is not None:
+            if not DeviceAllocator.plan_retire(ws[1]):
+                return                     # retired: freed by the allocator with its last live slice
+            DeviceAllocator.plan_release(ws[1])
+            DeviceAllocator.sync_device()
+            DeviceAllocator.free_cuda(ws[1])
+
+    def _plan_begin(self):
+        """'record' or 'planned' for this run, or None (no static plan: NBX_STATIC_PLAN unset, a multi-device run)."""
+        if os.environ.get("NBX_STATIC_PLAN") != "1" or self._is_multi_device:
+            return None
+        if os.environ.get("NBX_STATIC_PLAN_MODE", "graph") == "graph":
+            return self._plan_static_begin()
+        plans = self.__dict__.setdefault("_mem_plans", {})
+        key = self._plan_key()
+        self._plan_cur = key
+        st = plans.setdefault(key, {"traces": []})
+        if "table" in st:
+            ws = self.__dict__.get("_plan_ws")
+            if ws is None or ws[0] != key:
+                self._plan_release_ws()
+                self._plan_ws = (key, DeviceAllocator.malloc_cuda(st["size"]), st["size"])
+            DeviceAllocator.plan_apply(self.device_idx, st["table"], self._plan_ws[1], st["size"])
+            return "planned"
+        DeviceAllocator.plan_record(self.device_idx)
+        return "record"
+
+    def _plan_static_begin(self):
+        """S4b — the plan before the FIRST run, from the graph alone (no recording run): every op's outputs that die in
+        the run (the compiled liveness: the op that kills their slot; a protected slot — a weight, a kept input, a graph
+        output, a captured tensor — never dies and is left to the allocator), their element counts at the bound
+        symbols. The workspace is the most such bytes alive at once (`memory_plan.lower_bound`) at the widest width an
+        output may take (the traced one or the compute width, whichever is wider), capped at the device's largest
+        allocation; the allocator places each output as it is allocated (`DeviceAllocator.plan_static_begin`)."""
+        from neurobrix.core.prism.memory_plan import lower_bound
+        key = self._plan_key()
+        plans = self.__dict__.setdefault("_static_plans", {})
+        st = plans.get(key)
+        if st is None:
+            res = getattr(self, "_symbol_resolver", None)
+            tensors = self.dag.get("tensors", {}) or {}
+            dies = {}
+            for op_idx, op in enumerate(self._ops):
+                for sl in op.kill_slots:
+                    dies[sl] = op_idx
+            slot_to_tid = {sl: t for t, sl in self._tid_to_slot.items()}
+            # A slot a VIEW chain hands to a kept slot (a graph output, a protected capture) shares that kept tensor's
+            # bytes and outlives the run with it: never placed (a run output that is a view of a placed intermediate
+            # held the workspace past the run, and every piece of mochi's streamed transformer kept its own).
+            from neurobrix.core.prism.profiler import VIEW_OP_TYPES, ZERO_ALLOC_OP_TYPES
+            killed = set(dies)
+            escapes = {sl for op in self._ops for sl in op.output_slots if sl not in killed}
+            changed = True
+            while changed:
+                changed = False
+                for op in self._ops:
+                    if (op.op_type in VIEW_OP_TYPES or op.op_type in ZERO_ALLOC_OP_TYPES) and \
+                            any(sl in escapes for sl in op.output_slots):
+                        for sl in (op.all_input_slots or ()):
+                            if sl not in escapes:
+                                escapes.add(sl)
+                                changed = True
+            # What the device can give the workspace now: its free memory (an imposed rung bounds it as a card of
+            # that size, `NBX_PRISM_BUDGET_MB`); an output larger than that is never placed — a traced output the
+            # kernel never materialises (an efficient attention's 50 GB of scores in mochi's transformer) would
+            # otherwise size the workspace past the device.
+            room = DeviceAllocator.device_free_bytes(self.device_idx)
+            rung = os.environ.get("NBX_PRISM_BUDGET_MB")
+            if rung:
+                room = min(room, int(float(rung)) * (1 << 20) - DeviceAllocator._cuda_live_bytes.get(self.device_idx, 0))
+            cands, intervals = {}, []
+            for op_idx, op in enumerate(self._ops):
+                for sl in op.output_slots:
+                    last = dies.get(sl)
+                    if last is None or last < op_idx or sl in escapes:
+                        continue
+                    meta = tensors.get(slot_to_tid.get(sl, ""), {}) or {}
+                    try:
+                        numel = 1
+                        for d in meta.get("shape") or []:
+                            numel *= int(res.resolve(d)) if res is not None else int(d)
+                    except Exception:  # noqa: BLE001 — an extent not bound here: that output is the allocator's
+                        continue
+                    # sized at its TRACED width: the workspace is the graph's own figure; an output the dtype engine
+                    # widens takes its true bytes from the workspace if they fit, else from the pool
+                    width = _static_width(meta.get("dtype") or getattr(self, "_compute_dtype", None))
+                    if numel * width > room:
+                        continue
+                    cands.setdefault(op_idx, []).append([numel, last, False])
+                    intervals.append((op_idx, last, numel * width))
+            size = min(lower_bound(intervals), max(0, room))
+            st = plans[key] = {"cands": cands, "size": int(size)}
+            if os.environ.get("NBX_STATIC_PLAN_DIAG") == "1":
+                big = sorted(intervals, key=lambda t: -t[2])[:3]
+                print(f"[StaticPlan] {self.dag.get('component_name')}: {sum(len(v) for v in cands.values())} outputs "
+                      f"placed from the graph in a {size / 2**20:.0f} MB workspace (largest {big})", flush=True)
+        if os.environ.get("NBX_STATIC_PLAN_WS") != "1":
+            # MEASURED on Metal (2026-10-28): the graph-derived workspace placed only a third of a streamed piece's
+            # allocations (the wrappers' temporaries and widened outputs are no graph output) and sat BESIDE the pool —
+            # mochi-1-preview Triton at an 8 GB rung peaked 12 118 MB with it, 9 334 MB with the flush rule alone
+            # (10 034 before); HAT-L x4 9 194 with it, 8 913 alone (native 10 113). So the rule runs alone by default:
+            # no parked block survives a growth of the device; the workspace stays behind NBX_STATIC_PLAN_WS=1.
+            DeviceAllocator.plan_static_begin(self.device_idx, 0, 0, {})
+            return "static"
+        if not st["size"] or not st["cands"]:
+            return None
+        ws = self.__dict__.get("_plan_ws")
+        if ws is None or ws[0] != key:
+            self._plan_release_ws()
+            # ONE allocation: a device grants a single buffer only up to its largest (Metal's maxBufferLength) — a
+            # workspace the device refuses is halved until granted; what no longer fits goes to the pool
+            size = st["size"]
+            while True:
+                try:
+                    self._plan_ws = (key, DeviceAllocator.malloc_cuda(size), size)
+                    break
+                except Exception:  # noqa: BLE001 — the device's refusal of one buffer this large
+                    size //= 2
+                    if size < (256 << 20):
+                        return None
+            st["size"] = size
+        cands = {op: [[n, last, False] for n, last, _t in v] for op, v in st["cands"].items()}
+        DeviceAllocator.plan_static_begin(self.device_idx, self._plan_ws[1], st["size"], cands)
+        return "static"
+
+    def _plan_end(self, ok: bool) -> None:
+        mode, self._plan_mode = getattr(self, "_plan_mode", None), None
+        if mode is None:
+            return
+        if mode == "static":
+            hits, miss, held = DeviceAllocator.plan_static_stop()
+            if os.environ.get("NBX_STATIC_PLAN_DIAG") == "1":
+                print(f"[StaticPlan] {self.dag.get('component_name')}: {hits} allocations placed in the workspace, "
+                      f"{miss} served by the pool, {held} still held at the run's end", flush=True)
+            if True:  # noqa: SIM108 — kept as the block it was
+                # The workspace is the RUN's, like its intermediates: released at its end. Kept per sequence, the
+                # pieces of a streamed component each held theirs between runs — mochi-1-preview's transformer at an
+                # 8 GB rung reached 18 GB of the M4 Pro (2026-10-28 09:33). A slice still alive (a run output that is a
+                # view of a placed intermediate) retires it: the allocator frees it with that slice (`plan_retire`).
+                DeviceAllocator.sync_device()
+                self._plan_release_ws()
+                if DeviceAllocator._pool_enabled:
+                    DeviceAllocator._pool_flush(self.device_idx)   # back to the driver, never parked in the pool
+            return
+        trace = DeviceAllocator._plan_trace
+        DeviceAllocator.plan_stop()
+        if mode != "record" or not ok or trace is None:
+            return
+        st = self._mem_plans[self._plan_cur]
+        st["traces"].append([(r[0], r[1], r[2], r[4]) for r in trace if r[0] >= 0])
+        if len(st["traces"]) < self.PLAN_RECORDS:
+            return
+        from neurobrix.core.prism.memory_plan import assign_offsets
+        by_op = []
+        for tr in st["traces"]:
+            ops = {}
+            for op, k, n, freed in tr:
+                ops.setdefault(op, []).append((k, n, freed))
+            by_op.append(ops)
+        rows = []
+        for op, allocs in by_op[0].items():
+            same = all([(k, n) for k, n, _ in o.get(op, [])] == [(k, n) for k, n, _ in allocs] for o in by_op[1:])
+            if not same:
+                continue                       # this op's allocations move between runs: the allocator serves them
+            for i, (k, n, freed) in enumerate(allocs):
+                ends = [o[op][i][2] for o in by_op]
+                if any(e is None for e in ends):
+                    continue                   # outlives a run (an output, a kept state): never a workspace slice
+                rows.append((op, k, n, max(ends)))
+        offsets, size = assign_offsets([(op, end, n) for op, _k, n, end in rows])
+        st["table"] = {(op, k): (n, off) for (op, k, n, _e), off in zip(rows, offsets)}
+        st["size"] = size
+        st.pop("traces")
+        if os.environ.get("NBX_STATIC_PLAN_DIAG") == "1":
+            live = sum(n for _o, _k, n, _e in rows)
+            print(f"[StaticPlan] {self.dag.get('component_name')}: {len(rows)} allocations planned in "
+                  f"{size / 2**20:.0f} MB (their sum {live / 2**20:.0f} MB)", flush=True)
+
     def defer_inputs(self, providers) -> None:
         """Bind each input of `providers` ({tensor id: () -> tensor}) only right before the FIRST op that reads it, for
         the next run alone. A temporal stream's carried states, parked on the host between two chunks, come back to the
@@ -3225,7 +3428,13 @@ class TritonSequence:
                 if self._is_multi_device:
                     self._run_multi_device(skip_kills, pre_op_callback)
                 else:
-                    self._run_single_device(skip_kills, pre_op_callback)
+                    self._plan_mode = self._plan_begin()
+                    _plan_ok = False
+                    try:
+                        self._run_single_device(skip_kills, pre_op_callback)
+                        _plan_ok = True
+                    finally:
+                        self._plan_end(_plan_ok)
                 if _inv is not None and self._run_skip is None:
                     _inv.end(self._arena)
             except BaseException:
@@ -3701,7 +3910,13 @@ class TritonSequence:
         _key_ops = _key_census.recording()
         _skip = getattr(self, "_run_skip", None)
         _defer = getattr(self, "_deferred_at", None)
+        _plan_on = getattr(self, "_plan_mode", None) is not None
+        # a recording run frees what dies at the op it dies (the queue drained each op, a stream-ordered hand-back
+        # under the pool): the recorded lifetimes are the tensors' own, never the queue's
+        _plan_rec = getattr(self, "_plan_mode", None) in ("record", "static")
         for op_idx, op in enumerate(self._ops):
+            if _plan_on:
+                DeviceAllocator.plan_at_op(op_idx)
             if _defer and op_idx in _defer:
                 self._bind_deferred(op_idx)     # a parked input comes back right before its first reader
             if _skip is not None and _skip[op_idx]:
@@ -4306,7 +4521,7 @@ class TritonSequence:
             # throughput cost, which the pressure gate confines to the case
             # where the alternative is OOM.
             _drain_now = (_deferred_bytes >= _drain_cliff
-                          or len(_deferred) >= _drain_count_limit)
+                          or len(_deferred) >= _drain_count_limit or _plan_rec)
             _pressure = False
             # Under the allocator pool the pressure probe has no object: a
             # pressure drain parks dead blocks in the free-list (no driver

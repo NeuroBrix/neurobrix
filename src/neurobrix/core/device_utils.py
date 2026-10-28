@@ -164,3 +164,43 @@ def device_multinomial(probs, num_samples: int = 1):
         result = torch.multinomial(probs.cpu(), num_samples)
         return result.to(probs.device)
     return torch.multinomial(probs, num_samples)
+
+
+class SampledDevicePeak:
+    """The most a device's driver held over a span, for a runtime that keeps NO peak counter: Apple's MPS answers its
+    driver's current allocation (`torch.mps.driver_allocated_memory`) and nothing about the past, so the native [Peak] of
+    every Metal run read "na" (rule 3: every gate cell writes its peak). A thread reads the driver every `period_s`
+    between `start()` and `stop()`; the peak is the largest reading — what the driver held for this process, caches
+    included, the same quantity the Triton allocator reports for its own driver (`DeviceAllocator.peak_device_bytes`).
+    A runtime that keeps a counter (CUDA's max_memory_reserved) is read directly, never sampled."""
+
+    def __init__(self, read, period_s: float = 0.002):
+        import threading
+        self._read, self._period = read, float(period_s)
+        self.peak = 0
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._loop, name="nbx-device-peak", daemon=True)
+
+    def _loop(self) -> None:
+        while not self._stop.is_set():
+            self.peak = max(self.peak, int(self._read()))
+            self._stop.wait(self._period)
+
+    def start(self) -> "SampledDevicePeak":
+        self.peak = int(self._read())
+        self._thread.start()
+        return self
+
+    def stop(self) -> int:
+        self._stop.set()
+        self._thread.join()
+        self.peak = max(self.peak, int(self._read()))
+        return self.peak
+
+
+def sampled_device_peak() -> Optional[SampledDevicePeak]:
+    """A started sampler of the compiled branch's device when its runtime keeps no peak (MPS), else None."""
+    import torch
+    if torch.cuda.is_available() or not (hasattr(torch, "mps") and torch.backends.mps.is_available()):
+        return None
+    return SampledDevicePeak(torch.mps.driver_allocated_memory).start()
