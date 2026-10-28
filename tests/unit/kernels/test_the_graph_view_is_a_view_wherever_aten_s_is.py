@@ -11,7 +11,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from neurobrix.kernels.dispatch import _view_strides
+from nbxtensor.shape import view_strides as _view_strides
 
 
 def _candidates(shape):
