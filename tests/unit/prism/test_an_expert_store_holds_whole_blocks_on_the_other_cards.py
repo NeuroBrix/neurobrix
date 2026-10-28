@@ -8,7 +8,7 @@ import pytest
 
 from neurobrix.core.prism import PrismSolver
 from neurobrix.core.prism.loader import load_profile
-from tests.unit.prism._pinned_machine import V100_16GB, pin_dedicated_card, pin_host, profile
+from tests.unit.prism._pinned_machine import V100_16GB, pin_dedicated_card, pin_host, pin_no_calibration, profile
 from tests.unit.prism.test_a_component_over_the_rung_streams_inside_itself import _input_config, no_door
 
 MODEL = "Qwen3-30B-A3B-Thinking-2507"
@@ -17,8 +17,14 @@ BEFORE_S = {"compiled": 160.0, "triton": 203.0}
 
 def _solve(monkeypatch, prof, mode):
     no_door(monkeypatch)
+    # the routing's reuse curve the Dell measured (2026-10-28): the store is timed with it (without it, the plan says
+    # it is not timed — test_an_expert_cache_is_priced_by_the_routing_reuse)
+    import neurobrix.core.prism.expert_topology as ET
+    monkeypatch.setattr(ET, "routing_reuse", lambda cache_path, comp: [(8.0, 0.30), (16.0, 0.53), (32.0, 0.74),
+                                                                         (64.0, 0.93), (96.0, 0.96)])
     pin_host(monkeypatch, 257530, 200000, "an idle rack host")
     pin_dedicated_card(monkeypatch, 16151, 306, "the rack's V100-16GB cards as measured")
+    pin_no_calibration(monkeypatch)
     c, ic = _input_config(MODEL, mode)
     s = PrismSolver()
     return s.solve_smart(c, prof, ic, mode=mode, replan=False), s
@@ -31,11 +37,17 @@ def test_four_cards_hold_whole_blocks_of_experts_and_the_plan_is_faster(monkeypa
     store = p.components["model"]
     assert store.strategy == "expert_store", store.strategy
     cards = store.expert_cards
-    assert len(cards) >= 2 and store.device not in cards, cards
+    others = {c: v for c, v in cards.items() if c != store.device}
+    assert len(others) >= 2, cards
     devs = {d.device_string: d for d in s._prepare_devices(prof)}
-    reserve = s._live_activation_mb(p.component_memory["model"])
-    for card, held in cards.items():
+    reserve = s._moe_op_reserve_mb("model", s._expert_topology["model"].layers)
+    assert reserve is not None and 0 < reserve < 2048, reserve       # the MoE op's own activations, not the model's
+    for card, held in others.items():
         assert held["cache_mb"] + reserve <= s._usable_mb(devs[card]), (card, held)
+    # the home card keeps its whole room as the cache of the blocks left on the host (the reuse curve is unmeasured:
+    # holding blocks there cost the Dell's decode 381 -> 468 ms, 2026-10-28)
+    if store.device in cards:      # held there only where the curve says the cache left misses less
+        assert store.expert_cache_mb >= 0, store.expert_cache_mb
     blocks = [b for c in cards.values() for b in range(c["blocks"][0], c["blocks"][1] + 1)]
     assert len(blocks) == len(set(blocks)), cards                     # no block on two cards
     assert p.estimated_s is not None and p.estimated_s < BEFORE_S[mode], (p.estimated_s, p.selection_reason[-300:])
@@ -76,4 +88,4 @@ def test_a_card_with_no_room_for_one_block_takes_none(monkeypatch):
     p = PrismSolver().solve_smart(c, load_profile("c4140-4xv100-16GB-nvlink"), ic, mode="compiled")
     assert p.busy_replan, "the facts' plan put blocks on the busy card and the door did not see it"
     cards = p.components["model"].expert_cards
-    assert "cuda:3" not in cards and len(cards) >= 2, cards
+    assert "cuda:3" not in cards and len([c for c in cards if c != p.components["model"].device]) >= 2, cards

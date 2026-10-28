@@ -1241,8 +1241,9 @@ class PrismSolver:
                 self.__dict__.setdefault("_zero3_residency", {})[name] = (
                     f"usable {self._usable_mb(dev):.0f} MB - held {held_mb:.0f} MB = dense "
                     f"{alloc.resident_weight_mb:.0f} MB + expert cache {alloc.expert_cache_mb:.0f} MB")
+                self.__dict__.setdefault("_expert_mult", {})[name] = mult
                 if not unified:
-                    self._spread_experts(plan, name, alloc, devices, mult)
+                    self._spread_experts(plan, name, alloc, devices, mult, container)
                 continue
             resident_mb = max(0.0, min(room_mb, weight_mb))
             alloc.resident_weight_mb = float(int(resident_mb))
@@ -1250,7 +1251,7 @@ class PrismSolver:
             self.__dict__.setdefault("_zero3_residency", {})[name] = (
                 f"usable {self._usable_mb(dev):.0f} MB - held {held_mb:.0f} MB - window {window_mb:.0f} MB")
 
-    def _spread_experts(self, plan, name: str, alloc, devices, mult: float) -> None:
+    def _spread_experts(self, plan, name: str, alloc, devices, mult: float, container=None) -> None:
         """S3: an expert store whose profile has other cards holds whole blocks' routed experts in THEIR memory
         (`ComponentAllocation.expert_cards`) — every expert of a block resident, so the block's routed weights never
         cross a host link again; the home cache then serves only the blocks left to it. A card takes contiguous blocks
@@ -1264,8 +1265,10 @@ class PrismSolver:
         if topo is None or not topo.layers or not others or any(l.block is None for l in topo.layers):
             return
         mib = 1024 * 1024
-        mem = plan.component_memory.get(name)
-        reserve_mb = self._live_activation_mb(mem) if mem is not None else 0.0
+        reserve_mb = self._moe_op_reserve_mb(name, topo.layers)
+        if reserve_mb is None:
+            mem = plan.component_memory.get(name)
+            reserve_mb = self._live_activation_mb(mem) if mem is not None else 0.0
         placed: Dict[str, float] = {}
         for n, a in plan.components.items():
             for card in (a.expert_cards or {}):
@@ -1284,16 +1287,77 @@ class PrismSolver:
             if taken:
                 cards[card] = {"blocks": [taken[-1].block, taken[0].block], "cache_mb": float(math.ceil(mb)),
                                "experts": sum(l.n_experts for l in taken)}
+        # The HOME card: its room is the cache of the blocks left on the host, and a block it holds WHOLE never misses
+        # but takes that room from the cache every other block shares. Priced by the routing's reuse curve (a measured
+        # fact of the model, `expert_topology.routing_reuse`): the home holds the number of blocks that least expert
+        # bytes cross its host link per token. Without the curve it holds none — the Dell's 4 V100 decode went 381 ->
+        # 468 ms when blocks were held there unpriced (2026-10-28 05:56).
+        from neurobrix.core.prism.expert_topology import routing_reuse, hit_rate
+        curve = routing_reuse(getattr(container, "cache_path", None), name) if container is not None else None
+        floor_mb = max(l.top_k * l.expert_bytes for l in topo.layers) / mib * mult
+        mb, k_best = 0.0, 0
+        if curve and layers:
+            def missed(k: int) -> float:
+                left = layers[:len(layers) - k]
+                block_mb = sum(l.n_experts * l.expert_bytes for l in layers[len(layers) - k:]) / mib * mult
+                cache = alloc.expert_cache_mb - block_mb
+                if cache < (floor_mb if left else 0.0):
+                    return float("inf")
+                if not left:
+                    return 0.0
+                slots = cache / (left[0].expert_bytes / mib * mult) / len(left)
+                return sum(l.top_k * l.expert_bytes * (1.0 - hit_rate(curve, slots)) for l in left)
+            k_best = min(range(len(layers) + 1), key=lambda k: (missed(k), k))
+        if k_best:
+            home = layers[len(layers) - k_best:]
+            del layers[len(layers) - k_best:]
+            mb = sum(l.n_experts * l.expert_bytes for l in home) / mib * mult
+            cards[alloc.device] = {"blocks": [home[0].block, home[-1].block], "cache_mb": float(math.ceil(mb)),
+                                   "experts": sum(l.n_experts for l in home)}
         if not cards:
             return
         alloc.expert_cards = cards
         left_mb = sum(l.n_experts * l.expert_bytes for l in layers) / mib * mult
-        alloc.expert_cache_mb = float(int(min(alloc.expert_cache_mb, left_mb)))
-        plan.total_memory_mb += sum(c["cache_mb"] + reserve_mb for c in cards.values())
+        alloc.expert_cache_mb = float(int(min(alloc.expert_cache_mb - mb, left_mb))) if layers else 0.0
+        plan.total_memory_mb += sum(c["cache_mb"] + reserve_mb for k, c in cards.items() if k != alloc.device)
         logging.getLogger(__name__).info(
             "Prism: %s holds the routed experts of blocks %s on %s; %s serves the other %d block(s) through a %.0f MB "
             "cache", name, {c: v["blocks"] for c, v in cards.items()}, sorted(cards), alloc.device, len(layers),
             alloc.expert_cache_mb)
+
+    def _moe_op_reserve_mb(self, name: str, layers) -> Optional[float]:
+        """What a card running a routed layer's fused MoE op holds beside its experts, at the request: the op's
+        activation inputs and outputs, and its own intermediates — every routed token's gate and up projections
+        (2 x intermediate) and its down product (hidden) at the compute width — the largest over `layers`. None when
+        the request's sizing or the op's shapes are not known (the caller then reserves the component's live peak)."""
+        from neurobrix.core.prism.profiler import ActivationProfiler
+        graph = (self.__dict__.get("_executed_graphs") or {}).get(name)
+        sizing = (self.__dict__.get("_request_sizing") or {}).get(name)
+        if graph is None or sizing is None:
+            return None
+        smap, width, _w = sizing
+        prof = ActivationProfiler(graph)
+        best = 0
+        for l in layers:
+            op = (prof.ops or {}).get(l.op_uid) or {}
+            acts = [t for t in (op.get("input_tensor_ids") or []) + (op.get("output_tensor_ids") or [])
+                    if t in prof.tensors and not (prof.tensors[t].get("is_parameter") or prof.tensors[t].get("is_buffer")
+                                                   or prof.tensors[t].get("constant"))]
+            x = next((t for t in (op.get("input_tensor_ids") or []) if t in acts), None)
+            if x is None:
+                return None
+            shape = prof._resolve_shape(prof.tensors[x], smap)
+            if not shape:
+                return None
+            hidden = int(shape[-1])
+            tokens = 1
+            for d in shape[:-1]:
+                tokens *= int(d)
+            inter = l.expert_bytes // max(1, 3 * hidden * int(width))
+            io = sum(prof._compute_size(prof._resolve_shape(prof.tensors[t], smap), prof.tensors[t], int(width))
+                     for t in acts)
+            best = max(best, io + tokens * l.top_k * (2 * inter + hidden) * int(width))
+        return best / (1024 * 1024)
 
     def _refuse_unheld_expert_files(self, container, name: str, alloc) -> None:
         """Refuses, at plan time and by name, a unified expert store whose routed experts are STORED in a
@@ -2819,10 +2883,19 @@ class PrismSolver:
         self._zero3_resident_budgets(container, plan, devices, profile)
         _held = {n: {b for c in a.expert_cards.values() for b in range(c["blocks"][0], c["blocks"][1] + 1)}
                  for n, a in plan.components.items() if a.expert_cards}
-        if _held and isinstance(plan.estimated_s, float):
+        _stores = {n: float(a.expert_cache_mb) for n, a in plan.components.items()
+                   if a.strategy == "expert_store" and not a.expert_files}
+        if (_held or _stores) and isinstance(plan.estimated_s, float):
             # the chosen plan re-timed with the blocks its other cards hold whole (`_spread_experts`)
             _again = self._estimate_times([(0.0, plan.strategy, allocations, chosen_devices)], container,
-                                          input_config, profile, target_dtype_str, held_blocks=_held).get(plan.strategy)
+                                          input_config, profile, target_dtype_str, held_blocks=_held,
+                                          store_cache_mb=_stores).get(plan.strategy)
+            if not isinstance(_again, float):
+                # the chosen plan cannot be timed without a fact it now needs (the routing's reuse curve): said, never
+                # guessed — the estimate before the cache was sized is not this plan's
+                plan.estimated_s = None
+                plan.time_estimates = {**(plan.time_estimates or {}), plan.strategy: str(_again)}
+                plan.selection_reason = f"{plan.selection_reason} — {_again}"
             if isinstance(_again, float):
                 plan.estimated_s = _again
                 plan.time_estimates = {**(plan.time_estimates or {}), plan.strategy: _again}
@@ -2995,7 +3068,8 @@ class PrismSolver:
                 break
         # The cards an expert store holds whole blocks on (`_spread_experts`) are not the plan's devices, and hold its
         # blocks' experts and the live activations of their MoE ops: the same door, card by card.
-        _cards = {c: v for _a in plan.components.values() for c, v in (_a.expert_cards or {}).items()}
+        _cards = {c: v for _a in plan.components.values() for c, v in (_a.expert_cards or {}).items()
+                  if c != _a.device}
         if _cards and not plan.execution_door:
             _by = {d.device_string: d for d in self._prepare_devices(profile)}
             for _c, _v in sorted(_cards.items()):
@@ -3003,7 +3077,9 @@ class PrismSolver:
                 if _d is None or getattr(_d, "live_free_mb", None) is None:
                     continue
                 _owner = next(n for n, a in plan.components.items() if _c in (a.expert_cards or {}))
-                _planned = float(_v["cache_mb"]) + self._live_activation_mb(plan.component_memory[_owner])
+                _r_mb = self._moe_op_reserve_mb(_owner, (self._expert_topology or {}).get(_owner).layers)
+                _planned = float(_v["cache_mb"]) + (_r_mb if _r_mb is not None
+                                                    else self._live_activation_mb(plan.component_memory[_owner]))
                 _r = _DR(kind="device", capacity_mb=float(_d.capacity_mb), free_mb=float(_d.live_free_mb),
                          unified=False, held_by_others_mb=float(getattr(_d, "external_used_mb", 0.0) or 0.0),
                          measured=True, source=str(getattr(_d, "budget_note", "") or ""))
@@ -3898,6 +3974,7 @@ class PrismSolver:
         self._lm_component_name = lm_component_name
         # {component: ExpertTopology} of the routed components sized below (`expert_topology.py`).
         self._expert_topology = {}
+        self._executed_graphs = {}
         for comp in components:
             source_dtype = comp.get_dominant_dtype()
             # Per-component runtime dtype (the dtype this component ACTUALLY
@@ -3948,6 +4025,8 @@ class PrismSolver:
                     (_lm or {}).get("component_name") or (self._read_defaults(container) or {}).get("lm_component"))
                 if _topo is not None:
                     self._expert_topology[comp.name] = _topo
+                    # the graph its fused MoE ops live in, for what a card running one of them holds (`_moe_op_reserve_mb`)
+                    self.__dict__.setdefault("_executed_graphs", {})[comp.name] = _executed.graph
             if weight_bytes is None:
                 weight_bytes = sum(int(s * dtype_mult)
                                    for s in shard_sizes.get(comp.name, {}).values())
@@ -7412,7 +7491,8 @@ class PrismSolver:
         return candidates
 
     def _estimate_times(self, ranked, container, input_config, profile, dtype: str,
-                        held_blocks: Optional[Dict[str, set]] = None) -> Dict[str, Any]:
+                        held_blocks: Optional[Dict[str, set]] = None,
+                        store_cache_mb: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
         """{strategy: estimated seconds for the request, or why it cannot be estimated} for every ranked candidate
         (`core/prism/time_estimate.py`); {} when no device of the profile carries measured facts. `held_blocks`:
         {routed component: the blocks whose experts a card holds whole} (`_spread_experts`) — those blocks' experts
@@ -7454,7 +7534,20 @@ class PrismSolver:
             topo = (getattr(self, "_expert_topology", None) or {}).get(comp.name)
             if topo is not None and getattr(topo, "layers", None):
                 _held = (held_blocks or {}).get(comp.name) or set()
-                per_token = sum(int(l.top_k) * int(l.expert_bytes) for l in topo.layers if l.block not in _held)
+                _left = [l for l in topo.layers if l.block not in _held]
+                per_token = sum(int(l.top_k) * int(l.expert_bytes) for l in _left)
+                if comp.name in (store_cache_mb or {}) and _left:
+                    # the home cache's misses, at the routing's measured reuse (`expert_topology.routing_reuse`): the
+                    # experts a token routes cross the host link only when the cache does not hold them
+                    from neurobrix.core.prism.expert_topology import routing_reuse, hit_rate
+                    _curve = routing_reuse(getattr(container, "cache_path", None), comp.name)
+                    if not _curve:
+                        return {name: f"not estimated: {comp.name}'s expert cache misses need the routing's reuse curve "
+                                      f"(components/{comp.name}/profile.json routing_reuse), which the artifact does not state"
+                                for _s, name, _a, _d in ranked}
+                    _slot_mb = _left[0].expert_bytes / 2 ** 20 * getattr(self, "_expert_mult", {}).get(comp.name, 1.0)
+                    _slots = float(store_cache_mb[comp.name]) / _slot_mb / len(_left)
+                    per_token = int(sum(int(l.top_k) * int(l.expert_bytes) for l in _left) * (1.0 - hit_rate(_curve, _slots)))
                 w.expert_bytes_per_use = per_token
                 if comp.name in prompt:
                     plen = int(getattr(input_config, "seq_len", 0) or 0)
