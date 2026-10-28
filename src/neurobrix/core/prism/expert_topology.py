@@ -248,3 +248,39 @@ def price_working_set(topologies: Dict[str, ExpertTopology], weight_bytes: Dict[
         "working_set_mb": round((minimum + cache) / MB, 1),
         "components": [t.record() for t in topologies.values()],
     }
+
+
+def routing_reuse(cache_path, component: str) -> Optional[List[Tuple[float, float]]]:
+    """The routing's reuse curve of a routed component, a measured fact of the MODEL carried by its artifact: the
+    `routing_reuse` section of components/<component>/profile.json — `{"hit_by_slots_per_layer": {slots: hit rate},
+    "source": ...}`, the share of a store layer's routed experts found in an LRU cache of that many slots per layer,
+    recorded from a decode (the Dell, Qwen3-30B-A3B, 2026-10-28: 8 -> 0.30, 16 -> 0.53, 32 -> 0.74, 64 -> 0.93,
+    96 -> 0.96). [(slots, hit)] ascending, or None when the artifact states none (the price then refuses by name)."""
+    import json
+    from pathlib import Path
+    if cache_path is None:
+        return None
+    f = Path(cache_path) / "components" / component / "profile.json"
+    if not f.exists():
+        return None
+    sec = (json.loads(f.read_text()) or {}).get("routing_reuse") or {}
+    curve = sec.get("hit_by_slots_per_layer") or {}
+    if not curve:
+        return None
+    pts = sorted((float(k), float(v)) for k, v in curve.items())
+    if any(not 0.0 <= h <= 1.0 for _, h in pts):
+        raise ValueError(f"ZERO FALLBACK: {f}: routing_reuse hit rates outside [0, 1]: {pts}")
+    return pts
+
+
+def hit_rate(curve: List[Tuple[float, float]], slots_per_layer: float) -> float:
+    """The curve read at `slots_per_layer`: linear between its points, 0 hits with no slot, its last rate beyond it
+    (a cache larger than the measured range hits at least as often)."""
+    if slots_per_layer <= 0:
+        return 0.0
+    prev = (0.0, 0.0)
+    for s, h in curve:
+        if slots_per_layer <= s:
+            return prev[1] + (h - prev[1]) * (slots_per_layer - prev[0]) / (s - prev[0])
+        prev = (s, h)
+    return curve[-1][1]
