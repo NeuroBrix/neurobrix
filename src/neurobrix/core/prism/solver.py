@@ -1910,6 +1910,9 @@ class PrismSolver:
         as placed (`costs`, bytes) AND the graph outputs of the components of the phases BEFORE it, which the flow keeps
         until a later phase consumes them (a VLM's tower outputs wait for the language model's splice: 296 MB live on
         MiniCPM-o-4_5 when its language model loads, 2026-10-27). In MB. Without phases: the sum."""
+        # what the request never loads holds nothing at any moment (`_unloaded_by_request`), as `_phase_peak` reads it
+        unloaded = self._unloaded_by_request(container)
+        costs = {n: c for n, c in costs.items() if n not in unloaded}
         phases = self._flow_phases(container)
         if not phases:
             return sum(costs.values()) / (1024 * 1024)
