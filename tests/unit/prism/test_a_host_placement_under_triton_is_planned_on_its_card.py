@@ -66,7 +66,7 @@ def _stub(mode="triton"):
     s._whole_usable_mb = lambda d: 14_000.0
     s._live_activation_mb = lambda m: m.activation_mb
     s._whole_component_mb = lambda c, n, m, d: m.weight_mb + m.activation_mb
-    s._spatial_component_tiling = lambda c, n, m, r: (
+    s._spatial_component_tiling = lambda c, n, m, r, dev=None: (
         {"tiled_activation_bytes": 4_000 * 2 ** 20} if n == "vae" else None)
     s._tiled_component_mb = lambda c, n, m, d, t: m.weight_mb + t["tiled_activation_bytes"] / 2 ** 20
     return s, card

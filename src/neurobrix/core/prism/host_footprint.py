@@ -94,6 +94,12 @@ def _on_host(device) -> bool:
     return str(device).startswith("cpu")
 
 
+def triton_load_copies_bytes(key_sizes: Mapping[str, Mapping[str, int]]) -> int:
+    """What the Triton loader holds in host memory for the tensor it loads at one moment: the largest tensor, as read
+    and as converted (`TRITON_COPIES_PER_TENSOR`), from {component: {weight: stored bytes}}."""
+    return TRITON_COPIES_PER_TENSOR * max((n for ks in key_sizes.values() for n in ks.values()), default=0)
+
+
 def host_footprint(plan, key_sizes: Mapping[str, Mapping[str, int]],
                    shard_sizes: Mapping[str, Mapping[str, int]], engine: str,
                    base_mb: Optional[int], dtype_bytes: Mapping[str, int],
@@ -245,8 +251,7 @@ def host_footprint(plan, key_sizes: Mapping[str, Mapping[str, int]],
         else:
             transient = max(held + kept, default=0)
     else:
-        transient = TRITON_COPIES_PER_TENSOR * max(
-            (n for ks in key_sizes.values() for n in ks.values()), default=0)
+        transient = triton_load_copies_bytes(key_sizes)
     base = int(base_mb) << 20 if base_mb is not None else 0
     if engine == "triton" and device_weight_bytes is not None:
         loaded_or_peak = max(int(device_bytes), int(device_weight_bytes) + transient)

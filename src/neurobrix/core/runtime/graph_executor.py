@@ -3421,6 +3421,14 @@ class GraphExecutor:
 
         effective_skip_kills = bool(skip_kills) if skip_kills is not None else False
         self._triton_seq.run(skip_kills=effective_skip_kills, pre_op_callback=cb)
+        # the runtime's growth outside the allocator, read after this sequence's first pass (its kernels load there),
+        # so the run's height over every component and piece is recorded (core/runtime/runtime_growth.py)
+        if not getattr(self, "_growth_noted", False):
+            self._growth_noted = True
+            from neurobrix.kernels import census as _cs
+            if not _cs.active():        # a census shadow runs no kernel on a card
+                from neurobrix.core.runtime import runtime_growth as _rg
+                _rg.note(device_idx)
         return self._triton_seq.gather_outputs(), self._triton_seq.num_ops
 
     def _run_triton_sequential(self, input_map: dict, device_idx: int,

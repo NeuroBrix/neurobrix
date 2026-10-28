@@ -251,6 +251,9 @@ class ComponentMemory:
     activation_profiled: bool = False
     attention_per_block_bytes: int = 0
     attention_dominates: bool = False
+    # the KV cache inside `activation_bytes` (a language model's): one allocation the state engine makes, never arena
+    # activations — the Triton arena factor leaves it out (`PrismSolver._live_activation_mb`)
+    kv_bytes: int = 0
 
     @property
     def total_bytes(self) -> int:
@@ -862,6 +865,9 @@ class PrismSolver:
         self.oom_reserve_mb = prism_defaults["oom_reserve_mb"]
         #: Strategies whose host side overshot the free memory at the current rung (reset per solve).
         self._host_declined: set = set()
+        #: MB the Triton loader's copies in flight hold of a unified pool, read from the container a solve plans
+        #: (`_solve_at_rung`); None outside a solve — `_rung_part_mb` refuses to read it then.
+        self._load_copies_mb: Optional[float] = None
         #: THE SPREAD OF THE DEVICE READING, measured, at a FIXED point in a
         #: FIXED computation — the same op of the same request, refused three
         #: times, and what the driver said free each time:
@@ -1478,14 +1484,57 @@ class PrismSolver:
             return None
         return memory, scores_budget(memory, dev.memory_mb)
 
-    def _attention_scratch(self, profile):
-        """(batch, heads, Tq, Tk) -> the scores the compiled attention writes at the plan's budget, or None."""
+    def _attention_scratch(self, profile, dtype: str):
+        """(batch, heads, Tq, Tk, D=, Dv=) -> the scores an attention writes while it runs, or None. The compiled
+        engine: what its attention writes at the plan's budget (`attention_scratch.scratch_bytes`). The Triton engines:
+        what THEIR route writes — the wrappers' own `launch_keys.sdpa_route` over the device's vendor facts: the
+        deterministic math route's fp32 scores and their softmax at the value's width, a chunked route one chunk of
+        them, the flash route none. Unpriced, Wan2.2-I2V-A14B's cross-attention (q 2 x 40 x 4 680, k 512, under the V100's
+        math budget) wrote its 731 MB of scores beside a piece cut to the card's edge and ran out of memory (2026-10-28)."""
+        from neurobrix.core.prism.host_footprint import engine_of
+        if engine_of(getattr(self, "_mode", "compiled")) == "triton":
+            return self._triton_attention_scratch(profile, dtype)
         found = self._attention_budget(profile)
         if found is None:
             return None
         from neurobrix.core.prism.attention_scratch import scratch_bytes
         memory, budget = found
-        return lambda b, h, tq, tk: scratch_bytes(memory, budget, b, h, tq, tk)
+        return lambda b, h, tq, tk, **_: scratch_bytes(memory, budget, b, h, tq, tk)
+
+    def _triton_attention_scratch(self, profile, dtype: str):
+        if profile is None or not profile.devices:
+            return None
+        from neurobrix.core.prism.attention_scratch import vendor_memory
+        from neurobrix.core.module import tiling_sizes as _ts
+        from neurobrix.kernels import launch_keys as _lk
+        from neurobrix.kernels.nbx_tensor import NBXDtype
+        # the route the wrappers take on EACH card the plan may run on (`wrappers._sdpa_math_scores_budget_bytes_for`:
+        # the executing device's budget, `tiling_sizes.sdpa_math_scores_budget`), priced at the dearest of them: on a
+        # rack of 16 and 32 GB cards an attention between the two budgets runs the math route on the larger one
+        routes = []
+        for device in profile.devices:
+            memory = vendor_memory(device)
+            routes.append((_ts.sdpa_math_scores_budget(int(memory.get("sdpa_math_max_scores_bytes") or 0),
+                                                       float(memory.get("sdpa_math_scores_device_fraction") or 0.0),
+                                                       device.memory_mb),
+                           int(memory.get("sdpa_math_min_chunk_rows") or 0), int(memory.get("sdpa_math_max_chunks") or 0)))
+        # `dtype`: the dtype the component runs at (`_run_dtype`, the DtypeEngine's resolution the executor receives)
+        width = _itemsize.itemsize(dtype)               # an unknown dtype is refused by name
+        unit_dtype = NBXDtype[dtype]
+
+        def scratch(b, h, tq, tk, D, Dv):
+            unit = _lk.unit_flash_takes(D, unit_dtype, unit_dtype, unit_dtype)
+            worst = 0
+            for budget, min_rows, max_chunks in routes:
+                route, rows = _lk.sdpa_route(b, h, tq, tk, D, Dv, budget, min_rows, max_chunks, unit_flash=unit)
+                if route == "flash":
+                    continue
+                n = tq if route == "math" else rows
+                # `wrappers._math_attention`: two fp32 score buffers at its peak (the scaled scores beside the product,
+                # then the probabilities beside the scores), and the query made contiguous for the first product
+                worst = max(worst, 2 * _ts.sdpa_scores_bytes(b, h, n, tk) + b * h * n * D * width)
+            return worst
+        return scratch
 
     def _op_workspace(self, profile):
         """(op_type, x_shape, x_width, out_width) -> the bytes the compiled engine's implementation of an op holds beside
@@ -1633,8 +1682,31 @@ class PrismSolver:
         return self._rung_part_mb(dev) - self._deferred_drain_mb(dev)
 
     def _rung_part_mb(self, dev: "DeviceState") -> float:
-        """The rung times the whole-component fraction, before any drain is set aside."""
-        return self._effective_capacity_mb(dev) * self.whole_component_fraction
+        """The part of the rung one component may hold, before any drain is set aside: the whole rung under the Triton
+        engines, whose budget holds the runtime's measured growth (`_runtime_growth`) and whose activations price their
+        attention's scores (`_triton_attention_scratch`); the whole-component fraction (0.92, its provenance never
+        recorded) under the compiled engine, whose growth is not measured yet. On the Triton engine the fraction hid
+        those two terms: unpriced, Wan2.2-I2V-A14B's pieces ran out of memory by them; hedged, Janus-Pro-7B's language
+        model was refused whole and ran 3.4x slower on a V100-16GB (2026-10-28)."""
+        return self._part_of_rung_mb(self._effective_capacity_mb(dev), dev.spec)
+
+    def _part_of_rung_mb(self, rung_mb: float, spec) -> float:
+        """The part of a rung of `rung_mb` one component may hold on the device `spec` describes (`_rung_part_mb`, and a
+        temporal stream's tile rung). Under the Triton engines where the runtime's growth during a run is a measured fact
+        (`_runtime_growth_fact`: the budget holds it): the whole rung, less — on a UNIFIED device — the loader's copies in
+        flight, held in the same pool as the device plan while it loads (`host_footprint.triton_load_copies_bytes`).
+        Elsewhere — the compiled engine, a device whose growth is not measured — the whole-component fraction (0.92,
+        its provenance never recorded) stands, said in the budget's note: it is what holds those terms there."""
+        from neurobrix.core.prism.host_footprint import engine_of
+        if engine_of(getattr(self, "_mode", "compiled")) != "triton" or spec is None \
+                or self._runtime_growth_fact(spec) is None:
+            return float(rung_mb) * self.whole_component_fraction
+        if not spec.has_unified_memory:
+            return float(rung_mb)
+        if self._load_copies_mb is None:
+            raise RuntimeError("ZERO FALLBACK: the part of a unified rung is read outside a solve: the loader's copies "
+                               "in flight are the container's (`_solve_at_rung` reads them)")
+        return float(rung_mb) - self._load_copies_mb
 
     def _whole_usable_mb(self, dev: "DeviceState") -> float:
         """What ONE component held WHOLE may occupy on `dev`: the rung's part less the SMALLEST drain
@@ -1695,6 +1767,20 @@ class PrismSolver:
                 .get("memory", {}) or {})
 
     def _runtime_growth(self, spec) -> Tuple[float, str]:
+        """(MB, words) taken off the budget for the runtime's growth during a run (`_runtime_growth_fact`); a device whose
+        growth is not measured: 0, said — its plans keep the whole-component fraction (`_part_of_rung_mb`)."""
+        fact = self._runtime_growth_fact(spec)
+        if fact is not None:
+            return fact
+        from neurobrix.core.prism.host_footprint import engine_of
+        if spec is None or getattr(spec, "architecture", None) is None or str(spec.get_device_string()).startswith("cpu"):
+            return 0.0, ""
+        engine = engine_of(getattr(self, "_mode", "compiled"))
+        key = f"{engine}_runtime_growth_mb"
+        return 0.0, (f"the {engine} runtime's growth during a run is not measured on {spec.architecture} "
+                     f"({key}): not priced, the whole-component fraction holds it")
+
+    def _runtime_growth_fact(self, spec) -> Optional[Tuple[float, str]]:
         """(MB, words): what the engine's runtime holds on an accelerator beyond the context read when the plan starts,
         grown during a run — the kernels' modules and the local memory the driver reserves for them as they load,
         outside every allocator. The vendor file's measured `memory.<engine>_runtime_growth_mb`; unmeasured: 0, said.
@@ -1706,7 +1792,7 @@ class PrismSolver:
         brand = getattr(spec, "brand", None)
         arch = getattr(spec, "architecture", None)
         if arch is None or str(spec.get_device_string()).startswith("cpu"):
-            return 0.0, ""
+            return None
         from neurobrix.core.runtime import runtime_growth
         measured = runtime_growth.load(getattr(self, "_growth_model", None), engine, arch)
         if measured is not None:
@@ -1717,7 +1803,7 @@ class PrismSolver:
         key = f"{engine}_runtime_growth_mb"
         value = memory.get(key)
         if value is None:
-            return 0.0, f"the {engine} runtime's growth during a run is not measured on {arch} ({key}): not priced"
+            return None
         return float(value), (f"less the {engine} runtime's measured growth during a run, {float(value):.0f} MB "
                               f"({key}, the device's envelope: this model's own growth is not measured yet)")
 
@@ -1902,7 +1988,10 @@ class PrismSolver:
         no measurement of the factor exists on them, and a factor applied where it was not
         measured is a guess wearing a number."""
         if str(getattr(self, "_mode", "compiled")).startswith("triton"):
-            return float(mem.activation_mb) * float(get_prism_defaults()["triton_arena_activation_factor"])
+            # the KV cache is one allocation of the state engine, not arena activations: outside the factor
+            kv = float(getattr(mem, "kv_bytes", 0) or 0) / (1024 * 1024)
+            return ((float(mem.activation_mb) - kv) * float(get_prism_defaults()["triton_arena_activation_factor"])
+                    + kv)
         return float(mem.activation_mb)
 
     def _phase_peak_carried_mb(self, container, costs: Dict[str, int]) -> float:
@@ -2250,6 +2339,9 @@ class PrismSolver:
         from neurobrix.core.runtime.precision_contract import registry_model_name as _rmn
         _cp = getattr(container, "cache_path", None)
         self._growth_model = _rmn(_cp) if _cp else None
+        # what the Triton loader's copies in flight hold of a UNIFIED pool beside the device plan (`_rung_part_mb`)
+        from neurobrix.core.prism.host_footprint import triton_load_copies_bytes
+        self._load_copies_mb = triton_load_copies_bytes(self._weight_sizes_by_component(container)) / (1024 * 1024)
         # THE PROFILE THE PLAN IS FOR — what every hardware-dependent price reads (the tile
         # lattice), never the planning process's active profile (stage B P3).
         self._planned_profile = profile
@@ -4156,7 +4248,7 @@ class PrismSolver:
                         # unfloored map.
                         placement_floor=True,
                         in_place_weight_reads=_in_place,
-                        attention_scratch=self._attention_scratch(profile), conv3d_workspace=self._conv3d_workspace(profile), op_workspace=self._op_workspace(profile),
+                        attention_scratch=self._attention_scratch(profile, comp_dtype_str), conv3d_workspace=self._conv3d_workspace(profile), op_workspace=self._op_workspace(profile),
                     )
                     self.__dict__.setdefault("_output_elements", {})[comp.name] = int(ap.output_elements)
                     # The request's symbols, compute width AND each activation's runtime width, for
@@ -4233,7 +4325,7 @@ class PrismSolver:
                                 # The residual-chain sentinels carry nothing.
                                 source_holding_uids=fusion_uids | f2a_uids,
                                 in_place_weight_reads=_in_place,
-                        attention_scratch=self._attention_scratch(profile), conv3d_workspace=self._conv3d_workspace(profile), op_workspace=self._op_workspace(profile),
+                        attention_scratch=self._attention_scratch(profile, comp_dtype_str), conv3d_workspace=self._conv3d_workspace(profile), op_workspace=self._op_workspace(profile),
                                 tiled_convs=conv_tiles,
                             )
                             activation_bytes = ap_tiled.peak_bytes
@@ -4259,7 +4351,7 @@ class PrismSolver:
                                 inplace_adds=inplace_adds,
                                 widths=widths,
                                 in_place_weight_reads=_in_place,
-                        attention_scratch=self._attention_scratch(profile), conv3d_workspace=self._conv3d_workspace(profile), op_workspace=self._op_workspace(profile),
+                        attention_scratch=self._attention_scratch(profile, comp_dtype_str), conv3d_workspace=self._conv3d_workspace(profile), op_workspace=self._op_workspace(profile),
                                 tiled_convs=conv_tiles,
                             )
                             activation_bytes = ap_tiled.peak_bytes
@@ -4350,7 +4442,7 @@ class PrismSolver:
                     comp, activation_bytes, manifest, target_dtype_str, activation_profiled
                 )
 
-            overhead_bytes = int((weight_bytes + activation_bytes) * self.overhead_factor)
+            overhead_bytes = self._overhead_bytes(weight_bytes, activation_bytes)
 
             result[comp.name] = ComponentMemory(
                 component_name=comp.name,
@@ -4362,9 +4454,22 @@ class PrismSolver:
                 activation_profiled=activation_profiled,
                 attention_per_block_bytes=attn_per_block,
                 attention_dominates=attn_dominates,
+                kv_bytes=int(kv_estimate) if (needs_kv_cache and lm_component_name
+                                               and comp.name == lm_component_name) else 0,
             )
 
         return result
+
+    def _overhead_bytes(self, weight_bytes: int, activation_bytes: int) -> int:
+        """The fragmentation reserve beside a component. Under the Triton engines a component's weights land in ONE
+        arena of their exact bytes (`triton/weight_loader.ComponentArena`, one allocation): nothing fragments there, the
+        reserve is its activations' alone. Janus-Pro-7B on a V100-16GB: 659 MB of it was taken on 13 180 MB of weights
+        and refused the language model whole (the run held 14 151 MB; 2026-10-28). The compiled engine loads its weights
+        as tensors in torch's caching allocator: the reserve stays on both."""
+        from neurobrix.core.prism.host_footprint import engine_of
+        if engine_of(getattr(self, "_mode", "compiled")) == "triton":
+            return int(activation_bytes * self.overhead_factor)
+        return int((weight_bytes + activation_bytes) * self.overhead_factor)
 
     def _read_defaults(self, container) -> Optional[Dict]:
         """Read defaults.json from cache."""
@@ -6153,7 +6258,7 @@ class PrismSolver:
                 parked_out = frozenset(outs[s["name"]] for s in decl["states"] if s["name"] in outs) if parked else None
                 peaks[(kind, length, parked)] = int(prof.estimate_peak_memory(
                     input_config=cic, dtype_bytes=dtype_bytes, widths=widths,
-                    attention_scratch=self._attention_scratch(profile), conv3d_workspace=self._conv3d_workspace(profile), op_workspace=self._op_workspace(profile), handed_inputs=True,
+                    attention_scratch=self._attention_scratch(profile, comp_dtype), conv3d_workspace=self._conv3d_workspace(profile), op_workspace=self._op_workspace(profile), handed_inputs=True,
                     deferred_inputs=deferred, parked_outputs=parked_out).peak_bytes)
             return peaks[(kind, length, parked)]
 
@@ -6282,7 +6387,7 @@ class PrismSolver:
                                                  comp_dtype, getattr(self, "_profile", None))
                 tile_cost = int(tprof.estimate_peak_memory(
                     input_config=tic, dtype_bytes=dtype_bytes, widths=widths,
-                    attention_scratch=self._attention_scratch(getattr(self, "_profile", None)),
+                    attention_scratch=self._attention_scratch(getattr(self, "_profile", None), comp_dtype),
                     conv3d_workspace=self._conv3d_workspace(getattr(self, "_profile", None)),
                     op_workspace=self._op_workspace(getattr(self, "_profile", None))).peak_bytes)
         finally:
@@ -6330,7 +6435,7 @@ class PrismSolver:
                         f"request: {self._tiling_declined.get(name)}")
                 self._component_tiling[name] = spec
                 mem.activation_bytes = int(spec["tiled_activation_bytes"])
-                mem.overhead_bytes = int((mem.weight_bytes + mem.activation_bytes) * self.overhead_factor)
+                mem.overhead_bytes = self._overhead_bytes(mem.weight_bytes, mem.activation_bytes)
                 continue
             decl = self._stream_declaration(container, name)
             if decl is None or not decl.get("vendor_chunks"):
@@ -6342,7 +6447,7 @@ class PrismSolver:
                     f"schedule of them is read for this request: {self._stream_declined.get(name)}")
             self._component_stream[name] = spec
             mem.activation_bytes = int(spec["activation_bytes"])
-            mem.overhead_bytes = int((mem.weight_bytes + mem.activation_bytes) * self.overhead_factor)
+            mem.overhead_bytes = self._overhead_bytes(mem.weight_bytes, mem.activation_bytes)
 
     def _tile_only_if_exact(self, comp_name: str, graph: Dict[str, Any], profile_j: Dict[str, Any],
                             full_act: int, rung_mb: int):
@@ -6374,7 +6479,7 @@ class PrismSolver:
 
     def _spatial_component_tiling(
         self, container: "NBXContainer", comp_name: str,
-        mem: ComponentMemory, tile_rung_mb: int,
+        mem: ComponentMemory, tile_rung_mb: int, dev: Optional["DeviceState"] = None,
     ) -> Optional[Dict[str, Any]]:
         """Return a TilingEngine spec when a spatial component (4D/5D input +
         scale config) overflows `budget_bytes` untiled but fits when its
@@ -6419,12 +6524,14 @@ class PrismSolver:
         # component held whole, within the rung. The plan carries it in `component_stream`.
         streams = self.__dict__.setdefault("_component_stream", {})
         if comp_name not in streams and self._stream_declaration(container, comp_name) is not None:
-            # the part of the rung one component held whole may occupy (`_usable_mb`'s fraction; the caller
-            # still checks the chunk and the weights against its device's own figure)
-            part = int(int(tile_rung_mb) * 1024 * 1024 * self.whole_component_fraction)
+            # the part of the rung one component held whole may occupy (`_part_of_rung_mb`, the rule `_usable_mb` reads —
+            # the fraction where no device's facts are given;
+            # the caller still checks the chunk and the weights against its device's own figure), the overhead as a
+            # component held whole prices it (`_overhead_bytes`)
+            part = int(self._part_of_rung_mb(int(tile_rung_mb), dev.spec if dev is not None else None) * 1024 * 1024)
             weights = int(mem.weight_bytes)
             stream = self._temporal_stream(container, comp_name,
-                                           lambda c: (c + weights) * (1.0 + self.overhead_factor) <= part)
+                                           lambda c: c + weights + self._overhead_bytes(weights, c) <= part)
             if stream is not None:
                 streams[comp_name] = stream
                 return {"stream": True, "tiled_activation_bytes": int(stream["activation_bytes"]),
@@ -7069,7 +7176,7 @@ class PrismSolver:
                 # a chunk is the component held whole at the chunk's activations: the whole rule decides
                 # (the rung's whole part, the Triton arena's factor, the device's largest allocation)
                 m = _dc.replace(mem, activation_bytes=int(activation),
-                                overhead_bytes=int((mem.weight_bytes + activation) * self.overhead_factor))
+                                overhead_bytes=self._overhead_bytes(mem.weight_bytes, activation))
                 return self._holds_whole(container, comp_name, m, largest)
             stream = self._temporal_stream(container, comp_name, held_whole_at)
             if stream is not None:
@@ -7077,7 +7184,7 @@ class PrismSolver:
                 shard_map = {s: largest.device_string for s in shard_sizes.get(comp_name, {})}
                 return (largest.device_string, shard_map)
         tiling = self._spatial_component_tiling(
-            container, comp_name, mem, largest.tile_rung_mb or rung_down_mb(largest.free_mb))
+            container, comp_name, mem, largest.tile_rung_mb or rung_down_mb(largest.free_mb), largest)
         if tiling is not None:
             tiled_total_mb = self._tiled_component_mb(container, comp_name, mem, largest, tiling)
             if tiled_total_mb <= usable:
@@ -8113,7 +8220,7 @@ class PrismSolver:
             if whole <= whole_usable:
                 continue
             tiling = self._spatial_component_tiling(
-                container, comp_name, mem, largest.tile_rung_mb or rung_down_mb(largest.free_mb))
+                container, comp_name, mem, largest.tile_rung_mb or rung_down_mb(largest.free_mb), largest)
             tiled_mb = (self._tiled_component_mb(container, comp_name, mem, largest, tiling)
                         if tiling is not None else None)
             if tiled_mb is not None and tiled_mb <= usable:
@@ -8318,7 +8425,7 @@ class PrismSolver:
         ap = profiler.estimate_peak_memory(
             input_config=input_config, dtype_bytes=dtype_bytes, zero_alloc_uids=fusion | f2a | chains,
             inplace_adds=inplace, widths=widths, source_holding_uids=fusion | f2a,
-            in_place_weight_reads=(engine == "triton"), attention_scratch=self._attention_scratch(profile),
+            in_place_weight_reads=(engine == "triton"), attention_scratch=self._attention_scratch(profile, comp_dtype),
             conv3d_workspace=self._conv3d_workspace(profile), op_workspace=self._op_workspace(profile),
             tiled_convs=tiled)
         return int(self._scale_activations_to_request(comp, ap.peak_bytes, input_config)), str(ap.peak_op_uid or "")
@@ -8507,7 +8614,7 @@ class PrismSolver:
             if name in held_whole:
                 continue
             _t = (self._spatial_component_tiling(
-                container, name, mem, target.tile_rung_mb or rung_down_mb(target.free_mb))
+                container, name, mem, target.tile_rung_mb or rung_down_mb(target.free_mb), target)
                 if self._arena_over_allocation(container, name, mem, target) is None else None)
             if _t is not None:
                 _w = mem.weight_mb * target.get_cost_multiplier(self._get_component_dtype(container, name))
@@ -8728,9 +8835,21 @@ class PrismSolver:
                         f"'{comp_name}' has no activation profile at this request (_compute_memory could "
                         f"not profile it) — a partition cut at the trace's shapes would plan a run that "
                         f"is not this one")
+                _extra = dict((getattr(self, "_conv_band_bytes", None) or {}).get(comp_name) or {})
+                # what each attention writes while it runs (`_attention_scratch`, the engine's own route), on the
+                # piece's op peak as the activation profile prices it
+                _scr = self._attention_scratch(profile, self._run_dtype(comp_name))
+                if _scr is not None:
+                    from neurobrix.core.prism.profiler import ActivationProfiler, _is_attention
+                    _ap = ActivationProfiler(graph)
+                    for _uid, _op in (graph.get("ops") or {}).items():
+                        if _is_attention(_op.get("op_type")):
+                            _b = _ap._attention_scratch_of(_op, _sizing[0], _scr)
+                            if _b:
+                                _extra[_uid] = _extra.get(_uid, 0) + int(_b)
                 _cutter = LayerPartitioner(graph, _piece_sizes, symbol_map=_sizing[0],
                                            compute_dtype_bytes=_sizing[1], widths=_sizing[2],
-                                           op_extra=(getattr(self, "_conv_band_bytes", None) or {}).get(comp_name),
+                                           op_extra=_extra or None,
                                            token_split=bool(getattr(self, "_token_split", False)),
                                            swap_values=bool(getattr(self, "_swap_values", False)),
                                            beyond_walls=bool(getattr(self, "_regions_beyond_walls", False)))

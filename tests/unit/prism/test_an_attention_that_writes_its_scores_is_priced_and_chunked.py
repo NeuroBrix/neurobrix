@@ -104,7 +104,7 @@ def test_prism_adds_the_scores_to_the_attentions_in_op_figure():
              "execution_order": ["aten.sdpa::0"], "input_tensor_ids": ["q", "k", "v"], "output_tensor_ids": ["o"]}
     base = ActivationProfiler(graph).estimate_peak_memory(dtype_bytes=4).peak_bytes
     with_scores = ActivationProfiler(graph).estimate_peak_memory(
-        dtype_bytes=4, attention_scratch=lambda b, h, tq, tk: b * h * tq * tk * 4).peak_bytes
+        dtype_bytes=4, attention_scratch=lambda b, h, tq, tk, **_: b * h * tq * tk * 4).peak_bytes
     assert with_scores - base == 1 * 2 * 64 * 64 * 4
 
 
@@ -158,7 +158,7 @@ def test_the_plan_states_the_budget_its_attention_was_priced_at():
         assert plan.components["t"].attention_scores_budget_bytes == want, spec["id"]
         assert plan.components["h"].attention_scores_budget_bytes is None, "a host component computes no device attention"
         if expect:
-            assert s._attention_scratch(prof)(2, 24, 79200, 79200) <= want
+            assert s._attention_scratch(prof, "float16")(2, 24, 79200, 79200) <= want
     s._mode = "triton"
     assert s._attention_budget(profile(APPLE_M4_PRO)) is None, "the Triton engine runs its own attention kernels"
 

@@ -4605,9 +4605,11 @@ def isnan_wrapper(x) :
 
 def nan_to_num_wrapper(x, nan: float = 0.0,
                        posinf: float = 3.4028235e+38,
-                       neginf: float = -3.4028235e+38) :
+                       neginf: float = -3.4028235e+38, inplace: bool = False) :
+    """`inplace`: write over a contiguous `x` (an element-wise map: each element read once, then written) — the math
+    attention's probabilities, whose copy was one more [B*H, Tq, Tk] buffer at its peak."""
     x = x.contiguous()
-    output = NBXTensor.empty_like(x)
+    output = x if inplace else NBXTensor.empty_like(x)
     _set_device(x)
     nan_to_num_forward_kernel[_1d_grid(x.numel())](
         x, output, x.numel(), nan, posinf, neginf,
@@ -7745,7 +7747,7 @@ def _sdpa_math_scores_budget_bytes_for(device_idx) -> int:
                 if getattr(d, "index", None) == int(device_idx)), None)
     if dev is None:
         return base
-    return _ts.sdpa_device_scores_budget(base, frac, dev.memory_mb)
+    return _ts.sdpa_math_scores_budget(base, frac, dev.memory_mb)
 
 
 def _arch_param(section: str, key: str, default):
@@ -8021,7 +8023,12 @@ def _math_attention(q, k, v, attn_mask=None, is_causal=False, scale=None):
     # — for every attention that has no fully-masked row. Mirror of the flash
     # kernel's fully-masked-row guard in kernels/ops/flash_attention.py (the
     # two SDPA paths, math and flash, stay symmetric under R30).
-    p = nan_to_num_wrapper(p, nan=0.0)
+    # The scores die at the softmax and the probabilities are cleaned in place: at most two [B*H, Tq, Tk] buffers
+    # live where four did (the scaled scores, the probabilities and their cleaned copy, all held to the function's
+    # end) — Wan2.2-I2V-A14B's cross-attention asked a third 731 MB block beside 1.3 GB of them on a V100-16GB
+    # (2026-10-28). Same kernels, same values.
+    del scores
+    p = nan_to_num_wrapper(p, nan=0.0, inplace=True)
     # Cast back to value dtype for the second bmm
     if p.nbx_dtype != v_3d.nbx_dtype:
         p = p.to(v_3d.nbx_dtype)
@@ -8029,6 +8036,7 @@ def _math_attention(q, k, v, attn_mask=None, is_causal=False, scale=None):
     # out = p @ v (bmm again returns fp32 on V100). Strided B: v_3d may
     # be the merged bucketed-cache view (row pitch = buffer capacity).
     out_3d = bmm(p, v_3d, allow_strided_b=True)  # [BH, M, D_v]
+    del p
     if out_3d.nbx_dtype != q.nbx_dtype:
         out_3d = out_3d.to(q.nbx_dtype)
 

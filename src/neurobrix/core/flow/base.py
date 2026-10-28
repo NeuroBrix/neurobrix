@@ -297,11 +297,29 @@ def _named_outside_image_gen(flow: Dict[str, Any]) -> set:
     return names
 
 
+def _autoregressive_unloaded(flow: Dict[str, Any], mode: Optional[str], served: bool) -> set:
+    # An IMAGE decode (`generation.type: autoregressive_image`): both engines' handlers load, on demand, exactly the
+    # components its `generation` block names — the language model (`_ensure_weights_loaded(lm_name)`), the head, the
+    # embedding and the aligner (`_create_strategy`), the decoder (`process_output`) — in core/flow/autoregressive.py
+    # and triton/flow/autoregressive.py alike, whatever the mode and on every request of a session. A component of the
+    # flow's order that block does not name (an understanding tower and its aligner) is never loaded. Janus-Pro-7B
+    # triton on a V100-16GB: its `vision_model` (723 MB) and `aligner` (42 MB) were priced in both phases, the decode
+    # phase held 14 967 MB over the 14 965 permitted and the plan went from lazy to zero3, 242 s for 113 (2026-10-28).
+    # A block that leaves one of the five unnamed declares nothing: the handlers then fall on names of their own.
+    gen = flow.get("generation") or {}
+    keys = ("lm_component", "decoder_component", "head_component", "embed_component", "aligner_component")
+    if gen.get("type") != "autoregressive_image" or not all(gen.get(k) for k in keys):
+        return set()
+    named = {gen[k] for k in keys}
+    return {c for c in (flow.get("order") or []) if isinstance(c, str) and c not in named}
+
+
 #: flow type -> the components a request of a given mode NEVER loads, for a single request or a
 #: served session. Prism prices none of them — not in a phase, not beside a streamed component, not in
 #: a sum. A flow type not here declares nothing: every component may be loaded.
 UNLOADED_BY_REQUEST = {
     "vlm": _vlm_unloaded,
+    "autoregressive_generation": _autoregressive_unloaded,
 }
 
 

@@ -271,6 +271,18 @@ def sdpa_device_scores_budget(base_bytes: int, device_fraction: float, device_me
     return min(base_bytes, int(device_memory_mb * 1024 * 1024 * device_fraction))
 
 
+def sdpa_math_scores_budget(base_bytes: int, device_fraction: float, device_memory_mb) -> int:
+    """The math route's scores budget on the device that executes an attention: 0 where the arch states no byte budget
+    (`memory.sdpa_math_max_scores_bytes`: a power-of-two head dim never routes on size), the arch's budget where it
+    states no device fraction (`memory.sdpa_math_scores_device_fraction`), else `sdpa_device_scores_budget`. ONE rule
+    for the wrappers' route (`wrappers._sdpa_math_scores_budget_bytes_for`) and the scratch Prism prices for it."""
+    if not base_bytes:
+        return 0
+    if not device_fraction:
+        return base_bytes
+    return sdpa_device_scores_budget(base_bytes, device_fraction, device_memory_mb)
+
+
 # --- Prism: the op budget and the op-level band factors -------------------------------------------
 
 def op_budget_fraction() -> float:

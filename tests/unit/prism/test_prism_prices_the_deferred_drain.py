@@ -139,8 +139,8 @@ def test_a_component_leaving_less_than_the_floor_is_not_held_whole_under_triton(
     s_c, dev_c = _card(monkeypatch, "compiled")
     s_t, dev_t = _card(monkeypatch, "triton")
     floor = _floor_mb(dev_t)
-    part = s_c._usable_mb(dev_c)
-    mem = _component_of_whole(s_t, dev_t, part - floor / 2)     # leaves half the floor
+    # each engine's own rung part (`_rung_part_mb`: the whole rung under Triton, its fraction under compiled)
+    mem = _component_of_whole(s_t, dev_t, s_t._rung_part_mb(dev_t) - floor / 2)     # leaves half the floor
     placed = _place(s_t, dev_t, mem)
     assert placed is not None
     assert placed[0] == f"zero3:{dev_t.device_string}", (
@@ -148,8 +148,9 @@ def test_a_component_leaving_less_than_the_floor_is_not_held_whole_under_triton(
         f"placed {placed[0]} — the plan the allocator had to rescue")
     # Its plan, held off the card, drains at the profile's cliff.
     assert _plan_cliff(s_t, dev_t, mem, placed[0]) == int(_cliff_mb(dev_t) * MB)
-    # The control: the compiled engine has no queue, and holds the same component whole.
-    assert _place(s_c, dev_c, mem)[0] == dev_c.device_string
+    # The control: the compiled engine has no queue, and holds whole the component leaving half the floor of ITS part.
+    mem_c = _component_of_whole(s_c, dev_c, s_c._rung_part_mb(dev_c) - floor / 2)
+    assert _place(s_c, dev_c, mem_c)[0] == dev_c.device_string
 
 
 def test_the_hot_loop_drains_at_the_plans_cliff_and_the_door_still_pins_it(monkeypatch):
