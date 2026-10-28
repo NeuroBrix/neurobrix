@@ -34,6 +34,7 @@ Triple = Tuple[torch.Tensor, torch.Tensor, torch.Tensor]
 class TorchExpertStore:
     def __init__(self, residency: ExpertResidency, device: torch.device, like: Triple, release=None):
         self.residency = residency
+        self.trace = None     # an ExpertTrace (core/runtime/routing_reuse.py) the store notes each decode call into
         # A unified device (no CUDA streams): a missed expert is copied through ONE host staging
         # buffer per projection, allocated once, never through a device buffer over the file's own
         # pages, and `release(view)` gives the kernel back the expert's pages after each copy
@@ -68,6 +69,8 @@ class TorchExpertStore:
                 ) -> Tuple[Dict[int, Triple], Dict[int, "torch.cuda.Event"]]:
         """({expert: device triple}, {expert: its copy's event}) for the experts `routed` names — an
         event for every miss copied now and for every hit a prefetch is still copying."""
+        if self.trace is not None:
+            self.trace.note(layer, routed)      # the routing reuse curve (core/runtime/routing_reuse.py)
         slots, missed = self.residency.assign(layer, routed)
         events: Dict[int, torch.cuda.Event] = {}
         for e in slots:
@@ -143,6 +146,9 @@ class TorchExpertStore:
             self.bytes_in += s.numel() * s.element_size()
 
     def release(self) -> None:
+        if self.trace is not None:
+            self.trace.write(f"recorded by the compiled expert store's decode ({self.residency.summary()})")
+            self.trace = None
         if self._stream is not None:
             torch.cuda.current_stream(self.device).wait_stream(self._stream)
         if self.residency.hits or self.residency.misses:
