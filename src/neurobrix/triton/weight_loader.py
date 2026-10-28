@@ -26,8 +26,9 @@ import numpy as np
 
 from neurobrix.kernels.nbx_tensor import (
     NBXTensor, NBXDtype, DeviceAllocator, _contiguous_strides, dtype_size,
-    _set_device, float32_to_bf16_bits,
+    _set_device,
 )
+from nbxtensor.dtype.convert import bf16_bits_to_f16, f32_to_bf16_bits
 from .memory_pool import ComponentArena, HostPinnedArena
 # The loader's worker count — one figure for every loader and for Prism's host estimate (torch-free).
 from neurobrix.core.workspace import io_workers, apply_host_mmap_threshold, apply_host_huge_pages
@@ -107,19 +108,18 @@ def _read_bytes(fd: int, offset: int, nbytes: int) -> np.ndarray:
     return buf
 
 
-def _bf16_bits_to_half(u16: np.ndarray) -> np.ndarray:
-    """bf16 bits (uint16) to float16, exactly as `(bits << 16).view(float32).astype(float16)`, the elements split
-    across the loader's workers — the widening ran on one thread for every host-held bf16 weight (a third of
-    Qwen3-30B-A3B's 447 s load, py-spy 2026-10-27)."""
-    src = np.ascontiguousarray(u16).reshape(-1)
-    out = np.empty(u16.shape, dtype=np.float16)
+def _split_across_workers(src: np.ndarray, out: np.ndarray, convert) -> np.ndarray:
+    """`convert(src[a:b], out=flat_out[a:b])` over the loader's worker spans: one conversion of the library run in
+    parallel on a host-held weight — the widening ran on one thread for every host-held bf16 weight (a third of
+    Qwen3-30B-A3B's 447 s load, py-spy 2026-10-27). The split is the loader's; the conversion is nbxtensor's."""
+    flat_src = np.ascontiguousarray(src).reshape(-1)
     flat = out.reshape(-1)
 
     def _one(span):
         a, b = span
-        np.copyto(flat[a:b], (src[a:b].astype(np.uint32) << 16).view(np.float32), casting="unsafe")
+        convert(flat_src[a:b], out=flat[a:b])
 
-    list(_io_pool()[1].map(_one, _spans(src.size, src.itemsize, 1)))
+    list(_io_pool()[1].map(_one, _spans(flat_src.size, flat_src.itemsize, 1)))
     return out
 
 
@@ -504,7 +504,7 @@ def _load_to_pinned_cpu(
         # is fp16.
         raw_u16 = np.frombuffer(raw, dtype=np.uint16).reshape(shape)
         if target_dtype == NBXDtype.float16:
-            arr = _bf16_bits_to_half(raw_u16)
+            arr = _split_across_workers(raw_u16, np.empty(raw_u16.shape, dtype=np.float16), bf16_bits_to_f16)
         else:
             arr = np.ascontiguousarray(raw_u16)
     else:
@@ -523,7 +523,7 @@ def _load_to_pinned_cpu(
         arr = np.ascontiguousarray(arr)
         if target_dtype == NBXDtype.bfloat16 and source_dtype == NBXDtype.float16:
             # fp16 → bf16, rounded to nearest even (fp16 → fp32 is exact)
-            arr = float32_to_bf16_bits(arr.astype(np.float32))
+            arr = f32_to_bf16_bits(arr.astype(np.float32))
         elif target_dtype == NBXDtype.bfloat16 and source_dtype == NBXDtype.float32:
             # fp32 → bf16 rounded to nearest even, the SAME transform the
             # GPU arena loader uses (_load_shard_into_arenas), so the zero3
@@ -535,7 +535,7 @@ def _load_to_pinned_cpu(
             # stored_dtype_in_compute, the one rule shared with the census
             # shadow, so completing this pair keeps the shadow's dtypes and the
             # real run's identical rather than diverging.
-            arr = float32_to_bf16_bits(arr)
+            arr = f32_to_bf16_bits(arr)
 
     # Any remaining source->target pair: cast through numpy.
     #
@@ -718,11 +718,11 @@ def _load_shard_into_arenas(
                 elif (nbx_dtype == NBXDtype.float32
                       and target_dtype == NBXDtype.bfloat16):
                     # fp32 → bf16, rounded to nearest even.
-                    arr = float32_to_bf16_bits(arr)
+                    arr = f32_to_bf16_bits(arr)
                     final_dtype = NBXDtype.bfloat16
                 elif target_dtype != nbx_dtype:
                     # fp16 → bf16, rounded to nearest even (fp16 → fp32 is exact).
-                    arr = float32_to_bf16_bits(arr.astype(np.float32))
+                    arr = f32_to_bf16_bits(arr.astype(np.float32))
                     final_dtype = target_dtype
                 else:
                     final_dtype = target_dtype

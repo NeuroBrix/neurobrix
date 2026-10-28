@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Collection, Dict, List, Mapping, Optional
+from nbxtensor.shape import numel
 
 _PRODUCTS = frozenset({"aten::mm", "aten::addmm", "aten::bmm", "aten::baddbmm", "aten::matmul", "aten::linear"})
 _CONVS = frozenset({"aten::convolution", "aten::_convolution", "aten::conv1d", "aten::conv2d", "aten::conv3d"})
@@ -53,30 +54,24 @@ class Work:
                     self.expert_bytes_per_use * n)
 
 
-def _numel(shape: List[int]) -> int:
-    n = 1
-    for d in shape:
-        n *= int(d)
-    return n
-
 
 def op_flops(kind: str, ins: List[List[int]], outs: List[List[int]], attrs: Mapping[str, Any]) -> int:
     """Two flops per multiply-add of the op, from its resolved operand and output shapes."""
-    out = _numel(outs[0]) if outs and outs[0] else 0
+    out = numel(outs[0]) if outs and outs[0] else 0
     if kind in _PRODUCTS and ins and ins[0]:
         # the contraction is the first operand's last dim (addmm / baddbmm: the second operand, the first is the bias)
         a = ins[1] if kind in ("aten::addmm", "aten::baddbmm") and len(ins) > 1 else ins[0]
         return 2 * out * int(a[-1]) if a else out
     if kind in _CONVS and len(ins) > 1 and ins[1]:
-        return 2 * out * _numel(ins[1][1:])                   # each output element: Cin/groups x kernel taps
+        return 2 * out * numel(ins[1][1:])                   # each output element: Cin/groups x kernel taps
     if kind in _ATTENTION and len(ins) >= 3 and ins[0] and ins[1]:
         q, k = ins[0], ins[1]
         lq, lk, d = int(q[-2]), int(k[-2]), int(q[-1])
-        rows = _numel(q[:-2])
+        rows = numel(q[:-2])
         return 4 * rows * lq * lk * d                         # QK^T and PV
     if kind == "custom::moe_fused":
         h = ins[0] if ins else []
-        tokens = _numel(h[:-1]) if h else 0
+        tokens = numel(h[:-1]) if h else 0
         top_k = int(attrs.get("top_k") or 0)
         per_expert = int(attrs.get("_expert_params") or 0)
         return 2 * tokens * top_k * per_expert
@@ -99,7 +94,7 @@ def component_work(profiler, symbol_map: Dict[str, int], widths: Optional[Mappin
         if tid not in tensors:
             return 0
         if widths and tid in widths:
-            return _numel(shape(tid)) * int(widths[tid])
+            return numel(shape(tid)) * int(widths[tid])
         return profiler._compute_size(shape(tid), tensors[tid], default_dtype_bytes)
 
     def is_weight(tid: str) -> bool:
@@ -118,7 +113,7 @@ def component_work(profiler, symbol_map: Dict[str, int], widths: Optional[Mappin
         attrs = dict(op.get("attributes") or {})
         if op.get("op_type") == "custom::moe_fused":
             ids = attrs.get("expert_gate_weight_ids") or []
-            per = sum(_numel(shape(t)) for key in ("expert_gate_weight_ids", "expert_up_weight_ids",
+            per = sum(numel(shape(t)) for key in ("expert_gate_weight_ids", "expert_up_weight_ids",
                                                    "expert_down_weight_ids") for t in (attrs.get(key) or [])[:1])
             attrs["_expert_params"] = per if ids else 0
         w.flops += op_flops(op.get("op_type", ""), [shape(t) for t in ins], [shape(t) for t in outs], attrs)

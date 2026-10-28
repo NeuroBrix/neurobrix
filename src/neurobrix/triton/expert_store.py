@@ -31,6 +31,7 @@ from typing import Callable, Dict, List, Tuple
 
 from neurobrix.core.runtime.expert_residency import ExpertResidency
 from neurobrix.kernels.nbx_tensor import DeviceAllocator as DA, NBXDtype, NBXTensor, dtype_size
+from nbxtensor.shape import numel
 
 _ALIGN = 256   # every projection starts on a 256-byte boundary (the widest vector load of any backend)
 
@@ -38,12 +39,6 @@ _ALIGN = 256   # every projection starts on a 256-byte boundary (the widest vect
 def _aligned(nbytes: int) -> int:
     return -(-int(nbytes) // _ALIGN) * _ALIGN
 
-
-def _numel(shape) -> int:
-    n = 1
-    for d in shape:
-        n *= int(d)
-    return n
 
 
 class NBXExpertStore:
@@ -78,7 +73,7 @@ class NBXExpertStore:
         if self.in_place:
             return
         # The arena: one allocation for every slot, each projection a 256-byte-aligned view into it.
-        proj_bytes = [_aligned(_numel(s) * dtype_size(d)) for s, d in self._shape]
+        proj_bytes = [_aligned(numel(s) * dtype_size(d)) for s, d in self._shape]
         stride = sum(proj_bytes)
         self._arena = NBXTensor.empty((stride * residency.n_slots,), dtype=NBXDtype.uint8,
                                       device=f"cuda:{self.device_idx}")
@@ -195,7 +190,7 @@ class NBXExpertStore:
         ids = flat_indices if flat_indices._dtype == NBXDtype.int64 else flat_indices.to(NBXDtype.int64)
         expert_slot_assign_kernel[(1,)](ids, self._slot_of, self._owner, self._stamp, self._clock, slot_ids, miss,
                                         base, S, TOP_K=top_k, BLOCK_S=_tr.next_power_of_2(S), num_warps=4)
-        n = [_numel(sh) for sh, _d in self._shape]
+        n = [numel(sh) for sh, _d in self._shape]
         bf16 = self._shape[0][1] == NBXDtype.bfloat16
         CH = 4096
         expert_miss_copy_kernel[(top_k, 3, _tr.cdiv(max(n), CH))](

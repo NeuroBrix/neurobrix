@@ -557,8 +557,10 @@ def _to_numpy_f32(tensor) -> np.ndarray:
     sixteen bits of an fp32 — and lives in `nbx_tensor`, beside the table that
     creates the carrier.
     """
-    from neurobrix.kernels.nbx_tensor import bf16_carrier_to_float32
-    arr = bf16_carrier_to_float32(_to_numpy(tensor))
+    from nbxtensor.dtype.convert import bf16_bits_to_f32
+    arr = _to_numpy(tensor)
+    if isinstance(tensor, NBXTensor) and tensor.nbx_dtype == NBXDtype.bfloat16:
+        arr = bf16_bits_to_f32(arr)
     if arr.dtype in (np.float16, np.float64):
         arr = arr.astype(np.float32)
     return arr

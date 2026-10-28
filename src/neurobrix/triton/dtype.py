@@ -13,6 +13,7 @@ Rules (from PyTorch AT_FORALL_FP32 / AT_FORALL_LOWER_PRECISION_FP):
 from typing import Callable, FrozenSet, Optional
 
 from neurobrix.kernels.nbx_tensor import NBXDtype, NBXTensor
+from nbxtensor.dtype.promotion import promoted as _promoted
 from nbxtensor.dtype import itemsize as _itemsize
 
 
@@ -1066,17 +1067,11 @@ class TritonDtypeEngine:
 
     def _wrap_promote(self, func: Callable) -> Callable:
         """Promote to widest input dtype."""
-        def promote_func(*args, **kwargs):
-            max_size = 0
-            max_dtype = None
-            for a in args:
-                if _is_float_tensor(a):
-                    esz = a.element_size()
-                    if esz > max_size:
-                        max_size = esz
-                        max_dtype = _get_nbx_dtype(a)
-
-            if max_dtype is not None and max_size > 2:
+        def promoted_op(*args, **kwargs):
+            # the rule is nbxtensor's (`dtype.promotion.promoted`), read on the float inputs' dtype names
+            target = _promoted([_get_nbx_dtype(a).name for a in args if _is_float_tensor(a)])
+            if target is not None:
+                max_dtype = NBXDtype[target]
                 new_args = tuple(
                     a.to(max_dtype) if _is_float_tensor(a) and _get_nbx_dtype(a) != max_dtype
                     else a
@@ -1084,7 +1079,7 @@ class TritonDtypeEngine:
                 )
                 return func(*new_args, **kwargs)
             return func(*args, **kwargs)
-        return promote_func
+        return promoted_op
 
 
 # ============================================================================

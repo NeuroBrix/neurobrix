@@ -9,6 +9,8 @@
 #
 # Per entry:
 #   bits           storage bits per element (bytes = bits / 8 for every dense dtype)
+#   kind           float, int, uint, bool or complex — the class the promotion rule reads
+#                  (nbxtensor.dtype.promotion)
 #   safetensors    the dtype code a safetensors header writes for it (spec:
 #                  https://github.com/huggingface/safetensors — `Dtype`), when it has one
 #   autotune_keys  the spellings a launch key / certified directory carries for it
@@ -22,36 +24,36 @@
 
 dtypes:
   # IEEE 754-2008 binary64.
-  float64: {bits: 64, safetensors: F64, autotune_keys: [fp64], without_fp64: float32}
+  float64: {bits: 64, kind: float, safetensors: F64, autotune_keys: [fp64], without_fp64: float32}
   # IEEE 754-2008 binary32.
-  float32: {bits: 32, safetensors: F32, autotune_keys: [fp32]}
+  float32: {bits: 32, kind: float, safetensors: F32, autotune_keys: [fp32]}
   # NVIDIA TF32 (A100 architecture whitepaper): a tensor-core COMPUTE format of 19 significant
   # bits, stored and moved in a full 32-bit fp32 word.
-  tfloat32: {bits: 32}
+  tfloat32: {bits: 32, kind: float}
   # Google Brain bfloat16: the top 16 bits of a binary32.
-  bfloat16: {bits: 16, safetensors: BF16, autotune_keys: [bf16]}
+  bfloat16: {bits: 16, kind: float, safetensors: BF16, autotune_keys: [bf16]}
   # IEEE 754-2008 binary16.
-  float16: {bits: 16, safetensors: F16, autotune_keys: [fp16]}
+  float16: {bits: 16, kind: float, safetensors: F16, autotune_keys: [fp16]}
   # OCP 8-bit Floating Point Specification (OFP8) v1.0, E4M3 (finite, no inf) and E5M2;
   # torch.float8_e4m3fn / torch.float8_e5m2. The fnuz variants appear nowhere in this code.
-  float8_e4m3fn: {bits: 8, safetensors: F8_E4M3}
-  float8_e5m2: {bits: 8, safetensors: F8_E5M2}
+  float8_e4m3fn: {bits: 8, kind: float, safetensors: F8_E4M3}
+  float8_e5m2: {bits: 8, kind: float, safetensors: F8_E5M2}
   # Two's-complement integers of the stated width (C99 <stdint.h>, numpy, torch).
-  int64: {bits: 64, safetensors: I64, autotune_keys: [int64]}
-  int32: {bits: 32, safetensors: I32, autotune_keys: [int32]}
-  int16: {bits: 16, safetensors: I16, autotune_keys: [int16]}
-  int8: {bits: 8, safetensors: I8, autotune_keys: [int8]}
+  int64: {bits: 64, kind: int, safetensors: I64, autotune_keys: [int64]}
+  int32: {bits: 32, kind: int, safetensors: I32, autotune_keys: [int32]}
+  int16: {bits: 16, kind: int, safetensors: I16, autotune_keys: [int16]}
+  int8: {bits: 8, kind: int, safetensors: I8, autotune_keys: [int8]}
   # Unsigned integers of the stated width; uint16/32/64 are carried by launch keys (a bf16 bit
   # carrier, sort and RNG kernels), not by any container.
-  uint64: {bits: 64, autotune_keys: [uint64]}
-  uint32: {bits: 32, autotune_keys: [uint32]}
-  uint16: {bits: 16, autotune_keys: [uint16]}
-  uint8: {bits: 8, safetensors: U8, autotune_keys: [uint8]}
+  uint64: {bits: 64, kind: uint, autotune_keys: [uint64]}
+  uint32: {bits: 32, kind: uint, autotune_keys: [uint32]}
+  uint16: {bits: 16, kind: uint, autotune_keys: [uint16]}
+  uint8: {bits: 8, kind: uint, safetensors: U8, autotune_keys: [uint8]}
   # One byte per element in torch and numpy (no bit packing); `int1` is Triton's spelling.
-  bool: {bits: 8, safetensors: BOOL, autotune_keys: [int1, bool]}
+  bool: {bits: 8, kind: bool, safetensors: BOOL, autotune_keys: [int1, bool]}
   # Two binary32 / two binary64, interleaved [real, imag] (numpy and torch layout).
-  complex64: {bits: 64}
-  complex128: {bits: 128, without_fp64: complex64}
+  complex64: {bits: 64, kind: complex}
+  complex128: {bits: 128, kind: complex, without_fp64: complex64}
 
 # Packed weight encodings: bits per element is a fraction of a byte and the group scales live
 # beside the packed values. Only the encodings this engine executes
