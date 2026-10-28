@@ -439,6 +439,8 @@ class TritonSequence:
     #: zero3 ratchet, `core/strategies/expert_store.py`); the MoE closures read it per call.
     _expert_store = None
     _expert_cards = None      # {layer key: (card, (gate, up, down))} held whole on other cards (S3)
+    _replay_segment = None    # the segment of a decode step replayed in segments (`_expert_segments`), in its signature
+    _replay_advances = True   # this replayed run mirrors the step's advance onto the host's state owners
 
     def __init__(self, dag: dict, device_idx: int = 0,
                  compute_dtype: NBXDtype = NBXDtype.float16,
@@ -3159,27 +3161,78 @@ class TritonSequence:
         self._tail_cut_memo = res
         return res
 
+    def _expert_segments(self):
+        """The decode step of an expert-store sequence with a card-held tail, as segments in op order: each store-served
+        fused MoE op alone, run directly (its routing is read back to the host and its misses copied, every call); every
+        stretch between two of them, and the tail, replayed (`replay.maybe_run`, a plan per segment). Each replayed
+        segment carries its boundary slots — what it reads and does not produce — scanned like inputs at every replay.
+        [(kind, first op, end op, boundary slots, skip mask)], kind in direct | replay | tail; None without a tail."""
+        if "_segments_memo" in self.__dict__:
+            return self._segments_memo
+        res = None
+        tc = self._expert_tail_cut()
+        if tc is not None:
+            cut, tail_boundary = tc
+            held = self._expert_cards or {}
+            meta = self.dag.get("ops") or {}
+            n = len(self._ops)
+            base = self._num_weights + self._num_inputs
+            store = []
+            for i, op in enumerate(self._ops[:cut]):
+                if op.op_type == "custom::moe_fused":
+                    ids = ((meta.get(op.op_uid) or {}).get("attributes") or {}).get("expert_gate_weight_ids") or []
+                    if (ids[0] if ids else None) not in held:
+                        store.append(i)
+            spans, a = [], 0
+            for i in store:
+                if i > a:
+                    spans.append(("replay", a, i))
+                spans.append(("direct", i, i + 1))
+                a = i + 1
+            if cut > a:
+                spans.append(("replay", a, cut))
+            res = []
+            for kind, a, b in spans:
+                boundary = ()
+                if kind == "replay":
+                    produced, bnd = set(), set()
+                    for op in self._ops[a:b]:
+                        bnd.update(sl for sl in op.all_input_slots if sl >= base and sl not in produced)
+                        produced.update(op.output_slots)
+                    boundary = tuple(sorted(bnd))
+                res.append((kind, a, b, boundary, [not (a <= i < b) for i in range(n)]))
+            res.append(("tail", cut, n, tail_boundary, [i < cut for i in range(n)]))
+            print(f"[Replay] {self.dag.get('component_name')}: the decode step in {len(res)} segments — "
+                  f"{sum(1 for r in res if r[0] == 'direct')} store-served MoE ops direct, "
+                  f"{sum(1 for r in res if r[0] != 'direct')} replayed", flush=True)
+        self._segments_memo = res
+        return res
+
     def _run_expert_tail(self, skip_kills, pre_op_callback) -> None:
-        """One decode step as a head run directly (its store-served MoE layers, the zero3 ratchet's callback) and a
-        tail through the replay machinery (`replay.maybe_run`: measured, recorded, verified, then replayed), the tail's
-        boundary slots scanned like inputs (`FrozenPlan.extra_scan`). A tail the replay declines runs directly."""
-        cut, boundary = self._expert_tail_cut()
-        n = len(self._ops)
+        """One decode step of an expert-store sequence with a card-held tail (`_expert_segments`): the store-served MoE
+        ops run directly (with the zero3 ratchet's callback), every other stretch and the tail through the replay
+        machinery (measured, recorded, verified, then replayed). Only the tail mirrors the step's advance onto the
+        host's state owners (`_replay_advances`): a head stretch's replayed launches advance its own layers' device
+        counters exactly as its direct run does. A segment the replay declines runs directly."""
+        from neurobrix.kernels import wrappers as _w
         try:
-            self._run_skip = [i >= cut for i in range(n)]
-            self._run_multi_device(skip_kills, pre_op_callback)
-            self._run_skip = [i < cut for i in range(n)]
-            self._tail_replay, self._replay_extra_scan = True, boundary
-            # the tail is a run of its own for the per-run caches: a rotary table the head widened once per run would
-            # be read by the recorded tail at the head's address of the recorded step (stale at replay); emptied, the
-            # tail widens its own and the recording captures it
-            from neurobrix.kernels import wrappers as _w
-            _w.begin_run()
-            if not _replay.maybe_run(self, skip_kills, None):
-                self._run_multi_device(skip_kills, pre_op_callback)
+            for idx, (kind, a, b, boundary, skip) in enumerate(self._expert_segments()):
+                self._run_skip = skip
+                if kind == "direct":
+                    self._run_multi_device(skip_kills, pre_op_callback)
+                    continue
+                self._tail_replay, self._replay_extra_scan = True, boundary
+                self._replay_segment, self._replay_advances = idx, kind == "tail"
+                # each replayed segment is a run of its own for the per-run caches: a rotary table widened once per
+                # run would be read by a recorded segment at another segment's address of the recorded step (stale
+                # at replay); emptied, the segment widens its own and the recording captures it
+                _w.begin_run()
+                if not _replay.maybe_run(self, skip_kills, None):
+                    self._run_multi_device(skip_kills, pre_op_callback)
         finally:
             self._run_skip = None
             self._tail_replay = False
+            self._replay_segment, self._replay_advances = None, True
 
     def defer_inputs(self, providers) -> None:
         """Bind each input of `providers` ({tensor id: () -> tensor}) only right before the FIRST op that reads it, for

@@ -800,15 +800,20 @@ def _install_seams() -> None:
 class FrozenPlan:
     __slots__ = ("records", "slab", "arena_snapshot", "frozen_inputs",
                  "launches", "actions", "output_slots", "scan_limit",
-                 "graph", "graph_disabled", "extra_scan", "other_slabs", "_crosses")
+                 "graph", "graph_disabled", "extra_scan", "other_slabs", "_crosses", "scan_slots")
 
     def __init__(self, records: List[Tuple[str, tuple]],
                  slab: SlabAllocator,
                  arena_list: List[Optional[NBXTensor]],
                  input_slots: Tuple[int, ...],
                  scan_limit: Optional[int] = None,
-                 extra_scan: Tuple[int, ...] = ()) -> None:
+                 extra_scan: Tuple[int, ...] = (),
+                 scan_slots: Optional[Tuple[int, ...]] = None) -> None:
         self.records = records
+        # the weight/input slots a SEGMENT's ops read (a decode step replayed in segments): its scan visits only those —
+        # nine segments scanning every weight slot cost more a token than they saved (2026-10-28). None: the whole
+        # bound region, as a whole-run plan always did.
+        self.scan_slots = scan_slots
         self.slab = slab  # strong ref pins the slab for the plan's life
         self.arena_snapshot = list(arena_list)
         self.frozen_inputs: Dict[int, NBXTensor] = {}
@@ -857,9 +862,12 @@ class FrozenPlan:
         # indexed per-slot form cost ~19k Arena.__getitem__ per decode
         # token on the 30B row (2026-08-23 host profile).
         from itertools import islice
-        for slot, (frozen, new) in enumerate(
-                islice(zip(self.arena_snapshot, arena._slots),
-                       self.scan_limit)):
+        if self.scan_slots is not None:
+            _snap, _cur = self.arena_snapshot, arena._slots
+            pairs = ((sl, (_snap[sl], _cur[sl])) for sl in self.scan_slots)
+        else:
+            pairs = enumerate(islice(zip(self.arena_snapshot, arena._slots), self.scan_limit))
+        for slot, (frozen, new) in pairs:
             if frozen is None or new is None or new is frozen:
                 continue
             if (tuple(new.shape) != tuple(frozen.shape)
@@ -911,7 +919,7 @@ class FrozenPlan:
         # A plan that crosses cards (an expert store's card-held tail) replays one graph per stretch on one card
         # (`replay_graph.SegmentedPlan`), the engine's choice: its direct replay is ~1 850 Python-driven launches a
         # token (Qwen3-30B-A3B on 4 V100, 2026-10-28: ~60 ms of a 184 ms token for a few ms of kernels).
-        _segmented = self.crosses_cards()
+        _segmented = self.crosses_cards() or self.scan_slots is not None     # a segment of a step: graphs too
         if ((os.environ.get("NBX_REPLAY_GRAPH") == "1" or _segmented)
                 and not self.graph_disabled):
             # Full-list capture. The launch is bracketed by device-wide
@@ -1166,6 +1174,8 @@ def signature(seq) -> Optional[tuple]:
     # (measure/record/verify again) instead of replaying stale extents.
     parts.append(tuple(contrib))
     parts.append(bool(getattr(seq, "_activations_fp16_safe", False)))
+    # a decode step replayed in segments (`TritonSequence._expert_segments`): one plan per segment
+    parts.append(getattr(seq, "_replay_segment", None))
     sig = tuple(parts)
     if os.environ.get("NBX_REPLAY_SIG_DIAG") == "1":
         prev = seq.__dict__.get("_sig_diag_prev")
@@ -1388,8 +1398,9 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
                               f"normal={nor[:8].tolist()}", flush=True)
             return True
         state.replay(seq._arena)
-        for o in owners:
-            o.replay_advance()
+        if getattr(seq, "_replay_advances", True):     # a head segment's launches advanced its own layers only
+            for o in owners:
+                o.replay_advance()
         n_r = seq.__dict__.setdefault("_replay_count", {})
         n_r[sig] = n_r.get(sig, 0) + 1
         if n_r[sig] % 50 == 1:
@@ -1556,10 +1567,16 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
             seq._run_single_device(skip_kills, None)
         return True
 
+    _skip, _lim = getattr(seq, "_run_skip", None), seq._num_weights + seq._num_inputs
+    _read = None
+    if _skip is not None and getattr(seq, "_tail_replay", False):
+        _read = tuple(sorted({sl for i, op in enumerate(seq._ops) if not _skip[i]
+                              for sl in (op.all_input_slots or ()) if sl < _lim}))
     plan = FrozenPlan(records, slab, list(seq._arena),
                       tuple(_input_slot_range(seq)),
-                      scan_limit=seq._num_weights + seq._num_inputs,
-                      extra_scan=tuple(getattr(seq, "_replay_extra_scan", ()) or ()))
+                      scan_limit=_lim,
+                      extra_scan=tuple(getattr(seq, "_replay_extra_scan", ()) or ()),
+                      scan_slots=_read)
     plan.other_slabs = others
     plan.output_slots = tuple(
         s for s in (seq._tid_to_slot.get(tid)
