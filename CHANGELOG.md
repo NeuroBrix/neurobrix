@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`neurobrix autotune certify --keys <file>`** certifies exactly the keys a coverage check found missing (one `<kernel>::<key>` per line), without a census table.
 
 ### Fixed
+- **The cardless key census runs plans that stream a component in slices**: it no longer stops on a weight arena taken outside the allocator pool, nor on a slice taken from a value parked in host memory.
 - **The Triton engine reuses freed GPU memory for requests of other sizes**: its allocator now splits and merges freed blocks, so less memory sits idle and fewer allocations reach the driver.
 - **The PyTorch engine's reported memory peak is the whole run's**: it showed only the last component's peak.
 - **A run sized for a smaller memory rung parks freed memory as a card of that size would** (the Triton allocator's pool cap), so a proof at an imposed rung measures what that card would hold.

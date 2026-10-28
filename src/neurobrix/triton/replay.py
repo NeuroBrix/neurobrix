@@ -669,7 +669,10 @@ def _install_seams() -> None:
 
     CompiledKernel.run = property(_run_prop)
 
-    def malloc_cuda(nbytes: int, dev_idx: Optional[int] = None) -> int:
+    def malloc_cuda(nbytes: int, dev_idx: Optional[int] = None, pooled: bool = True) -> int:
+        # a block outside the pool (a weight arena, `DeviceAllocator.malloc_cuda`) is never a slab's: the driver's
+        if not pooled:
+            return _ORIG_MALLOC(nbytes, dev_idx, pooled=False)
         if STATE.recording and (STATE.slab is not None or STATE.slabs):
             # Route to the slab of the REQUESTED device. Serving a device-1
             # tensor from device 0's slab yields a pointer into the wrong
