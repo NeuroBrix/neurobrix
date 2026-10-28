@@ -273,8 +273,10 @@ class NBXHeldExperts:
                     total += _aligned(t._nbytes)
             shapes[key] = triples
         DA.set_device(self.device_idx)
-        # one allocation per card: it lives as long as the component's store
-        self._arena = NBXTensor.empty((total,), dtype=NBXDtype.uint8, device=f"cuda:{self.device_idx}")
+        # one allocation per card, outside the pool (a long-lived block a pool would let activations split once
+        # freed): it lives as long as the component's store
+        self._arena = NBXTensor.from_raw(DA.malloc_cuda(total, pooled=False), (total,), NBXDtype.uint8, "cuda",
+                                         owns_data=True, device_idx=self.device_idx)
         off = self._arena.data_ptr()
         for key, triples in shapes.items():
             g, u, d = [], [], []
