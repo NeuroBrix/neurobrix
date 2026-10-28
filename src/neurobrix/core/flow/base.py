@@ -261,9 +261,40 @@ def _vlm_unloaded(flow: Dict[str, Any], mode: Optional[str], served: bool) -> se
     # run (`ensure_weights_fn`). A single request of another mode never loads them. A SERVED session
     # may take a speech request later, and a request whose mode is not known may be one: both hold
     # the leg (the bound of `_vlm_phases`).
-    if served or mode is None or requests_speech(mode):
+    if served or mode is None:
         return set()
-    return {c for c in ((flow.get("speech") or {}).get("components") or {}).values() if isinstance(c, str)}
+    out = set()
+    if not requests_speech(mode):
+        out |= {c for c in ((flow.get("speech") or {}).get("components") or {}).values() if isinstance(c, str)}
+    # The generative-image leg (`flow.image_gen`, P-OMNI-GEN) runs on `--mode image` alone, in both engines' VLM
+    # handlers (core/flow/vlm.py and triton/flow/vlm.py: `global.mode == "image"`); its own components load nowhere
+    # else. The language model it conditions on is the VLM's own and stays. Ming-Lite-Omni-1.5 native, a text request
+    # on a V100-16GB: its image denoiser (10 982 MB stored fp32) and connector (5 913 MB) were priced in every phase and
+    # sent the plan from lazy to zero3, twice as slow (lot gate 2026-10-28).
+    if str(mode) != "image":
+        gen = {c for c in ((flow.get("image_gen") or {}).get("components") or {}).values() if isinstance(c, str)}
+        out |= gen - _named_outside_image_gen(flow)
+    return out
+
+
+def _named_outside_image_gen(flow: Dict[str, Any]) -> set:
+    """Every component name the flow's other sections carry (the VLM's towers and language model, the text generation's
+    model and head, the speech leg), read as the strings they are."""
+    names = set()
+
+    def walk(v):
+        if isinstance(v, str):
+            names.add(v)
+        elif isinstance(v, dict):
+            for x in v.values():
+                walk(x)
+        elif isinstance(v, (list, tuple)):
+            for x in v:
+                walk(x)
+    for k, v in flow.items():
+        if k != "image_gen":
+            walk(v)
+    return names
 
 
 #: flow type -> the components a request of a given mode NEVER loads, for a single request or a

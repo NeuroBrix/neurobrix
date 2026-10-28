@@ -24,7 +24,10 @@ def test_janus_triton_on_a_busy_mac_holds_its_language_model_and_streams_only_th
     streamed = sum(seg.weight_bytes for i, seg in enumerate(part.segments) if i not in set(held))
     assert streamed < 0.25 * part.total_weight_bytes, (streamed / 2**20, part.total_weight_bytes / 2**20)
     # what is reloaded per token is priced: far under the all-streamed hour, still above the calm 41 s
-    assert p.estimated_s is not None and 41 < p.estimated_s < 900, (p.estimated_s, p.selection_reason[:300])
+    # what is reloaded per token is priced: far under the all-streamed hour (3 648 s), above the calm plan; measured on
+    # Metal 2 146 s (verdicts/2026_10_28/s5_janus_triton_busy.md) — the loader-rate pricing (lot-2026-10-28) prices
+    # the loads at the measured rates, ~1 400 s here
+    assert p.estimated_s is not None and 41 < p.estimated_s < 2500, (p.estimated_s, p.selection_reason[:300])
     assert p.device_window_mb <= 16732, p.device_window_mb
 
 

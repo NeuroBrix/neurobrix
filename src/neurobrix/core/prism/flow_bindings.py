@@ -106,6 +106,27 @@ class FlowBindings:
         return self._graphs[comp]
 
     # -- the rules ------------------------------------------------------------------------------
+    def prompt_prefill_length(self, comp: str) -> Optional[int]:
+        """The longest pass the flow's GENERATING language model runs: its prompt, at most the prompt budget the
+        state engine sizes its cache with (`defaults.prompt_margin`, the same figure `PrismSolver._estimate_kv_cache_bytes`
+        adds to max_tokens) — every later token is a pass of one row. None for any other component. Unbound, the
+        language model's sequence axis took its TRACE extent under the placement floor, the whole cache at once:
+        Janus-Pro-7B, traced at 704 positions (576 image tokens + 128), priced its text logits over 5 x 704 rows,
+        687.5 MB of a 1 375 MB activation figure, where the run held ~300 MB (the Dell's split on a V100, 2026-10-28)."""
+        gen = self.flow.get("generation") or {}
+        lm = gen.get("lm_component")
+        if not lm or self.cache_path is None:
+            return None
+        from neurobrix.core.prism.time_estimate import resolve_flow_name
+        names = [p.name for p in (self.cache_path / "components").iterdir() if p.is_dir()] \
+            if (self.cache_path / "components").exists() else []
+        if resolve_flow_name(lm, names) != comp:
+            return None
+        defaults_path = self.cache_path / "runtime" / "defaults.json"
+        defaults = json.loads(defaults_path.read_text()) if defaults_path.exists() else {}
+        from neurobrix.core.state.price import DEFAULT_PROMPT_MARGIN
+        return int(defaults.get("prompt_margin", DEFAULT_PROMPT_MARGIN))
+
     def encoder_lengths(self) -> Dict[str, int]:
         """{pre-loop text encoder: tokenized length} of an iterative (diffusion) flow."""
         if self.flow.get("type") != "iterative_process":
@@ -324,6 +345,11 @@ class FlowBindings:
             for sid, info in table.items():
                 if info.get("name") == "batch":
                     out[sid] = pair
+        prefill = self.prompt_prefill_length(comp)
+        if prefill is not None:
+            for sid, info in table.items():
+                if info.get("name") in ("seq_len", "sequence_length"):
+                    out[sid] = prefill
         enc_len = self.encoder_lengths()
         if comp in enc_len:
             for sid, info in table.items():

@@ -108,6 +108,10 @@ def test_janus_is_planned_whole_on_the_idle_mac(monkeypatch):
     mode = "triton"
     no_door(monkeypatch)
     pin_host(monkeypatch, 24576, 18186, "the Mac, idle")
+    # the planning process's own memory, pinned at a fresh run's (resident 99 MB in the judged run): in a long test
+    # process it grows and enters the plan's host side (+463 MB in the full suite, the Mac 2026-10-28)
+    import neurobrix.core.prism.host_footprint as HF
+    monkeypatch.setattr(HF, "process_footprint_now", lambda: 100 << 20)
     p, s = _plan("Janus-Pro-7B", mode)
     assert p.strategy in WHOLE, f"Janus [{mode}] planned {p.strategy!r}"
     assert p.device_window_mb is None
