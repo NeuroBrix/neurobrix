@@ -43,6 +43,9 @@ class DeviceFacts:
     #: the engine's own LOADER, GB landed/s (`weight_load_gbps`, tools/profile_facts.py): {engine: {stored dtype ("BF16",
     #: "F32", "F16"): {"device"|"host": {"cold": GB/s, "warm": GB/s}}}} — read + decode + convert + land; None: not measured
     load_rates: Optional[Mapping[str, Any]] = None
+    #: the weight bandwidth a decode step's matrix-vector product reaches on each ENGINE (`gemv_gbps`,
+    #: core/prism/facts_probe.py): {engine: {dtype: GB/s}}; None: not measured
+    gemv_rates: Optional[Mapping[str, Any]] = None
 
 
 @dataclass(frozen=True)
@@ -65,7 +68,7 @@ def device_facts(measured: Optional[Mapping[str, Any]], where: str) -> DeviceFac
         return DeviceFacts(matmul_flops={k: float(v) * 1e12 for k, v in measured["matmul_tflops"].items()},
                            memory_bps=float(measured["memory_gbps"]) * 1e9, h2d_bps=float(measured["h2d_gbps"]) * 1e9,
                            h2d_pageable_bps=float(pageable) * 1e9 if pageable is not None else None,
-                           load_rates=measured.get("weight_load_gbps"))
+                           load_rates=measured.get("weight_load_gbps"), gemv_rates=measured.get("gemv_gbps"))
     except KeyError as exc:
         raise MissingFact(f"{where}: the measured facts lack {exc.args[0]!r}") from exc
 
@@ -109,6 +112,21 @@ def compute_seconds(work: Work, facts: DeviceFacts, dtype: str) -> float:
     if dtype not in facts.matmul_flops:
         raise MissingFact(f"no measured matmul throughput at {dtype!r} (measured: {sorted(facts.matmul_flops)})")
     return max(work.flops / facts.matmul_flops[dtype], (work.weight_bytes + work.activation_bytes) / facts.memory_bps)
+
+
+def decode_seconds(work: Work, facts: DeviceFacts, dtype: str, engine: Optional[str], dev: str) -> float:
+    """One generated token of a component: weight-bound, its weights streamed at the bandwidth the ENGINE's decode
+    product reaches (`gemv_gbps`), not the device's copy bandwidth — the Triton engine on the M4 Pro reaches ~1/15 of
+    it (Janus-Pro-7B: 41-47 s estimated, 445 s measured, the Mac 2026-10-27 23:02)."""
+    eng = engine or "compiled"
+    try:
+        gemv = float(facts.gemv_rates[eng][dtype]) * 1e9
+    except (TypeError, KeyError) as exc:
+        raise MissingFact(f"{dev}: no measured `gemv_gbps.{eng}.{dtype}` on the hardware profile — a decode streams "
+                          f"its weights at what the engine's matrix-vector product reaches (tools/profile_facts.py)") from exc
+    if dtype not in facts.matmul_flops:
+        raise MissingFact(f"no measured matmul throughput at {dtype!r} (measured: {sorted(facts.matmul_flops)})")
+    return max(work.flops / facts.matmul_flops[dtype], work.weight_bytes / gemv + work.activation_bytes / facts.memory_bps)
 
 
 def _device_of(alloc: Any) -> str:
@@ -206,7 +224,11 @@ def plan_seconds(strategy: str, allocations: Mapping[str, Any], works: Mapping[s
         if dev not in devices:
             raise MissingFact(f"{comp} is placed on {dev!r}, whose facts are not measured")
         f = devices[dev]
-        total += n * compute_seconds(w, f, dtype) + (compute_seconds(first, f, dtype) if first is not None else 0.0)
+        if first is not None:
+            # a generating component: one prompt pass, then `n` weight-bound tokens at the engine's decode bandwidth
+            total += n * decode_seconds(w, f, dtype, engine, dev) + compute_seconds(first, f, dtype)
+        else:
+            total += n * compute_seconds(w, f, dtype)
         loads = passes if strategy in STREAM_EVERY_USE else (int((phases or {}).get(comp, 1))
                                                              if strategy in LOAD_PER_PHASE else 1)
         # A load is the engine's LOADER — read (storage or the page cache), decode, convert to the device dtype, land —

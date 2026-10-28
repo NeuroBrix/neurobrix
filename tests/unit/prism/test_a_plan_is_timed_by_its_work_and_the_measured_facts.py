@@ -14,8 +14,11 @@ from neurobrix.core.prism.work import Work
 LOADER = {"BF16": {"device": {"cold": 12.0, "warm": 12.0}, "host": {"cold": 12.0, "warm": 12.0}}}
 #: every component these plans name, stored in bf16 (the key the loader rate is read for)
 ST = {c: "bfloat16" for c in ("transformer", "lm", "model", "c")}
+#: the decode product measured at the device bandwidth here (900 GB/s), so a token costs what it did before the
+#: engines' decode bandwidth was measured (`gemv_gbps`, 2026-10-27)
+GEMV = {"float16": 900.0}
 GPU = T.DeviceFacts(matmul_flops={"float16": 100e12}, memory_bps=900e9, h2d_bps=12e9,
-                    load_rates={"compiled": LOADER, "triton": LOADER})
+                    load_rates={"compiled": LOADER, "triton": LOADER}, gemv_rates={"compiled": GEMV, "triton": GEMV})
 HOST = T.HostFacts(matmul_flops=1e12, memory_bps=100e9, storage_bps=2e9)
 
 
@@ -138,3 +141,21 @@ def test_a_lazy_plan_s_host_held_component_lands_in_host_memory_then_streams():
     routed = T.plan_seconds("lazy_sequential", {"model": ("zero3:cuda:0", {})}, store, {"model": 2}, {"cuda:0": facts},
                             None, "float16", engine="triton", stored=ST)
     assert abs(routed - use - (8e9 / 0.5e9 + 2 * 1e9 / 8e9)) < 1e-6
+
+
+def test_a_generated_token_streams_its_weights_at_the_engine_s_decode_bandwidth():
+    """A token is weight-bound, priced at what the ENGINE's decode product reaches (`gemv_gbps`), not the device's copy
+    bandwidth (the Triton engine on the M4 Pro reaches ~1/15 of it: Janus-Pro-7B 41-47 s estimated, 445 s measured,
+    the Mac 2026-10-27). What this test would do if the code were wrong: the same seconds at both rates — RED; a
+    profile without the fact estimated anyway — RED."""
+    slow = T.DeviceFacts(matmul_flops={"float16": 100e12}, memory_bps=900e9, h2d_bps=12e9,
+                         load_rates={"triton": LOADER}, gemv_rates={"triton": {"float16": 60.0}})
+    token = {"lm": Work(flops=int(1e9), weight_bytes=int(12e9), activation_bytes=0)}
+    first = {"lm": Work(flops=int(100e12), weight_bytes=int(12e9), activation_bytes=0)}
+    t = T.plan_seconds("single_gpu", {"lm": "cuda:0"}, token, {"lm": 32}, {"cuda:0": slow}, HOST, "float16",
+                       prompt=first, engine="triton", stored=ST)
+    assert t == pytest.approx(32 * 12e9 / 60e9 + 1.0 + 1.0)
+    bare = T.DeviceFacts(matmul_flops={"float16": 100e12}, memory_bps=900e9, h2d_bps=12e9, load_rates={"triton": LOADER})
+    with pytest.raises(T.MissingFact, match="gemv_gbps.triton.float16"):
+        T.plan_seconds("single_gpu", {"lm": "cuda:0"}, token, {"lm": 32}, {"cuda:0": bare}, HOST, "float16",
+                       prompt=first, engine="triton", stored=ST)

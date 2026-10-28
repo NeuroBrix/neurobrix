@@ -11,6 +11,7 @@ supervisor's S2, 2026-10-27 22:20).
   host_matmul_gflops      a float32 GEMM on the host through numpy's BLAS
   host_memory_gbps        a copy of an array in host memory, (read + write) bytes / time
   storage_read_gbps       a sequential read of a named file, its pages dropped first
+  gemv_gbps               a decode step's matrix-vector product on each engine, the weight bytes it streams / time
   weight_load_gbps        the ENGINE'S OWN LOADER on a component's first block weights: bytes landed / time, per engine,
                           per stored dtype, to the card ("device") and to host memory ("host": the host-held path),
                           cold (the shards' pages dropped first) and warm (the same load again)
@@ -47,6 +48,44 @@ def matmul_tflops(dtype: str, sizes: Sequence[int] = (2048, 4096, 8192), warmup:
         per[n] = 2.0 * n * n * n / (ms * 1e-3) / 1e12
         del a, b
     return {"best": max(per.values()), "per_size": per}
+
+
+def gemv_gbps(dtype: str, engine: str, k: int = 4096, n: int = 14336, reps: int = 50) -> float:
+    """The weight bandwidth one decode step's matrix-vector product reaches on the ENGINE: x[1, k] @ W[n, k]^T, the
+    linear of a generated token, timed over `reps` launches; W's bytes / time. A decode is weight-bound and an engine
+    reaches a fraction of the device's copy bandwidth on it (the Mac, 2026-10-27 23:02: Triton on the M4 Pro ~1/15 —
+    Janus-Pro-7B estimated 41-47 s at the device bandwidth, measured 445 s)."""
+    import numpy as np
+    rng = np.random.default_rng(0)
+    npd = {"float16": np.float16, "float32": np.float32, "bfloat16": np.float32}[dtype]
+    xs = np.ascontiguousarray((rng.standard_normal((1, k)) * 0.1).astype(npd))
+    ws = np.ascontiguousarray((rng.standard_normal((n, k)) * 0.05).astype(npd))
+    if engine == "triton":
+        from neurobrix.kernels import launcher as L
+        from neurobrix.kernels import wrappers as W
+        from neurobrix.kernels.nbx_tensor import NBXTensor
+        x = NBXTensor.from_numpy(xs).to_cuda(0).to(dtype)
+        w = NBXTensor.from_numpy(ws).to_cuda(0).to(dtype)
+        wt = w.t()
+        ms = float(L.do_bench(lambda: W.mm(x, wt), warmup=10, rep=reps))
+        nbytes = w.nbytes()
+    else:
+        import torch
+        dev = "cuda" if torch.cuda.is_available() else "mps"
+        td = {"float16": torch.float16, "float32": torch.float32, "bfloat16": torch.bfloat16}[dtype]
+        x = torch.from_numpy(xs).to(dev).to(td)
+        w = torch.from_numpy(ws).to(dev).to(td)
+        sync = torch.cuda.synchronize if dev == "cuda" else torch.mps.synchronize
+        for _ in range(10):
+            torch.mm(x, w.t())
+        sync()
+        t0 = time.perf_counter()
+        for _ in range(reps):
+            torch.mm(x, w.t())
+        sync()
+        ms = (time.perf_counter() - t0) / reps * 1e3
+        nbytes = w.numel() * w.element_size()
+    return round(nbytes / (ms * 1e-3) / 1e9, 1)
 
 
 def _timed_copies(dst: int, src: int, nbytes: int, kind: int, reps: int) -> float:
@@ -224,7 +263,8 @@ def _compiled_loader(root: Path, comp: str, used: List[Path]):
         raise RuntimeError("weight_load_gbps: no accelerator torch can see for the compiled engine's device load")
 
     def tsync():
-        torch.cuda.synchronize() if tdev.startswith("cuda") else torch.mps.synchronize()
+        from neurobrix.core.device_utils import device_sync
+        device_sync(tdev)
 
     def make(host: bool, only: set):
         def load() -> int:

@@ -608,16 +608,22 @@ measured:
   h2d_gbps: 59.3
   d2h_gbps: 66.1
   h2d_pageable_gbps: 66.3
-  # the engines' loaders, GB/s landed — measured 2026-10-27 21:48 CET on the M4 Pro by the Mac, alone (loader-rates-tool 6a8e1175 + eb15e505 cold drop msync MS_INVALIDATE): Janus-Pro-7B:language_model BF16 3.1 GB, CogVideoX-2b:transformer F16 3.0 GB, Kokoro-82M:bert F32 0.02 GB (noisy, re-measure owed); compiled F16 host predates the pin fix 8d294144
+  # the engines' loaders, GB/s landed — measured 2026-10-27 21:48 CET on the M4 Pro by the Mac, alone (loader-rates-tool 6a8e1175 + eb15e505 cold drop msync MS_INVALIDATE): Janus-Pro-7B:language_model BF16 3.1 GB, CogVideoX-2b:transformer F16 3.0 GB, F32 re-measured 2026-10-28 01:1x on stable 58b39d7e on PixArt-XL-2-1024-MS:transformer F32 2.4 GB (the Mac, results/loader_f32_2026_10_28/run.log); compiled F16 host predates the pin fix 8d294144
   weight_load_gbps:
     triton:
       BF16: {device: {cold: 2.38, warm: 12.28}, host: {cold: 1.55, warm: 3.0}}
       F16: {device: {cold: 2.4, warm: 6.38}, host: {cold: 3.17, warm: 5.51}}
-      F32: {device: {cold: 1.02, warm: 3.52}, host: {cold: 0.9, warm: 2.13}}
+      F32: {device: {cold: 1.43, warm: 4.0}, host: {cold: 1.56, warm: 4.09}}
     compiled:
       BF16: {device: {cold: 1.56, warm: 10.07}, host: {cold: 1.37, warm: 10.45}}
       F16: {device: {cold: 1.67, warm: 7.21}, host: {cold: 72.35, warm: 360.69}}
-      F32: {device: {cold: 0.41, warm: 1.29}, host: {cold: 0.59, warm: 2.01}}
+      F32: {device: {cold: 0.82, warm: 5.21}, host: {cold: 0.85, warm: 5.94}}
+  # the decode-shaped matvec (x[1,4096] @ W[14336,4096]^T, 50 launches) per engine and dtype, GB/s of weights read —
+  # measured 2026-10-28 01:46-01:56 CET on the M4 Pro (card 0) by the Mac, alone, the VM off, gemv-facts cfd9e2ff
+  # (tools/profile_facts.py --card 0 --dtypes float16,bfloat16,float32; atelier results/gemv_2026_10_28/run.log)
+  gemv_gbps:
+    triton: {float16: 65.0, bfloat16: 67.5, float32: 73.2}
+    compiled: {float16: 247.3, bfloat16: 260.3, float32: 256.0}
 host_measured:
   source: "measured 2026-10-25 18:37:27 CET on the M4 Pro host, alone (tools/profile_facts.py)"
   host_matmul_gflops: 3125

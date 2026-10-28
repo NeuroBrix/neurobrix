@@ -207,15 +207,11 @@ def _reset_cuda_peak(device) -> None:
     worst op (a whole-component plan prints no segment line). The counter's reading so far is kept first: the run's
     [Peak] line read only the LAST component's peak (Flex.1-alpha native: 792 MB said, 12 466 MB held by its
     transformer, the lot gate's registers, 2026-10-27)."""
-    dev = str(device or "")
-    if not dev.startswith("cuda"):
-        return
-    import torch
-    if torch.cuda.is_available():
-        idx = int(dev.split(":")[1]) if ":" in dev else torch.cuda.current_device()
-        _RESERVED_PEAK_BEFORE_RESET[idx] = max(_RESERVED_PEAK_BEFORE_RESET.get(idx, 0),
-                                               int(torch.cuda.max_memory_reserved(idx)))
-        torch.cuda.reset_peak_memory_stats(idx)
+    from neurobrix.core.device_utils import device_reset_peak
+    got = device_reset_peak(str(device or "") or None)       # None: the allocator keeps no peak (MPS, the CPU)
+    if got is not None:
+        idx, peak = got
+        _RESERVED_PEAK_BEFORE_RESET[idx] = max(_RESERVED_PEAK_BEFORE_RESET.get(idx, 0), peak)
 
 
 def process_peak_reserved(idx: int) -> int:
@@ -236,27 +232,22 @@ def _left_after_release(device, mode) -> str:
         from neurobrix.kernels.nbx_tensor import DeviceAllocator as DA
         idx = int(dev.split(":")[1]) if ":" in dev else 0
         return f"; the device still holds {DA._cuda_live_bytes.get(idx, 0) / 2**20:.0f} MB live"
-    import torch
-    if dev.startswith("cuda") and torch.cuda.is_available():
-        idx = int(dev.split(":")[1]) if ":" in dev else torch.cuda.current_device()
-        return f"; the device still holds {torch.cuda.memory_allocated(idx) / 2**20:.0f} MB allocated"
-    if dev.startswith("mps") and hasattr(torch, "mps"):
-        return (f"; the device still holds {torch.mps.current_allocated_memory() / 2**20:.0f} MB allocated "
-                f"(driver {torch.mps.driver_allocated_memory() / 2**20:.0f} MB)")
-    return ""
+    from neurobrix.core.device_utils import device_allocator_figures
+    f = device_allocator_figures(dev or None)
+    if "allocated_mb" not in f:
+        return ""
+    driver = f" (driver {f['driver_mb']:.0f} MB)" if "driver_mb" in f else ""
+    return f"; the device still holds {f['allocated_mb']:.0f} MB allocated{driver}"
 
 
 def _cuda_peak_since_load(device, mode) -> str:
     """', peak allocated since its load N MB' on the compiled branch on CUDA; '' elsewhere (MPS keeps no peak; the
     Triton branch never imports torch)."""
-    dev = str(device or "")
-    if str(mode or "").startswith("triton") or not dev.startswith("cuda"):
+    if str(mode or "").startswith("triton"):
         return ""
-    import torch
-    if not torch.cuda.is_available():
-        return ""
-    idx = int(dev.split(":")[1]) if ":" in dev else torch.cuda.current_device()
-    return f", peak allocated since its load {torch.cuda.max_memory_allocated(idx) / 2**20:.0f} MB"
+    from neurobrix.core.device_utils import device_allocator_figures
+    f = device_allocator_figures(str(device or "") or None)
+    return f", peak allocated since its load {f['peak_allocated_mb']:.0f} MB" if "peak_allocated_mb" in f else ""
 
 
 def _held_line(loaded, device) -> str:
@@ -280,15 +271,12 @@ def _held_line(loaded, device) -> str:
             continue
         seen.add(key)
         nbytes += t.untyped_storage().nbytes() if hasattr(t, "untyped_storage") else t.numel() * t.element_size()
-    dev = str(device or "")
+    from neurobrix.core.device_utils import device_allocator_figures
+    f = device_allocator_figures(str(device or "") or None)
     alloc = ""
-    if dev.startswith("cuda") and torch.cuda.is_available():
-        idx = int(dev.split(":")[1]) if ":" in dev else torch.cuda.current_device()
-        alloc = (f"; device allocated {torch.cuda.memory_allocated(idx) / 2**20:.0f} MB, "
-                 f"reserved {torch.cuda.memory_reserved(idx) / 2**20:.0f} MB")
-    elif dev.startswith("mps") and hasattr(torch, "mps"):
-        alloc = (f"; device allocated {torch.mps.current_allocated_memory() / 2**20:.0f} MB, "
-                 f"driver {torch.mps.driver_allocated_memory() / 2**20:.0f} MB")
+    if "allocated_mb" in f:
+        held = (f"reserved {f['reserved_mb']:.0f} MB" if "reserved_mb" in f else f"driver {f['driver_mb']:.0f} MB")
+        alloc = f"; device allocated {f['allocated_mb']:.0f} MB, {held}"
     return f"{n} tensors, {nbytes / 2**20:.0f} MB, {on_host} on the host{alloc}"
 
 

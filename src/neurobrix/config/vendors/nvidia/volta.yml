@@ -559,6 +559,10 @@ measured:
   h2d_gbps: 8.1
   d2h_gbps: 3.7
   h2d_pageable_gbps: 4.6
+  # a decode step's matrix-vector product, GB/s of weights streamed — measured 2026-10-27 23:4x CET on the rack, card 0, alone (core/prism/facts_probe.gemv_gbps: x[1,4096] @ W[14336,4096]^T, 50 launches; W's bytes / time)
+  gemv_gbps:
+    triton: {float16: 763.2, float32: 822.4}
+    compiled: {float16: 694.8, float32: 846.0}
   # the engines' loaders, GB/s landed — measured 2026-10-27 21:57-21:59 CET on the rack, card 0, alone (tools/profile_facts.py --weights, loader-rates-tool 4ee138b0 on the loader of 93b01e1c): Qwen3-30B-A3B:model BF16, Wan2.2-I2V-A14B:transformer F32, Sana_1600M:transformer F16, 3 GB each, cold = pages evicted (posix_fadvise DONTNEED)
   weight_load_gbps:
     triton:

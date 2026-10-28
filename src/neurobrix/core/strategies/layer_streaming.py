@@ -52,12 +52,10 @@ def _reset_segment_peak(seg_exec) -> None:
     """The compiled branch on CUDA counts its peak from the segment's start, so the line says THIS segment's worst
     op: an allocator keeps what that op needed, and the figures at the end cannot tell it from a fragmented cache."""
     dev = str(getattr(seg_exec, "device", "") or "")
-    if str(getattr(seg_exec, "mode", "")).startswith("triton") or not dev.startswith("cuda"):
+    if str(getattr(seg_exec, "mode", "")).startswith("triton"):
         return
-    import torch
-    if torch.cuda.is_available():
-        from neurobrix.core.runtime.graph_executor import _reset_cuda_peak
-        _reset_cuda_peak(dev)                 # the run's peak kept before the counter restarts
+    from neurobrix.core.runtime.graph_executor import _reset_cuda_peak
+    _reset_cuda_peak(dev)                     # the run's peak kept before the counter restarts (none kept on MPS)
 
 
 def _segment_memory_line(seg_exec) -> str:
@@ -77,16 +75,14 @@ def _segment_memory_line(seg_exec) -> str:
         idx = int(dev.split(":")[1]) if ":" in dev else 0
         return (f"device live {DA._cuda_live_bytes.get(idx, 0) / 2**20:.0f} MB, "
                 f"pool cached {DA._pool_cached_bytes.get(idx, 0) / 2**20:.0f} MB")
-    import torch
-    if dev.startswith("cuda") and torch.cuda.is_available():
-        idx = int(dev.split(":")[1]) if ":" in dev else torch.cuda.current_device()
-        return (f"device allocated {torch.cuda.memory_allocated(idx) / 2**20:.0f} MB, "
-                f"reserved {torch.cuda.memory_reserved(idx) / 2**20:.0f} MB, "
-                f"peak allocated {torch.cuda.max_memory_allocated(idx) / 2**20:.0f} MB")
-    if dev.startswith("mps") and hasattr(torch, "mps"):
-        return (f"device allocated {torch.mps.current_allocated_memory() / 2**20:.0f} MB, "
-                f"driver {torch.mps.driver_allocated_memory() / 2**20:.0f} MB")
-    return f"no device allocator figures on {dev or 'this device'}"
+    from neurobrix.core.device_utils import device_allocator_figures
+    f = device_allocator_figures(dev or None)
+    if "allocated_mb" not in f:
+        return f"no device allocator figures on {dev or 'this device'}"
+    if "reserved_mb" in f:
+        return (f"device allocated {f['allocated_mb']:.0f} MB, reserved {f['reserved_mb']:.0f} MB, "
+                f"peak allocated {f['peak_allocated_mb']:.0f} MB")
+    return f"device allocated {f['allocated_mb']:.0f} MB, driver {f['driver_mb']:.0f} MB"
 
 class LayerStreamingStrategy(ExecutionStrategy):
     """One segment resident at a time, inside a single component."""
