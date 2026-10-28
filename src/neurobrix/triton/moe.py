@@ -823,6 +823,28 @@ def execute_moe_fused(
             DeviceAllocator.ensure_triton_device(act_dev)
             return output
 
+    # STEP 2c: the same SIMT band for half-precision experts (fp16/bf16, S3 2026-10-28): at one token the grouped GEMM
+    # below carries one real row per 16-row tile — Qwen3-30B-A3B's fp16 experts decoded at ~70 GB/s, 52 ms of GPU a
+    # token on 4 V100 (nsys). Single device, M == 1, unquantized, the experts' element type the tables point at.
+    if (M == 1 and not tables.quantized and len(tables.device_experts) == 1
+            and gate_weights[0]._dtype in (NBXDtype.float16, NBXDtype.bfloat16)):
+        dev = next(iter(tables.device_experts))
+        if dev != act_dev:
+            DeviceAllocator.set_device(dev)
+            DeviceAllocator.ensure_triton_device(dev)
+            hidden_states = _xfer(hidden_states, dev)
+            flat_scores = _xfer(flat_scores, dev)
+            flat_indices = _xfer(flat_indices, dev)
+        output = _moe_decode_vec_half_pass(hidden_states, tables, dev, flat_indices, flat_scores, top_k, K, N_gate,
+                                           gate_weights[0]._dtype == NBXDtype.bfloat16)
+        if dev != act_dev:
+            output = _xfer(output, act_dev)
+        if len(orig_shape) == 3:
+            output = output.reshape(orig_shape)
+        DeviceAllocator.set_device(act_dev)
+        DeviceAllocator.ensure_triton_device(act_dev)
+        return output
+
     # ================================================================
     # STEP 3: Align tokens by expert (sorting)
     # ================================================================
@@ -1046,6 +1068,42 @@ def _moe_decode_vec_pass(hidden_states, tables, dev, flat_indices,
         dsg, dsn,
         TOP_K=top_k, BLOCK_N=BND, BLOCK_K=BK, GROUP=128, PACK=8,
         num_warps=WD, num_stages=ST)
+    return out32.to(dt).reshape(1, K)
+
+
+#: The half band's launch shapes on sm_70, measured on the rack (V100-SXM2 card 1, Qwen3-30B-A3B's 2048 x 768 fp16
+#: experts, top 8 of 128, synthetic weights, `do_bench` of the whole routed call, 2026-10-28): the ladder BLOCK_N
+#: {16,32,64} x BLOCK_K {64,128,256} x warps {2,4,8} spans 193-240 us a call (~10 us run-to-run noise); 32/128/4 sits in
+#: the leading group (193-212 us, ~375-390 GB/s of expert weights) — the grouped GEMM it replaces took ~1.2 ms.
+_HALF_VEC = {"gateup": {"BLOCK_N": 32, "BLOCK_K": 128, "num_warps": 4},
+             "down": {"BLOCK_N": 32, "BLOCK_K": 128, "num_warps": 4}}
+
+
+def _moe_decode_vec_half_pass(hidden_states, tables, dev, flat_indices, flat_scores, top_k, K, N_gate, bf16):
+    """The SIMT decode band for half-precision experts (`moe_decode_vec` half kernels): gateup with SwiGLU, the down
+    projection with the expert axis on the grid writing router-weighted partials, their fixed-order sum. hidden [1, K]
+    -> [1, K] in hidden's dtype."""
+    import triton as _tr
+    from neurobrix.kernels.ops.moe_decode_vec import (
+        moe_gateup_vec_half_kernel, moe_down_split_vec_half_kernel, moe_part_reduce_kernel)
+    from neurobrix.kernels.nbx_tensor import _set_device
+
+    dt = hidden_states._dtype
+    x = hidden_states.reshape(K)
+    h = NBXTensor.empty((top_k, N_gate), dtype=NBXDtype.float32, device=f"cuda:{dev}")
+    part = NBXTensor.empty((top_k, K), dtype=NBXDtype.float32, device=f"cuda:{dev}")
+    out32 = NBXTensor.empty((K,), dtype=NBXDtype.float32, device=f"cuda:{dev}")
+    gu, dn = _HALF_VEC["gateup"], _HALF_VEC["down"]
+    _set_device(h)
+    moe_gateup_vec_half_kernel[(top_k, _tr.cdiv(N_gate, gu["BLOCK_N"]))](
+        x, flat_indices, tables.gate_ptrs[dev], tables.up_ptrs[dev], h, K, N_gate,
+        tables.gate_stride_bk[dev], tables.gate_stride_bn[dev],
+        BLOCK_N=gu["BLOCK_N"], BLOCK_K=gu["BLOCK_K"], W_BF16=bool(bf16), num_warps=gu["num_warps"])
+    moe_down_split_vec_half_kernel[(top_k, _tr.cdiv(K, dn["BLOCK_N"]))](
+        h, flat_indices, flat_scores, tables.down_ptrs[dev], part, N_gate, K,
+        tables.down_stride_bk[dev], tables.down_stride_bn[dev],
+        BLOCK_N=dn["BLOCK_N"], BLOCK_K=dn["BLOCK_K"], W_BF16=bool(bf16), num_warps=dn["num_warps"])
+    moe_part_reduce_kernel[(_tr.cdiv(K, 256),)](part, out32, K, TOP_K=top_k, BLOCK_N=256, num_warps=2)
     return out32.to(dt).reshape(1, K)
 
 

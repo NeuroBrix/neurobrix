@@ -268,3 +268,85 @@ def moe_part_reduce_kernel(
     for e in tl.static_range(TOP_K):
         acc += tl.load(part_ptr + e * N + offs_n, mask=mask_n, other=0.0)
     tl.store(out_ptr + offs_n, acc, mask=mask_n)
+
+
+# ---------------------------------------------------------------------------
+# Half-precision experts (fp16 / bf16), the fifth member (S3, 2026-10-28).
+#
+# The same band for experts stored in half precision: at M=1 the grouped GEMM
+# ran Qwen3-30B-A3B's decode (fp16 experts, 8 of 128, 2048 x 768) at 0.35 ms a
+# call for ~24 MB of weights (~70 GB/s, nsys on 4 V100, 52 ms of GPU a token);
+# every 16-row tile carried one real row. Same grids as the int4 member — the
+# expert axis on the grid for both projections, SwiGLU in the gateup epilogue,
+# the router-weighted partials summed in fixed order by moe_part_reduce_kernel —
+# with the weight tile read as stored (no dequant) and every product accumulated
+# in fp32. W_BF16 selects the element type the pointer tables point at.
+# ---------------------------------------------------------------------------
+
+
+@triton.jit
+def moe_gateup_vec_half_kernel(
+    x_ptr,            # [K] activation
+    topk_ids_ptr,     # [TOP_K] int — active expert ids, fixed order
+    gate_tab, up_tab,  # [E] int64 — expert weight ptrs ([N, K] or [K, N] by the strides)
+    h_ptr,            # [TOP_K, N] fp32 out — silu(gate) * up
+    K, N,
+    stride_wk, stride_wn,
+    BLOCK_N: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+    W_BF16: tl.constexpr,
+):
+    pid_e = tl.program_id(0).to(tl.int64)
+    pid_n = tl.program_id(1).to(tl.int64)
+    eid = tl.load(topk_ids_ptr + pid_e).to(tl.int64)
+    wty = tl.bfloat16 if W_BF16 else tl.float16
+    g_w = tl.cast(tl.load(gate_tab + eid), tl.pointer_type(wty), bitcast=True)
+    u_w = tl.cast(tl.load(up_tab + eid), tl.pointer_type(wty), bitcast=True)
+    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    mask_n = offs_n < N
+    acc_g = tl.zeros((BLOCK_N,), dtype=tl.float32)
+    acc_u = tl.zeros((BLOCK_N,), dtype=tl.float32)
+    for kc in range(0, tl.cdiv(K, BLOCK_K)):
+        offs_k = kc * BLOCK_K + tl.arange(0, BLOCK_K)
+        mask_k = offs_k < K
+        mask = mask_k[:, None] & mask_n[None, :]
+        a = tl.load(x_ptr + offs_k, mask=mask_k, other=0.0).to(tl.float32)
+        w_off = offs_k[:, None] * stride_wk + offs_n[None, :] * stride_wn
+        g = tl.load(g_w + w_off, mask=mask, other=0.0).to(tl.float32)
+        acc_g += tl.sum(a[:, None] * g, axis=0)
+        u = tl.load(u_w + w_off, mask=mask, other=0.0).to(tl.float32)
+        acc_u += tl.sum(a[:, None] * u, axis=0)
+    h = acc_g * tl.sigmoid(acc_g) * acc_u
+    tl.store(h_ptr + pid_e * N + offs_n, h, mask=mask_n)
+
+
+@triton.jit
+def moe_down_split_vec_half_kernel(
+    h_ptr,            # [TOP_K, Kd] fp32 — the gateup output
+    topk_ids_ptr, topk_w_ptr,
+    down_tab,         # [E] int64 — expert down weight ptrs
+    part_ptr,         # [TOP_K, N] fp32 — router-weighted per-expert partials
+    Kd, N,
+    stride_wk, stride_wn,
+    BLOCK_N: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+    W_BF16: tl.constexpr,
+):
+    pid_e = tl.program_id(0).to(tl.int64)
+    pid_n = tl.program_id(1).to(tl.int64)
+    eid = tl.load(topk_ids_ptr + pid_e).to(tl.int64)
+    rw = tl.load(topk_w_ptr + pid_e).to(tl.float32)
+    wty = tl.bfloat16 if W_BF16 else tl.float16
+    d_w = tl.cast(tl.load(down_tab + eid), tl.pointer_type(wty), bitcast=True)
+    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    mask_n = offs_n < N
+    acc = tl.zeros((BLOCK_N,), dtype=tl.float32)
+    for kc in range(0, tl.cdiv(Kd, BLOCK_K)):
+        offs_k = kc * BLOCK_K + tl.arange(0, BLOCK_K)
+        mask_k = offs_k < Kd
+        mask = mask_k[:, None] & mask_n[None, :]
+        a = tl.load(h_ptr + pid_e * Kd + offs_k, mask=mask_k, other=0.0)
+        w_off = offs_k[:, None] * stride_wk + offs_n[None, :] * stride_wn
+        d = tl.load(d_w + w_off, mask=mask, other=0.0).to(tl.float32)
+        acc += tl.sum(a[:, None] * d, axis=0)
+    tl.store(part_ptr + pid_e * N + offs_n, acc * rw, mask=mask_n)
