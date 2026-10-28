@@ -20,6 +20,10 @@ def test_the_generating_lm_binds_its_sequence_to_the_prompt_budget():
 def test_janus_triton_on_the_idle_mac_is_planned_lazy_with_its_head_priced_at_the_prompt(monkeypatch):
     no_door(monkeypatch)
     pin_host(monkeypatch, 24576, 17582, "the idle Mac")
+    # the planning process's own memory, pinned at what a fresh run holds (the judged run said resident 99 MB): in a
+    # long test process it grows and enters the plan's host side (+463 MB in the full suite)
+    import neurobrix.core.prism.host_footprint as HF
+    monkeypatch.setattr(HF, "process_footprint_now", lambda: 100 << 20)
     p, _ = _plan("Janus-Pro-7B", "triton")
     assert p.strategy in ("lazy_sequential", "single_gpu", "single_gpu_lifecycle"), (p.strategy, p.unified_rungs_tried)
     act_mb = p.component_memory["language_model"].activation_bytes / 2 ** 20
