@@ -41,6 +41,36 @@ def latest_rows(matrix_dir):
     return last
 
 
+def carried_through(base_gate, cls, model, mode, depth=16):
+    """(row, rows dir) of a cell the base gate itself CARRIED (its scope/carried.tsv names the rows it was carried from),
+    followed back gate by gate to the one that measured it — or (None, None). The stable gate carried 28 cells from the
+    lot gate before it; its successor read the stable gate's rows only and called the 28 "never measured" (lot gate
+    2026-10-28: "carried from base 0, never measured 28" on both classes)."""
+    from pathlib import Path
+    seen = set()
+    campaign = Path(base_gate)
+    for _ in range(depth):
+        f = campaign / "scope" / "carried.tsv"
+        if campaign in seen or not f.is_file():
+            return None, None
+        seen.add(campaign)
+        src = None
+        lines = f.read_text().splitlines()
+        head = lines[0].split("\t") if lines else []
+        for line in lines[1:]:
+            rec = dict(zip(head, line.split("\t")))
+            if (rec.get("class"), rec.get("model"), rec.get("mode")) == (cls, model, mode):
+                src = rec.get("carried_from")
+                break
+        if not src:
+            return None, None
+        row = latest_rows(src).get((model, mode))
+        if row is not None:
+            return row, src
+        campaign = Path(src).parents[1]           # <campaign>/gate/matrix_<cls> -> <campaign>
+    return None, None
+
+
 def wanted(list_path, modes=("native", "triton")):
     want = {}
     for l in open(list_path):
@@ -150,6 +180,10 @@ def tally(a) -> int:
         green, red, carried_g, carried_r, missing, never, unjudged = 0, [], 0, [], [], [], []
         for m, ms in sorted(want.items()):
             for x in ms:
+                if (m, x) not in rows and (m, x) not in base:
+                    far, _src = carried_through(a.base, cls, m, x)
+                    if far is not None:
+                        base[(m, x)] = far        # carried by the base from the gate that measured it
                 out = rows.get((m, x)) or base.get((m, x))
                 j = judged.get((out or {}).get("sha256") or "")
                 if out is not None and out.get("rc") == 0 and j is None:
