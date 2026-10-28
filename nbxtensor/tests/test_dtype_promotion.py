@@ -28,3 +28,11 @@ def test_every_dtype_of_the_table_has_a_kind():
         assert I.kind(name) in ("float", "int", "uint", "bool", "complex")
     with pytest.raises(ValueError, match="unknown dtype"):
         I.kind("fp8_nonexistent")
+
+
+def test_finite_maxima_come_from_the_table():
+    assert I.finite_max("float16") == 65504.0
+    assert I.finite_max("bfloat16") == pytest.approx(3.3895313892515355e38)
+    assert I.finite_max("float8_e4m3fn") == 448.0
+    with pytest.raises(ValueError, match="not a floating dtype"):
+        I.finite_max("int32")

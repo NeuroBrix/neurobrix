@@ -11,7 +11,7 @@ id: v100-16g-x2-01
 vendor: dell
 # preferred_dtype: same as the sibling V100 profiles (v100-16g, v100-32g)
 # — V100 sm_70 has no bf16 hardware support but float16 is the right
-# default for bf16 source models that pass `_scan_bf16_fp16_safety`.
+# default for bf16 source models that pass `_container_fits_float16`.
 # Without this, `PrismSolver._resolve_dtype` falls through the cascade
 # and lands on float32 (because the dominant model dtype is float32-or-
 # bfloat16 in most diffusion models), doubling the activation estimate
