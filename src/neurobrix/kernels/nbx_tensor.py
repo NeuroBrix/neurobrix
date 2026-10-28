@@ -1151,6 +1151,8 @@ class DeviceAllocator:
     _static_live: Dict[int, Tuple[int, int, int]] = {}  # ptr -> (offset, end, last op)
     _static_hits: int = 0
     _static_miss: int = 0
+    _ws_held: Dict[int, set] = {}                       # workspace base -> its slices not yet freed
+    _ws_retiring: set = set()                           # workspaces given back while slices of them still live
 
     @staticmethod
     def plan_static_begin(dev: int, base: int, size: int, cands: Dict[int, list]) -> None:
@@ -1160,12 +1162,13 @@ class DeviceAllocator:
         DeviceAllocator._static_live = {}
         DeviceAllocator._static_hits = DeviceAllocator._static_miss = 0
         DeviceAllocator._plan_workspaces[int(base)] = int(size)
+        DeviceAllocator._ws_held.setdefault(int(base), set())
         DeviceAllocator._plan_op = -1
 
     @staticmethod
-    def plan_static_stop() -> Tuple[int, int]:
-        """(allocations placed, allocations the pool served) of the run; the placement ends."""
-        out = (DeviceAllocator._static_hits, DeviceAllocator._static_miss)
+    def plan_static_stop() -> Tuple[int, int, int]:
+        """(allocations placed, allocations the pool served, slices still held) of the run; the placement ends."""
+        out = (DeviceAllocator._static_hits, DeviceAllocator._static_miss, len(DeviceAllocator._static_live))
         DeviceAllocator._static_cands, DeviceAllocator._static_dev = None, None
         DeviceAllocator._static_live = {}
         return out
@@ -1192,8 +1195,23 @@ class DeviceAllocator:
         cand[2] = True
         ptr = DeviceAllocator._static_base + at
         DeviceAllocator._static_live[ptr] = (at, at + size, cand[1])
+        DeviceAllocator._ws_held.setdefault(DeviceAllocator._static_base, set()).add(ptr)
         DeviceAllocator._static_hits += 1
         return ptr
+
+    @staticmethod
+    def plan_retire(base: int) -> bool:
+        """A sequence gives its workspace back: True when nothing placed in it is alive (the caller frees it now);
+        else it RETIRES — kept, and freed by the allocator when its last live slice is freed (a run output that is a
+        view of a placed intermediate, handed to the next piece of a streamed component, keeps its bytes until then;
+        freed with the sequence, mochi's second transformer piece read a pointer no allocation held any more)."""
+        base = int(base)
+        if DeviceAllocator._ws_held.get(base):
+            DeviceAllocator._ws_retiring.add(base)
+            return False
+        DeviceAllocator._ws_held.pop(base, None)
+        DeviceAllocator._plan_workspaces.pop(base, None)
+        return True
 
     @staticmethod
     def plan_at_op(op_idx: int) -> None:
@@ -1911,6 +1929,16 @@ class DeviceAllocator:
         # a slice of the static memory plan's workspace: its bytes are the workspace's, reused in stream order
         if DeviceAllocator._plan_workspaces and DeviceAllocator._in_workspace(ptr):
             DeviceAllocator._static_live.pop(ptr, None)      # S4b: its slice is free for the next placement
+            for b, held in list(DeviceAllocator._ws_held.items()):
+                if ptr in held:
+                    held.discard(ptr)
+                    if not held and b in DeviceAllocator._ws_retiring:
+                        # the last slice of a retired workspace: the workspace itself goes now
+                        DeviceAllocator._ws_retiring.discard(b)
+                        DeviceAllocator._ws_held.pop(b, None)
+                        DeviceAllocator._plan_workspaces.pop(b, None)
+                        DeviceAllocator.free_cuda(b)
+                    break
             return
         if DeviceAllocator._plan_trace is not None:
             row = DeviceAllocator._plan_trace_live.pop(ptr, None)

@@ -3085,6 +3085,8 @@ class TritonSequence:
     def _plan_release_ws(self) -> None:
         ws = self.__dict__.pop("_plan_ws", None)
         if ws is not None:
+            if not DeviceAllocator.plan_retire(ws[1]):
+                return                     # retired: freed by the allocator with its last live slice
             DeviceAllocator.plan_release(ws[1])
             DeviceAllocator.sync_device()
             DeviceAllocator.free_cuda(ws[1])
@@ -3128,11 +3130,35 @@ class TritonSequence:
                 for sl in op.kill_slots:
                     dies[sl] = op_idx
             slot_to_tid = {sl: t for t, sl in self._tid_to_slot.items()}
+            # A slot a VIEW chain hands to a kept slot (a graph output, a protected capture) shares that kept tensor's
+            # bytes and outlives the run with it: never placed (a run output that is a view of a placed intermediate
+            # held the workspace past the run, and every piece of mochi's streamed transformer kept its own).
+            from neurobrix.core.prism.profiler import VIEW_OP_TYPES, ZERO_ALLOC_OP_TYPES
+            killed = set(dies)
+            escapes = {sl for op in self._ops for sl in op.output_slots if sl not in killed}
+            changed = True
+            while changed:
+                changed = False
+                for op in self._ops:
+                    if (op.op_type in VIEW_OP_TYPES or op.op_type in ZERO_ALLOC_OP_TYPES) and \
+                            any(sl in escapes for sl in op.output_slots):
+                        for sl in (op.all_input_slots or ()):
+                            if sl not in escapes:
+                                escapes.add(sl)
+                                changed = True
+            # What the device can give the workspace now: its free memory (an imposed rung bounds it as a card of
+            # that size, `NBX_PRISM_BUDGET_MB`); an output larger than that is never placed — a traced output the
+            # kernel never materialises (an efficient attention's 50 GB of scores in mochi's transformer) would
+            # otherwise size the workspace past the device.
+            room = DeviceAllocator.device_free_bytes(self.device_idx)
+            rung = os.environ.get("NBX_PRISM_BUDGET_MB")
+            if rung:
+                room = min(room, int(float(rung)) * (1 << 20) - DeviceAllocator._cuda_live_bytes.get(self.device_idx, 0))
             cands, intervals = {}, []
             for op_idx, op in enumerate(self._ops):
                 for sl in op.output_slots:
                     last = dies.get(sl)
-                    if last is None or last < op_idx:
+                    if last is None or last < op_idx or sl in escapes:
                         continue
                     meta = tensors.get(slot_to_tid.get(sl, ""), {}) or {}
                     try:
@@ -3141,15 +3167,27 @@ class TritonSequence:
                             numel *= int(res.resolve(d)) if res is not None else int(d)
                     except Exception:  # noqa: BLE001 — an extent not bound here: that output is the allocator's
                         continue
-                    width = max(_static_width(meta.get("dtype")), _static_width(getattr(self, "_compute_dtype", None)))
+                    # sized at its TRACED width: the workspace is the graph's own figure; an output the dtype engine
+                    # widens takes its true bytes from the workspace if they fit, else from the pool
+                    width = _static_width(meta.get("dtype") or getattr(self, "_compute_dtype", None))
+                    if numel * width > room:
+                        continue
                     cands.setdefault(op_idx, []).append([numel, last, False])
                     intervals.append((op_idx, last, numel * width))
-            size = lower_bound(intervals)
+            size = min(lower_bound(intervals), max(0, room))
             st = plans[key] = {"cands": cands, "size": int(size)}
             if os.environ.get("NBX_STATIC_PLAN_DIAG") == "1":
                 big = sorted(intervals, key=lambda t: -t[2])[:3]
                 print(f"[StaticPlan] {self.dag.get('component_name')}: {sum(len(v) for v in cands.values())} outputs "
                       f"placed from the graph in a {size / 2**20:.0f} MB workspace (largest {big})", flush=True)
+        if os.environ.get("NBX_STATIC_PLAN_WS") != "1":
+            # MEASURED on Metal (2026-10-28): the graph-derived workspace placed only a third of a streamed piece's
+            # allocations (the wrappers' temporaries and widened outputs are no graph output) and sat BESIDE the pool —
+            # mochi-1-preview Triton at an 8 GB rung peaked 12 118 MB with it, 9 334 MB with the flush rule alone
+            # (10 034 before); HAT-L x4 9 194 with it, 8 913 alone (native 10 113). So the rule runs alone by default:
+            # no parked block survives a growth of the device; the workspace stays behind NBX_STATIC_PLAN_WS=1.
+            DeviceAllocator.plan_static_begin(self.device_idx, 0, 0, {})
+            return "static"
         if not st["size"] or not st["cands"]:
             return None
         ws = self.__dict__.get("_plan_ws")
@@ -3176,10 +3214,19 @@ class TritonSequence:
         if mode is None:
             return
         if mode == "static":
-            hits, miss = DeviceAllocator.plan_static_stop()
+            hits, miss, held = DeviceAllocator.plan_static_stop()
             if os.environ.get("NBX_STATIC_PLAN_DIAG") == "1":
                 print(f"[StaticPlan] {self.dag.get('component_name')}: {hits} allocations placed in the workspace, "
-                      f"{miss} served by the pool", flush=True)
+                      f"{miss} served by the pool, {held} still held at the run's end", flush=True)
+            if True:  # noqa: SIM108 — kept as the block it was
+                # The workspace is the RUN's, like its intermediates: released at its end. Kept per sequence, the
+                # pieces of a streamed component each held theirs between runs — mochi-1-preview's transformer at an
+                # 8 GB rung reached 18 GB of the M4 Pro (2026-10-28 09:33). A slice still alive (a run output that is a
+                # view of a placed intermediate) retires it: the allocator frees it with that slice (`plan_retire`).
+                DeviceAllocator.sync_device()
+                self._plan_release_ws()
+                if DeviceAllocator._pool_enabled:
+                    DeviceAllocator._pool_flush(self.device_idx)   # back to the driver, never parked in the pool
             return
         trace = DeviceAllocator._plan_trace
         DeviceAllocator.plan_stop()

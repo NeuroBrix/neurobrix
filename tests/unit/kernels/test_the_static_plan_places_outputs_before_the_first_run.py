@@ -15,6 +15,8 @@ MB = 1 << 20
 @pytest.fixture
 def plan(monkeypatch):
     monkeypatch.setattr(DA, "_plan_workspaces", {})
+    monkeypatch.setattr(DA, "_ws_held", {})
+    monkeypatch.setattr(DA, "_ws_retiring", set())
     base = 1 << 40
     cands = {0: [[100 * MB // 2, 2, False]], 1: [[50 * MB // 4, 3, False], [10 * MB, 1, False]],
              2: [[100 * MB // 2, 4, False]]}
@@ -66,3 +68,24 @@ def test_under_the_plan_the_device_does_not_grow_over_parked_blocks(monkeypatch,
     with pytest.raises(Exception):
         DA.malloc_cuda(64 * MB, 0)
     assert flushed and flushed[0] == 0, flushed       # the parked blocks went back before the driver was asked
+
+
+def test_a_workspace_given_back_with_a_slice_alive_waits_for_that_slice(monkeypatch, plan):
+    """A run output that is a view of a placed intermediate outlives the run: its workspace retires, and goes with it.
+    Freed with its sequence, mochi's second transformer piece read a pointer no allocation held (2026-10-28 09:47)."""
+    _at(0)
+    a = DA._static_place(100 * MB)
+    assert DA.plan_retire(plan) is False             # a is alive: the workspace stays
+    assert plan in DA._plan_workspaces
+    monkeypatch.setattr(DA, "_pool_enabled", False)
+    calls = []
+    orig = DA.free_cuda
+
+    def spy(ptr):
+        calls.append(ptr)
+        if ptr == plan and plan not in DA._plan_workspaces:
+            return                                     # the workspace's own free: the driver call is not the test
+        return orig(ptr)
+    monkeypatch.setattr(DA, "free_cuda", staticmethod(spy))
+    DA.free_cuda(a)                                    # its last slice: the workspace goes now
+    assert plan in calls and plan not in DA._plan_workspaces, calls
