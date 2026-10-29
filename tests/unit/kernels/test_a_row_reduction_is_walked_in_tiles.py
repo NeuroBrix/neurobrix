@@ -44,6 +44,9 @@ def test_a_long_row_reduction_reserves_no_local_memory():
     code = textwrap.dedent("""
         import ctypes
         import neurobrix  # the application: nbxtensor's host services
+        from neurobrix.core.prism.autodetect import load_default_profile
+        from neurobrix.triton.dtype import declare_hardware_profile
+        declare_hardware_profile(load_default_profile())   # as a run declares it: the row tile's register bound is the profile's
         import nbxtensor.ops.reduction_wrappers as _nbx_reduction_wrappers
         from nbxtensor.dtype.nbx_dtype import NBXDtype; from nbxtensor.tensor import NBXTensor; from nbxtensor.memory.allocator import DeviceAllocator; from nbxtensor.backend.runtime import _gpu_runtime
         from nbxtensor.ops import wrappers as W
@@ -56,7 +59,8 @@ def test_a_long_row_reduction_reserves_no_local_memory():
         print(used() - u0)
     """)
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=600,
-                       env={"PYTHONPATH": str(REPO / "src"), "PYTHONNOUSERSITE": "1", "PATH": "/usr/bin:/bin",
+                       env={"PYTHONPATH": f"{REPO / 'src'}:{REPO / 'nbxtensor' / 'src'}", "PYTHONNOUSERSITE": "1",
+                            "PATH": "/usr/bin:/bin",
                             **{k: v for k, v in __import__("os").environ.items() if k.startswith(("CUDA", "LD_", "HOME"))}})
     assert r.returncode == 0, r.stderr[-2000:]
     grew = int(r.stdout.strip().splitlines()[-1])
@@ -65,7 +69,7 @@ def test_a_long_row_reduction_reserves_no_local_memory():
 
 @needs_card
 @pytest.mark.parametrize("feat", [1, 63, 64, 4095, 4096, 4097, 8192, 12289, 224640])
-def test_sum_mean_amax_agree_with_float64_at_every_row_length(feat):
+def test_sum_mean_amax_agree_with_float64_at_every_row_length(feat, declared_profile):
     from nbxtensor.ops import wrappers as W
     from nbxtensor.ops import reduction_wrappers as _nbx_reduction_wrappers  # the family the moved names live in (M2 split)
     from nbxtensor.tensor import NBXTensor
