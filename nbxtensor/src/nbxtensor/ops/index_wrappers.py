@@ -580,7 +580,7 @@ def index_add_wrapper(x, dim: int, index,
 # Index Put
 # ---------------------------------------------------------------------------
 
-def nonzero_1d_wrapper(mask) -> "NBXTensor":
+def nonzero_1d_wrapper(mask, expected=None) -> "NBXTensor":
     """Ascending int64 indices of the True elements of a 1-D mask.
 
     Deterministic single-program compaction (kernels/ops/nonzero.py) —
@@ -588,11 +588,21 @@ def nonzero_1d_wrapper(mask) -> "NBXTensor":
     length is data-dependent: worst-case buffer + one count readback
     (the host-boundary sync every data-dependent-shape op requires),
     narrowed to [n] (a leading-dim narrow of a contiguous buffer stays
-    contiguous — no guard needed)."""
+    contiguous — no guard needed).
+
+    `expected`: the count the caller's own contract states (a masked scatter's values have exactly one row per True
+    element). A census shadow launches nothing and reads no value, so it takes that count as the extent — the read it
+    replaced returned a count the shadow never computed (Qwen3-VL's DeepStack write, `values` [196, 2048], formed one
+    row: every Qwen3-VL coverage cell rc 1 since the shadow existed). A real run reads the count and refuses by name a
+    mask that disagrees with the caller's contract."""
     from nbxtensor.ops.nonzero import nonzero_1d_kernel
     assert mask.ndim == 1, f"nonzero_1d expects 1-D, got {mask.ndim}-D"
     m = mask.contiguous()
     n = int(m.shape[0])
+    if expected is not None:
+        from nbxtensor.host import need as _need   # the application's launch census (nbxtensor.host)
+        if _need("census")().active():
+            return NBXTensor.empty([int(expected)], dtype=NBXDtype.int64, device=m.device)
     out = NBXTensor.empty([max(n, 1)], dtype=NBXDtype.int64, device=m.device)
     count = NBXTensor.zeros([1], dtype=NBXDtype.int32, device=m.device)
     if n > 0:
@@ -602,6 +612,9 @@ def nonzero_1d_wrapper(mask) -> "NBXTensor":
         k = int(count.numpy()[0])
     else:
         k = 0
+    if expected is not None and k != int(expected):
+        raise RuntimeError(f"nonzero: the mask holds {k} True elements and the caller's contract states {int(expected)} "
+                           f"(a masked scatter's values have one row per True element)")
     return out[:k]
 
 
@@ -704,7 +717,10 @@ def index_put_wrapper(x, indices, values, accumulate: bool = False):
             flat_rows *= int(_s)
         tail = list(x.shape[idx.ndim:])
         x_flat = xc.reshape([flat_rows] + tail)
-        rows = nonzero_1d_wrapper(idx.reshape([flat_rows]))
+        # x[mask] = vals: vals holds one row per True element (its leading dim) unless it broadcasts a single row
+        expected = (int(values.shape[0]) if isinstance(values, NBXTensor) and values.ndim == 1 + len(tail)
+                    and int(values.shape[0]) != 1 else None)
+        rows = nonzero_1d_wrapper(idx.reshape([flat_rows]), expected=expected)
         if int(rows.shape[0]) == 0:
             # All-False mask (text-mode empty-visual stubs): zero writes —
             # a fresh copy per the functional contract, same as the
