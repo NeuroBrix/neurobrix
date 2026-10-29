@@ -129,3 +129,22 @@ def test_the_simulation_holds_what_the_allocator_holds(rt, monkeypatch, cap_mb):
     sim = simulate(events, parked_cap=cap_mb * MB)
     assert sim.peak_bytes == held_peak[0], (sim, held_peak[0])
     assert sim.peak_live_bytes <= sim.peak_bytes
+
+
+def test_a_window_holds_the_most_held_since_it_opened_and_leaves_the_peak_alone(rt, monkeypatch):
+    """`DeviceAllocator.open_window` / `close_window`: what a component holds from the driver from its load to its
+    release (the release line says it) — the most held while the window was open, not the process's peak, which no
+    window resets. What it would do if wrong: the process peak or the bytes at the close instead (red)."""
+    monkeypatch.setattr(DA, "_windows", {})
+    big = DA.malloc_cuda(20 * MB)
+    DA.free_cuda(big)
+    DA._pool_flush(0)                                  # the process peak stays 20 MB
+    t = DA.open_window(0)
+    a = DA.malloc_cuda(3 * MB)
+    b = DA.malloc_cuda(5 * MB)
+    DA.free_cuda(a)
+    DA.free_cuda(b)
+    DA._pool_flush(0)
+    assert DA.close_window(0, t) == 8 * MB
+    assert DA._cuda_peak_bytes[0] == 20 * MB
+    assert DA.close_window(0, t) is None, "a closed window answers no figure"

@@ -296,6 +296,9 @@ class DeviceAllocator:
     # Measured 2026-10-28: mochi-1-preview triton at the 8 GB rung on a 32 GB card held 10.8 GB — 5.5-6.2 GB live and
     # 3.0-3.7 GB of pooled free blocks no refused malloc ever asked back.
     _rung_limit_bytes: Dict[int, Optional[int]] = {}
+    #: device -> {token: the most held from the driver since the window opened} (`open_window`)
+    _windows: Dict[int, Dict[int, int]] = {}
+    _window_seq: int = 0
 
     # Deferred-queue reclaimers (P-TRITON-LIVE-SET). The triton hot loops
     # register their deferred dead-tensor queues here. Since 2026-10-11 the
@@ -824,6 +827,11 @@ class DeviceAllocator:
         peak = DeviceAllocator._cuda_peak_bytes.get(dev, 0)
         if live > peak:
             DeviceAllocator._cuda_peak_bytes[dev] = live
+        _win = DeviceAllocator._windows.get(dev)
+        if _win:
+            for _t, _p in _win.items():
+                if live > _p:
+                    _win[_t] = live
         if _MALLOC_TRACE_FILE is not None:
             _record_malloc_site(p, nbytes, dev)
         return p
@@ -1078,6 +1086,23 @@ class DeviceAllocator:
                     DeviceAllocator.set_device(prev_dev)
                 except Exception:
                     pass
+
+    @staticmethod
+    def open_window(device_idx: int) -> int:
+        """Start watching what this process holds from the driver on `device_idx` (live and pooled bytes, the
+        quantity the peak counts); a token for `close_window`. The process-wide peak is never reset by it: a window
+        measures one stretch (a component from its load to its release) beside it."""
+        DeviceAllocator._window_seq += 1
+        t = DeviceAllocator._window_seq
+        DeviceAllocator._windows.setdefault(int(device_idx), {})[t] = DeviceAllocator._cuda_live_bytes.get(
+            int(device_idx), 0)
+        return t
+
+    @staticmethod
+    def close_window(device_idx: int, token: int) -> Optional[int]:
+        """The most this process held from the driver on `device_idx` since `open_window` returned `token`, and the
+        window closed; None for a token not open there."""
+        return DeviceAllocator._windows.get(int(device_idx), {}).pop(token, None)
 
     @staticmethod
     def reset_peak_memory(device_idx: Optional[int] = None) -> None:

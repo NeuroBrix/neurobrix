@@ -242,11 +242,17 @@ def _left_after_release(device, mode) -> str:
     return f"; the device still holds {f['allocated_mb']:.0f} MB allocated{driver}"
 
 
-def _cuda_peak_since_load(device, mode) -> str:
-    """', peak allocated since its load N MB' on the compiled branch on CUDA; '' elsewhere (MPS keeps no peak; the
-    Triton branch never imports torch)."""
+def _cuda_peak_since_load(device, mode, window=None) -> str:
+    """', peak allocated since its load N MB' on the compiled branch on CUDA (torch's peak, reset at the load); on the
+    Triton branch ', held at most N MB from the driver since its load' — the device allocator's window the load opened
+    (`window`: (device index, token), `DeviceAllocator.open_window`), live and pooled bytes, the figure Prism prices a
+    component's weights and held activations against; '' elsewhere (MPS keeps no peak)."""
     if str(mode or "").startswith("triton"):
-        return ""
+        if window is None:
+            return ""
+        from nbxtensor.memory.allocator import DeviceAllocator
+        held = DeviceAllocator.close_window(*window)
+        return f", held at most {held / 2**20:.0f} MB from the driver since its load" if held is not None else ""
     from neurobrix.core.device_utils import device_allocator_figures
     f = device_allocator_figures(str(device or "") or None)
     return f", peak allocated since its load {f['peak_allocated_mb']:.0f} MB" if "peak_allocated_mb" in f else ""
@@ -2472,6 +2478,9 @@ class GraphExecutor:
         _only, _taken = self._borrow(_only) if only is None else (_only, {})
         _only, _mapped = self._split_expert_files(_only, only)
         _t_load = time.perf_counter()
+        if only is None:
+            # what the component holds from its load to its release, said by the release line (`_cuda_peak_since_load`)
+            self._held_window = (device_idx, DeviceAllocator.open_window(device_idx))
         loaded = load_component_weights(
             nbx_path, component, device_idx, compute_dtype,
             shard_map=shard_map, only=_only,
@@ -6339,7 +6348,8 @@ class GraphExecutor:
         if _released:
             print(f"   [{'Triton' if str(self.mode).startswith('triton') else 'Compiled'}] "
                   f"'{getattr(self, '_component_name', '?')}': released {_released} weights"
-                  f"{_cuda_peak_since_load(getattr(self, 'device', ''), self.mode)}{_left_after_release(getattr(self, 'device', ''), self.mode)}",
+                  f"{_cuda_peak_since_load(getattr(self, 'device', ''), self.mode, self.__dict__.pop('_held_window', None))}"
+                  f"{_left_after_release(getattr(self, 'device', ''), self.mode)}",
                   flush=True)
         # Step 3: the last run's context goes with them. It holds the weight dict the run was
         # built on (`ExecutionContext.weights`), which `_reconcile_weight_keys` had replaced on

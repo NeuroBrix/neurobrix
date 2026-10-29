@@ -65,7 +65,7 @@ def test_a_streamed_segment_says_what_the_device_holds_after_it_computed(monkeyp
     synced = []
     monkeypatch.setattr(du, "device_sync", lambda d=None: synced.append(d))   # the line reads after the queue drained
     monkeypatch.setattr(DA, "_cuda_live_bytes", {2: 3 << 30})
-    monkeypatch.setattr(DA, "_pool_cached_bytes", {2: 1 << 30})
+    monkeypatch.setattr(DA._POOL, "cached", {2: 1 << 30})
     assert _segment_memory_line(NS(device="cuda:2", mode="triton")) == "device live 3072 MB, pool cached 1024 MB"
     assert synced == ["cuda:2"], "the device is synchronised before its figures are read"
     assert _segment_memory_line(NS(device="cpu", mode="compiled")).startswith("no device allocator figures")

@@ -2384,22 +2384,17 @@ def _alloc_state() -> str:
     try:
         from nbxtensor.memory.allocator import DeviceAllocator as A
 
-        def _sum(name):
-            v = getattr(A, name, None)
-            if isinstance(v, dict):
-                return sum(x for x in v.values() if isinstance(x, (int, float)))
-            return v if isinstance(v, (int, float)) else None
-
         parts = []
         live = A.memory_allocated() if callable(getattr(A, "memory_allocated", None)) else None
         if isinstance(live, (int, float)):
             parts.append(f"live {live / 2**20:.0f}MB")
-        cached = _sum("_pool_cached_bytes")
+        _pool = getattr(A, "_POOL", None)      # the allocator's pool (nbxtensor.memory.pool.SegmentPool)
+        cached = sum(_pool.cached.values()) if _pool is not None else None
         if cached is not None:
             parts.append(f"pool {cached / 2**20:.0f}MB")
         if getattr(A, "_pool_enabled", None) is False:
             parts.append("pool OFF")
-        st = getattr(A, "_pool_stats", None)
+        st = _pool.stats if _pool is not None else None
         if isinstance(st, dict) and (st.get("flushes") or st.get("evictions")):
             parts.append(f"flush {st.get('flushes', 0)}/evict {st.get('evictions', 0)}")
         return ", ".join(parts) or "alloc ?"
