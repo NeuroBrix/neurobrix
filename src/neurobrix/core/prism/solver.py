@@ -295,6 +295,9 @@ class ComponentMemory:
     #: through the hot loop's deferred queue, replayed through the allocator's pool (`nbxtensor.memory.pool.simulate`);
     #: None under the compiled engine and with no graph. Stated beside the run's measured figure (M3 exit).
     held_peak_bytes: Optional[int] = None
+    #: what the Triton pool alone holds over the walked live set, as a ratio (the walk replayed with every dead tensor
+    #: freed at once); stated, read by no decision yet; None where nothing was replayed
+    pool_ratio: Optional[float] = None
     # The KV cache inside `activation_bytes` (the language model's): one allocation the state engine makes once,
     # never the arena's per-op activations — `_live_activation_mb` keeps it out of the arena factor.
     kv_bytes: int = 0
@@ -622,6 +625,7 @@ class ExecutionPlan:
                     "arena_bytes": mem.arena_bytes,
                     "dense_arena_bytes": mem.dense_arena_bytes,
                     "held_peak_bytes": mem.held_peak_bytes,
+                    "pool_ratio": mem.pool_ratio,
                 }
                 for name, mem in self.component_memory.items()
             },
@@ -686,6 +690,7 @@ class ExecutionPlan:
                 arena_bytes=mem.get("arena_bytes"),
                 dense_arena_bytes=mem.get("dense_arena_bytes"),
                 held_peak_bytes=mem.get("held_peak_bytes"),
+                pool_ratio=mem.get("pool_ratio"),
             )
             for name, mem in data.get("memory_breakdown", {}).items()
         }
@@ -4598,6 +4603,11 @@ class PrismSolver:
             held_peak_bytes = None
             if _kept is not None and _kept.held_peak_bytes is not None:
                 held_peak_bytes = int(_kept.held_peak_bytes) + int(arena_bytes or 0)
+            # what the pool alone holds over the walked live set (every dead tensor freed at once): stated beside the
+            # device's measured arena factor it is to replace once a measured cell of each kind agrees with it (M3)
+            pool_ratio = None
+            if _kept is not None and _kept.held_live_bytes is not None and _kept.peak_bytes > 0:
+                pool_ratio = max(1.0, _kept.held_live_bytes / _kept.peak_bytes)
 
             result[comp.name] = ComponentMemory(
                 component_name=comp.name,
@@ -4612,6 +4622,7 @@ class PrismSolver:
                 arena_bytes=arena_bytes,
                 dense_arena_bytes=dense_arena_bytes,
                 held_peak_bytes=held_peak_bytes,
+                pool_ratio=pool_ratio,
                 kv_bytes=int(kv_estimate),
             )
 
@@ -10222,6 +10233,7 @@ def explain_plan(plan: "ExecutionPlan") -> str:
             detail = (f"  weights {mem.weight_bytes / 2**20:.0f} MB + activations {mem.activation_bytes / 2**20:.0f} MB"
                       + f" + overhead {mem.overhead_bytes / 2**20:.0f} MB"
                       + (f"; the allocator's replay holds {mem.held_peak_bytes / 2**20:.0f} MB at its peak"
+                         + (f" (the pool x{mem.pool_ratio:.3f} over the walk)" if mem.pool_ratio is not None else "")
                          if getattr(mem, "held_peak_bytes", None) is not None else "")
                       + (f"  (peak at {mem.peak_op_uid})" if mem.peak_op_uid else "")
                       + ("" if mem.activation_profiled else "  [activations estimated, not profiled]"))
