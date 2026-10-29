@@ -22,7 +22,6 @@ SERVICES: Dict[str, str] = {
     "vendor_config": "(vendor, architecture) -> the vendor file of that architecture, as a dict",
     "vendor_param": "(section, key, default) -> one value of the executing device's vendor file",
     "vendors_dir": "() -> the directory of the application's own vendor files (pathlib.Path); optional: absent, the library's device files alone",
-    "installation_refusals": "(path) -> why an installation path may not hold a backend build; optional: absent, none is refused",
     "matrix_unit_representation": "(...) -> how the matrix unit carries one GEMM's operands",
     "matrix_unit_flash_representation": "(...) -> how the matrix unit carries one attention's operands",
     "attention_operand_dtypes": "(...) -> the operand dtypes an attention runs at",
@@ -31,14 +30,7 @@ SERVICES: Dict[str, str] = {
 }
 
 #: hooks an application MAY provide; absent, the library runs as the value here describes (never a guessed fact)
-def _no_refusal(path) -> list:
-    """The installation rule of an application without one: no path is refused."""
-    return []
-
-
-_ABSENT = {# an application's rule on where a backend build may live (NeuroBrix: off its workshop's cleared storage);
-           # absent, the library refuses no installation
-           "installation_refusals": _no_refusal}
+_ABSENT: dict = {}
 
 _PROVIDED: Dict[str, Callable] = {}
 

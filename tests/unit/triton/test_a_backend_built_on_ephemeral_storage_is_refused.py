@@ -64,15 +64,29 @@ def test_the_refusal_names_the_environment(tmp_path, monkeypatch):
     assert any("environment" in r for r in reasons), reasons
 
 
-def test_the_seam_refuses_rather_than_warns(monkeypatch):
-    """The predicate is not a guard until the selection seam raises on it."""
+def test_the_engine_refuses_the_selected_backend_rather_than_warns(monkeypatch):
+    """The predicate is not a guard until the engine raises on it — on the backend the library SELECTED, whose module
+    the library names (`metal_backend.backend_module`); the library itself asks nothing (API.md section 11)."""
     from nbxtensor.backend import metal_backend as mb
-    monkeypatch.setattr(
-        "neurobrix.core.paths.installation_refusals",
-        lambda name, search_root=None: [
-            f"the package {name} is installed at /private/tmp/dead/x, "
-            f"under /private/tmp, which the machine clears without asking"])
-    with pytest.raises(mb.BackendSelectionRefused) as excinfo:
-        mb._refuse_if_ephemeral("triton_ext")
-    assert "/private/tmp" in str(excinfo.value)
-    assert "durable" in str(excinfo.value)
+    from neurobrix.core import paths
+    seen = []
+    monkeypatch.setattr(mb, "is_apple_silicon", lambda: True)
+    monkeypatch.setattr(mb, "selected_metal_backend", lambda: "triton_ext")
+    monkeypatch.setattr(paths, "installation_refusals", lambda name, search_root=None: seen.append(name) or [
+        f"the package {name} is installed at /private/tmp/dead/x, under /private/tmp, which the machine clears"])
+    with pytest.raises(paths.BackendOnClearedStorage) as excinfo:
+        paths.refuse_a_backend_on_cleared_storage()
+    assert seen == [mb.backend_module("triton_ext")]
+    assert "/private/tmp" in str(excinfo.value) and "durable" in str(excinfo.value)
+
+
+def test_a_durable_backend_passes_and_another_machine_is_not_asked(monkeypatch):
+    from nbxtensor.backend import metal_backend as mb
+    from neurobrix.core import paths
+    monkeypatch.setattr(mb, "is_apple_silicon", lambda: True)
+    monkeypatch.setattr(mb, "selected_metal_backend", lambda: "triton_ext")
+    monkeypatch.setattr(paths, "installation_refusals", lambda name, search_root=None: [])
+    paths.refuse_a_backend_on_cleared_storage()
+    monkeypatch.setattr(mb, "is_apple_silicon", lambda: False)
+    monkeypatch.setattr(mb, "selected_metal_backend", lambda: (_ for _ in ()).throw(AssertionError("asked")))
+    paths.refuse_a_backend_on_cleared_storage()

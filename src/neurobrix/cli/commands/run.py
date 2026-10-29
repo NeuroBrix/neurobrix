@@ -468,6 +468,7 @@ def cmd_run(args):
         # fetches anything on the user's behalf.
         from nbxtensor.backend.cpu_backend import TritonCPUNotInstalledError, ensure_triton_cpu_or_raise
         from nbxtensor.backend.metal_backend import TritonMetalNotInstalledError, ensure_triton_metal_or_raise
+        from neurobrix.core.paths import BackendOnClearedStorage as _BackendOnClearedStorage
         try:
             # A census shadow (NBX_CENSUS=1, kernels/census.py) launches nothing: it
             # runs with NO visible device on purpose — the door that proves it cannot
@@ -480,11 +481,14 @@ def cmd_run(args):
                 # "supported in a future version" message that was already
                 # out of date.
                 ensure_triton_metal_or_raise()
+                # The workshop's rule: the selected Metal backend is refused on storage the machine clears.
+                from neurobrix.core.paths import refuse_a_backend_on_cleared_storage
+                refuse_a_backend_on_cleared_storage()
                 # CPU-only profile: triton-cpu is a separate upstream package.
                 # Previously TRITON_CPU_BACKEND was set without checking it was
                 # installed, so the run died in the driver a step later.
                 ensure_triton_cpu_or_raise()
-        except (TritonMetalNotInstalledError, TritonCPUNotInstalledError) as exc:
+        except (TritonMetalNotInstalledError, TritonCPUNotInstalledError, _BackendOnClearedStorage) as exc:
             print(f"\n[ERROR] {exc}")
             return 1
         if getattr(args, 'triton_sequential', False):

@@ -55,7 +55,6 @@ def install() -> None:
     provide("vendors_dir", _config_dir("vendors"))
     from nbxtensor.ops.autotune_settings import set_store, set_miss_explainer
     set_store(_config_dir("autotune"))          # the engine's committed certified directory, resolved when asked
-    provide("installation_refusals", _call("neurobrix.core.paths", "installation_refusals"))
     # the certification census: the library's launch observer (a dry run that records every key) and the account of a
     # confirmation run's miss (the census row that should hold it) — both the library's optional hooks, read at call time
     from nbxtensor.ops.launch_observer import set_launch_observer

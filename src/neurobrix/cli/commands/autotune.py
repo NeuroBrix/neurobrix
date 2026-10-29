@@ -117,6 +117,12 @@ def cmd_autotune(args) -> int:
         if refusal:
             print(refusal)
             return 3
+        from neurobrix.core.paths import BackendOnClearedStorage, refuse_a_backend_on_cleared_storage
+        try:
+            refuse_a_backend_on_cleared_storage()        # a certification measures: never on a backend a cleaner removes
+        except BackendOnClearedStorage as exc:
+            print(f"ERROR: {exc}")
+            return 3
         from neurobrix.kernels.autotune_certify import certify
         kernels = [k for k in (args.kernels or "").split(",") if k] or None
         print("=" * 70)

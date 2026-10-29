@@ -17,7 +17,8 @@ def test_the_arch_string_is_the_librarys_own():
 
 
 def test_optional_hooks_run_without_an_application(no_application):
-    assert host.need("installation_refusals")("/tmp/anything") == []
+    with pytest.raises(KeyError, match="not a service"):       # the application's rule, applied by the application
+        host.need("installation_refusals")
 
 
 

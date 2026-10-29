@@ -241,3 +241,27 @@ def installation_refusals(module_name: str, search_root=None) -> list:
         if why:
             reasons.append(f"{module_name} was built from {tree}, {why}")
     return reasons
+
+
+class BackendOnClearedStorage(RuntimeError):
+    """The selected GPU backend's installation stands on storage this machine clears."""
+
+
+def refuse_a_backend_on_cleared_storage() -> None:
+    """The workshop's rule, applied by the engine before anything is measured: the selected Metal backend is REFUSED
+    when any leg of its installation (package, environment, build tree — `installation_refusals`) stands on storage the
+    machine clears. Three losses on this Mac (2026-09-17, -09-21, -09-22) each cost a campaign's environment.
+
+    It REFUSES rather than warns: a measurement would be attributed to a backend that may not exist by the time anyone
+    reads it. It was a hook nbxtensor's Metal selection called (`nbxtensor.host`, `installation_refusals`); it is
+    NeuroBrix's rule, so the engine applies it on the backend the library selected (API.md section 11, 2026-10-29)."""
+    from nbxtensor.backend import metal_backend as mb
+    if not mb.is_apple_silicon():
+        return
+    name = mb.selected_metal_backend()
+    reasons = installation_refusals(mb.backend_module(name))
+    if reasons:
+        raise BackendOnClearedStorage(
+            f"the Metal backend `{name}` stands on storage this machine clears: " + "; ".join(reasons)
+            + ". Reinstall it on durable storage. Refusing rather than measuring against an install a cleaner can "
+            "remove mid-campaign.")
