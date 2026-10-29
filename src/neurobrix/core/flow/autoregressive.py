@@ -1144,22 +1144,6 @@ class AutoregressiveHandler(FlowHandler):
 
         release_flow_memory(self.ctx.primary_device)
 
-    def _graph_lm_prefill(self, input_ids: torch.Tensor) -> torch.Tensor:
-        """Delegate to active session. Required by runtime-guard hook."""
-        if self._active_session is None:
-            raise RuntimeError("ZERO FALLBACK: No active session for prefill.")
-        return self._active_session.prefill(input_ids, input_ids.shape[0])
-
-    def _graph_lm_decode_step(
-        self,
-        input_ids: torch.Tensor,
-        inputs_embeds: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
-        """Delegate to active session. Required by runtime-guard hook."""
-        if self._active_session is None:
-            raise RuntimeError("ZERO FALLBACK: No active session for decode.")
-        return self._active_session.decode_step(input_ids, inputs_embeds=inputs_embeds)
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Module-Level Helpers

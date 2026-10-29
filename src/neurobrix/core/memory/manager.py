@@ -232,19 +232,6 @@ class MemoryManager:
         gc.collect()
         device_empty_cache(device)
 
-    @staticmethod
-    def get_memory_stats(device: Optional[str] = None) -> Dict[str, float]:
-        """
-        Get current GPU memory statistics.
-
-        Args:
-            device: Device string (e.g., "cuda:0"). If None, uses default.
-
-        Returns:
-            Dict with allocated_mb, reserved_mb, free_mb
-        """
-        return device_memory_stats(device)
-
 
 # Convenience functions (for simpler imports)
 def unload_weights(

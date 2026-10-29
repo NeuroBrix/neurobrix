@@ -1,21 +1,15 @@
 # The engine's open slimming findings (tools/engine_slim_scan.py); each ends deleted, moved into nbxtensor, or kept
 # with its reason in docs/nbxtensor/ENGINE_SLIM.md. Both figures below may only go down (test_the_engine_only_slims.py).
-# engine_lines: 145107
-# open: 725
+# engine_lines: 145042
+# open: 718
 kind	path	symbol	detail
 dead	src/neurobrix/cli/commands/registry.py	installing_path	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/components/handlers/text_encoder_handler.py	TextEncoderComponentHandler.get_hidden_size	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/components/handlers/text_encoder_handler.py	TextEncoderComponentHandler.produces_pooled_output	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/config/loader.py	vendor_file	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/dtype/calibration.py	embed_record	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/flow/audio.py	AudioEngine._get_sample_rate	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/flow/audio_utils.py	get_component_output	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/flow/audio_utils.py	get_sample_rate	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/flow/autoregressive.py	AutoregressiveHandler._graph_lm_decode_step	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/flow/autoregressive.py	AutoregressiveHandler._graph_lm_prefill	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/io/loader.py	SmartLoader.get_stats	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/io/weight_loader.py	WeightLoader.list_files	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/memory/manager.py	MemoryManager.get_memory_stats	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/module/autoregressive/factory.py	AutoregressiveFactory.create_by_name	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/module/autoregressive/factory.py	AutoregressiveFactory.get_generator_info	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/module/autoregressive/factory.py	AutoregressiveFactory.list_aliases	no reference outside its own body (tests excluded)
@@ -545,7 +539,6 @@ wrapper	src/neurobrix/core/io/weight_loader.py	list_files	only hands its paramet
 wrapper	src/neurobrix/core/memory/manager.py	cleanup_context(log_prefix)	no call site passes it: always its default '[MemoryManager]'
 wrapper	src/neurobrix/core/memory/manager.py	cleanup_context(verbose)	no call site passes it: always its default False
 wrapper	src/neurobrix/core/memory/manager.py	cleanup_tensors	only hands its parameters to MemoryManager.cleanup_tensors
-wrapper	src/neurobrix/core/memory/manager.py	get_memory_stats	only hands its parameters to device_memory_stats
 wrapper	src/neurobrix/core/memory/manager.py	release_flow_memory	only hands its parameters to MemoryManager.release_flow_memory
 wrapper	src/neurobrix/core/memory/manager.py	unload_weights	only hands its parameters to MemoryManager.unload_weights
 wrapper	src/neurobrix/core/module/audio/mel_dsp.py	_raw_waveform(_audio)	no call site passes it: always its default None

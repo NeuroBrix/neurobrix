@@ -713,19 +713,6 @@ class AudioEngine(FlowHandler):
                 return resolved[key]
         return None
 
-    def _get_sample_rate(self) -> int:
-        """Get sample rate from topology or defaults. ZERO FALLBACK."""
-        flow = self.ctx.pkg.topology.get("flow", {})
-        sr = flow.get("audio", {}).get("sample_rate")
-        if sr is not None:
-            return sr
-        sr = self.ctx.pkg.defaults.get("sample_rate")
-        if sr is not None:
-            return sr
-        raise RuntimeError(
-            "ZERO FALLBACK: sample_rate missing from both topology.flow.audio "
-            "and defaults.json."
-        )
 
     def _find_model_config_path(self) -> Path:
         """Find model config path from NBX container."""

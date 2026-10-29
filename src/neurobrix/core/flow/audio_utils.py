@@ -396,18 +396,6 @@ def get_compute_dtype(ctx: FlowContext) -> torch.dtype:
     return ctx.compute_dtype()
 
 
-def get_sample_rate(ctx: FlowContext) -> int:
-    """Get sample rate from topology or defaults."""
-    flow = ctx.pkg.topology.get("flow", {})
-    sr = flow.get("audio", {}).get("sample_rate")
-    if sr is not None:
-        return sr
-    sr = ctx.pkg.defaults.get("sample_rate")
-    if sr is not None:
-        return sr
-    raise RuntimeError("ZERO FALLBACK: sample_rate missing from topology and defaults.json.")
-
-
 def find_model_config_path(ctx: FlowContext) -> Path:
     """Find model config path from NBX container.
 
@@ -461,17 +449,6 @@ def get_component_input_shape(
                 else:
                     resolved.append(0)
             return tuple(resolved)
-    return None
-
-
-def get_component_output(
-    ctx: FlowContext, comp_name: str,
-) -> Optional[torch.Tensor]:
-    """Get a component's primary output tensor."""
-    resolved = ctx.variable_resolver.resolved
-    for key in [f"{comp_name}.output_0", f"{comp_name}.last_hidden_state", f"{comp_name}.output"]:
-        if key in resolved and (is_torch_tensor(resolved[key]) or hasattr(resolved[key], "nbx_dtype")):
-            return resolved[key]
     return None
 
 
