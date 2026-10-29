@@ -2137,67 +2137,6 @@ def _is_power_of_2(n: int) -> bool:
     return n > 0 and (n & (n - 1)) == 0
 
 
-_DEFERRED_DRAIN_CLIFF_DEFAULT = 2_000_000_000   # 2 GB — throughput ceiling
-
-
-def deferred_drain_policy():
-    """Return the triton deferred-free drain policy as a 4-tuple
-    `(cliff_bytes, floor_bytes, pressure_reserve_bytes, freecheck_interval)`.
-
-    The triton hot loop batches every dead/overwritten NBXTensor into a
-    `_deferred` list, drained (after a device sync) when a threshold trips —
-    the amount by which the triton live watermark can exceed the compiled
-    free-at-last-use watermark (compiled frees at the kill point via torch's
-    caching allocator). The historical policy was a flat 2 GB cap (audit #2
-    F1). Draining is always correctness-safe (sync-before-free) but NOT free:
-    with the caching pool off (default), every drain is a cudaFree→cudaMalloc
-    cycle, so draining EAGERLY on a model that has headroom is pure churn
-    (measured: a fixed 650 MiB cap regressed CogVideoX-2b VAE decode ~49% for
-    no capacity benefit — the device had ~21 GB free).
-
-    Policy is therefore PRESSURE-SENSITIVE:
-    - `cliff`   — the queue is ALWAYS drained at this size (throughput ceiling,
-      bounds worst-case retention). On a device with headroom this is the ONLY
-      trigger, so runtime is identical to the historical 2 GB behavior.
-    - `floor`   — below this the queue is never drained mid-run (small-model /
-      ample-headroom fast path).
-    - `reserve` — when the queue is >= floor, the engine probes driver-free
-      memory; if free < reserve the device is near capacity and the queue is
-      drained early to keep the watermark from reaching OOM. Draining more
-      (slower) to FIT beats an OOM — capacity is the hard constraint.
-    - `interval`— minimum ops between free probes (bounds the probe rate; the
-      probe is `DeviceAllocator.device_free_bytes` = cudaMemGetInfo, no sync,
-      the sanctioned feasibility API — NOT a kernel-config source).
-
-    Data-driven (R7/R24) from `config/vendors/<vendor>/<arch>.yml memory:`,
-    keyed on the detected device's vendor+architecture. Safe fallback (no
-    profile / keys absent / exception): `cliff = 2 GB, floor = cliff,
-    reserve = 0` → the pressure branch can never trip (`free < 0` is
-    impossible) and the queue only ever drains at the 2 GB cliff = the exact
-    prior behavior.
-    """
-    cliff = _DEFERRED_DRAIN_CLIFF_DEFAULT
-    fallback = (cliff, cliff, 0, 1 << 30)
-    prof = _core.get_hardware_profile()
-    devices = getattr(prof, "devices", None) if prof is not None else None
-    if not devices:
-        return fallback
-    try:
-        from nbxtensor.host import need as _need   # the application's core.config.loader (nbxtensor.host)
-        get_vendor_config = _need("vendor_config")
-        _brand = devices[0].brand
-        _vendor = getattr(_brand, "value", _brand)
-        cfg = get_vendor_config(_vendor, devices[0].architecture)
-        # The ONE reading of the policy, shared with the plan that prices the cliff
-        # (`core/prism/memory_budget.deferred_drain_policy_of`): the run and the plan
-        # cannot read two figures.
-        from nbxtensor.host import need as _need   # the application's core.prism.memory_budget (nbxtensor.host)
-        deferred_drain_policy_of = _need("deferred_drain_policy_of")
-        return deferred_drain_policy_of(cfg.get("memory", {}))
-    except Exception:
-        return fallback
-
-
 def _try_decode_vec(q, k, v, attn_mask, softmax_scale,
                     batch, nheads, nheads_k, seqlen_k, headdim, q_round=None):
     """Route guard for the vector decode kernel: returns the output or

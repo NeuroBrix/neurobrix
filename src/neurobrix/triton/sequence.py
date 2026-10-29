@@ -26,8 +26,7 @@ from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype, parse_dtype
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.backend.runtime import invalidate_current_device_cache
-from nbxtensor.ops.elementwise_wrappers import deferred_drain_policy
-from nbxtensor.ops.wrappers import _DEFERRED_DRAIN_FLOOR_DEFAULT
+from neurobrix.core.prism.memory_budget import deferred_drain_policy
 
 from nbxtensor.memory.arena import Arena
 from .symbols import SymbolResolver, impossible_extent_context
@@ -59,7 +58,7 @@ from . import replay as _replay
 # pool off (default) every drain is a cudaFree→cudaMalloc cycle, so draining
 # eagerly on a model that HAS headroom is pure churn (a fixed 650 MiB cap was
 # measured to regress CogVideoX-2b VAE decode ~49% with ~21 GB free — no
-# benefit). So `wrappers.deferred_drain_policy()` returns
+# benefit). So `core.prism.memory_budget.deferred_drain_policy()` returns
 # (cliff, floor, pressure_reserve, freecheck_interval): the queue always
 # drains at `cliff` (2 GB, throughput ceiling — unchanged when there is
 # headroom, hence NO runtime regression), and drains EARLY (at `floor`) only
@@ -99,17 +98,20 @@ def _parse_env_int(name: str, default: int) -> int:
         return default
 
 
-# Bytes/pressure thresholds are data-driven (wrappers.deferred_drain_policy);
+# Bytes/pressure thresholds are data-driven (core.prism.memory_budget.deferred_drain_policy);
 # the count safety-net stays a flat cap (guards pathological many-small-
 # tensor accumulation that never crosses the bytes budget).
 _DEFERRED_DRAIN_COUNT_DEFAULT = 512
+# The pressure-branch floor a NBX_DEFERRED_DRAIN_RESERVE override re-enables the branch at (a debug / A-B knob; the
+# run's own floor is the vendor file's, `core.prism.memory_budget.deferred_drain_policy`).
+_DEFERRED_DRAIN_FLOOR_DEFAULT = 268_435_456     # 256 MiB
 
 
 def _resolve_drain_policy(planned_cliff: Optional[int] = None):
     """Resolve the per-run deferred-drain policy once, applying env overrides.
 
     Returns `(cliff, floor, reserve, interval, count_limit)`. The config-driven
-    base comes from `wrappers.deferred_drain_policy()`; the cliff is then the
+    base comes from `core.prism.memory_budget.deferred_drain_policy()`; the cliff is then the
     PLAN's (`planned_cliff`, `ComponentAllocation.deferred_drain_cliff_bytes`)
     when Prism set one — Prism budgeted this device against that figure, never
     against the profile's, and the pressure floor never exceeds it. Two env

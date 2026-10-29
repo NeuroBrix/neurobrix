@@ -790,7 +790,6 @@ def _arch_memory_param(key: str, default):
     Thin alias of `_arch_param("memory", ...)`, kept because the memory
     knobs are read from many call sites."""
     return _arch_param("memory", key, default)
-_DEFERRED_DRAIN_FLOOR_DEFAULT = 268_435_456     # 256 MiB — pressure-branch floor
 
 # the families cut out of this module (M2), reached through their module
 from nbxtensor.ops import elementwise_wrappers as _ew  # noqa: E402 — the cut's families (M2)

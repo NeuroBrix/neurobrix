@@ -192,7 +192,7 @@ memory.set_limit(None)           # the physical card again
 ```
 
 Some services are still passed through `nbxtensor.host` while the boundary is cleaned before 0.0.1 (the device
-description, one allocator setting (the drain policy), the operand decisions of the matrix unit and attention, and NeuroBrix's own
+description, the operand decisions of the matrix unit and attention, and NeuroBrix's own
 census and memory classes). `docs/nbxtensor/API.md` section 11 lists each one, its fate (generic in the library, or
 back in the application) and its state.
 

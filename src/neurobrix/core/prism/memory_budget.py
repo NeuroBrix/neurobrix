@@ -213,7 +213,7 @@ DEFERRED_DRAIN_DOOR = "NBX_DEFERRED_DRAIN_BYTES"
 def deferred_drain_policy_of(memory: dict) -> tuple:
     """The Triton engine's deferred-free drain policy from ONE vendor profile's `memory:` section,
     as `(cliff_bytes, floor_bytes, pressure_reserve_bytes, freecheck_interval)` — the pure reading
-    shared by the runtime (`kernels.wrappers.deferred_drain_policy`, which drains by it) and the
+    shared by the runtime (`deferred_drain_policy` below, which the hot loops drain by) and the
     plan (`PrismSolver._deferred_drain_mb`, which prices it). One function, so the two can never
     read two figures.
 
@@ -233,6 +233,25 @@ def deferred_drain_policy_of(memory: dict) -> tuple:
     floor = min(int(memory["deferred_drain_floor_bytes"]), cliff)
     interval = max(1, int(memory.get("deferred_drain_freecheck_interval", 8)))
     return (cliff, floor, reserve, interval)
+
+
+def deferred_drain_policy() -> tuple:
+    """The deferred-drain policy of the run in force: `deferred_drain_policy_of` the vendor file of the first device of
+    the hardware profile the run declared (`triton.dtype.declare_hardware_profile`). The Triton hot loops read it
+    (`triton.sequence._resolve_drain_policy`); the queue is the engine's, so the reading is too (nbxtensor holds no
+    drain policy). No profile declared, or a device with no vendor file: refused by name — the library's reader this
+    replaces returned a 2 GB cliff in silence on either (and on any exception)."""
+    from nbxtensor.ops.wrappers import get_hardware_profile
+    from neurobrix.core.config.loader import get_vendor_config
+    prof = get_hardware_profile()
+    devices = getattr(prof, "devices", None) if prof is not None else None
+    if not devices:
+        raise RuntimeError("ZERO FALLBACK: the Triton hot loop sizes its dead-tensor queue from the hardware profile's "
+                           "vendor file, and no profile with a device was declared for this run "
+                           "(triton.dtype.declare_hardware_profile)")
+    brand = devices[0].brand
+    return deferred_drain_policy_of(get_vendor_config(getattr(brand, "value", brand), devices[0].architecture)
+                                    .get("memory", {}))
 
 
 def deferred_drain_retained_bytes(memory: dict) -> int:

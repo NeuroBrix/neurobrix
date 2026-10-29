@@ -154,12 +154,15 @@ def test_a_component_leaving_less_than_the_floor_is_not_held_whole_under_triton(
 
 
 def test_the_hot_loop_drains_at_the_plans_cliff_and_the_door_still_pins_it(monkeypatch):
-    from nbxtensor.ops.elementwise_wrappers import deferred_drain_policy
+    from neurobrix.core.prism.memory_budget import deferred_drain_policy, deferred_drain_policy_of
     from neurobrix.triton.sequence import TritonSequence, _resolve_drain_policy
 
     monkeypatch.delenv("NBX_DEFERRED_DRAIN_BYTES", raising=False)
     monkeypatch.delenv("NBX_DEFERRED_DRAIN_RESERVE", raising=False)
+    from nbxtensor.ops import wrappers as W
+    monkeypatch.setattr(W, "_NBX_HW_PROFILE", profile(V100_16GB))   # the run's declared profile (its vendor file)
     prof_cliff, prof_floor = deferred_drain_policy()[:2]
+    assert (prof_cliff, prof_floor) == deferred_drain_policy_of(get_vendor_config("nvidia", "volta")["memory"])[:2]
     planned = 904 * MB
     assert planned < prof_cliff
     cliff, floor = _resolve_drain_policy(planned)[:2]
@@ -171,3 +174,13 @@ def test_the_hot_loop_drains_at_the_plans_cliff_and_the_door_still_pins_it(monke
     assert seq._planned_drain_cliff == planned
     monkeypatch.setenv("NBX_DEFERRED_DRAIN_BYTES", str(300 * MB))
     assert _resolve_drain_policy(planned)[:2] == (300 * MB, 300 * MB), "the door no longer pins the cliff"
+
+
+def test_no_declared_profile_is_refused_by_name_not_a_silent_cliff(monkeypatch):
+    """The library's reader this replaces returned a 2 GB cliff on no profile and on ANY exception (a ZERO FALLBACK
+    breach). The engine's refuses by name."""
+    from nbxtensor.ops import wrappers as W
+    from neurobrix.core.prism.memory_budget import deferred_drain_policy
+    monkeypatch.setattr(W, "_NBX_HW_PROFILE", None)
+    with pytest.raises(RuntimeError, match="no profile with a device was declared"):
+        deferred_drain_policy()
