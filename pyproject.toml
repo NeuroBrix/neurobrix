@@ -47,8 +47,9 @@ dependencies = [
     # The tensor library the Triton engine is built on (nbxtensor/, this repository): a path dependency until it
     # is published on its own (docs/nbxtensor/MIGRATION.md, M6)
     "nbxtensor @ {root:uri}/nbxtensor",
-    # Core compute
-    "triton",
+    # Core compute. macOS has no triton wheel on PyPI: Apple Metal runs a triton built from source with its Metal
+    # backend (the Mac's install), which this line must not try to resolve.
+    "triton; platform_system != 'Darwin'",
     "numpy>=1.24.0",
     # .nbx container + config + schema
     "safetensors>=0.4.0",

@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-- **PyTorch is no longer a required dependency**: the Triton engine (`--triton`, `--triton-sequential`) runs on nbxtensor, Triton and NumPy alone. The PyTorch engine (`--compiled`, the default when no mode is given, and `--sequential`) is installed with `pip install "neurobrix[pytorch]"`; asking for it where PyTorch is not installed stops at once with a message naming the missing package and the Triton alternative.
+- **PyTorch is no longer a required dependency**: the Triton engine (`--triton`, `--triton-sequential`) runs on nbxtensor, Triton and NumPy alone (on macOS, Triton is the one the Apple Metal install provides; pip does not try to fetch it). The PyTorch engine (`--compiled`, the default when no mode is given, and `--sequential`) is installed with `pip install "neurobrix[pytorch]"`; asking for it where PyTorch is not installed stops at once with a message naming the missing package and the Triton alternative.
 
 ### Added
 - **A mixture-of-experts model fills the other cards of a multi-card machine with whole expert blocks**: a card that only holds experts is budgeted at its own memory, not at the margin a card running a model needs, so it takes every block that fits. Qwen3-30B-A3B on four 16 GB V100: 40 of 48 expert layers on the cards instead of 31, 186 ms a token instead of 274 ms, same text.
