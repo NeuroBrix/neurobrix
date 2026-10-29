@@ -73,6 +73,8 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 
 | kind | path | symbol | why it stays |
 |---|---|---|---|
+| dead | src/neurobrix/triton/paged_kv_cache.py | PagedTritonKVCache.capacity_for | the engine's prompt-aware sizing policy (S1) stated as one function of the prompt's end: the card-less instrument its tests pin the rule with (tests/unit/runtime/test_kv_prompt_aware_sizing.py), where the real path needs a card |
+| dead | src/neurobrix/triton/paged_kv_cache.py | PagedTritonKVCache.held_bytes | what the paged cache costs now, from its granted pages: the observable the page-release tests read (test_the_paged_kv_cache_decodes_as_its_oracle, test_the_imposed_rung_...) |
 | wrapper | src/neurobrix/core/prism/runtime_widths.py | storage_dtype_name | the compiled rules' half of the storage-ceiling interface the Triton rules implement with their own fp64 fact: which ceiling a branch applies is the engine's decision |
 | wrapper | src/neurobrix/core/prism/chunked_region.py | _Mix | a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `Exception` would name nothing |
 | wrapper | src/neurobrix/core/prism/profiler.py | _Declined | a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `Exception` would name nothing |
