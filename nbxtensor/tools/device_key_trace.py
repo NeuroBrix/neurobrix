@@ -1,4 +1,5 @@
-"""pytest plugin: record every device-file key the LIBRARY reads while a test suite runs (the dynamic half of the
+"""pytest plugin: record every device-file key the LIBRARY reads while a test suite runs (through the host's
+vendor_config / vendor_param and through the profile in force, `ops._configs.active_vendor_profile`) (the dynamic half of the
 device-key census, `device_key_census.py`). Activated with `-p nbxtensor.tools.device_key_trace` (or the file on
 the path) and NBX_DEVICE_KEY_TRACE=<file>: each read `section.key` (or a top-level key) is appended once."""
 from __future__ import annotations
@@ -55,3 +56,9 @@ def pytest_configure(config):
         return fn
 
     host.need = need
+
+    # the profile in force, read whole (`ops._configs.active_vendor_profile`: the executing device's vendor file,
+    # resolved from the machine): every module imports it inside its functions, so the module attribute is the one
+    from nbxtensor.ops import _configs
+    real_active = _configs.active_vendor_profile
+    _configs.active_vendor_profile = lambda: _Tracked(real_active())

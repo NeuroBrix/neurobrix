@@ -83,6 +83,8 @@ def main(argv=None) -> int:
     keys = {k for k in static_keys() if k.split(".")[0] in tops}
     for t in a.trace:
         keys |= {line.strip() for line in Path(t).read_text().splitlines() if line.strip()}
+    # `_vendor`, `_profile`, `_exact`: names the resolver adds to the profile it records, not keys of a file
+    keys = {k for k in keys if not k.startswith("_")}
     Path(a.out).write_text("".join(f"{k}\n" for k in sorted(keys)))
     print(f"[device-key census] {len(keys)} keys -> {a.out}")
     return 0
