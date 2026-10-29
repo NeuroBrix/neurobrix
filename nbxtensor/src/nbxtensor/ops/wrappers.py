@@ -1199,7 +1199,7 @@ def _int_division_widening_dtype(a, b):
             if m >= limit:
                 raise RuntimeError(
                     f"ZERO FALLBACK: an integer division with |values| up to {m} on a backend with no "
-                    f"float64 ('{__import__('nbxtensor.tensor', fromlist=['_detect_gpu_backend'])._detect_gpu_backend()}'): "
+                    f"float64 ('{__import__('nbxtensor.backend.runtime', fromlist=['_detect_gpu_backend'])._detect_gpu_backend()}'): "
                     f"the float32 widening is exact only below 2^24, and float64 is misread there. "
                     f"An integer division kernel is the extension that lifts this.")
     return NBXDtype.float32
