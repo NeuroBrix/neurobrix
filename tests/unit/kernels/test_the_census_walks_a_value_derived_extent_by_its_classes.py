@@ -65,7 +65,14 @@ def test_the_walk_meets_every_class_of_the_extent(shadow):
     truth = {_classes_of(n) for n in range(1, 2049)}
     met = {_classes_of(n) for n in ran}
     assert truth - met == set(), sorted(truth - met)[:5]
-    assert len(ran) < 4 * len(truth), (len(ran), len(truth))   # bounded: a walk, never the whole range
+    # bounded as the walk promises — one run per class and a log of the class's width: at most both ends plus, for each
+    # boundary between two adjacent extents whose classes differ, ceil(log2(range)) probes; and far below the range
+    # (the bound was "4 runs per class", which held at 191 classes and broke when volta's M ladder went to classes of
+    # eight below 64 on 2026-10-19: 119 classes, 490 runs — the walk was unchanged, the arbitrary bound was not)
+    import math
+    boundaries = sum(_classes_of(n) != _classes_of(n + 1) for n in range(1, 2048))
+    assert len(ran) <= 2 + boundaries * math.ceil(math.log2(2048)), (len(ran), boundaries)
+    assert len(ran) < 2048 // 3, (len(ran), "a walk, never the whole range")
     assert last == ran[-1]
 
 
