@@ -33,4 +33,15 @@ def test_a_view_with_gaps_is_still_refused():
     base = NBXTensor.from_numpy(np.zeros((4, 6), dtype=np.float32))
     assert L._writable_buffers([base[:, :3]]) is None                       # every row skips 3
     assert L._writable_buffers([base.permute(1, 0)[:2]]) is None             # permuted AND gapped
-    assert L._writable_buffers([NBXTensor.from_numpy(np.zeros((1, 6), dtype=np.float32)).expand(4, 6)]) is None
+
+
+
+def test_a_broadcast_of_a_dense_buffer_is_kept_at_the_bytes_it_reaches():
+    """A stride-0 broadcast of a dense buffer (the attention wrapper's bias read as [B, H, Sq, Sk]) is kept since the
+    matrix-unit flash certification (2026-10-21, `_dense_broadcast`): its span is exactly its buffer. This file still
+    asserted it refused and stood red from then to 2026-10-29."""
+    row = NBXTensor.from_numpy(np.zeros((1, 6), dtype=np.float32))
+    got = L._writable_buffers([row.expand(4, 6)])
+    assert got == [(row.data_ptr(), 6 * 4, "float32")] or got == [(row.data_ptr(), 6 * 4, "fp32")], got
+    gapped = NBXTensor.from_numpy(np.zeros((4, 6), dtype=np.float32))[:, :3]
+    assert L._writable_buffers([gapped.expand(2, 4, 3)]) is None             # a broadcast of a gapped view: refused
