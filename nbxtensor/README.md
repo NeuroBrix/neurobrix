@@ -113,8 +113,10 @@ assert promoted(["float16", "bfloat16"]) is None          # two half dtypes: the
 assert float_math_input("int64") == "float32"             # rsqrt of an integer reads it as float32
 
 from nbxtensor.dtype.promotion import binary_result
-assert binary_result("int64", "float16") == "float16"     # a binary op climbs by kind, then by width
-assert binary_result("float16", "bfloat16") == "float16"  # one kind, one width: the first operand's
+assert binary_result("int8", "uint8") == "int16"          # the Array API standard: wide enough for both
+assert binary_result("complex64", "float64") == "complex128"   # a complex keeps the wider float's precision
+assert binary_result("int64", "float16") == "float16"     # across kinds (left open by the standard): PyTorch's rule
+assert binary_result("bfloat16", "float16") == "float32"  # two half formats meet in float32, whatever the order
 ```
 
 ### Precision by policy

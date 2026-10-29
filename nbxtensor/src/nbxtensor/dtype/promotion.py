@@ -42,9 +42,35 @@ def float_math_input(dtype: str) -> str:
     return dtype if kind(dtype) in ("float", "complex") else "float32"
 
 
+def _of_kind(k: str, nbytes: int) -> str:
+    """The table's dtype of kind `k` and `nbytes` bytes (the standard formats: intN, uintN, floatN, complexN)."""
+    name = {"int": "int", "uint": "uint", "float": "float", "complex": "complex"}[k] + str(8 * nbytes)
+    if kind(name) != k or itemsize(name) != nbytes:
+        raise ValueError(f"no {k} dtype of {nbytes} bytes in the dtype table")
+    return name
+
+
 def binary_result(a: str, b: str) -> str:
-    """The dtype an element-wise op of two tensors of dtypes `a` and `b` computes and writes in: the higher by kind
-    (bool, unsigned, signed, float, complex), then by width; on a tie the first operand's."""
-    ra = (_KIND_ORDER.index(kind(a)), itemsize(a))
-    rb = (_KIND_ORDER.index(kind(b)), itemsize(b))
-    return a if ra >= rb else b
+    """The dtype an element-wise op of two tensors of dtypes `a` and `b` computes and writes in — the Array API
+    standard's type promotion (data-apis.org/array-api, "Type Promotion Rules"), the same whatever the operands' order:
+    within a kind the wider; a signed with an unsigned integer, the signed integer wide enough for both (none holds
+    uint64: refused by name); a real float with a complex, the complex carrying the wider float's precision. What the
+    standard leaves unspecified follows PyTorch, the engine's oracle: across kinds the higher kind (bool, unsigned,
+    signed, float, complex) with its own width; two floats of one width and different formats (float16, bfloat16)
+    meet in float32."""
+    ka, kb = kind(a), kind(b)
+    if ka == kb:
+        if itemsize(a) != itemsize(b):
+            return a if itemsize(a) > itemsize(b) else b
+        if a == b or ka not in ("float", "complex"):
+            return a
+        return _of_kind(ka, 2 * itemsize(a))                 # float16 with bfloat16: float32
+    if {ka, kb} == {"int", "uint"}:
+        signed, unsigned = (a, b) if ka == "int" else (b, a)
+        if itemsize(unsigned) >= 8:
+            raise ValueError(f"binary_result({a}, {b}): no signed integer holds every {unsigned} value")
+        return _of_kind("int", max(itemsize(signed), 2 * itemsize(unsigned)))
+    if {ka, kb} == {"float", "complex"}:
+        real, cplx = (a, b) if ka == "float" else (b, a)
+        return _of_kind("complex", max(itemsize(cplx), 2 * itemsize(real)))
+    return a if _KIND_ORDER.index(ka) > _KIND_ORDER.index(kb) else b

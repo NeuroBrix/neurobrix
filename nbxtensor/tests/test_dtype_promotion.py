@@ -42,11 +42,19 @@ _OLD_PRIORITY = {"bool": 0, "uint8": 1, "int8": 2, "int16": 3, "int32": 4, "int6
                  "float32": 7, "float64": 8, "complex64": 9, "complex128": 10}
 
 
-def test_the_binary_result_is_the_wrappers_former_table_on_every_pair():
+# The pairs where the former table was wrong, and what they are now (the Array API standard, PyTorch for float16
+# with bfloat16; 2026-10-29): uint8 with int8 stayed int8 (a silent overflow); float16 with bfloat16 took the FIRST
+# operand (the result depended on the order); complex64 with float64 lost float64's precision.
+_CORRECTED = {frozenset({"uint8", "int8"}): "int16", frozenset({"float16", "bfloat16"}): "float32",
+              frozenset({"complex64", "float64"}): "complex128"}
+
+
+def test_the_binary_result_is_the_wrappers_former_table_but_its_three_defects():
     """The table the Triton wrappers and Prism's width pass each kept (`_DTYPE_PRIORITY`, `_RANK`): the higher rank,
-    the first operand on a tie — now one rule read from the dtype table's kind and width."""
+    the first operand on a tie — now one rule read from the dtype table's kind and width, the Array API's; it differs
+    from the former table on the three pairs `_CORRECTED` names, and nowhere else."""
     from nbxtensor.dtype.promotion import binary_result
     for a in _OLD_PRIORITY:
         for b in _OLD_PRIORITY:
-            want = a if _OLD_PRIORITY[a] >= _OLD_PRIORITY[b] else b
+            want = _CORRECTED.get(frozenset({a, b})) or (a if _OLD_PRIORITY[a] >= _OLD_PRIORITY[b] else b)
             assert binary_result(a, b) == want, (a, b)
