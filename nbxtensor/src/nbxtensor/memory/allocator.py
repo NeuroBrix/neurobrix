@@ -58,20 +58,38 @@ def _extract_neurobrix_site(max_frames: int = 12) -> str:
     """Return nearest neurobrix/ frame as 'file:line func', skipping this file.
 
     The logger only fires inside DeviceAllocator — we want the CALLER of the
-    allocator (wrappers.py, dispatch.py, sequence.py, ...) not the allocator
-    itself. Walk the stack until the first frame whose filename contains
-    'neurobrix/' AND is NOT nbx_tensor.py.
+    allocator (a wrapper, the dispatch, the engine's sequence, ...) not the allocator
+    itself. Walk the stack until the first frame of the library or the engine
+    (`_is_caller_frame`) that is not the allocator's or the tensor's own.
     """
     f = sys._getframe(2)  # skip this fn + malloc_cuda/free_cuda
     n = 0
     while f is not None and n < max_frames:
         fname = f.f_code.co_filename
-        if "neurobrix" in fname and not fname.endswith("/nbx_tensor.py"):
-            rel = fname.split("neurobrix/")[-1]
-            return f"{rel}:{f.f_lineno} {f.f_code.co_name}"
+        if _is_caller_frame(fname):
+            return f"{_rel_site(fname)}:{f.f_lineno} {f.f_code.co_name}"
         f = f.f_back
         n += 1
     return "<unknown>"
+
+
+#: the allocator's and the tensor's own files: never the site a trace names
+_NOT_A_CALLER = ("/nbxtensor/memory/allocator.py", "/nbxtensor/memory/memory_pool.py", "/nbxtensor/tensor.py")
+
+
+def _is_caller_frame(fname: str) -> bool:
+    """A frame of the library or of the engine that calls it (the engine's tree under `neurobrix/`). The trace keyed on
+    'neurobrix' alone until the library moved out (M1, 2026-10-28): every wrapper's frame was then skipped and a site
+    named only the engine loop that dispatched it."""
+    return ("/nbxtensor/" in fname or "/neurobrix/" in fname) and not fname.endswith(_NOT_A_CALLER)
+
+
+def _rel_site(fname: str) -> str:
+    """`nbxtensor/ops/conv_wrappers.py` or `neurobrix/triton/sequence.py`: the path from the package."""
+    for pkg in ("/neurobrix/", "/nbxtensor/"):      # the engine first: a tree may be named nbxtensor
+        if pkg in fname:
+            return pkg.strip("/") + "/" + fname.rsplit(pkg, 1)[1]
+    return fname
 
 
 def _record_malloc_site(ptr: int, nbytes: int, dev: int) -> None:
@@ -91,9 +109,8 @@ def _extract_neurobrix_chain(max_frames: int = 40, keep: int = 8) -> str:
     out = []
     while f is not None and n < max_frames and len(out) < keep:
         fname = f.f_code.co_filename
-        if "neurobrix" in fname and not fname.endswith("/nbx_tensor.py"):
-            rel = fname.split("neurobrix/")[-1]
-            out.append(f"{rel}:{f.f_lineno} {f.f_code.co_name}")
+        if _is_caller_frame(fname):
+            out.append(f"{_rel_site(fname)}:{f.f_lineno} {f.f_code.co_name}")
         f = f.f_back
         n += 1
     return " < ".join(out) or "<unknown>"
