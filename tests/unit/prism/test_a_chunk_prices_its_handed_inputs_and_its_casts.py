@@ -130,12 +130,18 @@ def test_a_conv3d_is_priced_with_the_workspace_its_vendor_states():
 
 
 def test_the_triton_conv3d_is_priced_with_its_folds():
-    """The Triton engines run conv3d as kt conv2d launches over the folded frames, holding the input fold, the output
-    fold and the accumulator at once (`tiling_sizes.conv3d_one_shot_peak`): 3 output-sized buffers measured beside a
-    1,755 MB output on Wan2.1's VAE (2026-10-17). The same function decides the op's chunking; the profile prices from
-    it. Red if the profile adds anything else than that function's figure."""
-    from neurobrix.core.module.tiling_sizes import conv3d_one_shot_peak
+    """The Triton engines run conv3d through the wrapper's own path (the temporal pad, each tap's conv2d on the card's
+    matrix unit, the bias), and Prism prices it by the cost the library DECLARES for that path
+    (`nbxtensor.ops.conv_wrappers.conv3d_cost`): its peak less the result the walk already counts. That declared peak is
+    the allocator's measured peak to the byte on 12 V100 cases (test_a_convolution_allocates_what_it_declares). It
+    replaced `tiling_sizes.conv3d_one_shot_peak`, which counted the result twice and missed the matrix unit's copies
+    (M3, bdbdeb8c) — this test still pinned that formula, and stood red from bdbdeb8c to its correction.
+    Red if the profile adds anything else than the declared figure."""
     from neurobrix.core.prism import PrismSolver
+    from neurobrix.core.config.loader import vendor_config_for_device
+    from nbxtensor.ops import conv_wrappers as _cw
+    from nbxtensor.ops._configs import matrix_unit
+    from nbxtensor.ops._cost import Spec
     from types import SimpleNamespace
     T = {"input::x": _t([1, 4, 6, 8, 8], is_input=True, seam_alias_of="test"), "param::w": _t([4, 4, 3, 3, 3]),
          "c": _t([1, 4, 4, 6, 6])}
@@ -149,7 +155,11 @@ def test_the_triton_conv3d_is_priced_with_its_folds():
     base = ActivationProfiler(g).estimate_peak_memory(dtype_bytes=2, widths=w)
     priced = ActivationProfiler(g).estimate_peak_memory(dtype_bytes=2, widths=w, conv3d_workspace=hook)
     x_width = dict(w.casts.get("conv::0", [])).get("input::x", w["input::x"])                 # the conv reads its cast copy's width
-    expect = conv3d_one_shot_peak([1, 4, 6, 8, 8], [4, 4, 3, 3, 3], [1, 1, 1], [0, 0, 0], [1, 1, 1], x_width, w["c"])
+    names = {2: "float16", 4: "float32"}
+    cost = _cw.conv3d_cost(Spec.contiguous((1, 4, 6, 8, 8), names[x_width]), Spec.contiguous((4, 4, 3, 3, 3), names[x_width]),
+                           [1, 1, 1], [0, 0, 0], [1, 1, 1], 1, False, names[w["c"]],
+                           matrix_unit(vendor_config_for_device("nvidia", "volta", None, model=None)))
+    expect = cost.peak_bytes - sum(b.nbytes for b in cost.outputs)
     assert priced.peak_bytes - base.peak_bytes == expect
     assert expect > 0
 
