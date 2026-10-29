@@ -14,7 +14,7 @@ import triton.language as tl
 
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.memory.allocator import DeviceAllocator
-from nbxtensor.backend.runtime import _detect_gpu_backend
+from nbxtensor.backend.runtime import gpu_backend
 
 
 # ============================================================================
@@ -192,7 +192,7 @@ def _build_ptr_tables(gate_weights, up_weights, down_weights):
         by_device[gate_weights[i]._device_idx].append(i)
     tables.device_experts = dict(by_device)
 
-    _metal = _detect_gpu_backend() == "metal"
+    _metal = gpu_backend() == "metal"
     if _metal and tables.quantized:
         raise RuntimeError(
             "ZERO FALLBACK: quantized (int4) expert tables are not proven on "

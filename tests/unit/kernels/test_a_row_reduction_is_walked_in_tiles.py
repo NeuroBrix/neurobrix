@@ -48,9 +48,9 @@ def test_a_long_row_reduction_reserves_no_local_memory():
         from neurobrix.triton.dtype import declare_hardware_profile
         declare_hardware_profile(load_default_profile())   # as a run declares it: the row tile's register bound is the profile's
         import nbxtensor.ops.reduction_wrappers as _nbx_reduction_wrappers
-        from nbxtensor.dtype.nbx_dtype import NBXDtype; from nbxtensor.tensor import NBXTensor; from nbxtensor.memory.allocator import DeviceAllocator; from nbxtensor.backend.runtime import _gpu_runtime
+        from nbxtensor.dtype.nbx_dtype import NBXDtype; from nbxtensor.tensor import NBXTensor; from nbxtensor.memory.allocator import DeviceAllocator; from nbxtensor.backend.runtime import gpu_runtime
         from nbxtensor.ops import wrappers as W
-        rt = _gpu_runtime()
+        rt = gpu_runtime()
         def used():
             f, t = ctypes.c_size_t(), ctypes.c_size_t(); rt.cudaMemGetInfo(ctypes.byref(f), ctypes.byref(t))
             return (t.value - f.value) >> 20

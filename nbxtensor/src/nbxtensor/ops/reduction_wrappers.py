@@ -9,7 +9,7 @@ from nbxtensor.ops import launch_keys as _lk
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype, dtype_size
 from nbxtensor.memory.allocator import DeviceAllocator
-from nbxtensor.backend.runtime import _set_device
+from nbxtensor.backend.runtime import set_device
 from nbxtensor.shape import MAX_NDIM as _NBX_MAX_NDIM, broadcast_shapes, max_linear_offset
 from nbxtensor.dtype.itemsize import canonical_name
 from nbxtensor.dtype.promotion import binary_result, float_math_input
@@ -307,7 +307,7 @@ def mean_wrapper(x, dim=None, keepdim=False, dtype=None) :
     # rows per program, the feature tile and the warps: the certified configuration of this key (chantier 1), the
     # key the derived census forms (`launch_keys.row_reduce_launches`)
     grid = lambda META: (triton.cdiv(batch_dim, META['BLOCK_SIZE_BATCH']),)
-    _set_device(x_2d)
+    set_device(x_2d)
     mean_forward_kernel[grid](
         x_2d, output,
         batch_dim, feat_dim, _lk.bucket_of("M", batch_dim), _lk.softmax_feat_bucket(feat_dim),
@@ -375,7 +375,7 @@ def sum_wrapper(x, dim=None, keepdim=False, dtype=None) :
     # rows per program, the feature tile and the warps: the certified configuration of this key (chantier 1), the
     # key the derived census forms (`launch_keys.row_reduce_launches`)
     grid = lambda META: (triton.cdiv(batch_dim, META['BLOCK_SIZE_BATCH']),)
-    _set_device(x_2d)
+    set_device(x_2d)
     sum_forward_kernel[grid](
         x_2d, output,
         batch_dim, feat_dim, _lk.bucket_of("M", batch_dim), _lk.softmax_feat_bucket(feat_dim),
@@ -415,7 +415,7 @@ def amax_wrapper(x, dim=None, keepdim=False) :
     # rows per program, the feature tile and the warps: the certified configuration of this key (chantier 1), the
     # key the derived census forms (`launch_keys.row_reduce_launches`)
     grid = lambda META: (triton.cdiv(batch_dim, META['BLOCK_SIZE_BATCH']),)
-    _set_device(x_2d)
+    set_device(x_2d)
     amax_forward_kernel[grid](
         x_2d, output,
         batch_dim, feat_dim, _lk.bucket_of("M", batch_dim), _lk.softmax_feat_bucket(feat_dim),
@@ -446,9 +446,9 @@ def argmax_wrapper(x, dim=None, keepdim=False) :
         mid_index = NBXTensor.empty((mid_size,), dtype=NBXDtype.int64, device=x.device)
         out = NBXTensor.empty([], dtype=NBXDtype.int64, device=x.device)
 
-        _set_device(x.contiguous())
+        set_device(x.contiguous())
         argmax_kernel_1[(mid_size, 1, 1)](x.contiguous(), mid_value, mid_index, M, block_size)
-        _set_device(mid_value)
+        set_device(mid_value)
         argmax_kernel_2[(1, 1, 1)](mid_value, mid_index, out, mid_size, block_mid)
         return out
     else:
@@ -465,7 +465,7 @@ def argmax_wrapper(x, dim=None, keepdim=False) :
         cap, warps = _argmax_tile()
         TILE_N = min(triton.next_power_of_2(N), cap)
         grid = (M, 1, 1)
-        _set_device(x)
+        set_device(x)
         argmax_kernel_inner[grid](x, out_index, M, N, TILE_N=TILE_N,
                                   ONE_TILE_PER_CTA=(TILE_N >= N),
                                   num_warps=warps)
@@ -485,9 +485,9 @@ def argmin_wrapper(x, dim=None, keepdim=False) :
         mid_index = NBXTensor.empty((mid_size,), dtype=NBXDtype.int64, device=x.device)
         out = NBXTensor.empty([], dtype=NBXDtype.int64, device=x.device)
 
-        _set_device(x.contiguous())
+        set_device(x.contiguous())
         argmin_kernel_1[(mid_size, 1, 1)](x.contiguous(), mid_value, mid_index, M, block_size)
-        _set_device(mid_value)
+        set_device(mid_value)
         argmin_kernel_2[(1, 1, 1)](mid_value, mid_index, out, mid_size, block_mid)
         return out
     else:
@@ -512,7 +512,7 @@ def argmin_wrapper(x, dim=None, keepdim=False) :
         BLOCK_N = min(_amin_cap, triton.next_power_of_2(N))
         BLOCK_M = _amin_bm
         grid = (triton.cdiv(M, BLOCK_M), K)
-        _set_device(x)
+        set_device(x)
         argmin_kernel[grid](x, out_index, M, N, K, BLOCK_M, BLOCK_N,
                             num_warps=_amin_warps)
         return out_index
@@ -559,14 +559,14 @@ def cumsum_wrapper(x, dim: int = 0, dtype=None) :
         part_num = triton.cdiv(scan_size, BLOCK_SIZE)
         partial_sum = NBXTensor.empty(part_num, dtype=NBXDtype.float32, device=x.device)
 
-        _set_device(row_in)
+        set_device(row_in)
         scan_part_sum_kernel[(part_num,)](
             row_in, row_out, partial_sum, scan_size, part_num, BLOCK_SIZE=BLOCK_SIZE)
 
         if part_num > 1:
             for i in range(1, part_num):
                 partial_sum[i] += partial_sum[i - 1]
-            _set_device(row_out)
+            set_device(row_out)
             add_base_sum_kernel[(part_num,)](
                 row_out, partial_sum, scan_size, part_num, BLOCK_SIZE=BLOCK_SIZE)
 
@@ -591,9 +591,9 @@ def all_wrapper(x, dim=None, keepdim=False) :
         BLOCK_MID = triton.next_power_of_2(mid_size)
         mid = NBXTensor.empty(mid_size, dtype=NBXDtype.bool_, device=x.device)
         out = NBXTensor.empty([], dtype=NBXDtype.bool_, device=x.device)
-        _set_device(x)
+        set_device(x)
         all_kernel_mid[(mid_size,)](x, mid, M, mid_size, BLOCK_SIZE=BLOCK_SIZE)
-        _set_device(mid)
+        set_device(mid)
         all_kernel_result[(1,)](mid, out, mid_size, BLOCK_MID=BLOCK_MID)
         return out
     else:
@@ -606,7 +606,7 @@ def all_wrapper(x, dim=None, keepdim=False) :
         BLOCK_N = min(4096, triton.next_power_of_2(N))
         _red_bm, _red_bn, _red_warps = _ew._reduction_2d_tile()
         grid = (triton.cdiv(M, _red_bm),)
-        _set_device(x_perm)
+        set_device(x_perm)
         all_kernel_dim[grid](x_perm, out, M, N, BLOCK_M=_red_bm, BLOCK_N=BLOCK_N,
                              num_warps=_red_warps)
         shape[dim] = 1
@@ -627,9 +627,9 @@ def any_wrapper(x, dim=None, keepdim=False) :
         BLOCK_MID = triton.next_power_of_2(mid_size)
         mid = NBXTensor.empty(mid_size, dtype=NBXDtype.bool_, device=x.device)
         out = NBXTensor.empty([], dtype=NBXDtype.bool_, device=x.device)
-        _set_device(x)
+        set_device(x)
         any_kernel_mid[(mid_size,)](x, mid, M, mid_size, BLOCK_SIZE=BLOCK_SIZE)
-        _set_device(mid)
+        set_device(mid)
         any_kernel_result[(1,)](mid, out, mid_size, BLOCK_MID=BLOCK_MID)
         return out
     else:
@@ -642,7 +642,7 @@ def any_wrapper(x, dim=None, keepdim=False) :
         BLOCK_N = min(4096, triton.next_power_of_2(N))
         _red_bm, _red_bn, _red_warps = _ew._reduction_2d_tile()
         grid = (triton.cdiv(M, _red_bm),)
-        _set_device(x_perm)
+        set_device(x_perm)
         any_kernel_dim[grid](x_perm, out, M, N, BLOCK_M=_red_bm, BLOCK_N=BLOCK_N,
                              num_warps=_red_warps)
         shape[dim] = 1
@@ -667,9 +667,9 @@ def prod_wrapper(x, dim=None, keepdim=False) :
         BLOCK_MID = triton.next_power_of_2(mid_size)
         mid = NBXTensor.empty(mid_size, dtype=x.dtype, device=x.device)
         out = NBXTensor.empty([], dtype=x.dtype, device=x.device)
-        _set_device(x.view(-1))
+        set_device(x.view(-1))
         prod_kernel_mid[(mid_size,)](x.view(-1), mid, M, BLOCK_SIZE=BLOCK_SIZE)
-        _set_device(mid)
+        set_device(mid)
         prod_kernel_result[(1,)](mid, out, mid_size, BLOCK_MID=BLOCK_MID)
         return out
     else:
@@ -681,7 +681,7 @@ def prod_wrapper(x, dim=None, keepdim=False) :
         out = NBXTensor.empty(M, dtype=x.dtype, device=x.device)
         _red_bm, _red_bn, _red_warps = _ew._reduction_2d_tile()
         grid = (triton.cdiv(M, _red_bm),)
-        _set_device(x_perm)
+        set_device(x_perm)
         prod_kernel[grid](x_perm, out, M, N,
                           BLOCK_M=_red_bm, BLOCK_N=_red_bn,
                           num_warps=_red_warps)
@@ -711,10 +711,10 @@ def std_wrapper(x, dim=None, correction=1, keepdim=False) :
         tmp_sum = NBXTensor.empty(num_blocks, dtype=NBXDtype.float32, device=x.device)
         tmp_sum_sq = NBXTensor.empty(num_blocks, dtype=NBXDtype.float32, device=x.device)
         out = NBXTensor.empty([], dtype=NBXDtype.float32, device=x.device)
-        _set_device(x.view(-1))
+        set_device(x.view(-1))
         std_map_kernel[(num_blocks,)](x.view(-1), tmp_sum, tmp_sum_sq, N, BLOCK_N=BLOCK_N)
         BLOCK_SIZE = triton.next_power_of_2(num_blocks)
-        _set_device(tmp_sum)
+        set_device(tmp_sum)
         std_reduce_kernel[(1,)](
             tmp_sum, tmp_sum_sq, out, N, float(correction), num_blocks,
             BLOCK_SIZE=BLOCK_SIZE)
@@ -729,7 +729,7 @@ def std_wrapper(x, dim=None, correction=1, keepdim=False) :
         x_2d = x_perm.reshape(M, N)
         out_flat = NBXTensor.empty(M, dtype=NBXDtype.float32, device=x.device)
         grid, _bm, _bn = _ew._reduction_tile(M)
-        _set_device(x_2d)
+        set_device(x_2d)
         std_dim_kernel[grid](
             x_2d, out_flat,
             x_2d.stride(0), x_2d.stride(1),
@@ -760,10 +760,10 @@ def var_wrapper(x, dim=None, correction=1, keepdim=False) :
         average = NBXTensor.empty(num_blocks, dtype=NBXDtype.float32, device=x.device)
         count = NBXTensor.empty(num_blocks, dtype=NBXDtype.float32, device=x.device)
         out = NBXTensor.empty([], dtype=NBXDtype.float32, device=x.device)
-        _set_device(x.view(-1))
+        set_device(x.view(-1))
         var_kernel_1[(num_blocks,)](x.view(-1), acc, average, count, N, BLOCK_N=BLOCK_N)
         BLOCK_NUM = triton.next_power_of_2(num_blocks)
-        _set_device(acc)
+        set_device(acc)
         var_kernel_2[(1,)](
             acc, average, count, out, N, float(correction), num_blocks,
             BLOCK_N=BLOCK_NUM)
@@ -778,7 +778,7 @@ def var_wrapper(x, dim=None, correction=1, keepdim=False) :
         x_2d = x_perm.reshape(M, N)
         out_flat = NBXTensor.empty(M, dtype=NBXDtype.float32, device=x.device)
         grid, _bm, _bn = _ew._reduction_tile(M)
-        _set_device(x_2d)
+        set_device(x_2d)
         var_welford_kernel[grid](x_2d, out_flat, M, N, float(correction),
                                  BLOCK_M=_bm, BLOCK_N=_bn,
                                  num_warps=4)
@@ -833,7 +833,7 @@ def scatter_reduce_wrapper(input, dim: int, index,
         outer_size, dim_size, inner_size,
     )
 
-    _set_device(out)
+    set_device(out)
     if reduce == "sum" or reduce == "add":
         scatter_add_kernel[_ew._1d_grid(N)](*stride_args, **_ew_meta(N))
     elif reduce == "amax":

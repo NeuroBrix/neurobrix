@@ -19,7 +19,7 @@ WHY IT IS NOT A SWALLOWED ERROR
 -------------------------------
 The conversion happens only when an EXECUTING probe says this process can see no
 device at all — `DeviceAllocator.device_count()`, which asks the driver, not
-`_detect_gpu_backend()`, which answers which backend the BUILD can address and
+`gpu_backend()`, which answers which backend the BUILD can address and
 says "cuda" with no card visible (register 62). On a machine with a device the
 hook does nothing whatsoever: it is disarmed for the session, so a real
 allocation failure on a real card fails exactly as it does today. And it

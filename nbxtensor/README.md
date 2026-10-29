@@ -312,8 +312,11 @@ pool.set_threads(None)                                        # back to the meas
 
 ## Backends
 
-CUDA (NVIDIA), Apple Metal through triton-ext, and the CPU. The backend modules are moving into the library; until
-then the device examples live in NeuroBrix's tests.
+CUDA (NVIDIA) and Apple Metal through triton-ext; what a new backend provides is `docs/nbxtensor/BACKENDS.md`, and
+`tests/nbxtensor_backend_conformance` is what it must pass. The backend in force is public API:
+`nbxtensor.backend.runtime.gpu_backend()` names it ("cuda", "hip", "metal"), `gpu_runtime()` is its runtime,
+`backend_table()` its entry points, `device_memory()` its memory primitives, and `set_device(tensor)` binds the
+driver to a tensor's device before a launch.
 
 ## Exchange with other libraries: DLPack
 

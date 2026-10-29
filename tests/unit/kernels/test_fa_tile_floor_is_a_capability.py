@@ -60,7 +60,7 @@ def test_a_backend_without_a_row_refuses(monkeypatch):
     from nbxtensor import tensor as nt
     import nbxtensor.backend.runtime as _nbx_runtime
     from nbxtensor.backend.capabilities import _backend_capability
-    monkeypatch.setattr(_nbx_runtime, "_detect_gpu_backend", lambda: "no-such-backend")
+    monkeypatch.setattr(_nbx_runtime, "gpu_backend", lambda: "no-such-backend")
 
     with pytest.raises(RuntimeError) as exc:
         _backend_capability({"cuda": 16}, "_TEST_TABLE", "its FA tile floor")

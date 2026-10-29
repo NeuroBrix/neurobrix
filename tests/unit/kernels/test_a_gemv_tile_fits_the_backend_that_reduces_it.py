@@ -16,7 +16,7 @@ from nbxtensor.ops import _configs as CF
 
 
 def _backend(monkeypatch, name):
-    monkeypatch.setattr(_nbx_runtime, "_detect_gpu_backend", lambda: name)
+    monkeypatch.setattr(_nbx_runtime, "gpu_backend", lambda: name)
 
 
 @pytest.mark.parametrize("prune,configs,red,args", [

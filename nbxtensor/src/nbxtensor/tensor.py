@@ -135,7 +135,7 @@ def _copy_nd(src: 'NBXTensor', dst: 'NBXTensor'):
     dst_stride_buf = _upload_int64_array(dst_st, dst._device_idx)
     _m = _ew_meta(n)                 # the certified tile of the count's class (ops/elementwise_launch.py)
     BLOCK = _m['BLOCK_SIZE']
-    _rt._set_device(dst)
+    _rt.set_device(dst)
     strided_copy_nd_kernel[(triton.cdiv(n, BLOCK),)](
         src, dst, n, shape_buf, src_stride_buf, dst_stride_buf,
         BLOCK_SIZE=BLOCK, num_warps=_m['num_warps'], NDIM=ndim,
@@ -317,7 +317,7 @@ def _strided_copy(src: 'NBXTensor', dst: 'NBXTensor'):
     _m = _ew_meta(n)                 # the certified tile of the count's class (ops/elementwise_launch.py)
     BLOCK = _m['BLOCK_SIZE']
     grid = (triton.cdiv(n, BLOCK),)
-    _rt._set_device(src)
+    _rt.set_device(src)
     strided_copy_kernel[grid](
         src, dst, n,
         shape_buf, stride_buf,
@@ -355,7 +355,7 @@ def _strided_scatter(src: 'NBXTensor', dst: 'NBXTensor'):
     _m = _ew_meta(n)                 # the certified tile of the count's class (ops/elementwise_launch.py)
     BLOCK = _m['BLOCK_SIZE']
     grid = (triton.cdiv(n, BLOCK),)
-    _rt._set_device(src)
+    _rt.set_device(src)
     strided_scatter_kernel[grid](
         src, dst, n,
         shape_buf, stride_buf,
@@ -385,12 +385,12 @@ def _fill_constant(t: 'NBXTensor', value) -> 'NBXTensor':
         # would write the wrong addresses. Fill a contiguous temp, then scatter
         # into the view's strided positions.
         tmp = NBXTensor.empty(t._shape, t._dtype, f"cuda:{t._device_idx}")
-        _rt._set_device(tmp)
+        _rt.set_device(tmp)
         fill_kernel[(triton.cdiv(n, BLOCK),)](tmp, value, n, BLOCK_SIZE=BLOCK, num_warps=_m['num_warps'])
         _strided_scatter(tmp, t)
         return t
     grid = (triton.cdiv(n, BLOCK),)
-    _rt._set_device(t)
+    _rt.set_device(t)
     fill_kernel[grid](t, value, n, BLOCK_SIZE=BLOCK, num_warps=_m['num_warps'])
     return t
 
@@ -1631,7 +1631,7 @@ class NBXTensor:
                 or target in (NBXDtype.float64, NBXDtype.complex128)) and not _caps.backend_has_fp64():
             raise RuntimeError(
                 f"ZERO FALLBACK: a cast from {self._dtype.name} to {target.name} on the "
-                f"'{_rt._detect_gpu_backend()}' backend, whose kernels have no float64: its lowering "
+                f"'{_rt.gpu_backend()}' backend, whose kernels have no float64: its lowering "
                 f"narrows double in silence and the result would be garbage, not a cast "
                 f"(2026-09-28: 1 139 of 143 360 bits right on the Sana 4K positional embedding). "
                 f"Place the array at a dtype this backend has; a float64 formula result is cast "
@@ -1653,7 +1653,7 @@ class NBXTensor:
             from nbxtensor.ops.copy_op import copy_kernel
             import triton
             src = self.contiguous()
-            _rt._set_device(src)
+            _rt.set_device(src)
             _m = _ew_meta(n)                     # the certified tile of the count's class (ops/elementwise_launch.py)
             copy_kernel[(triton.cdiv(n, _m['BLOCK_SIZE']),)](src, new, n,
                                                  BLOCK_SIZE=_m['BLOCK_SIZE'], num_warps=_m['num_warps'],
@@ -1804,7 +1804,7 @@ class NBXTensor:
                 _m = _ew_meta(max_total)                 # the certified tile of the count's class (ops/elementwise_launch.py)
                 BLOCK = _m['BLOCK_SIZE']
                 grid = (triton.cdiv(max_total, BLOCK), len(batch))
-                _rt._set_device(out)
+                _rt.set_device(out)
                 cat_copy_kernel_4[grid](
                     out,
                     contig[0], contig[1], contig[2], contig[3],

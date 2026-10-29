@@ -25,7 +25,7 @@ REPO = Path(__file__).resolve().parents[3]
 
 @pytest.fixture
 def on_metal(monkeypatch):
-    monkeypatch.setattr(_nbx_runtime, "_detect_gpu_backend", lambda: "metal")
+    monkeypatch.setattr(_nbx_runtime, "gpu_backend", lambda: "metal")
     monkeypatch.setattr(_nbx_capabilities, "_DECLARED_CAPABILITIES", {})
 
 

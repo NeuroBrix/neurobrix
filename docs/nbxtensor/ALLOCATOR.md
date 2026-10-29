@@ -3,7 +3,7 @@
 ## Today
 `memory/allocator.DeviceAllocator` is the account: live bytes per device, peaks, the pool and its parked blocks,
 the deferred-free queues, the imposed rung, the OOM report. It reaches the device through ~40 call sites of one
-shape, `getattr(rt, backend["<name>"])(<ctypes args>)`, where `rt` is `backend.runtime._gpu_runtime()` (a ctypes
+shape, `getattr(rt, backend["<name>"])(<ctypes args>)`, where `rt` is `backend.runtime.gpu_runtime()` (a ctypes
 CDLL for CUDA/HIP, `MetalRuntime` for Metal) and `backend` a table of symbol names (`_GPU_BACKENDS[...]`, or
 `METAL_BACKEND`). Metal emulates the C ABI behind those names, and keeps a SECOND account of its own
 (`MetalRuntime._live_bytes`, the working-set budget).

@@ -116,7 +116,7 @@ def test_an_unanswerable_driver_reads_as_none_and_never_as_zero():
     import nbxtensor.tensor as M
     import nbxtensor.backend.runtime as _nbx_runtime
 
-    real_runtime = _nbx_runtime._gpu_runtime
+    real_runtime = _nbx_runtime.gpu_runtime
 
     class _NoMemInfo:
         """The runtime handle, minus the one symbol under test."""
@@ -129,12 +129,12 @@ def test_an_unanswerable_driver_reads_as_none_and_never_as_zero():
                 raise AttributeError(name)
             return getattr(self._rt, name)
 
-    _nbx_runtime._gpu_runtime = lambda *a, **k: _NoMemInfo(real_runtime())
+    _nbx_runtime.gpu_runtime = lambda *a, **k: _NoMemInfo(real_runtime())
     try:
         with pytest.raises(DeviceOOMError) as e:
             DeviceAllocator.malloc_cuda(_TOTAL * 4)
     finally:
-        _nbx_runtime._gpu_runtime = real_runtime
+        _nbx_runtime.gpu_runtime = real_runtime
 
     oom = e.value
     assert oom.driver_total is None, (

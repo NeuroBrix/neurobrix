@@ -34,8 +34,8 @@ BM, BN, BK = 16, 64, 32
 
 def _metal_or_skip():
     try:
-        from nbxtensor.backend.runtime import _detect_gpu_backend
-        if _detect_gpu_backend() != "metal":
+        from nbxtensor.backend.runtime import gpu_backend
+        if gpu_backend() != "metal":
             pytest.skip("the pinned-table contract is this driver's")
         from nbxtensor.backend import triton_ext_driver as d
         return d

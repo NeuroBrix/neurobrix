@@ -32,7 +32,7 @@ from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype, dtype_size
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.backend.capabilities import backend_loads_pointers_from_memory
-from nbxtensor.backend.runtime import _detect_gpu_backend
+from nbxtensor.backend.runtime import gpu_backend
 from nbxtensor.memory import pointer_tables as _pt
 
 # NBX_MOE_DIAG gate, hoisted to import time (C1 hygiene: never read the
@@ -81,7 +81,7 @@ def moe_align_block_size(topk_ids_flat, block_size, num_experts, device_idx):
         num_tokens_post_padded: NBXTensor [1] — total entries after padding
     """
     import triton as _tr
-    from nbxtensor.backend.runtime import _set_device
+    from nbxtensor.backend.runtime import set_device
     from nbxtensor.ops.moe_align import (
         moe_align_stage1_kernel, moe_align_stage2_kernel,
         moe_align_stage3_kernel)
@@ -105,7 +105,7 @@ def moe_align_block_size(topk_ids_flat, block_size, num_experts, device_idx):
                                 device=dev)
 
     ids = topk_ids_flat.contiguous()
-    _set_device(sorted_ids)
+    set_device(sorted_ids)
     BE = max(_tr.next_power_of_2(num_experts), 16)
     BLK = ((128 + bs - 1) // bs) * bs  # positions/program, multiple of bs
     # stages 1 and 2 hold [BF, BT], [BE, BF] and [BLK, BF] blocks: on Metal (32 KB of
@@ -114,7 +114,7 @@ def moe_align_block_size(topk_ids_flat, block_size, num_experts, device_idx):
     # "Required: 65536, Hardware limit: 32768"); a chunk never exceeds BE
     # (8 experts with BF 128 asked the same 64 KB); elsewhere one chunk.
     _w = max(16, min(128, 4096 // BE))
-    _bt, _bf = (_w, min(BE, _w)) if _detect_gpu_backend() == "metal" else (128, BE)
+    _bt, _bf = (_w, min(BE, _w)) if gpu_backend() == "metal" else (128, BE)
     moe_align_stage1_kernel[(1,)](
         ids, offsets_ws, padded_ws, num_post_pad, n,
         BS=bs, BE=BE, E=num_experts, BT=_bt, BF=_bf, num_warps=4)
@@ -126,7 +126,7 @@ def moe_align_block_size(topk_ids_flat, block_size, num_experts, device_idx):
     # (measured: granite triton, "Required: 65536, Hardware limit: 32768").
     # The rank is a sum over j-chunks, so the chunk width changes nothing
     # but the launch shape — 64x64 = 16 KB everywhere Metal runs.
-    _blkt, _bn = (64, 64) if _detect_gpu_backend() == "metal" else (128, 128)
+    _blkt, _bn = (64, 64) if gpu_backend() == "metal" else (128, 128)
     moe_align_stage3_kernel[(_tr.cdiv(n, _blkt),)](
         ids, offsets_ws, sorted_ids, n,
         E=num_experts, BLKT=_blkt, BN=_bn, num_warps=4)
@@ -729,7 +729,7 @@ def _moe_decode_vec_pass(hidden_states, tables, dev, flat_indices,
     from nbxtensor.ops.moe_decode_vec import (
         moe_gateup_vec_kernel, moe_down_combine_vec_kernel,
         moe_down_split_vec_kernel, moe_part_reduce_kernel)
-    from nbxtensor.backend.runtime import _set_device
+    from nbxtensor.backend.runtime import set_device
 
     dt = hidden_states._dtype
     x = hidden_states.reshape(K)
@@ -755,7 +755,7 @@ def _moe_decode_vec_pass(hidden_states, tables, dev, flat_indices,
     WD = int(_os_dv.environ.get("NBX_MOEV_WARPS_D", str(W)))
     ST = int(_os_dv.environ.get("NBX_MOEV_STAGES", "1"))
 
-    _set_device(h)
+    set_device(h)
     moe_gateup_vec_kernel[(top_k, _tr.cdiv(N_gate, BN))](
         x, flat_indices,
         tables.gate_ptrs[dev], g_sc, g_mn,
@@ -805,7 +805,7 @@ def _moe_decode_vec_half_pass(hidden_states, tables, dev, flat_indices, flat_sco
     import triton as _tr
     from nbxtensor.ops.moe_decode_vec import (
         moe_gateup_vec_half_kernel, moe_down_split_vec_half_kernel, moe_part_reduce_kernel)
-    from nbxtensor.backend.runtime import _set_device
+    from nbxtensor.backend.runtime import set_device
 
     dt = hidden_states._dtype
     x = hidden_states.reshape(K)
@@ -813,7 +813,7 @@ def _moe_decode_vec_half_pass(hidden_states, tables, dev, flat_indices, flat_sco
     part = NBXTensor.empty((top_k, K), dtype=NBXDtype.float32, device=f"cuda:{dev}")
     out32 = NBXTensor.empty((K,), dtype=NBXDtype.float32, device=f"cuda:{dev}")
     gu, dn = _HALF_VEC["gateup"], _HALF_VEC["down"]
-    _set_device(h)
+    set_device(h)
     moe_gateup_vec_half_kernel[(top_k, _tr.cdiv(N_gate, gu["BLOCK_N"]))](
         x, flat_indices, tables.gate_ptrs[dev], tables.up_ptrs[dev], h, K, N_gate,
         tables.gate_stride_bk[dev], tables.gate_stride_bn[dev],

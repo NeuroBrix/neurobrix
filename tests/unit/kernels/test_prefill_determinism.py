@@ -372,10 +372,10 @@ def _rig_cards_or_skip():
     """
     import pytest
 
-    from nbxtensor.backend.runtime import _detect_gpu_backend
+    from nbxtensor.backend.runtime import gpu_backend
 
     try:
-        backend = _detect_gpu_backend()
+        backend = gpu_backend()
     except Exception:
         backend = None
     if backend != "cuda":

@@ -98,8 +98,8 @@ def _metal_refuses_quantized_experts() -> bool:
     # The SAME import the engine uses (`triton/moe.py` line 33), not a guess at where it
     # lives: an import that misses defaults this door to False, the cells run, and they fail
     # with the engine's refusal — which is the safe direction but hides why.
-    from nbxtensor.backend.runtime import _detect_gpu_backend
-    return _detect_gpu_backend() == "metal"
+    from nbxtensor.backend.runtime import gpu_backend
+    return gpu_backend() == "metal"
 
 
 _QUANT_REFUSED = _metal_refuses_quantized_experts()

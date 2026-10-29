@@ -9,7 +9,7 @@ from nbxtensor.ops import launch_keys as _lk
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype, dtype_size
 from nbxtensor.memory.allocator import DeviceAllocator
-from nbxtensor.backend.runtime import _set_device
+from nbxtensor.backend.runtime import set_device
 from nbxtensor.shape import MAX_NDIM as _NBX_MAX_NDIM, broadcast_shapes, max_linear_offset
 from nbxtensor.dtype.itemsize import canonical_name
 from nbxtensor.dtype.promotion import binary_result, float_math_input
@@ -188,7 +188,7 @@ def where_wrapper(cond, x, y) :
     else:
         cond, x, y = cond.contiguous(), x.contiguous(), y.contiguous()
     output = NBXTensor.empty_like(x)
-    _set_device(cond)
+    set_device(cond)
     where_forward_kernel[_ew._1d_grid(x.numel())](cond, x, y, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
@@ -203,7 +203,7 @@ def masked_fill(x, mask, value: float) :
         x, mask = x.contiguous(), mask.contiguous()
     value = _core._to_scalar(value) if isinstance(value, NBXTensor) else value
     output = NBXTensor.empty_like(x)
-    _set_device(x)
+    set_device(x)
     masked_fill_forward_kernel[_ew._1d_grid(x.numel())](
     x, mask, output, x.numel(), float(value),
     **_ew_meta(x.numel()))
@@ -252,7 +252,7 @@ def embedding(weight, indices, padding_idx=-1, **kwargs) :
         DeviceAllocator.memcpy(new_indices.data_ptr(), indices.data_ptr(), indices._nbytes)
         indices = new_indices
     output = NBXTensor.empty((*indices.shape, N), dtype=weight.nbx_dtype if hasattr(weight, 'nbx_dtype') else weight.dtype, device=dev)
-    _set_device(weight)
+    set_device(weight)
     # weight.shape[0] = the id bound the kernel traps on (OOB parity with torch).
     embedding_kernel[M,](
         output, indices, weight, weight.shape[0],
@@ -309,7 +309,7 @@ def index_select_wrapper(x, dim: int, index) :
         total = outer * index_len * inner
         if total > 0:
             from nbxtensor.ops.index_select import index_select_mid_kernel
-            _set_device(x)
+            set_device(x)
             _m = _ew_meta(total)
             index_select_mid_kernel[_ew_grid(total, _m)](
                 x, out, outer, N, inner, index, index_len,
@@ -333,7 +333,7 @@ def index_select_wrapper(x, dim: int, index) :
     BLOCK_M = min(64, triton.next_power_of_2(M))
     BLOCK_N = min(64, triton.next_power_of_2(index_len))
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(index_len, BLOCK_N))
-    _set_device(x)
+    set_device(x)
     index_select_kernel[grid](
         x, out, M, N, index, index_len,
         *fault_channel(INDEX_SELECT_OOB, out),
@@ -389,7 +389,7 @@ def gather_wrapper(input, dim: int, index) :
     out_stride_dim = out.stride(dim)
     out_stride_inner = out.stride(-1) if dim < input.ndim - 1 else 0
 
-    _set_device(input)
+    set_device(input)
     gather_kernel[_ew._1d_grid(N)](
         input, index, out,
         N,
@@ -482,7 +482,7 @@ def scatter_wrapper(input, dim: int, index,
         inner_size *= index.shape[i]
     dim_size = index.shape[dim]
 
-    _set_device(src)
+    set_device(src)
     scatter_kernel[_ew._1d_grid(N)](
         src, index, out,
         N,
@@ -515,7 +515,7 @@ def scatter_add_wrapper(input, dim: int, index,
         inner_size *= index.shape[i]
     dim_size = index.shape[dim]
 
-    _set_device(src)
+    set_device(src)
     scatter_add_kernel[_ew._1d_grid(N)](
         src, index, out,
         N,
@@ -566,7 +566,7 @@ def index_add_wrapper(x, dim: int, index,
     _inner = _ew_meta(inner_size)
     n_inner_tiles = (inner_size + _inner['BLOCK_SIZE'] - 1) // _inner['BLOCK_SIZE']
     grid = (outer_size * inp_shape_dim * n_inner_tiles,)
-    _set_device(x)
+    set_device(x)
     index_add_gather_kernel[grid](
         x, source, index, out,
         dim_size, inp_shape_dim, inner_size, alpha,
@@ -607,7 +607,7 @@ def nonzero_1d_wrapper(mask, expected=None) -> "NBXTensor":
     count = NBXTensor.zeros([1], dtype=NBXDtype.int32, device=m.device)
     if n > 0:
         BLOCK = min(1024, triton.next_power_of_2(n))
-        _set_device(m)
+        set_device(m)
         nonzero_1d_kernel[(1,)](m, out, count, n, BLOCK)
         k = int(count.numpy()[0])
     else:
@@ -644,7 +644,7 @@ def bucketize_wrapper(x, boundaries, out_int32: bool = False,
     if n > 0:
         BLOCK = min(1024, triton.next_power_of_2(n))
         grid = ((n + BLOCK - 1) // BLOCK,)
-        _set_device(xc)
+        set_device(xc)
         bucketize_kernel[grid](xc, bc, out, n, nb,
                                RIGHT=bool(right), BLOCK_SIZE=BLOCK)
     if out_int32:
@@ -759,7 +759,7 @@ def index_put_wrapper(x, indices, values, accumulate: bool = False):
             "and not scalar — value broadcasting unwired (follow-up "
             "P-INDEX-PUT-ADVANCED-GENERAL).")
 
-    _set_device(out)
+    set_device(out)
     index_put_kernel[_ew._1d_grid(N)](
         out, idx, vbuf,
         T, N, out.shape[0],  # R: the row bound the kernel traps on (OOB parity with torch)

@@ -22,8 +22,8 @@ import pytest
 
 def _metal_or_skip():
     try:
-        from nbxtensor.backend.runtime import _detect_gpu_backend
-        if _detect_gpu_backend() != "metal":
+        from nbxtensor.backend.runtime import gpu_backend
+        if gpu_backend() != "metal":
             pytest.skip("the wrap of an interior pointer is the Metal driver's; other drivers bind their own way")
         from nbxtensor.backend import triton_ext_driver as drv
         return drv

@@ -9,7 +9,7 @@ from nbxtensor.ops import launch_keys as _lk
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype, dtype_size
 from nbxtensor.memory.allocator import DeviceAllocator
-from nbxtensor.backend.runtime import _set_device
+from nbxtensor.backend.runtime import set_device
 from nbxtensor.shape import MAX_NDIM as _NBX_MAX_NDIM, broadcast_shapes, max_linear_offset
 from nbxtensor.dtype.itemsize import canonical_name
 from nbxtensor.dtype.promotion import binary_result, float_math_input
@@ -216,7 +216,7 @@ def grid_sampler_2d_wrapper(inp, grid, interpolation_mode=0,
 
     BLOCK_C = min(triton.next_power_of_2(max(C, 1)), 256)
     launch_grid = (out_spatial, triton.cdiv(C, BLOCK_C), N)
-    _set_device(inp32)
+    set_device(inp32)
     grid_sampler_2d_kernel[launch_grid](
         inp32, grid32, out32,
         C, H, W, out_spatial,
@@ -234,7 +234,7 @@ def grid_sampler_2d_wrapper(inp, grid, interpolation_mode=0,
 def copy_to(x, dtype: object) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x, dtype=dtype)
-    _set_device(x)
+    set_device(x)
     copy_forward_kernel[_ew._1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
@@ -303,7 +303,7 @@ def upsample_nearest2d_wrapper(
         triton.cdiv(total_threads, _ew_meta(total_threads)['BLOCK_SIZE']),
         triton.cdiv(N * C, 4),
     )
-    _set_device(output)
+    set_device(output)
     s_n, s_c, s_h, s_w = x.stride()
     upsample_nearest2d_kernel[grid](
         output, x, N, C, OH, OW, IH, IW, s_n, s_c, s_h, s_w,
@@ -322,7 +322,7 @@ def triu_wrapper(x, diagonal: int = 0) :
 
     if x.ndim == 2:
         grid = (triton.cdiv(M, _TRIU_MBS),)
-        _set_device(x)
+        set_device(x)
         triu_kernel[grid](x, out, M, N, diagonal,
                           M_BLOCK_SIZE=_TRIU_MBS, N_BLOCK_SIZE=_TRIU_NBS,
                           num_warps=4)
@@ -333,7 +333,7 @@ def triu_wrapper(x, diagonal: int = 0) :
             triton.cdiv(batch, _TRIU_BATCH_BS),
             triton.cdiv(M * N, _TRIU_MN_BS),
         )
-        _set_device(B)
+        set_device(B)
         triu_batch_kernel[grid](B, out.reshape(batch, M * N), batch, M * N, N, diagonal,
                                 BATCH_BLOCK_SIZE=_TRIU_BATCH_BS, MN_BLOCK_SIZE=_TRIU_MN_BS,
                                 num_warps=4)
@@ -349,7 +349,7 @@ def tril_wrapper(x, diagonal: int = 0) :
 
     if x.ndim == 2:
         grid = (triton.cdiv(M, _TRIU_MBS),)
-        _set_device(x)
+        set_device(x)
         tril_kernel[grid](x, out, M, N, diagonal,
                           M_BLOCK_SIZE=_TRIU_MBS, N_BLOCK_SIZE=_TRIU_NBS,
                           num_warps=4)
@@ -360,7 +360,7 @@ def tril_wrapper(x, diagonal: int = 0) :
             triton.cdiv(batch, _TRIU_BATCH_BS),
             triton.cdiv(M * N, _TRIU_MN_BS),
         )
-        _set_device(B)
+        set_device(B)
         tril_batch_kernel[grid](B, out.reshape(batch, M * N), batch, M * N, N, diagonal,
                                 BATCH_BLOCK_SIZE=_TRIU_BATCH_BS, MN_BLOCK_SIZE=_TRIU_MN_BS,
                                 num_warps=4)
@@ -432,7 +432,7 @@ def flip_wrapper(x, dims) :
         dim = dim % result.ndim
         if result.ndim == 1:
             output = NBXTensor.empty_like(result)
-            _set_device(result)
+            set_device(result)
             flip_1d_kernel[_ew._1d_grid(result.numel())](
                 result, output, result.numel(),
                 **_ew_meta(result.numel()))
@@ -446,7 +446,7 @@ def flip_wrapper(x, dims) :
             for i in range(dim + 1, result.ndim):
                 stride_dim *= result.shape[i]
             grid = _ew._1d_grid(n_elements)
-            _set_device(result)
+            set_device(result)
             flip_strided_kernel[grid](
                 result, output, n_elements,
                 dim_size, stride_dim, stride_dim,
@@ -514,7 +514,7 @@ def pixel_shuffle_wrapper(x, upscale_factor: int) :
     output = NBXTensor.empty((N, C_out, OH, OW), device=x.device, dtype=x.dtype)
     total = N * C_out * OH * OW
     grid = _ew._1d_grid(total)
-    _set_device(x)
+    set_device(x)
     pixel_shuffle_kernel[grid](
         x, output, total,
         C_out, H, W, r, OH, OW,
@@ -566,7 +566,7 @@ def _pixel_shuffle_broadcast_aware(proxy, upscale_factor: int):
                              device=view.device, dtype=view.dtype)
     total = N * C_out * OH * OW
     grid = _ew._1d_grid(total)
-    _set_device(view)
+    set_device(view)
     pixel_shuffle_broadcast_aware_kernel[grid](
         view, output, total,
         C_out, OH, OW, r, bcast,
@@ -585,7 +585,7 @@ def pixel_unshuffle_wrapper(x, downscale_factor: int) :
     output = NBXTensor.empty((N, C_out, OH, OW), device=x.device, dtype=x.dtype)
     total = N * C_out * OH * OW
     grid = _ew._1d_grid(total)
-    _set_device(x)
+    set_device(x)
     pixel_unshuffle_kernel[grid](
         x, output, total,
         C, IH, IW, r, C_out, OH, OW,
@@ -620,7 +620,7 @@ def upsample_nearest3d_wrapper(
         triton.cdiv(total_threads, _ew_meta(total_threads)['BLOCK_SIZE']),
         triton.cdiv(N * C, 4),
     )
-    _set_device(output)
+    set_device(output)
     upsample_nearest3d_kernel[grid](
         output, x, N, C, OD, OH, OW, ID, IH, IW,
         reciprocal_scale_d, reciprocal_scale_h, reciprocal_scale_w,
@@ -670,7 +670,7 @@ def repeat_interleave_tensor_wrapper(
     size = repeats.size(0)
 
     BLOCK_SIZE = 32
-    _set_device(repeats)
+    set_device(repeats)
     repeat_interleave_tensor_kernel[(size,)](
         repeats, cumsum, out, size, BLOCK_SIZE=BLOCK_SIZE, num_warps=1,
     )
@@ -973,7 +973,7 @@ def _replication_pad_last(x, pad_list, n_axes: int):
     _wide = _index_wide(total, max_linear_offset(x.shape, x.stride()),
                         max_linear_offset(output.shape, output.stride()))
     pad5 = 5 - ndim
-    _set_device(x)
+    set_device(x)
     replication_pad_nd_kernel[_ew._1d_grid(total)](
         x, output, total,
         *([1] * pad5 + list(x.shape)), *([1] * pad5 + out_shape),
@@ -1000,7 +1000,7 @@ def replication_pad3d_wrapper(x, pad_list) :
     _wide = _index_wide(total, max_linear_offset(x.shape, x.stride()),
                         max_linear_offset(output.shape, output.stride()))
     pad5 = 5 - ndim
-    _set_device(x)
+    set_device(x)
     replication_pad_nd_kernel[_ew._1d_grid(total)](
         x, output, total,
         *([1] * pad5 + list(x.shape)), *([1] * pad5 + out_shape),

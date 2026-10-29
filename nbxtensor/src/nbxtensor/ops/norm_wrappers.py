@@ -9,7 +9,7 @@ from nbxtensor.ops import launch_keys as _lk
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype, dtype_size
 from nbxtensor.memory.allocator import DeviceAllocator
-from nbxtensor.backend.runtime import _set_device
+from nbxtensor.backend.runtime import set_device
 from nbxtensor.shape import MAX_NDIM as _NBX_MAX_NDIM, broadcast_shapes, max_linear_offset
 from nbxtensor.dtype.itemsize import canonical_name
 from nbxtensor.dtype.promotion import binary_result, float_math_input
@@ -206,7 +206,7 @@ def native_layer_norm(x, normalized_shape, weight, bias, eps=1e-5):
     # rows per program and warps: the certified configuration of this key (workstream 1), the rows' bucket from the
     # launcher's own `bucket_of` — the key the derived census forms (`launch_keys.layer_norm_launches`)
     grid = lambda META: (triton.cdiv(batch_dim, META['BLOCK_SIZE_BATCH']),)
-    _set_device(x_2d)
+    set_device(x_2d)
     layer_norm_forward_kernel[grid](
         x_2d, weight if has_weight else x_2d, bias if has_bias else x_2d,
         mean, inv_std, output_2d,
@@ -330,7 +330,7 @@ def group_norm_wrapper(x, num_groups: int, weight, bias, eps=1e-5):
     rstd = NBXTensor.empty((N, num_groups), dtype=NBXDtype.float32, device=x.device)
 
     grid = (N * num_groups,)
-    _set_device(x)
+    set_device(x)
     # the chunk along hidden = group_size * HxW and the warps: the certified configuration of this key (chantier 1),
     # the key the derived census forms (`launch_keys.group_norm_launches`)
     hidden = group_size * HxW
@@ -399,7 +399,7 @@ def batch_norm_wrapper(
 
     grid = (C,)
     xc = x.contiguous()
-    _set_device(xc)
+    set_device(xc)
     # Pass null pointers (None) — NOT x — for absent weight/bias/running. The
     # kernel guards each with `if *_pointer:`; substituting x defeated the guard
     # (kernel read x as the affine scale/shift and wrote running stats back into
@@ -454,19 +454,19 @@ def vector_norm_wrapper(x, ord: float = 2.0, dim=None, keepdim=False) :
     grid, _bm, _bn = _ew._reduction_tile(M)
 
     if ord == 2 or ord == 2.0:
-        _set_device(x_2d)
+        set_device(x_2d)
         l2_norm_kernel[grid](x_2d, out, M, N, BLOCK_M=_bm, BLOCK_N=_bn, num_warps=4)
     elif ord == float('inf'):
-        _set_device(x_2d)
+        set_device(x_2d)
         linf_norm_kernel[grid](x_2d, out, M, N, BLOCK_M=_bm, BLOCK_N=_bn, num_warps=4)
     elif ord == 0 or ord == 0.0:
-        _set_device(x_2d)
+        set_device(x_2d)
         l0_norm_kernel[grid](x_2d, out, M, N, BLOCK_M=_bm, BLOCK_N=_bn, num_warps=4)
     elif ord == 1 or ord == 1.0:
-        _set_device(x_2d)
+        set_device(x_2d)
         l1_norm_kernel[grid](x_2d, out, M, N, BLOCK_M=_bm, BLOCK_N=_bn, num_warps=4)
     else:
-        _set_device(x_2d)
+        set_device(x_2d)
         lp_norm_kernel[grid](x_2d, out, M, N, ord, BLOCK_M=_bm, BLOCK_N=_bn, num_warps=4)
 
     result = out.to(x.dtype).view(out_shape)
@@ -494,7 +494,7 @@ def weight_norm_interface_wrapper(
         N = math.prod(v.shape[1:])
         _wbm, _wbn = _red._clamp_reduce_tile(_WNORM_BM, _WNORM_BN)
         grid = (triton.cdiv(M, _wbm),)
-        _set_device(output)
+        set_device(output)
         weight_norm_kernel_first[grid](output, norm, v, g, M, N, eps,
                                        BLOCK_M=_wbm, BLOCK_N=_wbn,
                                        num_warps=4)
@@ -503,7 +503,7 @@ def weight_norm_interface_wrapper(
         N = v.shape[dim]
         _wbm, _wbn = _red._clamp_reduce_tile(_WNORM_BM, _WNORM_BN)
         grid = (triton.cdiv(N, _wbn),)
-        _set_device(output)
+        set_device(output)
         weight_norm_kernel_last[grid](output, norm, v, g, M, N, eps,
                                       BLOCK_M=_wbm, BLOCK_N=_wbn,
                                       num_warps=4)
@@ -535,7 +535,7 @@ def normal_wrapper(*args, **kwargs) :
         if n == 0:
             return output
         seed = _rnd._draw_seed()
-        _set_device(output)
+        set_device(output)
         randn_kernel[_ew._1d_grid(n)](output, n, seed, **_ew_meta(n))
     # Transform N(0,1) → N(mean, std)
     if std != 1.0:
@@ -556,7 +556,7 @@ def group_norm_statistics(x, num_groups: int, eps: float):
     HW = x.numel() // (N * C)
     mean = NBXTensor.empty((N, int(num_groups)), dtype=NBXDtype.float32, device=x.device)
     rstd = NBXTensor.empty((N, int(num_groups)), dtype=NBXDtype.float32, device=x.device)
-    _set_device(x)
+    set_device(x)
     group_norm_stats_kernel[(N * int(num_groups),)](x, mean, rstd, C // int(num_groups), C, HW, int(num_groups),
                                                      float(eps), BLOCK_SIZE=TILED_NORM_BLOCK, num_warps=TILED_NORM_WARPS)
     return mean, rstd
@@ -572,7 +572,7 @@ def group_norm_apply(x, weight, bias, num_groups: int, mean, rstd):
     if mean._device != "cuda" or getattr(mean, "_device_idx", None) != getattr(x, "_device_idx", None):
         mean, rstd = mean.to_cuda(x._device_idx), rstd.to_cuda(x._device_idx)
     y = NBXTensor.empty_like(x)
-    _set_device(x)
+    set_device(x)
     group_norm_apply_kernel[(N * int(num_groups),)](
         x, y, weight if weight is not None else x, bias if bias is not None else x, mean, rstd,
         C // int(num_groups), C, HW, int(num_groups), scale_by_weight=weight is not None, add_bias=bias is not None,

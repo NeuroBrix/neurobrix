@@ -18,8 +18,8 @@ _NOT_HERE = {"cpu": "nbxtensor 0.0.1 has no CPU kernel backend (README, Hardware
 
 
 def _in_force() -> str:
-    from nbxtensor.backend.runtime import _detect_gpu_backend
-    return _detect_gpu_backend()
+    from nbxtensor.backend.runtime import gpu_backend
+    return gpu_backend()
 
 
 @pytest.fixture(params=BACKENDS)

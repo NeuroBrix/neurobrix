@@ -1523,7 +1523,7 @@ def _current_backend() -> Optional[str]:
 
     This used to read `launcher.target().backend`. Those two agree on NVIDIA
     (both say `cuda`), which is why the difference stayed invisible, and they
-    diverge on Apple: `_detect_gpu_backend()` says `metal` while the Triton
+    diverge on Apple: `gpu_backend()` says `metal` while the Triton
     target says whatever the installed Triton backend calls itself — `metal`
     under the archived fork, `mps` under triton-ext.
 
@@ -1543,8 +1543,8 @@ def _current_backend() -> Optional[str]:
     and `target = "metal-apple-m4-pro"`.
     """
     try:
-        from nbxtensor.backend.runtime import _detect_gpu_backend
-        return _detect_gpu_backend()
+        from nbxtensor.backend.runtime import gpu_backend
+        return gpu_backend()
     except Exception:
         return None
 

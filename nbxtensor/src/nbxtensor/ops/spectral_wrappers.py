@@ -9,7 +9,7 @@ from nbxtensor.ops import launch_keys as _lk
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype, dtype_size
 from nbxtensor.memory.allocator import DeviceAllocator
-from nbxtensor.backend.runtime import _set_device
+from nbxtensor.backend.runtime import set_device
 from nbxtensor.shape import MAX_NDIM as _NBX_MAX_NDIM, broadcast_shapes, max_linear_offset
 from nbxtensor.dtype.itemsize import canonical_name
 from nbxtensor.dtype.promotion import binary_result, float_math_input
@@ -200,7 +200,7 @@ def _triton_fft_rows(x_real, x_imag, inverse: bool) -> tuple:
     out_imag = NBXTensor.empty_like(xi)
     log2n = N.bit_length() - 1
     total = rows * N
-    _set_device(xr)
+    set_device(xr)
     bit_reverse_rows_kernel[_ew._1d_grid(total)](xr, xi, out_real, out_imag, N, total, log2n,
                                              **_ew_meta(total))
     pairs = rows * (N // 2)
@@ -229,7 +229,7 @@ def _dft_rfft_matrices(N, N_bins, ref):
     Allocated on `ref`'s device."""
     import math
     from nbxtensor.ops.dft import dft_rfft_matrix_kernel
-    _set_device(ref)
+    set_device(ref)
     cos_mat = NBXTensor.empty((N_bins, N), dtype=NBXDtype.float32, device=ref.device)
     nsin_mat = NBXTensor.empty((N_bins, N), dtype=NBXDtype.float32, device=ref.device)
     total = N_bins * N
@@ -242,7 +242,7 @@ def _idft_c2r_matrices(N, N_bins, ref):
     """irfft basis matrices [N_bins, N]: real_out = X_real @ C + X_imag @ S."""
     import math
     from nbxtensor.ops.dft import idft_c2r_matrix_kernel
-    _set_device(ref)
+    set_device(ref)
     C = NBXTensor.empty((N_bins, N), dtype=NBXDtype.float32, device=ref.device)
     S = NBXTensor.empty((N_bins, N), dtype=NBXDtype.float32, device=ref.device)
     total = N_bins * N

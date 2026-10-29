@@ -42,7 +42,7 @@ def test_only_a_shared_heap_may_be_written_into():
 
 
 def test_an_unknown_backend_refuses_by_name(monkeypatch):
-    monkeypatch.setattr(_nbx_runtime, "_detect_gpu_backend", lambda: "quantum")
+    monkeypatch.setattr(_nbx_runtime, "gpu_backend", lambda: "quantum")
     with pytest.raises(RuntimeError, match=r"ZERO FALLBACK.*'quantum'"):
         _ti.torch_device_str(0)
 
@@ -54,7 +54,7 @@ def test_the_bridge_carries_the_values_on_this_machine():
     out = _ti.nbx_to_torch(t)
     assert out.flatten().tolist() == a.ravel().tolist()
     assert str(out.device).startswith(
-        _ti._TORCH_DEVICE_BY_BACKEND[_nbx_runtime._detect_gpu_backend()])
+        _ti._TORCH_DEVICE_BY_BACKEND[_nbx_runtime.gpu_backend()])
 
 
 def test_an_empty_tensor_still_crosses():

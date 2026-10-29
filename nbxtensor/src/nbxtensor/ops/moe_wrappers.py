@@ -9,7 +9,7 @@ from nbxtensor.ops import launch_keys as _lk
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype, dtype_size
 from nbxtensor.memory.allocator import DeviceAllocator
-from nbxtensor.backend.runtime import _set_device
+from nbxtensor.backend.runtime import set_device
 from nbxtensor.shape import MAX_NDIM as _NBX_MAX_NDIM, broadcast_shapes, max_linear_offset
 from nbxtensor.dtype.itemsize import canonical_name
 from nbxtensor.dtype.promotion import binary_result, float_math_input
@@ -226,7 +226,7 @@ def invoke_fused_moe(
         EM = min(EM, M * top_k * _MOE_BM)
 
     grid = (triton.cdiv(EM, _MOE_BM) * triton.cdiv(N, _MOE_BN),)
-    _set_device(hidden_states)
+    set_device(hidden_states)
 
     fused_moe_kernel[grid](
         hidden_states, expert_ptrs, output,
@@ -272,7 +272,7 @@ def invoke_fused_moe_wna16(
     if M < _MOE_BM:
         EM = min(EM, M * top_k * _MOE_BM)
     grid = (triton.cdiv(EM, _MOE_BM) * triton.cdiv(N, _MOE_BN),)
-    _set_device(hidden_states)
+    set_device(hidden_states)
 
     fused_moe_wna16_kernel[grid](
         hidden_states, qw_ptrs, sc_ptrs, mn_ptrs, output,

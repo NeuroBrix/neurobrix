@@ -26,8 +26,8 @@ from nbxtensor.tensor import NBXTensor
 
 def _gpu_or_skip():
     try:
-        from nbxtensor.backend.runtime import _detect_gpu_backend
-        _detect_gpu_backend()
+        from nbxtensor.backend.runtime import gpu_backend
+        gpu_backend()
     except Exception:
         pytest.skip("no GPU backend the engine can resolve")
 

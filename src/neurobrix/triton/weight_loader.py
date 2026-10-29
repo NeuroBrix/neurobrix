@@ -24,7 +24,7 @@ from typing import Dict, Optional, Set
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.memory.allocator import DeviceAllocator
-from nbxtensor.backend.runtime import _set_device
+from nbxtensor.backend.runtime import set_device
 from nbxtensor.dtype.itemsize import itemsize
 from nbxtensor.shape import numel
 from nbxtensor.memory.memory_pool import ComponentArena, HostPinnedArena

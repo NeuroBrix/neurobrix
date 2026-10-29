@@ -9,14 +9,14 @@ import numpy as np
 import pytest
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype
-from nbxtensor.backend.runtime import _detect_gpu_backend
+from nbxtensor.backend.runtime import gpu_backend
 import nbxtensor.backend.capabilities as _nbx_capabilities  # the module the moved names live in (M2 cut of tensor.py)
 
 
 def test_a_float64_cast_is_refused_by_name_where_the_backend_has_no_float64(needs_device, host_backend_fp64):
     from nbxtensor import tensor as T
     import nbxtensor.backend.capabilities as _nbx_capabilities
-    name = _detect_gpu_backend()
+    name = gpu_backend()
     if name is None:
         pytest.skip("no device")
     if _nbx_capabilities.backend_has_fp64():

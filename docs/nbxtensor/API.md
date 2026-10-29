@@ -201,7 +201,7 @@ pin(t) -> Tensor                         # pin_host
 ## 5. `nbxtensor.device` and capabilities (M2, Mac for Metal)
 
 ```python
-nbxtensor.device.devices() -> list[Device]          # detection (nbx_tensor.py:2668 _detect_gpu_backend)
+nbxtensor.device.devices() -> list[Device]          # detection (nbx_tensor.py:2668 gpu_backend)
 nbxtensor.device.capabilities(kind: str) -> Capabilities
 @dataclass(frozen=True)
 class Capabilities:          # one record per backend, today five dicts (nbx_tensor.py:345-490)
@@ -528,4 +528,14 @@ def param(vendor, name, section, key, default)        # one key of it (the per-o
 
 ```python
 def arch() -> int                                     # the target's arch as an int (70 for sm_70): target().arch
+```
+
+### `nbxtensor.backend.runtime` — the backend in force
+
+```python
+def gpu_backend() -> str          # "cuda", "hip" or "metal": the vendor runtime this process can load (or NBX_GPU_BACKEND)
+def gpu_runtime()                 # that backend's runtime: Metal's runtime object, or the vendor library through its C ABI
+def backend_table() -> dict       # the backend's entry-point name table (CUDA and HIP share one C ABI; Metal has its own)
+def set_device(tensor) -> None    # bind the driver's current device to the tensor's before a launch
+def device_memory()               # the memory primitives of the backend in force (memory.device_memory.DeviceMemory)
 ```

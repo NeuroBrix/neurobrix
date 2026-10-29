@@ -9,7 +9,7 @@ from nbxtensor.ops import launch_keys as _lk
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype, dtype_size
 from nbxtensor.memory.allocator import DeviceAllocator
-from nbxtensor.backend.runtime import _set_device
+from nbxtensor.backend.runtime import set_device
 from nbxtensor.shape import MAX_NDIM as _NBX_MAX_NDIM, broadcast_shapes, max_linear_offset
 from nbxtensor.dtype.itemsize import canonical_name
 from nbxtensor.dtype.promotion import binary_result, float_math_input
@@ -184,7 +184,7 @@ def dropout_wrapper(x, p: float = 0.5, train: bool = False) :
         # Inference mode: passthrough
         x = x.contiguous()
         output = NBXTensor.empty_like(x)
-        _set_device(x)
+        set_device(x)
         dropout_inference_kernel[_ew._1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
         return output
     raise NotImplementedError("Training dropout with Triton RNG not implemented yet")
@@ -231,7 +231,7 @@ def rand_wrapper(*args, **kwargs) :
     if n == 0:
         return output
     seed = _draw_seed()
-    _set_device(output)
+    set_device(output)
     rand_kernel[_ew._1d_grid(n)](output, n, seed, **_ew_meta(n))
     return output
 
@@ -254,7 +254,7 @@ def randn_wrapper(*args, **kwargs) :
     if n == 0:
         return output
     seed = _draw_seed()
-    _set_device(output)
+    set_device(output)
     randn_kernel[_ew._1d_grid(n)](output, n, seed, **_ew_meta(n))
     return output
 
@@ -272,7 +272,7 @@ def rand_like_wrapper(x, **kwargs) :
     if n == 0:
         return output
     seed = _draw_seed()
-    _set_device(output)
+    set_device(output)
     rand_kernel[_ew._1d_grid(n)](output, n, seed, **_ew_meta(n))
     return output
 
@@ -293,7 +293,7 @@ def randn_like_wrapper(x, **kwargs) :
     if n == 0:
         return output
     seed = _draw_seed()
-    _set_device(output)
+    set_device(output)
     randn_kernel[_ew._1d_grid(n)](output, n, seed, **_ew_meta(n))
     return output
 

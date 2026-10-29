@@ -71,11 +71,11 @@ def device_memory_gb(device_idx: int) -> "int | None":
 def host_shares_memory_with_device() -> bool:
     """Does the current device draw from the host's memory pool?"""
     from . import runtime as _rt
-    name = _rt._detect_gpu_backend()
+    name = _rt.gpu_backend()
     if name == "metal":
-        return bool(_rt._gpu_runtime().has_unified_memory)
+        return bool(_rt.gpu_runtime().has_unified_memory)
     if name == "cuda":
-        rt = _rt._gpu_runtime()
+        rt = _rt.gpu_runtime()
         rc, dev = _rt.device_memory().get_device()
         value = ctypes.c_int()
         if rc == 0:
@@ -93,7 +93,7 @@ def kernels_carry_fp64(profile=None) -> bool:
     """Do the backend's kernels compute float64? (`profile`: an application's hardware profile, which an application's
     own answer reads; the library's answer is the backend's.)"""
     from . import runtime as _rt
-    name = _rt._detect_gpu_backend()
+    name = _rt.gpu_backend()
     if name not in _FP64:
         raise RuntimeError(f"ZERO FALLBACK: nbxtensor does not know whether {name!r} kernels compute float64")
     return _FP64[name]

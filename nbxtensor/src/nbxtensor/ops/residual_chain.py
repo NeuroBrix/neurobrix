@@ -242,7 +242,7 @@ def band_streamed_chain_nbx(
     no top halo has been overwritten yet.
     """
     from nbxtensor.tensor import NBXTensor
-    from nbxtensor.backend.runtime import _set_device
+    from nbxtensor.backend.runtime import set_device
     from nbxtensor.ops.conv_wrappers import conv2d_wrapper
     from nbxtensor.ops.elementwise_wrappers import silu as silu_w, add as add_w
     from nbxtensor.ops.norm_wrappers import rms_norm as rms_norm_w
@@ -255,11 +255,11 @@ def band_streamed_chain_nbx(
     # report dev=0 contig=True at chain entry. The failure must
     # therefore happen at an intermediate allocation (slice +
     # contiguous → 1 GiB band, conv2d output → 1 GiB) where the
-    # device-context drifts. C3 fix: call `_set_device(t_base)`
+    # device-context drifts. C3 fix: call `set_device(t_base)`
     # before EVERY conv2d_wrapper / rms_norm_w / add_w in the
     # band loop — overhead is tiny (single cudaSetDevice per op)
     # vs the chain crash.
-    _set_device(t_base)
+    set_device(t_base)
 
     N, C, H, W = t_base.shape
     from nbxtensor.ops.tiling_sizes import residual_chain_bands  # the one band geometry (the census derives by it)
@@ -299,7 +299,7 @@ def band_streamed_chain_nbx(
         # conv1 — anchor device per op (the band size at 4096² is
         # 1 GiB; the allocator path inside NBXTensor.empty cudaSetDevice
         # can drift Triton's active device).
-        _set_device(band)
+        set_device(band)
         w1 = chain_weights["conv1_weight"]
         b1 = chain_weights["conv1_bias"]
         import os as _os_cd2
@@ -322,11 +322,11 @@ def band_streamed_chain_nbx(
         )
 
         # silu
-        _set_device(band)
+        set_device(band)
         band = silu_w(band)
 
         # conv2
-        _set_device(band)
+        set_device(band)
         w2 = chain_weights["conv2_weight"]
         b2 = chain_weights["conv2_bias"]
         band = conv2d_wrapper(
@@ -341,7 +341,7 @@ def band_streamed_chain_nbx(
         band = band.permute(*chain_weights["permute_forward"]).contiguous()
 
         # rms_norm over last (feature) dim
-        _set_device(band)
+        set_device(band)
         norm_w = chain_weights["norm_weight"]
         eps = float(chain_weights.get("norm_eps", 1e-6))
         band = rms_norm_w(band, norm_w, eps)
@@ -349,7 +349,7 @@ def band_streamed_chain_nbx(
         # post-norm bias shift (if any)
         post_bias = chain_weights.get("post_norm_bias")
         if post_bias is not None:
-            _set_device(band)
+            set_device(band)
             band = add_w(band, post_bias)
 
         # permute NHWC → NCHW
@@ -367,7 +367,7 @@ def band_streamed_chain_nbx(
         band_out = band[:, :, trim_top:trim_top + trim_h, :]
         t_base_slice = t_base[:, :, h_start:h_end, :]
         # add returns a new contiguous tensor; setitem writes back.
-        _set_device(t_base)
+        set_device(t_base)
         t_base[:, :, h_start:h_end, :] = add_w(t_base_slice, band_out)
 
     return t_base

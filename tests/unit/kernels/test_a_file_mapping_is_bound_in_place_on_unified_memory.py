@@ -18,7 +18,7 @@ import nbxtensor.backend.runtime as _nbx_runtime
 
 
 def _metal():
-    return _nbx_runtime._detect_gpu_backend() == "metal"
+    return _nbx_runtime.gpu_backend() == "metal"
 
 
 @pytest.mark.skipif(not _metal(), reason="needs the Metal backend (unified memory)")

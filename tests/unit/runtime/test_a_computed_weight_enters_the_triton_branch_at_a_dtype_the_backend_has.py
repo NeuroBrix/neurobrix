@@ -25,8 +25,8 @@ def _grid():
 
 @pytest.mark.parametrize("target", ["bfloat16", "float16", "float32"])
 def test_the_values_are_the_formulas_whatever_the_backend(target):
-    from nbxtensor.backend.runtime import _detect_gpu_backend
-    if _detect_gpu_backend() is None:
+    from nbxtensor.backend.runtime import gpu_backend
+    if gpu_backend() is None:
         pytest.skip("no device")
     g = _grid()
     out = computed_array_to_container(g, "cuda:0", target)

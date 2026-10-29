@@ -28,7 +28,7 @@ import nbxtensor.backend.runtime as _nbx_runtime  # the module the moved names l
 def _metal_driver():
     """The Metal driver, or None where there is no Apple GPU."""
     nbx_tensor = pytest.importorskip("nbxtensor.tensor")
-    detect = _nbx_runtime._detect_gpu_backend   # a renamed probe raises here, loudly
+    detect = _nbx_runtime.gpu_backend   # a renamed probe raises here, loudly
     try:
         if detect() != "metal":
             return None
@@ -52,7 +52,7 @@ def _cuda_driver():
     contract is for.
     """
     nbx_tensor = pytest.importorskip("nbxtensor.tensor")
-    detect = _nbx_runtime._detect_gpu_backend   # a renamed probe raises here, loudly
+    detect = _nbx_runtime.gpu_backend   # a renamed probe raises here, loudly
     try:
         if detect() != "cuda":
             return None

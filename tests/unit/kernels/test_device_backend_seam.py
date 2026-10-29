@@ -3,7 +3,7 @@
 Porting NeuroBrix to a new GPU runtime — ROCm yesterday, Metal next — is
 bounded only because every call into the device runtime goes through
 `DeviceAllocator`. Measured 2026-09-03: **49 runtime touches inside the
-class, 0 outside**. A single raw `_gpu_runtime()` call added anywhere else
+class, 0 outside**. A single raw `gpu_runtime()` call added anywhere else
 turns a bounded port into a hunt, and it would be invisible in review.
 
 So it is pinned here rather than trusted.
@@ -22,6 +22,7 @@ These pins describe the seam it will slot into.
 from __future__ import annotations
 
 import ast
+import re
 import inspect
 from pathlib import Path
 
@@ -43,13 +44,13 @@ SOURCE = Path(inspect.getfile(nbx_tensor)).read_text()
 
 # Names that reach the device runtime. Anything calling these is coupled to
 # the GPU API and must live inside DeviceAllocator.
-RUNTIME_ENTRY_POINTS = ("_gpu_runtime", "_active_backend")
+RUNTIME_ENTRY_POINTS = ("gpu_runtime", "backend_table")
 
 
 # The seam's own implementation: these two resolve the backend table and load
 # the runtime library, so they necessarily touch it. Everything ELSE must go
 # through DeviceAllocator.
-SEAM_FUNCTIONS = ("_gpu_runtime", "_active_backend", "_detect_gpu_backend",
+SEAM_FUNCTIONS = ("gpu_runtime", "backend_table", "gpu_backend",
                   "device_memory")   # builds the backend's memory primitives from the runtime (memory/device_memory.py)
 
 
@@ -85,7 +86,8 @@ def test_every_runtime_touch_is_inside_the_allocator():
             if any(start <= number <= end for start, end in spans):
                 continue
             code = line.split("#", 1)[0]
-            if any(f"{name}()" in code for name in RUNTIME_ENTRY_POINTS):
+            # the name as a whole word: `_metal_backend_table()` is another function, not a call of `backend_table()`
+            if any(re.search(rf"(?<!\w){re.escape(name)}\(\)", code) for name in RUNTIME_ENTRY_POINTS):
                 strays.append((f"{path.name}:{number}", line.strip()[:90]))
 
     assert not strays, (
@@ -193,7 +195,7 @@ def test_backend_selection_is_data_not_branching():
     """Selection walks the backend TABLE (the vendor runtime libraries each
     entry names) and never asks Triton's driver — whose backend probes import
     torch (R33, universal since 2026-09-05). Adding a backend is adding data."""
-    source = inspect.getsource(_nbx_runtime._detect_gpu_backend)
+    source = inspect.getsource(_nbx_runtime.gpu_backend)
     assert "driver.active" not in source.replace("`triton.runtime.driver.active`", ""), \
         "selection must not ask Triton's driver (its probes import torch)"
     assert "_GPU_BACKENDS.items()" in source, "selection should walk the backend table"

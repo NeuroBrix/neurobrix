@@ -23,7 +23,6 @@ NATIVE = {"Metal", "objc", "Foundation", "CoreFoundation", "MetalPerformanceShad
 
 # What is left: each site names a public API nbxtensor must gain. Shrinks only. (file relative to src/neurobrix, name)
 PRIVATE_SITES = {
-    ("kernels/autotune_certify.py", "nbxtensor.backend.runtime._detect_gpu_backend"),
     ("kernels/census.py", "nbxtensor.ops._configs"),
     ("kernels/ops/fused_upsample_conv_torch.py", "nbxtensor.ops.fused_upsample_conv._fused_upsample_conv2d_nbx"),
     ("kernels/ops/fused_upsample_conv_torch.py", "nbxtensor.ops.fused_upsample_conv._pair"),
@@ -31,13 +30,7 @@ PRIVATE_SITES = {
     ("triton/cfg/engine.py", "nbxtensor.ops.dispatch._create_ones"),
     ("triton/flow/autoregressive.py", "nbxtensor.ops._configs.active_vendor_profile"),
     ("triton/kv_cache.py", "nbxtensor.ops.dispatch._create_arange"),
-    ("triton/moe.py", "nbxtensor.backend.runtime._detect_gpu_backend"),
-    ("triton/moe.py", "nbxtensor.backend.runtime._set_device"),
-    ("triton/paged_kv_cache.py", "nbxtensor.backend.runtime._set_device"),
-    ("triton/sequence.py", "nbxtensor.backend.runtime._active_backend"),
-    ("triton/sequence.py", "nbxtensor.backend.runtime._gpu_runtime"),
     ("triton/state_fence.py", "nbxtensor.backend.triton_ext_driver._native"),
-    ("triton/weight_loader.py", "nbxtensor.backend.runtime._set_device"),
 }
 
 
@@ -95,6 +88,6 @@ def test_the_guard_sees_what_it_refuses(tmp_path):
     pkg = tmp_path / "neurobrix" / "triton"
     pkg.mkdir(parents=True)
     (pkg / "x.py").write_text("import objc\nfrom triton_apple_backend import metal_native\n"
-                              "from nbxtensor.backend.runtime import _set_device\nfrom nbxtensor.shape import numel\n")
+                              "from nbxtensor.backend.runtime import _private_helper\nfrom nbxtensor.shape import numel\n")
     assert [s.split(" ", 1)[1] for s in native_imports([pkg])] == ["objc", "triton_apple_backend"]
-    assert private_sites([pkg]) == {("triton/x.py", "nbxtensor.backend.runtime._set_device")}
+    assert private_sites([pkg]) == {("triton/x.py", "nbxtensor.backend.runtime._private_helper")}

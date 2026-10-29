@@ -57,7 +57,7 @@ def _gpu_available() -> bool:
     import pytest
 
     nbx = pytest.importorskip("nbxtensor.tensor")
-    detect = _nbx_runtime._detect_gpu_backend   # a renamed probe raises here, loudly
+    detect = _nbx_runtime.gpu_backend   # a renamed probe raises here, loudly
     try:
         return detect() is not None
     except Exception:

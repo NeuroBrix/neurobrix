@@ -25,8 +25,8 @@ from nbxtensor.memory.allocator import DeviceAllocator
 
 def _metal_or_skip():
     try:
-        from nbxtensor.backend.runtime import _detect_gpu_backend
-        if _detect_gpu_backend() != "metal":
+        from nbxtensor.backend.runtime import gpu_backend
+        if gpu_backend() != "metal":
             pytest.skip("this queue is Metal's; there is one queue elsewhere")
         from nbxtensor.backend.metal_device import runtime
         return runtime()

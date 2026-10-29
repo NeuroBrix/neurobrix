@@ -19,7 +19,7 @@ import nbxtensor.backend.runtime as _nbx_runtime  # the module the moved names l
 def _has_metal():
     nbx_tensor = pytest.importorskip("nbxtensor.tensor")
     try:
-        return _nbx_runtime._detect_gpu_backend() == "metal"
+        return _nbx_runtime.gpu_backend() == "metal"
     except Exception:
         return False
 

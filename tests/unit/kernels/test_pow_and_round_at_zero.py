@@ -30,8 +30,8 @@ from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # t
 
 def _dev_or_skip():
     try:
-        from nbxtensor.backend.runtime import _detect_gpu_backend
-        if _detect_gpu_backend() is None:
+        from nbxtensor.backend.runtime import gpu_backend
+        if gpu_backend() is None:
             pytest.skip("no GPU backend the engine can resolve")
     except Exception:
         pytest.skip("no GPU backend the engine can resolve")

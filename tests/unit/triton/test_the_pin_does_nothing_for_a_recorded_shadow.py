@@ -47,8 +47,8 @@ def _run(body: str, census: bool) -> subprocess.CompletedProcess:
 
 def _metal_or_skip():
     try:
-        from nbxtensor.backend.runtime import _detect_gpu_backend
-        if _detect_gpu_backend() != "metal":
+        from nbxtensor.backend.runtime import gpu_backend
+        if gpu_backend() != "metal":
             pytest.skip("the pin is the triton-ext (Metal) driver's")
     except Exception:
         pytest.skip("no Metal backend the engine can resolve")

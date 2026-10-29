@@ -32,7 +32,7 @@ import nbxtensor.dtype.nbx_dtype as _nbx_dtype  # the module the moved names liv
 
 
 def _has_gpu():
-    """A probe that EXECUTES. `_detect_gpu_backend()` answers which backend this
+    """A probe that EXECUTES. `gpu_backend()` answers which backend this
     build can address, which is a fact about the install, not about the machine:
     it returned "cuda" with no device visible and the five tests behind it then
     failed at their first allocation with `cudaErrorNoDevice` instead of skipping.

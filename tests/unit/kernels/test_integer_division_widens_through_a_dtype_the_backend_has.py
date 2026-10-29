@@ -9,7 +9,7 @@ from nbxtensor.ops import wrappers as W
 from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.memory.allocator import DeviceAllocator
-from nbxtensor.backend.runtime import _detect_gpu_backend
+from nbxtensor.backend.runtime import gpu_backend
 from nbxtensor.backend.capabilities import backend_has_fp64
 
 
@@ -19,13 +19,13 @@ def _declared(request):
     no Triton branch to declare it for, and the cell skips, said (it errored instead in the card-less suite, reading
     the device of a profile that has none)."""
     from neurobrix.core.prism.autodetect import load_default_profile
-    if _detect_gpu_backend() is None or not getattr(load_default_profile(), "devices", None):
+    if gpu_backend() is None or not getattr(load_default_profile(), "devices", None):
         pytest.skip("no device in this host's profile (a card-less run)")
     request.getfixturevalue("host_backend_fp64")
 
 
 def _dev():
-    if _detect_gpu_backend() is None:
+    if gpu_backend() is None:
         pytest.skip("no device")
 
 

@@ -9,7 +9,7 @@ from nbxtensor.ops import launch_keys as _lk
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype, dtype_size
 from nbxtensor.memory.allocator import DeviceAllocator
-from nbxtensor.backend.runtime import _set_device
+from nbxtensor.backend.runtime import set_device
 from nbxtensor.shape import MAX_NDIM as _NBX_MAX_NDIM, broadcast_shapes, max_linear_offset
 from nbxtensor.dtype.itemsize import canonical_name
 from nbxtensor.dtype.promotion import binary_result, float_math_input
@@ -324,7 +324,7 @@ def _mm_quantized(a, qt, _epilogue: int = 0):
     wq, sc, mn = qt.qweight, qt.scales, qt.qmins
     if hasattr(a, '_device_idx') and a._device_idx != wq._device_idx:
         a = _core._transfer_to_device(a, wq._device_idx)
-    _set_device(wq)
+    set_device(wq)
 
     if a.ndim == 2 and M == 1 or a.ndim == 1:
         x = a.contiguous().view(-1)
@@ -389,7 +389,7 @@ def _gemm_m8n8k4(a, b, bias, c, alpha, beta, promote_bias, epilogue, tile, bias_
     lay = mm_layouts(MB, NB, tile["warps_m"], tile["warps_n"], tile["block_k"], b_k_contig)
     from nbxtensor.dtype.operands import matrix_unit_split_scale   # the library's operand rules
     hi_exp, lo_shift = matrix_unit_split_scale(_matrix_unit())
-    _set_device(a)
+    set_device(a)
     for z0 in range(0, Z, _GRID_Z_MAX):
         zb = min(_GRID_Z_MAX, Z - z0)
         grid = (triton.cdiv(M, tile["block_m"]) * triton.cdiv(N, tile["block_n"]), zb)
@@ -519,7 +519,7 @@ def mm(a, b, _epilogue: int = 0) :
     # b.t() restores the original contiguous layout for free. Calling
     # b.contiguous() first would copy the entire weight — defeating the point.
     if M <= 4:
-        _set_device(a)
+        set_device(a)
         a = a.contiguous()
         bt = b.t()  # (N, K); contiguous if b came from pre-transpose
         dtype_out = _matmul_out_dtype(a, M)
@@ -549,7 +549,7 @@ def mm(a, b, _epilogue: int = 0) :
     # Phase 1.5 autotune: BLOCK_*/GROUP_M/num_warps/num_stages chosen
     # adaptively per (M, N, K, IEEE_PRECISION, PROMOTE_B). Grid uses
     # META lambda so autotune-selected blocks drive the launch shape.
-    _set_device(a)
+    set_device(a)
     # ROW BANDING above 2^31 OUTPUT ELEMENTS. A launch whose C holds more than 2^31 elements
     # writes nothing past row `2**31 // N` on the Metal backend: the offsets are promoted to
     # int64 in the kernel (matmul.py:257) and CUDA is exact, but the Metal lowering does not
@@ -661,7 +661,7 @@ def bmm(a, b, allow_strided_b: bool = False) :
     # driver active device, and dtype alignment paths may also have touched
     # it. Without this, batched kernels on non-zero devices hit
     # "Pointer argument (at 0) cannot be accessed from Triton".
-    _set_device(a)
+    set_device(a)
     # Batched launch — grid axis 2 walks the batch inside the kernel
     # (baddbmm_kernel HAS_BIAS=False). `c` doubles as the (dead) bias
     # pointer: with HAS_BIAS=False the bias load is compiled out, so no
@@ -925,17 +925,17 @@ def dot_wrapper(x, y) :
 
     if N <= BLOCK_SIZE:
         out = NBXTensor.empty([], dtype=NBXDtype.float32, device=x.device)
-        _set_device(x)
+        set_device(x)
         dot_kernel_small[(1,)](x, y, out, N, BLOCK_SIZE=BLOCK_SIZE)
         return out.to(x.dtype)
     else:
         mid_size = triton.cdiv(N, BLOCK_SIZE)
         mid = NBXTensor.empty(mid_size, dtype=NBXDtype.float32, device=x.device)
-        _set_device(x)
+        set_device(x)
         dot_kernel_partial[(mid_size,)](x, y, mid, N, BLOCK_SIZE=BLOCK_SIZE)
         BLOCK_MID = triton.next_power_of_2(mid_size)
         out = NBXTensor.empty([], dtype=NBXDtype.float32, device=x.device)
-        _set_device(mid)
+        set_device(mid)
         dot_kernel_reduce[(1,)](mid, out, mid_size, BLOCK_MID=BLOCK_MID)
         return out.to(x.dtype)
 
@@ -964,7 +964,7 @@ def mv_wrapper(mat, vec) :
         vec = vec.contiguous()          # justified: a broadcast vector has no stride to walk
     N, K = mat.shape
     out = NBXTensor.empty(N, device=mat.device, dtype=_matmul_out_dtype(mat))
-    _set_device(mat)
+    set_device(mat)
     from nbxtensor.ops.gemv_vec import gemv_vec_kernel
     gemv_vec_kernel[lambda META: (triton.cdiv(N, META['BLOCK_N']),)](
         mat, vec, out,
@@ -1015,7 +1015,7 @@ def baddbmm_wrapper(
                      bias_strides=(bias_batch_stride, bias_m_stride, bias_n_stride))
         return output
 
-    _set_device(batch1)
+    set_device(batch1)
     # IEEE_PRECISION=True preserves the kernel's historical
     # `allow_tf32=False` dot semantics for fp32 inputs (ignored by tl.dot
     # for half inputs). HAS_BIAS=True keeps the beta*bias epilogue.
@@ -1061,7 +1061,7 @@ def addmv_wrapper(
     input = input.contiguous()
     N, M = mat.shape
     out = NBXTensor.empty(N, device=mat.device, dtype=_matmul_out_dtype(mat))
-    _set_device(mat)
+    set_device(mat)
     # rows, reduction tile, warps: the certified configuration of the key (workstream 1, small-M GEMM) — the N and M
     # buckets and the dtypes of its tensors, the key the derived census forms (`launch_keys.addmv_launches`)
     addmv_kernel[lambda META: (triton.cdiv(N, META['BLOCK_N']),)](
@@ -1103,7 +1103,7 @@ def upsample_bilinear2d_wrapper(x, output_size, align_corners=False,
         triton.cdiv(OH, _core._BILINEAR_BY),
         N * C,
     )
-    _set_device(x.contiguous())
+    set_device(x.contiguous())
     upsample_bilinear2d_kernel[grid](
         x.contiguous(), output,
         N, C, IH, IW, OH, OW,

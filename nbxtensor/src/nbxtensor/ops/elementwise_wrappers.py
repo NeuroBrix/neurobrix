@@ -9,7 +9,7 @@ from nbxtensor.ops import launch_keys as _lk
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype, dtype_size
 from nbxtensor.memory.allocator import DeviceAllocator
-from nbxtensor.backend.runtime import _set_device
+from nbxtensor.backend.runtime import set_device
 from nbxtensor.shape import MAX_NDIM as _NBX_MAX_NDIM, broadcast_shapes, max_linear_offset
 from nbxtensor.dtype.itemsize import canonical_name
 from nbxtensor.dtype.promotion import binary_result, float_math_input
@@ -262,12 +262,12 @@ def _flat_unary(x, kernel, out=None):
         if span is not None:
             n = span.numel()
             res = NBXTensor.empty_like(span)
-            _set_device(span)
+            set_device(span)
             kernel[_1d_grid(n)](span, res, n, **_ew_meta(n))
             return res.as_strided(tuple(x.shape), tuple(x.stride()))
     x = x.contiguous()
     output = out if out is not None else NBXTensor.empty_like(x)
-    _set_device(x)
+    set_device(x)
     kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
@@ -304,7 +304,7 @@ def gelu(x, approximate: str = 'none', out=None) :
     # construction, not by luck. The liveness proof is the caller's:
     # see `OpLevelTilingEngine._detect_inplace_unary_candidates`.
     output = out if out is not None else NBXTensor.empty_like(x)
-    _set_device(x)
+    set_device(x)
     gelu_forward_kernel[_1d_grid(x.numel())](
         x, output, x.numel(), approximate=(approximate == 'tanh'),
         **_ew_meta(x.numel()))
@@ -344,7 +344,7 @@ def leaky_relu(x, negative_slope: float = 0.01, out=None) :
     # construction, not by luck. The liveness proof is the caller's:
     # see `OpLevelTilingEngine._detect_inplace_unary_candidates`.
     output = out if out is not None else NBXTensor.empty_like(x)
-    _set_device(x)
+    set_device(x)
     leaky_relu_forward_kernel[_1d_grid(x.numel())](
         x, output, x.numel(), negative_slope,
         **_ew_meta(x.numel()))
@@ -361,7 +361,7 @@ def elu(x, alpha: float = 1.0, out=None) :
     # construction, not by luck. The liveness proof is the caller's:
     # see `OpLevelTilingEngine._detect_inplace_unary_candidates`.
     output = out if out is not None else NBXTensor.empty_like(x)
-    _set_device(x)
+    set_device(x)
     elu_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), alpha, **_ew_meta(x.numel()))
     return output
 
@@ -398,7 +398,7 @@ def exp(x) :
         return complex_wrapper(mul(ea, cos(b)), mul(ea, sin(b)))
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
-    _set_device(x)
+    set_device(x)
     exp_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
@@ -428,7 +428,7 @@ def _promote_int_unary(x):
 def rsqrt(x) :
     x = _promote_int_unary(x).contiguous()
     output = NBXTensor.empty_like(x)
-    _set_device(x)
+    set_device(x)
     rsqrt_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
@@ -436,7 +436,7 @@ def rsqrt(x) :
 def sqrt_wrapper(x) :
     x = _promote_int_unary(x).contiguous()
     output = NBXTensor.empty_like(x)
-    _set_device(x)
+    set_device(x)
     sqrt_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
@@ -455,7 +455,7 @@ def abs_wrapper(x) :
         return sqrt_wrapper(add(mul(re, re), mul(im, im)))
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
-    _set_device(x)
+    set_device(x)
     abs_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
@@ -463,7 +463,7 @@ def abs_wrapper(x) :
 def log_wrapper(x) :
     x = _promote_int_unary(x).contiguous()
     output = NBXTensor.empty_like(x)
-    _set_device(x)
+    set_device(x)
     log_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
@@ -471,7 +471,7 @@ def log_wrapper(x) :
 def reciprocal(x) :
     x = _promote_int_unary(x).contiguous()
     output = NBXTensor.empty_like(x)
-    _set_device(x)
+    set_device(x)
     reciprocal_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
@@ -490,7 +490,7 @@ def pow_wrapper(x, exponent) :
     if x_is_t and not e_is_t:
         x = x.contiguous()
         output = NBXTensor.empty_like(x)
-        _set_device(x)
+        set_device(x)
         # A small integer exponent takes the exact multiplication route at
         # compile time (kernels/ops/pow.py, INT_EXP); everything else the
         # general exp/log route. Measured 2026-09-20 on CUDA: x**2 by exp/log is
@@ -528,7 +528,7 @@ def clamp(x, min_val=None, max_val=None) :
     output = NBXTensor.empty_like(x)
     _min = float(min_val) if min_val is not None else 0.0
     _max = float(max_val) if max_val is not None else 0.0
-    _set_device(x)
+    set_device(x)
     clamp_forward_kernel[_1d_grid(x.numel())](
         x, output, x.numel(), _min, _max,
         has_min=(min_val is not None), has_max=(max_val is not None),
@@ -539,7 +539,7 @@ def clamp(x, min_val=None, max_val=None) :
 def erf(x) :
     x = _promote_int_unary(x).contiguous()
     output = NBXTensor.empty_like(x)
-    _set_device(x)
+    set_device(x)
     erf_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
@@ -547,7 +547,7 @@ def erf(x) :
 def floor_wrapper(x):
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
-    _set_device(x)
+    set_device(x)
     floor_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
@@ -555,7 +555,7 @@ def floor_wrapper(x):
 def ceil_wrapper(x):
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
-    _set_device(x)
+    set_device(x)
     ceil_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
@@ -599,7 +599,7 @@ def _int_divide(a, b, floor):
     a, b = (x if x.dtype == dtype else x.to(dtype) for x in (a, b))
     shape = broadcast_shapes(a.shape, b.shape)
     a, b = (x.expand(shape).contiguous() if tuple(x.shape) != tuple(shape) else x.contiguous() for x in (a, b))
-    _set_device(a)
+    set_device(a)
     output = NBXTensor.empty_like(a)
     n = output.numel()
     if n:
@@ -610,7 +610,7 @@ def _int_divide(a, b, floor):
 def round_wrapper(x):
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
-    _set_device(x)
+    set_device(x)
     round_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
@@ -618,7 +618,7 @@ def round_wrapper(x):
 def trunc_wrapper(x):
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
-    _set_device(x)
+    set_device(x)
     trunc_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
@@ -686,7 +686,7 @@ def add(a, b, alpha: float = 1.0) :
         n = a.numel()
         feat_dim = b.shape[0]
         output = NBXTensor.empty_like(a)
-        _set_device(a)
+        set_device(a)
         add_bias_broadcast_kernel[_1d_grid(n)](
             a, b, output, n, feat_dim, alpha,
             **_ew_meta(n))
@@ -770,7 +770,7 @@ def add_inplace_nbx(target, other, alpha: float = 1.0):
             return add(target, other, alpha=alpha)
     other = other.contiguous()
     n = target.numel()
-    _set_device(target)
+    set_device(target)
     add_forward_kernel[_1d_grid(n)](
         target, other, target, n, alpha,
         **_ew_meta(n))
@@ -1073,7 +1073,7 @@ def invoke_silu_and_mul(input_tensor, M, N):
     BLOCK_N = min(triton.next_power_of_2(N), 1024)
 
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
-    _set_device(input_tensor)
+    set_device(input_tensor)
 
     silu_and_mul_kernel[grid](
         input_tensor, output,
@@ -1141,7 +1141,7 @@ def swiglu_fused_wrapper(gate, up):
     BLOCK_M = 16
     BLOCK_N = min(triton.next_power_of_2(N), 1024)
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
-    _set_device(gate2d)
+    set_device(gate2d)
 
     silu_mul_split_kernel[grid](
         gate2d, up2d, output,
@@ -1223,7 +1223,7 @@ def rope_fused_wrapper(q_raw, k_raw, cos, sin):
     BLOCK_SIZE = max(pad_n_qh, pad_n_kh)
 
     grid = (bs * sl,)
-    _set_device(q_bshd)
+    set_device(q_bshd)
 
     rope_forward_kernel[grid](
         q_bshd, q_row_stride,
@@ -1261,7 +1261,7 @@ def bf16_to_fp16_gpu(src: NBXTensor, out: "NBXTensor | None" = None) -> NBXTenso
     if dst.nbx_dtype != NBXDtype.float16 or dst.numel() != N:
         raise ValueError(f"bf16_to_fp16_gpu: out must be float16 with {N} elements, got {dst.nbx_dtype.name} "
                          f"with {dst.numel()}")
-    _set_device(src)
+    set_device(src)
     _m = _ew_meta(N)
     bf16_to_fp16_kernel[_ew_grid(N, _m)](src, dst, N, BLOCK=_m['BLOCK_SIZE'], num_warps=_m['num_warps'])
     return dst
@@ -1278,7 +1278,7 @@ def glu_wrapper(x, dim: int = -1, act_func: str = 'sigmoid') :
     x1, x2 = x.narrow(dim, 0, half_size), x.narrow(dim, half_size, half_size)
     x1, x2 = x1.contiguous(), x2.contiguous()
     output = NBXTensor.empty_like(x1)
-    _set_device(x1)
+    set_device(x1)
     glu_forward_kernel[_1d_grid(x1.numel())](
         x1, x2, output, x1.numel(), act_func,
         **_ew_meta(x1.numel()))
@@ -1301,7 +1301,7 @@ def le(a, b) :
 def softplus_wrapper(x, beta: float = 1.0, threshold: float = 20.0) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
-    _set_device(x)
+    set_device(x)
     softplus_forward_kernel[_1d_grid(x.numel())](
         x, output, x.numel(), beta, threshold,
         **_ew_meta(x.numel()))
@@ -1328,7 +1328,7 @@ def remainder_wrapper(a, b) :
 def exp2_wrapper(x) :
     x = _promote_int_unary(x).contiguous()
     output = NBXTensor.empty_like(x)
-    _set_device(x)
+    set_device(x)
     exp2_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
@@ -1336,7 +1336,7 @@ def exp2_wrapper(x) :
 def tan_wrapper(x) :
     x = _promote_int_unary(x).contiguous()
     output = NBXTensor.empty_like(x)
-    _set_device(x)
+    set_device(x)
     tan_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
@@ -1344,7 +1344,7 @@ def tan_wrapper(x) :
 def celu_wrapper(x, alpha: float = 1.0) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
-    _set_device(x)
+    set_device(x)
     celu_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), alpha, **_ew_meta(x.numel()))
     return output
 
@@ -1356,7 +1356,7 @@ def log_sigmoid_wrapper(x) :
 def isfinite_wrapper(x) :
     x = x.contiguous()
     output = NBXTensor.empty(x.shape, dtype=NBXDtype.bool_, device=x.device)
-    _set_device(x)
+    set_device(x)
     isfinite_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
@@ -1364,7 +1364,7 @@ def isfinite_wrapper(x) :
 def isinf_wrapper(x) :
     x = x.contiguous()
     output = NBXTensor.empty(x.shape, dtype=NBXDtype.bool_, device=x.device)
-    _set_device(x)
+    set_device(x)
     isinf_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
@@ -1372,7 +1372,7 @@ def isinf_wrapper(x) :
 def isnan_wrapper(x) :
     x = x.contiguous()
     output = NBXTensor.empty(x.shape, dtype=NBXDtype.bool_, device=x.device)
-    _set_device(x)
+    set_device(x)
     isnan_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
@@ -1384,7 +1384,7 @@ def nan_to_num_wrapper(x, nan: float = 0.0,
     attention's probabilities, whose copy was one more [B*H, Tq, Tk] buffer at its peak."""
     x = x.contiguous()
     output = x if inplace else NBXTensor.empty_like(x)
-    _set_device(x)
+    set_device(x)
     nan_to_num_forward_kernel[_1d_grid(x.numel())](
         x, output, x.numel(), nan, posinf, neginf,
         **_ew_meta(x.numel()))
@@ -1394,7 +1394,7 @@ def nan_to_num_wrapper(x, nan: float = 0.0,
 def threshold_wrapper(x, threshold: float, value: float) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
-    _set_device(x)
+    set_device(x)
     threshold_forward_kernel[_1d_grid(x.numel())](
         x, output, x.numel(), threshold, value,
         **_ew_meta(x.numel()))
@@ -1414,7 +1414,7 @@ def addcdiv_wrapper(input, tensor1,
     """result = input + value * (tensor1 / tensor2)"""
     input, tensor1, tensor2 = input.contiguous(), tensor1.contiguous(), tensor2.contiguous()
     output = NBXTensor.empty_like(input)
-    _set_device(input)
+    set_device(input)
     addcdiv_forward_kernel[_1d_grid(input.numel())](
         input, tensor1, tensor2, output, input.numel(), value,
         **_ew_meta(input.numel()))
@@ -1426,7 +1426,7 @@ def addcmul_wrapper(input, tensor1,
     """result = input + value * tensor1 * tensor2"""
     input, tensor1, tensor2 = input.contiguous(), tensor1.contiguous(), tensor2.contiguous()
     output = NBXTensor.empty_like(input)
-    _set_device(input)
+    set_device(input)
     addcmul_forward_kernel[_1d_grid(input.numel())](
         input, tensor1, tensor2, output, input.numel(), value,
         **_ew_meta(input.numel()))
@@ -1486,7 +1486,7 @@ def bitwise_not_wrapper(x) :
         return logical_not_wrapper(x)
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
-    _set_device(x)
+    set_device(x)
     bitwise_not_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
@@ -1520,7 +1520,7 @@ def logical_or_wrapper(a, b) :
 def logical_not_wrapper(x) :
     x = x.contiguous()
     output = NBXTensor.empty(x.shape, dtype=NBXDtype.bool_, device=x.device)
-    _set_device(x)
+    set_device(x)
     logical_not_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), **_ew_meta(x.numel()))
     return output
 
@@ -1535,17 +1535,17 @@ def lerp_wrapper(input, end, weight) :
     output = NBXTensor.empty_like(input)
     if isinstance(weight, NBXTensor):
         weight = weight.contiguous()
-        _set_device(input)
+        set_device(input)
         lerp_tensor_forward_kernel[_1d_grid(input.numel())](
             input, end, weight, output, input.numel(),
             **_ew_meta(input.numel()))
     elif abs(weight) < 0.5:
-        _set_device(input)
+        set_device(input)
         lerp_scalar_head_kernel[_1d_grid(input.numel())](
             input, end, output, input.numel(), float(weight),
             **_ew_meta(input.numel()))
     else:
-        _set_device(input)
+        set_device(input)
         lerp_scalar_tail_kernel[_1d_grid(input.numel())](
             input, end, output, input.numel(), float(weight),
             **_ew_meta(input.numel()))
@@ -1567,9 +1567,9 @@ def min_wrapper(x, dim=None, keepdim=False):
         BLOCK_MID = triton.next_power_of_2(mid_size)
         mid = NBXTensor.empty(mid_size, dtype=x.dtype, device=x.device)
         out = NBXTensor.empty([], dtype=x.dtype, device=x.device)
-        _set_device(x.view(-1))
+        set_device(x.view(-1))
         min_kernel_mid[(mid_size,)](x.view(-1), mid, M, BLOCK_SIZE=BLOCK_SIZE)
-        _set_device(mid)
+        set_device(mid)
         min_kernel_result[(1,)](mid, out, mid_size, BLOCK_MID=BLOCK_MID)
         return out
     else:
@@ -1582,7 +1582,7 @@ def min_wrapper(x, dim=None, keepdim=False):
         out_index = NBXTensor.empty(M, dtype=NBXDtype.int64, device=x.device)
         _red_bm, _red_bn, _red_warps = _reduction_2d_tile()
         grid = (triton.cdiv(M, _red_bm),)
-        _set_device(x_perm)
+        set_device(x_perm)
         # The kernel writes the value AND its index (ATen's min.dim returns
         # both); the wrapper passed four arguments to a five-argument kernel
         # — a latent defect on a path no model of the zoo exercised, found by
@@ -1610,9 +1610,9 @@ def max_wrapper(x, dim=None, keepdim=False):
         BLOCK_MID = triton.next_power_of_2(mid_size)
         mid = NBXTensor.empty(mid_size, dtype=x.dtype, device=x.device)
         out = NBXTensor.empty([], dtype=x.dtype, device=x.device)
-        _set_device(x.view(-1))
+        set_device(x.view(-1))
         max_kernel_mid[(mid_size,)](x.view(-1), mid, M, BLOCK_SIZE=BLOCK_SIZE)
-        _set_device(mid)
+        set_device(mid)
         max_kernel_result[(1,)](mid, out, mid_size, BLOCK_MID=BLOCK_MID)
         return out
     else:
@@ -1625,7 +1625,7 @@ def max_wrapper(x, dim=None, keepdim=False):
         out_index = NBXTensor.empty(M, dtype=NBXDtype.int64, device=x.device)
         _red_bm, _red_bn, _red_warps = _reduction_2d_tile()
         grid = (triton.cdiv(M, _red_bm),)
-        _set_device(x_perm)
+        set_device(x_perm)
         # The kernel writes the value AND its index (ATen's max.dim returns
         # both); the wrapper passed four arguments to a five-argument kernel
         # — a latent defect on a path no model of the zoo exercised, found by
@@ -1703,7 +1703,7 @@ def sort_wrapper(x, dim: int = -1,
     TILE_R = 8
 
     # Stage 1: compute global histogram
-    _set_device(x.contiguous())
+    set_device(x.contiguous())
     radix_sort_histogram_kernel[(m * grid_n,)](
         x.contiguous(), global_hist,
         n_passes, m, n, tiles_per_cta,
@@ -1728,7 +1728,7 @@ def sort_wrapper(x, dim: int = -1,
     arr_in = x.contiguous().clone()
     indices_in = NBXTensor.empty((m, n), dtype=NBXDtype.int64,
                                  device=x.device)
-    _set_device(indices_in)
+    set_device(indices_in)
     for b in range(m):
         arange_kernel[_1d_grid(n)](
             indices_in[b], 0, 1, n, **_ew_meta(n))
@@ -1750,7 +1750,7 @@ def sort_wrapper(x, dim: int = -1,
     # write past bin 0 landed out of the (m, bins, sweep_grid_n) buffer).
     for i in range(n_passes):
         status.fill_(0)
-        _set_device(arr_in)
+        set_device(arr_in)
         # THREE launches, not one. The single-kernel form carried a decoupled
         # lookback — a cross-CTA spin — which Triton does not order and Metal
         # does not make co-resident: measured wrong from n=2049 (the first size
@@ -1793,11 +1793,11 @@ def bitwise_left_shift_wrapper(a, b) :
     output = NBXTensor.empty_like(a)
     if isinstance(b, NBXTensor):
         b = b.contiguous()
-        _set_device(a)
+        set_device(a)
         bitwise_left_shift_kernel[_1d_grid(a.numel())](a, b, output, a.numel(), **_ew_meta(a.numel()))
     else:
         from nbxtensor.ops.bitwise_left_shift import bitwise_left_shift_scalar_kernel
-        _set_device(a)
+        set_device(a)
         bitwise_left_shift_scalar_kernel[_1d_grid(a.numel())](a, output, a.numel(), int(b), **_ew_meta(a.numel()))
     return output
 
@@ -1807,11 +1807,11 @@ def bitwise_right_shift_wrapper(a, b) :
     output = NBXTensor.empty_like(a)
     if isinstance(b, NBXTensor):
         b = b.contiguous()
-        _set_device(a)
+        set_device(a)
         bitwise_right_shift_kernel[_1d_grid(a.numel())](a, b, output, a.numel(), **_ew_meta(a.numel()))
     else:
         from nbxtensor.ops.bitwise_right_shift import bitwise_right_shift_scalar_kernel
-        _set_device(a)
+        set_device(a)
         bitwise_right_shift_scalar_kernel[_1d_grid(a.numel())](a, output, a.numel(), int(b), **_ew_meta(a.numel()))
     return output
 
@@ -1828,7 +1828,7 @@ def addr_wrapper(input, vec1, vec2,
     BLOCK_M = min(32, triton.next_power_of_2(M))
     BLOCK_N = min(32, triton.next_power_of_2(N))
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
-    _set_device(inp_c)
+    set_device(inp_c)
     addr_kernel[grid](
         inp_c, v1_c, v2_c, output,
         beta, alpha, M, N,
@@ -1846,7 +1846,7 @@ def clamp_min_wrapper(x, min_val) :
     output = NBXTensor.empty_like(x)
     if isinstance(min_val, NBXTensor):
         min_val = min_val.item()
-    _set_device(x)
+    set_device(x)
     clamp_min_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), float(min_val), **_ew_meta(x.numel()))
     return output
 
@@ -1927,7 +1927,7 @@ def topk_wrapper(x, k: int, dim: int = -1,
 
     # Stage 1: per-chunk top-k (iterative argmax → already sorted descending
     # for largest=True).
-    _set_device(s1_vals)
+    set_device(s1_vals)
     topk_stage1_kernel[batch_size, chunk_num](
         s1_vals, s1_idxs, x.contiguous(),
         k, topk_n, chunk_size, descending)
@@ -1956,7 +1956,7 @@ def topk_wrapper(x, k: int, dim: int = -1,
     # Stage 2: merge chunks via bitonic sort
     stage2_n = chunk_num * k
     BLOCK = triton.next_power_of_2(stage2_n)
-    _set_device(s2_vals)
+    set_device(s2_vals)
     topk_stage2_kernel[batch_size,](
         s2_vals, s2_idxs, s1_vals, s1_idxs,
         dim, k, stage2_n, BLOCK, descending)
@@ -1973,7 +1973,7 @@ def trace_wrapper(x) :
     assert x.ndim >= 2
     n = min(x.shape[-2], x.shape[-1])
     out = NBXTensor.empty(1, dtype=NBXDtype.float32, device=x.device)
-    _set_device(x.contiguous())
+    set_device(x.contiguous())
     trace_kernel[(1,)](
         x.contiguous(), out, n,
         x.stride(-2), x.stride(-1),
@@ -2164,7 +2164,7 @@ def angle_wrapper(x) :
         imag = x.imag.contiguous()
         out = NBXTensor.empty(tuple(real.shape), dtype=NBXDtype.float32,
                               device=real.device)
-        _set_device(real)
+        set_device(real)
         n = real.numel()
         atan2_kernel[_1d_grid(n)](imag, real, out, n, **_ew_meta(n))
         return out

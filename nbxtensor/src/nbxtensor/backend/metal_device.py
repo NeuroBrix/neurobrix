@@ -1248,7 +1248,7 @@ def reset_runtime_for_tests() -> None:
     #   * `_RUNTIME` here,
     #   * the compiled kernels in `metal_driver`, which hold the device and
     #     the pipelines they were built on,
-    #   * `_nbx_runtime._gpu_runtime`, an lru_cache the allocator resolves
+    #   * `_nbx_runtime.gpu_runtime`, an lru_cache the allocator resolves
     #     every malloc through.
     #
     # Clearing any subset is worse than clearing none: the tensors then come
@@ -1267,7 +1267,7 @@ def reset_runtime_for_tests() -> None:
     from nbxtensor.backend import launcher
     launcher.reset_caches()
 
-    for cached in (getattr(_nbx_runtime, "_gpu_runtime", None),
+    for cached in (getattr(_nbx_runtime, "gpu_runtime", None),
                    getattr(_nbx_runtime, "_metal_backend_table", None)):
         clear = getattr(cached, "cache_clear", None)
         if clear is not None:

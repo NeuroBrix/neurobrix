@@ -131,7 +131,7 @@ def test_an_unknown_backend_is_refused_not_guessed(monkeypatch):
     # row for the live backend; on a CUDA machine that table answers. The
     # refusal under test is "no row for THIS backend", so the live backend is
     # made one the table cannot have (merge of 2026-09-13, semantic conflict).
-    monkeypatch.setattr(_nbx_runtime, "_detect_gpu_backend", lambda: "no-such-backend")
+    monkeypatch.setattr(_nbx_runtime, "gpu_backend", lambda: "no-such-backend")
     with pytest.raises(RuntimeError, match="ZERO FALLBACK"):
         _nbx_capabilities._backend_capability({"cuda": True}, "_T", "whether it does the thing")
 
@@ -161,7 +161,7 @@ def test_a_disarmed_channel_allocates_nothing(monkeypatch):
     kernels refuse an out-of-range index by name, six outputs identical,
     +0.13% wall.
     """
-    monkeypatch.setattr(_nbx_runtime, "_detect_gpu_backend", lambda: "cuda")
+    monkeypatch.setattr(_nbx_runtime, "gpu_backend", lambda: "cuda")
     _nbx_faults.device_fault_code_cached.cache_clear()
     before = dict(_nbx_faults._FAULT_BUFFERS)
 

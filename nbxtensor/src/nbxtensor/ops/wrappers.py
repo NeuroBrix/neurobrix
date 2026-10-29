@@ -19,7 +19,7 @@ from nbxtensor.ops import launch_keys as _lk
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype, dtype_size
 from nbxtensor.memory.allocator import DeviceAllocator
-from nbxtensor.backend.runtime import _set_device
+from nbxtensor.backend.runtime import set_device
 from nbxtensor.shape import MAX_NDIM as _NBX_MAX_NDIM, broadcast_shapes, max_linear_offset
 from nbxtensor.dtype.itemsize import canonical_name
 from nbxtensor.dtype.promotion import binary_result, float_math_input
@@ -461,7 +461,7 @@ def _is_scalar(x):
 
 def _ensure_cuda(t):
     """Ensure CUDA runtime device matches tensor device."""
-    _set_device(t)
+    set_device(t)
     return t
 
 
@@ -485,7 +485,7 @@ def _wider_dtype(a_dtype, b_dtype):
 def _prepare_unary(x):
     """Prepare a single tensor for kernel launch."""
     x = x.contiguous()
-    _set_device(x)
+    set_device(x)
     return x, x.numel(), None
 
 
@@ -516,7 +516,7 @@ def _prepare_binary(a, b):
 
     if _is_scalar(b):
         a = a.contiguous()
-        _set_device(a)
+        set_device(a)
         output = NBXTensor.empty_like(a)
         if _dev_scalar(b):
             return a, b, output, a.numel(), None, "dev"
@@ -525,7 +525,7 @@ def _prepare_binary(a, b):
     if _is_scalar(a):
         # Swap: tensor goes to `a`, scalar goes to `b`
         b = b.contiguous()
-        _set_device(b)
+        set_device(b)
         output = NBXTensor.empty_like(b)
         if _dev_scalar(a):
             return b, a, output, b.numel(), None, "dev"
@@ -553,7 +553,7 @@ def _prepare_binary(a, b):
         a = a.contiguous()
         b = b.contiguous()
 
-    _set_device(a)
+    set_device(a)
     output = NBXTensor.empty_like(a)
     return a, b, output, a.numel(), None, False
 
@@ -589,7 +589,7 @@ def _prepare_binary_strided(a, b):
     shape = tuple(out_shape) or (1,)
     a_st = tuple(a._strides) or (0,)
     b_st = tuple(b._strides) or (0,)
-    _set_device(a)
+    set_device(a)
     output = NBXTensor.empty(tuple(out_shape), a._dtype, f"cuda:{a._device_idx}")
     n = output.numel()
     return (a, b, output, n,
@@ -614,7 +614,7 @@ def _prepare_scalar_strided(a, b):
         return None
     shape = tuple(a.shape) or (1,)
     st = tuple(a._strides) or (0,)
-    _set_device(a)
+    set_device(a)
     output = NBXTensor.empty(tuple(a.shape), a._dtype, f"cuda:{a._device_idx}")
     return (a, _to_scalar(b), output, output.numel(),
             _nbx_upload_int64(shape, a._device_idx), _nbx_upload_int64(st, a._device_idx), ndim)
@@ -630,14 +630,14 @@ def _prepare_comparison(a, b):
     """
     if _is_scalar(b):
         a = a.contiguous()
-        _set_device(a)
+        set_device(a)
         output = NBXTensor.empty(a.shape, NBXDtype.bool_, device=a.device)
         return a, _to_scalar(b), output, a.numel(), None, True
 
     if _is_scalar(a):
         # Swap: tensor goes to `a`, scalar goes to `b`
         b = b.contiguous()
-        _set_device(b)
+        set_device(b)
         output = NBXTensor.empty(b.shape, NBXDtype.bool_, device=b.device)
         return b, _to_scalar(a), output, b.numel(), None, True
 
@@ -661,7 +661,7 @@ def _prepare_comparison(a, b):
         a = a.contiguous()
         b = b.contiguous()
 
-    _set_device(a)
+    set_device(a)
     output = NBXTensor.empty(a.shape, NBXDtype.bool_, device=a.device)
     return a, b, output, a.numel(), None, False
 
@@ -691,7 +691,7 @@ def _int_division_widening_dtype(a, b):
             if m >= limit:
                 raise RuntimeError(
                     f"ZERO FALLBACK: an integer division with |values| up to {m} on a backend with no "
-                    f"float64 ('{__import__('nbxtensor.backend.runtime', fromlist=['_detect_gpu_backend'])._detect_gpu_backend()}'): "
+                    f"float64 ('{__import__('nbxtensor.backend.runtime', fromlist=['gpu_backend']).gpu_backend()}'): "
                     f"the float32 widening is exact only below 2^24, and float64 is misread there. "
                     f"An integer division kernel is the extension that lifts this.")
     return NBXDtype.float32

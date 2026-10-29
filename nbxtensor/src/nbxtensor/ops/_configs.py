@@ -973,7 +973,7 @@ def matmul_configs() -> List[triton.Config]:
 # inside its own `is_active()` — so importing a kernel module pulled torch
 # into the process, on a CUDA box as much as on a Mac.
 #
-# `_detect_gpu_backend()` answers the same question with three torch-free
+# `gpu_backend()` answers the same question with three torch-free
 # probes and records the result in `TRITON_DEFAULT_BACKEND`, after which
 # Triton resolves straight to that backend and probes nothing else. Doing it
 # here, in the module every kernel imports before it asks anything, is what
@@ -983,7 +983,7 @@ def matmul_configs() -> List[triton.Config]:
 # must still be importable — the refusal belongs at the call site, not at
 # import.
 try:                                          # pragma: no cover - env-dependent
-    from nbxtensor.backend.runtime import _detect_gpu_backend as _r33_pin_backend
+    from nbxtensor.backend.runtime import gpu_backend as _r33_pin_backend
 
     _r33_pin_backend()
 except Exception:

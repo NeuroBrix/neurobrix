@@ -122,9 +122,9 @@ def _no_gpu_reason():
     a broken kernel module, a refused profile or a failing allocator raises at collection, never reads as a skip."""
     from nbxtensor.ops import wrappers as W
     from nbxtensor.memory.allocator import DeviceAllocator
-    from nbxtensor.backend.runtime import _gpu_runtime
+    from nbxtensor.backend.runtime import gpu_runtime
     try:
-        _gpu_runtime()
+        gpu_runtime()
     except (OSError, RuntimeError) as exc:           # no CUDA/HIP runtime library on this host
         return f"no GPU runtime: {exc}"
     if DeviceAllocator.device_count() < 1:           # a runtime with no visible device (CUDA_VISIBLE_DEVICES="")

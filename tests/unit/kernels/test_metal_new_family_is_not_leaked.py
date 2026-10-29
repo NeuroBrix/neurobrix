@@ -24,7 +24,7 @@ from nbxtensor.tensor import NBXTensor
 
 def _on_metal() -> bool:
     try:
-        return _nbx_runtime._detect_gpu_backend() == "metal"
+        return _nbx_runtime.gpu_backend() == "metal"
     except Exception:
         return False
 

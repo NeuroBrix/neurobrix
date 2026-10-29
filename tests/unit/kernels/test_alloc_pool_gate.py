@@ -126,8 +126,8 @@ def _with_driver(monkeypatch):
     import nbxtensor.tensor as nt
     import nbxtensor.backend.runtime as _nbx_runtime
     drv = _FakeDriver()
-    monkeypatch.setattr(_nbx_runtime, "_gpu_runtime", lambda: drv)
-    monkeypatch.setattr(_nbx_runtime, "_active_backend", lambda: {"malloc": "cudaMalloc", "free": "cudaFree"})
+    monkeypatch.setattr(_nbx_runtime, "gpu_runtime", lambda: drv)
+    monkeypatch.setattr(_nbx_runtime, "backend_table", lambda: {"malloc": "cudaMalloc", "free": "cudaFree"})
     monkeypatch.setattr(DeviceAllocator, "get_device", staticmethod(lambda: 0))
     monkeypatch.setattr(DeviceAllocator, "_rung_limit_bytes", {0: None})
     return drv

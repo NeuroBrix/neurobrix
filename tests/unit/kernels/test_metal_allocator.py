@@ -32,7 +32,7 @@ from nbxtensor.tensor import NBXTensor
 
 def _on_metal() -> bool:
     try:
-        return _nbx_runtime._detect_gpu_backend() == "metal"
+        return _nbx_runtime.gpu_backend() == "metal"
     except Exception:
         return False
 
@@ -103,12 +103,12 @@ def test_no_metal_means_a_raise_not_a_cpu_backend(monkeypatch):
     monkeypatch.setattr(metal_device, "metal_device_available", lambda: False)
     monkeypatch.setattr(ctypes.cdll, "LoadLibrary", _no_runtime)   # CUDA and ROCm absent too
     monkeypatch.delenv("NBX_GPU_BACKEND", raising=False)
-    _nbx_runtime._detect_gpu_backend.cache_clear()
+    _nbx_runtime.gpu_backend.cache_clear()
     try:
         with pytest.raises(RuntimeError, match="No GPU runtime found"):
-            _nbx_runtime._detect_gpu_backend()
+            _nbx_runtime.gpu_backend()
     finally:
-        _nbx_runtime._detect_gpu_backend.cache_clear()
+        _nbx_runtime.gpu_backend.cache_clear()
 
 
 def test_a_device_without_unified_memory_is_refused():

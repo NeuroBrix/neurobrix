@@ -89,11 +89,11 @@ def test_the_shadow_refuses_while_a_device_is_visible(tmp_path):
     CUDA_VISIBLE_DEVICES=0 on the rack; on a machine with no card this test cannot see the
     door and is skipped rather than read as green."""
     from nbxtensor.memory.allocator import DeviceAllocator
-    from nbxtensor.backend.runtime import _detect_gpu_backend
+    from nbxtensor.backend.runtime import gpu_backend
     if DeviceAllocator.device_count() < 1:
         pytest.skip("no device visible: the door cannot be exercised here")
     try:
-        _metal = _detect_gpu_backend() == "metal"
+        _metal = gpu_backend() == "metal"
     except Exception:
         _metal = False
     if _metal:

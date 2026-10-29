@@ -38,8 +38,8 @@ KEPT_MB = 128           # a quarter of the arena: a release that works leaves a 
 
 def _metal_or_skip():
     try:
-        from nbxtensor.backend.runtime import _detect_gpu_backend
-        if _detect_gpu_backend() != "metal":
+        from nbxtensor.backend.runtime import gpu_backend
+        if gpu_backend() != "metal":
             pytest.skip("the autoreleased resident list is triton-ext's Metal launch; other drivers bind their own way")
         from nbxtensor.backend import triton_ext_driver as drv
         return drv

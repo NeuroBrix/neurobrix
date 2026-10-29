@@ -40,7 +40,7 @@ def capture_fft(rng, out):
     latent defect — a torch-style `mul_` on an NBXTensor — fixed separately)."""
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.ops.spectral_wrappers import _triton_fft_forward
-    from nbxtensor.ops.wrappers import _set_device, _EW_BLOCK
+    from nbxtensor.ops.wrappers import set_device, _EW_BLOCK
     from nbxtensor.ops.elementwise_wrappers import _1d_grid
     from nbxtensor.ops import fft_op
     for N in (256, 1024, 4096):
@@ -52,7 +52,7 @@ def capture_fft(rng, out):
         yr = _nbx((rng.standard_normal((N,))).astype(np.float32))
         yi = _nbx((rng.standard_normal((N,))).astype(np.float32))
         tr, ti = NBXTensor.empty_like(yr), NBXTensor.empty_like(yi)
-        _set_device(yr)
+        set_device(yr)
         # The inverse butterfly stages without the 1/N scale, as this capture has always taken
         # them — through whichever kernels the tree carries: the one-row kernels (before
         # 2026-09-28) or the row-batched ones, so a capture of each compares byte for byte.

@@ -1,7 +1,7 @@
-"""`_detect_gpu_backend()` names a backend; it does not find a device.
+"""`gpu_backend()` names a backend; it does not find a device.
 
 The two questions read alike and are not the same, and the difference cost five tests on
-2026-09-16: `test_autotune_correctness_screen.py` gated on `_detect_gpu_backend() is not None`,
+2026-09-16: `test_autotune_correctness_screen.py` gated on `gpu_backend() is not None`,
 got "cuda" on a host with no visible card — the vendor runtime LIBRARY loads there — and its
 tests then failed at their first allocation with `cudaErrorNoDevice` instead of skipping.
 
@@ -30,9 +30,9 @@ _ASK_BOTH = """
 import sys
 sys.path.insert(0, %r)
 import neurobrix  # the application: nbxtensor's host services
-from nbxtensor.backend.runtime import _detect_gpu_backend; from nbxtensor.memory.allocator import DeviceAllocator
+from nbxtensor.backend.runtime import gpu_backend; from nbxtensor.memory.allocator import DeviceAllocator
 try:
-    name = _detect_gpu_backend()
+    name = gpu_backend()
 except Exception as exc:
     name = "raised:" + type(exc).__name__
 print(name, DeviceAllocator.device_count())
@@ -78,7 +78,7 @@ def _backend_has_a_visibility_mask() -> bool:
 
     nbx = pytest.importorskip("nbxtensor.tensor")
     try:
-        return _nbx_runtime._detect_gpu_backend() == "cuda"
+        return _nbx_runtime.gpu_backend() == "cuda"
     except Exception:
         return False
 

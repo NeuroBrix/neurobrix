@@ -33,8 +33,8 @@ from nbxtensor.backend.launcher import launch  # noqa: E402
 
 def _metal_or_skip():
     try:
-        from nbxtensor.backend.runtime import _detect_gpu_backend
-        if _detect_gpu_backend() != "metal":
+        from nbxtensor.backend.runtime import gpu_backend
+        if gpu_backend() != "metal":
             pytest.skip("the transient-wrap lifetime is this driver's; "
                         "other drivers bind their own way")
         from nbxtensor.backend import triton_ext_driver as drv

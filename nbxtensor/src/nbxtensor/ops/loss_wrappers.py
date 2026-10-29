@@ -9,7 +9,7 @@ from nbxtensor.ops import launch_keys as _lk
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype, dtype_size
 from nbxtensor.memory.allocator import DeviceAllocator
-from nbxtensor.backend.runtime import _set_device
+from nbxtensor.backend.runtime import set_device
 from nbxtensor.shape import MAX_NDIM as _NBX_MAX_NDIM, broadcast_shapes, max_linear_offset
 from nbxtensor.dtype.itemsize import canonical_name
 from nbxtensor.dtype.promotion import binary_result, float_math_input
@@ -187,7 +187,7 @@ def mse_loss_wrapper(input, target,
     input, target = input.contiguous(), target.contiguous()
     if reduction == 0:
         output = NBXTensor.empty_like(input)
-        _set_device(input)
+        set_device(input)
         mse_loss_none_kernel[_ew._1d_grid(input.numel())](
             input, target, output, input.numel(),
             **_ew_meta(input.numel()))
@@ -199,10 +199,10 @@ def mse_loss_wrapper(input, target,
     BLOCK_MID = triton.next_power_of_2(mid_size)
     mid = NBXTensor.empty(mid_size, dtype=NBXDtype.float32, device=input.device)
     out = NBXTensor.empty([], dtype=NBXDtype.float32, device=input.device)
-    _set_device(input)
+    set_device(input)
     mse_loss_partial_kernel[(mid_size,)](
         input, target, mid, M, BLOCK_SIZE=BLOCK_SIZE, reduction=reduction)
-    _set_device(mid)
+    set_device(mid)
     mse_loss_reduce_kernel[(1,)](mid, out, mid_size, BLOCK_MID=BLOCK_MID)
     return out.to(input.dtype)
 
@@ -232,7 +232,7 @@ def nll_loss_wrapper(input, target,
 
     wgt_ptr = weight.contiguous() if weight is not None else None
 
-    _set_device(input)
+    set_device(input)
     nll_loss_forward_kernel[(num_blocks,)](
         input, target, wgt_ptr, out,
         ignore_index, N, C,
@@ -266,7 +266,7 @@ def cross_entropy_wrapper(input, target,
     output = NBXTensor.empty(num_blocks, dtype=NBXDtype.float32, device=input.device)
     sum_weights = NBXTensor.empty(num_blocks, dtype=NBXDtype.float32, device=input.device) if weighted else output
 
-    _set_device(input)
+    set_device(input)
     cross_entropy_loss_forward_kernel[(num_blocks,)](
         input, target,
         weight.contiguous() if weighted else input,

@@ -38,8 +38,8 @@ class FakeRT:
 @pytest.fixture
 def rt(monkeypatch):
     fake = FakeRT()
-    monkeypatch.setattr(_nbx_runtime, "_gpu_runtime", lambda: fake)
-    monkeypatch.setattr(_nbx_runtime, "_active_backend", lambda: {"malloc": "cudaMalloc", "free": "cudaFree"})
+    monkeypatch.setattr(_nbx_runtime, "gpu_runtime", lambda: fake)
+    monkeypatch.setattr(_nbx_runtime, "backend_table", lambda: {"malloc": "cudaMalloc", "free": "cudaFree"})
     monkeypatch.setattr(DA, "_pool_enabled_init", True, raising=False)
     for name, value in (("_pool_enabled", True), ("_POOL", SegmentPool(on_block=DA._block_reported)),
                         ("_cuda_ptr_size", {}), ("_cuda_ptr_device", {}),

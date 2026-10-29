@@ -26,9 +26,9 @@ from nbxtensor.tensor import NBXTensor
 def _no_gpu_reason():
     """Why these cells cannot run here, or None. Only the ABSENCE of a device or of the profile's split rows skips: a
     broken kernel module, a refused profile or a failing allocator raises at collection, never reads as a skip."""
-    from nbxtensor.backend.runtime import _gpu_runtime
+    from nbxtensor.backend.runtime import gpu_runtime
     try:
-        _gpu_runtime()
+        gpu_runtime()
     except (OSError, RuntimeError) as exc:           # no CUDA/HIP runtime library on this host
         return f"no GPU runtime: {exc}"
     if DeviceAllocator.device_count() < 1:           # a runtime with no visible device (CUDA_VISIBLE_DEVICES="")

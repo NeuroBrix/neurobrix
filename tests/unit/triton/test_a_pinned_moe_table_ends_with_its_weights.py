@@ -34,8 +34,8 @@ E, K_, H, F, T = 8, 2, 64, 32, 5
 
 def _metal_or_skip():
     try:
-        from nbxtensor.backend.runtime import _detect_gpu_backend
-        if _detect_gpu_backend() != "metal":
+        from nbxtensor.backend.runtime import gpu_backend
+        if gpu_backend() != "metal":
             pytest.skip("a table pins on the Metal driver only; on CUDA it holds integers")
         from nbxtensor.backend import triton_ext_driver as drv
         return drv

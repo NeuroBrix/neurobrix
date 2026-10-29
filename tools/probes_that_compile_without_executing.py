@@ -17,7 +17,7 @@ The census of 2026-09-16 16:xx read the engine (`src/`) and answered "no
 compile-only probe found here" — correctly, for what it read. It did not read
 the probes that gate TESTS, and that is where the next one was:
 `test_autotune_correctness_screen.py` decided with
-`_detect_gpu_backend() is not None`, which answers WHICH BACKEND THIS BUILD CAN
+`gpu_backend() is not None`, which answers WHICH BACKEND THIS BUILD CAN
 ADDRESS — a fact about the install, not about the machine. It returned "cuda"
 on a host with no visible device and the five tests behind it failed at their
 first allocation with `cudaErrorNoDevice` instead of skipping. A reading that
@@ -61,7 +61,7 @@ EXECUTES = ("empty", "zeros", "ones", "set_device", "device_count", "malloc", "a
 
 # Calls that are a NAME, a version or an import — never evidence about a device.
 DETECTS = ("import_module", "find_spec", "hasattr", "getattr", "version", "__version__",
-           "_detect_gpu_backend", "which", "environ", "platform", "uname", "exists")
+           "gpu_backend", "which", "environ", "platform", "uname", "exists")
 
 # Reading the driver's or the project's authority is not a compile-only probe.
 AUTHORITY = ("get_device_properties", "get_device_capability", "device_attribute",
@@ -85,14 +85,14 @@ def _calls(fn: ast.AST) -> list:
 
 # A probe whose work is done by ANOTHER of the project's probes is judged by that
 # one, and this census cannot follow it — so it says so rather than counting it.
-# The four Metal test probes call `_detect_gpu_backend()`, which OPENS the device on
+# The four Metal test probes call `gpu_backend()`, which OPENS the device on
 # that backend (`metal_device_available`: "it opens the real device rather than
 # checking for the import") and only loads a library on CUDA. The same call is an
 # executing probe on one backend and a naming one on the other, which is exactly
 # what a call site cannot see — and why the CUDA-side one cost five tests.
-DELEGATES_TO = ("_detect_gpu_backend", "metal_device_available", "_triton_cpu_available",
+DELEGATES_TO = ("gpu_backend", "metal_device_available", "_triton_cpu_available",
                 "triton_metal_available", "metal_shader_compiler_available",
-                "device_count", "_gpu_runtime", "_active_backend")
+                "device_count", "gpu_runtime", "backend_table")
 
 
 def classify(fn: ast.FunctionDef) -> tuple:

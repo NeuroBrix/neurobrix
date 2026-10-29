@@ -9,7 +9,7 @@ from nbxtensor.ops import launch_keys as _lk
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype, dtype_size
 from nbxtensor.memory.allocator import DeviceAllocator
-from nbxtensor.backend.runtime import _set_device
+from nbxtensor.backend.runtime import set_device
 from nbxtensor.shape import MAX_NDIM as _NBX_MAX_NDIM, broadcast_shapes, max_linear_offset
 from nbxtensor.dtype.itemsize import canonical_name
 from nbxtensor.dtype.promotion import binary_result, float_math_input
@@ -298,7 +298,7 @@ def conv_transpose_wrapper(
     OW = (IW - 1) * sw - 2 * pw + dw * (KW - 1) + opw + 1
 
     output = NBXTensor.empty((N, C_out, OH, OW), device=x_c.device, dtype=out_dtype)
-    _set_device(x_c)
+    set_device(x_c)
     BLOCK = 256
     grid = (N * C_out, triton.cdiv(OH * OW, BLOCK))
     conv_transpose2d_kernel[grid](
@@ -514,7 +514,7 @@ def _conv_bias_inplace(output, bias):
     n = output.numel()
     hw = int(output.shape[-2]) * int(output.shape[-1])
     c = int(output.shape[1])
-    _set_device(output)
+    set_device(output)
     _m = _ew_meta(n)
     conv2d_bias_inplace_kernel[_ew_grid(n, _m)](
         output, bias_c.contiguous(), n, hw, c, BLOCK=_m['BLOCK_SIZE'], num_warps=_m['num_warps'])
@@ -739,7 +739,7 @@ def conv2d_wrapper(
         triton.cdiv(out_c // groups, META['BLOCK_SIZE_OUTF']),
         groups,
     )
-    _set_device(x_c)
+    set_device(x_c)
     _in_w_key, _out_w_key = _conv_width_key(in_h, out_h, in_w, out_w, kw, stride_w, pad_w, dil_w)
     _core._autotune_headroom_guard(conv2d_forward_kernel[grid])(
         x_c, w_c, output,
@@ -769,7 +769,7 @@ def _conv2d_m8n8k4(x, w, bias, out, N, in_c, in_h, in_w, out_c, out_h, out_w, kh
     tile = _matrix_unit_mm_tile(M, OG, _matrix_unit())
     MB, NB = tile["block_m"] // 16, tile["block_n"] // 16
     lay = conv_layouts(MB, NB, tile["warps_m"], tile["warps_n"], tile["block_k"])
-    _set_device(x)
+    set_device(x)
     grid = (triton.cdiv(M, tile["block_m"]) * triton.cdiv(OG, tile["block_n"]), groups)
     conv2d_m8n8k4_kernel[grid](
         x, w, out if bias is None else bias.contiguous(), out,
@@ -800,7 +800,7 @@ def _depthwise_conv2d_dispatch(
         triton.cdiv(C, META['BLOCK_C']),
         triton.cdiv(out_h * out_w, META['BLOCK_HW']),
     )
-    _set_device(x_c)
+    set_device(x_c)
     _iw_key, _ow_key = _conv_width_key(IH, out_h, IW, out_w, kw, stride_w, pad_w, 1)
     _core._autotune_headroom_guard(depthwise_conv2d_kernel[grid])(
         x_c, w_c, output,
@@ -974,7 +974,7 @@ def avg_pool2d_wrapper(
         N * C,
         triton.cdiv(oh, _POOL_BH) * triton.cdiv(ow, _POOL_BW),
     )
-    _set_device(xc)
+    set_device(xc)
     avg_pool2d_forward_kernel[grid](
         xc, output,
         xc.stride(0), xc.stride(1), xc.stride(2), xc.stride(3),
@@ -1052,7 +1052,7 @@ def max_pool2d_wrapper(
         N * C,
         triton.cdiv(oh, _POOL_BH) * triton.cdiv(ow, _POOL_BW),
     )
-    _set_device(xc)
+    set_device(xc)
     max_pool2d_forward_kernel[grid](
         xc, output, indices,
         xc.stride(0), xc.stride(1), xc.stride(2), xc.stride(3),
@@ -1113,7 +1113,7 @@ def max_pool3d_with_indices_wrapper(
         N * C * ot,
         triton.cdiv(oh, _POOL_BH) * triton.cdiv(ow, _POOL_BW),
     )
-    _set_device(x_c)
+    set_device(x_c)
     max_pool3d_forward_kernel[grid](
         x_c, output, indices,
         x_c.stride(0), x_c.stride(1), x_c.stride(2), x_c.stride(3), x_c.stride(4),
@@ -1146,7 +1146,7 @@ def adaptive_avg_pool2d_wrapper(x, output_size) :
     total = N * C * OH * OW
     grid = _ew._1d_grid(total)
     x_c = x.contiguous()
-    _set_device(x_c)
+    set_device(x_c)
     adaptive_avg_pool2d_kernel[grid](
         x_c, output, total,
         IH, IW, OH, OW,
@@ -1171,7 +1171,7 @@ def conv_depthwise2d_wrapper(x, weight, bias=None,
         triton.cdiv(OH, _core._BILINEAR_BY),
         N * C,
     )
-    _set_device(x.contiguous())
+    set_device(x.contiguous())
     conv_depthwise2d_kernel[grid](
         x.contiguous(), weight.contiguous(), output,
         N, C, IH, IW, C, KH, KW, OH, OW,
@@ -1210,7 +1210,7 @@ def unfold_backward_wrapper(grad_in, input_sizes, dim, size, step) :
         B *= d
     g2 = grad_in.reshape(B, N_frames, sz)
     out = NBXTensor.zeros((B, L), dtype=grad_in.dtype, device=grad_in.device)
-    _set_device(g2)
+    set_device(g2)
     max_overlap = (sz // step) + 2
     BLOCK = 256
     grid = (B, triton.cdiv(L, BLOCK))
@@ -1247,7 +1247,7 @@ def im2col_wrapper(x, kernel_size, dilation, padding, stride):
     out_sn, out_sc, out_sl = C * KH * KW * L, L, 1
     BLOCK_L = min(1024, triton.next_power_of_2(L))
     grid = (N * C * KH * KW,)
-    _set_device(x)
+    set_device(x)
     im2col_kernel[grid](
         x, out, C, IH, IW, OW, L, KH, KW,
         stride_h, stride_w, pad_h, pad_w, dil_h, dil_w,

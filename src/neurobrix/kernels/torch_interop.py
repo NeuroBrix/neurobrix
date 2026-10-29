@@ -61,7 +61,7 @@ def torch_device_str(device_idx: int) -> str:
     every oracle test in tests/unit/kernels (161 of them, 13 files) failed
     here without ever comparing a number.
     """
-    backend = _nbx_runtime._detect_gpu_backend()
+    backend = _nbx_runtime.gpu_backend()
     name = _TORCH_DEVICE_BY_BACKEND.get(backend)
     if name is None:
         raise RuntimeError(
@@ -101,7 +101,7 @@ def set_torch_device(device) -> None:
     selection to make, and a backend that HAS one and is missing from the table
     is refused rather than guessed.
     """
-    backend = _nbx_runtime._detect_gpu_backend()
+    backend = _nbx_runtime.gpu_backend()
     selects = _TORCH_HAS_DEVICE_SELECTION.get(backend)
     if selects is None:
         raise RuntimeError(
@@ -121,7 +121,7 @@ def nbx_to_torch(tensor: 'NBXTensor'):
     Used at the boundary between triton execution and torch-based pipeline.
     """
     import torch
-    backend = _nbx_runtime._detect_gpu_backend()
+    backend = _nbx_runtime.gpu_backend()
     device = torch_device_str(tensor._device_idx)
     shares_heap = _TORCH_SHARES_DEVICE_HEAP.get(backend)
     if shares_heap is None:

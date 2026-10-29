@@ -9,7 +9,7 @@ from nbxtensor.ops import launch_keys as _lk
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype, dtype_size
 from nbxtensor.memory.allocator import DeviceAllocator
-from nbxtensor.backend.runtime import _set_device
+from nbxtensor.backend.runtime import set_device
 from nbxtensor.shape import MAX_NDIM as _NBX_MAX_NDIM, broadcast_shapes, max_linear_offset
 from nbxtensor.dtype.itemsize import canonical_name
 from nbxtensor.dtype.promotion import binary_result, float_math_input
@@ -222,7 +222,7 @@ def softmax(x, dim: int = -1, half_to_float: bool = False) :
     x_2d = x_perm.view(batch_dim, feat_dim)
     output_2d = NBXTensor.empty_like(x_2d)
 
-    _set_device(x_2d)
+    set_device(x_2d)
     if feat_dim > _SOFTMAX_MAX_FUSED_FEAT:
         _launch_looped_softmax(x_2d, output_2d, batch_dim, feat_dim, log=False)
     else:
@@ -249,7 +249,7 @@ def log_softmax(x, dim: int = -1) :
     x_2d = x_perm.view(batch_dim, feat_dim)
     output_2d = NBXTensor.empty_like(x_2d)
 
-    _set_device(x_2d)
+    set_device(x_2d)
     if feat_dim > _SOFTMAX_MAX_FUSED_FEAT:
         _launch_looped_softmax(x_2d, output_2d, batch_dim, feat_dim, log=True)
     else:
@@ -626,7 +626,7 @@ def paged_kv_append(new, pool, slot_mapping):
         raise ValueError("paged_kv_append: the head dim must be contiguous in the new positions and in the pool")
     if n_tok == 0:
         return pool
-    _set_device(pool)
+    set_device(pool)
     paged_kv_append_kernel[(n_tok, h_kv)](
         new, pool, slot_mapping, int(pool.shape[2]),
         new.stride(0), new.stride(1),
@@ -681,7 +681,7 @@ def paged_decode_attention(q, k_pool, v_pool, block_table, seq_lens, softmax_sca
     q_saturate = (q_round == NBXDtype.float16
                   and q.nbx_dtype in (NBXDtype.float32, NBXDtype.float64, NBXDtype.bfloat16))
     out = NBXTensor.empty((bhq, 1, d_v), dtype=out_dtype, device=dev)
-    _set_device(q)
+    set_device(q)
     paged_decode_attn_split_kernel[(bhq, split)](
         q2, k_pool, v_pool, block_table, seq_lens,
         opart, mpart, lpart,
@@ -755,7 +755,7 @@ def _decode_attn_vec(q, k, v, bias, softmax_scale,
                             device=dev)
     out = NBXTensor.empty((BHq, 1, D_v), dtype=out_dtype, device=dev)
 
-    _set_device(q)
+    set_device(q)
     if _os_dv.environ.get("NBX_DV_GROUPED", "0") == "1":
         # One KV head per program: K/V loaded once, reused across the
         # GQA group from registers (see the grouped kernel's docstring).
@@ -863,7 +863,7 @@ def _flash_decode(q, k, v, bias, softmax_scale,
     out = NBXTensor.empty((BH, groups, headdim), dtype=q.nbx_dtype,
                           device=dev)
 
-    _set_device(q)
+    set_device(q)
     flash_decode_split_kernel[(BH, split)](
         qg, kf, vf,
         bias if bias is not None else qg,   # dead pointer when HAS_BIAS=0
@@ -908,7 +908,7 @@ def _flash_m8n8k4(q, k, v, bias, softmax_scale, gqa_groups, tile, has_bias, spli
     seqlen_q_rounded = math.ceil(seqlen_q / 128) * 128
     lse = NBXTensor.empty((batch, nheads, seqlen_q_rounded), dtype=NBXDtype.float32,
                           device=f"cuda:{q._device_idx}" if hasattr(q, '_device_idx') else 'cuda')
-    _set_device(q)
+    set_device(q)
     grid = lambda META: (triton.cdiv(seqlen_q, 16 * META["MB"]), batch * nheads)
     flash_attention_m8n8k4_kernel[grid](
         q, k, v, bias, o, lse, softmax_scale,
@@ -943,7 +943,7 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     import math
     from nbxtensor.ops.flash_attention import flash_attention_forward_kernel
 
-    _set_device(q)
+    set_device(q)
     # A scale is a number: a numpy scalar (np.float64) carries a `.dtype`, and the autotuner — Triton's key and
     # `autotune_cache.key_of` alike — appends the dtype of every argument that has one, so the kernel's key grew a
     # 'float64' no certified entry can hold and the certified lookup refused it (the decode / flash cells, 2026-10-29)
@@ -1482,7 +1482,7 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
         _dev = f"cuda:{q._device_idx}" if hasattr(q, "_device_idx") else "cuda"
         lse = NBXTensor.empty((batch, nheads, seqlen_q_rounded), dtype=NBXDtype.float32, device=_dev)
         tmp = NBXTensor.empty((batch, nheads, seqlen_q_rounded), dtype=NBXDtype.float32, device=_dev)
-        _set_device(q)
+        set_device(q)
         flash_attention_certified_kernel[lambda META: (triton.cdiv(seqlen_q, META["BLOCK_M"]), batch * nheads)](
             q, k, v, bias,
             o, lse, tmp,
@@ -1531,7 +1531,7 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
         _flash_launch_meta["num_stages"] = int(_fns)
 
     # Ensure CUDA runtime is on the correct device before kernel launch
-    _set_device(q)
+    set_device(q)
 
     # The tile is offered only if the DEVICE says it can hold it.
     #

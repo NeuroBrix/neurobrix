@@ -53,8 +53,8 @@ def _stamp(out_ptr, value, N, BLOCK: tl.constexpr):
 
 def _backend_or_skip():
     try:
-        from nbxtensor.backend.runtime import _detect_gpu_backend
-        if _detect_gpu_backend() != "metal":
+        from nbxtensor.backend.runtime import gpu_backend
+        if gpu_backend() != "metal":
             pytest.skip("the two-queue hazard is Metal's; there is one queue elsewhere")
     except Exception:
         pytest.skip("no GPU backend the engine can resolve")

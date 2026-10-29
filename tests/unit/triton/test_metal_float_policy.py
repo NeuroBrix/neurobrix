@@ -40,7 +40,7 @@ _ext = pytest.importorskip("triton_apple_backend",
 
 def _has_metal():
     nbx_tensor = pytest.importorskip("nbxtensor.tensor")
-    detect = _nbx_runtime._detect_gpu_backend   # a renamed probe raises here, loudly
+    detect = _nbx_runtime.gpu_backend   # a renamed probe raises here, loudly
     try:
         return detect() == "metal"
     except Exception:

@@ -562,9 +562,9 @@ def active_driver() -> Driver:
 
 
 def _resolve_driver() -> Driver:
-    from nbxtensor.backend.runtime import _detect_gpu_backend
+    from nbxtensor.backend.runtime import gpu_backend
     try:
-        name = _detect_gpu_backend()
+        name = gpu_backend()
     except Exception:
         return CudaDriver.instance()
     if name == "metal":

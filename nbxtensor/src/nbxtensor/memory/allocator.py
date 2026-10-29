@@ -979,9 +979,9 @@ class DeviceAllocator:
         """Make `nbytes` of a file mapping at host address `ptr` readable by kernels IN PLACE — on a unified
         device only (one pool: the GPU reads the mapping's pages, nothing is copied). A discrete device has no
         such address space: refused by name. Registered in the range table, so `holds()` knows the range."""
-        if _rt._detect_gpu_backend() != "metal":
+        if _rt.gpu_backend() != "metal":
             raise RuntimeError(f"ZERO FALLBACK: binding a file mapping in place needs unified memory; backend "
-                               f"{_rt._detect_gpu_backend()!r} copies host experts into device slots")
+                               f"{_rt.gpu_backend()!r} copies host experts into device slots")
         start = _rt.device_memory().map_host(int(ptr), int(nbytes))
         page = int(os.sysconf("SC_PAGESIZE"))
         end = -(-(int(ptr) + int(nbytes)) // page) * page
@@ -1010,7 +1010,7 @@ class DeviceAllocator:
         if not dm.supports("host_alloc"):
             raise RuntimeError(
                 f"Pinned host allocation unsupported on backend "
-                f"{_rt._detect_gpu_backend()!r}")
+                f"{_rt.gpu_backend()!r}")
         ret = DeviceAllocator._past_budget(dm, DeviceAllocator.get_device(), nbytes)
         if ret is None:
             ret, p = dm.host_alloc(nbytes)
@@ -1236,8 +1236,8 @@ class DeviceAllocator:
         prior async error (sticky semantics) — discarding it hid the
         true poisoning site of the multi-GPU error-700 class behind the
         next checked malloc (R16 research, 2026-07-24)."""
-        rt = _rt._gpu_runtime()
-        backend = _rt._active_backend()
+        rt = _rt.gpu_runtime()
+        backend = _rt.backend_table()
         sync_name = backend.get("sync")
         if sync_name:
             _rc = getattr(rt, sync_name)()
@@ -1277,12 +1277,12 @@ class DeviceAllocator:
         launches and D2D copies on the legacy stream; the zero3 transfer
         stream created here). The only non-blocking stream in the engine
         is the replay-graph capture stream, bracketed by context syncs."""
-        rt = _rt._gpu_runtime()
-        backend = _rt._active_backend()
+        rt = _rt.gpu_runtime()
+        backend = _rt.backend_table()
         fn_name = backend.get("stream_create")
         if fn_name is None:
             raise RuntimeError(
-                f"Stream create unsupported on backend {_rt._detect_gpu_backend()!r}")
+                f"Stream create unsupported on backend {_rt.gpu_backend()!r}")
         h = ctypes.c_void_p()
         ret = getattr(rt, fn_name)(ctypes.byref(h))
         if ret != 0:
@@ -1298,16 +1298,16 @@ class DeviceAllocator:
         in the process — torch's, in the compiled branch — reports it as its
         own (found 2026-09-05: `invalid device ordinal` on an fp16 op after
         the stopwatch refusal test). Every expected refusal clears it."""
-        rt = _rt._gpu_runtime()
-        fn_name = _rt._active_backend().get("get_last_error")
+        rt = _rt.gpu_runtime()
+        fn_name = _rt.backend_table().get("get_last_error")
         return int(getattr(rt, fn_name)()) if fn_name else 0
 
     @staticmethod
     def _rt_call(key: str, *args):
-        rt = _rt._gpu_runtime()
-        fn_name = _rt._active_backend().get(key)
+        rt = _rt.gpu_runtime()
+        fn_name = _rt.backend_table().get(key)
         if fn_name is None:
-            raise RuntimeError(f"{key} unsupported on backend {_rt._detect_gpu_backend()!r}")
+            raise RuntimeError(f"{key} unsupported on backend {_rt.gpu_backend()!r}")
         ret = getattr(rt, fn_name)(*args)
         if ret != 0:
             DeviceAllocator.clear_last_error()
@@ -1318,8 +1318,8 @@ class DeviceAllocator:
         """Destroy a stream created by create_stream. No-op for default (0)."""
         if not stream:
             return
-        rt = _rt._gpu_runtime()
-        backend = _rt._active_backend()
+        rt = _rt.gpu_runtime()
+        backend = _rt.backend_table()
         fn_name = backend.get("stream_destroy")
         if fn_name is None:
             return
@@ -1381,8 +1381,8 @@ class DeviceAllocator:
 
         Selects the device first when one is given (the runtime's device
         synchronize is per current device) and restores the previous one."""
-        rt = _rt._gpu_runtime()
-        backend = _rt._active_backend()
+        rt = _rt.gpu_runtime()
+        backend = _rt.backend_table()
         fn_name = backend.get("sync")
         if fn_name is None:
             return
@@ -1404,7 +1404,7 @@ class DeviceAllocator:
     def mem_get_info(device_idx: Optional[int] = None) -> Tuple[int, int]:
         """(free_bytes, total_bytes) of a device, from the runtime."""
         dm = _rt.device_memory()
-        mem_fn = _rt._active_backend().get("mem_get_info", "cudaMemGetInfo")   # named in the refusal, as before
+        mem_fn = _rt.backend_table().get("mem_get_info", "cudaMemGetInfo")   # named in the refusal, as before
         prev = None
         if device_idx is not None:
             prev = DeviceAllocator.get_device()
@@ -1423,8 +1423,8 @@ class DeviceAllocator:
     @staticmethod
     def stream_synchronize(stream: int):
         """Block the caller until the given stream drains."""
-        rt = _rt._gpu_runtime()
-        backend = _rt._active_backend()
+        rt = _rt.gpu_runtime()
+        backend = _rt.backend_table()
         fn_name = backend.get("stream_sync")
         if fn_name is None:
             return
@@ -1445,8 +1445,8 @@ class DeviceAllocator:
         Pass timing=True (the default, kept for compatibility) only when the
         handle is going to reach `event_elapsed_ms`.
         """
-        rt = _rt._gpu_runtime()
-        backend = _rt._active_backend()
+        rt = _rt.gpu_runtime()
+        backend = _rt.backend_table()
         h = ctypes.c_void_p()
         flags_fn = backend.get("event_create_flags")
         if not timing and flags_fn is not None:
@@ -1457,7 +1457,7 @@ class DeviceAllocator:
             if fn_name is None:
                 raise RuntimeError(
                     f"Event create unsupported on backend "
-                    f"{_rt._detect_gpu_backend()!r}")
+                    f"{_rt.gpu_backend()!r}")
             ret = getattr(rt, fn_name)(ctypes.byref(h))
         if ret != 0:
             DeviceAllocator.clear_last_error()   # a refused call must not poison the next one
@@ -1469,8 +1469,8 @@ class DeviceAllocator:
         """Destroy an event created by create_event."""
         if not event:
             return
-        rt = _rt._gpu_runtime()
-        backend = _rt._active_backend()
+        rt = _rt.gpu_runtime()
+        backend = _rt.backend_table()
         fn_name = backend.get("event_destroy")
         if fn_name is None:
             return
@@ -1479,8 +1479,8 @@ class DeviceAllocator:
     @staticmethod
     def record_event(event: int, stream: int = 0):
         """Capture the current state of `stream` into `event`."""
-        rt = _rt._gpu_runtime()
-        backend = _rt._active_backend()
+        rt = _rt.gpu_runtime()
+        backend = _rt.backend_table()
         fn_name = backend.get("event_record")
         if fn_name is None:
             return
@@ -1490,8 +1490,8 @@ class DeviceAllocator:
     @staticmethod
     def stream_wait_event(stream: int, event: int, flags: int = 0):
         """Make `stream` wait for `event` without blocking the host."""
-        rt = _rt._gpu_runtime()
-        backend = _rt._active_backend()
+        rt = _rt.gpu_runtime()
+        backend = _rt.backend_table()
         fn_name = backend.get("stream_wait_event")
         if fn_name is None:
             return
@@ -1509,8 +1509,8 @@ class DeviceAllocator:
         """
         if nbytes <= 0:
             return
-        rt = _rt._gpu_runtime()
-        backend = _rt._active_backend()
+        rt = _rt.gpu_runtime()
+        backend = _rt.backend_table()
         fn_name = backend.get("memcpy_async")
         if fn_name is None:
             # Fallback to synchronous memcpy if async is unsupported.
@@ -1526,8 +1526,8 @@ class DeviceAllocator:
         """Block the host until `event` has been reached."""
         if not event:
             return
-        rt = _rt._gpu_runtime()
-        fn_name = _rt._active_backend().get("event_sync")
+        rt = _rt.gpu_runtime()
+        fn_name = _rt.backend_table().get("event_sync")
         if fn_name is None:
             DeviceAllocator.sync_device()
             return
@@ -1550,12 +1550,12 @@ class DeviceAllocator:
 
         The caller is responsible for having synchronized `end`.
         """
-        rt = _rt._gpu_runtime()
-        fn_name = _rt._active_backend().get("event_elapsed")
+        rt = _rt.gpu_runtime()
+        fn_name = _rt.backend_table().get("event_elapsed")
         if fn_name is None:
             raise RuntimeError(
                 f"event timing unsupported on backend "
-                f"{_rt._detect_gpu_backend()!r}")
+                f"{_rt.gpu_backend()!r}")
         fn = getattr(rt, fn_name)
         fn.restype = ctypes.c_int
         out = ctypes.c_float()
@@ -1578,8 +1578,8 @@ class DeviceAllocator:
         """
         if src_dev == dst_dev:
             return True
-        rt = _rt._gpu_runtime()
-        fn_name = _rt._active_backend().get("device_can_access_peer")
+        rt = _rt.gpu_runtime()
+        fn_name = _rt.backend_table().get("device_can_access_peer")
         if fn_name is None:
             return False
         out = ctypes.c_int()
@@ -1648,8 +1648,8 @@ class DeviceAllocator:
             return True
         if not DeviceAllocator.can_access_peer(src_dev, dst_dev):
             return False
-        rt = _rt._gpu_runtime()
-        fn_name = _rt._active_backend().get("device_enable_peer_access")
+        rt = _rt.gpu_runtime()
+        fn_name = _rt.backend_table().get("device_enable_peer_access")
         if fn_name is None:
             return False
         previous = DeviceAllocator.get_device()

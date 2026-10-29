@@ -183,7 +183,7 @@ def _watermark_sample(path: str, op_idx: int, op, arena, deferred_bytes) -> None
         import ctypes as _ct
         import json as _json
         from nbxtensor.memory.allocator import DeviceAllocator as _DA
-        from nbxtensor.backend.runtime import _gpu_runtime as _rt_fn, _active_backend as _bk_fn
+        from nbxtensor.backend.runtime import gpu_runtime as _rt_fn, backend_table as _bk_fn
         rt, bk = _rt_fn(), _bk_fn()
         dev = _DA.get_device()
         live = _DA._cuda_live_bytes.get(dev, 0)

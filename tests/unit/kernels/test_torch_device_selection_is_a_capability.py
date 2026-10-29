@@ -36,20 +36,20 @@ def test_every_backend_says_whether_torch_selects_a_device():
 
 
 def test_an_unknown_backend_is_refused_not_guessed(monkeypatch):
-    monkeypatch.setattr(_nbx_runtime, "_detect_gpu_backend", lambda: "tenstorrent")
+    monkeypatch.setattr(_nbx_runtime, "gpu_backend", lambda: "tenstorrent")
     with pytest.raises(RuntimeError, match="ZERO FALLBACK"):
         _ti.set_torch_device(0)
 
 
 def test_a_single_device_backend_is_a_no_op_and_does_not_raise(monkeypatch):
-    monkeypatch.setattr(_nbx_runtime, "_detect_gpu_backend", lambda: "metal")
+    monkeypatch.setattr(_nbx_runtime, "gpu_backend", lambda: "metal")
     _ti.set_torch_device(0)
     _ti.set_torch_device(3)          # an index it cannot honour is still not an error
 
 
 def test_a_numbered_backend_is_asked(monkeypatch):
     """CUDA must still be told, or a launch lands on the wrong device."""
-    monkeypatch.setattr(_nbx_runtime, "_detect_gpu_backend", lambda: "cuda")
+    monkeypatch.setattr(_nbx_runtime, "gpu_backend", lambda: "cuda")
     seen = []
 
     class _FakeCuda:

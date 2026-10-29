@@ -64,12 +64,12 @@ def _backend() -> str | None:
     FileNotFoundError, and the test failed rather than adapting.
 
     The engine already answers this, torch-free, for the allocator
-    (`_detect_gpu_backend`), and that is the answer that decides what this
+    (`gpu_backend`), and that is the answer that decides what this
     test can run. What it cannot do is skip: a boundary crossing is a
     boundary crossing on every backend.
     """
     nbx = pytest.importorskip("nbxtensor.tensor")
-    detect = _nbx_runtime._detect_gpu_backend   # a renamed probe raises here, loudly
+    detect = _nbx_runtime.gpu_backend   # a renamed probe raises here, loudly
     try:
         return detect()
     except Exception:

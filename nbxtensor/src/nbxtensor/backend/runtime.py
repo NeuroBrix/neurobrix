@@ -129,7 +129,7 @@ _GPU_BACKENDS = {
 # ============================================================================
 #
 # `ensure_triton_device` is called before every Triton kernel launch
-# (via `_set_device`). The cudaSetDevice + triton set_current_device
+# (via `set_device`). The cudaSetDevice + triton set_current_device
 # pair is pure overhead when the device is already current, so we cache
 # the last device index that was fully synchronised (runtime device AND
 # Triton driver device both pointing at it) and skip the pair on a hit.
@@ -174,7 +174,7 @@ def invalidate_current_device_cache() -> None:
     _DEVICE_CACHE.idx = None
 
 
-def _set_device(t):
+def set_device(t):
     """Sync Triton/CUDA driver context with the tensor's physical device.
 
     Called before every Triton kernel launch. Triton's internal driver
@@ -239,7 +239,7 @@ def _pin_triton_backend(name: str) -> str:
 
 
 @functools.lru_cache(maxsize=1)
-def _detect_gpu_backend() -> str:
+def gpu_backend() -> str:
     """Detect GPU backend: 'cuda', 'hip' or 'metal' — from the vendor runtime
     the process can load, or `NBX_GPU_BACKEND`.
 
@@ -327,13 +327,13 @@ def device_label(tensor) -> str:
     if placement != "cuda":
         return f"{placement}:{index}"
     try:
-        return f"{_detect_gpu_backend()}:{index}"
+        return f"{gpu_backend()}:{index}"
     except Exception:
         # No backend resolvable: say the token rather than invent a name.
         return f"{placement}:{index}"
 
 
-def _active_backend() -> dict:
+def backend_table() -> dict:
     """The entry-point name table for the detected backend.
 
     Metal resolves to a table that is deliberately NOT a row in
@@ -344,7 +344,7 @@ def _active_backend() -> dict:
     entry points, so it gets its own table — the second *implementation*
     behind this seam that the seam's own docstring describes.
     """
-    name = _detect_gpu_backend()
+    name = gpu_backend()
     if name == "metal":
         return _metal_backend_table()
     return _GPU_BACKENDS[name]
@@ -354,7 +354,7 @@ def _active_backend() -> dict:
 def _metal_backend_table() -> dict:
     """The Metal entry-point table, imported ONCE and then cached.
 
-    Cached rather than imported per call because `_active_backend` runs
+    Cached rather than imported per call because `backend_table` runs
     inside `NBXTensor.__del__`, and a finalizer can fire during interpreter
     shutdown when `sys.meta_path` is already None — an import there raises
     `ImportError: Python is likely shutting down` and every tensor still
@@ -367,12 +367,14 @@ def _metal_backend_table() -> dict:
 
 
 @functools.lru_cache(maxsize=1)
-def _gpu_runtime():
-    name = _detect_gpu_backend()
+def gpu_runtime():
+    """The runtime of the GPU backend in force: the Metal runtime object on Metal, else the vendor's runtime library
+    (CUDA, HIP) loaded through its C ABI, the first of the backend table's libraries that loads."""
+    name = gpu_backend()
     if name == "metal":
         from nbxtensor.backend.metal_device import runtime
         return runtime()          # itself cached; see _metal_backend_table
-    backend = _active_backend()
+    backend = backend_table()
     for lib in backend["rt_libs"]:
         try:
             return ctypes.cdll.LoadLibrary(lib)
@@ -385,9 +387,9 @@ def device_memory():
     """The memory primitives of the backend in force (`memory.device_memory.DeviceMemory`): the account
     (`memory.allocator.DeviceAllocator`) asks these and nothing else of the device's memory. Built per call from the
     runtime and its table, never cached: a substituted runtime or table is read at once."""
-    table = _active_backend()
-    if _detect_gpu_backend() == "metal" and table is _metal_backend_table():
+    table = backend_table()
+    if gpu_backend() == "metal" and table is _metal_backend_table():
         # Metal's own primitives, no C ABI behind them; a substituted table (a test's C-ABI driver) is read as one
         from nbxtensor.memory.metal import MetalMemory
-        return MetalMemory(_gpu_runtime())
-    return _AbiMemory(_gpu_runtime(), table)
+        return MetalMemory(gpu_runtime())
+    return _AbiMemory(gpu_runtime(), table)

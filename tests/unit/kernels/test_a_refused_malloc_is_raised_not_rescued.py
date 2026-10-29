@@ -50,8 +50,8 @@ class _RefuseOnceRuntime:
 
 def test_a_refused_malloc_raises_and_never_drains_the_deferred_queue(monkeypatch):
     rt = _RefuseOnceRuntime()
-    monkeypatch.setattr(_nbx_runtime, "_gpu_runtime", lambda: rt)
-    monkeypatch.setattr(_nbx_runtime, "_active_backend", lambda: {
+    monkeypatch.setattr(_nbx_runtime, "gpu_runtime", lambda: rt)
+    monkeypatch.setattr(_nbx_runtime, "backend_table", lambda: {
         "malloc": "cudaMalloc", "get_last_error": "cudaGetLastError",
         "mem_get_info": "cudaMemGetInfo"})
     monkeypatch.setattr(DeviceAllocator, "_pool_enabled", False, raising=False)

@@ -16,7 +16,7 @@ from typing import Optional, Callable, Dict
 import os
 import triton
 
-from nbxtensor.backend.runtime import _set_device
+from nbxtensor.backend.runtime import set_device
 from nbxtensor.shape import view_strides
 
 # Diagnostic (default-off): log when the metadata expand/view runtime-resolution
@@ -596,7 +596,7 @@ def _create_ones(*args, **kwargs):
     out = NBXTensor.empty(size, dtype=dtype, device=device or 'cuda')
     n = out.numel()
     if n > 0:
-        _set_device(out)
+        set_device(out)
         fill_kernel[_1d_grid_fixed(n)](out, 1.0, n, **_ew(n))
     return out
 
@@ -626,7 +626,7 @@ def _create_full(*args, **kwargs):
     out = NBXTensor.empty(size, dtype=dtype, device=device or 'cuda')
     n = out.numel()
     if n > 0:
-        _set_device(out)
+        set_device(out)
         fill_kernel[_1d_grid_fixed(n)](out, float(fill_value), n, **_ew(n))
     return out
 
@@ -638,7 +638,7 @@ def _create_scalar_tensor(value=0, **kwargs):
     dtype = kwargs.get('dtype')
     device = kwargs.get('device', 'cuda')
     out = NBXTensor.empty((1,), dtype=dtype, device=device or 'cuda')
-    _set_device(out)
+    set_device(out)
     fill_kernel[(1,)](out, float(value) if value is not None else 0.0, 1, **_ew(1))
     return out
 
@@ -669,7 +669,7 @@ def _create_arange(start_or_end, end=None, step=1, *, dtype=None,
     if size > 0:
         BLOCK_SIZE = 128
         grid = (triton.cdiv(size, BLOCK_SIZE),)
-        _set_device(out)
+        set_device(out)
         arange_kernel[grid](out, start, step, size, BLOCK_SIZE=BLOCK_SIZE)
     return out
 
@@ -687,7 +687,7 @@ def _create_ones_like(x, *, dtype=None, layout=None, device=None,
     out = NBXTensor.empty_like(x, dtype=dtype, device=device)
     n = out.numel()
     if n > 0:
-        _set_device(out)
+        set_device(out)
         fill_kernel[_1d_grid_fixed(n)](out, 1.0, n, **_ew(n))
     return out
 
@@ -705,7 +705,7 @@ def _create_full_like(x, fill_value, *, dtype=None, layout=None, device=None,
     out = NBXTensor.empty_like(x, dtype=dtype, device=device)
     n = out.numel()
     if n > 0:
-        _set_device(out)
+        set_device(out)
         fill_kernel[_1d_grid_fixed(n)](out, float(fill_value), n, **_ew(n))
     return out
 
@@ -736,7 +736,7 @@ def _create_linspace(start, end, steps, *, dtype=None, layout=None,
         return out
     BLOCK_SIZE = 128
     grid = (triton.cdiv(steps, BLOCK_SIZE),)
-    _set_device(out)
+    set_device(out)
     if steps == 1:
         fill_kernel[grid](out, start, 1, BLOCK_SIZE=BLOCK_SIZE)
         return out

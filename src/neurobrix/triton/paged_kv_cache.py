@@ -250,7 +250,7 @@ class PagedTritonKVCache:
         import triton
         from nbxtensor.ops import wrappers as W
         from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
-        from nbxtensor.backend.runtime import _set_device
+        from nbxtensor.backend.runtime import set_device
         from nbxtensor.ops.paged_decode_attn import paged_kv_append_step_kernel, paged_lens_advance_kernel
         if int(k.shape[2]) != 1:
             raise RuntimeError(f"PagedTritonKVCache.decode: {int(k.shape[2])} new positions — a decode step brings one")
@@ -261,7 +261,7 @@ class PagedTritonKVCache:
         v2 = v.reshape(self.batch, self.num_kv_heads, self.v_head_dim).contiguous()
         kp, vp, lens = self.k_pools[layer_idx], self.v_pools[layer_idx], self.lens[layer_idx]
         bt = self.block_tables[self.layer_device[layer_idx]]
-        _set_device(kp)
+        set_device(kp)
         paged_kv_append_step_kernel[(self.batch, self.num_kv_heads)](
             k2, v2, kp, vp, bt, lens, self.page_tokens,
             k2.stride(0), k2.stride(1), v2.stride(0), v2.stride(1),

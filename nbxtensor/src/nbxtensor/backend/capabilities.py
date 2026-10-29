@@ -78,7 +78,7 @@ def backend_has_fp64() -> bool:
     `set_backend_has_fp64`; refused while undeclared."""
     if _BACKEND_HAS_FP64 is None:
         raise RuntimeError(
-            f"ZERO FALLBACK: whether the '{_rt._detect_gpu_backend()}' backend's kernels compute "
+            f"ZERO FALLBACK: whether the '{_rt.gpu_backend()}' backend's kernels compute "
             f"float64 was never declared (`set_backend_has_fp64`); it is the hardware's fact, "
             f"never assumed")
     return _BACKEND_HAS_FP64
@@ -146,7 +146,7 @@ def reduced_extent_max(num_warps: int) -> Optional[int]:
 
 def _backend_capability(table, name: str, what: str) -> bool:
     """One row of one capability table, or a refusal naming both."""
-    backend = _rt._detect_gpu_backend()
+    backend = _rt.gpu_backend()
     value = table.get(backend)
     if value is None:
         raise RuntimeError(
@@ -191,7 +191,7 @@ def backend_loads_pointers_from_memory() -> bool:
     2026-09-26 this function imported the engine's metal_backend to ask, which
     widened the library's boundary (the ratchet cell went red on main).
     """
-    backend = _rt._detect_gpu_backend()
+    backend = _rt.gpu_backend()
     declared = _DECLARED_CAPABILITIES.get(backend, {}).get("loads_pointers_from_memory")
     if declared is not None:
         return declared
