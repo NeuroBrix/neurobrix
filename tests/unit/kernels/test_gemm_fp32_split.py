@@ -1,7 +1,7 @@
 """Unit test — an fp32 GEMM on the m8n8k4 matrix unit through the hi + lo split loses nothing against the fp32 path.
 
 Where the hardware profile declares `matrix_unit.fp32_split` (volta.yml), the DtypeEngine
-(`triton/dtype.matrix_unit_representation`) carries an fp32 operand to the fp16 unit as hi + lo under a power-of-two
+(`nbxtensor/dtype/operands.matrix_unit_representation`) carries an fp32 operand to the fp16 unit as hi + lo under a power-of-two
 scale per row (A) or column (B) of each K tile: three MMAs, fp32 accumulation (ops/matmul_m8n8k4.py). Each case is
 judged against an fp64 oracle computed in-test AND against the FMA path the operand took before (the unit withheld,
 `tl.dot(input_precision="ieee")`): the split's error must not exceed the FMA path's, beyond four fp32 epsilons. The

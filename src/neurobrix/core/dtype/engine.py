@@ -24,6 +24,8 @@ from typing import Callable, Optional, Dict, Any, FrozenSet
 
 from neurobrix.core.dtype.config import device_supports_fp64, parse_dtype, strip_aten_prefix
 from neurobrix.core.dtype import itemsize as _itemsize
+from nbxtensor.dtype.operands import (  # noqa: E402 — the operand rules both engines read, the library's
+    attention_operand_alignment, attention_operand_dtypes, contraction_accumulator_dtype)
 
 
 def rms_norm_fp32(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
@@ -423,78 +425,7 @@ def amp_fp32_output_dtype(compute_dtype: str, graph_dtype: Optional[str], safe: 
                      f"dtype — the AMP_FP32 cast-back rule exists for bfloat16 and float16 only")
 
 
-#: The ways a hardware profile may align attention operands that disagree in dtype
-#: (`precision.attention_operands`): every operand takes the narrowest of the three, or the widest.
-ATTENTION_OPERAND_ALIGNMENTS = ("narrowest", "widest")
-#: The operand dtypes the alignment chooses among; their widths are the dtype table's.
-_ATTENTION_OPERAND_DTYPES = ("float16", "bfloat16", "float32", "float64")
 
-
-def attention_operand_alignment(profile: dict) -> str:
-    """The alignment the hardware profile declares for attention operands that disagree in dtype
-    (`precision.attention_operands`, one of ATTENTION_OPERAND_ALIGNMENTS). A profile that declares
-    none, or another word, is refused by name: the choice moves a whole attention between the
-    matrix unit and the scalar units, so it is never guessed.
-
-    TWIN: triton/dtype.py `attention_operand_alignment` (neither module may import the
-    other; a unit test holds the two equal)."""
-    v = (profile.get("precision") or {}).get("attention_operands")
-    if v not in ATTENTION_OPERAND_ALIGNMENTS:
-        raise ValueError(f"hardware profile {profile.get('architecture')!r}: "
-                         f"precision.attention_operands is {v!r}, not one of "
-                         f"{ATTENTION_OPERAND_ALIGNMENTS}")
-    return v
-
-
-def attention_operand_dtypes(q: str, k: str, v: str, alignment: str,
-                             q_round: Optional[str] = None) -> tuple:
-    """The (q, k, v, q_round) dtypes (names) an attention computes with — the ONE decision both
-    engines' attention reads (R30): the Triton wrapper (`launch_keys.sdpa_operand_dtypes`), the
-    derived census and Prism's width estimate through it, and the compiled engine through its
-    twin. The kernels need matching operands: three that already match (Q judged at its KV-cache
-    rounding `q_round` when the cache asks for one) are returned unchanged; three that disagree
-    all take the narrowest or the widest of them, as the profile's `alignment` declares
-    (`attention_operand_alignment`), the first in (q, k, v) order on a tie, and q_round is
-    dropped. A non-floating operand is refused by name.
-
-    Measured on V100 (2026-10-08, nbx/campaigns/2026_10_08_allegro_prof/probe): an fp16 attention
-    whose V alone came out of an fp32-stored GEMM ran 22.0 s/op on the scalar flash when aligned
-    to the widest, 1.16 s/op on the matrix-unit flash when aligned to the narrowest.
-
-    TWIN: triton/dtype.py `attention_operand_dtypes` (a unit test holds the two equal)."""
-    qj = q_round if q_round is not None else q
-    for d in (qj, k, v):
-        if d not in _ATTENTION_OPERAND_DTYPES:
-            raise ValueError(f"attention_operand_dtypes: {d!r} is not a floating dtype an "
-                             f"attention computes in")
-    if qj == k == v:
-        return q, k, v, q_round
-    if alignment not in ATTENTION_OPERAND_ALIGNMENTS:
-        raise ValueError(f"attention_operand_dtypes: alignment {alignment!r} is not one of "
-                         f"{ATTENTION_OPERAND_ALIGNMENTS}")
-    pick = min if alignment == "narrowest" else max
-    t = pick((qj, k, v), key=_itemsize.itemsize)
-    return t, t, t, None
-
-
-def contraction_accumulator_dtype(dtype: str) -> str:
-    """The dtype (a name) the partial results of a contraction split over the axis it reduces
-    are summed in, when a stretch runs in slices of that axis (`core/strategies/chunked_piece`):
-    the split contraction is the SAME contraction, so its partials are summed in the accumulator
-    its kernel keeps — float32 for a half dtype (every mm/bmm/conv kernel accumulates fp32, and
-    `sum` is an AMP_FP32 op), the dtype itself for float32 and float64 — and the sum is stored
-    once, in the dtype the contraction's own output was given. A partial summed at the pass
-    dtype rounds once per slice where the whole op rounds once. Any other dtype is refused by
-    name: a contraction over a token axis yields a floating value.
-
-    Torch-free twin of triton/dtype.py `contraction_accumulator_dtype` (neither module may
-    import the other; a unit test holds the two equal)."""
-    if dtype in ("float16", "bfloat16"):
-        return "float32"
-    if dtype in ("float32", "float64"):
-        return dtype
-    raise ValueError(f"contraction_accumulator_dtype: {dtype!r} is not a floating dtype a "
-                     f"contraction's partials are summed in")
 
 
 

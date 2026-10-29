@@ -13,7 +13,9 @@ the comments written above each key (a value's source is part of the value), eve
 - everything else stays in the engine's file.
 
 The proof is the tool's own: each file is written only when the two halves, loaded, merge back to EXACTLY the
-original (no key in both, no value changed or lost); otherwise nothing is written and the file is named.
+original (no key in both, no value changed or lost); otherwise nothing is written and the file is named. A vendor
+already split takes the keys the list gained: they are appended to its library file, and the proof is then that the
+new halves merge back to the old ones.
 
     python3 tools/split_vendor_files.py --vendor apple --keys docs/nbxtensor/device_keys.txt \\
         --engine src/neurobrix/config/vendors --library nbxtensor/src/nbxtensor/backend/devices [--check]
@@ -80,6 +82,27 @@ def split(text: str, keys: set):
     return "".join(lib), "".join(eng), moved
 
 
+def _join(held: str, new: str) -> str:
+    """`new` (moved blocks) joined to a library file already written: a section the file already has takes the new
+    children at its end (a second header of the same name would REPLACE the first when loaded); any other block is
+    appended."""
+    lines = held.splitlines(keepends=True)
+    if lines and not lines[-1].endswith("\n"):
+        lines[-1] += "\n"
+    new_lines = new.splitlines(keepends=True)
+    tail = []
+    for top, start, at, end in _blocks(new_lines, 0, len(new_lines), TOP):
+        mine = [b for b in _blocks(lines, 0, len(lines), TOP) if b[0] == top]
+        if mine:
+            _, _, _, hend = mine[0]
+            body = new_lines[at + 1:end]
+            lines[hend:hend] = body
+        else:
+            tail.extend(new_lines[start:end])
+    out = "".join(lines)
+    return out + ("\n" + "".join(tail) if tail else "")
+
+
 def _merge(a: dict, b: dict, where=""):
     out = dict(a)
     for k, v in b.items():
@@ -110,8 +133,14 @@ def main(argv=None) -> int:
     for f in files:
         text = f.read_text()
         lib, eng, moved = split(text, keys)
+        held = dst / f.name
+        held_text = held.read_text() if held.is_file() else ""      # a split already made: the new keys join it
+        if held_text and lib:
+            lib = _join(held_text, lib)
+        elif held_text:
+            lib = held_text
         try:
-            whole = yaml.safe_load(text) or {}
+            whole = _merge(yaml.safe_load(held_text) or {}, yaml.safe_load(text) or {})
             back = _merge(yaml.safe_load(lib) or {}, yaml.safe_load(eng) or {})
             if back != whole:
                 raise ValueError("the halves do not merge back to the original")
@@ -128,6 +157,10 @@ def main(argv=None) -> int:
         if a.check:
             continue
         dst.mkdir(parents=True, exist_ok=True)
+        if (dst / f.name).is_file():
+            (dst / f.name).write_text(lib)                           # the note is already at its head
+            f.write_text(eng)
+            continue
         note = (f"# The library's half of {a.vendor}/{f.name}: the keys nbxtensor reads (docs/nbxtensor/device_keys.txt),\n"
                 f"# moved with their sources by tools/split_vendor_files.py. NeuroBrix's half stays in\n"
                 f"# src/neurobrix/config/vendors/{a.vendor}/{f.name}; the engine reads the two merged.\n\n")

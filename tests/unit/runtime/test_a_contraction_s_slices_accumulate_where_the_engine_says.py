@@ -26,24 +26,26 @@ import neurobrix.core.runtime  # noqa: F401  (pre-resolve the cfg<->runtime impo
 from neurobrix.core.dtype import engine as DE
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from neurobrix.triton import dtype as TD
+from nbxtensor.dtype import operands as OP   # the one rule (DESIGN rule 12)
 
 FLOATS = ("float16", "bfloat16", "float32", "float64")
 WIDTH = {"float16": 2, "bfloat16": 2, "float32": 4, "float64": 8}
 
 
 def test_the_two_engines_hold_one_rule():
+    assert DE.contraction_accumulator_dtype is OP.contraction_accumulator_dtype     # one definition, the library's
     for name in FLOATS:
-        assert DE.contraction_accumulator_dtype(name) == TD.contraction_accumulator_dtype(name), name
-        assert TD.contraction_accumulator_bytes(WIDTH[name]) == WIDTH[
-            TD.contraction_accumulator_dtype(name)], name
-    assert TD.contraction_accumulator_dtype("float16") == "float32"
-    assert TD.contraction_accumulator_dtype("bfloat16") == "float32"
+        assert DE.contraction_accumulator_dtype(name) == OP.contraction_accumulator_dtype(name), name
+        assert OP.contraction_accumulator_bytes(WIDTH[name]) == WIDTH[
+            OP.contraction_accumulator_dtype(name)], name
+    assert OP.contraction_accumulator_dtype("float16") == "float32"
+    assert OP.contraction_accumulator_dtype("bfloat16") == "float32"
     for bad in ("int64", "bool", "complex64"):
-        for f in (DE.contraction_accumulator_dtype, TD.contraction_accumulator_dtype):
+        for f in (DE.contraction_accumulator_dtype, OP.contraction_accumulator_dtype):
             with pytest.raises(ValueError, match=bad):
                 f(bad)
     with pytest.raises(ValueError, match="1-byte"):
-        TD.contraction_accumulator_bytes(1)
+        OP.contraction_accumulator_bytes(1)
 
 
 def test_each_engine_answers_in_its_own_dtype_type():
@@ -53,7 +55,7 @@ def test_each_engine_answers_in_its_own_dtype_type():
         a = aten.accumulation_dtype(getattr(torch, name))
         t = tri.accumulation_dtype(getattr(NBXDtype, name))
         assert isinstance(a, torch.dtype) and isinstance(t, NBXDtype)
-        assert str(a).replace("torch.", "") == t.name == TD.contraction_accumulator_dtype(name)
+        assert str(a).replace("torch.", "") == t.name == OP.contraction_accumulator_dtype(name)
 
 
 @pytest.mark.parametrize("mode", ["sequential", "compiled", "triton", "triton_sequential"])

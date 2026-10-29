@@ -1,7 +1,7 @@
 """Unit test — an fp32 attention on the m8n8k4 matrix unit through the hi + lo split keeps the fp32 path's accuracy.
 
 Where the hardware profile declares `matrix_unit.fp32_split.flash` (volta.yml), the DtypeEngine
-(`triton/dtype.matrix_unit_flash_representation`) carries an fp32 attention to the fp16 unit as hi + lo (Q, K, V and
+(`nbxtensor/dtype/operands.matrix_unit_flash_representation`) carries an fp32 attention to the fp16 unit as hi + lo (Q, K, V and
 the softmax's P, each under a power-of-two scale constant along its reduced axis): three MMAs per product, fp32
 accumulation (ops/flash_attention_m8n8k4.py, SPLIT). Before it, an fp32 attention ran the scalar FMA flash
 (`tl.dot(input_precision="ieee")`): 22.1 s/op at Allegro-TI2V's L 79 200, H 24, D 96 on V100, 2.6 TFLOP/s.
@@ -25,7 +25,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from neurobrix.triton.dtype import matrix_unit_flash_representation as rep
+from nbxtensor.dtype.operands import matrix_unit_flash_representation as rep
 from neurobrix.core.config.loader import vendor_file  # the device whole: engine file + library half
 
 _EPS32 = float(np.finfo(np.float32).eps)

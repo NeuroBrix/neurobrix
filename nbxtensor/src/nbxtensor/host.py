@@ -22,11 +22,6 @@ SERVICES: Dict[str, str] = {
     "vendor_config": "(vendor, architecture) -> the vendor file of that architecture, as a dict",
     "vendor_param": "(section, key, default) -> one value of the executing device's vendor file",
     "vendors_dir": "() -> the directory of the application's own vendor files (pathlib.Path); optional: absent, the library's device files alone",
-    "matrix_unit_representation": "(...) -> how the matrix unit carries one GEMM's operands",
-    "matrix_unit_flash_representation": "(...) -> how the matrix unit carries one attention's operands",
-    "attention_operand_dtypes": "(...) -> the operand dtypes an attention runs at",
-    "attention_operand_alignment": "(...) -> the alignment an attention's operands are given",
-    "matrix_unit_split_scale": "(...) -> the scale of a split fp32 operand on the matrix unit",
 }
 
 #: hooks an application MAY provide; absent, the library runs as the value here describes (never a guessed fact)

@@ -12,7 +12,7 @@ is selected from it exactly. The zero bias of an unmasked call is not read (HAS_
 The head dim is cut into at most two power-of-two parts DA + DB (the wrapper rounds it up to such a sum, the
 extra columns loaded as zeros), so 96 runs as 64 + 32 and never as 128.
 
-SPLIT (the DtypeEngine's "split" representation, triton/dtype.matrix_unit_flash_representation, the profile's
+SPLIT (the DtypeEngine's "split" representation, nbxtensor/dtype/operands.matrix_unit_flash_representation, the profile's
 `matrix_unit.fp32_split.flash`): operands of any float dtype in memory are widened to fp32 and carried to the fp16 unit
 as hi + lo, as ops/matmul_m8n8k4.py carries a GEMM operand (its `split_exponent` / `hi_lo`). Each operand takes a
 power-of-two scale constant along the axis it is reduced over, so the scale factors out of the product: Q (after

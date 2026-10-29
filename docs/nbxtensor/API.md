@@ -93,6 +93,19 @@ def promoted(dtypes: Sequence[str]) -> Optional[str]  # floating inputs brought 
 def float_math_input(dtype: str) -> str             # the dtype a floating-math op reads an input of `dtype` at
 ```
 
+### `nbxtensor.dtype.operands` — the kernels' operand decisions (DESIGN rule 12)
+
+```python
+def contraction_accumulator_dtype(dtype: str) -> str        # a contraction's partials: float32 for a half dtype
+def contraction_accumulator_bytes(store_bytes: int) -> int  # the same rule read on a width
+def matrix_unit_representation(dtype: str, unit: dict) -> Optional[str]                 # "native" / "split" / None
+def matrix_unit_flash_representation(q: str, k: str, v: str, unit: dict) -> Optional[str]
+ATTENTION_OPERAND_ALIGNMENTS = ("narrowest", "widest")
+def attention_operand_alignment(profile: dict) -> str       # a device's precision.attention_operands, refused if absent
+def attention_operand_dtypes(q, k, v, alignment, q_round=None) -> tuple   # (q, k, v, q_round) the attention runs at
+def matrix_unit_split_scale(unit: dict) -> tuple            # (hi_exp, lo_shift) of the split representation
+```
+
 ### `nbxtensor.dtype.policy` — precision by policy (DESIGN rule 12)
 
 ```python

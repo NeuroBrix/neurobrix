@@ -898,8 +898,7 @@ def _flash_m8n8k4(q, k, v, bias, softmax_scale, gqa_groups, tile, has_bias, spli
     `block_k` head-dim columns the unit sums before each round-to-nearest add."""
     from nbxtensor.ops.flash_attention_m8n8k4 import flash_attention_m8n8k4_kernel, head_parts
     from nbxtensor.ops.mma_m8n8k4 import UNIT
-    from nbxtensor.host import need as _need   # the application's triton.dtype (nbxtensor.host)
-    matrix_unit_split_scale = _need("matrix_unit_split_scale")
+    from nbxtensor.dtype.operands import matrix_unit_split_scale   # the library's operand rules
     batch, nheads, seqlen_q, headdim = q.shape
     seqlen_k = k.shape[2]
     DA, DB = head_parts(headdim)

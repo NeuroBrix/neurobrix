@@ -851,10 +851,10 @@ class LayerPartitioner:
     def _accumulator_bytes(self, tid: str, symbol_map: Dict[str, int]) -> int:
         """What summing a contraction's slices holds at once (`chunked_region.accumulate`): the
         running sum and the sum that replaces it, in the accumulator the engines' DtypeEngine
-        names (`triton/dtype.contraction_accumulator_bytes`, the width form of
+        names (`nbxtensor/dtype/operands.contraction_accumulator_bytes`, the width form of
         `contraction_accumulator_dtype`), plus the partial cast to it when the op stores
         narrower. The store once summed (`chunked_region.store`) is no wider than one of them."""
-        from neurobrix.triton.dtype import contraction_accumulator_bytes
+        from nbxtensor.dtype.operands import contraction_accumulator_bytes
         store = self._bytes_at(tid, symbol_map)
         numel = 1
         for d in self._resolver._resolve_shape(self.tensors.get(tid) or {}, symbol_map):

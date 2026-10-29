@@ -15,7 +15,7 @@ with round to nearest, as the fp32 `tl.dot(input_precision="ieee")` path sums, i
 Operands go global -> registers (coalesced) -> shared memory as [k-step x rows, 4] -> HMMA fragments
 (ops/mma_m8n8k4.py); the next K tile is loaded while the current one is multiplied.
 
-SPLIT representation (SPLIT_A / SPLIT_B, decided by the DtypeEngine: triton/dtype.matrix_unit_representation, the
+SPLIT representation (SPLIT_A / SPLIT_B, decided by the DtypeEngine: nbxtensor/dtype/operands.matrix_unit_representation, the
 profile's `matrix_unit.fp32_split`): an operand of any float dtype in memory is widened to fp32, each row of its K tile (each
 column for B) scaled by the power of two 2^s that brings that row's largest magnitude to [2^HI_EXP, 2^(HI_EXP+1)),
 and carried as hi = fp16(x 2^s) and lo = fp16((x 2^s - hi) 2^LO_SHIFT). The scale is constant along k, so it factors

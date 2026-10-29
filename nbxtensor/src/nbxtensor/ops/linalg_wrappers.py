@@ -388,8 +388,7 @@ def _gemm_m8n8k4(a, b, bias, c, alpha, beta, promote_bias, epilogue, tile, bias_
     MB, NB = tile["block_m"] // 16, tile["block_n"] // 16
     b_k_contig = sb[1] == 1 and N > 1
     lay = mm_layouts(MB, NB, tile["warps_m"], tile["warps_n"], tile["block_k"], b_k_contig)
-    from nbxtensor.host import need as _need   # the application's triton.dtype (nbxtensor.host)
-    matrix_unit_split_scale = _need("matrix_unit_split_scale")
+    from nbxtensor.dtype.operands import matrix_unit_split_scale   # the library's operand rules
     hi_exp, lo_shift = matrix_unit_split_scale(_matrix_unit())
     _set_device(a)
     for z0 in range(0, Z, _GRID_Z_MAX):

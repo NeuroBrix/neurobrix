@@ -65,12 +65,18 @@ def static_keys() -> set:
     return found
 
 
+def _vendor_files(vendors_dir: Path):
+    """Every vendor file of both halves: the application's (`vendors_dir`) and the library's device files — a key the
+    split already moved is still a key the library reads, so the census never shrinks as the split goes."""
+    return sorted(vendors_dir.glob("*/*.yml")) + sorted((LIB / "backend" / "devices").glob("*/*.yml"))
+
+
 def vendor_sections(vendors_dir: Path) -> set:
     """Every top-level key some vendor file carries (a static chain whose first key is none of them read another
     configuration — a launch config's `num_warps`, a call's `kwargs`)."""
     import yaml
     tops = set()
-    for f in sorted(vendors_dir.glob("*/*.yml")):
+    for f in _vendor_files(vendors_dir):
         tops |= set((yaml.safe_load(f.read_text()) or {}).keys())
     return tops
 
@@ -82,7 +88,7 @@ def named_keys(vendors_dir: Path) -> set:
     text = "\n".join(p.read_text() for p in LIB.rglob("*.py"))
     spelled = lambda name: re.search(r"[\"']%s[\"']" % re.escape(name), text) is not None
     found = set()
-    for f in sorted(vendors_dir.glob("*/*.yml")):
+    for f in _vendor_files(vendors_dir):
         for top, value in (yaml.safe_load(f.read_text()) or {}).items():
             subs = list(value) if isinstance(value, dict) else []
             found |= {f"{top}.{k}" for k in subs if spelled(str(k))}

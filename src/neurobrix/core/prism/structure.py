@@ -585,7 +585,7 @@ class PrismProfile:
     def attention_operands(self) -> str:
         """The alignment every device's vendor profile declares for attention operands that
         disagree in dtype (`precision.attention_operands`, read by the one reader
-        `triton/dtype.attention_operand_alignment`). Prism prices a plan's attention widths with
+        `nbxtensor/dtype/operands.attention_operand_alignment`). Prism prices a plan's attention widths with
         THIS profile's answer — the profile it plans for, never the one the planning process
         happens to run on (stage B P3). Devices that declare different alignments are refused
         by name. A profile with no device (a CPU plan) declares none: its answer is a word that

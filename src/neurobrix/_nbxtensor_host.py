@@ -60,9 +60,6 @@ def install() -> None:
     from nbxtensor.ops.launch_observer import set_launch_observer
     set_launch_observer(_CensusObserver())
     set_miss_explainer(_call("neurobrix.kernels.census_table", "census_row"))
-    for name in ("matrix_unit_representation", "matrix_unit_flash_representation", "attention_operand_dtypes",
-                 "attention_operand_alignment", "matrix_unit_split_scale"):
-        provide(name, _call(dtype, name))
     # A rung imposed on this process holds the Triton allocator to that card, through the library's public limit;
     # without one the library's default (the physical card) is already in force, and the allocator is not imported.
     # (the variable is core.prism.memory_budget._door_mb's; read here first so a process without a rung imports neither

@@ -157,8 +157,7 @@ def matrix_unit_operands(a: NBXDtype, b: NBXDtype, M: int, unit: Optional[dict] 
     depends on how many rows share its launch). The wrappers' `_gemm_unit_tile` asks this same function. `unit`: a
     matrix unit already read (a planner's, for the device it plans); the profile in force's when None."""
     from nbxtensor.ops._configs import matrix_unit
-    from nbxtensor.host import need as _need   # the application's triton.dtype (nbxtensor.host)
-    matrix_unit_representation = _need("matrix_unit_representation")
+    from nbxtensor.dtype.operands import matrix_unit_representation   # the library's operand rules
     mu = matrix_unit() if unit is None else unit
     ra, rb = matrix_unit_representation(a.name, mu), matrix_unit_representation(b.name, mu)
     if not (ra and rb):
@@ -416,15 +415,13 @@ def istft_launches(batch: int, bins: int, frames: int, n_fft: int,
 def sdpa_operand_dtypes(q: NBXDtype, k: NBXDtype, v: NBXDtype,
                         q_round: Optional[NBXDtype] = None, *, alignment: Optional[str] = None):
     """The (q, k, v, q_round) dtypes `scaled_dot_product_attention_wrapper` computes attention
-    with: the DtypeEngine's decision (`triton/dtype.attention_operand_dtypes`) under
+    with: the DtypeEngine's decision (`nbxtensor/dtype/operands.attention_operand_dtypes`) under
     `alignment` — `precision.attention_operands` of the hardware the attention runs on. The
     wrapper and the derived census run ON that hardware and leave it None (the active profile);
     Prism plans for a profile that need not be the process's and passes that profile's answer
     (`Profile.attention_operands`, read by `triton/dtype.profile_attention_operand_alignment`). All three ask this one function, so none holds a rule of
     its own."""
-    from nbxtensor.host import need as _need   # the application's triton.dtype (nbxtensor.host)
-    attention_operand_alignment = _need("attention_operand_alignment")
-    attention_operand_dtypes = _need("attention_operand_dtypes")
+    from nbxtensor.dtype.operands import attention_operand_alignment, attention_operand_dtypes   # the library's operand rules
     qj = q_round if q_round is not None else q
     if qj == k == v:
         return q, k, v, q_round
@@ -575,8 +572,7 @@ def unit_flash(D: int, q: NBXDtype, k: NBXDtype, v: NBXDtype,
     `unit`: a matrix unit already read (`_configs.matrix_unit(vendor_profile)`: Prism, for the device it plans); the
     profile in force's when None."""
     from nbxtensor.ops._configs import matrix_unit, matrix_unit_flash_tile
-    from nbxtensor.host import need as _need   # the application's triton.dtype (nbxtensor.host)
-    matrix_unit_flash_representation = _need("matrix_unit_flash_representation")
+    from nbxtensor.dtype.operands import matrix_unit_flash_representation   # the library's operand rules
     mu = matrix_unit() if unit is None else unit
     rep = matrix_unit_flash_representation(q.name, k.name, v.name, mu)
     if rep is None:

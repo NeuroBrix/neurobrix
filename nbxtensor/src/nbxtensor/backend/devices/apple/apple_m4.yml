@@ -120,6 +120,10 @@ precision:
   kernels_carry_fp64:
     compiled: true
     triton: false
+  # Attention operands that disagree in dtype (an fp16 GEMM stored fp32 feeding V) all take the
+  # narrowest of the three, the compiled engine's alignment: the half attention stays on the matrix
+  # unit (V100, 2026-10-08: 1.16 s/op aligned narrowest vs 22.0 s/op on the scalar flash aligned widest).
+  attention_operands: narrowest
 # Software-pipelining budget — see nvidia/volta.yml for the schema.
 #
 # validation_status: conservative_pending_first_light. cp.async is a PTX

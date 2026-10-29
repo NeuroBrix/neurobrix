@@ -16,7 +16,7 @@ import pytest
 import yaml
 
 from neurobrix.core.dtype import engine as CE
-from neurobrix.triton import dtype as TE
+from nbxtensor.dtype import operands as OP   # the one rule (DESIGN rule 12)
 from neurobrix.core.config.loader import vendor_file  # the device whole: engine file + library half
 
 _VENDORS = os.path.join(os.path.dirname(CE.__file__), "..", "..", "config", "vendors")
@@ -31,23 +31,24 @@ def test_every_vendor_profile_declares_the_alignment():
     files = sorted(glob.glob(os.path.join(_VENDORS, "*", "*.yml")))
     assert len(files) >= 27
     for f in files:
-        assert TE.attention_operand_alignment(vendor_file(f)) in TE.ATTENTION_OPERAND_ALIGNMENTS, f
+        assert OP.attention_operand_alignment(vendor_file(f)) in OP.ATTENTION_OPERAND_ALIGNMENTS, f
 
 
 def test_an_undeclared_or_unknown_alignment_is_refused_by_name():
     for prof in ({"architecture": "x", "precision": {}}, {"architecture": "x"},
                  {"architecture": "x", "precision": {"attention_operands": "fastest"}}):
-        for eng in (TE, CE):
+        for eng in (OP, CE):
             with pytest.raises(ValueError, match="precision.attention_operands"):
                 eng.attention_operand_alignment(prof)
 
 
 def test_the_two_engines_take_the_same_decision():
+    assert CE.attention_operand_dtypes is OP.attention_operand_dtypes        # one definition, the library's
     for q, k, v in itertools.product(_FLOATS, repeat=3):
         for r in (None,) + _FLOATS:
-            for a in TE.ATTENTION_OPERAND_ALIGNMENTS:
-                assert TE.attention_operand_dtypes(q, k, v, a, r) == CE.attention_operand_dtypes(q, k, v, a, r)
-    for eng in (TE, CE):
+            for a in OP.ATTENTION_OPERAND_ALIGNMENTS:
+                assert OP.attention_operand_dtypes(q, k, v, a, r) == CE.attention_operand_dtypes(q, k, v, a, r)
+    for eng in (OP, CE):
         assert eng.attention_operand_dtypes("float16", "float16", "float32", "narrowest") == ("float16",) * 3 + (None,)
         assert eng.attention_operand_dtypes("float16", "float16", "float32", "widest") == ("float32",) * 3 + (None,)
         assert eng.attention_operand_dtypes("bfloat16", "float16", "float32", "narrowest")[0] == "bfloat16"

@@ -389,7 +389,7 @@ def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_
     try:
         # The census is bound to its target's profile (the active one): its alignment is that profile's.
         from nbxtensor.ops._configs import active_vendor_profile
-        from neurobrix.triton.dtype import attention_operand_alignment
+        from nbxtensor.dtype.operands import attention_operand_alignment
         reads = _cache_reads(ops, decode_kv)
         align, fp64 = attention_operand_alignment(active_vendor_profile()), _triton_fp64()
         rt, op_casts = _widths_at(

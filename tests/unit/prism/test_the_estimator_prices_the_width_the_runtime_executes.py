@@ -550,7 +550,7 @@ def volta_alignment(monkeypatch):
     width pass prices the profile it is handed, never the planning process's card."""
     from neurobrix.core.config.loader import get_vendor_config
     from nbxtensor.ops import _configs
-    from neurobrix.triton.dtype import attention_operand_alignment
+    from nbxtensor.dtype.operands import attention_operand_alignment
     monkeypatch.setattr(_configs, "active_vendor_profile", lambda: {})
     return attention_operand_alignment(get_vendor_config("nvidia", "volta"))
 
