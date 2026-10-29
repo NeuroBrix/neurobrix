@@ -26,6 +26,8 @@ import numpy as np
 
 from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator, _contiguous_strides, dtype_size, _set_device
 from nbxtensor.dtype.convert import bf16_bits_to_f16, f32_to_bf16_bits
+from nbxtensor.dtype.itemsize import itemsize
+from nbxtensor.shape import numel
 from nbxtensor.memory.memory_pool import ComponentArena, HostPinnedArena
 # The loader's worker count — one figure for every loader and for Prism's host estimate (torch-free).
 from neurobrix.core.workspace import io_workers, apply_host_mmap_threshold, apply_host_huge_pages
@@ -335,15 +337,15 @@ def load_component_weights(
             if all_cpu_component:
                 if _BLOCK_RE.search(key):
                     cpu_weights.add(key)
-                    host_bytes += (_target_nbytes(info, compute_dtype) + HostPinnedArena.ALIGNMENT - 1) \
+                    host_bytes += (_stored_bytes(info, compute_dtype) + HostPinnedArena.ALIGNMENT - 1) \
                         & ~(HostPinnedArena.ALIGNMENT - 1)
                     continue
                 # Non-block → GPU sizing continues below.
                 target_dev = device_idx
             else:
                 target_dev = _weight_target_dev(key, shard_dev, weight_device, device_idx)
-            regular = _target_nbytes(info, compute_dtype)
-            upcast = _target_nbytes(info, compute_dtype,
+            regular = _stored_bytes(info, compute_dtype)
+            upcast = _stored_bytes(info, compute_dtype,
                                     upcast_fp16_to_fp32=True)
             reg_aligned = (regular + ComponentArena.ALIGNMENT - 1) & ~(
                 ComponentArena.ALIGNMENT - 1)
@@ -417,15 +419,15 @@ def load_component_weights(
 _read_header = read_safetensors_header
 
 
-def _target_nbytes(info: dict, compute_dtype: NBXDtype,
+def _stored_bytes(info: dict, compute_dtype: NBXDtype,
                    upcast_fp16_to_fp32: bool = False) -> int:
-    """Compute target byte count for a tensor after dtype remap.
+    """The bytes a tensor occupies once the loader stores it in its compute dtype (the remap below), from
+    nbxtensor's itemsize and numel.
 
     When upcast_fp16_to_fp32 is set, weights whose EFFECTIVE target
     dtype is fp16 (either native fp16 or bf16 remapped to fp16 via the
     standard bf16→fp16 path) are treated as fp32 for sizing purposes.
     """
-    from nbxtensor.tensor import dtype_size as _dsize
     shape = info["shape"]
     sf_dtype = info["dtype"]
     dtype_info = _SF_DTYPE_INFO.get(sf_dtype)
@@ -433,7 +435,7 @@ def _target_nbytes(info: dict, compute_dtype: NBXDtype,
         return 0
     _, nbx_dtype, _ = dtype_info
 
-    numel = math.prod(shape) if shape else 1
+    n = numel(shape)
 
     # Effective target dtype — must mirror the remap logic in the loader
     # below so arena sizing matches the bytes we actually write.  The
@@ -445,9 +447,9 @@ def _target_nbytes(info: dict, compute_dtype: NBXDtype,
     target = stored_dtype_in_compute(nbx_dtype, compute_dtype)
 
     if upcast_fp16_to_fp32 and target == NBXDtype.float16:
-        return numel * 4  # pre-Ampere overflow protection path
+        return n * itemsize("float32")  # pre-Ampere overflow protection path
 
-    return numel * _dsize(target)
+    return n * itemsize(target)
 
 
 def _bf16_to_fp16_inplace(ptr: int, numel: int, device_idx: int):

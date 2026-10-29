@@ -86,6 +86,16 @@ def kind(dtype: Any) -> str:
     return _dense_entry(dtype)[1]["kind"]
 
 
+def finite_max(dtype: Any) -> float:
+    """The largest finite value of a floating `dtype` (the table's `max`); any other kind is refused by name."""
+    name, entry = _dense_entry(dtype)
+    if entry.get("kind") != "float":
+        raise ValueError(f"ZERO FALLBACK: {name!r} is not a floating dtype: it has no finite maximum")
+    if "max" not in entry:
+        raise KeyError(f"ZERO FALLBACK: {_SOURCE} states no max for {name!r}")
+    return float(entry["max"])
+
+
 def itemsize_table() -> Dict[str, int]:
     """{name: bytes per element} over every dense dtype (a copy: the caller may not edit the table)."""
     return {name: entry["bits"] // 8 for name, entry in _tables()[0].items()}

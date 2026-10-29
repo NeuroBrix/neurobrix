@@ -50,3 +50,9 @@ def test_the_rounding_streams_beyond_one_step():
     a = np.random.default_rng(1).standard_normal(3 * (1 << 18) + 5).astype(np.float32)
     ref = ((a.view(np.uint32) + 0x7FFF + ((a.view(np.uint32) >> 16) & 1)) >> 16).astype(np.uint16)
     assert np.array_equal(C.f32_to_bf16_bits(a), ref)
+
+
+def test_the_largest_magnitude_ignores_nan_and_reads_infinity():
+    bits = C.f32_to_bf16_bits(np.array([1.0, -70000.0, np.nan, 3.0], dtype=np.float32))
+    assert C.bf16_abs_max(bits) == float(C.bf16_bits_to_f32(bits)[1].__abs__())
+    assert C.bf16_abs_max(np.array([0x7F80], dtype=np.uint16)) == float("inf")

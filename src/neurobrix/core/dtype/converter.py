@@ -27,7 +27,7 @@ def safe_dtype_convert(
     """
     Convert tensor dtype with safety clamping for bf16→fp16.
 
-    Prism validates bf16→fp16 safety upstream via _scan_bf16_fp16_safety().
+    Prism validates bf16→fp16 safety upstream via _container_fits_float16().
     This function adds clamping as a defense-in-depth measure to prevent
     inf/NaN from overflow in case any values exceed fp16 range (±65504).
 
