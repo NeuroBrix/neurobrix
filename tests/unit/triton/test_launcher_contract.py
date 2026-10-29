@@ -20,13 +20,13 @@ import ctypes
 
 import pytest
 
-from neurobrix.kernels.nbx_tensor import DeviceAllocator
-from neurobrix.triton.launcher_contract import (ArgSlot, verify_driver_contract)
+from nbxtensor.tensor import DeviceAllocator
+from nbxtensor.backend.launcher_contract import ArgSlot, verify_driver_contract
 
 
 def _metal_driver():
     """The Metal driver, or None where there is no Apple GPU."""
-    nbx_tensor = pytest.importorskip("neurobrix.kernels.nbx_tensor")
+    nbx_tensor = pytest.importorskip("nbxtensor.tensor")
     detect = nbx_tensor._detect_gpu_backend   # a renamed probe raises here, loudly
     try:
         if detect() != "metal":
@@ -36,7 +36,7 @@ def _metal_driver():
     # Past this point the backend SAYS metal, so its driver module must exist.
     # That module is triton-ext's since the fork was archived on 2026-09-17.
     # an absent one is a broken install, not "no Apple GPU", and says so.
-    from neurobrix.triton.triton_ext_driver import driver
+    from nbxtensor.backend.triton_ext_driver import driver
     try:
         return driver()
     except Exception:
@@ -50,7 +50,7 @@ def _cuda_driver():
     file runs against CUDA with no other change — which is the property the
     contract is for.
     """
-    nbx_tensor = pytest.importorskip("neurobrix.kernels.nbx_tensor")
+    nbx_tensor = pytest.importorskip("nbxtensor.tensor")
     detect = nbx_tensor._detect_gpu_backend   # a renamed probe raises here, loudly
     try:
         if detect() != "cuda":
@@ -59,7 +59,7 @@ def _cuda_driver():
         return None
     # Past this point the backend SAYS cuda; `driver` is the symbol this whole
     # file is a contract for, so its absence is the finding, never a quiet None.
-    from neurobrix.kernels.launcher import driver
+    from nbxtensor.backend.launcher import driver
     try:
         return driver()
     except Exception:
@@ -239,7 +239,7 @@ def test_no_torch_is_pulled_by_compiling_or_launching(driver):
     code = (
         "import sys;"
         "sys.path.insert(0, %r);" % str(src_root) +
-        "from neurobrix.kernels.nbx_tensor import DeviceAllocator;"
+        "import neurobrix; from nbxtensor.tensor import DeviceAllocator;"
         "DeviceAllocator.get_device();"
         "print('torch' in sys.modules)"
     )

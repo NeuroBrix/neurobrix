@@ -32,7 +32,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from neurobrix.kernels import autotune_certified as C
+from nbxtensor.ops import autotune_certified as C
 from nbxtensor.dtype import itemsize as _isz
 
 ORACLE = "fp64: the op in float64 (numpy), the reference bank's definition"
@@ -343,7 +343,7 @@ def _softmax_shape(rows: int, feat: int, card_bytes, in_dt: str, out_dt: str, wh
     if card_bytes is None:
         return rows, feat
     from neurobrix.core.config.system import PRISM_DEFAULTS
-    from neurobrix.kernels.launch_keys import softmax_feat_bucket
+    from nbxtensor.ops.launch_keys import softmax_feat_bucket
     per_elem = _isz.itemsize(_isz.from_autotune_key(in_dt)) + _isz.itemsize(_isz.from_autotune_key(out_dt))
     usable = int(int(card_bytes) * float(PRISM_DEFAULTS["safety_margin"]))
     if rows * feat * per_elem <= usable:
@@ -365,7 +365,7 @@ def _ew_count(top: int, card_bytes, dt: str, what: str) -> int:
     if card_bytes is None:
         return top
     from neurobrix.core.config.system import PRISM_DEFAULTS
-    from neurobrix.kernels.autotune_bucket import class_floor
+    from nbxtensor.ops.autotune_bucket import class_floor
     per = 2 * _isz.itemsize(_isz.from_autotune_key(dt))
     usable = int(int(card_bytes) * float(PRISM_DEFAULTS["safety_margin"]))
     if top * per <= usable:
@@ -458,12 +458,12 @@ def _unified_padded_row(qual: str, tuner, key: tuple, card_bytes, short: str) ->
         # profile refused it at 2 TB and canary / granite-speech missed it under certified-only (2026-10-24 13:43)
         if pr is None or pr["peak"] <= card_bytes:
             return key
-        from neurobrix.kernels.autotune_bucket import class_floor
+        from nbxtensor.ops.autotune_bucket import class_floor
         return (class_floor("elements", int(key[0])),) + tuple(key[1:])
 
     if pr is None or pr["peak"] <= card_bytes:
         return key
-    from neurobrix.kernels.launch_keys import softmax_feat_bucket
+    from nbxtensor.ops.launch_keys import softmax_feat_bucket
     feat = int(key[1])
     shortest = feat // 2 + 1 if feat > 1 else 1
     if softmax_feat_bucket(shortest) != feat:
@@ -504,8 +504,8 @@ def _gemm_rows(key: tuple, dts) -> int:
     """The row count a GEMM key is priced and synthesised at: the largest one whose launch forms the key
     (`launch_keys.gemm_row_representative`), not the bucket's top — at the top the matrix unit may take the GEMM and
     the wrapper never reaches the autotuner. A key no row count forms is refused by name: a census defect."""
-    from neurobrix.kernels import launch_keys as LK
-    from neurobrix.kernels.nbx_tensor import NBXDtype
+    from nbxtensor.ops import launch_keys as LK
+    from nbxtensor.tensor import NBXDtype
     nbx = {"fp16": NBXDtype.float16, "bf16": NBXDtype.bfloat16, "fp32": NBXDtype.float32}
     a = nbx.get(dts[0], NBXDtype.float16) if dts else NBXDtype.float16
     b = nbx.get(dts[1], a) if len(dts) > 1 else a
@@ -815,7 +815,7 @@ def _conv2d_oracle(x, w, stride, padding, dilation, groups, window=None):
     the runtime screen windows the same family through the same brick, so the receptive-field
     geometry is written once (a 1024²×256 input is 2 GB of float64 per window, 109 s of an
     oracle on 2026-09-07; the whole input in float64 was the Mac's 27.5 GB on 2026-09-25)."""
-    from neurobrix.kernels.oracles.conv2d_fp64 import conv2d_reference_window
+    from nbxtensor.ops.oracles.conv2d_fp64 import conv2d_reference_window
     # the input's numbers are read slab by slab, so a bf16 operand is decoded on the window only
     return conv2d_reference_window(None, _f64(w), stride=stride, padding=padding, dilation=dilation,
                                    groups=groups, window=window, shape=x.shape,
@@ -944,9 +944,9 @@ def _flash_batch_heads(tq: int, tk: int, hd: int, q, k, v) -> Tuple[int, int]:
     the wrapper's own route (`launch_keys.sdpa_route` at this device's scores budget) takes the flash — the key holds
     the lengths and the head dim, not the heads, and below the budget the attention takes the math route and never
     reaches the flash (a 32 768 x 512 key at two heads, 2026-10-21)."""
-    from neurobrix.kernels import launch_keys as LK
-    from neurobrix.kernels import wrappers as W
-    from neurobrix.kernels.nbx_tensor import NBXDtype
+    from nbxtensor.ops import launch_keys as LK
+    from nbxtensor.ops import wrappers as W
+    from nbxtensor.tensor import NBXDtype
     nbx = {"fp16": NBXDtype.float16, "bf16": NBXDtype.bfloat16, "fp32": NBXDtype.float32}
     qd, kd, vd = nbx[q], nbx[k], nbx[v]
     budget = W._sdpa_math_scores_budget_bytes_for(None)
@@ -1116,8 +1116,8 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
     nothing drawn on the host, no oracle (None). For a caller that compiles without running (the
     Mac's `msl_census.py`, 2026-09-26: it needs the key's dtypes, strides and `==1`/`%16`/i32
     specialisation, never the values)."""
-    from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
-    from neurobrix.kernels import wrappers as W
+    from nbxtensor.tensor import NBXTensor, NBXDtype
+    from nbxtensor.ops import wrappers as W
     dts = C.key_dtypes(key)
     short = C.kernel_short(qual)
     arr = _arr if values else _spec
@@ -1145,7 +1145,7 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         """The convolution weight in the order the loader stores it on this arch
         (`launch_keys.conv_weight_layout`): a KRSC weight is timed and checked as the run reads it,
         the logical (K, C, R, S) tensor over channels-innermost memory."""
-        from neurobrix.kernels import launch_keys as _lk
+        from nbxtensor.ops import launch_keys as _lk
         if not _lk.conv_weight_krsc(tuple(a.shape), groups, False, _lk.conv_weight_layout()):
             return to(a)
         K, Cg, R, S = a.shape
@@ -1178,7 +1178,7 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         # at the class's top where the card holds it, else at its floor (`_ew_count`); its oracle is the draw itself:
         # an element-wise result is each element's alone, so no tile moves a bit
         import triton
-        from neurobrix.kernels.ops.elementwise_launch import ew_launch_kernel as _ew
+        from nbxtensor.ops.elementwise_launch import ew_launch_kernel as _ew
         top = ew_top
         n = _ew_count(int(key[0]), card_bytes, dts[0] if dts else "fp32", short)
         x = arr(rng, (n,), dts[0] if dts else "fp32")
@@ -1393,7 +1393,7 @@ def _machine() -> Dict[str, Any]:
     info: Dict[str, Any] = {"hostname": socket.gethostname(), "platform": platform.platform(),
                             "python": platform.python_version()}
     try:
-        from neurobrix.kernels import wrappers as W
+        from nbxtensor.ops import wrappers as W
         hw = W.get_hardware_profile()
         if hw is not None:
             info["hardware_profile"] = str(getattr(hw, "id", hw))
@@ -1401,13 +1401,13 @@ def _machine() -> Dict[str, Any]:
     except Exception:
         pass
     try:
-        from neurobrix.kernels.launcher import target
+        from nbxtensor.backend.launcher import target
         t = target()
         info["target"] = f"{t.backend}-{t.arch}"
     except Exception:
         pass
     try:
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        from nbxtensor.tensor import DeviceAllocator
         for name in ("device_name", "driver_version"):
             fn = getattr(DeviceAllocator, name, None)
             if callable(fn):
@@ -1437,12 +1437,12 @@ def _read_certifying_device() -> Optional[Dict[str, Any]]:
     memory class (register 56). None when the card is not in the profile —
     the certifier then REFUSES to write the entry (`file_certification`)."""
     try:
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        from nbxtensor.tensor import DeviceAllocator
         idx = int(DeviceAllocator.get_device())
     except Exception:
         return None
     try:
-        from neurobrix.kernels import wrappers as W
+        from nbxtensor.ops import wrappers as W
         prof = W.get_hardware_profile()
         devices = getattr(prof, "devices", None) if prof is not None else None
     except Exception:
@@ -1574,7 +1574,7 @@ def _current_backend() -> Optional[str]:
     and `target = "metal-apple-m4-pro"`.
     """
     try:
-        from neurobrix.kernels.nbx_tensor import _detect_gpu_backend
+        from nbxtensor.tensor import _detect_gpu_backend
         return _detect_gpu_backend()
     except Exception:
         return None
@@ -1783,9 +1783,9 @@ def _witness_time_ms(proto: Dict[str, Any]) -> float:
     same — with the sweep's own timer (`L.do_bench`). The one number whose only
     variable across a sweep's open and close is the GPU regime: same shape, same
     inputs, same timer, so a change in it is a change in the machine."""
-    from neurobrix.kernels import launcher as L
-    from neurobrix.kernels import wrappers as W
-    from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
+    from nbxtensor.backend import launcher as L
+    from nbxtensor.ops import wrappers as W
+    from nbxtensor.tensor import NBXTensor, NBXDtype
     spec = proto["witness"]
     if spec.get("kernel", "matmul") != "matmul":
         raise RuntimeError(f"witness kernel {spec.get('kernel')!r} not supported "
@@ -1864,7 +1864,7 @@ def launch_oracle(qual: str, tuner, meta, out_tensor):
     family (census keys recorded per launch; a banded launch changes `out_height` and fails the
     key check before any comparison).
     """
-    from neurobrix.kernels import screen_oracle as _so
+    from nbxtensor.ops import screen_oracle as _so
     name = C.kernel_short(qual)
     if name not in _so.ROW_WINDOWABLE:
         return None
@@ -1923,8 +1923,8 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
     witness — a certificate made under a retired code generator is re-PROVEN, not
     re-swept (the owner, 2026-09-29 01:37, release-decisions); the proof then
     carries `reproven_from`, the generator label it was first proven under."""
-    from neurobrix.kernels import launcher as L
-    from neurobrix.triton import autotune_cache as atc
+    from nbxtensor.backend import launcher as L
+    from nbxtensor.ops import autotune_cache as atc
     from triton.runtime.autotuner import Autotuner
     made = synthesize(qual, tuner, key, rng, card_bytes=card_bytes, unified=unified,
                       budget_bytes=budget_bytes, floor_bytes=floor_bytes)
@@ -1956,7 +1956,7 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
             # oracle: the last band has another M, another grid and another edge mask, and an
             # entry that answers for N launch shapes is proven on each of them. A count is not
             # a comparison (the guardian, 2026-09-26).
-            from neurobrix.kernels.nbx_tensor import DeviceAllocator
+            from nbxtensor.tensor import DeviceAllocator
             oracle_k = launch_oracle(qual, tuner, kwargs, out0)
             if oracle_k is None:
                 raise RuntimeError(f"{qual} at {key!r}: a second launch of this key inside one "
@@ -1997,7 +1997,7 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
         buffers = L._writable_buffers(args)
         if buffers is None:
             raise RuntimeError(f"{qual}: a strided view among the arguments — not certifiable")
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        from nbxtensor.tensor import DeviceAllocator
         out_addr, out_nbytes = int(out_tensor.data_ptr()), int(out_tensor._nbytes)
 
         def poison():
@@ -2118,8 +2118,8 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
     # dtype the engine hands them — reproduce that context, or the wrapper computes
     # another key than the census's (the first dry run: every matmul key mismatched
     # because a bare process reads `has_native_bf16` as True).
-    from neurobrix.kernels import wrappers as W
-    from neurobrix.kernels.nbx_tensor import NBXDtype
+    from nbxtensor.ops import wrappers as W
+    from nbxtensor.tensor import NBXDtype
     _prev_dt = W.get_compute_dtype()
     _out_dt = C.output_dtype(tuner, key)
     _nbx = {"fp16": NBXDtype.float16, "bf16": NBXDtype.bfloat16, "fp32": NBXDtype.float32}.get(_out_dt)
@@ -2201,14 +2201,14 @@ def _bind_hardware_profile() -> str:
     the per-device VRAM the wrappers read for their dtype decisions."""
     from neurobrix.core.prism import load_profile
     from neurobrix.core.prism.autodetect import get_or_create_default_profile
-    from neurobrix.kernels import wrappers as W
+    from nbxtensor.ops import wrappers as W
     hw_id = get_or_create_default_profile()
     W.set_hardware_profile(load_profile(hw_id))
     return str(hw_id)
 
 
 def _has_native_bf16() -> bool:
-    from neurobrix.kernels import wrappers as W
+    from nbxtensor.ops import wrappers as W
     return bool(W.has_native_bf16())
 
 
@@ -2381,7 +2381,7 @@ def _resolve_pool_drain(allocator=None):
     ZERO FALLBACK: an allocator that exposes no drain at all is a defect to surface at the
     first key, not a condition to carry silently through a sweep."""
     if allocator is None:
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator as allocator  # noqa: N813
+        from nbxtensor.tensor import DeviceAllocator as allocator  # noqa: N813
     for name in _POOL_DRAIN_NAMES:
         drain = getattr(allocator, name, None)
         if callable(drain):
@@ -2411,7 +2411,7 @@ def _alloc_state() -> str:
     disabled pool and an idle one come to look identical. Summed here. Never raises: a probe
     that can end a sweep is worse than no probe."""
     try:
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator as A
+        from nbxtensor.tensor import DeviceAllocator as A
 
         def _sum(name):
             v = getattr(A, name, None)
@@ -2484,7 +2484,7 @@ def census_tuners(shapes) -> Dict[str, Any]:
     `autotune_cache._autotuners` only sees what is loaded — every key of `gemv_vec_kernel` read "not an autotuner"
     and was skipped (2026-10-22)."""
     import importlib
-    from neurobrix.triton import autotune_cache as atc
+    from nbxtensor.ops import autotune_cache as atc
     for qual in shapes:
         importlib.import_module(qual.rsplit(".", 1)[0])
     return {qual: t for qual, t in atc._autotuners()}
@@ -2520,7 +2520,7 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
     root = Path(out) if out else C.directory()
     hw_id = _bind_hardware_profile()
     log(f"[certify] hardware profile {hw_id}: has_native_bf16={_has_native_bf16()} — the wrappers' dtype policy in force")
-    from neurobrix.triton import autotune_cache as atc
+    from nbxtensor.ops import autotune_cache as atc
     tuners = {qual: t for qual, t in atc._autotuners()}
     # The card this run certifies on, read once (register 56): every proof
     # names it, `--only-missing` asks per its memory class, and a card the

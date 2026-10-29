@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from neurobrix.kernels import autotune_certify as A
-from neurobrix.kernels.launch_keys import softmax_feat_bucket
+from nbxtensor.ops.launch_keys import softmax_feat_bucket
 
 CARD = 16 * 1024 ** 3
 
@@ -33,7 +33,7 @@ def test_a_key_no_row_of_its_class_fits_is_refused_by_name():
 # with no card, so every padded-row key was drawn and priced at its class's top: the Mac's census on 00e31765 refused
 # HAT-L's 1 572 864 - 2 621 440 rows of 1 024 at 21-27 GB of a 19 GB card (2026-10-24 07:18). Injection: the unified
 # branch without `_unified_padded_row` -> the second case is refused, red.
-SOFTMAX = "neurobrix.kernels.ops.softmax.softmax_forward_kernel"
+SOFTMAX = "nbxtensor.ops.softmax.softmax_forward_kernel"
 UNIFIED = 19 * 1024 ** 3
 
 

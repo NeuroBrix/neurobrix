@@ -5,7 +5,7 @@ Bit identity of the two forms on V100: stable/conv32/probe.py (four shapes, fp16
 What this test would do if the threshold were wrong: Sana 4K's 64 x 4099 x 8194 input narrowed -> red."""
 from types import SimpleNamespace as NS
 
-from neurobrix.kernels.wrappers import _conv_offsets_wide
+from nbxtensor.ops.wrappers import _conv_offsets_wide
 
 
 def _t(shape):

@@ -26,12 +26,12 @@ import pytest
 
 
 def _table():
-    from neurobrix.kernels.nbx_tensor import _BACKEND_FA_MIN_TILE
+    from nbxtensor.tensor import _BACKEND_FA_MIN_TILE
     return _BACKEND_FA_MIN_TILE
 
 
 def test_every_backend_this_tree_knows_has_a_row():
-    from neurobrix.kernels.nbx_tensor import _BACKEND_TRAPS_ON_DEVICE_ASSERT
+    from nbxtensor.tensor import _BACKEND_TRAPS_ON_DEVICE_ASSERT
 
     known = set(_BACKEND_TRAPS_ON_DEVICE_ASSERT)
     missing = known - set(_table())
@@ -57,8 +57,8 @@ def test_a_backend_without_a_row_refuses(monkeypatch):
     """The row is the answer; its absence is a refusal, never a default.
     The live backend is made one no table can have: on a CUDA machine a table
     with a cuda row answers (merge of 2026-09-13, semantic conflict)."""
-    from neurobrix.kernels import nbx_tensor as nt
-    from neurobrix.kernels.nbx_tensor import _backend_capability
+    from nbxtensor import tensor as nt
+    from nbxtensor.tensor import _backend_capability
     monkeypatch.setattr(nt, "_detect_gpu_backend", lambda: "no-such-backend")
 
     with pytest.raises(RuntimeError) as exc:
@@ -73,7 +73,7 @@ def test_the_wrapper_reads_the_table_rather_than_a_literal():
     the wrapper still writing 16.
     """
     from pathlib import Path
-    import neurobrix.kernels.wrappers as W
+    import nbxtensor.ops.wrappers as W
 
     src = Path(W.__file__).read_text()
     assert "fa_min_tile" in src or "_BACKEND_FA_MIN_TILE" in src, (
@@ -103,8 +103,8 @@ def test_the_floor_survives_the_profile_ceiling():
     if sys.platform != "darwin":
         pytest.skip("the Metal floor is what conflicts with the profile row")
     import numpy as np
-    from neurobrix.kernels import wrappers as W
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.ops import wrappers as W
+    from nbxtensor.tensor import NBXTensor
 
     rng = np.random.default_rng(20260912)
     B, H, D = 1, 20, 64

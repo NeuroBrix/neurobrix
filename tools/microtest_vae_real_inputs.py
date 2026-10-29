@@ -31,8 +31,9 @@ def replay_op(uid: str, payload: dict, device: str = "cuda:2"):
     """Replay one op with captured inputs vs torch reference."""
     import torch
     import torch.nn.functional as F
-    from neurobrix.kernels.nbx_tensor import NBXTensor, nbx_to_torch
-
+    import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
+    from nbxtensor.tensor import NBXTensor
+    from neurobrix.kernels.torch_interop import nbx_to_torch
     base = uid.split("::")[0].replace("aten.", "")
 
     # Reconstruct args. Each arg in payload["args"] is either a torch
@@ -63,15 +64,15 @@ def replay_op(uid: str, payload: dict, device: str = "cuda:2"):
     # Dispatch by base name
     try:
         if base == "relu":
-            from neurobrix.kernels.wrappers import relu as nbx_op
+            from nbxtensor.ops.wrappers import relu as nbx_op
             nbx_out = nbx_op(args_nbx[0])
             ref_out = F.relu(args_torch[0])
         elif base == "silu":
-            from neurobrix.kernels.wrappers import silu as nbx_op
+            from nbxtensor.ops.wrappers import silu as nbx_op
             nbx_out = nbx_op(args_nbx[0])
             ref_out = F.silu(args_torch[0])
         elif base == "pixel_shuffle":
-            from neurobrix.kernels.wrappers import pixel_shuffle_wrapper
+            from nbxtensor.ops.wrappers import pixel_shuffle_wrapper
             # pixel_shuffle takes (input, upscale_factor)
             upscale = 2
             if len(args_torch) > 1 and isinstance(args_torch[1], int):
@@ -79,7 +80,7 @@ def replay_op(uid: str, payload: dict, device: str = "cuda:2"):
             nbx_out = pixel_shuffle_wrapper(args_nbx[0], upscale)
             ref_out = F.pixel_shuffle(args_torch[0], upscale)
         elif base == "convolution":
-            from neurobrix.kernels.wrappers import conv2d_wrapper
+            from nbxtensor.ops.wrappers import conv2d_wrapper
             # Convolution args: (input, weight, bias, stride, padding, ...)
             x_t = args_torch[0]
             w_t = args_torch[1] if len(args_torch) > 1 else None

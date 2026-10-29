@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.kernels.nbx_tensor import DeviceAllocator as D
+from nbxtensor.tensor import DeviceAllocator as D
 
 
 def test_free_is_positive_and_at_most_the_card():

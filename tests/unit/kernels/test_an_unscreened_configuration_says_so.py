@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.kernels import launcher
+from nbxtensor.backend import launcher
 
 
 @pytest.fixture(autouse=True)
@@ -78,7 +78,7 @@ def test_the_reason_names_the_provider_state():
     # The refusal register is per call and the launcher clears it before each provider call;
     # this test calls the reason function directly, so it clears what an earlier test in the
     # same process recorded (the non-finite reference cell), as the launcher would have.
-    from neurobrix.kernels.screen_oracle import set_last_refusal
+    from nbxtensor.ops.screen_oracle import set_last_refusal
     set_last_refusal(None)
     try:
         assert "covers no oracle" in launcher._no_oracle_reason(None)
@@ -90,7 +90,7 @@ def test_the_reason_names_the_provider_state():
 def test_the_certified_directory_is_a_different_path_entirely():
     """Structural, not a promise: the runtime cache writes under the machine's
     replay cache and the directory lives in the installed package."""
-    from neurobrix.triton import autotune_cache
+    from nbxtensor.ops import autotune_cache
     # `_dir()`, not `_DIR`: the latter is the snapshot taken at import, and a
     # test earlier in the process that redirects NEUROBRIX_REPLAY_CACHE to a tmp
     # path froze that value for everyone. Where the cache actually goes is what
@@ -105,7 +105,7 @@ def test_the_seat_is_recorded_under_the_key_the_choice_is_stored_under():
     stamped. The screen keyed its seats by the constexpr kwargs; Triton stores
     the choice under the shape key. This pins the replica of Triton's key."""
     import types
-    from neurobrix.kernels.launcher import autotune_shape_key
+    from nbxtensor.backend.launcher import autotune_shape_key
 
     class T:                                    # a tensor-like: only its dtype matters here
         def __init__(self, dt): self.dtype = dt
@@ -122,7 +122,8 @@ def test_the_provider_sees_the_launch_kwargs_not_only_the_positional_arguments()
     launch kwargs absent from `tuner.nargs`. 2026-09-13: every live conv key
     was refused with the oracle's own suite green."""
     import types
-    from neurobrix.kernels import launcher, screen_oracle as S
+    from nbxtensor.backend import launcher
+    from nbxtensor.ops import screen_oracle as S
 
     seen = {}
 
@@ -156,8 +157,8 @@ def test_a_screened_seat_is_recorded_as_screened_with_its_adjudicator(tmp_path, 
     """The converse of the unscreened stamp: a silent entry must not read as
     verified by default. 2026-09-13: ten conv keys screened by the fp64 oracle
     left records indistinguishable from unscreened ones."""
-    from neurobrix.kernels import launcher
-    from neurobrix.triton import autotune_cache as atc
+    from nbxtensor.backend import launcher
+    from nbxtensor.ops import autotune_cache as atc
     launcher._ADJUDICATED.clear()
     launcher._ADJUDICATED[("matmul_kernel", repr((64, 64, 32)))] = "fp64 oracle"
     assert launcher.adjudicated() == {("matmul_kernel", "(64, 64, 32)"): "fp64 oracle"}
@@ -168,7 +169,7 @@ def test_the_screen_deduplicates_by_the_shape_key_not_the_constexpr_key():
     """Ten conv shapes share one constexpr tuple; keyed by it the screen ran on
     the first and silently skipped nine (2026-09-13, real-esrgan-x4 live)."""
     import inspect
-    from neurobrix.kernels import launcher
+    from nbxtensor.backend import launcher
     # `screen_configs` is a thin wrapper since 2026-09-17 (it releases the
     # allocator pool in a `finally` after every sweep); the dedup lives in the
     # body it delegates to. Inspecting the wrapper found none of this and the

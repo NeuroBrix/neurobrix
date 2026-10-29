@@ -205,8 +205,9 @@ def _entry_point(wrappers, op: str):
 
 
 def run_entry(payload, meta):
-    from neurobrix.kernels.nbx_tensor import NBXTensor
-    from neurobrix.kernels import wrappers
+    import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.ops import wrappers
 
     op = meta["op"]
     if op in _NO_SIGNATURE:
@@ -258,7 +259,7 @@ def main() -> int:
     args = parser.parse_args()
 
     cleared = clear_caches()
-    from neurobrix.kernels import launcher
+    from nbxtensor.backend import launcher
     launcher.install()
 
     wanted = [w.strip() for w in args.only.split(",")] if args.only else None

@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from neurobrix.kernels import launcher as L
-from neurobrix.kernels.nbx_tensor import NBXTensor
+from nbxtensor.backend import launcher as L
+from nbxtensor.tensor import NBXTensor
 
 
 def _krsc_view():

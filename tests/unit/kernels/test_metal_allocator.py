@@ -23,8 +23,9 @@ import ctypes
 import numpy as np
 import pytest
 
-from neurobrix.kernels import metal_device, nbx_tensor
-from neurobrix.kernels.nbx_tensor import DeviceAllocator, NBXTensor
+from nbxtensor.backend import metal_device
+from nbxtensor import tensor as nbx_tensor
+from nbxtensor.tensor import DeviceAllocator, NBXTensor
 
 
 def _on_metal() -> bool:

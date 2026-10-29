@@ -6,7 +6,7 @@ What this test would do if the code were wrong: a parameter of the real allocato
 import inspect
 
 from neurobrix.kernels import census
-from neurobrix.kernels.nbx_tensor import DeviceAllocator
+from nbxtensor.tensor import DeviceAllocator
 
 
 def test_the_shadow_takes_every_parameter_of_the_real_malloc():

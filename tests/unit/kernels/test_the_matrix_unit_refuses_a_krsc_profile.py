@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from neurobrix.kernels.ops import _configs
+from nbxtensor.ops import _configs
 
 VOLTA = Path(__file__).resolve().parents[3] / "src/neurobrix/config/vendors/nvidia/volta.yml"
 

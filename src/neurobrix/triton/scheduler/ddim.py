@@ -10,7 +10,7 @@ the `NBX_FORCE_RAND_SEED` pin).
 """
 import numpy as np
 
-from neurobrix.kernels.nbx_tensor import NBXTensor
+from nbxtensor.tensor import NBXTensor
 from .noise_schedules import get_beta_schedule, betas_to_alphas_cumprod, get_timesteps_np
 
 
@@ -135,7 +135,7 @@ class TritonDDIMScheduler:
             pred_eps = (sample - pred_x0 * sqrt_a_t) * (1.0 / max(sqrt_1m_a_t, 1e-8))
 
         if self.clip_sample:
-            from neurobrix.kernels.wrappers import clamp
+            from nbxtensor.ops.wrappers import clamp
             pred_x0 = clamp(pred_x0, -self.clip_sample_range, self.clip_sample_range)
 
         variance = max((1.0 - a_prev) / max(1.0 - a_t, 1e-12)
@@ -144,7 +144,7 @@ class TritonDDIMScheduler:
         dir_coeff = max(1.0 - a_prev - sigma ** 2, 0.0) ** 0.5
         prev = pred_x0 * sqrt_a_prev + pred_eps * dir_coeff
         if self.eta > 0 and sigma > 0:
-            from neurobrix.kernels.wrappers import randn_like_wrapper
+            from nbxtensor.ops.wrappers import randn_like_wrapper
             prev = prev + randn_like_wrapper(sample) * sigma
 
         self._step_index += 1

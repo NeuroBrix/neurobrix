@@ -8,7 +8,7 @@ What each test would do if the code were wrong: a malloc past the rung served fr
 bytes over the rung — red); an OOM raised while the pool held enough to flush (red); no rung, a refusal (red)."""
 import pytest
 
-from neurobrix.kernels import nbx_tensor as N
+from nbxtensor import tensor as N
 
 DA = N.DeviceAllocator
 MB = 1 << 20

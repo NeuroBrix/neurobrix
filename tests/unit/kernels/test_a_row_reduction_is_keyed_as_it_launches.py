@@ -14,10 +14,10 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("needs a CUDA device", allow_module_level=True)
 
-from neurobrix.kernels import launch_keys as LK  # noqa: E402
-from neurobrix.kernels import wrappers as W  # noqa: E402
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype  # noqa: E402
-from neurobrix.triton.autotune_cache import key_of  # noqa: E402
+from nbxtensor.ops import launch_keys as LK  # noqa: E402
+from nbxtensor.ops import wrappers as W  # noqa: E402
+from nbxtensor.tensor import NBXTensor, NBXDtype  # noqa: E402
+from nbxtensor.ops.autotune_cache import key_of  # noqa: E402
 
 F32, F16 = NBXDtype.float32, NBXDtype.float16
 _FN = {"mean": "mean_wrapper", "sum": "sum_wrapper", "amax": "amax_wrapper"}
@@ -37,7 +37,7 @@ def _t(a, dt):
 @pytest.mark.parametrize("dt", [F32, F16])
 def test_the_launch_is_its_key(monkeypatch, red, shape, dim, dt):
     import importlib
-    K_ = getattr(importlib.import_module(f"neurobrix.kernels.ops.{red}"), f"{red}_forward_kernel")
+    K_ = getattr(importlib.import_module(f"nbxtensor.ops.{red}"), f"{red}_forward_kernel")
     seen = []
 
     def run(*args, **kwargs):
@@ -64,8 +64,8 @@ def test_the_values_are_the_reduction(red, shape, dim):
 def test_a_candidate_block_stays_within_one_block_s_registers(monkeypatch):
     """A 128 x 4 096 block spilled and ptxas took minutes per candidate (2026-10-23): the candidates of a long row
     stay within `memory.max_registers_per_block` fp32 elements (V100's 65 536). Red if the bound is not applied."""
-    from neurobrix.kernels.ops import _configs as K
-    from neurobrix.kernels import wrappers as W
+    from nbxtensor.ops import _configs as K
+    from nbxtensor.ops import wrappers as W
     regs = 65536
     real = W._arch_param
     monkeypatch.setattr(W, "_arch_param", lambda sec, key, default: regs if key == "max_registers_per_block"

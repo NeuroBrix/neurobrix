@@ -17,7 +17,7 @@ def to_engine_container(value: Any, mode: str) -> Any:
     if not isinstance(value, np.ndarray):
         return value
     if mode in ("triton", "triton_sequential"):
-        from neurobrix.kernels.nbx_tensor import NBXTensor
+        from nbxtensor.tensor import NBXTensor
         return NBXTensor.from_numpy(np.ascontiguousarray(value))
     import torch
     return torch.from_numpy(np.ascontiguousarray(value))
@@ -127,8 +127,8 @@ class VariableResolver:
         each is reproducible per (seed, draw order)."""
         import os
         import numpy as np
-        from neurobrix.kernels.nbx_tensor import NBXTensor, parse_dtype
-        from neurobrix.kernels import wrappers as W
+        from nbxtensor.tensor import NBXTensor, parse_dtype
+        from nbxtensor.ops import wrappers as W
         dt = parse_dtype(str(dtype_str).replace("torch.", ""))
         dev = self.device if isinstance(self.device, str) else "cuda"
         if init_type == "empty":

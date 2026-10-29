@@ -8,7 +8,7 @@ import ctypes
 import numpy as np
 import pytest
 
-from neurobrix.kernels.nbx_tensor import NBXTensor
+from nbxtensor.tensor import NBXTensor
 
 
 def test_numpy_reads_back_the_values_and_never_a_bytes_copy(monkeypatch):

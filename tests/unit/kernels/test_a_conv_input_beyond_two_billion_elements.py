@@ -25,8 +25,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from neurobrix.kernels import wrappers as W
-from neurobrix.kernels.nbx_tensor import NBXTensor
+from nbxtensor.ops import wrappers as W
+from nbxtensor.tensor import NBXTensor
 
 C_IN, H = 64, 6000                      # 2 304 000 000 input elements; the boundary falls inside channel 59
 C_PAST = 60                             # first channel entirely past 2^31 (2^31 // (H*H) = 59, so channel 60 starts at 2 160 000 000)
@@ -47,7 +47,7 @@ def _cuda_free_bytes():
 def test_the_channels_past_the_boundary_are_read():
     assert C_PAST * H * H >= BOUNDARY > (C_PAST - 1) * H * H, "the boundary must fall inside the input, before the marked channels"
     try:
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        from nbxtensor.tensor import DeviceAllocator
         DeviceAllocator.empty_cache_pool()
     except Exception:
         pass

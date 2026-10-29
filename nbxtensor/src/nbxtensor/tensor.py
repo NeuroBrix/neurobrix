@@ -1,0 +1,4535 @@
+"""NBXTensor — Tensor type for --triton mode.
+
+Wraps raw CUDA device pointers with shape/strides/dtype metadata.
+All metadata ops are pure Python CPU computation.
+Triton kernels receive NBXTensor via .data_ptr() and .dtype.
+
+Dependencies: ctypes (stdlib), math (stdlib), triton (lazy, for dtype mapping).
+
+Weight loading: safetensors → numpy → cudaMemcpy H2D → NBXTensor
+Allocation: raw cudaMalloc via ctypes
+Metadata ops: pure Python stride/shape computation
+"""
+
+from __future__ import annotations
+
+import bisect          # module level, NOT inside the range helpers: they run on the
+                      # finalizer path, and at interpreter shutdown `sys.meta_path` is
+                      # None, so a function-level import raises ImportError AFTER the
+                      # cudaFree has already happened — aborting the bookkeeping that
+                      # follows it and printing a traceback that can mask a real
+                      # [NBX-CUDA-ERROR] from the same free (observed 2026-09-18).
+import ctypes
+import functools
+import math
+import os
+import struct
+import sys
+import threading
+from enum import IntEnum
+from typing import Dict, List, Optional, Tuple
+
+
+# ============================================================================
+# MALLOC CALL-SITE LOGGER — env-gated, zero cost when disabled
+# ============================================================================
+#
+# When NBX_MALLOC_TRACE=<path> is set, every DeviceAllocator.malloc_cuda
+# records one row and every free_cuda records the matching "F" row. The
+# buffer is flushed to <path> at interpreter exit via atexit. When unset,
+# the allocator pays a single module-level `is None` check per call — no
+# frame walk, no list append.
+#
+# How to use:
+#   NBX_MALLOC_TRACE=/tmp/run.tsv  neurobrix run --model ... --triton
+#
+# Row format (tab-separated):
+#   event_id \t M|F \t ptr \t nbytes \t <file:line func>   (an F row carries the
+#                                                           engine frames that freed it, innermost first)
+#
+# Recipes:
+#   - Total allocation volume by site:
+#       awk '$2=="M"{by[$5]+=$4} END{for(k in by)print by[k],k}' run.tsv \
+#         | sort -rn | head
+#   - Live-set composition at peak: walk events, track ptr→nbytes live
+#     map, record the set at each new peak, then aggregate by site.
+#     This is the discriminator between "leak" (unfreed allocs), "peak
+#     concurrency" (tensors retained by a deferred-free mechanism), and
+#     "fragmentation" (total freed > 80% but driver rejects next alloc).
+#     In April 2026 this tool killed a wrong hypothesis in ~30 min on
+#     PixArt triton (confirmed _deferred accumulation as root cause,
+#     not workspace leak as initially hypothesised). Kept permanent —
+#     same discriminator work will be needed for Qwen3 long-context,
+#     Sana 4Kpx, video upscalers.
+# ============================================================================
+
+_MALLOC_TRACE_FILE: Optional[str] = os.environ.get("NBX_MALLOC_TRACE") or None
+_MALLOC_TRACE_EVENTS: List[Tuple[int, str, int, int, str]] = []  # (eid, kind, ptr, nbytes, site)
+_MALLOC_TRACE_COUNTER: List[int] = [0]
+
+# NBX_TRACE_DEL_BIG_MB=N (default off): NBXTensor.__del__ logs every
+# free of an owns_data tensor >= N MB. Read ONCE at import
+# (P-KERNEL-LAUNCH-HYGIENE C4) — __del__ fires per tensor, and an
+# environ.get there is pure overhead on the free path. Consequence:
+# changing the env var mid-process no longer applies; acceptable for a
+# diagnostic that is set before launch. None == trace disabled.
+try:
+    _TRACE_DEL_BIG_ENV = os.environ.get("NBX_TRACE_DEL_BIG_MB", "0")
+    _TRACE_DEL_BIG_THRESH: Optional[int] = (
+        int(_TRACE_DEL_BIG_ENV) * 1024 * 1024
+        if _TRACE_DEL_BIG_ENV != "0" else None)
+except Exception:
+    _TRACE_DEL_BIG_THRESH = None
+
+
+def _extract_neurobrix_site(max_frames: int = 12) -> str:
+    """Return nearest neurobrix/ frame as 'file:line func', skipping this file.
+
+    The logger only fires inside DeviceAllocator — we want the CALLER of the
+    allocator (wrappers.py, dispatch.py, sequence.py, ...) not the allocator
+    itself. Walk the stack until the first frame whose filename contains
+    'neurobrix/' AND is NOT nbx_tensor.py.
+    """
+    f = sys._getframe(2)  # skip this fn + malloc_cuda/free_cuda
+    n = 0
+    while f is not None and n < max_frames:
+        fname = f.f_code.co_filename
+        if "neurobrix" in fname and not fname.endswith("/nbx_tensor.py"):
+            rel = fname.split("neurobrix/")[-1]
+            return f"{rel}:{f.f_lineno} {f.f_code.co_name}"
+        f = f.f_back
+        n += 1
+    return "<unknown>"
+
+
+def _record_malloc_site(ptr: int, nbytes: int, dev: int) -> None:
+    eid = _MALLOC_TRACE_COUNTER[0]
+    _MALLOC_TRACE_COUNTER[0] = eid + 1
+    site = _extract_neurobrix_site()
+    _MALLOC_TRACE_EVENTS.append((eid, "M", ptr, nbytes, site))
+
+
+def _extract_neurobrix_chain(max_frames: int = 40, keep: int = 8) -> str:
+    """The engine frames of the caller, innermost first, ' < '-joined — for
+    a FREE row. A block freed by a finalizer names `free()` as its site,
+    which says nothing; the frames above it name what dropped the last
+    reference (Ming's arenas freed under live weights, 2026-09-16)."""
+    f = sys._getframe(2)
+    n = 0
+    out = []
+    while f is not None and n < max_frames and len(out) < keep:
+        fname = f.f_code.co_filename
+        if "neurobrix" in fname and not fname.endswith("/nbx_tensor.py"):
+            rel = fname.split("neurobrix/")[-1]
+            out.append(f"{rel}:{f.f_lineno} {f.f_code.co_name}")
+        f = f.f_back
+        n += 1
+    return " < ".join(out) or "<unknown>"
+
+
+def _record_free_site(ptr: int, nbytes: int) -> None:
+    eid = _MALLOC_TRACE_COUNTER[0]
+    _MALLOC_TRACE_COUNTER[0] = eid + 1
+    _MALLOC_TRACE_EVENTS.append((eid, "F", ptr, nbytes, _extract_neurobrix_chain()))
+
+
+def _flush_malloc_trace() -> None:
+    path = _MALLOC_TRACE_FILE
+    if path is None or not _MALLOC_TRACE_EVENTS:
+        return
+    try:
+        with open(path, "w") as fh:
+            for eid, kind, ptr, nbytes, site in _MALLOC_TRACE_EVENTS:
+                fh.write(f"{eid}\t{kind}\t{ptr}\t{nbytes}\t{site}\n")
+    except Exception:
+        pass
+
+
+import atexit as _atexit
+_atexit.register(_flush_malloc_trace)
+
+# The floor watchdog stops a run with SIGTERM (5 s grace before SIGKILL),
+# and Python's default SIGTERM action skips atexit — so a floor-stopped
+# traced run died with an EMPTY trace (measured: x8@1024, 2026-09-21).
+# When, and only when, the trace is armed, convert SIGTERM to SystemExit
+# so the flush runs inside the grace window. Unarmed runs keep the
+# default signal behavior untouched.
+if _MALLOC_TRACE_FILE:
+    import signal as _signal_mt
+
+    def _flush_on_term(_signum, _frame):
+        raise SystemExit(143)
+
+    try:
+        _signal_mt.signal(_signal_mt.SIGTERM, _flush_on_term)
+    except (ValueError, OSError):
+        pass                       # non-main thread or exotic host: trace
+                                   # stays best-effort, behavior unchanged
+
+
+# ============================================================================
+# DTYPE SYSTEM
+# ============================================================================
+
+class NBXDtype(IntEnum):
+    float16 = 0
+    bfloat16 = 1
+    float32 = 2
+    float64 = 3
+    int8 = 4
+    int16 = 5
+    int32 = 6
+    int64 = 7
+    uint8 = 8
+    bool_ = 9
+    complex64 = 10
+    complex128 = 11
+
+
+# Bytes per element of every NBXDtype: the library's own, beside the enum it defines (the library
+# boundary: nbx_tensor imports no engine module). The engine's table (config/dtypes.yml) is held
+# equal to it member by member by tests/unit/dtype/test_the_two_itemsize_readers_are_one.py.
+_DTYPE_SIZES = {
+    NBXDtype.float16: 2, NBXDtype.bfloat16: 2,
+    NBXDtype.float32: 4, NBXDtype.float64: 8,
+    NBXDtype.int8: 1, NBXDtype.int16: 2, NBXDtype.int32: 4, NBXDtype.int64: 8,
+    NBXDtype.uint8: 1, NBXDtype.bool_: 1,
+    NBXDtype.complex64: 8, NBXDtype.complex128: 16,
+}
+
+_DTYPE_FROM_STR = {
+    'float16': NBXDtype.float16, 'fp16': NBXDtype.float16, 'half': NBXDtype.float16,
+    'bfloat16': NBXDtype.bfloat16, 'bf16': NBXDtype.bfloat16,
+    'float32': NBXDtype.float32, 'fp32': NBXDtype.float32, 'float': NBXDtype.float32,
+    'float64': NBXDtype.float64, 'fp64': NBXDtype.float64, 'double': NBXDtype.float64,
+    'int8': NBXDtype.int8, 'int16': NBXDtype.int16,
+    'int32': NBXDtype.int32, 'int': NBXDtype.int32,
+    'int64': NBXDtype.int64, 'long': NBXDtype.int64,
+    'uint8': NBXDtype.uint8, 'byte': NBXDtype.uint8,
+    'bool': NBXDtype.bool_,
+    'complex64': NBXDtype.complex64, 'complex128': NBXDtype.complex128,
+}
+
+# numpy dtype string → NBXDtype
+_NUMPY_DTYPE_MAP = {
+    'float16': NBXDtype.float16, 'float32': NBXDtype.float32,
+    'float64': NBXDtype.float64, 'int8': NBXDtype.int8,
+    'int16': NBXDtype.int16, 'int32': NBXDtype.int32,
+    'int64': NBXDtype.int64, 'uint8': NBXDtype.uint8,
+    'bool': NBXDtype.bool_,
+    # Complex: numpy stores complex as interleaved [real, imag] pairs — exactly
+    # the NBXTensor complex storage convention (complex64 = fp32 pairs,
+    # complex128 = fp64 pairs). Tagging the raw-byte copy with the complex dtype
+    # therefore yields a valid complex NBXTensor (view_as_real/_complex reinterpret
+    # the same bytes). Without these entries from_numpy fell through to float32,
+    # mistagging complex constants (e.g. Wan RoPE freqs, complex128 [seq, hd/2])
+    # as garbage floats -> NaN through the RoPE rotation -> dead output.
+    'complex64': NBXDtype.complex64, 'complex128': NBXDtype.complex128,
+}
+
+# __cuda_array_interface__ typestr
+_DTYPE_TYPESTR = {
+    NBXDtype.float16: '<f2', NBXDtype.bfloat16: '<V2',
+    NBXDtype.float32: '<f4', NBXDtype.float64: '<f8',
+    NBXDtype.int8: '<i1', NBXDtype.int16: '<i2',
+    NBXDtype.int32: '<i4', NBXDtype.int64: '<i8',
+    NBXDtype.uint8: '<u1', NBXDtype.bool_: '|b1',
+    NBXDtype.complex64: '<c8', NBXDtype.complex128: '<c16',
+}
+
+_FLOATING_DTYPES = frozenset({
+    NBXDtype.float16, NBXDtype.bfloat16, NBXDtype.float32, NBXDtype.float64,
+})
+
+
+def bf16_carrier_to_float32(arr):
+    """Decode numpy's stand-in for bfloat16 into real float32 values.
+
+    numpy has no bfloat16, so `_DTYPE_TYPESTR` maps it to `'<V2'` and a bf16
+    tensor's `.numpy()` is a 2-byte VOID array: the bits are correct and nothing
+    can read them as numbers. `np.asarray(that, dtype=np.float32)` does not
+    fail usefully either — it raises "setting an array element with a
+    sequence", which names neither bf16 nor the tensor.
+
+    That error has now been met twice in two unrelated places, which is why the
+    decode lives HERE, once, beside the table that creates the carrier:
+
+      * certification read every bf16 kernel output through it and reported "no
+        config could run (10 of 10)" on kernels that had run correctly;
+      * the RNNT decoder read every LSTM weight through it and the whole
+        parakeet-tdt-1.1b pipeline died at `np.ascontiguousarray(w,
+        dtype=np.float32)`.
+
+    Widening is exact: a bf16 value is the top 16 bits of an fp32, so shifting
+    them back up loses nothing and the result is the number the kernel had.
+
+    Anything that is not the 2-byte void carrier is returned untouched, so this
+    is safe to apply to an array of unknown dtype.
+    """
+    import numpy as np
+    a = np.asarray(arr)
+    if a.dtype.kind != 'V' or a.dtype.itemsize != 2:
+        return a
+    bits = np.ascontiguousarray(a).view(np.uint16).astype(np.uint32)
+    return (bits << np.uint32(16)).view(np.float32).reshape(a.shape)
+
+def float32_to_bf16_bits(arr):
+    """Narrow float32 values to bfloat16, returned as their uint16 bit patterns
+    (numpy has no bfloat16), rounding to nearest with ties to even.
+
+    This is the rounding `torch.Tensor.to(torch.bfloat16)` applies, the one the
+    vendors' weights meet, and the one this engine's own device cast
+    (`NBXTensor.to(bfloat16)`) applies. Keeping the top sixteen bits instead is
+    a truncation toward zero: every value loses on average half a bf16 ulp of
+    magnitude, the same sign every time. The Triton weight loaders did that
+    until 2026-09-26 (measured on PixArt-XL-2-1024-MS: the Triton copy of a
+    weight equalled the truncation of the container's fp32 on 100 % of its
+    elements and the oracle's round-to-nearest copy on 49.9 %).
+
+    `+0x7FFF` alone rounds an exact half down; `((u >> 16) & 1)` adds the one
+    that makes it ties-to-even. A NaN whose payload lives only in the dropped
+    bits would become an infinity, so every NaN is written as a quiet NaN.
+    Infinities and values that round past the bf16 maximum become infinities,
+    as they do in torch."""
+    import numpy as np
+    a = np.ascontiguousarray(arr, dtype=np.float32)
+    u = a.view(np.uint32)
+    bits = ((u + (np.uint32(0x7FFF) + ((u >> np.uint32(16)) & np.uint32(1)))) >> np.uint32(16)).astype(np.uint16)
+    nan = np.isnan(a)
+    if nan.any():
+        bits[nan] = (((u[nan] >> np.uint32(16)) & np.uint32(0x8000)) | np.uint32(0x7FC0)).astype(np.uint16)
+    return bits.reshape(a.shape)
+
+_COMPLEX_DTYPES = frozenset({NBXDtype.complex64, NBXDtype.complex128})
+
+
+def dtype_size(dtype: NBXDtype) -> int:
+    return _DTYPE_SIZES[dtype]
+
+
+def parse_dtype(d) -> NBXDtype:
+    """Parse dtype from string or NBXDtype."""
+    if isinstance(d, NBXDtype):
+        return d
+    if isinstance(d, str):
+        s = d.replace('torch.', '')
+        return _DTYPE_FROM_STR[s]
+    # Unknown type — try string conversion
+    s = str(d).replace('torch.', '')
+    return _DTYPE_FROM_STR[s]
+
+
+
+# Whether the backend HONOURS a device-side assert the author explicitly kept
+# with `@triton.jit(debug=True)`. This is not a question about debug builds:
+# `tl.device_assert` reaches the IR at all ONLY when `options.debug` is true
+# (triton/language/semantic.py: `if not self.builder.options.debug: return`),
+# so a `tt.assert` in the IR is by construction one the author demanded.
+#
+# CUDA and ROCm halt the thread at the assert and the next sync raises. The
+# Metal backend COMPUTES the predicate and then discards it — measured
+# 2026-09-10: with debug=True the generated MSL carries `mask_5 = idx < 2`
+# and never reads it. The guard is paid for in registers and not delivered,
+# so a kernel whose only bounds check is that assert performs the very access
+# the assert was there to prevent (`index_put` wrote 8 floats past the end of
+# a 24-float tensor; `embedding` read past the end of the weight).
+#
+# This is a capability, not a vendor test — adding a backend is adding a row.
+_BACKEND_TRAPS_ON_DEVICE_ASSERT = {"cuda": True, "hip": True, "metal": False}
+
+# Whether a kernel can load a device ADDRESS out of a tensor and then read
+# through it — the [E] int64 pointer table that lets one launch reach every
+# expert's weights instead of one launch per expert.
+#
+# Measured 2026-09-17 on triton-ext (M4 Pro, Toolchain 27) with a control that
+# differs by the one variable — whether the address arrives AS a pointer or as
+# an integer to be converted — and in BOTH Triton spellings, because they are
+# different constructs and cannot be assumed to share a fate:
+#
+#     control  (pointer as a pointer)       : nonzero 256/256   correct
+#     subject  (.to(pointer_type))          : nonzero   0/256   ALL ZEROS
+#     subject  (tl.cast bitcast=True)       : nonzero   0/256   ALL ZEROS
+#
+# The second subject is the spelling our own kernels use, which is what makes
+# the engine's zeros attributable to this and not to us. Nothing is raised: the
+# kernel compiles, launches and writes zeros. The reproducer contains none of
+# our code (`repro_ext_pointer_from_table.py`) and is drafted for upstream.
+#
+# It is recorded HERE because the engine cannot catch what is never raised: a
+# band that cannot address its experts has to refuse by name, and a refusal
+# needs a fact to stand on. This is a capability, not a vendor test — adding a
+# backend is adding a row.
+_BACKEND_LOADS_POINTERS_FROM_MEMORY = {"cuda": True, "hip": True, "metal": False}
+
+# Whether this backend's device memory is directly readable at its own
+# `data_ptr()` from the host. The fault channel below reads its status word
+# that way — after a flush that has already happened, so no copy and no
+# recursion through `memcpy`. Unified memory says yes; a discrete heap does
+# not, and must add its row (and a copy path) before the channel is armed
+# on it.
+_BACKEND_MEMORY_IS_HOST_READABLE = {"cuda": False, "hip": False, "metal": True}
+# Whether the backend's kernels can read and write a float64 (or complex128) element. Metal
+# has no double: its lowering NARROWS f64 to float in silence (`triton/metal_backend.py`,
+# `TRITON_METAL_FP64_UNAVAILABLE`), so a kernel over a float64 buffer reads eight-byte
+# elements as four-byte ones. Measured 2026-09-28: `from_numpy(float64).to(bf16)` on the
+# M4 Pro gave 1 139 of 143 360 bits right and 3 255 non-finite values (the Sana 4K sincos
+# positional embedding, every off-trace size). A census says "not this time"; the door in
+# `NBXTensor.to` says "never": a cast from or to such a dtype is refused BY NAME there.
+#
+# The answer is the CALLER's to give (`set_backend_has_fp64`), not a table here: it is a fact
+# about the hardware the caller declares once (NeuroBrix: the vendor profile's
+# `precision.kernels_carry_fp64.triton`, bound by `kernels.wrappers.set_hardware_profile`).
+# Unset, a question that needs it is refused — a float64 element is never assumed readable.
+_BACKEND_HAS_FP64 = None
+
+
+def set_backend_has_fp64(value: bool) -> None:
+    """Declare whether this process's backend kernels compute float64 / complex128 elements."""
+    global _BACKEND_HAS_FP64
+    if not isinstance(value, bool):
+        raise TypeError(f"set_backend_has_fp64 takes a bool, got {value!r}")
+    _BACKEND_HAS_FP64 = value
+
+
+def backend_has_fp64() -> bool:
+    """Whether the backend's kernels handle float64 elements, as declared by
+    `set_backend_has_fp64`; refused while undeclared."""
+    if _BACKEND_HAS_FP64 is None:
+        raise RuntimeError(
+            f"ZERO FALLBACK: whether the '{_detect_gpu_backend()}' backend's kernels compute "
+            f"float64 was never declared (`set_backend_has_fp64`); it is the hardware's fact, "
+            f"never assumed")
+    return _BACKEND_HAS_FP64
+
+
+# The smallest `tl.dot` tile dimension a backend's attention lowering handles
+# CORRECTLY. On cuda/hip the floor is the TensorCore minimum, 16, and a decode
+# step at seqlen_q=1 uses it. Metal's generic attention lowering silently
+# mis-computes below 32 -- rows past the first become garbage, for any
+# head_dim -- and refuses rather than emit it; its tiled template does take a
+# smaller tile, but only for a kernel its detector resolves completely at
+# head_dim 64, which is not every kernel.
+#
+# Sixteen wastes half a Q tile at seqlen_q=1. A refusal wastes the model.
+#
+# This is a capability, not a vendor test — adding a backend is adding a row.
+_BACKEND_FA_MIN_TILE = {"cuda": 16, "hip": 16, "metal": 32}
+
+
+def fa_min_tile() -> int:
+    """The smallest attention tile dimension this backend computes correctly."""
+    return _backend_capability(
+        _BACKEND_FA_MIN_TILE, "_BACKEND_FA_MIN_TILE",
+        "the smallest attention tile dimension it computes correctly")
+
+
+# The largest 2-D reduction tile (product of block dims) a backend's lowering
+# stages correctly. The generic Metal lowering stages one element per thread,
+# so a tile above the 1024-thread threadgroup has lanes with nothing to hold
+# their part -- it refuses rather than reduce part of the tile. cuda/hip lower
+# a 2-D reduce differently and take the tile the reduction kernels were tuned
+# for (BLOCK_M*BLOCK_N = 8192); their entry is that tuned size so min() is the
+# identity and nothing moves there.
+#
+# A capability, not a vendor test -- adding a backend is adding a row.
+_BACKEND_REDUCE_TILE_MAX = {"cuda": 1 << 20, "hip": 1 << 20, "metal": 1024}
+
+
+def reduce_tile_max() -> int:
+    """The largest 2-D reduction tile this backend stages correctly."""
+    return _backend_capability(
+        _BACKEND_REDUCE_TILE_MAX, "_BACKEND_REDUCE_TILE_MAX",
+        "the largest 2-D reduction tile it stages correctly")
+
+
+# Whether a backend's lowering stages a 2-D reduce ONE ELEMENT PER THREAD along the reduced extent: then that extent of
+# a tile cannot exceed the threads of the program that reduces it (its warps x the backend's threads per warp). Metal,
+# measured 2026-09-07: the GEMV's 8 x 256 at 4 warps and the mv's 64 x 256 at 4 warps refused, naming the numbers
+# (tests/unit/config/test_apple_profiles_agree_with_the_device.py held those tiles in the profile until the certifier
+# chose them; the rule is the kernels' prune now, `ops/_configs.prune_gemv_vec` / `prune_addmv`). cuda/hip reduce many
+# elements per thread in registers.
+_BACKEND_REDUCE_PER_THREAD = {"cuda": False, "hip": False, "metal": True}
+_BACKEND_THREADS_PER_WARP = {"cuda": 32, "hip": 64, "metal": 32}
+
+
+def reduced_extent_max(num_warps: int) -> Optional[int]:
+    """The largest reduced extent a program of `num_warps` stages on this backend, or None when its lowering bounds
+    none (it reduces many elements per thread)."""
+    if not _backend_capability(_BACKEND_REDUCE_PER_THREAD, "_BACKEND_REDUCE_PER_THREAD",
+                               "whether it stages a 2-D reduce one element per thread"):
+        return None
+    return int(num_warps) * int(_backend_capability(_BACKEND_THREADS_PER_WARP, "_BACKEND_THREADS_PER_WARP",
+                                                    "its threads per warp"))
+
+
+def _backend_capability(table, name: str, what: str) -> bool:
+    """One row of one capability table, or a refusal naming both."""
+    backend = _detect_gpu_backend()
+    value = table.get(backend)
+    if value is None:
+        raise RuntimeError(
+            f"ZERO FALLBACK: backend {backend!r} does not say {what} "
+            f"({name}, rows: {sorted(table)}). Adding a backend is adding a "
+            f"row, not guessing.")
+    return value
+
+
+#: What the ENGINE declared about a backend, above the tables: a capability that is a
+#: property of the launcher it selected, not of the silicon, is the engine's to state.
+#: nbx_tensor is a library with a boundary (R33, the ratchet cell
+#: test_the_boundary_does_not_widen) and asks the engine nothing; the engine tells it,
+#: through `declare_backend_capability`, before a kernel is launched.
+_DECLARED_CAPABILITIES: Dict[str, Dict[str, bool]] = {}
+
+
+def declare_backend_capability(backend: str, **capabilities: bool) -> None:
+    """The engine states a capability of the launcher it selected for `backend`
+    (`loads_pointers_from_memory=True` for Metal's triton_ext, proven through its pinned
+    scope). Read by the capability questions below, above the static tables."""
+    for name, value in capabilities.items():
+        if not isinstance(value, bool):
+            raise TypeError(f"a backend capability is a bool, not {value!r} ({backend}.{name})")
+    _DECLARED_CAPABILITIES.setdefault(backend, {}).update(capabilities)
+
+
+def backend_loads_pointers_from_memory() -> bool:
+    """True where a kernel may dereference an address it LOADED from a tensor.
+
+    On Metal the answer is a property of the LAUNCHER, not the silicon: a
+    loaded address reads correctly exactly when the driver keeps the captured
+    address alive across launches, which `triton_ext` does through
+    `pinned_addresses` (proven against an fp64 oracle,
+    test_the_moe_table_reads_through_a_pinned_scope, 2026-09-20; the archived
+    fork had no such scope and the same load returned zeros with nothing
+    raised — the measured defect this gate refuses). So the metal row is a
+    SELECTION read, not a constant — and the selection is the engine's, so the
+    engine DECLARES it here on every Metal run's entry
+    (`triton/metal_backend.ensure_triton_metal_or_raise`); undeclared, the table's
+    False stands until a launcher proves its own lifetime contract. Until
+    2026-09-26 this function imported the engine's metal_backend to ask, which
+    widened the library's boundary (the ratchet cell went red on main).
+    """
+    backend = _detect_gpu_backend()
+    declared = _DECLARED_CAPABILITIES.get(backend, {}).get("loads_pointers_from_memory")
+    if declared is not None:
+        return declared
+    return _backend_capability(
+        _BACKEND_LOADS_POINTERS_FROM_MEMORY, "_BACKEND_LOADS_POINTERS_FROM_MEMORY",
+        "whether a kernel can read through a pointer loaded from memory")
+
+
+def backend_traps_on_device_assert() -> bool:
+    """True where `tl.device_assert` actually stops the kernel."""
+    return _backend_capability(
+        _BACKEND_TRAPS_ON_DEVICE_ASSERT, "_BACKEND_TRAPS_ON_DEVICE_ASSERT",
+        "whether it honours a device-side assert")
+
+
+# ============================================================================
+# DEVICE-SIDE FAULT CHANNEL
+# ============================================================================
+#
+# The portable half of `tl.device_assert`, for backends that do not honour
+# it. A kernel that detects a broken contract stores its fault code into a
+# one-word status buffer; the code is a `tl.constexpr`, so on a backend that
+# DOES trap the wrapper passes 0 and not one instruction is emitted (the
+# CUDA path is unchanged down to the generated PTX bar one unused kernel
+# parameter).
+#
+# Why a device-side word rather than checking the indices on the host:
+# measured 2026-09-10 on this machine, a host readback of the index tensor
+# costs +0.24 ms (1 id) to +0.29 ms (512 ids) per call against an embedding
+# launch of 0.017–0.020 ms — 13x to 17x the op it guards, and flat in the
+# number of indices because the cost is the `flush()` a D2H copy performs,
+# not the data. That is the same trap the D2D measurement of 2026-09-07
+# found (1,086 host-ordered copies in an 8-token decode: 0.007 s -> 4.08 s).
+# The status word costs one conditional store on the failing path and a
+# 4-byte read at a sync that was already happening.
+#
+# It is READ where the host observes device results — after `sync_device()`
+# and after a copy to the host — which is the sticky-error contract
+# `sync_device` already documents: the fault is at or before that point.
+_FAULT_MESSAGES: list = []
+_FAULT_BUFFERS: dict = {}
+_FAULT_LOCK = threading.Lock()
+
+
+def register_device_fault(message: str) -> int:
+    """Reserve a fault code for `message`. Called at import by the kernel
+    that raises it, so codes are stable within a process and never zero
+    (zero is 'clean', and it is what a disarmed kernel is compiled with)."""
+    with _FAULT_LOCK:
+        if message not in _FAULT_MESSAGES:
+            _FAULT_MESSAGES.append(message)
+        return _FAULT_MESSAGES.index(message) + 1
+
+
+def device_fault_code(message: str, *, armed: bool = None) -> int:
+    """The code a kernel should be compiled with: its own where the backend
+    needs the channel, 0 where the backend traps by itself."""
+    if armed is None:
+        armed = not backend_traps_on_device_assert()
+    return register_device_fault(message) if armed else 0
+
+
+@functools.lru_cache(maxsize=None)
+def device_fault_code_cached(message: str) -> int:
+    """`device_fault_code` memoised per message — it runs at every launch of
+    an armed kernel, and the answer cannot change within a process."""
+    return device_fault_code(message)
+
+
+def fault_channel(message: str, spare: 'NBXTensor') -> tuple:
+    """`(pointer_argument, FAULT_CODE)` for a kernel that carries the channel.
+
+    Where the backend HONOURS `tl.device_assert`, the code is 0 and the
+    generated kernel contains no fault store at all — proven on the emitted
+    code, not assumed: with FAULT_CODE=0 the body carries neither the store nor
+    the reduction that feeds it. The pointer is then a bound-but-unread
+    argument, so `spare` — a tensor the call already owns — is handed over and
+    NOTHING IS ALLOCATED.
+
+    That matters because the fault buffer is never freed by contract (a frozen
+    replay plan records its raw pointer), so allocating it on a backend that
+    can never write to it is a permanent allocation for a dead path. Reported
+    from the other machine 2026-09-11, whose CUDA proof also says the guard
+    itself holds: three kernels refuse an out-of-range index by name, six
+    outputs identical, +0.13% wall.
+
+    `spare` is never dereferenced through this argument on that path; passing
+    the output tensor is therefore safe and costs nothing.
+    """
+    code = device_fault_code_cached(message)
+    if code == 0:
+        return spare, 0
+    return device_fault_buffer(spare._device_idx), code
+
+
+def device_fault_buffer(device_idx: int) -> 'NBXTensor':
+    """This device's zeroed one-word status buffer.
+
+    Handed to the kernel as a TENSOR, not as a raw address: the launcher
+    binds a tensor as a pointer argument, and a bare int arrives as an
+    int64 scalar that `tl.store` refuses.
+
+    Never freed: a kernel launch records this raw pointer, and a frozen
+    replay plan may hold it long after the call that produced it — the same
+    reason `_INT64_ARRAY_CACHE` is never evicted.
+    """
+    buf = _FAULT_BUFFERS.get(device_idx)          # hot path: no lock
+    if buf is None:
+        with _FAULT_LOCK:
+            buf = _FAULT_BUFFERS.get(device_idx)
+            if buf is None:
+                buf = NBXTensor.zeros((1,), NBXDtype.int32, f"cuda:{device_idx}")
+                _FAULT_BUFFERS[device_idx] = buf
+    return buf
+
+
+def check_device_faults() -> None:
+    """Raise if any kernel reported a broken contract since the last check.
+
+    Reads the status word straight at its own address: this runs only after
+    a flush (a completed sync, or a copy that flushed), and only on a
+    backend whose device memory the host can read directly. The word is
+    cleared as it is read, so one violation raises once.
+    """
+    if not _FAULT_BUFFERS:
+        return
+    if not _backend_capability(
+            _BACKEND_MEMORY_IS_HOST_READABLE, "_BACKEND_MEMORY_IS_HOST_READABLE",
+            "whether the host can read its device memory directly"):
+        return
+    for device_idx, buf in list(_FAULT_BUFFERS.items()):
+        word = ctypes.c_int32.from_address(buf.data_ptr())
+        code = word.value
+        if code:
+            word.value = 0
+            message = (_FAULT_MESSAGES[code - 1]
+                       if 1 <= code <= len(_FAULT_MESSAGES)
+                       else f"unregistered fault code {code}")
+            raise RuntimeError(
+                f"device-side contract violated on device {device_idx}: "
+                f"{message}. The kernel reported it through the fault "
+                f"channel because this backend does not honour "
+                f"`tl.device_assert`; the fault is at or before this point.")
+# ============================================================================
+# TRITON DTYPE MAPPING (lazy import)
+# ============================================================================
+
+_TL_DTYPE_MAP = None
+
+
+def _get_tl_dtype(nbx_dtype: NBXDtype):
+    """Map NBXDtype → triton.language dtype. Lazy import of triton."""
+    global _TL_DTYPE_MAP
+    if _TL_DTYPE_MAP is None:
+        import triton.language as tl
+        _TL_DTYPE_MAP = {
+            NBXDtype.float16: tl.float16,
+            NBXDtype.bfloat16: tl.bfloat16,
+            NBXDtype.float32: tl.float32,
+            NBXDtype.float64: tl.float64,
+            NBXDtype.int8: tl.int8,
+            NBXDtype.int16: tl.int16,
+            NBXDtype.int32: tl.int32,
+            NBXDtype.int64: tl.int64,
+            NBXDtype.uint8: tl.uint8,
+            NBXDtype.bool_: tl.uint8,  # bool stored as uint8 (same as PyTorch)
+        }
+    result = _TL_DTYPE_MAP.get(nbx_dtype)
+    if result is None:
+        import triton.language as tl
+        return tl.float32
+    return result
+
+
+# ============================================================================
+# GPU RUNTIME — hardware-agnostic via ctypes (CUDA/ROCm)
+# ============================================================================
+
+def _environment_runtime_libs(package: str, names) -> list:
+    """The runtime libraries the ENVIRONMENT ships, ahead of the system's.
+    torch's CUDA wheels carry their own `nvidia/cuda_runtime/lib/libcudart.so.12`
+    and bind against it; a `libcudart.so.12` resolved by ldconfig is the
+    machine's toolkit (12.2 on this rack), and when the engine's ctypes loader
+    opened THAT one first, torch 2.14's `libc10_cuda.so` found an older runtime
+    than it was built on — `undefined symbol: cudaGetDriverEntryPointByVersion`
+    (2026-09-16, the stack alignment). One process, one runtime: the wheel's
+    own when it exists, the system's otherwise. Read from the package's
+    location, never a typed path."""
+    try:
+        import importlib.util
+        spec = importlib.util.find_spec(package)
+    except (ImportError, ValueError):
+        spec = None
+    if spec is None or not spec.submodule_search_locations:
+        return []
+    import os
+    root = list(spec.submodule_search_locations)[0]
+    out = []
+    for n in names:
+        cand = os.path.join(root, "lib", n)
+        if os.path.exists(cand):
+            out.append(cand)
+    return out
+
+
+# Runtime API mapping per backend
+_GPU_BACKENDS = {
+    "cuda": {
+        "rt_libs": _environment_runtime_libs("nvidia.cuda_runtime", ["libcudart.so.12"])
+                   + ["libcudart.so", "libcudart.so.12", "libcudart.so.11.0"],
+        "malloc": "cudaMalloc", "free": "cudaFree",
+        "memcpy": "cudaMemcpy", "memset": "cudaMemset",
+        "set_device": "cudaSetDevice",
+        "get_last_error": "cudaGetLastError", "get_device": "cudaGetDevice",
+        "device_count": "cudaGetDeviceCount",
+        "mem_get_info": "cudaMemGetInfo",
+        "sync": "cudaDeviceSynchronize",
+        "malloc_host": "cudaMallocHost", "free_host": "cudaFreeHost",
+        # Stream-ordered memory allocator (CUDA 11.2+). The driver
+        # handles kernel-lifetime correctness per-stream, so freeing a
+        # tensor while an async kernel is still reading from it is
+        # safe — the free is ordered against the stream's pending work.
+        # Using stream=0 (default stream) keeps us aligned with the
+        # rest of NeuroBrix's single-default-stream execution model;
+        # when pipelining introduces a transfer stream in a future
+        # session we'll route those allocs to it.
+        "malloc_async": "cudaMallocAsync", "free_async": "cudaFreeAsync",
+        # Stream + event API — used by zero3 pipelining for async H2D
+        # overlap of block N+1 with compute on block N.
+        "stream_create": "cudaStreamCreate",
+        "stream_destroy": "cudaStreamDestroy",
+        "stream_sync": "cudaStreamSynchronize",
+        "event_create": "cudaEventCreate",
+        "event_create_flags": "cudaEventCreateWithFlags",
+        "event_destroy": "cudaEventDestroy",
+        "event_record": "cudaEventRecord",
+        "stream_wait_event": "cudaStreamWaitEvent",
+        "memcpy_async": "cudaMemcpyAsync",
+        # Event timing — the ONLY way to measure a device-side interval
+        # without a host round-trip. `event_elapsed` is undefined across
+        # devices, so both events of a pair must be recorded on streams of
+        # the SAME device (see DeviceAllocator.event_elapsed_ms).
+        "event_sync": "cudaEventSynchronize",
+        "event_elapsed": "cudaEventElapsedTime",
+        # Peer access. Without it a cross-device D2D copy is STAGED THROUGH
+        # HOST MEMORY by the driver — it never touches NVLink. Enabling it
+        # is per ORDERED pair and per process.
+        "device_can_access_peer": "cudaDeviceCanAccessPeer",
+        "device_enable_peer_access": "cudaDeviceEnablePeerAccess",
+    },
+    "hip": {
+        "rt_libs": ["libamdhip64.so", "libamdhip64.so.5"],
+        "malloc": "hipMalloc", "free": "hipFree",
+        "memcpy": "hipMemcpy", "memset": "hipMemset",
+        "set_device": "hipSetDevice",
+        "get_last_error": "hipGetLastError", "get_device": "hipGetDevice",
+        "device_count": "hipGetDeviceCount",
+        "mem_get_info": "hipMemGetInfo",
+        "sync": "hipDeviceSynchronize",
+        "malloc_host": "hipHostMalloc", "free_host": "hipHostFree",
+        # ROCm 4.3+ exposes the same stream-ordered API under hip*
+        # names. Not tested in this pass (investigation was V100-only),
+        # but the symbol mapping is kept for symmetry.
+        "malloc_async": "hipMallocAsync", "free_async": "hipFreeAsync",
+        "stream_create": "hipStreamCreate",
+        "stream_destroy": "hipStreamDestroy",
+        "stream_sync": "hipStreamSynchronize",
+        "event_create": "hipEventCreate",
+        "event_create_flags": "hipEventCreateWithFlags",
+        "event_destroy": "hipEventDestroy",
+        "event_record": "hipEventRecord",
+        "stream_wait_event": "hipStreamWaitEvent",
+        "memcpy_async": "hipMemcpyAsync",
+        "event_sync": "hipEventSynchronize",
+        "event_elapsed": "hipEventElapsedTime",
+        # ROCm exposes peer access under the same semantics; xGMI plays the
+        # role NVLink plays here.
+        "device_can_access_peer": "hipDeviceCanAccessPeer",
+        "device_enable_peer_access": "hipDeviceEnablePeerAccess",
+    },
+}
+
+
+# ============================================================================
+# CURRENT-DEVICE CACHE (P-KERNEL-LAUNCH-HYGIENE C2)
+# ============================================================================
+#
+# `ensure_triton_device` is called before every Triton kernel launch
+# (via `_set_device`). The cudaSetDevice + triton set_current_device
+# pair is pure overhead when the device is already current, so we cache
+# the last device index that was fully synchronised (runtime device AND
+# Triton driver device both pointing at it) and skip the pair on a hit.
+#
+# Cache invariant: `_cached_device_idx() == idx` (per-thread) implies the CUDA/HIP
+# runtime current device is `idx` AND Triton's active driver device is
+# `idx`. Every NeuroBrix-side device change maintains the invariant:
+#   - `ensure_triton_device` refreshes the cache after a full sync;
+#   - `DeviceAllocator.set_device` (the single choke point for runtime-
+#     only switches) invalidates the cache when it switches to a device
+#     that differs from the cached one (it does not touch Triton's
+#     driver device, so the pair is no longer known-coherent);
+#   - `most_free_device` (raw per-device probe loop) invalidates
+#     unconditionally before returning.
+# Device changes that bypass NBX entirely (torch.cuda.set_device on the
+# compiled-mode path) cannot interleave with a warm cache inside a
+# triton run (R33: no torch in triton paths); triton run entry points
+# invalidate the cache defensively (see triton/sequence.py run()).
+#
+# THREAD-LOCAL, not process-global (D9 root cause, 2026-07-27): the
+# cudaSetDevice/hipSetDevice state the invariant mirrors IS per-thread.
+# A process-global cache warmed by one thread makes every OTHER thread
+# skip the sync while its own runtime device is still the default —
+# the serving daemon's worker thread then launches kernels holding
+# cuda:N pointers from a device-0 context ("CUDA: out of memory" at
+# launch with gigabytes free on every device; cmd_run, single-threaded,
+# can never reproduce it).
+_DEVICE_CACHE = threading.local()
+
+
+def _cached_device_idx() -> Optional[int]:
+    return getattr(_DEVICE_CACHE, "idx", None)
+
+
+def invalidate_current_device_cache() -> None:
+    """Drop the ensure_triton_device fast-path cache (this thread).
+
+    Call after any device switch that does not go through
+    `DeviceAllocator.set_device` / `ensure_triton_device`, so the next
+    `ensure_triton_device` performs the full runtime + Triton sync.
+    """
+    _DEVICE_CACHE.idx = None
+
+
+
+class ImpossibleExtentError(RuntimeError):
+    """An op would produce a tensor with an extent that cannot exist (<= 0 where the op defines
+    a length, or a rank the op does not produce). Raised at the op, with its input shapes and its
+    arithmetic, instead of letting an impossible tensor travel on and fail far away. The graph
+    executors add the op uid and the bound symbol values."""
+
+
+class DeviceOOMError(RuntimeError):
+    """The device allocator could not honor a request: the driver refused
+    the allocation after the deferred-free drain and the single retry.
+    Typed so a caller that names its own key in the refusal (the chunked
+    SDPA prefill re-raises it with op, shape, rows and bytes asked) catches
+    exactly this and nothing else — every other RuntimeError keeps propagating.
+
+    It also CARRIES the figures it prints, as attributes. The refusal already
+    computes requested / live / pool-cached / driver-free in order to write the
+    message; a caller that wants to reshape the work rather than give up then had
+    to parse them back out of English. They are the input a controller needs to
+    re-enter the placement cascade at the op-level tiling rung with the real free
+    figure at the moment of failure instead of the estimate made before the run
+    (`docs/reference/adaptive-memory-a-runtime-controller.md`, addition 3).
+
+    Every field is bytes, and `None` where the runtime could not answer — never 0,
+    which is a legitimate reading and would be acted on as one.
+    """
+
+    def __init__(self, message: str, *, requested: Optional[int] = None,
+                 device_idx: Optional[int] = None, live: Optional[int] = None,
+                 pool_cached: Optional[int] = None, pool_blocks: Optional[int] = None,
+                 driver_free: Optional[int] = None, driver_total: Optional[int] = None):
+        super().__init__(message)
+        self.requested = requested
+        self.device_idx = device_idx
+        self.live = live
+        self.pool_cached = pool_cached
+        self.pool_blocks = pool_blocks
+        self.driver_free = driver_free
+        self.driver_total = driver_total
+
+    @property
+    def shortfall(self) -> Optional[int]:
+        """How many bytes the request was short by, or None if the driver did
+        not report its free figure. This is the number a reshape has to close."""
+        if self.requested is None or self.driver_free is None:
+            return None
+        return max(0, self.requested - self.driver_free)
+
+class DeviceAllocator:
+    """GPU + pinned-host memory allocator via raw runtime API.
+
+    Tracks running byte counters per device and for pinned host memory
+    so diagnostics (especially for zero3 CPU offload) don't need to
+    round-trip through cudaMemGetInfo or torch.cuda.memory_allocated —
+    both of which are unavailable or incorrect for NBXTensor.
+    """
+
+    # Running counters — populated by every malloc_cuda/free_cuda and
+    # malloc_host_pinned/free_host_pinned. Class-level so the accounting
+    # is process-wide. Not thread-safe; NeuroBrix runtime is
+    # single-threaded per component by convention.
+    _cuda_live_bytes: Dict[int, int] = {}            # device_idx -> live
+    _cuda_peak_bytes: Dict[int, int] = {}            # device_idx -> peak
+    _cuda_ptr_size: Dict[int, int] = {}              # ptr -> nbytes (for free accounting)
+    _range_bases: list = []                          # live allocation bases, sorted (holds())
+    _range_size: dict = {}                           # base -> bytes, mirrors the two size tables
+    _cuda_ptr_device: Dict[int, int] = {}            # ptr -> device_idx (REQUIRED for cudaFreeAsync correctness)
+
+    # Which generation of the device runtime issued a pointer.
+    #
+    # A pointer is only meaningful to the runtime that issued it. Normally
+    # there is exactly one for the life of the process and this is a constant
+    # 0 that never costs a thought. When a runtime IS replaced, every address
+    # it issued dies with it — and the free-list must not outlive it, or a
+    # later allocation is served an address the current runtime never issued
+    # and the first launch that touches it refuses a perfectly good tensor.
+    #
+    # Flushing the pool at the swap is not enough: a tensor still ALIVE at
+    # that moment is freed afterwards, and that free parks its dead address
+    # for reuse. The epoch is what the flush cannot see.
+    _alloc_epoch: int = 0
+    _cuda_ptr_epoch: Dict[int, int] = {}             # ptr -> the epoch that issued it
+    _host_pinned_live_bytes: int = 0
+    _host_pinned_peak_bytes: int = 0
+    _host_pinned_ptr_size: Dict[int, int] = {}       # ptr -> nbytes
+
+    # Phase 2 — caching free-list pool. Per-device map of nbytes → list of
+    # cached free pointers. On free, the pointer is returned to the pool
+    # instead of cudaFree (which would re-fragment the driver heap). On
+    # malloc, the pool is checked first (exact size match, then smallest-
+    # fit ≥ requested). On cudaMalloc OOM, the entire pool is flushed back
+    # to the driver via cudaFree and the malloc is retried — this gives
+    # the driver a chance to coalesce its internal heap before declaring
+    # failure (analog to torch CachingAllocator's release-cached-blocks
+    # path on OOM). Default ON since 2026-09-02 (P-PREFILL-TRITON lever 1:
+    # the xlong triton prefill paid one cudaMalloc + one cudaFree per op
+    # output, 82 s of host API time on a 172 s run; the pool cut the cold
+    # run by 41 % with byte-identical output, gated by the full-zoo
+    # battery + the warm-serve sweep). `NBX_ALLOC_POOL=0` disables it
+    # (the differential for any allocator-suspected divergence).
+    # P-SANA-4KPX-RUNTIME Phase 2 origin.
+    _pool_free: Dict[int, Dict[int, list]] = {}      # device_idx -> {nbytes: [ptr, ...]}  (the FREE blocks, by size)
+    # The pool SPLITS and COALESCES (S4a, 2026-10-27; the method of torch's caching allocator): every driver allocation
+    # is a SEGMENT made of BLOCKS chained in address order; a request takes the smallest free block that holds it and
+    # splits off the rest when it is at least `_POOL_SPLIT_MIN`; a freed block merges with its free neighbours; only a
+    # segment wholly free returns to the driver (over the parked cap, on a refused malloc, on a flush). Exact-size
+    # parking kept a freed 3 GB block from ever serving a 2 GB request: 2.6-3.7 GB parked beside 6-7 GB live on
+    # mochi-1-preview triton at the 8 GB rung.
+    _blocks: Dict[int, list] = {}                    # ptr -> [size, prev ptr, next ptr, free, device]
+    _pool_sizes: Dict[int, list] = {}                # device_idx -> sorted sizes present in _pool_free[dev]
+    _POOL_ALIGN = 512
+    _POOL_SPLIT_MIN = 1 << 20
+    _pool_alloc_size: Dict[int, int] = {}            # ptr -> ALLOCATED nbytes (may exceed requested when smallest-fit is bigger)
+    _pool_enabled: bool = False                      # set by _maybe_init_pool() from env
+    #: Callables `(dev) -> bytes released` the engine registers for memory it caches outside the pool (a recorded
+    #: replay plan's slab, `triton/replay.release_idle_slabs`), called on a malloc refused after the pool's flush.
+    _idle_reclaimers: list = []
+    # Pool observability (NBX_ALLOC_STATS=1 prints it at exit): bytes
+    # parked in the free-list per device (+ peak), hit/miss counters,
+    # and the smallest-fit SLACK (allocated − requested) — the pool's
+    # own contribution to the driver-level watermark.
+    _pool_cached_bytes: Dict[int, int] = {}          # device_idx -> bytes parked in the free-list
+    _pool_cached_peak: Dict[int, int] = {}           # device_idx -> peak of the above
+    _pool_stats: Dict[str, int] = {"exact": 0, "fit": 0, "miss": 0,
+                                   "slack_total": 0, "slack_max": 0,
+                                   "flushes": 0, "flushed_bytes": 0,
+                                   "evictions": 0, "evicted_bytes": 0}
+    # Parked-bytes cap per device (bytes; 0 = unbounded), resolved once per
+    # device from the arch yml `memory.alloc_pool_parked_cap_fraction` ×
+    # the device's total memory (ONE cudaMemGetInfo at the first free on
+    # that device, never in the hot path afterwards).
+    _pool_cap_bytes: Dict[int, int] = {}
+    # A rung imposed on the plan (`NBX_PRISM_BUDGET_MB`: the census, the rung proofs) is the card the plan was sized
+    # for, and the allocator holds to it as to a card of that size: a malloc that would carry the bytes it holds from
+    # the driver (live and pooled) past the rung less the runtime's own context is refused as such a card refuses it,
+    # and takes the same path (the pool flushed, the malloc retried, then a named OOM). device -> bytes, None: no rung.
+    # Measured 2026-10-28: mochi-1-preview triton at the 8 GB rung on a 32 GB card held 10.8 GB — 5.5-6.2 GB live and
+    # 3.0-3.7 GB of pooled free blocks no refused malloc ever asked back.
+    _rung_limit_bytes: Dict[int, Optional[int]] = {}
+    _pool_slack_frac: Dict[int, float] = {}
+
+    # Deferred-queue reclaimers (P-TRITON-LIVE-SET). The triton hot loops
+    # register their deferred dead-tensor queues here. Since 2026-10-11 the
+    # allocator's OWN malloc never calls them: Prism prices the queue
+    # (`PrismSolver._deferred_drain_mb`), so a refused malloc is raised, not
+    # rescued. The one reader left is `wrappers._autotune_headroom_guard`,
+    # for the single device allocation the engine does not make and the plan
+    # does not price — the Triton autotuner's benchmark buffer. A hook takes
+    # (device_idx, nbytes requested) and returns the bytes it freed.
+    _oom_reclaim_hooks: list = []
+
+    @classmethod
+    def register_oom_reclaim_hook(cls, fn) -> None:
+        if fn not in cls._oom_reclaim_hooks:
+            cls._oom_reclaim_hooks.append(fn)
+
+    @classmethod
+    def unregister_oom_reclaim_hook(cls, fn) -> None:
+        try:
+            cls._oom_reclaim_hooks.remove(fn)
+        except ValueError:
+            pass
+
+    @staticmethod
+    def set_device(device_id: int):
+        """Set current GPU device for allocations (runtime API only).
+
+        Uses only cudaSetDevice/hipSetDevice — does NOT touch the driver
+        context. The driver context is managed solely by ensure_triton_device
+        which is called just before Triton kernel launches.
+        """
+        rt = _gpu_runtime()
+        ret = getattr(rt, _active_backend()["set_device"])(ctypes.c_int(device_id))
+        if ret != 0:
+            # An invalid ordinal (a device the process cannot see) must be
+            # loud here, not reported by the next unrelated launch check in
+            # the process as its own (2026-09-05: torch's, in the compiled
+            # branch — "invalid device ordinal" on an fp16 op).
+            DeviceAllocator.clear_last_error()
+            raise RuntimeError(f"set_device({device_id}) refused by the runtime (error {ret}) — "
+                               f"the process sees {DeviceAllocator.device_count()} device(s)")
+        # C2 cache maintenance: a runtime-only switch to a device other
+        # than the cached one breaks the "runtime AND Triton both point
+        # at the cached idx" invariant — invalidate so the next
+        # ensure_triton_device performs the full sync. Switching to the
+        # cached device itself keeps the pair coherent (Triton's driver
+        # device is untouched here).
+        if device_id != _cached_device_idx():
+            _DEVICE_CACHE.idx = None
+
+    @staticmethod
+    def get_device() -> int:
+        """Get current GPU device."""
+        dev = ctypes.c_int()
+        rt = _gpu_runtime()
+        getattr(rt, _active_backend()["get_device"])(ctypes.byref(dev))
+        return dev.value
+
+    @staticmethod
+    def peak_device_bytes():
+        """The most one device held at once since the process started, as this allocator counted it from the driver
+        (live driver bytes, the pool's cache included); None where the backend keeps no such count."""
+        return max(DeviceAllocator._cuda_peak_bytes.values()) if DeviceAllocator._cuda_peak_bytes else None
+
+    @staticmethod
+    def device_count() -> int:
+        """How many GPUs this process can see. 0 if there is no runtime.
+
+        The backend table has declared `device_count` since the seam was
+        written, but nothing exposed it: `most_free_device` counted inline and
+        every other caller reached for torch. Callers that need to know
+        whether multi-GPU behaviour is even testable need it too.
+        """
+        try:
+            rt = _gpu_runtime()
+            count = ctypes.c_int(0)
+            getattr(rt, _active_backend()["device_count"])(ctypes.byref(count))
+            return max(0, count.value)
+        except Exception:
+            return 0
+
+    @staticmethod
+    def free_memory_mb(index: int) -> "Optional[float]":
+        """The driver's FREE memory on device `index`, in MB, or None when the
+        runtime cannot answer.
+
+        The planner's door to the machine as it IS. `DeviceState.free_mb` was
+        `capacity - used_mb` with `used_mb` the plan's own accounting — on a
+        discrete card nothing ever read what another process holds, so a plan
+        that fitted the card whole was accepted while a neighbour held 18 GB
+        of it, and died at its first allocation (five of five runs, V100-32GB,
+        2026-09-20). Same query as `most_free_device`, for ONE card, the
+        previously-current device restored: cudaMemGetInfo / hipMemGetInfo via
+        ctypes, no torch (R33).
+        """
+        try:
+            if int(index) < 0 or int(index) >= DeviceAllocator.device_count():
+                return None            # cudaSetDevice REPORTS a bad ordinal; it does not raise
+            rt = _gpu_runtime()
+            backend = _active_backend()
+            prev = DeviceAllocator.get_device()
+            set_fn = backend["set_device"]
+            mem_fn = backend.get("mem_get_info", "cudaMemGetInfo")
+            getattr(rt, set_fn)(ctypes.c_int(int(index)))
+            free_b = ctypes.c_size_t()
+            total_b = ctypes.c_size_t()
+            getattr(rt, mem_fn)(ctypes.byref(free_b), ctypes.byref(total_b))
+            try:
+                getattr(rt, set_fn)(ctypes.c_int(prev))
+            except Exception:
+                pass
+            return free_b.value / (1024 * 1024)
+        except Exception:
+            return None
+
+    @staticmethod
+    def most_free_device() -> int:
+        """Return the GPU index with the most driver-free VRAM.
+
+        Used by the triton weight loader to place a CPU-staged lazy
+        component on the emptiest card (the loop GPU may have just
+        unloaded). Pure runtime-API — cudaGetDeviceCount + cudaSetDevice +
+        cudaMemGetInfo via ctypes; no torch (R33). The previously-current
+        device is restored before returning. Falls back to device 0 on any
+        query failure or a single-GPU host.
+        """
+        rt = _gpu_runtime()
+        backend = _active_backend()
+        ndev = DeviceAllocator.device_count()
+        if ndev <= 1:
+            return 0
+        prev = DeviceAllocator.get_device()
+        mem_fn = backend.get("mem_get_info", "cudaMemGetInfo")
+        set_fn = backend["set_device"]
+        best_idx, best_free = 0, -1
+        for i in range(ndev):
+            try:
+                getattr(rt, set_fn)(ctypes.c_int(i))
+                free_b = ctypes.c_size_t()
+                total_b = ctypes.c_size_t()
+                getattr(rt, mem_fn)(ctypes.byref(free_b), ctypes.byref(total_b))
+                if free_b.value > best_free:
+                    best_free, best_idx = free_b.value, i
+            except Exception:
+                continue
+        try:
+            getattr(rt, set_fn)(ctypes.c_int(prev))
+        except Exception:
+            pass
+        # C2: the probe loop above issued raw cudaSetDevice calls (and
+        # the restore may have failed silently) — drop the fast-path
+        # cache so the next ensure_triton_device re-syncs fully.
+        invalidate_current_device_cache()
+        return best_idx
+
+    @staticmethod
+    def visible_device_memory() -> list[tuple[int, int]]:
+        """`[(ordinal, total_bytes)]` for every device THIS PROCESS can see.
+
+        The ordinals come back usable as-is in `cuda:<i>`, because the whole
+        walk goes through the GPU RUNTIME — so `CUDA_VISIBLE_DEVICES` applies
+        to it, exactly as it applies to every allocation made afterwards.
+
+        That is the entire point of the method. `nvidia-smi` answers the same
+        question from NVML, which sits OUTSIDE the mask and always reports the
+        whole board: a caller that picks an index from `nvidia-smi` and then
+        allocates on it is reading one namespace and writing another, and the
+        two agree only on an unpinned host. `tests/unit/kernels/
+        test_prefill_determinism.py` did exactly that and asked for `cuda:2`
+        under `CUDA_VISIBLE_DEVICES=0` (2026-09-17) — a red that had nothing
+        to do with its subject, on a card that was simply not there.
+
+        Pure runtime API through ctypes — cudaGetDeviceCount + cudaSetDevice +
+        cudaMemGetInfo, no torch (R33). The previously-current device is
+        restored and the fast-path cache invalidated, as in
+        `most_free_device`, whose inline copy of this loop this replaces.
+        Returns `[]` when there is no runtime or no device.
+        """
+        try:
+            rt = _gpu_runtime()
+            backend = _active_backend()
+        except Exception:
+            return []
+        ndev = DeviceAllocator.device_count()
+        if ndev <= 0:
+            return []
+        prev = DeviceAllocator.get_device()
+        mem_fn = backend.get("mem_get_info", "cudaMemGetInfo")
+        set_fn = backend["set_device"]
+        out: list[tuple[int, int]] = []
+        for i in range(ndev):
+            try:
+                getattr(rt, set_fn)(ctypes.c_int(i))
+                free_b = ctypes.c_size_t()
+                total_b = ctypes.c_size_t()
+                getattr(rt, mem_fn)(ctypes.byref(free_b), ctypes.byref(total_b))
+                out.append((i, total_b.value))
+            except Exception:
+                continue
+        try:
+            getattr(rt, set_fn)(ctypes.c_int(prev))
+        except Exception:
+            pass
+        invalidate_current_device_cache()
+        return out
+
+    @staticmethod
+    def _maybe_init_pool() -> None:
+        """One-shot read of the NBX_ALLOC_POOL env var (default on;
+        `0` disables the pool). Cached on the class."""
+        if not hasattr(DeviceAllocator, '_pool_enabled_init'):
+            DeviceAllocator._pool_enabled = os.environ.get("NBX_ALLOC_POOL", "1") != "0"
+            DeviceAllocator._pool_enabled_init = True
+            if os.environ.get("NBX_ALLOC_STATS", "0") == "1":
+                _atexit.register(DeviceAllocator.print_alloc_stats)
+
+    @staticmethod
+    def print_alloc_stats() -> None:
+        """Driver-level watermark per device + the pool's own numbers
+        (NBX_ALLOC_STATS=1, printed at exit). `peak_driver` is the peak of
+        bytes held from the driver (pool-parked blocks included);
+        `pool_peak` is the most the free-list ever parked; `slack` is the
+        smallest-fit over-allocation (allocated − requested) summed over
+        every fit hit, and its maximum for one hit."""
+        st = DeviceAllocator._pool_stats
+        devs = sorted(set(DeviceAllocator._cuda_peak_bytes) | set(DeviceAllocator._pool_cached_peak))
+        for d in devs:
+            print(f"[NBX_ALLOC_STATS] cuda:{d} peak_driver={DeviceAllocator._cuda_peak_bytes.get(d, 0) / 2**20:.0f}MB "
+                  f"pool_peak={DeviceAllocator._pool_cached_peak.get(d, 0) / 2**20:.0f}MB "
+                  f"pool_now={DeviceAllocator._pool_cached_bytes.get(d, 0) / 2**20:.0f}MB", flush=True)
+        print(f"[NBX_ALLOC_STATS] pool={'on' if DeviceAllocator._pool_enabled else 'off'} "
+              f"hits exact={st['exact']} fit={st['fit']} miss={st['miss']} "
+              f"slack_total={st['slack_total'] / 2**20:.0f}MB slack_max={st['slack_max'] / 2**20:.0f}MB "
+              f"flushes={st['flushes']} flushed={st['flushed_bytes'] / 2**20:.0f}MB "
+              f"evictions={st['evictions']} evicted={st['evicted_bytes'] / 2**20:.0f}MB "
+              f"cap={ {d: round(c / 2**20) for d, c in DeviceAllocator._pool_cap_bytes.items()} }MB", flush=True)
+
+    @staticmethod
+    def _pool_take(dev: int, nbytes: int) -> Optional[int]:
+        """The smallest free block on `dev` that holds `nbytes` (rounded up to `_POOL_ALIGN`), split when what is
+        left is at least `_POOL_SPLIT_MIN`; None on a miss. The block's size is left in `_pool_alloc_size[ptr]` for
+        the caller (it may exceed the request by less than the split threshold)."""
+        st = DeviceAllocator._pool_stats
+        sizes = DeviceAllocator._pool_sizes.get(dev)
+        if not sizes:
+            st["miss"] += 1
+            return None
+        want = -(-int(nbytes) // DeviceAllocator._POOL_ALIGN) * DeviceAllocator._POOL_ALIGN
+        k = bisect.bisect_left(sizes, want)
+        if k >= len(sizes):
+            st["miss"] += 1
+            return None
+        sz = sizes[k]
+        ptr = DeviceAllocator._pool_free[dev][sz][-1]
+        DeviceAllocator._free_index_remove(dev, ptr, sz)
+        blk = DeviceAllocator._blocks[ptr]
+        blk[3] = False
+        if sz - want >= DeviceAllocator._POOL_SPLIT_MIN:
+            rest = ptr + want
+            DeviceAllocator._blocks[rest] = [sz - want, ptr, blk[2], True, dev]
+            if blk[2] is not None:
+                DeviceAllocator._blocks[blk[2]][1] = rest
+            blk[0], blk[2] = want, rest
+            DeviceAllocator._cuda_ptr_size[rest] = sz - want
+            DeviceAllocator._cuda_ptr_device[rest] = dev
+            DeviceAllocator._free_index_add(dev, rest, sz - want)
+            st["fit"] += 1
+        else:
+            st["exact" if sz == int(nbytes) else "fit"] += 1
+            if sz > int(nbytes):
+                st["slack_total"] += sz - int(nbytes)
+                st["slack_max"] = max(st["slack_max"], sz - int(nbytes))
+        DeviceAllocator._pool_alloc_size[ptr] = blk[0]
+        DeviceAllocator._pool_cached_bytes[dev] = DeviceAllocator._pool_cached_bytes.get(dev, 0) - blk[0]
+        return ptr
+
+    @staticmethod
+    def _free_index_add(dev: int, ptr: int, size: int) -> None:
+        per = DeviceAllocator._pool_free.setdefault(dev, {})
+        lst = per.get(size)
+        if lst is None:
+            per[size] = [ptr]
+            bisect.insort(DeviceAllocator._pool_sizes.setdefault(dev, []), size)
+        else:
+            lst.append(ptr)
+
+    @staticmethod
+    def _free_index_remove(dev: int, ptr: int, size: int) -> None:
+        per = DeviceAllocator._pool_free.get(dev, {})
+        lst = per.get(size)
+        lst.remove(ptr)
+        if not lst:
+            del per[size]
+            sizes = DeviceAllocator._pool_sizes[dev]
+            sizes.pop(bisect.bisect_left(sizes, size))
+
+    @staticmethod
+    def _pool_segment_new(dev: int, ptr: int, nbytes: int) -> None:
+        """A driver allocation joins the pool as a one-block segment, in use."""
+        DeviceAllocator._blocks[ptr] = [int(nbytes), None, None, False, dev]
+
+    @staticmethod
+    def _pool_release_block(dev: int, ptr: int) -> int:
+        """`ptr`'s block is free: merged with its free neighbours and indexed; returns the bytes it adds to the
+        pool's parked total."""
+        blk = DeviceAllocator._blocks[ptr]
+        added = blk[0]
+        blk[3] = True
+        nxt = blk[2]
+        if nxt is not None and DeviceAllocator._blocks[nxt][3]:
+            nb = DeviceAllocator._blocks.pop(nxt)
+            DeviceAllocator._free_index_remove(dev, nxt, nb[0])
+            DeviceAllocator._cuda_ptr_size.pop(nxt, None)
+            DeviceAllocator._cuda_ptr_device.pop(nxt, None)
+            blk[0] += nb[0]
+            blk[2] = nb[2]
+            if nb[2] is not None:
+                DeviceAllocator._blocks[nb[2]][1] = ptr
+        prv = blk[1]
+        if prv is not None and DeviceAllocator._blocks[prv][3]:
+            pb = DeviceAllocator._blocks[prv]
+            DeviceAllocator._free_index_remove(dev, prv, pb[0])
+            pb[0] += blk[0]
+            pb[2] = blk[2]
+            if blk[2] is not None:
+                DeviceAllocator._blocks[blk[2]][1] = prv
+            DeviceAllocator._blocks.pop(ptr)
+            DeviceAllocator._cuda_ptr_size.pop(ptr, None)
+            DeviceAllocator._cuda_ptr_device.pop(ptr, None)
+            ptr, blk = prv, pb
+        DeviceAllocator._cuda_ptr_size[ptr] = blk[0]
+        DeviceAllocator._cuda_ptr_device[ptr] = dev
+        DeviceAllocator._free_index_add(dev, ptr, blk[0])
+        return added
+
+    @staticmethod
+    def _pool_segment_free(dev: int, ptr: int) -> int:
+        """Return a WHOLLY free segment (its one block, free, unchained) to the driver; its bytes."""
+        blk = DeviceAllocator._blocks.pop(ptr)
+        DeviceAllocator._free_index_remove(dev, ptr, blk[0])
+        getattr(_gpu_runtime(), _active_backend()["free"])(ctypes.c_void_p(ptr))
+        DeviceAllocator._pool_alloc_size.pop(ptr, None)
+        DeviceAllocator._cuda_ptr_size.pop(ptr, None)
+        DeviceAllocator._range_del(ptr)
+        DeviceAllocator._cuda_ptr_device.pop(ptr, None)
+        DeviceAllocator._cuda_ptr_epoch.pop(ptr, None)
+        DeviceAllocator._cuda_live_bytes[dev] = max(0, DeviceAllocator._cuda_live_bytes.get(dev, 0) - blk[0])
+        return blk[0]
+
+    @staticmethod
+    def _free_segments(dev: int):
+        """The wholly free segments on `dev`, largest first: (ptr, bytes)."""
+        out = []
+        for size, ptrs in DeviceAllocator._pool_free.get(dev, {}).items():
+            for p in ptrs:
+                b = DeviceAllocator._blocks.get(p)
+                if b is not None and b[1] is None and b[2] is None:
+                    out.append((p, size))
+        return sorted(out, key=lambda x: -x[1])
+
+    @staticmethod
+    def _pool_fit_slack(dev: int) -> float:
+        """The most a smallest-fit hit may hand out beyond its request, as a fraction of the request:
+        `memory.alloc_pool_fit_slack_fraction` (arch yml), resolved once per device. The surplus of a
+        larger block stays held while its tensor lives and no plan prices it: at 2x, HAT-S at 2048 px
+        on a 16 GB V100 gave its 2 304 MB conv output the freed 4 096 MB attention mask's block, and the
+        next 1 153 MB tile found no room the plan had left (2026-10-22). No profile yet, or no key:
+        exact-size hits only (0.0, not cached until the profile exists)."""
+        frac = DeviceAllocator._pool_slack_frac.get(dev)
+        if frac is not None:
+            return frac
+        try:
+            from nbxtensor.ops.wrappers import get_hardware_profile, _arch_memory_param
+            prof = get_hardware_profile()
+            if prof is None or not getattr(prof, "devices", None):
+                return 0.0
+            frac = max(0.0, float(_arch_memory_param("alloc_pool_fit_slack_fraction", 0.0)))
+        except Exception:
+            return 0.0
+        DeviceAllocator._pool_slack_frac[dev] = frac
+        return frac
+
+    @staticmethod
+    def _pool_parked_cap(dev: int) -> int:
+        """Bytes the free-list may keep parked on `dev` (0 = unbounded):
+        `memory.alloc_pool_parked_cap_fraction` (arch yml) × the device's
+        total memory, resolved once per device. No profile / no key = 0."""
+        cap = DeviceAllocator._pool_cap_bytes.get(dev)
+        if cap is not None:
+            return cap
+        # "No hardware profile yet" (Prism has not stashed it) is NOT
+        # "explicitly unbounded": return 0 for this call without caching, so
+        # the cap resolves once the profile exists. The readers live one
+        # layer up (kernels/wrappers.py); the import is function-scoped —
+        # no import cycle at load — and the profile global is Prism's.
+        try:
+            from nbxtensor.ops.wrappers import get_hardware_profile, _arch_memory_param
+            prof = get_hardware_profile()
+            if prof is None or not getattr(prof, "devices", None):
+                return 0
+            frac = float(_arch_memory_param("alloc_pool_parked_cap_fraction", 0.0))
+            cap = 0
+            if frac > 0:
+                total = DeviceAllocator.device_total_bytes(dev)
+                # A rung imposed on the plan (`NBX_PRISM_BUDGET_MB`, the census and the rung proofs) is the device the
+                # plan was sized for: the pool parks a fraction of IT, as it would on a card of that size — measured
+                # 2026-10-27, mochi-1-preview triton at the 8 GB rung on a 32 GB card parked its 9 GB text encoder
+                # arena (cap 16 GB) and peaked at 22.6 GB where a card of 8 GB would have freed it
+                from nbxtensor.host import need as _need
+                door = _need("imposed_rung_mb")()      # the application's imposed rung (nbxtensor.host)
+                if door is not None and total > 0:
+                    total = min(total, int(door) << 20)
+                if total > 0:
+                    cap = int(total * frac)
+        except Exception:
+            return 0
+        DeviceAllocator._pool_cap_bytes[dev] = cap
+        return cap
+
+    @staticmethod
+    def _pool_evict(dev: int, want: int) -> int:
+        """Return wholly free segments on `dev` to the driver, largest first, until at least `want` bytes are freed
+        or none is left. Returns the bytes freed."""
+        freed = 0
+        st = DeviceAllocator._pool_stats
+        for p, size in DeviceAllocator._free_segments(dev):
+            if freed >= want:
+                break
+            freed += DeviceAllocator._pool_segment_free(dev, p)
+            st["evictions"] += 1
+        DeviceAllocator._pool_cached_bytes[dev] = max(0, DeviceAllocator._pool_cached_bytes.get(dev, 0) - freed)
+        st["evicted_bytes"] += freed
+        return freed
+
+    @staticmethod
+    def _pool_flush(dev: Optional[int] = None) -> int:
+        """Return every wholly free segment to the driver (a segment still holding a live block stays). Returns the
+        bytes freed. Called on a refused malloc and from empty_cache_pool()."""
+        freed = 0
+        devs = [dev] if dev is not None else list(DeviceAllocator._pool_free.keys())
+        DeviceAllocator._pool_stats["flushes"] += 1
+        for d in devs:
+            got = 0
+            for p, _size in DeviceAllocator._free_segments(d):
+                got += DeviceAllocator._pool_segment_free(d, p)
+            DeviceAllocator._pool_cached_bytes[d] = max(0, DeviceAllocator._pool_cached_bytes.get(d, 0) - got)
+            freed += got
+        DeviceAllocator._pool_stats["flushed_bytes"] += freed
+        return freed
+
+    @staticmethod
+    def empty_cache_pool() -> int:
+        """Public API: release all pool-cached blocks back to the driver.
+        Returns total bytes freed. Safe to call when pool is disabled
+        (no-op). Useful between phases to defragment proactively."""
+        DeviceAllocator._maybe_init_pool()
+        if not DeviceAllocator._pool_enabled:
+            return 0
+        return DeviceAllocator._pool_flush()
+
+    @staticmethod
+    def new_allocation_epoch() -> int:
+        """Declare that every address issued so far belongs to a runtime that
+        is being replaced. Returns the new epoch.
+
+        Call it AFTER releasing what can still be released (the parked pool)
+        and BEFORE the new runtime exists. From here on, a free of an older
+        pointer is a no-op rather than a park or a driver call.
+
+        The engine proper never calls this: a process has one device runtime
+        for its whole life. It exists because test processes legitimately
+        replace one, and because the alternative — a free-list that outlives
+        the runtime it belongs to — surfaced as an order-dependent numeric
+        failure in an unrelated kernel, which is the worst way for it to be
+        found.
+        """
+        DeviceAllocator._alloc_epoch += 1
+        return DeviceAllocator._alloc_epoch
+
+    @staticmethod
+    def _rung_limit(dev: int) -> Optional[int]:
+        """The bytes this process may hold from the driver on `dev` under an imposed rung: the rung less what the
+        runtime holds outside the allocator's own blocks (its context), read once from the driver; None: no rung."""
+        if dev in DeviceAllocator._rung_limit_bytes:
+            return DeviceAllocator._rung_limit_bytes[dev]
+        door = os.environ.get("NBX_PRISM_BUDGET_MB")
+        limit = None
+        if door:
+            free_b, total_b = DeviceAllocator.mem_get_info(dev)
+            context = max(0, int(total_b) - int(free_b) - DeviceAllocator._cuda_live_bytes.get(dev, 0))
+            limit = max(0, (int(door) << 20) - context)
+        DeviceAllocator._rung_limit_bytes[dev] = limit
+        return limit
+
+    @staticmethod
+    def _driver_malloc(ptr_obj, nbytes: int, dev: int) -> int:
+        """The runtime's malloc, or the refusal a card of the imposed rung gives (cudaErrorMemoryAllocation, 2)."""
+        limit = DeviceAllocator._rung_limit(dev)
+        if limit is not None and DeviceAllocator._cuda_live_bytes.get(dev, 0) + int(nbytes) > limit:
+            return 2
+        return getattr(_gpu_runtime(), _active_backend()["malloc"])(ctypes.byref(ptr_obj), ctypes.c_size_t(nbytes))
+
+    @staticmethod
+    def malloc_cuda(nbytes: int, dev_idx: Optional[int] = None, pooled: bool = True) -> int:
+        """Allocate GPU memory.
+
+        Default path: synchronous cudaMalloc. The stream-ordered allocator
+        (cudaMallocAsync) was prototyped but disabled because its per-
+        device memory pools don't grant cross-device peer access by
+        default — freeing a cuda:N pointer from a Python-GC site while
+        cuda:M is current produced illegal memory accesses on the multi-
+        GPU pipeline_parallel path (Qwen3-30B --triton). The synchronous
+        path combined with TritonSequence's _deferred batch-release is
+        stable across single-GPU, zero3, and pipeline_parallel.
+
+        Phase 2 path (NBX_ALLOC_POOL=1): satisfies requests from a per-
+        device free-list pool first; on cudaMalloc OOM, flushes the pool
+        back to the driver and retries (analog to torch CachingAllocator
+        release_cached_blocks → retry). Mitigates fragmentation when
+        many small/medium allocs precede a large alloc, which was the
+        Sana 4Kpx VAE conv::62 8 GiB OOM pattern.
+
+        dev_idx (C3): the CURRENT device index, when the caller already
+        knows it — skips the cudaGetDevice round-trip used purely for
+        pool/accounting bookkeeping. The caller MUST guarantee the
+        runtime current device equals dev_idx (cudaMalloc allocates on
+        the current device). None (default) keeps the internal query.
+
+        pooled=False: a block that never enters the pool — taken from the driver (a refusal still flushes the pool and
+        retries) and handed straight back to it when freed. A component's weight arena (`ComponentArena`): large and
+        held for a whole component or segment; pooled, the small tensors that outlive it split it once freed and pin
+        it whole (mochi-1-preview triton at the 8 GB rung, 2026-10-28: 3 553 MB of freed blocks held by ~19 MB of
+        live tensors refused the transformer's 5.2 GB segment).
+        """
+        if nbytes == 0:
+            return 0
+        DeviceAllocator._maybe_init_pool()
+        dev = dev_idx if dev_idx is not None else DeviceAllocator.get_device()
+
+        # Pool fast path
+        if DeviceAllocator._pool_enabled and pooled:
+            ptr = DeviceAllocator._pool_take(dev, nbytes)
+            if ptr is not None:
+                # alloc size: exact-size hit reuses nbytes; smallest-fit
+                # populated _pool_alloc_size with the bigger size.
+                actual = DeviceAllocator._pool_alloc_size.pop(ptr, nbytes)
+                DeviceAllocator._cuda_ptr_size[ptr] = actual
+                DeviceAllocator._cuda_ptr_device[ptr] = dev      # its segment's range stays registered
+                DeviceAllocator._cuda_ptr_epoch[ptr] = DeviceAllocator._alloc_epoch
+                if _MALLOC_TRACE_FILE is not None:
+                    _record_malloc_site(ptr, actual, dev)
+                # No live-byte change: pool blocks stay counted as live
+                # for the lifetime of the segment (pool == still allocated
+                # from the driver's POV). Peak unchanged.
+                return ptr
+
+        # The device never GROWS while the pool parks freed blocks: they go back to the driver first, so the device
+        # holds what is alive, not what is alive plus what was once freed and split (the S4a pool cuts its segments
+        # for later small blocks, and a refused malloc's flush can then return none of them whole). Sana_1600M_4Kpx
+        # triton on a V100-16GB, lot 2026-10-28: 4.5 GB of parked blocks in 12 split segments beside 9.4 GB alive
+        # refused the VAE's 2.96 GB convolution; the Mac measured the same rule on HAT-L x4 (10 688 -> 8 913 MB, bit-
+        # equal, 77258825).
+        if DeviceAllocator._pool_enabled and pooled:
+            DeviceAllocator._pool_flush(dev)
+        ptr_obj = ctypes.c_void_p()
+        rt = _gpu_runtime()
+        backend = _active_backend()
+        ret = DeviceAllocator._driver_malloc(ptr_obj, nbytes, dev)
+
+        # No reclaim-and-retry of the hot loops' deferred dead-tensor queues here
+        # (ZERO FALLBACK, 2026-10-11). That rescue drained the queue on a refused
+        # malloc and retried — `[NBX_OOM_RECLAIM] freed ...` 1 279 times in one
+        # 16 GB Allegro run — so a plan that did not leave room for the queue ran
+        # anyway. Prism now PRICES the queue (`PrismSolver._deferred_drain_mb`, the
+        # vendor profile's `memory.deferred_drain_cliff_bytes`), and a malloc refused
+        # with the queue inside its price is a plan defect, raised below and named
+        # by the hot loop with the op, the queue it held and the price it had.
+
+        # Phase 2 OOM-retry: if cudaMalloc fails and the pool holds cached
+        # blocks, flush them back to the driver and retry. Defragments the
+        # driver's internal heap before declaring failure.
+        if ret != 0 and DeviceAllocator._pool_enabled:
+            DeviceAllocator.clear_last_error()   # a refused call must not poison the next one
+            freed = DeviceAllocator._pool_flush(dev)
+            if freed > 0:
+                ret = DeviceAllocator._driver_malloc(ptr_obj, nbytes, dev)
+
+        # The engine's other cached memory, released the same way: a recorded replay plan's slab between two runs of
+        # its sequence (`triton/replay.release_idle_slabs`), freed through the pool, flushed, retried once.
+        if ret != 0 and DeviceAllocator._idle_reclaimers:
+            DeviceAllocator.clear_last_error()   # a refused call must not poison the next one
+            got = sum(int(r(dev) or 0) for r in list(DeviceAllocator._idle_reclaimers))
+            if got > 0:
+                if DeviceAllocator._pool_enabled:
+                    DeviceAllocator._pool_flush(dev)
+                ret = getattr(rt, backend["malloc"])(
+                    ctypes.byref(ptr_obj), ctypes.c_size_t(nbytes))
+
+        # Pre-allocation OOM-recovery (independent of pool): trigger a
+        # cycle-collecting gc.collect() then retry. Sana 4Kpx triton
+        # showed ~25 GB of NBXTensor instances pinned alive at conv::62
+        # OOM by Python frame-args lists from recursive conv2d_wrapper
+        # band loops; gc.collect() picks them up if they form a cycle.
+        # Gated by NBX_GC_ON_OOM=1 (opt-in until validated cross-model).
+        if ret != 0 and os.environ.get("NBX_GC_ON_OOM", "0") == "1":
+            DeviceAllocator.clear_last_error()   # a refused call must not poison the next one
+            import gc as _gc_oom
+            _gc_oom.collect()
+            ret = DeviceAllocator._driver_malloc(ptr_obj, nbytes, dev)
+
+        if ret != 0:
+            DeviceAllocator.clear_last_error()   # a refused call must not poison the next one
+            # Diagnostic: how much live + how big the pool was at OOM time.
+            live_now = DeviceAllocator._cuda_live_bytes.get(dev, 0)
+            pool_total = 0
+            pool_count = 0
+            per_dev = DeviceAllocator._pool_free.get(dev, {})
+            for sz, ptrs in per_dev.items():
+                pool_total += sz * len(ptrs)
+                pool_count += len(ptrs)
+            try:
+                free_b = ctypes.c_size_t()
+                total_b = ctypes.c_size_t()
+                if hasattr(rt, backend.get("mem_get_info", "cudaMemGetInfo")):
+                    getattr(rt, backend.get("mem_get_info", "cudaMemGetInfo"))(
+                        ctypes.byref(free_b), ctypes.byref(total_b))
+                    driver_free = free_b.value
+                    driver_total = total_b.value
+                else:
+                    driver_free = driver_total = 0
+            except Exception:
+                driver_free = driver_total = 0
+            # The message is unchanged to the byte: the queue runner's error
+            # extractor and every log-reading tool key on this text.
+            raise DeviceOOMError(
+                f"GPU malloc failed (error {ret}) for {nbytes} bytes "
+                f"[device cuda:{dev} live_tracked={live_now/1024/1024:.0f}MB "
+                f"pool_cached={pool_total/1024/1024:.0f}MB ({pool_count} blocks) "
+                f"driver_free={driver_free/1024/1024:.0f}MB / "
+                f"driver_total={driver_total/1024/1024:.0f}MB]"
+                + (f" under the imposed rung: {DeviceAllocator._rung_limit_bytes[dev]/1024/1024:.0f}MB this process may "
+                   f"hold (NBX_PRISM_BUDGET_MB less the runtime's context)"
+                   if DeviceAllocator._rung_limit_bytes.get(dev) is not None else ""),
+                requested=nbytes, device_idx=dev, live=live_now,
+                pool_cached=pool_total, pool_blocks=pool_count,
+                driver_free=driver_free if driver_total else None,
+                driver_total=driver_total or None)
+        p = ptr_obj.value or 0
+        DeviceAllocator._cuda_ptr_size[p] = nbytes
+        DeviceAllocator._range_add(p, nbytes)
+        DeviceAllocator._cuda_ptr_device[p] = dev
+        if DeviceAllocator._pool_enabled and pooled:
+            DeviceAllocator._pool_segment_new(dev, p, nbytes)
+        DeviceAllocator._cuda_ptr_epoch[p] = DeviceAllocator._alloc_epoch
+        live = DeviceAllocator._cuda_live_bytes.get(dev, 0) + nbytes
+        DeviceAllocator._cuda_live_bytes[dev] = live
+        peak = DeviceAllocator._cuda_peak_bytes.get(dev, 0)
+        if live > peak:
+            DeviceAllocator._cuda_peak_bytes[dev] = live
+        if _MALLOC_TRACE_FILE is not None:
+            _record_malloc_site(p, nbytes, dev)
+        return p
+
+    @staticmethod
+    def free_cuda(ptr: int):
+        """Free GPU memory.
+
+        Default path: cudaFree. Blocks the calling thread until the
+        device is idle for the relevant stream, so TritonSequence
+        batches freeable tensors into _deferred and releases them
+        after a sync at the end of each forward pass.
+
+        Phase 2 path (NBX_ALLOC_POOL=1): the pointer is returned to the
+        per-device free-list pool instead of cudaFree, keeping the
+        driver's internal heap intact (avoids fragmenting it with the
+        churn of small/medium tensors typical of a diffusion forward
+        pass). Live byte counters stay unchanged because the block is
+        STILL allocated from the driver's POV — it just sits in the
+        pool waiting to satisfy the next compatible malloc. cudaFree
+        eventually fires from _pool_flush() on OOM-retry or from
+        empty_cache_pool().
+        """
+        if not ptr:
+            return
+        DeviceAllocator._maybe_init_pool()
+
+        # A pointer issued by a runtime that no longer exists.
+        #
+        # Its memory went when that runtime did, so there is nothing to give
+        # back — and both of the things this function otherwise does would be
+        # wrong: parking it hands a dead address to the next allocation, and
+        # freeing it asks the CURRENT runtime to release something it never
+        # issued, which it correctly refuses and loudly. Drop the bookkeeping
+        # and say nothing. Only a process that replaces its runtime ever
+        # reaches this; with one runtime the epoch never moves.
+        _epoch = DeviceAllocator._cuda_ptr_epoch.pop(ptr, DeviceAllocator._alloc_epoch)
+        if _epoch != DeviceAllocator._alloc_epoch:
+            _dev = DeviceAllocator._cuda_ptr_device.pop(ptr, None)
+            _sz = DeviceAllocator._cuda_ptr_size.pop(ptr, None)
+            DeviceAllocator._pool_alloc_size.pop(ptr, None)
+            if _dev is not None and _sz:
+                _live = DeviceAllocator._cuda_live_bytes.get(_dev, 0) - _sz
+                DeviceAllocator._cuda_live_bytes[_dev] = max(0, _live)
+            return
+
+        # The pool: the block goes back to its segment, merged with its free neighbours; a segment wholly free over
+        # the parked cap returns to the driver. A block of a segment is never handed to the driver alone.
+        if DeviceAllocator._pool_enabled and ptr in DeviceAllocator._blocks:
+            if DeviceAllocator._blocks[ptr][3]:
+                print(f"[NBX-ALLOC-ERROR] free of a block already free: {ptr:#x}", flush=True)
+                return
+            dev = DeviceAllocator._blocks[ptr][4]
+            nbytes = DeviceAllocator._blocks[ptr][0]
+            added = DeviceAllocator._pool_release_block(dev, ptr)
+            cached = DeviceAllocator._pool_cached_bytes.get(dev, 0) + added
+            DeviceAllocator._pool_cached_bytes[dev] = cached
+            if cached > DeviceAllocator._pool_cached_peak.get(dev, 0):
+                DeviceAllocator._pool_cached_peak[dev] = cached
+            cap = DeviceAllocator._pool_parked_cap(dev)
+            if cap and cached > cap:
+                DeviceAllocator._pool_evict(dev, cached - cap)
+            if _MALLOC_TRACE_FILE is not None:
+                _record_free_site(ptr, nbytes)
+            return
+
+        rt = _gpu_runtime()
+        backend = _active_backend()
+        alloc_dev = DeviceAllocator._cuda_ptr_device.pop(ptr, None)
+        _rc = getattr(rt, backend["free"])(ctypes.c_void_p(ptr))
+        if _rc not in (None, 0):
+            # Finalizer context — raising here cascades through GC; a
+            # LOUD print preserves the sticky-error surfacing site.
+            print(f"[NBX-CUDA-ERROR] cudaFree rc={_rc} ptr={ptr:#x} "
+                  f"dev={alloc_dev} — sticky async error surfaced at "
+                  f"this free; the fault is at or before it.", flush=True)
+        nbytes = DeviceAllocator._cuda_ptr_size.pop(ptr, None)
+        DeviceAllocator._range_del(ptr)
+        if _MALLOC_TRACE_FILE is not None and nbytes is not None:
+            _record_free_site(ptr, nbytes)
+        if nbytes is not None:
+            if alloc_dev is not None:
+                live = DeviceAllocator._cuda_live_bytes.get(alloc_dev, 0) - nbytes
+                DeviceAllocator._cuda_live_bytes[alloc_dev] = live
+            else:
+                dev = DeviceAllocator.get_device()
+                live = DeviceAllocator._cuda_live_bytes.get(dev, 0) - nbytes
+                if live < 0:
+                    for d in DeviceAllocator._cuda_live_bytes:
+                        if DeviceAllocator._cuda_live_bytes[d] >= nbytes:
+                            DeviceAllocator._cuda_live_bytes[d] -= nbytes
+                            break
+                else:
+                    DeviceAllocator._cuda_live_bytes[dev] = live
+
+    @staticmethod
+    def bind_mapped(ptr: int, nbytes: int) -> None:
+        """Make `nbytes` of a file mapping at host address `ptr` readable by kernels IN PLACE — on a unified
+        device only (one pool: the GPU reads the mapping's pages, nothing is copied). A discrete device has no
+        such address space: refused by name. Registered in the range table, so `holds()` knows the range."""
+        if _detect_gpu_backend() != "metal":
+            raise RuntimeError(f"ZERO FALLBACK: binding a file mapping in place needs unified memory; backend "
+                               f"{_detect_gpu_backend()!r} copies host experts into device slots")
+        start = _gpu_runtime().bind_mapped(int(ptr), int(nbytes))
+        page = int(os.sysconf("SC_PAGESIZE"))
+        end = -(-(int(ptr) + int(nbytes)) // page) * page
+        DeviceAllocator._range_add(start, max(DeviceAllocator._range_size.get(start, 0), end - start))
+
+    @staticmethod
+    def unbind_mapped(ptr: int) -> None:
+        """Undo `bind_mapped` for the range starting at `ptr`'s page."""
+        page = int(os.sysconf("SC_PAGESIZE"))
+        start = int(ptr) // page * page
+        _gpu_runtime().unbind_mapped(start)
+        DeviceAllocator._range_del(start)
+
+    @staticmethod
+    def malloc_host_pinned(nbytes: int) -> int:
+        """Allocate page-locked host memory. Enables non_blocking H2D DMA.
+
+        Uses cudaMallocHost (or hipHostMalloc on ROCm). The returned
+        pointer is a HOST address — numpy can wrap it via
+        np.frombuffer(ctypes.string_at(ptr, nbytes), ...) or ctypes
+        casting, and cudaMemcpy kind=1 (H2D) uses it as src.
+        """
+        if nbytes == 0:
+            return 0
+        ptr = ctypes.c_void_p()
+        rt = _gpu_runtime()
+        backend = _active_backend()
+        fn_name = backend.get("malloc_host")
+        if fn_name is None:
+            raise RuntimeError(
+                f"Pinned host allocation unsupported on backend "
+                f"{_detect_gpu_backend()!r}")
+        ret = getattr(rt, fn_name)(
+            ctypes.byref(ptr), ctypes.c_size_t(nbytes))
+        if ret != 0:
+            DeviceAllocator.clear_last_error()   # a refused call must not poison the next one
+            raise RuntimeError(
+                f"Host pinned malloc failed (error {ret}) for {nbytes} bytes")
+        p = ptr.value or 0
+        DeviceAllocator._host_pinned_ptr_size[p] = nbytes
+        DeviceAllocator._range_add(p, nbytes)      # device-mapped (UVA): a kernel may read it, so holds() knows it
+        DeviceAllocator._host_pinned_live_bytes += nbytes
+        if DeviceAllocator._host_pinned_live_bytes > DeviceAllocator._host_pinned_peak_bytes:
+            DeviceAllocator._host_pinned_peak_bytes = DeviceAllocator._host_pinned_live_bytes
+        return p
+
+    @staticmethod
+    def free_host_pinned(ptr: int):
+        if ptr:
+            rt = _gpu_runtime()
+            backend = _active_backend()
+            fn_name = backend.get("free_host")
+            if fn_name is None:
+                return
+            getattr(rt, fn_name)(ctypes.c_void_p(ptr))
+            nbytes = DeviceAllocator._host_pinned_ptr_size.pop(ptr, None)
+            DeviceAllocator._range_del(ptr)
+            if nbytes is not None:
+                DeviceAllocator._host_pinned_live_bytes -= nbytes
+
+    # ------------------------------------------------------------------
+    # Accounting API — use instead of cudaMemGetInfo for per-NeuroBrix
+    # observability (cudaMemGetInfo returns device-wide numbers
+    # including other processes, which is useless for debugging a
+    # specific zero3 leak).
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def memory_allocated(device_idx: Optional[int] = None) -> int:
+        """Live bytes allocated via malloc_cuda on the given device.
+        With device_idx=None, returns the total across all devices."""
+        if device_idx is None:
+            return sum(DeviceAllocator._cuda_live_bytes.values())
+        return DeviceAllocator._cuda_live_bytes.get(device_idx, 0)
+
+    @staticmethod
+    def peak_memory_allocated(device_idx: Optional[int] = None) -> int:
+        """Highest live-bytes watermark observed for the device.
+        With device_idx=None, returns the total peak across all devices."""
+        if device_idx is None:
+            return sum(DeviceAllocator._cuda_peak_bytes.values())
+        return DeviceAllocator._cuda_peak_bytes.get(device_idx, 0)
+
+    @staticmethod
+    def device_free_bytes(device_idx: Optional[int] = None) -> int:
+        """Driver-free bytes on `device_idx` (None = current device), via
+        cudaMemGetInfo/hipMemGetInfo through ctypes (R33: no torch).
+
+        Returns -1 when the query is unavailable (CPU-only host, runtime
+        load failure) so callers can distinguish "unknown" from "0 bytes
+        free". Read-only feasibility probe for wrapper-internal memory
+        streaming gates (conv3d temporal chunk-streaming) — deliberately
+        NOT an accounting API (device-wide, includes other processes) and
+        NOT a per-launch kernel-config source (hardware params stay in the
+        vendor YAMLs)."""
+        prev_dev = None
+        try:
+            rt = _gpu_runtime()
+            backend = _active_backend()
+            if (device_idx is not None
+                    and DeviceAllocator.get_device() != device_idx):
+                # Probe on another device: switch, query, RESTORE (the
+                # allocator's own doctrine — a GC-site free of a cuda:N
+                # pointer must never leave cuda:N current; the C3 fast path
+                # contracts that the runtime current device is the caller's).
+                prev_dev = DeviceAllocator.get_device()
+                DeviceAllocator.set_device(device_idx)
+            free_b = ctypes.c_size_t(0)
+            total_b = ctypes.c_size_t(0)
+            getattr(rt, backend.get("mem_get_info", "cudaMemGetInfo"))(
+                ctypes.byref(free_b), ctypes.byref(total_b))
+            free = int(free_b.value)
+            # Pool-aware (2026-09-02): bytes parked in the free-list are
+            # reclaimable on demand (the malloc OOM path flushes them, the
+            # autotune guard flushes them), so every feasibility probe —
+            # the SDPA chunk decision, the drain pressure gate, the conv3d
+            # chunk-stream gate — reads the same headroom it read with the
+            # pool off. Without this the probes under-read free memory by
+            # the parked bytes and shrank their chunks on edge rows.
+            if DeviceAllocator._pool_enabled:
+                d = device_idx if device_idx is not None else DeviceAllocator.get_device()
+                free += DeviceAllocator._pool_cached_bytes.get(d, 0)
+            return free
+        except Exception:
+            return -1
+        finally:
+            if prev_dev is not None:
+                try:
+                    DeviceAllocator.set_device(prev_dev)
+                except Exception:
+                    pass
+
+    @staticmethod
+    def device_total_bytes(device_idx: Optional[int] = None) -> int:
+        """Total device memory on `device_idx` (None = current device) via
+        cudaMemGetInfo/hipMemGetInfo through ctypes; -1 when unavailable.
+        Same contract and caveats as `device_free_bytes`."""
+        prev_dev = None
+        try:
+            rt = _gpu_runtime()
+            backend = _active_backend()
+            if (device_idx is not None
+                    and DeviceAllocator.get_device() != device_idx):
+                # Probe on another device: switch, query, RESTORE (the
+                # allocator's own doctrine — a GC-site free of a cuda:N
+                # pointer must never leave cuda:N current; the C3 fast path
+                # contracts that the runtime current device is the caller's).
+                prev_dev = DeviceAllocator.get_device()
+                DeviceAllocator.set_device(device_idx)
+            free_b = ctypes.c_size_t(0)
+            total_b = ctypes.c_size_t(0)
+            getattr(rt, backend.get("mem_get_info", "cudaMemGetInfo"))(
+                ctypes.byref(free_b), ctypes.byref(total_b))
+            return int(total_b.value)
+        except Exception:
+            return -1
+        finally:
+            if prev_dev is not None:
+                try:
+                    DeviceAllocator.set_device(prev_dev)
+                except Exception:
+                    pass
+
+    @staticmethod
+    def reset_peak_memory(device_idx: Optional[int] = None) -> None:
+        """Reset the peak watermark to the current live value.
+        With device_idx=None, resets all devices."""
+        if device_idx is None:
+            for d in list(DeviceAllocator._cuda_live_bytes.keys()):
+                DeviceAllocator._cuda_peak_bytes[d] = (
+                    DeviceAllocator._cuda_live_bytes[d])
+        else:
+            DeviceAllocator._cuda_peak_bytes[device_idx] = (
+                DeviceAllocator._cuda_live_bytes.get(device_idx, 0))
+
+    @staticmethod
+    def host_pinned_allocated() -> int:
+        """Live bytes allocated via malloc_host_pinned."""
+        return DeviceAllocator._host_pinned_live_bytes
+
+    @staticmethod
+    def host_pinned_peak() -> int:
+        """Peak pinned host bytes observed."""
+        return DeviceAllocator._host_pinned_peak_bytes
+
+    @staticmethod
+    def memset_cuda(ptr: int, value: int, nbytes: int):
+        if nbytes > 0 and ptr:
+            rt = _gpu_runtime()
+            getattr(rt, _active_backend()["memset"])(
+                ctypes.c_void_p(ptr), ctypes.c_int(value),
+                ctypes.c_size_t(nbytes))
+
+    @staticmethod
+    def memcpy(dst: int, src: int, nbytes: int, kind: int = 3):
+        """Copy memory. kind: 0=H2H, 1=H2D, 2=D2H, 3=D2D.
+
+        NOTE (NVIDIA API-sync-behavior spec): for D2D the "synchronous"
+        cudaMemcpy performs NO host-side synchronization — the copy is
+        enqueued on the calling device's legacy stream and the host
+        returns immediately. Lifetime of src/dst must be guaranteed by
+        stream ordering, never by host program order.
+        """
+        if nbytes > 0:
+            rt = _gpu_runtime()
+            _rc = getattr(rt, _active_backend()["memcpy"])(
+                ctypes.c_void_p(dst), ctypes.c_void_p(src),
+                ctypes.c_size_t(nbytes), ctypes.c_int(kind))
+            if _rc not in (None, 0):
+                raise RuntimeError(
+                    f"cudaMemcpy failed rc={_rc} (kind={kind}, "
+                    f"nbytes={nbytes}) — CUDA errors are STICKY: this is "
+                    f"the first CHECKED call after the poisoning site, "
+                    f"not necessarily the fault itself.")
+
+    @staticmethod
+    def sync_device():
+        """Synchronize current GPU device. Waits for all pending GPU ops.
+
+        RAISES on a nonzero return: cudaDeviceSynchronize returns any
+        prior async error (sticky semantics) — discarding it hid the
+        true poisoning site of the multi-GPU error-700 class behind the
+        next checked malloc (R16 research, 2026-07-24)."""
+        rt = _gpu_runtime()
+        backend = _active_backend()
+        sync_name = backend.get("sync")
+        if sync_name:
+            _rc = getattr(rt, sync_name)()
+            if _rc not in (None, 0):
+                raise RuntimeError(
+                    f"deviceSynchronize failed rc={_rc} on current device "
+                    f"{DeviceAllocator.get_device()} — sticky async error "
+                    f"surfaced at this sync; the fault is at or before it.")
+        # The portable half of the same contract: a backend that does not
+        # honour `tl.device_assert` reports through the fault channel, and
+        # this is where it is observed. The sync above has retired the work
+        # that would have written it.
+        check_device_faults()
+
+    # ------------------------------------------------------------------
+    # Async stream + event primitives (zero torch).
+    # Zero3 pipelining opens a dedicated transfer stream so that the H2D
+    # copy of block N+1 overlaps with the compute on block N which runs
+    # on the default stream. Events synchronize the two streams so we
+    # never read a weight that's still being copied.
+    #
+    # Handles are opaque ctypes.c_void_p values surfaced as Python ints
+    # (0 is the default/NULL stream). Keep them in Python state; do not
+    # re-wrap them on each use — ctypes creates a fresh opaque object
+    # each call.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def create_stream() -> int:
+        """Create a new GPU stream (`cudaStreamCreate` / `hipStreamCreate`:
+        a BLOCKING stream, i.e. one that implicitly orders against the
+        legacy default stream). Returns an opaque handle.
+
+        This ordering is load-bearing: the deferred-free drain skips its
+        host sync under the allocator pool on the premise that every
+        NeuroBrix triton stream orders against the legacy stream (kernel
+        launches and D2D copies on the legacy stream; the zero3 transfer
+        stream created here). The only non-blocking stream in the engine
+        is the replay-graph capture stream, bracketed by context syncs."""
+        rt = _gpu_runtime()
+        backend = _active_backend()
+        fn_name = backend.get("stream_create")
+        if fn_name is None:
+            raise RuntimeError(
+                f"Stream create unsupported on backend {_detect_gpu_backend()!r}")
+        h = ctypes.c_void_p()
+        ret = getattr(rt, fn_name)(ctypes.byref(h))
+        if ret != 0:
+            DeviceAllocator.clear_last_error()   # a refused call must not poison the next one
+            raise RuntimeError(f"stream create failed (error {ret})")
+        return h.value or 0
+
+    @staticmethod
+    def clear_last_error() -> int:
+        """Read-and-reset the runtime's sticky "last error". A refused call
+        (an ordering event asked for an interval, a peer pair that cannot be
+        enabled) leaves its code there, and the next unrelated launch check
+        in the process — torch's, in the compiled branch — reports it as its
+        own (found 2026-09-05: `invalid device ordinal` on an fp16 op after
+        the stopwatch refusal test). Every expected refusal clears it."""
+        rt = _gpu_runtime()
+        fn_name = _active_backend().get("get_last_error")
+        return int(getattr(rt, fn_name)()) if fn_name else 0
+
+    @staticmethod
+    def _rt_call(key: str, *args):
+        rt = _gpu_runtime()
+        fn_name = _active_backend().get(key)
+        if fn_name is None:
+            raise RuntimeError(f"{key} unsupported on backend {_detect_gpu_backend()!r}")
+        ret = getattr(rt, fn_name)(*args)
+        if ret != 0:
+            DeviceAllocator.clear_last_error()
+            raise RuntimeError(f"{fn_name} failed (error {ret})")
+
+    @staticmethod
+    def destroy_stream(stream: int):
+        """Destroy a stream created by create_stream. No-op for default (0)."""
+        if not stream:
+            return
+        rt = _gpu_runtime()
+        backend = _active_backend()
+        fn_name = backend.get("stream_destroy")
+        if fn_name is None:
+            return
+        getattr(rt, fn_name)(ctypes.c_void_p(stream))
+
+    @staticmethod
+    def holds(ptr: int) -> bool:
+        """True when `ptr` lies inside a live device allocation this allocator
+        handed out (a block's base, or a view inside it). The launcher asks
+        before dispatching a kernel on an address: a foreign pointer is
+        refused, never launched (launcher contract, Metal workstream 2026-09-05).
+        O(log n): the live ranges are re-sorted only when a registration
+        changed since the last call."""
+        ptr = int(ptr)
+        size = DeviceAllocator._range_size.get(ptr)
+        if size is not None:
+            return True
+        bases = DeviceAllocator._range_bases
+        i = bisect.bisect_right(bases, ptr) - 1
+        return i >= 0 and bases[i] <= ptr < bases[i] + DeviceAllocator._range_size[bases[i]]
+
+    @staticmethod
+    def containing(ptr: int):
+        """(base, size) of the live range `ptr` lies in, the NEAREST one: the greatest base at or below `ptr` whose range
+        holds it. In-place expert bindings overlap where two projections share a page; the first range in insertion
+        order resolved a projection to its neighbour's shorter range and a launch read past it (DSV2 triton printed
+        garbage, 2026-10-20). The nearest base is the projection's own binding, which runs to its end. None when no
+        range holds `ptr`. O(log n) plus the ranges walked down past."""
+        ptr = int(ptr)
+        bases = DeviceAllocator._range_bases
+        sizes = DeviceAllocator._range_size
+        i = bisect.bisect_right(bases, ptr) - 1
+        while i >= 0:
+            b = bases[i]
+            if ptr < b + sizes[b]:
+                return b, sizes[b]
+            i -= 1
+        return None
+
+    @staticmethod
+    def _range_add(base: int, nbytes: int) -> None:
+        """Register a live range for `holds()` — O(log n) insert, kept sorted
+        so a launch pays one bisect and never a re-sort."""
+        if base not in DeviceAllocator._range_size:
+            bisect.insort(DeviceAllocator._range_bases, base)
+        DeviceAllocator._range_size[base] = int(nbytes)
+
+    @staticmethod
+    def _range_del(base: int) -> None:
+        if DeviceAllocator._range_size.pop(base, None) is not None:
+            bases = DeviceAllocator._range_bases
+            i = bisect.bisect_left(bases, base)
+            if i < len(bases) and bases[i] == base:
+                bases.pop(i)
+
+    @staticmethod
+    def device_synchronize(device_idx: Optional[int] = None):
+        """Block the caller until every stream of the device drains.
+
+        Selects the device first when one is given (the runtime's device
+        synchronize is per current device) and restores the previous one."""
+        rt = _gpu_runtime()
+        backend = _active_backend()
+        fn_name = backend.get("sync")
+        if fn_name is None:
+            return
+        prev = None
+        if device_idx is not None:
+            prev = DeviceAllocator.get_device()
+            if prev != device_idx:
+                DeviceAllocator.set_device(device_idx)
+        try:
+            ret = getattr(rt, fn_name)()
+            if ret != 0:
+                DeviceAllocator.clear_last_error()
+                raise RuntimeError(f"{fn_name} failed with error {ret}")
+        finally:
+            if prev is not None and prev != device_idx:
+                DeviceAllocator.set_device(prev)
+
+    @staticmethod
+    def mem_get_info(device_idx: Optional[int] = None) -> Tuple[int, int]:
+        """(free_bytes, total_bytes) of a device, from the runtime."""
+        rt = _gpu_runtime()
+        backend = _active_backend()
+        mem_fn = backend.get("mem_get_info", "cudaMemGetInfo")
+        prev = None
+        if device_idx is not None:
+            prev = DeviceAllocator.get_device()
+            if prev != device_idx:
+                DeviceAllocator.set_device(device_idx)
+        try:
+            free_b = ctypes.c_size_t()
+            total_b = ctypes.c_size_t()
+            ret = getattr(rt, mem_fn)(ctypes.byref(free_b), ctypes.byref(total_b))
+            if ret != 0:
+                DeviceAllocator.clear_last_error()
+                raise RuntimeError(f"{mem_fn} failed with error {ret}")
+            return int(free_b.value), int(total_b.value)
+        finally:
+            if prev is not None and prev != device_idx:
+                DeviceAllocator.set_device(prev)
+
+    @staticmethod
+    def stream_synchronize(stream: int):
+        """Block the caller until the given stream drains."""
+        rt = _gpu_runtime()
+        backend = _active_backend()
+        fn_name = backend.get("stream_sync")
+        if fn_name is None:
+            return
+        getattr(rt, fn_name)(ctypes.c_void_p(stream))
+
+    @staticmethod
+    def create_event(timing: bool = True) -> int:
+        """Create a new event. Returns opaque handle.
+
+        `timing=False` asks for an event that can order streams but cannot be
+        used to measure an interval, and that is what almost every event in
+        this engine actually wants. It is not a micro-optimisation: recording
+        a timing-enabled event costs **9.5 us** on this rig against ~1 us for
+        an ordering-only one, because the runtime has to place a clock read
+        in the stream and keep the result addressable. Measured 2026-09-03 —
+        it was 28 % of a cross-GPU collective's entire host cost.
+
+        Pass timing=True (the default, kept for compatibility) only when the
+        handle is going to reach `event_elapsed_ms`.
+        """
+        rt = _gpu_runtime()
+        backend = _active_backend()
+        h = ctypes.c_void_p()
+        flags_fn = backend.get("event_create_flags")
+        if not timing and flags_fn is not None:
+            # 0x02 = cudaEventDisableTiming / hipEventDisableTiming.
+            ret = getattr(rt, flags_fn)(ctypes.byref(h), ctypes.c_uint(0x02))
+        else:
+            fn_name = backend.get("event_create")
+            if fn_name is None:
+                raise RuntimeError(
+                    f"Event create unsupported on backend "
+                    f"{_detect_gpu_backend()!r}")
+            ret = getattr(rt, fn_name)(ctypes.byref(h))
+        if ret != 0:
+            DeviceAllocator.clear_last_error()   # a refused call must not poison the next one
+            raise RuntimeError(f"event create failed (error {ret})")
+        return h.value or 0
+
+    @staticmethod
+    def destroy_event(event: int):
+        """Destroy an event created by create_event."""
+        if not event:
+            return
+        rt = _gpu_runtime()
+        backend = _active_backend()
+        fn_name = backend.get("event_destroy")
+        if fn_name is None:
+            return
+        getattr(rt, fn_name)(ctypes.c_void_p(event))
+
+    @staticmethod
+    def record_event(event: int, stream: int = 0):
+        """Capture the current state of `stream` into `event`."""
+        rt = _gpu_runtime()
+        backend = _active_backend()
+        fn_name = backend.get("event_record")
+        if fn_name is None:
+            return
+        getattr(rt, fn_name)(
+            ctypes.c_void_p(event), ctypes.c_void_p(stream))
+
+    @staticmethod
+    def stream_wait_event(stream: int, event: int, flags: int = 0):
+        """Make `stream` wait for `event` without blocking the host."""
+        rt = _gpu_runtime()
+        backend = _active_backend()
+        fn_name = backend.get("stream_wait_event")
+        if fn_name is None:
+            return
+        getattr(rt, fn_name)(
+            ctypes.c_void_p(stream), ctypes.c_void_p(event),
+            ctypes.c_uint(flags))
+
+    @staticmethod
+    def memcpy_async(dst: int, src: int, nbytes: int,
+                     kind: int = 1, stream: int = 0):
+        """Asynchronous memcpy on a specific stream.
+
+        kind: 0=H2H, 1=H2D, 2=D2H, 3=D2D (matches cudaMemcpyKind).
+        For H2D to actually overlap with compute, `src` must be pinned.
+        """
+        if nbytes <= 0:
+            return
+        rt = _gpu_runtime()
+        backend = _active_backend()
+        fn_name = backend.get("memcpy_async")
+        if fn_name is None:
+            # Fallback to synchronous memcpy if async is unsupported.
+            DeviceAllocator.memcpy(dst, src, nbytes, kind)
+            return
+        getattr(rt, fn_name)(
+            ctypes.c_void_p(dst), ctypes.c_void_p(src),
+            ctypes.c_size_t(nbytes), ctypes.c_int(kind),
+            ctypes.c_void_p(stream))
+
+    @staticmethod
+    def event_synchronize(event: int):
+        """Block the host until `event` has been reached."""
+        if not event:
+            return
+        rt = _gpu_runtime()
+        fn_name = _active_backend().get("event_sync")
+        if fn_name is None:
+            DeviceAllocator.sync_device()
+            return
+        ret = getattr(rt, fn_name)(ctypes.c_void_p(event))
+        if ret != 0:
+            DeviceAllocator.clear_last_error()   # a refused call must not poison the next one
+            raise RuntimeError(f"event synchronize failed (error {ret})")
+
+    @staticmethod
+    def event_elapsed_ms(start: int, end: int) -> float:
+        """Milliseconds between two recorded events, measured ON THE DEVICE.
+
+        Both events MUST have been recorded on streams of the SAME device:
+        the runtime's elapsed-time query is undefined across devices because
+        each device has its own clock domain. To time a multi-device
+        collective, record both events on one device's stream and make that
+        stream `stream_wait_event` on the other devices' completion events —
+        then the interval covers the critical path without ever comparing
+        two clocks.
+
+        The caller is responsible for having synchronized `end`.
+        """
+        rt = _gpu_runtime()
+        fn_name = _active_backend().get("event_elapsed")
+        if fn_name is None:
+            raise RuntimeError(
+                f"event timing unsupported on backend "
+                f"{_detect_gpu_backend()!r}")
+        fn = getattr(rt, fn_name)
+        fn.restype = ctypes.c_int
+        out = ctypes.c_float()
+        ret = fn(ctypes.byref(out), ctypes.c_void_p(start), ctypes.c_void_p(end))
+        if ret != 0:
+            DeviceAllocator.clear_last_error()   # a refusal must not poison the next call
+            raise RuntimeError(
+                f"event elapsed failed (error {ret}) — the usual cause is "
+                f"two events recorded on DIFFERENT devices, which has no "
+                f"defined answer.")
+        return float(out.value)
+
+    @staticmethod
+    def can_access_peer(src_dev: int, dst_dev: int) -> bool:
+        """Whether `src_dev` can address `dst_dev`'s memory directly.
+
+        False does not mean a copy will fail — it means the driver will
+        stage it through host memory, at host-link speed rather than
+        interconnect speed.
+        """
+        if src_dev == dst_dev:
+            return True
+        rt = _gpu_runtime()
+        fn_name = _active_backend().get("device_can_access_peer")
+        if fn_name is None:
+            return False
+        out = ctypes.c_int()
+        ret = getattr(rt, fn_name)(
+            ctypes.byref(out), ctypes.c_int(src_dev), ctypes.c_int(dst_dev))
+        if ret != 0:
+            DeviceAllocator.clear_last_error()
+        return ret == 0 and bool(out.value)
+
+    # Pairs already granted, so the hot transfer path pays the query once.
+    _peer_enabled: set = set()
+    # Pairs the hardware refused, so a rig without peer links does not retry
+    # on every single transfer.
+    _peer_refused: set = set()
+
+    @staticmethod
+    def ensure_peer_access(src_dev: int, dst_dev: int) -> bool:
+        """Grant src -> dst once, then remember the answer.
+
+        Called on the cross-device transfer path, which is hot enough that
+        asking the driver every time would cost more than it saves. Both
+        outcomes are memoised: a rig whose cards have no direct links must
+        not re-ask on every hand-off.
+
+        A `False` here is not an error — the copy still works, the driver
+        just routes it through host memory. It is 2.4x slower at 4 KB and
+        8.7x slower at 34 MB on this rig (measured 2026-09-03).
+        """
+        if src_dev == dst_dev:
+            return True
+        key = (src_dev, dst_dev)
+        if key in DeviceAllocator._peer_enabled:
+            return True
+        if key in DeviceAllocator._peer_refused:
+            return False
+        if os.environ.get("NBX_DISABLE_PEER_ACCESS") == "1":
+            # Escape hatch and A/B control. Direct card-to-card access is a
+            # driver-level grant; if a rig ever misbehaves under it, this
+            # restores the host-staged route without a code change, and it is
+            # how the speedup was measured against the old behaviour.
+            DeviceAllocator._peer_refused.add(key)
+            return False
+        try:
+            granted = DeviceAllocator.enable_peer_access(src_dev, dst_dev)
+        except RuntimeError:
+            granted = False
+        (DeviceAllocator._peer_enabled if granted
+         else DeviceAllocator._peer_refused).add(key)
+        return granted
+
+    @staticmethod
+    def enable_peer_access(src_dev: int, dst_dev: int) -> bool:
+        """Let `src_dev` reach `dst_dev` over the interconnect directly.
+
+        Direction matters: this grants src -> dst only, so a bidirectional
+        pair needs both calls. Returns True if access is in force afterwards
+        (including when it already was), False if the hardware cannot do it.
+
+        Why this exists: a cross-device `memcpy(kind=3)` with peer access
+        OFF is bounced through host memory by the driver. On this rig every
+        GPU pair reports NV2 (two bonded NVLinks) and the copy still would
+        not use them. Measured cost of the difference:
+        `validation_outputs/tp_collective_latency_2026_09_03/`.
+        """
+        if src_dev == dst_dev:
+            return True
+        if not DeviceAllocator.can_access_peer(src_dev, dst_dev):
+            return False
+        rt = _gpu_runtime()
+        fn_name = _active_backend().get("device_enable_peer_access")
+        if fn_name is None:
+            return False
+        previous = DeviceAllocator.get_device()
+        try:
+            DeviceAllocator.set_device(src_dev)
+            ret = getattr(rt, fn_name)(ctypes.c_int(dst_dev), ctypes.c_uint(0))
+        finally:
+            DeviceAllocator.set_device(previous)
+        # 704 = cudaErrorPeerAccessAlreadyEnabled. Idempotence is the point:
+        # callers enable defensively and must not have to track state.
+        if ret in (0, 704):
+            return True
+        raise RuntimeError(
+            f"enable peer access {src_dev}->{dst_dev} failed (error {ret})")
+
+    @staticmethod
+    def ensure_triton_device(device_idx: int):
+        """Set GPU device for Triton JIT context. Zero torch. Universal.
+
+        Uses cudaSetDevice (runtime) + Triton's own driver API.
+        Does NOT call cuCtxSetCurrent — that conflicts with the runtime
+        context on multi-GPU systems.
+
+        C2 fast path: called before every kernel launch, so when the
+        requested device is already fully current (see the
+        per-thread device-cache invariant) the pair of
+        driver calls is skipped. Any device change outside this
+        function must invalidate the cache (set_device does so
+        automatically; raw switches call
+        invalidate_current_device_cache()).
+        """
+        if device_idx == _cached_device_idx():
+            return
+        # 1. Set runtime device (cudaSetDevice / hipSetDevice)
+        backend = _active_backend()
+        rt = _gpu_runtime()
+        getattr(rt, backend["set_device"])(ctypes.c_int(device_idx))
+        # 2. Tell the launcher which device to target. The NeuroBrix launcher
+        #    binds the runtime's primary context of the current device at each
+        #    launch; only the differential arm (NBX_LAUNCHER=triton) still
+        #    drives upstream's launcher, whose driver must be told (and whose
+        #    backend probes import torch — R33, universal since 2026-09-05).
+        if os.environ.get("NBX_LAUNCHER", "nbx").lower() == "triton":
+            import triton.runtime.driver
+            active = triton.runtime.driver.active
+            # A single-device backend has nothing to set and need not
+            # implement the setter: triton-msl's MetalDriver provides
+            # `get_current_device` and no `set_current_device` (measured
+            # 2026-09-05), and this arm is exactly how the Metal A/B is run.
+            # Falling through would raise AttributeError at the first launch;
+            # assuming it worked would risk launching on a device nobody
+            # selected. So the absence is handled by VERIFYING instead.
+            set_current = getattr(active, "set_current_device", None)
+            if set_current is not None:
+                set_current(device_idx)
+            else:
+                current = active.get_current_device()
+                if current != device_idx:
+                    raise RuntimeError(
+                        f"Triton backend "
+                        f"{active.get_current_target().backend!r} exposes no "
+                        f"set_current_device and reports device {current}, "
+                        f"but device {device_idx} was requested. The kernel "
+                        f"would launch on the wrong device, so this refuses "
+                        f"instead.")
+        # Cache only after BOTH calls succeeded (this thread's state).
+        _DEVICE_CACHE.idx = device_idx
+
+
+def _set_device(t):
+    """Sync Triton/CUDA driver context with the tensor's physical device.
+
+    Called before every Triton kernel launch. Triton's internal driver
+    state must match `t._device_idx`, or the kernel will target the
+    wrong device and raise "Pointer argument cannot be accessed from
+    Triton" when the pointer lives on a different GPU. Single source of
+    truth — imported by wrappers.py, dispatch.py, shape_utils.py,
+    triton/weight_loader.py so every kernel-launching module honours
+    the contract.
+    """
+    if hasattr(t, '_device_idx'):
+        DeviceAllocator.ensure_triton_device(t._device_idx)
+
+
+#: This engine names its backends for the vendor RUNTIME it loads (`cuda`, `hip`,
+#: `metal`); Triton names its own for the vendor's COMPILER target, which is the
+#: directory under `triton/backends/`. The two vocabularies are not the same and
+#: the mapping between them belongs here, once.
+_TRITON_BACKEND_BY_RUNTIME = {"cuda": "nvidia", "hip": "amd", "metal": "metal"}
+
+
+def _pin_triton_backend(name: str) -> str:
+    """Tell Triton which backend is here, then return the name.
+
+    R33, and it applies on every backend, not just Apple. Asking
+    `triton.runtime.driver.active` for anything makes Triton call
+    `is_active()` on EVERY registered backend to find the live one, and
+    upstream's AMD probe runs `import torch` inside its own — so a CUDA box
+    with no AMD card pays a torch import the moment any module asks the
+    driver a question. `kernels/ops/matmul.py` asks one at import time, which
+    is how it reached us.
+
+    `TRITON_DEFAULT_BACKEND` makes `_create_driver` select the named backend
+    directly and probe nothing else. We already know the answer here — this
+    function found it without importing anything — so we say so. `setdefault`,
+    because an explicit choice by the user or a test outranks ours.
+
+    **The name has to be TRITON'S, and ours is not.** This engine's backends are
+    called `cuda`, `hip` and `metal`; Triton's registry keys are the directory
+    names under `triton/backends/` — `nvidia` and `amd` — and `_create_driver`
+    raises `Unknown backend device '<name>'` on anything else. Pinning `cuda` was
+    therefore always wrong and never showed, because this engine's launcher does
+    every launch itself and never asks Triton for a driver. It showed the moment
+    a launch went down Triton's own path: torch 2.14 ships in-tree Triton ops and
+    the seam now hands those back to Triton, which then read the pin (2026-09-17).
+
+    A name Triton does not have is worse than no pin at all, so the mapped name is
+    checked against Triton's own registry when that can be read without probing —
+    `triton.backends` is a dict built at import and `is_active()` runs only inside
+    `_create_driver` — and the pin is skipped rather than set to something that
+    raises.
+    """
+    triton_name = _TRITON_BACKEND_BY_RUNTIME.get(name, name)
+    try:
+        from triton.backends import backends as _triton_backends
+        if triton_name not in _triton_backends:
+            return name                       # do not pin a name Triton would refuse
+    except Exception:                         # noqa: BLE001 — no Triton, or a shape we do not know
+        pass
+    os.environ.setdefault("TRITON_DEFAULT_BACKEND", triton_name)
+    return name
+
+
+@functools.lru_cache(maxsize=1)
+def _detect_gpu_backend() -> str:
+    """Detect GPU backend: 'cuda', 'hip' or 'metal' — from the vendor runtime
+    the process can load, or `NBX_GPU_BACKEND`.
+
+    **What this does NOT answer: whether a device is there.** On CUDA and ROCm
+    it succeeds when the vendor's runtime LIBRARY loads, which it does on a host
+    with the toolkit and no visible card — it answered "cuda" under
+    `CUDA_VISIBLE_DEVICES=` and five tests that had gated on it went on to fail
+    at their first allocation with `cudaErrorNoDevice` instead of skipping
+    (2026-09-16, register 62). On Metal the two questions coincide, because
+    there is no library to dlopen and the probe opens the device itself — which
+    is why the same call is an executing probe on one backend and a naming one
+    on the others. A caller asking "can I run here" wants
+    `DeviceAllocator.device_count() > 0`, which asks the driver, or an
+    allocation, which answers for the memory too.
+
+    Never through Triton's driver
+    probe: `triton.runtime.driver.active` asks every backend `is_active()`,
+    and those probes import torch (R33, universal since 2026-09-05 — this
+    call was the first torch import of the launch path).
+
+    **Every probe here is torch-free, and the order is R33 rather than
+    taste.** Asking Triton which backend is active — the obvious first
+    question, and what this function used to do — makes Triton call
+    `is_active()` on EVERY registered backend to find the live one, and
+    upstream's AMD probe runs `import torch` inside its own. So merely asking
+    puts torch in the process, on a CUDA box with no AMD card as much as on a
+    Mac. `kernels/ops/matmul.py` asks that question at module import, which is
+    how it reached the engine.
+
+    The Metal probe carries no platform strings. It opens the device and asks
+    it, because the property that matters is unified memory (which is what
+    makes one address valid for both processors) and that is a device answer,
+    not an `arm64` answer. It has no `rt_libs` row to try, which is why it is
+    not an entry in `_GPU_BACKENDS`: that dict holds symbol tables over one C
+    ABI and `test_device_backend_seam.py` pins it to exactly {cuda, hip}.
+
+    Whatever answers, `_pin_triton_backend` records it in
+    `TRITON_DEFAULT_BACKEND`, so that the differential arm
+    (`NBX_LAUNCHER=triton`) — the only path that still reaches
+    `triton.runtime.driver.active` — resolves straight to that backend and
+    probes nothing else.
+    """
+    forced = os.environ.get("NBX_GPU_BACKEND")
+    if forced:
+        if forced not in _GPU_BACKENDS and forced != "metal":
+            raise RuntimeError(f"NBX_GPU_BACKEND={forced!r} is not a known backend "
+                               f"({sorted(_GPU_BACKENDS) + ['metal']})")
+        return _pin_triton_backend(forced)
+    # The backend TABLE decides: the first vendor runtime the process can
+    # load names the backend — adding a backend is adding a table entry.
+    for name, backend in _GPU_BACKENDS.items():
+        for lib in backend["rt_libs"]:
+            try:
+                ctypes.cdll.LoadLibrary(lib)
+                return _pin_triton_backend(name)
+            except OSError:
+                continue
+    # Apple GPUs. Not a "fallback" in the sense the loop above is: there is
+    # no library to dlopen, so the probe opens the device itself and answers
+    # only when a usable one came back.
+    from nbxtensor.backend.metal_device import metal_device_available
+    if metal_device_available():
+        return _pin_triton_backend("metal")
+    raise RuntimeError("No GPU runtime found (tried CUDA, ROCm/HIP and Metal)")
+
+
+def device_label(tensor) -> str:
+    """How a tensor's placement should READ in a message, e.g. "metal:0".
+
+    `NBXTensor._device` is the engine's internal token for "device memory"
+    and its value is the string `"cuda"` on every backend — `is_cuda()` and
+    the allocator paths are written against that token, so it is not a name
+    to change. It is also not a name to PRINT: on an Apple machine a refusal
+    that says `arg0=cuda:0` is telling the reader something false about the
+    hardware, and the first Metal diagnostics did exactly that.
+
+    So the token stays and the label is resolved, once, from the backend the
+    engine actually detected. A tensor on the host still reads "cpu", which
+    is true everywhere.
+    """
+    placement = getattr(tensor, "_device", None)
+    index = getattr(tensor, "_device_idx", "?")
+    if placement is None:
+        return "?"
+    if placement != "cuda":
+        return f"{placement}:{index}"
+    try:
+        return f"{_detect_gpu_backend()}:{index}"
+    except Exception:
+        # No backend resolvable: say the token rather than invent a name.
+        return f"{placement}:{index}"
+
+
+def _active_backend() -> dict:
+    """The entry-point name table for the detected backend.
+
+    Metal resolves to a table that is deliberately NOT a row in
+    `_GPU_BACKENDS`. That dict holds symbol tables over one C ABI, and
+    `test_device_backend_seam.py` pins it to exactly `{"cuda", "hip"}`
+    because a key in one row and missing from the other is a crash on that
+    hardware alone. Metal is a different API with a different set of honest
+    entry points, so it gets its own table — the second *implementation*
+    behind this seam that the seam's own docstring describes.
+    """
+    name = _detect_gpu_backend()
+    if name == "metal":
+        return _metal_backend_table()
+    return _GPU_BACKENDS[name]
+
+
+@functools.lru_cache(maxsize=1)
+def _metal_backend_table() -> dict:
+    """The Metal entry-point table, imported ONCE and then cached.
+
+    Cached rather than imported per call because `_active_backend` runs
+    inside `NBXTensor.__del__`, and a finalizer can fire during interpreter
+    shutdown when `sys.meta_path` is already None — an import there raises
+    `ImportError: Python is likely shutting down` and every tensor still
+    alive prints a traceback on the way out. The cuda/hip path never had the
+    problem: `_GPU_BACKENDS` is a module global with no import behind it.
+    One `lru_cache` gives Metal the same property.
+    """
+    from nbxtensor.backend.metal_device import METAL_BACKEND
+    return METAL_BACKEND
+
+
+@functools.lru_cache(maxsize=1)
+def _gpu_runtime():
+    name = _detect_gpu_backend()
+    if name == "metal":
+        from nbxtensor.backend.metal_device import runtime
+        return runtime()          # itself cached; see _metal_backend_table
+    backend = _active_backend()
+    for lib in backend["rt_libs"]:
+        try:
+            return ctypes.cdll.LoadLibrary(lib)
+        except OSError:
+            continue
+    raise RuntimeError(f"GPU runtime not found for {name}")
+
+
+# ============================================================================
+# STRIDED COPY
+# ============================================================================
+
+# Shape/stride metadata buffers, keyed by (values, device). Never
+# evicted — a frozen replay plan records raw device pointers inside its
+# recorded kernel launches, so a freed buffer would leave the plan
+# pointing at reclaimed memory. See _upload_int64_array.
+_INT64_ARRAY_CACHE: dict = {}
+
+
+def _saturating_cast(src_dtype, dst_dtype) -> bool:
+    """The protected float16 downcast (clamp finite values to ±65504) —
+    the triton mirror of the compiled DtypeEngine's conversion contract,
+    decided once here for every cast path (`.to`, `copy_`, `__setitem__`)."""
+    return (dst_dtype == NBXDtype.float16
+            and src_dtype in (NBXDtype.float32, NBXDtype.float64, NBXDtype.bfloat16))
+
+
+def _copy_nd(src: 'NBXTensor', dst: 'NBXTensor'):
+    """Copy `src` into `dst` — any strides on either side, `src` broadcast
+    to `dst`'s shape, the dtype converted on the store — in ONE launch.
+
+    Real dtypes only: a complex source keeps the contiguous-then-cast
+    path (the kernel sees a float pointer, and a complex cast is a pair
+    of floats per element that `copy_kernel` already handles).
+    """
+    import triton
+    from nbxtensor.ops.strided_copy import strided_copy_nd_kernel
+
+    if tuple(src._shape) != tuple(dst._shape):
+        src = src.expand(*dst._shape)
+    ndim = dst.ndim
+    if ndim > _MAX_NDIM:
+        raise RuntimeError(
+            f"NBXTensor._copy_nd: ndim={ndim} exceeds the PyTorch hard limit "
+            f"of {_MAX_NDIM}. Please open an issue with the model name and trace site.")
+    n = dst._numel
+    if n == 0:
+        return
+    if ndim == 0:
+        # a scalar: one element, both offsets 0 — a rank-1 walk of extent 1
+        shape, sst, dst_st = (1,), (0,), (0,)
+        ndim = 1
+    else:
+        shape, sst, dst_st = tuple(dst._shape), tuple(src._strides), tuple(dst._strides)
+    shape_buf = _upload_int64_array(shape, dst._device_idx)
+    src_stride_buf = _upload_int64_array(sst, dst._device_idx)
+    dst_stride_buf = _upload_int64_array(dst_st, dst._device_idx)
+    _m = _ew_meta(n)                 # the certified tile of the count's class (ops/elementwise_launch.py)
+    BLOCK = _m['BLOCK_SIZE']
+    _set_device(dst)
+    strided_copy_nd_kernel[(triton.cdiv(n, BLOCK),)](
+        src, dst, n, shape_buf, src_stride_buf, dst_stride_buf,
+        BLOCK_SIZE=BLOCK, num_warps=_m['num_warps'], NDIM=ndim,
+        SATURATE_F16=_saturating_cast(src._dtype, dst._dtype),
+        WIDE=_index_wide(n, _max_linear_offset(shape, sst), _max_linear_offset(shape, dst_st)))
+
+
+def _ew_meta(n: int) -> dict:
+    """An element-wise launch's certified tile and warps (`ops/elementwise_launch.ew_meta`), imported at use: that
+    module resolves through an autotuner that allocates its scratch here."""
+    from nbxtensor.ops.elementwise_launch import ew_meta
+    return ew_meta(n)
+
+
+def _upload_int64_array(values, device_idx: int) -> 'NBXTensor':
+    """Upload a small tuple/list of ints to the GPU as a contiguous
+    int64 NBXTensor. Used to hand shape and stride vectors to the N-D
+    strided_copy / strided_scatter kernels.
+
+    Zero-torch: goes through `NBXTensor.from_numpy`, which internally
+    uses `DeviceAllocator.malloc_cuda` + `DeviceAllocator.memcpy` (via
+    `_GPU_BACKENDS`).
+
+    MEMOISED by value. The original form allocated, uploaded and freed a
+    fresh buffer per call, on the reasoning that "200 bytes per upload is
+    amortised across a whole forward pass (< 1 ms total)". Measured on
+    2026-08-20 that reasoning does not hold: `strided_copy` runs ~757
+    times per decode token on the canonical 30B row, so these metadata
+    uploads were **616 host-to-device transfers per token** — costing
+    more than every matmul in the model combined. The assumption was
+    true when the strided path was rare and false once it became hot.
+
+    The values are shapes and strides: a model touches a few hundred
+    distinct tuples, so the cache is bounded in practice at tens of
+    kilobytes.
+
+    It is deliberately NEVER evicted, and that is a correctness
+    requirement rather than a simplification: a frozen replay plan
+    records raw device POINTERS inside its kernel launches, so evicting
+    a buffer between recording and replay would leave the plan pointing
+    at freed memory.
+
+    Safe to share because every consumer is read-only — the four call
+    sites are `_strided_copy` and `_strided_scatter`, and the kernels
+    only `tl.load` these pointers, never `tl.store` to them.
+    """
+    key = (tuple(int(v) for v in values), int(device_idx))
+    hit = _INT64_ARRAY_CACHE.get(key)
+    if hit is not None:
+        return hit
+
+    import numpy as _np
+    arr = _np.asarray(values, dtype=_np.int64)
+    DeviceAllocator.set_device(device_idx)
+    buf = NBXTensor.from_numpy(arr)
+    _INT64_ARRAY_CACHE[key] = buf
+    return buf
+
+
+def _upload_index_array(values, device_idx: int, max_offset: int) -> 'NBXTensor':
+    """The same, in the NARROWEST integer that holds every index the kernel
+    will compute from it.
+
+    The element type of this buffer decides the width of the whole index
+    computation downstream: `tl.load(shape_ptr + dim)` takes its dtype from
+    the pointer, and Triton then promotes the flat offset, every `%`, every
+    `//` and every stride multiply to match. At int64 that is a 64-bit
+    integer division and modulo per dimension per element, on hardware —
+    Apple's — that has no integer-division instruction at any width and
+    emulates both.
+
+    Measured 2026-09-08 on an M4 Pro, `strided_copy_kernel` over a
+    (2048, 5632) bf16 transpose, the same kernel and the same launch, only
+    the metadata's width changed:
+
+        int64 metadata   3.794 ms    12.2 GB/s
+        int32 metadata   1.411 ms    32.7 GB/s
+        a contiguous copy of the same bytes    0.384 ms   120.3 GB/s
+
+    `max_offset` is the largest linear offset the kernel can form from these
+    values — `sum((shape[i] - 1) * stride[i])` at the call site. int32 is
+    used only when that bound and every value fit in it, so the narrower
+    buffer computes the SAME offsets rather than nearly the same ones; a
+    tensor large enough to overflow keeps int64 and keeps today's behaviour.
+    Numerically inert on CUDA by the same argument, where it is also the
+    cheaper arithmetic.
+    """
+    key = (tuple(int(v) for v in values), int(device_idx), "narrow")
+    hit = _INT64_ARRAY_CACHE.get(key)
+    if hit is not None:
+        return hit
+
+    import numpy as _np
+    _I32_MAX = 2 ** 31 - 1
+    fits = (abs(int(max_offset)) <= _I32_MAX
+            and all(abs(int(v)) <= _I32_MAX for v in values))
+    arr = _np.asarray(values, dtype=_np.int32 if fits else _np.int64)
+    DeviceAllocator.set_device(device_idx)
+    buf = NBXTensor.from_numpy(arr)
+    _INT64_ARRAY_CACHE[key] = buf
+    return buf
+
+
+def _index_wide(n_elements: int, *max_offsets: int) -> bool:
+    """64-bit index arithmetic in the strided kernels (`WIDE`) when the element count or an operand's largest offset
+    is within a factor of two of 2^31 (a masked lane forms an offset past the extent before its mask drops it; the
+    factor covers it). Below it the 32-bit path computes the same offsets. The kernels' flat offset was made 64-bit
+    from the program id for tensors past 2^31 elements, and that promoted every `%` and `//` of every copy back to
+    64-bit — emulated on Apple's GPU: the (1,128,9,242,362) bf16 permute copy of a VAE conv3d ran 84 ms (4.8 GB/s)
+    against 8.3 ms (48 GB/s) at 32 bits, same bytes (Mac, 2026-10-21); the narrow metadata of `_upload_index_array`
+    had stopped mattering."""
+    return max([int(n_elements)] + [abs(int(b)) for b in max_offsets]) >= (1 << 30)
+
+
+def _max_linear_offset(shape, strides) -> int:
+    """The largest offset `strided_copy_kernel` can address from this shape
+    and these strides — what the index arithmetic must be wide enough for."""
+    total = 0
+    for extent, stride in zip(shape, strides):
+        if extent > 0:
+            total += (int(extent) - 1) * abs(int(stride))
+    return total
+
+
+# PyTorch's hard limit on tensor rank. Beyond this we refuse to launch
+# rather than silently truncate. See torch/_C/_TensorBase.pyi:
+#   PyTorch stores ndim in an int64 but actual ops are bounded by
+#   TensorIterator::MAX_DIMS == 25 (aten/src/ATen/TensorIterator.h).
+_MAX_NDIM = 25
+
+
+def _strided_copy(src: 'NBXTensor', dst: 'NBXTensor'):
+    """Copy non-contiguous src into contiguous dst via the N-D scalable
+    Triton kernel.
+
+    The kernel is parameterised by `NDIM: tl.constexpr`; Triton's
+    kernel cache stores one specialised compilation per distinct ndim
+    encountered at runtime (first call compiles, subsequent calls hit
+    the cache at near-zero overhead). Shape and strides travel via
+    small int64 scratch buffers on-device, loaded inside the kernel
+    body — this keeps the kernel text identical regardless of ndim.
+
+    History: the prior 5-D-hardcoded kernel silently dropped dims
+    beyond 5 (via `[1] * (5 - ndim)` returning `[]` when `ndim > 5`),
+    producing OOB reads. 6-D PixArt patchify clones corrupted
+    (Alpha) or crashed (Sigma) on this path; 8-D SANA-Video VAE
+    clones never reached production. N-D path covers all of them
+    without a hardcoded ceiling.
+    """
+    import triton
+    from nbxtensor.ops.strided_copy import strided_copy_kernel
+
+    # Complex tensors are stored interleaved [real, imag], but Triton sees the
+    # data_ptr as a plain float (no complex dtype). The strided kernel would copy
+    # ONE float per element with the per-(complex)-element strides applied as
+    # float offsets — corrupting the imaginary half (chatterbox s3gen stft does
+    # fft_r2c -> transpose -> contiguous; the transposed-complex contiguous
+    # mangled the imag spectrum). Reinterpret both as a float view with a
+    # trailing [2] dim (strides * 2 in elements, +1 for the re/imag axis) and
+    # recurse — this copies BOTH floats per complex element with correct strides.
+    # Built manually (NOT view_as_real, which calls .contiguous() on strided
+    # input → would recurse back into this same broken path).
+    if src.is_complex():
+        _fdt = (NBXDtype.float64 if src._dtype == NBXDtype.complex128
+                else NBXDtype.float32)
+        _fsrc = NBXTensor(
+            src._data_ptr, tuple(src._shape) + (2,),
+            tuple(s * 2 for s in src._strides) + (1,),
+            _fdt, src._device, src._offset * 2,
+            device_idx=src._device_idx,
+            base=src._base if src._base is not None else src, pinned=src._pinned)
+        _fdst_shape = tuple(dst._shape) + (2,)
+        _fdst = NBXTensor(
+            dst._data_ptr, _fdst_shape, _contiguous_strides(_fdst_shape),
+            _fdt, dst._device, dst._offset * 2,
+            device_idx=dst._device_idx,
+            base=dst._base if dst._base is not None else dst, pinned=dst._pinned)
+        _strided_copy(_fsrc, _fdst)
+        return
+
+    ndim = src.ndim
+    if ndim > _MAX_NDIM:
+        raise RuntimeError(
+            f"NBXTensor._strided_copy: ndim={ndim} exceeds the PyTorch "
+            f"hard limit of {_MAX_NDIM}. Please open an issue with the "
+            f"model name and trace site."
+        )
+    n = src._numel
+
+    _bound = _max_linear_offset(src._shape, src._strides)
+    shape_buf = _upload_index_array(src._shape, src._device_idx, _bound)
+    stride_buf = _upload_index_array(src._strides, src._device_idx, _bound)
+
+    _m = _ew_meta(n)                 # the certified tile of the count's class (ops/elementwise_launch.py)
+    BLOCK = _m['BLOCK_SIZE']
+    grid = (triton.cdiv(n, BLOCK),)
+    _set_device(src)
+    strided_copy_kernel[grid](
+        src, dst, n,
+        shape_buf, stride_buf,
+        BLOCK_SIZE=BLOCK, num_warps=_m['num_warps'],
+        NDIM=ndim,
+        WIDE=_index_wide(n, _bound),
+    )
+
+
+def _strided_scatter(src: 'NBXTensor', dst: 'NBXTensor'):
+    """Scatter contiguous src into non-contiguous dst via the N-D
+    scalable Triton kernel. Inverse of `_strided_copy`.
+
+    Used by `NBXTensor.__setitem__` for KV-cache indexed writes where
+    the destination is a narrow view with non-contiguous strides. KV
+    caches are typically 4-D today so this path rarely exercises the
+    N-D machinery, but it stays in sync with `_strided_copy` for
+    consistency and to future-proof any emerging cache layouts.
+    """
+    import triton
+    from nbxtensor.ops.strided_copy import strided_scatter_kernel
+
+    ndim = dst.ndim
+    if ndim > _MAX_NDIM:
+        raise RuntimeError(
+            f"NBXTensor._strided_scatter: ndim={ndim} exceeds the "
+            f"PyTorch hard limit of {_MAX_NDIM}. Please open an issue."
+        )
+    n = src._numel
+
+    _bound = _max_linear_offset(dst._shape, dst._strides)
+    shape_buf = _upload_index_array(dst._shape, dst._device_idx, _bound)
+    stride_buf = _upload_index_array(dst._strides, dst._device_idx, _bound)
+
+    _m = _ew_meta(n)                 # the certified tile of the count's class (ops/elementwise_launch.py)
+    BLOCK = _m['BLOCK_SIZE']
+    grid = (triton.cdiv(n, BLOCK),)
+    _set_device(src)
+    strided_scatter_kernel[grid](
+        src, dst, n,
+        shape_buf, stride_buf,
+        BLOCK_SIZE=BLOCK, num_warps=_m['num_warps'],
+        NDIM=ndim,
+        WIDE=_index_wide(n, _bound),
+    )
+
+
+def _fill_constant(t: 'NBXTensor', value) -> 'NBXTensor':
+    """Fill a contiguous NBXTensor's storage with a scalar constant via the
+    pure-Triton `full_kernel`. Backs `NBXTensor.ones` and the non-zero branch
+    of `fill_` — the zero case stays on the cheaper byte-`memset` path. Flat
+    1-D indexing assumes contiguous storage (the only callers are freshly
+    allocated tensors and the existing full-storage fill_ semantics).
+    """
+    if t._nbytes == 0:
+        return t
+    import triton
+    from nbxtensor.ops.fill_op import fill_kernel
+
+    n = t._numel
+    _m = _ew_meta(n)                 # the certified tile of the count's class (ops/elementwise_launch.py)
+    BLOCK = _m['BLOCK_SIZE']
+    if not t.is_contiguous():
+        # Flat 1-D indexing assumes contiguous storage; on a strided view it
+        # would write the wrong addresses. Fill a contiguous temp, then scatter
+        # into the view's strided positions.
+        tmp = NBXTensor.empty(t._shape, t._dtype, f"cuda:{t._device_idx}")
+        _set_device(tmp)
+        fill_kernel[(triton.cdiv(n, BLOCK),)](tmp, value, n, BLOCK_SIZE=BLOCK, num_warps=_m['num_warps'])
+        _strided_scatter(tmp, t)
+        return t
+    grid = (triton.cdiv(n, BLOCK),)
+    _set_device(t)
+    fill_kernel[grid](t, value, n, BLOCK_SIZE=BLOCK, num_warps=_m['num_warps'])
+    return t
+
+
+# ============================================================================
+# STRIDE COMPUTATION
+# ============================================================================
+
+def _is_dense_row_major(shape: Tuple[int, ...], strides: Tuple[int, ...]) -> bool:
+    """PyTorch's contiguity: the elements lie row-major without gaps; a
+    dim of extent 1 may carry any stride (it is never walked) and an
+    empty tensor is contiguous. Comparing the strides to the canonical
+    ones instead called a decode-step view such as (1, 32, 64, 1) with
+    strides (2048, 64, 1, 64) — a transposed single-token head block —
+    non-contiguous and copied it before every element-wise kernel, and
+    refused `view` on (1, 32, 1, 64) with strides (0, 64, 0, 1), copying
+    the whole K/V per layer per token (the copy census of 2026-09-07)."""
+    expected = 1
+    for extent, stride in zip(reversed(shape), reversed(strides)):
+        if extent == 0:
+            return True
+        if extent == 1:
+            continue
+        if stride != expected:
+            return False
+        expected *= extent
+    return True
+
+
+def _contiguous_strides(shape: Tuple[int, ...]) -> Tuple[int, ...]:
+    if len(shape) == 0:
+        return ()
+    strides = [1] * len(shape)
+    for i in range(len(shape) - 2, -1, -1):
+        strides[i] = strides[i + 1] * shape[i + 1]
+    return tuple(strides)
+
+
+def _broadcast_shapes(*shapes: Tuple[int, ...]) -> Tuple[int, ...]:
+    """Compute broadcast output shape for 2+ tensors. Pure Python."""
+    if len(shapes) == 1:
+        return shapes[0]
+    result = shapes[0]
+    for s in shapes[1:]:
+        ndim = max(len(result), len(s))
+        a = (1,) * (ndim - len(result)) + result
+        b = (1,) * (ndim - len(s)) + s
+        new = []
+        for sa, sb in zip(a, b):
+            if sa == sb:
+                new.append(sa)
+            elif sa == 1:
+                new.append(sb)
+            elif sb == 1:
+                new.append(sa)
+            else:
+                raise ValueError(f"Cannot broadcast {result} and {s}")
+        result = tuple(new)
+    return result
+
+
+# ============================================================================
+# NBXTensor
+# ============================================================================
+
+def _slice_bounds(k: slice, size: int):
+    """(start, stop) of a Python slice over an axis of `size`, as torch and numpy read it: negative bounds count
+    from the end, and both bounds are CLAMPED to [0, size] — `t[50:80]` over 60 rows is rows 50..59. Unclamped, a
+    stop past the extent narrowed past the tensor's storage (a vendor tile at the latent's edge read 30 rows of
+    which 20 were not the tensor's: CogVideoX's last tiles, 2026-10-17). A step other than 1 is refused by name."""
+    if k.step not in (None, 1):
+        raise RuntimeError(f"ZERO FALLBACK: NBXTensor slicing with step {k.step} is not supported (narrow only)")
+    start = 0 if k.start is None else int(k.start)
+    stop = size if k.stop is None else int(k.stop)
+    if start < 0:
+        start += size
+    if stop < 0:
+        stop += size
+    start = min(max(start, 0), size)
+    stop = min(max(stop, start), size)
+    return start, stop
+
+
+class NBXTensor:
+    """Tensor descriptor for --triton mode.
+
+    Properties for Triton kernel compatibility:
+      .data_ptr() → raw CUDA pointer (int) — Triton reads this
+      .dtype      → triton.language dtype (tl.float16 etc.) — Triton JIT uses this
+      .nbx_dtype  → NBXDtype enum — internal, zero dependency
+      .shape      → tuple of ints
+      .stride()   → tuple of ints (element strides)
+
+    All metadata ops (view, reshape, permute...) are pure Python.
+    Allocation via raw cudaMalloc.
+    """
+
+    __slots__ = ('_data_ptr', '_shape', '_strides', '_dtype', '_device',
+                 '_nbytes', '_numel', '_offset', '_owns_data', '_device_idx',
+                 '_base',     # reference to parent tensor (prevents GC of underlying memory);
+                              # also holds the numpy buffer for unpinned CPU tensors
+                 '_pinned',   # True for pinned host memory (cudaMallocHost); used by __del__
+                              # to dispatch to free_host_pinned instead of free_cuda
+                 '_elem_size',  # C6b: dtype_size(_dtype) cached at construction
+                 '_contig',     # C6a: contiguity flag cached at construction
+                 )
+
+    def __init__(self, data_ptr: int, shape: Tuple[int, ...],
+                 strides: Tuple[int, ...], dtype: NBXDtype,
+                 device: str = 'cuda', offset: int = 0, owns_data: bool = False,
+                 device_idx: int = 0, base=None, pinned: bool = False):
+        self._data_ptr = data_ptr
+        self._shape = tuple(shape)
+        self._strides = tuple(strides)
+        self._dtype = dtype
+        self._device = device
+        self._offset = offset
+        self._owns_data = owns_data
+        self._device_idx = device_idx
+        self._base = base  # keep parent alive to prevent use-after-free on views
+        self._pinned = pinned
+        self._numel = math.prod(shape) if shape else 1
+        # C6b: element size cached once — shape/strides/dtype are fixed at
+        # construction (every view/reshape builds a NEW NBXTensor; __init__
+        # is the single construction path). `_elem_size` and `_nbytes` are
+        # derived from `dtype` HERE and never again, so assigning `_dtype`
+        # after construction leaves a tensor whose declared length belongs
+        # to the old dtype — a buffer overrun when the new dtype is smaller.
+        # There is no such retag left in the tree: the bf16-bits site
+        # (graph_executor._load_constant_triton) declares the dtype to
+        # from_numpy instead.
+        self._elem_size = dtype_size(dtype)
+        self._nbytes = self._numel * self._elem_size
+        # C6a: contiguity is a pure function of the (immutable) shape and
+        # strides — compute the flag once instead of per is_contiguous()
+        # call in the hot loops.
+        self._contig = _is_dense_row_major(self._shape, self._strides)
+
+    def __del__(self):
+        # Targeted lifecycle trace: NBX_TRACE_DEL_BIG_MB=N (default off)
+        # logs every __del__ on owns=True NBXTensors >= N MB. Lets us
+        # tell whether a leaked NBXTensor is actually freed and when.
+        # Gate is the module-level constant read once at import (C4) —
+        # zero env lookup on the per-tensor free path. The try/except
+        # keeps the free below unconditional (same as before), including
+        # at interpreter shutdown when module globals may be gone.
+        try:
+            if (_TRACE_DEL_BIG_THRESH is not None and self._owns_data
+                    and self._data_ptr
+                    and self._nbytes >= _TRACE_DEL_BIG_THRESH):
+                print(f"[NBX_DEL data_ptr={self._data_ptr} "
+                      f"shape={self._shape} nbytes={self._nbytes/1024/1024:.0f}MB]",
+                      flush=True)
+        except Exception:
+            pass
+
+        # A tensor built by `NBXTensor.__new__` without `__init__` has NO
+        # slot set at all — `copy`, `pickle`, the routing-contract test in
+        # test_prefill_determinism, and any `__init__` that raises part-way
+        # all leave one. Reading `_owns_data` there raises AttributeError, and
+        # Python does not propagate an exception out of `__del__`: it prints an
+        # unraisable exception and ABANDONS THE REST OF THIS METHOD — which is
+        # the free below. So the one case the old line could not survive is the
+        # one where failing silently would leak a device buffer.
+        #
+        # Returning early is correct and not a papered-over free: `__init__` is
+        # pure assignment and allocates nothing, so a tensor that did not finish
+        # it cannot own device memory. Ownership is recorded FROM the
+        # `owns_data` argument, never established inside the tensor.
+        try:
+            owns, ptr = self._owns_data, self._data_ptr
+        except AttributeError:
+            return
+
+        if owns and ptr:
+            if self._device == 'cuda':
+                DeviceAllocator.free_cuda(ptr)
+            elif self._device == 'cpu' and self._pinned:
+                # Pinned host memory allocated via cudaMallocHost.
+                DeviceAllocator.free_host_pinned(ptr)
+            # Unpinned CPU: backed by self._base (numpy array) — Python
+            # GC drops it automatically when self goes out of scope.
+
+    # ========================================================================
+    # PROPERTIES
+    # ========================================================================
+
+    def data_ptr(self) -> int:
+        """Raw CUDA pointer. Triton kernels read this."""
+        return self._data_ptr + self._offset * self._elem_size
+
+    @property
+    def shape(self) -> Tuple[int, ...]:
+        return self._shape
+
+    @property
+    def dtype(self):
+        """Returns triton.language dtype for Triton JIT compatibility."""
+        return _get_tl_dtype(self._dtype)
+
+    @property
+    def nbx_dtype(self) -> NBXDtype:
+        """Internal dtype — zero dependency."""
+        return self._dtype
+
+    @property
+    def device(self):
+        """Device descriptor. Returns self (NBXTensor is its own device context)."""
+        return self
+
+    @property
+    def type(self) -> str:
+        """Device type string for device.type compatibility."""
+        return self._device
+
+    @property
+    def index(self) -> int:
+        """Device index for device.index compatibility."""
+        return 0  # default GPU 0
+
+    @property
+    def raw_device(self) -> str:
+        return self._device
+
+    @property
+    def ndim(self) -> int:
+        return len(self._shape)
+
+    def numel(self) -> int:
+        """Element count. Method (not property) for ATen API compat."""
+        return self._numel
+
+    def nbytes(self) -> int:
+        return self._nbytes
+
+    def element_size(self) -> int:
+        return dtype_size(self._dtype)
+
+    def is_contiguous(self) -> bool:
+        """Method for ATen API compat. Returns the flag computed at
+        construction (C6a): _shape/_strides are never mutated after
+        __init__ — every view/reshape/slice constructs a new NBXTensor."""
+        return self._contig
+
+    def is_expanded(self) -> bool:
+        """True when the view replays elements along a broadcast axis.
+
+        Expand views have one or more (shape > 1, stride == 0) axes, which
+        means `numel * element_size > actual_backing_bytes`. Any caller that
+        intends to `memcpy(nbytes)` across a device boundary MUST first
+        materialise via `contiguous()` — otherwise the H2D / D2D read runs
+        past the real allocation and copies garbage.
+        """
+        return any(st == 0 and sh > 1
+                   for sh, st in zip(self._shape, self._strides))
+
+    def spans_densely(self) -> bool:
+        """True when the view's elements tile exactly one dense span of
+        `nbytes` starting at data_ptr() — contiguous, or a permutation of a
+        contiguous layout (a transpose). False for an expand view (stride 0
+        on a broadcast axis) and for a narrow on an inner axis (gaps between
+        rows): a single memcpy of nbytes copies the wrong bytes from those.
+        The one definition: `triton.device_transfer.transfer_tensor` asks it too."""
+        if self._numel == 0:
+            return True
+        expected = 1
+        for sh, st in sorted(((sh, st) for sh, st in zip(self._shape, self._strides)
+                              if sh != 1), key=lambda p: p[1]):
+            if st != expected:
+                return False
+            expected *= sh
+        return True
+
+    @property
+    def is_cuda(self) -> bool:
+        return self._device == 'cuda'
+
+    @property
+    def is_cpu(self) -> bool:
+        """True for NBXTensor allocated on host memory (zero3 offload,
+        pinned or unpinned). Every NBXTensor is either CUDA or CPU
+        today; there is no third state."""
+        return self._device == 'cpu'
+
+    @property
+    def is_pinned(self) -> bool:
+        """True for CPU-backed tensors allocated via cudaMallocHost
+        (fast non_blocking H2D DMA). False otherwise, including all
+        CUDA tensors."""
+        return self._pinned
+
+    # ========================================================================
+    # TYPE CHECKS
+    # ========================================================================
+
+    def is_floating_point(self) -> bool:
+        return self._dtype in _FLOATING_DTYPES
+
+    def is_complex(self) -> bool:
+        return self._dtype in _COMPLEX_DTYPES
+
+    # ========================================================================
+    # COMPLEX SUPPORT — complex64/128 stored as interleaved [real, imag] pairs
+    # (numpy '<c8'/'<c16', torch convention). Reinterprets are zero-copy when
+    # contiguous: the complex storage IS the float [..,N,2] storage. _offset is
+    # in elements of _dtype, so the complex↔float offset converts ×2 / ÷2.
+    # ========================================================================
+
+    def view_as_real(self) -> 'NBXTensor':
+        """complex [..,N] → float [..,N,2] (interleaved real/imag)."""
+        if not self.is_complex():
+            return self
+        x = self if self.is_contiguous() else self.contiguous()
+        fdt = NBXDtype.float64 if x._dtype == NBXDtype.complex128 else NBXDtype.float32
+        new_shape = x._shape + (2,)
+        return NBXTensor(x._data_ptr, new_shape, _contiguous_strides(new_shape),
+                         fdt, x._device, x._offset * 2,
+                         device_idx=x._device_idx,
+                         base=x._base if x._base is not None else x, pinned=x._pinned)
+
+    def view_as_complex(self) -> 'NBXTensor':
+        """float [..,N,2] → complex [..,N] (interleaved real/imag).
+
+        complex64 requires fp32 real/imag pairs and complex128 requires fp64
+        pairs — there is no complex32. A half-precision input (fp16/bf16, e.g.
+        a rotary-embedding q/k narrowed to the V100 compute dtype) therefore
+        CANNOT be reinterpreted as complex64 in place: the storage is half the
+        size the complex64 tag implies, so the downstream complex kernels read
+        past the data and produce garbage/Inf. Promote fp16/bf16 to fp32 first
+        (a real copy), then tag complex64. fp32→complex64 and fp64→complex128
+        stay zero-copy views.
+        """
+        x = self if self.is_contiguous() else self.contiguous()
+        if x._dtype in (NBXDtype.float16, NBXDtype.bfloat16):
+            x = x.to(NBXDtype.float32)
+        assert x._shape and x._shape[-1] == 2, \
+            f"view_as_complex expects last dim == 2, got {x._shape}"
+        cdt = NBXDtype.complex128 if x._dtype == NBXDtype.float64 else NBXDtype.complex64
+        new_shape = x._shape[:-1]
+        return NBXTensor(x._data_ptr, new_shape, _contiguous_strides(new_shape),
+                         cdt, x._device, x._offset // 2,
+                         device_idx=x._device_idx,
+                         base=x._base if x._base is not None else x, pinned=x._pinned)
+
+    @property
+    def real(self) -> 'NBXTensor':
+        """Real part (strided view, stride 2) of a complex tensor; self if real."""
+        if not self.is_complex():
+            return self
+        vr = self.view_as_real()
+        return vr.select(vr.ndim - 1, 0)
+
+    @property
+    def imag(self) -> 'NBXTensor':
+        """Imaginary part (strided view, stride 2) of a complex tensor."""
+        if not self.is_complex():
+            return NBXTensor.zeros(self._shape, dtype=self._dtype, device=self._device)
+        vr = self.view_as_real()
+        return vr.select(vr.ndim - 1, 1)
+
+    # ========================================================================
+    # SHAPE QUERY METHODS
+    # ========================================================================
+
+    def size(self, dim=None):
+        if dim is not None:
+            return self._shape[dim]
+        return self._shape
+
+    def dim(self) -> int:
+        return len(self._shape)
+
+    def stride(self, dim=None):
+        if dim is not None:
+            return self._strides[dim]
+        return self._strides
+
+    # ========================================================================
+    # __cuda_array_interface__ — standard CUDA interop
+    # ========================================================================
+
+    @property
+    def __cuda_array_interface__(self):
+        return {
+            'shape': self._shape,
+            'typestr': _DTYPE_TYPESTR[self._dtype],
+            'data': (self.data_ptr(), False),
+            'version': 3,
+            'strides': tuple(s * dtype_size(self._dtype) for s in self._strides),
+        }
+
+    # ========================================================================
+    # FACTORY METHODS — raw cudaMalloc
+    # ========================================================================
+
+    @staticmethod
+    def empty(shape, dtype=None, device='cuda') -> 'NBXTensor':
+        if isinstance(shape, int):
+            shape = (shape,)
+        if isinstance(shape, list):
+            shape = tuple(shape)
+        nbx_dt = dtype if isinstance(dtype, NBXDtype) else parse_dtype(str(dtype)) if dtype else NBXDtype.float32
+        dev_str = 'cuda'
+        # C3: resolve an explicit device index WITHOUT touching the
+        # driver; cudaGetDevice fires at most once per allocation, and
+        # not at all on the hot path (explicit device matching the
+        # cached current device).
+        dev_idx = None
+        if isinstance(device, str):
+            if ':' in device:
+                dev_idx = int(device.split(':')[1])
+        elif hasattr(device, '_device_idx'):
+            dev_idx = device._device_idx
+        elif hasattr(device, 'index') and device.index is not None:
+            dev_idx = device.index
+
+        numel = math.prod(shape) if shape else 1
+        nbytes = numel * dtype_size(nbx_dt)
+        if nbytes == 0:
+            if dev_idx is None:
+                dev_idx = DeviceAllocator.get_device()
+            return NBXTensor(0, shape, _contiguous_strides(shape), nbx_dt, dev_str, device_idx=dev_idx)
+
+        if dev_idx is None:
+            # No explicit device: allocate on the current one. Single
+            # query, no switch, and the resolved idx is threaded into
+            # malloc_cuda so it does not re-query.
+            dev_idx = DeviceAllocator.get_device()
+            ptr = DeviceAllocator.malloc_cuda(nbytes, dev_idx=dev_idx)
+        elif dev_idx == _cached_device_idx():
+            # Explicit device already fully current (C2 cache invariant
+            # guarantees the runtime device equals the cached idx): no
+            # driver query, no switch.
+            ptr = DeviceAllocator.malloc_cuda(nbytes, dev_idx=dev_idx)
+        else:
+            # Multi-GPU: allocate on the requested device, restore the
+            # previous one after. The restore target comes from a real
+            # driver query (never from the cache) so a cold/invalidated
+            # cache can never misdirect the restore.
+            cur = DeviceAllocator.get_device()
+            if cur != dev_idx:
+                DeviceAllocator.set_device(dev_idx)
+            ptr = DeviceAllocator.malloc_cuda(nbytes, dev_idx=dev_idx)
+            if cur != dev_idx:
+                DeviceAllocator.set_device(cur)
+
+        return NBXTensor(ptr, shape, _contiguous_strides(shape), nbx_dt, dev_str,
+                         owns_data=True, device_idx=dev_idx)
+
+    @staticmethod
+    def zeros(shape, dtype=None, device='cuda') -> 'NBXTensor':
+        t = NBXTensor.empty(shape, dtype, device)
+        if t._nbytes > 0:
+            DeviceAllocator.memset_cuda(t._data_ptr, 0, t._nbytes)
+        return t
+
+    @staticmethod
+    def ones(shape, dtype=None, device='cuda') -> 'NBXTensor':
+        return _fill_constant(NBXTensor.empty(shape, dtype, device), 1.0)
+
+    @staticmethod
+    def empty_like(other: 'NBXTensor', dtype=None, device=None) -> 'NBXTensor':
+        dev = device if device else f"cuda:{other._device_idx}"
+        return NBXTensor.empty(other._shape,
+                               dtype if dtype is not None else other._dtype,
+                               dev)
+
+    @staticmethod
+    def zeros_like(other: 'NBXTensor', dtype=None, device=None) -> 'NBXTensor':
+        return NBXTensor.zeros(other._shape,
+                               dtype if dtype is not None else other._dtype,
+                               device if device else other._device)
+
+    @staticmethod
+    def ones_like(other: 'NBXTensor', dtype=None, device=None) -> 'NBXTensor':
+        return NBXTensor.ones(other._shape,
+                              dtype if dtype is not None else other._dtype,
+                              device if device else other._device)
+
+    @staticmethod
+    def from_numpy(arr, dtype: 'Optional[NBXDtype]' = None) -> 'NBXTensor':
+        """Load numpy array to GPU. For weight loading from safetensors.
+
+        `dtype` names the NBX dtype the BITS in `arr` already are, for the
+        types numpy cannot express — bf16 travels in a uint16 container. It
+        is authoritative and must agree with the container's element size:
+        the buffer allocated here is `arr.nbytes`, and a tensor whose dtype
+        implies a different element size declares a length its own
+        allocation does not have. That mismatch used to be created by
+        retagging `_dtype` after construction (the tensor kept the
+        `_elem_size` / `_nbytes` of the dtype it was BUILT with): TinyLlama's
+        22 rotary tables, uint16 bf16 bits mistagged float32 by the fallback
+        below, each declared 524288 bytes over a 262144-byte buffer, and
+        every consumer that trusts `_nbytes` then ran off the end into
+        whichever allocation followed it — which is why the answer depended
+        on the sequence length. Measured 2026-09-07 on Apple.
+
+        An unmapped numpy dtype is refused rather than silently called
+        float32: guessing an element size is what produced the above.
+        """
+        import numpy as np
+        dtype_name = str(arr.dtype)
+        if dtype is not None:
+            nbx_dt = dtype if isinstance(dtype, NBXDtype) else parse_dtype(dtype)
+            if dtype_size(nbx_dt) != arr.dtype.itemsize:
+                raise ValueError(
+                    f"from_numpy: dtype {nbx_dt.name} is "
+                    f"{dtype_size(nbx_dt)} bytes per element but the numpy "
+                    f"container '{dtype_name}' is {arr.dtype.itemsize}; the "
+                    f"buffer is sized from the container, so the two must "
+                    f"agree.")
+        elif dtype_name in _NUMPY_DTYPE_MAP:
+            nbx_dt = _NUMPY_DTYPE_MAP[dtype_name]
+        else:
+            raise TypeError(
+                f"from_numpy: numpy dtype '{dtype_name}' has no NBX "
+                f"equivalent. Pass dtype=NBXDtype.<t> to declare what the "
+                f"bits are (bf16 travels as uint16); do not let the element "
+                f"size be guessed.")
+        arr_c = np.ascontiguousarray(arr)
+        nbytes = arr_c.nbytes
+        shape = arr_c.shape
+        dev_idx = DeviceAllocator.get_device()
+        ptr = DeviceAllocator.malloc_cuda(nbytes)
+        # H2D copy
+        DeviceAllocator.memcpy(ptr, arr_c.ctypes.data, nbytes, kind=1)
+        return NBXTensor(ptr, shape, _contiguous_strides(shape), nbx_dt, 'cuda',
+                         owns_data=True, device_idx=dev_idx)
+
+    @staticmethod
+    def from_raw(ptr: int, shape: Tuple[int, ...], dtype: NBXDtype,
+                 device: str = 'cuda', owns_data: bool = False,
+                 device_idx: int = 0, base=None) -> 'NBXTensor':
+        """Wrap an existing raw pointer. For interop at boundaries.
+
+        Args:
+            base: Reference to the object owning the memory (prevents GC).
+                  For torch.Tensor → NBXTensor conversion, pass the torch.Tensor
+                  so it stays alive as long as the NBXTensor exists.
+        """
+        return NBXTensor(ptr, shape, _contiguous_strides(shape), dtype, device,
+                         owns_data=owns_data, device_idx=device_idx, base=base)
+
+    # ------------------------------------------------------------------
+    # CPU form — zero3 weight offload and similar scenarios where
+    # weights live on host memory between promotions to GPU. Uses numpy
+    # for unpinned backing (default) or cudaMallocHost for pinned
+    # backing (faster H2D DMA). Zero torch dependency.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def empty_cpu(shape, dtype: 'Optional[NBXDtype]' = None,
+                  pinned: bool = False) -> 'NBXTensor':
+        """Allocate a CPU-backed NBXTensor.
+
+        Unpinned (pinned=False, default): backed by a numpy array. Cheap
+        to allocate, usable by numpy-based prep code, but incurs a
+        pageable→pinned staging copy on H2D.
+
+        Pinned (pinned=True): backed by cudaMallocHost-allocated memory.
+        Enables non_blocking DMA at ~2× unpinned throughput. Used by
+        zero3 for weights that will be transferred on the hot path.
+        """
+        if isinstance(shape, int):
+            shape = (shape,)
+        if isinstance(shape, list):
+            shape = tuple(shape)
+        nbx_dt = dtype if isinstance(dtype, NBXDtype) else (
+            parse_dtype(str(dtype)) if dtype else NBXDtype.float32)
+        numel = math.prod(shape) if shape else 1
+        elem = dtype_size(nbx_dt)
+        nbytes = numel * elem
+
+        if nbytes == 0:
+            return NBXTensor(0, shape, _contiguous_strides(shape), nbx_dt,
+                             'cpu', device_idx=0)
+
+        if pinned:
+            ptr = DeviceAllocator.malloc_host_pinned(nbytes)
+            return NBXTensor(ptr, shape, _contiguous_strides(shape), nbx_dt,
+                             'cpu', owns_data=True, device_idx=0,
+                             pinned=True)
+        else:
+            # Numpy backing — keep the array alive via _base.
+            import numpy as np
+            np_dtype_name = {
+                NBXDtype.float32: np.float32,
+                NBXDtype.float16: np.float16,
+                NBXDtype.bfloat16: np.uint16,   # bf16 stored as uint16 bits
+                NBXDtype.float64: np.float64,
+                NBXDtype.int64: np.int64,
+                NBXDtype.int32: np.int32,
+                NBXDtype.int16: np.int16,
+                NBXDtype.int8: np.int8,
+                NBXDtype.uint8: np.uint8,
+                NBXDtype.bool_: np.uint8,
+                NBXDtype.complex64: np.complex64,
+                NBXDtype.complex128: np.complex128,
+            }
+            # TOTAL, and it REFUSES what it does not know. `.get(nbx_dt,
+            # np.float32)` stood here with no complex entry, so the host buffer
+            # was allocated at four bytes an element while `to_cpu` copied
+            # `self._nbytes`, eight bytes an element, into it. Double the buffer,
+            # every complex readback, at every size: `malloc(): corrupted top
+            # size`. And not at the copy -- the first small probe printed a
+            # correct-looking array and the NEXT allocation died, which is how it
+            # survived. complex128 was the same bug at four times over.
+            #
+            # A default makes "a dtype I do not know" indistinguishable from
+            # "float32": a wrong-sized allocation waiting for that dtype to
+            # arrive. Every NBXDtype is named above; a new one that is not gets a
+            # refusal naming itself, not a corrupted heap.
+            if nbx_dt not in np_dtype_name:
+                raise RuntimeError(
+                    f"empty_cpu has no numpy backing for {nbx_dt}: add it to the "
+                    f"map above. Defaulting would size the host buffer for "
+                    f"another dtype and the copy that follows would write past it.")
+            arr = np.empty(shape, dtype=np_dtype_name[nbx_dt])
+            return NBXTensor(arr.ctypes.data, shape,
+                             _contiguous_strides(shape), nbx_dt, 'cpu',
+                             owns_data=True, device_idx=0,
+                             base=arr,  # keep numpy alive
+                             pinned=False)
+
+    def to_cuda(self, device_idx: int = 0) -> 'NBXTensor':
+        """Copy this tensor to a CUDA device. Returns a new GPU NBXTensor.
+
+        Handles CPU→GPU (kind=1 H2D) and GPU→GPU (kind=3 D2D). If the
+        tensor is already on the requested CUDA device, returns self.
+        A view whose elements do not tile one dense span (an expand view's
+        stride-0 axis, or a narrow on an inner axis — a stacked expert
+        slab's gate half) is materialised first: the copy is ONE memcpy of
+        nbytes from data_ptr, which is the view's bytes only when they are
+        dense.
+        """
+        if self._device == 'cuda' and self._device_idx == device_idx:
+            return self
+        src = self if self.spans_densely() else self.contiguous()
+        DeviceAllocator.set_device(device_idx)
+        ptr = DeviceAllocator.malloc_cuda(src._nbytes)
+        if src._nbytes > 0:
+            # kind: 1 = H2D if source is CPU, 3 = D2D if source is GPU.
+            kind = 1 if src._device == 'cpu' else 3
+            DeviceAllocator.memcpy(ptr, src.data_ptr(), src._nbytes, kind=kind)
+        return NBXTensor(ptr, src._shape, src._strides, src._dtype,
+                         'cuda', owns_data=True, device_idx=device_idx)
+
+    def to_cuda_async(self, device_idx: int = 0, stream: int = 0) -> 'NBXTensor':
+        """Non-blocking variant of to_cuda for zero3 pipelining.
+
+        Enqueues the memcpy on `stream` instead of running synchronously.
+        Caller is responsible for sequencing — either via stream_wait_event
+        before reading the returned tensor, or via stream_synchronize.
+
+        For H2D to actually overlap with compute on the default stream, the
+        source NBXTensor MUST be pinned (self._pinned == True). Otherwise
+        the driver falls back to a synchronous bounce-buffer copy and no
+        overlap happens.
+
+        Returns a GPU NBXTensor backed by a freshly-malloc'd pointer. The
+        allocation itself is synchronous (cudaMalloc); only the fill is
+        asynchronous.
+        """
+        if self._device == 'cuda' and self._device_idx == device_idx:
+            return self
+        src = self if self.spans_densely() else self.contiguous()
+        DeviceAllocator.set_device(device_idx)
+        ptr = DeviceAllocator.malloc_cuda(src._nbytes)
+        if src._nbytes > 0:
+            kind = 1 if src._device == 'cpu' else 3
+            DeviceAllocator.memcpy_async(
+                ptr, src.data_ptr(), src._nbytes,
+                kind=kind, stream=stream)
+        return NBXTensor(ptr, src._shape, src._strides, src._dtype,
+                         'cuda', owns_data=True, device_idx=device_idx)
+
+    def to_cpu(self, pinned: bool = False) -> 'NBXTensor':
+        """Copy this tensor to host memory. Returns a new CPU NBXTensor.
+
+        pinned=True allocates via cudaMallocHost for fast future H2D
+        promotion; pinned=False uses numpy backing.
+        """
+        if self._device == 'cpu' and self._pinned == pinned:
+            return self
+        dst = NBXTensor.empty_cpu(self._shape, self._dtype, pinned=pinned)
+        # The destination is row-major: a source that is not (a transpose, a
+        # narrow on an inner axis, an expand) is laid out row-major on its own
+        # side first — one memcpy of nbytes from data_ptr is its elements only
+        # when it already is.
+        src = self if self.is_contiguous() else self.contiguous()
+        if src._nbytes > 0:
+            # kind: 2 = D2H from GPU, 0 = H2H if we're re-packing CPU.
+            kind = 2 if src._device == 'cuda' else 0
+            DeviceAllocator.memcpy(dst.data_ptr(), src.data_ptr(),
+                                   src._nbytes, kind=kind)
+            # A device result crossing to the host is an observation, and a
+            # D2H copy has already flushed. Checking here rather than only at
+            # `sync_device` matters because a decode never calls that: it
+            # reads its logits, and this is that read.
+            if kind == 2:
+                check_device_faults()
+        return dst
+
+    def numpy(self):
+        """Host numpy array (boundary conversion — copies to CPU). Used at the
+        triton output boundary (e.g. saving a waveform). float/int dtypes only;
+        bf16 has no numpy dtype (cast to float32 first)."""
+        import numpy as np
+        import ctypes
+        f = self.contiguous()
+        if f._device != 'cpu':
+            f = f.to_cpu()
+        typestr = _DTYPE_TYPESTR.get(f._dtype, '<f4')
+        nbytes = f.numel() * dtype_size(f._dtype)
+        # A view over the host buffer, then one copy. `ctypes.string_at(ptr, n)` hands `n` to
+        # PyBytes_FromStringAndSize as a C int: a tensor of 2 GiB or more read back as
+        # "Negative size passed to PyBytes_FromStringAndSize" (the certifier on 2026-09-07:
+        # seven census shapes whose fp32 output exceeds 2 GiB — a 4K convolution, a
+        # 1,221,120-row matmul, a 16384² baddbmm — "no config could run").
+        if nbytes == 0:
+            return np.empty(tuple(self._shape), dtype=np.dtype(typestr))
+        buf = (ctypes.c_uint8 * nbytes).from_address(f.data_ptr())
+        view = np.ctypeslib.as_array(buf).view(np.dtype(typestr)).reshape(tuple(self._shape))
+        out = view.copy()
+        del view, buf                                   # nothing outlives the host buffer
+        return out
+
+    def pin_host(self) -> 'NBXTensor':
+        """Promote an unpinned CPU tensor to pinned host memory.
+
+        No-op if the tensor is already pinned. Used by Zero3Strategy to
+        accelerate subsequent H2D transfers during block-wise execution.
+        Raises on non-CPU tensors — pinning a GPU tensor is nonsensical.
+        """
+        if self._device != 'cpu':
+            raise RuntimeError(
+                f"pin_host() called on device={self._device}; pinning only "
+                f"applies to CPU-backed NBXTensors")
+        if self._pinned:
+            return self
+        return self.to_cpu(pinned=True)
+
+    # ========================================================================
+    # METADATA OPS — pure Python, zero data movement
+    # ========================================================================
+
+    def view(self, *shape) -> 'NBXTensor':
+        # Match PyTorch's aten::view tolerance: if the source tensor is
+        # expanded (stride-0 broadcast) or otherwise non-contiguous, the
+        # old path silently re-strode the view as contiguous while the
+        # underlying memory still held the unmaterialized broadcast —
+        # later kernel launches walked past the end of the backing
+        # allocation and got "Pointer argument cannot be accessed from
+        # Triton" on the second batch iteration (Janus RoPE bmm). Matches
+        # reshape's fallback: contiguous() first, then re-stride.
+        if not self.is_contiguous():
+            return self.contiguous().view(*shape)
+        if len(shape) == 1 and isinstance(shape[0], (list, tuple)):
+            shape = tuple(shape[0])
+        neg_idx = None
+        known = 1
+        for i, s in enumerate(shape):
+            if s == -1:
+                neg_idx = i
+            else:
+                known *= s
+        if neg_idx is not None:
+            shape = list(shape)
+            shape[neg_idx] = self._numel // known
+            shape = tuple(shape)
+        return NBXTensor(self._data_ptr, shape, _contiguous_strides(shape),
+                         self._dtype, self._device, self._offset, device_idx=self._device_idx, base=self._base if self._base is not None else self, pinned=self._pinned)
+
+    def reshape(self, *shape) -> 'NBXTensor':
+        if len(shape) == 1 and isinstance(shape[0], (list, tuple)):
+            shape = tuple(shape[0])
+        if self.is_contiguous():
+            return self.view(*shape)
+        return self.contiguous().view(*shape)
+
+    def unflatten(self, dim: int, sizes) -> 'NBXTensor':
+        """Split ONE dim into `sizes` (their product its extent), as torch's `unflatten` does: a pure
+        view on any strides — the split dim walks memory at its own stride, so its parts walk it at
+        that stride times the sizes after them. `reshape` makes a non-contiguous tensor contiguous
+        first: a sliced stretch's reading of a strided input copied the WHOLE input for every slice
+        (HAT-S at 2048 px, q/k/v views of the 6 912 MB qkv, 3 x 2 304 MB per pass, 2026-10-22)."""
+        dim = dim % self.ndim
+        sizes = [int(v) for v in sizes]
+        prod = 1
+        for v in sizes:
+            prod *= v
+        if prod != int(self._shape[dim]):
+            raise ValueError(f"unflatten: sizes {sizes} do not make extent {self._shape[dim]} of dim {dim}")
+        st, inner = [], int(self._strides[dim])
+        for v in reversed(sizes):
+            st.append(inner)
+            inner *= v
+        shape = tuple(self._shape[:dim]) + tuple(sizes) + tuple(self._shape[dim + 1:])
+        strides = tuple(self._strides[:dim]) + tuple(reversed(st)) + tuple(self._strides[dim + 1:])
+        return self.as_strided(shape, strides)
+
+    def merge_dims(self, d0: int, d1: int) -> 'NBXTensor':
+        """Merge two ADJACENT dims into one — as a pure view when the
+        strides allow it, else via reshape (which materialises).
+
+        The merge is a legal view iff stride(d0) == shape(d1)*stride(d1)
+        — the two dims already walk memory as one. This holds on tensors
+        whose non-contiguity lives in ANOTHER dim: the bucketed KV-cache
+        view `buffer[:, :, :padded, :]` is non-contiguous in the T dim,
+        so plain `reshape(BH, T, D)` copied the whole padded K/V per
+        layer per decode step (the copies-at-source census, 2026-08-23),
+        while its (B, H) pair still merges for free. Callers that feed
+        the merged tensor to a kernel must handle its strides
+        (`bmm(..., allow_strided_b=True)`); the fallback keeps the
+        semantics identical for every stride pattern.
+        """
+        d0 = d0 % self.ndim
+        d1 = d1 % self.ndim
+        if d1 != d0 + 1:
+            raise ValueError(f"merge_dims needs adjacent dims, got {d0},{d1}")
+        if self._strides[d0] != self._shape[d1] * self._strides[d1]:
+            new_shape = (self._shape[:d0]
+                         + (self._shape[d0] * self._shape[d1],)
+                         + self._shape[d1 + 1:])
+            return self.reshape(new_shape)
+        new_shape = (self._shape[:d0]
+                     + (self._shape[d0] * self._shape[d1],)
+                     + self._shape[d1 + 1:])
+        new_strides = (self._strides[:d0] + (self._strides[d1],)
+                       + self._strides[d1 + 1:])
+        return NBXTensor(self._data_ptr, new_shape, new_strides,
+                         self._dtype, self._device, self._offset,
+                         device_idx=self._device_idx,
+                         base=self._base if self._base is not None else self,
+                         pinned=self._pinned)
+
+    def unsqueeze(self, dim: int) -> 'NBXTensor':
+        dim = dim % (self.ndim + 1) if dim >= 0 else dim + self.ndim + 1
+        new_shape = list(self._shape)
+        new_strides = list(self._strides)
+        stride_val = new_strides[dim] * self._shape[dim] if dim < len(self._strides) else 1
+        new_shape.insert(dim, 1)
+        new_strides.insert(dim, stride_val)
+        return NBXTensor(self._data_ptr, tuple(new_shape), tuple(new_strides),
+                         self._dtype, self._device, self._offset, device_idx=self._device_idx, base=self._base if self._base is not None else self, pinned=self._pinned)
+
+    def squeeze(self, dim=None) -> 'NBXTensor':
+        if dim is not None:
+            dim = dim % self.ndim
+            if self._shape[dim] != 1:
+                return self
+            s = list(self._shape)
+            st = list(self._strides)
+            s.pop(dim)
+            st.pop(dim)
+        else:
+            s, st = [], []
+            for sz, sr in zip(self._shape, self._strides):
+                if sz != 1:
+                    s.append(sz)
+                    st.append(sr)
+        return NBXTensor(self._data_ptr, tuple(s), tuple(st),
+                         self._dtype, self._device, self._offset, device_idx=self._device_idx, base=self._base if self._base is not None else self, pinned=self._pinned)
+
+    def permute(self, *dims) -> 'NBXTensor':
+        if len(dims) == 1 and isinstance(dims[0], (list, tuple)):
+            dims = tuple(dims[0])
+        return NBXTensor(self._data_ptr,
+                         tuple(self._shape[d] for d in dims),
+                         tuple(self._strides[d] for d in dims),
+                         self._dtype, self._device, self._offset, device_idx=self._device_idx, base=self._base if self._base is not None else self, pinned=self._pinned)
+
+    def transpose(self, dim0: int, dim1: int) -> 'NBXTensor':
+        dim0, dim1 = dim0 % self.ndim, dim1 % self.ndim
+        s = list(self._shape)
+        st = list(self._strides)
+        s[dim0], s[dim1] = s[dim1], s[dim0]
+        st[dim0], st[dim1] = st[dim1], st[dim0]
+        return NBXTensor(self._data_ptr, tuple(s), tuple(st),
+                         self._dtype, self._device, self._offset, device_idx=self._device_idx, base=self._base if self._base is not None else self, pinned=self._pinned)
+
+    def t(self) -> 'NBXTensor':
+        if self.ndim < 2:
+            return self
+        return self.transpose(0, 1)
+
+    @property
+    def T(self) -> 'NBXTensor':
+        return self.transpose(-2, -1) if self.ndim >= 2 else self
+
+    def expand(self, *shape) -> 'NBXTensor':
+        if len(shape) == 1 and isinstance(shape[0], (list, tuple)):
+            shape = tuple(shape[0])
+        pad = len(shape) - self.ndim
+        old_s = (1,) * pad + self._shape
+        old_st = (0,) * pad + self._strides
+        new_s, new_st = [], []
+        for i, s in enumerate(shape):
+            if s == -1:
+                new_s.append(old_s[i]); new_st.append(old_st[i])
+            elif old_s[i] == 1:
+                new_s.append(s); new_st.append(0)
+            else:
+                new_s.append(s); new_st.append(old_st[i])
+        return NBXTensor(self._data_ptr, tuple(new_s), tuple(new_st),
+                         self._dtype, self._device, self._offset, device_idx=self._device_idx, base=self._base if self._base is not None else self, pinned=self._pinned)
+
+    def expand_as(self, other) -> 'NBXTensor':
+        return self.expand(*other._shape if isinstance(other, NBXTensor) else other.shape)
+
+    def repeat(self, *sizes) -> 'NBXTensor':
+        """aten::repeat — TILE the tensor `sizes[i]` times along each dim
+        (numpy.tile / torch.Tensor.repeat), NOT element-wise repeat_interleave.
+        When len(sizes) > ndim, leading singleton dims are prepended. R33-pure:
+        view → expand (stride-0 broadcast) → contiguous → reshape; the
+        interleaved `[1,d0,1,d1,…]` view collapses to `[r0*d0, r1*d1, …]`.
+        """
+        if len(sizes) == 1 and isinstance(sizes[0], (list, tuple)):
+            sizes = tuple(sizes[0])
+        sizes = tuple(int(s) for s in sizes)
+        m = len(sizes)
+        assert m >= self.ndim, f"repeat sizes {sizes} fewer than ndim {self.ndim}"
+        x = self.contiguous()
+        base = (1,) * (m - x.ndim) + tuple(x._shape)
+        view_shape, expand_shape, out_shape = [], [], []
+        for i in range(m):
+            view_shape += [1, base[i]]
+            expand_shape += [sizes[i], base[i]]
+            out_shape.append(sizes[i] * base[i])
+        return (x.view(tuple(view_shape))
+                 .expand(tuple(expand_shape))
+                 .contiguous()
+                 .reshape(tuple(out_shape)))
+
+    def narrow(self, dim: int, start: int, length: int) -> 'NBXTensor':
+        dim = dim % self.ndim
+        s = list(self._shape)
+        s[dim] = length
+        new_off = self._offset + start * self._strides[dim]
+        return NBXTensor(self._data_ptr, tuple(s), self._strides,
+                         self._dtype, self._device, new_off, device_idx=self._device_idx, base=self._base if self._base is not None else self, pinned=self._pinned)
+
+    def select(self, dim: int, index: int) -> 'NBXTensor':
+        dim = dim % self.ndim
+        # PyTorch semantics: negative index counts from the end.
+        # Without this, `select(0, -1)` on a (300,) contiguous tensor
+        # produced `new_off = -1 * 1 = -1`, and `data_ptr() = base - elem`
+        # pointed 4 bytes BEFORE the cudaMalloc'd block. Triton's
+        # cuPointerGetAttribute then flagged the pointer as CPU memory
+        # and raised "Pointer argument (at 0) cannot be accessed from
+        # Triton (cpu tensor?)" (PixArt T5 encoder aten.select+aten.add
+        # chain at position_ids build).
+        if index < 0:
+            index = self._shape[dim] + index
+        new_off = self._offset + index * self._strides[dim]
+        s = list(self._shape)
+        st = list(self._strides)
+        s.pop(dim)
+        st.pop(dim)
+        return NBXTensor(self._data_ptr, tuple(s), tuple(st),
+                         self._dtype, self._device, new_off, device_idx=self._device_idx, base=self._base if self._base is not None else self, pinned=self._pinned)
+
+    def flatten(self, start_dim: int = 0, end_dim: int = -1) -> 'NBXTensor':
+        start_dim = start_dim % self.ndim
+        end_dim = end_dim % self.ndim
+        if start_dim == end_dim:
+            return self
+        flat = 1
+        for i in range(start_dim, end_dim + 1):
+            flat *= self._shape[i]
+        new_s = list(self._shape[:start_dim]) + [flat] + list(self._shape[end_dim + 1:])
+        return self.view(*new_s)
+
+    def contiguous(self) -> 'NBXTensor':
+        if self.is_contiguous():
+            return self
+        if self._device == 'cpu':
+            return self._contiguous_cpu()
+        new = NBXTensor.empty(self._shape, self._dtype, f"cuda:{self._device_idx}")
+        n = self._numel
+        if n > 0:
+            _strided_copy(self, new)
+        return new
+
+    def _contiguous_cpu(self) -> 'NBXTensor':
+        """CPU-side materialization of a non-contiguous view.
+
+        The shared _strided_copy path launches a Triton kernel over GPU
+        pointers, so it cannot reach host memory. This helper performs
+        the same strided → contiguous copy in numpy (C-implemented
+        `ascontiguousarray` over an `as_strided` view) and preserves the
+        source's pinned / unpinned backing. Expand views (stride == 0)
+        materialize correctly because numpy replays the same source
+        element along zero-stride axes.
+        """
+        import numpy as np
+        dst = NBXTensor.empty_cpu(self._shape, self._dtype, pinned=self._pinned)
+        if self._numel == 0:
+            return dst
+        esz = dtype_size(self._dtype)
+        # Byte window touched by the strided view starting at self.data_ptr():
+        # last-reachable element offset + one element for esz bytes.
+        max_elem_offset = 1 + sum(
+            (dim - 1) * st for dim, st in zip(self._shape, self._strides)
+            if dim > 0)
+        n_bytes = max_elem_offset * esz
+        src_bytes = np.ctypeslib.as_array(
+            ctypes.cast(self.data_ptr(), ctypes.POINTER(ctypes.c_ubyte)),
+            shape=(n_bytes,),
+        )
+        byte_strides = tuple(s * esz for s in self._strides)
+        strided_view = np.lib.stride_tricks.as_strided(
+            src_bytes,
+            shape=tuple(self._shape) + (esz,),
+            strides=byte_strides + (1,),
+        )
+        contig = np.ascontiguousarray(strided_view)
+        ctypes.memmove(dst.data_ptr(), contig.ctypes.data, dst._nbytes)
+        return dst
+
+    def unfold(self, dimension: int, size: int, step: int) -> 'NBXTensor':
+        dimension = dimension % self.ndim
+        n = (self._shape[dimension] - size) // step + 1
+        s = list(self._shape)
+        st = list(self._strides)
+        s[dimension] = n
+        s.append(size)
+        st[dimension] = self._strides[dimension] * step
+        st.append(self._strides[dimension])
+        return NBXTensor(self._data_ptr, tuple(s), tuple(st),
+                         self._dtype, self._device, self._offset, device_idx=self._device_idx, base=self._base if self._base is not None else self, pinned=self._pinned)
+
+    def as_strided(self, size, stride, storage_offset=None) -> 'NBXTensor':
+        off = storage_offset if storage_offset is not None else self._offset
+        return NBXTensor(self._data_ptr, tuple(size), tuple(stride),
+                         self._dtype, self._device, off, device_idx=self._device_idx, base=self._base if self._base is not None else self, pinned=self._pinned)
+
+    def view_as(self, other) -> 'NBXTensor':
+        s = other._shape if isinstance(other, NBXTensor) else other.shape
+        return self.view(*s)
+
+    def reshape_as(self, other) -> 'NBXTensor':
+        s = other._shape if isinstance(other, NBXTensor) else other.shape
+        return self.reshape(*s)
+
+    def movedim(self, src: int, dst: int) -> 'NBXTensor':
+        src, dst = src % self.ndim, dst % self.ndim
+        dims = list(range(self.ndim))
+        dims.pop(src)
+        dims.insert(dst, src)
+        return self.permute(*dims)
+
+    def __getitem__(self, key):
+        """Basic tensor indexing: t[0], t[:, :, 0], t[:, 2:5], etc.
+
+        Fancy indexing by Python list of integers (e.g.
+        t[:, [0, -3, -2, -1]]) is NOT supported. NBXTensor enforces
+        explicit slicing via narrow, cat, or index_select_wrapper to
+        guarantee numerical and structural parity with torch. Prior to
+        this guard, list keys were silently no-op'd, returning the
+        original tensor unchanged — a bomb that masked a real bug in
+        the Sana CHI handler (see commit log). The crash is intentional
+        and forces the explicit pattern at every call site.
+        """
+        # Reject fancy indexing by list — silently no-op'd before, now hard-fails.
+        if isinstance(key, list):
+            raise RuntimeError(
+                "ZERO FALLBACK: NBXTensor does not support fancy indexing by "
+                "Python list (e.g. tensor[[0, 1, 2]]). Use narrow + cat for "
+                "static patterns or index_select_wrapper for dynamic indices. "
+                "See src/neurobrix/core/components/handlers/text_encoder_handler.py "
+                "for an example of the narrow + cat pattern."
+            )
+        if isinstance(key, tuple):
+            for k in key:
+                if isinstance(k, list):
+                    raise RuntimeError(
+                        "ZERO FALLBACK: NBXTensor does not support fancy indexing "
+                        "by Python list within a tuple (e.g. tensor[:, [0, 1, 2]]). "
+                        "Use narrow + cat for static patterns or "
+                        "index_select_wrapper for dynamic indices. See "
+                        "src/neurobrix/core/components/handlers/text_encoder_handler.py "
+                        "for an example of the narrow + cat pattern."
+                    )
+        if isinstance(key, int):
+            return self.select(0, key)
+        # P-TRITON-CHAIN-CPU-POINTER C3d 2026-05-15: handle negative slice
+        # start/stop per torch / numpy contract. Previous code did
+        # `k.start or 0` which silently converted None → 0 but left
+        # negative values untouched. For `t[-N:]` (slice(-N, None)),
+        # `start` stayed at `-N` and `narrow(dim, -N, length)` computed
+        # `new_off = offset - N*stride` → data_ptr pointed BEFORE the
+        # cudaMalloc'd block → Triton's cuPointerGetAttribute rejected
+        # the pointer with "Pointer argument (at 0) cannot be accessed
+        # from Triton (cpu tensor?)". The Sana 4Kpx VAE chain wrapper's
+        # `halo_carry[:, :, -top_size:, :]` triggered this at the third
+        # iteration of the 4096² chains (chains 7-9 of run).
+        if isinstance(key, slice):
+            start, stop = _slice_bounds(key, self._shape[0])
+            return self.narrow(0, start, stop - start)
+        if isinstance(key, tuple):
+            result = self
+            dim_offset = 0
+            for dim, k in enumerate(key):
+                actual_dim = dim - dim_offset
+                if isinstance(k, int):
+                    result = result.select(actual_dim, k)
+                    dim_offset += 1  # select reduces ndim
+                elif isinstance(k, slice):
+                    start, stop = _slice_bounds(k, result._shape[actual_dim])
+                    result = result.narrow(
+                        actual_dim, start, stop - start)
+                # slice(None) = : → no-op on this dim
+        return result
+
+    def __setitem__(self, key, value):
+        """Indexed write: buffer[..., start:end, :] = source.
+
+        Handles the KV cache pattern: contiguous slice assignment.
+        Uses strided_scatter_kernel when the destination view is non-contiguous.
+        Guards: dtype cast and device transfer before copy.
+        """
+        dst = self[key]
+        if isinstance(value, NBXTensor):
+            # Dtype guard: a complex source is cast first (the nd copy kernel
+            # is real-only); a real source is converted on the copy's store.
+            if value._dtype != dst._dtype and (value.is_complex() or dst.is_complex()):
+                value = value.to(dst._dtype)
+            # Device guard: transfer source to destination device
+            if hasattr(value, '_device_idx') and hasattr(dst, '_device_idx') and value._device_idx != dst._device_idx:
+                src_contig = value.contiguous()
+                tmp = NBXTensor.empty(src_contig._shape, src_contig._dtype, f"cuda:{dst._device_idx}")
+                DeviceAllocator.memcpy(tmp.data_ptr(), src_contig.data_ptr(), src_contig._nbytes, kind=3)
+                value = tmp
+            if (value.is_contiguous() and dst.is_contiguous()
+                    and tuple(value._shape) == tuple(dst._shape)):
+                DeviceAllocator.memcpy(dst.data_ptr(), value.data_ptr(), value._nbytes)
+            elif dst._numel > 0:
+                # One launch reads the source by its strides and writes the
+                # view by its own — no contiguous copy of the source first
+                # (the KV cache's V arrives as a head-strided view: its write
+                # was a strided copy, a cast and a scatter per layer per token).
+                _copy_nd(value, dst)
+
+    def unbind(self, dim: int = 0) -> tuple:
+        dim = dim % self.ndim
+        return tuple(self.select(dim, i) for i in range(self._shape[dim]))
+
+    # ========================================================================
+    # DATA OPS — cudaMemcpy
+    # ========================================================================
+
+    def clone(self) -> 'NBXTensor':
+        new = NBXTensor.empty(self._shape, self._dtype, f"cuda:{self._device_idx}")
+        n = self._numel
+        if n > 0:
+            if self.is_contiguous():
+                DeviceAllocator.memcpy(new._data_ptr, self.data_ptr(), self._nbytes)
+            else:
+                _strided_copy(self, new)
+        return new
+
+    def detach(self) -> 'NBXTensor':
+        return self  # no autograd in triton mode
+
+    def fill_(self, value) -> 'NBXTensor':
+        if self._nbytes == 0:
+            return self
+        # aten::fill carries its value as a 0-dim tensor (e.g. via
+        # aten::lift_fresh); collapse it to a host scalar before the kernel.
+        if isinstance(value, NBXTensor):
+            value = value.item()
+        if value == 0:
+            DeviceAllocator.memset_cuda(self.data_ptr(), 0, self._nbytes)
+            return self
+        # Non-zero fill via the pure-Triton fill_kernel.
+        return _fill_constant(self, value)
+
+    def copy_(self, src, non_blocking: bool = False) -> 'NBXTensor':
+        if isinstance(src, NBXTensor):
+            # PyTorch Tensor.copy_ converts src to self's dtype. A raw byte
+            # memcpy across a dtype boundary reinterprets the bits — e.g. an
+            # fp16 source written into an fp32 destination decodes the fp16
+            # bit-pairs as fp32 (≈0), and the byte counts differ (the chatterbox
+            # s3gen prompt-feat copy: fp16 src 50240 B into fp32 dst 100480 B).
+            # Cast to self's dtype first, then contiguous-pack the source so the
+            # flat copy of self._nbytes bytes is well-defined.
+            if src.dtype != self.dtype and (src.is_complex() or self.is_complex()):
+                src = src.to(self.dtype)
+            if not (src.is_contiguous() and self.is_contiguous()
+                    and src.dtype == self.dtype
+                    and tuple(src._shape) == tuple(self._shape)) and not self.is_complex():
+                # Strides on either side, a dtype to convert, or a source to
+                # broadcast: one launch, the source read in place.
+                _copy_nd(src, self)
+                return self
+            if not src.is_contiguous():
+                src = src.contiguous()
+            if not self.is_contiguous():
+                # Destination is a STRIDED view, e.g. an in-place slice-assignment
+                # `buf[..., :k] = src` that the tracer lowers to slice + copy_.
+                # A flat memcpy of self._nbytes would write the source CONTIGUOUSLY
+                # at self.data_ptr(), ignoring the view's strides — scattering the
+                # data to the wrong addresses. (Wan RoPE builds the rotated Q/K via
+                # an empty_like buffer + slice-copy; the flat memcpy left the buffer
+                # garbage → zero self-attn Q/K → washed-out VACE.) Scatter the
+                # contiguous src into self's strided layout via the same dedicated
+                # kernel `__setitem__` and `_fill_constant` use. R33-pure.
+                #
+                # The scatter maps flat src index i -> dst's strided position of
+                # multi-index i, so it requires equal element counts. A broadcast
+                # copy_ (src smaller than dst) into a strided view is unsupported
+                # — surface it loudly rather than silently under-writing. The old
+                # flat memcpy was already broken for that case (it read past src),
+                # so this raises no previously-working path.
+                if src._numel != self._numel:
+                    raise RuntimeError(
+                        "NBXTensor.copy_ into a strided (non-contiguous) "
+                        "destination requires matching element counts; "
+                        "broadcast copy_ into a strided view is unsupported "
+                        f"(src._numel={src._numel} dst._numel={self._numel}).")
+                if self.is_complex():
+                    # The scatter kernel sees a plain float ptr; reinterpret both
+                    # as a float view with a trailing [2] (re/imag) so each complex
+                    # element's two floats land at the correct strided positions.
+                    # Mirrors _strided_copy's complex handling.
+                    _fdt = (NBXDtype.float64 if self._dtype == NBXDtype.complex128
+                            else NBXDtype.float32)
+                    _src_shape2 = tuple(src._shape) + (2,)
+                    _fsrc = NBXTensor(
+                        src._data_ptr, _src_shape2, _contiguous_strides(_src_shape2),
+                        _fdt, src._device, src._offset * 2,
+                        device_idx=src._device_idx,
+                        base=src._base if src._base is not None else src,
+                        pinned=src._pinned)
+                    _fdst = NBXTensor(
+                        self._data_ptr, tuple(self._shape) + (2,),
+                        tuple(s * 2 for s in self._strides) + (1,),
+                        _fdt, self._device, self._offset * 2,
+                        device_idx=self._device_idx,
+                        base=self._base if self._base is not None else self,
+                        pinned=self._pinned)
+                    _strided_scatter(_fsrc, _fdst)
+                else:
+                    _strided_scatter(src, self)
+                return self
+            DeviceAllocator.memcpy(self.data_ptr(), src.data_ptr(), self._nbytes)
+        return self
+
+    def item(self) -> float:
+        """Read single scalar from GPU via cudaMemcpy D2H."""
+        assert self._numel == 1, f"item() requires 1 element, got {self._numel}"
+        esz = dtype_size(self._dtype)
+        buf = (ctypes.c_char * esz)()
+        DeviceAllocator.memcpy(ctypes.addressof(buf), self.data_ptr(), esz, kind=2)
+
+        if self._dtype == NBXDtype.float32:
+            return ctypes.cast(buf, ctypes.POINTER(ctypes.c_float))[0]
+        elif self._dtype == NBXDtype.float64:
+            return ctypes.cast(buf, ctypes.POINTER(ctypes.c_double))[0]
+        elif self._dtype == NBXDtype.int32:
+            return ctypes.cast(buf, ctypes.POINTER(ctypes.c_int32))[0]
+        elif self._dtype == NBXDtype.int64:
+            return ctypes.cast(buf, ctypes.POINTER(ctypes.c_int64))[0]
+        elif self._dtype == NBXDtype.float16:
+            raw = ctypes.cast(buf, ctypes.POINTER(ctypes.c_uint16))[0]
+            return struct.unpack('e', struct.pack('H', raw))[0]
+        elif self._dtype == NBXDtype.bool_:
+            return bool(ctypes.cast(buf, ctypes.POINTER(ctypes.c_uint8))[0])
+        return 0.0
+
+    # ========================================================================
+    # DTYPE CONVERSION
+    # ========================================================================
+
+    def to(self, *args, **kwargs) -> 'NBXTensor':
+        target = None
+        if args:
+            a = args[0]
+            if isinstance(a, NBXDtype):
+                target = a
+            elif isinstance(a, str):
+                # Distinguish device string ("cuda:0") from dtype string ("float32")
+                if 'cuda' in a or 'cpu' in a:
+                    return self  # .to(device) — already on device
+                target = parse_dtype(a)
+            elif isinstance(a, NBXTensor):
+                return self
+            else:
+                # Check if it's a device-like object (has .type attribute = "cuda"/"cpu")
+                s = str(a)
+                if 'cuda' in s or 'cpu' in s or 'device' in s:
+                    return self  # .to(device) — already on device
+                target = parse_dtype(s)
+        if 'dtype' in kwargs:
+            d = kwargs['dtype']
+            target = d if isinstance(d, NBXDtype) else parse_dtype(str(d))
+        if target is None or target == self._dtype:
+            return self
+        # Complex tensors must never be downcast to a REAL dtype via .to():
+        # PyTorch itself raises on complex->real .to() (real conversions go via
+        # .real / view_as_real). When it appears here it is always a spurious
+        # compute-dtype downcast of a complex tensor (e.g. the RoPE frequency
+        # table, stored complex128) by the AMP/Prism dtype pipeline — which would
+        # reinterpret the interleaved real/imag bytes as a single real array and
+        # poison the value with NaN. Preserve the complex tensor. complex<->complex
+        # casts (complex128<->complex64) still proceed below.
+        if self.is_complex() and target not in _COMPLEX_DTYPES:
+            return self
+        # A float64 element on a backend whose kernels have none is not cast, it is misread:
+        # refused by name (`backend_has_fp64`, asked only when fp64 is in play). The caller places the array at a dtype the
+        # backend has (a float64 formula result is cast on the host first).
+        if (self._dtype in (NBXDtype.float64, NBXDtype.complex128)
+                or target in (NBXDtype.float64, NBXDtype.complex128)) and not backend_has_fp64():
+            raise RuntimeError(
+                f"ZERO FALLBACK: a cast from {self._dtype.name} to {target.name} on the "
+                f"'{_detect_gpu_backend()}' backend, whose kernels have no float64: its lowering "
+                f"narrows double in silence and the result would be garbage, not a cast "
+                f"(2026-09-28: 1 139 of 143 360 bits right on the Sana 4K positional embedding). "
+                f"Place the array at a dtype this backend has; a float64 formula result is cast "
+                f"on the host first.")
+        # Cast via Triton copy kernel (tl.store auto-converts dtype).
+        # Downcasts from wider floats to float16 use the PROTECTED
+        # conversion (clamp finite values to ±65504) — the triton mirror
+        # of the compiled DtypeEngine contract; raw tl.store overflows
+        # bf16/fp32-range sentinels (finfo.min mask fills) to ±inf.
+        _sat = _saturating_cast(self._dtype, target)
+        new = NBXTensor.empty(self._shape, target, f"cuda:{self._device_idx}")
+        n = self._numel
+        if n > 0 and not self.is_contiguous() and not self.is_complex():
+            # a strided source is read in place and cast on the store —
+            # one launch instead of a contiguous copy and a cast of it
+            _copy_nd(self, new)
+            return new
+        if n > 0:
+            from nbxtensor.ops.copy_op import copy_kernel
+            import triton
+            src = self.contiguous()
+            _set_device(src)
+            _m = _ew_meta(n)                     # the certified tile of the count's class (ops/elementwise_launch.py)
+            copy_kernel[(triton.cdiv(n, _m['BLOCK_SIZE']),)](src, new, n,
+                                                 BLOCK_SIZE=_m['BLOCK_SIZE'], num_warps=_m['num_warps'],
+                                                 SATURATE_F16=_sat)
+        return new
+
+    def float(self) -> 'NBXTensor':
+        return self.to(NBXDtype.float32)
+
+    def half(self) -> 'NBXTensor':
+        return self.to(NBXDtype.float16)
+
+    def bfloat16(self) -> 'NBXTensor':
+        return self.to(NBXDtype.bfloat16)
+
+    def int(self) -> 'NBXTensor':
+        return self.to(NBXDtype.int32)
+
+    def long(self) -> 'NBXTensor':
+        return self.to(NBXDtype.int64)
+
+    def type_as(self, other) -> 'NBXTensor':
+        target = other._dtype if isinstance(other, NBXTensor) else parse_dtype(str(other.dtype))
+        return self.to(target)
+
+    # ========================================================================
+    # CREATION HELPERS
+    # ========================================================================
+
+    def new_zeros(self, size, **kwargs) -> 'NBXTensor':
+        return NBXTensor.zeros(tuple(size) if isinstance(size, list) else size,
+                               kwargs.get('dtype', self._dtype),
+                               kwargs.get('device', self._device))
+
+    def new_ones(self, size, **kwargs) -> 'NBXTensor':
+        # Must actually FILL ones — the former `NBXTensor.empty` returned
+        # uninitialized memory (a leftover TODO). The Allegro/T5 extended
+        # attention mask opens with `aten::new_ones([]) & (positions >= 0)`;
+        # the uninitialized 0-dim byte read as 0 -> False -> the AND zeroed the
+        # whole [1,1,S,1] q-side -> extended mask = -inf on ALL keys -> every
+        # T5 self-attention row went UNIFORM (softmax of a constant row), so
+        # positive-prompt embeddings washed toward the pad-token mean (cond
+        # branch corr 0.9288 vs the sequential oracle while the empty-prompt
+        # uncond branch stayed clean).
+        return NBXTensor.ones(tuple(size) if isinstance(size, list) else size,
+                              kwargs.get('dtype', self._dtype),
+                              kwargs.get('device', self._device))
+
+    def new_empty(self, size, **kwargs) -> 'NBXTensor':
+        return NBXTensor.empty(tuple(size) if isinstance(size, list) else size,
+                               kwargs.get('dtype', self._dtype),
+                               kwargs.get('device', self._device))
+
+    # ========================================================================
+    # STATIC ASSEMBLY — cat, stack (require data copy)
+    # ========================================================================
+
+    @staticmethod
+    def cat(tensors: list, dim: int = 0) -> 'NBXTensor':
+        # Filter out 0-dim scalars and empty tensors (Gemma2 attention pattern)
+        valid = [t for t in tensors if t.ndim > 0 and t._numel > 0]
+        if not valid:
+            return tensors[0] if tensors else NBXTensor.empty((0,), NBXDtype.float32, 'cuda')
+        if len(valid) == 1:
+            return valid[0]
+        tensors = valid
+        # Complex cat: the copy kernel concatenates the interleaved [re,im] float
+        # storage as if it were flat floats. For dim==0 that is correct (whole
+        # element-blocks stay contiguous), but for any inner dim it splits the
+        # boundary mid-pair, pairing re of one operand with im of the next
+        # (the Wan rotary freqs concat per-axis along the last dim). Route via
+        # the real view: cat on the same element dim with the [.,2] pair axis
+        # appended (untouched), then reinterpret as complex.
+        if valid[0].is_complex():
+            ndc = valid[0].ndim
+            dd = dim % ndc
+            real_parts = [t.view_as_real() for t in valid]
+            return NBXTensor.cat(real_parts, dd).view_as_complex()
+        dim = dim % tensors[0].ndim
+        # Contiguous-guard (manifesto pattern): the cat copy kernels
+        # flat-index their sources; a strided view (e.g. the MLA rope
+        # de-interleave slices x[..., 0::2]) fed directly reads wrong
+        # addresses — layout-dependent illegal access at runtime.
+        # Contiguous inputs short-circuit at zero cost.
+        tensors = [t.contiguous() for t in tensors]
+        # Align dtypes — cat_copy_kernel requires all inputs same type
+        target_dtype = tensors[0]._dtype
+        tensors = [t.to(target_dtype) if t._dtype != target_dtype else t for t in tensors]
+        # Align devices — all tensors must be on same GPU
+        target_dev = tensors[0]._device_idx
+        aligned = []
+        for t in tensors:
+            if hasattr(t, '_device_idx') and t._device_idx != target_dev:
+                src = t.contiguous()
+                dst = NBXTensor.empty(src._shape, src._dtype, f"cuda:{target_dev}")
+                DeviceAllocator.memcpy(dst.data_ptr(), src.data_ptr(), src._nbytes, kind=3)
+                aligned.append(dst)
+            else:
+                aligned.append(t)
+        tensors = aligned
+        out_shape = list(tensors[0]._shape)
+        out_shape[dim] = sum(t._shape[dim] for t in tensors)
+        # Allocate on same device as first input tensor
+        DeviceAllocator.set_device(tensors[0]._device_idx)
+        out = NBXTensor.empty(tuple(out_shape), target_dtype, tensors[0]._device)
+
+        if dim == 0:
+            # Simple case: concat on first dim → contiguous slices
+            offset = 0
+            for t in tensors:
+                tc = t.contiguous()
+                if tc._nbytes > 0:
+                    DeviceAllocator.memcpy(
+                        out._data_ptr + offset * _DTYPE_SIZES[out._dtype],
+                        tc.data_ptr(), tc._nbytes)
+                offset += tc._numel
+        else:
+            # General case: use cat_copy_kernel which handles dim offsets
+            import triton
+            from nbxtensor.ops.cat_op import cat_copy_kernel_4
+
+            dim_size_out = out_shape[dim]
+            # Product of dims after cat dim
+            dim_prod_post = 1
+            for d in range(dim + 1, len(out_shape)):
+                dim_prod_post *= out_shape[d]
+
+            # Process tensors in groups of 4 (kernel handles up to 4)
+            dim_offset = 0
+            for batch_start in range(0, len(tensors), 4):
+                batch = tensors[batch_start:batch_start + 4]
+                # Pad to 4 with dummy (zero-element) tensors
+                contig = [t.contiguous() for t in batch]
+                while len(contig) < 4:
+                    contig.append(out)  # dummy, total_elements=0
+
+                sizes = [c._shape[dim] if i < len(batch) else 0 for i, c in enumerate(contig)]
+                totals = [c._numel if i < len(batch) else 0 for i, c in enumerate(contig)]
+                offsets = []
+                off = dim_offset
+                for s in sizes:
+                    offsets.append(off)
+                    off += s
+
+                max_total = max(totals)
+                if max_total == 0:
+                    continue
+                _m = _ew_meta(max_total)                 # the certified tile of the count's class (ops/elementwise_launch.py)
+                BLOCK = _m['BLOCK_SIZE']
+                grid = (triton.cdiv(max_total, BLOCK), len(batch))
+                _set_device(out)
+                cat_copy_kernel_4[grid](
+                    out,
+                    contig[0], contig[1], contig[2], contig[3],
+                    sizes[0], sizes[1], sizes[2], sizes[3],
+                    dim_size_out, dim_prod_post,
+                    offsets[0], offsets[1], offsets[2], offsets[3],
+                    totals[0], totals[1], totals[2], totals[3],
+                    BLOCK_X=BLOCK, num_warps=_m['num_warps'],
+                )
+                dim_offset = off
+
+        return out
+
+    @staticmethod
+    def stack(tensors: list, dim: int = 0) -> 'NBXTensor':
+        return NBXTensor.cat([t.unsqueeze(dim) for t in tensors], dim=dim)
+
+    # ========================================================================
+    # REPR
+    # ========================================================================
+
+    # ========================================================================
+    # PYTHON OPERATORS — delegate to kernel wrappers
+    # ========================================================================
+
+    def __add__(self, other):
+        from nbxtensor.ops.wrappers import add
+        return add(self, other)
+
+    def __radd__(self, other):
+        from nbxtensor.ops.wrappers import add
+        return add(other, self)
+
+    def __sub__(self, other):
+        from nbxtensor.ops.wrappers import sub
+        return sub(self, other)
+
+    def __rsub__(self, other):
+        from nbxtensor.ops.wrappers import rsub
+        return rsub(self, other)
+
+    def __mul__(self, other):
+        from nbxtensor.ops.wrappers import mul
+        return mul(self, other)
+
+    def __rmul__(self, other):
+        from nbxtensor.ops.wrappers import mul
+        return mul(other, self)
+
+    def __truediv__(self, other):
+        from nbxtensor.ops.wrappers import div
+        return div(self, other)
+
+    def __neg__(self):
+        from nbxtensor.ops.wrappers import neg
+        return neg(self)
+
+    def __repr__(self) -> str:
+        return (f"NBXTensor(shape={self._shape}, dtype={self._dtype.name}, "
+                f"device={self._device}, ptr=0x{self._data_ptr:x})")

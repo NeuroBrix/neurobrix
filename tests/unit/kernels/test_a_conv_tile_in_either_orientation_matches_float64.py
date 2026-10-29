@@ -7,9 +7,9 @@ import numpy as np
 import pytest
 import triton
 
-from neurobrix.kernels.nbx_tensor import DeviceAllocator, NBXTensor
-from neurobrix.kernels.oracles.conv2d_fp64 import conv2d_reference
-from neurobrix.kernels.ops.conv2d import conv2d_forward_kernel
+from nbxtensor.tensor import DeviceAllocator, NBXTensor
+from nbxtensor.ops.oracles.conv2d_fp64 import conv2d_reference
+from nbxtensor.ops.conv2d import conv2d_forward_kernel
 
 
 def _gpu() -> bool:

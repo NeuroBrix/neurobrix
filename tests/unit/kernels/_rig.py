@@ -81,7 +81,7 @@ def running_backend(triton_version=None) -> dict:
     distribution metadata (2026-09-20), which is the behaviour a copy always
     buys.
     """
-    from neurobrix.kernels.autotune_certified import generator_identity
+    from nbxtensor.ops.autotune_certified import generator_identity
     # The identity is the RUNNING backend's (its content, since 2026-10-20: the launcher resolves the
     # active driver). Where no driver comes up — no card visible — the question has no answer on this
     # machine: the test is skipped with the launcher's own words, never answered with another identity.

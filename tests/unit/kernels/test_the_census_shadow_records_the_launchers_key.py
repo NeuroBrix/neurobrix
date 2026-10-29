@@ -23,8 +23,8 @@ SCRIPT = r'''
 import os
 from neurobrix.kernels import census
 census.install()
-from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator as DA
-from neurobrix.kernels import wrappers as W
+from nbxtensor.tensor import NBXTensor, DeviceAllocator as DA
+from nbxtensor.ops import wrappers as W
 DA.device_synchronize()               # the shadow answers the whole driver surface
 a = NBXTensor.empty((19, 2048), "float16", 2)
 b = NBXTensor.empty((2048, 2048), "float16", 2)
@@ -49,7 +49,7 @@ def test_the_shadow_records_the_key_the_live_launcher_forms(tmp_path):
     assert "OUT (19, 2048) fp16" in r.stdout, r.stdout
     lines = rec.read_text().splitlines() if rec.exists() else []
     assert lines, "the shadow formed no key: the record seam is gone"
-    assert lines[0].startswith("neurobrix.kernels.ops.matmul.matmul_kernel::(19, 2048, 2048,"), lines
+    assert lines[0].startswith("nbxtensor.ops.matmul.matmul_kernel::(19, 2048, 2048,"), lines
 
 
 def test_without_a_record_path_the_shadow_writes_nothing(tmp_path):
@@ -64,9 +64,9 @@ def test_without_the_census_the_engine_is_not_a_shadow(tmp_path):
     launcher and the kernels' `run` are the engine's own."""
     script = r'''
 from neurobrix.kernels import census
-from neurobrix.kernels import wrappers  # defines the autotuned kernels
-from neurobrix.kernels.nbx_tensor import DeviceAllocator as DA
-from neurobrix.kernels import launcher
+from nbxtensor.ops import wrappers  # defines the autotuned kernels
+from nbxtensor.tensor import DeviceAllocator as DA
+from nbxtensor.backend import launcher
 assert census.active() is False
 assert DA.malloc_cuda.__name__ == "malloc_cuda", DA.malloc_cuda
 assert launcher.launch.__name__ == "launch", launcher.launch
@@ -86,7 +86,7 @@ def test_the_shadow_refuses_while_a_device_is_visible(tmp_path):
     silence, so install() refuses at entry. Seen failing (the refusal) 2026-09-21 with
     CUDA_VISIBLE_DEVICES=0 on the rack; on a machine with no card this test cannot see the
     door and is skipped rather than read as green."""
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator, _detect_gpu_backend
+    from nbxtensor.tensor import DeviceAllocator, _detect_gpu_backend
     if DeviceAllocator.device_count() < 1:
         pytest.skip("no device visible: the door cannot be exercised here")
     try:

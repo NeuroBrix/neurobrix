@@ -82,7 +82,7 @@ OUT_W = (IN_W + 2 * PAD - KW) // STRIDE + 1
 #: so a config added there cannot stay unmeasured.
 def _servable_configs():
     import re
-    src = Path(__import__("neurobrix.kernels.ops.conv2d", fromlist=["x"]).__file__).read_text()
+    src = Path(__import__("nbxtensor.ops.conv2d", fromlist=["x"]).__file__).read_text()
     found = re.findall(
         r"BLOCK_SIZE_BHW':\s*(\d+),\s*'BLOCK_SIZE_OUTF':\s*(\d+),\s*'BLOCK_SIZE_INF':\s*(\d+)",
         src)
@@ -108,7 +108,7 @@ def _profile_tolerance(dtype: str) -> float:
     gate uses -- not a number written here, and not a second table that could
     drift from the one the engine trusts.
     """
-    from neurobrix.kernels.autotune_certified import _tolerance_for, active_profile
+    from nbxtensor.ops.autotune_certified import _tolerance_for, active_profile
 
     prof = active_profile()
     if prof is None:
@@ -173,8 +173,8 @@ def _run_pinned(x32, w32, blocks=None):
     Returns (output_as_float64, warnings_raised).
     """
     import triton
-    from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
-    from neurobrix.kernels.ops.conv2d import conv2d_forward_kernel
+    from nbxtensor.tensor import NBXTensor, NBXDtype
+    from nbxtensor.ops.conv2d import conv2d_forward_kernel
     from neurobrix.kernels.autotune_certify import f32_to_bf16_bits, bf16_bits_to_f32
 
     def _bf16(arr):
@@ -198,7 +198,7 @@ def _run_pinned(x32, w32, blocks=None):
         # was calling the jit function positionally and was never updated, so every config
         # died with "missing argument 'output_height_stride'": the strides were landing two
         # positions early. The wrapper passes them here and so does this call now.
-        from neurobrix.kernels.wrappers import _conv_width_key
+        from nbxtensor.ops.wrappers import _conv_width_key
         _in_w_key, _out_w_key = _conv_width_key(IN_H, OUT_H, IN_W, OUT_W, KW, STRIDE, PAD, 1)
         conv2d_forward_kernel.fn[grid](
             x, w, out,
@@ -212,7 +212,7 @@ def _run_pinned(x32, w32, blocks=None):
             groups=1, fp16=False,
             BLOCK_SIZE_BHW=bhw, BLOCK_SIZE_OUTF=outf, BLOCK_SIZE_INF=inf,
         )
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        from nbxtensor.tensor import DeviceAllocator
         DeviceAllocator.sync_device()
     got = bf16_bits_to_f32(out.numpy().view(np.uint16)).reshape(
         (N, OUT_C, OUT_H, OUT_W))
@@ -293,7 +293,7 @@ def test_the_output_agrees_with_the_fp64_oracle(blocks):
         # precisely how a kernel that dies wears a refusal's clothes, which the
         # comment above forbids. The gap is real and belongs upstream — a named
         # refusal type in triton-ext — not hidden behind a green skip here.
-        from neurobrix.triton.metal_backend import is_backend_refusal
+        from nbxtensor.backend.metal_backend import is_backend_refusal
 
         assert is_backend_refusal(exc), (
             f"config {blocks} failed with something the seam cannot certify as "

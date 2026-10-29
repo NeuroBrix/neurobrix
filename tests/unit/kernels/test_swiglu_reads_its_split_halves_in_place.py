@@ -7,7 +7,7 @@ second half read from the first's offset (values differ from silu(gate) * up —
 import numpy as np
 import pytest
 
-from neurobrix.kernels.nbx_tensor import DeviceAllocator, NBXTensor
+from nbxtensor.tensor import DeviceAllocator, NBXTensor
 
 
 
@@ -23,7 +23,7 @@ pytestmark = pytest.mark.skipif(not _has_gpu(), reason="needs a device")
 
 
 def test_the_halves_of_a_split_are_read_in_place_and_give_silu_gate_times_up(monkeypatch):
-    from neurobrix.kernels import wrappers as W
+    from nbxtensor.ops import wrappers as W
     rng = np.random.default_rng(0)
     host = rng.standard_normal((2, 7, 64)).astype(np.float32)
     fused = NBXTensor.from_numpy(host).to_cuda(0)

@@ -33,10 +33,10 @@ from typing import Any, Dict, List
 
 import numpy as np
 
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
-from neurobrix.kernels import wrappers as w
+from nbxtensor.tensor import NBXTensor, NBXDtype
+from nbxtensor.ops import wrappers as w
 from nbxtensor.random.seeded_draw import SeededDrawStream, seeded_gaussian
-from neurobrix.triton.device_transfer import needs_move, transfer_tensor
+from nbxtensor.memory.device_transfer import needs_move, transfer_tensor
 from neurobrix.triton.flow.speech import _require, _from_np_on
 
 

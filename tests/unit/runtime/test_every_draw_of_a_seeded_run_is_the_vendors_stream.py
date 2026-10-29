@@ -98,8 +98,8 @@ def test_a_seedless_run_still_draws():
 
 @card
 def test_the_triton_randn_like_takes_the_compiled_branchs_values():
-    from neurobrix.kernels.nbx_tensor import NBXDtype, NBXTensor
-    from neurobrix.kernels.wrappers import randn_like_wrapper
+    from nbxtensor.tensor import NBXDtype, NBXTensor
+    from nbxtensor.ops.wrappers import randn_like_wrapper
     from neurobrix.core.runtime.graph import run_generator
     rng_stream.set_run_seed(11)
     t = randn_like_wrapper(NBXTensor.from_numpy(np.zeros((2, 16), np.float32))).numpy()
@@ -114,7 +114,7 @@ def test_the_triton_randn_like_takes_the_compiled_branchs_values():
 
 @card
 def test_the_two_engines_ancestral_steps_agree():
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.tensor import NBXTensor
     from neurobrix.triton.scheduler.euler import TritonEulerAncestralDiscreteScheduler
     rs = np.random.RandomState(1)
     sample, eps = rs.randn(*SHAPE).astype(np.float32), rs.randn(*SHAPE).astype(np.float32)

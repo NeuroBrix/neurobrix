@@ -173,7 +173,7 @@ def test_triton_build_condition_bit_parity(tmp_path):
         pytest.skip("NBXTensor is CUDA-backed and no GPU is available; "
                     "structural parity is covered by the CPU tests above "
                     "(spec + host mask + latent pass-through, bit-exact)")
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.tensor import NBXTensor
 
     ref = _compiled_reference(tmp_path, _spec(), _NUM_FRAMES)
 
@@ -193,7 +193,7 @@ def test_triton_latent_t_mismatch_raises(tmp_path):
     if not _cuda_available():
         import pytest
         pytest.skip("NBXTensor is CUDA-backed and no GPU is available")
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.tensor import NBXTensor
 
     ctx = _make_ctx(tmp_path)
     ctx.variable_resolver.resolved["vae_encoder.output_0"] = (

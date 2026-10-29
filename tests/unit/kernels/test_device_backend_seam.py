@@ -27,7 +27,7 @@ from pathlib import Path
 
 import pytest
 
-from neurobrix.kernels import nbx_tensor
+from nbxtensor import tensor as nbx_tensor
 
 SOURCE = Path(inspect.getfile(nbx_tensor)).read_text()
 
@@ -112,10 +112,14 @@ def test_no_other_module_reaches_the_device_runtime_directly():
     The triton tree and the kernels use NBXTensor; if another module starts
     loading `libcudart` itself, the port has two coupling points instead of
     one."""
-    root = Path(inspect.getfile(nbx_tensor)).parent.parent
+    # the engine's package and its tensor library (nbxtensor, M1): one seam across both
+    import neurobrix
+    own = Path(inspect.getfile(nbx_tensor)).resolve()
+    roots = (Path(neurobrix.__file__).resolve().parent, own.parent)
     offenders = []
-    for path in root.rglob("*.py"):
-        if path.name == "nbx_tensor.py" or "triton_kernels_ref" in str(path):
+    for path in (p for r in roots for p in r.rglob("*.py")):
+        root = next(r for r in roots if r in path.resolve().parents)
+        if path.resolve() == own or "triton_kernels_ref" in str(path):
             continue
         text = path.read_text(errors="replace")
         if "cpu_backend" in path.name:

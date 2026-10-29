@@ -35,9 +35,9 @@ import pytest
 
 
 def _sorted_desc(host):
-    from neurobrix.kernels import launcher as L
-    from neurobrix.kernels.nbx_tensor import NBXTensor
-    from neurobrix.kernels.wrappers import sort_wrapper
+    from nbxtensor.backend import launcher as L
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.ops.wrappers import sort_wrapper
 
     L.install()
     got = sort_wrapper(NBXTensor.from_numpy(host.copy()), descending=True)
@@ -50,7 +50,7 @@ def _tile() -> int:
     import inspect
     import re
 
-    from neurobrix.kernels import wrappers
+    from nbxtensor.ops import wrappers
 
     src = inspect.getsource(wrappers.sort_wrapper)
     m = re.search(r"^\s*SWEEP_TILE\s*=\s*(\d+)", src, re.M)

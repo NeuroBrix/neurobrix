@@ -214,7 +214,7 @@ def test_a_seam_tensor_keeps_its_dtype_at_every_engines_entry(seg1):
     seam = seg1["tensors"][_alias(seg1)]
     assert is_seam_tensor(seam) and not is_seam_tensor(seg1["tensors"]["input::input_ids"])
     eng = TritonDtypeEngine.__new__(TritonDtypeEngine)
-    from neurobrix.kernels.nbx_tensor import parse_dtype
+    from nbxtensor.tensor import parse_dtype
     eng.compute_dtype = parse_dtype("bfloat16")
     eng.stores_fp64 = False
     assert eng._target_dtype_for_input(_alias(seg1), seg1["tensors"]) is None

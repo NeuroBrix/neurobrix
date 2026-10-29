@@ -304,7 +304,8 @@ def _chain_band_rows(ops, chain, shape) -> list:
 def _triton_fp64() -> bool:
     """The Triton branch's fp64 on the hardware profile this census bound
     (`wrappers.set_hardware_profile`; refused when none is bound)."""
-    from neurobrix.kernels.wrappers import get_hardware_profile
+    import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
+    from nbxtensor.ops.wrappers import get_hardware_profile
     from neurobrix.triton.dtype import profile_triton_stores_fp64
     return profile_triton_stores_fp64(get_hardware_profile())
 
@@ -372,8 +373,8 @@ def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_
     """`derive_component`'s body at one binding — and, when `axis_values` names value-derived
     axes, at those extents (`only`: the ops to derive, `skip`: the ops not to)."""
     from neurobrix.core.prism import runtime_widths as RW
-    from neurobrix.kernels import launch_keys as LK
-    from neurobrix.kernels.nbx_tensor import NBXDtype
+    from nbxtensor.ops import launch_keys as LK
+    from nbxtensor.tensor import NBXDtype
     g = runtime_graph(model, comp)
     ops = g["ops"]
     carried = {}
@@ -387,7 +388,7 @@ def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_
     engine = "triton" if mode == "triton" else "triton_sequential"
     try:
         # The census is bound to its target's profile (the active one): its alignment is that profile's.
-        from neurobrix.kernels.ops._configs import active_vendor_profile
+        from nbxtensor.ops._configs import active_vendor_profile
         from neurobrix.triton.dtype import attention_operand_alignment
         reads = _cache_reads(ops, decode_kv)
         align, fp64 = attention_operand_alignment(active_vendor_profile()), _triton_fp64()
@@ -430,7 +431,7 @@ def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_
         if n + "_" in NBXDtype.__members__:
             return NBXDtype[n + "_"]
         raise KeyError(f"runtime dtype {n!r} of {tid} is no NBXDtype")
-    from neurobrix.triton import tiling_sizes as _TS
+    from nbxtensor.ops import tiling_sizes as _TS
     conv_band_bytes = _TS.conv2d_band_bytes()
     out = []
     half = cdtype in ("float16", "bfloat16")
@@ -495,7 +496,7 @@ def _widening_check_rows(g, ops, shape, dt, skip, only, LK) -> list:
         if not (kind == "aten::floor_divide" or (kind == "aten::div" and mode in ("floor", "trunc"))):
             continue
         ins = list(o.get("input_tensor_ids") or ())
-        from neurobrix.kernels.nbx_tensor import _FLOATING_DTYPES
+        from nbxtensor.tensor import _FLOATING_DTYPES
         ints = [t for t in ins if dt(t) not in _FLOATING_DTYPES]
         if not ints or len(ints) == len(ins):            # all integer: divided in the integers, no widening
             continue
@@ -1096,7 +1097,7 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
     """The launches of one op; None when the op launches no autotuned kernel. `loaded_dt(tid)`: a tensor's runtime
     dtype as its producer or loader holds it, before an island's casts — the dtype of what an op reads by name rather
     than receives as an operand (the fused MoE's expert weights)."""
-    from neurobrix.kernels.nbx_tensor import NBXDtype
+    from nbxtensor.tensor import NBXDtype
     if kind not in _KEYED_KINDS:
         return None
     if True:  # noqa: SIM108 — the dispatch reads as the wrapper table it mirrors
@@ -1454,7 +1455,7 @@ def walked_pairs(walked: Path, model: str, mode: str, rung):
     # Logs walked before the conv key's fp16 flag was fixed (aaad1c48) carry False for fp16 inputs:
     # read them as the migration re-keyed the table (tools/migrate_conv_fp16_key.py `migrated`).
     import migrate_conv_fp16_key as _MG
-    from neurobrix.kernels import autotune_certified as _C
+    from nbxtensor.ops import autotune_certified as _C
     fixed = set()
     for op, q_, k in pairs:
         m = _MG.migrated(_C.parse_key(k)) if q_ == _MG.KERNEL else None
@@ -1925,8 +1926,8 @@ def _flow_logits(model, lm, rows, has_native_bf16):
     first (`vlm._compute_logits` / `audio_llm._compute_logits` `_proj`, `next_token_diffusion._generate_kv` in fp32) —
     keyed at the dtypes the LM's step gives its output. `rows`: (V, H, the dtype both operands take, or None for the
     LM output's own). A chain carries it as `flow_launches`; the extent loop asks it after the LM's derivation."""
-    from neurobrix.kernels import launch_keys as _LK
-    from neurobrix.kernels.nbx_tensor import NBXDtype
+    from nbxtensor.ops import launch_keys as _LK
+    from nbxtensor.tensor import NBXDtype
     out_tid = raw_graph(model, lm)["output_tensor_ids"][0]
     V, H, fixed = rows
 
@@ -1978,8 +1979,8 @@ def _encoder_decoder_sites(model, topo, defaults, plan, has_native_bf16):
         # the flow's weight-tied logits (triton/flow/encoder_decoder.py `_compute_logits`): the last position's hidden
         # state [1, H] @ the token embedding transposed, through `mm` — at M = 1, the GEMV; the embedding by the flow's
         # own rule (`tied_embedding_name`), both operands at the dtypes the decoder's step gives them
-        from neurobrix.kernels import launch_keys as _LK
-        from neurobrix.kernels.nbx_tensor import NBXDtype
+        from nbxtensor.ops import launch_keys as _LK
+        from nbxtensor.tensor import NBXDtype
         from neurobrix.triton.flow.encoder_decoder import tied_embedding_name
         gdec = raw_graph(model, dec)
         params = {t[len("param::"):]: m.get("shape") for t, m in gdec["tensors"].items() if t.startswith("param::")}
@@ -2359,7 +2360,7 @@ def derive_extents(model, mode, topo, defaults, plan, has_native_bf16, sdpa, unh
                     view, tiled_tf = plan_tiling(plan, comp)
                     if isinstance(feed, dict) and "__decode__" in feed:
                         # one position: every batch / sequence symbol at 1, the cache's K and V
-                        from neurobrix.kernels.nbx_tensor import NBXDtype
+                        from nbxtensor.tensor import NBXDtype
                         g = raw_graph(model, comp)
                         d = dict(feed["__decode__"])
                         syms = {sid: (int(d.get("batch") or 1) if i.get("name") == "batch" else 1)
@@ -2380,7 +2381,7 @@ def derive_extents(model, mode, topo, defaults, plan, has_native_bf16, sdpa, unh
                     if inputs.pop("__kv_prefill__", False):
                         kv = {"prefill": True}
                     if kv is not None and "dtype" in kv:
-                        from neurobrix.kernels.nbx_tensor import NBXDtype
+                        from nbxtensor.tensor import NBXDtype
                         kv = dict(kv, dtype=NBXDtype[str(kv["dtype"]).replace("torch.", "")])
                     _dts = {}
                     launches, outs = run_at_inputs(model, comp, dtypes[comp], mode, inputs,
@@ -2399,7 +2400,7 @@ def derive_extents(model, mode, topo, defaults, plan, has_native_bf16, sdpa, unh
         # matrix unit's take-over) split the extent into bands where the key set is a step function; the bisection
         # runs band by band. Over the whole extent alone it took the empty set at both ends for one class and missed
         # the keyed prompt lengths in between (TinyLlama, 2026-10-19).
-        from neurobrix.kernels import launch_keys as _LK
+        from nbxtensor.ops import launch_keys as _LK
         bps = _LK.row_breakpoints(lo, hi) if getattr(chain, "row_axis", False) else []
         points = sorted({int(lo), int(hi)} | {p for p in bps if lo < p < hi} | {p - 1 for p in bps if lo < p - 1 < hi})
         for a_, b_ in zip(points, points[1:]):
@@ -2416,7 +2417,7 @@ def derive_keys(model: str, hardware: str, mode: str, rung, request: list):
     plan record and the graphs, never executed — with the plan, the prompt's token count and the
     items the derivation cannot place yet (`unhandled`, a Counter: a model with any is not derived)."""
     from neurobrix.core.prism.loader import load_profile
-    from neurobrix.kernels import autotune_certified as C
+    from nbxtensor.ops import autotune_certified as C
     from neurobrix.kernels import census as _census
     from types import SimpleNamespace
     a = SimpleNamespace(model=model, hardware=hardware, mode=mode)
@@ -2426,7 +2427,7 @@ def derive_keys(model: str, hardware: str, mode: str, rung, request: list):
     P = None
     unhandled: collections.Counter = collections.Counter()
     derived = set()
-    from neurobrix.kernels import wrappers as W
+    from nbxtensor.ops import wrappers as W
     W.set_hardware_profile(prof)
     budget = W._sdpa_math_scores_budget_bytes_for(0) or 0
     min_rows, max_chunks = W._sdpa_math_min_chunk_rows(), W._sdpa_math_max_chunks()
@@ -2553,8 +2554,8 @@ def derive_keys(model: str, hardware: str, mode: str, rung, request: list):
         # the greedy decoder's LSTM runs through `lstm_wrapper` directly, one step at a time in
         # float32 (`TritonRNNTEngine._run_lstm_np`: [T=1, B=1, I], the weights cast once) — its
         # launches outside any op, its geometry the component's own traced lstm
-        from neurobrix.kernels import launch_keys as LK_
-        from neurobrix.kernels.nbx_tensor import NBXDtype as _Dt
+        from nbxtensor.ops import launch_keys as LK_
+        from nbxtensor.tensor import NBXDtype as _Dt
         for st in (flow.get("audio") or {}).get("stages") or []:
             if st.get("execution") != "rnnt_greedy":
                 continue

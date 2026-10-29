@@ -79,7 +79,7 @@ DEQUANT_GEMV_REL_BOUND = 5e-02
 
 
 def _has_gpu() -> bool:
-    nbx = pytest.importorskip("neurobrix.kernels.nbx_tensor")
+    nbx = pytest.importorskip("nbxtensor.tensor")
     set_device = nbx.DeviceAllocator.set_device   # a renamed symbol raises here, loudly
     try:
         set_device(0)
@@ -89,12 +89,12 @@ def _has_gpu() -> bool:
 
 
 def _nbx(arr):
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.tensor import NBXTensor
     return NBXTensor.from_numpy(np.ascontiguousarray(arr))
 
 
 def _dl(t, np_dtype):
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator
+    from nbxtensor.tensor import DeviceAllocator
     buf = np.empty(t._nbytes, dtype=np.uint8)
     DeviceAllocator.memcpy(buf.ctypes.data, t.data_ptr(), t._nbytes, 2)
     return buf.view(np_dtype).reshape(t.shape)
@@ -139,8 +139,7 @@ def _dequant_float64(packed, scales, mins) -> np.ndarray:
 def _run_fused(x_np, packed, scales, mins, K, N):
     """Launch ONLY the fused kernel — the thing under test."""
     import triton
-    from neurobrix.kernels.nbx_tensor import (NBXTensor, NBXDtype,
-                                              DeviceAllocator)
+    from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator
     from nbxtensor.ops.dequant_gemv import (
         BLOCK_K, BLOCK_N, NUM_WARPS, dequant_gemv_int4_kernel)
     x = _nbx(x_np)
@@ -202,8 +201,7 @@ def test_dequant_weights_match_float64(K, N) -> None:
     if not _has_gpu():
         pytest.skip("no GPU")
     import triton
-    from neurobrix.kernels.nbx_tensor import (NBXTensor, NBXDtype,
-                                              DeviceAllocator)
+    from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator
     from nbxtensor.ops.dequant_gemv import (
         BLOCK_K, BLOCK_N, NUM_WARPS, dequant_int4_kernel)
     rng = np.random.default_rng(K + N)

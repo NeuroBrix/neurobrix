@@ -22,7 +22,7 @@ from __future__ import annotations
 import pytest
 
 from neurobrix.kernels import census
-from neurobrix.kernels.autotune_bucket import bucket_of
+from nbxtensor.ops.autotune_bucket import bucket_of
 
 PROFILE = None
 

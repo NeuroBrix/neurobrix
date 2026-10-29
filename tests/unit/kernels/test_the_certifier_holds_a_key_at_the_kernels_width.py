@@ -23,9 +23,9 @@ import pytest
 
 from neurobrix.kernels import autotune_certify as AC
 
-CONV = "neurobrix.kernels.ops.conv2d.conv2d_forward_kernel"
-ADDMM = "neurobrix.kernels.ops.matmul.addmm_kernel"
-MM = "neurobrix.kernels.ops.matmul.matmul_kernel"
+CONV = "nbxtensor.ops.conv2d.conv2d_forward_kernel"
+ADDMM = "nbxtensor.ops.matmul.addmm_kernel"
+MM = "nbxtensor.ops.matmul.matmul_kernel"
 CARD = 19069403136                                   # default-9f169c79's 18 186 MiB, the refusals' card
 
 REFUSED_ON_MQ19 = [
@@ -123,7 +123,7 @@ def test_the_oracles_read_bf16_values_not_bits():
     got = AC._matmul_oracle_fn(a, b)()
     assert np.array_equal(got, AC.values(a).astype(np.float64) @ AC.values(b).astype(np.float64))
     x, w = AC._arr(r, (1, 4, 9, 7), "bf16"), AC._arr(r, (6, 4, 3, 3), "bf16")
-    from neurobrix.kernels.oracles.conv2d_fp64 import conv2d_reference_window
+    from nbxtensor.ops.oracles.conv2d_fp64 import conv2d_reference_window
     ref = conv2d_reference_window(AC.values(x).astype(np.float64), AC.values(w).astype(np.float64),
                                   stride=(1, 1), padding=(1, 1), dilation=(1, 1), groups=1)
     assert np.array_equal(AC._conv_oracle_fn(x, w, (1, 1), (1, 1), (1, 1), 1)(), ref)

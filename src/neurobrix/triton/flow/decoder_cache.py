@@ -11,7 +11,7 @@ import os
 import sys
 from typing import Any, Optional
 
-from neurobrix.kernels.nbx_tensor import parse_dtype
+from nbxtensor.tensor import parse_dtype
 
 
 def open_decoder_cache(ctx, dec_name: str, max_tokens: int):

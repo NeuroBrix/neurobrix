@@ -12,7 +12,7 @@ Rules (from PyTorch AT_FORALL_FP32 / AT_FORALL_LOWER_PRECISION_FP):
 
 from typing import Callable, FrozenSet, Optional
 
-from neurobrix.kernels.nbx_tensor import NBXDtype, NBXTensor
+from nbxtensor.tensor import NBXDtype, NBXTensor
 from nbxtensor.dtype.promotion import promoted as _promoted
 from nbxtensor.dtype import itemsize as _itemsize
 
@@ -741,7 +741,7 @@ class TritonDtypeEngine:
         dtype_str = meta.get("dtype")
         if not dtype_str:
             return None
-        from neurobrix.kernels.nbx_tensor import parse_dtype
+        from nbxtensor.tensor import parse_dtype
         try:
             graph_dt = parse_dtype(dtype_str.replace("torch.", ""))
         except Exception:
@@ -764,7 +764,7 @@ class TritonDtypeEngine:
         module's `storage_dtype` (the one Triton narrowing)."""
         # The MEMBER goes to the table, never its `.name`: `NBXDtype.bool_` is Python's keyword escape,
         # which only `canonical_name` maps to the table's `bool` (mq24 Allegro triton, 2026-10-11).
-        from neurobrix.kernels.nbx_tensor import parse_dtype
+        from nbxtensor.tensor import parse_dtype
         return parse_dtype(storage_dtype(dtype, self.stores_fp64))
 
     def accumulation_dtype(self, dtype: NBXDtype) -> NBXDtype:
@@ -773,7 +773,7 @@ class TritonDtypeEngine:
         in slices (`core/strategies/chunked_piece`) asks the engine, never the pass dtype. The
         twin of `DtypeEngine.accumulation_dtype` (R30). `dtype` is what the partial hands: an
         NBXTensor's `.dtype` is its triton.language dtype, parsed as the module parses any dtype."""
-        from neurobrix.kernels.nbx_tensor import parse_dtype
+        from nbxtensor.tensor import parse_dtype
         return parse_dtype(contraction_accumulator_dtype(parse_dtype(dtype).name))
 
     def set_precision_contract(self, safe: bool, fp32_op_uids=(), narrow_op_uids=()) -> None:
@@ -977,7 +977,7 @@ class TritonDtypeEngine:
         after the call, nested-safe."""
         widens = bool(getattr(func, "_nbx_widens_on_load", False))
         def fp32_func(*args, **kwargs):
-            from neurobrix.kernels import wrappers as _w
+            from nbxtensor.ops import wrappers as _w
             if widens:
                 # the island holds through the store dtype asked of a wrapper whose kernel
                 # widens its loads: no materialised fp32 input (the copy lever, 2026-09-07)
@@ -1024,7 +1024,7 @@ class TritonDtypeEngine:
         widens = bool(getattr(func, "_nbx_widens_on_load", False))
 
         def cast_back(result):
-            from neurobrix.kernels import wrappers as _w
+            from nbxtensor.ops import wrappers as _w
             if amp_fp32_output_dtype(cname, gname, _w._NBX_ACTIVATIONS_FP16_SAFE,
                                      force_cast_back, traced) != cname:
                 return result          # fp16 without the contract, or a non-bf16 graph: fp32

@@ -23,12 +23,13 @@ sys.path.insert(0, str(REPO))
 
 
 def _nbx(arr):
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
+    from nbxtensor.tensor import NBXTensor
     return NBXTensor.from_numpy(np.ascontiguousarray(arr))
 
 
 def _host(t, np_dtype):
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator
+    from nbxtensor.tensor import DeviceAllocator
     buf = np.empty(t._nbytes, dtype=np.uint8)
     DeviceAllocator.memcpy(buf.ctypes.data, t.contiguous().data_ptr(), t._nbytes, 2)
     return buf.view(np_dtype).reshape(t.shape)
@@ -37,8 +38,8 @@ def _host(t, np_dtype):
 def capture_fft(rng, out):
     """The kernels driven directly (the inverse wrapper carries an unrelated
     latent defect — a torch-style `mul_` on an NBXTensor — fixed separately)."""
-    from neurobrix.kernels.nbx_tensor import NBXTensor
-    from neurobrix.kernels.wrappers import _triton_fft_forward, _set_device, _1d_grid, _EW_BLOCK
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.ops.wrappers import _triton_fft_forward, _set_device, _1d_grid, _EW_BLOCK
     from nbxtensor.ops import fft_op
     for N in (256, 1024, 4096):
         xr = _nbx((rng.standard_normal((2, N))).astype(np.float32))
@@ -74,7 +75,7 @@ def capture_fft(rng, out):
 
 
 def capture_grid_sampler(rng, out):
-    from neurobrix.kernels.wrappers import grid_sampler_2d_wrapper
+    from nbxtensor.ops.wrappers import grid_sampler_2d_wrapper
     inp = _nbx((rng.standard_normal((2, 5, 7, 9))).astype(np.float32))      # C=5: a masked channel block
     grid = _nbx((rng.uniform(-1.2, 1.2, size=(2, 11, 13, 2))).astype(np.float32))
     for mode in (0, 2):
@@ -87,7 +88,7 @@ def capture_grid_sampler(rng, out):
 def capture_fused_moe(rng, out):
     import triton
     import triton.language as tl
-    from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
+    from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator
     from nbxtensor.ops.fused_moe import (fused_moe_kernel, fused_moe_wna16_kernel,
                                                  fused_moe_fp32b_kernel)
     from nbxtensor.ops.dequant_gemv import dequant_int4_kernel
@@ -139,7 +140,7 @@ def capture_fused_moe(rng, out):
 
 
 def capture(out_dir: Path) -> int:
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator
+    from nbxtensor.tensor import DeviceAllocator
     DeviceAllocator.set_device(0)
     out_dir.mkdir(parents=True, exist_ok=True)
     for name, fn in (("fft", capture_fft), ("grid_sampler", capture_grid_sampler), ("fused_moe", capture_fused_moe)):

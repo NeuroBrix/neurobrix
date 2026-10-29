@@ -25,7 +25,7 @@ from typing import Dict, List, Optional
 import numpy as np
 
 from neurobrix.core.state.pages import PagePool, PageTable, block_table as _block_table
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
+from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator
 
 
 class PagedTritonKVCache:
@@ -225,7 +225,7 @@ class PagedTritonKVCache:
     def prefill(self, layer_idx: int, k, v) -> None:
         """Append a prompt's K / V `[B, H_kv, T, D]` (positions length .. length+T-1). Layer 0 starts the request's
         reservation: the prompt and its decode budget."""
-        from neurobrix.kernels import wrappers as W
+        from nbxtensor.ops import wrappers as W
         self._ensure(layer_idx, k)
         t = int(k.shape[2])
         if layer_idx == 0:
@@ -245,8 +245,8 @@ class PagedTritonKVCache:
         """One decode step of one layer: append its new K / V `[B, H_kv, 1, D]` at the device length, advance it, and
         attend `q [B, H, 1, D]` over the sequence's pages. Returns `[B, H, 1, D_v]`."""
         import triton
-        from neurobrix.kernels import wrappers as W
-        from neurobrix.kernels.nbx_tensor import _set_device
+        from nbxtensor.ops import wrappers as W
+        from nbxtensor.tensor import _set_device
         from nbxtensor.ops.paged_decode_attn import paged_kv_append_step_kernel, paged_lens_advance_kernel
         if int(k.shape[2]) != 1:
             raise RuntimeError(f"PagedTritonKVCache.decode: {int(k.shape[2])} new positions — a decode step brings one")

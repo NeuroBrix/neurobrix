@@ -25,17 +25,17 @@ import pytest
 
 pytest.importorskip("triton")
 
-from neurobrix.kernels.nbx_tensor import DeviceAllocator, NBXDtype, NBXTensor  # noqa: E402
+from nbxtensor.tensor import DeviceAllocator, NBXDtype, NBXTensor  # noqa: E402
 
 E, K_, H, F, T = 8, 2, 64, 32, 5
 
 
 def _metal_or_skip():
     try:
-        from neurobrix.kernels.nbx_tensor import _detect_gpu_backend
+        from nbxtensor.tensor import _detect_gpu_backend
         if _detect_gpu_backend() != "metal":
             pytest.skip("a table pins on the Metal driver only; on CUDA it holds integers")
-        from neurobrix.triton import triton_ext_driver as drv
+        from nbxtensor.backend import triton_ext_driver as drv
         return drv
     except Exception:
         pytest.skip("no Metal backend the engine can resolve")

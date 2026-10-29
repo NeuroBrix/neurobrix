@@ -20,7 +20,7 @@ This file pins the contract on BOTH sides, so neither half can rot alone:
 """
 import pytest
 
-from neurobrix.kernels import launcher as L
+from nbxtensor.backend import launcher as L
 
 
 class _Meta:
@@ -48,7 +48,7 @@ def _selectable_drivers():
     the one driver that was actually broken when this seam landed. The next
     duck-typed driver must be added to this list by hand, which is a visible
     act."""
-    from neurobrix.triton import triton_ext_driver
+    from nbxtensor.backend import triton_ext_driver
     return (L.Driver, L.CudaDriver, triton_ext_driver.TritonExtDriver)
 
 
@@ -153,7 +153,7 @@ def _ext_or_skip():
     # REFUSES (BackendSelectionRefused) before the skip below could fire, and the
     # three behavioural cells read as red on CUDA (Dell, 2026-09-20).
     pytest.importorskip("triton_apple_backend")
-    from neurobrix.triton.metal_backend import nbx_driver_module, BackendSelectionRefused
+    from nbxtensor.backend.metal_backend import nbx_driver_module, BackendSelectionRefused
     try:
         mod = nbx_driver_module()
     except BackendSelectionRefused as exc:
@@ -174,7 +174,7 @@ def test_triton_ext_reports_a_failing_device_assert():
     import numpy as np
     import triton
     import triton.language as tl
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.tensor import NBXTensor
 
     @triton.jit(debug=True)
     def _guarded(x_ptr, out_ptr, n, BLOCK: tl.constexpr):
@@ -222,7 +222,7 @@ def test_a_kernel_without_an_assert_declares_nothing():
     import numpy as np
     import triton
     import triton.language as tl
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.tensor import NBXTensor
 
     @triton.jit
     def _plain(x_ptr, out_ptr, n, BLOCK: tl.constexpr):
@@ -254,7 +254,7 @@ def test_the_shared_memory_ceiling_is_asked_for_never_invented():
     """
     _ext_or_skip()
     import triton_apple_backend.hw_constants as hw
-    from neurobrix.triton.triton_ext_driver import TritonExtDriver
+    from nbxtensor.backend.triton_ext_driver import TritonExtDriver
 
     declared = getattr(hw, "TG_BUDGET_BYTES", None)
     assert declared is not None, (

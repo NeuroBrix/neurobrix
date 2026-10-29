@@ -23,7 +23,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from neurobrix.kernels import screen_oracle as SO
+from nbxtensor.ops import screen_oracle as SO
 
 
 class _T:
@@ -89,7 +89,7 @@ def test_a_non_finite_reference_is_refused_with_its_reason(poison):
 
 def test_the_launcher_records_that_reason_rather_than_a_generic_one():
     """The record has to say WHY, or `screened: false` reads as "no oracle"."""
-    from neurobrix.kernels import launcher as L
+    from nbxtensor.backend import launcher as L
     # A provider must be INSTALLED for the launcher to consult the oracle's own
     # refusal: with none, it answers "no oracle provider is installed" first —
     # which is what a CUDA rig reads at import (the provider is installed by the

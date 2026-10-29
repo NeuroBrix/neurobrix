@@ -75,7 +75,7 @@ class TritonAttentionInterceptor:
         (correct dtypes already) or create unwanted upcasts. Marked
         explicit on the bound method below.
         """
-        from neurobrix.kernels.wrappers import scaled_dot_product_attention_wrapper
+        from nbxtensor.ops.wrappers import scaled_dot_product_attention_wrapper
 
         if layer_idx < 0:
             layer_idx = self._call_count % self.cache.num_layers
@@ -224,7 +224,7 @@ class TritonAttentionInterceptor:
         """Mirror of core kv_cache_wrapper.intercept_position_cumsum: the positions a decoder counts
         over its own sequence, the cache's length added at decode. R33-pure: the cumsum and add
         wrappers of the kernel library."""
-        from neurobrix.kernels import wrappers as W
+        from nbxtensor.ops import wrappers as W
         out = W.cumsum_wrapper(x, int(dim), dtype)
         if self._is_prefill or self._position_offset <= 0:
             return out
@@ -246,7 +246,7 @@ class TritonAttentionInterceptor:
         triton-sequential oracle (full-context recompute, correct arange) passed.
         R33-pure: returns NBXTensor via the triton _create_arange dispatch.
         """
-        from neurobrix.kernels.dispatch import _create_arange
+        from nbxtensor.ops.dispatch import _create_arange
         if self._is_prefill:
             return _create_arange(*args, **kwargs)
         cache_len = self._position_offset

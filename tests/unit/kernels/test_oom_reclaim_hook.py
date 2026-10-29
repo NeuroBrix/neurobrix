@@ -29,7 +29,7 @@ except ModuleNotFoundError:  # script-mode under a pytest-less GPU venv
 
     pytest = _NoPytest()  # type: ignore
 
-from neurobrix.kernels.nbx_tensor import DeviceAllocator, NBXTensor
+from nbxtensor.tensor import DeviceAllocator, NBXTensor
 
 
 def _gpu_available() -> bool:

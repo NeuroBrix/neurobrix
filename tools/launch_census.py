@@ -137,7 +137,8 @@ class Census:
         # own `.launch(grid, args)`. Older trees still go through JITFunction.run; both are
         # wrapped, and a launch is counted once (the launcher does not call JITFunction.run).
         try:
-            from neurobrix.kernels import launcher as L
+            import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
+            from nbxtensor.backend import launcher as L
             original_launch = L.launch
 
             def counting_launch(kernel, grid, *args, **kwargs):

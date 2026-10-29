@@ -17,9 +17,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
 import derived_census as D  # noqa: E402
-from neurobrix.kernels import launch_keys as LK  # noqa: E402
+from nbxtensor.ops import launch_keys as LK  # noqa: E402
 from neurobrix.kernels import census as _census  # noqa: E402
-from neurobrix.kernels.nbx_tensor import NBXDtype  # noqa: E402
+from nbxtensor.tensor import NBXDtype  # noqa: E402
 
 import pytest  # noqa: E402
 
@@ -30,7 +30,7 @@ def _arch(monkeypatch, correct: bool):
     """The arch profile's own declaration decides the detour (flash.pow2_head_dim_correct, every profile
     declares it): these cells state which arch they speak of. They ran on whatever profile the process had
     bound — on a V100 rack, Volta, which declares true since 2026-10-03 — and two of them went red there."""
-    from neurobrix.kernels.ops import _configs
+    from nbxtensor.ops import _configs
     real = _configs.active_vendor_profile
     # the bound profile as it is (its ladders, its thresholds), with this one declaration stated
     monkeypatch.setattr(_configs, "active_vendor_profile",

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 
 def test_the_batched_gemm_key_names_the_contraction_bucket():
-    from neurobrix.kernels.ops.baddbmm_op import baddbmm_kernel
+    from nbxtensor.ops.baddbmm_op import baddbmm_kernel
     keys = list(getattr(baddbmm_kernel, "keys", None) or getattr(baddbmm_kernel, "key", []))
     assert "K_BUCKET" in keys and "K" not in keys, keys
     assert keys.index("M_BUCKET") < keys.index("N_BUCKET") < keys.index("K_BUCKET"), keys

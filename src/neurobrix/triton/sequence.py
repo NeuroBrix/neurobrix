@@ -14,20 +14,16 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from neurobrix.core.runtime import symexpr as _symexpr
 from neurobrix.core.runtime import liveness as _liveness
-from neurobrix.kernels.dispatch import dispatch
+from nbxtensor.ops.dispatch import dispatch
 # When the cause is the allocator refusing, say what would have made it fit.
 # "Out of memory" alone costs the reader the whole diagnosis, and the numbers
 # that answer it are already on the exception (adaptive-memory addition 4).
 # Imported once for ALL THREE op-failure seams in this file: wiring only the
 # single-device one left the real reproducer — real-esrgan-x8 at 16 GB, which
 # goes through the multi-device path — printing no advice at all (2026-09-18).
-from neurobrix.kernels.oom_advice import annotate as _oom_annotate
-from neurobrix.kernels.nbx_tensor import (
-    NBXTensor, NBXDtype, DeviceAllocator, parse_dtype,
-    invalidate_current_device_cache,
-)
-from neurobrix.kernels.wrappers import (
-    deferred_drain_policy, _DEFERRED_DRAIN_FLOOR_DEFAULT)
+from nbxtensor.memory.oom_advice import annotate as _oom_annotate
+from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator, parse_dtype, invalidate_current_device_cache
+from nbxtensor.ops.wrappers import deferred_drain_policy, _DEFERRED_DRAIN_FLOOR_DEFAULT
 
 from nbxtensor.memory.arena import Arena
 from .symbols import SymbolResolver, impossible_extent_context
@@ -180,8 +176,7 @@ def _watermark_sample(path: str, op_idx: int, op, arena, deferred_bytes) -> None
     try:
         import ctypes as _ct
         import json as _json
-        from neurobrix.kernels.nbx_tensor import (
-            DeviceAllocator as _DA, _gpu_runtime as _rt_fn, _active_backend as _bk_fn)
+        from nbxtensor.tensor import DeviceAllocator as _DA, _gpu_runtime as _rt_fn, _active_backend as _bk_fn
         rt, bk = _rt_fn(), _bk_fn()
         dev = _DA.get_device()
         live = _DA._cuda_live_bytes.get(dev, 0)
@@ -285,7 +280,7 @@ def _deferred_drain_context(exc, deferred_bytes: int, drain_cliff: int,
     longer drains the queue and retries (2026-10-11): an OOM is raised, and this line says whether
     the queue stayed inside its price — then the plan under-priced the op's live set — or not.
     Any other failure passes through with nothing appended."""
-    from neurobrix.kernels.nbx_tensor import DeviceOOMError
+    from nbxtensor.tensor import DeviceOOMError
     if not isinstance(exc, DeviceOOMError):
         return ""
     mb = 1024 * 1024
@@ -350,7 +345,7 @@ def _nbx_same_bits(a: NBXTensor, b: NBXTensor) -> bool:
         return True
     if a._dtype != NBXDtype.bool_ and a.element_size() not in _BITS_OF_ITEMSIZE:
         return False                    # no integer of that width: never reused, always evaluated (exact)
-    from neurobrix.kernels import wrappers as _wr
+    from nbxtensor.ops import wrappers as _wr
     return bool(_wr.all_wrapper(_wr.eq(_nbx_bits(a), _nbx_bits(b))).item())
 
 
@@ -474,7 +469,7 @@ class TritonSequence:
 
         # Engines
         self._symbol_resolver: Optional[SymbolResolver] = None
-        from neurobrix.kernels.wrappers import has_native_bf16 as _has_bf16
+        from nbxtensor.ops.wrappers import has_native_bf16 as _has_bf16
         # graph_dtype: the container's traced `torch_dtype` (graph.json top level; a
         # streamed segment and a const-fold sub-graph carry it too) — the AMP_FP32
         # cast-back rule reads it under bf16 compute.
@@ -2216,7 +2211,7 @@ class TritonSequence:
                 # A block whose experts another card holds whole (S3, `expert_store._hold_experts_on_cards`): the
                 # hidden state and the routing cross to that card, the op runs there against resident weights (no
                 # store), and its result comes back to the hidden state's card.
-                from neurobrix.triton.device_transfer import transfer_tensor as _xfer_card
+                from nbxtensor.memory.device_transfer import transfer_tensor as _xfer_card
                 from neurobrix.core.device_utils import _parse_device as _pd
                 _card = _pd(_held[0])[1]
                 _hs = arena[_hs_slot]
@@ -3124,7 +3119,7 @@ class TritonSequence:
                 if (hasattr(tensor, "_device_idx")
                         and tensor._device_idx != self.device_idx
                         and getattr(tensor, "_device", "cuda") != "cpu"):
-                    from neurobrix.triton.device_transfer import transfer_tensor
+                    from nbxtensor.memory.device_transfer import transfer_tensor
                     tensor = transfer_tensor(tensor, self.device_idx)
                 self._arena[slot] = tensor
 
@@ -3216,7 +3211,7 @@ class TritonSequence:
         machinery (measured, recorded, verified, then replayed). Only the tail mirrors the step's advance onto the
         host's state owners (`_replay_advances`): a head stretch's replayed launches advance its own layers' device
         counters exactly as its direct run does. A segment the replay declines runs directly."""
-        from neurobrix.kernels import wrappers as _w
+        from nbxtensor.ops import wrappers as _w
         try:
             for idx, (kind, a, b, boundary, skip) in enumerate(self._expert_segments()):
                 self._run_skip = skip
@@ -3342,7 +3337,7 @@ class TritonSequence:
         # for rms_norm/div). Restore prior values after to keep nested or
         # multi-component runs correct. Single-threaded NeuroBrix runtime,
         # safe to use module-level state.
-        from neurobrix.kernels import wrappers as _w
+        from nbxtensor.ops import wrappers as _w
         _prev_dt = _w.get_compute_dtype()
         _prev_safe = _w.get_activations_fp16_safe()
         _w.set_compute_dtype(self._compute_dtype)
@@ -3452,7 +3447,7 @@ class TritonSequence:
             if t is None:
                 continue
             try:
-                from neurobrix.kernels.nbx_tensor import NBXDtype, DeviceAllocator
+                from nbxtensor.tensor import NBXDtype, DeviceAllocator
                 import ctypes as _ct
                 # Complex tensors: check finiteness on the real VIEW (interleaved
                 # real/imag floats), not by casting the complex elements to a
@@ -3504,7 +3499,7 @@ class TritonSequence:
         re/im) so l2/head cover BOTH components; memcpy'ing a complex buffer
         as N floats would read only the real parts (half the energy).
         """
-        from neurobrix.kernels.nbx_tensor import NBXDtype, DeviceAllocator
+        from nbxtensor.tensor import NBXDtype, DeviceAllocator
         import ctypes as _ct
         # Zero-numel guard: an empty tensor (e.g. a VACE all-generate control
         # prefix new_zeros [1,0,1536]) has a 0-size dim. The reduction path below
@@ -3764,7 +3759,7 @@ class TritonSequence:
         if not hasattr(self, "_slot_to_tid"):
             self._slot_to_tid = {s: t for t, s in self._tid_to_slot.items()}
         try:
-            from neurobrix.kernels.nbx_tensor import DeviceAllocator
+            from nbxtensor.tensor import DeviceAllocator
             recs = []
             for out_slot in op.output_slots:
                 t = arena[out_slot] if arena else None
@@ -3931,7 +3926,7 @@ class TritonSequence:
                 # find when leakage begins. Cheap: just a counter read.
                 # Gate hoisted to run start (C1).
                 if _live_dump_n > 0 and op_idx % _live_dump_n == 0:
-                    from neurobrix.kernels.nbx_tensor import DeviceAllocator as _DA_p
+                    from nbxtensor.tensor import DeviceAllocator as _DA_p
                     _live = _DA_p._cuda_live_bytes.get(_DA_p.get_device(), 0)
                     print(f"[LIVE_TRACK op_idx={op_idx} {op.op_uid}] live={_live/1024/1024:.0f}MB",
                           flush=True)
@@ -4040,7 +4035,7 @@ class TritonSequence:
                             # bucketed by size. Exposes blocks that NBX
                             # allocated but no NBXTensor in this arena
                             # references (the 21 GB gap mystery).
-                            from neurobrix.kernels.nbx_tensor import DeviceAllocator as _DAW
+                            from nbxtensor.tensor import DeviceAllocator as _DAW
                             from collections import Counter as _Counter
                             per_dev_buckets: Dict[int, "_Counter[int]"] = {}
                             per_dev_total: Dict[int, int] = {}
@@ -4063,7 +4058,7 @@ class TritonSequence:
                             # the tensor itself) — the source of the leak.
                             try:
                                 import gc as _gc_h
-                                from neurobrix.kernels.nbx_tensor import NBXTensor as _NBX_H
+                                from nbxtensor.tensor import NBXTensor as _NBX_H
                                 # Force a cycle-collecting gc.collect() BEFORE the
                                 # scan. If the ORPHAN tensors are part of a Python
                                 # ref cycle that prevents __del__ from firing,
@@ -4309,7 +4304,7 @@ class TritonSequence:
                     # pointers alike — print what each arg actually is so
                     # the failure adjudicates itself (P-WARM-TRITON-VIDEO
                     # class: warm lazy_sequential fed a stale placement).
-                    from neurobrix.kernels.nbx_tensor import device_label
+                    from nbxtensor.tensor import device_label
                     _arg_diag = "; ".join(
                         f"arg{i}={device_label(a)}"
                         f" ptr={getattr(a, '_data_ptr', 0):#x}"
@@ -4825,7 +4820,7 @@ class TritonSequence:
     def _needs_move(t: NBXTensor, target_dev: int) -> bool:
         """Delegates to the shared cross-device helper (R30: same impl as the
         op-by-op triton_sequential path)."""
-        from neurobrix.triton.device_transfer import needs_move
+        from nbxtensor.memory.device_transfer import needs_move
         return needs_move(t, target_dev)
 
     @staticmethod
@@ -4929,7 +4924,7 @@ class TritonSequence:
         """
         # Delegates to the shared cross-device helper so the compiled and
         # op-by-op triton_sequential paths share ONE transfer impl (R30).
-        from neurobrix.triton.device_transfer import transfer_tensor
+        from nbxtensor.memory.device_transfer import transfer_tensor
         return transfer_tensor(tensor, target_dev)
 
     def gather_outputs(self, output_ids: Optional[List[str]] = None) -> Dict[str, Any]:

@@ -28,7 +28,7 @@ def test_the_effective_capacity_is_the_pools_fact_whatever_a_neighbour_holds():
 
 def test_prepare_devices_reads_the_driver_for_a_discrete_card(monkeypatch):
     from neurobrix.core.prism import solver as S
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator as D
+    from nbxtensor.tensor import DeviceAllocator as D
     class _Dev:
         memory_mb = 32000
         has_unified_memory = False

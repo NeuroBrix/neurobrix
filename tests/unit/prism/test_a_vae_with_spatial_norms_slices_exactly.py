@@ -63,8 +63,8 @@ def test_the_triton_engine_slices_its_group_norm_as_its_whole_norm(shape, group,
     whole input's statistics are the engine's own whole group norm (`native_group_norm_wrapper`), to its fp32 noise.
     Red if the statistics are a slice's, a slice is written at another place, or the affine reads another channel."""
     import numpy as np
-    from neurobrix.kernels.nbx_tensor import NBXTensor
-    from neurobrix.kernels.wrappers import native_group_norm_wrapper
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.ops.wrappers import native_group_norm_wrapper
     rng = np.random.default_rng(0)
     xs = (rng.standard_normal(shape) * 3 + 1).astype(dtype)
     w = rng.standard_normal(shape[1]).astype(dtype)

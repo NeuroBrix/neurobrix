@@ -270,7 +270,7 @@ def discover_kernels():
     for path in sorted([*OPS_DIR.glob("*.py"), *LIB_OPS_DIR.glob("*.py")], key=lambda p: p.name):
         if path.name == "__init__.py":
             continue
-        mod_name = f"{OPS_PKG}.{path.stem}"
+        mod_name = f"{OPS_PKG if path.parent == OPS_DIR else 'nbxtensor.ops'}.{path.stem}"   # the library's kernels (M1)
         try:
             module = importlib.import_module(mod_name)
         except Exception as exc:

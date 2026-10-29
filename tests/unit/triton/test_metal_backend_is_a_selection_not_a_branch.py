@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.triton import metal_backend as MB
+from nbxtensor.backend import metal_backend as MB
 
 
 @pytest.fixture
@@ -39,7 +39,7 @@ def profile(monkeypatch):
     # chunk. Clear it, and the profile is what chooses.
     monkeypatch.delenv("NEUROBRIX_METAL_BACKEND", raising=False)
 
-    import neurobrix.kernels.ops._configs as C
+    import nbxtensor.ops._configs as C
     # BOTH remaining doors: the seam reads its declaration through
     # `vendor_profile_for_arch` (see the cycle it had to break), and everything
     # else in the engine reads `active_vendor_profile`.
@@ -50,7 +50,7 @@ def profile(monkeypatch):
     # refusal read "the profile declares none" — four cells red on CUDA, 2026-09-20.
     # A declared profile is the subject of these cells, not the machine's Metal
     # runtime: give the seam an arch name to ask the (patched) profile with.
-    import neurobrix.kernels.metal_device as MD
+    import nbxtensor.backend.metal_device as MD
     class _Runtime:
         arch_name = "test-arch"
     monkeypatch.setattr(MD, "runtime", lambda: _Runtime())
@@ -126,7 +126,7 @@ def test_the_shared_refusal_module_names_no_vendor():
     """`autotune_refusals` is run by the Dell too; it must ask the seam."""
     import inspect
 
-    from neurobrix.kernels import autotune_refusals as R
+    from nbxtensor.ops import autotune_refusals as R
     src = inspect.getsource(R)
     assert "triton_msl" not in src and "triton_apple_backend" not in src
 
@@ -186,7 +186,7 @@ def test_the_declaration_is_READ_never_inferred(monkeypatch):
     supplies the declaration only through the door the seam must use. Verified
     red on the pre-fix seam, green after.
     """
-    import neurobrix.kernels.ops._configs as C
+    import nbxtensor.ops._configs as C
 
     def _cycle():
         raise RuntimeError("profile needs target, target needs backend")
@@ -197,7 +197,7 @@ def test_the_declaration_is_READ_never_inferred(monkeypatch):
     # The door is asked with the Metal runtime's arch name; off Apple that runtime
     # raises before the door is reached and the declaration reads as none (CUDA,
     # 2026-09-20). The runtime is not this cell's subject — the door is.
-    import neurobrix.kernels.metal_device as MD
+    import nbxtensor.backend.metal_device as MD
     class _Runtime:
         arch_name = "test-arch"
     monkeypatch.setattr(MD, "runtime", lambda: _Runtime())

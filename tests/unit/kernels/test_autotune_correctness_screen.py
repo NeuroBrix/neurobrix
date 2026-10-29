@@ -27,7 +27,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from neurobrix.kernels import launcher
+from nbxtensor.backend import launcher
 
 
 def _has_gpu():
@@ -39,7 +39,7 @@ def _has_gpu():
 
     The module may legitimately be absent; a NAME inside it may not — hence the
     split between importorskip and the attribute read."""
-    nbx = pytest.importorskip("neurobrix.kernels.nbx_tensor")
+    nbx = pytest.importorskip("nbxtensor.tensor")
     empty, f32 = nbx.NBXTensor.empty, nbx.NBXDtype.float32   # renamed symbols raise here
     try:
         empty((1,), f32, "cuda:0")
@@ -77,7 +77,7 @@ def test_the_screen_names_no_backend():
 
 def test_the_tolerance_comes_from_the_profile_not_the_code():
     """A number written here would be a hardware fact in the wrong place."""
-    from neurobrix.kernels.ops._configs import active_vendor_profile
+    from nbxtensor.ops._configs import active_vendor_profile
 
     profile = active_vendor_profile()
     if not profile:
@@ -110,7 +110,7 @@ def test_a_deliberately_wrong_config_is_excluded_and_recorded():
     Not a mock of the screen: the real `screen_configs`, given real buffers
     and configs whose kernel genuinely writes different bytes.
     """
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.tensor import NBXTensor
 
     launcher.clear_screened()
 
@@ -139,7 +139,7 @@ def test_a_deliberately_wrong_config_is_excluded_and_recorded():
     def _write(tensor, value):
         import ctypes
 
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        from nbxtensor.tensor import DeviceAllocator
         host = np.ascontiguousarray(value)
         DeviceAllocator.memcpy(tensor.data_ptr(),
                                host.ctypes.data_as(ctypes.c_void_p).value,
@@ -165,7 +165,7 @@ def test_a_deliberately_wrong_config_is_excluded_and_recorded():
 
 def test_no_consensus_is_refused_rather_than_timed():
     """Two configs that disagree and nothing to break the tie."""
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.tensor import NBXTensor
 
     launcher.clear_screened()
     out = NBXTensor.from_numpy(np.zeros(16, dtype=np.float32))
@@ -185,7 +185,7 @@ def test_no_consensus_is_refused_rather_than_timed():
         def run(self, *args, **kwargs):
             import ctypes
 
-            from neurobrix.kernels.nbx_tensor import DeviceAllocator
+            from nbxtensor.tensor import DeviceAllocator
             host = np.full(16, float(kwargs["V"]), dtype=np.float32)
             DeviceAllocator.memcpy(args[0].data_ptr(),
                                    host.ctypes.data_as(ctypes.c_void_p).value,
@@ -218,8 +218,8 @@ def test_the_screen_saves_fp16_mm_on_this_machine():
     the family we know is broken" — which fails loudly if the screen ever
     starts throwing out configs for the wrong reason.
     """
-    from neurobrix.kernels.nbx_tensor import NBXTensor
-    from neurobrix.kernels import wrappers
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.ops import wrappers
 
     launcher.install()
     launcher.clear_screened()

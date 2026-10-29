@@ -19,7 +19,7 @@ from neurobrix.kernels import census_table as T
 
 def _row(model, key, container="aaaa", mode="triton", rung=16384):
     return {"model": model, "container": container, "mode": mode, "rungs_mb": [rung], "ops": [None],
-            "kernel": "neurobrix.kernels.ops.matmul.matmul_kernel", "key": key,
+            "kernel": "nbxtensor.ops.matmul.matmul_kernel", "key": key,
             "dtype": T.dtypes_of(key), "tool": "t"}
 
 
@@ -59,9 +59,9 @@ def test_a_row_without_a_column_is_refused(tmp_path):
 
 def test_a_key_is_found_by_its_line(tmp_path):
     T.write(T.table_path("nvidia", "volta", 16, tmp_path), [_row("A", K1)])
-    path, rows = T.rows_for("neurobrix.kernels.ops.matmul.matmul_kernel", K1, "nvidia", "volta", 16, tmp_path)
+    path, rows = T.rows_for("nbxtensor.ops.matmul.matmul_kernel", K1, "nvidia", "volta", 16, tmp_path)
     assert [r["model"] for r in rows] == ["A"]
-    assert T.rows_for("neurobrix.kernels.ops.matmul.matmul_kernel", K2, "nvidia", "volta", 16, tmp_path)[1] == []
+    assert T.rows_for("nbxtensor.ops.matmul.matmul_kernel", K2, "nvidia", "volta", 16, tmp_path)[1] == []
 
 
 def test_consolidation_reads_a_logs_dir_and_skips_foreign_json(tmp_path, monkeypatch):
@@ -76,7 +76,7 @@ def test_consolidation_reads_a_logs_dir_and_skips_foreign_json(tmp_path, monkeyp
     src.mkdir()
     (src / "perf_keys.json").write_text(json.dumps(["not", "a", "census"]))
     (src / "census.json").write_text(json.dumps({"models": {"M": {"graph_sha": "abc"}}}))
-    (src / "M.triton.walk.keys").write_text(f"neurobrix.kernels.ops.matmul.matmul_kernel::{K1}\n")
+    (src / "M.triton.walk.keys").write_text(f"nbxtensor.ops.matmul.matmul_kernel::{K1}\n")
     by_model, unhashed = CT.rows_of_source(src, "t")
     assert list(by_model) == ["M"] and by_model["M"][0]["mode"] == "triton" and not unhashed
 

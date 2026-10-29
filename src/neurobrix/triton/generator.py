@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from neurobrix import decode_progress, decode_stop
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
+from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator
 
 from .samplers import CombinedSampler, create_sampler
 

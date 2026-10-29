@@ -458,7 +458,7 @@ class TilingEngine:
         # input_tensor.device then mixed cuda:0 + cuda:2 in the accumulate add.
         # For single-device placement the two devices coincide -> no-op.
         if _is_nbx_tensor(input_tensor):
-            from neurobrix.kernels.nbx_tensor import NBXTensor
+            from nbxtensor.tensor import NBXTensor
             dev = (f"cuda:{getattr(first_result, '_device_idx', 0)}"
                    if first_result._device == "cuda" else first_result._device)
             output = NBXTensor.zeros(out_shape, dtype=first_result.dtype, device=dev)
@@ -522,7 +522,7 @@ class TilingEngine:
                 arr = arr * _ramp(shape[axis], before, after).reshape(along)
             arr = np.ascontiguousarray(arr)
             if _is_nbx_tensor(first_result):
-                from neurobrix.kernels.nbx_tensor import NBXTensor
+                from nbxtensor.tensor import NBXTensor
                 return NBXTensor.from_numpy(arr).to(first_result.dtype)
             import torch
             return torch.from_numpy(arr).to(device=first_result.device, dtype=first_result.dtype)
@@ -597,7 +597,7 @@ class TilingEngine:
             if not _census:
                 return
             try:
-                from neurobrix.kernels.nbx_tensor import DeviceAllocator as _DA
+                from nbxtensor.tensor import DeviceAllocator as _DA
                 live = sum(_DA._cuda_live_bytes.values())
                 pooled = sum(_DA._pool_cached_bytes.values())
             except Exception:
@@ -711,7 +711,7 @@ class TilingEngine:
             pad_h = ts - actual_h
             pad_w = ts - actual_w
             if _is_nbx_tensor(input_tensor):
-                from neurobrix.kernels.wrappers import pad_wrapper
+                from nbxtensor.ops.wrappers import pad_wrapper
                 tile = pad_wrapper(tile, [0, pad_w, 0, pad_h], mode='replicate')
             else:
                 import torch
@@ -789,9 +789,9 @@ def conv3d_chunked(input_tensor, weight, bias=None, stride=1, padding=0, dilatio
     tensor -> F.conv3d over the same temporal output chunks, each chunk's input the frames its
     receptive field reads. Chunks of `tiling_sizes.chunk_frames(frame bytes)` output frames."""
     try:
-        from neurobrix.kernels.nbx_tensor import NBXTensor
+        from nbxtensor.tensor import NBXTensor
         if isinstance(input_tensor, NBXTensor):
-            from neurobrix.kernels import wrappers as _w
+            from nbxtensor.ops import wrappers as _w
             return _w.conv3d_chunked_wrapper(input_tensor, weight, bias, stride, padding, dilation,
                                              transposed, output_padding, groups)
     except ImportError:
@@ -1122,8 +1122,8 @@ class OpLevelTilingEngine:
         contiguous, and otherwise the ordinary out-of-place op of the
         correct kind runs.
         """
-        from neurobrix.kernels import wrappers as _w
-        from neurobrix.kernels.nbx_tensor import NBXTensor as _NBXT
+        from nbxtensor.ops import wrappers as _w
+        from nbxtensor.tensor import NBXTensor as _NBXT
 
         fn_name = OpLevelTilingEngine.INPLACE_SAFE_UNARY[op_type]
         fn = getattr(_w, fn_name)
@@ -1499,10 +1499,8 @@ class OpLevelTilingEngine:
         is created, BEFORE the first execute() so interceptors are in
         place when CompiledSequence is compiled.
         """
-        from neurobrix.kernels.ops.fused_upsample_conv import (
-            make_upsample_proxy_interceptor,
-            fused_upsample_conv2d,
-        )
+        from nbxtensor.ops.fused_upsample_conv import make_upsample_proxy_interceptor
+        from neurobrix.kernels.ops.fused_upsample_conv_torch import fused_upsample_conv2d
 
         # The in-place residual adds are Prism's decision, taken at the
         # REQUEST it priced (`_identify_inplace_add_candidates_static` under
@@ -1552,9 +1550,7 @@ class OpLevelTilingEngine:
 
         # Standalone tiled ops (no fusion — input already materialized but
         # the op's workspace alone would OOM)
-        from neurobrix.kernels.ops.fused_upsample_conv import (
-            tiled_conv2d_spatial, tiled_rms_norm_spatial,
-        )
+        from neurobrix.kernels.ops.fused_upsample_conv_torch import tiled_conv2d_spatial, tiled_rms_norm_spatial
         # P-TRITON-VAE-16G-STRIPED root cause IDENTIFIED 2026-05-14
         # (not fully fixed):
         # - memory_estimator.py:50-68 inflates standalone conv
@@ -1635,8 +1631,8 @@ class OpLevelTilingEngine:
         if _os_iadd.environ.get("NBX_DISABLE_INPLACE_ADD", "0") == "1":
             self.plan.inplace_adds = []
         if self.plan.inplace_adds:
-            from neurobrix.kernels.wrappers import add_inplace_nbx
-            from neurobrix.kernels.nbx_tensor import NBXTensor
+            from nbxtensor.ops.wrappers import add_inplace_nbx
+            from nbxtensor.tensor import NBXTensor
 
             def make_inplace_add_interceptor(_reuse_index):
                 def _inplace_add(a, b, alpha=1.0, *args, **kwargs):
@@ -1684,8 +1680,8 @@ class OpLevelTilingEngine:
         if _os_iadd.environ.get("NBX_DISABLE_INPLACE_UNARY", "0") == "1":
             self.plan.inplace_unary = []
         if self.plan.inplace_unary:
-            from neurobrix.kernels import wrappers as _w
-            from neurobrix.kernels.nbx_tensor import NBXTensor as _NBXT
+            from nbxtensor.ops import wrappers as _w
+            from nbxtensor.tensor import NBXTensor as _NBXT
 
             # `tiling_sizes.inplace_min_bytes()`, the same figure the in-place adds
             # use (NBX_INPLACE_MIN_BYTES overrides it for a diagnosis). Read at call
@@ -1714,10 +1710,8 @@ class OpLevelTilingEngine:
         chain_specs = OpLevelTilingEngine._detect_pixel_shuffle_broadcast_chains(
             graph_executor)
         if chain_specs:
-            from neurobrix.kernels.ops.fused_upsample_conv import (
-                BroadcastClonePyroxy,
-            )
-            from neurobrix.kernels.nbx_tensor import NBXTensor
+            from nbxtensor.ops.fused_upsample_conv import BroadcastClonePyroxy
+            from nbxtensor.tensor import NBXTensor
 
             def make_clone_proxy_interceptor(_bcast_dim, _bcast_factor,
                                              _post_clone_shape,
@@ -1763,9 +1757,7 @@ class OpLevelTilingEngine:
                 return _view_proxy
 
             def make_pixel_shuffle_proxy_interceptor():
-                from neurobrix.kernels.wrappers import (
-                    pixel_shuffle_wrapper as nbx_pixel_shuffle,
-                )
+                from nbxtensor.ops.wrappers import pixel_shuffle_wrapper as nbx_pixel_shuffle
 
                 def _pixel_shuffle_proxy(input_tensor, upscale_factor,
                                          *_args, **_kwargs):
@@ -1848,11 +1840,7 @@ class OpLevelTilingEngine:
             and _mode in ("compiled", "sequential") + _triton_chain_modes
         )
         if _residual_chains_active:
-            from neurobrix.kernels.ops.residual_chain import (
-                ChainSentinel,
-                resolve_chain_weights,
-                band_streamed_chain_nbx,
-            )
+            from nbxtensor.ops.residual_chain import ChainSentinel, resolve_chain_weights, band_streamed_chain_nbx
             # Pick the chain wrapper for the runtime mode. The torch variant
             # lives in its own module and is imported ONLY on the compiled
             # branch: importing it here unconditionally would pull torch into
@@ -2063,9 +2051,7 @@ class OpLevelTilingEngine:
                                     # Read DeviceAllocator live_bytes
                                     # for triton modes.
                                     if _is_triton_mode:
-                                        from neurobrix.kernels.nbx_tensor import (
-                                            DeviceAllocator as _DA_pre,
-                                        )
+                                        from nbxtensor.tensor import DeviceAllocator as _DA_pre
                                         _pre = (
                                             _DA_pre._cuda_live_bytes.get(
                                                 _DA_pre.get_device(), 0)
@@ -2145,9 +2131,7 @@ class OpLevelTilingEngine:
                                         halo=int(spec_int["halo"]),
                                     )
                                     if _is_triton_mode:
-                                        from neurobrix.kernels.nbx_tensor import (
-                                            DeviceAllocator as _DA_post,
-                                        )
+                                        from nbxtensor.tensor import DeviceAllocator as _DA_post
                                         _post = (
                                             _DA_post._cuda_live_bytes.get(
                                                 _DA_post.get_device(), 0)
@@ -2217,13 +2201,9 @@ class OpLevelTilingEngine:
                                                   or float(alpha) == 1.0):
                             _target = args[0] if _ridx == 0 else args[1]
                             _other = args[1] if _ridx == 0 else args[0]
-                            from neurobrix.kernels.nbx_tensor import (
-                                NBXTensor as _NBXT_ia,
-                            )
+                            from nbxtensor.tensor import NBXTensor as _NBXT_ia
                             if isinstance(_target, _NBXT_ia):
-                                from neurobrix.kernels.wrappers import (
-                                    add_inplace_nbx,
-                                )
+                                from nbxtensor.ops.wrappers import add_inplace_nbx
                                 value = add_inplace_nbx(
                                     _target, _other, alpha=float(alpha))
                             elif (is_torch_tensor(_target)
@@ -2257,9 +2237,7 @@ class OpLevelTilingEngine:
                     # skipped NBXTensor → triton chain forks never
                     # populated _pending → chain wrapper never fired on
                     # triton (P-TRITON-LIVE-WATERMARK-AUDIT L4b).
-                    from neurobrix.kernels.nbx_tensor import (
-                        NBXTensor as _NBXT,
-                    )
+                    from nbxtensor.tensor import NBXTensor as _NBXT
                     for fork_spec in _node_roles["forks"]:
                         if not (is_torch_tensor(value) or isinstance(value, _NBXT)):
                             continue

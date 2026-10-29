@@ -37,7 +37,7 @@ class _Prof:
 def _lattice(monkeypatch, *vendor_docs):
     """The planned profile's devices carry `vendor_docs`; the PROCESS profile raises if read."""
     import neurobrix.core.config.loader as L
-    import neurobrix.kernels.ops._configs as C
+    import nbxtensor.ops._configs as C
     docs = {f"arch{i}": d for i, d in enumerate(vendor_docs)}
     monkeypatch.setattr(L, "get_vendor_config", lambda brand, arch: docs[arch])
 

@@ -27,10 +27,10 @@ import numpy as np
 import triton
 import triton.language as tl
 
-from neurobrix.kernels import wrappers as w
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, dtype_size
-from neurobrix.kernels.nbx_tensor import backend_loads_pointers_from_memory
-from neurobrix.kernels.nbx_tensor import _detect_gpu_backend
+from nbxtensor.ops import wrappers as w
+from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator, dtype_size
+from nbxtensor.tensor import backend_loads_pointers_from_memory
+from nbxtensor.tensor import _detect_gpu_backend
 
 # NBX_MOE_DIAG gate, hoisted to import time (C1 hygiene: never read the
 # environ on the per-MoE-op hot path). Empty/unset → falsy → zero cost.
@@ -182,7 +182,7 @@ def _build_ptr_tables(gate_weights, up_weights, down_weights):
     instead: the addresses a shader dereferences, kept alive for the table's
     whole cache lifetime (PtrTables.pins, released on LRU eviction).
     """
-    from neurobrix.kernels.quantized_tensor import QuantizedTensor
+    from nbxtensor.quant.quantized_tensor import QuantizedTensor
 
     num_experts = len(gate_weights)
     tables = PtrTables()
@@ -233,7 +233,7 @@ def _build_ptr_tables(gate_weights, up_weights, down_weights):
             # Pin FIRST — the capture launches below store their wraps under
             # the pin, which is what keeps the captured addresses mapped.
             # Released when this table leaves the cache, never per call.
-            from neurobrix.triton.triton_ext_driver import pinned_addresses
+            from nbxtensor.backend.triton_ext_driver import pinned_addresses
             pin = pinned_addresses(*(
                 ws[eid]
                 for ws in (gate_weights, up_weights, down_weights)
@@ -248,7 +248,7 @@ def _build_ptr_tables(gate_weights, up_weights, down_weights):
             # kept wraps blow Metal's alias budget (declined at ~480,
             # granite layer 15). Host-side arithmetic on the pinned wrap's
             # gpu_address needs no launch and one wrap per allocation.
-            from neurobrix.triton.triton_ext_driver import pinned_gpu_address
+            from nbxtensor.backend.triton_ext_driver import pinned_gpu_address
 
             def _capture_proj(weights):
                 ptrs = np.array(
@@ -362,7 +362,7 @@ def moe_align_block_size(topk_ids_flat, block_size, num_experts, device_idx):
         num_tokens_post_padded: NBXTensor [1] — total entries after padding
     """
     import triton as _tr
-    from neurobrix.kernels.nbx_tensor import _set_device
+    from nbxtensor.tensor import _set_device
     from nbxtensor.ops.moe_align import (
         moe_align_stage1_kernel, moe_align_stage2_kernel,
         moe_align_stage3_kernel)
@@ -436,7 +436,7 @@ def _xfer(tensor: NBXTensor, target_dev: int) -> NBXTensor:
     """
     if tensor._device_idx == target_dev:
         return tensor
-    from neurobrix.triton.device_transfer import transfer_tensor
+    from nbxtensor.memory.device_transfer import transfer_tensor
     return transfer_tensor(tensor, target_dev)
 
 
@@ -679,7 +679,7 @@ def execute_moe_fused(
             return
         try:
             import ctypes as _ct
-            from neurobrix.kernels.nbx_tensor import NBXDtype as _NBX
+            from nbxtensor.tensor import NBXDtype as _NBX
             DeviceAllocator.set_device(tensor._device_idx)
             full = tensor if tensor.dtype == _NBX.float32 else tensor.to(_NBX.float32)
             full = full.contiguous()
@@ -1032,7 +1032,7 @@ def _moe_decode_vec_pass(hidden_states, tables, dev, flat_indices,
     from nbxtensor.ops.moe_decode_vec import (
         moe_gateup_vec_kernel, moe_down_combine_vec_kernel,
         moe_down_split_vec_kernel, moe_part_reduce_kernel)
-    from neurobrix.kernels.nbx_tensor import _set_device
+    from nbxtensor.tensor import _set_device
 
     dt = hidden_states._dtype
     x = hidden_states.reshape(K)
@@ -1108,7 +1108,7 @@ def _moe_decode_vec_half_pass(hidden_states, tables, dev, flat_indices, flat_sco
     import triton as _tr
     from nbxtensor.ops.moe_decode_vec import (
         moe_gateup_vec_half_kernel, moe_down_split_vec_half_kernel, moe_part_reduce_kernel)
-    from neurobrix.kernels.nbx_tensor import _set_device
+    from nbxtensor.tensor import _set_device
 
     dt = hidden_states._dtype
     x = hidden_states.reshape(K)

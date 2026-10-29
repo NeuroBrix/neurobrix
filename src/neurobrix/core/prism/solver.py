@@ -1385,7 +1385,7 @@ class PrismSolver:
         from pathlib import Path as _P
         from neurobrix.core.prism.host_footprint import engine_of
         from neurobrix.core.runtime.expert_files import held_dtype
-        from neurobrix.kernels.nbx_tensor import parse_dtype
+        from nbxtensor.tensor import parse_dtype
         from neurobrix.nbx.weight_presence import read_weights_index
         topo = (getattr(self, "_expert_topology", None) or {}).get(name)
         names = sorted({n for l in (topo.layers if topo else []) for n in l.expert_weight_names})

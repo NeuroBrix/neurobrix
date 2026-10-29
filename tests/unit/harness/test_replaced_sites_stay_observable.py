@@ -52,8 +52,7 @@ def test_a_replacement_reports_what_it_replaced() -> None:
     """
     torch = pytest.importorskip("torch")
     sys.path.insert(0, str(REPO / "src"))
-    from neurobrix.kernels.ops.fused_upsample_conv import (      # noqa: E402
-        FusionUpsampleProxy)
+    from nbxtensor.ops.fused_upsample_conv import FusionUpsampleProxy  # noqa: E402
 
     x = torch.arange(2 * 3 * 4 * 5, dtype=torch.float32).reshape(2, 3, 4, 5)
     proxy = FusionUpsampleProxy(x, 2.0, 2.0, (2, 3, 8, 10))
@@ -79,8 +78,7 @@ def test_an_unset_slot_does_not_silence_the_summary() -> None:
     """
     torch = pytest.importorskip("torch")
     sys.path.insert(0, str(REPO / "src"))
-    from neurobrix.kernels.ops.fused_upsample_conv import (      # noqa: E402
-        FusionUpsampleProxy)
+    from nbxtensor.ops.fused_upsample_conv import FusionUpsampleProxy  # noqa: E402
 
     proxy = FusionUpsampleProxy(torch.randn(1, 2, 3, 4), 2.0, 2.0, (1, 2, 6, 8))
     assert not hasattr(proxy, "dtype") or True      # may legitimately be unset

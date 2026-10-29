@@ -51,7 +51,7 @@ import os
 import traceback
 from typing import Any, Dict, List, Optional, Tuple
 
-from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator
+from nbxtensor.tensor import NBXTensor, DeviceAllocator
 
 # THE ENGINE REPLAYS BY DEFAULT (the supervisor's order 2026-10-28 08:20, S3): a sequence that runs again with the same
 # signature is measured, recorded, VERIFIED byte-equal against the normal path, and only then replayed; every sequence it
@@ -607,7 +607,7 @@ class _NBXLaunch:
             launch_md, enter_hook, exit_hook, *vals):
         # The stream is the CALLER's: the graph capture hands its own capture stream
         # because the recorded one may be the uncapturable legacy stream.
-        from neurobrix.kernels.launcher import active_driver
+        from nbxtensor.backend.launcher import active_driver
         # `trailing` travels with the PREPARATION, not with the recorded tuple:
         # it is what the compiled kernel declares beyond the call, so dropping
         # it here would replay a launch that binds fewer buffers than the kernel
@@ -642,7 +642,7 @@ def _nbx_record(prep, grid, params) -> None:
 
 
 def _arm_launch_recorder(on: bool) -> None:
-    from neurobrix.kernels import launcher as _lnch
+    from nbxtensor.backend import launcher as _lnch
     _lnch.set_launch_recorder(_nbx_record if on else None)
 
 
@@ -940,7 +940,7 @@ class FrozenPlan:
                 cut = len(self.records)
             try:
                 if self.graph is None:
-                    from neurobrix.triton.replay_graph import CapturedPlan
+                    from nbxtensor.backend.replay_graph import CapturedPlan
                     if os.environ.get("NBX_REPLAY_GRAPH_DUMP") == "1":
                         from collections import Counter as _Ctr
                         seqd = "".join(t for t, _ in recs[:60])
@@ -959,7 +959,7 @@ class FrozenPlan:
                                 for t, r in self.records[-16:]]
                         print(f"[Replay][GRAPH] tail16={tail}", flush=True)
                     if _segmented:
-                        from neurobrix.triton.replay_graph import SegmentedPlan
+                        from nbxtensor.backend.replay_graph import SegmentedPlan
                         self.graph = SegmentedPlan(recs, getattr(self.slab, "dev_idx", None))
                         print(f"[Replay][GRAPH] bucket captured: {self.graph.launches} launches as "
                               f"{self.graph.stretches} CUDA graphs, one per stretch on one card")
@@ -1208,7 +1208,7 @@ def _seed_autotune_once() -> None:
         return
     _AT_SEEDED = True
     try:
-        from neurobrix.triton.autotune_cache import seed as _at_seed
+        from nbxtensor.ops.autotune_cache import seed as _at_seed
         n = _at_seed()
         if n:
             print(f"[Replay] autotune artifact seeded: {n} configs")
@@ -1607,7 +1607,7 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
     # the arch-keyed artifact (seeded back on the next process's
     # install; immune to triton's source-hash invalidation).
     try:
-        from neurobrix.triton.autotune_cache import capture as _at_capture
+        from nbxtensor.ops.autotune_cache import capture as _at_capture
         _at_capture()
     except (OSError, ValueError):
         pass  # artifact I/O is an optimization, never a failure source

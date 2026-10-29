@@ -32,7 +32,7 @@ from neurobrix.core.flow.iterative_process import (
 from neurobrix.triton.flow.iterative_process import (
     _gate_loop_state_finite as _gate_triton,
 )
-from neurobrix.kernels.nbx_tensor import NBXDtype, NBXTensor
+from nbxtensor.tensor import NBXDtype, NBXTensor
 
 
 # ── compiled engine gate (full CPU coverage) ─────────────────────────
@@ -95,14 +95,14 @@ class _ScalarBool:
 
 
 def test_triton_finite_state_passes(monkeypatch):
-    import neurobrix.kernels.wrappers as w
+    import nbxtensor.ops.wrappers as w
     monkeypatch.setattr(w, "isfinite_wrapper", lambda x: x)
     monkeypatch.setattr(w, "all_wrapper", lambda x: _ScalarBool(True))
     _gate_triton(_nbx_stub(NBXDtype.float32), 0, 999.0, "model.transformer")
 
 
 def test_triton_nonfinite_state_raises_with_context(monkeypatch):
-    import neurobrix.kernels.wrappers as w
+    import nbxtensor.ops.wrappers as w
     monkeypatch.setattr(w, "isfinite_wrapper", lambda x: x)
     monkeypatch.setattr(w, "all_wrapper", lambda x: _ScalarBool(False))
     with pytest.raises(RuntimeError) as excinfo:
@@ -116,7 +116,7 @@ def test_triton_nonfinite_state_raises_with_context(monkeypatch):
 
 
 def test_triton_gate_skips_non_float_and_non_nbx(monkeypatch):
-    import neurobrix.kernels.wrappers as w
+    import nbxtensor.ops.wrappers as w
 
     def _must_not_run(x):  # pragma: no cover - failure path
         raise AssertionError("kernel wrapper must not be invoked")

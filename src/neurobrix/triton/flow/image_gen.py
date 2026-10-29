@@ -30,9 +30,9 @@ from typing import Any, Dict
 
 import numpy as np
 
-from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator
+from nbxtensor.tensor import NBXTensor, DeviceAllocator
 from nbxtensor.random.seeded_draw import seeded_gaussian
-from neurobrix.triton.device_transfer import needs_move, transfer_tensor
+from nbxtensor.memory.device_transfer import needs_move, transfer_tensor
 
 
 def _require(block: Dict[str, Any], key: str, where: str):

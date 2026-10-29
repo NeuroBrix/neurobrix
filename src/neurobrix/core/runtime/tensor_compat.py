@@ -37,7 +37,7 @@ def is_torch_tensor(x: Any) -> bool:
 def is_nbx_tensor(x: Any) -> bool:
     """True for an NBXTensor (the kernel layer is imported lazily)."""
     try:
-        from neurobrix.kernels.nbx_tensor import NBXTensor
+        from nbxtensor.tensor import NBXTensor
     except ImportError:
         return False
     return isinstance(x, NBXTensor)

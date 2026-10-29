@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.triton import cpu_backend, metal_backend
+from nbxtensor.backend import cpu_backend, metal_backend
 
 
 # --- the gate is reachable from the command that needs it -------------------

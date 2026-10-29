@@ -27,17 +27,17 @@ import pytest
 triton = pytest.importorskip("triton")
 import triton.language as tl  # noqa: E402
 
-from neurobrix.kernels.nbx_tensor import NBXTensor  # noqa: E402
-from neurobrix.kernels.launcher import launch  # noqa: E402
+from nbxtensor.tensor import NBXTensor  # noqa: E402
+from nbxtensor.backend.launcher import launch  # noqa: E402
 
 
 def _metal_or_skip():
     try:
-        from neurobrix.kernels.nbx_tensor import _detect_gpu_backend
+        from nbxtensor.tensor import _detect_gpu_backend
         if _detect_gpu_backend() != "metal":
             pytest.skip("the transient-wrap lifetime is this driver's; "
                         "other drivers bind their own way")
-        from neurobrix.triton import triton_ext_driver as drv
+        from nbxtensor.backend import triton_ext_driver as drv
         return drv
     except Exception:
         pytest.skip("no Metal backend the engine can resolve")
@@ -161,7 +161,7 @@ def test_the_address_flags_of_a_compilation_reach_its_kernel_call():
     through them, and its own launcher passes both flags to every call: Metal keeps resident only the buffers
     the encoder names. Our launch passed neither. They travel with the compilation's trailing object."""
     _metal_or_skip()
-    from neurobrix.kernels.launcher import prepare
+    from nbxtensor.backend.launcher import prepare
     src = NBXTensor.from_numpy(np.arange(1, N + 1, dtype=np.float32))
     tab = NBXTensor.from_numpy(np.zeros(1, dtype=np.int64))
     out = NBXTensor.from_numpy(np.zeros(N, dtype=np.float32))

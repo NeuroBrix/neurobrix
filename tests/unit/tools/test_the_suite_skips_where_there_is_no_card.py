@@ -55,7 +55,7 @@ def _devices_visible_under(visible: str) -> int:
     have = subprocess.run(
         [sys.executable, "-c",
          "import sys; sys.path.insert(0, %r);"
-         "from neurobrix.kernels.nbx_tensor import DeviceAllocator; print(DeviceAllocator.device_count())"
+         "import neurobrix; from nbxtensor.tensor import DeviceAllocator; print(DeviceAllocator.device_count())"
          % str(ROOT / "src")],
         capture_output=True, text=True, timeout=180, env=env)
     return int(have.stdout.strip() or 0) if have.returncode == 0 else 0
@@ -81,7 +81,7 @@ def test_with_a_card_visible_the_hook_is_disarmed(tmp_path):
     have = subprocess.run(
         [sys.executable, "-c",
          "import sys; sys.path.insert(0, %r);"
-         "from neurobrix.kernels.nbx_tensor import DeviceAllocator; print(DeviceAllocator.device_count())"
+         "import neurobrix; from nbxtensor.tensor import DeviceAllocator; print(DeviceAllocator.device_count())"
          % str(ROOT / "src")],
         capture_output=True, text=True, timeout=180, env=env2)
     if have.returncode != 0 or int(have.stdout.strip() or 0) == 0:

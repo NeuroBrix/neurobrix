@@ -8,8 +8,8 @@ All tensors are NBXTensor. No torch imports.
 import numpy as np
 from typing import Dict, List, Optional
 
-from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator
-from neurobrix.kernels import wrappers as w
+from nbxtensor.tensor import NBXTensor, DeviceAllocator
+from nbxtensor.ops import wrappers as w
 
 
 class TritonLMSession:
@@ -229,7 +229,7 @@ class TritonLMSession:
         device_transfer brick — it materialises expanded views before the
         copy and picks H2D vs D2D by source, which a flat memcpy of
         `_nbytes` would get wrong."""
-        from neurobrix.triton.device_transfer import needs_move, transfer_tensor
+        from nbxtensor.memory.device_transfer import needs_move, transfer_tensor
         if needs_move(t, self.device_idx):
             return transfer_tensor(t, self.device_idx)
         return t

@@ -1,7 +1,7 @@
 """The bucket ladder (kernels/autotune_bucket.py): the values the measurement chose. What this
 test would do if the code were wrong: place 57 in a 16-wide bucket (the batched GEMM lost up
 to 16.7 % there), or bucket a profile that declares no ladder."""
-from neurobrix.kernels.autotune_bucket import bucket, bucket_of, ladder_for, parse_ladder
+from nbxtensor.ops.autotune_bucket import bucket, bucket_of, ladder_for, parse_ladder
 
 LADDER = parse_ladder([{"up_to": 64, "step": 1}, {"up_to": 256, "step": 16},
                        {"up_to": 1024, "step": 32}, {"up_to": 8192, "step": 128}, {"up_to": None, "step": 512}])

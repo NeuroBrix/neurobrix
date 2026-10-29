@@ -35,7 +35,7 @@ from .compiled_ops import CompiledOpResolver
 # it. A torch OOM passes through untouched, deliberately: torch's own message
 # already carries the free and total figures, and re-deriving them from its prose
 # is exactly the string-parsing this design exists to avoid.
-from neurobrix.kernels.oom_advice import annotate as _oom_annotate
+from nbxtensor.memory.oom_advice import annotate as _oom_annotate
 
 
 def _live_dump_on_oom(err, arena, tid_of_slot) -> None:
@@ -4020,7 +4020,7 @@ class CompiledSequence:
         entirely (no branch cost beyond the None check) when None.
         """
         import torch
-        from neurobrix.kernels.nbx_tensor import set_torch_device
+        from neurobrix.kernels.torch_interop import set_torch_device
         _current_device_idx = self.device.index if self.device.index is not None else 0
         # Routed by declared capability, like `torch_device_str`: on a
         # single-device backend there is no selection to make, and asking

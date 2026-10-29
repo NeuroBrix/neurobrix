@@ -32,7 +32,8 @@ SRC = Path(__file__).resolve().parents[3] / "src"
 PROBE = r"""
 import sys
 # nothing imports yaml first: this is the cold order the engine really takes
-from neurobrix.kernels.ops._configs import arch_smem_budget, active_vendor_profile
+import neurobrix  # the application: nbxtensor's host services
+from nbxtensor.ops._configs import arch_smem_budget, active_vendor_profile
 arch_smem_budget()
 p = active_vendor_profile()
 print("KEYS", len(p))
@@ -51,7 +52,7 @@ def _run():
 def _has_profile():
     """Does this machine have a vendor profile at all? (Warm interpreter.)"""
     import yaml                                    # noqa: F401  (warm it first)
-    from neurobrix.kernels.ops._configs import arch_smem_budget, active_vendor_profile
+    from nbxtensor.ops._configs import arch_smem_budget, active_vendor_profile
     arch_smem_budget()
     return bool(active_vendor_profile())
 

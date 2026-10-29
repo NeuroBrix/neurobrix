@@ -19,11 +19,11 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.kernels.autotune_certified import EXTENT_POSITIONS, degenerate_extent
+from nbxtensor.ops.autotune_certified import EXTENT_POSITIONS, degenerate_extent
 
-CONV = "neurobrix.kernels.ops.conv2d.conv2d_forward_kernel"
-DW = "neurobrix.kernels.ops.depthwise_conv2d.depthwise_conv2d_kernel"
-MM = "neurobrix.kernels.ops.matmul.matmul_kernel"
+CONV = "nbxtensor.ops.conv2d.conv2d_forward_kernel"
+DW = "nbxtensor.ops.depthwise_conv2d.depthwise_conv2d_kernel"
+MM = "nbxtensor.ops.matmul.matmul_kernel"
 
 GOOD_CONV = (1, 64, 1, 4021, 64, 1, 4021, 1, 3, 1, 1, 0, 1, 1, 1, 1, False, "fp16", "fp16", "fp16")
 GOOD_DW = (64, 1, 4021, 1, 4021, 1, 3, 1, 1, 0, 1, True, "fp16", "fp16", "fp16")

@@ -51,7 +51,7 @@ def _owns_its_cache(tmp_path, monkeypatch):
 
 
 def _tensors():
-    from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
+    from nbxtensor.tensor import NBXTensor, NBXDtype
     from neurobrix.kernels.autotune_certify import f32_to_bf16_bits
 
     rng = np.random.default_rng(20260912)
@@ -65,9 +65,9 @@ def _tensors():
 
 def _key_seen(bias, a, b):
     """The key the autotuner would form for this call, captured at its seam."""
-    from neurobrix.kernels import wrappers as W
-    from neurobrix.triton import autotune_cache as atc
-    from neurobrix.kernels.ops.matmul import addmm_kernel
+    from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import autotune_cache as atc
+    from nbxtensor.ops.matmul import addmm_kernel
 
     tuner = addmm_kernel
     seen = {}
@@ -104,7 +104,7 @@ def _key_seen(bias, a, b):
 
 
 def test_the_bias_reaches_the_kernel_as_bf16():
-    from neurobrix.kernels.nbx_tensor import NBXDtype
+    from nbxtensor.tensor import NBXDtype
 
     a, b, bias = _tensors()
     assert bias.nbx_dtype == NBXDtype.bfloat16, "the fixture itself must be bf16"

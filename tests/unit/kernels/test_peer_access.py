@@ -23,8 +23,8 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.kernels import nbx_tensor
-from neurobrix.kernels.nbx_tensor import DeviceAllocator
+from nbxtensor import tensor as nbx_tensor
+from nbxtensor.tensor import DeviceAllocator
 
 
 def _gpu_count() -> int:
@@ -56,10 +56,13 @@ def test_peer_access_is_not_queried_by_hand_anywhere_else():
     """One place decides this. A second call site would drift out of the memo
     and start asking the driver on a hot transfer path."""
     import pathlib
-    root = pathlib.Path(nbx_tensor.__file__).resolve().parents[1]
+    import neurobrix
+    own = pathlib.Path(nbx_tensor.__file__).resolve()
+    roots = (pathlib.Path(neurobrix.__file__).resolve().parent, own.parent)   # the engine and its library (M1)
     offenders = []
-    for path in root.rglob("*.py"):
-        if path.name == "nbx_tensor.py":
+    for path in (p for r in roots for p in r.rglob("*.py")):
+        root = next(r for r in roots if r in path.resolve().parents)
+        if path.resolve() == own:
             continue
         text = path.read_text()
         if "EnablePeerAccess" in text or "CanAccessPeer" in text:
@@ -108,8 +111,8 @@ def test_a_cross_device_transfer_is_byte_identical_either_way():
     whenever the transfer path is touched."""
     import numpy as np
 
-    from neurobrix.kernels.nbx_tensor import NBXDtype, NBXTensor
-    from neurobrix.triton.device_transfer import transfer_tensor
+    from nbxtensor.tensor import NBXDtype, NBXTensor
+    from nbxtensor.memory.device_transfer import transfer_tensor
 
     rs = np.random.RandomState(1234)
     source = rs.randn(1, 16, 64, 128).astype(np.float16)
@@ -176,10 +179,13 @@ def test_the_engine_creates_no_timing_events_for_ordering():
     import pathlib
     import re
 
-    root = pathlib.Path(nbx_tensor.__file__).resolve().parents[1]
+    import neurobrix
+    own = pathlib.Path(nbx_tensor.__file__).resolve()
+    roots = (pathlib.Path(neurobrix.__file__).resolve().parent, own.parent)   # the engine and its library (M1)
     offenders = []
-    for path in root.rglob("*.py"):
-        if path.name == "nbx_tensor.py":
+    for path in (p for r in roots for p in r.rglob("*.py")):
+        root = next(r for r in roots if r in path.resolve().parents)
+        if path.resolve() == own:
             continue
         for number, line in enumerate(path.read_text().splitlines(), 1):
             if re.search(r"create_event\(\s*\)", line):

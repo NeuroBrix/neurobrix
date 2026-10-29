@@ -35,7 +35,7 @@ import textwrap
 
 import pytest
 
-from neurobrix.kernels.nbx_tensor import DeviceAllocator, NBXDtype
+from nbxtensor.tensor import DeviceAllocator, NBXDtype
 
 _TOTAL = DeviceAllocator.device_count()
 needs_a_card = pytest.mark.skipif(_TOTAL == 0, reason="needs a CUDA device")
@@ -60,7 +60,7 @@ def test_the_backing_map_has_an_entry_for_every_dtype_it_can_receive():
     dtype to arrive.
     """
     import inspect
-    from neurobrix.kernels import nbx_tensor as nt
+    from nbxtensor import tensor as nt
 
     src = inspect.getsource(nt.NBXTensor.empty_cpu)
     missing = [d.name for d in NBXDtype if f"NBXDtype.{d.name}" not in src]
@@ -75,7 +75,7 @@ def test_the_backing_map_has_an_entry_for_every_dtype_it_can_receive():
 def test_a_complex_tensor_reaches_the_host_without_corrupting_it(dtype_name, pairs):
     rc, out = _in_a_child(f"""
         import numpy as np
-        from neurobrix.kernels.nbx_tensor import NBXTensor
+        from nbxtensor.tensor import NBXTensor
         base = np.ascontiguousarray(
             np.random.default_rng(0).standard_normal((4, 8, {pairs}))
             .astype(np.float32 if "{dtype_name}" == "complex64" else np.float64))

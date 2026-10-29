@@ -38,8 +38,8 @@ def _setup(tmp_path):
         {"format": "nbx-autotune-certified/2", "entries": {OUT: E(3)}}))
     table = tmp_path / "18g.jsonl"
     table.write_text("\n".join(json.dumps(r) for r in (
-        {"model": "m", "kernel": "neurobrix.kernels.ops.matmul.matmul_kernel", "key": IN},
-        {"model": "m", "kernel": "neurobrix.kernels.ops.baddbmm_op.baddbmm_kernel", "key": OUT})) + "\n")
+        {"model": "m", "kernel": "nbxtensor.ops.matmul.matmul_kernel", "key": IN},
+        {"model": "m", "kernel": "nbxtensor.ops.baddbmm_op.baddbmm_kernel", "key": OUT})) + "\n")
     return d, table
 
 

@@ -57,7 +57,7 @@ def test_the_launch_meta_is_what_the_matching_row_states(monkeypatch):
     """The row's warps always, its chunk where it states one (2026-10-08: warps were read only beside a
     chunk, so the M4 Pro's stated head_dim-128 warps never reached the launch). A matching row without
     num_warps is an error naming the row, never Triton's default."""
-    from neurobrix.kernels.ops import _configs as K
+    from nbxtensor.ops import _configs as K
     rows = [{"seqlen_q_le": 16, "block_m": 16, "block_n": 64, "num_warps": 4},
             {"head_dim_ge": 256, "block_m": 32, "block_n": 32},
             {"head_dim_ge": 128, "block_m": 32, "block_n": 32, "num_warps": 8},
@@ -94,7 +94,7 @@ def _attn(q, k, v):
     """The FMA-path flash kernel itself: the route forced to flash and the profile's matrix unit withheld (where
     the unit is declared it takes these operands — tests/unit/kernels/test_flash_m8n8k4.py; this kernel still
     serves every call the unit does not take)."""
-    from neurobrix.kernels import wrappers as W
+    from nbxtensor.ops import wrappers as W
     real, real_mu = W._lk.sdpa_route, W._lk.unit_flash
     W._lk.sdpa_route = lambda *a, **kw: ("flash", 0)
     W._lk.unit_flash = lambda *a, **kw: None
@@ -107,7 +107,7 @@ def _attn(q, k, v):
 @volta
 @pytest.mark.parametrize("D", [64, 96, 128])
 def test_the_chunked_kernel_agrees_with_float64(D, without_matrix_unit):
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.tensor import NBXTensor
     rng = np.random.default_rng(D)
     a = [(rng.standard_normal((1, 2, 333, D)) * 0.5).astype(np.float16) for _ in range(3)]
     o = _attn(*[NBXTensor.from_numpy(x) for x in a]).numpy().astype(np.float64)
@@ -121,8 +121,8 @@ def test_the_chunked_kernel_agrees_with_float64(D, without_matrix_unit):
 def test_the_chunked_launch_is_several_times_the_held_one_on_this_card(monkeypatch, without_matrix_unit):
     """Same process, same inputs: the profile's chunk row against the same call with the row's
     launch meta withheld (the held form). Measured 14x at T 4096, D 96 (2026-10-03)."""
-    from neurobrix.kernels import wrappers as W
-    from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator
+    from nbxtensor.ops import wrappers as W
+    from nbxtensor.tensor import NBXTensor, DeviceAllocator
     rng = np.random.default_rng(0)
     q, k, v = [NBXTensor.from_numpy((rng.standard_normal((1, 8, 2048, 96)) * 0.5).astype(np.float16)) for _ in range(3)]
 

@@ -10,8 +10,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from neurobrix.kernels import launch_keys as LK
-from neurobrix.kernels import autotune_bucket as AB
+from nbxtensor.ops import launch_keys as LK
+from nbxtensor.ops import autotune_bucket as AB
 
 _LADDERS = {
     "measured": [{"up_to": 65536, "step": 65536}, {"up_to": 1048576, "step": 1048576},
@@ -53,10 +53,10 @@ torch = pytest.importorskip("torch")
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
 @pytest.mark.parametrize("n", [5, 70000, 3_000_000])
 def test_a_wrapper_launch_asks_the_shared_copy_for_its_class(monkeypatch, n):
-    from neurobrix.kernels import wrappers as W
-    from neurobrix.kernels.nbx_tensor import NBXTensor
-    from neurobrix.kernels.ops import elementwise_launch as E
-    from neurobrix.triton.autotune_cache import key_of
+    from nbxtensor.ops import wrappers as W
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.ops import elementwise_launch as E
+    from nbxtensor.ops.autotune_cache import key_of
 
     class _Launched(Exception):
         pass

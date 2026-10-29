@@ -81,8 +81,8 @@ except ModuleNotFoundError:  # script-mode under a pytest-less GPU venv
 
 import triton
 
-from neurobrix.kernels import wrappers as W
-from neurobrix.kernels.nbx_tensor import DeviceAllocator, NBXDtype, NBXTensor
+from nbxtensor.ops import wrappers as W
+from nbxtensor.tensor import DeviceAllocator, NBXDtype, NBXTensor
 
 _NP = {
     NBXDtype.float32: (np.float32, 4),

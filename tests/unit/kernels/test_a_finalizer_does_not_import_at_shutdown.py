@@ -50,7 +50,8 @@ _SRC = Path(__file__).resolve().parents[3] / "src"
 # to be None. 256x256 is enough — the fault is in the import, not the size — so
 # the cell costs no real memory.
 _CHILD = """
-from neurobrix.kernels.nbx_tensor import NBXTensor
+import neurobrix
+from nbxtensor.tensor import NBXTensor
 def body():
     x = NBXTensor.ones((256, 256), dtype="float16")
     y = x.t().contiguous()

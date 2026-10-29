@@ -488,8 +488,9 @@ def directory_idents(vendor_profile: str, idents, memory_class: int) -> set:
     failure into "not served": the 2026-09-26 census printed "0 served, 743 to certify" over a
     directory holding thousands of entries. It also asked `any_class`, which calls an entry
     proven on a 32 GB card served to a 16 GB census. Nothing is swallowed here."""
-    from neurobrix.kernels import autotune_certified as C
-    from neurobrix.triton.autotune_cache import _autotuners
+    import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
+    from nbxtensor.ops import autotune_certified as C
+    from nbxtensor.ops.autotune_cache import _autotuners
     vendor, _, profile = vendor_profile.partition("/")
     tuners = {qual: at for qual, at in _autotuners()}
     out = set()

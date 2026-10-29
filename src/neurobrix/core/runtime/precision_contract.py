@@ -249,7 +249,7 @@ def resolve(cache_path: Optional[str], component_name: str,
     # slower (the record only adds casts on this model) — the conservative
     # triple is the faster identical one (D-PRECISION-LEVER-NOOP-COST).
     try:
-        from neurobrix.triton.autotune_cache import _arch_fingerprint as _arch
+        from nbxtensor.ops.autotune_cache import _arch_fingerprint as _arch
         arch = _arch()
     except Exception:
         arch = None

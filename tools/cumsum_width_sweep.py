@@ -60,8 +60,9 @@ def main() -> int:
     spec = importlib.util.spec_from_file_location("bank", "tools/metal_bank_replay.py")
     bank = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(bank)
-    from neurobrix.kernels.nbx_tensor import NBXTensor
-    from neurobrix.kernels.wrappers import cumsum_wrapper
+    import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.ops.wrappers import cumsum_wrapper
 
     lengths = [1, 2, 511, 1023, 1024, 1025, 1026, 2047, 2048, 2049,
                3077, 4095, 4096, 4097, 5000, 8192, 8193]

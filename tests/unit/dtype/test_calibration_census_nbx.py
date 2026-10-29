@@ -17,7 +17,7 @@ from neurobrix.core.dtype import calibration as cal
 
 
 def _gpu():
-    nbx = pytest.importorskip("neurobrix.kernels.nbx_tensor")
+    nbx = pytest.importorskip("nbxtensor.tensor")
     empty, f32 = nbx.NBXTensor.empty, nbx.NBXDtype.float32   # renamed symbols raise here
     try:
         empty((1,), f32, "cuda:0")
@@ -33,14 +33,14 @@ def _bind_executing_profile(monkeypatch):
     runs on main a182a3f6 while the key was absent; a sweep found the key bounded once the profile was there)."""
     from neurobrix.core.prism import load_profile
     from neurobrix.core.prism.autodetect import get_or_create_default_profile
-    from neurobrix.kernels import wrappers as W
+    from nbxtensor.ops import wrappers as W
     monkeypatch.setattr(W, "_NBX_HW_PROFILE", W._NBX_HW_PROFILE)   # restored after the test
     W.set_hardware_profile(load_profile(get_or_create_default_profile()))
 
 
 @pytest.mark.skipif(not _gpu(), reason="needs a GPU")
 def test_census_observes_nbx_outputs(monkeypatch):
-    from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator
+    from nbxtensor.tensor import NBXTensor, DeviceAllocator
     _bind_executing_profile(monkeypatch)
     c = cal.RangeCensus()
     a = np.array([[1.0, -7.5], [3.0, 0.5]], dtype=np.float32)
@@ -65,7 +65,7 @@ def test_measured_preference_keeps_the_conservative_path(monkeypatch, tmp_path):
     rec.timing["cuda-70"] = {"conservative_s": 1.0, "calibrated_s": 1.2, "identical": True, "reps": 3}
     rec.prefer["cuda-70"] = "conservative"
     monkeypatch.setattr(pc, "load_calibration", lambda *a, **k: rec)
-    from neurobrix.triton import autotune_cache as atc
+    from nbxtensor.ops import autotune_cache as atc
     monkeypatch.setattr(atc, "_arch_fingerprint", lambda: "cuda-70")
     monkeypatch.delenv(pc.FLAG_ENV, raising=False)
     safe, pins, narrow = pc.resolve(str(tmp_path), "model", dag, compute_dtype="float16")

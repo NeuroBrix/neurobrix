@@ -50,7 +50,7 @@ def test_both_engines_add_the_same_pinned_noise(monkeypatch):
     torch = pytest.importorskip("torch")
     from neurobrix.core.module.scheduler.diffusion.euler import EulerAncestralDiscreteScheduler
     from neurobrix.triton.scheduler.euler import TritonEulerAncestralDiscreteScheduler
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.tensor import NBXTensor
     rng = np.random.default_rng(1)
     sample = rng.standard_normal((1, 2, 4, 4)).astype(np.float32); eps = rng.standard_normal((1, 2, 4, 4)).astype(np.float32)
     c = EulerAncestralDiscreteScheduler(CFG); c.set_timesteps(4)

@@ -32,8 +32,8 @@ from neurobrix.kernels import autotune_certify as AC
 def test_the_launch_oracle_is_computed_from_the_launch_operands_not_the_whole(monkeypatch):
     """A band of 8 rows out of a 64-row product: the oracle covers the 8 rows the launch carries."""
     import types
-    from neurobrix.kernels.nbx_tensor import NBXTensor
-    from neurobrix.kernels.ops.matmul import matmul_kernel
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.ops.matmul import matmul_kernel
     rng = np.random.default_rng(0)
     a = rng.standard_normal((64, 16)).astype(np.float32)
     b = rng.standard_normal((16, 32)).astype(np.float32)
@@ -42,18 +42,18 @@ def test_the_launch_oracle_is_computed_from_the_launch_operands_not_the_whole(mo
     tuner = types.SimpleNamespace(base_fn=matmul_kernel.fn if hasattr(matmul_kernel, "fn") else matmul_kernel,
                                   nargs={"a_ptr": NBXTensor.from_numpy(np.ascontiguousarray(band)),
                                          "b_ptr": NBXTensor.from_numpy(b), "c_ptr": out, "M": 8, "N": 32, "K": 16})
-    oracle = AC.launch_oracle("neurobrix.kernels.ops.matmul.matmul_kernel", tuner, {}, out)
+    oracle = AC.launch_oracle("nbxtensor.ops.matmul.matmul_kernel", tuner, {}, out)
     assert hasattr(oracle, "blocks") and [w for w, _ in oracle.blocks] == [(0, 8)], oracle.describe
     np.testing.assert_allclose(oracle.blocks[0][1], band.astype(np.float64) @ b.astype(np.float64), rtol=0, atol=1e-12)
     # a launch over the cap is windowed on ITS rows, never past them
     monkeypatch.setattr(AC, "ORACLE_MAX_MACS", 8 * 32 * 16 // 2)
-    windowed = AC.launch_oracle("neurobrix.kernels.ops.matmul.matmul_kernel", tuner, {}, out)
+    windowed = AC.launch_oracle("nbxtensor.ops.matmul.matmul_kernel", tuner, {}, out)
     assert all(r1 <= 8 for (r0, r1), _ in windowed.blocks), windowed.describe
     # families the screen does not row-window, or whose output is not a matrix, keep the
     # synthesized oracle — read from the screen's table and the output's rank, not a name list
-    assert AC.launch_oracle("neurobrix.kernels.ops.baddbmm_op.baddbmm_kernel", tuner, {}, out) is None
+    assert AC.launch_oracle("nbxtensor.ops.baddbmm_op.baddbmm_kernel", tuner, {}, out) is None
     out4 = NBXTensor.from_numpy(np.zeros((1, 2, 4, 4), np.float32))
-    assert AC.launch_oracle("neurobrix.kernels.ops.matmul.matmul_kernel", tuner, {}, out4) is None
+    assert AC.launch_oracle("nbxtensor.ops.matmul.matmul_kernel", tuner, {}, out4) is None
 
 
 def _cuda_free_bytes():
@@ -74,18 +74,18 @@ def test_a_key_the_wrapper_streams_in_bands_is_certified_on_its_launches(monkeyp
     if _cuda_free_bytes() < (1 << 30):
         pytest.skip("needs a card with 1 GB free")
     monkeypatch.setenv("NEUROBRIX_REPLAY_CACHE", str(tmp_path / "replay_cache"))
-    from neurobrix.kernels import wrappers as W
-    from neurobrix.triton import autotune_cache as atc
+    from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import autotune_cache as atc
     monkeypatch.setattr(W, "_NBX_MM_MAX_OUTPUT_ELEMS", 4096)
     AC._bind_hardware_profile()
-    qual = "neurobrix.kernels.ops.matmul.matmul_kernel"
+    qual = "nbxtensor.ops.matmul.matmul_kernel"
     tuner = dict(atc._autotuners())[qual]
     # the key the wrapper forms for this shape, captured at the autotuner's seam
     captured = {}
     saved = tuner.run
     tuner.run = lambda *a, **k: captured.setdefault("key", tuple(atc.key_of(tuner, a, k)))
     try:
-        from neurobrix.kernels.nbx_tensor import NBXTensor
+        from nbxtensor.tensor import NBXTensor
         W.mm(NBXTensor.from_numpy(np.ones((256, 16), np.float32)).to("cuda"),
              NBXTensor.from_numpy(np.ones((16, 32), np.float32)).to("cuda").to("float16"))
     finally:
@@ -106,17 +106,17 @@ def test_a_later_band_that_writes_nothing_is_REFUSED_not_counted(monkeypatch, tm
     if _cuda_free_bytes() < (1 << 30):
         pytest.skip("needs a card with 1 GB free")
     monkeypatch.setenv("NEUROBRIX_REPLAY_CACHE", str(tmp_path / "replay_cache"))
-    from neurobrix.kernels import wrappers as W
-    from neurobrix.triton import autotune_cache as atc
+    from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import autotune_cache as atc
     monkeypatch.setattr(W, "_NBX_MM_MAX_OUTPUT_ELEMS", 4096)
     AC._bind_hardware_profile()
-    qual = "neurobrix.kernels.ops.matmul.matmul_kernel"
+    qual = "nbxtensor.ops.matmul.matmul_kernel"
     tuner = dict(atc._autotuners())[qual]
     captured = {}
     saved = tuner.run
     tuner.run = lambda *a, **k: captured.setdefault("key", tuple(atc.key_of(tuner, a, k)))
     try:
-        from neurobrix.kernels.nbx_tensor import NBXTensor
+        from nbxtensor.tensor import NBXTensor
         W.mm(NBXTensor.from_numpy(np.ones((256, 16), np.float32)).to("cuda"),
              NBXTensor.from_numpy(np.ones((16, 32), np.float32)).to("cuda").to("float16"))
     finally:
@@ -146,12 +146,12 @@ def test_a_batched_key_with_a_bias_is_certified_by_its_synthesized_oracle(monkey
     if _cuda_free_bytes() < (1 << 30):
         pytest.skip("needs a card with 1 GB free")
     monkeypatch.setenv("NEUROBRIX_REPLAY_CACHE", str(tmp_path / "replay_cache"))
-    from neurobrix.triton import autotune_cache as atc
+    from nbxtensor.ops import autotune_cache as atc
     AC._bind_hardware_profile()
-    qual = "neurobrix.kernels.ops.baddbmm_op.baddbmm_kernel"
+    qual = "nbxtensor.ops.baddbmm_op.baddbmm_kernel"
     tuner = dict(atc._autotuners())[qual]
-    from neurobrix.kernels import wrappers as W
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.ops import wrappers as W
+    from nbxtensor.tensor import NBXTensor
     captured = {}
     saved = tuner.run
     tuner.run = lambda *a, **k: captured.setdefault("key", tuple(atc.key_of(tuner, a, k)))

@@ -1,7 +1,7 @@
 """A recorded plan that crosses cards (an expert store's card-held tail) replays one CUDA graph per stretch of actions on
 one card, the card switches and the recorded syncs run directly between them, in the recorded order (S3, 2026-10-28:
 Qwen3-30B-A3B on 4 V100, 1 845 launches as 121 graphs, 184 -> 175 ms a token, text identical). No card."""
-from neurobrix.triton import replay_graph as RG
+from nbxtensor.backend import replay_graph as RG
 
 
 class _Plan:

@@ -34,7 +34,7 @@ import pytest
 
 
 def test_the_decision_is_the_live_available_memory(monkeypatch):
-    from neurobrix.kernels import launcher as L
+    from nbxtensor.backend import launcher as L
     import neurobrix.core.host_memory as hm
 
     # The numbers straddle `available - the bench's own flush buffer`, not
@@ -90,7 +90,7 @@ def test_the_decision_is_the_live_available_memory(monkeypatch):
 def test_an_unreadable_platform_gates_nothing(monkeypatch):
     """`memory_state` names why it cannot read; this door must not turn that
     honest None into a silent always-on or always-off policy of its own."""
-    from neurobrix.kernels import launcher as L
+    from nbxtensor.backend import launcher as L
     import neurobrix.core.host_memory as hm
 
     class _M:
@@ -105,7 +105,7 @@ def test_an_unreadable_platform_gates_nothing(monkeypatch):
 
 
 def test_an_unmeasured_choice_is_never_persisted():
-    from neurobrix.triton import autotune_cache as atc
+    from nbxtensor.ops import autotune_cache as atc
 
     class _At:
         pass
@@ -139,7 +139,7 @@ def test_an_unmeasured_choice_is_never_persisted():
 
 
 def test_a_sweep_that_grew_the_swap_is_marked_unmeasured(monkeypatch):
-    from neurobrix.kernels import autotune_refusals as R
+    from nbxtensor.ops import autotune_refusals as R
     import neurobrix.core.host_memory as hm
 
     swap = {"used": 4000}
@@ -167,7 +167,7 @@ def test_a_sweep_that_grew_the_swap_is_marked_unmeasured(monkeypatch):
     grew = R.sweep_grew_the_swap()
     assert grew == 500
     R.mark_sweep_unmeasured(at, ("k", 1), grew, say=said.append)
-    from neurobrix.triton import autotune_cache as atc
+    from nbxtensor.ops import autotune_cache as atc
 
     assert atc.is_unmeasured(at, ("k", 1)) is True
     assert len(said) == 1 and "500" in said[0], (
@@ -177,7 +177,7 @@ def test_a_sweep_that_grew_the_swap_is_marked_unmeasured(monkeypatch):
 def test_a_quiet_sweep_is_not_marked(monkeypatch):
     """Both directions: zero growth marks nothing, or every sweep on a busy
     machine would starve the persistent cache for no reason."""
-    from neurobrix.kernels import autotune_refusals as R
+    from nbxtensor.ops import autotune_refusals as R
     import neurobrix.core.host_memory as hm
 
     class _M:
@@ -194,7 +194,7 @@ def test_a_quiet_sweep_is_not_marked(monkeypatch):
 
 
 def test_an_unreadable_swap_marks_nothing(monkeypatch):
-    from neurobrix.kernels import autotune_refusals as R
+    from nbxtensor.ops import autotune_refusals as R
     import neurobrix.core.host_memory as hm
 
     class _M:
@@ -214,8 +214,8 @@ def test_an_unreadable_swap_marks_nothing(monkeypatch):
 def test_on_discrete_memory_both_doors_are_inert(monkeypatch):
     """A V100 rack, 251 GB of host RAM: the host is not the bench. Seen firing
     on a 1 MB swap delta on 2026-09-13 before this condition existed."""
-    from neurobrix.kernels import autotune_refusals as R
-    from neurobrix.kernels.launcher import bench_would_swap
+    from nbxtensor.ops import autotune_refusals as R
+    from nbxtensor.backend.launcher import bench_would_swap
     import neurobrix.core.host_memory as hm
 
     class _M:

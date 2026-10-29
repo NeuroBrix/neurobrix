@@ -19,8 +19,8 @@ sys.path.insert(0, str(REPO / "tools"))
 
 import derived_census as D  # noqa: E402
 from neurobrix.kernels import census as _census  # noqa: E402
-from neurobrix.kernels import launch_keys as LK  # noqa: E402
-from neurobrix.kernels.nbx_tensor import NBXDtype  # noqa: E402
+from nbxtensor.ops import launch_keys as LK  # noqa: E402
+from nbxtensor.tensor import NBXDtype  # noqa: E402
 
 S = lambda v: {"type": "scalar", "value": v}       # noqa: E731
 T = lambda t: {"type": "tensor", "tensor_id": t}   # noqa: E731
@@ -28,8 +28,8 @@ T = lambda t: {"type": "tensor", "tensor_id": t}   # noqa: E731
 
 @pytest.fixture(autouse=True)
 def _the_bound_target_is_restored():
-    from neurobrix.kernels import launcher
-    from neurobrix.kernels.ops import _configs
+    from nbxtensor.backend import launcher
+    from nbxtensor.ops import _configs
     target, active = getattr(launcher, "_TARGET", None), dict(_configs._ACTIVE_PROFILE)
     yield
     launcher._TARGET = target

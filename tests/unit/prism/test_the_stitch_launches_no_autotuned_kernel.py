@@ -34,7 +34,7 @@ from pathlib import Path
 
 import neurobrix.core.runtime  # noqa: F401  (pre-resolve the cfg<->runtime import cycle)
 from neurobrix.core.prism import chunked_region as CR
-from neurobrix.kernels.nbx_tensor import NBXTensor
+from nbxtensor.tensor import NBXTensor
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
 import derived_census as D  # noqa: E402
@@ -84,7 +84,7 @@ def _resolve(name, fn, local):
 
 
 def _in_kernels(obj):
-    return (getattr(obj, "__module__", "") or "").startswith("neurobrix.kernels")
+    return (getattr(obj, "__module__", "") or "").startswith(("neurobrix.kernels", "nbxtensor."))   # the kernels moved into nbxtensor (M1)
 
 
 def _launches(entry_methods):

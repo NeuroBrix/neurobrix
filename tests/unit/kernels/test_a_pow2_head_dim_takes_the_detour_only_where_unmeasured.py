@@ -11,8 +11,8 @@ from pathlib import Path
 
 import yaml
 
-from neurobrix.kernels import launch_keys as LK
-from neurobrix.kernels.ops import _configs as K
+from nbxtensor.ops import launch_keys as LK
+from nbxtensor.ops import _configs as K
 
 REPO = Path(__file__).resolve().parents[3]
 

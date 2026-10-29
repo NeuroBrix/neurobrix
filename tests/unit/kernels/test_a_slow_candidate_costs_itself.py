@@ -29,7 +29,7 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _fresh_sweep():
-    from neurobrix.kernels import autotune_refusals as R
+    from nbxtensor.ops import autotune_refusals as R
 
     saved = dict(R._BUDGET_RATIOS)
     R.begin_sweep()
@@ -59,7 +59,7 @@ def test_the_budget_derives_from_the_fastest_completed_probe(_fresh_sweep):
 
 
 def test_an_over_budget_candidate_scores_inf_and_is_said(_fresh_sweep):
-    from neurobrix.kernels.launcher import CandidateOverTimeBudget
+    from nbxtensor.backend.launcher import CandidateOverTimeBudget
 
     R = _fresh_sweep
     said = []
@@ -105,7 +105,7 @@ def test_a_config_over_footprint_is_excluded_before_running():
     """Transposition of the threadgroup-budget door to unified memory: a
     config whose full footprint (args + scratch + bench buffer) exceeds
     available is cut BEFORE the spend, not caught after the swap grew."""
-    from neurobrix.kernels import autotune_refusals as R
+    from nbxtensor.ops import autotune_refusals as R
 
     # 5 GB of arguments against 3 GB available: cannot fit even before scratch.
     fits, avail, fp = R.config_footprint_fits(
@@ -115,7 +115,7 @@ def test_a_config_over_footprint_is_excluded_before_running():
 
 def test_a_config_that_fits_is_not_excluded():
     """Both directions: a small config under the margin runs normally."""
-    from neurobrix.kernels import autotune_refusals as R
+    from nbxtensor.ops import autotune_refusals as R
 
     fits, _, _ = R.config_footprint_fits(
         arg_bytes=100 * 2**20, config_scratch_bytes=0, available_mb=8000)
@@ -125,7 +125,7 @@ def test_a_config_that_fits_is_not_excluded():
 def test_the_bench_scratch_is_counted_not_just_the_arguments():
     """The whole point over bench_would_swap: a config whose ARGUMENTS fit but
     whose args + 256 MB bench buffer do not must still be excluded."""
-    from neurobrix.kernels import autotune_refusals as R
+    from nbxtensor.ops import autotune_refusals as R
 
     # args 500 MB fit in 700 MB available on their own; + 256 MB bench + margin
     # they do not.
@@ -140,7 +140,7 @@ def test_an_unreadable_platform_adds_no_policy(monkeypatch):
     """When the live reading is None (platform we cannot read), the door fits
     everything and adds no policy of its own -- host_memory already names why
     it could not read."""
-    from neurobrix.kernels import autotune_refusals as R
+    from nbxtensor.ops import autotune_refusals as R
     import neurobrix.core.host_memory as hm
 
     class _M:
@@ -154,7 +154,7 @@ def test_an_unreadable_platform_adds_no_policy(monkeypatch):
 
 
 def test_the_exclusion_is_said_with_its_numbers():
-    from neurobrix.kernels import autotune_refusals as R
+    from nbxtensor.ops import autotune_refusals as R
 
     said = []
     guarded = R.exclude_over_footprint(

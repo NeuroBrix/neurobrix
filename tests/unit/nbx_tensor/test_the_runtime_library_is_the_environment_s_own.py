@@ -7,7 +7,7 @@ candidates dropped from the list → the first test found the system's path
 first — RED."""
 import os
 
-from neurobrix.kernels import nbx_tensor as T
+from nbxtensor import tensor as T
 
 
 def test_the_environment_s_libcudart_leads_the_candidate_list():

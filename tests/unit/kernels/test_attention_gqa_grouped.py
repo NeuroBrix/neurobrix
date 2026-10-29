@@ -49,8 +49,8 @@ except ModuleNotFoundError:  # script-mode under a pytest-less GPU venv
 
     pytest = _NoPytest()  # type: ignore[assignment]
 
-from neurobrix.kernels import wrappers as W
-from neurobrix.kernels.nbx_tensor import DeviceAllocator, NBXDtype, NBXTensor
+from nbxtensor.ops import wrappers as W
+from nbxtensor.tensor import DeviceAllocator, NBXDtype, NBXTensor
 
 _NP = {NBXDtype.float32: (np.float32, 4), NBXDtype.float16: (np.float16, 2)}
 
@@ -144,7 +144,7 @@ def _attention_or_named_refusal(q, k, v, **kw):
     the refusal is asserted to name its reason. The same tests pass outright on
     triton-ext, where the kernel compiles (16/16, 2026-09-17).
     """
-    from neurobrix.kernels import wrappers as W
+    from nbxtensor.ops import wrappers as W
     reference = kw.pop("_reference", False)
     try:
         if reference:

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.triton import metal_backend as MB
+from nbxtensor.backend import metal_backend as MB
 
 
 @pytest.fixture(autouse=True)

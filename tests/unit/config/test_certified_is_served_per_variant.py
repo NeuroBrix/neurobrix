@@ -15,8 +15,8 @@ numbers would still be plausible.
 """
 import pytest
 
-from neurobrix.kernels import autotune_certified as AC
-from neurobrix.kernels.ops import _configs as C
+from nbxtensor.ops import autotune_certified as AC
+from nbxtensor.ops import _configs as C
 
 
 def _device_name():

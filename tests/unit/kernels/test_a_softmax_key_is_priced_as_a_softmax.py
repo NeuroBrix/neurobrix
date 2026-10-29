@@ -3,7 +3,7 @@ oracle's own — the fp64 arrays it holds per row window, every window's result 
 function fell through to: every Apple softmax certification failed on 'geometry' before its first launch (2026-10-21)."""
 from neurobrix.kernels import autotune_certify as C
 
-Q = "neurobrix.kernels.ops.softmax.softmax_forward_kernel"
+Q = "nbxtensor.ops.softmax.softmax_forward_kernel"
 
 
 def test_a_softmax_key_is_priced():

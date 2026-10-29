@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from neurobrix.kernels.nbx_tensor import NBXDtype, NBXTensor
+from nbxtensor.tensor import NBXDtype, NBXTensor
 
 
 def _capture(monkeypatch, name):
@@ -46,7 +46,7 @@ def test_a_like_op_without_a_dtype_follows_its_template(monkeypatch):
 
 
 def test_linspace_honours_an_explicit_fp16(monkeypatch):
-    from neurobrix.kernels import dispatch
+    from nbxtensor.ops import dispatch
     seen = _capture(monkeypatch, "empty")
     dispatch._create_linspace(0.0, 1.0, 0, dtype=NBXDtype.float16)     # steps 0: no launch
     assert seen["dtype"] == NBXDtype.float16

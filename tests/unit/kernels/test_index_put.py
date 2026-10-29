@@ -39,9 +39,9 @@ except ModuleNotFoundError:  # script-mode under the pytest-less GPU runtime ven
 import numpy as np
 import torch
 
-from neurobrix.kernels.dispatch import dispatch
-from neurobrix.kernels.nbx_tensor import NBXTensor, nbx_to_torch
-
+from nbxtensor.ops.dispatch import dispatch
+from nbxtensor.tensor import NBXTensor
+from neurobrix.kernels.torch_interop import nbx_to_torch
 _NP = {"float32": np.float32, "float16": np.float16}
 _TT = {"float32": torch.float32, "float16": torch.float16}
 
@@ -129,7 +129,7 @@ def test_index_put_bool_mask_is_correct():
     v = _nbx(np.ones((2,), np.float32))
     out = fn(x, [mask], v, False)
     import ctypes
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator
+    from nbxtensor.tensor import DeviceAllocator
     buf = (ctypes.c_char * out._nbytes)()
     DeviceAllocator.memcpy(ctypes.addressof(buf), out.data_ptr(),
                            out._nbytes, 2)

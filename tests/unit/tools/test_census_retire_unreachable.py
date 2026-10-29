@@ -15,8 +15,8 @@ from census_retire_unreachable import retire, unreachable_from_logs  # noqa: E40
 LOG_LINE = ("[certify] matmul_kernel fp16 M=67 N=65 K=33 IEEE_PRECISION=False PROMOTE_B=False fp16,fp16,fp16: "
             "UNREACHABLE — the wrapper computed key (67, 65, 33, True, True, 'fp16', 'fp16', 'fp32') for inputs "
             "synthesized from (67, 65, 33, False, False, 'fp16', 'fp16', 'fp16'): the census and the kernel disagree")
-OLD = "neurobrix.kernels.ops.matmul.matmul_kernel::(67, 65, 33, False, False, 'fp16', 'fp16', 'fp16')"
-NEW = "neurobrix.kernels.ops.matmul.matmul_kernel::(67, 65, 33, True, True, 'fp16', 'fp16', 'fp32')"
+OLD = "nbxtensor.ops.matmul.matmul_kernel::(67, 65, 33, False, False, 'fp16', 'fp16', 'fp16')"
+NEW = "nbxtensor.ops.matmul.matmul_kernel::(67, 65, 33, True, True, 'fp16', 'fp16', 'fp32')"
 OTHER = "neurobrix.kernels.ops.baddbmm.baddbmm_kernel::(67, 65, 33, False, False, 'fp16', 'fp16', 'fp16')"
 
 

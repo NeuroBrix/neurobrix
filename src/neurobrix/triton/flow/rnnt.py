@@ -22,9 +22,9 @@ import numpy as np
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
-from neurobrix.triton.memory_pool import release_flow_memory
-from neurobrix.triton.device_transfer import parse_device_idx
+from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator
+from nbxtensor.memory.memory_pool import release_flow_memory
+from nbxtensor.memory.device_transfer import parse_device_idx
 from neurobrix.nbx.neurotax import normalize_tensor_name_strict
 
 # R30 mirror of core/flow/rnnt.py: the joint's linears as NeMo names them, keyed by the parser.
@@ -347,8 +347,8 @@ class TritonRNNTEngine:
         input_seq: [T, 1, D] numpy (T == 1 per RNNT step); hx = (h, c) numpy
         [num_layers, 1, H]. Returns (output [T,1,H] numpy, (h_n, c_n) numpy).
         """
-        from neurobrix.kernels import wrappers as _w
-        from neurobrix.kernels.nbx_tensor import NBXTensor
+        from nbxtensor.ops import wrappers as _w
+        from nbxtensor.tensor import NBXTensor
 
         params = getattr(self, "_dec_lstm_params_nbx", None)
         if params is None:

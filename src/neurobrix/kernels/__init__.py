@@ -9,7 +9,7 @@ Architecture:
 - metadata_ops.py: Shape/view ops (PyTorch native)
 
 Usage:
-    from neurobrix.kernels.dispatch import dispatch
+    from nbxtensor.ops.dispatch import dispatch
     kernel = dispatch("aten::relu")  # Returns Triton wrapper or None
 """
 
@@ -50,6 +50,6 @@ __all__ = [
 # long before the first dispatch. Installed there, those launches went through
 # upstream's launcher and its torch-importing driver probe (whole-zoo probe
 # 2026-09-05: Sana, VibeVoice, Voxtral, canary, chatterbox).
-from .launcher import install as _install_launcher  # noqa: E402
+from nbxtensor.backend.launcher import install as _install_launcher  # noqa: E402
 
 _install_launcher()

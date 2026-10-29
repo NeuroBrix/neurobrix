@@ -16,7 +16,7 @@ is a valid integer in both namespaces and simply names different cards.
 
 import pytest
 
-from neurobrix.kernels.nbx_tensor import DeviceAllocator
+from nbxtensor.tensor import DeviceAllocator
 
 from .test_prefill_determinism import _gpu_classes
 
@@ -86,7 +86,7 @@ def test_on_a_real_card_the_ordinals_are_usable_for_an_allocation():
     """The method's activation proof: every ordinal it returns must actually
     take an allocation. A list that merely looks plausible is what the old
     helper produced."""
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.tensor import NBXTensor
 
     devs = DeviceAllocator.visible_device_memory()
     assert devs, "a host with a device must report at least one"

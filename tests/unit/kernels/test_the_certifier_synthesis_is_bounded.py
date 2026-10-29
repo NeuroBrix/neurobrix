@@ -35,7 +35,7 @@ def fp16_out(monkeypatch):
 
 
 def test_a_key_larger_than_the_card_is_refused_before_any_draw(fp16_out):
-    qual = "neurobrix.kernels.ops.matmul.matmul_kernel"
+    qual = "nbxtensor.ops.matmul.matmul_kernel"
     key = (1 << 20, 4096, 4096, True, False, "fp16", "fp16", "fp16")     # 8 GiB + 32 MiB + 8 GiB
     with pytest.raises(AC.KeyTooLargeForClass) as e:
         AC.synthesize(qual, _Tuner(), key, _NoDraw(), card_bytes=16 * 2**30)
@@ -44,7 +44,7 @@ def test_a_key_larger_than_the_card_is_refused_before_any_draw(fp16_out):
 
 
 def test_a_key_that_fits_is_drawn(fp16_out):
-    qual = "neurobrix.kernels.ops.matmul.matmul_kernel"
+    qual = "nbxtensor.ops.matmul.matmul_kernel"
     made = AC.synthesize(qual, _Tuner(), (64, 32, 16, True, False, "fp16", "fp16", "fp16"),
                          np.random.default_rng(0), card_bytes=16 * 2**30)
     assert made is not None
@@ -71,7 +71,7 @@ def test_the_host_peak_is_a_small_multiple_of_the_operand(dt, ceiling):
 
 def test_arguments_only_draws_nothing_and_builds_no_oracle(fp16_out):
     # The Mac's compile-only caller (msl_census.py) needs the key's arguments, never values.
-    qual = "neurobrix.kernels.ops.matmul.matmul_kernel"
+    qual = "nbxtensor.ops.matmul.matmul_kernel"
     for kernel, key in ((qual, (1 << 16, 4096, 4096, True, False, "fp16", "fp16", "fp16")),
                         ("neurobrix.kernels.ops.conv.conv2d_forward_kernel",
                          (1, 128, 2048, 1024, 128, 2048, 1024, 3, 3, 1, 1, 1, 1, 1, 1, 1, "fp16", "fp16"))):
@@ -91,7 +91,7 @@ def test_on_unified_memory_the_host_copies_count(fp16_out):
     oracle share one pool there. The bound on a unified device is the key's phase price (host
     draws + device copies + oracle), never the device bytes alone — and, since 2026-10-05, never
     the 10-bytes-an-element constant that refused keys the plans form."""
-    qual = "neurobrix.kernels.ops.matmul.matmul_kernel"
+    qual = "nbxtensor.ops.matmul.matmul_kernel"
     key = (1 << 18, 4096, 4096, True, False, "fp16", "fp16", "fp16")      # 1.07G + 16.8M + 1.07G elements
     device = 2 * ((1 << 18) * 4096 * 2 + 4096 * 4096)                     # A, B, the output at fp16
     peak = AC.price_key(qual, _Tuner(), key)["peak"]
@@ -103,7 +103,7 @@ def test_on_unified_memory_the_host_copies_count(fp16_out):
 
 def test_a_discrete_card_keeps_its_device_bound(fp16_out, monkeypatch):
     """Same key and budget on a discrete card: the device bytes fit, no refusal from the bound."""
-    qual = "neurobrix.kernels.ops.matmul.matmul_kernel"
+    qual = "nbxtensor.ops.matmul.matmul_kernel"
     key = (1 << 18, 4096, 4096, True, False, "fp16", "fp16", "fp16")
     elems = (1 << 18) * 4096 * 2 + 4096 * 4096
     seen = {}
@@ -115,7 +115,8 @@ def test_a_discrete_card_keeps_its_device_bound(fp16_out, monkeypatch):
 def test_the_certifying_device_says_whether_its_memory_is_unified(monkeypatch):
     """The flag's source: the hardware profile's device (DeviceSpec.has_unified_memory)."""
     import types
-    from neurobrix.kernels import nbx_tensor, wrappers
+    from nbxtensor import tensor as nbx_tensor
+    from nbxtensor.ops import wrappers
     monkeypatch.setattr(nbx_tensor.DeviceAllocator, "get_device", staticmethod(lambda: 0))
     for uni in (True, False):
         # The REAL DeviceSpec, whose has_unified_memory is a property: a SimpleNamespace stub

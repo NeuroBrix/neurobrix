@@ -53,7 +53,7 @@ def test_wider_means_wider_than_the_graph_s_own_parameters(traced, params, compu
     ctx = ExecutionContext(dag={"tensors": meta}, device="cpu", dtype=getattr(torch, compute))
     assert TensorResolver(ctx).get_input_dtype("t") == getattr(torch, traced if wide else compute)
     pytest.importorskip("triton")
-    from neurobrix.kernels.nbx_tensor import NBXDtype
+    from nbxtensor.tensor import NBXDtype
     from neurobrix.triton.dtype import TritonDtypeEngine
     eng = TritonDtypeEngine(NBXDtype[compute], has_native_bf16=True, graph_dtype=compute, stores_fp64=False)
     stored = {"float64": "float32"}.get(traced, traced)
@@ -82,7 +82,7 @@ def test_prism_prices_the_orpheus_input_at_the_compute_dtype():
 ])
 def test_the_triton_engine_s_entry_rule(traced, compute, stores_fp64, expected):
     pytest.importorskip("triton")
-    from neurobrix.kernels.nbx_tensor import NBXDtype
+    from nbxtensor.tensor import NBXDtype
     from neurobrix.triton.dtype import TritonDtypeEngine
     eng = TritonDtypeEngine(NBXDtype[compute], has_native_bf16=True, graph_dtype=compute, stores_fp64=stores_fp64)
     assert eng._target_dtype_for_input("input::t", _meta(traced)) == NBXDtype[expected]
@@ -156,7 +156,7 @@ def test_an_fp32_input_value_survives_the_entry_of_an_fp16_component(mode, devic
     ex._component_name = "transformer"
     x = torch.tensor([2049.0, 4097.0], dtype=torch.float32)      # exact in fp32, 2048 / 4096 in fp16
     if mode.startswith("triton"):
-        from neurobrix.kernels.nbx_tensor import NBXTensor
+        from nbxtensor.tensor import NBXTensor
         t = NBXTensor.from_numpy(x.numpy()).to_cuda()
     else:
         t = x.to(device)

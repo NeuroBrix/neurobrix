@@ -25,7 +25,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from neurobrix.kernels.autotune_certified import _DTYPES, key_dtypes
+from nbxtensor.ops.autotune_certified import _DTYPES, key_dtypes
 from neurobrix.kernels.autotune_certify import _NP, _arr
 
 #: The key MiniCPM-o forms, verbatim from its run record.

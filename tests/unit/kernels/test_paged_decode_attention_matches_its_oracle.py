@@ -21,8 +21,8 @@ import ctypes
 import numpy as np
 import pytest
 
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
-from neurobrix.kernels import wrappers as W
+from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator
+from nbxtensor.ops import wrappers as W
 from nbxtensor.ops.paged_decode_attn import PAGED_DECODE_TILE_CANDIDATES
 
 # fp16 K/V, fp32 accumulation over a few thousand positions: a correct kernel sits at a few 1e-4 relative (the

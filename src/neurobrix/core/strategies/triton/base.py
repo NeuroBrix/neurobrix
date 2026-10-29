@@ -88,7 +88,7 @@ class TritonStrategy(ExecutionStrategy):
 
         The device is restored on the way out, including if the sync raises.
         """
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        from nbxtensor.tensor import DeviceAllocator
         prefix, _, idx = str(device or "").partition(":")
         previous = None
         if prefix in _ACCELERATOR_PREFIXES:

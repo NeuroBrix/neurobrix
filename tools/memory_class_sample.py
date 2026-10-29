@@ -28,7 +28,8 @@ def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if len(argv) != 2 or argv[0] != "draft":
         print(__doc__); return 2
-    from neurobrix.kernels import autotune_certified as C
+    import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
+    from nbxtensor.ops import autotune_certified as C
     draft = Path(argv[1])
     engine = C.directory()
     agree = differ = missing = 0

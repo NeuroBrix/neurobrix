@@ -55,7 +55,7 @@ def _gpu_available() -> bool:
     """
     import pytest
 
-    nbx = pytest.importorskip("neurobrix.kernels.nbx_tensor")
+    nbx = pytest.importorskip("nbxtensor.tensor")
     detect = nbx._detect_gpu_backend   # a renamed probe raises here, loudly
     try:
         return detect() is not None
@@ -66,7 +66,7 @@ def _gpu_available() -> bool:
 def _download(t) -> bytes:
     """Device bytes of a CONTIGUOUS NBXTensor."""
     import ctypes
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator
+    from nbxtensor.tensor import DeviceAllocator
     buf = (ctypes.c_char * t._nbytes)()
     DeviceAllocator.memcpy(ctypes.addressof(buf), t.data_ptr(),
                            t._nbytes, 2)
@@ -76,7 +76,7 @@ def _download(t) -> bytes:
 def test_merge_dims_semantics() -> None:
     if not _gpu_available():
         pytest.skip("no GPU")
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.tensor import NBXTensor
 
     rng = np.random.default_rng(7)
 
@@ -122,9 +122,9 @@ def test_sdpa_bucketed_view_bit_equal_with_activation_proof() -> None:
     if not _gpu_available():
         pytest.skip("no GPU")
     import os
-    from neurobrix.kernels import nbx_tensor as NT
-    from neurobrix.kernels.nbx_tensor import NBXTensor
-    from neurobrix.kernels.wrappers import scaled_dot_product_attention_wrapper
+    from nbxtensor import tensor as NT
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.ops.wrappers import scaled_dot_product_attention_wrapper
 
     # Pin the MATH route — the route decode takes on Volta via the
     # vendor-yml scores budget. A bare test process has no hardware

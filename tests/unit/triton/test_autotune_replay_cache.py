@@ -13,7 +13,7 @@ import os
 import pytest
 import triton
 
-from neurobrix.triton import autotune_cache as atc
+from nbxtensor.ops import autotune_cache as atc
 
 
 class _Tuner:

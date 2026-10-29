@@ -28,7 +28,8 @@ SRC = Path(__file__).resolve().parents[3] / "src"
 _ASK_BOTH = """
 import sys
 sys.path.insert(0, %r)
-from neurobrix.kernels.nbx_tensor import _detect_gpu_backend, DeviceAllocator
+import neurobrix  # the application: nbxtensor's host services
+from nbxtensor.tensor import _detect_gpu_backend, DeviceAllocator
 try:
     name = _detect_gpu_backend()
 except Exception as exc:
@@ -74,7 +75,7 @@ def _backend_has_a_visibility_mask() -> bool:
     """
     import pytest
 
-    nbx = pytest.importorskip("neurobrix.kernels.nbx_tensor")
+    nbx = pytest.importorskip("nbxtensor.tensor")
     try:
         return nbx._detect_gpu_backend() == "cuda"
     except Exception:
@@ -92,7 +93,7 @@ def test_under_census_metal_is_nameable_though_the_device_is_unreachable(monkeyp
     Kokoro / orpheus / openaudio would not census — though the same census
     completes on CUDA (the Dell's 9ea81cd2 covers the rack, not Apple). Both
     answers are census-gated, so this holds on any machine."""
-    from neurobrix.kernels import metal_device
+    from nbxtensor.backend import metal_device
 
     monkeypatch.setenv("NBX_CENSUS", "1")
     # naming: the backend is nameable, so the resolver can pick metal

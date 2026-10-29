@@ -43,8 +43,8 @@ def test_a_projection_mixing_layouts_is_refused_by_name(monkeypatch):
 _PROMOTE = r"""
 import ctypes, os, sys
 import numpy as np
-import neurobrix.kernels.nbx_tensor as NT
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
+import nbxtensor.tensor as NT
+from nbxtensor.tensor import NBXTensor, NBXDtype
 calls = []
 keep = []
 def malloc(nbytes, dev_idx=None):

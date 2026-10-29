@@ -18,7 +18,7 @@ import json
 import pytest
 
 from neurobrix.kernels import autotune_certify as AC
-from neurobrix.kernels import autotune_certified as ACD
+from nbxtensor.ops import autotune_certified as ACD
 
 
 _METAL_PROTO = {

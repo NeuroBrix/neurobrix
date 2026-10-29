@@ -14,8 +14,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from neurobrix.kernels import wrappers as W
-from neurobrix.kernels.nbx_tensor import DeviceAllocator, NBXTensor
+from nbxtensor.ops import wrappers as W
+from nbxtensor.tensor import DeviceAllocator, NBXTensor
 
 
 def _unit_declared() -> bool:
@@ -157,8 +157,8 @@ def test_the_census_derives_no_key_where_the_unit_runs():
     """The recorded key IS the launcher's key: a GEMM the matrix unit takes has no autotune key, so the derived
     census (launch_keys, the same predicate as the wrappers) lists none, fp32 operands (split) included; a GEMM
     below the unit's smallest tile keeps its key."""
-    from neurobrix.kernels import launch_keys as LK
-    from neurobrix.kernels.nbx_tensor import NBXDtype
+    from nbxtensor.ops import launch_keys as LK
+    from nbxtensor.tensor import NBXDtype
     h, f = NBXDtype.float16, NBXDtype.float32
     assert LK.mm_launches(512, 512, 512, h, h, False) == []
     assert LK.addmm_launches(512, 512, 512, h, h, h, False) == []

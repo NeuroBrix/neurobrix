@@ -44,10 +44,10 @@ def census_hardware(monkeypatch):
     """Bind HARDWARE as `derived_census.derive_keys` does; every global it sets is restored after."""
     from neurobrix.core.prism.loader import load_profile
     from neurobrix.kernels import census as _census
-    from neurobrix.kernels import launcher as _launcher
-    from neurobrix.kernels import nbx_tensor as T
-    from neurobrix.kernels import wrappers as W
-    from neurobrix.kernels.ops import _configs
+    from nbxtensor.backend import launcher as _launcher
+    from nbxtensor import tensor as T
+    from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import _configs
     for mod, name in ((W, "_NBX_HW_PROFILE"), (W, "_NBX_HAS_NATIVE_BF16"), (T, "_BACKEND_HAS_FP64"),
                       (_launcher, "_TARGET")):
         monkeypatch.setattr(mod, name, getattr(mod, name))
@@ -116,9 +116,9 @@ def test_a_vlm_request_runs_its_contracts_components_only():
 def test_baddbmm_is_keyed_as_its_wrapper_launches(tl_dot_gemms):
     """`baddbmm_wrapper` launches IEEE_PRECISION True, PROMOTE_B False, HAS_BIAS True, its output
     batch1's dtype; the walk's key (64, 1024, 128, True, False, True, fp16, fp16, fp16, <bias>)."""
-    from neurobrix.kernels import launch_keys as LK
-    from neurobrix.kernels import wrappers as W
-    from neurobrix.kernels.nbx_tensor import NBXDtype
+    from nbxtensor.ops import launch_keys as LK
+    from nbxtensor.ops import wrappers as W
+    from nbxtensor.tensor import NBXDtype
     F16 = NBXDtype.float16
     assert LK.baddbmm_launches(64, 128, 1024, F16, F16, F16) == [
         (LK.BADDBMM, (64, 1024, 128, True, False, True, "fp16", "fp16", "fp16", "fp16"))]

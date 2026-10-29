@@ -42,7 +42,7 @@ def test_one_element_inputs_take_the_constexpr_form_and_still_run():
     placed inside the branches broke on it ('int' object has no attribute 'to',
     Flex.1-alpha's new arm, 2026-09-25). The selection must accept every form."""
     import numpy as np
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.tensor import NBXTensor
     g = lambda x: NBXTensor.from_numpy(x).to("cuda")
     one, two = np.array([1.5], dtype=np.float32), np.array([-2.0], dtype=np.float32)
     assert np.array_equal(NBXTensor.cat([g(one), g(two)], dim=0).to("cpu").numpy(), np.concatenate([one, two]))

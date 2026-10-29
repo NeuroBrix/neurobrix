@@ -23,9 +23,9 @@ from __future__ import annotations
 
 import numpy as np
 
-from neurobrix.kernels import screen_oracle as S
+from nbxtensor.ops import screen_oracle as S
 from neurobrix.kernels.autotune_certify import f32_to_bf16_bits
-from neurobrix.kernels.nbx_tensor import NBXDtype
+from nbxtensor.tensor import NBXDtype
 
 
 class _FakeTensor:

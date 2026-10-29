@@ -22,10 +22,10 @@ import pytest
 
 def _metal_or_skip():
     try:
-        from neurobrix.kernels.nbx_tensor import _detect_gpu_backend
+        from nbxtensor.tensor import _detect_gpu_backend
         if _detect_gpu_backend() != "metal":
             pytest.skip("the wrap of an interior pointer is the Metal driver's; other drivers bind their own way")
-        from neurobrix.triton import triton_ext_driver as drv
+        from nbxtensor.backend import triton_ext_driver as drv
         return drv
     except Exception:
         pytest.skip("no Metal backend the engine can resolve")
@@ -35,13 +35,13 @@ N = K = 3072
 
 
 def _bf16(rng, shape):
-    from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
+    from nbxtensor.tensor import NBXTensor, NBXDtype
     a = rng.standard_normal(shape, dtype=np.float32) * 0.1
     return NBXTensor.from_numpy((a.view(np.uint32) >> 16).astype(np.uint16), dtype=NBXDtype.bfloat16)
 
 
 def _ms_per_launch(fn, n=60):
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator
+    from nbxtensor.tensor import DeviceAllocator
     for _ in range(5):
         fn()
     DeviceAllocator.sync_device()
@@ -55,7 +55,7 @@ def _ms_per_launch(fn, n=60):
 @pytest.fixture(scope="module")
 def placed():
     _metal_or_skip()
-    from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
+    from nbxtensor.tensor import NBXTensor, NBXDtype
     rng = np.random.default_rng(0)
     own, vec = _bf16(rng, (N, K)), _bf16(rng, (K,))
     block = NBXTensor.empty((1 << 30) // 2, device=own.device, dtype=NBXDtype.bfloat16)   # 1 GiB
@@ -65,7 +65,7 @@ def placed():
 
 
 def test_a_view_at_the_start_of_a_large_block_launches_as_cheaply_as_its_own_buffer(placed):
-    from neurobrix.kernels import wrappers as W
+    from nbxtensor.ops import wrappers as W
     own, view, vec, _ = placed
     t_own = _ms_per_launch(lambda: W.mv_wrapper(own, vec))
     t_view = _ms_per_launch(lambda: W.mv_wrapper(view, vec))
@@ -75,7 +75,7 @@ def test_a_view_at_the_start_of_a_large_block_launches_as_cheaply_as_its_own_buf
 
 
 def test_the_view_computes_what_its_own_buffer_computes(placed):
-    from neurobrix.kernels import wrappers as W
+    from nbxtensor.ops import wrappers as W
     own, view, vec, _ = placed
     a = W.mv_wrapper(own, vec).numpy()
     b = W.mv_wrapper(view, vec).numpy()

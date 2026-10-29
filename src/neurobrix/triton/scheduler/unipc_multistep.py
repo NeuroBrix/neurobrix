@@ -17,7 +17,7 @@ solver, so order >= 3 raises rather than silently degrade.
 import math
 import numpy as np
 
-from neurobrix.kernels.nbx_tensor import NBXTensor
+from nbxtensor.tensor import NBXTensor
 
 
 def _safelog(v: float) -> float:

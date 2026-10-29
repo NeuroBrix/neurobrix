@@ -63,8 +63,8 @@ def _probe():
 # rig-less checkout, and a skip is invisible in a count -- register 67, where
 # five reds became five skips exactly this way. So the import is at module
 # scope and unguarded; only the device is optional.
-from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator
-from neurobrix.kernels import wrappers
+from nbxtensor.tensor import NBXTensor, DeviceAllocator
+from nbxtensor.ops import wrappers
 
 _TOTAL = DeviceAllocator.device_count()
 needs_a_card = pytest.mark.skipif(_TOTAL == 0, reason="needs a CUDA device")

@@ -21,7 +21,7 @@ dev, load = _mod.dev, _mod.load
 
 
 def _gpu():
-    nbx = pytest.importorskip("neurobrix.kernels.nbx_tensor")
+    nbx = pytest.importorskip("nbxtensor.tensor")
     set_device = nbx.DeviceAllocator.set_device   # a renamed symbol raises here, loudly
     try:
         set_device(0)
@@ -32,7 +32,7 @@ def _gpu():
 
 @pytest.mark.skipif(not _gpu(), reason="needs a CUDA device")
 def test_triton_stats_last_position_window_rank3_and_rank2():
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.tensor import NBXTensor
     from neurobrix.triton.sequence import TritonSequence
     a = np.arange(2 * 5 * 4, dtype=np.float32).reshape(2, 5, 4)      # [B, S, D]
     rec = TritonSequence.nbx_tid_stats(NBXTensor.from_numpy(a))
@@ -68,7 +68,7 @@ def test_triton_stats_are_fast_and_exact_on_a_video_sized_tensor():
     stalled for 50 minutes after its VAE encoder (2026-09-26). 32M elements must take seconds, not
     minutes, and the norm must equal numpy's float64 one."""
     import time
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.tensor import NBXTensor
     from neurobrix.triton.sequence import TritonSequence
     a = (np.random.default_rng(0).standard_normal((2, 16, 1000, 1000)) * 0.1).astype(np.float32)
     t0 = time.time()

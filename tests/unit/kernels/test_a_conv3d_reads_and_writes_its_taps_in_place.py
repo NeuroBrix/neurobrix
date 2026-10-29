@@ -5,9 +5,9 @@ spatial padding, a dilated and a strided case."""
 import numpy as np
 import pytest
 
-from neurobrix.kernels import wrappers as Wr
-from neurobrix.kernels.nbx_tensor import DeviceAllocator, NBXTensor
-from neurobrix.kernels.oracles.conv2d_fp64 import conv2d_reference
+from nbxtensor.ops import wrappers as Wr
+from nbxtensor.tensor import DeviceAllocator, NBXTensor
+from nbxtensor.ops.oracles.conv2d_fp64 import conv2d_reference
 
 
 def _gpu() -> bool:

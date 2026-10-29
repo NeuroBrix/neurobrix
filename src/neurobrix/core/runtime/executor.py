@@ -409,7 +409,7 @@ class RuntimeExecutor:
                 from neurobrix.core.runtime.graph import run_generator
                 run_generator.arm(None)
             if self.mode in ("triton", "triton_sequential"):
-                from neurobrix.kernels import autotune_certified as _cert
+                from nbxtensor.ops import autotune_certified as _cert
                 _served = _cert.served()
                 if _served.get("certified") or _served.get("swept") or _served.get("local"):
                     print(f"[autotune] certified directory: {_served['certified']} key(s) served without a sweep, "

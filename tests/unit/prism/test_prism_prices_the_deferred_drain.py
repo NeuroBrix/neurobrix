@@ -153,7 +153,7 @@ def test_a_component_leaving_less_than_the_floor_is_not_held_whole_under_triton(
 
 
 def test_the_hot_loop_drains_at_the_plans_cliff_and_the_door_still_pins_it(monkeypatch):
-    from neurobrix.kernels.wrappers import deferred_drain_policy
+    from nbxtensor.ops.wrappers import deferred_drain_policy
     from neurobrix.triton.sequence import TritonSequence, _resolve_drain_policy
 
     monkeypatch.delenv("NBX_DEFERRED_DRAIN_BYTES", raising=False)

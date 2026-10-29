@@ -71,7 +71,7 @@ def _segment_memory_line(seg_exec) -> str:
     if dev:
         device_sync(dev)
     if str(getattr(seg_exec, "mode", "")).startswith("triton"):
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator as DA
+        from nbxtensor.tensor import DeviceAllocator as DA
         idx = int(dev.split(":")[1]) if ":" in dev else 0
         return (f"device live {DA._cuda_live_bytes.get(idx, 0) / 2**20:.0f} MB, "
                 f"pool cached {DA._pool_cached_bytes.get(idx, 0) / 2**20:.0f} MB")

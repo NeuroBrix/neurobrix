@@ -19,7 +19,7 @@ held; this is the defect they were holding against.
 import numpy as np
 import pytest
 
-QUAL = "neurobrix.kernels.ops.depthwise_conv2d.depthwise_conv2d_kernel"
+QUAL = "nbxtensor.ops.depthwise_conv2d.depthwise_conv2d_kernel"
 SEED = 20260907
 #: bf16 carries 8 explicit mantissa bits, so ~4e-3 relative is the floor for a 9-tap
 #: accumulation. The defect sat two orders of magnitude above this.

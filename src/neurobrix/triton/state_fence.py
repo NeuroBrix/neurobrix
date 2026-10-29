@@ -12,7 +12,7 @@ from __future__ import annotations
 class MetalStateFence:
     def __init__(self, native=None):
         if native is None:
-            from neurobrix.triton.triton_ext_driver import _native
+            from nbxtensor.backend.triton_ext_driver import _native
             native = _native()
         if not hasattr(native, "completed_fence"):
             raise RuntimeError(

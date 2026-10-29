@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 
 from neurobrix.core.module import tiling_sizes as CORE
-from neurobrix.triton import tiling_sizes as TRITON
+from nbxtensor.ops import tiling_sizes as TRITON
 
 MB = 1024 ** 2
 GiB = 1024 ** 3
@@ -110,7 +110,7 @@ def test_the_two_copies_answer_the_same(name):
 
 def test_the_triton_copy_imports_no_torch_no_numpy_no_third_party():
     src = str(Path(__file__).resolve().parents[3] / "src")
-    probe = ("import sys; import neurobrix.triton.tiling_sizes as T; T.conv3d_chunk_bytes(); "
+    probe = ("import sys; import neurobrix; import nbxtensor.ops.tiling_sizes as T; T.conv3d_chunk_bytes(); "
              "print('torch' in sys.modules, 'numpy' in sys.modules)")
     out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, timeout=60,
                          env={"PYTHONPATH": src, "PYTHONNOUSERSITE": "1", "CUDA_VISIBLE_DEVICES": ""})
@@ -121,4 +121,4 @@ def test_the_triton_copy_imports_no_torch_no_numpy_no_third_party():
     imported = {(n.module or "") if isinstance(n, ast.ImportFrom) else a.name
                 for n in ast.walk(tree) if isinstance(n, (ast.Import, ast.ImportFrom))
                 for a in n.names}
-    assert imported <= {"__future__", "math", "typing", "neurobrix.core.config.loader"}, imported
+    assert imported <= {"__future__", "math", "typing", "nbxtensor.host"}, imported   # the policy through the host (M1)

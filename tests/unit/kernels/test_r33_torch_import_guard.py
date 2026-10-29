@@ -31,17 +31,21 @@ import pytest
 
 SRC = Path(__file__).resolve().parents[3] / "src" / "neurobrix"
 KERNELS = SRC / "kernels"          # the dispatch layer: dispatch, wrappers, adapter, classification, ops/
-TRITON = SRC / "triton"            # the whole triton branch, Metal backend included
+TRITON = SRC / "triton"            # the whole triton branch
+#: the tensor library the Triton branch is built on (nbxtensor, M1 2026-10-29): the dispatch layer, the wrappers, NBXTensor,
+#: the launcher and the Metal backend live there now — scanned with NO exception (R-NBXT 6)
+LIB = SRC.parents[1] / "nbxtensor" / "src" / "nbxtensor"
 
 # Every file under kernels/ still allowed to import torch, with the reason it
 # is allowed and what would remove it. Adding a line here is a deliberate act
 # that must survive review; removing one is the goal.
 ALLOWED = {
-    "nbx_tensor.py": (
-        "the two documented NBX<->torch BOUNDARY converters "
-        "(nbx_dtype_to_torch / nbx_to_torch), used at the edge to hand a "
-        "result to the compiled pipeline. R33 forbids conversion mid-compute, "
-        "not a hand-off at the boundary. Deferred imports, inside those two "
+    "torch_interop.py": (
+        "the documented NBX<->torch BOUNDARY converters (nbx_dtype_to_torch / "
+        "nbx_to_torch / set_torch_device / torch_device_str), used at the edge "
+        "to hand a result to the compiled pipeline; moved out of nbx_tensor.py "
+        "when it entered nbxtensor (M1). R33 forbids conversion mid-compute, "
+        "not a hand-off at the boundary. Deferred imports, inside those "
         "functions only."
     ),
     "metadata_ops.py": (
@@ -57,13 +61,12 @@ ALLOWED = {
         "residual_chain.py on 2026-09-03 precisely so the NBX half imports no "
         "torch. Imported only on the compiled branch of tiling_engine."
     ),
-    "ops/fused_upsample_conv.py": (
-        "three torch-only implementations (_fused_upsample_conv2d_torch, "
-        "_tiled_conv2d_spatial_torch, _rms_norm_direct) plus the torch branch "
-        "of tiled_rms_norm_spatial. All imports are DEFERRED and sit behind a "
-        "type test that asks whether the input is an NBXTensor, so the triton "
-        "path never reaches them. Removing this entry means moving those "
-        "functions to a companion module as residual_chain did."
+    "ops/fused_upsample_conv_torch.py": (
+        "the compiled half of the fused upsample-conv and the tiled conv "
+        "(_fused_upsample_conv2d_torch, _tiled_conv2d_spatial_torch, "
+        "_rms_norm_direct, tiled_rms_norm_spatial) and the dispatchers that "
+        "pick a branch by tensor type, split out of fused_upsample_conv.py "
+        "when its NBX half entered nbxtensor (M1). Deferred imports."
     ),
 }
 
@@ -118,6 +121,7 @@ def test_no_torch_import_anywhere_under_triton():
     the Metal backend included, conditional and dead-branch imports counted."""
     found = _torch_importers(TRITON)
     unlisted = {f: n for f, n in found.items() if f not in TRITON_ALLOWED}
+    unlisted.update({f"nbxtensor/{f}": n for f, n in _torch_importers(LIB).items()})
     assert not unlisted, (
         "torch imported under src/neurobrix/triton:\n"
         + "\n".join(f"  {f} (lines {n})" for f, n in unlisted.items())
@@ -128,9 +132,9 @@ def test_no_torch_import_anywhere_under_triton():
 
 @pytest.mark.parametrize("filename", METAL_FILES)
 def test_the_metal_files_exist_and_carry_no_torch(filename):
-    path = TRITON / filename
+    path = LIB / "backend" / filename
     assert path.exists(), f"{filename} is not where the gate expects it — update METAL_FILES"
-    assert filename not in _torch_importers(TRITON)
+    assert f"backend/{filename}" not in _torch_importers(LIB)
 
 
 @pytest.mark.parametrize("filename", METAL_ALLOCATOR_FILES)
@@ -142,11 +146,11 @@ def test_the_metal_allocator_files_exist_and_carry_no_torch(filename):
     file. The Metal allocator is the one place a missing capability would be
     most tempting to borrow from torch, which is exactly why R33 names it.
     """
-    path = KERNELS / filename
+    path = LIB / "backend" / filename
     assert path.exists(), (
         f"{filename} is not where the gate expects it — update "
         f"METAL_ALLOCATOR_FILES")
-    assert filename not in _torch_importers(KERNELS)
+    assert f"backend/{filename}" not in _torch_importers(LIB)
 
 
 def test_the_gate_is_seen_failing_on_an_injected_import(tmp_path):
@@ -182,10 +186,10 @@ def test_the_gate_covers_the_dispatch_layer():
     have let the launcher land outside it on the day it was written, which is
     exactly the day it mattered.
     """
-    scanned = {q.resolve() for root in (KERNELS, TRITON) for q in root.rglob("*.py")}
-    for required in (KERNELS / "dispatch.py", KERNELS / "wrappers.py",
-                     KERNELS / "nbx_tensor.py", KERNELS / "launcher.py",
-                     KERNELS / "metal_device.py", TRITON / "triton_ext_driver.py"):
+    scanned = {q.resolve() for root in (KERNELS, TRITON, LIB) for q in root.rglob("*.py")}
+    for required in (LIB / "ops" / "dispatch.py", LIB / "ops" / "wrappers.py",
+                     LIB / "tensor.py", LIB / "backend" / "launcher.py",
+                     LIB / "backend" / "metal_device.py", LIB / "backend" / "triton_ext_driver.py"):
         assert required.resolve() in scanned, (
             f"{required.name} is not inside the R33 scan perimeter")
 
@@ -265,9 +269,9 @@ def test_pure_kernel_modules_stay_torch_free():
     import sys
 
     src = KERNELS.parents[1]          # the package lives under src/, not at the repo root
-    for module in ("neurobrix.kernels.ops._configs",
-                   "neurobrix.kernels.ops.rmsnorm",
-                   "neurobrix.kernels.ops.residual_chain"):
+    for module in ("nbxtensor.ops._configs",
+                   "nbxtensor.ops.rmsnorm",
+                   "nbxtensor.ops.residual_chain"):
         code = (f"import sys, importlib;"
                 f"importlib.import_module('{module}');"
                 f"print('torch' in sys.modules)")

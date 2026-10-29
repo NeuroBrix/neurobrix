@@ -51,13 +51,13 @@ def _forget_announcements():
     """The "say it once per process" is product behaviour and also makes the
     module order-dependent: the second test to use a reason would see nothing
     and could not tell that from a bug."""
-    R = pytest.importorskip("neurobrix.kernels.autotune_refusals")
+    R = pytest.importorskip("nbxtensor.ops.autotune_refusals")
     R.reset_announcements()   # absent or renamed: the fixture fails, and it should
     yield
 
 
 def _policy():
-    from neurobrix.kernels import autotune_refusals as R
+    from nbxtensor.ops import autotune_refusals as R
     return R
 
 
@@ -82,7 +82,7 @@ def _a_refusal_type(monkeypatch):
             super().__init__(msg)
             self.op_name = op_name
 
-    from neurobrix.triton import metal_backend as MB
+    from nbxtensor.backend import metal_backend as MB
     monkeypatch.setattr(MB, "backend_refusal_types", lambda: (_BackendRefusal,))
     return _BackendRefusal
 
@@ -95,7 +95,7 @@ def test_the_policy_module_exists_and_is_installed_by_the_launcher():
     joins it there.
     """
     R = _policy()
-    from neurobrix.kernels import launcher
+    from nbxtensor.backend import launcher
     src = Path(launcher.__file__).read_text()
     assert "autotune_refusals" in src, (
         "the launcher must install the refusal policy; a policy nothing "

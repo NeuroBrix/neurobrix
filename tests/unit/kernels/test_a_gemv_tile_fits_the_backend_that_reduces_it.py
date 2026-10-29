@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.kernels import nbx_tensor as NT
-from neurobrix.kernels.ops import _configs as CF
+from nbxtensor import tensor as NT
+from nbxtensor.ops import _configs as CF
 
 
 def _backend(monkeypatch, name):

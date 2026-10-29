@@ -60,7 +60,7 @@ def test_a_streamed_segment_says_what_the_device_holds_after_it_computed(monkeyp
     a 1.3 GB segment computed under a 19 GB wired footprint, and nothing said whether that was live tensors or a cache."""
     from types import SimpleNamespace as NS
     from neurobrix.core.strategies.layer_streaming import _segment_memory_line
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator as DA
+    from nbxtensor.tensor import DeviceAllocator as DA
     import neurobrix.core.device_utils as du
     synced = []
     monkeypatch.setattr(du, "device_sync", lambda d=None: synced.append(d))   # the line reads after the queue drained
@@ -74,7 +74,7 @@ def test_a_streamed_segment_says_what_the_device_holds_after_it_computed(monkeyp
 def test_a_release_says_what_the_device_still_holds(monkeypatch, capsys):
     """After the release, the device's own figure, read after it drained: what crosses into the next component."""
     import neurobrix.core.device_utils as du
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator as DA
+    from nbxtensor.tensor import DeviceAllocator as DA
     monkeypatch.setattr(du, "device_sync", lambda d=None: None)
     monkeypatch.setattr(DA, "_cuda_live_bytes", {0: 4 << 30})
     ex = _executor("triton", {"a": 1}, monkeypatch)

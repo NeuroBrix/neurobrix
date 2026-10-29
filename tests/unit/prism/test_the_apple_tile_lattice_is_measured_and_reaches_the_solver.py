@@ -16,7 +16,7 @@ import pytest
 
 
 def test_the_profile_declares_the_measured_unit():
-    from neurobrix.kernels.ops._configs import active_vendor_profile
+    from nbxtensor.ops._configs import active_vendor_profile
     prof = active_vendor_profile()
     if not prof or "apple" not in str(prof.get("architecture", "")).lower():
         pytest.skip("this cell reads the ACTIVE Apple profile; not on Apple")

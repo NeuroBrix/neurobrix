@@ -18,13 +18,13 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from neurobrix.kernels.nbx_tensor import DeviceAllocator
+from nbxtensor.tensor import DeviceAllocator
 
 pytestmark = pytest.mark.skipif(DeviceAllocator.device_count() == 0, reason="needs a device to run the kernels")
 
 
 def _nbx(a):
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.tensor import NBXTensor
     return NBXTensor.from_numpy(np.ascontiguousarray(a, dtype=np.float32))
 
 
@@ -34,7 +34,7 @@ def _np(t):
 
 @pytest.mark.parametrize("rows,n", [(1, 8), (37, 256), (129, 1024)])
 def test_a_row_in_a_batch_is_the_row_alone_and_is_the_fft(rows, n):
-    from neurobrix.kernels.wrappers import _triton_fft_forward
+    from nbxtensor.ops.wrappers import _triton_fft_forward
     rng = np.random.default_rng(7)
     xr = rng.standard_normal((rows, n)).astype(np.float32)
     xi = rng.standard_normal((rows, n)).astype(np.float32)
@@ -49,7 +49,7 @@ def test_a_row_in_a_batch_is_the_row_alone_and_is_the_fft(rows, n):
 
 
 def test_the_inverse_undoes_the_forward_on_every_row():
-    from neurobrix.kernels.wrappers import _triton_fft_forward, _triton_ifft
+    from nbxtensor.ops.wrappers import _triton_fft_forward, _triton_ifft
     rng = np.random.default_rng(11)
     xr = rng.standard_normal((53, 512)).astype(np.float32)
     xi = rng.standard_normal((53, 512)).astype(np.float32)

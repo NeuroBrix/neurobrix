@@ -3,7 +3,7 @@ fp16 logits under the fp16 contract and the fp32-sized copy read past them — C
 test would do if the code were wrong: the fp16 / bf16 cases read twice the bytes (a CUDA error) or decode garbage."""
 import numpy as np
 import pytest
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
+from nbxtensor.tensor import NBXTensor, NBXDtype
 from neurobrix.triton import samplers as S
 
 pytestmark = pytest.mark.skipif(not __import__("os").environ.get("CUDA_VISIBLE_DEVICES"), reason="needs a card")

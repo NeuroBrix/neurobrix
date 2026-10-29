@@ -92,7 +92,7 @@ class _DA:
 
 @pytest.fixture
 def da(monkeypatch):
-    import neurobrix.kernels.nbx_tensor as nbx
+    import nbxtensor.tensor as nbx
     _DA.current, _DA.calls = 0, []
     monkeypatch.setattr(nbx, "DeviceAllocator", _DA)
     return _DA

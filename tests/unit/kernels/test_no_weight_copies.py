@@ -11,9 +11,9 @@ import os as _os
 import numpy as np
 import pytest
 
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
-from neurobrix.kernels import wrappers as W
-from neurobrix.kernels import launcher as L
+from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator
+from nbxtensor.ops import wrappers as W
+from nbxtensor.backend import launcher as L
 
 _NP = {NBXDtype.float16: (np.float16, 2), NBXDtype.float32: (np.float32, 4)}
 
@@ -155,7 +155,7 @@ def test_rms_norm_keeps_the_pre_cast_input_the_certified_rows_ran_with():
 
 def test_the_fp32_internal_wrap_asks_a_widening_wrapper_for_its_output_dtype(monkeypatch):
     from neurobrix.triton import dtype as D
-    from neurobrix.kernels import wrappers as _w
+    from nbxtensor.ops import wrappers as _w
     calls = []
 
     def widening(x, out_dtype=None):
@@ -371,7 +371,7 @@ def test_addmm_takes_the_activation_weight_and_bias_as_they_are(M):
     assert c.copies == 0
     # the path that copies: all three widened, or, where the matrix unit takes two fp16 operands as they are in
     # memory (launch_keys.matrix_unit_takes), the weight alone made contiguous (the unit's sums at fp16 operands)
-    from neurobrix.kernels import launch_keys as LK
+    from nbxtensor.ops import launch_keys as LK
     if LK.matrix_unit_takes(NBXDtype.float16, NBXDtype.float16, M):
         ref = W.addmm(bias, a, w.t().contiguous())
     else:

@@ -11,7 +11,7 @@ import random
 
 import pytest
 
-from neurobrix.kernels import nbx_tensor as N
+from nbxtensor import tensor as N
 
 DA = N.DeviceAllocator
 MB = 1 << 20

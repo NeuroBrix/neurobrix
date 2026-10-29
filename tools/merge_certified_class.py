@@ -26,7 +26,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from neurobrix.kernels import autotune_certified as C  # noqa: E402
+import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
+from nbxtensor.ops import autotune_certified as C  # noqa: E402
 
 
 def class_proof(entry: dict, cls: int):

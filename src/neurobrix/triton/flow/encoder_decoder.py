@@ -14,9 +14,9 @@ import numpy as np
 from typing import Any, Callable, Dict, List, Optional
 
 import os
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, parse_dtype
-from neurobrix.triton.memory_pool import release_flow_memory
-from neurobrix.triton.device_transfer import parse_device_idx
+from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator, parse_dtype
+from nbxtensor.memory.memory_pool import release_flow_memory
+from nbxtensor.memory.device_transfer import parse_device_idx
 
 
 class TritonEncoderDecoderEngine:
@@ -404,7 +404,7 @@ def _compute_logits(ctx, hidden_states, embed_weight, logits_source):
         # matmul: last_hidden @ embed_weight.T
         # Use the graph executor's run for the matmul if available,
         # otherwise fall back to kernel dispatch
-        from neurobrix.kernels.dispatch import dispatch
+        from nbxtensor.ops.dispatch import dispatch
         w_t = embed_weight.transpose(0, 1) if embed_weight.ndim == 2 else embed_weight
         mm = dispatch("mm")
         if last_hidden.ndim > 2:

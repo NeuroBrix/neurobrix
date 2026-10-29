@@ -61,7 +61,7 @@ import itertools
 
 import pytest
 
-from neurobrix.kernels.nbx_tensor import NBXDtype
+from nbxtensor.tensor import NBXDtype
 from neurobrix.triton import dtype as T
 
 _HALF = ("bfloat16", "float16")
@@ -169,7 +169,7 @@ _widening._nbx_widens_on_load = True
 @pytest.fixture
 def flag():
     """Set `_NBX_ACTIVATIONS_FP16_SAFE` for one test and restore it."""
-    from neurobrix.kernels import wrappers as _w
+    from nbxtensor.ops import wrappers as _w
     prev = _w.get_activations_fp16_safe()
     yield _w.set_activations_fp16_safe
     _w.set_activations_fp16_safe(prev)

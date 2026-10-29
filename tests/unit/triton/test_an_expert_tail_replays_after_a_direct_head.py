@@ -44,7 +44,7 @@ def test_no_tail_without_a_held_layer_after_the_store():
 
 
 def _has_gpu():
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator
+    from nbxtensor.tensor import DeviceAllocator
     try:
         DeviceAllocator.set_device(0)
         return True
@@ -55,7 +55,7 @@ def _has_gpu():
 @pytest.mark.skipif(not _has_gpu(), reason="needs a device")
 def test_a_sync_made_while_recording_is_an_action_of_the_plan():
     from neurobrix.triton import replay as R
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator
+    from nbxtensor.tensor import DeviceAllocator
     R._install_seams()
     R.STATE.records, R.STATE.recording = [], True
     try:

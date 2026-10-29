@@ -30,7 +30,7 @@ import pytest
 
 
 def _launcher():
-    m = importlib.import_module("neurobrix.kernels.launcher")
+    m = importlib.import_module("nbxtensor.backend.launcher")
     return m
 
 

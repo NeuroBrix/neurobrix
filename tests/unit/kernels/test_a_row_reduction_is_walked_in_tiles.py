@@ -43,8 +43,9 @@ def test_a_long_row_reduction_reserves_no_local_memory():
     the driver's used memory around one sum over a 449 280-element row (Wan2.1-I2V's at CFG 2)."""
     code = textwrap.dedent("""
         import ctypes
-        from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, _gpu_runtime
-        from neurobrix.kernels import wrappers as W
+        import neurobrix  # the application: nbxtensor's host services
+        from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator, _gpu_runtime
+        from nbxtensor.ops import wrappers as W
         rt = _gpu_runtime()
         def used():
             f, t = ctypes.c_size_t(), ctypes.c_size_t(); rt.cudaMemGetInfo(ctypes.byref(f), ctypes.byref(t))
@@ -64,8 +65,8 @@ def test_a_long_row_reduction_reserves_no_local_memory():
 @needs_card
 @pytest.mark.parametrize("feat", [1, 63, 64, 4095, 4096, 4097, 8192, 12289, 224640])
 def test_sum_mean_amax_agree_with_float64_at_every_row_length(feat):
-    from neurobrix.kernels import wrappers as W
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.ops import wrappers as W
+    from nbxtensor.tensor import NBXTensor
     rng = np.random.default_rng(feat)
     a = rng.standard_normal((3, feat)).astype(np.float32)
     a[1, -1] = 50.0                                         # the row's maximum in its LAST element

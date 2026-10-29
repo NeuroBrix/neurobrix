@@ -22,13 +22,13 @@ import pytest
 
 pytest.importorskip("triton")
 
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype  # noqa: E402
-import neurobrix.kernels.wrappers as W  # noqa: E402
+from nbxtensor.tensor import NBXTensor, NBXDtype  # noqa: E402
+import nbxtensor.ops.wrappers as W  # noqa: E402
 
 
 def _dev_or_skip():
     try:
-        from neurobrix.kernels.nbx_tensor import _detect_gpu_backend
+        from nbxtensor.tensor import _detect_gpu_backend
         if _detect_gpu_backend() is None:
             pytest.skip("no GPU backend the engine can resolve")
     except Exception:

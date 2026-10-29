@@ -24,11 +24,9 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.kernels.ops import _configs
-from neurobrix.kernels.ops._configs import (arch_smem_budget,
-                                            configs_within_smem_budget)
-from neurobrix.kernels.ops.matmul import (_MATMUL_AUTOTUNE_AMPERE_PLUS,
-                                          _MATMUL_AUTOTUNE_VOLTA)
+from nbxtensor.ops import _configs
+from nbxtensor.ops._configs import arch_smem_budget, configs_within_smem_budget
+from nbxtensor.ops.matmul import _MATMUL_AUTOTUNE_AMPERE_PLUS, _MATMUL_AUTOTUNE_VOLTA
 
 
 class _Target:
@@ -60,8 +58,8 @@ def _budget_for(arch):
     """
     from triton.backends.compiler import GPUTarget
 
-    from neurobrix.kernels import launcher
-    from neurobrix.kernels.ops import _configs
+    from nbxtensor.backend import launcher
+    from nbxtensor.ops import _configs
 
     saved = launcher._TARGET
     launcher._TARGET = GPUTarget("cuda", arch, 32)

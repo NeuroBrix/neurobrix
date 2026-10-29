@@ -38,7 +38,7 @@ def test_a_dtype_whose_str_is_a_bare_number_is_still_read_by_name():
 
 
 def test_the_racks_own_dtypes_read_the_same_by_name():
-    from neurobrix.kernels.nbx_tensor import NBXDtype
+    from nbxtensor.tensor import NBXDtype
     assert "bool" in _dtype_name(NBXDtype.bool_)
     assert "int" in _dtype_name(NBXDtype.int64)
     for f in ("float16", "float32", "bfloat16"):

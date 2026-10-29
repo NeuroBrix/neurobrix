@@ -148,11 +148,13 @@ def main() -> int:
     dtypes = [np.dtype(d.strip()) for d in args.dtype.split(",") if d.strip()]
     cleared = clear_caches()
 
-    from neurobrix.kernels import launcher
+    import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
+
+    from nbxtensor.backend import launcher
     launcher.install()
-    from neurobrix.kernels.nbx_tensor import NBXTensor
-    from neurobrix.kernels import wrappers
-    from neurobrix.kernels.ops._configs import active_vendor_profile
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.ops import wrappers
+    from nbxtensor.ops._configs import active_vendor_profile
 
     rows = []
     for dtype in dtypes:

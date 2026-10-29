@@ -136,7 +136,7 @@ def test_triton_wrap_op_upcasts_half_at_a_complex_output_op():
     """The Triton branch carries complex too (NBXDtype.complex64/complex128 —
     Wan's RoPE freqs are complex128), so the mirror engine needs the same
     floor. Dtype crosses that boundary as a string: no torch here (R33)."""
-    from neurobrix.kernels.nbx_tensor import NBXDtype
+    from nbxtensor.tensor import NBXDtype
     from neurobrix.triton.dtype import TritonDtypeEngine
 
     class _T:
@@ -162,7 +162,7 @@ def test_triton_wrap_op_upcasts_half_at_a_complex_output_op():
 
 
 def test_triton_wrap_op_keeps_float64_at_a_complex128_op():
-    from neurobrix.kernels.nbx_tensor import NBXDtype
+    from nbxtensor.tensor import NBXDtype
     from neurobrix.triton.dtype import TritonDtypeEngine
 
     class _T:
@@ -349,7 +349,7 @@ def test_triton_pin_does_not_retype_a_complex_op():
     """R30 mirror of test_vendor_fp32_pin_does_not_retype_a_complex_op: the
     complex floor sits ahead of the calibration islands in the Triton engine
     too, so a pinned op keeps its float64 rather than being levelled."""
-    from neurobrix.kernels.nbx_tensor import NBXDtype
+    from nbxtensor.tensor import NBXDtype
     from neurobrix.triton.dtype import TritonDtypeEngine
 
     class _T:

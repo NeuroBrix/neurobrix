@@ -8,7 +8,7 @@ not repeated, or a value at the wrong place for a permuted input (numpy disagree
 import numpy as np
 import pytest
 
-from neurobrix.kernels.nbx_tensor import DeviceAllocator, NBXTensor
+from nbxtensor.tensor import DeviceAllocator, NBXTensor
 
 
 def _has_gpu() -> bool:
@@ -33,7 +33,7 @@ def _counting(monkeypatch):
 @pytest.mark.parametrize("n_axes", [1, 2, 3])
 @pytest.mark.parametrize("permuted", [False, True])
 def test_the_replication_pad_repeats_the_edge_in_one_pass(monkeypatch, n_axes, permuted):
-    from neurobrix.kernels import wrappers as W
+    from nbxtensor.ops import wrappers as W
     rng = np.random.default_rng(n_axes)
     host = rng.standard_normal((2, 3, 4, 5, 6)).astype(np.float32)
     x = NBXTensor.from_numpy(host).to_cuda(0)
@@ -52,7 +52,7 @@ def test_the_replication_pad_repeats_the_edge_in_one_pass(monkeypatch, n_axes, p
 
 @pytest.mark.parametrize("name", ["silu", "relu", "sigmoid_wrapper", "neg"])
 def test_an_activation_of_a_permuted_input_keeps_its_layout_and_copies_nothing(monkeypatch, name):
-    from neurobrix.kernels import wrappers as W
+    from nbxtensor.ops import wrappers as W
     rng = np.random.default_rng(1)
     host = rng.standard_normal((2, 3, 4, 5)).astype(np.float32)
     x = NBXTensor.from_numpy(host).to_cuda(0).permute(0, 2, 3, 1)
@@ -70,7 +70,7 @@ def test_an_activation_of_a_permuted_input_keeps_its_layout_and_copies_nothing(m
 
 def test_a_conv3d_adds_each_tap_into_its_sum(monkeypatch):
     """`_conv3d_via_conv2d` adds each later tap INTO the sum: `out + tap` held the old sum, the tap and the new one."""
-    from neurobrix.kernels import wrappers as W
+    from nbxtensor.ops import wrappers as W
     rng = np.random.default_rng(2)
     x = NBXTensor.from_numpy(rng.standard_normal((1, 4, 5, 8, 8)).astype(np.float32)).to_cuda(0)
     w = NBXTensor.from_numpy(rng.standard_normal((6, 4, 3, 3, 3)).astype(np.float32)).to_cuda(0)

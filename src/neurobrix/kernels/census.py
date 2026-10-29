@@ -54,8 +54,8 @@ _SHADOW_PTR = [1 << 40]                 # addresses that address nothing, distin
 
 
 def key_line(tuned, key: tuple) -> Optional[str]:
-    from neurobrix.triton import autotune_cache as _atc
-    from neurobrix.kernels.autotune_certified import key_repr
+    from nbxtensor.ops import autotune_cache as _atc
+    from nbxtensor.ops.autotune_certified import key_repr
     qual = _atc._qual_of(tuned) or getattr(getattr(tuned, "base_fn", None), "__name__", None)
     if not qual:
         return None
@@ -84,7 +84,7 @@ def record(tuned, key: tuple) -> None:
         return
     line = key_line(tuned, key)
     if line is not None:
-        from neurobrix.kernels.autotune_certified import degenerate_extent
+        from nbxtensor.ops.autotune_certified import degenerate_extent
         bad = degenerate_extent(line.split("::", 1)[0], tuple(key))
         if bad is not None:
             # An extent of zero names a launch that cannot exist and a tensor the certifier
@@ -125,7 +125,7 @@ def pace(length: int) -> int:
     if not _ACTIVE["census"] or length < 1:
         return 0
     try:
-        from neurobrix.kernels.autotune_bucket import bucket_of
+        from nbxtensor.ops.autotune_bucket import bucket_of
         nxt = int(length) + 1
         top = max(int(bucket_of(dim, nxt)) for dim in ("M", "N", "K"))
         return max(0, top - nxt)
@@ -313,8 +313,8 @@ def _shadow_params_for(executor, nbx_path, component) -> Dict[str, Any]:
     and buffer shapes, each in the dtype the loader would give it under the component's
     compute dtype (`weight_loader.stored_dtype_in_compute`, the loader's own rule).
     Nothing is opened."""
-    from neurobrix.kernels import launch_keys as _lk
-    from neurobrix.kernels.nbx_tensor import NBXTensor, parse_dtype
+    from nbxtensor.ops import launch_keys as _lk
+    from nbxtensor.tensor import NBXTensor, parse_dtype
     from neurobrix.triton.weight_loader import stored_dtype_in_compute
     tensors = (executor._dag or {}).get("tensors", {})
     # The convolution weights the loader stores KRSC on this arch (`conv.weight_layout`): the
@@ -358,8 +358,8 @@ def install(hardware: Optional[str] = None, hardware_profile: Optional[dict] = N
     """
     if _ACTIVE["census"]:
         return
-    from neurobrix.kernels import nbx_tensor as _nt
-    from neurobrix.kernels import launcher as _launcher
+    from nbxtensor import tensor as _nt
+    from nbxtensor.backend import launcher as _launcher
     DA = _nt.DeviceAllocator
     # THE DOOR: a shadow is proven unable to touch a card only when no card can be seen.
     # With a device visible, a path this module does not cover would succeed on real
@@ -625,7 +625,7 @@ def _bind_target(hardware: Optional[str], profile: Optional[dict]) -> None:
                 "census: the hardware profile's device names no model, so no vendor profile "
                 "can be resolved for it; a census under no vendor profile is a census of "
                 "nothing (the ladder goes unread and every key is composed exact)")
-        from neurobrix.kernels.ops import _configs as _cfg
+        from nbxtensor.ops import _configs as _cfg
         _cfg._ACTIVE_PROFILE.clear()
         if not _cfg.vendor_profile_for_arch(model):
             raise RuntimeError(
@@ -635,7 +635,7 @@ def _bind_target(hardware: Optional[str], profile: Optional[dict]) -> None:
         return
     major, minor = (cc.split(".") + ["0"])[:2]
     from triton.backends.compiler import GPUTarget
-    from neurobrix.kernels import launcher as _launcher
+    from nbxtensor.backend import launcher as _launcher
     _launcher._TARGET = GPUTarget("cuda" if brand == "nvidia" else "hip", int(major) * 10 + int(minor), 32 if brand == "nvidia" else 64)
-    from neurobrix.kernels.ops import _configs
+    from nbxtensor.ops import _configs
     _configs._ACTIVE_PROFILE.clear()     # a profile resolved empty before the bind is read again

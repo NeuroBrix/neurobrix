@@ -387,7 +387,8 @@ def memory_class_coverage(container: str):
     if not log.exists():
         return None
     sys.path.insert(0, str(REPO / "src"))
-    from neurobrix.kernels import autotune_certified as C
+    import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
+    from nbxtensor.ops import autotune_certified as C
     root = C.directory() / "nvidia" / "volta"
     files: dict = {}
     out = {"total": 0, "by_class": {}, "unknown": 0, "absent": 0}

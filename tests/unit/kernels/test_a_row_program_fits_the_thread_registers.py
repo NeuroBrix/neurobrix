@@ -4,9 +4,9 @@ compiled for over 30 minutes and stalled the certification. What this test would
 1-warp candidate survives the prune for the 16 384 row — RED."""
 import pytest
 from neurobrix.core.prism.loader import load_profile
-from neurobrix.kernels import wrappers as W
-from neurobrix.kernels.ops import softmax as S
-from neurobrix.kernels.ops import _configs as C
+from nbxtensor.ops import wrappers as W
+from nbxtensor.ops import softmax as S
+from nbxtensor.ops import _configs as C
 
 
 @pytest.fixture

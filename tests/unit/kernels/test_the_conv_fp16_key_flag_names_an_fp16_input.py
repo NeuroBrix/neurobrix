@@ -23,7 +23,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
 import migrate_conv_fp16_key as MG  # noqa: E402
 
-from neurobrix.kernels import autotune_certified as C  # noqa: E402
+from nbxtensor.ops import autotune_certified as C  # noqa: E402
 
 FP16_KEY = (1, 64, 1, 3206, 32, 1, 3200, 1, 7, 1, 1, 0, 3, 1, 1, 1, False, "fp16", "fp16", "fp16")
 FP32_KEY = (1, 64, 1, 3206, 32, 1, 3200, 1, 7, 1, 1, 0, 3, 1, 1, 1, False, "fp32", "fp32", "fp32")
@@ -62,7 +62,7 @@ def test_an_existing_right_key_is_never_overwritten(tmp_path):
 
 
 def test_the_wrapper_flags_an_fp16_input_by_its_nbx_dtype():
-    from neurobrix.kernels import wrappers as W
+    from nbxtensor.ops import wrappers as W
     src = inspect.getsource(W.conv2d_wrapper)
     assert "fp16 = x.dtype == NBXDtype.float16" not in src
     assert "== NBXDtype.float16" in src and "nbx_dtype" in src

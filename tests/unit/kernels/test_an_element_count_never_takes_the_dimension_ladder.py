@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from neurobrix.kernels import autotune_bucket as AB
+from nbxtensor.ops import autotune_bucket as AB
 
 VENDORS = Path(AB.__file__).resolve().parents[1] / "config" / "vendors"
 

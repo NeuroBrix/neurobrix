@@ -66,7 +66,7 @@ def classify(lines, tree: Path, memory_class: int, vendor: str, profile: str) ->
     """{"absent": [...], "uncertified": [...], "served": n} for the recorded `<qual>::<key>` lines, read in the tree."""
     code = (
         "import json,sys\n"
-        "from neurobrix.kernels import census_table as T, autotune_certified as C\n"
+        "from neurobrix.kernels import census_table as T; from nbxtensor.ops import autotune_certified as C\n"
         "from neurobrix.kernels.autotune_certify import _read_file\n"
         "lines, cls, vendor, profile = json.loads(sys.stdin.read()), int(sys.argv[1]), sys.argv[2], sys.argv[3]\n"
         "out = {'absent': [], 'uncertified': [], 'served': 0}\n"

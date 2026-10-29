@@ -172,7 +172,7 @@ def _time_arms(args, model_name: str, family: str, record_paths: list, reps: int
     from neurobrix.core.runtime.precision_contract import FLAG_ENV
     from neurobrix.cli.commands.run import cmd_run
     try:
-        from neurobrix.triton.autotune_cache import _arch_fingerprint
+        from nbxtensor.ops.autotune_cache import _arch_fingerprint
         arch = _arch_fingerprint()
     except Exception:
         arch = None

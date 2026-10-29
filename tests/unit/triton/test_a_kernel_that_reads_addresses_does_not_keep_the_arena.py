@@ -27,8 +27,8 @@ import pytest
 triton = pytest.importorskip("triton")
 import triton.language as tl  # noqa: E402
 
-from neurobrix.kernels.nbx_tensor import DeviceAllocator, NBXDtype, NBXTensor  # noqa: E402
-from neurobrix.kernels.launcher import launch  # noqa: E402
+from nbxtensor.tensor import DeviceAllocator, NBXDtype, NBXTensor  # noqa: E402
+from nbxtensor.backend.launcher import launch  # noqa: E402
 
 ARENA_MB = 512
 KEPT_MB = 128           # a quarter of the arena: a release that works leaves a few MB, a leak leaves all 512
@@ -36,10 +36,10 @@ KEPT_MB = 128           # a quarter of the arena: a release that works leaves a 
 
 def _metal_or_skip():
     try:
-        from neurobrix.kernels.nbx_tensor import _detect_gpu_backend
+        from nbxtensor.tensor import _detect_gpu_backend
         if _detect_gpu_backend() != "metal":
             pytest.skip("the autoreleased resident list is triton-ext's Metal launch; other drivers bind their own way")
-        from neurobrix.triton import triton_ext_driver as drv
+        from nbxtensor.backend import triton_ext_driver as drv
         return drv
     except Exception:
         pytest.skip("no Metal backend the engine can resolve")

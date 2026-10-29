@@ -25,8 +25,8 @@ import gc
 import pytest
 
 from neurobrix.core.runtime.expert_residency import ExpertResidency
-from neurobrix.kernels import nbx_tensor as nt
-from neurobrix.kernels.nbx_tensor import DeviceAllocator as DA, NBXDtype, NBXTensor
+from nbxtensor import tensor as nt
+from nbxtensor.tensor import DeviceAllocator as DA, NBXDtype, NBXTensor
 
 HIDDEN, INTER, N_SLOTS = 2048, 768, 7
 

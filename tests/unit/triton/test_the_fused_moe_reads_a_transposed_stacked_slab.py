@@ -24,7 +24,7 @@ import pytest
 
 pytest.importorskip("triton")
 
-from neurobrix.kernels.nbx_tensor import NBXDtype, NBXTensor  # noqa: E402
+from nbxtensor.tensor import NBXDtype, NBXTensor  # noqa: E402
 
 E, K_, H, F, T = 8, 2, 64, 32, 5
 

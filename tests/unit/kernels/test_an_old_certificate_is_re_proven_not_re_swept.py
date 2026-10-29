@@ -12,8 +12,8 @@ import numpy as np
 import pytest
 
 from neurobrix.kernels import autotune_certify as Z
-from neurobrix.kernels import autotune_certified as C
-from neurobrix.triton import autotune_cache as atc
+from nbxtensor.ops import autotune_certified as C
+from nbxtensor.ops import autotune_cache as atc
 from neurobrix.kernels import census_table as T
 
 from tests.unit.kernels.test_autotune_certify_first_light import _cuda_available, _recorded_key  # noqa: E402
@@ -33,9 +33,9 @@ def root(tmp_path, monkeypatch):
 
 
 def _matmul_key():
-    from neurobrix.kernels.nbx_tensor import NBXTensor
-    from neurobrix.kernels import wrappers as W
-    from neurobrix.kernels.ops.matmul import matmul_kernel
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops.matmul import matmul_kernel
     rng = np.random.default_rng(7)
     a = (rng.standard_normal((96, 64)) * 0.1).astype(np.float16)
     b = (rng.standard_normal((64, 80)) * 0.1).astype(np.float16)
@@ -47,8 +47,8 @@ def _matmul_key():
 def _certify_once(root, monkeypatch, stored_proof_backend):
     """One `certify(reprove_generator=True)` over a one-key census whose directory already holds the
     key under `stored_proof_backend`; returns (summary, entry after, benches counted)."""
-    from neurobrix.kernels.ops.matmul import matmul_kernel
-    qual = "neurobrix.kernels.ops.matmul.matmul_kernel"
+    from nbxtensor.ops.matmul import matmul_kernel
+    qual = "nbxtensor.ops.matmul.matmul_kernel"
     tuner, key = _matmul_key()
     vendor, profile = C.active_profile()
     dtype = C.output_dtype(tuner, key)
@@ -94,8 +94,8 @@ def test_a_stored_configuration_that_fails_the_oracle_is_swept_and_the_reason_co
     membership gate; a configuration inside the space that computes wrongly is what a compiler change
     would produce — here the stored kwargs are replaced by ones the kernel's own configs do not carry, so
     the single-candidate re-prove cannot pass)."""
-    from neurobrix.kernels.ops.matmul import matmul_kernel
-    qual = "neurobrix.kernels.ops.matmul.matmul_kernel"
+    from nbxtensor.ops.matmul import matmul_kernel
+    qual = "nbxtensor.ops.matmul.matmul_kernel"
     tuner, key = _matmul_key()
     vendor, profile = C.active_profile()
     dtype = C.output_dtype(tuner, key)
@@ -129,8 +129,8 @@ def test_a_drift_on_the_single_re_prove_timing_is_a_refusal_for_the_retry_never_
     """Inbox 60 and 65 together: a key is never certified on a drifting witness and never left without its
     retry — and a drift is not an oracle failure, so it must not open a sweep. Injection: the witness
     reads two values 30 % apart around the single timing."""
-    from neurobrix.kernels.ops.matmul import matmul_kernel
-    qual = "neurobrix.kernels.ops.matmul.matmul_kernel"
+    from nbxtensor.ops.matmul import matmul_kernel
+    qual = "nbxtensor.ops.matmul.matmul_kernel"
     tuner, key = _matmul_key()
     vendor, profile = C.active_profile()
     dtype = C.output_dtype(tuner, key)

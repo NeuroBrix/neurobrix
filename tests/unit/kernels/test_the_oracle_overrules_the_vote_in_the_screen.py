@@ -25,7 +25,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from neurobrix.kernels import launcher as L
+from nbxtensor.backend import launcher as L
 
 
 #: The screen refuses to invent a tolerance, so the fake profile carries the
@@ -82,7 +82,7 @@ def screen(monkeypatch):
     monkeypatch.setattr(L, "_restore", lambda b, shot: state.update(out=shot[0]))
     monkeypatch.setattr(L, "_record_screen_exclusions", lambda dropped: None)
     monkeypatch.setattr(L, "_SCREEN_CACHE", {})
-    import neurobrix.kernels.ops._configs as C
+    import nbxtensor.ops._configs as C
     monkeypatch.setattr(C, "active_vendor_profile",
                         lambda: _PROFILE)
 
@@ -152,7 +152,7 @@ def test_a_provider_that_raises_falls_back_loudly(screen, capsys, monkeypatch):
         monkeypatch.setattr(L, "_snapshot", lambda b: [RIGHT])
         monkeypatch.setattr(L, "_restore", lambda b, s: None)
         monkeypatch.setattr(L, "_SCREEN_CACHE", {})
-        import neurobrix.kernels.ops._configs as C
+        import nbxtensor.ops._configs as C
         monkeypatch.setattr(C, "active_vendor_profile",
                             lambda: _PROFILE)
         cfgs = [_Config("a"), _Config("b")]

@@ -344,7 +344,7 @@ def _cuda() -> bool:
 
 def _on_card(monkeypatch, half):
     """The test's graph and weights in `half` on card 0, for the Triton modes."""
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.tensor import NBXTensor
     card = lambda t: NBXTensor.from_numpy(t.to(torch.float16).numpy()).to_cuda()
     monkeypatch.setitem(globals(), "WEIGHTS", {w: card(v) for w, v in WEIGHTS.items()})
     monkeypatch.setattr(sys.modules[__name__], "_graph", lambda _g=_graph: _half_graph_of(_g, half))
@@ -370,7 +370,7 @@ def test_the_triton_stitch_sums_at_the_accumulator_and_stores_the_op_s_own_dtype
     Injection (seen red, then restored green, 2026-10-21): `accumulation_dtype` on `NBXDtype(dtype)`
     as on main -> "triton.language.float32 is not a valid NBXDtype" at the first partial, both modes."""
     from neurobrix.core.strategies import chunked_piece as CP
-    from neurobrix.kernels.nbx_tensor import parse_dtype
+    from nbxtensor.tensor import parse_dtype
     name = lambda d: parse_dtype(d).name
     seen = {"acc": [], "store": []}
     real_acc, real_store = CP.accumulate, CP.store
@@ -415,7 +415,7 @@ def test_a_pinned_op_computes_and_keeps_fp32_from_the_next_run(mode, monkeypatch
             pytest.skip("the Triton modes live on a card")
         ex, card = _on_card(monkeypatch, "float16")
         half, x = "float16", card(torch.randn(B, T_TRACE, D))
-        from neurobrix.kernels.nbx_tensor import parse_dtype
+        from nbxtensor.tensor import parse_dtype
         name = lambda d: parse_dtype(d).name
     else:
         monkeypatch.setattr(DE, "compute_dtype_for_placement", lambda device, dtype: dtype)

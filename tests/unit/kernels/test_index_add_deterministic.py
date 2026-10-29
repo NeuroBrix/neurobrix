@@ -43,9 +43,9 @@ except ModuleNotFoundError:  # script-mode under the pytest-less GPU venv
 import numpy as np
 import torch
 
-from neurobrix.kernels.dispatch import dispatch
-from neurobrix.kernels.nbx_tensor import NBXDtype, NBXTensor, nbx_to_torch
-
+from nbxtensor.ops.dispatch import dispatch
+from nbxtensor.tensor import NBXDtype, NBXTensor
+from neurobrix.kernels.torch_interop import nbx_to_torch
 _TT = {"float32": torch.float32, "float16": torch.float16,
        "bfloat16": torch.bfloat16}
 _ND = {"float32": NBXDtype.float32, "float16": NBXDtype.float16,

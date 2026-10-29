@@ -30,10 +30,10 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
-from neurobrix.kernels import wrappers as w
+from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator
+from nbxtensor.ops import wrappers as w
 from nbxtensor.random.seeded_draw import SeededDrawStream
-from neurobrix.triton.device_transfer import needs_move, transfer_tensor
+from nbxtensor.memory.device_transfer import needs_move, transfer_tensor
 
 
 def _require(block: Dict[str, Any], key: str, where: str):
@@ -201,7 +201,7 @@ class SpeechLeg:
         # rows are extracted — release it BEFORE loading the talker branch
         # so the two never coexist in VRAM (compiled-leg idiom).
         if not self.ctx.persistent_mode:
-            from neurobrix.triton.memory_pool import release_flow_memory
+            from nbxtensor.memory.memory_pool import release_flow_memory
             self.engine._unload_component_weights(state["lm_name"])
             release_flow_memory(self.ctx.primary_device)
 

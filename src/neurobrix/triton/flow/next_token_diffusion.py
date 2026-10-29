@@ -28,9 +28,9 @@ import time
 import numpy as np
 from typing import Any, Callable, Dict, List, Optional
 
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
-from neurobrix.triton.memory_pool import release_flow_memory
-from neurobrix.triton.device_transfer import parse_device_idx
+from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator
+from nbxtensor.memory.memory_pool import release_flow_memory
+from nbxtensor.memory.device_transfer import parse_device_idx
 from neurobrix.triton.scheduler.dpm_solver_pp import TritonDPMSolverPPScheduler
 from neurobrix.triton.cfg.engine import TritonCFGEngine
 
@@ -386,7 +386,7 @@ class TritonNextTokenDiffusionEngine:
         Measured before (VibeVoice-1.5B, --triton, quiet card): 92 full
         re-prefills = 35 s of a 48 s request, 743 autotune shapes, the
         table's 900 MB exported to numpy once (7 s)."""
-        from neurobrix.kernels import wrappers as w
+        from nbxtensor.ops import wrappers as w
         from neurobrix.triton.flow.autoregressive import TritonAutoregressiveHandler
         import os as _os_vv
         _vv_dump_path = _os_vv.environ.get("NBX_VV_DUMP_LATENTS", "")

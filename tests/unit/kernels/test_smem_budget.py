@@ -27,15 +27,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-from neurobrix.kernels.ops._configs import (
-    arch_smem_budget,
-    configs_within_smem_budget,
-    smem_bytes_for_config,
-)
-from neurobrix.kernels.ops.matmul import (
-    _MATMUL_AUTOTUNE_AMPERE_PLUS,
-    _MATMUL_AUTOTUNE_VOLTA,
-)
+from nbxtensor.ops._configs import arch_smem_budget, configs_within_smem_budget, smem_bytes_for_config
+from nbxtensor.ops.matmul import _MATMUL_AUTOTUNE_AMPERE_PLUS, _MATMUL_AUTOTUNE_VOLTA
 
 VENDORS = (Path(__file__).resolve().parents[3]
            / "src" / "neurobrix" / "config" / "vendors")
@@ -250,8 +243,8 @@ def test_capability_resolution_covers_more_than_three_cards(monkeypatch):
     """
     import types
 
-    from neurobrix.kernels.ops import _configs
-    from neurobrix.kernels import launcher
+    from nbxtensor.ops import _configs
+    from nbxtensor.backend import launcher
 
     # The capability comes from the launcher's target (engine data), never
     # from Triton's driver probe (R33, universal since 2026-09-05).
@@ -272,8 +265,8 @@ def test_an_unknown_capability_still_declines_to_guess(monkeypatch):
     number — filtering on an invented budget deletes working configs."""
     import types
 
-    from neurobrix.kernels.ops import _configs
-    from neurobrix.kernels import launcher
+    from nbxtensor.ops import _configs
+    from nbxtensor.backend import launcher
     monkeypatch.setattr(launcher, "target",
                         lambda: types.SimpleNamespace(arch=30, backend="cuda"))
     assert _configs.arch_smem_budget() is None

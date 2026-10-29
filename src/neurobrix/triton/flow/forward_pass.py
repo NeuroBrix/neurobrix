@@ -9,8 +9,8 @@ No torch imports in this file.
 import numpy as np
 from typing import Any, Callable, Dict, Optional
 
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
-from neurobrix.triton.memory_pool import release_flow_memory
+from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator
+from nbxtensor.memory.memory_pool import release_flow_memory
 
 
 class TritonForwardPassHandler:

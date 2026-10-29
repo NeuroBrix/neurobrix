@@ -11,8 +11,8 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
-from neurobrix.kernels import wrappers as w
+from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator
+from nbxtensor.ops import wrappers as w
 
 
 def _cpu_sort(tensor: NBXTensor, descending: bool = False):
@@ -41,7 +41,7 @@ def _cpu_sort(tensor: NBXTensor, descending: bool = False):
 def _host_bytes(tensor, n: int) -> bytes:
     """The first `n` elements of a device tensor, copied to the host as raw bytes at the tensor's own width."""
     import ctypes as _ct
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator as _DA
+    from nbxtensor.tensor import DeviceAllocator as _DA
     width = {NBXDtype.float32: 4, NBXDtype.float16: 2, NBXDtype.bfloat16: 2}.get(tensor._dtype)
     if width is None:
         raise TypeError(f"ZERO FALLBACK: the sampler reads float logits; {tensor._dtype} is none")

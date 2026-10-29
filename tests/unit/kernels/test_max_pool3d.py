@@ -35,10 +35,9 @@ except ModuleNotFoundError:  # script-mode under the pytest-less GPU runtime ven
 import numpy as np
 import torch
 
-from neurobrix.kernels.dispatch import dispatch
-from neurobrix.kernels.nbx_tensor import NBXTensor, nbx_to_torch
-
-
+from nbxtensor.ops.dispatch import dispatch
+from nbxtensor.tensor import NBXTensor
+from neurobrix.kernels.torch_interop import nbx_to_torch
 def _nbx(arr):
     return NBXTensor.from_numpy(np.ascontiguousarray(arr))
 

@@ -17,8 +17,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from neurobrix.kernels import wrappers as W
-from neurobrix.kernels.nbx_tensor import NBXTensor
+from nbxtensor.ops import wrappers as W
+from nbxtensor.tensor import NBXTensor
 
 N, C, HW, GROUPS = 1, 64, 40_000_000, 8      # chan_start is a multiple of 8: 56 * HW = 2.24e9 > 2^31 (the first form, HW=35.2e6, never crossed it: 56 * 35.2e6 = 1.97e9 — a test green on the old tree, vacuous)
 

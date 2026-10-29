@@ -13,14 +13,14 @@ import json
 import numpy as np
 import pytest
 
-from neurobrix.kernels import autotune_certified as C
+from nbxtensor.ops import autotune_certified as C
 from neurobrix.kernels import autotune_certify as Z
 
 cuda = pytest.importorskip("triton")
 
 
 def _cuda_available():
-    nbx = pytest.importorskip("neurobrix.kernels.nbx_tensor")
+    nbx = pytest.importorskip("nbxtensor.tensor")
     device_count = nbx.DeviceAllocator.device_count   # a renamed symbol raises here, loudly
     try:
         return device_count() > 0
@@ -34,7 +34,7 @@ pytestmark = [pytest.mark.skipif(not _cuda_available(), reason="needs a CUDA car
 
 def _recorded_key(tuner, call):
     """The key the wrapper computes for this call (the autotuner's own key)."""
-    from neurobrix.triton import autotune_cache as atc
+    from nbxtensor.ops import autotune_cache as atc
     seen = {}
     saved = tuner.run
 
@@ -60,10 +60,10 @@ def root(tmp_path, monkeypatch):
 
 
 def test_one_matmul_shape_is_certified_gated_and_served(root, monkeypatch):
-    from neurobrix.kernels.nbx_tensor import NBXTensor
-    from neurobrix.kernels import wrappers as W
-    from neurobrix.kernels.ops.matmul import matmul_kernel
-    qual = "neurobrix.kernels.ops.matmul.matmul_kernel"
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops.matmul import matmul_kernel
+    qual = "nbxtensor.ops.matmul.matmul_kernel"
     prof = C.active_profile()
     assert prof is not None, "the launcher resolved no vendor profile on this card"
     vendor, profile = prof
@@ -108,10 +108,10 @@ def test_a_config_that_diverges_from_the_oracle_is_excluded_and_recorded(root, m
     """The certifier's judgement is the oracle's: a config whose result is
     made wrong is excluded with its deviation, and the file's gate still
     re-reads (its deviation is above the tolerance)."""
-    from neurobrix.kernels.nbx_tensor import NBXTensor
-    from neurobrix.kernels import wrappers as W
-    from neurobrix.kernels.ops.matmul import matmul_kernel
-    qual = "neurobrix.kernels.ops.matmul.matmul_kernel"
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops.matmul import matmul_kernel
+    qual = "nbxtensor.ops.matmul.matmul_kernel"
     vendor, profile = C.active_profile()
     rng = np.random.default_rng(3)
     a = (rng.standard_normal((64, 64)) * 0.1).astype(np.float16)

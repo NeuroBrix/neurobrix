@@ -15,7 +15,7 @@ import sys
 
 import pytest
 
-from neurobrix.kernels.nbx_tensor import NBXTensor
+from nbxtensor.tensor import NBXTensor
 
 
 def test_del_on_a_tensor_that_never_ran_init_does_not_raise():

@@ -5,8 +5,8 @@ store fp16 and the outputs differ from the flag-off run — RED; and a flag left
 import os
 import numpy as np
 import pytest
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
-from neurobrix.kernels import wrappers as W
+from nbxtensor.tensor import NBXTensor, NBXDtype
+from nbxtensor.ops import wrappers as W
 
 pytestmark = pytest.mark.skipif(not os.environ.get("CUDA_VISIBLE_DEVICES"), reason="needs a card")
 

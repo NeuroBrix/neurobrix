@@ -23,7 +23,8 @@ CHILD = textwrap.dedent('''
     from pathlib import Path
     sys.path.insert(0, "tools")
     import certified_census as CC
-    from neurobrix.kernels import autotune_certified as C
+    import neurobrix  # the application: nbxtensor's host services
+    from nbxtensor.ops import autotune_certified as C
     root = Path("src/neurobrix/config/autotune/nvidia/volta")
     picked = None
     for p in sorted(root.glob("*.json")):

@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 import torch
 
-from neurobrix.kernels.nbx_tensor import NBXTensor
+from nbxtensor.tensor import NBXTensor
 from neurobrix.triton.flow.iterative_process import _gate_component_outputs_finite
 
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU test")

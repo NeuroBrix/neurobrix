@@ -14,8 +14,8 @@ Handles diffusion models with denoising loop:
 import os
 from typing import Any, Callable, Dict, List, Optional
 
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, parse_dtype
-from neurobrix.triton.memory_pool import release_flow_memory
+from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator, parse_dtype
+from nbxtensor.memory.memory_pool import release_flow_memory
 from neurobrix.core.runtime.debug import DEBUG
 from neurobrix.core.flow.base import FlowContext
 from neurobrix.triton.cfg import TritonCFGEngine
@@ -32,8 +32,8 @@ _FLOAT_NBX_DTYPES = (NBXDtype.float16, NBXDtype.bfloat16,
 def _gate_component_outputs_finite(resolved: Any, comp_name: str) -> None:
     """R30 mirror of core/flow/iterative_process._gate_component_outputs_finite
     (R33: NBXTensor + the isfinite/all Triton wrappers, no torch)."""
-    from neurobrix.kernels.wrappers import all_wrapper, isfinite_wrapper
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.ops.wrappers import all_wrapper, isfinite_wrapper
+    from nbxtensor.tensor import NBXTensor
     for key, val in list(resolved.items()):
         if not str(key).startswith(f"{comp_name}.output"):
             continue
@@ -75,7 +75,7 @@ def _gate_loop_state_finite(state: Any, step_idx: int, timestep: Any,
 
     if not isinstance(state, NBXTensor) or state.nbx_dtype not in _FLOAT_NBX_DTYPES:
         return
-    from neurobrix.kernels.wrappers import all_wrapper, isfinite_wrapper
+    from nbxtensor.ops.wrappers import all_wrapper, isfinite_wrapper
     if bool(all_wrapper(isfinite_wrapper(state)).item()):
         return
     ts = timestep.item() if hasattr(timestep, "item") else timestep
@@ -996,7 +996,7 @@ class TritonIterativeProcessHandler:
         step, latent, sched = resumed
         try:
             cur = self.ctx.variable_resolver.get(state_key)
-            from neurobrix.kernels.nbx_tensor import NBXTensor
+            from nbxtensor.tensor import NBXTensor
             tensor = NBXTensor.from_numpy(latent)
             idx = getattr(cur, "_device_idx", 0) or 0
             tensor = tensor.to_cuda(idx)
@@ -1082,7 +1082,7 @@ class TritonIterativeProcessHandler:
     def _apply_latent_affine(self, state_key: str, decoder_name: str) -> None:
         import numpy as np
         from neurobrix.core.runtime.resolution.latent_statistics import latent_affine, decoder_profile
-        from neurobrix.kernels.wrappers import add as _add, mul as _mul
+        from nbxtensor.ops.wrappers import add as _add, mul as _mul
         affine = latent_affine(decoder_profile(self.ctx.pkg, decoder_name))
         if affine is None:
             return
@@ -1118,7 +1118,7 @@ class TritonIterativeProcessHandler:
         for comp_name in list(loop_components) + pre_loop:
             import os as _os_dbg
             if _os_dbg.environ.get("NBX_LIVE_DUMP_ON_OOM") == "1":
-                from neurobrix.kernels.nbx_tensor import DeviceAllocator as _DA
+                from nbxtensor.tensor import DeviceAllocator as _DA
                 pre_live = sum(_DA._cuda_live_bytes.values())
                 self._unload_component(comp_name, force=True)
                 post_live = sum(_DA._cuda_live_bytes.values())
@@ -1217,7 +1217,7 @@ class TritonIterativeProcessHandler:
         br = self.ctx.binned_request
         if br is None or not post_loop:
             return
-        from neurobrix.kernels.wrappers import upsample_bilinear2d_wrapper
+        from nbxtensor.ops.wrappers import upsample_bilinear2d_wrapper
         from neurobrix.core.runtime.resolution.resolution_binning import restore_fold, restore_plan
         comp = post_loop[-1]
         resolved = self.ctx.variable_resolver.resolved

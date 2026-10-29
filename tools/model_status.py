@@ -111,7 +111,8 @@ def main(argv=None) -> int:
     ap.add_argument("--out", required=True, type=Path)
     a = ap.parse_args(argv)
     sys.path.insert(0, str(a.engine_src or (a.tree / "src")))
-    from neurobrix.kernels import autotune_certified as C
+    import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
+    from nbxtensor.ops import autotune_certified as C
     classes = dict(kv.split("=") for kv in a.classes.split(","))
     class_of_card = dict(kv.split("=") for kv in a.class_of_card.split(","))
     vendor = dict(kv.split("=", 1) for kv in a.vendor_oracle)

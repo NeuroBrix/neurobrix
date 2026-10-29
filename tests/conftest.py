@@ -44,7 +44,7 @@ _NO_DEVICE_MARKS = ("error 100", "cudaErrorNoDevice", "driver_total=0MB",
 def _devices_visible() -> int:
     """How many devices the DRIVER reports, asked once, by executing the question."""
     try:
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        from nbxtensor.tensor import DeviceAllocator
         return int(DeviceAllocator.device_count())
     except Exception:
         return 0
@@ -76,7 +76,7 @@ def tl_dot_gemms(monkeypatch):
     was declared — the key it asserts is still the one an arch without the unit launches. The ONE decision
     point, `_configs.matrix_unit`, answers `{}` (what it answers for a profile that declares none); the
     unit's own placement is asserted by the cells that leave it declared."""
-    from neurobrix.kernels.ops import _configs
+    from nbxtensor.ops import _configs
     monkeypatch.setattr(_configs, "matrix_unit", lambda: {})
 
 
@@ -99,3 +99,7 @@ def installed_container(name: str) -> Path:
     if not (root / "manifest.json").is_file():
         pytest.skip(f"container {name} not installed at {root}")
     return root
+
+# The engine provides its tensor library with what the library does not own (src/neurobrix/_nbxtensor_host.py): a test
+# that imports nbxtensor alone runs under the engine all the same, whatever test ran before it.
+import neurobrix  # noqa: E402,F401

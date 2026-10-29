@@ -18,7 +18,7 @@ from neurobrix.kernels import census_table as T
 
 K1 = "(19, 2048, 2048, True, True, 'fp16', 'fp16', 'fp16')"
 K2 = "(64, 2048, 2048, True, True, 'fp16', 'fp16', 'fp16')"
-QUAL = "neurobrix.kernels.ops.matmul.matmul_kernel"
+QUAL = "nbxtensor.ops.matmul.matmul_kernel"
 
 
 def _row(model, key, mode="triton"):

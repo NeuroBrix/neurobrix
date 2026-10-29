@@ -9,7 +9,7 @@ import os
 import sys
 import types
 
-from neurobrix.kernels import autotune_certified as AC
+from nbxtensor.ops import autotune_certified as AC
 
 
 def _fake_backend(tmp_path, monkeypatch):

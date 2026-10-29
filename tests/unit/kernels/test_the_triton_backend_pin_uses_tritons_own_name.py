@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src"))
-from neurobrix.kernels import nbx_tensor as N  # noqa: E402
+from nbxtensor import tensor as N  # noqa: E402
 
 
 @pytest.fixture(autouse=True)

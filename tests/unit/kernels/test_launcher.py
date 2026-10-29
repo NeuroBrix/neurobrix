@@ -23,7 +23,7 @@ def _cuda():
     # a NAME inside it may not. Splitting the two is the whole point: an absent
     # module skips, a renamed symbol raises where the suite can see it, and the
     # guarded call stays guarded because "no device here" is a real answer.
-    nbx = pytest.importorskip("neurobrix.kernels.nbx_tensor")
+    nbx = pytest.importorskip("nbxtensor.tensor")
     set_device = nbx.DeviceAllocator.set_device
     try:
         set_device(0)
@@ -36,12 +36,12 @@ pytestmark = pytest.mark.skipif(not _cuda(), reason="CUDA device required")
 
 
 def _nbx(arr):
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.tensor import NBXTensor
     return NBXTensor.from_numpy(np.ascontiguousarray(arr))
 
 
 def _host(t, np_dtype):
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator
+    from nbxtensor.tensor import DeviceAllocator
     buf = np.empty(t._nbytes, dtype=np.uint8)
     DeviceAllocator.memcpy(buf.ctypes.data, t.data_ptr(), t._nbytes, 2)
     return buf.view(np_dtype).reshape(t.shape)
@@ -66,7 +66,7 @@ def _torch_verdict(stdout: str) -> str:
 
 
 def test_launch_is_byte_identical_to_upstream_on_a_house_kernel():
-    from neurobrix.kernels.launcher import launch
+    from nbxtensor.backend.launcher import launch
     from nbxtensor.ops.fft_op import scale_kernel
     rng = np.random.default_rng(7)
     n = 3001                                              # a masked tail
@@ -85,8 +85,9 @@ def test_the_launch_path_imports_no_torch():
     code = r"""
 import sys
 import numpy as np
-from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator
-from neurobrix.kernels.launcher import launch
+import neurobrix  # the application: nbxtensor's host services
+from nbxtensor.tensor import NBXTensor, DeviceAllocator
+from nbxtensor.backend.launcher import launch
 from nbxtensor.ops.fft_op import scale_kernel
 DeviceAllocator.set_device(0)
 n = 2048
@@ -112,7 +113,7 @@ def test_our_specialisation_matches_triton_s_binder():
     from triton._C.libtriton import native_specialize_impl
     from triton.backends.compiler import BaseBackend
     import triton.language as tl
-    from neurobrix.kernels.launcher import specialize_arg
+    from nbxtensor.backend.launcher import specialize_arg
     t16 = _nbx(np.zeros(64, dtype=np.float16))
     ti = _nbx(np.zeros(64, dtype=np.int64))
     cases = [t16, ti, 1, 16, 17, 0, 2 ** 31, -5, 2 ** 40 * 16, 2 ** 63, 0.37, True, None]
@@ -127,7 +128,7 @@ def test_our_specialisation_matches_triton_s_binder():
 def test_our_binder_returns_triton_s_triple_on_a_real_kernel():
     from triton.compiler import make_backend
     from triton.runtime.jit import create_function_from_signature
-    from neurobrix.kernels.launcher import nbx_binder, target
+    from nbxtensor.backend.launcher import nbx_binder, target
     from nbxtensor.ops.fused_moe import fused_moe_kernel
     import triton.language as tl
     backend = make_backend(target())
@@ -152,8 +153,9 @@ def test_an_autotuned_kernel_launches_and_benchmarks_without_torch(a_free_rig):
     code = r"""
 import sys
 import numpy as np
-from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator
-from neurobrix.kernels.dispatch import dispatch
+import neurobrix  # the application: nbxtensor's host services
+from nbxtensor.tensor import NBXTensor, DeviceAllocator
+from nbxtensor.ops.dispatch import dispatch
 DeviceAllocator.set_device(0)
 rng = np.random.default_rng(3)
 a = NBXTensor.from_numpy(rng.standard_normal((67, 33)).astype(np.float16))
@@ -174,7 +176,7 @@ print("torch" in sys.modules)
 
 
 def test_do_bench_returns_quantiles_in_milliseconds():
-    from neurobrix.kernels.launcher import do_bench
+    from nbxtensor.backend.launcher import do_bench
     from nbxtensor.ops.fft_op import scale_kernel
     n = 4096
     r, i = _nbx(np.ones(n, dtype=np.float32)), _nbx(np.ones(n, dtype=np.float32))
@@ -190,7 +192,7 @@ def test_a_recorder_sees_every_launch_and_its_record_replays():
     computes nothing, its verify gate rejects it, and the decode loses its CUDA-graph
     path without anything being wrong (measured 2026-09-08 on TinyLlama at a locked
     clock: 71.9 ms per token against 7.1)."""
-    from neurobrix.kernels.launcher import active_driver, launch, set_launch_recorder
+    from nbxtensor.backend.launcher import active_driver, launch, set_launch_recorder
     from nbxtensor.ops.fft_op import scale_kernel
     rng = np.random.default_rng(11)
     n = 2048
@@ -243,8 +245,8 @@ def test_a_refused_address_is_named_by_its_parameter():
     name dropped from the message this test failed on 'weight_ptr'."""
     import ctypes
     import pytest
-    from neurobrix.kernels.launcher import CudaDriver
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator
+    from nbxtensor.backend.launcher import CudaDriver
+    from nbxtensor.tensor import DeviceAllocator
     drv = CudaDriver.__new__(CudaDriver)
     drv._param_counts = {}
     fn = ctypes.c_void_p(1)

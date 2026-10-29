@@ -23,12 +23,17 @@ stdlib = set(getattr(sys, "stdlib_module_names", ()))
 third_party = sorted(
     {m.split(".")[0] for m in added}
     - stdlib
-    - {"neurobrix", "__main__"}
+    - {"neurobrix", "__main__", "nbxtensor"}
 )
+# the engine installs its tensor library's host services at import (neurobrix/_nbxtensor_host.py): the package and
+# `nbxtensor.host` (stdlib only) are loaded, and nothing else of the library
+library = sorted(m for m in added if m == "nbxtensor" or m.startswith("nbxtensor."))
+third_party += [m for m in library if m not in ("nbxtensor", "nbxtensor.host")]
 engine_leaks = sorted(
     m for m in added
     if m.startswith("neurobrix.")
     and not m.startswith("neurobrix.agent")
+    and m != "neurobrix._nbxtensor_host"   # the package's own init: the tensor library's host services (stdlib only)
 )
 print(json.dumps({"third_party": third_party, "engine_leaks": engine_leaks}))
 """

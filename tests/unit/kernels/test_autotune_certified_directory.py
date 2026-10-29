@@ -12,9 +12,9 @@ from pathlib import Path
 
 import pytest
 
-from neurobrix.kernels import autotune_certified as C
+from nbxtensor.ops import autotune_certified as C
 
-KERNEL = "neurobrix.kernels.ops.matmul.matmul_kernel"
+KERNEL = "nbxtensor.ops.matmul.matmul_kernel"
 
 
 class _Tuner:
@@ -57,8 +57,8 @@ def _one_16g_card():
     fixture entries were proven on. A heterogeneous rig would serve nothing to
     a launch that does not name its card — that case has its own file
     (`test_an_entry_serves_only_the_memory_class_it_covered.py`)."""
-    from neurobrix.kernels import wrappers as W
-    from neurobrix.kernels import nbx_tensor as T
+    from nbxtensor.ops import wrappers as W
+    from nbxtensor import tensor as T
     before = (W._NBX_HW_PROFILE, W._NBX_HAS_NATIVE_BF16, T._BACKEND_HAS_FP64)
     dev = type("Dev", (), {"index": 0, "name": "Tesla V100-SXM2-16GB", "memory_mb": 16384,
                            "brand": "nvidia", "architecture": "volta"})()
@@ -152,7 +152,7 @@ def test_off_switch_sweeps_everything(root, monkeypatch):
 def test_a_runtime_exclusion_that_contradicts_a_certification_is_reported(root, capsys, monkeypatch):
     """The runtime screen excludes the very config the directory certifies:
     printed as a CONTRADICTION, recorded, never silent."""
-    from neurobrix.triton import autotune_cache as atc
+    from nbxtensor.ops import autotune_cache as atc
     _write(root, {C.key_repr(KEY): _entry()})
     t = _Tuner()
     monkeypatch.setattr(atc, "_qual_of", lambda tuner: KERNEL)
@@ -173,7 +173,7 @@ def test_a_runtime_exclusion_that_contradicts_a_certification_is_reported(root, 
 
 
 def test_a_config_the_directory_did_not_certify_is_no_contradiction(root, monkeypatch, capsys):
-    from neurobrix.triton import autotune_cache as atc
+    from nbxtensor.ops import autotune_cache as atc
     _write(root, {C.key_repr(KEY): _entry()})
     monkeypatch.setattr(atc, "_qual_of", lambda tuner: KERNEL)
     monkeypatch.setattr(atc, "key_of", lambda tuner, args, kwargs: KEY)
@@ -196,7 +196,7 @@ def test_a_contradiction_is_reported_even_with_the_apply_switch_off(root, capsys
     """NBX_AUTOTUNE_CERTIFIED=off is the proof's runtime-sweep arm — exactly where
     the screen and a certification can disagree. The switch stops applying,
     never reporting."""
-    from neurobrix.triton import autotune_cache as atc
+    from nbxtensor.ops import autotune_cache as atc
     _write(root, {C.key_repr(KEY): _entry()})
     monkeypatch.setenv("NBX_AUTOTUNE_CERTIFIED", "off")
     monkeypatch.setattr(atc, "_qual_of", lambda tuner: KERNEL)
@@ -251,7 +251,7 @@ def test_the_replay_cache_key_of_a_widened_operand_is_overridden_by_its_certifie
     """At load the local replay cache seeds the memory-dtype key of a matmul whose activation
     is widened on load; with no call at hand the flags are read from the profile's rule (no
     native bf16 → the narrow activation computes in fp32) and the certified twin overrides it."""
-    from neurobrix.kernels import wrappers as W
+    from nbxtensor.ops import wrappers as W
     monkeypatch.setattr(W, "_NBX_HAS_NATIVE_BF16", False)
     _write(root, {C.key_repr(KEY): _entry()})
     t = _Tuner(); t.arg_names = t.arg_names + ["PROMOTE_A"]

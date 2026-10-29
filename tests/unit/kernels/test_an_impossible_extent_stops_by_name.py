@@ -20,12 +20,12 @@ import pytest
 
 pytest.importorskip("triton")
 
-from neurobrix.kernels.nbx_tensor import NBXDtype, NBXTensor  # noqa: E402
+from nbxtensor.tensor import NBXDtype, NBXTensor  # noqa: E402
 
 
 def _gpu_or_skip():
     try:
-        from neurobrix.kernels.nbx_tensor import _detect_gpu_backend
+        from nbxtensor.tensor import _detect_gpu_backend
         _detect_gpu_backend()
     except Exception:
         pytest.skip("no GPU backend the engine can resolve")
@@ -37,8 +37,8 @@ def _t(shape):
 
 def test_a_temporal_conv_with_no_frame_to_produce_stops_by_name():
     _gpu_or_skip()
-    from neurobrix.kernels.nbx_tensor import ImpossibleExtentError
-    from neurobrix.kernels.wrappers import conv2d_wrapper
+    from nbxtensor.tensor import ImpossibleExtentError
+    from nbxtensor.ops.wrappers import conv2d_wrapper
     x = _t((1, 4, 1, 8, 8))               # one frame
     w = _t((4, 4, 2, 1, 1))               # temporal kernel 2
     with pytest.raises(ImpossibleExtentError) as e:
@@ -49,8 +49,8 @@ def test_a_temporal_conv_with_no_frame_to_produce_stops_by_name():
 
 def test_a_spatial_conv_larger_than_its_input_stops_by_name():
     _gpu_or_skip()
-    from neurobrix.kernels.nbx_tensor import ImpossibleExtentError
-    from neurobrix.kernels.wrappers import conv2d_wrapper
+    from nbxtensor.tensor import ImpossibleExtentError
+    from nbxtensor.ops.wrappers import conv2d_wrapper
     x = _t((1, 2, 2, 2))
     w = _t((2, 2, 3, 3))
     with pytest.raises(ImpossibleExtentError) as e:
@@ -60,7 +60,7 @@ def test_a_spatial_conv_larger_than_its_input_stops_by_name():
 
 def test_a_valid_conv_is_unchanged():
     _gpu_or_skip()
-    from neurobrix.kernels.wrappers import conv2d_wrapper
+    from nbxtensor.ops.wrappers import conv2d_wrapper
     out = conv2d_wrapper(_t((1, 2, 5, 5)), _t((3, 2, 3, 3)), None, [1, 1], [0, 0], [1, 1],
                          False, [0, 0], 1)
     assert tuple(out.shape) == (1, 3, 3, 3)
@@ -68,7 +68,7 @@ def test_a_valid_conv_is_unchanged():
 
 def test_a_cat_of_empty_tensors_does_not_collapse_to_rank_one():
     _gpu_or_skip()
-    from neurobrix.kernels.nbx_tensor import ImpossibleExtentError
+    from nbxtensor.tensor import ImpossibleExtentError
     from neurobrix.triton.sequential import TritonSequentialDispatcher
     d = TritonSequentialDispatcher.__new__(TritonSequentialDispatcher)
     a = NBXTensor.empty((1, 8, 0, 4, 4), dtype=NBXDtype.float32)
@@ -90,7 +90,7 @@ def test_a_cat_with_one_empty_operand_keeps_the_other():
 
 def test_the_executor_names_the_input_shapes_and_the_bound_symbols():
     """The suffix both mode-2 executors append to an ImpossibleExtentError (and only to it)."""
-    from neurobrix.kernels.nbx_tensor import ImpossibleExtentError
+    from nbxtensor.tensor import ImpossibleExtentError
     from neurobrix.triton.symbols import SymbolResolver, impossible_extent_context
     r = SymbolResolver({"symbols": {"s0": {"name": "batch"}, "s1": {"name": "time"}}})
     r._bindings.update({"s0": 1, "s1": 1})

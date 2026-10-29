@@ -32,7 +32,7 @@ import tracemalloc
 import numpy as np
 import pytest
 
-from neurobrix.kernels.oracles import conv2d_fp64 as C
+from nbxtensor.ops.oracles import conv2d_fp64 as C
 
 GEOMETRIES = [
     # n, cin, h, w, cout, k, stride, pad, dilation, groups
@@ -131,8 +131,8 @@ def test_the_full_screen_is_measured_by_its_float64_footprint_not_the_device_byt
     reference. The device bytes were what the budget saw. This drives the launcher's own
     decision: a buffer set UNDER the budget in device bytes and OVER it in float64 must be
     windowed — delete the footprint term and this cell is red."""
-    from neurobrix.kernels import launcher as L
-    from neurobrix.kernels import screen_oracle as S
+    from nbxtensor.backend import launcher as L
+    from nbxtensor.ops import screen_oracle as S
     budget = 32 * 1024 * 1024
     macs = [(0, 128 * 2048 * 1024 * 2, "bfloat16"), (1, 3 * 128 * 9 * 2, "bfloat16"),
             (2, 3 * 2048 * 1024 * 2, "bfloat16")]
@@ -174,9 +174,10 @@ def test_the_macs_key_is_screened_on_windows_with_a_bounded_host_footprint(monke
     # A fresh replay cache: a sweep persisted by an earlier run of this key would serve it
     # without a screen, and this cell would then measure nothing (seen 2026-09-26).
     monkeypatch.setenv("NEUROBRIX_REPLAY_CACHE", str(tmp_path / "replay_cache"))
-    from neurobrix.kernels import launcher as L, wrappers as W
-    from neurobrix.kernels import screen_oracle as S
-    from neurobrix.triton import autotune_cache as atc
+    from nbxtensor.backend import launcher as L
+    from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import screen_oracle as S
+    from nbxtensor.ops import autotune_cache as atc
     # The fresh directory alone does not make the sweep fresh: an earlier cell's first launch in
     # this PROCESS seeds the Autotuners' memory from the default replay cache, which holds this key
     # once any run on the machine swept it — the key was then served with no screen (red after
@@ -184,7 +185,7 @@ def test_the_macs_key_is_screened_on_windows_with_a_bounded_host_footprint(monke
     for qual, at in atc._autotuners():
         if qual.rsplit(".", 1)[-1] == "conv2d_forward_kernel":
             monkeypatch.setattr(at, "cache", {})
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator, NBXTensor
+    from nbxtensor.tensor import DeviceAllocator, NBXTensor
     try:
         DeviceAllocator.empty_cache_pool()
     except Exception:                                   # noqa: BLE001

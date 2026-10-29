@@ -9,14 +9,14 @@ import pytest
 
 @pytest.fixture
 def prof(monkeypatch):
-    from neurobrix.kernels.ops import _configs as CF
+    from nbxtensor.ops import _configs as CF
     state = {}
     monkeypatch.setattr(CF, "active_vendor_profile", lambda: state)
     return state
 
 
 def _route(D, Tq=4096, Tk=4096):
-    from neurobrix.kernels import launch_keys as LK
+    from nbxtensor.ops import launch_keys as LK
     # an arch with no scores budget (every Apple and Ampere+ profile: memory.sdpa_math_max_scores_bytes 0)
     return LK.sdpa_route(2, 24, Tq, Tk, D, D, 0, 128, 64)[0]
 
@@ -39,8 +39,8 @@ def test_the_measurement_must_be_stated_true(prof):
 
 
 def test_the_flash_is_keyed_where_no_hand_table_chooses_its_tile(prof):
-    from neurobrix.kernels import launch_keys as LK
-    from neurobrix.kernels.nbx_tensor import NBXDtype as D
+    from nbxtensor.ops import launch_keys as LK
+    from nbxtensor.tensor import NBXDtype as D
     (kern, key), = LK.flash_launches(4680, 4680, 96, D.bfloat16, D.bfloat16, D.bfloat16)
     assert kern == LK.FLASH
     assert key == (LK.bucket_of("M", 4680), LK.bucket_of("N", 4680), 96,
@@ -50,15 +50,15 @@ def test_the_flash_is_keyed_where_no_hand_table_chooses_its_tile(prof):
 
 
 def test_a_hand_table_keeps_its_tiles_unkeyed(prof):
-    from neurobrix.kernels import launch_keys as LK
-    from neurobrix.kernels.nbx_tensor import NBXDtype as D
+    from nbxtensor.ops import launch_keys as LK
+    from nbxtensor.tensor import NBXDtype as D
     prof["sdpa_thresholds"] = [{"head_dim_lt": 128, "block_m": 64, "block_n": 64, "num_warps": 4}]
     assert LK.flash_launches(4096, 4096, 64, D.float16, D.float16, D.float16) == []
 
 
 def test_the_candidate_tiles_respect_the_backends_bounds(monkeypatch):
-    from neurobrix.kernels import nbx_tensor as NT
-    from neurobrix.kernels.ops import flash_attention as F
+    from nbxtensor import tensor as NT
+    from nbxtensor.ops import flash_attention as F
     monkeypatch.setattr(NT, "fa_min_tile", lambda: 32)
     monkeypatch.setattr(NT, "reduce_tile_max", lambda: 1024)
     keep = F._prune_flash(F.flash_configs(), {})

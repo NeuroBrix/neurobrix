@@ -24,9 +24,9 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from neurobrix.nbx.neurotax import SynonymRegistry
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
-from neurobrix.triton.memory_pool import release_flow_memory
-from neurobrix.triton.device_transfer import parse_device_idx
+from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator
+from nbxtensor.memory.memory_pool import release_flow_memory
+from nbxtensor.memory.device_transfer import parse_device_idx
 
 # The rule and its history live in core.runtime_values.
 from neurobrix.core.runtime_values import require_max_tokens

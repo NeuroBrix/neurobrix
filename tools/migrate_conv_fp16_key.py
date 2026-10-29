@@ -29,7 +29,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
 
-KERNEL = "neurobrix.kernels.ops.conv2d.conv2d_forward_kernel"
+KERNEL = "nbxtensor.ops.conv2d.conv2d_forward_kernel"
 FLAG, INPUT_TAG = 16, 17          # positions in the key: 'fp16', then the input's dtype tag
 
 
@@ -48,7 +48,8 @@ def _rekey_proof(entry: dict, new_key: tuple) -> None:
 
 
 def migrate_directory(directory: Path, dry: bool) -> int:
-    from neurobrix.kernels import autotune_certified as C
+    import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
+    from nbxtensor.ops import autotune_certified as C
     n = 0
     for path in sorted(directory.glob("conv2d_forward_kernel.*.json")):
         with open(path.with_suffix(".json.lock"), "a+") as lk:
@@ -80,7 +81,7 @@ def migrate_directory(directory: Path, dry: bool) -> int:
 
 
 def migrate_tables(tables: Path, dry: bool) -> int:
-    from neurobrix.kernels import autotune_certified as C
+    from nbxtensor.ops import autotune_certified as C
     from neurobrix.kernels import census_table as T
     n = 0
     for path in sorted(tables.glob("*g.jsonl")):

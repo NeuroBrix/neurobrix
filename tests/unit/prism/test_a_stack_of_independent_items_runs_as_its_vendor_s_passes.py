@@ -94,7 +94,7 @@ def _cuda() -> bool:
 @pytest.mark.skipif(not _cuda(), reason="the Triton kind lives on a card")
 def test_the_join_is_the_run_s_own_tensor_kind():
     from neurobrix.core.runtime.executor import RuntimeExecutor as Executor
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.tensor import NBXTensor
     fake = _Fake()
     x = NBXTensor.from_numpy(torch.arange(2 * 3, dtype=torch.float32).view(2, 3).numpy()).to_cuda()
     out = Executor._run_in_item_passes(fake, "enc", "pre_loop", None, {"x": x, "count": 1}, fed=2, per_pass=1)

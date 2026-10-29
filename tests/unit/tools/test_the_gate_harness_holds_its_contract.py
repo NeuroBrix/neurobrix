@@ -50,9 +50,9 @@ def _log(message, inner=None):
                f"{inner}\n\nThe above exception was the direct cause of the following exception:\n\n") if inner else ""
     return (f"$ python -m neurobrix run --certified-only\n[progress] load\n\nUNEXPECTED ERROR: {message}\n"
             f"{chained}Traceback (most recent call last):\n"
-            f"  File \"src/neurobrix/kernels/ops/_configs.py\", line 192, in wrapper\n"
+            f"  File \"nbxtensor/src/nbxtensor/ops/_configs.py\", line 192, in wrapper\n"
             f"    _cert.refuse_missing(qual, tuned, key)   # raises KeyNotCertified: never a sweep\n"
-            f"neurobrix.kernels.autotune_certified.KeyNotCertified: {message}\n")
+            f"nbxtensor.ops.autotune_certified.KeyNotCertified: {message}\n")
 
 
 def _stub_cell(monkeypatch, log_text, rc=1):

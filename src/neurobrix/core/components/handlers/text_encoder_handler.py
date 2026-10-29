@@ -27,7 +27,7 @@ def _cat(tensors, dim):
     """Universal concatenation across torch.Tensor and NBXTensor.
 
     NBXTensor exposes a class-level cat() classmethod (see
-    src/neurobrix/kernels/nbx_tensor.py); torch.Tensor does not, so we
+    nbxtensor/src/nbxtensor/tensor.py); torch.Tensor does not, so we
     dispatch on the runtime type of the first tensor.
     """
     if hasattr(type(tensors[0]), 'cat'):

@@ -19,8 +19,8 @@ from __future__ import annotations
 import pytest
 
 from neurobrix.kernels import census
-from neurobrix.kernels.ops import _configs
-from neurobrix.kernels.autotune_bucket import bucket_of, ladder_for
+from nbxtensor.ops import _configs
+from nbxtensor.ops.autotune_bucket import bucket_of, ladder_for
 
 
 APPLE_HW = {

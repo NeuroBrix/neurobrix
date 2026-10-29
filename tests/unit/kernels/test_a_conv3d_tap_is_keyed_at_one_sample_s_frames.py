@@ -12,8 +12,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from neurobrix.kernels import launch_keys as LK
-from neurobrix.kernels.nbx_tensor import NBXDtype
+from nbxtensor.ops import launch_keys as LK
+from nbxtensor.tensor import NBXDtype
 
 F32 = NBXDtype.float32
 

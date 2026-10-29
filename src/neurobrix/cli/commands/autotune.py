@@ -107,7 +107,7 @@ def _refuse_without_a_checkpointer(allowed: bool) -> str:
 
 
 def cmd_autotune(args) -> int:
-    from neurobrix.kernels import autotune_certified as C
+    from nbxtensor.ops import autotune_certified as C
     action = getattr(args, "action", None)
     if action == "certify":
         if not getattr(args, "profile", None):

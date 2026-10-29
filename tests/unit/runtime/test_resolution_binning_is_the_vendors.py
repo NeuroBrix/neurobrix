@@ -217,7 +217,7 @@ def test_the_aten_restore_of_a_video_in_another_axis_order_restores_every_frame(
 
 def _gpu():
     try:
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        from nbxtensor.tensor import DeviceAllocator
         return DeviceAllocator.device_count() > 0
     except Exception:                                     # pragma: no cover
         return False
@@ -226,7 +226,7 @@ def _gpu():
 @pytest.mark.skipif(not _gpu(), reason="needs a device")
 @pytest.mark.parametrize("req", REQUESTS)
 def test_the_triton_restore_is_the_vendors(req):
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.tensor import NBXTensor
     from neurobrix.triton.flow.iterative_process import TritonIterativeProcessHandler
     br = _binned(req)
     rng = np.random.default_rng(req[0] * 7919 + req[1])
@@ -253,7 +253,7 @@ def test_the_triton_restore_is_the_vendors(req):
 @pytest.mark.skipif(not _gpu(), reason="needs a device")
 @pytest.mark.parametrize("req", VIDEO_REQUESTS)
 def test_the_triton_restore_of_a_video_is_the_vendors(req):
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.tensor import NBXTensor
     from neurobrix.triton.flow.iterative_process import TritonIterativeProcessHandler
     br = _binned_video(req)
     rng = np.random.default_rng(req[0] * 131 + req[1])

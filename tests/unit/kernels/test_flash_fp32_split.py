@@ -56,7 +56,7 @@ def _profile(flash_row, smem=98304):
 
 
 def test_a_split_flash_row_without_a_power_of_two_block_k_is_refused(monkeypatch):
-    from neurobrix.kernels.ops import _configs as C
+    from nbxtensor.ops import _configs as C
     prof = _profile({"head_dim_le": 96, "block_m": 64, "block_n": 32, "warps_m": 4, "block_k": 24})
     monkeypatch.setattr(C, "active_vendor_profile", lambda: prof)
     with pytest.raises(ValueError, match="block_k 24"):
@@ -74,8 +74,8 @@ def test_a_flash_row_over_the_profiles_shared_memory_never_loads(monkeypatch):
     by name when the profile is read, not by the compiler at the first launch that reaches it. The split doubles the
     staged tiles (Q, K, V as hi + lo): head dim 256 at 64 x 16 stages 4 x 256 x (64 + 32) = 98 304 bytes — the whole
     V100 budget — and 64 x 32 is over it; the native row at the same tile is half that."""
-    from neurobrix.kernels.ops import _configs as C
-    from neurobrix.kernels.ops.flash_attention_m8n8k4 import head_parts, staged_shared_bytes
+    from nbxtensor.ops import _configs as C
+    from nbxtensor.ops.flash_attention_m8n8k4 import head_parts, staged_shared_bytes
     assert head_parts(256) == (256, 0) and head_parts(96) == (64, 32) and head_parts(80) == (64, 16)
     assert staged_shared_bytes(64, 16, 256, 0, split=True) == 98304
     assert staged_shared_bytes(64, 16, 256, 0, split=False) == 49152
@@ -103,8 +103,8 @@ def test_the_committed_volta_rows_all_load_under_their_own_budget():
     otherwise refuse the shipped profile at import)."""
     import yaml
     from pathlib import Path
-    from neurobrix.kernels.ops import _configs as C
-    from neurobrix.kernels.ops.flash_attention_m8n8k4 import head_parts, staged_shared_bytes
+    from nbxtensor.ops import _configs as C
+    from nbxtensor.ops.flash_attention_m8n8k4 import head_parts, staged_shared_bytes
     import neurobrix
     prof = yaml.safe_load((Path(neurobrix.__file__).parent / "config/vendors/nvidia/volta.yml").read_text())
     budget = prof["memory"]["max_shared_memory_per_block"]
@@ -119,8 +119,8 @@ def test_the_committed_volta_rows_all_load_under_their_own_budget():
 def _no_gpu_reason():
     """Why the GPU cells cannot run here, or None. Only the ABSENCE of a device or of the profile's split rows skips:
     a broken kernel module, a refused profile or a failing allocator raises at collection, never reads as a skip."""
-    from neurobrix.kernels import wrappers as W
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator, _gpu_runtime
+    from nbxtensor.ops import wrappers as W
+    from nbxtensor.tensor import DeviceAllocator, _gpu_runtime
     try:
         _gpu_runtime()
     except (OSError, RuntimeError) as exc:           # no CUDA/HIP runtime library on this host
@@ -158,8 +158,8 @@ def _run(q, k, v, mask=None, unit=True, dtype=None):
     """(output, representation taken or None): the wrapper on the flash route, the unit withheld when `unit` is
     False (the FMA path an fp32 attention took before the split). `dtype`: the operands cast on the device to it
     (bfloat16: the values must already be bf16-representable), the output read back through float32."""
-    from neurobrix.kernels import wrappers as W
-    from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
+    from nbxtensor.ops import wrappers as W
+    from nbxtensor.tensor import NBXTensor, NBXDtype
     taken = []
     real_flash, real_route, real_unit = W._flash_m8n8k4, W._lk.sdpa_route, W._lk.unit_flash
     W._flash_m8n8k4 = lambda *a, **kw: (taken.append(kw.get("split")), real_flash(*a, **kw))[1]
@@ -225,7 +225,7 @@ _BF16_ULP = 2.0 ** -7      # bfloat16: 7 stored significand bits (8 with the imp
 
 
 def _bf16_round(x):
-    from neurobrix.kernels.nbx_tensor import bf16_carrier_to_float32, float32_to_bf16_bits
+    from nbxtensor.tensor import bf16_carrier_to_float32, float32_to_bf16_bits
     bits = float32_to_bf16_bits(np.ascontiguousarray(x, dtype=np.float32))
     return bf16_carrier_to_float32(np.asarray(bits, dtype=np.uint16).view("V2")).astype(np.float64)
 
@@ -251,7 +251,7 @@ def test_a_bfloat16_attention_through_the_split_is_fp32_level_inside(L, D):
     so about half its elements differ from the correctly rounded oracle (measured 2026-10-12: 51.6 %, max 478 ulp of a
     cancelling element's binade). It is held to THAT inside: one ulp plus 2^-8 of the uncancelled sum, no fraction
     clause. The split path is the one that is fp32-level inside."""
-    from neurobrix.kernels.nbx_tensor import NBXDtype
+    from nbxtensor.tensor import NBXDtype
     rng = np.random.default_rng(L + D)
     q32, k32, v32 = (rng.standard_normal((1, 2, L, D)).astype(np.float32) for _ in range(3))
     q, k, v = (_bf16_round(x).astype(np.float32) for x in (q32, k32, v32))     # the bf16 values, exactly

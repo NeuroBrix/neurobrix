@@ -8,7 +8,7 @@ import types
 import yaml
 
 from neurobrix.core.config import loader
-from neurobrix.kernels import wrappers as w
+from nbxtensor.ops import wrappers as w
 
 
 def _volta_profile():

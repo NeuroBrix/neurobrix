@@ -24,8 +24,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from neurobrix.triton import memory_pool
-from neurobrix.triton.device_transfer import parse_device_idx, parse_device_idxs
+from nbxtensor.memory import memory_pool
+from nbxtensor.memory.device_transfer import parse_device_idx, parse_device_idxs
 from neurobrix.triton.dtype import resolve_compute_dtype
 
 

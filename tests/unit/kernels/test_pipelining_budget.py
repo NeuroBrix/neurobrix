@@ -20,8 +20,8 @@ import importlib
 
 import pytest
 
-wrappers = importlib.import_module("neurobrix.kernels.wrappers")
-_configs = importlib.import_module("neurobrix.kernels.ops._configs")
+wrappers = importlib.import_module("nbxtensor.ops.wrappers")
+_configs = importlib.import_module("nbxtensor.ops._configs")
 from neurobrix.core.config.loader import get_vendor_config  # noqa: E402
 
 
@@ -43,7 +43,7 @@ class _Profile:
 
 @pytest.fixture
 def restore_profile():
-    from neurobrix.kernels import nbx_tensor as T
+    from nbxtensor import tensor as T
     saved = wrappers.get_hardware_profile(), T._BACKEND_HAS_FP64
     yield
     setattr(wrappers, "_NBX_HW_PROFILE", saved[0])

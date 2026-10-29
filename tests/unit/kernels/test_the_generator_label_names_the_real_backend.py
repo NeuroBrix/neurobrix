@@ -25,14 +25,12 @@ import pytest
 
 pytest.importorskip("triton")
 
-from neurobrix.kernels.autotune_certified import (  # noqa: E402
-    proof_backend, running_generator,
-)
+from nbxtensor.ops.autotune_certified import proof_backend, running_generator  # noqa: E402
 
 
 def _target_or_skip():
     try:
-        from neurobrix.kernels.launcher import target
+        from nbxtensor.backend.launcher import target
         t = target()
     except Exception:
         pytest.skip("no Triton target the launcher can resolve")
@@ -64,7 +62,7 @@ def test_the_running_label_round_trips_through_proof_backend():
     hash), so the round-trip is built from the door, not a hand-made {triton,
     name} that would omit the hash and disagree with the reader."""
     name = _target_or_skip()
-    from neurobrix.kernels.autotune_certified import generator_identity
+    from nbxtensor.ops.autotune_certified import generator_identity
     import importlib.metadata as md
     try:
         ver = md.version("triton")

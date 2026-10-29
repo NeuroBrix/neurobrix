@@ -37,8 +37,8 @@ def test_the_loop_bound_is_cast_to_int32():
 def test_repeat_interleave_matches_torch():
     import numpy as np
     torch = pytest.importorskip("torch")
-    from neurobrix.kernels import wrappers as W
-    from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
+    from nbxtensor.ops import wrappers as W
+    from nbxtensor.tensor import NBXTensor, NBXDtype
 
     repeats = np.array([3, 1, 4, 1, 5, 2], dtype=np.int64)
     # the tensor wrapper returns the INDEX map (0,0,0,1,2,2,2,2,...)

@@ -387,7 +387,7 @@ def test_an_nbx_dtype_is_named_by_its_member_not_its_string(monkeypatch):
     and the pass refused Sana-4K's text encoder at plan time ("unknown dtype name '1'", 2026-09-28 12:16).
     The name is read from the member. RED on 43b307ad: this test forces the 3.11 str() on 3.10."""
     from neurobrix.core.prism import runtime_widths as RW
-    from neurobrix.kernels.nbx_tensor import NBXDtype
+    from nbxtensor.tensor import NBXDtype
     monkeypatch.setattr(NBXDtype, "__str__", lambda self: str(int(self)))
     assert str(NBXDtype.bfloat16) == "1"
     assert RW._nbx_name(NBXDtype.bfloat16) == "bfloat16"
@@ -468,8 +468,8 @@ def test_the_mirrors_answer_what_the_engines_execute():
     narrow set. The mirrored SETS are compared above; this compares the RULE."""
     torch = pytest.importorskip("torch")
     from neurobrix.core.dtype.engine import DtypeEngine
-    from neurobrix.kernels import wrappers as _wr
-    from neurobrix.kernels.nbx_tensor import NBXDtype
+    from nbxtensor.ops import wrappers as _wr
+    from nbxtensor.tensor import NBXDtype
     from neurobrix.triton.dtype import TritonDtypeEngine
 
     class Fake:
@@ -549,7 +549,7 @@ def volta_alignment(monkeypatch):
     in force (`active_vendor_profile` answers {}, as on a host with CUDA_VISIBLE_DEVICES=''): the
     width pass prices the profile it is handed, never the planning process's card."""
     from neurobrix.core.config.loader import get_vendor_config
-    from neurobrix.kernels.ops import _configs
+    from nbxtensor.ops import _configs
     from neurobrix.triton.dtype import attention_operand_alignment
     monkeypatch.setattr(_configs, "active_vendor_profile", lambda: {})
     return attention_operand_alignment(get_vendor_config("nvidia", "volta"))
@@ -612,7 +612,7 @@ def test_an_attention_is_priced_with_the_profile_the_plan_is_for(monkeypatch):
     `DtypeEngine.align_attention_operands`). Injections, each seen RED: the SDPA rule reading
     `active_vendor_profile()` again (raises below); the ATen rule back to q's own dtype
     ('float16' under widest on compiled)."""
-    from neurobrix.kernels.ops import _configs
+    from nbxtensor.ops import _configs
 
     def no_process_profile():
         raise AssertionError("Prism read the process's profile, not the one it plans for")
@@ -653,8 +653,8 @@ def test_a_profile_with_no_device_prices_agreeing_operands_and_refuses_disagreei
     refuses with no hardware — never aligned by a guess."""
     import pytest as _pt
     from neurobrix.core.prism import load_profile
-    from neurobrix.kernels.launch_keys import sdpa_operand_dtypes
-    from neurobrix.kernels.nbx_tensor import NBXDtype as D
+    from nbxtensor.ops.launch_keys import sdpa_operand_dtypes
+    from nbxtensor.tensor import NBXDtype as D
     word = load_profile("cpu-only-x86").attention_operands
     assert sdpa_operand_dtypes(D.float16, D.float16, D.float16, alignment=word)[0] == D.float16
     with _pt.raises(ValueError, match="has no device"):

@@ -45,10 +45,9 @@ import contextlib
 import numpy as np
 import torch
 
-from neurobrix.kernels import wrappers as w
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, nbx_to_torch
-
-
+from nbxtensor.ops import wrappers as w
+from nbxtensor.tensor import NBXTensor, NBXDtype
+from neurobrix.kernels.torch_interop import nbx_to_torch
 class _MockProfile:
     def __init__(self, has_native_bf16: bool):
         from neurobrix.core.prism.autodetect import load_default_profile
@@ -61,7 +60,7 @@ def _hw(has_native_bf16: bool):
     """Set the wrapper hardware flag for a test, restore after."""
     saved_flag = w._NBX_HAS_NATIVE_BF16
     saved_prof = w._NBX_HW_PROFILE
-    from neurobrix.kernels import nbx_tensor as _T
+    from nbxtensor import tensor as _T
     saved_fp64 = _T._BACKEND_HAS_FP64
     try:
         w.set_hardware_profile(_MockProfile(has_native_bf16))

@@ -17,7 +17,7 @@ import ctypes
 import numpy as np
 import pytest
 
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
+from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator
 from neurobrix.triton.paged_kv_cache import PagedTritonKVCache
 
 BOUND = 2e-03

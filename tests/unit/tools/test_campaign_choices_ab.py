@@ -12,7 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
 import precision_zoo_campaign as C  # noqa: E402
 
-K = "neurobrix.kernels.ops.matmul.matmul_kernel::"
+K = "nbxtensor.ops.matmul.matmul_kernel::"
 CFG_A = {"kwargs": {"BLOCK_M": 64, "BLOCK_N": 64, "BLOCK_K": 32}, "num_warps": 4, "num_stages": 3}
 CFG_B = {"kwargs": {"BLOCK_M": 32, "BLOCK_N": 64, "BLOCK_K": 64}, "num_warps": 4, "num_stages": 3}
 CFG_X = {"kwargs": {"BLOCK_M": 128, "BLOCK_N": 128, "BLOCK_K": 64}, "num_warps": 8, "num_stages": 2}

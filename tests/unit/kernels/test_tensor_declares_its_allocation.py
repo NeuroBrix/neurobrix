@@ -12,7 +12,7 @@ TinyLlama: 66 rotary tensors, each declaring 524288 bytes over a
 import numpy as np
 import pytest
 
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, dtype_size
+from nbxtensor.tensor import NBXTensor, NBXDtype, dtype_size
 
 
 def test_a_declared_dtype_sizes_the_tensor_by_its_container():

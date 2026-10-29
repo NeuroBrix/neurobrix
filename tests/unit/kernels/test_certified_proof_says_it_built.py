@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from neurobrix.kernels import autotune_certified as C
+from nbxtensor.ops import autotune_certified as C
 
 _APPLE = (Path(__file__).resolve().parents[3] / "src" / "neurobrix" / "config"
           / "autotune" / "apple" / "apple_m4_pro")
@@ -40,7 +40,7 @@ def _doc(fmt, with_built=True):
         proof["built"] = {"gpu": True, "how": "test", "fallback": None}
     return {
         "format": fmt, "vendor": "apple", "profile": "apple_m4_pro",
-        "kernel": "neurobrix.kernels.ops.matmul.matmul_kernel", "dtype": "fp32",
+        "kernel": "nbxtensor.ops.matmul.matmul_kernel", "dtype": "fp32",
         "entries": {"(4, 4, 4, False, False, 'fp32', 'fp32', 'fp32')":
                     {"config": {"kwargs": {"BLOCK_M": 32}, "num_warps": 4,
                                 "num_stages": 2},

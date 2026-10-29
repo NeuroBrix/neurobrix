@@ -261,7 +261,7 @@ def _probe(tree, rack, jobs):
 
 # a point reads the vendor profile the way a launch key does (matrix_unit() -> active_vendor_profile())
 READS_PROFILE = ("def f(x):\n"
-                 "    from neurobrix.kernels.ops._configs import matrix_unit, active_vendor_profile\n"
+                 "    import neurobrix; from nbxtensor.ops._configs import matrix_unit, active_vendor_profile\n"
                  "    return (x, active_vendor_profile().get('_profile'), bool(matrix_unit()))\n")
 
 
@@ -270,7 +270,7 @@ def test_a_probe_point_reads_the_racks_vendor_profile_and_not_an_empty_one(cfg):
     point re-probed it (37.6 ms each, measured) and was answered under `{}` — the matrix unit unread."""
     tree = _rack_tree()
     rack = dict(cfg["rack"], package=cfg["package"])
-    job = {"id": "p", "kind": "points", "module": "neurobrix.kernels.launch_keys", "source": READS_PROFILE,
+    job = {"id": "p", "kind": "points", "module": "nbxtensor.ops.launch_keys", "source": READS_PROFILE,
            "entry": "f", "points": [{"x": {"lit": i}} for i in range(2000)]}
     t0 = time.perf_counter()
     out = _probe(tree, rack, [job])
@@ -285,6 +285,6 @@ def test_a_probe_point_reads_the_racks_vendor_profile_and_not_an_empty_one(cfg):
 def test_a_rack_whose_vendor_profile_resolves_empty_is_refused_by_name(cfg):
     tree = _rack_tree()
     rack = dict(cfg["rack"], package=cfg["package"], target_binder="operator:is_")   # a binder that binds nothing
-    out = _probe(tree, rack, [{"id": "p", "kind": "points", "module": "neurobrix.kernels.launch_keys",
+    out = _probe(tree, rack, [{"id": "p", "kind": "points", "module": "nbxtensor.ops.launch_keys",
                                "source": READS_PROFILE, "entry": "f", "points": [{"x": {"lit": 0}}]}])
     assert set(out) == {"error"} and "vendor profile resolved EMPTY" in out["error"], out

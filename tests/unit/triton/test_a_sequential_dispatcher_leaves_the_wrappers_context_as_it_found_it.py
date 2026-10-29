@@ -15,8 +15,8 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.kernels import wrappers as W
-from neurobrix.kernels.nbx_tensor import NBXDtype
+from nbxtensor.ops import wrappers as W
+from nbxtensor.tensor import NBXDtype
 
 pytest.importorskip("triton")
 

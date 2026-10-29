@@ -36,8 +36,8 @@ import pytest
 triton = pytest.importorskip("triton")
 import triton.language as tl  # noqa: E402
 
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator  # noqa: E402
-from neurobrix.kernels.launcher import launch  # noqa: E402
+from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator  # noqa: E402
+from nbxtensor.backend.launcher import launch  # noqa: E402
 
 
 @triton.jit
@@ -51,7 +51,7 @@ def _stamp(out_ptr, value, N, BLOCK: tl.constexpr):
 
 def _backend_or_skip():
     try:
-        from neurobrix.kernels.nbx_tensor import _detect_gpu_backend
+        from nbxtensor.tensor import _detect_gpu_backend
         if _detect_gpu_backend() != "metal":
             pytest.skip("the two-queue hazard is Metal's; there is one queue elsewhere")
     except Exception:
@@ -146,7 +146,7 @@ def test_the_drain_is_what_makes_the_third_pass(monkeypatch):
     decode and should not be kept on an assumption.
     """
     _backend_or_skip()
-    from neurobrix.triton import triton_ext_driver as drv
+    from nbxtensor.backend import triton_ext_driver as drv
     monkeypatch.setattr(drv, "_nbx_queue_drain", lambda: None)
     corrupted = 0
     for rep in range(REPS):

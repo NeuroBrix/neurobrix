@@ -20,8 +20,8 @@ import tracemalloc
 import numpy as np
 import pytest
 
-from neurobrix.kernels import screen_oracle as SO
-from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator
+from nbxtensor.ops import screen_oracle as SO
+from nbxtensor.tensor import NBXTensor, DeviceAllocator
 
 
 @pytest.fixture

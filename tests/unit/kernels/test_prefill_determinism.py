@@ -44,8 +44,8 @@ except ModuleNotFoundError:  # script-mode under the pytest-less GPU venv
 
 import numpy as np
 
-from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator
-from neurobrix.kernels import wrappers as W
+from nbxtensor.tensor import NBXTensor, DeviceAllocator
+from nbxtensor.ops import wrappers as W
 
 BOUND = 2e-03  # same derived bound as the decode oracles
 
@@ -226,7 +226,7 @@ class _FakeProfile:
 
 
 def test_budget_composes_with_executing_device_memory() -> None:
-    import neurobrix.kernels.wrappers as W
+    import nbxtensor.ops.wrappers as W
     # The values the auto profile ACTUALLY records (config/hardware/
     # default.yml, from nvidia-smi memory.total — verified 2026-09-01):
     # 16384 / 32768. Expectations below are computed from these same
@@ -258,7 +258,7 @@ def test_nbxtensor_device_index_field_reaches_the_cap() -> None:
     """The call site consumes NBXTensor._device_idx — NOT ._device
     (bare type string 'cuda') and NOT .device (returns SELF, engraved
     trap). Guard the field contract the routing depends on."""
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.tensor import NBXTensor
     # Instance-level field contract: every construction path must stamp
     # a real integer index (bare "cuda" defaults to device 0).
     t = NBXTensor.__new__(NBXTensor)
@@ -266,7 +266,7 @@ def test_nbxtensor_device_index_field_reaches_the_cap() -> None:
         "_device_idx slot is the routing contract"
     del t
     import inspect
-    import neurobrix.kernels.wrappers as W
+    import nbxtensor.ops.wrappers as W
     src = inspect.getsource(W.scaled_dot_product_attention_wrapper)
     assert "_device_idx" in src, "route decision must read q._device_idx"
     assert 'getattr(q, "_device",' not in src.replace(
@@ -274,7 +274,7 @@ def test_nbxtensor_device_index_field_reaches_the_cap() -> None:
 
 
 def test_budget_unchanged_without_fraction_key() -> None:
-    import neurobrix.kernels.wrappers as W
+    import nbxtensor.ops.wrappers as W
     devs = [_FakeDev(0, 16384)]
     orig_prof, orig_base = W.get_hardware_profile, W._sdpa_math_scores_budget_bytes
     orig_frac = W._sdpa_math_scores_device_fraction
@@ -311,7 +311,7 @@ def _gpu_classes():
     allocation, so the answer cannot disagree with it.
     """
     try:
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        from nbxtensor.tensor import DeviceAllocator
         devs = DeviceAllocator.visible_device_memory()
     except Exception:
         return None, None
@@ -328,7 +328,7 @@ def _stash_real_profile():
     and stash it; return a zero-arg restore callable that puts BOTH
     stash-touched globals (profile + native-bf16 flag) back, so later
     tests in the same process see the bare-process state again."""
-    import neurobrix.kernels.wrappers as W
+    import nbxtensor.ops.wrappers as W
     prev_prof = W.get_hardware_profile()
     prev_flag = W.has_native_bf16()
     if prev_prof is None:
@@ -367,7 +367,7 @@ def _rig_cards_or_skip():
     """
     import pytest
 
-    from neurobrix.kernels.nbx_tensor import _detect_gpu_backend
+    from nbxtensor.tensor import _detect_gpu_backend
 
     try:
         backend = _detect_gpu_backend()
@@ -383,14 +383,14 @@ def _route_spy(q_shape, kv_shape, device_idx):
     """Run the wrapper with spies on both math entries; return which
     route fired ('chunked' | 'math' | 'flash')."""
     import numpy as np
-    import neurobrix.kernels.wrappers as W
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    import nbxtensor.ops.wrappers as W
+    from nbxtensor.tensor import NBXTensor
 
     def mk(shape):
         t = NBXTensor.empty(shape, dtype="float16",
                             device=f"cuda:{device_idx}")
         z = np.zeros(shape, dtype=np.float16)
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        from nbxtensor.tensor import DeviceAllocator
         DeviceAllocator.memcpy(t.data_ptr(),
                                z.ctypes.data, z.nbytes, kind=1)  # H2D
         return t
@@ -474,8 +474,8 @@ def test_32g_pow2_window_keeps_prefix_route_on_device(without_matrix_unit) -> No
 
 def test_chunk_retry_halves_on_malloc_refusal_and_matches() -> None:
     import numpy as np
-    import neurobrix.kernels.wrappers as W
-    from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator
+    import nbxtensor.ops.wrappers as W
+    from nbxtensor.tensor import NBXTensor, DeviceAllocator
     try:
         DeviceAllocator.set_device(0)
     except Exception:
@@ -493,7 +493,7 @@ def test_chunk_retry_halves_on_malloc_refusal_and_matches() -> None:
     W._sdpa_math_min_chunk_rows = lambda: 128   # the arch row block (yml), pinned
     state = {"calls": 0, "refused": False}
 
-    from neurobrix.kernels.nbx_tensor import DeviceOOMError
+    from nbxtensor.tensor import DeviceOOMError
 
     def flaky(*a, **kw):
         state["calls"] += 1
@@ -515,8 +515,8 @@ def test_chunk_retry_halves_on_malloc_refusal_and_matches() -> None:
 
 def test_chunk_retry_propagates_non_malloc_errors() -> None:
     import numpy as np
-    import neurobrix.kernels.wrappers as W
-    from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator
+    import nbxtensor.ops.wrappers as W
+    from nbxtensor.tensor import NBXTensor, DeviceAllocator
     try:
         DeviceAllocator.set_device(0)
     except Exception:

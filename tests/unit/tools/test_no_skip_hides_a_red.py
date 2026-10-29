@@ -120,7 +120,8 @@ import pytest
 
 def test_something():
     try:
-        from neurobrix.kernels.wrappers import flash_attention_wrapper
+        import neurobrix  # the application: nbxtensor's host services
+        from nbxtensor.ops.wrappers import flash_attention_wrapper
     except Exception:
         pytest.skip("no machine")
     assert flash_attention_wrapper is not None

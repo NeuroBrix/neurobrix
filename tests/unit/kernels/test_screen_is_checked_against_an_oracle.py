@@ -54,7 +54,7 @@ def _no_hardware_profile() -> bool:
     empty and four cells failed on that refusal instead of saying their premise
     was absent (2026-09-16, the suite under the device door)."""
     try:
-        from neurobrix.kernels.ops._configs import active_vendor_profile
+        from nbxtensor.ops._configs import active_vendor_profile
         return not active_vendor_profile()
     except Exception:
         return True
@@ -81,7 +81,7 @@ FAR = _f32([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 99.0])
 def test_a_wrong_majority_does_not_carry_the_vote():
     """The foreign-space shape: three configs wrong the same way, two right.
     Consensus alone seats the three. The oracle must overrule it."""
-    from neurobrix.kernels.launcher import configs_agreeing_with_oracle
+    from nbxtensor.backend.launcher import configs_agreeing_with_oracle
 
     space = [("m0", HALF_WRITTEN), ("m1", HALF_WRITTEN), ("m2", HALF_WRITTEN),
              ("ok0", CORRECT), ("ok1", CORRECT)]
@@ -94,7 +94,7 @@ def test_a_wrong_majority_does_not_carry_the_vote():
 def test_a_unanimous_wrong_space_is_refused_entirely():
     """The silent case: every candidate agrees, and all are wrong. Consensus
     returns the whole space and says nothing."""
-    from neurobrix.kernels.launcher import configs_agreeing_with_oracle
+    from nbxtensor.backend.launcher import configs_agreeing_with_oracle
 
     space = [("a", HALF_WRITTEN), ("b", HALF_WRITTEN), ("c", HALF_WRITTEN)]
     kept = configs_agreeing_with_oracle(space, ORACLE, "float32")
@@ -106,7 +106,7 @@ def test_a_unanimous_wrong_space_is_refused_entirely():
 def test_the_correct_space_is_untouched():
     """The control. A screen that refuses everything is not a screen — this
     must not become a rule that empties a healthy space."""
-    from neurobrix.kernels.launcher import configs_agreeing_with_oracle
+    from nbxtensor.backend.launcher import configs_agreeing_with_oracle
 
     space = [("a", CORRECT), ("b", CORRECT), ("c", CORRECT)]
     assert len(configs_agreeing_with_oracle(space, ORACLE, "float32")) == 3
@@ -115,7 +115,7 @@ def test_the_correct_space_is_untouched():
 def test_a_merely_distant_value_is_judged_by_the_profile_tolerance():
     """Not every difference is a defect: the tolerance is the profile's, and it
     is the same one the screen already uses between candidates."""
-    from neurobrix.kernels.launcher import configs_agreeing_with_oracle
+    from nbxtensor.backend.launcher import configs_agreeing_with_oracle
 
     kept = configs_agreeing_with_oracle([("far", FAR), ("ok", CORRECT)],
                                         ORACLE, "float32")
@@ -126,7 +126,7 @@ def test_no_oracle_seats_nothing_new_and_says_so():
     """The honest degradation: with no oracle the function refuses to pretend.
     It returns None so the caller keeps the consensus it had — and knows that is
     what it has."""
-    from neurobrix.kernels.launcher import configs_agreeing_with_oracle
+    from nbxtensor.backend.launcher import configs_agreeing_with_oracle
 
     assert configs_agreeing_with_oracle([("a", CORRECT)], None, "float32") is None
 
@@ -135,7 +135,7 @@ def test_the_cell_is_not_vacuous():
     """Non-vacuity, stated as its own test rather than assumed: given a
     deliberately wrong kernel, the predicate must SAY it is wrong. If this ever
     passes trivially, every test above is decoration."""
-    from neurobrix.kernels.launcher import configs_agreeing_with_oracle
+    from nbxtensor.backend.launcher import configs_agreeing_with_oracle
 
     kept = configs_agreeing_with_oracle([("deliberately_wrong", HALF_WRITTEN)],
                                         ORACLE, "float32")

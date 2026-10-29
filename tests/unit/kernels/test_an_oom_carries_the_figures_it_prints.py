@@ -26,7 +26,7 @@ import re
 
 import pytest
 
-from neurobrix.kernels.nbx_tensor import DeviceAllocator, DeviceOOMError
+from nbxtensor.tensor import DeviceAllocator, DeviceOOMError
 
 
 def _cuda_total_bytes():
@@ -112,7 +112,7 @@ def test_an_unanswerable_driver_reads_as_none_and_never_as_zero():
     Measured in that state: `driver_total=0 driver_free=0 shortfall=70368744177664`
     — a controller reading it would believe the card had nothing free and say so.
     """
-    import neurobrix.kernels.nbx_tensor as M
+    import nbxtensor.tensor as M
 
     real_runtime = M._gpu_runtime
 

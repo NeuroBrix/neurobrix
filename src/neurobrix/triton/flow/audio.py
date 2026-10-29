@@ -15,8 +15,8 @@ import numpy as np
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
-from neurobrix.triton.memory_pool import release_flow_memory
+from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator
+from nbxtensor.memory.memory_pool import release_flow_memory
 
 
 #: The stage executions the audio flow runs. Every execution a container of this flow declares

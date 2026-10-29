@@ -16,7 +16,7 @@ from neurobrix.core.state.pages import PagePool, PageTable
 
 
 def _has_metal():
-    nbx_tensor = pytest.importorskip("neurobrix.kernels.nbx_tensor")
+    nbx_tensor = pytest.importorskip("nbxtensor.tensor")
     try:
         return nbx_tensor._detect_gpu_backend() == "metal"
     except Exception:

@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src"))
-from neurobrix.kernels.launcher import _is_ours  # noqa: E402
+from nbxtensor.backend.launcher import _is_ours  # noqa: E402
 
 
 class _Fn:
@@ -37,8 +37,8 @@ class _Jit:
 
 
 def test_a_kernel_written_in_this_engine_is_ours():
-    assert _is_ours(_Jit("neurobrix.kernels.ops.matmul"))
-    assert _is_ours(_Jit("neurobrix.kernels.ops.flash_attention"))
+    assert _is_ours(_Jit("nbxtensor.ops.matmul"))
+    assert _is_ours(_Jit("nbxtensor.ops.flash_attention"))
     assert _is_ours(_Jit("neurobrix"))
 
 
@@ -68,7 +68,7 @@ def test_an_unreadable_module_is_treated_as_foreign():
 
 def test_the_seam_delegates_a_foreign_kernel_to_tritons_own_path(monkeypatch):
     """The wiring: `_is_ours` can be perfect and never consulted (register 17)."""
-    import neurobrix.kernels.launcher as L
+    import nbxtensor.backend.launcher as L
 
     calls = {"ours": 0, "upstream": 0}
 
@@ -97,7 +97,7 @@ def test_the_seam_delegates_a_foreign_kernel_to_tritons_own_path(monkeypatch):
     foreign = FakeJIT()
     foreign.fn = _Fn("torch._native.ops.bmm_outer_product.triton_kernels")
     mine = FakeJIT()
-    mine.fn = _Fn("neurobrix.kernels.ops.matmul")
+    mine.fn = _Fn("nbxtensor.ops.matmul")
 
     FakeJIT.__getitem__(foreign, (1,))
     assert calls["upstream"] >= 1, "a foreign kernel must go back to Triton's own path"

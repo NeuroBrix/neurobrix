@@ -12,7 +12,7 @@ What each test would do if the code were wrong: the MoE op placed on 0 or the se
 the second bind run, or a bind skipped after a clear / a replaced weight (red); `repr` built on a repeated call (red)."""
 from types import SimpleNamespace
 
-from neurobrix.kernels import autotune_bucket as AB
+from nbxtensor.ops import autotune_bucket as AB
 from nbxtensor.memory.arena import Arena
 from neurobrix.triton.sequence import TritonSequence
 

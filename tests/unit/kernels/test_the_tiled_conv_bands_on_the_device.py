@@ -13,9 +13,9 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("needs a CUDA device", allow_module_level=True)
 
-from neurobrix.kernels.nbx_tensor import NBXTensor, nbx_to_torch  # noqa: E402
-from neurobrix.kernels.ops.fused_upsample_conv import (  # noqa: E402
-    FusionUpsampleProxy, _fused_upsample_conv2d_nbx, _tiled_conv2d_spatial_nbx)
+from nbxtensor.tensor import NBXTensor  # noqa: E402
+from neurobrix.kernels.torch_interop import nbx_to_torch  # noqa: E402
+from nbxtensor.ops.fused_upsample_conv import FusionUpsampleProxy, _fused_upsample_conv2d_nbx, _tiled_conv2d_spatial_nbx  # noqa: E402
 
 
 def _nbx(a):
@@ -56,7 +56,7 @@ def test_a_biased_tiled_conv_holds_one_band_beside_its_output():
     2048 px on a 16 GB V100 (2026-10-22): the out-of-place bias add and the previous band's buffers stood beside the
     next band, and conv::2's second 1 153 MB band found no room. Injection (seen red, 2026-10-22): the out-of-place
     `add` back -> the peak assertion fails; the bias left out -> the value assertion fails."""
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator as DA
+    from nbxtensor.tensor import DeviceAllocator as DA
     rng = np.random.default_rng(5)
     x = rng.standard_normal((1, 8, 256, 64)).astype(np.float32)
     w = (rng.standard_normal((16, 8, 3, 3)) * 0.2).astype(np.float32)

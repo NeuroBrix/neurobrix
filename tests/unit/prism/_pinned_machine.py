@@ -100,7 +100,7 @@ def pin_dedicated_card(monkeypatch, driver_total_mb: int, own_context_mb: int, w
     BOTH readings `_prepare_devices` takes of a discrete card are pinned — the sharing facts and
     the driver's free figure — so a machine whose own driver answers differently (a Mac has no
     CUDA card at index 0; a rack card may be busy) plans the same card."""
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator
+    from nbxtensor.tensor import DeviceAllocator
     free = driver_total_mb - own_context_mb
     monkeypatch.setattr(solver_mod, "read_device_sharing", lambda _index: DeviceReading(
         kind="device", capacity_mb=driver_total_mb, free_mb=free,
@@ -130,7 +130,7 @@ def pin_shared_card(monkeypatch, driver_total_mb: int, held_by_others_mb: int, o
                     why: str) -> None:
     """Every discrete card reads as SHARED: another process holds `held_by_others_mb` of it, so the
     law rounds the free reading down onto the ladder and the rung sits below the capacity."""
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator
+    from nbxtensor.tensor import DeviceAllocator
     free = driver_total_mb - own_context_mb - held_by_others_mb
     monkeypatch.setattr(solver_mod, "read_device_sharing", lambda _index: DeviceReading(
         kind="device", capacity_mb=driver_total_mb, free_mb=free, held_by_others_mb=held_by_others_mb,

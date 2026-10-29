@@ -22,7 +22,7 @@ import sys
 
 SCRIPT = r'''
 from neurobrix.kernels import census; census.install()
-from neurobrix.kernels.nbx_tensor import NBXTensor
+from nbxtensor.tensor import NBXTensor
 from neurobrix.core.runtime.graph.moe_fusion import expert_weight_lists
 E, F, H = 3, 4, 5
 elem = 2

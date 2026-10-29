@@ -34,7 +34,7 @@ from child_env import child_env  # noqa: E402
 
 
 def _gpu():
-    nbx = pytest.importorskip("neurobrix.kernels.nbx_tensor")
+    nbx = pytest.importorskip("nbxtensor.tensor")
     try:
         nbx.DeviceAllocator.set_device(0)
         return True
@@ -52,7 +52,7 @@ _CHILD = textwrap.dedent('''
     sys.meta_path.insert(0, _Blocker())
 
     import numpy as np
-    from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
+    from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator
     from neurobrix.triton.sequence import TritonSequence
     DeviceAllocator.set_device(0)
 

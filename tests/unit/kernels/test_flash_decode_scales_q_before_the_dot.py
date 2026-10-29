@@ -106,8 +106,8 @@ def test_decode_attention_matches_aten():
     oracle.
     """
     torch = pytest.importorskip("torch")
-    from neurobrix.kernels import wrappers as W
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.ops import wrappers as W
+    from nbxtensor.tensor import NBXTensor
 
     B, H, T_k, D = 1, 4, 128, 64
     rng = np.random.default_rng(20260912)

@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.kernels import autotune_certified as C
+from nbxtensor.ops import autotune_certified as C
 
 from ._rig import running_backend
 

@@ -38,8 +38,8 @@ except ModuleNotFoundError:  # script-mode under the pytest-less GPU venv
 
 import numpy as np
 
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
-from neurobrix.kernels import wrappers as W
+from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator
+from nbxtensor.ops import wrappers as W
 
 # fp16 weights, fp32 activation, fp32 accumulation over K<=4096 terms:
 # a correct kernel sits at ~1e-4 relative; 2e-3 is the family bound.
@@ -141,7 +141,7 @@ def test_every_mv_launches_gemv_vec() -> None:
     restored it were removed (workstream 1: the tile is the certified configuration of the key)."""
     if not _has_gpu():
         pytest.skip("no GPU")
-    from neurobrix.kernels.ops import gemv_vec as G
+    from nbxtensor.ops import gemv_vec as G
     calls = {"n": 0}
     orig = G.gemv_vec_kernel
 

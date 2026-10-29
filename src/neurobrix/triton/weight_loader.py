@@ -24,12 +24,9 @@ from typing import Dict, Optional, Set
 
 import numpy as np
 
-from neurobrix.kernels.nbx_tensor import (
-    NBXTensor, NBXDtype, DeviceAllocator, _contiguous_strides, dtype_size,
-    _set_device,
-)
+from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator, _contiguous_strides, dtype_size, _set_device
 from nbxtensor.dtype.convert import bf16_bits_to_f16, f32_to_bf16_bits
-from .memory_pool import ComponentArena, HostPinnedArena
+from nbxtensor.memory.memory_pool import ComponentArena, HostPinnedArena
 # The loader's worker count — one figure for every loader and for Prism's host estimate (torch-free).
 from neurobrix.core.workspace import io_workers, apply_host_mmap_threshold, apply_host_huge_pages
 # The absent-weight rule lives beside the container format it guards (torch-free), one rule for
@@ -428,7 +425,7 @@ def _target_nbytes(info: dict, compute_dtype: NBXDtype,
     dtype is fp16 (either native fp16 or bf16 remapped to fp16 via the
     standard bf16→fp16 path) are treated as fp32 for sizing purposes.
     """
-    from neurobrix.kernels.nbx_tensor import dtype_size as _dsize
+    from nbxtensor.tensor import dtype_size as _dsize
     shape = info["shape"]
     sf_dtype = info["dtype"]
     dtype_info = _SF_DTYPE_INFO.get(sf_dtype)
@@ -478,7 +475,7 @@ def _bf16_to_fp16_inplace(ptr: int, numel: int, device_idx: int):
                     owns_data=False, device_idx=device_idx)
 
     _set_device(src)
-    from neurobrix.kernels.ops.elementwise_launch import ew_meta, ew_grid
+    from nbxtensor.ops.elementwise_launch import ew_meta, ew_grid
     m = ew_meta(numel)          # the certified tile of the count's class, as every element-wise launch
     bf16_to_fp16_kernel[ew_grid(numel, m)](src, dst, numel, BLOCK=m['BLOCK_SIZE'], num_warps=m['num_warps'])
 
@@ -560,7 +557,7 @@ def _load_to_pinned_cpu(
 
     # Pinned host memory: a slice of the component's one block when the load sized it, else its own block.
     if host_arena is not None:
-        from neurobrix.kernels.nbx_tensor import dtype_size as _dsize
+        from nbxtensor.tensor import dtype_size as _dsize
         ptr = host_arena.alloc((math.prod(shape) if shape else 1) * _dsize(target_dtype))
         dst = NBXTensor(ptr, tuple(shape), _contiguous_strides(tuple(shape)), target_dtype, 'cpu',
                         owns_data=False, device_idx=0, base=host_arena, pinned=True)

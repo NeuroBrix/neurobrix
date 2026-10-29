@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.kernels.nbx_tensor import NBXDtype
+from nbxtensor.tensor import NBXDtype
 from neurobrix.triton import dtype as T
 
 
@@ -78,7 +78,7 @@ def _same(*args, **kwargs):
 
 @pytest.fixture
 def flag():
-    from neurobrix.kernels import wrappers as _w
+    from nbxtensor.ops import wrappers as _w
     prev = _w.get_activations_fp16_safe()
     _w.set_activations_fp16_safe(True)
     yield

@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.kernels.ops import _configs
+from nbxtensor.ops import _configs
 
 
 class _FakeAutotuner:

@@ -142,7 +142,8 @@ def run_kernel(runtime, library, name, block_size, x, w):
     six int scalars, then the float eps.
     """
     import Metal
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator
+    import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
+    from nbxtensor.tensor import DeviceAllocator
 
     batch_dim, feat_dim = x.shape
     function = library.newFunctionWithName_(name)
@@ -208,9 +209,9 @@ def main() -> int:
     from triton_msl.backend.device_detect import get_device_info
     from triton_msl.backend.driver import _detect_metal_arch
 
-    from neurobrix.kernels import metal_device
-    from neurobrix.kernels.ops.rmsnorm import rms_norm_forward_kernel
-    from neurobrix.kernels.wrappers import _batch_block
+    from nbxtensor.backend import metal_device
+    from nbxtensor.ops.rmsnorm import rms_norm_forward_kernel
+    from nbxtensor.ops.wrappers import _batch_block
 
     runtime = metal_device.runtime()
     info = get_device_info()

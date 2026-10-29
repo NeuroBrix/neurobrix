@@ -47,7 +47,7 @@ def _run(body: str, census: bool) -> subprocess.CompletedProcess:
 
 def _metal_or_skip():
     try:
-        from neurobrix.kernels.nbx_tensor import _detect_gpu_backend
+        from nbxtensor.tensor import _detect_gpu_backend
         if _detect_gpu_backend() != "metal":
             pytest.skip("the pin is the triton-ext (Metal) driver's")
     except Exception:
@@ -58,8 +58,9 @@ def test_a_recorded_shadow_is_pinned_as_nothing():
     """The 3-line repro: a shadow tensor's view goes through the pin without a wrap."""
     _metal_or_skip()
     p = _run("""
-        from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
-        from neurobrix.triton import triton_ext_driver as drv
+        import neurobrix
+        from nbxtensor.tensor import NBXTensor, NBXDtype
+        from nbxtensor.backend import triton_ext_driver as drv
         t = NBXTensor.empty((4, 64, 32), dtype=NBXDtype.bfloat16)
         v = t.select(0, 1)
         with drv.pinned_addresses(v):
@@ -75,7 +76,8 @@ def test_an_unrecorded_address_still_fails_in_a_shadow():
     """In a census, an address the census did not hand out is not a shadow: loud."""
     _metal_or_skip()
     p = _run("""
-        from neurobrix.triton import triton_ext_driver as drv
+        import neurobrix
+        from nbxtensor.backend import triton_ext_driver as drv
         class Fake:
             def data_ptr(self):
                 return 0x7ff0_0000_1000
@@ -93,7 +95,8 @@ def test_an_unrecorded_address_still_fails_in_a_real_run():
     """No census at all: an address the allocator never recorded is refused, as before."""
     _metal_or_skip()
     p = _run("""
-        from neurobrix.triton import triton_ext_driver as drv
+        import neurobrix
+        from nbxtensor.backend import triton_ext_driver as drv
         class Fake:
             def data_ptr(self):
                 return 0x1_0000_0000_2000   # inside the census's shadow range, but no census

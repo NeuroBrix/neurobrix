@@ -5,8 +5,8 @@ Why: the wrappers widened integer operands to float64 unconditionally; on Metal 
 computed (`backend_has_fp64`, 2026-09-28). Seen red on Metal (wrong quotients) before the capability-driven widening."""
 import numpy as np
 import pytest
-from neurobrix.kernels import wrappers as W
-from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator, _detect_gpu_backend, backend_has_fp64
+from nbxtensor.ops import wrappers as W
+from nbxtensor.tensor import NBXTensor, DeviceAllocator, _detect_gpu_backend, backend_has_fp64
 
 
 @pytest.fixture(autouse=True)

@@ -51,30 +51,30 @@ CASES = [
      "import neurobrix.kernels"),
 
     ("import the Metal allocator",
-     "from neurobrix.kernels import metal_device"),
+     "import neurobrix; from nbxtensor.backend import metal_device"),
 
     ("reach the device (DeviceAllocator.get_device)",
-     "from neurobrix.kernels.nbx_tensor import DeviceAllocator\n"
+     "import neurobrix; from nbxtensor.tensor import DeviceAllocator\n"
      "assert DeviceAllocator.get_device() is not None"),
 
     ("allocate + H2D + D2H through NBXTensor",
      "import numpy as np\n"
-     "from neurobrix.kernels.nbx_tensor import NBXTensor\n"
+     "import neurobrix; from nbxtensor.tensor import NBXTensor\n"
      "a = np.arange(1024, dtype=np.float32)\n"
      "t = NBXTensor.from_numpy(a)\n"
      "assert np.array_equal(t.numpy(), a)"),
 
     ("import kernels.ops.matmul FIRST (asks the driver at import)",
-     "import neurobrix.kernels.ops.matmul"),
+     "import neurobrix; import nbxtensor.ops.matmul"),
 
     ("import the whole wrappers module",
-     "import neurobrix.kernels.wrappers"),
+     "import neurobrix; import nbxtensor.ops.wrappers"),
 
     ("import the launcher contract + Metal driver",
-     "from neurobrix.triton import launcher_contract, metal_driver"),
+     "from nbxtensor.backend import launcher_contract; from neurobrix.triton import metal_driver"),
 
     ("install the launcher (its registry resolves the driver)",
-     "from neurobrix.kernels import launcher\n"
+     "import neurobrix; from nbxtensor.backend import launcher\n"
      "assert launcher.install() is True\n"
      "drv = launcher.active_driver()\n"
      "assert drv is not None and drv.artifact_kind\n"
@@ -82,7 +82,7 @@ CASES = [
 
     ("COLD compile a kernel to MSL (our driver)",
      "from neurobrix.triton.metal_driver import compile_to_msl\n"
-     "from neurobrix.kernels.ops.rmsnorm import rms_norm_forward_kernel as k\n"
+     "from nbxtensor.ops.rmsnorm import rms_norm_forward_kernel as k\n"
      "# rms_norm is wrapped in @triton.heuristics. The launcher never\n"
      "# unwraps — it patches JITFunction.run so Triton's own decorators do\n"
      "# their work — but compile_to_msl takes the JITFunction directly, so\n"
@@ -108,8 +108,8 @@ CASES = [
      "# launcher's binder and Triton's compiler, our driver, our dispatch —\n"
      "# and the result checked.\n"
      "import numpy as np\n"
-     "from neurobrix.kernels import launcher, wrappers\n"
-     "from neurobrix.kernels.nbx_tensor import NBXTensor\n"
+     "import neurobrix; from nbxtensor.backend import launcher; from nbxtensor.ops import wrappers\n"
+     "from nbxtensor.tensor import NBXTensor\n"
      "assert launcher.install() is True\n"
      "x = np.arange(4096, dtype=np.float32)\n"
      "y = np.ones(4096, dtype=np.float32) * 3.0\n"

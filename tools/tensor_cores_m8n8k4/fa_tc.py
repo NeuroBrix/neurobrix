@@ -7,7 +7,8 @@ import os, sys, time
 import numpy as np
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
-from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator, NBXDtype
+import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
+from nbxtensor.tensor import NBXTensor, DeviceAllocator, NBXDtype
 
 ASM: gl.constexpr = gl.constexpr(
     "mma.sync.aligned.m8n8k4.row.col.f32.f16.f16.f32 {$0,$1,$2,$3,$4,$5,$6,$7}, {$8, $9}, {$12, $13},"
@@ -209,7 +210,7 @@ def run(q, k, v, MB, NS):
 
 
 if __name__ == "__main__":
-    from neurobrix.kernels import wrappers as W
+    from nbxtensor.ops import wrappers as W
     B, H, T, D = [int(x) for x in sys.argv[1:5]]
     cfgs = [tuple(int(x) for x in c.split(",")) for c in os.environ.get("CFG", "4,4").split(";")]
     rng = np.random.default_rng(0)

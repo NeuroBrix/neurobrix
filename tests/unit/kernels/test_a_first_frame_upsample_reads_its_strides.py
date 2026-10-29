@@ -33,7 +33,7 @@ def _gpu_available() -> bool:
     """Whether the ENGINE has a GPU, asked of the engine (not of a vendor tool)."""
     import pytest
 
-    nbx = pytest.importorskip("neurobrix.kernels.nbx_tensor")
+    nbx = pytest.importorskip("nbxtensor.tensor")
     detect = nbx._detect_gpu_backend
     try:
         return detect() is not None
@@ -44,7 +44,7 @@ def _gpu_available() -> bool:
 def _download(t) -> np.ndarray:
     """Host copy of a CONTIGUOUS NBXTensor, as float16."""
     import ctypes
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator
+    from nbxtensor.tensor import DeviceAllocator
     buf = (ctypes.c_char * t._nbytes)()
     DeviceAllocator.memcpy(ctypes.addressof(buf), t.data_ptr(), t._nbytes, 2)
     return np.frombuffer(bytes(buf), dtype=np.float16).reshape(tuple(t.shape))
@@ -59,7 +59,7 @@ def _nearest2d_reference(x: np.ndarray, oh: int, ow: int) -> np.ndarray:
 
 
 def _check(view_np: np.ndarray, view) -> None:
-    from neurobrix.kernels.wrappers import upsample_nearest2d_wrapper
+    from nbxtensor.ops.wrappers import upsample_nearest2d_wrapper
     n, c, ih, iw = view_np.shape
     out = upsample_nearest2d_wrapper(view, [2 * ih, 2 * iw], scales_h=2.0, scales_w=2.0)
     got = _download(out)
@@ -71,7 +71,7 @@ def _check(view_np: np.ndarray, view) -> None:
 def test_a_selected_frame_is_upsampled_from_its_own_bytes() -> None:
     if not _gpu_available():
         pytest.skip("no GPU")
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.tensor import NBXTensor
 
     rng = np.random.default_rng(11)
     # (B, C, T, H, W): two batches so the batch stride is exercised too.
@@ -86,7 +86,7 @@ def test_a_selected_frame_is_upsampled_from_its_own_bytes() -> None:
 def test_a_transposed_plane_is_upsampled_from_its_own_bytes() -> None:
     if not _gpu_available():
         pytest.skip("no GPU")
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.tensor import NBXTensor
 
     rng = np.random.default_rng(12)
     x_np = rng.standard_normal((1, 4, 6, 9)).astype(np.float16)
@@ -99,7 +99,7 @@ def test_a_transposed_plane_is_upsampled_from_its_own_bytes() -> None:
 def test_a_contiguous_input_is_unchanged() -> None:
     if not _gpu_available():
         pytest.skip("no GPU")
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.tensor import NBXTensor
 
     rng = np.random.default_rng(13)
     x_np = rng.standard_normal((2, 3, 5, 4)).astype(np.float16)

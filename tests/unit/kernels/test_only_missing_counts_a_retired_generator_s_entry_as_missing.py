@@ -6,7 +6,7 @@ nothing, and HAT's cells were withheld until `--reprove-generator` re-proved the
 What this test would do if the code were wrong: with `--only-missing` ignoring the generator (the behaviour before),
 the first assertion fails — the retired entry reads as coverage. Injection seen red on 2026-10-25, restored green.
 """
-from neurobrix.kernels import autotune_certified as C
+from nbxtensor.ops import autotune_certified as C
 
 
 def _entry(backend):

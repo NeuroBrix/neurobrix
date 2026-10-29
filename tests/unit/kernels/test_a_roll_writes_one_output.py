@@ -13,8 +13,9 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("needs a CUDA device", allow_module_level=True)
 
-from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator as DA, nbx_to_torch  # noqa: E402
-from neurobrix.kernels.wrappers import roll_wrapper  # noqa: E402
+from nbxtensor.tensor import NBXTensor, DeviceAllocator as DA  # noqa: E402
+from neurobrix.kernels.torch_interop import nbx_to_torch  # noqa: E402
+from nbxtensor.ops.wrappers import roll_wrapper  # noqa: E402
 
 
 @pytest.mark.parametrize("shifts,dims", [((-8, -8), (1, 2)), ((3,), (2,)), ((5, -2), (2, 1)), ((0, 4), (1, 2))])

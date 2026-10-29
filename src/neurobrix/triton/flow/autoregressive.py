@@ -12,8 +12,8 @@ import numpy as np
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, parse_dtype
-from neurobrix.triton.device_transfer import parse_device_idx
+from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator, parse_dtype
+from nbxtensor.memory.device_transfer import parse_device_idx
 
 from neurobrix.triton.generator import TritonGenerator
 from neurobrix.triton.session import TritonLMSession
@@ -106,7 +106,7 @@ def _phase_mem_note() -> str:
     exactly what these two stamps decide, and it could not be read.
     """
     import os as _os
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator as _DA
+    from nbxtensor.tensor import DeviceAllocator as _DA
     d = _DA.get_device()
     live = _DA._cuda_live_bytes.get(d, 0) / 2**20
     pooled = _DA._pool_cached_bytes.get(d, 0) / 2**20
@@ -211,7 +211,7 @@ def paged_kv_cache(kv_params: Dict[str, Any], kv_plan):
     its page size and release rule derived by core/state/price.paged_cache_params from the executing card's vendor
     file (the derivation the compiled engine takes too)."""
     from neurobrix.core.state.price import paged_cache_params
-    from neurobrix.kernels.ops._configs import active_vendor_profile
+    from nbxtensor.ops._configs import active_vendor_profile
     from nbxtensor.ops.paged_decode_attn import PAGED_DECODE_TILE_CANDIDATES
     from neurobrix.triton.paged_kv_cache import PagedTritonKVCache
     tokens, async_release = paged_cache_params(
@@ -262,8 +262,8 @@ class TritonAutoregressiveHandler:
         # stamp per phase boundary; the prefill stamp waits for the GPU.
         # R30 mirror of core/flow/autoregressive.py.
         from neurobrix.core.runtime.phase_trace import mark as _phase_mark
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator as _DA
-        from neurobrix.triton.device_transfer import parse_device_idxs as _pdi
+        from nbxtensor.tensor import DeviceAllocator as _DA
+        from nbxtensor.memory.device_transfer import parse_device_idxs as _pdi
 
         def _dev_sync():  # every device of the (possibly compound) primary device
             prev = _DA.get_device()
@@ -322,13 +322,12 @@ class TritonAutoregressiveHandler:
                     while flat.ndim > 1:
                         flat = flat[0]
                     # NBXTensor → numpy via to(fp32)
-                    from neurobrix.kernels.nbx_tensor import NBXDtype as _NBX
+                    from nbxtensor.tensor import NBXDtype as _NBX
                     flat = flat.to(_NBX.float32)
                     n = flat.numel()
                     import ctypes as _ct
                     buf = (_ct.c_float * n)()
-                    from neurobrix.kernels.nbx_tensor import (
-                        DeviceAllocator as _DA)
+                    from nbxtensor.tensor import DeviceAllocator as _DA
                     _DA.memcpy(_ct.addressof(buf), flat.data_ptr(),
                                n * 4, kind=2)
                     vals = list(buf)
@@ -372,8 +371,7 @@ class TritonAutoregressiveHandler:
             # for triton-seq-vs-sequential decode parity. R33-pure scalar read
             # (ctypes + DeviceAllocator, no torch).
             if _os_dl.environ.get("NBX_DEBUG_DECODE") == "1" and step_idx < 15:
-                from neurobrix.kernels.nbx_tensor import (
-                    NBXDtype as _NBXdt, DeviceAllocator as _DAdt)
+                from nbxtensor.tensor import NBXDtype as _NBXdt, DeviceAllocator as _DAdt
                 import ctypes as _ctdt
                 _tk = next_token
                 while hasattr(_tk, "ndim") and _tk.ndim > 1:

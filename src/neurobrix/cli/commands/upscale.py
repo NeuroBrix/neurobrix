@@ -54,7 +54,7 @@ def _drain_device(execution_mode: str) -> None:
         if torch.cuda.is_available():
             torch.cuda.synchronize()
     else:
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        from nbxtensor.tensor import DeviceAllocator
         if DeviceAllocator.device_count() > 0:
             DeviceAllocator.device_synchronize()
 
@@ -152,7 +152,7 @@ def cmd_upscale(args):
     loader = NBXRuntimeLoader()
     pkg = loader.load(str(nbx_path))
 
-    from neurobrix.kernels.wrappers import set_hardware_profile
+    from nbxtensor.ops.wrappers import set_hardware_profile
     set_hardware_profile(hw_profile)
     executor = RuntimeExecutor(pkg, execution_plan, mode=execution_mode)
 

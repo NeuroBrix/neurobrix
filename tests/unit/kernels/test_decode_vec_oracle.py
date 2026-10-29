@@ -49,8 +49,8 @@ except ModuleNotFoundError:  # script-mode under the pytest-less GPU venv
 
 import numpy as np
 
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
-from neurobrix.kernels import wrappers as W
+from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator
+from nbxtensor.ops import wrappers as W
 
 # Same derived bound as the flash-decode oracle (fp16 inputs, fp32
 # accumulation, ~4k-term softmax sums): relative error of a CORRECT
@@ -255,7 +255,7 @@ def test_strided_bucketed_views_bit_equal_no_copy() -> None:
     STRIDES: same bytes as materialised K/V, zero K/V-sized copies."""
     if not _has_gpu():
         pytest.skip("no GPU")
-    from neurobrix.kernels import nbx_tensor as NT
+    from nbxtensor import tensor as NT
     _os.environ["NBX_DECODE_VEC"] = "1"
     try:
         rng = np.random.default_rng(21)

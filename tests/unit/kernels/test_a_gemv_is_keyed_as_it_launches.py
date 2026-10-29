@@ -14,10 +14,10 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("needs a CUDA device", allow_module_level=True)
 
-from neurobrix.kernels import launch_keys as LK  # noqa: E402
-from neurobrix.kernels import wrappers as W  # noqa: E402
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype  # noqa: E402
-from neurobrix.triton.autotune_cache import key_of  # noqa: E402
+from nbxtensor.ops import launch_keys as LK  # noqa: E402
+from nbxtensor.ops import wrappers as W  # noqa: E402
+from nbxtensor.tensor import NBXTensor, NBXDtype  # noqa: E402
+from nbxtensor.ops.autotune_cache import key_of  # noqa: E402
 
 F32, F16, BF16 = NBXDtype.float32, NBXDtype.float16, NBXDtype.bfloat16
 
@@ -48,7 +48,7 @@ def _flags():
 @pytest.mark.parametrize("M,K,N", [(1, 2048, 32000), (3, 4096, 512), (4, 130, 100), (1, 896, 151936)])
 @pytest.mark.parametrize("a_dt,b_dt", [(F32, F16), (F16, F16), (F32, F32), (BF16, BF16)])
 def test_the_small_m_mm_launch_is_its_key(monkeypatch, M, K, N, a_dt, b_dt):
-    from neurobrix.kernels.ops.gemv_vec import gemv_vec_kernel as K_
+    from nbxtensor.ops.gemv_vec import gemv_vec_kernel as K_
     seen = _capture(monkeypatch, K_)
     a, b = _t((M, K), a_dt), _t((K, N), b_dt)
     with pytest.raises(_Launched):
@@ -61,7 +61,7 @@ def test_the_small_m_mm_launch_is_its_key(monkeypatch, M, K, N, a_dt, b_dt):
 @pytest.mark.parametrize("N,K", [(32000, 2048), (100, 130)])
 @pytest.mark.parametrize("m_dt,v_dt", [(F16, F32), (F32, F32), (BF16, BF16)])
 def test_the_vector_matmul_launch_is_its_key(monkeypatch, N, K, m_dt, v_dt):
-    from neurobrix.kernels.ops.gemv_vec import gemv_vec_kernel as K_
+    from nbxtensor.ops.gemv_vec import gemv_vec_kernel as K_
     seen = _capture(monkeypatch, K_)
     mat, vec = _t((N, K), m_dt), _t((K,), v_dt)
     with pytest.raises(_Launched):
@@ -74,7 +74,7 @@ def test_the_vector_matmul_launch_is_its_key(monkeypatch, N, K, m_dt, v_dt):
 @pytest.mark.parametrize("M,K,N", [(1, 2048, 2560), (2, 1024, 100)])
 @pytest.mark.parametrize("a_dt,b_dt,bias_dt", [(F32, F16, F16), (F16, F16, F16), (F32, F32, F32), (BF16, BF16, BF16)])
 def test_the_small_m_addmm_launch_is_its_key(monkeypatch, M, K, N, a_dt, b_dt, bias_dt):
-    from neurobrix.kernels.ops.addmv_op import addmv_kernel as K_
+    from nbxtensor.ops.addmv_op import addmv_kernel as K_
     seen = _capture(monkeypatch, K_)
     a, b, bias = _t((M, K), a_dt), _t((K, N), b_dt), _t((N,), bias_dt)
     with pytest.raises(_Launched):
@@ -90,7 +90,7 @@ def test_under_the_fp16_contract_the_small_m_launch_and_its_key_store_fp16(monke
     through the active flag: under it an fp16 GEMM stores fp16 on hardware without native bf16 (the aligned Triton
     branch, 2026-10-26). Seen red on e5aa3894: the census keyed fp32 stores while the runtime launched fp16 ones —
     17 gate cells refused their keys (KeyNotCertified)."""
-    from neurobrix.kernels.ops.gemv_vec import gemv_vec_kernel as K_
+    from nbxtensor.ops.gemv_vec import gemv_vec_kernel as K_
     seen = _capture(monkeypatch, K_)
     monkeypatch.setattr(W, "_NBX_ACTIVATIONS_FP16_SAFE", True)
     a, b = _t((M, K), F16), _t((K, N), F16)

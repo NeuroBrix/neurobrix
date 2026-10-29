@@ -71,7 +71,7 @@ def test_a_prefetched_expert_evicted_before_its_call_is_counted_wasted():
 # ── the stores (card required) ────────────────────────────────────────────────────────────────────────────────
 def _card():
     pytest.importorskip("triton")
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator as DA
+    from nbxtensor.tensor import DeviceAllocator as DA
     if DA.device_count() == 0:
         pytest.skip("no card")
 
@@ -118,7 +118,7 @@ def test_the_triton_store_with_a_two_layer_prefetch_is_byte_for_byte_the_residen
     monkeypatch.setenv("NBX_EXPERT_PREFETCH", "1")
     from tests.unit.runtime.test_the_expert_store_serves_routed_experts import _host, _problem, TOP_K
     from tests.unit.runtime.test_the_expert_store_serves_routed_experts import E as TE, F as TF, H as TH
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.tensor import NBXTensor
     from neurobrix.triton.expert_store import NBXExpertStore
     from neurobrix.triton.moe import execute_moe_fused
     probs = {L: _problem(tokens=1, seed=s) for L, s in (("L0", 21), ("L1", 22))}

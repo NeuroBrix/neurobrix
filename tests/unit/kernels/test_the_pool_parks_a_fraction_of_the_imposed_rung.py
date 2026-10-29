@@ -5,8 +5,8 @@ cap and peaked at 22.6 GB; with the cap of the rung, 11.1 GB, output byte-identi
 were wrong: the cap of the physical card under the door (red)."""
 import pytest
 
-from neurobrix.kernels import nbx_tensor as N
-from neurobrix.kernels import wrappers as W
+from nbxtensor import tensor as N
+from nbxtensor.ops import wrappers as W
 
 
 @pytest.fixture

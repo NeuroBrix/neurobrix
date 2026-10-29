@@ -68,7 +68,7 @@ import pytest
 # in another file this way, on the day the rule against it was written.
 _IMPORTED = False
 try:  # pragma: no cover - import-time only
-    import neurobrix.kernels.wrappers as w
+    import nbxtensor.ops.wrappers as w
     _IMPORTED = True
 except Exception:
     w = None
@@ -76,9 +76,8 @@ except Exception:
 if _IMPORTED:
     # Imported OUTSIDE the guard: if one of these names is gone, that is a
     # failure about this repository and must read as one.
-    from neurobrix.kernels.nbx_tensor import NBXTensor, nbx_to_torch
-
-
+    from nbxtensor.tensor import NBXTensor
+    from neurobrix.kernels.torch_interop import nbx_to_torch
 def _rig_reason() -> str:
     """Delegates to the shared door in `_rig.py`.
 

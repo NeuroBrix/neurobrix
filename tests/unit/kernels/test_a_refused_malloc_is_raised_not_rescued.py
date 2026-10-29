@@ -18,8 +18,8 @@ from __future__ import annotations
 
 import pytest
 
-import neurobrix.kernels.nbx_tensor as nt
-from neurobrix.kernels.nbx_tensor import DeviceAllocator, DeviceOOMError
+import nbxtensor.tensor as nt
+from nbxtensor.tensor import DeviceAllocator, DeviceOOMError
 
 _OOM = 2   # cudaErrorMemoryAllocation
 

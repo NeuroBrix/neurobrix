@@ -23,8 +23,8 @@ REPO = Path(__file__).resolve().parents[3]
 SCRIPT = r'''
 from neurobrix.kernels import census
 census.install()
-from neurobrix.kernels.nbx_tensor import NBXTensor
-from neurobrix.kernels import wrappers as W
+from nbxtensor.tensor import NBXTensor
+from nbxtensor.ops import wrappers as W
 from neurobrix.triton.sequential import TritonSequentialDispatcher
 a = NBXTensor.empty((19, 2048), "float16", 0)
 b = NBXTensor.empty((2048, 2048), "float16", 0)
@@ -52,8 +52,8 @@ def test_a_shadow_records_the_op_of_each_key(tmp_path):
 def test_table_rows_carry_the_op_and_keep_the_op_less_key():
     sys.path.insert(0, str(REPO / "tools"))
     import certified_census as CC
-    k1 = "neurobrix.kernels.ops.matmul.matmul_kernel::(19, 2048, 2048, True, True, 'fp16', 'fp16', 'fp16')"
-    k2 = "neurobrix.kernels.ops.matmul.matmul_kernel::(23, 2048, 2048, True, True, 'fp16', 'fp16', 'fp16')"
+    k1 = "nbxtensor.ops.matmul.matmul_kernel::(19, 2048, 2048, True, True, 'fp16', 'fp16', 'fp16')"
+    k2 = "nbxtensor.ops.matmul.matmul_kernel::(23, 2048, 2048, True, True, 'fp16', 'fp16', 'fp16')"
     rows = CC.table_rows("M", "sha", "triton", 16384, [k1, k2],
                          [("aten.mm::7", k1), ("aten.mm::9", k1)])
     got = sorted((r["key"][:4], tuple(r["ops"]), tuple(r["rungs_mb"])) for r in rows)

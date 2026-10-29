@@ -15,8 +15,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from neurobrix.kernels import wrappers as W
-from neurobrix.kernels.nbx_tensor import DeviceAllocator, NBXTensor
+from nbxtensor.ops import wrappers as W
+from nbxtensor.tensor import DeviceAllocator, NBXTensor
 
 
 def _unit_declared() -> bool:
@@ -92,8 +92,8 @@ def test_over_the_scores_budget_the_route_is_the_units_flash_and_deterministic(m
     (`unit_flash_takes`) instead of the chunked math — and the kernel is deterministic by construction (no atomics,
     a fixed reduction order), the property the math route exists for on this arch: three runs, byte-identical.
     The budget is set small so a test-sized call is over it (the data the route reads, not the route)."""
-    from neurobrix.kernels import launch_keys as LK
-    from neurobrix.kernels.nbx_tensor import NBXDtype
+    from nbxtensor.ops import launch_keys as LK
+    from nbxtensor.tensor import NBXDtype
     h = NBXDtype.float16
     assert LK.unit_flash_takes(96, h, h, h) and not LK.unit_flash_takes(96, NBXDtype.float32, h, h)
     calls = []

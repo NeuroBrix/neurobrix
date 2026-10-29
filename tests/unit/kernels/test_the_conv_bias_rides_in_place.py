@@ -18,10 +18,8 @@ import pytest
 
 triton = pytest.importorskip("triton")
 
-from neurobrix.kernels.nbx_tensor import (  # noqa: E402
-    DeviceAllocator, NBXDtype, NBXTensor,
-)
-from neurobrix.kernels import wrappers as w  # noqa: E402
+from nbxtensor.tensor import DeviceAllocator, NBXDtype, NBXTensor  # noqa: E402
+from nbxtensor.ops import wrappers as w  # noqa: E402
 
 
 def _gpu_or_skip():

@@ -12,7 +12,7 @@ the shared `NBX_FORCE_RAND_SEED` pin for cross-mode determinism.
 """
 import numpy as np
 
-from neurobrix.kernels.nbx_tensor import NBXTensor
+from nbxtensor.tensor import NBXTensor
 from .noise_schedules import (
     get_beta_schedule, betas_to_alphas_cumprod, alphas_cumprod_to_sigmas,
     get_timesteps_np, karras_sigmas,
@@ -129,7 +129,7 @@ class TritonEulerDiscreteScheduler(_EulerBase):
              return_dict: bool = True, **kwargs):
         if self.num_inference_steps is None:
             raise RuntimeError("ZERO FALLBACK: set_timesteps() before step()")
-        from neurobrix.kernels.nbx_tensor import NBXDtype
+        from nbxtensor.tensor import NBXDtype
         model_output = self._maybe_chunk_variance(model_output, sample)
         if self._step_index is None:
             self._init_step_index(timestep)
@@ -156,8 +156,8 @@ class TritonEulerAncestralDiscreteScheduler(_EulerBase):
              return_dict: bool = True, **kwargs):
         if self.num_inference_steps is None:
             raise RuntimeError("ZERO FALLBACK: set_timesteps() before step()")
-        from neurobrix.kernels.wrappers import randn_like_wrapper
-        from neurobrix.kernels.nbx_tensor import NBXDtype
+        from nbxtensor.ops.wrappers import randn_like_wrapper
+        from nbxtensor.tensor import NBXDtype
         model_output = self._maybe_chunk_variance(model_output, sample)
         if self._step_index is None:
             self._init_step_index(timestep)

@@ -28,7 +28,7 @@ import pytest
 
 
 def _has_metal():
-    nbx_tensor = pytest.importorskip("neurobrix.kernels.nbx_tensor")
+    nbx_tensor = pytest.importorskip("nbxtensor.tensor")
     detect = nbx_tensor._detect_gpu_backend   # a renamed probe raises here, loudly
     try:
         return detect() == "metal"
@@ -41,10 +41,10 @@ pytestmark = pytest.mark.skipif(not _has_metal(), reason="no Apple GPU here")
 
 def test_a_launch_still_works_after_the_runtime_is_reset():
     """Allocate, launch, reset, allocate, launch. Both must compute."""
-    from neurobrix.kernels import metal_device
-    from neurobrix.kernels.nbx_tensor import NBXTensor
-    from neurobrix.kernels import launcher
-    from neurobrix.kernels.wrappers import add
+    from nbxtensor.backend import metal_device
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.backend import launcher
+    from nbxtensor.ops.wrappers import add
 
     # The engine installs the launcher from kernels/dispatch.py; a test
     # that reaches for a wrapper directly must install it too, or it
@@ -68,13 +68,14 @@ def test_a_launch_still_works_after_the_runtime_is_reset():
 
 def test_resetting_the_runtime_clears_every_cache_that_holds_it():
     """The invariant itself, stated rather than inferred from behaviour."""
-    from neurobrix.kernels import launcher as L
-    from neurobrix.kernels import metal_device, nbx_tensor
+    from nbxtensor.backend import launcher as L
+    from nbxtensor.backend import metal_device
+    from nbxtensor import tensor as nbx_tensor
 
     # Populate all three.
     x = nbx_tensor.NBXTensor.from_numpy(np.ones(64, dtype=np.float32))
-    from neurobrix.kernels import launcher
-    from neurobrix.kernels.wrappers import add
+    from nbxtensor.backend import launcher
+    from nbxtensor.ops.wrappers import add
 
     # The engine installs the launcher from kernels/dispatch.py; a test
     # that reaches for a wrapper directly must install it too, or it
@@ -114,10 +115,10 @@ def test_a_tensor_alive_across_the_reset_does_not_poison_the_free_list():
     kernels suite while passing in every subset, run-to-run rather than by
     ordering: the same command gave 226 failures once and 236 the next time.
     """
-    from neurobrix.kernels import metal_device
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator, NBXTensor
-    from neurobrix.kernels import launcher
-    from neurobrix.kernels.wrappers import add
+    from nbxtensor.backend import metal_device
+    from nbxtensor.tensor import DeviceAllocator, NBXTensor
+    from nbxtensor.backend import launcher
+    from nbxtensor.ops.wrappers import add
 
     launcher.install()
 

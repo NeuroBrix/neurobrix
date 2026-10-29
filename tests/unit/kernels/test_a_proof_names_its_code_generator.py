@@ -4,7 +4,7 @@ the directory's proofs by generator, and a re-proof under a new Triton is a
 planned cost the document names (owner, 2026-09-16: 9 655 entries proven on
 3.6.0 are not proven on 3.8). Injection: `proof_backend` returning None for
 every proof → the status counted 'unknown' only — RED."""
-from neurobrix.kernels import autotune_certified as C
+from nbxtensor.ops import autotune_certified as C
 
 
 def test_the_label_reads_the_version_and_a_non_cuda_backend():
@@ -42,7 +42,7 @@ def test_the_identity_raises_rather_than_default_to_cuda(monkeypatch):
     to cuda once refused all 945 Apple entries). generator_identity raises, and
     running_generator turns that into 'cannot say' (None) — never a wrong label."""
     import types
-    from neurobrix.kernels import launcher as L
+    from nbxtensor.backend import launcher as L
 
     monkeypatch.setattr(L, "target", lambda: types.SimpleNamespace(backend=None),
                         raising=True)

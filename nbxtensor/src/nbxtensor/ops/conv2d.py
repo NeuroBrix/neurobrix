@@ -1,0 +1,265 @@
+"""Conv2D forward — pure @triton.jit kernel with autotune.
+
+From attorch (BobMcDear/attorch) conv_kernels.py — chosen over FlagGems
+for V100 compatibility (proper num_stages handling). Im2col approach
+with tl.dot, fp32 accumulation, groups support.
+
+Phase 1.5 conv2d Step (b) (2026-05): @triton.autotune + cache_results=True
+adoption — same pattern as mm/bmm/addmm/baddbmm (commits d514bdb +
+20ed765). Configs restricted to Volta-viable subspace (BLOCK_BHW ∈
+{32,64,128}, BLOCK_OUTF ∈ {32,64,128}, BLOCK_INF ∈ {16,32,64}, num_warps
+∈ {2,4}, num_stages ∈ {2,3}). Triton compiler ejects configs that
+exceed sm_70's 96 KB SMEM at compile time (native fallback). See
+CLAUDE.md "Autotune policy" for the doctrinal exception scope.
+"""
+
+import triton
+
+from nbxtensor.ops._configs import nbx_autotune
+import triton.language as tl
+
+from nbxtensor.ops._autotune_policy import maybe_pin_single, is_conv2d_pinned
+
+
+# Volta-viable conv2d autotune subspace.
+# SMEM budget per config (rough): 2 stages × dtype_bytes × (BLOCK_BHW *
+# BLOCK_INF [input tile] + BLOCK_INF * BLOCK_OUTF [weight tile]).
+# fp16 (2B), 2 stages: BLOCK_BHW=128, BLOCK_INF=64, BLOCK_OUTF=128 →
+# 2 * 2 * (128*64 + 64*128) = 65 KB → fits 96 KB sm_70.
+# BLOCK_BHW=128, BLOCK_INF=64, BLOCK_OUTF=128, stages=3 → 98 KB → over.
+# Triton ejects over-SMEM configs at compile time via native fallback.
+_CONV2D_AUTOTUNE_VOLTA = [
+    triton.Config({'BLOCK_SIZE_BHW': 32,  'BLOCK_SIZE_OUTF': 32,  'BLOCK_SIZE_INF': 16}, num_stages=2, num_warps=2),
+    triton.Config({'BLOCK_SIZE_BHW': 32,  'BLOCK_SIZE_OUTF': 32,  'BLOCK_SIZE_INF': 32}, num_stages=2, num_warps=2),
+    triton.Config({'BLOCK_SIZE_BHW': 32,  'BLOCK_SIZE_OUTF': 64,  'BLOCK_SIZE_INF': 32}, num_stages=2, num_warps=2),
+    triton.Config({'BLOCK_SIZE_BHW': 32,  'BLOCK_SIZE_OUTF': 64,  'BLOCK_SIZE_INF': 32}, num_stages=3, num_warps=4),
+    triton.Config({'BLOCK_SIZE_BHW': 32,  'BLOCK_SIZE_OUTF': 128, 'BLOCK_SIZE_INF': 32}, num_stages=2, num_warps=4),
+    triton.Config({'BLOCK_SIZE_BHW': 64,  'BLOCK_SIZE_OUTF': 32,  'BLOCK_SIZE_INF': 16}, num_stages=2, num_warps=2),
+    triton.Config({'BLOCK_SIZE_BHW': 64,  'BLOCK_SIZE_OUTF': 32,  'BLOCK_SIZE_INF': 32}, num_stages=2, num_warps=4),
+    triton.Config({'BLOCK_SIZE_BHW': 64,  'BLOCK_SIZE_OUTF': 32,  'BLOCK_SIZE_INF': 32}, num_stages=3, num_warps=4),
+    triton.Config({'BLOCK_SIZE_BHW': 64,  'BLOCK_SIZE_OUTF': 64,  'BLOCK_SIZE_INF': 16}, num_stages=2, num_warps=4),
+    triton.Config({'BLOCK_SIZE_BHW': 64,  'BLOCK_SIZE_OUTF': 64,  'BLOCK_SIZE_INF': 32}, num_stages=2, num_warps=4),
+    triton.Config({'BLOCK_SIZE_BHW': 64,  'BLOCK_SIZE_OUTF': 64,  'BLOCK_SIZE_INF': 32}, num_stages=3, num_warps=4),
+    triton.Config({'BLOCK_SIZE_BHW': 64,  'BLOCK_SIZE_OUTF': 64,  'BLOCK_SIZE_INF': 64}, num_stages=2, num_warps=4),
+    triton.Config({'BLOCK_SIZE_BHW': 64,  'BLOCK_SIZE_OUTF': 128, 'BLOCK_SIZE_INF': 16}, num_stages=2, num_warps=4),
+    triton.Config({'BLOCK_SIZE_BHW': 64,  'BLOCK_SIZE_OUTF': 128, 'BLOCK_SIZE_INF': 32}, num_stages=2, num_warps=4),
+    triton.Config({'BLOCK_SIZE_BHW': 128, 'BLOCK_SIZE_OUTF': 32,  'BLOCK_SIZE_INF': 32}, num_stages=2, num_warps=4),
+    triton.Config({'BLOCK_SIZE_BHW': 128, 'BLOCK_SIZE_OUTF': 64,  'BLOCK_SIZE_INF': 16}, num_stages=2, num_warps=4),
+    triton.Config({'BLOCK_SIZE_BHW': 128, 'BLOCK_SIZE_OUTF': 64,  'BLOCK_SIZE_INF': 32}, num_stages=2, num_warps=4),
+    triton.Config({'BLOCK_SIZE_BHW': 128, 'BLOCK_SIZE_OUTF': 128, 'BLOCK_SIZE_INF': 32}, num_stages=2, num_warps=4),
+]
+
+# Every tile in BOTH orientations (`SPATIAL_FAST`): the certifier picks per key per hardware. Metal takes the
+# spatial-fast tile (CogVideoX-2b VAE 3x3 (9,128,242x362) 109 -> 55 ms, Mac 2026-10-21); on V100 today's tile wins
+# five shapes of six (9-40 %, Dell 2026-10-21 01:53). Same key; an entry certified before the axis existed names no
+# orientation and keeps today's tile.
+_CONV2D_AUTOTUNE = _CONV2D_AUTOTUNE_VOLTA + [
+    triton.Config({**c.kwargs, 'SPATIAL_FAST': True}, num_stages=c.num_stages, num_warps=c.num_warps)
+    for c in _CONV2D_AUTOTUNE_VOLTA
+]
+
+
+@nbx_autotune(
+    configs=maybe_pin_single(_CONV2D_AUTOTUNE, is_conv2d_pinned),
+    key=['batch_dim', 'in_feat_dim', 'in_height', 'in_width_key',
+         'out_feat_dim', 'out_height', 'out_width_key',
+         'kernel_height', 'kernel_width',
+         'stride_height', 'stride_width',
+         'padding_height', 'padding_width',
+         'dilation_height', 'dilation_width',
+         'groups', 'fp16'],
+    cache_results=True,
+)
+@triton.jit
+def conv2d_forward_kernel(
+    input_pointer, weight_pointer, output_pointer,
+    batch_dim, in_feat_dim, in_height, in_width,
+    out_feat_dim, out_height, out_width,
+    in_width_key, out_width_key,
+    input_batch_stride, input_in_feat_stride, input_height_stride, input_width_stride,
+    weight_out_feat_stride, weight_in_feat_stride, weight_height_stride, weight_width_stride,
+    output_batch_stride, output_out_feat_stride, output_height_stride, output_width_stride,
+    kernel_height: tl.constexpr, kernel_width: tl.constexpr,
+    stride_height: tl.constexpr, stride_width: tl.constexpr,
+    padding_height: tl.constexpr, padding_width: tl.constexpr,
+    groups: tl.constexpr, fp16: tl.constexpr,
+    dilation_height: tl.constexpr = 1, dilation_width: tl.constexpr = 1,
+    BLOCK_SIZE_BHW: tl.constexpr = 64,
+    BLOCK_SIZE_INF: tl.constexpr = 32,
+    BLOCK_SIZE_OUTF: tl.constexpr = 64,
+    WIDE_OFFSETS: tl.constexpr = True,
+    SPATIAL_FAST: tl.constexpr = False,
+):
+    # 64-bit offsets only where an operand's extent needs them (`WIDE_OFFSETS`, chosen by the wrapper from the
+    # tensors' extents): 32-bit offsets are exact below 2^31 and the 64-bit ones cost 17 % on Apple's ALUs once the
+    # Metal backend stopped narrowing them (Mac, 2026-10-20, 60 bf16 keys re-proven)
+    if WIDE_OFFSETS:
+        bhw_pid = tl.program_id(0).to(tl.int64)
+        outf_pid = tl.program_id(1).to(tl.int64)
+        group_pid = tl.program_id(2).to(tl.int64)
+    else:
+        bhw_pid = tl.program_id(0)
+        outf_pid = tl.program_id(1)
+        group_pid = tl.program_id(2)
+
+    in_group_dim = in_feat_dim // groups
+    out_group_dim = out_feat_dim // groups
+
+    if SPATIAL_FAST:
+        # The tile is [OUTF, BHW] with the SPATIAL axis fast: NCHW holds a channel plane contiguous along width, so the
+        # input block is loaded [INF, BHW] and the output stored [OUTF, BHW] along it, and the weight block [OUTF, INF]
+        # steps the small kh*kw stride. Loaded [BHW, INF] and stored [BHW, OUTF], both fast axes stepped a whole channel
+        # plane: the Metal backend gathered them element by element — CogVideoX-2b's VAE 3x3 (9,128,242x362) 109 ms
+        # against 55 ms transposed, same values (max |diff| 0), native 31 ms (Mac, 2026-10-21).
+        bhw_offset = bhw_pid * BLOCK_SIZE_BHW + tl.arange(0, BLOCK_SIZE_BHW)
+        bh_offset = bhw_offset // out_width
+        batch_offset = bh_offset // out_height
+
+        outf_offset = outf_pid * BLOCK_SIZE_OUTF + tl.arange(0, BLOCK_SIZE_OUTF)
+        oh_offset = bh_offset % out_height
+        ow_offset = bhw_offset % out_width
+
+        input_pointer += (input_batch_stride * batch_offset +
+                          input_in_feat_stride * group_pid * in_group_dim)[None, :]
+        weight_pointer += (weight_out_feat_stride * outf_offset +
+                           weight_out_feat_stride * group_pid * out_group_dim)[:, None]
+
+        accum = tl.zeros((BLOCK_SIZE_OUTF, BLOCK_SIZE_BHW), dtype=tl.float32)
+
+        for h in range(kernel_height):
+            for w in range(kernel_width):
+                ih_offset = h * dilation_height - padding_height + stride_height * oh_offset
+                iw_offset = w * dilation_width - padding_width + stride_width * ow_offset
+                spatial = input_height_stride * ih_offset + input_width_stride * iw_offset
+                spatial_ok = ((batch_offset < batch_dim) &
+                              (ih_offset >= 0) & (ih_offset < in_height) &
+                              (iw_offset >= 0) & (iw_offset < in_width))
+                for c in range(0, in_group_dim, BLOCK_SIZE_INF):
+                    # 64-bit like every offset above it when the extents need it: `input_in_feat_stride *
+                    # inf_offset` is a product of the channel plane (36 000 000 elements at 6000x6000) and the
+                    # channel index, and past channel 59 it exceeds 2^31 — the 8x upscaler's last conv (64 -> 3, a
+                    # 6344x6344 tile) faulted with an illegal address, four of four, 2026-09-20 (register 58's
+                    # class; the output being small, the band-streaming that saves the 64 -> 64 convs never engaged).
+                    inf_offset = c + tl.arange(0, BLOCK_SIZE_INF)
+                    if WIDE_OFFSETS:
+                        inf_offset = inf_offset.to(tl.int64)
+
+                    curr_inp = (input_pointer +
+                                (input_in_feat_stride * inf_offset)[:, None] +
+                                spatial[None, :])
+                    curr_wt = (weight_pointer +
+                               (weight_in_feat_stride * inf_offset)[None, :] +
+                               (weight_height_stride * h) +
+                               (weight_width_stride * w))
+
+                    inp_mask = (inf_offset < in_group_dim)[:, None] & spatial_ok[None, :]
+                    wt_mask = ((outf_offset < out_group_dim)[:, None] &
+                               (inf_offset < in_group_dim)[None, :])
+
+                    inp_block = tl.load(curr_inp, mask=inp_mask, other=0.0)
+                    wt_block = tl.load(curr_wt, mask=wt_mask, other=0.0)
+
+                    if fp16:
+                        inp_block = inp_block.to(tl.float16)
+                        wt_block = wt_block.to(tl.float16)
+
+                    accum += tl.dot(wt_block, inp_block)
+
+        out_ptr = (output_pointer +
+                   (output_batch_stride * batch_offset)[None, :] +
+                   (output_out_feat_stride * (group_pid * out_group_dim + outf_offset))[:, None] +
+                   (output_height_stride * oh_offset)[None, :] +
+                   (output_width_stride * ow_offset)[None, :])
+        out_mask = ((batch_offset < batch_dim)[None, :] &
+                    (outf_offset < out_group_dim)[:, None] &
+                    (oh_offset < out_height)[None, :] &
+                    (ow_offset < out_width)[None, :])
+
+        tl.store(out_ptr, accum, mask=out_mask)
+    else:
+        bhw_offset = bhw_pid * BLOCK_SIZE_BHW + tl.arange(0, BLOCK_SIZE_BHW)
+        bh_offset = bhw_offset // out_width
+        batch_offset = bh_offset // out_height
+
+        outf_offset = outf_pid * BLOCK_SIZE_OUTF + tl.arange(0, BLOCK_SIZE_OUTF)
+        oh_offset = bh_offset % out_height
+        ow_offset = bhw_offset % out_width
+
+        input_pointer += (input_batch_stride * batch_offset +
+                          input_in_feat_stride * group_pid * in_group_dim)[:, None]
+        weight_pointer += (weight_out_feat_stride * outf_offset +
+                           weight_out_feat_stride * group_pid * out_group_dim)[None, :]
+
+        accum = tl.zeros((BLOCK_SIZE_BHW, BLOCK_SIZE_OUTF), dtype=tl.float32)
+
+        for h in range(kernel_height):
+            for w in range(kernel_width):
+                for c in range(0, in_group_dim, BLOCK_SIZE_INF):
+                    # 64-bit like every offset above it: `input_in_feat_stride *
+                    # inf_offset` is a product of the channel plane (36 000 000
+                    # elements at 6000x6000) and the channel index, and past channel
+                    # 59 it exceeds 2^31 — the 8x upscaler's last conv (64 -> 3, a
+                    # 6344x6344 tile) faulted with an illegal address, four of four,
+                    # 2026-09-20 (register 58's class; the output being small, the
+                    # band-streaming that saves the 64 -> 64 convs never engaged).
+                    inf_offset = c + tl.arange(0, BLOCK_SIZE_INF)
+                    if WIDE_OFFSETS:
+                        inf_offset = inf_offset.to(tl.int64)
+                    ih_offset = h * dilation_height - padding_height + stride_height * oh_offset
+                    iw_offset = w * dilation_width - padding_width + stride_width * ow_offset
+
+                    curr_inp = (input_pointer +
+                                (input_in_feat_stride * inf_offset)[None, :] +
+                                (input_height_stride * ih_offset)[:, None] +
+                                (input_width_stride * iw_offset)[:, None])
+                    curr_wt = (weight_pointer +
+                               (weight_in_feat_stride * inf_offset)[:, None] +
+                               (weight_height_stride * h) +
+                               (weight_width_stride * w))
+
+                    inp_mask = ((batch_offset < batch_dim)[:, None] &
+                                (inf_offset < in_group_dim)[None, :] &
+                                (ih_offset >= 0)[:, None] &
+                                (ih_offset < in_height)[:, None] &
+                                (iw_offset >= 0)[:, None] &
+                                (iw_offset < in_width)[:, None])
+                    wt_mask = ((inf_offset < in_group_dim)[:, None] &
+                               (outf_offset < out_group_dim)[None, :])
+
+                    inp_block = tl.load(curr_inp, mask=inp_mask, other=0.0)
+                    wt_block = tl.load(curr_wt, mask=wt_mask, other=0.0)
+
+                    if fp16:
+                        inp_block = inp_block.to(tl.float16)
+                        wt_block = wt_block.to(tl.float16)
+
+                    accum += tl.dot(inp_block, wt_block)
+
+        out_ptr = (output_pointer +
+                   (output_batch_stride * batch_offset)[:, None] +
+                   (output_out_feat_stride * (group_pid * out_group_dim + outf_offset))[None, :] +
+                   (output_height_stride * oh_offset)[:, None] +
+                   (output_width_stride * ow_offset)[:, None])
+        out_mask = ((batch_offset < batch_dim)[:, None] &
+                    (outf_offset < out_group_dim)[None, :] &
+                    (oh_offset < out_height)[:, None] &
+                    (ow_offset < out_width)[:, None])
+
+        tl.store(out_ptr, accum, mask=out_mask)
+
+
+@triton.jit
+def conv2d_bias_inplace_kernel(out_ptr, bias_ptr, n, HW, C, BLOCK: tl.constexpr):
+    """out[i] += bias[(i // HW) % C], in place, flat over a CONTIGUOUS NCHW
+    output. The conv wrapper's bias epilogue: the out-of-place `add` here
+    allocated a second full-size output per biased convolution — 2450 MB of
+    the measured 8008 MB tile peak on real-esrgan-x8 @1024 (malloc trace,
+    2026-09-21). Elementwise same-offset read/write, so aliasing the input
+    as the output is exact by construction. Fixed launch config — this
+    kernel takes no autotune key and adds nothing to any census."""
+    i = tl.program_id(0).to(tl.int64) * BLOCK + tl.arange(0, BLOCK)
+    m = i < n
+    c = (i // HW) % C
+    v = tl.load(out_ptr + i, mask=m)
+    b = tl.load(bias_ptr + c, mask=m)
+    tl.store(out_ptr + i, v + b, mask=m)

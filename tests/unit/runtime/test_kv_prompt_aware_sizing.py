@@ -130,7 +130,7 @@ def test_run_mode_initial_zero_keeps_the_plan_size() -> None:
 
 
 def _gpu() -> bool:
-    nbx = pytest.importorskip("neurobrix.kernels.nbx_tensor")
+    nbx = pytest.importorskip("nbxtensor.tensor")
     set_device = nbx.DeviceAllocator.set_device   # a renamed symbol raises here, loudly
     try:
         set_device(0)
@@ -142,7 +142,7 @@ def _gpu() -> bool:
 @pytest.mark.skipif(not _gpu(), reason="needs a CUDA device")
 def test_warm_pools_grow_for_a_longer_request() -> None:
     import numpy as np
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.tensor import NBXTensor
     c = _paged(num_layers=1, num_kv_heads=2, k_head_dim=8, v_head_dim=8,
                max_cache_len=4096, dtype=NBXDtype.float16,
                window_ceiling=8192, decode_budget=16, initial_cache_len=64)
@@ -222,7 +222,7 @@ def test_replacement_retires_the_old_generation_replay_plans() -> None:
     if not _gpu():
         pytest.skip("needs a CUDA device for the layer buffers")
     import numpy as np
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.tensor import NBXTensor
     k = NBXTensor.from_numpy(np.ones((1, 2, 20, 8), np.float16))
     c.prefill(0, k, k)
     c.clear()

@@ -21,7 +21,7 @@ import pytest
 from neurobrix.core.module import tiling_sizes as TS
 from neurobrix.core.prism import InputConfig, PrismSolver
 from neurobrix.core.prism.solver import ComponentMemory
-from neurobrix.kernels import launch_keys as LK
+from nbxtensor.ops import launch_keys as LK
 
 MB = 1024 ** 2
 GiB = 1024 ** 3
@@ -100,7 +100,7 @@ def test_the_sdpa_route_is_unchanged(args, expected):
 
 
 def test_the_sdpa_scores_budget_for_a_device_is_unchanged(monkeypatch):
-    from neurobrix.kernels import wrappers as W
+    from nbxtensor.ops import wrappers as W
     devs = [SimpleNamespace(index=0, memory_mb=16384), SimpleNamespace(index=2, memory_mb=32768)]
     monkeypatch.setattr(W, "get_hardware_profile", lambda: SimpleNamespace(devices=devs))
     monkeypatch.setattr(W, "_sdpa_math_scores_budget_bytes", lambda: 2 << 30)
@@ -311,8 +311,8 @@ def test_a_refused_attention_chunk_is_an_error_naming_its_key_never_a_smaller_re
     """ZERO FALLBACK: the chunked SDPA's rows are the TilingEngine's, fixed before the launch.
     An allocation failure re-raises naming the key (op, shape, rows, bytes asked); there is no
     second launch at fewer rows (the 2026-09-02 halving retry is gone)."""
-    from neurobrix.kernels import wrappers as W
-    from neurobrix.kernels.nbx_tensor import DeviceOOMError
+    from nbxtensor.ops import wrappers as W
+    from nbxtensor.tensor import DeviceOOMError
 
     class _T:
         def __init__(self, shape):

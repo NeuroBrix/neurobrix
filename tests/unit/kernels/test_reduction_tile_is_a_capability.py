@@ -20,8 +20,7 @@ import pytest
 
 
 def test_every_known_backend_has_a_row():
-    from neurobrix.kernels.nbx_tensor import (
-        _BACKEND_REDUCE_TILE_MAX, _BACKEND_TRAPS_ON_DEVICE_ASSERT)
+    from nbxtensor.tensor import _BACKEND_REDUCE_TILE_MAX, _BACKEND_TRAPS_ON_DEVICE_ASSERT
 
     missing = set(_BACKEND_TRAPS_ON_DEVICE_ASSERT) - set(_BACKEND_REDUCE_TILE_MAX)
     assert not missing, (
@@ -32,14 +31,14 @@ def test_every_known_backend_has_a_row():
 def test_cuda_takes_the_full_8192_tile_unchanged():
     """A shared-engine change is numerically inert on CUDA unless it fixes a
     bug, and this fixes one only on Metal: cuda/hip must still take 8x1024."""
-    from neurobrix.kernels.nbx_tensor import _BACKEND_REDUCE_TILE_MAX
+    from nbxtensor.tensor import _BACKEND_REDUCE_TILE_MAX
 
     assert _BACKEND_REDUCE_TILE_MAX["cuda"] >= 8192
     assert _BACKEND_REDUCE_TILE_MAX["hip"] >= 8192
 
 
 def test_metal_caps_at_the_threadgroup():
-    from neurobrix.kernels.nbx_tensor import _BACKEND_REDUCE_TILE_MAX
+    from nbxtensor.tensor import _BACKEND_REDUCE_TILE_MAX
 
     assert _BACKEND_REDUCE_TILE_MAX["metal"] == 1024
 
@@ -50,7 +49,7 @@ def test_the_clamp_shrinks_only_block_n_and_keeps_the_product_legal(monkeypatch)
     Over the cap: BLOCK_M kept (it sets the row grid), BLOCK_N shrunk so the
     product fits. Under it: untouched. The product must never exceed the cap.
     """
-    import neurobrix.kernels.wrappers as W
+    import nbxtensor.ops.wrappers as W
 
 
     monkeypatch.setattr(W, "_reduce_tile_max", lambda: 1024)
@@ -66,7 +65,7 @@ def test_the_clamp_shrinks_only_block_n_and_keeps_the_product_legal(monkeypatch)
 
 
 def test_a_backend_without_a_row_refuses():
-    from neurobrix.kernels.nbx_tensor import _backend_capability
+    from nbxtensor.tensor import _backend_capability
 
     with pytest.raises(RuntimeError):
         _backend_capability({"no-such-backend": 1}, "_T", "its reduction tile cap")   # a table without the executing backend refuses on EVERY backend (with a cuda row it refused only on Metal)
@@ -87,8 +86,8 @@ def test_l2_norm_with_the_clamped_tile_matches_aten():
     """
     import numpy as np
     torch = pytest.importorskip("torch")
-    from neurobrix.kernels import wrappers as W
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.ops import wrappers as W
+    from nbxtensor.tensor import NBXTensor
 
     rng = np.random.default_rng(20260913)
     x = (rng.standard_normal((4, 8192)) * 0.1).astype(np.float32)
@@ -114,8 +113,8 @@ def test_weight_norm_with_the_clamped_tile_matches_aten():
     """
     import numpy as np
     torch = pytest.importorskip("torch")
-    from neurobrix.kernels import wrappers as W
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.ops import wrappers as W
+    from nbxtensor.tensor import NBXTensor
 
     rng = np.random.default_rng(20260913)
     v = (rng.standard_normal((32, 16384)) * 0.1).astype(np.float32)   # dim=0, N=16384

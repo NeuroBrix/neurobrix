@@ -14,10 +14,10 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("needs a CUDA device", allow_module_level=True)
 
-from neurobrix.kernels import launch_keys as LK  # noqa: E402
-from neurobrix.kernels import wrappers as W  # noqa: E402
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype  # noqa: E402
-from neurobrix.triton.autotune_cache import key_of  # noqa: E402
+from nbxtensor.ops import launch_keys as LK  # noqa: E402
+from nbxtensor.ops import wrappers as W  # noqa: E402
+from nbxtensor.tensor import NBXTensor, NBXDtype  # noqa: E402
+from nbxtensor.ops.autotune_cache import key_of  # noqa: E402
 
 F32, F16 = NBXDtype.float32, NBXDtype.float16
 
@@ -45,7 +45,7 @@ def _t(shape, dt):
 @pytest.mark.parametrize("dt", [F32, F16])
 @pytest.mark.parametrize("log", [False, True])
 def test_a_long_row_launches_the_looped_kernel_with_its_key(monkeypatch, rows, feat, dt, log):
-    from neurobrix.kernels.ops.softmax import softmax_forward_looped_kernel as K_
+    from nbxtensor.ops.softmax import softmax_forward_looped_kernel as K_
     seen = _capture(monkeypatch, K_)
     x = _t((rows, feat), dt)
     with pytest.raises(_Launched):

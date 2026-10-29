@@ -28,7 +28,7 @@ import pytest
 triton = pytest.importorskip("triton")
 pytest.importorskip("triton_apple_backend")
 
-from neurobrix.triton.metal_backend import selected_metal_backend  # noqa: E402
+from nbxtensor.backend.metal_backend import selected_metal_backend  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -52,9 +52,9 @@ def _kernel():
 
 
 def test_scalars_arrive_whole_and_the_host_sees_the_writes():
-    from neurobrix.kernels.nbx_tensor import NBXTensor
-    from neurobrix.kernels.launcher import active_driver
-    from neurobrix.triton.triton_ext_driver import TritonExtDriver
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.backend.launcher import active_driver
+    from nbxtensor.backend.triton_ext_driver import TritonExtDriver
 
     assert isinstance(active_driver(), TritonExtDriver)
 
@@ -75,7 +75,7 @@ def test_scalars_arrive_whole_and_the_host_sees_the_writes():
     # only because the archived fork's driver tolerated Triton's own path. The
     # launch below goes through `launch()` explicitly, which is what a test of
     # OUR launch ABI has to do when its kernel is not the engine's.
-    from neurobrix.kernels import launcher
+    from nbxtensor.backend import launcher
 
     n, BLOCK, alpha = 4096, 256, 2.5
     rng = np.random.default_rng(0)
@@ -98,7 +98,7 @@ def test_scalars_arrive_whole_and_the_host_sees_the_writes():
 def test_a_parameter_the_allocator_does_not_own_is_refused_not_guessed():
     """A pointer has to be wrapped with its LENGTH, which only the allocator
     knows. An unknown pointer must be named, never bound at a guessed size."""
-    from neurobrix.triton.triton_ext_driver import _buffer_for
+    from nbxtensor.backend.triton_ext_driver import _buffer_for
 
     with pytest.raises(RuntimeError, match="does not record it"):
         _buffer_for(0xDEADB000, "*fp32")
@@ -107,7 +107,7 @@ def test_a_parameter_the_allocator_does_not_own_is_refused_not_guessed():
 def test_launching_without_parameter_types_is_refused():
     """The scalars share one packed buffer whose field offsets come from the
     Triton types. Without them the packing would be silently misaligned."""
-    from neurobrix.triton.triton_ext_driver import TritonExtDriver
+    from nbxtensor.backend.triton_ext_driver import TritonExtDriver
 
     with pytest.raises(RuntimeError, match="needs the Triton type"):
         TritonExtDriver.instance().launch(

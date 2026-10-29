@@ -31,9 +31,9 @@ PROBE = textwrap.dedent("""
     from neurobrix.kernels import census
     census.install(hardware_profile={"devices": [{"brand": "nvidia", "model": "Tesla V100-SXM2-16GB",
                                                   "compute_capability": "7.0", "architecture": "volta"}]})
-    from neurobrix.kernels.nbx_tensor import NBXTensor
-    from neurobrix.kernels import wrappers as W
-    from neurobrix.kernels.ops import _configs as C
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import _configs as C
     C.matrix_unit = W._matrix_unit = lambda: {}     # the tl.dot convolution's keys (the unit's have none)
     x1 = NBXTensor.empty((1, 64, 1, 4021), "float16", 0)
     w1 = NBXTensor.empty((64, 64, 1, 3), "float16", 0)

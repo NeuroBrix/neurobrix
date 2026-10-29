@@ -26,7 +26,7 @@ import torch
 import yaml
 
 from neurobrix.core.config.loader import CONFIG_ROOT
-from neurobrix.kernels.nbx_tensor import NBXDtype
+from nbxtensor.tensor import NBXDtype
 
 PROFILES = sorted((CONFIG_ROOT / "vendors").glob("*/*.yml"))
 BRANCHES = ("compiled", "triton")
@@ -137,8 +137,8 @@ def test_a_profile_whose_devices_disagree_is_refused_by_both_branches():
 @pytest.mark.parametrize("devices,expected", [((("nvidia", "volta"),), True),
                                               ((("apple", "apple_silicon"),), False)])
 def test_the_engine_declares_the_profile_s_capability_to_nbx_tensor(monkeypatch, devices, expected):
-    from neurobrix.kernels import nbx_tensor as T
-    from neurobrix.kernels import wrappers as W
+    from nbxtensor import tensor as T
+    from nbxtensor.ops import wrappers as W
     monkeypatch.setattr(T, "_BACKEND_HAS_FP64", None)
     monkeypatch.setattr(W, "_NBX_HW_PROFILE", None)
     monkeypatch.setattr(W, "_NBX_HAS_NATIVE_BF16", True)
@@ -150,7 +150,7 @@ def test_the_engine_declares_the_profile_s_capability_to_nbx_tensor(monkeypatch,
 
 def test_nbx_tensor_takes_its_fp64_capability_from_its_caller_only():
     import inspect
-    from neurobrix.kernels import nbx_tensor as T
+    from nbxtensor import tensor as T
     with pytest.raises(TypeError):
         T.set_backend_has_fp64("yes")
     src = inspect.getsource(T)
@@ -283,7 +283,7 @@ def test_a_compiled_serve_does_not_read_the_triton_surface():
     from neurobrix.serving import engine
     src = inspect.getsource(engine)
     site = src.index("set_hardware_profile(hw_profile)")
-    assert re.search(r'if self\.mode in TRITON_ENGINES:\s*\n\s*from neurobrix\.kernels\.wrappers import '
+    assert re.search(r'if self\.mode in TRITON_ENGINES:\s*\n\s*from nbxtensor\.ops\.wrappers import '
                      r'set_hardware_profile\s*\n\s*set_hardware_profile\(hw_profile\)', src), \
         "the serving engine declares the Triton surface in every mode"
     assert src.count("set_hardware_profile(") == 1 and site

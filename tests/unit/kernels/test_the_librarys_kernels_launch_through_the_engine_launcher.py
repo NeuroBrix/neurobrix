@@ -9,7 +9,7 @@ import importlib
 import nbxtensor.ops as lib_ops
 from triton.runtime.jit import JITFunction
 
-from neurobrix.kernels.launcher import _is_ours
+from nbxtensor.backend.launcher import _is_ours
 
 
 def test_every_jit_kernel_of_the_library_is_the_launchers():

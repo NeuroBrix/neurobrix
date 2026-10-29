@@ -156,9 +156,9 @@ def test_the_compiled_sequence_reuses_only_bit_identical_invariant_inputs():
 def test_the_triton_sequence_reuses_only_bit_identical_invariant_inputs():
     pytest.importorskip("triton")
     import numpy as np
-    from neurobrix.kernels.nbx_tensor import NBXDtype, NBXTensor
+    from nbxtensor.tensor import NBXDtype, NBXTensor
     try:
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        from nbxtensor.tensor import DeviceAllocator
         DeviceAllocator.ensure_triton_device(0)
     except Exception:
         pytest.skip("no CUDA card")

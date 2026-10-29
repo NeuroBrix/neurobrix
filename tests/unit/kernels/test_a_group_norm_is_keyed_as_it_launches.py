@@ -14,10 +14,10 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("needs a CUDA device", allow_module_level=True)
 
-from neurobrix.kernels import launch_keys as LK  # noqa: E402
-from neurobrix.kernels import wrappers as W  # noqa: E402
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype  # noqa: E402
-from neurobrix.triton.autotune_cache import key_of  # noqa: E402
+from nbxtensor.ops import launch_keys as LK  # noqa: E402
+from nbxtensor.ops import wrappers as W  # noqa: E402
+from nbxtensor.tensor import NBXTensor, NBXDtype  # noqa: E402
+from nbxtensor.ops.autotune_cache import key_of  # noqa: E402
 
 F32, F16 = NBXDtype.float32, NBXDtype.float16
 
@@ -35,7 +35,7 @@ def _t(a, dt):
 @pytest.mark.parametrize("dt", [F32, F16])
 @pytest.mark.parametrize("affine", [True, False])
 def test_the_launch_is_its_key(monkeypatch, shape, groups, dt, affine):
-    from neurobrix.kernels.ops.groupnorm import group_norm_forward_kernel as K_
+    from nbxtensor.ops.groupnorm import group_norm_forward_kernel as K_
     seen = []
 
     def run(*args, **kwargs):

@@ -69,8 +69,8 @@ except ModuleNotFoundError:  # script-mode under a pytest-less GPU venv
 
     pytest = _NoPytest()  # type: ignore[assignment]
 
-from neurobrix.kernels import wrappers as W
-from neurobrix.kernels.nbx_tensor import DeviceAllocator, NBXDtype, NBXTensor
+from nbxtensor.ops import wrappers as W
+from nbxtensor.tensor import DeviceAllocator, NBXDtype, NBXTensor
 
 # Declared bound for fp16-in / fp32-accumulate attention. See the
 # derivation in the module docstring. Widening this is a change to the

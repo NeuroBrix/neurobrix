@@ -24,8 +24,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from neurobrix.kernels import wrappers as W
-from neurobrix.kernels.nbx_tensor import NBXTensor
+from nbxtensor.ops import wrappers as W
+from nbxtensor.tensor import NBXTensor
 
 M, N, K = 1_100_000, 2048, 64          # M*N = 2 252 800 000 > 2**31; rows >= 1 048 576 overflow an int32 offset
 FIRST_OVERFLOWING_ROW = (2 ** 31) // N   # 1 048 576
@@ -45,7 +45,7 @@ def _device_free_bytes():
     the right authority for a question about the engine's own device.
     """
     try:
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        from nbxtensor.tensor import DeviceAllocator
         free = DeviceAllocator.device_free_bytes(None)
         return int(free) if free and free > 0 else 0
     except Exception:                                    # noqa: BLE001
@@ -75,7 +75,7 @@ def _require_room():
     # Flushing first makes the question answerable by the driver again, and
     # releasing the cache before a multi-gigabyte allocation is right anyway.
     try:
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        from nbxtensor.tensor import DeviceAllocator
         DeviceAllocator.empty_cache_pool()
     except Exception:
         pass

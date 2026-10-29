@@ -82,7 +82,7 @@ K = 3
 
 def _dev_ok():
     try:
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        from nbxtensor.tensor import DeviceAllocator
         return DeviceAllocator.device_count() > 0
     except Exception:
         return False
@@ -108,8 +108,8 @@ def _reference(x, w, pad):
 
 
 def _run(dtype, pad):
-    from neurobrix.kernels.nbx_tensor import NBXTensor
-    from neurobrix.kernels import wrappers as WR
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.ops import wrappers as WR
     rng = np.random.default_rng(20260922)
     x = rng.standard_normal((1, CI, H, W), dtype=np.float32)
     w = rng.standard_normal((CI, CO, K, K), dtype=np.float32)

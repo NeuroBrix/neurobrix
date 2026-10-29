@@ -31,7 +31,7 @@ import neurobrix.core.runtime  # noqa: F401  (pre-resolve the cfg<->runtime impo
 # tiling_engine imports the second DEFERRED, inside the call, so patching its
 # source module is what intercepts it — patching the old one would silently
 # patch nothing, which is the failure mode this file exists to prevent.
-import neurobrix.kernels.ops.residual_chain as _rc
+import nbxtensor.ops.residual_chain as _rc
 import neurobrix.kernels.ops.residual_chain_torch as _rc_torch
 from neurobrix.core.module.tiling_engine import (
     OpLevelTilingEngine,

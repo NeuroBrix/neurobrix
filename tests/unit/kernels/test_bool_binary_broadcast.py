@@ -34,10 +34,9 @@ except ModuleNotFoundError:  # script-mode under a pytest-less GPU venv
 import numpy as np
 import torch
 
-from neurobrix.kernels import wrappers as w
-from neurobrix.kernels.nbx_tensor import NBXTensor, nbx_to_torch
-
-
+from nbxtensor.ops import wrappers as w
+from nbxtensor.tensor import NBXTensor
+from neurobrix.kernels.torch_interop import nbx_to_torch
 def _nbx(arr):
     return NBXTensor.from_numpy(np.ascontiguousarray(arr))
 
@@ -101,7 +100,7 @@ def test_new_ones_fills_ones():
     masked ALL keys -> every T5 self-attention row uniform -> cond-branch
     embeds washed toward the pad mean (triton cond corr 0.9288 vs the
     sequential oracle, uncond clean)."""
-    from neurobrix.kernels.nbx_tensor import NBXDtype
+    from nbxtensor.tensor import NBXDtype
     base = _nbx(np.zeros((1, 1, _S, 1), dtype=np.int64))
     scalar = base.new_ones([], dtype=NBXDtype.bool_)   # the exact graph call
     assert tuple(scalar.shape) == ()

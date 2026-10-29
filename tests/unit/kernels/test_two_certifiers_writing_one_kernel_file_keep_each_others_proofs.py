@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 
-from neurobrix.kernels import autotune_certified as C
+from nbxtensor.ops import autotune_certified as C
 from neurobrix.kernels import autotune_certify as CF
 
 

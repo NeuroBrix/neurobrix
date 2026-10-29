@@ -15,16 +15,16 @@ from tests.unit.prism._pinned_machine import V100_16GB, profile
 @pytest.fixture
 def bound_profile(monkeypatch):
     """The Volta vendor file in force (`_configs.vendor_profile_for_arch("7.0")`, the compute capability): the ladders and the matrix unit are DATA on it."""
-    from neurobrix.kernels import wrappers as W
-    from neurobrix.kernels.ops import _configs as CF
+    from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import _configs as CF
     W.set_hardware_profile(profile(V100_16GB))
     monkeypatch.setattr(CF, "_ACTIVE_PROFILE", CF.vendor_profile_for_arch("7.0"))
     yield CF.active_vendor_profile()
 
 
 def test_the_breakpoints_are_the_gemv_bound_every_bucket_step_and_the_units_take_over(bound_profile):
-    from neurobrix.kernels import launch_keys as LK
-    from neurobrix.kernels.nbx_tensor import NBXDtype
+    from nbxtensor.ops import launch_keys as LK
+    from nbxtensor.tensor import NBXDtype
     bps = LK.row_breakpoints(1, 200)
     assert 5 in bps                                                   # M <= 4: the per-row GEMV, no key
     half, single = NBXDtype.float16, NBXDtype.float32

@@ -12,8 +12,8 @@ import pytest
 
 torch = pytest.importorskip("torch")                       # the oracle only: torch.nn.functional.pad
 
-from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator as DA  # noqa: E402
-from neurobrix.kernels import wrappers as W  # noqa: E402
+from nbxtensor.tensor import NBXTensor, DeviceAllocator as DA  # noqa: E402
+from nbxtensor.ops import wrappers as W  # noqa: E402
 
 # the engine's own device gate (CUDA, ROCm or Metal — the Triton tests' gate), never torch.cuda's: gated on CUDA the
 # test skipped on the Mac, and a test that never runs on a backend proves nothing for it (the Mac, 2026-10-17 23:04)

@@ -31,9 +31,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from neurobrix.kernels.oracles.conv2d_fp64 import (
-    conv2d_from_args, conv2d_reference, depthwise_from_args, depthwise_reference,
-)
+from nbxtensor.ops.oracles.conv2d_fp64 import conv2d_from_args, conv2d_reference, depthwise_from_args, depthwise_reference
 
 torch = pytest.importorskip("torch")
 

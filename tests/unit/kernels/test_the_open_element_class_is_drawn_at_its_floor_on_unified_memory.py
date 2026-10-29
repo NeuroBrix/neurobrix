@@ -9,16 +9,16 @@ from __future__ import annotations
 import pytest
 
 from neurobrix.kernels import autotune_certify as A
-from neurobrix.kernels.autotune_bucket import class_floor
+from nbxtensor.ops.autotune_bucket import class_floor
 
-EW = "neurobrix.kernels.ops.elementwise_launch.ew_launch_kernel"
+EW = "nbxtensor.ops.elementwise_launch.ew_launch_kernel"
 UNIFIED = 19 * 1024 ** 3
 LADDER = [(65536, 65536), (1048576, 1048576), (16777216, 16777216), (None, 68719476736)]
 
 
 @pytest.fixture
 def profile(monkeypatch):
-    from neurobrix.kernels import autotune_bucket as B
+    from nbxtensor.ops import autotune_bucket as B
     monkeypatch.setattr(A.C, "output_dtype", lambda tuner, key: "fp32")
     real = B.ladder_for
     monkeypatch.setattr(B, "ladder_for", lambda dim, profile=None: LADDER if dim == "elements" else real(dim, profile))

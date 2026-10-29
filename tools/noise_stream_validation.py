@@ -82,8 +82,9 @@ def draw(n: int, run_seed: int, count: int, device: str) -> list:
     Consumption order is the contract: draw i is the (i+1)-th stochastic draw a
     run makes, exactly as a flow handler would consume it.
     """
+    import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
     from nbxtensor.random import rng_stream
-    from neurobrix.kernels.wrappers import randn_wrapper
+    from nbxtensor.ops.wrappers import randn_wrapper
 
     rng_stream.set_run_seed(run_seed)
     out = []

@@ -8,7 +8,7 @@ No torch. Used by Sana/Flex/SD3-class flow-matching diffusion in triton mode.
 import math
 
 import numpy as np
-from neurobrix.kernels.nbx_tensor import NBXTensor
+from nbxtensor.tensor import NBXTensor
 
 
 class TritonFlowEulerScheduler:

@@ -10,9 +10,9 @@ Usage: --triton-sequential flag routes here.
 
 from typing import Optional, Any, Dict, List
 
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, parse_dtype
-from neurobrix.kernels.dispatch import dispatch as kernel_dispatch
-from neurobrix.kernels import wrappers as w
+from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator, parse_dtype
+from nbxtensor.ops.dispatch import dispatch as kernel_dispatch
+from nbxtensor.ops import wrappers as w
 
 from .symbols import SymbolResolver
 from neurobrix.core.runtime import symexpr as _symexpr
@@ -33,8 +33,8 @@ class TritonSequentialDispatcher:
         self.device_idx = device_idx
         self.compute_dtype = compute_dtype
         self.activations_fp16_safe = activations_fp16_safe
-        from neurobrix.kernels.wrappers import has_native_bf16 as _has_bf16
-        from neurobrix.kernels import wrappers as _w
+        from nbxtensor.ops.wrappers import has_native_bf16 as _has_bf16
+        from nbxtensor.ops import wrappers as _w
         # graph_dtype: the component's traced `torch_dtype` (the AMP_FP32 cast-back rule
         # reads it under bf16 compute) — the caller hands the DAG's own.
         self._dtype_engine = TritonDtypeEngine(
@@ -53,7 +53,7 @@ class TritonSequentialDispatcher:
     # fp32 convolution of the process under an fp16 compute dtype (2026-10-18: 27 conv kernels red in the unit
     # suite, each green alone; the leak was a test that merely constructed one).
     def __enter__(self):
-        from neurobrix.kernels import wrappers as _w
+        from nbxtensor.ops import wrappers as _w
         if self._saved_context is not None:
             raise RuntimeError("TritonSequentialDispatcher: a run is already open on this dispatcher")
         self._saved_context = (_w.get_compute_dtype(), _w.get_activations_fp16_safe())
@@ -63,7 +63,7 @@ class TritonSequentialDispatcher:
         return self
 
     def __exit__(self, exc_type, exc, tb):
-        from neurobrix.kernels import wrappers as _w
+        from nbxtensor.ops import wrappers as _w
         prev_dt, prev_safe = self._saved_context
         self._saved_context = None
         _w.set_compute_dtype(prev_dt)
@@ -259,7 +259,7 @@ class TritonSequentialDispatcher:
         valid = [t for t in inputs[0]
                  if hasattr(t, 'ndim') and t.ndim > 0 and t.numel() > 0]
         if len(valid) == 0:
-            from neurobrix.kernels.nbx_tensor import ImpossibleExtentError
+            from nbxtensor.tensor import ImpossibleExtentError
             shapes = [tuple(getattr(t, "shape", ())) for t in inputs[0]]
             dim = inputs[1] if len(inputs) > 1 else 0
             raise ImpossibleExtentError(

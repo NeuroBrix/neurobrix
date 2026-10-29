@@ -39,7 +39,7 @@ pytest.importorskip("triton")
 
 def _device_ready():
     try:
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        from nbxtensor.tensor import DeviceAllocator
         DeviceAllocator.set_device(0)
         return True
     except Exception:
@@ -50,8 +50,8 @@ pytestmark = pytest.mark.skipif(not _device_ready(), reason="a GPU device is req
 
 
 def test_repeated_identical_calls_return_identical_bytes():
-    from neurobrix.kernels.nbx_tensor import NBXTensor
-    from neurobrix.kernels import wrappers as w
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.ops import wrappers as w
 
     # S=512 is the smallest shape MEASURED to detect the race: with the
     # round-trip restored it gives 7 distinct results in 8 calls, while S=256
@@ -74,7 +74,7 @@ def test_repeated_identical_calls_return_identical_bytes():
             # 2-D" — and falls back to CPU. A backend that cannot run the kernel
             # cannot answer a question about the kernel's determinism, so skip
             # BY NAME rather than fail or silently pass.
-            from neurobrix.triton.metal_backend import is_backend_refusal
+            from nbxtensor.backend.metal_backend import is_backend_refusal
             if is_backend_refusal(exc) or "Refusing" in str(exc):
                 pytest.skip(f"the selected Metal backend refuses this kernel: "
                             f"{str(exc)[:160]}")
@@ -90,7 +90,7 @@ def test_repeated_identical_calls_return_identical_bytes():
 def test_the_unbarriered_tmp_round_trip_is_gone():
     """Guard the source: the race is invisible in any single run's output."""
     import inspect
-    from neurobrix.kernels.ops import flash_attention as FA
+    from nbxtensor.ops import flash_attention as FA
 
     src = inspect.getsource(FA)
     assert "tl.store(t_ptrs" not in src, (

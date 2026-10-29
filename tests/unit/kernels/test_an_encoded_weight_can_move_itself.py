@@ -16,7 +16,7 @@ Injection: `to_cuda_async` removed again → the first test raised
 AttributeError, which is the defect verbatim."""
 import pytest
 
-from neurobrix.kernels.quantized_tensor import QuantizedTensor
+from nbxtensor.quant.quantized_tensor import QuantizedTensor
 
 
 class _Part:

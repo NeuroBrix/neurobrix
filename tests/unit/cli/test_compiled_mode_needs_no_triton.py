@@ -123,4 +123,4 @@ def test_the_wrappers_module_cannot_import_without_the_wheel(without_triton):
     rather than assumed.
     """
     with pytest.raises(ModuleNotFoundError, match="triton"):
-        _fresh("neurobrix.kernels.wrappers")
+        _fresh("nbxtensor.ops.wrappers")

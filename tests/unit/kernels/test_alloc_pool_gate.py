@@ -46,7 +46,7 @@ except ModuleNotFoundError:  # script-mode under the pytest-less GPU venv
 
     pytest = _NoPytest()  # type: ignore
 
-from neurobrix.kernels.nbx_tensor import DeviceAllocator
+from nbxtensor.tensor import DeviceAllocator
 
 
 class _PoolState:
@@ -125,7 +125,7 @@ class _FakeDriver:
 
 
 def _with_driver(monkeypatch):
-    import neurobrix.kernels.nbx_tensor as nt
+    import nbxtensor.tensor as nt
     drv = _FakeDriver()
     monkeypatch.setattr(nt, "_gpu_runtime", lambda: drv)
     monkeypatch.setattr(nt, "_active_backend", lambda: {"malloc": "cudaMalloc", "free": "cudaFree"})
@@ -163,7 +163,7 @@ def test_free_list_accounting_tracks_bytes_hits_and_splits(monkeypatch):
 
 
 def test_autotune_headroom_guard_retries_once_then_gives_up():
-    from neurobrix.kernels import wrappers
+    from nbxtensor.ops import wrappers
 
     calls = {"launch": 0, "flush": 0, "hook": 0}
     saved = (DeviceAllocator.empty_cache_pool, DeviceAllocator.get_device,

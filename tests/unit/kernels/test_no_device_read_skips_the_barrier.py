@@ -45,7 +45,7 @@ def _owns_its_cache(tmp_path, monkeypatch):
 def _dtypes():
     """Every dtype the oracle may be handed, named from the enum and not
     listed here, so a dtype added to the engine cannot stay untested."""
-    from neurobrix.kernels.nbx_tensor import NBXDtype
+    from nbxtensor.tensor import NBXDtype
     wanted = ("float32", "float16", "bfloat16")
     return [getattr(NBXDtype, n) for n in wanted if hasattr(NBXDtype, n)]
 
@@ -59,7 +59,7 @@ def _copy_path(t):
     of this did and what made the bf16 case fail inside the test rather than
     inside the property.
     """
-    from neurobrix.kernels.nbx_tensor import NBXDtype
+    from nbxtensor.tensor import NBXDtype
     from neurobrix.kernels.autotune_certify import bf16_bits_to_f32
 
     host = t.to_cpu()
@@ -76,7 +76,7 @@ def _kernel_written(dtype, n=4096):
     situation the oracle actually meets when a model's bias was converted
     earlier in the graph.
     """
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.tensor import NBXTensor
 
     rng = np.random.default_rng(20260912)
     host = NBXTensor.from_numpy(rng.standard_normal(n, dtype=np.float32))
@@ -91,7 +91,7 @@ def test_the_oracle_reads_what_the_copy_path_reads(dtype):
     says nothing about when it was read. Only the two paths against each
     other, on the same buffer after the same kernel, can.
     """
-    from neurobrix.kernels.screen_oracle import _to_f64
+    from nbxtensor.ops.screen_oracle import _to_f64
 
     t = _kernel_written(dtype)
     by_oracle = _to_f64(t)
@@ -159,7 +159,7 @@ def test_no_raw_device_read_survives_anywhere_in_the_oracle():
     conversion kernel. A removal that is real at ninety percent leaves the next
     anomaly with the same two candidate causes.
     """
-    import neurobrix.kernels.screen_oracle as mod
+    import nbxtensor.ops.screen_oracle as mod
 
     found = _raw_reads(Path(mod.__file__))
     assert not found, (

@@ -220,7 +220,9 @@ def _vae_only_decode(model_name: str, dump_path: Path, output_png: Path,
         ]
         capture_dir = OUT_DIR / "vae_op_input_dumps"
         capture_dir.mkdir(exist_ok=True)
-        from neurobrix.kernels.nbx_tensor import nbx_to_torch, NBXTensor as _NBXT
+        import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
+        from nbxtensor.tensor import NBXTensor as _NBXT
+        from neurobrix.kernels.torch_interop import nbx_to_torch
         if not hasattr(vae_exec, "_op_uid_interceptors"):
             vae_exec._op_uid_interceptors = {}
         # Save the original interceptor (if any) so we forward.
@@ -230,7 +232,7 @@ def _vae_only_decode(model_name: str, dump_path: Path, output_png: Path,
         # standard dispatcher post-capture. Build one bound to vae_exec.
         from neurobrix.triton.sequential import TritonSequentialDispatcher
         try:
-            from neurobrix.kernels.nbx_tensor import NBXDtype as _NBXD
+            from nbxtensor.tensor import NBXDtype as _NBXD
             std_disp = TritonSequentialDispatcher(
                 device_idx=int(target_dev.split(":")[-1]) if isinstance(target_dev, str) and ":" in target_dev else 0,
                 compute_dtype=_NBXD.float16, stores_fp64=vae_exec._triton_stores_fp64())
@@ -330,7 +332,8 @@ def _vae_only_decode(model_name: str, dump_path: Path, output_png: Path,
 
     # output_tensor may be torch.Tensor (sequential) or NBXTensor (triton).
     # nbx_to_torch handles the NBXTensor->torch.Tensor conversion via D2D.
-    from neurobrix.kernels.nbx_tensor import nbx_to_torch, NBXTensor
+    from nbxtensor.tensor import NBXTensor
+    from neurobrix.kernels.torch_interop import nbx_to_torch
     if isinstance(output_tensor, NBXTensor):
         print(f"[VAE_ISO] converting NBXTensor->torch via nbx_to_torch...",
               flush=True)

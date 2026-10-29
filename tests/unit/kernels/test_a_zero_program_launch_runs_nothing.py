@@ -4,7 +4,7 @@ driver refuses as a null pointer (Qwen3-VL-30B-A3B-Thinking triton, Mac 2026-10-
 What this test would do if the code were wrong: the launch reaches prepare and the driver -> red."""
 import pytest
 
-from neurobrix.kernels import launcher as L
+from nbxtensor.backend import launcher as L
 
 
 def test_a_zero_grid_never_reaches_the_driver(monkeypatch):

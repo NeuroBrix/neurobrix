@@ -72,7 +72,7 @@ MODES = [("compiled", "cpu"), ("sequential", "cpu")] + (
 def _input(x, mode, device):
     """The run's own tensor kind: torch for the two torch engines, NBXTensor for the two Triton ones (R30/R33)."""
     if mode.startswith("triton"):
-        from neurobrix.kernels.nbx_tensor import NBXTensor
+        from nbxtensor.tensor import NBXTensor
         return NBXTensor.from_numpy(x.numpy()).to_cuda()
     return x.to(device)
 
@@ -200,7 +200,7 @@ def test_a_handed_state_is_freed_at_its_last_use(mode, device):
     pieces["next"].release_run_tensors()
     inputs = chunk_inputs()
     if mode.startswith("triton"):
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator as DA
+        from nbxtensor.tensor import DeviceAllocator as DA
         state_bytes = sum(int(v.numel()) * int(v.element_size()) for k, v in inputs.items() if k != "z")
         DA.empty_cache_pool()
         before = DA.memory_allocated()

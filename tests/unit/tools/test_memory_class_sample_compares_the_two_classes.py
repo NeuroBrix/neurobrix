@@ -24,7 +24,7 @@ def _cert(kw, memory_mb, dev=1e-6, ms=0.1):
 def _file(root, entries):
     p = root / "nvidia" / "volta" / "matmul_kernel.fp32.json"; p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps({"format": "nbx-autotune-certified/2", "vendor": "nvidia", "profile": "volta",
-                             "kernel": "neurobrix.kernels.ops.matmul.matmul_kernel", "dtype": "fp32", "entries": entries}))
+                             "kernel": "nbxtensor.ops.matmul.matmul_kernel", "dtype": "fp32", "entries": entries}))
 
 
 def test_same_and_different_configs_are_counted_not_reconciled(tmp_path, monkeypatch):

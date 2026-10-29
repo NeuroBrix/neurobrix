@@ -19,7 +19,7 @@ which refuses when a device is visible).
 from __future__ import annotations
 
 from neurobrix.kernels.census import _shadow_item_value
-from neurobrix.kernels.nbx_tensor import NBXDtype
+from nbxtensor.tensor import NBXDtype
 
 
 def test_a_bool_guard_reads_healthy():

@@ -1,0 +1,1234 @@
+"""The certified autotune directory — an engine component.
+
+The settings the autotuner would otherwise discover by sweeping at runtime
+live WITH the engine, versioned with it, under
+``src/neurobrix/config/autotune/<vendor>/<profile>/<kernel>.<dtype>.json``:
+one file per kernel and per dtype of the buffer the kernel writes, indexed
+inside by the shape key the launcher already computes (``autotune_cache.key_of``
+— the Autotuner's own key). Each entry carries the setting retained and its
+PROOF — the date, the engine and backend versions, the shape, the deviation
+measured against the fp64 oracle, the profile's tolerance, the machine — and
+the settings excluded with their deviation.
+
+The directory is filled by ``neurobrix autotune certify --profile <profile>``
+(``autotune_certify.py``), never by a request: at load the launcher looks the
+certified setting up for the profile Prism detected, the kernel, the dtype and
+the shape; if it exists it is applied without a sweep and without the screen;
+if it is missing the runtime sweeps with the consensus screen as before, SAYS
+SO, and keeps the result in the machine's local replay cache — never in this
+directory. A file without a proof, or whose proof does not re-read, is refused
+here with its reason and the runtime falls back to the sweep.
+
+Nothing here names a backend or a model: the vendor and profile come from the
+vendor profile in force, the kernels from the launcher, the tolerances from the
+profile.
+"""
+from __future__ import annotations
+
+import ast
+import datetime as _dt
+import json
+import os
+from pathlib import Path
+from typing import Any, Dict, Iterator, List, Optional, Tuple
+
+FORMAT = "nbx-autotune-certified/2"
+
+#: Formats this reader accepts. `/2` added the `built` field, which says the
+#: kernel actually COMPILED on the device during its certifying run. A `/1`
+#: file pre-dates that field and is READ, not refused: the 5628 shapes the
+#: other machine certified before it existed are proven work, and discarding
+#: them over a field that did not exist when they were written would be
+#: destroying a measurement to tidy a schema. What `/1` cannot say is said
+#: instead — `built_unknown_formats` names them to the caller.
+_FORMATS = ("nbx-autotune-certified/1", "nbx-autotune-certified/2")
+
+#: Which proof fields each format requires.
+_REQUIRED = {
+    "nbx-autotune-certified/1": ("date", "engine_version", "backend", "shape",
+                                 "deviation", "tolerance", "machine", "oracle"),
+    "nbx-autotune-certified/2": ("date", "engine_version", "backend", "shape",
+                                 "deviation", "tolerance", "machine", "oracle",
+                                 "built"),
+}
+#: Every dtype name the launcher can append to a key. The launcher writes
+#: `str(arg.dtype)` of a Triton dtype, so these are TRITON spellings.
+#:
+#: `uint8` was missing, and the omission was silent in the worst way: `key_dtypes`
+#: DROPPED the unknown name instead of refusing it, so a key ending
+#: `('fp16','fp16','fp16','uint8')` returned three dtypes, the bias index fell off the
+#: end, and `synthesize` built an fp16 bias for a uint8 key. The wrapper then computed
+#: an fp16 key — correctly — and the certifier reported the census key UNREACHABLE.
+#: A real miss on MiniCPM-o was read for a day as "the engine cannot produce this key".
+#: Same shape as `_NP` in autotune_certify.py, which did not know an integer dtype and
+#: made it float32 in silence: the same bug written twice is a missing brick.
+_DTYPES = ("fp16", "bf16", "fp32", "fp64",
+           "int1", "int8", "int16", "int32", "int64",
+           "uint8", "uint16", "uint32", "uint64", "bool")
+#: `built` says the kernel actually COMPILED on the device during the
+#: certifying run. It is required because the screen cannot answer it: a CPU
+#: fallback computes correctly, so its deviation against the fp64 oracle is
+#: excellent — an entry certified on one would record a configuration chosen
+#: for a path that never runs, and nothing in the proof would say so.
+_PROOF_FIELDS = ("date", "engine_version", "backend", "shape", "deviation",
+                 "tolerance", "machine", "oracle", "built")
+
+
+
+def format_for(entries: Dict[str, Dict]) -> str:
+    """The format a file of these entries may claim: `/2` only when EVERY
+    certification in it — primary and variants — carries `built`; `/1`
+    otherwise. A writer that stamped `/2` over a `/1` file's entries made the
+    gate refuse the whole file (three files, 6 344 entries, 2026-09-13 22:40):
+    the stamp is a claim about every entry, and the claim was false."""
+    for entry in (entries or {}).values():
+        certs = [entry] + list((entry.get("variants") or {}).values()) if isinstance(entry, dict) else [entry]
+        for c in certs:
+            if not isinstance(c, dict) or "built" not in (c.get("proof") or {}):
+                return "nbx-autotune-certified/1"
+    return FORMAT
+
+
+def restamp(path: Path) -> Optional[str]:
+    """Repair a file's format claim to what its entries satisfy, entries
+    untouched. Returns the new format when it changed, None otherwise."""
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    want = format_for(doc.get("entries") or {})
+    if doc.get("format") == want:
+        return None
+    doc["format"] = want
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(doc, indent=1, default=str), encoding="utf-8")
+    os.replace(tmp, path)
+    return want
+
+
+_LOADED: Dict[Tuple[str, str, str, str], Optional[Dict[str, Dict]]] = {}   # (vendor, profile, kernel, dtype) -> entries
+_REFUSED: Dict[str, str] = {}                                                # file -> reason (said once)
+_ANNOUNCED: set = set()                                                       # (kernel, key) already said missing
+_SERVED: Dict[str, int] = {"certified": 0, "swept": 0, "local": 0}     # local = keys seeded from the machine's replay cache
+
+
+# ---------------------------------------------------------------------------
+# where
+# ---------------------------------------------------------------------------
+def directory() -> Path:
+    """The engine's directory (NEUROBRIX_AUTOTUNE_CERTIFIED_DIR relocates it — tests, a contributor's draft)."""
+    override = os.environ.get("NEUROBRIX_AUTOTUNE_CERTIFIED_DIR")
+    if override:
+        return Path(override)
+    from nbxtensor.host import need as _need
+    return Path(_need("certified_dir")())       # the application's certified store (nbxtensor.host)
+
+
+def enabled() -> bool:
+    """NBX_AUTOTUNE_CERTIFIED=off makes every key sweep at runtime (the proof's "runtime sweep" arm)."""
+    return os.environ.get("NBX_AUTOTUNE_CERTIFIED", "on").strip().lower() != "off"
+
+
+def active_profile() -> Optional[Tuple[str, str]]:
+    """(vendor, profile) of the vendor profile in force, from the profile files themselves."""
+    try:
+        from nbxtensor.ops._configs import active_vendor_profile
+        cfg = active_vendor_profile()
+    except Exception:
+        return None
+    vendor, profile = cfg.get("_vendor"), cfg.get("_profile")
+    if not vendor or not profile:
+        return None
+    return str(vendor), str(profile)
+
+
+def kernel_short(qual: str) -> str:
+    return qual.rsplit(".", 1)[-1]
+
+
+def file_for(vendor: str, profile: str, kernel_qual: str, dtype: str, root: Optional[Path] = None) -> Path:
+    return (root or directory()) / vendor / profile / f"{kernel_short(kernel_qual)}.{dtype}.json"
+
+
+# ---------------------------------------------------------------------------
+# the key and its dtype
+# ---------------------------------------------------------------------------
+def key_dtypes(key: tuple) -> List[str]:
+    """The dtype names the launcher appended to the key, in argument order.
+
+    ZERO FALLBACK on an unknown name. Every string the launcher puts in a key is a
+    dtype (`key_of` appends `str(arg.dtype)` per tensor argument, after the `keys`
+    values, which are the bucket integers). So a string this table does not know is
+    not a thing to skip — skipping it SHIFTS every operand after it, and the caller
+    then synthesises the wrong dtype for the wrong argument and blames the kernel.
+    """
+    out: List[str] = []
+    for k in key:
+        if not isinstance(k, str):
+            continue
+        if str(k).lower() not in _DTYPES:
+            raise RuntimeError(
+                f"certify: key element {k!r} is a string this engine does not recognise as a "
+                f"dtype, and every string a key carries is one.\n"
+                f"  Known: {', '.join(_DTYPES)}.\n"
+                f"  Dropping it would shift every operand after it and synthesise the wrong "
+                f"dtype for the wrong argument — which reads as an UNREACHABLE key and hides "
+                f"a real miss.")
+        out.append(str(k))
+    return out
+
+
+def output_dtype(tuner, key: tuple) -> str:
+    """The dtype of the buffer the kernel WRITES — the file's dtype and the
+    tolerance's. `key_of` appends one dtype per tensor argument in the
+    kernel's argument order, so the i-th dtype belongs to the i-th pointer
+    argument; the output pointer is the one named for it."""
+    dts = key_dtypes(key)
+    if not dts:
+        return "any"
+    names = [n for n in getattr(tuner, "arg_names", []) if n.endswith("_ptr") or n.endswith("_pointer")]
+    if not names:
+        # a kernel whose pointers carry no suffix (the m8n8k4 flash: Q, K, V, Bias, Out, Lse) leads with its tensors:
+        # read without it, the log-sum-exp's fp32 was taken for the fp16 output and set the tolerance (2026-10-21)
+        names = list(getattr(tuner, "arg_names", []))[:len(dts)]
+    for i, name in enumerate(names):
+        low = name.lower()
+        if i < len(dts) and (low.startswith(("out", "c_", "output", "y_")) or low in ("c_ptr", "out_ptr", "output_pointer")):
+            return dts[i]
+    return dts[-1]
+
+
+#: Key positions that are TENSOR EXTENTS or divisors — every one of them must be at least 1
+#: for the key to name a launch that can exist. A padding may be 0 and is not listed; a
+#: negative value is impossible anywhere. The positions mirror what the certifier unpacks to
+#: synthesise a shape (`autotune_certify._synth`), and a test pins the two together: a key
+#: whose extent is 0 can be neither synthesised nor launched, and the served directory holds
+#: one already (`conv2d_forward_kernel.fp32`, batch_dim 0) from a census that recorded a
+#: shadow's degenerate arithmetic (2026-09-22).
+EXTENT_POSITIONS: Dict[str, tuple] = {
+    "matmul_kernel": (0, 1, 2),                       # M_BUCKET, N, K
+    "addmm_kernel": (0, 1, 2),
+    "baddbmm_kernel": (0, 1, 2),                      # M_BUCKET, N_BUCKET, K_BUCKET
+    # batch, in_feat, in_h, in_w, out_feat, out_h, out_w, kh, kw, stride_h, stride_w,
+    # (padding_h, padding_w may be 0), dilation_h, dilation_w, groups
+    "conv2d_forward_kernel": (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 13, 14, 15),
+    # C, H_in, W_in, H_out, W_out, kh, kw, stride_h, stride_w, (pad_h, pad_w may be 0)
+    "depthwise_conv2d_kernel": (0, 1, 2, 3, 4, 5, 6, 7, 8),
+}
+
+
+def degenerate_extent(qual: str, key: tuple) -> Optional[str]:
+    """The name and value of the first key position that cannot be a launch, or None.
+
+    A key is refused ONLY on a position this table names: a kernel not listed is answered
+    None rather than guessed at, because refusing a legitimate key would shrink a census in
+    silence — the failure mode this whole register exists to stop."""
+    short = qual.rsplit(".", 1)[-1]
+    positions = EXTENT_POSITIONS.get(short)
+    if not positions:
+        return None
+    for i in positions:
+        if i < len(key):
+            v = key[i]
+            if isinstance(v, int) and not isinstance(v, bool) and v < 1:
+                return f"position {i} = {v}"
+    return None
+
+
+def key_repr(key: tuple) -> str:
+    return repr(tuple(key))
+
+
+def parse_key(text: str) -> Optional[tuple]:
+    try:
+        value = ast.literal_eval(text)
+    except (ValueError, SyntaxError):
+        return None
+    return tuple(value) if isinstance(value, (tuple, list)) else None
+
+
+def describe_key(tuner, key: tuple) -> str:
+    """`M=1500 N=1280 K=1280 IEEE_PRECISION=True … fp32,fp16,fp32` — readable in a log line."""
+    names = list(getattr(tuner, "keys", []) or [])
+    parts = [f"{n}={v}" for n, v in zip(names, key)]
+    rest = [str(v) for v in key[len(names):]]
+    return " ".join(parts) + (" " + ",".join(rest) if rest else "")
+
+
+# ---------------------------------------------------------------------------
+# the gate: a file is trusted only if its proof re-reads
+# ---------------------------------------------------------------------------
+def _tolerance_for(vendor: str, profile: str, dtype: str) -> Optional[float]:
+    """The profile's `autotune_screen_rtol[dtype]`, read from the profile file itself."""
+    try:
+        import yaml
+        from nbxtensor.host import need as _need
+        path = Path(_need("vendors_dir")()) / vendor / f"{profile}.yml"   # the application's vendor files
+        cfg = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return None
+    table = cfg.get("autotune_screen_rtol") or {}
+    canon = {"fp16": "float16", "bf16": "bfloat16", "fp32": "float32", "fp64": "float64"}.get(dtype, dtype)
+    val = table.get(canon, table.get(dtype))
+    return float(val) if val is not None else None
+
+
+# ---------------------------------------------------------------------------
+# the memory class a proof covers (register entry 56)
+# ---------------------------------------------------------------------------
+# One vendor profile can be carried by cards of different memory: this rack's
+# `nvidia/volta` is two 16 GB V100s and two 32 GB ones. A proof was made on ONE
+# card, and an entry serves only the memory class it covered — a card of
+# another class sweeps at runtime, announced. The class is the card's memory
+# rounded to GB, the same rounding the auto-profile name uses
+# (`core/prism/autodetect.py`: `round(memory_mb / 1024)`), so the class read
+# from a proof's device record and the one read from a legacy profile name are
+# the same number for the same card.
+from nbxtensor.host import need as _need   # the application's memory classes (nbxtensor.host), read at call time
+
+
+def memory_class_gb(memory_mb):
+    return _need("memory_class_gb")(memory_mb)
+
+
+def memory_class_from_profile_id(profile_id):
+    return _need("memory_class_from_profile_id")(profile_id)
+
+
+def proof_memory_class(proof: Optional[Dict[str, Any]]) -> Optional[int]:
+    """The memory class (GB) of the card a proof was made on, or None when
+    the proof cannot say. A device record (`machine.device.memory_mb`) says it
+    exactly; a legacy profile name says it through the profile grammar's own
+    parser (`memory_class_from_profile_id`: a single-card name by its suffix,
+    a rig-wide name is unknown — never a reconstruction)."""
+    machine = (proof or {}).get("machine") or {}
+    device = machine.get("device")
+    cls = memory_class_gb(device.get("memory_mb")) if isinstance(device, dict) else None
+    if cls is not None:
+        return cls
+    return memory_class_from_profile_id(machine.get("hardware_profile"))
+
+
+def _variant_slot(cls: int) -> str:
+    return f"{int(cls)}g"
+
+
+def proof_backend(proof: Optional[Dict[str, Any]]) -> Optional[str]:
+    """The code generator a proof was made with, as one label: `triton <version>`
+    plus the backend name when it is not cuda (e.g. `triton 3.7.0 metal`). A
+    setting stays correct under any generator — the oracle proved the source,
+    not the compiler; what a newer generator may age is its RANK, by a few
+    percent — so the directory is re-proven under a new one as an optimisation
+    pass and the document reads each rank with its generator's date (owner,
+    2026-09-16).
+
+    A certificate asserts CORRECT and PINNED, not fastest: measured 2026-09-23,
+    88.1 % of Apple proofs and 33.2 % of CUDA ones were decided by a margin
+    smaller than that host's own spread, so for most entries the rank is not
+    established at all and the seated config is pinned for determinism. See
+    `docs/reference/what-certified-means.md`."""
+    if not proof:
+        return None
+    b = proof.get("backend") or {}
+    ver = b.get("triton")
+    if not ver:
+        return None
+    name = b.get("name")
+    label = f"triton {ver}" + (f" {name}" if name and name != "cuda" else "")
+    # The out-of-tree backend's source hash, when the identity carries one, is
+    # part of the generator: two triton-ext builds share the distribution
+    # version but differ here, and the gate must see them apart. In-tree
+    # (cuda/amd) proofs carry no hash, so their labels are unchanged.
+    bh = b.get("backend_hash")
+    if bh:
+        label += f" {str(bh)[:12]}"
+    return label
+
+
+def proof_backends(entry: Dict[str, Any]) -> set:
+    """Every generator label this entry carries a proof from (primary and variants)."""
+    out = set()
+    lab = proof_backend(entry.get("proof"))
+    if lab:
+        out.add(lab)
+    for slot, var in (entry.get("variants") or {}).items():
+        lab = proof_backend((var or {}).get("proof"))
+        if lab:
+            out.add(lab)
+    return out
+
+
+def covered_memory_classes(entry: Dict[str, Any]) -> set:
+    """Every memory class this entry carries a proof for: its primary proof's
+    class and each variant's."""
+    out = set()
+    cls = proof_memory_class(entry.get("proof"))
+    if cls is not None:
+        out.add(cls)
+    for slot, var in (entry.get("variants") or {}).items():
+        vcls = proof_memory_class((var or {}).get("proof"))
+        if vcls is not None:
+            out.add(vcls)
+    return out
+
+
+_GEN_REFUSED: Dict[str, int] = {}
+
+
+def running_generator() -> Optional[str]:
+    """The code generator about to run, as a proof's `backend` records it.
+
+    None when Triton cannot be imported: an engine that cannot say which
+    generator it is cannot refuse an entry for not matching it, and refusing
+    everything because the question is unanswerable is worse than serving.
+    """
+    try:
+        import triton
+        return proof_backend({"backend": generator_identity()})
+    except Exception:
+        # Triton missing, or the target/backend cannot be identified
+        # (generator_identity raises rather than answer a wrong "cuda"): the
+        # engine cannot say which generator it is, so it refuses NOTHING for
+        # not matching — serving on an unanswerable question beats refusing all.
+        return None
+
+
+_OUT_OF_TREE_HASH: Dict[str, Optional[str]] = {}
+
+
+_SAID: set = set()
+
+
+def _say_once(msg: str) -> None:
+    if msg not in _SAID:
+        _SAID.add(msg)
+        print(msg, flush=True)
+
+
+def _out_of_tree_backend_hash() -> Optional[str]:
+    """The source hash of the Triton backend that will ACTUALLY generate code,
+    but ONLY when that backend is out of tree — its version does not travel in
+    the `triton` distribution metadata.
+
+    `generator_identity`'s `triton` field is the DISTRIBUTION version, which
+    tracks the IN-TREE compiler (nvidia/amd): move the Triton pin and it moves.
+    An out-of-tree backend — the Metal backend under triton-ext, target `mps` —
+    is a separately built shared library whose distribution metadata is a
+    static `0.1.0` and does NOT move when triton-ext is rebuilt from a new head
+    (5439436 -> b9d5c06d), so a stamp built from the distribution version alone
+    would serve certified entries to a generator that had moved. That is the
+    same vacuous-gate class as the bare `triton.__version__` the version half
+    already fixed.
+
+    triton's OWN backend `hash()` folds in the compiled `PLUGIN_LIBRARY`'s stat
+    and the compiler source, and is exactly what triton puts in its kernel
+    cache key — so reusing it means the identity moves precisely when triton
+    would recompile. One canonical hash, not a second spelling. The active
+    backend is resolved by triton's own `make_backend` (matches `supports_target`),
+    so nothing here hardcodes the mps/apple mapping. Returns None for an
+    in-tree backend (cuda/amd), whose generator the distribution version
+    already tracks, leaving those labels unchanged."""
+    from nbxtensor.backend.launcher import target as _target
+    try:
+        tgt = _target()
+    except Exception as exc:  # noqa: BLE001 — no driver to ask: see below
+        # There is no target to name because there is no device to ask (a CPU-only
+        # machine, a census behind `CUDA_VISIBLE_DEVICES=`, a build host). The
+        # question "which OUT-OF-TREE backend will generate the code" is then
+        # unanswerable, and an unanswerable question refuses nothing — the rule the
+        # generator gate is built on. It is said once rather than swallowed, because
+        # an out-of-tree backend that silently lost its hash would serve entries to a
+        # generator that had moved, which is the defect this hash exists to stop.
+        _say_once(f"[autotune] no device to name the code generator ({exc.__class__.__name__}): "
+                  f"an out-of-tree backend hash cannot be read, so no entry is refused for one")
+        return None
+    if tgt is None:
+        return None
+    key = f"{getattr(tgt, 'backend', '?')}:{getattr(tgt, 'arch', '?')}"
+    if key in _OUT_OF_TREE_HASH:
+        return _OUT_OF_TREE_HASH[key]
+    from triton.compiler.compiler import make_backend
+    backend = make_backend(tgt)
+    module = (type(backend).__module__ or "")
+    result = None if module.startswith("triton.backends.") else _backend_content_hash(backend)
+    _OUT_OF_TREE_HASH[key] = result
+    return result
+
+
+def _backend_content_hash(backend) -> str:
+    """The out-of-tree backend's identity from its CONTENT: the bytes of every source file and shared library in its
+    package (and of its plugin library, wherever it lies) and the code-generation gates it declares (`CODEGEN_ENV`,
+    set or unset). triton's own `backend.hash()` folds in FILE DATES (the plugin's mtime, every .py's mtime): it decides
+    when triton recompiles, which a date may well do; a certificate proves a CODE, and a date is not code. The Mac,
+    2026-10-20: the served AppleGPU backend restored byte for byte with `cp -R` moved triton's hash 42ebffa ->
+    62109df8 and no Apple certificate served; byte-identical files keep this identity."""
+    import hashlib
+    import sys as _sys
+    mod = _sys.modules.get(type(backend).__module__)
+    pkg = Path(getattr(mod, "__file__", "") or "").parent
+    h = hashlib.sha256()
+    for name in getattr(type(backend), "CODEGEN_ENV", ()) or ():
+        h.update(f"{name}={name in os.environ}:{os.environ.get(name, '')}".encode())
+    files = sorted(f for f in pkg.rglob("*") if f.is_file() and f.suffix in (".py", ".so", ".dylib")
+                   and "__pycache__" not in f.parts) if pkg.is_dir() else []
+    plugin = getattr(mod, "PLUGIN_LIBRARY", None)
+    if plugin is not None and Path(plugin).is_file() and Path(plugin) not in files:
+        files.append(Path(plugin))
+    for f in files:
+        h.update(str(f.relative_to(pkg) if pkg in f.parents else f.name).encode())
+        h.update(hashlib.sha256(f.read_bytes()).digest())
+    return f"content-{h.hexdigest()[:16]}"
+
+
+def generator_identity() -> Dict[str, Any]:
+    """The compiler's identity, as ONE DOOR for the stamp writer and the gate.
+
+    Two halves, each chosen for a measured reason:
+
+    * **The version comes from the DISTRIBUTION metadata, not `__version__`.**
+      Moving the Triton pin 5a495ee2 -> 4a15f415 — 114 commits, 92 C++ files —
+      left `triton.__version__` at a bare `3.8.0` on BOTH sides, so a label
+      built from it served all 964 certified entries to a compiler that had
+      moved, and the gate never knew (measured 2026-09-20; the re-sweep found 0
+      oracle refusals and 562 rank changes, so the serving was correct and up
+      to 58% stale in rank — but the gate's job is to KNOW, not to be lucky).
+      `importlib.metadata.version("triton")` reads `3.8.0+git<pin>`, which
+      moves when the compiler does. `__version__` remains the fallback for an
+      install with no distribution metadata.
+
+    * **The name is the TRITON TARGET's backend** (`mps` under triton-ext,
+      `cuda` on the rack), not the engine's own name (`metal` here either way)
+      and not `nbx_tensor.BACKEND_NAME`, a symbol that never existed — reading
+      it defaulted every machine to "cuda" and refused all 945 Apple entries
+      (fixed 2026-09-19). It no longer defaults to "cuda" at all: a target that
+      cannot be read RAISES (ZERO FALLBACK). `autotune_certify._current_backend()`
+      documents the metal/mps divergence at length.
+
+    * **The OUT-OF-TREE backend carries its own source hash** (`backend_hash`,
+      present only when the active backend is out of tree). The `triton` field
+      above tracks the IN-TREE compiler; the Metal backend (target `mps`) is a
+      separately built library whose distribution metadata is a static `0.1.0`,
+      so without this a triton-ext move (5439436 -> b9d5c06d) would change the
+      compiled kernels while the identity stayed put — the same vacuous-gate
+      class as the bare `__version__`. The hash is triton's own backend
+      `hash()`, the one it puts in its kernel cache key. See
+      `_out_of_tree_backend_hash`.
+
+    `autotune_certify._backend()` writes this identity into every proof and
+    `running_generator()` reads it back: two hands, one spelling, because two
+    spellings is how each of those defects happened.
+    """
+    try:
+        import importlib.metadata as _md
+        ver = _md.version("triton")
+    except Exception:
+        ver = str(triton.__version__)
+    from nbxtensor.backend.launcher import target as _target
+    tgt = _target()
+    name = getattr(tgt, "backend", None)
+    if not name:
+        # ZERO FALLBACK: a target that cannot be read is an ERROR, not "cuda".
+        # A silent default to "cuda" once labelled every Apple run as the rack's
+        # generator and refused all 945 Apple entries (2026-09-19). The caller
+        # (running_generator) turns this into "cannot say" rather than a wrong
+        # answer; the writer (_backend) fails the stamp rather than mis-certify.
+        raise RuntimeError(
+            "generator_identity: the Triton target names no backend "
+            f"({tgt!r}); a certification generator that cannot be identified is "
+            "an error, not 'cuda'.")
+    ident = {"triton": ver, "name": name}
+    bh = _out_of_tree_backend_hash()
+    if bh:
+        ident["backend_hash"] = bh
+    return ident
+
+
+def entry_for_generator(entry: Optional[Dict[str, Any]],
+                        gen: Optional[str]) -> Optional[Dict[str, Any]]:
+    """The certification proven under THIS generator — the entry when its own
+    proof names it, a variant that does, or None.
+
+    Symmetric with `entry_for_memory_class`. Register 56 established that an
+    entry serves only the memory class it was proven on; the same argument
+    applies to the compiler, and `entry_covers(..., need_generator=...)`
+    already encodes it for the CERTIFIER (`--reprove-generator`). Nothing asked
+    it at the serving side, which is the gap this closes: measured 2026-09-19,
+    all 9,655 NVIDIA entries on `main` carry `triton 3.6.0`, the production
+    stack runs 3.6.0 and the candidate stack runs 3.8.0, so a stack move would
+    have served every one of them under a generator none names.
+    """
+    if entry is None or gen is None:
+        return None
+    if proof_backend(entry.get("proof")) == gen:
+        return entry
+    for var in (entry.get("variants") or {}).values():
+        if proof_backend((var or {}).get("proof")) == gen:
+            return var
+    return None
+
+
+def generator_refusals() -> Dict[str, int]:
+    """How many keys each kernel was refused for, by generator. For a report."""
+    return dict(_GEN_REFUSED)
+
+
+def entry_for_memory_class(entry: Optional[Dict[str, Any]], cls: Optional[int]) -> Optional[Dict[str, Any]]:
+    """The certification that covers this memory class — the entry itself when
+    its primary proof was made at that class, the variant filed under it
+    otherwise — or None. None for an unknown class: an engine that cannot say
+    which card it is on cannot say it is covered."""
+    if entry is None or cls is None:
+        return None
+    if proof_memory_class(entry.get("proof")) == cls:
+        return entry
+    var = (entry.get("variants") or {}).get(_variant_slot(cls))
+    if var and proof_memory_class(var.get("proof")) == cls:
+        return var
+    return None
+
+
+def proof_records_regime(proof: Optional[Dict[str, Any]]) -> bool:
+    """True when the proof records the stability regime its timings were measured
+    under — EITHER the clock every card was held to (`machine.clocks_mhz`, an
+    NVIDIA lock) OR the witness that proved the GPU held still across the sweep
+    (`stability_witness`, Apple, where the clock cannot be locked).
+
+    5 628 proofs of 2026-09-07 record neither: made before the door, at a regime
+    nothing recorded — their timings read 1.176× those of a proof taken under a
+    known one (2026-09-14, register 56). A witness and a lock are two proofs of
+    the same fact — the sweep was comparable — so either satisfies this.
+    """
+    p = proof or {}
+    return bool((p.get("machine") or {}).get("clocks_mhz") or p.get("stability_witness"))
+
+
+# Back-compat alias: the check used to ask only about the clock, before the
+# regime became clock-or-witness. Callers that named the clock keep working.
+proof_records_clock = proof_records_regime
+
+
+def entry_covers(entries: Dict[str, Dict[str, Any]], ktext: str, cls: Optional[int],
+                 need_clock: bool = False, need_generator: Optional[str] = None) -> bool:
+    """`--only-missing`'s question, asked per memory class; with `need_clock`
+    (`--reprove-unclocked`) a certification whose proof records no clock does
+    not count as coverage — it is re-proven at the protocol clock; with
+    `need_generator` (`--reprove-generator`, the running code generator's label,
+    e.g. `triton 3.8.0`) a certification proven under another generator does
+    not count either — a Triton upgrade changes the code it emits, so every
+    setting is re-proven under the new one (owner, 2026-09-16)."""
+    cert = entry_for_memory_class(entries.get(ktext), cls)
+    if cert is None:
+        return False
+    if need_clock and not proof_records_clock(cert.get("proof")):
+        return False
+    if need_generator is not None and proof_backend(cert.get("proof")) != need_generator:
+        return False
+    return True
+
+
+def coverage_asked(entries: Dict[str, Dict[str, Any]], ktext: str, cls: Optional[int], only_missing: bool,
+                   reprove_unclocked: bool, reprove_generator: bool, running_generator: Optional[str]) -> bool:
+    """The certifier's one question before a key: is it covered already, for what the flags ask? `--only-missing`
+    asks for a certification THE RUNTIME SERVES — the running code generator's (`entry_for_generator`): an entry
+    proven under a retired generator is not served, so it is missing, not present (the Mac, 2026-10-25 02:43: 17
+    addmm fp32 entries under a retired generator counted present and withheld HAT's cells). `--reprove-unclocked`
+    adds the clock; `--reprove-generator` asks the same generator question and re-proves the stored configuration."""
+    if not (only_missing or reprove_unclocked or reprove_generator):
+        return False
+    return entry_covers(entries, ktext, cls, need_clock=reprove_unclocked,
+                        need_generator=running_generator if (only_missing or reprove_generator) else None)
+
+
+def file_certification(entries: Dict[str, Dict[str, Any]], ktext: str, cert: Dict[str, Any]) -> None:
+    """Place a fresh certification in a file's entries by the class its proof
+    names: the primary slot when the key is new or the class is the primary's,
+    a variant slot otherwise. A proof that cannot say its card is refused — an
+    entry no card is ever served is not worth writing. A legacy primary whose
+    class is unknown (a rig-wide proof) is REPLACED by the fresh one: it served
+    no card, and its config, deviation and timings leave with it — said here
+    because a discarded measurement should be discarded on purpose."""
+    cls = proof_memory_class(cert.get("proof"))
+    if cls is None:
+        raise ValueError("the certification's proof does not say which card's memory it was made on "
+                         "(no machine.device.memory_mb): refused — an entry without a memory class is served to no card")
+    body = {"config": cert["config"], "proof": cert["proof"], "excluded": cert.get("excluded") or []}
+    cur = entries.get(ktext)
+    if cur is None or proof_memory_class(cur.get("proof")) in (cls, None):
+        variants = (cur or {}).get("variants")
+        entries[ktext] = body if not variants else {**body, "variants": variants}
+        entries[ktext].get("variants", {}).pop(_variant_slot(cls), None)
+        if "variants" in entries[ktext] and not entries[ktext]["variants"]:
+            del entries[ktext]["variants"]
+        return
+    cur.setdefault("variants", {})[_variant_slot(cls)] = body
+
+
+def executing_memory_class(args=None, device_idx: Optional[int] = None) -> Optional[int]:
+    """The memory class of the card a launch executes on: the device of its
+    first device-resident tensor argument (or the index given), looked up in
+    the Prism hardware profile in force — a static profile read, never a
+    driver query in the hot path. Without an index, the class only when every
+    device of the profile shares one; on a heterogeneous rig that is None."""
+    if device_idx is None and args:
+        for a in args:
+            idx = getattr(a, "_device_idx", None)
+            if idx is not None and getattr(a, "_device", None) != "cpu":
+                device_idx = int(idx)
+                break
+    try:
+        from nbxtensor.ops.wrappers import get_hardware_profile
+        prof = get_hardware_profile()
+    except Exception:
+        return None
+    devices = getattr(prof, "devices", None) if prof is not None else None
+    if not devices:
+        return None
+    if device_idx is not None:
+        dev = next((d for d in devices if getattr(d, "index", None) == int(device_idx)), None)
+        return memory_class_gb(getattr(dev, "memory_mb", None)) if dev is not None else None
+    classes = {memory_class_gb(getattr(d, "memory_mb", None)) for d in devices}
+    return classes.pop() if len(classes) == 1 else None
+
+
+def _validate_certification(where: str, entry: Any, fmt: str, expected_tol, key, stem_dtype, problems: List[str]) -> None:
+    """The per-certification checks, shared by an entry's primary and its variants."""
+    if not isinstance(entry, dict):
+        problems.append(f"{where}: not an object")
+        return
+    cfg = entry.get("config")
+    if not isinstance(cfg, dict) or not isinstance(cfg.get("kwargs"), dict) or "num_warps" not in cfg or "num_stages" not in cfg:
+        problems.append(f"{where}: no config (kwargs, num_warps, num_stages)")
+    proof = entry.get("proof")
+    if not isinstance(proof, dict):
+        problems.append(f"{where}: no proof")
+        return
+    missing = [f for f in _REQUIRED[fmt] if f not in proof]
+    if missing:
+        problems.append(f"{where}: proof without {', '.join(missing)}")
+        return
+    try:
+        dev, tol = float(proof["deviation"]), float(proof["tolerance"])
+    except (TypeError, ValueError):
+        problems.append(f"{where}: deviation/tolerance are not numbers")
+        return
+    if not (dev == dev) or dev < 0 or dev > tol:
+        problems.append(f"{where}: the proof's deviation {dev:.3e} exceeds its tolerance {tol:.1e}")
+    if expected_tol is not None and abs(tol - expected_tol) > 1e-15:
+        problems.append(f"{where}: tolerance {tol:.1e} is not the profile's {expected_tol:.1e} for {stem_dtype}")
+    if list(proof.get("shape") or []) != list(key):
+        problems.append(f"{where}: the proof's shape is not the entry's key")
+    try:
+        _dt.datetime.fromisoformat(str(proof["date"]).replace("Z", "+00:00"))
+    except ValueError:
+        problems.append(f"{where}: the date does not parse")
+    for ex in entry.get("excluded") or []:
+        try:
+            if float(ex.get("deviation")) <= tol:
+                problems.append(f"{where}: an excluded setting carries a deviation within the tolerance")
+        except (TypeError, ValueError, AttributeError):
+            problems.append(f"{where}: an excluded setting without a deviation")
+
+
+def validate(doc: Any, path: Path, tuner=None) -> List[str]:
+    """Every reason this file cannot be trusted; empty when its proof re-reads.
+
+    Checked: the format, that vendor/profile/kernel/dtype inside match the path,
+    that each entry has a config and a complete proof, that the proof's
+    deviation does not exceed its tolerance, that the tolerance is the
+    profile's for that dtype, that every excluded setting carries a deviation
+    ABOVE the tolerance, that the key parses and (with the tuner) has the
+    kernel's arity and the file's dtype, that the date parses; and that every
+    variant is filed under the memory class its own proof names."""
+    problems: List[str] = []
+    fmt = doc.get("format") if isinstance(doc, dict) else None
+    if fmt not in _FORMATS:
+        return [f"format is not one of {list(_FORMATS)!r}"]
+    vendor, profile = path.parent.parent.name, path.parent.name
+    stem_kernel, stem_dtype = path.stem.rsplit(".", 1) if "." in path.stem else (path.stem, "")
+    if doc.get("vendor") != vendor or doc.get("profile") != profile:
+        problems.append(f"vendor/profile inside ({doc.get('vendor')}/{doc.get('profile')}) differ from the path ({vendor}/{profile})")
+    if kernel_short(str(doc.get("kernel", ""))) != stem_kernel:
+        problems.append(f"kernel inside ({doc.get('kernel')}) differs from the file name ({stem_kernel})")
+    if str(doc.get("dtype")) != stem_dtype:
+        problems.append(f"dtype inside ({doc.get('dtype')}) differs from the file name ({stem_dtype})")
+    entries = doc.get("entries")
+    if not isinstance(entries, dict) or not entries:
+        problems.append("no entries")
+        return problems
+    expected_tol = _tolerance_for(vendor, profile, stem_dtype)
+    for ktext, entry in entries.items():
+        where = f"entry {ktext[:80]}"
+        key = parse_key(ktext)
+        if key is None:
+            problems.append(f"{where}: the key does not parse as a shape key")
+            continue
+        if tuner is not None:
+            arity = len(getattr(tuner, "keys", []) or [])
+            if len(key) < arity:
+                problems.append(f"{where}: the key has {len(key)} fields, the kernel's key has {arity}")
+            if output_dtype(tuner, key) != stem_dtype:
+                problems.append(f"{where}: the key's output dtype is {output_dtype(tuner, key)}, the file's is {stem_dtype}")
+        _validate_certification(where, entry, fmt, expected_tol, key, stem_dtype, problems)
+        if not isinstance(entry, dict):
+            continue
+        variants = entry.get("variants")
+        if variants is None:
+            continue
+        if not isinstance(variants, dict):
+            problems.append(f"{where}: variants is not an object")
+            continue
+        for slot, var in variants.items():
+            vwhere = f"{where} variant {slot}"
+            _validate_certification(vwhere, var, fmt, expected_tol, key, stem_dtype, problems)
+            vcls = proof_memory_class(var.get("proof")) if isinstance(var, dict) else None
+            if vcls is None:
+                problems.append(f"{vwhere}: its proof does not say which card's memory it was made on")
+            elif _variant_slot(vcls) != str(slot):
+                problems.append(f"{vwhere}: filed under {slot}, its proof was made on a {vcls} GB card")
+    return problems
+
+
+def files(root: Optional[Path] = None) -> Iterator[Path]:
+    base = root or directory()
+    if not base.exists():
+        return iter(())
+    return iter(sorted(base.glob("*/*/*.json")))
+
+
+# ---------------------------------------------------------------------------
+# lookup at load
+# ---------------------------------------------------------------------------
+def _load(vendor: str, profile: str, kernel_qual: str, dtype: str, tuner=None) -> Optional[Dict[str, Dict]]:
+    ident = (vendor, profile, kernel_qual, dtype)
+    if ident in _LOADED:
+        return _LOADED[ident]
+    path = file_for(vendor, profile, kernel_qual, dtype)
+    entries: Optional[Dict[str, Dict]] = None
+    if path.exists():
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            doc = None
+            problems = [f"unreadable: {exc}"]
+        else:
+            problems = validate(doc, path, tuner)
+        if problems:
+            if str(path) not in _REFUSED:
+                _REFUSED[str(path)] = problems[0]
+                print(f"[autotune] certified file REFUSED {path}: {problems[0]}"
+                      + (f" (+{len(problems) - 1} more)" if len(problems) > 1 else "")
+                      + " — its keys sweep at runtime", flush=True)
+        elif isinstance(doc, dict):
+            entries = dict(doc["entries"])
+    _LOADED[ident] = entries
+    return entries
+
+
+def lookup(kernel_qual: str, tuner, key: tuple, ignore_switch: bool = False,
+           memory_class: Optional[int] = None, any_class: bool = False) -> Optional[Dict[str, Any]]:
+    """The certification for this profile, kernel, dtype, shape AND the memory
+    class of the executing card, or None. An entry proven on another class is
+    not served (`entry_for_memory_class`); `memory_class` None means the card
+    is unknown, and unknown is served nothing. `any_class`: the raw entry
+    whatever its class — for a report that must name what exists, never to
+    serve. `ignore_switch`: read the directory even when
+    NBX_AUTOTUNE_CERTIFIED=off — the switch stops APPLYING a certification,
+    never REPORTING against one."""
+    if not enabled() and not ignore_switch:
+        return None
+    ident = active_profile()
+    if ident is None:
+        return None
+    entries = _load(ident[0], ident[1], kernel_qual, output_dtype(tuner, key), tuner)
+    if not entries:
+        return None
+    entry = entries.get(key_repr(key))
+    if any_class:
+        return entry
+    cert = entry_for_memory_class(entry, memory_class)
+    if cert is None:
+        return None
+    # THE GENERATOR, asked here for the same reason the memory class is: a
+    # setting is a property of the compiler that produced it as much as of the
+    # shape. `NBX_AUTOTUNE_ANY_GENERATOR=1` is the one opening, named so it
+    # reads as deliberate — it serves a setting proven under another compiler,
+    # which the owner's 2026-09-16 note allows as still CORRECT while no longer
+    # necessarily the FASTEST.
+    import os as _os_gen
+    if _os_gen.environ.get("NBX_AUTOTUNE_ANY_GENERATOR") == "1":
+        return cert
+    gen = running_generator()
+    if gen is None:
+        return cert                       # cannot ask: do not refuse
+    matched = entry_for_generator(cert, gen)
+    if matched is not None:
+        return matched
+    was = proof_backend(cert.get("proof"))
+    if was is None:
+        return cert                       # the proof does not say: not a mismatch
+    n = _GEN_REFUSED.get(kernel_qual, 0) + 1
+    _GEN_REFUSED[kernel_qual] = n
+    if n == 1:                            # once per kernel, not once per shape
+        print(f"[autotune] {kernel_qual}: the directory's settings were certified "
+              f"under {was} and this engine runs {gen}. They are not served: a "
+              f"configuration is a property of the compiler that produced it. "
+              f"These shapes sweep at runtime and land in the local replay cache. "
+              f"`neurobrix autotune certify --profile <p>` re-proves them; "
+              f"NBX_AUTOTUNE_ANY_GENERATOR=1 serves them anyway.", flush=True)
+    return None
+
+
+# A promotion flag that widens a pointer's tile on load: the kernel computes
+# that operand in fp32 whatever its memory dtype, so the key that names the
+# COMPUTATION carries fp32 for it — the directory's entries were certified
+# with the operand widened in memory (the copy the promotion replaced), and
+# the same setting applies. PROMOTE_B is NOT here: it was keyed by the memory
+# dtype from the first certification (`fp32,fp16,fp32`), and stays so.
+_KEYED_AS_COMPUTED = {"PROMOTE_A": "a_ptr", "PROMOTE_BIAS": "bias_ptr"}
+
+
+def _promotions_by_policy(tuner, tags: List[str]) -> Dict[str, bool]:
+    """Which operands the wrappers widen on load for a key, read from the dtype
+    tags under the hardware profile's rule — the same rule `mm`/`addmm` apply:
+    on a card without native bf16 a narrow activation computes in fp32, and a
+    narrow bias too whenever the activation computes in fp32. Used where no
+    call is at hand (the local replay cache's keys at load)."""
+    names = [n for n in getattr(tuner, "arg_names", []) if n.endswith("_ptr") or n.endswith("_pointer")]
+    if "PROMOTE_A" not in getattr(tuner, "arg_names", []):
+        return {}
+    try:
+        from nbxtensor.ops.wrappers import _NBX_HAS_NATIVE_BF16 as native_bf16
+    except Exception:
+        return {}
+    def tag(ptr):
+        return str(tags[names.index(ptr)]).lower() if ptr in names and names.index(ptr) < len(tags) else ""
+    a_narrow = tag("a_ptr") in ("fp16", "bf16")
+    promote_a = bool(a_narrow and not native_bf16)
+    a_fp32 = promote_a or tag("a_ptr") == "fp32"
+    promote_bias = bool(a_fp32 and tag("bias_ptr") in ("fp16", "bf16"))
+    return {"PROMOTE_A": promote_a, "PROMOTE_BIAS": promote_bias}
+
+
+def computed_key(tuner, key: tuple, kwargs: Optional[Dict[str, Any]] = None) -> Optional[tuple]:
+    """The key with every pointer a set promotion flag widens on load tagged
+    fp32 — the dtype the kernel computes it in — or None when no tag changes.
+    `kwargs` are the call's; None reads the flags from the profile's rule."""
+    names = [n for n in getattr(tuner, "arg_names", []) if n.endswith("_ptr") or n.endswith("_pointer")]
+    nkeys = len(list(getattr(tuner, "keys", []) or []))
+    head, tags = list(key[:nkeys]), list(key[nkeys:])
+    if kwargs is None:
+        kwargs = _promotions_by_policy(tuner, tags)
+    changed = False
+    for flag, ptr in _KEYED_AS_COMPUTED.items():
+        if kwargs.get(flag) and ptr in names:
+            i = names.index(ptr)
+            if i < len(tags) and str(tags[i]).lower() in ("fp16", "bf16"):
+                tags[i] = "fp32"
+                changed = True
+    return tuple(head + tags) if changed else None
+
+
+def apply(kernel_qual: str, tuner, key: tuple, lookup_key: Optional[tuple] = None,
+          memory_class: Optional[int] = None) -> bool:
+    """Put the certified config in the tuner's cache for `key` — no sweep, no
+    screen. False when the directory has nothing for it ON THIS CARD's memory
+    class. `lookup_key`: the key the directory is read at when it differs from
+    the tuner's (a promoted operand keyed by its computed dtype,
+    `computed_key`). `memory_class`: the executing card's, from
+    `executing_memory_class(args)` at a launch site; None here means "the
+    class every device of the profile in force shares", which is None — served
+    nothing — on a heterogeneous rig where the launch site did not say."""
+    if memory_class is None:
+        memory_class = executing_memory_class()
+    entry = lookup(kernel_qual, tuner, lookup_key or key, memory_class=memory_class)
+    if entry is None:
+        return False
+    import triton
+    cfg = entry["config"]
+    tuner.cache[key] = triton.Config(dict(cfg["kwargs"]), num_warps=int(cfg["num_warps"]),
+                                     num_stages=int(cfg["num_stages"]), num_ctas=int(cfg.get("num_ctas") or 1),
+                                     maxnreg=cfg.get("maxnreg"))
+    _SERVED["certified"] += 1
+    return True
+
+
+def override_seeded(tuners=None) -> int:
+    """The directory first, even on a warm machine: every key the local replay
+    cache seeded into a tuner that the directory certifies takes the certified
+    config instead (no sweep, no screen). Returns how many were overridden —
+    counted as certified, no longer as local. Without this the seed ran before
+    the lookup and a warm machine never applied a certified setting (Flex.1 on
+    2026-09-07: 2,717 entries in the directory, 0 served, 5,547 from the cache)."""
+    if not enabled():
+        return 0
+    if tuners is None:
+        from nbxtensor.ops.autotune_cache import _autotuners
+        tuners = list(_autotuners())
+    # The card is not known at seed time. When every device of the profile in
+    # force shares one memory class (a pinned card, a homogeneous rig) the
+    # class is that one and the directory is applied here. On a heterogeneous
+    # rig it is None: a seeded key the directory certifies for SOME class is
+    # then EVICTED, its local config remembered, so the launch site — which
+    # knows the tensor's card — decides: the certified setting for that
+    # card's class, or the local config put back (`reseed_evicted`).
+    mcls = executing_memory_class()
+    n = 0
+    for qual, tuner in tuners:
+        cache = getattr(tuner, "cache", None)
+        if not cache:
+            continue
+        for key in list(cache.keys()):
+            if not isinstance(key, tuple):
+                continue
+            twin = None
+            try:
+                entry = lookup(qual, tuner, key, any_class=True)
+                if entry is None:
+                    twin = computed_key(tuner, key)       # a widened-on-load operand, by the profile's rule
+                    entry = lookup(qual, tuner, twin, any_class=True) if twin else None
+            except Exception:
+                entry = None
+            if entry is None:
+                continue
+            local = cache.pop(key, None)
+            if mcls is not None:
+                if apply(qual, tuner, key, lookup_key=twin, memory_class=mcls):
+                    n += 1
+                elif local is not None:
+                    cache[key] = local                       # certified elsewhere, not for this card: the local config stays
+            elif local is not None:
+                _EVICTED[(qual, key)] = (local, twin)
+    _SERVED["local"] = max(0, _SERVED["local"] - n)
+    return n
+
+
+#: (kernel, key) -> (local triton.Config, twin key): seeds evicted by
+#: `override_seeded` on a rig whose card was unknown at seed time.
+_EVICTED: Dict[Tuple[str, tuple], Tuple[Any, Optional[tuple]]] = {}
+
+
+def served_evicted(kernel_qual: str, key: tuple) -> None:
+    """A key evicted at seed time that the launch site served CERTIFIED: it
+    is no longer a local key (the seed count was taken at seed time)."""
+    if _EVICTED.pop((kernel_qual, key), None) is not None:
+        _SERVED["local"] = max(0, _SERVED["local"] - 1)
+
+
+def reseed_evicted(kernel_qual: str, tuner, key: tuple) -> bool:
+    """Put back the local replay config `override_seeded` evicted for this
+    key when the directory does not cover the executing card's class — the
+    machine's own earlier sweep, not a sweep again. True when one was put back."""
+    rec = _EVICTED.pop((kernel_qual, key), None)
+    if rec is None:
+        return False
+    cache = getattr(tuner, "cache", None)
+    if cache is None:
+        return False
+    cache[key] = rec[0]
+    return True
+
+
+def certified_only() -> bool:
+    """A CONFIRMATION run (`neurobrix run --certified-only`, or NBX_AUTOTUNE_CERTIFIED_ONLY=1): every key
+    is served from the certified directory or the run fails — never a runtime sweep, never the local
+    replay cache (which holds earlier sweeps, not certifications). The owner's method, 2026-09-28:
+    the census and the certifier do the autotune without running models; a confirmation run that
+    swept would hide the census defect that let the key be missed."""
+    return os.environ.get("NBX_AUTOTUNE_CERTIFIED_ONLY", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+class KeyNotCertified(RuntimeError):
+    """A key a confirmation run met that the certified directory does not serve."""
+
+
+def census_row(kernel_qual: str, key: tuple, memory_class: Optional[int]) -> str:
+    """Where the census table stands on this key, in words: the table of the profile in force and
+    this card's memory class holds it (a certification gap) or not (a census defect)."""
+    from nbxtensor.host import need as _need
+    census_table = _need("census_table")()      # the application's census table reader (nbxtensor.host)
+    prof = active_profile()
+    if prof is None:
+        return "no vendor profile is bound, so no census table can be named"
+    if memory_class is None:
+        return f"the card's memory class is unknown, so no {prof[0]}/{prof[1]} census table can be named"
+    line = census_table.key_line(kernel_qual, key_repr(tuple(key)))
+    try:
+        path, rows = census_table.rows_for(kernel_qual, key_repr(tuple(key)), prof[0], prof[1], memory_class)
+    except Exception as exc:  # noqa: BLE001 — said: an unreadable table is not an absent row
+        return f"the census table could not be read ({type(exc).__name__}: {exc})"
+    if not path.exists():
+        return f"there is no census table {path} — take the census for this profile and memory class first"
+    if not rows:
+        return (f"ABSENT from the census table {path} — a CENSUS defect: fix the census tool so the shadow "
+                f"forms {line}, certify it, re-run the cell")
+    models = ", ".join(sorted({r["model"] for r in rows}))
+    return (f"present in the census table {path} (models: {models}) but not certified for this card — "
+            f"a CERTIFICATION gap: certify the table, re-run the cell")
+
+
+def refuse_missing(kernel_qual: str, tuner, key: tuple) -> None:
+    """The certified-only answer to a miss: raised before any bench, naming the key, the profile,
+    why a directory entry (if any) is not served, and what the census says."""
+    prof = active_profile()
+    where = f"{prof[0]}/{prof[1]}" if prof else "the profile in force"
+    why = ""
+    here = None
+    try:
+        here = executing_memory_class(list((getattr(tuner, "nargs", None) or {}).values()) or None)
+    except Exception:  # noqa: BLE001 — an unknown class is said by census_row
+        here = None
+    try:
+        raw = lookup(kernel_qual, tuner, key, ignore_switch=True, any_class=True)
+        if raw is not None:
+            covered = sorted(covered_memory_classes(raw))
+            why = (f"; the directory certifies it for {', '.join(f'{c} GB' for c in covered) or 'no known memory class'} "
+                   f"and this card is {f'{here} GB' if here is not None else 'of unknown memory'} (register 56)")
+    except Exception as exc:  # noqa: BLE001 — the reason failed to compute: said, the refusal stands
+        why = f"; (could not read what the directory holds for it: {exc})"
+    raise KeyNotCertified(
+        f"CERTIFIED-ONLY: no certified setting for {kernel_short(kernel_qual)} {output_dtype(tuner, key)} "
+        f"({describe_key(tuner, key)}) on {where}{why}. {census_row(kernel_qual, key, here)}. A confirmation run "
+        f"never sweeps.")
+
+
+def announce_missing(kernel_qual: str, tuner, key: tuple) -> None:
+    """Said once per key, in clear: the runtime is about to sweep."""
+    ident = (kernel_qual, key)
+    if ident in _ANNOUNCED:
+        return
+    _ANNOUNCED.add(ident)
+    _SERVED["swept"] += 1
+    prof = active_profile()
+    where = f"{prof[0]}/{prof[1]}" if prof else "the profile in force"
+    try:
+        from nbxtensor.ops.autotune_cache import _DIR as _local
+    except Exception:
+        _local = "the local replay cache"
+    # Say WHY when an entry exists and is not served: proven on another card's
+    # memory. A silence here would read as "the directory never had it".
+    why = ""
+    try:
+        raw = lookup(kernel_qual, tuner, key, ignore_switch=True, any_class=True)
+        if raw is not None:
+            covered = sorted(covered_memory_classes(raw))
+            here = executing_memory_class(list((getattr(tuner, "nargs", None) or {}).values()) or None)
+            why = (f" — certified for {', '.join(f'{c} GB' for c in covered) or 'no known memory class'}, "
+                   f"this card is {f'{here} GB' if here is not None else 'of unknown memory'}, not served (register 56)")
+    except Exception as exc:                # the reason failed to compute: say that, never an empty reason
+        why = f" — (could not read what the directory holds for it: {exc})"
+    print(f"[autotune] no certified setting for {kernel_short(kernel_qual)} {output_dtype(tuner, key)} "
+          f"({describe_key(tuner, key)}) on {where}{why}: sweeping at runtime with the consensus screen; the result is "
+          f"kept in {_local}, never in the engine's directory — `neurobrix autotune certify --profile "
+          f"{prof[1] if prof else '<profile>'}` certifies it", flush=True)
+
+
+def served() -> Dict[str, int]:
+    """How many keys this process took from the directory, how many it swept, how many came from the local replay cache."""
+    return dict(_SERVED)
+
+
+def note_local(n: int) -> None:
+    """Keys the local replay cache seeded into the autotuners (a previous runtime sweep on this machine)."""
+    _SERVED["local"] += int(n or 0)
+
+
+def reset() -> None:
+    _LOADED.clear(); _REFUSED.clear(); _ANNOUNCED.clear(); _EVICTED.clear()
+    _SERVED.update({"certified": 0, "swept": 0, "local": 0})
+
+
+def certified_config_for(kernel_name: str, key_fields: tuple) -> Optional[Dict[str, Any]]:
+    """For the screen: the certified entry of a kernel (short name) whose key
+    starts with these fields on the profile in force, or None. Used to report
+    a runtime exclusion that contradicts a certification."""
+    ident = active_profile()
+    if ident is None:
+        return None
+    root = directory() / ident[0] / ident[1]
+    if not root.exists():
+        return None
+    for path in sorted(root.glob(f"{kernel_name}.*.json")):
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if validate(doc, path):
+            continue
+        for ktext, entry in (doc.get("entries") or {}).items():
+            key = parse_key(ktext)
+            if key is not None and tuple(key[:len(key_fields)]) == tuple(key_fields):
+                return {"path": str(path), "key": key, **entry}
+    return None
+
+
+# ---------------------------------------------------------------------------
+# contradictions: the runtime screen against a certification
+# ---------------------------------------------------------------------------
+_CONTRADICTIONS: List[Dict[str, Any]] = []
+
+
+def contradictions() -> List[Dict[str, Any]]:
+    """Every runtime exclusion this process saw that contradicts a certified setting."""
+    return list(_CONTRADICTIONS)
+
+
+def _config_matches(cfg: Dict[str, Any], config_text: str) -> bool:
+    """`str(triton.Config)` against a stored config dict: every kwarg and num_warps/num_stages present."""
+    text = str(config_text)
+    for k, v in (cfg.get("kwargs") or {}).items():
+        if f"{k}: {v}" not in text:
+            return False
+    return (f"num_warps: {cfg.get('num_warps')}" in text) and (f"num_stages: {cfg.get('num_stages')}" in text)
+
+
+def report_contradictions(tuner, dropped) -> List[Dict[str, Any]]:
+    """Called by the screen with the configs it just excluded: any of them that
+    the directory certifies for this profile, kernel, dtype and shape is
+    printed as a CONTRADICTION and recorded beside the screen's exclusions.
+    The certified setting stays in force for this run; the finding is the
+    directory's to resolve (a re-certification, or a defect in one of the two
+    measurements) — silently trusting either would be the actual failure."""
+    if not dropped:
+        return []
+    from nbxtensor.ops.autotune_cache import key_of, _qual_of
+    qual = _qual_of(tuner)
+    if qual is None:
+        return []
+    try:
+        key = key_of(tuner, [], dict(getattr(tuner, "nargs", None) or {}))
+    except Exception:
+        return []
+    # the proof's sweep arm is where the two can disagree — against the certification
+    # made for THIS card's memory class (a contradiction with another class's proof is not one)
+    mcls = executing_memory_class(list((getattr(tuner, "nargs", None) or {}).values()) or None)
+    entry = lookup(qual, tuner, key, ignore_switch=True, memory_class=mcls)
+    if entry is None:
+        raw = lookup(qual, tuner, key, ignore_switch=True, any_class=True)
+        if raw is not None and mcls is None:
+            # a certification exists and this card's class is unknown: neither a
+            # contradiction nor a clean pass — said, never dropped
+            print(f"[AUTOTUNE_SCREEN] UNADJUDICATED — {kernel_short(qual)} {output_dtype(tuner, key)} "
+                  f"({describe_key(tuner, key)}): the directory certifies this shape for "
+                  f"{', '.join(f'{c} GB' for c in sorted(covered_memory_classes(raw))) or 'no known memory class'} and the "
+                  f"executing card's memory class is unknown, so the runtime exclusion cannot be read against it.", flush=True)
+        return []
+    found = []
+    for ex in dropped:
+        if not _config_matches(entry["config"], getattr(ex, "config", ex)):
+            continue
+        proof = entry.get("proof") or {}
+        rec = {"kernel": qual, "key": key_repr(key), "dtype": output_dtype(tuner, key), "config": entry["config"],
+               "certified": {"date": proof.get("date"), "deviation": proof.get("deviation"),
+                             "tolerance": proof.get("tolerance"), "machine": proof.get("machine")},
+               "runtime": {"deviation": getattr(ex, "deviation", None), "tolerance": getattr(ex, "tolerance", None)},
+               "contradiction": True}
+        found.append(rec)
+        _CONTRADICTIONS.append(rec)
+        print(f"[AUTOTUNE_SCREEN] CONTRADICTION — {kernel_short(qual)} {rec['dtype']} ({describe_key(tuner, key)}): the "
+              f"setting certified on {proof.get('date')} (deviation {proof.get('deviation')} vs the fp64 oracle, tolerance "
+              f"{proof.get('tolerance')}) is excluded by the runtime consensus (deviation {rec['runtime']['deviation']}). "
+              f"A finding to report: the certification and this run disagree.", flush=True)
+    if found:
+        try:
+            from nbxtensor.ops.autotune_cache import record_screen_exclusions
+            record_screen_exclusions([{**r, "config": str(r["config"])} for r in found])
+        except Exception:
+            pass
+    return found

@@ -1,7 +1,7 @@
 """A capability that is a property of the launcher the engine selected is DECLARED to nbx_tensor
 by the engine — nbx_tensor asks the engine nothing.
 
-Until 2026-09-26 `backend_loads_pointers_from_memory` imported `neurobrix.triton.metal_backend`
+Until 2026-09-26 `backend_loads_pointers_from_memory` imported `nbxtensor.backend.metal_backend`
 inside nbx_tensor.py to ask which Metal backend was selected (9828c7f7), and the boundary ratchet
 `test_the_boundary_does_not_widen` was red on main. The answer is the same — triton_ext proved its
 pinned scope, any other Metal launcher answers False — but it travels the other way: the selection
@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from neurobrix.kernels import nbx_tensor as T
+from nbxtensor import tensor as T
 
 REPO = Path(__file__).resolve().parents[3]
 
@@ -49,7 +49,7 @@ def test_a_declaration_is_a_bool():
 
 
 def test_the_selection_declares_what_it_selected():
-    src = (REPO / "src/neurobrix/triton/metal_backend.py").read_text()
+    src = (REPO / "nbxtensor/src/nbxtensor/backend/metal_backend.py").read_text()
     body = src.split("def selected_metal_backend(", 1)[1].split("\ndef ", 1)[0]
     assert body.count("return _declare_selected(") == 2 and "return declared" not in body
     helper = src.split("def _declare_selected(", 1)[1].split("\ndef ", 1)[0]
@@ -57,5 +57,5 @@ def test_the_selection_declares_what_it_selected():
 
 
 def test_nbx_tensor_no_longer_imports_the_metal_backend():
-    src = (REPO / "src/neurobrix/kernels/nbx_tensor.py").read_text()
-    assert "neurobrix.triton.metal_backend" not in src
+    src = (REPO / "nbxtensor/src/nbxtensor/tensor.py").read_text()
+    assert "nbxtensor.backend.metal_backend" not in src

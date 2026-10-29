@@ -43,7 +43,7 @@ import sys
 
 import pytest
 
-from neurobrix.kernels import nbx_tensor as nt
+from nbxtensor import tensor as nt
 from nbxtensor.ops.embedding import embedding_kernel, EMBEDDING_OOB
 from nbxtensor.ops.index_put_op import index_put_kernel, INDEX_PUT_OOB
 from nbxtensor.ops.index_select import index_select_kernel, INDEX_SELECT_OOB
@@ -175,7 +175,7 @@ def test_a_disarmed_channel_allocates_nothing(monkeypatch):
 # real device; the file used to declare the probe below them, so this one ran
 # unguarded and failed with `cudaErrorNoDevice` where its siblings skipped.
 def _no_device() -> bool:
-    nbx = pytest.importorskip("neurobrix.kernels.nbx_tensor")
+    nbx = pytest.importorskip("nbxtensor.tensor")
     empty, f32 = nbx.NBXTensor.empty, nbx.NBXDtype.float32   # renamed symbols raise here
     try:
         empty((1,), f32, "cuda:0")
@@ -204,7 +204,7 @@ def test_an_armed_channel_uses_the_shared_buffer(monkeypatch):
 def test_no_wrapper_reaches_past_the_brick():
     """Four launch sites; none may allocate the buffer for itself."""
     import inspect
-    from neurobrix.kernels import wrappers as W
+    from nbxtensor.ops import wrappers as W
     src = inspect.getsource(W)
     assert src.count("fault_channel(") >= 4
     assert "device_fault_buffer(" not in src.replace(
@@ -220,8 +220,9 @@ def test_no_wrapper_reaches_past_the_brick():
 
 _SUBPROCESS = r"""
 import sys, numpy as np
-from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator
-from neurobrix.kernels import wrappers as w
+import neurobrix  # the application: nbxtensor's host services
+from nbxtensor.tensor import NBXTensor, DeviceAllocator
+from nbxtensor.ops import wrappers as w
 kind, oob = sys.argv[1], sys.argv[2] == "oob"
 rows = np.arange(24, dtype=np.float32).reshape(6, 4)
 

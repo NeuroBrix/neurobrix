@@ -66,7 +66,7 @@ def test_the_refusal_names_the_environment(tmp_path, monkeypatch):
 
 def test_the_seam_refuses_rather_than_warns(monkeypatch):
     """The predicate is not a guard until the selection seam raises on it."""
-    from neurobrix.triton import metal_backend as mb
+    from nbxtensor.backend import metal_backend as mb
     monkeypatch.setattr(
         "neurobrix.core.paths.installation_refusals",
         lambda name, search_root=None: [

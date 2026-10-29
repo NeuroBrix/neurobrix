@@ -26,8 +26,8 @@ PROBE = textwrap.dedent("""
     from neurobrix.kernels import census
     census.install(hardware_profile={"devices": [{"brand": "nvidia", "model": "Tesla V100-SXM2-16GB",
                                                   "compute_capability": "7.0", "architecture": "volta"}]})
-    from neurobrix.kernels.ops import _configs
-    from neurobrix.kernels.autotune_bucket import bucket_of
+    from nbxtensor.ops import _configs
+    from nbxtensor.ops.autotune_bucket import bucket_of
     prof = _configs.active_vendor_profile()
     print(json.dumps({"profile": prof.get("_profile"), "bucket_M_226": bucket_of("M", 226),
                       "smem": _configs.arch_smem_budget()}))

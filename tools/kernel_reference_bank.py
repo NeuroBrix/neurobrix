@@ -222,7 +222,8 @@ GENERATORS = {
 # ---------------------------------------------------------------------------
 
 def to_nbx(x):
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
+    from nbxtensor.tensor import NBXTensor
     if isinstance(x, np.ndarray):
         return NBXTensor.from_numpy(np.ascontiguousarray(x))
     if isinstance(x, (list, tuple)) and x and isinstance(x[0], np.ndarray):
@@ -282,7 +283,7 @@ SKIP_ON_SM70 = {"_scaled_dot_product_flash_attention"}
 
 def one_case(op: str, tag: str, args, kwargs, device: str, out_dir: Path):
     import torch
-    wrapper = __import__("neurobrix.kernels.dispatch", fromlist=["dispatch"]).dispatch(f"aten::{op}")
+    wrapper = __import__("nbxtensor.ops.dispatch", fromlist=["dispatch"]).dispatch(f"aten::{op}")
     if wrapper is None:
         return {"op": op, "tag": tag, "status": "no wrapper"}
     Path(TRACE).unlink(missing_ok=True)
@@ -340,8 +341,8 @@ def one_case(op: str, tag: str, args, kwargs, device: str, out_dir: Path):
 
 
 def generate(out: Path, ops, only_missing: bool):
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator
-    from neurobrix.kernels.dispatch import list_kernels
+    from nbxtensor.tensor import DeviceAllocator
+    from nbxtensor.ops.dispatch import list_kernels
     DeviceAllocator.set_device(0)
     device = "cuda:0"
     T = tiles()

@@ -27,7 +27,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 
 def _sync() -> None:
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator
+    from nbxtensor.tensor import DeviceAllocator
     DeviceAllocator.device_synchronize()
 
 
@@ -35,9 +35,9 @@ def matmul_tflops(dtype: str, sizes: Sequence[int] = (2048, 4096, 8192), warmup:
     """The GEMM throughput at `dtype`. numpy draws float16 and float32; bfloat16 (no numpy dtype) is drawn float32 and
     cast on the device by the engine's own cast, so the measured kernel is the bf16 matmul a bf16 plan launches."""
     import numpy as np
-    from neurobrix.kernels import launcher as L
-    from neurobrix.kernels import wrappers as W
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.backend import launcher as L
+    from nbxtensor.ops import wrappers as W
+    from nbxtensor.tensor import NBXTensor
     npd = {"float16": np.float16, "float32": np.float32, "bfloat16": np.float32}[dtype]
     rng = np.random.default_rng(0)
     per = {}
@@ -61,9 +61,9 @@ def gemv_gbps(dtype: str, engine: str, k: int = 4096, n: int = 14336, reps: int 
     xs = np.ascontiguousarray((rng.standard_normal((1, k)) * 0.1).astype(npd))
     ws = np.ascontiguousarray((rng.standard_normal((n, k)) * 0.05).astype(npd))
     if engine == "triton":
-        from neurobrix.kernels import launcher as L
-        from neurobrix.kernels import wrappers as W
-        from neurobrix.kernels.nbx_tensor import NBXTensor
+        from nbxtensor.backend import launcher as L
+        from nbxtensor.ops import wrappers as W
+        from nbxtensor.tensor import NBXTensor
         x = NBXTensor.from_numpy(xs).to_cuda(0).to(dtype)
         w = NBXTensor.from_numpy(ws).to_cuda(0).to(dtype)
         wt = w.t()
@@ -89,7 +89,7 @@ def gemv_gbps(dtype: str, engine: str, k: int = 4096, n: int = 14336, reps: int 
 
 
 def _timed_copies(dst: int, src: int, nbytes: int, kind: int, reps: int) -> float:
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator
+    from nbxtensor.tensor import DeviceAllocator
     DeviceAllocator.memcpy(dst, src, nbytes, kind)
     _sync()
     t0 = time.perf_counter()
@@ -101,7 +101,7 @@ def _timed_copies(dst: int, src: int, nbytes: int, kind: int, reps: int) -> floa
 
 def copies(nbytes: int = 1 << 30, reps: int = 10) -> dict:
     import numpy as np
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator
+    from nbxtensor.tensor import DeviceAllocator
     n = int(nbytes)
     d0, d1 = DeviceAllocator.malloc_cuda(n), DeviceAllocator.malloc_cuda(n)
     h = DeviceAllocator.malloc_host_pinned(n)
@@ -238,7 +238,7 @@ def stored_dtype(shards: Iterable[Path], keys: Iterable[str]) -> str:
 
 
 def _triton_loader(root: Path, comp: str, used: List[Path]):
-    from neurobrix.kernels.nbx_tensor import NBXDtype, DeviceAllocator
+    from nbxtensor.tensor import NBXDtype, DeviceAllocator
     from neurobrix.triton.weight_loader import load_component_weights
     rel = {f"components/{comp}/weights/{sh.name}": "cpu" for sh in used}
 

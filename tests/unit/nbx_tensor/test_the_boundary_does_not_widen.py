@@ -17,31 +17,12 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[3]
-NBX_TENSOR = REPO / "src/neurobrix/kernels/nbx_tensor.py"
+NBX_TENSOR = REPO / "nbxtensor/src/nbxtensor/tensor.py"
 
 # Every engine-or-torch import nbx_tensor.py carried on 2026-09-14, by the scope
 # that carries it. Each is a debt of the separation; none may be joined by another.
-RECORDED = {
-    ("nbx_dtype_to_torch", "torch"),
-    ("set_torch_device", "torch"),
-    ("nbx_to_torch", "torch"),
-    ("DeviceAllocator._pool_parked_cap", "neurobrix.kernels.wrappers"),
-    ("_copy_nd", "nbxtensor.ops.strided_copy"),
-    ("_strided_copy", "nbxtensor.ops.strided_copy"),
-    ("_strided_scatter", "nbxtensor.ops.strided_copy"),
-    ("_fill_constant", "nbxtensor.ops.fill_op"),
-    ("NBXTensor.to", "nbxtensor.ops.copy_op"),
-    ("NBXTensor.cat", "nbxtensor.ops.cat_op"),
-    ("NBXTensor.__add__", "neurobrix.kernels.wrappers"),
-    ("NBXTensor.__radd__", "neurobrix.kernels.wrappers"),
-    ("NBXTensor.__sub__", "neurobrix.kernels.wrappers"),
-    ("NBXTensor.__rsub__", "neurobrix.kernels.wrappers"),
-    ("NBXTensor.__mul__", "neurobrix.kernels.wrappers"),
-    ("NBXTensor.__rmul__", "neurobrix.kernels.wrappers"),
-    ("NBXTensor.__truediv__", "neurobrix.kernels.wrappers"),
-    ("NBXTensor.__neg__", "neurobrix.kernels.wrappers"),
-}
-ALLOWED_ROOTS = {"triton", "numpy"}          # the library's own dependencies
+RECORDED: set = set()   # empty since nbx_tensor.py entered nbxtensor (M1, 2026-10-29): no engine or torch import left
+ALLOWED_ROOTS = {"triton", "numpy", "nbxtensor"}   # the library's own dependencies, and the library itself (its siblings)
 
 
 def boundary_imports(path: Path = NBX_TENSOR):

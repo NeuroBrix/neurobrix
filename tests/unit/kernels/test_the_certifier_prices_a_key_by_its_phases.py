@@ -31,14 +31,14 @@ import numpy as np
 import pytest
 
 from neurobrix.kernels import autotune_certify as AC
-from neurobrix.triton import autotune_cache as atc
+from nbxtensor.ops import autotune_cache as atc
 
 FLOOR_MIB = 457
-MM = "neurobrix.kernels.ops.matmul.matmul_kernel"
-ADDMM = "neurobrix.kernels.ops.matmul.addmm_kernel"
-BADD = "neurobrix.kernels.ops.baddbmm_op.baddbmm_kernel"
-CONV = "neurobrix.kernels.ops.conv2d.conv2d_forward_kernel"
-DW = "neurobrix.kernels.ops.depthwise_conv2d.depthwise_conv2d_kernel"
+MM = "nbxtensor.ops.matmul.matmul_kernel"
+ADDMM = "nbxtensor.ops.matmul.addmm_kernel"
+BADD = "nbxtensor.ops.baddbmm_op.baddbmm_kernel"
+CONV = "nbxtensor.ops.conv2d.conv2d_forward_kernel"
+DW = "nbxtensor.ops.depthwise_conv2d.depthwise_conv2d_kernel"
 MEASURED = [
     (DW, (4096, 256, 320, 256, 320, 3, 3, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16'), 6193),
     (DW, (4096, 384, 512, 384, 512, 3, 3, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16'), 8886),

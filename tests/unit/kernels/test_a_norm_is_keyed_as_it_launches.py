@@ -12,10 +12,10 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("needs a CUDA device", allow_module_level=True)
 
-from neurobrix.kernels import launch_keys as LK  # noqa: E402
-from neurobrix.kernels import wrappers as W  # noqa: E402
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype  # noqa: E402
-from neurobrix.triton.autotune_cache import key_of  # noqa: E402
+from nbxtensor.ops import launch_keys as LK  # noqa: E402
+from nbxtensor.ops import wrappers as W  # noqa: E402
+from nbxtensor.tensor import NBXTensor, NBXDtype  # noqa: E402
+from nbxtensor.ops.autotune_cache import key_of  # noqa: E402
 
 
 class _Launched(Exception):
@@ -39,7 +39,7 @@ def _t(shape, dt=np.float32):
 @pytest.mark.parametrize("rows,feat", [(7, 40), (2048, 576), (1, 4096), (300, 1280)])
 @pytest.mark.parametrize("weight,bias", [(True, True), (True, False), (False, False)])
 def test_the_layer_norm_launch_is_its_key(monkeypatch, rows, feat, weight, bias):
-    from neurobrix.kernels.ops.layernorm import layer_norm_forward_kernel as K
+    from nbxtensor.ops.layernorm import layer_norm_forward_kernel as K
     seen = _capture(monkeypatch, K)
     x = _t((rows, feat))
     w = _t((feat,)) if weight else None
@@ -54,7 +54,7 @@ def test_the_layer_norm_launch_is_its_key(monkeypatch, rows, feat, weight, bias)
 @pytest.mark.parametrize("rows,feat", [(7, 40), (2048, 576), (1, 4096), (300, 2240)])
 @pytest.mark.parametrize("weight", [True, False])
 def test_the_rms_norm_launch_is_its_key(monkeypatch, rows, feat, weight):
-    from neurobrix.kernels.ops.rmsnorm import rms_norm_forward_kernel as K
+    from nbxtensor.ops.rmsnorm import rms_norm_forward_kernel as K
     seen = _capture(monkeypatch, K)
     x = _t((rows, feat))
     w = _t((feat,)) if weight else None

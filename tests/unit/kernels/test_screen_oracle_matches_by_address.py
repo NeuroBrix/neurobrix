@@ -22,7 +22,7 @@ import ctypes
 import numpy as np
 import pytest
 
-from neurobrix.kernels import screen_oracle as SO
+from nbxtensor.ops import screen_oracle as SO
 
 
 class _Tensor:

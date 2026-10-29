@@ -33,7 +33,7 @@ PROFILE = "c4140-4xv100-16GB-nvlink"          # a committed profile: its memory 
 
 def _row(model, key="(64, 64, 64, 'fp16')", mode="triton"):
     return {"model": model, "container": "c0ffee", "mode": mode, "rungs_mb": [4096],
-            "ops": ["aten.mm::0"], "kernel": "neurobrix.kernels.ops.matmul.matmul_kernel", "key": key,
+            "ops": ["aten.mm::0"], "kernel": "nbxtensor.ops.matmul.matmul_kernel", "key": key,
             "dtype": "fp16", "tool": "test"}
 
 

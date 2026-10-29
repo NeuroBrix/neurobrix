@@ -1,0 +1,186 @@
+"""QuantizedTensor — the engine-side handle for an encoded weight.
+
+A weight stored under the int4-g128-asym encoding rides the container
+as a triplet (`X.qweight` int32 [K//8, N], `X.scales` / `X.qmins`
+fp16 [K//group, N], K = in_features). At weight-load the triplet is
+assembled into ONE QuantizedTensor registered under the graph's
+expected key (`X.weight`), so binding, placement accounting and
+lifecycle stay untouched — compute wrappers detect the type and route:
+
+  aten::t   -> returns self with the view flag flipped. The packed
+               layout is ALREADY the transposed orientation [K, N]
+               (the dequant-GEMV family's natural layout), so the
+               graph's `t(weight [N, K])` is a zero-cost marker.
+  aten::mm  -> M == 1: fused dequant-GEMV (byte-gated family);
+               M > 1: dequantize to dense fp32 via the family's
+               standalone kernel, then the normal mm path (prefill is
+               compute-bound; the transient dense buffer frees at op
+               end).
+
+Lives in kernels/ beside NBXTensor (wrappers route on this type; triton/ consumes it). R33: NBXTensor members only, zero torch. The logical metadata
+(shape/dtype) mirrors what the dense weight would expose so generic
+binding/accounting code needs no special cases.
+"""
+
+from typing import Tuple
+
+from nbxtensor.tensor import NBXTensor, NBXDtype
+
+ENCODING = "int4-g128-asym"
+GROUP = 128
+# The leaves an encoded `X.weight` is stored under, in fold order
+# (packed values, per-group scales, per-group minimums).
+STORAGE_LEAVES = ("qweight", "scales", "qmins")
+PACK = 8
+
+
+class QuantizedTensor:
+    """int4-g128-asym weight triplet under one graph-facing handle.
+
+    `logical_shape` is the DENSE weight's shape as the graph traced it
+    ([out_features, in_features]); `transposed=True` marks the
+    graph-side aten::t view ([in, out] — the packed layout's natural
+    orientation)."""
+
+    __slots__ = ("qweight", "scales", "qmins", "logical_shape",
+                 "transposed")
+
+    def __init__(self, qweight: NBXTensor, scales: NBXTensor,
+                 qmins: NBXTensor, logical_shape: Tuple[int, int],
+                 transposed: bool = False):
+        self.qweight = qweight
+        self.scales = scales
+        self.qmins = qmins
+        self.logical_shape = tuple(logical_shape)
+        self.transposed = transposed
+
+    # ── graph-facing metadata (mirrors the dense weight) ──
+    @property
+    def shape(self) -> Tuple[int, int]:
+        n, k = self.logical_shape
+        return (k, n) if self.transposed else (n, k)
+
+    @property
+    def ndim(self) -> int:
+        return 2
+
+    @property
+    def dtype(self):
+        return NBXDtype.float16  # the dense weight's traced dtype class
+
+    @property
+    def _dtype(self):
+        return NBXDtype.float16
+
+    @property
+    def _shape(self) -> Tuple[int, int]:
+        return self.shape
+
+    @property
+    def nbx_dtype(self):
+        return NBXDtype.float16
+
+    @property
+    def device(self):
+        return self.qweight.device
+
+    @property
+    def _device(self):
+        return self.qweight._device
+
+    @property
+    def _device_idx(self):
+        return self.qweight._device_idx
+
+    @property
+    def _nbytes(self) -> int:
+        return (self.qweight._nbytes + self.scales._nbytes
+                + self.qmins._nbytes)
+
+    def numel(self) -> int:
+        n, k = self.logical_shape
+        return n * k
+
+    def data_ptr(self) -> int:
+        """Identity pointer for cache fingerprints (the qweight buffer
+        — stable for the triplet's lifetime)."""
+        return self.qweight.data_ptr()
+
+    def pin_host(self) -> "QuantizedTensor":
+        """The three host parts pinned (zero3 offload of an int4 weight)."""
+        return QuantizedTensor(self.qweight.pin_host(), self.scales.pin_host(), self.qmins.pin_host(),
+                               self.logical_shape, self.transposed)
+
+    # ── the movers: a weight is moved by ASKING THE WEIGHT ──
+    #
+    # Every placement path in the engine moves a weight by calling a mover on
+    # the tensor itself (`strategies/base.py`, `strategies/zero3.py`,
+    # `strategies/triton/base.py`): dense weights answer, and an encoded one
+    # that cannot answer breaks the first time a plan streams or offloads.
+    # Measured 2026-09-16 on the vitrine's first LLM request:
+    # Qwen3-Coder-30B-A3B-Instruct-int4g128 died at
+    # `'QuantizedTensor' object has no attribute 'to_cuda_async'` — the plan
+    # was right, the encoding was right, the handle was missing three methods.
+    # The triplet moves as a triplet; the metadata (logical shape, view flag)
+    # is not a property of where the bytes live, so it rides unchanged.
+
+    def to_cuda(self, device_idx: int = 0) -> "QuantizedTensor":
+        """The three parts on the given card, the triplet rebuilt."""
+        return QuantizedTensor(self.qweight.to_cuda(device_idx),
+                               self.scales.to_cuda(device_idx),
+                               self.qmins.to_cuda(device_idx),
+                               self.logical_shape, self.transposed)
+
+    def to_cuda_async(self, device_idx: int = 0, stream: int = 0) -> "QuantizedTensor":
+        """The three parts enqueued on `stream` (the streaming strategies'
+        mover). Sequencing is the caller's, exactly as for a dense weight:
+        the returned triplet is readable once the stream is waited on."""
+        return QuantizedTensor(self.qweight.to_cuda_async(device_idx, stream=stream),
+                               self.scales.to_cuda_async(device_idx, stream=stream),
+                               self.qmins.to_cuda_async(device_idx, stream=stream),
+                               self.logical_shape, self.transposed)
+
+    def to_cpu(self, pinned: bool = False) -> "QuantizedTensor":
+        """The three parts back on the host (offload), pinned if asked."""
+        return QuantizedTensor(self.qweight.to_cpu(pinned=pinned),
+                               self.scales.to_cpu(pinned=pinned),
+                               self.qmins.to_cpu(pinned=pinned),
+                               self.logical_shape, self.transposed)
+
+    @property
+    def _pinned(self) -> bool:
+        return bool(getattr(self.qweight, "_pinned", False))
+
+    def t(self) -> "QuantizedTensor":
+        return QuantizedTensor(self.qweight, self.scales, self.qmins,
+                               self.logical_shape,
+                               transposed=not self.transposed)
+
+    def __repr__(self) -> str:
+        return (f"QuantizedTensor({ENCODING}, logical={self.logical_shape}, "
+                f"transposed={self.transposed}, "
+                f"packed={tuple(self.qweight.shape)})")
+
+
+def assemble_quantized(weights: dict) -> int:
+    """Fold `.qweight`/`.scales`/`.qmins` triplets in a loaded weights
+    dict into QuantizedTensor entries under the graph key `<base>.weight`.
+    Mutates the dict in place; returns the number of assembled weights.
+    ZERO FALLBACK: an incomplete triplet raises."""
+    q_leaf, s_leaf, m_leaf = STORAGE_LEAVES
+    bases = [k[: -len("." + q_leaf)] for k in weights
+             if k.endswith("." + q_leaf)]
+    for base in bases:
+        qw = weights.pop(f"{base}.{q_leaf}")
+        try:
+            sc = weights.pop(f"{base}.{s_leaf}")
+            mn = weights.pop(f"{base}.{m_leaf}")
+        except KeyError as e:
+            raise RuntimeError(
+                f"ZERO FALLBACK: incomplete quantized triplet for "
+                f"'{base}' — missing {e}. The build gate should have "
+                f"refused this artifact; re-build the variant.") from e
+        kp, n = qw.shape
+        weights[base + ".weight"] = QuantizedTensor(
+            qw, sc, mn, logical_shape=(n, kp * PACK))
+    return len(bases)

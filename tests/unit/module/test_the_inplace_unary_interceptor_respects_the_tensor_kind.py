@@ -73,7 +73,7 @@ def test_the_nbx_path_is_unchanged_below_and_above():
         # isinstance(x, NBXTensor). Use the real type with a tiny tensor.
         pass
 
-    from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator
+    from nbxtensor.tensor import NBXTensor, DeviceAllocator
     if DeviceAllocator.device_count() <= 0:
         pytest.skip("the NBX branch needs a device the wrapper can launch on")
     import numpy as np

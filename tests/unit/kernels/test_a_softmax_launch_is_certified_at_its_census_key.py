@@ -1,8 +1,8 @@
 """Workstream 1: the softmax kernel's rows per program and warps are certified per key, the key derived from the graph
 (`launch_keys.softmax_launches`, read by the census and by the wrapper's autotuner key) — and the candidates a key
 sweeps never hold more than the kernel already holds for one row (a wider tile compiled for minutes per candidate)."""
-from neurobrix.kernels import launch_keys as LK
-from neurobrix.kernels.ops import softmax as S
+from nbxtensor.ops import launch_keys as LK
+from nbxtensor.ops import softmax as S
 
 
 def test_a_short_row_is_keyed_by_its_rows_bucket_padded_length_log_and_dtypes():

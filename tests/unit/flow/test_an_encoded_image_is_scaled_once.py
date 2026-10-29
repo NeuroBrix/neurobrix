@@ -69,7 +69,7 @@ def test_the_compiled_condition_is_the_encoders_output_padded(tmp_path, invert):
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="NBXTensor is device-backed")
 @pytest.mark.parametrize("invert", [False, True])
 def test_the_triton_condition_is_the_encoders_output_padded(tmp_path, invert):
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.tensor import NBXTensor
     ctx = _ctx(tmp_path, invert)
     lat = _latent()
     ctx.variable_resolver.resolved["vae_encoder.output_0"] = NBXTensor.from_numpy(lat).to("cuda")

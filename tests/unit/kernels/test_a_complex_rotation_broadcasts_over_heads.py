@@ -28,7 +28,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator
+from nbxtensor.tensor import NBXTensor, DeviceAllocator
 
 _TOTAL = DeviceAllocator.device_count()
 needs_a_card = pytest.mark.skipif(_TOTAL == 0, reason="needs a CUDA device")

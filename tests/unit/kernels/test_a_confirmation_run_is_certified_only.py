@@ -29,8 +29,9 @@ import pytest
 SRC = Path(__file__).resolve().parents[3] / "src"
 
 SCRIPT = r'''
-from neurobrix.kernels.nbx_tensor import NBXTensor
-from neurobrix.kernels import wrappers as W
+import neurobrix  # the application: nbxtensor's host services
+from nbxtensor.tensor import NBXTensor
+from nbxtensor.ops import wrappers as W
 a = NBXTensor.empty((19, 2048), "float16", 0)
 b = NBXTensor.empty((2048, 2048), "float16", 0)
 out = W.mm(a, b)
@@ -39,7 +40,7 @@ print("OUT", tuple(out.shape))
 
 
 def _card():
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator
+    from nbxtensor.tensor import DeviceAllocator
     return DeviceAllocator.device_count() > 0
 
 
@@ -84,13 +85,13 @@ def test_the_replay_cache_is_neither_read_nor_written(tmp_path):
 
 
 def _key():
-    return ("neurobrix.kernels.ops.matmul.matmul_kernel", (19, 2048, 2048, True, True, "fp16", "fp16", "fp16"))
+    return ("nbxtensor.ops.matmul.matmul_kernel", (19, 2048, 2048, True, True, "fp16", "fp16", "fp16"))
 
 
 def _table(tmp_path, monkeypatch, rows):
     """A real census table (the P1 format) for nvidia/volta 16 GB under a tmp root, and that profile bound."""
     from neurobrix.kernels import census_table as T
-    from neurobrix.kernels import autotune_certified as C
+    from nbxtensor.ops import autotune_certified as C
     monkeypatch.setattr(T, "ROOT", tmp_path / "census")
     monkeypatch.setattr(C, "active_profile", lambda: ("nvidia", "volta"))
     T.write(T.table_path("nvidia", "volta", 16), rows)
@@ -103,7 +104,7 @@ def test_a_key_absent_from_the_census_table_is_named_a_census_defect(tmp_path, m
 
 
 def test_a_key_in_the_census_table_is_named_a_certification_gap(tmp_path, monkeypatch):
-    from neurobrix.kernels.autotune_certified import key_repr
+    from nbxtensor.ops.autotune_certified import key_repr
     qual, key = _key()
     row = {"model": "TinyLlama-1.1B-Chat-v1.0", "container": "3b8bbc487525959b", "mode": "triton", "rungs_mb": [16384],
            "ops": [None], "kernel": qual, "key": key_repr(key), "dtype": "fp16,fp16,fp16", "tool": "test"}
@@ -115,7 +116,7 @@ def test_a_key_in_the_census_table_is_named_a_certification_gap(tmp_path, monkey
 
 
 def test_a_card_of_unknown_memory_names_no_table(monkeypatch):
-    from neurobrix.kernels import autotune_certified as C
+    from nbxtensor.ops import autotune_certified as C
     monkeypatch.setattr(C, "active_profile", lambda: ("nvidia", "volta"))
     assert "memory class is unknown" in C.census_row(*_key(), None)
 

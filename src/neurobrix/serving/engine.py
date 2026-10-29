@@ -196,7 +196,7 @@ class InferenceEngine:
         # branch's fp64 key, which refuses a device-less or mixed profile.
         from neurobrix.core.prism.runtime_widths import TRITON_ENGINES
         if self.mode in TRITON_ENGINES:
-            from neurobrix.kernels.wrappers import set_hardware_profile
+            from nbxtensor.ops.wrappers import set_hardware_profile
             set_hardware_profile(hw_profile)
         self._executor = RuntimeExecutor(self._pkg, self._plan, mode=self.mode)
 

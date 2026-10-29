@@ -24,7 +24,7 @@ import torch
 
 import neurobrix.core.runtime  # noqa: F401  (pre-resolve the cfg<->runtime import cycle)
 from neurobrix.core.dtype import engine as DE
-from neurobrix.kernels.nbx_tensor import NBXDtype
+from nbxtensor.tensor import NBXDtype
 from neurobrix.triton import dtype as TD
 
 FLOATS = ("float16", "bfloat16", "float32", "float64")

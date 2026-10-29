@@ -82,7 +82,7 @@ E, TOP_K, H, F = 8, 2, 64, 32
 
 def _card():
     pytest.importorskip("triton")
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.tensor import NBXTensor
     try:
         NBXTensor.from_numpy(np.zeros(1, np.float16))
     except Exception as exc:                                # no card: the op-level probe is skipped
@@ -90,7 +90,7 @@ def _card():
 
 
 def _host(arr):
-    from neurobrix.kernels.nbx_tensor import NBXDtype, NBXTensor
+    from nbxtensor.tensor import NBXDtype, NBXTensor
     t = NBXTensor.empty_cpu(arr.shape, NBXDtype.float16)
     ctypes.memmove(t.data_ptr(), np.ascontiguousarray(arr).ctypes.data, arr.nbytes)
     return t
@@ -108,7 +108,7 @@ def _problem(tokens, seed):
 
 
 def _run(h, logits, g, u, d, store=None, key=""):
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.tensor import NBXTensor
     from neurobrix.triton.moe import execute_moe_fused
     mk = _host if store is not None else NBXTensor.from_numpy
     out = execute_moe_fused(NBXTensor.from_numpy(logits), NBXTensor.from_numpy(h),

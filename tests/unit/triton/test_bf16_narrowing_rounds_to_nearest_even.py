@@ -19,7 +19,7 @@ import struct
 import numpy as np
 import pytest
 
-from neurobrix.kernels.nbx_tensor import DeviceAllocator, NBXDtype, float32_to_bf16_bits
+from nbxtensor.tensor import DeviceAllocator, NBXDtype, float32_to_bf16_bits
 
 
 def _bits_value(b: int) -> float:

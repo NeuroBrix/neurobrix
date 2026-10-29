@@ -40,7 +40,7 @@ def load(model: Optional[str], engine: str, architecture: str) -> Optional[float
 
 def untracked_mb(devices) -> Dict[int, float]:
     """{device index: MB the driver reports used that the Triton allocator does not hold} for `devices`."""
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator as DA
+    from nbxtensor.tensor import DeviceAllocator as DA
     out = {}
     for d in devices:
         free_b, total_b = DA.mem_get_info(d)

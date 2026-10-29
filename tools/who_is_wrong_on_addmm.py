@@ -41,8 +41,9 @@ M, N, K = 8, 768, 128
 def main() -> int:
     enforce_owned_cache("the addmm arbitration")
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-    from neurobrix.kernels import wrappers as W
-    from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
+    import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
+    from nbxtensor.ops import wrappers as W
+    from nbxtensor.tensor import NBXTensor, NBXDtype
     from neurobrix.kernels.autotune_certify import (
         f32_to_bf16_bits, bf16_bits_to_f32)
 

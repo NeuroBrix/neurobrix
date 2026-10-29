@@ -20,8 +20,8 @@ HALF = {"input_dtypes": ["bfloat16", "bfloat16"], "output_dtypes": ["bfloat16"]}
 
 
 def test_the_store_rule_keeps_half_on_native_bf16_and_fp32_without_it():
-    from neurobrix.kernels.launch_keys import matmul_out_dtype
-    from neurobrix.kernels.nbx_tensor import NBXDtype as D
+    from nbxtensor.ops.launch_keys import matmul_out_dtype
+    from nbxtensor.tensor import NBXDtype as D
     # a decode row keeps fp32 on every hardware: stored bf16 on the M4 Pro, whisper-large-v3-turbo's Triton decoder
     # drifted from its first tokens (bisected to d4809a47, 2026-10-28); the forced attention GEMM stays bf16 natively
     assert matmul_out_dtype(D.bfloat16, 1, True, True) == D.float32
@@ -35,7 +35,7 @@ def test_the_store_rule_keeps_half_on_native_bf16_and_fp32_without_it():
 
 def test_the_triton_wrap_narrows_a_self_managed_op_to_bf16_unless_it_is_an_island(monkeypatch):
     pytest.importorskip("triton")
-    from neurobrix.kernels.nbx_tensor import NBXDtype
+    from nbxtensor.tensor import NBXDtype
     from neurobrix.triton import dtype as T
     eng = T.TritonDtypeEngine(NBXDtype.bfloat16, has_native_bf16=True, graph_dtype="bfloat16", stores_fp64=False)
     monkeypatch.setattr(eng, "_wrap_fp32", lambda f: "fp32")

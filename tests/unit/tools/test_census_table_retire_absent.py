@@ -20,7 +20,7 @@ from neurobrix.kernels import census_table as T  # noqa: E402
 
 def _row(model, key):
     return {"model": model, "container": "c0ffee", "mode": "triton", "rungs_mb": None, "ops": ["aten.mm::1"],
-            "kernel": "neurobrix.kernels.ops.matmul.matmul_kernel", "key": key, "dtype": "fp16", "tool": "t"}
+            "kernel": "nbxtensor.ops.matmul.matmul_kernel", "key": key, "dtype": "fp16", "tool": "t"}
 
 
 def _setup(tmp_path, in_cache=("kept",)):

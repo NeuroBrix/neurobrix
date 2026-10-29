@@ -16,7 +16,8 @@ from pathlib import Path
 tree, model, modes = Path(sys.argv[1]), sys.argv[2], sys.argv[3].split(",")
 sys.path.insert(0, str(tree / "src")); sys.path.insert(0, str(tree / "tools"))
 from neurobrix.kernels import census_table as T
-from neurobrix.kernels import autotune_certified as C
+import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
+from nbxtensor.ops import autotune_certified as C
 from neurobrix.kernels import autotune_certify as A
 from neurobrix.core.host_memory import memory_state
 
@@ -26,7 +27,7 @@ gen = C.proof_backend({"backend": A._backend()})
 vendor, profile = C.active_profile()
 rows = T.read(T.table_path(vendor, profile, klass, root=tree / "src" / "neurobrix" / "config" / "census"))
 import ast
-from neurobrix.triton import autotune_cache as atc
+from nbxtensor.ops import autotune_cache as atc
 tuners = dict(atc._autotuners())
 per = {}
 def covered(r):

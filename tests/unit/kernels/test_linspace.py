@@ -1,7 +1,7 @@
 """Unit test for the Triton linspace dispatch path (D1).
 
 Regression guard for P-CORRECTNESS-SILENT-FAILURES D1:
-`neurobrix.kernels.dispatch._create_linspace` used to return an
+`nbxtensor.ops.dispatch._create_linspace` used to return an
 UNINITIALISED `NBXTensor.empty` (it imported `fill_kernel` but never
 called any kernel), so every `aten::linspace` in a `--triton` /
 `--triton-sequential` DAG silently produced random memory. This test
@@ -37,9 +37,9 @@ except ModuleNotFoundError:  # script-mode under the pytest-less GPU runtime ven
 
 import torch
 
-from neurobrix.kernels.dispatch import _create_linspace
-from neurobrix.kernels.nbx_tensor import NBXDtype, nbx_to_torch
-
+from nbxtensor.ops.dispatch import _create_linspace
+from nbxtensor.tensor import NBXDtype
+from neurobrix.kernels.torch_interop import nbx_to_torch
 # (NBXDtype, torch dtype, exact?) — fp32 is bit-exact vs torch; fp16/bf16
 # use a 1-ULP tolerance because the bidirectional FlagGems kernel and
 # torch.linspace round interior points on different accumulation paths

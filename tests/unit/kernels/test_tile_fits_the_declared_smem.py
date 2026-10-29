@@ -66,7 +66,7 @@ def _cost(tile):
 
 
 def test_the_tile_that_killed_the_a40_is_refused_on_its_own_budget():
-    from neurobrix.kernels.ops._configs import largest_tile_within_smem
+    from nbxtensor.ops._configs import largest_tile_within_smem
 
     got = largest_tile_within_smem([TOO_BIG, FITS], _cost, SMEM["8.6"])
     assert got != TOO_BIG, (
@@ -78,7 +78,7 @@ def test_the_tile_that_killed_the_a40_is_refused_on_its_own_budget():
 def test_the_same_tile_is_kept_where_the_hardware_holds_it():
     """sm_80 declares 163 KB and does hold it. The fix must not cost the A100
     its tile — a ceiling that clamps everywhere is a regression, not a guard."""
-    from neurobrix.kernels.ops._configs import largest_tile_within_smem
+    from nbxtensor.ops._configs import largest_tile_within_smem
 
     assert largest_tile_within_smem([TOO_BIG, FITS], _cost, SMEM["8.0"]) == TOO_BIG
     assert largest_tile_within_smem([TOO_BIG, FITS], _cost, SMEM["9.0"]) == TOO_BIG
@@ -86,7 +86,7 @@ def test_the_same_tile_is_kept_where_the_hardware_holds_it():
 
 def test_every_ceiling_gets_a_tile_that_fits_it():
     """Nine families, one predicate. A tile is offered only where it fits."""
-    from neurobrix.kernels.ops._configs import largest_tile_within_smem
+    from nbxtensor.ops._configs import largest_tile_within_smem
 
     candidates = [(128, 64), (64, 64), (32, 64)]
     for cap, budget in SMEM.items():
@@ -99,7 +99,7 @@ def test_every_ceiling_gets_a_tile_that_fits_it():
 def test_an_unknown_budget_changes_nothing():
     """None means the hardware did not say. Pruning on a guessed budget deletes
     working configurations — the caller keeps its own proposal."""
-    from neurobrix.kernels.ops._configs import largest_tile_within_smem
+    from nbxtensor.ops._configs import largest_tile_within_smem
 
     assert largest_tile_within_smem([TOO_BIG, FITS], _cost, None) == TOO_BIG
 
@@ -107,7 +107,7 @@ def test_an_unknown_budget_changes_nothing():
 def test_the_space_is_never_emptied():
     """When nothing fits, the smallest is returned rather than nothing: an
     empty selection is a crash, and a tile that spills is at least measurable."""
-    from neurobrix.kernels.ops._configs import largest_tile_within_smem
+    from nbxtensor.ops._configs import largest_tile_within_smem
 
     got = largest_tile_within_smem([TOO_BIG, FITS], _cost, 1024)
     assert got == FITS

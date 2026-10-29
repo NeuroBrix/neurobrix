@@ -9,9 +9,9 @@ Seen red: `format_for` replaced by the old constant stamp → validate refuses.
 """
 import json
 
-from neurobrix.kernels import autotune_certified as C
+from nbxtensor.ops import autotune_certified as C
 
-KERNEL = "neurobrix.kernels.ops.matmul.matmul_kernel"
+KERNEL = "nbxtensor.ops.matmul.matmul_kernel"
 KEY = "(10, 1536, 1536, True, True, 'fp32', 'fp16', 'fp32')"
 
 

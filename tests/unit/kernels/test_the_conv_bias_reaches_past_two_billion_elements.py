@@ -23,8 +23,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from neurobrix.kernels import wrappers as W
-from neurobrix.kernels.nbx_tensor import NBXTensor
+from nbxtensor.ops import wrappers as W
+from nbxtensor.tensor import NBXTensor
 
 C, H, W_ = 64, 6000, 6000               # 2 304 000 000 elements; channel 60 starts past 2^31
 BOUNDARY = 2 ** 31
@@ -43,7 +43,7 @@ def _cuda_free_bytes():
 
 def _require_room():
     try:
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        from nbxtensor.tensor import DeviceAllocator
         DeviceAllocator.empty_cache_pool()
     except Exception:
         pass

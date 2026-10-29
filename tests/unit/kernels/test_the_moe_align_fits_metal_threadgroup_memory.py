@@ -10,7 +10,7 @@ narrowed for Metal. Before the fix the 128-expert cases fail on Metal; a chunk w
 import numpy as np
 import pytest
 
-from neurobrix.kernels.nbx_tensor import NBXDtype, NBXTensor
+from nbxtensor.tensor import NBXDtype, NBXTensor
 
 
 def _host_align(ids, bs, E):

@@ -34,7 +34,7 @@ def _is_nbx(t: Any) -> bool:
 
 def _zeros(ref: Any, shape: Sequence[int]) -> Any:
     if _is_nbx(ref):
-        from neurobrix.kernels.nbx_tensor import NBXTensor
+        from nbxtensor.tensor import NBXTensor
         dev = f"cuda:{getattr(ref, '_device_idx', 0)}" if ref._device == "cuda" else ref._device
         return NBXTensor.zeros(list(shape), dtype=ref.dtype, device=dev)
     import torch

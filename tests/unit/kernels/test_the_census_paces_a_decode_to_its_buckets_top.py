@@ -37,7 +37,7 @@ PROBE = textwrap.dedent("""
     from neurobrix.triton import kv_cache as kvc
     # the interceptor asks its cache to skip (the cache protocol, triton/kv_cache.py): the paged cache's length moves
     from neurobrix.triton.paged_kv_cache import PagedTritonKVCache
-    from neurobrix.kernels.nbx_tensor import NBXDtype
+    from nbxtensor.tensor import NBXDtype
     w = kvc.TritonAttentionInterceptor.__new__(kvc.TritonAttentionInterceptor)
     cache = PagedTritonKVCache(2, 2, 8, 8, 1024, NBXDtype.float16, page_tokens=16, async_release=False)
     cache.length = 5

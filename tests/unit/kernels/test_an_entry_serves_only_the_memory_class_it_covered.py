@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from neurobrix.kernels import autotune_certified as C
+from nbxtensor.ops import autotune_certified as C
 
 from ._rig import running_backend
 
@@ -106,7 +106,7 @@ def test_validate_refuses_a_variant_filed_under_another_class(tmp_path):
     e = _entry({"BLOCK_M": 64}, memory_mb=16384)
     e["variants"] = {"32g": _entry({"BLOCK_M": 128}, memory_mb=16384)}   # filed as 32g, proven on 16g
     doc = {"format": "nbx-autotune-certified/2", "vendor": "nvidia", "profile": "volta",
-           "kernel": "neurobrix.kernels.ops.matmul.matmul_kernel", "dtype": "fp32",
+           "kernel": "nbxtensor.ops.matmul.matmul_kernel", "dtype": "fp32",
            "entries": {"(10, 1536, 1536)": e}}
     path.write_text(json.dumps(doc))
     problems = C.validate(doc, path)
@@ -171,7 +171,7 @@ class _Tuner:
         self.nargs = {}
 
 
-KERNEL = "neurobrix.kernels.ops.matmul.matmul_kernel"
+KERNEL = "nbxtensor.ops.matmul.matmul_kernel"
 KEY = (1500, 1280, 1280, True, True, "fp32", "fp16", "fp32")
 
 
@@ -183,8 +183,8 @@ def _tensor_on(idx):
 def two_class_rig(tmp_path, monkeypatch):
     """A profile with a 16 GB card at ordinal 0 and a 32 GB card at ordinal 1,
     and a directory whose only entry was proven on the 16 GB card."""
-    from neurobrix.kernels import wrappers as W
-    from neurobrix.kernels import nbx_tensor as T
+    from nbxtensor.ops import wrappers as W
+    from nbxtensor import tensor as T
     monkeypatch.setattr(T, "_BACKEND_HAS_FP64", T._BACKEND_HAS_FP64)   # restored after the cell
     before = (W._NBX_HW_PROFILE, W._NBX_HAS_NATIVE_BF16)
     d16 = type("Dev", (), {"index": 0, "name": "Tesla V100-SXM2-16GB", "memory_mb": 16384,

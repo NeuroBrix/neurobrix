@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.kernels.autotune_bucket import bucket_of, ladder_for
+from nbxtensor.ops.autotune_bucket import bucket_of, ladder_for
 
 _LADDER = {"autotune": {"buckets": {"default": [{"up_to": 64, "step": 1},
                                                 {"up_to": 256, "step": 16}]}}}

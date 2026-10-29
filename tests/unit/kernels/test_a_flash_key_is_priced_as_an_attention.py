@@ -4,7 +4,7 @@ geometry the function fell through to: every Apple flash certification (C3) fail
 launch (Mac, 2026-10-23). What this test would do if the code were wrong: KeyError 'geometry' -> red."""
 from neurobrix.kernels import autotune_certify as C
 
-Q = "neurobrix.kernels.ops.flash_attention.flash_attention_certified_kernel"
+Q = "nbxtensor.ops.flash_attention.flash_attention_certified_kernel"
 
 
 def test_a_flash_key_is_priced(monkeypatch):

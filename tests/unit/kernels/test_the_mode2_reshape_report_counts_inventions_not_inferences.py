@@ -26,7 +26,7 @@ import pytest
 
 pytest.importorskip("triton")
 
-from neurobrix.kernels.dispatch import _resolve_view_shape  # noqa: E402
+from nbxtensor.ops.dispatch import _resolve_view_shape  # noqa: E402
 
 
 def _records(tmp_path, monkeypatch, in_shape, target):

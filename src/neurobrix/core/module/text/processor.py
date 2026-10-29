@@ -74,7 +74,7 @@ class TextProcessor:
         if arr.ndim == 1:
             arr = arr[None, :]
         if self._mode in ("triton", "triton_sequential"):
-            from neurobrix.kernels.nbx_tensor import NBXTensor
+            from nbxtensor.tensor import NBXTensor
             t = NBXTensor.from_numpy(arr)
             if isinstance(device, str) and ":" in device:
                 idx = int(device.split(":")[1])

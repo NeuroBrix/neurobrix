@@ -17,7 +17,7 @@ import numpy as np
 from enum import Enum, auto
 from typing import Any, Callable, Dict, Optional, TYPE_CHECKING
 
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, parse_dtype
+from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator, parse_dtype
 from neurobrix.core.runtime.debug import DEBUG
 from neurobrix.core.runtime.resolution.negative_text_mask import negative_mask_for as _negative_mask_for
 from neurobrix.core.runtime.resolution.negative_pooled_condition import negative_swaps as _negative_swaps
@@ -311,7 +311,7 @@ class TritonCFGEngine:
         else:
             # encoder_dtype may be a torch dtype or string — convert via parse
             encoder_dtype_str = str(encoder_dtype).replace("torch.", "")
-            from neurobrix.kernels.nbx_tensor import parse_dtype
+            from nbxtensor.tensor import parse_dtype
             target_dt = parse_dtype(encoder_dtype_str)
             if batched_state._dtype != target_dt:
                 batched_state = batched_state.to(target_dt)
@@ -544,7 +544,7 @@ def _branch_half(t: NBXTensor, branch: int) -> NBXTensor:
 
 def _create_ones_tensor(shape: tuple, dtype: NBXDtype, device: str) -> NBXTensor:
     """Create a tensor filled with ones via dispatch fill kernel."""
-    from neurobrix.kernels.dispatch import _create_ones
+    from nbxtensor.ops.dispatch import _create_ones
     return _create_ones(shape, dtype=dtype, device=device)
 
 

@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
-from neurobrix.kernels import wrappers as w
+from nbxtensor.tensor import NBXTensor, NBXDtype
+from nbxtensor.ops import wrappers as w
 
 
 def test_negative_indices_wrap_and_every_output_element_is_written():
@@ -35,7 +35,7 @@ def test_negative_indices_wrap_and_every_output_element_is_written():
 
 
 def test_meta_index_single_negative_index_matches_reference():
-    from neurobrix.kernels.dispatch import _meta_index
+    from nbxtensor.ops.dispatch import _meta_index
     rng = np.random.default_rng(3)
     table = rng.standard_normal((64, 8)).astype(np.float32)
     idx = rng.integers(-64, 64, size=(16, 32)).astype(np.int64)
@@ -45,7 +45,7 @@ def test_meta_index_single_negative_index_matches_reference():
 
 
 def test_meta_index_joint_negative_indices_match_reference():
-    from neurobrix.kernels.dispatch import _meta_index
+    from nbxtensor.ops.dispatch import _meta_index
     rng = np.random.default_rng(11)
     x = rng.standard_normal((5, 7, 3)).astype(np.float32)
     i0 = rng.integers(-5, 5, size=40).astype(np.int64)

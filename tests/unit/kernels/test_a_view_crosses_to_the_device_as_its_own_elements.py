@@ -26,8 +26,9 @@ import sys
 SCRIPT = r'''
 import ctypes, os
 import numpy as np
-import neurobrix.kernels.nbx_tensor as NT
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
+import neurobrix  # the application: nbxtensor's host services
+import nbxtensor.tensor as NT
+from nbxtensor.tensor import NBXTensor, NBXDtype
 
 keep = []
 def malloc(nbytes, dev_idx=None):

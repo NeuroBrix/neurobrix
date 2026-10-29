@@ -17,7 +17,7 @@ import copy
 
 import pytest
 
-from neurobrix.kernels.ops import _configs
+from nbxtensor.ops import _configs
 from neurobrix.triton.dtype import profile_attention_operand_alignment
 from tests.unit.prism._pinned_machine import APPLE_M4_PRO, V100_16GB, profile
 

@@ -17,14 +17,14 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from neurobrix.kernels import wrappers as W
-from neurobrix.kernels.nbx_tensor import DeviceAllocator, NBXTensor
+from nbxtensor.ops import wrappers as W
+from nbxtensor.tensor import DeviceAllocator, NBXTensor
 
 
 def _no_gpu_reason():
     """Why these cells cannot run here, or None. Only the ABSENCE of a device or of the profile's split rows skips: a
     broken kernel module, a refused profile or a failing allocator raises at collection, never reads as a skip."""
-    from neurobrix.kernels.nbx_tensor import _gpu_runtime
+    from nbxtensor.tensor import _gpu_runtime
     try:
         _gpu_runtime()
     except (OSError, RuntimeError) as exc:           # no CUDA/HIP runtime library on this host
@@ -67,7 +67,7 @@ def _both(run, monkeypatch):
     split = run().numpy().astype(np.float64)
     assert calls, "the m8n8k4 route was not taken"
     flags = (calls[0]["split_a"], calls[0]["split_b"])
-    from neurobrix.kernels.ops import _configs as C
+    from nbxtensor.ops import _configs as C
     monkeypatch.setattr(C, "matrix_unit", lambda: {})
     monkeypatch.setattr(W, "_matrix_unit", lambda: {})
     calls.clear()
@@ -145,7 +145,7 @@ def test_a_bfloat16_operand_through_the_split_rounds_to_the_oracle(monkeypatch):
     sum, not with its result; first measurement 2026-10-12: 0.010 % off, max exactly 2.00 'ulp' — the gate's ulp
     constant was 2^-8 where bfloat16's spacing is 2^-7, so a one-ulp element read as two). An fp16-level inside would put half the elements off. The FMA path on the
     same inputs is held to the same bound."""
-    from neurobrix.kernels.nbx_tensor import NBXDtype, bf16_carrier_to_float32, float32_to_bf16_bits
+    from nbxtensor.tensor import NBXDtype, bf16_carrier_to_float32, float32_to_bf16_bits
 
     def bf16(x):
         bits = float32_to_bf16_bits(np.ascontiguousarray(x, dtype=np.float32))
@@ -175,7 +175,7 @@ def test_a_bfloat16_operand_through_the_split_rounds_to_the_oracle(monkeypatch):
 def test_without_the_split_an_fp32_operand_keeps_the_exact_path(monkeypatch):
     """The representation is the profile's decision: with `fp32_split` withheld, an fp32 operand never reaches the
     unit (rounding it to fp16 would be wrong)."""
-    from neurobrix.kernels.ops import _configs as C
+    from nbxtensor.ops import _configs as C
     mu = {k: v for k, v in C.matrix_unit().items() if k != "fp32_split"}
     monkeypatch.setattr(C, "matrix_unit", lambda: mu)
     monkeypatch.setattr(W, "_matrix_unit", lambda: mu)

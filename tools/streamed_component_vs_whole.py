@@ -63,7 +63,8 @@ def _plan(model, mode, host_free, rung, h, w):
 
 def _to_engine(arr, mode, device):
     if mode.startswith("triton"):
-        from neurobrix.kernels.nbx_tensor import NBXTensor
+        import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
+        from nbxtensor.tensor import NBXTensor
         return NBXTensor.from_numpy(np.ascontiguousarray(arr)).to(device)
     import torch
     return torch.from_numpy(np.ascontiguousarray(arr)).to(device)
@@ -73,7 +74,7 @@ def _to_numpy(t):
     """Host copy, float32 — the triton tensor's own `numpy()` (R33: no torch on that side)."""
     if type(t).__module__.startswith("torch"):
         return t.detach().float().cpu().numpy()
-    from neurobrix.kernels.nbx_tensor import parse_dtype
+    from nbxtensor.tensor import parse_dtype
     if not str(getattr(t, "dtype", "")).endswith(("float32", "int64", "int32", "bool")):
         t = t.to(parse_dtype("float32"))          # bf16/fp16 read as raw bytes otherwise
     return np.asarray(t.numpy(), dtype=np.float32)

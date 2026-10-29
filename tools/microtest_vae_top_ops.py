@@ -88,13 +88,14 @@ def to_torch_cuda(x, target_device="cuda:0"):
 def to_nbx(x):
     """Move torch.Tensor to NBXTensor via numpy."""
     import torch
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
+    from nbxtensor.tensor import NBXTensor
     arr = x.detach().cpu().numpy()
     return NBXTensor.from_numpy(arr)
 
 
 def from_nbx(x):
-    from neurobrix.kernels.nbx_tensor import nbx_to_torch
+    from neurobrix.kernels.torch_interop import nbx_to_torch
     return nbx_to_torch(x)
 
 
@@ -122,15 +123,15 @@ def run_microtest(uid: str, kind: str, extra_kw: dict, target_dev: str):
 
     # Invoke NBX wrapper + torch reference.
     if kind == "relu":
-        from neurobrix.kernels.wrappers import relu as nbx_relu
+        from nbxtensor.ops.wrappers import relu as nbx_relu
         nbx_out = nbx_relu(x_nbx)
         ref_out = F.relu(x_torch)
     elif kind == "silu":
-        from neurobrix.kernels.wrappers import silu as nbx_silu
+        from nbxtensor.ops.wrappers import silu as nbx_silu
         nbx_out = nbx_silu(x_nbx)
         ref_out = F.silu(x_torch)
     elif kind == "pixel_shuffle":
-        from neurobrix.kernels.wrappers import pixel_shuffle_wrapper
+        from nbxtensor.ops.wrappers import pixel_shuffle_wrapper
         upscale = extra_kw.get("upscale_factor", 2)
         nbx_out = pixel_shuffle_wrapper(x_nbx, upscale)
         # Note: graph records NHWC-style (1, 1024, 1024, 1024). Torch's
@@ -140,7 +141,7 @@ def run_microtest(uid: str, kind: str, extra_kw: dict, target_dev: str):
         # NCHW means C=1024 H=1024 W=1024 — which is what we have.
         ref_out = F.pixel_shuffle(x_torch, upscale)
     elif kind == "conv2d":
-        from neurobrix.kernels.wrappers import conv2d_wrapper
+        from nbxtensor.ops.wrappers import conv2d_wrapper
         # Need weight tensor too (shape from graph input_shapes[1]).
         w_shape = in_shapes[1]
         w_torch = to_torch_cuda(

@@ -13,15 +13,15 @@ from tests.unit.prism._pinned_machine import V100_16GB, profile
 @pytest.fixture
 def bound_profile(monkeypatch):
     """The Volta vendor file in force (`_configs.vendor_profile_for_arch("7.0")`, the compute capability): the ladders are DATA on it."""
-    from neurobrix.kernels import wrappers as W
-    from neurobrix.kernels.ops import _configs as CF
+    from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import _configs as CF
     W.set_hardware_profile(profile(V100_16GB))
     monkeypatch.setattr(CF, "_ACTIVE_PROFILE", CF.vendor_profile_for_arch("7.0"))
     yield CF.active_vendor_profile()
 
 
 def test_m_is_keyed_in_classes_of_eight_below_the_unit_and_as_default_above(bound_profile):
-    from neurobrix.kernels.autotune_bucket import bucket_of
+    from nbxtensor.ops.autotune_bucket import bucket_of
     assert [bucket_of("M", m) for m in (5, 8, 9, 31, 32, 57, 64)] == [8, 8, 16, 32, 32, 64, 64]
     assert bucket_of("M", 65) == 80 and bucket_of("M", 257) == 288
     assert bucket_of("N", 31) == 31 and bucket_of("K", 57) == 57        # the other dimensions: the measured ladder

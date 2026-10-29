@@ -150,8 +150,8 @@ def test_the_interceptor_decides_size_at_call_time():
     Driven with a real NBXTensor when a card is present -- the threshold is
     lowered by the environment variable rather than allocating a gigabyte.
     """
-    pytest.importorskip("neurobrix.kernels.nbx_tensor")
-    from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator
+    pytest.importorskip("nbxtensor.tensor")
+    from nbxtensor.tensor import NBXTensor, DeviceAllocator
     if DeviceAllocator.device_count() == 0:
         pytest.skip("needs a CUDA device")
     import numpy as np, os
@@ -178,7 +178,7 @@ def test_the_interceptor_decides_size_at_call_time():
 
 def test_every_op_in_the_map_names_a_real_wrapper():
     """A map entry pointing at nothing would raise only when the op is met."""
-    from neurobrix.kernels import wrappers
+    from nbxtensor.ops import wrappers
     import inspect
     for op_type, fn_name in OpLevelTilingEngine.INPLACE_SAFE_UNARY.items():
         fn = getattr(wrappers, fn_name, None)

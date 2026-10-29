@@ -13,8 +13,8 @@ import numpy as np
 import pytest
 import torch
 
-from neurobrix.kernels.dispatch import _meta_select_scatter, _meta_slice_scatter
-from neurobrix.kernels.nbx_tensor import DeviceAllocator, NBXTensor
+from nbxtensor.ops.dispatch import _meta_select_scatter, _meta_slice_scatter
+from nbxtensor.tensor import DeviceAllocator, NBXTensor
 
 OPEN = 2 ** 63 - 1
 

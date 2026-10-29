@@ -73,8 +73,9 @@ def failed_from_logs(paths, census: dict) -> dict:
     """{(kernel_short, census_key_text): failure} for FAILED keys, recovered by
     describing every census key of that kernel and matching the certifier's text."""
     sys.path.insert(0, str(REPO / "src"))
-    from neurobrix.kernels import autotune_certified as C
-    from neurobrix.triton import autotune_cache as atc
+    import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
+    from nbxtensor.ops import autotune_certified as C
+    from nbxtensor.ops import autotune_cache as atc
     tuners = {q.split(".")[-1]: t for q, t in atc._autotuners()}
     out = {}
     wanted = []
@@ -166,7 +167,7 @@ def main_outside_the_table(args) -> int:
         print("--dry-run: nothing written.")
         return 0
     sys.path.insert(0, str(REPO / "src"))
-    from neurobrix.kernels import autotune_certified as C
+    from nbxtensor.ops import autotune_certified as C
     stamp = time.strftime("%Y%m%d_%H%M%S", time.gmtime())
     rec_dir = args.record_dir or Path(args.certified_dir)
     rec_dir.mkdir(parents=True, exist_ok=True)
@@ -230,7 +231,7 @@ def main() -> int:
         ap.error("--from-log is required (or --certified-dir with --table)")
     if args.census is None:
         sys.path.insert(0, str(REPO / "src"))
-        from neurobrix.triton import autotune_cache as atc
+        from nbxtensor.ops import autotune_cache as atc
         args.census = atc._artifact_path()
     census_path = Path(args.census)
     if not census_path.exists():

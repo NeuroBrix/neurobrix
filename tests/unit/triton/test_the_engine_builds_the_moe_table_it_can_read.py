@@ -18,19 +18,17 @@ import pytest
 
 triton = pytest.importorskip("triton")
 
-from neurobrix.kernels.nbx_tensor import (  # noqa: E402
-    NBXDtype, NBXTensor, bf16_carrier_to_float32,
-)
+from nbxtensor.tensor import NBXDtype, NBXTensor, bf16_carrier_to_float32  # noqa: E402
 
 E, TOP_K, K, N = 32, 8, 1024, 512
 
 
 def _metal_or_skip():
     try:
-        from neurobrix.kernels.nbx_tensor import _detect_gpu_backend
+        from nbxtensor.tensor import _detect_gpu_backend
         if _detect_gpu_backend() != "metal":
             pytest.skip("the pinned-table contract is this driver's")
-        from neurobrix.triton import triton_ext_driver as d
+        from nbxtensor.backend import triton_ext_driver as d
         return d
     except Exception:
         pytest.skip("no Metal backend the engine can resolve")
@@ -47,7 +45,7 @@ def _val(bits):
 
 def test_the_engine_table_matches_fp64_through_the_wrapper():
     drv = _metal_or_skip()
-    from neurobrix.kernels import wrappers as w
+    from nbxtensor.ops import wrappers as w
     from neurobrix.triton import moe as M
 
     rng = np.random.default_rng(11)
@@ -119,8 +117,8 @@ def test_the_engine_table_matches_fp64_through_the_wrapper():
 
 def test_the_capability_answers_from_the_selected_driver():
     _metal_or_skip()
-    from neurobrix.kernels.nbx_tensor import backend_loads_pointers_from_memory
-    from neurobrix.triton.metal_backend import selected_metal_backend
+    from nbxtensor.tensor import backend_loads_pointers_from_memory
+    from nbxtensor.backend.metal_backend import selected_metal_backend
     assert selected_metal_backend() == "triton_ext"
     assert backend_loads_pointers_from_memory() is True, (
         "on triton_ext the capability must now say True — the refusal in "
@@ -142,7 +140,7 @@ def test_the_pinned_authority_reads_across_command_buffers():
     drv = _metal_or_skip()
     import triton
     import triton.language as tl
-    from neurobrix.kernels.launcher import launch
+    from nbxtensor.backend.launcher import launch
 
     @triton.jit
     def _read_first(table_ptr, out_ptr, E: tl.constexpr):

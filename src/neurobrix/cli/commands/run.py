@@ -466,12 +466,8 @@ def cmd_run(args):
         # Both gates below REFUSE with an install command instead of letting
         # the run die later inside the Triton driver — and neither of them
         # fetches anything on the user's behalf.
-        from neurobrix.triton.cpu_backend import (
-            TritonCPUNotInstalledError, ensure_triton_cpu_or_raise,
-        )
-        from neurobrix.triton.metal_backend import (
-            TritonMetalNotInstalledError, ensure_triton_metal_or_raise,
-        )
+        from nbxtensor.backend.cpu_backend import TritonCPUNotInstalledError, ensure_triton_cpu_or_raise
+        from nbxtensor.backend.metal_backend import TritonMetalNotInstalledError, ensure_triton_metal_or_raise
         try:
             # A census shadow (NBX_CENSUS=1, kernels/census.py) launches nothing: it
             # runs with NO visible device on purpose — the door that proves it cannot
@@ -900,14 +896,14 @@ def cmd_run(args):
     # and the engine had printed `Engine: COMPILED`, so a fresh Mac could
     # not start the engine in ANY mode.
     if execution_mode != "compiled":
-        from neurobrix.kernels.wrappers import set_hardware_profile
+        from nbxtensor.ops.wrappers import set_hardware_profile
         set_hardware_profile(hw_profile)
     # What the runtime itself grows to during the run, outside every allocator (core/runtime/runtime_growth.py): read
     # before the executor exists and at the run's end, on the Triton engine with accelerators; recorded per model.
     _growth = None
     if execution_mode != "compiled" and getattr(hw_profile, "devices", None) and not any(
             getattr(d, "has_unified_memory", False) for d in hw_profile.devices):
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator as _DAg
+        from nbxtensor.tensor import DeviceAllocator as _DAg
         from neurobrix.core.runtime import runtime_growth as _rg
         _gdevs = list(range(_DAg.device_count()))
         if _gdevs:
@@ -923,7 +919,7 @@ def cmd_run(args):
             if torch.cuda.is_available():
                 torch.cuda.synchronize()
         else:
-            from neurobrix.kernels.nbx_tensor import DeviceAllocator
+            from nbxtensor.tensor import DeviceAllocator
             if DeviceAllocator.device_count() > 0:
                 DeviceAllocator.device_synchronize()
 
@@ -957,7 +953,7 @@ def cmd_run(args):
         _peak = (max(process_peak_reserved(d) for d in range(torch.cuda.device_count()))
                  if torch.cuda.is_available() else (_sampled_peak.stop() if _sampled_peak is not None else None))
     else:
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        from nbxtensor.tensor import DeviceAllocator
         _peak = DeviceAllocator.peak_device_bytes()
     print(run_timings.format_peak(None if _peak is None else _peak / 2**20), flush=True)
     if _growth is not None:

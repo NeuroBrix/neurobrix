@@ -21,7 +21,7 @@ from neurobrix.core.module import tiling_sizes as C3
 
 
 def test_the_wrapper_no_longer_reads_the_drivers_free_bytes():
-    from neurobrix.kernels import wrappers as W
+    from nbxtensor.ops import wrappers as W
     assert "device_free_bytes" not in inspect.getsource(W._conv3d_via_conv2d)
 
 

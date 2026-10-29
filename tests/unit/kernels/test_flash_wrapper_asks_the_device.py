@@ -23,8 +23,7 @@ def test_the_flash_wrapper_consults_the_budget_before_launching():
     import ast
     import pathlib
 
-    src = (pathlib.Path(__file__).resolve().parents[3] / "src" / "neurobrix"
-           / "kernels" / "wrappers.py")
+    src = (pathlib.Path(__file__).resolve().parents[3] / "nbxtensor" / "src" / "nbxtensor" / "ops" / "wrappers.py")
     tree = ast.parse(src.read_text(), filename=str(src))
     fn = next((n for n in ast.walk(tree)
                if isinstance(n, ast.FunctionDef)

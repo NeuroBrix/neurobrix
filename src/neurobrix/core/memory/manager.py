@@ -110,7 +110,7 @@ class MemoryManager:
         # is UAF-safe. Lazy import + guard: a triton-substrate cleanup must
         # never break a compiled-path unload, and never raise.
         try:
-            from neurobrix.kernels.wrappers import clear_bias_caches
+            from nbxtensor.ops.wrappers import clear_bias_caches
             clear_bias_caches()
         except Exception:
             pass
@@ -225,7 +225,7 @@ class MemoryManager:
         no-op sync/flush (CPU-only contexts), the collect still runs.
 
         The triton flows use the triton-side mirror
-        (`neurobrix.triton.memory_pool.release_flow_memory`) — separate
+        (`nbxtensor.memory.memory_pool.release_flow_memory`) — separate
         implementation by design (never a shared compute helper).
         """
         device_sync(device)

@@ -18,7 +18,7 @@ env_unset: [NBX_CENSUS]
 
 # The registries the launcher dispatches ops through (source: kernels/dispatch.py, kernels/metadata_ops.py).
 op_maps:
-  - builder: "neurobrix.kernels.dispatch:_build_op_map"
+  - builder: "nbxtensor.ops.dispatch:_build_op_map"
     key: "neurobrix.kernels.classification:canonical_aten"
     guard: wrapper                              # the wrapper's guard is evaluated over each op's signatures
   - table: "neurobrix.kernels.metadata_ops:METADATA_OPS_IMPL"
@@ -40,8 +40,8 @@ rack:
   # output), and every point was answered under NO profile (`{}`), not the gate's.
   target_binder: "neurobrix.kernels.census:_bind_target"
   # read after the setup: a vendor profile that resolved EMPTY is refused by name, never probed point by point
-  vendor_profile: "neurobrix.kernels.ops._configs:active_vendor_profile"
-  setup: "neurobrix.kernels.wrappers:set_hardware_profile"
+  vendor_profile: "nbxtensor.ops._configs:active_vendor_profile"
+  setup: "nbxtensor.ops.wrappers:set_hardware_profile"
 
 # Memory classes of this rack (CLAUDE.local.md: cards 0,1 = 16 GB, cards 2,3 = 32 GB).
 classes:
@@ -109,8 +109,8 @@ external_domains:
 # a hit, conservatively); a dtype record is the dtype enum's member (source: kernels/nbx_tensor.py, whose
 # NBXTensor keeps its dtype in the `_dtype` slot and names bool `bool_`).
 stubs:
-  tensor: {class: "neurobrix.kernels.nbx_tensor:NBXTensor", dtype_slot: "_dtype"}
-  dtype: {enum: "neurobrix.kernels.nbx_tensor:NBXDtype", suffixes: ["_"]}
+  tensor: {class: "nbxtensor.tensor:NBXTensor", dtype_slot: "_dtype"}
+  dtype: {enum: "nbxtensor.tensor:NBXDtype", suffixes: ["_"]}
 
 # Bounds of the evaluation (a bound reached is NAMED in scope.json and the unit falls back, never truncated).
 limits:

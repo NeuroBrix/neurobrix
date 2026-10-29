@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 SRC = str(Path(__file__).resolve().parents[3] / "src")
-QUAL = "neurobrix.kernels.ops.gemv_vec.gemv_vec_kernel"
+QUAL = "nbxtensor.ops.gemv_vec.gemv_vec_kernel"
 
 
 def test_a_lazily_imported_kernel_is_found():

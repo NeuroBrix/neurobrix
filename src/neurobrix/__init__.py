@@ -17,3 +17,7 @@ else:
         __version__ = _pkg_version("neurobrix")
     except Exception:
         __version__ = "0.0.0-dev"
+
+# The engine provides its tensor library with what the library does not own (src/neurobrix/_nbxtensor_host.py).
+from neurobrix import _nbxtensor_host as _nbxtensor_host
+_nbxtensor_host.install()

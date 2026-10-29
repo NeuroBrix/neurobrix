@@ -23,7 +23,7 @@ import numpy as np
 import pytest
 
 from neurobrix.core.runtime.resolution.input_synthesizer import InputSynthesizer
-from neurobrix.kernels.nbx_tensor import NBXTensor
+from nbxtensor.tensor import NBXTensor
 
 
 class _Resolver:

@@ -71,7 +71,7 @@ def test_the_shadow_shapes_a_stamped_weight_as_its_file():
         dtype = "float32"
         device = "mps:0"
 
-    import neurobrix.kernels.nbx_tensor as nt
+    import nbxtensor.tensor as nt
     real = nt.NBXTensor
     nt.NBXTensor = _FakeNBX
     try:

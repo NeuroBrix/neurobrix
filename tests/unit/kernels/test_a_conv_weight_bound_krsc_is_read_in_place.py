@@ -30,8 +30,8 @@ def test_every_profile_states_its_conv_weight_layout_and_only_the_measured_arch_
 
 
 def test_the_layout_is_read_from_the_profile_and_a_profile_without_one_is_refused(monkeypatch):
-    from neurobrix.kernels import launch_keys as LK
-    from neurobrix.kernels.ops import _configs as K
+    from nbxtensor.ops import launch_keys as LK
+    from nbxtensor.ops import _configs as K
     monkeypatch.setattr(K, "active_vendor_profile", lambda: {"conv": {"weight_layout": "KRSC"}})
     assert LK.conv_weight_layout() == "KRSC"
     monkeypatch.setattr(K, "active_vendor_profile", lambda: {"flash": {}})
@@ -54,13 +54,13 @@ def test_the_layout_is_read_from_the_profile_and_a_profile_without_one_is_refuse
     ((64, 32, 3, 3, 3), 1, False, False),             # conv3d, sliced per frame
 ])
 def test_which_weights_the_krsc_layout_takes(w_shape, groups, transposed, expected):
-    from neurobrix.kernels import launch_keys as LK
+    from nbxtensor.ops import launch_keys as LK
     assert LK.conv_weight_krsc(w_shape, groups, transposed, "KRSC") is expected
     assert LK.conv_weight_krsc(w_shape, groups, transposed, "KCRS") is False
 
 
 def test_a_weight_is_relaid_only_when_every_reader_is_a_conv_that_takes_it():
-    from neurobrix.kernels import launch_keys as LK
+    from nbxtensor.ops import launch_keys as LK
     tensors = {"param::a": {"shape": [8, 4, 3, 3], "weight_name": "a.weight"},
                "param::b": {"shape": [8, 4, 3, 3], "weight_name": "b.weight"},
                "param::d": {"shape": [8, 1, 3, 3], "weight_name": "d.weight"},
@@ -88,7 +88,7 @@ def test_the_host_relayout_keeps_the_logical_shape_and_puts_the_channels_innermo
 
 def _dev_ok():
     try:
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        from nbxtensor.tensor import DeviceAllocator
         return DeviceAllocator.device_count() > 0
     except Exception:
         return False
@@ -102,8 +102,8 @@ def _dev_ok():
 ])
 def test_the_wrapper_reads_a_krsc_weight_in_place_and_gives_the_same_bytes(
         monkeypatch, N, C, H, W, K, kh, kw, groups, stride, pad):
-    from neurobrix.kernels import wrappers as Wr
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.ops import wrappers as Wr
+    from nbxtensor.tensor import NBXTensor
     rng = np.random.default_rng(0)
     x = rng.standard_normal((N, C, H, W)).astype(np.float32)
     w = rng.standard_normal((K, C // groups, kh, kw)).astype(np.float32)
@@ -124,7 +124,7 @@ def test_the_wrapper_reads_a_krsc_weight_in_place_and_gives_the_same_bytes(
 def test_the_executor_joins_the_relaid_weights_to_the_loader_keys(monkeypatch):
     from types import SimpleNamespace
     from neurobrix.core.runtime.graph_executor import GraphExecutor
-    from neurobrix.kernels import launch_keys as LK
+    from nbxtensor.ops import launch_keys as LK
     monkeypatch.setattr(LK, "conv_weight_layout", lambda: "KRSC")
     conv = lambda w: {"op_type": "aten::convolution", "input_tensor_ids": ["x", w],
                       "attributes": {"groups": 1, "transposed": False}}

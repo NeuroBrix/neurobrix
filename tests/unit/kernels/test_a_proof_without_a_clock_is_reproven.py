@@ -9,7 +9,7 @@ protocol lock (register 56, adjudicated 2026-09-14 01:47 — the 32 GB and
 Injection (2026-09-14): with `need_clock` ignored in `entry_covers`, the
 second test went RED; restored, green.
 """
-from neurobrix.kernels import autotune_certified as C
+from nbxtensor.ops import autotune_certified as C
 
 
 def _entry(clocks):

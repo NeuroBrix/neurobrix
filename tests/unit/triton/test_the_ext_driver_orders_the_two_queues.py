@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.triton import triton_ext_driver as D
+from nbxtensor.backend import triton_ext_driver as D
 
 
 def test_neurobrix_queue_is_drained_BEFORE_the_foreign_dispatch(monkeypatch):

@@ -105,7 +105,9 @@ def main() -> int:
                              "number for a dtype the Dell did not run.")
     args = parser.parse_args()
 
-    from neurobrix.kernels import launcher
+    import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
+
+    from nbxtensor.backend import launcher
     launcher.install()
 
     wanted = [w.strip() for w in args.only.split(",")] if args.only else None
@@ -231,8 +233,8 @@ def _run_in_dtype(op: str, payload, meta, path, dtype):
     CUDA column: the Dell did not run this dtype, and inventing one would be
     the whole point of the bank thrown away.
     """
-    from neurobrix.kernels.nbx_tensor import NBXTensor
-    from neurobrix.kernels import wrappers
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.ops import wrappers
 
     row = {"op": op, "tag": meta["tag"], "file": path.name,
            "dtype": str(dtype), "source": "bank inputs, oracle recomputed here",
@@ -294,8 +296,8 @@ def _require_inputs(op, meta, arrays, path=None):
 
 def run_op(op: str, payload, meta):
     """Run one bank entry through the engine's own wrappers."""
-    from neurobrix.kernels.nbx_tensor import NBXTensor
-    from neurobrix.kernels import wrappers
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.ops import wrappers
 
     arrays = [np.ascontiguousarray(payload[k])
               for k in sorted(payload.files) if k.startswith("in")]
@@ -517,7 +519,7 @@ _HANDLERS = {
         i[0], i[1] if len(i) > 1 else None, i[2] if len(i) > 2 else None,
         k["N"], k["C"], k["HxW"], k["num_groups"], float(k.get("eps", 1e-5))),
     "cat": lambda w, i, k: __import__(
-        "neurobrix.kernels.nbx_tensor", fromlist=["NBXTensor"]
+        "nbxtensor.tensor", fromlist=["NBXTensor"]
     ).NBXTensor.cat(list(i), dim=int(k.get("dim", 0))),
     "index_select": lambda w, i, k: w.index_select_wrapper(
         i[0], int(k.get("dim", 0)), i[1]),

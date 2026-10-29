@@ -146,7 +146,8 @@ def ladder_profile(v, _dim="M"):
     that will run, so a candidate is only adopted once it has been evaluated under this name
     too. Two spellings of one ladder is how a tool comes to measure something the engine does
     not do."""
-    from neurobrix.kernels.autotune_bucket import bucket_of
+    import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
+    from nbxtensor.ops.autotune_bucket import bucket_of
     return int(bucket_of(_dim, int(v)))
 
 
@@ -168,7 +169,7 @@ def _synth(rng, shape, dtype):
     of 1 205 (Apple M4 Pro, 2026-09-22).
     """
     import numpy as np
-    from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
+    from nbxtensor.tensor import NBXTensor, NBXDtype
     x = np.ascontiguousarray((rng.standard_normal(shape) * 0.1).astype(np.float32))
     if str(dtype) in ("bfloat16", "bf16"):
         u = x.view(np.uint32)
@@ -185,10 +186,10 @@ def _cfg_repr(cfg) -> str:
 
 def sweep_matmul(M, N, K, dtype, dev):
     import numpy as np
-    from neurobrix.kernels.nbx_tensor import NBXTensor
-    from neurobrix.kernels import wrappers as W
-    from neurobrix.kernels.ops.matmul import matmul_kernel
-    from neurobrix.triton import autotune_cache as atc
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops.matmul import matmul_kernel
+    from nbxtensor.ops import autotune_cache as atc
     rng = np.random.default_rng(M)
     a = _synth(rng, (M, K), dtype)   # lands on the visible card
     b = _synth(rng, (K, N), dtype)
@@ -219,10 +220,10 @@ def sweep_bmm(B, M, N, K, dtype):
     replay census (302 baddbmm keys on this machine) has M > 1 in 301 of them — the prefill
     scores at the request's length — with N the key length and K the head dim."""
     import numpy as np
-    from neurobrix.kernels.nbx_tensor import NBXTensor
-    from neurobrix.kernels import wrappers as W
-    from neurobrix.kernels.ops.baddbmm_op import baddbmm_kernel
-    from neurobrix.triton import autotune_cache as atc
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops.baddbmm_op import baddbmm_kernel
+    from nbxtensor.ops import autotune_cache as atc
     rng = np.random.default_rng(M * 1000 + N)
     a = _synth(rng, (B, M, K), dtype)
     b = _synth(rng, (B, K, N), dtype)
@@ -253,10 +254,10 @@ def sweep_conv(B, C_in, C_out, H, W, k, dtype, kh=None, kw=None):
     `kh=1` the 1-D convolutions a vocoder runs over a sequence, whose width is the request's.
     Request-dependent: B (frames as batch), H, W (resolution, tile extent, sequence length)."""
     import numpy as np
-    from neurobrix.kernels.nbx_tensor import NBXTensor
-    from neurobrix.kernels import wrappers as Wr
-    from neurobrix.kernels.ops.conv2d import conv2d_forward_kernel
-    from neurobrix.triton import autotune_cache as atc
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.ops import wrappers as Wr
+    from nbxtensor.ops.conv2d import conv2d_forward_kernel
+    from nbxtensor.ops import autotune_cache as atc
     kh = int(kh or k); kw = int(kw or k)
     rng = np.random.default_rng(H * 7919 + W)
     x = _synth(rng, (B, C_in, H, W), dtype)
@@ -339,7 +340,7 @@ def _loss_tolerance():
     gets no verdict column rather than a made-up one.
     """
     try:
-        from neurobrix.kernels.ops._configs import active_vendor_profile
+        from nbxtensor.ops._configs import active_vendor_profile
         spec = ((active_vendor_profile() or {}).get("autotune") or {}).get("loss_tolerance")
         rows = (spec or {}).get("bands")
         if not rows:

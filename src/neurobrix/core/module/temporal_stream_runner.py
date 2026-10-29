@@ -39,7 +39,7 @@ def _out_frames(dag: Dict[str, Any], out_tid: str, axis: int, symbol: str, frame
 
 def _empty_like_shape(ref: Any, shape: List[int]) -> Any:
     if _is_nbx(ref):
-        from neurobrix.kernels.nbx_tensor import NBXTensor
+        from nbxtensor.tensor import NBXTensor
         dev = f"cuda:{getattr(ref, '_device_idx', 0)}" if ref._device == "cuda" else ref._device
         return NBXTensor.empty(shape, dtype=ref.dtype, device=dev)
     import torch

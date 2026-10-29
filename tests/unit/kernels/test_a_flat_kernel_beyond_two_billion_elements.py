@@ -18,8 +18,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from neurobrix.kernels import wrappers as W
-from neurobrix.kernels.nbx_tensor import NBXTensor
+from nbxtensor.ops import wrappers as W
+from nbxtensor.tensor import NBXTensor
 
 ROWS, COLS = 1_100_000, 2048            # 2 252 800 000 elements; the int32 boundary falls inside row 1 048 576
 BOUNDARY = 2 ** 31
@@ -68,7 +68,7 @@ def _require_room():
     # Flushing first makes the question answerable by the driver again, and
     # releasing the cache before a multi-gigabyte allocation is right anyway.
     try:
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        from nbxtensor.tensor import DeviceAllocator
         DeviceAllocator.empty_cache_pool()
     except Exception:
         pass

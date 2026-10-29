@@ -38,7 +38,7 @@ _ext = pytest.importorskip("triton_apple_backend",
 
 
 def _has_metal():
-    nbx_tensor = pytest.importorskip("neurobrix.kernels.nbx_tensor")
+    nbx_tensor = pytest.importorskip("nbxtensor.tensor")
     detect = nbx_tensor._detect_gpu_backend   # a renamed probe raises here, loudly
     try:
         return detect() == "metal"
@@ -93,7 +93,7 @@ def test_a_kernel_really_compiles_under_that_policy():
     reciprocal square root that fast math is most eager to approximate."""
     import Metal
 
-    from neurobrix.kernels.metal_device import runtime
+    from nbxtensor.backend.metal_device import runtime
 
     source = ("#include <metal_stdlib>\n"
               "using namespace metal;\n"

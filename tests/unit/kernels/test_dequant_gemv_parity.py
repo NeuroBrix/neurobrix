@@ -87,12 +87,12 @@ def dequant_int4_np(packed: np.ndarray, scales: np.ndarray,
 # ── GPU plumbing ─────────────────────────────────────────────────────
 
 def _nbx(arr):
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.tensor import NBXTensor
     return NBXTensor.from_numpy(np.ascontiguousarray(arr))
 
 
 def _dl(t, np_dtype):
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator
+    from nbxtensor.tensor import DeviceAllocator
     buf = np.empty(t._nbytes, dtype=np.uint8)
     DeviceAllocator.memcpy(buf.ctypes.data, t.data_ptr(), t._nbytes, 2)
     return buf.view(np_dtype).reshape(t.shape)
@@ -105,11 +105,11 @@ def _run_family(x_np, w_np, block_n=None):
     SAME width (the tier contract holds at every width; the wrapper's
     occupancy rule adapts it at small N)."""
     import triton
-    from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator
+    from nbxtensor.tensor import NBXTensor, DeviceAllocator
     from nbxtensor.ops.dequant_gemv import (
         BLOCK_K, BLOCK_N, NUM_WARPS, dequant_int4_kernel,
         dequant_gemv_int4_kernel, gemv_ref_kernel)
-    from neurobrix.kernels.nbx_tensor import NBXDtype
+    from nbxtensor.tensor import NBXDtype
 
     K, N = w_np.shape
     if block_n is None:
@@ -221,7 +221,7 @@ def test_occupancy_rule_resolves_vendor_config():
     profile whose arch is volta, _dequant_gemv_block_n narrows the
     router shape to 1 and leaves the huge-N grid pinned; with no
     profile, it degrades to the pinned width (prior behavior)."""
-    import neurobrix.kernels.wrappers as W
+    import nbxtensor.ops.wrappers as W
 
     class _Dev:
         brand = "nvidia"

@@ -1,0 +1,989 @@
+"""Shared autotune configurations for Triton kernels.
+
+V100 safety: _safe_num_stages() clamps num_stages to 2 on pre-Ampere GPUs.
+V100 (sm_70) lacks cp.async — Triton's software pipelining with num_stages > 2
+emits async copy instructions that cause CUDA_ERROR_MISALIGNED_ADDRESS on Volta.
+"""
+
+import inspect
+import sys
+import warnings
+from typing import Dict, List, Optional
+
+from pathlib import Path
+
+import triton
+from triton import next_power_of_2
+
+
+# ---------------------------------------------------------------------------
+# Autotune compatibility across Triton versions
+# ---------------------------------------------------------------------------
+
+_AUTOTUNE_DROPPED: set = set()
+
+
+def nbx_autotune(*args, **kwargs):
+    """`triton.autotune`, minus any keyword the installed Triton lacks.
+
+    NeuroBrix passes `cache_results=True` so autotune results persist to
+    disk instead of being re-measured every process. That keyword arrived
+    in a later Triton than the one `pip install torch --index-url .../cu121`
+    resolves (Triton 3.1 for torch 2.5), and passing it there raises
+
+        TypeError: autotune() got an unexpected keyword argument 'cache_results'
+
+    at the FIRST kernel launch — which made a clean install of NeuroBrix
+    unable to run a single model on any GPU whose torch build ships an
+    older Triton. That is what this shim exists to stop.
+
+    The degradation is real but bounded, and it is announced rather than
+    hidden: `cache_results` is a caching optimisation, so dropping it costs
+    one autotune sweep per process and changes no result. Anything that
+    would change a RESULT must never be dropped this way — it would be a
+    silent fallback, which this engine does not do.
+    """
+    import triton
+
+    try:
+        supported = set(inspect.signature(triton.autotune).parameters)
+    except (TypeError, ValueError):
+        return triton.autotune(*args, **kwargs)
+    # Triton's own on-disk autotune cache (`cache_results`) keys its files by
+    # `make_backend(driver.active.get_current_target()).hash()` — the driver
+    # probe that imports torch (R33, universal since 2026-09-05). The engine
+    # persists its sweeps itself (triton/autotune_cache.py seeds the tuner's
+    # cache from ~/.neurobrix/replay_cache), so the upstream file cache is
+    # dropped here: same results, one persistence, no probe.
+    kwargs.pop("cache_results", None)
+    if "do_bench" in supported and "do_bench" not in kwargs:
+        # The sweep's timing through the engine's runtime (CUDA events via
+        # the allocator), not Triton's benchmarker, which asks torch for its
+        # events and its flush buffer (R33, universal since 2026-09-05).
+        from nbxtensor.backend.launcher import do_bench as _nbx_do_bench
+        kwargs["do_bench"] = _nbx_do_bench
+
+    unsupported = {k for k in kwargs if k not in supported}
+    if unsupported:
+        for name in sorted(unsupported - _AUTOTUNE_DROPPED):
+            _AUTOTUNE_DROPPED.add(name)
+            warnings.warn(
+                f"Triton {getattr(triton, '__version__', '?')} does not support "
+                f"@triton.autotune({name}=...); continuing without it. "
+                f"Autotune results will be re-measured once per process instead "
+                f"of persisted to disk (slower first launch, identical results). "
+                f"Triton 3.6+ restores it.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        kwargs = {k: v for k, v in kwargs.items() if k not in unsupported}
+
+    decorator = triton.autotune(*args, **kwargs)
+
+    def announce_then_decorate(fn):
+        return _announce_first_sweep(decorator(fn))
+
+    return announce_then_decorate
+
+
+# Said once per process, the first time the autotuner actually measures.
+_SWEEP_ANNOUNCED = [False]
+_SEEDED = [False]
+
+_SWEEP_NOTICE = (
+    "[neurobrix] First run for these tensor shapes on this machine: measuring "
+    "kernel configurations.\n"
+    "[neurobrix] This happens ONCE per shape per machine and is kept in the engine's "
+    "artifact (~/.neurobrix/replay_cache/autotune_configs_<arch>.json).\n"
+    "[neurobrix] Later runs skip it entirely — measured 254.9 s -> 7.9 s on "
+    "whisper-large-v3-turbo, 15.5 s -> 7.4 s on TinyLlama-1.1B.\n"
+)
+
+
+def _announce_first_sweep(tuned):
+    """Say, once, that the engine is tuning rather than hung.
+
+    A first `whisper-large-v3-turbo` transcription spends **247 seconds**
+    autotuning before it produces a word, and said nothing at all while it did
+    — measured 2026-09-03,
+    `validation_outputs/audio_launch_census_2026_09_03/VERDICT.md`. The second
+    run of the same command takes 7.9 s. A user whose first run looks hung for
+    four minutes concludes the engine is broken, and they are not being
+    unreasonable: nothing on screen distinguished it from a hang.
+
+    The cost is not a defect — it buys ~12 % throughput per the autotune policy
+    and it is paid once per shape per machine. Being silent about it was.
+
+    The wrapper REMOVES ITSELF once it has spoken, restoring the class method,
+    so the warm path (the overwhelming majority of launches) pays nothing for
+    an announcement that has already happened.
+    """
+    cache = getattr(tuned, "cache", None)
+    if cache is None:                 # not an Autotuner — nothing to watch
+        return tuned
+    original = tuned.run
+    # A census shadow (kernels/census.py, installed before this kernel was defined)
+    # keeps this wrapper — it is the one door where the key is formed and recorded —
+    # and drops what stands behind it: no bench, no launch, no device.
+    from nbxtensor.host import need as _need
+    _census = _need("census")()                 # the application's launch census (nbxtensor.host)
+    if _census.active():
+        original = _census.shadow_run
+
+    def run_with_notice(*args, **kwargs):
+        # The engine's artifact is the ONLY persistence of a sweep since
+        # 2026-09-05 (upstream's on-disk cache was dropped: its key was a
+        # torch-importing driver probe): seed once, capture every growth.
+        from nbxtensor.ops import autotune_cache as _atc
+        from nbxtensor.ops import autotune_certified as _cert_mode
+        # A CONFIRMATION run (--certified-only) serves the certified directory and nothing else:
+        # the local replay cache holds earlier SWEEPS, so it is never seeded here (a gate that
+        # read it looked "served" while 39 % of its key uses were replayed sweeps — the Mac,
+        # 2026-09-28). A census shadow is not a confirmation run and keeps its own rules.
+        _confirm = _cert_mode.certified_only() and not _census.active()
+        if not _SEEDED[0]:
+            _SEEDED[0] = True
+            if not _confirm:
+                try:
+                    _n = _atc.seed()
+                    _cert_mode.note_local(_n)
+                    _cert_mode.override_seeded()   # the directory first, even on a warm machine
+                except Exception:              # the replay cache is an optimisation, never a failure source
+                    pass
+        # The certified directory (owner directive 2026-09-06, the engine
+        # component): a shape the directory certifies for the profile in
+        # force, this kernel and its dtype is applied here — no sweep, no
+        # screen. A shape it does not know sweeps at runtime with the
+        # consensus screen, is said in clear, and lands in the local replay
+        # cache, never in the directory.
+        try:
+            key = _atc.key_of(tuned, args, kwargs)
+        except Exception:
+            key = None
+        # THE KEY RECORD (2026-09-21, the census doctrine): every key this call forms — served
+        # from the directory, swept, or replayed — written as the certifier reads it, one door
+        # for the live proof target and for the shadow census. NBX_KEY_RECORD=<path>.
+        if key is not None:
+            _census.record(tuned, key)     # `_census`: imported once in the enclosing scope
+        if key is not None and key not in cache:
+            from nbxtensor.ops import autotune_certified as _cert
+            qual = _atc._qual_of(tuned) or getattr(getattr(tuned, "base_fn", None), "__name__", "?")
+            try:
+                # the card this launch executes on: its tensor's device, read in
+                # the Prism profile — an entry serves only the memory class it
+                # covered (register 56)
+                mcls = _cert.executing_memory_class(args)
+                applied = _cert.apply(qual, tuned, key, memory_class=mcls)
+                if not applied:
+                    # an operand widened on load is keyed by the dtype it is computed in
+                    twin = _cert.computed_key(tuned, key, kwargs)
+                    applied = bool(twin) and _cert.apply(qual, tuned, key, lookup_key=twin, memory_class=mcls)
+            except Exception as exc:            # the directory is an optimisation, never a failure source —
+                if _confirm:                    # except in a confirmation run, where it is the only source
+                    raise _cert.KeyNotCertified(f"CERTIFIED-ONLY: the certified lookup failed for {qual} "
+                                                f"at {key}: {exc}") from exc
+                print(f"[autotune] certified lookup failed for {qual}: {exc}", flush=True)
+                applied = False
+            if applied:
+                _cert.served_evicted(qual, key)  # a seed evicted at seed time, now served certified for this card
+            elif _cert.reseed_evicted(qual, tuned, key):
+                applied = True                  # the machine's own earlier sweep, put back for this card
+            if not applied:
+                if _confirm:
+                    _cert.refuse_missing(qual, tuned, key)   # raises KeyNotCertified: never a sweep
+                _cert.announce_missing(qual, tuned, key)
+        before = len(cache)
+        result = original(*args, **kwargs)
+        if len(cache) > before:
+            if _census.active():
+                # THE DOOR: a shadow benches nothing, so a grown tuner cache here means a
+                # kernel was defined before the census installed and ran a bench on events
+                # that answer 0 ms — its config must never reach the machine's live replay
+                # cache. Refused, never captured.
+                raise RuntimeError(
+                    "census shadow: the autotuner cache grew during a shadow run — a kernel "
+                    f"defined before kernels/census.py installed ({_atc._qual_of(tuned)!r}); "
+                    "nothing is captured. Install the census before the engine imports.")
+            if key is not None:
+                try:                       # the bench this call just ran: best, second-best, margin
+                    _atc.note_timings(tuned, key, getattr(tuned, "configs_timings", None))
+                except Exception:
+                    pass
+            if not _SWEEP_ANNOUNCED[0]:
+                _SWEEP_ANNOUNCED[0] = True
+                print(_SWEEP_NOTICE, file=sys.stderr, end="")
+            try:
+                _atc.capture()
+            except Exception:
+                pass
+        return result
+
+    tuned.run = run_with_notice
+    return tuned
+
+
+def _safe_num_stages(n: int) -> int:
+    """Clamp num_stages to the executing architecture's pipelining budget.
+
+    The budget is a HARDWARE CAPABILITY and is read from
+    `config/vendors/<vendor>/<arch>.yml` `pipelining.max_num_stages`
+    (R23/R24) — never decided in code, never queried from the driver in a
+    hot path. Volta's 2 is measured: sm_70 has no cp.async, and Triton's
+    pipelining above 2 stages emits async copies that fault with
+    CUDA_ERROR_MISALIGNED_ADDRESS in any kernel using tl.dot. Ampere and
+    Hopper carry a cap above the widest config space, so it never binds.
+    The CDNA profiles carry a conservative 2 pending first light.
+
+    Fallback path — a bare process with no hardware profile (unit tests):
+    the driver is the only signal available. Note that
+    `get_device_capability()` on ROCm returns the *gfx* version
+    (gfx90a -> (9, 0)), which is not an NVIDIA compute capability and must
+    never be compared against 8 — doing so silently cleared unvalidated
+    pipelining on every CDNA card. ROCm is clamped explicitly instead.
+    """
+    try:
+        from nbxtensor.ops.wrappers import _arch_param, get_hardware_profile
+        if get_hardware_profile() is not None:
+            cap = _arch_param("pipelining", "max_num_stages", None)
+            if cap:
+                return min(n, int(cap))
+    except Exception:
+        pass
+
+    # Ask the TRITON target, not torch. This module is imported by every
+    # triton kernel (rmsnorm, softmax, conv2d, matmul, baddbmm,
+    # depthwise_conv2d), so a module-level `import torch` here pulled torch
+    # into the process on the branch that exists to contain none — the widest
+    # torch surface under kernels/ (R33 inventory, 2026-09-03). The same
+    # question is answerable from the Triton runtime, which is the documented
+    # bootstrap mechanism already used by `matmul._detect_arch_configs`.
+    try:
+        from nbxtensor.backend.launcher import target as _nbx_target  # engine data, no driver probe (R33)
+        arch = _nbx_target().arch
+    except Exception:
+        return n                       # no runtime to ask: change nothing
+    if isinstance(arch, int):
+        # NVIDIA: Triton reports compute capability x 10 (sm_70 -> 70).
+        return n if arch >= 80 else min(n, 2)
+    # AMD ("gfx90a") and any other string-arch target: conservative, since
+    # cp.async does not exist there and their pipelining is unvalidated.
+    return min(n, 2)
+
+
+# ---------------------------------------------------------------------------
+# SHARED-MEMORY BUDGET — the physical limit on which autotune tiles can run
+# ---------------------------------------------------------------------------
+#
+# Every vendor profile has declared `memory.max_shared_memory_per_block` since
+# the profiles were written, and until 2026-09-03 NOTHING read it. The autotune
+# config space was instead chosen by an architecture NAME, with the reasoning
+# that anything unrecognised should take "the Volta subset, which fits the
+# smallest budget". That reasoning is false on Apple: Volta declares 96 KB and
+# an Apple GPU has 32 KB, so a BM=64/BN=128/BK=64 tile at 3 stages wants 72 KB
+# and cannot run there at all. The same silence sent every CDNA card into the
+# Volta space by coincidence rather than by decision, which the arch-selection
+# docstring already flagged as a first-light task.
+#
+# The budget is a hardware parameter, so it comes from the profile (R23/R24).
+# Resolution is data, not a mapping table: each profile declares a
+# `compute_capability` in exactly the form the Triton target reports it
+# ("7.0" / "gfx90a" / "apple9"), so the right file is found by matching, and a
+# new architecture is a new YAML rather than a new branch.
+
+
+def smem_bytes_for_config(config, dtype_bytes: int = 2) -> int:
+    """Shared memory one matmul-class tile needs, in bytes.
+
+    A blocked matmul stages an `[BLOCK_M, BLOCK_K]` slab of A and a
+    `[BLOCK_K, BLOCK_N]` slab of B per pipeline stage. That working set is what
+    saturates and spills — the measured Phase 1.5 collapse to 98-145 ms on
+    Volta was this quantity exceeding 96 KB.
+
+    Returns 0 for a config that names no tile (element-wise spaces), which the
+    filter reads as "no constraint to check".
+    """
+    kw = getattr(config, "kwargs", {}) or {}
+    m, n, k = kw.get("BLOCK_M"), kw.get("BLOCK_N"), kw.get("BLOCK_K")
+    if not (m and n and k):
+        return 0
+    stages = max(1, int(getattr(config, "num_stages", 1) or 1))
+    return (m * k + k * n) * dtype_bytes * stages
+
+
+def _profiles_for(wanted: str):
+    """Match the hardware profiles against one arch string.
+
+    Lifted verbatim out of `arch_smem_budget` on 2026-09-17 so that the
+    profile can be resolved from an arch ALONE. It used to be reachable
+    only through `launcher.target()`, which also builds the selected Metal
+    backend's NAME — and the Metal seam reads its own declaration out of
+    the profile. Profile needs target, target needs backend, backend needs
+    profile: on a cold process the declaration therefore could not be read,
+    and the seam fell through to 'the single installed backend' and
+    INFERRED what it was supposed to be told. It agreed with the
+    declaration only while exactly one backend was installed.
+
+    The cycle was spurious: a profile is matched on the ARCH, and the arch
+    is the device's, not the backend's.
+    """
+    import yaml
+
+    # NVIDIA reports capability x 10 (sm_70 -> 70); the profiles spell it
+    # "7.0". AMD and Apple report the profile's string form directly.
+
+    from nbxtensor.host import need as _need
+    vendors = Path(_need("vendors_dir")())       # the application's vendor files (nbxtensor.host)
+
+    exact, same_family = None, None
+    for path in sorted(vendors.glob("*/*.yml")):
+        try:
+            cfg = yaml.safe_load(path.read_text()) or {}
+        except Exception:                                 # pragma: no cover
+            continue
+        declared = str(cfg.get("compute_capability", "")).strip().lower()
+        if not declared:
+            continue
+        budget = (cfg.get("memory") or {}).get("max_shared_memory_per_block")
+        if not budget:
+            continue
+        _remember_profile(declared, wanted, cfg, path)
+        if declared == wanted:
+            exact = int(budget)
+        elif (declared.split(".")[0] == wanted.split(".")[0]
+                and "." in declared and "." in wanted):
+            # Same NVIDIA capability MAJOR. Only three NVIDIA profiles exist
+            # — 7.0, 8.0, 9.0 — so an exact match covers V100, A100 and H100
+            # and nothing else: a T4 (7.5), an A10 or 3090 (8.6) and an L4 or
+            # 4090 (8.9) would resolve to no profile and get no filtering at
+            # all. Falling back to the major mirrors what Prism's runtime
+            # detection already does (`_NVIDIA_ARCH_MAP`: "8" -> ampere), and
+            # the two MUST agree — a card whose runtime profile is ampere
+            # while its autotune space was chosen as if no profile existed is
+            # a disagreement inside the engine about its own hardware.
+            #
+            # That map is not imported here on purpose: `autodetect` pulls
+            # torch, and this module is imported by every Triton kernel (R33).
+            # Matching majors reads the same fact out of the profiles instead
+            # of copying the table.
+            same_family = int(budget)
+        elif any(wanted.startswith(prefix) for prefix in
+                 (str(m).strip().lower()
+                  for m in (cfg.get("compute_capability_matches") or []))):
+            # A profile may also declare the target strings it covers, as
+            # prefixes. Needed because not every backend reports a family:
+            # the Triton Metal target reports the Metal DEVICE NAME
+            # ("apple-m4-pro"), so no Apple profile could ever match on
+            # `compute_capability` alone and the budget resolved to None on
+            # every real Mac — the 32 KB filter silently not applying.
+            #
+            # It stays DATA: the prefixes live in the profile beside the
+            # budget they select, so a new chip family is a YAML line rather
+            # than a branch here. Profiles that declare none are unaffected,
+            # which is every NVIDIA and AMD profile — their exact and
+            # major-family matches are reached before this and are unchanged.
+            same_family = int(budget)
+    if exact is None and same_family is not None:
+        _announce_family_fallback(wanted)
+    return exact if exact is not None else same_family
+
+
+def vendor_profile_for_arch(arch) -> dict:
+    """The hardware profile for an arch string, resolved WITHOUT a Triton
+    target — so a caller the target itself depends on can still read it.
+
+    The Metal seam is that caller: it must read `metal_backend:` out of the
+    profile, and building the target asks the seam which backend is in
+    force. Added 2026-09-17 with `_profiles_for`, which see.
+    """
+    _profiles_for(str(arch).strip().lower())
+    return dict(_ACTIVE_PROFILE)
+
+
+def arch_smem_budget() -> Optional[int]:
+    """`memory.max_shared_memory_per_block` for the executing hardware.
+
+    Read from the vendor YAML, never from the driver — the driver is asked
+    only WHICH profile applies, which is identification and not a hardware
+    parameter. Returns None when no profile matches, and the caller must then
+    leave the config space alone rather than guess a budget: filtering on an
+    invented number would silently delete working configs.
+    """
+    # yaml FIRST, before anything touches the launcher. Measured 2026-09-16 on
+    # M4 Pro: resolving the target imports the Metal backend's compiler, which is
+    # re-entrant with Triton's backend discovery ("Found 0 concrete subclasses of
+    # BaseBackend in triton_msl.backend.compiler") and leaves partially
+    # (that string is quoted from the 2026-09-16 measurement, on the fork that
+    # was archived on 2026-09-17; the ORDERING it describes is a property of
+    # resolving the target, not of that backend, and still holds)
+    # initialised modules behind; a LATER `import yaml` then dies inside the
+    # libyaml C extension with "partially initialized module 'yaml' has no
+    # attribute 'error'". That exception is not an ImportError, so it escaped the
+    # guard below, `arch_smem_budget` returned nothing and `_ACTIVE_PROFILE` was
+    # CACHED EMPTY — the Apple profile's `metal_backend`,
+    # `autotune_screen_max_bytes` and smem budget silently unread, and
+    # `selected_metal_backend()` inferring the backend instead of reading the
+    # declaration. Importing yaml first removes the order dependency outright.
+    try:
+        import yaml
+    except ImportError:                                   # pragma: no cover
+        return None
+
+    try:
+        from nbxtensor.backend.launcher import target as _nbx_target  # engine data, no driver probe (R33)
+        arch = _nbx_target().arch
+    except Exception as exc:
+        # A machine with no Triton target has no profile, and None says so.
+        # But a DELIBERATE refusal is not that, and swallowing it here is how a
+        # loud correct stop became a quiet wrong answer: measured 2026-09-17,
+        # the moment the Apple profile declared a backend this venv did not
+        # have, the Metal seam's refusal was caught here, the whole profile
+        # resolved EMPTY and was cached empty — smem budget, screen bytes and
+        # the declared backend all silently unread — and the seam's next
+        # refusal then reported "the profile declares none" about a profile
+        # that declares one. A circle of silence, each half explaining the
+        # other.
+        #
+        # Asked BY TYPE, never by message: the seam names its refusal
+        # (`metal_backend.BackendSelectionRefused`) precisely so this does not
+        # become text matching. Inert on CUDA and on any machine without a
+        # Metal backend — the import below fails there and the old behaviour
+        # stands exactly as it was.
+        try:
+            from nbxtensor.backend.metal_backend import BackendSelectionRefused
+        except Exception:                                 # pragma: no cover
+            return None
+        if isinstance(exc, BackendSelectionRefused):
+            raise
+        return None
+
+    wanted = (f"{arch // 10}.{arch % 10}" if isinstance(arch, int)
+              else str(arch).strip().lower())
+    return _profiles_for(wanted)
+
+
+#: (target, profile) pairs already announced, so the notice is said once per
+#: process and not once per kernel compile.
+_FALLBACK_ANNOUNCED: set = set()
+
+
+def _announce_family_fallback(wanted: str) -> None:
+    """Say, out loud and once, that this chip has no profile of its own.
+
+    An unknown chip must RUN — correctly if not optimally — because refusing
+    would contradict a cascade that never refuses. But running on a family
+    profile is a different fact from running on the chip's own, and the
+    difference shows up as performance nobody can explain later. It is said
+    here rather than left to be inferred from a number.
+    """
+    import sys
+
+    profile = _ACTIVE_PROFILE.get("_profile")
+    key = (wanted, profile)
+    if profile is None or key in _FALLBACK_ANNOUNCED:
+        return
+    _FALLBACK_ANNOUNCED.add(key)
+    print(f"[PROFILE] {wanted!r} has no profile of its own; falling back to "
+          f"{profile!r}, which declares a prefix that covers it. The engine "
+          f"will run correctly, not optimally — a per-variant profile is what "
+          f"makes it optimal.", file=sys.stderr, flush=True)
+
+
+#: The vendor profile the last `arch_smem_budget()` resolution matched, by
+#: the same exact / same-family / declared-prefix rules. Kept beside that
+#: function rather than re-resolved so the engine cannot end up reading its
+#: shared-memory budget from one profile and its attention tiles from another.
+_ACTIVE_PROFILE: dict = {}
+
+
+def _remember_profile(declared: str, wanted: str, cfg: dict, path=None) -> None:
+    """Record the best profile seen so far, exact match winning. The profile's
+    NAME is its file's — `<vendor>/<profile>.yml` — kept as `_vendor` and
+    `_profile`, the only names the certified autotune directory is allowed to
+    use (nothing there names a backend)."""
+    names = {"_vendor": path.parent.name, "_profile": path.stem} if path is not None else {}
+    if declared == wanted:
+        _ACTIVE_PROFILE.clear()
+        _ACTIVE_PROFILE.update(cfg)
+        _ACTIVE_PROFILE.update(names)
+        _ACTIVE_PROFILE["_exact"] = True
+    elif not _ACTIVE_PROFILE.get("_exact"):
+        matches = [str(m).strip().lower()
+                   for m in (cfg.get("compute_capability_matches") or [])]
+        same_major = (declared.split(".")[0] == wanted.split(".")[0]
+                      and "." in declared and "." in wanted)
+        if same_major or any(wanted.startswith(m) for m in matches):
+            _ACTIVE_PROFILE.clear()
+            _ACTIVE_PROFILE.update(cfg)
+            _ACTIVE_PROFILE.update(names)
+
+
+def active_vendor_profile() -> dict:
+    """The hardware profile in force, or `{}` when none matched."""
+    if not _ACTIVE_PROFILE:
+        arch_smem_budget()          # resolves and records, cached upstream
+    return dict(_ACTIVE_PROFILE)
+
+
+def sdpa_block_ceiling(seqlen_q: int, head_dim: int):
+    """`(block_m, block_n)` the hardware profile allows here, or `(None, None)`.
+
+    A CEILING, not an instruction. The wrapper's own cascade stays the
+    proposer — it carries measurements the profiles do not, notably that
+    BLOCK_M=64 is the floor of CORRECTNESS on Volta at head_dim<128 while
+    volta.yml declares 128 — and this only clamps what it proposes.
+
+    Why it exists: the cascade decides between a 128-row and a 64-row Q tile
+    on `_NBX_HAS_NATIVE_BF16`, which distinguishes Volta from Ampere and
+    means nothing off CUDA. On an Apple GPU it therefore took the Ampere
+    branch and asked for BLOCK_M=128 — four times what
+    `apple_silicon.yml` declares (32) for this shape, and more than the
+    Metal backend will lower at all. The profile has said 32 since the file
+    was written; nothing read it.
+
+    Clamping rather than replacing is what keeps CUDA byte-identical:
+    min(64, 128) is Volta's measured 64, min(128, 128) is Hopper's 128.
+    Measured 2026-09-06: no NVIDIA tile changes.
+
+    Thresholds are read in file order, first match wins, exactly as the
+    profiles are written (decode rows before prefill rows).
+    """
+    profile = active_vendor_profile()
+    for row in profile.get("sdpa_thresholds") or []:
+        if "seqlen_q_le" in row and seqlen_q > row["seqlen_q_le"]:
+            continue
+        if "head_dim_ge" in row and head_dim < row["head_dim_ge"]:
+            continue
+        if "head_dim_lt" in row and head_dim >= row["head_dim_lt"]:
+            continue
+        return row.get("block_m"), row.get("block_n")
+    return None, None
+
+
+def sdpa_launch_meta(seqlen_q: int, head_dim: int) -> dict:
+    """The flash launch's `num_warps`, and its `qk_chunk` where the row states one (the row of an arch whose
+    dot lowers to scalar FMA), from the hardware profile row matching this shape; `{}` when no row matches.
+    Same row order and match rule as `sdpa_block_ceiling`. A matching row that states no `num_warps` is an
+    error naming it: the launch never takes Triton's hidden default (supervisor 2026-10-08 00:05).
+
+    Until 2026-10-08 `num_warps` was read only beside `qk_chunk`: every other row's stated warps were
+    ignored, and the M4 Pro's head_dim-128 attention ran at 4 warps where 8 is 41-43 % faster."""
+    profile = active_vendor_profile()
+    for i, row in enumerate(profile.get("sdpa_thresholds") or []):
+        if "seqlen_q_le" in row and seqlen_q > row["seqlen_q_le"]:
+            continue
+        if "head_dim_ge" in row and head_dim < row["head_dim_ge"]:
+            continue
+        if "head_dim_lt" in row and head_dim >= row["head_dim_lt"]:
+            continue
+        if "num_warps" not in row:
+            raise ValueError(f"sdpa_thresholds row {i} {row} matches seqlen_q={seqlen_q} head_dim={head_dim} "
+                             f"but states no num_warps; every row states the warps its flash launch runs at")
+        return {k: int(row[k]) for k in ("num_warps", "qk_chunk") if k in row}
+    return {}
+
+
+def matrix_unit() -> dict:
+    """The matrix unit the hardware profile declares for kernels Triton cannot lower onto it (`matrix_unit`:
+    shape, operand and accumulator dtypes, measured tiles); `{}` when the profile declares none. A declared
+    unit this engine has no kernel for, dtypes its instruction does not compute in, or a flash row whose tile
+    the kernel cannot lay out is refused by name: a declared capability is never silently left unused."""
+    mu = dict(active_vendor_profile().get("matrix_unit") or {})
+    if not mu:
+        return mu
+    from nbxtensor.ops.mma_m8n8k4 import UNIT
+    if mu.get("shape") != UNIT["shape"]:
+        raise ValueError(f"hardware profile: matrix_unit.shape {mu.get('shape')!r} has no kernel "
+                         f"(this engine builds {UNIT['shape']!r})")
+    for f in ("operand_dtype", "accumulator_dtype"):
+        if mu.get(f) != UNIT[f]:
+            raise ValueError(f"hardware profile: matrix_unit.{f} {mu.get(f)!r} is not what "
+                             f"{UNIT['shape']} computes in ({UNIT[f]!r})")
+    for row in mu.get("mm") or []:
+        for f in ("block_m", "block_n"):
+            t = int(row[f])
+            if t < 16 or t % 16 or (t // 16) & (t // 16 - 1):
+                raise ValueError(f"hardware profile: matrix_unit.mm {f} {t} is not 16 x a power of two")
+    split = mu.get("fp32_split") or {}
+    smem = (active_vendor_profile().get("memory") or {}).get("max_shared_memory_per_block")
+    from nbxtensor.ops.flash_attention_m8n8k4 import head_parts, staged_shared_bytes
+    for sec, rows in (("flash", mu.get("flash") or []), ("fp32_split.flash", split.get("flash") or [])):
+        for row in rows:
+            for f in ("block_m", "block_n"):
+                t = int(row[f])
+                if t < 16 or t % 16 or (t // 16) & (t // 16 - 1):
+                    raise ValueError(f"hardware profile: matrix_unit.{sec} {f} {t} is not 16 x a power of two")
+            wm = int(row["warps_m"])
+            if wm < 1 or wm & (wm - 1) or (int(row["block_m"]) // 16) % wm:
+                raise ValueError(f"hardware profile: matrix_unit.{sec} warps_m {wm} does not divide the "
+                                 f"{row['block_m']}-row tile's 16-row bands")
+            if "head_dim_le" not in row:
+                raise ValueError(f"hardware profile: matrix_unit.{sec} row {row!r} names no head_dim_le — the head "
+                                 "dim its shared memory is priced at")
+            if smem is not None:
+                # THE DOOR: the tiles the kernel stages by name (ops/flash_attention_m8n8k4.staged_shared_bytes) at
+                # the row's widest head dim, against the profile's budget. A wider row used to be refused by the
+                # compiler at the first launch that reached it — a census of "not this time"; here it never loads.
+                need = staged_shared_bytes(int(row["block_m"]), int(row["block_n"]),
+                                           *head_parts(int(row["head_dim_le"])), split=(sec != "flash"))
+                if need > int(smem):
+                    raise ValueError(f"hardware profile: matrix_unit.{sec} row head_dim_le {row['head_dim_le']} "
+                                     f"{row['block_m']}x{row['block_n']} stages {need} bytes of shared memory, over "
+                                     f"memory.max_shared_memory_per_block {smem}")
+    for row in split.get("flash") or []:
+        # the head-dim columns the unit sums (rounding toward zero) before each round-to-nearest add of S
+        if "block_k" not in row:
+            raise ValueError(f"hardware profile: matrix_unit.fp32_split.flash row head_dim_le {row.get('head_dim_le')} "
+                             "names no block_k (the head-dim columns the unit sums before each round-to-nearest add)")
+        bk = int(row["block_k"])
+        if bk < UNIT["k"] or bk & (bk - 1):
+            raise ValueError(f"hardware profile: matrix_unit.fp32_split.flash block_k {bk} is not a power of two "
+                             f">= {UNIT['k']} (the unit's k)")
+    layout = (active_vendor_profile().get("conv") or {}).get("weight_layout")
+    if layout not in (None, "KCRS"):
+        # ops/conv2d_m8n8k4.py reads a filter as one contiguous (C, R, S) run (w.stride(0) alone): a weight the
+        # loader relaid channels-innermost would be read in the wrong order. Refused here, where the two
+        # declarations meet, until that kernel takes the weight's four strides.
+        raise ValueError(f"hardware profile: matrix_unit with conv.weight_layout {layout!r} — the {UNIT['shape']} "
+                         f"convolution reads KCRS weights only")
+    if split and (not split.get("mm") or not split.get("operands")):
+        raise ValueError("hardware profile: matrix_unit.fp32_split declares no mm tiles or no operands")
+    for row in split.get("mm") or []:
+        for f in ("block_m", "block_n"):
+            t = int(row[f])
+            if t < 16 or t % 16 or (t // 16) & (t // 16 - 1):
+                raise ValueError(f"hardware profile: matrix_unit.fp32_split.mm {f} {t} is not 16 x a power of two")
+    for row in (mu.get("mm") or []) + (split.get("mm") or []):
+        bk, wm, wn = int(row["block_k"]), int(row["warps_m"]), int(row["warps_n"])
+        if bk < 8 or bk & (bk - 1):
+            raise ValueError(f"hardware profile: matrix_unit.mm block_k {bk} is not a power of two >= 8")
+        if (int(row["block_m"]) // 16) % wm or (int(row["block_n"]) // 16) % wn:
+            raise ValueError(f"hardware profile: matrix_unit.mm warps {wm}x{wn} do not divide the "
+                             f"{row['block_m']}x{row['block_n']} tile's 16-blocks")
+        int(row["group_m"])
+    return mu
+
+
+def matrix_unit_flash_tile(head_dim: int, unit: Optional[dict] = None) -> Optional[dict]:
+    """The first `flash` row of `unit` (the profile's `matrix_unit`, or its `fp32_split`) holding `head_dim`
+    (every row names its `head_dim_le`: `matrix_unit()` refuses one that does not), or None (no unit declared, or a
+    head dim beyond its measured rows: the kernel keeps tl.dot). `block_k` is the split rows' field alone."""
+    for row in (matrix_unit() if unit is None else unit).get("flash") or []:
+        if head_dim > row["head_dim_le"]:
+            continue
+        return {f: int(row[f]) for f in ("block_m", "block_n", "warps_m", "block_k") if f in row}
+    return None
+
+
+def matrix_unit_mm_tile(M: int, N: int, unit: Optional[dict] = None) -> Optional[dict]:
+    """The first `matrix_unit.mm` row whose tile fits inside an M x N output (rows are listed largest
+    first), else the last row; None when the profile declares no mm rows (the GEMM keeps tl.dot)."""
+    rows = (matrix_unit() if unit is None else unit).get("mm") or []
+    for row in rows:
+        if int(row["block_m"]) <= M and int(row["block_n"]) <= N:
+            return {k: int(v) for k, v in row.items()}
+    return {k: int(v) for k, v in rows[-1].items()} if rows else None
+
+
+def largest_tile_within_smem(candidates, cost, budget: Optional[int]):
+    """The first candidate the hardware can hold, or the smallest if none fits.
+
+    `candidates` are ordered largest-first, as the caller wants them. `cost` is
+    a callable returning the shared memory a candidate needs, in bytes; it is
+    INJECTED rather than computed here because an analytic formula for a Triton
+    kernel's shared memory is a guess, and the note on
+    `configs_within_smem_budget` applies with the same force: pruning on a
+    guessed budget silently deletes configurations that work.
+
+    `budget=None` means the hardware did not say. The caller's proposal is then
+    returned untouched — the same rule, for the same reason.
+
+    Why this exists. A user running 0.5.3 on two A40s (sm_86) could not start a
+    single language model on the Triton branch: the flash kernel asked for
+    164 352 bytes of shared memory per block against a limit of 101 376, the
+    same number in both Triton modes and unmoved by sequence length. The tile
+    was chosen at `wrappers.py` on `_NBX_HAS_NATIVE_BF16`, a flag that
+    separates Volta from Ampere and nothing else, so sm_86 took the branch
+    written for sm_80 — 163 KB of shared memory against its own 99. The engine
+    had already written `compute_capability: '8.6'` into the profile it
+    generated by itself for that card. The information was present and unused.
+
+    Nothing is ever refused into an empty selection: when no candidate fits,
+    the smallest is returned. A tile that spills is measurable and reports
+    itself; a selection with nothing in it is a crash at launch.
+    """
+    ordered = list(candidates)
+    if not ordered:
+        raise ValueError("largest_tile_within_smem: no candidate offered")
+    if budget is None:
+        return ordered[0]
+    for cand in ordered:
+        if cost(cand) <= budget:
+            return cand
+    return min(ordered, key=cost)
+
+
+def configs_within_smem_budget(configs, budget: Optional[int],
+                               dtype_bytes: int = 2):
+    """Drop the tiles that cannot physically fit in `budget` bytes.
+
+    `budget=None` (no profile matched) returns the space untouched: removing
+    configs on a guessed budget is worse than exploring a few that spill,
+    because the autotuner measures spilling configs and rejects them, whereas
+    a config that was never offered can never be chosen.
+
+    The smallest tile is always kept even if it exceeds the budget, so the
+    space is never emptied — an empty autotune list is an import-time crash,
+    and a wrong-but-present config is a slow kernel.
+    """
+    if not budget:
+        return configs
+    fitting = [c for c in configs
+               if smem_bytes_for_config(c, dtype_bytes) <= budget]
+    if fitting:
+        return fitting
+    return [min(configs, key=lambda c: smem_bytes_for_config(c, dtype_bytes))]
+
+
+def element_wise_configs() -> List[triton.Config]:
+    """Autotune configs for element-wise (1D) kernels."""
+    return [
+        triton.Config({'BLOCK_SIZE': 64}, num_warps=2),
+        triton.Config({'BLOCK_SIZE': 128}, num_warps=2),
+        triton.Config({'BLOCK_SIZE': 256}, num_warps=4),
+        triton.Config({'BLOCK_SIZE': 512}, num_warps=4),
+        triton.Config({'BLOCK_SIZE': 1024}, num_warps=4),
+    ]
+
+
+def warps_configs() -> List[triton.Config]:
+    """Autotune configs sweeping warp counts (for row-wise kernels)."""
+    return [triton.Config({}, num_warps=2**i) for i in range(6)]
+
+
+#: The widest feature tile one program of a row reduction holds at once. A reduction that sized its
+#: tile to the whole row (`next_power_of_2(feat_dim)`) kept every element in registers: at 4 warps a
+#: 224 640-element row is 2 048 fp32 values per thread, which spill to local memory — and the driver
+#: reserves local memory for EVERY thread the card can hold, outside any allocator: +2 062 MB on a
+#: V100 for one such sum (op-level probe, 2026-10-03), +4.3 GB at Wan2.1-I2V's CFG batch, the memory
+#: its 480x832 run lacked at SDPA::0. 4 096 elements is 32 fp32 values per thread at 4 warps — inside
+#: the register file on every NVIDIA and AMD part — and the cap `batch_norm`'s spatial tile already
+#: uses. A row wider than one tile is walked in tiles; a row that fits one tile is reduced exactly as
+#: before (one tile, no added term), so its bytes do not move.
+REDUCTION_FEAT_TILE = 4096
+
+
+def reduction_feat_tile(args: Dict) -> int:
+    """The feature tile of a looped row reduction: the row, rounded up, at most one tile."""
+    return min(next_power_of_2(args['feat_dim']), REDUCTION_FEAT_TILE)
+
+
+def row_program_configs() -> List[triton.Config]:
+    """The candidates the certifier proves for a row kernel holding its whole padded row (softmax, layer norm, RMS
+    norm — workstream 1, Hocine 2026-10-19 18:55): rows per program x warps. The configuration such a kernel ran before
+    it was certified is among them (`batch_block_heuristic`: 1 row for a row of 64 or more, up to 128 rows for a short
+    one; 4 warps) — a certified winner equal to it changes no bit. Rows per program partition independent rows and
+    change no bit; the warps split a row's reduction and can."""
+    return [triton.Config({'BLOCK_SIZE_BATCH': rows}, num_warps=warps)
+            for rows in (1, 2, 4, 8, 16, 32, 64, 128) for warps in (1, 2, 4, 8)]
+
+
+def fits_thread_registers(elements: int, num_warps: int) -> bool:
+    """Whether a program holding `elements` (rows x padded row) over `num_warps` warps keeps at most the profile's
+    `memory.max_registers_per_thread` elements per thread (an element a register, as the block bound counts it). A
+    profile that declares no per-thread bound (Apple: its lowering's own bound is `reduced_extent_max`) bounds
+    nothing here. Measured 2026-10-26: one warp over a 16 384-wide fp16 row (512 elements a thread) compiled for
+    over 30 minutes in LLVM and stalled the certification of the fp16 contract's softmax keys."""
+    from nbxtensor.ops.wrappers import _arch_param
+    per = _arch_param("memory", "max_registers_per_thread", None)
+    if per is None:
+        return True
+    warp = _arch_param("memory", "warp_size", None)
+    if warp is None:
+        raise RuntimeError("ZERO FALLBACK: the profile declares memory.max_registers_per_thread but no memory.warp_size")
+    return int(elements) <= int(per) * int(warp) * int(num_warps)
+
+
+def prune_row_programs(configs, named_args, **kwargs):
+    """A program holds rows x the padded row: one row whatever its length, more only while the tile stays within the
+    backend's reduce-tile cap (`nbx_tensor.reduce_tile_max`, where the lowering refuses beyond) AND within the
+    registers of one block (`memory.max_registers_per_block` of the profile: an fp32 element a register) — a tile past
+    them spills and its compile alone ran tens of minutes per config (the first norm certification, 2026-10-22: no key
+    done in 94 min on two cards); never more rows than exist."""
+    from nbxtensor.tensor import reduce_tile_max
+    from nbxtensor.ops.wrappers import _arch_param
+    regs = _arch_param("memory", "max_registers_per_block", None)
+    if regs is None:
+        raise RuntimeError("ZERO FALLBACK: the hardware profile declares no memory.max_registers_per_block — the row "
+                           "programs' tile has no bound")
+    feat = triton.next_power_of_2(int(named_args['feat_dim']))
+    rows = int(named_args['batch_dim'])
+    cap = min(reduce_tile_max(), int(regs))
+    keep = [c for c in configs
+            if c.kwargs['BLOCK_SIZE_BATCH'] * feat <= max(cap, feat)
+            and c.kwargs['BLOCK_SIZE_BATCH'] <= max(1, rows)
+            and fits_thread_registers(c.kwargs['BLOCK_SIZE_BATCH'] * feat, c.num_warps)]
+    return keep or [max(configs, key=lambda c: c.num_warps)]
+
+
+def gemv_vec_configs() -> List[triton.Config]:
+    """The candidates the certifier proves for the SIMT GEMV (`gemv_vec_kernel`, the decode projection of every
+    language model — workstream 1, small-M GEMM): output rows per program x K chunk x warps x stages. The tiles it
+    ran before it was certified are among them (8 x 256, 4 warps, 1 stage; Apple's 8 x 128). Every config reduces all
+    of K inside one program in a fixed chunk order — no split-K, no atomics: the chunk width moves the summation
+    order and so can move bits, rows per program cannot."""
+    return [triton.Config({'BLOCK_N': bn, 'BLOCK_K': bk}, num_warps=w, num_stages=st)
+            for bn in (4, 8, 16, 32) for bk in (128, 256, 512, 1024) for w in (2, 4, 8) for st in (1, 2)]
+
+
+def prune_gemv_vec(configs, named_args, **kwargs):
+    """A program's tile is BLOCK_N x BLOCK_K: at most the backend's reduce-tile cap (`nbx_tensor.reduce_tile_max`,
+    where its lowering refuses beyond — Metal's 1024-thread threadgroup) and, on a backend that stages the reduce one
+    element per thread, a K chunk within the program's threads (`nbx_tensor.reduced_extent_max`); never a chunk wider
+    than K's next power of two nor more rows than N's but the smallest candidate."""
+    from nbxtensor.tensor import reduce_tile_max, reduced_extent_max
+    cap = reduce_tile_max()
+    k = triton.next_power_of_2(int(named_args['K']))
+    n = triton.next_power_of_2(int(named_args['N']))
+    bk_min = min(c.kwargs['BLOCK_K'] for c in configs)
+    bn_min = min(c.kwargs['BLOCK_N'] for c in configs)
+    keep = [c for c in configs
+            if c.kwargs['BLOCK_N'] * c.kwargs['BLOCK_K'] <= cap
+            and c.kwargs['BLOCK_K'] <= max(k, bk_min) and c.kwargs['BLOCK_N'] <= max(n, bn_min)]
+    keep = [c for c in keep if reduced_extent_max(c.num_warps) is None
+            or c.kwargs['BLOCK_K'] <= reduced_extent_max(c.num_warps)]
+    if not keep:
+        raise ValueError(f"ZERO FALLBACK: no GEMV tile fits the backend's reduce tile of {cap} (N={named_args['N']}, "
+                         f"K={named_args['K']})")
+    return keep
+
+
+def addmv_configs() -> List[triton.Config]:
+    """The candidates the certifier proves for `addmv_kernel` (the decode projection WITH a bias, `addmm` at M <= 4):
+    output rows x reduction tile x warps. The kernel keeps a BLOCK_N x BLOCK_M fp32 accumulator and reduces it after
+    the loop. The tiles it ran before (64 x 256, 4 warps; Apple's 8 x 128 at 32 warps) are among them."""
+    return [triton.Config({'BLOCK_N': bn, 'BLOCK_M': bm}, num_warps=w)
+            for bn in (8, 16, 32, 64) for bm in (128, 256, 512) for w in (4, 8, 32)]
+
+
+def prune_addmv(configs, named_args, **kwargs):
+    """The accumulator tile BLOCK_N x BLOCK_M within the backend's reduce-tile cap (`reduce_tile_max`), never a tile
+    wider than M's next power of two nor more rows than N's but the smallest candidate; on a backend that stages the
+    reduce one element per thread, a reduction tile within the program's threads (`nbx_tensor.reduced_extent_max`;
+    Metal, measured 2026-09-07: 64 x 256 against a 128-thread group refused)."""
+    from nbxtensor.tensor import reduce_tile_max, reduced_extent_max
+    cap = reduce_tile_max()
+    m = triton.next_power_of_2(int(named_args['M']))
+    n = triton.next_power_of_2(int(named_args['N']))
+    bm_min = min(c.kwargs['BLOCK_M'] for c in configs)
+    bn_min = min(c.kwargs['BLOCK_N'] for c in configs)
+    keep = [c for c in configs
+            if c.kwargs['BLOCK_N'] * c.kwargs['BLOCK_M'] <= cap
+            and c.kwargs['BLOCK_M'] <= max(m, bm_min) and c.kwargs['BLOCK_N'] <= max(n, bn_min)]
+    keep = [c for c in keep if reduced_extent_max(c.num_warps) is None
+            or c.kwargs['BLOCK_M'] <= reduced_extent_max(c.num_warps)]
+    if not keep:
+        raise ValueError(f"ZERO FALLBACK: no addmv tile fits the backend's reduce tile of {cap} (N={named_args['N']}, "
+                         f"M={named_args['M']})")
+    return keep
+
+
+def row_reduce_configs() -> List[triton.Config]:
+    """The candidates the certifier proves for a looped row reduction (sum, mean, amax — chantier 1): rows per program x
+    the feature tile the row is walked by x warps. What such a kernel ran before it was certified is among them
+    (`batch_block_heuristic` rows, `reduction_feat_tile` tile, 4 warps)."""
+    return [triton.Config({'BLOCK_SIZE_BATCH': rows, 'BLOCK_SIZE_FEAT': tile}, num_warps=warps)
+            for rows in (1, 2, 4, 8, 16, 32, 64, 128) for tile in (64, 256, 1024, 4096) for warps in (2, 4, 8)]
+
+
+def prune_row_reduce(configs, named_args, **kwargs):
+    """No more rows than exist, no tile wider than the padded row (it only masks), and a rows x tile block within the
+    backend's reduce-tile cap (`nbx_tensor.reduce_tile_max`), the registers of one block (`memory.max_registers_per_
+    block`: an fp32 element a register — a 128 x 4 096 block spilled and ptxas took minutes per candidate, the c1rest
+    certification, 2026-10-23 17:57) and the per-thread bound (`reduced_extent_max`)."""
+    from nbxtensor.tensor import reduce_tile_max, reduced_extent_max
+    from nbxtensor.ops.wrappers import _arch_param
+    regs = _arch_param("memory", "max_registers_per_block", None)
+    if regs is None:
+        raise RuntimeError("ZERO FALLBACK: the hardware profile declares no memory.max_registers_per_block — the row "
+                           "reductions' block has no bound")
+    rows, feat = int(named_args['batch_dim']), next_power_of_2(max(1, int(named_args['feat_dim'])))
+    cap = min(reduce_tile_max(), int(regs))
+    keep = []
+    for c in configs:
+        r, t = c.kwargs['BLOCK_SIZE_BATCH'], c.kwargs['BLOCK_SIZE_FEAT']
+        per = reduced_extent_max(c.num_warps)
+        if r <= max(1, rows) and t <= max(64, feat) and r * t <= cap and (per is None or t <= per):
+            keep.append(c)
+    return keep or [min(configs, key=lambda c: c.kwargs['BLOCK_SIZE_BATCH'] * c.kwargs['BLOCK_SIZE_FEAT'])]
+
+
+def batch_block_heuristic(args: Dict) -> int:
+    """Heuristic for batch block size in softmax/norm kernels.
+
+    For small feature dims (< 64) and large batch, processes multiple rows
+    per program for efficiency.
+    """
+    return (min(max(1, next_power_of_2(args['batch_dim'] // 2 ** 10)), 128)
+            if args['feat_dim'] < 64 else 1)
+
+
+def reduction_configs() -> List[triton.Config]:
+    """Autotune configs for row-wise reduction kernels (BLOCK_M x BLOCK_N)."""
+    return [
+        triton.Config({'BLOCK_M': 8, 'BLOCK_N': 1024}, num_warps=8),
+        triton.Config({'BLOCK_M': 8, 'BLOCK_N': 2048}, num_warps=8),
+        triton.Config({'BLOCK_M': 16, 'BLOCK_N': 512}, num_warps=4),
+        triton.Config({'BLOCK_M': 16, 'BLOCK_N': 1024}, num_warps=8),
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 256}, num_warps=4),
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 512}, num_warps=4),
+    ]
+
+
+def matmul_configs() -> List[triton.Config]:
+    """Autotune configs for matmul kernels (CUDA).
+
+    num_stages clamped to 2 on V100 via _safe_num_stages().
+    """
+    return [
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 256, 'BLOCK_K': 64, 'GROUP_M': 8},
+                      num_stages=_safe_num_stages(3), num_warps=8),
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 256, 'BLOCK_K': 32, 'GROUP_M': 8},
+                      num_stages=_safe_num_stages(4), num_warps=4),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 32, 'GROUP_M': 8},
+                      num_stages=_safe_num_stages(4), num_warps=4),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_K': 32, 'GROUP_M': 8},
+                      num_stages=_safe_num_stages(4), num_warps=4),
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 32, 'GROUP_M': 8},
+                      num_stages=_safe_num_stages(4), num_warps=4),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'BLOCK_K': 32, 'GROUP_M': 8},
+                      num_stages=_safe_num_stages(4), num_warps=4),
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 32, 'BLOCK_K': 32, 'GROUP_M': 8},
+                      num_stages=_safe_num_stages(5), num_warps=2),
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 64, 'BLOCK_K': 32, 'GROUP_M': 8},
+                      num_stages=_safe_num_stages(5), num_warps=2),
+    ]
+
+
+# --- R33: identify the backend before any kernel module asks Triton --------
+#
+# `matmul.py` calls `triton.runtime.driver.active.get_current_target()` at
+# MODULE IMPORT to choose its autotune space. That question makes Triton probe
+# every registered backend, and upstream's AMD probe runs `import torch`
+# inside its own `is_active()` — so importing a kernel module pulled torch
+# into the process, on a CUDA box as much as on a Mac.
+#
+# `_detect_gpu_backend()` answers the same question with three torch-free
+# probes and records the result in `TRITON_DEFAULT_BACKEND`, after which
+# Triton resolves straight to that backend and probes nothing else. Doing it
+# here, in the module every kernel imports before it asks anything, is what
+# makes the ordering reliable rather than accidental.
+#
+# Wrapped: on a machine with no GPU at all this raises, and a kernel module
+# must still be importable — the refusal belongs at the call site, not at
+# import.
+try:                                          # pragma: no cover - env-dependent
+    from nbxtensor.tensor import _detect_gpu_backend as _r33_pin_backend
+
+    _r33_pin_backend()
+except Exception:
+    pass

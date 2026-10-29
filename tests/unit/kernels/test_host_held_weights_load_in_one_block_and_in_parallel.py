@@ -27,7 +27,7 @@ def test_the_parallel_widening_is_the_old_formula_bit_for_bit():
 
 def _gpu():
     try:
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        from nbxtensor.tensor import DeviceAllocator
         DeviceAllocator.set_device(0)
         return True
     except Exception:
@@ -36,8 +36,8 @@ def _gpu():
 
 @pytest.mark.skipif(not _gpu(), reason="page-locked memory needs the device runtime")
 def test_host_weights_share_one_pinned_block_that_outlives_the_load():
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator, NBXDtype
-    from neurobrix.triton.memory_pool import HostPinnedArena
+    from nbxtensor.tensor import DeviceAllocator, NBXDtype
+    from nbxtensor.memory.memory_pool import HostPinnedArena
     from neurobrix.triton.weight_loader import _load_to_pinned_cpu
     rng = np.random.default_rng(1)
     raws = [rng.integers(0, 2 ** 16, size=(64, 33), dtype=np.uint64).astype(np.uint16) for _ in range(5)]

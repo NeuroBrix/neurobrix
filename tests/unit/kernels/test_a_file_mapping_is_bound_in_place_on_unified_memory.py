@@ -12,7 +12,7 @@ import os
 
 import pytest
 
-from neurobrix.kernels import nbx_tensor as N
+from nbxtensor import tensor as N
 
 
 def _metal():
@@ -21,7 +21,7 @@ def _metal():
 
 @pytest.mark.skipif(not _metal(), reason="needs the Metal backend (unified memory)")
 def test_a_mapped_range_is_bound_without_a_copy_and_resolves_by_address(tmp_path):
-    from neurobrix.kernels.metal_device import runtime
+    from nbxtensor.backend.metal_device import runtime
     page = os.sysconf("SC_PAGESIZE")
     path = tmp_path / "shard.bin"
     path.write_bytes(bytes(range(256)) * (page * 4 // 256))

@@ -9,8 +9,8 @@ cases fail; `sdpa_operand_dtypes` returning its inputs unchanged -> the mixed ca
 import pytest
 
 from neurobrix.core.components.handlers.text_encoder_handler import finalized_text_length
-from neurobrix.kernels import launch_keys as LK
-from neurobrix.kernels.nbx_tensor import NBXDtype
+from nbxtensor.ops import launch_keys as LK
+from nbxtensor.tensor import NBXDtype
 
 F16, F32 = NBXDtype.float16, NBXDtype.float32
 
@@ -21,8 +21,8 @@ def volta_profile(monkeypatch):
     alignment is the profile's (`precision.attention_operands`), read by the function the run calls."""
     import os
     import yaml
-    from neurobrix.kernels.ops import _configs
-    path = os.path.join(os.path.dirname(_configs.__file__), "..", "..", "config", "vendors", "nvidia", "volta.yml")
+    from nbxtensor.ops import _configs
+    path = os.path.join(str(__import__("neurobrix.core.config.loader", fromlist=["CONFIG_ROOT"]).CONFIG_ROOT), "vendors", "nvidia", "volta.yml")
     with open(path) as f:
         prof = yaml.safe_load(f)
     monkeypatch.setattr(_configs, "active_vendor_profile", lambda: prof)
@@ -115,7 +115,7 @@ def test_the_torch_tiled_conv_equals_the_whole_conv_at_any_stride(sh, kh):
     band was shifted by half an output row (the halo skipped as output rows). Injection: the
     halo left unrounded -> the stride-2 cases differ, RED."""
     torch = pytest.importorskip("torch")
-    from neurobrix.kernels.ops.fused_upsample_conv import _tiled_conv2d_spatial_torch
+    from neurobrix.kernels.ops.fused_upsample_conv_torch import _tiled_conv2d_spatial_torch
     g = torch.Generator().manual_seed(1)
     x = torch.randn(1, 3, 41, 9, generator=g, dtype=torch.float64)
     w = torch.randn(4, 3, kh, 3, generator=g, dtype=torch.float64)
@@ -130,8 +130,8 @@ def test_the_torch_fused_upsample_conv_equals_upsample_then_conv(sh, kh):
     the upsampled extent: equal to upsample-then-conv at stride 1 and 2 (the halo rounded to whole
     strides, 2026-09-29). Injection: the halo left unrounded -> the stride-2 case, RED."""
     torch = pytest.importorskip("torch")
-    from neurobrix.kernels.ops.fused_upsample_conv import (FusionUpsampleProxy,
-                                                           _fused_upsample_conv2d_torch)
+    from nbxtensor.ops.fused_upsample_conv import FusionUpsampleProxy
+    from neurobrix.kernels.ops.fused_upsample_conv_torch import _fused_upsample_conv2d_torch
     g = torch.Generator().manual_seed(2)
     x = torch.randn(1, 3, 13, 7, generator=g, dtype=torch.float64)
     w = torch.randn(4, 3, kh, 3, generator=g, dtype=torch.float64)

@@ -62,12 +62,12 @@ def _quantize(w_t: np.ndarray):
 
 
 def _nbx(arr):
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.tensor import NBXTensor
     return NBXTensor.from_numpy(np.ascontiguousarray(arr))
 
 
 def _dl(t, np_dtype):
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator
+    from nbxtensor.tensor import DeviceAllocator
     buf = np.empty(t._nbytes, dtype=np.uint8)
     DeviceAllocator.memcpy(buf.ctypes.data, t.data_ptr(), t._nbytes, 2)
     return buf.view(np_dtype).reshape(t.shape)
@@ -80,8 +80,7 @@ def _ptr_table(tensors):
 def _run_case(M, K, N, E, top_k, mul_routed, seed):
     import triton
     import triton.language as tl
-    from neurobrix.kernels.nbx_tensor import (NBXTensor, NBXDtype,
-                                              DeviceAllocator)
+    from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator
     from nbxtensor.ops.dequant_gemv import dequant_int4_kernel
     from nbxtensor.ops.fused_moe import (fused_moe_wna16_kernel,
                                                  fused_moe_fp32b_kernel)
