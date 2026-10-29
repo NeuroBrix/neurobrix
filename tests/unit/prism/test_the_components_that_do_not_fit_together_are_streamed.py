@@ -25,6 +25,7 @@ MODEL = "orpheus-3b-0.1-ft"
 DRIVER = textwrap.dedent("""
     import sys
     from pathlib import Path
+    import neurobrix  # the engine first: it puts its own tree's nbxtensor on the path
     from nbxtensor.backend import host_memory as HM
     from neurobrix.core.prism import solver as S, loader as LD
     st = HM.MemoryState(available_mb=8400, source="simulated")

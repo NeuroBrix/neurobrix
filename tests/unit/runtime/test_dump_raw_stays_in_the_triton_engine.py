@@ -53,6 +53,7 @@ _CHILD = textwrap.dedent('''
     sys.meta_path.insert(0, _Blocker())
 
     import numpy as np
+    import neurobrix  # the engine first: it puts its own tree's nbxtensor on the path
     from nbxtensor.dtype.nbx_dtype import NBXDtype; from nbxtensor.tensor import NBXTensor; from nbxtensor.memory.allocator import DeviceAllocator
     from neurobrix.triton.sequence import TritonSequence
     DeviceAllocator.set_device(0)

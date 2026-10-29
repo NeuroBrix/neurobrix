@@ -48,7 +48,8 @@ def _in_a_child(body: str):
     env["PYTHONPATH"] = os.path.join(
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
             os.path.abspath(__file__))))), "src")
-    r = subprocess.run([sys.executable, "-c", textwrap.dedent(body)],
+    # the engine first: it puts its own tree's nbxtensor on the path
+    r = subprocess.run([sys.executable, "-c", "import neurobrix\n" + textwrap.dedent(body)],
                        capture_output=True, text=True, timeout=300, env=env)
     return r.returncode, (r.stdout or "") + (r.stderr or "")
 
