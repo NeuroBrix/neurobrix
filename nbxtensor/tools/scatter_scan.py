@@ -42,7 +42,10 @@ ROOTS = ("triton", "kernels", "core/prism", "core/memory", "core/module",
 SKIP_PARTS = ("triton_kernels_ref", "__pycache__")
 PYTORCH_BRANCH_PREFIXES = ("core/runtime/graph/",)
 PYTORCH_BRANCH_FILES = {"kernels/metadata_ops.py", "core/runtime/torch_allocator.py",
-                        "core/runtime/graph_executor.py"}
+                        "core/runtime/graph_executor.py",
+                        # the compiled halves split out of the kernel files: they stay with the engine (M1)
+                        "kernels/ops/residual_chain_torch.py", "kernels/ops/fused_upsample_conv_torch.py",
+                        "kernels/torch_interop.py"}
 
 # Names the pattern catches that are NOT tensor semantics (reviewed by hand;
 # a line here says why, and the list only grows with a reason).
@@ -106,6 +109,7 @@ def _files():
 
 def scan():
     rows = []
+    ops_left = False
     for p in _files():
         rel = str(p.relative_to(ENGINE))
         if rel in PYTORCH_BRANCH_FILES or rel.startswith(PYTORCH_BRANCH_PREFIXES):
@@ -114,6 +118,8 @@ def scan():
             rows.append((rel, "*", MODULES_TO_LIBRARY[rel]))
             continue
         if rel.startswith("kernels/ops/"):
+            if p.name != "__init__.py":
+                ops_left = True   # a Triton kernel file still in the engine: the directory is still to move
             continue  # the kernel files move as a directory (ops/)
         try:
             tree = ast.parse(p.read_text())
@@ -126,7 +132,8 @@ def scan():
                         and (rel, node.name) not in NOT_SEMANTIC):
                     seen.add(node.name)
                     rows.append((rel, node.name, f"line {node.lineno}"))
-    rows.append(("kernels/ops/", "*", "ops: every kernel file"))
+    if ops_left:
+        rows.append(("kernels/ops/", "*", "ops: every kernel file"))
     return rows
 
 
