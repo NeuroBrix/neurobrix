@@ -1395,7 +1395,9 @@ class ActivationProfiler:
                     out_width = (widths[out_tid0] if widths is not None
                                  else self._compute_size([1], self.tensors.get(out_tid0, {}), dtype_bytes))
                     w_shape = self._resolve_shape(self.tensors.get(op["input_tensor_ids"][1], {}), symbol_map)
-                    in_op += int(conv3d_workspace(x_shape, w_shape, op.get("attributes") or {}, x_width, out_width))
+                    _ins = op["input_tensor_ids"]
+                    _attrs = dict(op.get("attributes") or {}, has_bias=len(_ins) >= 3 and bool(_ins[2]))
+                    in_op += int(conv3d_workspace(x_shape, w_shape, _attrs, x_width, out_width))
             # what the engine's implementation of this op holds beside its input and output while it runs, as the
             # vendor file states it per op type (`op_workspace(op_type, x_shape, x_width, out_width) -> bytes`,
             # core/prism/op_workspace.py `compiled_op_workspace`): MPS's vector norm, its full-size intermediates

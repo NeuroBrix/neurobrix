@@ -1254,3 +1254,179 @@ def im2col_wrapper(x, kernel_size, dilation, padding, stride):
         in_sn, in_sc, in_sh, in_sw, out_sn, out_sc, out_sl,
         BLOCK_L=BLOCK_L)
     return out
+
+
+# ---------------------------------------------------------------------------
+# The cost each convolution path declares (M3, docs/nbxtensor/COST.md): what it allocates, in its order, read from the
+# same decisions the wrappers take (`launch_keys.conv_dtypes`, `conv2d_route`, `matrix_unit_native`, the strided read
+# rule) — a planner prices the convolution by it instead of re-deriving it. Operands are `_cost.Spec`s; a returned
+# buffer is the op's output.
+# ---------------------------------------------------------------------------
+
+def _reads_strided(shape, strides) -> bool:
+    """`_conv_reads_strided` on a shape and its strides: four non-negative strides, the width innermost."""
+    return len(strides) == 4 and all(int(v) >= 0 for v in strides) and (int(strides[3]) == 1 or int(shape[3]) == 1)
+
+
+def _pair(v):
+    return (v[0], v[1] if len(v) > 1 else v[0]) if isinstance(v, (list, tuple)) else (v, v)
+
+
+def conv2d_cost(x, w, stride=1, padding=0, dilation=1, groups=1, bias=False, out_dtype=None, out_given=False,
+                krsc=False, unit=None, depthwise_enabled=True):
+    """`conv2d_wrapper` on an input `x` and a weight `w` (`_cost.Spec`s): the operands narrowed to the narrowest of the
+    pair when they differ (a copy each), the input made contiguous unless the implicit GEMM reads it where it lies, a
+    weight not stored KRSC made contiguous, then the route — depthwise (a contiguous input, its output), band (the whole
+    output, each band's conv beside it), or the plain launch: its output (none when the caller hands `out_given`), and
+    on the matrix unit the input made contiguous and, for a caller's view, a dense result copied into it. The bias is
+    added in place. `out_dtype`: the component's compute dtype the wrapper writes (`_NBX_COMPUTE_DTYPE`), the input's
+    when None. `unit`: the matrix unit to judge by (a planner's), the profile in force's when None."""
+    from nbxtensor.ops import _cost as C
+    from nbxtensor.ops import tiling_sizes as _tsz
+    from nbxtensor.shape import contiguous_strides, is_contiguous
+    st = C._Steps()
+    N, in_c, in_h, in_w = (int(d) for d in x.shape)
+    out_c, _cg, kh, kw = (int(d) for d in w.shape)
+    sh, sw = _pair(stride)
+    ph, pw = _pair(padding)
+    dh, dw = _pair(dilation)
+    out_h, out_w = _lk.conv_out_hw(in_h, in_w, kh, kw, sh, sw, ph, pw, dh, dw)
+    x_to, w_to = _lk.conv_dtypes(NBXDtype[x.dtype], NBXDtype[w.dtype])
+    if x_to.name != x.dtype:
+        x = C.Spec.contiguous(x.shape, x_to.name)
+        st.alloc("input narrowed", x.nbytes)
+    if w_to.name != w.dtype:
+        w = C.Spec.contiguous(w.shape, w_to.name)
+        st.alloc("weight narrowed", w.nbytes)
+    if not is_contiguous(x.shape, x.strides) and not _reads_strided(x.shape, x.strides):
+        x = C.Spec.contiguous(x.shape, x.dtype)
+        st.alloc("input made contiguous", x.nbytes)
+    if not krsc and not is_contiguous(w.shape, w.strides):
+        st.alloc("weight made contiguous", w.nbytes)
+    out_dt = out_dtype or x.dtype
+    out_bytes = N * out_c * out_h * out_w * dtype_size(NBXDtype[out_dt])
+    route = _lk.conv2d_route(N, in_c, out_c, out_h, out_w, dh, dw, groups, NBXDtype[x.dtype],
+                             _tsz.conv2d_band_bytes(), depthwise_enabled=depthwise_enabled)
+    if route == "depthwise":
+        if not is_contiguous(x.shape, x.strides):
+            st.alloc("input made contiguous (depthwise)", x.nbytes)
+        st.alloc("output", out_bytes, returned=True)
+        return st.done(2 * N * out_c * out_h * out_w * kh * kw)
+    if route == "band":
+        if not is_contiguous(x.shape, x.strides):
+            x = C.Spec.contiguous(x.shape, x.dtype)
+            st.alloc("input made contiguous (bands)", x.nbytes)
+        st.alloc("output", out_bytes, returned=True)
+        band_oh = _lk.conv2d_band_rows(N, out_c, out_h, out_w, dtype_size(NBXDtype[x.dtype]), _tsz.conv2d_band_bytes())
+        worst = None
+        for oh_start in range(0, out_h, band_oh):
+            oh_end = min(oh_start + band_oh, out_h)
+            ih_start = max(0, oh_start * sh - ph)
+            ih_end = min(in_h, (oh_end - 1) * sh + dh * (kh - 1) + 1 - ph)
+            if ih_end <= ih_start:
+                continue
+            band = C.Spec((N, in_c, ih_end - ih_start, in_w), x.strides, x.dtype)
+            c = conv2d_cost(band, w, stride, padding, dilation, groups, False, out_dt, False, True, unit,
+                            depthwise_enabled)
+            if worst is None or c.peak_bytes > worst.peak_bytes:
+                worst = c
+        if worst is not None:
+            for i in st.nest(worst, "the largest band"):
+                st.free(i)                       # each band's result copied into the output, then dropped
+        return st.done(2 * N * out_c * out_h * out_w * kh * kw * (in_c // max(1, groups)))
+    if not out_given:
+        st.alloc("output", out_bytes, returned=True)
+    if _lk.matrix_unit_native(NBXDtype[x.dtype], NBXDtype[w.dtype], N * out_h * out_w, unit):
+        if not is_contiguous(x.shape, x.strides):
+            i = st.alloc("input made contiguous (matrix unit)", x.nbytes)
+        if out_given:
+            st.alloc("dense result for the caller's view (matrix unit)", out_bytes)
+    return st.done(2 * N * out_c * out_h * out_w * kh * kw * (in_c // max(1, groups)))
+
+
+def conv3d_cost(x, w, stride=1, padding=0, dilation=1, groups=1, bias=False, out_dtype=None, unit=None):
+    """`_conv3d_via_conv2d` on an input `x` [B, Cin, T, H, W] and a weight `w` [Cout, Cin_g, kt, kh, kw]: the temporal
+    pad (a padded copy, alive to the return), then — at temporal stride 1 — each tap's 2-D weight slice, its tap buffer
+    and its per-batch conv2d writing into the tap's view (`conv2d_cost(out_given=True)`: on the matrix unit the
+    frames made contiguous and a dense result), the first tap kept as the output and each later one added into it and
+    dropped; at a larger stride each tap's frames gathered and folded (a copy), its conv2d output, its result permuted
+    back (a copy) and the running sum (a new buffer per tap). The bias adds a new output. `out_dtype`: the compute
+    dtype the wrapper writes, the input's when None."""
+    from nbxtensor.ops import _cost as C
+    from nbxtensor.shape import contiguous_strides
+
+    def _triple(v):
+        return (v[0], v[1], v[2]) if isinstance(v, (list, tuple)) else (v, v, v)
+    st_, sh, sw = _triple(stride)
+    pt, ph, pw = _triple(padding)
+    dt, dh, dw = _triple(dilation)
+    B, Cin, T, H, W = (int(d) for d in x.shape)
+    Cout, Cin_g, kt, kh, kw = (int(d) for d in w.shape)
+    out_dt = out_dtype or x.dtype
+    st = C._Steps()
+    if pt > 0:
+        x = C.Spec.contiguous((B, Cin, T + 2 * pt, H, W), x.dtype)
+        st.alloc("temporal pad", x.nbytes)
+    Tp = x.shape[2]
+    T_out = (Tp - dt * (kt - 1) - 1) // st_ + 1
+    Ho, Wo = _lk.conv_out_hw(H, W, kh, kw, sh, sw, ph, pw, dh, dw)
+    out_bytes = B * Cout * T_out * Ho * Wo * dtype_size(NBXDtype[out_dt])
+    w2 = C.Spec.contiguous((Cout, Cin_g, kh, kw), w.dtype)
+    flops = 2 * B * Cout * T_out * Ho * Wo * kt * kh * kw * Cin_g
+    # the wrapper's locals, as Python holds them: a name rebound frees its old buffer only after the new one exists, a
+    # buffer at least `_NBX_CONV3D_EAGER_FREE_BYTES` is dropped as soon as it is dead (`x2 = None`, ...), the rest die
+    # at the return
+    held = {}
+
+    def bind(name, index):
+        old = held.get(name)
+        held[name] = index
+        if old is not None and old not in held.values():
+            st.free(old)
+
+    def drop(name):
+        old = held.pop(name, None)
+        if old is not None and old not in held.values():
+            st.free(old)
+
+    if st_ == 1:
+        xs = x.strides
+        frames = C.Spec((T_out, Cin, H, W), (xs[2], xs[1], xs[3], xs[4]), x.dtype)
+        for kti in range(kt):
+            bind("w2", st.alloc("tap weight slice", w2.nbytes))
+            bind("tap", st.alloc("tap", out_bytes))
+            for _b in range(B):
+                for i in st.nest(conv2d_cost(frames, w2, (sh, sw), (ph, pw), (dh, dw), groups, False, out_dt,
+                                             True, False, unit), f"tap {kti} conv2d"):
+                    st.free(i)
+            if "out" not in held:
+                held["out"] = held["tap"]       # the first tap is the sum
+            drop("tap")                         # a later one, added into the sum in place, dropped (`tap = None`)
+    else:
+        fold_bytes = B * T_out * Cin * H * W * dtype_size(NBXDtype[x.dtype])
+        for kti in range(kt):
+            bind("idx", st.alloc("frame indices", T_out * 8))
+            bind("xs", st.alloc("tap frames gathered", fold_bytes))
+            bind("x2", st.alloc("tap frames folded", fold_bytes))
+            bind("w2", st.alloc("tap weight slice", w2.nbytes))
+            fold = C.Spec.contiguous((B * T_out, Cin, H, W), x.dtype)
+            y2, = st.nest(conv2d_cost(fold, w2, (sh, sw), (ph, pw), (dh, dw), groups, False, out_dt, False, False,
+                                      unit), f"tap {kti} conv2d")
+            bind("y2", y2)
+            if fold_bytes >= _NBX_CONV3D_EAGER_FREE_BYTES:
+                drop("x2")
+            bind("y", st.alloc("tap result permuted back", out_bytes))
+            if out_bytes >= _NBX_CONV3D_EAGER_FREE_BYTES:
+                drop("y2")
+            if "out" not in held:
+                held["out"] = held["y"]
+            else:
+                bind("out", st.alloc("running sum", out_bytes))
+                if out_bytes >= _NBX_CONV3D_EAGER_FREE_BYTES:
+                    drop("y")
+    if bias:
+        bind("out", st.alloc("output with the bias", out_bytes))
+    out = held.pop("out")
+    st.buffers[out][4] = True                   # the result
+    st.buffers[out][3] = None
+    return st.done(flops)                       # every other local dies at the return

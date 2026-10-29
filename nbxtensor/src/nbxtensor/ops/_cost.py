@@ -88,10 +88,30 @@ class _Steps:
         self.buffers.append([name, int(nbytes), self.step, None, returned])
         return len(self.buffers) - 1
 
+    def free(self, index: int) -> None:
+        """The buffer dies here (a transient the wrapper drops before it returns: a reassigned local, a callee's
+        return): it lives over [its step, this step]."""
+        self.step += 1
+        self.buffers[index][3] = self.step
+
     def done(self, flops: int) -> Cost:
         end = self.step
-        return Cost(tuple(Buffer(n, b, f, end, r) for n, b, f, _l, r in self.buffers),
+        return Cost(tuple(Buffer(n, b, f, end if l is None else l, r) for n, b, f, l, r in self.buffers),
                     self.moved, int(flops))
+
+    def nest(self, cost: "Cost", prefix: str) -> list:
+        """A callee's cost inside this op's sequence: its buffers allocated in its order, its transients freed when it
+        returns; its returned buffers are the caller's to free (`free` on the indices returned)."""
+        base = self.step
+        kept = []
+        for b in cost.buffers:
+            self.buffers.append([f"{prefix}: {b.name}", b.nbytes, base + b.first,
+                                 None if b.returned else base + b.last, False])
+            if b.returned:
+                kept.append(len(self.buffers) - 1)
+        self.step = base + max((b.last for b in cost.buffers), default=0)
+        self.moved += cost.bytes_moved
+        return kept
 
 
 def _contiguous_copy(st: _Steps, x: Spec, name: str) -> Optional[int]:

@@ -149,16 +149,17 @@ def bmm_dtypes(a: NBXDtype, b: NBXDtype, native_bf16: bool, force_accum: bool = 
     return a, b, promote_b
 
 
-def matrix_unit_operands(a: NBXDtype, b: NBXDtype, M: int):
+def matrix_unit_operands(a: NBXDtype, b: NBXDtype, M: int, unit: Optional[dict] = None):
     """(rep_a, rep_b): how the profile's matrix unit carries each operand of a GEMM with M output rows, as they are
     in memory — the DtypeEngine's `matrix_unit_representation` ("native", "split") — or None: either operand has
     none, or M does not fill the smallest tile the profile lists for that representation (a row band mostly empty
     leaves the unit idle; the GEMV / batched kernels own those rows, and a row's reduction order then never
-    depends on how many rows share its launch). The wrappers' `_gemm_unit_tile` asks this same function."""
+    depends on how many rows share its launch). The wrappers' `_gemm_unit_tile` asks this same function. `unit`: a
+    matrix unit already read (a planner's, for the device it plans); the profile in force's when None."""
     from nbxtensor.ops._configs import matrix_unit
     from nbxtensor.host import need as _need   # the application's triton.dtype (nbxtensor.host)
     matrix_unit_representation = _need("matrix_unit_representation")
-    mu = matrix_unit()
+    mu = matrix_unit() if unit is None else unit
     ra, rb = matrix_unit_representation(a.name, mu), matrix_unit_representation(b.name, mu)
     if not (ra and rb):
         return None
@@ -188,10 +189,10 @@ def gemm_row_representative(m_bucket: int, a: NBXDtype, b: NBXDtype) -> Optional
     return None
 
 
-def matrix_unit_native(a: NBXDtype, b: NBXDtype, M: int) -> bool:
+def matrix_unit_native(a: NBXDtype, b: NBXDtype, M: int, unit: Optional[dict] = None) -> bool:
     """Both operands are the unit's operand dtype in memory: what the convolution's implicit GEMM
     (ops/conv2d_m8n8k4.py) carries until it takes the split representation too."""
-    return matrix_unit_operands(a, b, M) == ("native", "native")
+    return matrix_unit_operands(a, b, M, unit) == ("native", "native")
 
 
 def mv_launches(N: int, K: int, mat: NBXDtype, vec: NBXDtype, native_bf16: bool,
