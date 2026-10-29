@@ -121,16 +121,15 @@ def _announce_first_sweep(tuned):
     cache = getattr(tuned, "cache", None)
     if cache is None:                 # not an Autotuner — nothing to watch
         return tuned
-    original = tuned.run
-    # A census shadow (kernels/census.py, installed before this kernel was defined)
-    # keeps this wrapper — it is the one door where the key is formed and recorded —
-    # and drops what stands behind it: no bench, no launch, no device.
+    launch = tuned.run
+    # A dry run (an application's launch observer, active: NeuroBrix's census shadow) keeps this wrapper — it is the
+    # one door where the key is formed and recorded — and drops what stands behind it: no bench, no launch, no
+    # device. The observer is read at every call, so one installed after this kernel was defined is the one consulted.
     from nbxtensor.ops.launch_observer import launch_observer
-    _census = launch_observer()                 # the application's launch observer (dry run), if any
-    if _census.active():
-        original = _census.shadow_run
 
     def run_with_notice(*args, **kwargs):
+        _census = launch_observer()             # the application's launch observer (dry run), if any
+        original = _census.shadow_run if _census.active() else launch
         # The engine's artifact is the ONLY persistence of a sweep since
         # 2026-09-05 (upstream's on-disk cache was dropped: its key was a
         # torch-importing driver probe): seed once, capture every growth.
@@ -164,7 +163,7 @@ def _announce_first_sweep(tuned):
         # from the directory, swept, or replayed — written as the certifier reads it, one door
         # for the live proof target and for the shadow census. NBX_KEY_RECORD=<path>.
         if key is not None:
-            _census.record(tuned, key)     # `_census`: imported once in the enclosing scope
+            _census.record(tuned, key)     # every launch offers its key; the observer of this call
         if key is not None and key not in cache:
             from nbxtensor.ops import autotune_certified as _cert
             qual = _atc._qual_of(tuned) or getattr(getattr(tuned, "base_fn", None), "__name__", "?")
