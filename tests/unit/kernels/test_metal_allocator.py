@@ -162,30 +162,30 @@ def test_a_second_device_index_is_refused_not_clamped():
 @metal_only
 def test_an_allocation_past_the_device_budget_refuses():
     """Metal keeps handing out buffers past `recommendedMaxWorkingSetSize`,
-    backed by memory the whole machine shares. The allocator says no at the
-    device's own ceiling instead of letting a fill loop take the user's RAM."""
+    backed by memory the whole machine shares. The ONE account says no at the
+    device's own ceiling (`MetalMemory.budget`) instead of letting a fill loop
+    take the user's RAM — the device keeps no account of its own."""
+    from nbxtensor.memory.metal import MetalMemory
+    from nbxtensor.tensor import DeviceOOMError
     runtime = metal_device.runtime()
-    out = ctypes.c_void_p()
-    too_big = runtime._budget_bytes() + (1 << 20)
-    assert runtime.malloc(ctypes.byref(out), ctypes.c_size_t(too_big)) != 0
-    assert not out.value
+    assert not hasattr(runtime, "_live_bytes"), "a second account of the device's bytes"
+    rc, cap = MetalMemory(runtime).budget()
+    assert rc == 0 and cap == runtime.budget_bytes() > 0
+    with pytest.raises(DeviceOOMError):
+        DeviceAllocator.malloc_cuda(cap + (1 << 20))
 
 
 # --- allocation, the ordinary path -----------------------------------------
 
 @metal_only
 def test_alloc_and_free_return_the_live_count_to_zero():
-    runtime = metal_device.runtime()
-    page = runtime._page_size
-    start = runtime._live_bytes
-    out = ctypes.c_void_p()
-    assert runtime.malloc(ctypes.byref(out), ctypes.c_size_t(4096)) == 0
-    assert out.value
-    # Rounded up to a page, and the live count follows the bytes actually
-    # taken rather than the bytes asked for.
-    assert runtime._live_bytes == start + page
-    assert runtime.free(ctypes.c_void_p(out.value)) == 0
-    assert runtime._live_bytes == start
+    """The account's live bytes come back to where they were (`DeviceAllocator`, the one account)."""
+    start = DeviceAllocator._cuda_live_bytes.get(0, 0)
+    ptr = DeviceAllocator.malloc_cuda(4096, pooled=False)
+    assert ptr
+    assert DeviceAllocator._cuda_live_bytes.get(0, 0) == start + 4096
+    DeviceAllocator.free_cuda(ptr)
+    assert DeviceAllocator._cuda_live_bytes.get(0, 0) == start
 
 
 @metal_only
@@ -241,20 +241,14 @@ def test_live_bytes_survive_repeated_cycles():
     """The counter must come back DOWN. `MTLDevice.currentAllocatedSize()`
     does not — measured 2026-09-05, it read 2/4/6/8 GB across four cycles of
     allocating and releasing the same 2 GiB — which is why the budget is
-    checked against this counter and not against the device's."""
-    runtime = metal_device.runtime()
-    start = runtime._live_bytes
+    checked against the account and not against the device's."""
+    start = DeviceAllocator._cuda_live_bytes.get(0, 0)
     for _ in range(4):
-        pointers = []
-        for _ in range(8):
-            out = ctypes.c_void_p()
-            assert runtime.malloc(ctypes.byref(out),
-                                  ctypes.c_size_t(1 << 20)) == 0
-            pointers.append(out.value)
-        assert runtime._live_bytes == start + 8 * (1 << 20)
+        pointers = [DeviceAllocator.malloc_cuda(1 << 20, pooled=False) for _ in range(8)]
+        assert DeviceAllocator._cuda_live_bytes.get(0, 0) == start + 8 * (1 << 20)
         for pointer in pointers:
-            assert runtime.free(ctypes.c_void_p(pointer)) == 0
-        assert runtime._live_bytes == start
+            DeviceAllocator.free_cuda(pointer)
+        assert DeviceAllocator._cuda_live_bytes.get(0, 0) == start
 
 
 @metal_only
@@ -332,7 +326,7 @@ def test_memory_info_is_headroom_against_the_device_budget():
     runtime = metal_device.runtime()
     total = DeviceAllocator.device_total_bytes()
     free = DeviceAllocator.device_free_bytes()
-    assert total == runtime._budget_bytes() > 0
+    assert total == runtime.budget_bytes() > 0
     assert 0 <= free <= total
     pointer = DeviceAllocator.malloc_cuda(64 * 1024 * 1024)
     try:

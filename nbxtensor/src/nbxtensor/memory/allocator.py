@@ -777,12 +777,31 @@ class DeviceAllocator:
         return limit
 
     @staticmethod
+    def _past_budget(dm, dev: int, nbytes: int):
+        """The backend's allocation-refused status when `nbytes` more would take this process past the budget its
+        device grants (`DeviceMemory.budget`), for a backend whose driver does not refuse there itself
+        (`supports("budget_refusal")`: Metal, whose buffers draw on the memory the whole machine shares; its host
+        buffers draw on the same budget); None otherwise. The ONE account decides — the device keeps none."""
+        if not dm.supports("budget_refusal"):
+            return None
+        rc, cap = dm.budget()
+        if rc != 0:
+            return rc
+        held = DeviceAllocator._cuda_live_bytes.get(dev, 0) + DeviceAllocator._host_pinned_live_bytes
+        return dm.ALLOC_REFUSED if held + int(nbytes) > int(cap) else None
+
+    @staticmethod
     def _driver_malloc(ptr_obj, nbytes: int, dev: int) -> int:
         """The runtime's malloc, or the refusal a card of the imposed rung gives (cudaErrorMemoryAllocation, 2)."""
         limit = DeviceAllocator._rung_limit(dev)
         if limit is not None and DeviceAllocator._cuda_live_bytes.get(dev, 0) + int(nbytes) > limit:
             return 2
-        rc, ptr = _rt.device_memory().malloc(nbytes)
+        dm = _rt.device_memory()
+        refused = DeviceAllocator._past_budget(dm, dev, nbytes)
+        if refused is not None:
+            ptr_obj.value = None
+            return refused
+        rc, ptr = dm.malloc(nbytes)
         ptr_obj.value = ptr or None
         return rc
 
@@ -1098,7 +1117,9 @@ class DeviceAllocator:
             raise RuntimeError(
                 f"Pinned host allocation unsupported on backend "
                 f"{_rt._detect_gpu_backend()!r}")
-        ret, p = dm.host_alloc(nbytes)
+        ret = DeviceAllocator._past_budget(dm, DeviceAllocator.get_device(), nbytes)
+        if ret is None:
+            ret, p = dm.host_alloc(nbytes)
         if ret != 0:
             DeviceAllocator.clear_last_error()   # a refused call must not poison the next one
             raise RuntimeError(
