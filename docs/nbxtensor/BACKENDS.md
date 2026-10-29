@@ -106,6 +106,27 @@ accepts (`ops/autotune_certified.py`, `ops/screen_oracle.py`). Settings proven o
 name, with the code generator they were proven under. A new backend starts with an empty store: its first runs sweep,
 and what they prove is kept.
 
+## 6. AMD and Intel: what is ready, what is not
+
+Neither has run here: no AMD or Intel card on the machines this library is proven on. What a port finds ready, and
+what it still has to write:
+
+- **AMD (HIP, ROCm).** Triton has a HIP backend. The memory primitives are ready: `AbiMemory` serves HIP through the
+  same C ABI as CUDA (the `hip` row of the backend table, `backend.runtime.backend_table()`), and the capability rows
+  hold a `hip` column (64 threads per warp). Device files exist for CDNA, CDNA2, CDNA3 (the engine's half; the
+  library's half is split from them on `docs/nbxtensor/device_keys.txt`). To write: the launch driver (`load` /
+  `launch` of an hsaco through `hipModuleLoadData` / `hipModuleLaunchKernel`, `artifact_kind = "hsaco"`), then the
+  conformance suite on a card. Today the launcher resolves no HIP driver: on `hip` it hands out the CUDA driver
+  (`backend/launcher._resolve_driver`), which a HIP card would fail at its first launch — the driver above is the
+  missing piece.
+- **Intel (XPU).** Intel's Triton backend runs on Level Zero, which is NOT the CUDA C ABI: `AbiMemory` does not serve
+  it. To write: a `DeviceMemory` over Level Zero (`zeMemAllocDevice`, `zeMemFree`, a command list for copies, the
+  device's memory budget), a launch driver for its SPIR-V artifacts, a capability column, the device files, then the
+  conformance suite.
+
+A new device starts from `docs/nbxtensor/device_file_template.yml`: every key the library reads, empty, each to be
+filled from the device's own source.
+
 ## What exists, what is written, what is not supported
 
 See the README's **Hardware** table: the backends proven on a device (with the device and the date), those written but
