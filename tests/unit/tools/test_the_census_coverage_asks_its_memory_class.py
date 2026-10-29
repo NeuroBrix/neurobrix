@@ -30,7 +30,7 @@ CHILD = textwrap.dedent('''
     for p in sorted(root.glob("*.json")):
         doc = json.loads(p.read_text())
         for ktext, e in (doc.get("entries") or {}).items():
-            cls = C.proof_memory_class(e.get("proof"))
+            cls = C.proof_memory_gb(e.get("proof"))
             other = 16 if cls == 32 else 32
             if cls in (16, 32) and not (e.get("variants") or {}).get(f"{other}g"):
                 picked = (doc["kernel"], ktext, cls, other)

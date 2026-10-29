@@ -64,9 +64,9 @@ def _certify_once(root, monkeypatch, stored_proof_backend):
     assert C.proof_backend(old["proof"]) != C.proof_backend({"backend": Z._backend()}), "the stored proof must name another generator"
     tuner.cache.pop(key, None); C.reset()
     # the census is THE TABLE of this card's class (P2): one row for this key, nothing else
-    cls = C.memory_class_gb(Z._certifying_device()["memory_mb"]) if hasattr(Z, "_certifying_device") else C.memory_class_gb(C.executing_memory_class_mb()) if hasattr(C, "executing_memory_class_mb") else None
+    cls = C.memory_gb(Z._certifying_device()["memory_mb"]) if hasattr(Z, "_certifying_device") else C.memory_class_gb(C.executing_memory_class_mb()) if hasattr(C, "executing_memory_class_mb") else None
     if cls is None:
-        cls = C.proof_memory_class(first["proof"])
+        cls = C.proof_memory_gb(first["proof"])
     monkeypatch.setattr(T, "ROOT", root / "table")
     T.write(T.table_path(vendor, profile, cls), [{"model": "t", "container": "s", "mode": "triton", "rungs_mb": None, "ops": [None],
                                                   "kernel": qual, "key": C.key_repr(key), "dtype": T.dtypes_of(C.key_repr(key)), "tool": "t"}])
@@ -110,7 +110,7 @@ def test_a_stored_configuration_that_fails_the_oracle_is_swept_and_the_reason_co
     path = C.file_for(vendor, profile, qual, dtype, root=root)
     Z._write_file(path, vendor, profile, qual, dtype, {C.key_repr(key): old})
     tuner.cache.pop(key, None); C.reset()
-    cls = C.proof_memory_class(first["proof"])
+    cls = C.proof_memory_gb(first["proof"])
     monkeypatch.setattr(T, "ROOT", root / "table")
     T.write(T.table_path(vendor, profile, cls), [{"model": "t", "container": "s", "mode": "triton", "rungs_mb": None, "ops": [None],
                                                   "kernel": qual, "key": C.key_repr(key), "dtype": T.dtypes_of(C.key_repr(key)), "tool": "t"}])
@@ -145,7 +145,7 @@ def test_a_drift_on_the_single_re_prove_timing_is_a_refusal_for_the_retry_never_
     Z._write_file(path, vendor, profile, qual, dtype, {C.key_repr(key): old})
     before = path.read_text()
     tuner.cache.pop(key, None); C.reset()
-    cls = C.proof_memory_class(first["proof"])
+    cls = C.proof_memory_gb(first["proof"])
     monkeypatch.setattr(T, "ROOT", root / "table")
     T.write(T.table_path(vendor, profile, cls), [{"model": "t", "container": "s", "mode": "triton", "rungs_mb": None, "ops": [None],
                                                   "kernel": qual, "key": C.key_repr(key), "dtype": T.dtypes_of(C.key_repr(key)), "tool": "t"}])

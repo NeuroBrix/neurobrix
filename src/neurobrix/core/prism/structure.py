@@ -221,12 +221,10 @@ _ARCHITECTURE_IS_UNIFIED = {
 # legacy proof) call these, so the name's grammar cannot drift from its reading.
 # ---------------------------------------------------------------------------
 def memory_class_gb(memory_mb) -> Optional[int]:
-    """Memory in MB → its class in GB, `round(mb / 1024)`; None when unknown."""
-    try:
-        mb = float(memory_mb)
-    except (TypeError, ValueError):
-        return None
-    return int(round(mb / 1024)) if mb > 0 else None
+    """Memory in MB → its class in GB, `round(mb / 1024)`; None when unknown — the library's one rounding
+    (`nbxtensor.backend.device_facts.memory_gb`), which its certified store keys proofs by: one figure for one card."""
+    from nbxtensor.backend.device_facts import memory_gb
+    return memory_gb(memory_mb)
 
 
 def single_card_profile_id(model_short: str, memory_mb) -> str:

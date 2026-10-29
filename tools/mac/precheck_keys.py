@@ -22,7 +22,7 @@ from neurobrix.kernels import autotune_certify as A
 from nbxtensor.backend.host_memory import memory_state
 
 A._bind_hardware_profile()
-klass = C.memory_class_gb(A._certifying_device()["memory_mb"])
+klass = C.memory_gb(A._certifying_device()["memory_mb"])
 gen = C.proof_backend({"backend": A._backend()})
 vendor, profile = C.active_profile()
 rows = T.read(T.table_path(vendor, profile, klass, root=tree / "src" / "neurobrix" / "config" / "census"))

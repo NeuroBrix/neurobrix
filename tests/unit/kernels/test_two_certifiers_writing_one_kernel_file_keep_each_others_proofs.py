@@ -38,9 +38,9 @@ def test_a_key_both_classes_hold_keeps_both_classes(tmp_path):
     a = stale_a
     _write(path, {"k2": _cert(16384, 16)}, a)       # the 16 GB card's NEXT key, from its older view
     on_disk = json.loads(path.read_text())["entries"]
-    assert C.entry_for_memory_class(on_disk["k"], 32) is not None, "the 32 GB variant was erased"
-    assert C.entry_for_memory_class(on_disk["k"], 32)["config"]["kwargs"] == {"BLOCK_M": 64}
-    assert C.entry_for_memory_class(on_disk["k"], 16)["config"]["kwargs"] == {"BLOCK_M": 32}
+    assert C.entry_for_memory_gb(on_disk["k"], 32) is not None, "the 32 GB variant was erased"
+    assert C.entry_for_memory_gb(on_disk["k"], 32)["config"]["kwargs"] == {"BLOCK_M": 64}
+    assert C.entry_for_memory_gb(on_disk["k"], 16)["config"]["kwargs"] == {"BLOCK_M": 32}
     assert set(on_disk) == {"k", "k2"}
     assert a == on_disk, "the writer's view is refreshed to what it wrote"
     assert not list(tmp_path.glob("*.tmp"))

@@ -172,12 +172,12 @@ def _announce_first_sweep(tuned):
                 # the card this launch executes on: its tensor's device, read in
                 # the Prism profile — an entry serves only the memory class it
                 # covered (register 56)
-                mcls = _cert.executing_memory_class(args)
-                applied = _cert.apply(qual, tuned, key, memory_class=mcls)
+                mcls = _cert.executing_memory_gb(args)
+                applied = _cert.apply(qual, tuned, key, memory_gb=mcls)
                 if not applied:
                     # an operand widened on load is keyed by the dtype it is computed in
                     twin = _cert.computed_key(tuned, key, kwargs)
-                    applied = bool(twin) and _cert.apply(qual, tuned, key, lookup_key=twin, memory_class=mcls)
+                    applied = bool(twin) and _cert.apply(qual, tuned, key, lookup_key=twin, memory_gb=mcls)
             except Exception as exc:            # the directory is an optimisation, never a failure source —
                 if _confirm:                    # except in a confirmation run, where it is the only source
                     raise _cert.KeyNotCertified(f"CERTIFIED-ONLY: the certified lookup failed for {qual} "

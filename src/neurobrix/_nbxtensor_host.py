@@ -43,8 +43,6 @@ def install() -> None:
     provide("vendors_dir", _config_dir("vendors"))
     from nbxtensor.ops.autotune_certified import set_store
     set_store(_config_dir("autotune")())        # the engine's committed certified directory, through the public API
-    provide("memory_class_gb", _call("neurobrix.core.prism.structure", "memory_class_gb"))
-    provide("memory_class_from_profile_id", _call("neurobrix.core.prism.structure", "memory_class_from_profile_id"))
     provide("installation_refusals", _call("neurobrix.core.paths", "installation_refusals"))
     provide("census", _module("neurobrix.kernels.census"))
     provide("census_table", _module("neurobrix.kernels.census_table"))

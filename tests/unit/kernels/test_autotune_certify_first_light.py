@@ -97,12 +97,12 @@ def test_one_matmul_shape_is_certified_gated_and_served(root, monkeypatch):
     # the directory — and it is pinned below as the rule it is.
     matmul_kernel.cache.pop(key, None)
     C.reset()
-    mcls = C.proof_memory_class(entry["proof"])
+    mcls = C.proof_memory_gb(entry["proof"])
     assert mcls is not None, "the proof names the card's memory class"
-    if C.executing_memory_class() is None:
+    if C.executing_memory_gb() is None:
         assert C.apply(qual, matmul_kernel, key) is False, "no class known: served nothing (register 56)"
         C.reset()
-    assert C.apply(qual, matmul_kernel, key, memory_class=mcls) is True
+    assert C.apply(qual, matmul_kernel, key, memory_gb=mcls) is True
     assert matmul_kernel.cache[key].kwargs == entry["config"]["kwargs"]
 
 

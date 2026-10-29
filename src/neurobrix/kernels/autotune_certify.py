@@ -2494,7 +2494,7 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
     # profile in force does not describe is refused at entry — an entry made
     # on it could never say its class and would be served to no card.
     certifying_device = _certifying_device()
-    certifying_class = C.memory_class_gb((certifying_device or {}).get("memory_mb"))
+    certifying_class = C.memory_gb((certifying_device or {}).get("memory_mb"))
     # The working-set budget (`--working-set-mb`): what this run may hold, the figure its guard
     # kills at; None = no price door (the operand bound alone). The floor is the process now.
     budget_bytes = int(working_set_mb) * 2**20 if working_set_mb else None
@@ -2634,7 +2634,7 @@ def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, re
             if skip_proven_since is not None:
                 # resume a sweep: a key this card's class re-proved at or after the given time (ISO, UTC like the
                 # proofs) is done — a stopped re-sweep restarts where it was instead of from the first key
-                _e = C.entry_for_memory_class(entries.get(ktext), certifying_class)
+                _e = C.entry_for_memory_gb(entries.get(ktext), certifying_class)
                 if _e and str(_e.get("proof", {}).get("date", "")) >= skip_proven_since:
                     continue
             if C.coverage_asked(entries, ktext, certifying_class, only_missing, reprove_unclocked, reprove_generator,
@@ -2650,7 +2650,7 @@ def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, re
             # another code generator keeps its configuration — proven again here by the oracle and one
             # timing under the witness. A sweep only where that configuration fails the oracle, or where
             # there is no entry at all; the summary says how many of each and why.
-            stored = C.entry_for_memory_class(entries.get(ktext), certifying_class) if reprove_generator else None
+            stored = C.entry_for_memory_gb(entries.get(ktext), certifying_class) if reprove_generator else None
             stored_label = C.proof_backend(stored.get("proof")) if stored else None
             reprove = bool(stored and stored.get("config") and stored_label
                            and stored_label != C.proof_backend({"backend": _backend()}))

@@ -413,7 +413,7 @@ def memory_class_coverage(container: str):
         if entry is None:
             out["absent"] += 1
             continue
-        classes = C.covered_memory_classes(entry)
+        classes = C.covered_memory_gbs(entry)
         if not classes:
             out["unknown"] += 1
         for c in classes:

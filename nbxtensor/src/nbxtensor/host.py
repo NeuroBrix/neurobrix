@@ -21,8 +21,6 @@ SERVICES: Dict[str, str] = {
     "vendor_config": "(vendor, architecture) -> the vendor file of that architecture, as a dict",
     "vendor_param": "(section, key, default) -> one value of the executing device's vendor file",
     "vendors_dir": "() -> the directory of the vendor files (pathlib.Path)",
-    "memory_class_gb": "(memory_mb) -> the memory class of a card, in GB",
-    "memory_class_from_profile_id": "(hardware profile id) -> its memory class in GB, or None",
     "installation_refusals": "(path) -> why an installation path may not hold a backend build; optional: absent, none is refused",
     "census": "() -> the launch census in force (active, record, shadow_run); optional: absent, none is active",
     "census_table": "() -> the census table reader",

@@ -1,6 +1,6 @@
 """A certified configuration is a property of the compiler that produced it.
 
-`entry_for_memory_class` has refused to serve an entry across memory classes
+`entry_for_memory_gb` has refused to serve an entry across memory classes
 since register 56: a setting proven on a 16 GB card is not served to a 32 GB one.
 The same argument applies to the code generator, and the engine already half
 agreed with itself -- `entry_covers(..., need_generator=...)` encodes the rule and
@@ -23,7 +23,7 @@ serves them anyway for whoever wants the old behaviour, named so it reads as
 deliberate.
 
 SEEN RED: with the generator block removed from `lookup()` so it ends at
-`return entry_for_memory_class(entry, memory_class)`,
+`return entry_for_memory_gb(entry, memory_class)`,
 `test_an_entry_proven_under_another_compiler_is_not_served` fails.
 
 Run: PYTHONPATH=src python -m pytest tests/unit/kernels/test_a_certified_setting_is_served_only_to_the_compiler_that_proved_it.py
@@ -77,7 +77,7 @@ def test_an_entry_proven_under_another_compiler_is_not_served():
 
 
 def test_a_variant_proven_under_the_running_compiler_is_found():
-    """Same shape as `entry_for_memory_class`: the primary, or a variant.
+    """Same shape as `entry_for_memory_gb`: the primary, or a variant.
 
     Without this the check would refuse an entry that DOES carry a matching
     proof, just not in its primary slot -- turning a correct serve into a
@@ -162,19 +162,19 @@ def test_lookup_itself_refuses_the_mismatched_entry(monkeypatch, capsys):
     monkeypatch.setattr(C, "enabled", lambda: True)
     monkeypatch.setattr(C, "active_profile", lambda: ("nvidia", "volta"))
     monkeypatch.setattr(C, "output_dtype", lambda tuner, k: "fp32")
-    monkeypatch.setattr(C, "executing_memory_class", lambda *a, **k: 16)
+    monkeypatch.setattr(C, "executing_memory_gb", lambda *a, **k: 16)
 
     def _entries(version):
         return {C.key_repr(key): _entry(version)}
 
     # (a) the matching generator is served
     monkeypatch.setattr(C, "_load", lambda *a, **k: _entries(ver))
-    assert C.lookup("matmul_kernel", _Tuner(), key, memory_class=16) is not None
+    assert C.lookup("matmul_kernel", _Tuner(), key, memory_gb=16) is not None
 
     # (b) the mismatched one is NOT, and the engine says so
     C._GEN_REFUSED.clear()
     monkeypatch.setattr(C, "_load", lambda *a, **k: _entries(other))
-    assert C.lookup("matmul_kernel", _Tuner(), key, memory_class=16) is None, (
+    assert C.lookup("matmul_kernel", _Tuner(), key, memory_gb=16) is None, (
         "lookup served a setting proven under another compiler")
     said = capsys.readouterr().out
     assert "certified under" in said and other in said and ver in said, (
@@ -182,9 +182,9 @@ def test_lookup_itself_refuses_the_mismatched_entry(monkeypatch, capsys):
 
     # (c) it is said ONCE per kernel, not once per shape: 9,655 entries would
     #     otherwise print 9,655 lines.
-    C.lookup("matmul_kernel", _Tuner(), key, memory_class=16)
+    C.lookup("matmul_kernel", _Tuner(), key, memory_gb=16)
     assert capsys.readouterr().out == "", "the refusal repeated for the same kernel"
 
     # (d) the named opening serves it anyway
     monkeypatch.setenv("NBX_AUTOTUNE_ANY_GENERATOR", "1")
-    assert C.lookup("matmul_kernel", _Tuner(), key, memory_class=16) is not None
+    assert C.lookup("matmul_kernel", _Tuner(), key, memory_gb=16) is not None

@@ -6,7 +6,7 @@ Every cell is READ from an artefact and says how; a cell with no artefact says `
 cell` / `not judged` — never a number:
     container     the cache entry's manifest (nbx version, trace date, NeuroTax version, the manifest's sha256[:12])
     census        rows of the committed census table per class (`derived`: the census is a derivation)
-    keys served   census keys whose certified entry covers the class (`entry_for_memory_class`), over the census rows
+    keys served   census keys whose certified entry covers the class (`entry_for_memory_gb`), over the census rows
     native/triton the LATEST certified-only gate row per (model, mode, class): PASS = rc 0 and zero miss, else ERROR
     R29 verdict   the outside judgment of that row's artefact, by sha256 (artefact-judgments.jsonl); `not judged`
                   when no judgment names the sha
@@ -61,7 +61,7 @@ def served_keys(census_rows, files, cls_gb, C):
             if e and key in e:
                 ent = e[key]
                 break
-        if ent is not None and C.entry_for_memory_class(ent, cls_gb) is not None:
+        if ent is not None and C.entry_for_memory_gb(ent, cls_gb) is not None:
             n += 1
     return n, len(census_rows)
 

@@ -32,7 +32,7 @@ from nbxtensor.ops import autotune_certified as C  # noqa: E402
 
 def class_proof(entry: dict, cls: int):
     """The (config, proof, excluded) this entry carries FOR that class, or None."""
-    cert = C.entry_for_memory_class(entry, cls)
+    cert = C.entry_for_memory_gb(entry, cls)
     if cert is None:
         return None
     return {k: v for k, v in cert.items() if k in ("config", "proof", "excluded")}
@@ -51,7 +51,7 @@ def generator_of(proof: dict) -> tuple:
 
 def destination_proof_for(d_entry: dict, cls: int, slot: str):
     """What the destination already holds for this class, or None."""
-    if C.proof_memory_class((d_entry.get("proof") or {})) == cls:
+    if C.proof_memory_gb((d_entry.get("proof") or {})) == cls:
         return d_entry.get("proof")
     return ((d_entry.get("variants") or {}).get(slot) or {}).get("proof")
 
@@ -81,7 +81,7 @@ def merge_file(src: Path, dst: Path, cls: int, apply: bool) -> dict:
         if have is not None and generator_of(have) > generator_of(cert.get("proof")):
             kept_newer += 1
             continue
-        d_cls = C.proof_memory_class((d_entry.get("proof") or {}))
+        d_cls = C.proof_memory_gb((d_entry.get("proof") or {}))
         if d_cls == cls:                       # the destination's PRIMARY is this class
             d_entry.update(cert)
         else:

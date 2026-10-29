@@ -43,60 +43,60 @@ def _entry(config_kw, memory_mb=None, hardware_profile=None):
 # --- the class a proof covers -------------------------------------------------
 
 def test_a_proof_with_a_device_record_names_its_memory_class():
-    assert C.proof_memory_class(_proof(memory_mb=32768)) == 32
-    assert C.proof_memory_class(_proof(memory_mb=16384)) == 16
+    assert C.proof_memory_gb(_proof(memory_mb=32768)) == 32
+    assert C.proof_memory_gb(_proof(memory_mb=16384)) == 16
     # the same rounding as the auto-profile name (autodetect: round(mb / 1024))
-    assert C.proof_memory_class(_proof(memory_mb=16160)) == 16
+    assert C.proof_memory_gb(_proof(memory_mb=16160)) == 16
 
 
 def test_a_legacy_single_card_profile_name_is_read_as_its_class():
-    assert C.proof_memory_class(_proof(hardware_profile="auto-v100-16gb-16g")) == 16
-    assert C.proof_memory_class(_proof(hardware_profile="auto-v100-32gb-32g")) == 32
+    assert C.proof_memory_gb(_proof(hardware_profile="auto-v100-16gb-16g")) == 16
+    assert C.proof_memory_gb(_proof(hardware_profile="auto-v100-32gb-32g")) == 32
 
 
 def test_a_legacy_rig_profile_name_does_not_say_which_card_ran():
     """`auto-4xv100-16gb-96.0g` names the SUM and the first card's model; the
     certifying card is unknown — `?`, never a plausible reconstruction."""
-    assert C.proof_memory_class(_proof(hardware_profile="auto-4xv100-16gb-96.0g")) is None
-    assert C.proof_memory_class(_proof()) is None
+    assert C.proof_memory_gb(_proof(hardware_profile="auto-4xv100-16gb-96.0g")) is None
+    assert C.proof_memory_gb(_proof()) is None
 
 
 # --- serving: only the class covered -----------------------------------------
 
 def test_an_entry_proven_on_32g_is_not_served_to_a_16g_card():
     e = _entry({"BLOCK_M": 64}, memory_mb=32768)
-    assert C.entry_for_memory_class(e, 32) is e
-    assert C.entry_for_memory_class(e, 16) is None
-    assert C.entry_for_memory_class(e, 24) is None
+    assert C.entry_for_memory_gb(e, 32) is e
+    assert C.entry_for_memory_gb(e, 16) is None
+    assert C.entry_for_memory_gb(e, 24) is None
 
 
 def test_an_entry_proven_on_16g_is_not_served_to_a_32g_card_either():
     """The rule is coverage, not 'more memory is fine': a 16g proof covers 16g."""
     e = _entry({"BLOCK_M": 64}, memory_mb=16384)
-    assert C.entry_for_memory_class(e, 16) is e
-    assert C.entry_for_memory_class(e, 32) is None
+    assert C.entry_for_memory_gb(e, 16) is e
+    assert C.entry_for_memory_gb(e, 32) is None
 
 
 def test_a_variant_serves_its_own_class_with_its_own_config():
     e = _entry({"BLOCK_M": 64}, memory_mb=16384)
     e["variants"] = {"32g": _entry({"BLOCK_M": 128}, memory_mb=32768)}
-    served = C.entry_for_memory_class(e, 32)
+    served = C.entry_for_memory_gb(e, 32)
     assert served is not None and served["config"]["kwargs"] == {"BLOCK_M": 128}
-    assert C.entry_for_memory_class(e, 16)["config"]["kwargs"] == {"BLOCK_M": 64}
-    assert C.covered_memory_classes(e) == {16, 32}
+    assert C.entry_for_memory_gb(e, 16)["config"]["kwargs"] == {"BLOCK_M": 64}
+    assert C.covered_memory_gbs(e) == {16, 32}
 
 
 def test_an_unknown_class_proof_is_served_to_no_card():
     e = _entry({"BLOCK_M": 64}, hardware_profile="auto-4xv100-16gb-96.0g")
-    assert C.covered_memory_classes(e) == set()
-    assert C.entry_for_memory_class(e, 16) is None
-    assert C.entry_for_memory_class(e, 32) is None
+    assert C.covered_memory_gbs(e) == set()
+    assert C.entry_for_memory_gb(e, 16) is None
+    assert C.entry_for_memory_gb(e, 32) is None
 
 
 def test_an_unknown_executing_class_is_served_nothing():
     """The engine that cannot say which card it is on cannot say it is covered."""
     e = _entry({"BLOCK_M": 64}, memory_mb=16384)
-    assert C.entry_for_memory_class(e, None) is None
+    assert C.entry_for_memory_gb(e, None) is None
 
 
 # --- the file gate: a variant's slot name must be its proof's class ------------
@@ -209,9 +209,9 @@ def two_class_rig(tmp_path, monkeypatch):
 
 
 def test_on_a_two_class_rig_the_card_is_unknown_at_seed_time(two_class_rig):
-    assert C.executing_memory_class() is None, "two classes visible, no tensor: unknown"
-    assert C.executing_memory_class([_tensor_on(0)]) == 16
-    assert C.executing_memory_class([_tensor_on(1)]) == 32
+    assert C.executing_memory_gb() is None, "two classes visible, no tensor: unknown"
+    assert C.executing_memory_gb([_tensor_on(0)]) == 16
+    assert C.executing_memory_gb([_tensor_on(1)]) == 32
 
 
 def test_an_evicted_seed_is_served_certified_on_the_proven_card(two_class_rig):
@@ -225,8 +225,8 @@ def test_an_evicted_seed_is_served_certified_on_the_proven_card(two_class_rig):
     C.note_local(1)
     assert C.override_seeded([(KERNEL, t)]) == 0, "nothing applied at seed time: the card is unknown"
     assert KEY not in t.cache, "the seed is evicted so the launch site decides with the card in hand"
-    mcls = C.executing_memory_class([_tensor_on(0)])
-    assert C.apply(KERNEL, t, KEY, memory_class=mcls) is True
+    mcls = C.executing_memory_gb([_tensor_on(0)])
+    assert C.apply(KERNEL, t, KEY, memory_gb=mcls) is True
     C.served_evicted(KERNEL, KEY)
     assert t.cache[KEY].kwargs["BLOCK_N"] == 128
     assert C.served() == {"certified": 1, "swept": 0, "local": 0}
@@ -243,8 +243,8 @@ def test_an_evicted_seed_is_put_back_on_the_card_the_proof_does_not_cover(two_cl
     t.cache[KEY] = local
     C.note_local(1)
     C.override_seeded([(KERNEL, t)])
-    mcls = C.executing_memory_class([_tensor_on(1)])
-    assert C.apply(KERNEL, t, KEY, memory_class=mcls) is False, "proven on 16 GB, this card is 32 GB"
+    mcls = C.executing_memory_gb([_tensor_on(1)])
+    assert C.apply(KERNEL, t, KEY, memory_gb=mcls) is False, "proven on 16 GB, this card is 32 GB"
     assert C.reseed_evicted(KERNEL, t, KEY) is True
     assert t.cache[KEY] is local, "the machine's own config, not a new sweep"
     assert C.served() == {"certified": 0, "swept": 0, "local": 1}

@@ -208,11 +208,11 @@ def cmd_autotune(args) -> int:
             by_class = {}; unknown = 0; by_backend = {}
             for entries in docs:
                 for entry in entries.values():
-                    classes = C.covered_memory_classes(entry)
+                    classes = C.covered_memory_gbs(entry)
                     if not classes: unknown += 1
                     for c in classes: by_class[c] = by_class.get(c, 0) + 1
                     for lab in (C.proof_backends(entry) or {"unknown"}): by_backend[lab] = by_backend.get(lab, 0) + 1
-            here = C.executing_memory_class()
+            here = C.executing_memory_gb()
             from neurobrix.cli.json_out import emit
             emit("autotune.status", {"profile": f"{prof[0]}/{prof[1]}" if prof else None, "directory": str(C.directory()),
                                      "enabled": bool(C.enabled()), "files": len(mine), "shapes": sum(len(e) for e in docs),
@@ -228,13 +228,13 @@ def cmd_autotune(args) -> int:
         mine = [p for p in files if root and p.parent == root]
         docs = [json.loads(p.read_text(encoding='utf-8')).get('entries') or {} for p in mine]
         total = sum(len(e) for e in docs)
-        here = C.executing_memory_class()
+        here = C.executing_memory_gb()
         by_class = {}
         unknown = 0
         by_backend = {}
         for entries in docs:
             for entry in entries.values():
-                classes = C.covered_memory_classes(entry)
+                classes = C.covered_memory_gbs(entry)
                 if not classes:
                     unknown += 1
                 for c in classes:

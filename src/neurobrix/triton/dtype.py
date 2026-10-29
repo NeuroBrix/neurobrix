@@ -465,7 +465,8 @@ def profile_triton_has_fp64(profile) -> bool:
 def declare_hardware_profile(profile) -> None:
     """Hand the hardware profile a run plans for to nbxtensor's wrappers (`set_hardware_profile`), then declare the
     float64 capability of its kernels as the profile's vendor files state it (`precision.kernels_carry_fp64.triton`,
-    `profile_triton_has_fp64`) through the library's setter — the library's own default is its backend's fact, and a
+    `profile_triton_has_fp64`) and each device's memory (`device_facts.declare_device_memory`) through the library's
+    setters — the library's own default is its backend's fact, and a
     NeuroBrix profile is the engine's to read (rule 1: the profile is the machine's identity card)."""
     if profile is None:
         return
@@ -473,6 +474,12 @@ def declare_hardware_profile(profile) -> None:
     from nbxtensor.backend.capabilities import set_backend_has_fp64
     set_hardware_profile(profile)
     set_backend_has_fp64(profile_triton_has_fp64(profile))
+    # each device's memory as the profile states it: the size the library's certified store serves entries for —
+    # a census shadow sees no card, and a plan made for a profile is keyed by ITS cards
+    from nbxtensor.backend.device_facts import declare_device_memory
+    for device in getattr(profile, "devices", None) or []:
+        if getattr(device, "memory_mb", None):
+            declare_device_memory(int(getattr(device, "index", 0)), int(device.memory_mb) << 20)
 
 
 def profile_triton_stores_fp64(profile) -> bool:

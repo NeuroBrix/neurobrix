@@ -286,39 +286,22 @@ def _tolerance_for(vendor: str, profile: str, dtype: str) -> Optional[float]:
 
 
 # ---------------------------------------------------------------------------
-# the memory class a proof covers (register entry 56)
+# the memory size a proof covers (register entry 56)
 # ---------------------------------------------------------------------------
-# One vendor profile can be carried by cards of different memory: this rack's
-# `nvidia/volta` is two 16 GB V100s and two 32 GB ones. A proof was made on ONE
-# card, and an entry serves only the memory class it covered — a card of
-# another class sweeps at runtime, announced. The class is the card's memory
-# rounded to GB, the same rounding the auto-profile name uses
-# (`core/prism/autodetect.py`: `round(memory_mb / 1024)`), so the class read
-# from a proof's device record and the one read from a legacy profile name are
-# the same number for the same card.
-from nbxtensor.host import need as _need   # the application's memory classes (nbxtensor.host), read at call time
+# One architecture can be carried by cards of different memory: this rack's V100s are two of 16 GB and two of 32 GB.
+# A proof was made on ONE card, and an entry serves only cards of the memory it was proven on — a card of another
+# size sweeps at runtime, announced. The size is the card's memory rounded to GB (`device_facts.memory_gb`), read from
+# the proof's device record (every committed proof carries one: 76 133 of 76 133 on 2026-10-29) and, for the card
+# running, from the device or what the application declared of it (`device_facts.device_memory_gb`).
+from nbxtensor.host import need as _need   # the application's census table (nbxtensor.host), read at call time
+from nbxtensor.backend.device_facts import memory_gb, device_memory_gb, declared_device_memory
 
 
-def memory_class_gb(memory_mb):
-    return _need("memory_class_gb")(memory_mb)
-
-
-def memory_class_from_profile_id(profile_id):
-    return _need("memory_class_from_profile_id")(profile_id)
-
-
-def proof_memory_class(proof: Optional[Dict[str, Any]]) -> Optional[int]:
-    """The memory class (GB) of the card a proof was made on, or None when
-    the proof cannot say. A device record (`machine.device.memory_mb`) says it
-    exactly; a legacy profile name says it through the profile grammar's own
-    parser (`memory_class_from_profile_id`: a single-card name by its suffix,
-    a rig-wide name is unknown — never a reconstruction)."""
-    machine = (proof or {}).get("machine") or {}
-    device = machine.get("device")
-    cls = memory_class_gb(device.get("memory_mb")) if isinstance(device, dict) else None
-    if cls is not None:
-        return cls
-    return memory_class_from_profile_id(machine.get("hardware_profile"))
+def proof_memory_gb(proof: Optional[Dict[str, Any]]) -> Optional[int]:
+    """The memory (GB) of the card a proof was made on, from its device record (`machine.device.memory_mb`); None when
+    the proof has none (it then serves no card: a size is never reconstructed from a name)."""
+    device = ((proof or {}).get("machine") or {}).get("device")
+    return memory_gb(device.get("memory_mb")) if isinstance(device, dict) else None
 
 
 def _variant_slot(cls: int) -> str:
@@ -370,15 +353,15 @@ def proof_backends(entry: Dict[str, Any]) -> set:
     return out
 
 
-def covered_memory_classes(entry: Dict[str, Any]) -> set:
+def covered_memory_gbs(entry: Dict[str, Any]) -> set:
     """Every memory class this entry carries a proof for: its primary proof's
     class and each variant's."""
     out = set()
-    cls = proof_memory_class(entry.get("proof"))
+    cls = proof_memory_gb(entry.get("proof"))
     if cls is not None:
         out.add(cls)
     for slot, var in (entry.get("variants") or {}).items():
-        vcls = proof_memory_class((var or {}).get("proof"))
+        vcls = proof_memory_gb((var or {}).get("proof"))
         if vcls is not None:
             out.add(vcls)
     return out
@@ -560,7 +543,7 @@ def entry_for_generator(entry: Optional[Dict[str, Any]],
     """The certification proven under THIS generator — the entry when its own
     proof names it, a variant that does, or None.
 
-    Symmetric with `entry_for_memory_class`. Register 56 established that an
+    Symmetric with `entry_for_memory_gb`. Register 56 established that an
     entry serves only the memory class it was proven on; the same argument
     applies to the compiler, and `entry_covers(..., need_generator=...)`
     already encodes it for the CERTIFIER (`--reprove-generator`). Nothing asked
@@ -584,17 +567,17 @@ def generator_refusals() -> Dict[str, int]:
     return dict(_GEN_REFUSED)
 
 
-def entry_for_memory_class(entry: Optional[Dict[str, Any]], cls: Optional[int]) -> Optional[Dict[str, Any]]:
+def entry_for_memory_gb(entry: Optional[Dict[str, Any]], cls: Optional[int]) -> Optional[Dict[str, Any]]:
     """The certification that covers this memory class — the entry itself when
     its primary proof was made at that class, the variant filed under it
     otherwise — or None. None for an unknown class: an engine that cannot say
     which card it is on cannot say it is covered."""
     if entry is None or cls is None:
         return None
-    if proof_memory_class(entry.get("proof")) == cls:
+    if proof_memory_gb(entry.get("proof")) == cls:
         return entry
     var = (entry.get("variants") or {}).get(_variant_slot(cls))
-    if var and proof_memory_class(var.get("proof")) == cls:
+    if var and proof_memory_gb(var.get("proof")) == cls:
         return var
     return None
 
@@ -628,7 +611,7 @@ def entry_covers(entries: Dict[str, Dict[str, Any]], ktext: str, cls: Optional[i
     e.g. `triton 3.8.0`) a certification proven under another generator does
     not count either — a Triton upgrade changes the code it emits, so every
     setting is re-proven under the new one (owner, 2026-09-16)."""
-    cert = entry_for_memory_class(entries.get(ktext), cls)
+    cert = entry_for_memory_gb(entries.get(ktext), cls)
     if cert is None:
         return False
     if need_clock and not proof_records_clock(cert.get("proof")):
@@ -659,13 +642,13 @@ def file_certification(entries: Dict[str, Dict[str, Any]], ktext: str, cert: Dic
     class is unknown (a rig-wide proof) is REPLACED by the fresh one: it served
     no card, and its config, deviation and timings leave with it — said here
     because a discarded measurement should be discarded on purpose."""
-    cls = proof_memory_class(cert.get("proof"))
+    cls = proof_memory_gb(cert.get("proof"))
     if cls is None:
         raise ValueError("the certification's proof does not say which card's memory it was made on "
                          "(no machine.device.memory_mb): refused — an entry without a memory class is served to no card")
     body = {"config": cert["config"], "proof": cert["proof"], "excluded": cert.get("excluded") or []}
     cur = entries.get(ktext)
-    if cur is None or proof_memory_class(cur.get("proof")) in (cls, None):
+    if cur is None or proof_memory_gb(cur.get("proof")) in (cls, None):
         variants = (cur or {}).get("variants")
         entries[ktext] = body if not variants else {**body, "variants": variants}
         entries[ktext].get("variants", {}).pop(_variant_slot(cls), None)
@@ -675,31 +658,24 @@ def file_certification(entries: Dict[str, Dict[str, Any]], ktext: str, cert: Dic
     cur.setdefault("variants", {})[_variant_slot(cls)] = body
 
 
-def executing_memory_class(args=None, device_idx: Optional[int] = None) -> Optional[int]:
-    """The memory class of the card a launch executes on: the device of its
-    first device-resident tensor argument (or the index given), looked up in
-    the Prism hardware profile in force — a static profile read, never a
-    driver query in the hot path. Without an index, the class only when every
-    device of the profile shares one; on a heterogeneous rig that is None."""
+def executing_memory_gb(args=None, device_idx: Optional[int] = None) -> Optional[int]:
+    """The memory (GB) of the card a launch executes on: the device of its first device-resident tensor argument (or
+    the index given), as the application declared it or the driver reports it (`device_facts.device_memory_gb`, read
+    once per device — never a driver query in the hot path). Without an index: the size every declared device shares;
+    on a rig of mixed sizes, or with nothing declared and no card, None."""
     if device_idx is None and args:
         for a in args:
             idx = getattr(a, "_device_idx", None)
             if idx is not None and getattr(a, "_device", None) != "cpu":
                 device_idx = int(idx)
                 break
-    try:
-        from nbxtensor.ops.wrappers import get_hardware_profile
-        prof = get_hardware_profile()
-    except Exception:
-        return None
-    devices = getattr(prof, "devices", None) if prof is not None else None
-    if not devices:
-        return None
     if device_idx is not None:
-        dev = next((d for d in devices if getattr(d, "index", None) == int(device_idx)), None)
-        return memory_class_gb(getattr(dev, "memory_mb", None)) if dev is not None else None
-    classes = {memory_class_gb(getattr(d, "memory_mb", None)) for d in devices}
-    return classes.pop() if len(classes) == 1 else None
+        return device_memory_gb(int(device_idx))
+    declared = declared_device_memory()
+    if declared:
+        sizes = {memory_gb(b / (1 << 20)) for b in declared.values()}
+        return sizes.pop() if len(sizes) == 1 else None
+    return None
 
 
 def _validate_certification(where: str, entry: Any, fmt: str, expected_tol, key, stem_dtype, problems: List[str]) -> None:
@@ -792,7 +768,7 @@ def validate(doc: Any, path: Path, tuner=None) -> List[str]:
         for slot, var in variants.items():
             vwhere = f"{where} variant {slot}"
             _validate_certification(vwhere, var, fmt, expected_tol, key, stem_dtype, problems)
-            vcls = proof_memory_class(var.get("proof")) if isinstance(var, dict) else None
+            vcls = proof_memory_gb(var.get("proof")) if isinstance(var, dict) else None
             if vcls is None:
                 problems.append(f"{vwhere}: its proof does not say which card's memory it was made on")
             elif _variant_slot(vcls) != str(slot):
@@ -837,10 +813,10 @@ def _load(vendor: str, profile: str, kernel_qual: str, dtype: str, tuner=None) -
 
 
 def lookup(kernel_qual: str, tuner, key: tuple, ignore_switch: bool = False,
-           memory_class: Optional[int] = None, any_class: bool = False) -> Optional[Dict[str, Any]]:
+           memory_gb: Optional[int] = None, any_class: bool = False) -> Optional[Dict[str, Any]]:
     """The certification for this profile, kernel, dtype, shape AND the memory
     class of the executing card, or None. An entry proven on another class is
-    not served (`entry_for_memory_class`); `memory_class` None means the card
+    not served (`entry_for_memory_gb`); `memory_gb` None means the card
     is unknown, and unknown is served nothing. `any_class`: the raw entry
     whatever its class — for a report that must name what exists, never to
     serve. `ignore_switch`: read the directory even when
@@ -857,7 +833,7 @@ def lookup(kernel_qual: str, tuner, key: tuple, ignore_switch: bool = False,
     entry = entries.get(key_repr(key))
     if any_class:
         return entry
-    cert = entry_for_memory_class(entry, memory_class)
+    cert = entry_for_memory_gb(entry, memory_gb)
     if cert is None:
         return None
     # THE GENERATOR, asked here for the same reason the memory class is: a
@@ -941,18 +917,18 @@ def computed_key(tuner, key: tuple, kwargs: Optional[Dict[str, Any]] = None) -> 
 
 
 def apply(kernel_qual: str, tuner, key: tuple, lookup_key: Optional[tuple] = None,
-          memory_class: Optional[int] = None) -> bool:
+          memory_gb: Optional[int] = None) -> bool:
     """Put the certified config in the tuner's cache for `key` — no sweep, no
     screen. False when the directory has nothing for it ON THIS CARD's memory
     class. `lookup_key`: the key the directory is read at when it differs from
     the tuner's (a promoted operand keyed by its computed dtype,
-    `computed_key`). `memory_class`: the executing card's, from
-    `executing_memory_class(args)` at a launch site; None here means "the
+    `computed_key`). `memory_gb`: the executing card's, from
+    `executing_memory_gb(args)` at a launch site; None here means "the
     class every device of the profile in force shares", which is None — served
     nothing — on a heterogeneous rig where the launch site did not say."""
-    if memory_class is None:
-        memory_class = executing_memory_class()
-    entry = lookup(kernel_qual, tuner, lookup_key or key, memory_class=memory_class)
+    if memory_gb is None:
+        memory_gb = executing_memory_gb()
+    entry = lookup(kernel_qual, tuner, lookup_key or key, memory_gb=memory_gb)
     if entry is None:
         return False
     import triton
@@ -983,7 +959,7 @@ def override_seeded(tuners=None) -> int:
     # then EVICTED, its local config remembered, so the launch site — which
     # knows the tensor's card — decides: the certified setting for that
     # card's class, or the local config put back (`reseed_evicted`).
-    mcls = executing_memory_class()
+    mcls = executing_memory_gb()
     n = 0
     for qual, tuner in tuners:
         cache = getattr(tuner, "cache", None)
@@ -1004,7 +980,7 @@ def override_seeded(tuners=None) -> int:
                 continue
             local = cache.pop(key, None)
             if mcls is not None:
-                if apply(qual, tuner, key, lookup_key=twin, memory_class=mcls):
+                if apply(qual, tuner, key, lookup_key=twin, memory_gb=mcls):
                     n += 1
                 elif local is not None:
                     cache[key] = local                       # certified elsewhere, not for this card: the local config stays
@@ -1053,7 +1029,7 @@ class KeyNotCertified(RuntimeError):
     """A key a confirmation run met that the certified directory does not serve."""
 
 
-def census_row(kernel_qual: str, key: tuple, memory_class: Optional[int]) -> str:
+def census_row(kernel_qual: str, key: tuple, memory_gb: Optional[int]) -> str:
     """Where the census table stands on this key, in words: the table of the profile in force and
     this card's memory class holds it (a certification gap) or not (a census defect)."""
     from nbxtensor.host import need as _need
@@ -1061,11 +1037,11 @@ def census_row(kernel_qual: str, key: tuple, memory_class: Optional[int]) -> str
     prof = active_profile()
     if prof is None:
         return "no vendor profile is bound, so no census table can be named"
-    if memory_class is None:
+    if memory_gb is None:
         return f"the card's memory class is unknown, so no {prof[0]}/{prof[1]} census table can be named"
     line = census_table.key_line(kernel_qual, key_repr(tuple(key)))
     try:
-        path, rows = census_table.rows_for(kernel_qual, key_repr(tuple(key)), prof[0], prof[1], memory_class)
+        path, rows = census_table.rows_for(kernel_qual, key_repr(tuple(key)), prof[0], prof[1], memory_gb)
     except Exception as exc:  # noqa: BLE001 — said: an unreadable table is not an absent row
         return f"the census table could not be read ({type(exc).__name__}: {exc})"
     if not path.exists():
@@ -1086,13 +1062,13 @@ def refuse_missing(kernel_qual: str, tuner, key: tuple) -> None:
     why = ""
     here = None
     try:
-        here = executing_memory_class(list((getattr(tuner, "nargs", None) or {}).values()) or None)
+        here = executing_memory_gb(list((getattr(tuner, "nargs", None) or {}).values()) or None)
     except Exception:  # noqa: BLE001 — an unknown class is said by census_row
         here = None
     try:
         raw = lookup(kernel_qual, tuner, key, ignore_switch=True, any_class=True)
         if raw is not None:
-            covered = sorted(covered_memory_classes(raw))
+            covered = sorted(covered_memory_gbs(raw))
             why = (f"; the directory certifies it for {', '.join(f'{c} GB' for c in covered) or 'no known memory class'} "
                    f"and this card is {f'{here} GB' if here is not None else 'of unknown memory'} (register 56)")
     except Exception as exc:  # noqa: BLE001 — the reason failed to compute: said, the refusal stands
@@ -1122,8 +1098,8 @@ def announce_missing(kernel_qual: str, tuner, key: tuple) -> None:
     try:
         raw = lookup(kernel_qual, tuner, key, ignore_switch=True, any_class=True)
         if raw is not None:
-            covered = sorted(covered_memory_classes(raw))
-            here = executing_memory_class(list((getattr(tuner, "nargs", None) or {}).values()) or None)
+            covered = sorted(covered_memory_gbs(raw))
+            here = executing_memory_gb(list((getattr(tuner, "nargs", None) or {}).values()) or None)
             why = (f" — certified for {', '.join(f'{c} GB' for c in covered) or 'no known memory class'}, "
                    f"this card is {f'{here} GB' if here is not None else 'of unknown memory'}, not served (register 56)")
     except Exception as exc:                # the reason failed to compute: say that, never an empty reason
@@ -1212,8 +1188,8 @@ def report_contradictions(tuner, dropped) -> List[Dict[str, Any]]:
         return []
     # the proof's sweep arm is where the two can disagree — against the certification
     # made for THIS card's memory class (a contradiction with another class's proof is not one)
-    mcls = executing_memory_class(list((getattr(tuner, "nargs", None) or {}).values()) or None)
-    entry = lookup(qual, tuner, key, ignore_switch=True, memory_class=mcls)
+    mcls = executing_memory_gb(list((getattr(tuner, "nargs", None) or {}).values()) or None)
+    entry = lookup(qual, tuner, key, ignore_switch=True, memory_gb=mcls)
     if entry is None:
         raw = lookup(qual, tuner, key, ignore_switch=True, any_class=True)
         if raw is not None and mcls is None:
@@ -1221,7 +1197,7 @@ def report_contradictions(tuner, dropped) -> List[Dict[str, Any]]:
             # contradiction nor a clean pass — said, never dropped
             print(f"[AUTOTUNE_SCREEN] UNADJUDICATED — {kernel_short(qual)} {output_dtype(tuner, key)} "
                   f"({describe_key(tuner, key)}): the directory certifies this shape for "
-                  f"{', '.join(f'{c} GB' for c in sorted(covered_memory_classes(raw))) or 'no known memory class'} and the "
+                  f"{', '.join(f'{c} GB' for c in sorted(covered_memory_gbs(raw))) or 'no known memory class'} and the "
                   f"executing card's memory class is unknown, so the runtime exclusion cannot be read against it.", flush=True)
         return []
     found = []

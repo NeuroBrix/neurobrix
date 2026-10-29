@@ -43,14 +43,14 @@ def main(argv=None) -> int:
             print(f"unreadable {path}: {exc}"); continue
         for ktext, cert in (d.get("entries") or {}).items():
             base = (e.get("entries") or {}).get(ktext)
-            cls_new = C.proof_memory_class(cert.get("proof"))
+            cls_new = C.proof_memory_gb(cert.get("proof"))
             if base is None:
                 missing += 1
                 rows.append((rel.name, ktext, cls_new, None, "no engine entry", None, None))
                 continue
-            classes = C.covered_memory_classes(base)
+            classes = C.covered_memory_gbs(base)
             other = next((c for c in classes if c != cls_new), None)
-            ref = C.entry_for_memory_class(base, other) if other is not None else None
+            ref = C.entry_for_memory_gb(base, other) if other is not None else None
             if ref is None:
                 missing += 1
                 rows.append((rel.name, ktext, cls_new, None, "engine entry has no other class", None, None))
