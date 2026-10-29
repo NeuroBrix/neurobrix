@@ -1,6 +1,7 @@
-"""NBXDtype and its tables: the dtype enum NBXTensor carries, its byte sizes, the names it parses (a NeuroBrix or a
-torch spelling, read as text), the numpy and array-interface maps. Cut out of tensor.py as it was (M2, 2026-10-29); the
-dtype area reads it from the one table next (the Mac's M2)."""
+"""NBXDtype and its tables: the dtype enum NBXTensor carries (its values frozen: new members are appended, never
+renumbered), and the tables derived from the ONE dtype table (`dtypes.yml`): byte sizes, the spellings it parses (a
+table name, a launch-key spelling, an alias such as torch's `half`; a `torch.` prefix read as text), the numpy names
+and the array-interface type strings, the floating and complex kinds."""
 
 from __future__ import annotations
 
@@ -25,63 +26,34 @@ class NBXDtype(IntEnum):
     complex128 = 11
 
 
-# Bytes per element of every NBXDtype: the library's own, beside the enum it defines (the library
-# boundary: nbx_tensor imports no engine module). The engine's table (config/dtypes.yml) is held
-# equal to it member by member by tests/unit/dtype/test_the_two_itemsize_readers_are_one.py.
-_DTYPE_SIZES = {
-    NBXDtype.float16: 2, NBXDtype.bfloat16: 2,
-    NBXDtype.float32: 4, NBXDtype.float64: 8,
-    NBXDtype.int8: 1, NBXDtype.int16: 2, NBXDtype.int32: 4, NBXDtype.int64: 8,
-    NBXDtype.uint8: 1, NBXDtype.bool_: 1,
-    NBXDtype.complex64: 8, NBXDtype.complex128: 16,
-}
-
-_DTYPE_FROM_STR = {
-    'float16': NBXDtype.float16, 'fp16': NBXDtype.float16, 'half': NBXDtype.float16,
-    'bfloat16': NBXDtype.bfloat16, 'bf16': NBXDtype.bfloat16,
-    'float32': NBXDtype.float32, 'fp32': NBXDtype.float32, 'float': NBXDtype.float32,
-    'float64': NBXDtype.float64, 'fp64': NBXDtype.float64, 'double': NBXDtype.float64,
-    'int8': NBXDtype.int8, 'int16': NBXDtype.int16,
-    'int32': NBXDtype.int32, 'int': NBXDtype.int32,
-    'int64': NBXDtype.int64, 'long': NBXDtype.int64,
-    'uint8': NBXDtype.uint8, 'byte': NBXDtype.uint8,
-    'bool': NBXDtype.bool_,
-    'complex64': NBXDtype.complex64, 'complex128': NBXDtype.complex128,
-}
-
-# numpy dtype string → NBXDtype
-_NUMPY_DTYPE_MAP = {
-    'float16': NBXDtype.float16, 'float32': NBXDtype.float32,
-    'float64': NBXDtype.float64, 'int8': NBXDtype.int8,
-    'int16': NBXDtype.int16, 'int32': NBXDtype.int32,
-    'int64': NBXDtype.int64, 'uint8': NBXDtype.uint8,
-    'bool': NBXDtype.bool_,
-    # Complex: numpy stores complex as interleaved [real, imag] pairs — exactly
-    # the NBXTensor complex storage convention (complex64 = fp32 pairs,
-    # complex128 = fp64 pairs). Tagging the raw-byte copy with the complex dtype
-    # therefore yields a valid complex NBXTensor (view_as_real/_complex reinterpret
-    # the same bytes). Without these entries from_numpy fell through to float32,
-    # mistagging complex constants (e.g. Wan RoPE freqs, complex128 [seq, hd/2])
-    # as garbage floats -> NaN through the RoPE rotation -> dead output.
-    'complex64': NBXDtype.complex64, 'complex128': NBXDtype.complex128,
-}
-
-# __cuda_array_interface__ typestr
-_DTYPE_TYPESTR = {
-    NBXDtype.float16: '<f2', NBXDtype.bfloat16: '<V2',
-    NBXDtype.float32: '<f4', NBXDtype.float64: '<f8',
-    NBXDtype.int8: '<i1', NBXDtype.int16: '<i2',
-    NBXDtype.int32: '<i4', NBXDtype.int64: '<i8',
-    NBXDtype.uint8: '<u1', NBXDtype.bool_: '|b1',
-    NBXDtype.complex64: '<c8', NBXDtype.complex128: '<c16',
-}
-
-_FLOATING_DTYPES = frozenset({
-    NBXDtype.float16, NBXDtype.bfloat16, NBXDtype.float32, NBXDtype.float64,
-})
+def _table_name(m: "NBXDtype") -> str:
+    """A member's name in the dtype table (`bool_` is Python's keyword escape of `bool`)."""
+    return "bool" if m is NBXDtype.bool_ else m.name
 
 
-_COMPLEX_DTYPES = frozenset({NBXDtype.complex64, NBXDtype.complex128})
+def _derive():
+    """Every table of the enum, read from the one dtype table (`dtypes.yml`): widths, the spellings a caller may name
+    a dtype by, the numpy names, the array-interface type strings, the floating and complex kinds."""
+    from .itemsize import dtype_table
+    entries = dtype_table()["dtypes"]
+    sizes, names, numpy_names, typestr, floating, complex_ = {}, {}, {}, {}, set(), set()
+    for m in NBXDtype:
+        e = entries[_table_name(m)]
+        sizes[m] = int(e["bits"]) // 8
+        for spelling in [_table_name(m), *(e.get("autotune_keys") or ()), *(e.get("aliases") or ())]:
+            names[spelling] = m
+        if "numpy" in e:
+            numpy_names[e["numpy"]] = m
+        typestr[m] = e["typestr"]
+        if e["kind"] == "float":
+            floating.add(m)
+        elif e["kind"] == "complex":
+            complex_.add(m)
+    return sizes, names, numpy_names, typestr, frozenset(floating), frozenset(complex_)
+
+
+# Read once from the table: no width, spelling or type string is written here (R-NBXT 2, one fact once).
+_DTYPE_SIZES, _DTYPE_FROM_STR, _NUMPY_DTYPE_MAP, _DTYPE_TYPESTR, _FLOATING_DTYPES, _COMPLEX_DTYPES = _derive()
 
 
 def dtype_size(dtype: NBXDtype) -> int:

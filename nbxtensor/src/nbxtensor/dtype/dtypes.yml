@@ -9,6 +9,11 @@
 #
 # Per entry:
 #   bits           storage bits per element (bytes = bits / 8 for every dense dtype)
+#   typestr        the array-interface type string of the element (`__cuda_array_interface__`, numpy's
+#                  `__array_interface__`); bfloat16, which numpy cannot name, is the 2-byte void '<V2'
+#   numpy          the numpy dtype name, when numpy has one
+#   aliases        other spellings a caller may name it by (torch's `half`, `float`, `double`, `int`,
+#                  `long`, `byte`)
 #   kind           float, int, uint, bool or complex — the class the promotion rule reads
 #                  (nbxtensor.dtype.promotion)
 #   max            a float's largest finite value: (2 - 2^(1-p)) x 2^emax for an IEEE-style format of p
@@ -28,36 +33,36 @@
 
 dtypes:
   # IEEE 754-2008 binary64.
-  float64: {bits: 64, kind: float, max: 1.7976931348623157e+308, safetensors: F64, autotune_keys: [fp64], without_fp64: float32}
+  float64: {bits: 64, kind: float, max: 1.7976931348623157e+308, safetensors: F64, autotune_keys: [fp64], without_fp64: float32, typestr: '<f8', numpy: float64, aliases: [double]}
   # IEEE 754-2008 binary32.
-  float32: {bits: 32, kind: float, max: 3.4028234663852886e+38, safetensors: F32, autotune_keys: [fp32]}
+  float32: {bits: 32, kind: float, max: 3.4028234663852886e+38, safetensors: F32, autotune_keys: [fp32], typestr: '<f4', numpy: float32, aliases: [float]}
   # NVIDIA TF32 (A100 architecture whitepaper): a tensor-core COMPUTE format of 19 significant
   # bits, stored and moved in a full 32-bit fp32 word.
   tfloat32: {bits: 32, kind: float, max: 3.4011621342146535e+38}
   # Google Brain bfloat16: the top 16 bits of a binary32.
-  bfloat16: {bits: 16, kind: float, max: 3.3895313892515355e+38, safetensors: BF16, autotune_keys: [bf16]}
+  bfloat16: {bits: 16, kind: float, max: 3.3895313892515355e+38, safetensors: BF16, autotune_keys: [bf16], typestr: '<V2'}
   # IEEE 754-2008 binary16.
-  float16: {bits: 16, kind: float, max: 65504.0, safetensors: F16, autotune_keys: [fp16]}
+  float16: {bits: 16, kind: float, max: 65504.0, safetensors: F16, autotune_keys: [fp16], typestr: '<f2', numpy: float16, aliases: [half]}
   # OCP 8-bit Floating Point Specification (OFP8) v1.0, E4M3 (finite, no inf) and E5M2;
   # torch.float8_e4m3fn / torch.float8_e5m2. The fnuz variants appear nowhere in this code.
   float8_e4m3fn: {bits: 8, kind: float, max: 448.0, safetensors: F8_E4M3}
   float8_e5m2: {bits: 8, kind: float, max: 57344.0, safetensors: F8_E5M2}
   # Two's-complement integers of the stated width (C99 <stdint.h>, numpy, torch).
-  int64: {bits: 64, kind: int, safetensors: I64, autotune_keys: [int64]}
-  int32: {bits: 32, kind: int, safetensors: I32, autotune_keys: [int32]}
-  int16: {bits: 16, kind: int, safetensors: I16, autotune_keys: [int16]}
-  int8: {bits: 8, kind: int, safetensors: I8, autotune_keys: [int8]}
+  int64: {bits: 64, kind: int, safetensors: I64, autotune_keys: [int64], typestr: '<i8', numpy: int64, aliases: [long]}
+  int32: {bits: 32, kind: int, safetensors: I32, autotune_keys: [int32], typestr: '<i4', numpy: int32, aliases: [int]}
+  int16: {bits: 16, kind: int, safetensors: I16, autotune_keys: [int16], typestr: '<i2', numpy: int16}
+  int8: {bits: 8, kind: int, safetensors: I8, autotune_keys: [int8], typestr: '<i1', numpy: int8}
   # Unsigned integers of the stated width; uint16/32/64 are carried by launch keys (a bf16 bit
   # carrier, sort and RNG kernels), not by any container.
   uint64: {bits: 64, kind: uint, autotune_keys: [uint64]}
   uint32: {bits: 32, kind: uint, autotune_keys: [uint32]}
   uint16: {bits: 16, kind: uint, autotune_keys: [uint16]}
-  uint8: {bits: 8, kind: uint, safetensors: U8, autotune_keys: [uint8]}
+  uint8: {bits: 8, kind: uint, safetensors: U8, autotune_keys: [uint8], typestr: '<u1', numpy: uint8, aliases: [byte]}
   # One byte per element in torch and numpy (no bit packing); `int1` is Triton's spelling.
-  bool: {bits: 8, kind: bool, safetensors: BOOL, autotune_keys: [int1, bool]}
+  bool: {bits: 8, kind: bool, safetensors: BOOL, autotune_keys: [int1, bool], typestr: '|b1', numpy: bool}
   # Two binary32 / two binary64, interleaved [real, imag] (numpy and torch layout).
-  complex64: {bits: 64, kind: complex}
-  complex128: {bits: 128, kind: complex, without_fp64: complex64}
+  complex64: {bits: 64, kind: complex, typestr: '<c8', numpy: complex64}
+  complex128: {bits: 128, kind: complex, without_fp64: complex64, typestr: '<c16', numpy: complex128}
 
 # Packed weight encodings: bits per element is a fraction of a byte and the group scales live
 # beside the packed values. Only the encodings this engine executes
