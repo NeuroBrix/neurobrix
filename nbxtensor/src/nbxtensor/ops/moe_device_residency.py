@@ -75,8 +75,8 @@ def expert_miss_copy_kernel(
     BLOCK: tl.constexpr,
     W_BF16: tl.constexpr,
 ):
-    k = tl.program_id(0)
-    p = tl.program_id(1)
+    k = tl.program_id(0).to(tl.int64)
+    p = tl.program_id(1).to(tl.int64)
     c = tl.program_id(2).to(tl.int64)
     e_raw = tl.load(miss_ptr + k)
     # a hit (-1) copies nothing: masked, not returned (a bare return is unstructured control flow some backends do
