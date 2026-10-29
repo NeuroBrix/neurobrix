@@ -418,7 +418,7 @@ class LayerPartitioner:
     def _change_peak(segments: List[Segment], parked_cap_bytes: float, pool_fit_slack: float) -> int:
         """The most a piece change holds: the incoming arena, the outgoing one when the pool parks
         it (at most `parked_cap_bytes`) and the incoming request does not take it back (it lies in
-        [w, (1 + pool_fit_slack) w] of that request, `DeviceAllocator._pool_take`), and the activations
+        [w, (1 + pool_fit_slack) w] of that request, `DeviceAllocator._POOL.take`), and the activations
         live across the cut — every consecutive pair, the last piece to the first included. One
         piece: no change."""
         if len(segments) < 2:

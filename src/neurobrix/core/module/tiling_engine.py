@@ -599,7 +599,7 @@ class TilingEngine:
             try:
                 from nbxtensor.memory.allocator import DeviceAllocator as _DA
                 live = sum(_DA._cuda_live_bytes.values())
-                pooled = sum(_DA._pool_cached_bytes.values())
+                pooled = sum(_DA._POOL.cached.values())
             except Exception:
                 live = pooled = -1
             # the host through the engine's one reader (core.host_memory): no undeclared import here

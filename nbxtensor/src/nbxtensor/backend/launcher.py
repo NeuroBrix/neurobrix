@@ -1712,7 +1712,7 @@ def bench_would_swap(total_bytes: int):
         try:
             from nbxtensor.memory.allocator import DeviceAllocator as _DA
             _live = _DA.memory_allocated() / 1e6
-            _cached = sum(_DA._pool_cached_bytes.values()) / 1e6
+            _cached = sum(_DA._POOL.cached.values()) / 1e6
             _n = len(_DA._cuda_ptr_size)
             _acct = (f" | allocator: live {_live:.0f} MB, pooled {_cached:.0f} MB, "
                      f"{_n} live pointers")

@@ -185,7 +185,7 @@ def _watermark_sample(path: str, op_idx: int, op, arena, deferred_bytes) -> None
         rt, bk = _rt_fn(), _bk_fn()
         dev = _DA.get_device()
         live = _DA._cuda_live_bytes.get(dev, 0)
-        pool = sum(sz * len(ptrs) for sz, ptrs in _DA._pool_free.get(dev, {}).items())
+        pool = sum(sz * len(ptrs) for sz, ptrs in _DA._POOL.free.get(dev, {}).items())
         free_b, total_b = _ct.c_size_t(), _ct.c_size_t()
         mgi = bk.get("mem_get_info", "cudaMemGetInfo")
         if hasattr(rt, mgi):
@@ -3361,7 +3361,7 @@ class TritonSequence:
             self._run_live_n = getattr(self, "_run_live_n", 0) + 1
             print(f"[NBX_RUN_LIVE] {self.dag.get('component_name')} run#{self._run_live_n} entry "
                   f"live={DeviceAllocator._cuda_live_bytes.get(self.device_idx, 0) / 2**20:.0f}MB "
-                  f"pool={DeviceAllocator._pool_cached_bytes.get(self.device_idx, 0) / 2**20:.0f}MB", flush=True)
+                  f"pool={DeviceAllocator._POOL.cached.get(self.device_idx, 0) / 2**20:.0f}MB", flush=True)
         try:
             # Phase 4a frozen-plan replay (the engine's default, `replay.ENABLED`):
             # 1st run per bucket = warmup (autotune fires), 2nd =
@@ -3440,7 +3440,7 @@ class TritonSequence:
             if _live_diag:
                 print(f"[NBX_RUN_LIVE] {self.dag.get('component_name')} run#{self._run_live_n} exit  "
                       f"live={DeviceAllocator._cuda_live_bytes.get(self.device_idx, 0) / 2**20:.0f}MB "
-                      f"pool={DeviceAllocator._pool_cached_bytes.get(self.device_idx, 0) / 2**20:.0f}MB", flush=True)
+                      f"pool={DeviceAllocator._POOL.cached.get(self.device_idx, 0) / 2**20:.0f}MB", flush=True)
 
     def _maybe_trace_nan(self, op: 'CompiledOp', arena) -> None:
         """Scan op output(s) for Inf/NaN. Print the first offender on

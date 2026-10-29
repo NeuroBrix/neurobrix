@@ -10,6 +10,7 @@ import pytest
 
 from nbxtensor import tensor as N
 import nbxtensor.memory.allocator as _nbx_allocator
+from nbxtensor.memory.pool import SegmentPool
 import nbxtensor.backend.runtime as _nbx_runtime
 
 DA = _nbx_allocator.DeviceAllocator
@@ -40,9 +41,8 @@ def rt(monkeypatch):
     monkeypatch.setattr(_nbx_runtime, "_gpu_runtime", lambda: fake)
     monkeypatch.setattr(_nbx_runtime, "_active_backend", lambda: {"malloc": "cudaMalloc", "free": "cudaFree"})
     monkeypatch.setattr(DA, "_pool_enabled_init", True, raising=False)
-    for name, value in (("_pool_enabled", True), ("_blocks", {}), ("_pool_free", {}),
-                        ("_pool_sizes", {}), ("_pool_cached_bytes", {}), ("_pool_cached_peak", {}),
-                        ("_pool_alloc_size", {}), ("_cuda_ptr_size", {}), ("_cuda_ptr_device", {}),
+    for name, value in (("_pool_enabled", True), ("_POOL", SegmentPool(on_block=DA._block_reported)),
+                        ("_cuda_ptr_size", {}), ("_cuda_ptr_device", {}),
                         ("_cuda_ptr_epoch", {}), ("_cuda_live_bytes", {}), ("_cuda_peak_bytes", {}),
                         ("_range_size", {}), ("_range_bases", []), ("_pool_cap_bytes", {0: 1 << 40}),
                         ("_rung_limit_bytes", {})):
@@ -87,4 +87,4 @@ def test_a_weight_arena_freed_goes_back_to_the_driver_whole_not_into_the_pool(rt
     assert not rt.live, "the freed weight arena stayed held from the driver"
     small = DA.malloc_cuda(19 * MB)                             # the encoder's output, outliving the segment
     DA.malloc_cuda(600 * MB, pooled=False)                      # the next segment's weights: 19 + 600 <= 724
-    assert DA._blocks.get(small) is not None and sum(rt.live.values()) == 619 * MB
+    assert DA._POOL.blocks.get(small) is not None and sum(rt.live.values()) == 619 * MB

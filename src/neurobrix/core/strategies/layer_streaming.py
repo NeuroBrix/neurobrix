@@ -74,7 +74,7 @@ def _segment_memory_line(seg_exec) -> str:
         from nbxtensor.memory.allocator import DeviceAllocator as DA
         idx = int(dev.split(":")[1]) if ":" in dev else 0
         return (f"device live {DA._cuda_live_bytes.get(idx, 0) / 2**20:.0f} MB, "
-                f"pool cached {DA._pool_cached_bytes.get(idx, 0) / 2**20:.0f} MB")
+                f"pool cached {DA._POOL.cached.get(idx, 0) / 2**20:.0f} MB")
     from neurobrix.core.device_utils import device_allocator_figures
     f = device_allocator_figures(dev or None)
     if "allocated_mb" not in f:

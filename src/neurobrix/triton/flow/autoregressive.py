@@ -111,14 +111,14 @@ def _phase_mem_note() -> str:
     from nbxtensor.memory.allocator import DeviceAllocator as _DA
     d = _DA.get_device()
     live = _DA._cuda_live_bytes.get(d, 0) / 2**20
-    pooled = _DA._pool_cached_bytes.get(d, 0) / 2**20
+    pooled = _DA._POOL.cached.get(d, 0) / 2**20
     free = _DA.device_free_bytes() / 2**20
     note = f"live={live:.0f}MB pool={pooled:.0f}MB free={free:.0f}MB"
     if _os.environ.get("NBX_PHASE_BLOCKS") == "1":
         # The blocks BEHIND the number. A single `live=` reading says a plan and an
         # execution disagree; it never says which allocation is the difference. The
         # sizes do: a weight is recognisable by its byte count.
-        pooled_ptrs = {q for per in _DA._pool_free.values() for qs in per.values() for q in qs}
+        pooled_ptrs = {q for per in _DA._POOL.free.values() for qs in per.values() for q in qs}
         blocks = sorted(((sz, q) for q, sz in _DA._cuda_ptr_size.items()
                          if q not in pooled_ptrs
                          and _DA._cuda_ptr_device.get(q) == d), reverse=True)

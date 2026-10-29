@@ -13,6 +13,7 @@ import pytest
 
 from nbxtensor import tensor as N
 import nbxtensor.memory.allocator as _nbx_allocator
+from nbxtensor.memory.pool import SegmentPool
 import nbxtensor.backend.runtime as _nbx_runtime
 
 DA = _nbx_allocator.DeviceAllocator
@@ -44,9 +45,8 @@ def rt(monkeypatch):
     monkeypatch.setattr(_nbx_runtime, "_gpu_runtime", lambda: fake)
     monkeypatch.setattr(_nbx_runtime, "_active_backend", lambda: {"malloc": "cudaMalloc", "free": "cudaFree"})
     monkeypatch.setattr(DA, "_pool_enabled_init", True, raising=False)
-    for name, value in (("_pool_enabled", True), ("_blocks", {}), ("_pool_free", {}),
-                        ("_pool_sizes", {}), ("_pool_cached_bytes", {}), ("_pool_cached_peak", {}),
-                        ("_pool_alloc_size", {}), ("_cuda_ptr_size", {}), ("_cuda_ptr_device", {}),
+    for name, value in (("_pool_enabled", True), ("_POOL", SegmentPool(on_block=DA._block_reported)),
+                        ("_cuda_ptr_size", {}), ("_cuda_ptr_device", {}),
                         ("_cuda_ptr_epoch", {}), ("_cuda_live_bytes", {}), ("_cuda_peak_bytes", {}),
                         ("_range_size", {}), ("_range_bases", []), ("_pool_cap_bytes", {0: 0})):
         monkeypatch.setattr(DA, name, value)
@@ -63,8 +63,8 @@ def test_a_freed_large_block_serves_a_smaller_request_and_coalesces_back(rt):
     assert rt.mallocs == 1 and c == a + 2 * MB, "the split-off remainder did not serve the next request"
     DA.free_cuda(b)
     DA.free_cuda(c)
-    assert DA._blocks[a][0] == 3 * MB and DA._blocks[a][1] is None and DA._blocks[a][2] is None, "not coalesced"
-    assert DA._pool_cached_bytes[0] == 3 * MB
+    assert DA._POOL.blocks[a][0] == 3 * MB and DA._POOL.blocks[a][1] is None and DA._POOL.blocks[a][2] is None, "not coalesced"
+    assert DA._POOL.cached[0] == 3 * MB
 
 
 def test_a_wholly_free_segment_over_the_cap_returns_to_the_driver(rt, monkeypatch):
@@ -74,7 +74,7 @@ def test_a_wholly_free_segment_over_the_cap_returns_to_the_driver(rt, monkeypatc
     DA.free_cuda(b)                           # 1 MB parked, under the cap
     assert len(rt.live) == 2
     DA.free_cuda(a)                           # 4 MB parked, over the cap: whole segments go, largest first
-    assert DA._pool_cached_bytes[0] <= 2 * MB and len(rt.live) == 1
+    assert DA._POOL.cached[0] <= 2 * MB and len(rt.live) == 1
 
 
 def test_live_blocks_never_overlap_under_random_traffic(rt):
@@ -95,4 +95,37 @@ def test_live_blocks_never_overlap_under_random_traffic(rt):
     for p in list(live):
         DA.free_cuda(p)
     DA._pool_flush(0)
-    assert rt.live == {} and DA._blocks == {}, "a segment stayed with the driver or a block stayed in the pool"
+    assert rt.live == {} and DA._POOL.blocks == {}, "a segment stayed with the driver or a block stayed in the pool"
+
+
+@pytest.mark.parametrize("cap_mb", [0, 8])
+def test_the_simulation_holds_what_the_allocator_holds(rt, monkeypatch, cap_mb):
+    """`memory.pool.simulate` — the pricing replay of an allocation sequence (M3) — runs the allocator's own pool:
+    on random traffic, the bytes it holds from the driver at their peak are the bytes the allocator held from this
+    fake driver, to the byte, with the parked cap unbounded and bounded. What it would do if the two ran different
+    rules: differ (red)."""
+    from nbxtensor.memory.pool import simulate
+    monkeypatch.setattr(DA, "_pool_cap_bytes", {0: cap_mb * MB})
+    held_peak = [0]
+    real_malloc = rt.cudaMalloc
+
+    def counting_malloc(out, size):
+        rc = real_malloc(out, size)
+        held_peak[0] = max(held_peak[0], sum(rt.live.values()))
+        return rc
+
+    rt.cudaMalloc = counting_malloc
+    rng = random.Random(cap_mb + 1)
+    live, events = {}, []
+    for i in range(3000):
+        if live and rng.random() < 0.45:
+            k = rng.choice(list(live))
+            DA.free_cuda(live.pop(k))
+            events.append(("free", k, 0))
+        else:
+            n = rng.choice([512, 4096, MB, 3 * MB, 5 * MB + 7, 17 * MB])
+            live[i] = DA.malloc_cuda(n)
+            events.append(("alloc", i, n))
+    sim = simulate(events, parked_cap=cap_mb * MB)
+    assert sim.peak_bytes == held_peak[0], (sim, held_peak[0])
+    assert sim.peak_live_bytes <= sim.peak_bytes

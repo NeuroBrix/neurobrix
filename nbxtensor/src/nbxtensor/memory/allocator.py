@@ -12,6 +12,7 @@ import sys
 from typing import Dict, List, Optional, Tuple
 
 from nbxtensor.backend import runtime as _rt
+from nbxtensor.memory.pool import SegmentPool
 
 
 
@@ -185,6 +186,7 @@ class DeviceOOMError(RuntimeError):
             return None
         return max(0, self.requested - self.driver_free)
 
+
 class AllocatorInterceptor:
     """What stands in front of the allocator's five device operations (allocate, free, copy, set, synchronise) while
     it is installed (`DeviceAllocator.install_interceptor`): each method receives the DIRECT operation it stands in
@@ -263,18 +265,14 @@ class DeviceAllocator:
     # battery + the warm-serve sweep). `NBX_ALLOC_POOL=0` disables it
     # (the differential for any allocator-suspected divergence).
     # P-SANA-4KPX-RUNTIME Phase 2 origin.
-    _pool_free: Dict[int, Dict[int, list]] = {}      # device_idx -> {nbytes: [ptr, ...]}  (the FREE blocks, by size)
     # The pool SPLITS and COALESCES (S4a, 2026-10-27; the method of torch's caching allocator): every driver allocation
     # is a SEGMENT made of BLOCKS chained in address order; a request takes the smallest free block that holds it and
-    # splits off the rest when it is at least `_POOL_SPLIT_MIN`; a freed block merges with its free neighbours; only a
+    # splits off the rest when it is at least `memory.pool.POOL_SPLIT_MIN`; a freed block merges with its free neighbours; only a
     # segment wholly free returns to the driver (over the parked cap, on a refused malloc, on a flush). Exact-size
     # parking kept a freed 3 GB block from ever serving a 2 GB request: 2.6-3.7 GB parked beside 6-7 GB live on
     # mochi-1-preview triton at the 8 GB rung.
-    _blocks: Dict[int, list] = {}                    # ptr -> [size, prev ptr, next ptr, free, device]
-    _pool_sizes: Dict[int, list] = {}                # device_idx -> sorted sizes present in _pool_free[dev]
-    _POOL_ALIGN = 512
-    _POOL_SPLIT_MIN = 1 << 20
-    _pool_alloc_size: Dict[int, int] = {}            # ptr -> ALLOCATED nbytes (may exceed requested when smallest-fit is bigger)
+    # The segments, their blocks and the free index live in ONE `memory.pool.SegmentPool` (`_POOL`, set below the
+    # class): the same object Prism's pricing replays (`memory.pool.simulate`).
     _pool_enabled: bool = False                      # set by _maybe_init_pool() from env
     #: Callables `(dev) -> bytes released` the engine registers for memory it caches outside the pool (a recorded
     #: replay plan's slab, `triton/replay.release_idle_slabs`), called on a malloc refused after the pool's flush.
@@ -285,12 +283,7 @@ class DeviceAllocator:
     # parked in the free-list per device (+ peak), hit/miss counters,
     # and the smallest-fit SLACK (allocated − requested) — the pool's
     # own contribution to the driver-level watermark.
-    _pool_cached_bytes: Dict[int, int] = {}          # device_idx -> bytes parked in the free-list
-    _pool_cached_peak: Dict[int, int] = {}           # device_idx -> peak of the above
-    _pool_stats: Dict[str, int] = {"exact": 0, "fit": 0, "miss": 0,
-                                   "slack_total": 0, "slack_max": 0,
-                                   "flushes": 0, "flushed_bytes": 0,
-                                   "evictions": 0, "evicted_bytes": 0}
+    # (`_POOL.cached`, `_POOL.cached_peak`, `_POOL.stats`)
     # Parked-bytes cap per device (bytes; 0 = unbounded), resolved once per
     # device from the arch yml `memory.alloc_pool_parked_cap_fraction` ×
     # the device's total memory (ONE cudaMemGetInfo at the first free on
@@ -303,7 +296,6 @@ class DeviceAllocator:
     # Measured 2026-10-28: mochi-1-preview triton at the 8 GB rung on a 32 GB card held 10.8 GB — 5.5-6.2 GB live and
     # 3.0-3.7 GB of pooled free blocks no refused malloc ever asked back.
     _rung_limit_bytes: Dict[int, Optional[int]] = {}
-    _pool_slack_frac: Dict[int, float] = {}
 
     # Deferred-queue reclaimers (P-TRITON-LIVE-SET). The triton hot loops
     # register their deferred dead-tensor queues here. Since 2026-10-11 the
@@ -506,12 +498,12 @@ class DeviceAllocator:
         `pool_peak` is the most the free-list ever parked; `slack` is the
         smallest-fit over-allocation (allocated − requested) summed over
         every fit hit, and its maximum for one hit."""
-        st = DeviceAllocator._pool_stats
-        devs = sorted(set(DeviceAllocator._cuda_peak_bytes) | set(DeviceAllocator._pool_cached_peak))
+        st = DeviceAllocator._POOL.stats
+        devs = sorted(set(DeviceAllocator._cuda_peak_bytes) | set(DeviceAllocator._POOL.cached_peak))
         for d in devs:
             print(f"[NBX_ALLOC_STATS] cuda:{d} peak_driver={DeviceAllocator._cuda_peak_bytes.get(d, 0) / 2**20:.0f}MB "
-                  f"pool_peak={DeviceAllocator._pool_cached_peak.get(d, 0) / 2**20:.0f}MB "
-                  f"pool_now={DeviceAllocator._pool_cached_bytes.get(d, 0) / 2**20:.0f}MB", flush=True)
+                  f"pool_peak={DeviceAllocator._POOL.cached_peak.get(d, 0) / 2**20:.0f}MB "
+                  f"pool_now={DeviceAllocator._POOL.cached.get(d, 0) / 2**20:.0f}MB", flush=True)
         print(f"[NBX_ALLOC_STATS] pool={'on' if DeviceAllocator._pool_enabled else 'off'} "
               f"hits exact={st['exact']} fit={st['fit']} miss={st['miss']} "
               f"slack_total={st['slack_total'] / 2**20:.0f}MB slack_max={st['slack_max'] / 2**20:.0f}MB "
@@ -520,149 +512,26 @@ class DeviceAllocator:
               f"cap={ {d: round(c / 2**20) for d, c in DeviceAllocator._pool_cap_bytes.items()} }MB", flush=True)
 
     @staticmethod
-    def _pool_take(dev: int, nbytes: int) -> Optional[int]:
-        """The smallest free block on `dev` that holds `nbytes` (rounded up to `_POOL_ALIGN`), split when what is
-        left is at least `_POOL_SPLIT_MIN`; None on a miss. The block's size is left in `_pool_alloc_size[ptr]` for
-        the caller (it may exceed the request by less than the split threshold)."""
-        st = DeviceAllocator._pool_stats
-        sizes = DeviceAllocator._pool_sizes.get(dev)
-        if not sizes:
-            st["miss"] += 1
-            return None
-        want = -(-int(nbytes) // DeviceAllocator._POOL_ALIGN) * DeviceAllocator._POOL_ALIGN
-        k = bisect.bisect_left(sizes, want)
-        if k >= len(sizes):
-            st["miss"] += 1
-            return None
-        sz = sizes[k]
-        ptr = DeviceAllocator._pool_free[dev][sz][-1]
-        DeviceAllocator._free_index_remove(dev, ptr, sz)
-        blk = DeviceAllocator._blocks[ptr]
-        blk[3] = False
-        if sz - want >= DeviceAllocator._POOL_SPLIT_MIN:
-            rest = ptr + want
-            DeviceAllocator._blocks[rest] = [sz - want, ptr, blk[2], True, dev]
-            if blk[2] is not None:
-                DeviceAllocator._blocks[blk[2]][1] = rest
-            blk[0], blk[2] = want, rest
-            DeviceAllocator._cuda_ptr_size[rest] = sz - want
-            DeviceAllocator._cuda_ptr_device[rest] = dev
-            DeviceAllocator._free_index_add(dev, rest, sz - want)
-            st["fit"] += 1
-        else:
-            st["exact" if sz == int(nbytes) else "fit"] += 1
-            if sz > int(nbytes):
-                st["slack_total"] += sz - int(nbytes)
-                st["slack_max"] = max(st["slack_max"], sz - int(nbytes))
-        DeviceAllocator._pool_alloc_size[ptr] = blk[0]
-        DeviceAllocator._pool_cached_bytes[dev] = DeviceAllocator._pool_cached_bytes.get(dev, 0) - blk[0]
-        return ptr
-
-    @staticmethod
-    def _free_index_add(dev: int, ptr: int, size: int) -> None:
-        per = DeviceAllocator._pool_free.setdefault(dev, {})
-        lst = per.get(size)
-        if lst is None:
-            per[size] = [ptr]
-            bisect.insort(DeviceAllocator._pool_sizes.setdefault(dev, []), size)
-        else:
-            lst.append(ptr)
-
-    @staticmethod
-    def _free_index_remove(dev: int, ptr: int, size: int) -> None:
-        per = DeviceAllocator._pool_free.get(dev, {})
-        lst = per.get(size)
-        lst.remove(ptr)
-        if not lst:
-            del per[size]
-            sizes = DeviceAllocator._pool_sizes[dev]
-            sizes.pop(bisect.bisect_left(sizes, size))
-
-    @staticmethod
-    def _pool_segment_new(dev: int, ptr: int, nbytes: int) -> None:
-        """A driver allocation joins the pool as a one-block segment, in use."""
-        DeviceAllocator._blocks[ptr] = [int(nbytes), None, None, False, dev]
-
-    @staticmethod
-    def _pool_release_block(dev: int, ptr: int) -> int:
-        """`ptr`'s block is free: merged with its free neighbours and indexed; returns the bytes it adds to the
-        pool's parked total."""
-        blk = DeviceAllocator._blocks[ptr]
-        added = blk[0]
-        blk[3] = True
-        nxt = blk[2]
-        if nxt is not None and DeviceAllocator._blocks[nxt][3]:
-            nb = DeviceAllocator._blocks.pop(nxt)
-            DeviceAllocator._free_index_remove(dev, nxt, nb[0])
-            DeviceAllocator._cuda_ptr_size.pop(nxt, None)
-            DeviceAllocator._cuda_ptr_device.pop(nxt, None)
-            blk[0] += nb[0]
-            blk[2] = nb[2]
-            if nb[2] is not None:
-                DeviceAllocator._blocks[nb[2]][1] = ptr
-        prv = blk[1]
-        if prv is not None and DeviceAllocator._blocks[prv][3]:
-            pb = DeviceAllocator._blocks[prv]
-            DeviceAllocator._free_index_remove(dev, prv, pb[0])
-            pb[0] += blk[0]
-            pb[2] = blk[2]
-            if blk[2] is not None:
-                DeviceAllocator._blocks[blk[2]][1] = prv
-            DeviceAllocator._blocks.pop(ptr)
+    def _block_reported(ptr: int, size: Optional[int], dev: int) -> None:
+        """The pool's report of a block's size (`SegmentPool.on_block`): the per-pointer tables follow it."""
+        if size is None:
             DeviceAllocator._cuda_ptr_size.pop(ptr, None)
             DeviceAllocator._cuda_ptr_device.pop(ptr, None)
-            ptr, blk = prv, pb
-        DeviceAllocator._cuda_ptr_size[ptr] = blk[0]
-        DeviceAllocator._cuda_ptr_device[ptr] = dev
-        DeviceAllocator._free_index_add(dev, ptr, blk[0])
-        return added
+        else:
+            DeviceAllocator._cuda_ptr_size[ptr] = size
+            DeviceAllocator._cuda_ptr_device[ptr] = dev
 
     @staticmethod
-    def _pool_segment_free(dev: int, ptr: int) -> int:
+    def _segment_to_driver(dev: int, ptr: int) -> int:
         """Return a WHOLLY free segment (its one block, free, unchained) to the driver; its bytes."""
-        blk = DeviceAllocator._blocks.pop(ptr)
-        DeviceAllocator._free_index_remove(dev, ptr, blk[0])
+        n = DeviceAllocator._POOL.drop_segment(dev, ptr)
         _rt.device_memory().free(ptr)
-        DeviceAllocator._pool_alloc_size.pop(ptr, None)
         DeviceAllocator._cuda_ptr_size.pop(ptr, None)
         DeviceAllocator._range_del(ptr)
         DeviceAllocator._cuda_ptr_device.pop(ptr, None)
         DeviceAllocator._cuda_ptr_epoch.pop(ptr, None)
-        DeviceAllocator._cuda_live_bytes[dev] = max(0, DeviceAllocator._cuda_live_bytes.get(dev, 0) - blk[0])
-        return blk[0]
-
-    @staticmethod
-    def _free_segments(dev: int):
-        """The wholly free segments on `dev`, largest first: (ptr, bytes)."""
-        out = []
-        for size, ptrs in DeviceAllocator._pool_free.get(dev, {}).items():
-            for p in ptrs:
-                b = DeviceAllocator._blocks.get(p)
-                if b is not None and b[1] is None and b[2] is None:
-                    out.append((p, size))
-        return sorted(out, key=lambda x: -x[1])
-
-    @staticmethod
-    def _pool_fit_slack(dev: int) -> float:
-        """The most a smallest-fit hit may hand out beyond its request, as a fraction of the request:
-        `memory.alloc_pool_fit_slack_fraction` (arch yml), resolved once per device. The surplus of a
-        larger block stays held while its tensor lives and no plan prices it: at 2x, HAT-S at 2048 px
-        on a 16 GB V100 gave its 2 304 MB conv output the freed 4 096 MB attention mask's block, and the
-        next 1 153 MB tile found no room the plan had left (2026-10-22). No profile yet, or no key:
-        exact-size hits only (0.0, not cached until the profile exists)."""
-        frac = DeviceAllocator._pool_slack_frac.get(dev)
-        if frac is not None:
-            return frac
-        try:
-            from nbxtensor.ops.wrappers import get_hardware_profile, _arch_memory_param
-            prof = get_hardware_profile()
-            if prof is None or not getattr(prof, "devices", None):
-                return 0.0
-            frac = max(0.0, float(_arch_memory_param("alloc_pool_fit_slack_fraction", 0.0)))
-        except Exception:
-            return 0.0
-        DeviceAllocator._pool_slack_frac[dev] = frac
-        return frac
+        DeviceAllocator._cuda_live_bytes[dev] = max(0, DeviceAllocator._cuda_live_bytes.get(dev, 0) - n)
+        return n
 
     @staticmethod
     def _pool_parked_cap(dev: int) -> int:
@@ -702,35 +571,11 @@ class DeviceAllocator:
         return cap
 
     @staticmethod
-    def _pool_evict(dev: int, want: int) -> int:
-        """Return wholly free segments on `dev` to the driver, largest first, until at least `want` bytes are freed
-        or none is left. Returns the bytes freed."""
-        freed = 0
-        st = DeviceAllocator._pool_stats
-        for p, size in DeviceAllocator._free_segments(dev):
-            if freed >= want:
-                break
-            freed += DeviceAllocator._pool_segment_free(dev, p)
-            st["evictions"] += 1
-        DeviceAllocator._pool_cached_bytes[dev] = max(0, DeviceAllocator._pool_cached_bytes.get(dev, 0) - freed)
-        st["evicted_bytes"] += freed
-        return freed
-
-    @staticmethod
     def _pool_flush(dev: Optional[int] = None) -> int:
         """Return every wholly free segment to the driver (a segment still holding a live block stays). Returns the
         bytes freed. Called on a refused malloc and from empty_cache_pool()."""
-        freed = 0
-        devs = [dev] if dev is not None else list(DeviceAllocator._pool_free.keys())
-        DeviceAllocator._pool_stats["flushes"] += 1
-        for d in devs:
-            got = 0
-            for p, _size in DeviceAllocator._free_segments(d):
-                got += DeviceAllocator._pool_segment_free(d, p)
-            DeviceAllocator._pool_cached_bytes[d] = max(0, DeviceAllocator._pool_cached_bytes.get(d, 0) - got)
-            freed += got
-        DeviceAllocator._pool_stats["flushed_bytes"] += freed
-        return freed
+        devs = [dev] if dev is not None else list(DeviceAllocator._POOL.free.keys())
+        return DeviceAllocator._POOL.flush(devs, DeviceAllocator._segment_to_driver)
 
     @staticmethod
     def empty_cache_pool() -> int:
@@ -870,11 +715,11 @@ class DeviceAllocator:
 
         # Pool fast path
         if DeviceAllocator._pool_enabled and pooled:
-            ptr = DeviceAllocator._pool_take(dev, nbytes)
+            ptr = DeviceAllocator._POOL.take(dev, nbytes)
             if ptr is not None:
                 # alloc size: exact-size hit reuses nbytes; smallest-fit
-                # populated _pool_alloc_size with the bigger size.
-                actual = DeviceAllocator._pool_alloc_size.pop(ptr, nbytes)
+                # populated the pool's alloc_size with the bigger size.
+                actual = DeviceAllocator._POOL.alloc_size.pop(ptr, nbytes)
                 DeviceAllocator._cuda_ptr_size[ptr] = actual
                 DeviceAllocator._cuda_ptr_device[ptr] = dev      # its segment's range stays registered
                 DeviceAllocator._cuda_ptr_epoch[ptr] = DeviceAllocator._alloc_epoch
@@ -944,7 +789,7 @@ class DeviceAllocator:
             live_now = DeviceAllocator._cuda_live_bytes.get(dev, 0)
             pool_total = 0
             pool_count = 0
-            per_dev = DeviceAllocator._pool_free.get(dev, {})
+            per_dev = DeviceAllocator._POOL.free.get(dev, {})
             for sz, ptrs in per_dev.items():
                 pool_total += sz * len(ptrs)
                 pool_count += len(ptrs)
@@ -972,7 +817,7 @@ class DeviceAllocator:
         DeviceAllocator._range_add(p, nbytes)
         DeviceAllocator._cuda_ptr_device[p] = dev
         if DeviceAllocator._pool_enabled and pooled:
-            DeviceAllocator._pool_segment_new(dev, p, nbytes)
+            DeviceAllocator._POOL.add_segment(dev, p, nbytes)
         DeviceAllocator._cuda_ptr_epoch[p] = DeviceAllocator._alloc_epoch
         live = DeviceAllocator._cuda_live_bytes.get(dev, 0) + nbytes
         DeviceAllocator._cuda_live_bytes[dev] = live
@@ -1027,7 +872,7 @@ class DeviceAllocator:
         if _epoch != DeviceAllocator._alloc_epoch:
             _dev = DeviceAllocator._cuda_ptr_device.pop(ptr, None)
             _sz = DeviceAllocator._cuda_ptr_size.pop(ptr, None)
-            DeviceAllocator._pool_alloc_size.pop(ptr, None)
+            DeviceAllocator._POOL.alloc_size.pop(ptr, None)
             if _dev is not None and _sz:
                 _live = DeviceAllocator._cuda_live_bytes.get(_dev, 0) - _sz
                 DeviceAllocator._cuda_live_bytes[_dev] = max(0, _live)
@@ -1035,20 +880,16 @@ class DeviceAllocator:
 
         # The pool: the block goes back to its segment, merged with its free neighbours; a segment wholly free over
         # the parked cap returns to the driver. A block of a segment is never handed to the driver alone.
-        if DeviceAllocator._pool_enabled and ptr in DeviceAllocator._blocks:
-            if DeviceAllocator._blocks[ptr][3]:
+        if DeviceAllocator._pool_enabled and ptr in DeviceAllocator._POOL.blocks:
+            if DeviceAllocator._POOL.blocks[ptr][3]:
                 print(f"[NBX-ALLOC-ERROR] free of a block already free: {ptr:#x}", flush=True)
                 return
-            dev = DeviceAllocator._blocks[ptr][4]
-            nbytes = DeviceAllocator._blocks[ptr][0]
-            added = DeviceAllocator._pool_release_block(dev, ptr)
-            cached = DeviceAllocator._pool_cached_bytes.get(dev, 0) + added
-            DeviceAllocator._pool_cached_bytes[dev] = cached
-            if cached > DeviceAllocator._pool_cached_peak.get(dev, 0):
-                DeviceAllocator._pool_cached_peak[dev] = cached
+            dev = DeviceAllocator._POOL.blocks[ptr][4]
+            nbytes = DeviceAllocator._POOL.blocks[ptr][0]
+            cached = DeviceAllocator._POOL.park(dev, DeviceAllocator._POOL.release(ptr))
             cap = DeviceAllocator._pool_parked_cap(dev)
             if cap and cached > cap:
-                DeviceAllocator._pool_evict(dev, cached - cap)
+                DeviceAllocator._POOL.evict(dev, cached - cap, DeviceAllocator._segment_to_driver)
             if _MALLOC_TRACE_FILE is not None:
                 _record_free_site(ptr, nbytes)
             return
@@ -1200,7 +1041,7 @@ class DeviceAllocator:
             # the parked bytes and shrank their chunks on edge rows.
             if DeviceAllocator._pool_enabled:
                 d = device_idx if device_idx is not None else DeviceAllocator.get_device()
-                free += DeviceAllocator._pool_cached_bytes.get(d, 0)
+                free += DeviceAllocator._POOL.cached.get(d, 0)
             return free
         except Exception:
             return -1
@@ -1796,3 +1637,7 @@ class DeviceAllocator:
                         f"instead.")
         # Cache only after BOTH calls succeeded (this thread's state).
         _rt._DEVICE_CACHE.idx = device_idx
+
+
+#: the pool of every device's segments (memory/pool.py), its block sizes mirrored in the per-pointer tables
+DeviceAllocator._POOL = SegmentPool(on_block=DeviceAllocator._block_reported)
