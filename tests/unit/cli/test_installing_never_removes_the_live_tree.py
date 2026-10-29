@@ -85,6 +85,11 @@ def test_the_live_tree_is_readable_at_every_instant_of_a_reinstall(tmp_path):
             (staging / "manifest.json").write_text(json.dumps({"version": "NEW", "model_name": target.name}))
             (staging / "weights.safetensors").write_bytes(b"NEW" * 4096)
             time.sleep(0.05)          # the extraction the reader must survive
+        # the reader sees the new tree before it stops: on a loaded machine its 1 ms poll can miss the instant
+        # between the swap and the stop (the proofs' 36-way suite, 2026-10-29: {'OLD'} only, nothing missing)
+        deadline = time.monotonic() + 5
+        while "NEW" not in seen_versions and time.monotonic() < deadline:
+            time.sleep(0.01)
     finally:
         stop.set()
         reader.join(timeout=5)
