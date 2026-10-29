@@ -3006,18 +3006,18 @@ def rope_fused_wrapper(q_raw, k_raw, cos, sin):
 # DTYPE CONVERSION WRAPPER
 # ===========================================================================
 
-def bf16_to_fp16_gpu(src: NBXTensor) -> NBXTensor:
-    """Convert bf16 (stored as uint16) → fp16 on GPU. Zero CPU work.
+def bf16_to_fp16_gpu(src: NBXTensor, out: "NBXTensor | None" = None) -> NBXTensor:
+    """bfloat16 patterns (a 2-byte integer tensor holding the raw bits) to float16 on the device: the one device
+    conversion of the pair, through float32 (`ops/dtype_convert.bf16_to_fp16_kernel`).
 
-    Args:
-        src: NBXTensor with dtype uint16 containing raw bf16 bits
-
-    Returns:
-        NBXTensor with dtype float16, same shape
-    """
+    `out`: a float16 tensor of the same number of elements to write into — the SAME buffer as `src` converts in
+    place (both are two bytes an element, and each element is read before it is written); none: a new tensor."""
     N = src.numel()
-    dst = NBXTensor.empty(src._shape, NBXDtype.float16,
-                          device=f"cuda:{src._device_idx}")
+    dst = out if out is not None else NBXTensor.empty(src._shape, NBXDtype.float16,
+                                                     device=f"cuda:{src._device_idx}")
+    if dst.nbx_dtype != NBXDtype.float16 or dst.numel() != N:
+        raise ValueError(f"bf16_to_fp16_gpu: out must be float16 with {N} elements, got {dst.nbx_dtype.name} "
+                         f"with {dst.numel()}")
     _set_device(src)
     _m = _ew_meta(N)
     bf16_to_fp16_kernel[_ew_grid(N, _m)](src, dst, N, BLOCK=_m['BLOCK_SIZE'], num_warps=_m['num_warps'])
