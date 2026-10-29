@@ -29,10 +29,18 @@ shared:
   - src/
   - tools/
   - pyproject.toml
+  # the tensor library (nbxtensor/, moved out of the engine 2026-10-28): its code, packaging and tools reach both engines
+  # through the engine's imports — a change there replays every branch
+  - nbxtensor/src/
+  - nbxtensor/pyproject.toml
+  - nbxtensor/tools/
   - wd.sh
 inert:
   - docs/
   - tests/
+  - nbxtensor/tests/
+  - nbxtensor/README.md
+  - nbxtensor/LICENSE
   - benchmarks/
   - assets/
   - scripts/
