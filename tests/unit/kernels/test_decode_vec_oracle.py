@@ -168,7 +168,7 @@ def test_decode_vec_is_deterministic(D) -> None:
         f"for the replay engine regardless of accuracy")
 
 
-def test_decode_vec_routing_three_states() -> None:
+def test_decode_vec_routing_three_states(declared_profile) -> None:
     """ACTIVATION PROOF for the three-state contract (ADOPTED default,
     2026-08-23 verdict): "1" = armed pre-route; unset = the DEFAULT
     Tq=1 refinement of the math route; "0" = kill switch everywhere;
