@@ -192,9 +192,19 @@ memory.set_limit(None)           # the physical card again
 ```
 
 Some services are still passed through `nbxtensor.host` while the boundary is cleaned before 0.0.1 (the device
-description, the operand decisions of the matrix unit and attention, and NeuroBrix's own
-census and memory classes). `docs/nbxtensor/API.md` section 11 lists each one, its fate (generic in the library, or
-back in the application) and its state.
+description, the operand decisions of the matrix unit and attention, and where a backend build may live).
+`docs/nbxtensor/API.md` section 11 lists each one, its fate (generic in the library, or back in the application) and
+its state.
+
+An application may also watch every kernel launch without running it — a dry run, to list the kernel keys a model
+forms without a device: `nbxtensor.ops.launch_observer.set_launch_observer` installs an observer (`active()`,
+`record(tuned, key)`, `shadow_run(...)`); with none installed, every launch runs.
+
+```python
+from nbxtensor.ops import launch_observer
+
+assert launch_observer.launch_observer().active() is False     # no observer: nothing runs dry
+```
 
 ## Backends
 

@@ -26,6 +26,8 @@ from pathlib import Path
 
 import pytest
 
+from neurobrix.kernels import census_table as T
+
 SRC = Path(__file__).resolve().parents[3] / "src"
 
 SCRIPT = r'''
@@ -101,7 +103,7 @@ def _table(tmp_path, monkeypatch, rows):
 
 def test_a_key_absent_from_the_census_table_is_named_a_census_defect(tmp_path, monkeypatch):
     C = _table(tmp_path, monkeypatch, [])
-    assert "CENSUS defect" in C.census_row(*_key(), 16)
+    assert "CENSUS defect" in T.census_row(*_key(), 16)
 
 
 def test_a_key_in_the_census_table_is_named_a_certification_gap(tmp_path, monkeypatch):
@@ -110,16 +112,16 @@ def test_a_key_in_the_census_table_is_named_a_certification_gap(tmp_path, monkey
     row = {"model": "TinyLlama-1.1B-Chat-v1.0", "container": "3b8bbc487525959b", "mode": "triton", "rungs_mb": [16384],
            "ops": [None], "kernel": qual, "key": key_repr(key), "dtype": "fp16,fp16,fp16", "tool": "test"}
     C = _table(tmp_path, monkeypatch, [row])
-    said = C.census_row(qual, key, 16)
+    said = T.census_row(qual, key, 16)
     assert "CERTIFICATION gap" in said and "TinyLlama-1.1B-Chat-v1.0" in said
-    other = C.census_row(qual, key, 32)            # the 32 GB class reads ANOTHER table, absent here
+    other = T.census_row(qual, key, 32)            # the 32 GB class reads ANOTHER table, absent here
     assert "32g.jsonl" in other and "CERTIFICATION gap" not in other, other
 
 
 def test_a_card_of_unknown_memory_names_no_table(monkeypatch):
     from nbxtensor.ops import autotune_certified as C
     monkeypatch.setattr(C, "active_profile", lambda: ("nvidia", "volta"))
-    assert "memory class is unknown" in C.census_row(*_key(), None)
+    assert "memory class is unknown" in T.census_row(*_key(), None)
 
 
 def test_the_run_command_takes_the_flag():

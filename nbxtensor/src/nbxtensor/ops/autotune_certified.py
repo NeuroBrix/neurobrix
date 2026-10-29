@@ -293,7 +293,6 @@ def _tolerance_for(vendor: str, profile: str, dtype: str) -> Optional[float]:
 # size sweeps at runtime, announced. The size is the card's memory rounded to GB (`device_facts.memory_gb`), read from
 # the proof's device record (every committed proof carries one: 76 133 of 76 133 on 2026-10-29) and, for the card
 # running, from the device or what the application declared of it (`device_facts.device_memory_gb`).
-from nbxtensor.host import need as _need   # the application's census table (nbxtensor.host), read at call time
 from nbxtensor.backend.device_facts import memory_gb, device_memory_gb, declared_device_memory
 
 
@@ -1029,29 +1028,27 @@ class KeyNotCertified(RuntimeError):
     """A key a confirmation run met that the certified directory does not serve."""
 
 
-def census_row(kernel_qual: str, key: tuple, memory_gb: Optional[int]) -> str:
-    """Where the census table stands on this key, in words: the table of the profile in force and
-    this card's memory class holds it (a certification gap) or not (a census defect)."""
-    from nbxtensor.host import need as _need
-    census_table = _need("census_table")()      # the application's census table reader (nbxtensor.host)
-    prof = active_profile()
-    if prof is None:
-        return "no vendor profile is bound, so no census table can be named"
-    if memory_gb is None:
-        return f"the card's memory class is unknown, so no {prof[0]}/{prof[1]} census table can be named"
-    line = census_table.key_line(kernel_qual, key_repr(tuple(key)))
+#: An application's account of a key a confirmation run missed (`set_miss_explainer`), or None.
+_MISS_EXPLAINER = None
+
+
+def set_miss_explainer(explain) -> None:
+    """Install `explain(kernel_qual, key, memory_gb) -> str`: where the application expected a key it finds uncertified
+    to come from (NeuroBrix: the row of its census table that should hold it), appended to the refusal; None removes it.
+    Optional: without one, the refusal says what the store holds and nothing more."""
+    global _MISS_EXPLAINER
+    if explain is not None and not callable(explain):
+        raise TypeError("set_miss_explainer: the explainer must be callable (kernel_qual, key, memory_gb) -> str")
+    _MISS_EXPLAINER = explain
+
+
+def _explain_miss(kernel_qual: str, key: tuple, memory_gb: Optional[int]) -> str:
+    if _MISS_EXPLAINER is None:
+        return ""
     try:
-        path, rows = census_table.rows_for(kernel_qual, key_repr(tuple(key)), prof[0], prof[1], memory_gb)
-    except Exception as exc:  # noqa: BLE001 — said: an unreadable table is not an absent row
-        return f"the census table could not be read ({type(exc).__name__}: {exc})"
-    if not path.exists():
-        return f"there is no census table {path} — take the census for this profile and memory class first"
-    if not rows:
-        return (f"ABSENT from the census table {path} — a CENSUS defect: fix the census tool so the shadow "
-                f"forms {line}, certify it, re-run the cell")
-    models = ", ".join(sorted({r["model"] for r in rows}))
-    return (f"present in the census table {path} (models: {models}) but not certified for this card — "
-            f"a CERTIFICATION gap: certify the table, re-run the cell")
+        return f" {_MISS_EXPLAINER(kernel_qual, key, memory_gb)}."
+    except Exception as exc:  # noqa: BLE001 — said: the refusal stands, its explanation failed
+        return f" (the application's explanation of the miss failed: {type(exc).__name__}: {exc})."
 
 
 def refuse_missing(kernel_qual: str, tuner, key: tuple) -> None:
@@ -1063,7 +1060,7 @@ def refuse_missing(kernel_qual: str, tuner, key: tuple) -> None:
     here = None
     try:
         here = executing_memory_gb(list((getattr(tuner, "nargs", None) or {}).values()) or None)
-    except Exception:  # noqa: BLE001 — an unknown class is said by census_row
+    except Exception:  # noqa: BLE001 — an unknown size is said by the explanation
         here = None
     try:
         raw = lookup(kernel_qual, tuner, key, ignore_switch=True, any_class=True)
@@ -1075,7 +1072,7 @@ def refuse_missing(kernel_qual: str, tuner, key: tuple) -> None:
         why = f"; (could not read what the directory holds for it: {exc})"
     raise KeyNotCertified(
         f"CERTIFIED-ONLY: no certified setting for {kernel_short(kernel_qual)} {output_dtype(tuner, key)} "
-        f"({describe_key(tuner, key)}) on {where}{why}. {census_row(kernel_qual, key, here)}. A confirmation run "
+        f"({describe_key(tuner, key)}) on {where}{why}.{_explain_miss(kernel_qual, key, here)} A confirmation run "
         f"never sweeps.")
 
 

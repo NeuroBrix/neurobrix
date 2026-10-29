@@ -1,11 +1,12 @@
 """What the application that runs nbxtensor provides to it: the facts and policies the library does not own.
 
-nbxtensor computes; the application decides. Some decisions the kernels and the allocator need are not tensor facts:
-the hardware vendor's files (tiles, budgets, the matrix unit) and where they live, the store of certified kernel
-settings, how much host memory is free, the memory class a card belongs to, a rung imposed on the allocator, the
-dtype policy that picks an attention's operand dtypes, the census that records launches without running them. The
-application provides each of them ONCE, by name (`provide`); the library reads them by name (`need`). A service no
-application provided is refused by name, never guessed.
+nbxtensor computes; the application decides. The decisions still read here: the hardware vendor's files (tiles,
+budgets, the matrix unit) and where they live, the dtype policy that picks an attention's and a matrix unit's operand
+dtypes, and where a backend build may live. Each is moving to a fact the library reads itself or a setting with a
+default (docs/nbxtensor/API.md section 11); what left already: the memory limit (`memory.set_limit`), the certified
+store (`ops.autotune_certified.set_store`), the device's memory (`backend.device_facts`), the launch observer
+(`ops.launch_observer`). The application provides each service ONCE, by name (`provide`); the library reads it by name
+(`need`). A service no application provided is refused by name, never guessed.
 
 Each service is a callable. An application provides a function that reads its own state at call time, so a value it
 changes later is the one read.
@@ -22,8 +23,6 @@ SERVICES: Dict[str, str] = {
     "vendor_param": "(section, key, default) -> one value of the executing device's vendor file",
     "vendors_dir": "() -> the directory of the vendor files (pathlib.Path)",
     "installation_refusals": "(path) -> why an installation path may not hold a backend build; optional: absent, none is refused",
-    "census": "() -> the launch census in force (active, record, shadow_run); optional: absent, none is active",
-    "census_table": "() -> the census table reader",
     "matrix_unit_representation": "(...) -> how the matrix unit carries one GEMM's operands",
     "matrix_unit_flash_representation": "(...) -> how the matrix unit carries one attention's operands",
     "attention_operand_dtypes": "(...) -> the operand dtypes an attention runs at",
@@ -31,28 +30,13 @@ SERVICES: Dict[str, str] = {
     "matrix_unit_split_scale": "(...) -> the scale of a split fp32 operand on the matrix unit",
 }
 
-class _NoCensus:
-    """The census an application without one runs under: never active, it records nothing and holds no shadow memory.
-    A census is an observer of launches, not a fact a computation reads: with none, there is nothing to observe."""
-
-    @staticmethod
-    def active() -> bool:
-        return False
-
-    @staticmethod
-    def record(*args, **kwargs):
-        raise RuntimeError("nbxtensor.host: a launch was recorded with no census provided — record() is reached only "
-                           "under an active census")
-
-
 #: hooks an application MAY provide; absent, the library runs as the value here describes (never a guessed fact)
 def _no_refusal(path) -> list:
     """The installation rule of an application without one: no path is refused."""
     return []
 
 
-_ABSENT = {"census": lambda: _NoCensus,
-           # an application's rule on where a backend build may live (NeuroBrix: off its workshop's cleared storage);
+_ABSENT = {# an application's rule on where a backend build may live (NeuroBrix: off its workshop's cleared storage);
            # absent, the library refuses no installation
            "installation_refusals": _no_refusal}
 

@@ -37,14 +37,14 @@ def test_a_mask_that_disagrees_with_its_values_is_refused_by_name():
 
 
 def test_a_census_shadow_takes_the_count_from_the_values(monkeypatch):
-    from nbxtensor import host
+    from nbxtensor.ops import launch_observer as LO
 
     class _Shadow:
         @staticmethod
         def active():
             return True
 
-    monkeypatch.setitem(host._PROVIDED, "census", lambda: _Shadow)
+    monkeypatch.setattr(LO, "_OBSERVER", _Shadow)
     mask = _t(np.zeros(10, dtype=np.uint8))          # a shadow's mask holds no values: all zero here
     rows = IW.nonzero_1d_wrapper(mask, expected=7)
     assert tuple(rows.shape) == (7,), rows.shape

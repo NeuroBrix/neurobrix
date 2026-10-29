@@ -600,8 +600,8 @@ def nonzero_1d_wrapper(mask, expected=None) -> "NBXTensor":
     m = mask.contiguous()
     n = int(m.shape[0])
     if expected is not None:
-        from nbxtensor.host import need as _need   # the application's launch census (nbxtensor.host)
-        if _need("census")().active():
+        from nbxtensor.ops.launch_observer import launch_observer
+        if launch_observer().active():
             return NBXTensor.empty([int(expected)], dtype=NBXDtype.int64, device=m.device)
     out = NBXTensor.empty([max(n, 1)], dtype=NBXDtype.int64, device=m.device)
     count = NBXTensor.zeros([1], dtype=NBXDtype.int32, device=m.device)

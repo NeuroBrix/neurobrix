@@ -125,8 +125,8 @@ def _announce_first_sweep(tuned):
     # A census shadow (kernels/census.py, installed before this kernel was defined)
     # keeps this wrapper — it is the one door where the key is formed and recorded —
     # and drops what stands behind it: no bench, no launch, no device.
-    from nbxtensor.host import need as _need
-    _census = _need("census")()                 # the application's launch census (nbxtensor.host)
+    from nbxtensor.ops.launch_observer import launch_observer
+    _census = launch_observer()                 # the application's launch observer (dry run), if any
     if _census.active():
         original = _census.shadow_run
 

@@ -1,5 +1,6 @@
-"""The engine provides nbxtensor with what the library does not own (`nbxtensor.host`): its vendor files, its memory
-classes, its installation refusals, its launch census and the Triton DtypeEngine's operand decisions.
+"""The engine provides nbxtensor with what the library does not own (`nbxtensor.host`): its vendor files, its installation
+refusals and the Triton DtypeEngine's operand decisions; it installs its census as the library's launch observer and
+miss explainer.
 Two of its settings go through the library's public API instead, at install: its certified directory
 (`ops.autotune_certified.set_store`) and, when a rung is imposed on the process (`NBX_PRISM_BUDGET_MB`), the memory limit
 (`nbxtensor.memory.set_limit`, through `core.prism.memory_budget.apply_imposed_rung`).
@@ -21,18 +22,28 @@ def _call(module: str, attr: str):
     return service
 
 
-def _module(module: str):
-    def service():
-        return importlib.import_module(module)
-    service.__qualname__ = module
-    return service
-
-
 def _config_dir(name: str):
     def service() -> Path:
         return Path(importlib.import_module("neurobrix.core.config.loader").CONFIG_ROOT) / name
     service.__qualname__ = f"CONFIG_ROOT/{name}"
     return service
+
+
+class _CensusObserver:
+    """The engine's census (`neurobrix.kernels.census`) as the library's launch observer, resolved at call time: the
+    census installs itself before any kernel is defined, and a test that replaces it is the one consulted."""
+
+    @staticmethod
+    def active() -> bool:
+        return importlib.import_module("neurobrix.kernels.census").active()
+
+    @staticmethod
+    def record(tuned, key) -> None:
+        return importlib.import_module("neurobrix.kernels.census").record(tuned, key)
+
+    @staticmethod
+    def shadow_run(*args, **kwargs):
+        return importlib.import_module("neurobrix.kernels.census").shadow_run(*args, **kwargs)
 
 
 def install() -> None:
@@ -44,8 +55,12 @@ def install() -> None:
     from nbxtensor.ops.autotune_certified import set_store
     set_store(_config_dir("autotune")())        # the engine's committed certified directory, through the public API
     provide("installation_refusals", _call("neurobrix.core.paths", "installation_refusals"))
-    provide("census", _module("neurobrix.kernels.census"))
-    provide("census_table", _module("neurobrix.kernels.census_table"))
+    # the certification census: the library's launch observer (a dry run that records every key) and the account of a
+    # confirmation run's miss (the census row that should hold it) — both the library's optional hooks, read at call time
+    from nbxtensor.ops.launch_observer import set_launch_observer
+    from nbxtensor.ops.autotune_certified import set_miss_explainer
+    set_launch_observer(_CensusObserver())
+    set_miss_explainer(_call("neurobrix.kernels.census_table", "census_row"))
     for name in ("matrix_unit_representation", "matrix_unit_flash_representation", "attention_operand_dtypes",
                  "attention_operand_alignment", "matrix_unit_split_scale"):
         provide(name, _call(dtype, name))

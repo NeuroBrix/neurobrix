@@ -30,6 +30,8 @@ device: a table is data.
 """
 from __future__ import annotations
 
+import sys
+
 import contextlib
 import json
 import os
@@ -241,3 +243,29 @@ def rows_for(kernel_qual: str, key_repr_text: str, vendor: str, profile: str, me
             index.setdefault(key_line(row["kernel"], row["key"]), []).append(row)
         _INDEX[path] = (mtime, index)
     return path, _INDEX[path][1].get(key_line(kernel_qual, key_repr_text), [])
+
+
+def census_row(kernel_qual: str, key: tuple, memory_gb: Optional[int]) -> str:
+    """Where the census table stands on a key a confirmation run missed, in words (installed as the library's miss
+    explainer, `autotune_certified.set_miss_explainer`, by `neurobrix._nbxtensor_host.install`): the table of the profile in force and
+    this card's memory class holds it (a certification gap) or not (a census defect)."""
+    from nbxtensor.ops.autotune_certified import active_profile, key_repr
+    census_table = sys.modules[__name__]
+    prof = active_profile()
+    if prof is None:
+        return "no vendor profile is bound, so no census table can be named"
+    if memory_gb is None:
+        return f"the card's memory class is unknown, so no {prof[0]}/{prof[1]} census table can be named"
+    line = census_table.key_line(kernel_qual, key_repr(tuple(key)))
+    try:
+        path, rows = census_table.rows_for(kernel_qual, key_repr(tuple(key)), prof[0], prof[1], memory_gb)
+    except Exception as exc:  # noqa: BLE001 — said: an unreadable table is not an absent row
+        return f"the census table could not be read ({type(exc).__name__}: {exc})"
+    if not path.exists():
+        return f"there is no census table {path} — take the census for this profile and memory class first"
+    if not rows:
+        return (f"ABSENT from the census table {path} — a CENSUS defect: fix the census tool so the shadow "
+                f"forms {line}, certify it, re-run the cell")
+    models = ", ".join(sorted({r["model"] for r in rows}))
+    return (f"present in the census table {path} (models: {models}) but not certified for this card — "
+            f"a CERTIFICATION gap: certify the table, re-run the cell")

@@ -58,8 +58,8 @@ def ew_meta(n_elements: int) -> dict:
     from nbxtensor.ops.autotune_bucket import class_floor
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.dtype.nbx_dtype import NBXDtype
-    from nbxtensor.host import need as _need
-    _census = _need("census")()                 # the application's launch census (nbxtensor.host)
+    from nbxtensor.ops.launch_observer import launch_observer
+    _census = launch_observer()                 # the application's launch observer (dry run), if any
     from nbxtensor.ops.autotune_cache import key_of
     rep = class_floor("elements", nb)
     buf = NBXTensor.empty((rep,), dtype=NBXDtype.float32, device='cuda')
