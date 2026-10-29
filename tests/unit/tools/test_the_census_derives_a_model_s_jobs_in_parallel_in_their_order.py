@@ -13,6 +13,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
 
 import derived_census as DC  # noqa: E402
@@ -47,7 +49,7 @@ def test_the_workers_are_what_the_free_memory_holds_not_the_cores(monkeypatch):
     import types
     from nbxtensor.backend import host_memory as HM
     from neurobrix.core.prism import memory_budget as MB
-    monkeypatch.setattr(DC.os, "cpu_count", lambda: 12)
+    monkeypatch.setattr(DC, "_machine_cores", lambda: 12)
     monkeypatch.setattr(DC.os, "getloadavg", lambda: (0.0, 0.0, 0.0))
     monkeypatch.setattr(MB, "memory_ladder_mb", lambda: [4096, 8192, 16384])
     def free(mb):
@@ -67,12 +69,29 @@ def test_the_workers_are_the_cores_the_machine_is_not_running_on(monkeypatch):
     explanation's timeout (2026-10-22). Red if the cores alone decide, whatever the machine already runs."""
     import types
     from nbxtensor.backend import host_memory as HM
-    monkeypatch.setattr(DC.os, "cpu_count", lambda: 12)
+    monkeypatch.setattr(DC, "_machine_cores", lambda: 12)
     monkeypatch.setattr(HM, "memory_state", lambda: types.SimpleNamespace(available_mb=1_000_000))
     monkeypatch.setattr(DC.os, "getloadavg", lambda: (9.6, 9.0, 8.0))
     assert DC._workers_memory_holds(20, 1 << 20) == 3
     monkeypatch.setattr(DC.os, "getloadavg", lambda: (40.0, 40.0, 40.0))
     assert DC._workers_memory_holds(20, 1 << 20) == 1
+
+
+def test_the_cores_are_the_profiles_not_the_machines_threads(monkeypatch):
+    """The rack's profile declares 40 cores (cpu.compute_threads) where os.cpu_count() reads its 80 hyper-threads: the
+    workers are the profile's cores (rule 1). Red with the count read from the machine."""
+    import types
+    from nbxtensor.backend import host_memory as HM
+    from neurobrix.core.prism import autodetect as AD
+    monkeypatch.setattr(DC.os, "cpu_count", lambda: 80)
+    monkeypatch.setattr(DC.os, "getloadavg", lambda: (0.0, 0.0, 0.0))
+    monkeypatch.setattr(HM, "memory_state", lambda: types.SimpleNamespace(available_mb=1_000_000))
+    monkeypatch.setattr(AD, "load_default_profile", lambda: types.SimpleNamespace(
+        cpu=types.SimpleNamespace(compute_threads=40)))
+    assert DC._workers_memory_holds(100, 1 << 20) == 40
+    monkeypatch.setattr(AD, "load_default_profile", lambda: types.SimpleNamespace(cpu=None))
+    with pytest.raises(RuntimeError, match="declares no cpu"):
+        DC._workers_memory_holds(100, 1 << 20)
 
 
 def test_the_workers_leave_what_the_gate_cells_reserved_and_say_their_own(monkeypatch, tmp_path):
@@ -86,7 +105,7 @@ def test_the_workers_leave_what_the_gate_cells_reserved_and_say_their_own(monkey
     import types
     from nbxtensor.backend import host_memory as HM
     from neurobrix.core.prism import memory_budget as MB
-    monkeypatch.setattr(DC.os, "cpu_count", lambda: 12)
+    monkeypatch.setattr(DC, "_machine_cores", lambda: 12)
     monkeypatch.setattr(DC.os, "getloadavg", lambda: (0.0, 0.0, 0.0))
     monkeypatch.setattr(MB, "memory_ladder_mb", lambda: [4096, 8192, 16384])
     monkeypatch.setattr(HM, "memory_state", lambda: types.SimpleNamespace(available_mb=20_000, total_mb=20_000))

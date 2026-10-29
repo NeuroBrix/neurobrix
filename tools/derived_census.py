@@ -2779,8 +2779,21 @@ class _host_hold:
         return False
 
 
+def _machine_cores() -> int:
+    """The compute threads of the machine the workers run on, as its hardware profile declares them
+    (`cpu.compute_threads`: the performance cores of a hybrid CPU, else the physical cores — rule 1, the profile is the
+    machine's identity card): never `os.cpu_count()`, which counts the hyper-threads (80 on the rack's 40 cores).
+    A profile without its CPU is refused by name."""
+    from neurobrix.core.prism.autodetect import load_default_profile
+    cpu = getattr(load_default_profile(), "cpu", None)
+    if cpu is None:
+        raise RuntimeError("derived census: this machine's hardware profile declares no cpu: section, so the workers "
+                           "have no core count — regenerate the profile (rule 1: no count read from the machine)")
+    return int(cpu.compute_threads)
+
+
 def _workers_memory_holds(n_jobs: int, worker_bytes: int, running: int = 0) -> int:
-    """How many derivation workers the machine holds at once: the cores (`os.cpu_count()`), and the free host
+    """How many derivation workers the machine holds at once: the cores (`_machine_cores`, the profile's), and the free host
     memory read as Prism reads it (`nbxtensor.backend.host_memory`, rounded DOWN to the memory ladder's rung,
     `memory_budget.rung_down_mb`) over what one worker measured it takes (`worker_bytes`). A derivation holds a whole
     graph: on 24 GB of unified memory the cores were no memory bound, and the census started a worker per core until
@@ -2799,7 +2812,7 @@ def _workers_memory_holds(n_jobs: int, worker_bytes: int, running: int = 0) -> i
     for hours after the gate had ended (2026-10-23 21:34 -> 23:10)."""
     from nbxtensor.backend.host_memory import memory_state
     from neurobrix.core.prism.memory_budget import rung_down_mb
-    cores = max(0 if running else 1, (os.cpu_count() or 1) - int(os.getloadavg()[0]))
+    cores = max(0 if running else 1, _machine_cores() - int(os.getloadavg()[0]))
     state = memory_state()
     free = state.available_mb
     if free is None or worker_bytes <= 0:
