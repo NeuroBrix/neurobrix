@@ -182,7 +182,7 @@ def _exclusions_path() -> Optional[str]:
 
 
 def record_screen_exclusions(entries) -> int:
-    """Persist configs the correctness screen refused, so Forge sees them.
+    """Persist configs the correctness screen refused, so a later sweep and its readers see them.
 
     A config excluded for being WRONG and a config that merely lost on speed
     are indistinguishable in a sweep that records only the winner — and they
@@ -220,7 +220,7 @@ def record_screen_exclusions(entries) -> int:
 
 
 def screen_exclusions() -> Dict[str, Dict]:
-    """Everything the screen has refused on this machine, for Forge."""
+    """Everything the screen has refused on this machine."""
     path = _exclusions_path()
     if path is None:
         return {}

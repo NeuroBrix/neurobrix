@@ -2045,7 +2045,7 @@ def _screen_configs(tuner, configs, key, meta=None, record_key=None):
 
 
 def _record_screen_exclusions(dropped) -> None:
-    """Hand the exclusions to the persisted sweep, so Forge sees them."""
+    """Hand the exclusions to the persisted sweep, so its readers see them."""
     try:
         from nbxtensor.ops import autotune_cache
     except Exception:                                   # pragma: no cover

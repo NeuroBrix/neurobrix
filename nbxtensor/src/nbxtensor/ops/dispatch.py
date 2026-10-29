@@ -282,7 +282,7 @@ def _meta_select(x, dim, index):
 
 def _meta_slice_scatter(x, src, dim=0, start=None, end=None, step=1):
     """aten.slice_scatter: a copy of `x` with `src` written where `x[..., start:end:step]` lies (along `dim`) —
-    the functional form of an in-place write into a slice view (Forge `GraphBuilder.write_back_view`: Swin's
+    the functional form of an in-place write into a slice view (a traced graph records it for, e.g., Swin's
     shifted-window mask `img_mask[:, h, w, :] = cnt`). The slice is `_meta_slice`'s, the same bounds rules."""
     out = x.clone()
     _meta_slice(out, dim, start, end, step).copy_(src)

@@ -133,7 +133,7 @@ confirm: tensor metadata, allocators and the memory planner, the launcher.
 Developed in `nbxtensor/` of the NeuroBrix repository on branch `nbxtensor`,
 installed by the engine as a path dependency. Extracted to its own repository
 (`NeuroBrix/nbxtensor`, history kept with git filter-repo) and published on
-Hocine's GO only. Forge never enters it.
+Hocine's GO only. No code or detail of the container build toolchain enters it.
 
 ## 7. Versions
 
