@@ -194,6 +194,19 @@ live count. `MTLDevice.currentAllocatedSize` is cumulative and cannot be read as
 (kernels/metal_device.py:381). The docstring must state this, so that no caller reads `total - free` as
 the runtime's footprint.
 
+### `nbxtensor.backend.cpu.pool` — every core (DESIGN rule 13)
+
+```python
+def measured_threads() -> int                     # Apple silicon: performance cores; else physical cores allowed
+def threads() -> int                              # the set size, else the measurement
+def set_threads(n: Optional[int]) -> None         # an application's size; None = the measurement
+def numa_nodes() -> Dict[int, Tuple[int, ...]]    # Linux /sys/devices/system/node; {} elsewhere
+def pieces(n: int, parts: int) -> List[Tuple[int, int]]          # contiguous, in order, sizes within one
+def split_threshold(kind: str, probe=None) -> int                # set, or measured once (inline vs split)
+def set_split_threshold(kind: str, n: Optional[int]) -> None
+def parallel_for(n: int, run: Callable[[int, int], object], kind: str, probe=None) -> Sequence[object]
+```
+
 ## 6. `nbxtensor.memory`
 
 The allocator becomes one interface with one instance per device, not a class holding process-wide

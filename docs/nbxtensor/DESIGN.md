@@ -87,6 +87,15 @@ Apple MLX, tinygrad, Hugging Face candle. (vLLM did not: it is built on torch.)
     builds its own policy from what it knows (NeuroBrix: its DtypeEngine, from
     the hardware profile and the container) and passes it. The library knows
     no model and no profile.
+13. **The CPU uses every core it is given** (Hocine, 29/10 18:11). Host work
+    over a large array is cut into contiguous pieces run on one thread pool
+    (`nbxtensor.backend.cpu.pool`), each piece a numpy call that releases the
+    GIL in its inner loop, as ggml does. The pool's size is the library's
+    measurement of the machine (Apple silicon: its performance cores; else the
+    physical cores the process may run on) unless an application sets it
+    (NeuroBrix: its hardware profile's compute threads). Under a size
+    threshold the work runs inline: the threshold is measured (inline against
+    split, per kind of work), never written by hand. No new dependency.
 
 ## 3. Layout
 

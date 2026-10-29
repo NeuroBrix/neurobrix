@@ -231,6 +231,27 @@ from nbxtensor.ops import launch_observer
 assert launch_observer.launch_observer().active() is False     # no observer: nothing runs dry
 ```
 
+## The CPU: every core
+
+Host work over a large array runs on a thread pool, one contiguous piece per thread, each piece a numpy call (numpy
+releases the GIL in its loops). The pool's size is measured on the machine (Apple silicon: its performance cores) and
+can be set; under a threshold measured for each kind of work, the work runs inline.
+
+```python
+import numpy as np
+from nbxtensor.backend.cpu import pool
+
+assert pool.threads() == pool.measured_threads() >= 1        # this machine's compute cores, measured
+x = np.linspace(-3, 3, 1 << 20, dtype=np.float32)
+out = np.empty_like(x)
+probe = lambda n: (lambda a, b: np.exp(x[a:b], out=out[a:b]))   # how the threshold for "exp" is measured
+pool.parallel_for(x.size, lambda a, b: np.exp(x[a:b], out=out[a:b]), "exp", probe)
+assert out.tobytes() == np.exp(x).tobytes()                   # the same bytes as one numpy call
+pool.set_threads(2)                                           # an application's own size
+assert pool.threads() == 2
+pool.set_threads(None)                                        # back to the measurement
+```
+
 ## Backends
 
 CUDA (NVIDIA), Apple Metal through triton-ext, and the CPU. The backend modules are moving into the library; until
