@@ -31,7 +31,8 @@ def _past_the_door(*_a, **_k):
 
 def test_a_projection_mixing_layouts_is_refused_by_name(monkeypatch):
     from neurobrix.triton import moe as M
-    from neurobrix.triton.moe import _build_ptr_tables
+    import nbxtensor.memory.pointer_tables as PT  # the MoE pointer tables (M2)
+    from nbxtensor.memory.pointer_tables import _build_ptr_tables
     monkeypatch.setattr(M, "_detect_gpu_backend", lambda: "cuda")
     monkeypatch.setattr(M.DeviceAllocator, "set_device", staticmethod(_past_the_door))
     F, H = 4, 6
@@ -44,6 +45,7 @@ def test_a_projection_mixing_layouts_is_refused_by_name(monkeypatch):
 _PROMOTE = r"""
 import ctypes, os, sys
 import numpy as np
+import neurobrix  # the engine first: it puts its own tree's nbxtensor on the path
 import nbxtensor.tensor as NT
 import nbxtensor.memory.allocator as _nbx_allocator
 from nbxtensor.dtype.nbx_dtype import NBXDtype; from nbxtensor.tensor import NBXTensor
@@ -59,6 +61,7 @@ _nbx_allocator.DeviceAllocator.set_device = staticmethod(lambda *a, **k: None)
 _nbx_allocator.DeviceAllocator.ensure_triton_device = staticmethod(lambda *a, **k: None)
 _nbx_allocator.DeviceAllocator.free_cuda = staticmethod(lambda *a, **k: None)
 import neurobrix.triton.moe as M
+import nbxtensor.memory.pointer_tables as PT  # the MoE pointer tables (M2)
 from neurobrix.core.runtime.graph.moe_fusion import expert_weight_lists
 E, H, F = 4, 6, 3
 src = np.arange(E * H * 2 * F, dtype=np.float16).reshape(E, H, 2 * F)
@@ -90,14 +93,14 @@ print("PROMOTED OK")
 
 # 2. the table rule: per-call weights never enter (nor read) the pointer-table cache
 built = []
-M._build_ptr_tables = lambda *a: built.append(1) or object()
+PT._build_ptr_tables = lambda *a: built.append(1) or object()
 ws = [NBXTensor.empty((F, H), "float16", 0) for _ in range(E)]
-fp = M._ptr_cache_fingerprint(ws, ws, ws, E)
-t1 = M._tables_for_call(ws, ws, ws, E, True, 0)
-assert M._ptr_cache_get(fp) is None, "a per-call table entered the cache"
-t2 = M._tables_for_call(ws, ws, ws, E, False, 0)
-assert M._ptr_cache_get(fp) is t2 and len(built) == 2, "a resident table is cached"
-t3 = M._tables_for_call(ws, ws, ws, E, True, 0)
+fp = PT._ptr_cache_fingerprint(ws, ws, ws, E)
+t1 = PT._tables_for_call(ws, ws, ws, E, True, 0)
+assert PT._ptr_cache_get(fp) is None, "a per-call table entered the cache"
+t2 = PT._tables_for_call(ws, ws, ws, E, False, 0)
+assert PT._ptr_cache_get(fp) is t2 and len(built) == 2, "a resident table is cached"
+t3 = PT._tables_for_call(ws, ws, ws, E, True, 0)
 assert t3 is not t2 and len(built) == 3, "a per-call call must not be served a cached table"
 print("TABLES OK")
 

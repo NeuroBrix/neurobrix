@@ -50,6 +50,7 @@ def test_the_engine_table_matches_fp64_through_the_wrapper():
     from nbxtensor.ops import wrappers as w
     from nbxtensor.ops import moe_wrappers as _nbx_moe_wrappers  # the family the moved names live in (M2 split)
     from neurobrix.triton import moe as M
+    import nbxtensor.memory.pointer_tables as PT  # the MoE pointer tables (M2)
 
     rng = np.random.default_rng(11)
 
@@ -69,7 +70,7 @@ def test_the_engine_table_matches_fp64_through_the_wrapper():
 
     gate_w, gate64 = _experts()
 
-    tables = M._build_ptr_tables(gate_w, gate_w, gate_w)
+    tables = PT._build_ptr_tables(gate_w, gate_w, gate_w)
 
     # The pin half of the contract: held now, for the table's lifetime.
     assert tables.pins, "metal tables built without a pin are an accident"

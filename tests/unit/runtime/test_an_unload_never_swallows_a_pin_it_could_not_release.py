@@ -11,10 +11,10 @@ from neurobrix.core.memory.manager import MemoryManager
 
 
 def _stub(monkeypatch, fn):
-    monkeypatch.setitem(sys.modules, "neurobrix.triton.moe", types.SimpleNamespace(release_pinned_tables=fn))
+    monkeypatch.setitem(sys.modules, "nbxtensor.memory.pointer_tables", types.SimpleNamespace(release_pinned_tables=fn))
 
 
-def test_the_unload_asks_the_loaded_moe_module_to_release_its_pinned_tables(monkeypatch):
+def test_the_unload_asks_the_loaded_pointer_table_module_to_release_its_pinned_tables(monkeypatch):
     calls = []
     _stub(monkeypatch, lambda: calls.append(1) or 0)
     MemoryManager.unload_weights({}, clear_cuda_cache=False)

@@ -119,6 +119,7 @@ def test_a_per_call_table_releases_its_pins_when_the_call_returns():
 def test_unloading_the_weights_releases_the_cached_tables_that_pin_them(unload):
     drv = _metal_or_skip()
     from neurobrix.triton import moe as M
+    import nbxtensor.memory.pointer_tables as PT  # the MoE pointer tables (M2)
     weights, _ = _fused_call("resident", seed=43)
     spans = [(t.data_ptr(), DeviceAllocator._cuda_ptr_size[t.data_ptr()]) for t in weights.values()]
     assert all(b in drv._RESIDENT_WRAPS for b, _ in spans), "a resident table that pins nothing is an accident"
@@ -126,7 +127,7 @@ def test_unloading_the_weights_releases_the_cached_tables_that_pin_them(unload):
 
     unload(weights)                                    # what every strategy's unload goes through
 
-    assert not any(t.pins for t in M._ptr_cache.values()), "a cached table still pins after the unload"
+    assert not any(t.pins for t in PT._ptr_cache.values()), "a cached table still pins after the unload"
     assert not drv._RESIDENT_WRAPS, (
         f"the weights were unloaded and the driver still keeps {len(drv._RESIDENT_WRAPS)} whole-allocation "
         f"wrap(s): the arena stays mapped beside whatever loads next")

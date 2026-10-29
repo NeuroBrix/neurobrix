@@ -303,7 +303,7 @@ class NBXExpertStore:
         cap = max(int(self.residency.n_slots), len(keep))
         if len(self._bound) <= cap:
             return
-        from neurobrix.triton.moe import release_pinned_tables
+        from nbxtensor.memory.pointer_tables import release_pinned_tables
         release_pinned_tables()
         for key in [k for k in self._bound if k not in keep][:len(self._bound) - cap]:
             for ptr in self._bound.pop(key)[0]:
