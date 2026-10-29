@@ -35,9 +35,11 @@ def test_the_chip_file_is_read_before_the_family_file(tmp_path, monkeypatch):
     import yaml
     from neurobrix.core.config import loader as CL
     root = tmp_path / "vendors" / "apple"; root.mkdir(parents=True)
-    (root / "apple_silicon.yml").write_text(yaml.safe_dump({"architecture": "apple_silicon"}))
-    (root / "apple_m4_pro.yml").write_text(yaml.safe_dump({"architecture": "apple_silicon", "compute_capability": "apple-m4-pro",
-                                                          "measured": {"source": "test", "matmul_tflops": {"float16": 6.0}, "memory_gbps": 224, "h2d_gbps": 58}}))
+    # The engine's half of each device only (its measured facts); the identification a device is found by —
+    # `architecture`, `compute_capability` — is the library's half (nbxtensor/backend/devices/apple), merged in.
+    (root / "apple_silicon.yml").write_text(yaml.safe_dump({}))
+    (root / "apple_m4_pro.yml").write_text(yaml.safe_dump({
+        "measured": {"source": "test", "matmul_tflops": {"float16": 6.0}, "memory_gbps": 224, "h2d_gbps": 58}}))
     monkeypatch.setattr(CL, "CONFIG_ROOT", tmp_path)
     from neurobrix.core.prism.loader import _vendor_block
     dev = {"brand": "apple", "architecture": "apple_silicon", "compute_capability": "apple-m4-pro"}
