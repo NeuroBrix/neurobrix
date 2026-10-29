@@ -11,7 +11,7 @@ from nbxtensor.ops._cost import (Spec, elementwise_binary, elementwise_unary, na
 
 def _device():
     try:
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        from nbxtensor.tensor import DeviceAllocator
         DeviceAllocator.set_device(0)
         return True
     except Exception:
@@ -25,7 +25,7 @@ pytestmark = pytest.mark.skipif(not _device(), reason="the allocator's peak need
 def _this_machine(monkeypatch):
     """The kernels read their launch facts from the run's hardware profile (`set_hardware_profile`): this host's."""
     from neurobrix.core.prism.autodetect import load_default_profile
-    from neurobrix.kernels import wrappers as W
+    from nbxtensor.ops import wrappers as W
     previous = W.get_hardware_profile()
     W.set_hardware_profile(load_default_profile())
     yield
@@ -35,7 +35,7 @@ def _this_machine(monkeypatch):
 def _measure(fn):
     """The allocator's peak above its level during ONE call, after a first call (which may tune the kernel's
     configuration, the tuning's own buffers being no part of the op)."""
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator as DA
+    from nbxtensor.tensor import DeviceAllocator as DA
     fn()
     DA.device_synchronize(0)
     DA.empty_cache_pool()
@@ -49,7 +49,7 @@ def _measure(fn):
 
 
 def _x(shape, dtype, transpose=False):
-    from neurobrix.kernels.nbx_tensor import NBXDtype, NBXTensor
+    from nbxtensor.tensor import NBXDtype, NBXTensor
     a = np.random.default_rng(0).standard_normal(shape).astype(np.float32)
     t = NBXTensor.from_numpy(a)
     if dtype != "float32":
@@ -66,13 +66,13 @@ R, C = 256, 1024
 
 @pytest.mark.parametrize("transpose", [False, True])
 def test_unary(transpose):
-    from neurobrix.kernels import wrappers as W
+    from nbxtensor.ops import wrappers as W
     x = _x((C, R) if transpose else (R, C), "float16", transpose)
     assert _measure(lambda: W.exp(x)) == elementwise_unary(_spec(x)).peak_bytes
 
 
 def test_binary_with_a_cast():
-    from neurobrix.kernels import wrappers as W
+    from nbxtensor.ops import wrappers as W
     a, b = _x((R, C), "float16"), _x((R, C), "float32")
     want = elementwise_binary(_spec(a), _spec(b), "float32", (R, C)).peak_bytes
     assert _measure(lambda: W.add(a, b)) == want
@@ -80,21 +80,21 @@ def test_binary_with_a_cast():
 
 @pytest.mark.parametrize("dim", [-1, 0])
 def test_softmax(dim):
-    from neurobrix.kernels import wrappers as W
+    from nbxtensor.ops import wrappers as W
     x = _x((R, C), "float16")
     assert _measure(lambda: W.softmax(x, dim)) == softmax(_spec(x), dim).peak_bytes
 
 
 @pytest.mark.parametrize("transpose", [False, True])
 def test_rms_norm(transpose):
-    from neurobrix.kernels import wrappers as W
+    from nbxtensor.ops import wrappers as W
     x = _x((C, R) if transpose else (R, C), "float16", transpose)
     w = _x((x.shape[-1],), "float16")
     assert _measure(lambda: W.rms_norm(x, w)) == rms_norm(_spec(x), True).peak_bytes
 
 
 def test_layer_norm():
-    from neurobrix.kernels import wrappers as W
+    from nbxtensor.ops import wrappers as W
     x, w, b = _x((R, C), "float16"), _x((C,), "float16"), _x((C,), "float16")
     want = native_layer_norm(_spec(x), (C,), True, True).peak_bytes
     assert _measure(lambda: W.native_layer_norm(x, (C,), w, b)) == want
@@ -102,6 +102,6 @@ def test_layer_norm():
 
 @pytest.mark.parametrize("dim", [-1, 0])
 def test_sum(dim):
-    from neurobrix.kernels import wrappers as W
+    from nbxtensor.ops import wrappers as W
     x = _x((R, C), "float16")
     assert _measure(lambda: W.sum_wrapper(x, dim)) == reduction(_spec(x), dim, False, "float16").peak_bytes
