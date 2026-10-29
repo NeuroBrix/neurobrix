@@ -33,7 +33,7 @@ def available_mb() -> int | None:
     """Our own authority for this quantity, never `Pages free` alone."""
     try:
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-        from neurobrix.core.host_memory import memory_state
+        from nbxtensor.backend.host_memory import memory_state
         v = memory_state().available_mb
         if v is not None:
             return int(v)

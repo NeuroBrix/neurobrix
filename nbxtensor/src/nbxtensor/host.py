@@ -21,10 +21,10 @@ SERVICES: Dict[str, str] = {
     "vendor_config": "(vendor, architecture) -> the vendor file of that architecture, as a dict",
     "vendor_param": "(section, key, default) -> one value of the executing device's vendor file",
     "vendors_dir": "() -> the directory of the vendor files (pathlib.Path)",
-    "tiling_policy": "() -> the split sizes the tiling rules read, as a dict",
-    "certified_dir": "() -> the directory of the certified kernel settings (pathlib.Path)",
-    "memory_state": "() -> the host memory reading (available_mb, swap_used_mb, ...)",
-    "host_shares_memory_with_device": "(device) -> True when host and device draw on one pool",
+    "tiling_policy": "() -> the split sizes the tiling rules read, as a dict; the library's own when none is provided",
+    "certified_dir": "() -> the directory of the certified kernel settings (pathlib.Path); the library's own when none is provided",
+    "memory_state": "() -> the host memory reading (available_mb, swap_used_mb, ...); the library's own when none is provided",
+    "host_shares_memory_with_device": "(device) -> True when host and device draw on one pool; the library's own when none is provided",
     "imposed_rung_mb": "() -> the memory rung imposed on the allocator in MB, or None",
     "deferred_drain_policy_of": "(memory section of a vendor file) -> the deferred-free drain policy",
     "memory_class_gb": "(memory_mb) -> the memory class of a card, in GB",
@@ -38,7 +38,7 @@ SERVICES: Dict[str, str] = {
     "attention_operand_dtypes": "(...) -> the operand dtypes an attention runs at",
     "attention_operand_alignment": "(...) -> the alignment an attention's operands are given",
     "matrix_unit_split_scale": "(...) -> the scale of a split fp32 operand on the matrix unit",
-    "profile_triton_has_fp64": "() -> True when the profile in force computes float64",
+    "profile_triton_has_fp64": "(profile) -> True when the device of that profile computes float64; the library's own when none is provided",
 }
 
 class _NoCensus:
@@ -60,6 +60,33 @@ def _no_refusal(path) -> list:
     """The installation rule of an application without one: no path is refused."""
     return []
 
+
+def _library_memory_state():
+    from nbxtensor.backend.host_memory import memory_state
+    return memory_state
+
+
+def _library_fact(name):
+    def fact():
+        from nbxtensor.backend import device_facts
+        return getattr(device_facts, name)
+    return fact
+
+
+def _library_tiling_policy():
+    from nbxtensor.ops.tiling_policy import tiling_table
+    return tiling_table
+
+
+#: what the library answers by itself when no application provided the service (API.md section 11): a reading of the
+#: machine or the device, or the library's own default policy — an application's answer, when provided, wins
+_LIBRARY_OWN = {
+    "memory_state": _library_memory_state,
+    "host_shares_memory_with_device": _library_fact("host_shares_memory_with_device"),
+    "profile_triton_has_fp64": _library_fact("kernels_carry_fp64"),
+    "certified_dir": _library_fact("certified_dir"),
+    "tiling_policy": _library_tiling_policy,
+}
 
 _ABSENT = {"census": lambda: _NoCensus,
            # an application's rule on where a backend build may live (NeuroBrix: off its workshop's cleared storage);
@@ -85,6 +112,8 @@ def need(name: str) -> Callable:
     except KeyError:
         if name in _ABSENT:
             return _ABSENT[name]
+        if name in _LIBRARY_OWN:
+            return _LIBRARY_OWN[name]()
         if name not in SERVICES:
             raise KeyError(f"nbxtensor.host: {name!r} is not a service this library reads") from None
         raise RuntimeError(f"ZERO FALLBACK: nbxtensor needs the service {name!r} ({SERVICES[name]}) and the application "

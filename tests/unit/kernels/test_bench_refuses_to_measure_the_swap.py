@@ -32,10 +32,12 @@ from __future__ import annotations
 
 import pytest
 
+from nbxtensor.backend import device_facts as _facts
+
 
 def test_the_decision_is_the_live_available_memory(monkeypatch):
     from nbxtensor.backend import launcher as L
-    import neurobrix.core.host_memory as hm
+    import nbxtensor.backend.host_memory as hm
 
     # The numbers straddle `available - the bench's own flush buffer`, not
     # `available` alone: `do_bench` allocates a 256 MiB L2 flush buffer per
@@ -55,7 +57,7 @@ def test_the_decision_is_the_live_available_memory(monkeypatch):
         source = "test"
 
     monkeypatch.setattr(hm, "memory_state", lambda: _M())
-    monkeypatch.setattr(hm, "host_shares_memory_with_device", lambda: True)   # the doors reason about a unified pool
+    monkeypatch.setattr(_facts, "host_shares_memory_with_device", lambda: True)   # the doors reason about a unified pool
     swaps, avail = L.bench_would_swap((1000 - flush_mb + 1) * 2 ** 20)
     assert swaps is True and avail == 1000
     swaps, _ = L.bench_would_swap((1000 - flush_mb - 1) * 2 ** 20)
@@ -91,7 +93,7 @@ def test_an_unreadable_platform_gates_nothing(monkeypatch):
     """`memory_state` names why it cannot read; this door must not turn that
     honest None into a silent always-on or always-off policy of its own."""
     from nbxtensor.backend import launcher as L
-    import neurobrix.core.host_memory as hm
+    import nbxtensor.backend.host_memory as hm
 
     class _M:
         available_mb = None
@@ -99,7 +101,7 @@ def test_an_unreadable_platform_gates_nothing(monkeypatch):
         source = "unreadable platform"
 
     monkeypatch.setattr(hm, "memory_state", lambda: _M())
-    monkeypatch.setattr(hm, "host_shares_memory_with_device", lambda: True)   # the doors reason about a unified pool
+    monkeypatch.setattr(_facts, "host_shares_memory_with_device", lambda: True)   # the doors reason about a unified pool
     swaps, avail = L.bench_would_swap(10 ** 12)
     assert swaps is False and avail is None
 
@@ -140,7 +142,7 @@ def test_an_unmeasured_choice_is_never_persisted():
 
 def test_a_sweep_that_grew_the_swap_is_marked_unmeasured(monkeypatch):
     from nbxtensor.ops import autotune_refusals as R
-    import neurobrix.core.host_memory as hm
+    import nbxtensor.backend.host_memory as hm
 
     swap = {"used": 4000}
 
@@ -154,7 +156,7 @@ def test_a_sweep_that_grew_the_swap_is_marked_unmeasured(monkeypatch):
             return swap["used"]
 
     monkeypatch.setattr(hm, "memory_state", lambda: _M())
-    monkeypatch.setattr(hm, "host_shares_memory_with_device", lambda: True)   # the doors reason about a unified pool
+    monkeypatch.setattr(_facts, "host_shares_memory_with_device", lambda: True)   # the doors reason about a unified pool
     said = []
 
     class _At:
@@ -178,7 +180,7 @@ def test_a_quiet_sweep_is_not_marked(monkeypatch):
     """Both directions: zero growth marks nothing, or every sweep on a busy
     machine would starve the persistent cache for no reason."""
     from nbxtensor.ops import autotune_refusals as R
-    import neurobrix.core.host_memory as hm
+    import nbxtensor.backend.host_memory as hm
 
     class _M:
         available_mb = 9000
@@ -187,7 +189,7 @@ def test_a_quiet_sweep_is_not_marked(monkeypatch):
         swap_used_mb = 4000
 
     monkeypatch.setattr(hm, "memory_state", lambda: _M())
-    monkeypatch.setattr(hm, "host_shares_memory_with_device", lambda: True)   # the doors reason about a unified pool
+    monkeypatch.setattr(_facts, "host_shares_memory_with_device", lambda: True)   # the doors reason about a unified pool
     R.begin_sweep()
     R.note_sweep_swap_baseline()
     assert R.sweep_grew_the_swap() == 0
@@ -195,7 +197,7 @@ def test_a_quiet_sweep_is_not_marked(monkeypatch):
 
 def test_an_unreadable_swap_marks_nothing(monkeypatch):
     from nbxtensor.ops import autotune_refusals as R
-    import neurobrix.core.host_memory as hm
+    import nbxtensor.backend.host_memory as hm
 
     class _M:
         available_mb = None
@@ -204,7 +206,7 @@ def test_an_unreadable_swap_marks_nothing(monkeypatch):
         swap_used_mb = None
 
     monkeypatch.setattr(hm, "memory_state", lambda: _M())
-    monkeypatch.setattr(hm, "host_shares_memory_with_device", lambda: True)   # the doors reason about a unified pool
+    monkeypatch.setattr(_facts, "host_shares_memory_with_device", lambda: True)   # the doors reason about a unified pool
     R.begin_sweep()
     R.note_sweep_swap_baseline()
     assert R.sweep_grew_the_swap() == 0, (
@@ -216,7 +218,7 @@ def test_on_discrete_memory_both_doors_are_inert(monkeypatch):
     on a 1 MB swap delta on 2026-09-13 before this condition existed."""
     from nbxtensor.ops import autotune_refusals as R
     from nbxtensor.backend.launcher import bench_would_swap
-    import neurobrix.core.host_memory as hm
+    import nbxtensor.backend.host_memory as hm
 
     class _M:
         available_mb = 10           # would trip the pre-gate on a unified device
@@ -224,7 +226,7 @@ def test_on_discrete_memory_both_doors_are_inert(monkeypatch):
         source = "test"
         swap_used_mb = 999999        # would trip the post-hoc door too
     monkeypatch.setattr(hm, "memory_state", lambda: _M())
-    monkeypatch.setattr(hm, "host_shares_memory_with_device", lambda: False)
+    monkeypatch.setattr(_facts, "host_shares_memory_with_device", lambda: False)
     assert bench_would_swap(10 ** 12) == (False, None)
     R.begin_sweep(); R.note_sweep_swap_baseline()
     _M.swap_used_mb = 0              # a "delta" of -999999 either way: unread

@@ -30,10 +30,10 @@ from pathlib import Path
 import pytest
 import yaml
 
-import neurobrix.core.host_memory as host_memory
+import nbxtensor.backend.host_memory as host_memory
 import neurobrix.core.prism.loader as profile_loader
 import neurobrix.core.prism.solver as solver_mod
-from neurobrix.core.host_memory import MemoryState
+from nbxtensor.backend.host_memory import MemoryState
 from neurobrix.core.prism.memory_budget import DeviceReading
 from tests.conftest import installed_container
 

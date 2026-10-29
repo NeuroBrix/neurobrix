@@ -27,7 +27,7 @@ from typing import Dict, List, Optional, Any, Tuple, TYPE_CHECKING
 
 from neurobrix.core.prism.structure import AllocationStrategy, DeviceSpec, PrismProfile
 from neurobrix.core.prism.structure import names_accelerator
-from neurobrix.core.host_memory import MemoryState, memory_state
+from nbxtensor.backend.host_memory import MemoryState, memory_state
 from neurobrix.core.prism.memory_budget import (DeviceReading, budget_mb as _budget_mb, tile_rung_mb as _tile_rung_mb,
                                                 rung_down_mb, describe as _describe_budget, read_device_sharing,
                                                 host_budget_mb as _host_budget_mb_read)

@@ -7,7 +7,7 @@
 (2) MEMORY — the engine's own plan for the cell's request (`--explain-plan --json`, the harness's `cell_request`,
     nothing runs, the container read from the NAS catalogue: kilobytes): on this UNIFIED host a cell holds
     `planned_memory_mb` (the device plan) PLUS `host_footprint.total_bytes`, from one pool; it is compared with the
-    memory really available now (`core.host_memory.memory_state`) minus the harness's headroom share (1/16 of the
+    memory really available now (`nbxtensor.backend.host_memory.memory_state`) minus the harness's headroom share (1/16 of the
     host). The harness reserves only the host footprint (told to the Dell 2026-10-03).
 Exit 0 = run; 1 = WITHHELD, keys missing (a census defect, certify first); 2 = WITHHELD for memory now (need and
 available printed; replayed when the memory is there). usage: precheck_keys_v2.py <tree> <model> <modes csv>"""
@@ -19,7 +19,7 @@ from neurobrix.kernels import census_table as T
 import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
 from nbxtensor.ops import autotune_certified as C
 from neurobrix.kernels import autotune_certify as A
-from neurobrix.core.host_memory import memory_state
+from nbxtensor.backend.host_memory import memory_state
 
 A._bind_hardware_profile()
 klass = C.memory_class_gb(A._certifying_device()["memory_mb"])

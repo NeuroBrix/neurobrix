@@ -40,7 +40,7 @@ where the rule lives, so a change there is a change to price here:
         worker: read through `safe_open`, converted, `.to(device)`, dropped. A load holds one tensor in
         flight per worker, the largest that many, as read and as converted; the device copy is the device
         plan's. Its file pages are clean and reclaimable, counted as available by the host reader this
-        price is set against (core/host_memory.py), so not priced: the M4 read PixArt-XL-2's T5 (17.7 GB
+        price is set against (nbxtensor/backend/host_memory.py), so not priced: the M4 read PixArt-XL-2's T5 (17.7 GB
         fp32) per tensor with 8 workers at a peak RSS of 15.6 GB and a peak phys_footprint of 0.59 GB.
         The passes do not add up under eager. The Mac, 2026-10-12: PixArt-XL-2 (T5 stored fp32, 18 GB)
         native priced 50 170 MB of host, 32 740 MB of it the CUDA rule's whole component read + pinned;
@@ -205,7 +205,7 @@ def host_footprint(plan, key_sizes: Mapping[str, Mapping[str, int]],
             shards = sorted((shard_sizes.get(name) or {}).values(), reverse=True)
             mapped = min(max(sizes), sum(shards[:load_workers])) if shards else max(sizes)
             if not pins:
-                # Clean file pages the host reclaims at will, and counts as AVAILABLE (core/host_memory.py:
+                # Clean file pages the host reclaims at will, and counts as AVAILABLE (nbxtensor/backend/host_memory.py:
                 # "File-backed pages" on macOS) — the figure this price is set against; pricing them counts
                 # them twice. The M4, 2026-10-12, PixArt-XL-2's T5 (17.7 GB fp32, 10 shards) read per tensor
                 # by 8 workers: peak RSS 15.6 GB, peak phys_footprint 0.59 GB.

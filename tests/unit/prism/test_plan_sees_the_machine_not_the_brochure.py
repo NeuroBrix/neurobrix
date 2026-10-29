@@ -28,8 +28,8 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.core import host_memory
-from neurobrix.core.host_memory import MemoryState, memory_state
+from nbxtensor.backend import host_memory
+from nbxtensor.backend.host_memory import MemoryState, memory_state
 from neurobrix.core.prism import solver as solver_mod
 from neurobrix.core.prism.structure import DeviceBrand, DeviceSpec
 

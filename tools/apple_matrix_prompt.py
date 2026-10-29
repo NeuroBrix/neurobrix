@@ -26,7 +26,7 @@ MARGIN = 1.25
 
 
 def available_mb():
-    from neurobrix.core.host_memory import memory_state
+    from nbxtensor.backend.host_memory import memory_state
     return memory_state().available_mb
 
 

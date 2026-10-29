@@ -11,7 +11,7 @@ were refused at 31/32 GiB while their earlier native rows measured 2.6-7.2 GB of
 The loader (core/io/weight_loader.py `_load_with_pinned_dma`) pins only when the device is cuda/hip;
 elsewhere it reads one tensor per worker through `safe_open`, converts it, `.to(device)` and drops it.
 What a load holds on the host is the tensors in flight: one per worker, the largest that many, as read
-and as converted. Its file pages are clean and counted as available by core/host_memory.py (the M4,
+and as converted. Its file pages are clean and counted as available by nbxtensor/backend/host_memory.py (the M4,
 PixArt-XL-2's T5 read so by 8 workers: peak RSS 15.6 GB, peak phys_footprint 0.59 GB), so not priced.
 Nothing outlives the load, so the passes do not add up under eager. The device copy is the device
 plan's (the unified `device` term).

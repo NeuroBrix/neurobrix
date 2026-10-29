@@ -24,7 +24,7 @@ import derived_census as DC  # noqa: E402
 
 
 def _room(monkeypatch, mb):
-    from neurobrix.core import host_memory as HM
+    from nbxtensor.backend import host_memory as HM
     from neurobrix.core.prism import memory_budget as MB
     monkeypatch.setattr(DC.os, "cpu_count", lambda: 64)
     monkeypatch.setattr(DC.os, "getloadavg", lambda: (0.0, 0.0, 0.0))

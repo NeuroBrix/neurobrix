@@ -2778,7 +2778,7 @@ class _host_hold:
 
 def _workers_memory_holds(n_jobs: int, worker_bytes: int, running: int = 0) -> int:
     """How many derivation workers the machine holds at once: the cores (`os.cpu_count()`), and the free host
-    memory read as Prism reads it (`core.host_memory`, rounded DOWN to the memory ladder's rung,
+    memory read as Prism reads it (`nbxtensor.backend.host_memory`, rounded DOWN to the memory ladder's rung,
     `memory_budget.rung_down_mb`) over what one worker measured it takes (`worker_bytes`). A derivation holds a whole
     graph: on 24 GB of unified memory the cores were no memory bound, and the census started a worker per core until
     the Mac panicked three times (2026-10-20 00:27, 00:42, 00:54, WindowServer watchdog, 21 swap files). Unread
@@ -2794,7 +2794,7 @@ def _workers_memory_holds(n_jobs: int, worker_bytes: int, running: int = 0) -> i
     the free figure; a grown one is counted twice: the error is fewer workers). Asked again as the room moves: a
     pool sized once at the start of Qwen3-Coder, while a gate held 207 GiB, ran its 13 derivations one at a time
     for hours after the gate had ended (2026-10-23 21:34 -> 23:10)."""
-    from neurobrix.core.host_memory import memory_state
+    from nbxtensor.backend.host_memory import memory_state
     from neurobrix.core.prism.memory_budget import rung_down_mb
     cores = max(0 if running else 1, (os.cpu_count() or 1) - int(os.getloadavg()[0]))
     state = memory_state()

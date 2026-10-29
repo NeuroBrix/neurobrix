@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.core.host_memory import MemoryState
+from nbxtensor.backend.host_memory import MemoryState
 from neurobrix.core.prism import solver as _solver_mod
 from neurobrix.core.prism.solver import PrismSolver
 from tests.unit.prism._pinned_machine import V100_16GB, profile as pinned_profile
