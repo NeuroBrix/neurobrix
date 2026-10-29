@@ -10,7 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **The Triton engine's autotune screen no longer refuses every configuration of a kernel whose input is a permuted view** (a convolution reading a channels-last input, for instance): the reference it compares against is now laid out the way the buffer is stored, so a correct configuration is kept and a runtime sweep completes.
 
+- **nbxtensor's `addmm` refuses a per-row bias `[M, N]` above four rows instead of computing it wrong**: its kernel adds one bias row to every output row, so such a bias was applied with its first row only. It is now refused by name (a bias `[N]` or `[1, N]`, which every catalogue model uses, is unchanged; a per-row bias at up to four rows is still served).
+
 ### Changed
+- **The matrix product and the linear layer declare what they allocate** (`nbxtensor.ops.linalg_wrappers.mm_cost` / `addmm_cost`, beside `bmm_cost`): the casts, the decode rows' GEMV and the weight copy a row-major weight costs there, the bias made contiguous, the output at its store dtype, an epilogue's output; each equal to the allocator's measured peak on the device, over the dtypes, the decode and tiled row counts, both weight layouts and the bias forms.
 - **PyTorch is no longer a required dependency**: the Triton engine (`--triton`, `--triton-sequential`) runs on nbxtensor, Triton and NumPy alone (on macOS, Triton is the one the Apple Metal install provides; pip does not try to fetch it). The PyTorch engine (`--compiled`, the default when no mode is given, and `--sequential`) is installed with `pip install "neurobrix[pytorch]"`; asking for it where PyTorch is not installed stops before anything is loaded, on every command, with a message (never a traceback) giving the install line, where to choose the PyTorch wheel for your hardware (pytorch.org), and the Triton alternative.
 
 ### Added

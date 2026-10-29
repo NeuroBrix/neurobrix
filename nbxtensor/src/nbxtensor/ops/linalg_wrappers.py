@@ -835,6 +835,12 @@ def addmm(bias, a, b,
             c[i] = addmv_wrapper(br, bt, a[i], beta=beta, alpha=alpha)
         return _apply_matmul_epilogue(c, _epilogue)
 
+    if bias.ndim == 2 and bias.shape[0] != 1:
+        # The kernel adds ONE bias row [N] to every output row: a per-row bias above the decode rows would be computed
+        # with its first row only. Refused by name, never computed wrong (no catalogue graph forms one: its 10 478
+        # addmm carry a bias [N], read 2026-10-29).
+        raise ValueError(f"addmm: a per-row bias {tuple(bias.shape)} is served at M <= 4 only (here M = {M}); "
+                         f"the kernel adds one bias row [N] to every row")
     a = a.contiguous()
     # A pre-transposed weight is walked by its strides (as mm); only a broadcast
     # (stride 0) operand is materialised, the kernel's tile loads need a real address.
@@ -1145,6 +1151,140 @@ def upsample_linear1d_wrapper(x, output_size, align_corners: bool = False,
     # (input, output) shapes + align_corners.
     result_4d = upsample_bilinear2d_wrapper(x_4d, output_size_2d, align_corners)
     return result_4d.squeeze(2)
+
+
+def mm_cost(a, b, epilogue: int = 0, native_bf16=None, force_accum=None, contract_half=None):
+    """`mm` on `a` [M, K] and `b` [K, N] (`_cost.Spec`s), in the wrapper's order: the operands cast to
+    `launch_keys.mm_dtypes` (a dense copy each); then, at M <= 4, `a` made contiguous, the output [M, N] and, per row,
+    the GEMV's own output (N at `matmul_out_dtype` for one row) — and a full copy of the weight when its rows are not
+    K-contiguous (`mv_wrapper`: `b.t()` must have stride 1 along K; a pre-transposed weight view has it, a row-major
+    one does not) — each freed once copied into the output's row, then an epilogue (SiLU, GELU) makes its output while
+    the GEMM's is alive; above, `a` made contiguous, `b` only when broadcast (a zero stride), the output at
+    `matmul_out_dtype` (fp32 when `a` was promoted), the matrix unit or the kernel allocating nothing more (row bands
+    are views, the epilogue runs in the kernel). A local rebound frees its old buffer after the new one exists; the
+    rest die at the return."""
+    from nbxtensor.ops import _cost as C
+    from nbxtensor.shape import is_contiguous
+    native_bf16 = bool(_core._NBX_HAS_NATIVE_BF16) if native_bf16 is None else native_bf16
+    force_accum = bool(NBX_FORCE_FP32_ACCUM) if force_accum is None else force_accum
+    contract_half = bool(_core._NBX_ACTIVATIONS_FP16_SAFE) if contract_half is None else contract_half
+    st = C._Steps()
+    M, K = (int(d) for d in a.shape)
+    N = int(b.shape[1])
+    flops = 2 * M * N * K
+    held = {}
+
+    def rebind(name, spec, label):
+        i = st.alloc(label, spec.nbytes)
+        old = held.get(name)
+        held[name] = i
+        if old is not None:
+            st.free(old)
+        return spec
+
+    a_to, b_to, promote_a, _promote_b = _lk.mm_dtypes(NBXDtype[a.dtype], NBXDtype[b.dtype], native_bf16, force_accum)
+    if NBXDtype[a.dtype] != a_to:
+        a = rebind("a", C.Spec.contiguous(a.shape, a_to.name), "a cast")
+    if NBXDtype[b.dtype] != b_to:
+        b = rebind("b", C.Spec.contiguous(b.shape, b_to.name), "b cast")
+    if not is_contiguous(a.shape, a.strides):
+        a = rebind("a", C.Spec.contiguous(a.shape, a.dtype), "a made contiguous")
+    if M <= 4:
+        out = _lk.matmul_out_dtype(NBXDtype[a.dtype], M, False, native_bf16, force_accum, contract_half)
+        c = st.alloc("output", M * N * dtype_size(out), returned=epilogue == 0)
+        row_out = _lk.matmul_out_dtype(NBXDtype[b.dtype], 1, False, native_bf16, force_accum, contract_half)
+        k_contiguous_rows = int(b.strides[0]) == 1          # b.t() has stride 1 along K
+        for _ in range(M):
+            copy = None if k_contiguous_rows else st.alloc("the weight made K-contiguous (mv)", b.nbytes)
+            r = st.alloc("a row's GEMV output", N * dtype_size(row_out))
+            if copy is not None:
+                st.free(copy)
+            st.free(r)
+    else:
+        if any(int(x) == 0 for x in b.strides):
+            b = rebind("b", C.Spec.contiguous(b.shape, b.dtype), "b broadcast made dense")
+        out = _lk.matmul_out_dtype(NBXDtype[a.dtype], M, bool(promote_a), native_bf16, force_accum, contract_half)
+        st.alloc("output", M * N * dtype_size(out), returned=True)
+        return st.done(flops)                                # an epilogue runs inside the kernel here (EPILOGUE)
+    if epilogue:                                             # the GEMV rows: the epilogue after, its own output
+        for i in st.nest(C.elementwise_unary(C.Spec.contiguous((M, N), out.name)), "epilogue"):
+            st.buffers[i][4] = True                          # the epilogue's output is the one returned
+    return st.done(flops)
+
+
+def addmm_cost(bias, a, b, epilogue: int = 0, native_bf16=None, force_accum=None, contract_half=None):
+    """`addmm` on `bias` ([N], [1, N] or [M, N]), `a` [..., K] and `b` [K, N] (`_cost.Spec`s), in the wrapper's order:
+    the three operands cast to `launch_keys.addmm_dtypes` (a dense copy each); an `a` of more than two dims made
+    contiguous and flattened, the product computed on the flat rows (its view returned); then, at M <= 4, `a` and the
+    bias made contiguous, the output [M, N] at `matmul_out_dtype` and per row the GEMV's own output (N for one row) —
+    and the whole weight copied when `b.t()` is not contiguous (`addmv_wrapper` makes its matrix contiguous: a row-major
+    weight; a pre-transposed weight view is) — each freed once copied into the output's row, then an epilogue's output
+    beside the GEMM's; above, `a` and the bias made contiguous, `b` only when broadcast, the output at
+    `matmul_out_dtype` (fp32 when `a` was promoted), the epilogue in the kernel. A bias of another shape is refused by
+    name (the wrapper's own rows: shared [N] / [1, N], per-row [M, N] at M <= 4 only, as the wrapper)."""
+    from nbxtensor.ops import _cost as C
+    from nbxtensor.shape import is_contiguous
+    native_bf16 = bool(_core._NBX_HAS_NATIVE_BF16) if native_bf16 is None else native_bf16
+    force_accum = bool(NBX_FORCE_FP32_ACCUM) if force_accum is None else force_accum
+    contract_half = bool(_core._NBX_ACTIVATIONS_FP16_SAFE) if contract_half is None else contract_half
+    st = C._Steps()
+    held = {}
+
+    def rebind(name, spec, label):
+        i = st.alloc(label, spec.nbytes)
+        old = held.get(name)
+        held[name] = i
+        if old is not None:
+            st.free(old)
+        return spec
+
+    a_to, b_to, bias_to, promote_a, _pb, _pbias = _lk.addmm_dtypes(
+        NBXDtype[a.dtype], NBXDtype[b.dtype], NBXDtype[bias.dtype], native_bf16, force_accum)
+    if NBXDtype[a.dtype] != a_to:
+        a = rebind("a", C.Spec.contiguous(a.shape, a_to.name), "a cast")
+    if NBXDtype[b.dtype] != b_to:
+        b = rebind("b", C.Spec.contiguous(b.shape, b_to.name), "b cast")
+    if NBXDtype[bias.dtype] != bias_to:
+        bias = rebind("bias", C.Spec.contiguous(bias.shape, bias_to.name), "bias cast")
+    if len(a.shape) > 2:
+        if not is_contiguous(a.shape, a.strides):
+            a = rebind("a", C.Spec.contiguous(a.shape, a.dtype), "a made contiguous (flattened)")
+        rows = 1
+        for d in a.shape[:-1]:
+            rows *= int(d)
+        a = C.Spec.contiguous((rows, int(a.shape[-1])), a.dtype)
+    M, K = (int(d) for d in a.shape)
+    N = int(b.shape[1])
+    if not (len(bias.shape) == 1 or (len(bias.shape) == 2 and int(bias.shape[0]) in (1, M))):
+        raise ValueError(f"addmm_cost: a bias of shape {tuple(bias.shape)} is none of the wrapper's ([N], [1, N], [M, N])")
+    flops = 2 * M * N * K
+    if not is_contiguous(a.shape, a.strides):
+        a = rebind("a", C.Spec.contiguous(a.shape, a.dtype), "a made contiguous")
+    if not is_contiguous(bias.shape, bias.strides):
+        bias = rebind("bias", C.Spec.contiguous(bias.shape, bias.dtype), "bias made contiguous")
+    if M <= 4:
+        out = _lk.matmul_out_dtype(NBXDtype[a.dtype], M, False, native_bf16, force_accum, contract_half)
+        st.alloc("output", M * N * dtype_size(out), returned=epilogue == 0)
+        row_out = _lk.matmul_out_dtype(NBXDtype[b.dtype], 1, False, native_bf16, force_accum, contract_half)
+        bt_contiguous = tuple(int(x) for x in b.strides) == (1, K)       # b.t() is (N, K) row-major
+        for _ in range(M):
+            copy = None if bt_contiguous else st.alloc("the weight made contiguous (addmv)", b.nbytes)
+            r = st.alloc("a row's GEMV output", N * dtype_size(row_out))
+            if copy is not None:
+                st.free(copy)
+            st.free(r)
+        if epilogue:
+            for i in st.nest(C.elementwise_unary(C.Spec.contiguous((M, N), out.name)), "epilogue"):
+                st.buffers[i][4] = True
+        return st.done(flops)
+    if len(bias.shape) == 2 and int(bias.shape[0]) != 1:
+        raise ValueError(f"addmm_cost: a per-row bias {tuple(bias.shape)} is served at M <= 4 only (here M = {M}), "
+                         f"as the wrapper refuses it")
+    if any(int(x) == 0 for x in b.strides):
+        b = rebind("b", C.Spec.contiguous(b.shape, b.dtype), "b broadcast made dense")
+    out = _lk.matmul_out_dtype(NBXDtype[a.dtype], M, bool(promote_a), native_bf16, force_accum, contract_half)
+    st.alloc("output", M * N * dtype_size(out), returned=True)
+    return st.done(flops)
 
 
 def bmm_cost(a, b, allow_strided_b: bool = False, native_bf16=None, force_accum=None, contract_half=None,

@@ -74,6 +74,49 @@ def test_bmm(dtype, strided_b, allow):
 
 
 @pytest.mark.parametrize("dtype", ["float16", "float32"])
+@pytest.mark.parametrize("M", [1, 3, 64, 130])
+@pytest.mark.parametrize("pretransposed", [False, True])
+@pytest.mark.parametrize("epilogue", [0, 1])
+def test_mm(dtype, M, pretransposed, epilogue):
+    """`linalg_wrappers.mm_cost`: the GEMM — the casts, the decode rows' GEMV (each row's output, and the whole weight
+    copied when its rows are not K-contiguous: a row-major weight at M <= 4), the output at its store dtype, the matrix
+    unit or the kernel, an epilogue's output beside the GEMM's."""
+    from nbxtensor.ops import linalg_wrappers as LW
+    a = _t((M, 256), dtype)
+    b = _t((192, 256), dtype, 1).t() if pretransposed else _t((256, 192), dtype, 1)   # a weight bound as (N, K).t()
+    measured = _measure(lambda: LW.mm(a, b, epilogue))
+    declared = LW.mm_cost(_spec(a), _spec(b), epilogue).peak_bytes
+    assert measured == declared, (measured, declared)
+
+
+@pytest.mark.parametrize("dtype", ["float16", "float32"])
+@pytest.mark.parametrize("M,lead", [(1, None), (3, None), (64, None), (130, None), (2, (2, 1)), (96, (4, 24))])
+@pytest.mark.parametrize("pretransposed", [False, True])
+@pytest.mark.parametrize("bias_rows", [0, 1, "M"])
+def test_addmm(dtype, M, lead, pretransposed, bias_rows):
+    """`linalg_wrappers.addmm_cost`: the linear layer — the casts, the 3-D input flattened, the decode rows' GEMV and
+    the weight copy a row-major weight costs there, the bias made contiguous, the output at its store dtype."""
+    from nbxtensor.ops import linalg_wrappers as LW
+    a = _t(lead + (256,) if lead else (M, 256), dtype)
+    b = _t((192, 256), dtype, 1).t() if pretransposed else _t((256, 192), dtype, 1)
+    rows = 1
+    for d in (lead or (M,)):
+        rows *= d
+    bias = _t((192,) if bias_rows == 0 else ((1, 192) if bias_rows == 1 else (rows, 192)), dtype, 2)
+    if bias_rows == "M" and rows > 4:
+        # the kernel adds one bias row to every row: a per-row bias above the decode rows is refused by both, never
+        # computed with its first row (it was, silently, before 2026-10-29)
+        with pytest.raises(ValueError, match="per-row bias"):
+            LW.addmm(bias, a, b)
+        with pytest.raises(ValueError, match="per-row bias"):
+            LW.addmm_cost(_spec(bias), _spec(a), _spec(b))
+        return
+    measured = _measure(lambda: LW.addmm(bias, a, b))
+    declared = LW.addmm_cost(_spec(bias), _spec(a), _spec(b)).peak_bytes
+    assert measured == declared, (measured, declared)
+
+
+@pytest.mark.parametrize("dtype", ["float16", "float32"])
 @pytest.mark.parametrize("mask,causal,hk", [(None, False, 4), ("2d", False, 4), ("4d", False, 4), (None, True, 4),
                                             (None, False, 2)])
 def test_math_attention(dtype, mask, causal, hk):
