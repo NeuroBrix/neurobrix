@@ -56,6 +56,13 @@ def test_an_arch_that_measured_the_kernel_correct_takes_no_detour(monkeypatch):
     assert launches == [] and not unhandled
 
 
+def _empty_contract():
+    """No fp16 contract, as the engine's own object says it (the derivation reads `contract.safe` since 2026-10-26;
+    a None here stood red)."""
+    from neurobrix.core.prism.runtime_widths import conservative_contract
+    return conservative_contract("the detour cells: no contract")
+
+
 def _sdpa_launches(D_, budget):
     _census._bind_target("c4140-4xv100-16GB-nvlink", None)  # a committed V100 profile: its ladders
     o = {"op_type": "aten::_scaled_dot_product_efficient_attention", "attributes": {},
@@ -63,7 +70,7 @@ def _sdpa_launches(D_, budget):
     shape = lambda t: [1, 1, 3072, D_]
     unhandled = collections.Counter()
     out = D._op_launches(o["op_type"], "aten._scaled_dot_product_efficient_attention::0", o,
-                         ["q", "k", "v"], shape, lambda t: F32, LK, None, "float32", False,
+                         ["q", "k", "v"], shape, lambda t: F32, LK, _empty_contract(), "float32", False,
                          budget, 128, 0, 1 << 30, unhandled)
     return out or [], unhandled
 
