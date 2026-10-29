@@ -513,10 +513,10 @@ def pinned_gpu_address(addr: int) -> int:
 
 
 def _recorded_shadow(addr: int):
-    """(base, nbytes) when `addr` is a census shadow allocation RECORDED as one, else None.
-    Never true in a real run: the census records nothing unless it is installed."""
-    from nbxtensor.host import need as _need
-    return _need("census")().shadow_range(addr)   # the application's launch census (nbxtensor.host)
+    """(base, nbytes) when `addr` is a shadow allocation RECORDED as one (`memory.shadow`), else None.
+    Never true in a real run: nothing is recorded there unless an application installed the shadow."""
+    from nbxtensor.memory.shadow import shadow_range
+    return shadow_range(addr)
 
 
 def _resident_release(base) -> None:

@@ -30,7 +30,7 @@ SERVICES: Dict[str, str] = {
     "memory_class_gb": "(memory_mb) -> the memory class of a card, in GB",
     "memory_class_from_profile_id": "(hardware profile id) -> its memory class in GB, or None",
     "installation_refusals": "(path) -> why an installation path may not hold a backend build; optional: absent, none is refused",
-    "census": "() -> the launch census in force (active, record, shadow_range, shadow_run); optional: absent, none is active",
+    "census": "() -> the launch census in force (active, record, shadow_run); optional: absent, none is active",
     "census_table": "() -> the census table reader",
     "canonical_aten": "(op name) -> the canonical ATen op name",
     "matrix_unit_representation": "(...) -> how the matrix unit carries one GEMM's operands",
@@ -48,10 +48,6 @@ class _NoCensus:
     @staticmethod
     def active() -> bool:
         return False
-
-    @staticmethod
-    def shadow_range(addr):
-        return None
 
     @staticmethod
     def record(*args, **kwargs):

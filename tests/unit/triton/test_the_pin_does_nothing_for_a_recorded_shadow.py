@@ -7,7 +7,7 @@ first MoE layer on
     RuntimeError: the triton-ext driver cannot bind pointer 0x1....: the allocator does not
     record it, so its length is unknown and it cannot be wrapped as a Metal buffer
 
-because `census._shadow_malloc` hands out addresses the allocator never records, and
+because the census shadow (`nbxtensor.memory.shadow.malloc`) hands out addresses the allocator never records, and
 `pinned_addresses` (moe._build_ptr_tables) sizes its whole-allocation wrap from the allocator.
 
 The repair is deliberately NOT "skip the pin in a census". A path that exists only in the census

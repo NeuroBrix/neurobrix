@@ -51,7 +51,6 @@ def set_op(op_uid: Optional[str]) -> None:
     _OP[0] = op_uid
 _OBSERVERS: List[Set[str]] = []         # key lines formed during a `walk_extent` run, dedup or not
 _ACTIVE = {"census": False}
-_SHADOW_PTR = [1 << 40]                 # addresses that address nothing, distinct and aligned
 
 
 def key_line(tuned, key: tuple) -> Optional[str]:
@@ -227,41 +226,6 @@ def active() -> bool:
 # The shadow mode: installed once per process by the CLI when NBX_CENSUS=1.
 # --------------------------------------------------------------------------------------------
 
-# Every allocation the shadow hands out, recorded AS a shadow: base -> nbytes, bases sorted.
-# A consumer that must size an allocation (the Metal pin sizes its whole-allocation wrap) asks
-# `shadow_range` and gets an answer for a recorded shadow and None for anything else, so an
-# address nobody recorded keeps failing in every run, census or not. Measured 2026-09-24: the
-# 76 MoE census failures were the pin asking the allocator about addresses only this module had
-# handed out.
-_SHADOW_RANGES: Dict[int, int] = {}
-_SHADOW_BASES: List[int] = []
-
-
-def _shadow_malloc(nbytes: int, dev_idx: Optional[int] = None, pooled: bool = True) -> int:
-    """`DeviceAllocator.malloc_direct` in a shadow, its signature kept whole (`pooled`: a weight arena asks for a block
-    outside the pool; a shadow has no pool and answers the same address either way)."""
-    ptr = _SHADOW_PTR[0]
-    _SHADOW_PTR[0] += (int(nbytes) + 255) // 256 * 256 + 256
-    _SHADOW_RANGES[ptr] = int(nbytes)
-    _SHADOW_BASES.append(ptr)          # monotonic: appending keeps the list sorted
-    return ptr
-
-
-def shadow_range(addr: int) -> Optional[tuple]:
-    """(base, nbytes) of the RECORDED shadow allocation containing `addr`, or None.
-
-    None for every address this shadow did not hand out, including every address of a real
-    run, where nothing is ever recorded here."""
-    import bisect
-    addr = int(addr)
-    i = bisect.bisect_right(_SHADOW_BASES, addr) - 1
-    if i < 0:
-        return None
-    base = _SHADOW_BASES[i]
-    size = _SHADOW_RANGES[base]
-    return (base, size) if addr < base + max(size, 1) else None
-
-
 def _noop(*_a, **_k):
     return None
 
@@ -362,6 +326,7 @@ def install(hardware: Optional[str] = None, hardware_profile: Optional[dict] = N
         return
     from nbxtensor import tensor as _nt
     import nbxtensor.memory.allocator as _nbx_allocator
+    from nbxtensor.memory import shadow as _shadow
     from nbxtensor.backend import launcher as _launcher
     DA = _nbx_allocator.DeviceAllocator
     # THE DOOR: a shadow is proven unable to touch a card only when no card can be seen.
@@ -380,7 +345,7 @@ def install(hardware: Optional[str] = None, hardware_profile: Optional[dict] = N
 
     # The DIRECT device operations are the shadow's (an interceptor installed later, a replay recording, still stands
     # in front of them as it does in a real run).
-    DA.malloc_direct = staticmethod(_shadow_malloc)
+    DA.malloc_direct = staticmethod(_shadow.malloc)
     for name in ("free_direct", "memset_direct", "memcpy_direct", "memcpy_async", "sync_direct",
                  "set_device", "ensure_triton_device", "empty_cache_pool"):
         if hasattr(DA, name):
@@ -413,7 +378,7 @@ def install(hardware: Optional[str] = None, hardware_profile: Optional[dict] = N
         if hasattr(DA, name):
             setattr(DA, name, staticmethod(lambda *a, _v=value, **k: _v))
     if hasattr(DA, "malloc_host_pinned"):
-        DA.malloc_host_pinned = staticmethod(_shadow_malloc)
+        DA.malloc_host_pinned = staticmethod(_shadow.malloc)
     if hasattr(DA, "free_host_pinned"):
         DA.free_host_pinned = staticmethod(_noop)
     if hasattr(DA, "free_memory_mb"):
