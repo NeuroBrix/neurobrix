@@ -14,8 +14,14 @@ from nbxtensor.backend.capabilities import backend_has_fp64
 
 
 @pytest.fixture(autouse=True)
-def _declared(host_backend_fp64):
-    """The capability as a run declares it, from this host's profile."""
+def _declared(request):
+    """The capability as a run declares it, from this host's profile — on a host with a device: without one there is
+    no Triton branch to declare it for, and the cell skips, said (it errored instead in the card-less suite, reading
+    the device of a profile that has none)."""
+    from neurobrix.core.prism.autodetect import load_default_profile
+    if _detect_gpu_backend() is None or not getattr(load_default_profile(), "devices", None):
+        pytest.skip("no device in this host's profile (a card-less run)")
+    request.getfixturevalue("host_backend_fp64")
 
 
 def _dev():

@@ -56,19 +56,11 @@ CACHE = Path(os.path.expanduser("~/.neurobrix/ca" + "che"))
 #: Containers whose PARAMETERS carry at least one non-literal dim, measured 2026-09-23.
 #: Each is a Forge defect awaiting a retrace, not a licence. The value is the component set,
 #: so a known-bad container gaining a NEW bad component is still caught.
-KNOWN_OFFENDERS = {
-    "Sana_1600M_1024px_MultiLing":   {"vae"},
-    "Ming-Lite-Omni-1.5":            {"image_vae"},
-    "Real-ESRGAN-x4":                {"model"},
-    "Real-ESRGAN-x4":                {"model"},
-    "real-esrgan-x8":                {"model"},
-    "SANA-Video_2B_720p":            {"transformer"},
-    "MiniCPM-o-4_5":                 {"flow_dit"},
-    "Flex.1-alpha":                  {"text_encoder"},
-    "Open-Sora-v2":                  {"text_encoder_2"},
-    "mochi-1-preview":               {"transformer", "vae"},
-    "parakeet-tdt-1.1b":             {"joint"},
-}
+#: Empty since 2026-10-29: the retraces fixed every container listed (the scan read 166 graphs of the shared cache and
+#: found no parameter dim that is not a literal — mochi-1-preview's pos_freqs [3, 24, 64] among them); the two
+#: upscaler aliases it also held (Real-ESRGAN-x4, real-esrgan-x8) name no container of the catalogue (one model, one
+#: name). A container joining it again is a new Forge defect, named by the gate below.
+KNOWN_OFFENDERS: dict = {}
 
 
 def _tool():
