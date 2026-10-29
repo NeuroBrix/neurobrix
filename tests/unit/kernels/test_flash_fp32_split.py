@@ -298,3 +298,21 @@ def test_the_contract_clauses(B, H, Hk, Tq, Tk, D, mask):
         m[..., Tk - Tk // 3:] = -np.inf
         bias = np.broadcast_to(m.astype(np.float64), (B, H, Tq, Tk))
     _gate(q, k, v, mask=m, bias=bias)
+
+
+def test_a_planned_profile_is_read_against_its_own_shared_memory(monkeypatch):
+    """Prism plans a device that is not this process's (`matrix_unit(vendor_profile=...)`): the planned profile's
+    rows are priced against THAT profile's `memory.max_shared_memory_per_block`, never the active one's. Seen red
+    on the Mac 2026-10-29: Prism planning a V100 (96 KB) refused its own flash row (36 864 bytes) against the
+    M4 Pro's 32 KB, then the planned unit against the M4 Pro's KRSC weight layout: 28 Prism plans for CUDA cards
+    failed on the Mac only."""
+    from nbxtensor.ops import _configs as C
+    row = {"head_dim_le": 96, "block_m": 64, "block_n": 32, "warps_m": 4, "block_k": 32}
+    need = 4 * 96 * (64 + 64)                                               # the split row's staged tiles
+    planned = _profile(row, smem=98304)
+    host = {**_profile(row, smem=need - 1), "conv": {"weight_layout": "KRSC"}}   # this host: too small, KRSC weights
+    monkeypatch.setattr(C, "active_vendor_profile", lambda: host)
+    assert C.matrix_unit(vendor_profile=planned)["fp32_split"]["flash"] == [row]
+    with pytest.raises(ValueError, match=f"stages {need} bytes of shared memory, over "
+                                         f"memory.max_shared_memory_per_block {need - 1}"):
+        C.matrix_unit()                                                     # the host's own read keeps its door
