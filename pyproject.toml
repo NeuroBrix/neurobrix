@@ -38,15 +38,17 @@ classifiers = [
 ]
 dependencies = [
     # Zero Outsider / R34: the runtime engine needs ONLY these to RUN any model
-    # from its .nbx — torch (+ the cuDNN/cuBLAS/cuFFT it bridges; triton arrives
-    # transitively via torch) for compute, numpy as CPU glue, and pure
-    # container / config / file-I/O infra. NO vendor model/tokenizer/codec/DSP
+    # from its .nbx on the Triton branch — nbxtensor and triton for compute,
+    # numpy as CPU glue, and pure container / config / file-I/O infra. torch is
+    # NOT among them: it is the PyTorch branch (compiled / sequential), the
+    # `pytorch` extra below; asking for that branch without it is refused by
+    # name (core/runtime/engines.py). NO vendor model/tokenizer/codec/DSP
     # library is a runtime dependency (those moved to the `adapter` extra below).
     # The tensor library the Triton engine is built on (nbxtensor/, this repository): a path dependency until it
     # is published on its own (docs/nbxtensor/MIGRATION.md, M6)
     "nbxtensor @ {root:uri}/nbxtensor",
     # Core compute
-    "torch>=2.1.0",
+    "triton",
     "numpy>=1.24.0",
     # .nbx container + config + schema
     "safetensors>=0.4.0",
@@ -64,6 +66,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# The PyTorch branch (--compiled, the default when no mode flag is given, and --sequential): torch + the
+# cuDNN/cuBLAS/cuFFT it bridges. The Triton branch (--triton, --triton-sequential) runs without it.
+pytorch = ["torch>=2.1.0"]
 # psutil: the gate harness (tools/regression_matrix.py) reads a cell's process tree with it, and its tests
 # need it; the runtime engine does not import it (the host is read by core/host_memory.memory_state).
 # imageio: the harness's judge reads a video's size and frames with it (tools/judge_artefact.video_degeneracy);

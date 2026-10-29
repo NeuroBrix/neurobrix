@@ -380,6 +380,10 @@ class GraphExecutor:
                   - "triton": Triton-pure compiled (NeuroBrix arena+closures)
                   - "triton_sequential": Triton-pure op-by-op (debug)
         """
+        # A mode no engine answers, or the PyTorch branch without torch installed: refused by name here too, for
+        # whatever reached the executor without the CLI (core/runtime/engines.py).
+        from neurobrix.core.runtime.engines import require_engine
+        require_engine(mode)
         self.family = family
         self.vendor = vendor
         self.arch = arch

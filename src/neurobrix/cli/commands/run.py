@@ -494,6 +494,13 @@ def cmd_run(args):
     else:
         # default OR --compiled explicit
         execution_mode = "compiled"
+    # The PyTorch branch without torch installed: refused by name before anything is loaded (core/runtime/engines.py).
+    from neurobrix.core.runtime.engines import PyTorchBranchNotInstalledError, require_engine
+    try:
+        require_engine(execution_mode)
+    except PyTorchBranchNotInstalledError as exc:
+        print(f"\n[ERROR] {exc}")
+        return 1
 
     # 1. Load NBX Container
     print("\n[1/4] Loading NBX container...")

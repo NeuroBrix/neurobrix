@@ -45,6 +45,13 @@ def cmd_serve(args):
         mode = "triton"
     else:
         mode = "compiled"
+    # The PyTorch branch without torch installed: refused by name before the daemon starts (core/runtime/engines.py).
+    from neurobrix.core.runtime.engines import PyTorchBranchNotInstalledError, require_engine
+    try:
+        require_engine(mode)
+    except PyTorchBranchNotInstalledError as exc:
+        print(f"[Serve] ERROR: {exc}")
+        sys.exit(1)
 
     timeout = getattr(args, 'timeout', 1800) or 1800
     foreground = getattr(args, 'foreground', False)
