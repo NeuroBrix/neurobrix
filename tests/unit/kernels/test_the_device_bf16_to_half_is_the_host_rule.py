@@ -1,6 +1,6 @@
 """The one device conversion of bfloat16 patterns to float16 (`ops.wrappers.bf16_to_fp16_gpu`) gives, in place and
 out of place, the bits of the one host conversion (`nbxtensor.dtype.convert.bf16_bits_to_f16`) — the weight loader
-narrows its raw bf16 buffers with it in place (`triton/weight_loader._half_in_place`)."""
+narrows its raw bf16 buffers with it in place (`nbxtensor.io.safetensors.half_in_place`)."""
 import numpy as np
 import pytest
 

@@ -24,6 +24,14 @@ from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.dtype.convert import f32_to_bf16_bits as float32_to_bf16_bits
 
 
+def _stage(raw, shape, source, target, host_arena=None):
+    """A host-held weight staged as the engine's loader stages it: nbxtensor's primitive, the loader's I/O pool."""
+    from neurobrix.triton import weight_loader as W
+    from nbxtensor.io import safetensors as SF
+    return SF.load_to_pinned_host(raw, shape, source, target, W._io_pool(), host_arena)
+
+
+
 def _bits_value(b: int) -> float:
     """The float64 value of a bf16 pattern, read as IEEE does while rounding: exponent 255 with
     a zero mantissa is 2**128 (the value that rounds to infinity), not a special case."""
@@ -89,10 +97,9 @@ def _device_bits(t, n) -> np.ndarray:
 @pytest.mark.skipif(not _has_gpu(), reason="pinned host allocation needs a device runtime")
 @pytest.mark.parametrize("source", ["float32", "float16"])
 def test_staging_to_pinned_host_rounds_to_nearest_even(source):
-    from neurobrix.triton.weight_loader import _load_to_pinned_cpu
     x = _cases()[:4096 + 256]
     src = x.astype(np.float16) if source == "float16" else x
-    staged = _load_to_pinned_cpu(src.tobytes(), (src.size,),
+    staged = _stage(src.tobytes(), (src.size,),
                                  NBXDtype.float16 if source == "float16" else NBXDtype.float32, NBXDtype.bfloat16)
     np.testing.assert_array_equal(_device_bits(staged, src.size), _reference_bits(src.astype(np.float32)))
 

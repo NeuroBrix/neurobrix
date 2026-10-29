@@ -2284,7 +2284,7 @@ class GraphExecutor:
         if self.mode in ("triton", "triton_sequential"):
             import ctypes
             from nbxtensor.tensor import NBXTensor
-            from neurobrix.triton.weight_loader import _SF_DTYPE_INFO
+            from nbxtensor.io.safetensors import SF_DTYPE_INFO as _SF_DTYPE_INFO
             by_nbx = {info[1]: sf for sf, info in _SF_DTYPE_INFO.items()}
 
             def held_as(sf):

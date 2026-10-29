@@ -75,7 +75,7 @@ def test_a_weight_is_relaid_only_when_every_reader_is_a_conv_that_takes_it():
 
 
 def test_the_host_relayout_keeps_the_logical_shape_and_puts_the_channels_innermost():
-    from neurobrix.triton.weight_loader import host_weight_layout
+    from nbxtensor.io.safetensors import host_weight_layout
     w = np.arange(2 * 3 * 2 * 4, dtype=np.float32).reshape(2, 3, 2, 4)
     arr, strides = host_weight_layout(w, True)
     assert arr.flags["C_CONTIGUOUS"] and arr.shape == (2, 2, 4, 3)

@@ -54,6 +54,9 @@ NOT_SEMANTIC = {
     ("core/module/tiling_engine.py", "_detect_pixel_shuffle_broadcast_chains"): "graph pattern detection",
     ("triton/promotion.py", "_promote_int"): "symbolic seq_len promotion of trace constants (a graph pass)",
     ("triton/promotion.py", "_promote_int_value"): "symbolic seq_len promotion of trace constants (a graph pass)",
+    ("triton/weight_loader.py", "_load_shard_into_arenas"): "the engine's loading policy over one shard (which weight on "
+        "which device or the host, at which dtype, widened or not; DESIGN.md section 3: the engine keeps its loading "
+        "policy); every read, conversion and placement is nbxtensor.io.safetensors",
 }
 
 # Names that are tensor semantics wherever they are defined.

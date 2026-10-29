@@ -12,7 +12,16 @@ import numpy as np
 import pytest
 
 from nbxtensor.dtype.convert import bf16_bits_to_f16
-from neurobrix.triton.weight_loader import _split_across_workers
+from neurobrix.triton import weight_loader as W
+from nbxtensor.io.safetensors import split_across_workers
+
+
+def _stage(raw, shape, source, target, host_arena=None):
+    """A host-held weight staged as the engine's loader stages it: nbxtensor's primitive, the loader's I/O pool."""
+    from neurobrix.triton import weight_loader as W
+    from nbxtensor.io import safetensors as SF
+    return SF.load_to_pinned_host(raw, shape, source, target, W._io_pool(), host_arena)
+
 
 
 def test_the_parallel_widening_is_the_old_formula_bit_for_bit():
@@ -20,7 +29,7 @@ def test_the_parallel_widening_is_the_old_formula_bit_for_bit():
     bits = rng.integers(0, 2 ** 16, size=3_000_001, dtype=np.uint64).astype(np.uint16)   # every class: nan, inf, subnormal
     bits[:4] = [0x7F80, 0xFF80, 0x7FC0, 0x0001]
     old = (bits.astype(np.uint32) << 16).view(np.float32).astype(np.float16)
-    new = _split_across_workers(bits, np.empty(bits.shape, dtype=np.float16), bf16_bits_to_f16)
+    new = split_across_workers(bits, np.empty(bits.shape, dtype=np.float16), bf16_bits_to_f16, W._io_pool())
     assert new.dtype == np.float16
     assert np.array_equal(old.view(np.uint16), new.reshape(-1).view(np.uint16))
 
@@ -39,12 +48,11 @@ def test_host_weights_share_one_pinned_block_that_outlives_the_load():
     from nbxtensor.memory.allocator import DeviceAllocator
     from nbxtensor.dtype.nbx_dtype import NBXDtype
     from nbxtensor.memory.memory_pool import HostPinnedArena
-    from neurobrix.triton.weight_loader import _load_to_pinned_cpu
     rng = np.random.default_rng(1)
     raws = [rng.integers(0, 2 ** 16, size=(64, 33), dtype=np.uint64).astype(np.uint16) for _ in range(5)]
     before = len(DeviceAllocator._host_pinned_ptr_size)
     arena = HostPinnedArena(sum(-(-r.size * 2 // 256) * 256 for r in raws))
-    ts = [_load_to_pinned_cpu(r.tobytes(), r.shape, NBXDtype.bfloat16, NBXDtype.float16, arena) for r in raws]
+    ts = [_stage(r.tobytes(), r.shape, NBXDtype.bfloat16, NBXDtype.float16, arena) for r in raws]
     assert len(DeviceAllocator._host_pinned_ptr_size) == before + 1, "a pinned block per weight"
     del arena
     for r, t in zip(raws, ts):

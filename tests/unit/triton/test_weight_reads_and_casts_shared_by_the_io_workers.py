@@ -17,6 +17,7 @@ import numpy as np
 import pytest
 
 from neurobrix.triton import weight_loader as W
+from nbxtensor.io import safetensors as SF   # the primitives (M2); the pool is the loader's
 
 
 @pytest.fixture
@@ -34,20 +35,20 @@ def test_the_read_and_the_cast_are_the_single_pass_bytes(blob, n):
     a = np.random.default_rng(n).standard_normal(n).astype(np.float32)
     fd, off = blob(a)
     try:
-        r = W._read_bytes(fd, off, a.nbytes)
+        r = SF.read_bytes(fd, off, a.nbytes, W._io_pool())
     finally:
         os.close(fd)
     assert r.tobytes() == a.tobytes()
-    c = W._cast(np.frombuffer(r, np.float32), np.float16)
+    c = SF.cast(np.frombuffer(r, np.float32), np.float16, W._io_pool())
     assert c.flags.c_contiguous and c.tobytes() == a.astype(np.float16).tobytes()
 
 
 def test_a_strided_or_widening_cast_keeps_shape_and_bytes():
     rng = np.random.default_rng(1)
     t = rng.standard_normal((300, 513)).astype(np.float32)[:, ::2]
-    assert W._cast(t, np.float16).tobytes() == t.astype(np.float16).tobytes()
+    assert SF.cast(t, np.float16, W._io_pool()).tobytes() == t.astype(np.float16).tobytes()
     h = rng.standard_normal((37, 1001)).astype(np.float16)
-    out = W._cast(h, np.float32)
+    out = SF.cast(h, np.float32, W._io_pool())
     assert out.shape == h.shape and out.tobytes() == h.astype(np.float32).tobytes()
 
 
@@ -55,7 +56,7 @@ def test_a_short_read_is_refused_by_name(blob):
     fd, off = blob(np.zeros(1000, np.float32))
     try:
         with pytest.raises(RuntimeError, match="short"):
-            W._read_bytes(fd, off, 8_000_000)
+            SF.read_bytes(fd, off, 8_000_000, W._io_pool())
     finally:
         os.close(fd)
 
@@ -64,9 +65,9 @@ def test_a_large_tensor_is_split_across_the_workers():
     workers = W._io_pool()[0]
     if workers < 2:
         pytest.skip("one I/O worker configured: nothing to share")
-    spans = W._spans(10_000_000, 4, 1)
+    spans = SF.spans(10_000_000, 4, 1, workers)
     assert len(spans) == workers
     assert spans[0][0] == 0 and spans[-1][1] == 10_000_000
     assert all(a[1] == b[0] for a, b in zip(spans, spans[1:]))
-    page_spans = W._spans(10_000_000, 1, W._PAGE)
-    assert all(a % W._PAGE == 0 for a, _ in page_spans)
+    page_spans = SF.spans(10_000_000, 1, SF.PAGE, workers)
+    assert all(a % SF.PAGE == 0 for a, _ in page_spans)

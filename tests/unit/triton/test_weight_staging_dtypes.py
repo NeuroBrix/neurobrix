@@ -24,7 +24,14 @@ import pytest
 
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.dtype.nbx_dtype import NBXDtype
-from neurobrix.triton.weight_loader import _load_to_pinned_cpu
+
+
+def _stage(raw, shape, source, target, host_arena=None):
+    """A host-held weight staged as the engine's loader stages it: nbxtensor's primitive, the loader's I/O pool."""
+    from neurobrix.triton import weight_loader as W
+    from nbxtensor.io import safetensors as SF
+    return SF.load_to_pinned_host(raw, shape, source, target, W._io_pool(), host_arena)
+
 
 
 def _has_gpu() -> bool:
@@ -48,7 +55,7 @@ pytestmark = pytest.mark.skipif(
 def test_the_staged_buffer_is_exactly_the_target_width(
         source_np, source_dtype, target_dtype):
     values = (np.arange(256, dtype=np.float64) * 0.5).astype(source_np)
-    staged = _load_to_pinned_cpu(values.tobytes(), (256,),
+    staged = _stage(values.tobytes(), (256,),
                                  source_dtype, target_dtype)
     from nbxtensor.dtype.nbx_dtype import dtype_size
     assert staged.nbytes() == 256 * dtype_size(target_dtype)
@@ -58,7 +65,7 @@ def test_the_values_survive_the_conversion():
     """A conversion that resizes correctly but scrambles the numbers would
     pass the size check and produce a silently wrong model."""
     values = (np.arange(256, dtype=np.float32) * 0.25)
-    staged = _load_to_pinned_cpu(values.tobytes(), (256,),
+    staged = _stage(values.tobytes(), (256,),
                                  NBXDtype.float32, NBXDtype.float16)
     got = np.frombuffer(
         (np.ctypeslib.as_array(
@@ -77,7 +84,7 @@ def test_fp32_to_bf16_is_two_bytes_wide_and_rounded_to_nearest_even():
     two roundings differ. The rounding itself is proven in
     test_bf16_narrowing_rounds_to_nearest_even.py."""
     values = np.array([1.0, 2.0, -1.0, 0.5, 12345.0], dtype=np.float32)
-    staged = _load_to_pinned_cpu(values.tobytes(), (values.size,),
+    staged = _stage(values.tobytes(), (values.size,),
                                  NBXDtype.float32, NBXDtype.bfloat16)
     from nbxtensor.dtype.nbx_dtype import dtype_size
     assert staged.nbytes() == values.size * dtype_size(NBXDtype.bfloat16)
@@ -92,7 +99,7 @@ def test_bf16_to_fp16_still_takes_its_bit_exact_path():
     """The bf16 paths are bit-level and predate this fix. The generic cast
     must not have displaced them — numpy cannot represent bf16 at all."""
     raw_u16 = np.array([0x3F80, 0x4000, 0xBF80], dtype=np.uint16)  # 1.0, 2.0, -1.0
-    staged = _load_to_pinned_cpu(raw_u16.tobytes(), (3,),
+    staged = _stage(raw_u16.tobytes(), (3,),
                                  NBXDtype.bfloat16, NBXDtype.float16)
     assert staged.nbytes() == 6
     import ctypes
@@ -106,7 +113,7 @@ def test_an_unconvertible_pair_refuses_instead_of_overflowing(monkeypatch):
     """The guard is the point: a dtype pair nobody handled must fail HERE,
     naming itself, rather than write past a buffer and be caught — or not —
     somewhere downstream."""
-    import neurobrix.triton.weight_loader as wl
+    import nbxtensor.io.safetensors as wl   # the staging primitive's module (M2)
 
     real = wl.np.ascontiguousarray
 
@@ -117,8 +124,8 @@ def test_an_unconvertible_pair_refuses_instead_of_overflowing(monkeypatch):
         return out.astype(np.float64) if out.dtype == np.float16 else out
 
     monkeypatch.setattr(wl.np, "ascontiguousarray", sabotage)
-    # The loader's cast (`_cast`, shared by its I/O workers) converting nothing: the pair escapes.
-    monkeypatch.setattr(wl, "_cast", lambda arr, want: arr)
+    # The staging cast (`cast`, shared by the loader's I/O workers) converting nothing: the pair escapes.
+    monkeypatch.setattr(wl, "cast", lambda arr, want, io: arr)
     with pytest.raises(RuntimeError, match="would overflow"):
-        _load_to_pinned_cpu(np.zeros(256, np.float16).tobytes(), (256,),
+        _stage(np.zeros(256, np.float16).tobytes(), (256,),
                             NBXDtype.float16, NBXDtype.float16)
