@@ -69,14 +69,6 @@ def get_precision_calibration_policy() -> Dict[str, Any]:
     return policy
 
 
-def get_dtype_table() -> Dict[str, Any]:
-    """The dtype table (the width of every dtype the engine knows), as nbxtensor writes it — the one table
-    (`nbxtensor/dtype/dtypes.yml`), never a copy of the engine's. Read by the PyTorch branch's reader
-    `core/dtype/itemsize.py` and the DtypeEngine; the Triton branch reads `nbxtensor.dtype.itemsize` itself."""
-    from nbxtensor.dtype.itemsize import dtype_table
-    return dtype_table()
-
-
 @lru_cache(maxsize=1)
 def get_tiling_policy() -> Dict[str, Any]:
     """The tiling policy (nbxtensor/ops/tiling.yml: the TilingEngine's engine-wide split sizes, read through its two

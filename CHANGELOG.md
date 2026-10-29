@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Removed
-- **The engine slims now that it imports nbxtensor**: code nothing reached is deleted, with no change of behaviour — the vendored third-party reference kernels (never imported, never packaged) and the compiled branch's unmapped op handlers, the planner's, the runtime's and the flows' uncalled helpers. The engine's Python code went from 409 025 to 145 133 lines; `tools/engine_slim_scan.py` lists what remains to remove, move into nbxtensor or justify (`docs/nbxtensor/ENGINE_SLIM.md`), and a guard lets the engine only shrink.
+- **The engine slims now that it imports nbxtensor**: code nothing reached is deleted, with no change of behaviour — the vendored third-party reference kernels (never imported, never packaged) and the compiled branch's unmapped op handlers, the planner's, the runtime's and the flows' uncalled helpers, and the PyTorch branch's copy of nbxtensor's dtype table reader. The engine's Python code went from 409 025 to 144 980 lines; `tools/engine_slim_scan.py` lists what remains to remove, move into nbxtensor or justify (`docs/nbxtensor/ENGINE_SLIM.md`), and a guard lets the engine only shrink.
 
 ### Fixed
 - **The op-output fingerprint (`NBX_OP_FINGERPRINT`) hashes each whole output by default in both engines, as documented**: the ATen sequential loop and the Triton sequence still hashed the first 8 192 bytes unless told otherwise, so a difference past that prefix went unseen. A cap is now only what `NBX_OP_FINGERPRINT_CAP` asks for, read in one place.

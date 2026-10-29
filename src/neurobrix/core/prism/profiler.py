@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Dict, List, Any, Optional, Union
 from dataclasses import dataclass
 
-from neurobrix.core.dtype import itemsize as _itemsize
+from nbxtensor.dtype import itemsize as _itemsize
 from neurobrix.core.runtime_values import MissingRuntimeValue
 from neurobrix.core.runtime import symexpr as _symexpr
 from neurobrix.core.runtime import liveness as _liveness

@@ -22,13 +22,13 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.core.dtype.itemsize import itemsize_table
+from nbxtensor.dtype.itemsize import itemsize_table
 from neurobrix.core.paths import cache_dir
 
 BYTES_MAP = itemsize_table()   # the one table (dtypes.yml), read through the PyTorch reader
 from neurobrix.core.prism.memory_estimator import compute_dtype_factor
 # a dtype's width is read by the one reader of the table (`get_dtype_bytes_per_element` deleted for it, M3)
-from neurobrix.core.dtype.itemsize import itemsize
+from nbxtensor.dtype.itemsize import itemsize
 
 
 # ─────────────────────────── the defect, as it was ───────────────────────────

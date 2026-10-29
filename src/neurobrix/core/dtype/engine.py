@@ -23,7 +23,7 @@ from neurobrix.core.dtype.traced_island import is_traced_fp32_island
 from typing import Callable, Optional, Dict, Any, FrozenSet
 
 from neurobrix.core.dtype.config import device_supports_fp64, parse_dtype, strip_aten_prefix
-from neurobrix.core.dtype import itemsize as _itemsize
+from nbxtensor.dtype import itemsize as _itemsize
 from nbxtensor.dtype.operands import (  # noqa: E402 — the operand rules both engines read, the library's
     attention_operand_alignment, attention_operand_dtypes, contraction_accumulator_dtype)
 

@@ -120,7 +120,7 @@ def _tensor_bytes(tid: str, tensors: Dict[str, Any], sizes: Optional[Dict[str, A
             raise RuntimeError(f"ZERO FALLBACK: expert weight {tid!r} has a symbolic shape {t.get('shape')} "
                                "and no weights_index entry — its bytes cannot be read")
         n *= d
-    from neurobrix.core.dtype import itemsize as _itemsize   # the one table (config/dtypes.yml)
+    from nbxtensor.dtype import itemsize as _itemsize   # the one table (config/dtypes.yml)
     try:
         width = _itemsize.itemsize(t.get("dtype"))
     except (KeyError, ValueError) as e:

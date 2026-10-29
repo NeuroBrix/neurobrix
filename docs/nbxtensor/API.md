@@ -33,7 +33,7 @@ it as plain values: a `Capabilities` record, a matrix-unit description `dict`.
 
 The dense entries of `config/dtypes.yml` move into the library as its data file. Its two readers,
 `triton/itemsize.py` and the `_DTYPE_SIZES` dict in kernels/nbx_tensor.py:192, become one module.
-`core/dtype/itemsize.py` stays in the engine for the PyTorch branch: it is a mirror, held equal by test.
+Both engine branches read this module; the engine keeps no reader of its own (its PyTorch-branch mirror left 2026-10-29).
 
 ```python
 class DType(IntEnum):        # values frozen; new members are appended, never renumbered

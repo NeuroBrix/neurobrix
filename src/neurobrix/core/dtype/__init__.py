@@ -3,7 +3,7 @@
 NeuroBrix Dtype Module - Single Source of Truth
 
 Consolidates all dtype-related code:
-1. config.py - DTYPE_MAP, HARDWARE_SUPPORT (widths: itemsize.py, from config/dtypes.yml)
+1. config.py - DTYPE_MAP, HARDWARE_SUPPORT (widths: nbxtensor.dtype.itemsize, from nbxtensor/dtype/dtypes.yml)
 2. converter.py - safe_dtype_convert(), calculate_dtype_multiplier()
 3. engine.py - DtypeEngine (single dtype decision engine)
 

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Mapping, Optional, Tuple
 
-from neurobrix.core.dtype import itemsize as _itemsize
+from nbxtensor.dtype import itemsize as _itemsize
 
 
 class StateUndeclared(RuntimeError):

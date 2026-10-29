@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Optional
 
-from neurobrix.core.dtype.itemsize import itemsize
+from nbxtensor.dtype.itemsize import itemsize
 
 _FLOATING_NAMES = ("float16", "bfloat16", "float32", "float64", "half", "float", "double")
 

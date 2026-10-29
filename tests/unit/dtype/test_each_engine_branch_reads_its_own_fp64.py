@@ -294,10 +294,9 @@ def test_a_compiled_serve_does_not_read_the_triton_surface():
 
 
 def test_the_compiled_price_reads_the_compiled_branch_s_own_ceiling(monkeypatch):
-    """The ATen rules narrow through `core.dtype.itemsize.storage_dtype`, the compiled branch's own
-    reader of dtypes.yml, never the Triton branch's (Dell 22:43, R30): a change to the
-    compiled reader moves the compiled price and only it."""
-    from neurobrix.core.dtype import itemsize as core_itemsize
+    """The ATen rules narrow through the one dtype table's storage rule (`nbxtensor.dtype.itemsize.storage_dtype`) at
+    the compiled branch's own float64 fact (`stores_fp64`): the branches differ by the fact they pass, not by a reader
+    of their own (the engine's twin reader left 2026-10-29: the engine imports nbxtensor, no duplication)."""
     from neurobrix.core.prism.runtime_widths import conservative_contract, runtime_dtypes
     kw = dict(attention_operands="narrowest", has_native_bf16=False,
               contract=conservative_contract("test: no contract"), stores_fp64=False)
@@ -308,8 +307,3 @@ def test_the_compiled_price_reads_the_compiled_branch_s_own_ceiling(monkeypatch)
            "tensors": {"w": {"dtype": "float64", "shape": [4], "constant": True,
                              "constant_data": [0.0, 1.0, 2.0, 3.0]}}}
     assert runtime_dtypes(dag, "float16", "compiled", **kw)["w"] == "float32"
-    triton_before = runtime_dtypes(dag, "float16", "triton", **kw)["w"]
-    monkeypatch.setattr(core_itemsize, "storage_dtype",
-                        lambda dtype, stores_fp64: "float16" if str(dtype) == "float64" else str(dtype))
-    assert runtime_dtypes(dag, "float16", "compiled", **kw)["w"] == "float16"
-    assert runtime_dtypes(dag, "float16", "triton", **kw)["w"] == triton_before

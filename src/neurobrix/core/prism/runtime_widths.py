@@ -52,7 +52,7 @@ from neurobrix.kernels.classification import canonical_aten
 from neurobrix.triton import dtype as _tdt
 from neurobrix.core.dtype.traced_island import is_traced_fp32_island   # the engines' one predicate
 from neurobrix.triton.weight_loader import stored_dtype_in_compute
-from neurobrix.core.dtype import itemsize as _itemsize
+from nbxtensor.dtype import itemsize as _itemsize
 
 
 # ---------------------------------------------------------------------------
@@ -905,10 +905,9 @@ class _AtenRules(_Rules):
     promotion for what it leaves unwrapped."""
 
     def storage_dtype_name(self, name: str) -> str:
-        # The compiled branch's OWN ceiling on a device without fp64 (`DtypeEngine.storage_dtype`'s
-        # reader, `core.dtype.itemsize`), read here by name; R33 binds the Triton one.
-        from neurobrix.core.dtype import itemsize as _core_itemsize
-        return _core_itemsize.storage_dtype(name, False)
+        # The compiled branch's ceiling on a device without fp64: the one table's storage rule at that fact
+        # (`nbxtensor.dtype.itemsize`); R33 binds the Triton one.
+        return _itemsize.storage_dtype(name, False)
 
     def complex_dtype(self, name: str) -> str:
         # `_make_complex_output_wrapper` is a floor, never a leveller (engine.py:859-887):

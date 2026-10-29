@@ -49,7 +49,7 @@ class PlanNotComputable(RuntimeError):
 
 from neurobrix.core.prism.memory_estimator import compute_dtype_factor
 from neurobrix.core.config import get_prism_defaults
-from neurobrix.core.dtype import itemsize as _itemsize
+from nbxtensor.dtype import itemsize as _itemsize
 from neurobrix.core.config.system import PRISM_DEFAULTS
 from neurobrix.core.module import tiling_sizes as _ts
 

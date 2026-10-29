@@ -41,7 +41,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
 
-from neurobrix.core.dtype import itemsize as _itemsize
+from nbxtensor.dtype import itemsize as _itemsize
 
 
 def tensor_bytes(tensor: Dict[str, Any]) -> Optional[int]:

@@ -1,11 +1,8 @@
 # The dtype table: the width of every dtype the engine knows, one entry each.
 #
-# Read through its two mirror readers and nowhere else: `core/dtype/itemsize.py` (PyTorch branch,
-# Prism, the core executors) and `triton/itemsize.py` (Triton branch: NBXTensor, the wrappers,
-# the launch keys, the certifier). The two are held equal entry by entry by
-# `tests/unit/dtype/test_the_two_itemsize_readers_are_one.py`. A dtype absent from this file is
-# refused BY NAME by both readers: no width is ever guessed (the silent `.get(dtype, 4)` sized a
-# complex64 at half its bytes until 2026-09-22, Kokoro-82M's vocoder).
+# Read through ONE reader and nowhere else: `nbxtensor/dtype/itemsize.py` (both engine branches, Prism, NBXTensor, the
+# wrappers, the launch keys, the certifier). A dtype absent from this file is refused BY NAME: no width is ever guessed
+# (the silent `.get(dtype, 4)` sized a complex64 at half its bytes until 2026-09-22, Kokoro-82M's vocoder).
 #
 # Per entry:
 #   bits           storage bits per element (bytes = bits / 8 for every dense dtype)

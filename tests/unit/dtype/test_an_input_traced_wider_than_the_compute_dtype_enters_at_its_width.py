@@ -42,7 +42,7 @@ def _meta(dtype, params=None):
 ])
 def test_wider_means_wider_than_the_graph_s_own_parameters(traced, params, compute, wide):
     from neurobrix.core.dtype.entry_width import enters_at_traced_width, traced_parameter_width
-    from neurobrix.core.dtype.itemsize import itemsize
+    from nbxtensor.dtype.itemsize import itemsize
     meta = _meta(traced, params)
     assert traced_parameter_width(meta) == itemsize(params)
     assert enters_at_traced_width(itemsize(traced), itemsize(compute), meta) is wide

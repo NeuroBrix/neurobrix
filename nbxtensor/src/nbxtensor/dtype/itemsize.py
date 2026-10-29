@@ -1,8 +1,7 @@
 """The dtype table and its reader — the ONE place a dtype's width is written (`dtypes.yml`, beside this module).
 
-Every width a dtype has is read from `dtypes.yml` through this module. NeuroBrix's Triton engine reads it here; its
-PyTorch branch keeps its own reader (`neurobrix/core/dtype/itemsize.py`) fed by this same table (`dtype_table`), the two
-held equal entry by entry by the engine's `tests/unit/dtype/test_the_two_itemsize_readers_are_one.py`.
+Every width a dtype has is read from `dtypes.yml` through this module, and through no other reader: NeuroBrix's two
+engine branches read it here.
 
 Torch-free and numpy-free, at import and at execution.
 

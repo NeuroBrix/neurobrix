@@ -1,7 +1,7 @@
 # The engine's open slimming findings (tools/engine_slim_scan.py); each ends deleted, moved into nbxtensor, or kept
 # with its reason in docs/nbxtensor/ENGINE_SLIM.md. Both figures below may only go down (test_the_engine_only_slims.py).
-# engine_lines: 144911
-# open: 708
+# engine_lines: 144758
+# open: 690
 kind	path	symbol	detail
 dead	src/neurobrix/cli/commands/registry.py	installing_path	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/components/handlers/text_encoder_handler.py	TextEncoderComponentHandler.get_hidden_size	no reference outside its own body (tests excluded)
@@ -162,14 +162,6 @@ duplicate	src/neurobrix/core/audio_frontend.py	_requested_voice	same body as src
 duplicate	src/neurobrix/core/cfg/engine.py	__init__	same body as src/neurobrix/triton/cfg/engine.py::__init__
 duplicate	src/neurobrix/core/dtype/engine.py	amp_fp32_output_dtype	same body as src/neurobrix/triton/dtype.py::amp_fp32_output_dtype
 duplicate	src/neurobrix/core/dtype/engine.py	traced_output_is_complex	same body as src/neurobrix/triton/dtype.py::traced_output_is_complex
-duplicate	src/neurobrix/core/dtype/itemsize.py	_dense_entry	same body as nbxtensor/src/nbxtensor/dtype/itemsize.py::_dense_entry
-duplicate	src/neurobrix/core/dtype/itemsize.py	canonical_name	same body as nbxtensor/src/nbxtensor/dtype/itemsize.py::canonical_name
-duplicate	src/neurobrix/core/dtype/itemsize.py	finite_max	same body as nbxtensor/src/nbxtensor/dtype/itemsize.py::finite_max
-duplicate	src/neurobrix/core/dtype/itemsize.py	from_autotune_key	same body as nbxtensor/src/nbxtensor/dtype/itemsize.py::from_autotune_key
-duplicate	src/neurobrix/core/dtype/itemsize.py	from_safetensors	same body as nbxtensor/src/nbxtensor/dtype/itemsize.py::from_safetensors
-duplicate	src/neurobrix/core/dtype/itemsize.py	itemsize_table	same body as nbxtensor/src/nbxtensor/dtype/itemsize.py::itemsize_table
-duplicate	src/neurobrix/core/dtype/itemsize.py	representation_bytes	same body as nbxtensor/src/nbxtensor/dtype/itemsize.py::representation_bytes
-duplicate	src/neurobrix/core/dtype/itemsize.py	storage_dtype	same body as nbxtensor/src/nbxtensor/dtype/itemsize.py::storage_dtype
 duplicate	src/neurobrix/core/flow/audio.py	__init__	same body as src/neurobrix/core/flow/audio_llm.py::__init__, src/neurobrix/core/flow/dual_ar.py::__init__, src/neurobrix/core/flow/encoder_decoder.py::__init__, src/neurobrix/core/flow/forward_pass.py::__init__, src/neurobrix/core/flow/next_token_diffusion.py::__init__, src/neurobrix/core/flow/rnnt.py::__init__, src/neurobrix/core/flow/tts_llm.py::__init__, src/neurobrix/core/flow/vlm.py::__init__
 duplicate	src/neurobrix/core/flow/audio.py	_get_component_output	same body as src/neurobrix/core/flow/audio_llm.py::_get_component_output, src/neurobrix/core/flow/encoder_decoder.py::_get_component_output, src/neurobrix/core/flow/vlm.py::_get_component_output
 duplicate	src/neurobrix/core/flow/audio.py	_postprocess_output	same body as src/neurobrix/triton/flow/audio.py::_postprocess_output
@@ -469,16 +461,6 @@ duplicate	src/neurobrix/triton/vace_control_conditioning.py	_vae_latent_stats	sa
 duplicate	src/neurobrix/triton/vace_control_conditioning.py	conditioning_spec	same body as src/neurobrix/core/runtime/resolution/vace_control_conditioning.py::conditioning_spec
 fact	src/neurobrix/core/dtype/config.py	parse_dtype	nbxtensor exposes nbxtensor.dtype.nbx_dtype.parse_dtype
 fact	src/neurobrix/core/dtype/engine.py	storage_dtype	nbxtensor exposes nbxtensor.dtype.itemsize.storage_dtype
-fact	src/neurobrix/core/dtype/itemsize.py	canonical_name	nbxtensor exposes nbxtensor.dtype.itemsize.canonical_name
-fact	src/neurobrix/core/dtype/itemsize.py	finite_max	nbxtensor exposes nbxtensor.dtype.itemsize.finite_max
-fact	src/neurobrix/core/dtype/itemsize.py	from_autotune_key	nbxtensor exposes nbxtensor.dtype.itemsize.from_autotune_key
-fact	src/neurobrix/core/dtype/itemsize.py	from_safetensors	nbxtensor exposes nbxtensor.dtype.itemsize.from_safetensors
-fact	src/neurobrix/core/dtype/itemsize.py	itemsize	nbxtensor exposes nbxtensor.dtype.itemsize.itemsize
-fact	src/neurobrix/core/dtype/itemsize.py	itemsize_table	nbxtensor exposes nbxtensor.dtype.itemsize.itemsize_table
-fact	src/neurobrix/core/dtype/itemsize.py	kind	nbxtensor exposes nbxtensor.dtype.itemsize.kind
-fact	src/neurobrix/core/dtype/itemsize.py	known_dtypes	nbxtensor exposes nbxtensor.dtype.itemsize.known_dtypes
-fact	src/neurobrix/core/dtype/itemsize.py	representation_bytes	nbxtensor exposes nbxtensor.dtype.itemsize.representation_bytes
-fact	src/neurobrix/core/dtype/itemsize.py	storage_dtype	nbxtensor exposes nbxtensor.dtype.itemsize.storage_dtype
 fact	src/neurobrix/core/memory/manager.py	release_flow_memory	nbxtensor exposes nbxtensor.memory.memory_pool.release_flow_memory
 fact	src/neurobrix/core/prism/plan_advice.py	what_would_have_fit	nbxtensor exposes nbxtensor.memory.oom_advice.what_would_have_fit
 fact	src/neurobrix/core/prism/runtime_widths.py	_aligned	nbxtensor exposes nbxtensor.memory.layout.aligned

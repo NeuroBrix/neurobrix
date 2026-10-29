@@ -9,7 +9,7 @@ from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 
 from neurobrix.core.config.system import bytes_to_mb, bytes_to_gb
-from neurobrix.core.dtype.itemsize import itemsize, known_dtypes
+from nbxtensor.dtype.itemsize import itemsize, known_dtypes
 
 
 def estimate_op_workspace_bytes(

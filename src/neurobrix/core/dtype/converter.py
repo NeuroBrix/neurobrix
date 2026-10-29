@@ -17,7 +17,7 @@ if TYPE_CHECKING:  # R33: the ATen branch imports it; shared code only annotates
     import torch
 from typing import Dict
 
-from neurobrix.core.dtype.itemsize import itemsize
+from nbxtensor.dtype.itemsize import itemsize
 
 
 def safe_dtype_convert(
