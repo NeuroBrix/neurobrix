@@ -36,3 +36,13 @@ def declared_profile(monkeypatch):
     profile = load_default_profile()
     declare_hardware_profile(profile)
     return profile
+
+
+@pytest.fixture
+def needs_device():
+    """Skip, said, when this host's profile holds no device — a card-less run (the CPU suite runs with
+    CUDA_VISIBLE_DEVICES empty): a cell that launches on a card must skip there, not error in `cuInit` or a malloc.
+    Request it FIRST, before any fixture that touches the device."""
+    from neurobrix.core.prism.autodetect import load_default_profile
+    if not getattr(load_default_profile(), "devices", None):
+        pytest.skip("no device in this host's profile (a card-less run)")

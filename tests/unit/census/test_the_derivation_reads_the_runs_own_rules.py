@@ -15,6 +15,12 @@ from nbxtensor.dtype.nbx_dtype import NBXDtype
 F16, F32 = NBXDtype.float16, NBXDtype.float32
 
 
+def _empty_contract():
+    """No fp16 contract, as the engine's own object says it (the derivation reads `contract.safe` since 2026-10-26)."""
+    from neurobrix.core.prism.runtime_widths import conservative_contract
+    return conservative_contract("the rules cells: no contract")
+
+
 @pytest.fixture
 def volta_profile(monkeypatch):
     """The profile in force is volta.yml, whatever card (or none) the test host carries: the
@@ -312,7 +318,7 @@ def test_a_prefill_through_the_kv_interceptor_sees_no_mask():
     shapes = {"q": [1, 12, 1, 128], "k": [1, 12, 1, 128], "v": [1, 12, 1, 128], "m": [23, 23]}
     o = {"attributes": {"args": [{"type": "tensor", "tensor_id": t} for t in "qkvm"]}}
     args = ("aten::scaled_dot_product_attention", "u", o, list("qkvm"), shapes.__getitem__,
-            lambda _t: F16, LK, None, "float16", False, 1 << 40, 16, 64, 0,
+            lambda _t: F16, LK, _empty_contract(), "float16", False, 1 << 40, 16, 64, 0,
             collections.Counter())
     assert D._op_launches(*args, None, None)                     # the graph's mask: the math route
     assert not D._op_launches(*args, None, {"prefill": True})    # through the interceptor: none

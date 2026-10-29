@@ -39,7 +39,7 @@ def operands():
     del a, b
 
 
-def test_a_row_window_reads_the_rows_not_the_operand(operands):
+def test_a_row_window_reads_the_rows_not_the_operand(needs_device, operands):
     a, b, a_np, b_np = operands
     r0, r1 = 4096, 4096 + 64
     tracemalloc.start()

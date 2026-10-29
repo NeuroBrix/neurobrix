@@ -68,7 +68,7 @@ def _loop(monkeypatch, tmp_path, memory_mb, calls):
                             dev, 16, None, None, None, summary, lambda _m: None, types.SimpleNamespace(add=None), None)
 
 
-def test_a_pass_that_fills_what_is_missing_does_not_draw_a_refused_key_again(monkeypatch, tmp_path):
+def test_a_pass_that_fills_what_is_missing_does_not_draw_a_refused_key_again(needs_device, monkeypatch, tmp_path):
     calls = []
     first = _loop(monkeypatch, tmp_path, 16384, calls)
     assert first["oversize"] == 1 and first["failed"] == 0 and len(calls) == 1
@@ -78,7 +78,7 @@ def test_a_pass_that_fills_what_is_missing_does_not_draw_a_refused_key_again(mon
     assert second.get("refused_known") == 1 and len(calls) == 1, (second, calls)
 
 
-def test_a_refusal_made_at_another_bound_is_tried_again(monkeypatch, tmp_path):
+def test_a_refusal_made_at_another_bound_is_tried_again(needs_device, monkeypatch, tmp_path):
     calls = []
     _loop(monkeypatch, tmp_path, 16384, calls)
     again = _loop(monkeypatch, tmp_path, 32768, calls)                 # the class's capacity moved: drawn again

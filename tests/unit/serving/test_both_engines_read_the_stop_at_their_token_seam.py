@@ -74,7 +74,9 @@ def test_the_triton_generator_stops_at_the_next_token(monkeypatch):
     monkeypatch.setattr(tg, "DeviceAllocator", SimpleNamespace(set_device=lambda i: None))
     gen = tg.TritonGenerator(dict(_CFG))
     gen._sampler = lambda logits, input_ids=None: SimpleNamespace(item=lambda: 1)
-    logits = SimpleNamespace(ndim=2, shape=(1, _CFG["vocab_size"]))
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
+    # the logits as the Triton head hands them: fp32 (the generator widens any other dtype first, generator.py)
+    logits = SimpleNamespace(ndim=2, shape=(1, _CFG["vocab_size"]), _dtype=NBXDtype.float32)
     steps, honoured = _drive(gen, logits, stop_after=2)
     assert steps == 3 and honoured == 3 and len(gen.get_generated_tokens()) == 3 and gen.is_done
 

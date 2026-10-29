@@ -13,7 +13,7 @@ from nbxtensor.backend.runtime import _detect_gpu_backend
 import nbxtensor.backend.capabilities as _nbx_capabilities  # the module the moved names live in (M2 cut of tensor.py)
 
 
-def test_a_float64_cast_is_refused_by_name_where_the_backend_has_no_float64(host_backend_fp64):
+def test_a_float64_cast_is_refused_by_name_where_the_backend_has_no_float64(needs_device, host_backend_fp64):
     from nbxtensor import tensor as T
     import nbxtensor.backend.capabilities as _nbx_capabilities
     name = _detect_gpu_backend()
