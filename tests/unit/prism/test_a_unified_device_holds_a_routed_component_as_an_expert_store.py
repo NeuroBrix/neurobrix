@@ -97,7 +97,7 @@ def _solver(stacked=False):
 def _device(device_string, unified):
     profile = load_profile("a10-24g")             # a fixture in the tree, not this machine's file
     profile.devices[0].unified_memory = unified
-    spec = DeviceSpec(index=0, name="dev", memory_mb=24576, compute_capability="0.0",
+    spec = DeviceSpec(index=0, name="Apple M4 Pro", memory_mb=24576, compute_capability="0.0",
                       supports_dtypes=["bfloat16"], architecture="apple_silicon", brand=DeviceBrand.APPLE)
     # the M4 Pro's budget pinned at the 16 384 MB rung (NBX_PRISM_BUDGET_MB)
     dev = DeviceState(device_string=device_string, capacity_mb=18186.0, spec=spec,

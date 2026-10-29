@@ -582,12 +582,14 @@ def sdpa_launch_meta(seqlen_q: int, head_dim: int) -> dict:
     return {}
 
 
-def matrix_unit() -> dict:
+def matrix_unit(vendor_profile: Optional[dict] = None) -> dict:
     """The matrix unit the hardware profile declares for kernels Triton cannot lower onto it (`matrix_unit`:
     shape, operand and accumulator dtypes, measured tiles); `{}` when the profile declares none. A declared
     unit this engine has no kernel for, dtypes its instruction does not compute in, or a flash row whose tile
-    the kernel cannot lay out is refused by name: a declared capability is never silently left unused."""
-    mu = dict(active_vendor_profile().get("matrix_unit") or {})
+    the kernel cannot lay out is refused by name: a declared capability is never silently left unused.
+    `vendor_profile`: the profile to read (Prism, planning for a device that is not this process's); the
+    profile in force when None (the wrappers)."""
+    mu = dict((active_vendor_profile() if vendor_profile is None else vendor_profile).get("matrix_unit") or {})
     if not mu:
         return mu
     from nbxtensor.ops.mma_m8n8k4 import UNIT

@@ -565,15 +565,18 @@ def is_krsc_weight(w) -> bool:
     return tuple(w.stride()) == (R * S * C, 1, S * C, C)
 
 
-def unit_flash(D: int, q: NBXDtype, k: NBXDtype, v: NBXDtype) -> Optional[Tuple[str, dict]]:
+def unit_flash(D: int, q: NBXDtype, k: NBXDtype, v: NBXDtype,
+               unit: Optional[dict] = None) -> Optional[Tuple[str, dict]]:
     """(representation, tile) of this attention's flash on the profile's matrix unit, or None: the DtypeEngine's
     `matrix_unit_flash_representation` ("native": the three operands are the unit's operand dtype; "split": they are
     among `fp32_split.operands`, carried as hi + lo) and the first row of `matrix_unit.flash` — or of
-    `matrix_unit.fp32_split.flash` for the split — holding head dim D. The wrapper launches with this function."""
+    `matrix_unit.fp32_split.flash` for the split — holding head dim D. The wrapper launches with this function.
+    `unit`: a matrix unit already read (`_configs.matrix_unit(vendor_profile)`: Prism, for the device it plans); the
+    profile in force's when None."""
     from nbxtensor.ops._configs import matrix_unit, matrix_unit_flash_tile
     from nbxtensor.host import need as _need   # the application's triton.dtype (nbxtensor.host)
     matrix_unit_flash_representation = _need("matrix_unit_flash_representation")
-    mu = matrix_unit()
+    mu = matrix_unit() if unit is None else unit
     rep = matrix_unit_flash_representation(q.name, k.name, v.name, mu)
     if rep is None:
         return None
@@ -581,10 +584,10 @@ def unit_flash(D: int, q: NBXDtype, k: NBXDtype, v: NBXDtype) -> Optional[Tuple[
     return (rep, tile) if tile is not None else None
 
 
-def unit_flash_takes(D: int, q: NBXDtype, k: NBXDtype, v: NBXDtype) -> bool:
-    """The profile's matrix unit runs this attention's flash (`unit_flash`) — the wrappers' route and the derived
-    census ask this same function."""
-    return unit_flash(D, q, k, v) is not None
+def unit_flash_takes(D: int, q: NBXDtype, k: NBXDtype, v: NBXDtype, unit: Optional[dict] = None) -> bool:
+    """The profile's matrix unit runs this attention's flash (`unit_flash`) — the wrappers' route, the derived
+    census and Prism's priced scratch ask this same function."""
+    return unit_flash(D, q, k, v, unit) is not None
 
 
 def unit_flash_launches(Tq: int, Tk: int, D: int, q: NBXDtype, k: NBXDtype, v: NBXDtype,

@@ -1379,9 +1379,11 @@ def isnan_wrapper(x) :
 
 def nan_to_num_wrapper(x, nan: float = 0.0,
                        posinf: float = 3.4028235e+38,
-                       neginf: float = -3.4028235e+38) :
+                       neginf: float = -3.4028235e+38, inplace: bool = False) :
+    """`inplace`: write over a contiguous `x` (an element-wise map: each element read once, then written) — the math
+    attention's probabilities, whose copy was one more [B*H, Tq, Tk] buffer at its peak."""
     x = x.contiguous()
-    output = NBXTensor.empty_like(x)
+    output = x if inplace else NBXTensor.empty_like(x)
     _set_device(x)
     nan_to_num_forward_kernel[_1d_grid(x.numel())](
         x, output, x.numel(), nan, posinf, neginf,

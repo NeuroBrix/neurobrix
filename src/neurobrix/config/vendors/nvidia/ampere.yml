@@ -98,6 +98,9 @@ sdpa_thresholds:
 # parts (A30, A10, RTX 30xx) have less SMEM but the picker's safety
 # factor + cascade fallback keeps them safe.
 memory:
+  # the Triton arena's hold over the walked activations, while a component runs whole: not measured on this device —
+  # a Triton plan here is refused by name (`PrismSolver._live_activation_mb`)
+  triton_arena_activation_factor: null
   compiled_stream_driver_over_price: null   # not measured on this device (C1, 2026-10-27): a stream chunk is priced at its tensors
   # The compiled engine's torch caching allocator: see volta.yml (the measured case) and
   # core/runtime/torch_allocator.py. Declared on every NVIDIA and AMD profile.

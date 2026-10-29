@@ -73,7 +73,9 @@ IDS = [c[0] for c in OVER]
 # file's `compiled_private_reserve_mb` on unified memory (Apple: 3 900 MB, MPS's private reserve): PixArt's compiled
 # capacity is 11 198 - 3 900 = 7 298 MB under its 9 634.6 MB text encoder, granite's 18 186 x 0.95 - 3 900 = 13 376.7
 # under 17 151.7 (Dell, 2026-10-21 16:54); their Triton graphs, which hold no private reserve, still sit in the window.
-WINDOW_MODE = {"Flex.1-alpha": "triton", "PixArt-XL-2-1024-MS": "triton", "granite-speech-3.3-8b": "triton"}
+# granite-speech-3.3-8b came back into the compiled window when the 5 % buffer left the walked figures (2026-10-28,
+# janus-kv-once-overhead-measured: 16 335 MB under the compiled capacity 16 384): its case is constructed on that graph.
+WINDOW_MODE = {"Flex.1-alpha": "triton", "PixArt-XL-2-1024-MS": "triton"}
 
 
 def _spec(pool_mb: int) -> dict:
@@ -146,7 +148,9 @@ def test_the_largest_component_sits_between_the_rung_and_the_capacity(monkeypatc
     # Since 2026-10-25 the device has ONE planning figure (capacity_mb == budget_mb == the rung here); the
     # device's own declared figure is `recommended_mb` — the scenario is a component the DEVICE could hold that
     # the rung cannot, streamed on the card.
-    usable = s._usable_mb(dev)
+    # the larger of the two figures a whole component is judged against (`_whole_usable_mb`: the rung's part less the
+    # drain floor, where a component that leaves the floor is held whole and drains at the room beside it)
+    usable = max(s._usable_mb(dev), s._whole_usable_mb(dev))
     assert usable < largest < dev.recommended_mb, (
         f"{model}: largest component {largest:.1f} MB is not strictly between the usable part "
         f"{usable:.1f} of the rung {rung} and the device's figure {dev.recommended_mb:.1f} — the scenario "
@@ -272,8 +276,9 @@ def test_a_dedicated_card_cuts_the_boundaries_pinned_here(monkeypatch, mode):
     # segments shrink to fit the same usable rung. Two segments before, cut under the compute dtype's
     # 2 bytes; the solver's own note on this card already read three.
     # triton: eight pieces held, 0-7 since the Triton budget holds its runtime's growth (911 MB measured on V100,
-    # 2026-10-28) — the piece the smaller room leaves out moved from 0 to 8
-    held = {"compiled": list(range(1, 10)), "triton": list(range(0, 8))}
+    # 2026-10-28) — the piece the smaller room leaves out moved from 0 to 8; nine, 0-8, since the Triton rung part is the
+    # whole rung and the overhead is priced on activations only (the 0.92 gone, its terms priced, 2026-10-28)
+    held = {"compiled": list(range(1, 10)), "triton": list(range(0, 9))}
     assert list(cut) == ["model"] and len(cut["model"]) == 27, cut
     assert cut["model"][:2] == [["aten.embedding::0", "aten.view::27"], ["moe_fused::block.1", "aten.view::47"]], cut
     assert cut["model"][-1][1] == "custom.rms_norm::81", cut["model"][-1]

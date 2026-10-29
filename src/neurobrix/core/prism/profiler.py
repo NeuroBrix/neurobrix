@@ -956,17 +956,17 @@ class ActivationProfiler:
     def _attention_scratch_of(self, op, symbol_map, attention_scratch) -> int:
         """The scores an attention op writes, from its query [B, H, Tq, D] (or [B, Tq, D]) and value at the request."""
         ins = op.get("input_tensor_ids") or []
-        if len(ins) < 3:
-            return 0
-        q = self._resolve_shape(self.tensors.get(ins[0], {}), symbol_map)
-        v = self._resolve_shape(self.tensors.get(ins[2], {}), symbol_map)
+        q = self._resolve_shape(self.tensors.get(ins[0], {}), symbol_map) if len(ins) >= 3 else []
+        v = self._resolve_shape(self.tensors.get(ins[2], {}), symbol_map) if len(ins) >= 3 else []
         if len(q) < 3 or len(v) < 3:
-            return 0
+            raise ValueError(f"ZERO FALLBACK: attention op {op.get('op_uid') or op.get('op_type')} has no query and value "
+                             f"shapes at the request (inputs {list(ins)[:3]}: query {q}, value {v}) — its scores cannot "
+                             f"be priced")
         heads = int(q[-3]) if len(q) >= 4 else 1          # [B, H, T, D], or [B, T, D]: one head
         batch = 1
         for d in (q[:-3] if len(q) >= 4 else q[:-2]):
             batch *= int(d)
-        return int(attention_scratch(batch, heads, int(q[-2]), int(v[-2])))
+        return int(attention_scratch(batch, heads, int(q[-2]), int(v[-2]), D=int(q[-1]), Dv=int(v[-1])))
 
     def tiled_conv_band_bytes(self, op: Dict[str, Any], symbol_map: Dict[str, int], widths, dtype_bytes: int,
                               factor: int) -> int:

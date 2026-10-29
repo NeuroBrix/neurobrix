@@ -19,6 +19,10 @@ directory boundary, because it never looks at files at all.
     python3 tools/torch_provenance.py --model whisper-large-v3-turbo \\
         --audio benchmarks/assets/jfk_11s.wav --engine triton
 
+or, as a gate cell runs it — the entry point's own arguments, profile and family flags included (rule 3):
+
+    python3 tools/torch_provenance.py -- run --model whisper-large-v3-turbo --hardware <profile> --triton ...
+
 Output: every torch op that ran, how many times, and the call site inside
 NeuroBrix that issued it — ranked by count, because the count is what turns a
 boundary conversion into a hot path.
@@ -105,18 +109,28 @@ def main() -> int:
     ap.add_argument("--engine", default="triton", choices=["triton", "compiled"])
     ap.add_argument("--max-tokens", type=int, default=16)
     ap.add_argument("--top", type=int, default=25)
-    args = ap.parse_args()
-
-    sys.argv = ["neurobrix", "run", "--model", args.model,
-                "--max-tokens", str(args.max_tokens)]
-    if args.audio:
-        sys.argv += ["--audio", args.audio]
-    elif args.input_image:
-        sys.argv += ["--input-image", args.input_image]
+    argv = sys.argv[1:]
+    passthrough = argv[argv.index("--") + 1:] if "--" in argv else None
+    if passthrough is not None:
+        # the entry point's own command, as the gate launches it; the audit reads its model and engine from it
+        if not passthrough or passthrough[0] != "run" or "--model" not in passthrough:
+            ap.error("after `--`: the entry point's `run` command with its `--model` (refused: "
+                     f"{' '.join(passthrough) or 'nothing'})")
+        args = ap.parse_args(["--model", passthrough[passthrough.index("--model") + 1]]
+                             + (["--engine", "triton"] if "--triton" in passthrough else ["--engine", "compiled"]))
+        sys.argv = ["neurobrix", *passthrough]
     else:
-        sys.argv += ["--prompt", args.prompt]
-    if args.engine == "triton":
-        sys.argv.append("--triton")
+        args = ap.parse_args()
+        sys.argv = ["neurobrix", "run", "--model", args.model,
+                    "--max-tokens", str(args.max_tokens)]
+        if args.audio:
+            sys.argv += ["--audio", args.audio]
+        elif args.input_image:
+            sys.argv += ["--input-image", args.input_image]
+        else:
+            sys.argv += ["--prompt", args.prompt]
+        if args.engine == "triton":
+            sys.argv.append("--triton")
 
     counts: collections.Counter = collections.Counter()
     sites: collections.Counter = collections.Counter()

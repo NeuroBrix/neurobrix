@@ -901,8 +901,10 @@ def cmd_run(args):
     # What the runtime itself grows to during the run, outside every allocator (core/runtime/runtime_growth.py): read
     # before the executor exists and at the run's end, on the Triton engine with accelerators; recorded per model.
     _growth = None
-    if execution_mode != "compiled" and getattr(hw_profile, "devices", None) and not any(
+    from neurobrix.kernels import census as _census_g
+    if execution_mode != "compiled" and not _census_g.active() and getattr(hw_profile, "devices", None) and not any(
             getattr(d, "has_unified_memory", False) for d in hw_profile.devices):
+        # a census shadow runs no kernel on a card: it measures nothing of the runtime's growth
         from nbxtensor.memory.allocator import DeviceAllocator as _DAg
         from neurobrix.core.runtime import runtime_growth as _rg
         _gdevs = list(range(_DAg.device_count()))

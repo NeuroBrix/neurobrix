@@ -82,10 +82,12 @@ def band_for(mode):
             dev = s._prepare_devices(profile(APPLE))[0]
             whole = s._whole_component_mb(c, COMP, seen[COMP], dev)
             total = seen[COMP].total_mb
-            # The top of the band is the rung whose WHOLE part (`_whole_usable_mb`: the rung times
-            # the fraction, less the smallest drain the Triton plan may leave, the profile's floor —
-            # 0 under compiled) equals `whole` (merge-queue-25 option B).
-            _BANDS[mode] = (total, (whole + s._deferred_drain_floor_mb(dev)) / s.whole_component_fraction)
+            # The top of the band is the rung whose WHOLE part (`_whole_usable_mb`: the rung's part — the
+            # whole rung under Triton, its fraction under compiled, `_rung_part_mb` — less the smallest drain
+            # the Triton plan may leave, the profile's floor — 0 under compiled) equals `whole`
+            # (merge-queue-25 option B).
+            part = s._rung_part_mb(dev) / s._effective_capacity_mb(dev)
+            _BANDS[mode] = (total, (whole + s._deferred_drain_floor_mb(dev)) / part)
         finally:
             mp.undo()
     return _BANDS[mode]
@@ -157,6 +159,10 @@ def test_a_component_that_fits_whole_is_never_the_one_streamed(monkeypatch, band
     _, hi = band
     _, s, seen, _ = _solve(int(hi) + 64, monkeypatch, mode)
     dev = s._prepare_devices(profile(APPLE))[0]
+    if seen[COMP].overhead_bytes == 0 and mode == "compiled":
+        # no buffer on a walked figure (2026-10-28) and no arena factor under compiled: the total IS the whole cost,
+        # so there is nothing to tell apart on this engine; the Triton cell keeps the law (its arena factor)
+        pytest.skip("under compiled the total is the whole cost: no figure between them")
     assert seen[COMP].total_mb > s._usable_mb(dev), (
         "precondition: at this rung the component's total must exceed the usable figure, or the "
         "cell cannot tell the whole cost from the total")

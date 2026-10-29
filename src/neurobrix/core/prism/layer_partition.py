@@ -117,8 +117,15 @@ class LayerPartitioner:
                  compute_dtype_bytes: Optional[int] = None,
                  widths: Optional[Dict[str, int]] = None,
                  token_split: bool = False, swap_values: bool = False, beyond_walls: bool = False,
-                 op_extra: Optional[Dict[str, int]] = None):
+                 op_extra: Optional[Dict[str, int]] = None, activation_factor: float = 1.0):
         self._dag = graph
+        # What the engine's allocator holds over the walked activations while a piece runs: the Triton arena and its
+        # pool park freed blocks inside segments that still hold a live one (`memory.triton_arena_activation_factor`,
+        # the device's measured fact, passed by the solver under the Triton engines — the rule a component held whole
+        # is priced by, `PrismSolver._live_activation_mb`); 1.0 under the compiled engine, whose pieces hold no arena.
+        # Wan2.2-I2V-A14B triton V100-16GB: its first piece, cut on the walk alone, refused a 731 MB attention with
+        # 614 MB parked in 6 blocks the pool could not return (2026-10-28).
+        self._activation_factor = float(activation_factor)
         # {op uid: bytes} an op holds WHILE it runs beside its inputs and outputs, priced by the solver at the request
         # (`PrismSolver._conv_band_bytes`: a band-streamed conv's largest band — its input buffer and output — beside
         # its whole output): added to that op's figure on the op peak curve, as the activation walk adds it.
@@ -637,6 +644,7 @@ class LayerPartitioner:
         peak_live = max(peaks) if peaks else 0
         if reserve is not None:
             peak_live = max(peak_live, reserve)
+        peak_live = int(peak_live * self._activation_factor)    # the allocator's hold over the walk (`__init__`)
         starts = {r.first: r for r in regions}
 
         # The weights get the budget MINUS what the activations will hold.
