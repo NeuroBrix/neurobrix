@@ -181,6 +181,32 @@ _MAY_OMIT = {
         "profiles' table; AMD states it once a compiled plan runs there (core/runtime/graph/compiled_sequence.py refuses "
         "a vendor file that states nothing)",
 }
+_MAY_OMIT.update({
+    "memory.triton_runtime_growth_mb":
+        "a MEASURED fact of a device (the runtime's growth during a run, outside every allocator): optional by contract "
+        "(core/prism/solver._runtime_growth_fact — unmeasured, not priced, and the plan says so); a device states it once "
+        "measured there, never borrowed",
+    "memory.compiled_runtime_growth_mb": "same contract, the compiled engine's growth",
+    "memory.state_page_granule_bytes":
+        "optional by contract (core/state/price.py refuses by name a paged state priced on a device that states no "
+        "page granule): stated where the state engine's pages were measured",
+    "memory.async_release": "same contract, read with the page granule (core/state/price.py)",
+    "memory.compiled_conv3d_workspace_input_fraction":
+        "the compiled engine's 3-D convolution workspace, measured per convolution library (cuDNN on NVIDIA, MPS on "
+        "Apple): optional by contract — core/prism/op_workspace.conv3d_workspace_fraction refuses by name a plan that "
+        "prices a compiled conv3d on a device that states none (AMD's MIOpen: not measured, so refused, never borrowed)",
+    "autotune.buckets.M":
+        "optional by contract (nbxtensor ops/autotune_bucket.ladder_for): absent, M keys on the file's own `default` "
+        "dimension ladder, and a file without one is refused by name; a dedicated M ladder is adopted on measurement "
+        "(/bucket-loss) only",
+})
+#: Whole sections a profile may omit, by prefix, each with the reason.
+_MAY_OMIT_PREFIX = {
+    "measured.":
+        "a machine's MEASURED facts (bandwidths, matmul and GEMV rates, the loaders' rates; core/prism/facts_probe, "
+        "tools/profile_facts.py), measured at a machine's first launch: optional by contract — core/prism/time_estimate "
+        "ranks plans without a time estimate until then and the explanation says so; never borrowed from another chip",
+}
 _MAY_OMIT.update({f"matrix_unit.{k}": (
     "optional by contract (kernels/ops/_configs.matrix_unit): only an arch whose matrix unit Triton does "
     "not lower `tl.dot` onto declares one (Volta, triton-lang/triton#5066); absent, every kernel keeps tl.dot")
@@ -219,7 +245,7 @@ def test_every_profile_declares_what_the_reference_declares(path):
     reference = set(_flatten(yaml.safe_load(
         (VENDORS / "nvidia" / "volta.yml").read_text())))
     mine = set(_flatten(yaml.safe_load(path.read_text())))
-    missing = sorted(reference - mine - set(_MAY_OMIT))
+    missing = sorted(k for k in reference - mine - set(_MAY_OMIT) if not k.startswith(tuple(_MAY_OMIT_PREFIX)))
     assert not missing, (
         f"{name} does not declare, and has no recorded reason to omit:\n  "
         + "\n  ".join(missing)

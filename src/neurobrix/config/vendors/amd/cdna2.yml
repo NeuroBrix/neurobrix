@@ -122,6 +122,11 @@ memory:
   # `memory.warp_size` got nothing on AMD and would fall back to 32 — wrong
   # by 2x, silently, on every CDNA card.
   warp_size: 64
+  # The registers ONE lane may address for ordinary (non-matrix) code: the 256 architectural VGPRs V0-V255; the
+  # 256 AccVGPRs beside them in the same file serve the matrix (MFMA) instructions and spills, not a tile's elements
+  # (AMD Instinct MI300 / CDNA3 ISA reference guide, "VGPRs": up to 512 per wave, 256 of each type; CDNA2 the same,
+  # ORNL CDNA2 memory-hierarchy slides). Read by ops/_configs.fits_thread_registers (elements a thread holds).
+  max_registers_per_thread: 256
   # SDPA deterministic-routing budget (R10 schema parity with
   # volta.yml). 0 = NOT APPLICABLE: the flash-attention
   # non-determinism diagnosed in P-TRITON-MOE-DETERMINISM-RESIDUAL
