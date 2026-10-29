@@ -36,13 +36,15 @@ def test_a_caller_sets_its_own_tiling_and_restores_the_librarys():
 
 
 def test_the_certified_store_defaults_to_the_users_cache(monkeypatch, tmp_path):
-    from nbxtensor.ops import autotune_certified as C
+    from nbxtensor.ops import autotune_settings as C
     monkeypatch.delenv("NEUROBRIX_AUTOTUNE_CERTIFIED_DIR", raising=False)
     monkeypatch.setattr(C, "_STORE", {})
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
     assert C.directory() == tmp_path / "nbxtensor" / "certified"
     C.set_store(tmp_path / "committed")
     assert C.directory() == tmp_path / "committed"
+    C.set_store(lambda: tmp_path / "resolved_when_asked")
+    assert C.directory() == tmp_path / "resolved_when_asked"
     C.set_store(None)
     assert C.directory() == tmp_path / "nbxtensor" / "certified"
 

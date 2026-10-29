@@ -153,7 +153,7 @@ def test_the_compiled_sequence_reuses_only_bit_identical_invariant_inputs():
     assert not seq._invariant.holds
 
 
-def test_the_triton_sequence_reuses_only_bit_identical_invariant_inputs():
+def test_the_triton_sequence_reuses_only_bit_identical_invariant_inputs(declared_profile):
     pytest.importorskip("triton")
     import numpy as np
     from nbxtensor.dtype.nbx_dtype import NBXDtype

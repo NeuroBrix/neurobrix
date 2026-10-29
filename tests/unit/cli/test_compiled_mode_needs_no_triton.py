@@ -100,7 +100,7 @@ def test_the_compiled_run_path_does_not_reach_the_triton_wrappers(without_triton
     run = _fresh("neurobrix.cli.commands.run")
     import inspect
     src = inspect.getsource(run.cmd_run)
-    i = src.index("set_hardware_profile")
+    i = src.index("declare_hardware_profile")      # the engine's declaration of the profile to the Triton surface
     before = src[:i]
     assert 'execution_mode != "compiled"' in before, (
         "the Triton wrapper surface is configured without asking the mode; "

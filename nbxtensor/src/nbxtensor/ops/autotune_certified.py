@@ -112,28 +112,9 @@ _SERVED: Dict[str, int] = {"certified": 0, "swept": 0, "local": 0}     # local =
 # ---------------------------------------------------------------------------
 # where
 # ---------------------------------------------------------------------------
-_STORE: Dict[str, Path] = {}          # {"dir": Path} once a caller set its store
-
-
-def set_store(path) -> None:
-    """Set the directory of proven kernel settings (a path; `None` restores the library's own: the user's cache,
-    `backend.device_facts.certified_dir`). NeuroBrix sets its committed certified directory here."""
-    if path is None:
-        _STORE.clear()
-    else:
-        _STORE["dir"] = Path(path)
-
-
-def directory() -> Path:
-    """The store in force: NEUROBRIX_AUTOTUNE_CERTIFIED_DIR when set (tests, a contributor's draft), else the one a
-    caller set (`set_store`), else the library's own in the user's cache."""
-    override = os.environ.get("NEUROBRIX_AUTOTUNE_CERTIFIED_DIR")
-    if override:
-        return Path(override)
-    if "dir" in _STORE:
-        return _STORE["dir"]
-    from nbxtensor.backend.device_facts import certified_dir
-    return certified_dir()
+# The store and the miss explainer an application may set: `ops.autotune_settings` (standard library only, so an
+# application sets them at start without importing the autotune); read here at call time.
+from nbxtensor.ops.autotune_settings import directory, miss_explainer
 
 
 def enabled() -> bool:
@@ -1028,25 +1009,12 @@ class KeyNotCertified(RuntimeError):
     """A key a confirmation run met that the certified directory does not serve."""
 
 
-#: An application's account of a key a confirmation run missed (`set_miss_explainer`), or None.
-_MISS_EXPLAINER = None
-
-
-def set_miss_explainer(explain) -> None:
-    """Install `explain(kernel_qual, key, memory_gb) -> str`: where the application expected a key it finds uncertified
-    to come from (NeuroBrix: the row of its census table that should hold it), appended to the refusal; None removes it.
-    Optional: without one, the refusal says what the store holds and nothing more."""
-    global _MISS_EXPLAINER
-    if explain is not None and not callable(explain):
-        raise TypeError("set_miss_explainer: the explainer must be callable (kernel_qual, key, memory_gb) -> str")
-    _MISS_EXPLAINER = explain
-
-
 def _explain_miss(kernel_qual: str, key: tuple, memory_gb: Optional[int]) -> str:
-    if _MISS_EXPLAINER is None:
+    explain = miss_explainer()
+    if explain is None:
         return ""
     try:
-        return f" {_MISS_EXPLAINER(kernel_qual, key, memory_gb)}."
+        return f" {explain(kernel_qual, key, memory_gb)}."
     except Exception as exc:  # noqa: BLE001 — said: the refusal stands, its explanation failed
         return f" (the application's explanation of the miss failed: {type(exc).__name__}: {exc})."
 

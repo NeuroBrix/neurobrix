@@ -149,7 +149,7 @@ MODES = [("compiled", "cuda"), ("triton", "cuda"), ("triton_sequential", "cuda")
 
 @pytest.mark.skipif(not _cuda(), reason="the entry narrowing happens on a card: the host places fp16 components in fp32")
 @pytest.mark.parametrize("mode,device", MODES)
-def test_an_fp32_input_value_survives_the_entry_of_an_fp16_component(mode, device):
+def test_an_fp32_input_value_survives_the_entry_of_an_fp16_component(mode, device, declared_profile):
     from neurobrix.core.runtime.graph_executor import GraphExecutor
     ex = GraphExecutor(family="video", vendor="nvidia", arch="volta", device=device, dtype="float16", mode=mode)
     ex.load_graph_from_dict(_graph())

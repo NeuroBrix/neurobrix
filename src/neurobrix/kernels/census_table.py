@@ -247,7 +247,7 @@ def rows_for(kernel_qual: str, key_repr_text: str, vendor: str, profile: str, me
 
 def census_row(kernel_qual: str, key: tuple, memory_gb: Optional[int]) -> str:
     """Where the census table stands on a key a confirmation run missed, in words (installed as the library's miss
-    explainer, `autotune_certified.set_miss_explainer`, by `neurobrix._nbxtensor_host.install`): the table of the profile in force and
+    explainer, `autotune_settings.set_miss_explainer`, by `neurobrix._nbxtensor_host.install`): the table of the profile in force and
     this card's memory class holds it (a certification gap) or not (a census defect)."""
     from nbxtensor.ops.autotune_certified import active_profile, key_repr
     census_table = sys.modules[__name__]

@@ -158,7 +158,7 @@ works with no application around it:
   shares the host's memory, whether its kernels compute float64 (`nbxtensor.backend.device_facts`);
 - **settings with a default**, set with plain data: the tiling table the memory splits are cut by
   (`nbxtensor.ops.tiling_policy.set_tiling`, default: the library's `ops/tiling.yml`), the directory of proven kernel
-  settings (`nbxtensor.ops.autotune_certified.set_store`, default: your cache, `~/.cache/nbxtensor/certified/`,
+  settings (`nbxtensor.ops.autotune_settings.set_store`, a path or a callable returning one, default: your cache, `~/.cache/nbxtensor/certified/`,
   filled by the autotune at first use), the memory limit a process holds to (`nbxtensor.memory.set_limit`, default:
   the physical card). `None` restores a default.
 
@@ -166,14 +166,14 @@ works with no application around it:
 from pathlib import Path
 from nbxtensor.backend.device_names import arch_string
 from nbxtensor.backend.host_memory import memory_state
-from nbxtensor.ops import autotune_certified, tiling_policy
+from nbxtensor.ops import autotune_settings, tiling_policy
 
 assert arch_string("Apple M4 Pro") == "apple-m4-pro"        # a device's key: the library's own rule
 assert memory_state().source                                # the host reading names where it came from
 
-autotune_certified.set_store("/tmp/my-proven-settings")     # your own store of proven kernel settings
-assert autotune_certified.directory() == Path("/tmp/my-proven-settings")
-autotune_certified.set_store(None)                          # back to the default in your cache
+autotune_settings.set_store("/tmp/my-proven-settings")      # your own store of proven kernel settings
+assert autotune_settings.directory() == Path("/tmp/my-proven-settings")
+autotune_settings.set_store(None)                           # back to the default in your cache
 
 table = tiling_policy.tiling_table()                        # the split sizes in force (a copy)
 tiling_policy.set_tiling(table)                             # a whole table, as tiling.yml writes it

@@ -360,7 +360,7 @@ def _on_card(monkeypatch, half):
 
 @pytest.mark.skipif(not _cuda(), reason="the Triton modes live on a card")
 @pytest.mark.parametrize("mode", ["triton", "triton_sequential"])
-def test_the_triton_stitch_sums_at_the_accumulator_and_stores_the_op_s_own_dtype(mode, monkeypatch):
+def test_the_triton_stitch_sums_at_the_accumulator_and_stores_the_op_s_own_dtype(mode, monkeypatch, declared_profile):
     """The same stitch in the two Triton modes (R30), fp16 on the card: every partial summed is at the
     accumulator's width the TritonDtypeEngine names (`accumulation_dtype`, which reads the triton.language
     dtype an NBXTensor hands), the sum is stored once in the dtype the engine gave the op unpinned, and
@@ -402,7 +402,7 @@ def test_the_triton_stitch_sums_at_the_accumulator_and_stores_the_op_s_own_dtype
 
 
 @pytest.mark.parametrize("mode", ["sequential", "compiled", "triton", "triton_sequential"])
-def test_a_pinned_op_computes_and_keeps_fp32_from_the_next_run(mode, monkeypatch):
+def test_a_pinned_op_computes_and_keeps_fp32_from_the_next_run(mode, monkeypatch, declared_profile):
     """`GraphExecutor.pin_fp32_ops` in every mode: the op's output, half before, is fp32 from the next
     run on — compiled and triton rebuild their sequence with the pin, triton-sequential and
     sequential resolve it through the contract (`precision_contract`) at the run.

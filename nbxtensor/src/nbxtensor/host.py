@@ -4,7 +4,7 @@ nbxtensor computes; the application decides. The decisions still read here: the 
 budgets, the matrix unit) and where they live, the dtype policy that picks an attention's and a matrix unit's operand
 dtypes, and where a backend build may live. Each is moving to a fact the library reads itself or a setting with a
 default (docs/nbxtensor/API.md section 11); what left already: the memory limit (`memory.set_limit`), the certified
-store (`ops.autotune_certified.set_store`), the device's memory (`backend.device_facts`), the launch observer
+store (`ops.autotune_settings.set_store`), the device's memory (`backend.device_facts`), the launch observer
 (`ops.launch_observer`). The application provides each service ONCE, by name (`provide`); the library reads it by name
 (`need`). A service no application provided is refused by name, never guessed.
 

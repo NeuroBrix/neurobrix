@@ -28,7 +28,11 @@ third_party = sorted(
 # the engine installs its tensor library's host services at import (neurobrix/_nbxtensor_host.py): the package and
 # `nbxtensor.host` (stdlib only) are loaded, and nothing else of the library
 library = sorted(m for m in added if m == "nbxtensor" or m.startswith("nbxtensor."))
-third_party += [m for m in library if m not in ("nbxtensor", "nbxtensor.host")]
+# and the library's settings an application sets at start, in modules of the standard library only (the launch
+# observer, the autotune's store and miss explainer) — never the autotune, a kernel or a backend
+_STDLIB_ONLY = ("nbxtensor", "nbxtensor.host", "nbxtensor.ops", "nbxtensor.ops.launch_observer",
+                "nbxtensor.ops.autotune_settings")
+third_party += [m for m in library if m not in _STDLIB_ONLY]
 engine_leaks = sorted(
     m for m in added
     if m.startswith("neurobrix.")
