@@ -472,13 +472,15 @@ def test_32g_pow2_window_keeps_prefix_route_on_device(without_matrix_unit) -> No
 
 
 # ---------------------------------------------------------------------------
-# Headroom-aware chunk retry (D-OPENSORA-TRITON-SDPA, 2026-09-02): the static
-# per-device budget cannot see the live watermark; a refused chunk malloc
-# halves the chunk and resumes at the same row — byte-identical output,
-# loud line, bounded at 128 rows, non-malloc errors propagate untouched.
+# A refused chunk (2026-10-08, 8c40b0e7: the TilingEngine owns the chunk rows): a
+# refused chunk malloc is re-raised naming its key — the shape, the plan's rows a
+# chunk, the row it stopped at, the bytes asked — and never retried smaller, which
+# would run a chunk count the plan and the launch key never saw (it halved and
+# resumed before, D-OPENSORA-TRITON-SDPA 2026-09-02). Non-malloc errors propagate
+# untouched.
 # ---------------------------------------------------------------------------
 
-def test_chunk_retry_halves_on_malloc_refusal_and_matches() -> None:
+def test_a_refused_chunk_is_named_and_never_retried_smaller() -> None:
     import numpy as np
     import nbxtensor.ops.wrappers as W
     from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
@@ -493,8 +495,6 @@ def test_chunk_retry_halves_on_malloc_refusal_and_matches() -> None:
     mk = lambda: NBXTensor.from_numpy(
         (rng.standard_normal((B, H, T, D)) * 0.1).astype(np.float16))
     q, k, v = mk(), mk(), mk()
-    ref = _nbx_attention_wrappers._math_attention_chunked(q, k, v, None, True, 1.0 / np.sqrt(D), 256)
-    ref_b = _d2h(ref)
 
     orig = _nbx_attention_wrappers._math_attention
     orig_floor = _nbx_attention_wrappers._sdpa_math_min_chunk_rows
@@ -505,7 +505,7 @@ def test_chunk_retry_halves_on_malloc_refusal_and_matches() -> None:
 
     def flaky(*a, **kw):
         state["calls"] += 1
-        # refuse exactly one big chunk (the first call), then behave
+        # refuse the first chunk of the plan's 256 rows; a retry would come back with fewer rows
         if not state["refused"] and a[0].shape[2] == 256:
             state["refused"] = True
             raise DeviceOOMError("GPU malloc failed (error 2) for 1 bytes [device cuda:0 ...]")
@@ -513,12 +513,16 @@ def test_chunk_retry_halves_on_malloc_refusal_and_matches() -> None:
 
     _nbx_attention_wrappers._math_attention = flaky
     try:
-        out = _nbx_attention_wrappers._math_attention_chunked(q, k, v, None, True, 1.0 / np.sqrt(D), 256)
+        with pytest.raises(DeviceOOMError) as refused:
+            _nbx_attention_wrappers._math_attention_chunked(q, k, v, None, True, 1.0 / np.sqrt(D), 256)
     finally:
         _nbx_attention_wrappers._math_attention = orig
         _nbx_attention_wrappers._sdpa_math_min_chunk_rows = orig_floor
     assert state["refused"], "the refusal path never fired (vacuous)"
-    assert _d2h(out) == ref_b, "retry changed the bytes"
+    assert state["calls"] == 1, f"retried after the refusal ({state['calls']} calls): a chunk count the plan never saw"
+    msg = str(refused.value)
+    for part in (f"q [{B}, {H}, {T}, {D}]", "256 rows a chunk", "chunk at row 0", "not retried smaller"):
+        assert part in msg, (part, msg)
 
 
 def test_chunk_retry_propagates_non_malloc_errors() -> None:
