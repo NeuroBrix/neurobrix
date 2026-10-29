@@ -5,7 +5,7 @@
 #
 # Source: PyTorch's autocast tables (aten/src/ATen/autocast_mode.h: AT_FORALL_FP32, AT_FORALL_FP32_SET_OPT_DTYPE,
 # AT_FORALL_LOWER_PRECISION_FP, AT_FORALL_PROMOTE), as NeuroBrix's DtypeEngine carried them
-# (src/neurobrix/core/dtype/engine.py, moved here 2026-10-29) with its documented deviations: polar and
+# (moved here from its engine on 2026-10-29) with its documented deviations: polar and
 # view_as_complex compute in float32 (complex32 does not exist); div computes in the lower precision class; the
 # scaled-dot-product attention ops are in no class (the attention kernels choose their operand dtypes); the high-level
 # RNN ops (lstm, gru, rnn_tanh, rnn_relu) are lower precision, their kernels accumulate in float32.

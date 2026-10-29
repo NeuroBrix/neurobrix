@@ -503,65 +503,44 @@ def _dtype_name(dt) -> Optional[str]:
     return None if dt is None else str(dt).replace("torch.", "")
 
 
+# The op classes are data of the library's default precision policy (nbxtensor/dtype/policy.yml, DESIGN rule 12),
+# read here once: one fact, one place. The comments below say why each class holds what it holds.
+from nbxtensor.dtype.policy import default_classes as _default_classes  # noqa: E402
+_OP_CLASSES = _default_classes()
+
 # Ops that MUST run in float32 for numerical stability.
 # Combines AT_FORALL_FP32 + AT_FORALL_FP32_SET_OPT_DTYPE.
 # Output: `amp_fp32_output_dtype` — bf16 compute: bf16 on a bf16 graph, fp32 on
 # another; fp16 compute: fp32 unless the precision contract narrows it (downstream
 # FP16 ops bring fp32 back to C).
-AMP_FP32_OPS: FrozenSet[str] = frozenset({
-    # --- AT_FORALL_FP32 (PyTorch 100% match) ---
-    # Transcendental / exponential
-    "acos", "asin", "cosh", "erfinv", "exp", "expm1",
-    "log", "log10", "log2", "log1p", "reciprocal", "rsqrt",
-    "sinh", "tan",
-    # Power (all variants: Tensor_Scalar, Tensor_Tensor, Scalar)
-    "pow",
-    # Activation
-    "softplus",
-    # Normalization (PyTorch: layer_norm, native_layer_norm, group_norm, batch_norm)
-    "layer_norm", "native_layer_norm", "group_norm", "native_group_norm",
-    "batch_norm", "native_batch_norm", "cudnn_batch_norm", "instance_norm",
-    # Norms
-    "frobenius_norm", "nuclear_norm", "cosine_similarity",
-    # Loss functions (rare in inference, included for correctness)
-    "poisson_nll_loss", "cosine_embedding_loss", "nll_loss", "nll_loss2d",
-    "hinge_embedding_loss", "kl_div", "l1_loss", "smooth_l1_loss",
-    "huber_loss", "mse_loss", "margin_ranking_loss",
-    "multilabel_margin_loss", "soft_margin_loss", "triplet_margin_loss",
-    "multi_margin_loss", "binary_cross_entropy_with_logits",
-    # Distance
-    "dist", "pdist", "cdist",
-    # Complex number ops — EXTENSION (not in PyTorch autocast).
-    # Require fp32 because complex32/fp16 doesn't exist on CUDA.
-    # Used in RoPE implementations (DeepSeek-V2, etc.)
-    #
-    # These two are the FALLBACK, not the rule. The primary protection is
-    # `traced_output_is_complex`, which reads the container's own
-    # output_dtypes and therefore also covers `aten::complex`, `aten::stft`,
-    # `aten::_fft_r2c` and a plain `aten::mul` — all observed producing
-    # complex in the cached zoo. These names stay for a graph that carries no
-    # output_dtypes at all; do NOT try to complete the list, a generic `mul`
-    # can produce a complex in any model ever traced. Note the two rules also
-    # differ deliberately: this set LEVELS every non-fp32 float to fp32, the
-    # complex rule is a FLOOR that preserves float64.
-    "polar", "view_as_complex",
-    # Other
-    "renorm", "logsumexp",
-    # Upsample (all variants)
-    "upsample_nearest1d", "_upsample_nearest_exact1d",
-    "upsample_nearest2d", "_upsample_nearest_exact2d",
-    "upsample_nearest3d", "_upsample_nearest_exact3d",
-    "upsample_linear1d", "upsample_bilinear2d", "_upsample_bilinear2d_aa",
-    "upsample_trilinear3d", "upsample_bicubic2d", "_upsample_bicubic2d_aa",
-
-    # --- AT_FORALL_FP32_SET_OPT_DTYPE (PyTorch 100% match) ---
-    # Reductions (need fp32 accumulation to prevent overflow)
-    "prod", "softmax", "_softmax", "log_softmax",
-    "cumprod", "cumsum", "sum",
-    # Norm variants
-    "linalg_vector_norm", "linalg_matrix_norm",
-
-})
+# What the class holds, and why (kept from the list it was):
+# --- AT_FORALL_FP32 (PyTorch 100% match) ---
+# Transcendental / exponential
+# Power (all variants: Tensor_Scalar, Tensor_Tensor, Scalar)
+# Activation
+# Normalization (PyTorch: layer_norm, native_layer_norm, group_norm, batch_norm)
+# Norms
+# Loss functions (rare in inference, included for correctness)
+# Distance
+# Complex number ops — EXTENSION (not in PyTorch autocast).
+# Require fp32 because complex32/fp16 doesn't exist on CUDA.
+# Used in RoPE implementations (DeepSeek-V2, etc.)
+#
+# These two are the FALLBACK, not the rule. The primary protection is
+# `traced_output_is_complex`, which reads the container's own
+# output_dtypes and therefore also covers `aten::complex`, `aten::stft`,
+# `aten::_fft_r2c` and a plain `aten::mul` — all observed producing
+# complex in the cached zoo. These names stay for a graph that carries no
+# output_dtypes at all; do NOT try to complete the list, a generic `mul`
+# can produce a complex in any model ever traced. Note the two rules also
+# differ deliberately: this set LEVELS every non-fp32 float to fp32, the
+# complex rule is a FLOOR that preserves float64.
+# Other
+# Upsample (all variants)
+# --- AT_FORALL_FP32_SET_OPT_DTYPE (PyTorch 100% match) ---
+# Reductions (need fp32 accumulation to prevent overflow)
+# Norm variants
+AMP_FP32_OPS: FrozenSet[str] = _OP_CLASSES["float32"]   # nbxtensor/dtype/policy.yml (the library's default policy)
 
 # Ops that should run in compute_dtype (fp16/bf16) for performance.
 # From AT_FORALL_LOWER_PRECISION_FP.
@@ -576,33 +555,23 @@ AMP_FP32_OPS: FrozenSet[str] = frozenset({
 #   mm/bmm/addmm: inner dim accumulation exceeds fp16 max (65504) → inf → NaN cascade
 #   div: epsilon 1e-15 rounds to 0 in fp16 (min ~6e-8) → division by zero
 #
-AMP_FP16_OPS: FrozenSet[str] = frozenset({
-    # Convolutions (PyTorch 100% match)
-    "_convolution", "conv1d", "conv2d", "conv3d", "conv_tbc", "convolution",
-    "conv_transpose1d", "conv_transpose2d", "conv_transpose3d",
-    # Matrix multiply (PyTorch 100% match)
-    # [FP16→FP32]: mm, bmm, addmm need fp32 on V100
-    "addmm", "addmv", "addr", "matmul", "einsum",
-    "mm", "mv", "bmm", "addbmm", "baddbmm",
-    "linalg_vecdot", "linear", "chain_matmul", "linalg_multi_dot",
-    # [FP16→FP32]: div needs fp32 on V100 (epsilon underflow)
-    # RNN cells (PyTorch 100% match)
-    "_thnn_fused_lstm_cell", "_thnn_fused_gru_cell",
-    "lstm_cell", "gru_cell", "rnn_tanh_cell", "rnn_relu_cell",
-    # High-level RNN ops. PyTorch hides these behind cuDNN's own fp16 path;
-    # the RNN-reassembly pass emits a clean aten::lstm/gru, so the engine must
-    # cast its inputs (incl. hx/params lists) to compute_dtype itself —
-    # otherwise cuDNN rejects fp32-input × fp16-weights. cuDNN RNN accumulates
-    # in fp32 internally, so fp16 IO is safe (no _FP16_NEED_FP32 entry).
-    "lstm", "gru", "rnn_tanh", "rnn_relu",
-    # DEVIATION: SDPA ops EXCLUDED (PyTorch classifies as LOWER_PRECISION_FP).
-    # compiled_ops._make_attention() calls F.sdpa directly.
-    # DtypeEngine must not double-wrap SDPA inputs.
-    # Activation (PyTorch 100% match)
-    "prelu",
-    # Division — not in PyTorch autocast, but fp16 epsilon underflow needs protection
-    "div",
-})
+# What the class holds, and why (kept from the list it was):
+# Convolutions (PyTorch 100% match)
+# Matrix multiply (PyTorch 100% match)
+# [FP16→FP32]: mm, bmm, addmm need fp32 on V100
+# [FP16→FP32]: div needs fp32 on V100 (epsilon underflow)
+# RNN cells (PyTorch 100% match)
+# High-level RNN ops. PyTorch hides these behind cuDNN's own fp16 path;
+# the RNN-reassembly pass emits a clean aten::lstm/gru, so the engine must
+# cast its inputs (incl. hx/params lists) to compute_dtype itself —
+# otherwise cuDNN rejects fp32-input × fp16-weights. cuDNN RNN accumulates
+# in fp32 internally, so fp16 IO is safe (no _FP16_NEED_FP32 entry).
+# DEVIATION: SDPA ops EXCLUDED (PyTorch classifies as LOWER_PRECISION_FP).
+# compiled_ops._make_attention() calls F.sdpa directly.
+# DtypeEngine must not double-wrap SDPA inputs.
+# Activation (PyTorch 100% match)
+# Division — not in PyTorch autocast, but fp16 epsilon underflow needs protection
+AMP_FP16_OPS: FrozenSet[str] = _OP_CLASSES["lower"]   # nbxtensor/dtype/policy.yml (the library's default policy)
 
 # Subset of AMP_FP16_OPS that need fp32 on fp16-only hardware (V100).
 # On bf16 hardware, these stay in bf16 (bf16 exponent = fp32 exponent → no overflow).
@@ -619,27 +588,21 @@ _FP16_GEMM_OPS: FrozenSet[str] = frozenset({"mm", "bmm", "addmm"})
 # (vectorized_layer_norm_kernel<Half, float>, RowwiseMoments<Half>,
 # cunn_SoftMaxForward<..., float>): under the contract they take fp16 IO —
 # the vendor's plain-fp16 forward runs exactly these kernels.
-_FP32_OPS_HALF_IO: FrozenSet[str] = frozenset({
-    "native_layer_norm", "layer_norm", "native_group_norm", "group_norm",
-    "_softmax", "softmax", "_log_softmax", "log_softmax",
-})
+_FP32_OPS_HALF_IO: FrozenSet[str] = _OP_CLASSES["float32_half_io"]   # nbxtensor/dtype/policy.yml (the library's default policy)
 
 # Ops that promote to widest input type.
 # From AT_FORALL_PROMOTE. (PyTorch 100% match — all 11 ops)
-AMP_PROMOTE_OPS: FrozenSet[str] = frozenset({
-    "addcdiv", "addcmul", "atan2", "bilinear", "cross",
-    "dot", "vdot", "grid_sampler", "grid_sampler_2d", "grid_sampler_3d", "index_put",
-    # grid_sampler_2d/3d: the ATen names the trace carries (the autocast
-    # table lists the composite `grid_sampler`); input and grid must agree
-    # on the widest float type — under the contract the sampled features
-    # arrive fp16 and the grid fp32 (GLM-4.1V visual, 2026-09-05).
-    "tensordot", "scatter_add", "index_add",
-    # index_add: same promote class as its sibling scatter_add in the
-    # torch autocast tables — self/index/source must agree on the widest
-    # float type. First consumer: Qwen3-Omni thinker placeholder scatter
-    # (fp16 zeros buffer + AMP-upcast fp32 source crashed
-    # "self (Half) and source (Float)").
-})
+# What the class holds, and why (kept from the list it was):
+# grid_sampler_2d/3d: the ATen names the trace carries (the autocast
+# table lists the composite `grid_sampler`); input and grid must agree
+# on the widest float type — under the contract the sampled features
+# arrive fp16 and the grid fp32 (GLM-4.1V visual, 2026-09-05).
+# index_add: same promote class as its sibling scatter_add in the
+# torch autocast tables — self/index/source must agree on the widest
+# float type. First consumer: Qwen3-Omni thinker placeholder scatter
+# (fp16 zeros buffer + AMP-upcast fp32 source crashed
+# "self (Half) and source (Float)").
+AMP_PROMOTE_OPS: FrozenSet[str] = _OP_CLASSES["promote"]   # nbxtensor/dtype/policy.yml (the library's default policy)
 
 # Ops that take a Python-SCALAR fill value converted to a tensor's dtype.
 # A graph may carry a bf16/fp32 mask sentinel (e.g. bf16-min ≈ -3.39e38) as
@@ -650,10 +613,7 @@ AMP_PROMOTE_OPS: FrozenSet[str] = frozenset({
 # dtype authority owns this, not the dispatcher). Masked positions are ~0 after
 # softmax whether the sentinel is fp16-min or bf16-min, so this is numerically
 # inert versus the oracle. Surfaced by granite-speech conformer attention.
-AMP_SCALAR_FILL_OPS: FrozenSet[str] = frozenset({
-    "masked_fill", "masked_fill_", "fill", "fill_",
-    "index_fill", "index_fill_",
-})
+AMP_SCALAR_FILL_OPS: FrozenSet[str] = _OP_CLASSES["scalar_fill"]   # nbxtensor/dtype/policy.yml (the library's default policy)
 
 # CREATION ops that carry the fill scalar next to an explicit dtype kwarg
 # (no input tensor to infer from — the AMP_SCALAR_FILL_OPS mechanism above
@@ -675,9 +635,7 @@ def _dtype_name_of(d) -> str:
     return str(d).replace("torch.", "")
 
 
-AMP_CREATION_FILL_OPS: FrozenSet[str] = frozenset({
-    "full", "new_full", "full_like",
-})
+AMP_CREATION_FILL_OPS: FrozenSet[str] = _OP_CLASSES["creation_fill"]   # nbxtensor/dtype/policy.yml (the library's default policy)
 
 
 def clamp_creation_fill_args(op_base_name: str, args, kwargs):
