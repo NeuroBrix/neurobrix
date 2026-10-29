@@ -1037,7 +1037,7 @@ class NBXTensor:
         f = self.contiguous()
         if f._device != 'cpu':
             f = f.to_cpu()
-        typestr = _DTYPE_TYPESTR.get(f._dtype, '<f4')
+        typestr = _DTYPE_TYPESTR[f._dtype]          # every member has its type string in the dtype table
         nbytes = f.numel() * dtype_size(f._dtype)
         # A view over the host buffer, then one copy. `ctypes.string_at(ptr, n)` hands `n` to
         # PyBytes_FromStringAndSize as a C int: a tensor of 2 GiB or more read back as
