@@ -1,7 +1,7 @@
 # The engine's open slimming findings (tools/engine_slim_scan.py); each ends deleted, moved into nbxtensor, or kept
 # with its reason in docs/nbxtensor/ENGINE_SLIM.md. Both figures below may only go down (test_the_engine_only_slims.py).
-# engine_lines: 144384
-# open: 674
+# engine_lines: 144369
+# open: 650
 kind	path	symbol	detail
 dead	src/neurobrix/cli/commands/registry.py	installing_path	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/components/handlers/text_encoder_handler.py	TextEncoderComponentHandler.get_hidden_size	no reference outside its own body (tests excluded)
@@ -541,13 +541,6 @@ wrapper	src/neurobrix/core/optim/passes/invariant.py	InvariantPlanRefused	only r
 wrapper	src/neurobrix/core/paths.py	BackendOnClearedStorage	only renames RuntimeError
 wrapper	src/neurobrix/core/paths.py	PathNotConfigured	only renames RuntimeError
 wrapper	src/neurobrix/core/paths.py	installation_refusals(search_root)	no call site passes it: always its default None
-wrapper	src/neurobrix/core/prism/__init__.py	GpuDevice	an alias of DeviceSpec
-wrapper	src/neurobrix/core/prism/__init__.py	SmartExecutionPlan	an alias of PipelineExecutionPlan
-wrapper	src/neurobrix/core/prism/__init__.py	SmartSolver	an alias of PrismSolver
-wrapper	src/neurobrix/core/prism/__init__.py	SolverExecutionPlan	an alias of ExecutionPlan
-wrapper	src/neurobrix/core/prism/__init__.py	StructComponentAllocation	an alias of ComponentAllocation
-wrapper	src/neurobrix/core/prism/__init__.py	smart_solve	an alias of solve
-wrapper	src/neurobrix/core/prism/chunked_region.py	_Mix	only renames Exception
 wrapper	src/neurobrix/core/prism/facts_probe.py	gemv_gbps(k)	no call site passes it: always its default 4096
 wrapper	src/neurobrix/core/prism/facts_probe.py	gemv_gbps(n)	no call site passes it: always its default 14336
 wrapper	src/neurobrix/core/prism/facts_probe.py	gemv_gbps(reps)	no call site passes it: always its default 50
@@ -557,17 +550,12 @@ wrapper	src/neurobrix/core/prism/layer_partition.py	hybrid(max_pieces)	no call s
 wrapper	src/neurobrix/core/prism/loop_state.py	kept_neighbours(span)	no call site passes it: always its default 64
 wrapper	src/neurobrix/core/prism/plan_advice.py	assess(volatility)	no call site passes it: always its default READING_VOLATILITY
 wrapper	src/neurobrix/core/prism/plan_advice.py	dominated_by_activations(ratio)	no call site passes it: always its default 4.0
-wrapper	src/neurobrix/core/prism/profiler.py	_Declined	only renames Exception
-wrapper	src/neurobrix/core/prism/solver.py	PlanNotComputable	only renames RuntimeError
 wrapper	src/neurobrix/core/prism/solver.py	_identify_inplace_add_candidates_static(threshold_bytes)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/prism/solver.py	get_allocation	only hands its parameters to self.components.get
 wrapper	src/neurobrix/core/prism/solver.py	order_candidates(tie)	no call site passes it: always its default 0.01
 wrapper	src/neurobrix/core/prism/solver.py	solve	only hands its parameters to PrismSolver().solve
-wrapper	src/neurobrix/core/prism/temporal_stream.py	StreamDeclarationError	only renames RuntimeError
-wrapper	src/neurobrix/core/prism/time_estimate.py	MissingFact	only renames KeyError
 wrapper	src/neurobrix/core/prism/time_estimate.py	plan_seconds(phases)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/prism/work.py	component_work(default_dtype_bytes)	no call site passes it: always its default 2
-wrapper	src/neurobrix/core/runtime/engines.py	PyTorchBranchNotInstalledError	only renames RuntimeError
 wrapper	src/neurobrix/core/runtime/graph/compiled_sequence.py	func_wrapper	only hands its parameters to moe_fused_dispatch
 wrapper	src/neurobrix/core/runtime/graph/device_attention.py	_plain	only hands its parameters to F.scaled_dot_product_attention
 wrapper	src/neurobrix/core/runtime/graph/execution_context.py	get_tensor	only hands its parameters to self.tensor_store.get
@@ -575,7 +563,6 @@ wrapper	src/neurobrix/core/runtime/graph/kv_cache_wrapper.py	get_cache_len	only 
 wrapper	src/neurobrix/core/runtime/graph/kv_cache_wrapper.py	intercept_attention(enable_gqa)	no call site passes it: always its default False
 wrapper	src/neurobrix/core/runtime/graph/moe_fusion.py	detect_and_fuse_moe(refusals)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/runtime/graph/tensor_resolver.py	parse_dtype	only hands its parameters to _parse_dtype
-wrapper	src/neurobrix/core/runtime/graph_executor.py	GraphStructureError	only renames Exception
 wrapper	src/neurobrix/core/runtime/graph_executor.py	_resolve_fp16_activation_policy	only hands its parameters to self.precision_contract
 wrapper	src/neurobrix/core/runtime/graph_executor.py	execute	only hands its parameters to self.run
 wrapper	src/neurobrix/core/runtime/graph_executor.py	execute(skip_kills)	no call site passes it: always its default None
@@ -584,25 +571,17 @@ wrapper	src/neurobrix/core/runtime/lm_facts.py	decode_sequences(resolved)	no cal
 wrapper	src/neurobrix/core/runtime/output_dispatch.py	resolve_output_path(strict_extension)	no call site passes it: always its default True
 wrapper	src/neurobrix/core/runtime/phase_trace.py	first	only hands its parameters to _FIRST.get
 wrapper	src/neurobrix/core/runtime/resolution/variable_resolver.py	resolve_pointer	only hands its parameters to self._resolve_pointer
-wrapper	src/neurobrix/core/runtime/shape_resolver.py	ShapeResolutionError	only renames Exception
-wrapper	src/neurobrix/core/runtime/symexpr.py	ExpressionError	only renames ValueError
-wrapper	src/neurobrix/core/runtime/symexpr.py	RealInShapeSlot	only renames ExpressionError
-wrapper	src/neurobrix/core/runtime/symexpr.py	UnknownExpression	only renames ExpressionError
 wrapper	src/neurobrix/core/runtime/symint.py	__radd__	only hands its parameters to self.__add__
 wrapper	src/neurobrix/core/runtime/symint.py	__rmul__	only hands its parameters to self.__mul__
 wrapper	src/neurobrix/core/runtime/symint.py	__str__	only hands its parameters to self.to_expr_string
 wrapper	src/neurobrix/core/runtime/tensor_compat.py	aten	only hands its parameters to sys.modules.get
-wrapper	src/neurobrix/core/runtime_values.py	MissingRuntimeValue	only renames RuntimeError
 wrapper	src/neurobrix/core/runtime_values.py	require_max_tokens(override)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/runtime_values.py	resolve(container_key)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/runtime_values.py	resolve(default)	no call site passes it: always its default _SENTINEL
 wrapper	src/neurobrix/core/runtime_values.py	resolve(family)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/runtime_values.py	resolve(family_key)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/runtime_values.py	resolve(request_attr)	no call site passes it: always its default None
-wrapper	src/neurobrix/core/state/pages.py	StateExhausted	only renames RuntimeError
 wrapper	src/neurobrix/core/state/pages.py	writable(fence)	no call site passes it: always its default None
-wrapper	src/neurobrix/core/state/policy.py	StatePolicyRefused	only renames RuntimeError
-wrapper	src/neurobrix/core/state/price.py	StateUndeclared	only renames RuntimeError
 wrapper	src/neurobrix/core/strategies/base.py	synchronize_device	only hands its parameters to device_sync
 wrapper	src/neurobrix/core/strategies/layer_streaming.py	_nbx_path	only hands its parameters to self.resolve_artifact_path
 wrapper	src/neurobrix/core/strategies/layer_streaming.py	register_op_types_on_segments(_segs)	no call site passes it: always its default segments
@@ -614,8 +593,6 @@ wrapper	src/neurobrix/core/validators/base.py	NaNInfDetected	only renames Numeri
 wrapper	src/neurobrix/core/validators/pipeline.py	get_validator	only hands its parameters to self.validators.get
 wrapper	src/neurobrix/core/validators/runtime_guards.py	check_batch_size(max_batch)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/workspace.py	SnapshotNotPresent	only renames Exception
-wrapper	src/neurobrix/kernels/autotune_certify.py	UnreachableCensusKey	only renames RuntimeError
-wrapper	src/neurobrix/kernels/autotune_certify.py	WitnessDrift	only renames RuntimeError
 wrapper	src/neurobrix/kernels/autotune_certify.py	_contenders(factor)	no call site passes it: always its default None
 wrapper	src/neurobrix/kernels/autotune_certify.py	_conv_windows(cap)	no call site passes it: always its default None
 wrapper	src/neurobrix/kernels/autotune_certify.py	_protocol_file(backend)	no call site passes it: always its default None
@@ -627,7 +604,6 @@ wrapper	src/neurobrix/kernels/autotune_certify.py	log	only hands its parameters 
 wrapper	src/neurobrix/kernels/autotune_certify.py	price_key(unified)	no call site passes it: always its default True
 wrapper	src/neurobrix/kernels/autotune_certify.py	synthesize(values)	no call site passes it: always its default True
 wrapper	src/neurobrix/kernels/census.py	install(hardware_profile)	no call site passes it: always its default None
-wrapper	src/neurobrix/kernels/census_table.py	EmptyCensus	only renames ValueError
 wrapper	src/neurobrix/kernels/census_table.py	rows_for(root)	no call site passes it: always its default None
 wrapper	src/neurobrix/kernels/metadata_ops.py	_conv2d	only hands its parameters to _convolution
 wrapper	src/neurobrix/nbx/atomic_install.py	InstallHeldByAnother	only renames RuntimeError

@@ -57,15 +57,6 @@ from .memory_estimator import (
     MemoryBreakdown,
 )
 
-# Backward compatibility aliases
-GpuDevice = DeviceSpec
-SmartSolver = PrismSolver
-SmartExecutionPlan = PipelineExecutionPlan
-smart_solve = solve
-# Legacy alias: code importing StructComponentAllocation gets solver's version
-StructComponentAllocation = ComponentAllocation
-SolverExecutionPlan = ExecutionPlan
-
 __all__ = [
     # Enums
     "DeviceBrand",
@@ -74,7 +65,6 @@ __all__ = [
     "AllocationStrategy",
     # Device/Topology
     "DeviceSpec",
-    "GpuDevice",
     "InterconnectLink",
     "InterconnectGroup",
     "InterconnectTopology",
@@ -105,11 +95,6 @@ __all__ = [
     "ImportPlan",
     "solve",
     # Backward compatibility aliases
-    "SmartSolver",
-    "SmartExecutionPlan",
-    "smart_solve",
-    "StructComponentAllocation",
-    "SolverExecutionPlan",
     # Activation Profiler
     "ActivationProfiler",
     "ActivationProfile",

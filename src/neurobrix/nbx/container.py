@@ -702,7 +702,7 @@ class NBXContainer:
         else:
             profile = None
 
-        # Load runtime.json attributes (ZERO HARDCODE - used by SmartSolver)
+        # Load runtime.json attributes (ZERO HARDCODE - used by PrismSolver)
         runtime_path = comp_dir / "runtime.json"
         attributes = None
         if runtime_path.exists():

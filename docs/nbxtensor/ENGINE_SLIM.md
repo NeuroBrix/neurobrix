@@ -50,6 +50,7 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | 2026-10-29 | 8 definitions only tests reached (a test proves no use): `solver.memory_ladder_rung_mb` (a pass-through to `memory_budget.rung_down_mb`, which its tests now call), `memory_budget.is_shared` (the sharing predicate of the law before 2026-10-25, read by no budget since), `ActivationProfiler.growth_anomaly` (an instrument never wired into a decision), `InputConfig.to_symbol_map` (a refusal stub for an old name), `PrismProfile.node_of`, `Partition.peak_resident_mb`, and two unmapped metadata handlers; the two test cells that exercised only the deleted code went with them | 126 |
 | 2026-10-29 | `core/dtype/itemsize.py`, the PyTorch branch's mirror of `nbxtensor.dtype.itemsize` (every public function identical; the float64 fact is an argument), its loader `core.config.loader.get_dtype_table`, and the test that held the two equal: the 11 engine modules read the library | 144 |
 | 2026-10-29 | `core/module/tiling_sizes.py`, the PyTorch branch's mirror of `nbxtensor.ops.tiling_sizes` (all 30 functions identical; its value reader took a cached snapshot where the library reads the policy in force), the loader `core.config.loader.get_tiling_policy`, and the test that held the two equal: Prism, the TilingEngine, the attention scratch and the derived census read the library | 374 |
+| 2026-10-30 | `core/prism/__init__.py`: six backward-compatibility aliases nobody imports (`GpuDevice`, `SmartSolver`, `SmartExecutionPlan`, `smart_solve`, `StructComponentAllocation`, `SolverExecutionPlan`) | 15 |
 
 ## Moved into nbxtensor
 
@@ -61,3 +62,21 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | kind | path | symbol | why it stays |
 |---|---|---|---|
 | wrapper | src/neurobrix/core/prism/runtime_widths.py | storage_dtype_name | the compiled rules' half of the storage-ceiling interface the Triton rules implement with their own fp64 fact: which ceiling a branch applies is the engine's decision |
+| wrapper | src/neurobrix/core/prism/chunked_region.py | _Mix | a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `Exception` would name nothing |
+| wrapper | src/neurobrix/core/prism/profiler.py | _Declined | a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `Exception` would name nothing |
+| wrapper | src/neurobrix/core/prism/solver.py | PlanNotComputable | a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `RuntimeError` would name nothing |
+| wrapper | src/neurobrix/core/prism/temporal_stream.py | StreamDeclarationError | a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `RuntimeError` would name nothing |
+| wrapper | src/neurobrix/core/prism/time_estimate.py | MissingFact | a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `KeyError` would name nothing |
+| wrapper | src/neurobrix/core/runtime/engines.py | PyTorchBranchNotInstalledError | a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `RuntimeError` would name nothing |
+| wrapper | src/neurobrix/core/runtime/graph_executor.py | GraphStructureError | a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `Exception` would name nothing |
+| wrapper | src/neurobrix/core/runtime/shape_resolver.py | ShapeResolutionError | a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `Exception` would name nothing |
+| wrapper | src/neurobrix/core/runtime/symexpr.py | ExpressionError | a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `ValueError` would name nothing |
+| wrapper | src/neurobrix/core/runtime/symexpr.py | RealInShapeSlot | a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `ExpressionError` would name nothing |
+| wrapper | src/neurobrix/core/runtime/symexpr.py | UnknownExpression | a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `ExpressionError` would name nothing |
+| wrapper | src/neurobrix/core/runtime_values.py | MissingRuntimeValue | a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `RuntimeError` would name nothing |
+| wrapper | src/neurobrix/core/state/pages.py | StateExhausted | a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `RuntimeError` would name nothing |
+| wrapper | src/neurobrix/core/state/policy.py | StatePolicyRefused | a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `RuntimeError` would name nothing |
+| wrapper | src/neurobrix/core/state/price.py | StateUndeclared | a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `RuntimeError` would name nothing |
+| wrapper | src/neurobrix/kernels/autotune_certify.py | UnreachableCensusKey | a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `RuntimeError` would name nothing |
+| wrapper | src/neurobrix/kernels/autotune_certify.py | WitnessDrift | a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `RuntimeError` would name nothing |
+| wrapper | src/neurobrix/kernels/census_table.py | EmptyCensus | a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `ValueError` would name nothing |

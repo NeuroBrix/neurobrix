@@ -189,7 +189,7 @@ class ExecutorFactory:
     @classmethod
     def _extract_strategy(cls, allocation: "ComponentAllocation", component: str) -> str:
         """Extract strategy from allocation. ZERO FALLBACK."""
-        # Check for explicit strategy field first (from SmartSolver)
+        # Check for explicit strategy field first (from PrismSolver)
         if hasattr(allocation, "strategy"):
             strategy_val = allocation.strategy
             # Handle enum values
