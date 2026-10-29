@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The Triton engine's autotune screen no longer refuses every configuration of a kernel whose input is a permuted view** (a convolution reading a channels-last input, for instance): the reference it compares against is now laid out the way the buffer is stored, so a correct configuration is kept and a runtime sweep completes.
+
 ### Changed
 - **PyTorch is no longer a required dependency**: the Triton engine (`--triton`, `--triton-sequential`) runs on nbxtensor, Triton and NumPy alone (on macOS, Triton is the one the Apple Metal install provides; pip does not try to fetch it). The PyTorch engine (`--compiled`, the default when no mode is given, and `--sequential`) is installed with `pip install "neurobrix[pytorch]"`; asking for it where PyTorch is not installed stops at once with a message naming the missing package and the Triton alternative.
 

@@ -256,6 +256,32 @@ def windowed_reference(tuner, meta, rows) -> Optional[np.ndarray]:
         return None
 
 
+def _span_bytes(logical, tensor, nbytes: int) -> Optional[bytes]:
+    """`logical` (the tensor's elements in row-major order) laid out as the `nbytes` span the screen snapshots from
+    the tensor's `data_ptr()`, or None when they cannot be the same buffer.
+
+    The screen compares a candidate's effect on the PHYSICAL span of every buffer (`_writable_buffers` keeps a dense
+    permutation, a conv input read NHWC as NCHW, and a stride-0 broadcast). A reference in logical order is that span
+    only for a contiguous tensor: for a permuted fp32 conv input it is the same elements in another order, every
+    candidate "changed" the input, and the screen refused the whole space of a correct kernel (2026-10-29)."""
+    stride = getattr(tensor, "stride", None)
+    item = logical.dtype.itemsize
+    if (not callable(stride) or getattr(tensor, "is_contiguous", lambda: True)()
+            or logical.ndim == 0):
+        return logical.tobytes() if logical.nbytes == nbytes else None
+    if nbytes % item:
+        return None
+    steps = tuple(int(s) for s in stride())
+    if any(s < 0 for s in steps):
+        return None
+    reach = sum((int(n) - 1) * s for n, s in zip(logical.shape, steps)) + 1 if logical.size else 0
+    if reach * item != nbytes:
+        return None
+    span = np.zeros(reach, dtype=logical.dtype)
+    np.lib.stride_tricks.as_strided(span, shape=logical.shape, strides=tuple(s * item for s in steps))[...] = logical
+    return span.tobytes()
+
+
 def provider(tuner, key, buffers, meta=None) -> Optional[List[bytes]]:
     """The correct contents of every screened buffer, or None.
 
@@ -364,13 +390,16 @@ def provider(tuner, key, buffers, meta=None) -> Optional[List[bytes]]:
             else:
                 want = np.ascontiguousarray(
                     reference.astype(_NP.get(dtype_name, np.float32)))
-            if want.nbytes != int(nbytes):
+            if want.size == int(np.prod(getattr(out_tensor, "shape", (want.size,)))):
+                want = want.reshape(tuple(out_tensor.shape))
+            raw = _span_bytes(want, out_tensor, int(nbytes))
+            if raw is None:
                 announce_no_oracle(
                     name, key,
                     why=f"the reference is {want.nbytes} bytes and the output "
                         f"buffer is {nbytes}")
                 return None
-            out.append(want.tobytes())
+            out.append(raw)
         else:
             # An input, unchanged -- read through the tensor's own copy to the
             # host, which crosses the barrier a raw pointer read does not.
@@ -383,11 +412,12 @@ def provider(tuner, key, buffers, meta=None) -> Optional[List[bytes]]:
                         f"which crosses no barrier and caps at 2 GiB")
                 return None
             host = src.to_cpu() if getattr(src, "_device", "cpu") != "cpu" else src
-            raw = np.ascontiguousarray(host.numpy()).tobytes()
-            if len(raw) != int(nbytes):
+            logical = np.ascontiguousarray(host.numpy())
+            raw = _span_bytes(logical, src, int(nbytes))
+            if raw is None:
                 announce_no_oracle(
                     name, key,
-                    why=f"the input at {addr:#x} copies to {len(raw)} bytes "
+                    why=f"the input at {addr:#x} copies to {logical.nbytes} bytes "
                         f"and the buffer is {nbytes}")
                 return None
             out.append(raw)
