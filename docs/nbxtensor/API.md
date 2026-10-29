@@ -495,3 +495,19 @@ def seeded_gaussian(seed: int, shape) -> np.ndarray   # Seeded fp32 standard-nor
 ```python
 MAX_NDIM = ...   # (constant)
 ```
+
+### `nbxtensor.backend.device_files` — the library's device files (API.md section 11)
+
+```python
+DEVICES: Path                                         # nbxtensor/backend/devices: <vendor>/<name>.yml
+def names() -> Iterator[Tuple[str, str, Path]]        # every device described, by the library or the application
+def read(vendor: str, name: str) -> dict              # the library's half of one device ({} when none)
+def merge(library: dict, application: dict, where="") -> dict   # one description; a key in both refused
+def merged(vendor: str, name: str) -> dict            # the library's half with the application's (vendors_dir)
+```
+
+### `nbxtensor.backend.launcher.arch`
+
+```python
+def arch() -> int                                     # the target's arch as an int (70 for sm_70): target().arch
+```
