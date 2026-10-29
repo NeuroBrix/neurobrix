@@ -31,10 +31,11 @@ repository). This README documents what is in the library TODAY; every example b
 
 | area | in the library | what it holds |
 |---|---|---|
-| `nbxtensor.dtype` | yes | the dtype table (`dtypes.yml`) and its reader, host bfloat16 conversions, the promotion rule |
+| `nbxtensor.dtype` | yes | the dtype table (`dtypes.yml`) and its reader, the enum's tables derived from it, host bfloat16 conversions, the promotion rules |
 | `nbxtensor.shape` | yes | numel, strides, contiguity, the view rule, broadcasting, slice bounds |
 | `nbxtensor.random` | yes | seeded random streams and draws |
-| `Tensor`, `memory`, `backend`, `ops` | moving | the tensor class, the allocators, the device backends, the Triton kernels |
+| `nbxtensor.tensor`, `memory`, `backend`, `ops`, `quant` | moved in, public names being fixed (M2) | the tensor class, the allocators, the device backends, the Triton kernels and their cost declarations |
+| `nbxtensor.host` | yes | what an application provides to the library, by name (below) |
 
 ## Installation
 
@@ -110,6 +111,10 @@ from nbxtensor.dtype.promotion import promoted, float_math_input
 assert promoted(["float16", "float32"]) == "float32"      # the widest float, past two bytes
 assert promoted(["float16", "bfloat16"]) is None          # two half dtypes: the caller's precision policy decides
 assert float_math_input("int64") == "float32"             # rsqrt of an integer reads it as float32
+
+from nbxtensor.dtype.promotion import binary_result
+assert binary_result("int64", "float16") == "float16"     # a binary op climbs by kind, then by width
+assert binary_result("float16", "bfloat16") == "float16"  # one kind, one width: the first operand's
 ```
 
 ### Shapes, strides and views
@@ -131,6 +136,35 @@ assert S.is_contiguous((1, 32, 64, 1), (2048, 64, 1, 64))
 assert S.broadcast_shapes((5, 3, 1), (4,)) == (5, 3, 4)
 assert S.broadcast_strides((3, 1), (1, 1), (2, 3, 4)) == ((2, 3, 4), (0, 1, 0))   # expand without a copy
 assert S.slice_bounds(50, 80, 60) == (50, 60)                                       # clamped, as numpy does
+```
+
+### The dtype enum and its tables
+
+```python
+from nbxtensor.dtype.nbx_dtype import NBXDtype, dtype_size, parse_dtype
+
+assert NBXDtype.bfloat16.value == 1                        # values are frozen: new members are appended
+assert dtype_size(NBXDtype.complex64) == 8                 # read from the one table, never written twice
+assert parse_dtype("torch.float16") is NBXDtype.float16    # a torch spelling, read as text
+assert parse_dtype("half") is NBXDtype.float16             # an alias the table carries
+```
+
+## What the library asks of its application
+
+Some decisions are not tensor facts: where certified kernel settings live, a memory rung an application imposes, a
+launch census. The application provides each one ONCE by name (`nbxtensor.host.provide`); the library reads it by
+name (`need`). A service nobody provided is refused by name, except the optional hooks, which run without one. The
+list of services and what each becomes before the first release (a fact the library measures, an optional policy
+with a measured default, or an optional hook) is `docs/nbxtensor/API.md` section 11.
+
+```python
+from nbxtensor import host
+from nbxtensor.backend.device_names import arch_string
+
+assert "vendor_config" in host.SERVICES
+assert arch_string("Apple M4 Pro") == "apple-m4-pro"       # a device's key: the library's own rule
+if "installation_refusals" not in host.provided():
+    assert host.need("installation_refusals")("/any/path") == []   # an optional hook: absent, nothing refused
 ```
 
 ## Backends
