@@ -246,9 +246,10 @@ class TritonAttentionInterceptor:
         core/runtime/graph/kv_cache_wrapper.py:intercept_arange — the missing
         R30 half that left triton-compiled decode broken while the op-by-op
         triton-sequential oracle (full-context recompute, correct arange) passed.
-        R33-pure: returns NBXTensor via the triton _create_arange dispatch.
+        R33-pure: returns NBXTensor through the library's public aten::arange handler.
         """
-        from nbxtensor.ops.dispatch import _create_arange
+        from nbxtensor.ops.dispatch import dispatch
+        _create_arange = dispatch("arange")
         if self._is_prefill:
             return _create_arange(*args, **kwargs)
         cache_len = self._position_offset

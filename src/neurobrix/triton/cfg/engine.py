@@ -70,7 +70,6 @@ if TYPE_CHECKING:
     from neurobrix.core.flow.base import FlowContext
 
 
-
 def guidance_embedding_component(topology: dict):
     """The first loop component that takes a `guidance` input (a guidance-embedding model,
     Flux-style): classifier-free guidance then runs NO batch-2 pass — the scale is embedded. None
@@ -301,7 +300,8 @@ class TritonCFGEngine:
             if neg_mask is None:
                 # Create ones tensor via NBXTensor
                 ones_shape = (neg_hidden.shape[0], neg_hidden.shape[1])
-                neg_mask = _create_ones_tensor(ones_shape, pos_mask._dtype, pos_mask._device)
+                from nbxtensor.ops.dispatch import dispatch       # aten::ones, the library's public handler
+                neg_mask = dispatch("ones")(ones_shape, dtype=pos_mask._dtype, device=pos_mask._device)
             elif neg_mask._dtype != pos_mask._dtype:
                 neg_mask = neg_mask.to(pos_mask._dtype)
             batched_mask = NBXTensor.cat([neg_mask, pos_mask], dim=0)
@@ -542,13 +542,6 @@ def _branch_half(t: NBXTensor, branch: int) -> NBXTensor:
     """Branch `branch` (0 uncond, 1 cond) of a tensor holding [uncond, cond] on axis 0."""
     half = t.shape[0] // 2
     return t.narrow(0, branch * half, half)
-
-
-def _create_ones_tensor(shape: tuple, dtype: NBXDtype, device: str) -> NBXTensor:
-    """Create a tensor filled with ones via dispatch fill kernel."""
-    from nbxtensor.ops.dispatch import _create_ones
-    return _create_ones(shape, dtype=dtype, device=device)
-
 
 
 def txt_ids_carry_a_sequence_axis(shape) -> bool:

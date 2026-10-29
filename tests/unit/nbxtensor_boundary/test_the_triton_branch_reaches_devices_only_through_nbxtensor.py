@@ -27,9 +27,7 @@ PRIVATE_SITES = {
     ("kernels/ops/fused_upsample_conv_torch.py", "nbxtensor.ops.fused_upsample_conv._fused_upsample_conv2d_nbx"),
     ("kernels/ops/fused_upsample_conv_torch.py", "nbxtensor.ops.fused_upsample_conv._pair"),
     ("kernels/ops/fused_upsample_conv_torch.py", "nbxtensor.ops.fused_upsample_conv._tiled_conv2d_spatial_nbx"),
-    ("triton/cfg/engine.py", "nbxtensor.ops.dispatch._create_ones"),
     ("triton/flow/autoregressive.py", "nbxtensor.ops._configs.active_vendor_profile"),
-    ("triton/kv_cache.py", "nbxtensor.ops.dispatch._create_arange"),
     ("triton/state_fence.py", "nbxtensor.backend.triton_ext_driver._native"),
 }
 
