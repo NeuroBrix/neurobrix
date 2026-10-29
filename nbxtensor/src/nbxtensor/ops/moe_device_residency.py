@@ -78,10 +78,12 @@ def expert_miss_copy_kernel(
     k = tl.program_id(0)
     p = tl.program_id(1)
     c = tl.program_id(2).to(tl.int64)
-    e = tl.load(miss_ptr + k)
-    if e < 0:
-        return
-    s = tl.load(slot_ptr + k)
+    e_raw = tl.load(miss_ptr + k)
+    # a hit (-1) copies nothing: masked, not returned (a bare return is unstructured control flow some backends do
+    # not lower); its address loads read row 0 of the tables, a valid index, and the copy's mask is all false
+    miss = e_raw >= 0
+    e = tl.where(miss, e_raw, 0)
+    s = tl.where(miss, tl.load(slot_ptr + k), 0)
     wty = tl.bfloat16 if W_BF16 else tl.float16
     if p == 0:
         src_a = tl.load(host_g + layer_base + e)
@@ -98,5 +100,5 @@ def expert_miss_copy_kernel(
     src = tl.cast(src_a, tl.pointer_type(wty), bitcast=True)
     dst = tl.cast(dst_a, tl.pointer_type(wty), bitcast=True)
     offs = c * BLOCK + tl.arange(0, BLOCK)
-    m = offs < n
+    m = (offs < n) & miss
     tl.store(dst + offs, tl.load(src + offs, mask=m), mask=m)
