@@ -741,7 +741,7 @@ def _reduction_dtype(op, dtype):
 
 # Spatial band-streaming threshold for conv2d. When the per-launch output
 # tensor would exceed `tiling_sizes.conv2d_band_bytes()` (`conv2d.band_bytes` in
-# config/tiling.yml), conv2d_wrapper transparently splits along the H dimension
+# nbxtensor/ops/tiling.yml), conv2d_wrapper transparently splits along the H dimension
 # and streams band-by-band. This is the kernel-level tiling lever
 # (P-SANA-4KPX-RUNTIME, Step 1 — internal to the wrapper, not a Prism op-level
 # interceptor). The TilingEngine's sizing half is the one definition Prism, the
