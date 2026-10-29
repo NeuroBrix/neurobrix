@@ -84,6 +84,24 @@ def bf16_bits_to_f16(bits: np.ndarray, *, workers: int) -> np.ndarray     # weig
 module-global pool behind. The device-side bf16 to fp16 kernel (weight_loader.py:456
 `_bf16_to_fp16_inplace`) becomes `astype` on a tensor viewed over the same buffer (section 4).
 
+### `nbxtensor.dtype.policy` — precision by policy (DESIGN rule 12)
+
+```python
+@dataclass(frozen=True)
+class Policy:                      # plain data: three dtype names, a flag, the op classes
+    param: str = "float32"; compute: str = "float32"; output: str = "float32"
+    float32_ops_half_io: bool = False
+    classes: Tuple[Tuple[str, FrozenSet[str]], ...]          # default: policy.yml (PyTorch's autocast tables)
+    def ops(self, cls: str) -> FrozenSet[str]                # an op class's names
+    def op_class(self, op: str) -> Optional[str]             # "float32" / "lower" / "promote" / None
+    def compute_dtype(self, op: str, input_dtypes: Sequence[str]) -> Optional[str]
+    def fill_value(self, op: str, value, dtype: str)         # a fill scalar clamped to the dtype's finite range
+    def replace(self, **changes) -> Policy; def as_dict(self) -> dict
+def get_policy(spec: str, classes=None) -> Policy           # "params=float32,compute=float16,output=float32"
+def default_classes() -> Dict[str, FrozenSet[str]]
+CLASSES = ("float32", "lower", "promote", "float32_half_io", "scalar_fill", "creation_fill")
+```
+
 ## 3. `nbxtensor.shape` — pure functions on integers (M2, Mac)
 
 Each one is the code that runs today, moved and exported unchanged. Each is a pure function from ints to

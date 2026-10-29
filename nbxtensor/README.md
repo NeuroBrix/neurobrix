@@ -117,6 +117,24 @@ assert binary_result("int64", "float16") == "float16"     # a binary op climbs b
 assert binary_result("float16", "bfloat16") == "float16"  # one kind, one width: the first operand's
 ```
 
+### Precision by policy
+
+The dtype an op computes in is decided by a `Policy`: plain, immutable data handed to the calls that use it (no
+context manager, no global switch). Its op classes are PyTorch's autocast tables (`nbxtensor/dtype/policy.yml`):
+some ops compute in float32 whatever the policy, some in its compute dtype, some in the widest of their inputs; an op
+in no class keeps its inputs' dtypes.
+
+```python
+from nbxtensor.dtype.policy import get_policy
+
+p = get_policy("params=float32,compute=float16,output=float32")      # the spelling of JAX's jmp
+assert p.compute_dtype("mm", ["float32", "float32"]) == "float16"     # a matrix product: the compute dtype
+assert p.compute_dtype("softmax", ["float16"]) == "float32"           # a softmax: float32, whatever the policy
+assert p.compute_dtype("addcmul", ["float16", "float32", "float16"]) == "float32"   # the widest input
+assert p.fill_value("masked_fill", -3.39e38, "float16") == -65504.0   # a bfloat16 mask sentinel fits float16
+assert p.replace(compute="bfloat16").compute == "bfloat16"            # a policy never changes: a new one is made
+```
+
 ### Shapes, strides and views
 
 ```python

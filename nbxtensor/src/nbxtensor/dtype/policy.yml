@@ -1,0 +1,51 @@
+# The default precision policy's op classes (nbxtensor.dtype.policy, DESIGN rule 12): which ops compute in float32
+# whatever the policy's compute dtype, which ones compute in it, which ones take the widest of their inputs. An op in
+# no class keeps its inputs' dtypes (promoted among them). Op names are ATen's base names, the spelling a traced graph
+# carries.
+#
+# Source: PyTorch's autocast tables (aten/src/ATen/autocast_mode.h: AT_FORALL_FP32, AT_FORALL_FP32_SET_OPT_DTYPE,
+# AT_FORALL_LOWER_PRECISION_FP, AT_FORALL_PROMOTE), as NeuroBrix's DtypeEngine carried them
+# (src/neurobrix/core/dtype/engine.py, moved here 2026-10-29) with its documented deviations: polar and
+# view_as_complex compute in float32 (complex32 does not exist); div computes in the lower precision class; the
+# scaled-dot-product attention ops are in no class (the attention kernels choose their operand dtypes); the high-level
+# RNN ops (lstm, gru, rnn_tanh, rnn_relu) are lower precision, their kernels accumulate in float32.
+
+classes:
+  # compute in float32 (numerical range or accuracy): transcendental, power, norms, losses, reductions, softmax
+  float32: [
+    _softmax, _upsample_bicubic2d_aa, _upsample_bilinear2d_aa, _upsample_nearest_exact1d, _upsample_nearest_exact2d,
+    _upsample_nearest_exact3d, acos, asin, batch_norm, binary_cross_entropy_with_logits, cdist, cosh,
+    cosine_embedding_loss, cosine_similarity, cudnn_batch_norm, cumprod, cumsum, dist, erfinv, exp, expm1,
+    frobenius_norm, group_norm, hinge_embedding_loss, huber_loss, instance_norm, kl_div, l1_loss, layer_norm,
+    linalg_matrix_norm, linalg_vector_norm, log, log10, log1p, log2, log_softmax, logsumexp, margin_ranking_loss,
+    mse_loss, multi_margin_loss, multilabel_margin_loss, native_batch_norm, native_group_norm, native_layer_norm,
+    nll_loss, nll_loss2d, nuclear_norm, pdist, poisson_nll_loss, polar, pow, prod, reciprocal, renorm, rsqrt, sinh,
+    smooth_l1_loss, soft_margin_loss, softmax, softplus, sum, tan, triplet_margin_loss, upsample_bicubic2d,
+    upsample_bilinear2d, upsample_linear1d, upsample_nearest1d, upsample_nearest2d, upsample_nearest3d,
+    upsample_trilinear3d, view_as_complex
+  ]
+  # compute in the policy's compute dtype: convolutions, matrix products, RNN cells, some activations
+  lower: [
+    _convolution, _thnn_fused_gru_cell, _thnn_fused_lstm_cell, addbmm, addmm, addmv, addr, baddbmm, bmm,
+    chain_matmul, conv1d, conv2d, conv3d, conv_tbc, conv_transpose1d, conv_transpose2d, conv_transpose3d,
+    convolution, div, einsum, gru, gru_cell, linalg_multi_dot, linalg_vecdot, linear, lstm, lstm_cell, matmul, mm,
+    mv, prelu, rnn_relu, rnn_relu_cell, rnn_tanh, rnn_tanh_cell
+  ]
+  # compute in the widest floating dtype among their inputs (the inputs must agree)
+  promote: [
+    addcdiv, addcmul, atan2, bilinear, cross, dot, grid_sampler, grid_sampler_2d, grid_sampler_3d, index_add,
+    index_put, scatter_add, tensordot, vdot
+  ]
+  # float32-class ops whose kernels accumulate in float32 internally: a policy may let them take half-precision
+  # inputs and outputs (`Policy.float32_ops_half_io`)
+  float32_half_io: [
+    _log_softmax, _softmax, group_norm, layer_norm, log_softmax, native_group_norm, native_layer_norm, softmax
+  ]
+  # a scalar fill value converted to a tensor's dtype: clamped to that dtype's finite range (`Policy.fill_value`)
+  scalar_fill: [
+    fill, fill_, index_fill, index_fill_, masked_fill, masked_fill_
+  ]
+  # a creation op's scalar fill converted to its requested dtype: clamped likewise
+  creation_fill: [
+    full, full_like, new_full
+  ]

@@ -75,6 +75,18 @@ Apple MLX, tinygrad, Hugging Face candle. (vLLM did not: it is built on torch.)
     core could not reproduce: no monkey-patching, no duck-typed inputs, no
     dynamic attributes, no state hidden in module globals. Triton kernels stay
     Triton in v2; Rust would launch them precompiled.
+12. **Precision by policy** (Hocine, 29/10 16:37). The dtype an op computes in is
+    decided by a `Policy` (`nbxtensor.dtype.policy`): the dtypes of the
+    parameters, of the computation and of the output, and the op classes —
+    ops that compute in float32 whatever the policy, ops that compute in its
+    compute dtype, ops that take the widest of their inputs — as plain data,
+    immutable, handed explicitly to the calls that use it (the model of JAX's
+    jmp: no context manager, no global switch, no hidden state). The library
+    ships a default policy whose op classes are PyTorch's autocast tables
+    (`dtype/policy.yml`, with their sources and deviations); an application
+    builds its own policy from what it knows (NeuroBrix: its DtypeEngine, from
+    the hardware profile and the container) and passes it. The library knows
+    no model and no profile.
 
 ## 3. Layout
 
