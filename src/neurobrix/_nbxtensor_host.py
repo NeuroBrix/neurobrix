@@ -1,12 +1,12 @@
-"""The engine provides nbxtensor with what the library does not own (`nbxtensor.host`): its vendor files and certified
-store, its host memory reading, its drain policy, its memory classes, its installation refusals, its launch census and
-the Triton DtypeEngine's operand decisions.
+"""The engine provides nbxtensor with what the library does not own (`nbxtensor.host`): its vendor files, its drain
+policy, its memory classes, its installation refusals, its launch census and the Triton DtypeEngine's operand decisions.
+Two of its settings go through the library's public API instead, at install: its certified directory
+(`ops.autotune_certified.set_store`) and, when a rung is imposed on the process (`NBX_PRISM_BUDGET_MB`), the memory limit
+(`nbxtensor.memory.set_limit`, through `core.prism.memory_budget.apply_imposed_rung`).
 
 Every service resolves its engine function AT CALL TIME, in the module that owns it, so a value or a function the
 engine changes later — a test's monkeypatch included — is the one read. Installed once by `neurobrix/__init__.py`.
-Torch-free (R33). The one engine module imported at install is `core.prism.memory_budget` (os and dataclasses only):
-the rung imposed on the process (`NBX_PRISM_BUDGET_MB`) is not a service but a call of the library's public
-`nbxtensor.memory.set_limit`, made here when a rung is set.
+Torch-free (R33).
 """
 from __future__ import annotations
 
@@ -40,9 +40,9 @@ def install() -> None:
     loader, dtype = "neurobrix.core.config.loader", "neurobrix.triton.dtype"
     provide("vendor_config", _call(loader, "get_vendor_config"))
     provide("vendor_param", _call(loader, "vendor_param"))
-    provide("tiling_policy", _call(loader, "get_tiling_policy"))
     provide("vendors_dir", _config_dir("vendors"))
-    provide("certified_dir", _config_dir("autotune"))
+    from nbxtensor.ops.autotune_certified import set_store
+    set_store(_config_dir("autotune")())        # the engine's committed certified directory, through the public API
     provide("deferred_drain_policy_of", _call("neurobrix.core.prism.memory_budget", "deferred_drain_policy_of"))
     provide("memory_class_gb", _call("neurobrix.core.prism.structure", "memory_class_gb"))
     provide("memory_class_from_profile_id", _call("neurobrix.core.prism.structure", "memory_class_from_profile_id"))

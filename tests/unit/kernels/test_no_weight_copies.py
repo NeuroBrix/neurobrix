@@ -132,10 +132,16 @@ def _act16(M, K, seed=5):
 
 
 @pytest.mark.parametrize("M", [1, 4, 16, 64])
-def test_fp16_activation_is_widened_in_registers_not_materialised(M):
+def test_fp16_activation_is_widened_in_registers_not_materialised(M, monkeypatch):
     """On a card without native bf16 the fp16 activation used to be copied to fp32 before every
     matmul; the kernels widen it on load now — the same numbers, no copy. The reference is the
-    same kernel handed the pre-widened activation (the former path, still reachable)."""
+    same kernel handed the pre-widened activation (the former path, still reachable).
+    The same numbers AT THE SAME LAUNCH CONFIG: the two activations are two autotune keys, and on a cache that holds
+    neither (no certified setting at this test's shape) each was swept on its own and could seat another config —
+    another summation order, one ulp apart (the Mac, 2026-10-29, M = 1 and 4). The GEMV is held to one candidate."""
+    from nbxtensor.ops.gemv_vec import gemv_vec_kernel
+    monkeypatch.setattr(gemv_vec_kernel, "configs", gemv_vec_kernel.configs[:1])
+    monkeypatch.setattr(gemv_vec_kernel, "cache", {})
     Wt, a16 = _weight(96, 128), _act16(M, 128)
     b = Wt.t()
     a32 = a16.to(NBXDtype.float32)

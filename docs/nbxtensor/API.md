@@ -249,37 +249,44 @@ the engine and is passed in.
 3. **Dependency on the Dell's launcher.** The `.dtype` change (section 4) needs the launcher to stop
    reading the Triton dtype off the argument. It is listed as a precondition of the `Tensor` part of M2.
 
-## 11. The host services and what each becomes (M2/M3; supervisor, 29/10 02:50)
+## 11. The boundary: every host service is generic in the library or goes back to the engine (Hocine 29/10 16:28)
 
-M1 passed every fact the library does not hold yet through `nbxtensor.host`. The application provides a service by
-name, and the library refuses by name any service that is missing. That is a good boundary for the move. But a
-library published that way does nothing on its own: a developer who runs `import nbxtensor` has no vendor files, no
-certified store and no tiling policy.
+nbxtensor is the alternative to torch, and only that: the published library holds nothing of NeuroBrix. M1 passed
+every fact the library did not hold yet through `nbxtensor.host`: the application provided a service by name and the
+library refused a missing one by name. That was right for the move. A library published that way does nothing alone.
 
-The rule for M2/M3 is that each service becomes one of three things:
+Each service now takes one of two fates:
 
-- **a fact the library owns or measures itself;**
-- **an optional policy**, whose default comes from a measurement;
-- **an optional hook**, only for what truly belongs to the application.
+- **(a) GENERIC, in the library.** Either a fact nbxtensor measures on the device itself (capabilities, the
+  allocator's envelope, rates), or an optional setting whose default comes from a measurement (an autotune store at
+  the user's standard cache location, a memory limit the user MAY impose). A setting is plain data set through the
+  public API (rule 11), never a callback into the application.
+- **(b) BACK IN THE ENGINE**, when it is NeuroBrix's own (NeuroBrix profiles and vendor files, rungs, the
+  certification census, the classification of traced graphs). The engine applies it by calling the public API; the
+  library no longer knows it.
 
-| service (today) | what it answers | becomes | how |
-|---|---|---|---|
-| `vendor_config`, `vendor_param`, `vendors_dir`, `device_arch_string` | the kernel-relevant device description: tiles, shared memory, registers, thread counts, the matrix unit | **fact, owned** | the kernel sections of the vendor files move into the library (`nbxtensor/backend/devices/<vendor>/<arch>.yml`); what the driver reports is read at backend start (Metal `maxThreadgroupMemoryLength`, `maxBufferLength`; CUDA device attributes). The engine's vendor files keep only engine policy (Prism's budgets) |
-| `device_arch_string` | the key device files are found by | **fact, owned** | one function of the device's own name, in `backend` |
-| `matrix_unit_representation`, `matrix_unit_flash_representation`, `matrix_unit_split_scale` | how the matrix unit carries a GEMM's or an attention's operands | **fact, owned** | mechanism plus the device file's matrix-unit section, both in the library |
-| `profile_triton_has_fp64` | whether the device computes float64 | **fact, measured** | asked of the backend at start (a one-element fp64 kernel; Metal: none), kept in the frozen `Capabilities` |
-| `host_shares_memory_with_device` | unified memory | **fact, measured** | Metal `hasUnifiedMemory`, CUDA `cudaDevAttrIntegrated` |
-| `memory_state` | the host's free memory | **fact, measured** | the library reads the operating system (`sysctl` / `/proc/meminfo`); no NeuroBrix reader |
-| `certified_dir` | where certified kernel settings live | **policy, optional** | default: the library's own per-device store in the user cache (`~/.cache/nbxtensor/<device>/`), filled by autotune at first use; an application may point it at a committed directory (NeuroBrix: its certified store) |
-| `tiling_policy` | the split sizes the tiling rules read | **policy, optional** | default derived from the measured device limits (maximum buffer, shared memory); an application may override |
-| `deferred_drain_policy_of` | when freed blocks are returned | **policy, optional** | default: the allocator's measured envelope (drain on a refused allocation); NeuroBrix keeps its cliff |
-| `imposed_rung_mb` | a memory rung imposed on the allocator | **generic setting** (landed) | `nbxtensor.memory.set_limit(bytes, device=None)`; default: none (the physical card); NeuroBrix applies its `NBX_PRISM_BUDGET_MB` through it when it starts (`core.prism.memory_budget.apply_imposed_rung`) |
-| `attention_operand_dtypes`, `attention_operand_alignment` | the dtypes an attention's operands are run at | **policy, optional** | default: the operands' common dtype by `dtype.promotion.binary_result`; NeuroBrix's DtypeEngine overrides |
-| `canonical_aten` | a traced graph's ATen alias (`multiply` for `mul`) | **back in the engine** (landed) | `ops.dispatch.dispatch` maps the library's own op names only and asks for nothing; NeuroBrix resolves the alias first (`neurobrix.kernels.classification.kernel_for`) |
-| `memory_class_gb`, `memory_class_from_profile_id` | NeuroBrix's memory classes of a card | **hook, optional** | only the census keys read them; absent, keys carry no class |
-| `installation_refusals` | NeuroBrix's workshop rule on where a backend build may live | **hook, optional** | absent: no refusal |
-| `census`, `census_table` | the launch census | **hook, optional** | already optional (`_NoCensus`) |
+**Exit criterion.** `nbxtensor.host` disappears, or keeps only documented optional hooks; the README examples pass in
+an environment where NeuroBrix is NOT installed, on CUDA and on Metal; a guard
+(`tests/unit/nbxtensor_boundary/test_the_public_api_names_nothing_of_neurobrix.py`) refuses a NeuroBrix name
+(vendor file, rung, census, NeuroBrix profile, memory class) in the public API, its list of today's offenders
+shrinking only.
 
-**Added to M3's exit criterion.** A test runs every README example in an environment where NeuroBrix is NOT
-installed (a fresh venv holding only the nbxtensor wheel and its dependencies), on CUDA and on Metal. A service still
-refused there names the row of this table that has not landed.
+| service today | what it answers | fate | the library after | state, owner |
+|---|---|---|---|---|
+| `memory_state` | the host's free memory | (a) fact, measured | `nbxtensor.backend.host_memory` reads the operating system | **landed** (Mac, be3acf2b); the service goes |
+| `host_shares_memory_with_device` | unified memory | (a) fact, measured | `backend.device_facts`: Metal `hasUnifiedMemory`, CUDA `cudaDevAttrIntegrated` | **landed** (Mac); the service goes |
+| `profile_triton_has_fp64` | the device computes float64 | (a) fact | `backend.device_facts.kernels_carry_fp64()` — the backend's answer, no profile argument | **landed** (Mac); the service and its `profile` argument go |
+| `certified_dir` | where proven kernel settings live | (a) setting, default measured | default: the user's cache (`$XDG_CACHE_HOME`/`~/.cache` `/nbxtensor/certified/`), filled by the autotune; `nbxtensor.ops.autotune.set_store(path)` for another | default **landed** (Mac); the setter replaces the service (Mac) |
+| `tiling_policy` | the split sizes the tiling rules read | (a) setting, default | the library's table (`ops/tiling.yml`); `nbxtensor.ops.set_tiling(dict)` to replace values | table **landed** (Mac); the setter replaces the service (Mac) |
+| `vendor_config`, `vendor_param`, `vendors_dir` | the kernel-relevant device description (tiles, shared memory, registers, warp size, matrix unit) | (a) fact, per device | the keys a library reader reads (the key census, `nbxtensor/tools/device_key_census.py`) move to `nbxtensor/backend/devices/<vendor>/<arch>.yml`; what the driver reports is read at start (Metal `maxThreadgroupMemoryLength`, CUDA device attributes) | Mac: `apple/`; Dell: `nvidia/`, `amd/`; the engine keeps the rest of its vendor files (b) |
+| `device_arch_string` | the key a device file is found by | (a) fact | `backend.device_names.arch_string` | **landed** (Mac, M2) |
+| `imposed_rung_mb` | a memory ceiling imposed on the allocator | (a) setting, optional | `nbxtensor.memory.set_limit(bytes)` — a limit the user MAY impose (default: none, the device's own budget); the engine sets its rung through it (`core.prism.memory_budget.apply_imposed_rung`, at start when `NBX_PRISM_BUDGET_MB` is set) | **landed** (Dell, 0fb617eb); the service goes, the library reads no NeuroBrix variable |
+| `deferred_drain_policy_of` | when deferred frees go back | (a) setting, default measured | default: the allocator's measured envelope (drain on a refused allocation); `nbxtensor.memory.set_drain(policy)`; NeuroBrix sets its cliff through it | allocator zone: Dell |
+| `attention_operand_dtypes`, `attention_operand_alignment` | the dtypes and alignment an attention's operands run at | (a) default + explicit arguments | default: the operands' common dtype by `dtype.promotion.binary_result`, the device's own alignment; the engine's DtypeEngine passes its decision as the op's arguments | Mac (dtype zone) with the Dell (attention wrappers) |
+| `matrix_unit_representation`, `matrix_unit_flash_representation`, `matrix_unit_split_scale` | how the matrix unit carries a GEMM's or an attention's operands | (a) default + explicit arguments | default from the device file's matrix-unit section and the dtype table; the DtypeEngine's choice passed as arguments | Mac (dtype) with the Dell (linalg, attention wrappers) |
+| `canonical_aten` | an op name's canonical ATen spelling | (b) engine | the library's ops have their own names; the traced graph's spelling is the engine's dispatch (`neurobrix.kernels.classification.kernel_for`; `ops.dispatch.dispatch` maps the library's own names only) | **landed** (Dell, 504de8d5); the service goes |
+| `memory_class_gb`, `memory_class_from_profile_id` | NeuroBrix's memory classes of a card | (b) engine | none: the classes belong to the certification census | Dell |
+| `census`, `census_table` | the certification census | (b) engine | an optional launch observer, documented (`backend.launcher.observe(callback)`): the one hook kept | Dell |
+| `installation_refusals` | NeuroBrix's workshop rule on where a backend build may live | (b) engine | none | Dell |
+
+A service still refused in the environment without NeuroBrix names its row here.

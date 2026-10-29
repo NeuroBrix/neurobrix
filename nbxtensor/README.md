@@ -35,7 +35,7 @@ repository). This README documents what is in the library TODAY; every example b
 | `nbxtensor.shape` | yes | numel, strides, contiguity, the view rule, broadcasting, slice bounds |
 | `nbxtensor.random` | yes | seeded random streams and draws |
 | `nbxtensor.tensor`, `memory`, `backend`, `ops`, `quant` | moved in, public names being fixed (M2) | the tensor class, the allocators, the device backends, the Triton kernels and their cost declarations |
-| `nbxtensor.host` | yes | what an application provides to the library, by name (below) |
+| `nbxtensor.host` | yes | the services still passed by an application while the boundary is cleaned (below; API.md section 11) |
 
 ## Installation
 
@@ -149,21 +149,35 @@ assert parse_dtype("torch.float16") is NBXDtype.float16    # a torch spelling, r
 assert parse_dtype("half") is NBXDtype.float16             # an alias the table carries
 ```
 
-## What the library asks of its application
+## What the library reads by itself, and what you may set
 
-Some decisions are not tensor facts: where certified kernel settings live, a launch census. The application provides each one ONCE by name (`nbxtensor.host.provide`); the library reads it by
-name (`need`). A service nobody provided is refused by name, except the optional hooks, which run without one. The
-list of services and what each becomes before the first release (a fact the library measures, an optional policy
-with a measured default, or an optional hook) is `docs/nbxtensor/API.md` section 11.
+The library measures the facts of the machine it runs on and has a default for every setting, so `import nbxtensor`
+works with no application around it:
+
+- **measured facts**: the host's free memory (`nbxtensor.backend.host_memory.memory_state`), whether the device
+  shares the host's memory, whether its kernels compute float64 (`nbxtensor.backend.device_facts`);
+- **settings with a default**, set with plain data: the tiling table the memory splits are cut by
+  (`nbxtensor.ops.tiling_policy.set_tiling`, default: the library's `ops/tiling.yml`), the directory of proven kernel
+  settings (`nbxtensor.ops.autotune_certified.set_store`, default: your cache, `~/.cache/nbxtensor/certified/`,
+  filled by the autotune at first use), the memory limit a process holds to (`nbxtensor.memory.set_limit`, default:
+  the physical card). `None` restores a default.
 
 ```python
-from nbxtensor import host
+from pathlib import Path
 from nbxtensor.backend.device_names import arch_string
+from nbxtensor.backend.host_memory import memory_state
+from nbxtensor.ops import autotune_certified, tiling_policy
 
-assert "vendor_config" in host.SERVICES
-assert arch_string("Apple M4 Pro") == "apple-m4-pro"       # a device's key: the library's own rule
-if "installation_refusals" not in host.provided():
-    assert host.need("installation_refusals")("/any/path") == []   # an optional hook: absent, nothing refused
+assert arch_string("Apple M4 Pro") == "apple-m4-pro"        # a device's key: the library's own rule
+assert memory_state().source                                # the host reading names where it came from
+
+autotune_certified.set_store("/tmp/my-proven-settings")     # your own store of proven kernel settings
+assert autotune_certified.directory() == Path("/tmp/my-proven-settings")
+autotune_certified.set_store(None)                          # back to the default in your cache
+
+table = tiling_policy.tiling_table()                        # the split sizes in force (a copy)
+tiling_policy.set_tiling(table)                             # a whole table, as tiling.yml writes it
+tiling_policy.set_tiling(None)                              # back to the library's file
 ```
 
 A memory limit is a setting, not a service: `nbxtensor.memory.set_limit` holds the process to a card of that many
@@ -176,6 +190,11 @@ from nbxtensor import memory
 memory.set_limit(8 << 30)        # behave as a card of 8 GiB on every device
 memory.set_limit(None)           # the physical card again
 ```
+
+Some services are still passed through `nbxtensor.host` while the boundary is cleaned before 0.0.1 (the device
+description, one allocator setting (the drain policy), the operand decisions of the matrix unit and attention, and NeuroBrix's own
+census and memory classes). `docs/nbxtensor/API.md` section 11 lists each one, its fate (generic in the library, or
+back in the application) and its state.
 
 ## Backends
 

@@ -21,10 +21,6 @@ SERVICES: Dict[str, str] = {
     "vendor_config": "(vendor, architecture) -> the vendor file of that architecture, as a dict",
     "vendor_param": "(section, key, default) -> one value of the executing device's vendor file",
     "vendors_dir": "() -> the directory of the vendor files (pathlib.Path)",
-    "tiling_policy": "() -> the split sizes the tiling rules read, as a dict; the library's own when none is provided",
-    "certified_dir": "() -> the directory of the certified kernel settings (pathlib.Path); the library's own when none is provided",
-    "memory_state": "() -> the host memory reading (available_mb, swap_used_mb, ...); the library's own when none is provided",
-    "host_shares_memory_with_device": "(device) -> True when host and device draw on one pool; the library's own when none is provided",
     "deferred_drain_policy_of": "(memory section of a vendor file) -> the deferred-free drain policy",
     "memory_class_gb": "(memory_mb) -> the memory class of a card, in GB",
     "memory_class_from_profile_id": "(hardware profile id) -> its memory class in GB, or None",
@@ -59,10 +55,6 @@ def _no_refusal(path) -> list:
     return []
 
 
-def _library_memory_state():
-    from nbxtensor.backend.host_memory import memory_state
-    return memory_state
-
 
 def _library_fact(name):
     def fact():
@@ -71,19 +63,11 @@ def _library_fact(name):
     return fact
 
 
-def _library_tiling_policy():
-    from nbxtensor.ops.tiling_policy import tiling_table
-    return tiling_table
-
 
 #: what the library answers by itself when no application provided the service (API.md section 11): a reading of the
 #: machine or the device, or the library's own default policy — an application's answer, when provided, wins
 _LIBRARY_OWN = {
-    "memory_state": _library_memory_state,
-    "host_shares_memory_with_device": _library_fact("host_shares_memory_with_device"),
     "profile_triton_has_fp64": _library_fact("kernels_carry_fp64"),
-    "certified_dir": _library_fact("certified_dir"),
-    "tiling_policy": _library_tiling_policy,
 }
 
 _ABSENT = {"census": lambda: _NoCensus,
