@@ -175,7 +175,7 @@ def _run_pinned(x32, w32, blocks=None):
     import triton
     from nbxtensor.tensor import NBXTensor, NBXDtype
     from nbxtensor.ops.conv2d import conv2d_forward_kernel
-    from neurobrix.kernels.autotune_certify import f32_to_bf16_bits, bf16_bits_to_f32
+    from nbxtensor.dtype.convert import f32_to_bf16_bits, bf16_bits_to_f32
 
     def _bf16(arr):
         # bf16 travels in a uint16 container, and `from_numpy`'s `dtype`

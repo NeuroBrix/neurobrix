@@ -60,7 +60,7 @@ def _copy_path(t):
     inside the property.
     """
     from nbxtensor.tensor import NBXDtype
-    from neurobrix.kernels.autotune_certify import bf16_bits_to_f32
+    from nbxtensor.dtype.convert import bf16_bits_to_f32
 
     host = t.to_cpu()
     if t.nbx_dtype == NBXDtype.bfloat16:

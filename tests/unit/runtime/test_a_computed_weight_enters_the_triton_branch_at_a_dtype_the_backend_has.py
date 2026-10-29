@@ -12,7 +12,7 @@ Seen red on Metal with the device-side float64 cast (values garbage, non-finite)
 import numpy as np
 import pytest
 from neurobrix.core.runtime.graph_executor import computed_array_to_container
-from neurobrix.kernels.autotune_certify import f32_to_bf16_bits
+from nbxtensor.dtype.convert import f32_to_bf16_bits
 from nbxtensor.tensor import NBXDtype, DeviceAllocator
 
 

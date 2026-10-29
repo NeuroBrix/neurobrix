@@ -18,6 +18,9 @@ from nbxtensor.ops import launch_keys as _lk
 
 from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator, _set_device, dtype_size
 from nbxtensor.shape import MAX_NDIM as _NBX_MAX_NDIM, broadcast_shapes, max_linear_offset
+from nbxtensor.dtype.itemsize import canonical_name
+from nbxtensor.dtype.promotion import binary_result, float_math_input
+from nbxtensor.tensor import parse_dtype
 from nbxtensor.tensor import DeviceOOMError
 from nbxtensor.tensor import fa_min_tile as _fa_min_tile
 from nbxtensor.tensor import reduce_tile_max as _reduce_tile_max
@@ -555,32 +558,11 @@ def _transfer_to_device(tensor, target_device_idx: int):
     return dst
 
 
-# Dtype promotion order: wider dtype wins.
-# Maps (dtype_a, dtype_b) → result dtype following PyTorch semantics.
-_DTYPE_PRIORITY = {
-    NBXDtype.bool_: 0,
-    NBXDtype.uint8: 1,
-    NBXDtype.int8: 2,
-    NBXDtype.int16: 3,
-    NBXDtype.int32: 4,
-    NBXDtype.int64: 5,
-    NBXDtype.float16: 6,
-    NBXDtype.bfloat16: 6,
-    NBXDtype.float32: 7,
-    NBXDtype.float64: 8,
-    NBXDtype.complex64: 9,
-    NBXDtype.complex128: 10,
-}
-
-
 def _wider_dtype(a_dtype, b_dtype):
-    """Return the wider of two NBXDtype values for binary op promotion."""
+    """The dtype a binary element-wise op computes in: nbxtensor's one rule (`dtype.promotion.binary_result`)."""
     if a_dtype == b_dtype:
         return a_dtype
-    pa, pb = _DTYPE_PRIORITY.get(a_dtype, 7), _DTYPE_PRIORITY.get(b_dtype, 7)
-    if pa >= pb:
-        return a_dtype
-    return b_dtype
+    return parse_dtype(binary_result(canonical_name(a_dtype), canonical_name(b_dtype)))
 
 
 def _prepare_unary(x):
@@ -951,8 +933,9 @@ def _promote_int_unary(x):
     the Kokoro AdainResBlk1d residual `(h + sc) * rsqrt(2)` to all-zeros (the
     rsqrt(2) constant was traced as an int64 scalar; torch auto-promotes it).
     No-op for tensors already in a floating dtype."""
-    if hasattr(x, "is_floating_point") and not x.is_floating_point():
-        return x.to(NBXDtype.float32)
+    want = float_math_input(canonical_name(x.nbx_dtype)) if hasattr(x, "nbx_dtype") else None
+    if want is not None and want != canonical_name(x.nbx_dtype):
+        return x.to(parse_dtype(want))
     return x
 
 

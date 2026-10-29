@@ -13,7 +13,7 @@ implementation (peak about 3.5x the input) before the streaming one.
 """
 import tracemalloc
 import numpy as np
-from neurobrix.kernels.autotune_certify import f32_to_bf16_bits
+from nbxtensor.dtype.convert import f32_to_bf16_bits
 
 
 def _reference(a: np.ndarray) -> np.ndarray:

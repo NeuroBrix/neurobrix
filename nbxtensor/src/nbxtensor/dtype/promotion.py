@@ -5,6 +5,8 @@ Two rules decide it, both read on dtype NAMES (plain data, R-NBXT 11) through th
 - `promoted(dtypes)`: an op reading floating inputs of different widths reads them all at the WIDEST, when that
   widest is wider than two bytes; among two-byte floats alone nothing is promoted (which half dtype an op computes
   in is the caller's precision policy, not a promotion).
+- `binary_result(a, b)`: an element-wise op of two tensors computes in the higher of the two by kind, then by
+  width; two different dtypes of one kind and width (float16 and bfloat16) keep the first operand's.
 - `float_math_input(dtype)`: a floating-math op (rsqrt, exp, log ...) given an integer or bool input reads it as
   float32, as PyTorch's type promotion does; a floating or complex input is read as it is. Without it rsqrt of an
   int64 2 truncated 0.7071 to 0 (Kokoro's vocoder residual collapsed to zeros in NeuroBrix, 2026).
@@ -15,7 +17,10 @@ from typing import Optional, Sequence
 
 from .itemsize import itemsize, kind
 
-__all__ = ["promoted", "float_math_input"]
+__all__ = ["promoted", "float_math_input", "binary_result"]
+
+# The order of the kinds a binary result climbs (PyTorch type promotion: bool < unsigned < signed < float < complex).
+_KIND_ORDER = ("bool", "uint", "int", "float", "complex")
 
 
 def promoted(dtypes: Sequence[str]) -> Optional[str]:
@@ -35,3 +40,11 @@ def float_math_input(dtype: str) -> str:
     """The dtype a floating-math op reads an input of `dtype` at: float32 for an integer or bool input, the input's
     own dtype otherwise."""
     return dtype if kind(dtype) in ("float", "complex") else "float32"
+
+
+def binary_result(a: str, b: str) -> str:
+    """The dtype an element-wise op of two tensors of dtypes `a` and `b` computes and writes in: the higher by kind
+    (bool, unsigned, signed, float, complex), then by width; on a tie the first operand's."""
+    ra = (_KIND_ORDER.index(kind(a)), itemsize(a))
+    rb = (_KIND_ORDER.index(kind(b)), itemsize(b))
+    return a if ra >= rb else b

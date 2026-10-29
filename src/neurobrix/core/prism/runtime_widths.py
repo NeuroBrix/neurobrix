@@ -70,11 +70,6 @@ _HALF = frozenset({"float16", "bfloat16"})
 _COMPLEX = frozenset({"complex32", "complex64", "complex128"})
 _KNOWN = _FLOAT | _COMPLEX | frozenset({"int8", "int16", "int32", "int64", "uint8", "bool"})
 
-# Rank for "the wider of two" — wrappers.py:545-574 `_DTYPE_PRIORITY` / `_wider_dtype`
-# (fp16 and bf16 share a rank there; the first operand wins a tie, which `_wider` mirrors).
-_RANK = {"bool": 0, "uint8": 1, "int8": 2, "int16": 3, "int32": 4, "int64": 5,
-         "float16": 6, "bfloat16": 6, "float32": 7, "float64": 8,
-         "complex64": 9, "complex128": 10}
 
 
 # ---------------------------------------------------------------------------
@@ -286,8 +281,10 @@ def _nbx_name(nbx) -> str:
 
 
 def _wider(a: str, b: str) -> str:
-    """wrappers.py:567-574 `_wider_dtype`: the higher rank; the first on a tie."""
-    return a if _RANK[a] >= _RANK[b] else b
+    """The wider of two dtypes as the Triton engine's binary ops take it: nbxtensor's one rule
+    (`dtype.promotion.binary_result`, which the wrappers' `_wider_dtype` reads)."""
+    from nbxtensor.dtype.promotion import binary_result
+    return binary_result(a, b)
 
 
 def _triton_remap(name: str, c: str, stores_fp64: bool) -> str:

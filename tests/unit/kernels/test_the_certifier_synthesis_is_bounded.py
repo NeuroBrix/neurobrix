@@ -15,6 +15,7 @@ from __future__ import annotations
 import tracemalloc
 
 import numpy as np
+from nbxtensor.dtype import convert as CV
 import pytest
 
 from neurobrix.kernels import autotune_certify as AC
@@ -55,7 +56,7 @@ def test_bf16_operands_are_exactly_representable_and_rounded_to_nearest_even():
     a = AC._arr(np.random.default_rng(1), (257, 129), "bf16")
     assert a._nbx_dtype == "bf16" and a.dtype == np.uint16
     ref = np.random.default_rng(1).standard_normal((257, 129), dtype=np.float32) * np.float32(0.1)
-    assert np.array_equal(AC.bf16_bits_to_f32(AC.f32_to_bf16_bits(ref)), AC.values(a))
+    assert np.array_equal(CV.bf16_bits_to_f32(CV.f32_to_bf16_bits(ref)), AC.values(a))
 
 
 @pytest.mark.parametrize("dt,ceiling", [("fp32", 1.15), ("fp16", 1.15), ("bf16", 1.15)])

@@ -44,8 +44,7 @@ def main() -> int:
     import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
     from nbxtensor.ops import wrappers as W
     from nbxtensor.tensor import NBXTensor, NBXDtype
-    from neurobrix.kernels.autotune_certify import (
-        f32_to_bf16_bits, bf16_bits_to_f32)
+    from nbxtensor.dtype.convert import f32_to_bf16_bits, bf16_bits_to_f32
 
     rng = np.random.default_rng(20260912)
     a32 = (rng.standard_normal((M, K)) * 0.1).astype(np.float32)

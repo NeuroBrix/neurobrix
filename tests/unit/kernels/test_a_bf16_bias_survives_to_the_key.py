@@ -52,7 +52,7 @@ def _owns_its_cache(tmp_path, monkeypatch):
 
 def _tensors():
     from nbxtensor.tensor import NBXTensor, NBXDtype
-    from neurobrix.kernels.autotune_certify import f32_to_bf16_bits
+    from nbxtensor.dtype.convert import f32_to_bf16_bits
 
     rng = np.random.default_rng(20260912)
     a = NBXTensor.from_numpy(rng.standard_normal((M, K), dtype=np.float32))
