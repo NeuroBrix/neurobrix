@@ -636,7 +636,7 @@ def ensure_triton_metal_or_raise() -> None:
 
 
 def nbx_driver_module() -> str:
-    """The NeuroBrix launcher driver module implementing the SELECTED backend's
+    """The library's launcher driver module implementing the SELECTED backend's
     launch ABI, or a refusal naming why there is none.
 
     A driver is not interchangeable between Metal backends: ours reads the

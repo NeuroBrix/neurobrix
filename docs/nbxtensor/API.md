@@ -330,3 +330,168 @@ shrinking only.
 | `installation_refusals` | NeuroBrix's workshop rule on where a backend build may live | (b) engine | none | Mac (its one reader is the Metal backend selection) |
 
 A service still refused in the environment without NeuroBrix names its row here.
+
+## 12. The rest of the public surface, module by module (dtype, shape, random, host, backends)
+
+Every public name of these modules, with its signature and what it answers (the first line of its docstring);
+the guard `tests/unit/nbxtensor_boundary/test_every_public_name_is_in_the_api.py` keeps this complete.
+
+### `nbxtensor.backend.capabilities`
+
+```python
+def backend_has_fp64() -> bool   # Whether the backend's kernels handle float64 elements, as declared by
+def backend_loads_pointers_from_memory() -> bool   # True where a kernel may dereference an address it LOADED from a tensor.
+def backend_traps_on_device_assert() -> bool   # True where `tl.device_assert` actually stops the kernel.
+def reduced_extent_max(num_warps: int) -> Optional[int]   # The largest reduced extent a program of `num_warps` stages on this backend, or None when its lowering bounds
+```
+
+### `nbxtensor.backend.cpu_backend`
+
+```python
+class TritonCPUNotInstalledError   # Raised when `--triton` is invoked on a CPU-only profile and the
+def ensure_triton_cpu_or_raise() -> None   # Verify `triton-cpu` is installed when we're on a CPU-only profile.
+def get_install_instructions() -> str   # Return the install instructions string. Useful for CLI `--help`
+def is_cpu_triton_active() -> bool   # True iff triton-cpu has been selected for this process.
+```
+
+### `nbxtensor.backend.faults`
+
+```python
+def check_device_faults() -> None   # Raise if any kernel reported a broken contract since the last check.
+def device_fault_buffer(device_idx: int) -> 'NBXTensor'   # This device's zeroed one-word status buffer.
+def device_fault_code(message: str, *, armed: bool=None) -> int   # The code a kernel should be compiled with: its own where the backend
+def device_fault_code_cached(message: str) -> int   # `device_fault_code` memoised per message — it runs at every launch of
+def fault_channel(message: str, spare: 'NBXTensor') -> tuple   # `(pointer_argument, FAULT_CODE)` for a kernel that carries the channel.
+def register_device_fault(message: str) -> int   # Reserve a fault code for `message`. Called at import by the kernel
+```
+
+### `nbxtensor.backend.host_memory`
+
+```python
+class MemoryState   # One reading of the machine, at one instant.
+```
+
+### `nbxtensor.backend.metal_backend`
+
+```python
+class BackendSelectionRefused   # This seam refused to choose a Metal backend, and said why.
+class TritonMetalNotInstalledError   # Raised when `--triton` is invoked on an Apple GPU and no Metal Triton
+class TritonMetalShaderCompilerMissingError   # Raised when the Metal backend IS installed but Apple's offline shader
+def backend_compiler_class()   # The selected backend's Triton backend class — the object a driver patches.
+def backend_fallback_markers()   # Phrases that mean the selected backend did not emit for the device.
+def backend_module(name: str) -> str   # The top-level module Metal backend `name` is installed as (what an application inspects to judge where the
+def backend_refusal_types() -> tuple   # The exception types a Metal backend raises to say 'I cannot compile this
+def backend_target_name() -> str   # The Triton GPUTarget backend NAME the selected implementation answers to.
+def ensure_metal_toolchain_selected() -> None   # Work around Xcode 26/27's broken default-toolchain delegation, once.
+def ensure_triton_metal_or_raise() -> None   # Verify a Metal Triton backend is present before the triton path starts.
+def is_apple_silicon() -> bool   # True on an Apple-Silicon Mac.
+def is_backend_refusal(exc: BaseException) -> bool   # True when `exc` is a Metal backend saying it cannot compile this config —
+def metal_shader_compiler_available() -> bool   # True when Apple's offline shader compiler (`xcrun metal`) can be run.
+def metal_target()   # The Triton target for this machine, without activating a driver.
+def nbx_driver_module() -> str   # The library's launcher driver module implementing the SELECTED backend's
+def selected_metal_backend() -> str   # WHICH Metal backend this machine runs, decided by the PROFILE.
+def triton_metal_available() -> bool   # Probe for a Metal Triton backend without importing it.
+```
+
+### `nbxtensor.backend.metal_device`
+
+```python
+class MetalRuntime   # One Metal device, presented as the runtime object the seam expects.
+class MetalUnavailableError   # Metal, or its Python bindings, are not usable on this machine.
+def declare_new_family_ownership() -> None   # Tell pyobjc that the `new*` Metal selectors return an already-retained object.
+def metal_device_available() -> bool   # True when a Metal device can actually be opened.
+def reset_runtime_for_tests() -> None   # Drop the cached runtime — and everything compiled against it.
+```
+
+### `nbxtensor.backend.replay_graph`
+
+```python
+class CapturedPlan   # One bucket's action list as an instantiated CUDA graph.
+class GraphReplayError   # 
+class SegmentedPlan   # A multi-card plan's action list as one CUDA graph per stretch of actions on one card (S3, 2026-10-28).
+```
+
+### `nbxtensor.backend.runtime`
+
+```python
+def device_label(tensor) -> str   # How a tensor's placement should READ in a message, e.g. "metal:0".
+def device_memory()   # The memory primitives of the backend in force (`memory.device_memory.DeviceMemory`): the account
+def invalidate_current_device_cache() -> None   # Drop the ensure_triton_device fast-path cache (this thread).
+```
+
+### `nbxtensor.backend.triton_ext_driver`
+
+```python
+class TritonExtDriver   # Loads a metallib and launches it the way triton-ext's own launcher does.
+class pinned_addresses   # Pin the Metal wraps behind these tensors, so an address a kernel CAPTURES
+def pinned_gpu_address(addr: int) -> int   # The address a SHADER may read at `addr`, valid while its pin is held.
+```
+
+### `nbxtensor.dtype.convert`
+
+```python
+def bf16_abs_max(bits: np.ndarray) -> float   # The largest magnitude among bfloat16 patterns, NaN ignored (an infinity is infinite): what a caller compares to
+def bf16_bits(a: np.ndarray) -> np.ndarray   # The `uint16` patterns of a bfloat16 host carrier: the array itself when it already is `uint16`, a view when
+```
+
+### `nbxtensor.dtype.itemsize`
+
+```python
+def dtype_table() -> Dict[str, Any]   # The whole table as written (`dtypes`, `packed`, and every other section), a copy: the reader a client keeps of
+def from_autotune_key(key: str) -> str   # The dtype name of a launch-key spelling ("fp16" -> "float16", "int1" -> "bool").
+def itemsize_table() -> Dict[str, int]   # {name: bytes per element} over every dense dtype (a copy: the caller may not edit the table).
+def known_dtypes() -> Tuple[str, ...]   # Every dense dtype the table carries, sorted.
+```
+
+### `nbxtensor.dtype.nbx_dtype`
+
+```python
+def dtype_size(dtype: NBXDtype) -> int   # 
+```
+
+### `nbxtensor.host`
+
+```python
+def need(name: str) -> Callable   # Service `name` as the application provided it; refused by name when none did.
+def provide(name: str, fn: Callable) -> None   # The application provides service `name` (one of `SERVICES`). Providing it again replaces it.
+```
+
+### `nbxtensor.random.mt_randn`
+
+```python
+class MT19937   # The generator as torch's CPU `Generator` runs it: `manual_seed(s)` = `init_genrand(s & 0xffffffff)`.
+def mt_randn(seed: int, shape: Iterable[int]) -> np.ndarray   # A fresh generator seeded with `seed`, its first `prod(shape)` normals reshaped — the vendor's
+```
+
+### `nbxtensor.random.rng_pin`
+
+```python
+def pinned_normal(shape)   # Standard-normal N(0,1) float32 array of the given shape.
+def pinned_seed()   # Return the configured seed (int) or None when pinning is disabled.
+def pinned_uniform(shape)   # Uniform [0,1) float32 array of the given shape.
+```
+
+### `nbxtensor.random.rng_stream`
+
+```python
+def active() -> bool   # 
+def init_draw(shape)   # The run's next initial-noise draw as a float32 numpy array of `shape` — the vendor's CPU draw for
+def next_normal(shape)   # The run stream's next standard normals as a float32 numpy array of `shape` (torch's CPU `randn` for the
+def next_seed() -> int   # Next per-draw kernel seed: splitmix64 of (run_seed, counter), 31-bit.
+def next_uniform(shape)   # The run stream's next [0, 1) uniforms as a float32 numpy array of `shape` (torch's CPU `rand`, continued).
+def set_run_seed(seed)   # Arm (or disarm with None) the run stream; resets the draw counter and the init-draw generator.
+```
+
+### `nbxtensor.random.seeded_draw`
+
+```python
+class SeededDrawStream   # One seeded uniform stream; the draw ORDER is the R30 contract.
+def apply_repetition_penalty(logits: np.ndarray, seen_ids, penalty: float) -> np.ndarray   # RepetitionPenaltyLogitsProcessor semantics on fp64 logits (in place).
+def seeded_gaussian(seed: int, shape) -> np.ndarray   # Seeded fp32 standard-normal draw — the latent-init twin of
+```
+
+### `nbxtensor.shape`
+
+```python
+MAX_NDIM = ...   # (constant)
+```
