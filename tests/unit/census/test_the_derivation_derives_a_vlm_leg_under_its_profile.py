@@ -54,6 +54,10 @@ def _stubs(monkeypatch, seen):
     monkeypatch.setattr(V.TritonVLMEngine, "_tokenize_with_placeholder_run", staticmethod(lambda *a, **k: ([1, 2, 3], 1, 2)))
     monkeypatch.setattr(V.TritonVLMEngine, "_build_masked_splice_ids", staticmethod(lambda *a, **k: ([1, 2, 3], 1, 2)), raising=False)
     monkeypatch.setattr(D, "_vlm_flow_stub", lambda model: SimpleNamespace(), raising=False)
+    # the flow's logits after each LM step: the head's (V, H) weight and its GEMV, derived since the census reads the
+    # head (the cells here look at the vision legs' profile; the head is the catalogue's usual one, no launch kept)
+    monkeypatch.setattr(D, "_head_rows", lambda model, _u, head: (32000, 4096, "float16"))
+    monkeypatch.setattr(D, "_flow_logits", lambda model, lm, rows, native: [])
 
 
 def test_the_staged_contract_derives_the_tower_and_the_projector_under_the_profile(monkeypatch):
@@ -69,7 +73,8 @@ def test_the_sites_take_the_profile_from_extent_sites(monkeypatch):
     seen = []
     _stubs(monkeypatch, seen)
     topo = {"flow": {"type": "vlm", "vlm": {"vision_component": "vpm", "vision_projection_component": "resampler",
-                                           "lm_component": "llm", "preprocessing": {}}}}
+                                           "lm_component": "llm", "head_component": "lm_head",
+                                           "preprocessing": {}}}}     # every VLM of the catalogue names its head
     monkeypatch.setattr(D, "vlm_contract", lambda model, topo: "staged")
     D.extent_sites("M", topo, {"max_tokens": 8}, PLAN, "describe", None, None, "img.png",
                    has_native_bf16=True, sdpa=SDPA)
