@@ -76,7 +76,10 @@ def _check(tuners, lo=0.85, hi=1.65):
     return off
 
 
-def test_the_price_is_within_the_measured_peaks(tuners):
+def test_the_price_is_within_the_measured_peaks(tuners, as_the_m4_pro):
+    # the points were measured on the M4 Pro: priced under ITS profile (its ladder, no matrix unit), not under the one
+    # where the cell runs (on a V100 the volta ladder and unit refused its keys as census defects — red on the rack
+    # until 2026-10-29)
     off = _check(tuners)
     assert not off, "the price left the measured band on:\n  " + "\n  ".join(off)
 

@@ -31,12 +31,18 @@ class _Tuner:
     pass
 
 
+# The GEMM keys below (M up to 2^20 at fp16) are the synthesis's SIZE bound's cases; on a card whose matrix unit takes
+# every M of those buckets (Volta's, since the unit carries fp16 GEMMs) no launch forms them and `_gemm_rows` refuses
+# them as census defects before the bound is reached. The cells prove the bound, so they run `without_matrix_unit`
+# (conftest), the fixture for the certifier's machinery — red on base from the unit's take-over to 2026-10-29.
+
+
 @pytest.fixture
 def fp16_out(monkeypatch):
     monkeypatch.setattr(AC.C, "output_dtype", lambda tuner, key: "fp16")
 
 
-def test_a_key_larger_than_the_card_is_refused_before_any_draw(fp16_out):
+def test_a_key_larger_than_the_card_is_refused_before_any_draw(fp16_out, without_matrix_unit):
     qual = "nbxtensor.ops.matmul.matmul_kernel"
     key = (1 << 20, 4096, 4096, True, False, "fp16", "fp16", "fp16")     # 8 GiB + 32 MiB + 8 GiB
     with pytest.raises(AC.KeyTooLargeForClass) as e:
@@ -71,7 +77,7 @@ def test_the_host_peak_is_a_small_multiple_of_the_operand(dt, ceiling):
     assert peak <= ceiling * a.nbytes, f"{dt}: peak {peak} for {a.nbytes} operand bytes"
 
 
-def test_arguments_only_draws_nothing_and_builds_no_oracle(fp16_out):
+def test_arguments_only_draws_nothing_and_builds_no_oracle(fp16_out, without_matrix_unit):
     # The Mac's compile-only caller (msl_census.py) needs the key's arguments, never values.
     qual = "nbxtensor.ops.matmul.matmul_kernel"
     for kernel, key in ((qual, (1 << 16, 4096, 4096, True, False, "fp16", "fp16", "fp16")),
@@ -87,7 +93,7 @@ def test_arguments_only_draws_nothing_and_builds_no_oracle(fp16_out):
 
 
 
-def test_on_unified_memory_the_host_copies_count(fp16_out):
+def test_on_unified_memory_the_host_copies_count(fp16_out, without_matrix_unit):
     """The Mac's certifier (unified memory, 2026-09-27): a conv whose DEVICE bytes the bound
     admitted (~3 GB) grew past 14 GB and was killed — the host draws, the device copies and the
     oracle share one pool there. The bound on a unified device is the key's phase price (host
@@ -103,7 +109,7 @@ def test_on_unified_memory_the_host_copies_count(fp16_out):
     assert e.value.asked == peak
 
 
-def test_a_discrete_card_keeps_its_device_bound(fp16_out, monkeypatch):
+def test_a_discrete_card_keeps_its_device_bound(fp16_out, monkeypatch, without_matrix_unit):
     """Same key and budget on a discrete card: the device bytes fit, no refusal from the bound."""
     qual = "nbxtensor.ops.matmul.matmul_kernel"
     key = (1 << 18, 4096, 4096, True, False, "fp16", "fp16", "fp16")

@@ -33,3 +33,17 @@ def host_backend_fp64(monkeypatch):
     from neurobrix.triton.dtype import profile_triton_has_fp64
     monkeypatch.setattr(_nbx_capabilities, "_BACKEND_HAS_FP64", None)
     _nbx_capabilities.set_backend_has_fp64(profile_triton_has_fp64(load_default_profile()))
+
+
+@pytest.fixture
+def as_the_m4_pro(monkeypatch):
+    """The vendor profile in force as the Apple M4 Pro's (`apple/apple_m4_pro.yml`): its bucket ladders, no matrix unit.
+    For the cells that price or synthesise keys MEASURED on that card (the certifier's price points, the keys refused
+    on its 18 GB table): a key is formed under its card's profile, never under the one where the cell happens to run
+    — on a V100 the volta ladder and matrix unit refused them as census defects."""
+    from nbxtensor.ops import _configs as C
+    from neurobrix.core.config.loader import get_vendor_config
+    cfg = dict(get_vendor_config("apple", "apple_m4_pro"))
+    cfg.update({"_vendor": "apple", "_profile": "apple_m4_pro", "_exact": True})
+    monkeypatch.setattr(C, "_ACTIVE_PROFILE", cfg)
+    return cfg

@@ -55,8 +55,11 @@ class _Drawn(Exception):
 
 
 @pytest.fixture
-def out_dtype_of_key(monkeypatch):
-    """The output dtype the key's last field names (what `output_dtype` reads off a real tuner)."""
+def out_dtype_of_key(monkeypatch, as_the_m4_pro):
+    """The output dtype the key's last field names (what `output_dtype` reads off a real tuner). The keys are the M4
+    Pro's (REFUSED_ON_MQ19): they are priced under that card's profile (`as_the_m4_pro`: its ladders, no matrix
+    unit), not under the profile active where the cell runs — on a V100 the volta ladder and unit refused them as
+    census defects (red on the rack, green on the Mac, until 2026-10-29)."""
     monkeypatch.setattr(AC.C, "output_dtype", lambda tuner, key: key[-1])
 
 
