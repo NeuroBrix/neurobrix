@@ -39,11 +39,26 @@ repository). This README documents what is in the library TODAY; every example b
 
 ## Installation
 
+nbxtensor never needs torch: it is not a dependency, not even an optional one, and the library and its kernels run in
+an environment where torch is not installed (proven on Metal, 2026-10-29: `tools/torch_free_proof.py` records every
+attempt to import torch, caught ones included, and recorded none). Python 3.10 or later; its dependencies are numpy,
+pyyaml and Triton.
+
 ```
-pip install -e nbxtensor          # from the NeuroBrix repository; numpy, pyyaml and triton are its dependencies
+pip install -e nbxtensor          # from the NeuroBrix repository
 ```
 
-Python 3.10 or later. The device areas need Triton for the target backend (CUDA, or triton-ext on Apple Metal).
+**Linux, NVIDIA (CUDA).** Triton comes from PyPI with the install above.
+
+**macOS, Apple silicon (Metal).** PyPI publishes no Triton for macOS, so Triton and its Metal backend are built from
+source, then nbxtensor is installed into that environment:
+
+1. Triton (github.com/triton-lang/triton) built with `TRITON_EXT_ENABLED=1`, which lets out-of-tree backends plug in;
+2. the AppleGPU backend of triton-ext (github.com/triton-lang/triton-ext, `backend/AppleGPU`), installed into the same
+   environment;
+3. `pyobjc-framework-Metal` (the library opens the Metal device through it);
+4. Xcode's Metal toolchain (`xcrun metal` must find the real compiler, not Xcode's placeholder: `TOOLCHAINS=Metal`).
+
 `nbxtensor.dtype` and `nbxtensor.shape` need neither a device nor Triton.
 
 ## Concepts
