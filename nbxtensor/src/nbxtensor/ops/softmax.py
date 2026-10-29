@@ -22,7 +22,7 @@ def _prune_softmax(configs, named_args, **kwargs):
     reduce-tile cap (`nbx_tensor.reduce_tile_max`, the profile's, where the lowering refuses beyond); never more rows
     than exist. (The cap alone is far above the register budget on CUDA: 128 rows of a 2048-padded row compiled for
     minutes per candidate, 2026-10-20.)"""
-    from nbxtensor.tensor import reduce_tile_max
+    from nbxtensor.backend.capabilities import reduce_tile_max
     from nbxtensor.ops.launch_keys import SOFTMAX_FUSED_MAX_FEAT
     feat = next_power_of_2(int(named_args['feat_dim']))
     rows = int(named_args['batch_dim'])
@@ -96,7 +96,7 @@ def _looped_softmax_configs():
 def _prune_looped_softmax(configs, named_args, **kwargs):
     """A tile no wider than the backend's reduce-tile cap (`nbx_tensor.reduce_tile_max`, the profile's, where the
     lowering refuses beyond) nor than the padded row it scans (a wider tile only masks)."""
-    from nbxtensor.tensor import reduce_tile_max
+    from nbxtensor.backend.capabilities import reduce_tile_max
     cap = min(reduce_tile_max(), next_power_of_2(int(named_args['feat_dim'])))
     keep = [c for c in configs if c.kwargs['TILE_FEAT'] <= cap]
     return keep or configs[:1]

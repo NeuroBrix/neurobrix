@@ -4,7 +4,8 @@ sampler in half — RED."""
 import os
 import numpy as np
 import pytest
-from nbxtensor.tensor import NBXTensor, NBXDtype
+from nbxtensor.tensor import NBXTensor
+from nbxtensor.dtype.nbx_dtype import NBXDtype
 from neurobrix.triton import generator as G
 
 pytestmark = pytest.mark.skipif(not os.environ.get("CUDA_VISIBLE_DEVICES"), reason="needs a card")

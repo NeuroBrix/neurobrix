@@ -19,7 +19,8 @@ from __future__ import annotations
 import pytest
 
 import nbxtensor.tensor as nt
-from nbxtensor.tensor import DeviceAllocator, DeviceOOMError
+import nbxtensor.backend.runtime as _nbx_runtime
+from nbxtensor.memory.allocator import DeviceAllocator, DeviceOOMError
 
 _OOM = 2   # cudaErrorMemoryAllocation
 
@@ -49,8 +50,8 @@ class _RefuseOnceRuntime:
 
 def test_a_refused_malloc_raises_and_never_drains_the_deferred_queue(monkeypatch):
     rt = _RefuseOnceRuntime()
-    monkeypatch.setattr(nt, "_gpu_runtime", lambda: rt)
-    monkeypatch.setattr(nt, "_active_backend", lambda: {
+    monkeypatch.setattr(_nbx_runtime, "_gpu_runtime", lambda: rt)
+    monkeypatch.setattr(_nbx_runtime, "_active_backend", lambda: {
         "malloc": "cudaMalloc", "get_last_error": "cudaGetLastError",
         "mem_get_info": "cudaMemGetInfo"})
     monkeypatch.setattr(DeviceAllocator, "_pool_enabled", False, raising=False)

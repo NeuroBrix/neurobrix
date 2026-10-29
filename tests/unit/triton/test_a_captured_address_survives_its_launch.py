@@ -33,7 +33,7 @@ from nbxtensor.backend.launcher import launch  # noqa: E402
 
 def _metal_or_skip():
     try:
-        from nbxtensor.tensor import _detect_gpu_backend
+        from nbxtensor.backend.runtime import _detect_gpu_backend
         if _detect_gpu_backend() != "metal":
             pytest.skip("the transient-wrap lifetime is this driver's; "
                         "other drivers bind their own way")

@@ -16,7 +16,7 @@ is a valid integer in both namespaces and simply names different cards.
 
 import pytest
 
-from nbxtensor.tensor import DeviceAllocator
+from nbxtensor.memory.allocator import DeviceAllocator
 
 from .test_prefill_determinism import _gpu_classes
 

@@ -136,7 +136,7 @@ class PipelineParallelStrategy(TritonStrategy):
                 self._loaded_components.discard(component_name)
                 for device in devices:
                     self.synchronize_device(device)
-                from nbxtensor.tensor import DeviceAllocator
+                from nbxtensor.memory.allocator import DeviceAllocator
                 DeviceAllocator.empty_cache_pool()
 
     def get_embedding_device(self, component_name: str) -> str:

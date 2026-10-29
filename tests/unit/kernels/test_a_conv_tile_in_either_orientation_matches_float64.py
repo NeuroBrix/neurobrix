@@ -7,7 +7,8 @@ import numpy as np
 import pytest
 import triton
 
-from nbxtensor.tensor import DeviceAllocator, NBXTensor
+from nbxtensor.memory.allocator import DeviceAllocator
+from nbxtensor.tensor import NBXTensor
 from nbxtensor.ops.oracles.conv2d_fp64 import conv2d_reference
 from nbxtensor.ops.conv2d import conv2d_forward_kernel
 

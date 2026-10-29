@@ -27,6 +27,7 @@ Runnable two ways:
   - script:  PYTHONPATH=src python3 tests/unit/kernels/test_math_attention_strided_kv.py
 """
 from __future__ import annotations
+import nbxtensor.backend.runtime as _nbx_runtime  # the module the moved names live in (M2 cut of tensor.py)
 
 try:
     import pytest
@@ -56,7 +57,7 @@ def _gpu_available() -> bool:
     import pytest
 
     nbx = pytest.importorskip("nbxtensor.tensor")
-    detect = nbx._detect_gpu_backend   # a renamed probe raises here, loudly
+    detect = _nbx_runtime._detect_gpu_backend   # a renamed probe raises here, loudly
     try:
         return detect() is not None
     except Exception:
@@ -66,7 +67,7 @@ def _gpu_available() -> bool:
 def _download(t) -> bytes:
     """Device bytes of a CONTIGUOUS NBXTensor."""
     import ctypes
-    from nbxtensor.tensor import DeviceAllocator
+    from nbxtensor.memory.allocator import DeviceAllocator
     buf = (ctypes.c_char * t._nbytes)()
     DeviceAllocator.memcpy(ctypes.addressof(buf), t.data_ptr(),
                            t._nbytes, 2)

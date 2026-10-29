@@ -22,13 +22,14 @@ import pytest
 
 pytest.importorskip("triton")
 
-from nbxtensor.tensor import NBXTensor, NBXDtype  # noqa: E402
+from nbxtensor.tensor import NBXTensor  # noqa: E402
+from nbxtensor.dtype.nbx_dtype import NBXDtype
 import nbxtensor.ops.wrappers as W  # noqa: E402
 
 
 def _dev_or_skip():
     try:
-        from nbxtensor.tensor import _detect_gpu_backend
+        from nbxtensor.backend.runtime import _detect_gpu_backend
         if _detect_gpu_backend() is None:
             pytest.skip("no GPU backend the engine can resolve")
     except Exception:

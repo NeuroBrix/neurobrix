@@ -52,10 +52,12 @@ except ModuleNotFoundError:  # script-mode under the pytest-less GPU venv
 
 import numpy as np
 
-from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator
+from nbxtensor.tensor import NBXTensor
+from nbxtensor.dtype.nbx_dtype import NBXDtype
+from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.quant.quantized_tensor import QuantizedTensor
 from neurobrix.triton import moe as MOE
-from nbxtensor.tensor import backend_loads_pointers_from_memory
+from nbxtensor.backend.capabilities import backend_loads_pointers_from_memory
 
 
 # Every test below asserts ARITHMETIC — a float64 oracle, a router-weight
@@ -96,7 +98,7 @@ def _metal_refuses_quantized_experts() -> bool:
     # The SAME import the engine uses (`triton/moe.py` line 33), not a guess at where it
     # lives: an import that misses defaults this door to False, the cells run, and they fail
     # with the engine's refusal — which is the safe direction but hides why.
-    from nbxtensor.tensor import _detect_gpu_backend
+    from nbxtensor.backend.runtime import _detect_gpu_backend
     return _detect_gpu_backend() == "metal"
 
 

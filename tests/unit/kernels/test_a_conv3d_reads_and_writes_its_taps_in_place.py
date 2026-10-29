@@ -6,7 +6,8 @@ import numpy as np
 import pytest
 
 from nbxtensor.ops import wrappers as Wr
-from nbxtensor.tensor import DeviceAllocator, NBXTensor
+from nbxtensor.memory.allocator import DeviceAllocator
+from nbxtensor.tensor import NBXTensor
 from nbxtensor.ops.oracles.conv2d_fp64 import conv2d_reference
 
 

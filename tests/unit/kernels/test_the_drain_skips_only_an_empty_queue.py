@@ -19,12 +19,13 @@ import pytest
 
 pytest.importorskip("triton")
 
-from nbxtensor.tensor import NBXTensor, DeviceAllocator  # noqa: E402
+from nbxtensor.tensor import NBXTensor  # noqa: E402
+from nbxtensor.memory.allocator import DeviceAllocator
 
 
 def _metal_or_skip():
     try:
-        from nbxtensor.tensor import _detect_gpu_backend
+        from nbxtensor.backend.runtime import _detect_gpu_backend
         if _detect_gpu_backend() != "metal":
             pytest.skip("this queue is Metal's; there is one queue elsewhere")
         from nbxtensor.backend.metal_device import runtime

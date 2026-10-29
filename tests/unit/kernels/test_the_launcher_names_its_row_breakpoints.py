@@ -24,7 +24,7 @@ def bound_profile(monkeypatch):
 
 def test_the_breakpoints_are_the_gemv_bound_every_bucket_step_and_the_units_take_over(bound_profile):
     from nbxtensor.ops import launch_keys as LK
-    from nbxtensor.tensor import NBXDtype
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     bps = LK.row_breakpoints(1, 200)
     assert 5 in bps                                                   # M <= 4: the per-row GEMV, no key
     half, single = NBXDtype.float16, NBXDtype.float32

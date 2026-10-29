@@ -18,7 +18,9 @@ import pytest
 
 triton = pytest.importorskip("triton")
 
-from nbxtensor.tensor import DeviceAllocator, NBXDtype, NBXTensor  # noqa: E402
+from nbxtensor.memory.allocator import DeviceAllocator  # noqa: E402
+from nbxtensor.dtype.nbx_dtype import NBXDtype
+from nbxtensor.tensor import NBXTensor
 from nbxtensor.ops import wrappers as w  # noqa: E402
 
 

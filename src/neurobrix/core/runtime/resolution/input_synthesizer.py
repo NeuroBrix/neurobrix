@@ -186,7 +186,8 @@ class InputSynthesizer:
         # The two constructions of the rule table below.
         if triton:
             import numpy as np
-            from nbxtensor.tensor import NBXTensor, parse_dtype as _nbx_dtype
+            from nbxtensor.tensor import NBXTensor
+            from nbxtensor.dtype.nbx_dtype import parse_dtype as _nbx_dtype
 
             def _np_dtype(name):
                 name = str(name).replace("torch.", "")

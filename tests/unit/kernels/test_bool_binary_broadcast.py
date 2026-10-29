@@ -100,7 +100,7 @@ def test_new_ones_fills_ones():
     masked ALL keys -> every T5 self-attention row uniform -> cond-branch
     embeds washed toward the pad mean (triton cond corr 0.9288 vs the
     sequential oracle, uncond clean)."""
-    from nbxtensor.tensor import NBXDtype
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     base = _nbx(np.zeros((1, 1, _S, 1), dtype=np.int64))
     scalar = base.new_ones([], dtype=NBXDtype.bool_)   # the exact graph call
     assert tuple(scalar.shape) == ()

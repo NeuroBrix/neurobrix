@@ -14,7 +14,8 @@ if not torch.cuda.is_available():
 
 from nbxtensor.ops import launch_keys as LK  # noqa: E402
 from nbxtensor.ops import wrappers as W  # noqa: E402
-from nbxtensor.tensor import NBXTensor, NBXDtype  # noqa: E402
+from nbxtensor.tensor import NBXTensor  # noqa: E402
+from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.ops.autotune_cache import key_of  # noqa: E402
 
 

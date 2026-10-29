@@ -98,7 +98,8 @@ def test_a_seedless_run_still_draws():
 
 @card
 def test_the_triton_randn_like_takes_the_compiled_branchs_values():
-    from nbxtensor.tensor import NBXDtype, NBXTensor
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
+    from nbxtensor.tensor import NBXTensor
     from nbxtensor.ops.wrappers import randn_like_wrapper
     from neurobrix.core.runtime.graph import run_generator
     rng_stream.set_run_seed(11)

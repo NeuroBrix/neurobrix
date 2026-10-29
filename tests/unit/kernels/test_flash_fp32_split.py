@@ -120,7 +120,8 @@ def _no_gpu_reason():
     """Why the GPU cells cannot run here, or None. Only the ABSENCE of a device or of the profile's split rows skips:
     a broken kernel module, a refused profile or a failing allocator raises at collection, never reads as a skip."""
     from nbxtensor.ops import wrappers as W
-    from nbxtensor.tensor import DeviceAllocator, _gpu_runtime
+    from nbxtensor.memory.allocator import DeviceAllocator
+    from nbxtensor.backend.runtime import _gpu_runtime
     try:
         _gpu_runtime()
     except (OSError, RuntimeError) as exc:           # no CUDA/HIP runtime library on this host
@@ -159,7 +160,8 @@ def _run(q, k, v, mask=None, unit=True, dtype=None):
     False (the FMA path an fp32 attention took before the split). `dtype`: the operands cast on the device to it
     (bfloat16: the values must already be bf16-representable), the output read back through float32."""
     from nbxtensor.ops import wrappers as W
-    from nbxtensor.tensor import NBXTensor, NBXDtype
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     taken = []
     real_flash, real_route, real_unit = W._flash_m8n8k4, W._lk.sdpa_route, W._lk.unit_flash
     W._flash_m8n8k4 = lambda *a, **kw: (taken.append(kw.get("split")), real_flash(*a, **kw))[1]
@@ -251,7 +253,7 @@ def test_a_bfloat16_attention_through_the_split_is_fp32_level_inside(L, D):
     so about half its elements differ from the correctly rounded oracle (measured 2026-10-12: 51.6 %, max 478 ulp of a
     cancelling element's binade). It is held to THAT inside: one ulp plus 2^-8 of the uncancelled sum, no fraction
     clause. The split path is the one that is fp32-level inside."""
-    from nbxtensor.tensor import NBXDtype
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     rng = np.random.default_rng(L + D)
     q32, k32, v32 = (rng.standard_normal((1, 2, L, D)).astype(np.float32) for _ in range(3))
     q, k, v = (_bf16_round(x).astype(np.float32) for x in (q32, k32, v32))     # the bf16 values, exactly

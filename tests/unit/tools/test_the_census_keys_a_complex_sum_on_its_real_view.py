@@ -19,7 +19,7 @@ sys.path.insert(0, str(REPO / "tools"))
 import derived_census as D  # noqa: E402
 from neurobrix.kernels import census as _census  # noqa: E402
 from nbxtensor.ops import launch_keys as LK  # noqa: E402
-from nbxtensor.tensor import NBXDtype  # noqa: E402
+from nbxtensor.dtype.nbx_dtype import NBXDtype  # noqa: E402
 
 S = lambda v: {"type": "scalar", "value": v}       # noqa: E731
 T = lambda t: {"type": "tensor", "tensor_id": t}   # noqa: E731

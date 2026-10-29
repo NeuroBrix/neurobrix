@@ -19,7 +19,8 @@ import struct
 import numpy as np
 import pytest
 
-from nbxtensor.tensor import DeviceAllocator, NBXDtype
+from nbxtensor.memory.allocator import DeviceAllocator
+from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.dtype.convert import f32_to_bf16_bits as float32_to_bf16_bits
 
 

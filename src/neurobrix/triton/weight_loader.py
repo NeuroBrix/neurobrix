@@ -24,7 +24,10 @@ from typing import Dict, Optional, Set
 
 import numpy as np
 
-from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator, dtype_size, _set_device
+from nbxtensor.tensor import NBXTensor
+from nbxtensor.dtype.nbx_dtype import NBXDtype, dtype_size
+from nbxtensor.memory.allocator import DeviceAllocator
+from nbxtensor.backend.runtime import _set_device
 from nbxtensor.dtype.convert import bf16_bits_to_f16, f32_to_bf16_bits
 from nbxtensor.dtype.itemsize import itemsize
 from nbxtensor.shape import contiguous_strides, numel
@@ -543,7 +546,7 @@ def _load_to_pinned_cpu(
 
     # Pinned host memory: a slice of the component's one block when the load sized it, else its own block.
     if host_arena is not None:
-        from nbxtensor.tensor import dtype_size as _dsize
+        from nbxtensor.dtype.nbx_dtype import dtype_size as _dsize
         ptr = host_arena.alloc((math.prod(shape) if shape else 1) * _dsize(target_dtype))
         dst = NBXTensor(ptr, tuple(shape), contiguous_strides(tuple(shape)), target_dtype, 'cpu',
                         owns_data=False, device_idx=0, base=host_arena, pinned=True)

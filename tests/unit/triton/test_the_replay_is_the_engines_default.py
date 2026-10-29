@@ -36,7 +36,7 @@ def test_a_per_op_callback_is_refused_by_name(capsys):
 
 
 def test_an_idle_slab_is_released_when_its_card_needs_the_room(monkeypatch, capsys):
-    from nbxtensor.tensor import DeviceAllocator
+    from nbxtensor.memory.allocator import DeviceAllocator
     from neurobrix.triton import replay
     assert replay.release_idle_slabs in DeviceAllocator._idle_reclaimers
 

@@ -286,7 +286,7 @@ def _prune_flash(configs, named_args, **kwargs):
     """A tile under the backend's smallest correct attention tile (`fa_min_tile`), or whose [BLOCK_M, BLOCK_N] scores
     tile is over the largest 2-D reduction the backend stages (`reduce_tile_max`: the row max and row sum reduce it),
     is not built. None left is refused by name, never answered with the first config."""
-    from nbxtensor.tensor import fa_min_tile, reduce_tile_max
+    from nbxtensor.backend.capabilities import fa_min_tile, reduce_tile_max
     floor, most = fa_min_tile(), reduce_tile_max()
     keep = [c for c in configs if min(c.kwargs["BLOCK_M"], c.kwargs["BLOCK_N"]) >= floor
             and c.kwargs["BLOCK_M"] * c.kwargs["BLOCK_N"] <= most]

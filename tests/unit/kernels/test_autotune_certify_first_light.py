@@ -15,13 +15,14 @@ import pytest
 
 from nbxtensor.ops import autotune_certified as C
 from neurobrix.kernels import autotune_certify as Z
+import nbxtensor.memory.allocator as _nbx_allocator  # the module the moved names live in (M2 cut of tensor.py)
 
 cuda = pytest.importorskip("triton")
 
 
 def _cuda_available():
     nbx = pytest.importorskip("nbxtensor.tensor")
-    device_count = nbx.DeviceAllocator.device_count   # a renamed symbol raises here, loudly
+    device_count = _nbx_allocator.DeviceAllocator.device_count   # a renamed symbol raises here, loudly
     try:
         return device_count() > 0
     except Exception:

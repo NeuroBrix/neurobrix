@@ -44,7 +44,8 @@ except ModuleNotFoundError:  # script-mode under the pytest-less GPU venv
 
 import numpy as np
 
-from nbxtensor.tensor import NBXTensor, DeviceAllocator
+from nbxtensor.tensor import NBXTensor
+from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.ops import wrappers as W
 
 BOUND = 2e-03  # same derived bound as the decode oracles
@@ -311,7 +312,7 @@ def _gpu_classes():
     allocation, so the answer cannot disagree with it.
     """
     try:
-        from nbxtensor.tensor import DeviceAllocator
+        from nbxtensor.memory.allocator import DeviceAllocator
         devs = DeviceAllocator.visible_device_memory()
     except Exception:
         return None, None
@@ -367,7 +368,7 @@ def _rig_cards_or_skip():
     """
     import pytest
 
-    from nbxtensor.tensor import _detect_gpu_backend
+    from nbxtensor.backend.runtime import _detect_gpu_backend
 
     try:
         backend = _detect_gpu_backend()
@@ -390,7 +391,7 @@ def _route_spy(q_shape, kv_shape, device_idx):
         t = NBXTensor.empty(shape, dtype="float16",
                             device=f"cuda:{device_idx}")
         z = np.zeros(shape, dtype=np.float16)
-        from nbxtensor.tensor import DeviceAllocator
+        from nbxtensor.memory.allocator import DeviceAllocator
         DeviceAllocator.memcpy(t.data_ptr(),
                                z.ctypes.data, z.nbytes, kind=1)  # H2D
         return t
@@ -475,7 +476,8 @@ def test_32g_pow2_window_keeps_prefix_route_on_device(without_matrix_unit) -> No
 def test_chunk_retry_halves_on_malloc_refusal_and_matches() -> None:
     import numpy as np
     import nbxtensor.ops.wrappers as W
-    from nbxtensor.tensor import NBXTensor, DeviceAllocator
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.memory.allocator import DeviceAllocator
     try:
         DeviceAllocator.set_device(0)
     except Exception:
@@ -493,7 +495,7 @@ def test_chunk_retry_halves_on_malloc_refusal_and_matches() -> None:
     W._sdpa_math_min_chunk_rows = lambda: 128   # the arch row block (yml), pinned
     state = {"calls": 0, "refused": False}
 
-    from nbxtensor.tensor import DeviceOOMError
+    from nbxtensor.memory.allocator import DeviceOOMError
 
     def flaky(*a, **kw):
         state["calls"] += 1
@@ -516,7 +518,8 @@ def test_chunk_retry_halves_on_malloc_refusal_and_matches() -> None:
 def test_chunk_retry_propagates_non_malloc_errors() -> None:
     import numpy as np
     import nbxtensor.ops.wrappers as W
-    from nbxtensor.tensor import NBXTensor, DeviceAllocator
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.memory.allocator import DeviceAllocator
     try:
         DeviceAllocator.set_device(0)
     except Exception:

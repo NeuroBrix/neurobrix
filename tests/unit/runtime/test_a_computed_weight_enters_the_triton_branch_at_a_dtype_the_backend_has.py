@@ -13,7 +13,8 @@ import numpy as np
 import pytest
 from neurobrix.core.runtime.graph_executor import computed_array_to_container
 from nbxtensor.dtype.convert import f32_to_bf16_bits
-from nbxtensor.tensor import NBXDtype, DeviceAllocator
+from nbxtensor.dtype.nbx_dtype import NBXDtype
+from nbxtensor.memory.allocator import DeviceAllocator
 
 
 def _grid():
@@ -24,7 +25,7 @@ def _grid():
 
 @pytest.mark.parametrize("target", ["bfloat16", "float16", "float32"])
 def test_the_values_are_the_formulas_whatever_the_backend(target):
-    from nbxtensor.tensor import _detect_gpu_backend
+    from nbxtensor.backend.runtime import _detect_gpu_backend
     if _detect_gpu_backend() is None:
         pytest.skip("no device")
     g = _grid()

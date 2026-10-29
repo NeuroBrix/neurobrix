@@ -30,7 +30,9 @@ import os
 from typing import Callable, Dict, List, Tuple
 
 from neurobrix.core.runtime.expert_residency import ExpertResidency
-from nbxtensor.tensor import DeviceAllocator as DA, NBXDtype, NBXTensor, dtype_size
+from nbxtensor.memory.allocator import DeviceAllocator as DA
+from nbxtensor.dtype.nbx_dtype import NBXDtype, dtype_size
+from nbxtensor.tensor import NBXTensor
 from nbxtensor.shape import numel
 
 _ALIGN = 256   # every projection starts on a 256-byte boundary (the widest vector load of any backend)

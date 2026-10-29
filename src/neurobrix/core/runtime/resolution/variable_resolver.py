@@ -127,7 +127,8 @@ class VariableResolver:
         each is reproducible per (seed, draw order)."""
         import os
         import numpy as np
-        from nbxtensor.tensor import NBXTensor, parse_dtype
+        from nbxtensor.tensor import NBXTensor
+        from nbxtensor.dtype.nbx_dtype import parse_dtype
         from nbxtensor.ops import wrappers as W
         dt = parse_dtype(str(dtype_str).replace("torch.", ""))
         dev = self.device if isinstance(self.device, str) else "cuda"

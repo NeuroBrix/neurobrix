@@ -37,6 +37,7 @@ from __future__ import annotations
 import inspect
 import os
 from pathlib import Path
+import nbxtensor.dtype.nbx_dtype as _nbx_dtype  # the module the moved names live in (M2 cut of tensor.py)
 _REPO = Path(__file__).resolve().parents[3]
 import subprocess
 import sys
@@ -44,6 +45,9 @@ import sys
 import pytest
 
 from nbxtensor import tensor as nt
+import nbxtensor.backend.capabilities as _nbx_capabilities
+import nbxtensor.backend.faults as _nbx_faults
+import nbxtensor.backend.runtime as _nbx_runtime
 from nbxtensor.ops.embedding import embedding_kernel, EMBEDDING_OOB
 from nbxtensor.ops.index_put_op import index_put_kernel, INDEX_PUT_OOB
 from nbxtensor.ops.index_select import index_select_kernel, INDEX_SELECT_OOB
@@ -113,12 +117,12 @@ def test_the_guarded_access_is_legal_even_before_the_refusal_lands():
 # ---------------------------------------------------------------------------
 
 def test_every_backend_says_whether_it_honours_a_device_assert():
-    table = nt._BACKEND_TRAPS_ON_DEVICE_ASSERT
+    table = _nbx_capabilities._BACKEND_TRAPS_ON_DEVICE_ASSERT
     assert table["cuda"] is True and table["hip"] is True
     assert table["metal"] is False, (
         "Metal computes the assert predicate and discards it — measured "
         "2026-09-10; a True here would disarm the only channel that works there")
-    assert set(table) == set(nt._GPU_BACKENDS) | {"metal"}, (
+    assert set(table) == set(_nbx_runtime._GPU_BACKENDS) | {"metal"}, (
         "a backend without a row would be guessed at, not asked")
 
 
@@ -127,20 +131,20 @@ def test_an_unknown_backend_is_refused_not_guessed(monkeypatch):
     # row for the live backend; on a CUDA machine that table answers. The
     # refusal under test is "no row for THIS backend", so the live backend is
     # made one the table cannot have (merge of 2026-09-13, semantic conflict).
-    monkeypatch.setattr(nt, "_detect_gpu_backend", lambda: "no-such-backend")
+    monkeypatch.setattr(_nbx_runtime, "_detect_gpu_backend", lambda: "no-such-backend")
     with pytest.raises(RuntimeError, match="ZERO FALLBACK"):
-        nt._backend_capability({"cuda": True}, "_T", "whether it does the thing")
+        _nbx_capabilities._backend_capability({"cuda": True}, "_T", "whether it does the thing")
 
 
 def test_a_disarmed_kernel_is_compiled_with_code_zero():
-    assert nt.device_fault_code("x: out of range", armed=False) == 0
-    assert nt.device_fault_code("x: out of range", armed=True) != 0
+    assert _nbx_faults.device_fault_code("x: out of range", armed=False) == 0
+    assert _nbx_faults.device_fault_code("x: out of range", armed=True) != 0
 
 
 def test_a_registered_fault_keeps_its_code():
-    first = nt.register_device_fault("test: a message of its own")
-    assert nt.register_device_fault("test: a message of its own") == first
-    assert nt.register_device_fault("test: a different message") != first
+    first = _nbx_faults.register_device_fault("test: a message of its own")
+    assert _nbx_faults.register_device_fault("test: a message of its own") == first
+    assert _nbx_faults.register_device_fault("test: a different message") != first
 
 
 # ---------------------------------------------------------------------------
@@ -157,16 +161,16 @@ def test_a_disarmed_channel_allocates_nothing(monkeypatch):
     kernels refuse an out-of-range index by name, six outputs identical,
     +0.13% wall.
     """
-    monkeypatch.setattr(nt, "_detect_gpu_backend", lambda: "cuda")
-    nt.device_fault_code_cached.cache_clear()
-    before = dict(nt._FAULT_BUFFERS)
+    monkeypatch.setattr(_nbx_runtime, "_detect_gpu_backend", lambda: "cuda")
+    _nbx_faults.device_fault_code_cached.cache_clear()
+    before = dict(_nbx_faults._FAULT_BUFFERS)
 
     spare = object()
-    ptr, code = nt.fault_channel("some: contract", spare)
+    ptr, code = _nbx_faults.fault_channel("some: contract", spare)
 
     assert code == 0, "CUDA honours the assert; the channel must be disarmed"
     assert ptr is spare, "a disarmed channel must hand back the tensor it was given"
-    assert nt._FAULT_BUFFERS == before, (
+    assert _nbx_faults._FAULT_BUFFERS == before, (
         "a disarmed channel allocated a buffer the kernel can never write to, "
         "and nothing frees it")
 
@@ -176,7 +180,7 @@ def test_a_disarmed_channel_allocates_nothing(monkeypatch):
 # unguarded and failed with `cudaErrorNoDevice` where its siblings skipped.
 def _no_device() -> bool:
     nbx = pytest.importorskip("nbxtensor.tensor")
-    empty, f32 = nbx.NBXTensor.empty, nbx.NBXDtype.float32   # renamed symbols raise here
+    empty, f32 = nbx.NBXTensor.empty, _nbx_dtype.NBXDtype.float32   # renamed symbols raise here
     try:
         empty((1,), f32, "cuda:0")
         return False
@@ -190,15 +194,15 @@ def test_an_armed_channel_uses_the_shared_buffer(monkeypatch):
     # the buffer is a real device allocation, and on a CUDA machine a swapped
     # backend table hands the CUDA runtime Metal's entry-point names — an
     # AttributeError alone, a segfault inside the full suite (2026-09-13).
-    monkeypatch.setattr(nt, "backend_traps_on_device_assert", lambda: False)
-    nt.device_fault_code_cached.cache_clear()
+    monkeypatch.setattr(_nbx_capabilities, "backend_traps_on_device_assert", lambda: False)
+    _nbx_faults.device_fault_code_cached.cache_clear()
 
     class _Spare:
         _device_idx = 0
 
-    ptr, code = nt.fault_channel("another: contract", _Spare())
+    ptr, code = _nbx_faults.fault_channel("another: contract", _Spare())
     assert code != 0
-    assert ptr is nt.device_fault_buffer(0), "the armed path must share one buffer"
+    assert ptr is _nbx_faults.device_fault_buffer(0), "the armed path must share one buffer"
 
 
 def test_no_wrapper_reaches_past_the_brick():
@@ -221,7 +225,7 @@ def test_no_wrapper_reaches_past_the_brick():
 _SUBPROCESS = r"""
 import sys, numpy as np
 import neurobrix  # the application: nbxtensor's host services
-from nbxtensor.tensor import NBXTensor, DeviceAllocator
+from nbxtensor.tensor import NBXTensor; from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.ops import wrappers as w
 kind, oob = sys.argv[1], sys.argv[2] == "oob"
 rows = np.arange(24, dtype=np.float32).reshape(6, 4)

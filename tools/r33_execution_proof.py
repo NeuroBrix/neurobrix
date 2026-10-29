@@ -54,7 +54,7 @@ CASES = [
      "import neurobrix; from nbxtensor.backend import metal_device"),
 
     ("reach the device (DeviceAllocator.get_device)",
-     "import neurobrix; from nbxtensor.tensor import DeviceAllocator\n"
+     "import neurobrix; from nbxtensor.memory.allocator import DeviceAllocator\n"
      "assert DeviceAllocator.get_device() is not None"),
 
     ("allocate + H2D + D2H through NBXTensor",

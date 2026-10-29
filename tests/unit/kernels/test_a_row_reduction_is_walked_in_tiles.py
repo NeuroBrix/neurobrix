@@ -44,7 +44,7 @@ def test_a_long_row_reduction_reserves_no_local_memory():
     code = textwrap.dedent("""
         import ctypes
         import neurobrix  # the application: nbxtensor's host services
-        from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator, _gpu_runtime
+        from nbxtensor.dtype.nbx_dtype import NBXDtype; from nbxtensor.tensor import NBXTensor; from nbxtensor.memory.allocator import DeviceAllocator; from nbxtensor.backend.runtime import _gpu_runtime
         from nbxtensor.ops import wrappers as W
         rt = _gpu_runtime()
         def used():

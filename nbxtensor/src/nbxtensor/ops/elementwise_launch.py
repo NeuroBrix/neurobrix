@@ -56,7 +56,8 @@ def ew_meta(n_elements: int) -> dict:
     if hit is not None:
         return hit
     from nbxtensor.ops.autotune_bucket import class_floor
-    from nbxtensor.tensor import NBXTensor, NBXDtype
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     from nbxtensor.host import need as _need
     _census = _need("census")()                 # the application's launch census (nbxtensor.host)
     from nbxtensor.ops.autotune_cache import key_of

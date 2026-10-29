@@ -82,7 +82,7 @@ def annotate(message: str, cause, shape: Optional[Sequence] = None) -> str:
     failure into one that reads as a memory problem.
     """
     try:
-        from nbxtensor.tensor import DeviceOOMError
+        from nbxtensor.memory.allocator import DeviceOOMError
     except Exception:          # pragma: no cover - import cycle safety
         return message
     if not isinstance(cause, DeviceOOMError):

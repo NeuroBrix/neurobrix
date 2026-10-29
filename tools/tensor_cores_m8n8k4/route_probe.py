@@ -1,7 +1,8 @@
 """Proves the wrapper takes the m8n8k4 route on volta (fp16) and agrees with the FMA flash path."""
 import sys, numpy as np
 import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
-from nbxtensor.tensor import NBXTensor, NBXDtype
+from nbxtensor.tensor import NBXTensor
+from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.ops import wrappers as W
 calls = []
 orig = W._flash_m8n8k4

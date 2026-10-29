@@ -32,6 +32,7 @@ from __future__ import annotations
 import re
 
 import pytest
+import nbxtensor.backend.runtime as _nbx_runtime  # the module the moved names live in (M2 cut of tensor.py)
 
 _ext = pytest.importorskip("triton_apple_backend",
                            reason="the Metal backend in force is not installed here")
@@ -39,7 +40,7 @@ _ext = pytest.importorskip("triton_apple_backend",
 
 def _has_metal():
     nbx_tensor = pytest.importorskip("nbxtensor.tensor")
-    detect = nbx_tensor._detect_gpu_backend   # a renamed probe raises here, loudly
+    detect = _nbx_runtime._detect_gpu_backend   # a renamed probe raises here, loudly
     try:
         return detect() == "metal"
     except Exception:

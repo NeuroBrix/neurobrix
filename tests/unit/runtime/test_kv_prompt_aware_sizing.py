@@ -23,6 +23,7 @@ import pytest
 
 from neurobrix.triton.dtype import NBXDtype
 from neurobrix.triton.paged_kv_cache import PagedTritonKVCache
+import nbxtensor.memory.allocator as _nbx_allocator  # the module the moved names live in (M2 cut of tensor.py)
 
 
 def _paged(**kw):
@@ -131,7 +132,7 @@ def test_run_mode_initial_zero_keeps_the_plan_size() -> None:
 
 def _gpu() -> bool:
     nbx = pytest.importorskip("nbxtensor.tensor")
-    set_device = nbx.DeviceAllocator.set_device   # a renamed symbol raises here, loudly
+    set_device = _nbx_allocator.DeviceAllocator.set_device   # a renamed symbol raises here, loudly
     try:
         set_device(0)
         return True

@@ -25,14 +25,16 @@ import pytest
 
 pytest.importorskip("triton")
 
-from nbxtensor.tensor import DeviceAllocator, NBXDtype, NBXTensor  # noqa: E402
+from nbxtensor.memory.allocator import DeviceAllocator  # noqa: E402
+from nbxtensor.dtype.nbx_dtype import NBXDtype
+from nbxtensor.tensor import NBXTensor
 
 E, K_, H, F, T = 8, 2, 64, 32, 5
 
 
 def _metal_or_skip():
     try:
-        from nbxtensor.tensor import _detect_gpu_backend
+        from nbxtensor.backend.runtime import _detect_gpu_backend
         if _detect_gpu_backend() != "metal":
             pytest.skip("a table pins on the Metal driver only; on CUDA it holds integers")
         from nbxtensor.backend import triton_ext_driver as drv

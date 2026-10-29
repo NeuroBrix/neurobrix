@@ -45,7 +45,7 @@ def _owns_its_cache(tmp_path, monkeypatch):
 def _dtypes():
     """Every dtype the oracle may be handed, named from the enum and not
     listed here, so a dtype added to the engine cannot stay untested."""
-    from nbxtensor.tensor import NBXDtype
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     wanted = ("float32", "float16", "bfloat16")
     return [getattr(NBXDtype, n) for n in wanted if hasattr(NBXDtype, n)]
 
@@ -59,7 +59,7 @@ def _copy_path(t):
     of this did and what made the bf16 case fail inside the test rather than
     inside the property.
     """
-    from nbxtensor.tensor import NBXDtype
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     from nbxtensor.dtype.convert import bf16_bits_to_f32
 
     host = t.to_cpu()

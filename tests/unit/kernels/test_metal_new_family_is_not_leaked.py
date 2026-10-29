@@ -16,12 +16,15 @@ import pytest
 
 from nbxtensor.backend import metal_device
 from nbxtensor import tensor as nbx_tensor
-from nbxtensor.tensor import DeviceAllocator, NBXDtype, NBXTensor
+import nbxtensor.backend.runtime as _nbx_runtime
+from nbxtensor.memory.allocator import DeviceAllocator
+from nbxtensor.dtype.nbx_dtype import NBXDtype
+from nbxtensor.tensor import NBXTensor
 
 
 def _on_metal() -> bool:
     try:
-        return nbx_tensor._detect_gpu_backend() == "metal"
+        return _nbx_runtime._detect_gpu_backend() == "metal"
     except Exception:
         return False
 

@@ -27,6 +27,7 @@ from __future__ import annotations
 import os
 import threading
 from typing import List, Any, Dict, Optional, Set
+import nbxtensor.memory.allocator as _nbx_allocator  # the module the moved names live in (M2 cut of tensor.py)
 
 _RECORD_LOCK = threading.Lock()
 _RECORDED: Set[str] = set()
@@ -314,7 +315,8 @@ def _shadow_params_for(executor, nbx_path, component) -> Dict[str, Any]:
     compute dtype (`weight_loader.stored_dtype_in_compute`, the loader's own rule).
     Nothing is opened."""
     from nbxtensor.ops import launch_keys as _lk
-    from nbxtensor.tensor import NBXTensor, parse_dtype
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.dtype.nbx_dtype import parse_dtype
     from neurobrix.triton.weight_loader import stored_dtype_in_compute
     tensors = (executor._dag or {}).get("tensors", {})
     # The convolution weights the loader stores KRSC on this arch (`conv.weight_layout`): the
@@ -359,8 +361,9 @@ def install(hardware: Optional[str] = None, hardware_profile: Optional[dict] = N
     if _ACTIVE["census"]:
         return
     from nbxtensor import tensor as _nt
+    import nbxtensor.memory.allocator as _nbx_allocator
     from nbxtensor.backend import launcher as _launcher
-    DA = _nt.DeviceAllocator
+    DA = _nbx_allocator.DeviceAllocator
     # THE DOOR: a shadow is proven unable to touch a card only when no card can be seen.
     # With a device visible, a path this module does not cover would succeed on real
     # hardware in silence; behind the door it fails loudly (error 100). Refused at entry,

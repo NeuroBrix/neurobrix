@@ -49,7 +49,7 @@ _UNKNOWN = ["float4", "fp16", "bf16", "half", "", "torch.float4", "float8_e4m3fn
 
 
 def _names():
-    from nbxtensor.tensor import NBXDtype
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     names = list(CORE.known_dtypes()) + _UNKNOWN + ["int4-g128-asym"]
     return names + ["torch." + n for n in CORE.known_dtypes()] + list(NBXDtype)
 
@@ -137,7 +137,7 @@ OLD_TRITON_CONSTANT = {"float16": 2, "bfloat16": 2, "float32": 4, "float64": 4, 
 @pytest.mark.parametrize("table", sorted(OLD_TABLES))
 @pytest.mark.parametrize("reader", [CORE, TRITON], ids=["core", "triton"])
 def test_every_old_table_value_is_reproduced(reader, table):
-    from nbxtensor.tensor import NBXDtype
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     for name, width in OLD_TABLES[table].items():
         key = NBXDtype[name] if table.startswith("kernels.nbx_tensor") else name
         assert reader.itemsize(key) == width, (table, name)
@@ -163,7 +163,7 @@ def test_the_old_narrowed_constant_widths_are_reproduced(reader):
 
 def test_the_live_readers_answer_from_the_table():
     """The re-pointed readers, read live: NBXTensor's sizes and the engines' attention widths."""
-    from nbxtensor.tensor import NBXDtype, dtype_size
+    from nbxtensor.dtype.nbx_dtype import NBXDtype, dtype_size
     from nbxtensor.dtype import itemsize as triton_itemsize
     for m in NBXDtype:
         assert dtype_size(m) == OLD_TABLES["kernels.nbx_tensor._DTYPE_SIZES"][m.name], m

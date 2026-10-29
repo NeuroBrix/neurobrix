@@ -169,7 +169,8 @@ def _synth(rng, shape, dtype):
     of 1 205 (Apple M4 Pro, 2026-09-22).
     """
     import numpy as np
-    from nbxtensor.tensor import NBXTensor, NBXDtype
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     x = np.ascontiguousarray((rng.standard_normal(shape) * 0.1).astype(np.float32))
     if str(dtype) in ("bfloat16", "bf16"):
         u = x.view(np.uint32)

@@ -68,7 +68,7 @@ def _require_room():
     # Flushing first makes the question answerable by the driver again, and
     # releasing the cache before a multi-gigabyte allocation is right anyway.
     try:
-        from nbxtensor.tensor import DeviceAllocator
+        from nbxtensor.memory.allocator import DeviceAllocator
         DeviceAllocator.empty_cache_pool()
     except Exception:
         pass

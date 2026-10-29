@@ -45,7 +45,7 @@ def _device_free_bytes():
     the right authority for a question about the engine's own device.
     """
     try:
-        from nbxtensor.tensor import DeviceAllocator
+        from nbxtensor.memory.allocator import DeviceAllocator
         free = DeviceAllocator.device_free_bytes(None)
         return int(free) if free and free > 0 else 0
     except Exception:                                    # noqa: BLE001
@@ -75,7 +75,7 @@ def _require_room():
     # Flushing first makes the question answerable by the driver again, and
     # releasing the cache before a multi-gigabyte allocation is right anyway.
     try:
-        from nbxtensor.tensor import DeviceAllocator
+        from nbxtensor.memory.allocator import DeviceAllocator
         DeviceAllocator.empty_cache_pool()
     except Exception:
         pass

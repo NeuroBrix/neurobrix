@@ -31,7 +31,7 @@ def main() -> int:
         rc = int(e.code or 0)
     if triton:
         import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
-        from nbxtensor.tensor import DeviceAllocator
+        from nbxtensor.memory.allocator import DeviceAllocator
         for d in sorted(DeviceAllocator._cuda_peak_bytes):
             print(f"[PEAK] engine=triton cuda:{d} peak={DeviceAllocator._cuda_peak_bytes[d] / 2**20:.0f}", flush=True)
     else:

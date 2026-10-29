@@ -8,7 +8,8 @@ All tensors are NBXTensor. No torch imports.
 import numpy as np
 from typing import Dict, List, Optional
 
-from nbxtensor.tensor import NBXTensor, DeviceAllocator
+from nbxtensor.tensor import NBXTensor
+from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.ops import wrappers as w
 
 

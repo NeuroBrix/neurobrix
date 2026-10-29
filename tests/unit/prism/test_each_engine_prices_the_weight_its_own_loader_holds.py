@@ -31,7 +31,7 @@ from neurobrix.core.dtype.engine import DtypeEngine
 from neurobrix.core.io.weight_loader import WeightLoader
 from neurobrix.core.prism.runtime_widths import conservative_contract, runtime_dtypes
 from neurobrix.core.runtime.expert_files import held_dtype
-from nbxtensor.tensor import parse_dtype
+from nbxtensor.dtype.nbx_dtype import parse_dtype
 from neurobrix.triton.weight_loader import stored_dtype_in_compute
 
 NONE = conservative_contract("test: no record")

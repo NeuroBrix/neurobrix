@@ -13,7 +13,8 @@ import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
-from nbxtensor.tensor import NBXTensor, DeviceAllocator
+from nbxtensor.tensor import NBXTensor
+from nbxtensor.memory.allocator import DeviceAllocator
 
 # Triton hands 16-bit operands two per 32-bit register: A and B arrive as 4 "r" each, ($8, $9) = (a0 a1, a2 a3).
 ASM: gl.constexpr = gl.constexpr(

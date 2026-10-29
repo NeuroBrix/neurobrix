@@ -54,7 +54,7 @@ def _drain_device(execution_mode: str) -> None:
         if torch.cuda.is_available():
             torch.cuda.synchronize()
     else:
-        from nbxtensor.tensor import DeviceAllocator
+        from nbxtensor.memory.allocator import DeviceAllocator
         if DeviceAllocator.device_count() > 0:
             DeviceAllocator.device_synchronize()
 

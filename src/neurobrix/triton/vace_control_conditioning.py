@@ -27,7 +27,9 @@ from typing import Any, Optional
 
 import numpy as np
 
-from nbxtensor.tensor import NBXTensor, DeviceAllocator, NBXDtype
+from nbxtensor.tensor import NBXTensor
+from nbxtensor.dtype.nbx_dtype import NBXDtype
+from nbxtensor.memory.allocator import DeviceAllocator
 from neurobrix.core.runtime.registry_flags import get_component_flag
 
 CONTROL_VAR = "global.control_hidden_states"

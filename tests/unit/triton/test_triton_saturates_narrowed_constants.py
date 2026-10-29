@@ -11,7 +11,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from nbxtensor.tensor import NBXDtype, NBXTensor, DeviceAllocator
+from nbxtensor.dtype.nbx_dtype import NBXDtype
+from nbxtensor.tensor import NBXTensor
+from nbxtensor.memory.allocator import DeviceAllocator
 from neurobrix.triton.dtype import TritonDtypeEngine, saturate_scalar
 
 F32_MIN = float(np.finfo(np.float32).min)          # -3.4028234663852886e38

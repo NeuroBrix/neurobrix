@@ -18,13 +18,14 @@ import numpy as np
 import pytest
 
 from nbxtensor.ops import wrappers as W
-from nbxtensor.tensor import DeviceAllocator, NBXTensor
+from nbxtensor.memory.allocator import DeviceAllocator
+from nbxtensor.tensor import NBXTensor
 
 
 def _no_gpu_reason():
     """Why these cells cannot run here, or None. Only the ABSENCE of a device or of the profile's split rows skips: a
     broken kernel module, a refused profile or a failing allocator raises at collection, never reads as a skip."""
-    from nbxtensor.tensor import _gpu_runtime
+    from nbxtensor.backend.runtime import _gpu_runtime
     try:
         _gpu_runtime()
     except (OSError, RuntimeError) as exc:           # no CUDA/HIP runtime library on this host
@@ -145,7 +146,7 @@ def test_a_bfloat16_operand_through_the_split_rounds_to_the_oracle(monkeypatch):
     sum, not with its result; first measurement 2026-10-12: 0.010 % off, max exactly 2.00 'ulp' — the gate's ulp
     constant was 2^-8 where bfloat16's spacing is 2^-7, so a one-ulp element read as two). An fp16-level inside would put half the elements off. The FMA path on the
     same inputs is held to the same bound."""
-    from nbxtensor.tensor import NBXDtype
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     from nbxtensor.dtype.convert import bf16_bits_to_f32 as bf16_carrier_to_float32, f32_to_bf16_bits as float32_to_bf16_bits
 
     def bf16(x):

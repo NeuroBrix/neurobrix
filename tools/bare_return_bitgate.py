@@ -29,7 +29,7 @@ def _nbx(arr):
 
 
 def _host(t, np_dtype):
-    from nbxtensor.tensor import DeviceAllocator
+    from nbxtensor.memory.allocator import DeviceAllocator
     buf = np.empty(t._nbytes, dtype=np.uint8)
     DeviceAllocator.memcpy(buf.ctypes.data, t.contiguous().data_ptr(), t._nbytes, 2)
     return buf.view(np_dtype).reshape(t.shape)
@@ -88,7 +88,9 @@ def capture_grid_sampler(rng, out):
 def capture_fused_moe(rng, out):
     import triton
     import triton.language as tl
-    from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
+    from nbxtensor.memory.allocator import DeviceAllocator
     from nbxtensor.ops.fused_moe import (fused_moe_kernel, fused_moe_wna16_kernel,
                                                  fused_moe_fp32b_kernel)
     from nbxtensor.ops.dequant_gemv import dequant_int4_kernel
@@ -140,7 +142,7 @@ def capture_fused_moe(rng, out):
 
 
 def capture(out_dir: Path) -> int:
-    from nbxtensor.tensor import DeviceAllocator
+    from nbxtensor.memory.allocator import DeviceAllocator
     DeviceAllocator.set_device(0)
     out_dir.mkdir(parents=True, exist_ok=True)
     for name, fn in (("fft", capture_fft), ("grid_sampler", capture_grid_sampler), ("fused_moe", capture_fused_moe)):

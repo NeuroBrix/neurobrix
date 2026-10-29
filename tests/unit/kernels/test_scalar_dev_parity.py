@@ -58,7 +58,7 @@ def _dev0d(value, np_dtype):
 
 
 def _download(t) -> np.ndarray:
-    from nbxtensor.tensor import DeviceAllocator
+    from nbxtensor.memory.allocator import DeviceAllocator
     buf = np.empty(t._nbytes, dtype=np.uint8)
     DeviceAllocator.memcpy(buf.ctypes.data, t.data_ptr(), t._nbytes, 2)
     return buf

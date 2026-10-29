@@ -12,7 +12,9 @@ import numpy as np
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator, parse_dtype
+from nbxtensor.tensor import NBXTensor
+from nbxtensor.dtype.nbx_dtype import NBXDtype, parse_dtype
+from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.memory.device_transfer import parse_device_idx
 
 from neurobrix.triton.generator import TritonGenerator
@@ -106,7 +108,7 @@ def _phase_mem_note() -> str:
     exactly what these two stamps decide, and it could not be read.
     """
     import os as _os
-    from nbxtensor.tensor import DeviceAllocator as _DA
+    from nbxtensor.memory.allocator import DeviceAllocator as _DA
     d = _DA.get_device()
     live = _DA._cuda_live_bytes.get(d, 0) / 2**20
     pooled = _DA._pool_cached_bytes.get(d, 0) / 2**20
@@ -262,7 +264,7 @@ class TritonAutoregressiveHandler:
         # stamp per phase boundary; the prefill stamp waits for the GPU.
         # R30 mirror of core/flow/autoregressive.py.
         from neurobrix.core.runtime.phase_trace import mark as _phase_mark
-        from nbxtensor.tensor import DeviceAllocator as _DA
+        from nbxtensor.memory.allocator import DeviceAllocator as _DA
         from nbxtensor.memory.device_transfer import parse_device_idxs as _pdi
 
         def _dev_sync():  # every device of the (possibly compound) primary device
@@ -322,12 +324,12 @@ class TritonAutoregressiveHandler:
                     while flat.ndim > 1:
                         flat = flat[0]
                     # NBXTensor → numpy via to(fp32)
-                    from nbxtensor.tensor import NBXDtype as _NBX
+                    from nbxtensor.dtype.nbx_dtype import NBXDtype as _NBX
                     flat = flat.to(_NBX.float32)
                     n = flat.numel()
                     import ctypes as _ct
                     buf = (_ct.c_float * n)()
-                    from nbxtensor.tensor import DeviceAllocator as _DA
+                    from nbxtensor.memory.allocator import DeviceAllocator as _DA
                     _DA.memcpy(_ct.addressof(buf), flat.data_ptr(),
                                n * 4, kind=2)
                     vals = list(buf)
@@ -371,7 +373,8 @@ class TritonAutoregressiveHandler:
             # for triton-seq-vs-sequential decode parity. R33-pure scalar read
             # (ctypes + DeviceAllocator, no torch).
             if _os_dl.environ.get("NBX_DEBUG_DECODE") == "1" and step_idx < 15:
-                from nbxtensor.tensor import NBXDtype as _NBXdt, DeviceAllocator as _DAdt
+                from nbxtensor.dtype.nbx_dtype import NBXDtype as _NBXdt
+                from nbxtensor.memory.allocator import DeviceAllocator as _DAdt
                 import ctypes as _ctdt
                 _tk = next_token
                 while hasattr(_tk, "ndim") and _tk.ndim > 1:

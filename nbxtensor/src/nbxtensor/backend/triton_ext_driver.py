@@ -454,7 +454,7 @@ def _resident_acquire(addr: int) -> int:
     """Pin one wrap of the whole allocation containing `addr` for the scope's
     lifetime (`_RESIDENT_WRAPS` holds it); returns base."""
     import numpy as np
-    from nbxtensor.tensor import DeviceAllocator
+    from nbxtensor.memory.allocator import DeviceAllocator
 
     size = DeviceAllocator._cuda_ptr_size.get(addr)
     base = addr
@@ -494,7 +494,7 @@ def pinned_gpu_address(addr: int) -> int:
     is therefore the one address authority: its gpu_address plus the CPU
     offset inside the allocation, computable on the host with no launch.
     """
-    from nbxtensor.tensor import DeviceAllocator
+    from nbxtensor.memory.allocator import DeviceAllocator
     size = DeviceAllocator._cuda_ptr_size.get(addr)
     base = addr
     if size is None:
@@ -635,7 +635,7 @@ def _buffer_for(addr: int, ty: str, extent: Optional[int] = None):
         raise RuntimeError(
             "the triton-ext driver was handed a null pointer parameter; its "
             "launcher has no slot for one")
-    from nbxtensor.tensor import DeviceAllocator
+    from nbxtensor.memory.allocator import DeviceAllocator
 
     size = DeviceAllocator._cuda_ptr_size.get(addr)
     base = addr
@@ -701,7 +701,7 @@ def _buffer_for(addr: int, ty: str, extent: Optional[int] = None):
 
 
 def _containing_allocation(addr: int) -> Tuple[int, int]:
-    from nbxtensor.tensor import DeviceAllocator
+    from nbxtensor.memory.allocator import DeviceAllocator
     hit = DeviceAllocator.containing(addr)
     if hit is not None:
         return hit

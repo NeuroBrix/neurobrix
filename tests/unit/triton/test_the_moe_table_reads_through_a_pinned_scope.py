@@ -22,7 +22,8 @@ import pytest
 triton = pytest.importorskip("triton")
 import triton.language as tl  # noqa: E402
 
-from nbxtensor.tensor import NBXDtype, NBXTensor  # noqa: E402
+from nbxtensor.dtype.nbx_dtype import NBXDtype  # noqa: E402
+from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.convert import bf16_bits_to_f32 as bf16_carrier_to_float32  # noqa: E402
 from nbxtensor.backend.launcher import launch  # noqa: E402
 from nbxtensor.ops.fused_moe import fused_moe_kernel  # noqa: E402
@@ -33,7 +34,7 @@ BM, BN, BK = 16, 64, 32
 
 def _metal_or_skip():
     try:
-        from nbxtensor.tensor import _detect_gpu_backend
+        from nbxtensor.backend.runtime import _detect_gpu_backend
         if _detect_gpu_backend() != "metal":
             pytest.skip("the pinned-table contract is this driver's")
         from nbxtensor.backend import triton_ext_driver as d

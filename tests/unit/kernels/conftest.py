@@ -7,6 +7,7 @@ from ._rig import a_free_rig, rig_reason  # noqa: F401
 
 
 import pytest
+import nbxtensor.backend.capabilities as _nbx_capabilities  # the module the moved names live in (M2 cut of tensor.py)
 
 
 @pytest.fixture
@@ -26,6 +27,7 @@ def host_backend_fp64(monkeypatch):
     this host's hardware profile (`precision.kernels_carry_fp64.triton`), restored after the cell."""
     from neurobrix.core.prism.autodetect import load_default_profile
     from nbxtensor import tensor as T
+    import nbxtensor.backend.capabilities as _nbx_capabilities
     from neurobrix.triton.dtype import profile_triton_has_fp64
-    monkeypatch.setattr(T, "_BACKEND_HAS_FP64", None)
-    T.set_backend_has_fp64(profile_triton_has_fp64(load_default_profile()))
+    monkeypatch.setattr(_nbx_capabilities, "_BACKEND_HAS_FP64", None)
+    _nbx_capabilities.set_backend_has_fp64(profile_triton_has_fp64(load_default_profile()))

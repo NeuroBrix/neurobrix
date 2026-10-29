@@ -387,7 +387,7 @@ def test_an_nbx_dtype_is_named_by_its_member_not_its_string(monkeypatch):
     and the pass refused Sana-4K's text encoder at plan time ("unknown dtype name '1'", 2026-09-28 12:16).
     The name is read from the member. RED on 43b307ad: this test forces the 3.11 str() on 3.10."""
     from neurobrix.core.prism import runtime_widths as RW
-    from nbxtensor.tensor import NBXDtype
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     monkeypatch.setattr(NBXDtype, "__str__", lambda self: str(int(self)))
     assert str(NBXDtype.bfloat16) == "1"
     assert RW._nbx_name(NBXDtype.bfloat16) == "bfloat16"
@@ -469,7 +469,7 @@ def test_the_mirrors_answer_what_the_engines_execute():
     torch = pytest.importorskip("torch")
     from neurobrix.core.dtype.engine import DtypeEngine
     from nbxtensor.ops import wrappers as _wr
-    from nbxtensor.tensor import NBXDtype
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     from neurobrix.triton.dtype import TritonDtypeEngine
 
     class Fake:
@@ -654,7 +654,7 @@ def test_a_profile_with_no_device_prices_agreeing_operands_and_refuses_disagreei
     import pytest as _pt
     from neurobrix.core.prism import load_profile
     from nbxtensor.ops.launch_keys import sdpa_operand_dtypes
-    from nbxtensor.tensor import NBXDtype as D
+    from nbxtensor.dtype.nbx_dtype import NBXDtype as D
     word = load_profile("cpu-only-x86").attention_operands
     assert sdpa_operand_dtypes(D.float16, D.float16, D.float16, alignment=word)[0] == D.float16
     with _pt.raises(ValueError, match="has no device"):

@@ -17,7 +17,7 @@ PROFILE = "c4140-4xv100-16GB-nvlink"
 
 
 def _untouched_cards(monkeypatch, total_mb=16151):
-    from nbxtensor.tensor import DeviceAllocator
+    from nbxtensor.memory.allocator import DeviceAllocator
     monkeypatch.setattr(solver_mod, "read_device_sharing", lambda _i: DeviceReading(
         kind="device", capacity_mb=total_mb, free_mb=total_mb, own_context_mb=0.0, measured=True,
         source="injected: an idle card this process has not touched"))

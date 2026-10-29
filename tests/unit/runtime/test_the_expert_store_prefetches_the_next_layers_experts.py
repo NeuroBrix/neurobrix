@@ -71,7 +71,7 @@ def test_a_prefetched_expert_evicted_before_its_call_is_counted_wasted():
 # ── the stores (card required) ────────────────────────────────────────────────────────────────────────────────
 def _card():
     pytest.importorskip("triton")
-    from nbxtensor.tensor import DeviceAllocator as DA
+    from nbxtensor.memory.allocator import DeviceAllocator as DA
     if DA.device_count() == 0:
         pytest.skip("no card")
 

@@ -15,7 +15,8 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("needs a CUDA device", allow_module_level=True)
 
-from nbxtensor.tensor import NBXTensor, DeviceAllocator as DA  # noqa: E402
+from nbxtensor.tensor import NBXTensor  # noqa: E402
+from nbxtensor.memory.allocator import DeviceAllocator as DA
 from neurobrix.kernels.torch_interop import nbx_to_torch  # noqa: E402
 from neurobrix.core.prism import chunked_region as CR  # noqa: E402
 

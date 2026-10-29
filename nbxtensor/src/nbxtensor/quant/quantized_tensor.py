@@ -24,7 +24,8 @@ binding/accounting code needs no special cases.
 
 from typing import Tuple
 
-from nbxtensor.tensor import NBXTensor, NBXDtype
+from nbxtensor.tensor import NBXTensor
+from nbxtensor.dtype.nbx_dtype import NBXDtype
 
 ENCODING = "int4-g128-asym"
 GROUP = 128

@@ -8,11 +8,12 @@ first — RED."""
 import os
 
 from nbxtensor import tensor as T
+import nbxtensor.backend.runtime as _nbx_runtime
 
 
 def test_the_environment_s_libcudart_leads_the_candidate_list():
-    libs = T._GPU_BACKENDS["cuda"]["rt_libs"]
-    env = T._environment_runtime_libs("nvidia.cuda_runtime", ["libcudart.so.12"])
+    libs = _nbx_runtime._GPU_BACKENDS["cuda"]["rt_libs"]
+    env = _nbx_runtime._environment_runtime_libs("nvidia.cuda_runtime", ["libcudart.so.12"])
     if not env:
         import pytest
         pytest.skip("this environment ships no nvidia.cuda_runtime package")
@@ -21,4 +22,4 @@ def test_the_environment_s_libcudart_leads_the_candidate_list():
 
 
 def test_an_absent_package_adds_nothing():
-    assert T._environment_runtime_libs("nvidia.no_such_runtime", ["libcudart.so.12"]) == []
+    assert _nbx_runtime._environment_runtime_libs("nvidia.no_such_runtime", ["libcudart.so.12"]) == []

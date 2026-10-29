@@ -63,7 +63,8 @@ def _probe():
 # rig-less checkout, and a skip is invisible in a count -- register 67, where
 # five reds became five skips exactly this way. So the import is at module
 # scope and unguarded; only the device is optional.
-from nbxtensor.tensor import NBXTensor, DeviceAllocator
+from nbxtensor.tensor import NBXTensor
+from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.ops import wrappers
 
 _TOTAL = DeviceAllocator.device_count()

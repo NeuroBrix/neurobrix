@@ -14,7 +14,8 @@ import pytest
 import torch
 
 from nbxtensor.ops.dispatch import _meta_select_scatter, _meta_slice_scatter
-from nbxtensor.tensor import DeviceAllocator, NBXTensor
+from nbxtensor.memory.allocator import DeviceAllocator
+from nbxtensor.tensor import NBXTensor
 
 OPEN = 2 ** 63 - 1
 

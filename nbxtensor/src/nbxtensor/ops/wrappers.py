@@ -16,15 +16,18 @@ import triton
 from nbxtensor.ops.autotune_bucket import bucket_of as _bucket_of
 from nbxtensor.ops import launch_keys as _lk
 
-from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator, _set_device, dtype_size
+from nbxtensor.tensor import NBXTensor
+from nbxtensor.dtype.nbx_dtype import NBXDtype, dtype_size
+from nbxtensor.memory.allocator import DeviceAllocator
+from nbxtensor.backend.runtime import _set_device
 from nbxtensor.shape import MAX_NDIM as _NBX_MAX_NDIM, broadcast_shapes, max_linear_offset
 from nbxtensor.dtype.itemsize import canonical_name
 from nbxtensor.dtype.promotion import binary_result, float_math_input
-from nbxtensor.tensor import parse_dtype
-from nbxtensor.tensor import DeviceOOMError
-from nbxtensor.tensor import fa_min_tile as _fa_min_tile
-from nbxtensor.tensor import reduce_tile_max as _reduce_tile_max
-from nbxtensor.tensor import device_fault_buffer, device_fault_code_cached, fault_channel
+from nbxtensor.dtype.nbx_dtype import parse_dtype
+from nbxtensor.memory.allocator import DeviceOOMError
+from nbxtensor.backend.capabilities import fa_min_tile as _fa_min_tile
+from nbxtensor.backend.capabilities import reduce_tile_max as _reduce_tile_max
+from nbxtensor.backend.faults import device_fault_buffer, device_fault_code_cached, fault_channel
 from nbxtensor.tensor import _upload_int64_array as _nbx_upload_int64, _saturating_cast as _nbx_saturating_cast
 from nbxtensor.ops._configs import sdpa_block_ceiling as _sdpa_block_ceiling
 from nbxtensor.ops._configs import sdpa_launch_meta as _sdpa_launch_meta
@@ -358,7 +361,7 @@ def set_hardware_profile(profile) -> None:
     # declared to nbx_tensor, whose integer-division widening and cast door ask it.
     from nbxtensor.host import need as _need   # the application's triton.dtype (nbxtensor.host)
     profile_triton_has_fp64 = _need("profile_triton_has_fp64")
-    from nbxtensor.tensor import set_backend_has_fp64
+    from nbxtensor.backend.capabilities import set_backend_has_fp64
     set_backend_has_fp64(profile_triton_has_fp64(profile))
 
 
@@ -1185,7 +1188,7 @@ def _int_division_widening_dtype(a, b):
     (exact below 2^53), float32 where it has none (Metal; exact below 2^24, and REFUSED by name
     above, because a float64 element there is misread, not computed — `backend_has_fp64`,
     2026-09-28). The magnitude check is one reduction per integer division, a rare op."""
-    from nbxtensor.tensor import backend_has_fp64
+    from nbxtensor.backend.capabilities import backend_has_fp64
     if backend_has_fp64():
         return NBXDtype.float64
     limit = 1 << 24
@@ -3868,7 +3871,7 @@ def _conv3d_via_conv2d(x, weight, bias, stride, padding, dilation, groups):
     Cout, Cin_g, kt, kh, kw = weight.shape
     _t_out = (T + 2 * pt - dt * (kt - 1) - 1) // st + 1
     if _t_out <= 0:
-        from nbxtensor.tensor import ImpossibleExtentError
+        from nbxtensor.memory.allocator import ImpossibleExtentError
         raise ImpossibleExtentError(
             f"convolution produces no frame: input {tuple(x.shape)}, weight "
             f"{tuple(weight.shape)}, temporal stride {st}, padding {pt}, dilation {dt} -> "
@@ -4135,7 +4138,7 @@ def conv2d_wrapper(
     out_h = (in_h + 2 * pad_h - dil_h * (kh - 1) - 1) // stride_h + 1
     out_w = (in_w + 2 * pad_w - dil_w * (kw - 1) - 1) // stride_w + 1
     if out_h <= 0 or out_w <= 0:
-        from nbxtensor.tensor import ImpossibleExtentError
+        from nbxtensor.memory.allocator import ImpossibleExtentError
         raise ImpossibleExtentError(
             f"convolution produces no output: input {tuple(x.shape)}, weight "
             f"{tuple(weight.shape)}, stride ({stride_h}, {stride_w}), padding ({pad_h}, "
@@ -5861,7 +5864,7 @@ def index_put_wrapper(x, indices, values, accumulate: bool = False):
     follow-up rather than silently mis-scattering (ZERO-FALLBACK — a
     visible crash beats the previous identity-lambda silent data loss).
     """
-    from nbxtensor.tensor import NBXDtype
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
 
     if not isinstance(indices, (list, tuple)):
         indices = [indices]

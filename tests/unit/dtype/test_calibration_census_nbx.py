@@ -14,11 +14,12 @@ import numpy as np
 import pytest
 
 from neurobrix.core.dtype import calibration as cal
+import nbxtensor.dtype.nbx_dtype as _nbx_dtype  # the module the moved names live in (M2 cut of tensor.py)
 
 
 def _gpu():
     nbx = pytest.importorskip("nbxtensor.tensor")
-    empty, f32 = nbx.NBXTensor.empty, nbx.NBXDtype.float32   # renamed symbols raise here
+    empty, f32 = nbx.NBXTensor.empty, _nbx_dtype.NBXDtype.float32   # renamed symbols raise here
     try:
         empty((1,), f32, "cuda:0")
         return True
@@ -40,7 +41,8 @@ def _bind_executing_profile(monkeypatch):
 
 @pytest.mark.skipif(not _gpu(), reason="needs a GPU")
 def test_census_observes_nbx_outputs(monkeypatch):
-    from nbxtensor.tensor import NBXTensor, DeviceAllocator
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.memory.allocator import DeviceAllocator
     _bind_executing_profile(monkeypatch)
     c = cal.RangeCensus()
     a = np.array([[1.0, -7.5], [3.0, 0.5]], dtype=np.float32)

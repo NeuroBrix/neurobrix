@@ -8,7 +8,9 @@ import numpy as np
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
-from nbxtensor.tensor import NBXTensor, DeviceAllocator, NBXDtype
+from nbxtensor.tensor import NBXTensor
+from nbxtensor.dtype.nbx_dtype import NBXDtype
+from nbxtensor.memory.allocator import DeviceAllocator
 
 ASM: gl.constexpr = gl.constexpr(
     "mma.sync.aligned.m8n8k4.row.col.f32.f16.f16.f32 {$0,$1,$2,$3,$4,$5,$6,$7}, {$8, $9}, {$12, $13},"

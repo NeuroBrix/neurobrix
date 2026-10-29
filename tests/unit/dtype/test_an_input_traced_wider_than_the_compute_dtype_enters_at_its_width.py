@@ -53,7 +53,7 @@ def test_wider_means_wider_than_the_graph_s_own_parameters(traced, params, compu
     ctx = ExecutionContext(dag={"tensors": meta}, device="cpu", dtype=getattr(torch, compute))
     assert TensorResolver(ctx).get_input_dtype("t") == getattr(torch, traced if wide else compute)
     pytest.importorskip("triton")
-    from nbxtensor.tensor import NBXDtype
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     from neurobrix.triton.dtype import TritonDtypeEngine
     eng = TritonDtypeEngine(NBXDtype[compute], has_native_bf16=True, graph_dtype=compute, stores_fp64=False)
     stored = {"float64": "float32"}.get(traced, traced)
@@ -82,7 +82,7 @@ def test_prism_prices_the_orpheus_input_at_the_compute_dtype():
 ])
 def test_the_triton_engine_s_entry_rule(traced, compute, stores_fp64, expected):
     pytest.importorskip("triton")
-    from nbxtensor.tensor import NBXDtype
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     from neurobrix.triton.dtype import TritonDtypeEngine
     eng = TritonDtypeEngine(NBXDtype[compute], has_native_bf16=True, graph_dtype=compute, stores_fp64=stores_fp64)
     assert eng._target_dtype_for_input("input::t", _meta(traced)) == NBXDtype[expected]

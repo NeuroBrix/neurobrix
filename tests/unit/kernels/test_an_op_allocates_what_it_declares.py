@@ -11,7 +11,7 @@ from nbxtensor.ops._cost import (Spec, elementwise_binary, elementwise_unary, na
 
 def _device():
     try:
-        from nbxtensor.tensor import DeviceAllocator
+        from nbxtensor.memory.allocator import DeviceAllocator
         DeviceAllocator.set_device(0)
         return True
     except Exception:
@@ -47,7 +47,7 @@ def _no_pool(monkeypatch):
 def _measure(fn):
     """The allocator's peak above its level during ONE call, after a first call (which may tune the kernel's
     configuration, the tuning's own buffers being no part of the op)."""
-    from nbxtensor.tensor import DeviceAllocator as DA
+    from nbxtensor.memory.allocator import DeviceAllocator as DA
     fn()
     DA.device_synchronize(0)
     base = DA._cuda_live_bytes.get(0, 0)
@@ -60,7 +60,8 @@ def _measure(fn):
 
 
 def _x(shape, dtype, transpose=False):
-    from nbxtensor.tensor import NBXDtype, NBXTensor
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
+    from nbxtensor.tensor import NBXTensor
     a = np.random.default_rng(0).standard_normal(shape).astype(np.float32)
     t = NBXTensor.from_numpy(a)
     if dtype != "float32":

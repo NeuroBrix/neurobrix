@@ -59,7 +59,7 @@ def test_the_two_engines_take_the_same_decision():
 def test_the_launch_keys_read_the_profile_in_force(monkeypatch):
     from nbxtensor.ops import launch_keys as LK
     from nbxtensor.ops import _configs
-    from nbxtensor.tensor import NBXDtype
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     F16, F32 = NBXDtype.float16, NBXDtype.float32
     volta = _profile("nvidia/volta.yml")
     monkeypatch.setattr(_configs, "active_vendor_profile", lambda: volta)

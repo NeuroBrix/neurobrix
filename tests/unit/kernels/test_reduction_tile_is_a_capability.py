@@ -20,7 +20,7 @@ import pytest
 
 
 def test_every_known_backend_has_a_row():
-    from nbxtensor.tensor import _BACKEND_REDUCE_TILE_MAX, _BACKEND_TRAPS_ON_DEVICE_ASSERT
+    from nbxtensor.backend.capabilities import _BACKEND_REDUCE_TILE_MAX, _BACKEND_TRAPS_ON_DEVICE_ASSERT
 
     missing = set(_BACKEND_TRAPS_ON_DEVICE_ASSERT) - set(_BACKEND_REDUCE_TILE_MAX)
     assert not missing, (
@@ -31,14 +31,14 @@ def test_every_known_backend_has_a_row():
 def test_cuda_takes_the_full_8192_tile_unchanged():
     """A shared-engine change is numerically inert on CUDA unless it fixes a
     bug, and this fixes one only on Metal: cuda/hip must still take 8x1024."""
-    from nbxtensor.tensor import _BACKEND_REDUCE_TILE_MAX
+    from nbxtensor.backend.capabilities import _BACKEND_REDUCE_TILE_MAX
 
     assert _BACKEND_REDUCE_TILE_MAX["cuda"] >= 8192
     assert _BACKEND_REDUCE_TILE_MAX["hip"] >= 8192
 
 
 def test_metal_caps_at_the_threadgroup():
-    from nbxtensor.tensor import _BACKEND_REDUCE_TILE_MAX
+    from nbxtensor.backend.capabilities import _BACKEND_REDUCE_TILE_MAX
 
     assert _BACKEND_REDUCE_TILE_MAX["metal"] == 1024
 
@@ -65,7 +65,7 @@ def test_the_clamp_shrinks_only_block_n_and_keeps_the_product_legal(monkeypatch)
 
 
 def test_a_backend_without_a_row_refuses():
-    from nbxtensor.tensor import _backend_capability
+    from nbxtensor.backend.capabilities import _backend_capability
 
     with pytest.raises(RuntimeError):
         _backend_capability({"no-such-backend": 1}, "_T", "its reduction tile cap")   # a table without the executing backend refuses on EVERY backend (with a cuda row it refused only on Metal)

@@ -25,7 +25,7 @@ import numpy as np
 
 from nbxtensor.ops import screen_oracle as S
 from nbxtensor.dtype.convert import f32_to_bf16_bits
-from nbxtensor.tensor import NBXDtype
+from nbxtensor.dtype.nbx_dtype import NBXDtype
 
 
 class _FakeTensor:

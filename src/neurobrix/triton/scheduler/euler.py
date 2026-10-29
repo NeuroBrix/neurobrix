@@ -129,7 +129,7 @@ class TritonEulerDiscreteScheduler(_EulerBase):
              return_dict: bool = True, **kwargs):
         if self.num_inference_steps is None:
             raise RuntimeError("ZERO FALLBACK: set_timesteps() before step()")
-        from nbxtensor.tensor import NBXDtype
+        from nbxtensor.dtype.nbx_dtype import NBXDtype
         model_output = self._maybe_chunk_variance(model_output, sample)
         if self._step_index is None:
             self._init_step_index(timestep)
@@ -157,7 +157,7 @@ class TritonEulerAncestralDiscreteScheduler(_EulerBase):
         if self.num_inference_steps is None:
             raise RuntimeError("ZERO FALLBACK: set_timesteps() before step()")
         from nbxtensor.ops.wrappers import randn_like_wrapper
-        from nbxtensor.tensor import NBXDtype
+        from nbxtensor.dtype.nbx_dtype import NBXDtype
         model_output = self._maybe_chunk_variance(model_output, sample)
         if self._step_index is None:
             self._init_step_index(timestep)

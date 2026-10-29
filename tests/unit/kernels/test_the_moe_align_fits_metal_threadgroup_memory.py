@@ -10,7 +10,8 @@ narrowed for Metal. Before the fix the 128-expert cases fail on Metal; a chunk w
 import numpy as np
 import pytest
 
-from nbxtensor.tensor import NBXDtype, NBXTensor
+from nbxtensor.dtype.nbx_dtype import NBXDtype
+from nbxtensor.tensor import NBXTensor
 
 
 def _host_align(ids, bs, E):

@@ -22,6 +22,7 @@ from __future__ import annotations
 import pytest
 
 from nbxtensor import tensor as nt
+import nbxtensor.backend.runtime as _nbx_runtime
 
 import neurobrix.kernels.torch_interop as _ti
 
@@ -30,25 +31,25 @@ def test_every_backend_says_whether_torch_selects_a_device():
     table = _ti._TORCH_HAS_DEVICE_SELECTION
     assert table["cuda"] is True and table["hip"] is True
     assert table["metal"] is False
-    assert set(table) == set(nt._GPU_BACKENDS) | {"metal"}, (
+    assert set(table) == set(_nbx_runtime._GPU_BACKENDS) | {"metal"}, (
         "a backend without a row would be guessed at, not asked")
 
 
 def test_an_unknown_backend_is_refused_not_guessed(monkeypatch):
-    monkeypatch.setattr(nt, "_detect_gpu_backend", lambda: "tenstorrent")
+    monkeypatch.setattr(_nbx_runtime, "_detect_gpu_backend", lambda: "tenstorrent")
     with pytest.raises(RuntimeError, match="ZERO FALLBACK"):
         _ti.set_torch_device(0)
 
 
 def test_a_single_device_backend_is_a_no_op_and_does_not_raise(monkeypatch):
-    monkeypatch.setattr(nt, "_detect_gpu_backend", lambda: "metal")
+    monkeypatch.setattr(_nbx_runtime, "_detect_gpu_backend", lambda: "metal")
     _ti.set_torch_device(0)
     _ti.set_torch_device(3)          # an index it cannot honour is still not an error
 
 
 def test_a_numbered_backend_is_asked(monkeypatch):
     """CUDA must still be told, or a launch lands on the wrong device."""
-    monkeypatch.setattr(nt, "_detect_gpu_backend", lambda: "cuda")
+    monkeypatch.setattr(_nbx_runtime, "_detect_gpu_backend", lambda: "cuda")
     seen = []
 
     class _FakeCuda:

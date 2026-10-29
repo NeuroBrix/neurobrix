@@ -22,6 +22,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import nbxtensor.backend.runtime as _nbx_runtime  # the module the moved names live in (M2 cut of tensor.py)
 
 SRC = Path(__file__).resolve().parents[3] / "src"
 
@@ -29,7 +30,7 @@ _ASK_BOTH = """
 import sys
 sys.path.insert(0, %r)
 import neurobrix  # the application: nbxtensor's host services
-from nbxtensor.tensor import _detect_gpu_backend, DeviceAllocator
+from nbxtensor.backend.runtime import _detect_gpu_backend; from nbxtensor.memory.allocator import DeviceAllocator
 try:
     name = _detect_gpu_backend()
 except Exception as exc:
@@ -77,7 +78,7 @@ def _backend_has_a_visibility_mask() -> bool:
 
     nbx = pytest.importorskip("nbxtensor.tensor")
     try:
-        return nbx._detect_gpu_backend() == "cuda"
+        return _nbx_runtime._detect_gpu_backend() == "cuda"
     except Exception:
         return False
 

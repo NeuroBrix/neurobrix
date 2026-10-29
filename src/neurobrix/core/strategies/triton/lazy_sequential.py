@@ -163,5 +163,5 @@ class LazySequentialStrategy(TritonStrategy):
             brick.cleanup()
         self._loaded_components.clear()
         self._pinned_components.clear()
-        from nbxtensor.tensor import DeviceAllocator
+        from nbxtensor.memory.allocator import DeviceAllocator
         DeviceAllocator.empty_cache_pool()

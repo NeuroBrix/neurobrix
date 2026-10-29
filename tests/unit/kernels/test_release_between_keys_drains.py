@@ -12,7 +12,7 @@ This test would have failed the day the probe was written, which is the only rea
 """
 import pytest
 
-from nbxtensor.tensor import DeviceAllocator
+from nbxtensor.memory.allocator import DeviceAllocator
 from neurobrix.kernels import autotune_certify as AC
 
 

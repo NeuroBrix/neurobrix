@@ -268,7 +268,7 @@ def _name(dtype) -> str:
 
 
 def _nbx(name: str):
-    from nbxtensor.tensor import parse_dtype
+    from nbxtensor.dtype.nbx_dtype import parse_dtype
     return parse_dtype(name)
 
 
@@ -589,7 +589,7 @@ class _Rules:
         a_eff = "bfloat16" if "bfloat16" in (a, b) else a      # :2217-2224 widest of the halves
         # the store is the launcher's own rule (`launch_keys.matmul_out_dtype`), called — never a second copy
         from nbxtensor.ops import launch_keys as _lk
-        from nbxtensor.tensor import NBXDtype as _D
+        from nbxtensor.dtype.nbx_dtype import NBXDtype as _D
         return _lk.matmul_out_dtype(_D[a_eff], int(m) if m is not None else 1, bool(force), bool(self.native_bf16),
                                     contract_half=bool(self.contract.safe)).name
 
@@ -770,7 +770,7 @@ class _TritonRules(_Rules):
     def _aligned(self, name, fl, ins) -> List[Tuple[str, str]]:
         """A self-managed wrapper's operands at launch, by the function it calls; a copy for each one moved."""
         from nbxtensor.ops import launch_keys as _lk
-        from nbxtensor.tensor import NBXDtype
+        from nbxtensor.dtype.nbx_dtype import NBXDtype
         d = dict(fl)
         at = lambda t: NBXDtype[d[t]] if t in d else None
         if name in ("conv2d", "_convolution") and len(ins) >= 2 and at(ins[0]) and at(ins[1]):
@@ -891,7 +891,7 @@ class _TritonRules(_Rules):
             # narrowest), so Wan's cross-attention (fp16 q/k, fp32 v) writes fp16.
             if len(fl) >= 3 and len({d for _t, d, _z in fl[:3]}) > 1:
                 from nbxtensor.ops import launch_keys as _lk
-                from nbxtensor.tensor import NBXDtype
+                from nbxtensor.dtype.nbx_dtype import NBXDtype
                 return _lk.sdpa_operand_dtypes(*(NBXDtype[d] for _t, d, _z in fl[:3]),
                                                alignment=self.attention_alignment(uid, fl))[0].name
             return self.first(fl) or self.default(op, fl)
@@ -1047,7 +1047,7 @@ class _AtenRules(_Rules):
             # to F.sdpa: the output is the ALIGNED q's.
             if len(fl) >= 3 and len({d for _t, d, _z in fl[:3]}) > 1:
                 from nbxtensor.ops import launch_keys as _lk
-                from nbxtensor.tensor import NBXDtype
+                from nbxtensor.dtype.nbx_dtype import NBXDtype
                 return _lk.sdpa_operand_dtypes(*(NBXDtype[d] for _t, d, _z in fl[:3]),
                                                alignment=self.attention_alignment(uid, fl))[0].name
             return self.first(fl) or self.default(op, fl)

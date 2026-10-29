@@ -11,7 +11,7 @@ import sys
 SCRIPT = r"""
 from neurobrix.kernels import census
 census.install()
-from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator
+from nbxtensor.dtype.nbx_dtype import NBXDtype; from nbxtensor.tensor import NBXTensor; from nbxtensor.memory.allocator import DeviceAllocator
 ptr = DeviceAllocator.malloc_host_pinned(4 * 6 * 4)
 host = NBXTensor(ptr, (4, 6), (6, 1), NBXDtype.float32, "cpu", 0, pinned=True)
 view = host[:, 1:4]

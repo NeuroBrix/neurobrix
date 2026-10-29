@@ -126,7 +126,7 @@ def build_expert_store_state(z3: Any, component_name: str, executor: Any, seq: A
     holders = _hold_experts_on_cards(z3, component_name, executor, seq, is_triton, layers)
     # A decode token's residency on the card (`NBXExpertStore.enable_device_decode`): half-precision experts copied
     # into slots (not bound in place), once the routing's reuse curve is recorded (the trace reads the routing back).
-    from nbxtensor.tensor import NBXDtype as _D
+    from nbxtensor.dtype.nbx_dtype import NBXDtype as _D
     if (is_triton and not store.in_place and store.trace is None
             and getattr(like[0], "_dtype", None) in (_D.float16, _D.bfloat16)):
         store.enable_device_decode({k: i for i, k in enumerate(layers)}, widest)

@@ -12,7 +12,8 @@ fp32 lambda/sigma path; the NBXTensor latent keeps its own dtype.
 import math
 import numpy as np
 
-from nbxtensor.tensor import NBXTensor, NBXDtype
+from nbxtensor.tensor import NBXTensor
+from nbxtensor.dtype.nbx_dtype import NBXDtype
 from .noise_schedules import (
     get_beta_schedule, betas_to_alphas_cumprod, alphas_cumprod_to_sigmas,
     get_timesteps_linspace,

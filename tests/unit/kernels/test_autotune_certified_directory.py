@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from nbxtensor.ops import autotune_certified as C
+import nbxtensor.backend.capabilities as _nbx_capabilities  # the module the moved names live in (M2 cut of tensor.py)
 
 KERNEL = "nbxtensor.ops.matmul.matmul_kernel"
 
@@ -59,13 +60,14 @@ def _one_16g_card():
     (`test_an_entry_serves_only_the_memory_class_it_covered.py`)."""
     from nbxtensor.ops import wrappers as W
     from nbxtensor import tensor as T
-    before = (W._NBX_HW_PROFILE, W._NBX_HAS_NATIVE_BF16, T._BACKEND_HAS_FP64)
+    import nbxtensor.backend.capabilities as _nbx_capabilities
+    before = (W._NBX_HW_PROFILE, W._NBX_HAS_NATIVE_BF16, _nbx_capabilities._BACKEND_HAS_FP64)
     dev = type("Dev", (), {"index": 0, "name": "Tesla V100-SXM2-16GB", "memory_mb": 16384,
                            "brand": "nvidia", "architecture": "volta"})()
     prof = type("Prof", (), {"devices": [dev], "has_native_bf16": False, "id": "auto-v100-16gb-16g"})()
     W.set_hardware_profile(prof)
     yield
-    W._NBX_HW_PROFILE, W._NBX_HAS_NATIVE_BF16, T._BACKEND_HAS_FP64 = before
+    W._NBX_HW_PROFILE, W._NBX_HAS_NATIVE_BF16, _nbx_capabilities._BACKEND_HAS_FP64 = before
 
 
 def _write(root: Path, entries, vendor="nvidia", profile="volta", dtype="fp32", kernel=KERNEL, fmt=C.FORMAT):

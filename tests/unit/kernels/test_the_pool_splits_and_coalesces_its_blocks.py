@@ -12,8 +12,10 @@ import random
 import pytest
 
 from nbxtensor import tensor as N
+import nbxtensor.memory.allocator as _nbx_allocator
+import nbxtensor.backend.runtime as _nbx_runtime
 
-DA = N.DeviceAllocator
+DA = _nbx_allocator.DeviceAllocator
 MB = 1 << 20
 
 
@@ -39,8 +41,8 @@ class FakeRT:
 @pytest.fixture
 def rt(monkeypatch):
     fake = FakeRT()
-    monkeypatch.setattr(N, "_gpu_runtime", lambda: fake)
-    monkeypatch.setattr(N, "_active_backend", lambda: {"malloc": "cudaMalloc", "free": "cudaFree"})
+    monkeypatch.setattr(_nbx_runtime, "_gpu_runtime", lambda: fake)
+    monkeypatch.setattr(_nbx_runtime, "_active_backend", lambda: {"malloc": "cudaMalloc", "free": "cudaFree"})
     monkeypatch.setattr(DA, "_pool_enabled_init", True, raising=False)
     for name, value in (("_pool_enabled", True), ("_blocks", {}), ("_pool_free", {}),
                         ("_pool_sizes", {}), ("_pool_cached_bytes", {}), ("_pool_cached_peak", {}),

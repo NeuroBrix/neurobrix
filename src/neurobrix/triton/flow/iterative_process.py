@@ -14,7 +14,9 @@ Handles diffusion models with denoising loop:
 import os
 from typing import Any, Callable, Dict, List, Optional
 
-from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator, parse_dtype
+from nbxtensor.tensor import NBXTensor
+from nbxtensor.dtype.nbx_dtype import NBXDtype, parse_dtype
+from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.memory.memory_pool import release_flow_memory
 from neurobrix.core.runtime.debug import DEBUG
 from neurobrix.core.flow.base import FlowContext
@@ -1118,7 +1120,7 @@ class TritonIterativeProcessHandler:
         for comp_name in list(loop_components) + pre_loop:
             import os as _os_dbg
             if _os_dbg.environ.get("NBX_LIVE_DUMP_ON_OOM") == "1":
-                from nbxtensor.tensor import DeviceAllocator as _DA
+                from nbxtensor.memory.allocator import DeviceAllocator as _DA
                 pre_live = sum(_DA._cuda_live_bytes.values())
                 self._unload_component(comp_name, force=True)
                 post_live = sum(_DA._cuda_live_bytes.values())

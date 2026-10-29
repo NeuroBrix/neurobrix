@@ -22,7 +22,10 @@ from nbxtensor.ops.dispatch import dispatch
 # single-device one left the real reproducer — real-esrgan-x8 at 16 GB, which
 # goes through the multi-device path — printing no advice at all (2026-09-18).
 from nbxtensor.memory.oom_advice import annotate as _oom_annotate
-from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator, parse_dtype, invalidate_current_device_cache
+from nbxtensor.tensor import NBXTensor
+from nbxtensor.dtype.nbx_dtype import NBXDtype, parse_dtype
+from nbxtensor.memory.allocator import DeviceAllocator
+from nbxtensor.backend.runtime import invalidate_current_device_cache
 from nbxtensor.ops.wrappers import deferred_drain_policy, _DEFERRED_DRAIN_FLOOR_DEFAULT
 
 from nbxtensor.memory.arena import Arena
@@ -176,7 +179,8 @@ def _watermark_sample(path: str, op_idx: int, op, arena, deferred_bytes) -> None
     try:
         import ctypes as _ct
         import json as _json
-        from nbxtensor.tensor import DeviceAllocator as _DA, _gpu_runtime as _rt_fn, _active_backend as _bk_fn
+        from nbxtensor.memory.allocator import DeviceAllocator as _DA
+        from nbxtensor.backend.runtime import _gpu_runtime as _rt_fn, _active_backend as _bk_fn
         rt, bk = _rt_fn(), _bk_fn()
         dev = _DA.get_device()
         live = _DA._cuda_live_bytes.get(dev, 0)
@@ -280,7 +284,7 @@ def _deferred_drain_context(exc, deferred_bytes: int, drain_cliff: int,
     longer drains the queue and retries (2026-10-11): an OOM is raised, and this line says whether
     the queue stayed inside its price — then the plan under-priced the op's live set — or not.
     Any other failure passes through with nothing appended."""
-    from nbxtensor.tensor import DeviceOOMError
+    from nbxtensor.memory.allocator import DeviceOOMError
     if not isinstance(exc, DeviceOOMError):
         return ""
     mb = 1024 * 1024
@@ -3447,7 +3451,8 @@ class TritonSequence:
             if t is None:
                 continue
             try:
-                from nbxtensor.tensor import NBXDtype, DeviceAllocator
+                from nbxtensor.dtype.nbx_dtype import NBXDtype
+                from nbxtensor.memory.allocator import DeviceAllocator
                 import ctypes as _ct
                 # Complex tensors: check finiteness on the real VIEW (interleaved
                 # real/imag floats), not by casting the complex elements to a
@@ -3499,7 +3504,8 @@ class TritonSequence:
         re/im) so l2/head cover BOTH components; memcpy'ing a complex buffer
         as N floats would read only the real parts (half the energy).
         """
-        from nbxtensor.tensor import NBXDtype, DeviceAllocator
+        from nbxtensor.dtype.nbx_dtype import NBXDtype
+        from nbxtensor.memory.allocator import DeviceAllocator
         import ctypes as _ct
         # Zero-numel guard: an empty tensor (e.g. a VACE all-generate control
         # prefix new_zeros [1,0,1536]) has a 0-size dim. The reduction path below
@@ -3759,7 +3765,7 @@ class TritonSequence:
         if not hasattr(self, "_slot_to_tid"):
             self._slot_to_tid = {s: t for t, s in self._tid_to_slot.items()}
         try:
-            from nbxtensor.tensor import DeviceAllocator
+            from nbxtensor.memory.allocator import DeviceAllocator
             recs = []
             for out_slot in op.output_slots:
                 t = arena[out_slot] if arena else None
@@ -3926,7 +3932,7 @@ class TritonSequence:
                 # find when leakage begins. Cheap: just a counter read.
                 # Gate hoisted to run start (C1).
                 if _live_dump_n > 0 and op_idx % _live_dump_n == 0:
-                    from nbxtensor.tensor import DeviceAllocator as _DA_p
+                    from nbxtensor.memory.allocator import DeviceAllocator as _DA_p
                     _live = _DA_p._cuda_live_bytes.get(_DA_p.get_device(), 0)
                     print(f"[LIVE_TRACK op_idx={op_idx} {op.op_uid}] live={_live/1024/1024:.0f}MB",
                           flush=True)
@@ -4035,7 +4041,7 @@ class TritonSequence:
                             # bucketed by size. Exposes blocks that NBX
                             # allocated but no NBXTensor in this arena
                             # references (the 21 GB gap mystery).
-                            from nbxtensor.tensor import DeviceAllocator as _DAW
+                            from nbxtensor.memory.allocator import DeviceAllocator as _DAW
                             from collections import Counter as _Counter
                             per_dev_buckets: Dict[int, "_Counter[int]"] = {}
                             per_dev_total: Dict[int, int] = {}
@@ -4304,7 +4310,7 @@ class TritonSequence:
                     # pointers alike — print what each arg actually is so
                     # the failure adjudicates itself (P-WARM-TRITON-VIDEO
                     # class: warm lazy_sequential fed a stale placement).
-                    from nbxtensor.tensor import device_label
+                    from nbxtensor.backend.runtime import device_label
                     _arg_diag = "; ".join(
                         f"arg{i}={device_label(a)}"
                         f" ptr={getattr(a, '_data_ptr', 0):#x}"

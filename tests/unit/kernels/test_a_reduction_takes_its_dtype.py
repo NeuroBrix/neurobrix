@@ -15,7 +15,8 @@ import os
 import numpy as np
 import pytest
 
-from nbxtensor.tensor import NBXDtype, NBXTensor
+from nbxtensor.dtype.nbx_dtype import NBXDtype
+from nbxtensor.tensor import NBXTensor
 
 pytestmark = pytest.mark.skipif(os.environ.get("CUDA_VISIBLE_DEVICES", None) == "", reason="needs a device")
 

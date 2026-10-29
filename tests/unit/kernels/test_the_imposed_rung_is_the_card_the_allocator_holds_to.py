@@ -9,8 +9,10 @@ bytes over the rung — red); an OOM raised while the pool held enough to flush 
 import pytest
 
 from nbxtensor import tensor as N
+import nbxtensor.memory.allocator as _nbx_allocator
+import nbxtensor.backend.runtime as _nbx_runtime
 
-DA = N.DeviceAllocator
+DA = _nbx_allocator.DeviceAllocator
 MB = 1 << 20
 
 
@@ -35,8 +37,8 @@ class FakeRT:
 @pytest.fixture
 def rt(monkeypatch):
     fake = FakeRT()
-    monkeypatch.setattr(N, "_gpu_runtime", lambda: fake)
-    monkeypatch.setattr(N, "_active_backend", lambda: {"malloc": "cudaMalloc", "free": "cudaFree"})
+    monkeypatch.setattr(_nbx_runtime, "_gpu_runtime", lambda: fake)
+    monkeypatch.setattr(_nbx_runtime, "_active_backend", lambda: {"malloc": "cudaMalloc", "free": "cudaFree"})
     monkeypatch.setattr(DA, "_pool_enabled_init", True, raising=False)
     for name, value in (("_pool_enabled", True), ("_blocks", {}), ("_pool_free", {}),
                         ("_pool_sizes", {}), ("_pool_cached_bytes", {}), ("_pool_cached_peak", {}),
@@ -63,7 +65,7 @@ def test_a_malloc_past_the_rung_flushes_the_pool_and_the_held_bytes_stay_under_i
 def test_past_the_rung_with_nothing_to_flush_is_a_named_oom(rt, monkeypatch):
     monkeypatch.setenv("NBX_PRISM_BUDGET_MB", "1024")
     DA.malloc_cuda(600 * MB)
-    with pytest.raises(N.DeviceOOMError, match="imposed rung: 724MB"):
+    with pytest.raises(_nbx_allocator.DeviceOOMError, match="imposed rung: 724MB"):
         DA.malloc_cuda(200 * MB)
 
 

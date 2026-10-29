@@ -597,7 +597,7 @@ class TilingEngine:
             if not _census:
                 return
             try:
-                from nbxtensor.tensor import DeviceAllocator as _DA
+                from nbxtensor.memory.allocator import DeviceAllocator as _DA
                 live = sum(_DA._cuda_live_bytes.values())
                 pooled = sum(_DA._pool_cached_bytes.values())
             except Exception:
@@ -2051,7 +2051,7 @@ class OpLevelTilingEngine:
                                     # Read DeviceAllocator live_bytes
                                     # for triton modes.
                                     if _is_triton_mode:
-                                        from nbxtensor.tensor import DeviceAllocator as _DA_pre
+                                        from nbxtensor.memory.allocator import DeviceAllocator as _DA_pre
                                         _pre = (
                                             _DA_pre._cuda_live_bytes.get(
                                                 _DA_pre.get_device(), 0)
@@ -2131,7 +2131,7 @@ class OpLevelTilingEngine:
                                         halo=int(spec_int["halo"]),
                                     )
                                     if _is_triton_mode:
-                                        from nbxtensor.tensor import DeviceAllocator as _DA_post
+                                        from nbxtensor.memory.allocator import DeviceAllocator as _DA_post
                                         _post = (
                                             _DA_post._cuda_live_bytes.get(
                                                 _DA_post.get_device(), 0)

@@ -51,7 +51,8 @@ import os
 import traceback
 from typing import Any, Dict, List, Optional, Tuple
 
-from nbxtensor.tensor import NBXTensor, DeviceAllocator
+from nbxtensor.tensor import NBXTensor
+from nbxtensor.memory.allocator import DeviceAllocator
 
 # THE ENGINE REPLAYS BY DEFAULT (the supervisor's order 2026-10-28 08:20, S3): a sequence that runs again with the same
 # signature is measured, recorded, VERIFIED byte-equal against the normal path, and only then replayed; every sequence it

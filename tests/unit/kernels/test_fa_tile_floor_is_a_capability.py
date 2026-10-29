@@ -26,12 +26,12 @@ import pytest
 
 
 def _table():
-    from nbxtensor.tensor import _BACKEND_FA_MIN_TILE
+    from nbxtensor.backend.capabilities import _BACKEND_FA_MIN_TILE
     return _BACKEND_FA_MIN_TILE
 
 
 def test_every_backend_this_tree_knows_has_a_row():
-    from nbxtensor.tensor import _BACKEND_TRAPS_ON_DEVICE_ASSERT
+    from nbxtensor.backend.capabilities import _BACKEND_TRAPS_ON_DEVICE_ASSERT
 
     known = set(_BACKEND_TRAPS_ON_DEVICE_ASSERT)
     missing = known - set(_table())
@@ -58,8 +58,9 @@ def test_a_backend_without_a_row_refuses(monkeypatch):
     The live backend is made one no table can have: on a CUDA machine a table
     with a cuda row answers (merge of 2026-09-13, semantic conflict)."""
     from nbxtensor import tensor as nt
-    from nbxtensor.tensor import _backend_capability
-    monkeypatch.setattr(nt, "_detect_gpu_backend", lambda: "no-such-backend")
+    import nbxtensor.backend.runtime as _nbx_runtime
+    from nbxtensor.backend.capabilities import _backend_capability
+    monkeypatch.setattr(_nbx_runtime, "_detect_gpu_backend", lambda: "no-such-backend")
 
     with pytest.raises(RuntimeError) as exc:
         _backend_capability({"cuda": 16}, "_TEST_TABLE", "its FA tile floor")

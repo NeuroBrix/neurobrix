@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 
 from tests.unit.child_env import child_env, the_callers_door
+import nbxtensor.memory.allocator as _nbx_allocator  # the module the moved names live in (M2 cut of tensor.py)
 
 SRC = Path(__file__).resolve().parents[3] / "src"
 
@@ -24,7 +25,7 @@ def _cuda():
     # module skips, a renamed symbol raises where the suite can see it, and the
     # guarded call stays guarded because "no device here" is a real answer.
     nbx = pytest.importorskip("nbxtensor.tensor")
-    set_device = nbx.DeviceAllocator.set_device
+    set_device = _nbx_allocator.DeviceAllocator.set_device
     try:
         set_device(0)
         return True
@@ -41,7 +42,7 @@ def _nbx(arr):
 
 
 def _host(t, np_dtype):
-    from nbxtensor.tensor import DeviceAllocator
+    from nbxtensor.memory.allocator import DeviceAllocator
     buf = np.empty(t._nbytes, dtype=np.uint8)
     DeviceAllocator.memcpy(buf.ctypes.data, t.data_ptr(), t._nbytes, 2)
     return buf.view(np_dtype).reshape(t.shape)
@@ -86,7 +87,7 @@ def test_the_launch_path_imports_no_torch():
 import sys
 import numpy as np
 import neurobrix  # the application: nbxtensor's host services
-from nbxtensor.tensor import NBXTensor, DeviceAllocator
+from nbxtensor.tensor import NBXTensor; from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.backend.launcher import launch
 from nbxtensor.ops.fft_op import scale_kernel
 DeviceAllocator.set_device(0)
@@ -154,7 +155,7 @@ def test_an_autotuned_kernel_launches_and_benchmarks_without_torch(a_free_rig):
 import sys
 import numpy as np
 import neurobrix  # the application: nbxtensor's host services
-from nbxtensor.tensor import NBXTensor, DeviceAllocator
+from nbxtensor.tensor import NBXTensor; from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.ops.dispatch import dispatch
 DeviceAllocator.set_device(0)
 rng = np.random.default_rng(3)
@@ -246,7 +247,7 @@ def test_a_refused_address_is_named_by_its_parameter():
     import ctypes
     import pytest
     from nbxtensor.backend.launcher import CudaDriver
-    from nbxtensor.tensor import DeviceAllocator
+    from nbxtensor.memory.allocator import DeviceAllocator
     drv = CudaDriver.__new__(CudaDriver)
     drv._param_counts = {}
     fn = ctypes.c_void_p(1)

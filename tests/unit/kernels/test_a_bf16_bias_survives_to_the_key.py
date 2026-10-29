@@ -51,7 +51,8 @@ def _owns_its_cache(tmp_path, monkeypatch):
 
 
 def _tensors():
-    from nbxtensor.tensor import NBXTensor, NBXDtype
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     from nbxtensor.dtype.convert import f32_to_bf16_bits
 
     rng = np.random.default_rng(20260912)
@@ -104,7 +105,7 @@ def _key_seen(bias, a, b):
 
 
 def test_the_bias_reaches_the_kernel_as_bf16():
-    from nbxtensor.tensor import NBXDtype
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
 
     a, b, bias = _tensors()
     assert bias.nbx_dtype == NBXDtype.bfloat16, "the fixture itself must be bf16"

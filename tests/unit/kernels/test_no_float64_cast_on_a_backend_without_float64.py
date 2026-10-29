@@ -7,15 +7,19 @@ the Sana 4K positional embedding, placed as float64 and cast to bf16 on Metal, c
 A census says "not this time"; this door says "never". Seen red (garbage returned, nothing raised) before the door."""
 import numpy as np
 import pytest
-from nbxtensor.tensor import NBXTensor, NBXDtype, _detect_gpu_backend
+from nbxtensor.tensor import NBXTensor
+from nbxtensor.dtype.nbx_dtype import NBXDtype
+from nbxtensor.backend.runtime import _detect_gpu_backend
+import nbxtensor.backend.capabilities as _nbx_capabilities  # the module the moved names live in (M2 cut of tensor.py)
 
 
 def test_a_float64_cast_is_refused_by_name_where_the_backend_has_no_float64(host_backend_fp64):
     from nbxtensor import tensor as T
+    import nbxtensor.backend.capabilities as _nbx_capabilities
     name = _detect_gpu_backend()
     if name is None:
         pytest.skip("no device")
-    if T.backend_has_fp64():
+    if _nbx_capabilities.backend_has_fp64():
         pytest.skip(f"backend {name} has float64: the door is not on its path")
     x = NBXTensor.from_numpy(np.linspace(-1.0, 1.0, 4096, dtype=np.float64))
     with pytest.raises(RuntimeError, match="float64"):

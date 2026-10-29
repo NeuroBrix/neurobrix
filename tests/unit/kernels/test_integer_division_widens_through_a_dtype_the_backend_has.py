@@ -6,7 +6,10 @@ computed (`backend_has_fp64`, 2026-09-28). Seen red on Metal (wrong quotients) b
 import numpy as np
 import pytest
 from nbxtensor.ops import wrappers as W
-from nbxtensor.tensor import NBXTensor, DeviceAllocator, _detect_gpu_backend, backend_has_fp64
+from nbxtensor.tensor import NBXTensor
+from nbxtensor.memory.allocator import DeviceAllocator
+from nbxtensor.backend.runtime import _detect_gpu_backend
+from nbxtensor.backend.capabilities import backend_has_fp64
 
 
 @pytest.fixture(autouse=True)

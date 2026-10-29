@@ -33,7 +33,8 @@ from typing import Any, Dict, List
 
 import numpy as np
 
-from nbxtensor.tensor import NBXTensor, NBXDtype
+from nbxtensor.tensor import NBXTensor
+from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.ops import wrappers as w
 from nbxtensor.random.seeded_draw import SeededDrawStream, seeded_gaussian
 from nbxtensor.memory.device_transfer import needs_move, transfer_tensor

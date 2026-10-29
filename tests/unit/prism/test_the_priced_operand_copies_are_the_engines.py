@@ -93,7 +93,8 @@ def _cuda() -> bool:
                               if c[0] not in ("aten::mm", "aten::bmm")])
 def test_the_triton_engine_s_copies_are_priced(op_type, dtypes, same, engine):
     import numpy as np
-    from nbxtensor.tensor import NBXTensor, NBXDtype
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     from neurobrix.triton.dtype import TritonDtypeEngine
     eng = TritonDtypeEngine(NBXDtype.float16, has_native_bf16=False, graph_dtype="float16", stores_fp64=False)
 

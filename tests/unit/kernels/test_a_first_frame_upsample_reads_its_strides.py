@@ -15,6 +15,7 @@ Runnable two ways:
   - script:  PYTHONPATH=src python3 tests/unit/kernels/test_a_first_frame_upsample_reads_its_strides.py
 """
 from __future__ import annotations
+import nbxtensor.backend.runtime as _nbx_runtime  # the module the moved names live in (M2 cut of tensor.py)
 
 try:
     import pytest
@@ -34,7 +35,7 @@ def _gpu_available() -> bool:
     import pytest
 
     nbx = pytest.importorskip("nbxtensor.tensor")
-    detect = nbx._detect_gpu_backend
+    detect = _nbx_runtime._detect_gpu_backend
     try:
         return detect() is not None
     except Exception:
@@ -44,7 +45,7 @@ def _gpu_available() -> bool:
 def _download(t) -> np.ndarray:
     """Host copy of a CONTIGUOUS NBXTensor, as float16."""
     import ctypes
-    from nbxtensor.tensor import DeviceAllocator
+    from nbxtensor.memory.allocator import DeviceAllocator
     buf = (ctypes.c_char * t._nbytes)()
     DeviceAllocator.memcpy(ctypes.addressof(buf), t.data_ptr(), t._nbytes, 2)
     return np.frombuffer(bytes(buf), dtype=np.float16).reshape(tuple(t.shape))

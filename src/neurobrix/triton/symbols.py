@@ -19,7 +19,7 @@ def impossible_extent_context(err, args, resolver) -> str:
     """The suffix an executor appends to an `ImpossibleExtentError`: the op's input shapes and
     every bound symbol with its name, so the refusal says which input extent led there.
     Empty for any other exception (their messages are left exactly as they were)."""
-    from nbxtensor.tensor import ImpossibleExtentError
+    from nbxtensor.memory.allocator import ImpossibleExtentError
     if not isinstance(err, ImpossibleExtentError):
         return ""
     def _shape(a):

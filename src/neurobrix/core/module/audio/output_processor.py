@@ -49,7 +49,7 @@ class AudioOutputProcessor:
         if is_torch_tensor(waveform):
             audio_np = waveform.detach().cpu().float().numpy()
         elif hasattr(waveform, "nbx_dtype"):
-            from nbxtensor.tensor import NBXDtype
+            from nbxtensor.dtype.nbx_dtype import NBXDtype
             audio_np = (waveform.to(NBXDtype.float32) if waveform.nbx_dtype != NBXDtype.float32 else waveform).numpy()
         else:
             audio_np = np.asarray(waveform, dtype=np.float32)

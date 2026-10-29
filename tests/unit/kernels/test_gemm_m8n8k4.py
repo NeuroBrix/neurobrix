@@ -15,7 +15,8 @@ import numpy as np
 import pytest
 
 from nbxtensor.ops import wrappers as W
-from nbxtensor.tensor import DeviceAllocator, NBXTensor
+from nbxtensor.memory.allocator import DeviceAllocator
+from nbxtensor.tensor import NBXTensor
 
 
 def _unit_declared() -> bool:
@@ -158,7 +159,7 @@ def test_the_census_derives_no_key_where_the_unit_runs():
     census (launch_keys, the same predicate as the wrappers) lists none, fp32 operands (split) included; a GEMM
     below the unit's smallest tile keeps its key."""
     from nbxtensor.ops import launch_keys as LK
-    from nbxtensor.tensor import NBXDtype
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     h, f = NBXDtype.float16, NBXDtype.float32
     assert LK.mm_launches(512, 512, 512, h, h, False) == []
     assert LK.addmm_launches(512, 512, 512, h, h, h, False) == []

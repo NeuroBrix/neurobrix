@@ -19,7 +19,7 @@ def volta(monkeypatch):
 
 def test_a_half_attention_on_the_unit_forms_its_key(volta):
     from nbxtensor.ops import launch_keys as LK
-    from nbxtensor.tensor import NBXDtype as D
+    from nbxtensor.dtype.nbx_dtype import NBXDtype as D
     (kern, key), = LK.unit_flash_launches(32760, 32760, 128, D.float16, D.float16, D.float16)
     assert kern == LK.UNIT_FLASH
     assert key == (LK.bucket_of("M", 32760), LK.bucket_of("N", 32760), 128, False,
@@ -28,7 +28,7 @@ def test_a_half_attention_on_the_unit_forms_its_key(volta):
 
 def test_an_attention_the_unit_does_not_take_forms_none(volta):
     from nbxtensor.ops import launch_keys as LK
-    from nbxtensor.tensor import NBXDtype as D
+    from nbxtensor.dtype.nbx_dtype import NBXDtype as D
     assert not LK.unit_flash_takes(512, D.float16, D.float16, D.float16)
     assert LK.unit_flash_launches(4096, 4096, 512, D.float16, D.float16, D.float16) == []
 
