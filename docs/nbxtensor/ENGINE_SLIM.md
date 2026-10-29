@@ -43,6 +43,7 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | when | what | lines |
 |---|---|---|
 | 2026-10-29 | `src/neurobrix/kernels/triton_kernels_ref/` — 1 097 files of vendored third-party reference kernels (flaggems for a dozen vendors, fla, attorch, gemlite, ...), imported by no code, excluded from both package targets | 262 132 |
+| 2026-10-29 | `kernels/metadata_ops.py`: 34 handlers no table maps (`_addmm`, `_bmm`, `_exp`, ... — those ops resolve through `torch.ops.aten` by name) and the two listing helpers nothing calls; `kernels/classification.py`: one dead helper | 297 |
 
 ## Moved into nbxtensor
 

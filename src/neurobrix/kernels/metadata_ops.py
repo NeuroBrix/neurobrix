@@ -953,68 +953,6 @@ def _scalar_tensor(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.T
     return torch.tensor(scalar_val, dtype=dtype, device=device)
 
 
-def _constant_of_shape(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
-    """ATen full/zeros/ones - Create tensor filled with value."""
-    if inputs:
-        shape = _to_int_list(inputs[0])
-    else:
-        shape = _flatten_shape(attrs.get("shape", [1]))
-
-    val = attrs.get("value", 0.0)
-    dtype_str = "float32"
-
-    if isinstance(val, dict):
-        dtype_str = val.get("dtype", "float32") if isinstance(val.get("value"), dict) else "float32"
-        val = val.get("value", 0.0)
-
-    if isinstance(val, (list, tuple)):
-        val = val[0]
-
-    # Determine dtype
-    dtype_map = {'float32': torch.float32, 'float16': torch.float16,
-                 'int64': torch.int64, 'int32': torch.int32}
-    dtype = dtype_map.get(dtype_str, torch.float32)
-
-    # At this point val should be numeric
-    assert not isinstance(val, dict), f"val should not be dict at this point: {val}"
-    assert val is not None, "val must not be None at this point"
-    return torch.full(tuple(shape), float(val), dtype=dtype)
-
-
-def _arange(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
-    """aten::arange - create sequential tensor."""
-
-    # Extract from attrs
-    end = attrs.get("end", None)
-    start = attrs.get("start", 0)
-    step = attrs.get("step", 1)
-    dtype_str = attrs.get("dtype", None)
-    device = attrs.get("_device", "cuda")  # Default to CUDA for Triton ops
-
-    # Fallback: deduce end from output_shape
-    if end is None:
-        output_shape = attrs.get("_output_shape", [])
-        if output_shape and len(output_shape) == 1:
-            end = output_shape[0]
-
-    if end is None:
-        raise RuntimeError(
-            f"ZERO FALLBACK: aten::arange missing 'end' parameter.\n"
-            f"attrs={attrs}"
-        )
-
-    # Default dtype for indices
-    dtype = torch.int64
-    if dtype_str:
-        dtype_map = {
-            "int64": torch.int64, "int32": torch.int32,
-            "float32": torch.float32, "float16": torch.float16,
-        }
-        dtype = dtype_map.get(dtype_str, torch.int64)
-
-    return torch.arange(start, end, step, dtype=dtype, device=device)
-
-
 def _size(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
     """ATen numel - Return total number of elements."""
     return torch.tensor(inputs[0].numel(), dtype=torch.int64, device='cpu')
@@ -1534,21 +1472,6 @@ def _where(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
     return torch.where(aligned[0], aligned[1], aligned[2])
 
 
-def _clamp(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
-    """ATen clamp."""
-    x = inputs[0]
-    min_val = inputs[1] if len(inputs) > 1 else attrs.get("min", None)
-    max_val = inputs[2] if len(inputs) > 2 else attrs.get("max", None)
-    return torch.clamp(x, min=min_val, max=max_val)
-
-
-def _eq(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
-    """ATen eq - equality comparison."""
-    target_device = inputs[0].device
-    aligned = _ensure_same_device([inputs[0], inputs[1]], target_device)
-    return torch.eq(aligned[0], aligned[1])
-
-
 def _ne(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
     """ATen ne - not equal."""
     target_device = inputs[0].device
@@ -1563,35 +1486,11 @@ def _lt(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
     return torch.lt(aligned[0], aligned[1])
 
 
-def _le(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
-    """ATen le - less equal."""
-    target_device = inputs[0].device
-    aligned = _ensure_same_device([inputs[0], inputs[1]], target_device)
-    return torch.le(aligned[0], aligned[1])
-
-
-def _gt(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
-    """ATen gt - greater than."""
-    target_device = inputs[0].device
-    aligned = _ensure_same_device([inputs[0], inputs[1]], target_device)
-    return torch.gt(aligned[0], aligned[1])
-
-
 def _ge(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
     """ATen ge - greater equal."""
     target_device = inputs[0].device
     aligned = _ensure_same_device([inputs[0], inputs[1]], target_device)
     return torch.ge(aligned[0], aligned[1])
-
-
-def _masked_fill(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
-    """ATen masked_fill."""
-    x = inputs[0]
-    mask = inputs[1]
-    value = inputs[2] if len(inputs) > 2 else attrs.get("value", 0.0)
-    if isinstance(value, torch.Tensor):
-        value = value.item()
-    return x.masked_fill(mask, value)
 
 
 def _mul(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
@@ -1611,70 +1510,14 @@ def _add(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
     return torch.add(aligned[0], aligned[1])
 
 
-def _sub(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
-    """ATen sub."""
-    target_device = inputs[0].device
-    aligned = _ensure_same_device([inputs[0], inputs[1]], target_device)
-    alpha = attrs.get("alpha", 1.0)
-    if alpha != 1.0:
-        return torch.sub(aligned[0], aligned[1], alpha=alpha)
-    return torch.sub(aligned[0], aligned[1])
-
-
-def _div(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
-    """ATen div."""
-    target_device = inputs[0].device
-    aligned = _ensure_same_device([inputs[0], inputs[1]], target_device)
-    return torch.div(aligned[0], aligned[1])
-
-
-def _pow(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
-    """ATen pow."""
-    target_device = inputs[0].device
-    aligned = _ensure_same_device([inputs[0], inputs[1]], target_device)
-    return torch.pow(aligned[0], aligned[1])
-
-
-def _rsub(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
-    """ATen rsub - reverse subtract."""
-    target_device = inputs[0].device
-    aligned = _ensure_same_device([inputs[0], inputs[1]], target_device)
-    a, b = aligned[0], aligned[1]
-    alpha = attrs.get("alpha", 1.0)
-    # rsub(a, b, alpha) = b - alpha * a
-    if alpha != 1.0:
-        return b - alpha * a
-    return b - a
-
-
 def _neg(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
     """ATen neg."""
     return torch.neg(inputs[0])
 
 
-def _exp(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
-    """ATen exp."""
-    return torch.exp(inputs[0])
-
-
 def _log(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
     """ATen log."""
     return torch.log(inputs[0])
-
-
-def _sqrt(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
-    """ATen sqrt."""
-    return torch.sqrt(inputs[0])
-
-
-def _rsqrt(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
-    """ATen rsqrt."""
-    return torch.rsqrt(inputs[0])
-
-
-def _sin(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
-    """ATen sin."""
-    return torch.sin(inputs[0])
 
 
 def _cos(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
@@ -1692,53 +1535,9 @@ def _sigmoid(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
     return torch.sigmoid(inputs[0])
 
 
-def _relu(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
-    """ATen relu."""
-    return F.relu(inputs[0])
-
-
-def _erf(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
-    """ATen erf."""
-    return torch.erf(inputs[0])
-
-
 def _abs(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
     """ATen abs."""
     return torch.abs(inputs[0])
-
-
-def _isinf(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
-    """ATen isinf."""
-    return torch.isinf(inputs[0])
-
-
-def _isnan(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
-    """ATen isnan."""
-    return torch.isnan(inputs[0])
-
-
-def _isfinite(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
-    """ATen isfinite."""
-    return torch.isfinite(inputs[0])
-
-
-def _maximum(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
-    """ATen maximum."""
-    target_device = inputs[0].device
-    aligned = _ensure_same_device([inputs[0], inputs[1]], target_device)
-    return torch.maximum(aligned[0], aligned[1])
-
-
-def _minimum(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
-    """ATen minimum."""
-    target_device = inputs[0].device
-    aligned = _ensure_same_device([inputs[0], inputs[1]], target_device)
-    return torch.minimum(aligned[0], aligned[1])
-
-
-def _reciprocal(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
-    """ATen reciprocal."""
-    return torch.reciprocal(inputs[0])
 
 
 def _sum(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
@@ -1793,17 +1592,6 @@ def _prod(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
     return torch.prod(x)
 
 
-def _var(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
-    """ATen var."""
-    x = inputs[0]
-    dim = attrs.get("dim", None)
-    keepdim = attrs.get("keepdim", False)
-    unbiased = attrs.get("unbiased", True)
-    if dim is not None:
-        return torch.var(x, dim=dim, keepdim=keepdim, unbiased=unbiased)
-    return torch.var(x, unbiased=unbiased)
-
-
 def _std(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
     """ATen std."""
     x = inputs[0]
@@ -1813,26 +1601,6 @@ def _std(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
     if dim is not None:
         return torch.std(x, dim=dim, keepdim=keepdim, unbiased=unbiased)
     return torch.std(x, unbiased=unbiased)
-
-
-def _argmax(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
-    """ATen argmax."""
-    x = inputs[0]
-    dim = attrs.get("dim", None)
-    keepdim = attrs.get("keepdim", False)
-    if dim is not None:
-        return torch.argmax(x, dim=dim, keepdim=keepdim)
-    return torch.argmax(x)
-
-
-def _argmin(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
-    """ATen argmin."""
-    x = inputs[0]
-    dim = attrs.get("dim", None)
-    keepdim = attrs.get("keepdim", False)
-    if dim is not None:
-        return torch.argmin(x, dim=dim, keepdim=keepdim)
-    return torch.argmin(x)
 
 
 def _any(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
@@ -1855,43 +1623,9 @@ def _all(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
     return torch.all(x)
 
 
-def _cumsum(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
-    """ATen cumsum."""
-    x = inputs[0]
-    dim = inputs[1] if len(inputs) > 1 else attrs.get("dim", 0)
-    return torch.cumsum(x, dim=int(dim))
-
-
-def _cumprod(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
-    """ATen cumprod."""
-    x = inputs[0]
-    dim = inputs[1] if len(inputs) > 1 else attrs.get("dim", 0)
-    return torch.cumprod(x, dim=int(dim))
-
-
-def _embedding(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
-    """ATen embedding."""
-    weight = inputs[0]
-    indices = inputs[1]
-    # Ensure indices on same device as weight
-    if indices.device != weight.device:
-        indices = indices.to(weight.device)
-    return F.embedding(indices, weight)
-
-
-def _bmm(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
-    """ATen bmm - batched matrix multiplication."""
-    return torch.bmm(inputs[0], inputs[1])
-
-
 def _mm(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
     """ATen mm - matrix multiplication."""
     return torch.mm(inputs[0], inputs[1])
-
-
-def _matmul(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
-    """ATen matmul."""
-    return torch.matmul(inputs[0], inputs[1])
 
 
 def _linear(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
@@ -1900,16 +1634,6 @@ def _linear(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
     weight = inputs[1]
     bias = inputs[2] if len(inputs) > 2 and inputs[2] is not None else None
     return F.linear(x, weight, bias)
-
-
-def _addmm(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
-    """ATen addmm."""
-    bias = inputs[0]
-    mat1 = inputs[1]
-    mat2 = inputs[2]
-    beta = attrs.get("beta", 1.0)
-    alpha = attrs.get("alpha", 1.0)
-    return torch.addmm(bias, mat1, mat2, beta=beta, alpha=alpha)
 
 
 # ==============================================================================
@@ -2108,17 +1832,4 @@ def execute_metadata_op(op_type: str, inputs: List[torch.Tensor], attrs: Dict[st
 
 
 # --- Compatibility ---
-def is_implemented_metadata_op(op_type: str) -> bool:
-    """Check if op_type can be executed (custom handler OR dynamic resolution)."""
-    if op_type in METADATA_OPS_IMPL:
-        return True
-    # Try dynamic resolution
-    try:
-        _resolve_op(op_type)
-        return True
-    except AttributeError:
-        return False
 
-def list_implemented_ops() -> List[str]:
-    """List all ops with custom handlers."""
-    return list(METADATA_OPS_IMPL.keys())

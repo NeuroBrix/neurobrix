@@ -198,14 +198,6 @@ def get_execution_type(op_name: str) -> OpExecution:
     return ATEN_CLASSIFICATION[op_name]
 
 
-def is_triton_op(op_name: str) -> bool:
-    """Check if op uses pure Triton kernel."""
-    try:
-        return get_execution_type(op_name) == OpExecution.TRITON
-    except KeyError:
-        return False
-
-
 def is_metadata_op(op_name: str) -> bool:
     """Check if op is metadata-only (no kernel needed)."""
     try:
