@@ -308,8 +308,7 @@ class DeviceAllocator:
         context. The driver context is managed solely by ensure_triton_device
         which is called just before Triton kernel launches.
         """
-        rt = _rt._gpu_runtime()
-        ret = getattr(rt, _rt._active_backend()["set_device"])(ctypes.c_int(device_id))
+        ret = _rt.device_memory().set_device(device_id)
         if ret != 0:
             # An invalid ordinal (a device the process cannot see) must be
             # loud here, not reported by the next unrelated launch check in
@@ -330,10 +329,7 @@ class DeviceAllocator:
     @staticmethod
     def get_device() -> int:
         """Get current GPU device."""
-        dev = ctypes.c_int()
-        rt = _rt._gpu_runtime()
-        getattr(rt, _rt._active_backend()["get_device"])(ctypes.byref(dev))
-        return dev.value
+        return _rt.device_memory().get_device()[1]
 
     @staticmethod
     def peak_device_bytes():
@@ -351,10 +347,7 @@ class DeviceAllocator:
         whether multi-GPU behaviour is even testable need it too.
         """
         try:
-            rt = _rt._gpu_runtime()
-            count = ctypes.c_int(0)
-            getattr(rt, _rt._active_backend()["device_count"])(ctypes.byref(count))
-            return max(0, count.value)
+            return max(0, _rt.device_memory().device_count()[1])
         except Exception:
             return 0
 
@@ -375,20 +368,15 @@ class DeviceAllocator:
         try:
             if int(index) < 0 or int(index) >= DeviceAllocator.device_count():
                 return None            # cudaSetDevice REPORTS a bad ordinal; it does not raise
-            rt = _rt._gpu_runtime()
-            backend = _rt._active_backend()
+            dm = _rt.device_memory()
             prev = DeviceAllocator.get_device()
-            set_fn = backend["set_device"]
-            mem_fn = backend.get("mem_get_info", "cudaMemGetInfo")
-            getattr(rt, set_fn)(ctypes.c_int(int(index)))
-            free_b = ctypes.c_size_t()
-            total_b = ctypes.c_size_t()
-            getattr(rt, mem_fn)(ctypes.byref(free_b), ctypes.byref(total_b))
+            dm.set_device(int(index))
+            _rc, free_b, _total_b = dm.mem_get_info()
             try:
-                getattr(rt, set_fn)(ctypes.c_int(prev))
+                dm.set_device(prev)
             except Exception:
                 pass
-            return free_b.value / (1024 * 1024)
+            return free_b / (1024 * 1024)
         except Exception:
             return None
 
@@ -403,27 +391,22 @@ class DeviceAllocator:
         device is restored before returning. Falls back to device 0 on any
         query failure or a single-GPU host.
         """
-        rt = _rt._gpu_runtime()
-        backend = _rt._active_backend()
+        dm = _rt.device_memory()
         ndev = DeviceAllocator.device_count()
         if ndev <= 1:
             return 0
         prev = DeviceAllocator.get_device()
-        mem_fn = backend.get("mem_get_info", "cudaMemGetInfo")
-        set_fn = backend["set_device"]
         best_idx, best_free = 0, -1
         for i in range(ndev):
             try:
-                getattr(rt, set_fn)(ctypes.c_int(i))
-                free_b = ctypes.c_size_t()
-                total_b = ctypes.c_size_t()
-                getattr(rt, mem_fn)(ctypes.byref(free_b), ctypes.byref(total_b))
-                if free_b.value > best_free:
-                    best_free, best_idx = free_b.value, i
+                dm.set_device(i)
+                _rc, free_b, _total_b = dm.mem_get_info()
+                if free_b > best_free:
+                    best_free, best_idx = free_b, i
             except Exception:
                 continue
         try:
-            getattr(rt, set_fn)(ctypes.c_int(prev))
+            dm.set_device(prev)
         except Exception:
             pass
         # C2: the probe loop above issued raw cudaSetDevice calls (and
@@ -456,28 +439,23 @@ class DeviceAllocator:
         Returns `[]` when there is no runtime or no device.
         """
         try:
-            rt = _rt._gpu_runtime()
-            backend = _rt._active_backend()
+            dm = _rt.device_memory()
         except Exception:
             return []
         ndev = DeviceAllocator.device_count()
         if ndev <= 0:
             return []
         prev = DeviceAllocator.get_device()
-        mem_fn = backend.get("mem_get_info", "cudaMemGetInfo")
-        set_fn = backend["set_device"]
         out: list[tuple[int, int]] = []
         for i in range(ndev):
             try:
-                getattr(rt, set_fn)(ctypes.c_int(i))
-                free_b = ctypes.c_size_t()
-                total_b = ctypes.c_size_t()
-                getattr(rt, mem_fn)(ctypes.byref(free_b), ctypes.byref(total_b))
-                out.append((i, total_b.value))
+                dm.set_device(i)
+                _rc, _free_b, total_b = dm.mem_get_info()
+                out.append((i, total_b))
             except Exception:
                 continue
         try:
-            getattr(rt, set_fn)(ctypes.c_int(prev))
+            dm.set_device(prev)
         except Exception:
             pass
         _rt.invalidate_current_device_cache()
@@ -617,7 +595,7 @@ class DeviceAllocator:
         """Return a WHOLLY free segment (its one block, free, unchained) to the driver; its bytes."""
         blk = DeviceAllocator._blocks.pop(ptr)
         DeviceAllocator._free_index_remove(dev, ptr, blk[0])
-        getattr(_rt._gpu_runtime(), _rt._active_backend()["free"])(ctypes.c_void_p(ptr))
+        _rt.device_memory().free(ptr)
         DeviceAllocator._pool_alloc_size.pop(ptr, None)
         DeviceAllocator._cuda_ptr_size.pop(ptr, None)
         DeviceAllocator._range_del(ptr)
@@ -777,7 +755,9 @@ class DeviceAllocator:
         limit = DeviceAllocator._rung_limit(dev)
         if limit is not None and DeviceAllocator._cuda_live_bytes.get(dev, 0) + int(nbytes) > limit:
             return 2
-        return getattr(_rt._gpu_runtime(), _rt._active_backend()["malloc"])(ctypes.byref(ptr_obj), ctypes.c_size_t(nbytes))
+        rc, ptr = _rt.device_memory().malloc(nbytes)
+        ptr_obj.value = ptr or None
+        return rc
 
     @staticmethod
     def malloc_cuda(nbytes: int, dev_idx: Optional[int] = None, pooled: bool = True) -> int:
@@ -842,8 +822,7 @@ class DeviceAllocator:
         if DeviceAllocator._pool_enabled and pooled:
             DeviceAllocator._pool_flush(dev)
         ptr_obj = ctypes.c_void_p()
-        rt = _rt._gpu_runtime()
-        backend = _rt._active_backend()
+        dm = _rt.device_memory()
         ret = DeviceAllocator._driver_malloc(ptr_obj, nbytes, dev)
 
         # No reclaim-and-retry of the hot loops' deferred dead-tensor queues here
@@ -872,8 +851,8 @@ class DeviceAllocator:
             if got > 0:
                 if DeviceAllocator._pool_enabled:
                     DeviceAllocator._pool_flush(dev)
-                ret = getattr(rt, backend["malloc"])(
-                    ctypes.byref(ptr_obj), ctypes.c_size_t(nbytes))
+                ret, _p = dm.malloc(nbytes)          # the runtime's malloc itself, as before (no rung check here)
+                ptr_obj.value = _p or None
 
         # Pre-allocation OOM-recovery (independent of pool): trigger a
         # cycle-collecting gc.collect() then retry. Sana 4Kpx triton
@@ -898,15 +877,7 @@ class DeviceAllocator:
                 pool_total += sz * len(ptrs)
                 pool_count += len(ptrs)
             try:
-                free_b = ctypes.c_size_t()
-                total_b = ctypes.c_size_t()
-                if hasattr(rt, backend.get("mem_get_info", "cudaMemGetInfo")):
-                    getattr(rt, backend.get("mem_get_info", "cudaMemGetInfo"))(
-                        ctypes.byref(free_b), ctypes.byref(total_b))
-                    driver_free = free_b.value
-                    driver_total = total_b.value
-                else:
-                    driver_free = driver_total = 0
+                _rc, driver_free, driver_total = dm.mem_get_info()   # a runtime without the symbol raises: 0 below
             except Exception:
                 driver_free = driver_total = 0
             # The message is unchanged to the byte: the queue runner's error
@@ -1002,10 +973,8 @@ class DeviceAllocator:
                 _record_free_site(ptr, nbytes)
             return
 
-        rt = _rt._gpu_runtime()
-        backend = _rt._active_backend()
         alloc_dev = DeviceAllocator._cuda_ptr_device.pop(ptr, None)
-        _rc = getattr(rt, backend["free"])(ctypes.c_void_p(ptr))
+        _rc = _rt.device_memory().free(ptr)
         if _rc not in (None, 0):
             # Finalizer context — raising here cascades through GC; a
             # LOUD print preserves the sticky-error surfacing site.
@@ -1039,7 +1008,7 @@ class DeviceAllocator:
         if _rt._detect_gpu_backend() != "metal":
             raise RuntimeError(f"ZERO FALLBACK: binding a file mapping in place needs unified memory; backend "
                                f"{_rt._detect_gpu_backend()!r} copies host experts into device slots")
-        start = _rt._gpu_runtime().bind_mapped(int(ptr), int(nbytes))
+        start = _rt.device_memory().map_host(int(ptr), int(nbytes))
         page = int(os.sysconf("SC_PAGESIZE"))
         end = -(-(int(ptr) + int(nbytes)) // page) * page
         DeviceAllocator._range_add(start, max(DeviceAllocator._range_size.get(start, 0), end - start))
@@ -1049,7 +1018,7 @@ class DeviceAllocator:
         """Undo `bind_mapped` for the range starting at `ptr`'s page."""
         page = int(os.sysconf("SC_PAGESIZE"))
         start = int(ptr) // page * page
-        _rt._gpu_runtime().unbind_mapped(start)
+        _rt.device_memory().unmap_host(start)
         DeviceAllocator._range_del(start)
 
     @staticmethod
@@ -1063,21 +1032,16 @@ class DeviceAllocator:
         """
         if nbytes == 0:
             return 0
-        ptr = ctypes.c_void_p()
-        rt = _rt._gpu_runtime()
-        backend = _rt._active_backend()
-        fn_name = backend.get("malloc_host")
-        if fn_name is None:
+        dm = _rt.device_memory()
+        if not dm.supports("host_alloc"):
             raise RuntimeError(
                 f"Pinned host allocation unsupported on backend "
                 f"{_rt._detect_gpu_backend()!r}")
-        ret = getattr(rt, fn_name)(
-            ctypes.byref(ptr), ctypes.c_size_t(nbytes))
+        ret, p = dm.host_alloc(nbytes)
         if ret != 0:
             DeviceAllocator.clear_last_error()   # a refused call must not poison the next one
             raise RuntimeError(
                 f"Host pinned malloc failed (error {ret}) for {nbytes} bytes")
-        p = ptr.value or 0
         DeviceAllocator._host_pinned_ptr_size[p] = nbytes
         DeviceAllocator._range_add(p, nbytes)      # device-mapped (UVA): a kernel may read it, so holds() knows it
         DeviceAllocator._host_pinned_live_bytes += nbytes
@@ -1088,12 +1052,10 @@ class DeviceAllocator:
     @staticmethod
     def free_host_pinned(ptr: int):
         if ptr:
-            rt = _rt._gpu_runtime()
-            backend = _rt._active_backend()
-            fn_name = backend.get("free_host")
-            if fn_name is None:
+            dm = _rt.device_memory()
+            if not dm.supports("host_free"):
                 return
-            getattr(rt, fn_name)(ctypes.c_void_p(ptr))
+            dm.host_free(ptr)
             nbytes = DeviceAllocator._host_pinned_ptr_size.pop(ptr, None)
             DeviceAllocator._range_del(ptr)
             if nbytes is not None:
@@ -1136,8 +1098,7 @@ class DeviceAllocator:
         vendor YAMLs)."""
         prev_dev = None
         try:
-            rt = _rt._gpu_runtime()
-            backend = _rt._active_backend()
+            dm = _rt.device_memory()
             if (device_idx is not None
                     and DeviceAllocator.get_device() != device_idx):
                 # Probe on another device: switch, query, RESTORE (the
@@ -1146,11 +1107,8 @@ class DeviceAllocator:
                 # contracts that the runtime current device is the caller's).
                 prev_dev = DeviceAllocator.get_device()
                 DeviceAllocator.set_device(device_idx)
-            free_b = ctypes.c_size_t(0)
-            total_b = ctypes.c_size_t(0)
-            getattr(rt, backend.get("mem_get_info", "cudaMemGetInfo"))(
-                ctypes.byref(free_b), ctypes.byref(total_b))
-            free = int(free_b.value)
+            _rc, free_b, _total_b = dm.mem_get_info()
+            free = int(free_b)
             # Pool-aware (2026-09-02): bytes parked in the free-list are
             # reclaimable on demand (the malloc OOM path flushes them, the
             # autotune guard flushes them), so every feasibility probe —
@@ -1178,8 +1136,7 @@ class DeviceAllocator:
         Same contract and caveats as `device_free_bytes`."""
         prev_dev = None
         try:
-            rt = _rt._gpu_runtime()
-            backend = _rt._active_backend()
+            dm = _rt.device_memory()
             if (device_idx is not None
                     and DeviceAllocator.get_device() != device_idx):
                 # Probe on another device: switch, query, RESTORE (the
@@ -1188,11 +1145,8 @@ class DeviceAllocator:
                 # contracts that the runtime current device is the caller's).
                 prev_dev = DeviceAllocator.get_device()
                 DeviceAllocator.set_device(device_idx)
-            free_b = ctypes.c_size_t(0)
-            total_b = ctypes.c_size_t(0)
-            getattr(rt, backend.get("mem_get_info", "cudaMemGetInfo"))(
-                ctypes.byref(free_b), ctypes.byref(total_b))
-            return int(total_b.value)
+            _rc, _free_b, total_b = dm.mem_get_info()
+            return int(total_b)
         except Exception:
             return -1
         finally:
@@ -1227,10 +1181,7 @@ class DeviceAllocator:
     @staticmethod
     def memset_cuda(ptr: int, value: int, nbytes: int):
         if nbytes > 0 and ptr:
-            rt = _rt._gpu_runtime()
-            getattr(rt, _rt._active_backend()["memset"])(
-                ctypes.c_void_p(ptr), ctypes.c_int(value),
-                ctypes.c_size_t(nbytes))
+            _rt.device_memory().memset(ptr, value, nbytes)
 
     @staticmethod
     def memcpy(dst: int, src: int, nbytes: int, kind: int = 3):
@@ -1243,10 +1194,7 @@ class DeviceAllocator:
         stream ordering, never by host program order.
         """
         if nbytes > 0:
-            rt = _rt._gpu_runtime()
-            _rc = getattr(rt, _rt._active_backend()["memcpy"])(
-                ctypes.c_void_p(dst), ctypes.c_void_p(src),
-                ctypes.c_size_t(nbytes), ctypes.c_int(kind))
+            _rc = _rt.device_memory().memcpy(dst, src, nbytes, kind)
             if _rc not in (None, 0):
                 raise RuntimeError(
                     f"cudaMemcpy failed rc={_rc} (kind={kind}, "
@@ -1429,22 +1377,19 @@ class DeviceAllocator:
     @staticmethod
     def mem_get_info(device_idx: Optional[int] = None) -> Tuple[int, int]:
         """(free_bytes, total_bytes) of a device, from the runtime."""
-        rt = _rt._gpu_runtime()
-        backend = _rt._active_backend()
-        mem_fn = backend.get("mem_get_info", "cudaMemGetInfo")
+        dm = _rt.device_memory()
+        mem_fn = _rt._active_backend().get("mem_get_info", "cudaMemGetInfo")   # named in the refusal, as before
         prev = None
         if device_idx is not None:
             prev = DeviceAllocator.get_device()
             if prev != device_idx:
                 DeviceAllocator.set_device(device_idx)
         try:
-            free_b = ctypes.c_size_t()
-            total_b = ctypes.c_size_t()
-            ret = getattr(rt, mem_fn)(ctypes.byref(free_b), ctypes.byref(total_b))
+            ret, free_b, total_b = dm.mem_get_info()
             if ret != 0:
                 DeviceAllocator.clear_last_error()
                 raise RuntimeError(f"{mem_fn} failed with error {ret}")
-            return int(free_b.value), int(total_b.value)
+            return int(free_b), int(total_b)
         finally:
             if prev is not None and prev != device_idx:
                 DeviceAllocator.set_device(prev)
@@ -1713,9 +1658,7 @@ class DeviceAllocator:
         if device_idx == _rt._cached_device_idx():
             return
         # 1. Set runtime device (cudaSetDevice / hipSetDevice)
-        backend = _rt._active_backend()
-        rt = _rt._gpu_runtime()
-        getattr(rt, backend["set_device"])(ctypes.c_int(device_idx))
+        _rt.device_memory().set_device(device_idx)
         # 2. Tell the launcher which device to target. The NeuroBrix launcher
         #    binds the runtime's primary context of the current device at each
         #    launch; only the differential arm (NBX_LAUNCHER=triton) still

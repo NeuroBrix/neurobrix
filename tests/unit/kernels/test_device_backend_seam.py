@@ -49,7 +49,8 @@ RUNTIME_ENTRY_POINTS = ("_gpu_runtime", "_active_backend")
 # The seam's own implementation: these two resolve the backend table and load
 # the runtime library, so they necessarily touch it. Everything ELSE must go
 # through DeviceAllocator.
-SEAM_FUNCTIONS = ("_gpu_runtime", "_active_backend", "_detect_gpu_backend")
+SEAM_FUNCTIONS = ("_gpu_runtime", "_active_backend", "_detect_gpu_backend",
+                  "device_memory")   # builds the backend's memory primitives from the runtime (memory/device_memory.py)
 
 
 def _allowed_spans(source: str = SOURCE) -> list[tuple[int, int]]:

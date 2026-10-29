@@ -10,6 +10,9 @@ import os
 import threading
 from typing import Optional
 
+# module level, not in device_memory(): it runs on the finalizer path, where an import at shutdown raises
+from nbxtensor.memory.device_memory import AbiMemory as _AbiMemory
+
 
 
 # ============================================================================
@@ -376,3 +379,10 @@ def _gpu_runtime():
         except OSError:
             continue
     raise RuntimeError(f"GPU runtime not found for {name}")
+
+
+def device_memory():
+    """The memory primitives of the backend in force (`memory.device_memory.DeviceMemory`): the account
+    (`memory.allocator.DeviceAllocator`) asks these and nothing else of the device's memory. Built per call from the
+    runtime and its table, never cached: a substituted runtime or table is read at once."""
+    return _AbiMemory(_gpu_runtime(), _active_backend())
