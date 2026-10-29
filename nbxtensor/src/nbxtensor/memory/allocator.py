@@ -74,7 +74,8 @@ def _extract_neurobrix_site(max_frames: int = 12) -> str:
 
 
 #: the allocator's and the tensor's own files: never the site a trace names
-_NOT_A_CALLER = ("/nbxtensor/memory/allocator.py", "/nbxtensor/memory/memory_pool.py", "/nbxtensor/tensor.py")
+_NOT_A_CALLER = ("/nbxtensor/memory/allocator.py", "/nbxtensor/memory/memory_pool.py", "/nbxtensor/memory/slab.py",
+                 "/nbxtensor/tensor.py")
 
 
 def _is_caller_frame(fname: str) -> bool:

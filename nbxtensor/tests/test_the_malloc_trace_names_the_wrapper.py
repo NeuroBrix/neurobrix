@@ -20,6 +20,6 @@ def test_an_engine_frame_is_named_from_its_package_even_in_a_tree_named_nbxtenso
 
 
 def test_the_allocator_the_pool_and_the_tensor_are_never_sites():
-    for own in ("memory/allocator.py", "memory/memory_pool.py", "tensor.py"):
+    for own in ("memory/allocator.py", "memory/memory_pool.py", "memory/slab.py", "tensor.py"):
         assert not A._is_caller_frame(TREE + "/nbxtensor/src/nbxtensor/" + own), own
     assert not A._is_caller_frame("/usr/lib/python3/dist-packages/triton/runtime/jit.py")
