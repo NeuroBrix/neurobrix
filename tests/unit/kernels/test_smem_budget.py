@@ -200,6 +200,16 @@ _MAY_OMIT.update({
         "optional by contract (nbxtensor ops/autotune_bucket.ladder_for): absent, M keys on the file's own `default` "
         "dimension ladder, and a file without one is refused by name; a dedicated M ladder is adopted on measurement "
         "(/bucket-loss) only",
+    "sdpa_thresholds":
+        "absent BY DESIGN where the flash attention is measured correct at every head dim (flash.any_head_dim_correct, "
+        "Apple): a head dim routes like a power of two on the device's scores budget, no threshold table "
+        "(tests/unit/kernels/test_the_flash_takes_every_head_dim_where_measured.py holds that no Apple file carries one)",
+    "memory.max_registers_per_thread":
+        "optional by contract (ops/_configs.fits_thread_registers): a profile that declares no per-thread bound bounds "
+        "nothing there — Apple's lowering bounds a reduced extent itself (backend.capabilities.reduced_extent_max)",
+    "memory.compiled_stream_driver_over_price":
+        "stated as a table where measured (the M4 Pro: `vae: {ratio, source}`) and as null where not (V100): the "
+        "reference's null leaf is the measured profiles' table",
 })
 #: Whole sections a profile may omit, by prefix, each with the reason.
 _MAY_OMIT_PREFIX = {
