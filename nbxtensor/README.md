@@ -290,7 +290,7 @@ pool.set_threads(None)                                        # back to the meas
 | NVIDIA Tesla V100 (Volta, sm_70) | CUDA (`CudaDriver`, `AbiMemory`) | **proven**: the library's tests and the reference models' outputs identical to their judged sha, on a 4 x V100 rack, 2026-10-29 |
 | Apple M4 Pro (Apple silicon, 24 GB unified) | Metal through triton-ext (`TritonExtDriver`, `MetalMemory`) | **proven**: the library's tests, the reference models' outputs identical to their judged sha, in an environment where torch is not installed, 2026-10-29 |
 | NVIDIA Ampere, Hopper | CUDA | **written, not proven here**: device files exist (`backend/devices/nvidia/`), no such card on our machines |
-| Apple M1, M2, M3, M5 families and the other M4 chips | Metal | **written, not proven here**: device files exist (`backend/devices/apple/`, each value with its source; several inherited from a neighbouring chip and marked so); only the M4 Pro is measured |
+| Apple M1, M2, M3, M5 families and the other M4 chips | Metal | **written, not proven here**: device files exist (`backend/devices/apple/`); only the M4 Pro is measured |
 | AMD Instinct (CDNA, CDNA2, CDNA3) | HIP through the CUDA-style C ABI (`AbiMemory`) | **written, not proven**: device files exist, no test has run on an AMD card |
 | a CPU | none yet | **not supported** for the kernels: host work (loading, conversions) runs with numpy on every core (`backend.cpu.pool`); a CPU kernel backend is not part of 0.0.1 |
 | hardware with no Triton backend (Intel GPUs, NPUs, phones) | none | **not supported**: covering it needs a Triton backend for it and the five pieces of `docs/nbxtensor/BACKENDS.md` |
