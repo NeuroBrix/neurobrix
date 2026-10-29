@@ -108,12 +108,12 @@ CASES = [
      "# launcher's binder and Triton's compiler, our driver, our dispatch —\n"
      "# and the result checked.\n"
      "import numpy as np\n"
-     "import neurobrix; from nbxtensor.backend import launcher; from nbxtensor.ops import wrappers\n"
+     "import neurobrix; from nbxtensor.backend import launcher; from nbxtensor.ops import elementwise_wrappers\n"
      "from nbxtensor.tensor import NBXTensor\n"
      "assert launcher.install() is True\n"
      "x = np.arange(4096, dtype=np.float32)\n"
      "y = np.ones(4096, dtype=np.float32) * 3.0\n"
-     "out = wrappers.add(NBXTensor.from_numpy(x), NBXTensor.from_numpy(y))\n"
+     "out = elementwise_wrappers.add(NBXTensor.from_numpy(x), NBXTensor.from_numpy(y))\n"
      "got = out.numpy()\n"
      "assert np.array_equal(got, x + y), (got[:8], (x + y)[:8])"),
 

@@ -399,12 +399,12 @@ _BASE_PROBES = {
     "triton": (
         "import neurobrix.triton.flow.iterative_process\n"
         "from nbxtensor.memory.allocator import DeviceAllocator; from nbxtensor.dtype.nbx_dtype import NBXDtype; from nbxtensor.tensor import NBXTensor\n"
-        "from nbxtensor.ops import wrappers\n"
+        "from nbxtensor.ops import elementwise_wrappers, linalg_wrappers\n"
         "if DeviceAllocator.device_count() > 0:\n"
         "    DeviceAllocator.set_device(0)\n"
         "    a = NBXTensor.zeros((64, 64), NBXDtype.float16)\n"
-        "    wrappers.add(a, a)\n"
-        "    wrappers.mm(a, a)\n"),
+        "    elementwise_wrappers.add(a, a)\n"
+        "    linalg_wrappers.mm(a, a)\n"),
 }
 _PEAK_MB = "print(_mb('peak'))\n"
 
