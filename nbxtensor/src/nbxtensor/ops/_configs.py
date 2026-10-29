@@ -330,14 +330,13 @@ def _profiles_for(wanted: str):
     # NVIDIA reports capability x 10 (sm_70 -> 70); the profiles spell it
     # "7.0". AMD and Apple report the profile's string form directly.
 
-    from nbxtensor.host import need as _need
-    vendors = Path(_need("vendors_dir")())       # the application's vendor files (nbxtensor.host)
+    from nbxtensor.backend import device_files      # the library's device files, merged with the application's
 
     exact, same_family = None, None
-    for path in sorted(vendors.glob("*/*.yml")):
+    for vendor, name, path in device_files.names():
         try:
-            cfg = yaml.safe_load(path.read_text()) or {}
-        except Exception:                                 # pragma: no cover
+            cfg = device_files.merged(vendor, name)      # a key written in both halves is refused, never skipped
+        except yaml.YAMLError:                            # pragma: no cover — an unparsable file describes nothing
             continue
         declared = str(cfg.get("compute_capability", "")).strip().lower()
         if not declared:

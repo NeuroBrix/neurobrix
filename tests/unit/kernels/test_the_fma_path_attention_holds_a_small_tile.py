@@ -19,13 +19,14 @@ from pathlib import Path
 import numpy as np
 import pytest
 import yaml
+from neurobrix.core.config.loader import vendor_file  # the device whole: engine file + library half
 
 REPO = Path(__file__).resolve().parents[3]
 VENDORS = REPO / "src" / "neurobrix" / "config" / "vendors" / "nvidia"
 
 
 def _prefill_rows(arch):
-    rows = yaml.safe_load((VENDORS / f"{arch}.yml").read_text()).get("sdpa_thresholds") or []
+    rows = vendor_file((VENDORS / f"{arch}.yml")).get("sdpa_thresholds") or []
     return [r for r in rows if "seqlen_q_le" not in r]
 
 
@@ -43,14 +44,14 @@ def test_every_sdpa_row_of_every_profile_states_its_warps():
     its declared 8 (not measured here); the Apple profiles declare no table since C3 (certified tiles)."""
     missing = [f"{y.relative_to(VENDORS.parent)}:{i}"
                for y in sorted(VENDORS.parent.glob("*/*.yml"))
-               for i, r in enumerate(yaml.safe_load(y.read_text()).get("sdpa_thresholds") or [])
+               for i, r in enumerate(vendor_file(y).get("sdpa_thresholds") or [])
                if "num_warps" not in r]
     assert not missing, missing
-    hopper = yaml.safe_load((VENDORS / "hopper.yml").read_text())["sdpa_thresholds"]
+    hopper = vendor_file((VENDORS / "hopper.yml"))["sdpa_thresholds"]
     assert {r["num_warps"] for r in hopper} == {8}
     # the Apple profiles retired their table (roadmap C3): the flash's tile is certified per key there
     assert not [y.name for y in sorted((VENDORS.parent / "apple").glob("*.yml"))
-                if yaml.safe_load(y.read_text()).get("sdpa_thresholds")]
+                if vendor_file(y).get("sdpa_thresholds")]
 
 
 def test_the_launch_meta_is_what_the_matching_row_states(monkeypatch):

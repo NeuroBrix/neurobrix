@@ -3,9 +3,11 @@
 into the library's device file (`nbxtensor/backend/devices/<vendor>/<arch>.yml`) and the engine's policy file
 (`config/vendors/<vendor>/<arch>.yml`), one key list for every vendor (API.md section 11).
 
-Two halves, unioned:
+Three passes, unioned:
 - static: the library's code read with `ast` — `_arch_param("section", "key", ...)`, `vendor_param(v, a, "section",
   "key", ...)`, and chains `.get("a").get("b")` / `["a"]["b"]` on a vendor configuration;
+- named: every key of a vendor file (top level, or a section's key) whose name the library's code spells as a string
+  literal — a reader the tests do not reach, or one that copies a section before reading it;
 - dynamic: the keys the library actually read while a test run went through it (`device_key_trace.py`).
 
     python3 nbxtensor/tools/device_key_census.py --vendors src/neurobrix/config/vendors --trace <trace file> \\
@@ -73,6 +75,22 @@ def vendor_sections(vendors_dir: Path) -> set:
     return tops
 
 
+def named_keys(vendors_dir: Path) -> set:
+    """Vendor-file keys (`top` or `section.key`) whose NAME the library spells as a string literal."""
+    import re
+    import yaml
+    text = "\n".join(p.read_text() for p in LIB.rglob("*.py"))
+    spelled = lambda name: re.search(r"[\"']%s[\"']" % re.escape(name), text) is not None
+    found = set()
+    for f in sorted(vendors_dir.glob("*/*.yml")):
+        for top, value in (yaml.safe_load(f.read_text()) or {}).items():
+            subs = list(value) if isinstance(value, dict) else []
+            found |= {f"{top}.{k}" for k in subs if spelled(str(k))}
+            if not subs and spelled(str(top)):
+                found.add(str(top))
+    return found
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--trace", action="append", default=[])
@@ -80,7 +98,7 @@ def main(argv=None) -> int:
     ap.add_argument("--vendors", required=True, help="the vendor files' directory (config/vendors)")
     a = ap.parse_args(argv)
     tops = vendor_sections(Path(a.vendors))
-    keys = {k for k in static_keys() if k.split(".")[0] in tops}
+    keys = {k for k in static_keys() if k.split(".")[0] in tops} | named_keys(Path(a.vendors))
     for t in a.trace:
         keys |= {line.strip() for line in Path(t).read_text().splitlines() if line.strip()}
     # `_vendor`, `_profile`, `_exact`: names the resolver adds to the profile it records, not keys of a file

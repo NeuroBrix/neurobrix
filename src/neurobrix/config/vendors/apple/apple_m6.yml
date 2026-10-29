@@ -26,31 +26,6 @@
 # limits against what the device reports — a copy left behind is a
 # red test, never a false picture.
 
-architecture: apple_silicon
-# provenance: measured 2026-09-10 — the backend builds this string
-# from the device name (`driver.py`), verified on Apple M4 Pro.
-compute_capability: "apple-m6"
-# gpu_family: not stated. This project does not know which
-# Apple GPU family M6 reports, and will not guess one.
-
-# What the Triton target actually reports, which is NOT the family above.
-# MEASURED 2026-09-05 on an M4 Pro: the Metal backend builds its arch string
-# from the Metal DEVICE NAME, lowercased and hyphenated
-# (`kernels/metal_device.py::MetalRuntime.arch_name`), so it says
-# "apple-m4-pro" where this file says "apple9". Matching on the family alone,
-# the smem budget below resolved to NOTHING on a real Mac and the 32 KB
-# filter silently did not apply — all 17 Volta tiles were offered, including
-# the 72 KB one that cannot run here.
-#
-# These are prefixes, matched against the reported target. "apple-m" covers
-# the whole M-series, which is exactly the scope this file claims in its
-# header (M1..M4, GPU family 7/8/9). A chip outside it matches nothing and
-# gets no filtering, which is the same zero-fallback answer as before.
-compute_capability_matches:
-  # This file claims ONE variant. The family profile keeps the
-  # broad "apple-m" prefix and serves anything unknown.
-  - "apple-m6"
-
 # Metal exposes no CUDA-style device string. The compiled (PyTorch) path
 # reaches Apple GPUs through the MPS backend, whose device string is "mps".
 device_prefix: "mps"
@@ -61,8 +36,6 @@ device_prefix: "mps"
 # for the 32 KB threadgroup-memory budget, which is a QUARTER of Volta's
 # 96 KB — the tightest constraint on this platform.
 block_sizes:
-  default: 1024
-
   # GEMM — Apple's simdgroup_matrix units are the equivalent of tensor
   # cores. Kept small until the 32 KB budget is measured rather than assumed.
   gemm:
@@ -72,92 +45,15 @@ block_sizes:
     num_warps: 4
     num_stages: 2
 
-  bmm:
-    block_m: 32
-    block_n: 32
-    block_k: 32
-    num_warps: 4
-
-  conv2d:
-    block_h: 16
-    block_w: 16
-    num_warps: 4
-
   resize: 256
   softmax_cap: 8192
   layernorm_tile: 1024
   groupnorm_cap: 65536
-  reduction: 1024
-
-  # Row-wise reductions over a dim (min / max / prod / all / any) and argmin.
-  #
-  # MEASURED 2026-09-07: `min` and `max` over a dim return a VALUE AND ITS
-  # INDEX, so their reduce carries a pair, and the Metal lowering stages such
-  # a reduce one element per thread — the tile must fit num_warps * 32. The
-  # adopted 8 x 1024 is 8192 against a 128-thread group.
-  #
-  # 8 x 128 with 32 warps is 1024 elements over 1024 threads, and is correct
-  # for max, min and argmin at N = 511, 1024, 1025 and 3077 against numpy in
-  # float64 (the row group is what matters here: at 8 rows the lowering used
-  # to collapse every row onto the first, which is fixed upstream and is why
-  # this entry can carry more than one row at all).
-  reduction_2d:
-    block_m: 8
-    block_n: 128
-    num_warps: 32
-
-  argmin:
-    block_m: 8
-    tile_n: 128
-    num_warps: 32
-
-  # Row-wise argmax — greedy sampling reads the argmax of a 32000-wide
-  # vocabulary row every token.
-  #
-  # MEASURED 2026-09-07: argmax is a MULTI-VALUE reduce (a value and its
-  # index travel together), and the Metal lowering has no multipass form for
-  # a tuple — it says so and refuses — so the tile must fit the threadgroup,
-  # which is num_warps * 32. The 4096 cap every architecture used refused
-  # against the default 4 warps (128 threads). 1024 over 32 warps is the
-  # largest that fits; the index it returns is exact at every tile measured
-  # (128/4, 256/8, 512/16, 1024/32 all give the same index on a 32000-wide
-  # row), so this is throughput, not correctness.
-  argmax:
-    tile_n: 1024
-    num_warps: 32
-
-  # M=1 dequant-GEMV occupancy rule — see nvidia/volta.yml for the rationale
-  # (the wrapper halves BLOCK_N until the grid reaches min_programs).
-  # 2 waves x 40 GPU cores (M3/M4 Max class); validation_status: analytical.
-  # Key absent or 0 -> no adaptation.
-  dequant_gemv:
-    min_programs: 80
-
-# sdpa_thresholds RETIRED (roadmap C3, 2026-10-22): the tl.dot flash's tile is certified per key by autotune
-# certify (`launch_keys.flash_tiles_certified`), not read from a hand table.
-
 memory:
   # the Triton arena's hold over the walked activations, while a component runs whole: not measured on this device —
   # a Triton plan here is refused by name (`PrismSolver._live_activation_mb`)
   triton_arena_activation_factor: null
   compiled_stream_driver_over_price: null   # not measured on this device (C1, 2026-10-27): a stream chunk is priced at its tensors
-  # 32 KB of threadgroup memory per threadgroup (Apple GPU family 7+).
-  # The single most binding difference from every NVIDIA profile here.
-  # MEASURED 2026-09-05 on an M4 Pro: `MTLDevice.maxThreadgroupMemoryLength()`
-  # returns exactly 32768, so the documented figure holds on real hardware.
-  max_shared_memory_per_block: 32768
-  max_registers_per_block: 32768
-  # Apple GPUs schedule in 32-wide SIMD groups. Named `warp_size` because one
-  # hardware concept has ONE key across every profile — AMD's 64-wide
-  # wavefronts are declared under the same name.
-  warp_size: 32
-
-  # SDPA deterministic-routing budget. 0 = NOT APPLICABLE: the
-  # non-determinism this routes around is a Volta-SIMT MMA issue and does
-  # not transfer to Apple's simdgroup path. Left 0 until shown otherwise on
-  # real hardware.
-  sdpa_math_max_scores_bytes: 0
-  sdpa_math_min_chunk_rows: 128
   # THE COMPILED ENGINE'S ATTENTION. PyTorch's MPS scaled_dot_product_attention is "just the math implementation,
   # but fused into a single MPSGraph or Metal shader" — "not an implementation of the Flash Attention algorithm"; no
   # memory-efficient kernel on MPS (pytorch/pytorch#179294, maintainer, 2026-04). It writes the full [B, H, Tq, Tk]
@@ -199,11 +95,6 @@ memory:
   # 2026-10-15 08:30); bounded, the allocator releases its cached blocks before it grows.
   compiled_allocator_memory_fraction: 1.0           # provenance: the device's own working set, the figure Prism plans in
 
-  # Allocator pool: fraction of device memory the free-list may keep parked.
-  # Apple Silicon is UNIFIED memory — the "device" budget is system RAM
-  # shared with everything else on the machine, so parking is far less
-  # polite here than on a discrete card. Halved accordingly.
-  alloc_pool_parked_cap_fraction: 0.25
   # Allocator pool: the most a smallest-fit hit may hand out beyond its request (fraction of the request,
   # kernels/nbx_tensor.DeviceAllocator._pool_fit_slack; Prism's piece-change price reads the same value).
   # 1.0 = the former fixed 2x, kept as validated: on unified memory a refused fit parks the block beside a
@@ -270,15 +161,6 @@ precision:
   # bit-identical — so no host-sync route is needed. What to expect from any
   # FUTURE f64 expression is silent narrowing, not a loud refusal.
   supports_fp64: false
-  # Whether each engine branch's OWN kernels compute float64 / complex128 elements, read with
-  # supports_fp64 (both must hold) -- a CAPABILITY: `compiled` is ATen's, which carries both wherever
-  # the device does; `triton` is the NeuroBrix Triton kernels' (cuda/hip lower double; Metal's
-  # lowering narrows it in silence, measured 2026-09-28 on the Sana 4K positional embedding). Read
-  # by the DtypeEngine (`config.device_supports_fp64`) and by the Triton wrappers' binding
-  # (`triton.dtype.triton_has_fp64` -> `nbx_tensor.set_backend_has_fp64`).
-  kernels_carry_fp64:
-    compiled: true
-    triton: false
   # Whether each engine branch HOLDS float64 / complex128 tensors at that width where its kernels can
   # -- a DtypeEngine POLICY, not a capability: the Triton branch is fp32-max (its elementwise and
   # index kernels read at fp32 stride) and narrows them to float32 / complex64. Read by
@@ -286,74 +168,6 @@ precision:
   stores_fp64:
     compiled: true
     triton: false
-
-# Software-pipelining budget — see nvidia/volta.yml for the schema.
-#
-# validation_status: conservative_pending_first_light. cp.async is a PTX
-# instruction with no Apple equivalent, and the Metal backend stages through
-# threadgroup memory by a different mechanism. Neither Volta's measured
-# fault nor Ampere's clearance transfers, so the budget stays at 2 until an
-# Apple GPU measures it: clamping can only cost throughput.
-pipelining:
-  max_num_stages: 2
-
-# How work reaches the device.
-#
-# A launch used to commit its command buffer and block on
-# `waitUntilCompleted()` before returning, so every kernel cost a host round
-# trip. Measured 2026-09-07 on TinyLlama decode: 598 us per launch across
-# 10,695 launches, 1,337 of them in a single decode step — 799 ms of an
-# 857 ms step. Metal executes one queue's buffers in commit order, so the
-# wait was never what made the engine correct; it only made every host read
-# of device memory safe by accident. The waits moved to the host accesses
-# themselves and the launch path commits without blocking.
-#
-# `max_command_buffers_in_flight` is what a queue may hold committed and not
-# yet awaited. Metal's own ceiling is 64 per queue and it BLOCKS inside
-# `commandBuffer()` at that point — a stall with nobody's name on it. 32
-# keeps the backpressure ours and visible, at half the ceiling; it is a
-# starting point measured on an M4 Pro, not a hardware constant.
-dispatch:
-  max_command_buffers_in_flight: 32
-  # Dispatches one command buffer carries before the stream commits it. A
-  # NeuroBrix stream is one command buffer with one serialised compute
-  # encoder; this bounds how long the host waits for a result and how much
-  # work a single failure takes down with it. It is not a correctness knob —
-  # the encoder's own barriers keep the order at any value. A decode step of
-  # TinyLlama encodes ~1,350 dispatches, so 512 puts it in three buffers
-  # where one per launch put it in 1,505.
-  max_dispatches_per_command_buffer: 512
-
-# Autotune correctness screen. The engine runs every candidate config once and
-# compares its result against a reference config's before timing any of them,
-# because an autotuner that ranks on speed alone selects whichever WRONG
-# kernel is fastest — a kernel that writes half its output does half the
-# stores and wins. Measured on Apple 2026-09-07: fp16 mm [64,32]@[32,64] chose
-# a config that left half the columns zero.
-#
-# These are the tolerances that separate "a different but valid summation
-# order" from "a different answer". Two configs with different block sizes
-# reduce in a different order, so their results differ in the last bits; a
-# config that drops output differs by the scale of the output itself. The
-# gap between those two is several orders of magnitude, and these sit in it.
-#
-# Relative to the reference's own magnitude: max|a - b| / max|b|. Integer
-# and boolean results are compared BIT-IDENTICALLY and ignore this table —
-# there is no valid reordering that changes an integer.
-autotune_screen_rtol:
-  float16: 2.0e-2
-  bfloat16: 4.0e-2
-  float32: 1.0e-4
-  float64: 1.0e-8
-
-# Above this many bytes of buffer, the autotune correctness screen does not
-# run. Screening copies every argument out and back once per candidate, so a
-# very large tensor turns a tuning step into hundreds of megabytes of traffic
-# — and on unified memory that pressure is the machine's, not a card's.
-# MEASURED 2026-09-07: unbounded screening of a 151936-wide softmax perturbed
-# six unrelated tests in the same process. A skipped screen is announced, not
-# silent.
-autotune_screen_max_bytes: 33554432
 
 # ---------------------------------------------------------------------------
 # Autotune bucket ladder and tile-extent lattice — INHERITED, 2026-09-22.
@@ -378,74 +192,3 @@ autotune_screen_max_bytes: 33554432
 tiling:
   extent_lattice: 16
 
-autotune:
-  buckets:
-    # elements — an element-wise launch's element count (`kernels/ops/elementwise_launch.py`), NEVER the `default`
-    # dimension ladder (`autotune_bucket.ladder_for` refuses it). NOT measured on this architecture (no such device on
-    # either machine): the four classes measured on V100-SXM2 2026-10-23 (nvidia/volta.yml, launch-bound under 65 536
-    # elements, bandwidth classes above) and confirmed on apple_m4_pro 2026-10-24 — the measurement on this
-    # architecture is owed (docs/reference/owed-proofs.md, "element-wise ladder per architecture").
-    elements:
-      - {up_to: 65536, step: 65536}
-      - {up_to: 1048576, step: 1048576}
-      - {up_to: 16777216, step: 16777216}
-      - {up_to: null, step: 68719476736}
-    default:
-      - {up_to: 64, step: 1}
-      - {up_to: 256, step: 16}
-      - {up_to: 1024, step: 32}
-      - {up_to: 8192, step: 128}
-      # Above 8 192 a QUARTER-OCTAVE, not a 512-step. The 512 tail was decided by a sweep
-      # that ran to about 4 096 and never met a request-scale dimension: a vocoder's batched
-      # GEMM keys on the WAVEFORM and reaches 1 963 520, which a 512-step cuts into some four
-      # thousand buckets — 1 400 of one model's 1 522 distinct M values sat above 8 192.
-      # Measured 2026-09-22 on both classes, two shapes (the vocoder's B=1,N=1,K=9 and a
-      # GEMM at N=K=512), each octave bucket carrying three or four measured values with its
-      # TOP as representative: 0.0 % median loss, 0.2 % max at ONE octave bucket. The rows
-      # below are finer than the octave that was measured, so they cost no more than it did.
-      # The first three octaves above the knee keep a NARROW step. Measured directly on the
-      # rows as shipped (the upscalers' N=360, K=180; three sizes inside each bucket with
-      # its TOP among them, 2026-09-22): a quarter-octave there cost 0.0 % median but
-      # **5.2 %** at the 10 240 bucket and 1.2 % at 16 384 — the loss lives just above the
-      # knee, where a quarter of an OCTAVE is still a quarter of the VALUE. Beyond 65 536
-      # the same sweep measured 0.0 % median and at most 0.6 %, so the quarter-octave stands.
-      # The convolution-width ladder below keeps its quarter-octave: its own sweep measured
-      # 0.0 % median AND max there, on both classes and two channel counts.
-      - {up_to: 16384, step: 512}
-      - {up_to: 32768, step: 1024}
-      - {up_to: 65536, step: 2048}
-      - {up_to: 131072, step: 16384}
-      - {up_to: 262144, step: 32768}
-      - {up_to: 524288, step: 65536}
-      - {up_to: 1048576, step: 131072}
-      - {up_to: 2097152, step: 262144}
-      - {up_to: null, step: 524288}
-    # The width of a ONE-ROW convolution (a 1-D convolution over a sequence: a vocoder's
-    # samples, a mel spectrogram's frames) is the request's length, unbounded by any
-    # resolution — chatterbox's vocoder reaches 444 721 samples for 18 s of speech. Above the
-    # GEMM ladder it steps by a quarter-octave (≤ 25 % of the value), so a census meets every
-    # class of a speech length in ~100 runs instead of ~1 000; the loss of that step is owed a
-    # measurement on both classes (bucket_loss.py) before the ladder is called final.
-    W:
-      - {up_to: 64, step: 1}
-      - {up_to: 256, step: 16}
-      - {up_to: 1024, step: 32}
-      - {up_to: 8192, step: 128}
-      - {up_to: 16384, step: 2048}
-      - {up_to: 32768, step: 4096}
-      - {up_to: 65536, step: 8192}
-      - {up_to: 131072, step: 16384}
-      - {up_to: 262144, step: 32768}
-      - {up_to: 524288, step: 65536}
-      - {up_to: null, step: 131072}
-
-# The flash kernel at a power-of-two head dim >= 128 is NOT measured on this architecture: the zero-pad
-# detour stays (launch_keys.flash_headdim_detour). Declared, never left absent: true only where the
-# correctness oracle was run with the detour off on this arch and stack (Volta, Triton 3.8, 2026-10-03).
-flash:
-  pow2_head_dim_correct: false
-
-# Convolution weight storage order (launch_keys.conv_weight_layout): KCRS, the container's own,
-# until this arch measures KRSC (the M4 Pro measured +46-63 % on its 3x3 keys, 2026-10-07).
-conv:
-  weight_layout: KCRS

@@ -2,6 +2,7 @@
 test would do if the code were wrong: place 57 in a 16-wide bucket (the batched GEMM lost up
 to 16.7 % there), or bucket a profile that declares no ladder."""
 from nbxtensor.ops.autotune_bucket import bucket, bucket_of, ladder_for, parse_ladder
+from neurobrix.core.config.loader import vendor_file  # the device whole: engine file + library half
 
 LADDER = parse_ladder([{"up_to": 64, "step": 1}, {"up_to": 256, "step": 16},
                        {"up_to": 1024, "step": 32}, {"up_to": 8192, "step": 128}, {"up_to": None, "step": 512}])
@@ -25,7 +26,7 @@ def test_the_volta_profile_declares_the_measured_ladder():
     from pathlib import Path
     import neurobrix
     p = Path(neurobrix.__file__).parent / "config" / "vendors" / "nvidia" / "volta.yml"
-    prof = yaml.safe_load(p.read_text())
+    prof = vendor_file(p)
     # M below the matrix unit's 64-row tile: classes of EIGHT (decision 2026-10-19 02:32, the supervisor for Hocine —
     # an exact row count made ~60 classes per decoder under certified-only; volta.yml's comment, 7d4048a2). This
     # assertion still said exact (57 -> 57) and stood red from 7d4048a2 to 2026-10-29. The 8-step's loss against the

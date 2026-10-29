@@ -154,6 +154,9 @@ assert parse_dtype("half") is NBXDtype.float16             # an alias the table 
 The library measures the facts of the machine it runs on and has a default for every setting, so `import nbxtensor`
 works with no application around it:
 
+- **device descriptions**: what the kernels are tiled by — shared memory, registers, warp size, tiles, the matrix
+  unit, dispatch limits — and how a device is recognised, one file per device in the package
+  (`nbxtensor/backend/devices/<vendor>/<name>.yml`, read by `nbxtensor.backend.device_files`);
 - **measured facts**: the host's free memory (`nbxtensor.backend.host_memory.memory_state`), whether the device
   shares the host's memory, whether its kernels compute float64 (`nbxtensor.backend.device_facts`);
 - **settings with a default**, set with plain data: the tiling table the memory splits are cut by
@@ -167,6 +170,10 @@ from pathlib import Path
 from nbxtensor.backend.device_names import arch_string
 from nbxtensor.backend.host_memory import memory_state
 from nbxtensor.ops import autotune_settings, tiling_policy
+from nbxtensor.backend import device_files
+
+m4 = device_files.read("apple", "apple_m4_pro")             # one device's description, from the package itself
+assert m4["compute_capability"] == "apple-m4-pro" and m4["memory"]["max_shared_memory_per_block"] == 32768
 
 assert arch_string("Apple M4 Pro") == "apple-m4-pro"        # a device's key: the library's own rule
 assert memory_state().source                                # the host reading names where it came from

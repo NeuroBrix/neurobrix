@@ -27,6 +27,7 @@ import pytest
 from nbxtensor.ops import _configs
 from nbxtensor.ops._configs import arch_smem_budget, configs_within_smem_budget
 from nbxtensor.ops.matmul import _MATMUL_AUTOTUNE_AMPERE_PLUS, _MATMUL_AUTOTUNE_VOLTA
+from neurobrix.core.config.loader import vendor_file  # the device whole: engine file + library half
 
 
 class _Target:
@@ -120,7 +121,7 @@ def test_only_apple_profiles_declare_matches_and_the_family_one_is_the_fallback(
     declaring = {}
     for path in sorted(_configs.Path(__file__).resolve().parents[3]
                        .glob("src/neurobrix/config/vendors/*/*.yml")):
-        cfg = yaml.safe_load(path.read_text()) or {}
+        cfg = vendor_file(path) or {}
         if cfg.get("compute_capability_matches"):
             declaring[f"{path.parent.name}/{path.stem}"] = [
                 str(m).strip().lower() for m in cfg["compute_capability_matches"]]

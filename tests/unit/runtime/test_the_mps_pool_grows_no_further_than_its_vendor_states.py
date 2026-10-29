@@ -18,6 +18,7 @@ import torch
 import yaml
 
 from neurobrix.core.runtime import torch_allocator as TA
+from neurobrix.core.config.loader import vendor_file  # the device whole: engine file + library half
 
 VENDORS = Path(__file__).resolve().parents[3] / "src" / "neurobrix" / "config" / "vendors"
 
@@ -29,7 +30,7 @@ def _plan(*allocs):
 
 def test_apple_states_the_fraction_and_no_other_vendor_does():
     for f in sorted(glob.glob(str(VENDORS / "*" / "*.yml"))):
-        m = (yaml.safe_load(open(f)) or {}).get("memory") or {}
+        m = (vendor_file(f) or {}).get("memory") or {}
         if "/apple/" in f:
             assert 0 < m["compiled_allocator_memory_fraction"] <= 2, f
         else:

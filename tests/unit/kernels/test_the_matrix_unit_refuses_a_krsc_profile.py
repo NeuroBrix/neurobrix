@@ -8,12 +8,13 @@ import pytest
 import yaml
 
 from nbxtensor.ops import _configs
+from neurobrix.core.config.loader import vendor_file  # the device whole: engine file + library half
 
 VOLTA = Path(__file__).resolve().parents[3] / "src/neurobrix/config/vendors/nvidia/volta.yml"
 
 
 def _bound(monkeypatch, layout):
-    prof = yaml.safe_load(VOLTA.read_text())
+    prof = vendor_file(VOLTA)
     assert prof.get("matrix_unit"), "volta.yml declares the matrix unit this cell speaks of"
     prof["conv"] = {"weight_layout": layout}
     monkeypatch.setattr(_configs, "active_vendor_profile", lambda: prof)

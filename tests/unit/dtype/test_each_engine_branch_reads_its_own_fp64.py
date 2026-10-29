@@ -28,6 +28,7 @@ import yaml
 from neurobrix.core.config.loader import CONFIG_ROOT
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 import nbxtensor.backend.capabilities as _nbx_capabilities  # the module the moved names live in (M2 cut of tensor.py)
+from neurobrix.core.config.loader import vendor_file  # the device whole: engine file + library half
 
 PROFILES = sorted((CONFIG_ROOT / "vendors").glob("*/*.yml"))
 BRANCHES = ("compiled", "triton")
@@ -36,7 +37,7 @@ KEYS = ("kernels_carry_fp64", "stores_fp64")
 
 @pytest.mark.parametrize("path", PROFILES, ids=lambda p: f"{p.parent.name}/{p.stem}")
 def test_every_vendor_profile_declares_each_branch_s_fp64_capability_and_storage(path):
-    precision = (yaml.safe_load(path.read_text()) or {}).get("precision") or {}
+    precision = (vendor_file(path) or {}).get("precision") or {}
     for key in KEYS:
         got = precision.get(key)
         assert isinstance(got, dict) and set(got) == set(BRANCHES) and all(

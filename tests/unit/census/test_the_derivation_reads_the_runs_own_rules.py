@@ -29,8 +29,8 @@ def volta_profile(monkeypatch):
     import yaml
     from nbxtensor.ops import _configs
     path = os.path.join(str(__import__("neurobrix.core.config.loader", fromlist=["CONFIG_ROOT"]).CONFIG_ROOT), "vendors", "nvidia", "volta.yml")
-    with open(path) as f:
-        prof = yaml.safe_load(f)
+    from neurobrix.core.config.loader import vendor_file
+    prof = vendor_file(path)                  # the device whole: engine file + library half
     monkeypatch.setattr(_configs, "active_vendor_profile", lambda: prof)
     return prof
 

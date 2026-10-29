@@ -5,6 +5,7 @@ transformer on Apple); and its tile is certified per key where the profile decla
 What this test would do if the code were wrong: a measured arch routing 96 to math, an unmeasured one (every NVIDIA
 profile) routing it to the flash, a key where the hand table chooses the tile or none where it is certified -> red."""
 import pytest
+from neurobrix.core.config.loader import vendor_file  # the device whole: engine file + library half
 
 
 @pytest.fixture
@@ -74,4 +75,4 @@ def test_every_apple_profile_retired_its_hand_table():
     from pathlib import Path
     import yaml
     apple = Path(__file__).resolve().parents[3] / "src/neurobrix/config/vendors/apple"
-    assert not [y.name for y in sorted(apple.glob("*.yml")) if yaml.safe_load(y.read_text()).get("sdpa_thresholds")]
+    assert not [y.name for y in sorted(apple.glob("*.yml")) if vendor_file(y).get("sdpa_thresholds")]

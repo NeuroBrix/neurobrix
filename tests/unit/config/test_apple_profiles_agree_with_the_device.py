@@ -26,6 +26,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from neurobrix.core.config.loader import vendor_file  # the device whole: engine file + library half
 
 APPLE = Path(__file__).resolve().parents[3] / "src" / "neurobrix" / "config" / "vendors" / "apple"
 
@@ -62,7 +63,7 @@ _MEASURED_PER_PROFILE = (
 def _profiles() -> dict:
     out = {}
     for f in sorted(APPLE.glob("*.yml")):
-        out[f.name] = yaml.safe_load(f.read_text()) or {}
+        out[f.name] = vendor_file(f) or {}
     return out
 
 

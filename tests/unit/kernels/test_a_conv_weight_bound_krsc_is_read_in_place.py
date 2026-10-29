@@ -17,13 +17,14 @@ from pathlib import Path
 import numpy as np
 import pytest
 import yaml
+from neurobrix.core.config.loader import vendor_file  # the device whole: engine file + library half
 
 REPO = Path(__file__).resolve().parents[3]
 VENDORS = REPO / "src" / "neurobrix" / "config" / "vendors"
 
 
 def test_every_profile_states_its_conv_weight_layout_and_only_the_measured_arch_says_krsc():
-    layouts = {str(y.relative_to(VENDORS)): (yaml.safe_load(y.read_text()).get("conv") or {}).get("weight_layout")
+    layouts = {str(y.relative_to(VENDORS)): (vendor_file(y).get("conv") or {}).get("weight_layout")
                for y in sorted(VENDORS.glob("*/*.yml"))}
     assert layouts and all(v in ("KCRS", "KRSC") for v in layouts.values()), layouts
     assert {k for k, v in layouts.items() if v == "KRSC"} == {"apple/apple_m4_pro.yml"}

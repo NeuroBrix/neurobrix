@@ -13,6 +13,7 @@ The value is data in the profile, read through the one door the solver uses.
 from __future__ import annotations
 
 import pytest
+from neurobrix.core.config.loader import vendor_file  # the device whole: engine file + library half
 
 
 def test_the_profile_declares_the_measured_unit():
@@ -35,5 +36,5 @@ def test_the_yaml_carries_the_value_off_apple_too():
 
     p = (pathlib.Path(__file__).resolve().parents[3]
          / "src/neurobrix/config/vendors/apple/apple_m4_pro.yml")
-    doc = yaml.safe_load(p.read_text())
+    doc = vendor_file(p)
     assert (doc.get("tiling") or {}).get("extent_lattice") == 16

@@ -14,6 +14,7 @@ import pytest
 import yaml
 
 from nbxtensor.ops import autotune_bucket as AB
+from neurobrix.core.config.loader import vendor_file  # the device whole: engine file + library half
 
 VENDORS = Path(AB.__file__).resolve().parents[1] / "config" / "vendors"
 
@@ -27,7 +28,7 @@ def test_a_profile_without_an_element_ladder_is_refused_not_given_the_default():
 
 @pytest.mark.parametrize("path", sorted(VENDORS.glob("*/*.yml")), ids=lambda p: p.stem)
 def test_every_vendor_profile_declares_its_element_ladder(path):
-    doc = yaml.safe_load(path.read_text())
+    doc = vendor_file(path)
     rows = ((doc.get("autotune") or {}).get("buckets") or {}).get("elements")
     assert rows, f"{path.name}: no autotune.buckets.elements"
     assert AB.ladder_for("elements", doc)

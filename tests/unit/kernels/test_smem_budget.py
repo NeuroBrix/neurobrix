@@ -29,13 +29,14 @@ import yaml
 
 from nbxtensor.ops._configs import arch_smem_budget, configs_within_smem_budget, smem_bytes_for_config
 from nbxtensor.ops.matmul import _MATMUL_AUTOTUNE_AMPERE_PLUS, _MATMUL_AUTOTUNE_VOLTA
+from neurobrix.core.config.loader import vendor_file  # the device whole: engine file + library half
 
 VENDORS = (Path(__file__).resolve().parents[3]
            / "src" / "neurobrix" / "config" / "vendors")
 
 
 def _budget(vendor: str, arch: str) -> int:
-    cfg = yaml.safe_load((VENDORS / vendor / f"{arch}.yml").read_text())
+    cfg = vendor_file((VENDORS / vendor / f"{arch}.yml"))
     return int(cfg["memory"]["max_shared_memory_per_block"])
 
 
@@ -125,7 +126,7 @@ def test_the_space_is_never_emptied():
 def test_every_profile_declares_the_budget(path):
     """A new architecture that forgets this key gets no filtering at all, and
     would silently inherit tiles it cannot run."""
-    cfg = yaml.safe_load(path.read_text())
+    cfg = vendor_file(path)
     assert (cfg.get("memory") or {}).get("max_shared_memory_per_block"), (
         f"{path.parent.name}/{path.name} declares no "
         f"memory.max_shared_memory_per_block")
@@ -137,7 +138,7 @@ def test_every_profile_is_findable_by_its_compute_capability(path):
     """Resolution is data, not a mapping table: the budget is found by matching
     the Triton target against `compute_capability`. A profile that omits it is
     unreachable, and the failure would be invisible — no filtering, no error."""
-    cfg = yaml.safe_load(path.read_text())
+    cfg = vendor_file(path)
     assert str(cfg.get("compute_capability", "")).strip(), (
         f"{path.parent.name}/{path.name} declares no compute_capability, so no "
         f"Triton target can ever resolve to it")
@@ -242,9 +243,9 @@ def test_every_profile_declares_what_the_reference_declares(path):
     name = f"{path.parent.name}/{path.stem}"
     if name == _REFERENCE:
         return
-    reference = set(_flatten(yaml.safe_load(
-        (VENDORS / "nvidia" / "volta.yml").read_text())))
-    mine = set(_flatten(yaml.safe_load(path.read_text())))
+    reference = set(_flatten(vendor_file(
+        (VENDORS / "nvidia" / "volta.yml"))))
+    mine = set(_flatten(vendor_file(path)))
     missing = sorted(k for k in reference - mine - set(_MAY_OMIT) if not k.startswith(tuple(_MAY_OMIT_PREFIX)))
     assert not missing, (
         f"{name} does not declare, and has no recorded reason to omit:\n  "

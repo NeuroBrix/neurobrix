@@ -210,12 +210,23 @@ def get_vendor_config(vendor: str, architecture: str) -> Dict[str, Any]:
     return copy.deepcopy(_parsed_vendor_file(str(config_path)))
 
 
+def vendor_file(path) -> Dict[str, Any]:
+    """The device a vendor file describes, whole: the engine's file at `path` merged with the library's half of the same
+    device (nbxtensor/backend/devices) — what a reader of `config/vendors/<vendor>/<name>.yml` means (a copy)."""
+    return copy.deepcopy(_parsed_vendor_file(str(path)))
+
+
 @lru_cache(maxsize=64)
 def _parsed_vendor_file(path: str) -> Dict[str, Any]:
     """One vendor file, parsed once per process. Never handed out: callers get a copy (`get_vendor_config`) or one
     leaf value (`vendor_param`), so no caller can alter what the next one reads."""
     with open(path) as f:
-        return yaml.safe_load(f) or {}
+        engine_half = yaml.safe_load(f) or {}
+    # The device's kernel-relevant half lives in the library (nbxtensor/backend/devices/<vendor>/<name>.yml, API.md
+    # section 11): the engine reads the two merged, a key written in both refused by name.
+    from nbxtensor.backend import device_files
+    p = Path(path)
+    return device_files.merge(device_files.read(p.parent.name, p.stem), engine_half, f"{p.parent.name}/{p.stem}: ")
 
 
 _ABSENT = object()

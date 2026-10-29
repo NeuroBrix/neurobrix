@@ -26,6 +26,7 @@ import numpy as np
 import pytest
 
 from neurobrix.triton.dtype import matrix_unit_flash_representation as rep
+from neurobrix.core.config.loader import vendor_file  # the device whole: engine file + library half
 
 _EPS32 = float(np.finfo(np.float32).eps)
 
@@ -106,7 +107,7 @@ def test_the_committed_volta_rows_all_load_under_their_own_budget():
     from nbxtensor.ops import _configs as C
     from nbxtensor.ops.flash_attention_m8n8k4 import head_parts, staged_shared_bytes
     import neurobrix
-    prof = yaml.safe_load((Path(neurobrix.__file__).parent / "config/vendors/nvidia/volta.yml").read_text())
+    prof = vendor_file((Path(neurobrix.__file__).parent / "config/vendors/nvidia/volta.yml"))
     budget = prof["memory"]["max_shared_memory_per_block"]
     mu = prof["matrix_unit"]
     rows = [(r, False) for r in mu["flash"]] + [(r, True) for r in mu["fp32_split"]["flash"]]

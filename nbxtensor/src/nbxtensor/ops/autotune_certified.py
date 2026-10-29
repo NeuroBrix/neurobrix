@@ -254,11 +254,9 @@ def describe_key(tuner, key: tuple) -> str:
 def _tolerance_for(vendor: str, profile: str, dtype: str) -> Optional[float]:
     """The profile's `autotune_screen_rtol[dtype]`, read from the profile file itself."""
     try:
-        import yaml
-        from nbxtensor.host import need as _need
-        path = Path(_need("vendors_dir")()) / vendor / f"{profile}.yml"   # the application's vendor files
-        cfg = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except Exception:
+        from nbxtensor.backend import device_files
+        cfg = device_files.merged(vendor, profile)       # the device's description (library half + application's)
+    except FileNotFoundError:
         return None
     table = cfg.get("autotune_screen_rtol") or {}
     canon = {"fp16": "float16", "bf16": "bfloat16", "fp32": "float32", "fp64": "float64"}.get(dtype, dtype)

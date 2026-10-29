@@ -21,7 +21,7 @@ from typing import Callable, Dict
 SERVICES: Dict[str, str] = {
     "vendor_config": "(vendor, architecture) -> the vendor file of that architecture, as a dict",
     "vendor_param": "(section, key, default) -> one value of the executing device's vendor file",
-    "vendors_dir": "() -> the directory of the vendor files (pathlib.Path)",
+    "vendors_dir": "() -> the directory of the application's own vendor files (pathlib.Path); optional: absent, the library's device files alone",
     "installation_refusals": "(path) -> why an installation path may not hold a backend build; optional: absent, none is refused",
     "matrix_unit_representation": "(...) -> how the matrix unit carries one GEMM's operands",
     "matrix_unit_flash_representation": "(...) -> how the matrix unit carries one attention's operands",

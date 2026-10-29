@@ -17,22 +17,21 @@ import yaml
 
 from neurobrix.core.dtype import engine as CE
 from neurobrix.triton import dtype as TE
+from neurobrix.core.config.loader import vendor_file  # the device whole: engine file + library half
 
 _VENDORS = os.path.join(os.path.dirname(CE.__file__), "..", "..", "config", "vendors")
 _FLOATS = ("float16", "bfloat16", "float32", "float64")
 
 
 def _profile(name):
-    with open(os.path.join(_VENDORS, name)) as f:
-        return yaml.safe_load(f)
+    return vendor_file(os.path.join(_VENDORS, name))
 
 
 def test_every_vendor_profile_declares_the_alignment():
     files = sorted(glob.glob(os.path.join(_VENDORS, "*", "*.yml")))
     assert len(files) >= 27
     for f in files:
-        with open(f) as fh:
-            assert TE.attention_operand_alignment(yaml.safe_load(fh)) in TE.ATTENTION_OPERAND_ALIGNMENTS, f
+        assert TE.attention_operand_alignment(vendor_file(f)) in TE.ATTENTION_OPERAND_ALIGNMENTS, f
 
 
 def test_an_undeclared_or_unknown_alignment_is_refused_by_name():

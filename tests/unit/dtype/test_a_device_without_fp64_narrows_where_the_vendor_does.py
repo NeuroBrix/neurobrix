@@ -25,13 +25,14 @@ import yaml
 
 from neurobrix.core.config.loader import CONFIG_ROOT
 from neurobrix.core.dtype.engine import DtypeEngine
+from neurobrix.core.config.loader import vendor_file  # the device whole: engine file + library half
 
 PROFILES = sorted((CONFIG_ROOT / "vendors").glob("*/*.yml"))
 
 
 @pytest.mark.parametrize("path", PROFILES, ids=lambda p: f"{p.parent.name}/{p.stem}")
 def test_every_vendor_profile_declares_whether_its_device_has_fp64(path):
-    precision = (yaml.safe_load(path.read_text()) or {}).get("precision") or {}
+    precision = (vendor_file(path) or {}).get("precision") or {}
     assert isinstance(precision.get("supports_fp64"), bool), (
         f"{path.parent.name}/{path.stem}: precision.supports_fp64 undeclared ({precision})")
 

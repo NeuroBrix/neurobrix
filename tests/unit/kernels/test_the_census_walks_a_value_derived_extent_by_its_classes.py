@@ -23,6 +23,7 @@ import pytest
 
 from neurobrix.kernels import census
 from nbxtensor.ops.autotune_bucket import bucket_of
+from neurobrix.core.config.loader import vendor_file  # the device whole: engine file + library half
 
 PROFILE = None
 
@@ -33,7 +34,7 @@ def _profile():
         import yaml
         from pathlib import Path
         root = Path(__file__).resolve().parents[3]
-        PROFILE = yaml.safe_load((root / "src/neurobrix/config/vendors/nvidia/volta.yml").read_text())
+        PROFILE = vendor_file((root / "src/neurobrix/config/vendors/nvidia/volta.yml"))
     return PROFILE
 
 
