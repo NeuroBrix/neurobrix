@@ -455,34 +455,18 @@ def _stored_bytes(info: dict, compute_dtype: NBXDtype,
     return n * itemsize(target)
 
 
-def _bf16_to_fp16_inplace(ptr: int, numel: int, device_idx: int):
-    """Run bf16→fp16 kernel in-place on a GPU buffer.
-
-    Both bf16 and fp16 are 2 bytes/element, so the kernel reads uint16
-    (bf16 raw bits) and writes fp16 to the same memory locations.
-
-    Creates typed NBXTensor wrappers around the raw pointer for Triton.
-    """
-    import triton
-    from nbxtensor.ops.dtype_convert import bf16_to_fp16_kernel
+def _half_in_place(ptr: int, count: int, device_idx: int):
+    """The loader's raw bf16 weight buffer at `ptr` rewritten in place as float16 by nbxtensor's one device
+    conversion (`ops.wrappers.bf16_to_fp16_gpu` with `out=` the same buffer)."""
+    from nbxtensor.ops.wrappers import bf16_to_fp16_gpu
 
     DeviceAllocator.set_device(device_idx)
     DeviceAllocator.ensure_triton_device(device_idx)
-
-    # Wrap raw pointer as typed NBXTensor for Triton kernel.
-    # int16 and uint16 are same 2-byte memory layout — Triton kernel
-    # treats bits as unsigned via .to(tl.uint32) anyway.
-    flat = (numel,)
+    flat = (count,)
     strides = contiguous_strides(flat)
-    src = NBXTensor(ptr, flat, strides, NBXDtype.int16, 'cuda',
-                    owns_data=False, device_idx=device_idx)
-    dst = NBXTensor(ptr, flat, strides, NBXDtype.float16, 'cuda',
-                    owns_data=False, device_idx=device_idx)
-
-    _set_device(src)
-    from nbxtensor.ops.elementwise_launch import ew_meta, ew_grid
-    m = ew_meta(numel)          # the certified tile of the count's class, as every element-wise launch
-    bf16_to_fp16_kernel[ew_grid(numel, m)](src, dst, numel, BLOCK=m['BLOCK_SIZE'], num_warps=m['num_warps'])
+    bits = NBXTensor(ptr, flat, strides, NBXDtype.int16, 'cuda', owns_data=False, device_idx=device_idx)
+    half = NBXTensor(ptr, flat, strides, NBXDtype.float16, 'cuda', owns_data=False, device_idx=device_idx)
+    bf16_to_fp16_gpu(bits, out=half)
 
 
 def _load_to_pinned_cpu(
@@ -680,7 +664,7 @@ def _load_shard_into_arenas(
                 arr_u16, strides = host_weight_layout(
                     np.frombuffer(raw, dtype=np.uint16).reshape(shape), bool(krsc) and key in krsc)
                 DeviceAllocator.memcpy(ptr, arr_u16.ctypes.data, nbytes, kind=1)
-                _bf16_to_fp16_inplace(ptr, arr_u16.size, target_dev)
+                _half_in_place(ptr, arr_u16.size, target_dev)
                 nbx = NBXTensor(ptr, shape, strides, NBXDtype.float16, 'cuda',
                                 owns_data=False, device_idx=target_dev)
                 weights[key] = nbx

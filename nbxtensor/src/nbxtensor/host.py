@@ -20,7 +20,6 @@ from typing import Callable, Dict
 SERVICES: Dict[str, str] = {
     "vendor_config": "(vendor, architecture) -> the vendor file of that architecture, as a dict",
     "vendor_param": "(section, key, default) -> one value of the executing device's vendor file",
-    "device_arch_string": "(model name) -> the arch string vendor files are keyed by",
     "vendors_dir": "() -> the directory of the vendor files (pathlib.Path)",
     "tiling_policy": "() -> the split sizes the tiling rules read, as a dict",
     "certified_dir": "() -> the directory of the certified kernel settings (pathlib.Path)",
@@ -30,7 +29,7 @@ SERVICES: Dict[str, str] = {
     "deferred_drain_policy_of": "(memory section of a vendor file) -> the deferred-free drain policy",
     "memory_class_gb": "(memory_mb) -> the memory class of a card, in GB",
     "memory_class_from_profile_id": "(hardware profile id) -> its memory class in GB, or None",
-    "installation_refusals": "(path) -> why an installation path may not hold a backend build",
+    "installation_refusals": "(path) -> why an installation path may not hold a backend build; optional: absent, none is refused",
     "census": "() -> the launch census in force (active, record, shadow_range, shadow_run); optional: absent, none is active",
     "census_table": "() -> the census table reader",
     "canonical_aten": "(op name) -> the canonical ATen op name",
@@ -61,7 +60,15 @@ class _NoCensus:
 
 
 #: hooks an application MAY provide; absent, the library runs as the value here describes (never a guessed fact)
-_ABSENT = {"census": lambda: _NoCensus}
+def _no_refusal(path) -> list:
+    """The installation rule of an application without one: no path is refused."""
+    return []
+
+
+_ABSENT = {"census": lambda: _NoCensus,
+           # an application's rule on where a backend build may live (NeuroBrix: off its workshop's cleared storage);
+           # absent, the library refuses no installation
+           "installation_refusals": _no_refusal}
 
 _PROVIDED: Dict[str, Callable] = {}
 

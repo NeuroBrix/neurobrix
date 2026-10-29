@@ -32,13 +32,24 @@ def _this_machine(monkeypatch):
     W.set_hardware_profile(previous)
 
 
+@pytest.fixture(autouse=True)
+def _no_pool(monkeypatch):
+    """The measurement with the allocator's pool off: every buffer the op takes reaches the driver counter. With it
+    on, a block an earlier test parked serves the op's output, and pool blocks count as live: the delta read 0 inside
+    the GPU suite while each cell was green alone (the Dell, V100, 2026-10-29)."""
+    from nbxtensor.tensor import DeviceAllocator as DA
+    DA._maybe_init_pool()
+    DA.device_synchronize(0)
+    DA.empty_cache_pool()
+    monkeypatch.setattr(DA, "_pool_enabled", False)
+
+
 def _measure(fn):
     """The allocator's peak above its level during ONE call, after a first call (which may tune the kernel's
     configuration, the tuning's own buffers being no part of the op)."""
     from nbxtensor.memory.allocator import DeviceAllocator as DA
     fn()
     DA.device_synchronize(0)
-    DA.empty_cache_pool()
     base = DA._cuda_live_bytes.get(0, 0)
     DA._cuda_peak_bytes[0] = base
     out = fn()
