@@ -1314,9 +1314,6 @@ def pass_graph(graph: Dict[str, Any], cp: ChunkPass) -> Dict[str, Any]:
 # Runtime helpers: duck-typed over torch.Tensor and NBXTensor (view, reshape, narrow, contiguous,
 # new_empty, copy_) — no import of either (R33).
 
-def evaluate_inner(lay: Layout, symbol: Callable[[str], int]) -> int:
-    return lay.inner.evaluate(symbol)
-
 
 def sliced_reads(plan: "RegionPlan", ops: Dict[str, Any]) -> Set[str]:
     """The stretch's inputs it reads ONLY in slices: they carry the axis (a layout), are no output of it, and no pass
@@ -1415,14 +1412,6 @@ def accumulate(acc: Any, part: Any, dtype: Any) -> Any:
 def store(acc: Any, dtype: Any) -> Any:
     """A contraction's sum stored once in `dtype`, the dtype its own output was given."""
     return acc if acc.dtype == dtype else own(acc, dtype)
-
-
-def ceil_div(a: int, b: int) -> int:
-    return -(-a // b)
-
-
-def chunk_count(total: int, size: int) -> int:
-    return max(1, math.ceil(total / max(1, size)))
 
 
 def dim_source(info: Any) -> Optional[Tuple[str, int]]:

@@ -74,10 +74,6 @@ class Segment:
     def weight_mb(self) -> float:
         return self.weight_bytes / (1024 * 1024)
 
-    @property
-    def live_mb_at_exit(self) -> float:
-        return self.live_bytes_at_exit / (1024 * 1024)
-
 
 @dataclass
 class Partition:

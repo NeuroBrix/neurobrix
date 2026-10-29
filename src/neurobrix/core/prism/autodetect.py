@@ -2213,45 +2213,6 @@ _APPLE_SILICON_SPECS = {
 }
 
 
-def _lookup_apple_gpu_cores(chip_name: str) -> int:
-    """Get GPU core count from chip name. Returns 8 as safe default."""
-    key = _normalize_apple_chip_name(chip_name)
-    if key in _APPLE_SILICON_SPECS:
-        return _APPLE_SILICON_SPECS[key][0]
-    return 8
-
-
-def _lookup_apple_bandwidth(chip_name: str) -> float:
-    """Get memory bandwidth in GB/s from chip name. Returns 100.0 as default."""
-    key = _normalize_apple_chip_name(chip_name)
-    if key in _APPLE_SILICON_SPECS:
-        return _APPLE_SILICON_SPECS[key][1]
-    return 100.0
-
-
-def _normalize_apple_chip_name(chip_name: str) -> str:
-    """
-    Normalize chip name for lookup.
-
-    "Apple M4 Max 40-core GPU" → "m4 max"
-    "Apple M2" → "m2"
-    """
-    import re
-    name = chip_name.lower()
-    m = re.search(r'm(\d+)\s*(ultra|max|pro)?', name)
-    if not m:
-        return ""
-    gen = m.group(1)
-    variant = m.group(2) or ""
-    return f"m{gen} {variant}".strip()
-
-
-def _detect_apple_chip() -> str:
-    """Detect Apple Silicon chip model."""
-    return _sysctl_str("machdep.cpu.brand_string") or \
-           _sysctl_str("hw.model") or "Apple Silicon"
-
-
 def _detect_apple_host_memory_mb() -> int:
     """Total physical RAM. On unified memory the CPU and GPU share it, but
     the GPU may not have all of it — see `_detect_apple_memory_mb`."""
@@ -2554,26 +2515,6 @@ def stored_major(cache_path, component: str) -> Optional[str]:
             by[d] = by.get(d, 0) + int(v.get("size_bytes") or 0)
     return max(by, key=by.get) if by else None
 _STORED = {"bfloat16": "BF16", "float32": "F32", "float16": "F16"}
-
-
-def _major_stored_dtypes(cache_path: Path) -> Dict[str, Tuple[str, int]]:
-    """{safetensors dtype: (the largest component stored mostly in it, its bytes)} from the weights indexes."""
-    import json as _json
-    out: Dict[str, Tuple[str, int]] = {}
-    for index in sorted((Path(cache_path) / "components").glob("*/weights_index.json")):
-        by: Dict[str, int] = {}
-        for v in (_json.loads(index.read_text()).get("tensors") or {}).values():
-            d = str(v.get("dtype", "")) if isinstance(v, dict) else ""
-            if d in _STORED:
-                by[d] = by.get(d, 0) + int(v.get("size_bytes") or 0)
-        if not by:
-            continue
-        major = max(by, key=by.get)
-        total = sum(by.values())
-        st = _STORED[major]
-        if st not in out or total > out[st][1]:
-            out[st] = (index.parent.name, total)
-    return out
 
 
 def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None) -> dict:

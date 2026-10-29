@@ -74,10 +74,6 @@ class DtypeResolver:
         else:
             return "float32"
 
-    def get_dtype_multiplier(self, source: str, target: str) -> float:
-        """Calculate memory multiplier for dtype conversion."""
-        return calculate_dtype_multiplier(source, target)
-
 
 def resolve_dtype(
     requested: str,

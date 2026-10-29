@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Removed
-- **The engine slims now that it imports nbxtensor**: code nothing reached is deleted, with no change of behaviour — the vendored third-party reference kernels (never imported, never packaged) and the compiled branch's unmapped op handlers. The engine's Python code went from 409 025 to 146 571 lines; `tools/engine_slim_scan.py` lists what remains to remove, move into nbxtensor or justify (`docs/nbxtensor/ENGINE_SLIM.md`), and a guard lets the engine only shrink.
+- **The engine slims now that it imports nbxtensor**: code nothing reached is deleted, with no change of behaviour — the vendored third-party reference kernels (never imported, never packaged) and the compiled branch's unmapped op handlers, and the planner's uncalled helpers. The engine's Python code went from 409 025 to 146 323 lines; `tools/engine_slim_scan.py` lists what remains to remove, move into nbxtensor or justify (`docs/nbxtensor/ENGINE_SLIM.md`), and a guard lets the engine only shrink.
 
 ### Fixed
 - **The Triton engine's autotune screen no longer refuses every configuration of a kernel whose input is a permuted view** (a convolution reading a channels-last input, for instance): the reference it compares against is now laid out the way the buffer is stored, so a correct configuration is kept and a runtime sweep completes.

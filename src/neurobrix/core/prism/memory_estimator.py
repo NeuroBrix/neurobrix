@@ -117,16 +117,6 @@ def compute_tensor_bytes(shape: List[int], dtype: str) -> int:
     return numel * bytes_per_element
 
 
-def compute_tensor_mb(shape: List[int], dtype: str) -> float:
-    """Compute memory for a tensor in MB."""
-    return bytes_to_mb(compute_tensor_bytes(shape, dtype))
-
-
-def compute_tensor_gb(shape: List[int], dtype: str) -> float:
-    """Compute memory for a tensor in GB."""
-    return bytes_to_gb(compute_tensor_bytes(shape, dtype))
-
-
 _UNSPECIFIED_WIDTH = 4          # fp32: a request that names no dtype plans at the widest
 
 

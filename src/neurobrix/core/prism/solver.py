@@ -265,13 +265,6 @@ class ComponentAllocation:
     def is_cpu(self) -> bool:
         return self.devices == ["cpu"]
 
-    @property
-    def offload_to_cpu(self) -> bool:
-        return "cpu" in self.devices
-
-    def get_shard_device(self, shard_file: str) -> str:
-        return self.shard_map.get(shard_file, self.device)
-
 
 @dataclass
 class ComponentMemory:
@@ -389,9 +382,6 @@ class DeviceState:
     def free_mb(self) -> float:
         return self.capacity_mb - self.used_mb - self.external_used_mb
 
-    @property
-    def utilization_pct(self) -> float:
-        return (self.used_mb / self.capacity_mb) * 100 if self.capacity_mb > 0 else 0
 
     @property
     def supports_dtypes(self) -> List[str]:
@@ -415,19 +405,12 @@ class DeviceState:
     def can_fit(self, memory_mb: float) -> bool:
         return memory_mb <= self.free_mb
 
-    def can_fit_block(self, base_size_mb: float, model_dtype: str) -> bool:
-        return self.can_fit(self.get_real_block_size(base_size_mb, model_dtype))
 
     def allocate(self, component_name: str, memory_mb: float) -> None:
         if not self.can_fit(memory_mb):
             raise RuntimeError(f"ZERO FALLBACK: Cannot allocate {memory_mb:.0f}MB to {self.device_string}")
         self.used_mb += memory_mb
         self.components.append(component_name)
-
-    def allocate_block(self, block_name: str, base_size_mb: float, model_dtype: str) -> float:
-        real_size = self.get_real_block_size(base_size_mb, model_dtype)
-        self.allocate(block_name, real_size)
-        return real_size
 
 
 @dataclass
@@ -583,8 +566,6 @@ class ExecutionPlan:
         alloc = self.components.get(component_name)
         return alloc.device if alloc else "cpu"
 
-    def get_memory_breakdown(self, component_name: str) -> Optional[ComponentMemory]:
-        return self.component_memory.get(component_name)
 
     def to_dict(self, hardware_profile: str = "unknown") -> Dict[str, Any]:
         return {
@@ -743,7 +724,6 @@ def memory_ladder_rung_mb(free_mb) -> int:
     return rung_down_mb(free_mb)
 
 
-
 def _capped_budget_mb(reading, capacity: float) -> float:
     """The law's budget for this reading, never above the capacity it budgets.
 
@@ -848,14 +828,6 @@ STRATEGY_RANK = {
 RANK_BASE = {1: 1000.0, 2: 800.0, 3: 600.0, 4: 400.0, 5: 200.0, 6: 10.0}   # rank 5 is free: host compute is 6
 #: a rank's floor: no penalty takes a strategy below it, so a rank never crosses the one beneath
 RANK_FLOOR_SPAN = 99.0
-
-
-def candidate_order(name: str, score: float, estimates) -> tuple:
-    """The order the solver takes its candidates in: the physical rank first, the measured time inside the rank
-    (a candidate the profile's facts could not estimate comes after the estimated ones of its rank), today's score
-    last. Lower sorts first."""
-    est = (estimates or {}).get(name)
-    return (STRATEGY_RANK.get(name, 9), est if isinstance(est, float) else float("inf"), -float(score))
 
 
 def order_candidates(candidates, estimates, tie: float = 0.01):
@@ -2268,30 +2240,6 @@ class PrismSolver:
     def _get_device_index(self, device_string: str) -> int:
         """Extract device index: 'cuda:2' → 2"""
         return int(device_string.split(':')[1])
-
-    def _get_spillover_device(
-        self, current_dev: DeviceState, available_devices: List[DeviceState], profile: PrismProfile
-    ) -> Optional[DeviceState]:
-        """
-        NVLink-aware spillover: prefer same interconnect group.
-        Score = (same_group: bool, free_mb: float)
-        """
-        current_idx = self._get_device_index(current_dev.device_string)
-        topology = profile.topology
-
-        def score(dev: DeviceState) -> tuple:
-            if dev.free_mb <= 0:
-                return (False, -1.0)
-            dev_idx = self._get_device_index(dev.device_string)
-            same_group = topology.devices_have_fast_interconnect([current_idx, dev_idx])
-            return (same_group, dev.free_mb)
-
-        candidates = [d for d in available_devices if d.device_string != current_dev.device_string]
-        if not candidates:
-            return None
-
-        best = max(candidates, key=score)
-        return best if score(best)[1] > 0 else None
 
 
     def _find_pipeline_device(
@@ -10116,7 +10064,6 @@ class PrismSolver:
         pass
 
 
-
 # =============================================================================
 # IMPORT PLANNING (for NBX Importer)
 # =============================================================================
@@ -10131,13 +10078,6 @@ class ImportPlan:
 
 class PrismImportPlanner:
     """Hardware planning for NBX Import phase. ONNX export is symbolic - always uses CPU."""
-
-    def plan_import(self, safetensors_size_bytes: int) -> ImportPlan:
-        size_gb = safetensors_size_bytes / (1024**3)
-        return ImportPlan("cpu", True, f"CPU export ({size_gb:.1f}GB weights)")
-
-    def verify_before_load(self, plan: ImportPlan) -> bool:
-        return True
 
 
 # =============================================================================

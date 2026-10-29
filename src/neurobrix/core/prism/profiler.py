@@ -1769,14 +1769,6 @@ class ActivationProfiler:
 
         return numel * dtype_bytes
 
-    def get_tensor_count(self) -> int:
-        """Get total number of tensors in graph."""
-        return len(self.tensors)
-
-    def get_op_count(self) -> int:
-        """Get total number of ops in graph."""
-        return len(self.execution_order)
-
 
 def profile_component(
     graph_path: Union[str, Path],

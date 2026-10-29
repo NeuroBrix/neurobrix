@@ -146,14 +146,6 @@ class AllocationStrategy(Enum):
         """True if weights stay in VRAM permanently (fast serving)."""
         return self in _EAGER_STRATEGIES
 
-    @property
-    def is_multi_gpu(self) -> bool:
-        """True if strategy distributes across multiple GPUs."""
-        return self not in (
-            AllocationStrategy.SINGLE_GPU,
-            AllocationStrategy.SINGLE_GPU_LIFECYCLE,
-            AllocationStrategy.LAZY_SEQUENTIAL,
-        )
 
     @property
     def granularity(self) -> str:
@@ -171,25 +163,6 @@ class AllocationStrategy(Enum):
         if self == AllocationStrategy.WEIGHT_SHARDING:
             return "weight_file"
         return "unknown"
-
-    def is_component_placement(self) -> bool:
-        """Check if this is a component placement strategy."""
-        return self in (
-            AllocationStrategy.COMPONENT_PLACEMENT,
-            AllocationStrategy.COMPONENT_PLACEMENT_LAZY,
-        )
-
-    def is_pipeline_parallel(self) -> bool:
-        """Check if this is a pipeline parallel strategy (per-layer sequential fill)."""
-        return self == AllocationStrategy.PIPELINE_PARALLEL
-
-    def is_block_scatter(self) -> bool:
-        """Check if this is a block scatter strategy."""
-        return self == AllocationStrategy.BLOCK_SCATTER
-
-    def is_weight_sharding(self) -> bool:
-        """Check if this is a weight sharding strategy."""
-        return self == AllocationStrategy.WEIGHT_SHARDING
 
 
 # Eager strategies: weights stay in VRAM permanently
@@ -371,12 +344,6 @@ class InterconnectGroup:
         """Check if device is in this group."""
         return device_index in self.members
 
-    def get_peer_devices(self, device_index: int) -> List[int]:
-        """Get all peer devices in this group (excluding self)."""
-        if device_index not in self.members:
-            return []
-        return [m for m in self.members if m != device_index]
-
 
 @dataclass
 class InterconnectTopology:
@@ -456,12 +423,6 @@ class InterconnectTopology:
 
         return True
 
-    def get_fastest_group(self) -> Optional[InterconnectGroup]:
-        """Get group with highest internal bandwidth."""
-        if not self.groups:
-            return None
-        return max(self.groups, key=lambda g: g.internal_bandwidth_gbps)
-
 
 # =============================================================================
 # PRISM PROFILE
@@ -529,12 +490,6 @@ class PrismProfile:
                 return n
         raise KeyError(f"profile {self.id!r}: device {device_index} is on no node")
 
-    @property
-    def cpu_memory_gb(self) -> float:
-        """CPU RAM in GB. Backward compat for code reading cpu_memory_gb."""
-        if self.cpu is None:
-            return 0.0
-        return self.cpu.ram_gb
 
     @property
     def total_vram_mb(self) -> int:
@@ -616,26 +571,6 @@ class PrismProfile:
                              f"lattices {sorted(said)} — one plan tiles on one")
         return said.pop()
 
-    def get_supported_dtypes(self) -> Set[str]:
-        """Get dtypes supported by ALL devices."""
-        if not self.devices:
-            return set()
-        common = set(self.devices[0].supports_dtypes)
-        for device in self.devices[1:]:
-            common &= set(device.supports_dtypes)
-        return common
-
-    def get_device_strings(self) -> List[str]:
-        """Get PyTorch device strings for all devices."""
-        return [d.get_device_string() for d in self.devices]
-
-    def has_fast_interconnect(self) -> bool:
-        """Check if profile has fast interconnect (any technology exceeding PCIe bandwidth)."""
-        # Technology-agnostic: any group with bandwidth > PCIe 4.0 x16 (64 Gbps) is "fast"
-        FAST_THRESHOLD_GBPS = 64.0
-        if self.topology.groups:
-            return any(g.internal_bandwidth_gbps > FAST_THRESHOLD_GBPS for g in self.topology.groups)
-        return False
 
     def get_min_pairwise_bandwidth(self, device_indices: Optional[List[int]] = None) -> float:
         """Get minimum bandwidth between any pair of devices (Gbps).

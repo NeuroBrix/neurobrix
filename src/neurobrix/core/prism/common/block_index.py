@@ -61,33 +61,6 @@ class BlockIndexExtractor:
                 
         return None
         
-    def sort_by_block(
-        self,
-        shard_paths: List[str],
-    ) -> List[Tuple[str, int]]:
-        """
-        Sort shard paths by block index.
-        
-        Non-block shards (e.g., embeddings) get index -1 to be placed first.
-        
-        Args:
-            shard_paths: List of shard file paths
-            
-        Returns:
-            List of (path, block_index) tuples sorted by block index
-        """
-        shards_with_blocks = []
-        
-        for path in shard_paths:
-            block_idx = self.extract(path)
-            if block_idx is None:
-                block_idx = -1  # Non-block shards go first
-            shards_with_blocks.append((path, block_idx))
-            
-        # Sort by block index, then by path for determinism
-        shards_with_blocks.sort(key=lambda x: (x[1], x[0]))
-        
-        return shards_with_blocks
 
 
 def extract_block_index(shard_path: str) -> Optional[int]:
