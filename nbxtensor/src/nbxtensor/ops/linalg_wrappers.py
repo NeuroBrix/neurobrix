@@ -280,8 +280,7 @@ def _dequant_gemv_block_n(N: int) -> int:
             prof = _core.get_hardware_profile()
             devices = getattr(prof, "devices", None) if prof else None
             if devices:
-                from nbxtensor.host import need as _need   # the application's core.config.loader (nbxtensor.host)
-                get_vendor_config = _need("vendor_config")
+                from nbxtensor.backend.device_files import describe as get_vendor_config   # the device, both halves
                 _brand = devices[0].brand
                 _vendor = getattr(_brand, "value", _brand)
                 cfg = get_vendor_config(_vendor, devices[0].architecture)

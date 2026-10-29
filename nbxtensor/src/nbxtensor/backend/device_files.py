@@ -19,7 +19,7 @@ from typing import Any, Dict, Iterator, Optional, Tuple
 
 DEVICES = Path(__file__).resolve().parent / "devices"
 
-__all__ = ["DEVICES", "names", "read", "merge", "merged"]
+__all__ = ["DEVICES", "names", "read", "merge", "merged", "describe", "param"]
 
 
 @functools.lru_cache(maxsize=None)
@@ -74,3 +74,36 @@ def merged(vendor: str, name: str) -> Dict[str, Any]:
     if app is not None and (app / vendor / f"{name}.yml").is_file():
         app_half = copy.deepcopy(_parsed(str(app / vendor / f"{name}.yml")))
     return merge(read(vendor, name), app_half, f"{vendor}/{name}: ")
+
+
+@functools.lru_cache(maxsize=256)
+def _described(vendor: str, name: str, app: Optional[str]) -> Dict[str, Any]:
+    app_half = {}
+    if app is not None and (Path(app) / vendor / f"{name}.yml").is_file():
+        app_half = _parsed(str(Path(app) / vendor / f"{name}.yml"))
+    lib_path = DEVICES / vendor / f"{name}.yml"
+    if not app_half and not lib_path.is_file():
+        known = ", ".join(f"{v}/{n}" for v, n, _ in names()) or "none"
+        raise LookupError(f"ZERO FALLBACK: no device file describes {vendor}/{name} (the library's "
+                          f"backend/devices/{vendor}/{name}.yml, nor the application's). Known: {known}")
+    return merge(_parsed(str(lib_path)) if lib_path.is_file() else {}, app_half, f"{vendor}/{name}: ")
+
+
+def describe(vendor: str, name: str) -> Dict[str, Any]:
+    """Device `vendor/name` whole (both halves), refused by name when neither describes it — the reader a kernel
+    asks for its device's facts. Merged once per process; a copy is handed out."""
+    app = _application_dir()
+    return copy.deepcopy(_described(vendor, name, None if app is None else str(app)))
+
+
+def param(vendor: str, name: str, section: str, key: str, default):
+    """One `<section>.<key>` of device `vendor/name`, `default` when the device states no such key (the device
+    itself is refused by name when nothing describes it) — the per-op reader: no copy of the whole description."""
+    app = _application_dir()
+    value = (_described(vendor, name, None if app is None else str(app)).get(section) or {}).get(key, _ABSENT)
+    if value is _ABSENT:
+        return default
+    return copy.deepcopy(value) if isinstance(value, (dict, list)) else value
+
+
+_ABSENT = object()

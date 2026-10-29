@@ -20,8 +20,6 @@ NEUROBRIX_NAMES = re.compile(r"vendor|rung|census|neurobrix|memory_class|profile
 
 # What is left (API.md section 11 names each row's fate and owner). Shrinks only.
 OFFENDERS = {
-    "nbxtensor.host:vendor_config",
-    "nbxtensor.host:vendor_param",
     "nbxtensor.host:vendors_dir",
     "nbxtensor.ops.autotune_certified.active_profile",
     "nbxtensor.ops.wrappers.get_hardware_profile",

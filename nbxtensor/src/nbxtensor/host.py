@@ -19,8 +19,6 @@ from typing import Callable, Dict
 
 #: the services this library reads, and what each one answers — the contract an application fulfils
 SERVICES: Dict[str, str] = {
-    "vendor_config": "(vendor, architecture) -> the vendor file of that architecture, as a dict",
-    "vendor_param": "(section, key, default) -> one value of the executing device's vendor file",
     "vendors_dir": "() -> the directory of the application's own vendor files (pathlib.Path); optional: absent, the library's device files alone",
 }
 

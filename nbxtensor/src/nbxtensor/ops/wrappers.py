@@ -766,8 +766,7 @@ def _arch_param(section: str, key: str, default):
     if not devices:
         return default
     try:
-        from nbxtensor.host import need as _need   # the application's core.config.loader (nbxtensor.host)
-        vendor_param = _need("vendor_param")
+        from nbxtensor.backend.device_files import param as vendor_param   # one key of the device, both halves
         _brand = devices[0].brand
         _vendor = getattr(_brand, "value", _brand)
         return vendor_param(_vendor, devices[0].architecture, section, key, default)

@@ -281,8 +281,7 @@ def _sdpa_math_scores_budget_bytes() -> int:
     if not devices:
         return 0
     try:
-        from nbxtensor.host import need as _need   # the application's core.config.loader (nbxtensor.host)
-        get_vendor_config = _need("vendor_config")
+        from nbxtensor.backend.device_files import describe as get_vendor_config   # the device, both halves
         # the DEVICE brand — NOT PrismProfile.vendor (that is the
         # machine maker, e.g. "dell", and would mis-resolve the path
         # config/vendors/<vendor>/<arch>.yml).
@@ -309,8 +308,7 @@ def _sdpa_math_scores_device_fraction() -> float:
     if not devices:
         return 0.0
     try:
-        from nbxtensor.host import need as _need   # the application's core.config.loader (nbxtensor.host)
-        get_vendor_config = _need("vendor_config")
+        from nbxtensor.backend.device_files import describe as get_vendor_config   # the device, both halves
         _brand = devices[0].brand
         _vendor = getattr(_brand, "value", _brand)
         cfg = get_vendor_config(_vendor, devices[0].architecture)

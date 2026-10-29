@@ -42,5 +42,9 @@ def test_with_no_observer_installed_nothing_runs_dry():
 
 
 def test_a_needed_service_nobody_provided_is_refused_by_name(no_application):
-    with pytest.raises(RuntimeError, match="vendor_config"):
-        host.need("vendor_config")
+    needed = [n for n in host.SERVICES if n not in host._ABSENT and n not in getattr(host, "_LIBRARY_OWN", {})]
+    for name in needed:                                   # whatever is left of the services (API.md section 11)
+        with pytest.raises(RuntimeError, match=name):
+            host.need(name)
+    with pytest.raises(KeyError, match="not a service"):
+        host.need("vendor_config")                        # the device description: the library's own now
