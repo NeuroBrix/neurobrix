@@ -10,7 +10,9 @@ Usage: --triton-sequential flag routes here.
 
 from typing import Optional, Any, Dict, List
 
-from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator, parse_dtype
+from nbxtensor.tensor import NBXTensor
+from nbxtensor.dtype.nbx_dtype import NBXDtype, parse_dtype
+from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.ops.dispatch import dispatch as kernel_dispatch
 from nbxtensor.ops import wrappers as w
 
@@ -259,7 +261,7 @@ class TritonSequentialDispatcher:
         valid = [t for t in inputs[0]
                  if hasattr(t, 'ndim') and t.ndim > 0 and t.numel() > 0]
         if len(valid) == 0:
-            from nbxtensor.tensor import ImpossibleExtentError
+            from nbxtensor.memory.allocator import ImpossibleExtentError
             shapes = [tuple(getattr(t, "shape", ())) for t in inputs[0]]
             dim = inputs[1] if len(inputs) > 1 else 0
             raise ImpossibleExtentError(

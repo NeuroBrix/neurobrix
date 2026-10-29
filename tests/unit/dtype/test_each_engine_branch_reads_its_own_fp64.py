@@ -26,7 +26,8 @@ import torch
 import yaml
 
 from neurobrix.core.config.loader import CONFIG_ROOT
-from nbxtensor.tensor import NBXDtype
+from nbxtensor.dtype.nbx_dtype import NBXDtype
+import nbxtensor.backend.capabilities as _nbx_capabilities  # the module the moved names live in (M2 cut of tensor.py)
 
 PROFILES = sorted((CONFIG_ROOT / "vendors").glob("*/*.yml"))
 BRANCHES = ("compiled", "triton")
@@ -138,21 +139,22 @@ def test_a_profile_whose_devices_disagree_is_refused_by_both_branches():
                                               ((("apple", "apple_silicon"),), False)])
 def test_the_engine_declares_the_profile_s_capability_to_nbx_tensor(monkeypatch, devices, expected):
     from nbxtensor import tensor as T
+    import nbxtensor.backend.capabilities as _nbx_capabilities
     from nbxtensor.ops import wrappers as W
-    monkeypatch.setattr(T, "_BACKEND_HAS_FP64", None)
+    monkeypatch.setattr(_nbx_capabilities, "_BACKEND_HAS_FP64", None)
     monkeypatch.setattr(W, "_NBX_HW_PROFILE", None)
     monkeypatch.setattr(W, "_NBX_HAS_NATIVE_BF16", True)
     with pytest.raises(RuntimeError, match="never declared"):
-        T.backend_has_fp64()
+        _nbx_capabilities.backend_has_fp64()
     W.set_hardware_profile(_profile(*devices))
-    assert T.backend_has_fp64() is expected
+    assert _nbx_capabilities.backend_has_fp64() is expected
 
 
 def test_nbx_tensor_takes_its_fp64_capability_from_its_caller_only():
     import inspect
     from nbxtensor import tensor as T
     with pytest.raises(TypeError):
-        T.set_backend_has_fp64("yes")
+        _nbx_capabilities.set_backend_has_fp64("yes")
     src = inspect.getsource(T)
     assert not re.search(r"_BACKEND_HAS_FP64\s*=\s*\{", src), "a per-backend fp64 table is back"
     assert not re.search(r"^\s*(from|import)\s+neurobrix\.(core|config|triton)\b", src, re.M), \

@@ -27,6 +27,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
+import nbxtensor.backend.capabilities as _nbx_capabilities  # the module the moved names live in (M2 cut of tensor.py)
 
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / "tools"))
@@ -48,7 +49,7 @@ def census_hardware(monkeypatch):
     from nbxtensor import tensor as T
     from nbxtensor.ops import wrappers as W
     from nbxtensor.ops import _configs
-    for mod, name in ((W, "_NBX_HW_PROFILE"), (W, "_NBX_HAS_NATIVE_BF16"), (T, "_BACKEND_HAS_FP64"),
+    for mod, name in ((W, "_NBX_HW_PROFILE"), (W, "_NBX_HAS_NATIVE_BF16"), (_nbx_capabilities, "_BACKEND_HAS_FP64"),
                       (_launcher, "_TARGET")):
         monkeypatch.setattr(mod, name, getattr(mod, name))
     monkeypatch.setattr(_configs, "_ACTIVE_PROFILE", dict(_configs._ACTIVE_PROFILE))
@@ -118,7 +119,7 @@ def test_baddbmm_is_keyed_as_its_wrapper_launches(tl_dot_gemms):
     batch1's dtype; the walk's key (64, 1024, 128, True, False, True, fp16, fp16, fp16, <bias>)."""
     from nbxtensor.ops import launch_keys as LK
     from nbxtensor.ops import wrappers as W
-    from nbxtensor.tensor import NBXDtype
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     F16 = NBXDtype.float16
     assert LK.baddbmm_launches(64, 128, 1024, F16, F16, F16) == [
         (LK.BADDBMM, (64, 1024, 128, True, False, True, "fp16", "fp16", "fp16", "fp16"))]

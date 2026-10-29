@@ -20,6 +20,7 @@ import pytest
 from nbxtensor.ops import autotune_certified as C
 
 from ._rig import running_backend
+import nbxtensor.backend.capabilities as _nbx_capabilities  # the module the moved names live in (M2 cut of tensor.py)
 
 
 def _proof(memory_mb=None, hardware_profile=None):
@@ -185,7 +186,8 @@ def two_class_rig(tmp_path, monkeypatch):
     and a directory whose only entry was proven on the 16 GB card."""
     from nbxtensor.ops import wrappers as W
     from nbxtensor import tensor as T
-    monkeypatch.setattr(T, "_BACKEND_HAS_FP64", T._BACKEND_HAS_FP64)   # restored after the cell
+    import nbxtensor.backend.capabilities as _nbx_capabilities
+    monkeypatch.setattr(_nbx_capabilities, "_BACKEND_HAS_FP64", _nbx_capabilities._BACKEND_HAS_FP64)   # restored after the cell
     before = (W._NBX_HW_PROFILE, W._NBX_HAS_NATIVE_BF16)
     d16 = type("Dev", (), {"index": 0, "name": "Tesla V100-SXM2-16GB", "memory_mb": 16384,
                            "brand": "nvidia", "architecture": "volta"})()

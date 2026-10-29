@@ -341,7 +341,7 @@ def one_case(op: str, tag: str, args, kwargs, device: str, out_dir: Path):
 
 
 def generate(out: Path, ops, only_missing: bool):
-    from nbxtensor.tensor import DeviceAllocator
+    from nbxtensor.memory.allocator import DeviceAllocator
     from nbxtensor.ops.dispatch import list_kernels
     DeviceAllocator.set_device(0)
     device = "cuda:0"

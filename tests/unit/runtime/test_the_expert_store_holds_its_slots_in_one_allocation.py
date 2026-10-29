@@ -26,7 +26,10 @@ import pytest
 
 from neurobrix.core.runtime.expert_residency import ExpertResidency
 from nbxtensor import tensor as nt
-from nbxtensor.tensor import DeviceAllocator as DA, NBXDtype, NBXTensor
+import nbxtensor.dtype.nbx_dtype as _nbx_dtype
+from nbxtensor.memory.allocator import DeviceAllocator as DA
+from nbxtensor.dtype.nbx_dtype import NBXDtype
+from nbxtensor.tensor import NBXTensor
 
 HIDDEN, INTER, N_SLOTS = 2048, 768, 7
 
@@ -76,7 +79,7 @@ def _store(driver):
 
 def test_the_slots_live_in_one_allocation(driver):
     store = _store(driver)
-    proj = INTER * HIDDEN * nt.dtype_size(NBXDtype.bfloat16)
+    proj = INTER * HIDDEN * _nbx_dtype.dtype_size(NBXDtype.bfloat16)
     assert store.slot_bytes == 3 * proj
     assert len(driver.mallocs) == 1, f"{len(driver.mallocs)} device allocations for {N_SLOTS} slots; one arena expected"
     (ptr, nbytes), = driver.mallocs

@@ -27,7 +27,9 @@ import pytest
 triton = pytest.importorskip("triton")
 import triton.language as tl  # noqa: E402
 
-from nbxtensor.tensor import DeviceAllocator, NBXDtype, NBXTensor  # noqa: E402
+from nbxtensor.memory.allocator import DeviceAllocator  # noqa: E402
+from nbxtensor.dtype.nbx_dtype import NBXDtype
+from nbxtensor.tensor import NBXTensor
 from nbxtensor.backend.launcher import launch  # noqa: E402
 
 ARENA_MB = 512
@@ -36,7 +38,7 @@ KEPT_MB = 128           # a quarter of the arena: a release that works leaves a 
 
 def _metal_or_skip():
     try:
-        from nbxtensor.tensor import _detect_gpu_backend
+        from nbxtensor.backend.runtime import _detect_gpu_backend
         if _detect_gpu_backend() != "metal":
             pytest.skip("the autoreleased resident list is triton-ext's Metal launch; other drivers bind their own way")
         from nbxtensor.backend import triton_ext_driver as drv

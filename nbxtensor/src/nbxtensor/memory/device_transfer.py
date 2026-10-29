@@ -36,7 +36,8 @@ degenerate forms.
 import re
 from typing import List
 
-from nbxtensor.tensor import NBXTensor, DeviceAllocator
+from nbxtensor.tensor import NBXTensor
+from nbxtensor.memory.allocator import DeviceAllocator
 
 _CUDA_ORDINAL_RE = re.compile(r"cuda:(\d+)")
 

@@ -32,7 +32,8 @@ from neurobrix.core.flow.iterative_process import (
 from neurobrix.triton.flow.iterative_process import (
     _gate_loop_state_finite as _gate_triton,
 )
-from nbxtensor.tensor import NBXDtype, NBXTensor
+from nbxtensor.dtype.nbx_dtype import NBXDtype
+from nbxtensor.tensor import NBXTensor
 
 
 # ── compiled engine gate (full CPU coverage) ─────────────────────────

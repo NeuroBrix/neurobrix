@@ -35,7 +35,8 @@ import textwrap
 
 import pytest
 
-from nbxtensor.tensor import DeviceAllocator, NBXDtype
+from nbxtensor.memory.allocator import DeviceAllocator
+from nbxtensor.dtype.nbx_dtype import NBXDtype
 
 _TOTAL = DeviceAllocator.device_count()
 needs_a_card = pytest.mark.skipif(_TOTAL == 0, reason="needs a CUDA device")

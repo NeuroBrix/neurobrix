@@ -312,7 +312,7 @@ def test_a_refused_attention_chunk_is_an_error_naming_its_key_never_a_smaller_re
     An allocation failure re-raises naming the key (op, shape, rows, bytes asked); there is no
     second launch at fewer rows (the 2026-09-02 halving retry is gone)."""
     from nbxtensor.ops import wrappers as W
-    from nbxtensor.tensor import DeviceOOMError
+    from nbxtensor.memory.allocator import DeviceOOMError
 
     class _T:
         def __init__(self, shape):

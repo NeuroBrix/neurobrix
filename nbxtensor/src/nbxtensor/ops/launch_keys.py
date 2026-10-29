@@ -18,7 +18,8 @@ from typing import List, Optional, Tuple
 
 from nbxtensor.ops import tiling_sizes as _ts
 from nbxtensor.ops.autotune_bucket import bucket_of
-from nbxtensor.tensor import NBXDtype, _get_tl_dtype
+from nbxtensor.dtype.nbx_dtype import NBXDtype
+from nbxtensor.tensor import _get_tl_dtype
 
 MATMUL = "nbxtensor.ops.matmul.matmul_kernel"
 ADDMM = "nbxtensor.ops.matmul.addmm_kernel"
@@ -685,7 +686,7 @@ def conv2d_route(N: int, in_c: int, out_c: int, out_h: int, out_w: int, dh: int,
                  x: NBXDtype, band_bytes: int, depthwise_enabled: bool = True) -> str:
     """"depthwise" (groups == in_c == out_c at dilation 1), "band" (the output, sized at the
     input's dtype, over `band_bytes`) or "plain" — the order the wrapper tests them in."""
-    from nbxtensor.tensor import dtype_size
+    from nbxtensor.dtype.nbx_dtype import dtype_size
     if depthwise_enabled and groups == in_c and groups == out_c and dh == 1 and dw == 1:
         return "depthwise"
     if N * out_c * out_h * out_w * dtype_size(x) > band_bytes:
@@ -722,7 +723,7 @@ def conv2d_launches(N: int, in_c: int, in_h: int, in_w: int, out_c: int, kh: int
     launch. The output dtype is the run's compute dtype when set (`_NBX_COMPUTE_DTYPE`), else the
     input's. The `fp16` key flag names an fp16 input (fixed 2026-09-29, aaad1c48; the entries were
     re-keyed in place)."""
-    from nbxtensor.tensor import dtype_size
+    from nbxtensor.dtype.nbx_dtype import dtype_size
     out_h, out_w = conv_out_hw(in_h, in_w, kh, kw, sh, sw, ph, pw, dh, dw)
     if out_h <= 0 or out_w <= 0:
         return []

@@ -13,10 +13,12 @@ import os
 import pytest
 
 from nbxtensor import tensor as N
+import nbxtensor.memory.allocator as _nbx_allocator
+import nbxtensor.backend.runtime as _nbx_runtime
 
 
 def _metal():
-    return N._detect_gpu_backend() == "metal"
+    return _nbx_runtime._detect_gpu_backend() == "metal"
 
 
 @pytest.mark.skipif(not _metal(), reason="needs the Metal backend (unified memory)")
@@ -29,15 +31,15 @@ def test_a_mapped_range_is_bound_without_a_copy_and_resolves_by_address(tmp_path
         m = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_COPY)
     base = ctypes.addressof(ctypes.c_char.from_buffer(m))
     expert = base + page + 100                        # an expert that does not start on a page
-    N.DeviceAllocator.bind_mapped(expert, page + 300)
+    _nbx_allocator.DeviceAllocator.bind_mapped(expert, page + 300)
     buf, off = runtime().buffer_for_pointer(expert)
     assert buf is not None and off == 100, (buf, off)
     contents = ctypes.addressof(ctypes.c_char.from_buffer(buf.contents().as_buffer(1)))
     assert contents == base + page, "the buffer is the mapping's own pages, not a copy"
-    assert N.DeviceAllocator.holds(expert) if hasattr(N.DeviceAllocator, "holds") else True
+    assert _nbx_allocator.DeviceAllocator.holds(expert) if hasattr(_nbx_allocator.DeviceAllocator, "holds") else True
 
 
 @pytest.mark.skipif(_metal(), reason="the refusal is for a backend without unified memory")
 def test_a_discrete_backend_refuses_to_bind_a_mapping_by_name():
     with pytest.raises(RuntimeError, match="needs unified memory"):
-        N.DeviceAllocator.bind_mapped(1 << 20, 4096)
+        _nbx_allocator.DeviceAllocator.bind_mapped(1 << 20, 4096)

@@ -46,7 +46,7 @@ from __future__ import annotations
 import ctypes
 from typing import List, Tuple
 
-from nbxtensor.tensor import DeviceAllocator
+from nbxtensor.memory.allocator import DeviceAllocator
 
 _CUDA_SUCCESS = 0
 _CU_STREAM_NON_BLOCKING = 1

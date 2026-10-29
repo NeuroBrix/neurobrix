@@ -29,7 +29,8 @@ sys.path.insert(0, "src")
 import numpy as np
 import triton
 import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services
-from nbxtensor.tensor import NBXTensor, DeviceAllocator
+from nbxtensor.tensor import NBXTensor
+from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.ops import wrappers as W
 from neurobrix.kernels.ops import embedding as emb_mod, index_select as isel_mod, index_put_op as iput_mod
 

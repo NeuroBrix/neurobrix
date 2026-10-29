@@ -30,7 +30,8 @@ from typing import Any, Dict
 
 import numpy as np
 
-from nbxtensor.tensor import NBXTensor, DeviceAllocator
+from nbxtensor.tensor import NBXTensor
+from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.random.seeded_draw import seeded_gaussian
 from nbxtensor.memory.device_transfer import needs_move, transfer_tensor
 

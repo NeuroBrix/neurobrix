@@ -54,7 +54,9 @@ except ModuleNotFoundError:  # script-mode under a pytest-less GPU venv
     pytest = _NoPytest()  # type: ignore[assignment]
 
 from nbxtensor.ops import wrappers as W
-from nbxtensor.tensor import DeviceAllocator, NBXDtype, NBXTensor
+from nbxtensor.memory.allocator import DeviceAllocator
+from nbxtensor.dtype.nbx_dtype import NBXDtype
+from nbxtensor.tensor import NBXTensor
 
 _NP = {NBXDtype.float32: (np.float32, 4), NBXDtype.float16: (np.float16, 2)}
 

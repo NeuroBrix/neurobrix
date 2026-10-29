@@ -365,7 +365,7 @@ def _declare_selected(name: str) -> str:
     cell was red on main. Every selection (the launcher's driver seam, the autotune key
     resolution, the refusal reader) passes through `selected_metal_backend` before a kernel is
     launched, so the declaration precedes the first launch."""
-    from nbxtensor.tensor import declare_backend_capability
+    from nbxtensor.backend.capabilities import declare_backend_capability
     declare_backend_capability("metal", loads_pointers_from_memory=(name == "triton_ext"))
     return name
 

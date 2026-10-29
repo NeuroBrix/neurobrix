@@ -22,7 +22,9 @@ import numpy as np
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator
+from nbxtensor.tensor import NBXTensor
+from nbxtensor.dtype.nbx_dtype import NBXDtype
+from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.memory.memory_pool import release_flow_memory
 from nbxtensor.memory.device_transfer import parse_device_idx
 from neurobrix.nbx.neurotax import normalize_tensor_name_strict

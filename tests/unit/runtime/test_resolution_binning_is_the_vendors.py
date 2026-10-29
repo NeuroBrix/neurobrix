@@ -217,7 +217,7 @@ def test_the_aten_restore_of_a_video_in_another_axis_order_restores_every_frame(
 
 def _gpu():
     try:
-        from nbxtensor.tensor import DeviceAllocator
+        from nbxtensor.memory.allocator import DeviceAllocator
         return DeviceAllocator.device_count() > 0
     except Exception:                                     # pragma: no cover
         return False

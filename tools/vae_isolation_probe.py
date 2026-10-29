@@ -232,7 +232,7 @@ def _vae_only_decode(model_name: str, dump_path: Path, output_png: Path,
         # standard dispatcher post-capture. Build one bound to vae_exec.
         from neurobrix.triton.sequential import TritonSequentialDispatcher
         try:
-            from nbxtensor.tensor import NBXDtype as _NBXD
+            from nbxtensor.dtype.nbx_dtype import NBXDtype as _NBXD
             std_disp = TritonSequentialDispatcher(
                 device_idx=int(target_dev.split(":")[-1]) if isinstance(target_dev, str) and ":" in target_dev else 0,
                 compute_dtype=_NBXD.float16, stores_fp64=vae_exec._triton_stores_fp64())

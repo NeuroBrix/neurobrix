@@ -395,7 +395,7 @@ class Zero3Strategy(ExecutionStrategy):
         moved: Dict[str, Any] = {}
         stream = state['transfer_stream']
         if is_triton:
-            from nbxtensor.tensor import DeviceAllocator as DA
+            from nbxtensor.memory.allocator import DeviceAllocator as DA
             DA.set_device(dev_idx)
         else:
             import torch
@@ -427,7 +427,7 @@ class Zero3Strategy(ExecutionStrategy):
         # Record readiness so the compute stream can wait on this block
         # before consuming any of its weights.
         if is_triton and stream:
-            from nbxtensor.tensor import DeviceAllocator as DA
+            from nbxtensor.memory.allocator import DeviceAllocator as DA
             # Ordering only — this handle never reaches a timing query, and a
             # timing-enabled event costs 9.6 us to record against 1.6 us for
             # an ordering-only one (measured 2026-09-03,
@@ -465,7 +465,7 @@ class Zero3Strategy(ExecutionStrategy):
         if ev is None:
             return
         if is_triton:
-            from nbxtensor.tensor import DeviceAllocator as DA
+            from nbxtensor.memory.allocator import DeviceAllocator as DA
             # stream=0 is the default (compute) stream.
             DA.stream_wait_event(0, ev, flags=0)
             DA.destroy_event(ev)
@@ -516,7 +516,7 @@ class Zero3Strategy(ExecutionStrategy):
 
         # Step 4: sync so the next malloc sees the freed region
         if is_triton:
-            from nbxtensor.tensor import DeviceAllocator as DA
+            from nbxtensor.memory.allocator import DeviceAllocator as DA
             DA.sync_device()
         else:
             device_sync(self.exec_device)
@@ -538,7 +538,7 @@ class Zero3Strategy(ExecutionStrategy):
         if os.environ.get("NBX_ZERO3_VRAM_LOG"):
             dev_idx = state['exec_dev_idx']
             if is_triton:
-                from nbxtensor.tensor import DeviceAllocator as DA
+                from nbxtensor.memory.allocator import DeviceAllocator as DA
                 peak_mb = DA.peak_memory_allocated(dev_idx) / 1e6
                 live_mb = DA.memory_allocated(dev_idx) / 1e6
                 print(
@@ -564,7 +564,7 @@ class Zero3Strategy(ExecutionStrategy):
                 self._evict_block(state, bidx, is_triton)
         # Also drop any unwaited readiness events.
         if is_triton:
-            from nbxtensor.tensor import DeviceAllocator as DA
+            from nbxtensor.memory.allocator import DeviceAllocator as DA
             for ev in state['block_events'].values():
                 DA.destroy_event(ev)
         state['block_events'].clear()
@@ -637,7 +637,7 @@ class Zero3Strategy(ExecutionStrategy):
         transfer_stream_torch = None
         if is_triton:
             try:
-                from nbxtensor.tensor import DeviceAllocator as DA
+                from nbxtensor.memory.allocator import DeviceAllocator as DA
                 DA.set_device(dev_idx)
                 transfer_stream = DA.create_stream()
             except Exception as e:
@@ -944,7 +944,7 @@ class Zero3Strategy(ExecutionStrategy):
                 from .expert_store import release_expert_store
                 release_expert_store(state)
             if is_triton:
-                from nbxtensor.tensor import DeviceAllocator as DA
+                from nbxtensor.memory.allocator import DeviceAllocator as DA
                 for ev in state['block_events'].values():
                     DA.destroy_event(ev)
                 ts = state.get('transfer_stream') or 0

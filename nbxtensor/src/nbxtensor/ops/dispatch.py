@@ -16,7 +16,7 @@ from typing import Optional, Callable, Dict
 import os
 import triton
 
-from nbxtensor.tensor import _set_device
+from nbxtensor.backend.runtime import _set_device
 from nbxtensor.shape import view_strides
 
 # Diagnostic (default-off): log when the metadata expand/view runtime-resolution
@@ -658,7 +658,7 @@ def _create_arange(start_or_end, end=None, step=1, *, dtype=None,
         raise ValueError("step must be non-zero")
     size = max(0, math.ceil((end - start) / step))
     if dtype is None:
-        from nbxtensor.tensor import NBXDtype
+        from nbxtensor.dtype.nbx_dtype import NBXDtype
         dtype = NBXDtype.int64 if isinstance(start_or_end, int) and (end is None or isinstance(end, int)) else NBXDtype.float32
     out = NBXTensor.empty((size,), dtype=dtype, device=device or 'cuda')
     if size > 0:
@@ -718,7 +718,8 @@ def _create_linspace(start, end, steps, *, dtype=None, layout=None,
     [start], not [end]); the bidirectional formula would yield `end`
     for that lone element, so it is special-cased through fill_kernel.
     """
-    from nbxtensor.tensor import NBXTensor, NBXDtype
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     from nbxtensor.ops.linspace_op import linspace_kernel
     from nbxtensor.ops.fill_op import fill_kernel
     steps = int(steps)

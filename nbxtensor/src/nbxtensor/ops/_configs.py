@@ -809,7 +809,7 @@ def prune_row_programs(configs, named_args, **kwargs):
     registers of one block (`memory.max_registers_per_block` of the profile: an fp32 element a register) — a tile past
     them spills and its compile alone ran tens of minutes per config (the first norm certification, 2026-10-22: no key
     done in 94 min on two cards); never more rows than exist."""
-    from nbxtensor.tensor import reduce_tile_max
+    from nbxtensor.backend.capabilities import reduce_tile_max
     from nbxtensor.ops.wrappers import _arch_param
     regs = _arch_param("memory", "max_registers_per_block", None)
     if regs is None:
@@ -840,7 +840,7 @@ def prune_gemv_vec(configs, named_args, **kwargs):
     where its lowering refuses beyond — Metal's 1024-thread threadgroup) and, on a backend that stages the reduce one
     element per thread, a K chunk within the program's threads (`nbx_tensor.reduced_extent_max`); never a chunk wider
     than K's next power of two nor more rows than N's but the smallest candidate."""
-    from nbxtensor.tensor import reduce_tile_max, reduced_extent_max
+    from nbxtensor.backend.capabilities import reduce_tile_max, reduced_extent_max
     cap = reduce_tile_max()
     k = triton.next_power_of_2(int(named_args['K']))
     n = triton.next_power_of_2(int(named_args['N']))
@@ -870,7 +870,7 @@ def prune_addmv(configs, named_args, **kwargs):
     wider than M's next power of two nor more rows than N's but the smallest candidate; on a backend that stages the
     reduce one element per thread, a reduction tile within the program's threads (`nbx_tensor.reduced_extent_max`;
     Metal, measured 2026-09-07: 64 x 256 against a 128-thread group refused)."""
-    from nbxtensor.tensor import reduce_tile_max, reduced_extent_max
+    from nbxtensor.backend.capabilities import reduce_tile_max, reduced_extent_max
     cap = reduce_tile_max()
     m = triton.next_power_of_2(int(named_args['M']))
     n = triton.next_power_of_2(int(named_args['N']))
@@ -900,7 +900,7 @@ def prune_row_reduce(configs, named_args, **kwargs):
     backend's reduce-tile cap (`nbx_tensor.reduce_tile_max`), the registers of one block (`memory.max_registers_per_
     block`: an fp32 element a register — a 128 x 4 096 block spilled and ptxas took minutes per candidate, the c1rest
     certification, 2026-10-23 17:57) and the per-thread bound (`reduced_extent_max`)."""
-    from nbxtensor.tensor import reduce_tile_max, reduced_extent_max
+    from nbxtensor.backend.capabilities import reduce_tile_max, reduced_extent_max
     from nbxtensor.ops.wrappers import _arch_param
     regs = _arch_param("memory", "max_registers_per_block", None)
     if regs is None:
@@ -982,7 +982,7 @@ def matmul_configs() -> List[triton.Config]:
 # must still be importable — the refusal belongs at the call site, not at
 # import.
 try:                                          # pragma: no cover - env-dependent
-    from nbxtensor.tensor import _detect_gpu_backend as _r33_pin_backend
+    from nbxtensor.backend.runtime import _detect_gpu_backend as _r33_pin_backend
 
     _r33_pin_backend()
 except Exception:

@@ -28,7 +28,17 @@ from pathlib import Path
 import pytest
 
 from nbxtensor import tensor as nbx_tensor
+import nbxtensor.backend.runtime as _nbx_runtime
 
+import nbxtensor.memory.allocator as _nbx_allocator
+
+# The seam spans the modules tensor.py was cut into (M2): the allocator (DeviceAllocator) and the runtime (the backend
+# table, its resolution, the runtime library's loader). Each is read on its own and checked against its own spans.
+import nbxtensor.backend.capabilities as _nbx_capabilities
+import nbxtensor.backend.faults as _nbx_faults
+SEAM_FILES = (Path(inspect.getfile(nbx_tensor)), Path(inspect.getfile(_nbx_allocator)),
+              Path(inspect.getfile(_nbx_runtime)), Path(inspect.getfile(_nbx_capabilities)),
+              Path(inspect.getfile(_nbx_faults)))
 SOURCE = Path(inspect.getfile(nbx_tensor)).read_text()
 
 # Names that reach the device runtime. Anything calling these is coupled to
@@ -42,18 +52,22 @@ RUNTIME_ENTRY_POINTS = ("_gpu_runtime", "_active_backend")
 SEAM_FUNCTIONS = ("_gpu_runtime", "_active_backend", "_detect_gpu_backend")
 
 
-def _allowed_spans() -> list[tuple[int, int]]:
-    """Line ranges permitted to reach the device runtime."""
-    tree = ast.parse(SOURCE)
+def _allowed_spans(source: str = SOURCE) -> list[tuple[int, int]]:
+    """Line ranges of `source` permitted to reach the device runtime."""
+    tree = ast.parse(source)
     spans = []
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef) and node.name == "DeviceAllocator":
             spans.append((node.lineno, node.end_lineno or node.lineno))
         elif isinstance(node, ast.FunctionDef) and node.name in SEAM_FUNCTIONS:
             spans.append((node.lineno, node.end_lineno or node.lineno))
-    if not spans:
-        pytest.fail("DeviceAllocator not found")
     return spans
+
+
+def test_the_seam_is_where_it_is_declared():
+    """DeviceAllocator in the allocator, the runtime's resolution in the runtime: a rename fails here."""
+    assert _allowed_spans(SEAM_FILES[1].read_text()), "DeviceAllocator not found in memory/allocator.py"
+    assert _allowed_spans(SEAM_FILES[2].read_text()), "the runtime's resolution not found in backend/runtime.py"
 
 
 def test_every_runtime_touch_is_inside_the_allocator():
@@ -62,18 +76,20 @@ def test_every_runtime_touch_is_inside_the_allocator():
     If this fails, someone reached the GPU runtime from outside the one class
     that is meant to own it. Move the call into `DeviceAllocator` and expose
     it as a method — that is the seam a Metal or ROCm backend replaces."""
-    spans = _allowed_spans()
     strays = []
-    for number, line in enumerate(SOURCE.split("\n"), start=1):
-        if any(start <= number <= end for start, end in spans):
-            continue
-        code = line.split("#", 1)[0]
-        if any(f"{name}()" in code for name in RUNTIME_ENTRY_POINTS):
-            strays.append((number, line.strip()[:90]))
+    for path in SEAM_FILES:        # every module tensor.py was cut into, each against its own spans
+        source = path.read_text()
+        spans = _allowed_spans(source)
+        for number, line in enumerate(source.split("\n"), start=1):
+            if any(start <= number <= end for start, end in spans):
+                continue
+            code = line.split("#", 1)[0]
+            if any(f"{name}()" in code for name in RUNTIME_ENTRY_POINTS):
+                strays.append((f"{path.name}:{number}", line.strip()[:90]))
 
     assert not strays, (
         "device-runtime calls found outside DeviceAllocator:\n"
-        + "\n".join(f"  line {n}: {t}" for n, t in strays)
+        + "\n".join(f"  {n}: {t}" for n, t in strays)
     )
 
 
@@ -119,7 +135,7 @@ def test_no_other_module_reaches_the_device_runtime_directly():
     offenders = []
     for path in (p for r in roots for p in r.rglob("*.py")):
         root = next(r for r in roots if r in path.resolve().parents)
-        if path.resolve() == own or "triton_kernels_ref" in str(path):
+        if path.resolve() in {f.resolve() for f in SEAM_FILES} or "triton_kernels_ref" in str(path):
             continue
         text = path.read_text(errors="replace")
         if "cpu_backend" in path.name:
@@ -148,7 +164,7 @@ def test_no_other_module_reaches_the_device_runtime_directly():
 
 def test_declared_backends_have_identical_contracts():
     """A key in `cuda` but not in `hip` is a crash on AMD alone."""
-    backends = nbx_tensor._GPU_BACKENDS
+    backends = _nbx_runtime._GPU_BACKENDS
     assert set(backends) == {"cuda", "hip"}
     cuda, hip = set(backends["cuda"]), set(backends["hip"])
     assert cuda == hip, (
@@ -167,7 +183,7 @@ def test_the_contract_covers_what_a_port_must_provide():
         "set_device", "get_device", "device_count", "mem_get_info", "sync",
         "malloc_host", "free_host",
     }
-    for name, table in nbx_tensor._GPU_BACKENDS.items():
+    for name, table in _nbx_runtime._GPU_BACKENDS.items():
         missing = required - set(table)
         assert not missing, f"backend {name!r} does not declare {sorted(missing)}"
 
@@ -176,7 +192,7 @@ def test_backend_selection_is_data_not_branching():
     """Selection walks the backend TABLE (the vendor runtime libraries each
     entry names) and never asks Triton's driver — whose backend probes import
     torch (R33, universal since 2026-09-05). Adding a backend is adding data."""
-    source = inspect.getsource(nbx_tensor._detect_gpu_backend)
+    source = inspect.getsource(_nbx_runtime._detect_gpu_backend)
     assert "driver.active" not in source.replace("`triton.runtime.driver.active`", ""), \
         "selection must not ask Triton's driver (its probes import torch)"
     assert "_GPU_BACKENDS.items()" in source, "selection should walk the backend table"

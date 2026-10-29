@@ -10,11 +10,13 @@ from __future__ import annotations
 import pytest
 
 from nbxtensor import tensor as NT
+import nbxtensor.backend.capabilities as _nbx_capabilities
+import nbxtensor.backend.runtime as _nbx_runtime
 from nbxtensor.ops import _configs as CF
 
 
 def _backend(monkeypatch, name):
-    monkeypatch.setattr(NT, "_detect_gpu_backend", lambda: name)
+    monkeypatch.setattr(_nbx_runtime, "_detect_gpu_backend", lambda: name)
 
 
 @pytest.mark.parametrize("prune,configs,red,args", [
@@ -27,7 +29,7 @@ def test_on_a_per_thread_backend_the_reduced_extent_fits_the_threads(monkeypatch
     assert kept
     for c in kept:
         assert c.kwargs[red] <= c.num_warps * 32, (c.kwargs, c.num_warps)
-        assert c.kwargs["BLOCK_N"] * c.kwargs[red] <= NT.reduce_tile_max()
+        assert c.kwargs["BLOCK_N"] * c.kwargs[red] <= _nbx_capabilities.reduce_tile_max()
     # the tiles Apple adopted by hand are candidates it keeps (8 x 128: 4 warps for the GEMV, 32 for addmv)
     assert any(c.kwargs["BLOCK_N"] == 8 and c.kwargs[red] == 128 for c in kept)
 

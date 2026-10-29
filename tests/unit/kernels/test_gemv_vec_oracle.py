@@ -38,7 +38,9 @@ except ModuleNotFoundError:  # script-mode under the pytest-less GPU venv
 
 import numpy as np
 
-from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator
+from nbxtensor.tensor import NBXTensor
+from nbxtensor.dtype.nbx_dtype import NBXDtype
+from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.ops import wrappers as W
 
 # fp16 weights, fp32 activation, fp32 accumulation over K<=4096 terms:

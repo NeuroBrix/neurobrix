@@ -12,6 +12,7 @@ card: the refusal happens before any allocation.
 from __future__ import annotations
 
 import pytest
+import nbxtensor.memory.allocator as _nbx_allocator  # the module the moved names live in (M2 cut of tensor.py)
 
 pytest.importorskip("triton")
 
@@ -44,18 +45,19 @@ _PROMOTE = r"""
 import ctypes, os, sys
 import numpy as np
 import nbxtensor.tensor as NT
-from nbxtensor.tensor import NBXTensor, NBXDtype
+import nbxtensor.memory.allocator as _nbx_allocator
+from nbxtensor.dtype.nbx_dtype import NBXDtype; from nbxtensor.tensor import NBXTensor
 calls = []
 keep = []
 def malloc(nbytes, dev_idx=None):
     b = ctypes.create_string_buffer(max(nbytes, 1)); keep.append(b); return ctypes.addressof(b)
 def memcpy(dst, src, nbytes, kind=3):
     calls.append(nbytes); ctypes.memmove(dst, src, nbytes)
-NT.DeviceAllocator.malloc_cuda = staticmethod(malloc)
-NT.DeviceAllocator.memcpy = staticmethod(memcpy)
-NT.DeviceAllocator.set_device = staticmethod(lambda *a, **k: None)
-NT.DeviceAllocator.ensure_triton_device = staticmethod(lambda *a, **k: None)
-NT.DeviceAllocator.free_cuda = staticmethod(lambda *a, **k: None)
+_nbx_allocator.DeviceAllocator.malloc_cuda = staticmethod(malloc)
+_nbx_allocator.DeviceAllocator.memcpy = staticmethod(memcpy)
+_nbx_allocator.DeviceAllocator.set_device = staticmethod(lambda *a, **k: None)
+_nbx_allocator.DeviceAllocator.ensure_triton_device = staticmethod(lambda *a, **k: None)
+_nbx_allocator.DeviceAllocator.free_cuda = staticmethod(lambda *a, **k: None)
 import neurobrix.triton.moe as M
 from neurobrix.core.runtime.graph.moe_fusion import expert_weight_lists
 E, H, F = 4, 6, 3

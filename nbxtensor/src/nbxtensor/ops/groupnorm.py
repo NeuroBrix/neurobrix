@@ -36,7 +36,7 @@ def _group_norm_configs():
 def _prune_group_norm(configs, named_args, **kwargs):
     """A chunk no wider than the backend's reduce-tile cap (`nbx_tensor.reduce_tile_max`) nor than the group's padded
     extent (a wider chunk only masks)."""
-    from nbxtensor.tensor import reduce_tile_max
+    from nbxtensor.backend.capabilities import reduce_tile_max
     hidden = int(named_args['group_size']) * int(named_args['HW'])
     cap = min(reduce_tile_max(), next_power_of_2(max(1, hidden)))
     keep = [c for c in configs if c.kwargs['BLOCK_SIZE'] <= cap]

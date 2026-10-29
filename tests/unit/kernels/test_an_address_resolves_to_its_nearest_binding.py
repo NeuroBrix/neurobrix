@@ -1,7 +1,7 @@
 """An address inside overlapping in-place bindings resolves to the NEAREST one (greatest base at or below it), which
 runs to the end of its own projection — never to a neighbour's shorter range that a launch would read past (DSV2
 triton garbage, 2026-10-20)."""
-from nbxtensor.tensor import DeviceAllocator as DA
+from nbxtensor.memory.allocator import DeviceAllocator as DA
 
 
 def _with_ranges(ranges, fn):

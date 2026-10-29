@@ -143,7 +143,7 @@ def run_kernel(runtime, library, name, block_size, x, w):
     """
     import Metal
     import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
-    from nbxtensor.tensor import DeviceAllocator
+    from nbxtensor.memory.allocator import DeviceAllocator
 
     batch_dim, feat_dim = x.shape
     function = library.newFunctionWithName_(name)

@@ -23,7 +23,7 @@ from types import SimpleNamespace
 import pytest
 
 from neurobrix.core.runtime.expert_files import held_dtype
-from nbxtensor.tensor import NBXDtype
+from nbxtensor.dtype.nbx_dtype import NBXDtype
 from tests.unit.prism.test_a_unified_device_holds_a_routed_component_as_an_expert_store import (
     _Container, _device, _indexed, _model_mem, _solver,
 )

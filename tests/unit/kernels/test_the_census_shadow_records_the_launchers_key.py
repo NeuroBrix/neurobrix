@@ -23,7 +23,7 @@ SCRIPT = r'''
 import os
 from neurobrix.kernels import census
 census.install()
-from nbxtensor.tensor import NBXTensor, DeviceAllocator as DA
+from nbxtensor.tensor import NBXTensor; from nbxtensor.memory.allocator import DeviceAllocator as DA
 from nbxtensor.ops import wrappers as W
 DA.device_synchronize()               # the shadow answers the whole driver surface
 a = NBXTensor.empty((19, 2048), "float16", 2)
@@ -65,7 +65,7 @@ def test_without_the_census_the_engine_is_not_a_shadow(tmp_path):
     script = r'''
 from neurobrix.kernels import census
 from nbxtensor.ops import wrappers  # defines the autotuned kernels
-from nbxtensor.tensor import DeviceAllocator as DA
+from nbxtensor.memory.allocator import DeviceAllocator as DA
 from nbxtensor.backend import launcher
 assert census.active() is False
 assert DA.malloc_cuda.__name__ == "malloc_cuda", DA.malloc_cuda
@@ -86,7 +86,8 @@ def test_the_shadow_refuses_while_a_device_is_visible(tmp_path):
     silence, so install() refuses at entry. Seen failing (the refusal) 2026-09-21 with
     CUDA_VISIBLE_DEVICES=0 on the rack; on a machine with no card this test cannot see the
     door and is skipped rather than read as green."""
-    from nbxtensor.tensor import DeviceAllocator, _detect_gpu_backend
+    from nbxtensor.memory.allocator import DeviceAllocator
+    from nbxtensor.backend.runtime import _detect_gpu_backend
     if DeviceAllocator.device_count() < 1:
         pytest.skip("no device visible: the door cannot be exercised here")
     try:

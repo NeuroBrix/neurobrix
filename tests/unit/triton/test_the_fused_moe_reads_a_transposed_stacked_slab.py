@@ -24,7 +24,8 @@ import pytest
 
 pytest.importorskip("triton")
 
-from nbxtensor.tensor import NBXDtype, NBXTensor  # noqa: E402
+from nbxtensor.dtype.nbx_dtype import NBXDtype  # noqa: E402
+from nbxtensor.tensor import NBXTensor
 
 E, K_, H, F, T = 8, 2, 64, 32, 5
 

@@ -23,7 +23,9 @@ import numpy as np
 from typing import Any, Callable, Dict, List, Optional
 
 from neurobrix import decode_progress, decode_stop
-from nbxtensor.tensor import DeviceAllocator, NBXTensor, NBXDtype
+from nbxtensor.memory.allocator import DeviceAllocator
+from nbxtensor.tensor import NBXTensor
+from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.memory.memory_pool import release_flow_memory
 from nbxtensor.ops import wrappers as w
 

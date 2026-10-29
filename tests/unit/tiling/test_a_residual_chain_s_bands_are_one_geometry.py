@@ -27,7 +27,7 @@ def test_the_census_derives_a_chain_conv_at_every_band_height():
     import collections
     import derived_census as D
     from nbxtensor.ops import launch_keys as LK
-    from nbxtensor.tensor import NBXDtype
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     shapes = {"x": [1, 512, 1408, 1216], "w": [512, 512, 3, 3]}
     op = {"op_type": "aten::convolution", "input_tensor_ids": ["x", "w"], "output_tensor_ids": ["y"],
           "attributes": {"stride": [1, 1], "padding": [1, 1], "dilation": [1, 1], "groups": 1}}

@@ -46,7 +46,7 @@ except ModuleNotFoundError:  # script-mode under the pytest-less GPU venv
 
     pytest = _NoPytest()  # type: ignore
 
-from nbxtensor.tensor import DeviceAllocator
+from nbxtensor.memory.allocator import DeviceAllocator
 
 
 class _PoolState:
@@ -126,9 +126,10 @@ class _FakeDriver:
 
 def _with_driver(monkeypatch):
     import nbxtensor.tensor as nt
+    import nbxtensor.backend.runtime as _nbx_runtime
     drv = _FakeDriver()
-    monkeypatch.setattr(nt, "_gpu_runtime", lambda: drv)
-    monkeypatch.setattr(nt, "_active_backend", lambda: {"malloc": "cudaMalloc", "free": "cudaFree"})
+    monkeypatch.setattr(_nbx_runtime, "_gpu_runtime", lambda: drv)
+    monkeypatch.setattr(_nbx_runtime, "_active_backend", lambda: {"malloc": "cudaMalloc", "free": "cudaFree"})
     monkeypatch.setattr(DeviceAllocator, "get_device", staticmethod(lambda: 0))
     monkeypatch.setattr(DeviceAllocator, "_rung_limit_bytes", {0: None})
     return drv

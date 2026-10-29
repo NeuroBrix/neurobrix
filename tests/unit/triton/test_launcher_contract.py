@@ -20,14 +20,15 @@ import ctypes
 
 import pytest
 
-from nbxtensor.tensor import DeviceAllocator
+from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.backend.launcher_contract import ArgSlot, verify_driver_contract
+import nbxtensor.backend.runtime as _nbx_runtime  # the module the moved names live in (M2 cut of tensor.py)
 
 
 def _metal_driver():
     """The Metal driver, or None where there is no Apple GPU."""
     nbx_tensor = pytest.importorskip("nbxtensor.tensor")
-    detect = nbx_tensor._detect_gpu_backend   # a renamed probe raises here, loudly
+    detect = _nbx_runtime._detect_gpu_backend   # a renamed probe raises here, loudly
     try:
         if detect() != "metal":
             return None
@@ -51,7 +52,7 @@ def _cuda_driver():
     contract is for.
     """
     nbx_tensor = pytest.importorskip("nbxtensor.tensor")
-    detect = nbx_tensor._detect_gpu_backend   # a renamed probe raises here, loudly
+    detect = _nbx_runtime._detect_gpu_backend   # a renamed probe raises here, loudly
     try:
         if detect() != "cuda":
             return None
@@ -239,7 +240,7 @@ def test_no_torch_is_pulled_by_compiling_or_launching(driver):
     code = (
         "import sys;"
         "sys.path.insert(0, %r);" % str(src_root) +
-        "import neurobrix; from nbxtensor.tensor import DeviceAllocator;"
+        "import neurobrix; from nbxtensor.memory.allocator import DeviceAllocator;"
         "DeviceAllocator.get_device();"
         "print('torch' in sys.modules)"
     )

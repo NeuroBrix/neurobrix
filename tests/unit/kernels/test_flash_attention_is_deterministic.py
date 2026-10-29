@@ -39,7 +39,7 @@ pytest.importorskip("triton")
 
 def _device_ready():
     try:
-        from nbxtensor.tensor import DeviceAllocator
+        from nbxtensor.memory.allocator import DeviceAllocator
         DeviceAllocator.set_device(0)
         return True
     except Exception:

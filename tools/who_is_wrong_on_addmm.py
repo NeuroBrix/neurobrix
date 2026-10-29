@@ -43,7 +43,8 @@ def main() -> int:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
     import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
     from nbxtensor.ops import wrappers as W
-    from nbxtensor.tensor import NBXTensor, NBXDtype
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     from nbxtensor.dtype.convert import f32_to_bf16_bits, bf16_bits_to_f32
 
     rng = np.random.default_rng(20260912)

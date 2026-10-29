@@ -7,7 +7,7 @@ import pytest
 
 
 def _has_gpu():
-    from nbxtensor.tensor import DeviceAllocator
+    from nbxtensor.memory.allocator import DeviceAllocator
     try:
         DeviceAllocator.set_device(0)
         return True
@@ -19,7 +19,8 @@ def _has_gpu():
 def test_slots_follow_the_lru_and_hold_the_routed_experts():
     import ctypes
     import triton
-    from nbxtensor.tensor import NBXTensor, NBXDtype
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     from nbxtensor.ops.moe_device_residency import expert_slot_assign_kernel, expert_miss_copy_kernel
     rng = np.random.default_rng(3)
     L, E, S, K, n = 3, 16, 10, 4, 1000                     # n elements per projection

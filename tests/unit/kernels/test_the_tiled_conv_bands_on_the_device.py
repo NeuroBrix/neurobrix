@@ -56,7 +56,7 @@ def test_a_biased_tiled_conv_holds_one_band_beside_its_output():
     2048 px on a 16 GB V100 (2026-10-22): the out-of-place bias add and the previous band's buffers stood beside the
     next band, and conv::2's second 1 153 MB band found no room. Injection (seen red, 2026-10-22): the out-of-place
     `add` back -> the peak assertion fails; the bias left out -> the value assertion fails."""
-    from nbxtensor.tensor import DeviceAllocator as DA
+    from nbxtensor.memory.allocator import DeviceAllocator as DA
     rng = np.random.default_rng(5)
     x = rng.standard_normal((1, 8, 256, 64)).astype(np.float32)
     w = (rng.standard_normal((16, 8, 3, 3)) * 0.2).astype(np.float32)

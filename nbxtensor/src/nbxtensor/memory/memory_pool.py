@@ -8,7 +8,7 @@ Zero torch. Uses DeviceAllocator (hardware-agnostic: CUDA/ROCm).
 
 import gc
 
-from nbxtensor.tensor import DeviceAllocator
+from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.memory.device_transfer import parse_device_idxs
 
 

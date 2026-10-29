@@ -7,7 +7,8 @@ second half read from the first's offset (values differ from silu(gate) * up —
 import numpy as np
 import pytest
 
-from nbxtensor.tensor import DeviceAllocator, NBXTensor
+from nbxtensor.memory.allocator import DeviceAllocator
+from nbxtensor.tensor import NBXTensor
 
 
 

@@ -138,5 +138,5 @@ class ComponentPlacementLazyStrategy(ComponentPlacementStrategy):
         for comp_name in list(self._phase_loaded):
             self.unload_weights(comp_name)
         self._phase_loaded.clear()
-        from nbxtensor.tensor import DeviceAllocator
+        from nbxtensor.memory.allocator import DeviceAllocator
         DeviceAllocator.empty_cache_pool()

@@ -26,7 +26,7 @@ import nbxtensor.ops.wrappers as W  # noqa: E402
 
 def _gpu_or_skip():
     try:
-        from nbxtensor.tensor import _detect_gpu_backend
+        from nbxtensor.backend.runtime import _detect_gpu_backend
         if _detect_gpu_backend() is None:
             pytest.skip("no GPU backend the engine can resolve")
     except Exception:

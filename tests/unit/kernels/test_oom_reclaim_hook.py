@@ -29,7 +29,8 @@ except ModuleNotFoundError:  # script-mode under a pytest-less GPU venv
 
     pytest = _NoPytest()  # type: ignore
 
-from nbxtensor.tensor import DeviceAllocator, NBXTensor
+from nbxtensor.memory.allocator import DeviceAllocator
+from nbxtensor.tensor import NBXTensor
 
 
 def _gpu_available() -> bool:

@@ -230,7 +230,7 @@ class RangeCensus:
             return
         if not self._is_nbx(result):
             return
-        from nbxtensor.tensor import NBXDtype
+        from nbxtensor.dtype.nbx_dtype import NBXDtype
         from nbxtensor.ops import wrappers as _w
         x = result
         if getattr(x, "_numel", None) == 0 or 0 in list(x.shape):

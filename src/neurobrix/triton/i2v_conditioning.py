@@ -26,7 +26,8 @@ from typing import Any, Optional
 
 import numpy as np
 
-from nbxtensor.tensor import NBXTensor, DeviceAllocator
+from nbxtensor.tensor import NBXTensor
+from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.memory.device_transfer import transfer_tensor
 from neurobrix.core.runtime.registry_flags import get_component_flag
 

@@ -26,7 +26,7 @@ def bound_profile(monkeypatch):
 
 def test_every_keyed_bucket_s_representative_forms_its_key(bound_profile):
     from nbxtensor.ops import launch_keys as LK
-    from nbxtensor.tensor import NBXDtype as D
+    from nbxtensor.dtype.nbx_dtype import NBXDtype as D
     checked = 0
     for a, b in ((D.float32, D.float32), (D.float16, D.float16), (D.float32, D.float16)):
         buckets = sorted({LK.bucket_of("M", m) for m in range(5, 600)})
@@ -66,7 +66,7 @@ def test_a_batched_gemm_of_a_few_rows_is_certified_at_its_own_rows(apple_profile
     route for a batched GEMM). The representative stopped at five rows and refused those keys as census defects (80
     on the Mac, 2026-10-20) — red here with the old bound."""
     from nbxtensor.ops import launch_keys as LK
-    from nbxtensor.tensor import NBXDtype as D
+    from nbxtensor.dtype.nbx_dtype import NBXDtype as D
     for m in (1, 2, 3, 4):
         for d in (D.float32, D.bfloat16, D.float16):
             keys = LK.bmm_launches(m, 128, 128, d, d, native_bf16=True)

@@ -331,7 +331,7 @@ def final_as_array(final, batch_axis: int):
             t = t.float()
         return np.ascontiguousarray(t.numpy(), dtype=np.float32)
     if hasattr(final, "nbx_dtype"):
-        from nbxtensor.tensor import NBXDtype
+        from nbxtensor.dtype.nbx_dtype import NBXDtype
         arr = final.to(NBXDtype.float32).numpy() if final.nbx_dtype != NBXDtype.float32 else final.numpy()
     else:
         arr = np.asarray(final)

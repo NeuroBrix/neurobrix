@@ -300,13 +300,13 @@ class CudaDriver(Driver):
         self._check(self.lib.cuCtxGetCurrent(ctypes.byref(ctx)), "cuCtxGetCurrent")
         if ctx.value:
             return
-        from nbxtensor.tensor import DeviceAllocator
+        from nbxtensor.memory.allocator import DeviceAllocator
         dev = ctypes.c_int(int(DeviceAllocator.get_device()))
         self._check(self.lib.cuDevicePrimaryCtxRetain(ctypes.byref(ctx), dev), "cuDevicePrimaryCtxRetain")
         self._check(self.lib.cuCtxSetCurrent(ctx), "cuCtxSetCurrent")
 
     def compute_capability(self) -> int:
-        from nbxtensor.tensor import DeviceAllocator
+        from nbxtensor.memory.allocator import DeviceAllocator
         dev = ctypes.c_int(int(DeviceAllocator.get_device()))
         major, minor = ctypes.c_int(), ctypes.c_int()
         self._check(self.lib.cuDeviceGetAttribute(ctypes.byref(major), self.CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, dev), "cuDeviceGetAttribute")
@@ -323,7 +323,7 @@ class CudaDriver(Driver):
 
         Read once per process and cached by the caller, never per launch.
         """
-        from nbxtensor.tensor import DeviceAllocator
+        from nbxtensor.memory.allocator import DeviceAllocator
         dev = ctypes.c_int(int(DeviceAllocator.get_device()))
         out = ctypes.c_int()
         self._check(self.lib.cuDeviceGetAttribute(
@@ -334,7 +334,7 @@ class CudaDriver(Driver):
 
     def load(self, binary: bytes, name: str, shared: int):
         self._ensure_context()
-        from nbxtensor.tensor import DeviceAllocator
+        from nbxtensor.memory.allocator import DeviceAllocator
         dev = int(DeviceAllocator.get_device())
         key = (dev, binary)
         module = self._modules.get(key)
@@ -379,7 +379,7 @@ class CudaDriver(Driver):
         if expected is not None and len(params) != expected:
             raise TypeError(f"NeuroBrix launcher: the kernel declares {expected} parameters, "
                             f"{len(params)} given — refused, not launched")
-        from nbxtensor.tensor import DeviceAllocator
+        from nbxtensor.memory.allocator import DeviceAllocator
         for i, (kind, value) in enumerate(params):
             if kind == "ptr" and value and not DeviceAllocator.holds(int(value)):
                 # The refusal names the parameter: "which buffer" is the
@@ -499,7 +499,7 @@ class CudaDriver(Driver):
 
     @staticmethod
     def _allocator():
-        from nbxtensor.tensor import DeviceAllocator
+        from nbxtensor.memory.allocator import DeviceAllocator
         return DeviceAllocator
 
     def create_stream(self) -> int:
@@ -562,7 +562,7 @@ def active_driver() -> Driver:
 
 
 def _resolve_driver() -> Driver:
-    from nbxtensor.tensor import _detect_gpu_backend
+    from nbxtensor.backend.runtime import _detect_gpu_backend
     try:
         name = _detect_gpu_backend()
     except Exception:
@@ -860,7 +860,8 @@ def prepare(kernel, args, kwargs) -> Tuple[_Prepared, Dict[str, Any]]:
     kwargs = dict(kwargs)
     _forward_debug(kernel, kwargs)      # into kwargs: `_pack_args` parses the compile options from THEM
     bound_args, specialization, options = nbx_binder(kernel, args, kwargs)
-    from nbxtensor.tensor import DeviceAllocator, _cached_device_idx
+    from nbxtensor.memory.allocator import DeviceAllocator
+    from nbxtensor.backend.runtime import _cached_device_idx
     dev = _cached_device_idx()
     if dev is None:
         dev = int(DeviceAllocator.get_device())
@@ -1461,7 +1462,7 @@ def _snapshot_ranges(address, ranges):
     """Copy only the given byte ranges of one device buffer to the host."""
     import ctypes
 
-    from nbxtensor.tensor import DeviceAllocator
+    from nbxtensor.memory.allocator import DeviceAllocator
     blobs = []
     for off, length in ranges:
         host = (ctypes.c_char * length)()
@@ -1473,7 +1474,7 @@ def _snapshot_ranges(address, ranges):
 def _snapshot(buffers):
     import ctypes
 
-    from nbxtensor.tensor import DeviceAllocator
+    from nbxtensor.memory.allocator import DeviceAllocator
 
     shots = []
     for address, nbytes, _name in buffers:
@@ -1486,7 +1487,7 @@ def _snapshot(buffers):
 def _restore(buffers, shots):
     import ctypes
 
-    from nbxtensor.tensor import DeviceAllocator
+    from nbxtensor.memory.allocator import DeviceAllocator
 
     for (address, nbytes, _name), blob in zip(buffers, shots):
         host = (ctypes.c_char * nbytes).from_buffer_copy(blob)
@@ -1709,7 +1710,7 @@ def bench_would_swap(total_bytes: int):
     if _os_bws.environ.get("NBX_BENCH_DOOR_DIAG"):
         _acct = ""
         try:
-            from nbxtensor.tensor import DeviceAllocator as _DA
+            from nbxtensor.memory.allocator import DeviceAllocator as _DA
             _live = _DA.memory_allocated() / 1e6
             _cached = sum(_DA._pool_cached_bytes.values()) / 1e6
             _n = len(_DA._cuda_ptr_size)
@@ -1789,7 +1790,7 @@ def screen_configs(tuner, configs, key, meta=None, record_key=None):
                                record_key=record_key)
     finally:
         try:
-            from nbxtensor.tensor import DeviceAllocator
+            from nbxtensor.memory.allocator import DeviceAllocator
             DeviceAllocator.empty_cache_pool()
         except Exception:                              # noqa: BLE001
             pass                                       # a sweep must not fail on cleanup
@@ -2212,7 +2213,9 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
     a mean/min/max), with the L2 flush and the timing done through the
     engine's runtime (`DeviceAllocator`: events on the legacy stream)."""
     import numpy as np
-    from nbxtensor.tensor import DeviceAllocator, NBXTensor, NBXDtype
+    from nbxtensor.memory.allocator import DeviceAllocator
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     fn()
     DeviceAllocator.stream_synchronize(0)
     # an L2-sized scratch flushed before every timed call, as upstream does.
@@ -2280,7 +2283,7 @@ class CandidateOverTimeBudget(Exception):
 
 def _time_ms(fn, n: int) -> float:
     """Wall time of n calls on the device, by CUDA events on the legacy stream."""
-    from nbxtensor.tensor import DeviceAllocator
+    from nbxtensor.memory.allocator import DeviceAllocator
     start = DeviceAllocator.create_event(timing=True); end = DeviceAllocator.create_event(timing=True)
     DeviceAllocator.record_event(start, 0)
     for _i in range(n):

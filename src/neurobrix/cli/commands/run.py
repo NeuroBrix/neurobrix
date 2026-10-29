@@ -903,7 +903,7 @@ def cmd_run(args):
     _growth = None
     if execution_mode != "compiled" and getattr(hw_profile, "devices", None) and not any(
             getattr(d, "has_unified_memory", False) for d in hw_profile.devices):
-        from nbxtensor.tensor import DeviceAllocator as _DAg
+        from nbxtensor.memory.allocator import DeviceAllocator as _DAg
         from neurobrix.core.runtime import runtime_growth as _rg
         _gdevs = list(range(_DAg.device_count()))
         if _gdevs:
@@ -919,7 +919,7 @@ def cmd_run(args):
             if torch.cuda.is_available():
                 torch.cuda.synchronize()
         else:
-            from nbxtensor.tensor import DeviceAllocator
+            from nbxtensor.memory.allocator import DeviceAllocator
             if DeviceAllocator.device_count() > 0:
                 DeviceAllocator.device_synchronize()
 
@@ -953,7 +953,7 @@ def cmd_run(args):
         _peak = (max(process_peak_reserved(d) for d in range(torch.cuda.device_count()))
                  if torch.cuda.is_available() else (_sampled_peak.stop() if _sampled_peak is not None else None))
     else:
-        from nbxtensor.tensor import DeviceAllocator
+        from nbxtensor.memory.allocator import DeviceAllocator
         _peak = DeviceAllocator.peak_device_bytes()
     print(run_timings.format_peak(None if _peak is None else _peak / 2**20), flush=True)
     if _growth is not None:

@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 from nbxtensor.ops import launch_keys as LK
-from nbxtensor.tensor import NBXDtype
+from nbxtensor.dtype.nbx_dtype import NBXDtype
 
 F32 = NBXDtype.float32
 

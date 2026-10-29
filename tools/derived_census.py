@@ -374,7 +374,7 @@ def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_
     axes, at those extents (`only`: the ops to derive, `skip`: the ops not to)."""
     from neurobrix.core.prism import runtime_widths as RW
     from nbxtensor.ops import launch_keys as LK
-    from nbxtensor.tensor import NBXDtype
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     g = runtime_graph(model, comp)
     ops = g["ops"]
     carried = {}
@@ -496,7 +496,7 @@ def _widening_check_rows(g, ops, shape, dt, skip, only, LK) -> list:
         if not (kind == "aten::floor_divide" or (kind == "aten::div" and mode in ("floor", "trunc"))):
             continue
         ins = list(o.get("input_tensor_ids") or ())
-        from nbxtensor.tensor import _FLOATING_DTYPES
+        from nbxtensor.dtype.nbx_dtype import _FLOATING_DTYPES
         ints = [t for t in ins if dt(t) not in _FLOATING_DTYPES]
         if not ints or len(ints) == len(ins):            # all integer: divided in the integers, no widening
             continue
@@ -1097,7 +1097,7 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
     """The launches of one op; None when the op launches no autotuned kernel. `loaded_dt(tid)`: a tensor's runtime
     dtype as its producer or loader holds it, before an island's casts — the dtype of what an op reads by name rather
     than receives as an operand (the fused MoE's expert weights)."""
-    from nbxtensor.tensor import NBXDtype
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     if kind not in _KEYED_KINDS:
         return None
     if True:  # noqa: SIM108 — the dispatch reads as the wrapper table it mirrors
@@ -1927,7 +1927,7 @@ def _flow_logits(model, lm, rows, has_native_bf16):
     keyed at the dtypes the LM's step gives its output. `rows`: (V, H, the dtype both operands take, or None for the
     LM output's own). A chain carries it as `flow_launches`; the extent loop asks it after the LM's derivation."""
     from nbxtensor.ops import launch_keys as _LK
-    from nbxtensor.tensor import NBXDtype
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     out_tid = raw_graph(model, lm)["output_tensor_ids"][0]
     V, H, fixed = rows
 
@@ -1980,7 +1980,7 @@ def _encoder_decoder_sites(model, topo, defaults, plan, has_native_bf16):
         # state [1, H] @ the token embedding transposed, through `mm` — at M = 1, the GEMV; the embedding by the flow's
         # own rule (`tied_embedding_name`), both operands at the dtypes the decoder's step gives them
         from nbxtensor.ops import launch_keys as _LK
-        from nbxtensor.tensor import NBXDtype
+        from nbxtensor.dtype.nbx_dtype import NBXDtype
         from neurobrix.triton.flow.encoder_decoder import tied_embedding_name
         gdec = raw_graph(model, dec)
         params = {t[len("param::"):]: m.get("shape") for t, m in gdec["tensors"].items() if t.startswith("param::")}
@@ -2360,7 +2360,7 @@ def derive_extents(model, mode, topo, defaults, plan, has_native_bf16, sdpa, unh
                     view, tiled_tf = plan_tiling(plan, comp)
                     if isinstance(feed, dict) and "__decode__" in feed:
                         # one position: every batch / sequence symbol at 1, the cache's K and V
-                        from nbxtensor.tensor import NBXDtype
+                        from nbxtensor.dtype.nbx_dtype import NBXDtype
                         g = raw_graph(model, comp)
                         d = dict(feed["__decode__"])
                         syms = {sid: (int(d.get("batch") or 1) if i.get("name") == "batch" else 1)
@@ -2381,7 +2381,7 @@ def derive_extents(model, mode, topo, defaults, plan, has_native_bf16, sdpa, unh
                     if inputs.pop("__kv_prefill__", False):
                         kv = {"prefill": True}
                     if kv is not None and "dtype" in kv:
-                        from nbxtensor.tensor import NBXDtype
+                        from nbxtensor.dtype.nbx_dtype import NBXDtype
                         kv = dict(kv, dtype=NBXDtype[str(kv["dtype"]).replace("torch.", "")])
                     _dts = {}
                     launches, outs = run_at_inputs(model, comp, dtypes[comp], mode, inputs,
@@ -2555,7 +2555,7 @@ def derive_keys(model: str, hardware: str, mode: str, rung, request: list):
         # float32 (`TritonRNNTEngine._run_lstm_np`: [T=1, B=1, I], the weights cast once) — its
         # launches outside any op, its geometry the component's own traced lstm
         from nbxtensor.ops import launch_keys as LK_
-        from nbxtensor.tensor import NBXDtype as _Dt
+        from nbxtensor.dtype.nbx_dtype import NBXDtype as _Dt
         for st in (flow.get("audio") or {}).get("stages") or []:
             if st.get("execution") != "rnnt_greedy":
                 continue

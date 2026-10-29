@@ -26,7 +26,8 @@ import re
 
 import pytest
 
-from nbxtensor.tensor import DeviceAllocator, DeviceOOMError
+from nbxtensor.memory.allocator import DeviceAllocator, DeviceOOMError
+import nbxtensor.backend.runtime as _nbx_runtime  # the module the moved names live in (M2 cut of tensor.py)
 
 
 def _cuda_total_bytes():
@@ -113,8 +114,9 @@ def test_an_unanswerable_driver_reads_as_none_and_never_as_zero():
     — a controller reading it would believe the card had nothing free and say so.
     """
     import nbxtensor.tensor as M
+    import nbxtensor.backend.runtime as _nbx_runtime
 
-    real_runtime = M._gpu_runtime
+    real_runtime = _nbx_runtime._gpu_runtime
 
     class _NoMemInfo:
         """The runtime handle, minus the one symbol under test."""
@@ -127,12 +129,12 @@ def test_an_unanswerable_driver_reads_as_none_and_never_as_zero():
                 raise AttributeError(name)
             return getattr(self._rt, name)
 
-    M._gpu_runtime = lambda *a, **k: _NoMemInfo(real_runtime())
+    _nbx_runtime._gpu_runtime = lambda *a, **k: _NoMemInfo(real_runtime())
     try:
         with pytest.raises(DeviceOOMError) as e:
             DeviceAllocator.malloc_cuda(_TOTAL * 4)
     finally:
-        M._gpu_runtime = real_runtime
+        _nbx_runtime._gpu_runtime = real_runtime
 
     oom = e.value
     assert oom.driver_total is None, (

@@ -19,6 +19,7 @@ profile is present, and the bare-process fallback used by tests.
 import importlib
 
 import pytest
+import nbxtensor.backend.capabilities as _nbx_capabilities  # the module the moved names live in (M2 cut of tensor.py)
 
 wrappers = importlib.import_module("nbxtensor.ops.wrappers")
 _configs = importlib.import_module("nbxtensor.ops._configs")
@@ -44,10 +45,11 @@ class _Profile:
 @pytest.fixture
 def restore_profile():
     from nbxtensor import tensor as T
-    saved = wrappers.get_hardware_profile(), T._BACKEND_HAS_FP64
+    import nbxtensor.backend.capabilities as _nbx_capabilities
+    saved = wrappers.get_hardware_profile(), _nbx_capabilities._BACKEND_HAS_FP64
     yield
     setattr(wrappers, "_NBX_HW_PROFILE", saved[0])
-    T._BACKEND_HAS_FP64 = saved[1]
+    _nbx_capabilities._BACKEND_HAS_FP64 = saved[1]
 
 
 # --- the YAMLs carry the key at all, on every shipped architecture ----------

@@ -18,7 +18,8 @@ import pytest
 
 triton = pytest.importorskip("triton")
 
-from nbxtensor.tensor import NBXDtype, NBXTensor  # noqa: E402
+from nbxtensor.dtype.nbx_dtype import NBXDtype  # noqa: E402
+from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.convert import bf16_bits_to_f32 as bf16_carrier_to_float32  # noqa: E402
 
 E, TOP_K, K, N = 32, 8, 1024, 512
@@ -26,7 +27,7 @@ E, TOP_K, K, N = 32, 8, 1024, 512
 
 def _metal_or_skip():
     try:
-        from nbxtensor.tensor import _detect_gpu_backend
+        from nbxtensor.backend.runtime import _detect_gpu_backend
         if _detect_gpu_backend() != "metal":
             pytest.skip("the pinned-table contract is this driver's")
         from nbxtensor.backend import triton_ext_driver as d
@@ -118,7 +119,7 @@ def test_the_engine_table_matches_fp64_through_the_wrapper():
 
 def test_the_capability_answers_from_the_selected_driver():
     _metal_or_skip()
-    from nbxtensor.tensor import backend_loads_pointers_from_memory
+    from nbxtensor.backend.capabilities import backend_loads_pointers_from_memory
     from nbxtensor.backend.metal_backend import selected_metal_backend
     assert selected_metal_backend() == "triton_ext"
     assert backend_loads_pointers_from_memory() is True, (

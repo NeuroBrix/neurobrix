@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import pytest
 
-from nbxtensor.tensor import NBXDtype
+from nbxtensor.dtype.nbx_dtype import NBXDtype
 from neurobrix.triton import dtype as T
 
 

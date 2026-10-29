@@ -185,7 +185,8 @@ def test_the_macs_key_is_screened_on_windows_with_a_bounded_host_footprint(monke
     for qual, at in atc._autotuners():
         if qual.rsplit(".", 1)[-1] == "conv2d_forward_kernel":
             monkeypatch.setattr(at, "cache", {})
-    from nbxtensor.tensor import DeviceAllocator, NBXTensor
+    from nbxtensor.memory.allocator import DeviceAllocator
+    from nbxtensor.tensor import NBXTensor
     try:
         DeviceAllocator.empty_cache_pool()
     except Exception:                                   # noqa: BLE001

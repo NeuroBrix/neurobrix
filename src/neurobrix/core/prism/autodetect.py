@@ -398,7 +398,7 @@ _BASE_PROBES = {
         "    F.scaled_dot_product_attention(q, q, q).sum().item()\n"),
     "triton": (
         "import neurobrix.triton.flow.iterative_process\n"
-        "from nbxtensor.tensor import DeviceAllocator, NBXTensor, NBXDtype\n"
+        "from nbxtensor.memory.allocator import DeviceAllocator; from nbxtensor.dtype.nbx_dtype import NBXDtype; from nbxtensor.tensor import NBXTensor\n"
         "from nbxtensor.ops import wrappers\n"
         "if DeviceAllocator.device_count() > 0:\n"
         "    DeviceAllocator.set_device(0)\n"
@@ -2477,7 +2477,7 @@ def _runtime_card_facts(index: int) -> dict:
     allocator reports (cudaMemGetInfo) and this process's own context on it (`device_sharing`) — or {} when the runtime
     cannot answer (the census shadow then refuses the card by name). Read through the engine's allocator, never torch."""
     try:
-        from nbxtensor.tensor import DeviceAllocator
+        from nbxtensor.memory.allocator import DeviceAllocator
         total = DeviceAllocator.device_total_bytes(index)
         facts = device_sharing(index)
         if total is None or total <= 0 or not facts or facts.get("own_context_mb") is None:

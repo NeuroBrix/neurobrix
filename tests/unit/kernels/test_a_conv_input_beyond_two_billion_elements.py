@@ -47,7 +47,7 @@ def _cuda_free_bytes():
 def test_the_channels_past_the_boundary_are_read():
     assert C_PAST * H * H >= BOUNDARY > (C_PAST - 1) * H * H, "the boundary must fall inside the input, before the marked channels"
     try:
-        from nbxtensor.tensor import DeviceAllocator
+        from nbxtensor.memory.allocator import DeviceAllocator
         DeviceAllocator.empty_cache_pool()
     except Exception:
         pass

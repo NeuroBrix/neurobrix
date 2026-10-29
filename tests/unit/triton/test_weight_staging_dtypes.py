@@ -22,7 +22,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from nbxtensor.tensor import DeviceAllocator, NBXDtype
+from nbxtensor.memory.allocator import DeviceAllocator
+from nbxtensor.dtype.nbx_dtype import NBXDtype
 from neurobrix.triton.weight_loader import _load_to_pinned_cpu
 
 
@@ -49,7 +50,7 @@ def test_the_staged_buffer_is_exactly_the_target_width(
     values = (np.arange(256, dtype=np.float64) * 0.5).astype(source_np)
     staged = _load_to_pinned_cpu(values.tobytes(), (256,),
                                  source_dtype, target_dtype)
-    from nbxtensor.tensor import dtype_size
+    from nbxtensor.dtype.nbx_dtype import dtype_size
     assert staged.nbytes() == 256 * dtype_size(target_dtype)
 
 
@@ -78,7 +79,7 @@ def test_fp32_to_bf16_is_two_bytes_wide_and_rounded_to_nearest_even():
     values = np.array([1.0, 2.0, -1.0, 0.5, 12345.0], dtype=np.float32)
     staged = _load_to_pinned_cpu(values.tobytes(), (values.size,),
                                  NBXDtype.float32, NBXDtype.bfloat16)
-    from nbxtensor.tensor import dtype_size
+    from nbxtensor.dtype.nbx_dtype import dtype_size
     assert staged.nbytes() == values.size * dtype_size(NBXDtype.bfloat16)
     import ctypes
     got = np.ctypeslib.as_array(

@@ -36,7 +36,9 @@ import pytest
 triton = pytest.importorskip("triton")
 import triton.language as tl  # noqa: E402
 
-from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator  # noqa: E402
+from nbxtensor.tensor import NBXTensor  # noqa: E402
+from nbxtensor.dtype.nbx_dtype import NBXDtype
+from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.backend.launcher import launch  # noqa: E402
 
 
@@ -51,7 +53,7 @@ def _stamp(out_ptr, value, N, BLOCK: tl.constexpr):
 
 def _backend_or_skip():
     try:
-        from nbxtensor.tensor import _detect_gpu_backend
+        from nbxtensor.backend.runtime import _detect_gpu_backend
         if _detect_gpu_backend() != "metal":
             pytest.skip("the two-queue hazard is Metal's; there is one queue elsewhere")
     except Exception:

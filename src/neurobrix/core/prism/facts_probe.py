@@ -27,7 +27,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 
 def _sync() -> None:
-    from nbxtensor.tensor import DeviceAllocator
+    from nbxtensor.memory.allocator import DeviceAllocator
     DeviceAllocator.device_synchronize()
 
 
@@ -89,7 +89,7 @@ def gemv_gbps(dtype: str, engine: str, k: int = 4096, n: int = 14336, reps: int 
 
 
 def _timed_copies(dst: int, src: int, nbytes: int, kind: int, reps: int) -> float:
-    from nbxtensor.tensor import DeviceAllocator
+    from nbxtensor.memory.allocator import DeviceAllocator
     DeviceAllocator.memcpy(dst, src, nbytes, kind)
     _sync()
     t0 = time.perf_counter()
@@ -101,7 +101,7 @@ def _timed_copies(dst: int, src: int, nbytes: int, kind: int, reps: int) -> floa
 
 def copies(nbytes: int = 1 << 30, reps: int = 10) -> dict:
     import numpy as np
-    from nbxtensor.tensor import DeviceAllocator
+    from nbxtensor.memory.allocator import DeviceAllocator
     n = int(nbytes)
     d0, d1 = DeviceAllocator.malloc_cuda(n), DeviceAllocator.malloc_cuda(n)
     h = DeviceAllocator.malloc_host_pinned(n)
@@ -238,7 +238,8 @@ def stored_dtype(shards: Iterable[Path], keys: Iterable[str]) -> str:
 
 
 def _triton_loader(root: Path, comp: str, used: List[Path]):
-    from nbxtensor.tensor import NBXDtype, DeviceAllocator
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
+    from nbxtensor.memory.allocator import DeviceAllocator
     from neurobrix.triton.weight_loader import load_component_weights
     rel = {f"components/{comp}/weights/{sh.name}": "cpu" for sh in used}
 

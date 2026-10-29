@@ -38,7 +38,7 @@ except ModuleNotFoundError:  # script-mode under the pytest-less GPU runtime ven
 import torch
 
 from nbxtensor.ops.dispatch import _create_linspace
-from nbxtensor.tensor import NBXDtype
+from nbxtensor.dtype.nbx_dtype import NBXDtype
 from neurobrix.kernels.torch_interop import nbx_to_torch
 # (NBXDtype, torch dtype, exact?) — fp32 is bit-exact vs torch; fp16/bf16
 # use a 1-ULP tolerance because the bidirectional FlagGems kernel and

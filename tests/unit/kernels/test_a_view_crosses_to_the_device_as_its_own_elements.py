@@ -22,25 +22,27 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import nbxtensor.memory.allocator as _nbx_allocator  # the module the moved names live in (M2 cut of tensor.py)
 
 SCRIPT = r'''
 import ctypes, os
 import numpy as np
 import neurobrix  # the application: nbxtensor's host services
+import nbxtensor.memory.allocator as _nbx_allocator
 import nbxtensor.tensor as NT
-from nbxtensor.tensor import NBXTensor, NBXDtype
+from nbxtensor.dtype.nbx_dtype import NBXDtype; from nbxtensor.tensor import NBXTensor
 
 keep = []
 def malloc(nbytes, dev_idx=None):
     b = ctypes.create_string_buffer(max(nbytes, 1)); keep.append(b); return ctypes.addressof(b)
 def memcpy(dst, src, nbytes, kind=3):
     ctypes.memmove(dst, src, nbytes)
-NT.DeviceAllocator.malloc_cuda = staticmethod(malloc)
-NT.DeviceAllocator.memcpy = staticmethod(memcpy)
-NT.DeviceAllocator.set_device = staticmethod(lambda *a, **k: None)
-NT.DeviceAllocator.free_cuda = staticmethod(lambda *a, **k: None)
-NT.DeviceAllocator.memcpy_async = staticmethod(lambda dst, src, nbytes, kind=3, stream=0: ctypes.memmove(dst, src, nbytes))
-NT.DeviceAllocator.malloc_host_pinned = staticmethod(malloc)
+_nbx_allocator.DeviceAllocator.malloc_cuda = staticmethod(malloc)
+_nbx_allocator.DeviceAllocator.memcpy = staticmethod(memcpy)
+_nbx_allocator.DeviceAllocator.set_device = staticmethod(lambda *a, **k: None)
+_nbx_allocator.DeviceAllocator.free_cuda = staticmethod(lambda *a, **k: None)
+_nbx_allocator.DeviceAllocator.memcpy_async = staticmethod(lambda dst, src, nbytes, kind=3, stream=0: ctypes.memmove(dst, src, nbytes))
+_nbx_allocator.DeviceAllocator.malloc_host_pinned = staticmethod(malloc)
 
 E, H, F = 3, 5, 4
 src = np.arange(E * H * 2 * F, dtype=np.float32).reshape(E, H, 2 * F)

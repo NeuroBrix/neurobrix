@@ -28,6 +28,7 @@ import numpy as np
 import pytest
 
 from nbxtensor.backend import launcher
+import nbxtensor.dtype.nbx_dtype as _nbx_dtype  # the module the moved names live in (M2 cut of tensor.py)
 
 
 def _has_gpu():
@@ -40,7 +41,7 @@ def _has_gpu():
     The module may legitimately be absent; a NAME inside it may not — hence the
     split between importorskip and the attribute read."""
     nbx = pytest.importorskip("nbxtensor.tensor")
-    empty, f32 = nbx.NBXTensor.empty, nbx.NBXDtype.float32   # renamed symbols raise here
+    empty, f32 = nbx.NBXTensor.empty, _nbx_dtype.NBXDtype.float32   # renamed symbols raise here
     try:
         empty((1,), f32, "cuda:0")
         return True
@@ -139,7 +140,7 @@ def test_a_deliberately_wrong_config_is_excluded_and_recorded():
     def _write(tensor, value):
         import ctypes
 
-        from nbxtensor.tensor import DeviceAllocator
+        from nbxtensor.memory.allocator import DeviceAllocator
         host = np.ascontiguousarray(value)
         DeviceAllocator.memcpy(tensor.data_ptr(),
                                host.ctypes.data_as(ctypes.c_void_p).value,
@@ -185,7 +186,7 @@ def test_no_consensus_is_refused_rather_than_timed():
         def run(self, *args, **kwargs):
             import ctypes
 
-            from nbxtensor.tensor import DeviceAllocator
+            from nbxtensor.memory.allocator import DeviceAllocator
             host = np.full(16, float(kwargs["V"]), dtype=np.float32)
             DeviceAllocator.memcpy(args[0].data_ptr(),
                                    host.ctypes.data_as(ctypes.c_void_p).value,

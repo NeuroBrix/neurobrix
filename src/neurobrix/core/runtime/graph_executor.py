@@ -120,7 +120,9 @@ def computed_array_to_container(t, device, dtype_name: str):
     """A computed-at-runtime array (a sincos or interpolated positional embedding, a traced buffer)
     placed in the Triton branch's container at the component's compute dtype. No torch (R33)."""
     import numpy as np
-    from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator, parse_dtype as _nbx_dtype
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.dtype.nbx_dtype import NBXDtype, parse_dtype as _nbx_dtype
+    from nbxtensor.memory.allocator import DeviceAllocator
     dev_idx = (int(device.split(':')[1]) if isinstance(device, str) and ':' in device else 0)
     DeviceAllocator.set_device(dev_idx)
     want = _nbx_dtype(dtype_name)
@@ -229,7 +231,7 @@ def _left_after_release(device, mode) -> str:
     if dev:
         device_sync(dev)
     if str(mode or "").startswith("triton"):
-        from nbxtensor.tensor import DeviceAllocator as DA
+        from nbxtensor.memory.allocator import DeviceAllocator as DA
         idx = int(dev.split(":")[1]) if ":" in dev else 0
         return f"; the device still holds {DA._cuda_live_bytes.get(idx, 0) / 2**20:.0f} MB live"
     from neurobrix.core.device_utils import device_allocator_figures
@@ -812,7 +814,8 @@ class GraphExecutor:
                     return computed_array_to_container(t, self.device, str(self.dtype).replace("torch.", ""))
                 if not triton or not is_torch_tensor(t):
                     return t
-                from nbxtensor.tensor import NBXTensor, DeviceAllocator
+                from nbxtensor.tensor import NBXTensor
+                from nbxtensor.memory.allocator import DeviceAllocator
                 dev_idx = (int(self.device.split(':')[1])
                            if isinstance(self.device, str) and ':' in self.device
                            else 0)
@@ -1072,7 +1075,8 @@ class GraphExecutor:
             # The Triton branch interpolates with the house bilinear kernel
             # on an NBXTensor (R33): [1, D, gh, gw] fp32 → [1, D, gh', gw'].
             import numpy as np
-            from nbxtensor.tensor import NBXTensor, NBXDtype
+            from nbxtensor.tensor import NBXTensor
+            from nbxtensor.dtype.nbx_dtype import NBXDtype
             from nbxtensor.ops.wrappers import upsample_bilinear2d_wrapper
             if isinstance(traced_embed, np.ndarray):
                 src_np = traced_embed
@@ -2418,7 +2422,8 @@ class GraphExecutor:
     def _load_weights_triton(self, nbx_path, component, shard_map, only=None):
         """Load weights as NBXTensor (triton mode). Zero torch."""
         from neurobrix.triton.weight_loader import load_component_weights
-        from nbxtensor.tensor import parse_dtype, DeviceAllocator
+        from nbxtensor.dtype.nbx_dtype import parse_dtype
+        from nbxtensor.memory.allocator import DeviceAllocator
         from nbxtensor.ops import wrappers as _w
 
         if ':' in str(self.device):
@@ -2568,7 +2573,8 @@ class GraphExecutor:
         if getattr(self, "_fp32_constants_bound", False):
             return
         from neurobrix.triton.dtype import fp32_constant_names
-        from nbxtensor.tensor import NBXTensor, NBXDtype
+        from nbxtensor.tensor import NBXTensor
+        from nbxtensor.dtype.nbx_dtype import NBXDtype
         names = fp32_constant_names(
             self._dag,
             narrow if narrow is not None else getattr(self, "_narrow_op_uids", ()),
@@ -2901,7 +2907,9 @@ class GraphExecutor:
         """Load base64 constant via ZIP parse + numpy (triton mode). Zero torch."""
         import base64, io, zipfile
         import numpy as np
-        from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator, parse_dtype
+        from nbxtensor.tensor import NBXTensor
+        from nbxtensor.dtype.nbx_dtype import NBXDtype, parse_dtype
+        from nbxtensor.memory.allocator import DeviceAllocator
         from nbxtensor.dtype import itemsize as _isz
 
         shape = tuple(tdata.get("shape", []))
@@ -3187,7 +3195,9 @@ class GraphExecutor:
                 See `run()` for why this is an explicit flag.
         """
         import time as _time
-        from nbxtensor.tensor import NBXTensor, parse_dtype, DeviceAllocator
+        from nbxtensor.tensor import NBXTensor
+        from nbxtensor.dtype.nbx_dtype import parse_dtype
+        from nbxtensor.memory.allocator import DeviceAllocator
 
         start = _time.perf_counter()
         device_idx = self._triton_device_index()
@@ -3436,7 +3446,8 @@ class GraphExecutor:
         del skip_kills  # unused, kept for signature parity
         from neurobrix.triton.sequential import TritonSequentialDispatcher
         from neurobrix.triton.symbols import SymbolResolver
-        from nbxtensor.tensor import NBXTensor, parse_dtype
+        from nbxtensor.tensor import NBXTensor
+        from nbxtensor.dtype.nbx_dtype import parse_dtype
 
         # Precision contract of THIS component for the triton-sequential
         # engine: the same resolver as the compiled and triton paths, flag
@@ -3455,7 +3466,8 @@ class GraphExecutor:
     def _run_triton_sequential_ops(self, dispatcher, input_map: dict, device_idx: int):
         """The op-by-op loop of `_run_triton_sequential`, inside the dispatcher's run."""
         from neurobrix.triton.symbols import SymbolResolver
-        from nbxtensor.tensor import NBXTensor, parse_dtype
+        from nbxtensor.tensor import NBXTensor
+        from nbxtensor.dtype.nbx_dtype import parse_dtype
 
         tensors = self._dag.get("tensors", {})
         ops_meta = self._dag.get("ops", {})
@@ -3615,7 +3627,7 @@ class GraphExecutor:
         # primary device. See the per-op transfer block below.
         _seq_current_dev = device_idx
         from nbxtensor.memory.device_transfer import needs_move as _needs_move_dt, transfer_tensor as _xfer_dt
-        from nbxtensor.tensor import DeviceAllocator as _DA_dt
+        from nbxtensor.memory.allocator import DeviceAllocator as _DA_dt
 
         _type_interceptors = getattr(self, "_pending_triton_interceptors", None) or {}
         for op_idx, op_uid in enumerate(exec_order):
@@ -3638,7 +3650,7 @@ class GraphExecutor:
             if (_liveness_target and op_uid == _liveness_target
                     and not _liveness_audited):
                 _liveness_audited = True
-                from nbxtensor.tensor import DeviceAllocator as _DA
+                from nbxtensor.memory.allocator import DeviceAllocator as _DA
                 _live_bytes = _DA._cuda_live_bytes.get(_DA.get_device(), 0)
                 # Tids currently in store, with sizes
                 _store_entries = []
@@ -3904,7 +3916,7 @@ class GraphExecutor:
             import os as _os_dt
             if _os_dt.environ.get("NBX_DEVICE_TRACE") and output_tids:
                 try:
-                    from nbxtensor.tensor import DeviceAllocator as _DAdt
+                    from nbxtensor.memory.allocator import DeviceAllocator as _DAdt
                     _cur = _DAdt.get_device()
                     if _cur != device_idx:
                         print(f"[DEVTRACE] CURDRIFT after {op_uid} {op_type}: "
@@ -3941,7 +3953,7 @@ class GraphExecutor:
                 try:
                     import json as _json_fp_sq, hashlib as _hl_sq
                     import ctypes as _ct_fp_sq
-                    from nbxtensor.tensor import DeviceAllocator as _DA_fp_sq
+                    from nbxtensor.memory.allocator import DeviceAllocator as _DA_fp_sq
                     _fp_max_sq = int(
                         _os_fp_sq.environ.get("NBX_OP_FINGERPRINT_MAX", "0"))
                     _cap_sq = int(
@@ -4011,7 +4023,7 @@ class GraphExecutor:
             # Per-op symmetric trace (post-cleanup, before next op runs).
             if _tsq_per > 0 and op_idx % _tsq_per == 0:
                 try:
-                    from nbxtensor.tensor import DeviceAllocator as _DA_ts
+                    from nbxtensor.memory.allocator import DeviceAllocator as _DA_ts
                     # Sum NBX live across all devices for parity with
                     # native path.
                     _live = sum(_DA_ts._cuda_live_bytes.values()) / 1024 / 1024
@@ -4070,7 +4082,8 @@ class GraphExecutor:
                     # a 0-dim default (bind_weights `[]`, commit c0a1445); mirror that in
                     # triton-sequential with an R33-pure 0-dim zero NBXTensor (it is
                     # immediately `.item()`-ed by _meta_fill, so device is irrelevant).
-                    from nbxtensor.tensor import NBXTensor, NBXDtype
+                    from nbxtensor.tensor import NBXTensor
+                    from nbxtensor.dtype.nbx_dtype import NBXDtype
                     t = NBXTensor.zeros([], NBXDtype.float32, "cuda:0")
                 return t
             if atype == "tensor_tuple":
@@ -4148,7 +4161,7 @@ class GraphExecutor:
             # A block whose experts another card holds whole (S3, `expert_store._hold_experts_on_cards`): the op runs
             # on that card against them (no store), its inputs crossing there and its result coming back.
             from nbxtensor.memory.device_transfer import transfer_tensor
-            from nbxtensor.tensor import DeviceAllocator
+            from nbxtensor.memory.allocator import DeviceAllocator
             from neurobrix.core.device_utils import _parse_device
             card = _parse_device(_held[0])[1]
             hidden = store.get(attrs["hidden_states_tid"])
@@ -4236,7 +4249,8 @@ class GraphExecutor:
             return
 
         from neurobrix.triton.sequence import TritonSequence
-        from nbxtensor.tensor import parse_dtype, DeviceAllocator
+        from nbxtensor.dtype.nbx_dtype import parse_dtype
+        from nbxtensor.memory.allocator import DeviceAllocator
 
         DeviceAllocator.set_device(device_idx)
         DeviceAllocator.ensure_triton_device(device_idx)
@@ -4767,7 +4781,9 @@ class GraphExecutor:
         except Exception as _e:
             return f"ERR_torch:{_e}"
         try:
-            from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator
+            from nbxtensor.tensor import NBXTensor
+            from nbxtensor.dtype.nbx_dtype import NBXDtype
+            from nbxtensor.memory.allocator import DeviceAllocator
             if isinstance(t, NBXTensor):
                 n = t._numel
                 if n == 0:
@@ -5957,7 +5973,7 @@ class GraphExecutor:
             eng = getattr(getattr(self, "_triton_seq", None), "_dtype_engine", None)
             if eng is None:
                 from neurobrix.triton.dtype import TritonDtypeEngine
-                from nbxtensor.tensor import parse_dtype
+                from nbxtensor.dtype.nbx_dtype import parse_dtype
                 from nbxtensor.ops.wrappers import has_native_bf16
                 eng = TritonDtypeEngine(parse_dtype(self.dtype), has_native_bf16=has_native_bf16(),
                                         graph_dtype=self._dag.get("torch_dtype"),
@@ -6266,7 +6282,7 @@ class GraphExecutor:
         so `__del__` -> free_cuda cannot race an async kernel still reading the memory, and its
         recorded replay plans (slabs + captured graphs), which the weak registry does not. The
         next triton run compiles anew (`_ensure_triton_compiled`)."""
-        from nbxtensor.tensor import DeviceAllocator as _DA
+        from nbxtensor.memory.allocator import DeviceAllocator as _DA
         _DA.sync_device()
         self._triton_seq._arena.clear_all()  # type: ignore[attr-defined]
         from neurobrix.triton.replay import retire_sequence_plans
@@ -6361,7 +6377,7 @@ class GraphExecutor:
             if self._compiled_seq is not None:
                 self._compiled_seq._arena.clear_all()  # type: ignore[attr-defined]
             if hasattr(self, '_triton_seq') and self._triton_seq is not None:
-                from nbxtensor.tensor import DeviceAllocator as _DA
+                from nbxtensor.memory.allocator import DeviceAllocator as _DA
                 _DA.sync_device()
                 self._triton_seq._arena.clear_all()  # type: ignore[attr-defined]
             if hasattr(self, '_tritonseq_captured'):
@@ -6382,7 +6398,7 @@ class GraphExecutor:
             # Keep _persistent_tensor_ids — slot mappings remain valid in same sequence
 
         if hasattr(self, '_triton_seq') and self._triton_seq is not None:
-            from nbxtensor.tensor import DeviceAllocator as _DA
+            from nbxtensor.memory.allocator import DeviceAllocator as _DA
             _DA.sync_device()
             self._triton_seq._arena.clear_all()  # type: ignore[attr-defined]
             # Keep _triton_seq alive — R2 rebinds fresh weights into same slots

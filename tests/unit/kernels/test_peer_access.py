@@ -24,7 +24,8 @@ from __future__ import annotations
 import pytest
 
 from nbxtensor import tensor as nbx_tensor
-from nbxtensor.tensor import DeviceAllocator
+import nbxtensor.backend.runtime as _nbx_runtime
+from nbxtensor.memory.allocator import DeviceAllocator
 
 
 def _gpu_count() -> int:
@@ -48,7 +49,7 @@ def test_both_backends_declare_the_new_capabilities(key):
     """A key in `cuda` but not in `hip` is a crash on AMD alone. Peer access
     is xGMI there rather than NVLink, but the call and its meaning are the
     same, so it belongs in the table rather than in a branch."""
-    for vendor, table in nbx_tensor._GPU_BACKENDS.items():
+    for vendor, table in _nbx_runtime._GPU_BACKENDS.items():
         assert key in table, f"backend {vendor!r} does not declare {key!r}"
 
 
@@ -58,11 +59,13 @@ def test_peer_access_is_not_queried_by_hand_anywhere_else():
     import pathlib
     import neurobrix
     own = pathlib.Path(nbx_tensor.__file__).resolve()
+    import nbxtensor.memory.allocator as _a, nbxtensor.backend.runtime as _r
+    seam_alloc, seam_runtime = pathlib.Path(_a.__file__).resolve(), pathlib.Path(_r.__file__).resolve()
     roots = (pathlib.Path(neurobrix.__file__).resolve().parent, own.parent)   # the engine and its library (M1)
     offenders = []
     for path in (p for r in roots for p in r.rglob("*.py")):
         root = next(r for r in roots if r in path.resolve().parents)
-        if path.resolve() == own:
+        if path.resolve() in (own, seam_alloc, seam_runtime):   # the modules tensor.py was cut into (M2)
             continue
         text = path.read_text()
         if "EnablePeerAccess" in text or "CanAccessPeer" in text:
@@ -111,7 +114,8 @@ def test_a_cross_device_transfer_is_byte_identical_either_way():
     whenever the transfer path is touched."""
     import numpy as np
 
-    from nbxtensor.tensor import NBXDtype, NBXTensor
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
+    from nbxtensor.tensor import NBXTensor
     from nbxtensor.memory.device_transfer import transfer_tensor
 
     rs = np.random.RandomState(1234)
@@ -181,11 +185,13 @@ def test_the_engine_creates_no_timing_events_for_ordering():
 
     import neurobrix
     own = pathlib.Path(nbx_tensor.__file__).resolve()
+    import nbxtensor.memory.allocator as _a, nbxtensor.backend.runtime as _r
+    seam_alloc, seam_runtime = pathlib.Path(_a.__file__).resolve(), pathlib.Path(_r.__file__).resolve()
     roots = (pathlib.Path(neurobrix.__file__).resolve().parent, own.parent)   # the engine and its library (M1)
     offenders = []
     for path in (p for r in roots for p in r.rglob("*.py")):
         root = next(r for r in roots if r in path.resolve().parents)
-        if path.resolve() == own:
+        if path.resolve() in (own, seam_alloc, seam_runtime):   # the modules tensor.py was cut into (M2)
             continue
         for number, line in enumerate(path.read_text().splitlines(), 1):
             if re.search(r"create_event\(\s*\)", line):

@@ -163,7 +163,7 @@ def read_device_sharing(index: int) -> DeviceReading:
     shared (`measured=False`) — the plan then rounds the free figure down, the safe side."""
     from neurobrix.core.prism import autodetect
     facts = autodetect.device_sharing(index)
-    from nbxtensor.tensor import DeviceAllocator
+    from nbxtensor.memory.allocator import DeviceAllocator
     free = DeviceAllocator.free_memory_mb(index)
     total = None
     try:

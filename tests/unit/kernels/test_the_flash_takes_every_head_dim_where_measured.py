@@ -40,7 +40,7 @@ def test_the_measurement_must_be_stated_true(prof):
 
 def test_the_flash_is_keyed_where_no_hand_table_chooses_its_tile(prof):
     from nbxtensor.ops import launch_keys as LK
-    from nbxtensor.tensor import NBXDtype as D
+    from nbxtensor.dtype.nbx_dtype import NBXDtype as D
     (kern, key), = LK.flash_launches(4680, 4680, 96, D.bfloat16, D.bfloat16, D.bfloat16)
     assert kern == LK.FLASH
     assert key == (LK.bucket_of("M", 4680), LK.bucket_of("N", 4680), 96,
@@ -51,20 +51,21 @@ def test_the_flash_is_keyed_where_no_hand_table_chooses_its_tile(prof):
 
 def test_a_hand_table_keeps_its_tiles_unkeyed(prof):
     from nbxtensor.ops import launch_keys as LK
-    from nbxtensor.tensor import NBXDtype as D
+    from nbxtensor.dtype.nbx_dtype import NBXDtype as D
     prof["sdpa_thresholds"] = [{"head_dim_lt": 128, "block_m": 64, "block_n": 64, "num_warps": 4}]
     assert LK.flash_launches(4096, 4096, 64, D.float16, D.float16, D.float16) == []
 
 
 def test_the_candidate_tiles_respect_the_backends_bounds(monkeypatch):
     from nbxtensor import tensor as NT
+    import nbxtensor.backend.capabilities as _nbx_capabilities
     from nbxtensor.ops import flash_attention as F
-    monkeypatch.setattr(NT, "fa_min_tile", lambda: 32)
-    monkeypatch.setattr(NT, "reduce_tile_max", lambda: 1024)
+    monkeypatch.setattr(_nbx_capabilities, "fa_min_tile", lambda: 32)
+    monkeypatch.setattr(_nbx_capabilities, "reduce_tile_max", lambda: 1024)
     keep = F._prune_flash(F.flash_configs(), {})
     assert {(c.kwargs["BLOCK_M"], c.kwargs["BLOCK_N"]) for c in keep} == {(32, 32)}
     assert {c.num_warps for c in keep} == {2, 4, 8}
-    monkeypatch.setattr(NT, "fa_min_tile", lambda: 64)
+    monkeypatch.setattr(_nbx_capabilities, "fa_min_tile", lambda: 64)
     with pytest.raises(ValueError):
         F._prune_flash(F.flash_configs(), {})
 

@@ -12,6 +12,7 @@ import pytest
 
 import importlib.util
 from pathlib import Path
+import nbxtensor.memory.allocator as _nbx_allocator  # the module the moved names live in (M2 cut of tensor.py)
 
 _TOOL = Path(__file__).resolve().parents[3] / "tools" / "dump_diff_lastpos.py"
 _spec = importlib.util.spec_from_file_location("dump_diff_lastpos", _TOOL)
@@ -22,7 +23,7 @@ dev, load = _mod.dev, _mod.load
 
 def _gpu():
     nbx = pytest.importorskip("nbxtensor.tensor")
-    set_device = nbx.DeviceAllocator.set_device   # a renamed symbol raises here, loudly
+    set_device = _nbx_allocator.DeviceAllocator.set_device   # a renamed symbol raises here, loudly
     try:
         set_device(0)
         return True

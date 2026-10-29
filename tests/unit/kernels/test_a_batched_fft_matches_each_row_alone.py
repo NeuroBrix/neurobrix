@@ -18,7 +18,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from nbxtensor.tensor import DeviceAllocator
+from nbxtensor.memory.allocator import DeviceAllocator
 
 pytestmark = pytest.mark.skipif(DeviceAllocator.device_count() == 0, reason="needs a device to run the kernels")
 

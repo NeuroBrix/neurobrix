@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 
 from nbxtensor import tensor as nt
+import nbxtensor.backend.runtime as _nbx_runtime
 
 import neurobrix.kernels.torch_interop as _ti
 
@@ -41,7 +42,7 @@ def test_only_a_shared_heap_may_be_written_into():
 
 
 def test_an_unknown_backend_refuses_by_name(monkeypatch):
-    monkeypatch.setattr(nt, "_detect_gpu_backend", lambda: "quantum")
+    monkeypatch.setattr(_nbx_runtime, "_detect_gpu_backend", lambda: "quantum")
     with pytest.raises(RuntimeError, match=r"ZERO FALLBACK.*'quantum'"):
         _ti.torch_device_str(0)
 
@@ -53,7 +54,7 @@ def test_the_bridge_carries_the_values_on_this_machine():
     out = _ti.nbx_to_torch(t)
     assert out.flatten().tolist() == a.ravel().tolist()
     assert str(out.device).startswith(
-        _ti._TORCH_DEVICE_BY_BACKEND[nt._detect_gpu_backend()])
+        _ti._TORCH_DEVICE_BY_BACKEND[_nbx_runtime._detect_gpu_backend()])
 
 
 def test_an_empty_tensor_still_crosses():
@@ -70,7 +71,7 @@ def test_every_dtype_crosses_including_the_one_numpy_cannot_name():
     absent from that table. Either way a bf16 tensor would not arrive, and
     bf16 is what most of the hub runs in.
     """
-    from nbxtensor.tensor import NBXDtype
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
 
     a = np.arange(1, 9, dtype=np.float32).reshape(2, 4)
     src = nt.NBXTensor.from_numpy(np.ascontiguousarray(a))

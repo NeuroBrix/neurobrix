@@ -19,6 +19,7 @@ from nbxtensor.dtype import convert as CV
 import pytest
 
 from neurobrix.kernels import autotune_certify as AC
+import nbxtensor.memory.allocator as _nbx_allocator  # the module the moved names live in (M2 cut of tensor.py)
 
 
 class _NoDraw:
@@ -117,8 +118,9 @@ def test_the_certifying_device_says_whether_its_memory_is_unified(monkeypatch):
     """The flag's source: the hardware profile's device (DeviceSpec.has_unified_memory)."""
     import types
     from nbxtensor import tensor as nbx_tensor
+    import nbxtensor.memory.allocator as _nbx_allocator
     from nbxtensor.ops import wrappers
-    monkeypatch.setattr(nbx_tensor.DeviceAllocator, "get_device", staticmethod(lambda: 0))
+    monkeypatch.setattr(_nbx_allocator.DeviceAllocator, "get_device", staticmethod(lambda: 0))
     for uni in (True, False):
         # The REAL DeviceSpec, whose has_unified_memory is a property: a SimpleNamespace stub
         # with a method there kept this test green while every real profile raised

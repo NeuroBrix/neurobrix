@@ -12,13 +12,14 @@ import time
 import pytest
 
 from neurobrix.core.state.pages import PagePool, PageTable
+import nbxtensor.backend.runtime as _nbx_runtime  # the module the moved names live in (M2 cut of tensor.py)
 
 
 
 def _has_metal():
     nbx_tensor = pytest.importorskip("nbxtensor.tensor")
     try:
-        return nbx_tensor._detect_gpu_backend() == "metal"
+        return _nbx_runtime._detect_gpu_backend() == "metal"
     except Exception:
         return False
 

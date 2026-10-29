@@ -7,7 +7,7 @@ import pytest
 
 
 def _has_gpu():
-    from nbxtensor.tensor import DeviceAllocator
+    from nbxtensor.memory.allocator import DeviceAllocator
     try:
         DeviceAllocator.set_device(0)
         return True
@@ -29,7 +29,8 @@ def _oracle(x, gates, ups, downs, ids, wts):
 @pytest.mark.skipif(not _has_gpu(), reason="needs a device")
 @pytest.mark.parametrize("dtype", ["float16", "bfloat16"])
 def test_the_half_band_is_the_routed_swiglu_sum(dtype, monkeypatch):
-    from nbxtensor.tensor import NBXTensor, NBXDtype
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     from neurobrix.triton import moe
     nbx = {"float16": NBXDtype.float16, "bfloat16": NBXDtype.bfloat16}[dtype]
     rng = np.random.default_rng(7)

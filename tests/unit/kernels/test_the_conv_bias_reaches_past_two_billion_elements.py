@@ -43,7 +43,7 @@ def _cuda_free_bytes():
 
 def _require_room():
     try:
-        from nbxtensor.tensor import DeviceAllocator
+        from nbxtensor.memory.allocator import DeviceAllocator
         DeviceAllocator.empty_cache_pool()
     except Exception:
         pass

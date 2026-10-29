@@ -36,6 +36,7 @@ import tempfile
 from pathlib import Path
 
 from tests.unit.child_env import the_callers_door, the_pinned_profile
+import nbxtensor.backend.runtime as _nbx_runtime  # the module the moved names live in (M2 cut of tensor.py)
 
 try:
     import pytest
@@ -68,7 +69,7 @@ def _backend() -> str | None:
     boundary crossing on every backend.
     """
     nbx = pytest.importorskip("nbxtensor.tensor")
-    detect = nbx._detect_gpu_backend   # a renamed probe raises here, loudly
+    detect = _nbx_runtime._detect_gpu_backend   # a renamed probe raises here, loudly
     try:
         return detect()
     except Exception:

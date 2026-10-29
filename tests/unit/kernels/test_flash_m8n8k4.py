@@ -16,7 +16,8 @@ import numpy as np
 import pytest
 
 from nbxtensor.ops import wrappers as W
-from nbxtensor.tensor import DeviceAllocator, NBXTensor
+from nbxtensor.memory.allocator import DeviceAllocator
+from nbxtensor.tensor import NBXTensor
 
 
 def _unit_declared() -> bool:
@@ -93,7 +94,7 @@ def test_over_the_scores_budget_the_route_is_the_units_flash_and_deterministic(m
     a fixed reduction order), the property the math route exists for on this arch: three runs, byte-identical.
     The budget is set small so a test-sized call is over it (the data the route reads, not the route)."""
     from nbxtensor.ops import launch_keys as LK
-    from nbxtensor.tensor import NBXDtype
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     h = NBXDtype.float16
     assert LK.unit_flash_takes(96, h, h, h) and not LK.unit_flash_takes(96, NBXDtype.float32, h, h)
     calls = []

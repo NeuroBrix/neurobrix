@@ -49,7 +49,7 @@ _NP = {"fp16": np.float16, "float16": np.float16,
 def _to_f64(t) -> Optional[np.ndarray]:
     """A live operand as float64, or None when it cannot be read here."""
     try:
-        from nbxtensor.tensor import NBXDtype
+        from nbxtensor.dtype.nbx_dtype import NBXDtype
         # ONE path to host memory, for every dtype. The bf16 case used to read
         # the device pointer directly with `ctypes.string_at`, which crosses NO
         # BARRIER -- so a buffer a kernel had just written was read before the
@@ -209,7 +209,7 @@ def fp64_footprint(buffers) -> int:
     of float64 before the first tap is computed. The element size comes from `NBXDtype`, the
     one authority (`_writable_buffers` records `dtype.name`, the enum's own name); a name the
     enum does not know is a refusal, never a guess."""
-    from nbxtensor.tensor import NBXDtype, dtype_size, parse_dtype
+    from nbxtensor.dtype.nbx_dtype import NBXDtype, dtype_size, parse_dtype
     total = 0
     for _addr, nbytes, dtype in buffers:
         # `_writable_buffers` records `value.dtype.name`, and `NBXTensor.dtype` is the TRITON

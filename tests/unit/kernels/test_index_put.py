@@ -129,7 +129,7 @@ def test_index_put_bool_mask_is_correct():
     v = _nbx(np.ones((2,), np.float32))
     out = fn(x, [mask], v, False)
     import ctypes
-    from nbxtensor.tensor import DeviceAllocator
+    from nbxtensor.memory.allocator import DeviceAllocator
     buf = (ctypes.c_char * out._nbytes)()
     DeviceAllocator.memcpy(ctypes.addressof(buf), out.data_ptr(),
                            out._nbytes, 2)

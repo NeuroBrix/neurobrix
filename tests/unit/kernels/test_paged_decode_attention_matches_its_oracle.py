@@ -21,7 +21,9 @@ import ctypes
 import numpy as np
 import pytest
 
-from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator
+from nbxtensor.tensor import NBXTensor
+from nbxtensor.dtype.nbx_dtype import NBXDtype
+from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.ops import wrappers as W
 from nbxtensor.ops.paged_decode_attn import PAGED_DECODE_TILE_CANDIDATES
 

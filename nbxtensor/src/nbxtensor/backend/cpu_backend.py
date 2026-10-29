@@ -70,7 +70,7 @@ def _is_cpu_only_profile() -> bool:
     if visible == "":
         return True
     try:
-        from nbxtensor.tensor import _detect_gpu_backend
+        from nbxtensor.backend.runtime import _detect_gpu_backend
         _detect_gpu_backend()
         return False
     except Exception:

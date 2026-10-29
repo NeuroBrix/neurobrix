@@ -82,7 +82,7 @@ K = 3
 
 def _dev_ok():
     try:
-        from nbxtensor.tensor import DeviceAllocator
+        from nbxtensor.memory.allocator import DeviceAllocator
         return DeviceAllocator.device_count() > 0
     except Exception:
         return False

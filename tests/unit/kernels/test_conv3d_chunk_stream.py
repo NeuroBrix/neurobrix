@@ -40,7 +40,8 @@ import numpy as np
 import torch
 
 from nbxtensor.ops import wrappers
-from nbxtensor.tensor import DeviceAllocator, NBXTensor
+from nbxtensor.memory.allocator import DeviceAllocator
+from nbxtensor.tensor import NBXTensor
 from neurobrix.kernels.torch_interop import nbx_to_torch
 
 

@@ -122,7 +122,8 @@ def test_the_chunked_launch_is_several_times_the_held_one_on_this_card(monkeypat
     """Same process, same inputs: the profile's chunk row against the same call with the row's
     launch meta withheld (the held form). Measured 14x at T 4096, D 96 (2026-10-03)."""
     from nbxtensor.ops import wrappers as W
-    from nbxtensor.tensor import NBXTensor, DeviceAllocator
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.memory.allocator import DeviceAllocator
     rng = np.random.default_rng(0)
     q, k, v = [NBXTensor.from_numpy((rng.standard_normal((1, 8, 2048, 96)) * 0.5).astype(np.float16)) for _ in range(3)]
 

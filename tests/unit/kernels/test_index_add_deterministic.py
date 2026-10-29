@@ -44,7 +44,8 @@ import numpy as np
 import torch
 
 from nbxtensor.ops.dispatch import dispatch
-from nbxtensor.tensor import NBXDtype, NBXTensor
+from nbxtensor.dtype.nbx_dtype import NBXDtype
+from nbxtensor.tensor import NBXTensor
 from neurobrix.kernels.torch_interop import nbx_to_torch
 _TT = {"float32": torch.float32, "float16": torch.float16,
        "bfloat16": torch.bfloat16}

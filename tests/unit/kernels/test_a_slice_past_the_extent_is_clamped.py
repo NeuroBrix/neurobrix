@@ -8,7 +8,8 @@ values differ from numpy's for the same key: red.
 import numpy as np
 import pytest
 
-from nbxtensor.tensor import DeviceAllocator, NBXTensor
+from nbxtensor.memory.allocator import DeviceAllocator
+from nbxtensor.tensor import NBXTensor
 
 
 def _has_gpu() -> bool:

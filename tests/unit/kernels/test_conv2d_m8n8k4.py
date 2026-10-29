@@ -14,7 +14,8 @@ import numpy as np
 import pytest
 
 from nbxtensor.ops import wrappers as W
-from nbxtensor.tensor import DeviceAllocator, NBXTensor
+from nbxtensor.memory.allocator import DeviceAllocator
+from nbxtensor.tensor import NBXTensor
 
 
 def _unit_declared() -> bool:
@@ -119,7 +120,7 @@ def test_an_fp32_operand_keeps_the_exact_path(taken):
 
 def test_the_census_derives_no_key_where_the_unit_runs():
     from nbxtensor.ops import launch_keys as LK
-    from nbxtensor.tensor import NBXDtype
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     h, f = NBXDtype.float16, NBXDtype.float32
     args = (1, 64, 32, 32, 128, 3, 3, 1, 1, 1, 1, 1, 1, 1)
     assert LK.conv2d_launches(*args, h, h, None, 1 << 32) == []

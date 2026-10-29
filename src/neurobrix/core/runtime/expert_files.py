@@ -130,7 +130,7 @@ def held_dtype(stored, compute, engine: str):
     exactly what the load would. Triton: `stored_dtype_in_compute`, its loader's one rule. Compiled:
     `core/dtype/config.compiled_weight_dtype`, the ATen loader's one rule (every floating weight at the
     placement dtype, the rest as stored)."""
-    from nbxtensor.tensor import parse_dtype
+    from nbxtensor.dtype.nbx_dtype import parse_dtype
     s, c = parse_dtype(stored), parse_dtype(compute)
     if engine == "triton":
         from neurobrix.triton.weight_loader import stored_dtype_in_compute

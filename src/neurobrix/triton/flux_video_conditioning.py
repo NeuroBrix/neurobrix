@@ -20,7 +20,8 @@ vendor import.
 import numpy as np
 from typing import Any, List, Optional
 
-from nbxtensor.tensor import NBXTensor, DeviceAllocator
+from nbxtensor.tensor import NBXTensor
+from nbxtensor.memory.allocator import DeviceAllocator
 
 IMG_IDS_VAR = "global.img_ids"
 TXT_IDS_VAR = "global.txt_ids"

@@ -90,7 +90,8 @@ def _card():
 
 
 def _host(arr):
-    from nbxtensor.tensor import NBXDtype, NBXTensor
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
+    from nbxtensor.tensor import NBXTensor
     t = NBXTensor.empty_cpu(arr.shape, NBXDtype.float16)
     ctypes.memmove(t.data_ptr(), np.ascontiguousarray(arr).ctypes.data, arr.nbytes)
     return t

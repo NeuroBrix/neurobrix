@@ -467,7 +467,7 @@ def _gemm_rows(key: tuple, dts) -> int:
     (`launch_keys.gemm_row_representative`), not the bucket's top — at the top the matrix unit may take the GEMM and
     the wrapper never reaches the autotuner. A key no row count forms is refused by name: a census defect."""
     from nbxtensor.ops import launch_keys as LK
-    from nbxtensor.tensor import NBXDtype
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     nbx = {"fp16": NBXDtype.float16, "bf16": NBXDtype.bfloat16, "fp32": NBXDtype.float32}
     a = nbx.get(dts[0], NBXDtype.float16) if dts else NBXDtype.float16
     b = nbx.get(dts[1], a) if len(dts) > 1 else a
@@ -908,7 +908,7 @@ def _flash_batch_heads(tq: int, tk: int, hd: int, q, k, v) -> Tuple[int, int]:
     reaches the flash (a 32 768 x 512 key at two heads, 2026-10-21)."""
     from nbxtensor.ops import launch_keys as LK
     from nbxtensor.ops import wrappers as W
-    from nbxtensor.tensor import NBXDtype
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     nbx = {"fp16": NBXDtype.float16, "bf16": NBXDtype.bfloat16, "fp32": NBXDtype.float32}
     qd, kd, vd = nbx[q], nbx[k], nbx[v]
     budget = W._sdpa_math_scores_budget_bytes_for(None)
@@ -1078,7 +1078,8 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
     nothing drawn on the host, no oracle (None). For a caller that compiles without running (the
     Mac's `msl_census.py`, 2026-09-26: it needs the key's dtypes, strides and `==1`/`%16`/i32
     specialisation, never the values)."""
-    from nbxtensor.tensor import NBXTensor, NBXDtype
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     from nbxtensor.ops import wrappers as W
     dts = C.key_dtypes(key)
     short = C.kernel_short(qual)
@@ -1369,7 +1370,7 @@ def _machine() -> Dict[str, Any]:
     except Exception:
         pass
     try:
-        from nbxtensor.tensor import DeviceAllocator
+        from nbxtensor.memory.allocator import DeviceAllocator
         for name in ("device_name", "driver_version"):
             fn = getattr(DeviceAllocator, name, None)
             if callable(fn):
@@ -1399,7 +1400,7 @@ def _read_certifying_device() -> Optional[Dict[str, Any]]:
     memory class (register 56). None when the card is not in the profile —
     the certifier then REFUSES to write the entry (`file_certification`)."""
     try:
-        from nbxtensor.tensor import DeviceAllocator
+        from nbxtensor.memory.allocator import DeviceAllocator
         idx = int(DeviceAllocator.get_device())
     except Exception:
         return None
@@ -1536,7 +1537,7 @@ def _current_backend() -> Optional[str]:
     and `target = "metal-apple-m4-pro"`.
     """
     try:
-        from nbxtensor.tensor import _detect_gpu_backend
+        from nbxtensor.backend.runtime import _detect_gpu_backend
         return _detect_gpu_backend()
     except Exception:
         return None
@@ -1747,7 +1748,8 @@ def _witness_time_ms(proto: Dict[str, Any]) -> float:
     inputs, same timer, so a change in it is a change in the machine."""
     from nbxtensor.backend import launcher as L
     from nbxtensor.ops import wrappers as W
-    from nbxtensor.tensor import NBXTensor, NBXDtype
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     spec = proto["witness"]
     if spec.get("kernel", "matmul") != "matmul":
         raise RuntimeError(f"witness kernel {spec.get('kernel')!r} not supported "
@@ -1918,7 +1920,7 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
             # oracle: the last band has another M, another grid and another edge mask, and an
             # entry that answers for N launch shapes is proven on each of them. A count is not
             # a comparison (the guardian, 2026-09-26).
-            from nbxtensor.tensor import DeviceAllocator
+            from nbxtensor.memory.allocator import DeviceAllocator
             oracle_k = launch_oracle(qual, tuner, kwargs, out0)
             if oracle_k is None:
                 raise RuntimeError(f"{qual} at {key!r}: a second launch of this key inside one "
@@ -1959,7 +1961,7 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
         buffers = L._writable_buffers(args)
         if buffers is None:
             raise RuntimeError(f"{qual}: a strided view among the arguments — not certifiable")
-        from nbxtensor.tensor import DeviceAllocator
+        from nbxtensor.memory.allocator import DeviceAllocator
         out_addr, out_nbytes = int(out_tensor.data_ptr()), int(out_tensor._nbytes)
 
         def poison():
@@ -2081,7 +2083,7 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
     # another key than the census's (the first dry run: every matmul key mismatched
     # because a bare process reads `has_native_bf16` as True).
     from nbxtensor.ops import wrappers as W
-    from nbxtensor.tensor import NBXDtype
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     _prev_dt = W.get_compute_dtype()
     _out_dt = C.output_dtype(tuner, key)
     _nbx = {"fp16": NBXDtype.float16, "bf16": NBXDtype.bfloat16, "fp32": NBXDtype.float32}.get(_out_dt)
@@ -2343,7 +2345,7 @@ def _resolve_pool_drain(allocator=None):
     ZERO FALLBACK: an allocator that exposes no drain at all is a defect to surface at the
     first key, not a condition to carry silently through a sweep."""
     if allocator is None:
-        from nbxtensor.tensor import DeviceAllocator as allocator  # noqa: N813
+        from nbxtensor.memory.allocator import DeviceAllocator as allocator  # noqa: N813
     for name in _POOL_DRAIN_NAMES:
         drain = getattr(allocator, name, None)
         if callable(drain):
@@ -2373,7 +2375,7 @@ def _alloc_state() -> str:
     disabled pool and an idle one come to look identical. Summed here. Never raises: a probe
     that can end a sweep is worse than no probe."""
     try:
-        from nbxtensor.tensor import DeviceAllocator as A
+        from nbxtensor.memory.allocator import DeviceAllocator as A
 
         def _sum(name):
             v = getattr(A, name, None)

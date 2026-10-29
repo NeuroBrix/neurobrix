@@ -59,6 +59,8 @@ import ctypes
 import os
 import threading
 from typing import Dict, Optional, Tuple
+import nbxtensor.memory.allocator as _nbx_allocator  # the module the moved names live in (M2 cut of tensor.py)
+import nbxtensor.backend.runtime as _nbx_runtime  # the module the moved names live in (M2 cut of tensor.py)
 
 # Status codes. 0 is success, mirroring the C runtimes the seam was written
 # against; the non-zero values are ours and appear only in NeuroBrix errors.
@@ -1233,8 +1235,10 @@ def reset_runtime_for_tests() -> None:
     #     (a frozen replay plan records their raw device pointers), which
     #     also means forever across a reset.
     from nbxtensor import tensor as nbx_tensor
+    import nbxtensor.memory.allocator as _nbx_allocator
+    import nbxtensor.backend.runtime as _nbx_runtime
     try:
-        nbx_tensor.DeviceAllocator.empty_cache_pool()
+        _nbx_allocator.DeviceAllocator.empty_cache_pool()
     except Exception:                                   # pragma: no cover
         pass                                            # nothing to release
     nbx_tensor._INT64_ARRAY_CACHE.clear()
@@ -1244,7 +1248,7 @@ def reset_runtime_for_tests() -> None:
     # now is freed later, and without this that free would park its dead
     # address for the next allocation to be served.
     try:
-        nbx_tensor.DeviceAllocator.new_allocation_epoch()
+        _nbx_allocator.DeviceAllocator.new_allocation_epoch()
     except Exception:                                   # pragma: no cover
         pass
 
@@ -1258,7 +1262,7 @@ def reset_runtime_for_tests() -> None:
     #   * `_RUNTIME` here,
     #   * the compiled kernels in `metal_driver`, which hold the device and
     #     the pipelines they were built on,
-    #   * `nbx_tensor._gpu_runtime`, an lru_cache the allocator resolves
+    #   * `_nbx_runtime._gpu_runtime`, an lru_cache the allocator resolves
     #     every malloc through.
     #
     # Clearing any subset is worse than clearing none: the tensors then come
@@ -1277,8 +1281,8 @@ def reset_runtime_for_tests() -> None:
     from nbxtensor.backend import launcher
     launcher.reset_caches()
 
-    for cached in (getattr(nbx_tensor, "_gpu_runtime", None),
-                   getattr(nbx_tensor, "_metal_backend_table", None)):
+    for cached in (getattr(_nbx_runtime, "_gpu_runtime", None),
+                   getattr(_nbx_runtime, "_metal_backend_table", None)):
         clear = getattr(cached, "cache_clear", None)
         if clear is not None:
             clear()

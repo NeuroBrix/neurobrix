@@ -24,6 +24,7 @@ Runnable two ways:
   - script:  PYTHONPATH=src python3 tests/unit/kernels/test_bmm_batched.py
 """
 from __future__ import annotations
+import nbxtensor.backend.capabilities as _nbx_capabilities  # the module the moved names live in (M2 cut of tensor.py)
 
 try:
     import pytest
@@ -46,7 +47,8 @@ import numpy as np
 import torch
 
 from nbxtensor.ops import wrappers as w
-from nbxtensor.tensor import NBXTensor, NBXDtype
+from nbxtensor.tensor import NBXTensor
+from nbxtensor.dtype.nbx_dtype import NBXDtype
 from neurobrix.kernels.torch_interop import nbx_to_torch
 class _MockProfile:
     def __init__(self, has_native_bf16: bool):
@@ -61,14 +63,15 @@ def _hw(has_native_bf16: bool):
     saved_flag = w._NBX_HAS_NATIVE_BF16
     saved_prof = w._NBX_HW_PROFILE
     from nbxtensor import tensor as _T
-    saved_fp64 = _T._BACKEND_HAS_FP64
+    import nbxtensor.backend.capabilities as _nbx_capabilities
+    saved_fp64 = _nbx_capabilities._BACKEND_HAS_FP64
     try:
         w.set_hardware_profile(_MockProfile(has_native_bf16))
         yield
     finally:
         w._NBX_HAS_NATIVE_BF16 = saved_flag
         w._NBX_HW_PROFILE = saved_prof
-        _T._BACKEND_HAS_FP64 = saved_fp64
+        _nbx_capabilities._BACKEND_HAS_FP64 = saved_fp64
 
 
 _NBX_DT = {"fp16": NBXDtype.float16, "bf16": NBXDtype.bfloat16,

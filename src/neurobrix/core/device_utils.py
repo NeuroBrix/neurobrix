@@ -55,7 +55,7 @@ def device_sync(device: Optional[str] = None) -> None:
         # CPU, XPU: no explicit sync needed (operations are synchronous)
         return
     if kind == "cuda":
-        from nbxtensor.tensor import DeviceAllocator
+        from nbxtensor.memory.allocator import DeviceAllocator
         DeviceAllocator.device_synchronize(idx)
 
 
@@ -76,7 +76,7 @@ def device_empty_cache(device: Optional[str] = None) -> None:
         # CPU: no cache to clear
         return
     if kind == "cuda":
-        from nbxtensor.tensor import DeviceAllocator
+        from nbxtensor.memory.allocator import DeviceAllocator
         DeviceAllocator.empty_cache_pool()
 
 
@@ -138,7 +138,7 @@ def device_memory_stats(device: Optional[str] = None) -> Dict[str, float]:
         # CPU / unknown: no GPU memory to report
         return empty
     if kind == "cuda":
-        from nbxtensor.tensor import DeviceAllocator
+        from nbxtensor.memory.allocator import DeviceAllocator
         free_b, total_b = DeviceAllocator.mem_get_info(idx)
         allocated = DeviceAllocator.memory_allocated(idx) / (1024 * 1024)
         total = total_b / (1024 * 1024)

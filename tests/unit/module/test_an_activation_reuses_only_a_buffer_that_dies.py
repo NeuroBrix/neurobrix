@@ -151,7 +151,8 @@ def test_the_interceptor_decides_size_at_call_time():
     lowered by the environment variable rather than allocating a gigabyte.
     """
     pytest.importorskip("nbxtensor.tensor")
-    from nbxtensor.tensor import NBXTensor, DeviceAllocator
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.memory.allocator import DeviceAllocator
     if DeviceAllocator.device_count() == 0:
         pytest.skip("needs a CUDA device")
     import numpy as np, os

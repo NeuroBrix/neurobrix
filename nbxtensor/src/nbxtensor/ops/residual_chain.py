@@ -241,7 +241,8 @@ def band_streamed_chain_nbx(
     `add_` overwrites them. The first band uses t_base directly because
     no top halo has been overwritten yet.
     """
-    from nbxtensor.tensor import NBXTensor, _set_device
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.backend.runtime import _set_device
     from nbxtensor.ops.wrappers import conv2d_wrapper, silu as silu_w, rms_norm as rms_norm_w, add as add_w
 
     # P-TRITON-LIVE-WATERMARK-AUDIT L4b: explicit device sync at

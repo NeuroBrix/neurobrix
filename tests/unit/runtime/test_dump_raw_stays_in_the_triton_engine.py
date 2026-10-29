@@ -26,6 +26,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
+import nbxtensor.memory.allocator as _nbx_allocator  # the module the moved names live in (M2 cut of tensor.py)
 
 REPO = Path(__file__).resolve().parents[3]
 SRC = REPO / "src"
@@ -36,7 +37,7 @@ from child_env import child_env  # noqa: E402
 def _gpu():
     nbx = pytest.importorskip("nbxtensor.tensor")
     try:
-        nbx.DeviceAllocator.set_device(0)
+        _nbx_allocator.DeviceAllocator.set_device(0)
         return True
     except Exception:
         return False
@@ -52,7 +53,7 @@ _CHILD = textwrap.dedent('''
     sys.meta_path.insert(0, _Blocker())
 
     import numpy as np
-    from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator
+    from nbxtensor.dtype.nbx_dtype import NBXDtype; from nbxtensor.tensor import NBXTensor; from nbxtensor.memory.allocator import DeviceAllocator
     from neurobrix.triton.sequence import TritonSequence
     DeviceAllocator.set_device(0)
 

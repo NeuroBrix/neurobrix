@@ -10,7 +10,7 @@ import pytest
 
 from neurobrix.core.components.handlers.text_encoder_handler import finalized_text_length
 from nbxtensor.ops import launch_keys as LK
-from nbxtensor.tensor import NBXDtype
+from nbxtensor.dtype.nbx_dtype import NBXDtype
 
 F16, F32 = NBXDtype.float16, NBXDtype.float32
 

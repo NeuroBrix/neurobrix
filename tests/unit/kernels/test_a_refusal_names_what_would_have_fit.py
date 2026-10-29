@@ -19,7 +19,7 @@ Injection that turns these red: make `annotate` return its message unchanged.
 from __future__ import annotations
 
 
-from nbxtensor.tensor import DeviceOOMError
+from nbxtensor.memory.allocator import DeviceOOMError
 from nbxtensor.memory.oom_advice import annotate, what_would_have_fit
 
 _GB = 1024 ** 3

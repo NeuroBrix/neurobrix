@@ -25,6 +25,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src"))
 from nbxtensor import tensor as N  # noqa: E402
+import nbxtensor.backend.runtime as _nbx_runtime
 
 
 @pytest.fixture(autouse=True)
@@ -41,14 +42,14 @@ def _pin_with(monkeypatch, registry):
 
 def test_cuda_pins_tritons_nvidia(monkeypatch):
     _pin_with(monkeypatch, {"nvidia": object(), "amd": object()})
-    assert N._pin_triton_backend("cuda") == "cuda", "the engine's own name is what it returns"
+    assert _nbx_runtime._pin_triton_backend("cuda") == "cuda", "the engine's own name is what it returns"
     import os
     assert os.environ["TRITON_DEFAULT_BACKEND"] == "nvidia", "but Triton is told Triton's name"
 
 
 def test_hip_pins_tritons_amd(monkeypatch):
     _pin_with(monkeypatch, {"nvidia": object(), "amd": object()})
-    N._pin_triton_backend("hip")
+    _nbx_runtime._pin_triton_backend("hip")
     import os
     assert os.environ["TRITON_DEFAULT_BACKEND"] == "amd"
 
@@ -57,14 +58,14 @@ def test_a_name_triton_does_not_have_pins_nothing(monkeypatch):
     """Worse than no pin: `_create_driver` raises on an unknown name, so every launch down
     Triton's own path dies with `Unknown backend device`."""
     _pin_with(monkeypatch, {"nvidia": object(), "amd": object()})
-    N._pin_triton_backend("metal")          # no Metal plugin in this registry
+    _nbx_runtime._pin_triton_backend("metal")          # no Metal plugin in this registry
     import os
     assert "TRITON_DEFAULT_BACKEND" not in os.environ
 
 
 def test_metal_pins_metal_when_the_plugin_is_registered(monkeypatch):
     _pin_with(monkeypatch, {"nvidia": object(), "metal": object()})
-    N._pin_triton_backend("metal")
+    _nbx_runtime._pin_triton_backend("metal")
     import os
     assert os.environ["TRITON_DEFAULT_BACKEND"] == "metal"
 
@@ -72,7 +73,7 @@ def test_metal_pins_metal_when_the_plugin_is_registered(monkeypatch):
 def test_an_explicit_choice_outranks_ours(monkeypatch):
     monkeypatch.setenv("TRITON_DEFAULT_BACKEND", "amd")
     _pin_with(monkeypatch, {"nvidia": object(), "amd": object()})
-    N._pin_triton_backend("cuda")
+    _nbx_runtime._pin_triton_backend("cuda")
     import os
     assert os.environ["TRITON_DEFAULT_BACKEND"] == "amd", "setdefault, not set"
 
@@ -80,7 +81,7 @@ def test_an_explicit_choice_outranks_ours(monkeypatch):
 def test_no_triton_at_all_still_pins_the_mapped_name(monkeypatch):
     """A compiled-only install has no Triton to ask; the mapping is still the right answer."""
     monkeypatch.setitem(sys.modules, "triton.backends", None)
-    N._pin_triton_backend("cuda")
+    _nbx_runtime._pin_triton_backend("cuda")
     import os
     assert os.environ["TRITON_DEFAULT_BACKEND"] == "nvidia"
 

@@ -6,7 +6,7 @@ Three caches hold the Metal runtime:
 * the compiled kernels the LAUNCHER holds, which carry a driver-produced
   handle bound to the device and the
   pipelines they were built on,
-* `nbx_tensor._gpu_runtime`, an `lru_cache` the allocator resolves every
+* `nbxtensor.backend.runtime._gpu_runtime`, an `lru_cache` the allocator resolves every
   malloc through.
 
 Clearing any subset is worse than clearing none. The tensors then come from
@@ -25,11 +25,12 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+import nbxtensor.backend.runtime as _nbx_runtime  # the module the moved names live in (M2 cut of tensor.py)
 
 
 def _has_metal():
     nbx_tensor = pytest.importorskip("nbxtensor.tensor")
-    detect = nbx_tensor._detect_gpu_backend   # a renamed probe raises here, loudly
+    detect = _nbx_runtime._detect_gpu_backend   # a renamed probe raises here, loudly
     try:
         return detect() == "metal"
     except Exception:
@@ -71,6 +72,7 @@ def test_resetting_the_runtime_clears_every_cache_that_holds_it():
     from nbxtensor.backend import launcher as L
     from nbxtensor.backend import metal_device
     from nbxtensor import tensor as nbx_tensor
+    import nbxtensor.backend.runtime as _nbx_runtime
 
     # Populate all three.
     x = nbx_tensor.NBXTensor.from_numpy(np.ones(64, dtype=np.float32))
@@ -88,7 +90,7 @@ def test_resetting_the_runtime_clears_every_cache_that_holds_it():
     # cache — one `_Prepared` per specialisation, each carrying a Metal
     # function bound to the runtime that built it.
     assert L._binders, "no compiled kernel to invalidate"
-    assert nbx_tensor._gpu_runtime.cache_info().currsize == 1
+    assert _nbx_runtime._gpu_runtime.cache_info().currsize == 1
 
     metal_device.reset_runtime_for_tests()
 
@@ -96,7 +98,7 @@ def test_resetting_the_runtime_clears_every_cache_that_holds_it():
         "compiled kernels outlived the runtime they were built on")
     assert L._TARGET is None, (
         "the compile target outlived the runtime that named it")
-    assert nbx_tensor._gpu_runtime.cache_info().currsize == 0, (
+    assert _nbx_runtime._gpu_runtime.cache_info().currsize == 0, (
         "the allocator still resolves mallocs through the old runtime")
 
 
@@ -116,7 +118,8 @@ def test_a_tensor_alive_across_the_reset_does_not_poison_the_free_list():
     ordering: the same command gave 226 failures once and 236 the next time.
     """
     from nbxtensor.backend import metal_device
-    from nbxtensor.tensor import DeviceAllocator, NBXTensor
+    from nbxtensor.memory.allocator import DeviceAllocator
+    from nbxtensor.tensor import NBXTensor
     from nbxtensor.backend import launcher
     from nbxtensor.ops.wrappers import add
 

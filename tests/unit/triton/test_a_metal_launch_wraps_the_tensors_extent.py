@@ -22,7 +22,7 @@ import pytest
 
 def _metal_or_skip():
     try:
-        from nbxtensor.tensor import _detect_gpu_backend
+        from nbxtensor.backend.runtime import _detect_gpu_backend
         if _detect_gpu_backend() != "metal":
             pytest.skip("the wrap of an interior pointer is the Metal driver's; other drivers bind their own way")
         from nbxtensor.backend import triton_ext_driver as drv
@@ -35,13 +35,14 @@ N = K = 3072
 
 
 def _bf16(rng, shape):
-    from nbxtensor.tensor import NBXTensor, NBXDtype
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     a = rng.standard_normal(shape, dtype=np.float32) * 0.1
     return NBXTensor.from_numpy((a.view(np.uint32) >> 16).astype(np.uint16), dtype=NBXDtype.bfloat16)
 
 
 def _ms_per_launch(fn, n=60):
-    from nbxtensor.tensor import DeviceAllocator
+    from nbxtensor.memory.allocator import DeviceAllocator
     for _ in range(5):
         fn()
     DeviceAllocator.sync_device()
@@ -55,7 +56,8 @@ def _ms_per_launch(fn, n=60):
 @pytest.fixture(scope="module")
 def placed():
     _metal_or_skip()
-    from nbxtensor.tensor import NBXTensor, NBXDtype
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     rng = np.random.default_rng(0)
     own, vec = _bf16(rng, (N, K)), _bf16(rng, (K,))
     block = NBXTensor.empty((1 << 30) // 2, device=own.device, dtype=NBXDtype.bfloat16)   # 1 GiB

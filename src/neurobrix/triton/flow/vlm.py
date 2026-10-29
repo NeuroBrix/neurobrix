@@ -41,7 +41,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from neurobrix import decode_progress, decode_stop
-from nbxtensor.tensor import NBXTensor, NBXDtype
+from nbxtensor.tensor import NBXTensor
+from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.memory.memory_pool import release_flow_memory
 from neurobrix.triton.flow.audio_llm import (
     _DTYPE_STR_TO_NBX,
@@ -642,7 +643,7 @@ class TritonVLMEngine:
                 # embedding, cat) to complete on EVERY device before the
                 # next executor.run's rebind/transfers (current-device
                 # sync alone is blind to the scattered placement).
-                from nbxtensor.tensor import DeviceAllocator
+                from nbxtensor.memory.allocator import DeviceAllocator
                 _prev_d = DeviceAllocator.get_device()
                 try:
                     for _d in range(8):

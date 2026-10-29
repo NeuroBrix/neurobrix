@@ -49,7 +49,7 @@ def test_fp16_hardware_keeps_its_answer(monkeypatch):
 
 @pytest.mark.parametrize("record,expected", [(ISLAND, "fp32"), (HALF, "lower")])
 def test_the_triton_policy_reads_the_same_predicate(record, expected, monkeypatch):
-    from nbxtensor.tensor import NBXDtype
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     from neurobrix.triton.dtype import TritonDtypeEngine
     eng = TritonDtypeEngine(NBXDtype.bfloat16, graph_dtype="float16", stores_fp64=False)
     monkeypatch.setattr(eng, "_wrap_lower_precision", lambda f: "lower")

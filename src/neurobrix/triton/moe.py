@@ -28,9 +28,11 @@ import triton
 import triton.language as tl
 
 from nbxtensor.ops import wrappers as w
-from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator, dtype_size
-from nbxtensor.tensor import backend_loads_pointers_from_memory
-from nbxtensor.tensor import _detect_gpu_backend
+from nbxtensor.tensor import NBXTensor
+from nbxtensor.dtype.nbx_dtype import NBXDtype, dtype_size
+from nbxtensor.memory.allocator import DeviceAllocator
+from nbxtensor.backend.capabilities import backend_loads_pointers_from_memory
+from nbxtensor.backend.runtime import _detect_gpu_backend
 
 # NBX_MOE_DIAG gate, hoisted to import time (C1 hygiene: never read the
 # environ on the per-MoE-op hot path). Empty/unset → falsy → zero cost.
@@ -362,7 +364,7 @@ def moe_align_block_size(topk_ids_flat, block_size, num_experts, device_idx):
         num_tokens_post_padded: NBXTensor [1] — total entries after padding
     """
     import triton as _tr
-    from nbxtensor.tensor import _set_device
+    from nbxtensor.backend.runtime import _set_device
     from nbxtensor.ops.moe_align import (
         moe_align_stage1_kernel, moe_align_stage2_kernel,
         moe_align_stage3_kernel)
@@ -679,7 +681,7 @@ def execute_moe_fused(
             return
         try:
             import ctypes as _ct
-            from nbxtensor.tensor import NBXDtype as _NBX
+            from nbxtensor.dtype.nbx_dtype import NBXDtype as _NBX
             DeviceAllocator.set_device(tensor._device_idx)
             full = tensor if tensor.dtype == _NBX.float32 else tensor.to(_NBX.float32)
             full = full.contiguous()
@@ -1032,7 +1034,7 @@ def _moe_decode_vec_pass(hidden_states, tables, dev, flat_indices,
     from nbxtensor.ops.moe_decode_vec import (
         moe_gateup_vec_kernel, moe_down_combine_vec_kernel,
         moe_down_split_vec_kernel, moe_part_reduce_kernel)
-    from nbxtensor.tensor import _set_device
+    from nbxtensor.backend.runtime import _set_device
 
     dt = hidden_states._dtype
     x = hidden_states.reshape(K)
@@ -1108,7 +1110,7 @@ def _moe_decode_vec_half_pass(hidden_states, tables, dev, flat_indices, flat_sco
     import triton as _tr
     from nbxtensor.ops.moe_decode_vec import (
         moe_gateup_vec_half_kernel, moe_down_split_vec_half_kernel, moe_part_reduce_kernel)
-    from nbxtensor.tensor import _set_device
+    from nbxtensor.backend.runtime import _set_device
 
     dt = hidden_states._dtype
     x = hidden_states.reshape(K)

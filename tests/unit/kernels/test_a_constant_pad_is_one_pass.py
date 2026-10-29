@@ -12,7 +12,8 @@ import pytest
 
 torch = pytest.importorskip("torch")                       # the oracle only: torch.nn.functional.pad
 
-from nbxtensor.tensor import NBXTensor, DeviceAllocator as DA  # noqa: E402
+from nbxtensor.tensor import NBXTensor  # noqa: E402
+from nbxtensor.memory.allocator import DeviceAllocator as DA
 from nbxtensor.ops import wrappers as W  # noqa: E402
 
 # the engine's own device gate (CUDA, ROCm or Metal — the Triton tests' gate), never torch.cuda's: gated on CUDA the

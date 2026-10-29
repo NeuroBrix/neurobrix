@@ -44,7 +44,7 @@ _NO_DEVICE_MARKS = ("error 100", "cudaErrorNoDevice", "driver_total=0MB",
 def _devices_visible() -> int:
     """How many devices the DRIVER reports, asked once, by executing the question."""
     try:
-        from nbxtensor.tensor import DeviceAllocator
+        from nbxtensor.memory.allocator import DeviceAllocator
         return int(DeviceAllocator.device_count())
     except Exception:
         return 0

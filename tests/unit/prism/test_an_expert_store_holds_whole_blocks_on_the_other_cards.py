@@ -83,7 +83,7 @@ def test_a_card_with_no_room_for_one_block_takes_none(monkeypatch):
     now — gives card 3 no block while the others still hold theirs (at 1 500 MB free it takes one block, 1 152 MB)."""
     import neurobrix.core.prism.solver as solver_mod
     from neurobrix.core.prism.memory_budget import DeviceReading
-    from nbxtensor.tensor import DeviceAllocator
+    from nbxtensor.memory.allocator import DeviceAllocator
     no_door(monkeypatch)
     pin_host(monkeypatch, 257530, 200000, "an idle rack host")
     free = {0: 15845, 1: 15845, 2: 15845, 3: 1000}

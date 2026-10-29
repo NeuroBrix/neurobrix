@@ -88,7 +88,7 @@ def test_the_host_relayout_keeps_the_logical_shape_and_puts_the_channels_innermo
 
 def _dev_ok():
     try:
-        from nbxtensor.tensor import DeviceAllocator
+        from nbxtensor.memory.allocator import DeviceAllocator
         return DeviceAllocator.device_count() > 0
     except Exception:
         return False

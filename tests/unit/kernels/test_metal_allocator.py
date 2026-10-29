@@ -25,12 +25,14 @@ import pytest
 
 from nbxtensor.backend import metal_device
 from nbxtensor import tensor as nbx_tensor
-from nbxtensor.tensor import DeviceAllocator, NBXTensor
+import nbxtensor.backend.runtime as _nbx_runtime
+from nbxtensor.memory.allocator import DeviceAllocator
+from nbxtensor.tensor import NBXTensor
 
 
 def _on_metal() -> bool:
     try:
-        return nbx_tensor._detect_gpu_backend() == "metal"
+        return _nbx_runtime._detect_gpu_backend() == "metal"
     except Exception:
         return False
 
@@ -48,7 +50,7 @@ def test_metal_is_not_a_row_in_the_cuda_hip_table():
     API, so it gets its own table; adding a third row would have made that
     file's contract assertion false and, worse, would have implied Metal
     supports every key `cuda` does."""
-    assert "metal" not in nbx_tensor._GPU_BACKENDS
+    assert "metal" not in _nbx_runtime._GPU_BACKENDS
     assert metal_device.METAL_BACKEND is not None
 
 
@@ -101,12 +103,12 @@ def test_no_metal_means_a_raise_not_a_cpu_backend(monkeypatch):
     monkeypatch.setattr(metal_device, "metal_device_available", lambda: False)
     monkeypatch.setattr(ctypes.cdll, "LoadLibrary", _no_runtime)   # CUDA and ROCm absent too
     monkeypatch.delenv("NBX_GPU_BACKEND", raising=False)
-    nbx_tensor._detect_gpu_backend.cache_clear()
+    _nbx_runtime._detect_gpu_backend.cache_clear()
     try:
         with pytest.raises(RuntimeError, match="No GPU runtime found"):
-            nbx_tensor._detect_gpu_backend()
+            _nbx_runtime._detect_gpu_backend()
     finally:
-        nbx_tensor._detect_gpu_backend.cache_clear()
+        _nbx_runtime._detect_gpu_backend.cache_clear()
 
 
 def test_a_device_without_unified_memory_is_refused():

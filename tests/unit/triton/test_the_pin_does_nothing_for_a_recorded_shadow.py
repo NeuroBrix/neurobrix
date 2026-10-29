@@ -47,7 +47,7 @@ def _run(body: str, census: bool) -> subprocess.CompletedProcess:
 
 def _metal_or_skip():
     try:
-        from nbxtensor.tensor import _detect_gpu_backend
+        from nbxtensor.backend.runtime import _detect_gpu_backend
         if _detect_gpu_backend() != "metal":
             pytest.skip("the pin is the triton-ext (Metal) driver's")
     except Exception:
@@ -59,7 +59,7 @@ def test_a_recorded_shadow_is_pinned_as_nothing():
     _metal_or_skip()
     p = _run("""
         import neurobrix
-        from nbxtensor.tensor import NBXTensor, NBXDtype
+        from nbxtensor.dtype.nbx_dtype import NBXDtype; from nbxtensor.tensor import NBXTensor
         from nbxtensor.backend import triton_ext_driver as drv
         t = NBXTensor.empty((4, 64, 32), dtype=NBXDtype.bfloat16)
         v = t.select(0, 1)

@@ -21,7 +21,8 @@ import numpy as np
 import pytest
 
 from nbxtensor.ops import screen_oracle as SO
-from nbxtensor.tensor import NBXTensor, DeviceAllocator
+from nbxtensor.tensor import NBXTensor
+from nbxtensor.memory.allocator import DeviceAllocator
 
 
 @pytest.fixture

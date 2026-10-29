@@ -40,7 +40,7 @@ print("OUT", tuple(out.shape))
 
 
 def _card():
-    from nbxtensor.tensor import DeviceAllocator
+    from nbxtensor.memory.allocator import DeviceAllocator
     return DeviceAllocator.device_count() > 0
 
 
