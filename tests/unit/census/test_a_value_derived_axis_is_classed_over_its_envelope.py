@@ -177,7 +177,13 @@ def test_the_bisection_meets_every_class_the_envelope_holds(synthetic, tl_dot_ge
     for n in range(lo, hi + 1):
         want |= set(D._derive_at(MODEL, COMP, "float32", "triton", {"s1": L}, False, 0, 1, 1,
                                  collections.Counter(), axis_values={grp[0].uid: n}, axes=grp))
-    assert got == want, (len(got), len(want))
+    # The walk's promise is on the axis's CONE: there it meets every class the exhaustive derivation holds. Outside it
+    # the derivation keys each op once (the elementwise launch class `ew_launch_kernel` of the sigmoid that MAKES the
+    # durations, added to the derivation after this cell, 65 536 elements' class here), which `_derive_at` — the
+    # exhaustive side — does not: the bare `got == want` stood red from then (2026-10-29).
+    cone = grp[0].cone_ops
+    assert {k for k in got if k[0] in cone} == {k for k in want if k[0] in cone}, (len(got), len(want))
+    assert {k for k in want if k[0] not in cone} <= got, "a key outside the cone the walk lost"
     bmm = {k[1] for uid, _q, k in got if uid == "aten.bmm::0"}
     assert 240 in bmm                                    # the run's 229 frames: the 240 class
     assert (34 in bmm) == (lo <= 34)                     # the trace's draw only where the envelope holds it
