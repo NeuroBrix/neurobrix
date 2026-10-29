@@ -6,7 +6,7 @@ them). Its twin `neurobrix/core/module/tiling_sizes.py` serves the PyTorch branc
 executors and the TilingEngine): the two engines share no compute code, so each carries its own
 copy, held equal function by function by `tests/unit/tiling/test_the_two_tiling_sizes_are_one.py`.
 
-Every size a memory split is cut by is computed here, from `config/tiling.yml` (engine-wide
+Every size a memory split is cut by is computed here, from the library's `nbxtensor/ops/tiling.yml` (engine-wide
 values, each with its source) and from the values the caller reads in the active hardware
 profile (per-architecture values stay there). Pure arithmetic: Prism prices with it at plan time,
 the launch keys and the census derive with it, the wrappers and the executor cut with it — one
@@ -28,13 +28,13 @@ from typing import Any, Sequence, Tuple
 
 
 def _value(*path: str) -> Any:
-    """One value of config/tiling.yml, refused by name when absent."""
+    """One value of nbxtensor/ops/tiling.yml, refused by name when absent."""
     from nbxtensor.host import need as _need   # the application's core.config.loader (nbxtensor.host)
     get_tiling_policy = _need("tiling_policy")
     node: Any = get_tiling_policy()
     for i, key in enumerate(path):
         if not isinstance(node, dict) or key not in node:
-            raise KeyError(f"ZERO FALLBACK: config/tiling.yml states no {'.'.join(path[:i + 1])}")
+            raise KeyError(f"ZERO FALLBACK: nbxtensor/ops/tiling.yml states no {'.'.join(path[:i + 1])}")
         node = node[key]
     return node
 
