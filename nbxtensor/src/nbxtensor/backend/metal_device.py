@@ -354,9 +354,8 @@ class MetalRuntime:
         for Apple. The rule is one line of string handling, and the profile
         matches it by prefix (`config/vendors/apple/apple_silicon.yml`).
         """
-        from nbxtensor.host import need as _need   # the application's core.config.loader (nbxtensor.host)
-        device_arch_string = _need("device_arch_string")
-        return device_arch_string(self._device.name())
+        from nbxtensor.backend.device_names import arch_string
+        return arch_string(self._device.name())
 
     @property
     def has_unified_memory(self) -> bool:

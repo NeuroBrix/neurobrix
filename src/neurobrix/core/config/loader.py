@@ -98,13 +98,9 @@ class UnsupportedArchitectureError(FileNotFoundError):
     """
 
 
-@lru_cache(maxsize=16)
-def device_arch_string(model: Optional[str]) -> str:
-    """The arch string a device's MODEL name becomes: lowercased, spaces hyphenated — "Apple M4 Pro" -> "apple-m4-pro".
-    The Metal backend's own rule (`kernels/metal_device.MetalDevice.arch_name`) and the census's
-    (`kernels/census.py`), written once here so the vendor files, keyed by that string (`compute_capability:
-    "apple-m4-pro"`), resolve the same way everywhere."""
-    return str(model or "").strip().lower().replace(" ", "-")
+# The arch string of a device's model name is nbxtensor's rule (one rule for the library's Metal backend, the census
+# and the vendor files keyed by it).
+from nbxtensor.backend.device_names import arch_string as device_arch_string  # noqa: E402
 
 
 def vendor_config_for_device(vendor: str, architecture: Optional[str], compute_capability: Optional[str],

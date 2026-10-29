@@ -38,7 +38,6 @@ def install() -> None:
     loader, dtype = "neurobrix.core.config.loader", "neurobrix.triton.dtype"
     provide("vendor_config", _call(loader, "get_vendor_config"))
     provide("vendor_param", _call(loader, "vendor_param"))
-    provide("device_arch_string", _call(loader, "device_arch_string"))
     provide("tiling_policy", _call(loader, "get_tiling_policy"))
     provide("vendors_dir", _config_dir("vendors"))
     provide("certified_dir", _config_dir("autotune"))
