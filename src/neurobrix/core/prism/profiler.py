@@ -969,7 +969,10 @@ class ActivationProfiler:
         batch = 1
         for d in (q[:-3] if len(q) >= 4 else q[:-2]):
             batch *= int(d)
-        return int(attention_scratch(batch, heads, int(q[-2]), int(v[-2]), D=int(q[-1]), Dv=int(v[-1])))
+        kv_heads = int(v[-3]) if len(v) >= 4 else heads   # the key/value heads (fewer under grouped-query attention)
+        has_mask = len(ins) >= 4 and bool(ins[3])          # an explicit additive mask, made dense beside the scores
+        return int(attention_scratch(batch, heads, int(q[-2]), int(v[-2]), D=int(q[-1]), Dv=int(v[-1]), Hk=kv_heads,
+                                     mask=has_mask))
 
     def tiled_conv_band_bytes(self, op: Dict[str, Any], symbol_map: Dict[str, int], widths, dtype_bytes: int,
                               factor: int) -> int:

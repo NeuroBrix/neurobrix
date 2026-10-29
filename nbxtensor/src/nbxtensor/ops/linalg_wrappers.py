@@ -1145,3 +1145,54 @@ def upsample_linear1d_wrapper(x, output_size, align_corners: bool = False,
     # (input, output) shapes + align_corners.
     result_4d = upsample_bilinear2d_wrapper(x_4d, output_size_2d, align_corners)
     return result_4d.squeeze(2)
+
+
+def bmm_cost(a, b, allow_strided_b: bool = False, native_bf16=None, force_accum=None, contract_half=None,
+             unit=None):
+    """`bmm` on `a` [B, M, K] and `b` [B, K, N] (`_cost.Spec`s): on the matrix unit (`launch_keys.matrix_unit_operands`)
+    `a` made contiguous and `b` unless the caller lets it be walked by its strides, then the output; otherwise the
+    operands at `launch_keys.bmm_dtypes` (a cast each, dense), made contiguous as above, then the output at
+    `launch_keys.matmul_out_dtype` (fp32 for half inputs on hardware without native bf16 unless the component's precision
+    contract holds). The facts the wrapper reads from the run (`native_bf16`, `force_accum`, `contract_half`) are the
+    run's in force when None; `unit` the profile's matrix unit when None. A local rebound frees its old buffer after
+    the new one exists; the rest die at the return."""
+    from nbxtensor.ops import _cost as C
+    from nbxtensor.shape import is_contiguous
+    native_bf16 = bool(_core._NBX_HAS_NATIVE_BF16) if native_bf16 is None else native_bf16
+    force_accum = bool(NBX_FORCE_FP32_ACCUM) if force_accum is None else force_accum
+    contract_half = bool(_core._NBX_ACTIVATIONS_FP16_SAFE) if contract_half is None else contract_half
+    st = C._Steps()
+    Bz, M, K = (int(d) for d in a.shape)
+    N = int(b.shape[2])
+    flops = 2 * Bz * M * N * K
+    ad, bd = NBXDtype[a.dtype], NBXDtype[b.dtype]
+    held = {}
+
+    def rebind(name, spec, label):
+        i = st.alloc(label, spec.nbytes)
+        old = held.get(name)
+        held[name] = i
+        if old is not None:
+            st.free(old)
+        return spec
+
+    if _lk.matrix_unit_operands(ad, bd, M, unit) is not None:
+        if not is_contiguous(a.shape, a.strides):
+            a = rebind("a", C.Spec.contiguous(a.shape, a.dtype), "a made contiguous")
+        if not allow_strided_b and not is_contiguous(b.shape, b.strides):
+            b = rebind("b", C.Spec.contiguous(b.shape, b.dtype), "b made contiguous")
+        out = _lk.matmul_out_dtype(ad, M, True, native_bf16, force_accum, contract_half)
+        st.alloc("output", Bz * M * N * dtype_size(out), returned=True)
+        return st.done(flops)
+    a_to, b_to, _promote = _lk.bmm_dtypes(ad, bd, native_bf16, force_accum)
+    if ad != a_to:
+        a = rebind("a", C.Spec.contiguous(a.shape, a_to.name), "a cast")
+    if bd != b_to:
+        b = rebind("b", C.Spec.contiguous(b.shape, b_to.name), "b cast")
+    if not is_contiguous(a.shape, a.strides):
+        a = rebind("a", C.Spec.contiguous(a.shape, a.dtype), "a made contiguous")
+    if not allow_strided_b and not is_contiguous(b.shape, b.strides):
+        b = rebind("b", C.Spec.contiguous(b.shape, b.dtype), "b made contiguous")
+    out = _lk.matmul_out_dtype(NBXDtype[a.dtype], M, True, native_bf16, force_accum, contract_half)
+    st.alloc("output", Bz * M * N * dtype_size(out), returned=True)
+    return st.done(flops)

@@ -58,3 +58,48 @@ def test_conv2d(dtype, strided):
     measured = _measure(lambda: CW.conv2d_wrapper(x, w, None, 1, 1, 1, False, 0, 1))
     declared = CW.conv2d_cost(_spec(x), _spec(w), 1, 1, 1, 1).peak_bytes
     assert measured == declared, (measured, declared)
+
+
+@pytest.mark.parametrize("dtype", ["float16", "float32"])
+@pytest.mark.parametrize("strided_b,allow", [(False, False), (True, False), (True, True)])
+def test_bmm(dtype, strided_b, allow):
+    """`linalg_wrappers.bmm_cost`: the GEMM family's batched product — the matrix unit's dense operands, the casts of
+    the SIMT route, the store dtype (fp32 for half on hardware without native bf16)."""
+    from nbxtensor.ops import linalg_wrappers as LW
+    a = _t((8, 128, 64), dtype)
+    b = _t((8, 96, 64), dtype, 1).transpose(1, 2) if strided_b else _t((8, 64, 96), dtype, 1)
+    measured = _measure(lambda: LW.bmm(a, b, allow_strided_b=allow))
+    declared = LW.bmm_cost(_spec(a), _spec(b), allow_strided_b=allow).peak_bytes
+    assert measured == declared, (measured, declared)
+
+
+@pytest.mark.parametrize("dtype", ["float16", "float32"])
+@pytest.mark.parametrize("mask,causal,hk", [(None, False, 4), ("2d", False, 4), ("4d", False, 4), (None, True, 4),
+                                            (None, False, 2)])
+def test_math_attention(dtype, mask, causal, hk):
+    """`attention_wrappers.math_attention_cost`: the scores' product, the scale, the mask made dense, the softmax, the
+    probabilities' cast, the output's product — as `_math_attention` allocates them (GQA included)."""
+    from nbxtensor.ops import attention_wrappers as AW
+    B, H, Tq, Tk, D = 2, 4, 96, 80, 64
+    q = _t((B, H, Tq, D), dtype)
+    k = _t((B, hk, Tk, D), dtype, 1)
+    v = _t((B, hk, Tk, D), dtype, 2)
+    m = None
+    if mask == "2d":
+        m = _t((Tq, Tk), dtype, 3)
+    elif mask == "4d":
+        m = _t((B, 1, Tq, Tk), dtype, 3)
+    measured = _measure(lambda: AW._math_attention(q, k, v, attn_mask=m, is_causal=causal))
+    declared = AW.math_attention_cost(_spec(q), _spec(k), _spec(v), None if m is None else _spec(m), causal).peak_bytes
+    assert measured == declared, (measured, declared)
+
+
+@pytest.mark.parametrize("dtype", ["float16", "float32"])
+@pytest.mark.parametrize("causal", [False, True])
+def test_chunked_math_attention(dtype, causal):
+    from nbxtensor.ops import attention_wrappers as AW
+    B, H, Tq, Tk, D = 2, 4, 96, 80, 64
+    q, k, v = _t((B, H, Tq, D), dtype), _t((B, H, Tk, D), dtype, 1), _t((B, H, Tk, D), dtype, 2)
+    measured = _measure(lambda: AW._math_attention_chunked(q, k, v, None, causal, None, 32))
+    declared = AW.chunked_math_attention_cost(_spec(q), _spec(k), _spec(v), 32, None, causal).peak_bytes
+    assert measured == declared, (measured, declared)

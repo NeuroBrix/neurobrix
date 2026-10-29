@@ -1590,11 +1590,21 @@ class PrismSolver:
                            int(memory.get("sdpa_math_min_chunk_rows") or 0), int(memory.get("sdpa_math_max_chunks") or 0),
                            unit))
         # `dtype`: the dtype the component runs at (`_run_dtype`, the DtypeEngine's resolution the executor receives)
-        width = _itemsize.itemsize(dtype)               # an unknown dtype is refused by name
-        unit_dtype = NBXDtype[dtype]
+        unit_dtype = NBXDtype[dtype]                    # an unknown dtype is refused by name
+        native_bf16 = [bool(profile.has_native_bf16)] * len(profile.devices)   # the run's flag is the profile's (`set_hardware_profile`)
         takes = {}                                      # (device route, head dim) -> the unit runs its flash
 
-        def scratch(b, h, tq, tk, D, Dv):
+        def scratch(b, h, tq, tk, D, Dv, Hk=None, mask=False):
+            # the math route's buffers as the wrapper takes them (`attention_wrappers.math_attention_cost` /
+            # `chunked_math_attention_cost`: the scores' product, its scale, a mask made dense, the softmax, the casts,
+            # the output's product), less the output the walk already counts; the flash route writes no scores
+            from nbxtensor.ops import attention_wrappers as _aw
+            from nbxtensor.ops._cost import Spec
+            hk = int(Hk or h)
+            q = Spec.contiguous((b, h, tq, D), dtype)
+            k = Spec.contiguous((b, hk, tk, D), dtype)
+            v = Spec.contiguous((b, hk, tk, Dv), dtype)
+            m = Spec.contiguous((b, 1, tq, tk), dtype) if mask else None
             worst = 0
             for i, (budget, min_rows, max_chunks, unit) in enumerate(routes):
                 if (i, D) not in takes:
@@ -1603,10 +1613,10 @@ class PrismSolver:
                                              unit_flash=takes[(i, D)])
                 if route == "flash":
                     continue
-                n = tq if route == "math" else rows
-                # `wrappers._math_attention`: two fp32 score buffers at its peak (the scaled scores beside the product,
-                # then the probabilities beside the scores), and the query made contiguous for the first product
-                worst = max(worst, 2 * _ts.sdpa_scores_bytes(b, h, n, tk) + b * h * n * D * width)
+                facts = dict(native_bf16=native_bf16[i], force_accum=False, contract_half=False, unit=unit)
+                cost = (_aw.math_attention_cost(q, k, v, m, False, **facts) if route == "math"
+                        else _aw.chunked_math_attention_cost(q, k, v, rows, m, False, **facts))
+                worst = max(worst, cost.peak_bytes - sum(x.nbytes for x in cost.outputs))
             return worst
         return scratch
 

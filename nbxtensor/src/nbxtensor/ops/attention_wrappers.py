@@ -1648,3 +1648,127 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     if attn_mask is not None:
         o = _ew.nan_to_num_wrapper(o, nan=0.0, posinf=0.0, neginf=0.0)
     return o
+
+
+# ---------------------------------------------------------------------------
+# The cost the math attention declares (M3, docs/nbxtensor/COST.md): its buffers in its order, read from the decisions
+# it takes (the GEMM family's `linalg_wrappers.bmm_cost`, the element-wise and softmax declarations of `_cost`). A
+# causal bias is the wrapper's cache (`_get_causal_bias`, built once per shape and kept): not this call's.
+# ---------------------------------------------------------------------------
+
+def math_attention_cost(q, k, v, mask=None, is_causal=False, native_bf16=None, force_accum=None,
+                        contract_half=None, unit=None):
+    """`_math_attention` on q [B, H, Tq, D], k [B, Hk, Tk, D], v [B, Hk, Tk, Dv] and an optional additive `mask`
+    (`_cost.Spec`s; q as the wrapper hands it, contiguous): the scores' product (`bmm_cost`, k walked by its strides),
+    the scale (a new buffer, the product dropped), the bias added (a mask broadcast to the grouped scores and made
+    dense at the scores' dtype, then the sum; the causal bias is the cached one), the softmax (`_cost.softmax`), the
+    scores dropped, the probabilities cleaned in place, cast to the value's dtype when they differ, the output's
+    product (`bmm_cost`), the probabilities dropped, the output cast to q's dtype when they differ."""
+    from nbxtensor.ops import _cost as C
+    from nbxtensor.ops import linalg_wrappers as _lw
+    from nbxtensor.shape import contiguous_strides
+    B, H, Tq, D = (int(d) for d in q.shape)
+    Hk, Tk, Dv = int(k.shape[1]), int(k.shape[2]), int(v.shape[3])
+    groups = H // Hk
+    BH, M = B * Hk, groups * Tq
+    st = C._Steps()
+    held = {}
+
+    def bind(name, index):
+        old = held.get(name)
+        held[name] = index
+        if old is not None and old not in held.values():
+            st.free(old)
+
+    def drop(name):
+        old = held.pop(name, None)
+        if old is not None and old not in held.values():
+            st.free(old)
+
+    facts = dict(native_bf16=native_bf16, force_accum=force_accum, contract_half=contract_half, unit=unit)
+    q3 = C.Spec((BH, M, D), contiguous_strides((BH, M, D)), q.dtype)
+    ks = k.strides
+    k3t = C.Spec((BH, D, Tk), (ks[1], ks[3], ks[2]), k.dtype)            # merged (B, Hk), transposed: a view
+    s_cost = _lw.bmm_cost(q3, k3t, allow_strided_b=True, **facts)
+    scores_dt = next(b for b in s_cost.buffers if b.returned)
+    sdt = None
+    for name in ("float32", "float16", "bfloat16", "float64"):
+        if scores_dt.nbytes == BH * M * Tk * dtype_size(NBXDtype[name]):
+            sdt = name
+            break
+    out_idx = st.nest(s_cost, "scores")
+    bind("scores", out_idx[0])
+    sbytes = BH * M * Tk * dtype_size(NBXDtype[sdt])
+    bind("scores", st.alloc("scores scaled", sbytes))
+    if mask is not None and not is_causal:
+        m = st.alloc("mask made dense at the scores' dtype", sbytes)
+        bind("scores", st.alloc("scores with the mask", sbytes))
+        st.free(m)
+    elif is_causal and mask is None:
+        bind("scores", st.alloc("scores with the causal bias", sbytes))
+    p_cost = C.softmax(C.Spec.contiguous((BH, M, Tk), sdt), -1)
+    p_idx = st.nest(p_cost, "softmax")
+    bind("p", p_idx[0])
+    drop("scores")
+    pdt = sdt
+    if pdt != v.dtype:
+        bind("p", st.alloc("probabilities cast to the value's dtype", BH * M * Tk * dtype_size(NBXDtype[v.dtype])))
+        pdt = v.dtype
+    vs = v.strides
+    v3 = C.Spec((BH, Tk, Dv), (vs[1], vs[2], vs[3]), v.dtype)
+    o_cost = _lw.bmm_cost(C.Spec.contiguous((BH, M, Tk), pdt), v3, allow_strided_b=True, **facts)
+    o_idx = st.nest(o_cost, "output")
+    bind("out", o_idx[0])
+    drop("p")
+    odt = next(b for b in o_cost.buffers if b.returned)
+    if odt.nbytes != BH * M * Dv * dtype_size(NBXDtype[q.dtype]):
+        bind("out", st.alloc("output cast to q's dtype", BH * M * Dv * dtype_size(NBXDtype[q.dtype])))
+    out = held.pop("out")
+    st.buffers[out][4] = True
+    st.buffers[out][3] = None
+    return st.done(2 * B * H * Tq * Tk * (D + Dv))
+
+
+def chunked_math_attention_cost(q, k, v, chunk_rows: int, mask=None, is_causal=False, native_bf16=None,
+                                force_accum=None, contract_half=None, unit=None):
+    """`_math_attention_chunked`: the whole output at q's dtype, then per chunk of `chunk_rows` query rows (the last
+    one shorter) the chunk's query made dense and its math attention (`math_attention_cost`, the chunk's mask rows),
+    the chunk's result copied into the output. Python's lifetimes, as the wrapper has them: `q_c` and `o` are rebound,
+    not dropped, so the next chunk's query is made while the previous one is alive, and the previous chunk's result
+    lives until the next chunk's attention has RETURNED — the dearest chunk is the second, not the first (measured: one
+    chunk's result short, 16 384 elements on the test's case)."""
+    from nbxtensor.ops import _cost as C
+    B, H, Tq, D = (int(d) for d in q.shape)
+    Dv = int(v.shape[3])
+    st = C._Steps()
+    st.alloc("output", B * H * Tq * Dv * dtype_size(NBXDtype[q.dtype]), returned=True)
+    rows, q0 = [], 0
+    while q0 < Tq:
+        rows.append(min(int(chunk_rows), Tq - q0))
+        q0 += rows[-1]
+    prev_q, prev_o = None, []
+    for n, c in enumerate(rows):
+        start = sum(rows[:n])
+        # q[:, :, q0:q0 + c, :].contiguous(): a copy unless the slice already lies row-major
+        sliced = C.Spec(tuple((B, H, c, D)), tuple(q.strides), q.dtype)
+        qi = C._contiguous_copy(st, sliced, f"chunk {n}'s query made dense")
+        if prev_q is not None:
+            st.free(prev_q)                          # the previous q_c, rebound
+        prev_q = qi
+        qc = C.Spec.contiguous((B, H, c, D), q.dtype)
+        if is_causal and mask is None:
+            # the cached causal bias, built once in float32, handed to each chunk as its rows: an explicit mask
+            m = C.Spec.contiguous((c, int(k.shape[2])), "float32")
+        else:
+            m = None if mask is None else C.Spec.contiguous(tuple(mask.shape[:-2]) + (c, int(mask.shape[-1])),
+                                                            mask.dtype)
+        outs = st.nest(math_attention_cost(qc, k, v, m, False, native_bf16, force_accum, contract_half, unit),
+                       f"chunk {n} (rows {start}..{start + c})")
+        for i in prev_o:
+            st.free(i)                               # the previous chunk's result, rebound once this one returned
+        prev_o = outs
+    for i in prev_o:
+        st.free(i)
+    if prev_q is not None:
+        st.free(prev_q)
+    return st.done(2 * B * H * Tq * int(k.shape[2]) * (D + Dv))
