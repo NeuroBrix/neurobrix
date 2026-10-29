@@ -2685,6 +2685,8 @@ def _moved(model, hw, rec, container, jobs) -> str:
     import census_inputs as CI
     if rec is None:
         return "no input record"
+    if rec.get("roots") != CI.recorded_roots():
+        return f"recorded under the roots {rec.get('roots')}, this tree records {CI.recorded_roots()}"
     if rec.get("container") != container:
         return f"container {rec.get('container')} -> {container}"
     ids = [_job_id(*j) for j in jobs]
@@ -3047,7 +3049,8 @@ def table(a) -> int:
         removed, _ = T.replace_model(path, model, rows, keyless_ops=0 if rows else max(keyless, len(unrunnable)))
         units, files = CI.units_and_files(CI.merge(measured + [CI.take()]))
         T.replace_inputs(path, model, {"model": model, "container": container, "jobs": plans, "units": units,
-                                       "files": files, "tool": f"derived_census {rev}"})
+                                       "files": files, "roots": CI.recorded_roots(),
+                                       "tool": f"derived_census {rev}"})
         written = len({(r["mode"], r["kernel"], r["key"]) for r in rows})
         print(f"[derived table] {model}: {written} row(s) written ({removed} replaced; {keyless} keyless op(s) "
               f"placed) into {path.name} "

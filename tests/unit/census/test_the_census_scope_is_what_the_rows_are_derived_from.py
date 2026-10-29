@@ -86,6 +86,18 @@ def test_the_librarys_executed_code_is_an_input_and_moves(tmp_path):
     assert CI.static_move(rec, repo=root) == f"code repo:{LIB_REL}::numel changed"
 
 
+def test_a_record_taken_under_other_roots_is_derived_again():
+    """A record taken before the library joined the roots holds no library unit: nothing in it can move when the
+    library changes, so it is derived again by name — never kept as unchanged."""
+    import derived_census as DC
+    rec = {"container": "c", "jobs": {}, "units": {}, "files": {}, "roots": ["src", "tools"]}
+    assert DC._moved("m", None, rec, "c", []) == (
+        f"recorded under the roots ['src', 'tools'], this tree records {CI.recorded_roots()}")
+    del rec["roots"]
+    assert DC._moved("m", None, rec, "c", []).startswith("recorded under the roots None")
+    assert "nbxtensor/src" in CI.recorded_roots()
+
+
 def test_a_read_file_moves(tmp_path):
     root = tmp_path / "tree"
     f = root / "src/neurobrix/config/x.yml"

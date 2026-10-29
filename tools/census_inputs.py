@@ -33,6 +33,12 @@ REPO = Path(__file__).resolve().parents[1]
 # moved when it changed (the stale rows of TinyLlama and whisper the lot-2 key compare found, 2026-10-29)
 ROOTS = (REPO / "src", REPO / "nbxtensor" / "src", REPO / "tools")
 
+
+def recorded_roots() -> list:
+    """The roots a record is taken under, as the record writes them: a record taken under other roots holds none of
+    the units the missing roots executed, so `static_move` could never see them move — it is derived again instead."""
+    return sorted(str(r.relative_to(REPO)) for r in ROOTS)
+
 import gate_scope_code as GC                   # noqa: E402  (tools/ is on the path of every tool)
 
 _codes: set = set()
