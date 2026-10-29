@@ -7,6 +7,17 @@ computation, a conversion, a copy, a reduction, a memory placement, a launch uti
 library as a generic API, and the engine calls it. The mechanism goes to the library; the policy stays in the engine
 (rule 3); a piece that mixes the two is cut in two.
 
+## The figures
+
+Two figures, kept apart (the supervisor, 2026-10-29 23:40):
+
+- **Third-party code taken out of the engine**: the vendored reference tree `kernels/triton_kernels_ref/`, 262 132
+  lines, never imported and never packaged. It is not lost: it is kept, with its inventory and the provenance of each
+  subfolder (repository, licence), in the workshop's reference zone on the NAS (path below, under Deleted).
+- **The engine's own cleaning** — the figure that says whether the engine slims, tracked from here: the Python lines
+  of `src/neurobrix` and the open findings, both recorded in the header of `engine_slim_list.tsv` at every commit.
+  At the ratchet's first commit (2026-10-29, on nbxtensor 6c059035): 146 646 lines, 842 open findings.
+
 ## The scan
 
 `tools/engine_slim_scan.py` (standard library, ast) lists four kinds of finding in `src/neurobrix`, both branches:
@@ -42,7 +53,7 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 
 | when | what | lines |
 |---|---|---|
-| 2026-10-29 | `src/neurobrix/kernels/triton_kernels_ref/` — 1 097 files of vendored third-party reference kernels (flaggems for a dozen vendors, fla, attorch, gemlite, ...), imported by no code, excluded from both package targets | 262 132 |
+| 2026-10-29 | `src/neurobrix/kernels/triton_kernels_ref/` — 1 097 files of vendored third-party reference kernels (flaggems for a dozen vendors, fla, attorch, gemlite, ...), imported by no code, excluded from both package targets — kept outside the engine with its inventory and provenance (NAS reference zone: path pending the supervisor) | 262 132 |
 | 2026-10-29 | `kernels/metadata_ops.py`: 34 handlers no table maps (`_addmm`, `_bmm`, `_exp`, ... — those ops resolve through `torch.ops.aten` by name) and the two listing helpers nothing calls; `kernels/classification.py`: one dead helper | 297 |
 | 2026-10-29 | `core/prism/`: 36 definitions nothing called — the multi-GPU strategy predicates (`is_block_scatter`, `is_multi_gpu`, ...), the profile accessors (`get_device_strings`, `has_fast_interconnect`, ...), the device-state block helpers, the import planner's two entry points, three Apple chip lookups and their name normaliser, `compute_tensor_gb/mb` | 248 |
 | 2026-10-29 | `core/runtime/`: 42 definitions nothing called — the memory pool's `MemoryOptimizer` and `LivenessAnalyzer` (the Triton allocator replaced them), the native dispatcher's seven view-wrapper factories, the executor's metadata and intercepted-op paths and its unregister / summary helpers, the KV wrapper's three intercepts, the debug loggers, `SymInt`'s legacy parsers, and accessors no caller reads | 994 |
