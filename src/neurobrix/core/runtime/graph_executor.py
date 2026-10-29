@@ -251,8 +251,12 @@ def _cuda_peak_since_load(device, mode, window=None) -> str:
         if window is None:
             return ""
         from nbxtensor.memory.allocator import DeviceAllocator
+        start = DeviceAllocator.window_start(window[1])
         held = DeviceAllocator.close_window(*window)
-        return f", held at most {held / 2**20:.0f} MB from the driver since its load" if held is not None else ""
+        if held is None:
+            return ""
+        return (f", held at most {held / 2**20:.0f} MB from the driver since its load"
+                + (f" ({start / 2**20:.0f} MB of it held before)" if start else ""))
     from neurobrix.core.device_utils import device_allocator_figures
     f = device_allocator_figures(str(device or "") or None)
     return f", peak allocated since its load {f['peak_allocated_mb']:.0f} MB" if "peak_allocated_mb" in f else ""

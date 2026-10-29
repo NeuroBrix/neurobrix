@@ -318,6 +318,7 @@ class DeviceAllocator:
     _rung_limit_bytes: Dict[int, Optional[int]] = {}
     #: device -> {token: the most held from the driver since the window opened} (`open_window`)
     _windows: Dict[int, Dict[int, int]] = {}
+    _window_starts: Dict[int, int] = {}              # token -> held when it opened
     _window_seq: int = 0
 
     # Deferred-queue reclaimers (P-TRITON-LIVE-SET). The triton hot loops
@@ -1114,14 +1115,22 @@ class DeviceAllocator:
         measures one stretch (a component from its load to its release) beside it."""
         DeviceAllocator._window_seq += 1
         t = DeviceAllocator._window_seq
-        DeviceAllocator._windows.setdefault(int(device_idx), {})[t] = DeviceAllocator._cuda_live_bytes.get(
-            int(device_idx), 0)
+        held = DeviceAllocator._cuda_live_bytes.get(int(device_idx), 0)
+        DeviceAllocator._windows.setdefault(int(device_idx), {})[t] = held
+        DeviceAllocator._window_starts[t] = held
         return t
+
+    @staticmethod
+    def window_start(token: int) -> Optional[int]:
+        """What this process held from the driver when the window `token` opened (what other stretches already held:
+        the part of the window's peak that is not its own); None for a token never opened."""
+        return DeviceAllocator._window_starts.get(token)
 
     @staticmethod
     def close_window(device_idx: int, token: int) -> Optional[int]:
         """The most this process held from the driver on `device_idx` since `open_window` returned `token`, and the
         window closed; None for a token not open there."""
+        DeviceAllocator._window_starts.pop(token, None)
         return DeviceAllocator._windows.get(int(device_idx), {}).pop(token, None)
 
     @staticmethod
