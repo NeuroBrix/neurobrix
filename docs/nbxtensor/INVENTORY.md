@@ -28,7 +28,7 @@ helpers (l. 2829-3215), and the class `NBXTensor` (l. 3215-end).
 
 ## Size of what moves
 
-`kernels/` (excluding the never-executed reference tree `triton_kernels_ref/`):
+`kernels/` (excluding the never-executed reference tree `triton_kernels_ref/`, deleted 2026-10-29):
 22 modules and 174 kernel files under `ops/`; `kernels/wrappers.py` alone is
 9 722 lines and will be split by op family. `triton/`: 9 modules move
 (itemsize, arena, memory_pool, device_transfer, launcher_contract,

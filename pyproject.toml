@@ -109,7 +109,6 @@ allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/neurobrix"]
-exclude = ["src/neurobrix/kernels/triton_kernels_ref"]
 
 [tool.hatch.build.targets.sdist]
 # Whitelist approach: only include source tree + minimum metadata.
@@ -127,8 +126,6 @@ include = [
 ]
 exclude = [
     ".gitignore",
-    "src/neurobrix/kernels/triton_kernels_ref",
-    "src/neurobrix/kernels/triton_kernels_ref/**",
     "**/__pycache__",
     "**/*.pyc",
     "**/*.pyo",
