@@ -115,8 +115,11 @@ def graph():
                                                     "source": "input::dur::dim_1"}}}}
 
 
-class _Contract:
-    fp32_op_uids = frozenset()
+def _Contract():
+    """The plan-time contract empty, as the engine's own object says it (a stand-in class drifted: it lacked `safe`,
+    which the key path reads since 2026-10-26, and the whole file stood red)."""
+    from neurobrix.core.prism.runtime_widths import conservative_contract
+    return conservative_contract("the synthetic graph: no contract")
 
 
 @pytest.fixture
