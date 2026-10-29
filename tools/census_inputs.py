@@ -28,7 +28,10 @@ import threading
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-ROOTS = (REPO / "src", REPO / "tools")
+# the engine, its tensor library and the tools: since the library left the engine (2026-10-28) the key path's code —
+# launch_keys, the wrappers, the buckets — lives under nbxtensor/src, and a record that left it out marked no model
+# moved when it changed (the stale rows of TinyLlama and whisper the lot-2 key compare found, 2026-10-29)
+ROOTS = (REPO / "src", REPO / "nbxtensor" / "src", REPO / "tools")
 
 import gate_scope_code as GC                   # noqa: E402  (tools/ is on the path of every tool)
 

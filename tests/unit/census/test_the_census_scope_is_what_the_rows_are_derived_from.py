@@ -61,6 +61,31 @@ def test_an_executed_unit_moves_and_an_unexecuted_one_does_not(tmp_path):
     assert CI.static_move(rec, repo=root) == f"code repo:{REL}::<module> changed"
 
 
+LIB_REL = "nbxtensor/src/nbxtensor/shape/__init__.py"
+
+
+def test_the_librarys_executed_code_is_an_input_and_moves(tmp_path):
+    """The key path runs in the tensor library since 2026-10-28; its executed code is recorded like the engine's, and
+    an edit to it moves the model (it did not: the record's roots were src/ and tools/ only, and the table went stale
+    for TinyLlama and whisper while nothing said so)."""
+    from nbxtensor.shape import numel
+    CI.install()
+    CI.reset()
+    numel((2, 3))
+    m = CI.take()
+    sys.settrace(None)
+    units, _files = CI.units_and_files(m)
+    rec = {"units": {k: v for k, v in units.items() if k.startswith(f"repo:{LIB_REL}::")}, "files": {}}
+    assert f"repo:{LIB_REL}::numel" in rec["units"], sorted(units)[:20]
+    root = tmp_path / "tree"
+    (root / LIB_REL).parent.mkdir(parents=True)
+    shutil.copy(REPO / LIB_REL, root / LIB_REL)
+    assert CI.static_move(rec, repo=root) == ""
+    src = (root / LIB_REL).read_text()
+    (root / LIB_REL).write_text(src.replace("        n *= int(d)\n    return n", "        n = n * int(d)\n    return n"))
+    assert CI.static_move(rec, repo=root) == f"code repo:{LIB_REL}::numel changed"
+
+
 def test_a_read_file_moves(tmp_path):
     root = tmp_path / "tree"
     f = root / "src/neurobrix/config/x.yml"
