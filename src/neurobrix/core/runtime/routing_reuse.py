@@ -72,7 +72,11 @@ def load(model: str, component: str) -> Optional[Dict[str, object]]:
 
 def record(model: str, component: str, traces: Dict[str, List[List[int]]], top_k: int, n_experts: int,
            source: str) -> Optional[Path]:
-    """Write the curve of `traces` for `model`/`component` unless one is recorded already; returns the path written."""
+    """Write the curve of `traces` for `model`/`component` unless one is recorded already; returns the path written.
+    Under the census shadow nothing is written: its routing is read from values the shadow invents."""
+    from neurobrix.kernels import census
+    if census.active():
+        return None
     p = path(model, component)
     if p.is_file():
         return None

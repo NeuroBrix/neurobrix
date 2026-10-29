@@ -31,3 +31,14 @@ def test_a_trace_notes_decode_calls_only_and_writes_once(tmp_path, monkeypatch):
     t2 = RR.ExpertTrace("m", "model", top_k=2, n_experts=4)
     t2.note("L0", [3, 3])
     assert t2.write("again") is None and json.loads(p.read_text())["source"] == "test"
+
+
+def test_a_census_shadow_writes_no_curve(tmp_path, monkeypatch):
+    """The shadow's routing is read from the values it invents: written first, it would stand for the model's for good
+    (one record per component). What it would do if the code were wrong: a curve file under the shadow (red)."""
+    from neurobrix.kernels import census
+    monkeypatch.setattr(RR, "_root", lambda: tmp_path)
+    monkeypatch.setitem(census._ACTIVE, "census", True)
+    assert RR.record("m", "model", {"L0": [[0, 1]]}, 2, 4, "a shadow") is None
+    assert not RR.path("m", "model").exists()
+
