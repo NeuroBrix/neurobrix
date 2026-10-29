@@ -225,7 +225,7 @@ _BF16_ULP = 2.0 ** -7      # bfloat16: 7 stored significand bits (8 with the imp
 
 
 def _bf16_round(x):
-    from nbxtensor.tensor import bf16_carrier_to_float32, float32_to_bf16_bits
+    from nbxtensor.dtype.convert import bf16_bits_to_f32 as bf16_carrier_to_float32, f32_to_bf16_bits as float32_to_bf16_bits
     bits = float32_to_bf16_bits(np.ascontiguousarray(x, dtype=np.float32))
     return bf16_carrier_to_float32(np.asarray(bits, dtype=np.uint16).view("V2")).astype(np.float64)
 

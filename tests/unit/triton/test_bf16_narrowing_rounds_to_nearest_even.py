@@ -19,7 +19,8 @@ import struct
 import numpy as np
 import pytest
 
-from nbxtensor.tensor import DeviceAllocator, NBXDtype, float32_to_bf16_bits
+from nbxtensor.tensor import DeviceAllocator, NBXDtype
+from nbxtensor.dtype.convert import f32_to_bf16_bits as float32_to_bf16_bits
 
 
 def _bits_value(b: int) -> float:
@@ -31,14 +32,14 @@ def _bits_value(b: int) -> float:
 
 
 def _reference_bits(x: np.ndarray) -> np.ndarray:
-    """Nearest bf16 by enumeration in float64; ties to the even pattern; NaN quiet; infinities kept;
+    """Nearest bf16 by enumeration in float64; ties to the even pattern; NaN the quiet 0x7FC0; infinities kept;
     a value past the midpoint above the bf16 maximum rounds to infinity (IEEE)."""
     x = np.asarray(x, dtype=np.float32).reshape(-1)
     out = np.empty(x.size, dtype=np.uint16)
     for i, v in enumerate(x.tolist()):
         sign = 0x8000 if np.signbit(np.float32(v)) else 0
         if v != v:
-            out[i] = sign | 0x7FC0
+            out[i] = 0x7FC0          # torch/headeronly/util/BFloat16.h: every NaN is the quiet NaN, sign dropped
             continue
         if v in (float("inf"), float("-inf")):
             out[i] = sign | 0x7F80
@@ -55,7 +56,7 @@ def _cases() -> np.ndarray:
     random = (rng.standard_normal(4096) * 0.05).astype(np.float32)
     ties = ((rng.integers(1, 1 << 15, 256).astype(np.uint32) << 16) | 0x8000).view(np.float32)   # exact halves
     specials = np.array([0.0, -0.0, 1.0, -1.0, 12345.0, 3.3895313892515355e38, 3.4028234663852886e38,
-                         -3.4028234663852886e38, np.inf, -np.inf, np.nan, 1e-40, -1e-40], dtype=np.float32)
+                         -3.4028234663852886e38, np.inf, -np.inf, np.nan, -np.nan, 1e-40, -1e-40], dtype=np.float32)
     return np.concatenate([random, ties, specials])
 
 

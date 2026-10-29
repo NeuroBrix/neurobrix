@@ -18,7 +18,8 @@ import pytest
 
 triton = pytest.importorskip("triton")
 
-from nbxtensor.tensor import NBXDtype, NBXTensor, bf16_carrier_to_float32  # noqa: E402
+from nbxtensor.tensor import NBXDtype, NBXTensor  # noqa: E402
+from nbxtensor.dtype.convert import bf16_bits_to_f32 as bf16_carrier_to_float32  # noqa: E402
 
 E, TOP_K, K, N = 32, 8, 1024, 512
 
