@@ -385,4 +385,7 @@ def device_memory():
     """The memory primitives of the backend in force (`memory.device_memory.DeviceMemory`): the account
     (`memory.allocator.DeviceAllocator`) asks these and nothing else of the device's memory. Built per call from the
     runtime and its table, never cached: a substituted runtime or table is read at once."""
+    if _detect_gpu_backend() == "metal":
+        from nbxtensor.memory.metal import MetalMemory    # Metal's own primitives, no C ABI behind them
+        return MetalMemory(_gpu_runtime())
     return _AbiMemory(_gpu_runtime(), _active_backend())

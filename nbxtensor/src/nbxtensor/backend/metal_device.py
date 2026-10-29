@@ -232,10 +232,8 @@ class MetalRuntime:
         #: by bisection instead of a scan. The engine sub-allocates arenas,
         #: so interior pointers are the common case, not the exception.
         self._bases: list = []
-        # Bytes this allocator is currently holding. Ours, exactly, and it
-        # goes DOWN on free — which is the property `currentAllocatedSize()`
-        # turned out not to have (see `_budget_bytes`).
-        self._live_bytes = 0
+        # No byte is counted here: the one account is the allocator's (`memory.allocator.DeviceAllocator`), and the
+        # device's budget is refused there (`memory.metal.MetalMemory`), never a second figure of the same fact.
         # handle -> MTLCommandQueue, for the stream API.
         self._queues: Dict[int, object] = {}
         self._next_queue_handle = 1
@@ -375,7 +373,7 @@ class MetalRuntime:
 
     # -- allocation ---------------------------------------------------------
 
-    def _budget_bytes(self) -> int:
+    def budget_bytes(self) -> int:
         """The device's own working-set budget, read from the device."""
         return int(self._device.recommendedMaxWorkingSetSize())
 
@@ -391,23 +389,17 @@ class MetalRuntime:
     def _new_shared_buffer(self, nbytes: int):
         """A shared-storage MTLBuffer plus the address the CPU and GPU share.
 
-        The device's working-set budget is enforced HERE rather than left to
-        Metal, and that is deliberate. `recommendedMaxWorkingSetSize` is a
-        recommendation: Metal will keep handing out buffers past it, backed
-        by a memory the whole machine is sharing, until the system starts
-        paging or the process is killed. An allocator that never says no
-        turns "fill the device until it refuses" — which is how the engine's
-        own OOM-reclaim path is exercised — into an unbounded claim on the
-        user's RAM. Apple's number is the honest ceiling and it is read from
-        the device, never guessed.
+        The device's working-set budget is refused by the ONE account before it asks here
+        (`memory.allocator.DeviceAllocator`, `memory.metal.MetalMemory.budget`), and that is deliberate.
+        `recommendedMaxWorkingSetSize` is a recommendation: Metal will keep handing out buffers past it,
+        backed by a memory the whole machine is sharing, until the system starts paging or the process
+        is killed. An allocator that never says no turns "fill the device until it refuses" — which is
+        how the engine's own OOM-reclaim path is exercised — into an unbounded claim on the user's RAM.
+        Apple's number is the honest ceiling and it is read from the device, never guessed.
         """
         Metal = self._Metal
         page = self._page_size
         allocated = (nbytes + page - 1) // page * page
-        with self._lock:
-            live = self._live_bytes
-        if live + allocated > self._budget_bytes():
-            return None, None, 0, 0
         buffer = self._device.newBufferWithLength_options_(
             allocated, Metal.MTLResourceStorageModeShared)
         if buffer is None:
@@ -440,7 +432,6 @@ class MetalRuntime:
         with self._lock:
             self._buffers[address] = (buffer, view, allocated)
             bisect.insort(self._bases, address)
-            self._live_bytes += allocated
         slot.value = address
         return _OK
 
@@ -455,7 +446,6 @@ class MetalRuntime:
         with self._lock:
             entry = self._buffers.pop(address, None)
             if entry is not None:
-                self._live_bytes -= entry[2]
                 _drop_base(self._bases, address)
         if entry is None:
             # Freeing a pointer this runtime never handed out is a bug in the
@@ -485,7 +475,6 @@ class MetalRuntime:
         with self._lock:
             self._host_buffers[address] = (buffer, view, allocated)
             bisect.insort(self._bases, address)
-            self._live_bytes += allocated
         slot.value = address
         return _OK
 
@@ -496,7 +485,6 @@ class MetalRuntime:
         with self._lock:
             entry = self._host_buffers.pop(address, None)
             if entry is not None:
-                self._live_bytes -= entry[2]
                 _drop_base(self._bases, address)
         if entry is None:
             return _ERR_UNKNOWN_POINTER
@@ -621,12 +609,11 @@ class MetalRuntime:
         callers of this in NeuroBrix are feasibility probes and the pool's
         parked-bytes cap, both of which want exactly that.
         """
-        total = self._budget_bytes()
-        with self._lock:
-            used = self._live_bytes
+        from nbxtensor.memory.metal import MetalMemory
+        rc, free, total = MetalMemory(self).mem_get_info()      # headroom against the ONE account
         _deref(out_total).value = total
-        _deref(out_free).value = max(0, total - used)
-        return _OK
+        _deref(out_free).value = free
+        return rc
 
     # -- ordering -----------------------------------------------------------
 
