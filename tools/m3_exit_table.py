@@ -40,15 +40,20 @@ from typing import Dict, List, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import atelier  # noqa: E402
 
-COLUMNS = ("model", "mode", "component", "device", "weights_mb", "activations_mb", "walk_mb", "replay_held_mb",
+COLUMNS = ("model", "mode", "strategy", "component", "placement", "device", "weights_mb", "activations_mb", "walk_mb", "replay_held_mb",
            "pool_ratio", "arena_factor", "arena_mb", "measured_held_mb", "measured_before_mb", "measured_own_mb",
-           "replay_over_measured", "arena_over_measured", "row_date", "row_engine", "explain_rc")
+           "replay_over_measured", "arena_over_measured", "run_peak_mb", "row_date", "row_engine", "explain_rc")
 
 #: `solver.explain_plan`'s component line
 _PLAN_LINE = re.compile(
     r"^\s+(?P<comp>\S+)\s+->\s+(?P<dev>\S+?)(?:\s+sharded)?\s+weights (?P<w>\d+) MB \+ activations (?P<a>\d+) MB"
     r" \+ overhead \d+ MB(?:; the allocator's replay holds (?P<held>\d+) MB at its peak"
     r"(?: \(the pool x(?P<ratio>[\d.]+) over the walk\))?)?")
+#: the plan's strategy line, and the line under a component that says it is not held whole on its device
+_STRATEGY_LINE = re.compile(r"^strategy\s+(?P<s>\S+)")
+_NOT_WHOLE = (("zero3:", "zero3"), ("expert store:", "expert_store"))
+#: the run's device peak (`[Peak] device_mb=N`; `na` on a card-less run)
+_PEAK_LINE = re.compile(r"^\[Peak\] device_mb=(?P<mb>\d+)", re.M)
 #: `graph_executor._cuda_peak_since_load`'s Triton release line
 _RELEASE_LINE = re.compile(
     r"\[Triton\] '(?P<comp>[^']+)': released \d+ weights, held at most (?P<held>\d+) MB from the driver since its load"
@@ -83,16 +88,42 @@ def gate_rows(paths: List[str]) -> List[dict]:
     return list(latest.values())
 
 
+def strategy(explain_text: str) -> Optional[str]:
+    """The plan's strategy (`strategy` line of `--explain-plan`)."""
+    for line in explain_text.splitlines():
+        m = _STRATEGY_LINE.match(line)
+        if m:
+            return m["s"]
+    return None
+
+
 def predicted(explain_text: str) -> Dict[str, dict]:
-    """Per component, the plan's figures from `--explain-plan`'s output."""
-    out = {}
+    """Per component, the plan's figures from `--explain-plan`'s output, and its placement: `whole` unless the line
+    under it says its weights live elsewhere (`zero3`, `expert_store`) — the arena factor prices only a component held
+    whole, so only those rows can agree or disagree with it."""
+    out: Dict[str, dict] = {}
+    last = None
     for line in explain_text.splitlines():
         m = _PLAN_LINE.match(line)
         if m:
-            out[m["comp"]] = {"device": m["dev"], "weights_mb": int(m["w"]), "activations_mb": int(m["a"]),
-                              "replay_held_mb": int(m["held"]) if m["held"] else None,
-                              "pool_ratio": float(m["ratio"]) if m["ratio"] else None}
+            last = m["comp"]
+            out[last] = {"device": m["dev"], "weights_mb": int(m["w"]), "activations_mb": int(m["a"]),
+                         "replay_held_mb": int(m["held"]) if m["held"] else None,
+                         "pool_ratio": float(m["ratio"]) if m["ratio"] else None, "placement": "whole"}
+            continue
+        if last is not None and line.startswith("   ") and not line.lstrip().startswith(("-", "->")):
+            for word, placement in _NOT_WHOLE:
+                if line.strip().startswith(word):
+                    out[last]["placement"] = placement
+        elif not line.startswith("  "):
+            last = None
     return out
+
+
+def run_peak(log_text: str) -> Optional[int]:
+    """The run's device peak (`[Peak] device_mb=N`), or None."""
+    peaks = [int(m["mb"]) for m in _PEAK_LINE.finditer(log_text)]
+    return max(peaks) if peaks else None
 
 
 def measured(log_text: str) -> Dict[str, dict]:
@@ -152,6 +183,7 @@ def cell_profile(row: dict, tree: Path, _seen: Dict[str, tuple] = {}) -> tuple:
 
 def table_rows(row: dict, explain_text: str, explain_rc: int, log_text: str, hardware_id: str) -> List[dict]:
     plan, meas = predicted(explain_text), measured(log_text)
+    strat, peak = strategy(explain_text), run_peak(log_text)
     out = []
     for comp in sorted(set(plan) | set(meas)):
         p, m = plan.get(comp, {}), meas.get(comp)
@@ -159,7 +191,8 @@ def table_rows(row: dict, explain_text: str, explain_rc: int, log_text: str, har
         walk = (p["weights_mb"] + p["activations_mb"]) if p else None
         arena = round(p["weights_mb"] + p["activations_mb"] * f) if p and f is not None else None
         own = (m["held"] - m["before"]) if m else None
-        out.append({"model": row["model"], "mode": row["mode"], "component": comp, "device": p.get("device"),
+        out.append({"model": row["model"], "mode": row["mode"], "strategy": strat, "component": comp,
+                    "placement": p.get("placement"), "device": p.get("device"),
                     "weights_mb": p.get("weights_mb"), "activations_mb": p.get("activations_mb"), "walk_mb": walk,
                     "replay_held_mb": p.get("replay_held_mb"), "pool_ratio": p.get("pool_ratio"),
                     "arena_factor": f, "arena_mb": arena,
@@ -168,7 +201,8 @@ def table_rows(row: dict, explain_text: str, explain_rc: int, log_text: str, har
                     "replay_over_measured": (round(p["replay_held_mb"] / own, 3)
                                              if own and p.get("replay_held_mb") is not None else None),
                     "arena_over_measured": round(arena / own, 3) if own and arena is not None else None,
-                    "row_date": row.get("date"), "row_engine": row.get("engine"), "explain_rc": explain_rc})
+                    "run_peak_mb": peak, "row_date": row.get("date"), "row_engine": row.get("engine"),
+                    "explain_rc": explain_rc})
     return out
 
 
@@ -212,6 +246,9 @@ def main(argv=None) -> int:
     def one(row):
         hw, rung = profiles[(row["model"], row["mode"])]
         rc, text = _explain(row, tree, python, scratch, hw, rung)
+        evidence = out.with_suffix(".explain") / f"{row['model']}.{row['mode']}.txt"   # the plan the row is read against
+        evidence.parent.mkdir(parents=True, exist_ok=True)
+        evidence.write_text(text)
         log = Path(row["log"]).read_text(errors="replace") if row.get("log") and Path(row["log"]).is_file() else ""
         lines = table_rows(row, text, rc, log, hw)
         with open(out, "a") as f:                     # appended as each cell finishes

@@ -21,10 +21,13 @@ import m3_exit_table as X  # noqa: E402
 
 # the lines as the engine wrote them (PixArt-Sigma-XL-2-1024-MS, nbxtensor 2a0fc723, 2026-10-29)
 PLAN = """\
+strategy        single_gpu   (loading: eager, dtype: float16)
 host memory     1455 MB on the triton engine = resident 219 MB + engine 207 MB + held 0 MB (eager)
   text_encoder         -> cuda:0  weights 9083 MB + activations 78 MB + overhead 0 MB; the allocator's replay holds 11094 MB at its peak (the pool x1.352 over the walk)  (peak at aten.mul::7)
   vae                  -> cuda:0  weights 160 MB + activations 1920 MB + overhead 0 MB; the allocator's replay holds 4105 MB at its peak (the pool x1.180 over the walk)  (peak at aten.native_group_norm::23)
   transformer          -> cuda:0  weights 1165 MB + activations 628 MB + overhead 0 MB  (peak at aten.mm::3)
+  model                -> cuda:0  weights 57642 MB + activations 30 MB + overhead 0 MB; the allocator's replay holds 57790 MB at its peak (the pool x1.548 over the walk)
+                          expert store: the dense 2000 MB resident on cuda:0, routed experts on the host through a 3000 MB expert cache
 drain cliff     cuda:0: the Triton hot loop drains its dead tensors at 1907 MB queued
 """
 LOG = """\
@@ -32,16 +35,19 @@ LOG = """\
    [Triton] 'transformer': released 604 weights, held at most 8081 MB from the driver since its load (1071 MB of it held before); the device still holds 2998 MB live
    [Triton] 'vae': released 60 weights, held at most 3000 MB from the driver since its load; the device still holds 0 MB live
    [Triton] 'vae': released 60 weights, held at most 3500 MB from the driver since its load (200 MB of it held before); the device still holds 0 MB live
+[Peak] device_mb=10157
 """
 
 
 def test_the_plan_line_is_read_per_component():
     p = X.predicted(PLAN)
-    assert p["text_encoder"] == {"device": "cuda:0", "weights_mb": 9083, "activations_mb": 78,
-                                 "replay_held_mb": 11094, "pool_ratio": 1.352}
+    assert {k: v for k, v in p["text_encoder"].items() if k != "placement"} == {
+        "device": "cuda:0", "weights_mb": 9083, "activations_mb": 78, "replay_held_mb": 11094, "pool_ratio": 1.352}
     assert p["vae"]["replay_held_mb"] == 4105
     assert p["transformer"]["replay_held_mb"] is None and p["transformer"]["weights_mb"] == 1165   # a tree without
-    assert set(p) == {"text_encoder", "vae", "transformer"}                                      # the replay says so
+    assert set(p) == {"text_encoder", "vae", "transformer", "model"}                             # the replay says so
+    assert p["text_encoder"].pop("placement") == "whole" and p["model"]["placement"] == "expert_store"
+    assert X.strategy(PLAN) == "single_gpu" and X.run_peak(LOG) == 10157
 
 
 def test_the_release_line_is_read_and_a_component_keeps_its_dearest_load():
