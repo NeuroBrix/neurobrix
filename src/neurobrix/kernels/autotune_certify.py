@@ -2174,7 +2174,8 @@ def _bind_hardware_profile() -> str:
     from neurobrix.core.prism.autodetect import get_or_create_default_profile
     from nbxtensor.ops import wrappers as W
     hw_id = get_or_create_default_profile()
-    W.set_hardware_profile(load_profile(hw_id))
+    from neurobrix.triton.dtype import declare_hardware_profile
+    declare_hardware_profile(load_profile(hw_id))
     return str(hw_id)
 
 

@@ -2429,7 +2429,8 @@ def derive_keys(model: str, hardware: str, mode: str, rung, request: list):
     derived = set()
     from nbxtensor.ops import wrappers as W
     from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
-    W.set_hardware_profile(prof)
+    from neurobrix.triton.dtype import declare_hardware_profile
+    declare_hardware_profile(prof)
     budget = _nbx_attention_wrappers._sdpa_math_scores_budget_bytes_for(0) or 0
     min_rows, max_chunks = _nbx_attention_wrappers._sdpa_math_min_chunk_rows(), _nbx_attention_wrappers._sdpa_math_max_chunks()
     topo = json.loads((CACHE / a.model / "topology.json").read_text())

@@ -32,7 +32,6 @@ SERVICES: Dict[str, str] = {
     "attention_operand_dtypes": "(...) -> the operand dtypes an attention runs at",
     "attention_operand_alignment": "(...) -> the alignment an attention's operands are given",
     "matrix_unit_split_scale": "(...) -> the scale of a split fp32 operand on the matrix unit",
-    "profile_triton_has_fp64": "(profile) -> True when the device of that profile computes float64; the library's own when none is provided",
 }
 
 class _NoCensus:
@@ -54,21 +53,6 @@ def _no_refusal(path) -> list:
     """The installation rule of an application without one: no path is refused."""
     return []
 
-
-
-def _library_fact(name):
-    def fact():
-        from nbxtensor.backend import device_facts
-        return getattr(device_facts, name)
-    return fact
-
-
-
-#: what the library answers by itself when no application provided the service (API.md section 11): a reading of the
-#: machine or the device, or the library's own default policy — an application's answer, when provided, wins
-_LIBRARY_OWN = {
-    "profile_triton_has_fp64": _library_fact("kernels_carry_fp64"),
-}
 
 _ABSENT = {"census": lambda: _NoCensus,
            # an application's rule on where a backend build may live (NeuroBrix: off its workshop's cleared storage);
@@ -94,8 +78,6 @@ def need(name: str) -> Callable:
     except KeyError:
         if name in _ABSENT:
             return _ABSENT[name]
-        if name in _LIBRARY_OWN:
-            return _LIBRARY_OWN[name]()
         if name not in SERVICES:
             raise KeyError(f"nbxtensor.host: {name!r} is not a service this library reads") from None
         raise RuntimeError(f"ZERO FALLBACK: nbxtensor needs the service {name!r} ({SERVICES[name]}) and the application "

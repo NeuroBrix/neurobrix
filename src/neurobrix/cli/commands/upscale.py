@@ -152,8 +152,8 @@ def cmd_upscale(args):
     loader = NBXRuntimeLoader()
     pkg = loader.load(str(nbx_path))
 
-    from nbxtensor.ops.wrappers import set_hardware_profile
-    set_hardware_profile(hw_profile)
+    from neurobrix.triton.dtype import declare_hardware_profile
+    declare_hardware_profile(hw_profile)
     executor = RuntimeExecutor(pkg, execution_plan, mode=execution_mode)
 
     print(f"\n[4/4] Running upscale ({execution_mode})...")

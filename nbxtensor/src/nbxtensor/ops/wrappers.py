@@ -341,20 +341,20 @@ def set_hardware_profile(profile) -> None:
 
     Accepts any object with `has_native_bf16` and `devices` (each with `brand` and
     `architecture`), duck-typed so tests can pass a mock without importing the full Prism
-    stack; the devices' vendor profiles give the kernels' float64 capability, declared to
-    nbx_tensor (`set_backend_has_fp64`).
+    stack; the kernels' float64 capability is the backend's fact, declared to the capabilities
+    (`set_backend_has_fp64`).
     """
     global _NBX_HAS_NATIVE_BF16, _NBX_HW_PROFILE
     if profile is None:
         return
     _NBX_HW_PROFILE = profile
     _NBX_HAS_NATIVE_BF16 = bool(getattr(profile, "has_native_bf16", True))
-    # The kernels' float64 capability, the profile's (`precision.kernels_carry_fp64.triton`):
-    # declared to nbx_tensor, whose integer-division widening and cast door ask it.
-    from nbxtensor.host import need as _need   # the application's triton.dtype (nbxtensor.host)
-    profile_triton_has_fp64 = _need("profile_triton_has_fp64")
+    # The kernels' float64 capability, the backend's own fact (`device_facts.kernels_carry_fp64`), declared to the
+    # capabilities the integer-division widening and the cast door ask; an application that states it otherwise sets
+    # it after this call (`capabilities.set_backend_has_fp64`, NeuroBrix: `triton.dtype.declare_hardware_profile`).
+    from nbxtensor.backend.device_facts import kernels_carry_fp64
     from nbxtensor.backend.capabilities import set_backend_has_fp64
-    set_backend_has_fp64(profile_triton_has_fp64(profile))
+    set_backend_has_fp64(kernels_carry_fp64())
 
 
 def has_native_bf16() -> bool:

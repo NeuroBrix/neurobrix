@@ -903,8 +903,8 @@ def cmd_run(args):
     # and the engine had printed `Engine: COMPILED`, so a fresh Mac could
     # not start the engine in ANY mode.
     if execution_mode != "compiled":
-        from nbxtensor.ops.wrappers import set_hardware_profile
-        set_hardware_profile(hw_profile)
+        from neurobrix.triton.dtype import declare_hardware_profile
+        declare_hardware_profile(hw_profile)
     # What the runtime itself grows to during the run, outside every allocator (core/runtime/runtime_growth.py): read
     # before the executor exists and at the run's end, on the Triton engine with accelerators; recorded per model.
     _growth = None

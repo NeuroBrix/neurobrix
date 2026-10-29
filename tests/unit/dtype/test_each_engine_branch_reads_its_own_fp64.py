@@ -146,7 +146,8 @@ def test_the_engine_declares_the_profile_s_capability_to_nbx_tensor(monkeypatch,
     monkeypatch.setattr(W, "_NBX_HAS_NATIVE_BF16", True)
     with pytest.raises(RuntimeError, match="never declared"):
         _nbx_capabilities.backend_has_fp64()
-    W.set_hardware_profile(_profile(*devices))
+    from neurobrix.triton.dtype import declare_hardware_profile
+    declare_hardware_profile(_profile(*devices))     # the profile's capability is the engine's to declare (rule 1)
     assert _nbx_capabilities.backend_has_fp64() is expected
 
 
@@ -284,11 +285,11 @@ def test_a_compiled_serve_does_not_read_the_triton_surface():
     import inspect
     from neurobrix.serving import engine
     src = inspect.getsource(engine)
-    site = src.index("set_hardware_profile(hw_profile)")
-    assert re.search(r'if self\.mode in TRITON_ENGINES:\s*\n\s*from nbxtensor\.ops\.wrappers import '
-                     r'set_hardware_profile\s*\n\s*set_hardware_profile\(hw_profile\)', src), \
+    site = src.index("declare_hardware_profile(hw_profile)")
+    assert re.search(r'if self\.mode in TRITON_ENGINES:\s*\n\s*from neurobrix\.triton\.dtype import '
+                     r'declare_hardware_profile\s*\n\s*declare_hardware_profile\(hw_profile\)', src), \
         "the serving engine declares the Triton surface in every mode"
-    assert src.count("set_hardware_profile(") == 1 and site
+    assert src.count("declare_hardware_profile(") == 1 and "set_hardware_profile(" not in src and site
 
 
 def test_the_compiled_price_reads_the_compiled_branch_s_own_ceiling(monkeypatch):

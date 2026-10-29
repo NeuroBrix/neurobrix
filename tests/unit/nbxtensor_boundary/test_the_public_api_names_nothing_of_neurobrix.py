@@ -24,7 +24,6 @@ OFFENDERS = {
     "nbxtensor.host:census_table",
     "nbxtensor.host:memory_class_from_profile_id",
     "nbxtensor.host:memory_class_gb",
-    "nbxtensor.host:profile_triton_has_fp64",
     "nbxtensor.host:vendor_config",
     "nbxtensor.host:vendor_param",
     "nbxtensor.host:vendors_dir",
