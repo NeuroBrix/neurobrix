@@ -402,7 +402,7 @@ def test_the_triton_stitch_sums_at_the_accumulator_and_stores_the_op_s_own_dtype
 
 
 @pytest.mark.parametrize("mode", ["sequential", "compiled", "triton", "triton_sequential"])
-def test_a_pinned_op_computes_and_keeps_fp32_from_the_next_run(mode, monkeypatch, declared_profile):
+def test_a_pinned_op_computes_and_keeps_fp32_from_the_next_run(mode, monkeypatch, request):
     """`GraphExecutor.pin_fp32_ops` in every mode: the op's output, half before, is fp32 from the next
     run on — compiled and triton rebuild their sequence with the pin, triton-sequential and
     sequential resolve it through the contract (`precision_contract`) at the run.
@@ -413,6 +413,7 @@ def test_a_pinned_op_computes_and_keeps_fp32_from_the_next_run(mode, monkeypatch
     if mode.startswith("triton"):
         if not _cuda():
             pytest.skip("the Triton modes live on a card")
+        request.getfixturevalue("declared_profile")      # a Triton sequence runs under the declared profile, on a card
         ex, card = _on_card(monkeypatch, "float16")
         half, x = "float16", card(torch.randn(B, T_TRACE, D))
         from nbxtensor.dtype.nbx_dtype import parse_dtype
