@@ -151,7 +151,13 @@ def test_the_decode_phase_holds_the_LM_its_head_and_the_speech_leg_and_no_tower(
     mb = lambda names: sum(seen[n].total_bytes for n in names) / MB
     rung = s._effective_capacity_mb(s._prepare_devices(profile(APPLE_M4_PRO))[0])
     pair = mb({vlm["lm_component"], vlm["head_component"]})
-    assert pair < mb(decode) < rung < mb(seen), (pair, mb(decode), rung, mb(seen))
+    # Since f3f37973 (2026-10-28) the weights are priced at the bytes the engine loads (the weights index's stored
+    # dtypes, converted), not at the traced ones: the decode phase is 17 085 MB, OVER the M4 Pro's 16 384 rung — the
+    # premise "decode < rung" rested on the old under-pricing and this assertion stood red from that commit (bisected
+    # 2026-10-29). Over the rung the LM streams (the next cell); what this cell pins stays: the phases, and the pair
+    # below the decode phase below the sum of every component.
+    assert pair < mb(decode) < mb(seen), (pair, mb(decode), rung, mb(seen))
+    assert mb(decode) > rung, ("the decode phase now prices at the loaded bytes, over the rung", mb(decode), rung)
     peak = s._phase_peak(c, {n: m.total_bytes for n, m in seen.items()}) / MB
     assert peak == mb(decode), (peak, mb(decode))
 
