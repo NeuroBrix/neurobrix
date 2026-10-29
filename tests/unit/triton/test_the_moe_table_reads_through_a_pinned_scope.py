@@ -22,7 +22,8 @@ import pytest
 triton = pytest.importorskip("triton")
 import triton.language as tl  # noqa: E402
 
-from nbxtensor.tensor import NBXDtype, NBXTensor, bf16_carrier_to_float32  # noqa: E402
+from nbxtensor.tensor import NBXDtype, NBXTensor  # noqa: E402
+from nbxtensor.dtype.convert import bf16_bits_to_f32 as bf16_carrier_to_float32  # noqa: E402
 from nbxtensor.backend.launcher import launch  # noqa: E402
 from nbxtensor.ops.fused_moe import fused_moe_kernel  # noqa: E402
 

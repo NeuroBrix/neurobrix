@@ -29,6 +29,9 @@ import threading
 from enum import IntEnum
 from typing import Dict, List, Optional, Tuple
 
+from .shape import (MAX_NDIM, broadcast_strides, contiguous_strides, is_contiguous, max_linear_offset,
+                    slice_bounds)
+
 
 # ============================================================================
 # MALLOC CALL-SITE LOGGER — env-gated, zero cost when disabled
@@ -241,64 +244,6 @@ _FLOATING_DTYPES = frozenset({
     NBXDtype.float16, NBXDtype.bfloat16, NBXDtype.float32, NBXDtype.float64,
 })
 
-
-def bf16_carrier_to_float32(arr):
-    """Decode numpy's stand-in for bfloat16 into real float32 values.
-
-    numpy has no bfloat16, so `_DTYPE_TYPESTR` maps it to `'<V2'` and a bf16
-    tensor's `.numpy()` is a 2-byte VOID array: the bits are correct and nothing
-    can read them as numbers. `np.asarray(that, dtype=np.float32)` does not
-    fail usefully either — it raises "setting an array element with a
-    sequence", which names neither bf16 nor the tensor.
-
-    That error has now been met twice in two unrelated places, which is why the
-    decode lives HERE, once, beside the table that creates the carrier:
-
-      * certification read every bf16 kernel output through it and reported "no
-        config could run (10 of 10)" on kernels that had run correctly;
-      * the RNNT decoder read every LSTM weight through it and the whole
-        parakeet-tdt-1.1b pipeline died at `np.ascontiguousarray(w,
-        dtype=np.float32)`.
-
-    Widening is exact: a bf16 value is the top 16 bits of an fp32, so shifting
-    them back up loses nothing and the result is the number the kernel had.
-
-    Anything that is not the 2-byte void carrier is returned untouched, so this
-    is safe to apply to an array of unknown dtype.
-    """
-    import numpy as np
-    a = np.asarray(arr)
-    if a.dtype.kind != 'V' or a.dtype.itemsize != 2:
-        return a
-    bits = np.ascontiguousarray(a).view(np.uint16).astype(np.uint32)
-    return (bits << np.uint32(16)).view(np.float32).reshape(a.shape)
-
-def float32_to_bf16_bits(arr):
-    """Narrow float32 values to bfloat16, returned as their uint16 bit patterns
-    (numpy has no bfloat16), rounding to nearest with ties to even.
-
-    This is the rounding `torch.Tensor.to(torch.bfloat16)` applies, the one the
-    vendors' weights meet, and the one this engine's own device cast
-    (`NBXTensor.to(bfloat16)`) applies. Keeping the top sixteen bits instead is
-    a truncation toward zero: every value loses on average half a bf16 ulp of
-    magnitude, the same sign every time. The Triton weight loaders did that
-    until 2026-09-26 (measured on PixArt-XL-2-1024-MS: the Triton copy of a
-    weight equalled the truncation of the container's fp32 on 100 % of its
-    elements and the oracle's round-to-nearest copy on 49.9 %).
-
-    `+0x7FFF` alone rounds an exact half down; `((u >> 16) & 1)` adds the one
-    that makes it ties-to-even. A NaN whose payload lives only in the dropped
-    bits would become an infinity, so every NaN is written as a quiet NaN.
-    Infinities and values that round past the bf16 maximum become infinities,
-    as they do in torch."""
-    import numpy as np
-    a = np.ascontiguousarray(arr, dtype=np.float32)
-    u = a.view(np.uint32)
-    bits = ((u + (np.uint32(0x7FFF) + ((u >> np.uint32(16)) & np.uint32(1)))) >> np.uint32(16)).astype(np.uint16)
-    nan = np.isnan(a)
-    if nan.any():
-        bits[nan] = (((u[nan] >> np.uint32(16)) & np.uint32(0x8000)) | np.uint32(0x7FC0)).astype(np.uint16)
-    return bits.reshape(a.shape)
 
 _COMPLEX_DTYPES = frozenset({NBXDtype.complex64, NBXDtype.complex128})
 
@@ -2694,10 +2639,10 @@ def _copy_nd(src: 'NBXTensor', dst: 'NBXTensor'):
     if tuple(src._shape) != tuple(dst._shape):
         src = src.expand(*dst._shape)
     ndim = dst.ndim
-    if ndim > _MAX_NDIM:
+    if ndim > MAX_NDIM:
         raise RuntimeError(
             f"NBXTensor._copy_nd: ndim={ndim} exceeds the PyTorch hard limit "
-            f"of {_MAX_NDIM}. Please open an issue with the model name and trace site.")
+            f"of {MAX_NDIM}. Please open an issue with the model name and trace site.")
     n = dst._numel
     if n == 0:
         return
@@ -2717,7 +2662,7 @@ def _copy_nd(src: 'NBXTensor', dst: 'NBXTensor'):
         src, dst, n, shape_buf, src_stride_buf, dst_stride_buf,
         BLOCK_SIZE=BLOCK, num_warps=_m['num_warps'], NDIM=ndim,
         SATURATE_F16=_saturating_cast(src._dtype, dst._dtype),
-        WIDE=_index_wide(n, _max_linear_offset(shape, sst), _max_linear_offset(shape, dst_st)))
+        WIDE=_index_wide(n, max_linear_offset(shape, sst), max_linear_offset(shape, dst_st)))
 
 
 def _ew_meta(n: int) -> dict:
@@ -2827,21 +2772,6 @@ def _index_wide(n_elements: int, *max_offsets: int) -> bool:
     return max([int(n_elements)] + [abs(int(b)) for b in max_offsets]) >= (1 << 30)
 
 
-def _max_linear_offset(shape, strides) -> int:
-    """The largest offset `strided_copy_kernel` can address from this shape
-    and these strides — what the index arithmetic must be wide enough for."""
-    total = 0
-    for extent, stride in zip(shape, strides):
-        if extent > 0:
-            total += (int(extent) - 1) * abs(int(stride))
-    return total
-
-
-# PyTorch's hard limit on tensor rank. Beyond this we refuse to launch
-# rather than silently truncate. See torch/_C/_TensorBase.pyi:
-#   PyTorch stores ndim in an int64 but actual ops are bounded by
-#   TensorIterator::MAX_DIMS == 25 (aten/src/ATen/TensorIterator.h).
-_MAX_NDIM = 25
 
 
 def _strided_copy(src: 'NBXTensor', dst: 'NBXTensor'):
@@ -2886,7 +2816,7 @@ def _strided_copy(src: 'NBXTensor', dst: 'NBXTensor'):
             base=src._base if src._base is not None else src, pinned=src._pinned)
         _fdst_shape = tuple(dst._shape) + (2,)
         _fdst = NBXTensor(
-            dst._data_ptr, _fdst_shape, _contiguous_strides(_fdst_shape),
+            dst._data_ptr, _fdst_shape, contiguous_strides(_fdst_shape),
             _fdt, dst._device, dst._offset * 2,
             device_idx=dst._device_idx,
             base=dst._base if dst._base is not None else dst, pinned=dst._pinned)
@@ -2894,15 +2824,15 @@ def _strided_copy(src: 'NBXTensor', dst: 'NBXTensor'):
         return
 
     ndim = src.ndim
-    if ndim > _MAX_NDIM:
+    if ndim > MAX_NDIM:
         raise RuntimeError(
             f"NBXTensor._strided_copy: ndim={ndim} exceeds the PyTorch "
-            f"hard limit of {_MAX_NDIM}. Please open an issue with the "
+            f"hard limit of {MAX_NDIM}. Please open an issue with the "
             f"model name and trace site."
         )
     n = src._numel
 
-    _bound = _max_linear_offset(src._shape, src._strides)
+    _bound = max_linear_offset(src._shape, src._strides)
     shape_buf = _upload_index_array(src._shape, src._device_idx, _bound)
     stride_buf = _upload_index_array(src._strides, src._device_idx, _bound)
 
@@ -2933,14 +2863,14 @@ def _strided_scatter(src: 'NBXTensor', dst: 'NBXTensor'):
     from nbxtensor.ops.strided_copy import strided_scatter_kernel
 
     ndim = dst.ndim
-    if ndim > _MAX_NDIM:
+    if ndim > MAX_NDIM:
         raise RuntimeError(
             f"NBXTensor._strided_scatter: ndim={ndim} exceeds the "
-            f"PyTorch hard limit of {_MAX_NDIM}. Please open an issue."
+            f"PyTorch hard limit of {MAX_NDIM}. Please open an issue."
         )
     n = src._numel
 
-    _bound = _max_linear_offset(dst._shape, dst._strides)
+    _bound = max_linear_offset(dst._shape, dst._strides)
     shape_buf = _upload_index_array(dst._shape, dst._device_idx, _bound)
     stride_buf = _upload_index_array(dst._strides, dst._device_idx, _bound)
 
@@ -2991,80 +2921,9 @@ def _fill_constant(t: 'NBXTensor', value) -> 'NBXTensor':
 # STRIDE COMPUTATION
 # ============================================================================
 
-def _is_dense_row_major(shape: Tuple[int, ...], strides: Tuple[int, ...]) -> bool:
-    """PyTorch's contiguity: the elements lie row-major without gaps; a
-    dim of extent 1 may carry any stride (it is never walked) and an
-    empty tensor is contiguous. Comparing the strides to the canonical
-    ones instead called a decode-step view such as (1, 32, 64, 1) with
-    strides (2048, 64, 1, 64) — a transposed single-token head block —
-    non-contiguous and copied it before every element-wise kernel, and
-    refused `view` on (1, 32, 1, 64) with strides (0, 64, 0, 1), copying
-    the whole K/V per layer per token (the copy census of 2026-09-07)."""
-    expected = 1
-    for extent, stride in zip(reversed(shape), reversed(strides)):
-        if extent == 0:
-            return True
-        if extent == 1:
-            continue
-        if stride != expected:
-            return False
-        expected *= extent
-    return True
-
-
-def _contiguous_strides(shape: Tuple[int, ...]) -> Tuple[int, ...]:
-    if len(shape) == 0:
-        return ()
-    strides = [1] * len(shape)
-    for i in range(len(shape) - 2, -1, -1):
-        strides[i] = strides[i + 1] * shape[i + 1]
-    return tuple(strides)
-
-
-def _broadcast_shapes(*shapes: Tuple[int, ...]) -> Tuple[int, ...]:
-    """Compute broadcast output shape for 2+ tensors. Pure Python."""
-    if len(shapes) == 1:
-        return shapes[0]
-    result = shapes[0]
-    for s in shapes[1:]:
-        ndim = max(len(result), len(s))
-        a = (1,) * (ndim - len(result)) + result
-        b = (1,) * (ndim - len(s)) + s
-        new = []
-        for sa, sb in zip(a, b):
-            if sa == sb:
-                new.append(sa)
-            elif sa == 1:
-                new.append(sb)
-            elif sb == 1:
-                new.append(sa)
-            else:
-                raise ValueError(f"Cannot broadcast {result} and {s}")
-        result = tuple(new)
-    return result
-
-
 # ============================================================================
 # NBXTensor
 # ============================================================================
-
-def _slice_bounds(k: slice, size: int):
-    """(start, stop) of a Python slice over an axis of `size`, as torch and numpy read it: negative bounds count
-    from the end, and both bounds are CLAMPED to [0, size] — `t[50:80]` over 60 rows is rows 50..59. Unclamped, a
-    stop past the extent narrowed past the tensor's storage (a vendor tile at the latent's edge read 30 rows of
-    which 20 were not the tensor's: CogVideoX's last tiles, 2026-10-17). A step other than 1 is refused by name."""
-    if k.step not in (None, 1):
-        raise RuntimeError(f"ZERO FALLBACK: NBXTensor slicing with step {k.step} is not supported (narrow only)")
-    start = 0 if k.start is None else int(k.start)
-    stop = size if k.stop is None else int(k.stop)
-    if start < 0:
-        start += size
-    if stop < 0:
-        stop += size
-    start = min(max(start, 0), size)
-    stop = min(max(stop, start), size)
-    return start, stop
-
 
 class NBXTensor:
     """Tensor descriptor for --triton mode.
@@ -3119,7 +2978,7 @@ class NBXTensor:
         # C6a: contiguity is a pure function of the (immutable) shape and
         # strides — compute the flag once instead of per is_contiguous()
         # call in the hot loops.
-        self._contig = _is_dense_row_major(self._shape, self._strides)
+        self._contig = is_contiguous(self._shape, self._strides)
 
     def __del__(self):
         # Targeted lifecycle trace: NBX_TRACE_DEL_BIG_MB=N (default off)
@@ -3298,7 +3157,7 @@ class NBXTensor:
         x = self if self.is_contiguous() else self.contiguous()
         fdt = NBXDtype.float64 if x._dtype == NBXDtype.complex128 else NBXDtype.float32
         new_shape = x._shape + (2,)
-        return NBXTensor(x._data_ptr, new_shape, _contiguous_strides(new_shape),
+        return NBXTensor(x._data_ptr, new_shape, contiguous_strides(new_shape),
                          fdt, x._device, x._offset * 2,
                          device_idx=x._device_idx,
                          base=x._base if x._base is not None else x, pinned=x._pinned)
@@ -3322,7 +3181,7 @@ class NBXTensor:
             f"view_as_complex expects last dim == 2, got {x._shape}"
         cdt = NBXDtype.complex128 if x._dtype == NBXDtype.float64 else NBXDtype.complex64
         new_shape = x._shape[:-1]
-        return NBXTensor(x._data_ptr, new_shape, _contiguous_strides(new_shape),
+        return NBXTensor(x._data_ptr, new_shape, contiguous_strides(new_shape),
                          cdt, x._device, x._offset // 2,
                          device_idx=x._device_idx,
                          base=x._base if x._base is not None else x, pinned=x._pinned)
@@ -3404,7 +3263,7 @@ class NBXTensor:
         if nbytes == 0:
             if dev_idx is None:
                 dev_idx = DeviceAllocator.get_device()
-            return NBXTensor(0, shape, _contiguous_strides(shape), nbx_dt, dev_str, device_idx=dev_idx)
+            return NBXTensor(0, shape, contiguous_strides(shape), nbx_dt, dev_str, device_idx=dev_idx)
 
         if dev_idx is None:
             # No explicit device: allocate on the current one. Single
@@ -3429,7 +3288,7 @@ class NBXTensor:
             if cur != dev_idx:
                 DeviceAllocator.set_device(cur)
 
-        return NBXTensor(ptr, shape, _contiguous_strides(shape), nbx_dt, dev_str,
+        return NBXTensor(ptr, shape, contiguous_strides(shape), nbx_dt, dev_str,
                          owns_data=True, device_idx=dev_idx)
 
     @staticmethod
@@ -3509,7 +3368,7 @@ class NBXTensor:
         ptr = DeviceAllocator.malloc_cuda(nbytes)
         # H2D copy
         DeviceAllocator.memcpy(ptr, arr_c.ctypes.data, nbytes, kind=1)
-        return NBXTensor(ptr, shape, _contiguous_strides(shape), nbx_dt, 'cuda',
+        return NBXTensor(ptr, shape, contiguous_strides(shape), nbx_dt, 'cuda',
                          owns_data=True, device_idx=dev_idx)
 
     @staticmethod
@@ -3523,7 +3382,7 @@ class NBXTensor:
                   For torch.Tensor → NBXTensor conversion, pass the torch.Tensor
                   so it stays alive as long as the NBXTensor exists.
         """
-        return NBXTensor(ptr, shape, _contiguous_strides(shape), dtype, device,
+        return NBXTensor(ptr, shape, contiguous_strides(shape), dtype, device,
                          owns_data=owns_data, device_idx=device_idx, base=base)
 
     # ------------------------------------------------------------------
@@ -3557,12 +3416,12 @@ class NBXTensor:
         nbytes = numel * elem
 
         if nbytes == 0:
-            return NBXTensor(0, shape, _contiguous_strides(shape), nbx_dt,
+            return NBXTensor(0, shape, contiguous_strides(shape), nbx_dt,
                              'cpu', device_idx=0)
 
         if pinned:
             ptr = DeviceAllocator.malloc_host_pinned(nbytes)
-            return NBXTensor(ptr, shape, _contiguous_strides(shape), nbx_dt,
+            return NBXTensor(ptr, shape, contiguous_strides(shape), nbx_dt,
                              'cpu', owns_data=True, device_idx=0,
                              pinned=True)
         else:
@@ -3602,7 +3461,7 @@ class NBXTensor:
                     f"another dtype and the copy that follows would write past it.")
             arr = np.empty(shape, dtype=np_dtype_name[nbx_dt])
             return NBXTensor(arr.ctypes.data, shape,
-                             _contiguous_strides(shape), nbx_dt, 'cpu',
+                             contiguous_strides(shape), nbx_dt, 'cpu',
                              owns_data=True, device_idx=0,
                              base=arr,  # keep numpy alive
                              pinned=False)
@@ -3753,7 +3612,7 @@ class NBXTensor:
             shape = list(shape)
             shape[neg_idx] = self._numel // known
             shape = tuple(shape)
-        return NBXTensor(self._data_ptr, shape, _contiguous_strides(shape),
+        return NBXTensor(self._data_ptr, shape, contiguous_strides(shape),
                          self._dtype, self._device, self._offset, device_idx=self._device_idx, base=self._base if self._base is not None else self, pinned=self._pinned)
 
     def reshape(self, *shape) -> 'NBXTensor':
@@ -3876,18 +3735,8 @@ class NBXTensor:
     def expand(self, *shape) -> 'NBXTensor':
         if len(shape) == 1 and isinstance(shape[0], (list, tuple)):
             shape = tuple(shape[0])
-        pad = len(shape) - self.ndim
-        old_s = (1,) * pad + self._shape
-        old_st = (0,) * pad + self._strides
-        new_s, new_st = [], []
-        for i, s in enumerate(shape):
-            if s == -1:
-                new_s.append(old_s[i]); new_st.append(old_st[i])
-            elif old_s[i] == 1:
-                new_s.append(s); new_st.append(0)
-            else:
-                new_s.append(s); new_st.append(old_st[i])
-        return NBXTensor(self._data_ptr, tuple(new_s), tuple(new_st),
+        new_s, new_st = broadcast_strides(self._shape, self._strides, shape)
+        return NBXTensor(self._data_ptr, new_s, new_st,
                          self._dtype, self._device, self._offset, device_idx=self._device_idx, base=self._base if self._base is not None else self, pinned=self._pinned)
 
     def expand_as(self, other) -> 'NBXTensor':
@@ -4081,7 +3930,7 @@ class NBXTensor:
         # `halo_carry[:, :, -top_size:, :]` triggered this at the third
         # iteration of the 4096² chains (chains 7-9 of run).
         if isinstance(key, slice):
-            start, stop = _slice_bounds(key, self._shape[0])
+            start, stop = slice_bounds(key.start, key.stop, self._shape[0], key.step)
             return self.narrow(0, start, stop - start)
         if isinstance(key, tuple):
             result = self
@@ -4092,7 +3941,7 @@ class NBXTensor:
                     result = result.select(actual_dim, k)
                     dim_offset += 1  # select reduces ndim
                 elif isinstance(k, slice):
-                    start, stop = _slice_bounds(k, result._shape[actual_dim])
+                    start, stop = slice_bounds(k.start, k.stop, result._shape[actual_dim], k.step)
                     result = result.narrow(
                         actual_dim, start, stop - start)
                 # slice(None) = : → no-op on this dim
@@ -4213,7 +4062,7 @@ class NBXTensor:
                             else NBXDtype.float32)
                     _src_shape2 = tuple(src._shape) + (2,)
                     _fsrc = NBXTensor(
-                        src._data_ptr, _src_shape2, _contiguous_strides(_src_shape2),
+                        src._data_ptr, _src_shape2, contiguous_strides(_src_shape2),
                         _fdt, src._device, src._offset * 2,
                         device_idx=src._device_idx,
                         base=src._base if src._base is not None else src,

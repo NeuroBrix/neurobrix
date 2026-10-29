@@ -145,7 +145,8 @@ def test_a_bfloat16_operand_through_the_split_rounds_to_the_oracle(monkeypatch):
     sum, not with its result; first measurement 2026-10-12: 0.010 % off, max exactly 2.00 'ulp' — the gate's ulp
     constant was 2^-8 where bfloat16's spacing is 2^-7, so a one-ulp element read as two). An fp16-level inside would put half the elements off. The FMA path on the
     same inputs is held to the same bound."""
-    from nbxtensor.tensor import NBXDtype, bf16_carrier_to_float32, float32_to_bf16_bits
+    from nbxtensor.tensor import NBXDtype
+    from nbxtensor.dtype.convert import bf16_bits_to_f32 as bf16_carrier_to_float32, f32_to_bf16_bits as float32_to_bf16_bits
 
     def bf16(x):
         bits = float32_to_bf16_bits(np.ascontiguousarray(x, dtype=np.float32))

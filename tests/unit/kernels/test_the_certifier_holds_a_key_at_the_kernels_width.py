@@ -19,6 +19,7 @@ is `test_the_certifier_synthesis_is_bounded.test_the_host_peak_is_a_small_multip
 from __future__ import annotations
 
 import numpy as np
+from nbxtensor.dtype import convert as CV
 import pytest
 
 from neurobrix.kernels import autotune_certify as AC
@@ -92,11 +93,11 @@ def test_a_bf16_operand_is_its_rounded_bits_and_reads_back_as_its_values():
     a = AC._arr(np.random.default_rng(1), (257, 129), "bf16")
     assert a._nbx_dtype == "bf16" and a.dtype == np.uint16
     ref = np.random.default_rng(1).standard_normal((257, 129), dtype=np.float32) * np.float32(0.1)
-    bits = AC.f32_to_bf16_bits(ref)
+    bits = CV.f32_to_bf16_bits(ref)
     assert np.array_equal(np.asarray(a), bits)
     v = AC.values(a)
-    assert v.dtype == np.float32 and np.array_equal(v, AC.bf16_bits_to_f32(bits))
-    assert np.array_equal(AC.values(a[3:9, 1:4]), AC.bf16_bits_to_f32(bits)[3:9, 1:4])
+    assert v.dtype == np.float32 and np.array_equal(v, CV.bf16_bits_to_f32(bits))
+    assert np.array_equal(AC.values(a[3:9, 1:4]), CV.bf16_bits_to_f32(bits)[3:9, 1:4])
 
 
 def test_the_same_draws_as_before_for_every_width():

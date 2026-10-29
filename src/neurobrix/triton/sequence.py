@@ -4910,7 +4910,7 @@ class TritonSequence:
         at bind time, the arena holds a .t() view with swapped strides
         over the original row-major bytes. A previous implementation
         used NBXTensor.empty() for the destination, which hard-sets
-        _contiguous_strides(shape) — the memcpy'd bytes (still the
+        contiguous_strides(shape) — the memcpy'd bytes (still the
         original layout) were then re-indexed as if they were the
         transposed layout, silently producing act @ W instead of
         act @ W.t() inside every mm under zero3. Logit cosine vs

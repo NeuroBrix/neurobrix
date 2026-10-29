@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
+from nbxtensor.dtype.convert import bf16_bits_to_f32, f32_to_bf16_bits
 
 from nbxtensor.ops import autotune_certified as C
 from nbxtensor.dtype import itemsize as _isz
@@ -264,45 +265,6 @@ def values(a) -> np.ndarray:
 
 def _f64(a) -> np.ndarray:
     return values(a).astype(np.float64)
-
-
-def f32_to_bf16_bits(a: np.ndarray) -> np.ndarray:
-    """The top sixteen bits, rounded to nearest with ties to even.
-
-    `+0x7FFF` alone rounds an exact half down; `((u >> 16) & 1)` adds one ulp
-    when the kept bit is odd, which is exactly ties-to-even. A NaN whose
-    mantissa lives only in the discarded bits would become an infinity, so it
-    is forced to a quiet NaN.
-    """
-    a = np.ascontiguousarray(a, dtype=np.float32)
-    # Streamed through a 1 MB chunk, like `_arr`'s rounding: written as whole-array expressions,
-    # the bias, the sum and the shift were each a full-size uint32 temporary beside the array,
-    # three to four copies of a 5.1 GB operand, which is what took the Mac's certifier to its
-    # 14 GB guard on CogVideoX-5b-I2V's last convolution (2026-09-28 01:22) while the key's own
-    # tensors fit the unified-memory bound. Same bits, same rule; the peak is the output plus
-    # one chunk (tests/unit/kernels/test_f32_to_bf16_bits_streams.py).
-    flat = a.reshape(-1)
-    u = flat.view(np.uint32)
-    bits = np.empty(flat.shape, dtype=np.uint16)
-    step = 1 << 18
-    for i in range(0, flat.size, step):
-        uc = u[i:i + step]
-        t = np.right_shift(uc, np.uint32(16))
-        np.bitwise_and(t, np.uint32(1), out=t)
-        np.add(t, np.uint32(0x7FFF), out=t)
-        np.add(t, uc, out=t)
-        np.right_shift(t, np.uint32(16), out=t)
-        bits[i:i + step] = t
-        nan = np.isnan(flat[i:i + step])
-        if nan.any():
-            bits[i:i + step][nan] = np.uint16(0x7FC0)
-    return bits.reshape(a.shape)
-
-
-def bf16_bits_to_f32(bits: np.ndarray) -> np.ndarray:
-    """The exact value those bits represent, as fp32."""
-    return (np.ascontiguousarray(bits, dtype=np.uint16).astype(np.uint32)
-            << np.uint32(16)).view(np.float32)
 
 
 class WitnessDrift(RuntimeError):

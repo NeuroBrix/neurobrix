@@ -24,10 +24,10 @@ from typing import Dict, Optional, Set
 
 import numpy as np
 
-from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator, _contiguous_strides, dtype_size, _set_device
+from nbxtensor.tensor import NBXTensor, NBXDtype, DeviceAllocator, dtype_size, _set_device
 from nbxtensor.dtype.convert import bf16_bits_to_f16, f32_to_bf16_bits
 from nbxtensor.dtype.itemsize import itemsize
-from nbxtensor.shape import numel
+from nbxtensor.shape import contiguous_strides, numel
 from nbxtensor.memory.memory_pool import ComponentArena, HostPinnedArena
 # The loader's worker count — one figure for every loader and for Prism's host estimate (torch-free).
 from neurobrix.core.workspace import io_workers, apply_host_mmap_threshold, apply_host_huge_pages
@@ -470,7 +470,7 @@ def _bf16_to_fp16_inplace(ptr: int, numel: int, device_idx: int):
     # int16 and uint16 are same 2-byte memory layout — Triton kernel
     # treats bits as unsigned via .to(tl.uint32) anyway.
     flat = (numel,)
-    strides = _contiguous_strides(flat)
+    strides = contiguous_strides(flat)
     src = NBXTensor(ptr, flat, strides, NBXDtype.int16, 'cuda',
                     owns_data=False, device_idx=device_idx)
     dst = NBXTensor(ptr, flat, strides, NBXDtype.float16, 'cuda',
@@ -561,7 +561,7 @@ def _load_to_pinned_cpu(
     if host_arena is not None:
         from nbxtensor.tensor import dtype_size as _dsize
         ptr = host_arena.alloc((math.prod(shape) if shape else 1) * _dsize(target_dtype))
-        dst = NBXTensor(ptr, tuple(shape), _contiguous_strides(tuple(shape)), target_dtype, 'cpu',
+        dst = NBXTensor(ptr, tuple(shape), contiguous_strides(tuple(shape)), target_dtype, 'cpu',
                         owns_data=False, device_idx=0, base=host_arena, pinned=True)
     else:
         dst = NBXTensor.empty_cpu(shape, target_dtype, pinned=True)
@@ -590,7 +590,7 @@ def host_weight_layout(arr: np.ndarray, krsc: bool):
     it. A KRSC weight (`launch_keys.conv_weight_krsc`) is written channels-innermost, once, here,
     and stays a logical (K, C, R, S) tensor: the original order is never on the device."""
     if not krsc:
-        return arr, _contiguous_strides(arr.shape)
+        return arr, contiguous_strides(arr.shape)
     K, C, R, S = arr.shape
     return np.ascontiguousarray(arr.transpose(0, 2, 3, 1)), (R * S * C, 1, S * C, C)
 

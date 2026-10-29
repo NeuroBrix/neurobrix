@@ -627,9 +627,9 @@ def _pack_param(ty: str, value: Any) -> Tuple[str, Any]:
         import numpy as np
         return "bits16", int(np.array(float(value), dtype=np.float16).view(np.uint16))
     if ty == "bf16":
-        from nbxtensor.tensor import float32_to_bf16_bits
+        from nbxtensor.dtype.convert import f32_to_bf16_bits
         import numpy as np
-        return "bits16", int(float32_to_bf16_bits(np.array([float(value)], dtype=np.float32))[0])
+        return "bits16", int(f32_to_bf16_bits(np.array([float(value)], dtype=np.float32))[0])
     raise RuntimeError(f"NeuroBrix launcher: cannot pack a parameter of type {ty!r}")
 
 
