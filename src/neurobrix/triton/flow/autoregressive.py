@@ -462,19 +462,6 @@ class TritonAutoregressiveHandler:
         if wav is not None:
             rv["global.output_audio"] = wav
 
-    def _graph_lm_prefill(self, input_ids: NBXTensor) -> NBXTensor:
-        """Delegate to active session. Required by runtime-guard hook."""
-        if self._active_session is None:
-            raise RuntimeError("No active session for prefill.")
-        return self._active_session.prefill(input_ids, input_ids.shape[0])
-
-    def _graph_lm_decode_step(self, input_ids: NBXTensor,
-                              inputs_embeds=None) -> NBXTensor:
-        """Delegate to active session. Required by runtime-guard hook."""
-        if self._active_session is None:
-            raise RuntimeError("No active session for decode.")
-        return self._active_session.decode_step(input_ids, inputs_embeds)
-
     # ─── SETUP ────────────────────────────────────────────────────────
 
     def _tokenize(self, gen_info: Dict, device_idx: int) -> NBXTensor:
