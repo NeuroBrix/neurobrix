@@ -137,6 +137,35 @@ assert p.fill_value("masked_fill", -3.39e38, "float16") == -65504.0   # a bfloat
 assert p.replace(compute="bfloat16").compute == "bfloat16"            # a policy never changes: a new one is made
 ```
 
+### Array API: type promotion and Python scalars
+
+Type promotion follows the [Array API standard](https://data-apis.org/array-api/draft/API_specification/type_promotion.html),
+and a Python scalar is weak (it takes the array's dtype), as the standard and NumPy's NEP 50 say. Measured by
+`nbxtensor/tests/test_array_api_promotion.py`: the standard's promotion tables, 120 of 120 pairs of the dtypes the
+library holds, in both operand orders, and the order-independence of the result over three operands; its scalar rules.
+
+What the standard leaves open, decided once:
+
+| case | nbxtensor | note |
+|---|---|---|
+| arrays of two kinds (bool, unsigned, signed, float, complex) | the higher kind, its own width | as PyTorch |
+| float16 with bfloat16 (the standard defines neither) | float32, whatever the order | as PyTorch |
+| a signed integer with uint64 | refused by name | no signed integer holds it |
+| a Python float with an integer or bool array | float64 | NEP 50; PyTorch gives float32 |
+| a Python complex with an integer array; with a half float array | complex128; complex64 | NEP 50; the table has no complex32 |
+| a Python int outside an integer array's range | refused by name | never a silent wrap |
+
+The gap: nbxtensor exposes no array namespace (`__array_namespace__`) yet, so the standard's own test suite
+(`array-api-tests`) cannot run against it; the conformance above is measured on the standard's tables.
+
+```python
+from nbxtensor.dtype.promotion import binary_result, scalar_result
+
+assert binary_result("uint8", "int8") == "int16"                # wide enough for both
+assert scalar_result("float16", 0.5) == "float16"               # a Python scalar is weak
+assert scalar_result("int32", 1.5) == "float64"                 # left open by the standard: NEP 50
+```
+
 ### Shapes, strides and views
 
 ```python

@@ -17,7 +17,7 @@ from typing import Optional, Sequence
 
 from .itemsize import itemsize, kind
 
-__all__ = ["promoted", "float_math_input", "binary_result"]
+__all__ = ["promoted", "float_math_input", "binary_result", "scalar_result"]
 
 # The order of the kinds a binary result climbs (PyTorch type promotion: bool < unsigned < signed < float < complex).
 _KIND_ORDER = ("bool", "uint", "int", "float", "complex")
@@ -74,3 +74,39 @@ def binary_result(a: str, b: str) -> str:
         real, cplx = (a, b) if ka == "float" else (b, a)
         return _of_kind("complex", max(itemsize(cplx), 2 * itemsize(real)))
     return a if _KIND_ORDER.index(ka) > _KIND_ORDER.index(kb) else b
+
+
+def _int_bounds(dtype: str):
+    bits = 8 * itemsize(dtype)
+    return (0, (1 << bits) - 1) if kind(dtype) == "uint" else (-(1 << (bits - 1)), (1 << (bits - 1)) - 1)
+
+
+def scalar_result(dtype: str, scalar) -> str:
+    """The dtype an element-wise op of an array of `dtype` and a Python scalar computes in: the scalar is WEAK, it takes
+    the array's dtype (the Array API standard's "mixing arrays with Python scalars", NumPy's NEP 50) — a bool with a
+    bool array, an int with an integer array when the value fits it (refused by name otherwise: the standard leaves
+    the overflow open, a silent wrap is never taken), an int or a float with a real float array, an int, float or
+    complex with a complex array, a complex with a real float array as the complex of that precision (complex64 for a
+    half float: the table holds no complex32). Left open by the
+    standard and decided by NEP 50: a float with an integer or bool array is float64, a complex with one is
+    complex128, an int with a bool array is int64 (PyTorch differs on the first: float32; README, Array API)."""
+    k = kind(dtype)
+    if isinstance(scalar, bool):
+        return dtype
+    if isinstance(scalar, int):
+        if k in ("int", "uint"):
+            lo, hi = _int_bounds(dtype)
+            if not lo <= scalar <= hi:
+                raise OverflowError(f"scalar_result: {scalar} does not fit {dtype} [{lo}, {hi}]")
+            return dtype
+        return "int64" if k == "bool" else dtype
+    if isinstance(scalar, float):
+        return dtype if k in ("float", "complex") else "float64"
+    if isinstance(scalar, complex):
+        if k == "complex":
+            return dtype
+        if k != "float":
+            return "complex128"
+        # the complex of the float's precision; a half float has none in the table (no complex32): complex64 holds it
+        return _of_kind("complex", max(2 * itemsize(dtype), itemsize("complex64")))
+    raise TypeError(f"scalar_result: {type(scalar).__name__} is not a Python scalar (bool, int, float, complex)")

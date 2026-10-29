@@ -87,7 +87,16 @@ Apple MLX, tinygrad, Hugging Face candle. (vLLM did not: it is built on torch.)
     builds its own policy from what it knows (NeuroBrix: its DtypeEngine, from
     the hardware profile and the container) and passes it. The library knows
     no model and no profile.
-13. **The CPU uses every core it is given** (Hocine, 29/10 18:11). Host work
+13. **Array API** (Hocine, 29/10 16:37). Type promotion follows the Array API
+    standard (data-apis.org/array-api, "Type Promotion Rules"): within a kind
+    the wider, a signed with an unsigned integer the signed integer wide
+    enough for both, a real float with a complex the complex of the wider
+    precision, the result independent of the operands' order. A Python scalar
+    is weak, it takes the array's dtype (the standard, NumPy's NEP 50). What
+    the standard leaves open is decided once and written in the README:
+    arrays across kinds and two half floats as PyTorch does, scalars as NEP 50
+    does. Conformance is measured by a test over the standard's tables.
+14. **The CPU uses every core it is given** (Hocine, 29/10 18:11). Host work
     over a large array is cut into contiguous pieces run on one thread pool
     (`nbxtensor.backend.cpu.pool`), each piece a numpy call that releases the
     GIL in its inner loop, as ggml does. The pool's size is the library's

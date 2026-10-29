@@ -43,3 +43,28 @@ def test_what_the_standard_leaves_open_follows_pytorch():
 def test_the_result_does_not_depend_on_the_order(a, b, c):
     r = {binary_result(binary_result(x, y), z) for x, y, z in itertools.permutations((a, b, c))}
     assert len(r) == 1, r
+
+
+from nbxtensor.dtype.promotion import scalar_result  # noqa: E402
+
+
+@pytest.mark.parametrize("dtype,scalar,want", [
+    ("bool", True, "bool"), ("int8", 3, "int8"), ("uint8", 255, "uint8"), ("float16", 2, "float16"),
+    ("float16", 0.5, "float16"), ("bfloat16", 1e30, "bfloat16"), ("complex64", 1, "complex64"),
+    ("complex64", 2.5, "complex64"), ("complex128", 1j, "complex128"),
+    ("float32", 1j, "complex64"), ("float64", 1j, "complex128"), ("float16", 1j, "complex64"),
+])
+def test_a_python_scalar_is_weak(dtype, scalar, want):
+    assert scalar_result(dtype, scalar) == want
+
+
+def test_what_the_standard_leaves_open_for_scalars_follows_nep50():
+    assert scalar_result("int32", 1.5) == "float64"
+    assert scalar_result("int8", 1j) == "complex128"
+    assert scalar_result("bool", 2) == "int64"
+    with pytest.raises(OverflowError, match="does not fit int8"):
+        scalar_result("int8", 128)
+    with pytest.raises(OverflowError, match="uint8"):
+        scalar_result("uint8", -1)
+    with pytest.raises(TypeError):
+        scalar_result("float32", "1")

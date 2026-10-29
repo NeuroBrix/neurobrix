@@ -84,6 +84,15 @@ def bf16_bits_to_f16(bits: np.ndarray, *, workers: int) -> np.ndarray     # weig
 module-global pool behind. The device-side bf16 to fp16 kernel (weight_loader.py:456
 `_bf16_to_fp16_inplace`) becomes `astype` on a tensor viewed over the same buffer (section 4).
 
+### `nbxtensor.dtype.promotion` — the Array API's promotion (DESIGN rule 13)
+
+```python
+def binary_result(a: str, b: str) -> str            # two arrays' dtypes -> the dtype they compute in
+def scalar_result(dtype: str, scalar) -> str        # an array's dtype and a Python scalar (weak, NEP 50)
+def promoted(dtypes: Sequence[str]) -> Optional[str]  # floating inputs brought to the widest, when over two bytes
+def float_math_input(dtype: str) -> str             # the dtype a floating-math op reads an input of `dtype` at
+```
+
 ### `nbxtensor.dtype.policy` — precision by policy (DESIGN rule 12)
 
 ```python
