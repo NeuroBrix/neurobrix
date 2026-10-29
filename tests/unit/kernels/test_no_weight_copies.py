@@ -85,6 +85,7 @@ def test_prefill_mm_walks_the_pretransposed_weight_without_a_copy(M):
     Wt, a = _weight(96, 128), _act(M, 128)
     b = Wt.t()                                    # the (K, N) stride view the graph hands the wrapper
     assert not b.is_contiguous() and b.stride(0) == 1
+    _nbx_linalg_wrappers.mm(a, b)  # warm: a first call on a cold replay cache sweeps, and the sweep's copies are the autotune's, not the op's
     with _Count() as c:
         out = _nbx_linalg_wrappers.mm(a, b)
     assert c.copies == 0, "the weight is read in place"
@@ -146,6 +147,7 @@ def test_fp16_activation_is_widened_in_registers_not_materialised(M, monkeypatch
     b = Wt.t()
     a32 = a16.to(NBXDtype.float32)
     ref = _nbx_linalg_wrappers.mm(a32, b)                            # promote_a False (fp32 in), promote_b True: the old path
+    _nbx_linalg_wrappers.mm(a16, b)  # warm: a first call on a cold replay cache sweeps, and the sweep's copies are the autotune's, not the op's
     with _Count() as c:
         out = _nbx_linalg_wrappers.mm(a16, b)
     assert c.copies == 0, "no activation upcast copy, no weight copy"
@@ -379,6 +381,7 @@ def test_addmm_takes_the_activation_weight_and_bias_as_they_are(M):
     w = _weight(N, K)                                       # (N, K) fp16, the loader's layout
     rng = np.random.default_rng(9)
     bias = NBXTensor.from_numpy((rng.standard_normal(N) * 0.1).astype(np.float16))
+    _nbx_linalg_wrappers.addmm(bias, a, w.t())  # warm: a first call on a cold replay cache sweeps, and the sweep's copies are the autotune's, not the op's
     with _Count() as c:
         out = _nbx_linalg_wrappers.addmm(bias, a, w.t())
     assert c.copies == 0
