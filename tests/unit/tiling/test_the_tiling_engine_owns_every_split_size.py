@@ -95,7 +95,21 @@ def test_the_sdpa_chunk_rows_are_unchanged(args, expected):
     ((1, 32, 16384, 16384, 128, 128, 0, 64, 32), ("flash", 0)),        # pow2 head, no budget
     ((1, 32, 4096, 4096, 128, 64, 2 << 30, 64, 32), ("math", 0)),      # head dims differ
 ])
-def test_the_sdpa_route_is_unchanged(args, expected):
+def test_the_sdpa_route_is_unchanged(args, expected, monkeypatch):
+    """Recorded for an arch that has NOT measured the flash at every head dim (`flash.any_head_dim_correct`): the
+    route reads that measurement from the profile in force, so it is pinned here — unpinned, the cells passed on the
+    V100 and failed on the M4 Pro, whose profile has measured it (2026-10-29)."""
+    monkeypatch.setattr(LK, "flash_any_head_dim", lambda: False)
+    assert LK.sdpa_route(*args) == expected
+
+
+@pytest.mark.parametrize("args,expected", [
+    ((1, 32, 16384, 16384, 80, 80, 0, 64, 32), ("flash", 0)),          # non-pow2 head routes like a pow2 one
+    ((1, 16, 4096, 4096, 80, 80, 0, 64, 32), ("flash", 0)),
+])
+def test_an_arch_that_measured_the_flash_at_every_head_dim_routes_a_non_pow2_head_like_a_pow2_one(args, expected,
+                                                                                                    monkeypatch):
+    monkeypatch.setattr(LK, "flash_any_head_dim", lambda: True)
     assert LK.sdpa_route(*args) == expected
 
 
