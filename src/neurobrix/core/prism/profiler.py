@@ -896,7 +896,7 @@ class ActivationProfiler:
         (`tiling_sizes.tiled_conv2d_band_bytes`), at the request's shapes: the band's input copied at the conv's output
         width (the wrappers cast the band to the output's dtype) and the band's output at that width. One rule for the
         activation walk and the layer partitioner (`LayerPartitioner(op_extra=...)`)."""
-        from neurobrix.core.module.tiling_sizes import tiled_conv2d_band_bytes
+        from nbxtensor.ops.tiling_sizes import tiled_conv2d_band_bytes
         x_tid, w_tid = op["input_tensor_ids"][0], op["input_tensor_ids"][1]
         out_tid = op["output_tensor_ids"][0]
         x_shape = self._resolve_shape(self.tensors.get(x_tid, {}), symbol_map)
@@ -1424,7 +1424,7 @@ class ActivationProfiler:
             # 20-45 GB against the same line and clears it with or without the
             # resident term.
             if safety is None:
-                from neurobrix.core.module.tiling_sizes import op_budget_fraction
+                from nbxtensor.ops.tiling_sizes import op_budget_fraction
                 safety = op_budget_fraction()
             threshold = int(vram_per_gpu_bytes * safety) - max(0, int(resident_bytes))
             for op_uid in self.execution_order:

@@ -79,7 +79,7 @@ def _say(b, h, tq, tk, budget, plan, in_flight=None):
     if key in _SAID:
         return
     _SAID.add(key)
-    from neurobrix.core.module.tiling_sizes import sdpa_scores_bytes
+    from nbxtensor.ops.tiling_sizes import sdpa_scores_bytes
     whole = sdpa_scores_bytes(b, h, tq, tk) / 2**20
     if plan is None:
         print(f"[attention] {b} x {h} heads, {tq} x {tk}: whole, scores {whole:.0f} MB within the plan's budget "

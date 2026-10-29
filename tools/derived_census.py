@@ -282,7 +282,7 @@ def _chain_band_rows(ops, chain, shape) -> list:
     band's input height (`tiling_sizes.residual_chain_bands`, the loop's own geometry) through the chain's convs in
     graph order, each with its own kernel, stride, padding and dilation as the graph holds them, times the batch and
     the width they leave."""
-    from neurobrix.core.module.tiling_sizes import residual_chain_bands
+    from nbxtensor.ops.tiling_sizes import residual_chain_bands
     _, tf, halo, uids = chain
     convs = [u for u in uids if (ops.get(u) or {}).get("op_type") == "aten::convolution"]
     if not convs:
@@ -1337,7 +1337,7 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
             if isinstance(tile_factor, tuple) and tile_factor[0] == "chain" and nd == 2 and not transposed:
                 # A conv of a band-streamed residual chain (`band_streamed_chain_nbx`): conv2d_wrapper on each band,
                 # the band plus its halo rows — one launch set per distinct band input height.
-                from neurobrix.core.module.tiling_sizes import residual_chain_bands
+                from nbxtensor.ops.tiling_sizes import residual_chain_bands
                 tf_, halo_ = tile_factor[1], tile_factor[2]
                 heights = sorted({b[3] - b[2] for b in residual_chain_bands(x_s[2], tf_, halo_)})
                 launches = []

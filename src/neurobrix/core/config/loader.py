@@ -69,15 +69,6 @@ def get_precision_calibration_policy() -> Dict[str, Any]:
     return policy
 
 
-@lru_cache(maxsize=1)
-def get_tiling_policy() -> Dict[str, Any]:
-    """The tiling policy (nbxtensor/ops/tiling.yml: the TilingEngine's engine-wide split sizes, read through its two
-    mirror copies `core/module/tiling_sizes.py` and `triton/tiling_sizes.py`). ZERO FALLBACK: a missing file raises — no split is ever cut
-    by a size the data does not state."""
-    from nbxtensor.ops.tiling_policy import tiling_table      # the one file, nbxtensor's (nbxtensor/ops/tiling.yml)
-    return tiling_table()
-
-
 class UnsupportedArchitectureError(FileNotFoundError):
     """No hardware profile describes the detected GPU.
 

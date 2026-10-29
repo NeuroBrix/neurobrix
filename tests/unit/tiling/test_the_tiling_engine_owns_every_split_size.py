@@ -2,7 +2,7 @@
 
 Every size a memory split is cut by (a conv3d chunk, a conv2d band, an attention chunk, Prism's
 op-level band factors and op budget, the tile overlaps, the in-place thresholds) is computed by
-`core/module/tiling_sizes.py` from `config/tiling.yml`. These expectations were RECORDED on the
+`nbxtensor.ops.tiling_sizes` from `nbxtensor/ops/tiling.yml`. These expectations were RECORDED on the
 tree before the move (4dd80924), by calling the functions that computed the sizes there, and the
 move kept every literal below: a size that moved is a size this test sees.
 
@@ -18,7 +18,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from neurobrix.core.module import tiling_sizes as TS
+from nbxtensor.ops import tiling_sizes as TS
 from neurobrix.core.prism import InputConfig, PrismSolver
 from neurobrix.core.prism.solver import ComponentMemory
 from nbxtensor.ops import launch_keys as LK
@@ -360,13 +360,13 @@ def test_a_refused_attention_chunk_is_an_error_naming_its_key_never_a_smaller_re
 
 
 def test_a_missing_key_is_refused_by_name(monkeypatch):
-    from neurobrix.core.config import loader
-    policy = loader.get_tiling_policy()
+    from nbxtensor.ops import tiling_policy
+    policy = tiling_policy.tiling_table()
     stripped = {**policy, "conv3d": {k: v for k, v in policy["conv3d"].items() if k != "chunk_bytes"}}
-    monkeypatch.setattr(loader, "get_tiling_policy", lambda: stripped)
+    monkeypatch.setattr(tiling_policy, "tiling_table", lambda: stripped)
     with pytest.raises(KeyError, match="states no conv3d.chunk_bytes"):
         TS.conv3d_chunk_bytes()
-    monkeypatch.setattr(loader, "get_tiling_policy", lambda: {})
+    monkeypatch.setattr(tiling_policy, "tiling_table", lambda: {})
     with pytest.raises(KeyError, match="states no overlap"):
         TS.spatial_overlap(64)
 
@@ -376,7 +376,7 @@ def test_the_sizing_half_imports_no_torch():
     import subprocess
     from pathlib import Path
     src = str(Path(__file__).resolve().parents[3] / "src")
-    probe = ("import sys; import neurobrix.core.module.tiling_sizes as T; T.conv3d_chunk_bytes(); "
+    probe = ("import sys; import nbxtensor.ops.tiling_sizes as T; T.conv3d_chunk_bytes(); "
              "print('torch' in sys.modules)")
     out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, timeout=60,
                          env={"PYTHONPATH": src, "PYTHONNOUSERSITE": "1", "CUDA_VISIBLE_DEVICES": ""})

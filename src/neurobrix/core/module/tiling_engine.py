@@ -33,7 +33,7 @@ import sys
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from pathlib import Path
 
-from neurobrix.core.module import tiling_sizes as _tsz
+from nbxtensor.ops import tiling_sizes as _tsz
 
 logger = logging.getLogger(__name__)
 
@@ -866,7 +866,7 @@ class OpLevelTilingPlan:
         # `_detect_inplace_unary_candidates`.
         self.inplace_unary: List[Tuple[str, str]] = []
         # Each entry: a rank-5 convolution's op_uid whose one-shot peak exceeds the op's planned
-        # budget (`core/module/tiling_sizes.py`): it streams its temporal output in chunks. A PLAN
+        # budget (`nbxtensor.ops.tiling_sizes`): it streams its temporal output in chunks. A PLAN
         # decision — it read the driver's free bytes inside the wrapper (decision 2, 2026-09-29).
         self.conv3d_chunks: List[str] = []
 

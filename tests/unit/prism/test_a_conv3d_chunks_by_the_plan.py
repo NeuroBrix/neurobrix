@@ -17,7 +17,7 @@ import inspect
 
 import pytest
 
-from neurobrix.core.module import tiling_sizes as C3
+from nbxtensor.ops import tiling_sizes as C3
 
 
 def test_the_wrapper_no_longer_reads_the_drivers_free_bytes():

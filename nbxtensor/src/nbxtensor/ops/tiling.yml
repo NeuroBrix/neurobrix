@@ -1,8 +1,7 @@
 # The TilingEngine's sizes — every engine-wide value a memory split is cut by.
 #
-# Read by the TilingEngine's sizing half and nowhere else — its two mirror copies,
-# `core/module/tiling_sizes.py` (PyTorch branch) and `triton/tiling_sizes.py` (Triton branch); a
-# missing key is refused by name. Values that belong to an ARCHITECTURE stay in its hardware
+# Read by the TilingEngine's sizing half and nowhere else — `nbxtensor/ops/tiling_sizes.py`, for
+# both engine branches; a missing key is refused by name. Values that belong to an ARCHITECTURE stay in its hardware
 # profile (config/vendors/<vendor>/<arch>.yml): memory.sdpa_math_max_scores_bytes,
 # memory.sdpa_math_scores_device_fraction, memory.sdpa_math_min_chunk_rows,
 # memory.sdpa_math_max_chunks, tiling.extent_lattice.

@@ -338,7 +338,7 @@ def _conv3d_via_conv2d(x, weight, bias, stride, padding, dilation, groups):
             f"{tuple(weight.shape)}, temporal stride {st}, padding {pt}, dilation {dt} -> "
             f"T_out={_t_out}")
 
-    # The chunked variant is a PLAN decision (`core/module/tiling_sizes.py`; the supervisor's
+    # The chunked variant is a PLAN decision (`ops/tiling_sizes.py`; the supervisor's
     # decision 2, 2026-09-29): Prism registers `conv3d_chunked_wrapper` as this op's interceptor
     # when the one-shot peak exceeds the op's planned budget. It read the driver's free bytes here,
     # so a key a live run formed depended on the memory free at that instant.

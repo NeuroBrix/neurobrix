@@ -9,7 +9,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from neurobrix.core.module import tiling_sizes as TS
+from nbxtensor.ops import tiling_sizes as TS
 from nbxtensor.ops import tiling_sizes as TTS
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))

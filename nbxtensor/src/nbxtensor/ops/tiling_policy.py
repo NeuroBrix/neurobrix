@@ -1,8 +1,8 @@
 """The tiling policy's default: the split sizes the tiling rules read (`tiling.yml`, beside this module).
 
 The library owns the file and reads it itself, so the rules run with no application around them. A caller may set
-its own table (`set_tiling`, plain data; `None` restores the library's); NeuroBrix's loader hands out this same file
-(`core/config/loader.get_tiling_policy`). A missing file is refused by name: no split is ever cut by a size the data
+its own table (`set_tiling`, plain data; `None` restores the library's); NeuroBrix reads this same file through the
+library's `tiling_sizes`. A missing file is refused by name: no split is ever cut by a size the data
 does not state.
 """
 from __future__ import annotations

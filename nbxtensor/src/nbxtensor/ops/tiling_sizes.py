@@ -1,10 +1,8 @@
 """The TilingEngine's sizing half — torch-free, imported by Prism, the launch keys, the Triton
 wrappers and the TilingEngine's executor.
 
-This copy serves the Triton branch (the wrappers, the launch keys and the derived census through
-them). Its twin `neurobrix/core/module/tiling_sizes.py` serves the PyTorch branch (Prism, the core
-executors and the TilingEngine): the two engines share no compute code, so each carries its own
-copy, held equal function by function by `tests/unit/tiling/test_the_two_tiling_sizes_are_one.py`.
+One module for every caller: the Triton branch (the wrappers, the launch keys and the derived census through them)
+and NeuroBrix's PyTorch branch (Prism, the core executors and the TilingEngine) alike — the engine keeps no copy.
 
 Every size a memory split is cut by is computed here, from the library's `nbxtensor/ops/tiling.yml` (engine-wide
 values, each with its source) and from the values the caller reads in the active hardware

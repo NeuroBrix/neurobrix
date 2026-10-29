@@ -66,7 +66,7 @@ def chunk_plan(memory: Dict[str, Any], budget: int, batch: int, heads: int, tq: 
     """(slices per chunk, query rows per chunk), or None when the whole attention's scores fit the budget
     (`tiling_sizes.sdpa_chunk_plan`). A chunk is sized at the budget shared by the chunks in flight. Refused by name
     when one slice of one row block exceeds that share."""
-    from neurobrix.core.module.tiling_sizes import sdpa_chunk_plan, sdpa_scores_bytes
+    from nbxtensor.ops.tiling_sizes import sdpa_chunk_plan, sdpa_scores_bytes
     if sdpa_scores_bytes(batch, heads, tq, tk) <= budget:
         return None
     block = int(memory["sdpa_math_min_chunk_rows"])
@@ -82,7 +82,7 @@ def chunk_plan(memory: Dict[str, Any], budget: int, batch: int, heads: int, tq: 
 def scratch_bytes(memory: Dict[str, Any], budget: Optional[int], batch: int, heads: int, tq: int, tk: int) -> int:
     """The scores the compiled attention holds while it runs: none where the device writes none; the whole scores
     where they fit the budget; one chunk's otherwise."""
-    from neurobrix.core.module.tiling_sizes import sdpa_scores_bytes
+    from nbxtensor.ops.tiling_sizes import sdpa_scores_bytes
     if budget is None:
         return 0
     plan = chunk_plan(memory, budget, batch, heads, tq, tk)

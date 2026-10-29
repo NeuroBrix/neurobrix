@@ -11,7 +11,7 @@ and the values between pieces wait on the host.
 Injections (seen red): the band term dropped from the walk -> red; `op_extra` ignored by the op curve -> red."""
 from __future__ import annotations
 
-from neurobrix.core.module import tiling_sizes as TS
+from nbxtensor.ops import tiling_sizes as TS
 from neurobrix.core.prism.layer_partition import LayerPartitioner
 from neurobrix.core.prism.profiler import ActivationProfiler
 

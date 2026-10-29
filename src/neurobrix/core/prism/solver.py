@@ -51,7 +51,7 @@ from neurobrix.core.prism.memory_estimator import compute_dtype_factor
 from neurobrix.core.config import get_prism_defaults
 from nbxtensor.dtype import itemsize as _itemsize
 from neurobrix.core.config.system import PRISM_DEFAULTS
-from neurobrix.core.module import tiling_sizes as _ts
+from nbxtensor.ops import tiling_sizes as _ts
 
 if TYPE_CHECKING:
     from nbx import NBXContainer, ComponentData
@@ -1532,7 +1532,7 @@ class PrismSolver:
         if profile is None or not profile.devices:
             return None
         from neurobrix.core.prism.attention_scratch import vendor_memory
-        from neurobrix.core.module import tiling_sizes as _ts
+        from nbxtensor.ops import tiling_sizes as _ts
         from nbxtensor.ops import launch_keys as _lk
         from nbxtensor.dtype.nbx_dtype import NBXDtype
         # the route the wrappers take on EACH card the plan may run on (`wrappers._sdpa_math_scores_budget_bytes_for`:
