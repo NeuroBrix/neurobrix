@@ -14,7 +14,7 @@ from apple_matrix import MODES, REFERENCE_MODE, Verdict, classify_image, classif
 from apple_matrix_run import run_model, _read  # reuse the 3-mode runner + classifier
 
 def available_mb():
-    from neurobrix.core.host_memory import memory_state
+    from nbxtensor.backend.host_memory import memory_state
     return memory_state().available_mb
 
 def prism_need_mb(model, in_flag, in_val):

@@ -79,14 +79,11 @@ def get_dtype_table() -> Dict[str, Any]:
 
 @lru_cache(maxsize=1)
 def get_tiling_policy() -> Dict[str, Any]:
-    """Load config/tiling.yml (the TilingEngine's engine-wide split sizes, read through its two
+    """The tiling policy (nbxtensor/ops/tiling.yml: the TilingEngine's engine-wide split sizes, read through its two
     mirror copies `core/module/tiling_sizes.py` and `triton/tiling_sizes.py`). ZERO FALLBACK: a missing file raises — no split is ever cut
     by a size the data does not state."""
-    config_path = CONFIG_ROOT / "tiling.yml"
-    if not config_path.exists():
-        raise FileNotFoundError(f"ZERO FALLBACK: the tiling policy is not found: {config_path}")
-    with open(config_path) as f:
-        return yaml.safe_load(f) or {}
+    from nbxtensor.ops.tiling_policy import tiling_table      # the one file, nbxtensor's (nbxtensor/ops/tiling.yml)
+    return tiling_table()
 
 
 class UnsupportedArchitectureError(FileNotFoundError):

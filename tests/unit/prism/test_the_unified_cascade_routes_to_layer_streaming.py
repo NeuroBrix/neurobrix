@@ -109,8 +109,8 @@ def test_lazy_sequential_still_offloads_to_host_on_a_discrete_device(monkeypatch
     stays available and lazy_sequential uses it. The host-fit check reads live
     host memory (memory_budget._host_budget_mb) — pin it large so the arm proves
     the GUARD's inertness, not the test machine's current free RAM."""
-    from neurobrix.core import host_memory as _hm
-    from neurobrix.core.host_memory import MemoryState
+    from nbxtensor.backend import host_memory as _hm
+    from nbxtensor.backend.host_memory import MemoryState
     monkeypatch.setattr(_hm, "memory_state",
                         lambda: MemoryState(total_mb=65536, available_mb=60000,
                                             source="test"))

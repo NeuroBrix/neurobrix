@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from neurobrix.core import host_memory as H
+from nbxtensor.backend import host_memory as H
 
 # vm_stat as it read at 12:26:xx on 2026-09-29, the orpheus moment (page size 16384): 330 MB free, 10 GB inactive,
 # 14.4 GB file-backed — the copied container in the cache.

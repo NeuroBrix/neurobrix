@@ -46,11 +46,11 @@ from neurobrix.core.prism import facts_probe as _probe  # noqa: E402
 
 def system_share_mb(readings: int = 30, every_s: float = 10.0) -> dict:
     """The system's own share of the installed RAM: installed less the CALM available memory (median of `readings`
-    taken `every_s` apart through `core.host_memory.memory_state`, the reading the planner and its door use). Taken on
+    taken `every_s` apart through `nbxtensor.backend.host_memory.memory_state`, the reading the planner and its door use). Taken on
     an idle machine — no run, no copy — it is what the OS and its resident applications hold whatever a run does;
     the unified pool is bounded by it (`PrismSolver._unified_host_pool_mb`)."""
     import statistics
-    from neurobrix.core.host_memory import memory_state
+    from nbxtensor.backend.host_memory import memory_state
     vals, total = [], None
     for i in range(int(readings)):
         st = memory_state()

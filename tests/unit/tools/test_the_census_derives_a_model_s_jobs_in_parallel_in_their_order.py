@@ -45,7 +45,7 @@ def test_the_workers_are_what_the_free_memory_holds_not_the_cores(monkeypatch):
     panics, 2026-10-20). The workers are bounded by the free memory at its ladder rung over what one worker measured,
     then by the cores and the jobs; unread memory runs one at a time. Red if the cores alone decide."""
     import types
-    from neurobrix.core import host_memory as HM
+    from nbxtensor.backend import host_memory as HM
     from neurobrix.core.prism import memory_budget as MB
     monkeypatch.setattr(DC.os, "cpu_count", lambda: 12)
     monkeypatch.setattr(DC.os, "getloadavg", lambda: (0.0, 0.0, 0.0))
@@ -66,7 +66,7 @@ def test_the_workers_are_the_cores_the_machine_is_not_running_on(monkeypatch):
     """Eight census processes each starting a worker per core held ~300 derivations on 48 cores and a plan outran its
     explanation's timeout (2026-10-22). Red if the cores alone decide, whatever the machine already runs."""
     import types
-    from neurobrix.core import host_memory as HM
+    from nbxtensor.backend import host_memory as HM
     monkeypatch.setattr(DC.os, "cpu_count", lambda: 12)
     monkeypatch.setattr(HM, "memory_state", lambda: types.SimpleNamespace(available_mb=1_000_000))
     monkeypatch.setattr(DC.os, "getloadavg", lambda: (9.6, 9.0, 8.0))
@@ -84,7 +84,7 @@ def test_the_workers_leave_what_the_gate_cells_reserved_and_say_their_own(monkey
     read (8 workers, not 2), if another census is subtracted too (1, not 2), or if the hold is not written or removed."""
     import os
     import types
-    from neurobrix.core import host_memory as HM
+    from nbxtensor.backend import host_memory as HM
     from neurobrix.core.prism import memory_budget as MB
     monkeypatch.setattr(DC.os, "cpu_count", lambda: 12)
     monkeypatch.setattr(DC.os, "getloadavg", lambda: (0.0, 0.0, 0.0))
@@ -124,7 +124,7 @@ def test_a_running_gate_cell_is_not_counted_twice(monkeypatch, tmp_path):
     132 GiB cell running (100 GB free): 119 GiB of room, not none. Red if the reservation is subtracted from the free."""
     import os
     import types
-    from neurobrix.core import host_memory as HM
+    from nbxtensor.backend import host_memory as HM
     from neurobrix.core.prism import memory_budget as MB
     monkeypatch.setattr(DC.os, "cpu_count", lambda: 64)
     monkeypatch.setattr(DC.os, "getloadavg", lambda: (0.0, 0.0, 0.0))
@@ -142,7 +142,7 @@ def test_the_room_keeps_the_scheduler_s_headroom(monkeypatch, tmp_path):
     if the share is not kept."""
     import os
     import types
-    from neurobrix.core import host_memory as HM
+    from nbxtensor.backend import host_memory as HM
     from neurobrix.core.prism import memory_budget as MB
     monkeypatch.setattr(DC.os, "cpu_count", lambda: 128)
     monkeypatch.setattr(DC.os, "getloadavg", lambda: (0.0, 0.0, 0.0))

@@ -3,7 +3,7 @@
 The Mac, 2026-09-29 16:02: every cell of its first gate through `tools/regression_matrix.py` was
 refused in seconds — the harness read /proc/meminfo (and /proc/<pid>/status, /proc/<pid>/task/...
 /children, /proc/<pid>) itself, and macOS has no /proc. The available figure now comes from the
-engine's own reader (`core.host_memory.memory_state`), the process tree from psutil, liveness from
+engine's own reader (`nbxtensor.backend.host_memory.memory_state`), the process tree from psutil, liveness from
 `os.kill(pid, 0)`.
 
 What would this file do if the code were wrong? A /proc read left in the tool -> the first test,
@@ -29,7 +29,7 @@ def test_the_harness_names_no_linux_only_path():
 
 
 def test_the_available_figure_is_the_engine_s(monkeypatch):
-    from neurobrix.core import host_memory as H
+    from nbxtensor.backend import host_memory as H
     monkeypatch.setattr(H, "memory_state", lambda: H.MemoryState(total_mb=1000, available_mb=321, source="stub"))
     assert R._mem_available() == 321 << 20
     monkeypatch.setattr(H, "memory_state", lambda: H.MemoryState(source="unreadable here"))

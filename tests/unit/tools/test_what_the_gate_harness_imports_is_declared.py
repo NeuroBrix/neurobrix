@@ -3,7 +3,7 @@
 The Mac, 2026-10-03: tools/regression_matrix.py imports psutil (a cell's process tree, the runner's
 children) and pyproject declared it nowhere — the served venv lacked it and the harness's own test
 failed on ModuleNotFoundError there. It is declared in the `dev` extra (the harness is dev tooling);
-the runtime engine reads the host through core.host_memory and imports no psutil.
+the runtime engine reads the host through nbxtensor.backend.host_memory and imports no psutil.
 
 What would this file do if the code were wrong? psutil removed from the `dev` extra -> the first
 test, RED; an engine module importing psutil again -> the second, RED.

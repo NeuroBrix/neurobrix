@@ -7,7 +7,7 @@ down to the 4 096 MB rung, the busy re-plan priced the same 15 276 MB host side 
 """
 import pytest
 
-from neurobrix.core import host_memory as HM
+from nbxtensor.backend import host_memory as HM
 from neurobrix.core.prism import solver as S
 from neurobrix.core.prism.memory_budget import rung_down_mb
 from tests.unit.prism._pinned_machine import APPLE_M4_PRO, profile

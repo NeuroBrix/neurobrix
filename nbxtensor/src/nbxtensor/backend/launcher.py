@@ -1681,7 +1681,7 @@ def bench_would_swap(total_bytes: int):
     scratch `do_bench` REALLY ALLOCATES on every call, at the same name it
     allocates it with, so the two cannot drift. Nothing here is free to tune.
 
-    `available_mb` comes from `core.host_memory` -- our own authority for this
+    `available_mb` comes from `nbxtensor.backend.host_memory` -- our own authority for this
     quantity, never `Pages free` -- and is read live, never cached: pressure is
     a state of the moment, not of the process.
 
@@ -1689,7 +1689,7 @@ def bench_would_swap(total_bytes: int):
     here: `memory_state` already names why it could not read.
     """
     try:
-        from nbxtensor.host import need as _need   # the application's core.host_memory (nbxtensor.host)
+        from nbxtensor.host import need as _need   # memory_state: the library's own reading unless an application provides one (nbxtensor.host)
         host_shares_memory_with_device = _need("host_shares_memory_with_device")
         memory_state = _need("memory_state")
         if not host_shares_memory_with_device():

@@ -348,10 +348,10 @@ def _host_bytes() -> int:
 
 
 def _mem_available() -> int:
-    """The host's available bytes from the ENGINE's one reader (`core.host_memory.memory_state`:
+    """The host's available bytes from the ENGINE's one reader (`nbxtensor.backend.host_memory.memory_state`:
     MemAvailable on Linux, vm_stat + sysctl on macOS) — the harness read /proc/meminfo itself and
     every cell was refused on the Mac, where no /proc exists (the Mac, 2026-09-29 16:02)."""
-    from neurobrix.core.host_memory import memory_state
+    from nbxtensor.backend.host_memory import memory_state
     st = memory_state()
     if st.available_mb is None:
         raise SystemExit(f"the host's available memory cannot be read ({st.source}): the host budget cannot be measured")

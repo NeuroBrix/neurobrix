@@ -182,7 +182,7 @@ def read_device_sharing(index: int) -> DeviceReading:
 
 
 def host_reading() -> DeviceReading:
-    from neurobrix.core.host_memory import memory_state
+    from nbxtensor.backend.host_memory import memory_state
     st = memory_state()
     return DeviceReading(kind="host", capacity_mb=float(getattr(st, "total_mb", 0) or 0),
                          free_mb=float(getattr(st, "available_mb", 0) or 0),

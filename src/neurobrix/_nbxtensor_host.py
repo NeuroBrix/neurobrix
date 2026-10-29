@@ -41,8 +41,6 @@ def install() -> None:
     provide("tiling_policy", _call(loader, "get_tiling_policy"))
     provide("vendors_dir", _config_dir("vendors"))
     provide("certified_dir", _config_dir("autotune"))
-    provide("memory_state", _call("neurobrix.core.host_memory", "memory_state"))
-    provide("host_shares_memory_with_device", _call("neurobrix.core.host_memory", "host_shares_memory_with_device"))
     provide("imposed_rung_mb", _call("neurobrix.core.prism.memory_budget", "_door_mb"))
     provide("deferred_drain_policy_of", _call("neurobrix.core.prism.memory_budget", "deferred_drain_policy_of"))
     provide("memory_class_gb", _call("neurobrix.core.prism.structure", "memory_class_gb"))

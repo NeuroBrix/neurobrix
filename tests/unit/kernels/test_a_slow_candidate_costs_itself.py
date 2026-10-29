@@ -141,7 +141,7 @@ def test_an_unreadable_platform_adds_no_policy(monkeypatch):
     everything and adds no policy of its own -- host_memory already names why
     it could not read."""
     from nbxtensor.ops import autotune_refusals as R
-    import neurobrix.core.host_memory as hm
+    import nbxtensor.backend.host_memory as hm
 
     class _M:
         available_mb = None
