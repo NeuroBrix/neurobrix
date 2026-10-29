@@ -947,6 +947,11 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     from nbxtensor.ops.flash_attention import flash_attention_forward_kernel
 
     _set_device(q)
+    # A scale is a number: a numpy scalar (np.float64) carries a `.dtype`, and the autotuner — Triton's key and
+    # `autotune_cache.key_of` alike — appends the dtype of every argument that has one, so the kernel's key grew a
+    # 'float64' no certified entry can hold and the certified lookup refused it (the decode / flash cells, 2026-10-29)
+    if scale is not None:
+        scale = float(scale)
 
     # Fix pre-transposed K from graph math decomposition path.
     #
