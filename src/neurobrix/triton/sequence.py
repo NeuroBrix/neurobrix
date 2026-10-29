@@ -14,7 +14,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from neurobrix.core.runtime import symexpr as _symexpr
 from neurobrix.core.runtime import liveness as _liveness
-from nbxtensor.ops.dispatch import dispatch
+from neurobrix.kernels.classification import kernel_for as _kernel_for
 # When the cause is the allocator refusing, say what would have made it fit.
 # "Out of memory" alone costs the reader the whole diagnosis, and the numbers
 # that answer it are already on the exception (adaptive-memory addition 4).
@@ -2050,7 +2050,7 @@ class TritonSequence:
                 func = self._dtype_engine.wrap_op(bare_name, func, op_uid=op_uid,
                                                   op_record=op_data)
         else:
-            func = dispatch(op_type)
+            func = _kernel_for(op_type)
             if func is None:
                 raise RuntimeError(f"[triton] Missing op: {op_type}")
             # Wrap with AMP dtype rules (alias-canonical — the AMP sets

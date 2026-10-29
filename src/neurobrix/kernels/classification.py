@@ -165,6 +165,14 @@ def canonical_aten(bare_name: str) -> str:
     return ATEN_ALIASES.get(bare_name, bare_name)
 
 
+def kernel_for(op_type: str):
+    """The library kernel of a traced graph's op (`aten::multiply`, `custom::rms_norm`, `mul`), its ATen alias resolved
+    first — the alias table is the engine's knowledge of traced graphs, never the library's — or None."""
+    from nbxtensor.ops.dispatch import dispatch
+    bare = op_type.split("::")[-1] if "::" in op_type else op_type
+    return dispatch(canonical_aten(bare))
+
+
 # Build the classification dict
 ATEN_CLASSIFICATION: Dict[str, OpExecution] = {}
 for op in _TRITON_OPS:

@@ -275,7 +275,7 @@ The rule for M2/M3 is that each service becomes one of three things:
 | `deferred_drain_policy_of` | when freed blocks are returned | **policy, optional** | default: the allocator's measured envelope (drain on a refused allocation); NeuroBrix keeps its cliff |
 | `imposed_rung_mb` | a memory rung imposed on the allocator | **policy, optional** | default: none (the device's own budget) |
 | `attention_operand_dtypes`, `attention_operand_alignment` | the dtypes an attention's operands are run at | **policy, optional** | default: the operands' common dtype by `dtype.promotion.binary_result`; NeuroBrix's DtypeEngine overrides |
-| `canonical_aten` | an op name's canonical spelling | **fact, owned** | the op table's alias list (`ops`) |
+| `canonical_aten` | a traced graph's ATen alias (`multiply` for `mul`) | **back in the engine** (landed) | `ops.dispatch.dispatch` maps the library's own op names only and asks for nothing; NeuroBrix resolves the alias first (`neurobrix.kernels.classification.kernel_for`) |
 | `memory_class_gb`, `memory_class_from_profile_id` | NeuroBrix's memory classes of a card | **hook, optional** | only the census keys read them; absent, keys carry no class |
 | `installation_refusals` | NeuroBrix's workshop rule on where a backend build may live | **hook, optional** | absent: no refusal |
 | `census`, `census_table` | the launch census | **hook, optional** | already optional (`_NoCensus`) |

@@ -48,7 +48,6 @@ def install() -> None:
     provide("installation_refusals", _call("neurobrix.core.paths", "installation_refusals"))
     provide("census", _module("neurobrix.kernels.census"))
     provide("census_table", _module("neurobrix.kernels.census_table"))
-    provide("canonical_aten", _call("neurobrix.kernels.classification", "canonical_aten"))
     for name in ("matrix_unit_representation", "matrix_unit_flash_representation", "attention_operand_dtypes",
                  "attention_operand_alignment", "matrix_unit_split_scale", "profile_triton_has_fp64"):
         provide(name, _call(dtype, name))

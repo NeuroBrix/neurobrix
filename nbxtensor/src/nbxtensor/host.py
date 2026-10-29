@@ -32,7 +32,6 @@ SERVICES: Dict[str, str] = {
     "installation_refusals": "(path) -> why an installation path may not hold a backend build; optional: absent, none is refused",
     "census": "() -> the launch census in force (active, record, shadow_run); optional: absent, none is active",
     "census_table": "() -> the census table reader",
-    "canonical_aten": "(op name) -> the canonical ATen op name",
     "matrix_unit_representation": "(...) -> how the matrix unit carries one GEMM's operands",
     "matrix_unit_flash_representation": "(...) -> how the matrix unit carries one attention's operands",
     "attention_operand_dtypes": "(...) -> the operand dtypes an attention runs at",

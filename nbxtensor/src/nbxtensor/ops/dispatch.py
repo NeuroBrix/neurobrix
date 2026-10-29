@@ -1211,10 +1211,10 @@ def dispatch(op_type: str) -> Optional[Callable]:
     if _OP_MAP is None:
         _OP_MAP = _build_op_map()
 
+    # The library's own op names, as given: a graph's aliases (aten::multiply for mul) are the application's to
+    # resolve before it asks (NeuroBrix: neurobrix.kernels.classification.kernel_for).
     op_name = op_type.split("::")[-1] if "::" in op_type else op_type
-    from nbxtensor.host import need as _need   # the application's kernels.classification (nbxtensor.host)
-    canonical_aten = _need("canonical_aten")
-    return _OP_MAP.get(canonical_aten(op_name))
+    return _OP_MAP.get(op_name)
 
 
 def has_kernel(op_type: str) -> bool:
