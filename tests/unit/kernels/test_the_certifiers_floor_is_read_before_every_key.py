@@ -40,12 +40,14 @@ def test_each_key_is_priced_over_the_footprint_read_just_before_it(tmp_path, mon
 
 @pytest.mark.skipif(not __import__("sys").platform.startswith("linux"), reason="the Linux reader")
 def test_the_footprint_is_the_resident_bytes_now_not_the_high_water_mark():
+    # fresh anonymous pages, resident only once touched: a bytearray in a long process reuses pages the allocator
+    # already holds resident, and the reading rightly does not move (2026-10-29: red in the full kernels suite only)
+    import mmap
     before = HF.process_footprint_now()
-    blob = bytearray(256 << 20)                                 # touched: resident
+    blob = mmap.mmap(-1, 256 << 20)
     for i in range(0, len(blob), 4096):
-        blob[i] = 1
+        blob[i] = 1                                             # touched: resident
     grown = HF.process_footprint_now()
-    del blob
+    blob.close()                                                # unmapped: no longer resident
     assert grown - before > 200 << 20
-    import gc; gc.collect()
     assert HF.process_footprint_now() < grown - (200 << 20)     # a high-water mark never comes down
