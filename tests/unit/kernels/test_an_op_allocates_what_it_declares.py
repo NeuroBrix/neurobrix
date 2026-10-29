@@ -37,7 +37,7 @@ def _no_pool(monkeypatch):
     """The measurement with the allocator's pool off: every buffer the op takes reaches the driver counter. With it
     on, a block an earlier test parked serves the op's output, and pool blocks count as live: the delta read 0 inside
     the GPU suite while each cell was green alone (the Dell, V100, 2026-10-29)."""
-    from nbxtensor.tensor import DeviceAllocator as DA
+    from nbxtensor.memory.allocator import DeviceAllocator as DA
     DA._maybe_init_pool()
     DA.device_synchronize(0)
     DA.empty_cache_pool()

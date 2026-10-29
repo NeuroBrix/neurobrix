@@ -9,7 +9,7 @@ from nbxtensor.dtype.convert import bf16_bits_to_f16
 
 def _device():
     try:
-        from nbxtensor.tensor import DeviceAllocator
+        from nbxtensor.memory.allocator import DeviceAllocator
         DeviceAllocator.set_device(0)
         return True
     except Exception:
@@ -28,7 +28,8 @@ def _patterns():
 @pytest.mark.parametrize("in_place", [False, True])
 def test_every_finite_pattern_is_the_host_rule(in_place):
     from nbxtensor.ops.wrappers import bf16_to_fp16_gpu
-    from nbxtensor.tensor import NBXDtype, NBXTensor
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
+    from nbxtensor.tensor import NBXTensor
     bits = _patterns()
     src = NBXTensor.from_numpy(bits.view(np.int16).copy())
     out = None
