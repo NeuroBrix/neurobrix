@@ -70,6 +70,7 @@ from nbxtensor.memory.allocator import DeviceAllocator as DA
 from nbxtensor.backend import launcher
 assert census.active() is False
 assert DA.malloc_cuda.__name__ == "malloc_cuda", DA.malloc_cuda
+assert DA.malloc_direct.__name__ == "malloc_direct", DA.malloc_direct
 assert launcher.launch.__name__ == "launch", launcher.launch
 print("NOT A SHADOW")
 '''

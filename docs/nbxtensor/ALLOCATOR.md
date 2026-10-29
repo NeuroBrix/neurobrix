@@ -16,6 +16,21 @@ count, malloc/free (the pool's segments included), mem_get_info (one device, the
 memset, memcpy, pinned host memory, the unified-memory mapping. Return codes are the runtime's, checked by the account as
 before; messages unchanged. Peer copies, streams and events stay on the backend table (backend/, not memory).
 
+## The interceptor and the slabs (M2, after the interface)
+The account's five public device operations — `malloc_cuda`, `free_cuda`, `memcpy`, `memset_cuda`, `sync_device` — each
+go through the `AllocatorInterceptor` in force (`DeviceAllocator.install_interceptor`), handed the DIRECT operation it
+stands in front of (`malloc_direct`, `free_direct`, `memcpy_direct`, `memset_direct`, `sync_direct`), or straight to the
+direct operation when none is installed. One interceptor at a time; a second is refused by name. Nothing replaces the
+allocator's methods any more: the census shadow substitutes the DIRECT operations (so an interceptor still stands in front
+of them, as in a real run), and the frozen-plan replayer installs its interceptor.
+
+`memory/slab.py` holds the replay's slab allocators (`SlabAllocator`: first-fit over one device block; `StepSlab`: a
+pure-bump slab recycled at every decode step), the registry of slabs with outstanding carvings (`ACTIVE_SLABS`), and
+`SlabInterceptor`: while recording, a pooled allocation is carved from the slab of the requested device (a refusal goes to
+`slab_refused`, the owner's decision); between recordings, from the recycled step slab when one is in force; else the
+allocator serves it and the watermark is measured per device. The engine's replayer (`triton/replay.py`) is a
+`SlabInterceptor` that adds what is its own: the copies, sets and synchronisations a plan records.
+
 ## Target
 ```
 memory/allocator.py      DeviceAllocator — THE account (unchanged API)
@@ -39,5 +54,5 @@ Streams, events and synchronisation stay in `backend/` (not memory).
 - One account: a backend object never counts bytes; the account refuses past `budget()`.
 - Behaviour unchanged: the same calls in the same order, the same error codes surfaced by name; the 5-model shas,
   the coverage and the suites are the proof, as for every M1/M2 commit.
-- Then the allocation strategies (pool, replay slab, arena) sit on the account, one interface (`Allocator`:
-  `alloc(nbytes, device, kind)` / `free(...)`), the slab allocator of `triton/replay.py` moving under it.
+- The allocation strategies sit on the account: the pool inside it, the replay slab in front of it through the one
+  interceptor; the weight arena (a block outside the pool, `pooled=False`) is the next to move.

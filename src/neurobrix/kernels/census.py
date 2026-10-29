@@ -238,7 +238,7 @@ _SHADOW_BASES: List[int] = []
 
 
 def _shadow_malloc(nbytes: int, dev_idx: Optional[int] = None, pooled: bool = True) -> int:
-    """`DeviceAllocator.malloc_cuda` in a shadow, its signature kept whole (`pooled`: a weight arena asks for a block
+    """`DeviceAllocator.malloc_direct` in a shadow, its signature kept whole (`pooled`: a weight arena asks for a block
     outside the pool; a shadow has no pool and answers the same address either way)."""
     ptr = _SHADOW_PTR[0]
     _SHADOW_PTR[0] += (int(nbytes) + 255) // 256 * 256 + 256
@@ -378,8 +378,10 @@ def install(hardware: Optional[str] = None, hardware_profile: Optional[dict] = N
     _ACTIVE["census"] = True
     n_dev = int(os.environ.get("NBX_CENSUS_DEVICES", "1") or 1)
 
-    DA.malloc_cuda = staticmethod(_shadow_malloc)
-    for name in ("free_cuda", "memset_cuda", "memcpy", "memcpy_async", "sync_device",
+    # The DIRECT device operations are the shadow's (an interceptor installed later, a replay recording, still stands
+    # in front of them as it does in a real run).
+    DA.malloc_direct = staticmethod(_shadow_malloc)
+    for name in ("free_direct", "memset_direct", "memcpy_direct", "memcpy_async", "sync_direct",
                  "set_device", "ensure_triton_device", "empty_cache_pool"):
         if hasattr(DA, name):
             setattr(DA, name, staticmethod(_noop))

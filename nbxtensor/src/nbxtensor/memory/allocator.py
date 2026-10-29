@@ -185,6 +185,31 @@ class DeviceOOMError(RuntimeError):
             return None
         return max(0, self.requested - self.driver_free)
 
+class AllocatorInterceptor:
+    """What stands in front of the allocator's five device operations (allocate, free, copy, set, synchronise) while
+    it is installed (`DeviceAllocator.install_interceptor`): each method receives the DIRECT operation it stands in
+    front of (`DeviceAllocator.malloc_direct`, ...) and decides whether and how to call it. A replay recording carves
+    its run's allocations from a slab and records the copies it must reproduce (`memory.slab.SlabInterceptor`).
+
+    The defaults pass straight through; a subclass overrides only what it changes. One interceptor at a time: two
+    would each believe it sees every allocation."""
+
+    def malloc(self, direct, nbytes: int, dev_idx: Optional[int], pooled: bool) -> int:
+        return direct(nbytes, dev_idx, pooled)
+
+    def free(self, direct, ptr: int):
+        return direct(ptr)
+
+    def memcpy(self, direct, dst: int, src: int, nbytes: int, kind: int):
+        return direct(dst, src, nbytes, kind)
+
+    def memset(self, direct, ptr: int, value: int, nbytes: int):
+        return direct(ptr, value, nbytes)
+
+    def sync(self, direct):
+        return direct()
+
+
 class DeviceAllocator:
     """GPU + pinned-host memory allocator via raw runtime API.
 
@@ -254,6 +279,8 @@ class DeviceAllocator:
     #: Callables `(dev) -> bytes released` the engine registers for memory it caches outside the pool (a recorded
     #: replay plan's slab, `triton/replay.release_idle_slabs`), called on a malloc refused after the pool's flush.
     _idle_reclaimers: list = []
+    #: The `AllocatorInterceptor` in force, or None: the five public device operations go through it.
+    _interceptor: Optional[AllocatorInterceptor] = None
     # Pool observability (NBX_ALLOC_STATS=1 prints it at exit): bytes
     # parked in the free-list per device (+ peak), hit/miss counters,
     # and the smallest-fit SLACK (allocated − requested) — the pool's
@@ -760,7 +787,33 @@ class DeviceAllocator:
         return rc
 
     @staticmethod
+    def install_interceptor(interceptor: AllocatorInterceptor) -> None:
+        """Put `interceptor` in front of the five device operations. Installing the one in force again is a no-op; a
+        second, different one is refused by name (each would believe it sees every allocation)."""
+        cur = DeviceAllocator._interceptor
+        if cur is not None and cur is not interceptor:
+            raise RuntimeError(
+                f"an allocator interceptor is already installed ({type(cur).__module__}.{type(cur).__qualname__}); "
+                f"{type(interceptor).__module__}.{type(interceptor).__qualname__} cannot stand beside it")
+        DeviceAllocator._interceptor = interceptor
+
+    @staticmethod
+    def remove_interceptor(interceptor: AllocatorInterceptor) -> None:
+        """Take `interceptor` away; refused by name when it is not the one in force."""
+        if DeviceAllocator._interceptor is not interceptor:
+            raise RuntimeError(f"{type(interceptor).__qualname__} is not the allocator interceptor in force")
+        DeviceAllocator._interceptor = None
+
+    @staticmethod
     def malloc_cuda(nbytes: int, dev_idx: Optional[int] = None, pooled: bool = True) -> int:
+        """Allocate GPU memory: through the interceptor in force, else directly (`malloc_direct`)."""
+        i = DeviceAllocator._interceptor
+        if i is None:
+            return DeviceAllocator.malloc_direct(nbytes, dev_idx, pooled)
+        return i.malloc(DeviceAllocator.malloc_direct, nbytes, dev_idx, pooled)
+
+    @staticmethod
+    def malloc_direct(nbytes: int, dev_idx: Optional[int] = None, pooled: bool = True) -> int:
         """Allocate GPU memory.
 
         Default path: synchronous cudaMalloc. The stream-ordered allocator
@@ -913,6 +966,14 @@ class DeviceAllocator:
 
     @staticmethod
     def free_cuda(ptr: int):
+        """Free GPU memory: through the interceptor in force, else directly (`free_direct`)."""
+        i = DeviceAllocator._interceptor
+        if i is None:
+            return DeviceAllocator.free_direct(ptr)
+        return i.free(DeviceAllocator.free_direct, ptr)
+
+    @staticmethod
+    def free_direct(ptr: int):
         """Free GPU memory.
 
         Default path: cudaFree. Blocks the calling thread until the
@@ -1180,11 +1241,28 @@ class DeviceAllocator:
 
     @staticmethod
     def memset_cuda(ptr: int, value: int, nbytes: int):
+        """Set device bytes: through the interceptor in force, else directly (`memset_direct`)."""
+        i = DeviceAllocator._interceptor
+        if i is None:
+            return DeviceAllocator.memset_direct(ptr, value, nbytes)
+        return i.memset(DeviceAllocator.memset_direct, ptr, value, nbytes)
+
+    @staticmethod
+    def memset_direct(ptr: int, value: int, nbytes: int):
         if nbytes > 0 and ptr:
             _rt.device_memory().memset(ptr, value, nbytes)
 
     @staticmethod
     def memcpy(dst: int, src: int, nbytes: int, kind: int = 3):
+        """Copy memory (kind: 0=H2H, 1=H2D, 2=D2H, 3=D2D): through the interceptor in force, else directly
+        (`memcpy_direct`)."""
+        i = DeviceAllocator._interceptor
+        if i is None:
+            return DeviceAllocator.memcpy_direct(dst, src, nbytes, kind)
+        return i.memcpy(DeviceAllocator.memcpy_direct, dst, src, nbytes, kind)
+
+    @staticmethod
+    def memcpy_direct(dst: int, src: int, nbytes: int, kind: int = 3):
         """Copy memory. kind: 0=H2H, 1=H2D, 2=D2H, 3=D2D.
 
         NOTE (NVIDIA API-sync-behavior spec): for D2D the "synchronous"
@@ -1204,6 +1282,14 @@ class DeviceAllocator:
 
     @staticmethod
     def sync_device():
+        """Synchronize the current device: through the interceptor in force, else directly (`sync_direct`)."""
+        i = DeviceAllocator._interceptor
+        if i is None:
+            return DeviceAllocator.sync_direct()
+        return i.sync(DeviceAllocator.sync_direct)
+
+    @staticmethod
+    def sync_direct():
         """Synchronize current GPU device. Waits for all pending GPU ops.
 
         RAISES on a nonzero return: cudaDeviceSynchronize returns any
