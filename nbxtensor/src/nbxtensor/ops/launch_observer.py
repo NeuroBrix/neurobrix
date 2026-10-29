@@ -1,10 +1,11 @@
 """An optional observer of kernel launches, and a dry-run mode behind it.
 
-An application may install ONE observer (`set_launch_observer`). While its `active()` answers True the library runs dry:
-an autotuned kernel launches nothing — its wrapper forms the launch's key as always, hands it to `record(tuned, key)`,
-and calls `shadow_run(...)` in place of the benchmark and the launch — and a count the library would read back from
-the device is taken from the operation's own contract instead (`index_wrappers.nonzero_1d_wrapper`). This is how an
-application enumerates the kernel keys a model forms without a device (NeuroBrix: its certification census).
+An application may install ONE observer (`set_launch_observer`). Every autotuned launch hands its key to
+`record(tuned, key)`, live or dry (an application's record of the keys a run forms). While `active()` answers True the
+library runs dry: an autotuned kernel launches nothing — it calls `shadow_run(...)` in place of the benchmark and the
+launch — and a count the library would read back from the device is taken from the operation's own contract instead
+(`index_wrappers.nonzero_1d_wrapper`). This is how an application enumerates the kernel keys a model forms without a
+device (NeuroBrix: its certification census).
 
 With no observer installed, or one whose `active()` answers False, nothing changes: every launch runs. The observer is
 read at call time, never cached, so one installed after the kernels were defined is the one consulted.
@@ -25,8 +26,7 @@ class _NoObserver:
 
     @staticmethod
     def record(tuned, key) -> None:
-        raise RuntimeError("nbxtensor: a launch was recorded with no launch observer installed — record() is reached "
-                           "only during a dry run")
+        return None                       # every launch is offered to the observer; with none, nothing observes it
 
     @staticmethod
     def shadow_run(*args, **kwargs):

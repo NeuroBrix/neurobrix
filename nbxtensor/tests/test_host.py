@@ -30,6 +30,7 @@ def test_with_no_observer_installed_nothing_runs_dry():
     try:
         LO.set_launch_observer(None)
         assert LO.launch_observer().active() is False
+        assert LO.launch_observer().record(None, (1,)) is None      # a live launch offers its key; none observes it
         with _pytest.raises(RuntimeError, match="no launch observer installed"):
             LO.launch_observer().shadow_run()
         with _pytest.raises(TypeError, match="no callable record, shadow_run"):
