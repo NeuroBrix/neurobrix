@@ -563,10 +563,7 @@ def active_driver() -> Driver:
 
 def _resolve_driver() -> Driver:
     from nbxtensor.backend.runtime import gpu_backend
-    try:
-        name = gpu_backend()
-    except Exception:
-        return CudaDriver.instance()
+    name = gpu_backend()            # a backend it cannot read raises its own error: never answered with CUDA
     if name == "metal":
         # WHICH Metal backend is a profile selection, and a driver implements ONE
         # backend's launch ABI (ours reads the fork's MSL conventions for scalar
@@ -578,9 +575,12 @@ def _resolve_driver() -> Driver:
         from nbxtensor.backend.metal_backend import nbx_driver_module
         from importlib import import_module
         return import_module(nbx_driver_module()).driver()
-    # CUDA is the built-in default, which keeps the Dell's path byte-identical
-    # to before this seam existed.
-    return CudaDriver.instance()
+    if name == "cuda":
+        return CudaDriver.instance()
+    # Any other backend has no launch driver here yet: refused by name, never handed the CUDA one (an AMD card failed
+    # inside libcuda at its first launch, 2026-10-30). A new backend implements the driver interface (BACKENDS.md).
+    raise RuntimeError(f"nbxtensor launcher: no launch driver for the {name!r} backend — the library launches on cuda "
+                       f"and metal; a backend implements the launcher's Driver interface (docs/nbxtensor/BACKENDS.md)")
 
 
 def _unsupported(kind):

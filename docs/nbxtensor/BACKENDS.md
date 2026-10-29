@@ -27,6 +27,10 @@ What it asks of a backend is a subclass of `Driver`:
 | `target()` | the Triton `GPUTarget` the kernels are compiled for | `GPUTarget("cuda", <capability>, 32)` from the driver | the selected Metal backend's target (`backend/metal_backend.metal_target`) |
 | `max_shared_memory_per_block()` | the device's per-block shared-memory ceiling, in bytes (asked of the driver; a backend that cannot ask raises, and the autotune then prunes nothing) | `cuDeviceGetAttribute` | `maxThreadgroupMemoryLength` |
 
+The launcher picks its driver from the detected backend (`backend.runtime.gpu_backend`): `cuda` → `CudaDriver`,
+`metal` → the selected Metal backend's driver. Any other backend is refused by name until its driver exists, and a
+backend that cannot be read raises its own error: a backend is never handed another backend's driver.
+
 Three class attributes carry what the launcher must not assume; each default is CUDA's answer:
 
 - `artifact_kind` — the key of the compiled artifact (`"cubin"`; Metal `"msl"`; ROCm `"hsaco"`);
