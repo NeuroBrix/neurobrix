@@ -184,6 +184,12 @@ with the tensor class (API.md §4).
 - Slicing has step 1 (`narrow`); a strided slice is refused by name.
 - A dtype absent from the table is refused; add it to `dtypes.yml` with its source.
 
+## Versions
+
+The first publication is **0.0.1** (this version); each fix published after it increments the number (0.0.2, 0.0.3,
+…), with no alpha or beta label. The rewrite of the core in Rust will be **2.0.0**. `nbxtensor.__version__` is the
+installed version.
+
 ## License
 
 Apache 2.0.

@@ -134,3 +134,10 @@ Developed in `nbxtensor/` of the NeuroBrix repository on branch `nbxtensor`,
 installed by the engine as a path dependency. Extracted to its own repository
 (`NeuroBrix/nbxtensor`, history kept with git filter-repo) and published on
 Hocine's GO only. Forge never enters it.
+
+## 7. Versions
+
+Decided by Hocine on 29/10 15:52. The first publication of nbxtensor is **0.0.1**: no alpha, beta or release-candidate
+label, ever. Every fix published after it increments the version (0.0.2, 0.0.3, …); the Rust rewrite of section 5 is
+**2.0.0**. The one number lives in `nbxtensor/pyproject.toml` and `nbxtensor.__version__`, and a test holds them equal
+(`nbxtensor/tests/test_version.py`).
