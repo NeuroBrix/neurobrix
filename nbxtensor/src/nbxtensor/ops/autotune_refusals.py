@@ -161,8 +161,7 @@ def begin_sweep() -> None:
 def note_sweep_swap_baseline() -> None:
     """Snapshot swap usage at the sweep's start, from our own authority."""
     try:
-        from nbxtensor.host import need as _need   # the application's core.host_memory (nbxtensor.host)
-        memory_state = _need("memory_state")
+        from nbxtensor.backend.host_memory import memory_state   # the library's own reading of the host
         _SWEEP["swap0_mb"] = memory_state().swap_used_mb
     except Exception:                                  # noqa: BLE001
         _SWEEP["swap0_mb"] = None
@@ -184,9 +183,8 @@ def sweep_grew_the_swap() -> int:
     if base is None:
         return 0
     try:
-        from nbxtensor.host import need as _need   # the application's core.host_memory (nbxtensor.host)
-        host_shares_memory_with_device = _need("host_shares_memory_with_device")
-        memory_state = _need("memory_state")
+        from nbxtensor.backend import device_facts as _facts, host_memory as _hm   # the library's own readings
+        host_shares_memory_with_device, memory_state = _facts.host_shares_memory_with_device, _hm.memory_state
         if not host_shares_memory_with_device():
             return 0                                   # discrete memory: host swap is not the bench
         now = memory_state().swap_used_mb
@@ -308,8 +306,8 @@ def config_footprint_fits(arg_bytes: int, config_scratch_bytes: int = 0,
     """
     if available_mb is None:
         try:
-            from nbxtensor.host import need as _need   # the application's core.host_memory (nbxtensor.host)
-            memory_state = _need("memory_state")
+            from nbxtensor.backend import host_memory as _hm   # the library's own reading of the host
+            memory_state = _hm.memory_state
             available_mb = memory_state().available_mb
         except Exception:                              # noqa: BLE001
             available_mb = None

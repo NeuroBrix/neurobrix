@@ -1689,9 +1689,8 @@ def bench_would_swap(total_bytes: int):
     here: `memory_state` already names why it could not read.
     """
     try:
-        from nbxtensor.host import need as _need   # memory_state: the library's own reading unless an application provides one (nbxtensor.host)
-        host_shares_memory_with_device = _need("host_shares_memory_with_device")
-        memory_state = _need("memory_state")
+        from nbxtensor.backend import device_facts as _facts, host_memory as _hm   # the library's own readings
+        host_shares_memory_with_device, memory_state = _facts.host_shares_memory_with_device, _hm.memory_state
         if not host_shares_memory_with_device():
             return False, None                         # discrete memory: the host is not the bench
         avail_mb = memory_state().available_mb

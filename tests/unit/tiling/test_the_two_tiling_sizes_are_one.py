@@ -123,4 +123,4 @@ def test_the_triton_copy_imports_no_torch_no_numpy_no_third_party():
     imported = {(n.module or "") if isinstance(n, ast.ImportFrom) else a.name
                 for n in ast.walk(tree) if isinstance(n, (ast.Import, ast.ImportFrom))
                 for a in n.names}
-    assert imported <= {"__future__", "math", "typing", "nbxtensor.host"}, imported   # the policy through the host (M1)
+    assert imported <= {"__future__", "math", "typing", "nbxtensor.ops.tiling_policy"}, imported   # the policy in force: the library's

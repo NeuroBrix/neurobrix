@@ -38,9 +38,9 @@ def install() -> None:
     loader, dtype = "neurobrix.core.config.loader", "neurobrix.triton.dtype"
     provide("vendor_config", _call(loader, "get_vendor_config"))
     provide("vendor_param", _call(loader, "vendor_param"))
-    provide("tiling_policy", _call(loader, "get_tiling_policy"))
     provide("vendors_dir", _config_dir("vendors"))
-    provide("certified_dir", _config_dir("autotune"))
+    from nbxtensor.ops.autotune_certified import set_store
+    set_store(_config_dir("autotune")())        # the engine's committed certified directory, through the public API
     provide("imposed_rung_mb", _call("neurobrix.core.prism.memory_budget", "_door_mb"))
     provide("deferred_drain_policy_of", _call("neurobrix.core.prism.memory_budget", "deferred_drain_policy_of"))
     provide("memory_class_gb", _call("neurobrix.core.prism.structure", "memory_class_gb"))

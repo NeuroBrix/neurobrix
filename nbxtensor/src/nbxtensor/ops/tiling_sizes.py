@@ -29,9 +29,8 @@ from typing import Any, Sequence, Tuple
 
 def _value(*path: str) -> Any:
     """One value of nbxtensor/ops/tiling.yml, refused by name when absent."""
-    from nbxtensor.host import need as _need   # the application's core.config.loader (nbxtensor.host)
-    get_tiling_policy = _need("tiling_policy")
-    node: Any = get_tiling_policy()
+    from nbxtensor.ops.tiling_policy import tiling_table   # the policy in force (nbxtensor.ops.tiling_policy.set_tiling)
+    node: Any = tiling_table()
     for i, key in enumerate(path):
         if not isinstance(node, dict) or key not in node:
             raise KeyError(f"ZERO FALLBACK: nbxtensor/ops/tiling.yml states no {'.'.join(path[:i + 1])}")

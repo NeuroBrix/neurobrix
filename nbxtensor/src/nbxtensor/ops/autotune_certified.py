@@ -112,13 +112,28 @@ _SERVED: Dict[str, int] = {"certified": 0, "swept": 0, "local": 0}     # local =
 # ---------------------------------------------------------------------------
 # where
 # ---------------------------------------------------------------------------
+_STORE: Dict[str, Path] = {}          # {"dir": Path} once a caller set its store
+
+
+def set_store(path) -> None:
+    """Set the directory of proven kernel settings (a path; `None` restores the library's own: the user's cache,
+    `backend.device_facts.certified_dir`). NeuroBrix sets its committed certified directory here."""
+    if path is None:
+        _STORE.clear()
+    else:
+        _STORE["dir"] = Path(path)
+
+
 def directory() -> Path:
-    """The engine's directory (NEUROBRIX_AUTOTUNE_CERTIFIED_DIR relocates it — tests, a contributor's draft)."""
+    """The store in force: NEUROBRIX_AUTOTUNE_CERTIFIED_DIR when set (tests, a contributor's draft), else the one a
+    caller set (`set_store`), else the library's own in the user's cache."""
     override = os.environ.get("NEUROBRIX_AUTOTUNE_CERTIFIED_DIR")
     if override:
         return Path(override)
-    from nbxtensor.host import need as _need
-    return Path(_need("certified_dir")())       # the application's certified store (nbxtensor.host)
+    if "dir" in _STORE:
+        return _STORE["dir"]
+    from nbxtensor.backend.device_facts import certified_dir
+    return certified_dir()
 
 
 def enabled() -> bool:
