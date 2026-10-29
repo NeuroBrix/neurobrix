@@ -524,6 +524,10 @@ class ActivationProfile:
     #: Elements of the graph's output tensors at this binding — what the component hands on; the host
     #: estimate prices the run's output boundary from the largest of them.
     output_elements: int = 0
+    #: What the device allocator holds at its peak for this walk (`estimate_peak_memory(pool=)`: the walk's
+    #: allocations replayed through its pool, `nbxtensor.memory.pool.simulate`) — the live set and the free blocks
+    #: its segments keep pinned; None when no pool was given (the compiled engine)
+    held_peak_bytes: Optional[int] = None
 
     @property
     def peak_mb(self) -> float:
@@ -1002,9 +1006,17 @@ class ActivationProfiler:
         conv3d_workspace=None,
         op_workspace=None,
         tiled_convs: Optional[Dict[str, int]] = None,
+        pool: Optional[Dict[str, Any]] = None,
     ) -> ActivationProfile:
         """
         Simulate execution to find peak activation memory.
+
+        `pool`: the device allocator's rules the plan's engine runs under — the pool's (the keywords of
+        `nbxtensor.memory.pool.simulate`) and the hot loop's deferred queue (`drain_cliff` bytes, `drain_count`
+        tensors: a dead graph tensor is freed only when the queue reaches either, after the op that killed it) — or
+        None where it has none (the compiled engine): the walk's allocations and frees are replayed through them, and
+        `held_peak_bytes` is what the allocator holds at its peak — the live set, the queued dead, and the free blocks
+        its segments keep pinned. An op's own transients are freed when it returns, never queued.
 
         `tiled_convs`: {conv uid: band factor} — the 2-D convolutions the plan runs band by band (op-level tiling,
         `PrismSolver._standalone_conv_tiles`): while such a conv runs it holds, beside its input and its whole output,
@@ -1096,6 +1108,12 @@ class ActivationProfiler:
         peak_tensor_count = 0
         current_bytes = 0
         live_tensors: Dict[str, int] = {}  # tensor_id -> size_bytes
+        # the allocation sequence of this walk, for the pool's replay (`pool`): (alloc | free, key, bytes)
+        events: Optional[List[tuple]] = [] if pool is not None else None
+        pool = dict(pool or {})
+        drain_cliff, drain_count = int(pool.pop("drain_cliff", 0) or 0), int(pool.pop("drain_count", 0) or 0)
+        queued: List[str] = []             # dead graph tensors the hot loop holds until it drains
+        queued_bytes = 0
 
         # Get graph output tensors (these are never freed)
         graph_outputs = set(self.dag.get("output_tensor_ids", []))
@@ -1247,6 +1265,8 @@ class ActivationProfiler:
                     size = self._compute_size(shape, tensor_meta, dtype_bytes)
                 live_tensors[tid] = size
                 current_bytes += size
+                if events is not None:
+                    events.append(("alloc", tid, size))
             peak_bytes = current_bytes
 
         # The invariant state (state engine step 4, core/state/invariant.py): a run that reuses it holds the whole
@@ -1271,8 +1291,12 @@ class ActivationProfiler:
                 live_tensors[tid] = size
                 current_bytes += size
                 held_tids.add(tid)
+                if events is not None:
+                    events.append(("alloc", tid, size))
             for tid in _copies:
                 current_bytes += _held_size(tid)
+                if events is not None:
+                    events.append(("alloc", ("copy", tid), _held_size(tid)))
             peak_bytes = max(peak_bytes, current_bytes)
 
         # Diagnostic (default off): NBX_PRISM_CURVE_DUMP=<dir> writes this walk op by op — the in-op figure and the
@@ -1296,7 +1320,11 @@ class ActivationProfiler:
                     size = self._compute_size(shape, self.tensors.get(tid, {}), dtype_bytes)
                 live_tensors[tid] = size
                 current_bytes += size
+                if events is not None:
+                    events.append(("alloc", tid, size))
             live_before_op[op_uid] = current_bytes
+            # where this op's own transients go in the sequence: allocated before its outputs, freed when it returns
+            events_at = len(events) if events is not None else 0
 
             # 1. ALLOCATE: Add output tensors
             output_tids = op.get("output_tensor_ids", [])
@@ -1335,6 +1363,8 @@ class ActivationProfiler:
 
                 live_tensors[out_tid] = size
                 current_bytes += size
+                if events is not None:
+                    events.append(("alloc", out_tid, size))
 
             # 2. PEAK: Track maximum. A view (`VIEW_OP_TYPES`) allocates nothing WHILE it runs:
             # its in-op figure is the live set before it (the partitioner's `op_peak_curve`).
@@ -1382,6 +1412,9 @@ class ActivationProfiler:
                 in_op += n_cast * cast_width
             if attention_scratch is not None and _is_attention(op.get("op_type")):
                 in_op += self._attention_scratch_of(op, symbol_map, attention_scratch)
+            if events is not None and in_op > current_bytes:
+                events.insert(events_at, ("alloc", ("in_op", op_uid), in_op - current_bytes))
+                events.append(("free", ("in_op", op_uid), 0))
             if in_op > peak_bytes:
                 peak_bytes = in_op
                 peak_op_uid = op_uid
@@ -1400,10 +1433,21 @@ class ActivationProfiler:
                     continue
                 if tid in live_tensors:
                     current_bytes -= live_tensors[tid]
+                    if events is not None:
+                        if drain_cliff > 0:
+                            queued.append(tid)
+                            queued_bytes += live_tensors[tid]
+                        else:
+                            events.append(("free", tid, 0))
                     del live_tensors[tid]
             for tid in output_tids:
                 if parked_outputs and tid in parked_outputs and tid in live_tensors:
                     current_bytes -= live_tensors.pop(tid)     # copied to the host by the op that made it
+                    if events is not None:
+                        events.append(("free", tid, 0))
+            if queued and (queued_bytes >= drain_cliff or (drain_count and len(queued) >= drain_count)):
+                events.extend(("free", tid, 0) for tid in queued)     # the hot loop's drain, after this op
+                queued, queued_bytes = [], 0
             if _curve_dump is not None:
                 _curve_dump.append((op_uid, op.get("op_type"), _in_op_dump, current_bytes))
 
@@ -1496,8 +1540,14 @@ class ActivationProfiler:
                 for d in self._resolve_shape(meta, symbol_map):
                     n *= int(d)
                 output_elements += n
+        held_peak_bytes = None
+        if events is not None:
+            events.extend(("free", tid, 0) for tid in queued)         # the run's end drains what is left
+            from nbxtensor.memory.pool import simulate
+            held_peak_bytes = simulate(events, **pool).peak_bytes
         return ActivationProfile(
             output_elements=output_elements,
+            held_peak_bytes=held_peak_bytes,
             peak_bytes=peak_bytes,
             peak_op_uid=peak_op_uid,
             peak_step=peak_step,

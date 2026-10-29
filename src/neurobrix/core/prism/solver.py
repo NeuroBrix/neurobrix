@@ -291,6 +291,10 @@ class ComponentMemory:
     #: graph cannot say
     arena_bytes: Optional[int] = None
     dense_arena_bytes: Optional[int] = None
+    #: what the Triton allocator holds at its peak while the component runs whole: the walk's allocations, its frees
+    #: through the hot loop's deferred queue, replayed through the allocator's pool (`nbxtensor.memory.pool.simulate`);
+    #: None under the compiled engine and with no graph. Stated beside the run's measured figure (M3 exit).
+    held_peak_bytes: Optional[int] = None
 
     @property
     def total_bytes(self) -> int:
@@ -612,6 +616,9 @@ class ExecutionPlan:
                     "total_mb": mem.total_mb,
                     "peak_op": mem.peak_op_uid,
                     "activation_profiled": mem.activation_profiled,
+                    "arena_bytes": mem.arena_bytes,
+                    "dense_arena_bytes": mem.dense_arena_bytes,
+                    "held_peak_bytes": mem.held_peak_bytes,
                 }
                 for name, mem in self.component_memory.items()
             },
@@ -672,6 +679,10 @@ class ExecutionPlan:
                 overhead_bytes=int(mem.get("overhead_mb", 0) * 1024 * 1024),
                 peak_op_uid=mem.get("peak_op", ""),
                 activation_profiled=mem.get("activation_profiled", False),
+                # a plan saved before these fields laid out no arena and replayed no pool: None
+                arena_bytes=mem.get("arena_bytes"),
+                dense_arena_bytes=mem.get("dense_arena_bytes"),
+                held_peak_bytes=mem.get("held_peak_bytes"),
             )
             for name, mem in data.get("memory_breakdown", {}).items()
         }
@@ -1950,6 +1961,37 @@ class PrismSolver:
         if str(getattr(self, "_mode", "compiled")).startswith("triton"):
             return float(mem.activation_mb) * float(get_prism_defaults()["triton_arena_activation_factor"])
         return float(mem.activation_mb)
+
+    def _pool_rules(self, profile) -> Optional[Dict[str, Any]]:
+        """The device allocator's rules a walk is replayed through — the pool's (the keywords of
+        `nbxtensor.memory.pool.simulate`) and the Triton hot loop's deferred queue (`drain_cliff`,
+        `drain_count`: dead tensors are freed together when either is reached) — or None where the
+        plan's engine has neither (the compiled engine). The parked cap is the allocator's own reading: the arch yml's
+        `memory.alloc_pool_parked_cap_fraction` of the device (of the imposed rung where one is,
+        `DeviceAllocator._pool_parked_cap`), on the profile's smallest device — the one the walk is
+        budgeted against. `NBX_ALLOC_POOL=0` (the allocator's own door): no pool."""
+        from neurobrix.core.prism.host_footprint import engine_of
+        if engine_of(getattr(self, "_mode", "compiled")) != "triton":
+            return None
+        if os.environ.get("NBX_ALLOC_POOL", "1") == "0":
+            return {"pooled": False}
+        if profile is None or not getattr(profile, "devices", None):
+            return {"parked_cap": 0}
+        from neurobrix.core.config.loader import get_vendor_config
+        spec = min(profile.devices, key=lambda d: d.memory_mb)
+        brand = getattr(spec, "brand", None)
+        memory = (get_vendor_config(getattr(brand, "value", brand), spec.architecture).get("memory", {}) or {})
+        frac = float(memory.get("alloc_pool_parked_cap_fraction", 0.0) or 0.0)
+        total_mb = float(spec.memory_mb)
+        from neurobrix.core.prism.memory_budget import _door_mb, deferred_drain_retained_bytes
+        door = _door_mb()
+        if door is not None:
+            total_mb = min(total_mb, float(door))
+        from neurobrix.triton.sequence import _DEFERRED_DRAIN_COUNT_DEFAULT
+        return {"parked_cap": int(total_mb * (1 << 20) * frac) if frac > 0 else 0,
+                # the hot loop's deferred queue: dead tensors freed together at the cliff or the count (`_drain_now`)
+                "drain_cliff": int(deferred_drain_retained_bytes(memory)),
+                "drain_count": int(_DEFERRED_DRAIN_COUNT_DEFAULT)}
 
     def _phase_peak_carried_mb(self, container, costs: Dict[str, int]) -> float:
         """The dearest phase of the flow (`_flow_phases`, its towers first, the decode last), each with its components
@@ -3516,7 +3558,7 @@ class PrismSolver:
                 )
                 up_out_bytes = profiler._compute_size(up_out_shape, up_out_meta, dtype_bytes)
                 # Threshold: an upsample output over `op_level.upsample_overflow_card_fraction`
-                # of the card is worth fusing (config/tiling.yml).
+                # of the card is worth fusing (nbxtensor/ops/tiling.yml).
                 up_overflow = _ts.upsample_overflows(up_out_bytes, comp_vram)
                 if not (conv_overflow or up_overflow):
                     continue
@@ -3573,7 +3615,7 @@ class PrismSolver:
             # to bound the per-band materialized output. Fires on rms_norm
             # ops whose output exceeds `op_level.rms_norm.overflow_card_fraction`
             # of the card; the band factor is `tiling_sizes.rms_norm_band_factor`
-            # (config/tiling.yml carries each value's reason).
+            # (nbxtensor/ops/tiling.yml carries each value's reason).
             for uid in order:
                 op = ops.get(uid, {})
                 if op.get("op_type", "") != "custom::rms_norm":
@@ -4179,6 +4221,8 @@ class PrismSolver:
                         smallest_gpu_bytes = min(
                             int(d.memory_mb * 1024 * 1024) for d in profile.devices
                         )
+                    # the device allocator's pool the walk is replayed through (Triton engines; None: none)
+                    _pool_rules = self._pool_rules(profile)
                     # First pass: worst-case + overflow_ops detection.
                     #
                     # THE WIDTH EACH ACTIVATION IS EXECUTED AT. A graph traced
@@ -4215,7 +4259,7 @@ class PrismSolver:
                         # unfloored map.
                         placement_floor=True,
                         in_place_weight_reads=_in_place,
-                        attention_scratch=self._attention_scratch(profile), conv3d_workspace=self._conv3d_workspace(profile), op_workspace=self._op_workspace(profile),
+                        attention_scratch=self._attention_scratch(profile), conv3d_workspace=self._conv3d_workspace(profile), op_workspace=self._op_workspace(profile), pool=_pool_rules,
                     )
                     self.__dict__.setdefault("_output_elements", {})[comp.name] = int(ap.output_elements)
                     # The request's symbols, compute width AND each activation's runtime width, for
@@ -4292,7 +4336,7 @@ class PrismSolver:
                                 # The residual-chain sentinels carry nothing.
                                 source_holding_uids=fusion_uids | f2a_uids,
                                 in_place_weight_reads=_in_place,
-                        attention_scratch=self._attention_scratch(profile), conv3d_workspace=self._conv3d_workspace(profile), op_workspace=self._op_workspace(profile),
+                        attention_scratch=self._attention_scratch(profile), conv3d_workspace=self._conv3d_workspace(profile), op_workspace=self._op_workspace(profile), pool=_pool_rules,
                                 tiled_convs=conv_tiles,
                             )
                             activation_bytes = ap_tiled.peak_bytes
@@ -4318,7 +4362,7 @@ class PrismSolver:
                                 inplace_adds=inplace_adds,
                                 widths=widths,
                                 in_place_weight_reads=_in_place,
-                        attention_scratch=self._attention_scratch(profile), conv3d_workspace=self._conv3d_workspace(profile), op_workspace=self._op_workspace(profile),
+                        attention_scratch=self._attention_scratch(profile), conv3d_workspace=self._conv3d_workspace(profile), op_workspace=self._op_workspace(profile), pool=_pool_rules,
                                 tiled_convs=conv_tiles,
                             )
                             activation_bytes = ap_tiled.peak_bytes
@@ -4410,6 +4454,11 @@ class PrismSolver:
                 )
 
             overhead_bytes = int((weight_bytes + activation_bytes) * self.overhead_factor)
+            # What the Triton allocator holds at its peak, the walk replayed through its pool and its deferred queue
+            # (`ActivationProfile.held_peak_bytes`), beside the component's arena: stated, read by no decision yet.
+            held_peak_bytes = None
+            if _kept is not None and _kept.held_peak_bytes is not None:
+                held_peak_bytes = int(_kept.held_peak_bytes) + int(arena_bytes or 0)
 
             result[comp.name] = ComponentMemory(
                 component_name=comp.name,
@@ -4423,6 +4472,7 @@ class PrismSolver:
                 attention_dominates=attn_dominates,
                 arena_bytes=arena_bytes,
                 dense_arena_bytes=dense_arena_bytes,
+                held_peak_bytes=held_peak_bytes,
             )
 
         return result
@@ -9999,7 +10049,9 @@ def explain_plan(plan: "ExecutionPlan") -> str:
         detail = ""
         if mem is not None:
             detail = (f"  weights {mem.weight_bytes / 2**20:.0f} MB + activations {mem.activation_bytes / 2**20:.0f} MB"
-                      f" + overhead {mem.overhead_bytes / 2**20:.0f} MB"
+                      + f" + overhead {mem.overhead_bytes / 2**20:.0f} MB"
+                      + (f"; the allocator's replay holds {mem.held_peak_bytes / 2**20:.0f} MB at its peak"
+                         if getattr(mem, "held_peak_bytes", None) is not None else "")
                       + (f"  (peak at {mem.peak_op_uid})" if mem.peak_op_uid else "")
                       + ("" if mem.activation_profiled else "  [activations estimated, not profiled]"))
         shard = "  sharded" if getattr(alloc, "sharded", False) else ""
