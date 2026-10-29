@@ -151,8 +151,7 @@ assert parse_dtype("half") is NBXDtype.float16             # an alias the table 
 
 ## What the library asks of its application
 
-Some decisions are not tensor facts: where certified kernel settings live, a memory rung an application imposes, a
-launch census. The application provides each one ONCE by name (`nbxtensor.host.provide`); the library reads it by
+Some decisions are not tensor facts: where certified kernel settings live, a launch census. The application provides each one ONCE by name (`nbxtensor.host.provide`); the library reads it by
 name (`need`). A service nobody provided is refused by name, except the optional hooks, which run without one. The
 list of services and what each becomes before the first release (a fact the library measures, an optional policy
 with a measured default, or an optional hook) is `docs/nbxtensor/API.md` section 11.
@@ -165,6 +164,17 @@ assert "vendor_config" in host.SERVICES
 assert arch_string("Apple M4 Pro") == "apple-m4-pro"       # a device's key: the library's own rule
 if "installation_refusals" not in host.provided():
     assert host.need("installation_refusals")("/any/path") == []   # an optional hook: absent, nothing refused
+```
+
+A memory limit is a setting, not a service: `nbxtensor.memory.set_limit` holds the process to a card of that many
+bytes (the allocator refuses what such a card refuses, and its pool parks a fraction of the limit); absent, the
+physical card is the limit.
+
+```python
+from nbxtensor import memory
+
+memory.set_limit(8 << 30)        # behave as a card of 8 GiB on every device
+memory.set_limit(None)           # the physical card again
 ```
 
 ## Backends

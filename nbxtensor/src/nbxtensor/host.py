@@ -25,7 +25,6 @@ SERVICES: Dict[str, str] = {
     "certified_dir": "() -> the directory of the certified kernel settings (pathlib.Path); the library's own when none is provided",
     "memory_state": "() -> the host memory reading (available_mb, swap_used_mb, ...); the library's own when none is provided",
     "host_shares_memory_with_device": "(device) -> True when host and device draw on one pool; the library's own when none is provided",
-    "imposed_rung_mb": "() -> the memory rung imposed on the allocator in MB, or None",
     "deferred_drain_policy_of": "(memory section of a vendor file) -> the deferred-free drain policy",
     "memory_class_gb": "(memory_mb) -> the memory class of a card, in GB",
     "memory_class_from_profile_id": "(hardware profile id) -> its memory class in GB, or None",

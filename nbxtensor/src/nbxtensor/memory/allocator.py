@@ -309,13 +309,16 @@ class DeviceAllocator:
     # the device's total memory (ONE cudaMemGetInfo at the first free on
     # that device, never in the hot path afterwards).
     _pool_cap_bytes: Dict[int, int] = {}
-    # A rung imposed on the plan (`NBX_PRISM_BUDGET_MB`: the census, the rung proofs) is the card the plan was sized
+    # A limit imposed on the process (`set_limit`; an application's rung, a census) is the card the plan was sized
     # for, and the allocator holds to it as to a card of that size: a malloc that would carry the bytes it holds from
     # the driver (live and pooled) past the rung less the runtime's own context is refused as such a card refuses it,
     # and takes the same path (the pool flushed, the malloc retried, then a named OOM). device -> bytes, None: no rung.
     # Measured 2026-10-28: mochi-1-preview triton at the 8 GB rung on a 32 GB card held 10.8 GB — 5.5-6.2 GB live and
     # 3.0-3.7 GB of pooled free blocks no refused malloc ever asked back.
     _rung_limit_bytes: Dict[int, Optional[int]] = {}
+    # The memory limit an application imposes (`set_limit`): device -> the bytes of the card this process holds to, the
+    # key None for every device; absent, the physical card. Generic: the library knows no rung, no plan, no variable.
+    _limit_bytes: Dict[Optional[int], Optional[int]] = {}
     #: device -> {token: the most held from the driver since the window opened} (`open_window`)
     _windows: Dict[int, Dict[int, int]] = {}
     _window_starts: Dict[int, int] = {}              # token -> held when it opened
@@ -579,14 +582,13 @@ class DeviceAllocator:
             cap = 0
             if frac > 0:
                 total = DeviceAllocator.device_total_bytes(dev)
-                # A rung imposed on the plan (`NBX_PRISM_BUDGET_MB`, the census and the rung proofs) is the device the
+                # A limit imposed on the process (`set_limit`: an application's rung, a census) is the device the
                 # plan was sized for: the pool parks a fraction of IT, as it would on a card of that size — measured
                 # 2026-10-27, mochi-1-preview triton at the 8 GB rung on a 32 GB card parked its 9 GB text encoder
                 # arena (cap 16 GB) and peaked at 22.6 GB where a card of 8 GB would have freed it
-                from nbxtensor.host import need as _need
-                door = _need("imposed_rung_mb")()      # the application's imposed rung (nbxtensor.host)
-                if door is not None and total > 0:
-                    total = min(total, int(door) << 20)
+                limit = DeviceAllocator._imposed_bytes(dev)   # the card the application holds this process to
+                if limit is not None and total > 0:
+                    total = min(total, int(limit))
                 if total > 0:
                     cap = int(total * frac)
         except Exception:
@@ -631,17 +633,39 @@ class DeviceAllocator:
         return DeviceAllocator._alloc_epoch
 
     @staticmethod
+    def set_limit(nbytes: Optional[int], dev: Optional[int] = None) -> None:
+        """Hold this process to a card of `nbytes` on device `dev` (None: every device), or lift the limit (`nbytes`
+        None). The allocator then behaves as such a card does: a malloc that would carry what it holds from the driver
+        (live and pooled) past the limit less the runtime's own context is refused as that card refuses it — the pool
+        flushed, the malloc retried, then a named DeviceOOMError — and the pool parks its fraction of the limit, not of
+        the physical card."""
+        if nbytes is not None and int(nbytes) < 0:
+            raise ValueError(f"set_limit: a memory limit is a byte count >= 0 or None, not {nbytes!r}")
+        DeviceAllocator._limit_bytes[dev] = None if nbytes is None else int(nbytes)
+        for table in (DeviceAllocator._rung_limit_bytes, DeviceAllocator._pool_cap_bytes):
+            if dev is None:
+                table.clear()
+            else:
+                table.pop(dev, None)
+
+    @staticmethod
+    def _imposed_bytes(dev: int) -> Optional[int]:
+        """The card `set_limit` holds device `dev` to, in bytes; None: the physical card."""
+        lim = DeviceAllocator._limit_bytes
+        return lim[dev] if dev in lim else lim.get(None)
+
+    @staticmethod
     def _rung_limit(dev: int) -> Optional[int]:
-        """The bytes this process may hold from the driver on `dev` under an imposed rung: the rung less what the
-        runtime holds outside the allocator's own blocks (its context), read once from the driver; None: no rung."""
+        """The bytes this process may hold from the driver on `dev` under a limit (`set_limit`): the limit less what
+        the runtime holds outside the allocator's own blocks (its context), read once from the driver; None: none."""
         if dev in DeviceAllocator._rung_limit_bytes:
             return DeviceAllocator._rung_limit_bytes[dev]
-        door = os.environ.get("NBX_PRISM_BUDGET_MB")
+        imposed = DeviceAllocator._imposed_bytes(dev)
         limit = None
-        if door:
+        if imposed is not None:
             free_b, total_b = DeviceAllocator.mem_get_info(dev)
             context = max(0, int(total_b) - int(free_b) - DeviceAllocator._cuda_live_bytes.get(dev, 0))
-            limit = max(0, (int(door) << 20) - context)
+            limit = max(0, int(imposed) - context)
         DeviceAllocator._rung_limit_bytes[dev] = limit
         return limit
 
@@ -829,8 +853,8 @@ class DeviceAllocator:
                 f"pool_cached={pool_total/1024/1024:.0f}MB ({pool_count} blocks) "
                 f"driver_free={driver_free/1024/1024:.0f}MB / "
                 f"driver_total={driver_total/1024/1024:.0f}MB]"
-                + (f" under the imposed rung: {DeviceAllocator._rung_limit_bytes[dev]/1024/1024:.0f}MB this process may "
-                   f"hold (NBX_PRISM_BUDGET_MB less the runtime's context)"
+                + (f" under the imposed limit: {DeviceAllocator._rung_limit_bytes[dev]/1024/1024:.0f}MB this process may "
+                   f"hold (memory.set_limit less the runtime's context)"
                    if DeviceAllocator._rung_limit_bytes.get(dev) is not None else ""),
                 requested=nbytes, device_idx=dev, live=live_now,
                 pool_cached=pool_total, pool_blocks=pool_count,

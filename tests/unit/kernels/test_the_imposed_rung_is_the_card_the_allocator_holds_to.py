@@ -1,4 +1,4 @@
-"""Under an imposed rung (`NBX_PRISM_BUDGET_MB`) the Triton allocator holds to it as to a card of that size: a malloc
+"""Under a limit (`nbxtensor.memory.set_limit`; NeuroBrix sets it from an imposed rung, `NBX_PRISM_BUDGET_MB`) the Triton allocator holds to
 that would carry what the process holds from the driver (live and pooled) past the rung less the runtime's context is
 refused as that card refuses it — the pool is flushed and the malloc retried, then a named OOM. Measured 2026-10-28:
 mochi-1-preview triton at the 8 GB rung on a 32 GB card held 10.8 GB, 3.0-3.7 GB of it pooled free blocks no refused
@@ -45,7 +45,7 @@ def rt(monkeypatch):
                         ("_cuda_ptr_size", {}), ("_cuda_ptr_device", {}),
                         ("_cuda_ptr_epoch", {}), ("_cuda_live_bytes", {}), ("_cuda_peak_bytes", {}),
                         ("_range_size", {}), ("_range_bases", []), ("_pool_cap_bytes", {0: 1 << 40}),
-                        ("_rung_limit_bytes", {})):
+                        ("_rung_limit_bytes", {}), ("_limit_bytes", {})):
         monkeypatch.setattr(DA, name, value)
     monkeypatch.setattr(DA, "get_device", staticmethod(lambda: 0))
     monkeypatch.setattr(DA, "clear_last_error", staticmethod(lambda: None))
@@ -55,7 +55,7 @@ def rt(monkeypatch):
 
 
 def test_a_malloc_past_the_rung_flushes_the_pool_and_the_held_bytes_stay_under_it(rt, monkeypatch):
-    monkeypatch.setenv("NBX_PRISM_BUDGET_MB", "1024")          # this process may hold 1024 - 300 = 724 MB
+    DA.set_limit(1024 * MB)                                     # this process may hold 1024 - 300 = 724 MB
     a = DA.malloc_cuda(400 * MB)
     DA.free_cuda(a)                                             # parked in the pool, still held from the driver
     b = DA.malloc_cuda(500 * MB)                                # 400 + 500 > 724: the pool is flushed first
@@ -63,25 +63,27 @@ def test_a_malloc_past_the_rung_flushes_the_pool_and_the_held_bytes_stay_under_i
 
 
 def test_past_the_rung_with_nothing_to_flush_is_a_named_oom(rt, monkeypatch):
-    monkeypatch.setenv("NBX_PRISM_BUDGET_MB", "1024")
+    DA.set_limit(1024 * MB)
     DA.malloc_cuda(600 * MB)
-    with pytest.raises(_nbx_allocator.DeviceOOMError, match="imposed rung: 724MB"):
+    with pytest.raises(_nbx_allocator.DeviceOOMError, match="imposed limit: 724MB"):
         DA.malloc_cuda(200 * MB)
 
 
 def test_without_a_rung_the_card_is_the_physical_one(rt, monkeypatch):
-    monkeypatch.delenv("NBX_PRISM_BUDGET_MB", raising=False)
-    a = DA.malloc_cuda(600 * MB)
-    DA.free_cuda(a)
+    # 600 MB live and 2000 MB more: past what a 1024 MB limit lets this process hold (724 MB), well inside the 32 GB
+    # card. (A FREED block is flushed before the device grows whatever the limit — the pool's own rule since S4a
+    # 2026-10-27, `memory/pool.py` — which is why this test, written before it, asserted 2600 MB after a free and
+    # stood red on base.)
+    DA.malloc_cuda(600 * MB)
     DA.malloc_cuda(2000 * MB)
-    assert sum(rt.live.values()) == 2600 * MB, "the pool was flushed with no rung imposed"
+    assert sum(rt.live.values()) == 2600 * MB, "a malloc was refused with no limit set"
 
 
 def test_a_weight_arena_freed_goes_back_to_the_driver_whole_not_into_the_pool(rt, monkeypatch):
     """The 8 GB failure itself: a segment's weights freed into the pool, a small tensor that outlives it splits the
     freed block, and the next segment's arena finds the rung held by a pool it cannot flush. Unpooled, the freed arena
     leaves, and the small tensor takes its own segment."""
-    monkeypatch.setenv("NBX_PRISM_BUDGET_MB", "1024")          # 724 MB this process may hold
+    DA.set_limit(1024 * MB)                                     # 724 MB this process may hold
     arena = DA.malloc_cuda(500 * MB, pooled=False)              # segment 0's weights
     DA.free_cuda(arena)                                         # released after segment 0
     assert not rt.live, "the freed weight arena stayed held from the driver"

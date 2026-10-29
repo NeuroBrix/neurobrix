@@ -91,6 +91,16 @@ def _door_mb() -> Optional[int]:
     return int(v) if v else None
 
 
+def apply_imposed_rung() -> None:
+    """The rung imposed on this process (`NBX_PRISM_BUDGET_MB`: the census, the rung proofs, the gate's class cells)
+    applied to the Triton allocator through the library's public limit (`nbxtensor.memory.set_limit`), so the
+    allocator holds to the card the plan was sized for; no rung, the limit lifted. Applied when the engine starts
+    (`neurobrix._nbxtensor_host.install`); a caller that changes the variable later applies it again."""
+    from nbxtensor.memory import set_limit
+    door = _door_mb()
+    set_limit(None if door is None else int(door) << 20)
+
+
 def sized_by_the_moment(r: DeviceReading) -> bool:
     """The pools whose budget is still the FREE reading rounded onto the ladder: host RAM (no profile states what a
     plan may hold of it) and a device whose facts could not be read at all. Every device pool with a declared capacity
