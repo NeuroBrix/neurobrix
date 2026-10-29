@@ -11,6 +11,10 @@
 #   bits           storage bits per element (bytes = bits / 8 for every dense dtype)
 #   kind           float, int, uint, bool or complex — the class the promotion rule reads
 #                  (nbxtensor.dtype.promotion)
+#   max            a float's largest finite value: (2 - 2^(1-p)) x 2^emax for an IEEE-style format of p
+#                  significant bits (binary64, binary32, binary16; bfloat16 = binary32's exponent with
+#                  8 significant bits; TF32 = 11 significant bits), and the OCP OFP8 v1.0 table for the
+#                  two float8 formats (E4M3: 448, no infinity; E5M2: 57344)
 #   safetensors    the dtype code a safetensors header writes for it (spec:
 #                  https://github.com/huggingface/safetensors — `Dtype`), when it has one
 #   autotune_keys  the spellings a launch key / certified directory carries for it
@@ -24,20 +28,20 @@
 
 dtypes:
   # IEEE 754-2008 binary64.
-  float64: {bits: 64, kind: float, safetensors: F64, autotune_keys: [fp64], without_fp64: float32}
+  float64: {bits: 64, kind: float, max: 1.7976931348623157e+308, safetensors: F64, autotune_keys: [fp64], without_fp64: float32}
   # IEEE 754-2008 binary32.
-  float32: {bits: 32, kind: float, safetensors: F32, autotune_keys: [fp32]}
+  float32: {bits: 32, kind: float, max: 3.4028234663852886e+38, safetensors: F32, autotune_keys: [fp32]}
   # NVIDIA TF32 (A100 architecture whitepaper): a tensor-core COMPUTE format of 19 significant
   # bits, stored and moved in a full 32-bit fp32 word.
-  tfloat32: {bits: 32, kind: float}
+  tfloat32: {bits: 32, kind: float, max: 3.4011621342146535e+38}
   # Google Brain bfloat16: the top 16 bits of a binary32.
-  bfloat16: {bits: 16, kind: float, safetensors: BF16, autotune_keys: [bf16]}
+  bfloat16: {bits: 16, kind: float, max: 3.3895313892515355e+38, safetensors: BF16, autotune_keys: [bf16]}
   # IEEE 754-2008 binary16.
-  float16: {bits: 16, kind: float, safetensors: F16, autotune_keys: [fp16]}
+  float16: {bits: 16, kind: float, max: 65504.0, safetensors: F16, autotune_keys: [fp16]}
   # OCP 8-bit Floating Point Specification (OFP8) v1.0, E4M3 (finite, no inf) and E5M2;
   # torch.float8_e4m3fn / torch.float8_e5m2. The fnuz variants appear nowhere in this code.
-  float8_e4m3fn: {bits: 8, kind: float, safetensors: F8_E4M3}
-  float8_e5m2: {bits: 8, kind: float, safetensors: F8_E5M2}
+  float8_e4m3fn: {bits: 8, kind: float, max: 448.0, safetensors: F8_E4M3}
+  float8_e5m2: {bits: 8, kind: float, max: 57344.0, safetensors: F8_E5M2}
   # Two's-complement integers of the stated width (C99 <stdint.h>, numpy, torch).
   int64: {bits: 64, kind: int, safetensors: I64, autotune_keys: [int64]}
   int32: {bits: 32, kind: int, safetensors: I32, autotune_keys: [int32]}

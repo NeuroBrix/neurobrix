@@ -5,7 +5,7 @@ Dtype Resolver for Prism
 Extracted from solver.py and smart_solver.py.
 Unified dtype resolution logic used by the Prism solver.
 
-bf16→fp16 is safe when Prism's _scan_bf16_fp16_safety() verifies weights.
+bf16→fp16 is safe when Prism's _container_fits_float16() verifies weights.
 """
 
 from typing import TYPE_CHECKING

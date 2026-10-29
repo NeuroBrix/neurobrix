@@ -14,7 +14,7 @@ from typing import Optional
 
 import numpy as np
 
-__all__ = ["f32_to_bf16_bits", "bf16_bits_to_f32", "bf16_bits_to_f16", "bf16_bits"]
+__all__ = ["f32_to_bf16_bits", "bf16_bits_to_f32", "bf16_bits_to_f16", "bf16_bits", "bf16_abs_max"]
 
 # The quiet NaN every NaN becomes, sign dropped: PyTorch's `round_to_nearest_even`
 # (torch/headeronly/util/BFloat16.h: `if (std::isnan(src)) return UINT16_C(0x7FC0);`).
@@ -74,3 +74,16 @@ def bf16_bits_to_f16(bits: np.ndarray, out: Optional[np.ndarray] = None) -> np.n
     dst = np.empty(src.shape, dtype=np.float16) if out is None else out.reshape(-1)
     np.copyto(dst, (src.astype(np.uint32) << np.uint32(16)).view(np.float32), casting="unsafe")
     return dst.reshape(np.shape(bits)) if out is None else out
+
+
+def bf16_abs_max(bits: np.ndarray) -> float:
+    """The largest magnitude among bfloat16 patterns, NaN ignored (an infinity is infinite): what a caller compares to
+    a narrower dtype's `finite_max` to know whether the values fit it. Streamed in fixed steps."""
+    flat = np.ascontiguousarray(bf16_bits(bits)).reshape(-1)
+    top = 0.0
+    for i in range(0, flat.size, _STEP):
+        v = np.abs((flat[i:i + _STEP].astype(np.uint32) << np.uint32(16)).view(np.float32))
+        v = v[~np.isnan(v)]
+        if v.size:
+            top = max(top, float(v.max()))
+    return top

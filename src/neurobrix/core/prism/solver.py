@@ -9178,7 +9178,7 @@ class PrismSolver:
             header_bytes = f.read(header_size)
         return json.loads(header_bytes)
 
-    def _scan_bf16_fp16_safety(self, container: "NBXContainer") -> bool:
+    def _container_fits_float16(self, container: "NBXContainer") -> bool:
         """
         Scan bf16 weight files to verify all values fit in fp16 range (±65504).
         Returns True if bf16→fp16 is safe, False if fp32 fallback needed.
@@ -9223,10 +9223,16 @@ class PrismSolver:
                 self._bf16_fp16_safe_cache = result
                 return result
 
-        # Full scan using safetensors header metadata + selective tensor loading
-        from safetensors import safe_open
+        # Full scan: each bfloat16 weight read as its 16-bit patterns straight from the shard (the header gives its
+        # bytes), its largest magnitude by nbxtensor's one conversion module, held to float16's finite maximum
+        # from the one dtype table — no tensor library opens the file.
+        import numpy as np
+        from nbxtensor.dtype.convert import bf16_abs_max
+        from nbxtensor.dtype.itemsize import finite_max
+        from nbxtensor.shape import numel
+        from neurobrix.nbx.weight_presence import read_safetensors_header
 
-        FP16_MAX = 65504.0
+        FP16_MAX = finite_max("float16")
         total_params = 0
 
         for comp_dir in components_dir.iterdir():
@@ -9234,18 +9240,21 @@ class PrismSolver:
             if not weights_path.exists():
                 continue
             for shard in sorted(weights_path.glob("*.safetensors")):
-                with safe_open(str(shard), framework="pt") as f:
-                    for key in f.keys():
-                        tensor = f.get_tensor(key)
-                        if str(tensor.dtype) == "torch.bfloat16":
-                            total_params += tensor.numel()
-                            abs_max = tensor.abs().max().item()
-                            if abs_max > FP16_MAX:
-                                # Cache negative result to disk
-                                with open(safety_cache_file, 'w') as cf:
-                                    json.dump({"bf16_fp16_safe": False, "reason": f"{key}: abs_max={abs_max}"}, cf)
-                                self._bf16_fp16_safe_cache = False
-                                return False
+                header, data_start = read_safetensors_header(str(shard))
+                raw = np.memmap(shard, dtype=np.uint8, mode="r")
+                for key, entry in header.items():
+                    if key == "__metadata__" or entry.get("dtype") != "BF16":
+                        continue
+                    begin, end = entry["data_offsets"]
+                    bits = raw[data_start + begin:data_start + end].view(np.uint16)
+                    total_params += numel(entry["shape"])
+                    abs_max = bf16_abs_max(bits)
+                    if abs_max > FP16_MAX:
+                        # Cache negative result to disk
+                        with open(safety_cache_file, 'w') as cf:
+                            json.dump({"bf16_fp16_safe": False, "reason": f"{key}: abs_max={abs_max}"}, cf)
+                        self._bf16_fp16_safe_cache = False
+                        return False
 
         result = total_params > 0
         # Cache positive result to disk
@@ -9418,7 +9427,7 @@ class PrismSolver:
             return requested
 
         if requested == "bfloat16":
-            if profile.devices_support_dtype("float16") and self._scan_bf16_fp16_safety(container):
+            if profile.devices_support_dtype("float16") and self._container_fits_float16(container):
                 return "float16"
             return "float32"
         elif requested == "float16":
@@ -9442,7 +9451,7 @@ class PrismSolver:
             elif profile.devices_support_dtype(native):
                 resolved = native
             elif native == "bfloat16":
-                if container is not None and profile.devices_support_dtype("float16") and self._scan_bf16_fp16_safety(container):
+                if container is not None and profile.devices_support_dtype("float16") and self._container_fits_float16(container):
                     resolved = "float16"
                 else:
                     resolved = "float32"
