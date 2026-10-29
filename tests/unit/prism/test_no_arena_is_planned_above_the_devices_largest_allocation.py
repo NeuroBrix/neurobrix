@@ -181,7 +181,8 @@ def test_the_arena_door_refuses_a_plan_holding_one_component_whole_over_the_boun
     s._mode = "triton"
     s._get_component_dtype = lambda container, name: "bfloat16"
     dev = s._prepare_devices(profile(APPLE_CAPPED))[0]
-    mem = {"big": SimpleNamespace(weight_mb=MAX_ALLOCATION_MB + 1.0), "small": SimpleNamespace(weight_mb=10.0)}
+    mem = {"big": SimpleNamespace(weight_mb=MAX_ALLOCATION_MB + 1.0, arena_bytes=(MAX_ALLOCATION_MB + 1) * MB),
+           "small": SimpleNamespace(weight_mb=10.0, arena_bytes=10 * MB)}
     whole = {"big": (dev.device_string, {}), "small": (dev.device_string, {})}
     why = s._arena_door(None, "lazy_sequential", whole, [dev], mem)
     assert why and "'big'" in why and "max_allocation_mb" in why, why

@@ -47,7 +47,6 @@ from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Mapping, Opti
 
 from neurobrix.core.dtype.config import compiled_constant_dtype, compiled_weight_dtype
 from neurobrix.core.dtype.entry_width import enters_at_traced_width
-from neurobrix.core.prism.memory_estimator import get_dtype_bytes_per_element
 from neurobrix.core.prism.layer_partition import is_seam_tensor
 from neurobrix.kernels.classification import canonical_aten
 from neurobrix.triton import dtype as _tdt
@@ -348,9 +347,9 @@ def runtime_widths(dag: Dict[str, Any], compute_dtype: str, engine: str, *,
         dag, compute_dtype, engine, has_native_bf16=has_native_bf16,
         attention_operands=attention_operands, contract=contract,
         stores_fp64=stores_fp64, tiling=tiling, shape_of=shape_of, casts=casts, seams=seams)
-    w = ExecutedWidths((tid, get_dtype_bytes_per_element(n)) for tid, n in names.items())
+    w = ExecutedWidths((tid, _itemsize.itemsize(n)) for tid, n in names.items())
     w.dtypes = names
-    w.casts = {uid: [(t, get_dtype_bytes_per_element(d)) for t, d in cs] for uid, cs in casts.items()}
+    w.casts = {uid: [(t, _itemsize.itemsize(d)) for t, d in cs] for uid, cs in casts.items()}
     return w
 
 
@@ -764,7 +763,7 @@ class _TritonRules(_Rules):
             return self._copies(fl, c)
         if name in _tdt.AMP_PROMOTE_OPS:
             widest = self.widest([(t, d, False) for t, d in fl])
-            return self._copies(fl, widest) if widest and get_dtype_bytes_per_element(widest) > 2 else []
+            return self._copies(fl, widest) if widest and _itemsize.itemsize(widest) > 2 else []
         return []
 
     def _aligned(self, name, fl, ins) -> List[Tuple[str, str]]:
@@ -970,7 +969,7 @@ class _AtenRules(_Rules):
             return to(c)
         if name in ATEN_AMP_PROMOTE_OPS:
             widest = self.widest([(t, d, False) for t, d in fl])
-            return to(widest) if widest is not None and get_dtype_bytes_per_element(widest) > 2 else []
+            return to(widest) if widest is not None and _itemsize.itemsize(widest) > 2 else []
         if name == "mul" and c == "float16":
             a = op.get("input_tensor_ids") or [None, None]
             if len(a) >= 2 and a[0] == a[1] and fl[0][1] == "float16":

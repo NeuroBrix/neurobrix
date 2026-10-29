@@ -4,7 +4,7 @@
 `get_dtype_bytes_per_element` defaulted to 4. So a short name — `bf16`, `fp16` — produced:
 
     compute_dtype_factor("bf16", "bf16")      -> 2.0     (identity!)
-    get_dtype_bytes_per_element("fp16")       -> 4       (it is 2)
+    itemsize("fp16")       -> 4       (it is 2)
 
 A plan that touches one then reports exactly TWICE the memory it needs. That number reads
 like a real figure and cannot be told from one, which is the whole problem: the Mac and
@@ -26,8 +26,9 @@ from neurobrix.core.dtype.itemsize import itemsize_table
 from neurobrix.core.paths import cache_dir
 
 BYTES_MAP = itemsize_table()   # the one table (dtypes.yml), read through the PyTorch reader
-from neurobrix.core.prism.memory_estimator import (
-    compute_dtype_factor, get_dtype_bytes_per_element)
+from neurobrix.core.prism.memory_estimator import compute_dtype_factor
+# a dtype's width is read by the one reader of the table (`get_dtype_bytes_per_element` deleted for it, M3)
+from neurobrix.core.dtype.itemsize import itemsize
 
 
 # ─────────────────────────── the defect, as it was ───────────────────────────
@@ -38,7 +39,7 @@ def test_a_name_the_map_does_not_carry_is_REFUSED(name):
         compute_dtype_factor(name, name)
     assert name.__repr__() in str(e.value) or "unknown" in str(e.value)
     with pytest.raises(ValueError):
-        get_dtype_bytes_per_element(name)
+        itemsize(name)
 
 
 def test_the_refusal_says_what_would_satisfy_it():
@@ -54,14 +55,14 @@ def test_the_refusal_says_what_would_satisfy_it():
 
 @pytest.mark.parametrize("name", sorted(BYTES_MAP))
 def test_every_name_the_map_carries_still_resolves(name):
-    assert get_dtype_bytes_per_element(name) == BYTES_MAP[name]
+    assert itemsize(name) == BYTES_MAP[name]
     assert compute_dtype_factor(name, name) == 1.0, "identity must be 1.0, it was 2.0"
 
 
 def test_a_torch_spelling_resolves_to_its_name():
     """The one table reads a dtype as the code passes it: "torch.float16" IS float16 (the
     old private map refused it; the readers strip the torch spelling, never guess a width)."""
-    assert get_dtype_bytes_per_element("torch.float16") == 2
+    assert itemsize("torch.float16") == 2
     assert compute_dtype_factor("torch.float16", "float32") == 2.0
 
 
@@ -108,8 +109,11 @@ def test_every_dtype_in_this_cache_resolves():
 # been planned at the WIDEST width, which over-estimates — the safe direction, and the
 # opposite of what let mochi's VAE accept a plan 40x too small.
 
-def test_an_absent_dtype_is_not_a_refusal():
-    assert get_dtype_bytes_per_element(None) == 4
+def test_an_absent_dtype_is_stated_by_its_caller_not_given_a_width():
+    """The width reader refuses an absent dtype like any name it does not carry; the one caller that may meet one (a
+    request naming no dtype, `InputConfig()`) states its float32 itself (`profiler.estimate_peak_memory`)."""
+    with pytest.raises((ValueError, TypeError, KeyError)):
+        itemsize(None)
 
 
 def test_the_historical_widths_for_an_absent_operand_are_unchanged():
@@ -121,9 +125,16 @@ def test_the_historical_widths_for_an_absent_operand_are_unchanged():
 
 
 def test_a_request_that_names_no_dtype_still_plans():
-    """The call that went red, as its own cell."""
+    """The call that went red, as its own cell: a profile asked with no request (`InputConfig()`, no dtype) plans at
+    float32's 4 bytes."""
     from neurobrix.core.prism import InputConfig
-    assert get_dtype_bytes_per_element(InputConfig().dtype) == 4
+    from neurobrix.core.prism.profiler import ActivationProfiler
+    from tests.unit.prism.test_profile_says_which_request_it_is_about import _graph
+    assert InputConfig().dtype is None
+    g = _graph(3, 1)
+    at_none = ActivationProfiler(g).estimate_peak_memory()
+    at_fp32 = ActivationProfiler(g).estimate_peak_memory(dtype_bytes=4)
+    assert at_none.peak_bytes == at_fp32.peak_bytes > 0
 
 
 # ─────────── the granularity that let complex64 through ───────────
@@ -168,4 +179,4 @@ def test_every_TENSOR_dtype_in_this_cache_resolves():
 def test_the_complex_widths_are_the_real_ones(name, width):
     """complex64 is two fp32, complex128 two fp64. Pinned because the old default sized
     both at 4 bytes, which under-counts a complex128 activation by four times."""
-    assert get_dtype_bytes_per_element(name) == width
+    assert itemsize(name) == width

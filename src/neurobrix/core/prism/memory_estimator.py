@@ -135,8 +135,8 @@ def _bytes_of(dtype, role: str) -> int:
 
     These two functions used to default a miss — source to 2 and target to 4 — so any
     name the map does not carry returned a factor of 2.0 for EVERY pair, identity
-    included: `compute_dtype_factor("bf16", "bf16")` was 2.0, and
-    `get_dtype_bytes_per_element("fp16")` was 4. A plan then reports exactly twice the
+    included: `compute_dtype_factor("bf16", "bf16")` was 2.0, and a dtype's width
+    (`get_dtype_bytes_per_element("fp16")`, since deleted for `itemsize`) was 4. A plan then reports exactly twice the
     memory it needs, which reads as a real figure and cannot be told from one.
 
     That default cost two machines hours on Flex.1-alpha's 2.000x (metal-first-light
@@ -158,7 +158,7 @@ def _bytes_of(dtype, role: str) -> int:
         return itemsize(dtype)
     except (ValueError, TypeError):
         raise ValueError(
-            f"compute_dtype_factor/get_dtype_bytes_per_element: unknown {role} dtype "
+            f"compute_dtype_factor: unknown {role} dtype "
             f"{dtype!r}.\n"
             f"  Known: {', '.join(known_dtypes())}.\n"
             f"  This used to default silently (source=2, target=4), which returns a "
@@ -184,11 +184,6 @@ def compute_dtype_factor(source_dtype: str, target_dtype: str) -> float:
     source_bytes = 2 if source_dtype is None else _bytes_of(source_dtype, "source")
     target_bytes = 4 if target_dtype is None else _bytes_of(target_dtype, "target")
     return target_bytes / source_bytes
-
-
-def get_dtype_bytes_per_element(dtype: str) -> int:
-    """Bytes per element for a dtype. REFUSES a name it does not know."""
-    return _bytes_of(dtype, "dtype")
 
 
 @dataclass

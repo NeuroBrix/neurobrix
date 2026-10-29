@@ -34,12 +34,9 @@ from nbxtensor.memory.allocator import DeviceAllocator as DA
 from nbxtensor.dtype.nbx_dtype import NBXDtype, dtype_size
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.shape import numel
+# every projection starts on the library's arena boundary (memory.layout)
+from nbxtensor.memory.layout import aligned as _aligned
 
-_ALIGN = 256   # every projection starts on a 256-byte boundary (the widest vector load of any backend)
-
-
-def _aligned(nbytes: int) -> int:
-    return -(-int(nbytes) // _ALIGN) * _ALIGN
 
 
 

@@ -9,6 +9,7 @@ Zero torch. Uses DeviceAllocator (hardware-agnostic: CUDA/ROCm).
 import gc
 
 from nbxtensor.memory.allocator import DeviceAllocator
+from nbxtensor.memory.layout import ARENA_ALIGNMENT, aligned
 from nbxtensor.memory.device_transfer import parse_device_idxs
 
 
@@ -56,7 +57,7 @@ class ComponentArena:
         arena.free()               # release entire block at once
     """
 
-    ALIGNMENT = 256  # GPU memory alignment (matches CUDA spec)
+    ALIGNMENT = ARENA_ALIGNMENT  # the library's one arena layout (memory.layout)
 
     def __init__(self, total_bytes: int, device_idx: int):
         # Initialize _base_ptr BEFORE the malloc call so __del__ is safe
@@ -119,7 +120,7 @@ class ComponentArena:
         return self._total
 
     def _align(self, n: int) -> int:
-        return (n + self.ALIGNMENT - 1) & ~(self.ALIGNMENT - 1)
+        return aligned(n, self.ALIGNMENT)
 
     def __del__(self):
         # Guard: __init__ may raise before _base_ptr is set (rare but
@@ -135,11 +136,11 @@ class HostPinnedArena:
     page-locking calls — about 40 % of a 447 s load (py-spy, V100 rack, 2026-10-27); one block costs one. Each
     weight holds the arena as its `base`, so the block is released when the last of them is."""
 
-    ALIGNMENT = 256
+    ALIGNMENT = ARENA_ALIGNMENT
 
     def __init__(self, total_bytes: int):
         self._base_ptr = 0
-        self._total = (int(total_bytes) + self.ALIGNMENT - 1) & ~(self.ALIGNMENT - 1)
+        self._total = aligned(total_bytes, self.ALIGNMENT)
         self._offset = 0
         if self._total:
             self._base_ptr = DeviceAllocator.malloc_host_pinned(self._total)
@@ -147,12 +148,12 @@ class HostPinnedArena:
     def alloc(self, nbytes: int) -> int:
         if nbytes == 0:
             return 0
-        aligned = (int(nbytes) + self.ALIGNMENT - 1) & ~(self.ALIGNMENT - 1)
-        if self._offset + aligned > self._total:
+        size = aligned(nbytes, self.ALIGNMENT)
+        if self._offset + size > self._total:
             raise RuntimeError(f"HostPinnedArena: {nbytes} bytes asked, {self._offset}/{self._total} used — the "
                                f"sizing pass and the load disagree on a host weight's bytes")
         ptr = self._base_ptr + self._offset
-        self._offset += aligned
+        self._offset += size
         return ptr
 
     @property

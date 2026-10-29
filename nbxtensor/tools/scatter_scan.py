@@ -54,6 +54,14 @@ NOT_SEMANTIC = {
     ("core/module/tiling_engine.py", "_detect_pixel_shuffle_broadcast_chains"): "graph pattern detection",
     ("triton/promotion.py", "_promote_int"): "symbolic seq_len promotion of trace constants (a graph pass)",
     ("triton/promotion.py", "_promote_int_value"): "symbolic seq_len promotion of trace constants (a graph pass)",
+    ("core/prism/solver.py", "_arena_over_allocation"): "Prism's decision on a fact of the library (the arena's "
+        "bytes, nbxtensor.memory.layout; the device's largest allocation, the profile) — COST.md section 2",
+    ("core/prism/solver.py", "_store_arena_over_allocation"): "Prism's decision on a fact of the library (an expert "
+        "store's dense arena, nbxtensor.memory.layout) — COST.md section 2",
+    ("core/prism/solver.py", "_arena_door"): "Prism's policy over a plan, reading the two facts above — COST.md "
+        "section 2",
+    ("core/prism/solver.py", "_arena_mb_of"): "reads the arena bytes the library laid out (ComponentMemory.arena_bytes) "
+        "and refuses where none was",
     ("triton/weight_loader.py", "_load_shard_into_arenas"): "the engine's loading policy over one shard (which weight on "
         "which device or the host, at which dtype, widened or not; DESIGN.md section 3: the engine keeps its loading "
         "policy); every read, conversion and placement is nbxtensor.io.safetensors",

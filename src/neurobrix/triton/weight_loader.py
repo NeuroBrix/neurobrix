@@ -29,6 +29,7 @@ from nbxtensor.dtype.itemsize import itemsize
 from nbxtensor.shape import numel
 from nbxtensor.memory.memory_pool import ComponentArena, HostPinnedArena
 from nbxtensor.io import safetensors as _sf
+from nbxtensor.memory.layout import aligned
 # The loader's worker count — one figure for every loader and for Prism's host estimate (torch-free).
 from neurobrix.core.workspace import io_workers, apply_host_mmap_threshold, apply_host_huge_pages
 # The absent-weight rule lives beside the container format it guards (torch-free), one rule for
@@ -263,8 +264,7 @@ def load_component_weights(
             if all_cpu_component:
                 if _BLOCK_RE.search(key):
                     cpu_weights.add(key)
-                    host_bytes += (_stored_bytes(info, compute_dtype) + HostPinnedArena.ALIGNMENT - 1) \
-                        & ~(HostPinnedArena.ALIGNMENT - 1)
+                    host_bytes += aligned(_stored_bytes(info, compute_dtype), HostPinnedArena.ALIGNMENT)
                     continue
                 # Non-block → GPU sizing continues below.
                 target_dev = device_idx
@@ -273,10 +273,8 @@ def load_component_weights(
             regular = _stored_bytes(info, compute_dtype)
             upcast = _stored_bytes(info, compute_dtype,
                                     upcast_fp16_to_fp32=True)
-            reg_aligned = (regular + ComponentArena.ALIGNMENT - 1) & ~(
-                ComponentArena.ALIGNMENT - 1)
-            up_aligned = (upcast + ComponentArena.ALIGNMENT - 1) & ~(
-                ComponentArena.ALIGNMENT - 1)
+            reg_aligned = aligned(regular, ComponentArena.ALIGNMENT)
+            up_aligned = aligned(upcast, ComponentArena.ALIGNMENT)
             dev_bytes_regular[target_dev] = (
                 dev_bytes_regular.get(target_dev, 0) + reg_aligned)
             dev_bytes_upcast[target_dev] = (

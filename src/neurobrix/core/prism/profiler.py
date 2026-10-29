@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Dict, List, Any, Optional, Union
 from dataclasses import dataclass
 
-from neurobrix.core.prism.memory_estimator import get_dtype_bytes_per_element
+from neurobrix.core.dtype import itemsize as _itemsize
 from neurobrix.core.runtime_values import MissingRuntimeValue
 from neurobrix.core.runtime import symexpr as _symexpr
 from neurobrix.core.runtime import liveness as _liveness
@@ -1078,7 +1078,8 @@ class ActivationProfiler:
             binding = "trace"
 
         if dtype_bytes is None:
-            dtype_bytes = get_dtype_bytes_per_element(input_config.dtype)
+            # a request that names no dtype plans at the widest, float32: over-estimating is the safe direction
+            dtype_bytes = _itemsize.itemsize(input_config.dtype or "float32")
 
         if binding == "trace":
             symbol_map = self.trace_symbol_map()
@@ -1686,7 +1687,7 @@ class ActivationProfiler:
         dtype = tensor_meta.get("dtype", None)
 
         if dtype:
-            dtype_bytes = get_dtype_bytes_per_element(dtype)
+            dtype_bytes = _itemsize.itemsize(dtype)
         else:
             dtype_bytes = default_dtype_bytes
 

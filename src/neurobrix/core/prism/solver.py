@@ -47,7 +47,7 @@ class PlanNotComputable(RuntimeError):
     """
 
 
-from neurobrix.core.prism.memory_estimator import compute_dtype_factor, get_dtype_bytes_per_element
+from neurobrix.core.prism.memory_estimator import compute_dtype_factor
 from neurobrix.core.config import get_prism_defaults
 from neurobrix.core.dtype import itemsize as _itemsize
 from neurobrix.core.config.system import PRISM_DEFAULTS
@@ -61,8 +61,8 @@ if TYPE_CHECKING:
 # DATACLASSES
 # =============================================================================
 
-def _consumed_weight_bytes(comp, dtype_mult: float):
-    """Bytes of the weights this component's graph actually reads, or None.
+def _consumed_weights(comp):
+    """[(name, stored bytes, shape, stored dtype)] of the weights the engines load for this component, or None.
 
     Two sources, both already in hand at plan time: the graph names which
     parameters ops consume, and `weights_index.json` gives each one's size.
@@ -83,7 +83,7 @@ def _consumed_weight_bytes(comp, dtype_mult: float):
     if not isinstance(tensors, dict) or not isinstance(ops, dict) or not order:
         return None
 
-    total = 0
+    entries = []
     seen = set()
     sizes = None
     if isinstance(index, dict):
@@ -100,7 +100,8 @@ def _consumed_weight_bytes(comp, dtype_mult: float):
                 continue
             seen.add(name)
             if sizes is not None and name in sizes:
-                total += int(sizes[name].get("size_bytes", 0))
+                meta = sizes[name]
+                entries.append((name, int(meta.get("size_bytes", 0)), meta.get("shape"), meta.get("dtype")))
             else:
                 # No index entry: compute from the graph's own shape/dtype.
                 n = 1
@@ -109,7 +110,8 @@ def _consumed_weight_bytes(comp, dtype_mult: float):
                     if not isinstance(d, int) or d < 0:
                         return None          # symbolic: cannot size honestly
                     n *= d
-                total += n * _itemsize.itemsize(t.get("dtype"))   # an unknown dtype is refused by name
+                entries.append((name, n * _itemsize.itemsize(t.get("dtype")),   # an unknown dtype is refused by name
+                                shape, t.get("dtype")))
     if not seen:
         return None
     # What the engines LOAD is the consumed set plus every non-block weight
@@ -123,8 +125,40 @@ def _consumed_weight_bytes(comp, dtype_mult: float):
             if name in seen or _BLOCK_RE.search(name):
                 continue
             seen.add(name)
-            total += int((meta or {}).get("size_bytes", 0))
-    return int(total * dtype_mult)
+            meta = meta or {}
+            entries.append((name, int(meta.get("size_bytes", 0)), meta.get("shape"), meta.get("dtype")))
+    return entries
+
+
+def _consumed_weight_bytes(comp, dtype_mult: float):
+    """Bytes of the weights this component's graph actually reads (`_consumed_weights`) at `dtype_mult` of their
+    stored bytes, or None."""
+    entries = _consumed_weights(comp)
+    if entries is None:
+        return None
+    return int(sum(e[1] for e in entries) * dtype_mult)
+
+
+def _held_weight_sizes(comp, compute_dtype, exclude=frozenset()) -> Optional[List[int]]:
+    """The bytes of each weight the Triton loader places on a device for this component (`_consumed_weights`), at the
+    dtype it holds it in under `compute_dtype` (`expert_files.held_dtype(..., "triton")`, its loader's one rule), or
+    None where `_consumed_weights` cannot say. `exclude`: weights that are not placed there (an expert store's routed
+    experts). The arena they take is the library's layout of these sizes (`nbxtensor.memory.layout.arena_layout`,
+    what `ComponentArena(total)` asks the device for). Triton engines only: it reads the Triton loader's rule."""
+    entries = _consumed_weights(comp)
+    if entries is None:
+        return None
+    from neurobrix.core.runtime.expert_files import held_dtype
+    from nbxtensor.memory.layout import tensor_nbytes
+    sizes = []
+    for name, _stored, shape, dtype in entries:
+        if name in exclude:
+            continue
+        if shape is None or dtype is None:
+            raise RuntimeError(f"ZERO FALLBACK: weight {name!r} states no shape or dtype; the bytes it is held in "
+                               f"cannot be read")
+        sizes.append(tensor_nbytes(shape, held_dtype(dtype, compute_dtype, "triton")))
+    return sizes
 
 
 def unified_device_bytes(plan, profile, peak_loaded_bytes: Optional[int] = None) -> int:
@@ -251,6 +285,12 @@ class ComponentMemory:
     activation_profiled: bool = False
     attention_per_block_bytes: int = 0
     attention_dominates: bool = False
+    #: the ONE arena the Triton loader allocates for the component held whole (the library's layout of
+    #: `_held_weight_sizes`), and the
+    #: dense part's when it is served as an expert store; None under the compiled engine (no arena) or where the
+    #: graph cannot say
+    arena_bytes: Optional[int] = None
+    dense_arena_bytes: Optional[int] = None
 
     @property
     def total_bytes(self) -> int:
@@ -1754,10 +1794,15 @@ class PrismSolver:
         cap = getattr(getattr(dev, "spec", None), "max_allocation_mb", None)
         return int(cap) if cap else None
 
-    def _arena_mb(self, container, comp_name: str, mem: "ComponentMemory", dev: "DeviceState") -> float:
-        """The arena `comp_name` asks held whole on `dev`: its weights at the device's cost for the
-        component's dtype — the weight part of `_whole_component_mb`, and nothing else."""
-        return mem.weight_mb * dev.get_cost_multiplier(self._get_component_dtype(container, comp_name))
+    @staticmethod
+    def _arena_mb_of(comp_name: str, mem: "ComponentMemory", field_name: str) -> float:
+        """The MB of the arena `mem` carries in `field_name` (the library's layout of `_held_weight_sizes`), or a
+        refusal naming the component: an arena bound is never judged from a figure nobody laid out."""
+        nbytes = getattr(mem, field_name, None)
+        if nbytes is None:
+            raise RuntimeError(f"ZERO FALLBACK: '{comp_name}' carries no {field_name}: its graph and weights index "
+                               f"do not say which weights the Triton loader places in its arena")
+        return nbytes / (1024 * 1024)
 
     def _arena_over_allocation(self, container, comp_name: str, mem: "ComponentMemory",
                                dev: "DeviceState") -> Optional[str]:
@@ -1765,7 +1810,7 @@ class PrismSolver:
         cap = self._max_allocation_mb(dev)
         if cap is None:
             return None
-        arena = self._arena_mb(container, comp_name, mem, dev)
+        arena = self._arena_mb_of(comp_name, mem, "arena_bytes")
         if arena <= cap:
             return None
         why = (f"'{comp_name}' held whole is one arena of {arena:,.0f} MB of weights, over the "
@@ -1797,9 +1842,10 @@ class PrismSolver:
         floor = self._expert_store_floor(comp_name, mem.weight_mb * mult, mult)
         if floor is None:
             return self._arena_over_allocation(container, comp_name, mem, dev)
-        if floor[0] <= cap:
+        dense = self._arena_mb_of(comp_name, mem, "dense_arena_bytes")
+        if dense <= cap:
             return None
-        why = (f"'{comp_name}' as an expert store loads its dense part as one arena of {floor[0]:,.0f} MB, "
+        why = (f"'{comp_name}' as an expert store loads its dense part as one arena of {dense:,.0f} MB, "
                f"over the {cap:,} MB {dev.device_string} grants in a single allocation (the profile's "
                f"max_allocation_mb)")
         self.__dict__.setdefault("_arena_declined", {})[comp_name] = why
@@ -3327,7 +3373,7 @@ class PrismSolver:
         from neurobrix.core.module.tiling_engine import OpLevelTilingPlan
         from neurobrix.core.prism.profiler import ActivationProfiler
         from neurobrix.core.prism.memory_estimator import (
-            get_dtype_bytes_per_element, estimate_op_workspace_bytes,
+            estimate_op_workspace_bytes,
         )
 
         result = {}
@@ -3338,7 +3384,7 @@ class PrismSolver:
         for dev in profile.devices:
             device_caps[dev.get_device_string()] = int(dev.memory_mb * 1024 * 1024)
 
-        dtype_bytes = get_dtype_bytes_per_element(target_dtype_str)
+        dtype_bytes = _itemsize.itemsize(target_dtype_str)
 
         for comp in components:
             if comp.graph is None:
@@ -4098,6 +4144,19 @@ class PrismSolver:
             if weight_bytes is None:
                 weight_bytes = sum(int(s * dtype_mult)
                                    for s in shard_sizes.get(comp.name, {}).values())
+            # The arena the Triton loader allocates for it whole, and for an expert store's dense part: the library's
+            # layout at the loader's held dtypes (COST.md section 2), never the weights times a multiplier.
+            arena_bytes = dense_arena_bytes = None
+            from neurobrix.core.prism.host_footprint import engine_of as _engine_of
+            if _engine_of(getattr(self, "_mode", "compiled")) == "triton":
+                from nbxtensor.memory.layout import arena_layout
+                _held = _held_weight_sizes(_executed, comp_dtype_str)
+                arena_bytes = None if _held is None else arena_layout(_held).total_bytes
+                _topo = self._expert_topology.get(comp.name)
+                if _topo is not None:
+                    _held = _held_weight_sizes(_executed, comp_dtype_str, exclude=frozenset(
+                        n for l in _topo.layers for n in l.expert_weight_names))
+                    dense_arena_bytes = None if _held is None else arena_layout(_held).total_bytes
 
             # Activation memory
             activation_bytes = 0
@@ -4111,7 +4170,7 @@ class PrismSolver:
             if comp.graph is not None:
                 try:
                     profiler = ActivationProfiler(comp.graph)
-                    dtype_bytes = get_dtype_bytes_per_element(comp_dtype_str)
+                    dtype_bytes = _itemsize.itemsize(comp_dtype_str)
                     # Tiling-aware budget: smallest GPU in the profile.
                     # When profile is None (legacy callers), this stays 0
                     # and the two-pass logic short-circuits to worst-case.
@@ -4362,6 +4421,8 @@ class PrismSolver:
                 activation_profiled=activation_profiled,
                 attention_per_block_bytes=attn_per_block,
                 attention_dominates=attn_dominates,
+                arena_bytes=arena_bytes,
+                dense_arena_bytes=dense_arena_bytes,
             )
 
         return result
@@ -4859,7 +4920,7 @@ class PrismSolver:
         num_blocks = manifest.get('components', {}).get('transformer', {}).get('blocks', 20)
         num_heads = max(1, channels * 2)
         batch = PRISM_DEFAULTS.get("default_batch_size", 2)
-        dtype_bytes = get_dtype_bytes_per_element(dtype_str)
+        dtype_bytes = _itemsize.itemsize(dtype_str)
         hidden_dim = channels * num_heads
 
         # Attention = seq² × heads × batch + QKV
@@ -6083,7 +6144,7 @@ class PrismSolver:
             declined[comp_name] = f"the request binds no frame count to its time symbol {decl['symbol']}"
             return None
         comp_dtype = self._run_dtype(comp_name)
-        dtype_bytes = get_dtype_bytes_per_element(comp_dtype)
+        dtype_bytes = _itemsize.itemsize(comp_dtype)
 
         # The carried states. Inside a chunk they are its graph's outputs and inputs: the runner HANDS the states
         # and the chunk to the run that reads them, which frees each at its last use (`GraphExecutor.
@@ -6246,8 +6307,7 @@ class PrismSolver:
             cut[axis] = min(int(n), int(have)) if isinstance(have, int) else int(n)
         tic = dataclasses.replace(ic, cut_extents=cut)
         comp_dtype = self._run_dtype(comp_name)
-        from neurobrix.core.prism.memory_estimator import get_dtype_bytes_per_element
-        dtype_bytes = get_dtype_bytes_per_element(comp_dtype)
+        dtype_bytes = _itemsize.itemsize(comp_dtype)
 
         def tensor_bytes(tid, binding):
             n = 1
@@ -8297,12 +8357,11 @@ class PrismSolver:
         runtime holds (`_compute_memory` keeps the same profile for the plan's memory) — under the widths the
         plan's own tiling view gives. Returns (bytes, the op the peak sits at)."""
         from neurobrix.core.prism.profiler import ActivationProfiler
-        from neurobrix.core.prism.memory_estimator import get_dtype_bytes_per_element
         from neurobrix.core.prism.runtime_widths import TilingView
         from neurobrix.core.prism.host_footprint import engine_of
         comp = next(c for c in (getattr(self, "_neural_components", None) or []) if c.name == comp_name)
         comp_dtype = (getattr(self, "_component_dtypes", None) or {}).get(comp_name) or self._target_dtype_str
-        dtype_bytes = get_dtype_bytes_per_element(comp_dtype)
+        dtype_bytes = _itemsize.itemsize(comp_dtype)
         profiler = ActivationProfiler(comp.graph)
         engine = engine_of(getattr(self, "_mode", "compiled"))
         fusion = {u for u, _c, _f in tplan.fusion_pairs}

@@ -55,4 +55,6 @@ Streams, events and synchronisation stay in `backend/` (not memory).
 - Behaviour unchanged: the same calls in the same order, the same error codes surfaced by name; the 5-model shas,
   the coverage and the suites are the proof, as for every M1/M2 commit.
 - The allocation strategies sit on the account: the pool inside it, the replay slab in front of it through the one
-  interceptor; the weight arena (a block outside the pool, `pooled=False`) is the next to move.
+  interceptor, the weight arenas (`memory_pool.ComponentArena`, a block outside the pool, `pooled=False`; the
+  page-locked `HostPinnedArena`; an expert store's slot arena) on it, every one laid out by `memory/layout.py` — the
+  figure Prism prices an arena at (M3).

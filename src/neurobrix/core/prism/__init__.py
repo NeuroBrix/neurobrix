@@ -54,7 +54,6 @@ from .profiler import (
 from .memory_estimator import (
     compute_tensor_bytes,
     compute_dtype_factor,
-    get_dtype_bytes_per_element,
     MemoryBreakdown,
 )
 
@@ -119,6 +118,5 @@ __all__ = [
     # Memory Estimator
     "compute_tensor_bytes",
     "compute_dtype_factor",
-    "get_dtype_bytes_per_element",
     "MemoryBreakdown",
 ]
