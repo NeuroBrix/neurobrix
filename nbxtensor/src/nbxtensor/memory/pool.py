@@ -210,16 +210,19 @@ class Simulation:
 
 def simulate(events: Iterable[Tuple[str, object, int]], parked_cap: int = 0, align: int = POOL_ALIGN,
              split_min: int = POOL_SPLIT_MIN, pooled: bool = True) -> Simulation:
-    """Replay `events` — ("alloc", key, nbytes) and ("free", key, 0), `key` any hashable naming one allocation — through
-    the allocator's own pool (`SegmentPool`) and its own order: a request is served from the pool first; on a miss
-    the pool's wholly free segments return to the driver before the device grows by the request; a freed block parks,
-    and wholly free segments beyond `parked_cap` (0: unbounded) return to the driver. `pooled=False`: the pool is off
-    (`NBX_ALLOC_POOL=0`), every free returns to the driver. One device; the driver is a byte counter."""
+    """Replay `events` — ("alloc", key, nbytes), ("arena", key, nbytes) and ("free", key, 0), `key` any hashable naming
+    one allocation — through the allocator's own pool (`SegmentPool`) and its own order: a request is served from the
+    pool first; on a miss the pool's wholly free segments return to the driver before the device grows by the request;
+    a freed block parks, and wholly free segments beyond `parked_cap` (0: unbounded) return to the driver. An "arena"
+    is a block outside the pool (`malloc_cuda(pooled=False)`, a weight arena): straight from the driver (no flush before
+    it), back to it whole when freed. `pooled=False`: the pool is off (`NBX_ALLOC_POOL=0`), every free returns to the driver. One device; the
+    driver is a byte counter."""
     pool = SegmentPool(align, split_min)
     held = live = peak = peak_live = parked = 0
     next_ptr = 1 << 40
     where: Dict[object, Tuple[int, int]] = {}         # key -> (ptr, requested bytes)
     seg_bytes: Dict[int, int] = {}
+    arenas: set = set()                                # the ptrs of blocks outside the pool
 
     def to_driver(dev: int, ptr: int) -> int:
         nonlocal held
@@ -228,6 +231,20 @@ def simulate(events: Iterable[Tuple[str, object, int]], parked_cap: int = 0, ali
         return n
 
     for kind, key, nbytes in events:
+        if kind == "arena":
+            n = int(nbytes)
+            if n == 0:
+                continue
+            ptr = next_ptr                       # the allocator's order: no flush for a block outside the pool
+            next_ptr += -(-n // align) * align + align
+            seg_bytes[ptr] = n
+            arenas.add(ptr)
+            held += n
+            where[key] = (ptr, n)
+            live += n
+            peak = max(peak, held)
+            peak_live = max(peak_live, live)
+            continue
         if kind == "alloc":
             n = int(nbytes)
             if n == 0:
@@ -253,7 +270,10 @@ def simulate(events: Iterable[Tuple[str, object, int]], parked_cap: int = 0, ali
                 continue
             ptr, n = where.pop(key)
             live -= n
-            if pooled:
+            if ptr in arenas:
+                arenas.discard(ptr)
+                held -= seg_bytes.pop(ptr)
+            elif pooled:
                 cached = pool.park(0, pool.release(ptr))
                 parked = max(parked, cached)
                 if parked_cap and cached > parked_cap:

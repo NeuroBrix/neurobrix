@@ -102,8 +102,8 @@ def test_live_blocks_never_overlap_under_random_traffic(rt):
 def test_the_simulation_holds_what_the_allocator_holds(rt, monkeypatch, cap_mb):
     """`memory.pool.simulate` — the pricing replay of an allocation sequence (M3) — runs the allocator's own pool:
     on random traffic, the bytes it holds from the driver at their peak are the bytes the allocator held from this
-    fake driver, to the byte, with the parked cap unbounded and bounded. What it would do if the two ran different
-    rules: differ (red)."""
+    fake driver, to the byte, with the parked cap unbounded and bounded, weight arenas outside the pool among them. What
+    it would do if the two ran different rules: differ (red)."""
     from nbxtensor.memory.pool import simulate
     monkeypatch.setattr(DA, "_pool_cap_bytes", {0: cap_mb * MB})
     held_peak = [0]
@@ -124,8 +124,9 @@ def test_the_simulation_holds_what_the_allocator_holds(rt, monkeypatch, cap_mb):
             events.append(("free", k, 0))
         else:
             n = rng.choice([512, 4096, MB, 3 * MB, 5 * MB + 7, 17 * MB])
-            live[i] = DA.malloc_cuda(n)
-            events.append(("alloc", i, n))
+            arena = rng.random() < 0.1                  # a block outside the pool: a weight arena
+            live[i] = DA.malloc_cuda(n, pooled=not arena)
+            events.append(("arena" if arena else "alloc", i, n))
     sim = simulate(events, parked_cap=cap_mb * MB)
     assert sim.peak_bytes == held_peak[0], (sim, held_peak[0])
     assert sim.peak_live_bytes <= sim.peak_bytes

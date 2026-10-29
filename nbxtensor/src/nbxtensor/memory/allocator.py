@@ -92,11 +92,13 @@ def _rel_site(fname: str) -> str:
     return fname
 
 
-def _record_malloc_site(ptr: int, nbytes: int, dev: int) -> None:
+def _record_malloc_site(ptr: int, nbytes: int, dev: int, pooled: bool = True) -> None:
+    """One allocation of the trace: kind "M" for a pooled block, "A" for one outside the pool (a weight arena, handed back
+    to the driver whole) — the two the pool's replay (`memory.pool.simulate`) treats apart."""
     eid = _MALLOC_TRACE_COUNTER[0]
     _MALLOC_TRACE_COUNTER[0] = eid + 1
     site = _extract_neurobrix_site()
-    _MALLOC_TRACE_EVENTS.append((eid, "M", ptr, nbytes, site))
+    _MALLOC_TRACE_EVENTS.append((eid, "M" if pooled else "A", ptr, nbytes, site))
 
 
 def _extract_neurobrix_chain(max_frames: int = 40, keep: int = 8) -> str:
@@ -850,7 +852,7 @@ class DeviceAllocator:
                 if live > _p:
                     _win[_t] = live
         if _MALLOC_TRACE_FILE is not None:
-            _record_malloc_site(p, nbytes, dev)
+            _record_malloc_site(p, nbytes, dev, pooled=DeviceAllocator._pool_enabled and pooled)
         return p
 
     @staticmethod
