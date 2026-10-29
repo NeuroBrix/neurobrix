@@ -28,8 +28,8 @@ sys.path.insert(0, "src")
 
 import numpy as np
 import triton
-from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator
-from neurobrix.kernels import wrappers as W
+from nbxtensor.tensor import NBXTensor, DeviceAllocator
+from nbxtensor.ops import wrappers as W
 from neurobrix.kernels.ops import embedding as emb_mod, index_select as isel_mod, index_put_op as iput_mod
 
 
