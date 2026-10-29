@@ -26,8 +26,10 @@ from neurobrix.core.prism import solver as S
 
 @pytest.fixture
 def unified_profile():
-    from neurobrix.core.prism.loader import load_profile
-    p = load_profile("default-9f169c79")          # this machine: 1 x Apple M4 Pro, unified
+    # the Mac's profile as the scenario pins it (1 x Apple M4 Pro, unified), loaded by the engine's own loader: the
+    # machine-local id default-9f169c79 exists only on the Mac, and the cells errored everywhere else (2026-10-29)
+    from tests.unit.prism._pinned_machine import APPLE_M4_PRO, profile
+    p = profile(APPLE_M4_PRO)
     assert any(d.has_unified_memory for d in p.devices), "fixture needs a unified device"
     return p
 
@@ -36,7 +38,7 @@ def _capacities(profile):
     return [d.capacity_mb for d in S.PrismSolver()._prepare_devices(profile)]
 
 
-def test_outside_a_census_the_plan_is_sized_by_the_pool_s_facts_not_the_moment_s_reading(needs_device, monkeypatch, unified_profile):
+def test_outside_a_census_the_plan_is_sized_by_the_pool_s_facts_not_the_moment_s_reading(monkeypatch, unified_profile):
     """The 2026-09-10 lowering moved to the execution door (the owner, 2026-10-25 15:16): a real run's plan is sized
     by the pool's facts and is reproducible from one run to the next; the moment's free memory is read by
     `memory_budget.execution_door`, which re-plans a busy machine. What this test would do if the plan still read the
@@ -49,7 +51,7 @@ def test_outside_a_census_the_plan_is_sized_by_the_pool_s_facts_not_the_moment_s
     assert busy == idle, f"a real run's plan moved with the moment's free memory: {busy} vs {idle}"
 
 
-def test_under_the_census_shadow_the_room_does_not_move_the_plan(needs_device, monkeypatch, unified_profile):
+def test_under_the_census_shadow_the_room_does_not_move_the_plan(monkeypatch, unified_profile):
     monkeypatch.setattr(S, "memory_state", lambda: _Reading(measured=True, available_mb=3000.0))
     monkeypatch.setattr(S, "_census_shadow_active", lambda: True, raising=False)
     got = _capacities(unified_profile)
