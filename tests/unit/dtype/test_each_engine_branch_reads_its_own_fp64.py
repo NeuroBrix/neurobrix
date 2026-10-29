@@ -196,7 +196,7 @@ def test_the_triton_engine_stores_every_enum_member_the_table_carries(stores_fp6
 @pytest.mark.parametrize("stores_fp64", [True, False])
 def test_every_triton_site_asks_its_engine(stores_fp64):
     from neurobrix.core.prism.runtime_widths import conservative_contract, runtime_dtypes
-    from neurobrix.triton.dtype import constant_load_dtype
+    from nbxtensor.dtype.operands import constant_load_dtype
     from neurobrix.triton.sequence import TritonSequence
     from neurobrix.triton.sequential import TritonSequentialDispatcher
     wide = {"float64": "float64" if stores_fp64 else "float32",

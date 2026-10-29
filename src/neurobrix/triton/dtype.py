@@ -17,6 +17,7 @@ from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.promotion import promoted as _promoted
 from nbxtensor.dtype import itemsize as _itemsize
 from nbxtensor.dtype.operands import attention_operand_alignment, contraction_accumulator_dtype  # the library's rules
+from nbxtensor.dtype.convert import saturate_scalar  # noqa: F401 — the library's rule, used below
 
 
 # ============================================================================
@@ -136,19 +137,12 @@ AMP_SCALAR_FILL_OPS: FrozenSet[str] = frozenset({
     "masked_fill", "masked_fill_", "fill", "fill_", "index_fill", "index_fill_",
 })
 AMP_CREATION_FILL_OPS: FrozenSet[str] = frozenset({"full", "new_full", "full_like"})
-_HALF_MAX = {NBXDtype.float16: 65504.0, NBXDtype.bfloat16: 3.3895313892515355e38}
-
-
-def saturate_scalar(value, dtype):
-    """A Python number clamped to the finite range of a half `dtype`; anything else unchanged
-    (a bool, a non-half dtype, a NaN, an infinity the graph wrote on purpose)."""
-    top = _HALF_MAX.get(dtype)
-    if top is None or isinstance(value, bool) or not isinstance(value, (int, float)):
-        return value
-    v = float(value)
-    if v != v or v in (float("inf"), float("-inf")):
-        return value
-    return max(-top, min(top, v))
+def _is_half(dtype) -> bool:
+    """A half floating dtype (the dtype table: floating, two bytes) — what `saturate_scalar` clamps to."""
+    if dtype is None:
+        return False
+    name = _itemsize.canonical_name(dtype)
+    return _itemsize.kind(name) == "float" and _itemsize.itemsize(name) == 2
 
 
 def _saturated_one_element(t, out_dt):
@@ -380,18 +374,6 @@ def profile_attention_operand_alignment(profile) -> Optional[str]:
                          f"answer, so a mixed profile is refused rather than decided by its "
                          f"first device")
     return next(iter(answers.values()))
-
-
-def constant_load_dtype(traced: str, compute: str, stores_fp64: bool) -> str:
-    """The dtype (a name) an embedded graph constant is bound in by the Triton engines
-    (`GraphExecutor._load_constant_triton`): a bfloat16 constant is decoded to the compute dtype
-    when that is half (fp16 bits from bf16 on hardware computing fp16, the bf16 bits kept under
-    bf16), to float32 otherwise; float64 / complex128 are held as the branch holds them
-    (`storage_dtype`); every other dtype is kept as traced. The loader and Prism's width
-    pass both ask it."""
-    if traced == "bfloat16":
-        return compute if compute in ("float16", "bfloat16") else "float32"
-    return storage_dtype(traced, stores_fp64)
 
 
 def graph_dtype_name(graph_dtype) -> Optional[str]:
@@ -759,7 +741,7 @@ class TritonDtypeEngine:
         tensor it fills, as the ATen branch does (AMP_SCALAR_FILL_OPS)."""
         def fill_func(*args, **kwargs):
             target = next((_get_nbx_dtype(a) for a in args if _is_float_tensor(a)), None)
-            if target not in _HALF_MAX:
+            if not _is_half(target):
                 return func(*args, **kwargs)
             args = tuple(saturate_scalar(a, target) if not hasattr(a, "data_ptr") else a for a in args)
             kwargs = {k: (saturate_scalar(v, target) if not hasattr(v, "data_ptr") else v) for k, v in kwargs.items()}
@@ -777,7 +759,7 @@ class TritonDtypeEngine:
                 target = next((a for a in args if isinstance(a, NBXDtype)), None)
             if target is None:
                 target = next((_get_nbx_dtype(a) for a in args if _is_float_tensor(a)), None)
-            if target not in _HALF_MAX:
+            if not _is_half(target):
                 return func(*args, **kwargs)
             args = tuple(saturate_scalar(a, target) if isinstance(a, float) else a for a in args)
             if isinstance(kwargs.get("fill_value"), float):
@@ -792,7 +774,7 @@ class TritonDtypeEngine:
         before the kernel writes it (a mask sentinel, read on the host: one element, once)."""
         def where_func(cond, x, y, *rest, **kwargs):
             out_dt = _get_nbx_dtype(x) if _is_float_tensor(x) else None
-            if out_dt in _HALF_MAX:
+            if _is_half(out_dt):
                 x, y = (_saturated_one_element(t, out_dt) for t in (x, y))
             return func(cond, x, y, *rest, **kwargs)
         return where_func

@@ -104,7 +104,10 @@ ATTENTION_OPERAND_ALIGNMENTS = ("narrowest", "widest")
 def attention_operand_alignment(profile: dict) -> str       # a device's precision.attention_operands, refused if absent
 def attention_operand_dtypes(q, k, v, alignment, q_round=None) -> tuple   # (q, k, v, q_round) the attention runs at
 def matrix_unit_split_scale(unit: dict) -> tuple            # (hi_exp, lo_shift) of the split representation
+def constant_load_dtype(traced: str, compute: str, stores_fp64: bool) -> str   # the dtype a graph constant is bound in
 ```
+
+`nbxtensor.dtype.convert.saturate_scalar(value, dtype)`: a Python number clamped to a half float's finite range (the table's `max`); anything else unchanged.
 
 ### `nbxtensor.dtype.policy` — precision by policy (DESIGN rule 12)
 

@@ -11,7 +11,7 @@ from nbxtensor.dtype import itemsize as _itemsize
 
 __all__ = ["contraction_accumulator_dtype", "contraction_accumulator_bytes", "matrix_unit_representation",
            "matrix_unit_flash_representation", "ATTENTION_OPERAND_ALIGNMENTS", "attention_operand_alignment",
-           "attention_operand_dtypes", "matrix_unit_split_scale"]
+           "attention_operand_dtypes", "matrix_unit_split_scale", "constant_load_dtype"]
 
 
 def contraction_accumulator_dtype(dtype: str) -> str:
@@ -144,3 +144,15 @@ def matrix_unit_split_scale(unit: dict) -> tuple:
     import numpy as np
     fi = np.finfo(np.dtype(unit["operand_dtype"]))
     return int(fi.maxexp) - 2, int(fi.nmant) + 1
+
+
+def constant_load_dtype(traced: str, compute: str, stores_fp64: bool) -> str:
+    """The dtype (a name) an embedded graph constant is bound in by the Triton engines
+    (`GraphExecutor._load_constant_triton`): a bfloat16 constant is decoded to the compute dtype
+    when that is half (fp16 bits from bf16 on hardware computing fp16, the bf16 bits kept under
+    bf16), to float32 otherwise; float64 / complex128 are held as the branch holds them
+    (`dtype.itemsize.storage_dtype`); every other dtype is kept as traced. The loader and Prism's width
+    pass both ask it."""
+    if traced == "bfloat16":
+        return compute if compute in ("float16", "bfloat16") else "float32"
+    return _itemsize.storage_dtype(traced, stores_fp64)

@@ -14,7 +14,7 @@ from typing import Optional
 
 import numpy as np
 
-__all__ = ["f32_to_bf16_bits", "bf16_bits_to_f32", "bf16_bits_to_f16", "bf16_bits", "bf16_abs_max"]
+__all__ = ["f32_to_bf16_bits", "bf16_bits_to_f32", "bf16_bits_to_f16", "bf16_bits", "bf16_abs_max", "saturate_scalar"]
 
 # The quiet NaN every NaN becomes, sign dropped: PyTorch's `round_to_nearest_even`
 # (torch/headeronly/util/BFloat16.h: `if (std::isnan(src)) return UINT16_C(0x7FC0);`).
@@ -87,3 +87,21 @@ def bf16_abs_max(bits: np.ndarray) -> float:
         if v.size:
             top = max(top, float(v.max()))
     return top
+
+
+def saturate_scalar(value, dtype):
+    """A Python number clamped to the finite range of a half floating `dtype` (a name or an enum member; the range is
+    the dtype table's `max`), anything else unchanged: a bool, a non-number, a dtype wider than two bytes or not
+    floating, a NaN, an infinity the graph wrote on purpose. A mask sentinel written for one half format then holds in
+    the other (bfloat16's -3.39e38 becomes float16's -65504)."""
+    from nbxtensor.dtype.itemsize import canonical_name, finite_max, itemsize, kind
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return value
+    name = canonical_name(dtype)
+    if kind(name) != "float" or itemsize(name) != 2:
+        return value
+    v = float(value)
+    if v != v or v in (float("inf"), float("-inf")):
+        return value
+    top = finite_max(name)
+    return max(-top, min(top, v))

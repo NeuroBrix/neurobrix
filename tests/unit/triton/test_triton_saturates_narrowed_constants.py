@@ -14,7 +14,8 @@ import pytest
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.memory.allocator import DeviceAllocator
-from neurobrix.triton.dtype import TritonDtypeEngine, saturate_scalar
+from neurobrix.triton.dtype import TritonDtypeEngine
+from nbxtensor.dtype.convert import saturate_scalar
 
 F32_MIN = float(np.finfo(np.float32).min)          # -3.4028234663852886e38
 BF16_MAX = 3.3895313892515355e38

@@ -153,7 +153,7 @@ def test_an_embedded_constant_is_bound_by_the_loaders_rule():
     the width pass's: a bf16 constant decodes to the half compute dtype (canary's positional table,
     fp16 in the walk), an fp32 one stays fp32 (swin2SR's coordinates table). Injection: every
     constant cast to the compute dtype -> the fp32 case, RED."""
-    from neurobrix.triton.dtype import constant_load_dtype
+    from nbxtensor.dtype.operands import constant_load_dtype
     assert constant_load_dtype("bfloat16", "float16", False) == "float16"
     assert constant_load_dtype("bfloat16", "bfloat16", False) == "bfloat16"
     assert constant_load_dtype("bfloat16", "float32", False) == "float32"

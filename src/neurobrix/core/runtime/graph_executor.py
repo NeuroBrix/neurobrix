@@ -3048,7 +3048,7 @@ class GraphExecutor:
         # fp64/complex128 _to_copy an identity, avoiding a fragile complex128→complex64 kernel
         # cast. e.g. the Wan rotary-embedding freqs constant (complex128 [seq, head_dim/2]).
         if arr.dtype.kind in "fc":
-            from neurobrix.triton.dtype import constant_load_dtype
+            from nbxtensor.dtype.operands import constant_load_dtype
             held = constant_load_dtype(arr.dtype.name, self.dtype, self._triton_stores_fp64())
             if held != arr.dtype.name:
                 arr = arr.astype(np.dtype(held))

@@ -656,7 +656,8 @@ class _TritonRules(_Rules):
             # GraphExecutor._load_constant_triton): its traced dtype, a bf16 one decoded to the
             # half compute dtype — swin2SR's fp32 coordinates table stayed fp32, canary's bf16
             # positional table became fp16 (the census walk).
-            return _tdt.constant_load_dtype(traced, self.c, self.stores_fp64)
+            from nbxtensor.dtype.operands import constant_load_dtype
+            return constant_load_dtype(traced, self.c, self.stores_fp64)
         # The Triton loader's rule for every weight of a shard (`stored_dtype_in_compute`): a half
         # weight follows the compute half, fp32 is narrowed under a half compute, anything else
         # (an fp16 weight under an fp32 plan) keeps its stored dtype.
