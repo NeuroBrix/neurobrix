@@ -49,10 +49,15 @@ def container_root(model: str) -> Path:
 # Each is the profile as it was generated on the machine the scenario was measured on, reduced to
 # the fields the loader reads. Named by what they are, not by a machine-local id.
 
-APPLE_M4_PRO = {        # the Mac's `default-9f169c79`, 2026-09-24
+APPLE_M4_PRO = {        # the Mac's `default-9f169c79`, 2026-09-24; its engine base as remeasured 2026-10-29 01:47
     "id": "scenario-apple-m4-pro-18g", "vendor": "apple", "preferred_dtype": "bfloat16",
     "cpu": {"model": "Apple M4 Pro", "cores": 12, "threads": 12, "ram_mb": 24576,
-            "architecture": "arm64", "features": []},
+            "architecture": "arm64", "features": [],
+            # what the engine's device work adds to a process that has planned, measured on the Mac by
+            # autodetect._measure_runtime_base_mb (its default-9f169c79 regenerated 2026-10-29 01:47, the Mac 21:32):
+            # without it the replica priced the base at 0 and admitted Janus-Pro-7B whole at 16 732 MB free, where
+            # the Mac's own door, 254 MB dearer, streamed (2026-10-29 21:22)
+            "runtime_base_mb": {"compiled": 184, "triton": 254}},
     "devices": [{"index": 0, "brand": "apple", "model": "Apple M4 Pro", "memory_mb": 18186,
                  "compute_capability": "0.0", "supports_dtypes": ["float32", "float16", "bfloat16"],
                  "architecture": "apple_silicon", "pcie_version": "N/A", "unified_memory": True,

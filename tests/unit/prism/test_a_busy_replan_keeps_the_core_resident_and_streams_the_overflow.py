@@ -14,21 +14,37 @@ from tests.unit.prism.test_a_component_over_the_rung_streams_inside_itself impor
 
 
 def test_janus_triton_on_a_busy_mac_holds_its_language_model_and_streams_only_the_overflow(monkeypatch):
+    """The Mac's busy reading measured 2026-10-29 21:22 (14 687 MB free, the Windows VM up then closed, 2 641 MB taken):
+    its real door said "the fast plan single_gpu (~825 s) lacks 2,282 MB of the 14687 MB free now; running
+    layer_streaming instead (~1,762 s)" — this replica, with the Mac's measured engine base, says the same to the MB.
+    (Pinned at 16 732 MB until then: since 164e89dc a lazy unified plan's load is priced beside its weights, and at
+    16 732 the fastest plan that fits is lazy_sequential — the cell below.)"""
     no_door(monkeypatch)
-    pin_host(monkeypatch, 24576, 16732, "the Mac with 677 MB taken by other applications")
+    pin_host(monkeypatch, 24576, 14687, "the Mac with 2 641 MB taken by other applications (measured 2026-10-29)")
     p, s = _plan("Janus-Pro-7B", "triton")
     assert p.strategy == "layer_streaming", p.strategy
     held = (p.layer_stream_resident or {}).get("language_model")
     assert held, ("no piece of the language model is held between tokens", p.layer_stream_plan)
     part = s._layer_stream_partitions["language_model"]
     streamed = sum(seg.weight_bytes for i, seg in enumerate(part.segments) if i not in set(held))
-    assert streamed < 0.25 * part.total_weight_bytes, (streamed / 2**20, part.total_weight_bytes / 2**20)
-    # what is reloaded per token is priced: far under the all-streamed hour, still above the calm 41 s
-    # what is reloaded per token is priced: far under the all-streamed hour (3 648 s), above the calm plan; measured on
-    # Metal 2 146 s (verdicts/2026_10_28/s5_janus_triton_busy.md) — the loader-rate pricing (lot-2026-10-28) prices
-    # the loads at the measured rates, ~1 400 s here
+    # the core resident: most of the language model stays loaded between tokens and only the overflow is re-read
+    # (2 896 of 11 580 MB at this reading); RED as before when no piece is held (every token re-reads all of it)
+    assert len(held) > len(part.segments) // 2 and streamed < 0.5 * part.total_weight_bytes, (
+        len(held), len(part.segments), streamed / 2**20, part.total_weight_bytes / 2**20)
+    # what is reloaded per token is priced: far under the all-streamed hour (3 648 s), above the calm plan (41 s)
     assert p.estimated_s is not None and 41 < p.estimated_s < 2500, (p.estimated_s, p.selection_reason[:300])
-    assert p.device_window_mb <= 16732, p.device_window_mb
+    assert p.device_window_mb <= 14687, p.device_window_mb
+
+
+def test_janus_triton_where_the_lazy_load_fits_runs_lazy_not_streamed(monkeypatch):
+    """At 16 732 MB free (the Mac with 677 MB taken, 2026-10-27) single_gpu lacks 237 MB — the Mac's own door says the
+    same figure (2026-10-29 21:22) — and the fastest plan that fits is lazy_sequential, at single_gpu's estimate: no
+    piece streamed where the whole fits loaded on demand (rule 7, the fastest plan that fits)."""
+    no_door(monkeypatch)
+    pin_host(monkeypatch, 24576, 16732, "the Mac with 677 MB taken by other applications")
+    p, _ = _plan("Janus-Pro-7B", "triton")
+    assert p.strategy == "lazy_sequential", (p.strategy, p.selection_reason[:300])
+    assert "lacks 237 MB" in p.selection_reason, p.selection_reason[:300]
 
 
 def test_a_component_run_once_keeps_the_plain_cut(monkeypatch):
