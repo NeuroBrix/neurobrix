@@ -125,8 +125,12 @@ def test_bmm_exact_integer_valued(shape, dtype, hw_bf16):
     with _hw(hw_bf16):
         a = _int_valued((B, M, K), dtype, rng)
         b = _int_valued((B, K, N), dtype, rng)
-        got = _torch_of(_nbx_linalg_wrappers.bmm(a, b)).float()
-    ref = torch.matmul(_torch_of(a).float(), _torch_of(b).float())
+        out = _torch_of(_nbx_linalg_wrappers.bmm(a, b))
+    got = out.float()
+    # the exact integer sum (fp32 holds it), rounded ONCE to the dtype the kernel stores: on hardware that computes bf16
+    # natively a half GEMM stores half (the one precision contract, 2026-10-25 15:26, d4809a47) — the reference stayed
+    # the unrounded fp32 and the bf16 cells at M > 4 stood red from then (max|d| 1-2, bf16's spacing above 256)
+    ref = torch.matmul(_torch_of(a).float(), _torch_of(b).float()).to(out.dtype).float()
     assert got.shape == ref.shape
     assert torch.equal(got, ref), (
         f"bmm {shape} {dtype} hw_bf16={hw_bf16}: integer-valued result not "
