@@ -589,7 +589,8 @@ def matrix_unit(vendor_profile: Optional[dict] = None) -> dict:
     the kernel cannot lay out is refused by name: a declared capability is never silently left unused.
     `vendor_profile`: the profile to read (Prism, planning for a device that is not this process's); the
     profile in force when None (the wrappers)."""
-    mu = dict((active_vendor_profile() if vendor_profile is None else vendor_profile).get("matrix_unit") or {})
+    profile = active_vendor_profile() if vendor_profile is None else vendor_profile
+    mu = dict(profile.get("matrix_unit") or {})
     if not mu:
         return mu
     from nbxtensor.ops.mma_m8n8k4 import UNIT
@@ -606,7 +607,7 @@ def matrix_unit(vendor_profile: Optional[dict] = None) -> dict:
             if t < 16 or t % 16 or (t // 16) & (t // 16 - 1):
                 raise ValueError(f"hardware profile: matrix_unit.mm {f} {t} is not 16 x a power of two")
     split = mu.get("fp32_split") or {}
-    smem = (active_vendor_profile().get("memory") or {}).get("max_shared_memory_per_block")
+    smem = (profile.get("memory") or {}).get("max_shared_memory_per_block")     # the read profile's own budget
     from nbxtensor.ops.flash_attention_m8n8k4 import head_parts, staged_shared_bytes
     for sec, rows in (("flash", mu.get("flash") or []), ("fp32_split.flash", split.get("flash") or [])):
         for row in rows:
@@ -640,7 +641,7 @@ def matrix_unit(vendor_profile: Optional[dict] = None) -> dict:
         if bk < UNIT["k"] or bk & (bk - 1):
             raise ValueError(f"hardware profile: matrix_unit.fp32_split.flash block_k {bk} is not a power of two "
                              f">= {UNIT['k']} (the unit's k)")
-    layout = (active_vendor_profile().get("conv") or {}).get("weight_layout")
+    layout = (profile.get("conv") or {}).get("weight_layout")
     if layout not in (None, "KCRS"):
         # ops/conv2d_m8n8k4.py reads a filter as one contiguous (C, R, S) run (w.stride(0) alone): a weight the
         # loader relaid channels-innermost would be read in the wrong order. Refused here, where the two
