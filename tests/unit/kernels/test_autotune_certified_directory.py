@@ -53,7 +53,7 @@ def _entry(deviation=1.0e-5, tolerance=1.0e-4, **over):
 
 
 @pytest.fixture(autouse=True)
-def _one_16g_card():
+def _one_16g_card(monkeypatch):
     """The profile in force for these tests: one 16 GB card, the class the
     fixture entries were proven on. A heterogeneous rig would serve nothing to
     a launch that does not name its card — that case has its own file
@@ -66,6 +66,10 @@ def _one_16g_card():
                            "brand": "nvidia", "architecture": "volta"})()
     prof = type("Prof", (), {"devices": [dev], "has_native_bf16": False, "id": "auto-v100-16gb-16g"})()
     W.set_hardware_profile(prof)
+    # the card's memory, declared as the application does (NeuroBrix: `triton.dtype.declare_hardware_profile`) — the
+    # store serves an entry only to the memory a launch executes on, and the library reads no profile for it
+    from nbxtensor.backend import device_facts as DF
+    monkeypatch.setattr(DF, "_DECLARED_MEMORY", {0: 16384 << 20})
     yield
     W._NBX_HW_PROFILE, W._NBX_HAS_NATIVE_BF16, _nbx_capabilities._BACKEND_HAS_FP64 = before
 

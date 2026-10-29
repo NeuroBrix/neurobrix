@@ -49,9 +49,11 @@ def test_a_proof_with_a_device_record_names_its_memory_class():
     assert C.proof_memory_gb(_proof(memory_mb=16160)) == 16
 
 
-def test_a_legacy_single_card_profile_name_is_read_as_its_class():
-    assert C.proof_memory_gb(_proof(hardware_profile="auto-v100-16gb-16g")) == 16
-    assert C.proof_memory_gb(_proof(hardware_profile="auto-v100-32gb-32g")) == 32
+def test_a_single_card_profile_name_alone_serves_no_card():
+    """The library reads no NeuroBrix profile name: a proof's memory is its device record (every committed proof
+    carries one, 2026-10-29); the name parse stays in the engine (`memory_class_from_profile_id`, tested below)."""
+    assert C.proof_memory_gb(_proof(hardware_profile="auto-v100-16gb-16g")) is None
+    assert C.proof_memory_gb(_proof(hardware_profile="auto-v100-32gb-32g")) is None
 
 
 def test_a_legacy_rig_profile_name_does_not_say_which_card_ran():
@@ -194,6 +196,8 @@ def two_class_rig(tmp_path, monkeypatch):
     d32 = type("Dev", (), {"index": 1, "name": "Tesla V100-SXM2-32GB", "memory_mb": 32768,
                            "brand": "nvidia", "architecture": "volta"})()
     W.set_hardware_profile(type("Prof", (), {"devices": [d16, d32], "has_native_bf16": False})())
+    from nbxtensor.backend import device_facts as DF
+    monkeypatch.setattr(DF, "_DECLARED_MEMORY", {0: 16384 << 20, 1: 32768 << 20})   # as the application declares them
     monkeypatch.setenv("NEUROBRIX_AUTOTUNE_CERTIFIED_DIR", str(tmp_path))
     monkeypatch.setattr(C, "active_profile", lambda: ("nvidia", "volta"))
     root = tmp_path / "nvidia" / "volta"; root.mkdir(parents=True)
