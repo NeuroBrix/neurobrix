@@ -711,7 +711,7 @@ class TilingEngine:
             pad_h = ts - actual_h
             pad_w = ts - actual_w
             if _is_nbx_tensor(input_tensor):
-                from nbxtensor.ops.wrappers import pad_wrapper
+                from nbxtensor.ops.shape_wrappers import pad_wrapper
                 tile = pad_wrapper(tile, [0, pad_w, 0, pad_h], mode='replicate')
             else:
                 import torch
@@ -792,7 +792,8 @@ def conv3d_chunked(input_tensor, weight, bias=None, stride=1, padding=0, dilatio
         from nbxtensor.tensor import NBXTensor
         if isinstance(input_tensor, NBXTensor):
             from nbxtensor.ops import wrappers as _w
-            return _w.conv3d_chunked_wrapper(input_tensor, weight, bias, stride, padding, dilation,
+            from nbxtensor.ops import conv_wrappers as _nbx_conv_wrappers  # the family the moved names live in (M2 split)
+            return _nbx_conv_wrappers.conv3d_chunked_wrapper(input_tensor, weight, bias, stride, padding, dilation,
                                              transposed, output_padding, groups)
     except ImportError:
         pass
@@ -1126,7 +1127,7 @@ class OpLevelTilingEngine:
         from nbxtensor.tensor import NBXTensor as _NBXT
 
         fn_name = OpLevelTilingEngine.INPLACE_SAFE_UNARY[op_type]
-        fn = getattr(_w, fn_name)
+        fn = _w.function(fn_name)
 
         def _inplace_unary(x, *args, **kwargs):
             # Bytes at the tensor's own width (torch and NBXTensor both answer
@@ -1631,7 +1632,7 @@ class OpLevelTilingEngine:
         if _os_iadd.environ.get("NBX_DISABLE_INPLACE_ADD", "0") == "1":
             self.plan.inplace_adds = []
         if self.plan.inplace_adds:
-            from nbxtensor.ops.wrappers import add_inplace_nbx
+            from nbxtensor.ops.elementwise_wrappers import add_inplace_nbx
             from nbxtensor.tensor import NBXTensor
 
             def make_inplace_add_interceptor(_reuse_index):
@@ -1757,7 +1758,7 @@ class OpLevelTilingEngine:
                 return _view_proxy
 
             def make_pixel_shuffle_proxy_interceptor():
-                from nbxtensor.ops.wrappers import pixel_shuffle_wrapper as nbx_pixel_shuffle
+                from nbxtensor.ops.shape_wrappers import pixel_shuffle_wrapper as nbx_pixel_shuffle
 
                 def _pixel_shuffle_proxy(input_tensor, upscale_factor,
                                          *_args, **_kwargs):
@@ -2203,7 +2204,7 @@ class OpLevelTilingEngine:
                             _other = args[1] if _ridx == 0 else args[0]
                             from nbxtensor.tensor import NBXTensor as _NBXT_ia
                             if isinstance(_target, _NBXT_ia):
-                                from nbxtensor.ops.wrappers import add_inplace_nbx
+                                from nbxtensor.ops.elementwise_wrappers import add_inplace_nbx
                                 value = add_inplace_nbx(
                                     _target, _other, alpha=float(alpha))
                             elif (is_torch_tensor(_target)

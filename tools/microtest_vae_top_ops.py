@@ -123,15 +123,15 @@ def run_microtest(uid: str, kind: str, extra_kw: dict, target_dev: str):
 
     # Invoke NBX wrapper + torch reference.
     if kind == "relu":
-        from nbxtensor.ops.wrappers import relu as nbx_relu
+        from nbxtensor.ops.elementwise_wrappers import relu as nbx_relu
         nbx_out = nbx_relu(x_nbx)
         ref_out = F.relu(x_torch)
     elif kind == "silu":
-        from nbxtensor.ops.wrappers import silu as nbx_silu
+        from nbxtensor.ops.elementwise_wrappers import silu as nbx_silu
         nbx_out = nbx_silu(x_nbx)
         ref_out = F.silu(x_torch)
     elif kind == "pixel_shuffle":
-        from nbxtensor.ops.wrappers import pixel_shuffle_wrapper
+        from nbxtensor.ops.shape_wrappers import pixel_shuffle_wrapper
         upscale = extra_kw.get("upscale_factor", 2)
         nbx_out = pixel_shuffle_wrapper(x_nbx, upscale)
         # Note: graph records NHWC-style (1, 1024, 1024, 1024). Torch's
@@ -141,7 +141,7 @@ def run_microtest(uid: str, kind: str, extra_kw: dict, target_dev: str):
         # NCHW means C=1024 H=1024 W=1024 — which is what we have.
         ref_out = F.pixel_shuffle(x_torch, upscale)
     elif kind == "conv2d":
-        from nbxtensor.ops.wrappers import conv2d_wrapper
+        from nbxtensor.ops.conv_wrappers import conv2d_wrapper
         # Need weight tensor too (shape from graph input_shapes[1]).
         w_shape = in_shapes[1]
         w_torch = to_torch_cuda(

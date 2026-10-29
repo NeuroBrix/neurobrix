@@ -54,6 +54,11 @@ except ModuleNotFoundError:  # script-mode under a pytest-less GPU venv
     pytest = _NoPytest()  # type: ignore[assignment]
 
 from nbxtensor.ops import wrappers as W
+from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
+from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
+from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
+from nbxtensor.ops import norm_wrappers as _nbx_norm_wrappers  # the family the moved names live in (M2 split)
+from nbxtensor.ops import reduction_wrappers as _nbx_reduction_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.tensor import NBXTensor
@@ -110,7 +115,7 @@ def test_mm_is_correct(M, K, N) -> None:
     rng = np.random.default_rng(M * 7 + K)
     a = (rng.standard_normal((M, K)) * 0.1).astype(np.float16)
     b = (rng.standard_normal((K, N)) * 0.1).astype(np.float16)
-    got = _d2h(W.mm(_t(a), _t(b)))
+    got = _d2h(_nbx_linalg_wrappers.mm(_t(a), _t(b)))
     ref = a.astype(np.float64) @ b.astype(np.float64)
     err = _rel(got, ref)
     assert err <= BOUND_MATMUL_FP16, (
@@ -125,7 +130,7 @@ def test_bmm_is_correct(B, M, K, N) -> None:
     rng = np.random.default_rng(B * 13 + K)
     a = (rng.standard_normal((B, M, K)) * 0.1).astype(np.float16)
     b = (rng.standard_normal((B, K, N)) * 0.1).astype(np.float16)
-    got = _d2h(W.bmm(_t(a), _t(b)))
+    got = _d2h(_nbx_linalg_wrappers.bmm(_t(a), _t(b)))
     ref = a.astype(np.float64) @ b.astype(np.float64)
     err = _rel(got, ref)
     assert err <= BOUND_MATMUL_FP16, (
@@ -137,8 +142,8 @@ def test_bmm_is_correct(B, M, K, N) -> None:
 # ======================================================================
 
 @pytest.mark.parametrize("fn,ref_fn,name", [
-    (lambda x: W.silu(x), lambda x: x / (1.0 + np.exp(-x)), "silu"),
-    (lambda x: W.gelu(x),
+    (lambda x: _nbx_elementwise_wrappers.silu(x), lambda x: x / (1.0 + np.exp(-x)), "silu"),
+    (lambda x: _nbx_elementwise_wrappers.gelu(x),
      lambda x: 0.5 * x * (1.0 + np.tanh(np.sqrt(2.0 / np.pi) * (x + 0.044715 * x ** 3))),
      "gelu-tanh"),
 ])
@@ -169,7 +174,7 @@ def test_softmax_is_correct(n) -> None:
         pytest.skip("no GPU")
     rng = np.random.default_rng(n)
     x = (rng.standard_normal((1, n)) * 3.0).astype(np.float16)
-    got = _d2h(W.softmax(_t(x), dim=-1))
+    got = _d2h(_nbx_attention_wrappers.softmax(_t(x), dim=-1))
     xd = x.astype(np.float64)
     e = np.exp(xd - xd.max(-1, keepdims=True))
     ref = e / e.sum(-1, keepdims=True)
@@ -186,7 +191,7 @@ def test_rms_norm_is_correct(n) -> None:
     x = (rng.standard_normal((1, n)) * 1.5).astype(np.float16)
     w = (rng.standard_normal((n,)) * 0.5 + 1.0).astype(np.float16)
     eps = 1e-6
-    got = _d2h(W.rms_norm(_t(x), _t(w), eps=eps))
+    got = _d2h(_nbx_norm_wrappers.rms_norm(_t(x), _t(w), eps=eps))
     xd, wd = x.astype(np.float64), w.astype(np.float64)
     ref = xd / np.sqrt((xd ** 2).mean(-1, keepdims=True) + eps) * wd
     err = _rel(got, ref)
@@ -200,7 +205,7 @@ def test_cumsum_is_correct(n) -> None:
         pytest.skip("no GPU")
     rng = np.random.default_rng(n + 2)
     x = (rng.random((1, n)) * 0.01).astype(np.float32)
-    got = _d2h(W.cumsum_wrapper(_t(x), dim=-1))
+    got = _d2h(_nbx_reduction_wrappers.cumsum_wrapper(_t(x), dim=-1))
     ref = np.cumsum(x.astype(np.float64), axis=-1)
     err = _rel(got, ref)
     assert err <= BOUND_REDUCTION_FP16, (
@@ -213,7 +218,7 @@ def test_sum_is_correct(shape) -> None:
         pytest.skip("no GPU")
     rng = np.random.default_rng(shape[1])
     x = (rng.standard_normal(shape) * 0.5).astype(np.float16)
-    got = _d2h(W.sum_wrapper(_t(x), dim=-1))
+    got = _d2h(_nbx_reduction_wrappers.sum_wrapper(_t(x), dim=-1))
     ref = x.astype(np.float64).sum(-1)
     err = _rel(got, ref)
     assert err <= BOUND_REDUCTION_FP16, (
@@ -257,8 +262,8 @@ if __name__ == "__main__":  # script mode
         run(f"bmm {B}x{M}x{K}x{N}",
             lambda B=B, M=M, K=K, N=N: test_bmm_is_correct(B, M, K, N))
     print("=== elementwise ===")
-    for name, fn, rf in (("silu", lambda x: W.silu(x), lambda x: x / (1 + np.exp(-x))),
-                         ("gelu-tanh", lambda x: W.gelu(x),
+    for name, fn, rf in (("silu", lambda x: _nbx_elementwise_wrappers.silu(x), lambda x: x / (1 + np.exp(-x))),
+                         ("gelu-tanh", lambda x: _nbx_elementwise_wrappers.gelu(x),
                           lambda x: 0.5 * x * (1 + np.tanh(np.sqrt(2/np.pi) * (x + 0.044715 * x**3))))):
         for n in (1024, 4096):
             run(f"{name} n={n}",

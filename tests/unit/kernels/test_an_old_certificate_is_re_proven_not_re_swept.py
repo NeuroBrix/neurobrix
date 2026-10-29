@@ -35,11 +35,12 @@ def root(tmp_path, monkeypatch):
 def _matmul_key():
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
     from nbxtensor.ops.matmul import matmul_kernel
     rng = np.random.default_rng(7)
     a = (rng.standard_normal((96, 64)) * 0.1).astype(np.float16)
     b = (rng.standard_normal((64, 80)) * 0.1).astype(np.float16)
-    key = _recorded_key(matmul_kernel, lambda: W.mm(NBXTensor.from_numpy(a), NBXTensor.from_numpy(b)))
+    key = _recorded_key(matmul_kernel, lambda: _nbx_linalg_wrappers.mm(NBXTensor.from_numpy(a), NBXTensor.from_numpy(b)))
     matmul_kernel.cache.pop(key, None)
     return matmul_kernel, key
 

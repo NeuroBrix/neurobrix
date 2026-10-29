@@ -419,7 +419,7 @@ def _resolve_handler(op: str, wrappers):
     bare = op.lstrip("_")
     for candidate in (f"{op}_wrapper", op, f"{bare}_wrapper", bare,
                       f"{op}_forward", f"{bare}_forward", f"nbx_{op}"):
-        fn = getattr(wrappers, candidate, None)
+        fn = wrappers.function(candidate, None)
         if callable(fn):
             def handler(w, i, k, _fn=fn):
                 clean = {n: v for n, v in k.items() if not n.startswith("_")}

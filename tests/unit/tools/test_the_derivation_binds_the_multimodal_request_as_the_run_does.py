@@ -119,12 +119,13 @@ def test_baddbmm_is_keyed_as_its_wrapper_launches(tl_dot_gemms):
     batch1's dtype; the walk's key (64, 1024, 128, True, False, True, fp16, fp16, fp16, <bias>)."""
     from nbxtensor.ops import launch_keys as LK
     from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
     from nbxtensor.dtype.nbx_dtype import NBXDtype
     F16 = NBXDtype.float16
     assert LK.baddbmm_launches(64, 128, 1024, F16, F16, F16) == [
         (LK.BADDBMM, (64, 1024, 128, True, False, True, "fp16", "fp16", "fp16", "fp16"))]
     assert LK.baddbmm_launches(64, 128, 1024, F16, F16, NBXDtype.bool_)[0][1][-1] == "uint8"
-    src = textwrap.dedent(inspect.getsource(W.baddbmm_wrapper))
+    src = textwrap.dedent(inspect.getsource(_nbx_linalg_wrappers.baddbmm_wrapper))
     kw = {k.arg: k.value.value for n in ast.walk(ast.parse(src)) if isinstance(n, ast.Call)
           for k in n.keywords if k.arg in ("IEEE_PRECISION", "PROMOTE_B", "HAS_BIAS")
           and isinstance(k.value, ast.Constant)}

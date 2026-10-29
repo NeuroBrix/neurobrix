@@ -11,6 +11,7 @@ from typing import Dict, List, Optional
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.ops import wrappers as w
+from nbxtensor.ops import index_wrappers as _nbx_index_wrappers  # the family the moved names live in (M2 split)
 
 
 class TritonLMSession:
@@ -110,7 +111,7 @@ class TritonLMSession:
             embed_weight = self.executor.get_embed_tokens()
             if embed_weight is None:
                 raise RuntimeError("Graph expects inputs_embeds but no embedding weight found.")
-            inputs_embeds = w.embedding(embed_weight, input_ids)
+            inputs_embeds = _nbx_index_wrappers.embedding(embed_weight, input_ids)
             run_inputs = {"inputs_embeds": inputs_embeds}
             if "position_ids" in self.graph_inputs:
                 run_inputs["position_ids"] = position_ids
@@ -345,7 +346,7 @@ class TritonLMSession:
         embed_weight = self.executor.get_embed_tokens()
         if embed_weight is None:
             raise RuntimeError("No embedding weight found for embed lookup.")
-        return w.embedding(embed_weight, input_ids)
+        return _nbx_index_wrappers.embedding(embed_weight, input_ids)
 
     # ── decode branches (two contexts on one LM, see kv_cache.KVBranch) ──
     def branch_state(self):

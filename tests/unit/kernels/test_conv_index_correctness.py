@@ -53,6 +53,8 @@ except ModuleNotFoundError:  # script-mode under a pytest-less GPU venv
     pytest = _NoPytest()  # type: ignore[assignment]
 
 from nbxtensor.ops import wrappers as W
+from nbxtensor.ops import conv_wrappers as _nbx_conv_wrappers  # the family the moved names live in (M2 split)
+from nbxtensor.ops import index_wrappers as _nbx_index_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.tensor import NBXTensor
@@ -115,7 +117,7 @@ def test_conv2d_matches_float64(N, C, H, Wd, O, k, stride, pad) -> None:
     rng = np.random.default_rng(C * 100 + O)
     x = (rng.standard_normal((N, C, H, Wd)) * 0.5).astype(np.float16)
     w = (rng.standard_normal((O, C, k, k)) * 0.1).astype(np.float16)
-    got = _d2h(W.conv2d_wrapper(_t(x), _t(w), None,
+    got = _d2h(_nbx_conv_wrappers.conv2d_wrapper(_t(x), _t(w), None,
                                 stride=[stride, stride],
                                 padding=[pad, pad])).astype(np.float64)
     ref = _conv2d_float64(x, w, stride, pad)
@@ -140,7 +142,7 @@ def test_index_select_is_exact(rows, cols, picks) -> None:
     rng = np.random.default_rng(rows)
     x = rng.standard_normal((rows, cols)).astype(np.float32)
     idx = rng.integers(0, rows, size=picks).astype(np.int64)
-    got = _d2h(W.index_select_wrapper(_t(x), 0, _t(idx)))
+    got = _d2h(_nbx_index_wrappers.index_select_wrapper(_t(x), 0, _t(idx)))
     ref = x[idx].reshape(-1)
     assert np.array_equal(got, ref), (
         f"index_select rows={rows} picks={picks}: not exact "
@@ -154,7 +156,7 @@ def test_gather_is_exact(rows, cols) -> None:
     rng = np.random.default_rng(rows + cols)
     x = rng.standard_normal((rows, cols)).astype(np.float32)
     idx = rng.integers(0, cols, size=(rows, cols)).astype(np.int64)
-    got = _d2h(W.gather_wrapper(_t(x), 1, _t(idx)))
+    got = _d2h(_nbx_index_wrappers.gather_wrapper(_t(x), 1, _t(idx)))
     ref = np.take_along_axis(x, idx, axis=1).reshape(-1)
     assert np.array_equal(got, ref), (
         f"gather {rows}x{cols}: not exact "
@@ -171,7 +173,7 @@ def test_scatter_is_exact(rows, cols) -> None:
     # a permutation per row keeps the scatter one-to-one, so the
     # reference is unambiguous
     idx = np.stack([rng.permutation(cols) for _ in range(rows)]).astype(np.int64)
-    got = _d2h(W.scatter_wrapper(_t(base), 1, _t(idx), _t(src)))
+    got = _d2h(_nbx_index_wrappers.scatter_wrapper(_t(base), 1, _t(idx), _t(src)))
     ref = base.copy()
     np.put_along_axis(ref, idx, src, axis=1)
     assert np.array_equal(got, ref.reshape(-1)), (
@@ -193,7 +195,7 @@ def test_index_add_is_exact_on_disjoint_indices(rows, cols, adds) -> None:
     base = rng.standard_normal((rows, cols)).astype(np.float32)
     idx = rng.permutation(rows)[:adds].astype(np.int64)
     src = rng.standard_normal((adds, cols)).astype(np.float32)
-    got = _d2h(W.index_add_wrapper(_t(base), 0, _t(idx), _t(src)))
+    got = _d2h(_nbx_index_wrappers.index_add_wrapper(_t(base), 0, _t(idx), _t(src)))
     ref = base.copy()
     ref[idx] += src
     assert np.array_equal(got, ref.reshape(-1)), (

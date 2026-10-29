@@ -189,6 +189,7 @@ def sweep_matmul(M, N, K, dtype, dev):
     import numpy as np
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
     from nbxtensor.ops.matmul import matmul_kernel
     from nbxtensor.ops import autotune_cache as atc
     rng = np.random.default_rng(M)
@@ -203,7 +204,7 @@ def sweep_matmul(M, N, K, dtype, dev):
     matmul_kernel.run = spy
     try:
         matmul_kernel.cache.clear()
-        W.mm(a, b)
+        _nbx_linalg_wrappers.mm(a, b)
     finally:
         matmul_kernel.run = saved
     key = seen.get("key")
@@ -223,6 +224,7 @@ def sweep_bmm(B, M, N, K, dtype):
     import numpy as np
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
     from nbxtensor.ops.baddbmm_op import baddbmm_kernel
     from nbxtensor.ops import autotune_cache as atc
     rng = np.random.default_rng(M * 1000 + N)
@@ -237,7 +239,7 @@ def sweep_bmm(B, M, N, K, dtype):
     baddbmm_kernel.run = spy
     try:
         baddbmm_kernel.cache.clear()
-        W.bmm(a, b)
+        _nbx_linalg_wrappers.bmm(a, b)
     finally:
         baddbmm_kernel.run = saved
     key = seen.get("key")
@@ -257,6 +259,7 @@ def sweep_conv(B, C_in, C_out, H, W, k, dtype, kh=None, kw=None):
     import numpy as np
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.ops import wrappers as Wr
+    from nbxtensor.ops import conv_wrappers as _nbx_conv_wrappers  # the family the moved names live in (M2 split)
     from nbxtensor.ops.conv2d import conv2d_forward_kernel
     from nbxtensor.ops import autotune_cache as atc
     kh = int(kh or k); kw = int(kw or k)
@@ -272,7 +275,7 @@ def sweep_conv(B, C_in, C_out, H, W, k, dtype, kh=None, kw=None):
     conv2d_forward_kernel.run = spy
     try:
         conv2d_forward_kernel.cache.clear()
-        Wr.conv2d_wrapper(x, w, None, stride=1, padding=(kh // 2, kw // 2))
+        _nbx_conv_wrappers.conv2d_wrapper(x, w, None, stride=1, padding=(kh // 2, kw // 2))
     finally:
         conv2d_forward_kernel.run = saved
     key = seen.get("key")

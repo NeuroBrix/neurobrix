@@ -25,6 +25,7 @@ pytest.importorskip("triton")
 from nbxtensor.tensor import NBXTensor  # noqa: E402
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 import nbxtensor.ops.wrappers as W  # noqa: E402
+from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
 
 
 def _dev_or_skip():
@@ -94,7 +95,7 @@ def test_pow_of_zero_matches_the_c99_spec(e):
     x = np.array([0.0, -0.0], dtype=np.float32)
     want = np.array([_c99_pow_at_zero(False, e), _c99_pow_at_zero(True, e)],
                     dtype=np.float64)
-    got = W.pow_wrapper(NBXTensor.from_numpy(x), e).numpy().astype(np.float64)
+    got = _nbx_elementwise_wrappers.pow_wrapper(NBXTensor.from_numpy(x), e).numpy().astype(np.float64)
     _same(got, want, f"pow(x, {e}) on x = [+0.0, -0.0]")
 
 
@@ -109,7 +110,7 @@ def test_the_integer_exponents_agree_with_numpy_too(e):
     _dev_or_skip()
     x = np.array([0.0, -0.0], dtype=np.float32)
     want = np.power(x.astype(np.float64), np.float64(e))
-    got = W.pow_wrapper(NBXTensor.from_numpy(x), e).numpy().astype(np.float64)
+    got = _nbx_elementwise_wrappers.pow_wrapper(NBXTensor.from_numpy(x), e).numpy().astype(np.float64)
     _same(got, want, f"pow(x, {e}) against numpy on x = [+0.0, -0.0]")
 
 
@@ -119,7 +120,7 @@ def test_pow_keeps_the_nonzero_domain_it_already_had():
     x = np.array([1.0, 2.0, -2.0, 0.5, -0.5, 4.0, -1.0], dtype=np.float32)
     for e in (0.0, 1.0, 2.0, 3.0, -1.0, 0.5):
         want = np.power(x.astype(np.float64), np.float64(e))
-        got = W.pow_wrapper(NBXTensor.from_numpy(x), e).numpy().astype(np.float64)
+        got = _nbx_elementwise_wrappers.pow_wrapper(NBXTensor.from_numpy(x), e).numpy().astype(np.float64)
         # non-integer exponent of a negative base is NaN in both
         for i, (g, w) in enumerate(zip(got, want)):
             if np.isnan(w):
@@ -134,7 +135,7 @@ def test_round_keeps_the_sign_of_a_zero_result():
     _dev_or_skip()
     x = np.array([-0.5, -0.3, -0.0, 0.0, 0.3, 0.5, -0.49999997], dtype=np.float32)
     want = np.round(x.astype(np.float64))          # numpy rounds half to even
-    got = W.round_wrapper(NBXTensor.from_numpy(x)).numpy().astype(np.float64)
+    got = _nbx_elementwise_wrappers.round_wrapper(NBXTensor.from_numpy(x)).numpy().astype(np.float64)
     _same(got, want, "round on values whose result is a zero")
 
 
@@ -144,5 +145,5 @@ def test_round_still_gets_every_tie_to_even():
     x = np.array([0.5, 1.5, 2.5, 3.5, 4.5, -1.5, -2.5, -3.5, -4.5,
                   0.49, 1.49, 2.51, -2.51], dtype=np.float32)
     want = np.round(x.astype(np.float64))
-    got = W.round_wrapper(NBXTensor.from_numpy(x)).numpy().astype(np.float64)
+    got = _nbx_elementwise_wrappers.round_wrapper(NBXTensor.from_numpy(x)).numpy().astype(np.float64)
     _same(got, want, "round ties-to-even")

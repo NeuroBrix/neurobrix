@@ -220,7 +220,8 @@ def _tiled_conv2d_spatial_nbx(
     non-tiled `conv2d_wrapper` + `_torch` backend.
     """
     from nbxtensor.tensor import NBXTensor
-    from nbxtensor.ops.wrappers import conv2d_wrapper, constant_pad_nd_wrapper, _conv_bias_inplace
+    from nbxtensor.ops.conv_wrappers import conv2d_wrapper, _conv_bias_inplace
+    from nbxtensor.ops.shape_wrappers import constant_pad_nd_wrapper
 
     N, in_c, IH, IW = input_tensor.shape
     out_c, _, kh, kw = weight.shape
@@ -297,7 +298,8 @@ def _fused_upsample_conv2d_nbx(
     differences are the backend ops and explicit NBXTensor allocations.
     """
     from nbxtensor.tensor import NBXTensor
-    from nbxtensor.ops.wrappers import upsample_nearest2d_wrapper, conv2d_wrapper, _conv_bias_inplace
+    from nbxtensor.ops.shape_wrappers import upsample_nearest2d_wrapper
+    from nbxtensor.ops.conv_wrappers import conv2d_wrapper, _conv_bias_inplace
 
     sh_st, sw_st = _pair(stride)
     pad_h, pad_w = _pair(padding)
@@ -325,7 +327,7 @@ def _fused_upsample_conv2d_nbx(
     )
 
     pre_h = pre_input.shape[2]
-    from nbxtensor.ops.wrappers import constant_pad_nd_wrapper
+    from nbxtensor.ops.shape_wrappers import constant_pad_nd_wrapper
     # The bands over the UPSAMPLED extent are `launch_keys.tiled_conv2d_bands` — one cut with the
     # standalone tiled conv and the derived census (the halo rounded to whole strides).
     from nbxtensor.ops.launch_keys import tiled_conv2d_bands

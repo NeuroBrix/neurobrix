@@ -223,6 +223,7 @@ def test_occupancy_rule_resolves_vendor_config():
     router shape to 1 and leaves the huge-N grid pinned; with no
     profile, it degrades to the pinned width (prior behavior)."""
     import nbxtensor.ops.wrappers as W
+    from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
 
     class _Dev:
         brand = "nvidia"
@@ -232,29 +233,29 @@ def test_occupancy_rule_resolves_vendor_config():
         devices = [_Dev()]
 
     saved_prof = W.get_hardware_profile()
-    saved_cache = W._DEQUANT_GEMV_MIN_PROGRAMS
+    saved_cache = _nbx_linalg_wrappers._DEQUANT_GEMV_MIN_PROGRAMS
     try:
         W._NBX_HW_PROFILE = _Prof()
-        W._DEQUANT_GEMV_MIN_PROGRAMS = None  # force re-resolution
-        assert W._dequant_gemv_block_n(128) == 1, "router shape not narrowed"
-        assert W._dequant_gemv_block_n(2048) == 8, "projection not narrowed"
-        assert W._dequant_gemv_block_n(151936) == 64, "huge-N was touched"
+        _nbx_linalg_wrappers._DEQUANT_GEMV_MIN_PROGRAMS = None  # force re-resolution
+        assert _nbx_linalg_wrappers._dequant_gemv_block_n(128) == 1, "router shape not narrowed"
+        assert _nbx_linalg_wrappers._dequant_gemv_block_n(2048) == 8, "projection not narrowed"
+        assert _nbx_linalg_wrappers._dequant_gemv_block_n(151936) == 64, "huge-N was touched"
         W._NBX_HW_PROFILE = None
-        W._DEQUANT_GEMV_MIN_PROGRAMS = None
-        assert W._dequant_gemv_block_n(128) == 64, \
+        _nbx_linalg_wrappers._DEQUANT_GEMV_MIN_PROGRAMS = None
+        assert _nbx_linalg_wrappers._dequant_gemv_block_n(128) == 64, \
             "no-profile fallback lost the pinned width"
         import os as _osl
         W._NBX_HW_PROFILE = _Prof()
-        W._DEQUANT_GEMV_MIN_PROGRAMS = None
+        _nbx_linalg_wrappers._DEQUANT_GEMV_MIN_PROGRAMS = None
         _osl.environ["NBX_DGEMV_ADAPT"] = "0"
         try:
-            assert W._dequant_gemv_block_n(128) == 64, \
+            assert _nbx_linalg_wrappers._dequant_gemv_block_n(128) == 64, \
                 "kill switch '0' did not restore the pinned width"
         finally:
             _osl.environ.pop("NBX_DGEMV_ADAPT", None)
     finally:
         W._NBX_HW_PROFILE = saved_prof
-        W._DEQUANT_GEMV_MIN_PROGRAMS = saved_cache
+        _nbx_linalg_wrappers._DEQUANT_GEMV_MIN_PROGRAMS = saved_cache
 
 
 if __name__ == "__main__":

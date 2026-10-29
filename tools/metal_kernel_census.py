@@ -198,7 +198,7 @@ def _entry_point(wrappers, op: str):
     if op in _EXPLICIT:
         return _EXPLICIT[op]
     for cand in (f"{op}_wrapper", op, f"{op.lstrip('_')}_wrapper", op.lstrip("_")):
-        fn = getattr(wrappers, cand, None)
+        fn = wrappers.function(cand, None)
         if callable(fn):
             return lambda w, i, k, _fn=fn: _fn(*i, **k)
     return None

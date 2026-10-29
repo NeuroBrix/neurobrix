@@ -18,6 +18,7 @@ import numpy as np
 import pytest
 
 from nbxtensor.ops import wrappers as W
+from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.tensor import NBXTensor
 
@@ -63,14 +64,16 @@ def _per_row(got, ref):
 def _both(run, monkeypatch):
     """(split result, its tile's split flags), FMA-path result — the second with the unit withheld."""
     calls = []
-    real = W._gemm_m8n8k4
-    monkeypatch.setattr(W, "_gemm_m8n8k4", lambda *a, **kw: (calls.append(a[8]), real(*a, **kw))[1])
+    real = _nbx_linalg_wrappers._gemm_m8n8k4
+    monkeypatch.setattr(_nbx_linalg_wrappers, "_gemm_m8n8k4", lambda *a, **kw: (calls.append(a[8]), real(*a, **kw))[1])
     split = run().numpy().astype(np.float64)
     assert calls, "the m8n8k4 route was not taken"
     flags = (calls[0]["split_a"], calls[0]["split_b"])
     from nbxtensor.ops import _configs as C
     monkeypatch.setattr(C, "matrix_unit", lambda: {})
-    monkeypatch.setattr(W, "_matrix_unit", lambda: {})
+    import importlib
+    for _m in (W, *(importlib.import_module(f"nbxtensor.ops.{f}") for f in W._FAMILY_MODULES)):  # the core and its families (M2 split) each bind it
+        monkeypatch.setattr(_m, "_matrix_unit", lambda: {})
     calls.clear()
     fma = run().numpy().astype(np.float64)
     assert not calls
@@ -95,7 +98,7 @@ def test_addmm_census_shapes(M, K, N, w_dtype, monkeypatch):
     w = (rng.standard_normal((N, K)) / np.sqrt(K)).astype(w_dtype)
     bias = rng.standard_normal(N).astype(np.float32)
     A, Wt, B = _nb(a), _nb(w).t(), _nb(bias)
-    split, flags, fma = _both(lambda: W.addmm(B, A, Wt), monkeypatch)
+    split, flags, fma = _both(lambda: _nbx_linalg_wrappers.addmm(B, A, Wt), monkeypatch)
     assert flags == (True, w_dtype == np.float32)
     _judge(split, fma, bias.astype(np.float64) + a.astype(np.float64) @ w.astype(np.float64).T)
 
@@ -107,7 +110,7 @@ def test_baddbmm_census_shapes(Z, M, K, N, monkeypatch):
     b = (rng.standard_normal((Z, K, N)) / 8).astype(np.float32)
     bias = rng.standard_normal((Z, M, N)).astype(np.float32)
     X, Y, Bz = _nb(a), _nb(b), _nb(bias)
-    split, flags, fma = _both(lambda: W.baddbmm_wrapper(Bz, X, Y, beta=0.5, alpha=2.0), monkeypatch)
+    split, flags, fma = _both(lambda: _nbx_linalg_wrappers.baddbmm_wrapper(Bz, X, Y, beta=0.5, alpha=2.0), monkeypatch)
     assert flags == (True, True)
     _judge(split, fma, 0.5 * bias.astype(np.float64)
            + 2.0 * np.einsum("zmk,zkn->zmn", a.astype(np.float64), b.astype(np.float64)))
@@ -130,7 +133,7 @@ def test_range_edges(edge, monkeypatch):
     a = _EDGES[edge](rng, (M, K)).astype(np.float32)
     w = rng.standard_normal((K, N)).astype(np.float32)
     A, Wb = _nb(a), _nb(w)
-    split, flags, fma = _both(lambda: W.mm(A, Wb), monkeypatch)
+    split, flags, fma = _both(lambda: _nbx_linalg_wrappers.mm(A, Wb), monkeypatch)
     assert flags == (True, True)
     ref = a.astype(np.float64) @ w.astype(np.float64)
     if edge == "zero rows":
@@ -159,7 +162,7 @@ def test_a_bfloat16_operand_through_the_split_rounds_to_the_oracle(monkeypatch):
     A, Wb = _nb(a.astype(np.float32)).to(NBXDtype.bfloat16), _nb(w.astype(np.float32)).to(NBXDtype.bfloat16)
     ref = a @ w
     uncancelled = np.abs(a) @ np.abs(w)
-    split, flags, fma = _both(lambda: W.mm(A, Wb).to(NBXDtype.float32), monkeypatch)
+    split, flags, fma = _both(lambda: _nbx_linalg_wrappers.mm(A, Wb).to(NBXDtype.float32), monkeypatch)
     assert flags == (True, True)
     for name, got in (("split", split), ("FMA", fma)):
         off = np.abs(got - bf16(ref))
@@ -180,13 +183,15 @@ def test_without_the_split_an_fp32_operand_keeps_the_exact_path(monkeypatch):
     from nbxtensor.ops import _configs as C
     mu = {k: v for k, v in C.matrix_unit().items() if k != "fp32_split"}
     monkeypatch.setattr(C, "matrix_unit", lambda: mu)
-    monkeypatch.setattr(W, "_matrix_unit", lambda: mu)
+    import importlib
+    for _m in (W, *(importlib.import_module(f"nbxtensor.ops.{f}") for f in W._FAMILY_MODULES)):  # the core and its families (M2 split) each bind it
+        monkeypatch.setattr(_m, "_matrix_unit", lambda: mu)
     calls = []
-    real = W._gemm_m8n8k4
-    monkeypatch.setattr(W, "_gemm_m8n8k4", lambda *a, **kw: (calls.append(1), real(*a, **kw))[1])
+    real = _nbx_linalg_wrappers._gemm_m8n8k4
+    monkeypatch.setattr(_nbx_linalg_wrappers, "_gemm_m8n8k4", lambda *a, **kw: (calls.append(1), real(*a, **kw))[1])
     rng = np.random.default_rng(3)
     a = rng.standard_normal((128, 64)).astype(np.float32) * 70000.0
     w = rng.standard_normal((64, 64)).astype(np.float16)
-    got = W.mm(_nb(a), _nb(w)).numpy().astype(np.float64)
+    got = _nbx_linalg_wrappers.mm(_nb(a), _nb(w)).numpy().astype(np.float64)
     assert not calls, "an fp32 operand took the fp16 matrix unit without the split"
     assert np.isfinite(got).all()

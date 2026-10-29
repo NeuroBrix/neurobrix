@@ -21,6 +21,7 @@ pytest.importorskip("triton")
 
 from nbxtensor.tensor import NBXTensor  # noqa: E402
 import nbxtensor.ops.wrappers as W  # noqa: E402
+from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
 
 
 
@@ -50,7 +51,7 @@ def _inputs() -> np.ndarray:
 def test_a_small_integer_power_is_within_two_ulps_of_the_oracle(e):
     _gpu_or_skip()
     x = _inputs()
-    got = W.pow_wrapper(NBXTensor.from_numpy(x), float(e)).numpy()
+    got = _nbx_elementwise_wrappers.pow_wrapper(NBXTensor.from_numpy(x), float(e)).numpy()
     with np.errstate(divide="ignore", over="ignore"):
         want = (x.astype(np.float64) ** e).astype(np.float32)
     fin = np.isfinite(want)
@@ -75,7 +76,7 @@ def test_a_non_integer_exponent_still_takes_the_general_route():
     the cell above catches the reverse, which is the defect that happened."""
     _gpu_or_skip()
     x = np.abs(_inputs())
-    got = W.pow_wrapper(NBXTensor.from_numpy(x), 0.5).numpy()
+    got = _nbx_elementwise_wrappers.pow_wrapper(NBXTensor.from_numpy(x), 0.5).numpy()
     want = np.sqrt(x.astype(np.float64)).astype(np.float32)
     assert np.isfinite(got).all()
     assert _ulps(got, want).max() <= 32, "the general route drifted past 32 ulps on x**0.5; measured 9 on CUDA 2026-09-20"

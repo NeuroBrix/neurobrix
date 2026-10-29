@@ -228,6 +228,7 @@ class PagedTritonKVCache:
         """Append a prompt's K / V `[B, H_kv, T, D]` (positions length .. length+T-1). Layer 0 starts the request's
         reservation: the prompt and its decode budget."""
         from nbxtensor.ops import wrappers as W
+        from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
         self._ensure(layer_idx, k)
         t = int(k.shape[2])
         if layer_idx == 0:
@@ -237,8 +238,8 @@ class PagedTritonKVCache:
         for b in range(self.batch):
             slots = np.asarray(self.tables[b].slots(range(start, start + t)), dtype=np.int32)
             dev_slots = NBXTensor.from_numpy(slots)
-            W.paged_kv_append(k[b].permute(1, 0, 2), self.k_pools[layer_idx], dev_slots)
-            W.paged_kv_append(v[b].permute(1, 0, 2), self.v_pools[layer_idx], dev_slots)
+            _nbx_attention_wrappers.paged_kv_append(k[b].permute(1, 0, 2), self.k_pools[layer_idx], dev_slots)
+            _nbx_attention_wrappers.paged_kv_append(v[b].permute(1, 0, 2), self.v_pools[layer_idx], dev_slots)
         self._write_in_place(self.lens[layer_idx], np.full((self.batch,), start + t, dtype=np.int32))
         if layer_idx == self.num_layers - 1:
             self.length = start + t
@@ -248,6 +249,7 @@ class PagedTritonKVCache:
         attend `q [B, H, 1, D]` over the sequence's pages. Returns `[B, H, 1, D_v]`."""
         import triton
         from nbxtensor.ops import wrappers as W
+        from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
         from nbxtensor.backend.runtime import _set_device
         from nbxtensor.ops.paged_decode_attn import paged_kv_append_step_kernel, paged_lens_advance_kernel
         if int(k.shape[2]) != 1:
@@ -269,7 +271,7 @@ class PagedTritonKVCache:
             BLOCK_D=max(triton.next_power_of_2(max(self.k_head_dim, self.v_head_dim)), 16),
             D_K=self.k_head_dim, D_V=self.v_head_dim, num_warps=1)
         paged_lens_advance_kernel[(self.batch,)](lens, 1)
-        out = W.paged_decode_attention(q, kp, vp, bt, lens, scale, new_len, block_n,
+        out = _nbx_attention_wrappers.paged_decode_attention(q, kp, vp, bt, lens, scale, new_len, block_n,
                                        q_round=q_round)
         if layer_idx == self.num_layers - 1:
             self.length = new_len

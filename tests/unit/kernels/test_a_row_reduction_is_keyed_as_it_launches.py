@@ -47,7 +47,7 @@ def test_the_launch_is_its_key(monkeypatch, red, shape, dim, dt):
     monkeypatch.setattr(K_, "run", run)
     x = _t(np.random.default_rng(0).standard_normal(shape), dt)
     with pytest.raises(_Launched):
-        getattr(W, _FN[red])(x, dim)
+        W.function(_FN[red])(x, dim)
     feat = int(np.prod(shape)) if dim is None else shape[dim]
     want = LK.row_reduce_launches(red, int(np.prod(shape)) // feat, feat, dt)
     assert want[0][0] == LK.ROW_REDUCE[red] and seen == [want[0][1]], (seen, want)
@@ -57,7 +57,7 @@ def test_the_launch_is_its_key(monkeypatch, red, shape, dim, dt):
 @pytest.mark.parametrize("shape,dim", [((3, 100000), -1), ((300, 33), -1), ((2, 4, 6), 1)])
 def test_the_values_are_the_reduction(red, shape, dim):
     a = np.random.default_rng(1).standard_normal(shape).astype(np.float32)
-    got = getattr(W, _FN[red])(_t(a, F32), dim).to("cpu").numpy()
+    got = W.function(_FN[red])(_t(a, F32), dim).to("cpu").numpy()
     want = {"mean": np.mean, "sum": np.sum, "amax": np.max}[red](a.astype(np.float64), axis=dim)
     assert np.allclose(got, want, rtol=1e-4, atol=1e-3)
 

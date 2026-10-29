@@ -16,6 +16,7 @@ if not torch.cuda.is_available():
 
 from nbxtensor.ops import launch_keys as LK  # noqa: E402
 from nbxtensor.ops import wrappers as W  # noqa: E402
+from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.tensor import NBXTensor  # noqa: E402
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.ops.autotune_cache import key_of  # noqa: E402
@@ -50,7 +51,7 @@ def test_a_long_row_launches_the_looped_kernel_with_its_key(monkeypatch, rows, f
     seen = _capture(monkeypatch, K_)
     x = _t((rows, feat), dt)
     with pytest.raises(_Launched):
-        (W.log_softmax if log else W.softmax)(x, -1)
+        (_nbx_attention_wrappers.log_softmax if log else _nbx_attention_wrappers.softmax)(x, -1)
     want = LK.softmax_launches(rows, feat, log, dt, dt)
     assert want[0][0] == LK.SOFTMAX_LOOPED and seen == [want[0][1]], (seen, want)
 

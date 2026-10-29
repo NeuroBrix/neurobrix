@@ -47,6 +47,7 @@ import numpy as np
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.ops import wrappers as W
+from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
 
 BOUND = 2e-03  # same derived bound as the decode oracles
 
@@ -74,23 +75,23 @@ class _pinned_route:
         self.budget, self.max_chunks = budget, max_chunks
 
     def __enter__(self):
-        self._b = W._sdpa_math_scores_budget_bytes
-        self._f = getattr(W, "_sdpa_math_scores_device_fraction", None)
-        self._c = W._sdpa_math_max_chunks
-        self._r = W._sdpa_math_min_chunk_rows
-        W._sdpa_math_scores_budget_bytes = lambda: self.budget
+        self._b = _nbx_attention_wrappers._sdpa_math_scores_budget_bytes
+        self._f = getattr(_nbx_attention_wrappers, "_sdpa_math_scores_device_fraction", None)
+        self._c = _nbx_attention_wrappers._sdpa_math_max_chunks
+        self._r = _nbx_attention_wrappers._sdpa_math_min_chunk_rows
+        _nbx_attention_wrappers._sdpa_math_scores_budget_bytes = lambda: self.budget
         if self._f is not None:
-            W._sdpa_math_scores_device_fraction = lambda: 0.0
-        W._sdpa_math_max_chunks = lambda: self.max_chunks
-        W._sdpa_math_min_chunk_rows = lambda: 128   # the arch row block, pinned like the ceiling
+            _nbx_attention_wrappers._sdpa_math_scores_device_fraction = lambda: 0.0
+        _nbx_attention_wrappers._sdpa_math_max_chunks = lambda: self.max_chunks
+        _nbx_attention_wrappers._sdpa_math_min_chunk_rows = lambda: 128   # the arch row block, pinned like the ceiling
         return self
 
     def __exit__(self, *a):
-        W._sdpa_math_scores_budget_bytes = self._b
+        _nbx_attention_wrappers._sdpa_math_scores_budget_bytes = self._b
         if self._f is not None:
-            W._sdpa_math_scores_device_fraction = self._f
-        W._sdpa_math_max_chunks = self._c
-        W._sdpa_math_min_chunk_rows = self._r
+            _nbx_attention_wrappers._sdpa_math_scores_device_fraction = self._f
+        _nbx_attention_wrappers._sdpa_math_max_chunks = self._c
+        _nbx_attention_wrappers._sdpa_math_min_chunk_rows = self._r
 
 
 def _mk(B, H, H_kv, T, D, seed=7):
@@ -113,20 +114,20 @@ def test_long_prefill_is_deterministic_through_the_chunked_route(without_matrix_
     B, H, H_kv, T, D = 1, 32, 8, 4164, 128
     q, k, v = _mk(B, H, H_kv, T, D)
     calls = {"n": 0}
-    orig = W._math_attention_chunked
+    orig = _nbx_attention_wrappers._math_attention_chunked
 
     def counting(*a, **kw):
         calls["n"] += 1
         return orig(*a, **kw)
 
-    W._math_attention_chunked = counting
+    _nbx_attention_wrappers._math_attention_chunked = counting
     try:
         with _pinned_route(budget=2147483648, max_chunks=16):
-            outs = [_d2h(W.scaled_dot_product_attention_wrapper(
+            outs = [_d2h(_nbx_attention_wrappers.scaled_dot_product_attention_wrapper(
                 q, k, v, attn_mask=None, is_causal=True,
                 scale=1.0 / np.sqrt(D))) for _ in range(3)]
     finally:
-        W._math_attention_chunked = orig
+        _nbx_attention_wrappers._math_attention_chunked = orig
     assert calls["n"] == 3, (
         f"chunked route fired {calls['n']} times, wanted 3 — the "
         f"trigger shape did not route as pinned (vacuous determinism)")
@@ -145,7 +146,7 @@ def test_chunked_matches_float64() -> None:
     kn = (rng.standard_normal((B, H_kv, T, D)) * 0.1).astype(np.float16)
     vn = (rng.standard_normal((B, H_kv, T, D)) * 0.1).astype(np.float16)
     q, k, v = (NBXTensor.from_numpy(x) for x in (qn, kn, vn))
-    out = W._math_attention_chunked(q, k, v, None, True,
+    out = _nbx_attention_wrappers._math_attention_chunked(q, k, v, None, True,
                                     1.0 / np.sqrt(D), chunk_rows=128)
     got = np.frombuffer(_d2h(out), dtype=np.float16).astype(
         np.float64).reshape(B, H, T, D)
@@ -169,23 +170,23 @@ def test_video_scale_keeps_its_path() -> None:
     if not _has_gpu():
         pytest.skip("no GPU")
     calls = {"n": 0}
-    orig = W._math_attention_chunked
+    orig = _nbx_attention_wrappers._math_attention_chunked
 
     def counting(*a, **kw):
         calls["n"] += 1
         return orig(*a, **kw)
 
-    W._math_attention_chunked = counting
+    _nbx_attention_wrappers._math_attention_chunked = counting
     try:
         # tiny budget => chunk_rows 128, T=4096 => 32 chunks > ceiling 16
         with _pinned_route(budget=128 * 1 * 4 * 4096 * 4, max_chunks=16):
             B, H, H_kv, T, D = 1, 4, 4, 4096, 64
             q, k, v = _mk(B, H, H_kv, T, D, seed=9)
-            W.scaled_dot_product_attention_wrapper(
+            _nbx_attention_wrappers.scaled_dot_product_attention_wrapper(
                 q, k, v, attn_mask=None, is_causal=True,
                 scale=1.0 / np.sqrt(D))
     finally:
-        W._math_attention_chunked = orig
+        _nbx_attention_wrappers._math_attention_chunked = orig
     assert calls["n"] == 0, (
         "over-ceiling shape took the chunked route — the video-class "
         "cost bound is not being honored")
@@ -228,6 +229,7 @@ class _FakeProfile:
 
 def test_budget_composes_with_executing_device_memory() -> None:
     import nbxtensor.ops.wrappers as W
+    from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
     # The values the auto profile ACTUALLY records (config/hardware/
     # default.yml, from nvidia-smi memory.total — verified 2026-09-01):
     # 16384 / 32768. Expectations below are computed from these same
@@ -235,24 +237,24 @@ def test_budget_composes_with_executing_device_memory() -> None:
     # the 2026-08-31 gardien review caught an "exactly 2 GiB" identity
     # baked into an earlier draft of this test.
     devs = [_FakeDev(0, 16384), _FakeDev(2, 32768)]
-    orig_prof, orig_base = W.get_hardware_profile, W._sdpa_math_scores_budget_bytes
-    orig_frac = W._sdpa_math_scores_device_fraction
+    orig_prof, orig_base = W.get_hardware_profile, _nbx_attention_wrappers._sdpa_math_scores_budget_bytes
+    orig_frac = _nbx_attention_wrappers._sdpa_math_scores_device_fraction
     W.get_hardware_profile = lambda: _FakeProfile(devs)
-    W._sdpa_math_scores_budget_bytes = lambda: 2 << 30
-    W._sdpa_math_scores_device_fraction = lambda: 0.066
+    _nbx_attention_wrappers._sdpa_math_scores_budget_bytes = lambda: 2 << 30
+    _nbx_attention_wrappers._sdpa_math_scores_device_fraction = lambda: 0.066
     try:
         # 16G card: capped at 0.066 x 16384 MiB ~= 1.06 GiB
-        assert W._sdpa_math_scores_budget_bytes_for(0) == int(
+        assert _nbx_attention_wrappers._sdpa_math_scores_budget_bytes_for(0) == int(
             16384 * 1024 * 1024 * 0.066)
         # 32G card: 0.066 x 32768 MiB > 2 GiB -> min() keeps the base
-        assert W._sdpa_math_scores_budget_bytes_for(2) == 2 << 30
+        assert _nbx_attention_wrappers._sdpa_math_scores_budget_bytes_for(2) == 2 << 30
         # unknown index / None (absence, not error): plain base budget
-        assert W._sdpa_math_scores_budget_bytes_for(None) == 2 << 30
-        assert W._sdpa_math_scores_budget_bytes_for(7) == 2 << 30
+        assert _nbx_attention_wrappers._sdpa_math_scores_budget_bytes_for(None) == 2 << 30
+        assert _nbx_attention_wrappers._sdpa_math_scores_budget_bytes_for(7) == 2 << 30
     finally:
         W.get_hardware_profile = orig_prof
-        W._sdpa_math_scores_budget_bytes = orig_base
-        W._sdpa_math_scores_device_fraction = orig_frac
+        _nbx_attention_wrappers._sdpa_math_scores_budget_bytes = orig_base
+        _nbx_attention_wrappers._sdpa_math_scores_device_fraction = orig_frac
 
 
 def test_nbxtensor_device_index_field_reaches_the_cap() -> None:
@@ -268,7 +270,8 @@ def test_nbxtensor_device_index_field_reaches_the_cap() -> None:
     del t
     import inspect
     import nbxtensor.ops.wrappers as W
-    src = inspect.getsource(W.scaled_dot_product_attention_wrapper)
+    from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
+    src = inspect.getsource(_nbx_attention_wrappers.scaled_dot_product_attention_wrapper)
     assert "_device_idx" in src, "route decision must read q._device_idx"
     assert 'getattr(q, "_device",' not in src.replace(
         "_device_idx", ""), "bare _device (type string) must not be used"
@@ -276,18 +279,19 @@ def test_nbxtensor_device_index_field_reaches_the_cap() -> None:
 
 def test_budget_unchanged_without_fraction_key() -> None:
     import nbxtensor.ops.wrappers as W
+    from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
     devs = [_FakeDev(0, 16384)]
-    orig_prof, orig_base = W.get_hardware_profile, W._sdpa_math_scores_budget_bytes
-    orig_frac = W._sdpa_math_scores_device_fraction
+    orig_prof, orig_base = W.get_hardware_profile, _nbx_attention_wrappers._sdpa_math_scores_budget_bytes
+    orig_frac = _nbx_attention_wrappers._sdpa_math_scores_device_fraction
     W.get_hardware_profile = lambda: _FakeProfile(devs)
-    W._sdpa_math_scores_budget_bytes = lambda: 2 << 30
-    W._sdpa_math_scores_device_fraction = lambda: 0.0
+    _nbx_attention_wrappers._sdpa_math_scores_budget_bytes = lambda: 2 << 30
+    _nbx_attention_wrappers._sdpa_math_scores_device_fraction = lambda: 0.0
     try:
-        assert W._sdpa_math_scores_budget_bytes_for(0) == 2 << 30
+        assert _nbx_attention_wrappers._sdpa_math_scores_budget_bytes_for(0) == 2 << 30
     finally:
         W.get_hardware_profile = orig_prof
-        W._sdpa_math_scores_budget_bytes = orig_base
-        W._sdpa_math_scores_device_fraction = orig_frac
+        _nbx_attention_wrappers._sdpa_math_scores_budget_bytes = orig_base
+        _nbx_attention_wrappers._sdpa_math_scores_device_fraction = orig_frac
 
 
 # ---------------------------------------------------------------------------
@@ -385,6 +389,7 @@ def _route_spy(q_shape, kv_shape, device_idx):
     route fired ('chunked' | 'math' | 'flash')."""
     import numpy as np
     import nbxtensor.ops.wrappers as W
+    from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
     from nbxtensor.tensor import NBXTensor
 
     def mk(shape):
@@ -398,7 +403,7 @@ def _route_spy(q_shape, kv_shape, device_idx):
 
     q, k, v = mk(q_shape), mk(kv_shape), mk(kv_shape)
     fired = {}
-    orig_c, orig_m = W._math_attention_chunked, W._math_attention
+    orig_c, orig_m = _nbx_attention_wrappers._math_attention_chunked, _nbx_attention_wrappers._math_attention
 
     def spy_c(*a, **kw):
         fired["route"] = "chunked"
@@ -408,15 +413,15 @@ def _route_spy(q_shape, kv_shape, device_idx):
         fired["route"] = "math"
         raise _SpyHit()
 
-    W._math_attention_chunked, W._math_attention = spy_c, spy_m
+    _nbx_attention_wrappers._math_attention_chunked, _nbx_attention_wrappers._math_attention = spy_c, spy_m
     try:
         try:
-            W.scaled_dot_product_attention_wrapper(q, k, v, is_causal=True)
+            _nbx_attention_wrappers.scaled_dot_product_attention_wrapper(q, k, v, is_causal=True)
             fired.setdefault("route", "flash")
         except _SpyHit:
             pass
     finally:
-        W._math_attention_chunked, W._math_attention = orig_c, orig_m
+        _nbx_attention_wrappers._math_attention_chunked, _nbx_attention_wrappers._math_attention = orig_c, orig_m
     return fired.get("route")
 
 
@@ -476,6 +481,7 @@ def test_32g_pow2_window_keeps_prefix_route_on_device(without_matrix_unit) -> No
 def test_chunk_retry_halves_on_malloc_refusal_and_matches() -> None:
     import numpy as np
     import nbxtensor.ops.wrappers as W
+    from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.memory.allocator import DeviceAllocator
     try:
@@ -487,12 +493,12 @@ def test_chunk_retry_halves_on_malloc_refusal_and_matches() -> None:
     mk = lambda: NBXTensor.from_numpy(
         (rng.standard_normal((B, H, T, D)) * 0.1).astype(np.float16))
     q, k, v = mk(), mk(), mk()
-    ref = W._math_attention_chunked(q, k, v, None, True, 1.0 / np.sqrt(D), 256)
+    ref = _nbx_attention_wrappers._math_attention_chunked(q, k, v, None, True, 1.0 / np.sqrt(D), 256)
     ref_b = _d2h(ref)
 
-    orig = W._math_attention
-    orig_floor = W._sdpa_math_min_chunk_rows
-    W._sdpa_math_min_chunk_rows = lambda: 128   # the arch row block (yml), pinned
+    orig = _nbx_attention_wrappers._math_attention
+    orig_floor = _nbx_attention_wrappers._sdpa_math_min_chunk_rows
+    _nbx_attention_wrappers._sdpa_math_min_chunk_rows = lambda: 128   # the arch row block (yml), pinned
     state = {"calls": 0, "refused": False}
 
     from nbxtensor.memory.allocator import DeviceOOMError
@@ -505,12 +511,12 @@ def test_chunk_retry_halves_on_malloc_refusal_and_matches() -> None:
             raise DeviceOOMError("GPU malloc failed (error 2) for 1 bytes [device cuda:0 ...]")
         return orig(*a, **kw)
 
-    W._math_attention = flaky
+    _nbx_attention_wrappers._math_attention = flaky
     try:
-        out = W._math_attention_chunked(q, k, v, None, True, 1.0 / np.sqrt(D), 256)
+        out = _nbx_attention_wrappers._math_attention_chunked(q, k, v, None, True, 1.0 / np.sqrt(D), 256)
     finally:
-        W._math_attention = orig
-        W._sdpa_math_min_chunk_rows = orig_floor
+        _nbx_attention_wrappers._math_attention = orig
+        _nbx_attention_wrappers._sdpa_math_min_chunk_rows = orig_floor
     assert state["refused"], "the refusal path never fired (vacuous)"
     assert _d2h(out) == ref_b, "retry changed the bytes"
 
@@ -518,6 +524,7 @@ def test_chunk_retry_halves_on_malloc_refusal_and_matches() -> None:
 def test_chunk_retry_propagates_non_malloc_errors() -> None:
     import numpy as np
     import nbxtensor.ops.wrappers as W
+    from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.memory.allocator import DeviceAllocator
     try:
@@ -528,19 +535,19 @@ def test_chunk_retry_propagates_non_malloc_errors() -> None:
     mk = lambda: NBXTensor.from_numpy(
         (rng.standard_normal((1, 1, 256, 32)) * 0.1).astype(np.float16))
     q, k, v = mk(), mk(), mk()
-    orig = W._math_attention
+    orig = _nbx_attention_wrappers._math_attention
 
     def boom(*a, **kw):
         # Same text as a real refusal, but not the typed exception: the
         # retry must key on the TYPE, never on the message.
         raise RuntimeError("GPU malloc failed — impostor, some other kernel error")
 
-    W._math_attention = boom
-    orig_floor = W._sdpa_math_min_chunk_rows
-    W._sdpa_math_min_chunk_rows = lambda: 128
+    _nbx_attention_wrappers._math_attention = boom
+    orig_floor = _nbx_attention_wrappers._sdpa_math_min_chunk_rows
+    _nbx_attention_wrappers._sdpa_math_min_chunk_rows = lambda: 128
     try:
         with pytest.raises(RuntimeError, match="some other kernel error"):
-            W._math_attention_chunked(q, k, v, None, True, 0.1, 128)
+            _nbx_attention_wrappers._math_attention_chunked(q, k, v, None, True, 0.1, 128)
     finally:
-        W._math_attention = orig
-        W._sdpa_math_min_chunk_rows = orig_floor
+        _nbx_attention_wrappers._math_attention = orig
+        _nbx_attention_wrappers._sdpa_math_min_chunk_rows = orig_floor

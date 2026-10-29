@@ -15,6 +15,11 @@ from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.ops import wrappers as w
+from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
+from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
+from nbxtensor.ops import index_wrappers as _nbx_index_wrappers  # the family the moved names live in (M2 split)
+from nbxtensor.ops import random_wrappers as _nbx_random_wrappers  # the family the moved names live in (M2 split)
+from nbxtensor.ops import reduction_wrappers as _nbx_reduction_wrappers  # the family the moved names live in (M2 split)
 
 
 def _cpu_sort(tensor: NBXTensor, descending: bool = False):
@@ -106,7 +111,7 @@ class GreedySampler:
         self.config = config or {}
 
     def __call__(self, logits: NBXTensor, **kwargs) -> NBXTensor:
-        return w.argmax_wrapper(logits, dim=-1, keepdim=True)
+        return _nbx_reduction_wrappers.argmax_wrapper(logits, dim=-1, keepdim=True)
 
 
 class TemperatureSampler:
@@ -118,9 +123,9 @@ class TemperatureSampler:
 
     def __call__(self, logits: NBXTensor, **kwargs) -> NBXTensor:
         if self.temperature != 1.0 and self.temperature > 0:
-            logits = w.div(logits, self.temperature)
-        probs = w.softmax(logits, dim=-1)
-        return w.multinomial_wrapper(probs, num_samples=1)
+            logits = _nbx_elementwise_wrappers.div(logits, self.temperature)
+        probs = _nbx_attention_wrappers.softmax(logits, dim=-1)
+        return _nbx_random_wrappers.multinomial_wrapper(probs, num_samples=1)
 
 
 class TopKSampler:
@@ -134,18 +139,18 @@ class TopKSampler:
 
     def __call__(self, logits: NBXTensor, **kwargs) -> NBXTensor:
         if self.temperature != 1.0 and self.temperature > 0:
-            logits = w.div(logits, self.temperature)
+            logits = _nbx_elementwise_wrappers.div(logits, self.temperature)
 
         if self.top_k > 0:
             top_k = min(max(self.top_k, self.min_tokens_to_keep), logits.shape[-1])
-            values, _indices = w.topk_wrapper(logits, top_k, dim=-1)
+            values, _indices = _nbx_elementwise_wrappers.topk_wrapper(logits, top_k, dim=-1)
             # kth value is the last in top-k (smallest of the top)
             kth = values.select(-1, top_k - 1).unsqueeze(-1)
-            mask = w.lt(logits, kth)
-            logits = w.masked_fill(logits, mask, float('-inf'))
+            mask = _nbx_elementwise_wrappers.lt(logits, kth)
+            logits = _nbx_index_wrappers.masked_fill(logits, mask, float('-inf'))
 
-        probs = w.softmax(logits, dim=-1)
-        return w.multinomial_wrapper(probs, num_samples=1)
+        probs = _nbx_attention_wrappers.softmax(logits, dim=-1)
+        return _nbx_random_wrappers.multinomial_wrapper(probs, num_samples=1)
 
 
 class TopPSampler:
@@ -160,33 +165,33 @@ class TopPSampler:
 
     def __call__(self, logits: NBXTensor, **kwargs) -> NBXTensor:
         if self.temperature != 1.0 and self.temperature > 0:
-            logits = w.div(logits, self.temperature)
+            logits = _nbx_elementwise_wrappers.div(logits, self.temperature)
 
         # Top-k pre-filter
         if self.top_k > 0:
             top_k = min(max(self.top_k, self.min_tokens_to_keep), logits.shape[-1])
-            values, _indices = w.topk_wrapper(logits, top_k, dim=-1)
+            values, _indices = _nbx_elementwise_wrappers.topk_wrapper(logits, top_k, dim=-1)
             kth = values.select(-1, top_k - 1).unsqueeze(-1)
-            mask = w.lt(logits, kth)
-            logits = w.masked_fill(logits, mask, float('-inf'))
+            mask = _nbx_elementwise_wrappers.lt(logits, kth)
+            logits = _nbx_index_wrappers.masked_fill(logits, mask, float('-inf'))
 
         # Top-p filter
         if self.top_p < 1.0:
-            sorted_logits, sorted_indices = w.sort_wrapper(logits, dim=-1, descending=True)
-            sorted_probs = w.softmax(sorted_logits, dim=-1)
-            cumulative_probs = w.cumsum_wrapper(sorted_probs, dim=-1)
+            sorted_logits, sorted_indices = _nbx_elementwise_wrappers.sort_wrapper(logits, dim=-1, descending=True)
+            sorted_probs = _nbx_attention_wrappers.softmax(sorted_logits, dim=-1)
+            cumulative_probs = _nbx_reduction_wrappers.cumsum_wrapper(sorted_probs, dim=-1)
 
             # Mask tokens with cumulative prob above threshold
-            sorted_mask = w.gt(cumulative_probs, self.top_p)
+            sorted_mask = _nbx_elementwise_wrappers.gt(cumulative_probs, self.top_p)
 
             # Keep at least min_tokens_to_keep: zero out first N positions in mask
             # Shift mask right by 1 to include the boundary token
             # These are small CPU operations on the mask tensor
             # For simplicity, use the sorted logits approach: mask and scatter back
-            logits = w.masked_fill(logits, sorted_mask, float('-inf'))
+            logits = _nbx_index_wrappers.masked_fill(logits, sorted_mask, float('-inf'))
 
-        probs = w.softmax(logits, dim=-1)
-        return w.multinomial_wrapper(probs, num_samples=1)
+        probs = _nbx_attention_wrappers.softmax(logits, dim=-1)
+        return _nbx_random_wrappers.multinomial_wrapper(probs, num_samples=1)
 
 
 class CombinedSampler:
@@ -291,18 +296,18 @@ class CombinedSampler:
         stable across versions, but a recorded baseline will move.
         """
         top_k = min(max(self.top_k, self.min_tokens_to_keep), logits.shape[-1])
-        cand_logits, cand_ids = w.topk_wrapper(logits, top_k, dim=-1)
+        cand_logits, cand_ids = _nbx_elementwise_wrappers.topk_wrapper(logits, top_k, dim=-1)
 
         if self.top_p < 1.0:
-            probs = w.softmax(cand_logits, dim=-1)
-            cum = w.cumsum_wrapper(probs, dim=-1)
-            mask = self._shift_mask_right(w.gt(cum, self.top_p))
-            cand_logits = w.masked_fill(cand_logits, mask, float('-inf'))
+            probs = _nbx_attention_wrappers.softmax(cand_logits, dim=-1)
+            cum = _nbx_reduction_wrappers.cumsum_wrapper(probs, dim=-1)
+            mask = self._shift_mask_right(_nbx_elementwise_wrappers.gt(cum, self.top_p))
+            cand_logits = _nbx_index_wrappers.masked_fill(cand_logits, mask, float('-inf'))
 
-        probs = w.softmax(cand_logits, dim=-1)
+        probs = _nbx_attention_wrappers.softmax(cand_logits, dim=-1)
         # A position within the candidate set, not a vocabulary id.
-        pos = w.multinomial_wrapper(probs, num_samples=1)
-        return w.gather_wrapper(cand_ids, -1, pos)
+        pos = _nbx_random_wrappers.multinomial_wrapper(probs, num_samples=1)
+        return _nbx_index_wrappers.gather_wrapper(cand_ids, -1, pos)
 
     def __call__(self, logits: NBXTensor,
                  input_ids: Optional[NBXTensor] = None, **kwargs) -> NBXTensor:
@@ -311,11 +316,11 @@ class CombinedSampler:
 
         # 2. Temperature scaling
         if self.temperature != 1.0 and self.temperature > 0:
-            logits = w.div(logits, self.temperature)
+            logits = _nbx_elementwise_wrappers.div(logits, self.temperature)
 
         # Greedy needs no candidate set and draws nothing.
         if self.temperature <= 0:
-            return w.argmax_wrapper(logits, dim=-1, keepdim=True)
+            return _nbx_reduction_wrappers.argmax_wrapper(logits, dim=-1, keepdim=True)
 
         # 3+4+5 at width k when a top-k cut bounds the candidate set.
         if self.top_k > 0:
@@ -324,16 +329,16 @@ class CombinedSampler:
         # 4. Top-p filtering (sort via CPU for portability — ~1ms per token)
         if self.top_p < 1.0:
             sorted_logits, sorted_indices = _cpu_sort(logits, descending=True)
-            sorted_probs = w.softmax(sorted_logits, dim=-1)
-            cum_probs = w.cumsum_wrapper(sorted_probs, dim=-1)
-            sorted_mask = self._shift_mask_right(w.gt(cum_probs, self.top_p))
-            indices_to_remove = w.scatter_wrapper(
+            sorted_probs = _nbx_attention_wrappers.softmax(sorted_logits, dim=-1)
+            cum_probs = _nbx_reduction_wrappers.cumsum_wrapper(sorted_probs, dim=-1)
+            sorted_mask = self._shift_mask_right(_nbx_elementwise_wrappers.gt(cum_probs, self.top_p))
+            indices_to_remove = _nbx_index_wrappers.scatter_wrapper(
                 sorted_mask, -1, sorted_indices, sorted_mask)
-            logits = w.masked_fill(logits, indices_to_remove, float('-inf'))
+            logits = _nbx_index_wrappers.masked_fill(logits, indices_to_remove, float('-inf'))
 
         # 5. Sample. Greedy already returned above.
-        probs = w.softmax(logits, dim=-1)
-        return w.multinomial_wrapper(probs, num_samples=1)
+        probs = _nbx_attention_wrappers.softmax(logits, dim=-1)
+        return _nbx_random_wrappers.multinomial_wrapper(probs, num_samples=1)
 
 
 # =============================================================================

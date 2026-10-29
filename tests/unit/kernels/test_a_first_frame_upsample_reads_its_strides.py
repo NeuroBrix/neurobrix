@@ -60,7 +60,7 @@ def _nearest2d_reference(x: np.ndarray, oh: int, ow: int) -> np.ndarray:
 
 
 def _check(view_np: np.ndarray, view) -> None:
-    from nbxtensor.ops.wrappers import upsample_nearest2d_wrapper
+    from nbxtensor.ops.shape_wrappers import upsample_nearest2d_wrapper
     n, c, ih, iw = view_np.shape
     out = upsample_nearest2d_wrapper(view, [2 * ih, 2 * iw], scales_h=2.0, scales_w=2.0)
     got = _download(out)

@@ -50,17 +50,19 @@ def test_the_clamp_shrinks_only_block_n_and_keeps_the_product_legal(monkeypatch)
     product fits. Under it: untouched. The product must never exceed the cap.
     """
     import nbxtensor.ops.wrappers as W
+    from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
+    from nbxtensor.ops import reduction_wrappers as _nbx_reduction_wrappers  # the family the moved names live in (M2 split)
 
 
-    monkeypatch.setattr(W, "_reduce_tile_max", lambda: 1024)
-    _, bm, bn = W._reduction_tile(4096)
-    assert bm == W._RED_BM, "BLOCK_M sets the grid and must be kept"
+    monkeypatch.setattr(_nbx_reduction_wrappers, "_reduce_tile_max", lambda: 1024)
+    _, bm, bn = _nbx_elementwise_wrappers._reduction_tile(4096)
+    assert bm == _nbx_elementwise_wrappers._RED_BM, "BLOCK_M sets the grid and must be kept"
     assert bm * bn <= 1024, f"tile {bm}x{bn} still exceeds the cap"
-    assert bn < W._RED_BN, "over the cap, BLOCK_N must shrink"
+    assert bn < _nbx_elementwise_wrappers._RED_BN, "over the cap, BLOCK_N must shrink"
 
-    monkeypatch.setattr(W, "_reduce_tile_max", lambda: 1 << 20)
-    _, bm2, bn2 = W._reduction_tile(4096)
-    assert (bm2, bn2) == (W._RED_BM, W._RED_BN), (
+    monkeypatch.setattr(_nbx_reduction_wrappers, "_reduce_tile_max", lambda: 1 << 20)
+    _, bm2, bn2 = _nbx_elementwise_wrappers._reduction_tile(4096)
+    assert (bm2, bn2) == (_nbx_elementwise_wrappers._RED_BM, _nbx_elementwise_wrappers._RED_BN), (
         "under the cap nothing moves -- the CUDA path")
 
 
@@ -87,13 +89,14 @@ def test_l2_norm_with_the_clamped_tile_matches_aten():
     import numpy as np
     torch = pytest.importorskip("torch")
     from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import norm_wrappers as _nbx_norm_wrappers  # the family the moved names live in (M2 split)
     from nbxtensor.tensor import NBXTensor
 
     rng = np.random.default_rng(20260913)
     x = (rng.standard_normal((4, 8192)) * 0.1).astype(np.float32)
 
     got = np.asarray(
-        W.vector_norm_wrapper(NBXTensor.from_numpy(x), ord=2.0, dim=1)
+        _nbx_norm_wrappers.vector_norm_wrapper(NBXTensor.from_numpy(x), ord=2.0, dim=1)
         .to_cpu().numpy(), dtype=np.float64).ravel()
     want = torch.linalg.vector_norm(
         torch.from_numpy(x), ord=2, dim=1).to(torch.float64).numpy().ravel()
@@ -114,13 +117,14 @@ def test_weight_norm_with_the_clamped_tile_matches_aten():
     import numpy as np
     torch = pytest.importorskip("torch")
     from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import norm_wrappers as _nbx_norm_wrappers  # the family the moved names live in (M2 split)
     from nbxtensor.tensor import NBXTensor
 
     rng = np.random.default_rng(20260913)
     v = (rng.standard_normal((32, 16384)) * 0.1).astype(np.float32)   # dim=0, N=16384
     g = (rng.standard_normal((32, 1)) * 0.1 + 1.0).astype(np.float32)
 
-    out, _ = W.weight_norm_interface_wrapper(
+    out, _ = _nbx_norm_wrappers.weight_norm_interface_wrapper(
         NBXTensor.from_numpy(v), NBXTensor.from_numpy(g), dim=0)
     got = np.asarray(out.to_cpu().numpy(), dtype=np.float64)
 

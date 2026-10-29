@@ -89,7 +89,7 @@ def cmd_compile_only(ref_path) -> int:
     import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
 
     from nbxtensor.ops.rmsnorm import rms_norm_forward_kernel
-    from nbxtensor.ops.wrappers import _batch_block
+    from nbxtensor.ops.elementwise_wrappers import _batch_block
 
     jit_fn = rms_norm_forward_kernel.fn          # peel @triton.heuristics
     target = GPUTarget("metal", _detect_metal_arch(), 32)
@@ -173,7 +173,7 @@ def _run_kernel(x_np, w_np, device, eps=1e-6):
     import torch
     import triton
     from nbxtensor.ops.rmsnorm import rms_norm_forward_kernel
-    from nbxtensor.ops.wrappers import _batch_block
+    from nbxtensor.ops.elementwise_wrappers import _batch_block
 
     x = torch.from_numpy(np.ascontiguousarray(x_np)).to(device)
     w = torch.from_numpy(np.ascontiguousarray(w_np)).to(device)

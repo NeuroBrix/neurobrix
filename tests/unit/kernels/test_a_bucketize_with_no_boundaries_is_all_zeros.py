@@ -15,7 +15,7 @@ from nbxtensor.tensor import NBXTensor
 @pytest.mark.parametrize("right", [False, True])
 @pytest.mark.parametrize("nb", [0, 1, 4])
 def test_bucketize_answers_as_searchsorted(nb, right):
-    from nbxtensor.ops.wrappers import bucketize_wrapper
+    from nbxtensor.ops.index_wrappers import bucketize_wrapper
     x = np.arange(784, dtype=np.int64)
     b = np.sort(np.random.default_rng(nb).choice(784, size=nb, replace=False)).astype(np.int64)
     got = bucketize_wrapper(NBXTensor.from_numpy(x), NBXTensor.from_numpy(b), right=right).numpy()

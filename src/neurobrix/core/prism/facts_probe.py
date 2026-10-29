@@ -37,6 +37,7 @@ def matmul_tflops(dtype: str, sizes: Sequence[int] = (2048, 4096, 8192), warmup:
     import numpy as np
     from nbxtensor.backend import launcher as L
     from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
     from nbxtensor.tensor import NBXTensor
     npd = {"float16": np.float16, "float32": np.float32, "bfloat16": np.float32}[dtype]
     rng = np.random.default_rng(0)
@@ -44,7 +45,7 @@ def matmul_tflops(dtype: str, sizes: Sequence[int] = (2048, 4096, 8192), warmup:
     for n in sizes:
         a = NBXTensor.from_numpy(np.ascontiguousarray((rng.standard_normal((n, n)) * 0.1).astype(npd))).to_cuda(0).to(dtype)
         b = NBXTensor.from_numpy(np.ascontiguousarray((rng.standard_normal((n, n)) * 0.1).astype(npd))).to_cuda(0).to(dtype)
-        ms = float(L.do_bench(lambda: W.mm(a, b), warmup=warmup, rep=rep))
+        ms = float(L.do_bench(lambda: _nbx_linalg_wrappers.mm(a, b), warmup=warmup, rep=rep))
         per[n] = 2.0 * n * n * n / (ms * 1e-3) / 1e12
         del a, b
     return {"best": max(per.values()), "per_size": per}
@@ -63,11 +64,12 @@ def gemv_gbps(dtype: str, engine: str, k: int = 4096, n: int = 14336, reps: int 
     if engine == "triton":
         from nbxtensor.backend import launcher as L
         from nbxtensor.ops import wrappers as W
+        from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
         from nbxtensor.tensor import NBXTensor
         x = NBXTensor.from_numpy(xs).to_cuda(0).to(dtype)
         w = NBXTensor.from_numpy(ws).to_cuda(0).to(dtype)
         wt = w.t()
-        ms = float(L.do_bench(lambda: W.mm(x, wt), warmup=10, rep=reps))
+        ms = float(L.do_bench(lambda: _nbx_linalg_wrappers.mm(x, wt), warmup=10, rep=reps))
         nbytes = w.nbytes()
     else:
         import torch

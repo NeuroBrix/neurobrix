@@ -25,6 +25,7 @@ import numpy as np
 import pytest
 
 from nbxtensor.ops import wrappers as W
+from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.tensor import NBXTensor
 
 M, N, K = 1_100_000, 2048, 64          # M*N = 2 252 800 000 > 2**31; rows >= 1 048 576 overflow an int32 offset
@@ -92,7 +93,7 @@ def test_rows_past_the_int32_boundary_hold_the_product():
     rng = np.random.default_rng(20260914)
     a = rng.standard_normal((M, K), dtype=np.float32).astype(np.float16)
     b = rng.standard_normal((K, N), dtype=np.float32).astype(np.float16)
-    c = W.mm(NBXTensor.from_numpy(a), NBXTensor.from_numpy(b))
+    c = _nbx_linalg_wrappers.mm(NBXTensor.from_numpy(a), NBXTensor.from_numpy(b))
     assert tuple(c.shape) == (M, N)
     rows = [0, FIRST_OVERFLOWING_ROW - 1, FIRST_OVERFLOWING_ROW, FIRST_OVERFLOWING_ROW + 1, M - 1]
     ref = a[rows].astype(np.float32) @ b.astype(np.float32)

@@ -35,7 +35,7 @@ import numpy as np
 import pytest
 
 from nbxtensor.tensor import NBXTensor
-from nbxtensor.ops.wrappers import adaptive_avg_pool2d_wrapper, conv_depthwise2d_wrapper
+from nbxtensor.ops.conv_wrappers import adaptive_avg_pool2d_wrapper, conv_depthwise2d_wrapper
 
 
 def _fp32_tol(ref: np.ndarray) -> float:

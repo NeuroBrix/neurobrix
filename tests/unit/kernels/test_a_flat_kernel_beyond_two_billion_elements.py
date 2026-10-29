@@ -19,6 +19,7 @@ import numpy as np
 import pytest
 
 from nbxtensor.ops import wrappers as W
+from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.tensor import NBXTensor
 
 ROWS, COLS = 1_100_000, 2048            # 2 252 800 000 elements; the int32 boundary falls inside row 1 048 576
@@ -90,6 +91,6 @@ def test_fill_strided_copy_and_add_reach_past_the_boundary():
     assert tuple(y.shape) == (COLS, ROWS)
     last = y[COLS - 1:COLS].contiguous().numpy()[0]
     assert last.shape == (ROWS,) and float(last[-1]) == 1.0 and float(last[0]) == 1.0, "the strided copy lost the far end"
-    z = W.add(x, x)
+    z = _nbx_elementwise_wrappers.add(x, x)
     for p in probes:
         assert _at(z, p) == 2.0, f"add did not reach element {p}"

@@ -43,6 +43,7 @@ def main() -> int:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
     import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
     from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.dtype.nbx_dtype import NBXDtype
     from nbxtensor.dtype.convert import f32_to_bf16_bits, bf16_bits_to_f32
@@ -62,7 +63,7 @@ def main() -> int:
     b = NBXTensor.from_numpy(b32)
     bias = NBXTensor.from_numpy(f32_to_bf16_bits(bias32),
                                 dtype=NBXDtype.bfloat16)
-    ours = np.asarray(W.addmm(bias, a, b).to_cpu().numpy(), dtype=np.float64)
+    ours = np.asarray(_nbx_linalg_wrappers.addmm(bias, a, b).to_cpu().numpy(), dtype=np.float64)
 
     import torch
     dev = "mps" if torch.backends.mps.is_available() else "cpu"

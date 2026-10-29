@@ -57,6 +57,7 @@ except ModuleNotFoundError:  # script-mode under a pytest-less GPU venv
     pytest = _NoPytest()  # type: ignore[assignment]
 
 from nbxtensor.ops import wrappers as W
+from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.tensor import NBXTensor
@@ -86,7 +87,7 @@ def _d2h(t):
 
 
 def _check(x: np.ndarray, descending: bool, label: str) -> None:
-    v, i = W.sort_wrapper(NBXTensor.from_numpy(x), dim=-1, descending=descending)
+    v, i = _nbx_elementwise_wrappers.sort_wrapper(NBXTensor.from_numpy(x), dim=-1, descending=descending)
     got_v = _d2h(v).astype(np.float32)
     got_i = _d2h(i)
     ref = x.astype(np.float32)

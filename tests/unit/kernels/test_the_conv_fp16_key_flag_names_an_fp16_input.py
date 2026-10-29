@@ -63,6 +63,7 @@ def test_an_existing_right_key_is_never_overwritten(tmp_path):
 
 def test_the_wrapper_flags_an_fp16_input_by_its_nbx_dtype():
     from nbxtensor.ops import wrappers as W
-    src = inspect.getsource(W.conv2d_wrapper)
+    from nbxtensor.ops import conv_wrappers as _nbx_conv_wrappers  # the family the moved names live in (M2 split)
+    src = inspect.getsource(_nbx_conv_wrappers.conv2d_wrapper)
     assert "fp16 = x.dtype == NBXDtype.float16" not in src
     assert "== NBXDtype.float16" in src and "nbx_dtype" in src

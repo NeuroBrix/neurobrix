@@ -101,16 +101,17 @@ def test_the_sdpa_route_is_unchanged(args, expected):
 
 def test_the_sdpa_scores_budget_for_a_device_is_unchanged(monkeypatch):
     from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
     devs = [SimpleNamespace(index=0, memory_mb=16384), SimpleNamespace(index=2, memory_mb=32768)]
     monkeypatch.setattr(W, "get_hardware_profile", lambda: SimpleNamespace(devices=devs))
-    monkeypatch.setattr(W, "_sdpa_math_scores_budget_bytes", lambda: 2 << 30)
-    monkeypatch.setattr(W, "_sdpa_math_scores_device_fraction", lambda: 0.066)
-    assert W._sdpa_math_scores_budget_bytes_for(0) == 1133871366
-    assert W._sdpa_math_scores_budget_bytes_for(2) == 2147483648
-    assert W._sdpa_math_scores_budget_bytes_for(None) == 2147483648
-    assert W._sdpa_math_scores_budget_bytes_for(7) == 2147483648
-    monkeypatch.setattr(W, "_sdpa_math_scores_budget_bytes", lambda: 0)
-    assert W._sdpa_math_scores_budget_bytes_for(0) == 0
+    monkeypatch.setattr(_nbx_attention_wrappers, "_sdpa_math_scores_budget_bytes", lambda: 2 << 30)
+    monkeypatch.setattr(_nbx_attention_wrappers, "_sdpa_math_scores_device_fraction", lambda: 0.066)
+    assert _nbx_attention_wrappers._sdpa_math_scores_budget_bytes_for(0) == 1133871366
+    assert _nbx_attention_wrappers._sdpa_math_scores_budget_bytes_for(2) == 2147483648
+    assert _nbx_attention_wrappers._sdpa_math_scores_budget_bytes_for(None) == 2147483648
+    assert _nbx_attention_wrappers._sdpa_math_scores_budget_bytes_for(7) == 2147483648
+    monkeypatch.setattr(_nbx_attention_wrappers, "_sdpa_math_scores_budget_bytes", lambda: 0)
+    assert _nbx_attention_wrappers._sdpa_math_scores_budget_bytes_for(0) == 0
 
 
 # --- Prism's op-level band factors and op budget --------------------------------------------------
@@ -312,6 +313,7 @@ def test_a_refused_attention_chunk_is_an_error_naming_its_key_never_a_smaller_re
     An allocation failure re-raises naming the key (op, shape, rows, bytes asked); there is no
     second launch at fewer rows (the 2026-09-02 halving retry is gone)."""
     from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
     from nbxtensor.memory.allocator import DeviceOOMError
 
     class _T:
@@ -331,11 +333,11 @@ def test_a_refused_attention_chunk_is_an_error_naming_its_key_never_a_smaller_re
         raise DeviceOOMError("GPU malloc failed (injected)", requested=4 * GiB, device_idx=0)
 
     monkeypatch.setattr(W, "NBXTensor", SimpleNamespace(empty=lambda *a, **k: _T((2, 8, 4096, 64))))
-    monkeypatch.setattr(W, "_math_attention", _refused)
-    monkeypatch.setattr(W, "_sdpa_math_min_chunk_rows", lambda: 128)   # a halving retry would fire
+    monkeypatch.setattr(_nbx_attention_wrappers, "_math_attention", _refused)
+    monkeypatch.setattr(_nbx_attention_wrappers, "_sdpa_math_min_chunk_rows", lambda: 128)   # a halving retry would fire
     q, kv = _T((2, 8, 4096, 64)), _T((2, 8, 4096, 64))
     with pytest.raises(DeviceOOMError) as e:
-        W._math_attention_chunked(q, kv, kv, None, False, 0.125, 1024)
+        _nbx_attention_wrappers._math_attention_chunked(q, kv, kv, None, False, 0.125, 1024)
     msg = str(e.value)
     assert "chunked SDPA: q [2, 8, 4096, 64]" in msg and "1024 rows a chunk" in msg, msg
     assert f"{2 * 8 * 1024 * 4096 * 4} bytes of fp32 scores asked" in msg, msg

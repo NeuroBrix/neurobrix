@@ -105,6 +105,7 @@ def test_the_floor_survives_the_profile_ceiling():
         pytest.skip("the Metal floor is what conflicts with the profile row")
     import numpy as np
     from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
     from nbxtensor.tensor import NBXTensor
 
     rng = np.random.default_rng(20260912)
@@ -112,7 +113,7 @@ def test_the_floor_survives_the_profile_ceiling():
     q = NBXTensor.from_numpy((rng.standard_normal((B, H, 1, D)) * 0.1).astype(np.float32))
     k = NBXTensor.from_numpy((rng.standard_normal((B, H, 1, D)) * 0.1).astype(np.float32))
     v = NBXTensor.from_numpy((rng.standard_normal((B, H, 1, D)) * 0.1).astype(np.float32))
-    out = W.scaled_dot_product_attention_wrapper(q, k, v)   # must not refuse
+    out = _nbx_attention_wrappers.scaled_dot_product_attention_wrapper(q, k, v)   # must not refuse
     got = np.asarray(out.to_cpu().numpy(), dtype=np.float64)
 
     torch = pytest.importorskip("torch")

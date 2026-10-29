@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 
 from nbxtensor.ops import wrappers as W
+from nbxtensor.ops import conv_wrappers as _nbx_conv_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.tensor import NBXTensor
 
@@ -38,8 +39,8 @@ def _profile():
 @pytest.fixture
 def taken(monkeypatch):
     calls = []
-    real = W._conv2d_m8n8k4
-    monkeypatch.setattr(W, "_conv2d_m8n8k4", lambda *a, **kw: (calls.append(a[0].shape), real(*a, **kw))[1])
+    real = _nbx_conv_wrappers._conv2d_m8n8k4
+    monkeypatch.setattr(_nbx_conv_wrappers, "_conv2d_m8n8k4", lambda *a, **kw: (calls.append(a[0].shape), real(*a, **kw))[1])
     return calls
 
 
@@ -88,7 +89,7 @@ def test_conv2d_matches_fp64(N, C, H, Wd, O, KH, KW, s, p, d, g, bias_dtype, tak
     x = (rng.standard_normal((N, C, H, Wd)) * 0.5).astype(np.float16)
     w = (rng.standard_normal((O, C // g, KH, KW)) * 0.3).astype(np.float16)
     b = None if bias_dtype is None else rng.standard_normal(O).astype(bias_dtype)
-    out = W.conv2d_wrapper(_nb(x), _nb(w), None if b is None else _nb(b), stride=list(s), padding=list(p),
+    out = _nbx_conv_wrappers.conv2d_wrapper(_nb(x), _nb(w), None if b is None else _nb(b), stride=list(s), padding=list(p),
                            dilation=list(d), groups=g).numpy()
     assert taken, "the m8n8k4 route was not taken"
     ref = _ref(x, w, b, s, p, d, g)
@@ -102,7 +103,7 @@ def test_a_strided_input_is_read_through_its_strides(taken):
     x = (rng.standard_normal((1, 40, 18, 18)) * 0.5).astype(np.float16)
     w = (rng.standard_normal((24, 20, 3, 3)) * 0.3).astype(np.float16)
     xs = _nb(x).narrow(1, 10, 20)                                    # a channel slice: non-contiguous view
-    out = W.conv2d_wrapper(xs, _nb(w), None, stride=[1, 1], padding=[1, 1], dilation=[1, 1], groups=1).numpy()
+    out = _nbx_conv_wrappers.conv2d_wrapper(xs, _nb(w), None, stride=[1, 1], padding=[1, 1], dilation=[1, 1], groups=1).numpy()
     assert taken
     ref = _ref(x[:, 10:30], w, None, (1, 1), (1, 1), (1, 1), 1)
     rel = np.abs(out.astype(np.float64) - ref).max() / np.abs(ref).max()
@@ -113,7 +114,7 @@ def test_an_fp32_operand_keeps_the_exact_path(taken):
     rng = np.random.default_rng(3)
     x = rng.standard_normal((1, 8, 12, 12)).astype(np.float32) * 70000.0     # beyond fp16
     w = rng.standard_normal((8, 8, 3, 3)).astype(np.float32)
-    got = W.conv2d_wrapper(_nb(x), _nb(w), None, stride=[1, 1], padding=[1, 1], dilation=[1, 1], groups=1).numpy()
+    got = _nbx_conv_wrappers.conv2d_wrapper(_nb(x), _nb(w), None, stride=[1, 1], padding=[1, 1], dilation=[1, 1], groups=1).numpy()
     assert not taken, "an fp32 operand took the fp16 matrix unit"
     assert np.isfinite(got).all()
 

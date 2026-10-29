@@ -33,15 +33,16 @@ PROBE = textwrap.dedent("""
                                                   "compute_capability": "7.0", "architecture": "volta"}]})
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.ops import wrappers as W
+    import nbxtensor.ops.conv_wrappers as _nbx_conv_wrappers
     from nbxtensor.ops import _configs as C
     C.matrix_unit = W._matrix_unit = lambda: {}     # the tl.dot convolution's keys (the unit's have none)
     x1 = NBXTensor.empty((1, 64, 1, 4021), "float16", 0)
     w1 = NBXTensor.empty((64, 64, 1, 3), "float16", 0)
-    W.conv2d_wrapper(x1, w1, None, (1, 1), (0, 1), (1, 1), False, 0, 1)
+    _nbx_conv_wrappers.conv2d_wrapper(x1, w1, None, (1, 1), (0, 1), (1, 1), False, 0, 1)
     wd = NBXTensor.empty((64, 1, 1, 3), "float16", 0)
-    W.conv2d_wrapper(x1, wd, None, (1, 1), (0, 1), (1, 1), False, 0, 64)
+    _nbx_conv_wrappers.conv2d_wrapper(x1, wd, None, (1, 1), (0, 1), (1, 1), False, 0, 64)
     x2 = NBXTensor.empty((1, 64, 37, 4021), "float16", 0)
-    W.conv2d_wrapper(x2, w1, None, (1, 1), (0, 1), (1, 1), False, 0, 1)
+    _nbx_conv_wrappers.conv2d_wrapper(x2, w1, None, (1, 1), (0, 1), (1, 1), False, 0, 1)
     print("DONE")
 """)
 

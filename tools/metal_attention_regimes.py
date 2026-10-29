@@ -39,6 +39,7 @@ import time
 from pathlib import Path
 
 import numpy as np
+from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
 
 
 # The three caches that decide what a run measures. A regime table produced
@@ -209,7 +210,7 @@ def _measure(dtype, NBXTensor, wrappers) -> list:
                "dtype": str(dtype)}
         started = time.time()
         try:
-            out = wrappers.scaled_dot_product_attention_wrapper(
+            out = _nbx_attention_wrappers.scaled_dot_product_attention_wrapper(
                 NBXTensor.from_numpy(q), NBXTensor.from_numpy(k),
                 NBXTensor.from_numpy(v),
                 attn_mask=(None if bias is None

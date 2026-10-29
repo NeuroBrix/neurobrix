@@ -44,6 +44,7 @@ def test_a_long_row_reduction_reserves_no_local_memory():
     code = textwrap.dedent("""
         import ctypes
         import neurobrix  # the application: nbxtensor's host services
+        import nbxtensor.ops.reduction_wrappers as _nbx_reduction_wrappers
         from nbxtensor.dtype.nbx_dtype import NBXDtype; from nbxtensor.tensor import NBXTensor; from nbxtensor.memory.allocator import DeviceAllocator; from nbxtensor.backend.runtime import _gpu_runtime
         from nbxtensor.ops import wrappers as W
         rt = _gpu_runtime()
@@ -51,7 +52,7 @@ def test_a_long_row_reduction_reserves_no_local_memory():
             f, t = ctypes.c_size_t(), ctypes.c_size_t(); rt.cudaMemGetInfo(ctypes.byref(f), ctypes.byref(t))
             return (t.value - f.value) >> 20
         x = NBXTensor.empty((2, 36, 12, 60, 104), NBXDtype.float32, "cuda:0"); DeviceAllocator.sync_device()
-        u0 = used(); W.sum_wrapper(x, dim=[0, 1, 3, 4]); DeviceAllocator.sync_device()
+        u0 = used(); _nbx_reduction_wrappers.sum_wrapper(x, dim=[0, 1, 3, 4]); DeviceAllocator.sync_device()
         print(used() - u0)
     """)
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=600,
@@ -66,6 +67,7 @@ def test_a_long_row_reduction_reserves_no_local_memory():
 @pytest.mark.parametrize("feat", [1, 63, 64, 4095, 4096, 4097, 8192, 12289, 224640])
 def test_sum_mean_amax_agree_with_float64_at_every_row_length(feat):
     from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import reduction_wrappers as _nbx_reduction_wrappers  # the family the moved names live in (M2 split)
     from nbxtensor.tensor import NBXTensor
     rng = np.random.default_rng(feat)
     a = rng.standard_normal((3, feat)).astype(np.float32)
@@ -73,6 +75,6 @@ def test_sum_mean_amax_agree_with_float64_at_every_row_length(feat):
     x = NBXTensor.from_numpy(a)
     ref = a.astype(np.float64)
     tol = 1e-5 * np.sqrt(feat) + 1e-5
-    np.testing.assert_allclose(W.sum_wrapper(x, dim=1).numpy(), ref.sum(1), rtol=1e-5, atol=tol * 10)
-    np.testing.assert_allclose(W.mean_wrapper(x, dim=1).numpy(), ref.mean(1), rtol=1e-5, atol=tol)
-    np.testing.assert_array_equal(W.amax_wrapper(x, dim=1).numpy(), a.max(1))
+    np.testing.assert_allclose(_nbx_reduction_wrappers.sum_wrapper(x, dim=1).numpy(), ref.sum(1), rtol=1e-5, atol=tol * 10)
+    np.testing.assert_allclose(_nbx_reduction_wrappers.mean_wrapper(x, dim=1).numpy(), ref.mean(1), rtol=1e-5, atol=tol)
+    np.testing.assert_array_equal(_nbx_reduction_wrappers.amax_wrapper(x, dim=1).numpy(), a.max(1))

@@ -60,6 +60,11 @@ import subprocess
 
 import numpy as np
 import pytest
+from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
+from nbxtensor.ops import index_wrappers as _nbx_index_wrappers  # the family the moved names live in (M2 split)
+from nbxtensor.ops import norm_wrappers as _nbx_norm_wrappers  # the family the moved names live in (M2 split)
+from nbxtensor.ops import reduction_wrappers as _nbx_reduction_wrappers  # the family the moved names live in (M2 split)
+from nbxtensor.ops import shape_wrappers as _nbx_shape_wrappers  # the family the moved names live in (M2 split)
 
 # A rig-less checkout must still collect and run the CPU half -- but the guard
 # covers the PACKAGE, not the names. A catch-all around a name list turns the
@@ -136,7 +141,7 @@ does with an integer."""
 def _block_sizes():
     """Read from the wrapper module, never copied: a constant duplicated into a
     test is a constant that stops matching the code without saying so."""
-    return w._RED_BM, w._RED_BN
+    return _nbx_elementwise_wrappers._RED_BM, _nbx_elementwise_wrappers._RED_BN
 
 
 def _overhangs(extent: int, block: int, what: str) -> None:
@@ -198,15 +203,15 @@ def test_row_reductions_against_torch_at_an_overhanging_shape(op):
     x, t = _nbx(a), torch.from_numpy(a)
 
     if op == "prod":
-        got, want = w.prod_wrapper(x, dim=1), torch.prod(t, dim=1)
+        got, want = _nbx_reduction_wrappers.prod_wrapper(x, dim=1), torch.prod(t, dim=1)
     elif op == "min":
-        got, want = w.min_wrapper(x, dim=1)[0], torch.min(t, dim=1).values
+        got, want = _nbx_elementwise_wrappers.min_wrapper(x, dim=1)[0], torch.min(t, dim=1).values
     elif op == "max":
-        got, want = w.max_wrapper(x, dim=1)[0], torch.max(t, dim=1).values
+        got, want = _nbx_elementwise_wrappers.max_wrapper(x, dim=1)[0], torch.max(t, dim=1).values
     elif op == "var":
-        got, want = w.var_wrapper(x, dim=1, correction=1), torch.var(t, dim=1, correction=1)
+        got, want = _nbx_reduction_wrappers.var_wrapper(x, dim=1, correction=1), torch.var(t, dim=1, correction=1)
     else:
-        got, want = w.argmin_wrapper(x, dim=1), torch.argmin(t, dim=1)
+        got, want = _nbx_reduction_wrappers.argmin_wrapper(x, dim=1), torch.argmin(t, dim=1)
 
     got = nbx_to_torch(got).cpu()
     assert got.shape == want.shape, f"{op}: shape {tuple(got.shape)} vs {tuple(want.shape)}"
@@ -229,11 +234,11 @@ def test_all_and_any_with_the_single_disagreeing_element_in_the_tail(op):
     if op == "all":
         a = np.ones((M_ROWS, N_COLS), dtype=np.float32)
         a[M_ROWS - 1, N_COLS - 1] = 0.0
-        got, want = w.all_wrapper(_nbx(a), dim=1), torch.all(torch.from_numpy(a) != 0, dim=1)
+        got, want = _nbx_reduction_wrappers.all_wrapper(_nbx(a), dim=1), torch.all(torch.from_numpy(a) != 0, dim=1)
     else:
         a = np.zeros((M_ROWS, N_COLS), dtype=np.float32)
         a[M_ROWS - 1, N_COLS - 1] = 1.0
-        got, want = w.any_wrapper(_nbx(a), dim=1), torch.any(torch.from_numpy(a) != 0, dim=1)
+        got, want = _nbx_reduction_wrappers.any_wrapper(_nbx(a), dim=1), torch.any(torch.from_numpy(a) != 0, dim=1)
 
     got = nbx_to_torch(got).cpu().bool()
     assert torch.equal(got, want), (
@@ -255,7 +260,7 @@ def test_triangular_kernels_at_three_diagonals(op, diagonal):
     rng = np.random.default_rng(11)
     a = rng.standard_normal((TRI_M, TRI_N), dtype=np.float32)
     t = torch.from_numpy(a)
-    fn = w.tril_wrapper if op == "tril" else w.triu_wrapper
+    fn = _nbx_shape_wrappers.tril_wrapper if op == "tril" else _nbx_shape_wrappers.triu_wrapper
     ref = torch.tril if op == "tril" else torch.triu
     got = nbx_to_torch(fn(_nbx(a), diagonal=diagonal)).cpu()
     torch.testing.assert_close(got, ref(t, diagonal=diagonal))
@@ -275,7 +280,7 @@ def test_weight_norm_reads_the_second_pass(dim):
     v = rng.standard_normal((WN_M, WN_N), dtype=np.float32)
     g = rng.standard_normal(WN_M if dim == 0 else WN_N, dtype=np.float32)
 
-    out, _norm = w.weight_norm_interface_wrapper(_nbx(v), _nbx(g), dim=dim)
+    out, _norm = _nbx_norm_wrappers.weight_norm_interface_wrapper(_nbx(v), _nbx(g), dim=dim)
     tv, tg = torch.from_numpy(v), torch.from_numpy(g)
     want = torch._weight_norm_interface(tv, tg, dim)[0]
     torch.testing.assert_close(nbx_to_torch(out).cpu(), want, rtol=2e-5, atol=2e-5)
@@ -298,7 +303,7 @@ def test_where_treats_any_nonzero_byte_as_true(truthy):
     x = rng.standard_normal(WHERE_N, dtype=np.float32)
     y = rng.standard_normal(WHERE_N, dtype=np.float32)
 
-    got = nbx_to_torch(w.where_wrapper(_nbx(cond), _nbx(x), _nbx(y))).cpu()
+    got = nbx_to_torch(_nbx_index_wrappers.where_wrapper(_nbx(cond), _nbx(x), _nbx(y))).cpu()
     want = torch.where(torch.from_numpy(cond) != 0,
                        torch.from_numpy(x), torch.from_numpy(y))
     torch.testing.assert_close(got, want)

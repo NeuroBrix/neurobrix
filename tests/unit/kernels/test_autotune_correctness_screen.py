@@ -221,6 +221,7 @@ def test_the_screen_saves_fp16_mm_on_this_machine():
     """
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.ops import wrappers
+    from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
 
     launcher.install()
     launcher.clear_screened()
@@ -228,7 +229,7 @@ def test_the_screen_saves_fp16_mm_on_this_machine():
     rng = np.random.default_rng(0)
     a = rng.standard_normal((64, 32)).astype(np.float16)
     b = rng.standard_normal((32, 64)).astype(np.float16)
-    got = np.asarray(wrappers.mm(NBXTensor.from_numpy(a),
+    got = np.asarray(_nbx_linalg_wrappers.mm(NBXTensor.from_numpy(a),
                                  NBXTensor.from_numpy(b)).numpy())
     reference = a.astype(np.float64) @ b.astype(np.float64)
 

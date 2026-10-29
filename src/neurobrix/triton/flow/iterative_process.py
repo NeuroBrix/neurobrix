@@ -34,7 +34,8 @@ _FLOAT_NBX_DTYPES = (NBXDtype.float16, NBXDtype.bfloat16,
 def _gate_component_outputs_finite(resolved: Any, comp_name: str) -> None:
     """R30 mirror of core/flow/iterative_process._gate_component_outputs_finite
     (R33: NBXTensor + the isfinite/all Triton wrappers, no torch)."""
-    from nbxtensor.ops.wrappers import all_wrapper, isfinite_wrapper
+    from nbxtensor.ops.reduction_wrappers import all_wrapper
+    from nbxtensor.ops.elementwise_wrappers import isfinite_wrapper
     from nbxtensor.tensor import NBXTensor
     for key, val in list(resolved.items()):
         if not str(key).startswith(f"{comp_name}.output"):
@@ -77,7 +78,8 @@ def _gate_loop_state_finite(state: Any, step_idx: int, timestep: Any,
 
     if not isinstance(state, NBXTensor) or state.nbx_dtype not in _FLOAT_NBX_DTYPES:
         return
-    from nbxtensor.ops.wrappers import all_wrapper, isfinite_wrapper
+    from nbxtensor.ops.reduction_wrappers import all_wrapper
+    from nbxtensor.ops.elementwise_wrappers import isfinite_wrapper
     if bool(all_wrapper(isfinite_wrapper(state)).item()):
         return
     ts = timestep.item() if hasattr(timestep, "item") else timestep
@@ -1084,7 +1086,7 @@ class TritonIterativeProcessHandler:
     def _apply_latent_affine(self, state_key: str, decoder_name: str) -> None:
         import numpy as np
         from neurobrix.core.runtime.resolution.latent_statistics import latent_affine, decoder_profile
-        from nbxtensor.ops.wrappers import add as _add, mul as _mul
+        from nbxtensor.ops.elementwise_wrappers import add as _add, mul as _mul
         affine = latent_affine(decoder_profile(self.ctx.pkg, decoder_name))
         if affine is None:
             return
@@ -1219,7 +1221,7 @@ class TritonIterativeProcessHandler:
         br = self.ctx.binned_request
         if br is None or not post_loop:
             return
-        from nbxtensor.ops.wrappers import upsample_bilinear2d_wrapper
+        from nbxtensor.ops.linalg_wrappers import upsample_bilinear2d_wrapper
         from neurobrix.core.runtime.resolution.resolution_binning import restore_fold, restore_plan
         comp = post_loop[-1]
         resolved = self.ctx.variable_resolver.resolved

@@ -211,7 +211,7 @@ def main() -> int:
 
     from nbxtensor.backend import metal_device
     from nbxtensor.ops.rmsnorm import rms_norm_forward_kernel
-    from nbxtensor.ops.wrappers import _batch_block
+    from nbxtensor.ops.elementwise_wrappers import _batch_block
 
     runtime = metal_device.runtime()
     info = get_device_info()

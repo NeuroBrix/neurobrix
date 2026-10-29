@@ -26,7 +26,8 @@ from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype, parse_dtype
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.backend.runtime import invalidate_current_device_cache
-from nbxtensor.ops.wrappers import deferred_drain_policy, _DEFERRED_DRAIN_FLOOR_DEFAULT
+from nbxtensor.ops.elementwise_wrappers import deferred_drain_policy
+from nbxtensor.ops.wrappers import _DEFERRED_DRAIN_FLOOR_DEFAULT
 
 from nbxtensor.memory.arena import Arena
 from .symbols import SymbolResolver, impossible_extent_context
@@ -350,7 +351,9 @@ def _nbx_same_bits(a: NBXTensor, b: NBXTensor) -> bool:
     if a._dtype != NBXDtype.bool_ and a.element_size() not in _BITS_OF_ITEMSIZE:
         return False                    # no integer of that width: never reused, always evaluated (exact)
     from nbxtensor.ops import wrappers as _wr
-    return bool(_wr.all_wrapper(_wr.eq(_nbx_bits(a), _nbx_bits(b))).item())
+    from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
+    from nbxtensor.ops import reduction_wrappers as _nbx_reduction_wrappers  # the family the moved names live in (M2 split)
+    return bool(_nbx_reduction_wrappers.all_wrapper(_nbx_elementwise_wrappers.eq(_nbx_bits(a), _nbx_bits(b))).item())
 
 
 def _nbx_keep(t: NBXTensor) -> NBXTensor:
@@ -3216,6 +3219,7 @@ class TritonSequence:
         host's state owners (`_replay_advances`): a head stretch's replayed launches advance its own layers' device
         counters exactly as its direct run does. A segment the replay declines runs directly."""
         from nbxtensor.ops import wrappers as _w
+        from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
         try:
             for idx, (kind, a, b, boundary, skip) in enumerate(self._expert_segments()):
                 self._run_skip = skip
@@ -3227,7 +3231,7 @@ class TritonSequence:
                 # each replayed segment is a run of its own for the per-run caches: a rotary table widened once per
                 # run would be read by a recorded segment at another segment's address of the recorded step (stale
                 # at replay); emptied, the segment widens its own and the recording captures it
-                _w.begin_run()
+                _nbx_elementwise_wrappers.begin_run()
                 if not _replay.maybe_run(self, skip_kills, None):
                     self._run_multi_device(skip_kills, pre_op_callback)
         finally:
@@ -3342,11 +3346,12 @@ class TritonSequence:
         # multi-component runs correct. Single-threaded NeuroBrix runtime,
         # safe to use module-level state.
         from nbxtensor.ops import wrappers as _w
+        from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
         _prev_dt = _w.get_compute_dtype()
         _prev_safe = _w.get_activations_fp16_safe()
         _w.set_compute_dtype(self._compute_dtype)
         _w.set_activations_fp16_safe(self._activations_fp16_safe)
-        _w.begin_run()                      # the per-run caches empty (the step's rotary tables widened once)
+        _nbx_elementwise_wrappers.begin_run()                      # the per-run caches empty (the step's rotary tables widened once)
         # RETENTION INSTRUMENT (NBX_RUN_LIVE_DIAG=1, 2026-09-21): what this device holds at the
         # entry and the exit of every invocation — live NBX bytes and bytes parked in the pool —
         # so a per-invocation growth at constant shape (the Apple x8 retention object: +410 MB

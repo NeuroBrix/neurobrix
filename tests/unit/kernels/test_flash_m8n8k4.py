@@ -16,6 +16,7 @@ import numpy as np
 import pytest
 
 from nbxtensor.ops import wrappers as W
+from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.tensor import NBXTensor
 
@@ -59,8 +60,8 @@ CASES = [
 @pytest.mark.parametrize("B,H,Hk,Tq,Tk,D,mask", CASES)
 def test_m8n8k4_flash_matches_fp64(B, H, Hk, Tq, Tk, D, mask, monkeypatch):
     calls = []
-    real = W._flash_m8n8k4
-    monkeypatch.setattr(W, "_flash_m8n8k4", lambda *a, **kw: (calls.append(a[0].shape), real(*a, **kw))[1])
+    real = _nbx_attention_wrappers._flash_m8n8k4
+    monkeypatch.setattr(_nbx_attention_wrappers, "_flash_m8n8k4", lambda *a, **kw: (calls.append(a[0].shape), real(*a, **kw))[1])
     monkeypatch.setattr(W._lk, "sdpa_route", lambda *a, **kw: ("flash", 0))
     rng = np.random.default_rng(B * 1000 + Tq + D)
     q = (rng.standard_normal((B, H, Tq, D)) * 0.5).astype(np.float16)
@@ -79,7 +80,7 @@ def test_m8n8k4_flash_matches_fp64(B, H, Hk, Tq, Tk, D, mask, monkeypatch):
             m[..., 7, :] = -np.inf
         bias = np.broadcast_to(m.astype(np.float64), (B, H, Tq, Tk))
         kw["attn_mask"] = nb(m)
-    out = W.scaled_dot_product_attention_wrapper(nb(q), nb(k), nb(v), k_pre_transposed=False, **kw)
+    out = _nbx_attention_wrappers.scaled_dot_product_attention_wrapper(nb(q), nb(k), nb(v), k_pre_transposed=False, **kw)
     assert calls, "the m8n8k4 route was not taken"
     got = out.numpy().astype(np.float64)
     ref = _oracle(q.astype(np.float64), k.astype(np.float64), v.astype(np.float64), bias, 1.0 / D ** 0.5)
@@ -98,14 +99,14 @@ def test_over_the_scores_budget_the_route_is_the_units_flash_and_deterministic(m
     h = NBXDtype.float16
     assert LK.unit_flash_takes(96, h, h, h) and not LK.unit_flash_takes(96, NBXDtype.float32, h, h)
     calls = []
-    real = W._flash_m8n8k4
-    monkeypatch.setattr(W, "_flash_m8n8k4", lambda *a, **kw: (calls.append(a[0].shape), real(*a, **kw))[1])
-    monkeypatch.setattr(W, "_sdpa_math_scores_budget_bytes_for", lambda *_: 1 << 20)
+    real = _nbx_attention_wrappers._flash_m8n8k4
+    monkeypatch.setattr(_nbx_attention_wrappers, "_flash_m8n8k4", lambda *a, **kw: (calls.append(a[0].shape), real(*a, **kw))[1])
+    monkeypatch.setattr(_nbx_attention_wrappers, "_sdpa_math_scores_budget_bytes_for", lambda *_: 1 << 20)
     rng = np.random.default_rng(5)
     B, H, T, D = 1, 2, 1024, 96
     q, k, v = ((rng.standard_normal((B, H, T, D)) * 0.5).astype(np.float16) for _ in range(3))
     nb = lambda x: NBXTensor.from_numpy(np.ascontiguousarray(x)).to("cuda:0")
-    outs = [W.scaled_dot_product_attention_wrapper(nb(q), nb(k), nb(v)).numpy() for _ in range(3)]
+    outs = [_nbx_attention_wrappers.scaled_dot_product_attention_wrapper(nb(q), nb(k), nb(v)).numpy() for _ in range(3)]
     assert len(calls) == 3, f"the unit's flash ran {len(calls)} of 3 times"
     assert all(np.array_equal(o.view(np.uint8), outs[0].view(np.uint8)) for o in outs[1:])
     ref = _oracle(q.astype(np.float64), k.astype(np.float64), v.astype(np.float64), 0.0, 1.0 / np.sqrt(D))

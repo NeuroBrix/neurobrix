@@ -36,6 +36,8 @@ import numpy as np
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.ops import wrappers as w
+from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
+from nbxtensor.ops import reduction_wrappers as _nbx_reduction_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.random.seeded_draw import SeededDrawStream, seeded_gaussian
 from nbxtensor.memory.device_transfer import needs_move, transfer_tensor
 from neurobrix.triton.flow.speech import _require, _from_np_on
@@ -179,9 +181,9 @@ class SpeechCFMLeg:
         if norm_proj:
             # F.normalize(p=2, dim=-1) mirror: x / max(||x||2, eps).
             pf = proj.to(NBXDtype.float32)
-            nrm = w.sqrt_wrapper(
-                w.sum_wrapper(pf * pf, dim=-1, keepdim=True))
-            nrm = w.clamp_min_wrapper(nrm, 1e-12)
+            nrm = _nbx_elementwise_wrappers.sqrt_wrapper(
+                _nbx_reduction_wrappers.sum_wrapper(pf * pf, dim=-1, keepdim=True))
+            nrm = _nbx_elementwise_wrappers.clamp_min_wrapper(nrm, 1e-12)
             proj = pf / nrm
         merged = text_emb.to(NBXDtype.float32) \
             + proj.to(NBXDtype.float32)                     # [1, T, H]

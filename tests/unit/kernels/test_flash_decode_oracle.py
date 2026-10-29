@@ -49,6 +49,7 @@ except ModuleNotFoundError:  # script-mode under a pytest-less GPU venv
     pytest = _NoPytest()  # type: ignore[assignment]
 
 from nbxtensor.ops import wrappers as W
+from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.tensor import NBXTensor
@@ -120,7 +121,7 @@ def _run(B, H, H_kv, T_k, D, bias_len=None, seed=0):
         bias = b
         bias_t = _t(b.reshape(1, 1, 1, T_k))
     q, k, v = _t(qn), _t(kn), _t(vn)
-    out = W.scaled_dot_product_attention_wrapper(
+    out = _nbx_attention_wrappers.scaled_dot_product_attention_wrapper(
         q, k, v, attn_mask=bias_t, is_causal=False,
         scale=1.0 / np.sqrt(D))
     got = _d2h(out).astype(np.float64).reshape(B, H, 1, D)
@@ -181,12 +182,12 @@ def test_masked_tail_contributes_nothing() -> None:
     b = np.zeros(T_k, dtype=np.float32); b[live:] = -np.inf
     bias_t = _t(b.reshape(1, 1, 1, T_k))
     scale = 1.0 / np.sqrt(D)
-    out1 = _d2h(W.scaled_dot_product_attention_wrapper(
+    out1 = _d2h(_nbx_attention_wrappers.scaled_dot_product_attention_wrapper(
         _t(qn), _t(kn), _t(vn), attn_mask=bias_t, scale=scale))
     kn2, vn2 = kn.copy(), vn.copy()
     kn2[:, :, live:] = 7.5     # garbage in the dead region
     vn2[:, :, live:] = -3.25
-    out2 = _d2h(W.scaled_dot_product_attention_wrapper(
+    out2 = _d2h(_nbx_attention_wrappers.scaled_dot_product_attention_wrapper(
         _t(qn), _t(kn2), _t(vn2), attn_mask=bias_t, scale=scale))
     assert np.array_equal(out1, out2), (
         "keys beyond the -inf bias changed the output — the masked tail "
@@ -199,16 +200,16 @@ def test_flash_decode_is_actually_routed_when_armed() -> None:
     if not _has_gpu():
         pytest.skip("no GPU")
     called = {"n": 0}
-    orig = W._flash_decode
+    orig = _nbx_attention_wrappers._flash_decode
 
     def probe(*a, **k):
         called["n"] += 1
         return orig(*a, **k)
-    W._flash_decode = probe
+    _nbx_attention_wrappers._flash_decode = probe
     try:
         _run(1, 32, 4, 256, 128, None)
     finally:
-        W._flash_decode = orig
+        _nbx_attention_wrappers._flash_decode = orig
     assert called["n"] == 1, (
         f"_flash_decode called {called['n']} times for a T_q=1 shape "
         f"with the flag armed — the routing hook is not reaching it")
@@ -223,12 +224,12 @@ def test_flash_decode_is_off_by_default() -> None:
     if not _has_gpu():
         pytest.skip("no GPU")
     called = {"n": 0}
-    orig = W._flash_decode
+    orig = _nbx_attention_wrappers._flash_decode
 
     def probe(*a, **k):
         called["n"] += 1
         return orig(*a, **k)
-    W._flash_decode = probe
+    _nbx_attention_wrappers._flash_decode = probe
     _os.environ.pop("NBX_FLASH_DECODE", None)
     try:
         import numpy as _np
@@ -236,10 +237,10 @@ def test_flash_decode_is_off_by_default() -> None:
         q = _t(rng.standard_normal((1, 32, 1, 128)).astype(_np.float16))
         k = _t(rng.standard_normal((1, 4, 256, 128)).astype(_np.float16))
         v = _t(rng.standard_normal((1, 4, 256, 128)).astype(_np.float16))
-        W.scaled_dot_product_attention_wrapper(
+        _nbx_attention_wrappers.scaled_dot_product_attention_wrapper(
             q, k, v, scale=1.0 / _np.sqrt(128))
     finally:
-        W._flash_decode = orig
+        _nbx_attention_wrappers._flash_decode = orig
     assert called["n"] == 0, (
         "flash_decode ran WITHOUT NBX_FLASH_DECODE=1 — the measured "
         "default-off decision has drifted")

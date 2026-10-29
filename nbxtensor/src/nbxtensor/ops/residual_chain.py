@@ -243,7 +243,9 @@ def band_streamed_chain_nbx(
     """
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.backend.runtime import _set_device
-    from nbxtensor.ops.wrappers import conv2d_wrapper, silu as silu_w, rms_norm as rms_norm_w, add as add_w
+    from nbxtensor.ops.conv_wrappers import conv2d_wrapper
+    from nbxtensor.ops.elementwise_wrappers import silu as silu_w, add as add_w
+    from nbxtensor.ops.norm_wrappers import rms_norm as rms_norm_w
 
     # P-TRITON-LIVE-WATERMARK-AUDIT L4b: explicit device sync at
     # entry. P-TRITON-CHAIN-CPU-POINTER C1 2026-05-14: diagnostic

@@ -39,7 +39,7 @@ def _t(shape):
 def test_a_temporal_conv_with_no_frame_to_produce_stops_by_name():
     _gpu_or_skip()
     from nbxtensor.memory.allocator import ImpossibleExtentError
-    from nbxtensor.ops.wrappers import conv2d_wrapper
+    from nbxtensor.ops.conv_wrappers import conv2d_wrapper
     x = _t((1, 4, 1, 8, 8))               # one frame
     w = _t((4, 4, 2, 1, 1))               # temporal kernel 2
     with pytest.raises(ImpossibleExtentError) as e:
@@ -51,7 +51,7 @@ def test_a_temporal_conv_with_no_frame_to_produce_stops_by_name():
 def test_a_spatial_conv_larger_than_its_input_stops_by_name():
     _gpu_or_skip()
     from nbxtensor.memory.allocator import ImpossibleExtentError
-    from nbxtensor.ops.wrappers import conv2d_wrapper
+    from nbxtensor.ops.conv_wrappers import conv2d_wrapper
     x = _t((1, 2, 2, 2))
     w = _t((2, 2, 3, 3))
     with pytest.raises(ImpossibleExtentError) as e:
@@ -61,7 +61,7 @@ def test_a_spatial_conv_larger_than_its_input_stops_by_name():
 
 def test_a_valid_conv_is_unchanged():
     _gpu_or_skip()
-    from nbxtensor.ops.wrappers import conv2d_wrapper
+    from nbxtensor.ops.conv_wrappers import conv2d_wrapper
     out = conv2d_wrapper(_t((1, 2, 5, 5)), _t((3, 2, 3, 3)), None, [1, 1], [0, 0], [1, 1],
                          False, [0, 0], 1)
     assert tuple(out.shape) == (1, 3, 3, 3)

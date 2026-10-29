@@ -52,6 +52,7 @@ pytestmark = pytest.mark.skipif(not _device_ready(), reason="a GPU device is req
 def test_repeated_identical_calls_return_identical_bytes():
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.ops import wrappers as w
+    from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
 
     # S=512 is the smallest shape MEASURED to detect the race: with the
     # round-trip restored it gives 7 distinct results in 8 calls, while S=256
@@ -67,7 +68,7 @@ def test_repeated_identical_calls_return_identical_bytes():
     seen = {}
     for i in range(REPS):
         try:
-            out = w.scaled_dot_product_attention_wrapper(tq, tk, tv).numpy()
+            out = _nbx_attention_wrappers.scaled_dot_product_attention_wrapper(tq, tk, tv).numpy()
         except Exception as exc:                       # noqa: BLE001
             # The bledden fork refuses this kernel outright — "a 2-D axis reduce
             # whose loop-carried result is BOTH stored 1-D and broadcast back to

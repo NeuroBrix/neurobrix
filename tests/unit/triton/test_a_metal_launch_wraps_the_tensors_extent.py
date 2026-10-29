@@ -68,9 +68,10 @@ def placed():
 
 def test_a_view_at_the_start_of_a_large_block_launches_as_cheaply_as_its_own_buffer(placed):
     from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
     own, view, vec, _ = placed
-    t_own = _ms_per_launch(lambda: W.mv_wrapper(own, vec))
-    t_view = _ms_per_launch(lambda: W.mv_wrapper(view, vec))
+    t_own = _ms_per_launch(lambda: _nbx_linalg_wrappers.mv_wrapper(own, vec))
+    t_view = _ms_per_launch(lambda: _nbx_linalg_wrappers.mv_wrapper(view, vec))
     assert t_view < 3 * t_own + 0.5, (
         f"a gemv on a view at the start of a 1 GiB block costs {t_view:.2f} ms per launch against {t_own:.2f} ms on "
         f"its own buffer: the launch wraps the rest of the allocation, not the tensor")
@@ -78,7 +79,8 @@ def test_a_view_at_the_start_of_a_large_block_launches_as_cheaply_as_its_own_buf
 
 def test_the_view_computes_what_its_own_buffer_computes(placed):
     from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
     own, view, vec, _ = placed
-    a = W.mv_wrapper(own, vec).numpy()
-    b = W.mv_wrapper(view, vec).numpy()
+    a = _nbx_linalg_wrappers.mv_wrapper(own, vec).numpy()
+    b = _nbx_linalg_wrappers.mv_wrapper(view, vec).numpy()
     assert np.array_equal(a, b)

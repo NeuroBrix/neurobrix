@@ -16,7 +16,7 @@ if not torch.cuda.is_available():
 from nbxtensor.tensor import NBXTensor  # noqa: E402
 from nbxtensor.memory.allocator import DeviceAllocator as DA
 from neurobrix.kernels.torch_interop import nbx_to_torch  # noqa: E402
-from nbxtensor.ops.wrappers import roll_wrapper  # noqa: E402
+from nbxtensor.ops.shape_wrappers import roll_wrapper  # noqa: E402
 
 
 @pytest.mark.parametrize("shifts,dims", [((-8, -8), (1, 2)), ((3,), (2,)), ((5, -2), (2, 1)), ((0, 4), (1, 2))])

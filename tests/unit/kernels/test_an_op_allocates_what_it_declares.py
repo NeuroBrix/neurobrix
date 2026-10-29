@@ -79,41 +79,47 @@ R, C = 256, 1024
 @pytest.mark.parametrize("transpose", [False, True])
 def test_unary(transpose):
     from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
     x = _x((C, R) if transpose else (R, C), "float16", transpose)
-    assert _measure(lambda: W.exp(x)) == elementwise_unary(_spec(x)).peak_bytes
+    assert _measure(lambda: _nbx_elementwise_wrappers.exp(x)) == elementwise_unary(_spec(x)).peak_bytes
 
 
 def test_binary_with_a_cast():
     from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
     a, b = _x((R, C), "float16"), _x((R, C), "float32")
     want = elementwise_binary(_spec(a), _spec(b), "float32", (R, C)).peak_bytes
-    assert _measure(lambda: W.add(a, b)) == want
+    assert _measure(lambda: _nbx_elementwise_wrappers.add(a, b)) == want
 
 
 @pytest.mark.parametrize("dim", [-1, 0])
 def test_softmax(dim):
     from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
     x = _x((R, C), "float16")
-    assert _measure(lambda: W.softmax(x, dim)) == softmax(_spec(x), dim).peak_bytes
+    assert _measure(lambda: _nbx_attention_wrappers.softmax(x, dim)) == softmax(_spec(x), dim).peak_bytes
 
 
 @pytest.mark.parametrize("transpose", [False, True])
 def test_rms_norm(transpose):
     from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import norm_wrappers as _nbx_norm_wrappers  # the family the moved names live in (M2 split)
     x = _x((C, R) if transpose else (R, C), "float16", transpose)
     w = _x((x.shape[-1],), "float16")
-    assert _measure(lambda: W.rms_norm(x, w)) == rms_norm(_spec(x), True).peak_bytes
+    assert _measure(lambda: _nbx_norm_wrappers.rms_norm(x, w)) == rms_norm(_spec(x), True).peak_bytes
 
 
 def test_layer_norm():
     from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import norm_wrappers as _nbx_norm_wrappers  # the family the moved names live in (M2 split)
     x, w, b = _x((R, C), "float16"), _x((C,), "float16"), _x((C,), "float16")
     want = native_layer_norm(_spec(x), (C,), True, True).peak_bytes
-    assert _measure(lambda: W.native_layer_norm(x, (C,), w, b)) == want
+    assert _measure(lambda: _nbx_norm_wrappers.native_layer_norm(x, (C,), w, b)) == want
 
 
 @pytest.mark.parametrize("dim", [-1, 0])
 def test_sum(dim):
     from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import reduction_wrappers as _nbx_reduction_wrappers  # the family the moved names live in (M2 split)
     x = _x((R, C), "float16")
-    assert _measure(lambda: W.sum_wrapper(x, dim)) == reduction(_spec(x), dim, False, "float16").peak_bytes
+    assert _measure(lambda: _nbx_reduction_wrappers.sum_wrapper(x, dim)) == reduction(_spec(x), dim, False, "float16").peak_bytes

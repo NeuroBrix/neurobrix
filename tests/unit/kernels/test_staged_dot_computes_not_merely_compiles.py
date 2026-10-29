@@ -199,7 +199,7 @@ def _run_pinned(x32, w32, blocks=None):
         # was calling the jit function positionally and was never updated, so every config
         # died with "missing argument 'output_height_stride'": the strides were landing two
         # positions early. The wrapper passes them here and so does this call now.
-        from nbxtensor.ops.wrappers import _conv_width_key
+        from nbxtensor.ops.conv_wrappers import _conv_width_key
         _in_w_key, _out_w_key = _conv_width_key(IN_H, OUT_H, IN_W, OUT_W, KW, STRIDE, PAD, 1)
         conv2d_forward_kernel.fn[grid](
             x, w, out,

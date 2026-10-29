@@ -1831,35 +1831,35 @@ class NBXTensor:
     # ========================================================================
 
     def __add__(self, other):
-        from nbxtensor.ops.wrappers import add
+        from nbxtensor.ops.elementwise_wrappers import add
         return add(self, other)
 
     def __radd__(self, other):
-        from nbxtensor.ops.wrappers import add
+        from nbxtensor.ops.elementwise_wrappers import add
         return add(other, self)
 
     def __sub__(self, other):
-        from nbxtensor.ops.wrappers import sub
+        from nbxtensor.ops.elementwise_wrappers import sub
         return sub(self, other)
 
     def __rsub__(self, other):
-        from nbxtensor.ops.wrappers import rsub
+        from nbxtensor.ops.elementwise_wrappers import rsub
         return rsub(self, other)
 
     def __mul__(self, other):
-        from nbxtensor.ops.wrappers import mul
+        from nbxtensor.ops.elementwise_wrappers import mul
         return mul(self, other)
 
     def __rmul__(self, other):
-        from nbxtensor.ops.wrappers import mul
+        from nbxtensor.ops.elementwise_wrappers import mul
         return mul(other, self)
 
     def __truediv__(self, other):
-        from nbxtensor.ops.wrappers import div
+        from nbxtensor.ops.elementwise_wrappers import div
         return div(self, other)
 
     def __neg__(self):
-        from nbxtensor.ops.wrappers import neg
+        from nbxtensor.ops.elementwise_wrappers import neg
         return neg(self)
 
     def __repr__(self) -> str:

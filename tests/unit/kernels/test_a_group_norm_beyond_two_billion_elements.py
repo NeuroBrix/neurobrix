@@ -18,6 +18,7 @@ import numpy as np
 import pytest
 
 from nbxtensor.ops import wrappers as W
+from nbxtensor.ops import norm_wrappers as _nbx_norm_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.tensor import NBXTensor
 
 N, C, HW, GROUPS = 1, 64, 40_000_000, 8      # chan_start is a multiple of 8: 56 * HW = 2.24e9 > 2^31 (the first form, HW=35.2e6, never crossed it: 56 * 35.2e6 = 1.97e9 — a test green on the old tree, vacuous)
@@ -36,7 +37,7 @@ def _cuda_free_bytes():
 @pytest.mark.skipif(_cuda_free_bytes() < 10 * 2 ** 30, reason="needs a CUDA card with >= 10 GB free")
 def test_channels_past_the_int32_boundary_are_normalised():
     x = NBXTensor.ones((N, C, HW), dtype="float16")
-    y = W.group_norm_wrapper(x, GROUPS, None, None, 1e-5)
+    y = _nbx_norm_wrappers.group_norm_wrapper(x, GROUPS, None, None, 1e-5)
     y = y[0] if isinstance(y, tuple) else y          # the wrapper returns (y, mean, rstd)
     assert tuple(y.shape) == (N, C, HW)
     for c in (0, 55, 56, 63):

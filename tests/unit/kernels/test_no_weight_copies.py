@@ -15,6 +15,11 @@ from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.ops import wrappers as W
+from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
+from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
+from nbxtensor.ops import index_wrappers as _nbx_index_wrappers  # the family the moved names live in (M2 split)
+from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
+from nbxtensor.ops import norm_wrappers as _nbx_norm_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.backend import launcher as L
 
 _NP = {NBXDtype.float16: (np.float16, 2), NBXDtype.float32: (np.float32, 4)}
@@ -81,9 +86,9 @@ def test_prefill_mm_walks_the_pretransposed_weight_without_a_copy(M):
     b = Wt.t()                                    # the (K, N) stride view the graph hands the wrapper
     assert not b.is_contiguous() and b.stride(0) == 1
     with _Count() as c:
-        out = W.mm(a, b)
+        out = _nbx_linalg_wrappers.mm(a, b)
     assert c.copies == 0, "the weight is read in place"
-    ref = W.mm(a, b.contiguous())                 # the copying path, the same tile math
+    ref = _nbx_linalg_wrappers.mm(a, b.contiguous())                 # the copying path, the same tile math
     assert np.array_equal(_d2h(out), _d2h(ref))
 
 
@@ -92,9 +97,9 @@ def test_prefill_mm_still_materialises_a_broadcast_weight():
     row = NBXTensor.from_numpy((np.arange(8, dtype=np.float32) * 0.01).astype(np.float16))
     b = row.view(8, 1).expand(8, 6)               # stride 0 along N: the kernel cannot walk it
     with _Count() as c:
-        out = W.mm(a, b)
+        out = _nbx_linalg_wrappers.mm(a, b)
     assert c.copies >= 1
-    assert np.array_equal(_d2h(out), _d2h(W.mm(a, b.contiguous())))
+    assert np.array_equal(_d2h(out), _d2h(_nbx_linalg_wrappers.mm(a, b.contiguous())))
 
 
 def test_gemv_takes_a_row_contiguous_matrix_and_a_strided_vector_as_they_are():
@@ -104,9 +109,9 @@ def test_gemv_takes_a_row_contiguous_matrix_and_a_strided_vector_as_they_are():
     vec = two[:, 0]                               # a strided vector (stride 2)
     assert vec.stride(0) == 2
     with _Count() as c:
-        out = W.mv_wrapper(mat, vec)
+        out = _nbx_linalg_wrappers.mv_wrapper(mat, vec)
     assert c.copies == 0
-    assert np.array_equal(_d2h(out), _d2h(W.mv_wrapper(mat, vec.contiguous())))
+    assert np.array_equal(_d2h(out), _d2h(_nbx_linalg_wrappers.mv_wrapper(mat, vec.contiguous())))
 
 
 def test_gemv_copies_a_row_strided_matrix_exactly_once():
@@ -115,9 +120,9 @@ def test_gemv_copies_a_row_strided_matrix_exactly_once():
     mat = X.t()                                   # (N, K) with strided rows: the kernel's loads need K-contiguous rows
     vec = NBXTensor.from_numpy((rng.standard_normal(256) * 0.05).astype(np.float32))
     with _Count() as c:
-        out = W.mv_wrapper(mat, vec)
+        out = _nbx_linalg_wrappers.mv_wrapper(mat, vec)
     assert c.copies == 1, "the one justified copy"
-    assert np.array_equal(_d2h(out), _d2h(W.mv_wrapper(mat.contiguous(), vec)))
+    assert np.array_equal(_d2h(out), _d2h(_nbx_linalg_wrappers.mv_wrapper(mat.contiguous(), vec)))
 
 
 
@@ -134,9 +139,9 @@ def test_fp16_activation_is_widened_in_registers_not_materialised(M):
     Wt, a16 = _weight(96, 128), _act16(M, 128)
     b = Wt.t()
     a32 = a16.to(NBXDtype.float32)
-    ref = W.mm(a32, b)                            # promote_a False (fp32 in), promote_b True: the old path
+    ref = _nbx_linalg_wrappers.mm(a32, b)                            # promote_a False (fp32 in), promote_b True: the old path
     with _Count() as c:
-        out = W.mm(a16, b)
+        out = _nbx_linalg_wrappers.mm(a16, b)
     assert c.copies == 0, "no activation upcast copy, no weight copy"
     assert out._dtype == ref._dtype == NBXDtype.float32
     assert np.array_equal(_d2h(out), _d2h(ref))
@@ -147,11 +152,11 @@ def test_rms_norm_keeps_the_pre_cast_input_the_certified_rows_ran_with():
     at T5's shapes 12–15 % of the elements differ (PixArt-XL-2, 2026-09-08), so rms_norm does
     not declare `_nbx_widens_on_load` and the dtype engine's wrap pre-casts as it always did.
     The kernel's fp32 store from an fp32 input is the certified form."""
-    assert not getattr(W.rms_norm, "_nbx_widens_on_load", False)
+    assert not getattr(_nbx_norm_wrappers.rms_norm, "_nbx_widens_on_load", False)
     rng = np.random.default_rng(7)
     x16 = NBXTensor.from_numpy((rng.standard_normal((6, 256)) * 0.5).astype(np.float16))
     w = NBXTensor.from_numpy((1.0 + rng.standard_normal(256) * 0.1).astype(np.float16))
-    ref32 = W.rms_norm(x16.to(NBXDtype.float32), w)
+    ref32 = _nbx_norm_wrappers.rms_norm(x16.to(NBXDtype.float32), w)
     assert ref32._dtype == NBXDtype.float32 and np.isfinite(_d2h(ref32)).all()
 
 
@@ -190,7 +195,7 @@ def test_index_select_along_any_axis_needs_no_layout_copy(dim):
     idx = np.array([n - 1, 0, n // 2, n // 2, 1], dtype=np.int64)[:n]      # within [0, n)
     x = NBXTensor.from_numpy(data); index = NBXTensor.from_numpy(idx)
     with _Count() as c:
-        out = W.index_select_wrapper(x, dim, index)
+        out = _nbx_index_wrappers.index_select_wrapper(x, dim, index)
     assert c.copies == 0
     assert list(out.shape) == [data.shape[0] if dim != 0 else len(idx), data.shape[1] if dim != 1 else len(idx), data.shape[2] if dim != 2 else len(idx)]
     assert np.array_equal(_d2h(out).reshape(out.shape), np.take(data, idx, axis=dim))
@@ -221,7 +226,7 @@ def test_a_size_one_dim_may_carry_any_stride():
     t = x.transpose(2, 3)                       # (1, 32, 64, 1), strides (2048, 64, 1, 64)
     assert t.is_contiguous()
     with _Count() as c:
-        y = W.mul(t, 2.0)
+        y = _nbx_elementwise_wrappers.mul(t, 2.0)
         v = x.expand(1, 32, 1, 64).view(1, 32, 64)
     assert c.copies == 0
     assert np.array_equal(_d2h(y).reshape(1, 32, 64, 1), data.transpose(0, 1, 3, 2) * 2.0)
@@ -287,7 +292,7 @@ def test_rope_casts_the_tables_in_kernel_to_the_bytes_of_the_cast_copy(q_dt, tab
         q = NBXTensor.from_numpy(q_np).transpose(1, 2)      # (B, Hq, S, D) view, physical B,S,H,D
         k = NBXTensor.from_numpy(k_np).transpose(1, 2)
         with _Count() as c:
-            qo, ko = W.rope_fused_wrapper(q, k, cos_t, sin_t)
+            qo, ko = _nbx_elementwise_wrappers.rope_fused_wrapper(q, k, cos_t, sin_t)
         return c.copies, _d2h(qo), _d2h(ko)
 
     copies_ref, q_ref, k_ref = run(NBXTensor.from_numpy(cos_np.astype(q_dt)),
@@ -310,11 +315,11 @@ def test_decode_attention_reads_a_wider_q_in_the_cache_dtype_without_a_copy(monk
     k, v = NBXTensor.from_numpy(k_np), NBXTensor.from_numpy(v_np)
     scale = 1.0 / np.sqrt(D)
     with _Count() as c:
-        out = W.scaled_dot_product_attention_wrapper(NBXTensor.from_numpy(q_np), k, v, scale=scale,
+        out = _nbx_attention_wrappers.scaled_dot_product_attention_wrapper(NBXTensor.from_numpy(q_np), k, v, scale=scale,
                                                      k_pre_transposed=False, q_dtype_of_kv=True)
     assert c.copies == 0
     assert out.nbx_dtype == NBXDtype.float16
-    ref = W.scaled_dot_product_attention_wrapper(NBXTensor.from_numpy(q_np.astype(np.float16)), k, v,
+    ref = _nbx_attention_wrappers.scaled_dot_product_attention_wrapper(NBXTensor.from_numpy(q_np.astype(np.float16)), k, v,
                                                  scale=scale, k_pre_transposed=False)
     assert np.array_equal(_d2h(out), _d2h(ref))
 
@@ -329,7 +334,7 @@ def test_a_broadcast_or_strided_binary_operand_is_read_by_its_strides(op):
     from nbxtensor.ops.sub import sub_forward_kernel
     from nbxtensor.ops.div import div_forward_kernel
     rng = np.random.default_rng(8)
-    fn = {"add": W.add, "mul": W.mul, "sub": W.sub, "div": W.div}[op]
+    fn = {"add": _nbx_elementwise_wrappers.add, "mul": _nbx_elementwise_wrappers.mul, "sub": _nbx_elementwise_wrappers.sub, "div": _nbx_elementwise_wrappers.div}[op]
     cases = [
         ((2, 8, 16, 16), (1, 8, 1, 1)),        # a conv bias over the channels
         ((2, 64, 48), (2, 1, 48)),             # an adaLN shift over the tokens
@@ -369,15 +374,15 @@ def test_addmm_takes_the_activation_weight_and_bias_as_they_are(M):
     rng = np.random.default_rng(9)
     bias = NBXTensor.from_numpy((rng.standard_normal(N) * 0.1).astype(np.float16))
     with _Count() as c:
-        out = W.addmm(bias, a, w.t())
+        out = _nbx_linalg_wrappers.addmm(bias, a, w.t())
     assert c.copies == 0
     # the path that copies: all three widened, or, where the matrix unit takes two fp16 operands as they are in
     # memory (launch_keys.matrix_unit_takes), the weight alone made contiguous (the unit's sums at fp16 operands)
     from nbxtensor.ops import launch_keys as LK
     if LK.matrix_unit_takes(NBXDtype.float16, NBXDtype.float16, M):
-        ref = W.addmm(bias, a, w.t().contiguous())
+        ref = _nbx_linalg_wrappers.addmm(bias, a, w.t().contiguous())
     else:
-        ref = W.addmm(bias.to(NBXDtype.float32), a.to(NBXDtype.float32), w.t().contiguous())
+        ref = _nbx_linalg_wrappers.addmm(bias.to(NBXDtype.float32), a.to(NBXDtype.float32), w.t().contiguous())
     assert out.nbx_dtype == ref.nbx_dtype
     assert np.array_equal(_d2h(out), _d2h(ref))
 
@@ -390,7 +395,7 @@ def test_a_mixed_dtype_contiguous_add_casts_exactly_once():
     a = NBXTensor.from_numpy(rng.standard_normal((4, 64)).astype(np.float32))
     b = NBXTensor.from_numpy(rng.standard_normal((4, 64)).astype(np.float16))
     with _Launches() as l:
-        out = W.add(a, b)
+        out = _nbx_elementwise_wrappers.add(a, b)
     assert l.names == ["copy_kernel", "add_forward_kernel"], l.names
     assert out.nbx_dtype == NBXDtype.float32
 
@@ -406,19 +411,19 @@ def test_rope_widens_the_step_tables_once_per_run_not_once_per_layer():
     cos_base = NBXTensor.from_numpy(np.cos(ang).astype(np.float16)); sin_base = NBXTensor.from_numpy(np.sin(ang).astype(np.float16))
     def layer():
         q = NBXTensor.from_numpy(q_np).transpose(1, 2); k = NBXTensor.from_numpy(k_np).transpose(1, 2)
-        return W.rope_fused_wrapper(q, k, cos_base[:, :, :, :], sin_base[:, :, :, :])      # a fresh view per layer
-    W.begin_run()
+        return _nbx_elementwise_wrappers.rope_fused_wrapper(q, k, cos_base[:, :, :, :], sin_base[:, :, :, :])      # a fresh view per layer
+    _nbx_elementwise_wrappers.begin_run()
     with _Count() as c:
         (q1, _), (q2, _), (q3, _) = layer(), layer(), layer()
     assert c.copies == 2, c.copies                          # cos and sin, once
     assert np.array_equal(_d2h(q1), _d2h(q2)) and np.array_equal(_d2h(q2), _d2h(q3))
-    W.begin_run()
+    _nbx_elementwise_wrappers.begin_run()
     with _Count() as c:
         layer()
     assert c.copies == 2
     other = NBXTensor.from_numpy(np.cos(ang).astype(np.float16))
     with _Count() as c:
-        W.rope_fused_wrapper(NBXTensor.from_numpy(q_np).transpose(1, 2), NBXTensor.from_numpy(k_np).transpose(1, 2), other, sin_base[:, :, :, :])
+        _nbx_elementwise_wrappers.rope_fused_wrapper(NBXTensor.from_numpy(q_np).transpose(1, 2), NBXTensor.from_numpy(k_np).transpose(1, 2), other, sin_base[:, :, :, :])
     assert c.copies == 1                                    # another base for cos; sin cached
 
 
@@ -430,8 +435,8 @@ def test_rms_norm_stores_fp16_through_the_protected_conversion():
     x = (rng.standard_normal((4, 64)) * 0.5).astype(np.float16); x[0, 3] = 60000.0
     w = np.full(64, 1.0, dtype=np.float16); w[3] = 10000.0; w[5] = -10000.0; x[1, 5] = 60000.0
     xt, wt = NBXTensor.from_numpy(x), NBXTensor.from_numpy(w)
-    out = W.rms_norm(xt, wt, 1e-6, out_dtype=NBXDtype.float16)
-    ref = W.rms_norm(xt.to(NBXDtype.float32), wt.to(NBXDtype.float32), 1e-6).to(NBXDtype.float16)
+    out = _nbx_norm_wrappers.rms_norm(xt, wt, 1e-6, out_dtype=NBXDtype.float16)
+    ref = _nbx_norm_wrappers.rms_norm(xt.to(NBXDtype.float32), wt.to(NBXDtype.float32), 1e-6).to(NBXDtype.float16)
     got, exp = _d2h(out), _d2h(ref)
     assert np.isfinite(got).all() and got.max() == 65504.0 and got.min() == -65504.0
     assert np.array_equal(got, exp)
@@ -448,7 +453,7 @@ def test_a_strided_tensor_with_a_host_scalar_is_read_by_its_strides(op):
     base = rng.standard_normal((2, 6, 48)).astype(np.float16)
     chunk = NBXTensor.from_numpy(base)[:, 2:3, :]                    # strides (288, 48, 1), not dense
     assert not chunk.is_contiguous()
-    fn = W.add if op == "add" else W.mul
+    fn = _nbx_elementwise_wrappers.add if op == "add" else _nbx_elementwise_wrappers.mul
     with _Launches() as l:
         out = fn(1.0, chunk) if op == "add" else fn(chunk, 0.5)
     assert l.names == [f"{op}_scalar_strided_nd_kernel"], l.names

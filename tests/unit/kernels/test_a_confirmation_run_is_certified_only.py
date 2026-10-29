@@ -30,11 +30,12 @@ SRC = Path(__file__).resolve().parents[3] / "src"
 
 SCRIPT = r'''
 import neurobrix  # the application: nbxtensor's host services
+import nbxtensor.ops.linalg_wrappers as _nbx_linalg_wrappers
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.ops import wrappers as W
 a = NBXTensor.empty((19, 2048), "float16", 0)
 b = NBXTensor.empty((2048, 2048), "float16", 0)
-out = W.mm(a, b)
+out = _nbx_linalg_wrappers.mm(a, b)
 print("OUT", tuple(out.shape))
 '''
 

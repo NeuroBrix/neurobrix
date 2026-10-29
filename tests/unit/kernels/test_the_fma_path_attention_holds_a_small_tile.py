@@ -95,11 +95,12 @@ def _attn(q, k, v):
     the unit is declared it takes these operands — tests/unit/kernels/test_flash_m8n8k4.py; this kernel still
     serves every call the unit does not take)."""
     from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
     real, real_mu = W._lk.sdpa_route, W._lk.unit_flash
     W._lk.sdpa_route = lambda *a, **kw: ("flash", 0)
     W._lk.unit_flash = lambda *a, **kw: None
     try:
-        return W.scaled_dot_product_attention_wrapper(q, k, v, k_pre_transposed=False)
+        return _nbx_attention_wrappers.scaled_dot_product_attention_wrapper(q, k, v, k_pre_transposed=False)
     finally:
         W._lk.sdpa_route, W._lk.unit_flash = real, real_mu
 
@@ -122,6 +123,7 @@ def test_the_chunked_launch_is_several_times_the_held_one_on_this_card(monkeypat
     """Same process, same inputs: the profile's chunk row against the same call with the row's
     launch meta withheld (the held form). Measured 14x at T 4096, D 96 (2026-10-03)."""
     from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.memory.allocator import DeviceAllocator
     rng = np.random.default_rng(0)
@@ -132,6 +134,6 @@ def test_the_chunked_launch_is_several_times_the_held_one_on_this_card(monkeypat
         t0 = time.perf_counter(); _attn(q, k, v); DeviceAllocator.sync_device()
         return time.perf_counter() - t0
     chunked = timed()
-    monkeypatch.setattr(W, "_sdpa_launch_meta", lambda *a: {})
+    monkeypatch.setattr(_nbx_attention_wrappers, "_sdpa_launch_meta", lambda *a: {})
     held = timed()
     assert held / chunked > 4, (held, chunked)

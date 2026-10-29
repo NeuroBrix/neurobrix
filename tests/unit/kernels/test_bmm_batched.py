@@ -47,6 +47,7 @@ import numpy as np
 import torch
 
 from nbxtensor.ops import wrappers as w
+from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from neurobrix.kernels.torch_interop import nbx_to_torch
@@ -124,7 +125,7 @@ def test_bmm_exact_integer_valued(shape, dtype, hw_bf16):
     with _hw(hw_bf16):
         a = _int_valued((B, M, K), dtype, rng)
         b = _int_valued((B, K, N), dtype, rng)
-        got = _torch_of(w.bmm(a, b)).float()
+        got = _torch_of(_nbx_linalg_wrappers.bmm(a, b)).float()
     ref = torch.matmul(_torch_of(a).float(), _torch_of(b).float())
     assert got.shape == ref.shape
     assert torch.equal(got, ref), (
@@ -143,7 +144,7 @@ def test_bmm_real_valued_tolerance(shape, dtype):
     with _hw(False):  # pre-Ampere semantics (fp32 accumulate, fp32 store)
         a = _real_valued((B, M, K), dtype, rng)
         b = _real_valued((B, K, N), dtype, rng)
-        got = _torch_of(w.bmm(a, b)).double()
+        got = _torch_of(_nbx_linalg_wrappers.bmm(a, b)).double()
     ref = torch.matmul(_torch_of(a).double(), _torch_of(b).double())
     # fp16 inputs: element error ~2^-11 per product, K-summed in fp32.
     # fp32 inputs: fp32 accumulation vs float64 reference.
@@ -160,7 +161,7 @@ def test_bmm_mixed_f32xf16_promote_b():
     with _hw(False):
         a = _int_valued((4, 64, 48), "fp32", rng)
         b = _int_valued((4, 48, 80), "fp16", rng)
-        got = _torch_of(w.bmm(a, b)).float()
+        got = _torch_of(_nbx_linalg_wrappers.bmm(a, b)).float()
     ref = torch.matmul(_torch_of(a).float(), _torch_of(b).float())
     assert torch.equal(got, ref)
 
@@ -170,21 +171,21 @@ def test_bmm_no_per_row_launch_loop():
     to the per-batch x per-row mv loop (B1 regression)."""
     _skip_no_gpu()
     calls = {"n": 0}
-    orig = w.mv_wrapper
+    orig = _nbx_linalg_wrappers.mv_wrapper
 
     def _counting_mv(*a, **k):
         calls["n"] += 1
         return orig(*a, **k)
 
-    w.mv_wrapper = _counting_mv
+    _nbx_linalg_wrappers.mv_wrapper = _counting_mv
     try:
         rng = np.random.default_rng(3)
         with _hw(False):
             a = _real_valued((32, 1, 64), "fp16", rng)
             b = _real_valued((32, 64, 128), "fp16", rng)
-            w.bmm(a, b)
+            _nbx_linalg_wrappers.bmm(a, b)
     finally:
-        w.mv_wrapper = orig
+        _nbx_linalg_wrappers.mv_wrapper = orig
     assert calls["n"] == 0, (
         f"bmm(M=1) called mv_wrapper {calls['n']} times — the per-row "
         f"launch loop is back (P-KERNEL-LAUNCH-HYGIENE B1 regression)"
@@ -201,7 +202,7 @@ def test_bmm_grid_z_chunking():
     with _hw(False):
         a = _int_valued((B, M, K), "fp16", rng)
         b = _int_valued((B, K, N), "fp16", rng)
-        got = _torch_of(w.bmm(a, b)).float()
+        got = _torch_of(_nbx_linalg_wrappers.bmm(a, b)).float()
     ref = torch.matmul(_torch_of(a).float(), _torch_of(b).float())
     assert got.shape == ref.shape
     # Whole-tensor equality covers both sides of the 65535 boundary.
@@ -238,7 +239,7 @@ def test_baddbmm_bias_and_scaling(bias_kind, alpha, beta):
              "b1n": (B, 1, N), "m1": (M, 1)}[bias_kind]
     bias = _small(shape)
     got = _torch_of(
-        w.baddbmm_wrapper(bias, b1, b2, beta=beta, alpha=alpha)).float()
+        _nbx_linalg_wrappers.baddbmm_wrapper(bias, b1, b2, beta=beta, alpha=alpha)).float()
     ref = torch.baddbmm(_torch_of(bias).float().expand(B, M, N),
                         _torch_of(b1).float(), _torch_of(b2).float(),
                         beta=beta, alpha=alpha)

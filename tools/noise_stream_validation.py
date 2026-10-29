@@ -84,7 +84,7 @@ def draw(n: int, run_seed: int, count: int, device: str) -> list:
     """
     import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
     from nbxtensor.random import rng_stream
-    from nbxtensor.ops.wrappers import randn_wrapper
+    from nbxtensor.ops.random_wrappers import randn_wrapper
 
     rng_stream.set_run_seed(run_seed)
     out = []

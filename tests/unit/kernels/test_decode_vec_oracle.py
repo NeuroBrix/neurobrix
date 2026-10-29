@@ -53,6 +53,7 @@ from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.ops import wrappers as W
+from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
 
 # Same derived bound as the flash-decode oracle (fp16 inputs, fp32
 # accumulation, ~4k-term softmax sums): relative error of a CORRECT
@@ -120,7 +121,7 @@ def _run(B, H, H_kv, T_k, D, bias_len=None, seed=0):
             bias = b
             bias_t = _t(b.reshape(1, 1, 1, T_k))
         q, k, v = _t(qn), _t(kn), _t(vn)
-        out = W.scaled_dot_product_attention_wrapper(
+        out = _nbx_attention_wrappers.scaled_dot_product_attention_wrapper(
             q, k, v, attn_mask=bias_t, is_causal=False,
             scale=1.0 / np.sqrt(D))
         got = _d2h(out).astype(np.float64).reshape(B, H, 1, D)
@@ -176,7 +177,7 @@ def test_decode_vec_routing_three_states() -> None:
     if not _has_gpu():
         pytest.skip("no GPU")
     calls = {"n": 0}
-    orig = W._decode_attn_vec
+    orig = _nbx_attention_wrappers._decode_attn_vec
 
     def counting(*a, **k):
         calls["n"] += 1
@@ -187,10 +188,10 @@ def test_decode_vec_routing_three_states() -> None:
         q = _t(rng.standard_normal((1, 32, 1, 128)).astype(np.float16))
         k = _t(rng.standard_normal((1, 8, 256, 128)).astype(np.float16))
         v = _t(rng.standard_normal((1, 8, 256, 128)).astype(np.float16))
-        W.scaled_dot_product_attention_wrapper(
+        _nbx_attention_wrappers.scaled_dot_product_attention_wrapper(
             q, k, v, attn_mask=None, is_causal=False, scale=0.088)
 
-    W._decode_attn_vec = counting
+    _nbx_attention_wrappers._decode_attn_vec = counting
     try:
         _run(1, 32, 8, 256, 128)     # arms "1"
         assert calls["n"] == 1, "armed flag did not reach the vec kernel"
@@ -218,7 +219,7 @@ def test_decode_vec_routing_three_states() -> None:
             "NBX_FORCE_MATH_ATTENTION no longer means the pure math "
             "chain — the vec kernel fired under it")
     finally:
-        W._decode_attn_vec = orig
+        _nbx_attention_wrappers._decode_attn_vec = orig
 
 
 def test_masked_tail_contributes_nothing() -> None:
@@ -237,13 +238,13 @@ def test_masked_tail_contributes_nothing() -> None:
         b[live:] = -np.inf
         bias_t = _t(b.reshape(1, 1, 1, T_k))
 
-        out1 = W.scaled_dot_product_attention_wrapper(
+        out1 = _nbx_attention_wrappers.scaled_dot_product_attention_wrapper(
             _t(qn), _t(kn), _t(vn), attn_mask=bias_t, is_causal=False,
             scale=1.0 / np.sqrt(D))
         kn2, vn2 = kn.copy(), vn.copy()
         kn2[:, :, live:, :] = 999.0
         vn2[:, :, live:, :] = -999.0
-        out2 = W.scaled_dot_product_attention_wrapper(
+        out2 = _nbx_attention_wrappers.scaled_dot_product_attention_wrapper(
             _t(qn), _t(kn2), _t(vn2), attn_mask=bias_t, is_causal=False,
             scale=1.0 / np.sqrt(D))
         assert _d2h(out1).tobytes() == _d2h(out2).tobytes(), (
@@ -283,12 +284,12 @@ def test_strided_bucketed_views_bit_equal_no_copy() -> None:
 
         NT._strided_copy = counting_sc
         try:
-            out_v = W.scaled_dot_product_attention_wrapper(
+            out_v = _nbx_attention_wrappers.scaled_dot_product_attention_wrapper(
                 _t(qn), k_view, v_view, attn_mask=bias_t, is_causal=False,
                 scale=1.0 / np.sqrt(D))
         finally:
             NT._strided_copy = orig_sc
-        out_d = W.scaled_dot_product_attention_wrapper(
+        out_d = _nbx_attention_wrappers.scaled_dot_product_attention_wrapper(
             _t(qn), k_view.contiguous(), v_view.contiguous(),
             attn_mask=bias_t, is_causal=False, scale=1.0 / np.sqrt(D))
         assert _d2h(out_v).tobytes() == _d2h(out_d).tobytes(), (

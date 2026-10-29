@@ -46,8 +46,9 @@ def _host(t):
 @pytest.mark.skipif(not _gpu(), reason="needs a device")
 def test_where_writes_the_half_extreme_not_minus_infinity():
     from nbxtensor.ops import wrappers as w
+    from nbxtensor.ops import index_wrappers as _nbx_index_wrappers  # the family the moved names live in (M2 split)
     eng = TritonDtypeEngine(NBXDtype.bfloat16, stores_fp64=False)
-    where = eng.wrap_op("where", w.where_wrapper)
+    where = eng.wrap_op("where", _nbx_index_wrappers.where_wrapper)
     cond = NBXTensor.from_numpy(np.array([[True, False], [False, True]]))
     x = NBXTensor.from_numpy(np.zeros((), dtype=np.uint16), dtype=NBXDtype.bfloat16)   # 0.0 in bf16, one element
     y = NBXTensor.from_numpy(np.array(F32_MIN, dtype=np.float32))                       # the fp32 sentinel
@@ -59,11 +60,12 @@ def test_where_writes_the_half_extreme_not_minus_infinity():
 @pytest.mark.skipif(not _gpu(), reason="needs a device")
 def test_masked_fill_and_full_saturate_in_half_dtypes():
     from nbxtensor.ops import wrappers as w
+    from nbxtensor.ops import index_wrappers as _nbx_index_wrappers  # the family the moved names live in (M2 split)
     from nbxtensor.ops.dispatch import dispatch
     eng = TritonDtypeEngine(NBXDtype.float16, stores_fp64=False)
     x = NBXTensor.from_numpy(np.ones((2, 2), dtype=np.float16))
     mask = NBXTensor.from_numpy(np.array([[True, False], [False, False]]))
-    filled = _host(eng.wrap_op("masked_fill", w.masked_fill)(x, mask, F32_MIN))
+    filled = _host(eng.wrap_op("masked_fill", _nbx_index_wrappers.masked_fill)(x, mask, F32_MIN))
     assert filled[0, 0] == -65504.0 and filled[1, 1] == 1.0
     full = eng.wrap_op("full", dispatch("aten::full"))
     made = _host(full([2, 2], -3.3895e38, dtype=NBXDtype.float16))

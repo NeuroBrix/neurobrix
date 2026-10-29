@@ -458,7 +458,7 @@ def _stored_bytes(info: dict, compute_dtype: NBXDtype,
 def _half_in_place(ptr: int, count: int, device_idx: int):
     """The loader's raw bf16 weight buffer at `ptr` rewritten in place as float16 by nbxtensor's one device
     conversion (`ops.wrappers.bf16_to_fp16_gpu` with `out=` the same buffer)."""
-    from nbxtensor.ops.wrappers import bf16_to_fp16_gpu
+    from nbxtensor.ops.elementwise_wrappers import bf16_to_fp16_gpu
 
     DeviceAllocator.set_device(device_idx)
     DeviceAllocator.ensure_triton_device(device_idx)

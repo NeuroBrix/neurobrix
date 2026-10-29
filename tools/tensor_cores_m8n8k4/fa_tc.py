@@ -11,6 +11,7 @@ import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.memory.allocator import DeviceAllocator
+from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
 
 ASM: gl.constexpr = gl.constexpr(
     "mma.sync.aligned.m8n8k4.row.col.f32.f16.f16.f32 {$0,$1,$2,$3,$4,$5,$6,$7}, {$8, $9}, {$12, $13},"
@@ -226,8 +227,8 @@ if __name__ == "__main__":
         r = (p @ vn).astype(np.float32); rname = "fp64"
     else:           # the engine's FMA flash kernel as oracle (proven 10-07 against the container oracle)
         W._lk.sdpa_route = lambda *a, **kw: ("flash", 0)
-        ref = W.scaled_dot_product_attention_wrapper(q, k, v, k_pre_transposed=False); DeviceAllocator.sync_device()
-        t0 = time.perf_counter(); ref = W.scaled_dot_product_attention_wrapper(q, k, v, k_pre_transposed=False)
+        ref = _nbx_attention_wrappers.scaled_dot_product_attention_wrapper(q, k, v, k_pre_transposed=False); DeviceAllocator.sync_device()
+        t0 = time.perf_counter(); ref = _nbx_attention_wrappers.scaled_dot_product_attention_wrapper(q, k, v, k_pre_transposed=False)
         DeviceAllocator.sync_device(); t_ref = time.perf_counter() - t0
         print(f"engine flash (FMA) T{T} D{D}: {t_ref*1e3:.0f} ms {fl/t_ref/1e12:.2f} TFLOP/s", flush=True)
         r = ref.numpy().astype(np.float32); rname = "engine"

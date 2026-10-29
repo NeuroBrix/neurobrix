@@ -18,7 +18,7 @@ def norm_statistics(x: Any, group: int, eps: float) -> Tuple[Any, Any]:
     """(mean, rstd), each [N, G] fp32, of `x` [N, C, ...] over each group's channels and every other position — what
     `aten::native_group_norm` computes — taken one sample at a time so no fp32 copy of the whole input is held."""
     if _is_nbx(x):
-        from nbxtensor.ops.wrappers import group_norm_statistics
+        from nbxtensor.ops.norm_wrappers import group_norm_statistics
         return group_norm_statistics(x, int(group), float(eps))
     import torch
     n, c = int(x.shape[0]), int(x.shape[1])
@@ -41,7 +41,7 @@ def group_norm_apply(x: Any, weight: Any, bias: Any, group: int, mean: Any, rstd
     slice's dtype, as its group norm writes it (the DtypeEngine's wrap around the interceptor gives it the op's
     operands, `ChunkedPiece._norm_interceptor`)."""
     if _is_nbx(x):
-        from nbxtensor.ops.wrappers import group_norm_apply as _apply
+        from nbxtensor.ops.norm_wrappers import group_norm_apply as _apply
         return _apply(x, weight, bias, int(group), mean, rstd)
     import torch
     n, c = int(x.shape[0]), int(x.shape[1])

@@ -4,7 +4,7 @@ The kernel-level proof (test_the_moe_table_reads_through_a_pinned_scope) pinned
 and captured by hand. This test asserts the engine now does the same thing
 itself: `_build_ptr_tables` on Metal must produce tables a shader can read
 (device capture under a pin whose lifetime is the table's), and
-`w.invoke_fused_moe` — the exact launch the model path takes — must match the
+`_nbx_moe_wrappers.invoke_fused_moe` — the exact launch the model path takes — must match the
 fp64 oracle through them. Same granite geometry, same instrument.
 
 Red before the metal branch existed: the data_ptr tables read as silent zeros
@@ -48,6 +48,7 @@ def _val(bits):
 def test_the_engine_table_matches_fp64_through_the_wrapper():
     drv = _metal_or_skip()
     from nbxtensor.ops import wrappers as w
+    from nbxtensor.ops import moe_wrappers as _nbx_moe_wrappers  # the family the moved names live in (M2 split)
     from neurobrix.triton import moe as M
 
     rng = np.random.default_rng(11)
@@ -97,7 +98,7 @@ def test_the_engine_table_matches_fp64_through_the_wrapper():
     out = NBXTensor.from_numpy(_bf16(np.zeros((TOP_K, N))),
                                dtype=NBXDtype.bfloat16)
     dev = 0
-    w.invoke_fused_moe(
+    _nbx_moe_wrappers.invoke_fused_moe(
         a, tables.gate_ptrs[dev], out, t_w, t_sid, t_eid, t_np,
         N, K,
         tables.gate_stride_bk[dev], tables.gate_stride_bn[dev],

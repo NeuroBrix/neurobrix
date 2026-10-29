@@ -1077,7 +1077,7 @@ class GraphExecutor:
             import numpy as np
             from nbxtensor.tensor import NBXTensor
             from nbxtensor.dtype.nbx_dtype import NBXDtype
-            from nbxtensor.ops.wrappers import upsample_bilinear2d_wrapper
+            from nbxtensor.ops.linalg_wrappers import upsample_bilinear2d_wrapper
             if isinstance(traced_embed, np.ndarray):
                 src_np = traced_embed
             else:  # a loaded NBXTensor weight

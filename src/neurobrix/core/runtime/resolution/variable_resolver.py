@@ -130,6 +130,7 @@ class VariableResolver:
         from nbxtensor.tensor import NBXTensor
         from nbxtensor.dtype.nbx_dtype import parse_dtype
         from nbxtensor.ops import wrappers as W
+        from nbxtensor.ops import random_wrappers as _nbx_random_wrappers  # the family the moved names live in (M2 split)
         dt = parse_dtype(str(dtype_str).replace("torch.", ""))
         dev = self.device if isinstance(self.device, str) else "cuda"
         if init_type == "empty":
@@ -162,11 +163,11 @@ class VariableResolver:
                     "and the run stream is not armed — the executor arms it for every mode before any "
                     "variable resolves (one draw for both engines).")
             else:
-                _t = W.randn_wrapper(list(shape), dtype=dt, device=dev)
+                _t = _nbx_random_wrappers.randn_wrapper(list(shape), dtype=dt, device=dev)
             _dump_init_latent(name, _t.numpy)
             return _t
         if init_type == "uniform":
-            return W.rand_wrapper(list(shape), dtype=dt, device=dev)
+            return _nbx_random_wrappers.rand_wrapper(list(shape), dtype=dt, device=dev)
         if init_type == "full":
             fill_value = resolver_node.get("fill_value")
             if fill_value is None:

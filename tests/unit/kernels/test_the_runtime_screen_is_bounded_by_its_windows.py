@@ -176,6 +176,7 @@ def test_the_macs_key_is_screened_on_windows_with_a_bounded_host_footprint(monke
     monkeypatch.setenv("NEUROBRIX_REPLAY_CACHE", str(tmp_path / "replay_cache"))
     from nbxtensor.backend import launcher as L
     from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import conv_wrappers as _nbx_conv_wrappers  # the family the moved names live in (M2 split)
     from nbxtensor.ops import screen_oracle as S
     from nbxtensor.ops import autotune_cache as atc
     # The fresh directory alone does not make the sweep fresh: an earlier cell's first launch in
@@ -202,7 +203,7 @@ def test_the_macs_key_is_screened_on_windows_with_a_bounded_host_footprint(monke
     w = NBXTensor.from_numpy((rng.standard_normal((COUT, CIN, K_, K_)) * 0.05).astype(np.float32)).to("cuda").to("bfloat16")
 
     tracemalloc.start()
-    y = W.conv2d_wrapper(x, w, padding=1)
+    y = _nbx_conv_wrappers.conv2d_wrapper(x, w, padding=1)
     _cur, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
     assert tuple(y.shape) == (N_, COUT, H_, W_)

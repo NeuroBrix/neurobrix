@@ -14,6 +14,7 @@ if not torch.cuda.is_available():
 
 from nbxtensor.ops import launch_keys as LK  # noqa: E402
 from nbxtensor.ops import wrappers as W  # noqa: E402
+from nbxtensor.ops import norm_wrappers as _nbx_norm_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.tensor import NBXTensor  # noqa: E402
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.ops.autotune_cache import key_of  # noqa: E402
@@ -46,7 +47,7 @@ def test_the_layer_norm_launch_is_its_key(monkeypatch, rows, feat, weight, bias)
     w = _t((feat,)) if weight else None
     b = _t((feat,)) if bias else None
     with pytest.raises(_Launched):
-        W.native_layer_norm(x, [feat], w, b)
+        _nbx_norm_wrappers.native_layer_norm(x, [feat], w, b)
     F = NBXDtype.float32
     want = LK.layer_norm_launches(rows, feat, weight, bias, F, F if weight else None, F if bias else None, F)
     assert seen == [want[0][1]], (seen, want)
@@ -60,7 +61,7 @@ def test_the_rms_norm_launch_is_its_key(monkeypatch, rows, feat, weight):
     x = _t((rows, feat))
     w = _t((feat,)) if weight else None
     with pytest.raises(_Launched):
-        W.rms_norm(x, w)
+        _nbx_norm_wrappers.rms_norm(x, w)
     F = NBXDtype.float32
     want = LK.rms_norm_launches(rows, feat, weight, F, F if weight else None, F)
     assert seen == [want[0][1]], (seen, want)

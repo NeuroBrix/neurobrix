@@ -19,6 +19,7 @@ import numpy as np
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.ops import wrappers as w
+from nbxtensor.ops import index_wrappers as _nbx_index_wrappers  # the family the moved names live in (M2 split)
 
 
 def test_negative_indices_wrap_and_every_output_element_is_written():
@@ -28,7 +29,7 @@ def test_negative_indices_wrap_and_every_output_element_is_written():
     ref = table[idx]                                   # numpy wraps negatives like torch
     x = NBXTensor.from_numpy(table)
     i = NBXTensor.from_numpy(idx)
-    out = w.index_select_wrapper(x, 0, i)
+    out = _nbx_index_wrappers.index_select_wrapper(x, 0, i)
     got = out.numpy()
     assert got.shape == ref.shape
     assert not np.isnan(got).any(), "unwritten output elements"

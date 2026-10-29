@@ -156,7 +156,7 @@ class TritonEulerAncestralDiscreteScheduler(_EulerBase):
              return_dict: bool = True, **kwargs):
         if self.num_inference_steps is None:
             raise RuntimeError("ZERO FALLBACK: set_timesteps() before step()")
-        from nbxtensor.ops.wrappers import randn_like_wrapper
+        from nbxtensor.ops.random_wrappers import randn_like_wrapper
         from nbxtensor.dtype.nbx_dtype import NBXDtype
         model_output = self._maybe_chunk_variance(model_output, sample)
         if self._step_index is None:

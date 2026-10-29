@@ -110,7 +110,7 @@ class MemoryManager:
         # is UAF-safe. Lazy import + guard: a triton-substrate cleanup must
         # never break a compiled-path unload, and never raise.
         try:
-            from nbxtensor.ops.wrappers import clear_bias_caches
+            from nbxtensor.ops.elementwise_wrappers import clear_bias_caches
             clear_bias_caches()
         except Exception:
             pass

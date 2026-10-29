@@ -208,8 +208,11 @@ def test_an_armed_channel_uses_the_shared_buffer(monkeypatch):
 def test_no_wrapper_reaches_past_the_brick():
     """Four launch sites; none may allocate the buffer for itself."""
     import inspect
+    import importlib
     from nbxtensor.ops import wrappers as W
-    src = inspect.getsource(W)
+    # the wrappers are the core and its families (M2 split): every one of them is read
+    src = inspect.getsource(W) + "".join(inspect.getsource(importlib.import_module(f"nbxtensor.ops.{m}"))
+                                         for m in W._FAMILY_MODULES)
     assert src.count("fault_channel(") >= 4
     assert "device_fault_buffer(" not in src.replace(
         "from .nbx_tensor import device_fault_buffer, device_fault_code_cached, "
@@ -225,6 +228,7 @@ def test_no_wrapper_reaches_past_the_brick():
 _SUBPROCESS = r"""
 import sys, numpy as np
 import neurobrix  # the application: nbxtensor's host services
+import nbxtensor.ops.index_wrappers as _nbx_index_wrappers
 from nbxtensor.tensor import NBXTensor; from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.ops import wrappers as w
 kind, oob = sys.argv[1], sys.argv[2] == "oob"
@@ -233,16 +237,16 @@ rows = np.arange(24, dtype=np.float32).reshape(6, 4)
 def call(kind, oob):
     if kind == "index_select":
         idx = np.array([1, 3, 11 if oob else 5], dtype=np.int64)
-        return w.index_select_wrapper(NBXTensor.from_numpy(rows), 0,
+        return _nbx_index_wrappers.index_select_wrapper(NBXTensor.from_numpy(rows), 0,
                                       NBXTensor.from_numpy(idx)), idx
     if kind == "index_put":
         idx = np.array([0, 8 if oob else 2], dtype=np.int64)
         vals = np.full((2, 4), -1.0, dtype=np.float32)
-        return w.index_put_wrapper(NBXTensor.from_numpy(rows),
+        return _nbx_index_wrappers.index_put_wrapper(NBXTensor.from_numpy(rows),
                                    [NBXTensor.from_numpy(idx)],
                                    NBXTensor.from_numpy(vals)), idx
     ids = np.array([[4, 7 if oob else 1]], dtype=np.int64)
-    return w.embedding(NBXTensor.from_numpy(rows),
+    return _nbx_index_wrappers.embedding(NBXTensor.from_numpy(rows),
                        NBXTensor.from_numpy(ids)), ids
 
 out, idx = call(kind, oob)

@@ -350,6 +350,7 @@ class TritonRNNTEngine:
         [num_layers, 1, H]. Returns (output [T,1,H] numpy, (h_n, c_n) numpy).
         """
         from nbxtensor.ops import wrappers as _w
+        from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
         from nbxtensor.tensor import NBXTensor
 
         params = getattr(self, "_dec_lstm_params_nbx", None)
@@ -365,7 +366,7 @@ class TritonRNNTEngine:
         x = NBXTensor.from_numpy(np.ascontiguousarray(input_seq, dtype=np.float32))
         h0 = NBXTensor.from_numpy(np.ascontiguousarray(hx[0], dtype=np.float32))
         c0 = NBXTensor.from_numpy(np.ascontiguousarray(hx[1], dtype=np.float32))
-        out, h_n, c_n = _w.lstm_wrapper(
+        out, h_n, c_n = _nbx_elementwise_wrappers.lstm_wrapper(
             x, [h0, c0], params, has_biases=True, num_layers=num_layers,
             bidirectional=False, batch_first=False,
         )

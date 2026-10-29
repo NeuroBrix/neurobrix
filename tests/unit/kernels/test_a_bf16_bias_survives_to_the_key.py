@@ -67,6 +67,7 @@ def _tensors():
 def _key_seen(bias, a, b):
     """The key the autotuner would form for this call, captured at its seam."""
     from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
     from nbxtensor.ops import autotune_cache as atc
     from nbxtensor.ops.matmul import addmm_kernel
 
@@ -82,7 +83,7 @@ def _key_seen(bias, a, b):
     tuner.run = spy
     try:
         try:
-            W.addmm(bias, a, b)
+            _nbx_linalg_wrappers.addmm(bias, a, b)
         except Exception as exc:                       # noqa: BLE001
             # The key can only be observed where the backend can EMIT the
             # kernel. The bledden fork refuses this one outright — "matmul with

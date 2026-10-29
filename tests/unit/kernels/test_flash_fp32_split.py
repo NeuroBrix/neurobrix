@@ -160,11 +160,12 @@ def _run(q, k, v, mask=None, unit=True, dtype=None):
     False (the FMA path an fp32 attention took before the split). `dtype`: the operands cast on the device to it
     (bfloat16: the values must already be bf16-representable), the output read back through float32."""
     from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.dtype.nbx_dtype import NBXDtype
     taken = []
-    real_flash, real_route, real_unit = W._flash_m8n8k4, W._lk.sdpa_route, W._lk.unit_flash
-    W._flash_m8n8k4 = lambda *a, **kw: (taken.append(kw.get("split")), real_flash(*a, **kw))[1]
+    real_flash, real_route, real_unit = _nbx_attention_wrappers._flash_m8n8k4, W._lk.sdpa_route, W._lk.unit_flash
+    _nbx_attention_wrappers._flash_m8n8k4 = lambda *a, **kw: (taken.append(kw.get("split")), real_flash(*a, **kw))[1]
     W._lk.sdpa_route = lambda *a, **kw: ("flash", 0)
     if not unit:
         W._lk.unit_flash = lambda *a, **kw: None
@@ -174,13 +175,13 @@ def _run(q, k, v, mask=None, unit=True, dtype=None):
         return t.to(dtype) if dtype is not None else t
     try:
         kw = {"attn_mask": nb(mask)} if mask is not None else {}
-        out = W.scaled_dot_product_attention_wrapper(nb(q), nb(k), nb(v), k_pre_transposed=False, **kw)
+        out = _nbx_attention_wrappers.scaled_dot_product_attention_wrapper(nb(q), nb(k), nb(v), k_pre_transposed=False, **kw)
         if dtype is not None:
             assert out.nbx_dtype == dtype, f"the output is {out.nbx_dtype}, not the operands' {dtype}"
             out = out.to(NBXDtype.float32)
         return out.numpy().astype(np.float64), (taken[0] if taken else None)
     finally:
-        W._flash_m8n8k4, W._lk.sdpa_route, W._lk.unit_flash = real_flash, real_route, real_unit
+        _nbx_attention_wrappers._flash_m8n8k4, W._lk.sdpa_route, W._lk.unit_flash = real_flash, real_route, real_unit
 
 
 def _gate(q, k, v, mask=None, bias=0.0, rows=None, conditioned=True):

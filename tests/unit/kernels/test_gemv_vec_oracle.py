@@ -42,6 +42,7 @@ from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.ops import wrappers as W
+from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
 
 # fp16 weights, fp32 activation, fp32 accumulation over K<=4096 terms:
 # a correct kernel sits at ~1e-4 relative; 2e-3 is the family bound.
@@ -76,7 +77,7 @@ def _mk(N, K, seed=0):
 
 
 def _run_vec(mat, vec):
-    return W.mv_wrapper(mat, vec)
+    return _nbx_linalg_wrappers.mv_wrapper(mat, vec)
 
 
 # The five real call sites + ragged-K edges.
@@ -157,8 +158,8 @@ def test_every_mv_launches_gemv_vec() -> None:
     G.gemv_vec_kernel = Counting()
     try:
         mat, vec = _mk(512, 2048, seed=3)
-        W.mv_wrapper(mat, vec)
-        W.mv_wrapper(mat, vec)
+        _nbx_linalg_wrappers.mv_wrapper(mat, vec)
+        _nbx_linalg_wrappers.mv_wrapper(mat, vec)
         assert calls["n"] == 2, "an mv did not reach gemv_vec_kernel"
     finally:
         G.gemv_vec_kernel = orig

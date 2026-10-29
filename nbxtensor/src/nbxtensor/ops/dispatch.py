@@ -403,8 +403,10 @@ def _meta_index(x, indices):
     select via a flat row-major index over the consecutive indexed dims.
     """
     from nbxtensor.ops import wrappers as w
+    from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
+    from nbxtensor.ops import index_wrappers as _nbx_index_wrappers  # the family the moved names live in (M2 split)
     if not isinstance(indices, (list, tuple)):
-        return w.index_select_wrapper(x, 0, indices)
+        return _nbx_index_wrappers.index_select_wrapper(x, 0, indices)
 
     present = [(d, i) for d, i in enumerate(indices) if i is not None]
     if not present:
@@ -428,7 +430,7 @@ def _meta_index(x, indices):
             for _s in idx.shape:
                 flat_rows *= int(_s)
             x_flat = xc.reshape([flat_rows] + list(x.shape[idx.ndim:]))
-            rows = w.nonzero_1d_wrapper(idx.reshape([flat_rows]))
+            rows = _nbx_index_wrappers.nonzero_1d_wrapper(idx.reshape([flat_rows]))
             if int(rows.shape[0]) == 0:
                 # All-False mask (the text-mode empty-visual stub path):
                 # a [0, tail...] gather — allocated directly, the select
@@ -437,10 +439,10 @@ def _meta_index(x, indices):
                 return NBXTensor.empty(
                     [0] + list(x.shape[idx.ndim:]),
                     dtype=x.dtype, device=x.device)
-            return w.index_select_wrapper(x_flat, 0, rows)
+            return _nbx_index_wrappers.index_select_wrapper(x_flat, 0, rows)
         orig_idx_shape = idx.shape
         flat_idx = idx.reshape(-1) if idx.ndim > 1 else idx
-        selected = w.index_select_wrapper(x, dim, flat_idx)
+        selected = _nbx_index_wrappers.index_select_wrapper(x, dim, flat_idx)
         if idx.ndim > 1:
             out_shape = list(orig_idx_shape) + list(x.shape[dim + 1:])
             selected = selected.reshape(*out_shape)
@@ -491,7 +493,7 @@ def _meta_index(x, indices):
     # torch semantics: negative entries count from the end of THEIR dim —
     # wrap each index before the row-major flatten (a raw negative would
     # corrupt the joint offset; the single-dim gather wraps in-kernel).
-    flats = [w.remainder_wrapper(t.reshape(-1), int(sz)) for t, sz in zip(idx_tensors, sizes)]
+    flats = [_nbx_elementwise_wrappers.remainder_wrapper(t.reshape(-1), int(sz)) for t, sz in zip(idx_tensors, sizes)]
     flat = flats[0]
     for k in range(1, len(flats)):
         flat = flat * sizes[k] + flats[k]
@@ -501,7 +503,7 @@ def _meta_index(x, indices):
         block *= s
     collapsed = list(x.shape[:first]) + [block] + list(x.shape[first + len(dims):])
     xc = x.reshape(*collapsed)
-    sel = w.index_select_wrapper(xc, first, flat)
+    sel = _nbx_index_wrappers.index_select_wrapper(xc, first, flat)
     out_shape = list(x.shape[:first]) + base_shape + list(x.shape[first + len(dims):])
     return sel.reshape(*out_shape)
 
@@ -523,6 +525,7 @@ def _meta_sdpa_efficient(*args, **kwargs):
     two triton modes stay symmetric (R30).
     """
     from nbxtensor.ops import wrappers as w
+    from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
     q, k, v = args[0], args[1], args[2]
     attn_mask = args[3] if len(args) > 3 and args[3] is not None else None
     dropout_p = args[5] if len(args) > 5 else 0.0
@@ -532,7 +535,7 @@ def _meta_sdpa_efficient(*args, **kwargs):
         dropout_p = float(dropout_p)
     if not isinstance(is_causal, bool):
         is_causal = bool(is_causal)
-    return w.scaled_dot_product_attention_wrapper(
+    return _nbx_attention_wrappers.scaled_dot_product_attention_wrapper(
         q, k, v, attn_mask=attn_mask, dropout_p=dropout_p,
         is_causal=is_causal, scale=scale,
         # The graph's recorded K layout, when the caller bound it onto this
@@ -548,18 +551,20 @@ def _meta_weight_norm(v, g, dim=0, **kwargs):
     weight-normalized convs (chatterbox s3gen, HiFi-GAN-style).
     """
     from nbxtensor.ops import wrappers as w
+    from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
+    from nbxtensor.ops import reduction_wrappers as _nbx_reduction_wrappers  # the family the moved names live in (M2 split)
     nd = v.ndim
     d = dim % nd if nd else 0
-    vsq = w.mul(v, v)
+    vsq = _nbx_elementwise_wrappers.mul(v, v)
     nsq = vsq
     for rd in range(nd):
         if rd == d:
             continue
-        nsq = w.sum_wrapper(nsq, dim=rd, keepdim=True)
-    norm = w.sqrt_wrapper(nsq)
+        nsq = _nbx_reduction_wrappers.sum_wrapper(nsq, dim=rd, keepdim=True)
+    norm = _nbx_elementwise_wrappers.sqrt_wrapper(nsq)
     # w = v * (g / norm); g and norm share the norm-shape (1s except dim d),
     # broadcast against the full-shape v.
-    return w.mul(v, w.div(g, norm))
+    return _nbx_elementwise_wrappers.mul(v, _nbx_elementwise_wrappers.div(g, norm))
 
 
 # ============================================================================
@@ -779,6 +784,17 @@ def _build_op_map() -> Dict[str, Callable]:
     No second path. No fallback. Missing = crash.
     """
     from nbxtensor.ops import wrappers as w
+    from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
+    from nbxtensor.ops import conv_wrappers as _nbx_conv_wrappers  # the family the moved names live in (M2 split)
+    from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
+    from nbxtensor.ops import index_wrappers as _nbx_index_wrappers  # the family the moved names live in (M2 split)
+    from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
+    from nbxtensor.ops import loss_wrappers as _nbx_loss_wrappers  # the family the moved names live in (M2 split)
+    from nbxtensor.ops import norm_wrappers as _nbx_norm_wrappers  # the family the moved names live in (M2 split)
+    from nbxtensor.ops import random_wrappers as _nbx_random_wrappers  # the family the moved names live in (M2 split)
+    from nbxtensor.ops import reduction_wrappers as _nbx_reduction_wrappers  # the family the moved names live in (M2 split)
+    from nbxtensor.ops import shape_wrappers as _nbx_shape_wrappers  # the family the moved names live in (M2 split)
+    from nbxtensor.ops import spectral_wrappers as _nbx_spectral_wrappers  # the family the moved names live in (M2 split)
 
     ops = {
         # =================================================================
@@ -786,254 +802,254 @@ def _build_op_map() -> Dict[str, Callable]:
         # =================================================================
 
         # --- Activations ---
-        "relu": w.relu,
-        "silu": w.silu,
-        "gelu": w.gelu,
-        "sigmoid": w.sigmoid_wrapper,
-        "tanh": w.tanh_wrapper,
-        "hardsigmoid": w.hardsigmoid,
-        "hardswish": w.hardswish,
-        "leaky_relu": w.leaky_relu,
-        "elu": w.elu,
-        "mish": w.mish,
-        "selu": w.selu_wrapper,
+        "relu": _nbx_elementwise_wrappers.relu,
+        "silu": _nbx_elementwise_wrappers.silu,
+        "gelu": _nbx_elementwise_wrappers.gelu,
+        "sigmoid": _nbx_elementwise_wrappers.sigmoid_wrapper,
+        "tanh": _nbx_elementwise_wrappers.tanh_wrapper,
+        "hardsigmoid": _nbx_elementwise_wrappers.hardsigmoid,
+        "hardswish": _nbx_elementwise_wrappers.hardswish,
+        "leaky_relu": _nbx_elementwise_wrappers.leaky_relu,
+        "elu": _nbx_elementwise_wrappers.elu,
+        "mish": _nbx_elementwise_wrappers.mish,
+        "selu": _nbx_elementwise_wrappers.selu_wrapper,
 
         # --- Recurrent (triton-pure assembly; self-manages dtype) ---
-        "lstm": w.lstm_wrapper,
+        "lstm": _nbx_elementwise_wrappers.lstm_wrapper,
 
         # --- Unary element-wise ---
-        "neg": w.neg,
-        "exp": w.exp,
-        "sin": w.sin,
-        "cos": w.cos,
-        "rsqrt": w.rsqrt,
-        "sqrt": w.sqrt_wrapper,
-        "abs": w.abs_wrapper,
-        "log": w.log_wrapper,
-        "reciprocal": w.reciprocal,
-        "pow": w.pow_wrapper,
-        "clamp": w.clamp,
-        "clip": w.clamp,  # aten::clip is an alias of aten::clamp
-        "erf": w.erf,
+        "neg": _nbx_elementwise_wrappers.neg,
+        "exp": _nbx_elementwise_wrappers.exp,
+        "sin": _nbx_elementwise_wrappers.sin,
+        "cos": _nbx_elementwise_wrappers.cos,
+        "rsqrt": _nbx_elementwise_wrappers.rsqrt,
+        "sqrt": _nbx_elementwise_wrappers.sqrt_wrapper,
+        "abs": _nbx_elementwise_wrappers.abs_wrapper,
+        "log": _nbx_elementwise_wrappers.log_wrapper,
+        "reciprocal": _nbx_elementwise_wrappers.reciprocal,
+        "pow": _nbx_elementwise_wrappers.pow_wrapper,
+        "clamp": _nbx_elementwise_wrappers.clamp,
+        "clip": _nbx_elementwise_wrappers.clamp,  # aten::clip is an alias of aten::clamp
+        "erf": _nbx_elementwise_wrappers.erf,
 
         # --- Binary element-wise ---
-        "add": w.add,
-        "mul": w.mul,
-        "div": w.div,
-        "floor_divide": w.floor_divide_wrapper,
-        "sub": w.sub,
-        "rsub": w.rsub,
-        "where": w.where_wrapper,
-        "maximum": w.maximum_wrapper,
-        "minimum": w.minimum_wrapper,
-        "masked_fill": w.masked_fill,
-        "masked_scatter": w.masked_scatter_wrapper,
+        "add": _nbx_elementwise_wrappers.add,
+        "mul": _nbx_elementwise_wrappers.mul,
+        "div": _nbx_elementwise_wrappers.div,
+        "floor_divide": _nbx_elementwise_wrappers.floor_divide_wrapper,
+        "sub": _nbx_elementwise_wrappers.sub,
+        "rsub": _nbx_elementwise_wrappers.rsub,
+        "where": _nbx_index_wrappers.where_wrapper,
+        "maximum": _nbx_elementwise_wrappers.maximum_wrapper,
+        "minimum": _nbx_elementwise_wrappers.minimum_wrapper,
+        "masked_fill": _nbx_index_wrappers.masked_fill,
+        "masked_scatter": _nbx_index_wrappers.masked_scatter_wrapper,
 
         # --- Comparisons ---
-        "gt": w.gt,
-        "ge": w.ge,
-        "lt": w.lt,
-        "eq": w.eq,
-        "ne": w.ne,
-        "le": w.le,
+        "gt": _nbx_elementwise_wrappers.gt,
+        "ge": _nbx_elementwise_wrappers.ge,
+        "lt": _nbx_elementwise_wrappers.lt,
+        "eq": _nbx_elementwise_wrappers.eq,
+        "ne": _nbx_elementwise_wrappers.ne,
+        "le": _nbx_elementwise_wrappers.le,
 
         # --- Normalization ---
-        "native_layer_norm": w.native_layer_norm,
-        "layer_norm": w.layer_norm_wrapper,
-        "rms_norm": w.rms_norm,
-        "swiglu_fused": w.swiglu_fused_wrapper,
-        "rope_fused": w.rope_fused_wrapper,
-        "native_group_norm": w.native_group_norm_wrapper,
-        "group_norm": w.group_norm_wrapper,
-        "cudnn_batch_norm": w.batch_norm_wrapper,
-        "native_batch_norm": w.batch_norm_wrapper,
-        "batch_norm": w.batch_norm_wrapper,
+        "native_layer_norm": _nbx_norm_wrappers.native_layer_norm,
+        "layer_norm": _nbx_norm_wrappers.layer_norm_wrapper,
+        "rms_norm": _nbx_norm_wrappers.rms_norm,
+        "swiglu_fused": _nbx_elementwise_wrappers.swiglu_fused_wrapper,
+        "rope_fused": _nbx_elementwise_wrappers.rope_fused_wrapper,
+        "native_group_norm": _nbx_norm_wrappers.native_group_norm_wrapper,
+        "group_norm": _nbx_norm_wrappers.group_norm_wrapper,
+        "cudnn_batch_norm": _nbx_norm_wrappers.batch_norm_wrapper,
+        "native_batch_norm": _nbx_norm_wrappers.batch_norm_wrapper,
+        "batch_norm": _nbx_norm_wrappers.batch_norm_wrapper,
 
         # --- Softmax ---
-        "softmax": w.softmax,
-        "_softmax": w.softmax,
-        "_safe_softmax": w.softmax,
-        "log_softmax": w.log_softmax,
-        "_log_softmax": w.log_softmax,
+        "softmax": _nbx_attention_wrappers.softmax,
+        "_softmax": _nbx_attention_wrappers.softmax,
+        "_safe_softmax": _nbx_attention_wrappers.softmax,
+        "log_softmax": _nbx_attention_wrappers.log_softmax,
+        "_log_softmax": _nbx_attention_wrappers.log_softmax,
 
         # --- Matmul ---
-        "mm": w.mm,
-        "bmm": w.bmm,
-        "addmm": w.addmm,
-        "mm_epilogue": w.mm_epilogue_wrapper,
-        "addmm_epilogue": w.addmm_epilogue_wrapper,
-        "matmul": w.matmul_wrapper,
-        "linear": w.linear_wrapper,
-        "isin": w.isin_wrapper,
-        "is_nonzero": w.is_nonzero_wrapper,
+        "mm": _nbx_linalg_wrappers.mm,
+        "bmm": _nbx_linalg_wrappers.bmm,
+        "addmm": _nbx_linalg_wrappers.addmm,
+        "mm_epilogue": _nbx_linalg_wrappers.mm_epilogue_wrapper,
+        "addmm_epilogue": _nbx_linalg_wrappers.addmm_epilogue_wrapper,
+        "matmul": _nbx_linalg_wrappers.matmul_wrapper,
+        "linear": _nbx_linalg_wrappers.linear_wrapper,
+        "isin": _nbx_elementwise_wrappers.isin_wrapper,
+        "is_nonzero": _nbx_index_wrappers.is_nonzero_wrapper,
 
         # --- Embedding ---
-        "embedding": w.embedding,
+        "embedding": _nbx_index_wrappers.embedding,
 
         # --- Reductions ---
-        "mean": w.mean_wrapper,
-        "sum": w.sum_wrapper,
-        "norm": w.norm_wrapper,
-        "amax": w.amax_wrapper,
-        "argmax": w.argmax_wrapper,
-        "argmin": w.argmin_wrapper,
-        "prod": w.prod_wrapper,
-        "min": w.min_wrapper,
-        "max": w.max_wrapper,
-        "std": w.std_wrapper,
-        "var": w.var_wrapper,
+        "mean": _nbx_reduction_wrappers.mean_wrapper,
+        "sum": _nbx_reduction_wrappers.sum_wrapper,
+        "norm": _nbx_norm_wrappers.norm_wrapper,
+        "amax": _nbx_reduction_wrappers.amax_wrapper,
+        "argmax": _nbx_reduction_wrappers.argmax_wrapper,
+        "argmin": _nbx_reduction_wrappers.argmin_wrapper,
+        "prod": _nbx_reduction_wrappers.prod_wrapper,
+        "min": _nbx_elementwise_wrappers.min_wrapper,
+        "max": _nbx_elementwise_wrappers.max_wrapper,
+        "std": _nbx_reduction_wrappers.std_wrapper,
+        "var": _nbx_reduction_wrappers.var_wrapper,
 
         # --- GLU ---
-        "glu": w.glu_wrapper,
+        "glu": _nbx_elementwise_wrappers.glu_wrapper,
 
         # --- Spatial ---
-        "upsample_nearest1d": w.upsample_nearest1d_wrapper,
-        "upsample_nearest2d": w.upsample_nearest2d_wrapper,
+        "upsample_nearest1d": _nbx_shape_wrappers.upsample_nearest1d_wrapper,
+        "upsample_nearest2d": _nbx_shape_wrappers.upsample_nearest2d_wrapper,
         # nearest-exact variants: bit-identical to nearest for integer ×2
         # (every Wan VAE upsample); reuse the nearest wrappers.
-        "_upsample_nearest_exact1d": w.upsample_nearest1d_wrapper,
-        "_upsample_nearest_exact2d": w.upsample_nearest2d_wrapper,
-        "upsample_nearest3d": w.upsample_nearest3d_wrapper,
-        "upsample_bilinear2d": w.upsample_bilinear2d_wrapper,
-        "upsample_linear1d": w.upsample_linear1d_wrapper,
-        "interpolate": w.interpolate_wrapper,
-        "adaptive_avg_pool2d": w.adaptive_avg_pool2d_wrapper,
-        "avg_pool2d": w.avg_pool2d_wrapper,
-        "max_pool2d": w.max_pool2d_wrapper,
+        "_upsample_nearest_exact1d": _nbx_shape_wrappers.upsample_nearest1d_wrapper,
+        "_upsample_nearest_exact2d": _nbx_shape_wrappers.upsample_nearest2d_wrapper,
+        "upsample_nearest3d": _nbx_shape_wrappers.upsample_nearest3d_wrapper,
+        "upsample_bilinear2d": _nbx_linalg_wrappers.upsample_bilinear2d_wrapper,
+        "upsample_linear1d": _nbx_linalg_wrappers.upsample_linear1d_wrapper,
+        "interpolate": _nbx_shape_wrappers.interpolate_wrapper,
+        "adaptive_avg_pool2d": _nbx_conv_wrappers.adaptive_avg_pool2d_wrapper,
+        "avg_pool2d": _nbx_conv_wrappers.avg_pool2d_wrapper,
+        "max_pool2d": _nbx_conv_wrappers.max_pool2d_wrapper,
         # with_indices variants return (values, indices) tuples — the
         # sequence binds them to ::out_0 / ::out_1.
         "max_pool2d_with_indices": (
             lambda x, kernel_size, stride=None, padding=0, dilation=1,
                    ceil_mode=False:
-            w.max_pool2d_wrapper(x, kernel_size, stride, padding, dilation,
+            _nbx_conv_wrappers.max_pool2d_wrapper(x, kernel_size, stride, padding, dilation,
                                  ceil_mode, return_indices=True)),
-        "max_pool3d": w.max_pool3d_wrapper,
-        "max_pool3d_with_indices": w.max_pool3d_with_indices_wrapper,
+        "max_pool3d": _nbx_conv_wrappers.max_pool3d_wrapper,
+        "max_pool3d_with_indices": _nbx_conv_wrappers.max_pool3d_with_indices_wrapper,
 
         # --- Conv ---
-        "conv2d": w.conv2d_wrapper,
-        "convolution": w.conv2d_wrapper,
-        "conv1d": w.conv1d_wrapper,
-        "conv_transpose1d": w.conv_transpose1d_wrapper,
-        "depthwise_conv2d": w.conv_depthwise2d_wrapper,
-        "conv_depthwise2d": w.conv_depthwise2d_wrapper,
-        "conv_transpose2d": w.conv_depthwise2d_wrapper,
+        "conv2d": _nbx_conv_wrappers.conv2d_wrapper,
+        "convolution": _nbx_conv_wrappers.conv2d_wrapper,
+        "conv1d": _nbx_conv_wrappers.conv1d_wrapper,
+        "conv_transpose1d": _nbx_conv_wrappers.conv_transpose1d_wrapper,
+        "depthwise_conv2d": _nbx_conv_wrappers.conv_depthwise2d_wrapper,
+        "conv_depthwise2d": _nbx_conv_wrappers.conv_depthwise2d_wrapper,
+        "conv_transpose2d": _nbx_conv_wrappers.conv_depthwise2d_wrapper,
 
         # --- Indexing ---
-        "index_select": w.index_select_wrapper,
-        "gather": w.gather_wrapper,
-        "scatter": w.scatter_wrapper,
-        "scatter_add": w.scatter_add_wrapper,
-        "scatter_reduce": w.scatter_reduce_wrapper,
-        "index_add": w.index_add_wrapper,
-        "bincount": w.bincount_wrapper,
+        "index_select": _nbx_index_wrappers.index_select_wrapper,
+        "gather": _nbx_index_wrappers.gather_wrapper,
+        "scatter": _nbx_index_wrappers.scatter_wrapper,
+        "scatter_add": _nbx_index_wrappers.scatter_add_wrapper,
+        "scatter_reduce": _nbx_reduction_wrappers.scatter_reduce_wrapper,
+        "index_add": _nbx_index_wrappers.index_add_wrapper,
+        "bincount": _nbx_elementwise_wrappers.bincount_wrapper,
 
         # --- Triangular ---
-        "triu": w.triu_wrapper,
-        "tril": w.tril_wrapper,
+        "triu": _nbx_shape_wrappers.triu_wrapper,
+        "tril": _nbx_shape_wrappers.tril_wrapper,
 
         # --- Cumulative ---
-        "cumsum": w.cumsum_wrapper,
+        "cumsum": _nbx_reduction_wrappers.cumsum_wrapper,
 
         # --- Dropout (inference = identity) ---
-        "dropout": w.dropout_wrapper,
-        "native_dropout": w.dropout_wrapper,
+        "dropout": _nbx_random_wrappers.dropout_wrapper,
+        "native_dropout": _nbx_random_wrappers.dropout_wrapper,
 
         # --- Misc element-wise ---
-        "remainder": w.remainder_wrapper,
-        "exp2": w.exp2_wrapper,
-        "tan": w.tan_wrapper,
-        "celu": w.celu_wrapper,
-        "log_sigmoid": w.log_sigmoid_wrapper,
-        "softplus": w.softplus_wrapper,
-        "isfinite": w.isfinite_wrapper,
-        "isinf": w.isinf_wrapper,
-        "isnan": w.isnan_wrapper,
-        "nan_to_num": w.nan_to_num_wrapper,
-        "threshold": w.threshold_wrapper,
-        "addcdiv": w.addcdiv_wrapper,
-        "addcmul": w.addcmul_wrapper,
-        "lerp": w.lerp_wrapper,
+        "remainder": _nbx_elementwise_wrappers.remainder_wrapper,
+        "exp2": _nbx_elementwise_wrappers.exp2_wrapper,
+        "tan": _nbx_elementwise_wrappers.tan_wrapper,
+        "celu": _nbx_elementwise_wrappers.celu_wrapper,
+        "log_sigmoid": _nbx_elementwise_wrappers.log_sigmoid_wrapper,
+        "softplus": _nbx_elementwise_wrappers.softplus_wrapper,
+        "isfinite": _nbx_elementwise_wrappers.isfinite_wrapper,
+        "isinf": _nbx_elementwise_wrappers.isinf_wrapper,
+        "isnan": _nbx_elementwise_wrappers.isnan_wrapper,
+        "nan_to_num": _nbx_elementwise_wrappers.nan_to_num_wrapper,
+        "threshold": _nbx_elementwise_wrappers.threshold_wrapper,
+        "addcdiv": _nbx_elementwise_wrappers.addcdiv_wrapper,
+        "addcmul": _nbx_elementwise_wrappers.addcmul_wrapper,
+        "lerp": _nbx_elementwise_wrappers.lerp_wrapper,
 
         # --- Logic/bitwise ---
-        "all": w.all_wrapper,
-        "any": w.any_wrapper,
-        "bitwise_and": w.bitwise_and_wrapper,
-        "bitwise_or": w.bitwise_or_wrapper,
-        "bitwise_not": w.bitwise_not_wrapper,
-        "logical_and": w.logical_and_wrapper,
-        "logical_or": w.logical_or_wrapper,
-        "logical_not": w.logical_not_wrapper,
-        "logical_xor": w.logical_xor_wrapper,
-        "bitwise_left_shift": w.bitwise_left_shift_wrapper,
-        "bitwise_right_shift": w.bitwise_right_shift_wrapper,
+        "all": _nbx_reduction_wrappers.all_wrapper,
+        "any": _nbx_reduction_wrappers.any_wrapper,
+        "bitwise_and": _nbx_elementwise_wrappers.bitwise_and_wrapper,
+        "bitwise_or": _nbx_elementwise_wrappers.bitwise_or_wrapper,
+        "bitwise_not": _nbx_elementwise_wrappers.bitwise_not_wrapper,
+        "logical_and": _nbx_elementwise_wrappers.logical_and_wrapper,
+        "logical_or": _nbx_elementwise_wrappers.logical_or_wrapper,
+        "logical_not": _nbx_elementwise_wrappers.logical_not_wrapper,
+        "logical_xor": _nbx_elementwise_wrappers.logical_xor_wrapper,
+        "bitwise_left_shift": _nbx_elementwise_wrappers.bitwise_left_shift_wrapper,
+        "bitwise_right_shift": _nbx_elementwise_wrappers.bitwise_right_shift_wrapper,
 
         # --- Linear algebra ---
-        "dot": w.dot_wrapper,
-        "mv": w.mv_wrapper,
-        "baddbmm": w.baddbmm_wrapper,
+        "dot": _nbx_linalg_wrappers.dot_wrapper,
+        "mv": _nbx_linalg_wrappers.mv_wrapper,
+        "baddbmm": _nbx_linalg_wrappers.baddbmm_wrapper,
         "_weight_norm": _meta_weight_norm,
-        "addmv": w.addmv_wrapper,
-        "linalg_vector_norm": w.vector_norm_wrapper,
-        "addr": w.addr_wrapper,
-        "trace": w.trace_wrapper,
+        "addmv": _nbx_linalg_wrappers.addmv_wrapper,
+        "linalg_vector_norm": _nbx_norm_wrappers.vector_norm_wrapper,
+        "addr": _nbx_elementwise_wrappers.addr_wrapper,
+        "trace": _nbx_elementwise_wrappers.trace_wrapper,
 
         # --- Loss ---
-        "mse_loss": w.mse_loss_wrapper,
-        "nll_loss": w.nll_loss_wrapper,
-        "cross_entropy_loss": w.cross_entropy_wrapper,
+        "mse_loss": _nbx_loss_wrappers.mse_loss_wrapper,
+        "nll_loss": _nbx_loss_wrappers.nll_loss_wrapper,
+        "cross_entropy_loss": _nbx_loss_wrappers.cross_entropy_wrapper,
 
         # --- Sort/topk ---
-        "sort": w.sort_wrapper,
-        "topk": w.topk_wrapper,
-        "flip": w.flip_wrapper,
-        "roll": w.roll_wrapper,
+        "sort": _nbx_elementwise_wrappers.sort_wrapper,
+        "topk": _nbx_elementwise_wrappers.topk_wrapper,
+        "flip": _nbx_shape_wrappers.flip_wrapper,
+        "roll": _nbx_shape_wrappers.roll_wrapper,
 
-        "pixel_shuffle": w.pixel_shuffle_wrapper,
-        "pixel_unshuffle": w.pixel_unshuffle_wrapper,
+        "pixel_shuffle": _nbx_shape_wrappers.pixel_shuffle_wrapper,
+        "pixel_unshuffle": _nbx_shape_wrappers.pixel_unshuffle_wrapper,
 
         # --- Clamp ---
-        "clamp_min": w.clamp_min_wrapper,
+        "clamp_min": _nbx_elementwise_wrappers.clamp_min_wrapper,
 
         # --- Weight norm ---
-        "_weight_norm_interface": w.weight_norm_interface_wrapper,
-        "repeat_interleave": w.repeat_interleave_wrapper,
+        "_weight_norm_interface": _nbx_norm_wrappers.weight_norm_interface_wrapper,
+        "repeat_interleave": _nbx_shape_wrappers.repeat_interleave_wrapper,
 
         # --- RNG ---
-        "rand": w.rand_wrapper,
-        "randn": w.randn_wrapper,
-        "rand_like": w.rand_like_wrapper,
-        "randn_like": w.randn_like_wrapper,
-        "normal": w.normal_wrapper,
-        "uniform": w.uniform_wrapper,
-        "bernoulli": w.bernoulli_wrapper,
-        "multinomial": w.multinomial_wrapper,
+        "rand": _nbx_random_wrappers.rand_wrapper,
+        "randn": _nbx_random_wrappers.randn_wrapper,
+        "rand_like": _nbx_random_wrappers.rand_like_wrapper,
+        "randn_like": _nbx_random_wrappers.randn_like_wrapper,
+        "normal": _nbx_norm_wrappers.normal_wrapper,
+        "uniform": _nbx_random_wrappers.uniform_wrapper,
+        "bernoulli": _nbx_elementwise_wrappers.bernoulli_wrapper,
+        "multinomial": _nbx_random_wrappers.multinomial_wrapper,
 
         # --- Padding ---
-        "constant_pad_nd": w.constant_pad_nd_wrapper,
-        "pad": w.pad_wrapper,
-        "reflection_pad1d": w.reflection_pad1d_wrapper,
-        "reflection_pad2d": w.reflection_pad2d_wrapper,
-        "reflection_pad3d": w.reflection_pad3d_wrapper,
-        "replication_pad1d": w.replication_pad1d_wrapper,
-        "replication_pad2d": w.replication_pad2d_wrapper,
-        "replication_pad3d": w.replication_pad3d_wrapper,
+        "constant_pad_nd": _nbx_shape_wrappers.constant_pad_nd_wrapper,
+        "pad": _nbx_shape_wrappers.pad_wrapper,
+        "reflection_pad1d": _nbx_shape_wrappers.reflection_pad1d_wrapper,
+        "reflection_pad2d": _nbx_shape_wrappers.reflection_pad2d_wrapper,
+        "reflection_pad3d": _nbx_shape_wrappers.reflection_pad3d_wrapper,
+        "replication_pad1d": _nbx_shape_wrappers.replication_pad1d_wrapper,
+        "replication_pad2d": _nbx_shape_wrappers.replication_pad2d_wrapper,
+        "replication_pad3d": _nbx_shape_wrappers.replication_pad3d_wrapper,
 
         # --- FFT ---
-        "_fft_r2c": w.fft_r2c_wrapper,
-        "_fft_c2r": w.fft_c2r_wrapper,
-        "_fft_c2c": w.fft_c2c_wrapper,
-        "fft_rfft": w.fft_rfft_wrapper,
-        "fft_irfft": w.fft_irfft_wrapper,
-        "stft": w.stft_wrapper,
-        "istft": w.istft_wrapper,
+        "_fft_r2c": _nbx_spectral_wrappers.fft_r2c_wrapper,
+        "_fft_c2r": _nbx_spectral_wrappers.fft_c2r_wrapper,
+        "_fft_c2c": _nbx_spectral_wrappers.fft_c2c_wrapper,
+        "fft_rfft": _nbx_spectral_wrappers.fft_rfft_wrapper,
+        "fft_irfft": _nbx_spectral_wrappers.fft_irfft_wrapper,
+        "stft": _nbx_spectral_wrappers.stft_wrapper,
+        "istft": _nbx_spectral_wrappers.istft_wrapper,
 
         # --- Complex ---
-        "angle": w.angle_wrapper,
+        "angle": _nbx_elementwise_wrappers.angle_wrapper,
 
         # Attention — Dao-AILab Flash Attention v2 Triton kernel
-        "scaled_dot_product_attention": w.scaled_dot_product_attention_wrapper,
-        "_scaled_dot_product_attention": w.scaled_dot_product_attention_wrapper,
+        "scaled_dot_product_attention": _nbx_attention_wrappers.scaled_dot_product_attention_wrapper,
+        "_scaled_dot_product_attention": _nbx_attention_wrappers.scaled_dot_product_attention_wrapper,
         # Fused-backend variants have a shifted positional signature
         # (extra compute_log_sumexp / return_debug_mask arg). Route through the
         # remap shim so is_causal / scale read from the right slots — mirrors
@@ -1047,10 +1063,10 @@ def _build_op_map() -> Dict[str, Callable]:
         "_scaled_dot_product_flash_attention": _meta_sdpa_efficient,
         "_scaled_dot_product_efficient_attention": _meta_sdpa_efficient,
         "_scaled_dot_product_cudnn_attention": _meta_sdpa_efficient,
-        "_scaled_dot_product_flash_attention_for_cpu": w.scaled_dot_product_attention_wrapper,
-        "complex": w.complex_wrapper,
-        "fold": w.fold_wrapper,
-        "unfold_backward": w.unfold_backward_wrapper,
+        "_scaled_dot_product_flash_attention_for_cpu": _nbx_attention_wrappers.scaled_dot_product_attention_wrapper,
+        "complex": _nbx_elementwise_wrappers.complex_wrapper,
+        "fold": _nbx_elementwise_wrappers.fold_wrapper,
+        "unfold_backward": _nbx_conv_wrappers.unfold_backward_wrapper,
 
         # =================================================================
         # METADATA OPS — CPU stride math, NBXTensor methods
@@ -1084,12 +1100,12 @@ def _build_op_map() -> Dict[str, Callable]:
         # resurrect the wrong (single-output, wrong-signature) binding
         # (P-TRITON-MLA: the MLA q nope/rope split [128, 64] rides on the
         # narrow-based binding).
-        "bucketize": w.bucketize_wrapper,
+        "bucketize": _nbx_index_wrappers.bucketize_wrapper,
         "view_as": _meta_view_as,
         "reshape_as": _meta_reshape_as,
         "as_strided": _meta_as_strided,
         "unfold": _meta_unfold,
-        "im2col": w.im2col_wrapper,
+        "im2col": _nbx_conv_wrappers.im2col_wrapper,
         "movedim": _meta_movedim,
 
         # Memory
@@ -1115,13 +1131,13 @@ def _build_op_map() -> Dict[str, Callable]:
         "long": lambda x: x.long(),
 
         # Math rounding ops — proper Triton kernels
-        "floor": w.floor_wrapper,
-        "ceil": w.ceil_wrapper,
+        "floor": _nbx_elementwise_wrappers.floor_wrapper,
+        "ceil": _nbx_elementwise_wrappers.ceil_wrapper,
 
         # 2D grid sampler (VLM pos-embed adaptation: bicubic/bilinear)
-        "grid_sampler_2d": w.grid_sampler_2d_wrapper,
-        "round": w.round_wrapper,
-        "trunc": w.trunc_wrapper,
+        "grid_sampler_2d": _nbx_shape_wrappers.grid_sampler_2d_wrapper,
+        "round": _nbx_elementwise_wrappers.round_wrapper,
+        "trunc": _nbx_elementwise_wrappers.trunc_wrapper,
 
         # Scalar
         "item": _meta_select_item,
@@ -1143,12 +1159,12 @@ def _build_op_map() -> Dict[str, Callable]:
         "is_contiguous": lambda x: x.is_contiguous,
 
         # Broadcast
-        "broadcast_tensors": w.broadcast_tensors_wrapper,
+        "broadcast_tensors": _nbx_shape_wrappers.broadcast_tensors_wrapper,
 
         # Advanced indexing — aten::index(tensor, [idx0, idx1, ...])
         "index": _meta_index,
-        "index_put": w.index_put_wrapper,
-        "index_put_": w.index_put_wrapper,
+        "index_put": _nbx_index_wrappers.index_put_wrapper,
+        "index_put_": _nbx_index_wrappers.index_put_wrapper,
 
         # Split/chunk (use narrow internally). torch.split semantics:
         # ceil(shape/size) chunks, the LAST carries the remainder — the

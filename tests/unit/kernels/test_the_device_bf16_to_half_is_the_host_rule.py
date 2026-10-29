@@ -27,7 +27,7 @@ def _patterns():
 
 @pytest.mark.parametrize("in_place", [False, True])
 def test_every_finite_pattern_is_the_host_rule(in_place):
-    from nbxtensor.ops.wrappers import bf16_to_fp16_gpu
+    from nbxtensor.ops.elementwise_wrappers import bf16_to_fp16_gpu
     from nbxtensor.dtype.nbx_dtype import NBXDtype
     from nbxtensor.tensor import NBXTensor
     bits = _patterns()

@@ -16,6 +16,7 @@ if not torch.cuda.is_available():
 
 from nbxtensor.ops import launch_keys as LK  # noqa: E402
 from nbxtensor.ops import wrappers as W  # noqa: E402
+from nbxtensor.ops import norm_wrappers as _nbx_norm_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.tensor import NBXTensor  # noqa: E402
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.ops.autotune_cache import key_of  # noqa: E402
@@ -48,7 +49,7 @@ def test_the_launch_is_its_key(monkeypatch, shape, groups, dt, affine):
     w = _t(rng.standard_normal(shape[1]), dt) if affine else None
     b = _t(rng.standard_normal(shape[1]), dt) if affine else None
     with pytest.raises(_Launched):
-        W.group_norm_wrapper(x, groups, w, b)
+        _nbx_norm_wrappers.group_norm_wrapper(x, groups, w, b)
     hxw = int(np.prod(shape[2:]))
     want = LK.group_norm_launches(shape[0], shape[1], hxw, groups, affine, affine, dt, dt if affine else None,
                                   dt if affine else None)
@@ -60,7 +61,7 @@ def test_the_values_are_the_group_norm(shape, groups):
     rng = np.random.default_rng(1)
     a = rng.standard_normal(shape).astype(np.float32)
     w, b = rng.standard_normal(shape[1]).astype(np.float32), rng.standard_normal(shape[1]).astype(np.float32)
-    y = W.group_norm_wrapper(_t(a, F32), groups, _t(w, F32), _t(b, F32))[0].to("cpu").numpy()
+    y = _nbx_norm_wrappers.group_norm_wrapper(_t(a, F32), groups, _t(w, F32), _t(b, F32))[0].to("cpu").numpy()
     g = a.astype(np.float64).reshape(shape[0], groups, -1)
     z = (g - g.mean(-1, keepdims=True)) / np.sqrt(g.var(-1, keepdims=True) + 1e-5)
     z = z.reshape(shape) * w.reshape(1, -1, *([1] * (len(shape) - 2))) + b.reshape(1, -1, *([1] * (len(shape) - 2)))

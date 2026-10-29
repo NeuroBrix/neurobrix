@@ -46,6 +46,8 @@ except ModuleNotFoundError:  # script-mode under a pytest-less GPU venv
     pytest = _NoPytest()  # type: ignore[assignment]
 
 from nbxtensor.ops import wrappers as W
+from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
+from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.tensor import NBXTensor
@@ -80,7 +82,7 @@ def _reference_copying_kt(q, k, v, attn_mask=None, is_causal=False):
     T_k = k.shape[2]
     q_3d = q.reshape(B * H, T_q, D)
     kt = k.transpose(-2, -1).contiguous().reshape(B * H, D, T_k)
-    return W.bmm(q_3d, kt)
+    return _nbx_linalg_wrappers.bmm(q_3d, kt)
 
 
 def _new_strided_kt(q, k, v, attn_mask=None, is_causal=False):
@@ -90,7 +92,7 @@ def _new_strided_kt(q, k, v, attn_mask=None, is_causal=False):
     T_k = k.shape[2]
     q_3d = q.reshape(B * H, T_q, D)
     kt = k.reshape(B * H, T_k, D).transpose(-2, -1)
-    return W.bmm(q_3d, kt, allow_strided_b=True)
+    return _nbx_linalg_wrappers.bmm(q_3d, kt, allow_strided_b=True)
 
 
 def _rand(shape, seed, dt=np.float16):
@@ -148,7 +150,7 @@ def test_full_attention_paths(case) -> None:
         m[0, :] = -np.inf          # one row with every key masked
         mask = NBXTensor.from_numpy(m)
 
-    out = W._math_attention(q, k, v, attn_mask=mask, is_causal=causal)
+    out = _nbx_attention_wrappers._math_attention(q, k, v, attn_mask=mask, is_causal=causal)
     got = _d2h(out)
 
     assert np.isfinite(got).all(), (

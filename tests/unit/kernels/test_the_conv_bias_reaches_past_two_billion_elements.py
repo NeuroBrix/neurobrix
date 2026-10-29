@@ -24,6 +24,7 @@ import numpy as np
 import pytest
 
 from nbxtensor.ops import wrappers as W
+from nbxtensor.ops import conv_wrappers as _nbx_conv_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.tensor import NBXTensor
 
 C, H, W_ = 64, 6000, 6000               # 2 304 000 000 elements; channel 60 starts past 2^31
@@ -57,7 +58,7 @@ def test_the_bias_lands_on_every_channel_past_the_boundary():
     assert (C - 1) * H * W_ >= BOUNDARY > 59 * H * W_, "the shape must straddle 2^31"
     out = NBXTensor.ones((1, C, H, W_), dtype="float16")
     bias = NBXTensor.from_numpy(np.arange(C, dtype=np.float16) / np.float16(64))
-    out = W._conv_bias_inplace(out, bias)
+    out = _nbx_conv_wrappers._conv_bias_inplace(out, bias)
     for c in (0, 59, 60, 61, 63):
         plane = out[0, c:c + 1].contiguous()
         first = float(plane[0, 0:1, 0:1].contiguous().numpy().reshape(-1)[0])

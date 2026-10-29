@@ -54,6 +54,7 @@ torch = pytest.importorskip("torch")
 @pytest.mark.parametrize("n", [5, 70000, 3_000_000])
 def test_a_wrapper_launch_asks_the_shared_copy_for_its_class(monkeypatch, n):
     from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.ops import elementwise_launch as E
     from nbxtensor.ops.autotune_cache import key_of
@@ -69,6 +70,6 @@ def test_a_wrapper_launch_asks_the_shared_copy_for_its_class(monkeypatch, n):
     monkeypatch.setattr(E, "_MEMO", {})
     x = NBXTensor.from_numpy(np.ones(n, dtype=np.float32)).to("cuda")
     with pytest.raises(_Launched):
-        W.silu(x)
+        _nbx_elementwise_wrappers.silu(x)
     assert seen == [(E.ew_bucket(n), "fp32", "fp32")]
     assert seen[0] in [k for _, k in LK.elementwise_classes(n)]

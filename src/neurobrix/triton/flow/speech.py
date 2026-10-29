@@ -34,6 +34,9 @@ from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.ops import wrappers as w
+from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
+from nbxtensor.ops import index_wrappers as _nbx_index_wrappers  # the family the moved names live in (M2 split)
+from nbxtensor.ops import reduction_wrappers as _nbx_reduction_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.random.seeded_draw import SeededDrawStream
 from nbxtensor.memory.device_transfer import needs_move, transfer_tensor
 
@@ -193,7 +196,7 @@ class SpeechLeg:
         if thinker_embed_w is None:
             raise RuntimeError("ZERO FALLBACK: thinker embed weight not found.")
         _w_dev = int(thinker_embed_w._device_idx)
-        tts_embeds = w.embedding(
+        tts_embeds = _nbx_index_wrappers.embedding(
             thinker_embed_w,
             _from_np_on(np.asarray([tts_ids], dtype=np.int64), _w_dev))
         if needs_move(tts_embeds, self._dev):
@@ -236,13 +239,13 @@ class SpeechLeg:
                            if sequences[p] not in mm_ids]
                 pieces: Dict[int, NBXTensor] = {}
                 if mm_pos:
-                    seg_h = w.index_select_wrapper(
+                    seg_h = _nbx_index_wrappers.index_select_wrapper(
                         thinker_hidden, 1, self._ids(mm_pos))
                     mm_h = self._run(c_hproj, hidden_state=seg_h).to(dtype)
                     for k, p in enumerate(mm_pos):
                         pieces[p] = mm_h[:, k:k + 1]
                 if txt_pos:
-                    seg_e = w.index_select_wrapper(
+                    seg_e = _nbx_index_wrappers.index_select_wrapper(
                         thinker_embed, 1, self._ids(txt_pos))
                     txt_e = self._run(c_tproj, hidden_state=seg_e).to(dtype)
                     for k, p in enumerate(txt_pos):
@@ -284,7 +287,7 @@ class SpeechLeg:
                 trailing_text_hidden = NBXTensor.cat(
                     [assistant_hidden[:, _tf:], tts_eos_embed], dim=1)
                 talker_embeds.append(
-                    w.add(assistant_text_hidden, assistant_codec_hidden))
+                    _nbx_elementwise_wrappers.add(assistant_text_hidden, assistant_codec_hidden))
                 talker_ids.extend([tts_ids[2]]
                                   * assistant_text_hidden.shape[1])
             # history assistant parts: vendor skips them
@@ -382,14 +385,14 @@ class SpeechLeg:
             frames.append(frame)
 
             # next talker input: sum of the 16 group embeds (+ text inj)
-            next_embed = w.sum_wrapper(
+            next_embed = _nbx_reduction_wrappers.sum_wrapper(
                 NBXTensor.cat(group_embeds, dim=1), dim=1, keepdim=True)
             if gen_step < trailing_text_hidden.shape[1]:
-                next_embed = w.add(
+                next_embed = _nbx_elementwise_wrappers.add(
                     next_embed,
                     trailing_text_hidden[:, gen_step:gen_step + 1])
             else:
-                next_embed = w.add(next_embed, tts_pad_embed)
+                next_embed = _nbx_elementwise_wrappers.add(next_embed, tts_pad_embed)
             talker_context = NBXTensor.cat(
                 [talker_context, next_embed.to(dtype)], dim=1)
             gen_step += 1

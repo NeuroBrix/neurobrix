@@ -25,6 +25,7 @@ pytestmark = pytest.mark.skipif(not _has_gpu(), reason="needs a device")
 
 def test_the_halves_of_a_split_are_read_in_place_and_give_silu_gate_times_up(monkeypatch):
     from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
     rng = np.random.default_rng(0)
     host = rng.standard_normal((2, 7, 64)).astype(np.float32)
     fused = NBXTensor.from_numpy(host).to_cuda(0)
@@ -33,7 +34,7 @@ def test_the_halves_of_a_split_are_read_in_place_and_give_silu_gate_times_up(mon
     orig = DeviceAllocator.malloc_cuda
     monkeypatch.setattr(DeviceAllocator, "malloc_cuda",
                         staticmethod(lambda n, *a, **k: (sizes.append(n), orig(n, *a, **k))[1]))
-    out = W.swiglu_fused_wrapper(gate, up)
+    out = _nbx_elementwise_wrappers.swiglu_fused_wrapper(gate, up)
     assert sizes == [2 * 7 * 32 * 4], f"allocations beside the output: {sizes}"
     g, u = host[:, :, :32], host[:, :, 32:]
     ref = g / (1.0 + np.exp(-g)) * u

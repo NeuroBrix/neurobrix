@@ -62,7 +62,7 @@ def main() -> int:
     spec.loader.exec_module(bank)
     import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
     from nbxtensor.tensor import NBXTensor
-    from nbxtensor.ops.wrappers import cumsum_wrapper
+    from nbxtensor.ops.reduction_wrappers import cumsum_wrapper
 
     lengths = [1, 2, 511, 1023, 1024, 1025, 1026, 2047, 2048, 2049,
                3077, 4095, 4096, 4097, 5000, 8192, 8193]

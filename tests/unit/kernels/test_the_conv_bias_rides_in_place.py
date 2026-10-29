@@ -22,6 +22,8 @@ from nbxtensor.memory.allocator import DeviceAllocator  # noqa: E402
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.ops import wrappers as w  # noqa: E402
+from nbxtensor.ops import conv_wrappers as _nbx_conv_wrappers  # the family the moved names live in (M2 split)
+from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
 
 
 def _gpu_or_skip():
@@ -48,7 +50,7 @@ def test_a_biased_conv_allocates_one_output_not_two():
     # Warm the shape first: an uncertified conv sweeps at first touch and
     # the sweep's candidate buffers are output-sized — the counter below
     # must see the EPILOGUE's behavior, not autotune's.
-    w.conv2d_wrapper(x, wt, b, stride=(1, 1), padding=(1, 1), dilation=(1, 1), groups=1)
+    _nbx_conv_wrappers.conv2d_wrapper(x, wt, b, stride=(1, 1), padding=(1, 1), dilation=(1, 1), groups=1)
 
     big = []
     orig = DeviceAllocator.malloc_cuda
@@ -62,7 +64,7 @@ def test_a_biased_conv_allocates_one_output_not_two():
 
     DeviceAllocator.malloc_cuda = counting          # type: ignore[assignment]
     try:
-        out = w.conv2d_wrapper(x, wt, b, stride=(1, 1), padding=(1, 1), dilation=(1, 1), groups=1)
+        out = _nbx_conv_wrappers.conv2d_wrapper(x, wt, b, stride=(1, 1), padding=(1, 1), dilation=(1, 1), groups=1)
     finally:
         DeviceAllocator.malloc_cuda = orig          # type: ignore[assignment]
 
@@ -72,8 +74,8 @@ def test_a_biased_conv_allocates_one_output_not_two():
         f"a second full map again")
 
     # the law is unchanged: in-place bias equals conv-then-broadcast-add
-    ref = w.conv2d_wrapper(x, wt, None, stride=(1, 1), padding=(1, 1), dilation=(1, 1), groups=1)
-    ref = w.add(ref, b.view(1, -1, 1, 1))
+    ref = _nbx_conv_wrappers.conv2d_wrapper(x, wt, None, stride=(1, 1), padding=(1, 1), dilation=(1, 1), groups=1)
+    ref = _nbx_elementwise_wrappers.add(ref, b.view(1, -1, 1, 1))
     got, want = out.numpy(), ref.numpy()
     assert np.allclose(got, want, rtol=1e-5, atol=1e-5), (
         f"in-place bias diverges from the out-of-place law: "
@@ -94,7 +96,7 @@ def test_the_bias_is_cast_down_never_the_map_up():
           .view(np.uint32) + 0x7FFF) >> 16).astype(np.uint16),
         dtype=NBXDtype.bfloat16)
     b = NBXTensor.from_numpy(rng.standard_normal(8).astype(np.float32))
-    out = w.conv2d_wrapper(x, wt, b, stride=(1, 1), padding=(1, 1), dilation=(1, 1), groups=1)
+    out = _nbx_conv_wrappers.conv2d_wrapper(x, wt, b, stride=(1, 1), padding=(1, 1), dilation=(1, 1), groups=1)
     assert out._dtype == NBXDtype.bfloat16, (
         f"the biased conv's output widened to {out._dtype} — the epilogue "
         f"upcast the map instead of casting the bias")

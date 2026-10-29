@@ -63,6 +63,7 @@ def root(tmp_path, monkeypatch):
 def test_one_matmul_shape_is_certified_gated_and_served(root, monkeypatch):
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
     from nbxtensor.ops.matmul import matmul_kernel
     qual = "nbxtensor.ops.matmul.matmul_kernel"
     prof = C.active_profile()
@@ -72,7 +73,7 @@ def test_one_matmul_shape_is_certified_gated_and_served(root, monkeypatch):
     dt = np.float16
     a = (rng.standard_normal((96, 64)) * 0.1).astype(dt)
     b = (rng.standard_normal((64, 80)) * 0.1).astype(dt)
-    key = _recorded_key(matmul_kernel, lambda: W.mm(NBXTensor.from_numpy(a), NBXTensor.from_numpy(b)))
+    key = _recorded_key(matmul_kernel, lambda: _nbx_linalg_wrappers.mm(NBXTensor.from_numpy(a), NBXTensor.from_numpy(b)))
     matmul_kernel.cache.pop(key, None)
     dtype = C.output_dtype(matmul_kernel, key)
     tol = Z._tolerance(vendor, profile, dtype)
@@ -111,13 +112,14 @@ def test_a_config_that_diverges_from_the_oracle_is_excluded_and_recorded(root, m
     re-reads (its deviation is above the tolerance)."""
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
     from nbxtensor.ops.matmul import matmul_kernel
     qual = "nbxtensor.ops.matmul.matmul_kernel"
     vendor, profile = C.active_profile()
     rng = np.random.default_rng(3)
     a = (rng.standard_normal((64, 64)) * 0.1).astype(np.float16)
     b = (rng.standard_normal((64, 64)) * 0.1).astype(np.float16)
-    key = _recorded_key(matmul_kernel, lambda: W.mm(NBXTensor.from_numpy(a), NBXTensor.from_numpy(b)))
+    key = _recorded_key(matmul_kernel, lambda: _nbx_linalg_wrappers.mm(NBXTensor.from_numpy(a), NBXTensor.from_numpy(b)))
     matmul_kernel.cache.pop(key, None)
     tol = Z._tolerance(vendor, profile, C.output_dtype(matmul_kernel, key))
     real = Z.oracle_deviation

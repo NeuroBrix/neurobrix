@@ -97,15 +97,19 @@ class _ScalarBool:
 
 def test_triton_finite_state_passes(monkeypatch):
     import nbxtensor.ops.wrappers as w
-    monkeypatch.setattr(w, "isfinite_wrapper", lambda x: x)
-    monkeypatch.setattr(w, "all_wrapper", lambda x: _ScalarBool(True))
+    from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
+    from nbxtensor.ops import reduction_wrappers as _nbx_reduction_wrappers  # the family the moved names live in (M2 split)
+    monkeypatch.setattr(_nbx_elementwise_wrappers, "isfinite_wrapper", lambda x: x)
+    monkeypatch.setattr(_nbx_reduction_wrappers, "all_wrapper", lambda x: _ScalarBool(True))
     _gate_triton(_nbx_stub(NBXDtype.float32), 0, 999.0, "model.transformer")
 
 
 def test_triton_nonfinite_state_raises_with_context(monkeypatch):
     import nbxtensor.ops.wrappers as w
-    monkeypatch.setattr(w, "isfinite_wrapper", lambda x: x)
-    monkeypatch.setattr(w, "all_wrapper", lambda x: _ScalarBool(False))
+    from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
+    from nbxtensor.ops import reduction_wrappers as _nbx_reduction_wrappers  # the family the moved names live in (M2 split)
+    monkeypatch.setattr(_nbx_elementwise_wrappers, "isfinite_wrapper", lambda x: x)
+    monkeypatch.setattr(_nbx_reduction_wrappers, "all_wrapper", lambda x: _ScalarBool(False))
     with pytest.raises(RuntimeError) as excinfo:
         _gate_triton(_nbx_stub(NBXDtype.float16), 5, 981.0,
                      "model.transformer")
@@ -118,12 +122,14 @@ def test_triton_nonfinite_state_raises_with_context(monkeypatch):
 
 def test_triton_gate_skips_non_float_and_non_nbx(monkeypatch):
     import nbxtensor.ops.wrappers as w
+    from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
+    from nbxtensor.ops import reduction_wrappers as _nbx_reduction_wrappers  # the family the moved names live in (M2 split)
 
     def _must_not_run(x):  # pragma: no cover - failure path
         raise AssertionError("kernel wrapper must not be invoked")
 
-    monkeypatch.setattr(w, "isfinite_wrapper", _must_not_run)
-    monkeypatch.setattr(w, "all_wrapper", _must_not_run)
+    monkeypatch.setattr(_nbx_elementwise_wrappers, "isfinite_wrapper", _must_not_run)
+    monkeypatch.setattr(_nbx_reduction_wrappers, "all_wrapper", _must_not_run)
     _gate_triton(_nbx_stub(NBXDtype.int64), 0, 0.0, "c")
     _gate_triton(None, 0, 0.0, "c")
     _gate_triton(math.pi, 0, 0.0, "c")

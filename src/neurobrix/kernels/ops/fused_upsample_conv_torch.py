@@ -410,7 +410,7 @@ def tiled_rms_norm_spatial(
         # (single rms_norm rarely overflows alone in triton mode where
         # kernels stream). Function is named `rms_norm` (no `_wrapper`
         # suffix) in wrappers.py.
-        from nbxtensor.ops.wrappers import rms_norm as nbx_rms_norm
+        from nbxtensor.ops.norm_wrappers import rms_norm as nbx_rms_norm
         return nbx_rms_norm(input_tensor, weight, eps)
 
     # Torch branch only — never reached on the triton path.

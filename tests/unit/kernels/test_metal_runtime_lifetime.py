@@ -45,7 +45,7 @@ def test_a_launch_still_works_after_the_runtime_is_reset():
     from nbxtensor.backend import metal_device
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.backend import launcher
-    from nbxtensor.ops.wrappers import add
+    from nbxtensor.ops.elementwise_wrappers import add
 
     # The engine installs the launcher from kernels/dispatch.py; a test
     # that reaches for a wrapper directly must install it too, or it
@@ -77,7 +77,7 @@ def test_resetting_the_runtime_clears_every_cache_that_holds_it():
     # Populate all three.
     x = nbx_tensor.NBXTensor.from_numpy(np.ones(64, dtype=np.float32))
     from nbxtensor.backend import launcher
-    from nbxtensor.ops.wrappers import add
+    from nbxtensor.ops.elementwise_wrappers import add
 
     # The engine installs the launcher from kernels/dispatch.py; a test
     # that reaches for a wrapper directly must install it too, or it
@@ -121,7 +121,7 @@ def test_a_tensor_alive_across_the_reset_does_not_poison_the_free_list():
     from nbxtensor.memory.allocator import DeviceAllocator
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.backend import launcher
-    from nbxtensor.ops.wrappers import add
+    from nbxtensor.ops.elementwise_wrappers import add
 
     launcher.install()
 

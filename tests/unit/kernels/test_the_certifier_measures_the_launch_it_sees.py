@@ -75,8 +75,9 @@ def test_a_key_the_wrapper_streams_in_bands_is_certified_on_its_launches(monkeyp
         pytest.skip("needs a card with 1 GB free")
     monkeypatch.setenv("NEUROBRIX_REPLAY_CACHE", str(tmp_path / "replay_cache"))
     from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
     from nbxtensor.ops import autotune_cache as atc
-    monkeypatch.setattr(W, "_NBX_MM_MAX_OUTPUT_ELEMS", 4096)
+    monkeypatch.setattr(_nbx_linalg_wrappers, "_NBX_MM_MAX_OUTPUT_ELEMS", 4096)
     AC._bind_hardware_profile()
     qual = "nbxtensor.ops.matmul.matmul_kernel"
     tuner = dict(atc._autotuners())[qual]
@@ -86,7 +87,7 @@ def test_a_key_the_wrapper_streams_in_bands_is_certified_on_its_launches(monkeyp
     tuner.run = lambda *a, **k: captured.setdefault("key", tuple(atc.key_of(tuner, a, k)))
     try:
         from nbxtensor.tensor import NBXTensor
-        W.mm(NBXTensor.from_numpy(np.ones((256, 16), np.float32)).to("cuda"),
+        _nbx_linalg_wrappers.mm(NBXTensor.from_numpy(np.ones((256, 16), np.float32)).to("cuda"),
              NBXTensor.from_numpy(np.ones((16, 32), np.float32)).to("cuda").to("float16"))
     finally:
         tuner.run = saved
@@ -107,8 +108,9 @@ def test_a_later_band_that_writes_nothing_is_REFUSED_not_counted(monkeypatch, tm
         pytest.skip("needs a card with 1 GB free")
     monkeypatch.setenv("NEUROBRIX_REPLAY_CACHE", str(tmp_path / "replay_cache"))
     from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
     from nbxtensor.ops import autotune_cache as atc
-    monkeypatch.setattr(W, "_NBX_MM_MAX_OUTPUT_ELEMS", 4096)
+    monkeypatch.setattr(_nbx_linalg_wrappers, "_NBX_MM_MAX_OUTPUT_ELEMS", 4096)
     AC._bind_hardware_profile()
     qual = "nbxtensor.ops.matmul.matmul_kernel"
     tuner = dict(atc._autotuners())[qual]
@@ -117,7 +119,7 @@ def test_a_later_band_that_writes_nothing_is_REFUSED_not_counted(monkeypatch, tm
     tuner.run = lambda *a, **k: captured.setdefault("key", tuple(atc.key_of(tuner, a, k)))
     try:
         from nbxtensor.tensor import NBXTensor
-        W.mm(NBXTensor.from_numpy(np.ones((256, 16), np.float32)).to("cuda"),
+        _nbx_linalg_wrappers.mm(NBXTensor.from_numpy(np.ones((256, 16), np.float32)).to("cuda"),
              NBXTensor.from_numpy(np.ones((16, 32), np.float32)).to("cuda").to("float16"))
     finally:
         tuner.run = saved
@@ -151,13 +153,14 @@ def test_a_batched_key_with_a_bias_is_certified_by_its_synthesized_oracle(monkey
     qual = "nbxtensor.ops.baddbmm_op.baddbmm_kernel"
     tuner = dict(atc._autotuners())[qual]
     from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
     from nbxtensor.tensor import NBXTensor
     captured = {}
     saved = tuner.run
     tuner.run = lambda *a, **k: captured.setdefault("key", tuple(atc.key_of(tuner, a, k)))
     try:
         B, M, N, K = 2, 64, 32, 16
-        W.baddbmm_wrapper(NBXTensor.from_numpy(np.ones((B, M, N), np.float32)).to("cuda"),
+        _nbx_linalg_wrappers.baddbmm_wrapper(NBXTensor.from_numpy(np.ones((B, M, N), np.float32)).to("cuda"),
                           NBXTensor.from_numpy(np.ones((B, M, K), np.float32)).to("cuda"),
                           NBXTensor.from_numpy(np.ones((B, K, N), np.float32)).to("cuda"))
     finally:

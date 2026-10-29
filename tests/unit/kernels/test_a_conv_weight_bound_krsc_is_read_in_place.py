@@ -103,11 +103,12 @@ def _dev_ok():
 def test_the_wrapper_reads_a_krsc_weight_in_place_and_gives_the_same_bytes(
         monkeypatch, N, C, H, W, K, kh, kw, groups, stride, pad):
     from nbxtensor.ops import wrappers as Wr
+    from nbxtensor.ops import conv_wrappers as _nbx_conv_wrappers  # the family the moved names live in (M2 split)
     from nbxtensor.tensor import NBXTensor
     rng = np.random.default_rng(0)
     x = rng.standard_normal((N, C, H, W)).astype(np.float32)
     w = rng.standard_normal((K, C // groups, kh, kw)).astype(np.float32)
-    ref = Wr.conv2d_wrapper(NBXTensor.from_numpy(x), NBXTensor.from_numpy(w),
+    ref = _nbx_conv_wrappers.conv2d_wrapper(NBXTensor.from_numpy(x), NBXTensor.from_numpy(w),
                             stride=stride, padding=pad, groups=groups).numpy()
     wk = NBXTensor.from_numpy(np.ascontiguousarray(w.transpose(0, 2, 3, 1))).permute(0, 3, 1, 2)
     assert tuple(wk.shape) == w.shape and not wk.is_contiguous()
@@ -115,7 +116,7 @@ def test_the_wrapper_reads_a_krsc_weight_in_place_and_gives_the_same_bytes(
     real = type(wk).contiguous
     monkeypatch.setattr(type(wk), "contiguous",
                         lambda self: (copied.append(tuple(self.shape)), real(self))[1])
-    got = Wr.conv2d_wrapper(NBXTensor.from_numpy(x), wk, stride=stride, padding=pad,
+    got = _nbx_conv_wrappers.conv2d_wrapper(NBXTensor.from_numpy(x), wk, stride=stride, padding=pad,
                             groups=groups).numpy()
     assert w.shape not in copied                      # the weight was not copied back to KCRS
     assert np.array_equal(got, ref)

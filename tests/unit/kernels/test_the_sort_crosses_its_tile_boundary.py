@@ -37,7 +37,7 @@ import pytest
 def _sorted_desc(host):
     from nbxtensor.backend import launcher as L
     from nbxtensor.tensor import NBXTensor
-    from nbxtensor.ops.wrappers import sort_wrapper
+    from nbxtensor.ops.elementwise_wrappers import sort_wrapper
 
     L.install()
     got = sort_wrapper(NBXTensor.from_numpy(host.copy()), descending=True)
@@ -51,8 +51,9 @@ def _tile() -> int:
     import re
 
     from nbxtensor.ops import wrappers
+    from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
 
-    src = inspect.getsource(wrappers.sort_wrapper)
+    src = inspect.getsource(_nbx_elementwise_wrappers.sort_wrapper)
     m = re.search(r"^\s*SWEEP_TILE\s*=\s*(\d+)", src, re.M)
     assert m, "sort_wrapper no longer names SWEEP_TILE; re-point this test"
     return int(m.group(1))

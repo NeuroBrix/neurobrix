@@ -15,6 +15,8 @@ from nbxtensor.dtype.nbx_dtype import NBXDtype, parse_dtype
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.ops.dispatch import dispatch as kernel_dispatch
 from nbxtensor.ops import wrappers as w
+from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
+from nbxtensor.ops import norm_wrappers as _nbx_norm_wrappers  # the family the moved names live in (M2 split)
 
 from .symbols import SymbolResolver
 from neurobrix.core.runtime import symexpr as _symexpr
@@ -56,12 +58,13 @@ class TritonSequentialDispatcher:
     # suite, each green alone; the leak was a test that merely constructed one).
     def __enter__(self):
         from nbxtensor.ops import wrappers as _w
+        from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
         if self._saved_context is not None:
             raise RuntimeError("TritonSequentialDispatcher: a run is already open on this dispatcher")
         self._saved_context = (_w.get_compute_dtype(), _w.get_activations_fp16_safe())
         _w.set_compute_dtype(self.compute_dtype)
         _w.set_activations_fp16_safe(self.activations_fp16_safe)
-        _w.begin_run()                      # the per-run caches empty (the step's rotary tables widened once)
+        _nbx_elementwise_wrappers.begin_run()                      # the per-run caches empty (the step's rotary tables widened once)
         return self
 
     def __exit__(self, exc_type, exc, tb):
@@ -211,7 +214,7 @@ class TritonSequentialDispatcher:
         # path's kwargs forwarding below.
         if op_type == "custom::rms_norm":
             kwargs = self.resolve_kwargs(attributes)
-            func = self._dtype_engine.wrap_op("rms_norm", w.rms_norm,
+            func = self._dtype_engine.wrap_op("rms_norm", _nbx_norm_wrappers.rms_norm,
                                               op_record=op_record)
             if kwargs:
                 return func(*inputs, **kwargs)
@@ -310,7 +313,7 @@ class TritonSequentialDispatcher:
             dropout_p = float(_pos_or_kw(3, "dropout_p", 0.0))
             is_causal = bool(_pos_or_kw(4, "is_causal", False))
             scale = kw.get("scale", None)
-            output = w.scaled_dot_product_attention_wrapper(
+            output = _nbx_attention_wrappers.scaled_dot_product_attention_wrapper(
                 q, k, v, dropout_p=dropout_p, is_causal=is_causal, scale=scale,
                 k_pre_transposed=k_pre_transposed)
             lse = NBXTensor.zeros((q.shape[0], q.shape[1], q.shape[2]),
@@ -328,7 +331,7 @@ class TritonSequentialDispatcher:
             dropout_p = _pos_or_kw(5, "dropout_p", 0.0)
             is_causal = _pos_or_kw(6, "is_causal", False)
             scale = _pos_or_kw(7, "scale", None)
-            output = w.scaled_dot_product_attention_wrapper(
+            output = _nbx_attention_wrappers.scaled_dot_product_attention_wrapper(
                 q, k, v, attn_mask=attn_mask,
                 dropout_p=float(dropout_p) if not isinstance(dropout_p, float) else dropout_p,
                 is_causal=bool(is_causal) if not isinstance(is_causal, bool) else is_causal,
@@ -346,7 +349,7 @@ class TritonSequentialDispatcher:
         dropout_p = _pos_or_kw(4, "dropout_p", 0.0)
         is_causal = _pos_or_kw(5, "is_causal", False)
         scale = _pos_or_kw(6, "scale", None)
-        return w.scaled_dot_product_attention_wrapper(
+        return _nbx_attention_wrappers.scaled_dot_product_attention_wrapper(
             q, k, v, attn_mask=attn_mask,
             dropout_p=float(dropout_p) if not isinstance(dropout_p, float) else dropout_p,
             is_causal=bool(is_causal) if not isinstance(is_causal, bool) else is_causal,

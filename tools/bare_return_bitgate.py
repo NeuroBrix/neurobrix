@@ -39,7 +39,9 @@ def capture_fft(rng, out):
     """The kernels driven directly (the inverse wrapper carries an unrelated
     latent defect — a torch-style `mul_` on an NBXTensor — fixed separately)."""
     from nbxtensor.tensor import NBXTensor
-    from nbxtensor.ops.wrappers import _triton_fft_forward, _set_device, _1d_grid, _EW_BLOCK
+    from nbxtensor.ops.spectral_wrappers import _triton_fft_forward
+    from nbxtensor.ops.wrappers import _set_device, _EW_BLOCK
+    from nbxtensor.ops.elementwise_wrappers import _1d_grid
     from nbxtensor.ops import fft_op
     for N in (256, 1024, 4096):
         xr = _nbx((rng.standard_normal((2, N))).astype(np.float32))
@@ -75,7 +77,7 @@ def capture_fft(rng, out):
 
 
 def capture_grid_sampler(rng, out):
-    from nbxtensor.ops.wrappers import grid_sampler_2d_wrapper
+    from nbxtensor.ops.shape_wrappers import grid_sampler_2d_wrapper
     inp = _nbx((rng.standard_normal((2, 5, 7, 9))).astype(np.float32))      # C=5: a masked channel block
     grid = _nbx((rng.uniform(-1.2, 1.2, size=(2, 11, 13, 2))).astype(np.float32))
     for mode in (0, 2):

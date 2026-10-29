@@ -27,7 +27,7 @@ def _bf16(a):
 
 @pytest.mark.parametrize("dtype", [{"type": "dtype", "value": "torch.float32"}, "torch.float32", NBXDtype.float32])
 def test_sum_takes_its_dtype(dtype):
-    from nbxtensor.ops.wrappers import sum_wrapper
+    from nbxtensor.ops.reduction_wrappers import sum_wrapper
     a = np.array([[0.25, 0.5, 0.125], [1.0, 2.0, 4.0]], dtype=np.float32)
     out = sum_wrapper(_bf16(a), [-1], True, dtype=dtype)
     assert out.nbx_dtype == NBXDtype.float32 and tuple(out.shape) == (2, 1)
@@ -35,7 +35,7 @@ def test_sum_takes_its_dtype(dtype):
 
 
 def test_mean_takes_its_dtype():
-    from nbxtensor.ops.wrappers import mean_wrapper
+    from nbxtensor.ops.reduction_wrappers import mean_wrapper
     a = np.array([[0.25, 0.5, 0.125, 1.0]], dtype=np.float32)
     out = mean_wrapper(_bf16(a), [-1], False, dtype="torch.float32")
     assert out.nbx_dtype == NBXDtype.float32
@@ -43,6 +43,6 @@ def test_mean_takes_its_dtype():
 
 
 def test_an_unknown_dtype_is_refused():
-    from nbxtensor.ops.wrappers import sum_wrapper
+    from nbxtensor.ops.reduction_wrappers import sum_wrapper
     with pytest.raises(RuntimeError, match="not a known NBXDtype"):
         sum_wrapper(_bf16(np.ones((2, 2), np.float32)), [-1], False, dtype="torch.float8_e9m9")

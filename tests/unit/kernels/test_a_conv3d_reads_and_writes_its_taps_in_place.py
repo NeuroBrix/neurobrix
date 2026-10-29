@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from nbxtensor.ops import wrappers as Wr
+from nbxtensor.ops import conv_wrappers as _nbx_conv_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.ops.oracles.conv2d_fp64 import conv2d_reference
@@ -51,7 +52,7 @@ def test_the_taps_compute_the_definition(B, C, T, H, W, O, pt, ph, sh, dh):
     x = rng.standard_normal((B, C, T, H, W)).astype(np.float32)
     w = rng.standard_normal((O, C, 3, 3, 3)).astype(np.float32)
     ref = _conv3d_ref(x, w, pt, ph, sh, dh)
-    got = Wr._conv3d_via_conv2d(NBXTensor.from_numpy(x), NBXTensor.from_numpy(w), None,
+    got = _nbx_conv_wrappers._conv3d_via_conv2d(NBXTensor.from_numpy(x), NBXTensor.from_numpy(w), None,
                                 (1, sh, sh), (pt, ph, ph), (1, dh, dh), 1).numpy().astype(np.float64)
     assert got.shape == ref.shape
     err = np.abs(got - ref).max() / max(np.abs(ref).max(), 1e-12)

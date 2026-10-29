@@ -50,6 +50,9 @@ except ModuleNotFoundError:  # script-mode under a pytest-less GPU venv
     pytest = _NoPytest()  # type: ignore[assignment]
 
 from nbxtensor.ops import wrappers as W
+from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
+from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
+from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.tensor import NBXTensor
@@ -92,9 +95,9 @@ def _reference_expanding(q, k, v, attn_mask=None, is_causal=False):
     q_3d = q.reshape(B * H, T_q, D)
     k_3d_t = k.reshape(B * H, T_k, D).transpose(-2, -1)
     v_3d = v.reshape(B * H, T_k, D_v)
-    scores = W.bmm(q_3d, k_3d_t, allow_strided_b=True)
+    scores = _nbx_linalg_wrappers.bmm(q_3d, k_3d_t, allow_strided_b=True)
     import math
-    scores = W.mul(scores, float(1.0 / math.sqrt(D)))
+    scores = _nbx_elementwise_wrappers.mul(scores, float(1.0 / math.sqrt(D)))
     if attn_mask is not None:
         m = attn_mask
         if m.ndim == 2:
@@ -103,12 +106,12 @@ def _reference_expanding(q, k, v, attn_mask=None, is_causal=False):
             m = m.expand(B, H, T_q, T_k).reshape(B * H, T_q, T_k)
         if m.nbx_dtype != scores.nbx_dtype:
             m = m.to(scores.nbx_dtype)
-        scores = W.add(scores, m.contiguous())
-    p = W.softmax(scores, dim=-1)
-    p = W.nan_to_num_wrapper(p, nan=0.0)
+        scores = _nbx_elementwise_wrappers.add(scores, m.contiguous())
+    p = _nbx_attention_wrappers.softmax(scores, dim=-1)
+    p = _nbx_elementwise_wrappers.nan_to_num_wrapper(p, nan=0.0)
     if p.nbx_dtype != v_3d.nbx_dtype:
         p = p.to(v_3d.nbx_dtype)
-    out = W.bmm(p, v_3d)
+    out = _nbx_linalg_wrappers.bmm(p, v_3d)
     if out.nbx_dtype != q.nbx_dtype:
         out = out.to(q.nbx_dtype)
     return out.reshape(B, H, T_q, D_v)
@@ -147,11 +150,12 @@ def _attention_or_named_refusal(q, k, v, **kw):
     triton-ext, where the kernel compiles (16/16, 2026-09-17).
     """
     from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
     reference = kw.pop("_reference", False)
     try:
         if reference:
             return _reference_expanding(q, k, v), None
-        return W._math_attention(q, k, v, **kw), None
+        return _nbx_attention_wrappers._math_attention(q, k, v, **kw), None
     except Exception as exc:                           # noqa: BLE001
         msg = str(exc)
         named = ("Refusing" in msg or "not supported" in msg

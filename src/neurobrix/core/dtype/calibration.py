@@ -232,6 +232,8 @@ class RangeCensus:
             return
         from nbxtensor.dtype.nbx_dtype import NBXDtype
         from nbxtensor.ops import wrappers as _w
+        from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
+        from nbxtensor.ops import reduction_wrappers as _nbx_reduction_wrappers  # the family the moved names live in (M2 split)
         x = result
         if getattr(x, "_numel", None) == 0 or 0 in list(x.shape):
             return
@@ -239,11 +241,11 @@ class RangeCensus:
             x = x.view_as_real()
         if x.nbx_dtype not in (NBXDtype.float16, NBXDtype.bfloat16, NBXDtype.float32, NBXDtype.float64):
             return
-        a = _w.abs_wrapper(x)
-        m = float(_w.amax_wrapper(a).item())
+        a = _nbx_elementwise_wrappers.abs_wrapper(x)
+        m = float(_nbx_reduction_wrappers.amax_wrapper(a).item())
         nonfinite = not math.isfinite(m)
         if nonfinite:
-            m = float(_w.amax_wrapper(_w.nan_to_num_wrapper(a, nan=0.0, posinf=0.0, neginf=0.0)).item())
+            m = float(_nbx_reduction_wrappers.amax_wrapper(_nbx_elementwise_wrappers.nan_to_num_wrapper(a, nan=0.0, posinf=0.0, neginf=0.0)).item())
         prev = self._acc_host.get(op_uid)
         self._acc_host[op_uid] = m if prev is None else max(prev, m)
         self._nonfinite_host[op_uid] = self._nonfinite_host.get(op_uid, False) or nonfinite

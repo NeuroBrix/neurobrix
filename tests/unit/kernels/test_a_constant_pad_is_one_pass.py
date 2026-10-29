@@ -15,6 +15,7 @@ torch = pytest.importorskip("torch")                       # the oracle only: to
 from nbxtensor.tensor import NBXTensor  # noqa: E402
 from nbxtensor.memory.allocator import DeviceAllocator as DA
 from nbxtensor.ops import wrappers as W  # noqa: E402
+from nbxtensor.ops import shape_wrappers as _nbx_shape_wrappers  # the family the moved names live in (M2 split)
 
 # the engine's own device gate (CUDA, ROCm or Metal — the Triton tests' gate), never torch.cuda's: gated on CUDA the
 # test skipped on the Mac, and a test that never runs on a backend proves nothing for it (the Mac, 2026-10-17 23:04)
@@ -38,7 +39,7 @@ def test_the_pad_is_torch_s_and_allocates_its_output_only(shape, pad, value):
     DA.empty_cache_pool()
     DA.reset_peak_memory(0)
     before = DA.memory_allocated(0)
-    got = W.constant_pad_nd_wrapper(nx, pad, value)
+    got = _nbx_shape_wrappers.constant_pad_nd_wrapper(nx, pad, value)
     extra = DA.peak_memory_allocated(0) - before
     out_bytes = int(got.numel()) * int(got.element_size())
     assert extra <= out_bytes, f"{extra} B allocated while padding, the output is {out_bytes} B"

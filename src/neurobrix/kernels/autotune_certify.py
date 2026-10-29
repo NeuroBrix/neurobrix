@@ -908,11 +908,12 @@ def _flash_batch_heads(tq: int, tk: int, hd: int, q, k, v) -> Tuple[int, int]:
     reaches the flash (a 32 768 x 512 key at two heads, 2026-10-21)."""
     from nbxtensor.ops import launch_keys as LK
     from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
     from nbxtensor.dtype.nbx_dtype import NBXDtype
     nbx = {"fp16": NBXDtype.float16, "bf16": NBXDtype.bfloat16, "fp32": NBXDtype.float32}
     qd, kd, vd = nbx[q], nbx[k], nbx[v]
-    budget = W._sdpa_math_scores_budget_bytes_for(None)
-    rows, chunks = W._sdpa_math_min_chunk_rows(), W._sdpa_math_max_chunks()
+    budget = _nbx_attention_wrappers._sdpa_math_scores_budget_bytes_for(None)
+    rows, chunks = _nbx_attention_wrappers._sdpa_math_min_chunk_rows(), _nbx_attention_wrappers._sdpa_math_max_chunks()
     h = 1
     while LK.sdpa_route(1, h, tq, tk, hd, hd, budget, rows, chunks,
                         unit_flash=LK.unit_flash_takes(hd, qd, kd, vd))[0] != "flash":
@@ -1081,6 +1082,11 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.dtype.nbx_dtype import NBXDtype
     from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
+    from nbxtensor.ops import conv_wrappers as _nbx_conv_wrappers  # the family the moved names live in (M2 split)
+    from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
+    from nbxtensor.ops import norm_wrappers as _nbx_norm_wrappers  # the family the moved names live in (M2 split)
+    from nbxtensor.ops import reduction_wrappers as _nbx_reduction_wrappers  # the family the moved names live in (M2 split)
     dts = C.key_dtypes(key)
     short = C.kernel_short(qual)
     arr = _arr if values else _spec
@@ -1133,9 +1139,9 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         a = arr(rng, (M, K), dts[0] if dts else "fp16")
         b = arr(rng, (K, N), dts[1] if len(dts) > 1 else "fp16")
         if short == "matmul_kernel":
-            return (lambda: W.mm(to(a), to(b))), (_matmul_oracle_fn(a, b) if values else None), "c_ptr"
+            return (lambda: _nbx_linalg_wrappers.mm(to(a), to(b))), (_matmul_oracle_fn(a, b) if values else None), "c_ptr"
         bias = arr(rng, (N,), dts[2] if len(dts) > 2 else "fp16")
-        return ((lambda: W.addmm(to(bias), to(a), to(b))), (_matmul_oracle_fn(a, b, bias[None, :]) if values else None), "c_ptr")
+        return ((lambda: _nbx_linalg_wrappers.addmm(to(bias), to(a), to(b))), (_matmul_oracle_fn(a, b, bias[None, :]) if values else None), "c_ptr")
     if short == "ew_launch_kernel":
         # the class's shared copy (`ops/elementwise_launch.py`) launched itself — no wrapper reaches it but `ew_meta` —
         # at the class's top where the card holds it, else at its floor (`_ew_count`); its oracle is the draw itself:
@@ -1163,9 +1169,9 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         mat = arr(rng, (N, K), mat_dt)
         vec = arr(rng, (K,), vec_dt)
         if short == "gemv_vec_kernel":
-            return (lambda: W.mv_wrapper(to(mat), to(vec))), (_gemv_oracle_fn(mat, vec) if values else None), "C_ptr"
+            return (lambda: _nbx_linalg_wrappers.mv_wrapper(to(mat), to(vec))), (_gemv_oracle_fn(mat, vec) if values else None), "C_ptr"
         bias = arr(rng, (N,), dts[2] if len(dts) > 2 else out_dt)
-        return ((lambda: W.addmv_wrapper(to(bias), to(mat), to(vec))),
+        return ((lambda: _nbx_linalg_wrappers.addmv_wrapper(to(bias), to(mat), to(vec))),
                 (_gemv_oracle_fn(mat, vec, bias) if values else None), "out_ptr")
     if short == "baddbmm_kernel":
         M, N, K = _gemm_rows(key, dts), int(key[1]), int(key[2])
@@ -1181,8 +1187,8 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         if has_bias:
             bias_dt = dts[3] if len(dts) > 3 else (dts[0] if dts else "fp16")
             bias = arr(rng, (B, M, N), bias_dt)
-            return ((lambda: W.baddbmm_wrapper(to(bias), to(a), to(b))), (_matmul_oracle_fn(a, b, bias) if values else None), "out_ptr")
-        return (lambda: W.bmm(to(a), to(b))), (_matmul_oracle_fn(a, b) if values else None), "out_ptr"
+            return ((lambda: _nbx_linalg_wrappers.baddbmm_wrapper(to(bias), to(a), to(b))), (_matmul_oracle_fn(a, b, bias) if values else None), "out_ptr")
+        return (lambda: _nbx_linalg_wrappers.bmm(to(a), to(b))), (_matmul_oracle_fn(a, b) if values else None), "out_ptr"
     if short in ("flash_attention_m8n8k4_kernel", "flash_attention_certified_kernel"):
         # (Q_BUCKET, K_BUCKET, headdim, split, q, k, v, bias, out, lse): the buckets' top lengths, through the
         # attention wrapper itself (the matrix-unit route it takes for these dtypes and head dim); a mask only where
@@ -1199,7 +1205,7 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         scale = 1.0 / float(np.sqrt(hd))
         # K is drawn (B, H, tk, hd), never transposed: said, because where tk == hd its layout cannot be read from its
         # shape and the wrapper refuses to guess (four Apple flash keys, 64 x 64 and 128 x 128, 2026-10-24)
-        return ((lambda: W.scaled_dot_product_attention_wrapper(to(q), to(k), to(v),
+        return ((lambda: _nbx_attention_wrappers.scaled_dot_product_attention_wrapper(to(q), to(k), to(v),
                                                                 attn_mask=to(mask) if masked else None,
                                                                 k_pre_transposed=False)),
                 (_attention_oracle_fn(q, k, v, mask, scale) if values else None), "Out")
@@ -1212,7 +1218,7 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         _refuse_oversize(card_bytes, [((rows, feat), x_dt), ((rows,), out_dt)], short)
         x = arr(rng, (rows, feat), x_dt)
         red = short.split("_")[0]
-        fn = {"mean": W.mean_wrapper, "sum": W.sum_wrapper, "amax": W.amax_wrapper}[red]
+        fn = {"mean": _nbx_reduction_wrappers.mean_wrapper, "sum": _nbx_reduction_wrappers.sum_wrapper, "amax": _nbx_reduction_wrappers.amax_wrapper}[red]
         return (lambda: fn(to(x), -1)), (_row_reduce_oracle_fn(x, red) if values else None), "output_ptr"
     if short == "group_norm_forward_kernel":
         # through the wrapper (`group_norm_wrapper`, eps its default): N = 1, one channel per group, the groups the
@@ -1226,7 +1232,7 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         x = arr(rng, (rows, feat), x_dt)
         w = arr(rng, (rows,), dts[2]) if has_w else None
         b = arr(rng, (rows,), dts[3]) if has_b else None
-        run = lambda: W.group_norm_wrapper(to(x).view(1, rows, feat), rows, to(w) if has_w else None,
+        run = lambda: _nbx_norm_wrappers.group_norm_wrapper(to(x).view(1, rows, feat), rows, to(w) if has_w else None,
                                            to(b) if has_b else None)[0].view(rows, feat)
         return run, (_groupnorm_oracle_fn(x, w, b) if values else None), "Y"
     if short in ("layer_norm_forward_kernel", "rms_norm_forward_kernel"):
@@ -1241,9 +1247,9 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         w = arr(rng, (feat,), dts[1]) if has_w else None
         b = arr(rng, (feat,), dts[2]) if has_b else None
         if ln:
-            run = lambda: W.native_layer_norm(to(x), [feat], to(w) if has_w else None, to(b) if has_b else None)[0]
+            run = lambda: _nbx_norm_wrappers.native_layer_norm(to(x), [feat], to(w) if has_w else None, to(b) if has_b else None)[0]
         else:
-            run = lambda: W.rms_norm(to(x), to(w) if has_w else None)
+            run = lambda: _nbx_norm_wrappers.rms_norm(to(x), to(w) if has_w else None)
         return run, (_rownorm_oracle_fn(x, w, b, ln) if values else None), "output_ptr"
     if short in ("softmax_forward_kernel", "softmax_forward_looped_kernel"):
         # (BATCH_BUCKET, FEAT_BUCKET, log, x, out): the bucket's rows of the padded row length (a length of the class), through the wrapper itself; the
@@ -1252,7 +1258,7 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         rows, feat = _softmax_shape(rows, feat, card_bytes, dts[0] if dts else "fp32", out_dt, short)
         _refuse_oversize(card_bytes, [((rows, feat), dts[0] if dts else "fp32"), ((rows, feat), out_dt)], short)
         x = arr(rng, (rows, feat), dts[0] if dts else "fp32")
-        fn = W.log_softmax if log else W.softmax
+        fn = _nbx_attention_wrappers.log_softmax if log else _nbx_attention_wrappers.softmax
         return (lambda: fn(to(x), -1)), (_softmax_oracle_fn(x, log) if values else None), "output_ptr"
     if short == "conv2d_forward_kernel":
         (n, ci, h, w, co, _oh, _ow, kh, kw, sh, sw, ph, pw, dh, dw, groups) = [int(v) for v in key[:16]]
@@ -1261,7 +1267,7 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
                                       ((n, co, _oh, _ow), out_dt)], short)
         x = arr(rng, (n, ci, h, w), dts[0] if dts else "fp16")
         wt = arr(rng, (co, ci // max(groups, 1), kh, kw), dts[1] if len(dts) > 1 else "fp16")
-        return ((lambda: W.conv2d_wrapper(to(x), to_conv_weight(wt, groups), None, (sh, sw), (ph, pw), (dh, dw), False, 0, groups)),
+        return ((lambda: _nbx_conv_wrappers.conv2d_wrapper(to(x), to_conv_weight(wt, groups), None, (sh, sw), (ph, pw), (dh, dw), False, 0, groups)),
                 (_conv_oracle_fn(x, wt, (sh, sw), (ph, pw), (dh, dw), groups) if values else None), "output_pointer")
     if short == "depthwise_conv2d_kernel":
         (c, h, w, _oh, _ow, kh, kw, sh, sw, ph, pw) = [int(v) for v in key[:11]]
@@ -1270,7 +1276,7 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
                                       ((1, c, _oh, _ow), out_dt)], short)
         x = arr(rng, (1, c, h, w), dts[0] if dts else "fp16")
         wt = arr(rng, (c, 1, kh, kw), dts[1] if len(dts) > 1 else "fp16")
-        return ((lambda: W.conv2d_wrapper(to(x), to(wt), None, (sh, sw), (ph, pw), (1, 1), False, 0, c)),
+        return ((lambda: _nbx_conv_wrappers.conv2d_wrapper(to(x), to(wt), None, (sh, sw), (ph, pw), (1, 1), False, 0, c)),
                 (_conv_oracle_fn(x, wt, (sh, sw), (ph, pw), (1, 1), c) if values else None), "out_ptr")
     return None
 
@@ -1748,6 +1754,7 @@ def _witness_time_ms(proto: Dict[str, Any]) -> float:
     inputs, same timer, so a change in it is a change in the machine."""
     from nbxtensor.backend import launcher as L
     from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.dtype.nbx_dtype import NBXDtype
     spec = proto["witness"]
@@ -1760,7 +1767,7 @@ def _witness_time_ms(proto: Dict[str, Any]) -> float:
     rng = np.random.default_rng(0)                      # fixed inputs, every time
     a = NBXTensor.from_numpy(np.ascontiguousarray((rng.standard_normal((M, K)) * 0.1).astype(npd)))
     b = NBXTensor.from_numpy(np.ascontiguousarray((rng.standard_normal((K, N)) * 0.1).astype(npd)))
-    return float(L.do_bench(lambda: W.mm(a, b), warmup=BENCH_WARMUP_MS, rep=BENCH_REP_MS))
+    return float(L.do_bench(lambda: _nbx_linalg_wrappers.mm(a, b), warmup=BENCH_WARMUP_MS, rep=BENCH_REP_MS))
 
 
 def _witness_entry_refusal(proto: Dict[str, Any], path: Path, say) -> None:
@@ -2032,7 +2039,7 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
             """Time the witness on the UNPATCHED path.
 
             `certifying_run` IS the sweep, and it is installed AS `tuner.run`.
-            The witness is itself a matmul (`W.mm`), so on a matmul
+            The witness is itself a matmul (`_nbx_linalg_wrappers.mm`), so on a matmul
             certification it re-enters this very function: the nested call
             computes the witness's own key and compares it to the candidate's.
 

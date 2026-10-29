@@ -28,6 +28,10 @@ import triton
 import triton.language as tl
 
 from nbxtensor.ops import wrappers as w
+from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
+from nbxtensor.ops import index_wrappers as _nbx_index_wrappers  # the family the moved names live in (M2 split)
+from nbxtensor.ops import moe_wrappers as _nbx_moe_wrappers  # the family the moved names live in (M2 split)
+from nbxtensor.ops import reduction_wrappers as _nbx_reduction_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype, dtype_size
 from nbxtensor.memory.allocator import DeviceAllocator
@@ -721,13 +725,13 @@ def execute_moe_fused(
         _dump("blend_scores", scores)
     else:
         gate_fp32 = gate_scores.to(NBXDtype.float32)
-        scores, indices = w.topk_wrapper(gate_fp32, top_k, dim=-1)
+        scores, indices = _nbx_elementwise_wrappers.topk_wrapper(gate_fp32, top_k, dim=-1)
         _dump("topk_scores", scores)
         _dump("topk_indices", indices)
 
         if norm_topk_prob:
-            denom = w.sum_wrapper(scores, dim=-1, keepdim=True)
-            scores = w.div(scores, denom)
+            denom = _nbx_reduction_wrappers.sum_wrapper(scores, dim=-1, keepdim=True)
+            scores = _nbx_elementwise_wrappers.div(scores, denom)
             _dump("scores_norm", scores)
 
     # Flatten routing for fused kernel
@@ -1004,19 +1008,19 @@ def _expert_store_grouped_pass(hidden_states, flat_indices, flat_scores, store, 
         e_g = expert_ids.narrow(0, lo, hi - lo)
         n_g = NBXTensor.from_numpy(np.array([(hi - lo) * bm], dtype=np.int64))
         for name, x, out in (("gate", hidden_states, gate_out), ("up", hidden_states, up_out)):
-            w.invoke_fused_moe(
+            _nbx_moe_wrappers.invoke_fused_moe(
                 x, getattr(tables, f"{name}_ptrs")[dev], out, flat_scores, s_g, e_g, n_g,
                 N_gate, K, getattr(tables, f"{name}_stride_bk")[dev],
                 getattr(tables, f"{name}_stride_bn")[dev], top_k, mul_routed_weight=False)
-        activated = w.mul(w.silu(gate_out), up_out)
-        w.invoke_fused_moe(
+        activated = _nbx_elementwise_wrappers.mul(_nbx_elementwise_wrappers.silu(gate_out), up_out)
+        _nbx_moe_wrappers.invoke_fused_moe(
             activated, tables.down_ptrs[dev], down_out, flat_scores, s_g, e_g, n_g,
             K, N_gate, tables.down_stride_bk[dev], tables.down_stride_bn[dev], top_k,
             mul_routed_weight=True, topk_divide=False)
         tables.release_pins()
         del tables, g, u, d
     result = down_out.narrow(0, 0, M * top_k).reshape(M, top_k, K)
-    return w.sum_wrapper(result, dim=1)
+    return _nbx_reduction_wrappers.sum_wrapper(result, dim=1)
 
 
 def _moe_decode_vec_pass(hidden_states, tables, dev, flat_indices,
@@ -1165,7 +1169,7 @@ def _fused_moe_pass(
         """One grouped-GEMM pass — dense or W4 per the tables."""
         if tables.quantized:
             sc_t, mn_t, sg, sn = tables.q_tables[name][dev]
-            w.invoke_fused_moe_wna16(
+            _nbx_moe_wrappers.invoke_fused_moe_wna16(
                 x, getattr(tables, f"{name}_ptrs")[dev], sc_t, mn_t,
                 out, flat_scores,
                 sorted_token_ids, expert_ids, num_tokens_post_padded,
@@ -1176,7 +1180,7 @@ def _fused_moe_pass(
                 top_k, mul_routed_weight=mul_routed, topk_divide=topk_div,
             )
         else:
-            w.invoke_fused_moe(
+            _nbx_moe_wrappers.invoke_fused_moe(
                 x, getattr(tables, f"{name}_ptrs")[dev], out, flat_scores,
                 sorted_token_ids, expert_ids, num_tokens_post_padded,
                 N_p, K_p,
@@ -1196,8 +1200,8 @@ def _fused_moe_pass(
         _diag_dump("up_out", up_out)
 
     # SwiGLU: silu(gate) * up
-    gate_silu = w.silu(gate_out)
-    activated = w.mul(gate_silu, up_out)
+    gate_silu = _nbx_elementwise_wrappers.silu(gate_out)
+    activated = _nbx_elementwise_wrappers.mul(gate_silu, up_out)
     if _diag_dump is not None:
         _diag_dump("activated", activated)
 
@@ -1209,7 +1213,7 @@ def _fused_moe_pass(
 
     # Reduce across top_k
     result = down_out.narrow(0, 0, total_tokens).reshape(M, top_k, K)
-    result = w.sum_wrapper(result, dim=1)
+    result = _nbx_reduction_wrappers.sum_wrapper(result, dim=1)
     if _diag_dump is not None:
         _diag_dump("result_final", result)
     return result
@@ -1309,7 +1313,7 @@ def _multi_device_fused_moe(
         # Run 3 GEMM passes + activation
         local_padded = sorted_tids.shape[0]
         gate_out = NBXTensor.zeros((local_padded, N_gate), dtype=dt, device=f"cuda:{dev}")
-        w.invoke_fused_moe(
+        _nbx_moe_wrappers.invoke_fused_moe(
             h_local,
             tables.gate_ptrs[dev],
             gate_out, local_scores,
@@ -1320,7 +1324,7 @@ def _multi_device_fused_moe(
         )
 
         up_out = NBXTensor.zeros((local_padded, N_gate), dtype=dt, device=f"cuda:{dev}")
-        w.invoke_fused_moe(
+        _nbx_moe_wrappers.invoke_fused_moe(
             h_local,
             tables.up_ptrs[dev],
             up_out, local_scores,
@@ -1330,13 +1334,13 @@ def _multi_device_fused_moe(
             top_k, mul_routed_weight=False,
         )
 
-        gate_silu = w.silu(gate_out)
-        activated = w.mul(gate_silu, up_out)
+        gate_silu = _nbx_elementwise_wrappers.silu(gate_out)
+        activated = _nbx_elementwise_wrappers.mul(gate_silu, up_out)
 
         # FIX #3: Down pass writes to [padded, K] with routing weights.
         # Then scatter into output[M, K] using global token positions.
         down_out = NBXTensor.zeros((local_padded, K), dtype=dt, device=f"cuda:{dev}")
-        w.invoke_fused_moe(
+        _nbx_moe_wrappers.invoke_fused_moe(
             activated,
             tables.down_ptrs[dev],
             down_out, local_scores,
@@ -1362,8 +1366,8 @@ def _multi_device_fused_moe(
         # round-trip, no Python token loop, no np.float16 literal — this
         # replaced the pathological host-mediated scatter. (D7 Stage B.)
         stid_dev = _xfer(sorted_tids, act_dev)
-        token_ids = w.floor_divide_wrapper(stid_dev, top_k)
-        output = w.index_add_wrapper(output, 0, token_ids, down_out)
+        token_ids = _nbx_elementwise_wrappers.floor_divide_wrapper(stid_dev, top_k)
+        output = _nbx_index_wrappers.index_add_wrapper(output, 0, token_ids, down_out)
 
     # Drop the padding sink row (M); real tokens are [0, M).
     output = output.narrow(0, 0, M).contiguous()

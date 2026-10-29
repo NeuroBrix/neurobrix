@@ -107,6 +107,7 @@ def test_decode_attention_matches_aten():
     """
     torch = pytest.importorskip("torch")
     from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
     from nbxtensor.tensor import NBXTensor
 
     B, H, T_k, D = 1, 4, 128, 64
@@ -120,7 +121,7 @@ def test_decode_attention_matches_aten():
         torch.from_numpy(q).to(dev), torch.from_numpy(k).to(dev),
         torch.from_numpy(v).to(dev)).to("cpu").numpy().astype(np.float64)
 
-    got = W.scaled_dot_product_attention_wrapper(
+    got = _nbx_attention_wrappers.scaled_dot_product_attention_wrapper(
         NBXTensor.from_numpy(q), NBXTensor.from_numpy(k),
         NBXTensor.from_numpy(v))
     got = np.asarray(got.to_cpu().numpy(), dtype=np.float64)

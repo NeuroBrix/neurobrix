@@ -110,10 +110,11 @@ def _reference(x, w, pad):
 def _run(dtype, pad):
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.ops import wrappers as WR
+    from nbxtensor.ops import conv_wrappers as _nbx_conv_wrappers  # the family the moved names live in (M2 split)
     rng = np.random.default_rng(20260922)
     x = rng.standard_normal((1, CI, H, W), dtype=np.float32)
     w = rng.standard_normal((CI, CO, K, K), dtype=np.float32)
-    out = WR.conv_transpose_wrapper(
+    out = _nbx_conv_wrappers.conv_transpose_wrapper(
         NBXTensor.from_numpy(x).to(dtype), NBXTensor.from_numpy(w).to(dtype), None,
         stride=1, padding=pad, dilation=1, output_padding=0, groups=1)
     got = out.to("float32").numpy().astype(np.float64)

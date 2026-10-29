@@ -82,6 +82,7 @@ except ModuleNotFoundError:  # script-mode under a pytest-less GPU venv
 import triton
 
 from nbxtensor.ops import wrappers as W
+from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.tensor import NBXTensor
@@ -146,8 +147,8 @@ def _chunking(V: int, k: int):
     chunk = 256 if V < 1024 else 1024
     if chunk < k:
         chunk = triton.next_power_of_2(k)
-    while (chunk < W._TOPK_CHUNK_MAX
-           and triton.cdiv(V, chunk) * k > W._TOPK_MERGE_TILE_TARGET):
+    while (chunk < _nbx_elementwise_wrappers._TOPK_CHUNK_MAX
+           and triton.cdiv(V, chunk) * k > _nbx_elementwise_wrappers._TOPK_MERGE_TILE_TARGET):
         chunk *= 2
     n_chunks = triton.cdiv(V, chunk)
     stage2_n = n_chunks * k
@@ -156,7 +157,7 @@ def _chunking(V: int, k: int):
 
 def _run(x16: np.ndarray, k: int):
     """Return (values, indices, fp32 view of the fp16 input row)."""
-    v, i = W.topk_wrapper(NBXTensor.from_numpy(x16), k, dim=-1)
+    v, i = _nbx_elementwise_wrappers.topk_wrapper(NBXTensor.from_numpy(x16), k, dim=-1)
     return _d2h(v).astype(np.float32), _d2h(i), x16[0].astype(np.float32)
 
 
@@ -214,7 +215,7 @@ def test_topk_fp32_input(V: int, k: int) -> None:
         pytest.skip("no GPU")
     a32 = np.random.default_rng(3).standard_normal((1, V)).astype(np.float32)
     a16 = a32.astype(np.float16)
-    v, i = W.topk_wrapper(NBXTensor.from_numpy(a32), k, dim=-1)
+    v, i = _nbx_elementwise_wrappers.topk_wrapper(NBXTensor.from_numpy(a32), k, dim=-1)
     got_v, got_i = _d2h(v).astype(np.float32), _d2h(i)
     ref = a16[0].astype(np.float32)
     want = np.sort(ref)[::-1][:k]

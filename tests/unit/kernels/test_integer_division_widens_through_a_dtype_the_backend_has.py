@@ -6,6 +6,7 @@ computed (`backend_has_fp64`, 2026-09-28). Seen red on Metal (wrong quotients) b
 import numpy as np
 import pytest
 from nbxtensor.ops import wrappers as W
+from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.backend.runtime import _detect_gpu_backend
@@ -26,8 +27,8 @@ def test_small_integer_quotients_are_exact_on_every_backend():
     _dev()
     a = np.arange(-5000, 5000, dtype=np.int64) * 977
     b = np.full_like(a, 13)
-    for name, fn, ref in (("floor", W.floor_divide_wrapper, np.floor_divide(a, b)),
-                          ("trunc", lambda x, y: W.div(x, y, rounding_mode="trunc"), np.trunc(a / b).astype(np.int64))):
+    for name, fn, ref in (("floor", _nbx_elementwise_wrappers.floor_divide_wrapper, np.floor_divide(a, b)),
+                          ("trunc", lambda x, y: _nbx_elementwise_wrappers.div(x, y, rounding_mode="trunc"), np.trunc(a / b).astype(np.int64))):
         out = fn(NBXTensor.from_numpy(a), NBXTensor.from_numpy(b)); DeviceAllocator.device_synchronize()
         got = out.numpy().astype(np.int64)
         assert np.array_equal(got, ref), f"{name}: {int((got != ref).sum())} wrong quotients of {a.size}"
@@ -45,10 +46,10 @@ def test_integer_quotients_are_exact_at_every_magnitude_and_sign(dtype):
     A, B = NBXTensor.from_numpy(a), NBXTensor.from_numpy(b)
     floor = np.floor_divide(a, b)
     trunc = (np.sign(a) * np.sign(b) * (np.abs(a) // np.abs(b))).astype(dtype)
-    for name, got, ref in (("floor", W.floor_divide_wrapper(A, B), floor),
-                           ("trunc", W.div(A, B, rounding_mode="trunc"), trunc),
-                           ("floor by -7", W.floor_divide_wrapper(A, -7), np.floor_divide(a, -7)),
-                           ("floor by a row", W.floor_divide_wrapper(NBXTensor.from_numpy(a.reshape(100, 200)),
+    for name, got, ref in (("floor", _nbx_elementwise_wrappers.floor_divide_wrapper(A, B), floor),
+                           ("trunc", _nbx_elementwise_wrappers.div(A, B, rounding_mode="trunc"), trunc),
+                           ("floor by -7", _nbx_elementwise_wrappers.floor_divide_wrapper(A, -7), np.floor_divide(a, -7)),
+                           ("floor by a row", _nbx_elementwise_wrappers.floor_divide_wrapper(NBXTensor.from_numpy(a.reshape(100, 200)),
                                                                      NBXTensor.from_numpy(b[:200])),
                             np.floor_divide(a.reshape(100, 200), b[:200]))):
         DeviceAllocator.device_synchronize()

@@ -389,6 +389,10 @@ class TritonNextTokenDiffusionEngine:
         re-prefills = 35 s of a 48 s request, 743 autotune shapes, the
         table's 900 MB exported to numpy once (7 s)."""
         from nbxtensor.ops import wrappers as w
+        from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
+        from nbxtensor.ops import index_wrappers as _nbx_index_wrappers  # the family the moved names live in (M2 split)
+        from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
+        from nbxtensor.ops import reduction_wrappers as _nbx_reduction_wrappers  # the family the moved names live in (M2 split)
         from neurobrix.triton.flow.autoregressive import TritonAutoregressiveHandler
         import os as _os_vv
         _vv_dump_path = _os_vv.environ.get("NBX_VV_DUMP_LATENTS", "")
@@ -402,7 +406,7 @@ class TritonNextTokenDiffusionEngine:
         if embed_w is None:
             raise RuntimeError("ZERO FALLBACK: could not locate tied embed weight in language_model.")
         DeviceAllocator.set_device(parse_device_idx(self.ctx.primary_device))
-        valid_rows = w.embedding(embed_w, NBXTensor.from_numpy(np.asarray(valid_arr, dtype=np.int64)))  # [n_valid, H]
+        valid_rows = _nbx_index_wrappers.embedding(embed_w, NBXTensor.from_numpy(np.asarray(valid_arr, dtype=np.int64)))  # [n_valid, H]
         valid_rows_t = valid_rows.to(NBXDtype.float32).transpose(0, 1).contiguous()                     # [H, n_valid]
         use_cfg = cfg_scale != 1.0
         pos_branch = session.branch_state()
@@ -425,8 +429,8 @@ class TritonNextTokenDiffusionEngine:
         seq = len(prompt_ids)
         dummy = ids([0])
         for step in range(max_steps):
-            logits = w.matmul_wrapper(last_hidden.to(NBXDtype.float32), valid_rows_t)         # [1, n_valid]
-            next_token = int(valid_arr[int(w.argmax_wrapper(logits, dim=-1).item())])
+            logits = _nbx_linalg_wrappers.matmul_wrapper(last_hidden.to(NBXDtype.float32), valid_rows_t)         # [1, n_valid]
+            next_token = int(valid_arr[int(_nbx_reduction_wrappers.argmax_wrapper(logits, dim=-1).item())])
             from neurobrix.kernels import census as _census
             if _census.active():
                 # See the re-prefill path: a shadow's constrained argmax picks one control
@@ -444,7 +448,7 @@ class TritonNextTokenDiffusionEngine:
                       f"(diff_so_far={n_diffusion}, seq={seq})", flush=True)
             if next_token == eos_token_id:
                 break
-            next_embed = w.embedding(embed_w, ids([next_token]))                              # [1,1,H]
+            next_embed = _nbx_index_wrappers.embedding(embed_w, ids([next_token]))                              # [1,1,H]
             if next_token == speech_diffusion_id:
                 n_diffusion += 1
                 pos_cond = last_hidden
@@ -464,7 +468,7 @@ class TritonNextTokenDiffusionEngine:
                 if semantic_features_np.ndim == 3:
                     semantic_features_np = semantic_features_np.mean(axis=1)                  # [1,128]
                 semantic_embed = self._connector(self.SEMANTIC_CONN, semantic_features_np)    # NBX [1,H]
-                summed = w.add(acoustic_embed, semantic_embed)                                # [1,H]
+                summed = _nbx_elementwise_wrappers.add(acoustic_embed, semantic_embed)                                # [1,H]
                 next_embed = summed.view((1, 1, summed.shape[-1]))                            # [1,1,H]
             # Both contexts ingest the same embedding (the re-prefill path grew both sequences with it).
             last_hidden = self._last_hidden(session.decode_step(dummy, inputs_embeds=next_embed))

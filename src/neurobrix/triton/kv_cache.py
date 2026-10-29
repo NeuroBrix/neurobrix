@@ -75,7 +75,7 @@ class TritonAttentionInterceptor:
         (correct dtypes already) or create unwanted upcasts. Marked
         explicit on the bound method below.
         """
-        from nbxtensor.ops.wrappers import scaled_dot_product_attention_wrapper
+        from nbxtensor.ops.attention_wrappers import scaled_dot_product_attention_wrapper
 
         if layer_idx < 0:
             layer_idx = self._call_count % self.cache.num_layers
@@ -225,10 +225,12 @@ class TritonAttentionInterceptor:
         over its own sequence, the cache's length added at decode. R33-pure: the cumsum and add
         wrappers of the kernel library."""
         from nbxtensor.ops import wrappers as W
-        out = W.cumsum_wrapper(x, int(dim), dtype)
+        from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
+        from nbxtensor.ops import reduction_wrappers as _nbx_reduction_wrappers  # the family the moved names live in (M2 split)
+        out = _nbx_reduction_wrappers.cumsum_wrapper(x, int(dim), dtype)
         if self._is_prefill or self._position_offset <= 0:
             return out
-        return W.add(out, self._position_offset)
+        return _nbx_elementwise_wrappers.add(out, self._position_offset)
 
     def intercept_arange(self, *args, **kwargs):
         """Intercept aten::arange to fix RoPE positions during decode.

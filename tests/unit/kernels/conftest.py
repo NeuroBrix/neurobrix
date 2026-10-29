@@ -18,7 +18,9 @@ def without_matrix_unit(monkeypatch):
     from nbxtensor.ops import wrappers as W
     from nbxtensor.ops import _configs as C
     monkeypatch.setattr(C, "matrix_unit", lambda: {})
-    monkeypatch.setattr(W, "_matrix_unit", lambda: {})
+    import importlib
+    for _m in (W, *(importlib.import_module(f"nbxtensor.ops.{f}") for f in W._FAMILY_MODULES)):  # the core and its families (M2 split) each bind it
+        monkeypatch.setattr(_m, "_matrix_unit", lambda: {})
 
 
 @pytest.fixture

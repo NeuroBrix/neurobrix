@@ -28,6 +28,11 @@ from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.memory.memory_pool import release_flow_memory
 from nbxtensor.ops import wrappers as w
+from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
+from nbxtensor.ops import index_wrappers as _nbx_index_wrappers  # the family the moved names live in (M2 split)
+from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
+from nbxtensor.ops import random_wrappers as _nbx_random_wrappers  # the family the moved names live in (M2 split)
+from nbxtensor.ops import reduction_wrappers as _nbx_reduction_wrappers  # the family the moved names live in (M2 split)
 
 
 _DTYPE_STR_TO_NBX = {
@@ -81,12 +86,12 @@ def _sample_token_nbx(
         last = NBXTensor.from_numpy(row.reshape(1, -1))
 
     if temperature == 0.0:
-        idx = w.argmax_wrapper(last, dim=-1)
+        idx = _nbx_reduction_wrappers.argmax_wrapper(last, dim=-1)
         return int(idx.item())
 
     # Mirror core: softmax(last / temperature) then multinomial.
-    probs = w.softmax(last / float(temperature), dim=-1)
-    nxt = w.multinomial_wrapper(probs, num_samples=1)
+    probs = _nbx_attention_wrappers.softmax(last / float(temperature), dim=-1)
+    nxt = _nbx_random_wrappers.multinomial_wrapper(probs, num_samples=1)
     return int(nxt.item())
 
 
@@ -347,7 +352,7 @@ class TritonAudioLLMEngine:
         """F.embedding(ids, embed_weight) → NBXTensor [1, len(ids), H]."""
         idx = NBXTensor.from_numpy(
             np.array([ids], dtype=np.int64))
-        emb = w.embedding(embed_weight, idx)
+        emb = _nbx_index_wrappers.embedding(embed_weight, idx)
         return emb.to(dtype)
 
     def _get_component_output(self, comp_name: str) -> Optional[NBXTensor]:
@@ -395,7 +400,7 @@ class TritonAudioLLMEngine:
             B, S, H = last_hidden.shape
             a2 = last_hidden.reshape(B * S, H)         # [1, H]
             wtT = wt.transpose(0, 1)                   # [H, V]
-            out = w.matmul_wrapper(a2, wtT)            # [1, V]
+            out = _nbx_linalg_wrappers.matmul_wrapper(a2, wtT)            # [1, V]
             return out.reshape(B, S, out.shape[-1])    # [1, 1, V]
 
         if (logits_source == "lm_head"

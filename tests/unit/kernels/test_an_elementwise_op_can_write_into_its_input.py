@@ -73,7 +73,7 @@ needs_a_card = pytest.mark.skipif(_TOTAL == 0, reason="needs a CUDA device")
 
 @needs_a_card
 def test_in_place_equals_out_of_place_bitwise(op_type, fn_name):
-    fn = getattr(wrappers, fn_name)
+    fn = wrappers.function(fn_name)
     x = _probe()
 
     fresh = fn(NBXTensor.from_numpy(x.copy()))
@@ -101,7 +101,7 @@ def test_the_input_buffer_actually_carries_the_result(op_type, fn_name):
     equality check against the out-of-place path while saving nothing -- the
     allocation this whole mechanism exists to avoid would still happen.
     """
-    fn = getattr(wrappers, fn_name)
+    fn = wrappers.function(fn_name)
     x = _probe()
     target = NBXTensor.from_numpy(x.copy())
     before = target.data_ptr()
@@ -140,7 +140,7 @@ def test_the_values_match_an_oracle_outside_the_engine(op_type, fn_name):
     oracle = _ORACLES.get(fn_name)
     if oracle is None:
         pytest.skip(f"{fn_name} has no implementation-independent closed form")
-    fn = getattr(wrappers, fn_name)
+    fn = wrappers.function(fn_name)
     x = _probe()
     target = NBXTensor.from_numpy(x.copy())
     fn(target, out=target)

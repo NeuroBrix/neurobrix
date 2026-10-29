@@ -182,7 +182,7 @@ def test_every_op_in_the_map_names_a_real_wrapper():
     from nbxtensor.ops import wrappers
     import inspect
     for op_type, fn_name in OpLevelTilingEngine.INPLACE_SAFE_UNARY.items():
-        fn = getattr(wrappers, fn_name, None)
+        fn = wrappers.function(fn_name, None)
         assert fn is not None, f"{op_type} -> wrappers.{fn_name} does not exist"
         assert "out" in inspect.signature(fn).parameters, (
             f"wrappers.{fn_name} has no `out` parameter, so the interceptor "

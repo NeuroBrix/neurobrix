@@ -26,6 +26,7 @@ import numpy as np
 import pytest
 
 from nbxtensor.ops import wrappers as W
+from nbxtensor.ops import conv_wrappers as _nbx_conv_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.tensor import NBXTensor
 
 C_IN, H = 64, 6000                      # 2 304 000 000 input elements; the boundary falls inside channel 59
@@ -59,7 +60,7 @@ def test_the_channels_past_the_boundary_are_read():
     x[:, C_PAST:].fill_(2.0)                 # one contiguous tail block: channels 60..63, all past 2^31
     weight = NBXTensor.from_numpy(np.full((3, C_IN, 3, 3), 1.0 / (C_IN * 9), dtype=np.float16)).to("cuda")
 
-    y = W.conv2d_wrapper(x, weight, None, stride=1, padding=1, dilation=1, groups=1)
+    y = _nbx_conv_wrappers.conv2d_wrapper(x, weight, None, stride=1, padding=1, dilation=1, groups=1)
     assert tuple(y.shape) == (1, 3, H, H)
     # interior pixels far from the borders, in every output channel, sampled across the image
     for (r, col) in ((100, 100), (H // 2, H // 2), (H - 100, H - 100), (37, H - 37)):

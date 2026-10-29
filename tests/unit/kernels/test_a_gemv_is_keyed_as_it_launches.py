@@ -16,6 +16,7 @@ if not torch.cuda.is_available():
 
 from nbxtensor.ops import launch_keys as LK  # noqa: E402
 from nbxtensor.ops import wrappers as W  # noqa: E402
+from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.tensor import NBXTensor  # noqa: E402
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.ops.autotune_cache import key_of  # noqa: E402
@@ -53,7 +54,7 @@ def test_the_small_m_mm_launch_is_its_key(monkeypatch, M, K, N, a_dt, b_dt):
     seen = _capture(monkeypatch, K_)
     a, b = _t((M, K), a_dt), _t((K, N), b_dt)
     with pytest.raises(_Launched):
-        W.mm(a, b)
+        _nbx_linalg_wrappers.mm(a, b)
     nb, fa = _flags()
     want = LK.mm_launches(M, K, N, a_dt, b_dt, nb, fa)
     assert seen == [want[0][1]] and want[0][0] == LK.GEMV_VEC, (seen, want)
@@ -66,7 +67,7 @@ def test_the_vector_matmul_launch_is_its_key(monkeypatch, N, K, m_dt, v_dt):
     seen = _capture(monkeypatch, K_)
     mat, vec = _t((N, K), m_dt), _t((K,), v_dt)
     with pytest.raises(_Launched):
-        W.matmul_wrapper(mat, vec)
+        _nbx_linalg_wrappers.matmul_wrapper(mat, vec)
     nb, fa = _flags()
     want = LK.matmul_launches((N, K), (K,), m_dt, v_dt, nb, fa)
     assert seen == [want[0][1]], (seen, want)
@@ -79,7 +80,7 @@ def test_the_small_m_addmm_launch_is_its_key(monkeypatch, M, K, N, a_dt, b_dt, b
     seen = _capture(monkeypatch, K_)
     a, b, bias = _t((M, K), a_dt), _t((K, N), b_dt), _t((N,), bias_dt)
     with pytest.raises(_Launched):
-        W.addmm(bias, a, b)
+        _nbx_linalg_wrappers.addmm(bias, a, b)
     nb, fa = _flags()
     want = LK.addmm_launches(M, K, N, a_dt, b_dt, bias_dt, nb, fa)
     assert seen == [want[0][1]] and want[0][0] == LK.ADDMV, (seen, want)
@@ -96,7 +97,7 @@ def test_under_the_fp16_contract_the_small_m_launch_and_its_key_store_fp16(monke
     monkeypatch.setattr(W, "_NBX_ACTIVATIONS_FP16_SAFE", True)
     a, b = _t((M, K), F16), _t((K, N), F16)
     with pytest.raises(_Launched):
-        W.mm(a, b)
+        _nbx_linalg_wrappers.mm(a, b)
     nb, fa = _flags()
     want = LK.mm_launches(M, K, N, F16, F16, nb, fa, contract_half=True)
     assert seen == [want[0][1]] and want[0][0] == LK.GEMV_VEC, (seen, want)

@@ -8,6 +8,7 @@ import pytest
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.ops import wrappers as W
+from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
 
 pytestmark = pytest.mark.skipif(not os.environ.get("CUDA_VISIBLE_DEVICES"), reason="needs a card")
 
@@ -24,7 +25,7 @@ def test_the_flag_does_not_reach_the_recurrence():
     outs = []
     for flag in (False, True):
         W.set_activations_fp16_safe(flag)
-        o, _h, _c = W._lstm_run_direction(x, wi, wh, None, None, h, c, H, False)
+        o, _h, _c = _nbx_elementwise_wrappers._lstm_run_direction(x, wi, wh, None, None, h, c, H, False)
         assert W.get_activations_fp16_safe() is flag
         outs.append(o.to(NBXDtype.float32).numpy() if hasattr(o, "numpy") else o)
     W.set_activations_fp16_safe(False)

@@ -70,6 +70,7 @@ except ModuleNotFoundError:  # script-mode under a pytest-less GPU venv
     pytest = _NoPytest()  # type: ignore[assignment]
 
 from nbxtensor.ops import wrappers as W
+from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.tensor import NBXTensor
@@ -129,7 +130,7 @@ def _relative_error(B, H, T, D, causal=True, seed=0):
     # TinyLlama head_dim 64 at a 64-token prompt, argmax 29892 at logit 6.41
     # where the float64 oracle says 3864 at 22.36). Declaring it is the fix;
     # the parameter is inert at every non-square shape.
-    got = _d2h(W.scaled_dot_product_attention_wrapper(
+    got = _d2h(_nbx_attention_wrappers.scaled_dot_product_attention_wrapper(
         q, k, v, is_causal=causal, k_pre_transposed=False)).reshape(B, H, T, D)
     ref = _attention_float64(qn, kn, vn, causal)
     return float(np.abs(got - ref).max() / max(np.abs(ref).max(), 1e-9))

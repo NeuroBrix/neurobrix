@@ -35,6 +35,7 @@ import numpy as np
 import torch
 
 from nbxtensor.ops import wrappers as w
+from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.tensor import NBXTensor
 from neurobrix.kernels.torch_interop import nbx_to_torch
 def _nbx(arr):
@@ -45,10 +46,10 @@ _S = 13  # small odd size; outer product 13x13 != 13 catches any flat path
 
 _CASES = [
     # (op-id, wrapper, torch_fn)
-    ("bitwise_and", w.bitwise_and_wrapper, torch.bitwise_and),
-    ("bitwise_or", w.bitwise_or_wrapper, torch.bitwise_or),
-    ("logical_and", w.logical_and_wrapper, torch.logical_and),
-    ("logical_or", w.logical_or_wrapper, torch.logical_or),
+    ("bitwise_and", _nbx_elementwise_wrappers.bitwise_and_wrapper, torch.bitwise_and),
+    ("bitwise_or", _nbx_elementwise_wrappers.bitwise_or_wrapper, torch.bitwise_or),
+    ("logical_and", _nbx_elementwise_wrappers.logical_and_wrapper, torch.logical_and),
+    ("logical_or", _nbx_elementwise_wrappers.logical_or_wrapper, torch.logical_or),
 ]
 
 
@@ -87,7 +88,7 @@ def test_zero_dim_operand(scalar_val):
     m = _pad_mask().reshape(1, 1, _S, 1)
     s = np.array(scalar_val, dtype=bool)  # 0-dim
     ref = torch.bitwise_and(torch.from_numpy(s), torch.from_numpy(m))
-    got = nbx_to_torch(w.bitwise_and_wrapper(_nbx(s), _nbx(m))).cpu()
+    got = nbx_to_torch(_nbx_elementwise_wrappers.bitwise_and_wrapper(_nbx(s), _nbx(m))).cpu()
     assert tuple(got.shape) == (1, 1, _S, 1)
     assert torch.equal(got.bool(), ref.bool())
 

@@ -38,12 +38,13 @@ def test_repeat_interleave_matches_torch():
     import numpy as np
     torch = pytest.importorskip("torch")
     from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import shape_wrappers as _nbx_shape_wrappers  # the family the moved names live in (M2 split)
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.dtype.nbx_dtype import NBXDtype
 
     repeats = np.array([3, 1, 4, 1, 5, 2], dtype=np.int64)
     # the tensor wrapper returns the INDEX map (0,0,0,1,2,2,2,2,...)
-    got = W.repeat_interleave_tensor_wrapper(
+    got = _nbx_shape_wrappers.repeat_interleave_tensor_wrapper(
         NBXTensor.from_numpy(repeats)).to_cpu().numpy().ravel()
     want = torch.repeat_interleave(
         torch.arange(len(repeats)), torch.from_numpy(repeats)).numpy()

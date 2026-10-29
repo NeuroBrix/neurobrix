@@ -49,6 +49,8 @@ from neurobrix.triton.flow.audio_llm import (
     _sample_token_nbx,
 )
 from nbxtensor.ops import wrappers as w
+from nbxtensor.ops import index_wrappers as _nbx_index_wrappers  # the family the moved names live in (M2 split)
+from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
 from neurobrix.core.flow.base import requests_speech
 
 
@@ -1808,7 +1810,7 @@ class TritonVLMEngine:
     def _embed_ids(self, ids: List[int], embed_weight: NBXTensor,
                    dtype: NBXDtype) -> NBXTensor:
         idx = NBXTensor.from_numpy(np.array([ids], dtype=np.int64))
-        emb = w.embedding(embed_weight, idx)
+        emb = _nbx_index_wrappers.embedding(embed_weight, idx)
         return emb.to(dtype)
 
     def _get_component_output(self, comp_name: str) -> Optional[NBXTensor]:
@@ -1856,7 +1858,7 @@ class TritonVLMEngine:
             B, S, H = last_hidden.shape
             a2 = last_hidden.reshape(B * S, H)
             wtT = wt.transpose(0, 1)
-            out = w.matmul_wrapper(a2, wtT)
+            out = _nbx_linalg_wrappers.matmul_wrapper(a2, wtT)
             return out.reshape(B, S, out.shape[-1])
 
         if (logits_source == "lm_head" and head_name

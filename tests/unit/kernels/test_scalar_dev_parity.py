@@ -82,12 +82,13 @@ def test_byte_parity_hot_ops():
     byte-identical across dtype combinations."""
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.ops import wrappers as w
+    from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
     rng = np.random.default_rng(7)
-    cases = [("add", lambda a, b: w.add(a, b)),
-             ("mul", w.mul),
-             ("div", w.div),
-             ("sub", lambda a, b: w.sub(a, b)),
-             ("add_a2", lambda a, b: w.add(a, b, alpha=2.0))]
+    cases = [("add", lambda a, b: _nbx_elementwise_wrappers.add(a, b)),
+             ("mul", _nbx_elementwise_wrappers.mul),
+             ("div", _nbx_elementwise_wrappers.div),
+             ("sub", lambda a, b: _nbx_elementwise_wrappers.sub(a, b)),
+             ("add_a2", lambda a, b: _nbx_elementwise_wrappers.add(a, b, alpha=2.0))]
     for x_dt in (np.float32, np.float16):
         x_np = (rng.standard_normal(4096) * 3).astype(x_dt)
         x = NBXTensor.from_numpy(x_np)
@@ -110,18 +111,19 @@ def test_byte_parity_cold_ops():
     behavior preserved."""
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.ops import wrappers as w
+    from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
     x = NBXTensor.from_numpy(np.arange(-8, 8, dtype=np.float32))
     s = _dev0d(2.5, np.float32)
-    for name, fn in (("maximum", w.maximum_wrapper),
-                     ("minimum", w.minimum_wrapper),
-                     ("remainder", w.remainder_wrapper)):
+    for name, fn in (("maximum", _nbx_elementwise_wrappers.maximum_wrapper),
+                     ("minimum", _nbx_elementwise_wrappers.minimum_wrapper),
+                     ("remainder", _nbx_elementwise_wrappers.remainder_wrapper)):
         rh, rd = fn(x, 2.5), fn(x, s)
         assert rh.nbx_dtype == rd.nbx_dtype, name
         assert np.array_equal(_download(rh), _download(rd)), name
     xb = NBXTensor.from_numpy(np.array([0, 1, 1, 0], dtype=np.bool_))
     sb = _dev0d(True, np.bool_)
-    rh = w.bitwise_and_wrapper(xb, True)
-    rd = w.bitwise_and_wrapper(xb, sb)
+    rh = _nbx_elementwise_wrappers.bitwise_and_wrapper(xb, True)
+    rd = _nbx_elementwise_wrappers.bitwise_and_wrapper(xb, sb)
     assert np.array_equal(_download(rh), _download(rd)), "bitwise_and"
 
 

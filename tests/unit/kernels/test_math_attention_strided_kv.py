@@ -125,7 +125,7 @@ def test_sdpa_bucketed_view_bit_equal_with_activation_proof() -> None:
     import os
     from nbxtensor import tensor as NT
     from nbxtensor.tensor import NBXTensor
-    from nbxtensor.ops.wrappers import scaled_dot_product_attention_wrapper
+    from nbxtensor.ops.attention_wrappers import scaled_dot_product_attention_wrapper
 
     # Pin the MATH route — the route decode takes on Volta via the
     # vendor-yml scores budget. A bare test process has no hardware

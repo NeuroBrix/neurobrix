@@ -25,10 +25,11 @@ from neurobrix.kernels import census
 census.install()
 from nbxtensor.tensor import NBXTensor; from nbxtensor.memory.allocator import DeviceAllocator as DA
 from nbxtensor.ops import wrappers as W
+import nbxtensor.ops.linalg_wrappers as _nbx_linalg_wrappers
 DA.device_synchronize()               # the shadow answers the whole driver surface
 a = NBXTensor.empty((19, 2048), "float16", 2)
 b = NBXTensor.empty((2048, 2048), "float16", 2)
-out = W.mm(a, b)
+out = _nbx_linalg_wrappers.mm(a, b)
 print("OUT", tuple(out.shape), out.dtype)
 '''
 

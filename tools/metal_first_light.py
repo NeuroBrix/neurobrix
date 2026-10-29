@@ -92,7 +92,7 @@ def _run_kernel(x_np, w_np, eps=1e-6):
     import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
     from nbxtensor.backend import launcher
     from nbxtensor.tensor import NBXTensor
-    from nbxtensor.ops.wrappers import rms_norm
+    from nbxtensor.ops.norm_wrappers import rms_norm
 
     # The engine installs the launcher from `kernels/dispatch.py`; a tool that
     # reaches for a wrapper directly must install it too, or it measures

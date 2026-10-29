@@ -22,7 +22,8 @@ from neurobrix.core.module import tiling_sizes as C3
 
 def test_the_wrapper_no_longer_reads_the_drivers_free_bytes():
     from nbxtensor.ops import wrappers as W
-    assert "device_free_bytes" not in inspect.getsource(W._conv3d_via_conv2d)
+    from nbxtensor.ops import conv_wrappers as _nbx_conv_wrappers  # the family the moved names live in (M2 split)
+    assert "device_free_bytes" not in inspect.getsource(_nbx_conv_wrappers._conv3d_via_conv2d)
 
 
 def test_the_plan_lists_exactly_the_conv3d_over_its_budget():
