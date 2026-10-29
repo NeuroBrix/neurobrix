@@ -1515,11 +1515,6 @@ def _neg(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
     return torch.neg(inputs[0])
 
 
-def _log(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
-    """ATen log."""
-    return torch.log(inputs[0])
-
-
 def _cos(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
     """ATen cos."""
     return torch.cos(inputs[0])
@@ -1590,17 +1585,6 @@ def _prod(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
     if dim is not None:
         return torch.prod(x, dim=dim, keepdim=keepdim)
     return torch.prod(x)
-
-
-def _std(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
-    """ATen std."""
-    x = inputs[0]
-    dim = attrs.get("dim", None)
-    keepdim = attrs.get("keepdim", False)
-    unbiased = attrs.get("unbiased", True)
-    if dim is not None:
-        return torch.std(x, dim=dim, keepdim=keepdim, unbiased=unbiased)
-    return torch.std(x, unbiased=unbiased)
 
 
 def _any(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:

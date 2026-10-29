@@ -128,36 +128,6 @@ class InputConfig:
 
         return symbol_map
 
-    def to_symbol_map(self):
-        """REFUSED. The name promised an answer and delivered a guess.
-
-        This used to return the positional base, and four instruments were built
-        on it in one day (2026-09-12) because the name reads like "the symbol
-        map". Each bound `s1` to a latent height on containers that DECLARE
-        `s1: time`, and each produced a confident, wrong census — one of which
-        was reported upstream as an established fact before the instrument was
-        confronted with a measurement taken another way.
-
-        The same trap had already been paid for on 2026-08-10, and the warning
-        was written in `build_symbol_map`'s own docstring: Qwen3-Omni's mel-frame
-        axis, named `seq_len`, bound to the global text config instead of its
-        441-frame trace; the estimate collapsed and block_scatter packed a 16 GB
-        card to 15.77 GiB with no headroom. **A note in the function you did not
-        call cannot reach you.** So this is a refusal and not a note.
-
-        Callers wanting the graph's real map:
-            ActivationProfiler(dag).build_symbol_map(input_config)
-        Callers genuinely wanting the positional guess, knowing it is one:
-            input_config.positional_symbol_map()
-        """
-        raise AttributeError(
-            "InputConfig.to_symbol_map is refused: it returned a POSITIONAL "
-            "GUESS (s1=latent_h, s2=latent_w) under a name that reads like an "
-            "answer, and a graph declaring `s1: time` was silently mis-bound by "
-            "it. Use ActivationProfiler(dag).build_symbol_map(input_config) for "
-            "the graph's own declared names, or "
-            "InputConfig.positional_symbol_map() if the guess is what you want.")
-
 
 # ---------------------------------------------------------------------------
 # D2-ENCODER — linear-downscale graph classifier (shared Prism machinery)
@@ -901,60 +871,6 @@ class ActivationProfiler:
                 "exists to avoid. Pass an explicit InputConfig.")
         return out
 
-    def growth_anomaly(self, input_config: InputConfig,
-                       slack: float = 2.0) -> Dict[str, Any]:
-        """Does this component's cost grow faster than its extents justify?
-
-        A compounded symbolic rule is invisible at the trace point by
-        construction -- that is what makes it a rule defect rather than an
-        ordinary bug -- but it is LOUD one step away from it. CogVideoX-5b-I2V's
-        causal temporal pad recorded `3*s` where the truth was `s + 2`; seven
-        resnet blocks compounded it to `2187*s - 2184`, exact at the traced
-        s = 1. Profiled at 49 frames (latent extent 13, so 13x the trace on one
-        axis) the peak went from 0.09 GB to 210.26 GB -- a factor of **2237**,
-        which is the compound's own coefficient wearing a unit.
-
-        So the instrument is a ratio, and it needs no knowledge of the rule:
-
-            measured = peak(request) / peak(trace)
-            expected = product over symbols of (request extent / trace extent)
-
-        `expected` is the LINEAR growth the extents justify. Real components
-        exceed it -- attention is quadratic in its sequence axis -- so the bound
-        is `slack * expected**2`, which admits any quadratic op and still
-        separates a compound by two orders of magnitude: at 13x linear the bound
-        is 338 and the defect measured 2237. Bound written here before it was
-        applied to anything but the case that motivated it.
-
-        Returns the numbers whatever the verdict: a ratio is only useful beside
-        the two peaks it came from.
-        """
-        trace_profile = self.estimate_peak_memory()
-        request_profile = self.estimate_peak_memory(input_config)
-        trace_map = trace_profile.symbol_map or {}
-        request_map = request_profile.symbol_map or {}
-
-        expected = 1.0
-        per_axis = {}
-        for sid, traced in trace_map.items():
-            asked = request_map.get(sid)
-            if not isinstance(asked, int) or not traced:
-                continue
-            per_axis[sid] = asked / traced
-            expected *= max(asked / traced, 1.0)
-
-        measured = request_profile.peak_bytes / max(trace_profile.peak_bytes, 1)
-        bound = slack * expected ** 2
-        return {
-            "measured_ratio": measured,
-            "expected_linear": expected,
-            "bound": bound,
-            "exceeds": measured > bound,
-            "per_axis": per_axis,
-            "trace_gb": trace_profile.peak_gb,
-            "request_gb": request_profile.peak_gb,
-            "peak_op_uid": request_profile.peak_op_uid,
-        }
 
     def _attention_scratch_of(self, op, symbol_map, attention_scratch) -> int:
         """The scores an attention op writes, from its query [B, H, Tq, D] (or [B, Tq, D]) and value at the request."""

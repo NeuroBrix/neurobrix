@@ -21,7 +21,7 @@ def _dev(i):
 def test_a_profile_without_nodes_is_one_node_with_every_device_and_its_cpu():
     p = PrismProfile(id="one", vendor="v", devices=[_dev(0), _dev(1)], cpu="the-cpu")
     assert len(p.nodes) == 1 and p.nodes[0].device_indices == [0, 1] and p.nodes[0].cpu == "the-cpu"
-    assert p.node_of(1) is p.nodes[0] and p.node_links == []
+    assert [n for n in p.nodes if 1 in n.device_indices] == [p.nodes[0]] and p.node_links == []
 
 
 def test_a_cluster_profile_is_read_as_its_nodes_and_links(tmp_path, monkeypatch):
@@ -32,7 +32,7 @@ def test_a_cluster_profile_is_read_as_its_nodes_and_links(tmp_path, monkeypatch)
     (tmp_path / "two-macs.yml").write_text(yaml.safe_dump(doc))
     monkeypatch.setattr(L, "HARDWARE_DIR", tmp_path)
     p = L.load_profile("two-macs")
-    assert [n.id for n in p.nodes] == ["mac-a", "mac-b"] and p.node_of(1).id == "mac-b"
+    assert [n.id for n in p.nodes] == ["mac-a", "mac-b"] and [n.id for n in p.nodes if 1 in n.device_indices] == ["mac-b"]
     assert p.node_links == [NodeLink("mac-a", "mac-b", 80.0, 5.0, "rdma-tb5")]
 
 

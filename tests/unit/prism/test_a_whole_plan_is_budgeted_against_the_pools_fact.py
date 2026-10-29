@@ -5,7 +5,8 @@ neighbour is still there. The cells feed the planner a reading through the same 
 """
 from __future__ import annotations
 import pytest
-from neurobrix.core.prism.solver import DeviceState, PrismSolver, memory_ladder_rung_mb
+from neurobrix.core.prism.solver import DeviceState, PrismSolver
+from neurobrix.core.prism.memory_budget import rung_down_mb
 from neurobrix.core.prism.memory_budget import DeviceReading, execution_door
 
 

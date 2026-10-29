@@ -79,13 +79,6 @@ def rung_down_mb(mb: float) -> int:
     return rung
 
 
-def is_shared(r: DeviceReading) -> bool:
-    """Shared: a host pool, unified memory, a display, another process's memory, or a device
-    whose sharing could not be read."""
-    return (r.kind == "host" or r.unified or r.display_active
-            or r.held_by_others_mb > 0 or not r.measured)
-
-
 def _door_mb() -> Optional[int]:
     v = os.environ.get("NBX_PRISM_BUDGET_MB")
     return int(v) if v else None

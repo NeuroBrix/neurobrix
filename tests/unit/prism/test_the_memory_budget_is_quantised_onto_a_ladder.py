@@ -33,8 +33,9 @@ from pathlib import Path
 
 import pytest
 
+from neurobrix.core.prism.memory_budget import rung_down_mb
 from neurobrix.core.prism.solver import (
-    ComponentMemory, PrismSolver, memory_ladder_rung_mb,
+    ComponentMemory, PrismSolver,
 )
 from tests.conftest import installed_container
 
@@ -55,19 +56,19 @@ def _spec(budget_mb):
     mem = ComponentMemory("model", 32 * MB, 16384 * MB, 821 * MB)
     # the tile derives from the RUNG (Hocine's tiling standard): a reading is rounded first
     return s._spatial_component_tiling(
-        _Container(root), "model", mem, memory_ladder_rung_mb(budget_mb))
+        _Container(root), "model", mem, rung_down_mb(budget_mb))
 
 
 def test_the_ladder_rounds_free_down_and_never_up():
-    assert memory_ladder_rung_mb(6333) == 6 * 1024
-    assert memory_ladder_rung_mb(7950) == 6 * 1024
-    assert memory_ladder_rung_mb(8192) == 8 * 1024
-    assert memory_ladder_rung_mb(10330) == 8 * 1024
-    assert memory_ladder_rung_mb(130 * 1024) == 128 * 1024
+    assert rung_down_mb(6333) == 6 * 1024
+    assert rung_down_mb(7950) == 6 * 1024
+    assert rung_down_mb(8192) == 8 * 1024
+    assert rung_down_mb(10330) == 8 * 1024
+    assert rung_down_mb(130 * 1024) == 128 * 1024
     # under the lowest rung there is nothing to size against: the answer is 0, never the
     # reading itself (a value off the ladder reached the plan exactly where standard rungs
     # matter most — the memory doctrine, 2026-09-21)
-    assert memory_ladder_rung_mb(3900) == 0
+    assert rung_down_mb(3900) == 0
 
 
 def test_two_readings_on_one_rung_size_one_tile():
@@ -93,4 +94,4 @@ def test_readings_on_different_rungs_may_differ_and_the_rung_is_named():
 def test_the_rung_never_exceeds_the_reading():
     """Property two: the plan asks for less than it sees, by construction."""
     for reading in (4100, 5000, 6333, 7950, 10330, 13000):
-        assert memory_ladder_rung_mb(reading) <= reading
+        assert rung_down_mb(reading) <= reading

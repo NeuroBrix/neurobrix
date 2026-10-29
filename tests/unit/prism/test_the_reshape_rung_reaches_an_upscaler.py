@@ -43,7 +43,8 @@ from pathlib import Path
 import pytest
 
 from neurobrix.core.prism.profiler import InputConfig
-from neurobrix.core.prism.solver import memory_ladder_rung_mb, ComponentMemory, PrismSolver
+from neurobrix.core.prism.solver import ComponentMemory, PrismSolver
+from neurobrix.core.prism.memory_budget import rung_down_mb
 
 MB = 1024 * 1024
 # The engine's own door, not a literal: this file carried the Dell's absolute
@@ -74,7 +75,7 @@ def _size(model=MODEL, h=1024, w=1024, act_mb=16384, budget_mb=5232, vae_scale=N
     path = installed_container(model)
     mem = ComponentMemory("model", 32 * MB, act_mb * MB, 821 * MB)
     return _solver(h, w, vae_scale)._spatial_component_tiling(
-        _Container(path), "model", mem, memory_ladder_rung_mb(budget_mb))
+        _Container(path), "model", mem, rung_down_mb(budget_mb))
 
 
 def test_the_esrgan_case_is_now_sized():
@@ -136,7 +137,7 @@ def test_a_request_without_extents_still_refuses():
     s = _solver(h=None, w=None)
     mem = ComponentMemory("model", 32 * MB, 16384 * MB, 821 * MB)
     with pytest.raises(MissingRuntimeValue):
-        s._spatial_component_tiling(_Container(root), "model", mem, memory_ladder_rung_mb(5232))
+        s._spatial_component_tiling(_Container(root), "model", mem, rung_down_mb(5232))
 
 
 def test_a_component_that_fits_is_left_alone():

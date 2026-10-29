@@ -1,7 +1,7 @@
 # The engine's open slimming findings (tools/engine_slim_scan.py); each ends deleted, moved into nbxtensor, or kept
 # with its reason in docs/nbxtensor/ENGINE_SLIM.md. Both figures below may only go down (test_the_engine_only_slims.py).
-# engine_lines: 145037
-# open: 717
+# engine_lines: 144911
+# open: 708
 kind	path	symbol	detail
 dead	src/neurobrix/cli/commands/registry.py	installing_path	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/components/handlers/text_encoder_handler.py	TextEncoderComponentHandler.get_hidden_size	no reference outside its own body (tests excluded)
@@ -41,12 +41,6 @@ dead	src/neurobrix/core/module/tokenizer/tiktoken_bpe.py	PyTiktoken.id_to_token	
 dead	src/neurobrix/core/module/tokenizer/tiktoken_bpe.py	PyTiktoken.n_vocab	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/optim/passes/normalize.py	boundaries_present	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/optim/report.py	AnalysisReport.write_json	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/prism/layer_partition.py	Partition.peak_resident_mb	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/prism/memory_budget.py	is_shared	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/prism/profiler.py	ActivationProfiler.growth_anomaly	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/prism/profiler.py	InputConfig.to_symbol_map	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/prism/solver.py	memory_ladder_rung_mb	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/prism/structure.py	PrismProfile.node_of	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/runtime/graph/paged_kv_cache.py	PagedKVCache.held_bytes	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/state/mps_fence.py	MpsStateFence	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/state/pages.py	PagePool.pending_pages	no reference outside its own body (tests excluded)
@@ -135,8 +129,6 @@ dead	src/neurobrix/core/validators/sync_validator.py	SyncValidator.validate_devi
 dead	src/neurobrix/core/validators/tensor_validator.py	TensorValidator.log_shape_info	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/validators/tensor_validator.py	TensorValidator.validate_batch_consistency	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/validators/tensor_validator.py	TensorValidator.validate_device_consistency	no reference outside its own body (tests excluded)
-dead	src/neurobrix/kernels/metadata_ops.py	_log	no reference outside its own body (tests excluded)
-dead	src/neurobrix/kernels/metadata_ops.py	_std	no reference outside its own body (tests excluded)
 dead	src/neurobrix/nbx/cache.py	NBXCache.get_size	no reference outside its own body (tests excluded)
 dead	src/neurobrix/nbx/cache.py	NBXCache.list_cached	no reference outside its own body (tests excluded)
 dead	src/neurobrix/nbx/container.py	NBXContainer._load_components	no reference outside its own body (tests excluded)
@@ -603,7 +595,6 @@ wrapper	src/neurobrix/core/prism/profiler.py	_Declined	only renames Exception
 wrapper	src/neurobrix/core/prism/solver.py	PlanNotComputable	only renames RuntimeError
 wrapper	src/neurobrix/core/prism/solver.py	_identify_inplace_add_candidates_static(threshold_bytes)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/prism/solver.py	get_allocation	only hands its parameters to self.components.get
-wrapper	src/neurobrix/core/prism/solver.py	memory_ladder_rung_mb	only hands its parameters to rung_down_mb
 wrapper	src/neurobrix/core/prism/solver.py	order_candidates(tie)	no call site passes it: always its default 0.01
 wrapper	src/neurobrix/core/prism/solver.py	solve	only hands its parameters to PrismSolver().solve
 wrapper	src/neurobrix/core/prism/temporal_stream.py	StreamDeclarationError	only renames RuntimeError

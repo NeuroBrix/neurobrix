@@ -99,10 +99,6 @@ class Partition:
     def fits(self) -> bool:
         return self.refusal is None
 
-    @property
-    def peak_resident_mb(self) -> float:
-        return self.peak_resident_bytes / (1024 * 1024)
-
 
 class LayerPartitioner:
     """Partition one component graph into budget-sized segments."""

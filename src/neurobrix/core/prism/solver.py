@@ -714,14 +714,6 @@ PipelineExecutionPlan = ExecutionPlan
 #: step discards half of an 8 GB machine and hands a 128 GB machine sixty-four
 #: rungs — sixty-four certified key families — for nothing. Whole gigabytes;
 #: the 4096 MB floor is the lowest USABLE rung.
-def memory_ladder_rung_mb(free_mb) -> int:
-    """A reading rounded DOWN onto the commercial ladder — the ladder is configuration
-    (`PRISM_DEFAULTS["memory_ladder_gb"]`, 4 GB to 512 GB) and the law is
-    `core/prism/memory_budget.py`. Never a value off the ladder: a reading under the lowest
-    rung answers 0, and the caller refuses or streams in its own words. (Until 2026-09-21 the
-    ladder was a literal here that stopped at 128 GB and any reading under 4 GB passed through
-    untouched — exactly where standard rungs matter most.)"""
-    return rung_down_mb(free_mb)
 
 
 def _capped_budget_mb(reading, capacity: float) -> float:

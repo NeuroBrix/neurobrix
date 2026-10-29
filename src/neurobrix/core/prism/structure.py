@@ -483,13 +483,6 @@ class PrismProfile:
                 raise ValueError(f"ZERO FALLBACK: profile {self.id!r}: link {link.node_a}-{link.node_b} names a node "
                                  f"the profile does not declare ({sorted(names)})")
 
-    def node_of(self, device_index: int) -> ClusterNode:
-        """The node holding `device_index` (every device has exactly one, `__post_init__`)."""
-        for n in self.nodes:
-            if device_index in n.device_indices:
-                return n
-        raise KeyError(f"profile {self.id!r}: device {device_index} is on no node")
-
 
     @property
     def total_vram_mb(self) -> int:

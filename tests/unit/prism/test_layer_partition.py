@@ -72,7 +72,7 @@ def test_the_announced_peak_is_under_the_budget(budget_mb):
     if not part.fits:
         return                      # refusing is allowed; over-promising is not
     assert part.peak_resident_bytes <= budget_mb * 1024 * 1024, (
-        f"announced {part.peak_resident_mb:.1f} MB against a {budget_mb} MB budget")
+        f"announced {part.peak_resident_bytes / 2**20:.1f} MB against a {budget_mb} MB budget")
     for s in part.segments:
         assert s.weight_bytes + part.peak_live_bytes <= budget_mb * 1024 * 1024
 

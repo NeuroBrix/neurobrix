@@ -62,17 +62,6 @@ VIDEO_GRAPH = {
 }
 
 
-def test_the_promising_name_is_refused():
-    with pytest.raises(AttributeError) as exc:
-        REQUEST.to_symbol_map()
-    why = str(exc.value)
-    # The refusal must say what the old name did, or it is just an error.
-    assert "POSITIONAL GUESS" in why
-    # And name BOTH ways forward, so the caller is not left to search.
-    assert "build_symbol_map" in why
-    assert "positional_symbol_map" in why
-
-
 def test_the_guess_is_still_available_under_a_name_that_says_so():
     """Not removed — renamed. `build_symbol_map` is built on it."""
     base = REQUEST.positional_symbol_map()

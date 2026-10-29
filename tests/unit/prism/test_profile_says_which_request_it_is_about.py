@@ -6,9 +6,8 @@ through the positional base that calls `s1` a latent height. For a video
 component that binds the TIME axis to a spatial extent, and nothing in the
 returned profile said which request the number was about.
 
-Two things are pinned here: the default now binds to the extents the container
-was traced at (the one configuration it is known to have witnessed) and says so;
-and the ratio between the two bindings is an instrument in its own right.
+Pinned here: the default now binds to the extents the container was traced at
+(the one configuration it is known to have witnessed) and says so.
 
 Run: PYTHONPATH=src python -m pytest tests/unit/prism/test_profile_says_which_request_it_is_about.py
 """
@@ -107,25 +106,3 @@ def test_a_graph_with_no_trace_value_is_refused_not_guessed(tmp_path):
         prof.estimate_peak_memory()
 
 
-def test_a_compounded_rule_is_an_anomaly_and_a_sound_one_is_not(tmp_path):
-    """The positive and negative control, in the shape of the real case.
-
-    Both graphs are traced at s = 1 and profiled at a request of 9. The sound
-    one grows 9x, as its extents justify. The compounded one is 3 at the trace
-    and 17499 at the request, and the ratio says so.
-    """
-    request = InputConfig(num_frames=33, temporal_compression=4)          # latent (33-1)//4+1 = 9
-
-    sound_dir = tmp_path / "sound"
-    sound_dir.mkdir()
-    clean = _profiler(sound_dir, _graph(trace_time=1, coefficient=1)).growth_anomaly(request)
-    assert not clean["exceeds"], clean
-    assert clean["measured_ratio"] == pytest.approx(clean["expected_linear"], rel=0.2)
-
-    bad_dir = tmp_path / "compound"
-    bad_dir.mkdir()
-    bad = _profiler(bad_dir, _graph(trace_time=1, coefficient=2187)).growth_anomaly(request)
-    assert bad["exceeds"], bad
-    # 2187*9 - 2186 = 19497 against 3 at the trace: three orders of magnitude
-    # above the bound of 2 * 9**2 = 162.
-    assert bad["measured_ratio"] > 100 * bad["bound"], bad
