@@ -16,9 +16,8 @@ import os
 ENV_CAP = "NBX_OP_FINGERPRINT_CAP"
 
 
-def hashed_span(nbytes: int, cap: int | None = None) -> int:
-    """The number of bytes to hash for an output of `nbytes`: all of them unless a cap
-    (the env, or the argument) says fewer. A cap of 0 means the whole tensor."""
-    if cap is None:
-        cap = int(os.environ.get(ENV_CAP, "0") or 0)
+def hashed_span(nbytes: int) -> int:
+    """The number of bytes to hash for an output of `nbytes`: all of them unless the cap asked for by name
+    (`NBX_OP_FINGERPRINT_CAP`) says fewer. A cap of 0 means the whole tensor."""
+    cap = int(os.environ.get(ENV_CAP, "0") or 0)
     return nbytes if cap <= 0 else min(nbytes, cap)

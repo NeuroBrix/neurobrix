@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-129 entries, 122 in the rack's block (1-499) and 7 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 124 carry a site. Two
+130 entries, 123 in the rack's block (1-499) and 7 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 124 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -3819,3 +3819,22 @@ judged afterwards.
 
 **The lesson, in one line.** A differential over a hand-kept list of fields proves only those fields;
 derive the list from the record or refuse what it leaves out.
+
+### 123 — the fingerprint's one door was tested while neither engine walked through it
+
+**Gate**: `tests/unit/runtime/test_the_fingerprint_hashes_the_whole_tensor.py`, three cells on
+`core/runtime/fingerprint.hashed_span` (written 2026-09-21: the op-output fingerprint hashes the whole tensor
+unless a cap is asked for by name). The cells called the function directly. Neither engine did: the ATen
+sequential loop (`graph_executor`) and the Triton sequence each read `NBX_OP_FINGERPRINT_CAP` themselves with
+an 8 192-byte default, so the instrument went on hashing the prefix the owner had voided.
+
+**What the gate said about the defect**: green for five weeks. Found 2026-10-29 by the engine-slim scan, which
+reported `hashed_span` dead: nothing outside the tests called it.
+
+**Repair.** Both paths call `hashed_span`. Its unused `cap` parameter went too, so the environment is the only
+way to ask for a cap. A fourth cell refuses any engine file but the door that reads the variable, and requires
+both paths to import the door. On the old code it fails naming `core/runtime/graph_executor.py` and
+`triton/sequence.py`.
+
+**The lesson, in one line.** A test of a helper proves the helper; prove that the callers use it, or the door
+is a drawing of a door.

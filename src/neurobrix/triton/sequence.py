@@ -3789,13 +3789,10 @@ class TritonSequence:
                     DeviceAllocator.set_device(t._device_idx)
                 c = t.contiguous()
                 nb = c._nbytes
-                # Byte-cap (default 8 KiB): non-deterministic-reduction
-                # bit-noise is distributed across the tensor, so the
-                # leading bytes reflect any divergence while keeping
-                # 115k-op model traces feasible. NBX_OP_FINGERPRINT_CAP=0
-                # disables the cap (full hash).
-                cap = int(_os_f.environ.get("NBX_OP_FINGERPRINT_CAP", "8192"))
-                hb = nb if cap == 0 else min(nb, cap)
+                # The whole tensor unless a cap is asked for by name (core/runtime/fingerprint.py, the one door of
+                # both engines): a prefix named the wrong first differing op for Kokoro (2026-09-20)
+                from neurobrix.core.runtime.fingerprint import hashed_span
+                hb = hashed_span(nb)
                 buf = (_ct_f.c_char * hb)()
                 DeviceAllocator.memcpy(_ct_f.addressof(buf), c.data_ptr(),
                                        hb, kind=2)
