@@ -60,7 +60,25 @@ def test_the_pytorch_branch_without_torch_stops_before_the_load(flags):
     text = _run(*flags)
     assert "RC 1" in text, text[-3000:]
     assert "REACHED" not in text, "the run went on to load the container without torch"
-    assert "PyTorch branch" in text and 'neurobrix[pytorch]' in text and "--triton" in text, text[-3000:]
+    assert "PyTorch engine" in text and 'neurobrix[pytorch]' in text and "--triton" in text, text[-3000:]
+    assert "https://pytorch.org/get-started/locally/" in text, "the message does not say where the wheel is chosen"
+    assert "Traceback" not in text, text[-3000:]
+
+
+_MAIN = _DRIVER.replace(
+    'args = create_parser().parse_args(["run", "--model", "M", "--prompt", "p", *sys.argv[1:]])\ntry:\n    rc = R.cmd_run(args)',
+    'from neurobrix.cli import main\nsys.argv = ["neurobrix", "run", "--model", "M", "--prompt", "p", *sys.argv[1:]]\ntry:\n    rc = main()')
+
+
+def test_through_the_entry_point_main_the_refusal_is_a_message_and_rc_1():
+    assert _MAIN != _DRIVER
+    env = child_env(PYTHONPATH=f"{REPO / 'src'}{os.pathsep}{REPO / 'nbxtensor' / 'src'}{os.pathsep}{REPO}",
+                    PYTHONNOUSERSITE="1", CUDA_VISIBLE_DEVICES="")
+    out = subprocess.run([sys.executable, "-c", _MAIN, "--compiled"], cwd=REPO, env=env, capture_output=True,
+                         text=True, timeout=300)
+    text = out.stdout + out.stderr
+    assert out.returncode == 1 and "REACHED" not in text and "Traceback" not in text, text[-3000:]
+    assert "pip install \"neurobrix[pytorch]\"" in text and "pytorch.org" in text, text[-3000:]
 
 
 def test_the_triton_branch_is_not_asked_for_torch():

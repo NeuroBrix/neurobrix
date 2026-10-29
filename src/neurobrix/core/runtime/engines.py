@@ -31,8 +31,14 @@ def require_engine(mode: str) -> None:
     if mode not in PYTORCH_MODES:
         raise ValueError(f"execution mode {mode!r} is none of {PYTORCH_MODES + TRITON_MODES}")
     if importlib.util.find_spec("torch") is None:
-        raise PyTorchBranchNotInstalledError(
-            f"execution mode {mode!r} is the PyTorch branch, and torch is not installed in this environment "
-            f"({sys.executable}). "
-            f"Install it with: pip install \"neurobrix[pytorch]\" — or run the Triton branch, which needs no torch: "
-            f"--triton or --triton-sequential.")
+        raise PyTorchBranchNotInstalledError(torch_missing_message(f"execution mode {mode!r}"))
+
+
+def torch_missing_message(what: str) -> str:
+    """The one message a user without torch reads when `what` (a mode, a command) needs the PyTorch branch: what it
+    needs, the install line, where the wheel for their hardware is chosen, and that the Triton branch needs none."""
+    return (f"{what} runs on the PyTorch engine, and PyTorch is not installed in this environment ({sys.executable}).\n"
+            f"  To use it, install the PyTorch build for your hardware (choose the wheel for your GPU and driver at "
+            f"https://pytorch.org/get-started/locally/), then:\n"
+            f"      pip install \"neurobrix[pytorch]\"\n"
+            f"  Or run the Triton engine, which needs no PyTorch: add --triton (or --triton-sequential).")

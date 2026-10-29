@@ -591,6 +591,7 @@ def main():
         from neurobrix.kernels import census as _census
         _census.install(hardware=getattr(args, "hardware", None))
 
+    from neurobrix.core.runtime.engines import PyTorchBranchNotInstalledError
     try:
         if args.command == 'autotune':
             from neurobrix.cli.commands.autotune import cmd_autotune
@@ -667,6 +668,20 @@ def main():
         sys.exit(1)
     except ValueError as e:
         print(f"\nERROR: {e}")
+        sys.exit(1)
+    except PyTorchBranchNotInstalledError as e:
+        # The PyTorch engine asked for where torch is not installed: the named message, never a trace
+        print(f"\n[ERROR] {e}")
+        sys.exit(1)
+    except ModuleNotFoundError as e:
+        if (e.name or "").split(".")[0] != "torch":
+            print(f"\nUNEXPECTED ERROR: {e}")
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
+        # a PyTorch-engine path that imports torch before any mode check: the same message, never a trace
+        from neurobrix.core.runtime.engines import torch_missing_message
+        print(f"\n[ERROR] {torch_missing_message(f'neurobrix {args.command}')}")
         sys.exit(1)
     except Exception as e:
         print(f"\nUNEXPECTED ERROR: {e}")
