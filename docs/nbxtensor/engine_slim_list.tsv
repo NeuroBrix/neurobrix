@@ -1,7 +1,7 @@
 # The engine's open slimming findings (tools/engine_slim_scan.py); each ends deleted, moved into nbxtensor, or kept
 # with its reason in docs/nbxtensor/ENGINE_SLIM.md. Both figures below may only go down (test_the_engine_only_slims.py).
-# engine_lines: 146101
-# open: 770
+# engine_lines: 145107
+# open: 725
 kind	path	symbol	detail
 dead	src/neurobrix/cli/commands/registry.py	installing_path	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/components/handlers/text_encoder_handler.py	TextEncoderComponentHandler.get_hidden_size	no reference outside its own body (tests excluded)
@@ -53,41 +53,8 @@ dead	src/neurobrix/core/prism/profiler.py	ActivationProfiler.growth_anomaly	no r
 dead	src/neurobrix/core/prism/profiler.py	InputConfig.to_symbol_map	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/prism/solver.py	memory_ladder_rung_mb	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/prism/structure.py	PrismProfile.node_of	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/runtime/debug.py	debug_log_tensor	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/runtime/debug.py	debug_log_timestep	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/runtime/debug.py	set_debug	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/runtime/executor.py	RuntimeExecutor.get_final_component	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/runtime/factory.py	TPNotImplementedError	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/runtime/fingerprint.py	hashed_span	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/runtime/graph/compiled_ops.py	get_compiled_op_resolver	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/runtime/graph/compiled_sequence.py	CompiledSequence.clear_op_interceptors	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/runtime/graph/compiled_sequence.py	CompiledSequence.num_slots	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/runtime/graph/compiled_sequence.py	CompiledSequence.peek_tensor	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/runtime/graph/compiled_sequence.py	_concrete_product_match	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/runtime/graph/compiled_sequence.py	_expr_symbols_in_input	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/runtime/graph/execution_context.py	ExecutionContext.has_tensor	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/runtime/graph/kv_cache_wrapper.py	KVCacheAttentionWrapper.intercept_cudnn_attention	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/runtime/graph/kv_cache_wrapper.py	KVCacheAttentionWrapper.intercept_flash_attention	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/runtime/graph/kv_cache_wrapper.py	KVCacheAttentionWrapper.intercept_standard_attention	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/runtime/graph/memory_pool.py	MemoryOptimizer	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/runtime/graph/memory_pool.py	MemoryOptimizer.clear_pool	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/runtime/graph/memory_pool.py	MemoryOptimizer.get_dead_tensors	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/runtime/graph/memory_pool.py	MemoryOptimizer.release_tensor	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/runtime/graph/memory_pool.py	compute_allocation_schedule	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/runtime/graph/paged_kv_cache.py	PagedKVCache.held_bytes	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/runtime/graph/sequential_dispatcher.py	NativeATenDispatcher.get_native_op	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/runtime/graph_executor.py	GraphExecutor._execute_intercepted_op	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/runtime/graph_executor.py	GraphExecutor._execute_metadata_op	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/runtime/graph_executor.py	GraphExecutor.get_op_summary	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/runtime/graph_executor.py	GraphExecutor.unregister_op_interceptor	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/runtime/resolution/input_resolver.py	InputResolver.get_connections	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/runtime/resolution/input_resolver.py	InputResolver.update_loop_id	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/runtime/resolution/output_extractor.py	OutputExtractor.extract_hidden_states	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/runtime/resolution/output_extractor.py	OutputExtractor.get_encoder_hidden_states	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/runtime/resolution/output_extractor.py	OutputExtractor.is_loop_component	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/runtime/shape_resolver.py	SymbolicShapeResolver.resolve_tensor_shape	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/runtime/symint.py	SymInt.free_symbols	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/runtime/symint.py	SymInt.from_json	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/state/mps_fence.py	MpsStateFence	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/state/pages.py	PagePool.pending_pages	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/strategies/base.py	ExecutionStrategy.handle_outputs	no reference outside its own body (tests excluded)
@@ -347,13 +314,8 @@ duplicate	src/neurobrix/core/optim/passes/algebraic.py	_scalar	same body as nbxt
 duplicate	src/neurobrix/core/optim/passes/fusion_vertical.py	is_graph_output	same body as src/neurobrix/triton/sequence.py::_is_graph_output
 duplicate	src/neurobrix/core/prism/solver.py	_allocation_on_host	same body as src/neurobrix/core/prism/solver.py::_on_host
 duplicate	src/neurobrix/core/prism/solver.py	_on_host	same body as src/neurobrix/core/prism/solver.py::_allocation_on_host
-duplicate	src/neurobrix/core/runtime/graph/compiled_ops.py	embedding_wrapper	same body as src/neurobrix/core/runtime/graph/sequential_dispatcher.py::embedding_wrapper
 duplicate	src/neurobrix/core/runtime/graph/compiled_sequence.py	_compile_kwargs	same body as src/neurobrix/triton/sequence.py::_compile_kwargs
 duplicate	src/neurobrix/core/runtime/graph/compiled_sequence.py	_extract_const_fold_partition	same body as src/neurobrix/triton/sequence.py::_extract_const_fold_partition
-duplicate	src/neurobrix/core/runtime/graph/sequential_dispatcher.py	_make_select_wrapper	same body as src/neurobrix/core/runtime/graph/sequential_dispatcher.py::_make_transpose_wrapper
-duplicate	src/neurobrix/core/runtime/graph/sequential_dispatcher.py	_make_transpose_wrapper	same body as src/neurobrix/core/runtime/graph/sequential_dispatcher.py::_make_select_wrapper
-duplicate	src/neurobrix/core/runtime/graph/sequential_dispatcher.py	embedding_wrapper	same body as src/neurobrix/core/runtime/graph/compiled_ops.py::embedding_wrapper
-duplicate	src/neurobrix/core/runtime/graph/sequential_dispatcher.py	wrapper	same body as 
 duplicate	src/neurobrix/core/runtime/resolution/flux_video_conditioning.py	is_flux_family	same body as src/neurobrix/triton/flux_video_conditioning.py::is_flux_family
 duplicate	src/neurobrix/core/runtime/resolution/i2v_conditioning.py	_to_channels_first	same body as src/neurobrix/core/runtime/resolution/vace_control_conditioning.py::_to_channels_first, src/neurobrix/triton/i2v_conditioning.py::_to_channels_first, src/neurobrix/triton/vace_control_conditioning.py::_to_channels_first
 duplicate	src/neurobrix/core/runtime/resolution/i2v_conditioning.py	_vae_latent_stats	same body as src/neurobrix/triton/i2v_conditioning.py::_vae_latent_stats
@@ -657,16 +619,11 @@ wrapper	src/neurobrix/core/prism/time_estimate.py	MissingFact	only renames KeyEr
 wrapper	src/neurobrix/core/prism/time_estimate.py	plan_seconds(phases)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/prism/work.py	component_work(default_dtype_bytes)	no call site passes it: always its default 2
 wrapper	src/neurobrix/core/runtime/engines.py	PyTorchBranchNotInstalledError	only renames RuntimeError
-wrapper	src/neurobrix/core/runtime/factory.py	TPNotImplementedError	only renames NotImplementedError
-wrapper	src/neurobrix/core/runtime/graph/compiled_sequence.py	clear_op_interceptors	only hands its parameters to self._op_interceptors.clear
 wrapper	src/neurobrix/core/runtime/graph/compiled_sequence.py	func_wrapper	only hands its parameters to moe_fused_dispatch
 wrapper	src/neurobrix/core/runtime/graph/device_attention.py	_plain	only hands its parameters to F.scaled_dot_product_attention
 wrapper	src/neurobrix/core/runtime/graph/execution_context.py	get_tensor	only hands its parameters to self.tensor_store.get
 wrapper	src/neurobrix/core/runtime/graph/kv_cache_wrapper.py	get_cache_len	only hands its parameters to self.cache.get_seq_len
 wrapper	src/neurobrix/core/runtime/graph/kv_cache_wrapper.py	intercept_attention(enable_gqa)	no call site passes it: always its default False
-wrapper	src/neurobrix/core/runtime/graph/memory_pool.py	allocate	only hands its parameters to self._memory_pool.acquire
-wrapper	src/neurobrix/core/runtime/graph/memory_pool.py	clear_pool	only hands its parameters to self._memory_pool.clear
-wrapper	src/neurobrix/core/runtime/graph/memory_pool.py	release_tensor	only hands its parameters to self._memory_pool.release
 wrapper	src/neurobrix/core/runtime/graph/moe_fusion.py	detect_and_fuse_moe(refusals)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/runtime/graph/tensor_resolver.py	parse_dtype	only hands its parameters to _parse_dtype
 wrapper	src/neurobrix/core/runtime/graph_executor.py	GraphStructureError	only renames Exception
@@ -685,7 +642,6 @@ wrapper	src/neurobrix/core/runtime/symexpr.py	UnknownExpression	only renames Exp
 wrapper	src/neurobrix/core/runtime/symint.py	__radd__	only hands its parameters to self.__add__
 wrapper	src/neurobrix/core/runtime/symint.py	__rmul__	only hands its parameters to self.__mul__
 wrapper	src/neurobrix/core/runtime/symint.py	__str__	only hands its parameters to self.to_expr_string
-wrapper	src/neurobrix/core/runtime/symint.py	free_symbols	only hands its parameters to self.get_symbols
 wrapper	src/neurobrix/core/runtime/tensor_compat.py	aten	only hands its parameters to sys.modules.get
 wrapper	src/neurobrix/core/runtime_values.py	MissingRuntimeValue	only renames RuntimeError
 wrapper	src/neurobrix/core/runtime_values.py	require_max_tokens(override)	no call site passes it: always its default None
@@ -725,7 +681,6 @@ wrapper	src/neurobrix/kernels/census.py	install(hardware_profile)	no call site p
 wrapper	src/neurobrix/kernels/census_table.py	EmptyCensus	only renames ValueError
 wrapper	src/neurobrix/kernels/census_table.py	rows_for(root)	no call site passes it: always its default None
 wrapper	src/neurobrix/kernels/metadata_ops.py	_conv2d	only hands its parameters to _convolution
-wrapper	src/neurobrix/kernels/metadata_ops.py	execute_metadata_op(outputs)	no call site passes it: always its default None
 wrapper	src/neurobrix/nbx/atomic_install.py	InstallHeldByAnother	only renames RuntimeError
 wrapper	src/neurobrix/nbx/atomic_install.py	installing(allow_break)	no call site passes it: always its default False
 wrapper	src/neurobrix/nbx/cache.py	clear(model_name)	no call site passes it: always its default None

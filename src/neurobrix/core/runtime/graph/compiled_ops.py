@@ -1084,9 +1084,3 @@ class CompiledOpResolver:
 _resolver_instance: Optional[CompiledOpResolver] = None
 
 
-def get_compiled_op_resolver(device: torch.device, dtype: torch.dtype) -> CompiledOpResolver:
-    """Get or create the compiled op resolver singleton."""
-    global _resolver_instance
-    if _resolver_instance is None or _resolver_instance.device != device or _resolver_instance.dtype != dtype:
-        _resolver_instance = CompiledOpResolver(device, dtype)
-    return _resolver_instance

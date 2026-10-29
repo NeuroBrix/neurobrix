@@ -112,17 +112,6 @@ class SymInt:
     def is_expression(self) -> bool:
         return self._op not in (SymExprOp.CONST, SymExprOp.SYMBOL)
 
-    def get_symbols(self) -> Set[str]:
-        if self._op == SymExprOp.CONST:
-            return set()
-        if self._op == SymExprOp.SYMBOL:
-            assert self._symbol_id is not None
-            return {self._symbol_id}
-        if self._op == SymExprOp.NEG:
-            assert self._left is not None
-            return self._left.get_symbols()
-        assert self._left is not None and self._right is not None
-        return self._left.get_symbols() | self._right.get_symbols()
 
     def __mul__(self, other: Union['SymInt', int]) -> 'SymInt':
         other = self._coerce(other)
@@ -253,8 +242,6 @@ class SymInt:
             return self._const_val
         raise TypeError(f"Cannot convert symbolic expression to int: {self}")
 
-    def free_symbols(self) -> Set[str]:
-        return self.get_symbols()
 
     def substitute(self, old_symbol: str, new_expr: 'SymInt') -> 'SymInt':
         if self._op == SymExprOp.CONST:
@@ -328,76 +315,6 @@ class SymInt:
             "trace": self._trace_val,
         }
 
-    @classmethod
-    def from_json(cls, data: Union[int, str, Dict[str, Any]]) -> 'SymInt':
-        if isinstance(data, int):
-            return cls(data)
-        if isinstance(data, str):
-            if re.match(r'^s\d+$', data):
-                return cls.symbol(data, trace_value=1)
-            return cls._from_legacy_string(data)
-        if isinstance(data, dict):
-            type_str = data.get("type", "")
-            trace = data.get("trace", 1)
-            if type_str == "symbol":
-                return cls.symbol(data["id"], trace)
-            if type_str == "neg":
-                operand = cls.from_json(data["operand"])
-                return cls._unary(SymExprOp.NEG, operand, trace)
-            op_map = {
-                "add": SymExprOp.ADD, "sub": SymExprOp.SUB,
-                "mul": SymExprOp.MUL, "floordiv": SymExprOp.FLOORDIV,
-                "mod": SymExprOp.MOD,
-            }
-            if type_str in op_map:
-                left = cls.from_json(data["left"])
-                right = cls.from_json(data["right"])
-                return cls._binary(op_map[type_str], left, right, trace)
-            raise ValueError(f"Unknown SymInt type: {type_str}")
-        raise TypeError(f"Cannot deserialize SymInt from {type(data)}")
-
-    @classmethod
-    def _from_legacy_string(cls, expr: str) -> 'SymInt':
-        expr = expr.strip()
-        if re.match(r'^s\d+$', expr):
-            return cls.symbol(expr, trace_value=1)
-        try:
-            return cls(int(expr))
-        except ValueError:
-            pass
-        tree = ast.parse(expr, mode='eval')
-        return cls._from_ast(tree.body)
-
-    @classmethod
-    def _from_ast(cls, node: ast.AST) -> 'SymInt':
-        if isinstance(node, ast.Constant) and isinstance(node.value, int):
-            return cls(node.value)
-        if isinstance(node, ast.Num):
-            # ast.Num.n is a complex type, need to handle as Any
-            n_val: Any = node.n  # type: ignore[attr-defined]
-            return cls(int(n_val))
-        if isinstance(node, ast.Name):
-            return cls.symbol(node.id, trace_value=1)
-        if isinstance(node, ast.BinOp):
-            left = cls._from_ast(node.left)
-            right = cls._from_ast(node.right)
-            op_map = {
-                ast.Add: lambda l, r: l + r, ast.Sub: lambda l, r: l - r,
-                ast.Mult: lambda l, r: l * r, ast.FloorDiv: lambda l, r: l // r,
-                ast.Mod: lambda l, r: l % r,
-            }
-            op_type = type(node.op)
-            if op_type in op_map:
-                return op_map[op_type](left, right)
-            raise ValueError(f"Unsupported operator: {op_type.__name__}")
-        if isinstance(node, ast.UnaryOp):
-            operand = cls._from_ast(node.operand)
-            if isinstance(node.op, ast.USub):
-                return -operand
-            if isinstance(node.op, ast.UAdd):
-                return operand
-            raise ValueError(f"Unsupported unary operator: {type(node.op).__name__}")
-        raise ValueError(f"Unsupported AST node: {type(node).__name__}")
 
     def to_expr_string(self) -> str:
         if self._op == SymExprOp.CONST:

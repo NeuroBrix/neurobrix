@@ -138,7 +138,6 @@ def computed_array_to_container(t, device, dtype_name: str):
     return out.to(want) if out.nbx_dtype != want else out
 
 
-
 def _call_named(op_uid, fn, args, kwargs):
     """An op the triton-sequential loop runs OUTSIDE the dispatcher — an op_uid or op_type
     interceptor (Prism's tiled convs, the KV cache's attention) — is named for every key it forms
@@ -526,20 +525,6 @@ class GraphExecutor:
         for follow in list(self._op_followers.values()):
             follow(interceptors)
 
-    def unregister_op_interceptor(self, op_type: str) -> None:
-        """
-        Remove an interceptor for a specific op type.
-
-        Args:
-            op_type: ATen op type to unregister
-        """
-        if op_type in self._op_interceptors:
-            del self._op_interceptors[op_type]
-            self._interceptors_dirty = True
-            # Re-compile if already compiled
-            if self._compiled_seq is not None:
-                self._compile_execution_sequence()
-                self._interceptors_dirty = False
 
     def register_op_uid_interceptors(self, interceptors: Dict[str, Callable],
                                      groups: Sequence[Sequence[str]] = (),
@@ -586,30 +571,6 @@ class GraphExecutor:
         for follow in list(self._op_uid_followers.values()):
             follow(interceptors, groups=groups, planned=planned)
 
-    def _execute_intercepted_op(
-        self,
-        op_type: str,
-        args: List[Any],
-        kwargs: Dict[str, Any]
-    ) -> Any:
-        """
-        Execute an op through its registered interceptor.
-
-        Called by CompiledSequence when an op has a registered interceptor.
-        The interceptor receives the same args/kwargs as the native op.
-
-        Args:
-            op_type: ATen op type (e.g., "aten::scaled_dot_product_attention")
-            args: Positional arguments for the op
-            kwargs: Keyword arguments for the op
-
-        Returns:
-            Result from the interceptor
-        """
-        interceptor = self._op_interceptors.get(op_type)
-        if interceptor is None:
-            raise RuntimeError(f"No interceptor registered for {op_type}")
-        return interceptor(*args, **kwargs)
 
     def execute(self, inputs: Dict[str, Any],
                 skip_kills: Optional[bool] = None) -> Dict[str, Any]:
@@ -5408,47 +5369,6 @@ class GraphExecutor:
     # Op Dispatch (delegates to kernels/ infrastructure)
     # =========================================================================
 
-    def _execute_metadata_op(self, op_uid: str, op_data: Dict[str, Any]) -> None:
-        """
-        Execute a metadata op from its raw DAG data.
-
-        Metadata ops are O(1) - they only modify tensor views/strides.
-        PyTorch is optimal for these.
-
-        Delegates to: kernels/metadata_ops.py
-        """
-        from neurobrix.kernels.metadata_ops import execute_metadata_op
-
-        op_type = op_data["op_type"]
-        attrs = op_data.get("attributes", {})
-
-        # Resolve inputs via TensorResolver
-        assert self._resolver is not None
-        inputs = self._resolver.resolve_args(op_uid, attrs, op_type, op_data)
-
-        # Build metadata attrs - INCLUDE args/kwargs for handlers
-        metadata_attrs = dict(attrs)
-        input_shapes = op_data.get("input_shapes", [])
-        output_shapes = op_data.get("output_shapes", [])
-        if input_shapes:
-            metadata_attrs["input_shapes"] = input_shapes
-        if output_shapes:
-            metadata_attrs["_output_shape"] = output_shapes[0]
-        metadata_attrs["_device"] = self.device
-
-        # DtypeEngine intercept: _to_copy needs Prism override + complex protection
-        if op_type == "aten::_to_copy" and inputs:
-            to_copy_attrs = dict(attrs)
-            if "output_dtypes" in op_data:
-                to_copy_attrs["output_dtypes"] = op_data["output_dtypes"]
-            to_copy_fn = self._dtype_engine.compile_op(op_type, None, to_copy_attrs)
-            result = to_copy_fn(inputs[0])
-        else:
-            result = execute_metadata_op(op_type, inputs, metadata_attrs)
-
-        # Store outputs
-        self._store_op_outputs(op_uid, op_data, result)
-
 
     def _execute_native_op(self, op_uid: str, op_data: Dict[str, Any], op_type: str) -> None:
         """
@@ -6240,22 +6160,6 @@ class GraphExecutor:
         """Get raw DAG dict (read-only access)."""
         return self._dag
 
-    def get_op_summary(self) -> Dict[str, int]:
-        """Get count of ops by execution type."""
-        summary = {"triton": 0, "hybrid": 0, "metadata": 0, "unknown": 0}
-
-        if self._dag is None:
-            return summary
-
-        for op_data in self._dag.get("ops", {}).values():
-            op_type = op_data.get("op_type", "")
-            try:
-                exec_type = get_execution_type(op_type)
-                summary[exec_type.name.lower()] += 1
-            except KeyError:
-                summary["unknown"] += 1
-
-        return summary
 
     def get_embed_tokens(self) -> "Optional[torch.Tensor]":
         """Get embedding weight tensor for token embedding (LLMs).

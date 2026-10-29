@@ -83,9 +83,6 @@ class ExecutionContext:
         """Get a tensor from the store, or None if not found."""
         return self.tensor_store.get(tensor_id)
 
-    def has_tensor(self, tensor_id: str) -> bool:
-        """Check if a tensor is in the store."""
-        return tensor_id in self.tensor_store
 
     def delete_tensor(self, tensor_id: str) -> None:
         """Delete a tensor from the store (memory management)."""

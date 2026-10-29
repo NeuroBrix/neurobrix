@@ -32,11 +32,6 @@ if TYPE_CHECKING:
     from neurobrix.core.components.base import ComponentHandler
 
 
-class TPNotImplementedError(NotImplementedError):
-    """Raised when trying to execute TP intent without TP-DAG-Rewriter."""
-    pass
-
-
 class ExecutorFactory:
     """
     Factory to create appropriate executor based on Prism allocation.

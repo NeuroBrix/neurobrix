@@ -201,25 +201,4 @@ class InputResolver:
             f"Available: {list(self._variable_resolver.resolved.keys())}"
         )
 
-    def get_connections(self, comp_name: str) -> Dict[str, List[str]]:
-        """
-        Get raw connection mapping for a component.
 
-        Args:
-            comp_name: Component name
-
-        Returns:
-            Dict mapping input names to source lists
-        """
-        return self._connections_index.get(comp_name, {})
-
-    def update_loop_id(self, loop_id: str) -> None:
-        """
-        Update the current loop identifier.
-
-        Used when switching between loops or entering iteration.
-
-        Args:
-            loop_id: New loop identifier
-        """
-        self._loop_id = loop_id

@@ -37,7 +37,6 @@ from neurobrix.core.module.tiling_engine import TilingEngine
 from neurobrix.core.runtime.tensor_compat import is_tensor as _is_tensor, is_torch_tensor
 
 
-
 from neurobrix.core.prism.structure import names_accelerator as _names_accelerator
 from neurobrix.core.prism.host_footprint import engine_of
 from neurobrix.core.runtime.torch_allocator import (configure_torch_allocator, configure_memory_fraction,
@@ -1904,22 +1903,3 @@ class RuntimeExecutor:
 
         return None
 
-    def get_final_component(self) -> str:
-        """
-        Get the name of the final component in execution.
-
-        Returns:
-            Component name (e.g., "vae")
-        """
-        flow = self.pkg.topology.get("flow", {})
-        post_loop = flow.get("post_loop", [])
-        if post_loop:
-            return post_loop[-1]
-
-        # Fallback to flow order
-        flow = self.pkg.topology.get("flow", {})
-        order = flow.get("order", [])
-        if order:
-            return order[-1]
-
-        return "unknown"

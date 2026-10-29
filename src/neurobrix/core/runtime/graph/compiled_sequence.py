@@ -149,66 +149,6 @@ def _has_none_arg(args: tuple) -> bool:
     return False
 
 
-def _concrete_product_match(target: int, sym_dims: list) -> bool:
-    """True if ``target`` equals the product of some contiguous run of CONCRETE
-    (plain-int) entries in ``sym_dims`` — i.e. the value is fully explained by the
-    input's concrete dims, with no symbolic dim contributing. Mirror of the build toolchain's
-    windowing.py.
-    """
-    n = len(sym_dims)
-    for a in range(n):
-        prod = 1
-        for b in range(a, n):
-            d = sym_dims[b]
-            if not isinstance(d, int):  # symbolic dim breaks the all-concrete run
-                break
-            prod *= d
-            if prod == target:
-                return True
-            if prod > target:
-                break
-    return False
-
-
-def _expr_symbol_ids(node, acc: set) -> set:
-    """Collect every symbol id referenced anywhere in a serialized SymInt
-    expression tree. Mirror of the build toolchain's windowing.py."""
-    if isinstance(node, dict):
-        if node.get("type") == "symbol":
-            sid = node.get("id", node.get("symbol_id"))
-            if sid:
-                acc.add(sid)
-        for k in ("left", "right", "operand"):
-            if k in node:
-                _expr_symbol_ids(node[k], acc)
-        for f in node.get("factors", []):
-            if isinstance(f, dict):
-                _expr_symbol_ids(f, acc)
-            elif isinstance(f, str):
-                acc.add(f)
-    return acc
-
-
-def _expr_symbols_in_input(expr, in_sym_dims: list) -> bool:
-    """True if EVERY symbol referenced by ``expr`` also appears in the op's
-    input symbolic dims. Foreign-symbol collision guard (mirror of the build
-    toolchain's windowing.py): an architectural weight constant must NOT be
-    re-symbolized as a product whose factor symbols are FOREIGN to this op's
-    input — a trace-value coincidence with a product living in another
-    branch. The engine-side twin bit exactly the case the tracer guard
-    already covers (SANA-Video AdaLN 6 == a foreign s5*s6 product, trace 6,
-    runtime 4 → view split 13440 as 4x3360, 2026-09-02): a graph the tracer
-    correctly emits with the 6 CONCRETE must not have the collision
-    re-injected by this runtime pass."""
-    expr_syms = _expr_symbol_ids(expr, set())
-    if not expr_syms:
-        return True  # constant expr — the foreign-symbol guard does not apply
-    in_syms: set = set()
-    for d in (in_sym_dims or []):
-        _expr_symbol_ids(d, in_syms)
-    return expr_syms <= in_syms
-
-
 # ============================================================================
 # ARGUMENT TYPES (compile-time only, never seen at runtime)
 # ============================================================================
@@ -592,13 +532,6 @@ class CompiledSequence:
         """
         self._op_interceptors[op_type] = interceptor
 
-    def clear_op_interceptors(self) -> None:
-        """
-        Clear all registered op interceptors.
-
-        Call recompile() after this if the sequence was already compiled.
-        """
-        self._op_interceptors.clear()
 
     def update_op_interceptors(self, interceptors: Dict[str, Callable]) -> None:
         """
@@ -3369,12 +3302,6 @@ class CompiledSequence:
         """
         self._shape_resolver = resolver
 
-    def peek_tensor(self, tensor_id: str) -> Optional[torch.Tensor]:
-        """Peek at a tensor in the arena by ID. Returns None if not found."""
-        slot = self._tensor_id_to_slot.get(tensor_id)
-        if slot is None or self._arena is None:
-            return None
-        return self._arena[slot]
 
     def run(
         self,
@@ -4380,10 +4307,6 @@ class CompiledSequence:
         """Number of compiled ops."""
         return len(self._ops)
 
-    @property
-    def num_slots(self) -> int:
-        """Number of tensor slots in arena."""
-        return self._num_weights + self._num_inputs + self._num_intermediates
 
     @property
     def arena(self) -> TensorArena:

@@ -202,116 +202,11 @@ class OutputExtractor:
 
         return False
 
-    def is_loop_component(self, comp_name: str) -> bool:
-        """
-        Check if component is part of the main loop.
-
-        ZERO HARDCODE: Uses topology.flow.loop.components instead of hardcoded names.
-
-        Args:
-            comp_name: Component name
-
-        Returns:
-            True if component is in loop
-        """
-        loop_def = self._topology.get("flow", {}).get("loop", {})
-        return comp_name in loop_def.get("components", [])
-
-    def get_encoder_hidden_states_key(self) -> Optional[str]:
-        """
-        Get the variable key for encoder hidden states from topology.
-
-        ZERO HARDCODE: Finds the variable by looking for pre_loop component outputs
-        that connect to loop components with 'hidden_states' in the input name.
-
-        Returns:
-            The variable key (e.g., "text_encoder.last_hidden_state"), or None if not found.
-        """
-        # Find pre_loop components
-        pre_loop = self._topology.get("flow", {}).get("pre_loop", [])
-        loop_components = self._topology.get("flow", {}).get("loop", {}).get("components", [])
-
-        if not pre_loop or not loop_components:
-            return None
-
-        # Check connections for encoder_hidden_states pattern
-        connections = self._topology.get("connections", [])
-
-        for conn in connections:
-            from_port = conn.get("from", "")
-            to_port = conn.get("to", "")
-
-            # Check if from a pre_loop component to a loop component's encoder input
-            if "." in from_port and "." in to_port:
-                from_comp = from_port.split(".")[0]
-                to_comp, to_input = to_port.split(".", 1)
-
-                if from_comp in pre_loop and to_comp in loop_components:
-                    if "hidden_state" in to_input.lower():
-                        return from_port
-
-        return None
-
-    def get_encoder_hidden_states(self) -> Optional[torch.Tensor]:
-        """
-        Get encoder hidden states from resolved variables.
-
-        ZERO HARDCODE: Uses get_encoder_hidden_states_key to find the variable.
-
-        Returns:
-            The encoder hidden states tensor, or None if not found.
-        """
-        key = self.get_encoder_hidden_states_key()
-        if key:
-            return self._variable_resolver.get(key)
-        return None
 
     # ========================================================================
     # Semantic Extraction Methods (for autoregressive/LLM flows)
     # ========================================================================
 
-    def extract_hidden_states(self, output: Dict[str, Any], hidden_size: int = 0) -> torch.Tensor:
-        """
-        Extract hidden states from LM output.
-
-        DATA-DRIVEN: Uses hidden_size from topology to distinguish hidden_states
-        from logits (vocab_size >> hidden_size). If hidden_size not provided,
-        selects the 3D tensor whose last dim is SMALLEST (hidden < vocab).
-
-        Args:
-            output: Output dict from LM component
-            hidden_size: Model hidden_size from topology (0 = unknown)
-
-        Returns:
-            Hidden states tensor
-        """
-        # Try common output names first
-        for key in ["hidden_states", "last_hidden_state"]:
-            if key in output and is_torch_tensor(output[key]):
-                return output[key]
-
-        # Collect all 3D tensors with seq_len > 0
-        candidates = []
-        for key, val in output.items():
-            if is_torch_tensor(val) and len(val.shape) == 3:
-                batch_size, seq_len, last_dim = val.shape
-                if seq_len > 0:
-                    candidates.append((key, val, last_dim))
-
-        if candidates:
-            if hidden_size > 0:
-                # DATA-DRIVEN: exact match on hidden_size
-                exact = [c for c in candidates if c[2] == hidden_size]
-                if exact:
-                    return exact[0][1]
-            # UNIVERSAL: hidden_states has smallest last dim (hidden < vocab)
-            candidates.sort(key=lambda x: x[2])
-            return candidates[0][1]
-
-        raise RuntimeError(
-            f"ZERO FALLBACK: Cannot extract hidden_states from LM output.\n"
-            f"Keys: {list(output.keys())}"
-        )
 
     def extract_logits(self, output: Dict[str, Any]) -> torch.Tensor:
         """

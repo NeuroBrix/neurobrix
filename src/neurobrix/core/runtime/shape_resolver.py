@@ -397,47 +397,6 @@ class SymbolicShapeResolver:
             return self._resolve_symint_dict(value, _symexpr.SCALAR)
         return value
 
-    def resolve_tensor_shape(
-        self,
-        tensor_spec: Dict[str, Any]
-    ) -> Tuple[int, ...]:
-        """
-        Resolve shape for a tensor spec from graph.json.
-
-        Handles SymInt dict format (expression trees).
-        Handles string symbol references.
-
-        Args:
-            tensor_spec: Tensor spec with "shape" or "shape_concrete"
-
-        Returns:
-            Concrete shape tuple
-        """
-        if "shape" in tensor_spec:
-            shape = tensor_spec["shape"]
-            # Check if shape contains symbolic elements
-            has_symbolic = False
-            for d in shape:
-                if isinstance(d, str):
-                    has_symbolic = True
-                    break
-                if isinstance(d, dict):
-                    # SymInt dict format
-                    has_symbolic = True
-                    break
-
-            if has_symbolic:
-                return tuple(self.resolve(shape))
-            # All concrete ints
-            return tuple(shape)
-
-        # Fallback: Use shape_concrete or shape
-        if "shape_concrete" in tensor_spec:
-            return tuple(tensor_spec["shape_concrete"])
-
-        raise ShapeResolutionError(
-            f"Tensor spec missing shape: {tensor_spec.get('tensor_id', '?')}"
-        )
 
     def get_bound_symbols(self) -> Dict[str, int]:
         """Get all bound symbol values."""
