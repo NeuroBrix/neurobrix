@@ -248,3 +248,38 @@ the engine and is passed in.
    mechanism and move to `dtype`.
 3. **Dependency on the Dell's launcher.** The `.dtype` change (section 4) needs the launcher to stop
    reading the Triton dtype off the argument. It is listed as a precondition of the `Tensor` part of M2.
+
+## 11. The host services and what each becomes (M2/M3; supervisor, 29/10 02:50)
+
+M1 passed every fact the library does not hold yet through `nbxtensor.host`. The application provides a service by
+name, and the library refuses by name any service that is missing. That is a good boundary for the move. But a
+library published that way does nothing on its own: a developer who runs `import nbxtensor` has no vendor files, no
+certified store and no tiling policy.
+
+The rule for M2/M3 is that each service becomes one of three things:
+
+- **a fact the library owns or measures itself;**
+- **an optional policy**, whose default comes from a measurement;
+- **an optional hook**, only for what truly belongs to the application.
+
+| service (today) | what it answers | becomes | how |
+|---|---|---|---|
+| `vendor_config`, `vendor_param`, `vendors_dir`, `device_arch_string` | the kernel-relevant device description: tiles, shared memory, registers, thread counts, the matrix unit | **fact, owned** | the kernel sections of the vendor files move into the library (`nbxtensor/backend/devices/<vendor>/<arch>.yml`); what the driver reports is read at backend start (Metal `maxThreadgroupMemoryLength`, `maxBufferLength`; CUDA device attributes). The engine's vendor files keep only engine policy (Prism's budgets) |
+| `device_arch_string` | the key device files are found by | **fact, owned** | one function of the device's own name, in `backend` |
+| `matrix_unit_representation`, `matrix_unit_flash_representation`, `matrix_unit_split_scale` | how the matrix unit carries a GEMM's or an attention's operands | **fact, owned** | mechanism plus the device file's matrix-unit section, both in the library |
+| `profile_triton_has_fp64` | whether the device computes float64 | **fact, measured** | asked of the backend at start (a one-element fp64 kernel; Metal: none), kept in the frozen `Capabilities` |
+| `host_shares_memory_with_device` | unified memory | **fact, measured** | Metal `hasUnifiedMemory`, CUDA `cudaDevAttrIntegrated` |
+| `memory_state` | the host's free memory | **fact, measured** | the library reads the operating system (`sysctl` / `/proc/meminfo`); no NeuroBrix reader |
+| `certified_dir` | where certified kernel settings live | **policy, optional** | default: the library's own per-device store in the user cache (`~/.cache/nbxtensor/<device>/`), filled by autotune at first use; an application may point it at a committed directory (NeuroBrix: its certified store) |
+| `tiling_policy` | the split sizes the tiling rules read | **policy, optional** | default derived from the measured device limits (maximum buffer, shared memory); an application may override |
+| `deferred_drain_policy_of` | when freed blocks are returned | **policy, optional** | default: the allocator's measured envelope (drain on a refused allocation); NeuroBrix keeps its cliff |
+| `imposed_rung_mb` | a memory rung imposed on the allocator | **policy, optional** | default: none (the device's own budget) |
+| `attention_operand_dtypes`, `attention_operand_alignment` | the dtypes an attention's operands are run at | **policy, optional** | default: the operands' common dtype by `dtype.promotion.binary_result`; NeuroBrix's DtypeEngine overrides |
+| `canonical_aten` | an op name's canonical spelling | **fact, owned** | the op table's alias list (`ops`) |
+| `memory_class_gb`, `memory_class_from_profile_id` | NeuroBrix's memory classes of a card | **hook, optional** | only the census keys read them; absent, keys carry no class |
+| `installation_refusals` | NeuroBrix's workshop rule on where a backend build may live | **hook, optional** | absent: no refusal |
+| `census`, `census_table` | the launch census | **hook, optional** | already optional (`_NoCensus`) |
+
+**Added to M3's exit criterion.** A test runs every README example in an environment where NeuroBrix is NOT
+installed (a fresh venv holding only the nbxtensor wheel and its dependencies), on CUDA and on Metal. A service still
+refused there names the row of this table that has not landed.

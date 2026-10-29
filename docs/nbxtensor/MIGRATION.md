@@ -42,7 +42,11 @@ peak of a plan. Prism's `_arena_*` functions, `get_dtype_bytes_per_element`,
 the 1.3 factor and the 0.92 fraction are deleted. **Exit:** for every cell of
 the representative set, Prism's priced peak and the measured peak agree
 within the measured allocator envelope, printed per cell; migration_list.tsv
-empty.
+empty. And (supervisor, 29/10 02:50) every README example runs in an environment
+WITHOUT NeuroBrix installed (a venv holding only the nbxtensor wheel), on
+CUDA and on Metal: each `nbxtensor.host` service is by then a fact the
+library owns or measures, an optional policy with a measured default, or an
+optional hook (API.md section 11).
 
 ## M4 — benchmarks against torch (cards busy during M1-M3)
 Mac writes `benchmarks/nbxtensor_vs_torch/` first (outside the library) (kernel level: the census shapes; model
