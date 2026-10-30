@@ -100,23 +100,13 @@ class DDIMScheduler(DiffusionSchedulerBase):
     ) -> None:
         """Set timesteps for inference."""
         self.num_inference_steps = num_inference_steps
-        if self.timestep_spacing == "trailing":
-            # DDIM-standard trailing (diffusers DDIM/CogVideoX):
-            # round(arange(T, 0, -T/N)) - 1. The shared trailing_timesteps
-            # helper implements the DPM++ trailing convention
-            # (linspace(0,T-1,N+1).round()[::-1][:-1]) which differs by ±1 on
-            # most entries — the DDIM family must use the DDIM formula.
-            step_ratio = self.num_train_timesteps / num_inference_steps
-            import numpy as _np
-            ts = _np.round(_np.arange(self.num_train_timesteps, 0, -step_ratio)
-                           ).astype(_np.int64) - 1
-            self.timesteps = torch.from_numpy(ts)
-        else:
-            self.timesteps = get_timesteps(
-                self.timestep_spacing,
-                num_inference_steps,
-                self.num_train_timesteps
-            )
+        # every spacing through the shared helpers — trailing included, the vendor's formula for DDIM as for the
+        # others since 2026-10-30 (DDIM carried its own copy while the shared one computed linspace)
+        self.timesteps = get_timesteps(
+            self.timestep_spacing,
+            num_inference_steps,
+            self.num_train_timesteps
+        )
 
         if device is not None:
             self.timesteps = self.timesteps.to(device)

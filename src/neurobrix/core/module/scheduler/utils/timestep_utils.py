@@ -55,7 +55,8 @@ def trailing_timesteps(
     num_train_timesteps: int,
 ) -> torch.Tensor:
     """
-    Trailing spacing (diffusers default for DPM++).
+    Trailing spacing, the vendor's for every scheduler that asks for it (diffusers DPMSolverMultistep, EulerDiscrete,
+    DDIM with timestep_spacing="trailing"): round(arange(T, 0, -T/N)) - 1.
 
     Args:
         num_inference_steps: Number of inference steps (REQUIRED)
@@ -64,9 +65,9 @@ def trailing_timesteps(
     Returns:
         Timesteps tensor
     """
-    # This is the formula diffusers uses for DPMSolverMultistepScheduler
-    timesteps = np.linspace(0, num_train_timesteps - 1, num_inference_steps + 1)
-    timesteps = timesteps.round()[::-1][:-1].copy().astype(np.int64)
+    # Until 2026-10-30 this computed the linspace formula under the trailing name (off by one on several steps)
+    step_ratio = num_train_timesteps / num_inference_steps
+    timesteps = np.round(np.arange(num_train_timesteps, 0, -step_ratio)).astype(np.int64) - 1
     return torch.from_numpy(timesteps)
 
 
