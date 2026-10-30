@@ -1112,10 +1112,6 @@ class WeightLoader:
 
         return None
 
-    def list_files(self) -> List[str]:
-        """List all files in the container."""
-        return self._get_file_list()
-
     def __enter__(self):
         self.open()
         return self

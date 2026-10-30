@@ -667,7 +667,7 @@ class DtypeEngine:
         # arrive on, not only on the compute dtype. Checked before the AMP
         # rules because it applies whatever those rules say about the op.
         if cpu_lacks_half_kernel(op_name):
-            return self._make_cpu_fp32_wrapper(func)
+            return cpu_fp32_wrapper(func)
 
         # AMP rules only apply when compute_dtype is half-precision
         if self.compute_dtype in (torch.float16, torch.bfloat16):
@@ -811,11 +811,6 @@ class DtypeEngine:
             # Standard path: fp16 input with half_to_float=True
             return func(inp, dim, half_to_float)
         return safe_softmax
-
-    def _make_cpu_fp32_wrapper(self, func):
-        """The host-precision remedy (`cpu_fp32_wrapper`), reached from the
-        per-op wrapper chain when the op is in `CPU_NO_HALF_OPS`."""
-        return cpu_fp32_wrapper(func)
 
     def _make_complex_output_wrapper(self, func: Callable) -> Callable:
         """An op the container types as complex-producing never sees a half

@@ -1,12 +1,10 @@
 # The engine's open slimming findings (tools/engine_slim_scan.py); each ends deleted, moved into nbxtensor, or kept
 # with its reason in docs/nbxtensor/ENGINE_SLIM.md. Both figures below may only go down (test_the_engine_only_slims.py).
-# engine_lines: 142087
-# open: 441
+# engine_lines: 142021
+# open: 434
 kind	path	symbol	detail
 dead	src/neurobrix/cli/commands/registry.py	installing_path	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/config/loader.py	vendor_file	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/io/loader.py	SmartLoader.get_stats	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/io/weight_loader.py	WeightLoader.list_files	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/module/autoregressive/generator.py	AutoregressiveGenerator.num_generated	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/module/tiling_engine.py	OpLevelTilingPlan.add_inplace_unary	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/optim/passes/normalize.py	boundaries_present	no reference outside its own body (tests excluded)
@@ -37,6 +35,7 @@ dead	src/neurobrix/core/validators/runtime_guards.py	RuntimeGuards.check_shape	n
 dead	src/neurobrix/core/validators/runtime_guards.py	RuntimeGuards.check_shape_compatible	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/validators/runtime_guards.py	RuntimeGuards.check_tensor_size	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/validators/runtime_guards.py	RuntimeGuards.check_value_range	no reference outside its own body (tests excluded)
+dead	src/neurobrix/core/validators/runtime_guards.py	RuntimeGuards.get_stats	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/validators/runtime_guards.py	RuntimeGuards.reset_stats	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/validators/shape_validator.py	ShapeConstraints.validate_shape	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/validators/shape_validator.py	ShapeValidator.validate_shapes_match	no reference outside its own body (tests excluded)
@@ -266,8 +265,6 @@ duplicate	src/neurobrix/triton/vace_control_conditioning.py	_nbx_on	same body as
 duplicate	src/neurobrix/triton/vace_control_conditioning.py	_to_channels_first	same body as src/neurobrix/core/runtime/resolution/i2v_conditioning.py::_to_channels_first, src/neurobrix/core/runtime/resolution/vace_control_conditioning.py::_to_channels_first, src/neurobrix/triton/i2v_conditioning.py::_to_channels_first
 duplicate	src/neurobrix/triton/vace_control_conditioning.py	_vae_latent_stats	same body as src/neurobrix/core/runtime/resolution/vace_control_conditioning.py::_vae_latent_stats
 duplicate	src/neurobrix/triton/vace_control_conditioning.py	conditioning_spec	same body as src/neurobrix/core/runtime/resolution/vace_control_conditioning.py::conditioning_spec
-fact	src/neurobrix/core/dtype/config.py	parse_dtype	nbxtensor exposes nbxtensor.dtype.nbx_dtype.parse_dtype
-fact	src/neurobrix/core/dtype/engine.py	storage_dtype	nbxtensor exposes nbxtensor.dtype.itemsize.storage_dtype
 fact	src/neurobrix/core/memory/manager.py	release_flow_memory	nbxtensor exposes nbxtensor.memory.memory_pool.release_flow_memory
 fact	src/neurobrix/core/runtime/graph/compiled_sequence.py	_parse_dtype	nbxtensor exposes nbxtensor.dtype.nbx_dtype.parse_dtype
 fact	src/neurobrix/core/runtime/precision_contract.py	kind	nbxtensor exposes nbxtensor.dtype.itemsize.kind
@@ -296,9 +293,6 @@ wrapper	src/neurobrix/core/config/loader.py	UnsupportedArchitectureError	only re
 wrapper	src/neurobrix/core/config/loader.py	get_default(generation_type)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/config/system.py	get_precision_config	only hands its parameters to PRECISION_DEFAULTS.copy
 wrapper	src/neurobrix/core/config/system.py	get_prism_defaults	only hands its parameters to PRISM_DEFAULTS.copy
-wrapper	src/neurobrix/core/dtype/config.py	dtype_to_str	only hands its parameters to _torch_maps()[1].get
-wrapper	src/neurobrix/core/dtype/drift.py	detect(fields)	no call site passes it: always its default FIELDS
-wrapper	src/neurobrix/core/dtype/engine.py	_make_cpu_fp32_wrapper	only hands its parameters to cpu_fp32_wrapper
 wrapper	src/neurobrix/core/flow/audio.py	_get_compute_dtype	only hands its parameters to self.ctx.compute_dtype
 wrapper	src/neurobrix/core/flow/audio_utils.py	preprocess_text_input(input_config)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/flow/audio_utils.py	redistribute_snac_codes(codebook_size)	no call site passes it: always its default 4096
@@ -310,7 +304,6 @@ wrapper	src/neurobrix/core/flow/next_token_diffusion.py	_compute_dtype	only hand
 wrapper	src/neurobrix/core/flow/tts_llm.py	_get_compute_dtype	only hands its parameters to self.ctx.compute_dtype
 wrapper	src/neurobrix/core/flow/tts_llm.py	_sample_token(min_p)	no call site passes it: always its default 0.0
 wrapper	src/neurobrix/core/flow/tts_llm.py	_sample_token(top_p)	no call site passes it: always its default 1.0
-wrapper	src/neurobrix/core/io/weight_loader.py	list_files	only hands its parameters to self._get_file_list
 wrapper	src/neurobrix/core/memory/manager.py	cleanup_context(log_prefix)	no call site passes it: always its default '[MemoryManager]'
 wrapper	src/neurobrix/core/memory/manager.py	cleanup_context(verbose)	no call site passes it: always its default False
 wrapper	src/neurobrix/core/memory/manager.py	cleanup_tensors	only hands its parameters to MemoryManager.cleanup_tensors

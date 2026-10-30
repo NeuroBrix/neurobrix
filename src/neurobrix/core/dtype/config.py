@@ -144,19 +144,6 @@ def strip_aten_prefix(op_type: str) -> str:
     return op_name.split(".")[0]
 
 
-def dtype_to_str(dtype: torch.dtype) -> str:
-    """
-    Convert torch.dtype to string.
-
-    Args:
-        dtype: torch.dtype
-
-    Returns:
-        Dtype string (defaults to "float32" if unknown)
-    """
-    return _torch_maps()[1].get(dtype, "float32")
-
-
 # ============================================================================
 # Hardware Support Mapping
 # ============================================================================

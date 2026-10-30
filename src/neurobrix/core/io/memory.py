@@ -93,7 +93,6 @@ class PinnedMemoryManager:
 
     def __init__(self, enabled: bool = True):
         self.enabled = enabled and torch.cuda.is_available()
-        self._stats = {"pinned_bytes": 0, "transfers": 0}
 
     def to_pinned(self, tensors: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """
@@ -115,7 +114,6 @@ class PinnedMemoryManager:
                 pinned_tensor = torch.empty_like(tensor, pin_memory=True)
                 pinned_tensor.copy_(tensor)
                 pinned[name] = pinned_tensor
-                self._stats["pinned_bytes"] += tensor.numel() * tensor.element_size()
             else:
                 pinned[name] = tensor
 
@@ -141,15 +139,7 @@ class PinnedMemoryManager:
         result = {}
         for name, tensor in tensors.items():
             result[name] = tensor.to(device, non_blocking=non_blocking)
-            self._stats["transfers"] += 1
         return result
-
-    def get_stats(self) -> Dict[str, Any]:
-        """Get pinned memory statistics."""
-        return {
-            **self._stats,
-            "pinned_mb": self._stats["pinned_bytes"] / 1e6,
-        }
 
 
 # ============================================================================

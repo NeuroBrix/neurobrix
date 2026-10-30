@@ -19,7 +19,6 @@ ZERO HARDCODE: Import from here for all dtype operations.
 from neurobrix.core.dtype.config import (
     HARDWARE_DTYPE_SUPPORT,
     get_torch_dtype,
-    dtype_to_str,
     architecture_supports_dtype,
     parse_dtype,
     strip_aten_prefix,
@@ -54,7 +53,6 @@ __all__ = [
     "DTYPE_TO_STR",
     "HARDWARE_DTYPE_SUPPORT",
     "get_torch_dtype",
-    "dtype_to_str",
     "architecture_supports_dtype",
     "parse_dtype",
     "strip_aten_prefix",

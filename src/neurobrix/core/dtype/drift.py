@@ -140,9 +140,9 @@ class DriftReport:
                 "top": [site(s) for s in self.top]}
 
 
-def detect(dump_a, dump_b, *, bound: float = 0.02, top: int = 12, fields=FIELDS) -> DriftReport:
+def detect(dump_a, dump_b, *, bound: float = 0.02, top: int = 12) -> DriftReport:
     """The drift walk: A is the oracle's dump (its op order rules), B the
-    engine under test. An op deviates when any of `fields` deviates."""
+    engine under test. An op deviates when any of `FIELDS` deviates."""
     A, order = load_dump(dump_a)
     B, _ = load_dump(dump_b)
     rows: List[DriftSite] = []
@@ -153,7 +153,7 @@ def detect(dump_a, dump_b, *, bound: float = 0.02, top: int = 12, fields=FIELDS)
             missing += 1
             continue
         best = None
-        for f in fields:
+        for f in FIELDS:
             d = deviation(ra.get(f), rb.get(f))
             if d is None:
                 continue

@@ -107,16 +107,15 @@ def test_the_same_op_is_fine_in_fp16_on_cuda(op_name):
 
 
 def test_the_wrapper_leaves_cuda_tensors_alone():
-    from neurobrix.core.dtype.engine import DtypeEngine
+    from neurobrix.core.dtype.engine import cpu_fp32_wrapper
 
-    engine = object.__new__(DtypeEngine)
     seen = {}
 
     def spy(*args, **kwargs):
         seen["dtype"] = args[0].dtype
         return args[0]
 
-    wrapped = DtypeEngine._make_cpu_fp32_wrapper(engine, spy)
+    wrapped = cpu_fp32_wrapper(spy)
     wrapped(torch.zeros(2, 2, dtype=torch.float16))          # host -> upcast
     assert seen["dtype"] == torch.float32
     if torch.cuda.is_available():
@@ -127,10 +126,9 @@ def test_the_wrapper_leaves_cuda_tensors_alone():
 def test_the_result_comes_back_in_the_graphs_dtype():
     """The op must be invisible downstream: fp16 in, fp16 out, whatever
     happened inside."""
-    from neurobrix.core.dtype.engine import DtypeEngine
+    from neurobrix.core.dtype.engine import cpu_fp32_wrapper
 
-    engine = object.__new__(DtypeEngine)
-    wrapped = DtypeEngine._make_cpu_fp32_wrapper(engine, lambda x: x * 2)
+    wrapped = cpu_fp32_wrapper(lambda x: x * 2)
     out = wrapped(torch.ones(2, 2, dtype=torch.float16))
     assert out.dtype == torch.float16
 

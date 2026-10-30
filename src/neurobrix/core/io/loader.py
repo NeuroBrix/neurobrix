@@ -13,7 +13,6 @@ ZERO HARDCODE: Configuration from environment or IOConfig
 ZERO FALLBACK: Explicit errors for missing files
 """
 
-import time
 from pathlib import Path
 from typing import Dict, List, Callable, TypeVar, Any, Optional, Tuple, Union
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -308,11 +307,6 @@ class SmartLoader:
     def __init__(self, config: Optional[IOConfig] = None):
         self.config = config or get_io_config()
         self.pinned_manager = PinnedMemoryManager(self.config.use_pinned_memory)
-        self._stats = {
-            "shards_loaded": 0,
-            "total_bytes": 0,
-            "total_time": 0.0,
-        }
 
     def load_shard(
         self,
@@ -339,8 +333,6 @@ class SmartLoader:
         if not shard_paths:
             return {}
 
-        start_time = time.time()
-
         # Use canonical load_files_parallel
         def loader(path):
             _, tensors = self.load_shard(Path(path), to_pinned)
@@ -359,13 +351,6 @@ class SmartLoader:
         if dtype is not None:
             weights = self._convert_dtype(weights, dtype)
 
-        # Update stats
-        elapsed = time.time() - start_time
-        total_bytes = sum(t.numel() * t.element_size() for t in weights.values())
-        self._stats["total_bytes"] += total_bytes
-        self._stats["total_time"] += elapsed
-        self._stats["shards_loaded"] += len(shard_paths)
-
         return weights
 
     def transfer_to_device(
@@ -375,8 +360,6 @@ class SmartLoader:
         non_blocking: bool = True,
     ) -> Dict[str, torch.Tensor]:
         """Transfer tensors from pinned memory to GPU using DMA."""
-        start_time = time.time()
-
         result = self.pinned_manager.to_device(tensors, device, non_blocking)
 
         # Synchronise the device the tensors actually went to, whichever it
@@ -390,8 +373,6 @@ class SmartLoader:
         # something to leave to chance for a use-after-free. Syncing costs
         # nothing on a backend that copied synchronously anyway.
         _synchronize_device(device)
-
-        elapsed = time.time() - start_time
 
         return result
 
@@ -431,19 +412,6 @@ class SmartLoader:
             else:
                 result[name] = tensor
         return result
-
-    def get_stats(self) -> Dict[str, Any]:
-        """Get loading statistics."""
-        avg_speed = 0
-        if self._stats["total_time"] > 0:
-            avg_speed = (self._stats["total_bytes"] / 1e6) / self._stats["total_time"]
-
-        return {
-            **self._stats,
-            "total_mb": self._stats["total_bytes"] / 1e6,
-            "avg_speed_mbs": avg_speed,
-            "pinned_stats": self.pinned_manager.get_stats(),
-        }
 
 
 # ============================================================================
