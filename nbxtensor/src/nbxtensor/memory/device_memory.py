@@ -43,6 +43,12 @@ class DeviceMemory:
     def host_free(self, ptr: int) -> int:
         raise NotImplementedError
 
+    def host_register(self, ptr: int, nbytes: int) -> int:       # rc; page-locks existing host bytes (mapped, portable)
+        raise NotImplementedError
+
+    def host_unregister(self, ptr: int) -> int:
+        raise NotImplementedError
+
     def set_device(self, index: int) -> int:
         raise NotImplementedError
 
@@ -109,6 +115,14 @@ class AbiMemory(DeviceMemory):
 
     def host_free(self, ptr):
         return self._fn("free_host")(ctypes.c_void_p(int(ptr)))
+
+    def host_register(self, ptr, nbytes):
+        # flags 0 (the Default flag): under unified addressing the bytes are mapped and portable, as the
+        # runtime's own page-locked allocation is
+        return self._fn("host_register")(ctypes.c_void_p(int(ptr)), ctypes.c_size_t(int(nbytes)), ctypes.c_uint(0))
+
+    def host_unregister(self, ptr):
+        return self._fn("host_unregister")(ctypes.c_void_p(int(ptr)))
 
     def set_device(self, index):
         return self._fn("set_device")(ctypes.c_int(int(index)))

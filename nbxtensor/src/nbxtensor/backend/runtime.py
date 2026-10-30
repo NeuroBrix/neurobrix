@@ -59,6 +59,7 @@ _GPU_BACKENDS = {
         "mem_get_info": "cudaMemGetInfo",
         "sync": "cudaDeviceSynchronize",
         "malloc_host": "cudaMallocHost", "free_host": "cudaFreeHost",
+        "host_register": "cudaHostRegister", "host_unregister": "cudaHostUnregister",
         # Stream-ordered memory allocator (CUDA 11.2+). The driver
         # handles kernel-lifetime correctness per-stream, so freeing a
         # tensor while an async kernel is still reading from it is
@@ -101,6 +102,7 @@ _GPU_BACKENDS = {
         "mem_get_info": "hipMemGetInfo",
         "sync": "hipDeviceSynchronize",
         "malloc_host": "hipHostMalloc", "free_host": "hipHostFree",
+        "host_register": "hipHostRegister", "host_unregister": "hipHostUnregister",
         # ROCm 4.3+ exposes the same stream-ordered API under hip*
         # names. Not tested in this pass (investigation was V100-only),
         # but the symbol mapping is kept for symmetry.

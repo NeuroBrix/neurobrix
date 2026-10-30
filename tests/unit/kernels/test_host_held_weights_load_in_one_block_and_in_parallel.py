@@ -53,6 +53,7 @@ def test_host_weights_share_one_pinned_block_that_outlives_the_load():
     before = len(DeviceAllocator._host_pinned_ptr_size)
     arena = HostPinnedArena(sum(-(-r.size * 2 // 256) * 256 for r in raws))
     ts = [_stage(r.tobytes(), r.shape, NBXDtype.bfloat16, NBXDtype.float16, arena) for r in raws]
+    arena.pin()                     # the loader's order: every weight written, then the block page-locked once
     assert len(DeviceAllocator._host_pinned_ptr_size) == before + 1, "a pinned block per weight"
     del arena
     for r, t in zip(raws, ts):
@@ -60,3 +61,28 @@ def test_host_weights_share_one_pinned_block_that_outlives_the_load():
         assert np.array_equal(t.numpy().view(np.uint16), want.view(np.uint16))
     del ts, t                       # the loop above left the last weight bound to `t`
     assert len(DeviceAllocator._host_pinned_ptr_size) == before, "the block outlived its last weight"
+
+
+@pytest.mark.skipif(not _gpu(), reason="page-locked memory needs the device runtime")
+def test_the_block_is_written_as_ordinary_memory_and_page_locked_once():
+    """A page-locked allocation ran at 1.2 GiB/s on one thread (16 GiB in 13.0 s), writing ordinary memory then
+    registering it at 4.9 s (V100 rack, 2026-10-30): on a backend that registers, nothing is page-locked before
+    `pin()`, and `pin()` page-locks the whole block once — a second call does nothing."""
+    from nbxtensor.backend import runtime as _rt
+    from nbxtensor.memory.allocator import DeviceAllocator
+    from nbxtensor.memory.memory_pool import HostPinnedArena
+    if not _rt.device_memory().supports("host_register"):
+        pytest.skip("this backend allocates the block page-locked")
+    before = dict(DeviceAllocator._host_pinned_ptr_size)
+    arena = HostPinnedArena(3 << 20)
+    assert DeviceAllocator._host_pinned_ptr_size == before, "page-locked before the load wrote it"
+    p = arena.alloc(1 << 20)
+    assert p % HostPinnedArena.ALIGNMENT == 0
+    arena.pin()
+    arena.pin()
+    added = set(DeviceAllocator._host_pinned_ptr_size) - set(before)
+    assert len(added) == 1 and DeviceAllocator._host_pinned_ptr_size[added.pop()] == 3 << 20
+    assert DeviceAllocator.holds(p), "a kernel may read the block: holds() must know it"
+    del arena
+    assert DeviceAllocator._host_pinned_ptr_size == before, "the registration outlived its block"
+

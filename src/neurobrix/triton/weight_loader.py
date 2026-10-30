@@ -280,6 +280,8 @@ def load_component_weights(
             weights, device_idx, compute_dtype,
             weight_device, arenas, cpu_weights,
             only=only, krsc=krsc, host_arena=host_arena)
+    if host_arena is not None:
+        host_arena.pin()        # every host weight written: page-locked in one call, before any transfer reads one
 
     # Store arenas on the dict so they stay alive (prevent GC of GPU memory)
     weights['_arenas'] = arenas  # type: ignore

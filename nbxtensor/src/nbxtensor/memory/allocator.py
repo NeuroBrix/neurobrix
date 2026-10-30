@@ -1026,6 +1026,34 @@ class DeviceAllocator:
         return p
 
     @staticmethod
+    def register_host_pinned(ptr: int, nbytes: int) -> None:
+        """Page-lock `nbytes` of existing host memory at `ptr` (the backend's `host_register`), accounted as a pinned
+        allocation is: in `holds()`'s ranges (device-mapped under UVA) and in the pinned live / peak bytes.
+        `unregister_host_pinned` undoes it. A backend without the primitive is refused by name — the caller asks
+        `supports("host_register")` first."""
+        dm = _rt.device_memory()
+        if not dm.supports("host_register"):
+            raise RuntimeError(f"host memory registration unsupported on backend {_rt.gpu_backend()!r}")
+        ret = dm.host_register(int(ptr), int(nbytes))
+        if ret != 0:
+            DeviceAllocator.clear_last_error()
+            raise RuntimeError(f"Host memory registration failed (error {ret}) for {nbytes} bytes")
+        DeviceAllocator._host_pinned_ptr_size[ptr] = nbytes
+        DeviceAllocator._range_add(ptr, nbytes)
+        DeviceAllocator._host_pinned_live_bytes += nbytes
+        if DeviceAllocator._host_pinned_live_bytes > DeviceAllocator._host_pinned_peak_bytes:
+            DeviceAllocator._host_pinned_peak_bytes = DeviceAllocator._host_pinned_live_bytes
+
+    @staticmethod
+    def unregister_host_pinned(ptr: int) -> None:
+        if ptr:
+            _rt.device_memory().host_unregister(int(ptr))
+            nbytes = DeviceAllocator._host_pinned_ptr_size.pop(ptr, None)
+            DeviceAllocator._range_del(ptr)
+            if nbytes is not None:
+                DeviceAllocator._host_pinned_live_bytes -= nbytes
+
+    @staticmethod
     def free_host_pinned(ptr: int):
         if ptr:
             dm = _rt.device_memory()

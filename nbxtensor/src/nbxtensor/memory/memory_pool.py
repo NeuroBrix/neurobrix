@@ -8,6 +8,8 @@ Zero torch. Uses DeviceAllocator (hardware-agnostic: CUDA/ROCm).
 
 import gc
 
+import numpy as np
+
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.memory.layout import ARENA_ALIGNMENT, aligned
 from nbxtensor.memory.device_transfer import parse_device_idxs
@@ -139,11 +141,30 @@ class HostPinnedArena:
     ALIGNMENT = ARENA_ALIGNMENT
 
     def __init__(self, total_bytes: int):
+        """On a backend that page-locks existing memory (`host_register`), the block is ordinary host memory, written
+        by the load and page-locked by `pin()` in one call before any transfer reads it: a page-locked allocation
+        ran at 1.2 GiB/s on one thread, its threads serialised by the runtime (16 GiB in 13.0 s; 4 or 8 threads,
+        16 s), while 16 GiB written by 16 threads and then registered took 4.9 s (V100 rack, 2026-10-30) — and the
+        load's own writes are that touch. Elsewhere the block is the backend's page-locked allocation, as before."""
         self._base_ptr = 0
         self._total = aligned(total_bytes, self.ALIGNMENT)
         self._offset = 0
+        self._pageable = None          # the host bytes until `pin()` page-locks them (a register-capable backend)
+        self._registered = False
         if self._total:
-            self._base_ptr = DeviceAllocator.malloc_host_pinned(self._total)
+            from nbxtensor.backend import runtime as _rt
+            if _rt.device_memory().supports("host_register"):
+                self._pageable = np.empty(self._total + self.ALIGNMENT, dtype=np.uint8)
+                self._base_ptr = aligned(self._pageable.ctypes.data, self.ALIGNMENT)
+            else:
+                self._base_ptr = DeviceAllocator.malloc_host_pinned(self._total)
+
+    def pin(self) -> None:
+        """Page-lock the block (once; a no-op where it was allocated page-locked). Called by the loader after the
+        last weight is written and before any transfer reads one."""
+        if self._pageable is not None and not self._registered:
+            DeviceAllocator.register_host_pinned(self._base_ptr, self._total)
+            self._registered = True
 
     def alloc(self, nbytes: int) -> int:
         if nbytes == 0:
@@ -162,5 +183,9 @@ class HostPinnedArena:
 
     def __del__(self):
         if getattr(self, "_base_ptr", 0):
-            DeviceAllocator.free_host_pinned(self._base_ptr)
+            if getattr(self, "_pageable", None) is None:
+                DeviceAllocator.free_host_pinned(self._base_ptr)
+            elif self._registered:
+                DeviceAllocator.unregister_host_pinned(self._base_ptr)
+            self._pageable = None
             self._base_ptr = 0

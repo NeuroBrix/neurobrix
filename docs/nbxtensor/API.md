@@ -178,6 +178,8 @@ class ComponentArena
     # Single contiguous GPU memory block for one component's weights.
 class HostPinnedArena
     # One page-locked host block for weights held on the host, sub-allocated like `ComponentArena`.
+    # On a backend that registers host memory (`DeviceMemory.host_register`), ordinary memory written by the load,
+    # then page-locked once by `pin()` before any transfer reads it; elsewhere the backend's page-locked allocation.
 ```
 
 `nbxtensor.memory.metal`
