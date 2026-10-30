@@ -42,3 +42,17 @@ def test_a_weight_cache_is_measured_on_its_shards(tmp_path):
     n = M.workers_for(tmp_path, max_bytes=2 * M.PIECE, max_workers=2)
     assert n is None or n in (1, 2)
     assert [p.name for p in w.iterdir()] == ["shard_000.safetensors"]
+
+
+def test_the_count_is_the_median_of_three_steady_measures(tmp_path, monkeypatch):
+    draws = iter([{"steady": True, "workers": 16}, {"steady": False, "workers": 2}, {"steady": True, "workers": 8},
+                  {"steady": True, "workers": 16}])
+    monkeypatch.setattr(M, "measure", lambda *a, **k: next(draws))
+    (tmp_path / "x").write_bytes(b"0")
+    assert M.workers_for(tmp_path, pattern="x") == 16          # 16, 8, 16 -> the median; the unsteady draw is not one
+
+
+def test_fewer_than_two_steady_measures_state_nothing(tmp_path, monkeypatch):
+    monkeypatch.setattr(M, "measure", lambda *a, **k: {"steady": False, "workers": 4})
+    (tmp_path / "x").write_bytes(b"0")
+    assert M.workers_for(tmp_path, pattern="x") is None

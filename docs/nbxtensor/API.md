@@ -319,7 +319,8 @@ def choose(rates, within) -> int                   # the smallest count within `
 def measure(files, max_bytes, max_workers, within=0.05) -> dict
     # {'rates': {1: .., 2: .., 4: ..}, 'workers': choose(...), 'steady': bool, 'bytes': .., 'last_one_worker': ..}
 def workers_for(directory, max_bytes=256 << 20, max_workers=None, pattern='*/components/*/weights/*.safetensors') -> Optional[int]
-    # `measure` over the directory's largest weight files (else a scratch file it removes); None unless steady
+    # the median of three steady `measure`s over the directory's largest weight files (else a scratch file it
+    # removes); None when fewer than two of five measures are steady
 ```
 
 The cache is evicted before each trial and bypassed during it (macOS `msync(MS_INVALIDATE)` + `F_NOCACHE`, Linux

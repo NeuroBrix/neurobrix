@@ -117,9 +117,11 @@ def measure(files: Sequence[str], max_bytes: int, max_workers: int, within: floa
 
 def workers_for(directory, max_bytes: int = 256 << 20, max_workers: Optional[int] = None,
                 pattern: str = "*/components/*/weights/*.safetensors") -> Optional[int]:
-    """The parallel reads to keep in flight on `directory`'s storage: `measure` over its largest files matching
-    `pattern` (a weight cache's shards), else over a scratch file written there and removed. None when two measures
-    in a row are not steady (another reader on the storage): nothing is returned that was not measured."""
+    """The parallel reads to keep in flight on `directory`'s storage: the MEDIAN of three steady `measure`s over its
+    largest files matching `pattern` (a weight cache's shards), else over a scratch file written there and removed. One
+    measure fluctuates (8 or 16 across three runs on the rack's RDMA cache, 2026-10-30), and a plan prices the count:
+    a single draw would make the plan depend on the noise. None when fewer than two of up to five measures are steady
+    (another reader on the storage): nothing is returned that was not measured."""
     from pathlib import Path
     root = Path(directory)
     files = sorted(root.glob(pattern), key=lambda p: -p.stat().st_size)[:4]
@@ -131,11 +133,14 @@ def workers_for(directory, max_bytes: int = 256 << 20, max_workers: Optional[int
                 f.write(os.urandom(PIECE))
         files = [scratch]
     try:
-        for _ in range(2):
+        picks: List[int] = []
+        for _ in range(5):
             m = measure([str(p) for p in files], max_bytes, max_workers or os.cpu_count() or 1)
             if m["steady"]:
-                return int(m["workers"])
-        return None
+                picks.append(int(m["workers"]))
+            if len(picks) == 3:
+                break
+        return sorted(picks)[(len(picks) - 1) // 2] if len(picks) >= 2 else None
     finally:
         if scratch is not None:
             scratch.unlink(missing_ok=True)
