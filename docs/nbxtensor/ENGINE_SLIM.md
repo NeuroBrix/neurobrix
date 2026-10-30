@@ -79,6 +79,14 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 
 | kind | path | symbol | why it stays |
 |---|---|---|---|
+| duplicate | src/neurobrix/core/runtime/resolution/i2v_conditioning.py | _to_channels_first | the same text over each branch's tensor (torch.Tensor / NBXTensor: `dim`, `permute`, `contiguous` of its own class); one copy per branch, each branch's vace module reads it |
+| duplicate | src/neurobrix/core/runtime/resolution/i2v_conditioning.py | build_condition | the same dispatch, to each branch's own builders (`_build_condition_wan` / `_cogvideox` / `_state_video_mask` of that module): the text is shared, the functions it calls are not |
+| duplicate | src/neurobrix/triton/i2v_conditioning.py | _to_channels_first | the same text over each branch's tensor (torch.Tensor / NBXTensor: `dim`, `permute`, `contiguous` of its own class); one copy per branch, each branch's vace module reads it |
+| duplicate | src/neurobrix/triton/i2v_conditioning.py | build_condition | the same dispatch, to each branch's own builders (`_build_condition_wan` / `_cogvideox` / `_state_video_mask` of that module): the text is shared, the functions it calls are not |
+| duplicate | src/neurobrix/triton/cfg/engine.py | __init__ | the Triton branch's twin of core/cfg/engine.py, which imports torch at module level (R33): the Triton branch cannot inherit from it |
+| duplicate | src/neurobrix/triton/samplers.py | __init__ | the Triton branch's twin of core/module/autoregressive/samplers.py, which imports torch at module level (R33) |
+| wrapper | src/neurobrix/kernels/autotune_certify.py | log | certify's default log when no caller gives one: an unbuffered print, so an hours-long run is read while it runs |
+| wrapper | src/neurobrix/triton/kv_cache.py | intercept(enable_gqa) | the SDPA signature the interceptor stands in for: a graph's call may carry the kwarg, and the interceptor must accept every argument of the op it replaces |
 | wrapper | src/neurobrix/triton/replay.py | slab_refused | the allocator-interceptor protocol's hook: nbxtensor's slab allocator (nbxtensor/memory/slab.py) calls `slab_refused(reason)` on the interceptor in force |
 | wrapper | src/neurobrix/triton/moe.py | _host_expert(_h) | the default argument binds the layer's host tables at definition — a closure capture, not a parameter a caller passes |
 | wrapper | src/neurobrix/triton/generator.py | from_config | the factory interface every generator shares (core/module/autoregressive's generators and samplers have it): the flows construct through it |
