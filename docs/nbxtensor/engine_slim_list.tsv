@@ -1,7 +1,7 @@
 # The engine's open slimming findings (tools/engine_slim_scan.py); each ends deleted, moved into nbxtensor, or kept
 # with its reason in docs/nbxtensor/ENGINE_SLIM.md. Both figures below may only go down (test_the_engine_only_slims.py).
-# engine_lines: 142018
-# open: 434
+# engine_lines: 141885
+# open: 415
 kind	path	symbol	detail
 dead	src/neurobrix/cli/commands/registry.py	installing_path	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/config/loader.py	vendor_file	no reference outside its own body (tests excluded)
@@ -46,7 +46,6 @@ dead	src/neurobrix/core/validators/tensor_validator.py	TensorValidator.validate_
 dead	src/neurobrix/core/validators/tensor_validator.py	TensorValidator.validate_device_consistency	no reference outside its own body (tests excluded)
 dead	src/neurobrix/nbx/container.py	NBXContainer.get_topology	no reference outside its own body (tests excluded)
 dead	src/neurobrix/serving/client.py	DaemonClient.generate_stream	no reference outside its own body (tests excluded)
-dead	src/neurobrix/triton/state_fence.py	MetalStateFence	no reference outside its own body (tests excluded)
 duplicate	src/neurobrix/core/audio_frontend.py	_requested_voice	same body as src/neurobrix/triton/audio_frontend.py::_requested_voice_np
 duplicate	src/neurobrix/core/cfg/engine.py	__init__	same body as src/neurobrix/triton/cfg/engine.py::__init__
 duplicate	src/neurobrix/core/flow/audio.py	__init__	same body as src/neurobrix/core/flow/audio_llm.py::__init__, src/neurobrix/core/flow/dual_ar.py::__init__, src/neurobrix/core/flow/encoder_decoder.py::__init__, src/neurobrix/core/flow/forward_pass.py::__init__, src/neurobrix/core/flow/next_token_diffusion.py::__init__, src/neurobrix/core/flow/rnnt.py::__init__, src/neurobrix/core/flow/tts_llm.py::__init__, src/neurobrix/core/flow/vlm.py::__init__
@@ -130,16 +129,8 @@ duplicate	src/neurobrix/core/prism/solver.py	_allocation_on_host	same body as sr
 duplicate	src/neurobrix/core/prism/solver.py	_on_host	same body as src/neurobrix/core/prism/solver.py::_allocation_on_host
 duplicate	src/neurobrix/core/runtime/graph/compiled_sequence.py	_compile_kwargs	same body as src/neurobrix/triton/sequence.py::_compile_kwargs
 duplicate	src/neurobrix/core/runtime/graph/compiled_sequence.py	_extract_const_fold_partition	same body as src/neurobrix/triton/sequence.py::_extract_const_fold_partition
-duplicate	src/neurobrix/core/runtime/resolution/flux_video_conditioning.py	is_flux_family	same body as src/neurobrix/triton/flux_video_conditioning.py::is_flux_family
 duplicate	src/neurobrix/core/runtime/resolution/i2v_conditioning.py	_to_channels_first	same body as src/neurobrix/core/runtime/resolution/vace_control_conditioning.py::_to_channels_first, src/neurobrix/triton/i2v_conditioning.py::_to_channels_first, src/neurobrix/triton/vace_control_conditioning.py::_to_channels_first
-duplicate	src/neurobrix/core/runtime/resolution/i2v_conditioning.py	_vae_latent_stats	same body as src/neurobrix/triton/i2v_conditioning.py::_vae_latent_stats
-duplicate	src/neurobrix/core/runtime/resolution/i2v_conditioning.py	_vae_temporal_ratio	same body as src/neurobrix/triton/i2v_conditioning.py::_vae_temporal_ratio
 duplicate	src/neurobrix/core/runtime/resolution/i2v_conditioning.py	build_condition	same body as src/neurobrix/triton/i2v_conditioning.py::build_condition
-duplicate	src/neurobrix/core/runtime/resolution/i2v_conditioning.py	condition_channel_dim	same body as src/neurobrix/triton/i2v_conditioning.py::condition_channel_dim
-duplicate	src/neurobrix/core/runtime/resolution/i2v_conditioning.py	conditioning_spec	same body as src/neurobrix/triton/i2v_conditioning.py::conditioning_spec
-duplicate	src/neurobrix/core/runtime/resolution/vace_control_conditioning.py	_to_channels_first	same body as src/neurobrix/core/runtime/resolution/i2v_conditioning.py::_to_channels_first, src/neurobrix/triton/i2v_conditioning.py::_to_channels_first, src/neurobrix/triton/vace_control_conditioning.py::_to_channels_first
-duplicate	src/neurobrix/core/runtime/resolution/vace_control_conditioning.py	_vae_latent_stats	same body as src/neurobrix/triton/vace_control_conditioning.py::_vae_latent_stats
-duplicate	src/neurobrix/core/runtime/resolution/vace_control_conditioning.py	conditioning_spec	same body as src/neurobrix/triton/vace_control_conditioning.py::conditioning_spec
 duplicate	src/neurobrix/core/strategies/block_scatter.py	__init__	same body as src/neurobrix/core/strategies/triton/block_scatter.py::__init__
 duplicate	src/neurobrix/core/strategies/block_scatter.py	_load_fgp_weights	same body as src/neurobrix/core/strategies/pipeline_parallel.py::_load_pp_weights, src/neurobrix/core/strategies/triton/block_scatter.py::_load_fgp_weights, src/neurobrix/core/strategies/triton/pipeline_parallel.py::_load_pp_weights
 duplicate	src/neurobrix/core/strategies/block_scatter.py	execute_component	same body as src/neurobrix/core/strategies/triton/block_scatter.py::execute_component
@@ -245,14 +236,8 @@ duplicate	src/neurobrix/triton/flow/vlm.py	_mrope_segments	same body as src/neur
 duplicate	src/neurobrix/triton/flow/vlm.py	_proj	same body as src/neurobrix/triton/flow/audio_llm.py::_proj
 duplicate	src/neurobrix/triton/flow/vlm.py	_span	same body as src/neurobrix/core/flow/vlm.py::_span
 duplicate	src/neurobrix/triton/flow/vlm.py	_tok_str	same body as src/neurobrix/core/flow/vlm.py::_tok_str
-duplicate	src/neurobrix/triton/flux_video_conditioning.py	is_flux_family	same body as src/neurobrix/core/runtime/resolution/flux_video_conditioning.py::is_flux_family
-duplicate	src/neurobrix/triton/i2v_conditioning.py	_nbx_on	same body as src/neurobrix/triton/vace_control_conditioning.py::_nbx_on
 duplicate	src/neurobrix/triton/i2v_conditioning.py	_to_channels_first	same body as src/neurobrix/core/runtime/resolution/i2v_conditioning.py::_to_channels_first, src/neurobrix/core/runtime/resolution/vace_control_conditioning.py::_to_channels_first, src/neurobrix/triton/vace_control_conditioning.py::_to_channels_first
-duplicate	src/neurobrix/triton/i2v_conditioning.py	_vae_latent_stats	same body as src/neurobrix/core/runtime/resolution/i2v_conditioning.py::_vae_latent_stats
-duplicate	src/neurobrix/triton/i2v_conditioning.py	_vae_temporal_ratio	same body as src/neurobrix/core/runtime/resolution/i2v_conditioning.py::_vae_temporal_ratio
 duplicate	src/neurobrix/triton/i2v_conditioning.py	build_condition	same body as src/neurobrix/core/runtime/resolution/i2v_conditioning.py::build_condition
-duplicate	src/neurobrix/triton/i2v_conditioning.py	condition_channel_dim	same body as src/neurobrix/core/runtime/resolution/i2v_conditioning.py::condition_channel_dim
-duplicate	src/neurobrix/triton/i2v_conditioning.py	conditioning_spec	same body as src/neurobrix/core/runtime/resolution/i2v_conditioning.py::conditioning_spec
 duplicate	src/neurobrix/triton/samplers.py	__init__	same body as src/neurobrix/core/module/autoregressive/samplers.py::__init__
 duplicate	src/neurobrix/triton/scheduler/ddim.py	_init_step_index	same body as src/neurobrix/triton/scheduler/unipc_multistep.py::_init_step_index
 duplicate	src/neurobrix/triton/scheduler/dpm_solver_pp.py	_sigma_to_alpha_sigma_t	same body as src/neurobrix/triton/scheduler/unipc_multistep.py::_sigma_to_alpha_sigma_t
@@ -261,10 +246,6 @@ duplicate	src/neurobrix/triton/scheduler/unipc_multistep.py	_sigma_to_alpha_sigm
 duplicate	src/neurobrix/triton/sequence.py	_compile_kwargs	same body as src/neurobrix/core/runtime/graph/compiled_sequence.py::_compile_kwargs
 duplicate	src/neurobrix/triton/sequence.py	_extract_const_fold_partition	same body as src/neurobrix/core/runtime/graph/compiled_sequence.py::_extract_const_fold_partition
 duplicate	src/neurobrix/triton/sequence.py	_is_graph_output	same body as src/neurobrix/core/optim/passes/fusion_vertical.py::is_graph_output
-duplicate	src/neurobrix/triton/vace_control_conditioning.py	_nbx_on	same body as src/neurobrix/triton/i2v_conditioning.py::_nbx_on
-duplicate	src/neurobrix/triton/vace_control_conditioning.py	_to_channels_first	same body as src/neurobrix/core/runtime/resolution/i2v_conditioning.py::_to_channels_first, src/neurobrix/core/runtime/resolution/vace_control_conditioning.py::_to_channels_first, src/neurobrix/triton/i2v_conditioning.py::_to_channels_first
-duplicate	src/neurobrix/triton/vace_control_conditioning.py	_vae_latent_stats	same body as src/neurobrix/core/runtime/resolution/vace_control_conditioning.py::_vae_latent_stats
-duplicate	src/neurobrix/triton/vace_control_conditioning.py	conditioning_spec	same body as src/neurobrix/core/runtime/resolution/vace_control_conditioning.py::conditioning_spec
 fact	src/neurobrix/core/memory/manager.py	release_flow_memory	nbxtensor exposes nbxtensor.memory.memory_pool.release_flow_memory
 fact	src/neurobrix/core/runtime/graph/compiled_sequence.py	_parse_dtype	nbxtensor exposes nbxtensor.dtype.nbx_dtype.parse_dtype
 fact	src/neurobrix/core/runtime/precision_contract.py	kind	nbxtensor exposes nbxtensor.dtype.itemsize.kind

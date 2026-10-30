@@ -16,21 +16,12 @@ model. Mirror: ``triton/flux_video_conditioning.py`` (NBXTensor, R33-pure).
 """
 
 import torch
-from typing import Any, List, Optional
+from typing import Any, Optional
+from neurobrix.core.runtime.resolution.flux_video_spec import is_flux_family  # noqa: F401
 
 IMG_IDS_VAR = "global.img_ids"
 TXT_IDS_VAR = "global.txt_ids"
 COND_VAR = "global.cond"
-
-
-def is_flux_family(ctx: Any, components: List[str]) -> bool:
-    """True iff a loop denoiser declares an ``img_ids`` input (FLUX-family)."""
-    comps = ctx.pkg.topology.get("components", {})
-    for c in components:
-        inputs = comps.get(c, {}).get("interface", {}).get("inputs", []) or []
-        if "img_ids" in inputs:
-            return True
-    return False
 
 
 def _resolve_txt(ctx: Any) -> Optional[torch.Tensor]:

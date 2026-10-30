@@ -103,10 +103,8 @@ def _compiled_reference(tmp_path, spec: dict, num_frames: int) -> np.ndarray:
 
 def test_spec_normalization_parity(tmp_path, monkeypatch):
     flag = {"layout": "state_video_mask"}
-    monkeypatch.setattr(compiled_i2v, "get_component_flag",
-                        lambda *a, **k: dict(flag))
-    monkeypatch.setattr(triton_i2v, "get_component_flag",
-                        lambda *a, **k: dict(flag))
+    from neurobrix.core.runtime.resolution import i2v_spec
+    monkeypatch.setattr(i2v_spec, "get_component_flag", lambda *a, **k: dict(flag))
     ctx = _make_ctx(tmp_path)
     spec_c = compiled_i2v.conditioning_spec(ctx, "transformer")
     spec_t = triton_i2v.conditioning_spec(ctx, "transformer")

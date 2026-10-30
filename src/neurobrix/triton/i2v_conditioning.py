@@ -21,7 +21,6 @@ registry-flag / profile readers (data-driven config, not compute — the triton
 flow already reads registry flags the same way).
 """
 
-import json
 from typing import Any, Optional
 
 import numpy as np
@@ -29,67 +28,10 @@ import numpy as np
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.memory.device_transfer import transfer_tensor
-from neurobrix.core.runtime.registry_flags import get_component_flag
+from neurobrix.core.runtime.resolution.i2v_spec import (  # noqa: F401 — the facts both branches read
+    _vae_latent_stats, _vae_temporal_ratio, condition_channel_dim, conditioning_spec)
 
 CONDITION_VAR = "global.i2v_condition"
-
-
-def conditioning_spec(ctx: Any, loop_comp: str) -> Optional[dict]:
-    """Return the i2v_latent_conditioning flag dict for the denoiser, or None.
-
-    Identical data-driven read as the compiled brick (registry flag = config,
-    not compute). Inert (None) for every model without the flag (R23).
-    """
-    model_name = ctx.pkg.manifest.get("model_name")
-    flag = get_component_flag(model_name, loop_comp, "i2v_latent_conditioning",
-                              default=None)
-    if not flag:
-        return None
-    spec = dict(flag) if isinstance(flag, dict) else {}
-    # `layout` is the registry alias for `style` (Allegro-TI2V declares
-    # `layout: state_video_mask`); both feed the same style switch.
-    style = spec.setdefault("style", spec.get("layout") or "wan")
-    spec.setdefault("condition_component", "vae_encoder")
-    if style == "wan":
-        spec.setdefault("mask_channels", 4)
-        spec.setdefault("channel_dim", 1)
-    elif style == "cogvideox":
-        spec.setdefault("channel_dim", 2)
-    elif style == "state_video_mask":
-        # Allegro-TI2V: transformer input = cat([latents, masked_video, mask],
-        # dim=1); state is channels-first [B, C, T, H, W] -> concat dim 1.
-        spec.setdefault("channel_dim", 1)
-        # Frame indices carrying a conditioning image (vendor
-        # conditional_images_indices); a single first-frame image by default.
-        spec.setdefault("cond_frame_indices", [0])
-    return spec
-
-
-def condition_channel_dim(ctx: Any, loop_comp: str) -> int:
-    """Channel axis for apply()'s concat, data-driven from the spec (R30 mirror
-    of the compiled brick). 1 (channels-first default) when there is no spec."""
-    spec = conditioning_spec(ctx, loop_comp)
-    return int(spec.get("channel_dim", 1)) if spec else 1
-
-
-def _vae_temporal_ratio(ctx: Any) -> Optional[int]:
-    """Read the VAE temporal compression ratio (pixel frames per latent frame).
-
-    From the vae profile config: `temporal_compression_ratio` (diffusers-style
-    configs, e.g. AutoencoderKLAllegro) or `vae_scale_factor[0]` (vendor
-    pipelines expose a (t, h, w) tuple). Data-driven, never hardcoded — the
-    same fallback chain as the compiled brick (config read, not compute).
-    """
-    prof_path = ctx.pkg.cache_path / "components" / "vae" / "profile.json"
-    prof = json.loads(prof_path.read_text())
-    cfg = prof.get("config") if isinstance(prof.get("config"), dict) else prof
-    ratio = (cfg.get("temporal_compression_ratio")
-             or prof.get("temporal_compression_ratio"))
-    if not ratio:
-        vsf = cfg.get("vae_scale_factor") or prof.get("vae_scale_factor")
-        if isinstance(vsf, (list, tuple)) and vsf:
-            ratio = vsf[0]
-    return int(ratio) if ratio else None
 
 
 def _target_latent_frames(ctx: Any) -> Optional[int]:
@@ -105,18 +47,6 @@ def _target_latent_frames(ctx: Any) -> Optional[int]:
         if isinstance(st, NBXTensor) and st.dim() == 5:
             return int(st.shape[1])
     return None
-
-
-def _vae_latent_stats(ctx: Any) -> tuple:
-    """Read (latents_mean, latents_std, latent_channels) from the vae profile."""
-    prof_path = ctx.pkg.cache_path / "components" / "vae" / "profile.json"
-    prof = json.loads(prof_path.read_text())
-    cfg = prof.get("config") if isinstance(prof.get("config"), dict) else prof
-    mean = cfg.get("latents_mean") or prof.get("latents_mean")
-    std = cfg.get("latents_std") or prof.get("latents_std")
-    ch = (cfg.get("latent_channels") or prof.get("latent_channels")
-          or (len(mean) if mean else 16))
-    return mean, std, int(ch)
 
 
 def _to_channels_first(latent: NBXTensor, latent_channels: int) -> NBXTensor:

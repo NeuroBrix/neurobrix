@@ -18,7 +18,8 @@ vendor import.
 """
 
 import numpy as np
-from typing import Any, List, Optional
+from typing import Any, Optional
+from neurobrix.core.runtime.resolution.flux_video_spec import is_flux_family  # noqa: F401
 
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.memory.allocator import DeviceAllocator
@@ -26,16 +27,6 @@ from nbxtensor.memory.allocator import DeviceAllocator
 IMG_IDS_VAR = "global.img_ids"
 TXT_IDS_VAR = "global.txt_ids"
 COND_VAR = "global.cond"
-
-
-def is_flux_family(ctx: Any, components: List[str]) -> bool:
-    """True iff a loop denoiser declares an ``img_ids`` input (FLUX-family)."""
-    comps = ctx.pkg.topology.get("components", {})
-    for c in components:
-        inputs = comps.get(c, {}).get("interface", {}).get("inputs", []) or []
-        if "img_ids" in inputs:
-            return True
-    return False
 
 
 def _nbx_on(arr: np.ndarray, dev_idx: int) -> NBXTensor:
