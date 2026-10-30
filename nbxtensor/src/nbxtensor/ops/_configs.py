@@ -192,7 +192,13 @@ def _announce_first_sweep(tuned):
                     _cert.refuse_missing(qual, tuned, key)   # raises KeyNotCertified: never a sweep
                 _cert.announce_missing(qual, tuned, key)
         before = len(cache)
-        result = original(*args, **kwargs)
+        try:
+            result = original(*args, **kwargs)
+        except Exception as exc:
+            refused = every_candidate_refused(tuned, key, exc)
+            if refused is not None:
+                raise refused from exc
+            raise
         if len(cache) > before:
             if _census.active():
                 # THE DOOR: a shadow benches nothing, so a grown tuner cache here means a
@@ -219,6 +225,31 @@ def _announce_first_sweep(tuned):
 
     tuned.run = run_with_notice
     return tuned
+
+
+def every_candidate_refused(tuned, key, exc: BaseException):
+    """The named refusal to raise when the sweep just run scored EVERY candidate infinite (each refused by the backend:
+    out of shared memory, a compile assertion, ...) and the launch of the one Triton then picked failed — or None when
+    the failure is something else. Triton takes `min` over all-infinite timings and launches an arbitrary config, whose
+    own error names that one config and hides that none runs here (the matrix-unit split flash at head dim 192 on a
+    V100: each tile over the 96 KB of shared memory once compiled, 2026-10-30)."""
+    from nbxtensor.ops.autotune_refusals import all_refused, _is_backend_refusal
+    from triton.runtime.errors import OutOfResources, PTXASError
+    from triton.compiler.errors import CompileTimeAssertionFailure
+    # the classes Triton's own bench scores infinite (autotuner._bench), and the Metal seam's refusals
+    refusal = isinstance(exc, (OutOfResources, CompileTimeAssertionFailure, PTXASError)) or _is_backend_refusal(exc)
+    name = getattr(getattr(tuned, "base_fn", None), "__name__", None) or getattr(tuned, "__name__", "?")
+    timings = getattr(tuned, "configs_timings", None)
+    if timings and all_refused(timings):
+        tried = f"{len(timings)} of {len(timings)}"
+    elif refusal and len(getattr(tuned, "configs", None) or []) >= 1 and not timings:
+        # Triton benches nothing when the prune leaves one config: it launches it, and that one was refused
+        tried = "the only one the prune kept"
+    else:
+        return None
+    return RuntimeError(f"autotune: every candidate of {name} at key {key} was refused by the backend "
+                        f"({tried}; the launch failed with {type(exc).__name__}: {exc}) — no configuration of this "
+                        f"kernel runs on this device at this key")
 
 
 def _safe_num_stages(n: int) -> int:
