@@ -164,16 +164,11 @@ matrix_unit:
         block_n: 16
         warps_m: 4
         block_k: 32
-      - head_dim_le: 192
-        block_m: 64
-        block_n: 16
-        warps_m: 4
-        block_k: 32
-      - head_dim_le: 256
-        block_m: 32
-        block_n: 16
-        warps_m: 2
-        block_k: 32
+      # No row past 160 (2026-10-30): the tiles the certifier proves per key (unit_flash_configs: 64 or 128 query rows,
+      # 32 or 64 keys a step) do not fit this card's 96 KB of shared memory at head dim 192 or 256 in the split — once
+      # COMPILED, the one tile the staged-bytes prune keeps asks 102 400 bytes at 192 and 135 168 at 256 against the
+      # card's 98 304 (V100-SXM2, the launcher's compiled figure). The smaller tiles that loaded there on 2026-10-12
+      # (64x16, 32x16) left with the hand table; a fp32 attention at those head dims runs the FMA flash.
 
 sdpa_thresholds:
   # ── Decode path (seqlen_q ≤ 16) ────────────────────────────────

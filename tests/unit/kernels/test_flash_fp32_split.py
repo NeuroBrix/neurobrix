@@ -190,6 +190,17 @@ def _gate(q, k, v, mask=None, bias=0.0, rows=None, conditioned=True):
     rows = np.arange(Tq) if rows is None else rows
     ref = _oracle_rows(q, k, v, rows, bias, 1.0 / np.sqrt(D))
     split, how = _run(q, k, v, mask)
+    from nbxtensor.ops import launch_keys as LK
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
+    if LK.unit_flash(D, NBXDtype.float32, NBXDtype.float32, NBXDtype.float32) is None:
+        # the profile declares no unit row at this head dim on this card (volta past 160: no certified tile fits once
+        # compiled): the fp32 attention runs the FMA flash, held to the same oracle
+        assert how is None, "the unit's split flash ran at a head dim its profile declares no row for"
+        e = _per_row(split[:, :, rows], ref)
+        assert np.isfinite(split).all()
+        if conditioned:
+            assert e <= 1e-5, f"the FMA flash {e:.2e} is not fp32-level"
+        return
     assert how is True, "the fp32 attention did not take the unit's split flash"
     fma, how = _run(q, k, v, mask, unit=False)
     assert how is None
@@ -285,7 +296,7 @@ def test_a_bfloat16_attention_through_the_split_is_fp32_level_inside(L, D):
     (1, 4, 2, 65, 200, 80, "keypad"),      # GQA 2, Tq != Tk, D 80 -> 64 + 16
     (2, 3, 3, 300, 300, 64, "none"),
     (1, 2, 2, 129, 129, 128, "none"),
-    (1, 2, 1, 100, 77, 192, "none"),       # the profile's 192 and 256 rows
+    (1, 2, 1, 100, 77, 192, "none"),       # past the volta rows: the FMA flash (the profile declares no unit row there)
     (1, 1, 1, 70, 90, 256, "none"),
 ])
 def test_the_contract_clauses(B, H, Hk, Tq, Tk, D, mask):
