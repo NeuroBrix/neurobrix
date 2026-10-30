@@ -239,19 +239,14 @@ def host_weight_layout(arr: np.ndarray, krsc: bool):
     return np.ascontiguousarray(arr.transpose(0, 2, 3, 1)), (R * S * C, 1, S * C, C)
 
 
-def place_in_arena(raw, shape: tuple, nbx_dtype: NBXDtype, np_dtype, target_dtype: NBXDtype, upcast_this: bool,
-                   krsc: bool, arena: ComponentArena, target_dev: int, io) -> NBXTensor:
+def place_in_arena(raw, shape: tuple, nbx_dtype: NBXDtype, np_dtype, target_dtype: NBXDtype, krsc: bool,
+                   arena: ComponentArena, target_dev: int, io) -> NBXTensor:
     """One safetensors tensor's raw bytes (stored as `nbx_dtype`, read through `np_dtype`) placed in `arena` on
-    `target_dev` at `target_dtype` — as fp32 when `upcast_this` (pre-Ampere overflow protection of an fp16 target),
-    channels-innermost when `krsc` (`host_weight_layout`) — and the NBXTensor over the arena's sub-allocation. The
-    current device is the caller's to set."""
+    `target_dev` at `target_dtype` — channels-innermost when `krsc` (`host_weight_layout`) — and the NBXTensor over
+    the arena's sub-allocation. The current device is the caller's to set."""
     nbytes = len(raw)
     # GPU-accelerated bf16→fp16 path (same buffer, 2 bytes/elem).
-    # Only used when we're NOT also upcasting to fp32 — otherwise
-    # the staged bf16→fp32 conversion happens via numpy below.
-    if (nbx_dtype == NBXDtype.bfloat16
-            and target_dtype == NBXDtype.float16
-            and not upcast_this):
+    if nbx_dtype == NBXDtype.bfloat16 and target_dtype == NBXDtype.float16:
         ptr = arena.alloc(nbytes)
         arr_u16, strides = host_weight_layout(
             np.frombuffer(raw, dtype=np.uint16).reshape(shape), krsc)
@@ -260,28 +255,15 @@ def place_in_arena(raw, shape: tuple, nbx_dtype: NBXDtype, np_dtype, target_dtyp
         return NBXTensor(ptr, shape, strides, NBXDtype.float16, 'cuda',
                          owns_data=False, device_idx=target_dev)
 
-    # Standard path: numpy → H2D, with optional fp32 upcast.
+    # Standard path: numpy → H2D.
     if nbx_dtype == NBXDtype.bfloat16:
-        # bf16 bits in uint16 containers. If upcast_this, expand
-        # them to fp32 via the standard bit-shift: bf16 is the top
-        # 16 bits of a fp32, so (bf16_bits << 16) reinterpret-cast
-        # as fp32 reproduces the value exactly (no approximation).
-        raw_u16 = np.frombuffer(raw, dtype=np.uint16).reshape(shape)
-        if upcast_this:
-            u32 = raw_u16.astype(np.uint32) << 16
-            arr = np.ascontiguousarray(u32.view(np.float32))
-            final_dtype = NBXDtype.float32
-        else:
-            arr = np.ascontiguousarray(raw_u16)
-            final_dtype = target_dtype  # bf16 (kept as uint16)
+        # bf16 bits in uint16 containers, kept as they are
+        arr = np.ascontiguousarray(np.frombuffer(raw, dtype=np.uint16).reshape(shape))
+        final_dtype = target_dtype
     else:
         arr = np.frombuffer(raw, dtype=np_dtype).reshape(shape)
         arr = np.ascontiguousarray(arr)
-        if upcast_this:
-            # Native fp16 → fp32 widening (exact, no precision loss).
-            arr = cast(arr, np.float32, io)
-            final_dtype = NBXDtype.float32
-        elif (nbx_dtype == NBXDtype.float32
+        if (nbx_dtype == NBXDtype.float32
               and target_dtype == NBXDtype.float16):
             # fp32 → fp16 downcast. Required when an encoder ships
             # fp32 on disk (PixArt T5, SDXL text_encoder_2, ...)

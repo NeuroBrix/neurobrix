@@ -1,7 +1,7 @@
 # The engine's open slimming findings (tools/engine_slim_scan.py); each ends deleted, moved into nbxtensor, or kept
 # with its reason in docs/nbxtensor/ENGINE_SLIM.md. Both figures below may only go down (test_the_engine_only_slims.py).
-# engine_lines: 138379
-# open: 294
+# engine_lines: 138314
+# open: 292
 kind	path	symbol	detail
 dead	src/neurobrix/cli/commands/registry.py	installing_path	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/config/loader.py	vendor_file	no reference outside its own body (tests excluded)
@@ -295,5 +295,3 @@ wrapper	src/neurobrix/triton/dtype.py	resolve_compute_dtype(component)	no call s
 wrapper	src/neurobrix/triton/flow/iterative_process.py	_to_nbx(device_idx)	no call site passes it: always its default 0
 wrapper	src/neurobrix/triton/sequence.py	func_wrapper	only hands its parameters to moe_fused_dispatch
 wrapper	src/neurobrix/triton/weight_loader.py	_read_header	an alias of read_safetensors_header
-wrapper	src/neurobrix/triton/weight_loader.py	load_component_weights(per_device_vram_budget)	no call site passes it: always its default None
-wrapper	src/neurobrix/triton/weight_loader.py	load_component_weights(upcast_fp16_to_fp32)	no call site passes it: always its default False

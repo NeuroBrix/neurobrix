@@ -115,8 +115,6 @@ def load_component_weights(
     device_idx: int,
     compute_dtype: NBXDtype = NBXDtype.float16,
     shard_map: Optional[Dict[str, str]] = None,
-    upcast_fp16_to_fp32: bool = False,
-    per_device_vram_budget: Optional[Dict[int, int]] = None,
     only: Optional[Set[str]] = None,
     krsc: Optional[Set[str]] = None,
 ) -> Dict[str, NBXTensor]:
@@ -144,15 +142,6 @@ def load_component_weights(
         device_idx: Default GPU device
         compute_dtype: Target dtype from Prism (bf16↔fp16 remap)
         shard_map: weight_name → "cuda:N" from Prism strategy
-        upcast_fp16_to_fp32: If True AND the fp32 footprint fits the
-            per-device budget, store fp16-target weights as fp32 at load
-            time. Used on pre-Ampere hardware (no native bf16) to avoid
-            per-call weight upcast in mm/bmm/addmm.
-        per_device_vram_budget: Per-device byte budget reserved for
-            weights (typically ~50% of device memory, leaving room for
-            activations + KV cache). If the doubled fp32 footprint for a
-            given device exceeds its budget, upcast is globally disabled
-            to keep dtype consistency across the model.
         krsc: loader keys of the convolution weights stored KRSC (`host_weight_layout`), from
             the hardware profile's `conv.weight_layout` and the graph's readers
             (`launch_keys.krsc_conv_weights`). None stores every weight in its file order.
@@ -240,11 +229,8 @@ def load_component_weights(
                 elif isinstance(dev_str, int):
                     weight_device[wname] = dev_str
 
-    # Phase 1: Scan all shards to compute per-device bytes for both the
-    # regular (fp16/bf16-targeted) path and the hypothetical fp32 upcast
-    # path. We then decide globally whether to upcast.
-    dev_bytes_regular: Dict[int, int] = {}
-    dev_bytes_upcast: Dict[int, int] = {}
+    # Phase 1: Scan all shards to compute per-device bytes.
+    dev_bytes: Dict[int, int] = {}
     host_bytes = 0          # the host-held weights' bytes, in their target dtype: ONE pinned block (HostPinnedArena)
 
     for shard_path, header, _ in shard_headers:
@@ -270,45 +256,14 @@ def load_component_weights(
                 target_dev = device_idx
             else:
                 target_dev = _weight_target_dev(key, shard_dev, weight_device, device_idx)
-            regular = _stored_bytes(info, compute_dtype)
-            upcast = _stored_bytes(info, compute_dtype,
-                                    upcast_fp16_to_fp32=True)
-            reg_aligned = aligned(regular, ComponentArena.ALIGNMENT)
-            up_aligned = aligned(upcast, ComponentArena.ALIGNMENT)
-            dev_bytes_regular[target_dev] = (
-                dev_bytes_regular.get(target_dev, 0) + reg_aligned)
-            dev_bytes_upcast[target_dev] = (
-                dev_bytes_upcast.get(target_dev, 0) + up_aligned)
-
-    # Decide: upcast only if every device's fp32 footprint fits its budget.
-    upcast_effective = upcast_fp16_to_fp32
-    if upcast_effective and per_device_vram_budget is not None:
-        for dev, up in dev_bytes_upcast.items():
-            budget = per_device_vram_budget.get(dev, 0)
-            if budget <= 0 or up > budget:
-                upcast_effective = False
-                print(f"[weight_loader] bind-time fp16→fp32 upcast skipped "
-                      f"for {component}: device {dev} needs {up/1e9:.1f}GB "
-                      f"fp32, budget {budget/1e9:.1f}GB — per-call fallback "
-                      f"will handle overflow protection")
-                break
-    elif upcast_effective and per_device_vram_budget is None:
-        # No budget means we can't verify fit — be conservative.
-        upcast_effective = False
-
-    dev_bytes = dev_bytes_upcast if upcast_effective else dev_bytes_regular
+            dev_bytes[target_dev] = (dev_bytes.get(target_dev, 0)
+                                     + aligned(_stored_bytes(info, compute_dtype), ComponentArena.ALIGNMENT))
 
     import os as _os
     if _os.environ.get("NBX_DIAG_TRITON_PRELOOP") == "1":
         _dist = {f"cuda:{d}": f"{b/1e9:.2f}GB" for d, b in sorted(dev_bytes.items())}
         print(f"   [NBX-DIAG-SHARD] {component}: shard_map_entries={len(shard_map or {})} "
               f"per-device={_dist}", flush=True)
-
-    if upcast_effective:
-        total_up = sum(dev_bytes_upcast.values())
-        total_reg = sum(dev_bytes_regular.values())
-        print(f"[weight_loader] bind-time fp16→fp32 upcast ENABLED for "
-              f"{component}: {total_reg/1e9:.2f}GB → {total_up/1e9:.2f}GB")
 
     # Phase 2: Create one arena per device
     arenas: Dict[int, ComponentArena] = {}
@@ -324,7 +279,7 @@ def load_component_weights(
             shard_path, header, data_offset,
             weights, device_idx, compute_dtype,
             weight_device, arenas, cpu_weights,
-            upcast_effective=upcast_effective, only=only, krsc=krsc, host_arena=host_arena)
+            only=only, krsc=krsc, host_arena=host_arena)
 
     # Store arenas on the dict so they stay alive (prevent GC of GPU memory)
     weights['_arenas'] = arenas  # type: ignore
@@ -343,20 +298,15 @@ def load_component_weights(
 _read_header = read_safetensors_header
 
 
-def _stored_bytes(info: dict, compute_dtype: NBXDtype,
-                   upcast_fp16_to_fp32: bool = False) -> int:
+def _stored_bytes(info: dict, compute_dtype: NBXDtype) -> int:
     """The bytes a tensor occupies once the loader stores it in its compute dtype (the remap below), from
-    nbxtensor's itemsize and numel.
-
-    When upcast_fp16_to_fp32 is set, weights whose EFFECTIVE target
-    dtype is fp16 (either native fp16 or bf16 remapped to fp16 via the
-    standard bf16→fp16 path) are treated as fp32 for sizing purposes.
-    """
+    nbxtensor's itemsize and numel. A safetensors dtype the table does not carry is refused by name (it was sized 0
+    bytes, then refused by the load loop only after its arena was made too small)."""
     shape = info["shape"]
     sf_dtype = info["dtype"]
     dtype_info = _sf.SF_DTYPE_INFO.get(sf_dtype)
     if dtype_info is None:
-        return 0
+        raise RuntimeError(f"Unknown safetensors dtype: {sf_dtype}")
     _, nbx_dtype, _ = dtype_info
 
     n = numel(shape)
@@ -369,9 +319,6 @@ def _stored_bytes(info: dict, compute_dtype: NBXDtype,
     # 9.5 GB the load loop actually writes → OOM on a 32 GB V100 even
     # though the data fits).
     target = stored_dtype_in_compute(nbx_dtype, compute_dtype)
-
-    if upcast_fp16_to_fp32 and target == NBXDtype.float16:
-        return n * itemsize("float32")  # pre-Ampere overflow protection path
 
     return n * itemsize(target)
 
@@ -386,20 +333,14 @@ def _load_shard_into_arenas(
     weight_device: Dict[str, int],
     arenas: Dict[int, ComponentArena],
     cpu_weights: set,
-    upcast_effective: bool = False,
     only: Optional[Set[str]] = None,
     krsc: Optional[Set[str]] = None,
     host_arena: Optional[HostPinnedArena] = None,
 ) -> None:
     """Load tensors from one shard, sub-allocating from arenas.
 
-    When upcast_effective is True, weights whose target dtype resolves
-    to fp16 (via the standard remap chain) are stored as fp32 instead.
-    This is decided upstream based on per-device VRAM budget.
-
     Weights listed in cpu_weights skip the GPU arena and land on pinned
-    host memory as CPU-backed NBXTensors (zero3 offload). They are not
-    subject to upcast_effective — CPU weights are stored in their
+    host memory as CPU-backed NBXTensors (zero3 offload), stored in their
     native dtype (post-remap) to save host RAM. The runtime slow path
     handles CPU→GPU transfer per op.
     """
@@ -416,7 +357,6 @@ def _load_shard_into_arenas(
             sf_dtype = info["dtype"]
             shape = tuple(info["shape"])
             start, end = info["data_offsets"]
-            nbytes = end - start
 
             dtype_info = _sf.SF_DTYPE_INFO.get(sf_dtype)
             if dtype_info is None:
@@ -425,7 +365,7 @@ def _load_shard_into_arenas(
             np_dtype, nbx_dtype, elem_size = dtype_info
 
             # Read raw bytes from file
-            raw = _sf.read_bytes(f.fileno(), data_offset + start, nbytes, _io_pool())
+            raw = _sf.read_bytes(f.fileno(), data_offset + start, end - start, _io_pool())
 
             # Determine target dtype after remap — the one rule, `stored_dtype_in_compute`
             target_dtype = stored_dtype_in_compute(nbx_dtype, compute_dtype)
@@ -439,16 +379,11 @@ def _load_shard_into_arenas(
                     raw, shape, nbx_dtype, target_dtype, _io_pool(), host_arena)
                 continue
 
-            # Bind-time fp16→fp32 upcast for pre-Ampere overflow protection.
-            # Only promote weights whose final target is fp16; bf16 targets,
-            # integer types, and already-fp32 weights pass through unchanged.
-            upcast_this = upcast_effective and target_dtype == NBXDtype.float16
-
             target_dev = _weight_target_dev(key, shard_dev, weight_device, device_idx)
             arena = arenas[target_dev]
             DeviceAllocator.set_device(target_dev)
 
-            weights[key] = _sf.place_in_arena(raw, shape, nbx_dtype, np_dtype, target_dtype, upcast_this,
+            weights[key] = _sf.place_in_arena(raw, shape, nbx_dtype, np_dtype, target_dtype,
                                               bool(krsc) and key in krsc, arena, target_dev, _io_pool())
 
 def stored_dtype_in_compute(nbx_dtype, compute_dtype):
