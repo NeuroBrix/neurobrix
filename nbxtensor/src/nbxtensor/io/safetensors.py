@@ -9,6 +9,7 @@ Torch-free.
 """
 from __future__ import annotations
 
+import ctypes
 import math
 import os
 from typing import Optional
@@ -140,6 +141,19 @@ def load_to_pinned_host(
     uint16-bit reinterpret path the GPU arena loader uses, so the
     resulting values match exactly.
     """
+    if source_dtype == NBXDtype.bfloat16 and target_dtype == NBXDtype.float16:
+        # The widening written straight into the destination by the workers: no per-weight temporary (each one over
+        # the host mmap threshold an mmap, its page faults and an munmap) and no copy after it — 18 864 of
+        # Qwen3-30B-A3B's weights, 57 GB, take this path on a card without bfloat16 (2026-10-30).
+        dst = _host_destination(shape, target_dtype, host_arena)
+        if len(raw) != dst.nbytes():
+            raise RuntimeError(f"weight staging would overflow: {len(raw)} bfloat16 bytes for shape {tuple(shape)} "
+                               f"into a {dst.nbytes()}-byte float16 buffer")
+        if dst.numel():
+            out = np.ctypeslib.as_array((ctypes.c_uint16 * dst.numel()).from_address(dst.data_ptr())).view(np.float16)
+            split_across_workers(np.frombuffer(raw, dtype=np.uint16), out, bf16_bits_to_f16, io)
+        return dst
+
     # Decode source bytes to a numpy array matching target_dtype.
     if source_dtype == NBXDtype.bfloat16:
         # Raw bf16 bits stored as uint16. Stays uint16 if target is
@@ -201,14 +215,7 @@ def load_to_pinned_host(
     if want is not None and arr.dtype != want:
         arr = cast(arr, want, io)
 
-    # Pinned host memory: a slice of the component's one block when the load sized it, else its own block.
-    if host_arena is not None:
-        from nbxtensor.dtype.nbx_dtype import dtype_size as _dsize
-        ptr = host_arena.alloc((math.prod(shape) if shape else 1) * _dsize(target_dtype))
-        dst = NBXTensor(ptr, tuple(shape), contiguous_strides(tuple(shape)), target_dtype, 'cpu',
-                        owns_data=False, device_idx=0, base=host_arena, pinned=True)
-    else:
-        dst = NBXTensor.empty_cpu(shape, target_dtype, pinned=True)
+    dst = _host_destination(shape, target_dtype, host_arena)
 
     # The copy is sized from the SOURCE and the buffer from the TARGET, so a
     # dtype pair nobody converted is a write past the end of a cudaMallocHost
@@ -227,6 +234,17 @@ def load_to_pinned_host(
     DeviceAllocator.memcpy(dst.data_ptr(), arr.ctypes.data,
                            arr.nbytes, kind=0)
     return dst
+
+
+def _host_destination(shape: tuple, target_dtype: NBXDtype, host_arena: Optional[HostPinnedArena]) -> NBXTensor:
+    """A host weight's destination: a slice of the component's one block when the load sized it, else its own
+    page-locked block."""
+    if host_arena is not None:
+        from nbxtensor.dtype.nbx_dtype import dtype_size as _dsize
+        ptr = host_arena.alloc((math.prod(shape) if shape else 1) * _dsize(target_dtype))
+        return NBXTensor(ptr, tuple(shape), contiguous_strides(tuple(shape)), target_dtype, 'cpu',
+                         owns_data=False, device_idx=0, base=host_arena, pinned=True)
+    return NBXTensor.empty_cpu(shape, target_dtype, pinned=True)
 
 
 def host_weight_layout(arr: np.ndarray, krsc: bool):
