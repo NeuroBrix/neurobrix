@@ -120,6 +120,67 @@ def amp_fp32_output_dtype(compute_dtype, graph_dtype, safe, narrowed, traced=Non
 
 `nbxtensor.dtype.convert.saturate_scalar(value, dtype)`: a Python number clamped to a half float's finite range (the table's `max`); anything else unchanged.
 
+### `nbxtensor.ops.tiling_sizes` — the sizes the tiled and chunked paths cut by (the tiling table in force: `ops.tiling_policy`)
+
+Every figure is read from the tiling table in force (`set_tiling` / `tiling_table`), never written in the code.
+
+```python
+def conv3d_chunk_bytes()
+    # The per-transient bound of the chunked conv3d path (`conv3d.chunk_bytes`).
+def conv2d_band_bytes()
+    # The conv2d band-streaming threshold (`conv2d.band_bytes`).
+def conv3d_need(x_shape: Sequence[int], w_shape: Sequence[int], stride, padding, dilation, in_bytes: int, out_bytes: int)
+    # (bytes the ONE-SHOT path holds at its peak, folded bytes per output frame).
+def conv3d_one_shot_peak(x_shape: Sequence[int], w_shape: Sequence[int], stride, padding, dilation, in_bytes: int, out_bytes: int)
+    # The bytes the one-shot conv3d path (`_conv3d_via_conv2d`) holds at its peak BESIDE its input
+def residual_chain_bands(H: int, tile_factor: int, halo: int)
+    # The bands a band-streamed residual chain runs over its spatial axis
+def chunk_frames(frame_bytes: int)
+    # Output frames per chunk
+def conv2d_band_rows(N: int, out_c: int, out_h: int, out_w: int, out_bytes: int, band_bytes: int)
+    # (output rows of one band, bytes of one output row) of conv2d band streaming
+def tiled_conv2d_bands(IH: int, out_h: int, kh: int, sh: int, dh: int, pad_h: int, tile_factor: int)
+    # The bands of the op-level tiled conv (real halo)
+def tiled_conv2d_band_bytes(x_shape: Sequence[int], w_shape: Sequence[int], stride, padding, dilation, tile_factor: int, in_bytes: int, out_bytes: int)
+    # What a tiled 2-D conv holds BESIDE its input and its whole output while its largest band runs
+def sdpa_scores_bytes(batch: int, nheads: int, Tq: int, Tk: int)
+    # The bytes of an attention's fp32 scores.
+def sdpa_scores_bound(budget_bytes: int, head_dim_pow2: bool)
+    # The fp32 scores bound an attention routes on
+def sdpa_chunk_rows(bound: int, batch: int, nheads: int, Tq: int, Tk: int, min_chunk_rows: int, max_chunks: int)
+    # Query rows per chunk that keep each chunk's fp32 scores within `bound`, aligned to the arch's row block (`memory.sdpa_math_min_chunk_rows`); 0 when the shape cannot chunk within the arch's chunk ceiling (`memory.sdpa_math_max_chunks`).
+def sdpa_chunk_plan(bound: int, batch: int, nheads: int, Tq: int, Tk: int, min_chunk_rows: int)
+    # (slices per chunk, query rows per chunk) that keep each chunk's fp32 scores within `bound`
+def sdpa_device_scores_budget(base_bytes: int, device_fraction: float, device_memory_mb)
+    # The scores budget on one device
+def sdpa_math_scores_budget(base_bytes: int, device_fraction: float, device_memory_mb)
+    # The math route's scores budget on the device that executes an attention
+def op_budget_fraction()
+    # The fraction of a card an op's transient is measured against (`op_level.op_budget_card_fraction`).
+def op_budget_bytes(card_bytes: int, resident_bytes: int)
+    # An op's budget on its card
+def conv_band_factor(total_bytes: int, kept_bytes: int, card_bytes: int)
+    # Bands an overflowing convolution (or upsample->conv pair) runs in
+def upsample_overflows(out_bytes: int, card_bytes: int)
+    # An upsample output worth fusing into its conv even when the conv does not overflow.
+def rms_norm_overflows(out_bytes: int, card_bytes: int)
+    # An rms_norm whose output runs in H bands.
+def rms_norm_band_factor(out_bytes: int, card_bytes: int)
+    # Bands an overflowing rms_norm runs in
+def residual_chain_band_factor(bytes_fp32: int)
+    # Bands a residual chain streams in
+def residual_chain_min_base_bytes_fp32()
+    # The base-tensor size (fp32) from which a residual chain is detected.
+def spatial_halo(extent: int)
+    # The proportional spatial overlap of a tile of `extent`
+def spatial_overlap(extent: int)
+    # A spatial tile's overlap
+def temporal_halo(t_tile: int)
+    # The proportional temporal overlap of a tile of `t_tile` frames
+def inplace_min_bytes()
+    # The output size from which an add or an element-wise unary writes into its dead input.
+```
+
 ### `nbxtensor.ops.fused_upsample_conv` — a convolution streamed in bands of output rows
 
 ```python
