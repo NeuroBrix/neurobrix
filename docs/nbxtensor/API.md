@@ -232,6 +232,14 @@ def set_split_threshold(kind: str, n: Optional[int]) -> None
 def parallel_for(n: int, run: Callable[[int, int], object], kind: str, probe=None) -> Sequence[object]
 ```
 
+`nbxtensor.backend.cpu.blas` — the BLAS numpy calls, held to the pool's cores:
+
+```python
+def blas() -> Tuple[str, object]               # ("accelerate" | "openblas", the library); refused by name otherwise
+def set_blas_threads(n: int) -> None           # OpenBLAS: the process's count; Accelerate: 1 = single-threaded here
+def blas_threads_of_this_thread() -> Optional[int]   # 1 single-threaded, a count (OpenBLAS), None (Accelerate's own)
+```
+
 ## 6. `nbxtensor.memory`
 
 The allocator becomes one interface with one instance per device, not a class holding process-wide

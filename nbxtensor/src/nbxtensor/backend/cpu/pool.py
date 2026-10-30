@@ -13,6 +13,8 @@ by hand.
   `hw.physicalcpu`). An application sets its own (`set_threads`; NeuroBrix: its hardware profile's compute threads).
 - `parallel_for(n, run, kind)`: `run(start, stop)` over contiguous pieces of `[0, n)`, inline under the measured
   threshold of `kind`; returns the pieces' results in order.
+- the BLAS numpy calls: as many threads as the pool outside it, one per piece inside `parallel_for` — no
+  oversubscription (`backend.cpu.blas`).
 - `numa_nodes()`: the NUMA nodes and their CPUs (Linux `/sys/devices/system/node`), `{}` where the machine has none to
   report.
 """
@@ -102,6 +104,9 @@ def set_threads(n: Optional[int]) -> None:
         _STATE.pop("pool_size", None)
     if pool is not None:
         pool.shutdown(wait=True)
+    from nbxtensor.backend.cpu.blas import blas, set_blas_threads
+    if blas()[0] == "openblas":                       # the process's BLAS count follows the pool's size
+        set_blas_threads(threads())
 
 
 def _pool(size: int) -> concurrent.futures.ThreadPoolExecutor:
@@ -110,9 +115,18 @@ def _pool(size: int) -> concurrent.futures.ThreadPoolExecutor:
             old = _STATE.pop("pool", None)
             if old is not None:
                 old.shutdown(wait=False)
-            _STATE["pool"] = concurrent.futures.ThreadPoolExecutor(max_workers=size, thread_name_prefix="nbx-cpu")
+            _STATE["pool"] = concurrent.futures.ThreadPoolExecutor(max_workers=size, thread_name_prefix="nbx-cpu",
+                                                                   initializer=_one_blas_thread_here)
             _STATE["pool_size"] = size
         return _STATE["pool"]
+
+
+def _one_blas_thread_here() -> None:
+    """A pool thread runs its BLAS single-threaded (Accelerate's setting is per thread; OpenBLAS's count is the
+    process's and is lowered by `parallel_for` itself)."""
+    from nbxtensor.backend.cpu.blas import blas, set_blas_threads
+    if blas()[0] == "accelerate":
+        set_blas_threads(1)
 
 
 def pieces(n: int, parts: int) -> List[Tuple[int, int]]:
@@ -178,5 +192,13 @@ def parallel_for(n: int, run: Callable[[int, int], object], kind: str,
     size = threads()
     if size == 1 or n < split_threshold(kind, probe):
         return [run(0, n)]
-    futures = [_pool(size).submit(run, a, b) for a, b in pieces(n, size)]
-    return [f.result() for f in futures]
+    from nbxtensor.backend.cpu.blas import blas, set_blas_threads
+    process_wide = blas()[0] == "openblas"           # a count for the whole process: 1 while the pieces run
+    if process_wide:
+        set_blas_threads(1)
+    try:
+        futures = [_pool(size).submit(run, a, b) for a, b in pieces(n, size)]
+        return [f.result() for f in futures]
+    finally:
+        if process_wide:
+            set_blas_threads(size)

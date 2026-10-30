@@ -63,3 +63,23 @@ def test_the_threshold_is_measured_when_a_probe_is_given():
     probe = lambda n: (lambda a, b: np.exp(x[a:b], out=out[a:b]))
     t = P.split_threshold("exp", probe)
     assert 1 << 12 <= t <= 1 << 26 and P.split_threshold("exp") == t
+
+
+def test_the_blas_of_this_process_is_known_and_a_piece_runs_it_single_threaded():
+    """No oversubscription: a pool thread's BLAS is single-threaded (Accelerate per thread; OpenBLAS lowered to 1 for
+    the duration of parallel_for), and the BLAS outside is not."""
+    from nbxtensor.backend.cpu import blas as B
+    kind, _ = B.blas()
+    assert kind in ("accelerate", "openblas")
+    P.set_threads(4)
+    P.set_split_threshold("t", 1)
+    seen = P.parallel_for(8, lambda a, b: B.blas_threads_of_this_thread(), "t")
+    assert seen and all(s == 1 for s in seen), seen
+    outside = B.blas_threads_of_this_thread()
+    assert outside != 1 or kind == "accelerate" and outside is None or outside == 4, outside
+
+
+def test_a_blas_thread_count_below_one_is_refused():
+    from nbxtensor.backend.cpu import blas as B
+    with pytest.raises(ValueError):
+        B.set_blas_threads(0)

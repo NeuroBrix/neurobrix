@@ -281,7 +281,9 @@ assert launch_observer.launch_observer().active() is False     # no observer: no
 
 Host work over a large array runs on a thread pool, one contiguous piece per thread, each piece a numpy call (numpy
 releases the GIL in its loops). The pool's size is measured on the machine (Apple silicon: its performance cores) and
-can be set; under a threshold measured for each kind of work, the work runs inline.
+can be set; under a threshold measured for each kind of work, the work runs inline. The BLAS numpy calls is held to
+the same cores: as many threads as the pool outside it, one per piece inside `parallel_for`, so the two never
+oversubscribe the machine (`nbxtensor.backend.cpu.blas`: Apple's Accelerate per thread, OpenBLAS for the process).
 
 ```python
 import numpy as np
