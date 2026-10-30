@@ -15,9 +15,6 @@ from neurobrix.core.module.scheduler.factory import SchedulerFactory
 from neurobrix.core.module.scheduler.base import Scheduler, DiffusionSchedulerBase, FlowSchedulerBase
 from neurobrix.core.module.scheduler.config import SchedulerConfig
 
-# Alias for backward compatibility
-BaseScheduler = Scheduler
-
 __all__ = [
     "SchedulerFactory",
     "Scheduler",
@@ -25,5 +22,4 @@ __all__ = [
     "FlowSchedulerBase",
     "SchedulerConfig",
     # Backward compatibility
-    "BaseScheduler",
 ]

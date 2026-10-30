@@ -1,7 +1,7 @@
 # The engine's open slimming findings (tools/engine_slim_scan.py); each ends deleted, moved into nbxtensor, or kept
 # with its reason in docs/nbxtensor/ENGINE_SLIM.md. Both figures below may only go down (test_the_engine_only_slims.py).
-# engine_lines: 142821
-# open: 516
+# engine_lines: 142813
+# open: 494
 kind	path	symbol	detail
 dead	src/neurobrix/cli/commands/registry.py	installing_path	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/components/handlers/text_encoder_handler.py	TextEncoderComponentHandler.get_hidden_size	no reference outside its own body (tests excluded)
@@ -372,37 +372,22 @@ wrapper	src/neurobrix/core/module/audio/mel_dsp.py	extract_features_np(rng)	no c
 wrapper	src/neurobrix/core/module/audio/output_processor.py	decode_snac_tokens(audio_token_start)	no call site passes it: always its default 128266
 wrapper	src/neurobrix/core/module/audio/output_processor.py	decode_tokens(skip_special)	no call site passes it: always its default True
 wrapper	src/neurobrix/core/module/autoregressive/factory.py	AutoregressiveConfigError	only renames Exception
-wrapper	src/neurobrix/core/module/autoregressive/generator.py	from_config	only hands its parameters to cls
 wrapper	src/neurobrix/core/module/autoregressive/generator.py	set_generation_params(max_tokens)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/module/autoregressive/generator.py	set_generation_params(repetition_penalty)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/module/autoregressive/generator.py	set_generation_params(temperature)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/module/autoregressive/generator.py	set_generation_params(top_k)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/module/autoregressive/generator.py	set_generation_params(top_p)	no call site passes it: always its default None
-wrapper	src/neurobrix/core/module/autoregressive/samplers.py	from_config	only hands its parameters to cls
-wrapper	src/neurobrix/core/module/scheduler/__init__.py	BaseScheduler	an alias of Scheduler
 wrapper	src/neurobrix/core/module/scheduler/config.py	SchedulerConfigError	only renames RuntimeError
-wrapper	src/neurobrix/core/module/scheduler/consistency/lcm.py	from_config	only hands its parameters to cls
-wrapper	src/neurobrix/core/module/scheduler/diffusion/ddim.py	from_config	only hands its parameters to cls
-wrapper	src/neurobrix/core/module/scheduler/diffusion/dpm_solver_pp.py	from_config	only hands its parameters to cls
-wrapper	src/neurobrix/core/module/scheduler/diffusion/euler.py	from_config	only hands its parameters to cls
 wrapper	src/neurobrix/core/module/scheduler/diffusion/unipc_multistep.py	_betas_for_alpha_bar(max_beta)	no call site passes it: always its default 0.999
-wrapper	src/neurobrix/core/module/scheduler/diffusion/unipc_multistep.py	from_config	only hands its parameters to cls
-wrapper	src/neurobrix/core/module/scheduler/flow/flow_euler.py	from_config	only hands its parameters to cls
 wrapper	src/neurobrix/core/module/text/processor.py	tokenize(chat_mode)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/module/text/processor.py	tokenize_for_diffusion(encoder_name)	no call site passes it: always its default 'text_encoder'
 wrapper	src/neurobrix/core/module/tiling_engine.py	_detect_residual_chains(threshold_bytes)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/module/tiling_engine.py	make_unified_node_interceptor(_executor_ref)	no call site passes it: always its default graph_executor
 wrapper	src/neurobrix/core/module/tiling_engine.py	make_unified_node_interceptor(_pending)	no call site passes it: always its default self._pending_chain
 wrapper	src/neurobrix/core/module/tiling_engine.py	make_unified_node_interceptor(_registry)	no call site passes it: always its default self._chain_registry
-wrapper	src/neurobrix/core/module/tokenizer/factory.py	decode	only hands its parameters to self._tokenizer.decode
-wrapper	src/neurobrix/core/module/tokenizer/factory.py	encode	only hands its parameters to self._tokenizer.encode
 wrapper	src/neurobrix/core/module/tokenizer/json_bpe.py	get_vocab_size(with_added_tokens)	no call site passes it: always its default True
-wrapper	src/neurobrix/core/module/tokenizer/json_bpe.py	token_to_id	only hands its parameters to self._vocab.get
-wrapper	src/neurobrix/core/module/tokenizer/sp_tokenizer.py	decode	only hands its parameters to self._tokenizer.decode
-wrapper	src/neurobrix/core/module/tokenizer/sp_tokenizer.py	vocab_size	only hands its parameters to self._tokenizer.get_vocab_size
 wrapper	src/neurobrix/core/module/tokenizer/tiktoken_bpe.py	from_file(pat_str)	no call site passes it: always its default PAT_STR
 wrapper	src/neurobrix/core/module/tokenizer/tiktoken_bpe.py	from_file(special_tokens)	no call site passes it: always its default None
-wrapper	src/neurobrix/core/module/tokenizer/tiktoken_bpe.py	token_to_id	only hands its parameters to self._ranks.get
 wrapper	src/neurobrix/core/optim/passes/invariant.py	InvariantPlanRefused	only renames RuntimeError
 wrapper	src/neurobrix/core/paths.py	BackendOnClearedStorage	only renames RuntimeError
 wrapper	src/neurobrix/core/paths.py	PathNotConfigured	only renames RuntimeError
@@ -417,15 +402,12 @@ wrapper	src/neurobrix/core/prism/loop_state.py	kept_neighbours(span)	no call sit
 wrapper	src/neurobrix/core/prism/plan_advice.py	assess(volatility)	no call site passes it: always its default READING_VOLATILITY
 wrapper	src/neurobrix/core/prism/plan_advice.py	dominated_by_activations(ratio)	no call site passes it: always its default 4.0
 wrapper	src/neurobrix/core/prism/solver.py	_identify_inplace_add_candidates_static(threshold_bytes)	no call site passes it: always its default None
-wrapper	src/neurobrix/core/prism/solver.py	get_allocation	only hands its parameters to self.components.get
 wrapper	src/neurobrix/core/prism/solver.py	order_candidates(tie)	no call site passes it: always its default 0.01
 wrapper	src/neurobrix/core/prism/solver.py	solve	only hands its parameters to PrismSolver().solve
 wrapper	src/neurobrix/core/prism/time_estimate.py	plan_seconds(phases)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/prism/work.py	component_work(default_dtype_bytes)	no call site passes it: always its default 2
 wrapper	src/neurobrix/core/runtime/graph/compiled_sequence.py	func_wrapper	only hands its parameters to moe_fused_dispatch
 wrapper	src/neurobrix/core/runtime/graph/device_attention.py	_plain	only hands its parameters to F.scaled_dot_product_attention
-wrapper	src/neurobrix/core/runtime/graph/execution_context.py	get_tensor	only hands its parameters to self.tensor_store.get
-wrapper	src/neurobrix/core/runtime/graph/kv_cache_wrapper.py	get_cache_len	only hands its parameters to self.cache.get_seq_len
 wrapper	src/neurobrix/core/runtime/graph/kv_cache_wrapper.py	intercept_attention(enable_gqa)	no call site passes it: always its default False
 wrapper	src/neurobrix/core/runtime/graph/moe_fusion.py	detect_and_fuse_moe(refusals)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/runtime/graph/tensor_resolver.py	parse_dtype	only hands its parameters to _parse_dtype
@@ -436,10 +418,6 @@ wrapper	src/neurobrix/core/runtime/graph_executor.py	load_flow_read_weights(shar
 wrapper	src/neurobrix/core/runtime/lm_facts.py	decode_sequences(resolved)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/runtime/output_dispatch.py	resolve_output_path(strict_extension)	no call site passes it: always its default True
 wrapper	src/neurobrix/core/runtime/phase_trace.py	first	only hands its parameters to _FIRST.get
-wrapper	src/neurobrix/core/runtime/resolution/variable_resolver.py	resolve_pointer	only hands its parameters to self._resolve_pointer
-wrapper	src/neurobrix/core/runtime/symint.py	__radd__	only hands its parameters to self.__add__
-wrapper	src/neurobrix/core/runtime/symint.py	__rmul__	only hands its parameters to self.__mul__
-wrapper	src/neurobrix/core/runtime/symint.py	__str__	only hands its parameters to self.to_expr_string
 wrapper	src/neurobrix/core/runtime/tensor_compat.py	aten	only hands its parameters to sys.modules.get
 wrapper	src/neurobrix/core/runtime_values.py	require_max_tokens(override)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/runtime_values.py	resolve(container_key)	no call site passes it: always its default None

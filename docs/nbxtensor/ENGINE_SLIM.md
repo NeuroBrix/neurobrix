@@ -99,3 +99,23 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | fact | src/neurobrix/core/prism/plan_advice.py | what_would_have_fit | a name collision: the plan's advice over its component verdicts, where the library's answers an allocator refusal — two facts, one name |
 | fact | src/neurobrix/core/prism/structure.py | memory_gb | a name collision: a profile device's raw memory in GB, where the library's is the rounded memory class a certified entry is keyed by |
 | fact | src/neurobrix/core/prism/runtime_widths.py | _aligned | a name collision: whether an op's operands are dtype-aligned as its wrapper launches them, where the library's rounds a byte count to an alignment |
+| wrapper | src/neurobrix/core/module/autoregressive/generator.py | from_config | a scheduler / sampler / generator protocol's constructor from its config, called by name on whichever class the container names |
+| wrapper | src/neurobrix/core/module/autoregressive/samplers.py | from_config | a scheduler / sampler / generator protocol's constructor from its config, called by name on whichever class the container names |
+| wrapper | src/neurobrix/core/module/scheduler/consistency/lcm.py | from_config | a scheduler / sampler / generator protocol's constructor from its config, called by name on whichever class the container names |
+| wrapper | src/neurobrix/core/module/scheduler/diffusion/ddim.py | from_config | a scheduler / sampler / generator protocol's constructor from its config, called by name on whichever class the container names |
+| wrapper | src/neurobrix/core/module/scheduler/diffusion/dpm_solver_pp.py | from_config | a scheduler / sampler / generator protocol's constructor from its config, called by name on whichever class the container names |
+| wrapper | src/neurobrix/core/module/scheduler/diffusion/euler.py | from_config | a scheduler / sampler / generator protocol's constructor from its config, called by name on whichever class the container names |
+| wrapper | src/neurobrix/core/module/scheduler/diffusion/unipc_multistep.py | from_config | a scheduler / sampler / generator protocol's constructor from its config, called by name on whichever class the container names |
+| wrapper | src/neurobrix/core/module/scheduler/flow/flow_euler.py | from_config | a scheduler / sampler / generator protocol's constructor from its config, called by name on whichever class the container names |
+| wrapper | src/neurobrix/core/module/tokenizer/factory.py | decode | the tokenizer protocol's decode, called by name on whichever tokenizer the container names |
+| wrapper | src/neurobrix/core/module/tokenizer/factory.py | encode | the tokenizer protocol's encode, called by name on whichever tokenizer the container names |
+| wrapper | src/neurobrix/core/module/tokenizer/json_bpe.py | token_to_id | the tokenizer protocol's token lookup, called by name on whichever tokenizer the container names |
+| wrapper | src/neurobrix/core/module/tokenizer/sp_tokenizer.py | decode | the tokenizer protocol's decode, called by name on whichever tokenizer the container names |
+| wrapper | src/neurobrix/core/module/tokenizer/sp_tokenizer.py | vocab_size | the tokenizer protocol's vocabulary size, called by name on whichever tokenizer the container names |
+| wrapper | src/neurobrix/core/module/tokenizer/tiktoken_bpe.py | token_to_id | the tokenizer protocol's token lookup, called by name on whichever tokenizer the container names |
+| wrapper | src/neurobrix/core/prism/solver.py | get_allocation | the plan's lookup the flows ask through hasattr on any plan object |
+| wrapper | src/neurobrix/core/runtime/graph/execution_context.py | get_tensor | the execution context's protocol, called by name on either branch's context |
+| wrapper | src/neurobrix/core/runtime/graph/kv_cache_wrapper.py | get_cache_len | the KV cache wrapper's protocol shared with the Triton cache, called by name on either |
+| wrapper | src/neurobrix/core/runtime/symint.py | __radd__ | Python's reflected-operator protocol: 2 + s calls it, never by name |
+| wrapper | src/neurobrix/core/runtime/symint.py | __rmul__ | Python's reflected-operator protocol: 2 * s calls it, never by name |
+| wrapper | src/neurobrix/core/runtime/symint.py | __str__ | Python's str() protocol |

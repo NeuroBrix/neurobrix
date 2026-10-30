@@ -218,10 +218,6 @@ class VariableResolver:
         )
 
     def resolve_pointer(self, pointer: Union[str, int, float]) -> Any:
-        """A runtime or component pointer's value (the public form of _resolve_pointer)."""
-        return self._resolve_pointer(pointer)
-
-    def _resolve_pointer(self, pointer: Union[str, int, float]) -> Any:
         """
         Resolves a NBX v0.1 pointer (without $ prefix).
 
@@ -345,7 +341,7 @@ class VariableResolver:
             shape = []
             for axis_key in sorted_axes:
                 pointer = shape_source[axis_key]
-                val = self._resolve_pointer(pointer)
+                val = self.resolve_pointer(pointer)
                 if not isinstance(val, (int, float)):
                     raise RuntimeError(f"Shape axis '{axis_key}' resolved to non-numeric: {val}")
                 shape.append(int(val))
