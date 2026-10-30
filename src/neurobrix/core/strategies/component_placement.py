@@ -83,19 +83,6 @@ class ComponentPlacementStrategy(ExecutionStrategy):
             self.synchronize_device(target_device)
         return transferred
 
-    def handle_outputs(
-        self,
-        component_name: str,
-        outputs: Dict[str, Any],
-        target_device: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Handle outputs - transfer to target device if specified."""
-        source_device = self.component_devices.get(component_name)
-        if target_device and target_device != source_device:
-            outputs = self.transfer_dict(outputs, target_device, self.use_async)
-            if self.use_async:
-                self.synchronize_device(target_device)
-        return outputs
 
     def transfer_model_output(self, model_output: torch.Tensor, state_tensor: torch.Tensor) -> torch.Tensor:
         """Transfer model output to same device as state tensor."""

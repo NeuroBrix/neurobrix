@@ -123,20 +123,6 @@ class SingleGPUStrategy(ExecutionStrategy):
         """
         return self.transfer_dict(inputs, self.device)
 
-    def handle_outputs(
-        self,
-        component_name: str,
-        outputs: Dict[str, Any],
-        target_device: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """
-        Handle outputs from component.
-
-        For single GPU, outputs are already on the correct device.
-        No transfer needed.
-        """
-        # Single GPU: outputs stay on same device
-        return outputs
 
     def unload_inactive_components(self, keep_component: str) -> None:
         """

@@ -47,7 +47,6 @@ def _piece_input(values: Dict[str, Any], name: str) -> Any:
     return cur
 
 
-
 def _reset_segment_peak(seg_exec) -> None:
     """The compiled branch on CUDA counts its peak from the segment's start, so the line says THIS segment's worst
     op: an allocator keeps what that op needed, and the figures at the end cannot tell it from a fragmented cache."""
@@ -734,8 +733,3 @@ class LayerStreamingStrategy(ExecutionStrategy):
                        inputs: Dict[str, Any]) -> Dict[str, Any]:
         return self.transfer_dict(inputs, self.context.get_device(component_name))
 
-    def handle_outputs(self, component_name: str, outputs: Dict[str, Any],
-                       target_device: Optional[str] = None) -> Dict[str, Any]:
-        if target_device is None:
-            return outputs
-        return self.transfer_dict(outputs, target_device)

@@ -161,16 +161,6 @@ class LazySequentialStrategy(ExecutionStrategy):
         device = self._get_component_device(component_name)
         return self.transfer_dict(inputs, device)
 
-    def handle_outputs(
-        self,
-        component_name: str,
-        outputs: Dict[str, Any],
-        target_device: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Transfer outputs if next component is on different device."""
-        if target_device:
-            return self.transfer_dict(outputs, target_device)
-        return outputs
 
     def unload_weights(self, component_name: str) -> None:
         """Unload component weights (lazy mode — always unload)."""

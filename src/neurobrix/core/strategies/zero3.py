@@ -998,16 +998,6 @@ class Zero3Strategy(ExecutionStrategy):
         """Move model inputs to the GPU execution device."""
         return self.transfer_dict(inputs, self.exec_device)
 
-    def handle_outputs(
-        self,
-        component_name: str,
-        outputs: Dict[str, Any],
-        target_device: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Forward outputs; retarget only if the next component differs."""
-        if target_device and target_device != self.exec_device:
-            return self.transfer_dict(outputs, target_device)
-        return outputs
 
     def unload_weights(self, component_name: str) -> None:
         """Uninstall hooks, then fall through to the base implementation."""

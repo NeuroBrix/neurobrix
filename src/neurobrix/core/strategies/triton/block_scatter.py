@@ -115,23 +115,6 @@ class BlockScatterStrategy(TritonStrategy):
         target_device = devices[0] if devices else self.primary_device
         return self.transfer_dict(inputs, target_device, self.use_async)
 
-    def handle_outputs(
-        self,
-        component_name: str,
-        outputs: Dict[str, Any],
-        target_device: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        if target_device:
-            source_device = None
-            for val in outputs.values():
-                source_device = _nbx_device_str(val)
-                if source_device is not None:
-                    break
-            if source_device and source_device != target_device:
-                outputs = self.transfer_dict(outputs, target_device, self.use_async)
-                if self.use_async:
-                    self.synchronize_device(target_device)
-        return outputs
 
     def unload_weights(self, component_name: str) -> None:
         executor = self.context.component_executors.get(component_name)

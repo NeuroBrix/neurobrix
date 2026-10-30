@@ -99,14 +99,6 @@ class CPUExecutionStrategy(ExecutionStrategy):
         """Ensure inputs are on CPU (the only device this strategy uses)."""
         return self.transfer_dict(inputs, self.device)
 
-    def handle_outputs(
-        self,
-        component_name: str,
-        outputs: Dict[str, Any],
-        target_device: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Pass-through: outputs are already on CPU."""
-        return outputs
 
     def unload_inactive_components(self, keep_component: str) -> None:
         """Unload all components except the specified one.

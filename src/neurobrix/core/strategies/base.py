@@ -211,27 +211,6 @@ class ExecutionStrategy(ABC):
         """
         pass
 
-    @abstractmethod
-    def handle_outputs(
-        self,
-        component_name: str,
-        outputs: Dict[str, Any],
-        target_device: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """
-        Handle component outputs.
-
-        May transfer to target device for next component.
-
-        Args:
-            component_name: Source component
-            outputs: Output tensors
-            target_device: Device for next component (if known)
-
-        Returns:
-            Outputs (possibly transferred)
-        """
-        pass
 
     # Attribute names under which a runtime package may carry its artefact
     # path. Measured 2026-09-09: the executor's package carries `root_path`,

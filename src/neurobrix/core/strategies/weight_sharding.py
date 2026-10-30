@@ -79,17 +79,6 @@ class WeightShardingStrategy(ExecutionStrategy):
             return inputs
         return self.transfer_dict(inputs, target, async_transfer=False)
 
-    def handle_outputs(
-        self,
-        component_name: str,
-        outputs: Dict[str, Any],
-        target_device: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Transfer outputs to target device if needed."""
-        if target_device is None:
-            return outputs
-        return self.transfer_dict(outputs, target_device, async_transfer=False)
-
 
     def cleanup(self) -> None:
         """Release resources."""

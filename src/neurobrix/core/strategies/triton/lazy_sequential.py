@@ -114,15 +114,6 @@ class LazySequentialStrategy(TritonStrategy):
         return self.transfer_dict(
             inputs, self._execution_device(component_name))
 
-    def handle_outputs(
-        self,
-        component_name: str,
-        outputs: Dict[str, Any],
-        target_device: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        if target_device:
-            return self.transfer_dict(outputs, target_device)
-        return outputs
 
     def install_for_executor(self, component_name: str, executor) -> None:
         """Engage the FULL zero3 machinery for a zero3-mapped

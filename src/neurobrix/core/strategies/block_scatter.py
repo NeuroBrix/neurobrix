@@ -126,24 +126,6 @@ class BlockScatterStrategy(ExecutionStrategy):
         target_device = devices[0] if devices else self.primary_device
         return self.transfer_dict(inputs, target_device, self.use_async)
 
-    def handle_outputs(
-        self,
-        component_name: str,
-        outputs: Dict[str, Any],
-        target_device: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Handle outputs — transfer to target device if needed."""
-        if target_device:
-            source_device = None
-            for val in outputs.values():
-                if isinstance(val, torch.Tensor):
-                    source_device = str(val.device)
-                    break
-            if source_device and source_device != target_device:
-                outputs = self.transfer_dict(outputs, target_device, self.use_async)
-                if self.use_async:
-                    self.synchronize_device(target_device)
-        return outputs
 
     def unload_weights(self, component_name: str) -> None:
         """Unload weights for scattered component."""

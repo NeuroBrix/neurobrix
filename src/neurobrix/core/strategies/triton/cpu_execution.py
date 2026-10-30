@@ -54,13 +54,6 @@ class CPUExecutionStrategy(TritonStrategy):
     ) -> Dict[str, Any]:
         return self.transfer_dict(inputs, self.device)
 
-    def handle_outputs(
-        self,
-        component_name: str,
-        outputs: Dict[str, Any],
-        target_device: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        return outputs
 
     def unload_inactive_components(self, keep_component: str) -> None:
         if self._eager:

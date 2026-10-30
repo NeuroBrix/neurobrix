@@ -36,9 +36,6 @@ class _Strat(ExecutionStrategy):
     def prepare_inputs(self, *a, **k):  # pragma: no cover - unused
         raise NotImplementedError
 
-    def handle_outputs(self, *a, **k):  # pragma: no cover - unused
-        raise NotImplementedError
-
 
 def _strat(package):
     return _Strat(_Ctx(package))

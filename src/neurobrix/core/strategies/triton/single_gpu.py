@@ -67,14 +67,6 @@ class SingleGPUStrategy(TritonStrategy):
         """Ensure inputs are on the assigned GPU (NBXTensor transfer)."""
         return self.transfer_dict(inputs, self.device)
 
-    def handle_outputs(
-        self,
-        component_name: str,
-        outputs: Dict[str, Any],
-        target_device: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Single GPU: outputs already on the correct device."""
-        return outputs
 
     def unload_inactive_components(self, keep_component: str) -> None:
         """Free every component except `keep_component` (lazy mode only)."""
