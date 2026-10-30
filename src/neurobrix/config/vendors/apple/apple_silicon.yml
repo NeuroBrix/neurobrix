@@ -94,10 +94,10 @@ memory:
   # MEASURED 2026-10-16 on the M4 Pro: `MTLDevice.heapBufferSizeAndAlignWithLength:options:` (shared storage) returns
   # align 256 for every length from 1 B to 1 MiB — the placement unit Metal itself uses for a buffer in a heap.
   state_page_granule_bytes: 256
-  # A released page returns to the pool at once: the pool is fixed and every write into a page is GPU work on the queue
-  # that reads it (Triton: kernels on the Apple backend's queue; compiled: index_copy on the one MPS stream), and Metal
-  # runs one queue's command buffers in enqueue order (MTLCommandBuffer.commit documentation). A path that wrote a page
-  # from the host or another queue would need true here and a fence (triton/state_fence.py, core/state/mps_fence.py).
+  # A released page returns to the pool at once. Triton: every launch waits for its kernel and drains the allocator's
+  # queue first (nbxtensor/backend/triton_ext_driver.py), so no kernel runs when the host or that queue touches a page;
+  # compiled: index_copy on the one MPS stream, in enqueue order. When launches stop waiting: true here and the fence
+  # (triton/state_fence.py, core/state/mps_fence.py; docs/nbxtensor/BACKENDS.md).
   async_release: false
 
   # Allocator pool: the most a smallest-fit hit may hand out beyond its request (fraction of the request,

@@ -555,9 +555,10 @@ class MetalRuntime:
         # host-ordered, and once the launch path stopped waiting that turned
         # every one of them into a flush: measured 2026-09-07, 1,086 D2D
         # copies in an 8-token decode went from 0.007 s to 4.08 s, taking back
-        # most of what dropping the per-launch wait had given. A blit on the
-        # same queue as the kernels is ordered by the GPU and waits for
-        # nothing.
+        # most of what dropping the per-launch wait had given. A blit on this
+        # allocator's queue is ordered by the GPU against the work on that
+        # queue and waits for nothing; the Triton kernels run on triton-ext's
+        # own queue, and the launcher drains this one before each of them.
         if _as_int(kind) == 3:
             blitted = self._blit(dst_addr, src_addr, nbytes)
             if blitted is not None:
@@ -772,7 +773,9 @@ class MetalRuntime:
         self.close_stream(int(stream or 0))
 
     def _blit(self, dst_addr: int, src_addr: int, nbytes: int):
-        """A device-to-device copy as GPU work on the kernels' own queue.
+        """A device-to-device copy as GPU work on this allocator's queue (not the
+        Triton kernels' queue: triton-ext runs those on its own, and the launcher
+        drains this queue before every kernel).
 
         Returns `_OK` when it was enqueued, or None when either end is not
         memory this allocator handed out — in which case the caller falls

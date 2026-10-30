@@ -1,23 +1,21 @@
 """The Triton branch's release fence on Metal (state engine step 2, docs/design/state-engine.md §4.3).
 
-A state page released by its last holder may be granted again only once every kernel that read it has completed
-(core/state/pages.py, the release queue). On Metal the kernels run on the Apple backend's own command queue, whose
-buffers complete in commit order; the backend numbers each committed buffer (`metal_native.fence`) and reports the
-highest completed without waiting (`metal_native.completed_fence`). A page copy for copy-on-write is a kernel on the
-same queue, so the same fence covers it. Torch-free (R33).
+Not in use today: the Apple vendor files declare `memory.async_release: false`, because every launch through nbxtensor
+waits for its kernel (docs/nbxtensor/BACKENDS.md, "Releasing state pages on Metal"), so no kernel is running when a page
+is released. The day launches stop waiting, a released page may be granted again only once every kernel that read it
+has completed (core/state/pages.py, the release queue): the Apple backend then numbers each committed command buffer
+(`fence()`) and reports the highest completed without waiting (`completed_fence()`), and this class reads them. The
+backend module is handed in by the caller; one without those two calls is refused by name. Torch-free (R33).
 """
 from __future__ import annotations
 
 
 class MetalStateFence:
-    def __init__(self, native=None):
-        if native is None:
-            from nbxtensor.backend.triton_ext_driver import _native
-            native = _native()
+    def __init__(self, native):
         if not hasattr(native, "completed_fence"):
             raise RuntimeError(
-                "ZERO FALLBACK: the Apple backend has no fence (metal_native.fence / completed_fence, triton-ext-nbx "
-                "branch state-fences): state pages cannot be released on Metal without one — rebuild the backend")
+                "ZERO FALLBACK: the Apple backend has no fence (fence / completed_fence): state pages cannot be released "
+                "asynchronously on Metal without one — docs/nbxtensor/BACKENDS.md, 'Releasing state pages on Metal'")
         self._native = native
 
     def record(self) -> int:

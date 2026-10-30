@@ -45,6 +45,24 @@ The contract a driver must meet is written down as two protocols, `CompiledKerne
 `backend/launcher_contract.py`: integers for device addresses, opaque integers for streams and events, no tensor object
 and no torch at the boundary.
 
+### Releasing state pages on Metal
+
+A state page (a paged KV cache's) may be granted again only once no kernel still reads it. On Metal the Triton kernels
+run on triton-ext's own command queue, and the library's copies and host writes run on the allocator's queue or from
+the host, so nothing orders the two queues by itself. What makes an immediate release safe is the launch: the Metal
+driver drains the allocator's queue before every kernel and waits for the kernel after it (`_nbx_queue_drain()` before,
+`_native().synchronize()` after, `backend/triton_ext_driver.py`). No kernel is running when the host or the allocator's
+queue touches a page, so the Apple device files state `memory.async_release: false`. A test launches a kernel long
+enough to be caught running and reads its output at the instant the launch returns
+(`tests/unit/core/test_a_metal_page_comes_back_only_after_the_kernels_that_read_it.py`); it is red when the
+post-launch wait disappears or stops waiting.
+
+That declaration falls the day launches stop waiting for their kernel (speed work will want it). From then on a fence
+is mandatory: triton-ext numbers each committed command buffer (`fence()`) and reports the highest completed without
+waiting (`completed_fence()`), pages are released past it (`MetalStateFence`), and the device files state
+`async_release: true`. Those two calls are not in triton-ext today; they are written as an upstream change, not yet
+proposed.
+
 ## 2. The memory primitives
 
 Every allocation, copy and memory reading goes through one object, `DeviceMemory` (`memory/device_memory.py`); the

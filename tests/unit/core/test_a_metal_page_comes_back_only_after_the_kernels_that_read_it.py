@@ -1,15 +1,23 @@
 """Step 2 of the state engine on Metal (docs/design/state-engine.md §3.3 point 3, §4.3): a released page returns to the
-free list only after the work that read it completed — on the Triton branch through the Apple backend's fence, on the
-compiled branch through MPS events.
+free list only after the work that read it completed.
 
-What this test does if the code is wrong: with a kernel still running on the page, the page must stay in the release
-queue (granting it would hand the next writer memory the GPU is still reading, which on MPS gives a wrong answer and
-no error); once the device reports completion the drain must give it back. A backend without a fence is refused by name
-(no silent synchronous fallback).
+Triton branch: the Apple vendor files declare `memory.async_release: false` — a page comes back AT ONCE — and what makes
+that true is the launch, not a fence: nbxtensor's launcher drains NeuroBrix's own queue before every kernel and waits
+for the kernel after it (`_nbx_queue_drain()` / `_native().synchronize()`, nbxtensor/backend/triton_ext_driver.py), so
+no kernel is running when the host or that queue touches a page. The test that holds the declaration launches a kernel
+long enough to be caught running and reads its output from the host at the instant the launch returns: complete, or
+the declaration is false. Seen red with the post-launch synchronize() made a no-op (0 of 4096 values written). The day
+the launch stops waiting, the backend's fence (triton/state_fence.py, docs/nbxtensor/BACKENDS.md) becomes mandatory.
+
+Compiled branch: through MPS events (core/state/mps_fence.py). A backend without a fence is refused by name.
 """
+import ctypes
 import time
+from pathlib import Path
 
+import numpy as np
 import pytest
+import yaml
 
 from neurobrix.core.state.pages import PagePool, PageTable
 import nbxtensor.backend.runtime as _nbx_runtime  # the module the moved names live in (M2 cut of tensor.py)
@@ -44,20 +52,45 @@ def _wait(fence, pool, deadline_s=30.0):
         time.sleep(0.001)
 
 
-def test_the_triton_branch_frees_a_page_past_the_backends_fence():
-    from triton_apple_backend import metal_native as m
-    from neurobrix.triton.state_fence import MetalStateFence
-    fence = MetalStateFence(m)
-    pool = PagePool(num_pages=2, tokens_per_page=16, async_release=True)
+_APPLE = Path(__file__).resolve().parents[3] / "src" / "neurobrix" / "config" / "vendors" / "apple"
+_N, _BLOCK = 4096, 256
+
+
+def test_the_apple_vendor_files_release_a_page_at_once():
+    for f in sorted(_APPLE.glob("*.yml")):
+        memory = (yaml.safe_load(f.read_text()) or {}).get("memory") or {}
+        if "async_release" in memory:
+            assert memory["async_release"] is False, f"{f.name}: a page is released at once on Metal (the launch waits)"
+    pool = PagePool(num_pages=2, tokens_per_page=16, async_release=False)
     t = PageTable(pool)
     t.reserve(32)
-    kernel = m.load_metallib(m.compile_source(SPIN, "safe")).get_function("spin")
-    buf = m.alloc(4 * 1024)
-    kernel(buf, threads=[1024, 1, 1], group_size=[256, 1, 1])     # the "read" of the pages
-    t.free(fence=fence.record())
-    assert fence.drain(pool) == 0 and pool.free_pages == 0, "the kernel is still running: no page may come back"
-    _wait(fence, pool)
+    t.free()
     assert pool.free_pages == 2 and pool.pending_pages == 0
+
+
+def test_a_triton_launch_on_metal_returns_only_once_its_kernel_completed():
+    triton = pytest.importorskip("triton")
+    import triton.language as tl
+    from nbxtensor.backend.launcher import launch
+    from nbxtensor.tensor import NBXTensor
+
+    @triton.jit
+    def _spin(out_ptr, steps, BLOCK: tl.constexpr):
+        off = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+        x = off.to(tl.float32) * 0.0
+        for _ in range(steps):
+            x = x * 0.5 + 1.0
+        tl.store(out_ptr + off, x)
+
+    launch(_spin, (_N // _BLOCK,), NBXTensor.from_numpy(np.zeros(_N, dtype=np.float32)), 8, BLOCK=_BLOCK)  # compiled
+    out = NBXTensor.from_numpy(np.zeros(_N, dtype=np.float32))
+    launch(_spin, (_N // _BLOCK,), out, 200000, BLOCK=_BLOCK)
+    # The host's view of the buffer, read with no synchronize of its own (numpy() would copy through a path that may wait).
+    got = np.ctypeslib.as_array((ctypes.c_float * _N).from_address(out.data_ptr())).copy()
+    assert int((got == 2.0).sum()) == _N, (
+        f"{int((got == 2.0).sum())} of {_N} values written when the launch returned: the kernel was still running, so "
+        f"memory.async_release: false on Apple is false — keep the post-launch wait, or release pages past the "
+        f"backend's fence (triton/state_fence.py)")
 
 
 def test_a_backend_without_a_fence_is_refused_by_name():
