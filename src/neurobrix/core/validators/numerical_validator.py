@@ -245,49 +245,6 @@ class NumericalValidator(BaseValidator):
                 )
                 metrics['inf_increasing_trend'] = True
 
-    def check_tensor_immediate(
-        self,
-        tensor: Any,
-        name: str = "tensor",
-        raise_on_issue: bool = True,
-    ) -> Dict[str, Any]:
-        """
-        Immediately check a tensor for NaN/Inf.
-
-        Args:
-            tensor: Tensor to check
-            name: Name for error messages
-            raise_on_issue: If True, raise NaNInfDetected on issues
-
-        Returns:
-            Dict with check results
-
-        Raises:
-            NaNInfDetected if issues found and raise_on_issue=True
-        """
-        stats = self._get_tensor_stats(tensor)
-
-        if raise_on_issue:
-            if stats.get('nan_count', 0) > 0:
-                raise NaNInfDetected(
-                    f"NaN detected in {name}",
-                    nan_count=stats['nan_count'],
-                    suggestion="Check for division by zero, log of negative, or exploding gradients",
-                )
-            if stats.get('inf_count', 0) > 0:
-                raise NaNInfDetected(
-                    f"Inf detected in {name}",
-                    inf_count=stats['inf_count'],
-                    suggestion="Check for overflow or very large values before operations",
-                )
-
-        return stats
-
-    def reset_history(self) -> None:
-        """Reset numerical tracking history."""
-        self._check_count = 0
-        self._nan_history = []
-        self._inf_history = []
 
     def should_run(self, safety_level: SafetyLevel) -> bool:
         """Numerical validation runs at STANDARD and PARANOID levels."""

@@ -86,14 +86,6 @@ class ValidatorConfig:
     max_kernel_time_ms: Optional[float] = None
     max_memory_bandwidth_usage: Optional[float] = None
 
-    def validate_memory_requirement(self, required_bytes: int, available_bytes: int) -> bool:
-        """Check if memory requirement is within limits."""
-        usable = available_bytes * (1.0 - self.memory_safety_margin)
-        return required_bytes <= usable
-
-    def is_op_supported(self, op: str) -> bool:
-        """Check if operation is supported."""
-        return op.lower() in self.supported_ops
 
     def get_dtype_max(self, dtype: str) -> float:
         """Get max representable value for dtype."""

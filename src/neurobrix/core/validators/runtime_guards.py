@@ -34,53 +34,6 @@ class RuntimeGuards:
     # Shape Guards
     # ========================================================================
 
-    def check_shape(
-        self,
-        tensor: Any,
-        expected_shape: Tuple[int, ...],
-        name: str = "tensor",
-    ) -> None:
-        """
-        Check tensor shape matches expected.
-
-        Fast: O(n) where n = number of dimensions.
-        """
-        self._check_count += 1
-
-        actual_shape = self._get_shape(tensor)
-        if actual_shape != expected_shape:
-            self._violation_count += 1
-            raise ShapeViolation(
-                f"Shape mismatch for {name}",
-                expected_shape=expected_shape,
-                actual_shape=actual_shape,
-            )
-
-    def check_shape_compatible(
-        self,
-        tensor_a: Any,
-        tensor_b: Any,
-        name_a: str = "tensor_a",
-        name_b: str = "tensor_b",
-    ) -> None:
-        """
-        Check two tensors have compatible shapes for operations.
-
-        Checks broadcastability.
-        """
-        self._check_count += 1
-
-        shape_a = self._get_shape(tensor_a)
-        shape_b = self._get_shape(tensor_b)
-
-        if not self._are_broadcastable(shape_a, shape_b):
-            self._violation_count += 1
-            raise ShapeViolation(
-                f"Shapes not compatible: {name_a} and {name_b}",
-                expected_shape=shape_a,
-                actual_shape=shape_b,
-                suggestion="Shapes must be broadcastable",
-            )
 
     def check_batch_size(
         self,
@@ -197,96 +150,11 @@ class RuntimeGuards:
         self.check_no_nan(tensor, name)
         self.check_no_inf(tensor, name)
 
-    def check_value_range(
-        self,
-        tensor: Any,
-        min_val: Optional[float] = None,
-        max_val: Optional[float] = None,
-        name: str = "tensor",
-    ) -> None:
-        """Check tensor values are within range."""
-        if self.safety_level == SafetyLevel.MINIMAL:
-            return
-
-        self._check_count += 1
-
-        if hasattr(tensor, 'min') and hasattr(tensor, 'max'):
-            actual_min = float(tensor.min().item())
-            actual_max = float(tensor.max().item())
-
-            if min_val is not None and actual_min < min_val:
-                self._violation_count += 1
-                raise ValidationError(
-                    f"Value below minimum in {name}: {actual_min} < {min_val}",
-                    context={'actual_min': actual_min, 'required_min': min_val},
-                )
-
-            if max_val is not None and actual_max > max_val:
-                self._violation_count += 1
-                raise ValidationError(
-                    f"Value above maximum in {name}: {actual_max} > {max_val}",
-                    context={'actual_max': actual_max, 'required_max': max_val},
-                )
 
     # ========================================================================
     # Memory Guards
     # ========================================================================
 
-    def check_memory_available(
-        self,
-        required_bytes: int,
-        available_bytes: int,
-        name: str = "allocation",
-    ) -> None:
-        """Check sufficient memory is available."""
-        self._check_count += 1
-
-        config = self.config
-        usable = int(available_bytes * (1.0 - config.memory_safety_margin))
-
-        if required_bytes > usable:
-            self._violation_count += 1
-            raise MemoryPlanError(
-                f"Insufficient memory for {name}",
-                required_bytes=required_bytes,
-                available_bytes=available_bytes,
-                suggestion="Consider gradient checkpointing or smaller batch size",
-            )
-
-    def check_tensor_size(
-        self,
-        tensor: Any,
-        max_bytes: Optional[int] = None,
-        name: str = "tensor",
-    ) -> None:
-        """Check tensor size is within limits."""
-        self._check_count += 1
-
-        # Estimate tensor size
-        size_bytes = self._estimate_tensor_bytes(tensor)
-        max_allowed = max_bytes or self.config.max_tensor_bytes
-
-        if size_bytes > max_allowed:
-            self._violation_count += 1
-            raise MemoryPlanError(
-                f"Tensor {name} too large: {size_bytes / 1024**3:.2f} GB",
-                required_bytes=size_bytes,
-                suggestion=f"Max tensor size is {max_allowed / 1024**3:.0f} GB",
-            )
-
-    def _estimate_tensor_bytes(self, tensor: Any) -> int:
-        """Estimate tensor size in bytes."""
-        if hasattr(tensor, 'nbytes'):
-            return tensor.nbytes
-        elif hasattr(tensor, 'numel') and hasattr(tensor, 'element_size'):
-            return tensor.numel() * tensor.element_size()
-        elif hasattr(tensor, 'shape'):
-            # Assume float32
-            import functools
-            import operator
-            numel = functools.reduce(operator.mul, tensor.shape, 1)
-            return numel * 4
-        return 0
 
     # ========================================================================
     # Decorators
@@ -338,7 +206,3 @@ class RuntimeGuards:
             'safety_level': self.safety_level.name,
         }
 
-    def reset_stats(self) -> None:
-        """Reset statistics."""
-        self._check_count = 0
-        self._violation_count = 0

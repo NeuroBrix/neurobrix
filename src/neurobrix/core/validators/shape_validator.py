@@ -28,34 +28,6 @@ class ShapeConstraints:
     max_dims: Optional[Tuple[int, ...]] = None
     must_match: Set[str] = field(default_factory=set)  # Other tensors to match
 
-    def validate_shape(self, shape: Tuple[int, ...]) -> Tuple[bool, str]:
-        """
-        Validate a concrete shape against constraints.
-
-        Returns (is_valid, error_message).
-        """
-        # Check rank
-        if len(shape) != len(self.dims):
-            return False, f"Rank mismatch: expected {len(self.dims)}, got {len(shape)}"
-
-        # Check each dimension
-        for i, (actual, expected) in enumerate(zip(shape, self.dims)):
-            # Fixed dimension check
-            if expected is not None and actual != expected:
-                return False, f"Dim {i}: expected {expected}, got {actual}"
-
-            # Min bound check
-            if self.min_dims is not None and i < len(self.min_dims):
-                if actual < self.min_dims[i]:
-                    return False, f"Dim {i}: {actual} < min {self.min_dims[i]}"
-
-            # Max bound check
-            if self.max_dims is not None and i < len(self.max_dims):
-                if actual > self.max_dims[i]:
-                    return False, f"Dim {i}: {actual} > max {self.max_dims[i]}"
-
-        return True, ""
-
 
 class ShapeValidator(BaseValidator):
     """
@@ -308,25 +280,6 @@ class ShapeValidator(BaseValidator):
                     f"Tensor {name} sequence length {shape[1]} exceeds max {config.max_sequence_length}"
                 )
 
-    def validate_shapes_match(
-        self,
-        expected: Tuple[int, ...],
-        actual: Tuple[int, ...],
-        name: str = "",
-    ) -> None:
-        """
-        Validate that two shapes match exactly.
-
-        Raises ShapeViolation if mismatch.
-        """
-        if expected != actual:
-            raise ShapeViolation(
-                f"Shape mismatch for {name}",
-                expected_shape=expected,
-                actual_shape=actual,
-                suggestion=f"Expected {expected}, got {actual}. "
-                          f"Check input dimensions.",
-            )
 
     def should_run(self, safety_level: SafetyLevel) -> bool:
         """Shape validation runs at all levels."""

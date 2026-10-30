@@ -174,28 +174,6 @@ class ValidationPipeline:
 
         return self.validate_all(exec_plan, context)
 
-    def validate_runtime(
-        self,
-        tensors: Dict[str, Any],
-        context: Optional[Dict[str, Any]] = None,
-    ) -> List[ValidationResult]:
-        """
-        Run runtime validators (numerical stability).
-
-        Called during execution to check intermediate values.
-        """
-        context = context or {}
-        context['tensors'] = tensors
-
-        results = []
-        for validator_cls in self.RUNTIME_VALIDATORS:
-            validator = self._get_validator_by_class(validator_cls)
-            if validator and validator.should_run(self.level):
-                result = validator.validate(None, context)
-                results.append(result)
-
-        self._results = results
-        return results
 
     def _get_validator_by_class(
         self,
@@ -211,71 +189,9 @@ class ValidationPipeline:
     # Result Aggregation
     # ========================================================================
 
-    def all_passed(self) -> bool:
-        """Check if all validations passed."""
-        return all(r.passed for r in self._results)
-
-    def get_errors(self) -> List[str]:
-        """Get all error messages."""
-        errors = []
-        for result in self._results:
-            if not result.passed:
-                errors.append(f"[{result.validator_name}] {result.message}")
-        return errors
-
-    def get_warnings(self) -> List[str]:
-        """Get all warnings."""
-        warnings = []
-        for result in self._results:
-            warnings.extend(
-                f"[{result.validator_name}] {w}" for w in result.warnings
-            )
-        return warnings
-
-    def raise_if_failed(self) -> None:
-        """Raise ValidationError if any validation failed."""
-        if not self.all_passed():
-            errors = self.get_errors()
-            raise ValidationError(
-                f"Validation failed:\n" + "\n".join(errors)
-            )
-
-    def get_summary(self) -> Dict[str, Any]:
-        """Get validation summary."""
-        return {
-            'all_passed': self.all_passed(),
-            'validator_count': len(self._results),
-            'passed_count': sum(1 for r in self._results if r.passed),
-            'failed_count': sum(1 for r in self._results if not r.passed),
-            'warning_count': sum(len(r.warnings) for r in self._results),
-            'safety_level': self.level.name,
-            'errors': self.get_errors(),
-            'warnings': self.get_warnings(),
-        }
 
     # ========================================================================
     # Configuration
     # ========================================================================
 
-    def set_level(self, level: SafetyLevel) -> None:
-        """Update safety level for all validators."""
-        self.level = level
-        for validator in self.validators.values():
-            validator.safety_level = level
 
-    def add_validator(
-        self,
-        name: str,
-        validator: BaseValidator,
-    ) -> None:
-        """Add custom validator to pipeline."""
-        self.validators[name] = validator
-
-    def remove_validator(self, name: str) -> None:
-        """Remove validator from pipeline."""
-        if name in self.validators:
-            del self.validators[name]
-
-    def get_validator(self, name: str) -> Optional[BaseValidator]:
-        """Get validator by name."""
-        return self.validators.get(name)

@@ -241,13 +241,6 @@ class ValidationResult:
     def __bool__(self) -> bool:
         return self.passed
 
-    def raise_if_failed(self) -> None:
-        """Raise ValidationError if validation failed."""
-        if not self.passed:
-            raise ValidationError(
-                f"Validation failed: {self.validator_name}\n{self.message}"
-            )
-
 
 # ============================================================================
 # Base Validator

@@ -209,52 +209,6 @@ class OpValidator(BaseValidator):
                 if isinstance(kernel_size, int) and kernel_size <= 0:
                     errors.append(f"Invalid kernel_size {kernel_size} for {op}")
 
-    def check_op_supported(self, op: str, hardware: str = 'generic') -> bool:
-        """
-        Check if an operation is supported.
-
-        Args:
-            op: Operation name
-            hardware: Target hardware
-
-        Returns:
-            True if supported
-        """
-        supported = set(self.config.supported_ops)
-        supported.update(self._get_hardware_ops(hardware))
-        return op.lower() in supported
-
-    def get_all_supported_ops(self, hardware: str = 'generic') -> Set[str]:
-        """Get set of all supported operations."""
-        supported = set(self.config.supported_ops)
-        supported.update(self._get_hardware_ops(hardware))
-        return supported
-
-    def raise_if_unsupported(
-        self,
-        ops: List[str],
-        hardware: str = 'generic',
-    ) -> None:
-        """
-        Raise exception if any ops are unsupported.
-
-        Args:
-            ops: List of operation names
-            hardware: Target hardware
-
-        Raises:
-            UnsupportedOpsError if any ops unsupported
-        """
-        supported = self.get_all_supported_ops(hardware)
-        unsupported = [op for op in ops if op.lower() not in supported]
-
-        if unsupported:
-            raise UnsupportedOpsError(
-                f"Unsupported operations: {', '.join(unsupported)}",
-                unsupported_ops=unsupported,
-                suggestion=f"Available ops: {', '.join(sorted(supported)[:20])}... "
-                          f"Consider implementing custom kernels or using decomposition.",
-            )
 
     def should_run(self, safety_level: SafetyLevel) -> bool:
         """Op validation runs at all levels."""

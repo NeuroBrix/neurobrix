@@ -269,35 +269,6 @@ class MemoryValidator(BaseValidator):
                 f"This may impact performance."
             )
 
-    def validate_single_allocation(
-        self,
-        size_bytes: int,
-        available_bytes: int,
-        name: str = "",
-    ) -> None:
-        """
-        Validate a single memory allocation.
-
-        Raises MemoryPlanError if invalid.
-        """
-        config = self.config
-
-        if size_bytes > config.max_tensor_bytes:
-            raise MemoryPlanError(
-                f"Allocation '{name}' too large",
-                required_bytes=size_bytes,
-                suggestion=f"Max tensor size is {config.max_tensor_bytes / 1024**3:.0f} GB. "
-                          f"Consider chunking or offloading.",
-            )
-
-        usable = int(available_bytes * (1.0 - config.memory_safety_margin))
-        if size_bytes > usable:
-            raise MemoryPlanError(
-                f"Allocation '{name}' exceeds available memory",
-                required_bytes=size_bytes,
-                available_bytes=available_bytes,
-                suggestion="Consider gradient checkpointing or model sharding.",
-            )
 
     def should_run(self, safety_level: SafetyLevel) -> bool:
         """Memory validation runs at all levels."""

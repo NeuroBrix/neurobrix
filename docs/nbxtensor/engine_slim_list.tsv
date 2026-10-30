@@ -1,7 +1,7 @@
 # The engine's open slimming findings (tools/engine_slim_scan.py); each ends deleted, moved into nbxtensor, or kept
 # with its reason in docs/nbxtensor/ENGINE_SLIM.md. Both figures below may only go down (test_the_engine_only_slims.py).
-# engine_lines: 141621
-# open: 364
+# engine_lines: 140953
+# open: 332
 kind	path	symbol	detail
 dead	src/neurobrix/cli/commands/registry.py	installing_path	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/config/loader.py	vendor_file	no reference outside its own body (tests excluded)
@@ -12,38 +12,7 @@ dead	src/neurobrix/core/optim/report.py	AnalysisReport.write_json	no reference o
 dead	src/neurobrix/core/runtime/graph/paged_kv_cache.py	PagedKVCache.held_bytes	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/state/mps_fence.py	MpsStateFence	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/state/pages.py	PagePool.pending_pages	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/validators/base.py	ValidationResult.raise_if_failed	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/validators/config.py	ValidatorConfig.is_op_supported	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/validators/config.py	ValidatorConfig.validate_memory_requirement	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/validators/fusion_validator.py	FusionValidator.can_fuse	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/validators/fusion_validator.py	FusionValidator.find_fusion_groups	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/validators/fusion_validator.py	FusionValidator.validate_fusion	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/validators/memory_validator.py	MemoryValidator.validate_single_allocation	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/validators/numerical_validator.py	NumericalValidator.check_tensor_immediate	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/validators/numerical_validator.py	NumericalValidator.reset_history	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/validators/op_validator.py	OpValidator.check_op_supported	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/validators/op_validator.py	OpValidator.raise_if_unsupported	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/validators/pipeline.py	ValidationPipeline.add_validator	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/validators/pipeline.py	ValidationPipeline.get_summary	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/validators/pipeline.py	ValidationPipeline.get_validator	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/validators/pipeline.py	ValidationPipeline.raise_if_failed	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/validators/pipeline.py	ValidationPipeline.remove_validator	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/validators/pipeline.py	ValidationPipeline.set_level	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/validators/pipeline.py	ValidationPipeline.validate_runtime	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/validators/runtime_guards.py	RuntimeGuards.check_memory_available	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/validators/runtime_guards.py	RuntimeGuards.check_shape	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/validators/runtime_guards.py	RuntimeGuards.check_shape_compatible	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/validators/runtime_guards.py	RuntimeGuards.check_tensor_size	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/validators/runtime_guards.py	RuntimeGuards.check_value_range	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/validators/runtime_guards.py	RuntimeGuards.get_stats	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/validators/runtime_guards.py	RuntimeGuards.reset_stats	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/validators/shape_validator.py	ShapeConstraints.validate_shape	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/validators/shape_validator.py	ShapeValidator.validate_shapes_match	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/validators/sync_validator.py	SyncValidator.check_for_deadlock	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/validators/sync_validator.py	SyncValidator.validate_device_transfer	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/validators/tensor_validator.py	TensorValidator.log_shape_info	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/validators/tensor_validator.py	TensorValidator.validate_batch_consistency	no reference outside its own body (tests excluded)
-dead	src/neurobrix/core/validators/tensor_validator.py	TensorValidator.validate_device_consistency	no reference outside its own body (tests excluded)
 dead	src/neurobrix/nbx/container.py	NBXContainer.get_topology	no reference outside its own body (tests excluded)
 dead	src/neurobrix/serving/client.py	DaemonClient.generate_stream	no reference outside its own body (tests excluded)
 duplicate	src/neurobrix/core/audio_frontend.py	_requested_voice	same body as src/neurobrix/triton/audio_frontend.py::_requested_voice_np
@@ -316,7 +285,6 @@ wrapper	src/neurobrix/core/strategies/shared_steps.py	cleanup	only hands its par
 wrapper	src/neurobrix/core/strategies/tp_sharding.py	TP_SHARD_WORKERS	an alias of DEFAULT_NUM_WORKERS
 wrapper	src/neurobrix/core/validators/base.py	DeadlockRisk	only renames SyncError
 wrapper	src/neurobrix/core/validators/base.py	NaNInfDetected	only renames NumericalDivergence
-wrapper	src/neurobrix/core/validators/pipeline.py	get_validator	only hands its parameters to self.validators.get
 wrapper	src/neurobrix/core/validators/runtime_guards.py	check_batch_size(max_batch)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/workspace.py	SnapshotNotPresent	only renames Exception
 wrapper	src/neurobrix/kernels/autotune_certify.py	log	only hands its parameters to print
