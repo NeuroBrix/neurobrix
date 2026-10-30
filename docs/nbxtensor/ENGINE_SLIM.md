@@ -77,6 +77,11 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 
 | kind | path | symbol | why it stays |
 |---|---|---|---|
+| wrapper | src/neurobrix/kernels/autotune_certify.py | _contenders(factor) | a test seam: tests/unit/kernels/test_autotune_certify_windowed_oracle.py passes it to observe or replace what the run does |
+| wrapper | src/neurobrix/kernels/autotune_certify.py | _release_between_keys(allocator) | a test seam: tests/unit/kernels/test_release_between_keys_drains.py passes it to observe or replace what the run does |
+| wrapper | src/neurobrix/kernels/autotune_certify.py | certify(bench) | a test seam: the certifier's tests (a stub bench: no card) passes it to observe or replace what the run does |
+| wrapper | src/neurobrix/kernels/autotune_certify.py | certify(log) | a test seam: the certifier's tests (the log read back) passes it to observe or replace what the run does |
+| wrapper | src/neurobrix/kernels/autotune_certify.py | synthesize(values) | a test seam: tests/unit/kernels/test_a_square_flash_key_states_its_k_layout.py passes it to observe or replace what the run does |
 | duplicate | src/neurobrix/triton/scheduler/ddim.py | _init_step_index | the per-class hook the census shadows (kernels/census.py replaces `_init_step_index` on every scheduler class that defines it in its own body): one copy per scheduler class, by design |
 | duplicate | src/neurobrix/triton/scheduler/unipc_multistep.py | _init_step_index | the per-class hook the census shadows (kernels/census.py replaces `_init_step_index` on every scheduler class that defines it in its own body): one copy per scheduler class, by design |
 | dead | src/neurobrix/triton/state_fence.py | MetalStateFence | the Metal release fence the day launches stop waiting for their kernel (docs/nbxtensor/BACKENDS.md, 'Releasing state pages on Metal'; decision (b') of 2026-10-29 21:35): today only its refusal test reaches it |

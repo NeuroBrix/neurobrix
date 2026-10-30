@@ -589,7 +589,7 @@ def _draw_bytes(dt: str) -> int:
     return _isz.itemsize(_isz.from_autotune_key(dt))
 
 
-def price_key(qual: str, tuner, key: tuple, unified: bool = True) -> Optional[Dict[str, int]]:
+def price_key(qual: str, tuner, key: tuple) -> Optional[Dict[str, int]]:
     """The bytes a certification of `key` holds, phase by phase, from what the code allocates —
     never a constant per element. Measured on the Mac 2026-09-28 (`NBX_CERTIFY_PHASES=1`,
     results/certifier_price): a depthwise key's peak is the windowed fp64 conv oracle (three
@@ -784,11 +784,11 @@ def _conv2d_oracle(x, w, stride, padding, dilation, groups, window=None):
                                    slab_of=lambda n0, n1, u0, u1, v0, v1: _f64(x[n0:n1, :, u0:u1, v0:v1]))
 
 
-def _conv_windows(n, oh, ow, ci_g, co, kh, kw, cap=None):
+def _conv_windows(n, oh, ow, ci_g, co, kh, kw):
     """None when the whole oracle fits the cap; else the windows of the output the oracle is
     computed on — the top-left corner of the first batch element, the centre of the middle
     one, the bottom-right corner of the last — each of at most cap/3 multiply-adds."""
-    cap = ORACLE_MAX_MACS if cap is None else cap
+    cap = ORACLE_MAX_MACS
     per_position = ci_g * co * kh * kw
     if n * oh * ow * per_position <= cap:
         return None
@@ -1549,7 +1549,7 @@ def _current_backend() -> Optional[str]:
         return None
 
 
-def _protocol_file(backend: Optional[str] = None) -> Optional[Path]:
+def _protocol_file() -> Optional[Path]:
     """The machine's declared measurement protocol FOR ITS BACKEND, or None.
 
     A protocol is a property of the MACHINE AND ITS BACKEND, not of the engine:
@@ -1568,7 +1568,7 @@ def _protocol_file(backend: Optional[str] = None) -> Optional[Path]:
     then the machine's dotfile. A legacy un-suffixed file is honoured ONLY if it
     declares this backend, never blindly — the leak does not come back.
     """
-    backend = backend or _current_backend()
+    backend = _current_backend()
     env = os.environ.get(_PROTOCOL_ENV)
     if env:
         return Path(env)                      # named, so a missing one refuses below
@@ -2459,7 +2459,7 @@ def census_tuners(shapes) -> Dict[str, Any]:
 
 def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[str] = None, bench=None,
             out: Optional[str] = None, kernels: Optional[List[str]] = None, limit: Optional[int] = None,
-            only_missing: bool = False, seed: int = 20260907, log=None,
+            only_missing: bool = False, log=None,
             allow_off_protocol: bool = False, reprove_unclocked: bool = False,
             reprove_generator: bool = False, working_set_mb: Optional[int] = None,
             models: Optional[List[str]] = None, skip_proven_since: Optional[str] = None,
@@ -2527,7 +2527,7 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
     if kernels:
         want = set(kernels)
         shapes = {q: ks for q, ks in shapes.items() if q in want or C.kernel_short(q) in want}
-    rng = np.random.default_rng(seed)
+    rng = np.random.default_rng(20260907)   # one draw for every certification: a key's witness is reproducible
     summary: Dict[str, Any] = {"vendor": vendor, "profile": profile, "directory": str(root), "kernels": {},
                                "certified": 0, "skipped": 0, "failed": 0, "unreachable": 0,
                                "excluded_configs": 0, "started": time.time()}
