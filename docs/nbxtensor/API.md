@@ -307,6 +307,21 @@ def tiled_upsample_conv2d(x_or_proxy, weight, bias, stride, padding, dilation, t
 def pair(v) -> tuple           # (h, w) of a convolution argument given as one int or a pair
 ```
 
+### `nbxtensor.io.read_rate` — how fast the machine reads its weight files, by parallel reads
+
+```python
+PIECE = 16 << 20                                   # the loaders' read piece
+def pieces(files, max_bytes) -> (list, int)        # (path, offset, bytes) pieces over `files`, and their total
+def trial(pieces, workers) -> float                # bytes/s reading them with `workers` threads, the cache evicted first
+def choose(rates, within) -> int                   # the smallest count within `within` of the best rate
+def measure(files, max_bytes, max_workers, within=0.05) -> dict
+    # {'rates': {1: .., 2: .., 4: ..}, 'workers': choose(...), 'steady': bool, 'bytes': .., 'last_one_worker': ..}
+```
+
+The cache is evicted before each trial and bypassed during it (macOS `msync(MS_INVALIDATE)` + `F_NOCACHE`, Linux
+`posix_fadvise(DONTNEED)`): the rate is the storage path's, never the page cache's. A measure whose first and last
+one-worker trials disagree is not steady and is not to be recorded.
+
 ### `nbxtensor.io.safetensors` — the host conversions of a loaded weight, split across the loader's workers
 
 ```python
