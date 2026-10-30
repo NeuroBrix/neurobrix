@@ -854,6 +854,16 @@ def untiled_reason(blocking, components) -> str:
             + "; ".join(kinds) + " — no tiled implementation exists for that op, so the rung cannot claim it")
 
 
+
+def _spatial_input(graph) -> tuple:
+    """(H, W) of a graph's first rank-4 (NCHW) or rank-5 (NCDHW) input, (None, None) when it has none."""
+    tensors = graph.get("tensors", {})
+    for iid in graph.get("input_tensor_ids", []):
+        shape = tensors.get(str(iid), {}).get("shape", [])
+        if isinstance(shape, list) and len(shape) in (4, 5):
+            return shape[-2], shape[-1]
+    return None, None
+
 class PrismSolver:
     """
     Enterprise Grade Hardware Allocation Solver.
@@ -6641,6 +6651,15 @@ class PrismSolver:
         ppath = cache_path / "components" / comp_name / "profile.json"
         if not gpath.exists() or not ppath.exists():
             return self._tiling_decline(comp_name, "its graph.json or profile.json is absent")
+        # Declined before its graph is read again from disk (4.9 s for Qwen3-30B-A3B's) when no branch below can
+        # apply: no stream, no vendor cut, and no rank-4 or rank-5 input in the graph the container holds.
+        held = (getattr(container, "_components", None) or {}).get(comp_name)
+        if (isinstance(getattr(held, "graph", None), dict)
+                and comp_name not in self.__dict__.get("_component_stream", {})
+                and self._stream_declaration(container, comp_name) is None
+                and self._vendor_tiling_declaration(comp_name) is None
+                and _spatial_input(held.graph)[0] is None):
+            return self._tiling_decline(comp_name, "its graph has no rank-4 or rank-5 input to tile")
         try:
             with open(gpath) as _gf:
                 graph = json.load(_gf)
@@ -6684,14 +6703,7 @@ class PrismSolver:
 
         # Spatial input: 4D NCHW or 5D NCDHW; trace_size = H (index -2).
         tensors = graph.get("tensors", {})
-        trace_size = None
-        in_spatial_w = None          # the W beside it, for the scale derivation below
-        for iid in graph.get("input_tensor_ids", []):
-            shape = tensors.get(str(iid), {}).get("shape", [])
-            if isinstance(shape, list) and len(shape) in (4, 5):
-                trace_size = shape[-2]
-                in_spatial_w = shape[-1]
-                break
+        trace_size, in_spatial_w = _spatial_input(graph)          # H, and the W beside it for the scale derivation
         if not trace_size:
             return self._tiling_decline(comp_name, "its graph has no rank-4 or rank-5 input to tile")
 
