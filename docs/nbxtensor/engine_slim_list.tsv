@@ -1,7 +1,7 @@
 # The engine's open slimming findings (tools/engine_slim_scan.py); each ends deleted, moved into nbxtensor, or kept
 # with its reason in docs/nbxtensor/ENGINE_SLIM.md. Both figures below may only go down (test_the_engine_only_slims.py).
-# engine_lines: 142267
-# open: 445
+# engine_lines: 142087
+# open: 441
 kind	path	symbol	detail
 dead	src/neurobrix/cli/commands/registry.py	installing_path	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/config/loader.py	vendor_file	no reference outside its own body (tests excluded)
@@ -50,8 +50,6 @@ dead	src/neurobrix/serving/client.py	DaemonClient.generate_stream	no reference o
 dead	src/neurobrix/triton/state_fence.py	MetalStateFence	no reference outside its own body (tests excluded)
 duplicate	src/neurobrix/core/audio_frontend.py	_requested_voice	same body as src/neurobrix/triton/audio_frontend.py::_requested_voice_np
 duplicate	src/neurobrix/core/cfg/engine.py	__init__	same body as src/neurobrix/triton/cfg/engine.py::__init__
-duplicate	src/neurobrix/core/dtype/engine.py	amp_fp32_output_dtype	same body as src/neurobrix/triton/dtype.py::amp_fp32_output_dtype
-duplicate	src/neurobrix/core/dtype/engine.py	traced_output_is_complex	same body as src/neurobrix/triton/dtype.py::traced_output_is_complex
 duplicate	src/neurobrix/core/flow/audio.py	__init__	same body as src/neurobrix/core/flow/audio_llm.py::__init__, src/neurobrix/core/flow/dual_ar.py::__init__, src/neurobrix/core/flow/encoder_decoder.py::__init__, src/neurobrix/core/flow/forward_pass.py::__init__, src/neurobrix/core/flow/next_token_diffusion.py::__init__, src/neurobrix/core/flow/rnnt.py::__init__, src/neurobrix/core/flow/tts_llm.py::__init__, src/neurobrix/core/flow/vlm.py::__init__
 duplicate	src/neurobrix/core/flow/audio.py	_get_component_output	same body as src/neurobrix/core/flow/audio_llm.py::_get_component_output, src/neurobrix/core/flow/encoder_decoder.py::_get_component_output, src/neurobrix/core/flow/vlm.py::_get_component_output
 duplicate	src/neurobrix/core/flow/audio.py	_postprocess_output	same body as src/neurobrix/triton/flow/audio.py::_postprocess_output
@@ -192,8 +190,6 @@ duplicate	src/neurobrix/core/validators/runtime_guards.py	_are_broadcastable	sam
 duplicate	src/neurobrix/triton/audio_frontend.py	_requested_voice_np	same body as src/neurobrix/core/audio_frontend.py::_requested_voice
 duplicate	src/neurobrix/triton/audio_frontend.py	postprocess_text_output_np	same body as src/neurobrix/core/flow/audio_utils.py::postprocess_text_output
 duplicate	src/neurobrix/triton/cfg/engine.py	__init__	same body as src/neurobrix/core/cfg/engine.py::__init__
-duplicate	src/neurobrix/triton/dtype.py	amp_fp32_output_dtype	same body as src/neurobrix/core/dtype/engine.py::amp_fp32_output_dtype
-duplicate	src/neurobrix/triton/dtype.py	traced_output_is_complex	same body as src/neurobrix/core/dtype/engine.py::traced_output_is_complex
 duplicate	src/neurobrix/triton/flow/audio.py	__init__	same body as src/neurobrix/triton/flow/audio_llm.py::__init__, src/neurobrix/triton/flow/dual_ar.py::__init__, src/neurobrix/triton/flow/encoder_decoder.py::__init__, src/neurobrix/triton/flow/forward_pass.py::__init__, src/neurobrix/triton/flow/next_token_diffusion.py::__init__, src/neurobrix/triton/flow/rnnt.py::__init__, src/neurobrix/triton/flow/tts_llm.py::__init__, src/neurobrix/triton/flow/vlm.py::__init__
 duplicate	src/neurobrix/triton/flow/audio.py	_get_component_input_shape	same body as src/neurobrix/core/flow/audio_utils.py::get_component_input_shape
 duplicate	src/neurobrix/triton/flow/audio.py	_postprocess_output	same body as src/neurobrix/core/flow/audio.py::_postprocess_output

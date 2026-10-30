@@ -233,25 +233,21 @@ def test_every_dispatch_site_passes_the_op_record():
 
 
 # ─────────────────────────────────────────────────────────────────────
-# The predicate is duplicated across the two branches (R33: triton/ may
-# not import the torch-carrying core module). Pin the copies together.
+# The predicate is the library's (nbxtensor/dtype/outputs.py): both branches
+# import that one definition — no twin left to drift.
 # ─────────────────────────────────────────────────────────────────────
 
 def test_both_branches_read_the_container_identically():
-    """core/dtype/engine.py and triton/dtype.py each carry their own
-    `traced_output_is_complex` — the Triton branch cannot import the core one
-    without pulling torch in at import time (R33). Duplication is the
-    doctrine's answer there (AMP_FP32_OPS is duplicated for the same reason),
-    but two copies can drift. They read a STRING, so the whole surface they
-    could drift on is representation — pinned here.
+    """core/dtype/engine.py and triton/dtype.py both hand out the library's
+    `traced_output_is_complex` — one definition, torch-free, read the same way
+    on a plain string, a torch.dtype and an NBXDtype.
     """
-    from neurobrix.core.dtype import engine as core_mod
+    from nbxtensor.dtype import outputs
     from neurobrix.core.dtype.engine import traced_output_is_complex as core
-    from neurobrix.triton import dtype as triton_mod
     from neurobrix.triton.dtype import traced_output_is_complex as triton
 
-    assert core_mod._COMPLEX_DTYPE_NAMES == triton_mod._COMPLEX_DTYPE_NAMES, (
-        "the two branches recognise different complex dtype names")
+    assert core is triton is outputs.traced_output_is_complex, (
+        "a branch carries its own copy of the complex-output predicate")
 
     cases = [
         ({"output_dtypes": ["complex64"]}, True),

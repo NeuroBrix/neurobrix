@@ -1019,8 +1019,8 @@ class _AtenRules(_Rules):
                 if contract and name in ATEN_FP32_OPS_HALF_IO:
                     return c
                 # The store is the engine's `amp_fp32_output_dtype(c, graph, False, narrowed)`
-                # (engine.py; its torch-free twin in triton/dtype.py is CALLED here — a test
-                # holds the twins equal): bf16 -> bf16 on a bf16 graph, fp32 on another;
+                # (the library's rule, nbxtensor/dtype/outputs.py, which both engines import):
+                # bf16 -> bf16 on a bf16 graph, fp32 on another;
                 # fp16 -> C only when narrowed.
                 return _tdt.amp_fp32_output_dtype(
                     c, self.graph_dtype, False, contract and uid in self.contract.narrow_op_uids)

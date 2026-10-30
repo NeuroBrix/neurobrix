@@ -152,6 +152,16 @@ assert p.fill_value("masked_fill", -3.39e38, "float16") == -65504.0   # a bfloat
 assert p.replace(compute="bfloat16").compute == "bfloat16"            # a policy never changes: a new one is made
 ```
 
+An op's output dtype under a half compute dtype, when it computes in float32 inside (`nbxtensor.dtype.outputs`):
+
+```python
+from nbxtensor.dtype.outputs import amp_fp32_output_dtype, traced_output_is_complex
+
+assert amp_fp32_output_dtype("bfloat16", "bfloat16", safe=False, narrowed=False) == "bfloat16"  # follows the graph
+assert amp_fp32_output_dtype("float16", "float16", safe=False, narrowed=False) == "float32"      # no contract: float32
+assert traced_output_is_complex({"output_dtypes": ["complex64"]})   # read from the traced output, never the op's name
+```
+
 ### Array API: type promotion and Python scalars
 
 Type promotion follows the [Array API standard](https://data-apis.org/array-api/draft/API_specification/type_promotion.html),

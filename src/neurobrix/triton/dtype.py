@@ -59,8 +59,8 @@ AMP_FP32_OPS: FrozenSet[str] = frozenset({
 
 # UNIFORM cast-back doctrine: every AMP_FP32_OPS goes through the
 # fp32-internal-compute-then-cast-back wrap, and ONE rule decides its output
-# dtype — `amp_fp32_output_dtype` below (the compiled DtypeEngine carries its
-# torch-free twin; a test holds the two equal):
+# dtype — `amp_fp32_output_dtype` (the library's, nbxtensor/dtype/outputs.py; the
+# compiled DtypeEngine imports the same one):
 #   * compute dtype bf16 on a bf16 GRAPH (the container's `torch_dtype`): the
 #     output is cast back to bf16, always. The op still computes in fp32; its
 #     fp32 result always fits bf16's range (bf16 has fp32's exponent), so the
@@ -162,49 +162,11 @@ def _saturated_one_element(t, out_dt):
     return NBXTensor.from_numpy(arr)
 
 
-# Mirror of core/dtype/engine.py's predicate. Duplicated, not imported: that
-# module imports torch, and the Triton branch loads no torch at import or at
-# execution (R33). The two-modes doctrine keeps these paths parallel by
-# construction — AMP_FP32_OPS / AMP_FP16_OPS above are duplicated for the same
-# reason. Dtype crosses this boundary as a STRING, which is all the predicate
-# reads, so the two copies cannot drift on representation.
-_COMPLEX_DTYPE_NAMES = frozenset({
-    "complex32", "complex64", "complex128", "chalf", "cfloat", "cdouble",
-})
 
-
-def traced_output_dtype_name(op_meta) -> Optional[str]:
-    """The plain name of the op's first traced output dtype (`output_dtypes[0]` at the
-    record's TOP level, as `traced_output_is_complex` reads it), or None when the record
-    states none."""
-    if not isinstance(op_meta, dict):
-        return None
-    dts = op_meta.get("output_dtypes") or ()
-    if not dts:
-        return None
-    return str(dts[0]).rsplit(".", 1)[-1]
-
-
-def traced_output_is_complex(op_meta) -> bool:
-    """True when the CONTAINER types this op's output as complex.
-
-    See core/dtype/engine.traced_output_is_complex for the full rationale: the
-    op's NAME cannot answer this (a plain `aten::mul` produces Kokoro's
-    complex64) and neither can its INPUTS (the other operand is the Python
-    scalar `1j`, absent from input_dtypes). NBXDtype carries complex64 and
-    complex128 — Wan2.1's RoPE freqs are complex128 — so the Triton branch
-    needs the same floor as the ATen branch.
-
-    `op_meta` carries the op's traced dtypes — the op's graph record here.
-    Only `output_dtypes` is read, at that dict's TOP level.
-    """
-    if not isinstance(op_meta, dict):
-        return False
-    # Last dotted segment — see the core copy: it makes the two branches read
-    # a plain string, a torch.dtype and an NBXDtype identically, so the
-    # duplication cannot drift on representation.
-    return any(str(d).rsplit(".", 1)[-1] in _COMPLEX_DTYPE_NAMES
-               for d in (op_meta.get("output_dtypes") or ()))
+# `traced_output_dtype_name`, `traced_output_is_complex` and `amp_fp32_output_dtype` are the library's
+# (nbxtensor/dtype/outputs.py), one definition for both engines.
+from nbxtensor.dtype.outputs import (  # noqa: F401 — the library's rules, one definition for both engines
+    amp_fp32_output_dtype, traced_output_dtype_name, traced_output_is_complex)
 
 
 def _is_float_tensor(a) -> bool:
@@ -219,58 +181,6 @@ def _get_nbx_dtype(a) -> NBXDtype:
     if hasattr(a, 'nbx_dtype'):
         return a.nbx_dtype
     return NBXDtype.float32
-
-
-_GRAPH_FLOAT_NAMES: FrozenSet[str] = frozenset({"float16", "bfloat16", "float32", "float64"})
-_HALF_GRAPH_NAMES: FrozenSet[str] = frozenset({"float16", "bfloat16"})
-
-
-def amp_fp32_output_dtype(compute_dtype: str, graph_dtype: Optional[str], safe: bool,
-                          narrowed: bool, traced: Optional[str] = None) -> str:
-    """The OUTPUT dtype (a name) of an op computed fp32-internal under the half compute
-    dtype `compute_dtype` (a name: "bfloat16" or "float16") — THE cast-back rule of the
-    AMP_FP32 class (see the doctrine above AMP_FP16_OPS).
-
-    `graph_dtype` is the component's GRAPH dtype — the container's traced `torch_dtype`
-    (graph.json top level), the dtype its vendor's forward ran in. Read under bf16 only:
-    the op returns bf16 when the graph is bf16 (the vendor's forward returns x.dtype, and
-    x is bf16 there — Sana's DC-AE RMSNorm); on a graph of another dtype that the
-    profile's preferred dtype coerced to bf16 compute, x.dtype was fp32 in the vendor's
-    forward and the output stays fp32 (measured 2026-09-28 on the Mac's Apple gate:
-    Kokoro's fp32 graph moved FARTHER from its fp32 reference with a bf16 cast-back).
-    A graph dtype the container does not state is refused by name under bf16.
-
-    `safe` is the component's `activations_fp16_safe` flag as THIS engine reads it for the
-    cast back; `narrowed` says the op is in the record's narrow set (the compiled engine
-    passes `safe=False`: its flag alone never narrows an fp32-class output). Both are read
-    only under fp16 — the contract does not exist under bf16
-    (precision_contract.resolve returns (False, set(), set())). `traced` is the op's traced
-    output dtype name (its graph record's `output_dtypes[0]`): float32 on a half graph is
-    the vendor's own fp32 island, which `safe` never narrows — only `narrowed` does.
-
-    Pure, torch-free and device-free: the Triton wrapper, its compiled twin
-    (core/dtype/engine.py `amp_fp32_output_dtype`) and Prism's width pass
-    (core/prism/runtime_widths.py) all ask it. A compute dtype that is not half is refused
-    by name — no AMP wrap exists there, so a caller asking is a caller in error."""
-    if compute_dtype == "bfloat16":
-        if graph_dtype not in _GRAPH_FLOAT_NAMES:
-            raise ValueError(
-                f"amp_fp32_output_dtype: under bfloat16 compute the output follows the "
-                f"component's graph dtype, and {graph_dtype!r} is none of "
-                f"{sorted(_GRAPH_FLOAT_NAMES)} — the container's graph.json `torch_dtype` "
-                f"must state it")
-        return "bfloat16" if graph_dtype == "bfloat16" else "float32"
-    if compute_dtype == "float16":
-        if traced == "float32" and graph_dtype in _HALF_GRAPH_NAMES:
-            # The vendor's own fp32 island inside a half forward (a timestep frequency table:
-            # exp(-log(10000) * arange / half) times t up to 999). The component's flag does
-            # not narrow it; only the record's per-op narrow set does, the compiled engine's
-            # rule. Narrowed to fp16 by the flag, CogVideoX-2b's frequency table moved
-            # sin(t * f) by 0.21 at t = 999 (drift walk, 2026-10-05).
-            return "float16" if narrowed else "float32"
-        return "float16" if (safe or narrowed) else "float32"
-    raise ValueError(f"amp_fp32_output_dtype: compute dtype {compute_dtype!r} is not a half "
-                     f"dtype — the AMP_FP32 cast-back rule exists for bfloat16 and float16 only")
 
 
 def _triton_fp64_keys(vendor: str, architecture: str, keys) -> bool:

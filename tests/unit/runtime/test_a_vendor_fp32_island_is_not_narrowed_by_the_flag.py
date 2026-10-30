@@ -12,10 +12,10 @@ flag (it passes safe=False and narrows per op from the record's narrow set), so 
 disagreed on the same container.
 
 The rule now: an op traced float32 on a half graph is narrowed by the narrow set only, never by
-the flag — in `amp_fp32_output_dtype` (both twins), in the Triton wrapper (which reads the op's
+the flag — in `amp_fp32_output_dtype` (the library's, both engines'), in the Triton wrapper (which reads the op's
 record), and in Prism's width pass. An op traced at the half dtype is unchanged.
 
-What these tests do if the code is wrong: with the floor removed from the Triton twin,
+What these tests do if the code is wrong: with the floor removed from the rule,
 test_the_rule_* and test_the_triton_wrapper_keeps_* are red (fp16 returned); with the wrapper
 not handing the record's dtype to the rule, test_the_triton_wrapper_keeps_* is red.
 

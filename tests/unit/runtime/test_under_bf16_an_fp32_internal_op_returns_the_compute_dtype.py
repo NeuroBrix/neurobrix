@@ -13,10 +13,10 @@ Under C = fp16 the calibration contract is unchanged: cast back only under the c
 (Triton: the `activations_fp16_safe` flag or the narrow set; compiled: the narrow set, or a
 half-IO kernel), fp32 otherwise. A contract island keeps fp32 whatever C.
 
-The decision is one pure function per engine — `amp_fp32_output_dtype(c, graph, safe,
-narrowed)` in triton/dtype.py (called by the Triton wrapper and by Prism's width pass) and
-its torch-free twin in core/dtype/engine.py (called by `compile_op` and by the PyTorch-
-sequential `amp_cast_result`); `test_the_two_engines_twins_are_one_rule` holds them equal.
+The decision is one pure function — `amp_fp32_output_dtype(c, graph, safe, narrowed)`, the
+library's (nbxtensor/dtype/outputs.py), which both engines import: the Triton wrapper and Prism's
+width pass through triton/dtype.py, `compile_op` and the PyTorch-sequential `amp_cast_result`
+through core/dtype/engine.py; `test_the_two_engines_twins_are_one_rule` holds them one object.
 The graph dtype each engine reads is the DAG's `torch_dtype`:
 `test_every_engine_reads_the_graph_dtype_from_the_container_s_torch_dtype`.
 
@@ -109,10 +109,12 @@ def test_the_graph_dtype_is_read_by_name_from_the_container():
 
 
 def test_the_two_engines_twins_are_one_rule():
-    """The compiled engine's module imports torch and the Triton one imports triton: neither
-    may import the other, so the rule has a twin. This door holds them equal everywhere."""
+    """Both engines hand out the library's rule (nbxtensor/dtype/outputs.py): one definition,
+    held here to answer equally everywhere."""
     pytest.importorskip("torch")
+    from nbxtensor.dtype import outputs
     from neurobrix.core.dtype import engine as E
+    assert E.amp_fp32_output_dtype is T.amp_fp32_output_dtype is outputs.amp_fp32_output_dtype
     for c, g, safe, narrowed, traced in itertools.product(
             _HALF, _GRAPHS, (False, True), (False, True), (None,) + _GRAPHS):
         assert (E.amp_fp32_output_dtype(c, g, safe, narrowed, traced)

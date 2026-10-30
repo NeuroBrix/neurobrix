@@ -71,6 +71,7 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 
 | when | engine definition | nbxtensor API |
 |---|---|---|
+| 2026-10-30 | `traced_output_dtype_name` (triton/dtype.py), `traced_output_is_complex` and `amp_fp32_output_dtype` (twins in core/dtype/engine.py and triton/dtype.py, held equal by tests) | `nbxtensor.dtype.outputs` — one definition both engines import |
 
 ## Kept in the engine
 
