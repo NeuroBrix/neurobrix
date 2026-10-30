@@ -67,31 +67,10 @@ class TritonGenerator:
             "repetition_penalty": self.repetition_penalty,
         })
 
-    def set_generation_params(self, max_tokens: Optional[int] = None,
-                              temperature: Optional[float] = None,
-                              top_p: Optional[float] = None,
-                              top_k: Optional[int] = None,
-                              repetition_penalty: Optional[float] = None,
-                              device_idx: Optional[int] = None):
-        needs_resample = False
-        if max_tokens is not None:
-            self.max_tokens = max_tokens
-        if temperature is not None:
-            self.temperature = temperature
-            needs_resample = True
-        if top_p is not None:
-            self.top_p = top_p
-            needs_resample = True
-        if top_k is not None:
-            self.top_k = top_k
-            needs_resample = True
-        if repetition_penalty is not None:
-            self.repetition_penalty = repetition_penalty
-            needs_resample = True
-        if needs_resample:
-            self._sampler = self._create_sampler()
-        if device_idx is not None:
-            self._state.device_idx = device_idx
+    def set_generation_params(self, device_idx: int):
+        """The device the generation runs on (the flow sets it once the plan placed the component); the sampling
+        parameters are read from the config at construction."""
+        self._state.device_idx = device_idx
 
     def set_prompt_ids(self, prompt_ids: List[int]):
         self._prompt_ids = prompt_ids

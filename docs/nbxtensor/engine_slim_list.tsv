@@ -1,7 +1,7 @@
 # The engine's open slimming findings (tools/engine_slim_scan.py); each ends deleted, moved into nbxtensor, or kept
 # with its reason in docs/nbxtensor/ENGINE_SLIM.md. Both figures below may only go down (test_the_engine_only_slims.py).
-# engine_lines: 138407
-# open: 314
+# engine_lines: 138386
+# open: 309
 kind	path	symbol	detail
 dead	src/neurobrix/cli/commands/registry.py	installing_path	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/config/loader.py	vendor_file	no reference outside its own body (tests excluded)
@@ -301,11 +301,6 @@ wrapper	src/neurobrix/triton/audio_frontend.py	_build(_ctx)	no call site passes 
 wrapper	src/neurobrix/triton/dtype.py	resolve_compute_dtype(component)	no call site passes it: always its default None
 wrapper	src/neurobrix/triton/flow/iterative_process.py	_to_nbx(device_idx)	no call site passes it: always its default 0
 wrapper	src/neurobrix/triton/generator.py	from_config	only hands its parameters to cls
-wrapper	src/neurobrix/triton/generator.py	set_generation_params(max_tokens)	no call site passes it: always its default None
-wrapper	src/neurobrix/triton/generator.py	set_generation_params(repetition_penalty)	no call site passes it: always its default None
-wrapper	src/neurobrix/triton/generator.py	set_generation_params(temperature)	no call site passes it: always its default None
-wrapper	src/neurobrix/triton/generator.py	set_generation_params(top_k)	no call site passes it: always its default None
-wrapper	src/neurobrix/triton/generator.py	set_generation_params(top_p)	no call site passes it: always its default None
 wrapper	src/neurobrix/triton/kv_cache.py	intercept(enable_gqa)	no call site passes it: always its default None
 wrapper	src/neurobrix/triton/moe.py	_host_expert(_h)	no call site passes it: always its default _host
 wrapper	src/neurobrix/triton/replay.py	slab_refused	only hands its parameters to self.break_plan
