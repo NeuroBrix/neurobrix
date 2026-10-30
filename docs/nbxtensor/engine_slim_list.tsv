@@ -1,7 +1,7 @@
 # The engine's open slimming findings (tools/engine_slim_scan.py); each ends deleted, moved into nbxtensor, or kept
 # with its reason in docs/nbxtensor/ENGINE_SLIM.md. Both figures below may only go down (test_the_engine_only_slims.py).
-# engine_lines: 138386
-# open: 309
+# engine_lines: 138379
+# open: 302
 kind	path	symbol	detail
 dead	src/neurobrix/cli/commands/registry.py	installing_path	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/config/loader.py	vendor_file	no reference outside its own body (tests excluded)
@@ -300,15 +300,8 @@ wrapper	src/neurobrix/serving/protocol.py	endpoint	only hands its parameters to 
 wrapper	src/neurobrix/triton/audio_frontend.py	_build(_ctx)	no call site passes it: always its default ctx
 wrapper	src/neurobrix/triton/dtype.py	resolve_compute_dtype(component)	no call site passes it: always its default None
 wrapper	src/neurobrix/triton/flow/iterative_process.py	_to_nbx(device_idx)	no call site passes it: always its default 0
-wrapper	src/neurobrix/triton/generator.py	from_config	only hands its parameters to cls
 wrapper	src/neurobrix/triton/kv_cache.py	intercept(enable_gqa)	no call site passes it: always its default None
-wrapper	src/neurobrix/triton/moe.py	_host_expert(_h)	no call site passes it: always its default _host
-wrapper	src/neurobrix/triton/replay.py	slab_refused	only hands its parameters to self.break_plan
-wrapper	src/neurobrix/triton/samplers.py	create_sampler	only hands its parameters to CombinedSampler
 wrapper	src/neurobrix/triton/sequence.py	func_wrapper	only hands its parameters to moe_fused_dispatch
-wrapper	src/neurobrix/triton/sequential.py	bind_inputs	only hands its parameters to self._dtype_engine.cast_runtime_inputs
-wrapper	src/neurobrix/triton/session.py	use_branch	only hands its parameters to self.kv_wrapper.use_branch
-wrapper	src/neurobrix/triton/symbols.py	get	only hands its parameters to self._bindings.get
 wrapper	src/neurobrix/triton/weight_loader.py	_read_header	an alias of read_safetensors_header
 wrapper	src/neurobrix/triton/weight_loader.py	load_component_weights(per_device_vram_budget)	no call site passes it: always its default None
 wrapper	src/neurobrix/triton/weight_loader.py	load_component_weights(upcast_fp16_to_fp32)	no call site passes it: always its default False

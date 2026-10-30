@@ -16,7 +16,7 @@ from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.memory.allocator import DeviceAllocator
 
-from .samplers import CombinedSampler, create_sampler
+from .samplers import CombinedSampler
 
 
 @dataclass
@@ -59,7 +59,7 @@ class TritonGenerator:
         self._sampler = self._create_sampler()
 
     def _create_sampler(self) -> CombinedSampler:
-        return create_sampler({
+        return CombinedSampler({
             "temperature": self.temperature,
             "top_p": self.top_p,
             "top_k": self.top_k,

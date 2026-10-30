@@ -344,10 +344,3 @@ class CombinedSampler:
 # =============================================================================
 # Factory
 # =============================================================================
-
-def create_sampler(config: Dict[str, Any]) -> CombinedSampler:
-    """Create the appropriate sampler from config.
-
-    Always returns CombinedSampler — it handles all strategies via config.
-    """
-    return CombinedSampler(config)

@@ -79,6 +79,12 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 
 | kind | path | symbol | why it stays |
 |---|---|---|---|
+| wrapper | src/neurobrix/triton/replay.py | slab_refused | the allocator-interceptor protocol's hook: nbxtensor's slab allocator (nbxtensor/memory/slab.py) calls `slab_refused(reason)` on the interceptor in force |
+| wrapper | src/neurobrix/triton/moe.py | _host_expert(_h) | the default argument binds the layer's host tables at definition — a closure capture, not a parameter a caller passes |
+| wrapper | src/neurobrix/triton/generator.py | from_config | the factory interface every generator shares (core/module/autoregressive's generators and samplers have it): the flows construct through it |
+| wrapper | src/neurobrix/triton/symbols.py | get | the symbol table's accessor (6 403 call sites): the bindings dict stays private, `is_bound` decides boundness |
+| wrapper | src/neurobrix/triton/session.py | use_branch | the session is the flows' handle; the KV wrapper behind it is the session's to replace |
+| wrapper | src/neurobrix/triton/sequential.py | bind_inputs | the interface every sequence implements (TritonSequence.bind_inputs, CompiledSequence.bind_inputs): the flows bind through it |
 | wrapper | src/neurobrix/triton/kv_cache.py | replay_advance | the KV wrapper is the handle the Triton flows hold (triton/flow/*); the paged cache behind it is the wrapper's to replace — a caller reaching `.cache` would bind to that internal |
 | wrapper | src/neurobrix/triton/kv_cache.py | replay_lens_restore | the KV wrapper is the handle the Triton flows hold (triton/flow/*); the paged cache behind it is the wrapper's to replace — a caller reaching `.cache` would bind to that internal |
 | wrapper | src/neurobrix/triton/kv_cache.py | replay_lens_snapshot | the KV wrapper is the handle the Triton flows hold (triton/flow/*); the paged cache behind it is the wrapper's to replace — a caller reaching `.cache` would bind to that internal |
