@@ -32,9 +32,10 @@ P-PRISM-NEVER-REFUSE v2 — 2026-05-12.
 from typing import Dict, Any, Optional, Set
 
 from .base import ExecutionStrategy, StrategyContext
+from neurobrix.core.strategies.shared_steps import CPUExecutionSteps   # the steps both branches share
 
 
-class CPUExecutionStrategy(ExecutionStrategy):
+class CPUExecutionStrategy(CPUExecutionSteps, ExecutionStrategy):
     """All components execute on the host CPU.
 
     Identical control flow to `SingleGPUStrategy` but the device is
@@ -80,23 +81,5 @@ class CPUExecutionStrategy(ExecutionStrategy):
 
         outputs = executor.run(inputs or {})
         return outputs
-
-    def unload_weights(self, component_name: str) -> None:
-        """Unload weights for component.
-
-        In eager mode, skip unloading. In lazy mode, delegate to base
-        which frees the underlying tensor storage.
-        """
-        if self._eager:
-            return
-        super().unload_weights(component_name)
-
-    def prepare_inputs(
-        self,
-        component_name: str,
-        inputs: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        """Ensure inputs are on CPU (the only device this strategy uses)."""
-        return self.transfer_dict(inputs, self.device)
 
 

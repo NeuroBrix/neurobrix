@@ -1,7 +1,7 @@
 # The engine's open slimming findings (tools/engine_slim_scan.py); each ends deleted, moved into nbxtensor, or kept
 # with its reason in docs/nbxtensor/ENGINE_SLIM.md. Both figures below may only go down (test_the_engine_only_slims.py).
-# engine_lines: 141787
-# open: 386
+# engine_lines: 141621
+# open: 364
 kind	path	symbol	detail
 dead	src/neurobrix/cli/commands/registry.py	installing_path	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/config/loader.py	vendor_file	no reference outside its own body (tests excluded)
@@ -124,49 +124,28 @@ duplicate	src/neurobrix/core/runtime/graph/compiled_sequence.py	_extract_const_f
 duplicate	src/neurobrix/core/runtime/resolution/i2v_conditioning.py	_to_channels_first	same body as src/neurobrix/triton/i2v_conditioning.py::_to_channels_first
 duplicate	src/neurobrix/core/runtime/resolution/i2v_conditioning.py	build_condition	same body as src/neurobrix/triton/i2v_conditioning.py::build_condition
 duplicate	src/neurobrix/core/strategies/block_scatter.py	__init__	same body as src/neurobrix/core/strategies/triton/block_scatter.py::__init__
-duplicate	src/neurobrix/core/strategies/block_scatter.py	_load_fgp_weights	same body as src/neurobrix/core/strategies/pipeline_parallel.py::_load_pp_weights, src/neurobrix/core/strategies/triton/block_scatter.py::_load_fgp_weights, src/neurobrix/core/strategies/triton/pipeline_parallel.py::_load_pp_weights
-duplicate	src/neurobrix/core/strategies/block_scatter.py	execute_component	same body as src/neurobrix/core/strategies/triton/block_scatter.py::execute_component
-duplicate	src/neurobrix/core/strategies/block_scatter.py	prepare_inputs	same body as src/neurobrix/core/strategies/pipeline_parallel.py::prepare_inputs, src/neurobrix/core/strategies/triton/block_scatter.py::prepare_inputs, src/neurobrix/core/strategies/triton/pipeline_parallel.py::prepare_inputs
 duplicate	src/neurobrix/core/strategies/block_scatter.py	unload_weights	same body as src/neurobrix/core/strategies/pipeline_parallel.py::unload_weights
 duplicate	src/neurobrix/core/strategies/component_placement.py	__init__	same body as src/neurobrix/core/strategies/triton/component_placement.py::__init__
 duplicate	src/neurobrix/core/strategies/component_placement.py	execute_component	same body as src/neurobrix/core/strategies/triton/component_placement.py::execute_component
-duplicate	src/neurobrix/core/strategies/component_placement.py	prepare_inputs	same body as src/neurobrix/core/strategies/triton/component_placement.py::prepare_inputs
 duplicate	src/neurobrix/core/strategies/cpu_execution.py	__init__	same body as src/neurobrix/core/strategies/triton/cpu_execution.py::__init__
 duplicate	src/neurobrix/core/strategies/cpu_execution.py	execute_component	same body as src/neurobrix/core/strategies/triton/single_gpu.py::execute_component
 duplicate	src/neurobrix/core/strategies/lazy_sequential.py	__init__	same body as src/neurobrix/core/strategies/triton/lazy_sequential.py::__init__
-duplicate	src/neurobrix/core/strategies/lazy_sequential.py	_get_component_device	same body as src/neurobrix/core/strategies/triton/lazy_sequential.py::_get_component_device
-duplicate	src/neurobrix/core/strategies/lazy_sequential.py	_get_component_strategy	same body as src/neurobrix/core/strategies/triton/lazy_sequential.py::_get_component_strategy
-duplicate	src/neurobrix/core/strategies/lazy_sequential.py	uninstall_for_executor	same body as src/neurobrix/core/strategies/triton/lazy_sequential.py::uninstall_for_executor
-duplicate	src/neurobrix/core/strategies/lazy_sequential.py	unload_weights	same body as src/neurobrix/core/strategies/triton/lazy_sequential.py::unload_weights
 duplicate	src/neurobrix/core/strategies/pipeline_parallel.py	__init__	same body as src/neurobrix/core/strategies/triton/pipeline_parallel.py::__init__
-duplicate	src/neurobrix/core/strategies/pipeline_parallel.py	_load_pp_weights	same body as src/neurobrix/core/strategies/block_scatter.py::_load_fgp_weights, src/neurobrix/core/strategies/triton/block_scatter.py::_load_fgp_weights, src/neurobrix/core/strategies/triton/pipeline_parallel.py::_load_pp_weights
-duplicate	src/neurobrix/core/strategies/pipeline_parallel.py	prepare_inputs	same body as src/neurobrix/core/strategies/block_scatter.py::prepare_inputs, src/neurobrix/core/strategies/triton/block_scatter.py::prepare_inputs, src/neurobrix/core/strategies/triton/pipeline_parallel.py::prepare_inputs
 duplicate	src/neurobrix/core/strategies/pipeline_parallel.py	unload_weights	same body as src/neurobrix/core/strategies/block_scatter.py::unload_weights
+duplicate	src/neurobrix/core/strategies/shared_steps.py	_load_fgp_weights	same body as src/neurobrix/core/strategies/shared_steps.py::_load_pp_weights
+duplicate	src/neurobrix/core/strategies/shared_steps.py	_load_pp_weights	same body as src/neurobrix/core/strategies/shared_steps.py::_load_fgp_weights
+duplicate	src/neurobrix/core/strategies/shared_steps.py	prepare_inputs	same body as 
 duplicate	src/neurobrix/core/strategies/triton/block_scatter.py	__init__	same body as src/neurobrix/core/strategies/block_scatter.py::__init__
-duplicate	src/neurobrix/core/strategies/triton/block_scatter.py	_load_fgp_weights	same body as src/neurobrix/core/strategies/block_scatter.py::_load_fgp_weights, src/neurobrix/core/strategies/pipeline_parallel.py::_load_pp_weights, src/neurobrix/core/strategies/triton/pipeline_parallel.py::_load_pp_weights
-duplicate	src/neurobrix/core/strategies/triton/block_scatter.py	execute_component	same body as src/neurobrix/core/strategies/block_scatter.py::execute_component
-duplicate	src/neurobrix/core/strategies/triton/block_scatter.py	prepare_inputs	same body as src/neurobrix/core/strategies/block_scatter.py::prepare_inputs, src/neurobrix/core/strategies/pipeline_parallel.py::prepare_inputs, src/neurobrix/core/strategies/triton/pipeline_parallel.py::prepare_inputs
 duplicate	src/neurobrix/core/strategies/triton/block_scatter.py	unload_weights	same body as src/neurobrix/core/strategies/triton/pipeline_parallel.py::unload_weights
 duplicate	src/neurobrix/core/strategies/triton/component_placement.py	__init__	same body as src/neurobrix/core/strategies/component_placement.py::__init__
 duplicate	src/neurobrix/core/strategies/triton/component_placement.py	execute_component	same body as src/neurobrix/core/strategies/component_placement.py::execute_component
-duplicate	src/neurobrix/core/strategies/triton/component_placement.py	prepare_inputs	same body as src/neurobrix/core/strategies/component_placement.py::prepare_inputs
 duplicate	src/neurobrix/core/strategies/triton/cpu_execution.py	__init__	same body as src/neurobrix/core/strategies/cpu_execution.py::__init__
 duplicate	src/neurobrix/core/strategies/triton/lazy_sequential.py	__init__	same body as src/neurobrix/core/strategies/lazy_sequential.py::__init__
-duplicate	src/neurobrix/core/strategies/triton/lazy_sequential.py	_get_component_device	same body as src/neurobrix/core/strategies/lazy_sequential.py::_get_component_device
-duplicate	src/neurobrix/core/strategies/triton/lazy_sequential.py	_get_component_strategy	same body as src/neurobrix/core/strategies/lazy_sequential.py::_get_component_strategy
-duplicate	src/neurobrix/core/strategies/triton/lazy_sequential.py	uninstall_for_executor	same body as src/neurobrix/core/strategies/lazy_sequential.py::uninstall_for_executor
-duplicate	src/neurobrix/core/strategies/triton/lazy_sequential.py	unload_weights	same body as src/neurobrix/core/strategies/lazy_sequential.py::unload_weights
 duplicate	src/neurobrix/core/strategies/triton/pipeline_parallel.py	__init__	same body as src/neurobrix/core/strategies/pipeline_parallel.py::__init__
-duplicate	src/neurobrix/core/strategies/triton/pipeline_parallel.py	_load_pp_weights	same body as src/neurobrix/core/strategies/block_scatter.py::_load_fgp_weights, src/neurobrix/core/strategies/pipeline_parallel.py::_load_pp_weights, src/neurobrix/core/strategies/triton/block_scatter.py::_load_fgp_weights
-duplicate	src/neurobrix/core/strategies/triton/pipeline_parallel.py	prepare_inputs	same body as src/neurobrix/core/strategies/block_scatter.py::prepare_inputs, src/neurobrix/core/strategies/pipeline_parallel.py::prepare_inputs, src/neurobrix/core/strategies/triton/block_scatter.py::prepare_inputs
 duplicate	src/neurobrix/core/strategies/triton/pipeline_parallel.py	unload_weights	same body as src/neurobrix/core/strategies/triton/block_scatter.py::unload_weights
 duplicate	src/neurobrix/core/strategies/triton/single_gpu.py	execute_component	same body as src/neurobrix/core/strategies/cpu_execution.py::execute_component
 duplicate	src/neurobrix/core/strategies/triton/weight_sharding.py	__init__	same body as src/neurobrix/core/strategies/weight_sharding.py::__init__
-duplicate	src/neurobrix/core/strategies/triton/weight_sharding.py	execute_component	same body as src/neurobrix/core/strategies/weight_sharding.py::execute_component
-duplicate	src/neurobrix/core/strategies/triton/weight_sharding.py	prepare_inputs	same body as src/neurobrix/core/strategies/weight_sharding.py::prepare_inputs
 duplicate	src/neurobrix/core/strategies/weight_sharding.py	__init__	same body as src/neurobrix/core/strategies/triton/weight_sharding.py::__init__
-duplicate	src/neurobrix/core/strategies/weight_sharding.py	execute_component	same body as src/neurobrix/core/strategies/triton/weight_sharding.py::execute_component
-duplicate	src/neurobrix/core/strategies/weight_sharding.py	prepare_inputs	same body as src/neurobrix/core/strategies/triton/weight_sharding.py::prepare_inputs
 duplicate	src/neurobrix/core/validators/fusion_validator.py	_are_broadcastable	same body as src/neurobrix/core/validators/runtime_guards.py::_are_broadcastable
 duplicate	src/neurobrix/core/validators/runtime_guards.py	_are_broadcastable	same body as src/neurobrix/core/validators/fusion_validator.py::_are_broadcastable
 duplicate	src/neurobrix/triton/audio_frontend.py	_requested_voice_np	same body as src/neurobrix/core/audio_frontend.py::_requested_voice
@@ -333,9 +312,8 @@ wrapper	src/neurobrix/core/state/pages.py	writable(fence)	no call site passes it
 wrapper	src/neurobrix/core/strategies/base.py	synchronize_device	only hands its parameters to device_sync
 wrapper	src/neurobrix/core/strategies/layer_streaming.py	_nbx_path	only hands its parameters to self.resolve_artifact_path
 wrapper	src/neurobrix/core/strategies/layer_streaming.py	register_op_types_on_segments(_segs)	no call site passes it: always its default segments
+wrapper	src/neurobrix/core/strategies/shared_steps.py	cleanup	only hands its parameters to self._loaded_components.clear
 wrapper	src/neurobrix/core/strategies/tp_sharding.py	TP_SHARD_WORKERS	an alias of DEFAULT_NUM_WORKERS
-wrapper	src/neurobrix/core/strategies/triton/weight_sharding.py	cleanup	only hands its parameters to self._loaded_components.clear
-wrapper	src/neurobrix/core/strategies/weight_sharding.py	cleanup	only hands its parameters to self._loaded_components.clear
 wrapper	src/neurobrix/core/validators/base.py	DeadlockRisk	only renames SyncError
 wrapper	src/neurobrix/core/validators/base.py	NaNInfDetected	only renames NumericalDivergence
 wrapper	src/neurobrix/core/validators/pipeline.py	get_validator	only hands its parameters to self.validators.get

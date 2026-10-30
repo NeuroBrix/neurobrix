@@ -11,9 +11,10 @@ from typing import Dict, Any, Optional, Set
 
 from ..base import StrategyContext
 from .base import TritonStrategy
+from neurobrix.core.strategies.shared_steps import CPUExecutionSteps   # the steps both branches share
 
 
-class CPUExecutionStrategy(TritonStrategy):
+class CPUExecutionStrategy(CPUExecutionSteps, TritonStrategy):
     """All components execute on the host (triton-path contract mirror)."""
 
     def __init__(self, context: StrategyContext, strategy_name: str = "cpu_execution"):
@@ -41,17 +42,5 @@ class CPUExecutionStrategy(TritonStrategy):
             inputs = self.prepare_inputs(component_name, inputs)
 
         return executor.run(inputs or {})
-
-    def unload_weights(self, component_name: str) -> None:
-        if self._eager:
-            return
-        super().unload_weights(component_name)
-
-    def prepare_inputs(
-        self,
-        component_name: str,
-        inputs: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        return self.transfer_dict(inputs, self.device)
 
 

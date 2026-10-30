@@ -14,9 +14,10 @@ from typing import Dict, Any, Optional, List, Set
 import torch
 
 from .base import ExecutionStrategy, StrategyContext
+from neurobrix.core.strategies.shared_steps import WeightShardingSteps   # the steps both branches share
 
 
-class WeightShardingStrategy(ExecutionStrategy):
+class WeightShardingStrategy(WeightShardingSteps, ExecutionStrategy):
     """
     Weight sharding execution across multiple GPUs.
 
@@ -46,40 +47,4 @@ class WeightShardingStrategy(ExecutionStrategy):
 
         self._loaded_components: Set[str] = set()
 
-    def execute_component(
-        self,
-        component_name: str,
-        phase: str,
-        inputs: Optional[Dict[str, Any]] = None,
-    ) -> Optional[Dict[str, Any]]:
-        """Execute component — sharded or regular."""
-        executor = self.context.component_executors.get(component_name)
-        if executor is None:
-            raise RuntimeError(f"ZERO FALLBACK: No executor for component '{component_name}'")
 
-        if component_name in self.sharded_components:
-            primary_device = self.sharded_components[component_name][0]
-        elif component_name in self.regular_components:
-            primary_device = self.regular_components[component_name]
-        else:
-            primary_device = str(executor.device)
-
-        if inputs:
-            inputs = self.transfer_dict(inputs, primary_device, async_transfer=False)
-
-        return executor.run(inputs or {})
-
-    def prepare_inputs(self, component_name: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        """Transfer inputs to component's primary device."""
-        if component_name in self.sharded_components:
-            target = self.sharded_components[component_name][0]
-        elif component_name in self.regular_components:
-            target = self.regular_components[component_name]
-        else:
-            return inputs
-        return self.transfer_dict(inputs, target, async_transfer=False)
-
-
-    def cleanup(self) -> None:
-        """Release resources."""
-        self._loaded_components.clear()

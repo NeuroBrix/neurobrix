@@ -15,9 +15,10 @@ from typing import Dict, Any, Optional, Set
 import torch
 
 from .base import ExecutionStrategy, StrategyContext
+from neurobrix.core.strategies.shared_steps import SingleGPUSteps   # the steps both branches share
 
 
-class SingleGPUStrategy(ExecutionStrategy):
+class SingleGPUStrategy(SingleGPUSteps, ExecutionStrategy):
     """
     Single GPU execution with configurable loading mode.
 
@@ -110,17 +111,5 @@ class SingleGPUStrategy(ExecutionStrategy):
 
         # Lazy mode: actually unload
         super().unload_weights(component_name)
-
-    def prepare_inputs(
-        self,
-        component_name: str,
-        inputs: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        """
-        Ensure inputs are on the GPU.
-
-        For single GPU, just move any CPU tensors to device.
-        """
-        return self.transfer_dict(inputs, self.device)
 
 

@@ -10,9 +10,10 @@ from typing import Dict, Any, Optional, List, Set
 
 from ..base import StrategyContext
 from .base import TritonStrategy
+from neurobrix.core.strategies.shared_steps import WeightShardingSteps   # the steps both branches share
 
 
-class WeightShardingStrategy(TritonStrategy):
+class WeightShardingStrategy(WeightShardingSteps, TritonStrategy):
     """Weight sharding execution across multiple GPUs (triton path)."""
 
     def __init__(self, context: StrategyContext, strategy_name: str = "weight_sharding"):
@@ -35,37 +36,4 @@ class WeightShardingStrategy(TritonStrategy):
 
         self._loaded_components: Set[str] = set()
 
-    def execute_component(
-        self,
-        component_name: str,
-        phase: str,
-        inputs: Optional[Dict[str, Any]] = None,
-    ) -> Optional[Dict[str, Any]]:
-        executor = self.context.component_executors.get(component_name)
-        if executor is None:
-            raise RuntimeError(f"ZERO FALLBACK: No executor for component '{component_name}'")
 
-        if component_name in self.sharded_components:
-            primary_device = self.sharded_components[component_name][0]
-        elif component_name in self.regular_components:
-            primary_device = self.regular_components[component_name]
-        else:
-            primary_device = str(executor.device)
-
-        if inputs:
-            inputs = self.transfer_dict(inputs, primary_device, async_transfer=False)
-
-        return executor.run(inputs or {})
-
-    def prepare_inputs(self, component_name: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        if component_name in self.sharded_components:
-            target = self.sharded_components[component_name][0]
-        elif component_name in self.regular_components:
-            target = self.regular_components[component_name]
-        else:
-            return inputs
-        return self.transfer_dict(inputs, target, async_transfer=False)
-
-
-    def cleanup(self) -> None:
-        self._loaded_components.clear()

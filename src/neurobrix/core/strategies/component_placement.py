@@ -21,9 +21,10 @@ import torch
 from neurobrix.core.device_utils import device_empty_cache
 
 from .base import ExecutionStrategy, StrategyContext
+from neurobrix.core.strategies.shared_steps import ComponentPlacementLazySteps, ComponentPlacementSteps   # the steps both branches share
 
 
-class ComponentPlacementStrategy(ExecutionStrategy):
+class ComponentPlacementStrategy(ComponentPlacementSteps, ExecutionStrategy):
     """
     Component placement across multiple GPUs.
 
@@ -72,17 +73,6 @@ class ComponentPlacementStrategy(ExecutionStrategy):
 
         return executor.run(inputs or {})
 
-    def prepare_inputs(self, component_name: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        """Transfer inputs to component's device."""
-        target_device = self.component_devices.get(component_name)
-        if target_device is None:
-            return inputs
-
-        transferred = self.transfer_dict(inputs, target_device, self.use_async)
-        if self.use_async:
-            self.synchronize_device(target_device)
-        return transferred
-
 
     def transfer_model_output(self, model_output: torch.Tensor, state_tensor: torch.Tensor) -> torch.Tensor:
         """Transfer model output to same device as state tensor."""
@@ -95,7 +85,7 @@ class ComponentPlacementStrategy(ExecutionStrategy):
         return transferred
 
 
-class ComponentPlacementLazyStrategy(ComponentPlacementStrategy):
+class ComponentPlacementLazyStrategy(ComponentPlacementLazySteps, ComponentPlacementStrategy):
     """
     Component placement with lazy weight swapping between phases.
 
@@ -108,15 +98,4 @@ class ComponentPlacementLazyStrategy(ComponentPlacementStrategy):
         super().__init__(context, strategy_name)
         self._phase_loaded: Set[str] = set()
 
-    def execute_component(
-        self,
-        component_name: str,
-        phase: str,
-        inputs: Optional[Dict[str, Any]] = None,
-    ) -> Optional[Dict[str, Any]]:
-        """Execute component with lazy load/unload around execution."""
-        if component_name not in self._phase_loaded:
-            self.load_weights(component_name)
-            self._phase_loaded.add(component_name)
-        return super().execute_component(component_name, phase, inputs)
 

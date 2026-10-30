@@ -12,9 +12,10 @@ from typing import Dict, Any, Optional, List, Set
 from ..base import StrategyContext
 from .base import TritonStrategy
 from .block_scatter import _nbx_device_str
+from neurobrix.core.strategies.shared_steps import PipelineParallelSteps   # the steps both branches share
 
 
-class PipelineParallelStrategy(TritonStrategy):
+class PipelineParallelStrategy(PipelineParallelSteps, TritonStrategy):
     """Pipeline parallel execution across multiple GPUs (triton path)."""
 
     def __init__(self, context: StrategyContext, strategy_name: str = "pipeline_parallel"):
@@ -48,14 +49,6 @@ class PipelineParallelStrategy(TritonStrategy):
         self.primary_device = self.devices[0]
         self._loaded_components: Set[str] = set()
 
-    def is_pp_component(self, component_name: str) -> bool:
-        return component_name in self.pp_components
-
-    def get_shard_map(self, component_name: str) -> Dict[str, str]:
-        return self.pp_components.get(component_name, {})
-
-    def get_component_devices(self, component_name: str) -> List[str]:
-        return self.component_devices.get(component_name, [self.primary_device])
 
     def execute_component(
         self,
@@ -80,31 +73,6 @@ class PipelineParallelStrategy(TritonStrategy):
             inputs = self.prepare_inputs(component_name, inputs)
 
         return executor.run(inputs or {})
-
-    def _load_pp_weights(self, component_name: str) -> None:
-        executor = self.context.component_executors.get(component_name)
-        if executor is None:
-            return
-
-        weights_loaded = hasattr(executor, '_weights') and bool(executor._weights)
-        if weights_loaded:
-            return
-
-        shard_map = self.get_shard_map(component_name)
-        # Was: read `nbx_path` off the package, and if absent skip the
-        # load without a word. That name exists on no package this
-        # engine builds, so the load never happened and never said so.
-        nbx_path = self.resolve_artifact_path(component_name)
-
-        if shard_map:
-            executor.load_weights(nbx_path, component_name, shard_map)
-        else:
-            executor.load_weights(nbx_path, component_name)
-
-    def prepare_inputs(self, component_name: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        devices = self.get_component_devices(component_name)
-        target_device = devices[0] if devices else self.primary_device
-        return self.transfer_dict(inputs, target_device, self.use_async)
 
 
     def unload_weights(self, component_name: str) -> None:

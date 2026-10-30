@@ -17,11 +17,12 @@ from neurobrix.core.device_utils import device_empty_cache
 from typing import Dict, Optional, Any, Set
 
 from .base import ExecutionStrategy, StrategyContext
+from neurobrix.core.strategies.shared_steps import LazySequentialSteps   # the steps both branches share
 
 logger = logging.getLogger(__name__)
 
 
-class LazySequentialStrategy(ExecutionStrategy):
+class LazySequentialStrategy(LazySequentialSteps, ExecutionStrategy):
     """
     Sequential component execution with lazy weight loading.
 
@@ -99,32 +100,6 @@ class LazySequentialStrategy(ExecutionStrategy):
                 self.context, strategy_name="lazy_sequential+zero3")
         self._zero3_brick.install_for_executor(component_name, executor)
 
-    def uninstall_for_executor(self, component_name: str,
-                               executor=None) -> None:
-        """Lifecycle mirror of install_for_executor — forwards to the
-        zero3 brick so a between-request unload re-arms the install
-        (see Zero3Strategy.uninstall_for_executor for the failure
-        class). No-op when no brick exists or the component was never
-        installed."""
-        brick = getattr(self, "_zero3_brick", None)
-        if brick is not None:
-            brick.uninstall_for_executor(component_name, executor)
-
-    def _get_component_strategy(self, component_name: str) -> str:
-        """Get per-component strategy from allocation."""
-        alloc = self.context.allocations.get(component_name)
-        if isinstance(alloc, dict):
-            return alloc.get('strategy', 'single_gpu')
-        return 'single_gpu'
-
-    def _get_component_device(self, component_name: str) -> str:
-        """Get device for component."""
-        alloc = self.context.allocations.get(component_name)
-        if isinstance(alloc, dict):
-            return alloc.get('device', 'cpu')
-        elif isinstance(alloc, tuple):
-            return alloc[0]
-        return 'cpu'
 
     def _pin_cpu_weights(self, component_name: str, executor: Any) -> None:
         """Pin CPU weights for zero3 sub-components — never a unified expert store's experts, which
@@ -161,13 +136,6 @@ class LazySequentialStrategy(ExecutionStrategy):
         device = self._get_component_device(component_name)
         return self.transfer_dict(inputs, device)
 
-
-    def unload_weights(self, component_name: str) -> None:
-        """Unload component weights (lazy mode — always unload)."""
-        self.uninstall_for_executor(component_name)
-        super().unload_weights(component_name)
-        self._loaded_components.discard(component_name)
-        self._pinned_components.discard(component_name)
 
     def cleanup(self) -> None:
         """Release all resources (brick teardown first — its ratchet

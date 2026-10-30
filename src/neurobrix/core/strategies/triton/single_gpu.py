@@ -10,9 +10,10 @@ from typing import Dict, Any, Optional, Set
 
 from ..base import StrategyContext
 from .base import TritonStrategy
+from neurobrix.core.strategies.shared_steps import SingleGPUSteps   # the steps both branches share
 
 
-class SingleGPUStrategy(TritonStrategy):
+class SingleGPUStrategy(SingleGPUSteps, TritonStrategy):
     """Single GPU execution with configurable loading mode (triton path)."""
 
     def __init__(self, context: StrategyContext, strategy_name: str = "single_gpu"):
@@ -58,13 +59,5 @@ class SingleGPUStrategy(TritonStrategy):
         if self._eager:
             return
         super().unload_weights(component_name)
-
-    def prepare_inputs(
-        self,
-        component_name: str,
-        inputs: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        """Ensure inputs are on the assigned GPU (NBXTensor transfer)."""
-        return self.transfer_dict(inputs, self.device)
 
 

@@ -12,6 +12,7 @@ from typing import Dict, Optional, Any, Set
 
 from ..base import StrategyContext
 from .base import TritonStrategy, _ACCELERATOR_PREFIXES
+from neurobrix.core.strategies.shared_steps import LazySequentialSteps   # the steps both branches share
 
 
 def _names_accelerator(device: str) -> bool:
@@ -31,7 +32,7 @@ def _names_accelerator(device: str) -> bool:
 logger = logging.getLogger(__name__)
 
 
-class LazySequentialStrategy(TritonStrategy):
+class LazySequentialStrategy(LazySequentialSteps, TritonStrategy):
     """Sequential component execution with lazy weight loading (triton path)."""
 
     def __init__(self, context: StrategyContext, strategy_name: str = "lazy_sequential"):
@@ -92,19 +93,6 @@ class LazySequentialStrategy(TritonStrategy):
             f"the weight loader must resolve the GPU before inputs can "
             f"be placed.")
 
-    def _get_component_strategy(self, component_name: str) -> str:
-        alloc = self.context.allocations.get(component_name)
-        if isinstance(alloc, dict):
-            return alloc.get('strategy', 'single_gpu')
-        return 'single_gpu'
-
-    def _get_component_device(self, component_name: str) -> str:
-        alloc = self.context.allocations.get(component_name)
-        if isinstance(alloc, dict):
-            return alloc.get('device', 'cpu')
-        elif isinstance(alloc, tuple):
-            return alloc[0]
-        return 'cpu'
 
     def prepare_inputs(
         self,
@@ -134,19 +122,6 @@ class LazySequentialStrategy(TritonStrategy):
                 self.context, strategy_name="triton_lazy_sequential+zero3")
         self._zero3_brick.install_for_executor(component_name, executor)
 
-    def uninstall_for_executor(self, component_name: str,
-                               executor=None) -> None:
-        """Lifecycle mirror of install_for_executor (see the compiled
-        LazySequential twin for the request-2 stale-install class)."""
-        brick = getattr(self, "_zero3_brick", None)
-        if brick is not None:
-            brick.uninstall_for_executor(component_name, executor)
-
-    def unload_weights(self, component_name: str) -> None:
-        self.uninstall_for_executor(component_name)
-        super().unload_weights(component_name)
-        self._loaded_components.discard(component_name)
-        self._pinned_components.discard(component_name)
 
     def cleanup(self) -> None:
         brick = getattr(self, "_zero3_brick", None)

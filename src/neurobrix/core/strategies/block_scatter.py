@@ -18,9 +18,10 @@ import torch
 from neurobrix.core.device_utils import device_empty_cache
 
 from .base import ExecutionStrategy, StrategyContext
+from neurobrix.core.strategies.shared_steps import BlockScatterSteps   # the steps both branches share
 
 
-class BlockScatterStrategy(ExecutionStrategy):
+class BlockScatterStrategy(BlockScatterSteps, ExecutionStrategy):
     """
     Block scatter execution across multiple GPUs.
 
@@ -60,71 +61,6 @@ class BlockScatterStrategy(ExecutionStrategy):
             raise RuntimeError("ZERO FALLBACK: No devices assigned by Prism for block scatter")
         self.primary_device = self.devices[0]
         self._loaded_components: Set[str] = set()
-
-    def is_fgp_component(self, component_name: str) -> bool:
-        """Check if component is block-scattered across GPUs."""
-        return component_name in self.fgp_components
-
-    def get_shard_map(self, component_name: str) -> Dict[str, str]:
-        """Get shard map for scattered component."""
-        return self.fgp_components.get(component_name, {})
-
-    def get_component_devices(self, component_name: str) -> List[str]:
-        """Get list of devices for component."""
-        return self.component_devices.get(component_name, [self.primary_device])
-
-    def execute_component(
-        self,
-        component_name: str,
-        phase: str,
-        inputs: Optional[Dict[str, Any]] = None,
-    ) -> Optional[Dict[str, Any]]:
-        """Execute component in block scatter mode."""
-        executor = self.context.component_executors.get(component_name)
-        if executor is None:
-            raise RuntimeError(f"ZERO FALLBACK: No executor for '{component_name}'")
-
-        is_fgp = self.is_fgp_component(component_name)
-
-        if component_name not in self._loaded_components:
-            self._load_fgp_weights(component_name)
-            self._loaded_components.add(component_name)
-
-        if is_fgp and hasattr(executor, '_is_fgp_mode'):
-            executor._is_fgp_mode = True
-
-        if inputs:
-            inputs = self.prepare_inputs(component_name, inputs)
-
-        return executor.run(inputs or {})
-
-    def _load_fgp_weights(self, component_name: str) -> None:
-        """Load weights for scattered component using shard map."""
-        executor = self.context.component_executors.get(component_name)
-        if executor is None:
-            return
-
-        weights_loaded = hasattr(executor, '_weights') and bool(executor._weights)
-        if weights_loaded:
-            return
-
-        shard_map = self.get_shard_map(component_name)
-
-        # Was: read `nbx_path` off the package, and if absent skip the
-        # load without a word. That name exists on no package this
-        # engine builds, so the load never happened and never said so.
-        nbx_path = self.resolve_artifact_path(component_name)
-
-        if shard_map:
-            executor.load_weights(nbx_path, component_name, shard_map)
-        else:
-            executor.load_weights(nbx_path, component_name)
-
-    def prepare_inputs(self, component_name: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        """Transfer inputs to first device in the device list."""
-        devices = self.get_component_devices(component_name)
-        target_device = devices[0] if devices else self.primary_device
-        return self.transfer_dict(inputs, target_device, self.use_async)
 
 
     def unload_weights(self, component_name: str) -> None:
