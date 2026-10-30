@@ -91,7 +91,7 @@ def test_a_conv_row_over_the_band_budget_is_refused_not_recursed():
 @pytest.mark.parametrize("IH,kh,sh,dh,ph,tf", [(37, 3, 1, 1, 1, 4), (64, 3, 2, 1, 1, 3), (50, 5, 1, 2, 4, 5),
                                                (29, 1, 1, 1, 0, 2)])
 def test_the_tiled_conv_band_cut_rebuilds_the_whole_conv(IH, kh, sh, dh, ph, tf):
-    """`launch_keys.tiled_conv2d_bands` is the band cut `_tiled_conv2d_spatial_nbx` iterates (and
+    """`launch_keys.tiled_conv2d_bands` is the band cut `tiled_conv2d` iterates (and
     the derived census keys the tiled conv with): a convolution rebuilt band by band from it —
     each band read with its halo, padded only at the image edges, run at padding 0, its halo
     rows skipped — equals the whole convolution exactly. Injection: pad_h added again on the edge

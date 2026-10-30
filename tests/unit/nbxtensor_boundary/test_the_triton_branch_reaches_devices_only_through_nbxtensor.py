@@ -24,9 +24,6 @@ NATIVE = {"Metal", "objc", "Foundation", "CoreFoundation", "MetalPerformanceShad
 # What is left: each site names a public API nbxtensor must gain. Shrinks only. (file relative to src/neurobrix, name)
 PRIVATE_SITES = {
     ("kernels/census.py", "nbxtensor.ops._configs"),
-    ("kernels/ops/fused_upsample_conv_torch.py", "nbxtensor.ops.fused_upsample_conv._fused_upsample_conv2d_nbx"),
-    ("kernels/ops/fused_upsample_conv_torch.py", "nbxtensor.ops.fused_upsample_conv._pair"),
-    ("kernels/ops/fused_upsample_conv_torch.py", "nbxtensor.ops.fused_upsample_conv._tiled_conv2d_spatial_nbx"),
     ("triton/flow/autoregressive.py", "nbxtensor.ops._configs.active_vendor_profile"),
 }
 

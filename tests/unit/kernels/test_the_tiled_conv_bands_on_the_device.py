@@ -15,7 +15,7 @@ if not torch.cuda.is_available():
 
 from nbxtensor.tensor import NBXTensor  # noqa: E402
 from neurobrix.kernels.torch_interop import nbx_to_torch  # noqa: E402
-from nbxtensor.ops.fused_upsample_conv import FusionUpsampleProxy, _fused_upsample_conv2d_nbx, _tiled_conv2d_spatial_nbx  # noqa: E402
+from nbxtensor.ops.fused_upsample_conv import FusionUpsampleProxy, tiled_upsample_conv2d, tiled_conv2d  # noqa: E402
 
 
 def _nbx(a):
@@ -30,7 +30,7 @@ def test_the_tiled_conv_equals_the_whole_conv_on_the_device(sh, kh, tf):
     ph = kh // 2
     ref = torch.nn.functional.conv2d(torch.from_numpy(x), torch.from_numpy(w),
                                      stride=(sh, 1), padding=(ph, 1)).numpy()
-    got = nbx_to_torch(_tiled_conv2d_spatial_nbx(_nbx(x), _nbx(w), None, sh, 1, ph, 1, 1, 1, 1, tf)
+    got = nbx_to_torch(tiled_conv2d(_nbx(x), _nbx(w), None, sh, 1, ph, 1, 1, 1, 1, tf)
                        ).float().cpu().numpy()
     assert got.shape == ref.shape
     assert np.abs(got - ref).max() < 1e-3, np.abs(got - ref).max()
@@ -44,7 +44,7 @@ def test_the_fused_upsample_conv_equals_upsample_then_conv_on_the_device(sh):
     up = torch.nn.functional.interpolate(torch.from_numpy(x), scale_factor=2, mode="nearest")
     ref = torch.nn.functional.conv2d(up, torch.from_numpy(w), stride=(sh, 1), padding=(1, 1)).numpy()
     proxy = FusionUpsampleProxy(_nbx(x), 2.0, 2.0, list(up.shape))
-    got = nbx_to_torch(_fused_upsample_conv2d_nbx(proxy, _nbx(w), None, (sh, 1), (1, 1), (1, 1),
+    got = nbx_to_torch(tiled_upsample_conv2d(proxy, _nbx(w), None, (sh, 1), (1, 1), (1, 1),
                                                   False, (0, 0), 1, 4)).float().cpu().numpy()
     assert got.shape == ref.shape
     assert np.abs(got - ref).max() < 1e-3, np.abs(got - ref).max()
@@ -68,15 +68,16 @@ def test_a_biased_tiled_conv_holds_one_band_beside_its_output():
     out_bytes = 16 * 256 * 64 * 4
     band_out = 16 * (256 // tf + 2) * 64 * 4                       # a band's conv output, its halo rows included
     band_in = 8 * (256 // tf + 4) * (64 + 2) * 4                   # a band's padded input
-    _tiled_conv2d_spatial_nbx(xn, wn, bn, 1, 1, 1, 1, 1, 1, 1, tf)   # warm: a first launch may sweep its configs
+    tiled_conv2d(xn, wn, bn, 1, 1, 1, 1, 1, 1, 1, tf)   # warm: a first launch may sweep its configs
     dev = DA.get_device()
     DA._pool_flush(dev)
     base = DA._cuda_live_bytes.get(dev, 0)
     DA._cuda_peak_bytes[dev] = base
-    got_t = _tiled_conv2d_spatial_nbx(xn, wn, bn, 1, 1, 1, 1, 1, 1, 1, tf)
+    got_t = tiled_conv2d(xn, wn, bn, 1, 1, 1, 1, 1, 1, 1, tf)
     peak = DA._cuda_peak_bytes.get(dev, 0) - base
     got = nbx_to_torch(got_t).float().cpu().numpy()
     assert np.abs(got - ref).max() < 1e-3, np.abs(got - ref).max()
     # one band's work (its input copied then padded, the conv's own buffers, its output) beside the full output:
     # measured 1.09 MB over the output here; the previous band and an out-of-place bias add beside it, 1.63 MB
     assert peak <= out_bytes + 3 * (band_in + band_out), (peak, out_bytes, band_in, band_out)
+

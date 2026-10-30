@@ -689,7 +689,7 @@ class _TritonRules(_Rules):
         explicit = _explicit_dtype(op)
 
         # A fused conv writes its output at its PRE-INPUT's dtype:
-        # `_fused_upsample_conv2d_nbx` (kernels/ops/fused_upsample_conv.py:804-807). Its
+        # `tiled_upsample_conv2d` (nbxtensor/ops/fused_upsample_conv.py:804-807). Its
         # interceptor (tiling_engine.py:1494-1504) is not self_manages_dtype, so wrap_op
         # applies — but the proxy is no float tensor and passes every cast untouched.
         up = self.fused_input(uid) if name in _CONV else None

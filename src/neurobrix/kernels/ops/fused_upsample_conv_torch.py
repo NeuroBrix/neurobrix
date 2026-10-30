@@ -8,8 +8,7 @@ Split from kernels/ops/fused_upsample_conv.py when that file entered nbxtensor (
 
 from typing import Any, Optional
 
-from nbxtensor.ops.fused_upsample_conv import (FusionUpsampleProxy, _fused_upsample_conv2d_nbx, _pair,
-                                               _tiled_conv2d_spatial_nbx)
+from nbxtensor.ops.fused_upsample_conv import FusionUpsampleProxy, pair, tiled_conv2d, tiled_upsample_conv2d
 
 
 
@@ -46,7 +45,7 @@ def fused_upsample_conv2d(
         pass
 
     if use_nbx:
-        return _fused_upsample_conv2d_nbx(
+        return tiled_upsample_conv2d(
             proxy_or_tensor, weight, bias, stride, padding, dilation,
             transposed, output_padding, groups, tile_factor,
         )
@@ -79,9 +78,9 @@ def _fused_upsample_conv2d_torch(
     import torch
     import torch.nn.functional as F
 
-    sh_st, sw_st = _pair(stride)
-    pad_h, pad_w = _pair(padding)
-    dh, dw = _pair(dilation)
+    sh_st, sw_st = pair(stride)
+    pad_h, pad_w = pair(padding)
+    dh, dw = pair(dilation)
 
     if not isinstance(proxy_or_tensor, FusionUpsampleProxy):
         return F.conv2d(
@@ -254,9 +253,9 @@ def tiled_conv2d_spatial(
 
     Mode-agnostic: torch.Tensor → F.conv2d, NBXTensor → conv2d_wrapper.
     """
-    sh_st, sw_st = _pair(stride)
-    pad_h, pad_w = _pair(padding)
-    dh, dw = _pair(dilation)
+    sh_st, sw_st = pair(stride)
+    pad_h, pad_w = pair(padding)
+    dh, dw = pair(dilation)
 
     # Detect backend
     use_nbx = False
@@ -267,7 +266,7 @@ def tiled_conv2d_spatial(
         pass
 
     if use_nbx:
-        return _tiled_conv2d_spatial_nbx(
+        return tiled_conv2d(
             input_tensor, weight, bias, sh_st, sw_st, pad_h, pad_w,
             dh, dw, groups, tile_factor,
         )

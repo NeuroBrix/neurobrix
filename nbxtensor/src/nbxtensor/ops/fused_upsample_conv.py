@@ -193,13 +193,14 @@ def make_upsample_proxy_interceptor():
     return _proxy
 
 
-def _pair(v):
+def pair(v):
+    """(h, w) of a convolution argument given as one int or a pair."""
     if isinstance(v, (list, tuple)):
         return int(v[0]), int(v[1])
     return int(v), int(v)
 
 
-def _tiled_conv2d_spatial_nbx(
+def tiled_conv2d(
     input_tensor, weight, bias, sh_st, sw_st, pad_h, pad_w,
     dh, dw, groups, tile_factor,
 ):
@@ -237,7 +238,7 @@ def _tiled_conv2d_spatial_nbx(
     for (oh_start, oh_end, in_clamped_start, in_clamped_end,
          pad_top_real, pad_bot_real, skip) in tiled_conv2d_bands(
             IH, out_h, kh, sh_st, dh, pad_h, tile_factor):
-        # POINT 6 FIX (P-SANA-4KPX-RUNTIME): see `_fused_upsample_conv2d_nbx`
+        # POINT 6 FIX (P-SANA-4KPX-RUNTIME): see `tiled_upsample_conv2d`
         # for the full rationale — H-slice on an NCHW tensor produces a
         # non-contiguous view; the downstream conv/pad Triton wrappers use
         # flat indexing that assumes contiguous and read wrong memory
@@ -271,7 +272,7 @@ def _tiled_conv2d_spatial_nbx(
         avail_after_halo = conv_band.shape[2] - skip
         if avail_after_halo < actual_band_h:
             actual_band_h = avail_after_halo
-        # Bias add inside band — see _fused_upsample_conv2d_nbx for rationale
+        # Bias add inside band — see tiled_upsample_conv2d for rationale
         # (avoids 8 GiB bias broadcast materialization on Sana 4Kpx).
         if bias is not None:
             # In place, as every conv wrapper adds its bias (`_conv_bias_inplace`): an out-of-place add held a
@@ -289,7 +290,7 @@ def _tiled_conv2d_spatial_nbx(
 # ---------------------------------------------------------------------------
 
 
-def _fused_upsample_conv2d_nbx(
+def tiled_upsample_conv2d(
     proxy_or_tensor, weight, bias, stride, padding, dilation,
     transposed, output_padding, groups, tile_factor,
 ):
@@ -301,9 +302,9 @@ def _fused_upsample_conv2d_nbx(
     from nbxtensor.ops.shape_wrappers import upsample_nearest2d_wrapper
     from nbxtensor.ops.conv_wrappers import conv2d_wrapper, _conv_bias_inplace
 
-    sh_st, sw_st = _pair(stride)
-    pad_h, pad_w = _pair(padding)
-    dh, dw = _pair(dilation)
+    sh_st, sw_st = pair(stride)
+    pad_h, pad_w = pair(padding)
+    dh, dw = pair(dilation)
 
     if not isinstance(proxy_or_tensor, FusionUpsampleProxy):
         return conv2d_wrapper(
@@ -407,6 +408,6 @@ def _fused_upsample_conv2d_nbx(
 #   - rms_norm tiled wrapper delegates to the rms_norm wrapper which
 #     follows AMP_FP32_OPS via DtypeEngine (or the opt-in cast-back
 #     variant when activations_fp16_safe is enabled)
-_fused_upsample_conv2d_nbx.self_manages_dtype = True
-_tiled_conv2d_spatial_nbx.self_manages_dtype = True
+tiled_upsample_conv2d.self_manages_dtype = True
+tiled_conv2d.self_manages_dtype = True
 # (the public dispatchers, mode-agnostic, are marked in the engine's fused_upsample_conv_torch.py)

@@ -658,7 +658,7 @@ def conv2d_wrapper(
     # P-SANA-4KPX-RUNTIME Step 1 — kernel-level spatial band-streaming.
     # When the output tensor would exceed the per-launch threshold (default
     # 4 GiB), split along H and stream band-by-band. Halo handling mirrors
-    # _tiled_conv2d_spatial_nbx: each band re-enters this same wrapper with
+    # tiled_conv2d: each band re-enters this same wrapper with
     # a smaller H, so the recursion bottoms out on its own. The full output
     # remains allocated for downstream consumers in the DAG.
     # x.dtype returns a triton.language dtype; use x.nbx_dtype for the
@@ -837,7 +837,7 @@ def _conv2d_band_streamed(
     pad_h on the read side (clamped to image edges); the recursive
     conv2d_wrapper call uses the original padding=(pad_h, pad_w), which
     inserts pad_h zeros on internal frontiers — same engineering trade
-    used by `_tiled_conv2d_spatial_nbx` for compiled mode (faint seam at
+    used by `tiled_conv2d` for compiled mode (faint seam at
     band frontiers, accepted as a follow-up halo-correctness workstream).
     """
     # The TilingEngine sizes each band (`conv2d.band_budget_divisor` of the threshold);

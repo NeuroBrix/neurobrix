@@ -156,7 +156,7 @@ def conv2d_band_rows(N: int, out_c: int, out_h: int, out_w: int, out_bytes: int,
 def tiled_conv2d_bands(IH: int, out_h: int, kh: int, sh: int, dh: int, pad_h: int, tile_factor: int):
     """The bands of Prism's op-level tiled conv (real halo): per band (oh_start, oh_end, in_start, in_end, pad_top,
     pad_bot, skip) — the output rows, the input rows read (clamped), the image-edge padding added, the band's leading
-    conv rows to skip. ONE cut for the run (`kernels/ops/fused_upsample_conv._tiled_conv2d_spatial_nbx` and its torch
+    conv rows to skip. ONE cut for the run (`nbxtensor/ops/fused_upsample_conv.tiled_conv2d` and its torch
     twin), the derived census (`launch_keys.tiled_conv2d_launches`) and Prism's price of the band
     (`tiled_conv2d_band_bytes`). The image-edge padding is `max(0, -read_start)` alone: `read_start` already carries
     -pad_h (P-NBX-TILED-CONV2D-SMALL-SCALE 2026-05-14). The halo is rounded up to a whole number of strides: the band's

@@ -120,6 +120,18 @@ def amp_fp32_output_dtype(compute_dtype, graph_dtype, safe, narrowed, traced=Non
 
 `nbxtensor.dtype.convert.saturate_scalar(value, dtype)`: a Python number clamped to a half float's finite range (the table's `max`); anything else unchanged.
 
+### `nbxtensor.ops.fused_upsample_conv` — a convolution streamed in bands of output rows
+
+```python
+def tiled_conv2d(x, weight, bias, sh, sw, pad_h, pad_w, dh, dw, groups, tile_factor) -> NBXTensor
+    # conv2d computed in `tile_factor` bands of output rows, each band reading its halo rows (zero padding only at
+    # the image's edges): the bytes of one conv2d, with the peak of one band
+def tiled_upsample_conv2d(x_or_proxy, weight, bias, stride, padding, dilation, transposed, output_padding,
+                          groups, tile_factor) -> NBXTensor
+    # the same over a nearest upsample fused in (`FusionUpsampleProxy`): the upsampled input is never materialised
+def pair(v) -> tuple           # (h, w) of a convolution argument given as one int or a pair
+```
+
 ### `nbxtensor.io.safetensors` — the host conversions of a loaded weight, split across the loader's workers
 
 ```python

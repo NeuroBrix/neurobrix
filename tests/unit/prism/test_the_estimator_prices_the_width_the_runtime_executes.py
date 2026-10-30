@@ -167,7 +167,7 @@ def _fused():
 
 
 def test_a_fused_conv_writes_at_its_pre_input_s_width():
-    """`_fused_upsample_conv2d_nbx` allocates at pre_input.dtype
+    """`tiled_upsample_conv2d` allocates at pre_input.dtype
     (kernels/ops/fused_upsample_conv.py:804-807); the torch variant at weight.dtype (:299-303)."""
     g = _fused()
     assert _w(g)["r"] == "float32" and _w(g)["up"] == "float32"
