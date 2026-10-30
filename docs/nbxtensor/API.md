@@ -120,6 +120,120 @@ def amp_fp32_output_dtype(compute_dtype, graph_dtype, safe, narrowed, traced=Non
 
 `nbxtensor.dtype.convert.saturate_scalar(value, dtype)`: a Python number clamped to a half float's finite range (the table's `max`); anything else unchanged.
 
+### `nbxtensor.memory` — the names left: allocator, arenas, pools, transfers, layouts, OOM advice
+
+`nbxtensor.memory.allocator`
+
+```python
+class ImpossibleExtentError(RuntimeError)
+    # An op would produce a tensor with an extent that cannot exist (<= 0 where the op defines a length, or a rank the op does not produce).
+class AllocatorInterceptor
+    # What stands in front of the allocator's five device operations (allocate, free, copy, set, synchronise) while installed.
+```
+
+`nbxtensor.memory.arena`
+
+```python
+class Arena
+    # O(1) tensor storage via integer-indexed list.
+```
+
+`nbxtensor.memory.device_memory`
+
+```python
+class AbiMemory(DeviceMemory)
+    # The memory primitives of a runtime that exposes the C ABI of a CUDA-style runtime (CUDA, HIP), through its symbol table.
+```
+
+`nbxtensor.memory.device_transfer`
+
+```python
+def parse_device_idxs(device)
+    # All CUDA ordinals named in a device string, in order of appearance.
+def parse_device_idx(device)
+    # The first CUDA ordinal named in a device string.
+def needs_move(t: NBXTensor, target_dev: int)
+    # True iff `t` must be transferred to land on cuda:target_dev.
+def transfer_tensor(tensor: NBXTensor, target_dev: int)
+    # Copy an NBXTensor to cuda:target_dev, preserving shape/strides/dtype.
+```
+
+`nbxtensor.memory.layout`
+
+```python
+def tensor_nbytes(shape: Sequence[int], dtype)
+    # The bytes a dense tensor of `shape` holds at `dtype` (a name, a torch spelling or an NBXDtype, as `itemsize`).
+class ArenaLayout
+    # The placement of tensors in one arena: each tensor's offset and the arena's total bytes.
+def arena_layout(sizes: Iterable[int], alignment: int=ARENA_ALIGNMENT)
+    # The layout of tensors of `sizes` bytes (placement order) in one arena
+```
+
+`nbxtensor.memory.memory_pool`
+
+```python
+def release_flow_memory(device=None)
+    # Release what a finished stage held: synchronise the devices named, collect garbage (finalizers free), give the pool's cached blocks back to the driver.
+class ComponentArena
+    # Single contiguous GPU memory block for one component's weights.
+class HostPinnedArena
+    # One page-locked host block for weights held on the host, sub-allocated like `ComponentArena`.
+```
+
+`nbxtensor.memory.metal`
+
+```python
+class MetalMemory(DeviceMemory)
+    # The memory primitives of the one Metal device of this process, over its runtime.
+```
+
+`nbxtensor.memory.oom_advice`
+
+```python
+def what_would_have_fit(oom, shape: Optional[Sequence]=None)
+    # One sentence naming what would have made the refused allocation fit.
+def annotate(message: str, cause, shape: Optional[Sequence]=None)
+    # Append the advice to an op-failure message when the cause is an OOM.
+```
+
+`nbxtensor.memory.pointer_tables`
+
+```python
+def release_pinned_tables()
+    # Drop every cached table that PINS (Metal), releasing its pins
+class PtrTables
+    # Per-projection absolute pointer tables for zero-copy expert access.
+```
+
+`nbxtensor.memory.pool`
+
+```python
+class SegmentPool
+    # The free blocks of every device's segments, and the blocks in use inside them.
+class Simulation
+    # What the allocator holds for a sequence of allocations and frees
+def simulate(events: Iterable[Tuple[str, object, int]], parked_cap: int=0, align: int=POOL_ALIGN, split_min: int=POOL_SPLIT_MIN, pooled: bool=True)
+    # Replay `events` — ("alloc", key, nbytes), ("arena", key, nbytes) and ("free", key, 0), `key` any hashable naming one allocation — through the allocator's own pool (`SegmentPool`) and its own order
+```
+
+`nbxtensor.memory.shadow`
+
+```python
+def malloc(nbytes: int, dev_idx: Optional[int]=None, pooled: bool=True)
+    # `DeviceAllocator.malloc_direct` in a shadow, its signature kept whole (`pooled`
+def shadow_range(addr: int)
+    # (base, nbytes) of the RECORDED shadow allocation containing `addr`, or None.
+```
+
+`nbxtensor.memory.slab`
+
+```python
+class StepSlab(SlabAllocator)
+    # Per-sequence slab RECYCLED at every decode step (P-REPLAY-KV- DECODE B1).
+class SlabInterceptor(AllocatorInterceptor)
+    # The allocator's interceptor for slab-served runs.
+```
+
 ### `nbxtensor.ops.tiling_sizes` — the sizes the tiled and chunked paths cut by (the tiling table in force: `ops.tiling_policy`)
 
 Every figure is read from the tiling table in force (`set_tiling` / `tiling_table`), never written in the code.
