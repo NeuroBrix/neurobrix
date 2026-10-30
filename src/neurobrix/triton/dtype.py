@@ -162,7 +162,6 @@ def _saturated_one_element(t, out_dt):
     return NBXTensor.from_numpy(arr)
 
 
-
 # Mirror of core/dtype/engine.py's predicate. Duplicated, not imported: that
 # module imports torch, and the Triton branch loads no torch at import or at
 # execution (R33). The two-modes doctrine keeps these paths parallel by
@@ -335,6 +334,14 @@ def declare_hardware_profile(profile) -> None:
     from nbxtensor.backend.capabilities import set_backend_has_fp64
     set_hardware_profile(profile)
     set_backend_has_fp64(profile_triton_has_fp64(profile))
+    # the library's CPU pool (host work: conversions, pre-processing, the parallel loop) is sized by the profile's
+    # compute threads — the performance cores of a hybrid CPU, else the physical ones (Hocine 2026-10-29 18:11, rule 1)
+    cpu = getattr(profile, "cpu", None)
+    if cpu is None:
+        raise ValueError("declare_hardware_profile: the hardware profile declares no cpu: section — the library's CPU "
+                         "pool is sized by the profile's compute threads (rule 1), never by a count read off the machine")
+    from nbxtensor.backend.cpu.pool import set_threads
+    set_threads(int(cpu.compute_threads))
     # each device's memory as the profile states it: the size the library's certified store serves entries for —
     # a census shadow sees no card, and a plan made for a profile is keyed by ITS cards
     from nbxtensor.backend.device_facts import declare_device_memory
@@ -613,11 +620,11 @@ class TritonDtypeEngine:
     def storage_dtype(self, dtype: NBXDtype) -> NBXDtype:
         """`dtype` as this branch holds it: float64 -> float32 and complex128 -> complex64 where it
         carries no fp64, unchanged otherwise — `DtypeEngine.storage_dtype`'s mirror, through the
-        module's `storage_dtype` (the one Triton narrowing)."""
+        library's `itemsize.storage_dtype` (the one narrowing, at this branch's fp64 fact)."""
         # The MEMBER goes to the table, never its `.name`: `NBXDtype.bool_` is Python's keyword escape,
         # which only `canonical_name` maps to the table's `bool` (mq24 Allegro triton, 2026-10-11).
         from nbxtensor.dtype.nbx_dtype import parse_dtype
-        return parse_dtype(storage_dtype(dtype, self.stores_fp64))
+        return parse_dtype(_itemsize.storage_dtype(dtype, self.stores_fp64))
 
     def accumulation_dtype(self, dtype: NBXDtype) -> NBXDtype:
         """The dtype the partials of a contraction split over its reduced axis are summed in
@@ -934,16 +941,3 @@ class TritonDtypeEngine:
         return promoted_op
 
 
-# ============================================================================
-# STORAGE — what the Triton engine holds a 64-bit float in
-# ============================================================================
-
-def storage_dtype(dtype, stores_fp64: bool) -> str:
-    """The dtype name a tensor of `dtype` is STORED in by the Triton engine (config/dtypes.yml
-    `without_fp64` when the engine stores no fp64). The ONE owner of the Triton branch's storage
-    narrowing; a dtype the table does not carry is refused by name. `stores_fp64` is the vendor
-    profile's answer (`triton_stores_fp64`, `precision.stores_fp64.triton`), read by the caller
-    from the hardware it runs on: the constant loader (`GraphExecutor._load_constant_triton`), the
-    graph's dtype casts (`TritonDtypeEngine.storage_dtype`, `TritonSequence._parse_dtype`), the
-    width pass (`runtime_widths`) and Prism's pricing (`solver._constants_store_fp64`)."""
-    return _itemsize.storage_dtype(dtype, stores_fp64)

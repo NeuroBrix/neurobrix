@@ -294,7 +294,7 @@ def _triton_remap(name: str, c: str, stores_fp64: bool) -> str:
         return "float16"
     if name == "float16" and c == "bfloat16":
         return "bfloat16"
-    return _tdt.storage_dtype(name, stores_fp64)
+    return _itemsize.storage_dtype(name, stores_fp64)
 
 
 def _aten_kwarg_remap(name: str, c: str) -> str:

@@ -54,5 +54,8 @@ def test_the_engine_declares_its_profiles_devices(clean_memory, monkeypatch):
     from neurobrix.triton.dtype import declare_hardware_profile
     monkeypatch.setattr(W, "_NBX_HW_PROFILE", None)
     dev = SimpleNamespace(index=0, memory_mb=16384, brand="nvidia", architecture="volta")
-    declare_hardware_profile(SimpleNamespace(devices=[dev], has_native_bf16=False))
+    from nbxtensor.backend.cpu import pool
+    monkeypatch.setattr(pool, "_STATE", dict(pool._STATE))      # the declared CPU pool size, restored after the cell
+    declare_hardware_profile(SimpleNamespace(devices=[dev], has_native_bf16=False,
+                                             cpu=SimpleNamespace(compute_threads=2)))
     assert clean_memory.declared_device_memory() == {0: 16384 << 20}

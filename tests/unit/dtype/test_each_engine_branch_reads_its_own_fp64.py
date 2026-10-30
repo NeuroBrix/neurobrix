@@ -121,7 +121,8 @@ def test_on_apple_neither_branch_holds_fp64_and_the_triton_kernels_have_none():
 
 
 def _profile(*devices):
-    return types.SimpleNamespace(has_native_bf16=False, devices=[
+    # a profile declares its CPU too (its compute threads size the library's CPU pool, declare_hardware_profile)
+    return types.SimpleNamespace(has_native_bf16=False, cpu=types.SimpleNamespace(compute_threads=2), devices=[
         types.SimpleNamespace(brand=b, architecture=a) for b, a in devices])
 
 
@@ -139,6 +140,8 @@ def test_a_profile_whose_devices_disagree_is_refused_by_both_branches():
 @pytest.mark.parametrize("devices,expected", [((("nvidia", "volta"),), True),
                                               ((("apple", "apple_silicon"),), False)])
 def test_the_engine_declares_the_profile_s_capability_to_nbx_tensor(monkeypatch, devices, expected):
+    from nbxtensor.backend.cpu import pool
+    monkeypatch.setattr(pool, "_STATE", dict(pool._STATE))      # the declared CPU pool size, restored after the cell
     from nbxtensor import tensor as T
     import nbxtensor.backend.capabilities as _nbx_capabilities
     from nbxtensor.ops import wrappers as W
