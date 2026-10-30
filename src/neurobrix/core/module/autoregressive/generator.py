@@ -386,15 +386,6 @@ class VQImageGenerator(AutoregressiveGenerator):
         # Initialize base generator
         super().__init__(config)
 
-    def get_image_grid_shape(self) -> Tuple[int, int, int, int]:
-        """
-        Get shape for VQ decoder.
-
-        Returns:
-            (batch, codebook_dim, height_patches, width_patches)
-        """
-        num_patches = self.image_size // self.patch_size
-        return (1, self.codebook_dim, num_patches, num_patches)
 
     @classmethod
     def from_config(cls, config: Dict[str, Any]) -> "VQImageGenerator":

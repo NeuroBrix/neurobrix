@@ -76,12 +76,6 @@ class WeightShardingStrategy(TritonStrategy):
             return outputs
         return self.transfer_dict(outputs, target_device, async_transfer=False)
 
-    def get_component_device(self, component_name: str) -> str:
-        if component_name in self.sharded_components:
-            return self.sharded_components[component_name][0]
-        elif component_name in self.regular_components:
-            return self.regular_components[component_name]
-        raise RuntimeError(f"ZERO FALLBACK: No device for '{component_name}'")
 
     def cleanup(self) -> None:
         self._loaded_components.clear()

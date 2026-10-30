@@ -28,22 +28,6 @@ class PredictionType(Enum):
     FLOW_PREDICTION = "flow_prediction"  # Flow prediction (Sana, newer flow models)
 
 
-class TimestepSpacing(Enum):
-    """Timestep spacing strategy."""
-    LINSPACE = "linspace"         # Linear spacing
-    LEADING = "leading"           # Leading spacing
-    TRAILING = "trailing"         # Trailing spacing (diffusers default)
-    KARRAS = "karras"             # Karras sigmas
-
-
-class BetaSchedule(Enum):
-    """Beta schedule type."""
-    LINEAR = "linear"
-    SCALED_LINEAR = "scaled_linear"
-    SQUAREDCOS_CAP_V2 = "squaredcos_cap_v2"  # Cosine schedule
-    SIGMOID = "sigmoid"
-
-
 # =============================================================================
 # LEGACY INTERFACE (for backward compatibility)
 # =============================================================================
@@ -102,17 +86,6 @@ class Scheduler(ABC):
         """
         pass
 
-    @abstractmethod
-    def add_noise(
-        self,
-        original_samples: torch.Tensor,
-        noise: torch.Tensor,
-        timesteps: torch.Tensor
-    ) -> torch.Tensor:
-        """
-        Add noise to the original samples.
-        """
-        pass
 
     @abstractmethod
     def scale_model_input(
@@ -203,15 +176,6 @@ class DiffusionSchedulerBase(ABC):
         """Compute one denoising step."""
         pass
 
-    @abstractmethod
-    def add_noise(
-        self,
-        original_samples: torch.Tensor,
-        noise: torch.Tensor,
-        timesteps: torch.Tensor,
-    ) -> torch.Tensor:
-        """Add noise to samples (forward diffusion process)."""
-        pass
 
     @abstractmethod
     def scale_model_input(

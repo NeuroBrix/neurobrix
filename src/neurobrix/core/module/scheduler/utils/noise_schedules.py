@@ -184,36 +184,3 @@ def sigmas_to_alphas(sigmas: torch.Tensor) -> torch.Tensor:
     return 1.0 / (1.0 + sigmas ** 2)
 
 
-def rescale_zero_terminal_snr(betas: torch.Tensor) -> torch.Tensor:
-    """
-    Rescale betas to have zero terminal SNR.
-
-    Based on https://arxiv.org/abs/2305.08891
-
-    Args:
-        betas: Original beta values
-
-    Returns:
-        Rescaled beta values
-    """
-    alphas = 1.0 - betas
-    alphas_cumprod = torch.cumprod(alphas, dim=0)
-
-    # Rescale
-    alphas_cumprod_sqrt = alphas_cumprod.sqrt()
-    alphas_cumprod_sqrt_0 = alphas_cumprod_sqrt[0].clone()
-    alphas_cumprod_sqrt_T = alphas_cumprod_sqrt[-1].clone()
-
-    alphas_cumprod_sqrt = (
-        (alphas_cumprod_sqrt - alphas_cumprod_sqrt_T)
-        / (alphas_cumprod_sqrt_0 - alphas_cumprod_sqrt_T)
-    )
-
-    alphas_cumprod = alphas_cumprod_sqrt ** 2
-
-    # Derive betas from rescaled alphas
-    alphas = alphas_cumprod[1:] / alphas_cumprod[:-1]
-    alphas = torch.cat([alphas_cumprod[0:1], alphas])
-    betas = 1 - alphas
-
-    return betas

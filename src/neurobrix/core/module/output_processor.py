@@ -117,21 +117,6 @@ class OutputProcessor:
 
         return cls(config)
 
-    @classmethod
-    def from_vae_class(cls, vae_class: str) -> "OutputProcessor":
-        """
-        Create processor directly from VAE class name.
-        Useful for testing or when package is not available.
-        """
-        config = ProcessorConfig(vae_class=vae_class)
-
-        if vae_class in VAE_CLAMP_REGISTRY:
-            registry_config = VAE_CLAMP_REGISTRY[vae_class]
-            config.clamp_before_normalize = registry_config.get(
-                "clamp_before_normalize", False
-            )
-
-        return cls(config)
 
     def process(
         self,
@@ -179,34 +164,4 @@ class OutputProcessor:
             arr = np.power(arr, np.float32(1.0 / self.config.gamma_correction))
         return arr
 
-    def get_info(self) -> Dict[str, Any]:
-        """Return processor configuration for debugging."""
-        return {
-            "vae_class": self.config.vae_class,
-            "clamp_before_normalize": self.config.clamp_before_normalize,
-            "clamp_range": self.config.clamp_range,
-            "normalize": self.config.normalize,
-            "gamma_correction": self.config.gamma_correction,
-        }
 
-
-def register_vae_processor(
-    vae_class: str,
-    clamp_before_normalize: bool = False,
-    description: str = ""
-) -> None:
-    """
-    Register a new VAE class with its processing requirements.
-
-    This allows extending the processor without modifying code.
-    Can be called from configuration or plugin system.
-
-    Args:
-        vae_class: The _class_name from VAE config (e.g., "AutoencoderDC")
-        clamp_before_normalize: Whether to clamp before normalizing
-        description: Human-readable description of why this is needed
-    """
-    VAE_CLAMP_REGISTRY[vae_class] = {
-        "clamp_before_normalize": clamp_before_normalize,
-        "description": description
-    }

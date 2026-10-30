@@ -819,16 +819,11 @@ class PyTokenizer:
             data = json.load(fh)
         return cls(data)
 
-    @classmethod
-    def from_str(cls, blob: str) -> "PyTokenizer":
-        return cls(json.loads(blob))
 
     # -- vocab API ---------------------------------------------------------
     def token_to_id(self, tok: str) -> Optional[int]:
         return self._vocab.get(tok)
 
-    def id_to_token(self, i: int) -> Optional[str]:
-        return self._id_to_tok.get(i)
 
     def get_vocab_size(self, with_added_tokens: bool = True) -> int:
         if with_added_tokens:
@@ -836,8 +831,6 @@ class PyTokenizer:
         base = self._data.get("model", {}).get("vocab", {})
         return len(base)
 
-    def get_vocab(self, with_added_tokens: bool = True) -> Dict[str, int]:
-        return dict(self._vocab)
 
     # -- encode ------------------------------------------------------------
     def encode(self, text: str, add_special_tokens: bool = True) -> _Encoding:

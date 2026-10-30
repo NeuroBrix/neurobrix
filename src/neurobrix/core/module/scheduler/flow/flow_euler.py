@@ -193,32 +193,6 @@ class FlowEulerScheduler(FlowSchedulerBase):
         """
         return sample
 
-    def add_noise(
-        self,
-        original_samples: torch.Tensor,
-        noise: torch.Tensor,
-        timesteps: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Add noise to samples.
-
-        For flow matching: x_t = (1-t) * x_0 + t * noise
-        """
-        if isinstance(timesteps, torch.Tensor) and timesteps.dim() == 0:
-            t = timesteps.item()
-        elif isinstance(timesteps, (int, float)):
-            t = timesteps
-        else:
-            t = timesteps[0].item()
-
-        # Ensure t is a tensor for broadcasting
-        t = torch.tensor(t, device=original_samples.device, dtype=original_samples.dtype)
-        while t.dim() < original_samples.dim():
-            t = t.unsqueeze(-1)
-
-        # Flow interpolation: x_t = (1-t) * x_0 + t * noise
-        noisy_samples = (1 - t) * original_samples + t * noise
-        return noisy_samples
 
     @property
     def init_noise_sigma(self) -> float:
@@ -323,25 +297,6 @@ class RectifiedFlowScheduler(FlowSchedulerBase):
         """Scale model input (no scaling for rectified flow)."""
         return sample
 
-    def add_noise(
-        self,
-        original_samples: torch.Tensor,
-        noise: torch.Tensor,
-        timesteps: torch.Tensor,
-    ) -> torch.Tensor:
-        """Add noise using linear interpolation."""
-        if isinstance(timesteps, torch.Tensor) and timesteps.dim() == 0:
-            t = timesteps.item()
-        elif isinstance(timesteps, (int, float)):
-            t = timesteps
-        else:
-            t = timesteps[0].item()
-
-        t = torch.tensor(t, device=original_samples.device, dtype=original_samples.dtype)
-        while t.dim() < original_samples.dim():
-            t = t.unsqueeze(-1)
-
-        return (1 - t) * original_samples + t * noise
 
     @property
     def init_noise_sigma(self) -> float:

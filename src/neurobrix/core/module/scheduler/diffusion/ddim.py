@@ -266,24 +266,6 @@ class DDIMScheduler(DiffusionSchedulerBase):
             return {"prev_sample": prev_sample, "pred_original_sample": pred_x0}
         return prev_sample
 
-    def add_noise(
-        self,
-        original_samples: torch.Tensor,
-        noise: torch.Tensor,
-        timesteps: torch.Tensor,
-    ) -> torch.Tensor:
-        """Add noise to samples (forward diffusion)."""
-        alphas_cumprod = self.alphas_cumprod.to(original_samples.device)
-
-        sqrt_alpha_prod = alphas_cumprod[timesteps] ** 0.5
-        sqrt_one_minus_alpha_prod = (1 - alphas_cumprod[timesteps]) ** 0.5
-
-        while len(sqrt_alpha_prod.shape) < len(original_samples.shape):
-            sqrt_alpha_prod = sqrt_alpha_prod.unsqueeze(-1)
-            sqrt_one_minus_alpha_prod = sqrt_one_minus_alpha_prod.unsqueeze(-1)
-
-        noisy_samples = sqrt_alpha_prod * original_samples + sqrt_one_minus_alpha_prod * noise
-        return noisy_samples
 
     def scale_model_input(
         self,

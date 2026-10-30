@@ -217,23 +217,6 @@ class EulerDiscreteScheduler(DiffusionSchedulerBase):
             return {"prev_sample": prev_sample, "denoised": denoised}
         return prev_sample
 
-    def add_noise(
-        self,
-        original_samples: torch.Tensor,
-        noise: torch.Tensor,
-        timesteps: torch.Tensor,
-    ) -> torch.Tensor:
-        """Add noise to samples (forward diffusion)."""
-        # Get sigmas for timesteps
-        assert self.sigmas is not None, "sigmas must be initialized via set_timesteps()"
-        sigmas = self.sigmas[:-1][timesteps].to(original_samples.device)
-
-        while len(sigmas.shape) < len(original_samples.shape):
-            sigmas = sigmas.unsqueeze(-1)
-
-        # For Euler: x_t = x_0 + sigma * noise
-        noisy_samples = original_samples + sigmas * noise
-        return noisy_samples
 
     def scale_model_input(
         self,
@@ -478,18 +461,6 @@ class EulerAncestralDiscreteScheduler(DiffusionSchedulerBase):
             return {"prev_sample": prev_sample, "denoised": denoised}
         return prev_sample
 
-    def add_noise(
-        self,
-        original_samples: torch.Tensor,
-        noise: torch.Tensor,
-        timesteps: torch.Tensor,
-    ) -> torch.Tensor:
-        """Add noise to samples."""
-        assert self.sigmas is not None, "sigmas must be initialized via set_timesteps()"
-        sigmas = self.sigmas[:-1][timesteps].to(original_samples.device)
-        while len(sigmas.shape) < len(original_samples.shape):
-            sigmas = sigmas.unsqueeze(-1)
-        return original_samples + sigmas * noise
 
     def scale_model_input(
         self,

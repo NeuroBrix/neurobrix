@@ -311,9 +311,6 @@ class Zero3Strategy(ExecutionStrategy):
     # Ratchet state + install
     # ------------------------------------------------------------------
 
-    def _is_triton_path(self, executor: Any) -> bool:
-        """Triton path if the executor carries a _triton_seq attribute."""
-        return getattr(executor, '_triton_seq', None) is not None
 
     def _seq_handle(self, executor: Any):
         """Return (seq, is_triton) or (None, None) if neither is ready."""

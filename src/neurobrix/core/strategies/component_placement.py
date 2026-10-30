@@ -107,22 +107,6 @@ class ComponentPlacementStrategy(ExecutionStrategy):
             self.synchronize_device(target_device)
         return transferred
 
-    def get_component_device(self, component_name: str) -> str:
-        """Get device for component."""
-        device = self.component_devices.get(component_name)
-        if device is None:
-            raise RuntimeError(f"ZERO FALLBACK: No device for component '{component_name}'")
-        return device
-
-    def set_state_device(self, device: str) -> None:
-        self.state_device = device
-
-    def get_state_device(self) -> Optional[str]:
-        return self.state_device
-
-    def ensure_on_device(self, tensor: torch.Tensor, device: str) -> torch.Tensor:
-        return self.transfer_tensor(tensor, device, self.use_async)
-
 
 class ComponentPlacementLazyStrategy(ComponentPlacementStrategy):
     """
@@ -149,15 +133,3 @@ class ComponentPlacementLazyStrategy(ComponentPlacementStrategy):
             self._phase_loaded.add(component_name)
         return super().execute_component(component_name, phase, inputs)
 
-    def end_phase(self, phase: str) -> None:
-        """Signal end of execution phase — unload weights loaded during this phase."""
-        for comp_name in list(self._phase_loaded):
-            self.unload_weights(comp_name)
-        self._phase_loaded.clear()
-        # Phase-transition defrag (the legitimate use of empty_cache, per its
-        # docstring — component unload, not a compute hot loop). `device` was
-        # undefined here (NameError if this path ran with loaded weights);
-        # empty the cache on every device this component-placement strategy
-        # spans. (D7 latent-bug fix, 2026-07-20.)
-        for _dev in self.devices:
-            device_empty_cache(_dev)

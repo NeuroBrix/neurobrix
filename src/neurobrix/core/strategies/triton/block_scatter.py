@@ -148,14 +148,4 @@ class BlockScatterStrategy(TritonStrategy):
                 from nbxtensor.memory.allocator import DeviceAllocator
                 DeviceAllocator.empty_cache_pool()
 
-    def get_embedding_device(self, component_name: str) -> str:
-        devices = self.get_component_devices(component_name)
-        return devices[0] if devices else self.primary_device
 
-    def get_head_device(self, component_name: str) -> str:
-        devices = self.get_component_devices(component_name)
-        return devices[-1] if devices else self.primary_device
-
-    def synchronize_all(self) -> None:
-        for device in self.devices:
-            self.synchronize_device(device)

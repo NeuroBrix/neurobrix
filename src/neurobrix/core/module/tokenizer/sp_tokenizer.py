@@ -297,30 +297,6 @@ class SPTokenizer:
 
         return self._sp.decode(ids)
 
-    def batch_encode(
-        self,
-        texts: List[str],
-        max_length: int = 120,
-        padding: bool = True,
-        add_special_tokens: bool = True,
-    ) -> List[List[int]]:
-        """
-        Encode multiple texts.
-
-        Args:
-            texts: List of text strings
-            max_length: Maximum sequence length
-            padding: Whether to pad to max_length
-            add_special_tokens: Whether to add EOS token
-
-        Returns:
-            List of token ID lists
-        """
-        return [
-            self.encode(text, max_length, padding, add_special_tokens)
-            for text in texts
-        ]
-
 
 class BPETokenizer:
     """
@@ -709,30 +685,6 @@ class BPETokenizer:
             pass
 
         return text.strip()
-
-    def batch_encode(
-        self,
-        texts: List[str],
-        max_length: Optional[int] = None,
-        padding: bool = True,
-        add_special_tokens: bool = True,
-    ) -> List[List[int]]:
-        """
-        Encode multiple texts.
-
-        Args:
-            texts: List of text strings
-            max_length: Maximum sequence length
-            padding: Whether to pad to max_length
-            add_special_tokens: Whether to add BOS/EOS tokens
-
-        Returns:
-            List of token ID lists
-        """
-        return [
-            self.encode(text, max_length, padding, add_special_tokens)
-            for text in texts
-        ]
 
 
 class HFTokenizer:
@@ -1124,29 +1076,6 @@ class HFTokenizer:
         """
         return self._tokenizer.decode(ids, skip_special_tokens=skip_special_tokens)
 
-    def batch_encode(
-        self,
-        texts: List[str],
-        max_length: Optional[int] = None,
-        padding: bool = True,
-        add_special_tokens: bool = True,
-    ) -> List[List[int]]:
-        """
-        Encode multiple texts.
-
-        Args:
-            texts: List of text strings
-            max_length: Maximum sequence length
-            padding: Whether to pad to max_length
-            add_special_tokens: Whether to add special tokens
-
-        Returns:
-            List of token ID lists
-        """
-        return [
-            self.encode(text, max_length, padding, add_special_tokens)
-            for text in texts
-        ]
 
     def format_generation_prompt(
         self,

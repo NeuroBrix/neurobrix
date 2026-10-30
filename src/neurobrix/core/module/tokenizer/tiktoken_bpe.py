@@ -482,14 +482,6 @@ class PyTiktoken:
             out.append(buf.decode("utf-8", errors=errors))
         return "".join(out)
 
-    def decode_bytes(self, ids: Sequence[int]) -> bytes:
-        """Decode regular token ids to raw bytes (special ids contribute none)."""
-        buf = bytearray()
-        for i in ids:
-            piece = self._decoder.get(i)
-            if piece is not None:
-                buf.extend(piece)
-        return bytes(buf)
 
     # ----- lookups / metadata ----------------------------------------------
 
@@ -497,16 +489,9 @@ class PyTiktoken:
         """Rank/id for a regular token's bytes (None if absent)."""
         return self._ranks.get(token)
 
-    def id_to_token(self, token_id: int) -> Optional[bytes]:
-        """Bytes for a regular token id (None if it is a special / unknown id)."""
-        return self._decoder.get(token_id)
 
     @property
     def vocab_size(self) -> int:
         """Total vocabulary size: regular ranks + special tokens."""
         return len(self._ranks) + len(self._special_tokens)
 
-    @property
-    def n_vocab(self) -> int:
-        """Alias for :attr:`vocab_size` (tiktoken naming)."""
-        return self.vocab_size

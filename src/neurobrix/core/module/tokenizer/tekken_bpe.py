@@ -439,21 +439,12 @@ class PyTekken:
         rank = self._ranks.get(token)
         return None if rank is None else rank + self._num_special
 
-    def id_to_token(self, token_id: int) -> Optional[bytes]:
-        """Bytes for a regular Tekken id (None for special / unknown ids)."""
-        if token_id < self._num_special:
-            return None
-        return self._decoder.get(token_id - self._num_special)
 
     @property
     def vocab_size(self) -> int:
         """Total vocabulary size (``default_vocab_size`` = 131072)."""
         return self._vocab_size
 
-    @property
-    def n_words(self) -> int:
-        """Alias for :attr:`vocab_size` (mistral_common naming)."""
-        return self._vocab_size
 
     @property
     def bos_id(self) -> int:

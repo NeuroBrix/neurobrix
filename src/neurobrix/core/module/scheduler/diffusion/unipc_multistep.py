@@ -621,36 +621,6 @@ class UniPCMultistepScheduler(DiffusionSchedulerBase):
             return {"prev_sample": prev_sample}
         return prev_sample
 
-    def add_noise(
-        self,
-        original_samples: torch.Tensor,
-        noise: torch.Tensor,
-        timesteps: torch.Tensor,
-    ) -> torch.Tensor:
-        """Add noise to samples (forward diffusion). Port of diffusers add_noise."""
-        assert self.sigmas is not None, "set_timesteps() must be called before add_noise()"
-        sigmas = self.sigmas.to(device=original_samples.device, dtype=original_samples.dtype)
-        schedule_timesteps = self.timesteps.to(original_samples.device)
-        timesteps = timesteps.to(original_samples.device)
-
-        step_indices = []
-        for t in timesteps:
-            index_candidates = (schedule_timesteps == t).nonzero()
-            if len(index_candidates) == 0:
-                idx = len(schedule_timesteps) - 1
-            elif len(index_candidates) > 1:
-                idx = index_candidates[1].item()
-            else:
-                idx = index_candidates[0].item()
-            step_indices.append(int(idx))
-
-        sigma = sigmas[step_indices].flatten()
-        while len(sigma.shape) < len(original_samples.shape):
-            sigma = sigma.unsqueeze(-1)
-
-        alpha_t, sigma_t = self._sigma_to_alpha_sigma_t(sigma)
-        noisy_samples = alpha_t * original_samples + sigma_t * noise
-        return noisy_samples
 
     def scale_model_input(
         self,

@@ -95,21 +95,6 @@ class ComponentPlacementStrategy(TritonStrategy):
             self.synchronize_device(target_device)
         return transferred
 
-    def get_component_device(self, component_name: str) -> str:
-        device = self.component_devices.get(component_name)
-        if device is None:
-            raise RuntimeError(f"ZERO FALLBACK: No device for component '{component_name}'")
-        return device
-
-    def set_state_device(self, device: str) -> None:
-        self.state_device = device
-
-    def get_state_device(self) -> Optional[str]:
-        return self.state_device
-
-    def ensure_on_device(self, tensor: Any, device: str) -> Any:
-        return self.transfer_tensor(tensor, device, self.use_async)
-
 
 class ComponentPlacementLazyStrategy(ComponentPlacementStrategy):
     """Component placement with lazy weight swapping between phases (triton)."""
@@ -129,14 +114,3 @@ class ComponentPlacementLazyStrategy(ComponentPlacementStrategy):
             self._phase_loaded.add(component_name)
         return super().execute_component(component_name, phase, inputs)
 
-    def end_phase(self, phase: str) -> None:
-        """Unload weights loaded during this phase and flush the NBX pool.
-
-        (The pytorch sibling called device_empty_cache(device) with an
-        undefined `device` — a latent bug; the triton path frees through
-        the NBX allocator pool, which is the correct torch-free cleanup.)"""
-        for comp_name in list(self._phase_loaded):
-            self.unload_weights(comp_name)
-        self._phase_loaded.clear()
-        from nbxtensor.memory.allocator import DeviceAllocator
-        DeviceAllocator.empty_cache_pool()

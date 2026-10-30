@@ -160,17 +160,4 @@ class BlockScatterStrategy(ExecutionStrategy):
                     self.synchronize_device(device)
                 device_empty_cache(device)
 
-    def get_embedding_device(self, component_name: str) -> str:
-        """Get device where embedding layer is located."""
-        devices = self.get_component_devices(component_name)
-        return devices[0] if devices else self.primary_device
 
-    def get_head_device(self, component_name: str) -> str:
-        """Get device where output head is located."""
-        devices = self.get_component_devices(component_name)
-        return devices[-1] if devices else self.primary_device
-
-    def synchronize_all(self) -> None:
-        """Synchronize all devices used in block scatter execution."""
-        for device in self.devices:
-            self.synchronize_device(device)

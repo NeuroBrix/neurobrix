@@ -117,10 +117,6 @@ class StrategyContext:
                 devices.append(alloc[0])
         return list(set(devices))
 
-    def is_multi_device(self) -> bool:
-        """Check if components are on multiple devices."""
-        return len(self.get_all_devices()) > 1
-
 
 _ACCELERATOR_PREFIXES = frozenset({"cuda", "hip", "xpu", "mps", "tt"})
 
