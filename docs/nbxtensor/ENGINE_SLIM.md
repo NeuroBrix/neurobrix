@@ -77,6 +77,8 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 
 | kind | path | symbol | why it stays |
 |---|---|---|---|
+| duplicate | src/neurobrix/triton/scheduler/ddim.py | _init_step_index | the per-class hook the census shadows (kernels/census.py replaces `_init_step_index` on every scheduler class that defines it in its own body): one copy per scheduler class, by design |
+| duplicate | src/neurobrix/triton/scheduler/unipc_multistep.py | _init_step_index | the per-class hook the census shadows (kernels/census.py replaces `_init_step_index` on every scheduler class that defines it in its own body): one copy per scheduler class, by design |
 | dead | src/neurobrix/triton/state_fence.py | MetalStateFence | the Metal release fence the day launches stop waiting for their kernel (docs/nbxtensor/BACKENDS.md, 'Releasing state pages on Metal'; decision (b') of 2026-10-29 21:35): today only its refusal test reaches it |
 | fact | src/neurobrix/core/dtype/config.py | parse_dtype | the PyTorch branch's reader: it hands a torch.dtype (the library hands NBXDtype, never torch) and applies the engine's half remap under the compute dtype Prism chose — the remap is the engine's decision |
 | fact | src/neurobrix/core/dtype/engine.py | storage_dtype | the DtypeEngine's torch.dtype face of the library's rule (`nbxtensor.dtype.itemsize.storage_dtype`), with the device's fp64 fact this engine holds: the rule is the library's, the torch dtype is the PyTorch branch's |

@@ -69,3 +69,12 @@ def karras_sigmas(num_inference_steps: int, sigma_min: float,
     min_inv_rho = sigma_min ** (1.0 / rho)
     max_inv_rho = sigma_max ** (1.0 / rho)
     return (max_inv_rho + ramp * (min_inv_rho - max_inv_rho)) ** rho
+
+
+def sigma_to_alpha_sigma_t(sigma: float, flow: bool):
+    """(alpha_t, sigma_t) of a noise level `sigma`: (1 - sigma, sigma) on a flow-matching schedule, else the variance-
+    preserving pair (1 / sqrt(sigma^2 + 1), sigma / sqrt(sigma^2 + 1)) — the DPM-Solver++ and UniPC rule."""
+    if flow:
+        return (1.0 - sigma), sigma
+    alpha_t = 1.0 / (sigma ** 2 + 1.0) ** 0.5
+    return alpha_t, sigma * alpha_t

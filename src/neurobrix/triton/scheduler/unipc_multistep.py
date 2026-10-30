@@ -19,6 +19,8 @@ import numpy as np
 
 from nbxtensor.tensor import NBXTensor
 
+from .noise_schedules import sigma_to_alpha_sigma_t
+
 
 def _safelog(v: float) -> float:
     """log mirroring torch.log at the domain edge: log(0) = -inf (Python's
@@ -118,16 +120,10 @@ class TritonUniPCMultistepScheduler:
     def step_index(self):
         return self._step_index
 
-    def _sigma_to_alpha_sigma_t(self, sigma: float):
-        if self.use_flow_sigmas:
-            return (1.0 - sigma), sigma
-        alpha_t = 1.0 / (sigma ** 2 + 1.0) ** 0.5
-        return alpha_t, sigma * alpha_t
-
     # ---- model-output conversion (NBXTensor) ----
     def convert_model_output(self, model_output: NBXTensor, sample: NBXTensor) -> NBXTensor:
         sigma = float(self.sigmas[self._step_index])
-        alpha_t, sigma_t = self._sigma_to_alpha_sigma_t(sigma)
+        alpha_t, sigma_t = sigma_to_alpha_sigma_t(sigma, self.use_flow_sigmas)
         pt = self.prediction_type
         if self.predict_x0:
             if pt == "epsilon":
@@ -162,8 +158,8 @@ class TritonUniPCMultistepScheduler:
         x = sample
         s_t = float(self.sigmas[self._step_index + 1])
         s_s0 = float(self.sigmas[self._step_index])
-        alpha_t, sigma_t = self._sigma_to_alpha_sigma_t(s_t)
-        alpha_s0, sigma_s0 = self._sigma_to_alpha_sigma_t(s_s0)
+        alpha_t, sigma_t = sigma_to_alpha_sigma_t(s_t, self.use_flow_sigmas)
+        alpha_s0, sigma_s0 = sigma_to_alpha_sigma_t(s_s0, self.use_flow_sigmas)
         lambda_t = _safelog(alpha_t) - _safelog(sigma_t)
         lambda_s0 = _safelog(alpha_s0) - _safelog(sigma_s0)
         h = lambda_t - lambda_s0
@@ -174,7 +170,7 @@ class TritonUniPCMultistepScheduler:
         if order == 2:
             mi = self.model_outputs[-2]
             si = self._step_index - 1
-            alpha_si, sigma_si = self._sigma_to_alpha_sigma_t(float(self.sigmas[si]))
+            alpha_si, sigma_si = sigma_to_alpha_sigma_t(float(self.sigmas[si]), self.use_flow_sigmas)
             lambda_si = _safelog(alpha_si) - _safelog(sigma_si)
             rk = (lambda_si - lambda_s0) / h
             D1 = (mi - m0) * (1.0 / rk)         # NBXTensor
@@ -198,8 +194,8 @@ class TritonUniPCMultistepScheduler:
         model_t = this_model_output
         s_t = float(self.sigmas[self._step_index])
         s_s0 = float(self.sigmas[self._step_index - 1])
-        alpha_t, sigma_t = self._sigma_to_alpha_sigma_t(s_t)
-        alpha_s0, sigma_s0 = self._sigma_to_alpha_sigma_t(s_s0)
+        alpha_t, sigma_t = sigma_to_alpha_sigma_t(s_t, self.use_flow_sigmas)
+        alpha_s0, sigma_s0 = sigma_to_alpha_sigma_t(s_s0, self.use_flow_sigmas)
         lambda_t = _safelog(alpha_t) - _safelog(sigma_t)
         lambda_s0 = _safelog(alpha_s0) - _safelog(sigma_s0)
         h = lambda_t - lambda_s0
@@ -209,7 +205,7 @@ class TritonUniPCMultistepScheduler:
         if order == 2:
             mi = self.model_outputs[-2]
             si = self._step_index - 2
-            alpha_si, sigma_si = self._sigma_to_alpha_sigma_t(float(self.sigmas[si]))
+            alpha_si, sigma_si = sigma_to_alpha_sigma_t(float(self.sigmas[si]), self.use_flow_sigmas)
             lambda_si = _safelog(alpha_si) - _safelog(sigma_si)
             rk = (lambda_si - lambda_s0) / h
             D1 = (mi - m0) * (1.0 / rk)

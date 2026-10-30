@@ -16,7 +16,7 @@ from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from .noise_schedules import (
     get_beta_schedule, betas_to_alphas_cumprod, alphas_cumprod_to_sigmas,
-    get_timesteps_linspace,
+    get_timesteps_linspace, sigma_to_alpha_sigma_t,
 )
 
 
@@ -89,16 +89,10 @@ class TritonDPMSolverPPScheduler:
     def step_index(self):
         return self._step_index
 
-    def _sigma_to_alpha_sigma_t(self, sigma: float):
-        if self.use_flow_sigmas:
-            return (1.0 - sigma), sigma
-        alpha_t = 1.0 / (sigma ** 2 + 1.0) ** 0.5
-        return alpha_t, sigma * alpha_t
-
     # ---- model-output conversion (NBXTensor) ----
     def convert_model_output(self, model_output: NBXTensor, sample: NBXTensor) -> NBXTensor:
         sigma = float(self.sigmas[self._step_index])
-        alpha_t, sigma_t = self._sigma_to_alpha_sigma_t(sigma)
+        alpha_t, sigma_t = sigma_to_alpha_sigma_t(sigma, self.use_flow_sigmas)
         pt = self.prediction_type
         if pt == "epsilon":
             return (sample - model_output * sigma_t) * (1.0 / alpha_t)
@@ -116,8 +110,8 @@ class TritonDPMSolverPPScheduler:
         sigma_s_raw = float(self.sigmas[self._step_index])
         if sigma_t_raw == 0:
             return model_output
-        alpha_t, sigma_t = self._sigma_to_alpha_sigma_t(sigma_t_raw)
-        alpha_s, sigma_s = self._sigma_to_alpha_sigma_t(sigma_s_raw)
+        alpha_t, sigma_t = sigma_to_alpha_sigma_t(sigma_t_raw, self.use_flow_sigmas)
+        alpha_s, sigma_s = sigma_to_alpha_sigma_t(sigma_s_raw, self.use_flow_sigmas)
         h = (math.log(alpha_t) - math.log(sigma_t)) - (math.log(alpha_s) - math.log(sigma_s))
         if self.algorithm_type == "dpmsolver++":
             return sample * (sigma_t / sigma_s) - model_output * (alpha_t * (math.exp(-h) - 1.0))
@@ -129,9 +123,9 @@ class TritonDPMSolverPPScheduler:
         sigma_s1_raw = float(self.sigmas[self._step_index - 1])
         if sigma_t_raw == 0:
             return model_output_list[-1]
-        alpha_t, sigma_t = self._sigma_to_alpha_sigma_t(sigma_t_raw)
-        alpha_s0, sigma_s0 = self._sigma_to_alpha_sigma_t(sigma_s0_raw)
-        alpha_s1, sigma_s1 = self._sigma_to_alpha_sigma_t(sigma_s1_raw)
+        alpha_t, sigma_t = sigma_to_alpha_sigma_t(sigma_t_raw, self.use_flow_sigmas)
+        alpha_s0, sigma_s0 = sigma_to_alpha_sigma_t(sigma_s0_raw, self.use_flow_sigmas)
+        alpha_s1, sigma_s1 = sigma_to_alpha_sigma_t(sigma_s1_raw, self.use_flow_sigmas)
         lambda_t = math.log(alpha_t) - math.log(sigma_t)
         lambda_s0 = math.log(alpha_s0) - math.log(sigma_s0)
         lambda_s1 = math.log(alpha_s1) - math.log(sigma_s1)
