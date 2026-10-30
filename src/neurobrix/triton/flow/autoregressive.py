@@ -213,12 +213,12 @@ def paged_kv_cache(kv_params: Dict[str, Any], kv_plan):
     its page size and release rule derived by core/state/price.paged_cache_params from the executing card's vendor
     file (the derivation the compiled engine takes too)."""
     from neurobrix.core.state.price import paged_cache_params
-    from nbxtensor.ops._configs import active_vendor_profile
+    from nbxtensor.backend.device_files import in_force
     from nbxtensor.ops.paged_decode_attn import PAGED_DECODE_TILE_CANDIDATES
     from neurobrix.triton.paged_kv_cache import PagedTritonKVCache
     tokens, async_release = paged_cache_params(
         kv_params["num_kv_heads"], kv_params["k_head_dim"], kv_params["v_head_dim"], kv_params["dtype"].name,
-        (active_vendor_profile() or {}).get("memory"), int(getattr(kv_plan, "memory_bytes", 0) or 0),
+        (in_force() or {}).get("memory"), int(getattr(kv_plan, "memory_bytes", 0) or 0),
         PAGED_DECODE_TILE_CANDIDATES)
     return PagedTritonKVCache(page_tokens=tokens, async_release=async_release, **kv_params)
 

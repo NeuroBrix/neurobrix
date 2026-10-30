@@ -22,10 +22,7 @@ NATIVE = {"Metal", "objc", "Foundation", "CoreFoundation", "MetalPerformanceShad
           "metal_native"}
 
 # What is left: each site names a public API nbxtensor must gain. Shrinks only. (file relative to src/neurobrix, name)
-PRIVATE_SITES = {
-    ("kernels/census.py", "nbxtensor.ops._configs"),
-    ("triton/flow/autoregressive.py", "nbxtensor.ops._configs.active_vendor_profile"),
-}
+PRIVATE_SITES: set = set()
 
 
 def _files(roots=ROOTS):

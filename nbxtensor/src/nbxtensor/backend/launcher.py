@@ -82,6 +82,13 @@ def max_shared_memory_per_block() -> Optional[int]:
     return _SMEM_LIMIT
 
 
+def bind_target(compile_target) -> None:
+    """Bind this process's compile target without asking a driver: a derivation that compiles and launches nothing
+    (a key census) states the target its hardware description declares. `target()` answers it from then on."""
+    global _TARGET
+    _TARGET = compile_target
+
+
 def target():
     """The compile target of this process: vendor, capability, warp size —
     from the engine's data, never from `triton.runtime.driver.active` (whose

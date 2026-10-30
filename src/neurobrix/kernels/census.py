@@ -595,9 +595,9 @@ def _bind_target(hardware: Optional[str], profile: Optional[dict]) -> None:
                 "census: the hardware profile's device names no model, so no vendor profile "
                 "can be resolved for it; a census under no vendor profile is a census of "
                 "nothing (the ladder goes unread and every key is composed exact)")
-        from nbxtensor.ops import _configs as _cfg
-        _cfg._ACTIVE_PROFILE.clear()
-        if not _cfg.vendor_profile_for_arch(model):
+        from nbxtensor.backend import device_files
+        device_files.forget()
+        if not device_files.for_arch(model):
             raise RuntimeError(
                 f"census: no vendor profile matches the hardware profile's device {model!r}; "
                 f"refusing rather than recording a catalogue of exact keys a bucketed "
@@ -606,6 +606,6 @@ def _bind_target(hardware: Optional[str], profile: Optional[dict]) -> None:
     major, minor = (cc.split(".") + ["0"])[:2]
     from triton.backends.compiler import GPUTarget
     from nbxtensor.backend import launcher as _launcher
-    _launcher._TARGET = GPUTarget("cuda" if brand == "nvidia" else "hip", int(major) * 10 + int(minor), 32 if brand == "nvidia" else 64)
-    from nbxtensor.ops import _configs
-    _configs._ACTIVE_PROFILE.clear()     # a profile resolved empty before the bind is read again
+    _launcher.bind_target(GPUTarget("cuda" if brand == "nvidia" else "hip", int(major) * 10 + int(minor), 32 if brand == "nvidia" else 64))
+    from nbxtensor.backend import device_files
+    device_files.forget()     # a profile resolved empty before the bind is read again

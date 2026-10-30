@@ -19,7 +19,7 @@ from typing import Any, Dict, Iterator, Optional, Tuple
 
 DEVICES = Path(__file__).resolve().parent / "devices"
 
-__all__ = ["DEVICES", "names", "read", "merge", "merged", "describe", "param"]
+__all__ = ["DEVICES", "names", "read", "merge", "merged", "describe", "param", "in_force", "for_arch", "forget"]
 
 
 @functools.lru_cache(maxsize=None)
@@ -107,3 +107,23 @@ def param(vendor: str, name: str, section: str, key: str, default):
 
 
 _ABSENT = object()
+
+
+def in_force() -> Dict[str, Any]:
+    """The description of the device the launch target names (both halves merged), `{}` when no device file matches
+    it — what every kernel setting reads, resolved once per process."""
+    from nbxtensor.ops import _configs
+    return _configs.active_vendor_profile()
+
+
+def for_arch(arch: str) -> Dict[str, Any]:
+    """The description an arch string resolves to, read WITHOUT a launch target (a caller the target depends on, or
+    a derivation that binds no device), and recorded as the one in force."""
+    from nbxtensor.ops import _configs
+    return _configs.vendor_profile_for_arch(arch)
+
+
+def forget() -> None:
+    """Forget the description in force: the next reader resolves it again (after the launch target is bound)."""
+    from nbxtensor.ops import _configs
+    _configs._ACTIVE_PROFILE.clear()

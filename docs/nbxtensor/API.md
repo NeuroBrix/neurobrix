@@ -752,12 +752,16 @@ def merge(library: dict, application: dict, where="") -> dict   # one descriptio
 def merged(vendor: str, name: str) -> dict            # the library's half with the application's (vendors_dir)
 def describe(vendor: str, name: str) -> dict          # the device whole, refused by name when nothing describes it
 def param(vendor, name, section, key, default)        # one key of it (the per-op reader: merged once per process)
+def in_force() -> dict                                # the device the launch target names ({} when none matches)
+def for_arch(arch: str) -> dict                       # the device an arch string names, read without a target
+def forget() -> None                                  # the next reader resolves the device in force again
 ```
 
 ### `nbxtensor.backend.launcher.arch`
 
 ```python
 def arch() -> int                                     # the target's arch as an int (70 for sm_70): target().arch
+def bind_target(compile_target) -> None               # the target stated without a driver (a derivation that launches nothing)
 ```
 
 ### `nbxtensor.backend.runtime` — the backend in force
