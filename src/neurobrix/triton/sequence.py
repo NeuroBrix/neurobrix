@@ -2035,8 +2035,8 @@ class TritonSequence:
         # interceptors that self-manage:
         #   - TritonAttentionInterceptor.intercept (kv_cache.py):
         #     Flash Attention works in fp16/bf16, casts internally
-        #   - fused_upsample_conv2d / _tiled_conv2d_spatial_nbx /
-        #     _tiled_rms_norm_nbx (op-level tiling): delegate to
+        #   - fused_upsample_conv2d / tiled_conv2d_spatial (nbxtensor tiled_conv2d,
+        #     op-level tiling): delegate to
         #     conv2d_wrapper which is itself self-managed
         if op_uid in self._op_uid_interceptors:
             func = self._op_uid_interceptors[op_uid]

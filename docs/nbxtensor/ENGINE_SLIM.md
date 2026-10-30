@@ -67,6 +67,7 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | 2026-10-30 | the strategies' `handle_outputs`, declared by the base and implemented by all 16 strategies of both branches, called by nothing (a test's subclass had to stub it "unused") | 210 |
 | 2026-10-30 | `nbx/`, `serving/`, `core/components`, `core/dtype`: 24 definitions nothing called, the build toolchain included (checked in its repository) — container accessors and writers no reader or builder uses (`add_file`, `compute_checksum`, `set_topology`, `get_weights`, `list_files`, ...), two loader helpers, NeuroTax's unused groupings, the text-encoder handler's two probes, `embed_record`, `get_onnx_dtype`, a session's `build_prompt` | 320 |
 | 2026-10-30 | `core/validators/`: 36 definitions nothing called (to a fixpoint) — the fusion, memory, op, shape and sync validators' checks, the runtime guards' checks, the validation pipeline's management API; what stays is what the `validate` command and the iterative process read | 668 |
+| 2026-10-30 | `core/validators/`: the layered validation pipeline whole — ten modules (base, config, fusion, memory, numerical, op, shape and sync validators, runtime guards, the pipeline) reached only by the package's re-exports, which the scan reads as a use; nothing in the engine, its tools, its tests or the build toolchain imported them. Then, to a fixpoint, `NBXContainer.get_config` / `set_config`, which only they named | 2526 |
 
 ## Moved into nbxtensor
 

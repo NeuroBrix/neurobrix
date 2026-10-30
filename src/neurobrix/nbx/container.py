@@ -278,18 +278,6 @@ class NBXContainer:
     # CONFIG
     # =========================================================================
 
-    def set_config(self, config: Dict[str, Any]) -> None:
-        """
-        Set the model configuration.
-
-        Args:
-            config: Model configuration dictionary
-        """
-        self._config = config
-
-    def get_config(self) -> Optional[Dict]:
-        """Get the model configuration."""
-        return self._config
 
     # =========================================================================
     # WEIGHTS

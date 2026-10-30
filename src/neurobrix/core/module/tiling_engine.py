@@ -1566,7 +1566,7 @@ class OpLevelTilingEngine:
         #   < 12+2 GiB workspace+output). On 32g: only 15 (threshold
         #   6.4 GiB).
         # - The 35 extra convs on 16g triton route through
-        #   `_tiled_conv2d_spatial_nbx`. The wrapper was validated
+        #   `tiled_conv2d_spatial` (nbxtensor `tiled_conv2d`). The wrapper was validated
         #   numerically at 4096² (POINT 6 H2 fix) but produces
         #   striped/garbage at 1024²/2048² (a smaller-scale
         #   correctness gap).
@@ -1575,7 +1575,7 @@ class OpLevelTilingEngine:
         # stay full-size and cumulative memory exceeds budget).
         # Trade-off: striped output (completes, wrong values) vs OOM
         # crash. Keeping the original tiling = striped is the
-        # current ⏳ state; fixing `_tiled_conv2d_spatial_nbx` at
+        # current ⏳ state; fixing nbxtensor's `tiled_conv2d` at
         # smaller scales is the actual close — separate sub-workstream
         # `P-NBX-TILED-CONV2D-SMALL-SCALE`. Mandate v2 condition #2
         # legitimate escalation: structural root cause identified,
