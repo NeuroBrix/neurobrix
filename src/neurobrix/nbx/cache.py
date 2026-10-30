@@ -381,18 +381,6 @@ class NBXCache:
 
         return cached
 
-    def get_size(self, model_name: Optional[str] = None) -> int:
-        """Get cache size in bytes."""
-        if model_name:
-            cache_path = self.cache_dir / model_name
-            if not cache_path.exists():
-                return 0
-            return sum(f.stat().st_size for f in cache_path.rglob("*") if f.is_file())
-        else:
-            if not self.cache_dir.exists():
-                return 0
-            return sum(f.stat().st_size for f in self.cache_dir.rglob("*") if f.is_file())
-
 
 # Global instance
 _cache = NBXCache()

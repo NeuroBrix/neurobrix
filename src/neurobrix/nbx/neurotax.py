@@ -886,16 +886,6 @@ class SynonymRegistry:
         """Every token the registry translates TO."""
         return frozenset(cls._REGISTRY.values())
 
-    @classmethod
-    def add_synonym(cls, vendor_term: str, neurotax_term: str):
-        """Add a custom synonym mapping."""
-        cls._REGISTRY[vendor_term] = neurotax_term
-
-    @classmethod
-    def has_mapping(cls, token: str) -> bool:
-        """Check if a token has a mapping (case-insensitive)."""
-        return cls._lookup(token) is not None
-
 
 @dataclass
 class ParsedTensor:
@@ -1069,34 +1059,6 @@ class NeuroTaxParser:
 
         return ".".join(normalized_parts), normalized_parts
 
-    def extract_all_block_indices(self, tensor_names: List[str]) -> List[int]:
-        """Extract all unique block indices from tensor names."""
-        indices = set()
-        for name in tensor_names:
-            idx = self._extract_block_idx(name)
-            if idx is not None:
-                indices.add(idx)
-        return sorted(indices)
-
-    def group_by_block(self, tensor_names: List[str]) -> Dict[int, List[str]]:
-        """Group tensor names by block index."""
-        groups: Dict[int, List[str]] = {}
-
-        for name in tensor_names:
-            idx = self._extract_block_idx(name)
-            if idx is not None:
-                if idx not in groups:
-                    groups[idx] = []
-                groups[idx].append(name)
-
-        return groups
-
-    def filter_global_tensors(self, tensor_names: List[str]) -> List[str]:
-        """Return only global tensors (not in blocks)."""
-        return [
-            name for name in tensor_names
-            if self._extract_block_idx(name) is None
-        ]
 
     @staticmethod
     def build_reverse_map(forward_map: Dict[str, str]) -> Dict[str, str]:

@@ -135,19 +135,6 @@ class ConversationSession:
 
         return True
 
-    def build_prompt(self) -> str:
-        """
-        Format full conversation history via chat_template.
-
-        Returns the complete formatted string ready for tokenization.
-        The caller should tokenize this WITHOUT applying chat_mode
-        (the template is already applied here).
-        """
-        if hasattr(self._tokenizer, 'apply_chat_template'):
-            return self._tokenizer.apply_chat_template(
-                self.messages, tokenize=False, add_generation_prompt=True
-            )
-        return self._format_basic()
 
     def build_token_ids(self) -> List[int]:
         """

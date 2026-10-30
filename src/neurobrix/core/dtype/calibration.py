@@ -417,18 +417,6 @@ def load_embedded_record(cache_path, component: str) -> Optional[CalibrationReco
     return CalibrationRecord.from_dict(section)
 
 
-def embed_record(cache_path, component: str, record: "CalibrationRecord") -> Path:
-    """Write the record into the component's profile.json of the extracted
-    container (the artifact's own home); returns the path written."""
-    p = Path(cache_path) / "components" / component / "profile.json"
-    profile = json.loads(p.read_text()) if p.exists() else {}
-    profile[EMBED_KEY] = record.to_dict()
-    tmp = p.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(profile, indent=1))
-    tmp.replace(p)
-    return p
-
-
 def load_record(model_name: Optional[str], component: str) -> Optional[CalibrationRecord]:
     """The component's record from the engine store; None when there is
     none. A record that EXISTS but cannot be read raises — a silent None

@@ -142,42 +142,6 @@ class TextEncoderComponentHandler(ComponentHandler):
             "Model data incomplete. Re-import: neurobrix remove <model> && neurobrix import <org>/<model>"
         )
 
-    def get_hidden_size(self) -> int:
-        """
-        Get hidden size from config.
-
-        Returns:
-            Hidden dimension size
-        """
-        if self.config.hidden_size is not None:
-            return self.config.hidden_size
-
-        # Try alternative key names
-        hidden = self.config.get("d_model")  # T5 uses d_model
-        if hidden is not None:
-            return hidden
-
-        hidden = self.config.get("hidden_size")
-        if hidden is not None:
-            return hidden
-
-        # ZERO FALLBACK: Should not reach here if config is complete
-        raise RuntimeError(
-            f"ZERO FALLBACK: Cannot determine hidden_size for {self.config.class_name}. "
-            f"Missing hidden_size or d_model in profile.json"
-        )
-
-    def produces_pooled_output(self) -> bool:
-        """
-        Check if this encoder produces pooled output.
-
-        CLIP-style encoders produce pooled_output in addition to
-        last_hidden_state, which is used for conditioning.
-
-        Returns:
-            True if encoder produces pooled_output
-        """
-        return self.config.class_name in self.POOLED_OUTPUT_CLASSES
 
     @staticmethod
     def preprocess_prompt(

@@ -65,6 +65,7 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | 2026-10-30 | `core/prism/__init__.py`: six backward-compatibility aliases nobody imports (`GpuDevice`, `SmartSolver`, `SmartExecutionPlan`, `smart_solve`, `StructComponentAllocation`, `SolverExecutionPlan`) | 15 |
 | 2026-10-30 | `core/strategies/`, `core/module/`: 76 definitions nothing called (to a fixpoint) — the strategies' unused helpers (both branches), a tensor-parallel shard loader nothing reached (`create_block_shards` and its five helpers), every scheduler's `add_noise` (no flow noises latents: its only caller was dead), the scheduler and generator factories' unused entries, tokenizer helpers | 1 049 |
 | 2026-10-30 | the strategies' `handle_outputs`, declared by the base and implemented by all 16 strategies of both branches, called by nothing (a test's subclass had to stub it "unused") | 210 |
+| 2026-10-30 | `nbx/`, `serving/`, `core/components`, `core/dtype`: 24 definitions nothing called, the build toolchain included (checked in its repository) — container accessors and writers no reader or builder uses (`add_file`, `compute_checksum`, `set_topology`, `get_weights`, `list_files`, ...), two loader helpers, NeuroTax's unused groupings, the text-encoder handler's two probes, `embed_record`, `get_onnx_dtype`, a session's `build_prompt` | 320 |
 
 ## Moved into nbxtensor
 
@@ -119,3 +120,6 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | wrapper | src/neurobrix/core/runtime/symint.py | __radd__ | Python's reflected-operator protocol: 2 + s calls it, never by name |
 | wrapper | src/neurobrix/core/runtime/symint.py | __rmul__ | Python's reflected-operator protocol: 2 * s calls it, never by name |
 | wrapper | src/neurobrix/core/runtime/symint.py | __str__ | Python's str() protocol |
+| dead | src/neurobrix/nbx/cache.py | NBXCache.list_cached | used by the build toolchain, which reads the engine's package from its own repository (outside this scan's roots) |
+| dead | src/neurobrix/nbx/neurotax.py | NeuroTaxParser.normalize_parent_module | used by the build toolchain, which reads the engine's package from its own repository (outside this scan's roots) |
+| dead | src/neurobrix/serving/engine.py | InferenceEngine.is_loaded | used by the build toolchain, which reads the engine's package from its own repository (outside this scan's roots) |

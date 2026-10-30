@@ -263,23 +263,12 @@ class NBXContainer:
     # GRAPH (TensorDAG)
     # =========================================================================
 
-    def set_graph(self, graph: Dict[str, Any]) -> None:
-        """
-        Set the model execution graph (TensorDAG).
-
-        Args:
-            graph: TensorDAG dictionary with ops, tensors, execution_order
-        """
-        self._graph = graph
 
     def get_graph(self) -> Optional[Dict]:
         """Get the model execution graph (TensorDAG)."""
         return self._graph
 
     # Legacy aliases for backward compatibility
-    def set_topology(self, topology: Dict[str, Any]) -> None:
-        """DEPRECATED: Use set_graph() instead."""
-        self._graph = topology
 
     def get_topology(self) -> Optional[Dict]:
         """DEPRECATED: Use get_graph() instead."""
@@ -328,55 +317,11 @@ class NBXContainer:
             "metadata": metadata or {},
         }
 
-    def get_weights(self, component_name: str) -> Optional[Dict[str, "np.ndarray"]]:
-        """
-        Get weights for a component.
-
-        Args:
-            component_name: Name of the component
-
-        Returns:
-            Dictionary mapping weight names to numpy arrays
-        """
-        if component_name in self._weights:
-            return self._weights[component_name].get("tensors")
-        return None
-
-    def list_weight_components(self) -> List[str]:
-        """List all component names that have weights."""
-        return list(self._weights.keys())
 
     # =========================================================================
     # ADDITIONAL FILES
     # =========================================================================
 
-    def add_file(self, path: str, content: Union[bytes, str]) -> None:
-        """
-        Add an arbitrary file to the container.
-
-        Args:
-            path: Path within the container (e.g., "tokenizer/vocab.json")
-            content: File content (bytes or string)
-        """
-        if isinstance(content, str):
-            content = content.encode("utf-8")
-        self._files[path] = content
-
-    def get_file(self, path: str) -> Optional[bytes]:
-        """
-        Get a file from the container.
-
-        Args:
-            path: Path within the container
-
-        Returns:
-            File content as bytes, or None if not found
-        """
-        return self._files.get(path)
-
-    def list_files(self) -> List[str]:
-        """List all additional files in the container."""
-        return list(self._files.keys())
 
     # =========================================================================
     # SAVE / LOAD
@@ -534,102 +479,6 @@ class NBXContainer:
 
         return container
 
-    def _load_components(self, zf: zipfile.ZipFile) -> None:
-        """
-        Load all components.
-
-        ZERO HARDCODE: Category from config.json (_class_name).
-        """
-        # Find all components from manifest or by scanning for config.json
-        component_names = set()
-
-        # From manifest
-        if self._manifest:
-            components = self._manifest.get("components", {})
-            component_names.update(components.keys())
-
-        # By scanning for config files
-        for name in zf.namelist():
-            # Match components/{name}/*config.json
-            parts = name.split("/")
-            if len(parts) == 3 and parts[0] == "components" and "config.json" in parts[2]:
-                comp_name = parts[1]
-                component_names.add(comp_name)
-
-        # Load each component
-        for comp_name in component_names:
-            self._load_single_component(zf, comp_name)
-
-    def _load_single_component(self, zf: zipfile.ZipFile, comp_name: str) -> None:
-        """Load a single component with all its files."""
-        prefix = f"components/{comp_name}/"
-        file_list = zf.namelist()
-
-        # Load config (try config.json, then {name}_config.json, then any *config.json)
-        config = {}
-        config_candidates = [
-            f"{prefix}config.json",
-            f"{prefix}{comp_name}_config.json",
-            f"{prefix}scheduler_config.json",
-            f"{prefix}tokenizer_config.json"
-        ]
-
-        # Also scan specifically for this component if needed
-        for f in file_list:
-            if f.startswith(prefix) and "config.json" in f:
-                if f not in config_candidates:
-                    config_candidates.append(f)
-
-        found_config = False
-        for config_path in config_candidates:
-            if config_path in file_list:
-                try:
-                    config = json.loads(zf.read(config_path).decode("utf-8"))
-                    found_config = True
-                    break
-                except Exception:
-                    continue
-
-        # Category from config.json (ZERO HARDCODE)
-        category = get_category_from_config(config)
-
-        # Load graph.json (neural components only) - TensorDAG format
-        graph_path = f"{prefix}graph.json"
-        if graph_path in file_list:
-            graph = json.loads(zf.read(graph_path).decode("utf-8"))
-        else:
-            graph = None
-
-        # Load profile.json (trace-time values - SOURCE OF TRUTH for dtype)
-        profile_path = f"{prefix}profile.json"
-        if profile_path in file_list:
-            profile = json.loads(zf.read(profile_path).decode("utf-8"))
-        else:
-            profile = None
-
-        # NOTE: attributes are loaded from cache only (runtime.json)
-        # Per CLAUDE.md: Runtime ALWAYS reads from ~/.neurobrix/cache/<name>/
-
-        # Find weight paths
-        weight_paths = [
-            n for n in file_list
-            if n.startswith(f"{prefix}weights/") and n.endswith(".safetensors")
-        ]
-
-        index_path = f"{prefix}weights_index.json"
-        weights_index = json.loads(zf.read(index_path).decode("utf-8")) if index_path in file_list else None
-
-        # Create ComponentData (attributes=None here, loaded from cache later)
-        self._components[comp_name] = ComponentData(
-            name=comp_name,
-            category=category,
-            config=config,
-            graph=graph,
-            weight_paths=weight_paths,
-            profile=profile,
-            attributes=None,
-            weights_index=weights_index,
-        )
 
     def _load_components_from_cache(self, cache_path: Path) -> None:
         """
@@ -766,14 +615,6 @@ class NBXContainer:
         """List all component names."""
         return list(self._components.keys())
 
-    def get_component_categories(self) -> Dict[str, str]:
-        """
-        Get category for each component.
-
-        Returns:
-            Dict mapping component name to detected category
-        """
-        return {name: comp.category for name, comp in self._components.items()}
 
     # =========================================================================
     # VALIDATION
@@ -807,33 +648,6 @@ class NBXContainer:
 
         return errors
 
-    def compute_checksum(self) -> str:
-        """
-        Compute SHA256 checksum of the container contents.
-
-        Returns:
-            Hex-encoded SHA256 hash
-        """
-        hasher = hashlib.sha256()
-
-        # Hash manifest
-        if self._manifest:
-            hasher.update(json.dumps(self._manifest, sort_keys=True).encode())
-
-        # Hash component graphs
-        for comp in sorted(self._components.values(), key=lambda c: c.name):
-            if comp.graph:
-                hasher.update(json.dumps(comp.graph, sort_keys=True).encode())
-
-        # Hash weight shapes (not values - too slow)
-        for name in sorted(self._weights.keys()):
-            weight_data = self._weights[name]
-            tensors = weight_data.get("tensors", {})
-            for tensor_name in sorted(tensors.keys()):
-                tensor = tensors[tensor_name]
-                hasher.update(f"{name}/{tensor_name}:{tensor.shape}".encode())
-
-        return hasher.hexdigest()
 
     # =========================================================================
     # INFO

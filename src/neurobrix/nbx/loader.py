@@ -114,9 +114,6 @@ class FastNBXLoader:
                 return json.load(f)
         return {}
 
-    def load_component_graph(self, component: str) -> Dict[str, Any]:
-        """Load component's graph.json (TensorDAG)."""
-        return self.load_json(f"components/{component}/graph.json")
 
     def find_weight_files(self, component: str) -> List[Path]:
         """Find all weight files for a component."""
@@ -291,13 +288,6 @@ class FastNBXLoader:
             "stats": self.stats,
             "cache_path": self.cache_path,
         }
-
-    def get_component_list(self) -> List[str]:
-        """Get list of available components in cache."""
-        components_dir = self.cache_path / "components"
-        if not components_dir.exists():
-            return []
-        return [d.name for d in components_dir.iterdir() if d.is_dir()]
 
 
 def fast_load_nbx(nbx_path: str, device: str = "cpu") -> Dict[str, Any]:
