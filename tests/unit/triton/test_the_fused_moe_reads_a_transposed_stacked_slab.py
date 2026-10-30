@@ -57,7 +57,7 @@ def _host(arr):
 @pytest.mark.parametrize("where", ["resident", "host"])
 @pytest.mark.parametrize("g_off", [0, F])
 @pytest.mark.parametrize("renorm", [True, False])
-def test_the_grouped_gemm_reads_the_transposed_views(where, g_off, renorm):
+def test_the_grouped_gemm_reads_the_transposed_views(where, g_off, renorm, needs_device, declared_profile):
     from neurobrix.core.runtime.graph.moe_fusion import expert_weight_lists
     from neurobrix.triton.moe import execute_moe_fused
     rng = np.random.default_rng(3 + g_off + 2 * renorm)
