@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # R33: the ATen branch imports it; shared code only annotates
     import torch
+import copy
 import json
 import gc
 import logging
@@ -105,6 +106,7 @@ class RuntimeExecutor:
         # the parsed parameters are input-independent, only should_tile() /
         # tiled_execute() are per-request. None = not built yet.
         self._tiling_autodetect_cache: Optional[Dict[str, TilingEngine]] = None
+        self._graph_io: Dict[str, Dict[str, Any]] = {}     # each loaded graph's inputs and outputs (`_setup_executors`)
 
         # Setup flag — allows InferenceEngine to call setup() once, then execute() many times
         self._is_setup = False
@@ -565,10 +567,14 @@ class RuntimeExecutor:
             components_dir = self.pkg.cache_path / "components"
             for comp_name in self.pkg.topology.get("components", {}):
                 try:
-                    engine = TilingEngine.from_component_config(
-                        graph_path=components_dir / comp_name / "graph.json",
-                        profile_path=components_dir / comp_name / "profile.json",
-                    )
+                    io = self._graph_io.get(comp_name)
+                    ppath = components_dir / comp_name / "profile.json"
+                    if io is not None:
+                        engine = (TilingEngine.from_graph(io, json.loads(ppath.read_text()))
+                                  if ppath.exists() else None)
+                    else:
+                        engine = TilingEngine.from_component_config(
+                            graph_path=components_dir / comp_name / "graph.json", profile_path=ppath)
                     if engine is not None:
                         cache[comp_name] = engine
                 except (FileNotFoundError, ValueError) as e:
@@ -1031,6 +1037,14 @@ class RuntimeExecutor:
                 )
 
             dag = self._load_graph(comp_name)
+            # what the tiling auto-detect reads of the graph (its inputs and outputs), kept before the graph is
+            # handed over and fused, so the graph is not parsed again for it (`TilingEngine.from_graph`)
+            io_ids = list(dag.get("input_tensor_ids", [])) + list(dag.get("output_tensor_ids", []))
+            self._graph_io[comp_name] = {
+                "input_tensor_ids": list(dag.get("input_tensor_ids", [])),
+                "output_tensor_ids": list(dag.get("output_tensor_ids", [])),
+                "tensors": {str(t): copy.deepcopy(dag["tensors"][str(t)])
+                            for t in io_ids if str(t) in (dag.get("tensors") or {})}}
             executor = ExecutorFactory.create(
                 component=comp_name,
                 allocation=allocation,

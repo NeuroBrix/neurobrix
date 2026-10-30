@@ -182,10 +182,19 @@ class TilingEngine:
         """
         if not graph_path.exists() or not profile_path.exists():
             return None
-
-        # --- Step 1: Read trace size from graph input shape ---
         with open(graph_path) as f:
             graph = json.load(f)
+        with open(profile_path) as f:
+            profile = json.load(f)
+        return cls.from_graph(graph, profile)
+
+    @classmethod
+    def from_graph(cls, graph: Dict[str, Any], profile: Dict[str, Any]) -> Optional["TilingEngine"]:
+        """`from_component_config` on a graph and a profile already read. Only the graph's `input_tensor_ids`,
+        `output_tensor_ids` and those tensors' metadata are read, so the inputs and outputs of the graph suffice
+        (the executor keeps them when it reads a graph, before the graph is fused: parsing a 115 419-op graph.json
+        again cost 6 s of one core, Qwen3-30B-A3B 2026-10-30)."""
+        # --- Step 1: Read trace size from graph input shape ---
 
         input_ids = graph.get("input_tensor_ids", [])
         tensors = graph.get("tensors", {})
@@ -267,8 +276,6 @@ class TilingEngine:
             return None  # downsampler (encoder) — not a tiling target
 
         # --- Step 2: Read scale factor and window config from profile ---
-        with open(profile_path) as f:
-            profile = json.load(f)
 
         config = profile.get("config", {})
 
