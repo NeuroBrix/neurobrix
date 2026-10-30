@@ -103,6 +103,7 @@ def detect_and_fuse_moe(dag: Dict[str, Any], family: str, norm_topk_prob: bool =
     ops_removed_total = 0
     dead_outputs_total = 0
     declined: Dict[str, str] = {}
+    swept_whole = False       # the first per-expert fusion sweeps every op; the next ones sweep what they removed
 
     for topk_uid in moe_topk_uids:
         blend = blends.get(topk_uid)
@@ -115,7 +116,9 @@ def detect_and_fuse_moe(dag: Dict[str, Any], family: str, norm_topk_prob: bool =
             consumer_map, producer_map, topk_uid,
             norm_topk_prob=norm_topk_prob,
             blend=blend,
+            whole_sweep=not swept_whole,
         )
+        swept_whole = swept_whole or result is not None
         if result is None and blend is None:
             # Stacked expert parameters (two [E, ., .] slabs, no per-expert
             # tensors): softmax after topk with a sorted dispatch, or softmax
@@ -212,6 +215,7 @@ def _fuse_one_moe_layer(
     topk_uid: str,
     norm_topk_prob: bool = True,
     blend: Optional["GateBlend"] = None,
+    whole_sweep: bool = True,
 ) -> Optional[Tuple[int, str, Dict[str, Any], int]]:
     """
     Fuse one MoE layer starting from a topk op.
@@ -569,9 +573,19 @@ def _fuse_one_moe_layer(
 
     # A worklist: every op once, then the producers of a removed op's inputs, which may have
     # lost their last consumer with it. Removing an op only ever makes more ops removable, so
-    # the set reached is the one the whole-order fixed point reached, in any order.
+    # the set reached is the one the whole-order fixed point reached, in any order. After one
+    # whole sweep (`whole_sweep`, the caller's first fusion) the graph is at that fixed point, so
+    # a later layer can only kill what lost a consumer to THIS layer — the producers of the
+    # inputs of the ops it fused away or removed above: every op of the order at every layer was
+    # 48 x 115 419 visits on Qwen3-30B-A3B, 2.8 M liveness checks, ~8 s of one core per fusion
+    # (2026-10-30); the fused graph is the same (tested on the catalogue's MoE graphs).
     dead_outputs_count = 0
-    pending = [uid for uid in new_order if uid in active_ops]
+    if whole_sweep:
+        pending = [uid for uid in new_order if uid in active_ops]
+    else:
+        pending = list(dict.fromkeys(
+            producer_map[t] for r in moe_op_uids | dead_ops for t in _collect_input_tids(ops.get(r, {}))
+            if producer_map.get(t) in active_ops))
     queued = set(pending)
     while pending:
         uid = pending.pop()
