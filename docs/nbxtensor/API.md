@@ -318,9 +318,11 @@ def trial(pieces, workers) -> float                # bytes/s reading them with `
 def choose(rates, within) -> int                   # the smallest count within `within` of the best rate
 def measure(files, max_bytes, max_workers, within=0.05) -> dict
     # {'rates': {1: .., 2: .., 4: ..}, 'workers': choose(...), 'steady': bool, 'bytes': .., 'last_one_worker': ..}
-def workers_for(directory, max_bytes=256 << 20, max_workers=None, pattern='*/components/*/weights/*.safetensors') -> Optional[int]
-    # the median of three steady `measure`s over the directory's largest weight files (else a scratch file it
-    # removes); None when fewer than two of five measures are steady
+WITNESS_BYTES = 1 << 30                           # the witness written when the storage holds no weight file
+def workers_for(directory, max_workers=None, pattern='*/components/*/weights/*.safetensors') -> int
+    # measured on the directory's storage (its largest weight files, else a witness it writes and removes):
+    # the trials grow while the measure is not stable; two steady draws decide (a third breaks a tie);
+    # refused by name when no size is stable — never None, never a default
 ```
 
 The cache is evicted before each trial and bypassed during it (macOS `msync(MS_INVALIDATE)` + `F_NOCACHE`, Linux

@@ -11,7 +11,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Sequence
 
-__all__ = ["PIECE", "pieces", "trial", "choose", "measure", "workers_for"]
+__all__ = ["PIECE", "WITNESS_BYTES", "pieces", "trial", "choose", "measure", "workers_for"]
 
 PIECE = 16 << 20                       # the loaders' read piece
 
@@ -115,33 +115,63 @@ def measure(files: Sequence[str], max_bytes: int, max_workers: int, within: floa
     return {"bytes": total, "rates": rates, "workers": choose(rates, within), "steady": steady, "last_one_worker": last}
 
 
-def workers_for(directory, max_bytes: int = 256 << 20, max_workers: Optional[int] = None,
-                pattern: str = "*/components/*/weights/*.safetensors") -> Optional[int]:
-    """The parallel reads to keep in flight on `directory`'s storage: the MEDIAN of three steady `measure`s over its
-    largest files matching `pattern` (a weight cache's shards), else over a scratch file written there and removed. One
-    measure fluctuates (8 or 16 across three runs on the rack's RDMA cache, 2026-10-30), and a plan prices the count:
-    a single draw would make the plan depend on the noise. None when fewer than two of up to five measures are steady
-    (another reader on the storage): nothing is returned that was not measured."""
+WITNESS_BYTES = 1 << 30                # the witness file written when the storage holds no weight file yet
+
+
+def workers_for(directory, max_workers: Optional[int] = None,
+                pattern: str = "*/components/*/weights/*.safetensors") -> int:
+    """The parallel reads to keep in flight on `directory`'s storage, MEASURED there: over its largest files matching
+    `pattern` (a weight cache's shards), else over a witness file of `WITNESS_BYTES` written in that directory (the
+    storage measured is the one the loaders read) and removed. Counts 1, 2, 4, ... up to `max_workers` (the machine's
+    `os.cpu_count()` when not given).
+
+    The trials grow while the measure is not stable: at a given size, up to three measures; when two of them are
+    steady (`measure`'s first/last one-worker check) the answer is their median — one draw fluctuates (8 or 16 on the
+    rack's RDMA cache) and a plan prices the count. Otherwise the trial size is quadrupled, up to everything the files
+    hold: a byte count is a time on one storage only (256 MiB was 7 s over the Mac's NFS, 40 ms over the rack's RDMA
+    cache, where every draw read as unsteady — 2026-10-30). When no size gives a stable measure, refused by name:
+    never a silent None, never a default."""
     from pathlib import Path
     root = Path(directory)
-    files = sorted(root.glob(pattern), key=lambda p: -p.stat().st_size)[:4]
-    scratch = None
+    max_workers = max_workers or os.cpu_count() or 1
+    files = [str(p) for p in sorted(root.glob(pattern), key=lambda p: -p.stat().st_size)[:4]]
+    witness = None
     if not files:
-        scratch = root / f".read_rate_{os.getpid()}"
-        with open(scratch, "wb") as f:
-            for _ in range(max(1, max_bytes // PIECE)):
+        witness = root / f".read_rate_witness_{os.getpid()}"
+        with open(witness, "wb") as f:
+            for _ in range(WITNESS_BYTES // PIECE):
                 f.write(os.urandom(PIECE))
-        files = [scratch]
+        files = [str(witness)]
     try:
-        picks: List[int] = []
-        for _ in range(5):
-            m = measure([str(p) for p in files], max_bytes, max_workers or os.cpu_count() or 1)
-            if m["steady"]:
-                picks.append(int(m["workers"]))
-            if len(picks) == 3:
-                break
-        return sorted(picks)[(len(picks) - 1) // 2] if len(picks) >= 2 else None
+        available = sum(os.path.getsize(p) for p in files)
+        size, tried = 4 * PIECE, []
+        while True:
+            size = min(size, available)
+            picks = []
+            for _ in range(3):
+                m = measure(files, size, max_workers)
+                if m["steady"]:
+                    picks.append(int(m["workers"]))
+                if len(picks) == 2:
+                    break
+            tried.append(f"{size >> 20} MiB: {len(picks)}/3 steady")
+            if len(picks) >= 2:
+                return sorted(picks)[0] if picks[0] == picks[1] else _median_of_three(files, size, max_workers, picks)
+            if size >= available:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: no stable read-rate measure on {root} up to {available >> 20} MiB per trial "
+                    f"({'; '.join(tried)}): another reader on the storage? measure again on a quiet machine "
+                    f"(tools/measure_io_workers.py) — no worker count is assumed")
+            size *= 4
     finally:
-        if scratch is not None:
-            scratch.unlink(missing_ok=True)
+        if witness is not None:
+            witness.unlink(missing_ok=True)
 
+
+def _median_of_three(files, size, max_workers, picks):
+    """Two steady draws disagree: a third steady one decides (their median)."""
+    for _ in range(3):
+        m = measure(files, size, max_workers)
+        if m["steady"]:
+            return sorted(picks + [int(m["workers"])])[1]
+    return sorted(picks)[0]

@@ -2,6 +2,8 @@
 5 % of the best — a worker past it holds a shard in host memory for nothing (Prism counts one per worker)."""
 from pathlib import Path
 
+import pytest
+
 from nbxtensor.io import read_rate as M
 
 
@@ -29,30 +31,37 @@ def test_a_measure_reads_every_count_and_says_whether_it_was_steady(tmp_path):
     assert isinstance(m["steady"], bool)
 
 
-def test_a_directory_without_weights_is_measured_on_a_scratch_file_it_removes(tmp_path):
-    n = M.workers_for(tmp_path, max_bytes=2 * M.PIECE, max_workers=2)
-    assert n is None or n in (1, 2)
+def test_a_directory_without_weights_is_measured_on_a_witness_it_removes(tmp_path, monkeypatch):
+    monkeypatch.setattr(M, "WITNESS_BYTES", 2 * M.PIECE)
+    seen = []
+    monkeypatch.setattr(M, "measure", lambda files, *a: seen.append(files) or {"steady": True, "workers": 2})
+    assert M.workers_for(tmp_path, max_workers=2) == 2
+    assert seen and all(f[0].startswith(str(tmp_path)) for f in seen)    # the storage measured is the directory's
     assert list(tmp_path.iterdir()) == []
 
 
-def test_a_weight_cache_is_measured_on_its_shards(tmp_path):
-    w = tmp_path / "m" / "components" / "c" / "weights"
-    w.mkdir(parents=True)
-    (w / "shard_000.safetensors").write_bytes(b"s" * (2 * M.PIECE))
-    n = M.workers_for(tmp_path, max_bytes=2 * M.PIECE, max_workers=2)
-    assert n is None or n in (1, 2)
-    assert [p.name for p in w.iterdir()] == ["shard_000.safetensors"]
+def test_the_trials_grow_while_the_measure_is_not_stable(tmp_path, monkeypatch):
+    (tmp_path / "x").write_bytes(b"0" * (64 * M.PIECE))
+    sizes = []
+
+    def measure(files, size, workers):
+        sizes.append(size)
+        return {"steady": size >= 16 * M.PIECE, "workers": 8}
+    monkeypatch.setattr(M, "measure", measure)
+    assert M.workers_for(tmp_path, max_workers=8, pattern="x") == 8
+    assert sorted(set(sizes)) == [4 * M.PIECE, 16 * M.PIECE]              # quadrupled once, then two steady draws
 
 
-def test_the_count_is_the_median_of_three_steady_measures(tmp_path, monkeypatch):
-    draws = iter([{"steady": True, "workers": 16}, {"steady": False, "workers": 2}, {"steady": True, "workers": 8},
+def test_no_stable_measure_at_any_size_is_refused_by_name(tmp_path, monkeypatch):
+    (tmp_path / "x").write_bytes(b"0" * (8 * M.PIECE))
+    monkeypatch.setattr(M, "measure", lambda *a: {"steady": False, "workers": 4})
+    with pytest.raises(RuntimeError, match="no stable read-rate measure"):
+        M.workers_for(tmp_path, max_workers=4, pattern="x")
+
+
+def test_two_steady_draws_that_disagree_are_decided_by_a_third(tmp_path, monkeypatch):
+    (tmp_path / "x").write_bytes(b"0" * (8 * M.PIECE))
+    draws = iter([{"steady": True, "workers": 16}, {"steady": True, "workers": 8}, {"steady": False, "workers": 2},
                   {"steady": True, "workers": 16}])
-    monkeypatch.setattr(M, "measure", lambda *a, **k: next(draws))
-    (tmp_path / "x").write_bytes(b"0")
-    assert M.workers_for(tmp_path, pattern="x") == 16          # 16, 8, 16 -> the median; the unsteady draw is not one
-
-
-def test_fewer_than_two_steady_measures_state_nothing(tmp_path, monkeypatch):
-    monkeypatch.setattr(M, "measure", lambda *a, **k: {"steady": False, "workers": 4})
-    (tmp_path / "x").write_bytes(b"0")
-    assert M.workers_for(tmp_path, pattern="x") is None
+    monkeypatch.setattr(M, "measure", lambda *a: next(draws))
+    assert M.workers_for(tmp_path, max_workers=16, pattern="x") == 16   # 16, 8, 16 -> the median
