@@ -902,7 +902,7 @@ class ActivationProfiler:
         x_shape = self._resolve_shape(self.tensors.get(x_tid, {}), symbol_map)
         w_shape = self._resolve_shape(self.tensors.get(w_tid, {}), symbol_map)
         width = (widths[out_tid] if widths is not None and out_tid in widths
-                 else self._compute_size([1], self.tensors.get(out_tid, {}), dtype_bytes))
+                 else self._compute_size([1], self.tensors.get(out_tid, {})))
         attrs = op.get("attributes") or {}
         return int(tiled_conv2d_band_bytes(x_shape, w_shape, attrs["stride"], attrs["padding"], attrs["dilation"],
                                            int(factor), int(width), int(width)))
@@ -1186,7 +1186,7 @@ class ActivationProfiler:
                         numel *= dim
                     size = numel * widths[tid]
                 else:
-                    size = self._compute_size(shape, tensor_meta, dtype_bytes)
+                    size = self._compute_size(shape, tensor_meta)
                 live_tensors[tid] = size
                 current_bytes += size
                 if events is not None:
@@ -1209,7 +1209,7 @@ class ActivationProfiler:
                     for d in shape:
                         n *= d
                     return n * widths[tid]
-                return self._compute_size(shape, meta, dtype_bytes)
+                return self._compute_size(shape, meta)
 
             for tid in _frontier:
                 size = _held_size(tid)
@@ -1244,7 +1244,7 @@ class ActivationProfiler:
                         numel *= dim
                     size = numel * widths[tid]
                 else:
-                    size = self._compute_size(shape, self.tensors.get(tid, {}), dtype_bytes)
+                    size = self._compute_size(shape, self.tensors.get(tid, {}))
                 live_tensors[tid] = size
                 current_bytes += size
                 if events is not None:
@@ -1281,7 +1281,7 @@ class ActivationProfiler:
                         numel *= dim
                     size = numel * widths[out_tid]
                 else:
-                    size = self._compute_size(shape, tensor_meta, dtype_bytes)
+                    size = self._compute_size(shape, tensor_meta)
 
                 # Zero-alloc op: output is a sentinel proxy / stride-0 view
                 # at runtime, not a real allocation. Liveness still tracks
@@ -1309,10 +1309,10 @@ class ActivationProfiler:
                     x_width = next((cw for ct, cw in op_casts.get(op_uid, ()) if ct == x_tid), None)
                     if x_width is None:
                         x_width = (widths[x_tid] if widths is not None
-                                   else self._compute_size([1], self.tensors.get(x_tid, {}), dtype_bytes))
+                                   else self._compute_size([1], self.tensors.get(x_tid, {})))
                     out_tid0 = output_tids[0]
                     out_width = (widths[out_tid0] if widths is not None
-                                 else self._compute_size([1], self.tensors.get(out_tid0, {}), dtype_bytes))
+                                 else self._compute_size([1], self.tensors.get(out_tid0, {})))
                     w_shape = self._resolve_shape(self.tensors.get(op["input_tensor_ids"][1], {}), symbol_map)
                     _ins = op["input_tensor_ids"]
                     _attrs = dict(op.get("attributes") or {}, has_bias=len(_ins) >= 3 and bool(_ins[2]))
@@ -1328,9 +1328,9 @@ class ActivationProfiler:
                     x_shape = self._resolve_shape(x_meta, symbol_map)
                     x_width = next((cw for ct, cw in op_casts.get(op_uid, ()) if ct == x_tid), None)
                     if x_width is None:
-                        x_width = widths[x_tid] if widths is not None else self._compute_size([1], x_meta, dtype_bytes)
+                        x_width = widths[x_tid] if widths is not None else self._compute_size([1], x_meta)
                     out_tid0 = output_tids[0] if output_tids else None
-                    out_width = ((widths[out_tid0] if widths is not None else self._compute_size([1], self.tensors.get(out_tid0, {}), dtype_bytes))
+                    out_width = ((widths[out_tid0] if widths is not None else self._compute_size([1], self.tensors.get(out_tid0, {})))
                                  if out_tid0 else 0)
                     in_op += int(op_workspace(op.get("op_type"), x_shape, x_width, out_width))
             # a band-streamed 2-D conv: its largest band's input buffer and output, beside the whole output
@@ -1444,7 +1444,7 @@ class ActivationProfiler:
                     sh = self._resolve_shape(meta, symbol_map)
                     out_shapes.append(sh)
                     if not is_view:
-                        out_bytes_total += self._compute_size(sh, meta, dtype_bytes)
+                        out_bytes_total += self._compute_size(sh, meta)
                 ws_bytes = estimate_op_workspace_bytes(
                     mode, op_type, in_shapes, out_shapes, dtype_bytes,
                     vram_per_gpu_bytes=vram_per_gpu_bytes,
@@ -1454,7 +1454,7 @@ class ActivationProfiler:
                 for tid, sh in zip(in_tids, in_shapes):
                     meta = self.tensors.get(tid, {})
                     largest_in_bytes = max(
-                        largest_in_bytes, self._compute_size(sh, meta, dtype_bytes)
+                        largest_in_bytes, self._compute_size(sh, meta)
                     )
                 # `largest_in_bytes` stands in for an input the simulation
                 # never allocated -- a weight, or a graph input -- so it stays
@@ -1657,11 +1657,11 @@ class ActivationProfiler:
         self,
         shape: List[int],
         tensor_meta: Dict[str, Any],
-        default_dtype_bytes: int,
     ) -> int:
         """
-        Compute tensor size in bytes at the tensor's TRACED dtype (the default
-        when the meta carries none).
+        Compute tensor size in bytes at the tensor's TRACED dtype — every graph tensor carries one (805 445 tensors of
+        the 49 containers, none without, 2026-10-30); a meta without it is refused by name, never priced at a default
+        width.
 
         The width a tensor is EXECUTED at is another question, answered by
         `core.prism.runtime_widths` and passed to `estimate_peak_memory` as
@@ -1671,19 +1671,15 @@ class ActivationProfiler:
         4Kpx's VAE planned 6 144 MB at 3072x4096 and ran out of memory holding
         15 360 MB (2026-09-28).
         """
-        # Get dtype from tensor meta if available
-        dtype = tensor_meta.get("dtype", None)
-
-        if dtype:
-            dtype_bytes = _itemsize.itemsize(dtype)
-        else:
-            dtype_bytes = default_dtype_bytes
-
+        dtype = tensor_meta.get("dtype")
+        if not dtype:
+            raise ValueError(
+                f"Prism: a tensor of shape {list(shape)} carries no traced dtype (its meta: {sorted(tensor_meta)}); "
+                "every graph tensor is priced at its own width, never at a default")
         numel = 1
         for dim in shape:
             numel *= dim
-
-        return numel * dtype_bytes
+        return numel * _itemsize.itemsize(dtype)
 
 
 def profile_component(

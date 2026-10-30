@@ -79,7 +79,7 @@ def op_flops(kind: str, ins: List[List[int]], outs: List[List[int]], attrs: Mapp
 
 
 def component_work(profiler, symbol_map: Dict[str, int], widths: Optional[Mapping[str, int]] = None,
-                   default_dtype_bytes: int = 2, ops: Optional[Collection[str]] = None) -> Work:
+                   ops: Optional[Collection[str]] = None) -> Work:
     """The work of one run of the profiler's graph at `symbol_map`. `widths`: {tensor id: bytes per element} as the
     engine executes it, where the caller has it. `ops`: only these op uids (a stretch of the graph), else every op."""
     tensors = profiler.tensors
@@ -95,7 +95,7 @@ def component_work(profiler, symbol_map: Dict[str, int], widths: Optional[Mappin
             return 0
         if widths and tid in widths:
             return numel(shape(tid)) * int(widths[tid])
-        return profiler._compute_size(shape(tid), tensors[tid], default_dtype_bytes)
+        return profiler._compute_size(shape(tid), tensors[tid])
 
     def is_weight(tid: str) -> bool:
         meta = tensors.get(tid) or {}

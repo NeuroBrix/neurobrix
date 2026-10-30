@@ -136,7 +136,7 @@ class _Ap:
 
 
 def _t(shape):
-    return {"shape": list(shape)}
+    return {"shape": list(shape), "dtype": "float16"}   # every graph tensor carries its traced dtype
 
 
 def _op_level_graph():
@@ -187,11 +187,11 @@ def _op_level_plan(monkeypatch, card_mb, resident_mb, chain_bytes_fp32):
         def _resolve_shape(self, meta, symbols):
             return meta["shape"]
 
-        def _compute_size(self, shape, meta, dtype_bytes):
+        def _compute_size(self, shape, meta):
             n = 1
             for d in shape:
                 n *= int(d)
-            return n * dtype_bytes
+            return n * {"float16": 2, "float32": 4}[meta["dtype"]]
 
     monkeypatch.setattr(P, "ActivationProfiler", _Profiler)
     monkeypatch.setattr(ME, "estimate_op_workspace_bytes", lambda *a, **k: 5 * GiB)

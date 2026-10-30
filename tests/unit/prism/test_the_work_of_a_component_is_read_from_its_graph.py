@@ -25,11 +25,11 @@ class _Profiler:
     def _resolve_shape(self, meta, symbol_map):
         return [symbol_map.get(d, d) if isinstance(d, str) else d for d in meta["shape"]]
 
-    def _compute_size(self, shape, meta, default):
+    def _compute_size(self, shape, meta):
         n = 1
         for d in shape:
             n *= d
-        return n * {"float16": 2, "float32": 4}.get(meta.get("dtype"), default)
+        return n * {"float16": 2, "float32": 4}[meta["dtype"]]
 
 
 def test_a_weight_read_through_a_view_is_counted_once_and_a_view_moves_nothing():

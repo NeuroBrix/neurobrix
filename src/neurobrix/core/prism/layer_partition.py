@@ -179,7 +179,7 @@ class LayerPartitioner:
             for d in shape:
                 numel *= int(d)
             return numel * int(self._widths[tid])
-        return self._resolver._compute_size(shape, t, self._compute_dtype_bytes)
+        return self._resolver._compute_size(shape, t)
 
     # -- dataflow ---------------------------------------------------------
 
@@ -771,7 +771,7 @@ class LayerPartitioner:
             for d in shape:
                 numel *= int(d)
             return numel * int(self._widths[tid])
-        return self._resolver._compute_size(shape, t, self._compute_dtype_bytes)
+        return self._resolver._compute_size(shape, t)
 
     def _axis(self, sym: str, unit: int = 1):
         from neurobrix.core.prism.chunked_region import TokenAxis

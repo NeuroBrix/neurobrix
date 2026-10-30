@@ -1390,7 +1390,7 @@ class PrismSolver:
             for d in shape[:-1]:
                 tokens *= int(d)
             inter = l.expert_bytes // max(1, 3 * hidden * int(width))
-            io = sum(prof._compute_size(prof._resolve_shape(prof.tensors[t], smap), prof.tensors[t], int(width))
+            io = sum(prof._compute_size(prof._resolve_shape(prof.tensors[t], smap), prof.tensors[t])
                      for t in acts)
             best = max(best, io + tokens * l.top_k * (2 * inter + hidden) * int(width))
         return best / (1024 * 1024)
@@ -2506,14 +2506,10 @@ class PrismSolver:
         manifest = container.get_manifest() or {}
         family = manifest.get("family", "unknown")
         has_lm_config = bool(self._read_lm_config(container))
-        family_kv_cache = False
-        try:
-            from neurobrix.core.config import get_family_config
-            family_kv_cache = bool(
-                get_family_config(family).get("execution", {}).get("has_kv_cache", False)
-            )
-        except (FileNotFoundError, RuntimeError):
-            pass
+        # a family without its file is refused by get_family_config by name (every family of the 49 has one), never
+        # read as "no KV cache"
+        from neurobrix.core.config import get_family_config
+        family_kv_cache = bool(get_family_config(family).get("execution", {}).get("has_kv_cache", False))
 
         # Inspect topology for autoregressive_image (VQ multimodal Janus pattern)
         try:
@@ -3281,17 +3277,12 @@ class PrismSolver:
         # module-level function that never sees the solver — which is why
         # `_op_tiling_declined` was written three times and read nowhere.
         plan.op_tiling_declined = getattr(self, "_op_tiling_declined", None)
-        try:
-            _caps = [d.memory_mb for d in profile.devices] if profile.devices else []
-            if _caps:
-                _cap = max(_caps)
-                plan.margin_mb = self._margin_mb(_cap)
-                plan.margin_reason = (f"{plan.margin_mb} MB, the allocator's reserve"
-                                      + (" (the vendor file's measured plan_reserve_mb)"
-                                         if getattr(self, "_vendor_plan_reserve_mb", None) else
-                                         " (PRISM_DEFAULTS oom_reserve_mb)"))
-        except Exception:
-            pass
+        if profile.devices:
+            plan.margin_mb = self._margin_mb(max(d.memory_mb for d in profile.devices))
+            plan.margin_reason = (f"{plan.margin_mb} MB, the allocator's reserve"
+                                  + (" (the vendor file's measured plan_reserve_mb)"
+                                     if getattr(self, "_vendor_plan_reserve_mb", None) else
+                                     " (PRISM_DEFAULTS oom_reserve_mb)"))
         # THE EXECUTION DOOR (the owner, 2026-10-25 15:16): the plan was sized by each pool's declared fact; what is
         # free NOW decides only whether it runs. A pool holding less than the plan places on it refuses by name — what
         # holds the memory is said — and the plan is never traded for a slower one.
@@ -3669,7 +3660,7 @@ class PrismSolver:
                 up_out_shape = profiler._resolve_shape(
                     up_out_meta, comp_symbol_map
                 )
-                up_out_bytes = profiler._compute_size(up_out_shape, up_out_meta, dtype_bytes)
+                up_out_bytes = profiler._compute_size(up_out_shape, up_out_meta)
                 # Threshold: an upsample output over `op_level.upsample_overflow_card_fraction`
                 # of the card is worth fusing (nbxtensor/ops/tiling.yml).
                 up_overflow = _ts.upsample_overflows(up_out_bytes, comp_vram)
@@ -3697,7 +3688,7 @@ class PrismSolver:
                     meta = comp.graph["tensors"].get(tid, {})
                     sh = profiler._resolve_shape(meta, comp_symbol_map)
                     conv_out_shapes.append(sh)
-                    conv_out_bytes += profiler._compute_size(sh, meta, dtype_bytes)
+                    conv_out_bytes += profiler._compute_size(sh, meta)
                 cudnn_ws_bytes = estimate_op_workspace_bytes(
                     "compiled", conv_op.get("op_type", ""),
                     conv_in_shapes, conv_out_shapes, dtype_bytes,
@@ -3740,7 +3731,7 @@ class PrismSolver:
                 out_sh = profiler._resolve_shape(
                     out_meta, comp_symbol_map
                 )
-                out_b = profiler._compute_size(out_sh, out_meta, dtype_bytes)
+                out_b = profiler._compute_size(out_sh, out_meta)
                 if not _ts.rms_norm_overflows(out_b, comp_vram):
                     continue
                 plan.add_tiled_op(uid, "custom::rms_norm", _ts.rms_norm_band_factor(out_b, comp_vram))
@@ -4166,9 +4157,7 @@ class PrismSolver:
             conv_overflow = conv_uid in overflow_conv_uids
             up_out_meta = graph["tensors"].get(out_tids[0], {})
             up_out_shape = profiler._resolve_shape(up_out_meta, symbol_map)
-            up_out_bytes = profiler._compute_size(
-                up_out_shape, up_out_meta, dtype_bytes
-            )
+            up_out_bytes = profiler._compute_size(up_out_shape, up_out_meta)
             up_overflow = _ts.upsample_overflows(up_out_bytes, comp_vram_bytes)
             if conv_overflow or up_overflow:
                 fusion_uids.add(uid)
