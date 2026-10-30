@@ -1,7 +1,7 @@
 # The engine's open slimming findings (tools/engine_slim_scan.py); each ends deleted, moved into nbxtensor, or kept
 # with its reason in docs/nbxtensor/ENGINE_SLIM.md. Both figures below may only go down (test_the_engine_only_slims.py).
-# engine_lines: 144350
-# open: 646
+# engine_lines: 144313
+# open: 641
 kind	path	symbol	detail
 dead	src/neurobrix/cli/commands/registry.py	installing_path	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/components/handlers/text_encoder_handler.py	TextEncoderComponentHandler.get_hidden_size	no reference outside its own body (tests excluded)
@@ -442,9 +442,6 @@ duplicate	src/neurobrix/triton/vace_control_conditioning.py	conditioning_spec	sa
 fact	src/neurobrix/core/dtype/config.py	parse_dtype	nbxtensor exposes nbxtensor.dtype.nbx_dtype.parse_dtype
 fact	src/neurobrix/core/dtype/engine.py	storage_dtype	nbxtensor exposes nbxtensor.dtype.itemsize.storage_dtype
 fact	src/neurobrix/core/memory/manager.py	release_flow_memory	nbxtensor exposes nbxtensor.memory.memory_pool.release_flow_memory
-fact	src/neurobrix/core/prism/plan_advice.py	what_would_have_fit	nbxtensor exposes nbxtensor.memory.oom_advice.what_would_have_fit
-fact	src/neurobrix/core/prism/runtime_widths.py	_aligned	nbxtensor exposes nbxtensor.memory.layout.aligned
-fact	src/neurobrix/core/prism/structure.py	memory_gb	nbxtensor exposes nbxtensor.backend.device_facts.memory_gb
 fact	src/neurobrix/core/runtime/graph/compiled_sequence.py	_parse_dtype	nbxtensor exposes nbxtensor.dtype.nbx_dtype.parse_dtype
 fact	src/neurobrix/core/runtime/precision_contract.py	kind	nbxtensor exposes nbxtensor.dtype.itemsize.kind
 fact	src/neurobrix/core/strategies/base.py	transfer_tensor	nbxtensor exposes nbxtensor.memory.device_transfer.transfer_tensor
@@ -453,9 +450,7 @@ fact	src/neurobrix/kernels/metadata_ops.py	_native_layer_norm	nbxtensor exposes 
 fact	src/neurobrix/kernels/metadata_ops.py	_parse_dtype	nbxtensor exposes nbxtensor.dtype.nbx_dtype.parse_dtype
 fact	src/neurobrix/kernels/metadata_ops.py	_softmax	nbxtensor exposes nbxtensor.ops._cost.softmax
 fact	src/neurobrix/triton/dtype.py	storage_dtype	nbxtensor exposes nbxtensor.dtype.itemsize.storage_dtype
-fact	src/neurobrix/triton/sequence.py	_needs_move	nbxtensor exposes nbxtensor.memory.device_transfer.needs_move
 fact	src/neurobrix/triton/sequence.py	_parse_dtype	nbxtensor exposes nbxtensor.dtype.nbx_dtype.parse_dtype
-fact	src/neurobrix/triton/sequence.py	_transfer_tensor	nbxtensor exposes nbxtensor.memory.device_transfer.transfer_tensor
 wrapper	src/neurobrix/_nbxtensor_host.py	active	only hands its parameters to importlib.import_module('neurobrix.kernels.census').active
 wrapper	src/neurobrix/_nbxtensor_host.py	record	only hands its parameters to importlib.import_module('neurobrix.kernels.census').record
 wrapper	src/neurobrix/_nbxtensor_host.py	service	only hands its parameters to getattr(importlib.import_module(module), attr)

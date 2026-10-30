@@ -170,7 +170,6 @@ def _refuse_unbound(resolver, symbol_id, trace_value) -> None:
         f"witnessed extent, not a value. Bound: {bound}.")
 
 
-
 def _watermark_sample(path: str, op_idx: int, op, arena, deferred_bytes) -> None:
     """One line of the memory ledger (NBX_LIVE_WATERMARK_TRACE=path.jsonl, every
     NBX_LIVE_WATERMARK_EVERY ops), the SAME in both hot loops: what the allocator tracks live, what
@@ -4587,7 +4586,7 @@ class TritonSequence:
 
         - Fast path (99%+ ops): just switch device context if op.device_idx changed
         - Slow path (needs_transfer ops): D2D memcpy inputs to target device.
-          For CPU-backed weight inputs (zero3), _transfer_tensor handles
+          For CPU-backed weight inputs (zero3), the library's transfer_tensor handles
           H2D (kind=1) instead of D2D.
 
         Uses cudaMalloc/cudaFree (sync) underneath, so both output-slot
@@ -4827,13 +4826,6 @@ class TritonSequence:
 
 
     @staticmethod
-    def _needs_move(t: NBXTensor, target_dev: int) -> bool:
-        """Delegates to the shared cross-device helper (R30: same impl as the
-        op-by-op triton_sequential path)."""
-        from nbxtensor.memory.device_transfer import needs_move
-        return needs_move(t, target_dev)
-
-    @staticmethod
     def _find_cuda_arg(args) -> 'Optional[int]':
         """Return the device_idx of the first CUDA NBXTensor in args (scanning
         nested lists/tuples one level deep), or None if args contains no
@@ -4879,15 +4871,16 @@ class TritonSequence:
         # views, which is exactly what native does).
         if self._find_cuda_arg(args) is None:
             return args
+        from nbxtensor.memory.device_transfer import needs_move, transfer_tensor
 
         new_args = []
         for a in args:
-            if isinstance(a, NBXTensor) and self._needs_move(a, target_dev):
-                new_args.append(self._transfer_tensor(a, target_dev))
+            if isinstance(a, NBXTensor) and needs_move(a, target_dev):
+                new_args.append(transfer_tensor(a, target_dev))
             elif isinstance(a, (list, tuple)):
                 moved = [
-                    self._transfer_tensor(item, target_dev)
-                    if isinstance(item, NBXTensor) and self._needs_move(item, target_dev)
+                    transfer_tensor(item, target_dev)
+                    if isinstance(item, NBXTensor) and needs_move(item, target_dev)
                     else item
                     for item in a
                 ]
@@ -4900,42 +4893,12 @@ class TritonSequence:
         """Transfer NBXTensor kwargs to target CUDA device."""
         new_kw = {}
         for k, v in kwargs.items():
-            if isinstance(v, NBXTensor) and self._needs_move(v, target_dev):
-                new_kw[k] = self._transfer_tensor(v, target_dev)
+            if isinstance(v, NBXTensor) and needs_move(v, target_dev):
+                new_kw[k] = transfer_tensor(v, target_dev)
             else:
                 new_kw[k] = v
         return new_kw
 
-    def _transfer_tensor(self, tensor: NBXTensor, target_dev: int) -> NBXTensor:
-        """Copy NBXTensor to target CUDA device, preserving strides.
-
-        Picks the memcpy kind based on the source device:
-          - CPU source (zero3 offload): kind=1 (H2D)
-          - CUDA source (cross-GPU transfer): kind=3 (D2D)
-
-        Stride preservation (critical for zero3 correctness): the
-        destination NBXTensor is constructed with the source's shape
-        AND strides, not forced to contiguous. When
-        _eliminate_weight_transpose_ops pre-transposes a linear weight
-        at bind time, the arena holds a .t() view with swapped strides
-        over the original row-major bytes. A previous implementation
-        used NBXTensor.empty() for the destination, which hard-sets
-        contiguous_strides(shape) — the memcpy'd bytes (still the
-        original layout) were then re-indexed as if they were the
-        transposed layout, silently producing act @ W instead of
-        act @ W.t() inside every mm under zero3. Logit cosine vs
-        native was near zero. See
-        tests/scratch/divergence_inv/DIVERGENCE_REPORT.md for the
-        bytes-vs-strides walkthrough and reproducer. Fix: construct
-        the GPU NBXTensor directly so the view's stride semantics
-        carry over; downstream .contiguous() inside mm/bmm then
-        correctly materialises via strided_copy, matching what the
-        native torch.Tensor.to(device) contract does.
-        """
-        # Delegates to the shared cross-device helper so the compiled and
-        # op-by-op triton_sequential paths share ONE transfer impl (R30).
-        from nbxtensor.memory.device_transfer import transfer_tensor
-        return transfer_tensor(tensor, target_dev)
 
     def gather_outputs(self, output_ids: Optional[List[str]] = None) -> Dict[str, Any]:
         """Read output tensors from arena."""
