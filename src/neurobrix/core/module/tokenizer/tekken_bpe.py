@@ -57,6 +57,11 @@ import json
 import re
 import unicodedata
 
+# the regex and merge machinery tiktoken's reader already carries, read from it (one copy: the engine-slim scan, 2026-10-30)
+from neurobrix.core.module.tokenizer.tiktoken_bpe import (  # noqa: F401 — used below
+    _byte_pair_merge, _category_table, _class_body, _ranges_for_predicate, _ranges_for_set, _sanitize_surrogates,
+    _translate_pattern)
+
 
 # ---------------------------------------------------------------------------
 # Unicode property-class translation (stdlib `re` has no \p{...} support).
@@ -84,137 +89,9 @@ _WHITE_SPACE = {
 }
 
 
-def _category_table() -> List[str]:
-    """Enumerate the unicodedata general category for every codepoint once."""
-    return [unicodedata.category(chr(cp)) for cp in range(0x110000)]
-
-
-_CATS = _category_table()
-
-
-def _ranges_for_predicate(pred) -> List[Tuple[int, int]]:
-    """Contiguous (start, end) codepoint ranges where pred(category) is True."""
-    out: List[Tuple[int, int]] = []
-    start: Optional[int] = None
-    prev = -1
-    for cp in range(0x110000):
-        if pred(_CATS[cp]):
-            if start is None:
-                start = cp
-            prev = cp
-        elif start is not None:
-            out.append((start, prev))
-            start = None
-    if start is not None:
-        out.append((start, prev))
-    return out
-
-
-def _ranges_for_set(codepoints) -> List[Tuple[int, int]]:
-    """Contiguous (start, end) ranges covering an explicit codepoint set."""
-    out: List[Tuple[int, int]] = []
-    start: Optional[int] = None
-    prev = -1
-    for cp in sorted(codepoints):
-        if start is None:
-            start = prev = cp
-        elif cp == prev + 1:
-            prev = cp
-        else:
-            out.append((start, prev))
-            start = prev = cp
-    if start is not None:
-        out.append((start, prev))
-    return out
-
-
-def _class_body(ranges: Sequence[Tuple[int, int]]) -> str:
-    """Render ranges as a `re` character-class body (codepoints as \\Uxxxxxxxx)."""
-    parts: List[str] = []
-    for a, b in ranges:
-        pa = "\\U%08x" % a
-        if a == b:
-            parts.append(pa)
-        else:
-            parts.append(pa + "-" + "\\U%08x" % b)
-    return "".join(parts)
-
-
-_PROP_BODY = {name: _class_body(_ranges_for_predicate(pred))
-              for name, pred in _PROP_PREDICATES.items()}
-_WS_BODY = _class_body(_ranges_for_set(_WHITE_SPACE))
-
-
-def _translate_pattern(pat: str) -> str:
-    """Translate a `regex`-style pat_str into an equivalent stdlib-`re` pattern.
-
-    Replaces ``\\p{X}`` / ``\\P{X}`` (both standalone and inside ``[...]``) with
-    explicit character-class bodies, and ``\\s`` / ``\\S`` with the Unicode
-    White_Space set / its negation.
-    """
-    out: List[str] = []
-    i = 0
-    n = len(pat)
-    while i < n:
-        c = pat[i]
-        if c == "[":
-            j = i + 1
-            body = ""
-            if j < n and pat[j] == "^":
-                body += "^"
-                j += 1
-            if j < n and pat[j] == "]":
-                body += "]"
-                j += 1
-            while j < n and pat[j] != "]":
-                if pat[j] == "\\" and j + 1 < n:
-                    two = pat[j:j + 2]
-                    if two in ("\\p", "\\P"):
-                        k = pat.index("}", j + 3)
-                        body += _PROP_BODY[pat[j + 3:k]]
-                        j = k + 1
-                        continue
-                    if two == "\\s":
-                        body += _WS_BODY
-                        j += 2
-                        continue
-                    body += two
-                    j += 2
-                    continue
-                body += pat[j]
-                j += 1
-            out.append("[" + body + "]")
-            i = j + 1
-            continue
-        if c == "\\" and i + 1 < n:
-            two = pat[i:i + 2]
-            if two in ("\\p", "\\P"):
-                k = pat.index("}", i + 3)
-                name = pat[i + 3:k]
-                out.append(("[^" if two == "\\P" else "[") + _PROP_BODY[name] + "]")
-                i = k + 1
-                continue
-            if two == "\\s":
-                out.append("[" + _WS_BODY + "]")
-                i += 2
-                continue
-            if two == "\\S":
-                out.append("[^" + _WS_BODY + "]")
-                i += 2
-                continue
-            out.append(two)
-            i += 2
-            continue
-        out.append(c)
-        i += 1
-    return "".join(out)
-
-
 # ---------------------------------------------------------------------------
 # Byte-level BPE (tiktoken algorithm, shared with PyTiktoken).
 # ---------------------------------------------------------------------------
-
-_MAX_RANK = (1 << 63) - 1
 
 
 # Surrogate sanitizer. mistral_common wraps tiktoken, which converts the Python
@@ -224,64 +101,6 @@ _MAX_RANK = (1 << 63) - 1
 # from corrupted / non-UTF-8 input. We replicate the exact conversion so our
 # pure-Python ``str.encode("utf-8")`` (which rejects surrogates) matches the
 # oracle bit for bit.
-_SURROGATE_RE = re.compile("[\ud800-\udfff]")
-
-
-def _sanitize_surrogates(text: str) -> str:
-    if not _SURROGATE_RE.search(text):
-        return text
-    out: List[str] = []
-    i = 0
-    n = len(text)
-    while i < n:
-        o = ord(text[i])
-        if 0xD800 <= o <= 0xDBFF:  # high surrogate
-            if i + 1 < n and 0xDC00 <= ord(text[i + 1]) <= 0xDFFF:
-                lo = ord(text[i + 1])
-                out.append(chr(0x10000 + ((o - 0xD800) << 10) + (lo - 0xDC00)))
-                i += 2
-                continue
-            out.append("�")
-            i += 1
-            continue
-        if 0xDC00 <= o <= 0xDFFF:  # lone low surrogate
-            out.append("�")
-            i += 1
-            continue
-        out.append(text[i])
-        i += 1
-    return "".join(out)
-
-
-def _byte_pair_merge(piece: bytes, ranks: Dict[bytes, int]) -> List[bytes]:
-    """tiktoken's byte-pair merge: split `piece` into minimal-rank pieces."""
-    parts: List[List[int]] = [[i, _MAX_RANK] for i in range(len(piece) + 1)]
-
-    def get_rank(parts_list: List[List[int]], idx: int) -> int:
-        if idx + 3 < len(parts_list):
-            sub = piece[parts_list[idx][0]:parts_list[idx + 3][0]]
-            return ranks.get(sub, _MAX_RANK)
-        return _MAX_RANK
-
-    for i in range(len(parts) - 2):
-        parts[i][1] = ranks.get(piece[parts[i][0]:parts[i + 2][0]], _MAX_RANK)
-
-    while len(parts) > 1:
-        min_rank = _MAX_RANK
-        min_idx = -1
-        for i in range(len(parts) - 1):
-            if parts[i][1] < min_rank:
-                min_rank = parts[i][1]
-                min_idx = i
-        if min_rank == _MAX_RANK:
-            break
-        i = min_idx
-        parts[i][1] = get_rank(parts, i)
-        if i > 0:
-            parts[i - 1][1] = get_rank(parts, i - 1)
-        parts.pop(i + 1)
-
-    return [piece[parts[i][0]:parts[i + 1][0]] for i in range(len(parts) - 1)]
 
 
 class PyTekken:
