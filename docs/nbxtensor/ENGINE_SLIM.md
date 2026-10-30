@@ -79,6 +79,13 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 
 | kind | path | symbol | why it stays |
 |---|---|---|---|
+| wrapper | src/neurobrix/triton/kv_cache.py | replay_advance | the KV wrapper is the handle the Triton flows hold (triton/flow/*); the paged cache behind it is the wrapper's to replace — a caller reaching `.cache` would bind to that internal |
+| wrapper | src/neurobrix/triton/kv_cache.py | replay_lens_restore | the KV wrapper is the handle the Triton flows hold (triton/flow/*); the paged cache behind it is the wrapper's to replace — a caller reaching `.cache` would bind to that internal |
+| wrapper | src/neurobrix/triton/kv_cache.py | replay_lens_snapshot | the KV wrapper is the handle the Triton flows hold (triton/flow/*); the paged cache behind it is the wrapper's to replace — a caller reaching `.cache` would bind to that internal |
+| wrapper | src/neurobrix/triton/kv_cache.py | replay_restore | the KV wrapper is the handle the Triton flows hold (triton/flow/*); the paged cache behind it is the wrapper's to replace — a caller reaching `.cache` would bind to that internal |
+| wrapper | src/neurobrix/triton/kv_cache.py | skip_positions | the KV wrapper is the handle the Triton flows hold (triton/flow/*); the paged cache behind it is the wrapper's to replace — a caller reaching `.cache` would bind to that internal |
+| wrapper | src/neurobrix/triton/kv_cache.py | get_cache_len | the interface both branches' KV wrappers implement (core/runtime/graph/kv_cache_wrapper.py has its own), read by 8 call sites through either |
+| wrapper | src/neurobrix/triton/symbols.py | UnboundSymbolError | a typed refusal of the engine's error contract (162 references): callers and tests name it, where a bare RuntimeError would name nothing |
 | fact | src/neurobrix/kernels/metadata_ops.py | _native_layer_norm | the PyTorch branch's ATen handler for native_layer_norm (torch tensors in, torch tensors out); the scan matched the name of the library's cost declaration, not its work |
 | fact | src/neurobrix/kernels/metadata_ops.py | _softmax | the PyTorch branch's ATen handler for _softmax (torch tensors in, torch tensors out); the scan matched the name of the library's cost declaration, not its work |
 | fact | src/neurobrix/kernels/metadata_ops.py | _parse_dtype | the PyTorch branch's ATen handler for a call's dtype keyword (a torch.dtype) (torch tensors in, torch tensors out); the scan matched the name of the library's dtype parser, not its work |
