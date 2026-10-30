@@ -1,7 +1,7 @@
 # The engine's open slimming findings (tools/engine_slim_scan.py); each ends deleted, moved into nbxtensor, or kept
 # with its reason in docs/nbxtensor/ENGINE_SLIM.md. Both figures below may only go down (test_the_engine_only_slims.py).
-# engine_lines: 138412
-# open: 325
+# engine_lines: 138407
+# open: 321
 kind	path	symbol	detail
 dead	src/neurobrix/cli/commands/registry.py	installing_path	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/config/loader.py	vendor_file	no reference outside its own body (tests excluded)
@@ -176,9 +176,6 @@ fact	src/neurobrix/core/runtime/graph/compiled_sequence.py	_parse_dtype	nbxtenso
 fact	src/neurobrix/core/runtime/precision_contract.py	kind	nbxtensor exposes nbxtensor.dtype.itemsize.kind
 fact	src/neurobrix/core/strategies/base.py	transfer_tensor	nbxtensor exposes nbxtensor.memory.device_transfer.transfer_tensor
 fact	src/neurobrix/core/strategies/triton/base.py	transfer_tensor	nbxtensor exposes nbxtensor.memory.device_transfer.transfer_tensor
-fact	src/neurobrix/kernels/metadata_ops.py	_native_layer_norm	nbxtensor exposes nbxtensor.ops._cost.native_layer_norm
-fact	src/neurobrix/kernels/metadata_ops.py	_parse_dtype	nbxtensor exposes nbxtensor.dtype.nbx_dtype.parse_dtype
-fact	src/neurobrix/kernels/metadata_ops.py	_softmax	nbxtensor exposes nbxtensor.ops._cost.softmax
 fact	src/neurobrix/triton/dtype.py	storage_dtype	nbxtensor exposes nbxtensor.dtype.itemsize.storage_dtype
 fact	src/neurobrix/triton/sequence.py	_parse_dtype	nbxtensor exposes nbxtensor.dtype.nbx_dtype.parse_dtype
 wrapper	src/neurobrix/_nbxtensor_host.py	active	only hands its parameters to importlib.import_module('neurobrix.kernels.census').active
@@ -283,7 +280,6 @@ wrapper	src/neurobrix/core/workspace.py	SnapshotNotPresent	only renames Exceptio
 wrapper	src/neurobrix/kernels/autotune_certify.py	log	only hands its parameters to print
 wrapper	src/neurobrix/kernels/census.py	install(hardware_profile)	no call site passes it: always its default None
 wrapper	src/neurobrix/kernels/census_table.py	rows_for(root)	no call site passes it: always its default None
-wrapper	src/neurobrix/kernels/metadata_ops.py	_conv2d	only hands its parameters to _convolution
 wrapper	src/neurobrix/nbx/atomic_install.py	InstallHeldByAnother	only renames RuntimeError
 wrapper	src/neurobrix/nbx/atomic_install.py	installing(allow_break)	no call site passes it: always its default False
 wrapper	src/neurobrix/nbx/cache.py	clear(model_name)	no call site passes it: always its default None

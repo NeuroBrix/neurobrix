@@ -79,6 +79,9 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 
 | kind | path | symbol | why it stays |
 |---|---|---|---|
+| fact | src/neurobrix/kernels/metadata_ops.py | _native_layer_norm | the PyTorch branch's ATen handler for native_layer_norm (torch tensors in, torch tensors out); the scan matched the name of the library's cost declaration, not its work |
+| fact | src/neurobrix/kernels/metadata_ops.py | _softmax | the PyTorch branch's ATen handler for _softmax (torch tensors in, torch tensors out); the scan matched the name of the library's cost declaration, not its work |
+| fact | src/neurobrix/kernels/metadata_ops.py | _parse_dtype | the PyTorch branch's ATen handler for a call's dtype keyword (a torch.dtype) (torch tensors in, torch tensors out); the scan matched the name of the library's dtype parser, not its work |
 | wrapper | src/neurobrix/kernels/autotune_certify.py | _contenders(factor) | a test seam: tests/unit/kernels/test_autotune_certify_windowed_oracle.py passes it to observe or replace what the run does |
 | wrapper | src/neurobrix/kernels/autotune_certify.py | _release_between_keys(allocator) | a test seam: tests/unit/kernels/test_release_between_keys_drains.py passes it to observe or replace what the run does |
 | wrapper | src/neurobrix/kernels/autotune_certify.py | certify(bench) | a test seam: the certifier's tests (a stub bench: no card) passes it to observe or replace what the run does |

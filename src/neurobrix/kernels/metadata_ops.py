@@ -1410,11 +1410,6 @@ def _convolution(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Ten
     return torch.conv2d(x, weight, bias, stride, padding, dilation, int(groups))
 
 
-def _conv2d(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
-    """ATen conv2d."""
-    return _convolution(inputs, attrs)
-
-
 def _pad(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
     """ATen pad/constant_pad_nd."""
     x = inputs[0]
@@ -1636,7 +1631,7 @@ METADATA_OPS_IMPL: Dict[str, Callable] = {
     "aten::native_group_norm": _native_group_norm,
     "aten::group_norm": _group_norm,
     "aten::convolution": _convolution,
-    "aten::conv2d": _conv2d,
+    "aten::conv2d": _convolution,
     "aten::pad": _pad,
     "aten::constant_pad_nd": _pad,
     "aten::upsample_nearest2d": _upsample_nearest2d,
