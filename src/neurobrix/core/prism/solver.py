@@ -3830,50 +3830,53 @@ class PrismSolver:
         applications, plan A -> plan B"), never a refusal while a plan fits, never a run that swaps. Only when no plan
         fits the free memory is the request refused, naming the shortfall. The re-plan never reaches a census shadow
         (its readings are the profile's) nor an imposed rung (`NBX_PRISM_BUDGET_MB`)."""
-        plan = self.solve(container, profile, input_config, serve_mode=serve_mode, mode=mode)
-        door = getattr(plan, "execution_door", None)
-        if not door or not replan:
-            # `replan=False` (a dry --explain-plan): the plan of the pool's FACTS, the moment said beside it — a table
-            # of plans is reproducible on a loaded machine (the Mac's 4-job table read its own workers as other
-            # applications and re-planned 7 cells, 2026-10-26 23:27)
-            return plan
-        caps, host_free, held = self._busy_readings(profile)
-        if not caps and host_free is None:
-            return plan                      # nothing live to re-plan on: the door stands as it was said
-        first = (plan.strategy, float(plan.total_memory_mb or 0.0))
-        # The host pool is set against a plan's whole host side, the process's resident memory included; the free
-        # reading excludes what this process already holds, so that is given back to it (`_unified_host_pool_mb`).
-        resident_mb = int((plan.host_footprint or {}).get("resident_bytes", 0)) / (1 << 20)
-        self._busy_caps = caps
-        self._busy_host_pool_mb = None if host_free is None else host_free + resident_mb
-        self._settled_fp32 = bool(getattr(self, "_fell_back_fp32", False))
         try:
-            busy = self.solve(container, profile, input_config, serve_mode=serve_mode, mode=mode)
-        except RuntimeError as refusal:
-            raise RuntimeError(
-                f"{door}\nRe-planned on the memory free now (machine busy: {held:.0f} MB taken by other "
-                f"applications) — no plan fits it either:\n{str(refusal).splitlines()[0]}") from refusal
+            plan = self.solve(container, profile, input_config, serve_mode=serve_mode, mode=mode)
+            door = getattr(plan, "execution_door", None)
+            if not door or not replan:
+                # `replan=False` (a dry --explain-plan): the plan of the pool's FACTS, the moment said beside it — a table
+                # of plans is reproducible on a loaded machine (the Mac's 4-job table read its own workers as other
+                # applications and re-planned 7 cells, 2026-10-26 23:27)
+                return plan
+            caps, host_free, held = self._busy_readings(profile)
+            if not caps and host_free is None:
+                return plan                      # nothing live to re-plan on: the door stands as it was said
+            first = (plan.strategy, float(plan.total_memory_mb or 0.0))
+            # The host pool is set against a plan's whole host side, the process's resident memory included; the free
+            # reading excludes what this process already holds, so that is given back to it (`_unified_host_pool_mb`).
+            resident_mb = int((plan.host_footprint or {}).get("resident_bytes", 0)) / (1 << 20)
+            self._busy_caps = caps
+            self._busy_host_pool_mb = None if host_free is None else host_free + resident_mb
+            self._settled_fp32 = bool(getattr(self, "_fell_back_fp32", False))
+            try:
+                busy = self.solve(container, profile, input_config, serve_mode=serve_mode, mode=mode)
+            except RuntimeError as refusal:
+                raise RuntimeError(
+                    f"{door}\nRe-planned on the memory free now (machine busy: {held:.0f} MB taken by other "
+                    f"applications) — no plan fits it either:\n{str(refusal).splitlines()[0]}") from refusal
+            finally:
+                self._busy_caps, self._busy_host_pool_mb, self._settled_fp32 = None, None, False
+            if getattr(busy, "execution_door", None):
+                raise RuntimeError(f"{door}\nRe-planned on the memory free now (machine busy: {held:.0f} MB taken by "
+                                   f"other applications) — the smaller plan does not fit either: {busy.execution_door}")
+            free_now = host_free if host_free is not None else min(caps.values())
+            # The supervisor's decision 2026-10-27 20:45 (Janus-Pro-7B triton, 300 MB short): no refusal, a CLEAR warning —
+            # what the fast plan lacks, both plans' honest times, and what the user can do about it.
+            _fp = plan.host_footprint or {}
+            _need = (int(_fp.get("total_bytes", 0)) - int(_fp.get("resident_bytes", 0))) / (1 << 20)
+            _short = max(0.0, _need - float(free_now))
+            _t = lambda x: (f"~{x:,.0f} s" if x < 3600 else f"~{x / 3600:.1f} h") if x is not None else "not estimated"
+            note = (f"machine busy: {held:.0f} MB taken by other applications — the fast plan {first[0]} "
+                    f"({_t(getattr(plan, 'estimated_s', None))}) lacks {_short:,.0f} MB of the {free_now:.0f} MB free now; "
+                    f"running {busy.strategy} instead ({_t(getattr(busy, 'estimated_s', None))}); close an application to "
+                    f"get the fast plan back")
+            logging.getLogger(__name__).warning("Prism: %s", note)
+            print(f"   [Prism] {note}")
+            busy.selection_reason = f"{note}; {busy.selection_reason}"
+            busy.busy_replan = {"from": first[0], "free_now_mb": free_now, "held_by_others_mb": held}
+            return busy
         finally:
-            self._busy_caps, self._busy_host_pool_mb, self._settled_fp32 = None, None, False
-        if getattr(busy, "execution_door", None):
-            raise RuntimeError(f"{door}\nRe-planned on the memory free now (machine busy: {held:.0f} MB taken by "
-                               f"other applications) — the smaller plan does not fit either: {busy.execution_door}")
-        free_now = host_free if host_free is not None else min(caps.values())
-        # The supervisor's decision 2026-10-27 20:45 (Janus-Pro-7B triton, 300 MB short): no refusal, a CLEAR warning —
-        # what the fast plan lacks, both plans' honest times, and what the user can do about it.
-        _fp = plan.host_footprint or {}
-        _need = (int(_fp.get("total_bytes", 0)) - int(_fp.get("resident_bytes", 0))) / (1 << 20)
-        _short = max(0.0, _need - float(free_now))
-        _t = lambda x: (f"~{x:,.0f} s" if x < 3600 else f"~{x / 3600:.1f} h") if x is not None else "not estimated"
-        note = (f"machine busy: {held:.0f} MB taken by other applications — the fast plan {first[0]} "
-                f"({_t(getattr(plan, 'estimated_s', None))}) lacks {_short:,.0f} MB of the {free_now:.0f} MB free now; "
-                f"running {busy.strategy} instead ({_t(getattr(busy, 'estimated_s', None))}); close an application to "
-                f"get the fast plan back")
-        logging.getLogger(__name__).warning("Prism: %s", note)
-        print(f"   [Prism] {note}")
-        busy.selection_reason = f"{note}; {busy.selection_reason}"
-        busy.busy_replan = {"from": first[0], "free_now_mb": free_now, "held_by_others_mb": held}
-        return busy
+            self.__dict__.pop("_declared_fusions", None)      # the fused graphs end with the planning (one graph each)
 
     def _busy_readings(self, profile):
         """({device: MB free now}, the host's MB free now for a unified pool or None, MB held by others) — the
@@ -4672,17 +4675,27 @@ class PrismSolver:
         _moe = self._moe_declaration(graph, container)
         if _moe is None:
             return comp
-        import copy as _copy
         from types import SimpleNamespace
-        from neurobrix.core.runtime.graph.moe_fusion import detect_and_fuse_moe
-        # norm_topk_prob does not change which weights the fused op reads; the
-        # declared value is passed so the sizing and the cut fuse identically.
-        fused = detect_and_fuse_moe(_copy.deepcopy(graph), "declared",
-                                    norm_topk_prob=_moe, declared=True)
         return SimpleNamespace(
-            graph=fused,
+            graph=self._fused_as_declared(graph, _moe),
             weights_index=getattr(comp, "weights_index", None) or getattr(comp, "weight_index", None),
             name=getattr(comp, "name", None))
+
+    def _fused_as_declared(self, graph, norm_topk_prob: bool):
+        """A copy of `graph` with the declared-MoE fusion applied (the flows' pass at execute), made once per graph a
+        plan reads: the weight sizing (`_graph_as_executed`) and the layer cut (`_try_layer_streaming`) read this one
+        object, never the container's graph — each fused its own deep copy, 2 x (14.5 s copy + the fusion) of
+        Qwen3-30B-A3B's 115 419 ops on one core (py-spy, 2026-10-30). norm_topk_prob does not change which weights
+        the fused op reads; the declared value is passed so the sizing and the cut fuse identically."""
+        memo = self.__dict__.setdefault("_declared_fusions", {})
+        hit = memo.get(id(graph))
+        if hit is None or hit[0] is not graph or hit[1] != norm_topk_prob:
+            from neurobrix.core.optim.passes.normalize import graph_copy
+            from neurobrix.core.runtime.graph.moe_fusion import detect_and_fuse_moe
+            hit = (graph, norm_topk_prob,
+                   detect_and_fuse_moe(graph_copy(graph), "declared", norm_topk_prob=norm_topk_prob, declared=True))
+            memo[id(graph)] = hit
+        return hit[2]
 
     def _moe_declaration(self, graph, container) -> Optional[bool]:
         """The declaration the runtime fuses this graph's experts on, as the `norm_topk_prob` the
@@ -8944,8 +8957,11 @@ class PrismSolver:
                 if _moe is not None:
                     moe_declared[comp_name] = _moe
                 if comp_name not in _normalized:
-                    _normalized[comp_name] = normalize_for_branch(
-                        graph, getattr(self, "_mode", "compiled"), _family, declared_moe=_moe)
+                    # a declared MoE is cut from the graph the weight sizing fused (`_fused_as_declared`, the same
+                    # declared fusion normalize_for_branch would apply): only the branch's rewrites are left
+                    _normalized[comp_name] = (
+                        normalize_for_branch(graph, getattr(self, "_mode", "compiled"), _family) if _moe is None
+                        else normalize_for_branch(self._fused_as_declared(graph, _moe), getattr(self, "_mode", "compiled")))
                 graph = _normalized[comp_name]
                 # A piece borrows the non-block weights the base holds (reserved above), so it is
                 # sized over its block weights: a non-block weight counts 0 here, not its bytes a

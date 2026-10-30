@@ -61,7 +61,6 @@ perform must not be performed here either, or the two disagree in the other dire
 """
 from __future__ import annotations
 
-import copy
 import hashlib
 import os
 from typing import Any, Dict, Optional
@@ -91,6 +90,39 @@ def _sequence_rewrites_graph(mode: str) -> bool:
     return str(mode or "").lower() == "triton"
 
 
+_PLAIN_SCALARS = (str, int, float, bool, type(None))
+
+
+def graph_copy(graph: Dict[str, Any]) -> Dict[str, Any]:
+    """An exact deep copy of a graph — plain data read from graph.json (dicts, lists, tuples, strings, numbers,
+    booleans, None), shared containers kept shared, immutable values returned as they are — copy.deepcopy's result
+    without its per-object dispatch: 0.81 s against 1.21 s on DeepSeek-Coder-V2-Lite's 11 722 ops, 7.1 s against
+    13.0 s on Qwen3-30B-A3B's 115 419 (2026-10-30, a copy the plan makes once per MoE graph). marshal was faster on
+    Qwen3 and twice as slow on DeepSeek. A graph holding anything but plain data is refused by name."""
+    memo: Dict[int, Any] = {}
+
+    def cp(o):
+        t = type(o)
+        if t is dict or t is list or t is tuple:
+            hit = memo.get(id(o))
+            if hit is not None:
+                return hit
+            if t is dict:
+                out = memo[id(o)] = {}
+                for k, v in o.items():
+                    out[k] = cp(v)
+            elif t is list:
+                out = memo[id(o)] = []
+                out.extend(cp(v) for v in o)
+            else:
+                out = memo[id(o)] = tuple(cp(v) for v in o)
+            return out
+        if t in _PLAIN_SCALARS:
+            return o
+        raise TypeError(f"graph_copy: the graph holds a {t.__name__}, which is not plain data")
+    return cp(graph)
+
+
 def normalize_for_branch(graph: Dict[str, Any], mode: str, family: str = "",
                          declared_moe: Optional[bool] = None) -> Dict[str, Any]:
     """A COPY of `graph` rewritten the way `mode`'s sequence will rewrite it.
@@ -109,7 +141,7 @@ def normalize_for_branch(graph: Dict[str, Any], mode: str, family: str = "",
     Any mode but `triton` (compiled, sequential, triton_sequential) returns a copy with the MoE fusion applied and nothing else — the compiled branch's two
     transforms both need weights or a built sequence, so there is nothing pure to apply.
     """
-    out = copy.deepcopy(graph)
+    out = graph_copy(graph)
 
     # FIRST, and in every mode: the MoE fusion. It is not a branch rewrite — the doctrine is
     # that it runs in all modes — and it is by far the largest: measured on
