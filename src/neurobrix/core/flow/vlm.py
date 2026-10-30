@@ -44,6 +44,7 @@ from .base import FlowHandler, FlowContext, register_flow, requests_speech
 from .table_gather import gather_rows
 from neurobrix import decode_progress, decode_stop
 from neurobrix.core.memory.manager import release_flow_memory
+from neurobrix.core.flow.shared_steps import VLMSteps   # the steps both branches share
 
 
 def _maybe_log_topk(logits, step: int) -> None:
@@ -73,7 +74,7 @@ def _maybe_log_topk(logits, step: int) -> None:
 
 
 @register_flow("vlm")
-class VLMEngine(FlowHandler):
+class VLMEngine(VLMSteps, FlowHandler):
     """Vision-conditioned LLM: encode image → merge embeds → decode text.
 
     topology.flow.vlm:
@@ -1763,38 +1764,6 @@ class VLMEngine(FlowHandler):
                 "be disjoint (the vendor asserts the same).")
         return ids, img_span, aud_span
 
-    @staticmethod
-    def _mrope_segments(seq_len: int, img_span: Tuple[int, int],
-                        aud_span: Tuple[int, int],
-                        vis_grid_llm: Optional[Tuple[int, int, int]]):
-        """Segment layout for the M-RoPE builder: text runs between the
-        modality spans, the visual span as a t/h/w grid, the audio span
-        as a text-like run (the vendor's audio-only branch is a plain
-        arange expanded over the three planes)."""
-        spans = []
-        if img_span[1] > img_span[0]:
-            if vis_grid_llm is None:
-                raise RuntimeError(
-                    "ZERO FALLBACK: a visual span needs its llm grid "
-                    "(t, h/merge, w/merge) for the M-RoPE builder.")
-            spans.append((img_span[0], img_span[1], "visual", vis_grid_llm))
-        if aud_span[1] > aud_span[0]:
-            spans.append((aud_span[0], aud_span[1], "text", None))
-        spans.sort(key=lambda s: s[0])
-        segments: List[Tuple[str, int, Optional[Tuple[int, int, int, float]]]] = []
-        cursor = 0
-        for lo, hi, kind, grid in spans:
-            if lo > cursor:
-                segments.append(("text", lo - cursor, None))
-            if kind == "visual":
-                gt, gh, gw = grid
-                segments.append(("visual", hi - lo, (gt, gh, gw, 1.0)))
-            else:
-                segments.append(("text", hi - lo, None))
-            cursor = hi
-        if cursor < seq_len:
-            segments.append(("text", seq_len - cursor, None))
-        return segments
 
     # ─── mrope positions (internal get_rope_index port) ─────────────────
 
@@ -1924,29 +1893,6 @@ class VLMEngine(FlowHandler):
                 return resolved[key]
         return None
 
-    def _get_embed_weight(self, comp_name: str) -> Optional[torch.Tensor]:
-        executor = self.ctx.executors.get(comp_name)
-        if executor is None:
-            return None
-        for key in executor._weights:
-            if "embed_tokens" in key or "token_embed" in key or key == "embed.weight":
-                return executor._weights[key]
-        # Second pass — the NeuroTax substring rule ("embed" in key, see
-        # src/neurobrix/CLAUDE.md §0) with the vocab table as the
-        # discriminator: a rank-2 weight whose rows equal the declared
-        # vocab_size IS the token embedding (e.g. `word_embeddings.weight`).
-        # Additive only: every build resolved by the exact names above
-        # never reaches this pass.
-        vocab = (self.ctx.pkg.defaults.get("lm_config", {}) or {}).get(
-            "vocab_size")
-        if vocab is None:
-            return None
-        for key, tensor in executor._weights.items():
-            if ("embed" in key and tensor is not None
-                    and getattr(tensor, "ndim", 0) == 2
-                    and int(tensor.shape[0]) == int(vocab)):
-                return tensor
-        return None
 
     def _compute_logits(self, hidden_states: torch.Tensor,
                         embed_weight: Optional[torch.Tensor],

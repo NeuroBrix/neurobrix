@@ -12,9 +12,10 @@ from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.memory.memory_pool import release_flow_memory
+from neurobrix.core.flow.shared_steps import StaticGraphSteps   # the steps both branches share
 
 
-class TritonStaticGraphHandler:
+class TritonStaticGraphHandler(StaticGraphSteps):
     """
     Triton-mode static graph flow handler.
 
@@ -36,31 +37,6 @@ class TritonStaticGraphHandler:
         self._execute_component = execute_component_fn
         self._unload_component_weights = unload_weights_fn
 
-    def execute(self) -> Dict[str, Any]:
-        """
-        Execute static graph (no loop).
-
-        Executes all components in order: pre_loop + loop.components + post_loop
-
-        Returns:
-            Dict of resolved variables/outputs
-        """
-        flow = self.ctx.pkg.topology.get("flow", {})
-
-        # Execute all components in topological order
-        all_components = (
-            flow.get("pre_loop", []) +
-            flow.get("loop", {}).get("components", []) +
-            flow.get("post_loop", [])
-        )
-
-        for comp_name in all_components:
-            self._execute_component(comp_name, "static", None)
-
-            # Unload after each component
-            self._unload_component(comp_name)
-
-        return self.ctx.variable_resolver.resolve_all()
 
     def _unload_component(self, comp_name: str) -> None:
         """Unload component weights and clear memory (skip in serve mode)."""

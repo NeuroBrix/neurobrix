@@ -19,6 +19,7 @@ from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.memory.memory_pool import release_flow_memory
+from neurobrix.core.flow.shared_steps import AudioSteps   # the steps both branches share
 
 
 #: The stage executions the audio flow runs. Every execution a container of this flow declares
@@ -26,7 +27,7 @@ from nbxtensor.memory.memory_pool import release_flow_memory
 #: set in both engines (R30).
 STAGE_EXECUTIONS = ("forward",)
 
-class TritonAudioEngine:
+class TritonAudioEngine(AudioSteps):
     """
     Triton-mode audio flow orchestrator.
 
@@ -129,14 +130,6 @@ class TritonAudioEngine:
     # Input preprocessing
     # -----------------------------------------------------------------
 
-    def _preprocess_input(self, input_config: Dict, direction: str, stages: List) -> None:
-        """Preprocess input based on modality and preprocessing type."""
-        modality = input_config.get("modality", "audio" if direction == "stt" else "text")
-
-        if modality == "audio":
-            self._preprocess_audio_input(input_config, stages)
-        elif modality == "text":
-            self._preprocess_text_input(input_config)
 
     def _preprocess_audio_input(self, input_config: Dict, stages: List) -> None:
         """Load audio file and extract mel/raw features — ZERO TORCH (R33).
@@ -412,32 +405,6 @@ class TritonAudioEngine:
     # Output postprocessing
     # -----------------------------------------------------------------
 
-    def _postprocess_output(self, output_config: Dict, direction: str) -> None:
-        """Postprocess output based on modality."""
-        modality = output_config.get("modality", "text" if direction == "stt" else "audio")
-
-        if modality == "text":
-            self._postprocess_text_output(output_config)
-        elif modality == "audio":
-            self._postprocess_audio_output(output_config)
-
-    def _postprocess_text_output(self, output_config: Dict) -> None:
-        """Decode generated token IDs to text (STT)."""
-        generated_ids = self.ctx.variable_resolver.resolved.get("global.generated_token_ids")
-        if generated_ids is None:
-            return
-
-        tokenizer = self.ctx.modules.get("tokenizer")
-        if tokenizer is not None:
-            from neurobrix.core.module.audio.output_processor import AudioOutputProcessor
-            text = AudioOutputProcessor.decode_tokens(generated_ids, tokenizer)
-        else:
-            text = str(generated_ids)
-
-        variable = output_config.get("variable", "global.transcription")
-        self.ctx.variable_resolver.resolved[variable] = text
-        self.ctx.variable_resolver.resolved["global.transcription"] = text
-        print(f"   [Output] Transcription: {text[:100]}{'...' if len(text) > 100 else ''}")
 
     def _postprocess_audio_output(self, output_config: Dict) -> None:
         """Process TTS output: decode audio tokens or store raw waveform."""

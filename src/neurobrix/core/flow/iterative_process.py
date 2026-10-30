@@ -22,6 +22,7 @@ from neurobrix.core.runtime.resolution import flux_video_conditioning
 from .base import FlowHandler, FlowContext, register_flow
 from neurobrix.core.runtime.progress import StepProgress
 from neurobrix.core.runtime.resolution.negative_pooled_condition import pooled_text_outputs
+from neurobrix.core.flow.iterative_steps import IterativeSteps   # the steps both branches share
 
 
 def _gate_component_outputs_finite(resolved: Any, comp_name: str) -> None:
@@ -121,8 +122,6 @@ def _dump_final_latent(tensor, to_numpy):
     print(f"[final-latent] {tuple(arr.shape)} {arr.dtype} l2={float(np.linalg.norm(arr)):.4f}"
           f" -> {path}", flush=True)
 
-
-from neurobrix.core.flow.iterative_steps import IterativeSteps   # the steps both branches share
 
 class IterativeProcessHandler(IterativeSteps, FlowHandler):
     """

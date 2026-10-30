@@ -52,6 +52,7 @@ from nbxtensor.ops import wrappers as w
 from nbxtensor.ops import index_wrappers as _nbx_index_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
 from neurobrix.core.flow.base import requests_speech
+from neurobrix.core.flow.shared_steps import VLMSteps   # the steps both branches share
 
 
 def _maybe_log_topk(logits, step: int) -> None:
@@ -135,7 +136,7 @@ def tokenize_around_span(tokenizer, prompt: str, span_token_id: int,
     return ids[:first], ids[last + 1:]
 
 
-class TritonVLMEngine:
+class TritonVLMEngine(VLMSteps):
     """Vision-conditioned LLM (R33): encode image → merge embeds →
     mrope decode. Mirror of core/flow/vlm.py VLMEngine."""
 
@@ -1705,37 +1706,6 @@ class TritonVLMEngine:
                 "be disjoint (the vendor asserts the same).")
         return ids, img_span, aud_span
 
-    @staticmethod
-    def _mrope_segments(seq_len: int, img_span: Tuple[int, int],
-                        aud_span: Tuple[int, int],
-                        vis_grid_llm: Optional[Tuple[int, int, int]]):
-        """Segment layout for the M-RoPE builder (R30 mirror): text runs
-        between the modality spans, the visual span as a t/h/w grid, the
-        audio span text-like on the three planes."""
-        spans = []
-        if img_span[1] > img_span[0]:
-            if vis_grid_llm is None:
-                raise RuntimeError(
-                    "ZERO FALLBACK: a visual span needs its llm grid "
-                    "(t, h/merge, w/merge) for the M-RoPE builder.")
-            spans.append((img_span[0], img_span[1], "visual", vis_grid_llm))
-        if aud_span[1] > aud_span[0]:
-            spans.append((aud_span[0], aud_span[1], "text", None))
-        spans.sort(key=lambda s: s[0])
-        segments: List[Tuple[str, int, Optional[Tuple[int, int, int, float]]]] = []
-        cursor = 0
-        for lo, hi, kind, grid in spans:
-            if lo > cursor:
-                segments.append(("text", lo - cursor, None))
-            if kind == "visual":
-                gt, gh, gw = grid
-                segments.append(("visual", hi - lo, (gt, gh, gw, 1.0)))
-            else:
-                segments.append(("text", hi - lo, None))
-            cursor = hi
-        if cursor < seq_len:
-            segments.append(("text", seq_len - cursor, None))
-        return segments
 
     # ─── mrope positions (numpy; mirror of core VLMEngine) ────────────
 
@@ -1823,29 +1793,6 @@ class TritonVLMEngine:
                 return v
         return None
 
-    def _get_embed_weight(self, comp_name: str) -> Optional[NBXTensor]:
-        executor = self.ctx.executors.get(comp_name)
-        if executor is None:
-            return None
-        for key in executor._weights:
-            if ("embed_tokens" in key or "token_embed" in key
-                    or key == "embed.weight"):
-                return executor._weights[key]
-        # Second pass (R30 mirror) — the NeuroTax substring rule
-        # ("embed" in key) with the declared vocab_size as the
-        # discriminator: a rank-2 weight whose rows equal vocab_size IS
-        # the token embedding (e.g. `word_embeddings.weight`). Additive:
-        # builds resolved by the exact names above never reach it.
-        vocab = (self.ctx.pkg.defaults.get("lm_config", {}) or {}).get(
-            "vocab_size")
-        if vocab is None:
-            return None
-        for key, tensor in executor._weights.items():
-            if ("embed" in key and tensor is not None
-                    and getattr(tensor, "ndim", 0) == 2
-                    and int(tensor.shape[0]) == int(vocab)):
-                return tensor
-        return None
 
     def _compute_logits(self, hidden_states: NBXTensor,
                         embed_weight: Optional[NBXTensor],

@@ -1,7 +1,7 @@
 # The engine's open slimming findings (tools/engine_slim_scan.py); each ends deleted, moved into nbxtensor, or kept
 # with its reason in docs/nbxtensor/ENGINE_SLIM.md. Both figures below may only go down (test_the_engine_only_slims.py).
-# engine_lines: 141884
-# open: 402
+# engine_lines: 141787
+# open: 386
 kind	path	symbol	detail
 dead	src/neurobrix/cli/commands/registry.py	installing_path	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/config/loader.py	vendor_file	no reference outside its own body (tests excluded)
@@ -50,9 +50,6 @@ duplicate	src/neurobrix/core/audio_frontend.py	_requested_voice	same body as src
 duplicate	src/neurobrix/core/cfg/engine.py	__init__	same body as src/neurobrix/triton/cfg/engine.py::__init__
 duplicate	src/neurobrix/core/flow/audio.py	__init__	same body as src/neurobrix/core/flow/audio_llm.py::__init__, src/neurobrix/core/flow/dual_ar.py::__init__, src/neurobrix/core/flow/encoder_decoder.py::__init__, src/neurobrix/core/flow/forward_pass.py::__init__, src/neurobrix/core/flow/next_token_diffusion.py::__init__, src/neurobrix/core/flow/rnnt.py::__init__, src/neurobrix/core/flow/tts_llm.py::__init__, src/neurobrix/core/flow/vlm.py::__init__
 duplicate	src/neurobrix/core/flow/audio.py	_get_component_output	same body as src/neurobrix/core/flow/audio_llm.py::_get_component_output, src/neurobrix/core/flow/encoder_decoder.py::_get_component_output, src/neurobrix/core/flow/vlm.py::_get_component_output
-duplicate	src/neurobrix/core/flow/audio.py	_postprocess_output	same body as src/neurobrix/triton/flow/audio.py::_postprocess_output
-duplicate	src/neurobrix/core/flow/audio.py	_postprocess_text_output	same body as src/neurobrix/triton/flow/audio.py::_postprocess_text_output
-duplicate	src/neurobrix/core/flow/audio.py	_preprocess_input	same body as src/neurobrix/triton/flow/audio.py::_preprocess_input
 duplicate	src/neurobrix/core/flow/audio_llm.py	__init__	same body as src/neurobrix/core/flow/audio.py::__init__, src/neurobrix/core/flow/dual_ar.py::__init__, src/neurobrix/core/flow/encoder_decoder.py::__init__, src/neurobrix/core/flow/forward_pass.py::__init__, src/neurobrix/core/flow/next_token_diffusion.py::__init__, src/neurobrix/core/flow/rnnt.py::__init__, src/neurobrix/core/flow/tts_llm.py::__init__, src/neurobrix/core/flow/vlm.py::__init__
 duplicate	src/neurobrix/core/flow/audio_llm.py	_effective_sampling	same body as src/neurobrix/core/flow/encoder_decoder.py::_effective_sampling, src/neurobrix/core/flow/tts_llm.py::_effective_sampling, src/neurobrix/core/flow/vlm.py::_effective_sampling, src/neurobrix/triton/flow/audio_llm.py::_effective_sampling, src/neurobrix/triton/flow/encoder_decoder.py::_effective_sampling
 duplicate	src/neurobrix/core/flow/audio_llm.py	_family_default	same body as src/neurobrix/core/flow/encoder_decoder.py::_family_default, src/neurobrix/core/flow/tts_llm.py::_family_default, src/neurobrix/core/flow/vlm.py::_family_default, src/neurobrix/triton/flow/audio_llm.py::_family_default, src/neurobrix/triton/flow/encoder_decoder.py::_family_default
@@ -83,8 +80,6 @@ duplicate	src/neurobrix/core/flow/next_token_diffusion.py	_require_default	same 
 duplicate	src/neurobrix/core/flow/next_token_diffusion.py	_require_tensor	same body as src/neurobrix/triton/flow/next_token_diffusion.py::_require
 duplicate	src/neurobrix/core/flow/rnnt.py	__init__	same body as src/neurobrix/core/flow/audio.py::__init__, src/neurobrix/core/flow/audio_llm.py::__init__, src/neurobrix/core/flow/dual_ar.py::__init__, src/neurobrix/core/flow/encoder_decoder.py::__init__, src/neurobrix/core/flow/forward_pass.py::__init__, src/neurobrix/core/flow/next_token_diffusion.py::__init__, src/neurobrix/core/flow/tts_llm.py::__init__, src/neurobrix/core/flow/vlm.py::__init__
 duplicate	src/neurobrix/core/flow/rnnt.py	_bind_window	same body as src/neurobrix/triton/flow/rnnt.py::_bind_window
-duplicate	src/neurobrix/core/flow/rnnt.py	_find_tokenizer_model	same body as src/neurobrix/triton/flow/rnnt.py::_find_tokenizer_model
-duplicate	src/neurobrix/core/flow/rnnt.py	_get_component_output	same body as src/neurobrix/triton/flow/rnnt.py::_get_component_output
 duplicate	src/neurobrix/core/flow/rnnt.py	joint_role	same body as src/neurobrix/triton/flow/rnnt.py::joint_role
 duplicate	src/neurobrix/core/flow/speech.py	__init__	same body as src/neurobrix/core/flow/image_gen.py::__init__, src/neurobrix/core/flow/speech_cfm.py::__init__
 duplicate	src/neurobrix/core/flow/speech.py	_require	same body as src/neurobrix/core/flow/speech_cfm.py::_require, src/neurobrix/triton/flow/speech.py::_require
@@ -92,7 +87,6 @@ duplicate	src/neurobrix/core/flow/speech.py	_run	same body as src/neurobrix/core
 duplicate	src/neurobrix/core/flow/speech_cfm.py	__init__	same body as src/neurobrix/core/flow/image_gen.py::__init__, src/neurobrix/core/flow/speech.py::__init__
 duplicate	src/neurobrix/core/flow/speech_cfm.py	_require	same body as src/neurobrix/core/flow/speech.py::_require, src/neurobrix/triton/flow/speech.py::_require
 duplicate	src/neurobrix/core/flow/static_graph.py	_unload_component	same body as src/neurobrix/triton/flow/static_graph.py::_unload_component
-duplicate	src/neurobrix/core/flow/static_graph.py	execute	same body as src/neurobrix/triton/flow/static_graph.py::execute
 duplicate	src/neurobrix/core/flow/tts_llm.py	__init__	same body as src/neurobrix/core/flow/audio.py::__init__, src/neurobrix/core/flow/audio_llm.py::__init__, src/neurobrix/core/flow/dual_ar.py::__init__, src/neurobrix/core/flow/encoder_decoder.py::__init__, src/neurobrix/core/flow/forward_pass.py::__init__, src/neurobrix/core/flow/next_token_diffusion.py::__init__, src/neurobrix/core/flow/rnnt.py::__init__, src/neurobrix/core/flow/vlm.py::__init__
 duplicate	src/neurobrix/core/flow/tts_llm.py	_effective_sampling	same body as src/neurobrix/core/flow/audio_llm.py::_effective_sampling, src/neurobrix/core/flow/encoder_decoder.py::_effective_sampling, src/neurobrix/core/flow/vlm.py::_effective_sampling, src/neurobrix/triton/flow/audio_llm.py::_effective_sampling, src/neurobrix/triton/flow/encoder_decoder.py::_effective_sampling
 duplicate	src/neurobrix/core/flow/tts_llm.py	_family_default	same body as src/neurobrix/core/flow/audio_llm.py::_family_default, src/neurobrix/core/flow/encoder_decoder.py::_family_default, src/neurobrix/core/flow/vlm.py::_family_default, src/neurobrix/triton/flow/audio_llm.py::_family_default, src/neurobrix/triton/flow/encoder_decoder.py::_family_default
@@ -100,8 +94,6 @@ duplicate	src/neurobrix/core/flow/vlm.py	__init__	same body as src/neurobrix/cor
 duplicate	src/neurobrix/core/flow/vlm.py	_effective_sampling	same body as src/neurobrix/core/flow/audio_llm.py::_effective_sampling, src/neurobrix/core/flow/encoder_decoder.py::_effective_sampling, src/neurobrix/core/flow/tts_llm.py::_effective_sampling, src/neurobrix/triton/flow/audio_llm.py::_effective_sampling, src/neurobrix/triton/flow/encoder_decoder.py::_effective_sampling
 duplicate	src/neurobrix/core/flow/vlm.py	_family_default	same body as src/neurobrix/core/flow/audio_llm.py::_family_default, src/neurobrix/core/flow/encoder_decoder.py::_family_default, src/neurobrix/core/flow/tts_llm.py::_family_default, src/neurobrix/triton/flow/audio_llm.py::_family_default, src/neurobrix/triton/flow/encoder_decoder.py::_family_default
 duplicate	src/neurobrix/core/flow/vlm.py	_get_component_output	same body as src/neurobrix/core/flow/audio.py::_get_component_output, src/neurobrix/core/flow/audio_llm.py::_get_component_output, src/neurobrix/core/flow/encoder_decoder.py::_get_component_output
-duplicate	src/neurobrix/core/flow/vlm.py	_get_embed_weight	same body as src/neurobrix/triton/flow/vlm.py::_get_embed_weight
-duplicate	src/neurobrix/core/flow/vlm.py	_mrope_segments	same body as src/neurobrix/triton/flow/vlm.py::_mrope_segments
 duplicate	src/neurobrix/core/flow/vlm.py	_span	same body as src/neurobrix/triton/flow/vlm.py::_span
 duplicate	src/neurobrix/core/flow/vlm.py	_tok_str	same body as src/neurobrix/triton/flow/vlm.py::_tok_str
 duplicate	src/neurobrix/core/module/autoregressive/samplers.py	__call__	same body as 
@@ -129,7 +121,7 @@ duplicate	src/neurobrix/core/prism/solver.py	_allocation_on_host	same body as sr
 duplicate	src/neurobrix/core/prism/solver.py	_on_host	same body as src/neurobrix/core/prism/solver.py::_allocation_on_host
 duplicate	src/neurobrix/core/runtime/graph/compiled_sequence.py	_compile_kwargs	same body as src/neurobrix/triton/sequence.py::_compile_kwargs
 duplicate	src/neurobrix/core/runtime/graph/compiled_sequence.py	_extract_const_fold_partition	same body as src/neurobrix/triton/sequence.py::_extract_const_fold_partition
-duplicate	src/neurobrix/core/runtime/resolution/i2v_conditioning.py	_to_channels_first	same body as src/neurobrix/core/runtime/resolution/vace_control_conditioning.py::_to_channels_first, src/neurobrix/triton/i2v_conditioning.py::_to_channels_first, src/neurobrix/triton/vace_control_conditioning.py::_to_channels_first
+duplicate	src/neurobrix/core/runtime/resolution/i2v_conditioning.py	_to_channels_first	same body as src/neurobrix/triton/i2v_conditioning.py::_to_channels_first
 duplicate	src/neurobrix/core/runtime/resolution/i2v_conditioning.py	build_condition	same body as src/neurobrix/triton/i2v_conditioning.py::build_condition
 duplicate	src/neurobrix/core/strategies/block_scatter.py	__init__	same body as src/neurobrix/core/strategies/triton/block_scatter.py::__init__
 duplicate	src/neurobrix/core/strategies/block_scatter.py	_load_fgp_weights	same body as src/neurobrix/core/strategies/pipeline_parallel.py::_load_pp_weights, src/neurobrix/core/strategies/triton/block_scatter.py::_load_fgp_weights, src/neurobrix/core/strategies/triton/pipeline_parallel.py::_load_pp_weights
@@ -182,9 +174,6 @@ duplicate	src/neurobrix/triton/audio_frontend.py	postprocess_text_output_np	same
 duplicate	src/neurobrix/triton/cfg/engine.py	__init__	same body as src/neurobrix/core/cfg/engine.py::__init__
 duplicate	src/neurobrix/triton/flow/audio.py	__init__	same body as src/neurobrix/triton/flow/audio_llm.py::__init__, src/neurobrix/triton/flow/dual_ar.py::__init__, src/neurobrix/triton/flow/encoder_decoder.py::__init__, src/neurobrix/triton/flow/forward_pass.py::__init__, src/neurobrix/triton/flow/next_token_diffusion.py::__init__, src/neurobrix/triton/flow/rnnt.py::__init__, src/neurobrix/triton/flow/tts_llm.py::__init__, src/neurobrix/triton/flow/vlm.py::__init__
 duplicate	src/neurobrix/triton/flow/audio.py	_get_component_input_shape	same body as src/neurobrix/core/flow/audio_utils.py::get_component_input_shape
-duplicate	src/neurobrix/triton/flow/audio.py	_postprocess_output	same body as src/neurobrix/core/flow/audio.py::_postprocess_output
-duplicate	src/neurobrix/triton/flow/audio.py	_postprocess_text_output	same body as src/neurobrix/core/flow/audio.py::_postprocess_text_output
-duplicate	src/neurobrix/triton/flow/audio.py	_preprocess_input	same body as src/neurobrix/core/flow/audio.py::_preprocess_input
 duplicate	src/neurobrix/triton/flow/audio_llm.py	__init__	same body as src/neurobrix/triton/flow/audio.py::__init__, src/neurobrix/triton/flow/dual_ar.py::__init__, src/neurobrix/triton/flow/encoder_decoder.py::__init__, src/neurobrix/triton/flow/forward_pass.py::__init__, src/neurobrix/triton/flow/next_token_diffusion.py::__init__, src/neurobrix/triton/flow/rnnt.py::__init__, src/neurobrix/triton/flow/tts_llm.py::__init__, src/neurobrix/triton/flow/vlm.py::__init__
 duplicate	src/neurobrix/triton/flow/audio_llm.py	_compute_dtype	same body as src/neurobrix/triton/flow/vlm.py::_compute_dtype
 duplicate	src/neurobrix/triton/flow/audio_llm.py	_effective_sampling	same body as src/neurobrix/core/flow/audio_llm.py::_effective_sampling, src/neurobrix/core/flow/encoder_decoder.py::_effective_sampling, src/neurobrix/core/flow/tts_llm.py::_effective_sampling, src/neurobrix/core/flow/vlm.py::_effective_sampling, src/neurobrix/triton/flow/encoder_decoder.py::_effective_sampling
@@ -215,8 +204,6 @@ duplicate	src/neurobrix/triton/flow/next_token_diffusion.py	_require_default	sam
 duplicate	src/neurobrix/triton/flow/next_token_diffusion.py	encode_nopad	same body as src/neurobrix/core/flow/next_token_diffusion.py::_encode_nopad
 duplicate	src/neurobrix/triton/flow/rnnt.py	__init__	same body as src/neurobrix/triton/flow/audio.py::__init__, src/neurobrix/triton/flow/audio_llm.py::__init__, src/neurobrix/triton/flow/dual_ar.py::__init__, src/neurobrix/triton/flow/encoder_decoder.py::__init__, src/neurobrix/triton/flow/forward_pass.py::__init__, src/neurobrix/triton/flow/next_token_diffusion.py::__init__, src/neurobrix/triton/flow/tts_llm.py::__init__, src/neurobrix/triton/flow/vlm.py::__init__
 duplicate	src/neurobrix/triton/flow/rnnt.py	_bind_window	same body as src/neurobrix/core/flow/rnnt.py::_bind_window
-duplicate	src/neurobrix/triton/flow/rnnt.py	_find_tokenizer_model	same body as src/neurobrix/core/flow/rnnt.py::_find_tokenizer_model
-duplicate	src/neurobrix/triton/flow/rnnt.py	_get_component_output	same body as src/neurobrix/core/flow/rnnt.py::_get_component_output
 duplicate	src/neurobrix/triton/flow/rnnt.py	joint_role	same body as src/neurobrix/core/flow/rnnt.py::joint_role
 duplicate	src/neurobrix/triton/flow/speech.py	__init__	same body as src/neurobrix/triton/flow/image_gen.py::__init__, src/neurobrix/triton/flow/speech_cfm.py::__init__
 duplicate	src/neurobrix/triton/flow/speech.py	_from_np_on	same body as src/neurobrix/triton/flow/image_gen.py::_from_np_on
@@ -224,19 +211,16 @@ duplicate	src/neurobrix/triton/flow/speech.py	_require	same body as src/neurobri
 duplicate	src/neurobrix/triton/flow/speech.py	_run	same body as src/neurobrix/triton/flow/image_gen.py::_run
 duplicate	src/neurobrix/triton/flow/speech_cfm.py	__init__	same body as src/neurobrix/triton/flow/image_gen.py::__init__, src/neurobrix/triton/flow/speech.py::__init__
 duplicate	src/neurobrix/triton/flow/static_graph.py	_unload_component	same body as src/neurobrix/core/flow/static_graph.py::_unload_component
-duplicate	src/neurobrix/triton/flow/static_graph.py	execute	same body as src/neurobrix/core/flow/static_graph.py::execute
 duplicate	src/neurobrix/triton/flow/tts_llm.py	__init__	same body as src/neurobrix/triton/flow/audio.py::__init__, src/neurobrix/triton/flow/audio_llm.py::__init__, src/neurobrix/triton/flow/dual_ar.py::__init__, src/neurobrix/triton/flow/encoder_decoder.py::__init__, src/neurobrix/triton/flow/forward_pass.py::__init__, src/neurobrix/triton/flow/next_token_diffusion.py::__init__, src/neurobrix/triton/flow/rnnt.py::__init__, src/neurobrix/triton/flow/vlm.py::__init__
 duplicate	src/neurobrix/triton/flow/tts_llm.py	_is_tensor	same body as src/neurobrix/triton/flow/dual_ar.py::_is_tensor
 duplicate	src/neurobrix/triton/flow/vlm.py	__init__	same body as src/neurobrix/triton/flow/audio.py::__init__, src/neurobrix/triton/flow/audio_llm.py::__init__, src/neurobrix/triton/flow/dual_ar.py::__init__, src/neurobrix/triton/flow/encoder_decoder.py::__init__, src/neurobrix/triton/flow/forward_pass.py::__init__, src/neurobrix/triton/flow/next_token_diffusion.py::__init__, src/neurobrix/triton/flow/rnnt.py::__init__, src/neurobrix/triton/flow/tts_llm.py::__init__
 duplicate	src/neurobrix/triton/flow/vlm.py	_compute_dtype	same body as src/neurobrix/triton/flow/audio_llm.py::_compute_dtype
 duplicate	src/neurobrix/triton/flow/vlm.py	_embed_ids	same body as src/neurobrix/triton/flow/audio_llm.py::_embed_ids
 duplicate	src/neurobrix/triton/flow/vlm.py	_get_component_output	same body as src/neurobrix/triton/flow/audio_llm.py::_get_component_output
-duplicate	src/neurobrix/triton/flow/vlm.py	_get_embed_weight	same body as src/neurobrix/core/flow/vlm.py::_get_embed_weight
-duplicate	src/neurobrix/triton/flow/vlm.py	_mrope_segments	same body as src/neurobrix/core/flow/vlm.py::_mrope_segments
 duplicate	src/neurobrix/triton/flow/vlm.py	_proj	same body as src/neurobrix/triton/flow/audio_llm.py::_proj
 duplicate	src/neurobrix/triton/flow/vlm.py	_span	same body as src/neurobrix/core/flow/vlm.py::_span
 duplicate	src/neurobrix/triton/flow/vlm.py	_tok_str	same body as src/neurobrix/core/flow/vlm.py::_tok_str
-duplicate	src/neurobrix/triton/i2v_conditioning.py	_to_channels_first	same body as src/neurobrix/core/runtime/resolution/i2v_conditioning.py::_to_channels_first, src/neurobrix/core/runtime/resolution/vace_control_conditioning.py::_to_channels_first, src/neurobrix/triton/vace_control_conditioning.py::_to_channels_first
+duplicate	src/neurobrix/triton/i2v_conditioning.py	_to_channels_first	same body as src/neurobrix/core/runtime/resolution/i2v_conditioning.py::_to_channels_first
 duplicate	src/neurobrix/triton/i2v_conditioning.py	build_condition	same body as src/neurobrix/core/runtime/resolution/i2v_conditioning.py::build_condition
 duplicate	src/neurobrix/triton/samplers.py	__init__	same body as src/neurobrix/core/module/autoregressive/samplers.py::__init__
 duplicate	src/neurobrix/triton/sequence.py	_compile_kwargs	same body as src/neurobrix/core/runtime/graph/compiled_sequence.py::_compile_kwargs

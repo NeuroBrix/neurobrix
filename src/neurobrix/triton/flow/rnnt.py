@@ -28,6 +28,7 @@ from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.memory.memory_pool import release_flow_memory
 from nbxtensor.memory.device_transfer import parse_device_idx
 from neurobrix.nbx.neurotax import normalize_tensor_name_strict
+from neurobrix.core.flow.shared_steps import RNNTSteps   # the steps both branches share
 
 # R30 mirror of core/flow/rnnt.py: the joint's linears as NeMo names them, keyed by the parser.
 _JOINT_KEYS = {normalize_tensor_name_strict(vendor): role for vendor, role in (
@@ -44,7 +45,7 @@ def joint_role(key: str) -> Optional[str]:
     return None
 
 
-class TritonRNNTEngine:
+class TritonRNNTEngine(RNNTSteps):
     """
     Triton-mode RNNT transducer flow: encoder -> greedy decode (decoder + joint per frame).
 
@@ -469,16 +470,6 @@ class TritonRNNTEngine:
     # Output utilities
     # -----------------------------------------------------------------
 
-    def _get_component_output(self, comp_name: str):
-        """Get the primary output tensor from a component."""
-        resolved = self.ctx.variable_resolver.resolved
-        for key in [f"{comp_name}.output_0", f"{comp_name}.output"]:
-            if key in resolved:
-                return resolved[key]
-        executor = self.ctx.executors.get(comp_name)
-        if executor and hasattr(executor, '_last_outputs') and executor._last_outputs:
-            return executor._last_outputs[0]
-        raise RuntimeError(f"ZERO FALLBACK: No output found for {comp_name}")
 
     def _decode_tokens(self, tokens: List[int]) -> str:
         """Decode token IDs to text using sentencepiece tokenizer from NBX cache."""
@@ -507,14 +498,6 @@ class TritonRNNTEngine:
             "ZERO FALLBACK: No sentencepiece tokenizer.model or vocab.txt in NBX cache.\n"
             "The model needs to be rebuilt with the tokenizer included."
         )
-
-    def _find_tokenizer_model(self) -> Optional[Path]:
-        """Find sentencepiece tokenizer.model in NBX cache."""
-        cache_path = self.ctx.pkg.cache_path
-        if cache_path is None:
-            return None
-        sp_paths = list(cache_path.rglob("*.model"))
-        return sp_paths[0] if sp_paths else None
 
 
 # -----------------------------------------------------------------

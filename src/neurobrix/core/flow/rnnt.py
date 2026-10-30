@@ -39,10 +39,11 @@ def joint_role(key: str) -> Optional[str]:
             return role
     return None
 from .table_gather import gather_rows
+from neurobrix.core.flow.shared_steps import RNNTSteps   # the steps both branches share
 
 
 @register_flow("rnnt")
-class RNNTEngine(FlowHandler):
+class RNNTEngine(RNNTSteps, FlowHandler):
     """
     RNNT transducer flow: encoder → greedy decode (decoder + joint per frame).
 
@@ -569,17 +570,6 @@ class RNNTEngine(FlowHandler):
     # Output utilities
     # ─────────────────────────────────────────────────────────
 
-    def _get_component_output(self, comp_name: str) -> torch.Tensor:
-        """Get the primary output tensor from a component."""
-        resolved = self.ctx.variable_resolver.resolved
-        for key in [f"{comp_name}.output_0", f"{comp_name}.output"]:
-            if key in resolved:
-                return resolved[key]
-        # Check executor outputs
-        executor = self.ctx.executors.get(comp_name)
-        if executor and hasattr(executor, '_last_outputs') and executor._last_outputs:
-            return executor._last_outputs[0]
-        raise RuntimeError(f"ZERO FALLBACK: No output found for {comp_name}")
 
     def _decode_tokens(self, tokens: List[int]) -> str:
         """Decode token IDs to text using sentencepiece tokenizer from NBX cache."""
@@ -614,15 +604,3 @@ class RNNTEngine(FlowHandler):
             "Re-run the build toolchain: build --overwrite"
         )
 
-    def _find_tokenizer_model(self) -> Optional[Path]:
-        """Find sentencepiece tokenizer.model in NBX cache.
-
-        ZERO FALLBACK: Runtime ONLY reads from NBX cache.
-        If the tokenizer is missing, the toolchain builder needs to include it.
-        """
-        cache_path = self.ctx.pkg.cache_path
-        if cache_path is None:
-            return None
-        # Search NBX cache for sentencepiece model files
-        sp_paths = list(cache_path.rglob("*.model"))
-        return sp_paths[0] if sp_paths else None
