@@ -70,10 +70,18 @@ def test_lazy_keeps_nothing_whatever_the_classification():
         assert not s._keeps(c), "a lazy plan releases every component"
 
 
-def test_unload_inactive_releases_transients_under_an_eager_plan():
+def _flows_release_all_but(s, keep):
+    """What the flows do after a component runs (`_unload_component` -> the strategy's unload_weights), for every
+    component but the one kept — the release path the runtime takes."""
+    for name in s.context.component_executors:
+        if name != keep:
+            s.unload_weights(name)
+
+
+def test_unload_releases_transients_under_an_eager_plan():
     ctx = _ctx("eager", frozenset({"vae", "text_encoder"}))
     s = SingleGPUStrategy(ctx)
-    s.unload_inactive_components(keep_component="transformer")
+    _flows_release_all_but(s, "transformer")
     assert ctx.component_executors["vae"].unloaded == 1
     assert ctx.component_executors["text_encoder"].unloaded == 1
     assert ctx.component_executors["transformer"].unloaded == 0, (
@@ -81,10 +89,10 @@ def test_unload_inactive_releases_transients_under_an_eager_plan():
     )
 
 
-def test_unload_inactive_is_a_no_op_under_a_plain_eager_plan():
+def test_unload_is_a_no_op_under_a_plain_eager_plan():
     ctx = _ctx("eager")
     s = SingleGPUStrategy(ctx)
-    s.unload_inactive_components(keep_component="transformer")
+    _flows_release_all_but(s, "transformer")
     assert all(e.unloaded == 0 for e in ctx.component_executors.values()), (
         "plain single_gpu must not start releasing components"
     )

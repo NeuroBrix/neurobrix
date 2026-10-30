@@ -100,15 +100,3 @@ class CPUExecutionStrategy(ExecutionStrategy):
         return self.transfer_dict(inputs, self.device)
 
 
-    def unload_inactive_components(self, keep_component: str) -> None:
-        """Unload all components except the specified one.
-
-        In eager mode, skip. In lazy mode, free RAM held by inactive
-        components — useful for very large models where peak RAM
-        consumption matters.
-        """
-        if self._eager:
-            return
-        for comp_name in self.context.component_executors:
-            if comp_name != keep_component:
-                self.unload_weights(comp_name)

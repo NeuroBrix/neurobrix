@@ -124,17 +124,3 @@ class SingleGPUStrategy(ExecutionStrategy):
         return self.transfer_dict(inputs, self.device)
 
 
-    def unload_inactive_components(self, keep_component: str) -> None:
-        """
-        Unload all components except the specified one.
-
-        In eager mode, persistent components stay in memory; transients are
-        still released, because that is what the lifecycle budget promised.
-        In lazy mode, ensures memory is available for the next component.
-        """
-        for comp_name in self.context.component_executors:
-            if comp_name == keep_component:
-                continue
-            if self._keeps(comp_name):
-                continue
-            self.unload_weights(comp_name)

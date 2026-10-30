@@ -68,10 +68,3 @@ class SingleGPUStrategy(TritonStrategy):
         return self.transfer_dict(inputs, self.device)
 
 
-    def unload_inactive_components(self, keep_component: str) -> None:
-        """Free every component except `keep_component` (lazy mode only)."""
-        if self._eager:
-            return
-        for comp_name in self.context.component_executors:
-            if comp_name != keep_component:
-                self.unload_weights(comp_name)
