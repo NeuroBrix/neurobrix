@@ -46,6 +46,7 @@ import json
 import os
 import shutil
 import socket
+import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -140,41 +141,40 @@ def _describe(owner: dict) -> str:
     return f"{host} (pid {pid}{age})"
 
 
-#: `renameat2(2)` with `RENAME_EXCHANGE` swaps two paths in ONE syscall, so there is
-#: no instant at which either name is missing. The two-rename form is correct but not
-#: instantaneous, and its window is real rather than theoretical: the gate
-#: `test_the_live_tree_is_readable_at_every_instant_of_a_reinstall` caught it on
-#: 2026-09-18 with a single observation of `manifest.json absent` out of thousands of
-#: polls on a loaded machine. One observation is enough — the claim is "at every instant".
+#: `renameat2(2)` with `RENAME_EXCHANGE` (Linux) and `renamex_np(2)` with `RENAME_SWAP` (macOS)
+#: swap two paths in ONE call, so no instant exists at which either name is missing. The
+#: two-rename form's window is real: a gate caught it on 2026-09-18 (one `manifest.json absent`
+#: in thousands of polls), and on macOS, which took the two renames until 2026-10-30, 22 409.
 _AT_FDCWD = -100
 _RENAME_EXCHANGE = 2
 _SYS_renameat2 = 316          # x86_64
+_RENAME_SWAP = 0x2            # macOS <stdio.h>
 
 
 def _exchange(a: Path, b: Path) -> bool:
     """Swap two existing paths atomically. False if the platform cannot.
 
-    Returns False rather than raising on ENOSYS (a kernel older than the call),
-    EINVAL/EOPNOTSUPP (a filesystem without the flag — several network filesystems
-    included) and on any non-x86_64 build, so the caller keeps its portable path
-    instead of an install failing on a machine whose kernel simply predates this.
+    False rather than raising on ENOSYS (a kernel older than the call), EINVAL/ENOTSUP (a
+    filesystem without the flag — network filesystems included) and on any platform but
+    Linux x86_64 and macOS, so the caller keeps its portable path instead of failing.
     """
     import ctypes
-    if os.uname().machine != "x86_64":
-        return False
-    try:
-        libc = ctypes.CDLL("libc.so.6", use_errno=True)
-    except OSError:
-        return False
     ctypes.set_errno(0)
-    rc = libc.syscall(ctypes.c_long(_SYS_renameat2),
-                      ctypes.c_int(_AT_FDCWD), ctypes.c_char_p(str(a).encode()),
-                      ctypes.c_int(_AT_FDCWD), ctypes.c_char_p(str(b).encode()),
-                      ctypes.c_uint(_RENAME_EXCHANGE))
+    if sys.platform == "darwin":
+        rc = ctypes.CDLL(None, use_errno=True).renamex_np(os.fsencode(a), os.fsencode(b), ctypes.c_uint(_RENAME_SWAP))
+    elif sys.platform == "linux" and os.uname().machine == "x86_64":
+        try:
+            libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        except OSError:
+            return False
+        rc = libc.syscall(ctypes.c_long(_SYS_renameat2), ctypes.c_int(_AT_FDCWD), os.fsencode(a),
+                          ctypes.c_int(_AT_FDCWD), os.fsencode(b), ctypes.c_uint(_RENAME_EXCHANGE))
+    else:
+        return False
     if rc == 0:
         return True
     err = ctypes.get_errno()
-    if err in (errno.ENOSYS, errno.EINVAL, errno.ENOTTY, errno.EOPNOTSUPP):
+    if err in (errno.ENOSYS, errno.EINVAL, errno.ENOTTY, errno.EOPNOTSUPP, errno.ENOTSUP):
         return False
     raise OSError(err, os.strerror(err), str(a), None, str(b))
 
