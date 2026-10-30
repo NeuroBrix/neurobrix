@@ -70,7 +70,9 @@ def open_decoder_cache(ctx, dec_name: str, max_tokens: int):
     return interceptor
 
 
-class DecodeSteps:
+from neurobrix.core.flow.decoder_cache import DecodeSteps as _SharedDecodeSteps   # the steps both branches share (torch-free)
+
+class DecodeSteps(_SharedDecodeSteps):
     """The step protocol of a cached decode loop, for one sequence of the cache (a branch) — mirror of
     `core/flow/decoder_cache.DecodeSteps`: the whole context at the first run (the prefill), the one
     new token afterwards, placed at its absolute position by the cache; without a cache every run
@@ -81,29 +83,6 @@ class DecodeSteps:
         self.branch = branch
         self.runs = 0
 
-    @property
-    def cached(self) -> bool:
-        return self.wrapper is not None
-
-    @property
-    def one_token(self) -> bool:
-        return self.wrapper is not None and self.runs >= 1
-
-    def feed(self, whole, last):
-        return last if self.one_token else whole
-
-    def before_run(self) -> None:
-        if self.wrapper is None:
-            return
-        if self.branch is not None:
-            self.wrapper.use_branch(self.branch)
-        if self.runs >= 1:
-            # EVERY decode step, the first included: the offset the positional ops of the graph are shifted by is
-            # the cache's length now. The first form shifted from the second step on and relied on `set_decode_mode`
-            # for the first — the compiled wrapper sets the offset there, the Triton interceptor did not, so
-            # openaudio's first cached token was rotated at position 0 on the Triton engine (4 % off the oracle at
-            # its first step, 2026-10-19 02:46; the compiled step was bit-identical).
-            self.wrapper.update_position_offset()
 
     def after_run(self) -> None:
         self.runs += 1
