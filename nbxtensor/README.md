@@ -310,6 +310,9 @@ assert pool.threads() == 2
 pool.set_threads(None)                                        # back to the measurement
 ```
 
+The host conversions of a weight at load are split the same way, across the loader's workers
+(`nbxtensor.io.safetensors.to_bf16_bits`: float32 or float16 rounded to bfloat16, the bytes of one call).
+
 ## Hardware
 
 | hardware | backend | state |

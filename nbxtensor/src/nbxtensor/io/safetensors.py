@@ -82,6 +82,20 @@ def cast(arr: np.ndarray, want, io) -> np.ndarray:
     return out
 
 
+def to_bf16_bits(arr: np.ndarray, io) -> np.ndarray:
+    """float32 or float16 `arr` rounded to bfloat16 (`f32_to_bf16_bits`, uint16 patterns), the elements split across
+    the loader's workers like `cast`: each span is widened (float16 -> float32 is exact) and rounded into its slice."""
+    src = np.ascontiguousarray(arr).reshape(-1)
+    out = np.empty(arr.shape, dtype=np.uint16)
+    flat = out.reshape(-1)
+
+    def _one(span):
+        f32_to_bf16_bits(src[span[0]:span[1]].astype(np.float32, copy=False), out=flat[span[0]:span[1]])
+
+    list(io[1].map(_one, spans(src.size, src.itemsize, 1, io[0])))
+    return out
+
+
 # safetensors dtype → (numpy dtype for reading, NBXDtype, bytes per element)
 SF_DTYPE_INFO = {
     "F16":  (np.float16,  NBXDtype.float16,  2),
@@ -152,7 +166,7 @@ def load_to_pinned_host(
         arr = np.ascontiguousarray(arr)
         if target_dtype == NBXDtype.bfloat16 and source_dtype == NBXDtype.float16:
             # fp16 → bf16, rounded to nearest even (fp16 → fp32 is exact)
-            arr = f32_to_bf16_bits(arr.astype(np.float32))
+            arr = to_bf16_bits(arr, io)
         elif target_dtype == NBXDtype.bfloat16 and source_dtype == NBXDtype.float32:
             # fp32 → bf16 rounded to nearest even, the SAME transform the
             # GPU arena placement uses (`place_in_arena`), so the zero3
@@ -164,7 +178,7 @@ def load_to_pinned_host(
             # stored_dtype_in_compute, the one rule shared with the census
             # shadow, so completing this pair keeps the shadow's dtypes and the
             # real run's identical rather than diverging.
-            arr = f32_to_bf16_bits(arr)
+            arr = to_bf16_bits(arr, io)
 
     # Any remaining source->target pair: cast through numpy.
     #
@@ -280,11 +294,11 @@ def place_in_arena(raw, shape: tuple, nbx_dtype: NBXDtype, np_dtype, target_dtyp
         elif (nbx_dtype == NBXDtype.float32
               and target_dtype == NBXDtype.bfloat16):
             # fp32 → bf16, rounded to nearest even.
-            arr = f32_to_bf16_bits(arr)
+            arr = to_bf16_bits(arr, io)
             final_dtype = NBXDtype.bfloat16
         elif target_dtype != nbx_dtype:
             # fp16 → bf16, rounded to nearest even (fp16 → fp32 is exact).
-            arr = f32_to_bf16_bits(arr.astype(np.float32))
+            arr = to_bf16_bits(arr, io)
             final_dtype = target_dtype
         else:
             final_dtype = target_dtype

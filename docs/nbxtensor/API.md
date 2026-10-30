@@ -120,6 +120,15 @@ def amp_fp32_output_dtype(compute_dtype, graph_dtype, safe, narrowed, traced=Non
 
 `nbxtensor.dtype.convert.saturate_scalar(value, dtype)`: a Python number clamped to a half float's finite range (the table's `max`); anything else unchanged.
 
+### `nbxtensor.io.safetensors` — the host conversions of a loaded weight, split across the loader's workers
+
+```python
+def to_bf16_bits(arr: np.ndarray, io) -> np.ndarray   # float32 / float16 -> bfloat16 patterns (uint16), the
+                                                      # bytes of one f32_to_bf16_bits call, one span per worker
+```
+
+`io = (workers, executor)` is the application's pool (DESIGN rule 14: its size is the profile's).
+
 ### `nbxtensor.dtype.policy` — precision by policy (DESIGN rule 12)
 
 ```python
