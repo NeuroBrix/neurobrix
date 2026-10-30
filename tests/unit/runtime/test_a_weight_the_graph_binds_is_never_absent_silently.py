@@ -50,6 +50,13 @@ ARRAYS = {   # two shards, so a missing one leaves the other loadable
 }
 
 
+@pytest.fixture(autouse=True)
+def _io_workers_declared(monkeypatch):
+    """The count a loaded profile declares (cpu.io_workers): these cells drive the loaders with no profile."""
+    from neurobrix.core import workspace
+    monkeypatch.setattr(workspace, "_IO_WORKERS", 2)
+
+
 def _write_shard(path: Path, arrays: dict) -> None:
     """A safetensors file written byte by byte (torch-free): header, then the data."""
     header, blobs, off = {}, [], 0

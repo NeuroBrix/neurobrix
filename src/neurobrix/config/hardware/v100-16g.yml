@@ -30,6 +30,9 @@ cpu:
   - avx
   - f16c
   - avx2
+  # the loaders' parallel reads, MEASURED on the rack (tools/measure_io_workers.py, the 29 Qwen3-30B shards on
+  # the RDMA cache, 2026-10-30: 6149 / 6241 MiB/s at 16 in two steady runs)
+  io_workers: 16
 devices:
 - index: 0
   brand: nvidia

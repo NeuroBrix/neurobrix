@@ -9,9 +9,9 @@ import os
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, List, Sequence
+from typing import Dict, List, Optional, Sequence
 
-__all__ = ["PIECE", "pieces", "trial", "choose", "measure"]
+__all__ = ["PIECE", "pieces", "trial", "choose", "measure", "workers_for"]
 
 PIECE = 16 << 20                       # the loaders' read piece
 
@@ -113,3 +113,30 @@ def measure(files: Sequence[str], max_bytes: int, max_workers: int, within: floa
     last = trial(ps, 1)
     steady = abs(last - rates[1]) <= within * max(last, rates[1])
     return {"bytes": total, "rates": rates, "workers": choose(rates, within), "steady": steady, "last_one_worker": last}
+
+
+def workers_for(directory, max_bytes: int = 256 << 20, max_workers: Optional[int] = None,
+                pattern: str = "*/components/*/weights/*.safetensors") -> Optional[int]:
+    """The parallel reads to keep in flight on `directory`'s storage: `measure` over its largest files matching
+    `pattern` (a weight cache's shards), else over a scratch file written there and removed. None when two measures
+    in a row are not steady (another reader on the storage): nothing is returned that was not measured."""
+    from pathlib import Path
+    root = Path(directory)
+    files = sorted(root.glob(pattern), key=lambda p: -p.stat().st_size)[:4]
+    scratch = None
+    if not files:
+        scratch = root / f".read_rate_{os.getpid()}"
+        with open(scratch, "wb") as f:
+            for _ in range(max(1, max_bytes // PIECE)):
+                f.write(os.urandom(PIECE))
+        files = [scratch]
+    try:
+        for _ in range(2):
+            m = measure([str(p) for p in files], max_bytes, max_workers or os.cpu_count() or 1)
+            if m["steady"]:
+                return int(m["workers"])
+        return None
+    finally:
+        if scratch is not None:
+            scratch.unlink(missing_ok=True)
+

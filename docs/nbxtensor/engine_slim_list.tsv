@@ -1,7 +1,7 @@
 # The engine's open slimming findings (tools/engine_slim_scan.py); each ends deleted, moved into nbxtensor, or kept
 # with its reason in docs/nbxtensor/ENGINE_SLIM.md. Both figures below may only go down (test_the_engine_only_slims.py).
-# engine_lines: 138320
-# open: 289
+# engine_lines: 138307
+# open: 286
 kind	path	symbol	detail
 dead	src/neurobrix/cli/commands/registry.py	installing_path	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/config/loader.py	vendor_file	no reference outside its own body (tests excluded)
@@ -266,7 +266,6 @@ wrapper	src/neurobrix/core/strategies/base.py	synchronize_device	only hands its 
 wrapper	src/neurobrix/core/strategies/layer_streaming.py	_nbx_path	only hands its parameters to self.resolve_artifact_path
 wrapper	src/neurobrix/core/strategies/layer_streaming.py	register_op_types_on_segments(_segs)	no call site passes it: always its default segments
 wrapper	src/neurobrix/core/strategies/shared_steps.py	cleanup	only hands its parameters to self._loaded_components.clear
-wrapper	src/neurobrix/core/strategies/tp_sharding.py	TP_SHARD_WORKERS	an alias of DEFAULT_NUM_WORKERS
 wrapper	src/neurobrix/core/workspace.py	SnapshotNotPresent	only renames Exception
 wrapper	src/neurobrix/kernels/census.py	install(hardware_profile)	no call site passes it: always its default None
 wrapper	src/neurobrix/kernels/census_table.py	rows_for(root)	no call site passes it: always its default None
@@ -275,8 +274,6 @@ wrapper	src/neurobrix/nbx/atomic_install.py	installing(allow_break)	no call site
 wrapper	src/neurobrix/nbx/cache.py	clear(model_name)	no call site passes it: always its default None
 wrapper	src/neurobrix/nbx/cache.py	extract(allow_replace)	no call site passes it: always its default False
 wrapper	src/neurobrix/nbx/component_flags.py	clear	only hands its parameters to _TABLE.clear
-wrapper	src/neurobrix/nbx/loader.py	load_all_components(dtype)	no call site passes it: always its default None
-wrapper	src/neurobrix/nbx/loader.py	load_all_components(verbose)	no call site passes it: always its default True
 wrapper	src/neurobrix/nbx/loader.py	load_manifest	only hands its parameters to self.load_json
 wrapper	src/neurobrix/nbx/spec.py	get_nbx_dtype	only hands its parameters to NBX_DTYPES.get
 wrapper	src/neurobrix/nbx/weight_presence.py	AbsentWeightError	only renames RuntimeError

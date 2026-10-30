@@ -20,6 +20,13 @@ from neurobrix.triton import weight_loader as W
 from nbxtensor.io import safetensors as SF   # the primitives (M2); the pool is the loader's
 
 
+@pytest.fixture(autouse=True)
+def _io_workers_declared(monkeypatch):
+    """The count a loaded profile declares (cpu.io_workers); these cells were written against 8."""
+    from neurobrix.core import workspace
+    monkeypatch.setattr(workspace, "_IO_WORKERS", 8)
+
+
 @pytest.fixture
 def blob(tmp_path):
     def write(arr, lead=b"hdr"):

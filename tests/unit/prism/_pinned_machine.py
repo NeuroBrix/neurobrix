@@ -51,7 +51,7 @@ def container_root(model: str) -> Path:
 
 APPLE_M4_PRO = {        # the Mac's `default-9f169c79`, 2026-09-24; its engine base as remeasured 2026-10-29 01:47
     "id": "scenario-apple-m4-pro-18g", "vendor": "apple", "preferred_dtype": "bfloat16",
-    "cpu": {"model": "Apple M4 Pro", "cores": 12, "threads": 12, "ram_mb": 24576,
+    "cpu": {"io_workers": 8, "model": "Apple M4 Pro", "cores": 12, "threads": 12, "ram_mb": 24576,
             "architecture": "arm64", "features": [],
             # what the engine's device work adds to a process that has planned, measured on the Mac by
             # autodetect._measure_runtime_base_mb (its default-9f169c79 regenerated 2026-10-29 01:47, the Mac 21:32):
@@ -68,7 +68,7 @@ APPLE_M4_PRO = {        # the Mac's `default-9f169c79`, 2026-09-24; its engine b
 
 V100_16GB = {           # the rack's `default-ff6008b7`, one V100-SXM2-16GB, 2026-09-24
     "id": "scenario-v100-16gb", "vendor": "dell", "preferred_dtype": "float16",
-    "cpu": {"model": "Intel(R) Xeon(R) Gold 6230 CPU @ 2.10GHz", "cores": 40, "threads": 80,
+    "cpu": {"io_workers": 8, "model": "Intel(R) Xeon(R) Gold 6230 CPU @ 2.10GHz", "cores": 40, "threads": 80,
             "ram_mb": 257530, "architecture": "x86_64", "features": ["avx2", "avx512f"]},
     "devices": [{"index": 0, "brand": "nvidia", "model": "Tesla V100-SXM2-16GB", "memory_mb": 16384,
                  "compute_capability": "7.0", "supports_dtypes": ["float32", "float16"],

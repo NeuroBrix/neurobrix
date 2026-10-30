@@ -288,6 +288,8 @@ def _complete_measured_fields(path: Path) -> None:
     added = {}
     if "runtime_base_mb" not in cpu:
         added["runtime_base_mb"] = _measure_runtime_base_mb()
+    if "io_workers" not in cpu and (io := _measure_io_workers()) is not None:
+        added["io_workers"] = io
     # a hybrid CPU's core classes (2026-10-26: the profile is the one source of the host's threads)
     if "performance_cores" not in cpu and platform.system() == "Darwin" and cpu.get("architecture") == "arm64":
         added.update({k: v for k, v in _detect_cpu_darwin().items() if k in ("performance_cores", "efficiency_cores")})
@@ -409,6 +411,12 @@ _BASE_PROBES = {
 _PEAK_MB = "print(_mb('peak'))\n"
 
 
+def _measure_io_workers() -> Optional[int]:
+    from neurobrix.core.paths import cache_dir
+    from nbxtensor.io.read_rate import workers_for
+    return workers_for(cache_dir())
+
+
 def _measure_runtime_base_mb() -> Dict[str, int]:
     """{engine: MB} — what the engine's device work adds to a process at the planning state, measured on
     this machine. An engine whose probe cannot run here is left out, and a plan on this profile says its
@@ -443,6 +451,8 @@ def detect_hardware() -> Dict[str, Any]:
     cpu = _detect_cpu(os_type)
     # The runtime's own base, measured here per engine: the base of Prism's host estimate.
     cpu["runtime_base_mb"] = _measure_runtime_base_mb()
+    if (io := _measure_io_workers()) is not None:
+        cpu["io_workers"] = io                 # the loaders' parallel reads on this machine's cache, measured
 
     # --- GPUs (OS-specific cascade) ---
     devices, brand = detect_devices()

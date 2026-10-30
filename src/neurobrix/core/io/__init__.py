@@ -38,14 +38,12 @@ from neurobrix.core.io.loader import (
     SmartLoader,
     get_smart_loader,
     # Constants
-    DEFAULT_NUM_WORKERS,
 )
 
 # NBX weight loader (moved from core/runtime/)
 from neurobrix.core.io.weight_loader import (
     WeightLoader,
     safe_dtype_convert,
-    PARALLEL_SHARD_WORKERS,
 )
 
 __all__ = [
@@ -74,6 +72,4 @@ __all__ = [
     "WeightLoader",
     "safe_dtype_convert",
     # Constants
-    "DEFAULT_NUM_WORKERS",
-    "PARALLEL_SHARD_WORKERS",
 ]

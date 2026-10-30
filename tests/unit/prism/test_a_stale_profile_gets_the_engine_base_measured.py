@@ -16,6 +16,7 @@ def _stale(tmp_path, monkeypatch, cpu):
     calls = []
     monkeypatch.setattr(autodetect, "_measure_runtime_base_mb",
                         lambda: calls.append(1) or {"compiled": 803, "triton": 206})
+    monkeypatch.setattr(autodetect, "_measure_io_workers", lambda: calls.append("io") or 4)   # never the real cache
     monkeypatch.setattr(autodetect, "detect_hardware", lambda: (_ for _ in ()).throw(AssertionError("re-detected")))
     path = tmp_path / "default-abcd1234.yml"
     path.write_text(yaml.safe_dump({"id": "auto-x", "cpu": cpu, "devices": [{"model": "kept"}]}))
@@ -26,12 +27,19 @@ def test_a_profile_without_the_base_gets_it_measured_and_keeps_the_rest(tmp_path
     path, calls = _stale(tmp_path, monkeypatch, {"model": "xeon", "cores": 40})
     assert autodetect.get_or_create_default_profile() == "default-abcd1234"
     data = yaml.safe_load(path.read_text())
-    assert data["cpu"] == {"model": "xeon", "cores": 40, "runtime_base_mb": {"compiled": 803, "triton": 206}}
-    assert data["devices"] == [{"model": "kept"}] and calls == [1]
+    assert data["cpu"] == {"model": "xeon", "cores": 40, "runtime_base_mb": {"compiled": 803, "triton": 206},
+                           "io_workers": 4}
+    assert data["devices"] == [{"model": "kept"}] and calls == [1, "io"]
 
 
 def test_a_profile_that_has_the_base_is_not_measured_again(tmp_path, monkeypatch):
-    path, calls = _stale(tmp_path, monkeypatch, {"model": "xeon", "runtime_base_mb": {"triton": 1}})
+    path, calls = _stale(tmp_path, monkeypatch, {"model": "xeon", "runtime_base_mb": {"triton": 1}, "io_workers": 2})
     before = path.read_text()
     autodetect.get_or_create_default_profile()
     assert calls == [] and path.read_text() == before
+
+
+def test_a_profile_without_the_io_workers_gets_them_measured(tmp_path, monkeypatch):
+    path, calls = _stale(tmp_path, monkeypatch, {"model": "xeon", "runtime_base_mb": {"triton": 1}})
+    autodetect.get_or_create_default_profile()
+    assert calls == ["io"] and yaml.safe_load(path.read_text())["cpu"]["io_workers"] == 4

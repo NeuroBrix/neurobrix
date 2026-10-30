@@ -38,6 +38,8 @@ class CPUConfig:
     # profile declares them; None on a CPU of one class.
     performance_cores: Optional[int] = None
     efficiency_cores: Optional[int] = None
+    # Shard reads the weight loaders keep in flight, MEASURED on this machine (nbxtensor.io.read_rate); None: unmeasured
+    io_workers: Optional[int] = None
 
     @property
     def ram_gb(self) -> float:
@@ -70,6 +72,7 @@ class CPUConfig:
             runtime_base_mb=dict(cpu_dict.get("runtime_base_mb") or {}),
             performance_cores=cpu_dict.get("performance_cores"),
             efficiency_cores=cpu_dict.get("efficiency_cores"),
+            io_workers=cpu_dict.get("io_workers"),
         )
 
 

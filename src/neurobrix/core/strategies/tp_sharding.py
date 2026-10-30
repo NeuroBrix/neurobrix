@@ -35,9 +35,6 @@ from safetensors import safe_open
 from safetensors.torch import save_file
 
 # Use consolidated parallel loader (eliminates code duplication)
-from neurobrix.core.io.loader import load_files_parallel, DEFAULT_NUM_WORKERS
-
-# Parallel loading workers for TP sharding (matches system.yml io.num_workers)
-TP_SHARD_WORKERS = DEFAULT_NUM_WORKERS
+from neurobrix.core.io.loader import load_files_parallel
 
 

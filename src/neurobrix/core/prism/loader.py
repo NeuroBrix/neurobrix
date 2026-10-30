@@ -289,6 +289,8 @@ def load_profile(hardware_id: str) -> PrismProfile:
                            tech=str(l.get("tech", "")))
                   for l in (data.get("node_links") or [])]
 
+    from neurobrix.core.workspace import declare_io_workers
+    declare_io_workers(cpu_config.io_workers if cpu_config else None)
     return PrismProfile(
         id=data["id"],
         vendor=data.get("vendor", "unknown"),

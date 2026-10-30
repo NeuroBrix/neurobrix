@@ -22,21 +22,24 @@ SYSTEM_YML = Path(__file__).resolve().parent.parent / "config" / "system.yml"
 _root: Optional[Path] = None
 
 
+_IO_WORKERS: Optional[int] = None
+
+
+def declare_io_workers(n: Optional[int]) -> None:
+    """The profile's `cpu.io_workers`, declared where a profile is loaded (`core.prism.loader.load_profile`)."""
+    global _IO_WORKERS
+    _IO_WORKERS = n
+
+
 def io_workers() -> int:
-    """How many shard reads the weight loaders keep in flight: `NBX_IO_WORKERS`, else `io.num_workers`
-    in config/system.yml — read by every loader AND by Prism's host estimate (each read in flight holds
-    a shard in host memory), so the figure has one source. Until 2026-09-27 four modules each wrote
-    `8` beside a comment saying it "matches system.yml io.num_workers", and none read the file."""
-    env = os.environ.get("NBX_IO_WORKERS")
-    if env:
-        return int(env)
-    cfg = yaml.safe_load(SYSTEM_YML.read_text()) or {}
-    n = (cfg.get("io") or {}).get("num_workers")
-    if not isinstance(n, int) or n < 1:
+    """The shard reads the loaders keep in flight AND Prism's host estimate counts (a shard held per read): the
+    profile's measured `cpu.io_workers` (rule 1; until 2026-10-30 a hand-written 8 in system.yml), refused if absent."""
+    if not isinstance(_IO_WORKERS, int) or _IO_WORKERS < 1:
         raise RuntimeError(
-            f"ZERO FALLBACK: no I/O worker count is configured: looked at $NBX_IO_WORKERS and "
-            f"{SYSTEM_YML} under `io.num_workers` (got {n!r}).")
-    return n
+            f"ZERO FALLBACK: no I/O worker count: the hardware profile in force declares no cpu.io_workers "
+            f"(got {_IO_WORKERS!r}) — a profile made on this machine measures it at its first launch; an older one: "
+            f"`python tools/measure_io_workers.py --files '<cache>/<model>/components/*/weights/*.safetensors'`")
+    return _IO_WORKERS
 
 
 def pinned_uploads_in_flight() -> int:

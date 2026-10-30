@@ -30,9 +30,6 @@ logger = logging.getLogger(__name__)
 class IOConfig:
     """I/O configuration for loaders."""
 
-    # Number of parallel workers for disk I/O
-    num_workers: int = 8
-
     # Use pinned memory for DMA transfers
     use_pinned_memory: bool = True
 
@@ -49,7 +46,6 @@ class IOConfig:
     def from_env(cls) -> "IOConfig":
         """Create config from environment variables."""
         return cls(
-            num_workers=int(os.environ.get("NBX_IO_WORKERS", "8")),
             use_pinned_memory=os.environ.get("NBX_PINNED_MEMORY", "1") == "1",
             enable_prefetch=os.environ.get("NBX_PREFETCH", "1") == "1",
             prefetch_queue_size=int(os.environ.get("NBX_PREFETCH_SIZE", "2")),

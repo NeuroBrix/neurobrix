@@ -33,9 +33,7 @@ from neurobrix.core.io.memory import PinnedMemoryManager, get_io_config, IOConfi
 
 T = TypeVar('T')
 
-# The configured count (core.workspace.io_workers: $NBX_IO_WORKERS, else system.yml io.num_workers)
-from neurobrix.core.workspace import io_workers as _io_workers
-DEFAULT_NUM_WORKERS = _io_workers()
+from neurobrix.core.workspace import io_workers   # the profile's cpu.io_workers, read when a load runs
 
 
 # ============================================================================
@@ -45,7 +43,7 @@ DEFAULT_NUM_WORKERS = _io_workers()
 def load_files_parallel(
     files: List[Union[str, Path]],
     loader_fn: Callable[[Union[str, Path]], Dict[str, torch.Tensor]],
-    max_workers: int = DEFAULT_NUM_WORKERS,
+    max_workers: Optional[int] = None,
     log_progress: bool = True,
     prefix: str = "[Loader]"
 ) -> Dict[str, torch.Tensor]:
@@ -76,7 +74,7 @@ def load_files_parallel(
 
     # Parallel loading
     weights: Dict[str, torch.Tensor] = {}
-    num_workers = min(max_workers, len(files))
+    num_workers = min(max_workers or io_workers(), len(files))
 
     errors: List[Tuple[str, Exception]] = []
 
@@ -105,7 +103,7 @@ def load_files_parallel(
 def load_shards_with_devices(
     shard_items: List[Tuple[Union[str, Path], str]],
     loader_fn: Callable[[Union[str, Path], str], Dict[str, torch.Tensor]],
-    max_workers: int = DEFAULT_NUM_WORKERS,
+    max_workers: Optional[int] = None,
     log_progress: bool = True,
     prefix: str = "[Loader]"
 ) -> Dict[str, torch.Tensor]:
@@ -132,7 +130,7 @@ def load_shards_with_devices(
         return loader_fn(path, device)
 
     weights: Dict[str, torch.Tensor] = {}
-    num_workers = min(max_workers, len(shard_items))
+    num_workers = min(max_workers or io_workers(), len(shard_items))
 
     def load_with_device(item: Tuple[Union[str, Path], str]) -> Tuple[str, str, Dict[str, torch.Tensor]]:
         path, device = item
@@ -165,7 +163,7 @@ def load_shards_with_devices(
 def execute_parallel(
     items: List[T],
     worker_fn: Callable[[T], Any],
-    max_workers: int = DEFAULT_NUM_WORKERS,
+    max_workers: Optional[int] = None,
     log_progress: bool = False,
     prefix: str = "[Loader]"
 ) -> List[Any]:
@@ -188,7 +186,7 @@ def execute_parallel(
     if len(items) == 1:
         return [worker_fn(items[0])]
 
-    num_workers = min(max_workers, len(items))
+    num_workers = min(max_workers or io_workers(), len(items))
     results = []
 
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
@@ -342,7 +340,7 @@ class SmartLoader:
         weights = load_files_parallel(
             shard_paths_list,
             loader,
-            max_workers=self.config.num_workers,
+            max_workers=io_workers(),
             log_progress=self.config.log_performance,
             prefix="[SmartLoader]"
         )

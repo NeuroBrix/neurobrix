@@ -27,3 +27,18 @@ def test_a_measure_reads_every_count_and_says_whether_it_was_steady(tmp_path):
     m = M.measure([str(f)], 1 << 40, 4)
     assert set(m["rates"]) == {1, 2, 4} and m["bytes"] == 3 * M.PIECE and m["workers"] in (1, 2, 4)
     assert isinstance(m["steady"], bool)
+
+
+def test_a_directory_without_weights_is_measured_on_a_scratch_file_it_removes(tmp_path):
+    n = M.workers_for(tmp_path, max_bytes=2 * M.PIECE, max_workers=2)
+    assert n is None or n in (1, 2)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_weight_cache_is_measured_on_its_shards(tmp_path):
+    w = tmp_path / "m" / "components" / "c" / "weights"
+    w.mkdir(parents=True)
+    (w / "shard_000.safetensors").write_bytes(b"s" * (2 * M.PIECE))
+    n = M.workers_for(tmp_path, max_bytes=2 * M.PIECE, max_workers=2)
+    assert n is None or n in (1, 2)
+    assert [p.name for p in w.iterdir()] == ["shard_000.safetensors"]

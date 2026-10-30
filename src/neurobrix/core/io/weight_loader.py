@@ -60,11 +60,9 @@ WEIGHTS_INDEX_PATTERNS = [
 
 # PARALLEL LOADING: Number of concurrent shard loads
 # safetensors loading is I/O-bound, threading helps significantly
-# The configured count (core.workspace.io_workers: $NBX_IO_WORKERS, else system.yml io.num_workers)
 from neurobrix.core.workspace import (
     io_workers as _io_workers, apply_host_mmap_threshold, apply_host_huge_pages,
     pinned_uploads_in_flight as _pinned_in_flight)
-PARALLEL_SHARD_WORKERS = _io_workers()
 #: Non-blocking uploads one loader worker keeps outstanding (`_load_with_pinned_dma`, system.yml
 #: io.pinned_uploads_in_flight): the pinned host bytes of a load are bounded by workers x this.
 PINNED_IN_FLIGHT = _pinned_in_flight()
@@ -444,13 +442,13 @@ class WeightLoader:
         weights = {}
 
         # PARALLEL LOADING: Load multiple shards concurrently
-        if len(weight_files) > 1 and PARALLEL_SHARD_WORKERS > 1:
+        if len(weight_files) > 1 and _io_workers() > 1:
             def load_shard(weight_file):
                 """Load a single shard (runs in thread)."""
                 shard_name = weight_file.split("/")[-1]
                 return shard_name, self._load_weight_file(weight_file, device, dtype)
 
-            with ThreadPoolExecutor(max_workers=PARALLEL_SHARD_WORKERS) as executor:
+            with ThreadPoolExecutor(max_workers=_io_workers()) as executor:
                 futures = {executor.submit(load_shard, wf): wf for wf in weight_files}
                 for future in as_completed(futures):
                     shard_name, block_weights = future.result()
@@ -638,7 +636,7 @@ class WeightLoader:
 
             return results
 
-        num_workers = min(PARALLEL_SHARD_WORKERS, len(weight_files))
+        num_workers = min(_io_workers(), len(weight_files))
         if num_workers > 1:
             with ThreadPoolExecutor(max_workers=num_workers) as executor:
                 futures = {executor.submit(_load_one_fgp_file, wf): wf for wf in sorted(weight_files)}
@@ -727,14 +725,14 @@ class WeightLoader:
             shard_items.append((actual_path, device))
 
         # === Read every file of the map, each onto its device ===
-        if len(shard_items) > 1 and PARALLEL_SHARD_WORKERS > 1:
+        if len(shard_items) > 1 and _io_workers() > 1:
             def load_shard(item):
                 """Load a single shard (runs in thread)."""
                 actual_path, device = item
                 shard_name = actual_path.split("/")[-1]
                 return shard_name, device, self._load_weight_file(actual_path, device, dtype)
 
-            with ThreadPoolExecutor(max_workers=PARALLEL_SHARD_WORKERS) as executor:
+            with ThreadPoolExecutor(max_workers=_io_workers()) as executor:
                 futures = {executor.submit(load_shard, item): item for item in shard_items}
                 for future in as_completed(futures):
                     shard_name, device, block_weights = future.result()

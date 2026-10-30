@@ -29,9 +29,7 @@ if TYPE_CHECKING:  # R33: the ATen branch loads through torch; the Triton branch
 
 from .cache import ensure_extracted
 
-# The configured count (core.workspace.io_workers: $NBX_IO_WORKERS, else system.yml io.num_workers)
 from neurobrix.core.workspace import io_workers as _io_workers
-NBX_LOADER_WORKERS = _io_workers()
 
 
 @dataclass
@@ -187,9 +185,9 @@ class FastNBXLoader:
         if len(weight_files) > 1:
             # PARALLEL LOADING
             if verbose:
-                print(f"[FastLoader] Parallel loading with {NBX_LOADER_WORKERS} workers...")
+                print(f"[FastLoader] Parallel loading with {_io_workers()} workers...")
 
-            with ThreadPoolExecutor(max_workers=NBX_LOADER_WORKERS) as executor:
+            with ThreadPoolExecutor(max_workers=_io_workers()) as executor:
                 futures = {executor.submit(load_shard, wf): wf for wf in weight_files}
                 for future in as_completed(futures):
                     shard_name, shard_weights, shard_bytes = future.result()
@@ -218,20 +216,8 @@ class FastNBXLoader:
 
         return all_weights
 
-    def load_all_components(
-        self,
-        dtype: Optional[torch.dtype] = None,
-        verbose: bool = True,
-    ) -> Dict[str, Dict[str, torch.Tensor]]:
-        """
-        Load weights for all neural components.
-
-        Returns:
-            Dict of component_name -> weights dict
-        """
-        manifest = self.load_manifest()
-        components = manifest.get("components", [])
-
+    def load_all_components(self) -> Dict[str, Dict[str, torch.Tensor]]:
+        """The weights of every neural component: component_name -> weights dict."""
         # Filter to neural components only
         topology = self.load_topology()
         neural_components = [
@@ -241,13 +227,11 @@ class FastNBXLoader:
 
         all_weights = {}
         for comp in neural_components:
-            if verbose:
-                print(f"\n[FastLoader] === {comp} ===")
+            print(f"\n[FastLoader] === {comp} ===")
             try:
-                all_weights[comp] = self.load_weights(comp, dtype=dtype, verbose=verbose)
+                all_weights[comp] = self.load_weights(comp)
             except FileNotFoundError as e:
-                if verbose:
-                    print(f"[FastLoader] Skipping {comp}: {e}")
+                print(f"[FastLoader] Skipping {comp}: {e}")
 
         return all_weights
 
