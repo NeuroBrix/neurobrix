@@ -10,10 +10,6 @@ Consolidates memory cleanup logic previously duplicated across:
 SINGLE SOURCE OF TRUTH for memory operations.
 """
 
-from .manager import MemoryManager, unload_weights, cleanup_tensors
+from .manager import MemoryManager
 
-__all__ = [
-    "MemoryManager",
-    "unload_weights",
-    "cleanup_tensors",
-]
+__all__ = ["MemoryManager"]

@@ -154,53 +154,10 @@ class MemoryManager:
                 device_empty_cache(dev)
 
     @staticmethod
-    def cleanup_context(
-        context: Any,
-        log_prefix: str = "[MemoryManager]",
-        verbose: bool = False,
-    ) -> None:
-        """
-        Cleanup execution context runtime state.
-
-        Args:
-            context: ExecutionContext or similar object with clear_runtime_state()
-            log_prefix: Prefix for log messages
-            verbose: Print debug messages
-        """
+    def cleanup_context(context: Any) -> None:
+        """Clear an execution context's runtime state (an object with clear_runtime_state())."""
         if context is not None and hasattr(context, "clear_runtime_state"):
-            if verbose:
-                print(f"{log_prefix} Clearing context runtime state")
             context.clear_runtime_state()
-
-    @staticmethod
-    def cleanup_tensors(
-        *tensor_dicts: Dict[str, torch.Tensor],
-        clear_cuda_cache: bool = True,
-        log_prefix: str = "[MemoryManager]",
-        verbose: bool = False,
-    ) -> None:
-        """
-        Cleanup multiple tensor dictionaries at once.
-
-        Args:
-            *tensor_dicts: Variable number of tensor dictionaries to clear
-            clear_cuda_cache: Whether to call torch.cuda.empty_cache()
-            log_prefix: Prefix for log messages
-            verbose: Print debug messages
-        """
-        total_cleared = 0
-        for tensor_dict in tensor_dicts:
-            if tensor_dict is not None:
-                total_cleared += len(tensor_dict)
-                tensor_dict.clear()
-
-        if verbose:
-            print(f"{log_prefix} Cleared {total_cleared} tensors from {len(tensor_dicts)} dicts")
-
-        # Single GC and cache clear at the end
-        gc.collect()
-        if clear_cuda_cache:
-            device_empty_cache()
 
     @staticmethod
     def release_flow_memory(device: Optional[str] = None) -> None:
@@ -233,28 +190,7 @@ class MemoryManager:
         device_empty_cache(device)
 
 
-# Convenience functions (for simpler imports)
-def unload_weights(
-    weights_dict: Dict[str, torch.Tensor],
-    clear_cuda_cache: bool = True,
-    log_prefix: str = "[Memory]",
-    verbose: bool = False,
-) -> None:
-    """Convenience function for MemoryManager.unload_weights()."""
-    MemoryManager.unload_weights(weights_dict, clear_cuda_cache, log_prefix, verbose)
-
-
-def cleanup_tensors(
-    *tensor_dicts: Dict[str, torch.Tensor],
-    clear_cuda_cache: bool = True,
-    log_prefix: str = "[Memory]",
-    verbose: bool = False,
-) -> None:
-    """Convenience function for MemoryManager.cleanup_tensors()."""
-    MemoryManager.cleanup_tensors(*tensor_dicts, clear_cuda_cache=clear_cuda_cache,
-                                   log_prefix=log_prefix, verbose=verbose)
-
-
+# The flows' boundary release, imported by name
 def release_flow_memory(device: Optional[str] = None) -> None:
     """Convenience function for MemoryManager.release_flow_memory()."""
     MemoryManager.release_flow_memory(device)

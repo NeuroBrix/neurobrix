@@ -1,7 +1,7 @@
 # The engine's open slimming findings (tools/engine_slim_scan.py); each ends deleted, moved into nbxtensor, or kept
 # with its reason in docs/nbxtensor/ENGINE_SLIM.md. Both figures below may only go down (test_the_engine_only_slims.py).
-# engine_lines: 138314
-# open: 292
+# engine_lines: 138244
+# open: 289
 kind	path	symbol	detail
 dead	src/neurobrix/cli/commands/registry.py	installing_path	no reference outside its own body (tests excluded)
 dead	src/neurobrix/core/config/loader.py	vendor_file	no reference outside its own body (tests excluded)
@@ -85,8 +85,6 @@ duplicate	src/neurobrix/core/module/tokenizer/tiktoken_bpe.py	_encode_ordinary	s
 duplicate	src/neurobrix/core/optim/analyzer.py	walk	same body as 
 duplicate	src/neurobrix/core/optim/passes/algebraic.py	_scalar	same body as nbxtensor/src/nbxtensor/ops/residual_chain.py::_get_scalar
 duplicate	src/neurobrix/core/optim/passes/fusion_vertical.py	is_graph_output	same body as src/neurobrix/triton/sequence.py::_is_graph_output
-duplicate	src/neurobrix/core/prism/solver.py	_allocation_on_host	same body as src/neurobrix/core/prism/solver.py::_on_host
-duplicate	src/neurobrix/core/prism/solver.py	_on_host	same body as src/neurobrix/core/prism/solver.py::_allocation_on_host
 duplicate	src/neurobrix/core/runtime/graph/compiled_sequence.py	_compile_kwargs	same body as src/neurobrix/triton/sequence.py::_compile_kwargs
 duplicate	src/neurobrix/core/runtime/graph/compiled_sequence.py	_extract_const_fold_partition	same body as src/neurobrix/triton/sequence.py::_extract_const_fold_partition
 duplicate	src/neurobrix/core/strategies/block_scatter.py	__init__	same body as src/neurobrix/core/strategies/triton/block_scatter.py::__init__
@@ -201,11 +199,10 @@ wrapper	src/neurobrix/core/flow/next_token_diffusion.py	_compute_dtype	only hand
 wrapper	src/neurobrix/core/flow/tts_llm.py	_get_compute_dtype	only hands its parameters to self.ctx.compute_dtype
 wrapper	src/neurobrix/core/flow/tts_llm.py	_sample_token(min_p)	no call site passes it: always its default 0.0
 wrapper	src/neurobrix/core/flow/tts_llm.py	_sample_token(top_p)	no call site passes it: always its default 1.0
-wrapper	src/neurobrix/core/memory/manager.py	cleanup_context(log_prefix)	no call site passes it: always its default '[MemoryManager]'
-wrapper	src/neurobrix/core/memory/manager.py	cleanup_context(verbose)	no call site passes it: always its default False
-wrapper	src/neurobrix/core/memory/manager.py	cleanup_tensors	only hands its parameters to MemoryManager.cleanup_tensors
 wrapper	src/neurobrix/core/memory/manager.py	release_flow_memory	only hands its parameters to MemoryManager.release_flow_memory
-wrapper	src/neurobrix/core/memory/manager.py	unload_weights	only hands its parameters to MemoryManager.unload_weights
+wrapper	src/neurobrix/core/memory/manager.py	unload_weights(clear_cuda_cache)	no call site passes it: always its default True
+wrapper	src/neurobrix/core/memory/manager.py	unload_weights(log_prefix)	no call site passes it: always its default '[MemoryManager]'
+wrapper	src/neurobrix/core/memory/manager.py	unload_weights(verbose)	no call site passes it: always its default False
 wrapper	src/neurobrix/core/module/audio/mel_dsp.py	_raw_waveform(_audio)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/module/audio/mel_dsp.py	_whisper_mel(_audio)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/module/audio/mel_dsp.py	extract_features_np(rng)	no call site passes it: always its default None

@@ -2838,9 +2838,7 @@ class PrismSolver:
         _tiling = next((c for c in candidates if c[1] == "op_level_tiling"), None)
         if _tiling is not None:
             _t_alloc = _tiling[2] or {}
-            def _on_host(alloc):
-                dev = alloc[0] if isinstance(alloc, tuple) else getattr(alloc, "device", alloc)
-                return isinstance(dev, str) and dev.startswith("cpu")
+            _on_host = self._allocation_on_host
             _offloaded = {
                 name for name, a in _t_alloc.items() if not _on_host(a)}
             _demoted = []
