@@ -768,6 +768,1521 @@ def row_reduce_launches(kind: str, rows: int, feat: int, x: NBXDtype)
     # `wrappers.mean_wrapper` / `sum_wrapper` / `amax_wrapper` over rows of `feat` (the reduced elements
 ```
 
+### `nbxtensor.ops` — the kernel modules and the remaining wrappers (each module's public kernels, launchers and helpers)
+
+`nbxtensor.ops.abs`
+
+```python
+def abs_forward_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.adaptive_avg_pool2d`
+
+```python
+def adaptive_avg_pool2d_kernel(input_ptr, output_ptr, n_elements, IH, IW, OH, OW, stride_n, stride_c, stride_h, stride_w, BLOCK_SIZE: tl.constexpr)
+    # Adaptive average pool 2D.
+def adaptive_avg_pool2d_tiled_kernel(input_ptr, output_ptr, N, C, IH, IW, OH, OW, BLOCK_X: tl.constexpr, BLOCK_Y: tl.constexpr)
+    # Tiled variant for spatial parallelism.
+```
+
+`nbxtensor.ops.add`
+
+```python
+def add_forward_kernel(x_ptr, y_ptr, output_ptr, n_elements, alpha, BLOCK_SIZE: tl.constexpr)
+    # out = x + alpha * y (tensor + tensor)
+def add_scalar_kernel(x_ptr, output_ptr, n_elements, scalar, BLOCK_SIZE: tl.constexpr)
+    # out = x + scalar
+def add_scalar_dev_kernel(x_ptr, s_ptr, output_ptr, n_elements, alpha, BLOCK_SIZE: tl.constexpr)
+    # out = x + (s * alpha) where s is a 0-d DEVICE tensor.
+def add_bias_broadcast_kernel(x_ptr, bias_ptr, output_ptr, n_elements, feat_dim, alpha, BLOCK_SIZE: tl.constexpr)
+    # out[i] = x[i] + alpha * bias[i % feat_dim].
+```
+
+`nbxtensor.ops.addcdiv`
+
+```python
+def addcdiv_forward_kernel(input_ptr, tensor1_ptr, tensor2_ptr, output_ptr, n_elements, value, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.addcmul`
+
+```python
+def addcmul_forward_kernel(input_ptr, tensor1_ptr, tensor2_ptr, output_ptr, n_elements, value, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.addmv_op`
+
+```python
+def addmv_kernel(A_ptr, B_ptr, inp_ptr, out_ptr, N, M, N_BUCKET, M_BUCKET, alpha, beta, stride_an, stride_am, stride_bm, stride_in, stride_outn, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr)
+    # Matrix-vector multiply with bias
+```
+
+`nbxtensor.ops.addr`
+
+```python
+def addr_kernel(input_ptr, vec1_ptr, vec2_ptr, output_ptr, beta, alpha, M, N, stride_input_m, stride_input_n, stride_vec1, stride_vec2, stride_output_m, stride_output_n, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr)
+    # Outer product add
+```
+
+`nbxtensor.ops.all_reduce`
+
+```python
+def reduce_all(a, b)
+def all_kernel_mid(inp, mid, n_elements, mid_size, BLOCK_SIZE: tl.constexpr)
+    # Pass 1
+def all_kernel_result(mid, out, MID_SIZE, BLOCK_MID: tl.constexpr)
+    # Pass 2
+def all_kernel_dim(inp, out, M, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr)
+    # Check all non-zero along compressed inner dim N.
+```
+
+`nbxtensor.ops.amax`
+
+```python
+def amax_forward_kernel(input_ptr, output_ptr, batch_dim, feat_dim, BATCH_BUCKET, FEAT_BUCKET, input_batch_stride, input_feat_stride, BLOCK_SIZE_BATCH: tl.constexpr, BLOCK_SIZE_FEAT: tl.constexpr)
+    # Max reduction over the last dimension
+```
+
+`nbxtensor.ops.any_reduce`
+
+```python
+def reduce_any(a, b)
+def any_kernel_mid(inp, mid, n_elements, mid_size, BLOCK_SIZE: tl.constexpr)
+    # Pass 1
+def any_kernel_result(mid, out, MID_SIZE, BLOCK_MID: tl.constexpr)
+    # Pass 2
+def any_kernel_dim(inp, out, M, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr)
+    # Check any non-zero along compressed inner dim N.
+```
+
+`nbxtensor.ops.arange_op`
+
+```python
+def arange_kernel(output_ptr, start, step, n_elements, BLOCK_SIZE: tl.constexpr)
+    # Generate sequential values
+```
+
+`nbxtensor.ops.argmax`
+
+```python
+def argmax_kernel_1(inp, mid_value, mid_index, M, BLOCK_SIZE: tl.constexpr)
+def argmax_kernel_2(mid_value, mid_index, out, mid_size, BLOCK_MID: tl.constexpr)
+def argmax_kernel_inner(inp, out_index, M, N, TILE_N: tl.constexpr, ONE_TILE_PER_CTA: tl.constexpr)
+    # Argmax along the innermost (last) dimension.
+```
+
+`nbxtensor.ops.argmin`
+
+```python
+def argmin_kernel_1(inp, mid_value, mid_index, M, BLOCK_SIZE: tl.constexpr)
+def argmin_kernel_2(mid_value, mid_index, out, mid_size, BLOCK_MID: tl.constexpr)
+def argmin_kernel(inp, out_index, M, N, K, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr)
+    # Argmin along an arbitrary dimension.
+```
+
+`nbxtensor.ops.atan2`
+
+```python
+def atan2_kernel(y_ptr, x_ptr, out_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.attention_wrappers`
+
+```python
+def paged_kv_append(new, pool, slot_mapping)
+    # Write new positions into a layer's paged pool (state engine step 2, ops/paged_decode_attn.py).
+def paged_decode_attention(q, k_pool, v_pool, block_table, seq_lens, softmax_scale, max_seq_len, block_n, q_round=None)
+    # Decode attention (one query position) read through the page table — the vector split-KV kernel of ops/decode_attn_vec.py on paged K / V, merged by the fixed-order `flash_decode_reduce_kernel`.
+def math_attention_cost(q, k, v, mask=None, is_causal=False, native_bf16=None, force_accum=None, contract_half=None, unit=None)
+    # `_math_attention` on q [B, H, Tq, D], k [B, Hk, Tk, D], v [B, Hk, Tk, Dv] and an optional additive `mask` (`_cost.Spec`s
+def chunked_math_attention_cost(q, k, v, chunk_rows: int, mask=None, is_causal=False, native_bf16=None, force_accum=None, contract_half=None, unit=None)
+    # `_math_attention_chunked`
+```
+
+`nbxtensor.ops.autotune_settings`
+
+```python
+def miss_explainer()
+    # The explainer in force, or None.
+```
+
+`nbxtensor.ops.avg_pool2d`
+
+```python
+def avg_pool2d_forward_kernel(input_ptr, output_ptr, in_stride_n, in_stride_c, in_stride_h, in_stride_w, in_c, in_h, in_w, out_h, out_w, kernel_h: tl.constexpr, kernel_w: tl.constexpr, stride_h: tl.constexpr, stride_w: tl.constexpr, padding_h: tl.constexpr, padding_w: tl.constexpr, dilation_h: tl.constexpr, dilation_w: tl.constexpr, COUNT_INCLUDE_PAD: tl.constexpr, divisor_override, BLOCK_H: tl.constexpr, BLOCK_W: tl.constexpr)
+```
+
+`nbxtensor.ops.baddbmm_op`
+
+```python
+def baddbmm_kernel(A_ptr, B_ptr, out_ptr, bias_ptr, alpha, beta, M, N, K, M_BUCKET, N_BUCKET, K_BUCKET, stride_ab, stride_am, stride_ak, stride_bb, stride_bk, stride_bn, stride_ob, stride_om, stride_on, bias_batch_stride, bias_m_stride, bias_n_stride, IEEE_PRECISION: tl.constexpr=False, PROMOTE_B: tl.constexpr=False, HAS_BIAS: tl.constexpr=True, BLOCK_M: tl.constexpr=64, BLOCK_N: tl.constexpr=64, BLOCK_K: tl.constexpr=32, GROUP_M: tl.constexpr=8)
+    # out[b] = beta*bias[b] + alpha*(A[b] @ B[b]) (HAS_BIAS=True) out[b] = A[b] @ B[b] (HAS_BIAS=False)
+```
+
+`nbxtensor.ops.batch_norm`
+
+```python
+def batch_norm_forward_kernel(input_pointer, weight_pointer, bias_pointer, mean_pointer, inv_std_pointer, output_pointer, running_mean_pointer, running_var_pointer, batch_dim, spatial_dim, input_batch_stride, input_feat_stride, input_spatial_stride, output_batch_stride, output_feat_stride, output_spatial_stride, momentum, eps, is_train: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr)
+```
+
+`nbxtensor.ops.binary_strided`
+
+```python
+def add_strided_nd_kernel(x_ptr, y_ptr, output_ptr, n_elements, alpha, shape_ptr, x_stride_ptr, y_stride_ptr, BLOCK_SIZE: tl.constexpr, NDIM: tl.constexpr)
+    # out = x + alpha * y, x and y read by their strides, out contiguous.
+def mul_strided_nd_kernel(x_ptr, y_ptr, output_ptr, n_elements, shape_ptr, x_stride_ptr, y_stride_ptr, BLOCK_SIZE: tl.constexpr, NDIM: tl.constexpr)
+    # out = x * y, x and y read by their strides, out contiguous.
+def sub_strided_nd_kernel(x_ptr, y_ptr, output_ptr, n_elements, alpha, shape_ptr, x_stride_ptr, y_stride_ptr, BLOCK_SIZE: tl.constexpr, NDIM: tl.constexpr)
+    # out = x - alpha * y, x and y read by their strides, out contiguous.
+def div_strided_nd_kernel(x_ptr, y_ptr, output_ptr, n_elements, shape_ptr, x_stride_ptr, y_stride_ptr, BLOCK_SIZE: tl.constexpr, NDIM: tl.constexpr)
+    # out = x / y, x and y read by their strides, out contiguous.
+def add_scalar_strided_nd_kernel(x_ptr, output_ptr, n_elements, scalar, shape_ptr, x_stride_ptr, BLOCK_SIZE: tl.constexpr, NDIM: tl.constexpr)
+    # out = x + scalar, x read by its strides, out contiguous (add_scalar_kernel's expression).
+def mul_scalar_strided_nd_kernel(x_ptr, output_ptr, n_elements, scalar, shape_ptr, x_stride_ptr, BLOCK_SIZE: tl.constexpr, NDIM: tl.constexpr)
+    # out = x * scalar, x read by its strides, out contiguous (mul_scalar_kernel's expression).
+```
+
+`nbxtensor.ops.bitwise_and`
+
+```python
+def bitwise_and_forward_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.bitwise_left_shift`
+
+```python
+def bitwise_left_shift_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+    # Bitwise left shift
+def bitwise_left_shift_scalar_kernel(x_ptr, output_ptr, n_elements, shift_amount, BLOCK_SIZE: tl.constexpr)
+    # Bitwise left shift by scalar
+```
+
+`nbxtensor.ops.bitwise_not`
+
+```python
+def bitwise_not_forward_kernel(x_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.bitwise_or`
+
+```python
+def bitwise_or_forward_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.bitwise_right_shift`
+
+```python
+def bitwise_right_shift_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+    # Bitwise right shift
+def bitwise_right_shift_scalar_kernel(x_ptr, output_ptr, n_elements, shift_amount, BLOCK_SIZE: tl.constexpr)
+    # Bitwise right shift by scalar
+```
+
+`nbxtensor.ops.bucketize`
+
+```python
+def bucketize_kernel(x_ptr, boundaries_ptr, out_ptr, n_elements, n_boundaries, RIGHT: tl.constexpr, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.cat_op`
+
+```python
+def cat_copy_kernel_4(out_ptr, in_ptr_a, in_ptr_b, in_ptr_c, in_ptr_d, dim_size_in_a, dim_size_in_b, dim_size_in_c, dim_size_in_d, dim_size_out, dim_prod_post, dim_offset_a, dim_offset_b, dim_offset_c, dim_offset_d, total_elements_a, total_elements_b, total_elements_c, total_elements_d, BLOCK_X: tl.constexpr)
+    # Copy up to 4 input tensors into their correct positions in the output.
+```
+
+`nbxtensor.ops.celu`
+
+```python
+def celu_forward_kernel(input_ptr, output_ptr, n_elements, alpha, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.clamp`
+
+```python
+def clamp_forward_kernel(input_ptr, output_ptr, n_elements, min_val, max_val, has_min: tl.constexpr, has_max: tl.constexpr, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.clamp_min`
+
+```python
+def clamp_min_forward_kernel(input_ptr, output_ptr, n_elements, min_val, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.conv1d`
+
+```python
+def conv1d_forward_kernel(input_pointer, weight_pointer, output_pointer, bias_pointer, in_n, input_length, out_c, out_length, input_n_stride, input_c_stride, input_l_stride, weight_n_stride, weight_c_stride, weight_l_stride, output_n_stride, output_c_stride, output_l_stride, weight_c: tl.constexpr, weight_k: tl.constexpr, stride_l: tl.constexpr, padding_l: tl.constexpr, dilation_l: tl.constexpr, groups: tl.constexpr, BLOCK_NI_LO: tl.constexpr, BLOCK_CI: tl.constexpr, BLOCK_CO: tl.constexpr)
+    # Conv1D forward
+```
+
+`nbxtensor.ops.conv2d`
+
+```python
+def conv2d_forward_kernel(input_pointer, weight_pointer, output_pointer, batch_dim, in_feat_dim, in_height, in_width, out_feat_dim, out_height, out_width, in_width_key, out_width_key, input_batch_stride, input_in_feat_stride, input_height_stride, input_width_stride, weight_out_feat_stride, weight_in_feat_stride, weight_height_stride, weight_width_stride, output_batch_stride, output_out_feat_stride, output_height_stride, output_width_stride, kernel_height: tl.constexpr, kernel_width: tl.constexpr, stride_height: tl.constexpr, stride_width: tl.constexpr, padding_height: tl.constexpr, padding_width: tl.constexpr, groups: tl.constexpr, fp16: tl.constexpr, dilation_height: tl.constexpr=1, dilation_width: tl.constexpr=1, BLOCK_SIZE_BHW: tl.constexpr=64, BLOCK_SIZE_INF: tl.constexpr=32, BLOCK_SIZE_OUTF: tl.constexpr=64, WIDE_OFFSETS: tl.constexpr=True, SPATIAL_FAST: tl.constexpr=False)
+def conv2d_bias_inplace_kernel(out_ptr, bias_ptr, n, HW, C, BLOCK: tl.constexpr)
+    # out[i] += bias[(i // HW) % C], in place, flat over a CONTIGUOUS NCHW output.
+```
+
+`nbxtensor.ops.conv2d_m8n8k4`
+
+```python
+def conv2d_m8n8k4_kernel(X, Wt, Bias, C, M, NG, K, IH, IW, OH, OW, stride_xn, stride_xc, stride_xh, stride_xw, stride_wo, stride_cn, stride_cc, stride_ch, stride_cw, CG, OG, KH: gl.constexpr, KW: gl.constexpr, SH_: gl.constexpr, SW_: gl.constexpr, PH: gl.constexpr, PW: gl.constexpr, DH: gl.constexpr, DW: gl.constexpr, HAS_BIAS: gl.constexpr, MB: gl.constexpr, NB: gl.constexpr, BK: gl.constexpr, GROUP_M: gl.constexpr, L: gl.constexpr, LA: gl.constexpr, LB: gl.constexpr, GA: gl.constexpr, GB: gl.constexpr)
+def conv_layouts(MB: int, NB: int, WM: int, WN: int, BK: int)
+    # The GEMM's layouts (ops/matmul_m8n8k4.py, B k-contiguous) with the gathered A walked row-fastest
+```
+
+`nbxtensor.ops.conv_depthwise2d`
+
+```python
+def conv_depthwise2d_kernel(input_ptr, weight_ptr, output_ptr, N, C_in, IH, IW, C_out, KH, KW, OH, OW, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, ch_mult, BLOCK_X: tl.constexpr, BLOCK_Y: tl.constexpr)
+    # Depthwise conv2d kernel.
+def conv_depthwise2d_bias_kernel(input_ptr, weight_ptr, bias_ptr, output_ptr, N, C_in, IH, IW, C_out, KH, KW, OH, OW, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, ch_mult, BLOCK_X: tl.constexpr, BLOCK_Y: tl.constexpr)
+    # Depthwise conv2d with bias, same structure as above.
+```
+
+`nbxtensor.ops.conv_transpose2d`
+
+```python
+def conv_transpose2d_kernel(input_ptr, weight_ptr, output_ptr, N, C_in, IH, IW, C_out, KH, KW, OH, OW, stride_h, stride_w, pad_h, pad_w, dil_h, dil_w, C_in_per_g, C_out_per_g, BLOCK_SIZE: tl.constexpr)
+    # Scatter-based transposed convolution kernel (groups + dilation aware).
+```
+
+`nbxtensor.ops.copy`
+
+```python
+def copy_forward_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+    # Copy tensor (with implicit dtype conversion via pointer types).
+```
+
+`nbxtensor.ops.copy_op`
+
+```python
+def copy_kernel(src_ptr, dst_ptr, n_elements, BLOCK_SIZE: tl.constexpr, SATURATE_F16: tl.constexpr=False)
+    # Copy src to dst.
+```
+
+`nbxtensor.ops.cos`
+
+```python
+def cos_forward_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.count_nonzero`
+
+```python
+def count_nonzero_kernel(x_ptr, out_ptr, numel, BLOCK_SIZE: tl.constexpr)
+    # Count non-zero elements via block-local sum + atomic global add.
+def count_nonzero_dim_kernel(x_ptr, out_ptr, N, numel, BLOCK_SIZE: tl.constexpr)
+    # Count non-zero elements along a dimension (after dim_compress).
+```
+
+`nbxtensor.ops.cross_entropy`
+
+```python
+def cross_entropy_loss_forward_kernel(input_pointer, target_pointer, weight_pointer, sum_weights_pointer, output_pointer, batch_dim, feat_dim, input_batch_stride, input_feat_stride, weighted: tl.constexpr, BLOCK_SIZE_BATCH: tl.constexpr, BLOCK_SIZE_FEAT: tl.constexpr)
+    # Cross entropy loss
+```
+
+`nbxtensor.ops.cummax`
+
+```python
+def scan_part_max_kernel(inp, out, out_indices, partial_max, partial_max_indices, n_elements, BLOCK_SIZE: tl.constexpr, NEED_PARTIAL: tl.constexpr)
+    # Block-local cumulative maximum with optional partial output.
+def add_base_max_kernel(out, out_indices, partial_max, partial_max_indices, n_elements, BLOCK_SIZE: tl.constexpr)
+    # Fan-out phase
+```
+
+`nbxtensor.ops.cummin`
+
+```python
+def scan_part_min_kernel(inp, out, out_indices, partial_min, partial_min_indices, n_elements, BLOCK_SIZE: tl.constexpr, NEED_PARTIAL: tl.constexpr)
+    # Block-local cumulative minimum with optional partial output.
+def add_base_min_kernel(out, out_indices, partial_min, partial_min_indices, n_elements, BLOCK_SIZE: tl.constexpr)
+    # Fan-out phase
+```
+
+`nbxtensor.ops.cumsum`
+
+```python
+def get_scan_accum_type(inp_dtype: tl.dtype)
+def scan_part_sum_kernel(inp, out, partial_sum, n_elements, part_num, BLOCK_SIZE: tl.constexpr)
+def add_base_sum_kernel(out, partial_sum, n_elements, part_num, BLOCK_SIZE: tl.constexpr)
+def scan_part_sum_abc_kernel(inp, out, partial_sum, B, C, part_num, BLOCK_SIZE: tl.constexpr)
+def add_base_sum_abc_kernel(out, partial_sum, B, C, part_num, BLOCK_SIZE: tl.constexpr)
+def reduce_then_scan_block_sum_kernel_row(in_ptr, block_sum_ptr, N, tiles_per_cta, TILE_SIZE: tl.constexpr)
+    # Block sum
+def reduce_then_scan_root_scan_kernel_row(in_ptr, out_ptr, N, TILE_SIZE: tl.constexpr)
+    # Persistent scan of block sums (or small row).
+def reduce_then_scan_block_scan_kernel_row(in_ptr, previous_sum_ptr, out_ptr, N, num_tiles_n, tiles_per_cta, TILE_SIZE: tl.constexpr)
+    # Final block scan
+```
+
+`nbxtensor.ops.decode_attn_vec`
+
+```python
+def decode_attn_vec_split_kernel(q_ptr, k_ptr, v_ptr, bias_ptr, opart_ptr, mpart_ptr, lpart_ptr, T_k, seg_len, sm_scale, stride_qh, stride_kh, stride_kn, stride_vh, stride_vn, stride_oh, stride_os, stride_mh, GQA_GROUPS: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_D: tl.constexpr, D: tl.constexpr, D_V: tl.constexpr, HAS_BIAS: tl.constexpr, Q_TO: tl.constexpr=None, Q_SATURATE: tl.constexpr=False)
+def decode_attn_vec_grouped_kernel(q_ptr, k_ptr, v_ptr, bias_ptr, opart_ptr, mpart_ptr, lpart_ptr, T_k, seg_len, sm_scale, stride_qh, stride_kh, stride_kn, stride_vh, stride_vn, stride_oh, stride_os, stride_mh, GQA_GROUPS: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_D: tl.constexpr, D: tl.constexpr, D_V: tl.constexpr, HAS_BIAS: tl.constexpr, Q_TO: tl.constexpr=None, Q_SATURATE: tl.constexpr=False)
+    # One KV HEAD per program (grid = (B*H_kv, split))
+```
+
+`nbxtensor.ops.depthwise_conv2d`
+
+```python
+def depthwise_conv2d_kernel(x_ptr, w_ptr, out_ptr, N, C, H_in, W_in, H_out, W_out, W_in_key, W_out_key, x_n_stride, x_c_stride, x_h_stride, x_w_stride, w_c_stride, w_kh_stride, w_kw_stride, out_n_stride, out_c_stride, out_h_stride, out_w_stride, kh: tl.constexpr, kw: tl.constexpr, stride_h: tl.constexpr, stride_w: tl.constexpr, pad_h: tl.constexpr, pad_w: tl.constexpr, fp16: tl.constexpr, BLOCK_HW: tl.constexpr=64, BLOCK_C: tl.constexpr=32, WIDE_OFFSETS: tl.constexpr=True)
+```
+
+`nbxtensor.ops.dequant_gemv`
+
+```python
+def dequant_int4_kernel(wq_ptr, scales_ptr, mins_ptr, out_ptr, K, N, stride_wk, stride_wn, stride_sg, stride_sn, stride_ok, stride_on, BLOCK_K_C: tl.constexpr, BLOCK_N_C: tl.constexpr, GROUP_C: tl.constexpr, PACK_C: tl.constexpr)
+    # Standalone dequant
+def gemv_ref_kernel(x_ptr, w_ptr, out_ptr, K, N, stride_wk, stride_wn, BLOCK_K_C: tl.constexpr, BLOCK_N_C: tl.constexpr)
+    # Reference dense-weight GEMV
+def dequant_gemv_int4_kernel(x_ptr, wq_ptr, scales_ptr, mins_ptr, out_ptr, K, N, stride_wk, stride_wn, stride_sg, stride_sn, BLOCK_K_C: tl.constexpr, BLOCK_N_C: tl.constexpr, GROUP_C: tl.constexpr, PACK_C: tl.constexpr)
+    # Fused
+```
+
+`nbxtensor.ops.dft`
+
+```python
+def dft_rfft_matrix_kernel(cos_ptr, nsin_ptr, N_bins, N, two_pi_over_N, BLOCK_SIZE: tl.constexpr)
+    # Forward rfft basis
+def idft_c2r_matrix_kernel(cos_ptr, sin_ptr, N_bins, N, two_pi_over_N, inv_N, n_even, BLOCK_SIZE: tl.constexpr)
+    # Inverse rfft (irfft) basis, exploiting Hermitian symmetry.
+```
+
+`nbxtensor.ops.dispatch`
+
+```python
+def has_kernel(op_type: str)
+def list_kernels()
+```
+
+`nbxtensor.ops.div`
+
+```python
+def div_forward_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+    # out = x / y (tensor / tensor)
+def div_scalar_kernel(x_ptr, output_ptr, n_elements, scalar, BLOCK_SIZE: tl.constexpr)
+    # out = x / scalar
+def div_scalar_dev_kernel(x_ptr, s_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+    # out = x / s where s is a 0-d DEVICE tensor.
+def int_div_kernel(x_ptr, y_ptr, output_ptr, n_elements, FLOOR: tl.constexpr, BLOCK_SIZE: tl.constexpr)
+    # out = x // y on integers, computed in the integers
+```
+
+`nbxtensor.ops.dot_op`
+
+```python
+def dot_kernel_small(x_ptr, y_ptr, out_ptr, N, BLOCK_SIZE: tl.constexpr)
+    # Single-block dot product for small vectors (N < 4096).
+def dot_kernel_partial(x_ptr, y_ptr, mid_ptr, N, BLOCK_SIZE: tl.constexpr)
+    # Phase 1
+def dot_kernel_reduce(mid_ptr, out_ptr, M, BLOCK_MID: tl.constexpr)
+    # Phase 2
+```
+
+`nbxtensor.ops.dropout`
+
+```python
+def dropout_inference_kernel(x_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+    # Dropout at inference = identity copy.
+```
+
+`nbxtensor.ops.dtype_convert`
+
+```python
+def bf16_to_fp16_kernel(src_ptr, dst_ptr, N, BLOCK: tl.constexpr)
+    # Convert bf16 → fp16 on GPU via fp32 intermediate.
+```
+
+`nbxtensor.ops.elementwise_launch`
+
+```python
+def ew_launch_kernel(x_ptr, y_ptr, n_elements, N_BUCKET, BLOCK_SIZE: tl.constexpr)
+    # y = x over n_elements
+def ew_meta(n_elements: int)
+    # The tile and warps of an element-wise launch of `n_elements`
+def ew_grid(n_elements: int, meta: dict)
+    # The 1-D grid of an element-wise launch at its configuration.
+```
+
+`nbxtensor.ops.elu`
+
+```python
+def elu_forward_kernel(input_ptr, output_ptr, n_elements, alpha, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.embedding`
+
+```python
+def embedding_kernel(output_ptr, indices_ptr, weight_ptr, V, fault_ptr, FAULT_CODE: tl.constexpr, N: tl.constexpr, BLOCK_SIZE: tl.constexpr)
+    # Embedding forward
+```
+
+`nbxtensor.ops.eq`
+
+```python
+def eq_forward_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+def eq_scalar_kernel(x_ptr, output_ptr, n_elements, scalar, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.erf`
+
+```python
+def erf_forward_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.exp`
+
+```python
+def exp_forward_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.exp2`
+
+```python
+def exp2_forward_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.fft_op`
+
+```python
+def bit_reverse_rows_kernel(real_in, imag_in, real_out, imag_out, n, total, log2n, BLOCK_SIZE: tl.constexpr)
+    # Bit-reversal permutation of EVERY row of a [rows, n] pair in one launch
+def fft_stage_rows_kernel(real_ptr, imag_ptr, n, pairs, stage, INVERSE: tl.constexpr, BLOCK_SIZE: tl.constexpr)
+    # One butterfly stage of the Cooley-Tukey FFT on EVERY row of a [rows, n] pair, in place, one butterfly pair per lane (`pairs` = rows * n // 2 lanes).
+def scale_kernel(real_ptr, imag_ptr, n_elements, scale, BLOCK_SIZE: tl.constexpr)
+    # Scale all elements by 1/N after inverse FFT.
+```
+
+`nbxtensor.ops.fill_op`
+
+```python
+def fill_kernel(output_ptr, value, n_elements, BLOCK_SIZE: tl.constexpr)
+    # Fill output with a scalar value.
+```
+
+`nbxtensor.ops.flash_attention`
+
+```python
+def flash_attention_forward_kernel(Q, K, V, Bias, Out, Lse, TMP, softmax_scale, stride_qb, stride_qh, stride_qm, stride_kb, stride_kh, stride_kn, stride_vb, stride_vh, stride_vn, stride_bb, stride_bh, stride_bm, stride_ob, stride_oh, stride_om, nheads, seqlen_q, seqlen_k, seqlen_q_rounded, headdim, CACHE_KEY_SEQLEN_Q, CACHE_KEY_SEQLEN_K, BIAS_TYPE: tl.constexpr, BLOCK_HEADDIM: tl.constexpr, EVEN_M: tl.constexpr, EVEN_N: tl.constexpr, EVEN_HEADDIM: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, GQA_GROUPS: tl.constexpr, QK_CHUNK: tl.constexpr=0)
+def flash_configs()
+    # The tiles the certifier proves per key (workstream 1) where the profile declares no hand table of tiles (`launch_keys.flash_tiles_certified`)
+```
+
+`nbxtensor.ops.flash_attention_m8n8k4`
+
+```python
+def unit_flash_configs()
+    # The tiles the certifier proves per key (workstream 1)
+def flash_attention_m8n8k4_kernel(Q, K, V, Bias, Out, Lse, softmax_scale, stride_qb, stride_qh, stride_qm, stride_kb, stride_kh, stride_kn, stride_vb, stride_vh, stride_vn, stride_bb, stride_bh, stride_bm, stride_ob, stride_oh, stride_om, nheads, seqlen_q, seqlen_k, seqlen_q_rounded, headdim, Q_BUCKET, K_BUCKET, MB: gl.constexpr, NS: gl.constexpr, DA: gl.constexpr, DB: gl.constexpr, GQA_GROUPS: gl.constexpr, HAS_BIAS: gl.constexpr, SPLIT: gl.constexpr, HI_EXP: gl.constexpr, LO_SHIFT: gl.constexpr, KSA: gl.constexpr, KSB: gl.constexpr)
+def p_layout(MB: int, NS: int, NBO: int, WM: int)
+    # P as [MB, 2, 8, 4, BN/4] = (mb, mi3, mi, k, j)
+def staged_shared_bytes(BM: int, BN: int, DA: int, DB: int, split: bool)
+    # The shared memory the kernel above allocates by name for one program
+def head_parts(headdim: int)
+    # The head dim as DA + DB, each a power of two >= 16 (DB may be 0)
+def flash_layouts(MB: int, NS: int, DA: int, DB: int, WM: int)
+    # Every layout the kernel takes, for MB 16-row bands over WM warps (WN = 1).
+def flash_layout(name, MB, NS, DA, DB, WM)
+    # One of the kernel's layouts (`flash_layouts`), evaluated at compile time from its constexprs.
+```
+
+`nbxtensor.ops.flash_decode`
+
+```python
+def flash_decode_split_kernel(q_ptr, k_ptr, v_ptr, bias_ptr, opart_ptr, mpart_ptr, lpart_ptr, T_k, seg_len, sm_scale, stride_qh, stride_qg, stride_kh, stride_kn, stride_oh, stride_os, stride_og, stride_mh, stride_ms, GROUPS: tl.constexpr, BLOCK_G: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_D: tl.constexpr, D: tl.constexpr, HAS_BIAS: tl.constexpr)
+def flash_decode_reduce_kernel(opart_ptr, mpart_ptr, lpart_ptr, out_ptr, stride_oh, stride_os, stride_og, stride_mh, stride_ms, stride_outh, stride_outg, SPLIT: tl.constexpr, GROUPS: tl.constexpr, BLOCK_G: tl.constexpr, BLOCK_D: tl.constexpr, D: tl.constexpr)
+    # Combine the split partials via log-sum-exp correction.
+```
+
+`nbxtensor.ops.flip_op`
+
+```python
+def flip_1d_kernel(src_ptr, dst_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+    # Reverse a 1D contiguous tensor
+def flip_strided_kernel(src_ptr, dst_ptr, n_elements, dim_size, stride_dim, stride_post, BLOCK_SIZE: tl.constexpr)
+    # Flip along a single dimension of an N-D contiguous tensor.
+```
+
+`nbxtensor.ops.floor`
+
+```python
+def floor_forward_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+def ceil_forward_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+def round_forward_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+def trunc_forward_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.full_op`
+
+```python
+def full_kernel(output_ptr, fill_value, n_elements, BLOCK_SIZE: tl.constexpr)
+    # Fill output tensor with a constant scalar value.
+```
+
+`nbxtensor.ops.fused_moe`
+
+```python
+def fused_moe_kernel(a_ptr, expert_ptrs_ptr, c_ptr, topk_weights_ptr, sorted_token_ids_ptr, expert_ids_ptr, num_tokens_post_padded_ptr, N, K, EM, num_valid_tokens, stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn, BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr, MUL_ROUTED_WEIGHT: tl.constexpr, top_k: tl.constexpr, compute_type: tl.constexpr, TOPK_DIVIDE: tl.constexpr=True)
+    # Grouped GEMM with absolute expert pointer table.
+def fused_moe_wna16_kernel(a_ptr, qw_ptrs_ptr, sc_ptrs_ptr, mn_ptrs_ptr, c_ptr, topk_weights_ptr, sorted_token_ids_ptr, expert_ids_ptr, num_tokens_post_padded_ptr, N, K, EM, num_valid_tokens, stride_am, stride_ak, stride_qk, stride_qn, stride_sg, stride_sn, stride_cm, stride_cn, BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr, MUL_ROUTED_WEIGHT: tl.constexpr, top_k: tl.constexpr, compute_type: tl.constexpr, QGROUP: tl.constexpr, QPACK: tl.constexpr, TOPK_DIVIDE: tl.constexpr=True)
+    # Grouped GEMM over int4-g128-asym experts — in-register dequant.
+def fused_moe_fp32b_kernel(a_ptr, expert_ptrs_ptr, c_ptr, topk_weights_ptr, sorted_token_ids_ptr, expert_ids_ptr, num_tokens_post_padded_ptr, N, K, EM, num_valid_tokens, stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn, BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr, MUL_ROUTED_WEIGHT: tl.constexpr, top_k: tl.constexpr, compute_type: tl.constexpr, TOPK_DIVIDE: tl.constexpr=True)
+    # The wna16 kernel's BYTE ORACLE
+def silu_and_mul_kernel(input_ptr, output_ptr, M, N, stride_im, stride_in, stride_om, stride_on, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr)
+    # Fused SwiGLU
+def silu_mul_split_kernel(gate_ptr, up_ptr, output_ptr, M, N, stride_gm, stride_gn, stride_um, stride_un, stride_om, stride_on, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr)
+    # Fused SwiGLU with split gate/up tensors
+```
+
+`nbxtensor.ops.fused_upsample_conv`
+
+```python
+class BroadcastClonePyroxy
+    # Sentinel returned by an intercepted aten.clone op whose input is a broadcast-view (stride=0 on some dim from a preceding aten.expand) and whose consumer chain is `aten.view -> aten.pixel_shuffle`.
+def make_upsample_proxy_interceptor()
+    # Return an interceptor that turns an upsample into a FusionUpsampleProxy (no compute, no allocation of the full upsampled tensor).
+```
+
+`nbxtensor.ops.gather_op`
+
+```python
+def gather_kernel(inp, index, out, N, inp_dim_stride, idx_stride_outer, idx_stride_dim, idx_stride_inner, inp_stride_outer, inp_stride_inner, out_stride_outer, out_stride_dim, out_stride_inner, outer_size, dim_size, inner_size, BLOCK_SIZE: tl.constexpr)
+    # Gather kernel — works for any tensor rank via pre-computed strides.
+```
+
+`nbxtensor.ops.ge`
+
+```python
+def ge_forward_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+def ge_scalar_kernel(x_ptr, output_ptr, n_elements, scalar, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.gelu`
+
+```python
+def gelu_forward_kernel(input_ptr, output_ptr, n_elements, approximate: tl.constexpr, BLOCK_SIZE: tl.constexpr)
+    # GELU forward.
+```
+
+`nbxtensor.ops.gemv_vec`
+
+```python
+def gemv_vec_kernel(A_ptr, B_ptr, C_ptr, N, K, N_BUCKET, K_BUCKET, stride_an, stride_am, stride_bm, stride_cn, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr)
+```
+
+`nbxtensor.ops.glu`
+
+```python
+def glu_forward_kernel(input1_ptr, input2_ptr, output_ptr, size, act_func: tl.constexpr, BLOCK_SIZE: tl.constexpr)
+    # GLU forward
+```
+
+`nbxtensor.ops.grid_sampler`
+
+```python
+def grid_sampler_2d_kernel(inp_ptr, grid_ptr, out_ptr, C, H, W, OUT_SPATIAL, stride_in, stride_ic, stride_ih, stride_iw, stride_gn, stride_gs, stride_gc, stride_on, stride_oc, stride_os, MODE: tl.constexpr, PAD_BORDER: tl.constexpr, ALIGN: tl.constexpr, BLOCK_C: tl.constexpr)
+```
+
+`nbxtensor.ops.group_norm_tiled`
+
+```python
+def group_norm_stats_kernel(X, Mean, Rstd, group_size, C, HW, num_groups, eps, BLOCK_SIZE: tl.constexpr)
+def group_norm_apply_kernel(X, Y, W, B, Mean, Rstd, group_size, C, HW, num_groups, scale_by_weight: tl.constexpr, add_bias: tl.constexpr, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.groupnorm`
+
+```python
+def group_norm_forward_kernel(X, Y, W, B, Mean, Rstd, group_size, C, HW, num_groups, eps, PROG_BUCKET, HIDDEN_BUCKET, scale_by_weight: tl.constexpr, add_bias: tl.constexpr, BLOCK_SIZE: tl.constexpr)
+    # One program handles one (batch, group) pair.
+```
+
+`nbxtensor.ops.gt`
+
+```python
+def gt_forward_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+def gt_scalar_kernel(x_ptr, output_ptr, n_elements, scalar, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.hardsigmoid`
+
+```python
+def hardsigmoid_forward_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.hardswish`
+
+```python
+def hardswish_forward_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.im2col`
+
+```python
+def im2col_kernel(inp_ptr, out_ptr, C, IH, IW, OW, L, KH: tl.constexpr, KW: tl.constexpr, stride_h: tl.constexpr, stride_w: tl.constexpr, pad_h: tl.constexpr, pad_w: tl.constexpr, dil_h: tl.constexpr, dil_w: tl.constexpr, in_sn, in_sc, in_sh, in_sw, out_sn, out_sc, out_sl, BLOCK_L: tl.constexpr)
+```
+
+`nbxtensor.ops.index_add`
+
+```python
+def index_add_gather_kernel(x, src, index, out, dim_size, inp_shape_dim, inner_size, alpha, src_stride_outer, src_stride_dim, src_stride_inner, INNER_BLOCK: tl.constexpr)
+    # One program == one (outer, dest, inner-tile) output cell.
+```
+
+`nbxtensor.ops.index_put_op`
+
+```python
+def index_put_kernel(out_ptr, idx_ptr, val_ptr, T, N, R, fault_ptr, FAULT_CODE: tl.constexpr, VAL_SCALAR: tl.constexpr, ACCUMULATE: tl.constexpr, BLOCK_SIZE: tl.constexpr)
+    # out[idx[off // T], off % T] {=|+=} values[off] for off < N.
+```
+
+`nbxtensor.ops.index_select`
+
+```python
+def index_select_kernel(inp, out, M, N, index, index_len, fault_ptr, FAULT_CODE: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr)
+    # `debug=True` keeps the `tl.device_assert` below in the compiled kernel regardless of TRITON_DEBUG
+def index_select_mid_kernel(inp, out, outer, N, inner, index, index_len, fault_ptr, FAULT_CODE: tl.constexpr, BLOCK: tl.constexpr)
+    # Gather along a MIDDLE axis of a contiguous input read as (outer, N, inner)
+```
+
+`nbxtensor.ops.isfinite`
+
+```python
+def isfinite_forward_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.isinf`
+
+```python
+def isinf_forward_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.isnan`
+
+```python
+def isnan_forward_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.layernorm`
+
+```python
+def layer_norm_forward_kernel(input_ptr, weight_ptr, bias_ptr, mean_ptr, inv_std_ptr, output_ptr, batch_dim, feat_dim, BATCH_BUCKET, FEAT_BUCKET, input_batch_stride, input_feat_stride, output_batch_stride, output_feat_stride, eps, scale_by_weight: tl.constexpr, add_bias: tl.constexpr, save_stats: tl.constexpr, BLOCK_SIZE_BATCH: tl.constexpr, BLOCK_SIZE_FEAT: tl.constexpr)
+    # Layer normalization forward.
+```
+
+`nbxtensor.ops.le`
+
+```python
+def le_forward_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+def le_scalar_kernel(x_ptr, output_ptr, n_elements, scalar, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.leaky_relu`
+
+```python
+def leaky_relu_forward_kernel(input_ptr, output_ptr, n_elements, negative_slope, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.lerp`
+
+```python
+def lerp_tensor_forward_kernel(input_ptr, end_ptr, weight_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+    # Lerp with tensor weight
+def lerp_scalar_head_kernel(input_ptr, end_ptr, output_ptr, n_elements, weight, BLOCK_SIZE: tl.constexpr)
+    # Lerp with scalar weight < 0.5
+def lerp_scalar_tail_kernel(input_ptr, end_ptr, output_ptr, n_elements, weight, BLOCK_SIZE: tl.constexpr)
+    # Lerp with scalar weight >= 0.5
+```
+
+`nbxtensor.ops.linspace_op`
+
+```python
+def linspace_kernel(out_ptr, out_stride0, start, mid, end, step_size, steps, BLOCK_SIZE: tl.constexpr)
+    # Generate evenly spaced values from start to end.
+```
+
+`nbxtensor.ops.log`
+
+```python
+def log_forward_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.log_sigmoid`
+
+```python
+def log_sigmoid_forward_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.logical_and`
+
+```python
+def logical_and_forward_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.logical_not`
+
+```python
+def logical_not_forward_kernel(x_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.logical_or`
+
+```python
+def logical_or_forward_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.logical_xor`
+
+```python
+def logical_xor_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+    # Logical XOR
+```
+
+`nbxtensor.ops.loss_wrappers`
+
+```python
+def mse_loss_wrapper(input, target, reduction: int=1)
+    # MSE Loss.
+def nll_loss_wrapper(input, target, weight=None, ignore_index: int=-100, reduction: int=1)
+    # NLL Loss.
+def cross_entropy_wrapper(input, target, weight=None, reduction: int=1)
+    # Cross entropy loss
+```
+
+`nbxtensor.ops.lt`
+
+```python
+def lt_forward_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+def lt_scalar_kernel(x_ptr, output_ptr, n_elements, scalar, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.masked_fill`
+
+```python
+def masked_fill_forward_kernel(input_ptr, mask_ptr, output_ptr, n_elements, fill_value, BLOCK_SIZE: tl.constexpr)
+    # out = fill_value where mask is True, else input.
+```
+
+`nbxtensor.ops.matmul`
+
+```python
+def matmul_kernel(a_ptr, b_ptr, c_ptr, M, N, K, M_BUCKET, stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn, IEEE_PRECISION: tl.constexpr=False, PROMOTE_B: tl.constexpr=False, PROMOTE_A: tl.constexpr=False, EPILOGUE: tl.constexpr=0, BLOCK_M: tl.constexpr=64, BLOCK_N: tl.constexpr=64, BLOCK_K: tl.constexpr=32, GROUP_M: tl.constexpr=8)
+    # C = A @ B where A is [M, K], B is [K, N], C is [M, N].
+def addmm_kernel(a_ptr, b_ptr, bias_ptr, c_ptr, M, N, K, M_BUCKET, stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn, alpha, beta, IEEE_PRECISION: tl.constexpr=False, PROMOTE_B: tl.constexpr=False, PROMOTE_A: tl.constexpr=False, PROMOTE_BIAS: tl.constexpr=False, EPILOGUE: tl.constexpr=0, BLOCK_M: tl.constexpr=64, BLOCK_N: tl.constexpr=64, BLOCK_K: tl.constexpr=32, GROUP_M: tl.constexpr=8)
+    # C = beta * bias + alpha * (A @ B) where bias is [N].
+```
+
+`nbxtensor.ops.matmul_m8n8k4`
+
+```python
+def matmul_m8n8k4_kernel(A, B, Bias, C, M, N, K, stride_az, stride_am, stride_ak, stride_bz, stride_bk, stride_bn, stride_cz, stride_cm, stride_cn, stride_xz, stride_xm, stride_xn, alpha, beta, HAS_BIAS: gl.constexpr, PROMOTE_BIAS: gl.constexpr, EPILOGUE: gl.constexpr, B_K_CONTIG: gl.constexpr, SPLIT_A: gl.constexpr, SPLIT_B: gl.constexpr, HI_EXP: gl.constexpr, LO_SHIFT: gl.constexpr, MB: gl.constexpr, NB: gl.constexpr, BK: gl.constexpr, GROUP_M: gl.constexpr, L: gl.constexpr, LA: gl.constexpr, LB: gl.constexpr, GA: gl.constexpr, GB: gl.constexpr)
+def split_exponent(m, HI_EXP: gl.constexpr)
+    # The exponent s of the power-of-two scale 2^s that brings a largest magnitude m (fp32) into [2^HI_EXP, 2^(HI_EXP+1))
+def hi_lo(x, LO_SHIFT: gl.constexpr)
+    # fp32 x (already scaled) as hi = fp16(x) and lo = fp16((x - hi) 2^LO_SHIFT)
+def mm_layouts(MB: int, NB: int, WM: int, WN: int, BK: int, b_k_contig: bool)
+    # Every layout the kernel takes for a tile of 16 MB x 16 NB x BK over WM x WN warps.
+```
+
+`nbxtensor.ops.max_pool2d`
+
+```python
+def max_pool2d_forward_kernel(input_ptr, output_ptr, indices_ptr, in_stride_n, in_stride_c, in_stride_h, in_stride_w, in_c, in_h, in_w, out_h, out_w, kernel_h: tl.constexpr, kernel_w: tl.constexpr, stride_h: tl.constexpr, stride_w: tl.constexpr, padding_h: tl.constexpr, padding_w: tl.constexpr, dilation_h: tl.constexpr, dilation_w: tl.constexpr, BLOCK_H: tl.constexpr, BLOCK_W: tl.constexpr)
+```
+
+`nbxtensor.ops.max_pool3d`
+
+```python
+def max_pool3d_forward_kernel(input_ptr, output_ptr, indices_ptr, in_stride_n, in_stride_c, in_stride_t, in_stride_h, in_stride_w, in_c, in_t, in_h, in_w, out_t, out_h, out_w, kernel_t: tl.constexpr, kernel_h: tl.constexpr, kernel_w: tl.constexpr, stride_t: tl.constexpr, stride_h: tl.constexpr, stride_w: tl.constexpr, padding_t: tl.constexpr, padding_h: tl.constexpr, padding_w: tl.constexpr, dilation_t: tl.constexpr, dilation_h: tl.constexpr, dilation_w: tl.constexpr, BLOCK_H: tl.constexpr, BLOCK_W: tl.constexpr)
+```
+
+`nbxtensor.ops.max_reduce`
+
+```python
+def max_kernel_mid(inp, mid, M, BLOCK_SIZE: tl.constexpr)
+    # Pass 1
+def max_kernel_result(mid, out, mid_size, BLOCK_MID: tl.constexpr)
+    # Pass 2
+def max_kernel(inp, out_value, out_index, M, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr)
+    # Max reduction along compressed inner dim N.
+```
+
+`nbxtensor.ops.maximum`
+
+```python
+def maximum_forward_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.mean`
+
+```python
+def mean_forward_kernel(input_ptr, output_ptr, batch_dim, feat_dim, BATCH_BUCKET, FEAT_BUCKET, input_batch_stride, input_feat_stride, BLOCK_SIZE_BATCH: tl.constexpr, BLOCK_SIZE_FEAT: tl.constexpr)
+    # Mean reduction over the last dimension
+```
+
+`nbxtensor.ops.min_reduce`
+
+```python
+def min_kernel_mid(inp, mid, M, BLOCK_SIZE: tl.constexpr)
+    # Pass 1
+def min_kernel_result(mid, out, mid_size, BLOCK_MID: tl.constexpr)
+    # Pass 2
+def min_kernel(inp, out_value, out_index, M, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr)
+    # Min reduction along compressed inner dim N.
+```
+
+`nbxtensor.ops.minimum`
+
+```python
+def minimum_forward_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.mish`
+
+```python
+def mish_forward_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.mma_m8n8k4`
+
+```python
+def acc_layout(MB: int, NB: int, WM: int, WN: int)
+    # The [MB, 2, 8, NB, 2, 2, 4] accumulator over WM x WN warps (WM | MB, WN | NB, all powers of two).
+def frag_a_layout(MB: int, NB: int, WM: int, WN: int)
+    # One k-step of the A operand, [16 MB, 4] = (row, k), in the registers acc_layout(MB, NB, WM, WN) needs.
+def frag_b_layout(MB: int, NB: int, WM: int, WN: int)
+    # One k-step of the B operand, [16 NB, 4] = (column, k), in the registers acc_layout(MB, NB, WM, WN) needs.
+def acc_rows_cols(L: gl.constexpr, MB: gl.constexpr, NB: gl.constexpr)
+    # Row and column index of every accumulator element, broadcastable over L ([.., 1, 1, 1, 1] / [1, 1, 1, ..]).
+def row_layout_rows(L: gl.constexpr, MB: gl.constexpr)
+    # Row index [MB, 2, 8] in the layout of a row statistic of L (L with its four column dims reduced).
+def row_max(x)
+def row_sum(x)
+def bcast_rows(r, L: gl.constexpr)
+    # A [MB, 2, 8] row statistic -> broadcastable over accumulator L (any NB
+def stage_k_inner(smem, tile, R: gl.constexpr, KK: gl.constexpr)
+    # tile [R, KK] whose k runs along its columns -> smem [(KK/4) R, 4] laid out [k-step, R, 4].
+def stage_k_outer(smem, tile, KK: gl.constexpr, C: gl.constexpr)
+    # tile [KK, C] whose k runs along its rows -> smem [(KK/4) C, 4] laid out [k-step, C, 4].
+def mma_k4(sa, a_row0, sb, b_row0, acc, MB: gl.constexpr, NB: gl.constexpr, LA: gl.constexpr, LB: gl.constexpr, L: gl.constexpr)
+    # acc += A[:, 4j:4j+4] @ B[4j:4j+4, :] for the k-step whose rows start at a_row0 / b_row0 of the staged operands (16 MB rows of sa, 16 NB rows of sb).
+```
+
+`nbxtensor.ops.moe_align`
+
+```python
+def moe_align_stage1_kernel(topk_ids_ptr, offsets_ptr, padded_ptr, num_post_pad_ptr, n, BS: tl.constexpr, BE: tl.constexpr, E: tl.constexpr, BT: tl.constexpr, BF: tl.constexpr)
+    # Single program
+def moe_align_stage2_kernel(offsets_ptr, padded_ptr, sorted_ids_ptr, expert_ids_ptr, n, max_total, BS: tl.constexpr, BE: tl.constexpr, E: tl.constexpr, BLK: tl.constexpr, BF: tl.constexpr)
+    # Grid over output positions
+def moe_align_stage3_kernel(topk_ids_ptr, offsets_ptr, sorted_ids_ptr, n, E: tl.constexpr, BLKT: tl.constexpr, BN: tl.constexpr)
+    # Grid over tokens
+```
+
+`nbxtensor.ops.moe_decode_vec`
+
+```python
+def moe_gateup_vec_kernel(x_ptr, topk_ids_ptr, gate_qw_tab, gate_sc_tab, gate_mn_tab, up_qw_tab, up_sc_tab, up_mn_tab, h_ptr, K, N, stride_wk, stride_wn, stride_sg, stride_sn, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, GROUP: tl.constexpr, PACK: tl.constexpr)
+def moe_down_combine_vec_kernel(h_ptr, topk_ids_ptr, topk_w_ptr, down_qw_tab, down_sc_tab, down_mn_tab, out_ptr, Kd, N, stride_wk, stride_wn, stride_sg, stride_sn, TOP_K: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, GROUP: tl.constexpr, PACK: tl.constexpr)
+    # The combine IS the kernel
+def moe_down_split_vec_kernel(h_ptr, topk_ids_ptr, topk_w_ptr, down_qw_tab, down_sc_tab, down_mn_tab, part_ptr, Kd, N, stride_wk, stride_wn, stride_sg, stride_sn, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, GROUP: tl.constexpr, PACK: tl.constexpr)
+    # ADOPTED second pass (2026-08-25)
+def moe_part_reduce_kernel(part_ptr, out_ptr, N, TOP_K: tl.constexpr, BLOCK_N: tl.constexpr)
+    # Fixed-order sum of the TOP_K weighted partials — deterministic (the same contract as flash_decode_reduce
+def moe_gateup_vec_half_kernel(x_ptr, topk_ids_ptr, gate_tab, up_tab, h_ptr, K, N, stride_wk, stride_wn, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, W_BF16: tl.constexpr)
+def moe_down_split_vec_half_kernel(h_ptr, topk_ids_ptr, topk_w_ptr, down_tab, part_ptr, Kd, N, stride_wk, stride_wn, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, W_BF16: tl.constexpr)
+```
+
+`nbxtensor.ops.moe_device_residency`
+
+```python
+def expert_slot_assign_kernel(ids_ptr, slot_of_ptr, owner_ptr, stamp_ptr, clock_ptr, slot_out_ptr, miss_out_ptr, layer_base, S, TOP_K: tl.constexpr, BLOCK_S: tl.constexpr)
+def expert_miss_copy_kernel(miss_ptr, slot_ptr, host_g, host_u, host_d, slot_g, slot_u, slot_d, layer_base, n_g, n_u, n_d, BLOCK: tl.constexpr, W_BF16: tl.constexpr)
+```
+
+`nbxtensor.ops.moe_wrappers`
+
+```python
+def invoke_fused_moe(hidden_states, expert_ptrs, output, topk_weights, sorted_token_ids, expert_ids, num_tokens_post_padded, N, K, stride_bk, stride_bn, top_k, mul_routed_weight=False, topk_divide=True)
+    # Launch fused MoE grouped GEMM kernel (absolute pointer table).
+def invoke_fused_moe_wna16(hidden_states, qw_ptrs, sc_ptrs, mn_ptrs, output, topk_weights, sorted_token_ids, expert_ids, num_tokens_post_padded, N, K, stride_qk, stride_qn, stride_sg, stride_sn, top_k, mul_routed_weight=False, topk_divide=True)
+    # Launch the W4 fused MoE grouped GEMM (int4-g128-asym experts, in-register dequant — byte-gated vs fused_moe_fp32b_kernel).
+```
+
+`nbxtensor.ops.mse_loss`
+
+```python
+def mse_loss_partial_kernel(inp, target, mid, M, BLOCK_SIZE: tl.constexpr, reduction: tl.constexpr)
+    # Pass 1
+def mse_loss_reduce_kernel(mid, out, mid_size, BLOCK_MID: tl.constexpr)
+    # Pass 2
+def mse_loss_none_kernel(inp_ptr, target_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+    # Pointwise (no reduction)
+```
+
+`nbxtensor.ops.mul`
+
+```python
+def mul_forward_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+    # out = x * y (tensor * tensor)
+def mul_scalar_kernel(x_ptr, output_ptr, n_elements, scalar, BLOCK_SIZE: tl.constexpr)
+    # out = x * scalar
+def mul_scalar_dev_kernel(x_ptr, s_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+    # out = x * s where s is a 0-d DEVICE tensor.
+```
+
+`nbxtensor.ops.nan_to_num`
+
+```python
+def nan_to_num_forward_kernel(input_ptr, output_ptr, n_elements, nan_val, posinf_val, neginf_val, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.ne`
+
+```python
+def ne_forward_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+def ne_scalar_kernel(x_ptr, output_ptr, n_elements, scalar, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.neg`
+
+```python
+def neg_forward_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.nllloss`
+
+```python
+def nll_loss_forward_kernel(inp_ptr, tgt_ptr, wgt_ptr, out_ptr, ignore_index, N, C, reduction: tl.constexpr, BLOCK_N: tl.constexpr)
+    # NLL Loss forward for 1D/2D input [N, C].
+def nll_loss_backward_kernel(out_grad_ptr, tgt_ptr, wgt_ptr, inp_grad_ptr, ignore_index, total_weight, N, C, reduction: tl.constexpr, BLOCK_N: tl.constexpr)
+    # NLL Loss backward for 1D/2D input [N, C].
+```
+
+`nbxtensor.ops.nonzero`
+
+```python
+def nonzero_1d_kernel(mask_ptr, out_ptr, count_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.nonzero_op`
+
+```python
+def nonzero_kernel(inp, prefix_sum, out, n_elements, shape, ndim: tl.constexpr, BLOCK_SIZE: tl.constexpr)
+    # Write indices of non-zero elements into output tensor.
+```
+
+`nbxtensor.ops.ones_op`
+
+```python
+def ones_kernel(output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+    # Fill output with ones.
+```
+
+`nbxtensor.ops.oracles.conv2d_fp64`
+
+```python
+def conv2d_reference(x: np.ndarray, w: np.ndarray, *, stride: Sequence[int], padding: Sequence[int], dilation: Sequence[int], groups: int)
+    # `[N, Cin, H, W]` ⊛ `[Cout, Cin//groups, KH, KW]` → `[N, Cout, Ho, Wo]`, fp64.
+def receptive_slab(h: int, wd: int, k_h: int, k_w: int, *, stride, padding, dilation, window)
+    # The input slab an output window `(r0, r1, c0, c1)` reads, and the padding it still needs.
+def conv2d_reference_window(x, w: np.ndarray, *, stride: Sequence[int], padding: Sequence[int], dilation: Sequence[int], groups: int, window=None, shape: Optional[Sequence[int]]=None, slab_of=None)
+    # `conv2d_reference` on one output block only
+def conv2d_rows(named: dict, slab_of, weight_f64, rows)
+    # The reference for the flat output rows `rows = (r0, r1)` of `conv2d_forward_kernel`, the output read as `[N*Cout*Ho, Wo]` — the form the runtime screen windows every kernel in.
+def depthwise_rows(named: dict, slab_of, weight_f64, rows)
+    # The same for `depthwise_conv2d_kernel` (`groups == C`, weight `[C, KH, KW]`).
+class RowOracle(NamedTuple)
+    # One kernel's row-windowed reference
+def oracle_row_bytes(kernel: str, named: dict)
+    # What one flat output row costs `kernel`'s reference, or None for a kernel this table does not window.
+def depthwise_reference(x: np.ndarray, w: np.ndarray, *, stride: Sequence[int], padding: Sequence[int])
+    # `[N, C, H, W]` ⊛ `[C, KH, KW]` → `[N, C, Ho, Wo]`, fp64.
+def conv2d_from_args(named: dict, to_f64)
+    # The reference output for `conv2d_forward_kernel`, or None.
+def depthwise_from_args(named: dict, to_f64)
+    # The reference output for `depthwise_conv2d_kernel`, or None.
+```
+
+`nbxtensor.ops.pad_op`
+
+```python
+def constant_pad_2d_kernel(x_ptr, output_ptr, total, in_h, in_w, out_h, out_w, channels_times_batch, x_stride_n, x_stride_c, x_stride_h, x_stride_w, out_stride_n, out_stride_c, out_stride_h, out_stride_w, pad_left, pad_top, pad_value, BLOCK_SIZE: tl.constexpr, WIDE: tl.constexpr=True)
+    # Constant pad for 4D tensors (N,C,H,W).
+def constant_pad_1d_kernel(x_ptr, output_ptr, total, in_size, out_size, batch_size, pad_left, pad_value, BLOCK_SIZE: tl.constexpr, WIDE: tl.constexpr=True)
+    # Constant pad for 2D/3D tensors along last dim.
+def constant_pad_nd_kernel(x_ptr, output_ptr, total, in0, in1, in2, in3, in4, out0, out1, out2, out3, out4, xs0, xs1, xs2, xs3, xs4, pb0, pb1, pb2, pb3, pb4, pad_value, BLOCK_SIZE: tl.constexpr, WIDE: tl.constexpr=True)
+    # Constant pad of up to 5 dims in ONE pass
+def replication_pad_nd_kernel(x_ptr, output_ptr, total, in0, in1, in2, in3, in4, out0, out1, out2, out3, out4, xs0, xs1, xs2, xs3, xs4, pb0, pb1, pb2, pb3, pb4, BLOCK_SIZE: tl.constexpr, WIDE: tl.constexpr=True)
+    # Replication pad of up to 5 dims in ONE pass (PyTorch `replicate`)
+```
+
+`nbxtensor.ops.paged_decode_attn`
+
+```python
+def paged_kv_append_kernel(new_ptr, pool_ptr, slot_ptr, page_tokens, stride_nt, stride_nh, stride_pp, stride_ph, stride_ps, BLOCK_D: tl.constexpr, D: tl.constexpr)
+    # One program per (new token, KV head)
+def paged_decode_attn_split_kernel(q_ptr, k_pool_ptr, v_pool_ptr, block_table_ptr, seq_lens_ptr, opart_ptr, mpart_ptr, lpart_ptr, n_seqs, page_tokens, sm_scale, H_Q, stride_qh, stride_kp, stride_kh, stride_ks, stride_vp, stride_vh, stride_vs, stride_bt, stride_oh, stride_os, stride_mh, GQA_GROUPS: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_D: tl.constexpr, D: tl.constexpr, D_V: tl.constexpr, Q_TO: tl.constexpr=None, Q_SATURATE: tl.constexpr=False)
+def paged_kv_append_step_kernel(k_new_ptr, v_new_ptr, k_pool_ptr, v_pool_ptr, block_table_ptr, lens_ptr, page_tokens, stride_kb, stride_kh, stride_vb, stride_vh, stride_kp, stride_kph, stride_ks, stride_vp, stride_vph, stride_vs, stride_bt, BLOCK_D: tl.constexpr, D_K: tl.constexpr, D_V: tl.constexpr)
+    # A decode step's append with no host input
+def paged_lens_advance_kernel(lens_ptr, n)
+    # lens[b] += n for every sequence
+```
+
+`nbxtensor.ops.pixel_shuffle`
+
+```python
+def pixel_shuffle_kernel(input_ptr, output_ptr, n_elements, C_out, H, W, r, OH, OW, stride_in_n, stride_in_c, stride_in_h, stride_in_w, stride_out_n, stride_out_c, stride_out_h, stride_out_w, BLOCK_SIZE: tl.constexpr)
+    # Pixel shuffle
+def pixel_shuffle_broadcast_aware_kernel(bcast_view_ptr, output_ptr, n_elements, C_out, OH, OW, r, bcast, stride_v_n, stride_v_c, stride_v_b, stride_v_h, stride_v_w, stride_out_n, stride_out_c, stride_out_h, stride_out_w, BLOCK_SIZE: tl.constexpr)
+    # Pixel shuffle that reads through an unmaterialized NBX broadcast view.
+```
+
+`nbxtensor.ops.pixel_unshuffle`
+
+```python
+def pixel_unshuffle_kernel(input_ptr, output_ptr, n_elements, C, IH, IW, r, C_out, H, W, stride_in_n, stride_in_c, stride_in_h, stride_in_w, stride_out_n, stride_out_c, stride_out_h, stride_out_w, BLOCK_SIZE: tl.constexpr)
+    # Pixel unshuffle
+```
+
+`nbxtensor.ops.pow`
+
+```python
+def pow_forward_kernel(input_ptr, output_ptr, n_elements, exponent, BLOCK_SIZE: tl.constexpr, INT_EXP: tl.constexpr=0)
+```
+
+`nbxtensor.ops.prod`
+
+```python
+def reduce_mul(a, b)
+def prod_kernel_mid(inp, mid, M, BLOCK_SIZE: tl.constexpr)
+    # Pass 1
+def prod_kernel_result(mid, out, mid_size, BLOCK_MID: tl.constexpr)
+    # Pass 2
+def prod_kernel(inp, out, M, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr)
+    # Reduce product along the compressed inner dimension N.
+```
+
+`nbxtensor.ops.rand_op`
+
+```python
+def rand_kernel(output_ptr, n_elements, seed, BLOCK_SIZE: tl.constexpr)
+    # Fill output with uniform random values in [0, 1).
+def randn_kernel(output_ptr, n_elements, seed, BLOCK_SIZE: tl.constexpr)
+    # Fill output with standard normal random values N(0, 1).
+```
+
+`nbxtensor.ops.random_wrappers`
+
+```python
+def dropout_wrapper(x, p: float=0.5, train: bool=False)
+    # Dropout at inference = identity.
+def rand_wrapper(*args, **kwargs)
+    # rand(size, ...) → uniform [0, 1) via Triton kernel.
+def randn_wrapper(*args, **kwargs)
+    # randn(size, ...) → standard normal N(0,1) via Triton kernel.
+def rand_like_wrapper(x, **kwargs)
+    # rand_like(tensor) → uniform [0, 1) same shape/dtype/device.
+def randn_like_wrapper(x, **kwargs)
+    # randn_like(tensor) → standard normal N(0,1) same shape/dtype/device.
+def uniform_wrapper(x, low: float=0.0, high: float=1.0, **kwargs)
+    # uniform_(tensor, low, high) → fill with uniform [low, high).
+def multinomial_wrapper(x, num_samples: int, replacement: bool=False, **kwargs)
+    # multinomial(probs, num_samples) → sampled indices.
+```
+
+`nbxtensor.ops.reciprocal`
+
+```python
+def reciprocal_forward_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.relu`
+
+```python
+def relu_forward_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.remainder`
+
+```python
+def remainder_forward_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+def remainder_scalar_kernel(x_ptr, output_ptr, n_elements, divisor, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.repeat_interleave`
+
+```python
+def repeat_interleave_tensor_kernel(repeats_ptr, cumsum_ptr, out_ptr, size, BLOCK_SIZE: tl.constexpr)
+    # Write source indices for tensor-based repeat_interleave.
+```
+
+`nbxtensor.ops.repeat_op`
+
+```python
+def repeat_1d_kernel(in_ptr, out_ptr, in_stride0, out_stride0, out_shape0, in_shape0, num_tasks, BLOCK_SIZE: tl.constexpr)
+    # Repeat kernel for 1D tensors.
+def repeat_2d_kernel(in_ptr, out_ptr, in_stride0, in_stride1, out_stride0, out_stride1, out_shape0, out_shape1, in_shape0, in_shape1, num_tasks, BLOCK_SIZE: tl.constexpr)
+    # Repeat kernel for 2D tensors.
+def repeat_3d_kernel(in_ptr, out_ptr, in_stride0, in_stride1, in_stride2, out_stride0, out_stride1, out_stride2, out_shape0, out_shape1, out_shape2, in_shape0, in_shape1, in_shape2, num_tasks, BLOCK_SIZE: tl.constexpr)
+    # Repeat kernel for 3D tensors.
+def repeat_4d_kernel(in_ptr, out_ptr, in_stride0, in_stride1, in_stride2, in_stride3, out_stride0, out_stride1, out_stride2, out_stride3, out_shape0, out_shape1, out_shape2, out_shape3, in_shape0, in_shape1, in_shape2, in_shape3, num_tasks, BLOCK_SIZE: tl.constexpr)
+    # Repeat kernel for 4D tensors.
+```
+
+`nbxtensor.ops.residual_chain`
+
+```python
+class ChainSentinel
+    # Zero-allocation sentinel returned by chain intermediate interceptors.
+def resolve_chain_weights(chain_spec: Dict[str, Any], dag: Dict[str, Any], weights: Dict[str, Any])
+    # Look up the weight tensors each chain op needs.
+def band_streamed_chain_nbx(t_base: 'Any', chain_weights: Dict[str, Any], tile_factor: int, halo: int)
+    # A residual chain run in bands over its spatial axis, on NBXTensor (torch-free).
+```
+
+`nbxtensor.ops.rmsnorm`
+
+```python
+def rms_norm_forward_kernel(input_ptr, weight_ptr, output_ptr, batch_dim, feat_dim, BATCH_BUCKET, FEAT_BUCKET, input_batch_stride, input_feat_stride, output_batch_stride, output_feat_stride, eps, scale_by_weight: tl.constexpr, BLOCK_SIZE_BATCH: tl.constexpr, BLOCK_SIZE_FEAT: tl.constexpr, SATURATE_F16: tl.constexpr=False)
+    # RMS normalization forward.
+```
+
+`nbxtensor.ops.rope`
+
+```python
+def rope_forward_kernel(q_ptr, q_row_stride, k_ptr, k_row_stride, cos, cos_row_stride, sin, sin_row_stride, sl, bs: tl.constexpr, cos_bs: tl.constexpr, n_qh: tl.constexpr, n_kh: tl.constexpr, hd: tl.constexpr, pad_n_qh: tl.constexpr, pad_n_kh: tl.constexpr, pad_hd: tl.constexpr, BLOCK_SIZE: tl.constexpr, BACKWARD_PASS: tl.constexpr=False)
+    # Fused RoPE kernel — applies rotary embedding in-place to Q and K.
+```
+
+`nbxtensor.ops.rsqrt`
+
+```python
+def rsqrt_forward_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.scaled_softmax`
+
+```python
+def scaled_softmax_kernel(output_ptr, input_ptr, scale_factor, query_seq_len, key_seq_len, stride_b, stride_h, stride_q, BLOCK_Q: tl.constexpr, BLOCK_K: tl.constexpr)
+    # Scaled softmax
+```
+
+`nbxtensor.ops.scatter_op`
+
+```python
+def scatter_kernel(src, index, out, N, out_dim_stride, src_stride_outer, src_stride_dim, src_stride_inner, idx_stride_outer, idx_stride_dim, idx_stride_inner, out_stride_outer, out_stride_inner, outer_size, dim_size, inner_size, BLOCK_SIZE: tl.constexpr)
+    # Scatter
+def scatter_add_kernel(src, index, out, N, out_dim_stride, src_stride_outer, src_stride_dim, src_stride_inner, idx_stride_outer, idx_stride_dim, idx_stride_inner, out_stride_outer, out_stride_inner, outer_size, dim_size, inner_size, BLOCK_SIZE: tl.constexpr)
+    # Scatter add
+def scatter_reduce_amax_kernel(src, index, out, N, out_dim_stride, src_stride_outer, src_stride_dim, src_stride_inner, idx_stride_outer, idx_stride_dim, idx_stride_inner, out_stride_outer, out_stride_inner, outer_size, dim_size, inner_size, BLOCK_SIZE: tl.constexpr)
+    # scatter_reduce with reduce='amax'
+def scatter_reduce_amin_kernel(src, index, out, N, out_dim_stride, src_stride_outer, src_stride_dim, src_stride_inner, idx_stride_outer, idx_stride_dim, idx_stride_inner, out_stride_outer, out_stride_inner, outer_size, dim_size, inner_size, BLOCK_SIZE: tl.constexpr)
+    # scatter_reduce with reduce='amin'
+```
+
+`nbxtensor.ops.screen_oracle`
+
+```python
+def oracle_row_bytes(tuner, meta)
+    # What one flat output row costs THIS kernel's float64 reference on the host, or None for a kernel the row table does not window (the default
+def fp64_footprint(buffers)
+    # The host bytes a FULL reference would hold for these device buffers
+def windowed_reference(tuner, meta, rows)
+    # The fp64 reference for flat `rows` of the output, or None if this kernel cannot be windowed.
+def provider(tuner, key, buffers, meta=None)
+    # The correct contents of every screened buffer, or None.
+def set_last_refusal(why: str)
+def last_refusal()
+def record_oracle_ms(key, ms: float)
+def oracle_ms_of(key)
+    # The oracle's measured CPU time for this key, or None if it never ran.
+def announce_no_oracle(kernel_name: str, key, why: str='no oracle is registered for this kernel')
+    # Say, once per process, that a screen ran on a consensus alone.
+```
+
+`nbxtensor.ops.selu`
+
+```python
+def selu_forward_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.sigmoid`
+
+```python
+def sigmoid_forward_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.silu`
+
+```python
+def silu_forward_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.sin`
+
+```python
+def sin_forward_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.softmax`
+
+```python
+def softmax_forward_kernel(input_ptr, output_ptr, batch_dim, feat_dim, BATCH_BUCKET, FEAT_BUCKET, input_batch_stride, input_feat_stride, output_batch_stride, output_feat_stride, log: tl.constexpr, BLOCK_SIZE_BATCH: tl.constexpr, BLOCK_SIZE_FEAT: tl.constexpr)
+    # Softmax forward (or log_softmax if log=True).
+def softmax_forward_looped_kernel(input_ptr, output_ptr, feat_dim, BATCH_BUCKET, FEAT_BUCKET, input_batch_stride, input_feat_stride, output_batch_stride, output_feat_stride, log: tl.constexpr, TILE_FEAT: tl.constexpr)
+    # Online two-pass softmax for rows too large for one register tile.
+```
+
+`nbxtensor.ops.softplus`
+
+```python
+def softplus_forward_kernel(x_ptr, output_ptr, n_elements, beta, threshold, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.sort_op`
+
+```python
+def uint_to_uint(x, descending: tl.constexpr=False)
+    # Unsigned → unsigned
+def int_to_uint(x, descending: tl.constexpr=False)
+    # Signed int → unsigned, preserving sort order.
+def floating_to_uint(x, descending: tl.constexpr=False)
+    # Float → unsigned, preserving sort order (handles sign bit correctly).
+def convert_to_uint_preserve_order(x, descending: tl.constexpr=False)
+    # Convert any numeric type to unsigned, preserving sort order.
+def radix_sort_histogram_kernel(arr_ptr, out_ptr, num_passes, m, n, tiles_n_per_cta, TILE_N: tl.constexpr, TILE_R: tl.constexpr, num_bits_per_pass: tl.constexpr, descending: tl.constexpr)
+    # Compute per-bin histograms for radix sort.
+def radix_sort_tile_counts_kernel(arr_ptr, counts_ptr, m, N, OUT_N, TILE_N: tl.constexpr, TILE_R: tl.constexpr, k_bits: tl.constexpr, bit_offset, descending: tl.constexpr)
+    # How many elements of each bin this TILE holds.
+def radix_sort_tile_prefix_kernel(counts_ptr, prefix_ptr, num_tiles, OUT_N, TILES_POW2: tl.constexpr)
+    # Exclusive scan of the per-tile counts, along the TILE axis.
+def radix_sort_scatter_kernel(arr_ptr, associate_arr_ptr, out_ptr, associate_out_ptr, excumsum_bins_ptr, tile_prefix_ptr, n_passes, pass_id, bit_offset, m, N, OUT_N, TILE_N: tl.constexpr, TILE_R: tl.constexpr, k_bits: tl.constexpr, descending: tl.constexpr)
+    # Scatter elements to their sorted positions.
+```
+
+`nbxtensor.ops.spectral_wrappers`
+
+```python
+def fft_c2c_wrapper(x, dim: int=-1, norm: str=None, forward: bool=True)
+    # _fft_c2c
+def fft_rfft_wrapper(x, n: int=None, dim: int=-1, norm: str=None)
+    # rfft equivalent via Triton kernel.
+def fft_irfft_wrapper(x, n: int=None, dim: int=-1, norm: str=None)
+    # irfft equivalent via Triton kernel.
+```
+
+`nbxtensor.ops.sqrt`
+
+```python
+def sqrt_forward_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.stack_op`
+
+```python
+def stack_copy_kernel(out_ptr, in_ptr_a, in_ptr_b, in_ptr_c, in_ptr_d, dim_size_in_a, dim_size_in_b, dim_size_in_c, dim_size_in_d, dim_size_out, dim_prod_post, dim_offset_a, dim_offset_b, dim_offset_c, dim_offset_d, total_elements_a, total_elements_b, total_elements_c, total_elements_d, BLOCK_X: tl.constexpr)
+    # Copies up to 4 tensors into stacked output at correct offsets.
+```
+
+`nbxtensor.ops.std`
+
+```python
+def std_map_kernel(X, Tmp_sum, Tmp_sum_sq, N, BLOCK_N: tl.constexpr)
+    # Pass 1
+def std_reduce_kernel(Tmp_sum, Tmp_sum_sq, Out, N, correction, BLOCK_NUM, BLOCK_SIZE: tl.constexpr)
+    # Pass 2
+def std_dim_kernel(X, Out, stride_x_row, stride_x_col, M, N, correction, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr)
+    # Compute std along compressed inner dim N.
+```
+
+`nbxtensor.ops.strided_copy`
+
+```python
+def strided_copy_kernel(src_ptr, dst_ptr, n_elements, shape_ptr, stride_ptr, BLOCK_SIZE: tl.constexpr, NDIM: tl.constexpr, WIDE: tl.constexpr=True)
+    # Copy strided src → contiguous dst.
+def strided_scatter_kernel(src_ptr, dst_ptr, n_elements, shape_ptr, stride_ptr, BLOCK_SIZE: tl.constexpr, NDIM: tl.constexpr, WIDE: tl.constexpr=True)
+    # Scatter contiguous src → strided dst.
+def strided_copy_nd_kernel(src_ptr, dst_ptr, n_elements, shape_ptr, src_stride_ptr, dst_stride_ptr, BLOCK_SIZE: tl.constexpr, NDIM: tl.constexpr, WIDE: tl.constexpr=True, SATURATE_F16: tl.constexpr=False)
+    # Copy strided src → strided dst, casting on the store.
+```
+
+`nbxtensor.ops.sub`
+
+```python
+def sub_forward_kernel(x_ptr, y_ptr, output_ptr, n_elements, alpha, BLOCK_SIZE: tl.constexpr)
+    # out = x - alpha * y
+def rsub_forward_kernel(x_ptr, output_ptr, n_elements, scalar, BLOCK_SIZE: tl.constexpr)
+    # out = scalar - x (reverse subtraction)
+```
+
+`nbxtensor.ops.sum`
+
+```python
+def sum_forward_kernel(input_ptr, output_ptr, batch_dim, feat_dim, BATCH_BUCKET, FEAT_BUCKET, input_batch_stride, input_feat_stride, BLOCK_SIZE_BATCH: tl.constexpr, BLOCK_SIZE_FEAT: tl.constexpr)
+    # Sum reduction over the last dimension
+```
+
+`nbxtensor.ops.tan`
+
+```python
+def tan_forward_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.tanh`
+
+```python
+def tanh_forward_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.threshold`
+
+```python
+def threshold_forward_kernel(input_ptr, output_ptr, n_elements, threshold_val, value, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.topk`
+
+```python
+def topk_stage1_kernel(y_ptr, index_ptr, x_ptr, k, N: tl.constexpr, CHUNK_SIZE: tl.constexpr, DESCENDING: tl.constexpr)
+def argsort(x, ids, dim: tl.constexpr, descending: core.constexpr)
+def topk_stage2_kernel(y_ptr, index_ptr, chunk_x, chunk_index, sort_dim: tl.constexpr, k: tl.constexpr, N: tl.constexpr, BLOCK_SIZE: tl.constexpr, DESCENDING: tl.constexpr)
+```
+
+`nbxtensor.ops.trace_op`
+
+```python
+def trace_kernel(inp_ptr, out_ptr, num_diag, stride0, stride1, BLOCK_SIZE: tl.constexpr)
+    # Sum diagonal elements of a 2D matrix.
+```
+
+`nbxtensor.ops.tril`
+
+```python
+def tril_kernel(X, Y, M, N, diagonal, M_BLOCK_SIZE: tl.constexpr, N_BLOCK_SIZE: tl.constexpr)
+def tril_batch_kernel(X, Y, batch, MN, N, diagonal, BATCH_BLOCK_SIZE: tl.constexpr, MN_BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.triu`
+
+```python
+def triu_kernel(X, Y, M, N, diagonal, M_BLOCK_SIZE: tl.constexpr, N_BLOCK_SIZE: tl.constexpr)
+def triu_batch_kernel(X, Y, batch, MN, N, diagonal, BATCH_BLOCK_SIZE: tl.constexpr, MN_BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.unfold_op`
+
+```python
+def unfold_backward_1d_kernel(grad_ptr, out_ptr, N_frames, size, step, L, MAX_OVERLAP: tl.constexpr, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.unique_op`
+
+```python
+def simple_unique_flat_kernel(sorted_data_ptr, sorted_indices_ptr, data_out_ptr, inverse_indices_ptr, idx_ptr, unique_size_ptr, return_inverse: tl.constexpr, return_counts: tl.constexpr, num_tasks, tile_size: tl.constexpr)
+    # Single-block unique on pre-sorted data (for small inputs <= 8192).
+def output_counts_kernel(idx_ptr, origin_num_tasks, counts_ptr, num_tasks, tile_size: tl.constexpr)
+    # Compute counts from boundary indices.
+```
+
+`nbxtensor.ops.upsample_bilinear2d`
+
+```python
+def upsample_bilinear2d_kernel(input_ptr, output_ptr, N, C, IH, IW, OH, OW, scale_h, scale_w, offset, BLOCK_X: tl.constexpr, BLOCK_Y: tl.constexpr)
+    # Bilinear interpolation upsampling.
+```
+
+`nbxtensor.ops.upsample_nearest2d`
+
+```python
+def upsample_nearest2d_kernel(ptr_o, ptr_i, N, C, OH, OW, IH, IW, s_n, s_c, s_h, s_w, reciprocal_scale_h, reciprocal_scale_w, BLOCK_SIZE: tl.constexpr)
+```
+
+`nbxtensor.ops.upsample_nearest3d`
+
+```python
+def upsample_nearest3d_kernel(ptr_o, ptr_i, N, C, OD, OH, OW, ID, IH, IW, reciprocal_scale_d, reciprocal_scale_h, reciprocal_scale_w, BLOCK_SIZE: tl.constexpr)
+    # Nearest-neighbor 3D upsample.
+```
+
+`nbxtensor.ops.var`
+
+```python
+def welford_func(mean_x, count_x, M_x, mean_y, count_y, M_y)
+    # Combine two Welford partial aggregates.
+def var_kernel_1(X, Acc, Average, Count, N, BLOCK_N: tl.constexpr)
+    # Pass 1
+def var_kernel_2(Acc, Average, Count, Var, N, correction, BLOCK_NUM, BLOCK_N: tl.constexpr)
+    # Pass 2
+def var_welford_kernel(X, Var, M, N, correction, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr)
+    # Welford variance along compressed inner dim N.
+```
+
+`nbxtensor.ops.vector_norm`
+
+```python
+def l2_norm_kernel(X, Out, M, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr)
+    # L2 norm per row
+def l1_norm_kernel(X, Out, M, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr)
+    # L1 norm per row
+def linf_norm_kernel(X, Out, M, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr)
+    # L-infinity norm per row
+def l0_norm_kernel(X, Out, M, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr)
+    # L0 norm per row
+def lp_norm_kernel(X, Out, M, N, ord, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr)
+    # General Lp norm per row
+def l2_norm_pass1_kernel(X, Mid, M, BLOCK_SIZE: tl.constexpr)
+    # First pass of flat L2 norm
+def l2_norm_pass2_kernel(Mid, Out, MID_SIZE, BLOCK_MID: tl.constexpr)
+    # Second pass
+def linf_norm_pass1_kernel(X, Mid, M, BLOCK_SIZE: tl.constexpr)
+    # First pass of flat Linf norm
+def linf_norm_pass2_kernel(Mid, Out, MID_SIZE, BLOCK_MID: tl.constexpr)
+    # Second pass
+```
+
+`nbxtensor.ops.weight_norm`
+
+```python
+def weight_norm_kernel_first(output_ptr, norm_ptr, v_ptr, g_ptr, M, N, eps, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr)
+    # Weight norm forward, normalizing along dim=0 (rows).
+def weight_norm_kernel_last(output_ptr, norm_ptr, v_ptr, g_ptr, M, N, eps, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr)
+    # Weight norm forward, normalizing along last dim (columns).
+```
+
+`nbxtensor.ops.where`
+
+```python
+def where_forward_kernel(cond_ptr, x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+    # out = where(cond, x, y)
+```
+
+`nbxtensor.ops.wrappers`
+
+```python
+def has_native_bf16()
+    # Expose the cached hardware capability flag for non-kernel callers.
+def get_hardware_profile()
+    # The hardware profile given to set_hardware_profile, or None.
+def get_compute_dtype()
+    # Return the active per-component compute dtype, or None if not set.
+def set_activations_fp16_safe(safe: bool)
+    # Set the activations-fp16-safe opt-in flag for the active component.
+def get_activations_fp16_safe()
+    # Return the activations-fp16-safe flag for the active component.
+```
+
+`nbxtensor.ops.zeros_op`
+
+```python
+def zeros_kernel(output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
+    # Fill output with zeros.
+```
+
 ### `nbxtensor.io.read_rate` — how fast the machine reads its weight files, by parallel reads
 
 ```python
