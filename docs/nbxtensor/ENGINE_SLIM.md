@@ -79,6 +79,16 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 
 | kind | path | symbol | why it stays |
 |---|---|---|---|
+| dead | src/neurobrix/cli/commands/registry.py | installing_path | a test seam: read by tests/unit/cli/test_import_speaks_ndjson.py, nothing else |
+| dead | src/neurobrix/core/config/loader.py | vendor_file | a test seam: read by tests/unit/config/test_apple_profiles_agree_with_the_device.py and the Apple tile-lattice test, nothing else |
+| dead | src/neurobrix/core/module/autoregressive/generator.py | AutoregressiveGenerator.num_generated | a test seam: read by tests/unit/serving/test_both_engines_read_the_stop_at_their_token_seam.py, nothing else |
+| dead | src/neurobrix/core/module/tiling_engine.py | OpLevelTilingPlan.add_inplace_unary | a test seam: read by tests/unit/prism/test_the_tiling_rung_s_reason_reaches_a_reader.py, nothing else |
+| dead | src/neurobrix/core/optim/passes/normalize.py | boundaries_present | a test seam: read by tests/unit/prism/test_a_segment_boundary_names_an_op_the_executor_still_has.py (the invariant a gate asserts), nothing else |
+| dead | src/neurobrix/core/runtime/graph/paged_kv_cache.py | PagedKVCache.held_bytes | a test seam: read by the paged-cache tests of both engines (what was appended is held), nothing else |
+| dead | src/neurobrix/core/state/mps_fence.py | MpsStateFence | a test seam: read by tests/unit/core/test_a_metal_page_comes_back_only_after_the_kernels_that_read_it.py, nothing else |
+| dead | src/neurobrix/core/state/pages.py | PagePool.pending_pages | a test seam: read by the state-page tests (a page released only past its fence), nothing else |
+| dead | src/neurobrix/nbx/container.py | NBXContainer.get_topology | a test seam: read by tests/unit/prism/test_the_plan_prices_every_cache_its_decoder_opens.py, nothing else |
+| dead | src/neurobrix/serving/client.py | DaemonClient.generate_stream | a test seam: read by tests/unit/serving/test_the_daemon_answers_while_it_generates.py (the streaming client), nothing else |
 | duplicate | src/neurobrix/core/runtime/resolution/i2v_conditioning.py | _to_channels_first | the same text over each branch's tensor (torch.Tensor / NBXTensor: `dim`, `permute`, `contiguous` of its own class); one copy per branch, each branch's vace module reads it |
 | duplicate | src/neurobrix/core/runtime/resolution/i2v_conditioning.py | build_condition | the same dispatch, to each branch's own builders (`_build_condition_wan` / `_cogvideox` / `_state_video_mask` of that module): the text is shared, the functions it calls are not |
 | duplicate | src/neurobrix/triton/i2v_conditioning.py | _to_channels_first | the same text over each branch's tensor (torch.Tensor / NBXTensor: `dim`, `permute`, `contiguous` of its own class); one copy per branch, each branch's vace module reads it |
