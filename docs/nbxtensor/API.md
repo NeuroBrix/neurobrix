@@ -309,6 +309,126 @@ def tiled_upsample_conv2d(x_or_proxy, weight, bias, stride, padding, dilation, t
 def pair(v) -> tuple           # (h, w) of a convolution argument given as one int or a pair
 ```
 
+### `nbxtensor.ops.elementwise_wrappers` — element-wise ops on NBXTensor (activations, unary and binary arithmetic, comparisons, bitwise and logical, interpolation)
+
+`nbxtensor.ops.elementwise_wrappers`
+
+```python
+def begin_run()
+    # A Triton sequence's run begins
+def relu(x, out=None)
+def silu(x, out=None)
+def gelu(x, approximate: str='none', out=None)
+def sigmoid_wrapper(x)
+def tanh_wrapper(x)
+def hardsigmoid(x)
+def hardswish(x, out=None)
+def leaky_relu(x, negative_slope: float=0.01, out=None)
+def elu(x, alpha: float=1.0, out=None)
+def mish(x, out=None)
+def selu_wrapper(x)
+def neg(x)
+def exp(x)
+def sin(x)
+def cos(x)
+def rsqrt(x)
+def sqrt_wrapper(x)
+def abs_wrapper(x)
+def log_wrapper(x)
+def reciprocal(x)
+def pow_wrapper(x, exponent)
+def clamp(x, min_val=None, max_val=None)
+def erf(x)
+def floor_wrapper(x)
+def ceil_wrapper(x)
+def floor_divide_wrapper(a, b)
+    # aten::floor_divide — floor(a / b), result in a's dtype.
+def round_wrapper(x)
+def trunc_wrapper(x)
+def add_inplace_nbx(target, other, alpha: float=1.0)
+    # In-place element-wise add
+def mul(a, b)
+def div(a, b, rounding_mode=None)
+def rsub(a, b)
+    # Reverse subtraction
+def maximum_wrapper(a, b)
+def minimum_wrapper(a, b)
+def gt(a, b)
+def ge(a, b)
+def lt(a, b)
+def eq(a, b)
+def ne(a, b)
+def isin_wrapper(elements, test_elements, *, invert: bool=False, assume_unique: bool=False)
+    # aten::isin — elementwise membership test.
+def invoke_silu_and_mul(input_tensor, M, N)
+    # Launch fused SwiGLU kernel
+def swiglu_fused_wrapper(gate, up)
+    # Fused SwiGLU with split gate/up tensors
+def rope_fused_wrapper(q_raw, k_raw, cos, sin)
+    # Fused RoPE (Liger-style rotate_half) — applies to Q and K in one launch.
+def bf16_to_fp16_gpu(src: NBXTensor, out: 'NBXTensor | None'=None)
+    # bfloat16 patterns (a 2-byte integer tensor holding the raw bits) to float16 on the device
+def glu_wrapper(x, dim: int=-1, act_func: str='sigmoid')
+    # Gated Linear Unit
+def le(a, b)
+def softplus_wrapper(x, beta: float=1.0, threshold: float=20.0)
+def remainder_wrapper(a, b)
+    # Remainder (modulo)
+def exp2_wrapper(x)
+def tan_wrapper(x)
+def celu_wrapper(x, alpha: float=1.0)
+def log_sigmoid_wrapper(x)
+def isfinite_wrapper(x)
+def isinf_wrapper(x)
+def isnan_wrapper(x)
+def nan_to_num_wrapper(x, nan: float=0.0, posinf: float=3.4028235e+38, neginf: float=-3.4028235e+38, inplace: bool=False)
+    # `inplace`
+def threshold_wrapper(x, threshold: float, value: float)
+def addcdiv_wrapper(input, tensor1, tensor2, value: float=1.0)
+    # result = input + value * (tensor1 / tensor2)
+def addcmul_wrapper(input, tensor1, tensor2, value: float=1.0)
+    # result = input + value * tensor1 * tensor2
+def bitwise_and_wrapper(a, b)
+def bitwise_or_wrapper(a, b)
+def bitwise_not_wrapper(x)
+def logical_and_wrapper(a, b)
+def logical_or_wrapper(a, b)
+def logical_not_wrapper(x)
+def lerp_wrapper(input, end, weight)
+    # Linear interpolation
+def min_wrapper(x, dim=None, keepdim=False)
+    # Min reduction.
+def max_wrapper(x, dim=None, keepdim=False)
+    # Max reduction.
+def bincount_wrapper(x, minlength: int=0)
+    # Bincount via CPU numpy (input is small 1D int tensor from MoE routing).
+def sort_wrapper(x, dim: int=-1, descending: bool=False, stable: bool=False)
+    # Sort via Triton radix sort.
+def logical_xor_wrapper(a, b)
+def bitwise_left_shift_wrapper(a, b)
+def bitwise_right_shift_wrapper(a, b)
+def addr_wrapper(input, vec1, vec2, beta: float=1.0, alpha: float=1.0)
+    # Outer product add
+def clamp_min_wrapper(x, min_val)
+    # Clamp minimum
+def topk_wrapper(x, k: int, dim: int=-1, largest: bool=True, sorted: bool=True)
+    # Top-k via 2-stage Triton pipeline.
+def trace_wrapper(x)
+    # Sum of diagonal elements.
+def bernoulli_wrapper(x, p: float=0.5, **kwargs)
+    # bernoulli(tensor) → 0/1 values based on probabilities.
+def fold_wrapper(*args, **kwargs)
+    # fold — NOT YET IMPLEMENTED in Triton.
+def clear_bias_caches()
+    # Evict the module-global attention bias caches.
+def angle_wrapper(x)
+    # angle(complex_tensor) → atan2(imag, real).
+def complex_wrapper(real, imag)
+    # complex(real, imag) → complex64 tensor (interleaved [real, imag] pairs).
+def lstm_wrapper(input_, hx, params, has_biases=True, num_layers=1, dropout=0.0, train=False, bidirectional=False, batch_first=False)
+    # Triton-pure aten::lstm.
+```
+
 ### `nbxtensor.io.read_rate` — how fast the machine reads its weight files, by parallel reads
 
 ```python
