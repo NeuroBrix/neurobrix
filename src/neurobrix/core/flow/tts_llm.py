@@ -165,7 +165,7 @@ class TTSLLMEngine(FlowHandler):
         stages = audio_config.get("stages", [])
         defaults = self.ctx.pkg.defaults
         device = self.ctx.primary_device
-        dtype = self._get_compute_dtype()
+        dtype = self.ctx.compute_dtype()
 
         # Separate stages by role
         ve_stage = None
@@ -597,15 +597,6 @@ class TTSLLMEngine(FlowHandler):
 
     # ─── Helpers ──────────────────────────────────────────────────────────────
 
-    def _get_compute_dtype(self) -> torch.dtype:
-        """Get compute dtype from the Prism-resolved plan (FlowContext.compute_dtype).
-
-        The previous local copy walked `plan.allocations`, an attribute the
-        ExecutionPlan never had (`plan.components` is the real one) — the
-        walk was dead code and the method silently fell back to
-        `defaults.json`. The FlowContext resolver reads the actual plan.
-        """
-        return self.ctx.compute_dtype()
 
     def _get_component_output(self, comp_name: str) -> Optional[torch.Tensor]:
         """Get component output from variable resolver."""

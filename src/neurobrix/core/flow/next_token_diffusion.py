@@ -52,7 +52,6 @@ from neurobrix.core.memory.manager import release_flow_memory
 from neurobrix.core.runtime_values import require_max_tokens
 
 
-
 def _require_default(defaults: Dict[str, Any], key: str) -> Any:
     """ZERO FALLBACK read of a semantic key from the .nbx defaults.json.
 
@@ -113,7 +112,7 @@ class NextTokenDiffusionEngine(FlowHandler):
     def execute(self) -> Dict[str, Any]:
         defaults = self.ctx.pkg.defaults
         device = self.ctx.primary_device
-        dtype = self._compute_dtype()
+        dtype = self.ctx.compute_dtype()
 
         # ── Resolve special token ids from the embedded tokenizer (no hardcode) ──
         tok = self.ctx.modules.get("tokenizer")
@@ -658,9 +657,6 @@ class NextTokenDiffusionEngine(FlowHandler):
             return None
         return out
 
-    def _compute_dtype(self) -> torch.dtype:
-        """Compute dtype from the Prism-resolved plan (FlowContext.compute_dtype)."""
-        return self.ctx.compute_dtype()
 
     def _embed_weight(self, comp_name: str) -> Optional[torch.Tensor]:
         executor = self.ctx.executors.get(comp_name)
