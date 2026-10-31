@@ -79,6 +79,13 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 
 | kind | path | symbol | why it stays |
 |---|---|---|---|
+| wrapper | src/neurobrix/cli/commands/registry.py | IncompleteDownload | a named refusal: its type says what was refused, to the reader and to a caller that catches it |
+| wrapper | src/neurobrix/core/config/loader.py | UnsupportedArchitectureError | a named refusal: its type says what was refused, to the reader and to a caller that catches it |
+| wrapper | src/neurobrix/core/module/autoregressive/factory.py | AutoregressiveConfigError | a named refusal: its type says what was refused, to the reader and to a caller that catches it |
+| wrapper | src/neurobrix/core/module/scheduler/config.py | SchedulerConfigError | a named refusal: its type says what was refused, to the reader and to a caller that catches it |
+| wrapper | src/neurobrix/core/optim/passes/invariant.py | InvariantPlanRefused | a named refusal: its type says what was refused, to the reader and to a caller that catches it |
+| wrapper | src/neurobrix/nbx/atomic_install.py | InstallHeldByAnother | a named refusal: its type says what was refused, to the reader and to a caller that catches it |
+| wrapper | src/neurobrix/nbx/weight_presence.py | AbsentWeightError | a named refusal: its type says what was refused, to the reader and to a caller that catches it |
 | dead | src/neurobrix/cli/commands/registry.py | installing_path | a test seam: read by tests/unit/cli/test_import_speaks_ndjson.py, nothing else |
 | dead | src/neurobrix/core/config/loader.py | vendor_file | a test seam: read by tests/unit/config/test_apple_profiles_agree_with_the_device.py and the Apple tile-lattice test, nothing else |
 | dead | src/neurobrix/core/module/autoregressive/generator.py | AutoregressiveGenerator.num_generated | a test seam: read by tests/unit/serving/test_both_engines_read_the_stop_at_their_token_seam.py, nothing else |

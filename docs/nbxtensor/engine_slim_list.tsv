@@ -1,7 +1,7 @@
 # The engine's open slimming findings (tools/engine_slim_scan.py); each ends deleted, moved into nbxtensor, or kept
 # with its reason in docs/nbxtensor/ENGINE_SLIM.md. Both figures below may only go down (test_the_engine_only_slims.py).
-# engine_lines: 138322
-# open: 275
+# engine_lines: 138306
+# open: 265
 kind	path	symbol	detail
 duplicate	src/neurobrix/core/audio_frontend.py	_requested_voice	same body as src/neurobrix/triton/audio_frontend.py::_requested_voice_np
 duplicate	src/neurobrix/core/cfg/engine.py	__init__	same body as src/neurobrix/triton/cfg/engine.py::__init__
@@ -166,26 +166,21 @@ wrapper	src/neurobrix/_nbxtensor_host.py	shadow_run	only hands its parameters to
 wrapper	src/neurobrix/agent/sandbox.py	SandboxViolation	only renames Exception
 wrapper	src/neurobrix/agent/sandbox.py	_bound(limit)	no call site passes it: always its default _OUTPUT_BOUND
 wrapper	src/neurobrix/cli/commands/agent.py	complete_fn	only hands its parameters to engine.complete
-wrapper	src/neurobrix/cli/commands/registry.py	IncompleteDownload	only renames RuntimeError
 wrapper	src/neurobrix/cli/commands/registry.py	_strip_build_stamp	only hands its parameters to re.sub
 wrapper	src/neurobrix/cli/commands/registry.py	download_resumable(chunk_size)	no call site passes it: always its default 1 << 20
 wrapper	src/neurobrix/cli/commands/run.py	_rt	only hands its parameters to _resolve_runtime
 wrapper	src/neurobrix/cli/json_out.py	close	only hands its parameters to self._emit
 wrapper	src/neurobrix/core/cfg/engine.py	execute_component_with_cfg	only hands its parameters to self._execute_batched_cfg
 wrapper	src/neurobrix/core/components/handlers/transformer_handler.py	get_latent_scale	only hands its parameters to self._get_vae_scale
-wrapper	src/neurobrix/core/config/loader.py	UnsupportedArchitectureError	only renames FileNotFoundError
 wrapper	src/neurobrix/core/config/loader.py	get_default(generation_type)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/config/system.py	get_precision_config	only hands its parameters to PRECISION_DEFAULTS.copy
 wrapper	src/neurobrix/core/config/system.py	get_prism_defaults	only hands its parameters to PRISM_DEFAULTS.copy
-wrapper	src/neurobrix/core/flow/audio.py	_get_compute_dtype	only hands its parameters to self.ctx.compute_dtype
 wrapper	src/neurobrix/core/flow/audio_utils.py	preprocess_text_input(input_config)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/flow/audio_utils.py	redistribute_snac_codes(codebook_size)	no call site passes it: always its default 4096
 wrapper	src/neurobrix/core/flow/audio_utils.py	sample_token(top_p)	no call site passes it: always its default 1.0
 wrapper	src/neurobrix/core/flow/autoregressive.py	use_branch	only hands its parameters to self.kv_wrapper.use_branch
 wrapper	src/neurobrix/core/flow/base.py	compute_dtype(component)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/flow/decoder_kv.py	decoder_self_attention_plan(encoder_input)	no call site passes it: always its default 'input::encoder_hidden_states'
-wrapper	src/neurobrix/core/flow/next_token_diffusion.py	_compute_dtype	only hands its parameters to self.ctx.compute_dtype
-wrapper	src/neurobrix/core/flow/tts_llm.py	_get_compute_dtype	only hands its parameters to self.ctx.compute_dtype
 wrapper	src/neurobrix/core/flow/tts_llm.py	_sample_token(min_p)	no call site passes it: always its default 0.0
 wrapper	src/neurobrix/core/flow/tts_llm.py	_sample_token(top_p)	no call site passes it: always its default 1.0
 wrapper	src/neurobrix/core/memory/manager.py	release_flow_memory	only hands its parameters to MemoryManager.release_flow_memory
@@ -197,13 +192,11 @@ wrapper	src/neurobrix/core/module/audio/mel_dsp.py	_whisper_mel(_audio)	no call 
 wrapper	src/neurobrix/core/module/audio/mel_dsp.py	extract_features_np(rng)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/module/audio/output_processor.py	decode_snac_tokens(audio_token_start)	no call site passes it: always its default 128266
 wrapper	src/neurobrix/core/module/audio/output_processor.py	decode_tokens(skip_special)	no call site passes it: always its default True
-wrapper	src/neurobrix/core/module/autoregressive/factory.py	AutoregressiveConfigError	only renames Exception
 wrapper	src/neurobrix/core/module/autoregressive/generator.py	set_generation_params(max_tokens)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/module/autoregressive/generator.py	set_generation_params(repetition_penalty)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/module/autoregressive/generator.py	set_generation_params(temperature)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/module/autoregressive/generator.py	set_generation_params(top_k)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/module/autoregressive/generator.py	set_generation_params(top_p)	no call site passes it: always its default None
-wrapper	src/neurobrix/core/module/scheduler/config.py	SchedulerConfigError	only renames RuntimeError
 wrapper	src/neurobrix/core/module/scheduler/diffusion/unipc_multistep.py	_betas_for_alpha_bar(max_beta)	no call site passes it: always its default 0.999
 wrapper	src/neurobrix/core/module/text/processor.py	tokenize(chat_mode)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/module/text/processor.py	tokenize_for_diffusion(encoder_name)	no call site passes it: always its default 'text_encoder'
@@ -214,7 +207,6 @@ wrapper	src/neurobrix/core/module/tiling_engine.py	make_unified_node_interceptor
 wrapper	src/neurobrix/core/module/tokenizer/json_bpe.py	get_vocab_size(with_added_tokens)	no call site passes it: always its default True
 wrapper	src/neurobrix/core/module/tokenizer/tiktoken_bpe.py	from_file(pat_str)	no call site passes it: always its default PAT_STR
 wrapper	src/neurobrix/core/module/tokenizer/tiktoken_bpe.py	from_file(special_tokens)	no call site passes it: always its default None
-wrapper	src/neurobrix/core/optim/passes/invariant.py	InvariantPlanRefused	only renames RuntimeError
 wrapper	src/neurobrix/core/paths.py	BackendOnClearedStorage	only renames RuntimeError
 wrapper	src/neurobrix/core/paths.py	PathNotConfigured	only renames RuntimeError
 wrapper	src/neurobrix/core/paths.py	installation_refusals(search_root)	no call site passes it: always its default None
@@ -258,14 +250,12 @@ wrapper	src/neurobrix/core/strategies/shared_steps.py	cleanup	only hands its par
 wrapper	src/neurobrix/core/workspace.py	SnapshotNotPresent	only renames Exception
 wrapper	src/neurobrix/kernels/census.py	install(hardware_profile)	no call site passes it: always its default None
 wrapper	src/neurobrix/kernels/census_table.py	rows_for(root)	no call site passes it: always its default None
-wrapper	src/neurobrix/nbx/atomic_install.py	InstallHeldByAnother	only renames RuntimeError
 wrapper	src/neurobrix/nbx/atomic_install.py	installing(allow_break)	no call site passes it: always its default False
 wrapper	src/neurobrix/nbx/cache.py	clear(model_name)	no call site passes it: always its default None
 wrapper	src/neurobrix/nbx/cache.py	extract(allow_replace)	no call site passes it: always its default False
 wrapper	src/neurobrix/nbx/component_flags.py	clear	only hands its parameters to _TABLE.clear
 wrapper	src/neurobrix/nbx/loader.py	load_manifest	only hands its parameters to self.load_json
 wrapper	src/neurobrix/nbx/spec.py	get_nbx_dtype	only hands its parameters to NBX_DTYPES.get
-wrapper	src/neurobrix/nbx/weight_presence.py	AbsentWeightError	only renames RuntimeError
 wrapper	src/neurobrix/nbx/weight_presence.py	refuse_absent_weights(limit)	no call site passes it: always its default 20
 wrapper	src/neurobrix/nbx/weight_presence.py	refuse_unbound_weights(limit)	no call site passes it: always its default 20
 wrapper	src/neurobrix/serving/client.py	new_chat	only hands its parameters to self.send

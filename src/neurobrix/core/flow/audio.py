@@ -135,7 +135,7 @@ class AudioEngine(AudioSteps, FlowHandler):
             )
         variable = input_config.get("variable", "global.input_features")
         device = torch.device(self.ctx.primary_device)
-        dtype = self._get_compute_dtype()
+        dtype = self.ctx.compute_dtype()
 
         # Read expected input shape from first stage's graph (DATA-DRIVEN)
         first_comp = stages[0]["component"] if stages else None
@@ -731,6 +731,3 @@ class AudioEngine(AudioSteps, FlowHandler):
                 return tuple(resolved)
         return None
 
-    def _get_compute_dtype(self) -> torch.dtype:
-        """Get compute dtype from the Prism-resolved plan (FlowContext.compute_dtype)."""
-        return self.ctx.compute_dtype()
