@@ -319,9 +319,10 @@ def choose(rates, within) -> int                   # the smallest count within `
 def measure(files, max_bytes, max_workers, within=0.05) -> dict
     # {'rates': {1: .., 2: .., 4: ..}, 'workers': choose(...), 'steady': bool, 'bytes': .., 'last_one_worker': ..}
 WITNESS_BYTES = 1 << 30                           # the witness written when the storage holds no weight file
+START_BYTES = 2 << 30                             # the first trial: one shard's read, at most this
 def workers_for(directory, max_workers=None, pattern='*/components/*/weights/*.safetensors') -> int
     # measured on the directory's storage (its largest weight files, else a witness it writes and removes):
-    # the trials grow while the measure is not stable; two steady draws decide (a third breaks a tie);
+    # the first trial reads one shard (at most START_BYTES = 2 GiB), then the trials grow while the measure is not stable; two steady draws decide (a third breaks a tie);
     # refused by name when no size is stable — never None, never a default
 ```
 

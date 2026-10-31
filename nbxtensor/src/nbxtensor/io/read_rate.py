@@ -11,7 +11,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Sequence
 
-__all__ = ["PIECE", "WITNESS_BYTES", "pieces", "trial", "choose", "measure", "workers_for"]
+__all__ = ["PIECE", "WITNESS_BYTES", "START_BYTES", "pieces", "trial", "choose", "measure", "workers_for"]
 
 PIECE = 16 << 20                       # the loaders' read piece
 
@@ -116,6 +116,7 @@ def measure(files: Sequence[str], max_bytes: int, max_workers: int, within: floa
 
 
 WITNESS_BYTES = 1 << 30                # the witness file written when the storage holds no weight file yet
+START_BYTES = 2 << 30                  # the first trial: one shard's read, at most this
 
 
 def workers_for(directory, max_workers: Optional[int] = None,
@@ -125,7 +126,10 @@ def workers_for(directory, max_workers: Optional[int] = None,
     storage measured is the one the loaders read) and removed. Counts 1, 2, 4, ... up to `max_workers` (the machine's
     `os.cpu_count()` when not given).
 
-    The trials grow while the measure is not stable: at a given size, up to three measures; when two of them are
+    The first trial reads one shard (the largest file, at most `START_BYTES`): a loader reads whole shards, and a
+    shorter trial undervalues parallel reads (64 MiB picked 4 on the rack's RDMA cache, 2 GiB 8/16/16 — the count
+    the planner prices host memory by is the one a load sees). The trials then grow while the measure is not stable:
+    at a given size, up to three measures; when two of them are
     steady (`measure`'s first/last one-worker check) the answer is their median — one draw fluctuates (8 or 16 on the
     rack's RDMA cache) and a plan prices the count. Otherwise the trial size is quadrupled, up to everything the files
     hold: a byte count is a time on one storage only (256 MiB was 7 s over the Mac's NFS, 40 ms over the rack's RDMA
@@ -144,7 +148,10 @@ def workers_for(directory, max_workers: Optional[int] = None,
         files = [str(witness)]
     try:
         available = sum(os.path.getsize(p) for p in files)
-        size, tried = 4 * PIECE, []
+        # A loader reads whole shards: a trial shorter than one is a rate no load sees (64 MiB trials picked 4 on the
+        # rack's RDMA cache where 2 GiB ones picked 8/16/16, the Dell 2026-10-31). The first trial reads the largest
+        # file (at most START_BYTES), then grows while the measure is not stable.
+        size, tried = max(4 * PIECE, min(max(os.path.getsize(p) for p in files), START_BYTES)), []
         while True:
             size = min(size, available)
             picks = []

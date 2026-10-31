@@ -40,16 +40,26 @@ def test_a_directory_without_weights_is_measured_on_a_witness_it_removes(tmp_pat
     assert list(tmp_path.iterdir()) == []
 
 
-def test_the_trials_grow_while_the_measure_is_not_stable(tmp_path, monkeypatch):
-    (tmp_path / "x").write_bytes(b"0" * (64 * M.PIECE))
+def test_the_first_trial_reads_one_shard_then_grows_while_not_stable(tmp_path, monkeypatch):
+    for i in range(8):
+        (tmp_path / f"x{i}").write_bytes(b"0" * (8 * M.PIECE))               # shards of 8 pieces, 64 in all
     sizes = []
 
     def measure(files, size, workers):
         sizes.append(size)
-        return {"steady": size >= 16 * M.PIECE, "workers": 8}
+        return {"steady": size >= 32 * M.PIECE, "workers": 8}
     monkeypatch.setattr(M, "measure", measure)
-    assert M.workers_for(tmp_path, max_workers=8, pattern="x") == 8
-    assert sorted(set(sizes)) == [4 * M.PIECE, 16 * M.PIECE]              # quadrupled once, then two steady draws
+    assert M.workers_for(tmp_path, max_workers=8, pattern="x*") == 8
+    assert sorted(set(sizes)) == [8 * M.PIECE, 32 * M.PIECE]              # one shard first, quadrupled once
+
+
+def test_the_first_trial_is_capped(tmp_path, monkeypatch):
+    (tmp_path / "x").write_bytes(b"0" * (8 * M.PIECE))
+    monkeypatch.setattr(M, "START_BYTES", 2 * M.PIECE)
+    sizes = []
+    monkeypatch.setattr(M, "measure", lambda f, size, w: sizes.append(size) or {"steady": True, "workers": 2})
+    M.workers_for(tmp_path, max_workers=2, pattern="x")
+    assert sizes[0] == 4 * M.PIECE                                         # never below four pieces
 
 
 def test_no_stable_measure_at_any_size_is_refused_by_name(tmp_path, monkeypatch):
