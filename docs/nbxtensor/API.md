@@ -429,6 +429,345 @@ def lstm_wrapper(input_, hx, params, has_biases=True, num_layers=1, dropout=0.0,
     # Triton-pure aten::lstm.
 ```
 
+### `nbxtensor.ops.shape_wrappers`
+
+`nbxtensor.ops.shape_wrappers`
+
+```python
+def grid_sampler_2d_wrapper(inp, grid, interpolation_mode=0, padding_mode=0, align_corners=False)
+    # aten::grid_sampler_2d — pure Triton 2D grid sampler.
+def copy_to(x, dtype: object)
+def upsample_nearest1d_wrapper(x, output_size, scales=None)
+    # Upsample nearest 1D via 2D
+def upsample_nearest2d_wrapper(x, output_size, scales_h=None, scales_w=None)
+    # Upsample nearest 2D.
+def triu_wrapper(x, diagonal: int=0)
+    # Upper triangular.
+def tril_wrapper(x, diagonal: int=0)
+    # Lower triangular.
+def roll_wrapper(x, shifts, dims=None)
+    # Circular shift along given dim(s) — `torch.roll` semantics.
+def flip_wrapper(x, dims)
+    # Reverse elements along the given dimension(s).
+def broadcast_tensors_wrapper(*tensors)
+    # aten::broadcast_tensors(Tensor[] tensors) -> Tensor[].
+def pixel_shuffle_wrapper(x, upscale_factor: int)
+    # Pixel shuffle
+def pixel_unshuffle_wrapper(x, downscale_factor: int)
+    # Pixel unshuffle
+def upsample_nearest3d_wrapper(x, output_size, scales_d=None, scales_h=None, scales_w=None)
+    # Upsample nearest 3D
+def repeat_interleave_self_int_wrapper(inp, repeats: int, dim: int=0, output_size: int=None)
+    # repeat_interleave with scalar repeats
+def repeat_interleave_tensor_wrapper(repeats, output_size: int=None)
+    # repeat_interleave with tensor repeats
+def repeat_interleave_self_tensor_wrapper(inp, repeats, dim: int=0, output_size: int=None)
+    # repeat_interleave with tensor repeats applied to input.
+def repeat_interleave_wrapper(*args, **kwargs)
+    # aten::repeat_interleave dispatcher — routes by args, since the bare op_type cannot distinguish the overloads
+def constant_pad_nd_wrapper(x, pad_list, value: float=0.0)
+    # constant_pad_nd via Triton kernel.
+def pad_wrapper(x, pad_list, mode: str='constant', value: float=0.0)
+    # F.pad via Triton — routes by mode + padded-dim count (len(pad_list)//2).
+def reflection_pad1d_wrapper(x, pad_list)
+    # Reflection pad 1D — `F.pad(mode='reflect')` on the last dim.
+def reflection_pad2d_wrapper(x, pad_list)
+    # Reflection pad 2D — `F.pad(mode='reflect')` semantics.
+def reflection_pad3d_wrapper(x, pad_list)
+    # Reflection pad 3D (last three dims) — F.pad(mode='reflect').
+def replication_pad1d_wrapper(x, pad_list)
+    # Replication pad 1D (last dim) — F.pad(mode='replicate'), one pass (`_replication_pad_last`).
+def replication_pad2d_wrapper(x, pad_list)
+    # Replication pad 2D (last two dims) — F.pad(mode='replicate'), one pass (`_replication_pad_last`).
+def replication_pad3d_wrapper(x, pad_list)
+    # Replication pad 3D (last three dims) — F.pad(mode='replicate'), one pass (`_replication_pad_last`).
+def interpolate_wrapper(x, size=None, scale_factor=None, mode: str='nearest', align_corners=None, **kwargs)
+    # F.interpolate via Triton upsample kernels.
+```
+
+### `nbxtensor.ops.linalg_wrappers`
+
+`nbxtensor.ops.linalg_wrappers`
+
+```python
+def mm(a, b, _epilogue: int=0)
+    # Matrix multiplication
+def bmm(a, b, allow_strided_b: bool=False)
+    # Batched matrix multiplication
+def matmul_wrapper(a, b)
+    # General matmul dispatcher
+def linear_wrapper(input, weight, bias=None)
+    # aten::linear — y = input @ weight.T + bias.
+def addmm(bias, a, b, beta: float=1.0, alpha: float=1.0, _epilogue: int=0)
+    # C = beta * bias + alpha * (A @ B).
+def mm_epilogue_wrapper(a, b, epilogue: str='silu', approximate: str='none')
+    # custom::mm_epilogue — aten::mm fused with a unary elementwise epilogue (fusion_vertical pass, EXACT gate).
+def addmm_epilogue_wrapper(bias, a, b, beta: float=1.0, alpha: float=1.0, epilogue: str='silu', approximate: str='none')
+    # custom::addmm_epilogue — aten::addmm fused with a unary elementwise epilogue (fusion_vertical pass, EXACT gate).
+def dot_wrapper(x, y)
+    # Dot product
+def mv_wrapper(mat, vec)
+    # Matrix-vector multiply
+def baddbmm_wrapper(input, batch1, batch2, beta: float=1.0, alpha: float=1.0)
+    # Batched addmm
+def addmv_wrapper(input, mat, vec, beta: float=1.0, alpha: float=1.0)
+    # Matrix-vector with bias
+def upsample_bilinear2d_wrapper(x, output_size, align_corners=False, scales_h=None, scales_w=None)
+    # Bilinear upsampling.
+def upsample_linear1d_wrapper(x, output_size, align_corners: bool=False, scales=None)
+    # upsample_linear1d via bilinear2d
+def mm_cost(a, b, epilogue: int=0, native_bf16=None, force_accum=None, contract_half=None)
+    # `mm` on `a` [M, K] and `b` [K, N] (`_cost.Spec`s), in the wrapper's order
+def addmm_cost(bias, a, b, epilogue: int=0, native_bf16=None, force_accum=None, contract_half=None)
+    # `addmm` on `bias` ([N], [1, N] or [M, N]), `a` [..., K] and `b` [K, N] (`_cost.Spec`s), in the wrapper's order
+def bmm_cost(a, b, allow_strided_b: bool=False, native_bf16=None, force_accum=None, contract_half=None, unit=None)
+    # `bmm` on `a` [B, M, K] and `b` [B, K, N] (`_cost.Spec`s)
+```
+
+### `nbxtensor.ops.conv_wrappers`
+
+`nbxtensor.ops.conv_wrappers`
+
+```python
+def conv_transpose_wrapper(x, weight, bias=None, stride=1, padding=0, dilation=1, output_padding=0, groups=1)
+    # Transposed convolution — aten::convolution(transposed=True).
+def conv3d_chunked_wrapper(x, weight, bias=None, stride=1, padding=0, dilation=1, transposed=False, output_padding=0, groups=1, *args, **kwargs)
+    # A 3-D convolution the caller's plan chunks (op-level tiling, `conv3d_chunks`)
+def conv2d_wrapper(x, weight, bias=None, stride=1, padding=0, dilation=1, transposed=False, output_padding=0, groups=1, out=None)
+    # Convolution forward.
+def conv1d_wrapper(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1)
+    # Conv1D via conv2d with unsqueeze.
+def conv_transpose1d_wrapper(x, weight, bias=None, stride=1, padding=0, output_padding=0, groups=1, dilation=1)
+    # aten::conv_transpose1d — 1D transposed convolution.
+def avg_pool2d_wrapper(x, kernel_size, stride=None, padding=0, ceil_mode=False, count_include_pad=True, divisor_override=None)
+    # Average pooling 2D forward.
+def max_pool2d_wrapper(x, kernel_size, stride=None, padding=0, dilation=1, ceil_mode=False, return_indices=False)
+    # Max pooling 2D forward.
+def max_pool3d_with_indices_wrapper(x, kernel_size, stride=None, padding=0, dilation=1, ceil_mode=False)
+    # Max pooling 3D forward — aten::max_pool3d_with_indices.
+def max_pool3d_wrapper(x, kernel_size, stride=None, padding=0, dilation=1, ceil_mode=False)
+    # aten::max_pool3d — values-only variant.
+def adaptive_avg_pool2d_wrapper(x, output_size)
+    # Adaptive average pooling 2D.
+def conv_depthwise2d_wrapper(x, weight, bias=None, stride=1, padding=0, dilation=1)
+    # Depthwise conv2d.
+def unfold_backward_wrapper(grad_in, input_sizes, dim, size, step)
+    # unfold_backward (overlap-add)
+def im2col_wrapper(x, kernel_size, dilation, padding, stride)
+    # aten::im2col / nn.Unfold — sliding local blocks of an NCHW tensor.
+def conv2d_cost(x, w, stride=1, padding=0, dilation=1, groups=1, bias=False, out_dtype=None, out_given=False, krsc=False, unit=None, depthwise_enabled=True)
+    # `conv2d_wrapper` on an input `x` and a weight `w` (`_cost.Spec`s)
+def conv3d_cost(x, w, stride=1, padding=0, dilation=1, groups=1, bias=False, out_dtype=None, unit=None)
+    # `_conv3d_via_conv2d` on an input `x` [B, Cin, T, H, W] and a weight `w` [Cout, Cin_g, kt, kh, kw]
+```
+
+### `nbxtensor.ops.index_wrappers`
+
+`nbxtensor.ops.index_wrappers`
+
+```python
+def where_wrapper(cond, x, y)
+def masked_fill(x, mask, value: float)
+def is_nonzero_wrapper(x)
+    # aten::is_nonzero — returns the scalar truthiness of a 1-element tensor.
+def embedding(weight, indices, padding_idx=-1, **kwargs)
+    # Embedding lookup
+def index_select_wrapper(x, dim: int, index)
+    # Index select along dimension.
+def gather_wrapper(input, dim: int, index)
+    # Gather along dimension.
+def masked_scatter_wrapper(x, mask, source)
+    # aten::masked_scatter — fill mask-True elements of `x` from the flat `source` buffer in row-major order (torch semantics).
+def scatter_wrapper(input, dim: int, index, src)
+    # Scatter
+def scatter_add_wrapper(input, dim: int, index, src)
+    # Scatter add
+def index_add_wrapper(x, dim: int, index, source, alpha: float=1.0)
+    # Index add
+def nonzero_1d_wrapper(mask, expected=None)
+    # Ascending int64 indices of the True elements of a 1-D mask.
+def bucketize_wrapper(x, boundaries, out_int32: bool=False, right: bool=False)
+    # aten::bucketize.Tensor — per-element boundary index (linear scan kernel, kernels/ops/bucketize.py).
+def index_put_wrapper(x, indices, values, accumulate: bool=False)
+    # aten::index_put / index_put_ — scatter-write `values` into `x`.
+```
+
+### `nbxtensor.ops.reduction_wrappers`
+
+`nbxtensor.ops.reduction_wrappers`
+
+```python
+def mean_wrapper(x, dim=None, keepdim=False, dtype=None)
+    # Mean reduction.
+def sum_wrapper(x, dim=None, keepdim=False, dtype=None)
+    # Sum reduction.
+def amax_wrapper(x, dim=None, keepdim=False)
+    # Max reduction (one dim, a 1-elem list, or an arbitrary list of dims).
+def argmax_wrapper(x, dim=None, keepdim=False)
+    # Argmax reduction.
+def argmin_wrapper(x, dim=None, keepdim=False)
+    # Argmin reduction.
+def cumsum_wrapper(x, dim: int=0, dtype=None)
+    # Cumulative sum along dimension.
+def all_wrapper(x, dim=None, keepdim=False)
+    # Test if all elements are non-zero.
+def any_wrapper(x, dim=None, keepdim=False)
+    # Test if any element is non-zero.
+def prod_wrapper(x, dim=None, keepdim=False)
+    # Product reduction.
+def std_wrapper(x, dim=None, correction=1, keepdim=False)
+    # Standard deviation.
+def var_wrapper(x, dim=None, correction=1, keepdim=False)
+    # Variance.
+def scatter_reduce_wrapper(input, dim: int, index, src, reduce: str, include_self: bool=True)
+    # scatter_reduce
+```
+
+### `nbxtensor.ops.norm_wrappers`
+
+`nbxtensor.ops.norm_wrappers`
+
+```python
+def native_layer_norm(x, normalized_shape, weight, bias, eps=1e-05)
+    # LayerNorm matching ATen native_layer_norm signature.
+def layer_norm_wrapper(x, normalized_shape, weight=None, bias=None, eps=1e-05, cudnn_enable=True)
+    # aten::layer_norm — the high-level op returns ONLY the normalized output (native_layer_norm also returns mean/rstd).
+def norm_wrapper(x, p=2, dim=None, keepdim=False)
+    # aten::norm(self, p, dim, keepdim) — Lp norm reduction over ``dim``.
+def group_norm_wrapper(x, num_groups: int, weight, bias, eps=1e-05)
+    # GroupNorm.
+def native_group_norm_wrapper(input, weight, bias, N, C, HxW, num_groups, eps)
+    # Adapter for ATen's low-level `aten::native_group_norm`.
+def batch_norm_wrapper(x, weight, bias, running_mean, running_var, training: bool=False, momentum: float=0.1, eps: float=1e-05)
+    # BatchNorm / InstanceNorm forward (kernel from FlagGems).
+def vector_norm_wrapper(x, ord: float=2.0, dim=None, keepdim=False)
+    # Vector norm — dispatches by ord to L0/L1/L2/Linf/Lp kernels.
+def weight_norm_interface_wrapper(v, g, dim: int=0)
+    # Weight normalization
+def normal_wrapper(*args, **kwargs)
+    # normal(mean, std, size) → N(mean, std) via Triton randn + transform.
+def group_norm_statistics(x, num_groups: int, eps: float)
+    # (mean, rstd) [N, G] fp32 of `x` [N, C, ...] over each group — the first pass of an exact tiled group norm (`core/strategies/tiled_norm.py`), over the WHOLE input, without its normalised tensor.
+def group_norm_apply(x, weight, bias, num_groups: int, mean, rstd)
+    # `aten::native_group_norm`'s three outputs for a slice `x` given the whole input's statistics — the second pass
+```
+
+### `nbxtensor.ops.launch_keys`
+
+`nbxtensor.ops.launch_keys`
+
+```python
+def matmul_out_dtype(dt: NBXDtype, M: int, force_fp32: bool, native_bf16: bool, force_accum: bool=False, contract_half: bool=False)
+    # The store dtype of mm/bmm/addmm/mv/addmv (see `wrappers._matmul_out_dtype` for the why)
+def mm_dtypes(a: NBXDtype, b: NBXDtype, native_bf16: bool, force_accum: bool=False)
+    # `mm`'s operand decisions
+def addmm_dtypes(a: NBXDtype, b: NBXDtype, bias: NBXDtype, native_bf16: bool, force_accum: bool=False)
+    # `addmm`'s operand decisions
+def bmm_dtypes(a: NBXDtype, b: NBXDtype, native_bf16: bool, force_accum: bool=False)
+    # `bmm`'s operand decisions
+def matrix_unit_operands(a: NBXDtype, b: NBXDtype, M: int, unit: Optional[dict]=None)
+    # (rep_a, rep_b)
+def matrix_unit_takes(a: NBXDtype, b: NBXDtype, M: int)
+    # The profile's matrix unit runs this GEMM (`matrix_unit_operands`).
+def gemm_row_representative(m_bucket: int, a: NBXDtype, b: NBXDtype)
+    # The largest row count M whose GEMM launch forms the autotune key of M bucket `m_bucket`
+def matrix_unit_native(a: NBXDtype, b: NBXDtype, M: int, unit: Optional[dict]=None)
+    # Both operands are the unit's operand dtype in memory
+def mv_launches(N: int, K: int, mat: NBXDtype, vec: NBXDtype, native_bf16: bool, force_accum: bool=False, contract_half: bool=False)
+    # `mv_wrapper` on a [N, K] matrix and a [K] vector
+def addmv_launches(N: int, K: int, mat: NBXDtype, vec: NBXDtype, bias: NBXDtype, native_bf16: bool, force_accum: bool=False, contract_half: bool=False)
+    # `addmv_wrapper` on a [N, K] matrix, a [K] vector and a [N] bias
+def mm_launches(M: int, K: int, N: int, a: NBXDtype, b: NBXDtype, native_bf16: bool, force_accum: bool=False, contract_half: bool=False)
+    # `mm` (and `mm_epilogue`)
+def addmm_launches(M: int, K: int, N: int, a: NBXDtype, b: NBXDtype, bias: NBXDtype, native_bf16: bool, force_accum: bool=False, contract_half: bool=False, bias_row: bool=True)
+    # `addmm` on a 2-D activation (an N-D one is flattened to (numel/K, K) first)
+def bmm_launches(M: int, K: int, N: int, a: NBXDtype, b: NBXDtype, native_bf16: bool, force_accum: bool=False, contract_half: bool=False)
+    # `bmm`
+def baddbmm_launches(M: int, K: int, N: int, a: NBXDtype, b: NBXDtype, bias: NBXDtype)
+    # `baddbmm_wrapper`
+def mm_out(M: int, a: NBXDtype, b: NBXDtype, native_bf16: bool, force_accum: bool=False, contract_half: bool=False)
+    # The dtype `mm` stores for these operands (its launch or its per-row GEMV alike).
+def bmm_out(M: int, a: NBXDtype, b: NBXDtype, native_bf16: bool, force_accum: bool=False, contract_half: bool=False)
+    # The dtype `bmm` stores for these operands
+def row_breakpoints(lo: int, hi: int)
+    # The row counts M in (lo, hi] at which a GEMM's launch CLASS changes on the bound profile
+def matmul_route(a_rank: int, b_rank: int)
+    # `matmul_wrapper`'s route by operand ranks (torch.matmul semantics)
+def matmul_launches(a_shape, b_shape, a: NBXDtype, b: NBXDtype, native_bf16: bool, force_accum: bool=False, contract_half: bool=False)
+    # `matmul_wrapper` (and `linear_wrapper`, which calls it with the transposed weight)
+def lstm_launches(B: int, T: int, I: int, H: int, num_layers: int, bidirectional: bool, x: NBXDtype, native_bf16: bool)
+    # `lstm_wrapper` -> `_lstm_run_direction`, per layer and direction
+def dft_r2c_launches(M: int, N: int, onesided: bool, native_bf16: bool)
+    # `fft_r2c_wrapper` on a length that is not a power of two
+def dft_c2r_launches(M: int, bins: int, N: int, native_bf16: bool)
+    # `fft_c2r_wrapper` -> `_dft_c2r`, any length
+def stft_launches(lead: int, length: int, n_fft: int, hop_length: Optional[int], win_length: Optional[int], onesided: Optional[bool], native_bf16: bool)
+    # `stft_wrapper` on a signal of `lead` rows x `length` samples
+def istft_launches(batch: int, bins: int, frames: int, n_fft: int, native_bf16: bool)
+    # `istft_wrapper` on a [batch, bins, frames] spectrum
+def sdpa_operand_dtypes(q: NBXDtype, k: NBXDtype, v: NBXDtype, q_round: Optional[NBXDtype]=None, *, alignment: Optional[str]=None)
+    # The (q, k, v, q_round) dtypes `scaled_dot_product_attention_wrapper` computes attention with
+def decode_vec_takes(headdim: int, headdim_v: int, mask_numel: Optional[int], seqlen_k: int)
+    # Whether a single-query attention on the math route runs the vector decode kernel (no autotuned key) — `_try_decode_vec`'s contract
+def flash_any_head_dim()
+    # The arch's profile MEASURED the tl.dot flash kernel correct at every head dim (`flash.any_head_dim_correct`)
+def flash_tiles_certified()
+    # The tl.dot flash's tile is certified per key (workstream 1) where the profile declares no hand table of tiles (`sdpa_thresholds`)
+def flash_launches(Tq: int, Tk: int, D: int, q: NBXDtype, k: NBXDtype, v: NBXDtype, bias: Optional[NBXDtype]=None)
+    # The tl.dot flash where its tile is certified (`flash_tiles_certified`)
+def flash_headdim_detour(D: int, enabled: bool=True)
+    # The head dim the flash route runs at
+def conv_weight_layout()
+    # The order a convolution weight is stored in on this arch
+def conv_weight_krsc(w_shape, groups: int, transposed: bool, layout: str)
+    # Whether a convolution weight of this shape is stored KRSC under `layout`
+def krsc_conv_weights(dag: dict, layout: str)
+    # The tensor ids of the graph weights stored KRSC
+def is_krsc_weight(w)
+    # A logical (K, C, R, S) weight whose memory is (K, R, S, C), contiguous.
+def unit_flash(D: int, q: NBXDtype, k: NBXDtype, v: NBXDtype, unit: Optional[dict]=None)
+    # (representation, tile) of this attention's flash on the profile's matrix unit, or None
+def unit_flash_takes(D: int, q: NBXDtype, k: NBXDtype, v: NBXDtype, unit: Optional[dict]=None)
+    # Whether the device's matrix unit runs this attention's flash route (`unit_flash`)
+def unit_flash_launches(Tq: int, Tk: int, D: int, q: NBXDtype, k: NBXDtype, v: NBXDtype, bias: Optional[NBXDtype]=None)
+    # The flash on the profile's matrix unit (`unit_flash`, ops/flash_attention_m8n8k4.py)
+def sdpa_route(batch: int, nheads: int, Tq: int, Tk: int, D: int, Dv: int, budget_bytes: int, min_chunk_rows: int, max_chunks: int, force_math: bool=False, unit_flash: bool=False)
+    # The attention route
+def math_attention_launches(B: int, H: int, Hk: int, Tq: int, Tk: int, D: int, Dv: int, q: NBXDtype, k: NBXDtype, v: NBXDtype, native_bf16: bool, force_accum: bool=False, contract_half: bool=False)
+    # `_math_attention`
+def chunked_math_attention_launches(B: int, H: int, Hk: int, Tq: int, Tk: int, D: int, Dv: int, q: NBXDtype, k: NBXDtype, v: NBXDtype, native_bf16: bool, rows: int, force_accum: bool=False, contract_half: bool=False)
+    # `_math_attention_chunked`
+def conv_width_key(in_h: int, out_h: int, in_w: int, out_w: int, kw: int, stride_w: int, pad_w: int, dil_w: int)
+    # The width a convolution's key carries
+def conv_dtypes(x: NBXDtype, w: NBXDtype)
+    # A convolution's operands, narrowed to the narrowest of the pair when they differ.
+def conv_out_hw(in_h, in_w, kh, kw, sh, sw, ph, pw, dh, dw)
+def conv2d_route(N: int, in_c: int, out_c: int, out_h: int, out_w: int, dh: int, dw: int, groups: int, x: NBXDtype, band_bytes: int, depthwise_enabled: bool=True)
+    # "depthwise" (groups == in_c == out_c at dilation 1), "band" (the output, sized at the input's dtype, over `band_bytes`) or "plain" — the order the wrapper tests them in.
+class ConvRowOverBand(ValueError)
+    # A convolution whose single output row is over the band budget
+def conv2d_launches(N: int, in_c: int, in_h: int, in_w: int, out_c: int, kh: int, kw: int, sh: int, sw: int, ph: int, pw: int, dh: int, dw: int, groups: int, x: NBXDtype, w: NBXDtype, compute: Optional[NBXDtype], band_bytes: int, depthwise_enabled: bool=True)
+    # `conv2d_wrapper` on a 4-D weight
+def tiled_conv2d_launches(N: int, in_c: int, IH: int, IW: int, out_c: int, kh: int, kw: int, sh: int, sw: int, ph: int, pw: int, dh: int, dw: int, groups: int, x: NBXDtype, w: NBXDtype, compute: Optional[NBXDtype], band_bytes: int, tile_factor: int)
+    # The launches of an op-level tiled conv
+def conv_launches(x_shape, w_shape, stride, padding, dilation, transposed: bool, groups: int, x: NBXDtype, w: NBXDtype, compute: Optional[NBXDtype], band_bytes: int, depthwise_enabled: bool=True)
+    # `conv2d_wrapper` by the weight's rank
+def softmax_feat_bucket(feat: int)
+    # The row length's class in a softmax key
+def softmax_launches(rows: int, feat: int, log: bool, x: NBXDtype, out: NBXDtype)
+    # `softmax` / `log_softmax` over a row of `feat` (rows = every other element)
+def layer_norm_launches(rows: int, feat: int, has_weight: bool, has_bias: bool, x: NBXDtype, w: Optional[NBXDtype], b: Optional[NBXDtype], out: NBXDtype)
+    # `wrappers.native_layer_norm` over rows of `feat` (the normalized extent
+def rms_norm_launches(rows: int, feat: int, has_weight: bool, x: NBXDtype, w: Optional[NBXDtype], out: NBXDtype)
+    # `wrappers.rms_norm` over rows of `feat` (the last dim)
+def elementwise_classes(largest: int)
+    # Every element-wise class (`ops/elementwise_launch.ew_bucket`
+def group_norm_launches(N: int, C: int, HxW: int, groups: int, has_weight: bool, has_bias: bool, x: NBXDtype, w: Optional[NBXDtype], b: Optional[NBXDtype])
+    # `wrappers.group_norm_wrapper` (one program per batch x group, the group's channel x spatial extent walked in chunks)
+def row_reduce_launches(kind: str, rows: int, feat: int, x: NBXDtype)
+    # `wrappers.mean_wrapper` / `sum_wrapper` / `amax_wrapper` over rows of `feat` (the reduced elements
+```
+
 ### `nbxtensor.io.read_rate` — how fast the machine reads its weight files, by parallel reads
 
 ```python
