@@ -16,6 +16,18 @@ from neurobrix.triton import weight_loader as W
 from nbxtensor.io.safetensors import split_across_workers
 
 
+@pytest.fixture(autouse=True)
+def _the_machine_s_profile(monkeypatch):
+    """The loader's reads in flight are the profile's measured cpu.io_workers, declared where a run loads its profile
+    (`core.prism.loader.load_profile`): loaded here as a run loads it, the previous declaration restored after. Without
+    it these cells reached the io pool undeclared and were refused since the count left system.yml (2026-10-30)."""
+    from neurobrix.core import workspace
+    from neurobrix.core.prism.autodetect import load_default_profile
+    monkeypatch.setattr(workspace, "_IO_WORKERS", workspace._IO_WORKERS)
+    monkeypatch.setattr(W, "_IO_POOL", None)          # a pool built under another count is not this one
+    load_default_profile()
+
+
 def _stage(raw, shape, source, target, host_arena=None):
     """A host-held weight staged as the engine's loader stages it: nbxtensor's primitive, the loader's I/O pool."""
     from neurobrix.triton import weight_loader as W
