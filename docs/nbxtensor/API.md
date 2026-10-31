@@ -2283,6 +2283,32 @@ def zeros_kernel(output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
     # Fill output with zeros.
 ```
 
+### `nbxtensor.backend.launcher_contract` — the contract a launch driver meets (BACKENDS.md section 1)
+
+`nbxtensor.backend.launcher_contract`
+
+```python
+class ArgSlot
+    # One argument the launcher must supply, in binding order.
+class CompiledKernel(Protocol)
+    # The result of compiling once, launched many times.
+class LauncherDriver(Protocol)
+    # What the launcher needs from a backend, and nothing more.
+def verify_driver_contract(driver, jit_fn, signature, constexprs, make_buffer, read_buffer, free_buffer, grid, args_builder, expected)
+    # Exercise a driver against the contract.
+```
+
+### `nbxtensor.quant` — quantized tensors
+
+`nbxtensor.quant.quantized_tensor`
+
+```python
+class QuantizedTensor
+    # int4-g128-asym weight triplet under one graph-facing handle.
+def assemble_quantized(weights: dict)
+    # Fold `.qweight`/`.scales`/`.qmins` triplets in a loaded weights dict into QuantizedTensor entries under the graph key `<base>.weight`.
+```
+
 ### `nbxtensor.io.read_rate` — how fast the machine reads its weight files, by parallel reads
 
 ```python
