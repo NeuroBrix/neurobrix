@@ -138,7 +138,7 @@ class UniPCMultistepScheduler(DiffusionSchedulerBase):
         self.this_order: int = 0
 
     @staticmethod
-    def _betas_for_alpha_bar(num_diffusion_timesteps: int, max_beta: float = 0.999) -> torch.Tensor:
+    def _betas_for_alpha_bar(num_diffusion_timesteps: int) -> torch.Tensor:
         """Cosine (Glide) beta schedule. Pure-torch port of diffusers helper."""
         import math
 
@@ -149,7 +149,7 @@ class UniPCMultistepScheduler(DiffusionSchedulerBase):
         for i in range(num_diffusion_timesteps):
             t1 = i / num_diffusion_timesteps
             t2 = (i + 1) / num_diffusion_timesteps
-            betas.append(min(1 - alpha_bar_fn(t2) / alpha_bar_fn(t1), max_beta))
+            betas.append(min(1 - alpha_bar_fn(t2) / alpha_bar_fn(t1), 0.999))   # diffusers' max_beta
         return torch.tensor(betas, dtype=torch.float32)
 
     def set_timesteps(

@@ -79,6 +79,9 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 
 | kind | path | symbol | why it stays |
 |---|---|---|---|
+| wrapper | src/neurobrix/core/module/tiling_engine.py | make_unified_node_interceptor(_executor_ref) | a closure capture: the default binds the graph executor at definition, never a parameter a caller passes |
+| wrapper | src/neurobrix/core/module/tiling_engine.py | make_unified_node_interceptor(_pending) | a closure capture: the default binds the pending chain at definition, never a parameter a caller passes |
+| wrapper | src/neurobrix/core/module/tiling_engine.py | make_unified_node_interceptor(_registry) | a closure capture: the default binds the chain registry at definition, never a parameter a caller passes |
 | wrapper | src/neurobrix/cli/commands/registry.py | download_resumable(chunk_size) | a test seam: the download tests pass small chunks to exercise resumption without megabytes |
 | wrapper | src/neurobrix/nbx/atomic_install.py | installing(allow_break) | the one deliberate opening of the install lock (a lock held by another host broken on purpose), named in the refusal a user reads |
 | wrapper | src/neurobrix/nbx/cache.py | extract(allow_replace) | the deliberate opening a refusal names (`extract(..., allow_replace=True)`, or its env): replacing a live model is said, never silent |

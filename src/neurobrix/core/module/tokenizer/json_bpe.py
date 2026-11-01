@@ -825,11 +825,9 @@ class PyTokenizer:
         return self._vocab.get(tok)
 
 
-    def get_vocab_size(self, with_added_tokens: bool = True) -> int:
-        if with_added_tokens:
-            return len(self._vocab)
-        base = self._data.get("model", {}).get("vocab", {})
-        return len(base)
+    def get_vocab_size(self) -> int:
+        """The vocabulary with its added tokens (every caller's question)."""
+        return len(self._vocab)
 
 
     # -- encode ------------------------------------------------------------

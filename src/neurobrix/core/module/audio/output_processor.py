@@ -17,19 +17,18 @@ class AudioOutputProcessor:
     """Audio output processing for STT and TTS models."""
 
     @staticmethod
-    def decode_tokens(token_ids: List[int], tokenizer: Any, skip_special: bool = True) -> str:
+    def decode_tokens(token_ids: List[int], tokenizer: Any) -> str:
         """Decode token IDs to text string (STT)."""
         if hasattr(tokenizer, "decode"):
-            text = tokenizer.decode(token_ids, skip_special_tokens=skip_special)
-            if skip_special:
-                # Timestamp tokens (<|d.dd|>) are NOT special by the
-                # vendor's own tokenizer data ("special": false), so
-                # skip_special_tokens leaves them; the vendor's decode
-                # drops them by form. Long-form decoding (2026-09-02)
-                # surfaces them in every window. Only the timestamp
-                # form is stripped — any other marker stays visible.
-                import re
-                text = re.sub(r"<\|\d+\.\d+\|>", "", text)
+            text = tokenizer.decode(token_ids, skip_special_tokens=True)
+            # Timestamp tokens (<|d.dd|>) are NOT special by the
+            # vendor's own tokenizer data ("special": false), so
+            # skip_special_tokens leaves them; the vendor's decode
+            # drops them by form. Long-form decoding (2026-09-02)
+            # surfaces them in every window. Only the timestamp
+            # form is stripped — any other marker stays visible.
+            import re
+            text = re.sub(r"<\|\d+\.\d+\|>", "", text)
             return text
         return str(token_ids)
 
