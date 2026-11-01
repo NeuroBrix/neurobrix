@@ -286,14 +286,13 @@ def get_rope_base(family: str = "llm", model_config: Optional[Dict] = None) -> f
     return 10000.0
 
 
-def get_default(family: str, key: str, generation_type: str | None = None) -> Any:
+def get_default(family: str, key: str) -> Any:
     """
     Get a default value from family config.
 
     Args:
         family: Family name (image, llm, etc.)
         key: Config key (e.g., "temperature", "num_inference_steps")
-        generation_type: Optional generation type (diffusion, autoregressive)
 
     Returns:
         Default value, or None if not found
@@ -301,14 +300,6 @@ def get_default(family: str, key: str, generation_type: str | None = None) -> An
     try:
         family_cfg = get_family_config(family)
 
-        # Try generation-type specific defaults first
-        if generation_type:
-            gen_cfg = family_cfg.get(generation_type, {})
-            defaults = gen_cfg.get("defaults", {})
-            if key in defaults:
-                return defaults[key]
-
-        # Fall back to global defaults
         defaults = family_cfg.get("defaults", {})
         return defaults.get(key)
 

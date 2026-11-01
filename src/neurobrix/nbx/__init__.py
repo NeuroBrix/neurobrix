@@ -18,7 +18,6 @@ from .spec import (
     ONNX_TO_NBX_OPS,
     NBX_DTYPES,
     get_nbx_op,
-    get_nbx_dtype,
 )
 
 from .container import NBXContainer, ComponentData
@@ -44,7 +43,6 @@ __all__ = [
     "NBX_DTYPES",
     # Helper functions
     "get_nbx_op",
-    "get_nbx_dtype",
     # Classes
     "NBXContainer",
     "ComponentData",

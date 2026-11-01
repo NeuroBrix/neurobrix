@@ -1,7 +1,7 @@
 # The engine's open slimming findings (tools/engine_slim_scan.py); each ends deleted, moved into nbxtensor, or kept
 # with its reason in docs/nbxtensor/ENGINE_SLIM.md. Both figures below may only go down (test_the_engine_only_slims.py).
-# engine_lines: 138308
-# open: 265
+# engine_lines: 138256
+# open: 243
 kind	path	symbol	detail
 duplicate	src/neurobrix/core/audio_frontend.py	_requested_voice	same body as src/neurobrix/triton/audio_frontend.py::_requested_voice_np
 duplicate	src/neurobrix/core/cfg/engine.py	__init__	same body as src/neurobrix/triton/cfg/engine.py::__init__
@@ -165,16 +165,7 @@ wrapper	src/neurobrix/_nbxtensor_host.py	service	only hands its parameters to ge
 wrapper	src/neurobrix/_nbxtensor_host.py	shadow_run	only hands its parameters to importlib.import_module('neurobrix.kernels.census').shadow_run
 wrapper	src/neurobrix/agent/sandbox.py	SandboxViolation	only renames Exception
 wrapper	src/neurobrix/agent/sandbox.py	_bound(limit)	no call site passes it: always its default _OUTPUT_BOUND
-wrapper	src/neurobrix/cli/commands/agent.py	complete_fn	only hands its parameters to engine.complete
-wrapper	src/neurobrix/cli/commands/registry.py	_strip_build_stamp	only hands its parameters to re.sub
-wrapper	src/neurobrix/cli/commands/registry.py	download_resumable(chunk_size)	no call site passes it: always its default 1 << 20
-wrapper	src/neurobrix/cli/commands/run.py	_rt	only hands its parameters to _resolve_runtime
-wrapper	src/neurobrix/cli/json_out.py	close	only hands its parameters to self._emit
 wrapper	src/neurobrix/core/cfg/engine.py	execute_component_with_cfg	only hands its parameters to self._execute_batched_cfg
-wrapper	src/neurobrix/core/components/handlers/transformer_handler.py	get_latent_scale	only hands its parameters to self._get_vae_scale
-wrapper	src/neurobrix/core/config/loader.py	get_default(generation_type)	no call site passes it: always its default None
-wrapper	src/neurobrix/core/config/system.py	get_precision_config	only hands its parameters to PRECISION_DEFAULTS.copy
-wrapper	src/neurobrix/core/config/system.py	get_prism_defaults	only hands its parameters to PRISM_DEFAULTS.copy
 wrapper	src/neurobrix/core/flow/audio_utils.py	preprocess_text_input(input_config)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/flow/audio_utils.py	redistribute_snac_codes(codebook_size)	no call site passes it: always its default 4096
 wrapper	src/neurobrix/core/flow/audio_utils.py	sample_token(top_p)	no call site passes it: always its default 1.0
@@ -250,19 +241,6 @@ wrapper	src/neurobrix/core/strategies/shared_steps.py	cleanup	only hands its par
 wrapper	src/neurobrix/core/workspace.py	SnapshotNotPresent	only renames Exception
 wrapper	src/neurobrix/kernels/census.py	install(hardware_profile)	no call site passes it: always its default None
 wrapper	src/neurobrix/kernels/census_table.py	rows_for(root)	no call site passes it: always its default None
-wrapper	src/neurobrix/nbx/atomic_install.py	installing(allow_break)	no call site passes it: always its default False
-wrapper	src/neurobrix/nbx/cache.py	clear(model_name)	no call site passes it: always its default None
-wrapper	src/neurobrix/nbx/cache.py	extract(allow_replace)	no call site passes it: always its default False
-wrapper	src/neurobrix/nbx/component_flags.py	clear	only hands its parameters to _TABLE.clear
-wrapper	src/neurobrix/nbx/loader.py	load_manifest	only hands its parameters to self.load_json
-wrapper	src/neurobrix/nbx/spec.py	get_nbx_dtype	only hands its parameters to NBX_DTYPES.get
-wrapper	src/neurobrix/nbx/weight_presence.py	refuse_absent_weights(limit)	no call site passes it: always its default 20
-wrapper	src/neurobrix/nbx/weight_presence.py	refuse_unbound_weights(limit)	no call site passes it: always its default 20
-wrapper	src/neurobrix/serving/client.py	new_chat	only hands its parameters to self.send
-wrapper	src/neurobrix/serving/client.py	shutdown	only hands its parameters to self.send
-wrapper	src/neurobrix/serving/client.py	status	only hands its parameters to self.send
-wrapper	src/neurobrix/serving/client.py	template	only hands its parameters to self.send
-wrapper	src/neurobrix/serving/protocol.py	endpoint	only hands its parameters to INSTANCE.endpoint
 wrapper	src/neurobrix/triton/audio_frontend.py	_build(_ctx)	no call site passes it: always its default ctx
 wrapper	src/neurobrix/triton/dtype.py	resolve_compute_dtype(component)	no call site passes it: always its default None
 wrapper	src/neurobrix/triton/flow/iterative_process.py	_to_nbx(device_idx)	no call site passes it: always its default 0

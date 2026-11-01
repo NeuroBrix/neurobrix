@@ -83,10 +83,6 @@ class FastNBXLoader:
         with open(path) as f:
             return json.load(f)
 
-    def load_manifest(self) -> Dict[str, Any]:
-        """Load manifest.json."""
-        return self.load_json("manifest.json")
-
     def load_topology(self) -> Dict[str, Any]:
         """Load topology.json (pipeline definition)."""
         # Try both names
@@ -246,7 +242,7 @@ class FastNBXLoader:
 
         # Load metadata
         t0 = time.time()
-        manifest = self.load_manifest()
+        manifest = self.load_json("manifest.json")
         topology = self.load_topology()
         runtime = self.load_runtime()
         self.stats.metadata_time = time.time() - t0

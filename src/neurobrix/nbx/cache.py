@@ -337,21 +337,6 @@ class NBXCache:
         print(f"[Cache] Done: {total} files, {total_bytes/1e9:.2f}GB extracted")
         return final_path
 
-    def clear(self, model_name: Optional[str] = None):
-        """Clear cache for a model or all models."""
-        if model_name:
-            cache_path = self.cache_dir / model_name
-            if cache_path.exists():
-                shutil.rmtree(cache_path)
-                print(f"[Cache] Cleared: {model_name}")
-            else:
-                print(f"[Cache] Not found: {model_name}")
-        else:
-            if self.cache_dir.exists():
-                shutil.rmtree(self.cache_dir)
-                self.cache_dir.mkdir(parents=True, exist_ok=True)
-                print("[Cache] Cleared all")
-
     def list_cached(self) -> List[Dict[str, Any]]:
         """List all cached models with metadata."""
         if not self.cache_dir.exists():

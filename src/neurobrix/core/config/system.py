@@ -89,16 +89,6 @@ def get_prism_defaults() -> Dict[str, Any]:
     return PRISM_DEFAULTS.copy()
 
 
-def get_precision_config() -> Dict[str, bool]:
-    """
-    Get numerical precision configuration.
-
-    Returns:
-        Precision configuration dict.
-    """
-    return PRECISION_DEFAULTS.copy()
-
-
 def load_system_config() -> Dict[str, Any]:
     """
     Legacy function for backwards compatibility.
@@ -108,7 +98,7 @@ def load_system_config() -> Dict[str, Any]:
     return {
         "memory": get_memory_constants(),
         "prism": get_prism_defaults(),
-        "precision": get_precision_config(),
+        "precision": PRECISION_DEFAULTS.copy(),
     }
 
 

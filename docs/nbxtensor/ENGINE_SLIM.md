@@ -79,6 +79,21 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 
 | kind | path | symbol | why it stays |
 |---|---|---|---|
+| wrapper | src/neurobrix/cli/commands/registry.py | download_resumable(chunk_size) | a test seam: the download tests pass small chunks to exercise resumption without megabytes |
+| wrapper | src/neurobrix/nbx/atomic_install.py | installing(allow_break) | the one deliberate opening of the install lock (a lock held by another host broken on purpose), named in the refusal a user reads |
+| wrapper | src/neurobrix/nbx/cache.py | extract(allow_replace) | the deliberate opening a refusal names (`extract(..., allow_replace=True)`, or its env): replacing a live model is said, never silent |
+| wrapper | src/neurobrix/cli/commands/agent.py | complete_fn | two closures returned as one callback (daemon client, cold engine): the agent loop calls whichever the launch chose |
+| wrapper | src/neurobrix/cli/commands/registry.py | _strip_build_stamp | a named rule (the build stamp a comparison ignores), pinned by its test |
+| wrapper | src/neurobrix/cli/commands/run.py | _rt | the one door for every runtime dimension (request -> container defaults -> family config -> refusal), 8 callers |
+| wrapper | src/neurobrix/cli/json_out.py | close | the writer's close of the JSON-lines protocol its callers hold |
+| wrapper | src/neurobrix/core/components/handlers/transformer_handler.py | get_latent_scale | the override of the handler interface (core/components/base.py) the executor calls |
+| wrapper | src/neurobrix/core/config/system.py | get_prism_defaults | a defensive copy of the defaults (3 callers): a caller editing it never edits the table |
+| wrapper | src/neurobrix/nbx/component_flags.py | clear | the reset of the process's flag table the plan tests start from |
+| wrapper | src/neurobrix/serving/client.py | new_chat | the daemon client's API (the CLI and the serving tests call it): each method is one request of the protocol |
+| wrapper | src/neurobrix/serving/client.py | shutdown | the daemon client's API (the CLI and the serving tests call it): each method is one request of the protocol |
+| wrapper | src/neurobrix/serving/client.py | status | the daemon client's API (the CLI and the serving tests call it): each method is one request of the protocol |
+| wrapper | src/neurobrix/serving/client.py | template | the daemon client's API (the CLI and the serving tests call it): each method is one request of the protocol |
+| wrapper | src/neurobrix/serving/protocol.py | endpoint | the module-level door to the daemon's one endpoint instance, used by the CLI and the serving tests |
 | wrapper | src/neurobrix/cli/commands/registry.py | IncompleteDownload | a named refusal: its type says what was refused, to the reader and to a caller that catches it |
 | wrapper | src/neurobrix/core/config/loader.py | UnsupportedArchitectureError | a named refusal: its type says what was refused, to the reader and to a caller that catches it |
 | wrapper | src/neurobrix/core/module/autoregressive/factory.py | AutoregressiveConfigError | a named refusal: its type says what was refused, to the reader and to a caller that catches it |

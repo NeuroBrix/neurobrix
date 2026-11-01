@@ -247,19 +247,6 @@ def get_nbx_op(onnx_op: str) -> str:
     return onnx_op.lower()
 
 
-def get_nbx_dtype(onnx_dtype: int) -> str:
-    """
-    Convert ONNX data type enum to NBX dtype string.
-
-    Args:
-        onnx_dtype: ONNX TensorProto data type enum
-
-    Returns:
-        NBX dtype string (e.g., "float32", "int64")
-    """
-    return NBX_DTYPES.get(onnx_dtype, "float32")
-
-
 # =============================================================================
 # NBX TOPOLOGY SCHEMA KEYS
 # =============================================================================

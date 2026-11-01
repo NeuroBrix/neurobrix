@@ -17,6 +17,9 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 
+_SHOWN = 20          # the refusals list at most this many weights, then say how many more
+
+
 def read_safetensors_header_from(f) -> Tuple[dict, int]:
     """The header of the safetensors stream `f` (a file, or an archive member) and the offset
     its data starts at, reading nothing past the header."""
@@ -114,17 +117,17 @@ def absent_weights(index_tensors: dict, wanted, header_of) -> list:
 
 
 def refuse_absent_weights(component: str, weights_dir: str, index_path: str,
-                          absent: list, limit: int = 20) -> None:
+                          absent: list) -> None:
     """Raise AbsentWeightError naming each absent weight (`absent_weights`' rows) — the
     component, the key, and the shard path the index expects it in. No-op when nothing is
     absent."""
     if not absent:
         return
     lines = []
-    for key, shard, reason in absent[:limit]:
+    for key, shard, reason in absent[:_SHOWN]:
         where = f"{weights_dir.rstrip('/')}/{shard}" if shard else index_path
         lines.append(f"  {key}: expected in {where} — {reason}")
-    more = f"\n  ... and {len(absent) - limit} more" if len(absent) > limit else ""
+    more = f"\n  ... and {len(absent) - _SHOWN} more" if len(absent) > _SHOWN else ""
     shards = sorted({s for _, s, _ in absent if s})
     raise AbsentWeightError(
         f"component '{component}': {len(absent)} weight(s) the load needs are absent from the "
@@ -161,18 +164,18 @@ def loader_weight_consumers(dag: dict) -> Dict[str, str]:
     return out
 
 
-def refuse_unbound_weights(component, unbound: list, tensors: dict, limit: int = 20) -> None:
+def refuse_unbound_weights(component, unbound: list, tensors: dict) -> None:
     """Raise AbsentWeightError for weights the graph binds that reached the bind empty —
     `unbound` is [(tid, first consumer op uid)]. No-op when empty. Shared by both engines'
     sequences (R30)."""
     if not unbound:
         return
     lines = []
-    for tid, uid in unbound[:limit]:
+    for tid, uid in unbound[:_SHOWN]:
         name = (tensors.get(tid) or {}).get("weight_name") or tid.split("::", 1)[-1]
         lines.append(f"  {tid} (read by {uid}): no loaded tensor under '{name}' nor under "
                      f"any trailing suffix of it")
-    more = f"\n  ... and {len(unbound) - limit} more" if len(unbound) > limit else ""
+    more = f"\n  ... and {len(unbound) - _SHOWN} more" if len(unbound) > _SHOWN else ""
     raise AbsentWeightError(
         f"component '{component}': {len(unbound)} weight(s) the graph binds are absent at the "
         f"weight bind — refused before the first op reads None:\n" + "\n".join(lines) + more
