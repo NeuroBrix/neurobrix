@@ -14,7 +14,7 @@ DATA-DRIVEN: All parameters from runtime/defaults.json.
 
 Usage Pattern:
     generator = AutoregressiveGenerator.from_config(config)
-    generator.set_generation_params(max_tokens=576, ...)
+    generator.set_generation_params(device=torch.device("cuda:0"))
 
     for step_idx in generator:
         # Execute LM forward pass via GraphExecutor
@@ -165,39 +165,10 @@ class AutoregressiveGenerator:
         # Use CombinedSampler for flexibility
         return CombinedSampler(sampler_config)
 
-    def set_generation_params(
-        self,
-        max_tokens: Optional[int] = None,
-        temperature: Optional[float] = None,
-        top_p: Optional[float] = None,
-        top_k: Optional[int] = None,
-        repetition_penalty: Optional[float] = None,
-        device: Optional[torch.device] = None
-    ) -> None:
-        """
-        Override generation parameters.
-
-        Allows runtime override of config values.
-        """
-        needs_resample = False
-        if max_tokens is not None:
-            self.max_tokens = max_tokens
-        if temperature is not None:
-            self.temperature = temperature
-            needs_resample = True
-        if top_p is not None:
-            self.top_p = top_p
-            needs_resample = True
-        if top_k is not None:
-            self.top_k = top_k
-            needs_resample = True
-        if repetition_penalty is not None:
-            self.repetition_penalty = repetition_penalty
-            needs_resample = True
-        if needs_resample:
-            self._sampler = self._create_sampler()
-        if device is not None:
-            self._state.device = device
+    def set_generation_params(self, device: torch.device) -> None:
+        """The device the generation runs on (the flow sets it once the plan placed the component); the sampling
+        parameters are read from the config at construction."""
+        self._state.device = device
 
     def set_prompt_ids(self, prompt_ids: List[int]) -> None:
         """Set prompt token IDs for repetition penalty context."""
