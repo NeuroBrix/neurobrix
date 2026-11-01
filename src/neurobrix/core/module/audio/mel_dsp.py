@@ -111,8 +111,7 @@ def _mel_filters(sr: int, n_fft: int, n_mels: int, *, htk: bool, norm) -> np.nda
 # extractors (numpy) — bit-close mirrors of the original vendor extractors
 # ---------------------------------------------------------------------------
 def _whisper_mel(audio_path: str, model_path: Path, n_mels_override,
-                 params: "Optional[dict]" = None,
-                 _audio: "Optional[np.ndarray]" = None) -> np.ndarray:
+                 params: "Optional[dict]" = None) -> np.ndarray:
     """Whisper log-mel (mel_spectrogram). Mirrors WhisperFeatureExtractor.
 
     `params` (the topology's audio_preprocessing block, when the build
@@ -132,7 +131,7 @@ def _whisper_mel(audio_path: str, model_path: Path, n_mels_override,
     sr = cfg.get("sampling_rate", cfg.get("sample_rate", 16000))
     n_mels = (cfg.get("n_mels") or n_mels_override
               or cfg.get("feature_size", 80))
-    audio = _audio if _audio is not None else _load_audio(audio_path, sr)
+    audio = _load_audio(audio_path, sr)
     if params and "chunk_length" not in params:
         # Varlen contract: keep the true length (cap only at the
         # extractor's own maximum when it declares one).
@@ -219,7 +218,7 @@ def nemo_mel_params(model_path: Path) -> dict:
             "dither": dither, "preemph": preemph, "source": source}
 
 
-def _nemo_mel(audio_path: str, model_path: Path, n_mels_override, rng=None) -> np.ndarray:
+def _nemo_mel(audio_path: str, model_path: Path, n_mels_override) -> np.ndarray:
     """NeMo mel (Canary): pre-emphasis + dither + log mel + per-feature normalize."""
     _p = nemo_mel_params(model_path)
     n_mels, n_fft, win, hop = _p["n_mels"], _p["n_fft"], _p["win"], _p["hop"]
@@ -230,8 +229,7 @@ def _nemo_mel(audio_path: str, model_path: Path, n_mels_override, rng=None) -> n
     if preemph > 0:
         audio = np.concatenate([audio[:1], audio[1:] - preemph * audio[:-1]])
     if dither > 0:
-        _r = rng if rng is not None else np.random
-        audio = audio + dither * _r.standard_normal(audio.shape)
+        audio = audio + dither * np.random.standard_normal(audio.shape)
     power = _stft_power(audio, n_fft, win, hop)
     mf = _mel_filters(sr, n_fft, n_mels, htk=True, norm=None)
     mel = np.log(np.clip((power.T @ mf.T), 1e-5, None))     # [frames, n_mels]
@@ -241,15 +239,13 @@ def _nemo_mel(audio_path: str, model_path: Path, n_mels_override, rng=None) -> n
     return mel.T[None].astype(np.float32)                  # [1, n_mels, frames]
 
 
-def _raw_waveform(audio_path: str, model_path: Path, input_shape,
-                  _audio: "Optional[np.ndarray]" = None) -> np.ndarray:
+def _raw_waveform(audio_path: str, model_path: Path, input_shape) -> np.ndarray:
     """Raw waveform (Parakeet) reshaped to the graph input shape."""
     sr = 16000
     cp = model_path / "preprocessor_config.json"
     if cp.exists():
         sr = json.load(open(cp)).get("sampling_rate", sr)
-    audio = (_audio if _audio is not None
-             else _load_audio(audio_path, sr))[None]       # [1, samples]
+    audio = _load_audio(audio_path, sr)[None]       # [1, samples]
     if input_shape and len(input_shape) == 3:
         channels, target = input_shape[1], input_shape[2]
         wf = audio[:, None, :]                              # [1, 1, samples]
@@ -266,7 +262,7 @@ def _raw_waveform(audio_path: str, model_path: Path, input_shape,
 
 def extract_features_np(preprocessing_type: str, audio_path: str, model_path: Path,
                         input_shape: Optional[Tuple[int, ...]] = None,
-                        rng=None, params: Optional[dict] = None) -> np.ndarray:
+                        params: Optional[dict] = None) -> np.ndarray:
     n_mels_override = None
     if input_shape and len(input_shape) >= 3 and input_shape[1] in (40, 64, 80, 128):
         n_mels_override = input_shape[1]
@@ -278,7 +274,7 @@ def extract_features_np(preprocessing_type: str, audio_path: str, model_path: Pa
     if preprocessing_type == "conformer":
         return _conformer_mel(audio_path, model_path, n_mels_override)
     if preprocessing_type == "nemo_mel":
-        return _nemo_mel(audio_path, model_path, n_mels_override, rng=rng)
+        return _nemo_mel(audio_path, model_path, n_mels_override)
     if preprocessing_type == "raw_waveform":
         return _raw_waveform(audio_path, model_path, input_shape)
     raise RuntimeError(
@@ -293,7 +289,7 @@ def whisper_seek_context(audio_path: str, model_path: Path,
     seeks to the end of the last complete segment and decodes again from
     there — no word is cut at a fixed window boundary. Returns the audio
     and the window parameters; each window's mel goes through the
-    unchanged single-window code (`_whisper_mel(_audio=)`)."""
+    window mel code (`whisper_window_mel`)."""
     cp = model_path / "preprocessor_config.json"
     if not cp.exists():
         raise RuntimeError(
