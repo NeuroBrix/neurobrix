@@ -1268,7 +1268,6 @@ class OpLevelTilingEngine:
     @staticmethod
     def _detect_residual_chains(
         graph_executor,
-        threshold_bytes: Optional[int] = None,  # tiling_sizes.residual_chain_min_base_bytes_fp32()
         shape_of: Optional[Callable[[str], Optional[List[int]]]] = None,
     ) -> "List[Dict[str, Any]]":
         """Detect long residual chains (`fork → ≥3-op chain → merge`).
@@ -1308,8 +1307,7 @@ class OpLevelTilingEngine:
         the spatial test and the spec's `shape` / `bytes_fp32` (which set the
         band factor) are read from it. Without it, the DAG's traced extents.
         """
-        if threshold_bytes is None:
-            threshold_bytes = _tsz.residual_chain_min_base_bytes_fp32()
+        threshold_bytes = _tsz.residual_chain_min_base_bytes_fp32()
         dag = getattr(graph_executor, '_dag', None)
         if dag is None:
             return []
