@@ -1,6 +1,7 @@
-"""The resumable state of a multistep solver (DPM-Solver++, UniPC): the step index and the solver HISTORY travel with
-the latent — the one definition both schedulers inherit."""
+"""What the multistep solvers (DPM-Solver++, UniPC) share, one definition both inherit: the resumable state (the step
+index and the solver HISTORY travel with the latent) and the sigma -> (alpha_t, sigma_t) conversion."""
 import numpy as np
+import torch
 
 
 class MultistepStateMixin:
@@ -59,3 +60,16 @@ class MultistepStateMixin:
             self.last_sample = _back(state["last_sample"])
         if "timestep_list" in state:
             self.timestep_list = list(state["timestep_list"])
+
+    def _sigma_to_alpha_sigma_t(self, sigma: torch.Tensor):
+        """Convert sigma to (alpha_t, sigma_t) pair."""
+        if self.use_flow_sigmas:
+            # Flow matching: sigma IS the timestep t in [0, 1]
+            # alpha_t = 1 - t, sigma_t = t
+            alpha_t = 1 - sigma
+            sigma_t = sigma
+        else:
+            # Standard diffusion: sigma = sqrt((1-alpha)/alpha)
+            alpha_t = 1 / (sigma ** 2 + 1) ** 0.5
+            sigma_t = sigma * alpha_t
+        return alpha_t, sigma_t

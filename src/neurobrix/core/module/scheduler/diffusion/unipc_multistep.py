@@ -264,16 +264,6 @@ class UniPCMultistepScheduler(MultistepStateMixin, DiffusionSchedulerBase):
             step_index = index_candidates[0].item()
         self._step_index = int(step_index)
 
-    def _sigma_to_alpha_sigma_t(self, sigma: torch.Tensor):
-        """Convert a sigma to (alpha_t, sigma_t). Flow branch: alpha=1-s, sigma=s."""
-        if self.use_flow_sigmas:
-            alpha_t = 1 - sigma
-            sigma_t = sigma
-        else:
-            alpha_t = 1 / ((sigma ** 2 + 1) ** 0.5)
-            sigma_t = sigma * alpha_t
-        return alpha_t, sigma_t
-
     def _threshold_sample(self, sample: torch.Tensor) -> torch.Tensor:
         """Dynamic thresholding from Imagen (pure-torch port of diffusers)."""
         import numpy as np
