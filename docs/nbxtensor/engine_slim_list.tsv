@@ -1,7 +1,7 @@
 # The engine's open slimming findings (tools/engine_slim_scan.py); each ends deleted, moved into nbxtensor, or kept
 # with its reason in docs/nbxtensor/ENGINE_SLIM.md. Both figures below may only go down (test_the_engine_only_slims.py).
-# engine_lines: 138253
-# open: 237
+# engine_lines: 138255
+# open: 235
 kind	path	symbol	detail
 duplicate	src/neurobrix/core/audio_frontend.py	_requested_voice	same body as src/neurobrix/triton/audio_frontend.py::_requested_voice_np
 duplicate	src/neurobrix/core/cfg/engine.py	__init__	same body as src/neurobrix/triton/cfg/engine.py::__init__
@@ -190,8 +190,6 @@ wrapper	src/neurobrix/core/module/autoregressive/generator.py	set_generation_par
 wrapper	src/neurobrix/core/module/text/processor.py	tokenize(chat_mode)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/module/text/processor.py	tokenize_for_diffusion(encoder_name)	no call site passes it: always its default 'text_encoder'
 wrapper	src/neurobrix/core/module/tiling_engine.py	_detect_residual_chains(threshold_bytes)	no call site passes it: always its default None
-wrapper	src/neurobrix/core/module/tokenizer/tiktoken_bpe.py	from_file(pat_str)	no call site passes it: always its default PAT_STR
-wrapper	src/neurobrix/core/module/tokenizer/tiktoken_bpe.py	from_file(special_tokens)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/paths.py	BackendOnClearedStorage	only renames RuntimeError
 wrapper	src/neurobrix/core/paths.py	PathNotConfigured	only renames RuntimeError
 wrapper	src/neurobrix/core/paths.py	installation_refusals(search_root)	no call site passes it: always its default None

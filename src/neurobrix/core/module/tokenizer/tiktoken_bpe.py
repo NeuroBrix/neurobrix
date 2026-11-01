@@ -359,13 +359,10 @@ class PyTiktoken:
         cls,
         tiktoken_path: str,
         special_tokens_path: Optional[str] = None,
-        special_tokens: Optional[Dict[str, int]] = None,
-        pat_str: str = PAT_STR,
     ) -> "PyTiktoken":
         """Build from a ``*.tiktoken`` file (+ optional ``special_tokens.json``).
 
-        ``special_tokens`` may be passed directly; otherwise, if
-        ``special_tokens_path`` is given it is read as a JSON ``{str: int}``
+        If ``special_tokens_path`` is given it is read as a JSON ``{str: int}``
         mapping (the openaudio ``special_tokens.json`` format). If neither is
         given, the sibling ``special_tokens.json`` next to the ``.tiktoken``
         file is loaded when present.
@@ -380,30 +377,27 @@ class PyTiktoken:
                 ranks[base64.b64decode(token_b64)] = int(rank)
 
         specials: Dict[str, int] = {}
-        if special_tokens is not None:
-            specials = dict(special_tokens)
-        else:
-            path = special_tokens_path
-            if path is None:
-                import os
-                sibling = os.path.join(
-                    os.path.dirname(tiktoken_path), "special_tokens.json"
-                )
-                if os.path.exists(sibling):
-                    path = sibling
-            if path is not None:
-                with open(path, "r", encoding="utf-8") as f:
-                    raw = json.load(f)
-                for name, info in raw.items():
-                    if isinstance(info, dict):
-                        tid = info.get("id")
-                        content = info.get("content", name)
-                        if tid is not None:
-                            specials[content] = tid
-                    elif isinstance(info, int):
-                        specials[name] = info
+        path = special_tokens_path
+        if path is None:
+            import os
+            sibling = os.path.join(
+                os.path.dirname(tiktoken_path), "special_tokens.json"
+            )
+            if os.path.exists(sibling):
+                path = sibling
+        if path is not None:
+            with open(path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            for name, info in raw.items():
+                if isinstance(info, dict):
+                    tid = info.get("id")
+                    content = info.get("content", name)
+                    if tid is not None:
+                        specials[content] = tid
+                elif isinstance(info, int):
+                    specials[name] = info
 
-        return cls(ranks, specials, pat_str)
+        return cls(ranks, specials, PAT_STR)
 
     # ----- core encoding ----------------------------------------------------
 
