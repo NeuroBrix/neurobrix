@@ -25,6 +25,10 @@ cpu:
   - avx2
   - avx512f
   - avx512_vnni
+  # the loaders' parallel reads, MEASURED on this host (the same rack, its RDMA cache): 16 — the engine's own
+  # first-launch measure of every generated profile of the host, 2026-10-31 (nbxtensor.io.read_rate.workers_for,
+  # one shard a trial, two steady draws), and tools/measure_io_workers.py 2026-10-30 (6149 / 6241 MiB/s at 16)
+  io_workers: 16
 devices: []
 notes: 'CPU-only profile for Doctrine R35 cascade R35 validation.
 
