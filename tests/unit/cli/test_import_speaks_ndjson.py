@@ -1,5 +1,5 @@
 """`neurobrix import --json` is a lifecycle a client reads: one NDJSON event
-per phase on stdout — info, (license), download with the real byte counts,
+per phase on stdout — info, license (every model, under its own), download with the real byte counts,
 downloaded, extracting, installed, done — or a terminal `error`; every human
 line on stderr; the model visible under its name only after the extraction
 succeeded (it extracts into `<name>.installing` and renames in one motion).
@@ -71,7 +71,7 @@ def _wire(monkeypatch, tmp_path, body: bytes, gated=False, status_info=200):
 
 def _args(**kw):
     base = dict(model_ref=f"{ORG}/{NAME}", registry=REGISTRY, force=False, no_keep=False,
-                accept_license=False, json=True)
+                accept_license=True, json=True)     # every model is accepted under its license at import (2026-11-01)
     base.update(kw)
     return argparse.Namespace(**base)
 
@@ -93,7 +93,7 @@ def test_the_lifecycle_is_one_event_per_phase_and_nothing_else_on_stdout(tmp_pat
     assert code == 0
     names = [e["event"] for e in events]
     assert names[0] == "info" and names[-1] == "done"
-    assert [n for n in names if n != "download"] == ["info", "downloaded", "extracting", "installed", "done"]
+    assert [n for n in names if n != "download"] == ["info", "license", "downloaded", "extracting", "installed", "done"]
     assert all(e["schema"] == "neurobrix.import/1" for e in events)
     dl = [e for e in events if e["event"] == "download"]
     assert dl[-1]["bytes"] == dl[-1]["total"] == len(_archive(tmp_path))
@@ -150,7 +150,7 @@ def test_a_refusal_is_one_error_event_and_exit_1(tmp_path, monkeypatch, capsys):
 def test_a_gated_model_under_json_is_refused_by_name_never_prompted(tmp_path, monkeypatch, capsys):
     _wire(monkeypatch, tmp_path, _archive(tmp_path), gated=True)
     monkeypatch.setattr("builtins.input", lambda *a: pytest.fail("a client was prompted"))
-    code, events, _ = _run(capsys, _args())
+    code, events, _ = _run(capsys, _args(accept_license=False))
     assert code == 1 and events[-1]["event"] == "error" and "--accept-license" in events[-1]["message"]
     code, events, _ = _run(capsys, _args(accept_license=True))
     assert code == 0

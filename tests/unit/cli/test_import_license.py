@@ -1,4 +1,4 @@
-"""Non-interactive license acceptance for `neurobrix import` (gated models).
+"""Non-interactive license acceptance for `neurobrix import` — every model, under its license (gated or not).
 
 Pins the scripting/CI contract of the license gate:
   - non-interactive stdin without --accept-license / NBX_ACCEPT_LICENSE=1
@@ -81,13 +81,13 @@ class _TTYStdin(io.StringIO):
         return True
 
 
-def _install_registry_api(monkeypatch, download_behavior):
+def _install_registry_api(monkeypatch, download_behavior, model_info=None):
     """Mock requests.get: model metadata always answers; the download-URL
     endpoint delegates to download_behavior()."""
 
     def fake_get(url, *args, **kwargs):
         if url == f"{REGISTRY}/api/models/{ORG}/{NAME}":
-            return _FakeResponse(MODEL_INFO)
+            return _FakeResponse(MODEL_INFO if model_info is None else model_info)
         if url == f"{REGISTRY}/api/models/{ORG}/{NAME}/download":
             return download_behavior()
         raise AssertionError(f"unexpected URL fetched: {url}")
@@ -116,6 +116,35 @@ def _isolated_state(monkeypatch, tmp_path):
     monkeypatch.setattr(reg, "CACHE_DIR", tmp_path / "cache")
     monkeypatch.setattr(reg, "STORE_DIR", tmp_path / "store")
     monkeypatch.delenv("NBX_ACCEPT_LICENSE", raising=False)
+
+
+# ── Every model is accepted under its license at import (Hocine 2026-11-01) ──
+
+
+def test_an_ungated_model_is_accepted_under_its_license_too(monkeypatch, capsys):
+    """The hub's `gated` flag says whether the hub asks a login; the acceptance is asked of every model. What this
+    test would do if the gate still keyed on `gated`: reach the download step (red)."""
+    info = {"model": dict(MODEL_INFO["model"], gated=False)}
+    _install_registry_api(monkeypatch, lambda: pytest.fail("gate must block before download"), model_info=info)
+    monkeypatch.setattr(sys, "stdin", _NonTTYStdin())
+    with pytest.raises(SystemExit) as exc:
+        reg.cmd_import(_args())
+    assert exc.value.code == 1
+    out = capsys.readouterr().out
+    assert LICENSE_NAME in out and "--accept-license" in out
+
+
+def test_a_model_without_a_license_is_free_no_question(monkeypatch, capsys):
+    """No license on the record = free: downloaded with no acceptance asked, nothing recorded (Hocine 2026-11-01
+    21:26). If the code were wrong it would block or prompt before the download step (red)."""
+    info = {"model": {k: v for k, v in MODEL_INFO["model"].items() if k not in ("license", "licenseName", "licenseUrl")}}
+    _install_registry_api(monkeypatch, _gate_passed, model_info=info)
+    monkeypatch.setattr(sys, "stdin", _NonTTYStdin())
+    monkeypatch.setattr("builtins.input", lambda *a: pytest.fail("a free model was asked a question"))
+    with pytest.raises(_GatePassed):
+        reg.cmd_import(_args())
+    out = capsys.readouterr().out
+    assert "LICENSE NOTICE" not in out and not reg._ACCEPTANCES_FILE.exists()
 
 
 # ── Non-interactive terminal without flag/env → guidance, exit 1 ──────
