@@ -79,6 +79,10 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 
 | kind | path | symbol | why it stays |
 |---|---|---|---|
+| duplicate | src/neurobrix/core/module/autoregressive/samplers.py | validate | each config type's own entry point (SamplerConfig / SchedulerConfig): the same fill-in of its DEFAULTS today, two unrelated configs — a shared base for three lines would tie them |
+| duplicate | src/neurobrix/core/module/scheduler/config.py | validate | the scheduler config's entry point; same reason as SamplerConfig.validate |
+| duplicate | src/neurobrix/core/module/autoregressive/samplers.py | __init__ | the compiled twin of triton/samplers.py's, which imports no torch (R33) and so cannot inherit from this module |
+| duplicate | src/neurobrix/core/module/autoregressive/samplers.py | __call__ | each sampler class's own call (the dispatch picks a class by strategy); two classes' calls coincide today |
 | wrapper | src/neurobrix/core/module/text/processor.py | tokenize_for_diffusion(encoder_name) | the encoder component the prompt is tokenized for; removing the parameter would only move the 'text_encoder' name into the body as a literal |
 | wrapper | src/neurobrix/core/module/audio/output_processor.py | decode_snac_tokens(audio_token_start) | NOT a slimming question: the default is one model's constant (Orpheus's 128266, with vocab_size 156940) — both must come from the container (rule 3: zero per-model value); named to the Dell 2026-11-02 |
 | wrapper | src/neurobrix/core/module/tiling_engine.py | make_unified_node_interceptor(_executor_ref) | a closure capture: the default binds the graph executor at definition, never a parameter a caller passes |
