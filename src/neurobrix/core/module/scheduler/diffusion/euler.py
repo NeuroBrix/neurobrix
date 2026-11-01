@@ -475,12 +475,7 @@ class EulerAncestralDiscreteScheduler(DiffusionSchedulerBase):
         sigma = self.sigmas[self._step_index]
         return sample / ((sigma ** 2 + 1) ** 0.5)
 
-    @property
-    def init_noise_sigma(self) -> float:
-        """Initial noise sigma."""
-        if self.sigmas is not None and len(self.sigmas) > 0:
-            return self.sigmas[0].item()
-        return 1.0
+    init_noise_sigma = EulerDiscreteScheduler.init_noise_sigma     # the same first sigma, one definition
 
     # --- resumable renders (see core/runtime/render_checkpoint.py) ---------
 
