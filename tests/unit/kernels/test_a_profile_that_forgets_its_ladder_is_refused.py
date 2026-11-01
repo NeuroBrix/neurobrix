@@ -26,6 +26,7 @@ import pytest
 
 from nbxtensor.ops.autotune_bucket import bucket_of, ladder_for
 from neurobrix.core.config.loader import vendor_file  # the device whole: engine file + library half
+from tests.unit.accelerator_vendor_files import accelerator_vendor_files  # the cpu/ files hold only the CPU path's keys
 
 _LADDER = {"autotune": {"buckets": {"default": [{"up_to": 64, "step": 1},
                                                 {"up_to": 256, "step": 16}]}}}
@@ -71,7 +72,7 @@ def test_every_shipped_profile_answers_without_refusing():
     import yaml
 
     vendors = pathlib.Path(__file__).resolve().parents[3] / "src/neurobrix/config/vendors"
-    profiles = sorted(vendors.glob("*/*.yml"))
+    profiles = accelerator_vendor_files()
     assert profiles, "no vendor profiles found — the check would be vacuous"
     for p in profiles:
         profile = vendor_file(p) or {}

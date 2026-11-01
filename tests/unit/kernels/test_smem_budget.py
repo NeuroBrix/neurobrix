@@ -30,6 +30,7 @@ import yaml
 from nbxtensor.ops._configs import arch_smem_budget, configs_within_smem_budget, smem_bytes_for_config
 from nbxtensor.ops.matmul import _MATMUL_AUTOTUNE_AMPERE_PLUS, _MATMUL_AUTOTUNE_VOLTA
 from neurobrix.core.config.loader import vendor_file  # the device whole: engine file + library half
+from tests.unit.accelerator_vendor_files import accelerator_vendor_files  # the cpu/ files hold only the CPU path's keys
 
 VENDORS = (Path(__file__).resolve().parents[3]
            / "src" / "neurobrix" / "config" / "vendors")
@@ -121,7 +122,7 @@ def test_the_space_is_never_emptied():
 
 # --- the profiles are the source of truth -----------------------------------
 
-@pytest.mark.parametrize("path", sorted(VENDORS.glob("*/*.yml")),
+@pytest.mark.parametrize("path", accelerator_vendor_files(),
                          ids=lambda p: f"{p.parent.name}/{p.stem}")
 def test_every_profile_declares_the_budget(path):
     """A new architecture that forgets this key gets no filtering at all, and
@@ -132,7 +133,7 @@ def test_every_profile_declares_the_budget(path):
         f"memory.max_shared_memory_per_block")
 
 
-@pytest.mark.parametrize("path", sorted(VENDORS.glob("*/*.yml")),
+@pytest.mark.parametrize("path", accelerator_vendor_files(),
                          ids=lambda p: f"{p.parent.name}/{p.stem}")
 def test_every_profile_is_findable_by_its_compute_capability(path):
     """Resolution is data, not a mapping table: the budget is found by matching
@@ -148,7 +149,7 @@ def test_the_running_machine_resolves_to_its_own_profile():
     budget = arch_smem_budget()
     if budget is None:
         pytest.skip("no GPU / no matching profile on this host")
-    declared = {_budget(p.parent.name, p.stem) for p in VENDORS.glob("*/*.yml")}
+    declared = {_budget(p.parent.name, p.stem) for p in accelerator_vendor_files()}
     assert budget in declared, (
         "the resolved budget came from somewhere other than a vendor profile")
 
@@ -235,7 +236,7 @@ def _flatten(d, prefix=""):
     return out
 
 
-@pytest.mark.parametrize("path", sorted(VENDORS.glob("*/*.yml")),
+@pytest.mark.parametrize("path", accelerator_vendor_files(),
                          ids=lambda p: f"{p.parent.name}/{p.stem}")
 def test_every_profile_declares_what_the_reference_declares(path):
     """One hardware concept, one key name, in every profile.

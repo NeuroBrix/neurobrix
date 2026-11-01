@@ -26,6 +26,7 @@ import yaml
 
 from neurobrix.core.runtime.graph.device_attention import attention_in_chunks
 from neurobrix.core.config.loader import vendor_file  # the device whole: engine file + library half
+from tests.unit.accelerator_vendor_files import accelerator_vendor_files  # the cpu/ files hold only the CPU path's keys
 
 VENDORS = Path(__file__).resolve().parents[3] / "src" / "neurobrix" / "config" / "vendors"
 
@@ -61,7 +62,7 @@ def test_a_masked_and_a_causal_attention_chunk_exactly():
 
 
 def test_every_vendor_file_states_whether_its_compiled_attention_writes_its_scores():
-    for f in sorted(glob.glob(str(VENDORS / "*" / "*.yml"))):
+    for f in map(str, accelerator_vendor_files()):
         m = (vendor_file(f) or {}).get("memory") or {}
         assert "compiled_sdpa_full_scores" in m, f
         assert m["compiled_sdpa_full_scores"] is ("/apple/" in f), f

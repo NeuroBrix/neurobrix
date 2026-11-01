@@ -14,6 +14,7 @@ import yaml
 from nbxtensor.ops import launch_keys as LK
 from nbxtensor.ops import _configs as K
 from neurobrix.core.config.loader import vendor_file  # the device whole: engine file + library half
+from tests.unit.accelerator_vendor_files import accelerator_vendor_files  # the cpu/ files hold only the CPU path's keys
 
 REPO = Path(__file__).resolve().parents[3]
 
@@ -38,7 +39,7 @@ def test_the_measured_archs_state_it_and_every_other_arch_declares_it_unmeasured
     a card."""
     vendors = REPO / "src" / "neurobrix" / "config" / "vendors"
     declared = {f"{p.parent.name}/{p.stem}": (vendor_file(p).get("flash") or {}).get("pow2_head_dim_correct")
-                for p in sorted(vendors.glob("*/*.yml"))}
+                for p in accelerator_vendor_files()}
     measured = {"nvidia/volta", "apple/apple_m4_pro"}
     assert all(declared[k] is True for k in measured)
     others = {k: v for k, v in declared.items() if k not in measured}

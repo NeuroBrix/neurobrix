@@ -18,6 +18,7 @@ import numpy as np
 import pytest
 import yaml
 from neurobrix.core.config.loader import vendor_file  # the device whole: engine file + library half
+from tests.unit.accelerator_vendor_files import accelerator_vendor_files  # the cpu/ files hold only the CPU path's keys
 
 REPO = Path(__file__).resolve().parents[3]
 VENDORS = REPO / "src" / "neurobrix" / "config" / "vendors"
@@ -25,7 +26,7 @@ VENDORS = REPO / "src" / "neurobrix" / "config" / "vendors"
 
 def test_every_profile_states_its_conv_weight_layout_and_only_the_measured_arch_says_krsc():
     layouts = {str(y.relative_to(VENDORS)): (vendor_file(y).get("conv") or {}).get("weight_layout")
-               for y in sorted(VENDORS.glob("*/*.yml"))}
+               for y in accelerator_vendor_files()}
     assert layouts and all(v in ("KCRS", "KRSC") for v in layouts.values()), layouts
     assert {k for k, v in layouts.items() if v == "KRSC"} == {"apple/apple_m4_pro.yml"}
 

@@ -29,12 +29,9 @@ from neurobrix.core.config.loader import CONFIG_ROOT
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 import nbxtensor.backend.capabilities as _nbx_capabilities  # the module the moved names live in (M2 cut of tensor.py)
 from neurobrix.core.config.loader import vendor_file  # the device whole: engine file + library half
+from tests.unit.accelerator_vendor_files import accelerator_vendor_files  # the cpu/ files hold only the CPU path's keys
 
-# The accelerators' files only: a CPU device's float64 comes from the DtypeEngine's own table
-# (`core/dtype/config.device_supports_fp64`, `HARDWARE_DTYPE_SUPPORT["cpu"]`), and a cpu/ vendor file holds only the keys
-# the CPU path reads (cpu/x86_64.yml, cpu/arm64.yml: the key census of 2026-11-01) — no precision contract to state.
-PROFILES = sorted(p for p in (CONFIG_ROOT / "vendors").glob("*/*.yml")
-                  if (yaml.safe_load(p.read_text()) or {}).get("device_prefix") != "cpu")
+PROFILES = accelerator_vendor_files()   # a CPU device's float64 is the DtypeEngine's own table (device_supports_fp64)
 BRANCHES = ("compiled", "triton")
 KEYS = ("kernels_carry_fp64", "stores_fp64")
 
