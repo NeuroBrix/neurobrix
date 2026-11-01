@@ -59,7 +59,7 @@ import unicodedata
 
 # the regex and merge machinery tiktoken's reader already carries, read from it (one copy: the engine-slim scan, 2026-10-30)
 from neurobrix.core.module.tokenizer.tiktoken_bpe import (  # noqa: F401 — used below
-    _byte_pair_merge, _category_table, _class_body, _ranges_for_predicate, _ranges_for_set, _sanitize_surrogates,
+    PyTiktoken, _byte_pair_merge, _category_table, _class_body, _ranges_for_predicate, _ranges_for_set, _sanitize_surrogates,
     _translate_pattern)
 
 
@@ -184,25 +184,8 @@ class PyTekken:
 
     # ----- core encoding ----------------------------------------------------
 
-    def _encode_ordinary(self, text: str) -> List[int]:
-        """Byte-level BPE over `text`, before the +num_special offset."""
-        ids: List[int] = []
-        for match in self._pat.finditer(text):
-            piece = match.group()
-            cached = self._cache.get(piece)
-            if cached is not None:
-                ids.extend(cached)
-                continue
-            piece_bytes = piece.encode("utf-8")
-            token = self._ranks.get(piece_bytes)
-            if token is not None:
-                result = [token]
-            else:
-                result = [self._ranks[p]
-                          for p in _byte_pair_merge(piece_bytes, self._ranks)]
-            self._cache[piece] = result
-            ids.extend(result)
-        return ids
+    # Byte-level BPE over `text`, before the +num_special offset: the same pieces and merges as PyTiktoken's
+    _encode_ordinary = PyTiktoken._encode_ordinary
 
     def encode(self, text: str, bos: bool = False, eos: bool = False) -> List[int]:
         """Encode text to Tekken token ids.
