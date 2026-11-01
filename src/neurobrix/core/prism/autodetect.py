@@ -412,9 +412,11 @@ _PEAK_MB = "print(_mb('peak'))\n"
 
 
 def _measure_io_workers() -> int:
-    from neurobrix.core.paths import cache_dir
+    from neurobrix.core.paths import cache_dir, neurobrix_home
     from nbxtensor.io.read_rate import workers_for
-    return workers_for(cache_dir())      # measured on the cache's storage; refused by name when no measure is stable
+    m = workers_for(cache_dir(), witness_dir=neurobrix_home() / "tmp")     # refused by name when nothing is stable
+    print(f"   [Auto-detect] io_workers {m['workers']}, measured on {m['storage']} ({m['read']})")
+    return int(m["workers"])
 
 
 def _measure_runtime_base_mb() -> Dict[str, int]:

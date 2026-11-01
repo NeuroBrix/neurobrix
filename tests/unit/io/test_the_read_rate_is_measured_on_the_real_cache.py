@@ -20,7 +20,7 @@ def test_the_cache_s_read_count_is_measured_or_refused_by_name():
     if not any(root.glob("*/components/*/weights/*.safetensors")):
         pytest.skip(f"no weight file in {root}")
     try:
-        n = workers_for(root)
+        n = workers_for(root)["workers"]
     except RuntimeError as e:
         assert "no stable read-rate measure" in str(e), e
         return

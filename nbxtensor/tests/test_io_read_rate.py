@@ -31,13 +31,21 @@ def test_a_measure_reads_every_count_and_says_whether_it_was_steady(tmp_path):
     assert isinstance(m["steady"], bool)
 
 
-def test_a_directory_without_weights_is_measured_on_a_witness_it_removes(tmp_path, monkeypatch):
+def test_a_cache_without_weights_is_measured_on_a_witness_written_elsewhere(tmp_path, monkeypatch):
+    cache, scratch = tmp_path / "cache", tmp_path / "scratch"
+    cache.mkdir()
     monkeypatch.setattr(M, "WITNESS_BYTES", 2 * M.PIECE)
     seen = []
     monkeypatch.setattr(M, "measure", lambda files, *a: seen.append(files) or {"steady": True, "workers": 2})
-    assert M.workers_for(tmp_path, max_workers=2) == 2
-    assert seen and all(f[0].startswith(str(tmp_path)) for f in seen)    # the storage measured is the directory's
-    assert list(tmp_path.iterdir()) == []
+    m = M.workers_for(cache, witness_dir=scratch, max_workers=2)
+    assert m["workers"] == 2 and m["read"] == "witness" and m["storage"] == M.mount_of(scratch)
+    assert all(f[0].startswith(str(scratch)) for f in seen)               # never written into the (shared) cache
+    assert list(cache.iterdir()) == [] and list(scratch.iterdir()) == []
+
+
+def test_no_weights_and_no_witness_directory_is_refused_by_name(tmp_path):
+    with pytest.raises(RuntimeError, match="never written into the cache itself"):
+        M.workers_for(tmp_path, max_workers=2)
 
 
 def test_the_first_trial_reads_one_shard_then_grows_while_not_stable(tmp_path, monkeypatch):
@@ -49,7 +57,7 @@ def test_the_first_trial_reads_one_shard_then_grows_while_not_stable(tmp_path, m
         sizes.append(size)
         return {"steady": size >= 32 * M.PIECE, "workers": 8}
     monkeypatch.setattr(M, "measure", measure)
-    assert M.workers_for(tmp_path, max_workers=8, pattern="x*") == 8
+    assert M.workers_for(tmp_path, max_workers=8, pattern="x*")["workers"] == 8
     assert sorted(set(sizes)) == [8 * M.PIECE, 32 * M.PIECE]              # one shard first, quadrupled once
 
 
@@ -74,4 +82,4 @@ def test_two_steady_draws_that_disagree_are_decided_by_a_third(tmp_path, monkeyp
     draws = iter([{"steady": True, "workers": 16}, {"steady": True, "workers": 8}, {"steady": False, "workers": 2},
                   {"steady": True, "workers": 16}])
     monkeypatch.setattr(M, "measure", lambda *a: next(draws))
-    assert M.workers_for(tmp_path, max_workers=16, pattern="x") == 16   # 16, 8, 16 -> the median
+    assert M.workers_for(tmp_path, max_workers=16, pattern="x")["workers"] == 16   # 16, 8, 16 -> the median

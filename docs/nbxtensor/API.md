@@ -2320,10 +2320,13 @@ def measure(files, max_bytes, max_workers, within=0.05) -> dict
     # {'rates': {1: .., 2: .., 4: ..}, 'workers': choose(...), 'steady': bool, 'bytes': .., 'last_one_worker': ..}
 WITNESS_BYTES = 1 << 30                           # the witness written when the storage holds no weight file
 START_BYTES = 2 << 30                             # the first trial: one shard's read, at most this
-def workers_for(directory, max_workers=None, pattern='*/components/*/weights/*.safetensors') -> int
-    # measured on the directory's storage (its largest weight files, else a witness it writes and removes):
-    # the first trial reads one shard (at most START_BYTES = 2 GiB), then the trials grow while the measure is not stable; two steady draws decide (a third breaks a tie);
-    # refused by name when no size is stable — never None, never a default
+def mount_of(path) -> str                         # the mount point a file is read through
+def workers_for(directory, witness_dir=None, max_workers=None, pattern='*/components/*/weights/*.safetensors') -> dict
+    # {'workers': n, 'storage': the mount point read, 'read': 'shards' | 'witness'}: measured on the directory's
+    # largest weight files, else on a witness written in witness_dir (never in the cache, which may be shared);
+    # the first trial reads one shard (at most START_BYTES = 2 GiB), then the trials grow while the measure is
+    # not stable; two steady draws decide (a third breaks a tie); refused by name when no size is stable —
+    # never None, never a default
 ```
 
 The cache is evicted before each trial and bypassed during it (macOS `msync(MS_INVALIDATE)` + `F_NOCACHE`, Linux

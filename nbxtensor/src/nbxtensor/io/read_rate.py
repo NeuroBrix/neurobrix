@@ -11,7 +11,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Sequence
 
-__all__ = ["PIECE", "WITNESS_BYTES", "START_BYTES", "pieces", "trial", "choose", "measure", "workers_for"]
+__all__ = ["PIECE", "WITNESS_BYTES", "START_BYTES", "mount_of", "pieces", "trial", "choose", "measure", "workers_for"]
 
 PIECE = 16 << 20                       # the loaders' read piece
 
@@ -119,38 +119,50 @@ WITNESS_BYTES = 1 << 30                # the witness file written when the stora
 START_BYTES = 2 << 30                  # the first trial: one shard's read, at most this
 
 
-def workers_for(directory, max_workers: Optional[int] = None,
-                pattern: str = "*/components/*/weights/*.safetensors") -> int:
-    """The parallel reads to keep in flight on `directory`'s storage, MEASURED there: over its largest files matching
-    `pattern` (a weight cache's shards), else over a witness file of `WITNESS_BYTES` written in that directory (the
-    storage measured is the one the loaders read) and removed. Counts 1, 2, 4, ... up to `max_workers` (the machine's
-    `os.cpu_count()` when not given).
+def mount_of(path) -> str:
+    """The mount point the file `path` lives on: the storage a read of it goes through."""
+    p = os.path.realpath(path)
+    while not os.path.ismount(p):
+        p = os.path.dirname(p)
+    return p
+
+
+def workers_for(directory, witness_dir=None, max_workers: Optional[int] = None,
+                pattern: str = "*/components/*/weights/*.safetensors") -> Dict[str, object]:
+    """The parallel reads to keep in flight on the storage a weight cache is read from, MEASURED there:
+    {"workers": n, "storage": the mount point read, "read": "shards" or "witness"}.
+
+    The files read are `directory`'s largest matching `pattern` (the cache's shards). When it holds none yet, a witness
+    of `WITNESS_BYTES` is written in `witness_dir` (a local scratch directory the caller names, on the local cache's
+    storage when there is one) and removed — NEVER in `directory`, which may be a cache shared over a network; with no
+    `witness_dir`, refused by name. The answer says which storage it read. Counts 1, 2, 4, ... up to `max_workers`
+    (the machine's `os.cpu_count()` when not given).
 
     The first trial reads one shard (the largest file, at most `START_BYTES`): a loader reads whole shards, and a
     shorter trial undervalues parallel reads (64 MiB picked 4 on the rack's RDMA cache, 2 GiB 8/16/16 — the count
     the planner prices host memory by is the one a load sees). The trials then grow while the measure is not stable:
-    at a given size, up to three measures; when two of them are
-    steady (`measure`'s first/last one-worker check) the answer is their median — one draw fluctuates (8 or 16 on the
-    rack's RDMA cache) and a plan prices the count. Otherwise the trial size is quadrupled, up to everything the files
-    hold: a byte count is a time on one storage only (256 MiB was 7 s over the Mac's NFS, 40 ms over the rack's RDMA
-    cache, where every draw read as unsteady — 2026-10-30). When no size gives a stable measure, refused by name:
-    never a silent None, never a default."""
+    at a given size, up to three measures; when two of them are steady (`measure`'s first/last one-worker check) the
+    answer is their median — one draw fluctuates and a plan prices the count. Otherwise the trial size is quadrupled,
+    up to everything the files hold. When no size gives a stable measure, refused by name: never a silent None, never
+    a default."""
     from pathlib import Path
     root = Path(directory)
     max_workers = max_workers or os.cpu_count() or 1
     files = [str(p) for p in sorted(root.glob(pattern), key=lambda p: -p.stat().st_size)[:4]]
     witness = None
     if not files:
-        witness = root / f".read_rate_witness_{os.getpid()}"
+        if witness_dir is None:
+            raise RuntimeError(f"ZERO FALLBACK: {root} holds no weight file to measure its reads on, and no local "
+                               f"directory was named for a witness file (it is never written into the cache itself)")
+        Path(witness_dir).mkdir(parents=True, exist_ok=True)
+        witness = Path(witness_dir) / f".read_rate_witness_{os.getpid()}"
         with open(witness, "wb") as f:
             for _ in range(WITNESS_BYTES // PIECE):
                 f.write(os.urandom(PIECE))
         files = [str(witness)]
     try:
         available = sum(os.path.getsize(p) for p in files)
-        # A loader reads whole shards: a trial shorter than one is a rate no load sees (64 MiB trials picked 4 on the
-        # rack's RDMA cache where 2 GiB ones picked 8/16/16, the Dell 2026-10-31). The first trial reads the largest
-        # file (at most START_BYTES), then grows while the measure is not stable.
+        # A loader reads whole shards: a trial shorter than one is a rate no load sees.
         size, tried = max(4 * PIECE, min(max(os.path.getsize(p) for p in files), START_BYTES)), []
         while True:
             size = min(size, available)
@@ -163,11 +175,12 @@ def workers_for(directory, max_workers: Optional[int] = None,
                     break
             tried.append(f"{size >> 20} MiB: {len(picks)}/3 steady")
             if len(picks) >= 2:
-                return sorted(picks)[0] if picks[0] == picks[1] else _median_of_three(files, size, max_workers, picks)
+                n = picks[0] if picks[0] == picks[1] else _median_of_three(files, size, max_workers, picks)
+                return {"workers": n, "storage": mount_of(files[0]), "read": "witness" if witness else "shards"}
             if size >= available:
                 raise RuntimeError(
-                    f"ZERO FALLBACK: no stable read-rate measure on {root} up to {available >> 20} MiB per trial "
-                    f"({'; '.join(tried)}): another reader on the storage? measure again on a quiet machine "
+                    f"ZERO FALLBACK: no stable read-rate measure on {mount_of(files[0])} up to {available >> 20} MiB per "
+                    f"trial ({'; '.join(tried)}): another reader on the storage? measure again on a quiet machine "
                     f"(tools/measure_io_workers.py) — no worker count is assumed")
             size *= 4
     finally:
