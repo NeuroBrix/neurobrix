@@ -122,7 +122,6 @@ class TextProcessor:
         prompt: str,
         device: str,
         is_unconditional: bool = False,
-        chat_mode: Optional[bool] = None,
     ) -> torch.Tensor:
         """
         Tokenize prompt using the data-driven priority cascade.
@@ -136,19 +135,14 @@ class TextProcessor:
             prompt: Text prompt to tokenize
             device: Target device string
             is_unconditional: If True, create unconditional tokens for CFG
-            chat_mode: Override chat mode (None = use defaults)
 
         Returns:
             input_ids tensor [1, seq_len]
         """
-        # Resolve chat_mode: CLI override > defaults > False
-        if chat_mode is None:
-            _SENTINEL = object()
-            cli_chat = self._resolver.get("global.chat_mode", default=_SENTINEL)
-            if cli_chat is not _SENTINEL:
-                chat_mode = bool(cli_chat)
-            else:
-                chat_mode = self._defaults["chat_mode"]
+        # chat_mode: the CLI's, else the container's defaults
+        _SENTINEL = object()
+        cli_chat = self._resolver.get("global.chat_mode", default=_SENTINEL)
+        chat_mode = bool(cli_chat) if cli_chat is not _SENTINEL else self._defaults["chat_mode"]
 
         has_template = hasattr(self._tokenizer, 'has_chat_template') and self._tokenizer.has_chat_template()
         # Priority 1: HuggingFace chat_template
