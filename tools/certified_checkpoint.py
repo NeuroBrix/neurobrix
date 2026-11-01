@@ -231,6 +231,23 @@ def _commit_blobs(repo: str, blobs: Dict[str, bytes], message: str) -> subproces
             os.unlink(idx)
 
 
+#: The cumulative kernel-time registry each checkpoint appends to (tools/kernel_times.py), or None (Hocine 2026-11-01:
+#: the registry is fed at every certification, not by hand).
+_KERNEL_TIMES: Optional[str] = None
+
+
+def _feed_kernel_times(repo: str, rel_dir: str, say) -> None:
+    """Append the newly certified keys' times to the registry, one <vendor>/<profile> store at a time."""
+    if not _KERNEL_TIMES:
+        return
+    root = Path(repo) / rel_dir
+    for store in sorted(p for p in root.glob("*/*") if p.is_dir()):
+        r = subprocess.run([sys.executable, str(Path(repo) / "tools" / "kernel_times.py"), "--dir", str(store),
+                            "--out", _KERNEL_TIMES], capture_output=True, text=True)
+        say(f"[checkpoint] kernel times {store.relative_to(root)}: "
+            f"{(r.stdout or r.stderr).strip().splitlines()[-1] if (r.stdout or r.stderr).strip() else r.returncode}")
+
+
 def checkpoint(repo: str, rel_dir: str, remotes: List[str], gate_cmd: List[str], trailers: List[str],
                record: Optional[str] = None, say=print, label: str = "") -> Dict[str, object]:
     """One checkpoint: read the changed files ONCE → gate those bytes → commit those bytes → push
@@ -301,6 +318,7 @@ def checkpoint(repo: str, rel_dir: str, remotes: List[str], gate_cmd: List[str],
     _record(record, f"== checkpoint {sha} {stamp}: {len(to_commit)} file(s), +{added} entries, ~{changed} changed; "
                     + "; ".join(status)
                     + (f"; REFUSED by the gate, not committed: {', '.join(refused_rel)}" if refused_rel else ""), say)
+    _feed_kernel_times(repo, rel_dir, say)
     return result
 
 
@@ -489,12 +507,16 @@ def main(argv=None) -> int:
                         "(default: the engine's `autotune check --dir`)")
     p.add_argument("--label", default="", help="a short name for the pass, in each commit's subject")
     p.add_argument("--once", action="store_true")
+    p.add_argument("--kernel-times", default=None,
+                   help="the cumulative kernel-time registry (TSV) each checkpoint appends the new keys' times to")
     p.add_argument("--touch-push", action="store_true",
                    help="record a push of --repo made by hand now, so this tool's window counts it; then exit")
     p.add_argument("--allow-parent-as-producer", action="store_true",
                    help="permit --producer-pid to name the shell that launched this "
                         "checkpointer; only correct if that shell will NOT wait on it")
     a = p.parse_args(argv)
+    global _KERNEL_TIMES
+    _KERNEL_TIMES = a.kernel_times
     deadlock = refuse_a_producer_that_will_wait_for_us(a.producer_pid, os.getppid())
     if deadlock and not a.allow_parent_as_producer:
         print(deadlock, file=sys.stderr)
