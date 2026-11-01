@@ -1,0 +1,22 @@
+# The host CPU as an execution device (Prism's cpu_execution rung, the compiled branch on torch's CPU backend) — x86_64.
+#
+# What the CPU path reads from a vendor file, and nothing more: the key census of 2026-11-01 (the Mac's, cpu/arm64.yml —
+# a card-less plan and run of TinyLlama-1.1B, whisper-large-v3-turbo and Real-ESRGAN, every get_vendor_config('cpu', ...)
+# read recorded with its reader): Prism's planning reads no cpu/ key; the compiled paged KV cache reads the two below
+# (core/module/cache/factory.paged_params -> core/state/price.paged_cache_params), for a model with a decoder cache.
+# The Triton branch has no CPU device (no triton CPU backend): a card-less Triton run is refused before any cpu/ read.
+# A new key the CPU path starts reading must be added here AND to tests/unit/config/test_the_cpu_vendor_files_state_what_the_cpu_path_reads.py.
+
+architecture: x86_64
+device_prefix: "cpu"
+
+memory:
+  # The allocation granule a state page row is placed at: torch's CPU allocator alignment. MEASURED 2026-11-01 on the
+  # rack (Intel Xeon Gold 6230, x86_64, torch 2.14.0+cu126): 64 = the largest power of two dividing every data pointer
+  # of 4 000 CPU tensors of odd sizes over eight dtypes (float32/16, bfloat16, int64/32/8, uint8, bool; c10's CPU
+  # alignment) — the same figure as arm64's.
+  state_page_granule_bytes: 64
+  # A released page returns to the pool at once: torch's CPU ops run synchronously on the calling thread (no stream,
+  # no queue — the host never runs ahead of the work it issued), so no kernel can still be reading a page when its
+  # last holder lets it go.
+  async_release: false
