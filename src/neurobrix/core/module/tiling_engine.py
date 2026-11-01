@@ -45,6 +45,22 @@ def _is_nbx_tensor(t: Any) -> bool:
     return hasattr(t, "to_cuda") and hasattr(t, "_device")
 
 
+def _collect_arg_tids(arg, out_set) -> None:
+    """Add to `out_set` every tensor id an op argument names (a tensor, a tuple of tensors, or a list of either)."""
+    if isinstance(arg, dict):
+        atype = arg.get("type")
+        if atype in ("tensor", "tensor_ref"):
+            t = arg.get("tensor_id")
+            if t:
+                out_set.add(t)
+        elif atype == "tensor_tuple":
+            for t in arg.get("tensor_ids", []):
+                out_set.add(t)
+        elif atype == "list":
+            for item in arg.get("value", []):
+                _collect_arg_tids(item, out_set)
+
+
 class TilingEngine:
     """
     Universal tiled execution engine for spatial components.
@@ -986,20 +1002,6 @@ class OpLevelTilingEngine:
         order = dag.get("execution_order", [])
 
         # Build consumer map (tid -> list of op_uid that reads it)
-        def _collect_arg_tids(arg, out_set):
-            if isinstance(arg, dict):
-                atype = arg.get("type")
-                if atype in ("tensor", "tensor_ref"):
-                    t = arg.get("tensor_id")
-                    if t:
-                        out_set.add(t)
-                elif atype == "tensor_tuple":
-                    for t in arg.get("tensor_ids", []):
-                        out_set.add(t)
-                elif atype == "list":
-                    for item in arg.get("value", []):
-                        _collect_arg_tids(item, out_set)
-
         consumers: Dict[str, List[str]] = {}
         for op_uid in order:
             op = ops_by_uid.get(op_uid)
@@ -1321,20 +1323,6 @@ class OpLevelTilingEngine:
         output_ids = set(dag.get("output_tensor_ids", []))
 
         # Build consumer map: tensor_id -> [op_uid that reads it]
-        def _collect_arg_tids(arg, out_set):
-            if isinstance(arg, dict):
-                atype = arg.get("type")
-                if atype in ("tensor", "tensor_ref"):
-                    t = arg.get("tensor_id")
-                    if t:
-                        out_set.add(t)
-                elif atype == "tensor_tuple":
-                    for t in arg.get("tensor_ids", []):
-                        out_set.add(t)
-                elif atype == "list":
-                    for item in arg.get("value", []):
-                        _collect_arg_tids(item, out_set)
-
         consumers: Dict[str, List[str]] = {}
         for op_uid in order:
             op = ops_by_uid.get(op_uid)
