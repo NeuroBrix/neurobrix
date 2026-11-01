@@ -3,12 +3,23 @@ as a pure function of an allocation sequence (`simulate`), which is how a planne
 beyond the tensors alive (M3, docs/nbxtensor/COST.md section 2: the 1.3 factor it replaces).
 
 Every driver allocation the pool takes is a SEGMENT made of BLOCKS chained in address order (the method of torch's
-caching allocator, S4a 2026-10-27). A request takes the smallest free block that holds it (rounded up to `align`) and
-splits off the rest when it is at least `split_min`; a freed block merges with its free neighbours; only a segment wholly
-free returns to the driver — over the parked cap, on a refused malloc, on a flush, and before the device grows (the
-allocator flushes the pool before every new driver allocation, so the device holds what is alive and the free blocks of
-segments something alive still pins). Mirrored, a block's size is reported to `on_block(ptr, size, dev)` (`size` None:
-the block is gone) — the allocator keeps its per-pointer tables by it.
+caching allocator, S4a 2026-10-27), in one of two SIZE CLASSES: a request of at most `POOL_SMALL_BYTES` is served only
+from small segments of `POOL_SMALL_SEGMENT_BYTES`, a larger one only from large segments grown to the request (torch's
+kSmallSize / kSmallBuffer). A request takes the smallest free block of its class that holds it (rounded up to `align`)
+and splits off the rest when it is at least `split_min` — in the large class only when what is left is at most the
+request itself (the half rule), so a block is never pinned by something smaller than its remainder. A freed block
+merges with its free neighbours; only a segment wholly free returns to the driver — over the parked cap, on a refused
+malloc, on a flush. A wholly free segment stays parked across a growth: it is the next request of its size's block.
+
+Why the classes and the half rule (Allegro triton on a V100-16GB, gate of 2026-11-01): with one class and a free split,
+a 17 KB scalar took a freed 2.5 GB block and pinned its remainder alive, a 632 MB request did the same to the next —
+4.4 GB of free blocks in pinned segments beside 9.7 GB alive refused a 2.5 GB gelu. The real trace replayed through
+these rules (campaign 2026_11_01_gate_nbxtensor, trace_allegro/replay.py; also mochi-1-preview 32g and Kokoro) completes
+with the least held of every pooled rule tried, and 164e89dc's flush of the pool before every growth — which only
+emptied the small free segments the scalars would have used — is withdrawn with it.
+
+Mirrored, a block's size is reported to `on_block(ptr, size, dev)` (`size` None: the block is gone) — the allocator
+keeps its per-pointer tables by it.
 
 Torch-free, device-free: the driver is reached only through the callable a caller passes in (`flush`, `evict`).
 """
@@ -22,6 +33,12 @@ from typing import Callable, Dict, Iterable, List, Optional, Tuple
 POOL_ALIGN = 512
 #: the least remainder a block is split for; a smaller one stays with the block it was cut from
 POOL_SPLIT_MIN = 1 << 20
+#: the largest request of the small class (torch's caching allocator: kSmallSize)
+POOL_SMALL_BYTES = 1 << 20
+#: the segment a small request grows the device by, carved for the small requests that follow (kSmallBuffer)
+POOL_SMALL_SEGMENT_BYTES = 1 << 21
+
+LARGE, SMALL = 0, 1
 
 
 def _no_report(ptr: int, size: Optional[int], dev: int) -> None:
@@ -31,48 +48,78 @@ def _no_report(ptr: int, size: Optional[int], dev: int) -> None:
 class SegmentPool:
     """The free blocks of every device's segments, and the blocks in use inside them."""
 
-    def __init__(self, align: int = POOL_ALIGN, split_min: int = POOL_SPLIT_MIN,
+    def __init__(self, align: int = POOL_ALIGN, split_min: int = POOL_SPLIT_MIN, small: int = POOL_SMALL_BYTES,
+                 small_segment: int = POOL_SMALL_SEGMENT_BYTES,
                  on_block: Callable[[int, Optional[int], int], None] = _no_report) -> None:
         self.align = int(align)
         self.split_min = int(split_min)
+        self.small = int(small)
+        self.small_segment = int(small_segment)
         self.on_block = on_block
-        self.blocks: Dict[int, list] = {}            # ptr -> [size, prev ptr, next ptr, free, device]
+        self.blocks: Dict[int, list] = {}            # ptr -> [size, prev ptr, next ptr, free, device, class]
         self.free: Dict[int, Dict[int, list]] = {}   # device -> {size: [ptr, ...]}  (the FREE blocks, by size)
         self.sizes: Dict[int, list] = {}             # device -> sorted sizes present in free[dev]
+        self._cls_free: Dict[Tuple[int, int], Dict[int, list]] = {}   # (device, class) -> {size: [ptr, ...]}
+        self._cls_sizes: Dict[Tuple[int, int], list] = {}             # (device, class) -> sorted sizes
         self.alloc_size: Dict[int, int] = {}         # ptr -> the block's size, for the caller of the last take
         self.cached: Dict[int, int] = {}             # device -> bytes parked in free blocks
         self.cached_peak: Dict[int, int] = {}        # device -> peak of the above
         self.stats: Dict[str, int] = {"exact": 0, "fit": 0, "miss": 0, "slack_total": 0, "slack_max": 0,
                                       "flushes": 0, "flushed_bytes": 0, "evictions": 0, "evicted_bytes": 0}
 
+    # -- the classes ---------------------------------------------------------------------------------------------------
+
+    def cls(self, nbytes: int) -> int:
+        """The size class of a request: SMALL up to `small` bytes, LARGE beyond."""
+        return SMALL if int(nbytes) <= self.small else LARGE
+
+    def grow_size(self, nbytes: int) -> int:
+        """The bytes the device grows by for a request the pool cannot serve: a small segment for a small request, the
+        request itself (rounded up to `align`) for a large one."""
+        if self.cls(nbytes) == SMALL:
+            return self.small_segment
+        return -(-int(nbytes) // self.align) * self.align
+
     # -- the free index ------------------------------------------------------------------------------------------------
 
-    def _index_add(self, dev: int, ptr: int, size: int) -> None:
-        per = self.free.setdefault(dev, {})
+    @staticmethod
+    def _add(index: dict, sizes: dict, key, ptr: int, size: int) -> None:
+        per = index.setdefault(key, {})
         lst = per.get(size)
         if lst is None:
             per[size] = [ptr]
-            bisect.insort(self.sizes.setdefault(dev, []), size)
+            bisect.insort(sizes.setdefault(key, []), size)
         else:
             lst.append(ptr)
 
-    def _index_remove(self, dev: int, ptr: int, size: int) -> None:
-        per = self.free.get(dev, {})
+    @staticmethod
+    def _remove(index: dict, sizes: dict, key, ptr: int, size: int) -> None:
+        per = index.get(key, {})
         lst = per.get(size)
         lst.remove(ptr)
         if not lst:
             del per[size]
-            sizes = self.sizes[dev]
-            sizes.pop(bisect.bisect_left(sizes, size))
+            sz = sizes[key]
+            sz.pop(bisect.bisect_left(sz, size))
+
+    def _index_add(self, dev: int, ptr: int, size: int) -> None:
+        self._add(self.free, self.sizes, dev, ptr, size)
+        self._add(self._cls_free, self._cls_sizes, (dev, self.blocks[ptr][5]), ptr, size)
+
+    def _index_remove(self, dev: int, ptr: int, size: int) -> None:
+        self._remove(self.free, self.sizes, dev, ptr, size)
+        self._remove(self._cls_free, self._cls_sizes, (dev, self.blocks[ptr][5]), ptr, size)
 
     # -- blocks --------------------------------------------------------------------------------------------------------
 
     def take(self, dev: int, nbytes: int) -> Optional[int]:
-        """The smallest free block on `dev` that holds `nbytes` (rounded up to `align`), split when what is left is at
-        least `split_min`; None on a miss. The block's size is left in `alloc_size[ptr]` for the caller (it may exceed
-        the request by less than the split threshold)."""
+        """The smallest free block of the request's class on `dev` that holds `nbytes` (rounded up to `align`), split
+        when what is left is at least `split_min` — and, in the large class, at most the request; None on a miss (no
+        such block, or the only ones would be left with more free than the request pins). The block's size is left in
+        `alloc_size[ptr]` for the caller (it may exceed the request by less than the split threshold)."""
         st = self.stats
-        sizes = self.sizes.get(dev)
+        cls = self.cls(nbytes)
+        sizes = self._cls_sizes.get((dev, cls))
         if not sizes:
             st["miss"] += 1
             return None
@@ -82,13 +129,16 @@ class SegmentPool:
             st["miss"] += 1
             return None
         sz = sizes[k]
-        ptr = self.free[dev][sz][-1]
+        if cls == LARGE and sz - want >= self.split_min and sz - want > want:
+            st["miss"] += 1                      # the half rule: a larger block would leave even more pinned
+            return None
+        ptr = self._cls_free[(dev, cls)][sz][-1]
         self._index_remove(dev, ptr, sz)
         blk = self.blocks[ptr]
         blk[3] = False
         if sz - want >= self.split_min:
             rest = ptr + want
-            self.blocks[rest] = [sz - want, ptr, blk[2], True, dev]
+            self.blocks[rest] = [sz - want, ptr, blk[2], True, dev, cls]
             if blk[2] is not None:
                 self.blocks[blk[2]][1] = rest
             blk[0], blk[2] = want, rest
@@ -104,9 +154,13 @@ class SegmentPool:
         self.cached[dev] = self.cached.get(dev, 0) - blk[0]
         return ptr
 
-    def add_segment(self, dev: int, ptr: int, nbytes: int) -> None:
-        """A driver allocation joins the pool as a one-block segment, in use."""
-        self.blocks[ptr] = [int(nbytes), None, None, False, dev]
+    def add_free_segment(self, dev: int, ptr: int, nbytes: int, request: int) -> None:
+        """A driver allocation of `nbytes` grown for `request` (`grow_size`) joins the pool as a one-block FREE segment
+        of the request's class, parked; the caller takes the request from it next."""
+        cls = self.cls(request)
+        self.blocks[ptr] = [int(nbytes), None, None, True, dev, cls]
+        self._index_add(dev, ptr, int(nbytes))
+        self.cached[dev] = self.cached.get(dev, 0) + int(nbytes)
 
     def release(self, ptr: int) -> int:
         """`ptr`'s block is free: merged with its free neighbours and indexed; returns the bytes it adds to the pool's
@@ -117,8 +171,8 @@ class SegmentPool:
         blk[3] = True
         nxt = blk[2]
         if nxt is not None and self.blocks[nxt][3]:
+            self._index_remove(dev, nxt, self.blocks[nxt][0])
             nb = self.blocks.pop(nxt)
-            self._index_remove(dev, nxt, nb[0])
             self.on_block(nxt, None, dev)
             blk[0] += nb[0]
             blk[2] = nb[2]
@@ -162,8 +216,9 @@ class SegmentPool:
     def drop_segment(self, dev: int, ptr: int) -> int:
         """A WHOLLY free segment (its one block, free, unchained) leaves the pool; its bytes. The driver's release is
         the caller's."""
-        blk = self.blocks.pop(ptr)
+        blk = self.blocks[ptr]
         self._index_remove(dev, ptr, blk[0])
+        self.blocks.pop(ptr)
         self.alloc_size.pop(ptr, None)
         return blk[0]
 
@@ -212,11 +267,11 @@ def simulate(events: Iterable[Tuple[str, object, int]], parked_cap: int = 0, ali
              split_min: int = POOL_SPLIT_MIN, pooled: bool = True) -> Simulation:
     """Replay `events` — ("alloc", key, nbytes), ("arena", key, nbytes) and ("free", key, 0), `key` any hashable naming
     one allocation — through the allocator's own pool (`SegmentPool`) and its own order: a request is served from the
-    pool first; on a miss the pool's wholly free segments return to the driver before the device grows by the request;
-    a freed block parks, and wholly free segments beyond `parked_cap` (0: unbounded) return to the driver. An "arena"
-    is a block outside the pool (`malloc_cuda(pooled=False)`, a weight arena): straight from the driver (no flush before
-    it), back to it whole when freed. `pooled=False`: the pool is off (`NBX_ALLOC_POOL=0`), every free returns to the driver. One device; the
-    driver is a byte counter."""
+    pool first; on a miss the device grows by `grow_size` and the new segment is taken from; a freed block parks, and
+    wholly free segments beyond `parked_cap` (0: unbounded) return to the driver. An "arena" is a block outside the
+    pool (`malloc_cuda(pooled=False)`, a weight arena): straight from the driver, back to it whole when freed.
+    `pooled=False`: the pool is off (`NBX_ALLOC_POOL=0`), every free returns to the driver. One device; the driver is a
+    byte counter that never refuses (what a refusal flushes is the parked whole segments, counted in `parked_bytes`)."""
     pool = SegmentPool(align, split_min)
     held = live = peak = peak_live = parked = 0
     next_ptr = 1 << 40
@@ -235,7 +290,7 @@ def simulate(events: Iterable[Tuple[str, object, int]], parked_cap: int = 0, ali
             n = int(nbytes)
             if n == 0:
                 continue
-            ptr = next_ptr                       # the allocator's order: no flush for a block outside the pool
+            ptr = next_ptr
             next_ptr += -(-n // align) * align + align
             seg_bytes[ptr] = n
             arenas.add(ptr)
@@ -251,16 +306,17 @@ def simulate(events: Iterable[Tuple[str, object, int]], parked_cap: int = 0, ali
                 continue
             ptr = pool.take(0, n) if pooled else None
             if ptr is None:
+                grown = pool.grow_size(n) if pooled else n
+                seg = next_ptr
+                next_ptr += grown + align
+                seg_bytes[seg] = grown
+                held += grown
                 if pooled:
-                    pool.flush([0], to_driver)
-                ptr = next_ptr
-                next_ptr += -(-n // align) * align + align
-                seg_bytes[ptr] = n
-                held += n
-                if pooled:
-                    pool.add_segment(0, ptr, n)
-            else:
-                pool.alloc_size.pop(ptr, None)
+                    pool.add_free_segment(0, seg, grown, n)
+                    ptr = pool.take(0, n)
+                else:
+                    ptr = seg
+            pool.alloc_size.pop(ptr, None) if pooled else None
             where[key] = (ptr, n)
             live += n
             peak = max(peak, held)

@@ -3,7 +3,7 @@ holds it and splits off the rest; a freed block merges with its free neighbours;
 the driver. Exact-size parking kept a freed 3 GB block from serving a 2 GB request (2.6-3.7 GB parked beside 6-7 GB
 live, mochi-1-preview triton at the 8 GB rung). Card-less: the driver is a fake that hands out disjoint ranges.
 
-What each test would do if the code were wrong: a freed 3 MB block not serving a 2 MB request (a second driver
+What each test would do if the code were wrong: a freed 4 MB block not serving a 2 MB request (a second driver
 malloc — red); two live blocks overlapping (red); a coalesced segment never returned over the cap (red); a block of a
 segment handed to the driver alone (the fake refuses a pointer it never issued — red)."""
 import ctypes
@@ -55,16 +55,19 @@ def rt(monkeypatch):
 
 
 def test_a_freed_large_block_serves_a_smaller_request_and_coalesces_back(rt):
-    a = DA.malloc_cuda(3 * MB)
+    """A 4 MB block freed serves a 2 MB request (its remainder, 2 MB, is at most the request: the half rule splits),
+    the remainder serves the next 2 MB request (large class: a 1 MB request would go to a small segment of its own,
+    2026-11-01), and the two frees coalesce the segment back whole."""
+    a = DA.malloc_cuda(4 * MB)
     DA.free_cuda(a)
     b = DA.malloc_cuda(2 * MB)
-    assert rt.mallocs == 1 and b == a, "the freed 3 MB block did not serve the 2 MB request"
-    c = DA.malloc_cuda(MB)
+    assert rt.mallocs == 1 and b == a, "the freed 4 MB block did not serve the 2 MB request"
+    c = DA.malloc_cuda(2 * MB)
     assert rt.mallocs == 1 and c == a + 2 * MB, "the split-off remainder did not serve the next request"
     DA.free_cuda(b)
     DA.free_cuda(c)
-    assert DA._POOL.blocks[a][0] == 3 * MB and DA._POOL.blocks[a][1] is None and DA._POOL.blocks[a][2] is None, "not coalesced"
-    assert DA._POOL.cached[0] == 3 * MB
+    assert DA._POOL.blocks[a][0] == 4 * MB and DA._POOL.blocks[a][1] is None and DA._POOL.blocks[a][2] is None, "not coalesced"
+    assert DA._POOL.cached[0] == 4 * MB
 
 
 def test_a_wholly_free_segment_over_the_cap_returns_to_the_driver(rt, monkeypatch):

@@ -107,9 +107,12 @@ class _FakeDriver:
     """Disjoint ranges handed out and taken back, so the pool's segments are real ones (S4a, 2026-10-27: blocks are
     slices of driver segments; a pointer the driver never issued is refused)."""
     def __init__(self):
-        self.next, self.live, self.freed = 1 << 32, {}, []
+        self.next, self.live, self.freed, self.refuse_once = 1 << 32, {}, [], False
 
     def cudaMalloc(self, out, size):
+        if self.refuse_once:                 # one refusal (cudaErrorMemoryAllocation), as a full card gives
+            self.refuse_once = False
+            return 2
         p = self.next
         self.next += size.value + (2 * MiB)
         self.live[p] = size.value
@@ -139,26 +142,28 @@ def test_free_list_accounting_tracks_bytes_hits_and_splits(monkeypatch):
         drv = _with_driver(monkeypatch)
         dev = 0
         DeviceAllocator._pool_cap_bytes[dev] = 1 << 40
-        ptrs = [DeviceAllocator.malloc_cuda(n) for n in (1 * MiB, 4 * MiB, 6 * MiB)]
+        # three large-class blocks (a 1 MiB request would carve a 2 MiB small segment of its own, 2026-11-01)
+        ptrs = [DeviceAllocator.malloc_cuda(n) for n in (3 * MiB, 4 * MiB, 6 * MiB)]
         for p in ptrs:
             DeviceAllocator.free_cuda(p)
-        assert DeviceAllocator._POOL.cached[dev] == 11 * MiB
-        assert DeviceAllocator._POOL.cached_peak[dev] == 11 * MiB
+        assert DeviceAllocator._POOL.cached[dev] == 13 * MiB
+        assert DeviceAllocator._POOL.cached_peak[dev] == 13 * MiB
         st = DeviceAllocator._POOL.stats
+        exact0, fit0 = st["exact"], st["fit"]     # a growth is taken from its new segment: an exact hit each (2026-11-01)
         # Exact hit.
         assert DeviceAllocator._POOL.take(dev, 4 * MiB) == ptrs[1]
-        assert st["exact"] == 1 and DeviceAllocator._POOL.cached[dev] == 7 * MiB
+        assert st["exact"] == exact0 + 1 and DeviceAllocator._POOL.cached[dev] == 9 * MiB
         # Smallest block that holds it, split: 5 MiB from the 6 MiB segment, 1 MiB left free beside it.
         assert DeviceAllocator._POOL.take(dev, 5 * MiB) == ptrs[2]
-        assert st["fit"] == 1 and st["slack_total"] == 0
+        assert st["fit"] == fit0 + 1 and st["slack_total"] == 0
         assert DeviceAllocator._POOL.alloc_size[ptrs[2]] == 5 * MiB
-        assert DeviceAllocator._POOL.cached[dev] == 2 * MiB
-        # Miss: no free block holds 3 MiB.
+        assert DeviceAllocator._POOL.cached[dev] == 4 * MiB
+        # Miss: no free block holds 7 MiB.
         misses = st["miss"]
-        assert DeviceAllocator._POOL.take(dev, 3 * MiB) is None
+        assert DeviceAllocator._POOL.take(dev, 7 * MiB) is None
         assert st["miss"] == misses + 1
         # Peak unchanged by takes; nothing went back to the driver.
-        assert DeviceAllocator._POOL.cached_peak[dev] == 11 * MiB and drv.freed == []
+        assert DeviceAllocator._POOL.cached_peak[dev] == 13 * MiB and drv.freed == []
 
 
 def test_autotune_headroom_guard_retries_once_then_gives_up():
@@ -217,17 +222,17 @@ def test_parked_cap_evicts_whole_segments_largest_first_and_never_parks_an_over_
         assert DeviceAllocator._POOL.stats["evictions"] == 1
         assert DeviceAllocator._POOL.stats["evicted_bytes"] == 6 * MiB
         assert DeviceAllocator._cuda_live_bytes[dev] == 5 * MiB     # the evicted segment left the driver
-        # A segment larger than the whole cap is never parked: straight back to the driver. The device grows for it,
-        # so the parked 3 + 2 MiB go back to the driver first (no parked block survives a device growth).
+        # A segment larger than the whole cap is never parked: straight back to the driver, the parked 3 + 2 MiB
+        # untouched (a parked segment survives a device growth, 2026-11-01: it is the next request of its size's block).
         DeviceAllocator.free_cuda(DeviceAllocator.malloc_cuda(20 * MiB))
-        assert sorted(drv.freed[1:3]) == [2 * MiB, 3 * MiB] and drv.freed[0] == 6 * MiB and drv.freed[3] == 20 * MiB
-        assert DeviceAllocator._POOL.cached[dev] == 0
+        assert drv.freed == [6 * MiB, 20 * MiB]
+        assert DeviceAllocator._POOL.cached[dev] == 5 * MiB
 
 
-def test_no_parked_block_survives_a_device_growth(monkeypatch):
-    """A malloc the pool cannot serve grows the device; every parked block goes back to the driver first, so the device
-    holds what is alive, not what is alive plus what was once freed and split (Sana_1600M_4Kpx triton on a V100-16GB,
-    lot 2026-10-28: 4.5 GB parked in 12 split segments beside 9.4 GB alive refused a 2.96 GB convolution)."""
+def test_a_parked_segment_survives_a_growth_and_leaves_at_a_refusal(monkeypatch):
+    """A malloc the pool cannot serve grows the device and the parked segments stay (the next request of their size
+    takes them whole: 164e89dc's flush before every growth emptied the small free segments and the scalars then carved
+    large blocks — Allegro triton 16g, gate 2026-11-01); a malloc the driver refuses sends them back and is retried."""
     with _PoolState():
         _reinit(None)
         drv = _with_driver(monkeypatch)
@@ -237,6 +242,11 @@ def test_no_parked_block_survives_a_device_growth(monkeypatch):
         DeviceAllocator.free_cuda(a)
         assert DeviceAllocator._POOL.cached[dev] == 4 * MiB and drv.freed == []
         DeviceAllocator.malloc_cuda(8 * MiB)                  # the pool cannot serve it: the device grows
+        assert drv.freed == [] and DeviceAllocator._POOL.cached[dev] == 4 * MiB
+        assert DeviceAllocator.malloc_cuda(4 * MiB) == a      # the parked segment is this request's block
+        DeviceAllocator.free_cuda(a)
+        drv.refuse_once = True                                # the card is full: the refusal flushes the parked 4 MiB
+        DeviceAllocator.malloc_cuda(12 * MiB)
         assert drv.freed == [4 * MiB] and DeviceAllocator._POOL.cached[dev] == 0
 
 

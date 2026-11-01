@@ -286,8 +286,10 @@ class DeviceAllocator:
     # (the differential for any allocator-suspected divergence).
     # P-SANA-4KPX-RUNTIME Phase 2 origin.
     # The pool SPLITS and COALESCES (S4a, 2026-10-27; the method of torch's caching allocator): every driver allocation
-    # is a SEGMENT made of BLOCKS chained in address order; a request takes the smallest free block that holds it and
-    # splits off the rest when it is at least `memory.pool.POOL_SPLIT_MIN`; a freed block merges with its free neighbours; only a
+    # is a SEGMENT made of BLOCKS chained in address order, in one of two SIZE CLASSES (small requests carve small
+    # segments, large ones never share a segment with them); a request takes the smallest free block of its class that
+    # holds it and splits off the rest when it is at least `memory.pool.POOL_SPLIT_MIN` — a large block only when the
+    # rest is at most the request (the half rule, 2026-11-01); a freed block merges with its free neighbours; only a
     # segment wholly free returns to the driver (over the parked cap, on a refused malloc, on a flush). Exact-size
     # parking kept a freed 3 GB block from ever serving a 2 GB request: 2.6-3.7 GB parked beside 6-7 GB live on
     # mochi-1-preview triton at the 8 GB rung.
@@ -738,11 +740,11 @@ class DeviceAllocator:
         stable across single-GPU, zero3, and pipeline_parallel.
 
         Phase 2 path (NBX_ALLOC_POOL=1): satisfies requests from a per-
-        device free-list pool first; on cudaMalloc OOM, flushes the pool
-        back to the driver and retries (analog to torch CachingAllocator
-        release_cached_blocks → retry). Mitigates fragmentation when
-        many small/medium allocs precede a large alloc, which was the
-        Sana 4Kpx VAE conv::62 8 GiB OOM pattern.
+        device pool first (`memory.pool.SegmentPool`: two size classes, the
+        half rule); on a miss the device grows by `grow_size` and the request
+        is taken from the new segment; on cudaMalloc OOM, flushes the pool's
+        wholly free segments back to the driver and retries (analog to torch
+        CachingAllocator release_cached_blocks → retry).
 
         dev_idx (C3): the CURRENT device index, when the caller already
         knows it — skips the cudaGetDevice round-trip used purely for
@@ -778,17 +780,17 @@ class DeviceAllocator:
                 # from the driver's POV). Peak unchanged.
                 return ptr
 
-        # The device never GROWS while the pool parks freed blocks: they go back to the driver first, so the device
-        # holds what is alive, not what is alive plus what was once freed and split (the S4a pool cuts its segments
-        # for later small blocks, and a refused malloc's flush can then return none of them whole). Sana_1600M_4Kpx
-        # triton on a V100-16GB, lot 2026-10-28: 4.5 GB of parked blocks in 12 split segments beside 9.4 GB alive
-        # refused the VAE's 2.96 GB convolution; the Mac measured the same rule on HAT-L x4 (10 688 -> 8 913 MB, bit-
-        # equal, 77258825).
-        if DeviceAllocator._pool_enabled and pooled:
-            DeviceAllocator._pool_flush(dev)
+        # The device grows by what the pool asks for the request (`grow_size`: a small segment for a small request,
+        # the request for a large one) while its wholly free segments stay parked: with the pool's two size classes and
+        # its half rule (memory/pool.py), no segment is pinned by a block smaller than its free remainder, so what a
+        # refused malloc flushes is whole. 164e89dc flushed the pool before every growth instead (Sana_1600M_4Kpx
+        # triton on a V100-16GB, lot 2026-10-28: 4.5 GB parked in 12 split segments beside 9.4 GB alive refused a
+        # 2.96 GB convolution) — and emptied the small free segments the scalars then carved large blocks for: Allegro
+        # triton 16g, gate 2026-11-01, 4.4 GB of free blocks in pinned segments refused a 2.5 GB gelu.
+        grown = DeviceAllocator._POOL.grow_size(nbytes) if DeviceAllocator._pool_enabled and pooled else nbytes
         ptr_obj = ctypes.c_void_p()
         dm = _rt.device_memory()
-        ret = DeviceAllocator._driver_malloc(ptr_obj, nbytes, dev)
+        ret = DeviceAllocator._driver_malloc(ptr_obj, grown, dev)
 
         # No reclaim-and-retry of the hot loops' deferred dead-tensor queues here
         # (ZERO FALLBACK, 2026-10-11). That rescue drained the queue on a refused
@@ -861,13 +863,17 @@ class DeviceAllocator:
                 driver_free=driver_free if driver_total else None,
                 driver_total=driver_total or None)
         p = ptr_obj.value or 0
-        DeviceAllocator._cuda_ptr_size[p] = nbytes
-        DeviceAllocator._range_add(p, nbytes)
+        DeviceAllocator._cuda_ptr_size[p] = grown
+        DeviceAllocator._range_add(p, grown)
         DeviceAllocator._cuda_ptr_device[p] = dev
         if DeviceAllocator._pool_enabled and pooled:
-            DeviceAllocator._POOL.add_segment(dev, p, nbytes)
+            # the new segment joins the pool free, and the request is taken from it (carved, for a small one)
+            DeviceAllocator._POOL.add_free_segment(dev, p, grown, nbytes)
+            taken = DeviceAllocator._POOL.take(dev, nbytes)
+            assert taken == p, f"the pool did not hand back the segment it was just given: {taken} for {p:#x}"
+            DeviceAllocator._cuda_ptr_size[p] = DeviceAllocator._POOL.alloc_size.pop(p, grown)
         DeviceAllocator._cuda_ptr_epoch[p] = DeviceAllocator._alloc_epoch
-        live = DeviceAllocator._cuda_live_bytes.get(dev, 0) + nbytes
+        live = DeviceAllocator._cuda_live_bytes.get(dev, 0) + grown
         DeviceAllocator._cuda_live_bytes[dev] = live
         peak = DeviceAllocator._cuda_peak_bytes.get(dev, 0)
         if live > peak:
