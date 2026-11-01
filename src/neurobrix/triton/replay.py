@@ -1106,6 +1106,22 @@ def would_replay(seq, pre_op_callback) -> bool:
     return isinstance(state, FrozenPlan)
 
 
+def _outputs_off_the_slab(seq, slab) -> int:
+    """Every graph output of `seq` carved from `slab` replaced in the arena by a heap copy; the count. A retired slab is
+    freed only once nothing carved from it lives, and the caller keeps a run's outputs."""
+    lo, hi, n = slab.base, slab.base + slab.size, 0
+    for tid in (seq.dag.get("output_tensor_ids") or []):
+        slot = seq._tid_to_slot.get(tid)
+        t = seq._arena[slot] if slot is not None else None
+        if t is None or not (lo <= t.data_ptr() < hi):
+            continue
+        fresh = NBXTensor.empty_like(t)
+        DeviceAllocator.memcpy(fresh.data_ptr(), t.data_ptr(), t._nbytes, 3)
+        seq._arena[slot] = fresh
+        n += 1
+    return n
+
+
 def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
     """Replay fast path. True = this run was fully handled.
 
@@ -1334,6 +1350,12 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
     if failed is not None or STATE.broken is not None:
         reason = STATE.broken or f"exception: {failed}"
         shortfall = slab.shortfall
+        # The run's outputs were carved from the slab and the caller keeps them: handed over as heap copies (as a
+        # frozen plan's are), so the retired slab is freed once the run's own tensors die, not held beside the rest of
+        # the run. Kept, a VAE chunk's output pinned a 7.5 GB undersized slab through the next chunks (Allegro triton
+        # on a V100-16GB, 2026-11-01: the 2.5 GB malloc that followed was refused).
+        if failed is None:
+            _outputs_off_the_slab(seq, slab)
         slab.retire()  # deferred: frees only after carved tensors die
         for _o in others.values():
             _o.retire()
