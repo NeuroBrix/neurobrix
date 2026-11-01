@@ -942,11 +942,17 @@ def signature(seq) -> Optional[tuple]:
             parts.append((s, None))
         else:
             parts.append((s, tuple(t.shape), int(t.nbx_dtype)))
+    # Every symbol's bound value: a launch bakes the extents its symbols resolved to, so two runs whose bindings differ
+    # are two plans. The Triton resolver's are `bindings` (`triton/symbols.SymbolResolver`); this line read a
+    # `resolved` it never had, so no symbol ever entered the signature — deepseek-moe-16b-chat's rotary table,
+    # `arange(nbx_rope_len + 1)` with `nbx_rope_len` bound per step from position_ids, was recorded at one step's length
+    # and replayed at the next step's position: index_select out of range, CUresult 710 (gate 2026-11-01, bisected to
+    # 18fb11c2, the first commit that replayed that component's decode step).
     resolver = getattr(seq, "_symbol_resolver", None)
-    resolved = getattr(resolver, "resolved", None) if resolver else None
-    if isinstance(resolved, dict):
+    bindings = getattr(resolver, "bindings", None) if resolver is not None else None
+    if isinstance(bindings, dict):
         parts.append(tuple(sorted(
-            (k, v) for k, v in resolved.items()
+            (k, v) for k, v in bindings.items()
             if isinstance(v, (int, float, str)))))
     parts.append(tuple(sorted(seq._op_uid_interceptors)))
     parts.append(tuple(sorted(seq._op_interceptors)))
