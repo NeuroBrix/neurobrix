@@ -686,6 +686,39 @@ class DeviceAllocator:
         return dm.ALLOC_REFUSED if held + int(nbytes) > int(cap) else None
 
     @staticmethod
+    def _oom(dev: int, nbytes: int, ret: int, dm) -> "DeviceOOMError":
+        """The named refusal of `nbytes` on `dev` (the driver's code `ret`): what was live, what the pool held, what the
+        driver had free — the text every log reader keys on."""
+        DeviceAllocator.clear_last_error()   # a refused call must not poison the next one
+        # Diagnostic: how much live + how big the pool was at OOM time.
+        live_now = DeviceAllocator._cuda_live_bytes.get(dev, 0)
+        pool_total = 0
+        pool_count = 0
+        per_dev = DeviceAllocator._POOL.free.get(dev, {})
+        for sz, ptrs in per_dev.items():
+            pool_total += sz * len(ptrs)
+            pool_count += len(ptrs)
+        try:
+            _rc, driver_free, driver_total = dm.mem_get_info()   # a runtime without the symbol raises: 0 below
+        except Exception:
+            driver_free = driver_total = 0
+        # The message is unchanged to the byte: the queue runner's error
+        # extractor and every log-reading tool key on this text.
+        return DeviceOOMError(
+            f"GPU malloc failed (error {ret}) for {nbytes} bytes "
+            f"[device cuda:{dev} live_tracked={live_now/1024/1024:.0f}MB "
+            f"pool_cached={pool_total/1024/1024:.0f}MB ({pool_count} blocks) "
+            f"driver_free={driver_free/1024/1024:.0f}MB / "
+            f"driver_total={driver_total/1024/1024:.0f}MB]"
+            + (f" under the imposed limit: {DeviceAllocator._rung_limit_bytes[dev]/1024/1024:.0f}MB this process may "
+               f"hold (memory.set_limit less the runtime's context)"
+               if DeviceAllocator._rung_limit_bytes.get(dev) is not None else ""),
+            requested=nbytes, device_idx=dev, live=live_now,
+            pool_cached=pool_total, pool_blocks=pool_count,
+            driver_free=driver_free if driver_total else None,
+            driver_total=driver_total or None)
+
+    @staticmethod
     def _driver_malloc(ptr_obj, nbytes: int, dev: int) -> int:
         """The runtime's malloc, or the refusal a card of the imposed rung gives (cudaErrorMemoryAllocation, 2)."""
         limit = DeviceAllocator._rung_limit(dev)
@@ -808,7 +841,7 @@ class DeviceAllocator:
             DeviceAllocator.clear_last_error()   # a refused call must not poison the next one
             freed = DeviceAllocator._pool_flush(dev)
             if freed > 0:
-                ret = DeviceAllocator._driver_malloc(ptr_obj, nbytes, dev)
+                ret = DeviceAllocator._driver_malloc(ptr_obj, grown, dev)   # what the pool records, never the request
 
         # The engine's other cached memory, released the same way: a recorded replay plan's slab between two runs of
         # its sequence (`triton/replay.release_idle_slabs`), freed through the pool, flushed, retried once.
@@ -818,7 +851,7 @@ class DeviceAllocator:
             if got > 0:
                 if DeviceAllocator._pool_enabled:
                     DeviceAllocator._pool_flush(dev)
-                ret, _p = dm.malloc(nbytes)          # the runtime's malloc itself, as before (no rung check here)
+                ret, _p = dm.malloc(grown)           # the runtime's malloc itself, as before (no rung check here)
                 ptr_obj.value = _p or None
 
         # Pre-allocation OOM-recovery (independent of pool): trigger a
@@ -831,37 +864,10 @@ class DeviceAllocator:
             DeviceAllocator.clear_last_error()   # a refused call must not poison the next one
             import gc as _gc_oom
             _gc_oom.collect()
-            ret = DeviceAllocator._driver_malloc(ptr_obj, nbytes, dev)
+            ret = DeviceAllocator._driver_malloc(ptr_obj, grown, dev)
 
         if ret != 0:
-            DeviceAllocator.clear_last_error()   # a refused call must not poison the next one
-            # Diagnostic: how much live + how big the pool was at OOM time.
-            live_now = DeviceAllocator._cuda_live_bytes.get(dev, 0)
-            pool_total = 0
-            pool_count = 0
-            per_dev = DeviceAllocator._POOL.free.get(dev, {})
-            for sz, ptrs in per_dev.items():
-                pool_total += sz * len(ptrs)
-                pool_count += len(ptrs)
-            try:
-                _rc, driver_free, driver_total = dm.mem_get_info()   # a runtime without the symbol raises: 0 below
-            except Exception:
-                driver_free = driver_total = 0
-            # The message is unchanged to the byte: the queue runner's error
-            # extractor and every log-reading tool key on this text.
-            raise DeviceOOMError(
-                f"GPU malloc failed (error {ret}) for {nbytes} bytes "
-                f"[device cuda:{dev} live_tracked={live_now/1024/1024:.0f}MB "
-                f"pool_cached={pool_total/1024/1024:.0f}MB ({pool_count} blocks) "
-                f"driver_free={driver_free/1024/1024:.0f}MB / "
-                f"driver_total={driver_total/1024/1024:.0f}MB]"
-                + (f" under the imposed limit: {DeviceAllocator._rung_limit_bytes[dev]/1024/1024:.0f}MB this process may "
-                   f"hold (memory.set_limit less the runtime's context)"
-                   if DeviceAllocator._rung_limit_bytes.get(dev) is not None else ""),
-                requested=nbytes, device_idx=dev, live=live_now,
-                pool_cached=pool_total, pool_blocks=pool_count,
-                driver_free=driver_free if driver_total else None,
-                driver_total=driver_total or None)
+            raise DeviceAllocator._oom(dev, nbytes, ret, dm)
         p = ptr_obj.value or 0
         DeviceAllocator._cuda_ptr_size[p] = grown
         DeviceAllocator._range_add(p, grown)
