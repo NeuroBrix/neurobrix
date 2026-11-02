@@ -617,10 +617,11 @@ class DeviceAllocator:
         DeviceAllocator._maybe_init_pool()
         if not DeviceAllocator._pool_enabled:
             return 0
-        out = 0
-        for dev in [d for d, rs in DeviceAllocator._POOL.ranges.items() if rs]:
-            out += DeviceAllocator._range_reclaim(dev) - 0    # its free chunks unmapped (and its segments flushed)
-        return out + DeviceAllocator._pool_flush()
+        # an expandable range's free chunks stay mapped: the next component's tensors are their pages, and a driver
+        # allocation that needs them (a weight arena, a refused segment) reclaims what it needs at its refusal
+        # (`malloc_direct`). Unmapped here, they were mapped back at once — SANA-Video 16g: 65 calls between its
+        # phases, 47 737 unmaps and as many maps, +26 s (2026-11-02)
+        return DeviceAllocator._pool_flush()
 
     @staticmethod
     def new_allocation_epoch() -> int:
@@ -1013,6 +1014,8 @@ class DeviceAllocator:
         if ret != 0 and DeviceAllocator._pool_enabled:
             DeviceAllocator.clear_last_error()   # a refused call must not poison the next one
             freed = DeviceAllocator._pool_flush(dev)
+            if DeviceAllocator._POOL.ranges.get(dev):
+                freed += DeviceAllocator._range_reclaim(dev, need=grown)   # the range's free chunks, what it needs
             if freed > 0:
                 ret = DeviceAllocator._driver_malloc(ptr_obj, grown, dev)   # what the pool records, never the request
 
