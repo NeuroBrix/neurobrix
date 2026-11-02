@@ -160,7 +160,7 @@ def _as_text(chunk) -> str:
     return chunk
 
 
-def _bound(text: str, limit: int = _OUTPUT_BOUND) -> str:
-    if len(text) <= limit:
+def _bound(text: str) -> str:
+    if len(text) <= _OUTPUT_BOUND:
         return text
-    return text[:limit] + f"\n[... output truncated at {limit} chars]"
+    return text[:_OUTPUT_BOUND] + f"\n[... output truncated at {_OUTPUT_BOUND} chars]"

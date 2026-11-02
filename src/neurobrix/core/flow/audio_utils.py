@@ -499,3 +499,31 @@ def sample_token(
         next_token = device_multinomial(probs, 1).squeeze(-1).item()
 
     return next_token
+
+
+def requested_voice(engine, available) -> str:
+    """Which voice this run asked for.
+
+    The voice is a run parameter, like the prompt. It is read, in order, from
+    the run's own request (`--speaker`, bound as `global.speaker` by
+    cli/commands/run.py) and then from the artefact's runtime defaults. It is
+    NOT chosen here: `defaults.get("voice", "af_heart")` picked one of the 54
+    voicepacks this artefact ships by a literal in the code, on every run,
+    without a word — and if that one was missing it silently substituted
+    another. Asking for one voice and getting another is a wrong answer.
+    """
+    resolved = getattr(engine.ctx.variable_resolver, "resolved", {}) or {}
+    for key in ("global.speaker", "speaker", "global.voice", "voice"):
+        value = resolved.get(key)
+        if value:
+            return str(value)
+
+    declared = engine.ctx.pkg.defaults.get("voice")
+    if declared:
+        return str(declared)
+
+    raise RuntimeError(
+        f"ZERO FALLBACK: this artefact ships {len(available)} voices and "
+        f"declares none as its default (`voice` is absent from "
+        f"runtime/defaults.json, where `phoneme_lang` is present). Choose one "
+        f"with --speaker: {', '.join(available)}.")

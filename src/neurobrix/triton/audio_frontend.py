@@ -39,7 +39,7 @@ from neurobrix.core.module.audio.mel_dsp import (  # noqa: F401
     extract_features_np,
 )
 from neurobrix.core.flow.audio_utils import (   # torch-free: the compiled flow's own readers, the same
-    get_component_input_shape, postprocess_text_output as postprocess_text_output_np)
+    get_component_input_shape, postprocess_text_output as postprocess_text_output_np, requested_voice)
 
 
 # ---------------------------------------------------------------------------
@@ -105,31 +105,6 @@ def _set_device_for(ctx):
     _DA.set_device(parse_device_idx(getattr(ctx, "primary_device", "cuda:0")))
 
 
-def _requested_voice_np(engine, available) -> str:
-    """Which voice this run asked for — mirror of the ATen stage's rule.
-
-    The voice is a run parameter, like the prompt. It is read, in order, from
-    the run's own request (`--speaker`, bound as `global.speaker` by
-    cli/commands/run.py) and then from the artefact's runtime defaults. It is
-    NOT chosen here: `defaults.get("voice", "af_heart")` picked one of the 54
-    voicepacks this artefact ships by a literal in the code, on every run,
-    without a word — and if that one was missing it silently substituted
-    another. Asking for one voice and getting another is a wrong answer.
-    """
-    resolved = getattr(engine.ctx.variable_resolver, "resolved", {}) or {}
-    for key in ("global.speaker", "speaker", "global.voice", "voice"):
-        value = resolved.get(key)
-        if value:
-            return str(value)
-    declared = engine.ctx.pkg.defaults.get("voice")
-    if declared:
-        return str(declared)
-    raise RuntimeError(
-        f"ZERO FALLBACK: this artefact ships {len(available)} voices and "
-        f"declares none as its default (`voice` is absent from "
-        f"runtime/defaults.json, where `phoneme_lang` is present). Choose one "
-        f"with --speaker: {', '.join(available)}.")
-
 def _load_voicepack_np(engine, phoneme_count: int) -> None:
     """Torch-free Kokoro voicepack load + split (decoder/predictor styles)."""
     nbx_path = Path(engine.ctx.nbx_path_str)
@@ -140,7 +115,7 @@ def _load_voicepack_np(engine, phoneme_count: int) -> None:
             f"'{vdir}' does not exist. Returning here used to let the decoder "
             f"and predictor run with no style bound at all.")
     available = sorted(f.stem for f in vdir.glob("*.pt"))
-    vname = _requested_voice_np(engine, available)
+    vname = requested_voice(engine, available)
     vp = vdir / f"{vname}.pt"
     if not vp.exists():
         raise RuntimeError(
@@ -270,8 +245,8 @@ def preprocess_audio_input_np(ctx, audio_config: Dict, stages: List[Dict]) -> No
         _seek = whisper_seek_context(
             str(audio_path), Path(find_model_config_path(ctx)), input_shape)
         if _seek is not None:
-            def _build(mel_np, _ctx=ctx):
-                _set_device_for(_ctx)   # the encoder's device, explicitly, every window
+            def _build(mel_np):
+                _set_device_for(ctx)   # the encoder's device, explicitly, every window
                 return NBXTensor.from_numpy(_fit(mel_np))
             _seek["build"] = _build
             ctx._stt_seek = _seek

@@ -79,6 +79,11 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 
 | kind | path | symbol | why it stays |
 |---|---|---|---|
+| wrapper | src/neurobrix/kernels/census.py | install(hardware_profile) | the tests install the census for a profile they name (tests/unit/kernels/test_a_one_row_convolution_keys_its_width_on_the_ladder) |
+| wrapper | src/neurobrix/kernels/census_table.py | rows_for(root) | the tests read a table under a temporary root (tests/unit/kernels/test_the_census_is_one_table) |
+| wrapper | src/neurobrix/core/state/pages.py | writable(fence) | the tests write at a fence (tests/unit/core/test_the_state_pages_grow_share_and_release_on_fences): the copy-on-write rule it pins |
+| wrapper | src/neurobrix/agent/sandbox.py | SandboxViolation | a named refusal: the agent tells a sandbox refusal from a tool's own failure (exported by neurobrix.agent) |
+| wrapper | src/neurobrix/core/workspace.py | SnapshotNotPresent | a named refusal: a missing snapshot, told apart from any other error by its callers |
 | fact | src/neurobrix/core/runtime/graph/compiled_sequence.py | _parse_dtype | returns a torch.dtype with the sequence's Prism remap (compute_dtype); nbxtensor's parse_dtype returns an NBXDtype — two types |
 | fact | src/neurobrix/core/runtime/precision_contract.py | kind | a different function under the same name: the precision class of an op (precision / casting / passthrough), not a dtype's kind |
 | wrapper | src/neurobrix/core/runtime/graph/device_attention.py | _plain | the plain-SDPA entry of the attention dispatch table, called positionally like its other entries |
