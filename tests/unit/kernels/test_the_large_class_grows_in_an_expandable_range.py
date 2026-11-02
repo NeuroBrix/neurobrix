@@ -144,3 +144,18 @@ def test_a_device_measured_without_vmm_keeps_its_driver_segments(card, monkeypat
     monkeypatch.setattr(_wrappers, "get_hardware_profile", lambda: prof)
     p = DA.malloc_cuda(8 * MB)
     assert not DA._POOL.ranges.get(0) and p in _nbx_runtime.gpu_runtime().live
+
+
+def test_a_weight_arena_refused_takes_back_the_range_s_free_chunks(card):
+    """A weight arena (`pooled=False`: straight from the driver) refused on a full card gets the range's free chunks
+    back (what it needs) and is retried; `empty_cache_pool` between phases leaves them mapped (the next component's
+    pages: unmapped there, SANA-Video mapped 47 737 chunks back, +26 s). What this test would do if the code were wrong:
+    the arena refused although whole free chunks were mappable (red), or the chunks unmapped by empty_cache_pool (red)."""
+    DA._rung_limit_bytes[0] = 20 * MB
+    x = DA.malloc_cuda(16 * MB)
+    DA.free_cuda(x)
+    mapped_before = len(card.mapped)
+    DA.empty_cache_pool()
+    assert len(card.mapped) == mapped_before, "empty_cache_pool unmapped the range's chunks"
+    a = DA.malloc_cuda(10 * MB, pooled=False)
+    assert a is not None and DA._cuda_live_bytes[0] <= 20 * MB
