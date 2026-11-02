@@ -802,7 +802,9 @@ class DeviceAllocator:
                 if reclaimed:
                     DeviceAllocator.clear_last_error()
                     return False
-                DeviceAllocator._range_reclaim(dev)
+                # what this mapping still needs, never every free chunk: unmapping them all and mapping them back at the
+                # next growths cost HAT-L x4 4 143 unmaps + remaps per run, 2 s of its 12 (the supervisor 10:55)
+                DeviceAllocator._range_reclaim(dev, need=(len(pairs) - pairs.index((r, i))) * r.chunk)
                 reclaimed = True
             r.mapped.add(i)
             r.handles[i] = h
@@ -827,15 +829,19 @@ class DeviceAllocator:
         DeviceAllocator._cuda_live_bytes[dev] = max(0, DeviceAllocator._cuda_live_bytes.get(dev, 0) - r.chunk)
 
     @staticmethod
-    def _range_reclaim(dev: int) -> int:
-        """ONE synchronisation of `dev`, then every mapped chunk lying whole inside a free block of its ranges unmapped
-        and released (nothing a kernel may still read: the work is drained), and its driver segments flushed. The bytes
-        given back."""
+    def _range_reclaim(dev: int, need: Optional[int] = None) -> int:
+        """ONE synchronisation of `dev`, then the mapped chunks lying whole inside free blocks of its ranges unmapped and
+        released (nothing a kernel may still read: the work is drained) — the highest addresses first, until `need`
+        bytes are given back (None: all of them), the driver segments flushed when the chunks were not enough. The
+        bytes given back."""
         DeviceAllocator.device_synchronize(dev)
         st = DeviceAllocator._POOL.stats
         st["range_reclaims"] = st.get("range_reclaims", 0) + 1
         out = 0
-        for r, i in range_reclaimable(DeviceAllocator._POOL, dev):
+        pairs = sorted(range_reclaimable(DeviceAllocator._POOL, dev), key=lambda ri: -ri[0].chunk_va(ri[1]))
+        for r, i in pairs:
+            if need is not None and out >= need:
+                return out
             st["range_unmaps"] = st.get("range_unmaps", 0) + 1
             DeviceAllocator._range_unmap(dev, r, i)
             r.mapped.discard(i)
