@@ -43,8 +43,7 @@ def test_reproduction_reuses_a_render_of_the_same_request(tmp_path, monkeypatch)
     calls = []
     monkeypatch.setattr(R.subprocess, "run", lambda *a, **k: calls.append(a) or types.SimpleNamespace(returncode=0))
     monkeypatch.setattr(C, "gate", lambda a, b: {"psnr_db": 41.4 if "new" in str(b) else 20.6, "ssim": 0.99, "pass": "new" in str(b), "identical": False})
-    # the snapshot lookup walks fixed roots; point the first at our tmp via a fake next()
-    monkeypatch.setattr(R.Path, "is_dir", lambda self: str(self).endswith("/hf_snapshots/m") or Path.__dict__["is_dir"](self))
+    monkeypatch.setenv("NBX_ATELIER_HF_SNAPSHOTS", str(tmp_path / "hf_snapshots"))   # the snapshot root, read at call time
     old = {"sequential": {"output": str(m.dir / "old_sequential.png")}}; new = {"sequential": {"output": str(m.dir / "new_sequential.png")}}
     res = m.vendor_reproduction(old, new)
     assert calls == [], "the render of the same request is reused"
@@ -71,8 +70,10 @@ def test_the_vendor_renders_the_length_the_request_pins(tmp_path, monkeypatch):
         calls.append(list(cmd)); (m.dir / "vendor_seed42.png").write_bytes(b"png")
         return types.SimpleNamespace(returncode=0)
     monkeypatch.setattr(R.subprocess, "run", _run)
+    # the vendor render's interpreter (mocked above), declared for the cell: a machine may have no competitors environment
+    monkeypatch.setenv("NBX_ATELIER_PYTHON_COMPETITORS", str(tmp_path / "competitors-venv" / "bin" / "python"))
     monkeypatch.setattr(C, "gate", lambda a, b: {"psnr_db": 40.0, "ssim": 0.99, "pass": True, "identical": False})
-    monkeypatch.setattr(R.Path, "is_dir", lambda self: str(self).endswith("/hf_snapshots/m") or Path.__dict__["is_dir"](self))
+    monkeypatch.setenv("NBX_ATELIER_HF_SNAPSHOTS", str(tmp_path / "hf_snapshots"))   # the snapshot root, read at call time
     old = {"sequential": {"output": str(m.dir / "old_sequential.png")}}; new = {"sequential": {"output": str(m.dir / "new_sequential.png")}}
     m.vendor_reproduction(old, new)
     assert calls and "--steps" in calls[0]

@@ -11,6 +11,8 @@ import importlib
 import sys
 from pathlib import Path
 
+import pytest
+
 TOOLS = Path(__file__).resolve().parents[3] / "tools"
 
 
@@ -26,4 +28,14 @@ def _fresh(monkeypatch, value):
 
 def test_the_door_switches_forges_python_and_the_default_is_the_toolchains_venv(monkeypatch):
     assert _fresh(monkeypatch, "/home/mlops/venvs/nbx_t214/bin/python").PY == "/home/mlops/venvs/nbx_t214/bin/python"
-    assert _fresh(monkeypatch, None).PY == "/home/mlops/ml/venv/bin/python"
+    # the default is the machine's declared Forge environment (tools/atelier.python("forge"): the Dell's toolchain
+    # venv); a machine that declares none (the Mac, by design) imports the tool and is refused BY NAME when it runs
+    import atelier
+    default = _fresh(monkeypatch, None).PY
+    try:
+        declared = atelier.python("forge")
+    except atelier.AtelierUndeclared:
+        with pytest.raises(atelier.AtelierUndeclared, match="forge"):
+            str(default)
+    else:
+        assert default == declared

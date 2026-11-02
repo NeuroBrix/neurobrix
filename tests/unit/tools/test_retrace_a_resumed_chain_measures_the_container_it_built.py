@@ -23,6 +23,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
 import retrace_zoo as R  # noqa: E402
+
+pytestmark = pytest.mark.usefixtures("forge_python")   # Forge's subprocess is mocked; its interpreter is declared
 import precision_zoo_campaign as C  # noqa: E402
 
 NAME = "audio-test"
