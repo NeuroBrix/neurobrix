@@ -2338,6 +2338,25 @@ one-worker trials disagree is not steady and is not to be recorded.
 ```python
 def to_bf16_bits(arr: np.ndarray, io) -> np.ndarray   # float32 / float16 -> bfloat16 patterns (uint16), the
                                                       # bytes of one f32_to_bf16_bits call, one span per worker
+def read_bytes(fd: int, offset: int, nbytes: int, io) -> np.ndarray
+    # nbytes of the file at offset, read by the loader's workers into one buffer (page-aligned spans, each read until
+    # full: preadv may return short)
+def spans(n: int, unit: int, align: int, workers: int)
+    # [start, end) element spans of an n-element run, one per worker, each a multiple of `align`; a run under one page
+    # per worker stays whole
+def split_across_workers(src: np.ndarray, out: np.ndarray, convert, io) -> np.ndarray
+    # `convert(src[a:b], out=flat_out[a:b])` over the workers' spans: one conversion of the library, in parallel
+def host_weight_layout(arr: np.ndarray, krsc: bool)
+    # the host array to copy to the device and the element strides of the logical tensor over it
+def load_to_pinned_host(raw: bytes, shape: tuple, source_dtype: NBXDtype, target_dtype: NBXDtype, io,
+                        host_arena: Optional[HostPinnedArena] = None) -> NBXTensor
+    # safetensors raw bytes decoded into a pinned-host NBXTensor
+def place_in_arena(raw, shape: tuple, nbx_dtype: NBXDtype, np_dtype, target_dtype: NBXDtype, krsc: bool,
+                   arena: ComponentArena, target_dev: int, io) -> NBXTensor
+    # one safetensors tensor's raw bytes placed in a component's device arena at its target dtype
+def half_in_place(ptr: int, count: int, device_idx: int)
+    # the loader's raw bf16 buffer at `ptr` rewritten in place as float16 by the library's one device conversion
+    # (ops.wrappers.bf16_to_fp16_gpu with `out=` the same buffer)
 ```
 
 `io = (workers, executor)` is the application's pool (DESIGN rule 14: its size is the profile's).
@@ -2592,6 +2611,158 @@ A service still refused in the environment without NeuroBrix names its row here.
 
 Every public name of these modules, with its signature and what it answers (the first line of its docstring);
 the guard `tests/unit/nbxtensor_boundary/test_every_public_name_is_in_the_api.py` keeps this complete.
+
+### `nbxtensor.backend.launcher` — compile, load and launch a Triton kernel; time and screen autotune candidates
+
+```python
+class Driver                   # what a backend implements: load a binary, launch it, name the compile target it wants
+class CudaDriver(Driver)       # libcuda through ctypes
+class CudaCompiledKernel       # the result of compiling once, launched many times (contract object)
+def register_driver(driver: Optional[Driver]) -> None   # install the driver this process launches through
+def active_driver() -> Driver  # the driver in force, resolved once from the detected backend
+def nbx_binder(kernel, args, kwargs)
+    # (bound_args, specialization, options): the triple Triton's generated binder returns, from the kernel's parameters
+def specialize_arg(arg, specialize: bool = True, align: bool = True)
+    # (type, attr) of one runtime argument, exactly as Triton's binder: a pointer `*<dtype>` with 'D' when 16-byte
+    # aligned; an int i32 / i64 / u64 by range
+def prepare(kernel, args, kwargs) -> Tuple[_Prepared, Dict[str, Any]]
+    # specialise (the binder above), compile (Triton's compiler, the engine's target), load (the driver): once per
+    # specialisation and device
+def reset_caches() -> None     # drop every compiled kernel this launcher holds
+def set_launch_recorder(fn) -> None
+    # record every launch issued: fn(prepared, grid, params), the launch as the DRIVER takes it
+def max_shared_memory_per_block() -> Optional[int]   # the executing device's shared-memory ceiling per block, or None
+def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode='mean', budget_ms=None, **_)
+    # triton.testing.do_bench's contract (milliseconds; quantiles or a mean/min/max), with the L2 flush
+def bench_would_swap(total_bytes: int)   # (True, available_mb) when timing candidates would measure the swap
+class CandidateOverTimeBudget(Exception)   # one autotune candidate exceeded the sweep's measured time budget
+def autotune_shape_key(tuner, kwargs)    # the key Triton's Autotuner stores this call's choice under
+# the correctness screen: every candidate configuration checked against an oracle before it may be seated
+def set_screen_oracle(provider) -> None  # install (or clear, with None) the screen's oracle provider
+def screen_configs(tuner, configs, key, meta=None, record_key=None)
+    # screen a key's candidates, then RELEASE what the sweep cached
+def configs_agreeing_with_oracle(results, oracle, dtype_name)
+    # the configurations an oracle does not contradict, or None if there is none
+class ScreenedOut(NamedTuple)  # one configuration the screen refused, and why
+class Unscreened(NamedTuple)   # one key whose configuration was seated WITHOUT an oracle
+def screened_out() -> List[ScreenedOut]   # every configuration the screen excluded, in order
+def unscreened() -> List[Unscreened]      # every key whose seated configuration no oracle adjudicated
+def adjudicated() -> dict      # the keys the oracle did adjudicate (a copy of the screen's record)
+def screen_windows_of(key)     # the windows a key was screened on, for the proof
+def clear_screened() -> None   # forget the screen's records (screened out, unscreened, its cache)
+```
+
+### `nbxtensor.ops.autotune_refusals` — what a sweep refuses to time, and says so
+
+```python
+def begin_sweep() -> None                  # reset the per-sweep state
+def exclude_refused_configs(bench: Callable, say: Callable[[str], None] | None = None)
+    # wrap a per-config bench so a refusal scores inf instead of raising
+def exclude_over_footprint(bench, arg_bytes, config_scratch_bytes=0, say=None)
+    # wrap it so an over-footprint config scores inf WITHOUT running, said with its numbers
+def config_footprint_fits(arg_bytes: int, config_scratch_bytes: int = 0, available_mb: 'float | None' = None)
+    # (fits, available_mb, footprint_mb) for one candidate
+def exclude_slow_candidates(bench, say=None)   # wrap it so an over-budget candidate scores inf
+def current_budget_ms()                    # the budget the bench enforces for the CURRENT candidate, or None
+def note_candidate_time(single_launch_ms: float) -> None   # a completed candidate's probe time, fed back to the sweep
+def all_refused(timings: Dict) -> bool     # did EVERY config score infinite?
+def note_sweep_swap_baseline() -> None     # the swap usage at the sweep's start, from our own reading
+def sweep_grew_the_swap() -> int           # MB of swap growth since that baseline, 0 when unknown or quiet
+def mark_sweep_unmeasured(at, key, grew_mb: int, say=None) -> None
+    # mark this sweep's choice as timed against the swap, and say it once
+def reset_announcements() -> None          # forget what has been said
+```
+
+### `nbxtensor.ops.autotune_cache` — the local record of what this machine measured
+
+```python
+def key_of(at, args, kwargs) -> tuple     # the Autotuner's cache key for a call, as Autotuner.run forms it
+def capture() -> int                      # merge every selected config into the local artifact; the count merged
+def note_timings(at, key: tuple, timings) -> None
+    # keep a key's bench just measured: the best time, the second best and the margin between them
+def mark_unmeasured(at, key) -> None      # this tuner's choice for `key` was not a clean measurement (see above)
+def is_unmeasured(at, key) -> bool        # was it marked so?
+def record_screen_exclusions(entries) -> int   # persist the configs the screen refused, for later sweeps and readers
+def screen_exclusions() -> Dict[str, Dict]     # everything the screen has refused on this machine
+```
+
+### `nbxtensor.ops.autotune_bucket` — the autotune keys' size classes, from the profile's ladders
+
+```python
+def parse_ladder(rows: Any) -> Ladder     # parsed once per distinct row list (every launch's key reads a ladder)
+def ladder_for(dim: str, profile: Optional[Dict[str, Any]] = None) -> Ladder
+    # the profile's ladder for `dim` ("M", "N", "batch", "height", "width"), else exact
+def bucket_of(dim: str, value: int, profile: Optional[Dict[str, Any]] = None) -> int
+    # the class `value` falls in on `dim`'s ladder (bucket(value, ladder_for(dim, profile)))
+def class_floor(dim: str, top: int, profile: Optional[Dict[str, Any]] = None) -> int
+    # the fewest `dim` that form the class whose top is `top`: bucket_of's inverse floor
+```
+
+### `nbxtensor.ops.autotune_certified` — the certified directory: serve, refuse, prove, file
+
+```python
+# serving a run
+def active_profile() -> Optional[Tuple[str, str]]   # (vendor, profile) in force, from the profile files themselves
+def certified_only() -> bool
+    # a CONFIRMATION run (--certified-only, NBX_AUTOTUNE_CERTIFIED_ONLY=1): every key served from the directory or
+    # the run fails, never a runtime sweep
+def apply(kernel_qual: str, tuner, key: tuple, lookup_key: Optional[tuple] = None,
+          memory_gb: Optional[int] = None) -> bool
+    # put the certified config in the tuner's cache for `key`: no sweep, no screen
+def computed_key(tuner, key: tuple, kwargs: Optional[Dict[str, Any]] = None) -> Optional[tuple]
+    # the key with every pointer a set promotion flag widens on load tagged fp32 (the dtype it is computed in)
+def override_seeded(tuners=None) -> int
+    # the directory first, even warm: a key the local replay cache seeded that the directory certifies takes the
+    # certified config
+def reseed_evicted(kernel_qual: str, tuner, key: tuple) -> bool
+    # put back a local config override_seeded evicted, when the directory does not cover the card's class
+def served_evicted(kernel_qual: str, key: tuple) -> None   # an evicted key the launch site served certified
+def note_local(n: int) -> None   # keys the local replay cache seeded into the autotuners (an earlier sweep here)
+def announce_missing(kernel_qual: str, tuner, key: tuple) -> None   # said once per key: the runtime is about to sweep
+def refuse_missing(kernel_qual: str, tuner, key: tuple) -> None
+    # the certified-only answer to a miss: raised before any bench, naming the key, the profile, why an entry is not
+    # served and what the census says
+def certified_config_for(kernel_name: str, key_fields: tuple) -> Optional[Dict[str, Any]]
+    # for the screen: the certified entry of a kernel whose key starts with these fields, on the profile in force
+def report_contradictions(tuner, dropped) -> List[Dict[str, Any]]
+    # with the configs the screen just excluded: any the directory certifies here is printed as a CONTRADICTION
+def contradictions() -> List[Dict[str, Any]]   # every such contradiction this process saw
+def generator_refusals() -> Dict[str, int]    # how many keys each kernel was refused for, by generator
+def reset() -> None                            # forget what this process loaded, refused, announced and served
+# keys
+def describe_key(tuner, key: tuple) -> str     # "M=1500 N=1280 K=1280 IEEE_PRECISION=True … fp32,fp16,fp32"
+def key_dtypes(key: tuple) -> List[str]        # the dtype names the launcher appended to the key, in argument order
+def output_dtype(tuner, key: tuple) -> str     # the dtype of the buffer the kernel WRITES (the file's, the tolerance's)
+def degenerate_extent(qual: str, key: tuple) -> Optional[str]
+    # the name and value of the first key position that cannot be a launch, or None
+def key_repr(key: tuple) -> str                # the key as a file stores it: repr of the tuple
+def parse_key(text: str) -> Optional[tuple]    # its inverse (a literal tuple), None when the text is not one
+def kernel_short(qual: str) -> str             # a kernel's short name: the last part of its qualified name
+# the files and their proofs
+def file_for(vendor: str, profile: str, kernel_qual: str, dtype: str, root: Optional[Path] = None) -> Path
+    # <directory>/<vendor>/<profile>/<kernel short name>.<dtype>.json
+def validate(doc: Any, path: Path, tuner=None) -> List[str]   # every reason a file cannot be trusted; empty if it re-reads
+def format_for(entries: Dict[str, Dict]) -> str
+    # the format a file may claim: /2 only when EVERY certification in it carries `built`, /1 otherwise
+def restamp(path: Path) -> Optional[str]       # repair a file's format claim to what its entries satisfy
+def file_certification(entries: Dict[str, Dict[str, Any]], ktext: str, cert: Dict[str, Any]) -> None
+    # place a fresh certification in a file's entries by the memory class its proof names
+def entry_covers(entries: Dict[str, Dict[str, Any]], ktext: str, cls: Optional[int], need_clock: bool = False,
+                 need_generator: Optional[str] = None) -> bool
+    # --only-missing's question, per memory class
+def coverage_asked(entries: Dict[str, Dict[str, Any]], ktext: str, cls: Optional[int], only_missing: bool,
+                   reprove_unclocked: bool, reprove_generator: bool, running_generator: Optional[str]) -> bool
+    # the certifier's one question: is this key to be (re)certified on this run?
+def entry_for_generator(entry: Optional[Dict[str, Any]], gen: Optional[str]) -> Optional[Dict[str, Any]]
+    # the certification proven under THIS generator: the entry, a variant that names it, or None
+def generator_identity() -> Dict[str, Any]     # the compiler's identity, one door for the stamp writer and the gate
+def running_generator() -> Optional[str]       # the code generator about to run, as a proof's `backend` records it
+def proof_backend(proof: Optional[Dict[str, Any]]) -> Optional[str]
+    # the generator a proof was made with, as one label (triton <version>, plus the backend when not cuda)
+def proof_backends(entry: Dict[str, Any]) -> set   # every generator label an entry carries a proof from
+def proof_records_regime(proof: Optional[Dict[str, Any]]) -> bool
+    # True when the proof records the stability regime its timings were measured under (a clock lock or a witness)
+```
 
 ### `nbxtensor.backend.capabilities`
 
