@@ -55,6 +55,11 @@ torch.compile, nbxtensor, per device. Runs ALONE on the machine (no other
 process). **Exit:** a table per device, kernel and model, with the gaps
 named; the losses become the optimisation queue (rule 14).
 
+**Status (2026-11-02):** the harness is written and proven card-less (`benchmarks/nbxtensor_vs_torch/`, README:
+two sides in two environments — torch in the oracle environment, nbxtensor in the library's torch-free one —
+every row into the dated registry); the Apple instances build card-less (54 models); no device run yet, so no
+figure. It runs alone on each machine after the day's landings.
+
 ## M5 — final gate S7 on the extracted engine
 One gate, scope = everything (the move touches every Triton cell), times =
 benchmark, plus the R33 runtime audit (torch_provenance) per architecture,
