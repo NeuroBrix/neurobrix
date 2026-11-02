@@ -7,7 +7,7 @@ engines can call it without either subtree pulling on the other.
 
 `resolve_sampling` — THE resolution of a decode's four sampling parameters (request > container > family file), read
 by every text, vlm and audio_llm decode of both branches, which then draw with their branch's one `CombinedSampler`
-(core/module/autoregressive/samplers.decode_sampler, triton/samplers.decode_sampler; the supervisor 2026-11-02 06:40).
+(`CombinedSampler(sampler_config(...))` in each branch, no compute shared; the supervisor 2026-11-02 06:40).
 Before it, four flow paths sampled on their own and each implemented a different subset (the vlm and audio_llm decodes
 had no top-k; the compiled vlm dropped top-p; audio_llm read the container's temperature whatever the request said).
 
@@ -163,3 +163,10 @@ def resolve_sampling(resolver, container_defaults, site: str) -> dict:
             f"(--{missing[0].replace('_', '-')}), the container's runtime/defaults.json nor the family file "
             f"(config/families/<family>.yml `defaults:`) declares it.")
     return out
+
+
+def sampler_config(resolver, container_defaults, site: str) -> dict:
+    """What a decode's CombinedSampler is built from, either branch (`CombinedSampler(sampler_config(...))`): the four
+    resolved parameters (resolve_sampling) and the top token always kept (min_tokens_to_keep 1, the HF convention: a
+    top-p cut never empties the candidate set)."""
+    return dict(resolve_sampling(resolver, container_defaults, site), min_tokens_to_keep=1)

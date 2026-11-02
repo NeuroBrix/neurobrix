@@ -148,8 +148,9 @@ class TritonAudioLLMEngine(AudioLLMSteps, ComponentFlowHandler):
         # The decode's sampler: the branch's one CombinedSampler, its parameters resolved the one way (request >
         # container > family file — core/module/sampling_contract.resolve_sampling); the request's --temperature,
         # --top-k, --top-p and --repetition-penalty are read, as every other decode reads them.
-        from neurobrix.triton.samplers import decode_sampler, sample_next_id
-        sampler = decode_sampler(self.ctx.variable_resolver, defaults, "audio_llm (triton)")
+        from neurobrix.triton.samplers import CombinedSampler, sample_next_id
+        from neurobrix.core.module.sampling_contract import sampler_config
+        sampler = CombinedSampler(sampler_config(self.ctx.variable_resolver, defaults, "audio_llm (triton)"))
         eos_token_id = defaults.get("eos_token_id")
         if eos_token_id is None:
             raise RuntimeError(

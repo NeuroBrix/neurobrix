@@ -5,7 +5,7 @@ them: R33); the tensors they move are each branch's own, through the strategy's 
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 
 class BlockScatterSteps:
@@ -69,6 +69,38 @@ class BlockScatterSteps:
         target_device = devices[0] if devices else self.primary_device
         return self.transfer_dict(inputs, target_device, self.use_async)
 
+    def __init__(self, context: StrategyContext, strategy_name: str = "block_scatter"):
+        super().__init__(context, strategy_name)
+
+        self.devices: List[str] = context.get_all_devices()
+        self.use_async = True
+
+        # Parse FGP allocations from context
+        self.fgp_components: Dict[str, Dict[str, str]] = {}
+        self.component_devices: Dict[str, List[str]] = {}
+
+        for comp_name, alloc in context.allocations.items():
+            if isinstance(alloc, dict):
+                device_str = alloc.get('device', '')
+                shard_map = alloc.get('shard_map', {})
+            elif isinstance(alloc, tuple) and len(alloc) >= 2:
+                device_str, shard_map = alloc[0], alloc[1]
+            else:
+                continue
+
+            if isinstance(device_str, str) and device_str.startswith("fgp:"):
+                device_list = device_str[4:].split(",")
+                self.fgp_components[comp_name] = shard_map
+                self.component_devices[comp_name] = device_list
+            else:
+                if isinstance(device_str, str):
+                    self.component_devices[comp_name] = [device_str]
+
+        if not self.devices:
+            raise RuntimeError("ZERO FALLBACK: No devices assigned by Prism for block scatter")
+        self.primary_device = self.devices[0]
+        self._loaded_components: Set[str] = set()
+
 
 class ComponentPlacementLazySteps:
     """What the compiled and the Triton `ComponentPlacementLazyStrategy` ran alike (core/strategies/component_placement.py, core/strategies/triton/component_placement.py)."""
@@ -99,6 +131,47 @@ class ComponentPlacementSteps:
             self.synchronize_device(target_device)
         return transferred
 
+    def execute_component(
+        self,
+        component_name: str,
+        phase: str,
+        inputs: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Execute component on its assigned GPU."""
+        executor = self.context.component_executors.get(component_name)
+        if executor is None:
+            raise RuntimeError(f"ZERO FALLBACK: No executor for '{component_name}'")
+
+        target_device = self.component_devices.get(component_name)
+        if target_device is None:
+            raise RuntimeError(f"ZERO FALLBACK: No device assignment for '{component_name}'")
+
+        self.load_weights(component_name)
+
+        if inputs:
+            inputs = self.prepare_inputs(component_name, inputs)
+
+        return executor.run(inputs or {})
+
+    def __init__(self, context: StrategyContext, strategy_name: str = "component_placement"):
+        super().__init__(context, strategy_name)
+
+        self.devices = context.get_all_devices()
+        self.use_async = True  # Always use async when available
+
+        # Map components to their devices
+        self.component_devices: Dict[str, str] = {}
+        for comp_name, alloc_info in context.allocations.items():
+            if isinstance(alloc_info, dict):
+                device = alloc_info.get('device')
+                assert device is not None, f"Allocation dict missing 'device' key for {comp_name}"
+            else:
+                assert isinstance(alloc_info, tuple), f"Allocation must be dict or tuple, got {type(alloc_info)}"
+                device = alloc_info[0]
+            self.component_devices[comp_name] = device
+
+        self.state_device: Optional[str] = None
+
 
 class CPUExecutionSteps:
     """What the compiled and the Triton `CPUExecutionStrategy` ran alike (core/strategies/cpu_execution.py, core/strategies/triton/cpu_execution.py)."""
@@ -114,6 +187,14 @@ class CPUExecutionSteps:
         inputs: Dict[str, Any],
     ) -> Dict[str, Any]:
         return self.transfer_dict(inputs, self.device)
+
+    def __init__(self, context: StrategyContext, strategy_name: str = "cpu_execution"):
+        super().__init__(context, strategy_name)
+        # All components share the same logical "cpu" device.
+        self.device = "cpu"
+        # Loading mode from Prism plan (DATA-DRIVEN)
+        self._eager = context.loading_mode == "eager"
+        self._loaded_components: Set[str] = set()
 
 
 class LazySequentialSteps:
@@ -146,6 +227,11 @@ class LazySequentialSteps:
         super().unload_weights(component_name)
         self._loaded_components.discard(component_name)
         self._pinned_components.discard(component_name)
+
+    def __init__(self, context: StrategyContext, strategy_name: str = "lazy_sequential"):
+        super().__init__(context, strategy_name)
+        self._loaded_components: Set[str] = set()
+        self._pinned_components: Set[str] = set()
 
 
 class PipelineParallelSteps:
@@ -184,6 +270,38 @@ class PipelineParallelSteps:
         devices = self.get_component_devices(component_name)
         target_device = devices[0] if devices else self.primary_device
         return self.transfer_dict(inputs, target_device, self.use_async)
+
+    def __init__(self, context: StrategyContext, strategy_name: str = "pipeline_parallel"):
+        super().__init__(context, strategy_name)
+
+        self.devices: List[str] = context.get_all_devices()
+        self.use_async = True
+
+        # Parse PP allocations from context (same format as FGP: fgp: prefix)
+        self.pp_components: Dict[str, Dict[str, str]] = {}
+        self.component_devices: Dict[str, List[str]] = {}
+
+        for comp_name, alloc in context.allocations.items():
+            if isinstance(alloc, dict):
+                device_str = alloc.get('device', '')
+                shard_map = alloc.get('shard_map', {})
+            elif isinstance(alloc, tuple) and len(alloc) >= 2:
+                device_str, shard_map = alloc[0], alloc[1]
+            else:
+                continue
+
+            if isinstance(device_str, str) and device_str.startswith("fgp:"):
+                device_list = device_str[4:].split(",")
+                self.pp_components[comp_name] = shard_map
+                self.component_devices[comp_name] = device_list
+            else:
+                if isinstance(device_str, str):
+                    self.component_devices[comp_name] = [device_str]
+
+        if not self.devices:
+            raise RuntimeError("ZERO FALLBACK: No devices assigned by Prism for pipeline parallel")
+        self.primary_device = self.devices[0]
+        self._loaded_components: Set[str] = set()
 
 
 class SingleGPUSteps:
@@ -234,3 +352,24 @@ class WeightShardingSteps:
 
     def cleanup(self) -> None:
         self._loaded_components.clear()
+
+    def __init__(self, context: StrategyContext, strategy_name: str = "weight_sharding"):
+        super().__init__(context, strategy_name)
+
+        # Parse sharded vs regular component allocations
+        self.sharded_components: Dict[str, List[str]] = {}
+        self.regular_components: Dict[str, str] = {}
+
+        for comp_name, alloc_info in context.allocations.items():
+            if isinstance(alloc_info, dict):
+                device_str = alloc_info.get('device', '')
+            else:
+                device_str = alloc_info[0] if isinstance(alloc_info, tuple) else str(alloc_info)
+
+            if device_str.startswith("tp:"):
+                devices = device_str[3:].split(",")
+                self.sharded_components[comp_name] = devices
+            else:
+                self.regular_components[comp_name] = device_str
+
+        self._loaded_components: Set[str] = set()

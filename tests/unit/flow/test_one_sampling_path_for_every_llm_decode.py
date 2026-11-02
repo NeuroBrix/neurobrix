@@ -59,7 +59,7 @@ def test_every_decode_flow_samples_through_the_one_path(rel):
     called = set(_calls(tree))
     own = called & OWN_SAMPLERS
     assert not own, f"{rel} draws with its own sampler {sorted(own)}, not the branch's CombinedSampler"
-    assert called & {"resolve_sampling", "decode_sampler"}, f"{rel} resolves no sampling through resolve_sampling"
+    assert called & {"resolve_sampling", "sampler_config"}, f"{rel} resolves no sampling through resolve_sampling"
     by_hand = [k for k in SAMPLING_KEYS
                if f'"global.{k}"' in text or f"defaults.get(\"{k}\"" in text or f'defaults["{k}"]' in text]
     assert not by_hand, f"{rel} reads {by_hand} by hand instead of resolve_sampling"
@@ -76,9 +76,10 @@ def test_the_decode_samplers_honour_top_k():
     """vlm and audio_llm decodes drew with helpers that had no top-k (MiniCPM-o's container declares top_k=20, Qwen3-VL's
     20): through the branch's sampler a top-1 cut leaves the largest logit only, whatever the draw."""
     torch = pytest.importorskip("torch")
-    from neurobrix.core.module.autoregressive.samplers import decode_sampler, sample_next_id
+    from neurobrix.core.module.autoregressive.samplers import CombinedSampler, sample_next_id
+    from neurobrix.core.module.sampling_contract import sampler_config
     container = {"temperature": 1.0, "top_k": 1, "top_p": 1.0, "repetition_penalty": 1.0}
-    sampler = decode_sampler(_resolver(), container, "test")
+    sampler = CombinedSampler(sampler_config(_resolver(), container, "test"))
     logits = torch.tensor([[[0.0, 2.0, 2.5, 1.0]]])
     assert {sample_next_id(sampler, logits, []) for _ in range(16)} == {2}
 

@@ -34,11 +34,6 @@ class LazySequentialStrategy(LazySequentialSteps, ExecutionStrategy):
     Peak GPU = max(single component weight + activation), not sum(all).
     """
 
-    def __init__(self, context: StrategyContext, strategy_name: str = "lazy_sequential"):
-        super().__init__(context, strategy_name)
-        self._loaded_components: Set[str] = set()
-        self._pinned_components: Set[str] = set()
-
     def execute_component(
         self,
         component_name: str,

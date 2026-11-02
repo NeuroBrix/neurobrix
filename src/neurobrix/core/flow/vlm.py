@@ -386,8 +386,9 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
             raise RuntimeError("ZERO FALLBACK: max_tokens missing from defaults.json.")
         # The decode's sampler: the branch's one CombinedSampler, its parameters resolved the one way (request >
         # container > family file — core/module/sampling_contract.resolve_sampling).
-        from neurobrix.core.module.autoregressive.samplers import decode_sampler, sample_next_id
-        sampler = decode_sampler(self.ctx.variable_resolver, defaults, "vlm (compiled)")
+        from neurobrix.core.module.autoregressive.samplers import CombinedSampler, sample_next_id
+        from neurobrix.core.module.sampling_contract import sampler_config
+        sampler = CombinedSampler(sampler_config(self.ctx.variable_resolver, defaults, "vlm (compiled)"))
         eos_token_id = defaults.get("eos_token_id")
         if eos_token_id is None:
             raise RuntimeError("ZERO FALLBACK: eos_token_id missing from defaults.json.")
@@ -867,8 +868,9 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
                 "ZERO FALLBACK: max_tokens missing from defaults.json.")
         # The decode's sampler: the branch's one CombinedSampler, its parameters resolved the one way (request >
         # container > family file — core/module/sampling_contract.resolve_sampling).
-        from neurobrix.core.module.autoregressive.samplers import decode_sampler, sample_next_id
-        sampler = decode_sampler(self.ctx.variable_resolver, defaults, "vlm (compiled)")
+        from neurobrix.core.module.autoregressive.samplers import CombinedSampler, sample_next_id
+        from neurobrix.core.module.sampling_contract import sampler_config
+        sampler = CombinedSampler(sampler_config(self.ctx.variable_resolver, defaults, "vlm (compiled)"))
         eos_token_id = defaults.get("eos_token_id")
         if eos_token_id is None:
             raise RuntimeError(
@@ -1364,8 +1366,9 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
             raise RuntimeError("ZERO FALLBACK: max_tokens missing from defaults.json.")
         # The decode's sampler: the branch's one CombinedSampler, its parameters resolved the one way (request >
         # container > family file — core/module/sampling_contract.resolve_sampling).
-        from neurobrix.core.module.autoregressive.samplers import decode_sampler, sample_next_id
-        sampler = decode_sampler(self.ctx.variable_resolver, defaults, "vlm (compiled)")
+        from neurobrix.core.module.autoregressive.samplers import CombinedSampler, sample_next_id
+        from neurobrix.core.module.sampling_contract import sampler_config
+        sampler = CombinedSampler(sampler_config(self.ctx.variable_resolver, defaults, "vlm (compiled)"))
         eos_token_id = defaults.get("eos_token_id")
         if eos_token_id is None:
             raise RuntimeError("ZERO FALLBACK: eos_token_id missing from defaults.json.")

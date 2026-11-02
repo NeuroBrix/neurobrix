@@ -353,16 +353,6 @@ class CombinedSampler:
 # =============================================================================
 
 
-def decode_sampler(resolver, container_defaults, site: str) -> CombinedSampler:
-    """THE sampler of every text, vlm and audio_llm decode of the Triton branch, its parameters resolved one way
-    (core/module/sampling_contract.resolve_sampling: request > container > family file) — the mirror of the compiled
-    branch's, sharing no compute with it."""
-    from neurobrix.core.module.sampling_contract import resolve_sampling
-    config = resolve_sampling(resolver, container_defaults, site)
-    config["min_tokens_to_keep"] = 1
-    return CombinedSampler(config)
-
-
 def sample_next_id(sampler: CombinedSampler, logits: NBXTensor, context_ids) -> int:
     """One token id from a decode step's logits ([1, S, V] or [1, V]) through `sampler`. The row is read in fp32 once
     whatever the head stored (the TritonGenerator's rule, as vLLM: never computed in half) and copied when it already

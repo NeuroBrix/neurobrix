@@ -154,8 +154,9 @@ class AudioLLMEngine(AudioLLMSteps, ComponentFlowHandler):
         # The decode's sampler: the branch's one CombinedSampler, its parameters resolved the one way (request >
         # container > family file — core/module/sampling_contract.resolve_sampling); the request's --temperature and
         # --repetition-penalty are read, as every other decode reads them.
-        from neurobrix.core.module.autoregressive.samplers import decode_sampler, sample_next_id
-        sampler = decode_sampler(self.ctx.variable_resolver, defaults, "audio_llm (compiled)")
+        from neurobrix.core.module.autoregressive.samplers import CombinedSampler, sample_next_id
+        from neurobrix.core.module.sampling_contract import sampler_config
+        sampler = CombinedSampler(sampler_config(self.ctx.variable_resolver, defaults, "audio_llm (compiled)"))
         eos_token_id = defaults.get("eos_token_id")
         if eos_token_id is None:
             raise RuntimeError("ZERO FALLBACK: eos_token_id missing from defaults.json.")

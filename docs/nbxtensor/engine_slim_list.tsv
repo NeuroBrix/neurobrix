@@ -1,37 +1,24 @@
 # The engine's open slimming findings (tools/engine_slim_scan.py); each ends deleted, moved into nbxtensor, or kept
 # with its reason in docs/nbxtensor/ENGINE_SLIM.md. Both figures below may only go down (test_the_engine_only_slims.py).
-# engine_lines: 137016
-# open: 48
+# engine_lines: 136979
+# open: 35
 kind	path	symbol	detail
 duplicate	src/neurobrix/core/optim/passes/fusion_vertical.py	is_graph_output	same body as src/neurobrix/triton/sequence.py::_is_graph_output
-duplicate	src/neurobrix/core/strategies/block_scatter.py	__init__	same body as src/neurobrix/core/strategies/triton/block_scatter.py::__init__
 duplicate	src/neurobrix/core/strategies/block_scatter.py	unload_weights	same body as src/neurobrix/core/strategies/pipeline_parallel.py::unload_weights
 duplicate	src/neurobrix/core/strategies/component_placement.py	__init__	same body as src/neurobrix/core/strategies/triton/component_placement.py::__init__
-duplicate	src/neurobrix/core/strategies/component_placement.py	execute_component	same body as src/neurobrix/core/strategies/triton/component_placement.py::execute_component
-duplicate	src/neurobrix/core/strategies/cpu_execution.py	__init__	same body as src/neurobrix/core/strategies/triton/cpu_execution.py::__init__
 duplicate	src/neurobrix/core/strategies/cpu_execution.py	execute_component	same body as src/neurobrix/core/strategies/triton/single_gpu.py::execute_component
-duplicate	src/neurobrix/core/strategies/lazy_sequential.py	__init__	same body as src/neurobrix/core/strategies/triton/lazy_sequential.py::__init__
-duplicate	src/neurobrix/core/strategies/pipeline_parallel.py	__init__	same body as src/neurobrix/core/strategies/triton/pipeline_parallel.py::__init__
 duplicate	src/neurobrix/core/strategies/pipeline_parallel.py	unload_weights	same body as src/neurobrix/core/strategies/block_scatter.py::unload_weights
 duplicate	src/neurobrix/core/strategies/shared_steps.py	_load_fgp_weights	same body as src/neurobrix/core/strategies/shared_steps.py::_load_pp_weights
 duplicate	src/neurobrix/core/strategies/shared_steps.py	_load_pp_weights	same body as src/neurobrix/core/strategies/shared_steps.py::_load_fgp_weights
 duplicate	src/neurobrix/core/strategies/shared_steps.py	prepare_inputs	same body as 
-duplicate	src/neurobrix/core/strategies/triton/block_scatter.py	__init__	same body as src/neurobrix/core/strategies/block_scatter.py::__init__
 duplicate	src/neurobrix/core/strategies/triton/block_scatter.py	unload_weights	same body as src/neurobrix/core/strategies/triton/pipeline_parallel.py::unload_weights
 duplicate	src/neurobrix/core/strategies/triton/component_placement.py	__init__	same body as src/neurobrix/core/strategies/component_placement.py::__init__
-duplicate	src/neurobrix/core/strategies/triton/component_placement.py	execute_component	same body as src/neurobrix/core/strategies/component_placement.py::execute_component
-duplicate	src/neurobrix/core/strategies/triton/cpu_execution.py	__init__	same body as src/neurobrix/core/strategies/cpu_execution.py::__init__
-duplicate	src/neurobrix/core/strategies/triton/lazy_sequential.py	__init__	same body as src/neurobrix/core/strategies/lazy_sequential.py::__init__
-duplicate	src/neurobrix/core/strategies/triton/pipeline_parallel.py	__init__	same body as src/neurobrix/core/strategies/pipeline_parallel.py::__init__
 duplicate	src/neurobrix/core/strategies/triton/pipeline_parallel.py	unload_weights	same body as src/neurobrix/core/strategies/triton/block_scatter.py::unload_weights
 duplicate	src/neurobrix/core/strategies/triton/single_gpu.py	execute_component	same body as src/neurobrix/core/strategies/cpu_execution.py::execute_component
-duplicate	src/neurobrix/core/strategies/triton/weight_sharding.py	__init__	same body as src/neurobrix/core/strategies/weight_sharding.py::__init__
-duplicate	src/neurobrix/core/strategies/weight_sharding.py	__init__	same body as src/neurobrix/core/strategies/triton/weight_sharding.py::__init__
 duplicate	src/neurobrix/triton/sequence.py	_is_graph_output	same body as src/neurobrix/core/optim/passes/fusion_vertical.py::is_graph_output
 fact	src/neurobrix/core/strategies/base.py	transfer_tensor	nbxtensor exposes nbxtensor.memory.device_transfer.transfer_tensor
 fact	src/neurobrix/core/strategies/triton/base.py	transfer_tensor	nbxtensor exposes nbxtensor.memory.device_transfer.transfer_tensor
 fact	src/neurobrix/triton/sequence.py	_parse_dtype	nbxtensor exposes nbxtensor.dtype.nbx_dtype.parse_dtype
-wrapper	src/neurobrix/core/flow/audio_utils.py	sample_token(top_p)	no call site passes it: always its default 1.0
 wrapper	src/neurobrix/core/prism/facts_probe.py	gemv_gbps(k)	no call site passes it: always its default 4096
 wrapper	src/neurobrix/core/prism/facts_probe.py	gemv_gbps(n)	no call site passes it: always its default 14336
 wrapper	src/neurobrix/core/prism/facts_probe.py	gemv_gbps(reps)	no call site passes it: always its default 50

@@ -17,46 +17,6 @@ from neurobrix.core.strategies.shared_steps import ComponentPlacementLazySteps, 
 class ComponentPlacementStrategy(ComponentPlacementSteps, TritonStrategy):
     """Component placement across multiple GPUs (triton path)."""
 
-    def __init__(self, context: StrategyContext, strategy_name: str = "component_placement"):
-        super().__init__(context, strategy_name)
-
-        self.devices = context.get_all_devices()
-        self.use_async = True
-
-        self.component_devices: Dict[str, str] = {}
-        for comp_name, alloc_info in context.allocations.items():
-            if isinstance(alloc_info, dict):
-                device = alloc_info.get('device')
-                assert device is not None, f"Allocation dict missing 'device' key for {comp_name}"
-            else:
-                assert isinstance(alloc_info, tuple), f"Allocation must be dict or tuple, got {type(alloc_info)}"
-                device = alloc_info[0]
-            self.component_devices[comp_name] = device
-
-        self.state_device: Optional[str] = None
-
-    def execute_component(
-        self,
-        component_name: str,
-        phase: str,
-        inputs: Optional[Dict[str, Any]] = None,
-    ) -> Optional[Dict[str, Any]]:
-        """Execute component on its assigned GPU."""
-        executor = self.context.component_executors.get(component_name)
-        if executor is None:
-            raise RuntimeError(f"ZERO FALLBACK: No executor for '{component_name}'")
-
-        target_device = self.component_devices.get(component_name)
-        if target_device is None:
-            raise RuntimeError(f"ZERO FALLBACK: No device assignment for '{component_name}'")
-
-        self.load_weights(component_name)
-
-        if inputs:
-            inputs = self.prepare_inputs(component_name, inputs)
-
-        return executor.run(inputs or {})
-
 
     def transfer_model_output(self, model_output: Any, state_tensor: Any) -> Any:
         """Move the model output (NBXTensor) to the state tensor's device for

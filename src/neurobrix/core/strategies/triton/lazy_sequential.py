@@ -35,11 +35,6 @@ logger = logging.getLogger(__name__)
 class LazySequentialStrategy(LazySequentialSteps, TritonStrategy):
     """Sequential component execution with lazy weight loading (triton path)."""
 
-    def __init__(self, context: StrategyContext, strategy_name: str = "lazy_sequential"):
-        super().__init__(context, strategy_name)
-        self._loaded_components: Set[str] = set()
-        self._pinned_components: Set[str] = set()
-
     def execute_component(
         self,
         component_name: str,

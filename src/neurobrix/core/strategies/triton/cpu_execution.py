@@ -17,12 +17,6 @@ from neurobrix.core.strategies.shared_steps import CPUExecutionSteps   # the ste
 class CPUExecutionStrategy(CPUExecutionSteps, TritonStrategy):
     """All components execute on the host (triton-path contract mirror)."""
 
-    def __init__(self, context: StrategyContext, strategy_name: str = "cpu_execution"):
-        super().__init__(context, strategy_name)
-        self.device = "cpu"
-        self._eager = context.loading_mode == "eager"
-        self._loaded_components: Set[str] = set()
-
     def execute_component(
         self,
         component_name: str,

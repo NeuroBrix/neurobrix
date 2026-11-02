@@ -16,24 +16,4 @@ from neurobrix.core.strategies.shared_steps import WeightShardingSteps   # the s
 class WeightShardingStrategy(WeightShardingSteps, TritonStrategy):
     """Weight sharding execution across multiple GPUs (triton path)."""
 
-    def __init__(self, context: StrategyContext, strategy_name: str = "weight_sharding"):
-        super().__init__(context, strategy_name)
-
-        self.sharded_components: Dict[str, List[str]] = {}
-        self.regular_components: Dict[str, str] = {}
-
-        for comp_name, alloc_info in context.allocations.items():
-            if isinstance(alloc_info, dict):
-                device_str = alloc_info.get('device', '')
-            else:
-                device_str = alloc_info[0] if isinstance(alloc_info, tuple) else str(alloc_info)
-
-            if device_str.startswith("tp:"):
-                devices = device_str[3:].split(",")
-                self.sharded_components[comp_name] = devices
-            else:
-                self.regular_components[comp_name] = device_str
-
-        self._loaded_components: Set[str] = set()
-
 

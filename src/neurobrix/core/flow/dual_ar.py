@@ -151,7 +151,6 @@ class DualAREngine(ComponentFlowHandler):
                                         special.get("<|interleave|>"), self.ctx.modules.get("tokenizer"))
         print(f"   [{comp_name}] prompt tokens ({len(prompt_ids)}): {prompt_ids[:16]}")
 
-        from .audio_utils import sample_token
         print(f"   [{comp_name}] DualAR generation (max_tokens={max_tokens}, N={num_codebooks})...")
         start = time.perf_counter()
 

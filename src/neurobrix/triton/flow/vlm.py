@@ -46,7 +46,8 @@ from nbxtensor.memory.memory_pool import release_flow_memory
 from neurobrix.triton.flow.audio_llm import (
     TritonAudioLLMEngine,   # its dtype, embedding and output helpers, the same
 )
-from neurobrix.triton.samplers import decode_sampler, sample_next_id
+from neurobrix.triton.samplers import CombinedSampler, sample_next_id
+from neurobrix.core.module.sampling_contract import sampler_config
 from neurobrix.core.flow.shared_steps import effective_sampling as _effective_sampling   # both branches read the sampling alike
 from neurobrix.core.module.sampling_contract import enforce_sampling_support, SAMPLER_IMPLEMENTS
 from nbxtensor.ops import wrappers as w
@@ -445,7 +446,7 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
         # The decode's sampler: the branch's one CombinedSampler, its parameters resolved the one way (request >
         # container > family file — core/module/sampling_contract.resolve_sampling); what it does not implement (min_p)
         # is refused when asked, reported when inherited.
-        sampler = decode_sampler(self.ctx.variable_resolver, defaults, "vlm (triton)")
+        sampler = CombinedSampler(sampler_config(self.ctx.variable_resolver, defaults, "vlm (triton)"))
         _samp_cfg, _samp_explicit = _effective_sampling(self.ctx, defaults)
         enforce_sampling_support("vlm (triton)", SAMPLER_IMPLEMENTS, _samp_cfg, explicit=_samp_explicit)
         eos_token_id = defaults.get("eos_token_id")
@@ -910,7 +911,7 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
         # The decode's sampler: the branch's one CombinedSampler, its parameters resolved the one way (request >
         # container > family file — core/module/sampling_contract.resolve_sampling); what it does not implement (min_p)
         # is refused when asked, reported when inherited.
-        sampler = decode_sampler(self.ctx.variable_resolver, defaults, "vlm (triton)")
+        sampler = CombinedSampler(sampler_config(self.ctx.variable_resolver, defaults, "vlm (triton)"))
         _samp_cfg, _samp_explicit = _effective_sampling(self.ctx, defaults)
         enforce_sampling_support("vlm (triton)", SAMPLER_IMPLEMENTS, _samp_cfg, explicit=_samp_explicit)
         eos_token_id = defaults.get("eos_token_id")
@@ -1353,7 +1354,7 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
         # The decode's sampler: the branch's one CombinedSampler, its parameters resolved the one way (request >
         # container > family file — core/module/sampling_contract.resolve_sampling); what it does not implement (min_p)
         # is refused when asked, reported when inherited.
-        sampler = decode_sampler(self.ctx.variable_resolver, defaults, "vlm (triton)")
+        sampler = CombinedSampler(sampler_config(self.ctx.variable_resolver, defaults, "vlm (triton)"))
         _samp_cfg, _samp_explicit = _effective_sampling(self.ctx, defaults)
         enforce_sampling_support("vlm (triton)", SAMPLER_IMPLEMENTS, _samp_cfg, explicit=_samp_explicit)
         eos_token_id = defaults.get("eos_token_id")

@@ -46,14 +46,6 @@ class CPUExecutionStrategy(CPUExecutionSteps, ExecutionStrategy):
     R34 compliant — no hardcoded thread count).
     """
 
-    def __init__(self, context: StrategyContext, strategy_name: str = "cpu_execution"):
-        super().__init__(context, strategy_name)
-        # All components share the same logical "cpu" device.
-        self.device = "cpu"
-        # Loading mode from Prism plan (DATA-DRIVEN)
-        self._eager = context.loading_mode == "eager"
-        self._loaded_components: Set[str] = set()
-
     def execute_component(
         self,
         component_name: str,

@@ -27,37 +27,6 @@ def _nbx_device_str(tensor: Any) -> Optional[str]:
 class BlockScatterStrategy(BlockScatterSteps, TritonStrategy):
     """Block scatter execution across multiple GPUs (triton path)."""
 
-    def __init__(self, context: StrategyContext, strategy_name: str = "block_scatter"):
-        super().__init__(context, strategy_name)
-
-        self.devices: List[str] = context.get_all_devices()
-        self.use_async = True
-
-        self.fgp_components: Dict[str, Dict[str, str]] = {}
-        self.component_devices: Dict[str, List[str]] = {}
-
-        for comp_name, alloc in context.allocations.items():
-            if isinstance(alloc, dict):
-                device_str = alloc.get('device', '')
-                shard_map = alloc.get('shard_map', {})
-            elif isinstance(alloc, tuple) and len(alloc) >= 2:
-                device_str, shard_map = alloc[0], alloc[1]
-            else:
-                continue
-
-            if isinstance(device_str, str) and device_str.startswith("fgp:"):
-                device_list = device_str[4:].split(",")
-                self.fgp_components[comp_name] = shard_map
-                self.component_devices[comp_name] = device_list
-            else:
-                if isinstance(device_str, str):
-                    self.component_devices[comp_name] = [device_str]
-
-        if not self.devices:
-            raise RuntimeError("ZERO FALLBACK: No devices assigned by Prism for block scatter")
-        self.primary_device = self.devices[0]
-        self._loaded_components: Set[str] = set()
-
 
     def unload_weights(self, component_name: str) -> None:
         executor = self.context.component_executors.get(component_name)

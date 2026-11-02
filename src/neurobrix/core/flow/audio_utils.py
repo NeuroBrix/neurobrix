@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from neurobrix.core.device_utils import device_multinomial
 from neurobrix.core.runtime.tensor_compat import is_torch_tensor
 
 if TYPE_CHECKING:  # R33: the ATen branch imports it; the Triton flows share two functions of this module
@@ -464,41 +463,6 @@ def get_embed_weight(ctx: FlowContext, comp_name: str) -> Optional[torch.Tensor]
             if "weight" in key or "embed" in key:
                 return embed_executor._weights[key]
     return None
-
-
-def sample_token(
-    logits: torch.Tensor, temperature: float,
-    generated_ids: Optional[List[int]] = None,
-    repetition_penalty: float = 1.0,
-    top_p: float = 1.0,
-) -> int:
-    """Sample next token from logits with optional repetition penalty and top-p."""
-    import torch  # the ATen branch's flows are the callers
-    last_logits = logits[:, -1, :].clone()
-
-    if repetition_penalty != 1.0 and generated_ids:
-        for tid in set(generated_ids):
-            if last_logits[0, tid] > 0:
-                last_logits[0, tid] /= repetition_penalty
-            else:
-                last_logits[0, tid] *= repetition_penalty
-
-    if temperature == 0.0:
-        return last_logits.argmax(dim=-1).item()
-
-    probs = torch.softmax(last_logits / temperature, dim=-1)
-
-    if top_p < 1.0:
-        sorted_probs, sorted_idx = torch.sort(probs, descending=True)
-        cumsum = torch.cumsum(sorted_probs, dim=-1)
-        mask = cumsum - sorted_probs > top_p
-        sorted_probs[mask] = 0.0
-        sorted_probs = sorted_probs / sorted_probs.sum(dim=-1, keepdim=True)
-        next_token = sorted_idx[0, device_multinomial(sorted_probs[0], 1)].item()
-    else:
-        next_token = device_multinomial(probs, 1).squeeze(-1).item()
-
-    return next_token
 
 
 def requested_voice(engine, available) -> str:

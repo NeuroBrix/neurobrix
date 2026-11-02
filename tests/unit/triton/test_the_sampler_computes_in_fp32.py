@@ -28,7 +28,7 @@ def test_the_sampler_receives_fp32_logits(dt):
 
 
 @pytest.mark.parametrize("dt", [NBXDtype.float16, NBXDtype.bfloat16])
-@pytest.mark.parametrize("helper", ["decode_sampler", "encoder_decoder"])
+@pytest.mark.parametrize("helper", ["combined_sampler", "encoder_decoder"])
 def test_the_flow_samplers_draw_in_fp32(dt, helper):
     """The flows' samplers (the decode sampler every text, vlm and audio_llm decode draws with, and the
     encoder-decoder's own): a half row whose largest logit divided by the temperature is past the half range
@@ -36,7 +36,7 @@ def test_the_flow_samplers_draw_in_fp32(dt, helper):
     the argmax, token 7."""
     import importlib
     logits = NBXTensor.from_numpy((np.arange(8, dtype=np.float32) * 10).reshape(1, 8)).to("cuda").to(dt)
-    if helper == "decode_sampler":
+    if helper == "combined_sampler":
         from neurobrix.triton import samplers as S
         sampler = S.CombinedSampler({"temperature": 1e-3, "top_k": 0, "top_p": 1.0, "repetition_penalty": 1.0})
         draws = [S.sample_next_id(sampler, logits, []) for _ in range(4)]

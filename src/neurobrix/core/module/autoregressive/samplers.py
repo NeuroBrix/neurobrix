@@ -414,15 +414,6 @@ def sample_top_p(logits: torch.Tensor, p: float, temperature: float = 1.0) -> to
     return sampler(logits)
 
 
-def decode_sampler(resolver, container_defaults, site: str) -> CombinedSampler:
-    """THE sampler of every text, vlm and audio_llm decode of the compiled branch, its parameters resolved one way
-    (core/module/sampling_contract.resolve_sampling: request > container > family file)."""
-    from neurobrix.core.module.sampling_contract import resolve_sampling
-    config = resolve_sampling(resolver, container_defaults, site)
-    config["min_tokens_to_keep"] = 1
-    return CombinedSampler(config)
-
-
 def sample_next_id(sampler: CombinedSampler, logits: torch.Tensor, context_ids) -> int:
     """One token id from a decode step's logits ([1, S, V] or [1, V]) through `sampler`; the repetition penalty reads
     `context_ids` (the ids the flow holds: generated ones for an embedding-fed decode). The row is copied first — the
