@@ -11,18 +11,18 @@ import textwrap
 def test_the_compiled_paged_cache_params_import_no_triton():
     script = textwrap.dedent("""
         import sys
-        class _NoTriton:
-            def find_spec(self, name, path=None, target=None):
-                if name == "triton" or name.startswith("triton."):
-                    raise ImportError("triton is not installed in this environment")
-                return None
-        sys.meta_path.insert(0, _NoTriton())
+        # triton absent, as the import system sees an absent package: `import triton` (and any triton.*) raises
+        # ImportError, `importlib.util.find_spec("triton")` answers None — torch 2.14 probes that at import
+        # (torch._native's triton overrides) and a finder that RAISES there was a simulation no real environment
+        # produces (the test failed in torch's own import, before the code under test ran).
+        sys.modules["triton"] = None
         from types import SimpleNamespace
         from neurobrix.core.module.cache.factory import paged_params
         tokens, async_release = paged_params(4, 64, 64, "float32", ("cpu", "arm64"),
                                              SimpleNamespace(memory_bytes=64 << 20))
         assert tokens > 0 and async_release is False
-        assert not any(m == "triton" or m.startswith("triton.") for m in sys.modules), "triton was imported"
+        assert not [m for m, v in sys.modules.items()
+                    if (m == "triton" or m.startswith("triton.")) and v is not None], "triton was imported"
         print("ok")
     """)
     p = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)

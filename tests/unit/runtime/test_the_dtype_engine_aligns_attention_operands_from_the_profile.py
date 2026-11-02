@@ -28,9 +28,14 @@ def _profile(name):
 
 
 def test_every_vendor_profile_declares_the_alignment():
+    """Every ACCELERATOR's file: the host CPU's files (device_prefix cpu, config/vendors/cpu/) state only what the CPU
+    path reads, and it reads no attention alignment (the key census of 2026-11-01, pinned by
+    tests/unit/config/test_the_cpu_vendor_files_state_what_the_cpu_path_reads.py)."""
     files = sorted(glob.glob(os.path.join(_VENDORS, "*", "*.yml")))
-    assert len(files) >= 27
-    for f in files:
+    accelerators = [f for f in files if vendor_file(f).get("device_prefix") != "cpu"]
+    assert len(files) - len(accelerators) == len(glob.glob(os.path.join(_VENDORS, "cpu", "*.yml")))
+    assert len(accelerators) >= 27
+    for f in accelerators:
         assert OP.attention_operand_alignment(vendor_file(f)) in OP.ATTENTION_OPERAND_ALIGNMENTS, f
 
 
