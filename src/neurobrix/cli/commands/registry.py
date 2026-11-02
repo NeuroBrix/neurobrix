@@ -399,7 +399,13 @@ def _import_body(args):
     # 2. Get signed download URL
     print(f"\n[2/4] Getting download URL...")
     try:
-        headers = {"X-License-Accepted": "true"} if license_id else {}      # accepted above, when there is one
+        # Who asks: the engine's command line, by name and version — the hub serves the engine client without a
+        # session (the user accepted at this terminal) and sends a browser without one to its login (the owner,
+        # 2026-11-02 15:01); the acceptance itself only when there is a licence, accepted above.
+        from neurobrix import __version__ as _nbx_version
+        headers = {"X-NeuroBrix-Client": f"neurobrix-cli/{_nbx_version}"}
+        if license_id:
+            headers["X-License-Accepted"] = "true"
         resp = requests.get(f"{registry}/api/models/{org}/{name}/download", headers=headers, timeout=10)
         resp.raise_for_status()
         download_info = resp.json()
