@@ -331,3 +331,9 @@ def _maybe_log_topk(row, step: int, engine: str, stage: str) -> None:
     with open(path, "a") as f:
         _json.dump(rec, f)
         f.write("\n")
+
+
+# The Triton dual_ar and tts_llm handlers' tensor test (an NBXTensor, or anything shaped and typed).
+def _is_tensor(val) -> bool:
+    """Check if val is any tensor type."""
+    return isinstance(val, NBXTensor) or (hasattr(val, 'shape') and hasattr(val, 'dtype'))

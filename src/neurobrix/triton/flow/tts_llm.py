@@ -33,6 +33,7 @@ from nbxtensor.memory.device_transfer import parse_device_idx
 # The rule and its history live in core.runtime_values.
 from neurobrix.core.runtime_values import require_max_tokens
 from neurobrix.core.flow.base import ComponentFlowHandler   # the executor's four component callables, both branches
+from neurobrix.core.flow.shared_steps import _is_tensor   # dual_ar and tts_llm, the same
 
 
 # Deterministic sampler seed — shared by both triton modes so triton-seq and
@@ -807,10 +808,3 @@ def _to_numpy(tensor) -> np.ndarray:
     if hasattr(tensor, 'detach'):
         return tensor.detach().cpu().numpy()
     return np.array(tensor)
-
-
-def _is_tensor(val) -> bool:
-    """Check if val is any tensor type."""
-    return isinstance(val, NBXTensor) or (hasattr(val, 'shape') and hasattr(val, 'dtype'))
-
-
