@@ -228,6 +228,21 @@ def range_reclaimable(pool: SegmentPool, dev: int) -> List[Tuple[Range, int]]
     # The mapped chunks lying whole inside free blocks: what a refusal may unmap.
 ```
 
+`nbxtensor.memory.trace_replay`
+
+```python
+TRACES_DIR
+    # The allocation traces the library carries (traces/*.tsv: one real run's allocations and frees, by id and bytes, its card size)
+def traces() -> List[Path]
+    # The carried traces, by name.
+def load_trace(path) -> Tuple[Dict[str, str], List[Tuple[str, int, int]]]
+    # (the trace's header facts, its events (kind M/A/F, id, nbytes)); a trace without card_mb or events is refused.
+def replay_trace(events, device: int, chunk: int, limit_bytes: int) -> Dict[str, float]
+    # Replay the events through this process's allocator under limit_bytes, the large class in an expandable range of chunk bytes (0: the driver segments): seconds, map_seconds, reclaims, peak_bytes
+def chunk_by_replay(device: int, granularity: int, ks: Sequence[int], reps: int, trace: Optional[str]=None) -> Tuple[Optional[int], Dict[int, List[float]]]
+    # The expandable range's chunk: the smallest granularity x k (ascending) whose median replay is within R16 OFF's median plus its spread, each replay in its own process; None when none is
+```
+
 `nbxtensor.memory.vmm`
 
 ```python

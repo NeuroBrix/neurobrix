@@ -716,6 +716,26 @@ class DeviceAllocator:
         return int(measured["vmm_chunk_bytes"] or 0)
 
     @staticmethod
+    def use_expandable(dev: int, chunk: int, range_bytes: Optional[int] = None) -> None:
+        """Set `dev`'s large class before its first allocation: an expandable range of `chunk` bytes, or the driver
+        segments (`chunk` 0) — the chunk probe's replay (`memory.trace_replay`), which measures each candidate in its
+        own process; a run reads the profile's measured fact instead (`_range_vmm`). `range_bytes`: the range's size
+        (the replayed card's; a run's is the profile's card). A chunk on a device that cannot map is refused by name."""
+        if chunk <= 0:
+            DeviceAllocator._VMM[dev] = False
+            return
+        libs = _rt.backend_table().get("driver_libs")
+        from nbxtensor.memory.vmm import Vmm
+        lib = Vmm.load(libs) if libs else None
+        vv = Vmm(lib, dev) if lib is not None else None
+        if vv is None or not vv.supported():
+            raise RuntimeError(f"ZERO FALLBACK: device {dev} cannot map an expandable range (no driver VMM): a chunk "
+                               f"of {chunk} bytes is no measurement there")
+        vv.chunk = int(chunk)
+        vv.range_bytes = range_bytes
+        DeviceAllocator._VMM[dev] = vv
+
+    @staticmethod
     def _range_vmm(dev: int):
         """The device's VMM when its large class grows in an expandable range, else None (resolved once)."""
         v = DeviceAllocator._VMM.get(dev)
@@ -743,9 +763,10 @@ class DeviceAllocator:
         """Reserve one more address range for `dev`'s large class: the card's memory as the hardware profile declares
         it (rule 1), whole chunks; registered as device memory for the pointer checks (`holds`)."""
         from nbxtensor.ops.wrappers import get_hardware_profile
-        prof = get_hardware_profile()
+        given = getattr(v, "range_bytes", None)        # a replay names its card's size (use_expandable)
+        prof = get_hardware_profile() if given is None else None
         spec = next((d for d in (getattr(prof, "devices", None) or []) if getattr(d, "index", None) == dev), None)
-        mb = int(getattr(spec, "memory_mb", 0) or 0)
+        mb = (int(given) >> 20) if given is not None else int(getattr(spec, "memory_mb", 0) or 0)
         if mb <= 0:
             raise RuntimeError(f"ZERO FALLBACK: the hardware profile declares no memory for device {dev}: its "
                                f"expandable range has no size")

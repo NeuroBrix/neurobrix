@@ -2509,7 +2509,7 @@ FIRST_LAUNCH = {"gemm_sizes": (4096,), "gemm_warmup": 10, "gemm_rep": 30, "copy_
                 "host_gemm_n": 2048, "host_copy_bytes": 256 << 20,
                 # the expandable pool's chunk (facts_probe.vmm_chunk_bytes): the multiples of the granularity tried,
                 # ascending, and the repetitions of each timing
-                "vmm_ks": (1, 2, 4, 8, 16, 32, 64), "vmm_reps": 30}
+                "vmm_ks": (1, 2, 4, 8, 16, 32, 64), "vmm_reps": 3}
 #: a load smaller than this is not a loader rate (its fixed costs dominate)
 LOADER_RATE_MIN_BYTES = 256 << 20
 #: the hardware profile this process runs under (set by the run once it resolved it): the one its loaders write into

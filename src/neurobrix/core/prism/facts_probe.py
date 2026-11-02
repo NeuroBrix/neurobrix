@@ -316,14 +316,17 @@ def weight_load_gbps(root: Path, comp: str, gb: float, engines: Sequence[str] = 
 
 
 def vmm_chunk_bytes(device: int, reps: int, ks: Sequence[int]) -> Optional[int]:
-    """The expandable pool's chunk on `device`, measured (R16): for chunk = granularity x k, k in `ks` ascending, the
-    median cost of creating + mapping + opening + unmapping + releasing one chunk against the median and spread
-    (max - median) of an ordinary allocation + free of the same bytes, `reps` each; the first k whose chunk costs no
-    more than the ordinary allocation's median plus its spread. None when the device has no VMM (the pool keeps its
-    driver segments there). Measured 2026-11-02 on V100-SXM2 (vmm/measure_k.py): k = 1, 358 us against 373 +- 109 us."""
-    import statistics
+    """The expandable pool's chunk on `device`, measured on a REAL run's allocations (R16; the supervisor 2026-11-02
+    17:15): the library's recorded allocation trace (`nbxtensor.memory.trace_replay`) replayed through the allocator on
+    this device, under the card size it was recorded on, with the range off (the driver segments) and then at each
+    chunk = granularity x k, `ks` ascending, `reps` replays each in its own process; the chunk is the first whose median
+    replay is within R16 OFF's median plus its spread. None when the device has no VMM, or when no chunk keeps up with
+    the segments (the pool keeps them). On the V100 16 GB: OFF 2.16-2.29 s, 16 MiB 2.7 s, 32 MiB 2.0 s -> 32 MiB; the
+    run itself, SANA-Video_2B_720p ttft 40.6/41.4 s at 32 MiB against 40.9/39.9 s OFF (vmm_v100.md). A synthetic
+    churn of the same bytes was measured and rejected: its cost per call is flat, so it always favours the largest."""
     from nbxtensor.backend import runtime as _rt
     from nbxtensor.memory.vmm import Vmm
+    from nbxtensor.memory import trace_replay
     lib = Vmm.load(_rt.backend_table().get("driver_libs"))
     if lib is None:
         return None
@@ -333,35 +336,5 @@ def vmm_chunk_bytes(device: int, reps: int, ks: Sequence[int]) -> Optional[int]:
     rc, gran = v.granularity()
     if rc != 0 or gran <= 0:
         return None
-    dm = _rt.device_memory()
-    for k in sorted(ks):
-        size = gran * int(k)
-        ordinary, mapped = [], []
-        for _ in range(reps):
-            t0 = time.perf_counter()
-            rc, ptr = dm.malloc(size)
-            if rc != 0:
-                return None
-            dm.free(ptr)
-            ordinary.append(time.perf_counter() - t0)
-        rc, va = v.reserve(size)
-        if rc != 0:
-            return None
-        try:
-            for _ in range(reps):
-                t0 = time.perf_counter()
-                rc, h = v.create(size)
-                if rc != 0:
-                    return None
-                if v.map(va, size, h) != 0:
-                    v.release(h)
-                    return None
-                v.unmap(va, size)
-                v.release(h)
-                mapped.append(time.perf_counter() - t0)
-        finally:
-            v.unreserve(va, size)
-        med = statistics.median(ordinary)
-        if statistics.median(mapped) <= med + (max(ordinary) - med):
-            return size
-    return None
+    chunk, _times = trace_replay.chunk_by_replay(device, gran, ks, reps)
+    return chunk
