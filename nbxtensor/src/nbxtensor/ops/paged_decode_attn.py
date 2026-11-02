@@ -11,7 +11,7 @@ head inside one page are contiguous rows, so a tile of BLOCK_N positions of one 
   per program, FMA reduction over D, scalar online softmax, fp32 accumulator, partials merged by the fixed-order
   `flash_decode_reduce_kernel` — with K / V addressed through the block table (one page id per page of the sequence,
   int32, padded with -1). A tile never straddles two pages: every candidate tile divides the page size
-  (`PAGED_DECODE_TILE_CANDIDATES`, read by core/state/price.page_tokens) and each split starts on a tile boundary.
+  (`PAGED_DECODE_TILE_CANDIDATES`, ops/tiling_sizes, read by core/state/price.page_tokens) and each split starts on a tile boundary.
   Each sequence of a batch reads its own length (`seq_lens`), so one launch serves a batch of different lengths.
 
 Pure @triton.jit, no tl.dot (sm_70: the vector kernel's measured structure), one source for every backend.
@@ -23,13 +23,9 @@ import triton.language as tl
 from nbxtensor.ops.decode_attn_vec import _round_q
 
 
-# The position tiles the paged read is compiled for: powers of two, each dividing the largest, so a page sized from the
-# largest holds a whole number of tiles of every candidate. 32 is the vector decode kernel's judged tile (its locked
-# protocol of 2026-08-23: seg 256 / BLOCK_N 32 / 4 warps won at all three contexts, ops/decode_attn_vec.py,
-# kernels/wrappers.py `_decode_attn_vec`); 16 and 64 are its neighbours, the range the certified directory chooses in.
-PAGED_DECODE_TILE_CANDIDATES = (16, 32, 64)
-# The tile the read runs at until the certified directory chooses among the candidates: the judged one.
-PAGED_DECODE_JUDGED_TILE = 32
+# The page tiles are sizes: nbxtensor.ops.tiling_sizes owns them (torch- and triton-free — the compiled branch sizes
+# its paged cache with them in an environment without triton).
+from nbxtensor.ops.tiling_sizes import PAGED_DECODE_JUDGED_TILE, PAGED_DECODE_TILE_CANDIDATES  # noqa: F401
 
 # The split shape: positions per split and the most splits one launch makes — the vector decode kernel's judged config
 # (its locked protocol of 2026-08-23, the defaults of `_decode_attn_vec`'s NBX_DV_SEG and its 64-split cap), so the

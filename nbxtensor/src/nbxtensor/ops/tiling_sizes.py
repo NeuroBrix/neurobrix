@@ -17,13 +17,22 @@ What it owns:
   * the attention scores bound and its chunk rows;
   * Prism's op budget and its op-level band factors (conv, fusion pair, rms_norm, residual chain);
   * the tile overlaps (spatial and temporal);
-  * the in-place and residual-chain thresholds.
+  * the in-place and residual-chain thresholds;
+  * the paged decode read's position tiles (the page size is sized from them, core/state/price).
 """
 from __future__ import annotations
 
 import math
 from typing import Any, Sequence, Tuple
 
+
+# The position tiles the paged read is compiled for: powers of two, each dividing the largest, so a page sized from the
+# largest holds a whole number of tiles of every candidate. 32 is the vector decode kernel's judged tile (its locked
+# protocol of 2026-08-23: seg 256 / BLOCK_N 32 / 4 warps won at all three contexts, ops/decode_attn_vec.py,
+# kernels/wrappers.py `_decode_attn_vec`); 16 and 64 are its neighbours, the range the certified directory chooses in.
+PAGED_DECODE_TILE_CANDIDATES = (16, 32, 64)
+# The tile the read runs at until the certified directory chooses among the candidates: the judged one.
+PAGED_DECODE_JUDGED_TILE = 32
 
 def _value(*path: str) -> Any:
     """One value of nbxtensor/ops/tiling.yml, refused by name when absent."""
