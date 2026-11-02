@@ -10,6 +10,7 @@ Handles non-iterative models like encoders, decoders, multimodal models.
 from neurobrix.core.memory.manager import release_flow_memory
 from typing import Any, Dict
 
+from .iterative_steps import IterativeSteps
 from .base import ComponentFlowHandler, register_flow
 
 
@@ -74,45 +75,5 @@ class ForwardPassHandler(ComponentFlowHandler):
                 release_flow_memory(self.ctx.primary_device)
         return self.ctx.variable_resolver.resolve_all()
 
-    def _preprocess_inputs(self) -> None:
-        """
-        Preprocess user inputs for forward_pass models.
-
-        Delegates to TextProcessor for unified tokenization
-        (handles CHI, chat templates, max_length cascade).
-        """
-        prompt = None
-        for key in ["global.prompt", "prompt"]:
-            if key in self.ctx.variable_resolver.resolved:
-                prompt = self.ctx.variable_resolver.resolved[key]
-                break
-
-        if prompt is None:
-            return
-
-        if "tokenizer" not in self.ctx.modules:
-            return
-
-        from neurobrix.core.module.text.processor import TextProcessor
-
-        tp = TextProcessor(
-            tokenizer=self.ctx.modules["tokenizer"],
-            defaults=self.ctx.pkg.defaults,
-            topology=self.ctx.pkg.topology,
-            variable_resolver=self.ctx.variable_resolver,
-        )
-
-        device = self.ctx.primary_device
-
-        try:
-            input_ids, attention_mask = tp.tokenize_for_diffusion(prompt, device)
-
-            self.ctx.variable_resolver.resolved["global.input_ids"] = input_ids
-            self.ctx.variable_resolver.resolved["input_ids"] = input_ids
-
-            if attention_mask is not None:
-                self.ctx.variable_resolver.resolved["global.attention_mask"] = attention_mask
-                self.ctx.variable_resolver.resolved["attention_mask"] = attention_mask
-
-        except Exception as e:
-            raise RuntimeError(f"Tokenization failed: {e}") from e
+    # the prompt tokenized into input_ids / attention_mask: the iterative handlers' step, the same body
+    _preprocess_inputs = IterativeSteps._preprocess_inputs

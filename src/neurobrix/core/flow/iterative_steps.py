@@ -156,7 +156,8 @@ class IterativeSteps:
 
     def _preprocess_inputs(self) -> None:
         """
-        Preprocess user inputs for iterative_process models.
+        Preprocess user inputs for iterative_process models (and the compiled
+        forward_pass handler, which takes this method).
 
         Delegates to TextProcessor brick for tokenization.
         """
