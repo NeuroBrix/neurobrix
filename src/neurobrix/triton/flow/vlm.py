@@ -1801,12 +1801,14 @@ class TritonVLMEngine(VLMSteps):
         last_hidden = hidden_states[:, -1:, :]
 
         def _proj(weight: NBXTensor) -> NBXTensor:
-            wt = weight.to(last_hidden.dtype)
+            # The projection runs at the head weight's dtype — the one the DtypeEngine placed it at — the hidden row
+            # cast to it, never the weight to the hidden's: a whole fp32 copy of a 151 748 x 4 096 head is 2.4 GB at
+            # every token (MiniCPM-o-4_5 triton on a V100-16GB refused it, 2026-11-01). The vendor runs its head at
+            # the model's half dtype; the logits come back at the hidden's dtype.
             B, S, H = last_hidden.shape
-            a2 = last_hidden.reshape(B * S, H)
-            wtT = wt.transpose(0, 1)
-            out = _nbx_linalg_wrappers.matmul_wrapper(a2, wtT)
-            return out.reshape(B, S, out.shape[-1])
+            a2 = last_hidden.reshape(B * S, H).to(weight.dtype)
+            out = _nbx_linalg_wrappers.matmul_wrapper(a2, weight.transpose(0, 1))
+            return out.to(last_hidden.dtype).reshape(B, S, out.shape[-1])
 
         if (logits_source == "lm_head" and head_name
                 and head_name in self.ctx.executors):

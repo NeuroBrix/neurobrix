@@ -1871,6 +1871,14 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
         from .audio_utils import get_compute_dtype
         return get_compute_dtype(self.ctx)
 
+    @staticmethod
+    def _head_logits(last_hidden: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
+        """The projection at the head weight's dtype — the one the DtypeEngine placed it at — the hidden row cast to
+        it, never the weight to the hidden's (a whole fp32 copy of the head at every token, 2.4 GB on MiniCPM-o-4_5,
+        2026-11-01); the logits back at the hidden's dtype. The Triton flow's `_proj` is the same rule."""
+        w = weight.to(device=last_hidden.device)
+        return torch.matmul(last_hidden.to(w.dtype), w.T).to(last_hidden.dtype)
+
     def _compute_logits(self, hidden_states: torch.Tensor,
                         embed_weight: Optional[torch.Tensor],
                         logits_source: str, head_name: Optional[str]) -> torch.Tensor:
@@ -1880,8 +1888,7 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
             executor = self.ctx.executors[head_name]
             for key, tensor in (executor._weights or {}).items():
                 if tensor is not None and tensor.ndim == 2:
-                    w = tensor.to(device=last_hidden.device, dtype=last_hidden.dtype)
-                    return torch.matmul(last_hidden, w.T)
+                    return self._head_logits(last_hidden, tensor)
             # ZERO FALLBACK: the flow names this head as the logits' source; a head executor that
             # holds no 2-D weight is a load defect, not a tied model. Falling through to the token
             # embedding decoded garbage with GLM-4.1V and MiniCPM-o streamed (2026-10-08: the head's
@@ -1891,8 +1898,7 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
                 f"'{head_name}' holds no 2-D weight (held: {sorted(executor._weights or {})}); "
                 f"projecting with the token embedding instead would decode another model's logits.")
         if embed_weight is not None:
-            w = embed_weight.to(device=last_hidden.device, dtype=last_hidden.dtype)
-            return torch.matmul(last_hidden, w.T)
+            return self._head_logits(last_hidden, embed_weight)
         raise RuntimeError(
             "ZERO FALLBACK: no lm_head weight and no embed weight — "
             "cannot project hidden states to logits.")
