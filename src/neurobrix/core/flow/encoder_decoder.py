@@ -18,6 +18,7 @@ from neurobrix.core.memory.manager import release_flow_memory
 from typing import Any, Dict, List, Optional
 
 from .base import ComponentFlowHandler, register_flow
+from neurobrix.core.flow.shared_steps import effective_sampling as _effective_sampling   # both branches read the sampling alike
 
 
 @register_flow("encoder_decoder")
@@ -432,7 +433,6 @@ class EncoderDecoderEngine(ComponentFlowHandler):
         return device_multinomial(probs, 1).item()
 
 
-
 def _maybe_log_topk(row, step: int, engine: str, stage: str) -> None:
     """NBX_DECODE_TOPK=<jsonl>: per-step top-4 ids/values + top-2 margin
     of one logits row (numpy), `stage` = "raw" (model logits) or
@@ -453,72 +453,3 @@ def _maybe_log_topk(row, step: int, engine: str, stage: str) -> None:
     with open(path, "a") as f:
         _json.dump(rec, f)
         f.write("\n")
-
-
-_SAMPLING_PARAMS = ("temperature", "top_k", "top_p",
-                    "repetition_penalty", "min_p")
-
-
-def _effective_sampling(ctx, defaults):
-    """Effective sampling config, and which parts the USER asked for.
-
-    The registry's `defaults` is only half the story: a CLI flag or a
-    serving request lands as a `global.*` variable in the resolver, and
-    the autoregressive flow's own override table reads it from there.
-    A guard that inspected `defaults` alone would miss exactly the case
-    it exists to catch — whisper carries no `top_k` at all, so
-    `--top-k 20` is invisible in `defaults` and visible only here.
-
-    Returns (config, explicit) where config is defaults overlaid with
-    the overrides, and explicit names the overridden parameters.
-    """
-    config = {k: defaults.get(k) for k in _SAMPLING_PARAMS}
-    explicit = set()
-    resolver = getattr(ctx, "variable_resolver", None)
-    if resolver is None:
-        return config, explicit
-    for name in _SAMPLING_PARAMS:
-        try:
-            val = resolver.get(f"global.{name}", None)
-        except Exception:
-            continue
-        if val is None:
-            continue
-        config[name] = val
-        # EXPLICIT means the value DIFFERS from the registry default,
-        # not merely that the resolver holds one. The configuration
-        # pipeline populates `global.*` from defaults too, so presence
-        # alone classifies every inherited field as a user request — the
-        # first version did exactly that and refused MiniCPM-o for a
-        # top_k=20 nobody had asked for. Re-requesting the default value
-        # lands in the inherited branch, which is harmless: it is the
-        # same value that was going to be ignored either way.
-        # The default cascade has two rungs: the model's defaults.json and
-        # the family's defaults (config/families/<family>.yml). A value
-        # equal to EITHER is inherited — the family rung populates
-        # `global.*` for a model whose defaults carry no such key
-        # (audio_llm top_k=50, 2026-09-05: every model of the family refused).
-        inherited = [defaults.get(name), _family_default(ctx, name)]
-        same = False
-        for ref in inherited:
-            if ref is None:
-                continue
-            try:
-                same = same or float(val) == float(ref)
-            except (TypeError, ValueError):
-                same = same or val == ref
-        if not same:
-            explicit.add(name)
-    return config, explicit
-
-
-def _family_default(ctx, name):
-    """The family-level default of a sampling parameter, or None."""
-    try:
-        family = (getattr(getattr(ctx, "pkg", None), "manifest", None) or {}).get("family")
-        if not family:
-            return None
-        from neurobrix.core.config.loader import get_family_config
-        return ((get_family_config(family) or {}).get("defaults") or {}).get(name)
-    except Exception:
-        return None
