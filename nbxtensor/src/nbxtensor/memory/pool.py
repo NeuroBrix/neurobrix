@@ -400,10 +400,15 @@ def simulate(events: Iterable[Tuple[str, object, int]], parked_cap: int = 0, ali
         nonlocal held
         need = len(pairs) * rng.chunk
         if cap is not None and held + need > cap:
-            pool.flush([0], to_driver)
-            for r, i in range_reclaimable(pool, 0):
+            # the allocator's reclaim: whole free chunks, the highest addresses first, until the mapping fits; then
+            # the driver segments
+            for r, i in sorted(range_reclaimable(pool, 0), key=lambda ri: -ri[0].chunk_va(ri[1])):
+                if held + need <= cap:
+                    break
                 r.mapped.discard(i)
                 held -= r.chunk
+            if held + need > cap:
+                pool.flush([0], to_driver)
             if held + need > cap:
                 return False
         for r, i in pairs:
