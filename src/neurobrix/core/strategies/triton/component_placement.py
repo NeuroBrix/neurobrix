@@ -7,7 +7,7 @@ move across devices at component boundaries through NBXTensor.to_cuda
 contract as the pytorch strategy, NBXTensor compute path.
 """
 
-from typing import Dict, Any, Optional, Set
+from typing import Dict, Any, Optional
 
 from ..base import StrategyContext
 from .base import TritonStrategy
@@ -35,9 +35,3 @@ class ComponentPlacementStrategy(ComponentPlacementSteps, TritonStrategy):
 
 class ComponentPlacementLazyStrategy(ComponentPlacementLazySteps, ComponentPlacementStrategy):
     """Component placement with lazy weight swapping between phases (triton)."""
-
-    def __init__(self, context: StrategyContext, strategy_name: str = "component_placement_lazy"):
-        super().__init__(context, strategy_name)
-        self._phase_loaded: Set[str] = set()
-
-

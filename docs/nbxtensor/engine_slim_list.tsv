@@ -1,31 +1,10 @@
 # The engine's open slimming findings (tools/engine_slim_scan.py); each ends deleted, moved into nbxtensor, or kept
 # with its reason in docs/nbxtensor/ENGINE_SLIM.md. Both figures below may only go down (test_the_engine_only_slims.py).
-# engine_lines: 137041
-# open: 26
+# engine_lines: 137025
+# open: 5
 kind	path	symbol	detail
-duplicate	src/neurobrix/core/optim/passes/fusion_vertical.py	is_graph_output	same body as src/neurobrix/triton/sequence.py::_is_graph_output
-duplicate	src/neurobrix/core/strategies/component_placement.py	__init__	same body as src/neurobrix/core/strategies/triton/component_placement.py::__init__
-duplicate	src/neurobrix/core/strategies/shared_steps.py	prepare_inputs	same body as 
-duplicate	src/neurobrix/core/strategies/triton/component_placement.py	__init__	same body as src/neurobrix/core/strategies/component_placement.py::__init__
-duplicate	src/neurobrix/triton/sequence.py	_is_graph_output	same body as src/neurobrix/core/optim/passes/fusion_vertical.py::is_graph_output
-fact	src/neurobrix/core/strategies/base.py	transfer_tensor	nbxtensor exposes nbxtensor.memory.device_transfer.transfer_tensor
-fact	src/neurobrix/core/strategies/triton/base.py	transfer_tensor	nbxtensor exposes nbxtensor.memory.device_transfer.transfer_tensor
-fact	src/neurobrix/triton/sequence.py	_parse_dtype	nbxtensor exposes nbxtensor.dtype.nbx_dtype.parse_dtype
-wrapper	src/neurobrix/core/prism/facts_probe.py	gemv_gbps(k)	no call site passes it: always its default 4096
-wrapper	src/neurobrix/core/prism/facts_probe.py	gemv_gbps(n)	no call site passes it: always its default 14336
-wrapper	src/neurobrix/core/prism/facts_probe.py	gemv_gbps(reps)	no call site passes it: always its default 50
-wrapper	src/neurobrix/core/prism/facts_probe.py	weight_load_gbps(engines)	no call site passes it: always its default ('triton', 'compiled')
-wrapper	src/neurobrix/core/prism/layer_partition.py	_bytes_for(tid_hint)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/prism/layer_partition.py	hybrid(max_pieces)	no call site passes it: always its default 64
 wrapper	src/neurobrix/core/prism/loop_state.py	kept_neighbours(span)	no call site passes it: always its default 64
-wrapper	src/neurobrix/core/prism/plan_advice.py	assess(volatility)	no call site passes it: always its default READING_VOLATILITY
 wrapper	src/neurobrix/core/prism/plan_advice.py	dominated_by_activations(ratio)	no call site passes it: always its default 4.0
-wrapper	src/neurobrix/core/prism/solver.py	_identify_inplace_add_candidates_static(threshold_bytes)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/prism/solver.py	order_candidates(tie)	no call site passes it: always its default 0.01
 wrapper	src/neurobrix/core/prism/time_estimate.py	plan_seconds(phases)	no call site passes it: always its default None
-wrapper	src/neurobrix/core/strategies/base.py	synchronize_device	only hands its parameters to device_sync
-wrapper	src/neurobrix/core/strategies/layer_streaming.py	_nbx_path	only hands its parameters to self.resolve_artifact_path
-wrapper	src/neurobrix/core/strategies/layer_streaming.py	register_op_types_on_segments(_segs)	no call site passes it: always its default segments
-wrapper	src/neurobrix/core/strategies/shared_steps.py	cleanup	only hands its parameters to self._loaded_components.clear
-wrapper	src/neurobrix/triton/sequence.py	func_wrapper	only hands its parameters to moe_fused_dispatch
-wrapper	src/neurobrix/triton/weight_loader.py	_read_header	an alias of read_safetensors_header

@@ -165,7 +165,7 @@ def load_component_weights(
     shard_files = sorted(weights_dir.glob("*.safetensors")) if weights_dir.is_dir() else []
     shard_headers = []
     for shard_path in shard_files:
-        header, data_offset = _read_header(str(shard_path))
+        header, data_offset = read_safetensors_header(str(shard_path))
         shard_headers.append((str(shard_path), header, data_offset))
 
     # Pre-flight, before any device is touched: every weight this load is asked for (`only`,
@@ -297,7 +297,6 @@ def load_component_weights(
 
 
 # The safetensors header reader is the container layer's, one reader for every engine.
-_read_header = read_safetensors_header
 
 
 def _stored_bytes(info: dict, compute_dtype: NBXDtype) -> int:

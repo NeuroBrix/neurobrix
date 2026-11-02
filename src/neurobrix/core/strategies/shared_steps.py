@@ -44,6 +44,12 @@ def unload_sharded_weights(self, component_name: str) -> None:
             self.synchronize_device(device)
         self._release_device_cache(device)
 
+
+def _prepare_on_first_device(self, component_name: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
+    devices = self.get_component_devices(component_name)
+    target_device = devices[0] if devices else self.primary_device
+    return self.transfer_dict(inputs, target_device, self.use_async)
+
 class BlockScatterSteps:
     """What the compiled and the Triton `BlockScatterStrategy` ran alike (core/strategies/block_scatter.py, core/strategies/triton/block_scatter.py)."""
 
@@ -83,10 +89,7 @@ class BlockScatterSteps:
     _load_fgp_weights = _load_sharded_weights       # the same load as pipeline parallel's (one body)
     unload_weights = unload_sharded_weights
 
-    def prepare_inputs(self, component_name: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        devices = self.get_component_devices(component_name)
-        target_device = devices[0] if devices else self.primary_device
-        return self.transfer_dict(inputs, target_device, self.use_async)
+    prepare_inputs = _prepare_on_first_device
 
     def __init__(self, context: StrategyContext, strategy_name: str = "block_scatter"):
         super().__init__(context, strategy_name)
@@ -123,6 +126,10 @@ class BlockScatterSteps:
 
 class ComponentPlacementLazySteps:
     """What the compiled and the Triton `ComponentPlacementLazyStrategy` ran alike (core/strategies/component_placement.py, core/strategies/triton/component_placement.py)."""
+
+    def __init__(self, context: StrategyContext, strategy_name: str = "component_placement_lazy"):
+        super().__init__(context, strategy_name)
+        self._phase_loaded: Set[str] = set()
 
     def execute_component(
         self,
@@ -268,10 +275,7 @@ class PipelineParallelSteps:
     _load_pp_weights = _load_sharded_weights        # the same load as block scatter's (one body)
     unload_weights = unload_sharded_weights
 
-    def prepare_inputs(self, component_name: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        devices = self.get_component_devices(component_name)
-        target_device = devices[0] if devices else self.primary_device
-        return self.transfer_dict(inputs, target_device, self.use_async)
+    prepare_inputs = _prepare_on_first_device
 
     def __init__(self, context: StrategyContext, strategy_name: str = "pipeline_parallel"):
         super().__init__(context, strategy_name)

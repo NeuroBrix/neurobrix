@@ -16,7 +16,7 @@ Key features:
 - State tracking for efficient transfers
 """
 
-from typing import Dict, Any, Optional, Set
+from typing import Dict, Any, Optional
 import torch
 from neurobrix.core.device_utils import device_empty_cache
 
@@ -52,9 +52,3 @@ class ComponentPlacementLazyStrategy(ComponentPlacementLazySteps, ComponentPlace
     Allows models where total weights exceed combined VRAM, as long as
     each phase (pre_loop, loop, post_loop) fits.
     """
-
-    def __init__(self, context: StrategyContext, strategy_name: str = "component_placement_lazy"):
-        super().__init__(context, strategy_name)
-        self._phase_loaded: Set[str] = set()
-
-

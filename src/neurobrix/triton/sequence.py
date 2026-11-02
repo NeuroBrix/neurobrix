@@ -1483,15 +1483,10 @@ class TritonSequence(SequenceSteps):
 
         graph_outputs = set(self.dag.get("output_tensor_ids", []))
 
+        from neurobrix.core.optim.passes.fusion_vertical import graph_output
+
         def _is_graph_output(tid: str) -> bool:
-            # Union check (gardien HIGH 2026-08-10): the categorizer
-            # treats output-ness as `is_output OR in output_tensor_ids`
-            # and detach elimination propagates is_output without
-            # touching the id list — mirror the same union here.
-            if tid in graph_outputs:
-                return True
-            tdata = tensors.get(tid)
-            return bool(tdata and tdata.get("is_output"))
+            return graph_output(tid, graph_outputs, tensors)
 
         consumers: Dict[str, List[str]] = {}
         for op_uid in execution_order:
@@ -2266,12 +2261,9 @@ class TritonSequence(SequenceSteps):
         def kwargs_resolver(_arena):
             return {}
 
-        def func_wrapper(arena):
-            return moe_fused_dispatch(arena)
-
         return CompiledOp(
             op_uid=op_uid, op_type="custom::moe_fused",
-            func=func_wrapper,
+            func=moe_fused_dispatch,
             args_resolver=args_resolver,
             kwargs_resolver=kwargs_resolver,
             output_slots=tuple(output_slots),
