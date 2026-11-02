@@ -33,6 +33,7 @@ Every quantity is read from topology.flow.speech / pkg.defaults — no
 model names, no literals (ZERO FALLBACK on missing contract keys).
 """
 
+import functools
 import time
 from typing import Any, Dict, List, Optional
 
@@ -40,41 +41,16 @@ import torch
 
 from nbxtensor.random.seeded_draw import SeededDrawStream
 from .table_gather import gather_rows
+from neurobrix.core.flow.base import FlowLeg
+from neurobrix.core.flow.shared_steps import require_contract
 
 
-def _require(block: Dict[str, Any], key: str, where: str):
-    val = block.get(key)
-    if val is None:
-        raise RuntimeError(
-            f"ZERO FALLBACK: topology.flow.speech is missing '{key}' "
-            f"({where}) — re-emit the speech contract from the registry.")
-    return val
+_require = functools.partial(require_contract, "speech")   # this leg's contract block
 
 
-class SpeechLeg:
+class SpeechLeg(FlowLeg):
     """Compiled-engine speech leg over the flow.speech contract."""
 
-    def __init__(self, engine):
-        # engine = the VLMEngine instance: we reuse its component
-        # execution helpers and resolver (same ctx, same lifecycle).
-        self.engine = engine
-        self.ctx = engine.ctx
-        self.resolved = engine.ctx.variable_resolver.resolved
-
-    # ── component plumbing (vlm projection idiom: dual-write + run) ──
-
-    def _run(self, comp: str, **inputs: torch.Tensor) -> torch.Tensor:
-        self.engine._ensure_weights_loaded(comp)
-        for name, val in inputs.items():
-            self.resolved[f"{comp}.{name}"] = val
-            self.resolved[f"global.{name}"] = val
-        self.engine._execute_component(comp, "forward", None)
-        out = self.engine._get_component_output(comp)
-        if out is None:
-            raise RuntimeError(f"ZERO FALLBACK: {comp} produced no output.")
-        # Multi-GPU placements put components on different devices; the
-        # leg concatenates across calls, so normalize to the leg device.
-        return out.to(self._device) if hasattr(out, "to") else out
 
     @staticmethod
     def _mrope_positions(seq_len: int, device) -> torch.Tensor:

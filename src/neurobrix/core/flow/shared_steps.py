@@ -233,3 +233,14 @@ def family_default(ctx, name):
         return ((get_family_config(family) or {}).get("defaults") or {}).get(name)
     except Exception:
         return None
+
+
+def require_contract(flow: str, block: Dict[str, Any], key: str, where: str):
+    """The value `key` of a topology.flow.<flow> contract block, or a refusal naming it (the image_gen and speech
+    legs of both branches)."""
+    val = block.get(key)
+    if val is None:
+        raise RuntimeError(
+            f"ZERO FALLBACK: topology.flow.{flow} is missing '{key}' "
+            f"({where}) — re-emit the {flow} contract from the registry.")
+    return val

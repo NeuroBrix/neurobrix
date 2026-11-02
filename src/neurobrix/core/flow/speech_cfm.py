@@ -32,6 +32,7 @@ Every quantity from topology.flow.speech / pkg.defaults — ZERO
 FALLBACK on missing contract keys; no model names anywhere.
 """
 
+import functools
 import math
 import time
 from typing import Any, Dict, List
@@ -40,24 +41,15 @@ import numpy as np
 import torch
 
 from nbxtensor.random.seeded_draw import SeededDrawStream, seeded_gaussian
+from neurobrix.core.flow.base import FlowLeg
+from neurobrix.core.flow.shared_steps import require_contract
 
 
-def _require(block: Dict[str, Any], key: str, where: str):
-    val = block.get(key)
-    if val is None:
-        raise RuntimeError(
-            f"ZERO FALLBACK: topology.flow.speech is missing '{key}' "
-            f"({where}) — re-emit the speech contract from the registry.")
-    return val
+_require = functools.partial(require_contract, "speech")   # this leg's contract block
 
 
-class SpeechCFMLeg:
+class SpeechCFMLeg(FlowLeg):
     """Compiled-engine CFM speech leg over the flow.speech contract."""
-
-    def __init__(self, engine):
-        self.engine = engine
-        self.ctx = engine.ctx
-        self.resolved = engine.ctx.variable_resolver.resolved
 
     def _run(self, comp: str, **inputs):
         self.engine._ensure_weights_loaded(comp)

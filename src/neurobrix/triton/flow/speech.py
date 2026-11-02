@@ -25,6 +25,7 @@ Every quantity comes from topology.flow.speech / pkg.defaults — no
 model names, no literals (ZERO FALLBACK on missing contract keys).
 """
 
+import functools
 import time
 from typing import Any, Dict, List, Optional
 
@@ -39,15 +40,10 @@ from nbxtensor.ops import index_wrappers as _nbx_index_wrappers  # the family th
 from nbxtensor.ops import reduction_wrappers as _nbx_reduction_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.random.seeded_draw import SeededDrawStream
 from nbxtensor.memory.device_transfer import needs_move, transfer_tensor
+from neurobrix.core.flow.shared_steps import require_contract
 
 
-def _require(block: Dict[str, Any], key: str, where: str):
-    val = block.get(key)
-    if val is None:
-        raise RuntimeError(
-            f"ZERO FALLBACK: topology.flow.speech is missing '{key}' "
-            f"({where}) — re-emit the speech contract from the registry.")
-    return val
+_require = functools.partial(require_contract, "speech")   # this leg's contract block
 
 
 def _from_np_on(arr: np.ndarray, dev_idx: int) -> NBXTensor:

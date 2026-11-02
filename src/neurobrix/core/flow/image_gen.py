@@ -29,41 +29,21 @@ The RNG is the generation.seed chain (CLI global.seed override >
 defaults.seed > raise), driving latent init deterministically.
 """
 
+import functools
 import time
 from typing import Any, Dict
 
 import torch
+from neurobrix.core.flow.base import FlowLeg
+from neurobrix.core.flow.shared_steps import require_contract
 
 
-def _require(block: Dict[str, Any], key: str, where: str):
-    val = block.get(key)
-    if val is None:
-        raise RuntimeError(
-            f"ZERO FALLBACK: topology.flow.image_gen is missing '{key}' "
-            f"({where}) — re-emit the image_gen contract from the registry.")
-    return val
+_require = functools.partial(require_contract, "image_gen")   # this leg's contract block
 
 
-class ImageGenLeg:
+class ImageGenLeg(FlowLeg):
     """Compiled-engine image-gen leg over the flow.image_gen contract."""
 
-    def __init__(self, engine):
-        # engine = the VLMEngine instance (same ctx, same component
-        # plumbing, same lifecycle — the SpeechLeg idiom).
-        self.engine = engine
-        self.ctx = engine.ctx
-        self.resolved = engine.ctx.variable_resolver.resolved
-
-    def _run(self, comp: str, **inputs) -> torch.Tensor:
-        self.engine._ensure_weights_loaded(comp)
-        for name, val in inputs.items():
-            self.resolved[f"{comp}.{name}"] = val
-            self.resolved[f"global.{name}"] = val
-        self.engine._execute_component(comp, "forward", None)
-        out = self.engine._get_component_output(comp)
-        if out is None:
-            raise RuntimeError(f"ZERO FALLBACK: {comp} produced no output.")
-        return out.to(self._device) if hasattr(out, "to") else out
 
     def _load_query_tokens(self) -> Dict[str, torch.Tensor]:
         """Load the query-token constants from the container asset

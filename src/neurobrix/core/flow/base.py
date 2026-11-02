@@ -173,6 +173,30 @@ class ComponentFlowHandler(FlowHandler):
         return None
 
 
+class FlowLeg:
+    """A leg a handler runs inside its own flow (the VLM handler's image_gen, speech and CFM speech legs): its engine's
+    ctx, resolver and component plumbing, one lifecycle."""
+
+    def __init__(self, engine):
+        self.engine = engine
+        self.ctx = engine.ctx
+        self.resolved = engine.ctx.variable_resolver.resolved
+
+    def _run(self, comp: str, **inputs):
+        """Run one component on `inputs` (dual-written to `<comp>.<name>` and `global.<name>`), its primary output
+        moved to the leg's device: multi-GPU placements put components on different devices and a leg concatenates
+        across calls."""
+        self.engine._ensure_weights_loaded(comp)
+        for name, val in inputs.items():
+            self.resolved[f"{comp}.{name}"] = val
+            self.resolved[f"global.{name}"] = val
+        self.engine._execute_component(comp, "forward", None)
+        out = self.engine._get_component_output(comp)
+        if out is None:
+            raise RuntimeError(f"ZERO FALLBACK: {comp} produced no output.")
+        return out.to(self._device) if hasattr(out, "to") else out
+
+
 # Flow type registry for factory pattern
 FLOW_REGISTRY: Dict[str, type] = {}
 

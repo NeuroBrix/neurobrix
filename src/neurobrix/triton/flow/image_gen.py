@@ -25,6 +25,7 @@ Every quantity comes from topology.flow.image_gen / pkg.defaults — no
 model names, no literals (ZERO FALLBACK on missing contract keys).
 """
 
+import functools
 import time
 from typing import Any, Dict
 
@@ -34,15 +35,10 @@ from nbxtensor.tensor import NBXTensor
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.random.seeded_draw import seeded_gaussian
 from nbxtensor.memory.device_transfer import needs_move, transfer_tensor
+from neurobrix.core.flow.shared_steps import require_contract
 
 
-def _require(block: Dict[str, Any], key: str, where: str):
-    val = block.get(key)
-    if val is None:
-        raise RuntimeError(
-            f"ZERO FALLBACK: topology.flow.image_gen is missing '{key}' "
-            f"({where}) — re-emit the image_gen contract from the registry.")
-    return val
+_require = functools.partial(require_contract, "image_gen")   # this leg's contract block
 
 
 def _from_np_on(arr: np.ndarray, dev_idx: int) -> NBXTensor:
