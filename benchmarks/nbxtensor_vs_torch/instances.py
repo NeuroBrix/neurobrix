@@ -89,9 +89,21 @@ def census_ops(census: str) -> dict:
     return dict(out)
 
 
-def _component_bindings(model: str):
+def plan_dtypes(model: str, request: list, hardware: str) -> dict:
+    """{component: compute dtype} of the plan the engine makes for the request on `hardware`, at its whole card —
+    `derived_census.plan_record` (`neurobrix run --explain-plan --json`, the census shadow), the census's own source:
+    the DtypeEngine's decision on that profile, never the dtype the container stores (bf16 weights compute in fp16 on a
+    V100, which has no bf16; the stored dtype formed bf16 keys the engine never launches there, refused
+    KeyNotCertified on 16 of 25 nbxtensor instances, 2026-11-03)."""
+    import derived_census as DC
+    plan = DC.plan_record(model, request, MODE, hardware, None)
+    return {c["name"]: str(c["dtype"]).replace("torch.", "") for c in plan["components"]}
+
+
+def _component_bindings(model: str, hardware: str):
     """[(component, graph, {symbol id: value}, compute dtype)] at the model's gate request, or a skip reason per
-    component — the census's own binding rule for every flow it binds from the request."""
+    component — the census's own binding rule for every flow it binds from the request, each component at the
+    compute dtype the engine's plan gives it on `hardware` (`plan_dtypes`)."""
     import derived_census as DC
     import trace_request as TR
     from neurobrix.cli import create_parser
@@ -104,6 +116,7 @@ def _component_bindings(model: str):
     topo = json.loads((cache / "topology.json").read_text())
     args = create_parser().parse_args(["run", "--model", model, *request, "--triton"])
     ic = request_input_config(args, manifest, manifest.get("family"), cache)
+    dtypes = plan_dtypes(model, request, hardware)
     flow = topo.get("flow") or {}
     gen = flow.get("generation") or {}
     autoregressive = flow.get("type") == "autoregressive_generation"
@@ -131,17 +144,19 @@ def _component_bindings(model: str):
         if missing:
             skipped[comp] = f"symbols {missing} not bound by the request (a value-derived extent)"
             continue
-        dtype = (manifest.get("dtype") or g.get("torch_dtype") or "float16")
-        bound.append((comp, g, syms, str(dtype).replace("torch.", "")))
+        if comp not in dtypes:
+            skipped[comp] = "not in the engine's plan for the request (no compute dtype: the plan never runs it)"
+            continue
+        bound.append((comp, g, syms, dtypes[comp]))
     return bound, skipped
 
 
-def instances_of(model: str, ops_wanted: set, has_native_bf16: bool):
+def instances_of(model: str, ops_wanted: set, has_native_bf16: bool, hardware: str):
     """{instance key: instance} for one model, and its skipped components."""
     import derived_census as DC
     from neurobrix.kernels import classification as CL
     out, skipped = {}, {}
-    bound, skipped = _component_bindings(model)
+    bound, skipped = _component_bindings(model, hardware)
     for comp, g, syms, cdtype in bound:
         dtypes: dict = {}
         unhandled = collections.Counter()
@@ -205,7 +220,7 @@ def main(argv=None) -> int:
     merged, skipped = {}, {}
     for model in models:
         try:
-            found, sk = instances_of(model, wanted.get(model, set()), has_native_bf16())
+            found, sk = instances_of(model, wanted.get(model, set()), has_native_bf16(), a.hardware)
         except Exception as e:
             skipped[model] = f"refused: {type(e).__name__}: {e}"
             print(f"[instances] {model}: refused — {e}", flush=True)

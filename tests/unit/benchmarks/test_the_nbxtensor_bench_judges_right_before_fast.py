@@ -156,3 +156,22 @@ class _Host:
 class _NoDevice:
     def release(self):
         pass
+
+
+def test_an_instance_computes_at_the_plan_s_dtype_never_the_stored_one(monkeypatch):
+    """Each component's instances are taken at the compute dtype the engine's plan gives it on the profile
+    (`instances.plan_dtypes`, `derived_census.plan_record`: the census's own source), never the container's stored
+    dtype: TinyLlama stores bfloat16, a V100 plan computes it in float16 (no bf16 there). What this test would do if
+    the instances read the manifest: bfloat16 instances, keys the engine never forms on that card — RED. Card-less."""
+    from tests.conftest import installed_container
+    import derived_census as DC
+    root = installed_container("TinyLlama-1.1B-Chat-v1.0")
+    import json
+    assert json.loads((root / "manifest.json").read_text())["dtype"] == "bfloat16"
+    comps = sorted(p.name for p in (root / "components").iterdir() if (p / "graph.json").exists())
+    asked = []
+    monkeypatch.setattr(DC, "plan_record", lambda model, request, mode, hardware, rung: asked.append(
+        (model, mode, hardware, rung)) or {"components": [{"name": c, "dtype": "float16"} for c in comps]})
+    bound, _skipped = I._component_bindings("TinyLlama-1.1B-Chat-v1.0", "scenario-v100")
+    assert asked == [("TinyLlama-1.1B-Chat-v1.0", "triton", "scenario-v100", None)]
+    assert bound and {d for _c, _g, _s, d in bound} == {"float16"}
