@@ -42,6 +42,7 @@ from atelier import writable  # noqa: E402
 from neurobrix.core.prism.facts_probe import (  # noqa: E402
     block_keys, copies, host_matmul_gflops, host_memory_gbps, matmul_tflops, storage_read_gbps, stored_dtype)
 from neurobrix.core.prism import facts_probe as _probe  # noqa: E402
+from neurobrix.core.prism.autodetect import FIRST_LAUNCH as _FL  # noqa: E402  the probes' settings, one table
 
 
 def system_share_mb(readings: int = 30, every_s: float = 10.0) -> dict:
@@ -98,7 +99,8 @@ def main(argv=None) -> int:
              "matmul_tflops": {d: matmul_tflops(d) for d in dtypes}, **copies(),
              "host_matmul_gflops": host_matmul_gflops(), "host_memory_gbps": host_memory_gbps(),
              # the decode product's weight bandwidth on each engine (Prism prices a generated token at it)
-             "gemv_gbps": {e: {d: _probe.gemv_gbps(d, e) for d in dtypes} for e in ("triton", "compiled")}}
+             "gemv_gbps": {e: {d: _probe.gemv_gbps(d, e, *_FL["gemv_kn"], _FL["gemv_reps"]) for d in dtypes}
+                           for e in ("triton", "compiled")}}
     if a.system_share:
         facts["system_share"] = system_share_mb()
     if a.storage_file is not None:

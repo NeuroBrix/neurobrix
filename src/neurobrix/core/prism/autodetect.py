@@ -2508,7 +2508,9 @@ FIRST_LAUNCH = {"gemm_sizes": (4096,), "gemm_warmup": 10, "gemm_rep": 30, "copy_
                 "host_gemm_n": 2048, "host_copy_bytes": 256 << 20,
                 # the expandable pool's chunk (facts_probe.vmm_chunk_bytes): the multiples of the granularity tried,
                 # ascending, and the repetitions of each timing
-                "vmm_ks": (1, 2, 4, 8, 16, 32, 64), "vmm_reps": 3}
+                "vmm_ks": (1, 2, 4, 8, 16, 32, 64), "vmm_reps": 3,
+                # one decode step's linear (a 7B model's MLP: x[1, 4096] @ W[14336, 4096]^T), timed over 50 launches
+                "gemv_kn": (4096, 14336), "gemv_reps": 50}
 #: a load smaller than this is not a loader rate (its fixed costs dominate)
 LOADER_RATE_MIN_BYTES = 256 << 20
 #: the hardware profile this process runs under (set by the run once it resolved it): the one its loaders write into
@@ -2573,7 +2575,7 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None) -> dic
         added["measured"] = sorted(k for k in first if k != "source")
     if engine is not None and engine not in (first.get("gemv_gbps") or {}):
         dtypes = [t for t in (devices[0].get("supports_dtypes") or []) if t in ("float16", "float32", "bfloat16")]
-        first.setdefault("gemv_gbps", {})[engine] = {t: P.gemv_gbps(t, engine) for t in dtypes}
+        first.setdefault("gemv_gbps", {})[engine] = {t: P.gemv_gbps(t, engine, *q["gemv_kn"], q["gemv_reps"]) for t in dtypes}
         added["gemv_gbps"] = [engine]
     if "vmm_chunk_bytes" not in first:
         # the expandable pool's chunk on this machine's card (R16; 0: the device has no VMM, the pool keeps segments)

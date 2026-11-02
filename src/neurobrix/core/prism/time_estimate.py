@@ -21,8 +21,6 @@ from neurobrix.core.prism.work import Work
 
 #: strategies whose weights cross the host link at every use of a component
 STREAM_EVERY_USE = frozenset({"zero3", "layer_streaming"})
-#: strategies that load a component's weights on demand, once per phase that uses it
-LOAD_PER_PHASE = frozenset({"component_placement_lazy", "lazy_sequential", "single_gpu_lifecycle"})
 #: strategies that read a component's weights from storage at every use
 STORAGE_EVERY_USE = frozenset({"cpu_streaming"})
 #: strategies that hold every weight of a component on the accelerators: no expert store, no per-use expert traffic
@@ -230,12 +228,11 @@ def _link(links: Mapping[tuple, float], a: str, b: str) -> float:
 
 def plan_seconds(strategy: str, allocations: Mapping[str, Any], works: Mapping[str, Work], uses: Mapping[str, int],
                  devices: Mapping[str, DeviceFacts], host: Optional[HostFacts], dtype: str,
-                 phases: Optional[Mapping[str, int]] = None, prompt: Optional[Mapping[str, Work]] = None,
+                 prompt: Optional[Mapping[str, Work]] = None,
                  links: Optional[Mapping[tuple, float]] = None, engine: Optional[str] = None,
                  stored: Optional[Mapping[str, str]] = None, held: Optional[Mapping[str, float]] = None) -> float:
     """The plan's estimated seconds for the request. `devices`: {device string ("cuda:0"): its facts}; `uses`: {component:
-    runs per request}; `phases`: {component: phases that load it} for the strategies that load per phase (1 when
-    absent); `prompt`: {component: the work of its one prompt pass} for a generating component whose `works` entry is
+    runs per request}; `prompt`: {component: the work of its one prompt pass} for a generating component whose `works` entry is
     the work of ONE token — the prompt pass runs once more, over the same loaded weights; `stored`: {component: the
     dtype most of its weights are stored in} (the weights index), which the loader rate is read for; `held`: {component:
     the fraction of its weights a streaming strategy keeps loaded between uses} (`LayerPartitioner.hybrid`) — loaded
@@ -266,8 +263,7 @@ def plan_seconds(strategy: str, allocations: Mapping[str, Any], works: Mapping[s
             total += n * decode_seconds(w, f, dtype, engine, dev) + compute_seconds(first, f, dtype)
         else:
             total += n * compute_seconds(w, f, dtype)
-        loads = passes if strategy in STREAM_EVERY_USE else (int((phases or {}).get(comp, 1))
-                                                             if strategy in LOAD_PER_PHASE else 1)
+        loads = passes if strategy in STREAM_EVERY_USE else 1
         # A load is the engine's LOADER — read (storage or the page cache), decode, convert to the device dtype, land —
         # at its measured rate (`weight_load_gbps`), never a bare copy: the rule-13 proof (V100 rack, 2026-10-27) loaded
         # Wan2.2-I2V-A14B in 123-173 s and Qwen3-30B-A3B in 294-447 s against estimates at the H2D copy rate, and so

@@ -86,6 +86,12 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 
 | kind | path | symbol | why it stays |
 |---|---|---|---|
+| fact | src/neurobrix/core/strategies/base.py | transfer_tensor | the strategy's method takes a DEVICE STRING (cpu, cuda:N, mps:N) and passes a non-tensor value through; the library's function takes a device index and an NBXTensor only — a different contract, not a copy (2026-11-02) |
+| fact | src/neurobrix/core/strategies/triton/base.py | transfer_tensor | the same method on the Triton branch: device strings, cpu, pass-through of non-tensors (2026-11-02) |
+| fact | src/neurobrix/triton/sequence.py | _parse_dtype | parses through the library's parse_dtype, then remaps bf16<->fp16 to the plan's compute dtype (Prism's decision, the engine's) (2026-11-02) |
+| wrapper | src/neurobrix/core/strategies/base.py | synchronize_device | polymorphic: both branches' bases define it (the Triton one through DeviceAllocator), and the shared steps call it on self (2026-11-02) |
+| wrapper | src/neurobrix/core/strategies/shared_steps.py | cleanup | polymorphic: the flows call `cleanup()` on every strategy, this one empties the loaded set (2026-11-02) |
+| wrapper | src/neurobrix/core/strategies/layer_streaming.py | _nbx_path | a test seam: six streaming tests stub it to run card-less (2026-11-02) |
 | duplicate | src/neurobrix/core/optim/passes/algebraic.py | _scalar | nbxtensor's twin is a function local to its residual-chain reader: the library exposes nothing to import, and the library never imports the engine |
 | wrapper | src/neurobrix/core/cfg/engine.py | execute_component_with_cfg | the CFG engine's public entry, called by both iterative handlers; the Triton engine's converts its inputs at the boundary first, so the two are not one |
 | wrapper | src/neurobrix/_nbxtensor_host.py | active | a host service registered into nbxtensor.host: it imports its engine module when the library first calls it, not at registration (no engine import, no torch, at nbxtensor's load) |

@@ -761,8 +761,8 @@ class LayerStreamingStrategy(ExecutionStrategy):
         # M4 Pro, TinyLlama-1.1B native greedy: whole ' Paris.', streamed 'The' and eleven
         # newlines, ' Paris.' again with NBX_KV_RECOMPUTE=1. One instance for all segments,
         # for the reason given above.
-        def register_op_types_on_segments(interceptors, _segs=segments):
-            for seg_exec in _segs:
+        def register_op_types_on_segments(interceptors):
+            for seg_exec in segments:
                 fn = getattr(seg_exec, "register_op_interceptors", None)
                 if fn is None:
                     raise RuntimeError(

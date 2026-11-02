@@ -3912,7 +3912,7 @@ class PrismSolver:
     # =========================================================================
 
     def _identify_inplace_add_candidates_static(
-        self, graph: Dict, threshold_bytes: Optional[int] = None, input_config=None,
+        self, graph: Dict, input_config=None,
     ):
         """THE in-place-add decision: `(op_uid, reuse_input_idx)` for residual
         `aten::add` ops where one input has its last use at the add (so its
@@ -3926,8 +3926,7 @@ class PrismSolver:
         P-PRISM-ACTIVATION-ESTIMATOR-TILING-AWARE 2026-05-11.
         Sized at `input_config` (`_request_shape_of`), never at the trace.
         """
-        if threshold_bytes is None:
-            threshold_bytes = _ts.inplace_min_bytes()
+        threshold_bytes = _ts.inplace_min_bytes()
         shape_of = self._request_shape_of(graph, input_config)
         ops = graph.get("ops", {})
         order = graph.get("execution_order", [])

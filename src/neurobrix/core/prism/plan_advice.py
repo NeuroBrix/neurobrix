@@ -73,8 +73,7 @@ def _mb(n: float) -> str:
 
 
 def assess(component: str, weight_bytes: int, activation_bytes: int,
-           overhead_bytes: int, available_bytes: int,
-           volatility: float = READING_VOLATILITY) -> TilingVerdict:
+           overhead_bytes: int, available_bytes: int) -> TilingVerdict:
     """Can this component's overflow be cut into bands, and into how many?
 
     The arithmetic is deliberately the simplest thing that is true: weights and
@@ -83,7 +82,7 @@ def assess(component: str, weight_bytes: int, activation_bytes: int,
     budget no number of bands reaches it — which is the honest refusal, and a
     different sentence from "your input is too large".
     """
-    budget = int(available_bytes * (1.0 - volatility))
+    budget = int(available_bytes * (1.0 - READING_VOLATILITY))
     fixed = weight_bytes + overhead_bytes
 
     if fixed >= budget:

@@ -63,6 +63,16 @@ _MUTATING_SUFFIX = "_"
 _MAX_HOPS = 6
 
 
+
+def graph_output(tid: str, graph_outputs, tensors) -> bool:
+    """Output-ness is a UNION at the categorizers (gardien HIGH, 2026-08-10): `tensors[tid]["is_output"]` is live and
+    propagated on its own (detach elimination transfers it without touching output_tensor_ids) — the id list alone
+    lets a chain tensor the arena protects as a component output get silently redefined. Both engines read this one."""
+    if tid in graph_outputs:
+        return True
+    t = tensors.get(tid)
+    return bool(t and t.get("is_output"))
+
 def _gelu_approximate(op: dict) -> str | None:
     """Parse aten::gelu's `approximate` attribute across the observed
     trace encodings: plain attr key, kwargs scalar dict, args scan.
@@ -109,16 +119,7 @@ def plan_fusion_vertical(dag: dict) -> dict | None:
     graph_outputs = set(dag.get("output_tensor_ids") or [])
 
     def is_graph_output(tid: str) -> bool:
-        # Output-ness is a UNION at the categorizers (gardien HIGH,
-        # 2026-08-10): `tensors[tid]["is_output"]` is live and
-        # independently propagated (detach elimination transfers it
-        # without touching output_tensor_ids) — guarding on the id
-        # list alone lets a chain tensor the arena protects as a
-        # component output get silently redefined.
-        if tid in graph_outputs:
-            return True
-        t = tensors.get(tid)
-        return bool(t and t.get("is_output"))
+        return graph_output(tid, graph_outputs, tensors)
 
     # Consumer index from the ops themselves (tensors' consumer lists
     # can be stale after MoE fusion rewrites).

@@ -54,7 +54,7 @@ def matmul_tflops(dtype: str, sizes: Sequence[int] = (2048, 4096, 8192), warmup:
     return {"best": max(per.values()), "per_size": per}
 
 
-def gemv_gbps(dtype: str, engine: str, k: int = 4096, n: int = 14336, reps: int = 50) -> float:
+def gemv_gbps(dtype: str, engine: str, k: int, n: int, reps: int) -> float:
     """The weight bandwidth one decode step's matrix-vector product reaches on the ENGINE: x[1, k] @ W[n, k]^T, the
     linear of a generated token, timed over `reps` launches; W's bytes / time. A decode is weight-bound and an engine
     reaches a fraction of the device's copy bandwidth on it (the Mac, 2026-10-27 23:02: Triton on the M4 Pro ~1/15 —
@@ -203,7 +203,7 @@ def storage_read_gbps(path: Path) -> float:
 def block_keys(root: Path, comp: str, gb: float) -> Tuple[List[str], int, List[Path]]:
     """(keys, stored bytes, shard files) — the component's first block weights, in shard order, up to `gb` GB stored.
     Refuses a component with no shard or no block weight by name."""
-    from neurobrix.triton.weight_loader import _read_header, is_block_key
+    from neurobrix.triton.weight_loader import is_block_key, read_safetensors_header as _read_header
     wdir = Path(root) / "components" / comp / "weights"
     shards = sorted(wdir.glob("*.safetensors"))
     if not shards:
@@ -231,7 +231,7 @@ def block_keys(root: Path, comp: str, gb: float) -> Tuple[List[str], int, List[P
 def stored_dtype(shards: Iterable[Path], keys: Iterable[str]) -> str:
     """The safetensors dtype holding most of `keys`' stored bytes ("BF16", "F32", "F16") — a loader's rate depends on
     what it converts from (bf16 widened on the card, fp32 narrowed by numpy, fp16 as is)."""
-    from neurobrix.triton.weight_loader import _read_header
+    from neurobrix.triton.weight_loader import read_safetensors_header as _read_header
     want, by = set(keys), {}
     for sh in shards:
         h, _ = _read_header(str(sh))
@@ -288,7 +288,7 @@ def _compiled_loader(root: Path, comp: str, used: List[Path]):
     return make
 
 
-def weight_load_gbps(root: Path, comp: str, gb: float, engines: Sequence[str] = ("triton", "compiled")) -> dict:
+def weight_load_gbps(root: Path, comp: str, gb: float) -> dict:
     """{"dtype": stored dtype, "stored_bytes", "weights", engine: {"device"|"host": {"cold": GB/s, "warm": GB/s}}} —
     the engine's own loader on the component's first block weights up to `gb` GB stored, bytes LANDED per second."""
     root = Path(root)
@@ -300,7 +300,7 @@ def weight_load_gbps(root: Path, comp: str, gb: float, engines: Sequence[str] = 
         landed = load()
         return round(landed / (time.perf_counter() - t0) / 1e9, 3)
 
-    for engine in engines:
+    for engine in ("triton", "compiled"):        # both engines' loaders
         make = {"triton": _triton_loader, "compiled": _compiled_loader}[engine](root, comp, used)
         # one small load first, never timed: the engine's context, its conversion kernels' compilation and its pools
         # belong to the process, not to the load (the first triton bf16 load measured 0.01 GB/s cold without it)

@@ -278,7 +278,7 @@ class LayerPartitioner:
                     names.add(t.get("weight_name") or root)
         return names
 
-    def _bytes_for(self, name: str, tid_hint: Optional[str] = None) -> int:
+    def _bytes_for(self, name: str) -> int:
         if name in self.weight_sizes:
             return int(self.weight_sizes[name])
         # fall back to the graph's own description of that parameter
