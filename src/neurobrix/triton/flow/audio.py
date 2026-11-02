@@ -13,13 +13,14 @@ No torch imports in this file.
 import time
 import numpy as np
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.memory.memory_pool import release_flow_memory
 from neurobrix.core.flow.shared_steps import AudioSteps   # the steps both branches share
+from neurobrix.core.flow.base import ComponentFlowHandler   # the executor's four component callables, both branches
 
 
 #: The stage executions the audio flow runs. Every execution a container of this flow declares
@@ -27,7 +28,7 @@ from neurobrix.core.flow.shared_steps import AudioSteps   # the steps both branc
 #: set in both engines (R30).
 STAGE_EXECUTIONS = ("forward",)
 
-class TritonAudioEngine(AudioSteps):
+class TritonAudioEngine(AudioSteps, ComponentFlowHandler):
     """
     Triton-mode audio flow orchestrator.
 
@@ -36,20 +37,6 @@ class TritonAudioEngine(AudioSteps):
     2. Stage execution (forward, native_kokoro, diffusion, native_acoustic_decoder)
     3. Output postprocessing (tokens->text or waveform->file)
     """
-
-    def __init__(
-        self,
-        ctx,
-        execute_component_fn: Callable,
-        resolve_inputs_fn: Callable,
-        ensure_weights_fn: Callable,
-        unload_weights_fn: Callable,
-    ):
-        self.ctx = ctx
-        self._execute_component = execute_component_fn
-        self._resolve_component_inputs = resolve_inputs_fn
-        self._ensure_weights_loaded = ensure_weights_fn
-        self._unload_component_weights = unload_weights_fn
 
     def _get_compute_dtype(self) -> str:
         """Return compute dtype as a STRING (e.g. "float16", "bfloat16").
@@ -129,7 +116,6 @@ class TritonAudioEngine(AudioSteps):
     # -----------------------------------------------------------------
     # Input preprocessing
     # -----------------------------------------------------------------
-
 
     def _preprocess_audio_input(self, input_config: Dict, stages: List) -> None:
         """Load audio file and extract mel/raw features — ZERO TORCH (R33).
@@ -404,7 +390,6 @@ class TritonAudioEngine(AudioSteps):
     # -----------------------------------------------------------------
     # Output postprocessing
     # -----------------------------------------------------------------
-
 
     def _postprocess_audio_output(self, output_config: Dict) -> None:
         """Process TTS output: decode audio tokens or store raw waveform."""

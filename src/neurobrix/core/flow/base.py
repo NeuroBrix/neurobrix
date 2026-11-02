@@ -147,7 +147,8 @@ class FlowHandler(ABC):
 class ComponentFlowHandler(FlowHandler):
     """A flow handler that runs components through the executor's callables: execute one, resolve its
     inputs, load and unload its weights. The forward-pass, audio, encoder-decoder, audio-LLM, VLM, DualAR,
-    TTS-LLM, next-token-diffusion and RNNT handlers are built this way."""
+    TTS-LLM, next-token-diffusion and RNNT handlers of BOTH branches are built this way (torch-free at load:
+    the Triton handlers inherit it, R33)."""
 
     def __init__(
         self,
@@ -164,7 +165,8 @@ class ComponentFlowHandler(FlowHandler):
         self._unload_component_weights = unload_weights_fn
 
     def _get_component_output(self, comp_name: str) -> Optional["torch.Tensor"]:
-        """A component's primary output tensor (compiled handlers only: torch is imported here, not at load)."""
+        """A component's primary output tensor — the compiled handlers' lookup (torch is imported here, not at load). The
+        Triton handlers that read outputs (audio_llm, vlm, rnnt) define their own, on NBXTensor."""
         import torch
         resolved = self.ctx.variable_resolver.resolved
         for key in [f"{comp_name}.output_0", f"{comp_name}.last_hidden_state", f"{comp_name}.output"]:

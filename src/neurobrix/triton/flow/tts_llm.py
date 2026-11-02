@@ -21,7 +21,7 @@ import time
 from neurobrix import decode_stop
 import numpy as np
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from neurobrix.nbx.neurotax import SynonymRegistry
 from nbxtensor.tensor import NBXTensor
@@ -32,6 +32,7 @@ from nbxtensor.memory.device_transfer import parse_device_idx
 
 # The rule and its history live in core.runtime_values.
 from neurobrix.core.runtime_values import require_max_tokens
+from neurobrix.core.flow.base import ComponentFlowHandler   # the executor's four component callables, both branches
 
 
 # Deterministic sampler seed — shared by both triton modes so triton-seq and
@@ -46,7 +47,7 @@ _TTS_LLM_SEED = 1234
 _TOKEN_EMBED = SynonymRegistry.resolve("embed_tokens")
 
 
-class TritonTTSLLMEngine:
+class TritonTTSLLMEngine(ComponentFlowHandler):
     """
     Triton-mode TTS Speech LM: conditioning + text/speech embeddings
     -> backbone -> speech tokens -> vocoder.
@@ -66,20 +67,6 @@ class TritonTTSLLMEngine:
             execution: forward
             role: vocoder
     """
-
-    def __init__(
-        self,
-        ctx,
-        execute_component_fn: Callable,
-        resolve_inputs_fn: Callable,
-        ensure_weights_fn: Callable,
-        unload_weights_fn: Callable,
-    ):
-        self.ctx = ctx
-        self._execute_component = execute_component_fn
-        self._resolve_component_inputs = resolve_inputs_fn
-        self._ensure_weights_loaded = ensure_weights_fn
-        self._unload_component_weights = unload_weights_fn
 
     def execute(self) -> Dict[str, Any]:
         """Execute TTS-LLM pipeline."""

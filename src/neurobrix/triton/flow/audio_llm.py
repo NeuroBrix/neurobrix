@@ -20,7 +20,7 @@ parameters from the NBX container / defaults.json.
 
 import time
 import numpy as np
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from neurobrix import decode_progress, decode_stop
 from neurobrix.core.flow.shared_steps import effective_sampling as _effective_sampling   # both branches read the sampling alike
@@ -34,6 +34,7 @@ from nbxtensor.ops import index_wrappers as _nbx_index_wrappers  # the family th
 from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.ops import random_wrappers as _nbx_random_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.ops import reduction_wrappers as _nbx_reduction_wrappers  # the family the moved names live in (M2 split)
+from neurobrix.core.flow.base import ComponentFlowHandler   # the executor's four component callables, both branches
 
 
 _DTYPE_STR_TO_NBX = {
@@ -96,24 +97,10 @@ def _sample_token_nbx(
     return int(nxt.item())
 
 
-class TritonAudioLLMEngine:
+class TritonAudioLLMEngine(ComponentFlowHandler):
     """Audio-conditioned LLM (R33): encode audio → project → LLM
     autoregressive decode with audio embeddings. Mirror of
     core/flow/audio_llm.py AudioLLMEngine."""
-
-    def __init__(
-        self,
-        ctx,
-        execute_component_fn: Callable,
-        resolve_inputs_fn: Callable,
-        ensure_weights_fn: Callable,
-        unload_weights_fn: Callable,
-    ):
-        self.ctx = ctx
-        self._execute_component = execute_component_fn
-        self._resolve_component_inputs = resolve_inputs_fn
-        self._ensure_weights_loaded = ensure_weights_fn
-        self._unload_component_weights = unload_weights_fn
 
     def _compute_dtype(self) -> NBXDtype:
         """Prism-plan resolved dtype (triton-side resolver), string → NBXDtype."""

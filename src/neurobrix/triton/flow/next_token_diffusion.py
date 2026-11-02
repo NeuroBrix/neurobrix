@@ -26,7 +26,7 @@ via `uncond + scale*(cond - uncond)`. cfg_scale=1.0 disables it.
 
 import time
 import numpy as np
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype
@@ -39,6 +39,7 @@ from neurobrix.triton.cfg.engine import TritonCFGEngine
 # The rule and its history live in core.runtime_values.
 from neurobrix.core.runtime_values import require_max_tokens
 from neurobrix.core.flow.shared_steps import _require_default, encode_nopad   # both branches
+from neurobrix.core.flow.base import ComponentFlowHandler   # the executor's four component callables, both branches
 
 
 def _to_numpy(t) -> np.ndarray:
@@ -111,7 +112,7 @@ def speaker_prompt_ids(tok, prompt: str, speech_start_id: int) -> List[int]:
     return ids
 
 
-class TritonNextTokenDiffusionEngine:
+class TritonNextTokenDiffusionEngine(ComponentFlowHandler):
     """Triton-mode VibeVoice next-token-diffusion TTS (NBXTensor end-to-end)."""
 
     LM = "model.language_model"
@@ -120,20 +121,6 @@ class TritonNextTokenDiffusionEngine:
     SEMANTIC_TOK = "model.semantic_tokenizer"
     ACOUSTIC_CONN = "model.acoustic_connector"
     SEMANTIC_CONN = "model.semantic_connector"
-
-    def __init__(
-        self,
-        ctx,
-        execute_component_fn: Callable,
-        resolve_inputs_fn: Callable,
-        ensure_weights_fn: Callable,
-        unload_weights_fn: Callable,
-    ):
-        self.ctx = ctx
-        self._execute_component = execute_component_fn
-        self._resolve_component_inputs = resolve_inputs_fn
-        self._ensure_weights_loaded = ensure_weights_fn
-        self._unload_component_weights = unload_weights_fn
 
     # ─── public entry ──────────────────────────────────────────────────────────
     def execute(self) -> Dict[str, Any]:
@@ -215,7 +202,6 @@ class TritonNextTokenDiffusionEngine:
             release_flow_memory(self.ctx.primary_device)
 
         return self.ctx.variable_resolver.resolve_all()
-
 
     # ─── the two generation paths ───────────────────────────────────────────
     def _generate_reprefill(self, prompt_ids, speech_start_id, speech_end_id, speech_diffusion_id,

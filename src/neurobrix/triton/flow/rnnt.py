@@ -20,7 +20,7 @@ No torch imports in hot path.
 import time
 import numpy as np
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype
@@ -28,12 +28,13 @@ from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.memory.memory_pool import release_flow_memory
 from nbxtensor.memory.device_transfer import parse_device_idx
 from neurobrix.core.flow.shared_steps import RNNTSteps, joint_role   # the steps both branches share
+from neurobrix.core.flow.base import ComponentFlowHandler   # the executor's four component callables, both branches
 
 # R30 mirror of core/flow/rnnt.py: the joint's linears as NeMo names them, keyed by the parser.
 
 
 
-class TritonRNNTEngine(RNNTSteps):
+class TritonRNNTEngine(RNNTSteps, ComponentFlowHandler):
     """
     Triton-mode RNNT transducer flow: encoder -> greedy decode (decoder + joint per frame).
 
@@ -43,20 +44,6 @@ class TritonRNNTEngine(RNNTSteps):
     since their tiny graphs have trace-time shapes that don't match the
     variable runtime shapes of greedy decoding.
     """
-
-    def __init__(
-        self,
-        ctx,
-        execute_component_fn: Callable,
-        resolve_inputs_fn: Callable,
-        ensure_weights_fn: Callable,
-        unload_weights_fn: Callable,
-    ):
-        self.ctx = ctx
-        self._execute_component = execute_component_fn
-        self._resolve_component_inputs = resolve_inputs_fn
-        self._ensure_weights_loaded = ensure_weights_fn
-        self._unload_component_weights = unload_weights_fn
 
     def execute(self) -> Dict[str, Any]:
         """Execute RNNT pipeline: preprocess -> encoder -> greedy decode -> text."""

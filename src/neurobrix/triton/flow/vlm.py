@@ -38,7 +38,7 @@ import os
 import time
 import numpy as np
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from neurobrix import decode_progress, decode_stop
 from nbxtensor.tensor import NBXTensor
@@ -53,6 +53,7 @@ from nbxtensor.ops import index_wrappers as _nbx_index_wrappers  # the family th
 from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
 from neurobrix.core.flow.base import requests_speech
 from neurobrix.core.flow.shared_steps import VLMSteps   # the steps both branches share
+from neurobrix.core.flow.base import ComponentFlowHandler   # the executor's four component callables, both branches
 
 
 def _maybe_log_topk(logits, step: int) -> None:
@@ -136,23 +137,9 @@ def tokenize_around_span(tokenizer, prompt: str, span_token_id: int,
     return ids[:first], ids[last + 1:]
 
 
-class TritonVLMEngine(VLMSteps):
+class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
     """Vision-conditioned LLM (R33): encode image → merge embeds →
     mrope decode. Mirror of core/flow/vlm.py VLMEngine."""
-
-    def __init__(
-        self,
-        ctx,
-        execute_component_fn: Callable,
-        resolve_inputs_fn: Callable,
-        ensure_weights_fn: Callable,
-        unload_weights_fn: Callable,
-    ):
-        self.ctx = ctx
-        self._execute_component = execute_component_fn
-        self._resolve_component_inputs = resolve_inputs_fn
-        self._ensure_weights_loaded = ensure_weights_fn
-        self._unload_component_weights = unload_weights_fn
 
     def _compute_dtype(self) -> NBXDtype:
         from neurobrix.triton.dtype import resolve_compute_dtype
@@ -1706,7 +1693,6 @@ class TritonVLMEngine(VLMSteps):
                 "be disjoint (the vendor asserts the same).")
         return ids, img_span, aud_span
 
-
     # ─── mrope positions (numpy; mirror of core VLMEngine) ────────────
 
     @staticmethod
@@ -1792,7 +1778,6 @@ class TritonVLMEngine(VLMSteps):
             if isinstance(v, NBXTensor):
                 return v
         return None
-
 
     def _compute_logits(self, hidden_states: NBXTensor,
                         embed_weight: Optional[NBXTensor],

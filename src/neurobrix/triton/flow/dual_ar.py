@@ -9,7 +9,7 @@ No torch imports in hot path.
 
 import time
 import numpy as np
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype
@@ -19,6 +19,7 @@ from nbxtensor.memory.device_transfer import parse_device_idx
 
 # The rule and its history live in core.runtime_values.
 from neurobrix.core.runtime_values import require_max_tokens
+from neurobrix.core.flow.base import ComponentFlowHandler   # the executor's four component callables, both branches
 
 
 # Shared default sampler seed (R27/R28). The pytorch dual_ar path
@@ -27,7 +28,7 @@ from neurobrix.core.runtime_values import require_max_tokens
 _DUALAR_SEED = 1234
 
 
-class TritonDualAREngine:
+class TritonDualAREngine(ComponentFlowHandler):
     """
     Triton-mode DualAR semantic token generation + codec decoding.
 
@@ -39,20 +40,6 @@ class TritonDualAREngine:
           - component: codec.decoder
             execution: forward
     """
-
-    def __init__(
-        self,
-        ctx,
-        execute_component_fn: Callable,
-        resolve_inputs_fn: Callable,
-        ensure_weights_fn: Callable,
-        unload_weights_fn: Callable,
-    ):
-        self.ctx = ctx
-        self._execute_component = execute_component_fn
-        self._resolve_component_inputs = resolve_inputs_fn
-        self._ensure_weights_loaded = ensure_weights_fn
-        self._unload_component_weights = unload_weights_fn
 
     def execute(self) -> Dict[str, Any]:
         """Execute DualAR pipeline."""

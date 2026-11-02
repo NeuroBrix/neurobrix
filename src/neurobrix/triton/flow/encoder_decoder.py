@@ -13,7 +13,7 @@ from neurobrix import decode_progress, decode_stop
 from neurobrix.core.flow.shared_steps import effective_sampling as _effective_sampling   # both branches read the sampling alike
 from neurobrix.core.flow.shared_steps import _maybe_log_topk   # both branches
 import numpy as np
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import os
 from nbxtensor.tensor import NBXTensor
@@ -21,9 +21,10 @@ from nbxtensor.dtype.nbx_dtype import NBXDtype, parse_dtype
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.memory.memory_pool import release_flow_memory
 from nbxtensor.memory.device_transfer import parse_device_idx
+from neurobrix.core.flow.base import ComponentFlowHandler   # the executor's four component callables, both branches
 
 
-class TritonEncoderDecoderEngine:
+class TritonEncoderDecoderEngine(ComponentFlowHandler):
     """
     Triton-mode encoder-decoder cross-attention flow.
 
@@ -37,20 +38,6 @@ class TritonEncoderDecoderEngine:
             cross_attention_from: model.encoder
             logits_source: embed_weight_tied | self | lm_head
     """
-
-    def __init__(
-        self,
-        ctx,
-        execute_component_fn: Callable,
-        resolve_inputs_fn: Callable,
-        ensure_weights_fn: Callable,
-        unload_weights_fn: Callable,
-    ):
-        self.ctx = ctx
-        self._execute_component = execute_component_fn
-        self._resolve_component_inputs = resolve_inputs_fn
-        self._ensure_weights_loaded = ensure_weights_fn
-        self._unload_component_weights = unload_weights_fn
 
     def execute(self) -> Dict[str, Any]:
         """Execute encoder-decoder pipeline."""
