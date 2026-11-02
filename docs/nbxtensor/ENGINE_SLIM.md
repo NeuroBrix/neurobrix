@@ -79,6 +79,7 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 
 | kind | path | symbol | why it stays |
 |---|---|---|---|
+| wrapper | src/neurobrix/core/cfg/engine.py | execute_component_with_cfg | the CFG engine's public entry, called by both iterative handlers; the Triton engine's converts its inputs at the boundary first, so the two are not one |
 | wrapper | src/neurobrix/_nbxtensor_host.py | active | a host service registered into nbxtensor.host: it imports its engine module when the library first calls it, not at registration (no engine import, no torch, at nbxtensor's load) |
 | wrapper | src/neurobrix/_nbxtensor_host.py | record | a host service registered into nbxtensor.host: it imports its engine module when the library first calls it, not at registration (no engine import, no torch, at nbxtensor's load) |
 | wrapper | src/neurobrix/_nbxtensor_host.py | service | a host service registered into nbxtensor.host: it imports its engine module when the library first calls it, not at registration (no engine import, no torch, at nbxtensor's load) |
@@ -164,7 +165,6 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | duplicate | src/neurobrix/core/runtime/resolution/i2v_conditioning.py | build_condition | the same dispatch, to each branch's own builders (`_build_condition_wan` / `_cogvideox` / `_state_video_mask` of that module): the text is shared, the functions it calls are not |
 | duplicate | src/neurobrix/triton/i2v_conditioning.py | _to_channels_first | the same text over each branch's tensor (torch.Tensor / NBXTensor: `dim`, `permute`, `contiguous` of its own class); one copy per branch, each branch's vace module reads it |
 | duplicate | src/neurobrix/triton/i2v_conditioning.py | build_condition | the same dispatch, to each branch's own builders (`_build_condition_wan` / `_cogvideox` / `_state_video_mask` of that module): the text is shared, the functions it calls are not |
-| duplicate | src/neurobrix/triton/cfg/engine.py | __init__ | the Triton branch's twin of core/cfg/engine.py, which imports torch at module level (R33): the Triton branch cannot inherit from it |
 | duplicate | src/neurobrix/triton/samplers.py | __init__ | the Triton branch's twin of core/module/autoregressive/samplers.py, which imports torch at module level (R33) |
 | wrapper | src/neurobrix/kernels/autotune_certify.py | log | certify's default log when no caller gives one: an unbuffered print, so an hours-long run is read while it runs |
 | wrapper | src/neurobrix/triton/kv_cache.py | intercept(enable_gqa) | the SDPA signature the interceptor stands in for: a graph's call may carry the kwarg, and the interceptor must accept every argument of the op it replaces |

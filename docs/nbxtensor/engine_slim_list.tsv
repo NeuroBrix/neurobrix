@@ -1,9 +1,8 @@
 # The engine's open slimming findings (tools/engine_slim_scan.py); each ends deleted, moved into nbxtensor, or kept
 # with its reason in docs/nbxtensor/ENGINE_SLIM.md. Both figures below may only go down (test_the_engine_only_slims.py).
-# engine_lines: 137052
-# open: 52
+# engine_lines: 137024
+# open: 50
 kind	path	symbol	detail
-duplicate	src/neurobrix/core/cfg/engine.py	__init__	same body as src/neurobrix/triton/cfg/engine.py::__init__
 duplicate	src/neurobrix/core/optim/analyzer.py	walk	same body as 
 duplicate	src/neurobrix/core/optim/passes/algebraic.py	_scalar	same body as nbxtensor/src/nbxtensor/ops/residual_chain.py::_get_scalar
 duplicate	src/neurobrix/core/optim/passes/fusion_vertical.py	is_graph_output	same body as src/neurobrix/triton/sequence.py::_is_graph_output
@@ -34,7 +33,6 @@ duplicate	src/neurobrix/triton/sequence.py	_is_graph_output	same body as src/neu
 fact	src/neurobrix/core/strategies/base.py	transfer_tensor	nbxtensor exposes nbxtensor.memory.device_transfer.transfer_tensor
 fact	src/neurobrix/core/strategies/triton/base.py	transfer_tensor	nbxtensor exposes nbxtensor.memory.device_transfer.transfer_tensor
 fact	src/neurobrix/triton/sequence.py	_parse_dtype	nbxtensor exposes nbxtensor.dtype.nbx_dtype.parse_dtype
-wrapper	src/neurobrix/core/cfg/engine.py	execute_component_with_cfg	only hands its parameters to self._execute_batched_cfg
 wrapper	src/neurobrix/core/flow/audio_utils.py	sample_token(top_p)	no call site passes it: always its default 1.0
 wrapper	src/neurobrix/core/prism/facts_probe.py	gemv_gbps(k)	no call site passes it: always its default 4096
 wrapper	src/neurobrix/core/prism/facts_probe.py	gemv_gbps(n)	no call site passes it: always its default 14336

@@ -14,13 +14,13 @@ Interface:
 
 import math
 import numpy as np
-from enum import Enum, auto
 from typing import Any, Callable, Dict, Optional, TYPE_CHECKING
 
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype, parse_dtype
 from nbxtensor.memory.allocator import DeviceAllocator
 from neurobrix.core.runtime.debug import DEBUG
+from neurobrix.core.cfg_steps import CFGMode, CFGSteps   # the state and steps both engines share
 from neurobrix.core.runtime.resolution.negative_text_mask import negative_mask_for as _negative_mask_for
 from neurobrix.core.runtime.resolution.negative_pooled_condition import negative_swaps as _negative_swaps
 from neurobrix.triton import i2v_conditioning as _i2v
@@ -81,14 +81,8 @@ def guidance_embedding_component(topology: dict):
             return comp_name
     return None
 
-class CFGMode(Enum):
-    """CFG execution mode."""
-    DISABLED = auto()     # No CFG (scale <= threshold)
-    BATCHED = auto()      # Batch [cond, uncond] together (default)
-    SEQUENTIAL = auto()   # Run cond/uncond separately (TP strategy)
 
-
-class TritonCFGEngine:
+class TritonCFGEngine(CFGSteps):
     """
     Unified Classifier-Free Guidance engine — triton mode.
 
@@ -101,25 +95,6 @@ class TritonCFGEngine:
 
     ZERO TORCH: All tensor ops via NBXTensor.
     """
-
-    def __init__(
-        self,
-        ctx: 'FlowContext',
-        execute_component_fn: Callable[[str, str], Any],
-        extract_primary_output_fn: Callable[[str, Any], Any],
-        guidance_scale: float = 7.5,
-        mode: CFGMode = CFGMode.BATCHED,
-    ):
-        self._ctx = ctx
-        self._execute_component = execute_component_fn
-        self._extract_primary_output = extract_primary_output_fn
-        self.guidance_scale = guidance_scale
-        self.mode = mode
-
-    @property
-    def is_enabled(self) -> bool:
-        """Check if CFG is enabled (guidance_scale above threshold)."""
-        return self.mode != CFGMode.DISABLED
 
     @classmethod
     def from_topology(
@@ -478,11 +453,6 @@ class TritonCFGEngine:
     # HELPERS
     # =========================================================================
 
-    def _split_components(self) -> frozenset:
-        """The loop components the plan runs one guidance branch at a time — the plan's decision
-        (`ExecutionPlan.cfg_split_components`), never this engine's."""
-        return frozenset(getattr(self._ctx.plan, "cfg_split_components", None) or ())
-
     def _get_encoder_hidden_states_key(self) -> Optional[str]:
         """Get encoder hidden states variable key from topology connections."""
         topology = self._ctx.pkg.topology
@@ -523,15 +493,6 @@ class TritonCFGEngine:
                             and "image" not in ti):
                         return from_port
         return None
-
-    @staticmethod
-    def apply_guidance(
-        cond_output: NBXTensor,
-        uncond_output: NBXTensor,
-        guidance_scale: float,
-    ) -> NBXTensor:
-        """Pure CFG formula: uncond + scale * (cond - uncond)."""
-        return uncond_output + guidance_scale * (cond_output - uncond_output)
 
 
 # =============================================================================
