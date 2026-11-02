@@ -791,54 +791,75 @@ class DeviceAllocator:
         reclaimed = False
         dm = _rt.device_memory()
         _t0 = time.perf_counter() if pairs else 0.0
-        for r, i in pairs:
-            while True:
-                rc = 2
-                limit = DeviceAllocator._rung_limit(dev)
-                if not (limit is not None and DeviceAllocator._cuda_live_bytes.get(dev, 0) + r.chunk > limit) \
-                        and DeviceAllocator._past_budget(dm, dev, r.chunk) is None:
-                    rc, h = v.create(r.chunk)
-                    if rc == 0:
+        # the physical chunks this mapping's reclaim took back, KEPT to be mapped again where this mapping needs them: a
+        # remap is a map + an access grant, where a release then a create paid the driver's allocation of the bytes
+        # again (SANA-Video 16g: 2 852 chunks of 32 MiB created over a run, 10.6 s of its mapping — vmm_v100.md);
+        # whatever this mapping leaves unused goes back to the driver before it returns
+        spare: list = []
+        try:
+            for r, i in pairs:
+                while True:
+                    rc = 2
+                    if spare:
+                        h = spare.pop()
                         rc = v.map(r.chunk_va(i), r.chunk, h)
                         if rc != 0:
                             v.release(h)
-                if rc == 0:
-                    break
-                if reclaimed:
-                    DeviceAllocator.clear_last_error()
-                    return False
-                # what this mapping still needs, never every free chunk: unmapping them all and mapping them back at the
-                # next growths cost HAT-L x4 4 143 unmaps + remaps per run, 2 s of its 12 (the supervisor 10:55)
-                DeviceAllocator._range_reclaim(dev, need=(len(pairs) - pairs.index((r, i))) * r.chunk)
-                reclaimed = True
-            r.mapped.add(i)
-            r.handles[i] = h
-            DeviceAllocator._POOL.stats["range_maps"] = DeviceAllocator._POOL.stats.get("range_maps", 0) + 1
-            live = DeviceAllocator._cuda_live_bytes.get(dev, 0) + r.chunk
-            DeviceAllocator._cuda_live_bytes[dev] = live
-            if live > DeviceAllocator._cuda_peak_bytes.get(dev, 0):
-                DeviceAllocator._cuda_peak_bytes[dev] = live
-            for _t, _p in (DeviceAllocator._windows.get(dev) or {}).items():
-                if live > _p:
-                    DeviceAllocator._windows[dev][_t] = live
-        if pairs:
-            st = DeviceAllocator._POOL.stats
-            st["range_map_us"] = st.get("range_map_us", 0) + int((time.perf_counter() - _t0) * 1e6)
+                    else:
+                        limit = DeviceAllocator._rung_limit(dev)
+                        if not (limit is not None and DeviceAllocator._cuda_live_bytes.get(dev, 0) + r.chunk > limit) \
+                                and DeviceAllocator._past_budget(dm, dev, r.chunk) is None:
+                            rc, h = v.create(r.chunk)
+                            if rc == 0:
+                                rc = v.map(r.chunk_va(i), r.chunk, h)
+                                if rc != 0:
+                                    v.release(h)
+                    if rc == 0:
+                        break
+                    if reclaimed:
+                        DeviceAllocator.clear_last_error()
+                        return False
+                    # what this mapping still needs, never every free chunk: unmapping them all and mapping them back at
+                    # the next growths cost HAT-L x4 4 143 unmaps + remaps per run, 2 s of its 12 (the supervisor 10:55)
+                    DeviceAllocator._range_reclaim(dev, need=(len(pairs) - pairs.index((r, i))) * r.chunk, keep=spare)
+                    reclaimed = True
+                r.mapped.add(i)
+                r.handles[i] = h
+                DeviceAllocator._POOL.stats["range_maps"] = DeviceAllocator._POOL.stats.get("range_maps", 0) + 1
+                live = DeviceAllocator._cuda_live_bytes.get(dev, 0) + r.chunk
+                DeviceAllocator._cuda_live_bytes[dev] = live
+                if live > DeviceAllocator._cuda_peak_bytes.get(dev, 0):
+                    DeviceAllocator._cuda_peak_bytes[dev] = live
+                for _t, _p in (DeviceAllocator._windows.get(dev) or {}).items():
+                    if live > _p:
+                        DeviceAllocator._windows[dev][_t] = live
+        finally:
+            for h in spare:
+                v.release(h)
+            if pairs:
+                st = DeviceAllocator._POOL.stats
+                st["range_map_us"] = st.get("range_map_us", 0) + int((time.perf_counter() - _t0) * 1e6)
         return True
 
     @staticmethod
-    def _range_unmap(dev: int, r, i: int) -> None:
+    def _range_unmap(dev: int, r, i: int, keep: Optional[list] = None) -> None:
+        """Unmap chunk `i` of `r`; its physical handle released to the driver, or appended to `keep` (a mapping's own
+        reclaim, which maps it again elsewhere in the range)."""
         v = DeviceAllocator._VMM.get(dev)
         v.unmap(r.chunk_va(i), r.chunk)
-        v.release(r.handles.pop(i))
+        h = r.handles.pop(i)
+        if keep is None:
+            v.release(h)
+        else:
+            keep.append(h)
         DeviceAllocator._cuda_live_bytes[dev] = max(0, DeviceAllocator._cuda_live_bytes.get(dev, 0) - r.chunk)
 
     @staticmethod
-    def _range_reclaim(dev: int, need: Optional[int] = None) -> int:
+    def _range_reclaim(dev: int, need: Optional[int] = None, keep: Optional[list] = None) -> int:
         """ONE synchronisation of `dev`, then the mapped chunks lying whole inside free blocks of its ranges unmapped and
         released (nothing a kernel may still read: the work is drained) — the highest addresses first, until `need`
         bytes are given back (None: all of them), the driver segments flushed when the chunks were not enough. The
-        bytes given back."""
+        bytes given back. `keep`: the handles are appended there instead of released (a range mapping's own reclaim)."""
         DeviceAllocator.device_synchronize(dev)
         st = DeviceAllocator._POOL.stats
         st["range_reclaims"] = st.get("range_reclaims", 0) + 1
@@ -848,7 +869,7 @@ class DeviceAllocator:
             if need is not None and out >= need:
                 return out
             st["range_unmaps"] = st.get("range_unmaps", 0) + 1
-            DeviceAllocator._range_unmap(dev, r, i)
+            DeviceAllocator._range_unmap(dev, r, i, keep=keep)
             r.mapped.discard(i)
             out += r.chunk
         return out + DeviceAllocator._pool_flush(dev)

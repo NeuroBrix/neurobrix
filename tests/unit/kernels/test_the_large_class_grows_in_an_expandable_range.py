@@ -111,6 +111,22 @@ def test_a_free_remainder_beside_a_live_block_gives_its_pages_back_at_a_refusal(
     assert not DA._POOL.blocks[b][3], "B stayed live"
 
 
+def test_a_mapping_s_reclaim_maps_the_chunks_it_took_back_without_creating_them_again(card):
+    """The same refusal: the 10 MB request's 5 chunks — the 2 the card still holds are created, then the refusal's
+    reclaim takes back the 3 still needed from the free remainder and they are MAPPED AGAIN, not released and created:
+    creations = the request's chunks - the chunks reclaimed; and no physical chunk outlives the call unmapped (every
+    handle held is a mapped one). Red before the reuse: 5 creations (SANA-Video 16g: 2 852 creations of 32 MiB over a
+    run, vmm_v100.md 2026-11-02)."""
+    DA._rung_limit_bytes[0] = 20 * MB
+    _pinned_remainder()
+    created, unmapped = card.n, DA._POOL.stats.get("range_unmaps", 0)
+    DA.malloc_cuda(10 * MB)
+    reclaimed = DA._POOL.stats.get("range_unmaps", 0) - unmapped
+    assert reclaimed == 3, f"the reclaim took back {reclaimed} chunks, the mapping needed 3"
+    assert card.n - created == 5 - reclaimed, f"{card.n - created} chunks created for a 5-chunk request, {reclaimed} reclaimed"
+    assert card.handles == set(card.mapped.values()), "a reclaimed chunk kept unmapped, or a mapped one released"
+
+
 def test_the_same_remainder_in_a_driver_segment_refuses_the_request(card, monkeypatch):
     """The control: the device measured without VMM (chunk 0) keeps driver segments — the remainder is pinned by B in
     its segment, the refusal's flush returns nothing, the 10 MB request is refused (Wan2.1-I2V's failure, small)."""
