@@ -27,22 +27,10 @@ from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.memory.memory_pool import release_flow_memory
 from nbxtensor.memory.device_transfer import parse_device_idx
-from neurobrix.nbx.neurotax import normalize_tensor_name_strict
-from neurobrix.core.flow.shared_steps import RNNTSteps   # the steps both branches share
+from neurobrix.core.flow.shared_steps import RNNTSteps, joint_role   # the steps both branches share
 
 # R30 mirror of core/flow/rnnt.py: the joint's linears as NeMo names them, keyed by the parser.
-_JOINT_KEYS = {normalize_tensor_name_strict(vendor): role for vendor, role in (
-    ("enc.weight", "enc_weight"), ("enc.bias", "enc_bias"),
-    ("pred.weight", "dec_weight"), ("pred.bias", "dec_bias"),
-    ("joint_net.2.weight", "out_weight"), ("joint_net.2.bias", "out_bias"))}
 
-
-def joint_role(key: str) -> Optional[str]:
-    """The joint-network role of a weight key (the key itself, or the key under a component prefix)."""
-    for canon, role in _JOINT_KEYS.items():
-        if key == canon or key.endswith("." + canon):
-            return role
-    return None
 
 
 class TritonRNNTEngine(RNNTSteps):
@@ -227,14 +215,6 @@ class TritonRNNTEngine(RNNTSteps):
                 np.array([min(actual_frames, expected_frames)], dtype=np.int64))
 
         self._bind_window(features_nbx, length_nbx)
-
-    def _bind_window(self, features_nbx, length_nbx) -> None:
-        # Bind under all possible keys
-        for key in ["global.audio_signal", "global.input_features", "audio_signal",
-                     "input::audio_signal", "encoder.audio_signal"]:
-            self.ctx.variable_resolver.resolved[key] = features_nbx
-        for key in ["global.length", "length", "input::length", "encoder.length"]:
-            self.ctx.variable_resolver.resolved[key] = length_nbx
 
     # -----------------------------------------------------------------
     # RNNT greedy decode (numpy-based for variable shapes)
@@ -469,7 +449,6 @@ class TritonRNNTEngine(RNNTSteps):
     # -----------------------------------------------------------------
     # Output utilities
     # -----------------------------------------------------------------
-
 
     def _decode_tokens(self, tokens: List[int]) -> str:
         """Decode token IDs to text using sentencepiece tokenizer from NBX cache."""

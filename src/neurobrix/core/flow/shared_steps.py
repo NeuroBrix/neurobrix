@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from nbxtensor.tensor import NBXTensor
+from neurobrix.nbx.neurotax import normalize_tensor_name_strict
 
 
 class VLMSteps:
@@ -111,6 +112,13 @@ class AudioSteps:
         print(f"   [Output] Transcription: {text[:100]}{'...' if len(text) > 100 else ''}")
 
 
+# The RNN-T joint's weights, NeuroTax name -> role (both branches' joint).
+_JOINT_KEYS = {normalize_tensor_name_strict(vendor): role for vendor, role in (
+    ("enc.weight", "enc_weight"), ("enc.bias", "enc_bias"),
+    ("pred.weight", "dec_weight"), ("pred.bias", "dec_bias"),
+    ("joint_net.2.weight", "out_weight"), ("joint_net.2.bias", "out_bias"))}
+
+
 class RNNTSteps:
     """The steps the compiled `RNNTEngine` and the Triton `TritonRNNTEngine` ran alike (core/flow/rnnt.py, triton/flow/rnnt.py)."""
 
@@ -132,6 +140,22 @@ class RNNTSteps:
             return None
         sp_paths = list(cache_path.rglob("*.model"))
         return sp_paths[0] if sp_paths else None
+
+    def _bind_window(self, features, length) -> None:
+        # Bind under all possible keys the executor might look for (each branch's own tensors)
+        for key in ["global.audio_signal", "global.input_features", "audio_signal",
+                     "input::audio_signal", "encoder.audio_signal"]:
+            self.ctx.variable_resolver.resolved[key] = features
+        for key in ["global.length", "length", "input::length", "encoder.length"]:
+            self.ctx.variable_resolver.resolved[key] = length
+
+
+def joint_role(key: str) -> Optional[str]:
+    """The joint-network role of a weight key (the key itself, or the key under a component prefix)."""
+    for canon, role in _JOINT_KEYS.items():
+        if key == canon or key.endswith("." + canon):
+            return role
+    return None
 
 
 class StaticGraphSteps:

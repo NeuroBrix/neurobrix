@@ -22,7 +22,7 @@ from neurobrix.core.runtime.resolution import flux_video_conditioning
 from .base import FlowHandler, FlowContext, register_flow
 from neurobrix.core.runtime.progress import StepProgress
 from neurobrix.core.runtime.resolution.negative_pooled_condition import pooled_text_outputs
-from neurobrix.core.flow.iterative_steps import IterativeSteps   # the steps both branches share
+from neurobrix.core.flow.iterative_steps import IterativeSteps, _dump_final_latent   # the steps both branches share
 
 
 def _gate_component_outputs_finite(resolved: Any, comp_name: str) -> None:
@@ -87,38 +87,6 @@ def _gate_loop_state_finite(state: Any, step_idx: int, timestep: Any,
         f"continue to a corrupt output. Set NBX_TRACE_NAN=1 to localise "
         f"the first offending op."
     )
-
-
-def _dump_final_latent(tensor, to_numpy):
-    """Write the final post-denoise latent to `NBX_DUMP_FINAL_LATENT=<dir>`, if armed.
-
-    The latent that ENTERS the decoder, dumped at the one boundary where it is
-    known and named — the `pre_vae` gate, beside the validator that already
-    stands here. Its mirror at the other end of the run is
-    `NBX_DUMP_INIT_LATENT`, which writes the noise the denoise starts from.
-
-    It exists because inferring this tensor from the first decode op requires
-    assuming a normalisation convention read from the vendor's VAE config, and a
-    13 % gap measured under an unverified assumption is not a measurement — it is
-    the assumption, wearing a number. With this the comparison is direct.
-
-    Diagnostic, default off. It writes what the flow already computed.
-    """
-    import os
-    d = os.environ.get("NBX_DUMP_FINAL_LATENT")
-    if not d or tensor is None:
-        return
-    import numpy as np
-    try:
-        arr = to_numpy()
-    except Exception as exc:                    # a dump must never break a run
-        print(f"[final-latent] not dumped ({exc})", flush=True)
-        return
-    os.makedirs(d, exist_ok=True)
-    path = os.path.join(d, "final_latent.npy")
-    np.save(path, np.ascontiguousarray(arr))
-    print(f"[final-latent] {tuple(arr.shape)} {arr.dtype} l2={float(np.linalg.norm(arr)):.4f}"
-          f" -> {path}", flush=True)
 
 
 @register_flow("iterative_process")

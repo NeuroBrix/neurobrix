@@ -21,25 +21,13 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .base import ComponentFlowHandler, register_flow
-from neurobrix.nbx.neurotax import normalize_tensor_name_strict
 
 # The transducer joint's three linears as the vendor names them (NeMo `joint.enc`, `joint.pred`,
 # `joint.joint_net.2`), keyed by the container's parser — the engine never matches the raw spelling
 # (the neurotaxe's rule 8; the complete vocabulary of 2026-10-04 names `enc` `enc_proj`, `pred` `pred_proj`).
-_JOINT_KEYS = {normalize_tensor_name_strict(vendor): role for vendor, role in (
-    ("enc.weight", "enc_weight"), ("enc.bias", "enc_bias"),
-    ("pred.weight", "dec_weight"), ("pred.bias", "dec_bias"),
-    ("joint_net.2.weight", "out_weight"), ("joint_net.2.bias", "out_bias"))}
 
-
-def joint_role(key: str) -> Optional[str]:
-    """The joint-network role of a weight key (the key itself, or the key under a component prefix)."""
-    for canon, role in _JOINT_KEYS.items():
-        if key == canon or key.endswith("." + canon):
-            return role
-    return None
 from .table_gather import gather_rows
-from neurobrix.core.flow.shared_steps import RNNTSteps   # the steps both branches share
+from neurobrix.core.flow.shared_steps import RNNTSteps, joint_role   # the steps both branches share
 
 
 @register_flow("rnnt")
@@ -275,14 +263,6 @@ class RNNTEngine(RNNTSteps, ComponentFlowHandler):
             length = torch.tensor([min(actual_frames, expected_frames)], dtype=torch.long, device=device)
 
         self._bind_window(features, length)
-
-    def _bind_window(self, features, length) -> None:
-        # Bind under all possible keys the executor might look for
-        for key in ["global.audio_signal", "global.input_features", "audio_signal",
-                     "input::audio_signal", "encoder.audio_signal"]:
-            self.ctx.variable_resolver.resolved[key] = features
-        for key in ["global.length", "length", "input::length", "encoder.length"]:
-            self.ctx.variable_resolver.resolved[key] = length
 
     # ─────────────────────────────────────────────────────────
     # RNNT greedy decode
@@ -555,7 +535,6 @@ class RNNTEngine(RNNTSteps, ComponentFlowHandler):
     # ─────────────────────────────────────────────────────────
     # Output utilities
     # ─────────────────────────────────────────────────────────
-
 
     def _decode_tokens(self, tokens: List[int]) -> str:
         """Decode token IDs to text using sentencepiece tokenizer from NBX cache."""

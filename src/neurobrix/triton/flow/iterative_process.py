@@ -20,7 +20,7 @@ from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.memory.memory_pool import release_flow_memory
 from neurobrix.core.runtime.debug import DEBUG
 from neurobrix.core.flow.base import FlowContext
-from neurobrix.core.flow.iterative_steps import IterativeSteps   # the steps both branches share
+from neurobrix.core.flow.iterative_steps import IterativeSteps, _dump_final_latent   # the steps both branches share
 from neurobrix.triton.cfg import TritonCFGEngine
 from neurobrix.triton import i2v_conditioning
 from neurobrix.triton import vace_control_conditioning
@@ -163,29 +163,6 @@ def _to_nbx(tensor, device_idx: int = 0) -> NBXTensor:
             parse_dtype(str(tensor.dtype)), 'cuda',
             owns_data=False, device_idx=didx, base=tensor)
     return tensor
-
-
-def _dump_final_latent(tensor, to_numpy):
-    """Write the final post-denoise latent to `NBX_DUMP_FINAL_LATENT=<dir>`, if armed.
-
-    R30 mirror of the compiled flow's seam, at the same `pre_vae` boundary. Pure
-    numpy out of NBXTensor — no torch (R33).
-    """
-    import os
-    d = os.environ.get("NBX_DUMP_FINAL_LATENT")
-    if not d or tensor is None:
-        return
-    import numpy as np
-    try:
-        arr = to_numpy()
-    except Exception as exc:
-        print(f"[final-latent] not dumped ({exc})", flush=True)
-        return
-    os.makedirs(d, exist_ok=True)
-    path = os.path.join(d, "final_latent.npy")
-    np.save(path, np.ascontiguousarray(arr))
-    print(f"[final-latent] {tuple(arr.shape)} {arr.dtype} l2={float(np.linalg.norm(arr)):.4f}"
-          f" -> {path}", flush=True)
 
 
 class TritonIterativeProcessHandler(IterativeSteps):
