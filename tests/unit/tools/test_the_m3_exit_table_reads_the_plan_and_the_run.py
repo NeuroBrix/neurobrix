@@ -93,7 +93,7 @@ def test_only_an_entry_point_command_is_asked_for_its_plan():
 
 
 def test_a_table_outside_the_workshop_is_refused(tmp_path):
-    import atelier
+    atelier = X.atelier   # the module the tool refuses through (another cell may have re-imported `atelier`)
     f = tmp_path / "rows_card0.jsonl"
     f.write_text(json.dumps({"model": "M", "mode": "triton", "command": "/py -m neurobrix run --model M"}) + "\n")
     with pytest.raises(atelier.OutsideTheAtelier):

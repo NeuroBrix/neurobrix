@@ -26,8 +26,15 @@ import regression_matrix as R  # noqa: E402
 def test_before_kill_runs_while_the_group_is_alive(tmp_path):
     seen = {}
 
+    def _alive(pid):                     # signal 0: the process exists (Linux and macOS alike; no /proc on macOS)
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+
     def before_kill(pgid):
-        seen["alive"] = [p for p in Z.group_pids(pgid) if Path(f"/proc/{p}").exists()]
+        seen["alive"] = [p for p in Z.group_pids(pgid) if _alive(p)]
 
     with open(tmp_path / "log", "w") as fh:
         rc = Z.run_group([sys.executable, "-c", "import time; time.sleep(60)"], dict(os.environ), fh, 2,

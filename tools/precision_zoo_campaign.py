@@ -236,8 +236,13 @@ STACK_MARK = "=== STACK AT TIMEOUT (py-spy dump, taken before the kill) ==="
 
 
 def group_pids(pgid: int) -> list:
-    """Every live process of a process group, read from /proc."""
+    """Every live process of a process group: read from /proc where the system has one (Linux), from `ps` where it
+    does not (macOS — the tool runs on both machines)."""
     import os
+    if not os.path.isdir("/proc"):
+        import subprocess
+        rows = subprocess.run(["ps", "-A", "-o", "pid=,pgid="], capture_output=True, text=True).stdout.split("\n")
+        return sorted(int(p) for p, g in (r.split() for r in rows if len(r.split()) == 2) if int(g) == pgid)
     out = []
     for d in os.listdir("/proc"):
         if not d.isdigit():
