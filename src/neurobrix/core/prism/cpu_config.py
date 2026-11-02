@@ -59,7 +59,7 @@ class CPUConfig:
             if key not in cpu_dict:
                 raise RuntimeError(
                     f"ZERO FALLBACK: cpu.{key} missing in hardware profile.\n"
-                    f"Regenerate profile: delete config/hardware/default.yml "
+                    f"Regenerate profile: delete ~/.neurobrix/hardware/default.yml "
                     f"and run neurobrix without --hardware."
                 )
         return cls(

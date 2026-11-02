@@ -18,7 +18,7 @@ Auto-detection covers:
 - **Interconnect**: NVLink, XGMI, PCIe topology and bandwidth
 - **OS**: Linux, macOS, and Windows
 
-The generated profile is saved to `config/hardware/default.yml` and reused until you delete it.
+The generated profile is saved to `~/.neurobrix/hardware/default.yml` (`default-<tag>.yml` for a process that sees only some of the cards), beside the engine's measured facts, and reused until you delete it. Committed profiles stay in the package's `config/hardware/`; a generated one found there is refused by name.
 
 ## Using `--hardware` (Optional Override)
 

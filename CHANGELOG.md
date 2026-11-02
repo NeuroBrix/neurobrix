@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it reclaimed and created them again — SANA-Video_2B_720p on a V100-16GB mapped 89 GB over a run and was 33-44 % slower
   than without the range. The first launch now replays a real run's allocation trace, which the library carries, with
   the range off and at each candidate chunk, and keeps the smallest within the off replay's noise (32 MiB on the V100
-  16 GB and 32 GB); a reclaim maps its chunks again where they are needed. SANA-Video 16g runs at the off figure, and on
+  16 GB, 64 MiB on the 32 GB); a reclaim maps its chunks again where they are needed. SANA-Video 16g runs at the off figure, and on
   a 32 GB card the range holds 8 GB less at its peak.
 - **Every text, vlm and audio_llm decode samples the same way on both engines, and reads every sampling flag**: the
   temperature, top-k, top-p and repetition penalty are taken from the request (the flag, or the same key in a `serve`
@@ -26,6 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the warm daemon path dropped `--top-k`, `--top-p` and `--max-tokens`; a value no source sets now stops the run
   by name instead of taking a built-in literal. A greedy decode (temperature 0) is unchanged. Documented in the CLI
   reference, "Sampling".
+- **A machine's generated hardware profiles live in one place, beside its measured facts**: `default.yml` and
+  `default-<tag>.yml` are written to `~/.neurobrix/hardware/` instead of the package's `config/hardware/`, so every
+  installation and every source tree on a machine reads the same profile and the facts the engine measures into it
+  (an editable install's trees each kept a copy, four different versions at once on the rack). A generated profile left
+  in the package is refused by name, with the command to move it.
 - **The engine's measured profile facts can no longer be falsified by another process on the card or the host**: the runtime's growth was read from the card's free/total, so a second run on the same card wrote 7 430 MB into Allegro-TI2V's record (654 MB measured alone) and its 16 GB plan was refused. It is now what the driver attributes to this process (NVML's per-process accounting) less the allocator's live bytes, and a backend without that accounting does not measure it, said; records of the old method are no longer read and are measured again. The per-token reload rate is written only from three consecutive runs that agree within 5 % (the storage measure's steadiness), never from a single reading.
 - **The Triton allocator's large class grows in an expandable range on a CUDA device with virtual memory management**: one reserved address range per device, physical chunks mapped into it as the pool grows, and at a refusal one synchronisation, then every mapped chunk lying whole inside a free block unmapped and mapped again where the request needs it — a free remainder beside a live tensor no longer pins its pages (Wan2.1-I2V triton on a V100-16GB was refused a 731 MB attention product with 1.1 GB of 48 MB remainders pinned in driver segments). The method of PyTorch's `expandable_segments`; the chunk is a measured fact of the generated profile (`vmm_chunk_bytes`: the smallest multiple of the granularity whose map costs no more than an ordinary allocation, 2 MiB on V100), refused by name when absent; a device without VMM keeps its driver segments. The small class and the weight arenas are unchanged; `memory.pool.simulate` replays the same rules.
 - **A refused small allocation is retried at the size of the segment the pool records**: a small request grows the device by a 2 MiB segment the pool then carves later small blocks from, but the retries after a refusal (the pool's flush, the idle slabs' release, the opt-in collection) asked the driver for the request's bytes — a 1 KiB driver allocation the pool treated as 2 MiB. Found while reading the allocator for the expandable segments (2026-11-02), on the path a full card takes; a test pins it.

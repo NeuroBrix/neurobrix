@@ -27,8 +27,10 @@ def _rows(path, model):
 
 
 def test_the_derived_rows_are_the_walked_rows(tmp_path):
-    if not (REPO / "src/neurobrix/config/hardware" / f"{PROFILE}.yml").exists():
-        pytest.fail(f"the rack's profile {PROFILE} is not in this tree (an ignored file: copy it in)")
+    from neurobrix.core.prism.loader import profile_path
+    if not profile_path(PROFILE).exists():
+        pytest.fail(f"the rack's profile {PROFILE} is not at {profile_path(PROFILE)} (the machine's generated "
+                    f"profiles: written by its first launch)")
     table = REPO / "src/neurobrix/config/census/nvidia/volta/16g.jsonl"
     walked = _rows(table, MODEL)
     assert walked, f"the committed table holds no walked rows for {MODEL}"

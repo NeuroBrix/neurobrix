@@ -87,16 +87,9 @@ def full_sha(repo: Path, rev: str) -> str:
     return git(repo, "rev-parse", "--verify", f"{rev}^{{commit}}").strip()
 
 
-def main_checkout(repo: Path) -> Path:
-    """The main working tree of the repository (a worktree's machine files live there)."""
-    common = Path(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir").strip())
-    return common.parent
-
-
 def tree_of(repo: Path, sha: str, scratch: Path = SCRATCH) -> Path:
-    """The tree of one commit, materialized once under scratch/trees/<sha12> (git archive), with the hardware
-    profiles the engine reads but git does not carry (config/hardware/*.yml are machine files of the main
-    checkout)."""
+    """The tree of one commit, materialized once under scratch/trees/<sha12> (git archive), with the machine's
+    generated hardware profiles when that tree reads them from its package (see below)."""
     d = scratch / "trees" / sha[:12]
     if (d / ".complete").is_file():
         return d
@@ -107,12 +100,17 @@ def tree_of(repo: Path, sha: str, scratch: Path = SCRATCH) -> Path:
     if arch.returncode != 0:
         raise SystemExit(f"REFUSED: git archive {sha} failed: {arch.stderr.decode()[:200]}")
     subprocess.run(["tar", "-x", "-C", str(tmp)], input=arch.stdout, check=True)
-    hw_src = main_checkout(repo) / "src" / "neurobrix" / "config" / "hardware"
-    hw_dst = tmp / "src" / "neurobrix" / "config" / "hardware"
-    hw_dst.mkdir(parents=True, exist_ok=True)
-    for y in hw_src.glob("*.yml"):
-        if not (hw_dst / y.name).exists():
-            shutil.copy2(y, hw_dst / y.name)
+    # The machine's GENERATED profiles live in ONE place (core/prism/loader.GENERATED_DIR, ~/.neurobrix/hardware): a
+    # tree whose loader reads them there gets none copied in (a copy in its package is refused by name); a tree from
+    # before that reads them from its own config/hardware/, so it gets the machine's, from that one place.
+    loader_src = (tmp / "src" / "neurobrix" / "core" / "prism" / "loader.py").read_text()
+    if "GENERATED_DIR" not in loader_src:
+        hw_src = Path(os.path.expanduser("~")) / ".neurobrix" / "hardware"
+        hw_dst = tmp / "src" / "neurobrix" / "config" / "hardware"
+        hw_dst.mkdir(parents=True, exist_ok=True)
+        for y in hw_src.glob("default*.yml"):
+            if not (hw_dst / y.name).exists():
+                shutil.copy2(y, hw_dst / y.name)
     (tmp / ".complete").write_text(sha + "\n")
     # two scopes (one per class) extract the same tree at once (gate final, 2026-10-27: the 16g scope died on
     # "Directory not empty" after removing the tree the 32g one had just completed): a COMPLETE tree is never

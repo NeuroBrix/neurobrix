@@ -23,7 +23,7 @@ Supports:
   Hygon DCU  — rocm-smi (DTK fork)
   Cambricon  — cnmon
 
-Called when --hardware is omitted. Creates config/hardware/default.yml once.
+Called when --hardware is omitted. Creates ~/.neurobrix/hardware/default.yml once (core/prism/loader.GENERATED_DIR).
 """
 
 import platform
@@ -39,8 +39,9 @@ from typing import Any, Dict, List, Optional, Tuple
 # CONSTANTS
 # ============================================================================
 
-# Same directory as all other hardware profiles (config/hardware/)
-HARDWARE_DIR = Path(__file__).parent.parent.parent / "config" / "hardware"
+# Where this machine's GENERATED profiles are written and completed: ONE place per machine, beside the measured-facts
+# store (core/prism/loader.GENERATED_DIR — the committed profiles stay in the package's config/hardware/).
+from neurobrix.core.prism.loader import GENERATED_DIR as HARDWARE_DIR
 DEFAULT_PROFILE_PATH = HARDWARE_DIR / "default.yml"
 
 # ---------------------------------------------------------------------------
