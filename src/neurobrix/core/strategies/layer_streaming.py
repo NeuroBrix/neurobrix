@@ -94,16 +94,36 @@ def _weights_bytes(executor) -> int:
     return n
 
 
+#: (component, engine) -> [(bytes, seconds) of each run's reloads]: the draws a steady reload rate is read from
+_RELOAD_DRAWS: Dict[tuple, list] = {}
+
+
 def _note_reload(executor, nbx_path, component: str, reloaded_bytes: int, seconds: float) -> None:
     """The engine's own measure of its per-token reload, handed to the active generated profile
-    (`autodetect.note_reload_rate`): the fact Prism prices a streamed piece's reload with."""
+    (`autodetect.note_reload_rate`): the fact Prism prices a streamed piece's reload with. A rate a neighbour can
+    disturb is no fact (the supervisor 2026-11-02 09:50): it is written only from three consecutive runs whose rates
+    agree within the steadiness the storage measure uses (`nbxtensor.io.read_rate`: 5 %), their median; an unsteady
+    reading is said, never written."""
     from neurobrix.core.prism import autodetect as _ad
     stored = _ad.stored_major(nbx_path, component)
-    if stored is None:
+    if stored is None or seconds <= 0:
         return
     engine = "triton" if str(getattr(executor, "mode", "")).startswith("triton") else "compiled"
-    _ad.note_reload_rate(_ad.ACTIVE_HARDWARE_ID, engine, stored, int(reloaded_bytes), float(seconds),
-                         f"{os.path.basename(str(nbx_path))}:{component}")
+    draws = _RELOAD_DRAWS.setdefault((component, engine), [])
+    draws.append((int(reloaded_bytes), float(seconds)))
+    if len(draws) < 3:
+        return
+    last = draws[-3:]
+    rates = sorted(b / s for b, s in last)
+    med = rates[1]
+    if rates[-1] - rates[0] > 0.05 * med:
+        if len(draws) % 3 == 0:
+            print(f"   [Reload] {component}: per-token reload not steady ({', '.join(f'{r / 1e9:.3f}' for r in rates)}"
+                  f" GB/s over the last three runs): not recorded", flush=True)
+        return
+    b, sec = sum(x[0] for x in last), sum(x[1] for x in last)
+    _ad.note_reload_rate(_ad.ACTIVE_HARDWARE_ID, engine, stored, b, b / med,
+                         f"{os.path.basename(str(nbx_path))}:{component}, median of 3 steady runs")
 
 class LayerStreamingStrategy(ExecutionStrategy):
     """One segment resident at a time, inside a single component."""
