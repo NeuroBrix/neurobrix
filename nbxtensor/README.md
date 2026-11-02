@@ -24,8 +24,9 @@ lives in `nbxtensor/` of the NeuroBrix repository until the extraction is comple
 
 ## Status
 
-The library is being moved out of the engine, area by area (`docs/nbxtensor/MIGRATION.md` in the NeuroBrix
-repository). This README documents what is in the library TODAY; every example below is executed by
+Every area below is in the library, and every public name is documented in `docs/nbxtensor/API.md` (the list of
+undocumented names is empty and a test keeps it so). What remains before 0.0.1 is in `docs/nbxtensor/MIGRATION.md` of
+the NeuroBrix repository. This README documents what is in the library TODAY; every example below is executed by
 `nbxtensor/tests/test_readme.py`, so an example that stops working fails a test. The target API is
 `docs/nbxtensor/API.md`.
 
@@ -34,7 +35,7 @@ repository). This README documents what is in the library TODAY; every example b
 | `nbxtensor.dtype` | yes | the dtype table (`dtypes.yml`) and its reader, the enum's tables derived from it, host bfloat16 conversions, the promotion rules |
 | `nbxtensor.shape` | yes | numel, strides, contiguity, the view rule, broadcasting, slice bounds |
 | `nbxtensor.random` | yes | seeded random streams and draws |
-| `nbxtensor.tensor`, `memory`, `backend`, `ops`, `quant` | moved in, public names being fixed (M2) | the tensor class, the allocators, the device backends, the Triton kernels and their cost declarations |
+| `nbxtensor.tensor`, `memory`, `backend`, `ops`, `quant` | yes | the tensor class, the allocators, the device backends, the Triton kernels and their cost declarations |
 | `nbxtensor.host` | yes | the services still passed by an application while the boundary is cleaned (below; API.md section 11) |
 
 ## Installation
