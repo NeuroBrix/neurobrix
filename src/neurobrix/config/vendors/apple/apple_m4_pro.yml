@@ -341,7 +341,8 @@ host_measured:
   # what the loader takes to RELOAD a streamed piece's weights onto the device (container read through the page cache,
   # decode, bf16->fp16 conversion, upload), measured on Janus-Pro-7B triton 2026-10-27 19:0x on stable f8def0b9: the
   # language model's 2 segments (13.8 GB together, fp16) re-read 716 times in 2 348 s -> 3.28 s per 6.9 GB segment
-  weight_reload_gbps: 2.1
+  # per engine and stored dtype (the estimator's key, time_estimate.reload_bps): this one is the triton loader on BF16
+  weight_reload_gbps: {triton: {BF16: 2.1}}
   # what a sliced stretch whose inputs wait on the host moves through host memory per second (its slices cut from the
   # host tensors + its outputs assembled), measured IN SITU by the Mac 2026-10-28 05:12-05:16 on stable 58b39d7e
   # (mochi-1-preview native at an imposed 8 GB rung, per-call timing inside each pass, synced): the two host-read

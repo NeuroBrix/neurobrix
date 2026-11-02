@@ -107,18 +107,25 @@ def test_a_load_is_priced_at_the_engine_s_own_measured_loader_rate():
 
 def test_a_reloaded_piece_pays_the_loader_at_every_use_after_the_first():
     """layer_streaming reloads a piece from the container at every use: the first at the loader's cold rate, the next
-    ones at the measured reload rate when the profile states one (`weight_reload_gbps`), else the loader's warm rate."""
+    ones at the engine's measured reload rate (`weight_reload_gbps.{engine}.{stored}`) — refused by name without it,
+    never the loader's whole-component warm rate in its place (the supervisor 2026-11-02 06:40: Janus-Pro-7B native
+    16g priced at the warm rate chose layer_streaming, 674 s estimated, 1 151 s measured). What this test would do if
+    the code fell back: the warm-rate seconds, no refusal — RED."""
     facts = T.device_facts({"matmul_tflops": {"float16": 42.3}, "memory_gbps": 789, "h2d_gbps": 8.0,
                             "weight_load_gbps": {"triton": {"BF16": {"device": {"cold": 2.0, "warm": 4.0}}}}}, "cuda:0")
     w = {"lm": Work(flops=0.0, weight_bytes=8e9, activation_bytes=0.0)}
-    t = T.plan_seconds("layer_streaming", {"lm": "cuda:0"}, w, {"lm": 10}, {"cuda:0": facts}, None, "float16",
+    with pytest.raises(T.MissingFact, match="weight_reload_gbps.triton.BF16"):
+        T.plan_seconds("layer_streaming", {"lm": "cuda:0"}, w, {"lm": 10}, {"cuda:0": facts}, None, "float16",
                        engine="triton", stored=ST)
     use = 10 * 8e9 / 789e9                                                            # ten memory-bound uses
-    assert abs(t - use - (8e9 / 2e9 + 9 * 8e9 / 4e9)) < 1e-6
-    host = T.HostFacts(matmul_flops=1e12, memory_bps=100e9, reload_bps=1e9)
+    host = T.HostFacts(matmul_flops=1e12, memory_bps=100e9, reload_gbps={"triton": {"BF16": 1.0}})
     t = T.plan_seconds("layer_streaming", {"lm": "cuda:0"}, w, {"lm": 10}, {"cuda:0": facts}, host, "float16",
                        engine="triton", stored=ST)
     assert abs(t - use - (8e9 / 2e9 + 9 * 8e9 / 1e9)) < 1e-6
+    # a single use reloads nothing: no reload fact is asked
+    t1 = T.plan_seconds("layer_streaming", {"lm": "cuda:0"}, w, {"lm": 1}, {"cuda:0": facts}, None, "float16",
+                        engine="triton", stored=ST)
+    assert abs(t1 - 8e9 / 789e9 - 8e9 / 2e9) < 1e-6
 
 
 def test_a_lazy_plan_s_host_held_component_lands_in_host_memory_then_streams():
