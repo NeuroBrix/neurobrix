@@ -2073,9 +2073,19 @@ class PrismSolver:
         no measurement of the factor exists on them, and a factor applied where it was not
         measured is a guess wearing a number."""
         if str(getattr(self, "_mode", "compiled")).startswith("triton"):
-            # the KV cache inside the figure is one allocation made once, not the arena's activations
+            # The allocator's own replay of the walk (`ActivationProfile.held_peak_bytes`: every allocation and free
+            # of the walk through the pool and the hot loop's deferred queue, `nbxtensor.memory.pool.simulate`),
+            # the component's weight arena beside it taken out — in place of the profiled peak times the device's
+            # measured `triton_arena_activation_factor` (M3, 2026-11-01). The KV cache is one allocation the state
+            # engine makes once, outside the walk: added back as it is.
+            held = getattr(mem, "held_peak_bytes", None)
+            if held is None:
+                raise PlanNotComputable(
+                    f"'{mem.component_name}': no replay of its walk through the allocator (its activations were not "
+                    f"profiled from a graph), so what the Triton arena holds while it runs whole is unknown — a "
+                    f"factor over a guessed figure is not a measure")
             kv_mb = int(getattr(mem, "kv_bytes", 0) or 0) / (1024 * 1024)
-            return (float(mem.activation_mb) - kv_mb) * self._triton_arena_factor(dev) + kv_mb
+            return (float(held) - float(getattr(mem, "arena_bytes", 0) or 0)) / (1024 * 1024) + kv_mb
         return float(mem.activation_mb)
 
     def _pool_rules(self, profile) -> Optional[Dict[str, Any]]:
@@ -4569,7 +4579,8 @@ class PrismSolver:
 
             overhead_bytes = self._overhead_bytes(weight_bytes, activation_bytes, activation_profiled)
             # What the Triton allocator holds at its peak, the walk replayed through its pool and its deferred queue
-            # (`ActivationProfile.held_peak_bytes`), beside the component's arena: stated, read by no decision yet.
+            # (`ActivationProfile.held_peak_bytes`), beside the component's arena: what `_live_activation_mb` prices
+            # a component held whole at (M3).
             held_peak_bytes = None
             if _kept is not None and _kept.held_peak_bytes is not None:
                 held_peak_bytes = int(_kept.held_peak_bytes) + int(arena_bytes or 0)
