@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 from .base import FlowHandler, FlowContext, register_flow
 from .table_gather import gather_rows
 from neurobrix.core.memory.manager import release_flow_memory
+from neurobrix.core.flow.decoder_cache import _session_dag   # both branches read the session's DAG alike
 
 _SENTINEL = object()
 
@@ -562,28 +563,6 @@ class ImageStrategy(GenerationStrategy):
 # ═══════════════════════════════════════════════════════════════════════════════
 # AutoregressiveHandler — Universal Loop
 # ═══════════════════════════════════════════════════════════════════════════════
-
-def _session_dag(executor, graph_path: Path, lm_name: str) -> Dict[str, Any]:
-    """The DAG a session reads its input contract from: the executor's
-    parsed DAG when the executor exists (warm serve, every request after
-    the first), the graph.json file only when the executor has yet to be
-    created (cold CLI path, first serve request). ZERO FALLBACK on a
-    live executor without a DAG. Triton mirror: triton/flow/
-    autoregressive.py::_session_dag (R30, separate implementation)."""
-    if executor is not None:
-        dag = getattr(executor, "dag", None)
-        if dag is None:
-            raise RuntimeError(
-                f"ZERO FALLBACK: executor for '{lm_name}' holds no DAG "
-                f"(load_graph_from_dict never ran) — cannot create a session.")
-        return dag
-    if not graph_path.exists():
-        raise RuntimeError(
-            f"ZERO FALLBACK: graph.json not found for '{lm_name}'.\n"
-            f"Expected at: {graph_path}"
-        )
-    with open(graph_path, 'r') as f:
-        return json.load(f)
 
 
 @register_flow("autoregressive_generation")

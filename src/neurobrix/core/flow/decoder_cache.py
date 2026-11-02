@@ -12,9 +12,11 @@ TTS-LLM and dual-AR flows, which re-forwarded their whole context at every token
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
-from typing import Any, Optional
+from pathlib import Path
+from typing import Any, Dict, Optional
 
 
 def open_decoder_cache(ctx, dec_name: str, max_tokens: int):
@@ -77,6 +79,29 @@ def open_decoder_cache(ctx, dec_name: str, max_tokens: int):
               f"heads={plan['num_heads']} d={plan['head_dim']} max={kv.max_cache_len}, {how}")
     wrapper.reset_for_new_sequence()
     return wrapper
+
+
+def _session_dag(executor, graph_path: Path, lm_name: str) -> Dict[str, Any]:
+    """The DAG a session reads its input contract from: the executor's
+    parsed DAG when the executor exists (warm serve, every request after
+    the first), the graph.json file only when the executor has yet to be
+    created (cold CLI path, first serve request). ZERO FALLBACK on a
+    live executor without a DAG. Both branches' autoregressive handlers
+    read it (it touches no tensor)."""
+    if executor is not None:
+        dag = getattr(executor, "dag", None)
+        if dag is None:
+            raise RuntimeError(
+                f"ZERO FALLBACK: executor for '{lm_name}' holds no DAG "
+                f"(load_graph_from_dict never ran) — cannot create a session.")
+        return dag
+    if not graph_path.exists():
+        raise RuntimeError(
+            f"ZERO FALLBACK: graph.json not found for '{lm_name}'.\n"
+            f"Expected at: {graph_path}"
+        )
+    with open(graph_path, 'r') as f:
+        return json.load(f)
 
 
 class DecodeSteps:

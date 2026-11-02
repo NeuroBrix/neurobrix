@@ -26,7 +26,7 @@ from neurobrix.core.runtime_values import require_max_tokens
 # both engines' sessions (core/runtime/lm_facts.py)
 from neurobrix.core.runtime.lm_facts import (  # noqa: F401  (re-exported for the census)
     image_guidance_weight as image_cfg_weight, lm_config_of as session_lm_config, session_lm_name)
-
+from neurobrix.core.flow.decoder_cache import _session_dag   # both branches read the session's DAG alike
 
 
 def _flatten_tokenizer_output(token_ids: Any) -> List[int]:
@@ -67,29 +67,6 @@ def _build_generator_config(defaults: Dict, resolver: Any) -> Dict[str, Any]:
             elif key in resolved and resolved[key] is not None:
                 config[key] = resolved[key]
     return config
-
-
-
-def _session_dag(executor, graph_path: Path, lm_name: str) -> Dict[str, Any]:
-    """The DAG a session reads its input contract from: the executor's
-    parsed DAG (the triton path always has its executor by the time a
-    session is created); the graph.json file only for an executor-less
-    context. ZERO FALLBACK on a live executor without a DAG. Compiled
-    mirror: core/flow/autoregressive.py::_session_dag (R30)."""
-    if executor is not None:
-        dag = getattr(executor, "dag", None)
-        if dag is None:
-            raise RuntimeError(
-                f"ZERO FALLBACK: executor for '{lm_name}' holds no DAG "
-                f"(load_graph_from_dict never ran) — cannot create a session.")
-        return dag
-    if not graph_path.exists():
-        raise RuntimeError(
-            f"ZERO FALLBACK: graph.json not found for '{lm_name}'.\n"
-            f"Expected at: {graph_path}"
-        )
-    with open(graph_path, 'r') as f:
-        return json.load(f)
 
 
 def _phase_mem_note() -> str:
