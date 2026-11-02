@@ -13,6 +13,10 @@ exists today, cited `file:line` on that commit, and judged against two rules:
 
 Section 9 lists what today's code does that this API does not keep, and why.
 
+A reference `nbx_tensor.py:N` (or `kernels/nbx_tensor.py:N`) names the engine file every item came from before the
+move (one file until M1, 2026-10-28): its provenance, not where it lives now — the module each section documents
+is where it lives.
+
 ## 1. Plain data at the edges
 
 | concept | Python v1 | Rust v2 | today |
@@ -29,7 +33,7 @@ Section 9 lists what today's code does that this API does not keep, and why.
 The library never reads a NeuroBrix profile, a family file or a model name (rule 3). Device facts reach
 it as plain values: a `Capabilities` record, a matrix-unit description `dict`.
 
-## 2. `nbxtensor.dtype` — the one table (M2, Mac)
+## 2. `nbxtensor.dtype` — the one table
 
 The dense entries of `config/dtypes.yml` move into the library as its data file. Its two readers,
 `triton/itemsize.py` and the `_DTYPE_SIZES` dict in kernels/nbx_tensor.py:192, become one module.
@@ -2418,7 +2422,7 @@ def default_classes() -> Dict[str, FrozenSet[str]]
 CLASSES = ("float32", "lower", "promote", "float32_half_io", "scalar_fill", "creation_fill")
 ```
 
-## 3. `nbxtensor.shape` — pure functions on integers (M2, Mac)
+## 3. `nbxtensor.shape` — pure functions on integers
 
 Each one is the code that runs today, moved and exported unchanged. Each is a pure function from ints to
 ints, so a Rust port is mechanical.
@@ -2489,7 +2493,7 @@ to_device(t, device: Device, *, pinned: bool = False, stream: int | None = None)
 pin(t) -> Tensor                         # pin_host
 ```
 
-## 5. `nbxtensor.device` and capabilities (M2, Mac for Metal)
+## 5. `nbxtensor.device` and capabilities
 
 ```python
 nbxtensor.device.devices() -> list[Device]          # detection (nbx_tensor.py:2668 gpu_backend)
@@ -2553,7 +2557,7 @@ class DeviceOOMError(RuntimeError): requested: int; device: Device; live: int; p
 The replay `SlabAllocator`, the arena and the pool sit behind this interface. That is the Dell's M2 work;
 this section only names the surface.
 
-## 7. `nbxtensor.ops` (surface for M2/M3; the Dell owns the move)
+## 7. `nbxtensor.ops`
 
 ```python
 nbxtensor.ops.get(name: str) -> Op       # kernels/dispatch.py:1213 dispatch(op_type); unknown name: KeyError naming it
@@ -2577,32 +2581,31 @@ the engine and is passed in.
 
 | today | where | v1 |
 |---|---|---|
-| `.to(*args, **kwargs)`: a dtype, a device string or a tensor, guessed from `str()` | nbx_tensor.py:4407 | `astype`, `to_device` |
-| `.dtype` returns a `triton.language` dtype | nbx_tensor.py:3328 | `DType`; Triton dtype derived inside the launcher |
-| `.device` returns the tensor itself | nbx_tensor.py:3338 | `Device` |
-| `parse_dtype(d)` takes any object through `str(d)`, `"torch."` stripped | nbx_tensor.py:310 | `dtype(name: str)`; torch spellings normalised at the engine's graph boundary |
-| `canonical_name` accepts a torch dtype by its `__module__` | triton/itemsize.py `canonical_name` | the engine's mirror keeps it; the library takes `DType` or `str` |
-| `empty(shape, dtype=None, device='cuda')`: float32 and the current device by default | nbx_tensor.py:3527 | dtype and device required |
-| capability dicts mutated by `set_backend_has_fp64` / `declare_backend_capability` | nbx_tensor.py:420,519 | frozen `Capabilities` |
-| allocator state in class-level dicts | nbx_tensor.py:1040 | `Allocator` per device |
-| device fault channel in module globals (`_FAULT_MESSAGES`, `_FAULT_BUFFERS`) | nbx_tensor.py:586 | a field of the device runtime object (M2) |
-| current device cached in `threading.local` | nbx_tensor.py:975 | explicit `Device` everywhere |
-| `numpy_staging_dtype(dt)` falls back to float32 for any dtype it does not list | triton/dtype.py:529 (`.get(dtype, np.float32)`) | removed: `to_numpy` / `from_numpy` own the host mapping and refuse by name |
-| torch hand-off (`nbx_to_torch`, `nbx_dtype_to_torch`, `set_torch_device`, `torch_device_str`) | nbx_tensor.py:326,693-800 | stays in the engine until DLPack replaces it (rule 6) |
+| `.to(*args, **kwargs)`: a dtype, a device string or a tensor, guessed from `str()` | `nbxtensor/src/nbxtensor/tensor.py` `to` | `astype`, `to_device` |
+| `.dtype` returns a `triton.language` dtype | `nbxtensor/src/nbxtensor/tensor.py` `dtype` | `DType`; Triton dtype derived inside the launcher |
+| `.device` returns the tensor itself | `nbxtensor/src/nbxtensor/tensor.py` `device` | `Device` |
+| `parse_dtype(d)` takes any object through `str(d)`, `"torch."` stripped | `nbxtensor/src/nbxtensor/dtype/nbx_dtype.py` `parse_dtype` | `dtype(name: str)`; torch spellings normalised at the engine's graph boundary |
+| `canonical_name` accepts a torch dtype by its `__module__` | `nbxtensor/src/nbxtensor/dtype/itemsize.py` `canonical_name` | the engine's mirror keeps it; the library takes `DType` or `str` |
+| `empty(shape, dtype=None, device='cuda')`: float32 and the current device by default | `nbxtensor/src/nbxtensor/tensor.py` `empty` | dtype and device required |
+| capability dicts mutated by `set_backend_has_fp64` / `declare_backend_capability` | `nbxtensor/src/nbxtensor/backend/capabilities.py` | frozen `Capabilities` |
+| allocator state in class-level dicts | `nbxtensor/src/nbxtensor/memory/allocator.py` `DeviceAllocator` | `Allocator` per device |
+| device fault channel in module globals (`_FAULT_MESSAGES`, `_FAULT_BUFFERS`) | `nbxtensor/src/nbxtensor/backend/faults.py` | a field of the device runtime object |
+| current device cached in `threading.local` | `nbxtensor/src/nbxtensor/backend/runtime.py` | explicit `Device` everywhere |
+| `numpy_staging_dtype(dt)` falls back to float32 for any dtype it does not list | gone (it was triton/dtype.py) | done: `to_numpy` / `from_numpy` own the host mapping and refuse by name |
+| torch hand-off (`nbx_to_torch`, `nbx_dtype_to_torch`, `set_torch_device`, `torch_device_str`) | the engine: `src/neurobrix/kernels/torch_interop.py` | stays in the engine until DLPack replaces it (rule 6) |
 | torch-style conveniences (`float()`, `half()`, `long()`, `type_as`, `new_zeros`, `item`, `size()`, `dim()`) | NBXTensor | engine compatibility only, not exported; they disappear with their callers |
 | arithmetic dunders (`__add__`, `__mul__` …) launching kernels | NBXTensor | `nbxtensor.ops`; the dunders stay as sugar calling the op |
 
-## 10. Open points for the supervisor
+## 10. Open points
 
-1. **The enum and the table disagree.** The table carries `uint16`, `uint32`, `uint64`, `float8_e4m3fn`,
+1. **The enum and the table disagree (still, 2026-11-02).** The table carries `uint16`, `uint32`, `uint64`, `float8_e4m3fn`,
    `float8_e5m2` and `tfloat32`, which the enum lacks. This proposal appends the storage dtypes to the enum.
    `tfloat32` is a compute format with no storage of its own, so it is not a `DType`.
-2. **Policy mixed with mechanism in triton/dtype.py.** The AMP op sets and `TritonDtypeEngine` are policy
-   and stay in the engine (rule 3). `matrix_unit_representation` (triton/dtype.py:312) is a device fact
-   read as a plain dict and moves to `ops`. `contraction_accumulator_dtype` and `saturate_scalar` are
-   mechanism and move to `dtype`.
-3. **Dependency on the Dell's launcher.** The `.dtype` change (section 4) needs the launcher to stop
-   reading the Triton dtype off the argument. It is listed as a precondition of the `Tensor` part of M2.
+2. **Policy mixed with mechanism in triton/dtype.py — done.** The AMP op sets and `TritonDtypeEngine` stay in the
+   engine (rule 3); `contraction_accumulator_dtype` and `matrix_unit_representation` are in `nbxtensor.dtype.operands`,
+   `saturate_scalar` in `nbxtensor.dtype.convert`.
+3. **Dependency on the launcher (still open, 2026-11-02).** The `.dtype` change (section 4) needs the launcher to stop
+   reading the Triton dtype off the argument (`backend/launcher.py` reads `arg.dtype` to bind and to key).
 
 ## 11. The boundary: every host service is generic in the library or goes back to the engine (Hocine 29/10 16:28)
 
