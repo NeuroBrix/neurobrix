@@ -10091,12 +10091,6 @@ class PrismImportPlanner:
 # CONVENIENCE FUNCTION
 # =============================================================================
 
-def solve(container: "NBXContainer", profile: PrismProfile, input_config: Optional[InputConfig] = None,
-          mode: str = "compiled") -> ExecutionPlan:
-    """Convenience wrapper for PrismSolver.solve()"""
-    return PrismSolver().solve(container, profile, input_config, mode=mode)
-
-
 def plan_record(plan: "ExecutionPlan") -> dict:
     """The plan as a client reads it — the same fields `explain_plan` prints,
     read from the plan and never recomputed, so the record is what will run."""

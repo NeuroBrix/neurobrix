@@ -39,9 +39,7 @@ from typing import Any, Dict, List, Optional, Tuple
 # CONSTANTS
 # ============================================================================
 
-# Where this machine's GENERATED profiles are written and completed: ONE place per machine, beside the measured-facts
-# store (core/prism/loader.GENERATED_DIR — the committed profiles stay in the package's config/hardware/).
-from neurobrix.core.prism.loader import GENERATED_DIR as HARDWARE_DIR
+from neurobrix.core.prism.loader import GENERATED_DIR as HARDWARE_DIR   # the generated profiles' one place per machine
 DEFAULT_PROFILE_PATH = HARDWARE_DIR / "default.yml"
 
 # ---------------------------------------------------------------------------
