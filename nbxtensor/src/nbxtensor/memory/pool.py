@@ -351,22 +351,6 @@ def range_unmapped(pool: "SegmentPool", dev: int, ptr: int, nbytes: int) -> List
     return [(r, i) for i in r.chunks_touching(ptr, ptr + nbytes) if i not in r.mapped]
 
 
-def unmap_over_cap(pool: "SegmentPool", dev: int, parked_cap: int, unmap) -> int:
-    """Unmap reclaimable chunks (`range_reclaimable`) while the bytes mapped under free blocks exceed `parked_cap`;
-    `unmap(range, chunk)` releases each; the bytes unmapped."""
-    out = 0
-    pairs = range_reclaimable(pool, dev)
-    mapped_free = len(pairs) * (pairs[0][0].chunk if pairs else 0)
-    for r, i in pairs:
-        if mapped_free <= parked_cap:
-            break
-        unmap(r, i)
-        r.mapped.discard(i)
-        mapped_free -= r.chunk
-        out += r.chunk
-    return out
-
-
 def range_reclaimable(pool: "SegmentPool", dev: int) -> List[Tuple[Range, int]]:
     """The mapped chunks lying WHOLE inside free blocks of the device's ranges: what an unmap gives back without
     touching a live byte."""
@@ -511,9 +495,6 @@ def simulate(events: Iterable[Tuple[str, object, int]], parked_cap: int = 0, ali
                 parked = max(parked, cached)
                 if parked_cap and cached > parked_cap:
                     pool.evict(0, cached - parked_cap, to_driver)
-                    if rng is not None:
-                        unmap_over_cap(pool, 0, parked_cap, lambda r, i: None)
-                        held = sum(seg_bytes.values()) + rng.mapped_bytes
             else:
                 held -= seg_bytes.pop(ptr)
         else:
