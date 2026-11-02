@@ -93,14 +93,14 @@ def _torch_dtype(name: str):
 
 
 def _nbx_dtype(name: str):
-    from neurobrix.kernels.nbx_tensor import NBXDtype
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
     return getattr(NBXDtype, name)
 
 
 def _to_numpy(x):
     if isinstance(x, (list, tuple)):
         x = x[0]
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from nbxtensor.tensor import NBXTensor
     if isinstance(x, NBXTensor):
         return np.asarray((x.float() if x.is_floating_point() else x).numpy(), dtype=np.float64)
     return x.detach().to("cpu").double().numpy()
@@ -144,7 +144,7 @@ class _Device:
             self.torch.mps.synchronize()
 
     def nbx_sync(self):
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        from nbxtensor.memory.allocator import DeviceAllocator
         DeviceAllocator.device_synchronize(0)
 
 
@@ -224,7 +224,8 @@ def run_torch(inst, arrays, dev, res, warmup, reps, compile_mode=None):
 
 
 def run_nbx(inst, arrays, dev, res, warmup, reps):
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator, NBXTensor
+    from nbxtensor.memory.allocator import DeviceAllocator
+    from nbxtensor.tensor import NBXTensor
     from neurobrix.triton.sequential import TritonSequentialDispatcher
     floats = [d for d in inst["dtypes"] if "float" in d]
     compute = _nbx_dtype(max(set(floats), key=floats.count) if floats else "float32")
@@ -318,7 +319,7 @@ def _release(dev):
         dev.torch.cuda.empty_cache()
     else:
         dev.torch.mps.empty_cache()
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator
+    from nbxtensor.memory.allocator import DeviceAllocator
     dev.nbx_sync()
     DeviceAllocator.empty_cache_pool()
 

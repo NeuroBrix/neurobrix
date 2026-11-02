@@ -39,7 +39,7 @@ def bind_profile(hardware: str):
     profile, the vendor's key ladders, the wrappers' profile."""
     from neurobrix.core.prism.loader import load_profile
     from neurobrix.kernels import census as _census
-    from neurobrix.kernels import wrappers as W
+    from nbxtensor.ops import wrappers as W
     prof = load_profile(hardware)
     _census._bind_target(hardware, None)
     W.set_hardware_profile(prof)
@@ -165,7 +165,7 @@ def main(argv=None) -> int:
     ap.add_argument("--hardware", required=True, help="the hardware profile id the census was derived for")
     a = ap.parse_args(argv)
     bind_profile(a.hardware)
-    from neurobrix.kernels.wrappers import has_native_bf16
+    from nbxtensor.ops.wrappers import has_native_bf16
     wanted = census_ops(a.census)
     models = a.models.split(",") if a.models else sorted(wanted)
     out = Path(a.out)
