@@ -54,7 +54,10 @@ def test_the_inputs_are_deterministic_and_an_index_stays_in_its_extent():
     inst = {"shapes": [[8, 16], [4], []], "dtypes": ["float16", "int64", "float32"]}
     x, y = K.host_inputs(inst), K.host_inputs(inst)
     assert all(np.array_equal(p, q) for p, q in zip(x, y))
-    assert x[1].dtype == np.int64 and x[1].max() < 16 and x[2].shape == ()
+    assert x[1].dtype == np.int64 and x[1].max() < 8 and x[2].shape == ()
+    # an embedding's indices stay below its table's rows (02/11: [10, 32] x [1, 36000] drew up to 32)
+    emb = K.host_inputs({"shapes": [[10, 32], [1, 36000]], "dtypes": ["float32", "int64"]})
+    assert emb[1].max() < 10
 
 
 def test_the_compute_dtype_of_a_tie_never_depends_on_the_process():

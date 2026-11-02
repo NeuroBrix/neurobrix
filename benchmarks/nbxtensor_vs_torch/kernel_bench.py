@@ -86,12 +86,13 @@ def _symbols(binding: dict):
 
 def host_inputs(inst: dict, seed: int = 0) -> list:
     """One numpy array per input, deterministic: floats ~ N(0, 1) scaled by 1/sqrt(last dim) (a GEMM's K, so half
-    outputs stay in range); integers within the extent of the input they index (the largest dim of the op's first
-    floating input), booleans fair."""
+    outputs stay in range); integers below the SMALLEST dim of the op's first floating input — in range for whichever
+    axis they index (an embedding's table rows: [10, 32] x [1, 36000] drew up to 32 for 10 rows on 02/11, a device
+    assert on both engines that poisoned the CUDA context of every later instance); booleans fair."""
     rng = np.random.default_rng(seed)
     out = []
-    float_extent = max((max(s) if s else 1) for s, d in zip(inst["shapes"], inst["dtypes"])
-                       if "float" in d) if any("float" in d for d in inst["dtypes"]) else 2
+    first = next((s for s, d in zip(inst["shapes"], inst["dtypes"]) if "float" in d), None)
+    float_extent = min((int(x) for x in first), default=2) if first else 2
     for shape, dt in zip(inst["shapes"], inst["dtypes"]):
         if "float" in dt:
             k = shape[-1] if shape else 1
@@ -243,7 +244,13 @@ def run_torch(inst, arrays, dev, res, warmup, reps, compile_mode=None):
     if compile_mode is not None:
         compiled = torch.compile(lambda: disp.dispatch(inst["op_type"], args, attrs), mode=compile_mode,
                                  dynamic=False, fullgraph=False)
-        call = compiled
+        mark = getattr(getattr(torch, "compiler", None), "cudagraph_mark_step_begin", None)
+
+        def call():
+            # max-autotune replays CUDA graphs: each run begins a step, or a later replay overwrites the output
+            if mark is not None and dev.cuda:
+                mark()
+            return compiled()
     peak_how = "max_memory_allocated" if dev.cuda else "sampled driver"
     if dev.cuda:
         torch.cuda.reset_peak_memory_stats()
@@ -256,6 +263,10 @@ def run_torch(inst, arrays, dev, res, warmup, reps, compile_mode=None):
         s = SampledDevicePeak(torch.mps.driver_allocated_memory).start()
         out, first, times = _time(call, dev.sync, warmup, reps)
         peak = (s.stop() - base) / 2 ** 20
+    # the output compared is one more call's, cloned at once: a graph replay reuses its output buffer
+    out = call()
+    dev.sync()
+    out = [o.clone() for o in out] if isinstance(out, (list, tuple)) else out.clone()
     return out, first, times, peak, peak_how
 
 
@@ -544,6 +555,21 @@ class _Worker:
             self.p.kill()
 
 
+def _ask_or_restart(wk, req: dict) -> dict:
+    """The worker's answer, or the named error of a worker that died on this instance (the caller restarts it)."""
+    try:
+        return wk.ask(req)
+    except Exception as e:
+        return {"error": f"the worker ended on this instance: {type(e).__name__}: {e}"}
+
+
+def _restart(wk, python: str, side: str, a):
+    """A fresh worker after an error: a device error that sticks to its context (a CUDA assert) is never carried to
+    the next instance — only the instance that raised it is refused (02/11 V100: one bad index refused 1 053)."""
+    wk.close()
+    return _Worker(python, side, a)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--worker", choices=("torch", "nbxtensor"), default=None, help=argparse.SUPPRESS)
@@ -597,15 +623,20 @@ def main(argv=None) -> int:
                 else:
                     nbx_w = nbx_w or _Worker(a.python_nbxtensor, "nbxtensor", a)
                     torch_w = torch_w or _Worker(a.python_torch, "torch", a)
-                    nb = nbx_w.ask({"inst": inst})
+                    nb = _ask_or_restart(nbx_w, {"inst": inst})
                     rows = []
                     if "error" in nb:
                         r = _row(inst, "nbxtensor"); r.update(status="refused", note=nb["error"]); rows.append(r)
-                    tr = torch_w.ask({"inst": inst, "nbx": nb.get("ok")})
+                        nbx_w = _restart(nbx_w, a.python_nbxtensor, "nbxtensor", a)
+                    tr = _ask_or_restart(torch_w, {"inst": inst, "nbx": nb.get("ok")})
                     if "error" in tr:
                         r = _row(inst, "torch_eager"); r.update(status="refused", note=tr["error"]); rows.append(r)
+                        torch_w = _restart(torch_w, a.python_torch, "torch", a)
                     else:
                         rows += tr["ok"]
+                        if any(r.get("status") == "refused" for r in tr["ok"]):
+                            # a refused contender may leave a sticky device error: the next instance starts clean
+                            torch_w = _restart(torch_w, a.python_torch, "torch", a)
                 for r in rows:
                     w.writerow(r)
                     reg.append(r)
