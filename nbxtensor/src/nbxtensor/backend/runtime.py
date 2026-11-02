@@ -53,6 +53,9 @@ _GPU_BACKENDS = {
                    + ["libcudart.so", "libcudart.so.12", "libcudart.so.11.0"],
         # the driver API's library: the virtual memory primitives of the expandable pool (`memory.vmm`, R16)
         "driver_libs": ["libcuda.so.1", "libcuda.so"],
+        # the management library: what the driver attributes to THIS process on a device (`backend.process_memory`)
+        "management_libs": ["libnvidia-ml.so.1", "libnvidia-ml.so"],
+        "pci_bus_id": "cudaDeviceGetPCIBusId",
         "malloc": "cudaMalloc", "free": "cudaFree",
         "memcpy": "cudaMemcpy", "memset": "cudaMemset",
         "set_device": "cudaSetDevice",

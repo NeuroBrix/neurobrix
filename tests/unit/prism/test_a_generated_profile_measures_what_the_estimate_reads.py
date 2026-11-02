@@ -100,3 +100,28 @@ def test_the_engine_measures_its_per_token_reload_once_on_a_generated_profile(hw
     assert abs(T.reload_bps(T.host_facts(host), "compiled", "bfloat16") - 1e9) < 1
     _profile(hw, "c4140-something", DEV)
     assert not A.note_reload_rate("c4140-something", "compiled", "bfloat16", 2 * 10 ** 9, 2.0, "m:c")
+
+
+def test_the_reload_rate_is_written_only_from_three_steady_runs(hw, monkeypatch):
+    """The supervisor 2026-11-02 09:50: a profile fact a neighbour can disturb is no fact. The engine's reload rate is
+    written from three consecutive runs whose rates agree within 5 % (their median), and an unsteady reading is never
+    written. What this test would do if the code wrote the first reading: a fact after one run, or after three runs
+    spread 2x — RED."""
+    from neurobrix.core.strategies import layer_streaming as LS
+    _profile(hw, "default-abc", DEV)
+    A.ensure_measured_facts("default-abc")
+    monkeypatch.setattr(A, "ACTIVE_HARDWARE_ID", "default-abc")
+    monkeypatch.setattr(A, "stored_major", lambda *a: "bfloat16")
+    monkeypatch.setattr(LS, "_RELOAD_DRAWS", {})
+    ex = type("E", (), {"mode": "compiled"})()
+
+    def written():
+        h = yaml.safe_load((hw / "default-abc.yml").read_text()).get("host_measured") or {}
+        return (h.get("weight_reload_gbps") or {}).get("compiled", {}).get("BF16")
+
+    for b, s in ((10 ** 9, 1.0), (10 ** 9, 2.0), (10 ** 9, 1.0)):       # 1, 0.5, 1 GB/s: not steady
+        LS._note_reload(ex, "/x", "lm", b, s)
+    assert written() is None
+    for b, s in ((10 ** 9, 1.0), (10 ** 9, 1.02), (10 ** 9, 0.99)):      # steady around 1 GB/s
+        LS._note_reload(ex, "/x", "lm", b, s)
+    assert written() is not None and abs(written() - 0.98) < 0.03, written()
