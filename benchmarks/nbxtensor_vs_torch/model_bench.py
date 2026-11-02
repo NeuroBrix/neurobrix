@@ -5,14 +5,18 @@ machine's own profile, alone, once per engine:
 - `torch_eager`: the engine's ATen branch (the default mode: torch's eager kernels, one call per op);
 - `nbxtensor`: the Triton branch (`--triton`), the engine that becomes nbxtensor.
 `torch.compile` has no engine mode at this level: the row says so rather than inventing one.
+Each contender runs in its own environment (the supervisor, 2026-11-02 11:55): the ATen branch in one that has torch
+(`--python-torch`), the Triton branch in the library's torch-free one (`--python-nbxtensor`) — the nbxtensor row is
+also the proof that the run needs no torch.
 
 Each row: the run's wall time, the engine's own `[Timings]` (load, time to first output, per-token time when it
 decodes) and `[Peak] device_mb`, the output's sha256, and whether the two engines' outputs agree (byte-identical, or
 the image/video PSNR when they differ). A run that fails is a row with its return code. Rows are appended as each
 cell ends; a rerun skips the cells already written.
 
-    python benchmarks/nbxtensor_vs_torch/model_bench.py --models A,B --out <results/<device>/model.tsv> \\
-        --outputs <a directory for the outputs>
+    python benchmarks/nbxtensor_vs_torch/model_bench.py --models A,B --out <campaign>/model.tsv> \\
+        --outputs <a directory for the outputs> --python-torch <python> --python-nbxtensor <python> \\
+        --device <profile id> --registry <dir>
 """
 from __future__ import annotations
 
@@ -80,13 +84,14 @@ def _agreement(a: Path, b: Path) -> str:
 
 
 def run_cell(model: str, contender: str, outdir: Path, python: str) -> dict:
+    """One gate cell through the entry point, in `python`'s environment, this tree's engine and library first."""
     import trace_request as TR
     request = TR.gate_request(model)
     fam = _family(model)
     ext = _EXT.get(fam, "txt")
     out = outdir / f"{model}.{contender}.{ext}"
     cmd = [python, "-m", "neurobrix", "run", "--model", model, *request, *ENGINES[contender], "--output", str(out)]
-    env = dict(os.environ, PYTHONPATH=str(REPO / "src"))
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(REPO / "src"), str(REPO / "nbxtensor" / "src")]))
     t0 = time.time()
     p = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=str(REPO))
     wall = time.time() - t0
@@ -104,8 +109,15 @@ def main(argv=None) -> int:
     ap.add_argument("--models", required=True, help="comma-separated, or @file with one model per line")
     ap.add_argument("--out", required=True)
     ap.add_argument("--outputs", required=True)
-    ap.add_argument("--python", default=sys.executable)
+    ap.add_argument("--python-torch", required=True, help="the ATen branch's python (an environment with torch)")
+    ap.add_argument("--python-nbxtensor", required=True, help="the Triton branch's python (the library's, no torch)")
+    ap.add_argument("--device", required=True, help="the machine's profile id, for the registry")
+    ap.add_argument("--registry", default=None, help="the dated registry directory every row is appended to as well")
     a = ap.parse_args(argv)
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from registry import Registry
+    reg = Registry(a.registry, "model", FIELDS, a.device, REPO)
+    pythons = {"torch_eager": a.python_torch, "nbxtensor": a.python_nbxtensor}
     models = (Path(a.models[1:]).read_text().split() if a.models.startswith("@") else a.models.split(","))
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -127,13 +139,14 @@ def main(argv=None) -> int:
             for contender in ENGINES:
                 if (model, contender) in done:
                     continue
-                rows[contender] = run_cell(model, contender, outdir, a.python)
+                rows[contender] = run_cell(model, contender, outdir, pythons[contender])
             if "nbxtensor" in rows:
                 ext = _EXT.get(_family(model), "txt")
                 rows["nbxtensor"]["agrees_with_torch_eager"] = _agreement(
                     outdir / f"{model}.torch_eager.{ext}", outdir / f"{model}.nbxtensor.{ext}")
             for r in rows.values():
                 w.writerow(r)
+                reg.append(r)
                 f.flush()
                 print(f"[model] {r['model']} {r['contender']} rc={r['rc']} wall={r['wall_s']}s "
                       f"peak={r['peak_mb']} {r.get('agrees_with_torch_eager', '')}", flush=True)

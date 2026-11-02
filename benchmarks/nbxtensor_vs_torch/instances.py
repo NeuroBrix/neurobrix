@@ -16,7 +16,7 @@ reaches through its extent sites: a decode step, a codec frame count) is not ins
 output's `skipped` record — never benchmarked at an invented shape.
 
     python benchmarks/nbxtensor_vs_torch/instances.py --census apple/apple_m4_pro/18g --hardware <profile id> \\
-        --out benchmarks/nbxtensor_vs_torch/results/apple_m4_pro/instances.jsonl [--models A,B]
+        --out <campaign>/instances.jsonl [--models A,B]
 """
 from __future__ import annotations
 

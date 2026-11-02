@@ -6,7 +6,7 @@ its output disagrees with the eager one beyond identity, or its wall time is abo
 optimisation queue (Hocine's rule 14: Triton must do better than PyTorch).
 
     python benchmarks/nbxtensor_vs_torch/summary.py --device apple_m4_pro \\
-        --kernel <results/<device>/kernel.tsv> [--model <results/<device>/model.tsv>] --out <summary.md>
+        --kernel <campaign>/kernel.tsv> [--model <campaign>/model.tsv>] --out <summary.md>
 """
 from __future__ import annotations
 

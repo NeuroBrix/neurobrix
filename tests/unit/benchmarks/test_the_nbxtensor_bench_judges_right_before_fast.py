@@ -55,3 +55,56 @@ def test_the_inputs_are_deterministic_and_an_index_stays_in_its_extent():
     x, y = K.host_inputs(inst), K.host_inputs(inst)
     assert all(np.array_equal(p, q) for p, q in zip(x, y))
     assert x[1].dtype == np.int64 and x[1].max() < 16 and x[2].shape == ()
+
+
+def test_the_compute_dtype_of_a_tie_never_depends_on_the_process():
+    # one fp32 island beside a half weight: the op's recorded output decides; without one, the name breaks the tie
+    # (a set's order is salted per process — the two sides of the bench must agree on it run after run)
+    assert K._compute_dtype({"dtypes": ["float32", "bfloat16"], "output_dtypes": ["float32"]}) == "float32"
+    assert K._compute_dtype({"dtypes": ["float32", "bfloat16"], "output_dtypes": None}) == "bfloat16"
+    assert K._compute_dtype({"dtypes": ["float16", "float16", "float32"]}) == "float16"
+    assert K._compute_dtype({"dtypes": ["int64"]}) == "float32"
+
+
+def test_the_nbxtensor_side_without_a_reference_says_so(tmp_path, monkeypatch):
+    inst = {"key": "k1", "op_type": "aten::mm", "shapes": [[2, 2], [2, 2]], "dtypes": ["float32", "float32"],
+            "sites": ["m/c/op"], "output_dtypes": ["float32"]}
+    out = np.zeros((2, 2), dtype=np.float32)
+    monkeypatch.setattr(K, "run_nbx", lambda *a, **k: (_Host(out), 1.0, [0.5, 0.6], 0.0, "test"))
+    rows = K.bench_nbxtensor(inst, _NoDevice(), None, 0, 2, tmp_path)
+    assert rows[0]["status"] == "ok" and "no float64 reference" in rows[0]["note"]
+    np.save(tmp_path / "k1.npy", np.ones((2, 2)))           # the torch side's reference: the zeros are wrong
+    rows = K.bench_nbxtensor(inst, _NoDevice(), None, 0, 2, tmp_path)
+    assert rows[0]["status"] == "wrong" and rows[0]["note"] == ""
+
+
+def test_every_row_reaches_the_dated_registry(tmp_path):
+    import registry as R
+    reg = R.Registry(tmp_path, "kernel", K.FIELDS, "default-test", BENCH.parents[1])
+    reg.append({"key": "k1", "contender": "nbxtensor", "status": "ok", "median_ms": "0.5"})
+    reg.append({"key": "k1", "contender": "torch_eager", "status": "ok", "median_ms": "0.4"})
+    lines = (tmp_path / "nbxtensor_vs_torch.kernel.tsv").read_text().splitlines()
+    assert lines[0].split("\t")[:3] == ["date", "device", "commit"] and len(lines) == 3
+    assert all(l.split("\t")[1] == "default-test" and l.split("\t")[2] for l in lines[1:])
+    assert R.Registry(None, "kernel", K.FIELDS, "x", BENCH.parents[1]).path is None
+
+
+class _Host:
+    """A contender's output as the nbxtensor side holds it (numpy behind the NBXTensor surface _to_numpy reads)."""
+
+    def __init__(self, a):
+        self.a, self.dtype = a, "float32"
+
+    def is_floating_point(self):
+        return True
+
+    def float(self):
+        return self
+
+    def numpy(self):
+        return self.a
+
+
+class _NoDevice:
+    def release(self):
+        pass
