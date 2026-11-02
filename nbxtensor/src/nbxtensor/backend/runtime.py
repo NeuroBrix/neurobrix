@@ -99,6 +99,13 @@ _GPU_BACKENDS = {
     },
     "hip": {
         "rt_libs": ["libamdhip64.so", "libamdhip64.so.5"],
+        # the same three facts as cuda's, declared ABSENT: the expandable pool speaks the CUDA driver's VMM calls only
+        # (`memory.vmm`; HIP's hipMemCreate family is not wired), so a HIP device keeps its driver segments; and no
+        # per-process accounting is read on ROCm (`backend.process_memory` answers None, the runtime's growth is not
+        # measured there, said) — never a CUDA library tried on an AMD card.
+        "driver_libs": [],
+        "management_libs": [],
+        "pci_bus_id": "hipDeviceGetPCIBusId",
         "malloc": "hipMalloc", "free": "hipFree",
         "memcpy": "hipMemcpy", "memset": "hipMemset",
         "set_device": "hipSetDevice",

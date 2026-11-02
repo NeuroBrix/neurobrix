@@ -130,12 +130,32 @@ def test_a_request_the_card_cannot_hold_even_after_the_reclaim_is_refused_by_nam
         DA.malloc_cuda(8 * MB)
 
 
+def _a_device_that_can_map(monkeypatch, can: bool):
+    from nbxtensor.memory import vmm as V
+    monkeypatch.setattr(V.Vmm, "load", staticmethod(lambda libs: object() if can else None))
+    monkeypatch.setattr(V.Vmm, "supported", lambda self: True)
+
+
 def test_a_profile_without_the_measured_chunk_is_refused_by_name(card, monkeypatch):
+    """A device that CAN map (the driver API loads, the VMM attribute is 1) and a profile that measured no chunk."""
     DA._VMM.clear()
+    _a_device_that_can_map(monkeypatch, True)
     prof = SimpleNamespace(devices=[SimpleNamespace(index=0, memory_mb=64, measured={})])
     monkeypatch.setattr(_wrappers, "get_hardware_profile", lambda: prof)
     with pytest.raises(RuntimeError, match="vmm_chunk_bytes"):
         DA.malloc_cuda(8 * MB)
+
+
+def test_a_process_without_the_driver_api_needs_no_chunk_fact(card, monkeypatch):
+    """No driver library that loads (a process that sees no card, a backend without the API): the capability is read
+    BEFORE the fact, so a profile that measured no chunk is no refusal — the device keeps its driver segments. Red on
+    bf108a8d, which read the fact first: every pool test of a card-less run refused."""
+    DA._VMM.clear()
+    _a_device_that_can_map(monkeypatch, False)
+    prof = SimpleNamespace(devices=[SimpleNamespace(index=0, memory_mb=64, measured={})])
+    monkeypatch.setattr(_wrappers, "get_hardware_profile", lambda: prof)
+    p = DA.malloc_cuda(8 * MB)
+    assert not DA._POOL.ranges.get(0) and p in _nbx_runtime.gpu_runtime().live
 
 
 def test_a_device_measured_without_vmm_keeps_its_driver_segments(card, monkeypatch):

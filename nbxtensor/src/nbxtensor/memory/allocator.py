@@ -721,16 +721,20 @@ class DeviceAllocator:
         v = DeviceAllocator._VMM.get(dev)
         if v is None:
             v = False
-            chunk = DeviceAllocator._vmm_chunk_fact(dev)
+            # the capability first, the fact after: a backend without the driver API (HIP, Metal), a process that sees
+            # no card, or a device without the VMM attribute keeps its driver segments and needs no chunk fact; only a
+            # device that CAN map reads the measured chunk, refused by name when the profile states none
             libs = _rt.backend_table().get("driver_libs")
-            if chunk and libs:
+            if libs:
                 from nbxtensor.memory.vmm import Vmm
                 lib = Vmm.load(libs)
                 if lib is not None:
                     vv = Vmm(lib, dev)
                     if vv.supported():
-                        vv.chunk = chunk
-                        v = vv
+                        chunk = DeviceAllocator._vmm_chunk_fact(dev)
+                        if chunk:
+                            vv.chunk = chunk
+                            v = vv
             DeviceAllocator._VMM[dev] = v
         return v or None
 
