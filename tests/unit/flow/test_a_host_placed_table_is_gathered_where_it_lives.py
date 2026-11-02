@@ -143,7 +143,8 @@ def _decode(monkeypatch, table, context_device, script):
     ctx = types.SimpleNamespace(
         pkg=types.SimpleNamespace(
             topology={"flow": {"audio": {"stages": stages}}},
-            defaults={"temperature": 0.0, "eos_token_id": 0, "max_tokens": 8,
+            defaults={"temperature": 0.0, "top_k": 0, "top_p": 1.0, "repetition_penalty": 1.0,
+                      "eos_token_id": 0, "max_tokens": 8,
                       "stt_prefix_ids": [1, 2], "stt_suffix_ids": [3]},
             manifest={}),
         variable_resolver=_Resolver(resolved),

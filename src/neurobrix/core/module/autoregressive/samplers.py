@@ -315,6 +315,13 @@ class CombinedSampler(SamplerBase):
 
     def __init__(self, config: Dict[str, Any]):
         """Initialize with all sampling parameters."""
+        # Every decode's four parameters come resolved (sampling_contract.resolve_sampling); a missing one is a
+        # caller defect named here, never the literal SamplerConfig.DEFAULTS would put in its place.
+        from neurobrix.core.module.sampling_contract import SAMPLING_KEYS
+        _missing = [k for k in SAMPLING_KEYS if config.get(k) is None]
+        if _missing:
+            raise RuntimeError(f"ZERO FALLBACK: CombinedSampler built without {', '.join(_missing)} "
+                               f"(resolve them with core/module/sampling_contract.resolve_sampling)")
         validated = SamplerConfig.validate(config)
         self.temperature = validated["temperature"]
         self.top_k = validated["top_k"]
@@ -405,3 +412,22 @@ def sample_top_p(logits: torch.Tensor, p: float, temperature: float = 1.0) -> to
     """Quick top-p (nucleus) sampling function."""
     sampler = TopPSampler({"top_p": p, "temperature": temperature})
     return sampler(logits)
+
+
+def decode_sampler(resolver, container_defaults, site: str) -> CombinedSampler:
+    """THE sampler of every text, vlm and audio_llm decode of the compiled branch, its parameters resolved one way
+    (core/module/sampling_contract.resolve_sampling: request > container > family file)."""
+    from neurobrix.core.module.sampling_contract import resolve_sampling
+    config = resolve_sampling(resolver, container_defaults, site)
+    config["min_tokens_to_keep"] = 1
+    return CombinedSampler(config)
+
+
+def sample_next_id(sampler: CombinedSampler, logits: torch.Tensor, context_ids) -> int:
+    """One token id from a decode step's logits ([1, S, V] or [1, V]) through `sampler`; the repetition penalty reads
+    `context_ids` (the ids the flow holds: generated ones for an embedding-fed decode). The row is copied first — the
+    penalty scales in place and the logits stay the model's."""
+    row = (logits[:, -1, :] if logits.dim() == 3 else logits).clone()
+    ids = torch.tensor([list(context_ids)], device=row.device) if context_ids else None
+    return int(sampler(row, input_ids=ids).reshape(-1)[0].item())
+

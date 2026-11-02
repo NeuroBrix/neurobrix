@@ -384,32 +384,23 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
             else defaults.get("max_tokens"))
         if max_tokens is None:
             raise RuntimeError("ZERO FALLBACK: max_tokens missing from defaults.json.")
-        temperature = (float(resolved["global.temperature"])
-                       if resolved.get("global.temperature") is not None
-                       else defaults.get("temperature"))
-        if temperature is None:
-            raise RuntimeError("ZERO FALLBACK: temperature missing from defaults.json.")
+        # The decode's sampler: the branch's one CombinedSampler, its parameters resolved the one way (request >
+        # container > family file — core/module/sampling_contract.resolve_sampling).
+        from neurobrix.core.module.autoregressive.samplers import decode_sampler, sample_next_id
+        sampler = decode_sampler(self.ctx.variable_resolver, defaults, "vlm (compiled)")
         eos_token_id = defaults.get("eos_token_id")
         if eos_token_id is None:
             raise RuntimeError("ZERO FALLBACK: eos_token_id missing from defaults.json.")
         eos_ids = set(eos_token_id if isinstance(eos_token_id, (list, tuple))
                       else [eos_token_id])
-        repetition_penalty = (
-            float(resolved["global.repetition_penalty"])
-            if resolved.get("global.repetition_penalty") is not None
-            else defaults.get("repetition_penalty", 1.0))
 
-        # Sampling-parameter contract: this decode path samples through
-        # `audio_utils.sample_token`, which implements temperature,
-        # top-p and the repetition penalty — but NOT top-k. Refuse an
-        # explicit top_k rather than drop it; report an inherited one.
-        # See core/module/sampling_contract.py.
+        # Sampling-parameter contract: the sampler implements temperature, top-k, top-p and the repetition penalty;
+        # anything else configured (min_p) is refused when asked, reported when inherited (core/module/sampling_contract).
         from neurobrix.core.module.sampling_contract import (
-            enforce_sampling_support)
+            enforce_sampling_support, SAMPLER_IMPLEMENTS)
         _samp_cfg, _samp_explicit = _effective_sampling(self.ctx, defaults)
         enforce_sampling_support(
-            "vlm (compiled)", ("temperature", "top_p", "repetition_penalty"),
-            _samp_cfg, explicit=_samp_explicit)
+            "vlm (compiled)", SAMPLER_IMPLEMENTS, _samp_cfg, explicit=_samp_explicit)
 
         # Declared-MoE fusion (mirror of the AR flow's setup — the Stage-1
         # wall-5 class: without it only the trace-fired experts of a
@@ -571,12 +562,7 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
                       f"pos_head={position_ids[:, 0, :3].tolist()} "
                       f"top5_ids={_top.indices.tolist()} "
                       f"top5_logits={[round(float(x), 3) for x in _top.values]}")
-            from .audio_utils import sample_token
-            next_token = sample_token(
-                logits, temperature,
-                generated_ids=generated_ids,
-                repetition_penalty=repetition_penalty,
-            )
+            next_token = sample_next_id(sampler, logits, generated_ids)
             generated_ids.append(next_token)
             # In-process per-token event (same site as the autoregressive
             # generators): feeds the daemon's streaming RPC for real TTFT.
@@ -879,34 +865,24 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
         if max_tokens is None:
             raise RuntimeError(
                 "ZERO FALLBACK: max_tokens missing from defaults.json.")
-        temperature = (float(resolved["global.temperature"])
-                       if resolved.get("global.temperature") is not None
-                       else defaults.get("temperature"))
-        if temperature is None:
-            raise RuntimeError(
-                "ZERO FALLBACK: temperature missing from defaults.json.")
+        # The decode's sampler: the branch's one CombinedSampler, its parameters resolved the one way (request >
+        # container > family file — core/module/sampling_contract.resolve_sampling).
+        from neurobrix.core.module.autoregressive.samplers import decode_sampler, sample_next_id
+        sampler = decode_sampler(self.ctx.variable_resolver, defaults, "vlm (compiled)")
         eos_token_id = defaults.get("eos_token_id")
         if eos_token_id is None:
             raise RuntimeError(
                 "ZERO FALLBACK: eos_token_id missing from defaults.json.")
         eos_ids = set(eos_token_id if isinstance(eos_token_id, (list, tuple))
                       else [eos_token_id])
-        repetition_penalty = (
-            float(resolved["global.repetition_penalty"])
-            if resolved.get("global.repetition_penalty") is not None
-            else defaults.get("repetition_penalty", 1.0))
 
-        # Sampling-parameter contract: this decode path samples through
-        # `audio_utils.sample_token`, which implements temperature,
-        # top-p and the repetition penalty — but NOT top-k. Refuse an
-        # explicit top_k rather than drop it; report an inherited one.
-        # See core/module/sampling_contract.py.
+        # Sampling-parameter contract: the sampler implements temperature, top-k, top-p and the repetition penalty;
+        # anything else configured (min_p) is refused when asked, reported when inherited (core/module/sampling_contract).
         from neurobrix.core.module.sampling_contract import (
-            enforce_sampling_support)
+            enforce_sampling_support, SAMPLER_IMPLEMENTS)
         _samp_cfg, _samp_explicit = _effective_sampling(self.ctx, defaults)
         enforce_sampling_support(
-            "vlm (compiled)", ("temperature", "top_p", "repetition_penalty"),
-            _samp_cfg, explicit=_samp_explicit)
+            "vlm (compiled)", SAMPLER_IMPLEMENTS, _samp_cfg, explicit=_samp_explicit)
 
         # Declared-MoE fusion mirror (data-driven; no-op on dense builds).
         lm_cfg = defaults.get("lm_config", {})
@@ -995,12 +971,7 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
             logits = self._compute_logits(output, embed_weight,
                                           logits_source, head_name)
             _maybe_log_topk(logits, len(generated_ids))
-            from .audio_utils import sample_token
-            next_token = sample_token(
-                logits, temperature,
-                generated_ids=generated_ids,
-                repetition_penalty=repetition_penalty,
-            )
+            next_token = sample_next_id(sampler, logits, generated_ids)
             generated_ids.append(next_token)
             # In-process per-token event (same site as the autoregressive
             # generators): feeds the daemon's streaming RPC for real TTFT.
@@ -1391,32 +1362,23 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
             else defaults.get("max_tokens"))
         if max_tokens is None:
             raise RuntimeError("ZERO FALLBACK: max_tokens missing from defaults.json.")
-        temperature = (float(resolved["global.temperature"])
-                       if resolved.get("global.temperature") is not None
-                       else defaults.get("temperature"))
-        if temperature is None:
-            raise RuntimeError("ZERO FALLBACK: temperature missing from defaults.json.")
+        # The decode's sampler: the branch's one CombinedSampler, its parameters resolved the one way (request >
+        # container > family file — core/module/sampling_contract.resolve_sampling).
+        from neurobrix.core.module.autoregressive.samplers import decode_sampler, sample_next_id
+        sampler = decode_sampler(self.ctx.variable_resolver, defaults, "vlm (compiled)")
         eos_token_id = defaults.get("eos_token_id")
         if eos_token_id is None:
             raise RuntimeError("ZERO FALLBACK: eos_token_id missing from defaults.json.")
         eos_ids = set(eos_token_id if isinstance(eos_token_id, (list, tuple))
                       else [eos_token_id])
-        repetition_penalty = (
-            float(resolved["global.repetition_penalty"])
-            if resolved.get("global.repetition_penalty") is not None
-            else defaults.get("repetition_penalty", 1.0))
 
-        # Sampling-parameter contract: this decode path samples through
-        # `audio_utils.sample_token`, which implements temperature,
-        # top-p and the repetition penalty — but NOT top-k. Refuse an
-        # explicit top_k rather than drop it; report an inherited one.
-        # See core/module/sampling_contract.py.
+        # Sampling-parameter contract: the sampler implements temperature, top-k, top-p and the repetition penalty;
+        # anything else configured (min_p) is refused when asked, reported when inherited (core/module/sampling_contract).
         from neurobrix.core.module.sampling_contract import (
-            enforce_sampling_support)
+            enforce_sampling_support, SAMPLER_IMPLEMENTS)
         _samp_cfg, _samp_explicit = _effective_sampling(self.ctx, defaults)
         enforce_sampling_support(
-            "vlm (compiled)", ("temperature", "top_p", "repetition_penalty"),
-            _samp_cfg, explicit=_samp_explicit)
+            "vlm (compiled)", SAMPLER_IMPLEMENTS, _samp_cfg, explicit=_samp_explicit)
 
         # Declared-MoE fusion (data-driven; no-op on dense builds) — same
         # call as every other branch of this engine.
@@ -1596,12 +1558,7 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
             logits = self._compute_logits(output, embed_weight,
                                           logits_source, head_name)
             _maybe_log_topk(logits, len(generated_ids))
-            from .audio_utils import sample_token
-            next_token = sample_token(
-                logits, temperature,
-                generated_ids=generated_ids,
-                repetition_penalty=repetition_penalty,
-            )
+            next_token = sample_next_id(sampler, logits, generated_ids)
             generated_ids.append(next_token)
             # In-process per-token event (same site as the autoregressive
             # generators): feeds the daemon's streaming RPC for real TTFT.

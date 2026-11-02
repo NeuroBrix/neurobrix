@@ -201,6 +201,13 @@ class CombinedSampler:
     """
 
     def __init__(self, config: Dict[str, Any]):
+        # Every decode's four parameters come resolved (sampling_contract.resolve_sampling); a missing one is a
+        # caller defect named here, never the literal SamplerConfig.DEFAULTS would put in its place.
+        from neurobrix.core.module.sampling_contract import SAMPLING_KEYS
+        _missing = [k for k in SAMPLING_KEYS if config.get(k) is None]
+        if _missing:
+            raise RuntimeError(f"ZERO FALLBACK: CombinedSampler built without {', '.join(_missing)} "
+                               f"(resolve them with core/module/sampling_contract.resolve_sampling)")
         validated = SamplerConfig.validate(config)
         self.temperature = validated["temperature"]
         self.top_k = validated["top_k"]
@@ -344,3 +351,27 @@ class CombinedSampler:
 # =============================================================================
 # Factory
 # =============================================================================
+
+
+def decode_sampler(resolver, container_defaults, site: str) -> CombinedSampler:
+    """THE sampler of every text, vlm and audio_llm decode of the Triton branch, its parameters resolved one way
+    (core/module/sampling_contract.resolve_sampling: request > container > family file) — the mirror of the compiled
+    branch's, sharing no compute with it."""
+    from neurobrix.core.module.sampling_contract import resolve_sampling
+    config = resolve_sampling(resolver, container_defaults, site)
+    config["min_tokens_to_keep"] = 1
+    return CombinedSampler(config)
+
+
+def sample_next_id(sampler: CombinedSampler, logits: NBXTensor, context_ids) -> int:
+    """One token id from a decode step's logits ([1, S, V] or [1, V]) through `sampler`. The row is read in fp32 once
+    whatever the head stored (the TritonGenerator's rule, as vLLM: never computed in half) and copied when it already
+    is fp32 — the penalty scales in place and the logits stay the model's. `context_ids`: the ids the penalty reads."""
+    row = logits[:, -1, :] if logits.ndim == 3 else logits
+    row = row.to(NBXDtype.float32) if row._dtype != NBXDtype.float32 else row.clone()
+    ids = None
+    if context_ids:
+        DeviceAllocator.set_device(row._device_idx)
+        ids = NBXTensor.from_numpy(np.array([list(context_ids)], dtype=np.int64))
+    return int(sampler(row, input_ids=ids).item())
+

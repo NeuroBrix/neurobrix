@@ -121,8 +121,10 @@ neurobrix run --model <name> --prompt <text> [--hardware <profile>] [options]
 | `--height` / `--width` | Output resolution in pixels |
 | `--output` | Output file path |
 | `--seed` | Random seed for reproducibility |
-| `--temperature` | Sampling temperature (LLM) |
-| `--repetition-penalty` | Repetition penalty (LLM) |
+| `--temperature` | Sampling temperature, 0 = greedy (text, vlm, audio_llm decodes) |
+| `--top-k` | Keep the k most likely tokens, 0 = off |
+| `--top-p` | Nucleus threshold, 1.0 = off |
+| `--repetition-penalty` | Repetition penalty, 1.0 = none |
 | `--chat` / `--no-chat` | Force chat template on/off |
 | `--set KEY=VALUE` | Override any runtime variable |
 | `--compiled` | PyTorch fused graph (explicit default) |
@@ -148,6 +150,23 @@ neurobrix run --model 1600m-1024 \
 ```
 
 > **Note:** For repeated use, prefer `serve` + `chat` to avoid reloading weights each time.
+
+#### Sampling
+
+Every text, vlm and audio_llm decode samples the same way, on both engines (`--compiled` and `--triton`): one sampler
+applies the repetition penalty, the temperature, top-k and top-p, then draws (or takes the most likely token when the
+temperature is 0). Each of the four values is taken from the first source that sets it:
+
+1. the request: the flag above, or the same key in a `serve` request (the warm path forwards all four and
+   `--max-tokens`);
+2. the model's container: its `runtime/defaults.json`, the vendor's generation config as the container was built with
+   it;
+3. the family's documented defaults, in `config/families/<family>.yml` under `defaults:`. For `llm`, `vlm`,
+   `audio_llm` and `multimodal`: temperature 0.7, top-k 50, top-p 0.9, repetition penalty 1.0.
+
+A value the container leaves empty (`null`) lets the family's value through. A value no source sets stops the run with
+an error naming it; the engine never substitutes one. The repetition penalty counts the prompt's tokens and the
+generated ones for a text decode, and the generated ones for a decode fed with image or audio embeddings.
 
 ### upscale
 

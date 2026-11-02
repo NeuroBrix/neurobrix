@@ -41,7 +41,6 @@ class TritonGenerator:
         self.top_p: float = config["top_p"]
         self.top_k: int = config["top_k"]
         self.repetition_penalty: float = config["repetition_penalty"]
-        self.vocab_size: int = config.get("vocab_size", 16384)
         self.eos_token_id = config.get("eos_token_id")
         self.pad_token_id: Optional[int] = config.get("pad_token_id")
         # defaults.json is vendor-faithful: eos_token_id may be a single id

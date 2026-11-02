@@ -3,38 +3,24 @@
 Zero imports on purpose: this is a contract check, not compute, so both
 engines can call it without either subtree pulling on the other.
 
-=== WHY THIS EXISTS ===
+=== WHAT IT HOLDS ===
 
-`CombinedSampler` is the sampling engine, but four flow paths sample on
-their own — `core/flow/encoder_decoder.py`, `core/flow/audio_utils.py`,
-`core/flow/tts_llm.py`, `triton/flow/audio_llm.py` — and each implements
-a different subset of the parameters:
+`resolve_sampling` — THE resolution of a decode's four sampling parameters (request > container > family file), read
+by every text, vlm and audio_llm decode of both branches, which then draw with their branch's one `CombinedSampler`
+(core/module/autoregressive/samplers.decode_sampler, triton/samplers.decode_sampler; the supervisor 2026-11-02 06:40).
+Before it, four flow paths sampled on their own and each implemented a different subset (the vlm and audio_llm decodes
+had no top-k; the compiled vlm dropped top-p; audio_llm read the container's temperature whatever the request said).
+
+`enforce_sampling_support` — refuse loudly rather than ignore silently, for the decodes that still sample on their own
+(encoder_decoder, tts_llm, dual_ar) and for a parameter no sampler implements (min_p):
 
     site                      temperature  rep_penalty  top_p  top_k  min_p
-    CombinedSampler (engine)       yes         yes       yes    yes     no
+    CombinedSampler (both)         yes         yes       yes    yes     no
     encoder_decoder                yes         yes        no     no     no
-    audio_utils                    yes         yes       yes     no     no
     tts_llm                        yes          -        yes     no    yes
-    triton audio_llm               yes         yes        no     no     no
 
-`top_k` is honoured by the engine and by nothing else. MiniCPM-o's
-registry declares `top_k=20` and the voice path never applies it. A user
-who sets top-k, top-p or a repetition penalty and whose setting is
-dropped depending on which flow ran gets no error, no warning, and
-plausible-looking output of the wrong quality.
-
-That is the same family as the top-k merge defect: it does not crash, it
-is invisible, and it degrades quality silently. The doctrine that answers
-it is the one already used for unsupported capabilities — **refuse at the
-boundary, naming what is missing** — applied to parameters rather than to
-model families.
-
-=== WHAT THIS IS AND IS NOT ===
-
-It is a stopgap that makes the divergence LOUD. It is not the fix. The
-fix is consolidation onto the engine's sampler, tracked as
-P-SAMPLING-CONSOLIDATION; until that lands, a dropped parameter raises
-instead of passing.
+A user who sets a parameter a path drops gets an error when they asked for it, a one-time warning when it was
+inherited from the registry; consolidating those last paths is the rest of P-SAMPLING-CONSOLIDATION.
 
 Neutral values never raise: a parameter at its disabled default is not a
 request. `top_k=0`, `top_p=1.0`, `repetition_penalty=1.0`, `min_p=0.0`
@@ -131,3 +117,49 @@ def enforce_sampling_support(site: str, supported, config,
 
 
 _WARNED = set()
+
+
+# The parameters every LLM-headed decode samples with, through its branch's ONE sampler (core/module/autoregressive/
+# samplers.CombinedSampler, triton/samplers.CombinedSampler): text, vlm and audio_llm decodes of both branches.
+SAMPLING_KEYS = ("temperature", "top_k", "top_p", "repetition_penalty")
+_CASTS = {"temperature": float, "top_k": int, "top_p": float, "repetition_penalty": float}
+#: What the sampler implements — the contract enforce_sampling_support checks every other configured key against.
+SAMPLER_IMPLEMENTS = SAMPLING_KEYS
+
+
+def resolve_sampling(resolver, container_defaults, site: str) -> dict:
+    """The sampling one decode runs with, resolved ONE way for every text, vlm and audio_llm decode of both branches.
+
+    Order, the first that carries a value wins:
+      1. the request — `global.<key>`, set by the CLI flag (`--temperature`, `--top-k`, `--top-p`,
+         `--repetition-penalty`) or a serving request;
+      2. the container — its `runtime/defaults.json` (the vendor's generation_config as the build embedded it);
+      3. the family file — `config/families/<family>.yml` `defaults:` (and its generation-type block), the documented
+         defaults (docs/reference/cli.md, "Sampling").
+    A null is no value: a container that declares `top_k: null` leaves the family's value in force. A key that no
+    source carries is refused by name — never a literal in the code.
+
+    The executor injects the merged defaults as `global.temperature/top_p/top_k` when the request set none; the order
+    above is unchanged by it (the merged value IS the container's over the family's), and a null injected there is no
+    value either.
+    """
+    resolved = getattr(resolver, "resolved", None) or {}
+    family = getattr(resolver, "family_defaults", None) or {}
+    container = container_defaults or {}
+    out, missing = {}, []
+    for key in SAMPLING_KEYS:
+        value = resolved.get(f"global.{key}")
+        if value is None:
+            value = container.get(key)
+        if value is None:
+            value = family.get(key)
+        if value is None:
+            missing.append(key)
+            continue
+        out[key] = _CASTS[key](value)
+    if missing:
+        raise RuntimeError(
+            f"ZERO FALLBACK: sampling: {site} has no value for {', '.join(missing)} — neither the request "
+            f"(--{missing[0].replace('_', '-')}), the container's runtime/defaults.json nor the family file "
+            f"(config/families/<family>.yml `defaults:`) declares it.")
+    return out

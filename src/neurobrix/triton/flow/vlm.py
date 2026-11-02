@@ -45,8 +45,10 @@ from nbxtensor.tensor import NBXTensor
 from nbxtensor.memory.memory_pool import release_flow_memory
 from neurobrix.triton.flow.audio_llm import (
     TritonAudioLLMEngine,   # its dtype, embedding and output helpers, the same
-    _sample_token_nbx,
 )
+from neurobrix.triton.samplers import decode_sampler, sample_next_id
+from neurobrix.core.flow.shared_steps import effective_sampling as _effective_sampling   # both branches read the sampling alike
+from neurobrix.core.module.sampling_contract import enforce_sampling_support, SAMPLER_IMPLEMENTS
 from nbxtensor.ops import wrappers as w
 from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
 from neurobrix.core.flow.base import requests_speech
@@ -440,22 +442,18 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
         if max_tokens is None:
             raise RuntimeError(
                 "ZERO FALLBACK: max_tokens missing from defaults.json.")
-        temperature = (float(resolved["global.temperature"])
-                       if resolved.get("global.temperature") is not None
-                       else defaults.get("temperature"))
-        if temperature is None:
-            raise RuntimeError(
-                "ZERO FALLBACK: temperature missing from defaults.json.")
+        # The decode's sampler: the branch's one CombinedSampler, its parameters resolved the one way (request >
+        # container > family file — core/module/sampling_contract.resolve_sampling); what it does not implement (min_p)
+        # is refused when asked, reported when inherited.
+        sampler = decode_sampler(self.ctx.variable_resolver, defaults, "vlm (triton)")
+        _samp_cfg, _samp_explicit = _effective_sampling(self.ctx, defaults)
+        enforce_sampling_support("vlm (triton)", SAMPLER_IMPLEMENTS, _samp_cfg, explicit=_samp_explicit)
         eos_token_id = defaults.get("eos_token_id")
         if eos_token_id is None:
             raise RuntimeError(
                 "ZERO FALLBACK: eos_token_id missing from defaults.json.")
         eos_ids = set(eos_token_id if isinstance(eos_token_id, (list, tuple))
                       else [eos_token_id])
-        repetition_penalty = (
-            float(resolved["global.repetition_penalty"])
-            if resolved.get("global.repetition_penalty") is not None
-            else defaults.get("repetition_penalty", 1.0))
 
         # Declared-MoE fusion — R30 mirror of the compiled vlm flow (the
         # Stage-1 wall-5 class: without it only trace-fired experts run
@@ -603,11 +601,7 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
             logits = self._compute_logits(
                 output, embed_weight, logits_source, head_name)
             _maybe_log_topk(logits, len(generated_ids))
-            next_token = _sample_token_nbx(
-                logits, temperature,
-                generated_ids=generated_ids,
-                repetition_penalty=repetition_penalty,
-            )
+            next_token = sample_next_id(sampler, logits, generated_ids)
             generated_ids.append(next_token)
             # In-process per-token event (same site as the autoregressive
             # generators): feeds the daemon's streaming RPC for real TTFT.
@@ -913,22 +907,18 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
         if max_tokens is None:
             raise RuntimeError(
                 "ZERO FALLBACK: max_tokens missing from defaults.json.")
-        temperature = (float(resolved["global.temperature"])
-                       if resolved.get("global.temperature") is not None
-                       else defaults.get("temperature"))
-        if temperature is None:
-            raise RuntimeError(
-                "ZERO FALLBACK: temperature missing from defaults.json.")
+        # The decode's sampler: the branch's one CombinedSampler, its parameters resolved the one way (request >
+        # container > family file — core/module/sampling_contract.resolve_sampling); what it does not implement (min_p)
+        # is refused when asked, reported when inherited.
+        sampler = decode_sampler(self.ctx.variable_resolver, defaults, "vlm (triton)")
+        _samp_cfg, _samp_explicit = _effective_sampling(self.ctx, defaults)
+        enforce_sampling_support("vlm (triton)", SAMPLER_IMPLEMENTS, _samp_cfg, explicit=_samp_explicit)
         eos_token_id = defaults.get("eos_token_id")
         if eos_token_id is None:
             raise RuntimeError(
                 "ZERO FALLBACK: eos_token_id missing from defaults.json.")
         eos_ids = set(eos_token_id if isinstance(eos_token_id, (list, tuple))
                       else [eos_token_id])
-        repetition_penalty = (
-            float(resolved["global.repetition_penalty"])
-            if resolved.get("global.repetition_penalty") is not None
-            else defaults.get("repetition_penalty", 1.0))
 
         # Declared-MoE fusion mirror (data-driven; no-op on dense builds).
         lm_cfg = defaults.get("lm_config", {})
@@ -1016,11 +1006,7 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
             logits = self._compute_logits(
                 output, embed_weight, logits_source, head_name)
             _maybe_log_topk(logits, len(generated_ids))
-            next_token = _sample_token_nbx(
-                logits, temperature,
-                generated_ids=generated_ids,
-                repetition_penalty=repetition_penalty,
-            )
+            next_token = sample_next_id(sampler, logits, generated_ids)
             generated_ids.append(next_token)
             # In-process per-token event (same site as the autoregressive
             # generators): feeds the daemon's streaming RPC for real TTFT.
@@ -1364,22 +1350,18 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
         if max_tokens is None:
             raise RuntimeError(
                 "ZERO FALLBACK: max_tokens missing from defaults.json.")
-        temperature = (float(resolved["global.temperature"])
-                       if resolved.get("global.temperature") is not None
-                       else defaults.get("temperature"))
-        if temperature is None:
-            raise RuntimeError(
-                "ZERO FALLBACK: temperature missing from defaults.json.")
+        # The decode's sampler: the branch's one CombinedSampler, its parameters resolved the one way (request >
+        # container > family file — core/module/sampling_contract.resolve_sampling); what it does not implement (min_p)
+        # is refused when asked, reported when inherited.
+        sampler = decode_sampler(self.ctx.variable_resolver, defaults, "vlm (triton)")
+        _samp_cfg, _samp_explicit = _effective_sampling(self.ctx, defaults)
+        enforce_sampling_support("vlm (triton)", SAMPLER_IMPLEMENTS, _samp_cfg, explicit=_samp_explicit)
         eos_token_id = defaults.get("eos_token_id")
         if eos_token_id is None:
             raise RuntimeError(
                 "ZERO FALLBACK: eos_token_id missing from defaults.json.")
         eos_ids = set(eos_token_id if isinstance(eos_token_id, (list, tuple))
                       else [eos_token_id])
-        repetition_penalty = (
-            float(resolved["global.repetition_penalty"])
-            if resolved.get("global.repetition_penalty") is not None
-            else defaults.get("repetition_penalty", 1.0))
 
         # Declared-MoE fusion mirror (data-driven; no-op on dense builds).
         lm_cfg = defaults.get("lm_config", {})
@@ -1549,11 +1531,7 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
             logits = self._compute_logits(
                 output, embed_weight, logits_source, head_name)
             _maybe_log_topk(logits, len(generated_ids))
-            next_token = _sample_token_nbx(
-                logits, temperature,
-                generated_ids=generated_ids,
-                repetition_penalty=repetition_penalty,
-            )
+            next_token = sample_next_id(sampler, logits, generated_ids)
             generated_ids.append(next_token)
             # In-process per-token event (same site as the autoregressive
             # generators): feeds the daemon's streaming RPC for real TTFT.

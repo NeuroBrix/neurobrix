@@ -81,6 +81,8 @@ class VariableResolver:
         # NBXTensor on the Triton branch (R33).
         self.mode = mode
         self.defaults = runtime_defaults
+        # The family layer before the container's defaults overlaid it (set by the executor; resolve_sampling reads it).
+        self.family_defaults: Optional[Dict[str, Any]] = None
         self.component_configs = component_configs
         self.modules = modules
         self.loop_state = loop_state

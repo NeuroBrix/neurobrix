@@ -70,6 +70,14 @@ def _try_warm_path(args) -> bool:
         kwargs["temperature"] = args.temperature
     if args.repetition_penalty is not None:
         kwargs["repetition_penalty"] = args.repetition_penalty
+    # The warm path carries every sampling flag the cold path does (the daemon used to receive no --top-k, --top-p or
+    # --max-tokens and decode at the container's values without a word)
+    if args.top_k is not None:
+        kwargs["top_k"] = args.top_k
+    if args.top_p is not None:
+        kwargs["top_p"] = args.top_p
+    if args.max_tokens is not None:
+        kwargs["max_tokens"] = args.max_tokens
     if args.chat_mode is not None:
         kwargs["chat_mode"] = args.chat_mode
     # Warm-boundary symmetry (doctrine: serving RPCs hide R30 gaps): the

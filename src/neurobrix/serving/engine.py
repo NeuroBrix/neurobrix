@@ -273,6 +273,11 @@ class InferenceEngine:
             inputs["global.temperature"] = kwargs["temperature"]
         if "repetition_penalty" in kwargs and kwargs["repetition_penalty"] is not None:
             inputs["global.repetition_penalty"] = kwargs["repetition_penalty"]
+        # top-k and top-p ride like the temperature: every decode resolves the four alike (sampling_contract)
+        if "top_k" in kwargs and kwargs["top_k"] is not None:
+            inputs["global.top_k"] = kwargs["top_k"]
+        if "top_p" in kwargs and kwargs["top_p"] is not None:
+            inputs["global.top_p"] = kwargs["top_p"]
         if "max_tokens" in kwargs and kwargs["max_tokens"] is not None:
             inputs["global.max_tokens"] = kwargs["max_tokens"]
         if "chat_mode" in kwargs:
@@ -331,6 +336,10 @@ class InferenceEngine:
             inputs["global.temperature"] = params["temperature"]
         if "repetition_penalty" in params and params["repetition_penalty"] is not None:
             inputs["global.repetition_penalty"] = params["repetition_penalty"]
+        if "top_k" in params and params["top_k"] is not None:
+            inputs["global.top_k"] = params["top_k"]
+        if "top_p" in params and params["top_p"] is not None:
+            inputs["global.top_p"] = params["top_p"]
         if "max_tokens" in params and params["max_tokens"] is not None:
             inputs["global.max_tokens"] = params["max_tokens"]
         if "seed" in params and params["seed"] is not None:
