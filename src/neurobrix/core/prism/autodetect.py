@@ -2589,6 +2589,42 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None) -> dic
     return added
 
 
+def note_reload_rate(hardware_id: Optional[str], engine: str, stored: str, reloaded_bytes: int, seconds: float,
+                     what: str) -> bool:
+    """The engine measured ITSELF reloading streamed pieces at a real run (`core/strategies/layer_streaming.py`): the
+    pieces a token loads again — read from the container through the page cache, decoded, converted, uploaded —
+    `reloaded_bytes` in `seconds`. Written once, on a GENERATED profile only, as `host_measured.weight_reload_gbps.
+    {engine}.{stored}` when neither it nor the vendor file states it: the fact Prism prices a per-token reload with
+    (`time_estimate.reload_bps`, refused by name without it — the supervisor 2026-11-02 06:40). True when written."""
+    if not hardware_id or not str(hardware_id).startswith("default") or seconds <= 0 \
+            or reloaded_bytes < LOADER_RATE_MIN_BYTES:
+        return False
+    st = _STORED.get(str(stored), str(stored))
+    path = HARDWARE_DIR / f"{hardware_id}.yml"
+    if not path.exists():
+        return False
+    from neurobrix.core.prism.loader import _vendor_block
+    import time as _time
+    data = yaml.safe_load(path.read_text()) or {}
+    devices = data.get("devices") or []
+    host = data.get("host_measured")
+    vendor = _vendor_block(devices[0], "host_measured") if devices else None
+    for block in (host, vendor):
+        if (((block or {}).get("weight_reload_gbps") or {}).get(engine) or {}).get(st) is not None:
+            return False
+    if not isinstance(host, dict):
+        return False                         # the first launch writes host_measured; never a block made here
+    gbps = round(reloaded_bytes / seconds / 1e9, 3)
+    host.setdefault("weight_reload_gbps", {}).setdefault(engine, {})[st] = gbps
+    host.setdefault("weight_reload_source", []).append(
+        f"{engine} {st}: {gbps} GB/s measured by the engine itself reloading streamed pieces at a real run "
+        f"{_time.strftime('%Y-%m-%d %H:%M:%S %Z')}, {what}, {reloaded_bytes / 1e9:.2f} GB reloaded")
+    _write_profile_atomically(path, data)
+    print(f"   [Auto-detect] the {engine} engine measured its per-token reload: {st} {gbps} GB/s, written into "
+          f"{path.name}")
+    return True
+
+
 def note_loader_rate(hardware_id: Optional[str], engine: str, stored: str, where: str, landed_bytes: int, seconds: float,
                      what: str) -> bool:
     """The engine's loader measured ITSELF at a real load (`GraphExecutor`'s loaders): `landed_bytes` of weights stored

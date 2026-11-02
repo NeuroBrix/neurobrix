@@ -29,6 +29,12 @@ def test_janus_triton_on_a_busy_mac_is_not_re_planned_into_a_per_token_reload(mo
 
 
 def test_a_per_token_reload_is_priced_at_the_measured_reload_rate():
-    from neurobrix.core.prism.time_estimate import host_facts
-    h = host_facts({"host_matmul_gflops": 3125, "host_memory_gbps": 132, "weight_reload_gbps": 2.1})
-    assert abs(h.reload_bps - 2.1e9) < 1
+    """The fact is per engine and stored dtype; a bare number (which engine? which width?) is refused by name."""
+    import pytest
+    from neurobrix.core.prism.time_estimate import host_facts, reload_bps, MissingFact
+    h = host_facts({"host_matmul_gflops": 3125, "host_memory_gbps": 132, "weight_reload_gbps": {"triton": {"BF16": 2.1}}})
+    assert abs(reload_bps(h, "triton", "bfloat16") - 2.1e9) < 1
+    with pytest.raises(MissingFact, match="weight_reload_gbps.compiled.BF16"):
+        reload_bps(h, "compiled", "bfloat16")
+    with pytest.raises(MissingFact, match="names no engine"):
+        host_facts({"host_matmul_gflops": 3125, "host_memory_gbps": 132, "weight_reload_gbps": 2.1})
