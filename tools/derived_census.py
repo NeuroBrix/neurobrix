@@ -2281,7 +2281,7 @@ def _audio_llm_sites(model, topo, defaults, plan, audio_path, max_tokens_req, ha
     lm = next(st["component"] for st in stages if st.get("execution") == "autoregressive")
     graph = lambda c: json.loads((root / "components" / c / "graph.json").read_text())
     ctx = _Stub(executors={fwd[0]: _Stub(_dag=graph(fwd[0]))}, nbx_path_str=str(root))
-    input_shape = AF._component_input_shape(ctx, fwd[0])
+    input_shape = AF.get_component_input_shape(ctx, fwd[0])   # the one reader (core/flow/audio_utils, d2571d44)
     prep = AF.resolve_preprocessing((audio.get("input") or {}).get("preprocessing"), input_shape)
     cfg = AF._model_config_path(ctx)
     wins = None
