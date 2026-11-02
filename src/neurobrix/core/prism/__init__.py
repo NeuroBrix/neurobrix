@@ -42,8 +42,6 @@ from .solver import (
     # Import planning
     PrismImportPlanner,
     ImportPlan,
-    # Convenience function
-    solve,
 )
 from .profiler import (
     ActivationProfiler,
@@ -93,7 +91,6 @@ __all__ = [
     "PipelineExecutionPlan",
     "PrismImportPlanner",
     "ImportPlan",
-    "solve",
     # Backward compatibility aliases
     # Activation Profiler
     "ActivationProfiler",

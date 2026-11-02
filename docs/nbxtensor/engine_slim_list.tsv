@@ -1,7 +1,7 @@
 # The engine's open slimming findings (tools/engine_slim_scan.py); each ends deleted, moved into nbxtensor, or kept
 # with its reason in docs/nbxtensor/ENGINE_SLIM.md. Both figures below may only go down (test_the_engine_only_slims.py).
-# engine_lines: 136979
-# open: 35
+# engine_lines: 136976
+# open: 34
 kind	path	symbol	detail
 duplicate	src/neurobrix/core/optim/passes/fusion_vertical.py	is_graph_output	same body as src/neurobrix/triton/sequence.py::_is_graph_output
 duplicate	src/neurobrix/core/strategies/block_scatter.py	unload_weights	same body as src/neurobrix/core/strategies/pipeline_parallel.py::unload_weights
@@ -30,7 +30,6 @@ wrapper	src/neurobrix/core/prism/plan_advice.py	assess(volatility)	no call site 
 wrapper	src/neurobrix/core/prism/plan_advice.py	dominated_by_activations(ratio)	no call site passes it: always its default 4.0
 wrapper	src/neurobrix/core/prism/solver.py	_identify_inplace_add_candidates_static(threshold_bytes)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/prism/solver.py	order_candidates(tie)	no call site passes it: always its default 0.01
-wrapper	src/neurobrix/core/prism/solver.py	solve	only hands its parameters to PrismSolver().solve
 wrapper	src/neurobrix/core/prism/time_estimate.py	plan_seconds(phases)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/strategies/base.py	synchronize_device	only hands its parameters to device_sync
 wrapper	src/neurobrix/core/strategies/layer_streaming.py	_nbx_path	only hands its parameters to self.resolve_artifact_path
