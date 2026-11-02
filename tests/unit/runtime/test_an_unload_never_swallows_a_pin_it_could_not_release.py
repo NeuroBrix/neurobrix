@@ -17,7 +17,7 @@ def _stub(monkeypatch, fn):
 def test_the_unload_asks_the_loaded_pointer_table_module_to_release_its_pinned_tables(monkeypatch):
     calls = []
     _stub(monkeypatch, lambda: calls.append(1) or 0)
-    MemoryManager.unload_weights({}, clear_cuda_cache=False)
+    MemoryManager.unload_weights({})
     assert calls == [1]
 
 
@@ -26,10 +26,10 @@ def test_a_release_that_fails_is_raised(monkeypatch):
         raise RuntimeError("a pin would not exit")
     _stub(monkeypatch, boom)
     with pytest.raises(RuntimeError, match="a pin would not exit"):
-        MemoryManager.unload_weights({}, clear_cuda_cache=False)
+        MemoryManager.unload_weights({})
 
 
 def test_a_run_that_never_loaded_the_moe_module_imports_nothing(monkeypatch):
     monkeypatch.delitem(sys.modules, "neurobrix.triton.moe", raising=False)
-    MemoryManager.unload_weights({}, clear_cuda_cache=False)
+    MemoryManager.unload_weights({})
     assert "neurobrix.triton.moe" not in sys.modules

@@ -101,16 +101,12 @@ def test_compute_dtype_plan_wins_over_manifest():
     assert _flow_ctx(plan, "bfloat16").compute_dtype() == torch.float32
 
 
-def test_compute_dtype_component_selects_its_allocation():
+def test_compute_dtype_reads_the_first_allocation_carrying_a_dtype():
+    # No flow names the component it synthesises for (the per-component rung went, 2026-11-02): the model-wide
+    # answer is the first allocation carrying a dtype.
     plan = _plan({"vae": SimpleNamespace(dtype="float32"),
                   "lm": SimpleNamespace(dtype="float16")})
-    ctx = _flow_ctx(plan)
-    assert ctx.compute_dtype("lm") == torch.float16
-    assert ctx.compute_dtype("vae") == torch.float32
-    # unnamed → first allocation carrying a dtype
-    assert ctx.compute_dtype() == torch.float32
-    # unknown component → same first-allocation answer, no crash
-    assert ctx.compute_dtype("missing") == torch.float32
+    assert _flow_ctx(plan).compute_dtype() == torch.float32
 
 
 def test_compute_dtype_target_dtype_fallback():
