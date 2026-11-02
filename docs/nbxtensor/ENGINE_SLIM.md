@@ -79,6 +79,7 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 
 | kind | path | symbol | why it stays |
 |---|---|---|---|
+| wrapper | src/neurobrix/core/flow/autoregressive.py | use_branch | the session's branch API, the pair of new_branch (the Triton session has the same): the next_token_diffusion flows hold the session, not its cache wrapper |
 | duplicate | src/neurobrix/core/flow/next_token_diffusion.py | _require_tensor | each branch tests its own tensor type for the primary output (torch.Tensor in the compiled engine, NBXTensor in the Triton one): the same text, two types |
 | duplicate | src/neurobrix/triton/flow/next_token_diffusion.py | _require | each branch tests its own tensor type for the primary output (torch.Tensor in the compiled engine, NBXTensor in the Triton one): the same text, two types |
 | duplicate | src/neurobrix/core/flow/vlm.py | _span | a function nested in the VLM decode, closing over that decode's own locals (its ids, its tokenizer); the same text in both branches, shared only by lifting it with its captured state as parameters — the VLM decode is the Dell's in flight (logits projection, 2026-11-02 01:29) |
