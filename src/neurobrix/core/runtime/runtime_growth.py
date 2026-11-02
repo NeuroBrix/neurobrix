@@ -33,8 +33,11 @@ def path(model: str) -> Path:
     return _root() / model / "runtime_growth.json"
 
 
-#: the measuring method a record states, and the only one `load` reads
-METHOD = "triton-driver-used-less-allocator-live, run end less before the executor, on real devices (v2, 2026-10-29)"
+#: the measuring method a record states, and the only one `load` reads. v3 (2026-11-02): what the driver attributes to
+#: THIS process (`nbxtensor.backend.process_memory`), less the allocator's live bytes — the card's free/total counted every
+#: other process as ours (Allegro-TI2V read 7 430 MB with a second run on its card, 654 MB alone; the supervisor 09:50).
+#: A v2 record (the card's reading) is no longer read: re-measured at the next run.
+METHOD = "triton-process-held-less-allocator-live, run end less before the executor, on real devices (v3, 2026-11-02)"
 
 
 def load(model: Optional[str], engine: str, architecture: str) -> Optional[float]:
@@ -50,13 +53,19 @@ def load(model: Optional[str], engine: str, architecture: str) -> Optional[float
     return float(value["mb"])
 
 
-def untracked_mb(devices) -> Dict[int, float]:
-    """{device index: MB the driver reports used that the Triton allocator does not hold} for `devices`."""
+def untracked_mb(devices) -> Optional[Dict[int, float]]:
+    """{device index: MB the driver attributes to THIS process that the Triton allocator does not hold} for `devices`;
+    None when the backend gives no per-process accounting — the growth is then not measured (said by `record`), never
+    read from the card's free/total, which counts every other process."""
+    from nbxtensor.backend.process_memory import process_device_bytes
     from nbxtensor.memory.allocator import DeviceAllocator as DA
     out = {}
     for d in devices:
-        free_b, total_b = DA.mem_get_info(d)
-        out[int(d)] = (int(total_b) - int(free_b) - DA._cuda_live_bytes.get(int(d), 0)) / (1024 * 1024)
+        DA.mem_get_info(d)        # the context exists before it is read (the before-reading held it in v2 as well)
+        held = process_device_bytes(int(d))
+        if held is None:
+            return None
+        out[int(d)] = (int(held) - DA._cuda_live_bytes.get(int(d), 0)) / (1024 * 1024)
     return out
 
 
@@ -65,6 +74,9 @@ def record(model: Optional[str], engine: str, architecture: str, before: Dict[in
     """Writes max(recorded by this method, the largest growth of any device this run) and returns the run's growth in
     MB. Under the census shadow nothing is measured and nothing is written: its devices are no device."""
     if not model or not before or not after:
+        if model and (before is None or after is None):
+            print(f"   [RuntimeGrowth] not measured for {model}: the backend gives no per-process accounting of the "
+                  f"device (the card's free/total would count other processes)", flush=True)
         return None
     from neurobrix.kernels import census
     if census.active():
@@ -78,8 +90,9 @@ def record(model: Optional[str], engine: str, architecture: str, before: Dict[in
     prior_mb = (float(prior["mb"]) if isinstance(prior, dict) and prior.get("method") == METHOD else None)
     if prior_mb is None or grown > prior_mb:
         per[str(architecture)] = {"mb": grown, "method": METHOD}
-        data["source"] = ("the engine's own reading at the end of a run, driver used less its allocator's live bytes, "
-                          "less the same reading before the executor (core/runtime/runtime_growth.py)")
+        data["source"] = ("the engine's own reading at the end of a run, what the driver attributes to this process less "
+                          "its allocator's live bytes, less the same reading before the executor "
+                          "(core/runtime/runtime_growth.py)")
         p.parent.mkdir(parents=True, exist_ok=True)
         tmp = p.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, indent=1, sort_keys=True))
