@@ -23,11 +23,14 @@ import pytest
 import torch
 import yaml
 
-from neurobrix.core.config.loader import CONFIG_ROOT
 from neurobrix.core.dtype.engine import DtypeEngine
 from neurobrix.core.config.loader import vendor_file  # the device whole: engine file + library half
 
-PROFILES = sorted((CONFIG_ROOT / "vendors").glob("*/*.yml"))
+from tests.unit.accelerator_vendor_files import accelerator_vendor_files  # the cpu/ files state the CPU path's keys only
+
+# The accelerators: a cpu/ vendor file describes the host CPU (its fp64 is config.DTYPE_SUPPORT["cpu"], above) and
+# holds only the keys the CPU path reads — the key census of 2026-11-01.
+PROFILES = accelerator_vendor_files()
 
 
 @pytest.mark.parametrize("path", PROFILES, ids=lambda p: f"{p.parent.name}/{p.stem}")
