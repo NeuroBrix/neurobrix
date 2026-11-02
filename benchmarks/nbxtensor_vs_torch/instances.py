@@ -56,13 +56,16 @@ def bind_profile(hardware: str):
 
 
 def census_ops(census: str) -> dict:
-    """{model: {op uid}} the census table records a Triton kernel for."""
+    """{model: {op uid}} the census table records a Triton kernel for — under each container's name of today (a row
+    written before a rename keeps its former name: read through tools/container_renames.current_name)."""
+    sys.path.insert(0, str(REPO / "tools"))
+    from container_renames import current_name
     path = REPO / "src" / "neurobrix" / "config" / "census" / f"{census}.jsonl"
     out = collections.defaultdict(set)
     for line in path.read_text().splitlines():
         row = json.loads(line)
         if row.get("mode") == MODE:
-            out[row["model"]].update(row.get("ops") or [])
+            out[current_name(row["model"])].update(row.get("ops") or [])
     return dict(out)
 
 
