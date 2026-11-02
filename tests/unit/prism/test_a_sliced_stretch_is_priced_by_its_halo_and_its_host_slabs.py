@@ -8,13 +8,15 @@ plans priced the same. Without the host fact the sliced plan is not timed, said 
 import pytest
 
 import neurobrix.core.prism.solver as S
-from tests.unit.prism._pinned_machine import pin_host
+from tests.unit.prism._pinned_machine import pin_host, pin_reload
 from tests.unit.prism.test_a_component_over_the_rung_streams_inside_itself import _plan, no_door
 
 
 def _mochi(monkeypatch, rung=None):
     no_door(monkeypatch)
     pin_host(monkeypatch, 24576, 17582, "the calm Mac")
+    pin_reload(monkeypatch, "compiled", "BF16", 2.1,
+               "the M4 Pro's measured Triton BF16 reload (2.1 GB/s, apple_m4_pro.yml) stands for the compiled one, not measured yet (owed by the Mac): this test prices slicing, not reload")
     if rung:
         monkeypatch.setenv("NBX_PRISM_BUDGET_MB", str(rung))
     terms = []

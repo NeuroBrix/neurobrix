@@ -99,6 +99,22 @@ def pin_host(monkeypatch, total_mb: int, available_mb: int, why: str) -> None:
     monkeypatch.setattr(host_memory, "memory_state", lambda: st)
 
 
+def pin_reload(monkeypatch, engine: str, stored: str, gbps: float, why: str) -> None:
+    """The host's per-token reload rate for `engine` at `stored` width (`weight_reload_gbps`, which Prism prices a
+    streamed piece's reload at and refuses to estimate without — e0d521e8), as the scenario states it, with `why`."""
+    import dataclasses
+    from neurobrix.core.prism import time_estimate as TE
+    real = TE.host_facts
+
+    def facts(*a, **k):
+        f = real(*a, **k)
+        table = {e: dict(v) for e, v in (f.reload_gbps or {}).items()}
+        table.setdefault(engine, {})[stored] = gbps
+        return dataclasses.replace(f, reload_gbps=table)
+    facts.why = why
+    monkeypatch.setattr(TE, "host_facts", facts)
+
+
 def pin_dedicated_card(monkeypatch, driver_total_mb: int, own_context_mb: int, why: str) -> None:
     """Every discrete card reads as dedicated: nothing else on it, the runtime's own context.
 
