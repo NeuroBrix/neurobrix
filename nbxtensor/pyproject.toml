@@ -20,3 +20,7 @@ test = ["pytest"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/nbxtensor"]
+
+# The code taken from other projects, with their licenses, ships inside the package (the sdist carries it at the root).
+[tool.hatch.build.targets.wheel.force-include]
+"THIRD_PARTY_NOTICES.md" = "nbxtensor/THIRD_PARTY_NOTICES.md"

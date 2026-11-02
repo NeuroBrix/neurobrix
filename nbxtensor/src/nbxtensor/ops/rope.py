@@ -2,7 +2,7 @@
 
 Fused forward kernel: applies rotary embedding in-place to Q and K.
 HuggingFace Llama/Mistral style: split-half rotation (not interleaved).
-Extracted from Liger-Kernel (Apache 2.0).
+Extracted from Liger-Kernel (BSD-2-Clause; THIRD_PARTY_NOTICES.md).
 
 Layout:
     q: (bsz, seq_len, n_q_heads, head_dim)  — physical (transposed from [B,H,S,D])
