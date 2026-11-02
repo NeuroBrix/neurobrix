@@ -214,8 +214,32 @@ class SegmentPool
     # The free blocks of every device's segments, and the blocks in use inside them.
 class Simulation
     # What the allocator holds for a sequence of allocations and frees
-def simulate(events: Iterable[Tuple[str, object, int]], parked_cap: int=0, align: int=POOL_ALIGN, split_min: int=POOL_SPLIT_MIN, pooled: bool=True)
-    # Replay `events` — ("alloc", key, nbytes), ("arena", key, nbytes) and ("free", key, 0), `key` any hashable naming one allocation — through the allocator's own pool (`SegmentPool`) and its own order
+def simulate(events: Iterable[Tuple[str, object, int]], parked_cap: int=0, align: int=POOL_ALIGN, split_min: int=POOL_SPLIT_MIN, pooled: bool=True, vmm_chunk: Optional[int]=None, cap: Optional[int]=None) -> Simulation
+    # Replay `events` — ("alloc", key, nbytes), ("arena", key, nbytes) and ("free", key, 0), `key` any hashable naming one allocation — through the allocator's own pool (`SegmentPool`) and its own order; `vmm_chunk` > 0 grows the large class in an expandable range of that chunk, `cap` the card's bytes
+class Range
+    # One reserved virtual address range of a device: chunks mapped into it as the pool's large class grows (R16)
+def range_add(pool: SegmentPool, dev: int, base: int, size: int, chunk: int) -> Range
+    # A reserved range joins the device's large class.
+def range_extend(pool: SegmentPool, dev: int, nbytes: int) -> Optional[Tuple[Range, int, int]]
+    # Grow the last range's top by `nbytes` (whole chunks): the new free block, or None when the range is full.
+def range_unmapped(pool: SegmentPool, dev: int, ptr: int, nbytes: int) -> List[Tuple[Range, int]]
+    # The (range, chunk) pairs a block touches that are not mapped yet.
+def range_reclaimable(pool: SegmentPool, dev: int) -> List[Tuple[Range, int]]
+    # The mapped chunks lying whole inside free blocks: what a refusal may unmap.
+```
+
+`nbxtensor.memory.vmm`
+
+```python
+class Vmm(lib, device: int)
+    # One device's virtual memory management calls (CUDA's driver API through ctypes): load(libs), supported(), granularity(), reserve(), unreserve(), create(), map(), unmap(), release() — each returns the driver's status code
+```
+
+`nbxtensor.backend.process_memory`
+
+```python
+def process_device_bytes(device: int) -> Optional[int]
+    # The bytes the driver attributes to THIS process on the visible `device` (NVML's per-process accounting), or None when the backend or the driver gives none — never the card's free/total
 ```
 
 `nbxtensor.memory.shadow`
