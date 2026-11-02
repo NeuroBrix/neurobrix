@@ -73,7 +73,7 @@ class FlowContext:
     # the decoder. None when the request is not binned.
     binned_request: Any = None
 
-    def compute_dtype(self, component: str = None) -> 'torch.dtype':
+    def compute_dtype(self) -> 'torch.dtype':
         """Prism-RESOLVED compute dtype for flow-level tensor synthesis.
 
         SINGLE compiled-side resolver (brick-consolidation E2). The Prism
@@ -85,12 +85,10 @@ class FlowContext:
         under (e.g. a bf16 manifest resolved to fp32 on non-bf16 hardware).
 
         Resolution order:
-          1. `plan.components[component].dtype` — per-component resolved
-             dtype, when the caller names the component it synthesises for;
-          2. first allocation carrying a dtype — the model-wide answer for
+          1. first allocation carrying a dtype — the model-wide answer for
              single-dtype plans (every allocation agrees);
-          3. `plan.target_dtype` — the plan-wide resolved dtype;
-          4. `manifest["dtype"]` — no plan attached.
+          2. `plan.target_dtype` — the plan-wide resolved dtype;
+          3. `manifest["dtype"]` — no plan attached.
 
         The triton mirror is `neurobrix.triton.dtype.resolve_compute_dtype`
         (string-dtype boundary, R33) — separate implementation by design.
@@ -100,10 +98,8 @@ class FlowContext:
         if plan is not None:
             comps = getattr(plan, "components", None)
             if comps:
-                alloc = comps.get(component) if component else None
-                if alloc is None or not getattr(alloc, "dtype", None):
-                    alloc = next((a for a in comps.values()
-                                  if getattr(a, "dtype", None)), None)
+                alloc = next((a for a in comps.values()
+                              if getattr(a, "dtype", None)), None)
                 if alloc is not None and getattr(alloc, "dtype", None):
                     return get_torch_dtype(alloc.dtype)
             target = getattr(plan, "target_dtype", None)

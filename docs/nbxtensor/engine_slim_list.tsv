@@ -1,7 +1,7 @@
 # The engine's open slimming findings (tools/engine_slim_scan.py); each ends deleted, moved into nbxtensor, or kept
 # with its reason in docs/nbxtensor/ENGINE_SLIM.md. Both figures below may only go down (test_the_engine_only_slims.py).
-# engine_lines: 137217
-# open: 108
+# engine_lines: 137171
+# open: 101
 kind	path	symbol	detail
 duplicate	src/neurobrix/core/audio_frontend.py	_requested_voice	same body as src/neurobrix/triton/audio_frontend.py::_requested_voice_np
 duplicate	src/neurobrix/core/cfg/engine.py	__init__	same body as src/neurobrix/triton/cfg/engine.py::__init__
@@ -51,14 +51,8 @@ wrapper	src/neurobrix/_nbxtensor_host.py	shadow_run	only hands its parameters to
 wrapper	src/neurobrix/agent/sandbox.py	SandboxViolation	only renames Exception
 wrapper	src/neurobrix/agent/sandbox.py	_bound(limit)	no call site passes it: always its default _OUTPUT_BOUND
 wrapper	src/neurobrix/core/cfg/engine.py	execute_component_with_cfg	only hands its parameters to self._execute_batched_cfg
-wrapper	src/neurobrix/core/flow/audio_utils.py	preprocess_text_input(input_config)	no call site passes it: always its default None
-wrapper	src/neurobrix/core/flow/audio_utils.py	redistribute_snac_codes(codebook_size)	no call site passes it: always its default 4096
 wrapper	src/neurobrix/core/flow/audio_utils.py	sample_token(top_p)	no call site passes it: always its default 1.0
 wrapper	src/neurobrix/core/flow/autoregressive.py	use_branch	only hands its parameters to self.kv_wrapper.use_branch
-wrapper	src/neurobrix/core/flow/base.py	compute_dtype(component)	no call site passes it: always its default None
-wrapper	src/neurobrix/core/flow/decoder_kv.py	decoder_self_attention_plan(encoder_input)	no call site passes it: always its default 'input::encoder_hidden_states'
-wrapper	src/neurobrix/core/flow/tts_llm.py	_sample_token(min_p)	no call site passes it: always its default 0.0
-wrapper	src/neurobrix/core/flow/tts_llm.py	_sample_token(top_p)	no call site passes it: always its default 1.0
 wrapper	src/neurobrix/core/memory/manager.py	release_flow_memory	only hands its parameters to MemoryManager.release_flow_memory
 wrapper	src/neurobrix/core/memory/manager.py	unload_weights(clear_cuda_cache)	no call site passes it: always its default True
 wrapper	src/neurobrix/core/memory/manager.py	unload_weights(log_prefix)	no call site passes it: always its default '[MemoryManager]'
@@ -108,6 +102,5 @@ wrapper	src/neurobrix/kernels/census.py	install(hardware_profile)	no call site p
 wrapper	src/neurobrix/kernels/census_table.py	rows_for(root)	no call site passes it: always its default None
 wrapper	src/neurobrix/triton/audio_frontend.py	_build(_ctx)	no call site passes it: always its default ctx
 wrapper	src/neurobrix/triton/dtype.py	resolve_compute_dtype(component)	no call site passes it: always its default None
-wrapper	src/neurobrix/triton/flow/iterative_process.py	_to_nbx(device_idx)	no call site passes it: always its default 0
 wrapper	src/neurobrix/triton/sequence.py	func_wrapper	only hands its parameters to moe_fused_dispatch
 wrapper	src/neurobrix/triton/weight_loader.py	_read_header	an alias of read_safetensors_header

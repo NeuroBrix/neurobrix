@@ -131,10 +131,10 @@ def _vram_probe(tag: str) -> None:
         print(f"[VRAM_PROBE {tag}] failed: {_e}", flush=True)
 
 
-def _to_nbx(tensor, device_idx: int = 0) -> NBXTensor:
+def _to_nbx(tensor) -> NBXTensor:
     """Convert torch.Tensor to NBXTensor at the boundary.
 
-    CPU tensors: numpy → from_numpy (H2D via cudaMemcpy, zero torch).
+    CPU tensors: numpy → from_numpy on device 0 (H2D via cudaMemcpy, zero torch).
     CUDA tensors: from_raw (pointer wrap, zero copy).
     """
     if isinstance(tensor, NBXTensor):
@@ -154,10 +154,10 @@ def _to_nbx(tensor, device_idx: int = 0) -> NBXTensor:
             tensor = tensor.contiguous()
         if hasattr(tensor, 'is_cuda') and not tensor.is_cuda:
             # CPU → CUDA via numpy path (zero torch)
-            DeviceAllocator.set_device(device_idx)
+            DeviceAllocator.set_device(0)
             arr = tensor.detach().numpy()
             return NBXTensor.from_numpy(arr)
-        didx = tensor.device.index if hasattr(tensor.device, 'index') and tensor.device.index is not None else device_idx
+        didx = tensor.device.index if hasattr(tensor.device, 'index') and tensor.device.index is not None else 0
         return NBXTensor.from_raw(
             tensor.data_ptr(), tuple(tensor.shape),
             parse_dtype(str(tensor.dtype)), 'cuda',

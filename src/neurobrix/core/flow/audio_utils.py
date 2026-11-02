@@ -154,11 +154,8 @@ def preprocess_audio_input(
         ctx.variable_resolver.resolved[key] = length_tensor
 
 
-def preprocess_text_input(ctx: FlowContext, input_config: Dict = None) -> None:
+def preprocess_text_input(ctx: FlowContext) -> None:
     """Tokenize text prompt for TTS/LLM-audio models."""
-    if input_config is None:
-        input_config = {}
-
     prompt = ctx.variable_resolver.resolved.get("global.prompt")
     if prompt is None:
         raise RuntimeError(
@@ -263,11 +260,13 @@ def dual_ar_prompt_ids(input_ids: List[int], bos_id, interleave_id, tokenizer) -
     return ([interleave_id] if interleave_id is not None else []) + speaker + ids
 
 
-def redistribute_snac_codes(generated_ids, audio_token_start, vocab_size,
-                            codebook_size: int = 4096):
+_SNAC_CODEBOOK_SIZE = 4096   # each of the SNAC codec's three codebooks (Orpheus' 24 kHz SNAC)
+
+
+def redistribute_snac_codes(generated_ids, audio_token_start, vocab_size):
     """Zero Outsider (ZO-0): redistribute an orpheus SNAC token stream (7 tokens
     per frame) into the 3 SNAC codebooks. PURE python (no torch, no `snac`):
-    c0=[0], c1=[1,4], c2=[2,3,5,6] per frame, each modulo codebook_size. Returns
+    c0=[0], c1=[1,4], c2=[2,3,5,6] per frame, each modulo _SNAC_CODEBOOK_SIZE. Returns
     (c0, c1, c2) lists or None if there are no full frames. The neural decode of
     these codes runs through the TRACED codec.decoder component (in the .nbx)."""
     at = [t - audio_token_start for t in generated_ids
@@ -279,10 +278,10 @@ def redistribute_snac_codes(generated_ids, audio_token_start, vocab_size,
     c0, c1, c2 = [], [], []
     for i in range(n):
         b = i * 7
-        c0.append(at[b] % codebook_size)
-        c1.append(at[b + 1] % codebook_size); c1.append(at[b + 4] % codebook_size)
-        c2.append(at[b + 2] % codebook_size); c2.append(at[b + 3] % codebook_size)
-        c2.append(at[b + 5] % codebook_size); c2.append(at[b + 6] % codebook_size)
+        c0.append(at[b] % _SNAC_CODEBOOK_SIZE)
+        c1.append(at[b + 1] % _SNAC_CODEBOOK_SIZE); c1.append(at[b + 4] % _SNAC_CODEBOOK_SIZE)
+        c2.append(at[b + 2] % _SNAC_CODEBOOK_SIZE); c2.append(at[b + 3] % _SNAC_CODEBOOK_SIZE)
+        c2.append(at[b + 5] % _SNAC_CODEBOOK_SIZE); c2.append(at[b + 6] % _SNAC_CODEBOOK_SIZE)
     return c0, c1, c2
 
 

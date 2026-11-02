@@ -584,7 +584,6 @@ class TTSLLMEngine(ComponentFlowHandler):
 
     # ─── Helpers ──────────────────────────────────────────────────────────────
 
-
     def _get_component_output(self, comp_name: str) -> Optional[torch.Tensor]:
         """Get component output from variable resolver."""
         resolved = self.ctx.variable_resolver.resolved
@@ -722,47 +721,6 @@ class TTSLLMEngine(ComponentFlowHandler):
             self._unload_component_weights(cond_name)
             release_flow_memory(self.ctx.primary_device)
         return cond_emb
-
-    def _sample_token(
-        self, logits: torch.Tensor, temperature: float,
-        top_p: float = 1.0, min_p: float = 0.0,
-        generated_ids: Optional[list] = None,
-        repetition_penalty: float = 1.0,
-    ) -> int:
-        """Sample next token from logits with temperature, top-p, min-p, and repetition penalty."""
-        logits = logits[:, -1, :].float()  # [B, vocab]
-
-        # Repetition penalty
-        if generated_ids and repetition_penalty != 1.0:
-            for tid in set(generated_ids):
-                if 0 <= tid < logits.shape[-1]:
-                    if logits[0, tid] > 0:
-                        logits[0, tid] /= repetition_penalty
-                    else:
-                        logits[0, tid] *= repetition_penalty
-
-        # Temperature
-        if temperature != 1.0 and temperature > 0:
-            logits = logits / temperature
-
-        # Min-p filtering
-        if min_p > 0:
-            probs = torch.softmax(logits, dim=-1)
-            max_prob = probs.max(dim=-1, keepdim=True).values
-            threshold = min_p * max_prob
-            logits = logits.masked_fill(probs < threshold, float('-inf'))
-
-        # Top-p (nucleus) sampling
-        if top_p < 1.0:
-            sorted_logits, sorted_indices = torch.sort(logits, descending=True)
-            cumulative_probs = torch.cumsum(torch.softmax(sorted_logits, dim=-1), dim=-1)
-            sorted_mask = cumulative_probs - torch.softmax(sorted_logits, dim=-1) >= top_p
-            sorted_logits[sorted_mask] = float('-inf')
-            logits = sorted_logits.scatter(1, sorted_indices, sorted_logits)
-
-        probs = torch.softmax(logits, dim=-1)
-        next_token = int(device_multinomial(probs, num_samples=1).item())
-        return next_token
 
     def _save_audio(self, audio_tensor: torch.Tensor, sample_rate: int) -> None:
         """Save audio tensor to WAV file."""

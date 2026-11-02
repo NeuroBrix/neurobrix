@@ -41,9 +41,10 @@ def _derived_from(dag: Dict[str, Any], roots: Set[str]) -> Set[str]:
     return reached
 
 
-def decoder_self_attention_plan(dag: Dict[str, Any],
-                                encoder_input: str = "input::encoder_hidden_states",
-                                ) -> Optional[Dict[str, Any]]:
+_ENCODER_INPUT = "input::encoder_hidden_states"   # the cross-attention memory: not a token-derived input
+
+
+def decoder_self_attention_plan(dag: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Return the decoder's self-attention geometry and op ids, or None when
     the graph has no attention op.
 
@@ -68,7 +69,7 @@ def decoder_self_attention_plan(dag: Dict[str, Any],
     # cross-attention, so "derived from the encoder" alone is not the test:
     # a cross-attention's K/V derive from the encoder states and NOT from the
     # decoder's own token inputs; a self-attention's K/V derive from the tokens.
-    from_tokens = _derived_from(dag, {t for t in inputs if t != encoder_input})
+    from_tokens = _derived_from(dag, {t for t in inputs if t != _ENCODER_INPUT})
     self_uids: List[str] = []
     cross_uids: List[str] = []
     num_heads = head_dim = kv_heads_at_op = v_head_dim = None
@@ -103,7 +104,7 @@ def decoder_self_attention_plan(dag: Dict[str, Any],
         arange_uids, position_slice_uids, position_cumsum_uids = [], [], []
     else:
         arange_uids = [uid for uid, op in ops.items() if op.get("op_type") == "aten::arange"]
-        position_slice_uids = _positional_table_slices(dag, {t for t in inputs if t != encoder_input})
+        position_slice_uids = _positional_table_slices(dag, {t for t in inputs if t != _ENCODER_INPUT})
         position_cumsum_uids = _positional_cumsums(dag, from_tokens)
     return {
         "num_layers": len(self_uids), "num_heads": num_heads, "head_dim": head_dim,
