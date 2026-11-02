@@ -274,3 +274,22 @@ if __name__ == "__main__":
     test_pool_is_on_by_default_and_zero_disables_it()
     test_autotune_headroom_guard_retries_once_then_gives_up()
     print("OK 4/4")
+
+
+def test_a_refused_growth_is_retried_at_the_size_the_pool_records(monkeypatch):
+    """A small request grows the device by a small SEGMENT (`grow_size`: 2 MiB for a 1 KiB request); when the driver
+    refuses and the flushed pool lets the retry through, the retry must ask the driver for that segment too — the pool
+    records the segment's size and carves later small blocks from it. Before (54aab11a .. 2026-11-02): the retries
+    asked for the REQUEST's bytes, so the pool carved 2 MiB of blocks out of a 1 KiB driver allocation.
+    What this test would do if the code were wrong: the driver's allocation smaller than the pool's segment — RED."""
+    with _PoolState():
+        _reinit(None)
+        drv = _with_driver(monkeypatch)
+        dev = 0
+        DeviceAllocator._pool_cap_bytes[dev] = 1 << 40
+        a = DeviceAllocator.malloc_cuda(8 * MiB)
+        DeviceAllocator.free_cuda(a)                         # a wholly free segment the refusal can flush
+        drv.refuse_once = True
+        p = DeviceAllocator.malloc_cuda(1024)                # small: a 2 MiB segment, refused once, retried
+        size_in_driver = drv.live[p]
+        assert size_in_driver == DeviceAllocator._POOL.grow_size(1024), (size_in_driver, DeviceAllocator._POOL.grow_size(1024))
