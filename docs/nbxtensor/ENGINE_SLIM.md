@@ -79,6 +79,12 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 
 | kind | path | symbol | why it stays |
 |---|---|---|---|
+| duplicate | src/neurobrix/core/flow/forward_pass.py | execute | each branch frees its own memory: the compiled one calls core/memory/manager.release_flow_memory, the Triton one nbxtensor.memory.memory_pool.release_flow_memory (two functions) — the text is the same, the call is not |
+| duplicate | src/neurobrix/triton/flow/forward_pass.py | execute | each branch frees its own memory: the compiled one calls core/memory/manager.release_flow_memory, the Triton one nbxtensor.memory.memory_pool.release_flow_memory (two functions) — the text is the same, the call is not |
+| duplicate | src/neurobrix/core/flow/iterative_process.py | _unload_component | each branch frees its own memory: the compiled one calls core/memory/manager.release_flow_memory, the Triton one nbxtensor.memory.memory_pool.release_flow_memory (two functions) — the text is the same, the call is not |
+| duplicate | src/neurobrix/triton/flow/iterative_process.py | _unload_component | each branch frees its own memory: the compiled one calls core/memory/manager.release_flow_memory, the Triton one nbxtensor.memory.memory_pool.release_flow_memory (two functions) — the text is the same, the call is not |
+| duplicate | src/neurobrix/core/flow/static_graph.py | _unload_component | each branch frees its own memory: the compiled one calls core/memory/manager.release_flow_memory, the Triton one nbxtensor.memory.memory_pool.release_flow_memory (two functions) — the text is the same, the call is not |
+| duplicate | src/neurobrix/triton/flow/static_graph.py | _unload_component | each branch frees its own memory: the compiled one calls core/memory/manager.release_flow_memory, the Triton one nbxtensor.memory.memory_pool.release_flow_memory (two functions) — the text is the same, the call is not |
 | duplicate | src/neurobrix/core/module/autoregressive/samplers.py | validate | each config type's own entry point (SamplerConfig / SchedulerConfig): the same fill-in of its DEFAULTS today, two unrelated configs — a shared base for three lines would tie them |
 | duplicate | src/neurobrix/core/module/scheduler/config.py | validate | the scheduler config's entry point; same reason as SamplerConfig.validate |
 | duplicate | src/neurobrix/core/module/autoregressive/samplers.py | __init__ | the compiled twin of triton/samplers.py's, which imports no torch (R33) and so cannot inherit from this module |
