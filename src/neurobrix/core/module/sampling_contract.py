@@ -137,11 +137,8 @@ def resolve_sampling(resolver, container_defaults, site: str) -> dict:
       3. the family file — `config/families/<family>.yml` `defaults:` (and its generation-type block), the documented
          defaults (docs/reference/cli.md, "Sampling").
     A null is no value: a container that declares `top_k: null` leaves the family's value in force. A key that no
-    source carries is refused by name — never a literal in the code.
-
-    The executor injects the merged defaults as `global.temperature/top_p/top_k` when the request set none; the order
-    above is unchanged by it (the merged value IS the container's over the family's), and a null injected there is no
-    value either.
+    source carries is refused by name — never a literal in the code. (The executor's injected `global.*` defaults are
+    the container's over the family's: the order holds.)
     """
     resolved = getattr(resolver, "resolved", None) or {}
     family = getattr(resolver, "family_defaults", None) or {}

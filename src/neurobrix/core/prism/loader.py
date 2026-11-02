@@ -28,10 +28,8 @@ from neurobrix.core.prism.cpu_config import CPUConfig
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 #: The COMMITTED profiles, shipped with the package.
 HARDWARE_DIR = PROJECT_ROOT / "config" / "hardware"
-#: The machine's GENERATED profiles (`default`, `default-<tag>`): written by the engine at its first launch and completed
-#: with what it measures, in ONE place per machine — beside the measured-facts store (core/dtype/calibration.STORE_ROOT)
-#: under the engine's home — never inside a source tree, where every tree carried a copy of its own and a fact measured
-#: in one never reached the others (the team's review, 2026-11-02).
+#: The machine's GENERATED profiles (`default`, `default-<tag>`), ONE place per machine beside the measured-facts store,
+#: never inside a source tree, where each tree kept its own copy (the team's review, 2026-11-02).
 GENERATED_DIR = Path(os.path.expanduser("~")) / ".neurobrix" / "hardware"
 
 
