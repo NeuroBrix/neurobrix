@@ -1,7 +1,7 @@
 # The engine's open slimming findings (tools/engine_slim_scan.py); each ends deleted, moved into nbxtensor, or kept
 # with its reason in docs/nbxtensor/ENGINE_SLIM.md. Both figures below may only go down (test_the_engine_only_slims.py).
 # engine_lines: 137155
-# open: 89
+# open: 86
 kind	path	symbol	detail
 duplicate	src/neurobrix/core/audio_frontend.py	_requested_voice	same body as src/neurobrix/triton/audio_frontend.py::_requested_voice_np
 duplicate	src/neurobrix/core/cfg/engine.py	__init__	same body as src/neurobrix/triton/cfg/engine.py::__init__
@@ -51,9 +51,6 @@ wrapper	src/neurobrix/agent/sandbox.py	SandboxViolation	only renames Exception
 wrapper	src/neurobrix/agent/sandbox.py	_bound(limit)	no call site passes it: always its default _OUTPUT_BOUND
 wrapper	src/neurobrix/core/cfg/engine.py	execute_component_with_cfg	only hands its parameters to self._execute_batched_cfg
 wrapper	src/neurobrix/core/flow/audio_utils.py	sample_token(top_p)	no call site passes it: always its default 1.0
-wrapper	src/neurobrix/core/paths.py	BackendOnClearedStorage	only renames RuntimeError
-wrapper	src/neurobrix/core/paths.py	PathNotConfigured	only renames RuntimeError
-wrapper	src/neurobrix/core/paths.py	installation_refusals(search_root)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/prism/facts_probe.py	gemv_gbps(k)	no call site passes it: always its default 4096
 wrapper	src/neurobrix/core/prism/facts_probe.py	gemv_gbps(n)	no call site passes it: always its default 14336
 wrapper	src/neurobrix/core/prism/facts_probe.py	gemv_gbps(reps)	no call site passes it: always its default 50

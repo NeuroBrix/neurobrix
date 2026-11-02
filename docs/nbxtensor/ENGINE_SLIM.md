@@ -79,6 +79,9 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 
 | kind | path | symbol | why it stays |
 |---|---|---|---|
+| wrapper | src/neurobrix/core/paths.py | PathNotConfigured | a named refusal: a caller tells a missing configured location from an ordinary directory it may create (tests/unit/core/test_one_door_for_the_machines_paths catches it by name) |
+| wrapper | src/neurobrix/core/paths.py | BackendOnClearedStorage | a named refusal caught by name in cli run and cli autotune, beside the backend-not-installed errors, to refuse with its own sentence |
+| wrapper | src/neurobrix/core/paths.py | installation_refusals(search_root) | the tests point it at a fake installation tree (tests/unit/triton/test_a_backend_built_on_ephemeral_storage_is_refused); the engine looks the package up on sys.path |
 | fact | src/neurobrix/core/memory/manager.py | release_flow_memory | the compiled engine's own release: torch's device sync and cache flush (device_utils) on the flow's device; nbxtensor's syncs and empties the DeviceAllocator pool (no torch, R33) — the same discipline, two allocators |
 | wrapper | src/neurobrix/core/runtime_values.py | resolve(default) | passed, through an aliased import the scan does not follow: cli/commands/run._rt (`resolve as _resolve_runtime`, family= at every call, default= at six) and serving/engine (default=None) |
 | wrapper | src/neurobrix/core/runtime_values.py | resolve(extra) | passed, through an aliased import the scan does not follow: cli/commands/run._rt (extra= at five calls) and serving/engine (the container's own height/width/VAE scale, the request's max_tokens) |
