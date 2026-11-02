@@ -79,6 +79,11 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 
 | kind | path | symbol | why it stays |
 |---|---|---|---|
+| wrapper | src/neurobrix/_nbxtensor_host.py | active | a host service registered into nbxtensor.host: it imports its engine module when the library first calls it, not at registration (no engine import, no torch, at nbxtensor's load) |
+| wrapper | src/neurobrix/_nbxtensor_host.py | record | a host service registered into nbxtensor.host: it imports its engine module when the library first calls it, not at registration (no engine import, no torch, at nbxtensor's load) |
+| wrapper | src/neurobrix/_nbxtensor_host.py | service | a host service registered into nbxtensor.host: it imports its engine module when the library first calls it, not at registration (no engine import, no torch, at nbxtensor's load) |
+| wrapper | src/neurobrix/_nbxtensor_host.py | shadow_run | a host service registered into nbxtensor.host: it imports its engine module when the library first calls it, not at registration (no engine import, no torch, at nbxtensor's load) |
+| fact | src/neurobrix/triton/dtype.py | storage_dtype | already reads nbxtensor's itemsize.storage_dtype at this branch's fp64 fact and returns the NBXDtype member: the engine's dtype-engine method over the library's table |
 | wrapper | src/neurobrix/kernels/census.py | install(hardware_profile) | the tests install the census for a profile they name (tests/unit/kernels/test_a_one_row_convolution_keys_its_width_on_the_ladder) |
 | wrapper | src/neurobrix/kernels/census_table.py | rows_for(root) | the tests read a table under a temporary root (tests/unit/kernels/test_the_census_is_one_table) |
 | wrapper | src/neurobrix/core/state/pages.py | writable(fence) | the tests write at a fence (tests/unit/core/test_the_state_pages_grow_share_and_release_on_fences): the copy-on-write rule it pins |
