@@ -60,13 +60,22 @@ def test_the_inputs_are_deterministic_and_an_index_stays_in_its_extent():
     assert emb[1].max() < 10
 
 
-def test_the_compute_dtype_of_a_tie_never_depends_on_the_process():
-    # one fp32 island beside a half weight: the op's recorded output decides; without one, the name breaks the tie
-    # (a set's order is salted per process — the two sides of the bench must agree on it run after run)
-    assert K._compute_dtype({"dtypes": ["float32", "bfloat16"], "output_dtypes": ["float32"]}) == "float32"
-    assert K._compute_dtype({"dtypes": ["float32", "bfloat16"], "output_dtypes": None}) == "bfloat16"
-    assert K._compute_dtype({"dtypes": ["float16", "float16", "float32"]}) == "float16"
-    assert K._compute_dtype({"dtypes": ["int64"]}) == "float32"
+def test_the_nbxtensor_side_runs_the_dtype_the_engine_runs_never_the_trace_record():
+    # Allegro's patch-embedding conv as the Apple census derived it: a bf16 component whose graph recorded the op's
+    # output as float16 (its trace dtype). The engine dispatches it at bf16 (census key ... 'bf16', 'bf16', 'bf16');
+    # the bench once took the recorded float16 and timed an fp16 key no certificate holds, swept at runtime (03/11)
+    inst = {"key": "ce761272518bca25", "op_type": "aten::convolution", "dtypes": ["bfloat16"] * 3,
+            "output_dtypes": ["float16"], "op_uid": "aten.convolution::0", "compute_dtype": "bfloat16",
+            "graph_dtype": "float16", "contract": {"safe": False, "island": None}}
+    disp, facts = K.engine_dispatcher(inst, stores_fp64=False)
+    assert disp.compute_dtype.name == "bfloat16" and facts["uid"] == "aten.convolution::0"
+    # a calibration island is the engine's too: the op's uid reaches the contract
+    _, isl = K.engine_dispatcher({**inst, "compute_dtype": "float16", "contract": {"safe": True, "island": "fp32"}},
+                                 stores_fp64=False)
+    assert isl["contract"] == (True, {"aten.convolution::0"}, set())
+    # an instances file without the facts is refused, never guessed
+    with pytest.raises(KeyError, match="compute_dtype"):
+        K.engine_dispatcher({k: v for k, v in inst.items() if k != "compute_dtype"}, stores_fp64=False)
 
 
 def test_a_video_instance_too_large_for_the_device_is_out_of_class_never_run():

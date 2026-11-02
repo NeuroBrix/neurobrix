@@ -168,6 +168,10 @@ def instances_of(model: str, ops_wanted: set, has_native_bf16: bool, hardware: s
             skipped[comp] = f"derivation refused: {type(e).__name__}: {e}"
             continue
         rg = DC.runtime_graph(model, comp)
+        # the dtype facts the engine's dispatcher runs the op under, as the census derived its key: the component's
+        # compute dtype, the graph's traced dtype (the AMP cast-back floor) and the precision contract's role for the op
+        contract = DC._contract(model, comp, rg, cdtype)
+        gdtype = str(rg.get("torch_dtype") or g.get("torch_dtype") or "").replace("torch.", "") or None
         for uid, op in rg["ops"].items():
             if uid not in ops_wanted or not _runs_a_triton_kernel(CL, op["op_type"].split("::")[-1].split(".")[0]):
                 continue
@@ -182,9 +186,16 @@ def instances_of(model: str, ops_wanted: set, has_native_bf16: bool, hardware: s
             spec = {"op_type": op["op_type"], "inputs": ins, "shapes": shapes, "dtypes": dts,
                     "args": attrs.get("args"), "kwargs": attrs.get("kwargs") or {},
                     "attributes": {k: v for k, v in attrs.items() if k != "args"},
-                    "symbols": syms, "output_dtypes": op.get("output_dtypes")}
+                    "symbols": syms, "output_dtypes": op.get("output_dtypes"), "op_uid": uid,
+                    "compute_dtype": cdtype, "graph_dtype": gdtype,
+                    "contract": {"safe": bool(contract.safe),
+                                 "island": ("fp32" if uid in contract.fp32_op_uids
+                                            else "narrow" if uid in contract.narrow_op_uids else None)}}
+            # two sites run one instance only when the engine runs them alike: the dtype facts are part of the key
             key = hashlib.sha256(json.dumps([spec["op_type"], shapes, dts, _literal(attrs.get("args")),
-                                             spec["attributes"]], sort_keys=True, default=str).encode()).hexdigest()[:16]
+                                             spec["attributes"], cdtype, gdtype, spec["contract"],
+                                             op.get("output_dtypes")],
+                                            sort_keys=True, default=str).encode()).hexdigest()[:16]
             inst = out.setdefault(key, {"key": key, **spec, "sites": []})
             inst["sites"].append(f"{model}/{comp}/{uid}")
     return out, skipped

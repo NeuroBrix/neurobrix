@@ -40,6 +40,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import statistics
 import sys
 import time
@@ -278,27 +279,37 @@ def release_compile_caches(dev) -> None:
     dev.release()
 
 
-def _compute_dtype(inst) -> str:
-    """The Triton dispatcher's compute dtype for an instance, deterministic: the floating dtype the op writes (the
-    container's record of its output), else the one most of its floating inputs carry — a tie (54 of the Apple
-    census's instances: an fp32 island beside a half weight) broken by name, never by a set's order, which Python
-    salts per process."""
-    out = [str(d) for d in (inst.get("output_dtypes") or []) if "float" in str(d)]
-    if out:
-        return out[0]
-    floats = [d for d in inst["dtypes"] if "float" in d]
-    if not floats:
-        return "float32"
-    return sorted(set(floats), key=lambda d: (-floats.count(d), d))[0]
+def _engine_dtype_facts(inst) -> dict:
+    """The dtype facts the engine's dispatcher runs this op under, as the census derived its key (instances.py): the
+    component's compute dtype, the graph's traced dtype and the precision contract's role for the op. They were once
+    guessed from the container's record of the op's output — the TRACE dtype: on Apple the conv [20, 4, 90, 160] ran
+    in fp16 and the VAE convs stored fp32 where the engine runs bf16, keys no certificate holds, swept at runtime (11
+    of the first 13 instances, 03/11 00:43). An instance file without them is refused, never guessed."""
+    missing = [k for k in ("compute_dtype", "graph_dtype", "contract", "op_uid") if k not in inst]
+    if missing:
+        raise KeyError(f"instance {inst.get('key')}: no {', '.join(missing)} — an instances file from before "
+                       f"03/11; rebuild it with instances.py")
+    c = inst["contract"]
+    uid = inst["op_uid"]
+    return {"compute": inst["compute_dtype"], "graph": inst["graph_dtype"], "uid": uid,
+            "contract": (bool(c["safe"]), {uid} if c["island"] == "fp32" else set(),
+                         {uid} if c["island"] == "narrow" else set())}
+
+
+def engine_dispatcher(inst, stores_fp64: bool):
+    """The Triton dispatcher the engine runs this op through: its compute dtype, graph dtype and precision contract."""
+    from neurobrix.triton.sequential import TritonSequentialDispatcher
+    facts = _engine_dtype_facts(inst)
+    disp = TritonSequentialDispatcher(device_idx=0, compute_dtype=_nbx_dtype(facts["compute"]),
+                                      precision_contract=facts["contract"], graph_dtype=facts["graph"],
+                                      stores_fp64=stores_fp64)
+    return disp, facts
 
 
 def run_nbx(inst, arrays, dev, res, warmup, reps):
     from nbxtensor.memory.allocator import DeviceAllocator
     from nbxtensor.tensor import NBXTensor
-    from neurobrix.triton.sequential import TritonSequentialDispatcher
-    compute = _nbx_dtype(_compute_dtype(inst))
-    stores_fp64 = _stores_fp64()
-    disp = TritonSequentialDispatcher(device_idx=0, compute_dtype=compute, stores_fp64=stores_fp64)
+    disp, facts = engine_dispatcher(inst, _stores_fp64())
     disp.symbol_resolver = _symbols(inst["symbols"])
     store = {}
     for tid, arr, d in zip(inst["inputs"], arrays, inst["dtypes"]):
@@ -310,7 +321,7 @@ def run_nbx(inst, arrays, dev, res, warmup, reps):
         record = {"output_dtypes": inst.get("output_dtypes"), "op_type": inst["op_type"]}
 
         def call():
-            return disp.dispatch(inst["op_type"], args, attrs, op_record=record)
+            return disp.dispatch(inst["op_type"], args, attrs, op_uid=facts["uid"], op_record=record)
         out, first, times = _time(call, dev.nbx_sync, warmup, reps)
         # the peak of ONE call with the pool emptied first, so every byte it takes reaches the driver counter
         dev_idx = 0
@@ -509,6 +520,8 @@ def torch_work(inst, dev, res, warmup, reps, compile_modes, nbx: dict | None) ->
 def worker(side: str, hardware: str, warmup: int, reps: int, compile_modes, scratch: Path) -> int:
     """A persistent worker: one JSON request per stdin line, one JSON answer per stdout line."""
     if side == "nbxtensor":
+        # a confirmation run: a key the certified directory does not hold is refused by name, never swept and timed
+        os.environ["NBX_AUTOTUNE_CERTIFIED_ONLY"] = "1"
         import instances as I
         I.bind_profile(hardware)
         dev = _NbxDevice()
