@@ -79,6 +79,9 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 
 | kind | path | symbol | why it stays |
 |---|---|---|---|
+| wrapper | src/neurobrix/core/runtime_values.py | resolve(default) | passed, through an aliased import the scan does not follow: cli/commands/run._rt (`resolve as _resolve_runtime`, family= at every call, default= at six) and serving/engine (default=None) |
+| wrapper | src/neurobrix/core/runtime_values.py | resolve(extra) | passed, through an aliased import the scan does not follow: cli/commands/run._rt (extra= at five calls) and serving/engine (the container's own height/width/VAE scale, the request's max_tokens) |
+| wrapper | src/neurobrix/core/runtime_values.py | resolve(family) | passed, through an aliased import the scan does not follow: cli/commands/run._rt (`resolve as _resolve_runtime`, family= at every call, default= at six) and serving/engine (default=None) |
 | wrapper | src/neurobrix/core/flow/autoregressive.py | use_branch | the session's branch API, the pair of new_branch (the Triton session has the same): the next_token_diffusion flows hold the session, not its cache wrapper |
 | duplicate | src/neurobrix/core/flow/next_token_diffusion.py | _require_tensor | each branch tests its own tensor type for the primary output (torch.Tensor in the compiled engine, NBXTensor in the Triton one): the same text, two types |
 | duplicate | src/neurobrix/triton/flow/next_token_diffusion.py | _require | each branch tests its own tensor type for the primary output (torch.Tensor in the compiled engine, NBXTensor in the Triton one): the same text, two types |

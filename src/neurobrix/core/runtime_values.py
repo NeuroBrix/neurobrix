@@ -31,9 +31,6 @@ def resolve(name: str,
             container: Optional[Mapping[str, Any]] = None,
             family: Optional[Mapping[str, Any]] = None,
             *,
-            request_attr: Optional[str] = None,
-            container_key: Optional[str] = None,
-            family_key: Optional[str] = None,
             extra: Sequence[tuple] = (),
             default: Any = _SENTINEL,
             why: str = "") -> Any:
@@ -49,29 +46,28 @@ def resolve(name: str,
     between the request and the container — the place for a value read from the
     request's own payload, such as an input image's dimensions.
     """
-    attr = request_attr or name
     if request is not None:
-        v = getattr(request, attr, None)
+        v = getattr(request, name, None)
         if v is not None:
             return v
     for src_name, v in extra:
         if v is not None:
             return v
     if container is not None:
-        v = container.get(container_key or name)
+        v = container.get(name)
         if v is not None:
             return v
     if family is not None:
-        v = family.get(family_key or name)
+        v = family.get(name)
         if v is not None:
             return v
     if default is not _SENTINEL:
         return default
     looked = ", ".join(
-        [f"request.{attr}"]
+        [f"request.{name}"]
         + [s for s, _ in extra]
-        + [f"container runtime/defaults.json[{container_key or name!r}]",
-           f"family config[{family_key or name!r}]"])
+        + [f"container runtime/defaults.json[{name!r}]",
+           f"family config[{name!r}]"])
     raise MissingRuntimeValue(
         f"{name!r} is required to run this model and nothing declares it. "
         f"Looked in: {looked}."
@@ -81,8 +77,9 @@ def resolve(name: str,
           "value for it.")
 
 
-def require_max_tokens(defaults, override=None):
-    """`max_tokens` from the request, then the container — never a literal.
+def require_max_tokens(defaults):
+    """`max_tokens` from the container — never a literal (a request's own bound is read by the caller first:
+    `_ov.get("global.max_tokens", require_max_tokens(defaults))`).
 
     `defaults.get("max_tokens", 512)` stood at five sites and `..., 2048)` at
     four others: two literals disagreeing with each other inside one engine. A
@@ -94,5 +91,4 @@ def require_max_tokens(defaults, override=None):
     simply not read as required.
     """
     return resolve("max_tokens", container=(defaults or {}),
-                   extra=[("the request", override)],
                    why="It bounds this generation.")

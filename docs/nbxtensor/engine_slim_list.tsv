@@ -1,7 +1,7 @@
 # The engine's open slimming findings (tools/engine_slim_scan.py); each ends deleted, moved into nbxtensor, or kept
 # with its reason in docs/nbxtensor/ENGINE_SLIM.md. Both figures below may only go down (test_the_engine_only_slims.py).
-# engine_lines: 137171
-# open: 100
+# engine_lines: 137167
+# open: 94
 kind	path	symbol	detail
 duplicate	src/neurobrix/core/audio_frontend.py	_requested_voice	same body as src/neurobrix/triton/audio_frontend.py::_requested_voice_np
 duplicate	src/neurobrix/core/cfg/engine.py	__init__	same body as src/neurobrix/triton/cfg/engine.py::__init__
@@ -85,12 +85,6 @@ wrapper	src/neurobrix/core/runtime/lm_facts.py	decode_sequences(resolved)	no cal
 wrapper	src/neurobrix/core/runtime/output_dispatch.py	resolve_output_path(strict_extension)	no call site passes it: always its default True
 wrapper	src/neurobrix/core/runtime/phase_trace.py	first	only hands its parameters to _FIRST.get
 wrapper	src/neurobrix/core/runtime/tensor_compat.py	aten	only hands its parameters to sys.modules.get
-wrapper	src/neurobrix/core/runtime_values.py	require_max_tokens(override)	no call site passes it: always its default None
-wrapper	src/neurobrix/core/runtime_values.py	resolve(container_key)	no call site passes it: always its default None
-wrapper	src/neurobrix/core/runtime_values.py	resolve(default)	no call site passes it: always its default _SENTINEL
-wrapper	src/neurobrix/core/runtime_values.py	resolve(family)	no call site passes it: always its default None
-wrapper	src/neurobrix/core/runtime_values.py	resolve(family_key)	no call site passes it: always its default None
-wrapper	src/neurobrix/core/runtime_values.py	resolve(request_attr)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/state/pages.py	writable(fence)	no call site passes it: always its default None
 wrapper	src/neurobrix/core/strategies/base.py	synchronize_device	only hands its parameters to device_sync
 wrapper	src/neurobrix/core/strategies/layer_streaming.py	_nbx_path	only hands its parameters to self.resolve_artifact_path
