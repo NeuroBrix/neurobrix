@@ -24,6 +24,18 @@ def without_matrix_unit(monkeypatch):
 
 
 @pytest.fixture
+def one_store_route(monkeypatch):
+    """Every GEMM's store decided as for a non-decode row (`launch_keys.matmul_out_dtype` with M raised past the
+    decode threshold), so two calls that differ only in how many rows their GEMM sees store at one width. For the
+    cells that prove an identity between a regrouped and a broadcast GEMM: the decode-row rule (M <= 4 keeps its fp32
+    store, 9771e724) gives the broadcast call's T_q rows fp32 and the grouped call's groups*T_q rows half — two routes,
+    two roundings, the engine's rule and not the identity's (the Dell, 2026-11-02 13:41)."""
+    from nbxtensor.ops import launch_keys as LK
+    original = LK.matmul_out_dtype
+    monkeypatch.setattr(LK, "matmul_out_dtype", lambda dt, M, *a, **k: original(dt, max(int(M), 5), *a, **k))
+
+
+@pytest.fixture
 def host_backend_fp64(monkeypatch):
     """nbx_tensor's float64 capability declared as a run declares it (`set_hardware_profile`): from
     this host's hardware profile (`precision.kernels_carry_fp64.triton`), restored after the cell."""
