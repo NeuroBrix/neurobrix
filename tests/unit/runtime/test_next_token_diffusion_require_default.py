@@ -9,9 +9,10 @@ ddpm_num_steps) plus the two same-class adjacent keys
 when the .nbx defaults.json omits them, where the sibling
 encoder_decoder flow does exemplary ZERO FALLBACK.
 
-Both engines carry their OWN `_require_default` (R30 symmetric fix,
-total path separation — no shared helper across engines); this test
-pins both.
+Both engines read the keys through ONE `_require_default`
+(core/flow/shared_steps, torch-free — Hocine 2026-10-29 22:39: no
+duplication; it replaced the R30 per-engine copies); this test pins it
+through both engines' modules.
 
 Run: PYTHONPATH=src python -m pytest tests/unit/runtime/test_next_token_diffusion_require_default.py
 """
@@ -66,10 +67,7 @@ def test_missing_semantic_key_raises_naming_key(require_default, key):
 
 
 @_ENGINES
-def test_engines_carry_separate_helpers(require_default):
-    """Path separation: the two engines must not share the helper."""
-    assert _require_default_compiled is not _require_default_triton
-    assert (_require_default_compiled.__module__
-            == "neurobrix.core.flow.next_token_diffusion")
-    assert (_require_default_triton.__module__
-            == "neurobrix.triton.flow.next_token_diffusion")
+def test_engines_read_one_helper(require_default):
+    """No duplication: both engines read the keys through the same helper."""
+    assert _require_default_compiled is _require_default_triton
+    assert require_default.__module__ == "neurobrix.core.flow.shared_steps"

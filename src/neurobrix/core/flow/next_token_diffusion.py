@@ -45,30 +45,12 @@ import torch
 from typing import Any, Dict, List, Optional
 
 from .base import ComponentFlowHandler, register_flow
+from neurobrix.core.flow.shared_steps import _require_default, encode_nopad   # both branches
 from .table_gather import gather_rows
 from neurobrix.core.memory.manager import release_flow_memory
 
 # The rule and its history live in core.runtime_values.
 from neurobrix.core.runtime_values import require_max_tokens
-
-
-def _require_default(defaults: Dict[str, Any], key: str) -> Any:
-    """ZERO FALLBACK read of a semantic key from the .nbx defaults.json.
-
-    These keys encode model semantics (guidance scale, latent scale/bias,
-    scheduler shape); a silently-invented value yields plausible-but-wrong
-    audio. Absent key = malformed/incomplete .nbx → crash naming the key
-    (engine audit #2 2026-07-05, P-ZERO-FALLBACK-SWEEP — the sibling
-    encoder_decoder flow is the reference pattern).
-    """
-    val = defaults.get(key)
-    if val is None:
-        raise RuntimeError(
-            f"ZERO FALLBACK: '{key}' missing from defaults.json — "
-            f"next_token_diffusion refuses to invent a value; rebuild the "
-            f".nbx with '{key}' in its runtime defaults."
-        )
-    return val
 
 
 @register_flow("next_token_diffusion")
@@ -606,29 +588,7 @@ class NextTokenDiffusionEngine(ComponentFlowHandler):
 
     # ─── Helpers ───────────────────────────────────────────────────────────────
 
-    @staticmethod
-    def _encode_nopad(tok, text: str, add_special: bool = False) -> List[int]:
-        """Encode text WITHOUT padding.
-
-        The runtime HFTokenizer (sp_tokenizer.HFTokenizer) defaults to
-        padding=True up to model_max_length, which would explode an
-        incrementally-assembled prompt. We assemble the prompt token-piece by
-        token-piece, so each piece must be encoded unpadded. Pass padding=False
-        when supported; otherwise strip trailing pad/eos padding heuristically.
-        """
-        ids = None
-        try:
-            ids = tok.encode(text, add_special_tokens=add_special, padding=False)
-        except TypeError:
-            try:
-                ids = tok.encode(text, add_special_tokens=add_special)
-            except TypeError:
-                ids = tok.encode(text)
-        if hasattr(ids, "tolist"):
-            ids = ids.tolist()
-        if ids and isinstance(ids[0], list):
-            ids = ids[0]
-        return [int(x) for x in ids]
+    _encode_nopad = staticmethod(encode_nopad)
 
     @staticmethod
     def _primary(out):

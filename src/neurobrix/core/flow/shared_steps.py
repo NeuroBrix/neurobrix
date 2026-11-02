@@ -268,3 +268,66 @@ def require_contract(flow: str, block: Dict[str, Any], key: str, where: str):
             f"ZERO FALLBACK: topology.flow.{flow} is missing '{key}' "
             f"({where}) — re-emit the {flow} contract from the registry.")
     return val
+
+
+# next_token_diffusion, both branches
+def _require_default(defaults: Dict[str, Any], key: str) -> Any:
+    """ZERO FALLBACK read of a semantic key from the .nbx defaults.json (both next_token_diffusion handlers).
+
+    These keys encode model semantics (guidance scale, latent scale/bias,
+    scheduler shape); a silently-invented value yields plausible-but-wrong
+    audio. Absent key = malformed/incomplete .nbx → crash naming the key
+    (engine audit #2 2026-07-05, P-ZERO-FALLBACK-SWEEP — the sibling
+    encoder_decoder flow is the reference pattern).
+    """
+    val = defaults.get(key)
+    if val is None:
+        raise RuntimeError(
+            f"ZERO FALLBACK: '{key}' missing from defaults.json — "
+            f"next_token_diffusion refuses to invent a value; rebuild the "
+            f".nbx with '{key}' in its runtime defaults."
+        )
+    return val
+
+
+def encode_nopad(tok, text: str, add_special: bool = False) -> List[int]:
+    """The tokenizer's ids for `text`, unpadded, whichever encode signature it offers.
+
+    The runtime HFTokenizer pads to model_max_length by default; the prompt is assembled piece by piece, so each
+    piece must be encoded unpadded."""
+    ids = None
+    try:
+        ids = tok.encode(text, add_special_tokens=add_special, padding=False)
+    except TypeError:
+        try:
+            ids = tok.encode(text, add_special_tokens=add_special)
+        except TypeError:
+            ids = tok.encode(text)
+    if hasattr(ids, "tolist"):
+        ids = ids.tolist()
+    if ids and isinstance(ids[0], list):
+        ids = ids[0]
+    return [int(x) for x in ids]
+
+
+# encoder_decoder, both branches
+def _maybe_log_topk(row, step: int, engine: str, stage: str) -> None:
+    """NBX_DECODE_TOPK=<jsonl>: per-step top-4 ids/values + top-2 margin
+    of one logits row (numpy), `stage` = "raw" (model logits) or
+    "rules" (after the vendor logit rules). Same record shape as the
+    vlm flows so engine records pair by (step, stage). Default-off."""
+    import os as _os
+    path = _os.environ.get("NBX_DECODE_TOPK")
+    if not path:
+        return
+    import json as _json
+    import numpy as _np
+    r = _np.asarray(row, dtype=_np.float64).reshape(-1)
+    top = _np.argsort(-r)[:4]
+    vals = [float(r[i]) for i in top]
+    rec = {"engine": engine, "stage": stage, "step": int(step),
+           "ids": [int(i) for i in top], "vals": [round(v, 6) for v in vals],
+           "margin12": round(vals[0] - vals[1], 6)}
+    with open(path, "a") as f:
+        _json.dump(rec, f)
+        f.write("\n")

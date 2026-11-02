@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 
 from .base import ComponentFlowHandler, register_flow
 from neurobrix.core.flow.shared_steps import effective_sampling as _effective_sampling   # both branches read the sampling alike
+from neurobrix.core.flow.shared_steps import _maybe_log_topk   # both branches
 
 
 @register_flow("encoder_decoder")
@@ -425,23 +426,3 @@ class EncoderDecoderEngine(ComponentFlowHandler):
         return device_multinomial(probs, 1).item()
 
 
-def _maybe_log_topk(row, step: int, engine: str, stage: str) -> None:
-    """NBX_DECODE_TOPK=<jsonl>: per-step top-4 ids/values + top-2 margin
-    of one logits row (numpy), `stage` = "raw" (model logits) or
-    "rules" (after the vendor logit rules). Same record shape as the
-    vlm flows so engine records pair by (step, stage). Default-off."""
-    import os as _os
-    path = _os.environ.get("NBX_DECODE_TOPK")
-    if not path:
-        return
-    import json as _json
-    import numpy as _np
-    r = _np.asarray(row, dtype=_np.float64).reshape(-1)
-    top = _np.argsort(-r)[:4]
-    vals = [float(r[i]) for i in top]
-    rec = {"engine": engine, "stage": stage, "step": int(step),
-           "ids": [int(i) for i in top], "vals": [round(v, 6) for v in vals],
-           "margin12": round(vals[0] - vals[1], 6)}
-    with open(path, "a") as f:
-        _json.dump(rec, f)
-        f.write("\n")

@@ -11,6 +11,7 @@ import time
 
 from neurobrix import decode_progress, decode_stop
 from neurobrix.core.flow.shared_steps import effective_sampling as _effective_sampling   # both branches read the sampling alike
+from neurobrix.core.flow.shared_steps import _maybe_log_topk   # both branches
 import numpy as np
 from typing import Any, Callable, Dict, List, Optional
 
@@ -476,28 +477,6 @@ def _sample_token_nbx(logits, temperature, generated_ids=None, repetition_penalt
     probs = exp_logits / exp_logits.sum()
 
     return int(np.random.choice(len(probs), p=probs))
-
-
-def _maybe_log_topk(row, step: int, engine: str, stage: str) -> None:
-    """NBX_DECODE_TOPK=<jsonl>: per-step top-4 ids/values + top-2 margin
-    of one logits row (numpy), `stage` = "raw" (model logits) or
-    "rules" (after the vendor logit rules). Same record shape as the
-    vlm flows so engine records pair by (step, stage). Default-off."""
-    import os as _os
-    path = _os.environ.get("NBX_DECODE_TOPK")
-    if not path:
-        return
-    import json as _json
-    import numpy as _np
-    r = _np.asarray(row, dtype=_np.float64).reshape(-1)
-    top = _np.argsort(-r)[:4]
-    vals = [float(r[i]) for i in top]
-    rec = {"engine": engine, "stage": stage, "step": int(step),
-           "ids": [int(i) for i in top], "vals": [round(v, 6) for v in vals],
-           "margin12": round(vals[0] - vals[1], 6)}
-    with open(path, "a") as f:
-        _json.dump(rec, f)
-        f.write("\n")
 
 
 def _to_numpy(tensor) -> np.ndarray:

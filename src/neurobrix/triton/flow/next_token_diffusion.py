@@ -38,7 +38,7 @@ from neurobrix.triton.cfg.engine import TritonCFGEngine
 
 # The rule and its history live in core.runtime_values.
 from neurobrix.core.runtime_values import require_max_tokens
-
+from neurobrix.core.flow.shared_steps import _require_default, encode_nopad   # both branches
 
 
 def _to_numpy(t) -> np.ndarray:
@@ -49,49 +49,10 @@ def _to_numpy(t) -> np.ndarray:
     return np.asarray(t)
 
 
-
-
-def _require_default(defaults: Dict[str, Any], key: str) -> Any:
-    """ZERO FALLBACK read of a semantic key from the .nbx defaults.json.
-
-    R30 mirror of core/flow/next_token_diffusion._require_default (own
-    copy — the two engines never share compute-path helpers). These keys
-    encode model semantics (guidance scale, latent scale/bias, scheduler
-    shape); a silently-invented value yields plausible-but-wrong audio.
-    Absent key = malformed/incomplete .nbx → crash naming the key
-    (engine audit #2 2026-07-05, P-ZERO-FALLBACK-SWEEP).
-    """
-    val = defaults.get(key)
-    if val is None:
-        raise RuntimeError(
-            f"ZERO FALLBACK: '{key}' missing from defaults.json — "
-            f"next_token_diffusion refuses to invent a value; rebuild the "
-            f".nbx with '{key}' in its runtime defaults."
-        )
-    return val
-
-
 # The LM's speech control tokens, as its tokenizer spells them.
 SPEECH_START_TOKEN = "<|vision_start|>"
 SPEECH_END_TOKEN = "<|vision_end|>"
 SPEECH_DIFFUSION_TOKEN = "<|vision_pad|>"
-
-
-def encode_nopad(tok, text: str, add_special: bool = False) -> List[int]:
-    """The tokenizer's ids for `text`, unpadded, whichever encode signature it offers."""
-    ids = None
-    try:
-        ids = tok.encode(text, add_special_tokens=add_special, padding=False)
-    except TypeError:
-        try:
-            ids = tok.encode(text, add_special_tokens=add_special)
-        except TypeError:
-            ids = tok.encode(text)
-    if hasattr(ids, "tolist"):
-        ids = ids.tolist()
-    if ids and isinstance(ids[0], list):
-        ids = ids[0]
-    return [int(x) for x in ids]
 
 
 def special_token_id(tok, name: str) -> Optional[int]:
