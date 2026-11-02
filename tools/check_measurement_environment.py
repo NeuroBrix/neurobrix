@@ -232,7 +232,7 @@ def check_profile_matches_hardware() -> tuple[list[str], list[str]]:
     except Exception:
         return [], []          # not an Apple device: nothing to compare against
     declared = os.environ.get("NBX_PROFILE_TIGHTENED") == "1"
-    for f in glob.glob("src/neurobrix/config/hardware/default-*.yml"):
+    for f in glob.glob(os.path.expanduser("~/.neurobrix/hardware/default-*.yml")):   # the machine's generated profiles
         m = re.search(r"^\s*memory_mb:\s*(\d+)", Path(f).read_text(), re.M)
         if not m:
             continue

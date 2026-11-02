@@ -5,6 +5,7 @@ YAML Reader for Hardware Profiles with Multi-Interconnect Support
 ZERO HARDCODE: All values from hardware profile YAML
 """
 
+import os
 import yaml
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -25,15 +26,43 @@ from neurobrix.core.prism.cpu_config import CPUConfig
 
 # Project Root Resolution
 PROJECT_ROOT = Path(__file__).parent.parent.parent
+#: The COMMITTED profiles, shipped with the package.
 HARDWARE_DIR = PROJECT_ROOT / "config" / "hardware"
+#: The machine's GENERATED profiles (`default`, `default-<tag>`): written by the engine at its first launch and completed
+#: with what it measures, in ONE place per machine — beside the measured-facts store (core/dtype/calibration.STORE_ROOT)
+#: under the engine's home — never inside a source tree, where every tree carried a copy of its own and a fact measured
+#: in one never reached the others (the team's review, 2026-11-02).
+GENERATED_DIR = Path(os.path.expanduser("~")) / ".neurobrix" / "hardware"
+
+
+def is_generated(hardware_id: str) -> bool:
+    """A name the engine generates (`default`, `default-<tag>`): it lives in GENERATED_DIR, never in the package."""
+    return hardware_id == "default" or str(hardware_id).startswith("default-")
+
+
+def profile_path(hardware_id: str) -> Path:
+    """THE file of a hardware profile: a generated one in GENERATED_DIR, a committed one in HARDWARE_DIR. A generated
+    name found in the package is refused by name — two copies of one machine's facts, the one read decided by where
+    the reader runs, is what this place exists to end."""
+    if is_generated(hardware_id):
+        stale = HARDWARE_DIR / f"{hardware_id}.yml"
+        if stale.exists():
+            raise RuntimeError(
+                f"ZERO FALLBACK: a generated hardware profile sits in the package ({stale}); generated profiles live "
+                f"in {GENERATED_DIR}, one per machine — move it there (or delete it: the engine regenerates it at the "
+                f"next launch without --hardware)")
+        return GENERATED_DIR / f"{hardware_id}.yml"
+    return HARDWARE_DIR / f"{hardware_id}.yml"
 
 
 def list_available_profiles() -> List[str]:
-    """List all available hardware profile names."""
-    if not HARDWARE_DIR.exists():
-        return []
-    # Filter out macOS hidden files (._*)
-    return sorted([p.stem for p in HARDWARE_DIR.glob("*.yml") if not p.stem.startswith("._")])
+    """List all available hardware profile names: the committed ones and this machine's generated ones."""
+    names = set()
+    for d in (HARDWARE_DIR, GENERATED_DIR):
+        if d.exists():
+            # Filter out macOS hidden files (._*)
+            names.update(p.stem for p in d.glob("*.yml") if not p.stem.startswith("._"))
+    return sorted(names)
 
 
 def _parse_brand(brand_str: str) -> DeviceBrand:
@@ -228,7 +257,7 @@ def load_profile(hardware_id: str) -> PrismProfile:
 
     ZERO HARDCODE: All values from YAML.
     """
-    path = HARDWARE_DIR / f"{hardware_id}.yml"
+    path = profile_path(hardware_id)
 
     if not path.exists():
         available = list_available_profiles()
@@ -243,7 +272,7 @@ def load_profile(hardware_id: str) -> PrismProfile:
         else:
             msg = (
                 f"Hardware profile '{hardware_id}' not found.\n"
-                f"No profiles found in {HARDWARE_DIR}/"
+                f"No profiles found in {HARDWARE_DIR}/ or {GENERATED_DIR}/"
             )
         raise FileNotFoundError(msg)
 

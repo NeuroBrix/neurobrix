@@ -51,9 +51,8 @@ def info_record(args) -> dict:
             if model_dir.is_dir() and (model_dir / "manifest.json").exists():
                 rec["models"].append({"name": model_dir.name,
                                       "size_bytes": sum(f.stat().st_size for f in model_dir.rglob("*") if f.is_file())})
-    hw_dir = PACKAGE_ROOT / "config" / "hardware"
-    if hw_dir.exists():
-        rec["hardware_profiles"] = [f.stem for f in sorted(hw_dir.glob("*.yml"))]
+    from neurobrix.core.prism.loader import list_available_profiles
+    rec["hardware_profiles"] = list_available_profiles()      # the committed ones and this machine's generated ones
     try:
         from neurobrix.serving.engine import daemon_identity
         rec.update({k: v for k, v in daemon_identity().items() if k != "engine"})
@@ -95,11 +94,11 @@ def cmd_info(args):
 
     if args.hardware or show_all:
         print("\nHardware Profiles:")
-        hw_dir = PACKAGE_ROOT / "config" / "hardware"
-        if hw_dir.exists():
-            for hw_file in sorted(hw_dir.glob("*.yml")):
-                print(f"  - {hw_file.stem}")
-        else:
+        from neurobrix.core.prism.loader import list_available_profiles
+        _profiles = list_available_profiles()                 # the committed ones and this machine's generated ones
+        for _name in _profiles:
+            print(f"  - {_name}")
+        if not _profiles:
             print("  No hardware profiles found")
 
     if args.system or show_all:
