@@ -28,9 +28,22 @@ class Registry:
     """Appends each row, as it is written, to `<dir>/nbxtensor_vs_torch.<level>.tsv`; None writes nothing."""
 
     def __init__(self, directory, level: str, fields: list, device: str, repo: Path):
-        self.path = None if directory is None else Path(directory) / f"nbxtensor_vs_torch.{level}.tsv"
         self.fields = HEAD + list(fields)
+        self.path = None if directory is None else self._file(Path(directory), level)
         self.stamp = {"device": device, "commit": commit(repo)}
+
+    def _file(self, directory: Path, level: str) -> Path:
+        """The registry file whose header is these fields: the level's file, or — when the columns changed (a file is
+        never rewritten) — the first `.v<n>` continuation that is new or has this header."""
+        n = 1
+        while True:
+            p = directory / (f"nbxtensor_vs_torch.{level}.tsv" if n == 1 else f"nbxtensor_vs_torch.{level}.v{n}.tsv")
+            if not p.exists():
+                return p
+            with open(p) as f:
+                if f.readline().rstrip("\n").split("\t") == self.fields:
+                    return p
+            n += 1
 
     def append(self, row: dict) -> None:
         if self.path is None:

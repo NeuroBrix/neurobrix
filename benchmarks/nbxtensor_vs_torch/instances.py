@@ -55,6 +55,26 @@ def bind_profile(hardware: str):
     return prof
 
 
+def load_hardware_profile(hardware: str):
+    """The machine's hardware profile, read as the engine reads it (core/prism/loader.load_profile), nothing bound."""
+    from neurobrix.core.prism.loader import load_profile
+    return load_profile(hardware)
+
+
+def census_rows(census: str) -> list:
+    """The census table's Triton rows (`<vendor>/<profile>/<rung>`), models under their names of today."""
+    sys.path.insert(0, str(REPO / "tools"))
+    from container_renames import current_name
+    path = REPO / "src" / "neurobrix" / "config" / "census" / f"{census}.jsonl"
+    out = []
+    for line in path.read_text().splitlines():
+        row = json.loads(line)
+        if row.get("mode") == MODE:
+            row["model"] = current_name(row["model"])
+            out.append(row)
+    return out
+
+
 def census_ops(census: str) -> dict:
     """{model: {op uid}} the census table records a Triton kernel for — under each container's name of today (a row
     written before a rename keeps its former name: read through tools/container_renames.current_name)."""

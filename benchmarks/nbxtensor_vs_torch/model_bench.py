@@ -5,6 +5,11 @@ machine's own profile, alone, once per engine:
 - `torch_eager`: the engine's ATen branch (the default mode: torch's eager kernels, one call per op);
 - `nbxtensor`: the Triton branch (`--triton`), the engine that becomes nbxtensor.
 `torch.compile` has no engine mode at this level: the row says so rather than inventing one.
+The load is decomposed by conditions, not guessed (the supervisor, 2026-11-02 19:35): a pass runs the two engines in
+one order (`--order`), the first one on whatever the machine holds (cold from the NAS on the first pass), the second
+on the page cache the first warmed; `--pass` labels the rows (the contender becomes `<engine>[<pass>]`), so the same
+cells run torch-first, nbxtensor-first and warm stand side by side — the read share of `load_s` is a cold row minus
+its warm row, the rest is placing and converting.
 Each contender runs in its own environment (the supervisor, 2026-11-02 11:55): the ATen branch in one that has torch
 (`--python-torch`), the Triton branch in the library's torch-free one (`--python-nbxtensor`) — the nbxtensor row is
 also the proof that the run needs no torch.
@@ -83,22 +88,23 @@ def _agreement(a: Path, b: Path) -> str:
     return "differs"
 
 
-def run_cell(model: str, contender: str, outdir: Path, python: str) -> dict:
+def run_cell(model: str, contender: str, outdir: Path, python: str, label: str = "") -> dict:
     """One gate cell through the entry point, in `python`'s environment, this tree's engine and library first."""
     import trace_request as TR
     request = TR.gate_request(model)
     fam = _family(model)
     ext = _EXT.get(fam, "txt")
-    out = outdir / f"{model}.{contender}.{ext}"
+    name = f"{contender}[{label}]" if label else contender
+    out = outdir / f"{model}.{name}.{ext}"
     cmd = [python, "-m", "neurobrix", "run", "--model", model, *request, *ENGINES[contender], "--output", str(out)]
     env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(REPO / "src"), str(REPO / "nbxtensor" / "src")]))
     t0 = time.time()
     p = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=str(REPO))
     wall = time.time() - t0
     log = p.stdout + p.stderr
-    (outdir / f"{model}.{contender}.log").write_text(log)
+    (outdir / f"{model}.{name}.log").write_text(log)
     t = _timings(log)
-    return {"model": model, "contender": contender, "rc": p.returncode, "wall_s": f"{wall:.1f}",
+    return {"model": model, "contender": name, "rc": p.returncode, "wall_s": f"{wall:.1f}",
             "load_s": t.get("load_s", ""), "ttft_s": t.get("ttft_s", ""), "tpot_ms": t.get("tpot_ms", ""),
             "peak_mb": t.get("peak_mb", ""), "sha256": _sha(out)[:16], "command": " ".join(cmd),
             "note": "" if p.returncode == 0 else log.strip().splitlines()[-1][:300] if log.strip() else ""}
@@ -113,6 +119,8 @@ def main(argv=None) -> int:
     ap.add_argument("--python-nbxtensor", required=True, help="the Triton branch's python (the library's, no torch)")
     ap.add_argument("--device", required=True, help="the machine's profile id, for the registry")
     ap.add_argument("--registry", default=None, help="the dated registry directory every row is appended to as well")
+    ap.add_argument("--order", choices=("torch-first", "nbxtensor-first"), default="torch-first")
+    ap.add_argument("--pass", dest="label", default="", help="this pass's label in the rows (cold, reverse, warm…)")
     a = ap.parse_args(argv)
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from registry import Registry
@@ -136,14 +144,16 @@ def main(argv=None) -> int:
                                "no engine mode runs torch.compile: not measured at the model level"]) + "\n")
         for model in models:
             rows = {}
-            for contender in ENGINES:
-                if (model, contender) in done:
+            order = list(ENGINES) if a.order == "torch-first" else list(reversed(list(ENGINES)))
+            tag = (lambda c: f"{c}[{a.label}]" if a.label else c)
+            for contender in order:
+                if (model, tag(contender)) in done:
                     continue
-                rows[contender] = run_cell(model, contender, outdir, pythons[contender])
+                rows[contender] = run_cell(model, contender, outdir, pythons[contender], a.label)
             if "nbxtensor" in rows:
                 ext = _EXT.get(_family(model), "txt")
                 rows["nbxtensor"]["agrees_with_torch_eager"] = _agreement(
-                    outdir / f"{model}.torch_eager.{ext}", outdir / f"{model}.nbxtensor.{ext}")
+                    outdir / f"{model}.{tag('torch_eager')}.{ext}", outdir / f"{model}.{tag('nbxtensor')}.{ext}")
             for r in rows.values():
                 w.writerow(r)
                 reg.append(r)

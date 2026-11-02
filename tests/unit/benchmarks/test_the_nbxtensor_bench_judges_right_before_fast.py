@@ -66,16 +66,54 @@ def test_the_compute_dtype_of_a_tie_never_depends_on_the_process():
     assert K._compute_dtype({"dtypes": ["int64"]}) == "float32"
 
 
-def test_the_nbxtensor_side_without_a_reference_says_so(tmp_path, monkeypatch):
+def test_a_video_instance_too_large_for_the_device_is_out_of_class_never_run():
+    # a video VAE convolution at its whole request shape (Allegro, [1, 512, 22, 180, 320]): its operands and float64
+    # reference exceed the op budget an 18 GB device grants — the row says so with its numbers, nothing runs
+    inst = {"key": "v1", "op_type": "aten::convolution", "shapes": [[1, 512, 22, 180, 320], [512, 512, 3, 3, 3], [512]],
+            "dtypes": ["bfloat16", "bfloat16", "bfloat16"], "sites": ["Allegro/vae/aten.convolution::3"]}
+    profile = {"devices": [{"memory_mb": 18186}]}
+    budget = K.device_budget_bytes(profile)
+    assert 0 < budget < 18186 * 2**20                     # a share of the device, from the library's op budget fraction
+    need = K.instance_bytes(inst)
+    assert need > budget
+    census = [{"model": "Allegro", "ops": ["vae/aten.convolution::3"], "kernel": "nbxtensor.ops.conv3d.conv3d_kernel",
+               "key": "(1, 512, 6, 180, 320)"}]
+    row = K.out_of_class_row(inst, need, budget, K.census_cut_keys(inst, census))
+    assert row["status"] == "out_of_class" and "op budget" in row["note"] and "conv3d_kernel" in row["note"]
+    small = {**inst, "shapes": [[1, 64, 2, 16, 16], [64, 64, 3, 3, 3], [64]]}
+    assert K.instance_bytes(small) < budget             # an instance that fits is run whole
+
+
+def test_the_reference_is_compared_tile_by_tile_never_whole(tmp_path, monkeypatch):
+    monkeypatch.setattr(K, "TILE", 7)                    # tile edges inside the arrays
+    rng = np.random.default_rng(3)
+    ref = rng.standard_normal(100)
+    got = (ref + 1e-3 * rng.standard_normal(100)).astype(np.float32)
+    np.save(tmp_path / "g.npy", got)
+    mx, mean = K.compare_tiles(np.load(tmp_path / "g.npy", mmap_mode="r"), ref)
+    whole = np.abs(got.astype(np.float64) - ref)
+    assert mx == pytest.approx(whole.max() / np.abs(ref).max()) and mean == pytest.approx(whole.mean() / np.abs(ref).max())
+    assert K.compare_tiles(got[:99], ref) == (float("inf"), float("inf"))
+
+
+def test_the_torch_side_keeps_nothing_but_the_rows(tmp_path, monkeypatch):
     inst = {"key": "k1", "op_type": "aten::mm", "shapes": [[2, 2], [2, 2]], "dtypes": ["float32", "float32"],
-            "sites": ["m/c/op"], "output_dtypes": ["float32"]}
-    out = np.zeros((2, 2), dtype=np.float32)
-    monkeypatch.setattr(K, "run_nbx", lambda *a, **k: (_Host(out), 1.0, [0.5, 0.6], 0.0, "test"))
-    rows = K.bench_nbxtensor(inst, _NoDevice(), None, 0, 2, tmp_path)
-    assert rows[0]["status"] == "ok" and "no float64 reference" in rows[0]["note"]
-    np.save(tmp_path / "k1.npy", np.ones((2, 2)))           # the torch side's reference: the zeros are wrong
-    rows = K.bench_nbxtensor(inst, _NoDevice(), None, 0, 2, tmp_path)
-    assert rows[0]["status"] == "wrong" and rows[0]["note"] == ""
+            "sites": ["m/c/op"], "output_dtypes": ["float32"], "inputs": ["a", "b"], "args": [], "attributes": {},
+            "symbols": {}}
+    out = np.ones((2, 2), dtype=np.float32)
+    nbx_file = tmp_path / "k1.npy"
+    np.save(nbx_file, np.zeros(4, dtype=np.float32))      # the library's output: wrong
+    monkeypatch.setattr(K, "reference", lambda *a, **k: np.ones((2, 2)))
+    monkeypatch.setattr(K, "_to_numpy", lambda x: np.asarray(x, dtype=np.float64))
+    monkeypatch.setattr(K, "run_torch", lambda *a, **k: (_Host(out), 3.0, [0.5, 0.6], 0.0, "test"))
+    monkeypatch.setattr(K, "release_compile_caches", lambda dev: None)
+    nbx = {"first": 1.0, "times": [0.4, 0.5], "peak": 0.0, "how": "test", "od": "float32", "file": str(nbx_file)}
+    rows = K.torch_work(inst, None, None, 0, 2, ["default"], nbx)
+    by = {r["contender"]: r for r in rows}
+    assert by["torch_eager"]["status"] == "ok" and by["torch_eager"]["compile_ms"] == ""
+    assert by["torch_compile[default]"]["compile_ms"] != ""          # the compile time, apart from the execution
+    assert by["nbxtensor"]["status"] == "wrong" and by["nbxtensor"]["mean_err"] != ""
+    assert list(tmp_path.iterdir()) == []                  # the library's output removed; no reference written
 
 
 def test_every_row_reaches_the_dated_registry(tmp_path):
@@ -87,6 +125,11 @@ def test_every_row_reaches_the_dated_registry(tmp_path):
     assert lines[0].split("\t")[:3] == ["date", "device", "commit"] and len(lines) == 3
     assert all(l.split("\t")[1] == "default-test" and l.split("\t")[2] for l in lines[1:])
     assert R.Registry(None, "kernel", K.FIELDS, "x", BENCH.parents[1]).path is None
+    # new columns: the file written under the old header is never rewritten; the rows continue in a .v2 file
+    reg2 = R.Registry(tmp_path, "kernel", K.FIELDS + ["new_column"], "default-test", BENCH.parents[1])
+    assert reg2.path.name == "nbxtensor_vs_torch.kernel.v2.tsv"
+    reg2.append({"key": "k2", "new_column": "x"})
+    assert (tmp_path / "nbxtensor_vs_torch.kernel.tsv").read_text().splitlines() == lines
 
 
 class _Host:

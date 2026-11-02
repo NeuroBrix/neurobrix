@@ -5,12 +5,19 @@ Contenders, each through the engine's own per-op entry so the call is the one a 
 - `torch_compile` (`--compile-modes`, default "default,max-autotune"): `torch.compile` of that same call;
 - `nbxtensor`: `TritonSequentialDispatcher.dispatch` (the Triton engine's kernel call, which becomes nbxtensor).
 
-Two processes, two environments (the supervisor, 2026-11-02 11:55: torch in a separate oracle environment, never in
-the library's): `--side torch` runs the torch contenders AND writes each instance's float64 reference to `--refs`
-(`<key>.npy`), in an environment that has torch; `--side nbxtensor` runs nbxtensor in the library's torch-free
-environment and judges its output against that reference file (the torch side runs first; a missing reference is
-said in the row). Both draw the same inputs (`host_inputs`, seeded) and append to the same TSV, and to the dated
-registry (`--registry`, `registry.py`) as each row is written.
+Two environments, one pass (the supervisor, 2026-11-02 11:55 and 21:35): torch runs in an oracle environment, never
+in the library's. A coordinator (`--python-torch`, `--python-nbxtensor`) drives two persistent workers, instance by
+instance: the nbxtensor worker (the library's torch-free environment) runs the call and leaves ONLY its output, at its
+own width, in a scratch file; the torch worker computes the float64 reference in memory, times torch eager and each
+torch.compile mode, and compares every contender with the reference TILE BY TILE as it goes — the nbxtensor output
+read through a memory map; the scratch file is removed at once. Nothing is kept but the result rows: the float64
+reference is never written (the 02/11 runs filled 227 GB on the Dell and 21 GB here with whole references).
+
+The guard: an instance whose operands, held at once with the float64 reference this pass needs, exceed the op budget
+Prism grants an op on this device (`tiling_sizes.op_budget_bytes` of the profile's device memory: the library's
+`op_level.op_budget_card_fraction`, never a threshold written here) is not run whole — its row says `out_of_class`
+with the numbers and the cut keys the census certifies for its sites (a cut op runs in Prism's slices, which the bench
+does not replay). Never killed, never skipped in silence.
 
 Protocol (README): the machine runs nothing else; the first call is timed APART (it carries compilation, autotune,
 first-touch allocation) and reported as `first_ms`; then `--warmup` untimed calls; then `--reps` timed calls, each
@@ -24,9 +31,9 @@ nbxtensor: `DeviceAllocator`'s own peak counter).
 One TSV per device, appended as each instance finishes (a stopped run keeps what it measured; a rerun skips the
 instances its side already wrote).
 
-    <torch python> benchmarks/nbxtensor_vs_torch/kernel_bench.py --side torch --hardware <profile id> \\
-        --instances <campaign>/instances.jsonl> --out <campaign>/kernel.tsv> --refs <dir> --registry <dir>
-    <library python> benchmarks/nbxtensor_vs_torch/kernel_bench.py --side nbxtensor ... (the same arguments)
+    <library python> benchmarks/nbxtensor_vs_torch/kernel_bench.py --hardware <profile id> \\
+        --instances <campaign>/instances.jsonl --out <campaign>/kernel.tsv --scratch <dir> --registry <dir> \\
+        --python-torch <oracle python> --python-nbxtensor <library python>
 """
 from __future__ import annotations
 
@@ -48,8 +55,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # The relative error bound per output dtype: a few units in the last place of the dtype's mantissa, scaled for the
 # long reductions the catalogue's GEMMs and convolutions accumulate (K up to ~16k). Stated once, for every contender.
 TOLERANCE = {"float32": 2e-3, "float16": 2e-2, "bfloat16": 6e-2}
-FIELDS = ["key", "op_type", "shapes", "dtypes", "sites", "contender", "status", "first_ms", "median_ms", "p10_ms",
-          "p90_ms", "n", "rel_err", "tolerance", "peak_mb", "peak_how", "note"]
+FIELDS = ["key", "op_type", "shapes", "dtypes", "sites", "contender", "status", "first_ms", "compile_ms", "median_ms",
+          "p10_ms", "p90_ms", "n", "rel_err", "mean_err", "tolerance", "peak_mb", "peak_how", "note"]
+# the elements compared at once: the comparison holds one tile of each side in float64, never the whole
+TILE = 1 << 22
 
 
 class _ArgResolver:
@@ -250,6 +259,14 @@ def run_torch(inst, arrays, dev, res, warmup, reps, compile_mode=None):
     return out, first, times, peak, peak_how
 
 
+def release_compile_caches(dev) -> None:
+    """torch.compile's caches given back after each instance (its graphs, guards and generated kernels): held across
+    1 682 instances they pressed the unified memory of the Mac until the session was stopped (02/11 19:44)."""
+    import torch
+    torch._dynamo.reset()
+    dev.release()
+
+
 def _compute_dtype(inst) -> str:
     """The Triton dispatcher's compute dtype for an instance, deterministic: the floating dtype the op writes (the
     container's record of its output), else the one most of its floating inputs carry — a tie (54 of the Apple
@@ -310,128 +327,293 @@ def _row(inst, name) -> dict:
             "dtypes": ",".join(inst["dtypes"]), "sites": len(inst["sites"]), "contender": name}
 
 
-def _judge(row, inst, out, first, times, peak, how, ref, ref_note) -> dict:
-    """The row of one contender's run: its times, and its output against the float64 reference."""
+_ITEMSIZE = {"float64": 8, "float32": 4, "float16": 2, "bfloat16": 2, "int64": 8, "int32": 4, "bool": 1, "uint8": 1}
+
+
+def _elems(shape) -> int:
+    n = 1
+    for d in shape:
+        n *= int(d)
+    return n
+
+
+def instance_bytes(inst) -> int:
+    """What the torch worker holds at once for an instance — the larger of the two workers, which never overlap (the
+    library's releases its pool and arrays before the torch side starts): per input element the host array (float32,
+    `host_inputs`), its float64 copy (the reference) and its device copy at its width; per output element (no wider
+    than the largest operand, for every op of the catalogue: an elementwise, a reduction, a GEMM or a convolution at
+    the request's shapes) the float64 result, the device output at its width and the host copy compared (float32)."""
+    els = [_elems(s) for s in inst["shapes"]]
+    inputs = sum(e * (4 + 8 + _ITEMSIZE.get(d, 8)) for e, d in zip(els, inst["dtypes"]))
+    widest = max((_ITEMSIZE.get(d, 8) for d in inst["dtypes"]), default=8)
+    return inputs + (max(els) if els else 0) * (8 + widest + 4)
+
+
+def device_budget_bytes(profile) -> int:
+    """The op budget Prism grants one op on this device: `op_budget_bytes` of the profile's device memory (nothing
+    resident beside it): the library's `op_level.op_budget_card_fraction`, read with its source."""
+    from nbxtensor.ops.tiling_sizes import op_budget_bytes
+    devices = getattr(profile, "devices", None) or (profile.get("devices") if isinstance(profile, dict) else None)
+    if not devices:
+        raise RuntimeError("ZERO FALLBACK: the hardware profile declares no device: the guard has no memory to read")
+    d0 = devices[0]
+    mb = getattr(d0, "memory_mb", None) or (d0.get("memory_mb") if isinstance(d0, dict) else None)
+    if not mb:
+        raise RuntimeError("ZERO FALLBACK: the profile's device declares no memory_mb: the guard has no memory to read")
+    return op_budget_bytes(int(mb) * 2 ** 20, 0)
+
+
+def census_cut_keys(inst, census_rows) -> list:
+    """The kernel keys the census certifies for this instance's sites (model/component/op uid): a cut op's are its
+    slices' — named in the row of an instance too large to run whole."""
+    sites = set(inst["sites"])
+    out = []
+    for row in census_rows:
+        for op in row.get("ops") or []:
+            if f"{row.get('model')}/{op}" in sites or any(s.endswith("/" + op) and s.startswith(row.get("model", "") + "/")
+                                                          for s in sites):
+                out.append(f"{row.get('kernel', '?').rsplit('.', 1)[-1]} {row.get('key')}")
+    return sorted(set(out))
+
+
+def out_of_class_row(inst, need: int, budget: int, cut_keys) -> dict:
+    row = _row(inst, "*")
+    row.update(status="out_of_class",
+               note=(f"operands + float64 reference {need / 2**20:.0f} MB > the op budget {budget / 2**20:.0f} MB "
+                     f"(profile device memory x op_level.op_budget_card_fraction): not run whole; "
+                     + ("the census certifies it cut: " + "; ".join(cut_keys[:4]) if cut_keys
+                        else "no cut certified by the census for its sites")))
+    return row
+
+
+def compare_tiles(got_flat, ref_flat):
+    """(max |got - ref| / max |ref|, mean |got - ref| / max |ref|) over the two flat arrays, read TILE elements at a
+    time in float64 — `got_flat` may be a memory map: neither side is ever held whole in float64."""
+    n = int(ref_flat.shape[0])
+    if int(got_flat.shape[0]) != n:
+        return float("inf"), float("inf")
+    mx = sm = rmax = 0.0
+    for a in range(0, n, TILE):
+        g = np.asarray(got_flat[a:a + TILE], dtype=np.float64)
+        r = np.asarray(ref_flat[a:a + TILE], dtype=np.float64)
+        d = np.abs(g - r)
+        mx = max(mx, float(d.max()) if d.size else 0.0)
+        sm += float(d.sum())
+        rmax = max(rmax, float(np.abs(r).max()) if r.size else 0.0)
+    denom = max(rmax, 1e-30)
+    return mx / denom, (sm / max(n, 1)) / denom
+
+
+def judge_row(row, inst, od: str, first, times, peak, how, errs, ref_note, compile_ms=None) -> dict:
+    """The row of one contender: its times, and its output against the float64 reference (`errs` from
+    `compare_tiles`, None when there is no reference)."""
     med, p10, p90 = _stats(times)
-    od = _dtype_of(out)
     # the narrowest of what the op reads, writes, and what the container records it writes (the precision
     # contract rounds an output to the traced dtype: an fp32 island's result handed back in bf16)
     tol = _bound(inst["dtypes"] + [od] + [str(d) for d in (inst.get("output_dtypes") or [])])
-    status, err = "ok", None
-    if ref is not None:
-        got = _to_numpy(out)
-        if got.shape != ref.shape:
-            status, err = "wrong", float("inf")
-        else:
-            err = float(np.max(np.abs(got - ref)) / max(float(np.max(np.abs(ref))), 1e-30))
-            if not err <= (tol if tol is not None else 0.0):
-                status = "wrong"
+    status, err, mean = "ok", None, None
+    if errs is not None:
+        err, mean = errs
+        if not err <= (tol if tol is not None else 0.0):
+            status = "wrong"
     row.update(status=status, first_ms=f"{first:.3f}", median_ms=f"{med:.4f}", p10_ms=f"{p10:.4f}",
                p90_ms=f"{p90:.4f}", n=len(times), rel_err="" if err is None else f"{err:.3e}",
+               mean_err="" if mean is None else f"{mean:.3e}",
+               compile_ms="" if compile_ms is None else f"{compile_ms:.3f}",
                tolerance="" if tol is None else tol, peak_mb=f"{peak:.3f}", peak_how=how,
                note=ref_note or ("" if tol is not None else f"no floating dtype to bound ({od}): exact match asked"))
     return row
 
 
-def bench_torch(inst, dev, res, warmup, reps, compile_modes, refs: Path) -> list:
-    """The torch side: the float64 reference (written to `refs/<key>.npy` for the nbxtensor side), then torch eager
-    and each torch.compile mode."""
+def _host_flat(x):
+    """A contender's output as a flat host array at its OWN width (float32 for the halves, exact), never float64."""
+    if isinstance(x, (list, tuple)):
+        x = x[0]
+    if type(x).__module__.startswith("torch"):
+        t = x.detach().to("cpu")
+        return (t.float() if t.is_floating_point() else t).numpy().reshape(-1)
+    a = (x.float() if x.is_floating_point() else x).numpy()
+    return np.asarray(a).reshape(-1)
+
+
+# ---------------------------------------------------------------------------------------------------- the workers
+
+def nbx_work(inst, dev, res, warmup, reps, scratch: Path) -> dict:
+    """The library's side of one instance: the call timed, its output left at its own width in `scratch/<key>.npy`."""
     arrays = host_inputs(inst)
+    out, first, times, peak, how = run_nbx(inst, arrays, dev, res, warmup, reps)
+    f = scratch / f"{inst['key']}.npy"
+    np.save(f, _host_flat(out))
+    od = _dtype_of(out)
+    del out
+    dev.release()
+    return {"first": first, "times": times, "peak": peak, "how": how, "od": od, "file": str(f)}
+
+
+def torch_work(inst, dev, res, warmup, reps, compile_modes, nbx: dict | None) -> list:
+    """The torch side of one instance: the float64 reference in memory, torch eager and each compile mode (compile
+    time apart), every contender — the nbxtensor output read by memory map — compared tile by tile; the scratch file
+    removed; torch.compile's caches released."""
+    arrays = host_inputs(inst)
+    rows = []
     try:
-        ref = _to_numpy(reference(inst, arrays, res))
-        np.save(refs / f"{inst['key']}.npy", ref)
+        ref = _to_numpy(reference(inst, arrays, res)).reshape(-1)
         ref_note = ""
     except Exception as e:
         ref, ref_note = None, f"no float64 reference: {type(e).__name__}: {e}"
-    contenders = [("torch_eager", lambda: run_torch(inst, arrays, dev, res, warmup, reps))]
-    contenders += [(f"torch_compile[{m}]", (lambda m=m: run_torch(inst, arrays, dev, res, warmup, reps, m)))
-                   for m in compile_modes]
-    rows = []
-    for name, fn in contenders:
+    contenders = [("torch_eager", None)] + [(f"torch_compile[{m}]", m) for m in compile_modes]
+    for name, mode in contenders:
         row = _row(inst, name)
         try:
-            rows.append(_judge(row, inst, *fn(), ref, ref_note))
+            out, first, times, peak, how = run_torch(inst, arrays, dev, res, warmup, reps, mode)
+            errs = None if ref is None else compare_tiles(_host_flat(out), ref)
+            od = _dtype_of(out)
+            del out
+            med = _stats(times)[0]
+            # a compiled call's first launch carries the compilation: its time apart from the execution's
+            rows.append(judge_row(row, inst, od, first, times, peak, how, errs, ref_note,
+                                  compile_ms=(first - med) if mode is not None else None))
         except Exception as e:
             row.update(status="refused", note=f"{type(e).__name__}: {str(e)[:300]}")
             rows.append(row)
-        dev.release()
+        release_compile_caches(dev)
+    if nbx is not None:
+        row = _row(inst, "nbxtensor")
+        f = Path(nbx["file"])
+        try:
+            got = np.load(f, mmap_mode="r")
+            errs = None if ref is None else compare_tiles(got, ref)
+            del got
+            rows.append(judge_row(row, inst, nbx["od"], nbx["first"], nbx["times"], nbx["peak"], nbx["how"],
+                                  errs, ref_note))
+        finally:
+            f.unlink(missing_ok=True)
+    del ref
+    release_compile_caches(dev)
     return rows
 
 
-def bench_nbxtensor(inst, dev, res, warmup, reps, refs: Path) -> list:
-    """The nbxtensor side: the Triton engine's call, judged against the torch side's float64 reference file."""
-    arrays = host_inputs(inst)
-    f = refs / f"{inst['key']}.npy"
-    ref, ref_note = ((np.load(f), "") if f.exists()
-                     else (None, f"no float64 reference: {f.name} not written by the torch side"))
-    row = _row(inst, "nbxtensor")
-    try:
-        row = _judge(row, inst, *run_nbx(inst, arrays, dev, res, warmup, reps), ref, ref_note)
-    except Exception as e:
-        row.update(status="refused", note=f"{type(e).__name__}: {str(e)[:300]}")
-    dev.release()
-    return [row]
+def worker(side: str, hardware: str, warmup: int, reps: int, compile_modes, scratch: Path) -> int:
+    """A persistent worker: one JSON request per stdin line, one JSON answer per stdout line."""
+    if side == "nbxtensor":
+        import instances as I
+        I.bind_profile(hardware)
+        dev = _NbxDevice()
+    else:
+        dev = _TorchDevice()
+    res = _ArgResolver()
+    real_out = sys.stdout
+    sys.stdout = sys.stderr                     # the engine's prints never corrupt the answer channel
+    for line in sys.stdin:
+        req = json.loads(line)
+        try:
+            if side == "nbxtensor":
+                ans = {"ok": nbx_work(req["inst"], dev, res, warmup, reps, scratch)}
+            else:
+                ans = {"ok": torch_work(req["inst"], dev, res, warmup, reps, compile_modes, req.get("nbx"))}
+        except Exception:
+            ans = {"error": traceback.format_exc().replace("\n", " | ")[-600:]}
+        real_out.write(json.dumps(ans) + "\n")
+        real_out.flush()
+    return 0
+
+
+class _Worker:
+    def __init__(self, python: str, side: str, a):
+        import subprocess
+        cmd = [python, __file__, "--worker", side, "--hardware", a.hardware, "--warmup", str(a.warmup),
+               "--reps", str(a.reps), "--compile-modes", a.compile_modes, "--scratch", a.scratch]
+        self.p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
+                                  stderr=open(Path(a.out).with_suffix(f".{side}.log"), "a"))
+
+    def ask(self, req: dict) -> dict:
+        self.p.stdin.write(json.dumps(req) + "\n")
+        self.p.stdin.flush()
+        line = self.p.stdout.readline()
+        if not line:
+            raise RuntimeError(f"the worker ended (rc {self.p.poll()}): see its log")
+        return json.loads(line)
+
+    def close(self):
+        try:
+            self.p.stdin.close()
+            self.p.wait(timeout=60)
+        except Exception:
+            self.p.kill()
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--side", required=True, choices=("torch", "nbxtensor"),
-                    help="torch: the torch contenders and the references (an environment with torch); "
-                         "nbxtensor: the library's contender (its torch-free environment)")
+    ap.add_argument("--worker", choices=("torch", "nbxtensor"), default=None, help=argparse.SUPPRESS)
     ap.add_argument("--hardware", required=True)
-    ap.add_argument("--instances", required=True)
-    ap.add_argument("--out", required=True)
-    ap.add_argument("--refs", required=True, help="the float64 references: written by the torch side, read by nbxtensor")
+    ap.add_argument("--census", default=None, help="<vendor>/<profile>/<rung>: the cut keys an out-of-class row names")
+    ap.add_argument("--instances")
+    ap.add_argument("--out")
+    ap.add_argument("--scratch", required=True, help="where the nbxtensor output of ONE instance waits for its comparison")
     ap.add_argument("--registry", default=None, help="the dated registry directory every row is appended to as well")
+    ap.add_argument("--python-torch", help="the oracle environment's python (torch)")
+    ap.add_argument("--python-nbxtensor", help="the library environment's python (no torch)")
     ap.add_argument("--warmup", type=int, default=3)
     ap.add_argument("--reps", type=int, default=20)
     ap.add_argument("--compile-modes", default="default,max-autotune")
     ap.add_argument("--ops", default=None, help="comma-separated op types to keep")
     ap.add_argument("--limit", type=int, default=None)
     a = ap.parse_args(argv)
+    modes = [m for m in a.compile_modes.split(",") if m]
+    scratch = Path(a.scratch)
+    scratch.mkdir(parents=True, exist_ok=True)
+    if a.worker:
+        return worker(a.worker, a.hardware, a.warmup, a.reps, modes, scratch)
     from registry import Registry
+    import instances as I
     reg = Registry(a.registry, "kernel", FIELDS, a.hardware, REPO)
-    if a.side == "nbxtensor":
-        import instances as I
-        I.bind_profile(a.hardware)
-        dev = _NbxDevice()
-    else:
-        dev = _TorchDevice()
-    res = _ArgResolver()
-    refs = Path(a.refs)
-    refs.mkdir(parents=True, exist_ok=True)
+    profile = I.load_hardware_profile(a.hardware)
+    budget = device_budget_bytes(profile)
+    census_rows = I.census_rows(a.census) if a.census else []
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    mine = (lambda c: c == "nbxtensor") if a.side == "nbxtensor" else (lambda c: c != "nbxtensor")
     done = set()
     if out.exists():
         with open(out) as f:
-            done = {r["key"] for r in csv.DictReader(f, delimiter="\t") if mine(r["contender"])}
+            done = {r["key"] for r in csv.DictReader(f, delimiter="\t")}
     insts = [json.loads(x) for x in open(a.instances)]
     if a.ops:
         keep = set(a.ops.split(","))
         insts = [i for i in insts if i["op_type"] in keep]
     insts = [i for i in insts if i["key"] not in done][:a.limit]
-    modes = [m for m in a.compile_modes.split(",") if m]
     new = not out.exists()
-    with open(out, "a", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=FIELDS, delimiter="\t")
-        if new:
-            w.writeheader()
-        for k, inst in enumerate(insts, 1):
-            try:
-                rows = (bench_nbxtensor(inst, dev, res, a.warmup, a.reps, refs) if a.side == "nbxtensor"
-                        else bench_torch(inst, dev, res, a.warmup, a.reps, modes, refs))
-            except Exception:
-                rows = [{"key": inst["key"], "op_type": inst["op_type"],
-                         "contender": "nbxtensor" if a.side == "nbxtensor" else "torch_eager",
-                         "status": "refused", "note": traceback.format_exc().replace("\n", " | ")[-600:]}]
-            for r in rows:
-                w.writerow(r)
-                reg.append(r)
-            f.flush()
-            print(f"[kernel:{a.side}] {k}/{len(insts)} {inst['op_type']} {inst['shapes']}: "
-                  + " ".join(f"{r['contender']}={r.get('median_ms', r['status'])}" for r in rows), flush=True)
+    nbx_w = torch_w = None
+    try:
+        with open(out, "a", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=FIELDS, delimiter="\t")
+            if new:
+                w.writeheader()
+            for k, inst in enumerate(insts, 1):
+                need = instance_bytes(inst)
+                if need > budget:
+                    rows = [out_of_class_row(inst, need, budget, census_cut_keys(inst, census_rows))]
+                else:
+                    nbx_w = nbx_w or _Worker(a.python_nbxtensor, "nbxtensor", a)
+                    torch_w = torch_w or _Worker(a.python_torch, "torch", a)
+                    nb = nbx_w.ask({"inst": inst})
+                    rows = []
+                    if "error" in nb:
+                        r = _row(inst, "nbxtensor"); r.update(status="refused", note=nb["error"]); rows.append(r)
+                    tr = torch_w.ask({"inst": inst, "nbx": nb.get("ok")})
+                    if "error" in tr:
+                        r = _row(inst, "torch_eager"); r.update(status="refused", note=tr["error"]); rows.append(r)
+                    else:
+                        rows += tr["ok"]
+                for r in rows:
+                    w.writerow(r)
+                    reg.append(r)
+                f.flush()
+                print(f"[kernel] {k}/{len(insts)} {inst['op_type']} {inst['shapes']}: "
+                      + " ".join(f"{r['contender']}={r.get('median_ms') or r['status']}" for r in rows), flush=True)
+    finally:
+        for wk in (nbx_w, torch_w):
+            if wk is not None:
+                wk.close()
     return 0
 
 
