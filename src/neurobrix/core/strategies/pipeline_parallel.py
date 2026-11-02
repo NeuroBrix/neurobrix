@@ -14,7 +14,6 @@ but with sequential fill allocation instead of scattered best-fit.
 
 from typing import Dict, Any, Optional, List, Set
 import torch
-from neurobrix.core.device_utils import device_empty_cache
 
 from .base import ExecutionStrategy, StrategyContext
 from neurobrix.core.strategies.shared_steps import PipelineParallelSteps   # the steps both branches share
@@ -58,21 +57,4 @@ class PipelineParallelStrategy(PipelineParallelSteps, ExecutionStrategy):
             inputs = self.prepare_inputs(component_name, inputs)
 
         return executor.run(inputs or {})
-
-
-    def unload_weights(self, component_name: str) -> None:
-        """Unload weights for PP component."""
-        executor = self.context.component_executors.get(component_name)
-        if executor is not None:
-            weights_loaded = hasattr(executor, '_weights') and bool(executor._weights)
-            if weights_loaded:
-                devices = self.get_component_devices(component_name)
-                if hasattr(executor, '_is_fgp_mode'):
-                    executor._is_fgp_mode = False
-                executor.unload_weights()
-                self._loaded_components.discard(component_name)
-                for device in devices:
-                    self.synchronize_device(device)
-                device_empty_cache(device)
-
 

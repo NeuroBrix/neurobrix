@@ -48,6 +48,15 @@ CUDA and on Metal: each `nbxtensor.host` service is by then a fact the
 library owns or measures, an optional policy with a measured default, or an
 optional hook (API.md section 11).
 
+**Decided 2026-11-02 (the owner, 15:01):** the Triton arena factor is not deleted, it is a MEASURED fact. A vendor
+file's declared measurement stands (V100 1.35, M4 Pro 1.19); a card no vendor file declares measures itself at its
+first launch (`core/prism/arena_probe`: the cache's smallest container, its component run whole at doubling extents
+until the largest that fits, the ratio of the arena's held peak to Prism's walk, three runs within 5 %; a V100-16GB
+measured 1.476 on HAT-S at x4 — 3.50 at x1, a fixed hold a small walk over-weights) and Prism refuses by name without
+either. The exact allocator replay (the `memory.plan` above) replaces the factor device by device only where its table
+is within ±10 % of the measured peak, never before; the `_arena_*` references are the consumers of the measured fact,
+not a count to bring to zero. M3 is outside 0.0.1 until then.
+
 ## M4 — benchmarks against torch (cards busy during M1-M3)
 Mac writes `benchmarks/nbxtensor_vs_torch/` first (outside the library) (kernel level: the census shapes; model
 level: the gate cells), then both machines run it: torch eager,

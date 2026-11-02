@@ -2579,6 +2579,15 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None) -> dic
         # the expandable pool's chunk on this machine's card (R16; 0: the device has no VMM, the pool keeps segments)
         first["vmm_chunk_bytes"] = int(P.vmm_chunk_bytes(0, q["vmm_reps"], q["vmm_ks"]) or 0)
         added["vmm_chunk_bytes"] = first["vmm_chunk_bytes"]
+    if engine == "triton" and "triton_arena_activation_factor" not in first:
+        # the Triton arena's hold over a large walk, on a card its vendor file does not declare (the owner 2026-11-02
+        # 15:01): measured by core/prism/arena_probe, written when three runs agree within the reload's steadiness
+        from neurobrix.core.config.loader import vendor_config_for_device
+        d0 = devices[0]
+        if (vendor_config_for_device(d0.get("brand"), d0.get("architecture"), d0.get("compute_capability"),
+                                     model=d0.get("model")).get("memory") or {}).get("triton_arena_activation_factor") is None:
+            first["triton_arena_activation_factor"] = _measure_arena_factor(hardware_id, d0)
+            added["triton_arena_activation_factor"] = first["triton_arena_activation_factor"]
     if not (data.get("host_measured") or _vendor_block(devices[0], "host_measured")):
         data["host_measured"] = {"source": f"measured {stamp} at the first launch on this machine (autodetect, quick)",
                                  "host_matmul_gflops": round(P.host_matmul_gflops(q["host_gemm_n"])),
@@ -2593,6 +2602,28 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None) -> dic
     _write_profile_atomically(path, data)
     print(f"   [Auto-detect] measured on this machine and written into {path.name}: {added}")
     return added
+
+
+def _measure_arena_factor(hardware_id: str, device: dict) -> float:
+    """The arena factor of `device` (the generated profile's card 0), measured on the cache's smallest container
+    (`arena_probe`); refused by name when the runs disagree — never a value carried from another card."""
+    from neurobrix.core.paths import cache_dir
+    from neurobrix.core.prism import arena_probe as A
+    total, ctx = device.get("runtime_total_mb"), device.get("runtime_context_mb")
+    if total is None or ctx is None:
+        raise RuntimeError("ZERO FALLBACK: the arena probe sizes its runs on the card as a run reads it, and the "
+                           "profile states no runtime_total_mb / runtime_context_mb")
+    import inspect
+    from nbxtensor.io import read_rate
+    steady = inspect.signature(read_rate.measure).parameters["within"].default   # the storage measure's steadiness
+    root, comp = A.smallest_container(cache_dir())
+    weights = sum(f.stat().st_size for f in (root / "components" / comp).rglob("*.safetensors"))
+    factor, runs = A.factor_on_card((int(total) - int(ctx)) << 20, weights,
+                                    lambda k: A.child(str(root), comp, hardware_id, k), 3, steady)
+    if factor is None:
+        raise RuntimeError(f"ZERO FALLBACK: the arena probe's runs on {root.name}:{comp} disagree "
+                           f"({[round(r['hold_bytes'] / r['walked_bytes'], 3) for r in runs]}): no factor written")
+    return round(float(factor), 3)
 
 
 def note_reload_rate(hardware_id: Optional[str], engine: str, stored: str, reloaded_bytes: int, seconds: float,

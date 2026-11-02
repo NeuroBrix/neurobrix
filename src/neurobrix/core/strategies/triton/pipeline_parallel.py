@@ -43,20 +43,3 @@ class PipelineParallelStrategy(PipelineParallelSteps, TritonStrategy):
 
         return executor.run(inputs or {})
 
-
-    def unload_weights(self, component_name: str) -> None:
-        executor = self.context.component_executors.get(component_name)
-        if executor is not None:
-            weights_loaded = hasattr(executor, '_weights') and bool(executor._weights)
-            if weights_loaded:
-                devices = self.get_component_devices(component_name)
-                if hasattr(executor, '_is_fgp_mode'):
-                    executor._is_fgp_mode = False
-                executor.unload_weights()
-                self._loaded_components.discard(component_name)
-                for device in devices:
-                    self.synchronize_device(device)
-                from nbxtensor.memory.allocator import DeviceAllocator
-                DeviceAllocator.empty_cache_pool()
-
-

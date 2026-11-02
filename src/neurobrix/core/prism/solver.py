@@ -2128,13 +2128,14 @@ class PrismSolver:
         value = ((vendor_config_for_device(brand, dev.architecture, getattr(dev, "compute_capability", None),
                                            model=getattr(dev, "name", None)).get("memory") or {})
                  .get("triton_arena_activation_factor"))
+        if value is None:       # a card the vendor files do not know measures itself at its first launch
+            value = (getattr(dev, "measured", None) or {}).get("triton_arena_activation_factor")
         if value is None:
             raise PlanNotComputable(
-                f"{getattr(getattr(dev, 'brand', None), 'value', getattr(dev, 'brand', '?'))}/{dev.architecture}: its "
-                f"vendor file states no measured memory.triton_arena_activation_factor (what the Triton arena holds "
-                f"over the walked activations while a component runs whole), so no Triton plan is priced on it. "
-                f"Measure it: a whole component through the entry point with NBX_LIVE_WATERMARK_TRACE, (allocator live "
-                f"peak - weights) / the walk.")
+                f"{getattr(getattr(dev, 'brand', None), 'value', getattr(dev, 'brand', '?'))}/{dev.architecture}: no "
+                f"measured memory.triton_arena_activation_factor (what the Triton arena holds over the walked activations "
+                f"while a component runs whole) in its vendor file nor in the generated profile, so no Triton plan is "
+                f"priced on it: a launch without --hardware measures it (core/prism/arena_probe)")
         return float(value)
 
     def _phase_peak_carried_mb(self, container, costs: Dict[str, int]) -> float:

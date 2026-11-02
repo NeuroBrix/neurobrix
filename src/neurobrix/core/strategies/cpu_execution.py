@@ -32,7 +32,7 @@ P-PRISM-NEVER-REFUSE v2 — 2026-05-12.
 from typing import Dict, Any, Optional, Set
 
 from .base import ExecutionStrategy, StrategyContext
-from neurobrix.core.strategies.shared_steps import CPUExecutionSteps   # the steps both branches share
+from neurobrix.core.strategies.shared_steps import CPUExecutionSteps, execute_whole_component   # the steps both branches share
 
 
 class CPUExecutionStrategy(CPUExecutionSteps, ExecutionStrategy):
@@ -46,32 +46,6 @@ class CPUExecutionStrategy(CPUExecutionSteps, ExecutionStrategy):
     R34 compliant — no hardcoded thread count).
     """
 
-    def execute_component(
-        self,
-        component_name: str,
-        phase: str,
-        inputs: Optional[Dict[str, Any]] = None,
-    ) -> Optional[Dict[str, Any]]:
-        """Execute component on CPU.
-
-        Identical pattern to SingleGPUStrategy: load weights (lazy or
-        eager), prepare inputs (ensure CPU tensors), execute.
-        """
-        executor = self.context.component_executors.get(component_name)
-        if executor is None:
-            raise RuntimeError(
-                f"ZERO FALLBACK: No executor for '{component_name}'"
-            )
-
-        if component_name not in self._loaded_components:
-            self.load_weights(component_name)
-            if self._eager:
-                self._loaded_components.add(component_name)
-
-        if inputs:
-            inputs = self.prepare_inputs(component_name, inputs)
-
-        outputs = executor.run(inputs or {})
-        return outputs
+    execute_component = execute_whole_component     # the same execution as the Triton single GPU's (one body)
 
 

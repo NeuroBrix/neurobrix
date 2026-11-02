@@ -80,6 +80,7 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | when | engine definition | nbxtensor API |
 |---|---|---|
 | 2026-10-30 | `traced_output_dtype_name` (triton/dtype.py), `traced_output_is_complex` and `amp_fp32_output_dtype` (twins in core/dtype/engine.py and triton/dtype.py, held equal by tests) | `nbxtensor.dtype.outputs` — one definition both engines import |
+| 2026-11-02 | the strategies' duplicates live once in `shared_steps` (`execute_whole_component`, `unload_sharded_weights` with each branch's `_release_device_cache`, `_load_sharded_weights`); 8 findings closed. The RATCHET RAISED by the remainder, +66 lines: the Triton arena factor became a fact the engine measures at its first launch on a card no vendor file declares (`core/prism/arena_probe`, the owner 2026-11-02 15:01, a 0.0.1 criterion) — 178 lines added, 112 taken back here | -112 / +178 |
 
 ## Kept in the engine
 

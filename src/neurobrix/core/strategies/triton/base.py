@@ -71,6 +71,10 @@ class TritonStrategy(ExecutionStrategy):
                 result[key] = value
         return result
 
+    def _release_device_cache(self, device: str) -> None:
+        from nbxtensor.memory.allocator import DeviceAllocator
+        DeviceAllocator.empty_cache_pool()
+
     def synchronize_device(self, device: Optional[str] = None) -> None:
         """Synchronize `device` through DeviceAllocator (zero torch).
 

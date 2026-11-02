@@ -10,7 +10,7 @@ from typing import Dict, Any, Optional, Set
 
 from ..base import StrategyContext
 from .base import TritonStrategy
-from neurobrix.core.strategies.shared_steps import SingleGPUSteps   # the steps both branches share
+from neurobrix.core.strategies.shared_steps import SingleGPUSteps, execute_whole_component   # the steps both branches share
 
 
 class SingleGPUStrategy(SingleGPUSteps, TritonStrategy):
@@ -29,30 +29,7 @@ class SingleGPUStrategy(SingleGPUSteps, TritonStrategy):
         self._eager = context.loading_mode == "eager"
         self._loaded_components: Set[str] = set()
 
-    def execute_component(
-        self,
-        component_name: str,
-        phase: str,
-        inputs: Optional[Dict[str, Any]] = None,
-    ) -> Optional[Dict[str, Any]]:
-        """Execute component on the single assigned GPU (no cross-device
-        transfer)."""
-        executor = self.context.component_executors.get(component_name)
-        if executor is None:
-            raise RuntimeError(
-                f"ZERO FALLBACK: No executor for '{component_name}'"
-            )
-
-        if component_name not in self._loaded_components:
-            self.load_weights(component_name)
-            if self._eager:
-                self._loaded_components.add(component_name)
-
-        if inputs:
-            inputs = self.prepare_inputs(component_name, inputs)
-
-        outputs = executor.run(inputs or {})
-        return outputs
+    execute_component = execute_whole_component     # the same execution as the compiled CPU strategy's (one body)
 
     def unload_weights(self, component_name: str) -> None:
         """Lazy mode unloads; eager mode keeps weights resident."""

@@ -399,6 +399,10 @@ class ExecutionStrategy(ABC):
                 result[key] = value
         return result
 
+    def _release_device_cache(self, device: str) -> None:
+        from neurobrix.core.device_utils import device_empty_cache
+        device_empty_cache(device)
+
     def synchronize_device(self, device: str) -> None:
         """Synchronize device (wait for async operations)."""
         device_sync(device)

@@ -8,6 +8,42 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Set
 
 
+
+def _load_sharded_weights(self, component_name: str) -> None:
+    executor = self.context.component_executors.get(component_name)
+    if executor is None:
+        return
+
+    weights_loaded = hasattr(executor, '_weights') and bool(executor._weights)
+    if weights_loaded:
+        return
+
+    shard_map = self.get_shard_map(component_name)
+    # Was: read `nbx_path` off the package, and if absent skip the
+    # load without a word. That name exists on no package this
+    # engine builds, so the load never happened and never said so.
+    nbx_path = self.resolve_artifact_path(component_name)
+
+    if shard_map:
+        executor.load_weights(nbx_path, component_name, shard_map)
+    else:
+        executor.load_weights(nbx_path, component_name)
+
+
+def unload_sharded_weights(self, component_name: str) -> None:
+    """Unload a component spread over several cards (block scatter, pipeline parallel), both branches: each card
+    synchronised, then the branch's cache released (`_release_device_cache`)."""
+    executor = self.context.component_executors.get(component_name)
+    if executor is not None and hasattr(executor, '_weights') and bool(executor._weights):
+        devices = self.get_component_devices(component_name)
+        if hasattr(executor, '_is_fgp_mode'):
+            executor._is_fgp_mode = False
+        executor.unload_weights()
+        self._loaded_components.discard(component_name)
+        for device in devices:
+            self.synchronize_device(device)
+        self._release_device_cache(device)
+
 class BlockScatterSteps:
     """What the compiled and the Triton `BlockScatterStrategy` ran alike (core/strategies/block_scatter.py, core/strategies/triton/block_scatter.py)."""
 
@@ -44,25 +80,8 @@ class BlockScatterSteps:
 
         return executor.run(inputs or {})
 
-    def _load_fgp_weights(self, component_name: str) -> None:
-        executor = self.context.component_executors.get(component_name)
-        if executor is None:
-            return
-
-        weights_loaded = hasattr(executor, '_weights') and bool(executor._weights)
-        if weights_loaded:
-            return
-
-        shard_map = self.get_shard_map(component_name)
-        # Was: read `nbx_path` off the package, and if absent skip the
-        # load without a word. That name exists on no package this
-        # engine builds, so the load never happened and never said so.
-        nbx_path = self.resolve_artifact_path(component_name)
-
-        if shard_map:
-            executor.load_weights(nbx_path, component_name, shard_map)
-        else:
-            executor.load_weights(nbx_path, component_name)
+    _load_fgp_weights = _load_sharded_weights       # the same load as pipeline parallel's (one body)
+    unload_weights = unload_sharded_weights
 
     def prepare_inputs(self, component_name: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
         devices = self.get_component_devices(component_name)
@@ -246,25 +265,8 @@ class PipelineParallelSteps:
     def get_component_devices(self, component_name: str) -> List[str]:
         return self.component_devices.get(component_name, [self.primary_device])
 
-    def _load_pp_weights(self, component_name: str) -> None:
-        executor = self.context.component_executors.get(component_name)
-        if executor is None:
-            return
-
-        weights_loaded = hasattr(executor, '_weights') and bool(executor._weights)
-        if weights_loaded:
-            return
-
-        shard_map = self.get_shard_map(component_name)
-        # Was: read `nbx_path` off the package, and if absent skip the
-        # load without a word. That name exists on no package this
-        # engine builds, so the load never happened and never said so.
-        nbx_path = self.resolve_artifact_path(component_name)
-
-        if shard_map:
-            executor.load_weights(nbx_path, component_name, shard_map)
-        else:
-            executor.load_weights(nbx_path, component_name)
+    _load_pp_weights = _load_sharded_weights        # the same load as block scatter's (one body)
+    unload_weights = unload_sharded_weights
 
     def prepare_inputs(self, component_name: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
         devices = self.get_component_devices(component_name)
@@ -373,3 +375,32 @@ class WeightShardingSteps:
                 self.regular_components[comp_name] = device_str
 
         self._loaded_components: Set[str] = set()
+
+
+def execute_whole_component(
+    self,
+    component_name: str,
+    phase: str,
+    inputs: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Execute component on CPU.
+
+    Identical pattern to SingleGPUStrategy: load weights (lazy or
+    eager), prepare inputs (ensure CPU tensors), execute.
+    """
+    executor = self.context.component_executors.get(component_name)
+    if executor is None:
+        raise RuntimeError(
+            f"ZERO FALLBACK: No executor for '{component_name}'"
+        )
+
+    if component_name not in self._loaded_components:
+        self.load_weights(component_name)
+        if self._eager:
+            self._loaded_components.add(component_name)
+
+    if inputs:
+        inputs = self.prepare_inputs(component_name, inputs)
+
+    outputs = executor.run(inputs or {})
+    return outputs

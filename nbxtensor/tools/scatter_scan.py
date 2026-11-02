@@ -58,6 +58,8 @@ NOT_SEMANTIC = {
         "bytes, nbxtensor.memory.layout; the device's largest allocation, the profile) — COST.md section 2",
     ("core/prism/solver.py", "_store_arena_over_allocation"): "Prism's decision on a fact of the library (an expert "
         "store's dense arena, nbxtensor.memory.layout) — COST.md section 2",
+    ("core/prism/autodetect.py", "_measure_arena_factor"): "the engine measuring a profile fact at its first launch "
+        "(the arena's hold over Prism's walk, core/prism/arena_probe): the hold is the library's own peak window",
     ("core/prism/solver.py", "_arena_door"): "Prism's policy over a plan, reading the two facts above — COST.md "
         "section 2",
     ("core/prism/solver.py", "_arena_mb_of"): "reads the arena bytes the library laid out (ComponentMemory.arena_bytes) "
