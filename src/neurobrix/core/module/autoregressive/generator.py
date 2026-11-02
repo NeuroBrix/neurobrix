@@ -89,7 +89,6 @@ class AutoregressiveGenerator:
     top_k: int
     eos_token_id: "Union[int, List[int], None]"  # vendor-faithful: id or list of ids
     pad_token_id: Optional[int]
-    vocab_size: int
 
     # State
     _state: GenerationState
@@ -105,7 +104,6 @@ class AutoregressiveGenerator:
                 - temperature: Sampling temperature
                 - top_p: Nucleus sampling threshold
                 - top_k: Top-K sampling size (0 = disabled)
-                - vocab_size: Size of token vocabulary
                 - eos_token_id: End of sequence token (optional)
                 - pad_token_id: Padding token (optional)
         """
@@ -119,7 +117,6 @@ class AutoregressiveGenerator:
         self.top_p = config["top_p"]
         self.top_k = config["top_k"]
         self.repetition_penalty = config["repetition_penalty"]
-        self.vocab_size = config.get("vocab_size", 16384)
         self.eos_token_id = config.get("eos_token_id")
         self.pad_token_id = config.get("pad_token_id")
         # defaults.json is vendor-faithful: eos_token_id may be a single id

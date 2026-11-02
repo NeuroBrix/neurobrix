@@ -151,25 +151,22 @@ class AudioLLMEngine(AudioLLMSteps, ComponentFlowHandler):
         max_tokens = decode_bound(_mt)
         if max_tokens is None:
             raise RuntimeError("ZERO FALLBACK: max_tokens missing from defaults.json.")
-        temperature = defaults.get("temperature")
-        if temperature is None:
-            raise RuntimeError("ZERO FALLBACK: temperature missing from defaults.json.")
+        # The decode's sampler: the branch's one CombinedSampler, its parameters resolved the one way (request >
+        # container > family file — core/module/sampling_contract.resolve_sampling); the request's --temperature and
+        # --repetition-penalty are read, as every other decode reads them.
+        from neurobrix.core.module.autoregressive.samplers import decode_sampler, sample_next_id
+        sampler = decode_sampler(self.ctx.variable_resolver, defaults, "audio_llm (compiled)")
         eos_token_id = defaults.get("eos_token_id")
         if eos_token_id is None:
             raise RuntimeError("ZERO FALLBACK: eos_token_id missing from defaults.json.")
-        repetition_penalty = defaults.get("repetition_penalty", 1.0)
 
-        # Sampling-parameter contract: `audio_utils.sample_token`
-        # implements temperature, top-p and the repetition penalty — but
-        # NOT top-k. Refuse an explicit top_k rather than drop it; report
-        # one inherited from the registry.
-        # See core/module/sampling_contract.py.
+        # Sampling-parameter contract: the sampler implements temperature, top-k, top-p and the repetition penalty;
+        # anything else configured (min_p) is refused when asked, reported when inherited (core/module/sampling_contract).
         from neurobrix.core.module.sampling_contract import (
-            enforce_sampling_support)
+            enforce_sampling_support, SAMPLER_IMPLEMENTS)
         _samp_cfg, _samp_explicit = _effective_sampling(self.ctx, defaults)
         enforce_sampling_support(
-            "audio_llm (compiled)", ("temperature", "top_p", "repetition_penalty"),
-            _samp_cfg, explicit=_samp_explicit)
+            "audio_llm (compiled)", SAMPLER_IMPLEMENTS, _samp_cfg, explicit=_samp_explicit)
 
         self._ensure_weights_loaded(lm_name)
         embed_weight = self._get_embed_weight(lm_name)
@@ -251,12 +248,7 @@ class AudioLLMEngine(AudioLLMSteps, ComponentFlowHandler):
             logits = self._compute_logits(output, embed_weight, logits_source)
             from .decode_topk import log_topk
             log_topk(logits, step)
-            from .audio_utils import sample_token
-            next_token = sample_token(
-                logits, temperature,
-                generated_ids=generated_ids,
-                repetition_penalty=repetition_penalty,
-            )
+            next_token = sample_next_id(sampler, logits, generated_ids)
             generated_ids.append(next_token)
             _done = next_token == eos_token_id or step + 1 >= max_tokens
             # The stop seam (Studio request 3, decode_stop): ends the decode

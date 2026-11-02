@@ -73,7 +73,7 @@ neurobrix run --model Qwen3-30B-A3B-Thinking-2507 \
 | `--prompt` | yes | Input text |
 | `--system` | no | System message (chat mode) |
 | `--chat` / `--no-chat` | no | Force chat template on/off |
-| `--temperature`, `--max-tokens`, `--repetition-penalty` | no | Sampling params |
+| `--temperature`, `--top-k`, `--top-p`, `--repetition-penalty`, `--max-tokens` | no | Sampling params (order and defaults: [CLI reference, Sampling](reference/cli.md#sampling)) |
 
 Output: `.txt` (or `.json` if `--output result.json`).
 

@@ -46,26 +46,20 @@ def _build_generator_config(defaults: Dict, resolver: Any) -> Dict[str, Any]:
     """Build generator config from defaults.json — pure Python."""
     config = {
         "max_tokens": require_max_tokens(defaults),
-        "temperature": defaults.get("temperature", 1.0),
-        "top_p": defaults.get("top_p", 1.0),
-        "top_k": defaults.get("top_k", 0),
-        "repetition_penalty": defaults.get("repetition_penalty", 1.0),
-        "vocab_size": defaults.get("vocab_size", 32000),
         "eos_token_id": defaults.get("eos_token_id"),
         "pad_token_id": defaults.get("pad_token_id"),
         "_class_name": "TritonGenerator",
     }
-    # Override from variable resolver if present.
-    # Use explicit `is not None` — bare `or` treats valid falsy values
-    # (temperature=0 for greedy, top_k=0 to disable) as missing.
-    if resolver is not None:
-        resolved = getattr(resolver, 'resolved', {})
-        for key in ("max_tokens", "temperature", "top_p", "top_k"):
-            gkey = f"global.{key}"
-            if gkey in resolved and resolved[gkey] is not None:
-                config[key] = resolved[gkey]
-            elif key in resolved and resolved[key] is not None:
-                config[key] = resolved[key]
+    # The sampling, resolved the one way every decode of both branches resolves it (request > container > family) —
+    # the repetition penalty included, which this table used to leave at the container's whatever the request said.
+    from neurobrix.core.module.sampling_contract import resolve_sampling
+    config.update(resolve_sampling(resolver, defaults, "autoregressive_text (triton)"))
+    # The request's token budget over the container's (explicit `is not None`: a falsy value is a value).
+    resolved = getattr(resolver, 'resolved', {}) or {}
+    for key in ("global.max_tokens", "max_tokens"):
+        if resolved.get(key) is not None:
+            config["max_tokens"] = resolved[key]
+            break
     return config
 
 
@@ -1027,21 +1021,12 @@ class TritonImageStrategy:
         max_tokens = image_token_count(defaults)
         config = {
             "max_tokens": max_tokens,
-            "temperature": defaults["temperature"],
-            "top_p": defaults["top_p"],
-            "top_k": defaults["top_k"],
-            "repetition_penalty": defaults["repetition_penalty"],
-            "vocab_size": defaults["codebook_size"],
             "eos_token_id": None,
             "pad_token_id": None,
             "_class_name": "TritonVQImageGenerator",
         }
-        if resolver is not None:
-            resolved = getattr(resolver, 'resolved', {})
-            for key in ("temperature", "top_p", "top_k", "repetition_penalty"):
-                gkey = f"global.{key}"
-                if gkey in resolved and resolved[gkey] is not None:
-                    config[key] = resolved[gkey]
+        from neurobrix.core.module.sampling_contract import resolve_sampling
+        config.update(resolve_sampling(resolver, defaults, "autoregressive_image (triton)"))
         return TritonGenerator(config)
 
     def get_logits(self, hidden: NBXTensor, step_idx: int) -> NBXTensor:

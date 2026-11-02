@@ -29,12 +29,8 @@ from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.memory.memory_pool import release_flow_memory
-from nbxtensor.ops import wrappers as w
-from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.ops import index_wrappers as _nbx_index_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
-from nbxtensor.ops import random_wrappers as _nbx_random_wrappers  # the family the moved names live in (M2 split)
-from nbxtensor.ops import reduction_wrappers as _nbx_reduction_wrappers  # the family the moved names live in (M2 split)
 from neurobrix.core.flow.base import ComponentFlowHandler   # the executor's four component callables, both branches
 
 
@@ -43,59 +39,6 @@ _DTYPE_STR_TO_NBX = {
     "bfloat16": NBXDtype.bfloat16, "bf16": NBXDtype.bfloat16,
     "float32": NBXDtype.float32, "fp32": NBXDtype.float32,
 }
-
-
-def _nbx_f32_to_numpy(t: NBXTensor) -> np.ndarray:
-    """R33-pure NBXTensor → host float32 numpy (D2H copy, no torch).
-    Mirrors triton/flow/autoregressive.py::_read_ids_to_list."""
-    import ctypes
-    f = t.to(NBXDtype.float32).contiguous()
-    n = f.numel()
-    buf = (ctypes.c_char * (n * 4))()
-    # Through DeviceAllocator, not a hardcoded libcudart (ROCm/Metal have no
-    # such library), and with the return code checked.
-    DeviceAllocator.memcpy(ctypes.addressof(buf), f.data_ptr(), n * 4, 2)  # D2H
-    return np.frombuffer(bytes(buf), dtype=np.float32).copy()
-
-
-def _sample_token_nbx(
-    logits: NBXTensor, temperature: float,
-    generated_ids: Optional[List[int]] = None,
-    repetition_penalty: float = 1.0,
-) -> int:
-    """NBXTensor mirror of core.flow.audio_utils.sample_token.
-
-    Selecting one integer token id from a [1, S, V] logits tensor is a
-    decode-control decision (the same `.item()` the core handler does);
-    the compute that produced the logits stayed on the Triton path.
-    """
-    last = logits[:, -1, :] if logits.ndim == 3 else logits  # [1, V]
-    # Penalty, temperature, softmax and draw in fp32 whatever the head stored, as vLLM (the owner, 2026-10-26 19:21):
-    # the row is read at its width once, never computed in half (a fp16 row divided by a small temperature overflows).
-    if last._dtype != NBXDtype.float32:
-        last = last.to(NBXDtype.float32)
-
-    if repetition_penalty != 1.0 and generated_ids:
-        # Faithful mirror of the core per-id scaling, on a tiny [1,V]
-        # vector at the decode-control boundary.
-        row = _nbx_f32_to_numpy(last).reshape(-1)
-        for tid in set(generated_ids):
-            if row[tid] > 0:
-                row[tid] /= repetition_penalty
-            else:
-                row[tid] *= repetition_penalty
-        if temperature == 0.0:
-            return int(np.argmax(row))
-        last = NBXTensor.from_numpy(row.reshape(1, -1))
-
-    if temperature == 0.0:
-        idx = _nbx_reduction_wrappers.argmax_wrapper(last, dim=-1)
-        return int(idx.item())
-
-    # Mirror core: softmax(last / temperature) then multinomial.
-    probs = _nbx_attention_wrappers.softmax(last / float(temperature), dim=-1)
-    nxt = _nbx_random_wrappers.multinomial_wrapper(probs, num_samples=1)
-    return int(nxt.item())
 
 
 class TritonAudioLLMEngine(AudioLLMSteps, ComponentFlowHandler):
@@ -202,27 +145,24 @@ class TritonAudioLLMEngine(AudioLLMSteps, ComponentFlowHandler):
         if max_tokens is None:
             raise RuntimeError(
                 "ZERO FALLBACK: max_tokens missing from defaults.json.")
-        temperature = defaults.get("temperature")
-        if temperature is None:
-            raise RuntimeError(
-                "ZERO FALLBACK: temperature missing from defaults.json.")
+        # The decode's sampler: the branch's one CombinedSampler, its parameters resolved the one way (request >
+        # container > family file — core/module/sampling_contract.resolve_sampling); the request's --temperature,
+        # --top-k, --top-p and --repetition-penalty are read, as every other decode reads them.
+        from neurobrix.triton.samplers import decode_sampler, sample_next_id
+        sampler = decode_sampler(self.ctx.variable_resolver, defaults, "audio_llm (triton)")
         eos_token_id = defaults.get("eos_token_id")
         if eos_token_id is None:
             raise RuntimeError(
                 "ZERO FALLBACK: eos_token_id missing from defaults.json.")
-        repetition_penalty = defaults.get("repetition_penalty", 1.0)
 
-        # Sampling-parameter contract: this path implements temperature
-        # and the repetition penalty only. Anything else configured here
-        # would be silently dropped, so refuse instead. See
-        # core/module/sampling_contract.py.
+        # Sampling-parameter contract: what the sampler does not implement (min_p) is refused when asked, reported
+        # when inherited (core/module/sampling_contract).
         from neurobrix.core.module.sampling_contract import (
-            enforce_sampling_support)
+            enforce_sampling_support, SAMPLER_IMPLEMENTS)
         _samp_cfg, _samp_explicit = _effective_sampling(
             self.ctx, defaults)
         enforce_sampling_support(
-            "audio_llm (triton)", ("temperature", "repetition_penalty"),
-            _samp_cfg, explicit=_samp_explicit)
+            "audio_llm (triton)", SAMPLER_IMPLEMENTS, _samp_cfg, explicit=_samp_explicit)
 
         self._ensure_weights_loaded(lm_name)
         embed_weight = self._get_embed_weight(lm_name)
@@ -300,11 +240,7 @@ class TritonAudioLLMEngine(AudioLLMSteps, ComponentFlowHandler):
                 output, embed_weight, logits_source)
             from neurobrix.triton.flow.decode_topk import log_topk
             log_topk(logits, _step)
-            next_token = _sample_token_nbx(
-                logits, temperature,
-                generated_ids=generated_ids,
-                repetition_penalty=repetition_penalty,
-            )
+            next_token = sample_next_id(sampler, logits, generated_ids)
             generated_ids.append(next_token)
             _done = next_token == eos_token_id or _step + 1 >= max_tokens
             # The stop seam (Studio request 3, decode_stop): ends the decode

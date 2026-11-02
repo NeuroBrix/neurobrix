@@ -446,6 +446,10 @@ class RuntimeExecutor:
                 merged_defaults.update(gen_defaults)
             except FileNotFoundError:
                 pass
+        # The family layer (family file + its generation-type block) as it stood before the container spoke: a key the
+        # container declares null (the vendor's generation_config carries none) leaves the family's documented value
+        # visible to the sampling resolution (core/module/sampling_contract.resolve_sampling).
+        self._family_layer = dict(merged_defaults)
         merged_defaults.update(self.pkg.defaults)
         # The output size is the CONTAINER's when the build declares none: the
         # traced latent extent of the diffusion backbone times the VAE scale
@@ -510,6 +514,7 @@ class RuntimeExecutor:
             device=self._get_primary_device(),
             mode=self.mode,
         )
+        self.variable_resolver.family_defaults = self._family_layer
 
         # Inject user inputs
         for name, value in inputs.items():

@@ -1154,26 +1154,17 @@ def _build_generator_config(defaults: Dict, resolver: Any, gen_type: str) -> Dic
         "codebook_size": codebook_size,
         "codebook_dim": codebook_dim,
         "max_tokens": max_tokens,
-        "temperature": defaults["temperature"],
-        "top_p": defaults["top_p"],
-        "top_k": defaults["top_k"],
-        "repetition_penalty": defaults["repetition_penalty"],
         "eos_token_id": defaults.get("eos_token_id"),
         "pad_token_id": defaults.get("pad_token_id"),
     }
+    # The sampling, resolved the one way every decode of both branches resolves it (request > container > family).
+    from neurobrix.core.module.sampling_contract import resolve_sampling
+    config.update(resolve_sampling(resolver, defaults, f"{gen_type} (compiled)"))
 
-    # CLI overrides
-    _CLI_OVERRIDES = [
-        ("global.temperature", "temperature", float),
-        ("global.repetition_penalty", "repetition_penalty", float),
-        ("global.top_k", "top_k", int),
-        ("global.top_p", "top_p", float),
-        ("global.max_tokens", "max_tokens", int),
-    ]
-    for var_name, config_key, cast_fn in _CLI_OVERRIDES:
-        cli_val = resolver.get(var_name, default=_SENTINEL)
-        if cli_val is not _SENTINEL:
-            config[config_key] = cast_fn(cli_val)
+    # The request's token budget over the container's
+    cli_val = resolver.get("global.max_tokens", default=_SENTINEL)
+    if cli_val is not _SENTINEL:
+        config["max_tokens"] = int(cli_val)
 
     return config
 
