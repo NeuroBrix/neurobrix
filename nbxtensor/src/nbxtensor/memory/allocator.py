@@ -12,8 +12,7 @@ import sys
 from typing import Any, Dict, List, Optional, Tuple
 
 from nbxtensor.backend import runtime as _rt
-from nbxtensor.memory.pool import (SegmentPool, LARGE, range_add, range_extend, range_unmapped, range_reclaimable,
-                                   unmap_over_cap)
+from nbxtensor.memory.pool import (SegmentPool, LARGE, range_add, range_extend, range_unmapped, range_reclaimable)
 
 
 
@@ -539,6 +538,8 @@ class DeviceAllocator:
               f"slack_total={st['slack_total'] / 2**20:.0f}MB slack_max={st['slack_max'] / 2**20:.0f}MB "
               f"flushes={st['flushes']} flushed={st['flushed_bytes'] / 2**20:.0f}MB "
               f"evictions={st['evictions']} evicted={st['evicted_bytes'] / 2**20:.0f}MB "
+              f"range maps={st.get('range_maps', 0)} reclaims={st.get('range_reclaims', 0)} "
+              f"unmaps={st.get('range_unmaps', 0)} "
               f"cap={ {d: round(c / 2**20) for d, c in DeviceAllocator._pool_cap_bytes.items()} }MB", flush=True)
 
     @staticmethod
@@ -802,6 +803,7 @@ class DeviceAllocator:
                 reclaimed = True
             r.mapped.add(i)
             r.handles[i] = h
+            DeviceAllocator._POOL.stats["range_maps"] = DeviceAllocator._POOL.stats.get("range_maps", 0) + 1
             live = DeviceAllocator._cuda_live_bytes.get(dev, 0) + r.chunk
             DeviceAllocator._cuda_live_bytes[dev] = live
             if live > DeviceAllocator._cuda_peak_bytes.get(dev, 0):
@@ -824,8 +826,11 @@ class DeviceAllocator:
         and released (nothing a kernel may still read: the work is drained), and its driver segments flushed. The bytes
         given back."""
         DeviceAllocator.device_synchronize(dev)
+        st = DeviceAllocator._POOL.stats
+        st["range_reclaims"] = st.get("range_reclaims", 0) + 1
         out = 0
         for r, i in range_reclaimable(DeviceAllocator._POOL, dev):
+            st["range_unmaps"] = st.get("range_unmaps", 0) + 1
             DeviceAllocator._range_unmap(dev, r, i)
             r.mapped.discard(i)
             out += r.chunk
@@ -1110,13 +1115,10 @@ class DeviceAllocator:
             cached = DeviceAllocator._POOL.park(dev, DeviceAllocator._POOL.release(ptr))
             cap = DeviceAllocator._pool_parked_cap(dev)
             if cap and cached > cap:
+                # a range's free chunks stay mapped (they are the next request's pages): they are unmapped only at a
+                # refusal (`_range_reclaim`), as torch's expandable segments release only on an out-of-memory — an unmap
+                # here needed a device synchronisation at every free over the cap (Allegro triton 16g's VAE: 3x slower)
                 DeviceAllocator._POOL.evict(dev, cached - cap, DeviceAllocator._segment_to_driver)
-                if DeviceAllocator._POOL.ranges.get(dev):
-                    # a range's mapped free chunks over the cap are unmapped (after a sync: a kernel may still read a
-                    # block freed this instant), as a wholly free segment over the cap returns to the driver
-                    DeviceAllocator.device_synchronize(dev)
-                    unmap_over_cap(DeviceAllocator._POOL, dev, cap,
-                                   lambda r, i: DeviceAllocator._range_unmap(dev, r, i))
             if _MALLOC_TRACE_FILE is not None:
                 _record_free_site(ptr, nbytes)
             return
