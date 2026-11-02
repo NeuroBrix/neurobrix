@@ -1,7 +1,7 @@
 # The engine's open slimming findings (tools/engine_slim_scan.py); each ends deleted, moved into nbxtensor, or kept
 # with its reason in docs/nbxtensor/ENGINE_SLIM.md. Both figures below may only go down (test_the_engine_only_slims.py).
-# engine_lines: 137106
-# open: 67
+# engine_lines: 137073
+# open: 66
 kind	path	symbol	detail
 duplicate	src/neurobrix/core/audio_frontend.py	_requested_voice	same body as src/neurobrix/triton/audio_frontend.py::_requested_voice_np
 duplicate	src/neurobrix/core/cfg/engine.py	__init__	same body as src/neurobrix/triton/cfg/engine.py::__init__
@@ -67,6 +67,5 @@ wrapper	src/neurobrix/core/workspace.py	SnapshotNotPresent	only renames Exceptio
 wrapper	src/neurobrix/kernels/census.py	install(hardware_profile)	no call site passes it: always its default None
 wrapper	src/neurobrix/kernels/census_table.py	rows_for(root)	no call site passes it: always its default None
 wrapper	src/neurobrix/triton/audio_frontend.py	_build(_ctx)	no call site passes it: always its default ctx
-wrapper	src/neurobrix/triton/dtype.py	resolve_compute_dtype(component)	no call site passes it: always its default None
 wrapper	src/neurobrix/triton/sequence.py	func_wrapper	only hands its parameters to moe_fused_dispatch
 wrapper	src/neurobrix/triton/weight_loader.py	_read_header	an alias of read_safetensors_header

@@ -314,38 +314,7 @@ def _cast_floats_to(result, dtype: NBXDtype):
     return result
 
 
-def resolve_compute_dtype(ctx, component: str = None) -> str:
-    """Prism-RESOLVED compute dtype for triton flow-level tensor synthesis.
-
-    SINGLE triton-side resolver (brick-consolidation E2). Returns the dtype
-    as a STRING ("float16" / "bfloat16" / "float32") — no torch.dtype ever
-    crosses into triton/ (R33 string-dtype boundary). The Prism plan is the
-    authority for the dtype that actually executes; the manifest carries the
-    pre-Prism vendor declaration and is only a last-resort fallback when no
-    plan is attached.
-
-    Resolution order (mirror of the compiled-side
-    `FlowContext.compute_dtype` — separate implementation by design):
-      1. `plan.components[component].dtype` when the caller names the
-         component it synthesises for;
-      2. first allocation carrying a dtype (single-dtype plans agree);
-      3. `plan.target_dtype`;
-      4. `manifest["dtype"]`.
-    """
-    plan = getattr(ctx, "plan", None)
-    if plan is not None:
-        comps = getattr(plan, "components", None)
-        if comps:
-            alloc = comps.get(component) if component else None
-            if alloc is None or not getattr(alloc, "dtype", None):
-                alloc = next((a for a in comps.values()
-                              if getattr(a, "dtype", None)), None)
-            if alloc is not None and getattr(alloc, "dtype", None):
-                return alloc.dtype
-        target = getattr(plan, "target_dtype", None)
-        if target:
-            return target
-    return ctx.pkg.manifest.get("dtype", "float16")
+from neurobrix.core.flow.base import resolve_compute_dtype  # noqa: E402,F401  (the one resolution, both branches)
 
 
 # ============================================================================

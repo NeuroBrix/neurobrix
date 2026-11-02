@@ -148,15 +148,11 @@ def test_resolve_compute_dtype_plan_wins_over_manifest():
     assert resolve_compute_dtype(_ctx(plan, "bfloat16")) == "float32"
 
 
-def test_resolve_compute_dtype_component_selects_its_allocation():
+def test_resolve_compute_dtype_reads_the_first_allocation_carrying_a_dtype():
+    # No flow names the component it synthesises for (the per-component rung went, 2026-11-02).
     plan = _plan({"vae": SimpleNamespace(dtype="float32"),
                   "lm": SimpleNamespace(dtype="float16")})
-    assert resolve_compute_dtype(_ctx(plan), component="lm") == "float16"
-    assert resolve_compute_dtype(_ctx(plan), component="vae") == "float32"
-    # unnamed → first allocation carrying a dtype
     assert resolve_compute_dtype(_ctx(plan)) == "float32"
-    # unknown component → same first-allocation answer, no crash
-    assert resolve_compute_dtype(_ctx(plan), component="missing") == "float32"
 
 
 def test_resolve_compute_dtype_target_dtype_fallback():

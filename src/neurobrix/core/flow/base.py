@@ -74,38 +74,36 @@ class FlowContext:
     binned_request: Any = None
 
     def compute_dtype(self) -> 'torch.dtype':
-        """Prism-RESOLVED compute dtype for flow-level tensor synthesis.
-
-        SINGLE compiled-side resolver (brick-consolidation E2). The Prism
-        plan is the authority for the dtype that actually executes — the
-        manifest carries the pre-Prism vendor declaration and is only a
-        last-resort fallback when no plan is attached (degraded/isolation
-        contexts). Flow handlers that previously read `manifest["dtype"]`
-        directly could diverge from the allocation the DtypeEngine runs
-        under (e.g. a bf16 manifest resolved to fp32 on non-bf16 hardware).
-
-        Resolution order:
-          1. first allocation carrying a dtype — the model-wide answer for
-             single-dtype plans (every allocation agrees);
-          2. `plan.target_dtype` — the plan-wide resolved dtype;
-          3. `manifest["dtype"]` — no plan attached.
-
-        The triton mirror is `neurobrix.triton.dtype.resolve_compute_dtype`
-        (string-dtype boundary, R33) — separate implementation by design.
-        """
+        """Prism-RESOLVED compute dtype for flow-level tensor synthesis, as a torch.dtype — the
+        compiled side's reading of `resolve_compute_dtype` (the one resolution, below)."""
         from neurobrix.core.dtype.config import get_torch_dtype
-        plan = self.plan
-        if plan is not None:
-            comps = getattr(plan, "components", None)
-            if comps:
-                alloc = next((a for a in comps.values()
-                              if getattr(a, "dtype", None)), None)
-                if alloc is not None and getattr(alloc, "dtype", None):
-                    return get_torch_dtype(alloc.dtype)
-            target = getattr(plan, "target_dtype", None)
-            if target:
-                return get_torch_dtype(target)
-        return get_torch_dtype(self.pkg.manifest.get("dtype", "float16"))
+        return get_torch_dtype(resolve_compute_dtype(self))
+
+
+def resolve_compute_dtype(ctx) -> str:
+    """Prism-RESOLVED compute dtype for flow-level tensor synthesis, as a STRING ("float16" / "bfloat16" /
+    "float32") — both branches read it: the Triton flows as is (no torch.dtype crosses into triton/, R33), the
+    compiled ones through `FlowContext.compute_dtype`. The Prism plan is the authority for the dtype that actually
+    executes; the manifest carries the pre-Prism vendor declaration and is only a last-resort fallback when no plan
+    is attached (degraded/isolation contexts) — flow handlers that read `manifest["dtype"]` directly could diverge
+    from the allocation the DtypeEngine runs under (a bf16 manifest resolved to fp32 on non-bf16 hardware).
+
+    Resolution order:
+      1. the first allocation carrying a dtype — the model-wide answer (single-dtype plans agree);
+      2. `plan.target_dtype` — the plan-wide resolved dtype;
+      3. `manifest["dtype"]` — no plan attached.
+    """
+    plan = getattr(ctx, "plan", None)
+    if plan is not None:
+        comps = getattr(plan, "components", None)
+        if comps:
+            alloc = next((a for a in comps.values() if getattr(a, "dtype", None)), None)
+            if alloc is not None:
+                return alloc.dtype
+        target = getattr(plan, "target_dtype", None)
+        if target:
+            return target
+    return ctx.pkg.manifest.get("dtype", "float16")
 
 
 class FlowHandler(ABC):
