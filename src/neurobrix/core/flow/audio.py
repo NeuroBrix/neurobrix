@@ -103,7 +103,6 @@ class AudioEngine(AudioSteps, ComponentFlowHandler):
     # Input preprocessing
     # ─────────────────────────────────────────────────────────────
 
-
     def _preprocess_audio_input(self, input_config: Dict, stages: List) -> None:
         """Load audio file and extract features. Input shape read from graph (DATA-DRIVEN)."""
         audio_path = self.ctx.variable_resolver.resolved.get("global.audio_path")
@@ -338,7 +337,6 @@ class AudioEngine(AudioSteps, ComponentFlowHandler):
     # ─────────────────────────────────────────────────────────────
     # Output postprocessing
     # ─────────────────────────────────────────────────────────────
-
 
     def _postprocess_audio_output(self, output_config: Dict) -> None:
         """Process TTS output: decode audio tokens or store raw waveform."""
@@ -653,19 +651,6 @@ class AudioEngine(AudioSteps, ComponentFlowHandler):
             if key in resolved:
                 return  # Already stored by executor
         # If not stored, the executor's connection system should have handled it
-
-    def _get_component_output(self, comp_name: str) -> Optional[torch.Tensor]:
-        """Get a component's primary output tensor."""
-        resolved = self.ctx.variable_resolver.resolved
-        for key in [
-            f"{comp_name}.output_0",
-            f"{comp_name}.last_hidden_state",
-            f"{comp_name}.output",
-        ]:
-            if key in resolved and isinstance(resolved[key], torch.Tensor):
-                return resolved[key]
-        return None
-
 
     def _find_model_config_path(self) -> Path:
         """Find model config path from NBX container."""

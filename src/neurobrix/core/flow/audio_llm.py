@@ -284,13 +284,6 @@ class AudioLLMEngine(ComponentFlowHandler):
 
     # ─── Helpers ──────────────────────────────────────────────────────────────
 
-    def _get_component_output(self, comp_name: str) -> Optional[torch.Tensor]:
-        resolved = self.ctx.variable_resolver.resolved
-        for key in [f"{comp_name}.output_0", f"{comp_name}.last_hidden_state", f"{comp_name}.output"]:
-            if key in resolved and isinstance(resolved[key], torch.Tensor):
-                return resolved[key]
-        return None
-
     def _get_last_forward_output(self, forward_stages: List[Dict]) -> Optional[torch.Tensor]:
         """Get output from the last forward stage (projector output)."""
         for s in reversed(forward_stages):

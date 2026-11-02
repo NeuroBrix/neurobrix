@@ -163,6 +163,15 @@ class ComponentFlowHandler(FlowHandler):
         self._ensure_weights_loaded = ensure_weights_fn
         self._unload_component_weights = unload_weights_fn
 
+    def _get_component_output(self, comp_name: str) -> Optional["torch.Tensor"]:
+        """A component's primary output tensor (compiled handlers only: torch is imported here, not at load)."""
+        import torch
+        resolved = self.ctx.variable_resolver.resolved
+        for key in [f"{comp_name}.output_0", f"{comp_name}.last_hidden_state", f"{comp_name}.output"]:
+            if key in resolved and isinstance(resolved[key], torch.Tensor):
+                return resolved[key]
+        return None
+
 
 # Flow type registry for factory pattern
 FLOW_REGISTRY: Dict[str, type] = {}

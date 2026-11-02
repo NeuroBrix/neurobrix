@@ -1871,15 +1871,6 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
         from .audio_utils import get_compute_dtype
         return get_compute_dtype(self.ctx)
 
-    def _get_component_output(self, comp_name: str) -> Optional[torch.Tensor]:
-        resolved = self.ctx.variable_resolver.resolved
-        for key in [f"{comp_name}.output_0", f"{comp_name}.last_hidden_state",
-                    f"{comp_name}.output"]:
-            if key in resolved and isinstance(resolved[key], torch.Tensor):
-                return resolved[key]
-        return None
-
-
     def _compute_logits(self, hidden_states: torch.Tensor,
                         embed_weight: Optional[torch.Tensor],
                         logits_source: str, head_name: Optional[str]) -> torch.Tensor:
