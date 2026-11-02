@@ -78,7 +78,8 @@ def test_an_absent_ambiguous_or_unreadable_declaration_is_refused(engine, declar
 
 
 def test_every_unipc_flow_container_declares_a_readable_version():
-    root = os.path.expanduser("~/.neurobrix/" + "ca" + "che")
+    from neurobrix.core.paths import cache_dir
+    root = str(cache_dir())          # the engine's own door (NEUROBRIX_CACHE where set: the Mac's catalogue is the NAS's)
     if not os.path.isdir(root):
         pytest.skip("no shared cache on this machine")
     seen = 0
