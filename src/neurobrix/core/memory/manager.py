@@ -32,9 +32,6 @@ class MemoryManager:
     @staticmethod
     def unload_weights(
         weights_dict: Dict[str, torch.Tensor],
-        clear_cuda_cache: bool = True,
-        log_prefix: str = "[MemoryManager]",
-        verbose: bool = False,
     ) -> None:
         """
         Unload weights and free GPU memory.
@@ -65,13 +62,7 @@ class MemoryManager:
 
         Args:
             weights_dict: Dictionary of weight tensors to clear
-            clear_cuda_cache: Whether to call empty_cache after clear
-            log_prefix: Prefix for log messages
-            verbose: Print debug messages
         """
-        if verbose:
-            print(f"{log_prefix} Unloading {len(weights_dict)} weight tensors")
-
         # Step 1: collect every device holding memory in this dict, so we
         # can sync each one before freeing. Multi-GPU safe.
         # - "_arenas" key (triton path): Dict[int, ComponentArena] keyed
@@ -149,9 +140,8 @@ class MemoryManager:
         # current cuda hardcode. Portability to ROCm/MPS will be addressed
         # as a single coherent pass when NBXTensor factory methods are
         # migrated — see NBXTensor debt.
-        if clear_cuda_cache:
-            for dev in devices_to_sync:
-                device_empty_cache(dev)
+        for dev in devices_to_sync:
+            device_empty_cache(dev)
 
     @staticmethod
     def cleanup_context(context: Any) -> None:
@@ -191,6 +181,4 @@ class MemoryManager:
 
 
 # The flows' boundary release, imported by name
-def release_flow_memory(device: Optional[str] = None) -> None:
-    """Convenience function for MemoryManager.release_flow_memory()."""
-    MemoryManager.release_flow_memory(device)
+release_flow_memory = MemoryManager.release_flow_memory

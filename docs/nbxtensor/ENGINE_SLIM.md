@@ -79,6 +79,7 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 
 | kind | path | symbol | why it stays |
 |---|---|---|---|
+| fact | src/neurobrix/core/memory/manager.py | release_flow_memory | the compiled engine's own release: torch's device sync and cache flush (device_utils) on the flow's device; nbxtensor's syncs and empties the DeviceAllocator pool (no torch, R33) — the same discipline, two allocators |
 | wrapper | src/neurobrix/core/runtime_values.py | resolve(default) | passed, through an aliased import the scan does not follow: cli/commands/run._rt (`resolve as _resolve_runtime`, family= at every call, default= at six) and serving/engine (default=None) |
 | wrapper | src/neurobrix/core/runtime_values.py | resolve(extra) | passed, through an aliased import the scan does not follow: cli/commands/run._rt (extra= at five calls) and serving/engine (the container's own height/width/VAE scale, the request's max_tokens) |
 | wrapper | src/neurobrix/core/runtime_values.py | resolve(family) | passed, through an aliased import the scan does not follow: cli/commands/run._rt (`resolve as _resolve_runtime`, family= at every call, default= at six) and serving/engine (default=None) |
