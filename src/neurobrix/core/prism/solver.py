@@ -5226,6 +5226,12 @@ class PrismSolver:
             if ctx is not None and r.measured and r.own_context_mb < float(ctx):
                 missing = float(ctx) - r.own_context_mb
                 r = dataclasses.replace(r, own_context_mb=float(ctx), free_mb=max(0.0, r.free_mb - missing))
+            # the PROFILE's card as a run reads it (its measured runtime total), never a bigger card it runs on (rule 1;
+            # a 16 GB profile on a 32 GB V100 planned Janus's LM whole, 2026-11-02); a smaller or busier card still lowers
+            total = getattr(dev, "runtime_total_mb", None)
+            if total is not None and r.measured and r.capacity_mb > float(total):
+                over = r.capacity_mb - float(total)
+                r = dataclasses.replace(r, capacity_mb=float(total), free_mb=max(0.0, r.free_mb - over))
             return r
         except Exception as exc:  # noqa: BLE001 — a reading that cannot be taken is a shared pool, said
             return DeviceReading(kind="device", capacity_mb=float(dev.memory_mb), free_mb=float(capacity),
