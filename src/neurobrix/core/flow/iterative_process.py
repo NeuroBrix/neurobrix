@@ -89,8 +89,6 @@ def _gate_loop_state_finite(state: Any, step_idx: int, timestep: Any,
     )
 
 
-@register_flow("iterative_process")
-
 def _dump_final_latent(tensor, to_numpy):
     """Write the final post-denoise latent to `NBX_DUMP_FINAL_LATENT=<dir>`, if armed.
 
@@ -123,6 +121,7 @@ def _dump_final_latent(tensor, to_numpy):
           f" -> {path}", flush=True)
 
 
+@register_flow("iterative_process")
 class IterativeProcessHandler(IterativeSteps, FlowHandler):
     """
     Flow handler for iterative diffusion process.
