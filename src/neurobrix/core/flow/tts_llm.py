@@ -27,9 +27,9 @@ import numpy as np
 import torch
 from neurobrix.core.device_utils import device_multinomial
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
-from .base import FlowHandler, FlowContext, register_flow
+from .base import ComponentFlowHandler, register_flow
 from .table_gather import gather_rows
 
 # The rule and its history live in core.runtime_values.
@@ -121,7 +121,7 @@ def _sample_token_np_core(
 
 
 @register_flow("tts_llm")
-class TTSLLMEngine(FlowHandler):
+class TTSLLMEngine(ComponentFlowHandler):
     """
     TTS Speech LM: conditioning + text/speech embeddings → backbone → speech tokens → vocoder.
 
@@ -140,20 +140,6 @@ class TTSLLMEngine(FlowHandler):
             execution: forward
             role: vocoder
     """
-
-    def __init__(
-        self,
-        ctx: FlowContext,
-        execute_component_fn: Callable,
-        resolve_inputs_fn: Callable,
-        ensure_weights_fn: Callable,
-        unload_weights_fn: Callable,
-    ):
-        super().__init__(ctx)
-        self._execute_component = execute_component_fn
-        self._resolve_component_inputs = resolve_inputs_fn
-        self._ensure_weights_loaded = ensure_weights_fn
-        self._unload_component_weights = unload_weights_fn
 
     def execute(self) -> Dict[str, Any]:
         """Execute TTS-LLM pipeline."""

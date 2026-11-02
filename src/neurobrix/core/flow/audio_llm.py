@@ -12,10 +12,10 @@ ZERO HARDCODE: All parameters from NBX container.
 
 import time
 import torch
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from neurobrix import decode_progress, decode_stop
-from .base import FlowHandler, FlowContext, register_flow
+from .base import ComponentFlowHandler, register_flow
 from .table_gather import gather_rows
 from neurobrix.core.memory.manager import release_flow_memory
 
@@ -36,7 +36,7 @@ def project_on_table(hidden: torch.Tensor, table: torch.Tensor) -> torch.Tensor:
 
 
 @register_flow("audio_llm")
-class AudioLLMEngine(FlowHandler):
+class AudioLLMEngine(ComponentFlowHandler):
     """
     Audio-conditioned LLM: encode audio → project → LLM autoregressive decode.
 
@@ -51,20 +51,6 @@ class AudioLLMEngine(FlowHandler):
             execution: autoregressive
             logits_source: lm_head | self
     """
-
-    def __init__(
-        self,
-        ctx: FlowContext,
-        execute_component_fn: Callable,
-        resolve_inputs_fn: Callable,
-        ensure_weights_fn: Callable,
-        unload_weights_fn: Callable,
-    ):
-        super().__init__(ctx)
-        self._execute_component = execute_component_fn
-        self._resolve_component_inputs = resolve_inputs_fn
-        self._ensure_weights_loaded = ensure_weights_fn
-        self._unload_component_weights = unload_weights_fn
 
     def execute(self) -> Dict[str, Any]:
         """Execute audio-LLM pipeline."""

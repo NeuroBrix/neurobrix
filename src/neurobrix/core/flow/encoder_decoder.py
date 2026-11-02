@@ -15,13 +15,13 @@ from neurobrix import decode_progress, decode_stop
 import torch
 from neurobrix.core.device_utils import device_multinomial
 from neurobrix.core.memory.manager import release_flow_memory
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
-from .base import FlowHandler, FlowContext, register_flow
+from .base import ComponentFlowHandler, register_flow
 
 
 @register_flow("encoder_decoder")
-class EncoderDecoderEngine(FlowHandler):
+class EncoderDecoderEngine(ComponentFlowHandler):
     """
     Encoder-decoder cross-attention flow.
 
@@ -35,20 +35,6 @@ class EncoderDecoderEngine(FlowHandler):
             cross_attention_from: model.encoder
             logits_source: embed_weight_tied | self | lm_head
     """
-
-    def __init__(
-        self,
-        ctx: FlowContext,
-        execute_component_fn: Callable,
-        resolve_inputs_fn: Callable,
-        ensure_weights_fn: Callable,
-        unload_weights_fn: Callable,
-    ):
-        super().__init__(ctx)
-        self._execute_component = execute_component_fn
-        self._resolve_component_inputs = resolve_inputs_fn
-        self._ensure_weights_loaded = ensure_weights_fn
-        self._unload_component_weights = unload_weights_fn
 
     def execute(self) -> Dict[str, Any]:
         """Execute encoder-decoder pipeline."""

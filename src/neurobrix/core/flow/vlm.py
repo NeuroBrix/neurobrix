@@ -38,9 +38,9 @@ import os
 import time
 import os as _os_vlm
 import torch
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-from .base import FlowHandler, FlowContext, register_flow, requests_speech
+from .base import ComponentFlowHandler, register_flow, requests_speech
 from .table_gather import gather_rows
 from neurobrix import decode_progress, decode_stop
 from neurobrix.core.memory.manager import release_flow_memory
@@ -74,7 +74,7 @@ def _maybe_log_topk(logits, step: int) -> None:
 
 
 @register_flow("vlm")
-class VLMEngine(VLMSteps, FlowHandler):
+class VLMEngine(VLMSteps, ComponentFlowHandler):
     """Vision-conditioned LLM: encode image → merge embeds → decode text.
 
     topology.flow.vlm:
@@ -86,20 +86,6 @@ class VLMEngine(VLMSteps, FlowHandler):
         stages: [{component, execution: forward},
                  {component, execution: autoregressive, logits_source}]
     """
-
-    def __init__(
-        self,
-        ctx: FlowContext,
-        execute_component_fn: Callable,
-        resolve_inputs_fn: Callable,
-        ensure_weights_fn: Callable,
-        unload_weights_fn: Callable,
-    ):
-        super().__init__(ctx)
-        self._execute_component = execute_component_fn
-        self._resolve_component_inputs = resolve_inputs_fn
-        self._ensure_weights_loaded = ensure_weights_fn
-        self._unload_component_weights = unload_weights_fn
 
     # ─── main ────────────────────────────────────────────────────────────
 
@@ -1763,7 +1749,6 @@ class VLMEngine(VLMSteps, FlowHandler):
                 f"overlap ({img_span} vs {aud_span}) — the two masks must "
                 "be disjoint (the vendor asserts the same).")
         return ids, img_span, aud_span
-
 
     # ─── mrope positions (internal get_rope_index port) ─────────────────
 

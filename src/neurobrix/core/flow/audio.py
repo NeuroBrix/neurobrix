@@ -17,9 +17,9 @@ ZERO HARDCODE: All parameters from NBX container.
 import time
 import torch
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-from .base import FlowHandler, FlowContext, register_flow
+from .base import ComponentFlowHandler, register_flow
 from neurobrix.core.memory.manager import release_flow_memory
 from neurobrix.core.flow.shared_steps import AudioSteps   # the steps both branches share
 
@@ -30,7 +30,7 @@ from neurobrix.core.flow.shared_steps import AudioSteps   # the steps both branc
 STAGE_EXECUTIONS = ("forward",)
 
 @register_flow("audio")
-class AudioEngine(AudioSteps, FlowHandler):
+class AudioEngine(AudioSteps, ComponentFlowHandler):
     """
     Audio flow orchestrator for Kokoro-82M and VibeVoice-1.5B.
 
@@ -39,20 +39,6 @@ class AudioEngine(AudioSteps, FlowHandler):
     2. Stage execution (forward, native_kokoro, diffusion, native_acoustic_decoder)
     3. Output postprocessing (tokens->text or waveform->file)
     """
-
-    def __init__(
-        self,
-        ctx: FlowContext,
-        execute_component_fn: Callable[[str, str, Optional[torch.Tensor]], Any],
-        resolve_inputs_fn: Callable[[str], Dict[str, Any]],
-        ensure_weights_fn: Callable[[str], None],
-        unload_weights_fn: Callable[[str], None],
-    ):
-        super().__init__(ctx)
-        self._execute_component = execute_component_fn
-        self._resolve_component_inputs = resolve_inputs_fn
-        self._ensure_weights_loaded = ensure_weights_fn
-        self._unload_component_weights = unload_weights_fn
 
     def execute(self) -> Dict[str, Any]:
         """Execute the audio pipeline from topology.json flow.audio."""

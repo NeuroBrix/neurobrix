@@ -18,9 +18,9 @@ from neurobrix.core.memory.manager import release_flow_memory
 import time
 import torch
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
-from .base import FlowHandler, FlowContext, register_flow
+from .base import ComponentFlowHandler, register_flow
 from neurobrix.nbx.neurotax import normalize_tensor_name_strict
 
 # The transducer joint's three linears as the vendor names them (NeMo `joint.enc`, `joint.pred`,
@@ -43,7 +43,7 @@ from neurobrix.core.flow.shared_steps import RNNTSteps   # the steps both branch
 
 
 @register_flow("rnnt")
-class RNNTEngine(RNNTSteps, FlowHandler):
+class RNNTEngine(RNNTSteps, ComponentFlowHandler):
     """
     RNNT transducer flow: encoder → greedy decode (decoder + joint per frame).
 
@@ -53,20 +53,6 @@ class RNNTEngine(RNNTSteps, FlowHandler):
     since their tiny graphs (11 and 20 ops) have trace-time shapes that don't
     match the variable runtime shapes of greedy decoding.
     """
-
-    def __init__(
-        self,
-        ctx: FlowContext,
-        execute_component_fn: Callable,
-        resolve_inputs_fn: Callable,
-        ensure_weights_fn: Callable,
-        unload_weights_fn: Callable,
-    ):
-        super().__init__(ctx)
-        self._execute_component = execute_component_fn
-        self._resolve_component_inputs = resolve_inputs_fn
-        self._ensure_weights_loaded = ensure_weights_fn
-        self._unload_component_weights = unload_weights_fn
 
     def execute(self) -> Dict[str, Any]:
         """Execute RNNT pipeline: preprocess → encoder → greedy decode → text."""

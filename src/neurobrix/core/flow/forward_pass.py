@@ -8,14 +8,13 @@ Handles non-iterative models like encoders, decoders, multimodal models.
 """
 
 from neurobrix.core.memory.manager import release_flow_memory
-import torch
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Dict
 
-from .base import FlowHandler, FlowContext, register_flow
+from .base import ComponentFlowHandler, register_flow
 
 
 @register_flow("forward_pass")
-class ForwardPassHandler(FlowHandler):
+class ForwardPassHandler(ComponentFlowHandler):
     """
     Flow handler for forward pass execution.
 
@@ -25,30 +24,6 @@ class ForwardPassHandler(FlowHandler):
     ZERO SEMANTIC: No domain knowledge - just executes in order.
     ZERO HARDCODE: Component order from topology.
     """
-
-    def __init__(
-        self,
-        ctx: FlowContext,
-        execute_component_fn: Callable[[str, str, Optional[torch.Tensor]], Any],
-        resolve_inputs_fn: Callable[[str], Dict[str, Any]],
-        ensure_weights_fn: Callable[[str], None],
-        unload_weights_fn: Callable[[str], None]
-    ):
-        """
-        Initialize forward pass handler.
-
-        Args:
-            ctx: FlowContext with all shared state
-            execute_component_fn: Function to execute a component
-            resolve_inputs_fn: Function to resolve component inputs
-            ensure_weights_fn: Function to ensure weights are loaded
-            unload_weights_fn: Function to unload component weights
-        """
-        super().__init__(ctx)
-        self._execute_component = execute_component_fn
-        self._resolve_component_inputs = resolve_inputs_fn
-        self._ensure_weights_loaded = ensure_weights_fn
-        self._unload_component_weights = unload_weights_fn
 
     def execute(self) -> Dict[str, Any]:
         """

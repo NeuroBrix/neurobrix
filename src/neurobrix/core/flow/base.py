@@ -7,11 +7,12 @@ ZERO HARDCODE: All configuration comes from NBX container.
 This module provides:
 - FlowContext: Immutable context shared by all flow handlers
 - FlowHandler: Abstract base class for execution flows
+- ComponentFlowHandler: a FlowHandler driven through the executor's four component callables
 """
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     import torch
@@ -141,6 +142,26 @@ class FlowHandler(ABC):
         """
         pass
 
+
+
+class ComponentFlowHandler(FlowHandler):
+    """A flow handler that runs components through the executor's callables: execute one, resolve its
+    inputs, load and unload its weights. The forward-pass, audio, encoder-decoder, audio-LLM, VLM, DualAR,
+    TTS-LLM, next-token-diffusion and RNNT handlers are built this way."""
+
+    def __init__(
+        self,
+        ctx: FlowContext,
+        execute_component_fn: Callable[[str, str, Optional["torch.Tensor"]], Any],
+        resolve_inputs_fn: Callable[[str], Dict[str, Any]],
+        ensure_weights_fn: Callable[[str], None],
+        unload_weights_fn: Callable[[str], None],
+    ):
+        super().__init__(ctx)
+        self._execute_component = execute_component_fn
+        self._resolve_component_inputs = resolve_inputs_fn
+        self._ensure_weights_loaded = ensure_weights_fn
+        self._unload_component_weights = unload_weights_fn
 
 
 # Flow type registry for factory pattern

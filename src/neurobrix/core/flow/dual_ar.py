@@ -12,9 +12,9 @@ from neurobrix.core.memory.manager import release_flow_memory
 import time
 import torch
 import numpy as np
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List
 
-from .base import FlowHandler, FlowContext, register_flow
+from .base import ComponentFlowHandler, register_flow
 
 # The rule and its history live in core.runtime_values.
 from neurobrix.core.runtime_values import require_max_tokens
@@ -62,7 +62,7 @@ def _sample_token_np_core(logits_1d, temperature, top_p=1.0,
 
 
 @register_flow("dual_ar")
-class DualAREngine(FlowHandler):
+class DualAREngine(ComponentFlowHandler):
     """
     DualAR semantic token generation + codec decoding.
 
@@ -74,20 +74,6 @@ class DualAREngine(FlowHandler):
           - component: codec.decoder
             execution: forward
     """
-
-    def __init__(
-        self,
-        ctx: FlowContext,
-        execute_component_fn: Callable,
-        resolve_inputs_fn: Callable,
-        ensure_weights_fn: Callable,
-        unload_weights_fn: Callable,
-    ):
-        super().__init__(ctx)
-        self._execute_component = execute_component_fn
-        self._resolve_component_inputs = resolve_inputs_fn
-        self._ensure_weights_loaded = ensure_weights_fn
-        self._unload_component_weights = unload_weights_fn
 
     def execute(self) -> Dict[str, Any]:
         """Execute DualAR pipeline."""

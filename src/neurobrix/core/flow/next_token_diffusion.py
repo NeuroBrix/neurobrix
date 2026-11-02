@@ -42,9 +42,9 @@ CFG (classifier-free guidance):
 
 import time
 import torch
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
-from .base import FlowHandler, FlowContext, register_flow
+from .base import ComponentFlowHandler, register_flow
 from .table_gather import gather_rows
 from neurobrix.core.memory.manager import release_flow_memory
 
@@ -72,7 +72,7 @@ def _require_default(defaults: Dict[str, Any], key: str) -> Any:
 
 
 @register_flow("next_token_diffusion")
-class NextTokenDiffusionEngine(FlowHandler):
+class NextTokenDiffusionEngine(ComponentFlowHandler):
     """
     VibeVoice next-token-diffusion TTS.
 
@@ -86,20 +86,6 @@ class NextTokenDiffusionEngine(FlowHandler):
           - model.acoustic_connector    (latent -> 1536 embed)
           - model.semantic_connector    (semantic -> 1536 embed)
     """
-
-    def __init__(
-        self,
-        ctx: FlowContext,
-        execute_component_fn: Callable,
-        resolve_inputs_fn: Callable,
-        ensure_weights_fn: Callable,
-        unload_weights_fn: Callable,
-    ):
-        super().__init__(ctx)
-        self._execute_component = execute_component_fn
-        self._resolve_component_inputs = resolve_inputs_fn
-        self._ensure_weights_loaded = ensure_weights_fn
-        self._unload_component_weights = unload_weights_fn
 
     # ─── Component names (NeuroTax / topology, no vendor strings) ──────────────
     LM = "model.language_model"
@@ -253,7 +239,6 @@ class NextTokenDiffusionEngine(FlowHandler):
         return self.ctx.variable_resolver.resolve_all()
 
     # ─── Diffusion sampling (mirror of vendor sample_speech_tokens) ────────────
-
 
     # ─── the two generation paths (R30 mirror of triton/flow/next_token_diffusion.py) ───
     def _generate_reprefill(self, prompt_ids, speech_start_id, speech_end_id, speech_diffusion_id,
