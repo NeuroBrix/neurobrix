@@ -18,6 +18,9 @@ Two figures, kept apart (the supervisor, 2026-10-29 23:40):
 - **The engine's own cleaning** — the figure that says whether the engine slims, tracked from here: the Python lines
   of `src/neurobrix` and the open findings, both recorded in the header of `engine_slim_list.tsv` at every commit.
   At the ratchet's first commit (2026-10-29, on nbxtensor 6c059035): 146 646 lines, 842 open findings.
+  On 2026-11-02 (nbxtensor ff5c55a3): 137 016 lines, 48 open findings — every one in a zone held elsewhere: core/strategies
+  (29), core/prism (13), triton/weight_loader and triton/sequence (the Dell's lots in flight), and the sampling contract
+  (`audio_utils.sample_token(top_p)`, assigned to the Dell on 2026-11-02 06:40: one sampling path for both engines).
 
 ## The scan
 
@@ -31,6 +34,9 @@ Two figures, kept apart (the supervisor, 2026-10-29 23:40):
 | `fact` | a definition carrying the name of a public nbxtensor fact function (`dtype`, `shape`, `memory`, the device facts, the `*_cost` declarations) or of a recorded synonym, and literal dtype-size tables |
 
 Its rules are syntactic: a finding is a question a person answers, never a deletion on the scan's word alone.
+Two of its blind spots, met in practice: a parameter passed through an aliased import (`from m import f as _g`,
+then `_g(..., p=...)`) reads as never passed, and so does one the tests pass — every `wrapper` finding is checked
+against the callers by hand, tests included, before a parameter goes.
 
 ## Three fates
 
