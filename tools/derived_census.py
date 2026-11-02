@@ -314,15 +314,18 @@ def _triton_fp64() -> bool:
 _WIDTHS: dict = {}
 
 
-def _widths_at(key, shape, compute):
+def _widths_at(key, shape, compute, g=None):
     """`compute(shape_of, casts)` — the width pass at this binding — or the result of an earlier binding that read
     the same facts of every tensor it asked about (`runtime_widths.binding_signature`): the pass reads a binding
     ONLY through `shape_of`, so equal answers give equal widths, exactly. The pass was 76 % of a Qwen3-Coder
     derivation job (py-spy, 2026-10-23), recomputed at each of ~1 200 prompt lengths of one bisection, where it
     reads M <= 4 and an empty extent and nothing more. Returns copies: callers own what they get."""
     from neurobrix.core.prism.runtime_widths import binding_signature
-    for asked, rt, casts in _WIDTHS.get(key, ()):
-        if all(binding_signature(shape(t)) == sig for t, sig in asked):
+    # The pass's results belong to ONE graph: a key names the component, not its graph, and two graphs under one
+    # name (a test's synthetic graphs, a container derived again after a change) must never share widths — the entry
+    # holds its graph and is served only to that very object (as _FIXED does; the reference keeps its id unreused).
+    for eg, asked, rt, casts in _WIDTHS.get(key, ()):
+        if eg is g and all(binding_signature(shape(t)) == sig for t, sig in asked):
             return dict(rt), {u: list(v) for u, v in casts.items()}
     asked = {}
 
@@ -333,7 +336,7 @@ def _widths_at(key, shape, compute):
 
     casts = {}
     rt = compute(recorded, casts)
-    _WIDTHS.setdefault(key, []).append((list(asked.items()), dict(rt), {u: list(v) for u, v in casts.items()}))
+    _WIDTHS.setdefault(key, []).append((g, list(asked.items()), dict(rt), {u: list(v) for u, v in casts.items()}))
     return rt, casts
 
 
@@ -397,7 +400,7 @@ def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_
              _reads_key(reads)), shape,
             lambda shape_of, casts: RW.runtime_dtypes(
                 g, cdtype, engine, has_native_bf16=has_native_bf16, attention_operands=align, contract=contract,
-                stores_fp64=fp64, tiling=tiling, shape_of=shape_of, casts=casts, operand_reads=reads))
+                stores_fp64=fp64, tiling=tiling, shape_of=shape_of, casts=casts, operand_reads=reads), g)
     except AnnotationContradiction as e:
         # The width pass reads the shapes too (the matmul store rule reads M): a component whose
         # annotation contradicts itself is not derivable as a whole — named, never guessed.
