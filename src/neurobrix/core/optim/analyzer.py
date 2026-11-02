@@ -145,15 +145,7 @@ class GraphAnalyzer:
         return "float"
 
     def _has_symbol(self, op: dict) -> bool:
-        def walk(node) -> bool:
-            if isinstance(node, dict):
-                if node.get("type") == "symbol":
-                    return True
-                return any(walk(v) for v in node.values())
-            if isinstance(node, list):
-                return any(walk(v) for v in node)
-            return False
-        return walk(op.get("attributes", {}))
+        return self._dim_is_symbolic(op.get("attributes", {}))   # a symbol node anywhere in its attributes
 
     def _sym_dims(self, tensor_id: str) -> list | None:
         """The tensor's symbolic dims ([symbol-node | int, ...]), or
