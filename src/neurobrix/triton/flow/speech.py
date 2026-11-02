@@ -40,6 +40,7 @@ from nbxtensor.ops import index_wrappers as _nbx_index_wrappers  # the family th
 from nbxtensor.ops import reduction_wrappers as _nbx_reduction_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.random.seeded_draw import SeededDrawStream
 from nbxtensor.memory.device_transfer import needs_move, transfer_tensor
+from neurobrix.core.flow.base import FlowLeg   # the leg's engine, ctx and resolver, both branches
 from neurobrix.core.flow.shared_steps import require_contract
 
 
@@ -62,16 +63,10 @@ def _from_np_on(arr: np.ndarray, dev_idx: int) -> NBXTensor:
         DeviceAllocator.set_device(prev)
 
 
-class SpeechLeg:
+class SpeechLeg(FlowLeg):
     """Triton-engine speech leg over the flow.speech contract."""
 
-    def __init__(self, engine):
-        # engine = the triton VLMEngine instance: same ctx, same
-        # component plumbing, same lifecycle (compiled-leg idiom).
-        self.engine = engine
-        self.ctx = engine.ctx
-        self.resolved = engine.ctx.variable_resolver.resolved
-        self._dev: int = 0   # bound to the tap's device in run()
+    _dev: int = 0   # bound to the tap's device in run()
 
     # ── component plumbing (dual-write + run, compiled-leg idiom) ──
 

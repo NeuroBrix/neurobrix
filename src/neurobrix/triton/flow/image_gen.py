@@ -32,52 +32,23 @@ from typing import Any, Dict
 import numpy as np
 
 from nbxtensor.tensor import NBXTensor
-from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.random.seeded_draw import seeded_gaussian
-from nbxtensor.memory.device_transfer import needs_move, transfer_tensor
+from neurobrix.triton.flow.speech import SpeechLeg, _from_np_on   # the speech leg's plumbing, the same
+from neurobrix.core.flow.base import FlowLeg   # the leg's engine, ctx and resolver, both branches
 from neurobrix.core.flow.shared_steps import require_contract
 
 
 _require = functools.partial(require_contract, "image_gen")   # this leg's contract block
 
 
-def _from_np_on(arr: np.ndarray, dev_idx: int) -> NBXTensor:
-    """Upload a host array to a SPECIFIC device (speech-leg idiom: under
-    a multi-GPU placement the leg's components sit on different devices,
-    so every host-created tensor is pinned explicitly)."""
-    prev = DeviceAllocator.get_device()
-    try:
-        DeviceAllocator.set_device(dev_idx)
-        return NBXTensor.from_numpy(arr)
-    finally:
-        DeviceAllocator.set_device(prev)
-
-
-class ImageGenLeg:
+class ImageGenLeg(FlowLeg):
     """Triton-engine image-gen leg over the flow.image_gen contract."""
 
-    def __init__(self, engine):
-        # engine = the triton VLMEngine instance: same ctx, same
-        # component plumbing, same lifecycle (compiled-leg idiom).
-        self.engine = engine
-        self.ctx = engine.ctx
-        self.resolved = engine.ctx.variable_resolver.resolved
-        self._dev: int = 0   # bound to the gen-hidden tap's device in run()
+    _dev: int = 0   # bound to the gen-hidden tap's device in run()
 
     # ── component plumbing (dual-write + run, compiled-leg idiom) ──
 
-    def _run(self, comp: str, **inputs) -> NBXTensor:
-        self.engine._ensure_weights_loaded(comp)
-        for name, val in inputs.items():
-            self.resolved[f"{comp}.{name}"] = val
-            self.resolved[f"global.{name}"] = val
-        self.engine._execute_component(comp, "forward", None)
-        out = self.engine._get_component_output(comp)
-        if out is None:
-            raise RuntimeError(f"ZERO FALLBACK: {comp} produced no output.")
-        if needs_move(out, self._dev):
-            out = transfer_tensor(out, self._dev)
-        return out
+    _run = SpeechLeg._run   # the same dual-write + run, the output moved to the leg's device
 
     def _load_query_tokens_np(self) -> Dict[str, np.ndarray]:
         """Load the query-token constants from the container asset

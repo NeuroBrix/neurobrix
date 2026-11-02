@@ -42,14 +42,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from neurobrix import decode_progress, decode_stop
 from nbxtensor.tensor import NBXTensor
-from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.memory.memory_pool import release_flow_memory
 from neurobrix.triton.flow.audio_llm import (
-    _DTYPE_STR_TO_NBX,
+    TritonAudioLLMEngine,   # its dtype, embedding and output helpers, the same
     _sample_token_nbx,
 )
 from nbxtensor.ops import wrappers as w
-from nbxtensor.ops import index_wrappers as _nbx_index_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
 from neurobrix.core.flow.base import requests_speech
 from neurobrix.core.flow.shared_steps import VLMSteps   # the steps both branches share
@@ -141,10 +139,7 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
     """Vision-conditioned LLM (R33): encode image → merge embeds →
     mrope decode. Mirror of core/flow/vlm.py VLMEngine."""
 
-    def _compute_dtype(self) -> NBXDtype:
-        from neurobrix.triton.dtype import resolve_compute_dtype
-        s = resolve_compute_dtype(self.ctx)
-        return _DTYPE_STR_TO_NBX.get(s, NBXDtype.float16)
+    _compute_dtype = TritonAudioLLMEngine._compute_dtype
 
     # ─── main ────────────────────────────────────────────────────────
 
@@ -1763,21 +1758,9 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
 
     # ─── helpers (NBXTensor mirrors) ───────────────────────────────────
 
-    def _embed_ids(self, ids: List[int], embed_weight: NBXTensor,
-                   dtype: NBXDtype) -> NBXTensor:
-        idx = NBXTensor.from_numpy(np.array([ids], dtype=np.int64))
-        emb = _nbx_index_wrappers.embedding(embed_weight, idx)
-        return emb.to(dtype)
+    _embed_ids = TritonAudioLLMEngine._embed_ids
 
-    def _get_component_output(self, comp_name: str) -> Optional[NBXTensor]:
-        resolved = self.ctx.variable_resolver.resolved
-        for key in (f"{comp_name}.output_0",
-                    f"{comp_name}.last_hidden_state",
-                    f"{comp_name}.output"):
-            v = resolved.get(key)
-            if isinstance(v, NBXTensor):
-                return v
-        return None
+    _get_component_output = TritonAudioLLMEngine._get_component_output
 
     def _compute_logits(self, hidden_states: NBXTensor,
                         embed_weight: Optional[NBXTensor],

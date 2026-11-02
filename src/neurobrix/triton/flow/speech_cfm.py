@@ -40,17 +40,14 @@ from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # t
 from nbxtensor.ops import reduction_wrappers as _nbx_reduction_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.random.seeded_draw import SeededDrawStream, seeded_gaussian
 from nbxtensor.memory.device_transfer import needs_move, transfer_tensor
+from neurobrix.core.flow.base import FlowLeg   # the leg's engine, ctx and resolver, both branches
 from neurobrix.triton.flow.speech import _require, _from_np_on
 
 
-class SpeechCFMLeg:
+class SpeechCFMLeg(FlowLeg):
     """Triton-engine CFM speech leg over the flow.speech contract."""
 
-    def __init__(self, engine):
-        self.engine = engine
-        self.ctx = engine.ctx
-        self.resolved = engine.ctx.variable_resolver.resolved
-        self._dev: int = 0   # bound to lm_hidden's device in run()
+    _dev: int = 0   # bound to lm_hidden's device in run()
 
     # ── component plumbing (dual-write + run, omni-leg idiom) ──
 
