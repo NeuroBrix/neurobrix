@@ -8,6 +8,7 @@ from nbxtensor.backend import faults as _faults
 import bisect
 import ctypes
 import os
+import time
 import sys
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -538,8 +539,9 @@ class DeviceAllocator:
               f"slack_total={st['slack_total'] / 2**20:.0f}MB slack_max={st['slack_max'] / 2**20:.0f}MB "
               f"flushes={st['flushes']} flushed={st['flushed_bytes'] / 2**20:.0f}MB "
               f"evictions={st['evictions']} evicted={st['evicted_bytes'] / 2**20:.0f}MB "
-              f"range maps={st.get('range_maps', 0)} reclaims={st.get('range_reclaims', 0)} "
-              f"unmaps={st.get('range_unmaps', 0)} "
+              f"range maps={st.get('range_maps', 0)} ({st.get('range_map_us', 0) / 1e6:.2f} s) "
+              f"reclaims={st.get('range_reclaims', 0)} unmaps={st.get('range_unmaps', 0)} "
+              f"ranges={ {d: len(rs) for d, rs in DeviceAllocator._POOL.ranges.items()} } "
               f"cap={ {d: round(c / 2**20) for d, c in DeviceAllocator._pool_cap_bytes.items()} }MB", flush=True)
 
     @staticmethod
@@ -783,6 +785,7 @@ class DeviceAllocator:
         mapping is retried; False when it still refuses."""
         reclaimed = False
         dm = _rt.device_memory()
+        _t0 = time.perf_counter() if pairs else 0.0
         for r, i in pairs:
             while True:
                 rc = 2
@@ -811,6 +814,9 @@ class DeviceAllocator:
             for _t, _p in (DeviceAllocator._windows.get(dev) or {}).items():
                 if live > _p:
                     DeviceAllocator._windows[dev][_t] = live
+        if pairs:
+            st = DeviceAllocator._POOL.stats
+            st["range_map_us"] = st.get("range_map_us", 0) + int((time.perf_counter() - _t0) * 1e6)
         return True
 
     @staticmethod
