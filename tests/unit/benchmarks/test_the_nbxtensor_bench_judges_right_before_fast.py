@@ -77,7 +77,9 @@ def test_a_video_instance_too_large_for_the_device_is_out_of_class_never_run():
     need = K.instance_bytes(inst)
     assert need > budget
     census = [{"model": "Allegro", "ops": ["vae/aten.convolution::3"], "kernel": "nbxtensor.ops.conv3d.conv3d_kernel",
-               "key": "(1, 512, 6, 180, 320)"}]
+               "key": "(1, 512, 6, 180, 320)"},
+              {"model": "Allegro", "ops": [None], "kernel": "k", "key": "()"},     # the table holds such rows (02/11 21:47)
+              {"model": None, "ops": ["x"], "kernel": "k", "key": "()"}]
     row = K.out_of_class_row(inst, need, budget, K.census_cut_keys(inst, census))
     assert row["status"] == "out_of_class" and "op budget" in row["note"] and "conv3d_kernel" in row["note"]
     small = {**inst, "shapes": [[1, 64, 2, 16, 16], [64, 64, 3, 3, 3], [64]]}

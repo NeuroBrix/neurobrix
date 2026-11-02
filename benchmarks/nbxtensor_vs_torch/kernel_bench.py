@@ -369,9 +369,11 @@ def census_cut_keys(inst, census_rows) -> list:
     sites = set(inst["sites"])
     out = []
     for row in census_rows:
+        model = row.get("model") or ""
         for op in row.get("ops") or []:
-            if f"{row.get('model')}/{op}" in sites or any(s.endswith("/" + op) and s.startswith(row.get("model", "") + "/")
-                                                          for s in sites):
+            if not isinstance(op, str) or not model:         # a row naming no op or no model names no site
+                continue
+            if f"{model}/{op}" in sites or any(s.endswith("/" + op) and s.startswith(model + "/") for s in sites):
                 out.append(f"{row.get('kernel', '?').rsplit('.', 1)[-1]} {row.get('key')}")
     return sorted(set(out))
 
