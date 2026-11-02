@@ -24,6 +24,7 @@ import os
 from typing import Any, Callable, Dict, List, Optional
 
 from neurobrix.core.runtime.graph_executor import output_key
+import time
 from neurobrix.core.strategies.base import ExecutionStrategy
 
 
@@ -82,6 +83,27 @@ def _segment_memory_line(seg_exec) -> str:
         return (f"device allocated {f['allocated_mb']:.0f} MB, reserved {f['reserved_mb']:.0f} MB, "
                 f"peak allocated {f['peak_allocated_mb']:.0f} MB")
     return f"device allocated {f['allocated_mb']:.0f} MB, driver {f['driver_mb']:.0f} MB"
+
+
+def _weights_bytes(executor) -> int:
+    """The bytes of the weights an executor holds now (torch or NBXTensor)."""
+    n = 0
+    for t in (getattr(executor, "_weights", None) or {}).values():
+        if t is not None:
+            n += int(getattr(t, "nbytes", None) or getattr(t, "_nbytes", 0) or 0)
+    return n
+
+
+def _note_reload(executor, nbx_path, component: str, reloaded_bytes: int, seconds: float) -> None:
+    """The engine's own measure of its per-token reload, handed to the active generated profile
+    (`autodetect.note_reload_rate`): the fact Prism prices a streamed piece's reload with."""
+    from neurobrix.core.prism import autodetect as _ad
+    stored = _ad.stored_major(nbx_path, component)
+    if stored is None:
+        return
+    engine = "triton" if str(getattr(executor, "mode", "")).startswith("triton") else "compiled"
+    _ad.note_reload_rate(_ad.ACTIVE_HARDWARE_ID, engine, stored, int(reloaded_bytes), float(seconds),
+                         f"{os.path.basename(str(nbx_path))}:{component}")
 
 class LayerStreamingStrategy(ExecutionStrategy):
     """One segment resident at a time, inside a single component."""
@@ -506,6 +528,7 @@ class LayerStreamingStrategy(ExecutionStrategy):
         # The pieces Prism holds between the component's runs (`layer_stream_resident`): loaded at the first run, kept
         # loaded until the component is released (`uninstall_for_executor`); the others load and unload around each run.
         held = (getattr(self.context, "layer_resident", None) or {}).get(component_name) or frozenset()
+        reloaded = [0, 0.0]                  # bytes, seconds: the streamed pieces this run loaded AGAIN
         for i, (seg_exec, produced) in enumerate(zip(pieces, produced_by)):
             sub = seg_exec._dag
             needed = sub.get("segment_input_names") or []
@@ -535,7 +558,13 @@ class LayerStreamingStrategy(ExecutionStrategy):
             # This piece's weights, and only this piece's: the executor asks its own dag
             # what it consumes.
             if i not in held or not getattr(seg_exec, "_weights_loaded", False):
+                again = seg_exec.__dict__.get("_streamed_loads", 0) > 0
+                _t_load = time.perf_counter()
                 seg_exec.load_weights(nbx_path, component_name)
+                seg_exec._streamed_loads = seg_exec.__dict__.get("_streamed_loads", 0) + 1
+                if again:          # a RELOAD: what a token pays for a streamed piece (the engine's own measure)
+                    reloaded[0] += _weights_bytes(seg_exec)
+                    reloaded[1] += time.perf_counter() - _t_load
             _reset_segment_peak(seg_exec)
             try:
                 out = seg_exec.run(feed, *args, **kwargs) or {}
@@ -581,6 +610,8 @@ class LayerStreamingStrategy(ExecutionStrategy):
             for n in [n for n, j in last_read.items() if j == i and n in values and n not in final]:
                 del values[n]
 
+        if reloaded[0]:
+            _note_reload(pieces[0], nbx_path, component_name, reloaded[0], reloaded[1])
         # The component's declared outputs, keyed as a whole run keys them (`output_name`,
         # else the tid) — not the last piece's dict, which holds only what the last piece
         # produced and, in the triton engine, the protected tids beside them.

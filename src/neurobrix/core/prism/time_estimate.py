@@ -53,10 +53,12 @@ class HostFacts:
     matmul_flops: float                     # host FLOP/s (float32 GEMM)
     memory_bps: float                       # host memory bandwidth, bytes/s (a copy in host memory)
     storage_bps: Optional[float] = None     # sequential read of a weight file, bytes/s
-    #: what the loader really takes to RELOAD a streamed piece's weights onto the device, bytes/s — read from the
-    #: container (page cache), decode, convert to the device dtype, upload (`weight_reload_gbps`, measured): a strategy that
-    #: re-reads a generating component's weights every token pays it at every reload after the first
-    reload_bps: Optional[float] = None
+    #: what the loader really takes to RELOAD a streamed piece's weights onto the device, GB/s per engine and stored
+    #: dtype — read from the container (page cache), decode, convert to the device dtype, upload
+    #: (`weight_reload_gbps: {engine: {stored: GB/s}}`, measured by the engine itself at a real per-token reload,
+    #: `autodetect.note_reload_rate`): a strategy that re-reads a generating component's weights every token pays it at
+    #: every reload after the first
+    reload_gbps: Optional[Mapping[str, Any]] = None
     #: what a sliced stretch whose inputs wait on the host moves through host memory per second — its slices cut from
     #: the host tensors and its outputs assembled (`host_slab_gbps`, measured in situ: mochi's VAE at an 8 GB rung on
     #: the M4 Pro, the Mac's diagnosis 4b 2026-10-28)
@@ -77,6 +79,33 @@ def device_facts(measured: Optional[Mapping[str, Any]], where: str) -> DeviceFac
         raise MissingFact(f"{where}: the measured facts lack {exc.args[0]!r}") from exc
 
 
+def _reload_table(r) -> Optional[Mapping[str, Any]]:
+    """`weight_reload_gbps` as {engine: {stored: GB/s}}; a bare number says neither engine nor stored dtype — refused by
+    name (a reload is the engine's loader at its stored width, never a rate shared across them)."""
+    if r is None:
+        return None
+    if not isinstance(r, Mapping):
+        raise MissingFact(f"host: `weight_reload_gbps: {r}` names no engine and no stored dtype — it is "
+                          f"{{engine: {{stored: GB/s}}}}, as the engine measures it (autodetect.note_reload_rate)")
+    return r
+
+
+def reload_bps(host: Optional[HostFacts], engine: Optional[str], stored: Optional[str]) -> float:
+    """The measured per-token reload rate of `engine`'s loader for weights stored as `stored`, bytes/s; refused by name
+    when the profile does not state it — never the loader's whole-component warm rate in its place (Janus-Pro-7B native
+    on a V100-16GB, 2026-11-02: priced at the warm 1.6 GB/s, measured ~1.0 GB/s per piece per token, layer_streaming
+    chosen at 674 s estimated and run in 1 151 s against lazy_sequential's 555 s)."""
+    eng = engine or "compiled"
+    st = STORED_AS.get(str(stored), str(stored))
+    try:
+        return float(host.reload_gbps[eng][st]) * 1e9
+    except (AttributeError, TypeError, KeyError) as exc:
+        raise MissingFact(f"host: no measured `weight_reload_gbps.{eng}.{st}` — the rate the {eng} loader reloads a "
+                          f"streamed piece at every token, measured by the engine itself at a real reload (a run of the "
+                          f"plan: NBX_FORCE_STRATEGY=layer_streaming neurobrix run ..., written into the generated "
+                          f"profile)") from exc
+
+
 def host_facts(measured: Optional[Mapping[str, Any]]) -> HostFacts:
     for key in ("host_matmul_gflops", "host_memory_gbps"):
         if not measured or key not in measured:
@@ -87,7 +116,7 @@ def host_facts(measured: Optional[Mapping[str, Any]]) -> HostFacts:
     return HostFacts(matmul_flops=float(measured["host_matmul_gflops"]) * 1e9,
                      memory_bps=float(measured["host_memory_gbps"]) * 1e9,
                      storage_bps=float(s) * 1e9 if s is not None else None,
-                     reload_bps=float(r) * 1e9 if r is not None else None,
+                     reload_gbps=_reload_table(r),
                      slab_bps=float(sl) * 1e9 if sl is not None else None)
 
 
@@ -259,13 +288,13 @@ def plan_seconds(strategy: str, allocations: Mapping[str, Any], works: Mapping[s
                 resident = float(getattr(alloc, "resident_weight_mb", 0.0) or 0.0) * 2 ** 20
                 total += passes * max(0.0, w.weight_bytes - resident) / f.h2d_bps
         elif strategy in STREAM_EVERY_USE:
-            # a piece reloaded from the container at every use after the first (layer_streaming): at the measured
-            # reload rate when the profile states one (`weight_reload_gbps`, the Janus case on the Mac), else the
-            # loader's warm rate to the device
-            again = host.reload_bps if (host is not None and host.reload_bps) else _loader_bps(f, engine, st, "device", "warm", dev)
+            # a piece reloaded from the container at every use after the first (layer_streaming): at the engine's
+            # measured reload rate (`weight_reload_gbps`), refused by name without it (the supervisor 2026-11-02 06:40)
             # the pieces held between uses (`held`, S5 2026-10-27) load once: only the rest is reloaded
             moved = w.weight_bytes * (1.0 - float((held or {}).get(comp, 0.0)))
-            total += w.weight_bytes / _loader_bps(f, engine, st, "device", "cold", dev) + (passes - 1) * moved / again
+            total += w.weight_bytes / _loader_bps(f, engine, st, "device", "cold", dev)
+            if passes > 1 and moved > 0:
+                total += (passes - 1) * moved / reload_bps(host, engine, st)
         else:
             total += w.weight_bytes / _loader_bps(f, engine, st, "device", "cold", dev) + \
                 (loads - 1) * w.weight_bytes / _loader_bps(f, engine, st, "device", "warm", dev)

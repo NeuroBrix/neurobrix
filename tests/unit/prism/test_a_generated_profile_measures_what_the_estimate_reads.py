@@ -77,3 +77,23 @@ def test_the_loader_measures_itself_cold_then_warm_then_stops(hw):
     d = yaml.safe_load((hw / "default-abc.yml").read_text())["devices"][1]["measured"]
     assert d["weight_load_gbps"]["triton"]["BF16"]["device"] == {"cold": 1.0, "warm": 2.0}
     assert d["matmul_tflops"]["float16"] == 10.0, "the probe's facts kept beside the loader's"
+
+
+def test_the_engine_measures_its_per_token_reload_once_on_a_generated_profile(hw):
+    """The supervisor 2026-11-02 06:40 (B): the per-token reload rate a layer_streaming plan pays is a profile fact the
+    engine measures itself at a real reload (`note_reload_rate`), per engine and stored dtype, written once into a
+    GENERATED profile's host_measured; a committed profile is never written, a reload too small to time is not kept.
+    What this test would do if the code were wrong: a second measure overwriting the first, a committed profile written,
+    or the rate filed under another key than the estimator reads (time_estimate.reload_bps) — RED."""
+    from neurobrix.core.prism import time_estimate as T
+    _profile(hw, "default-abc", DEV)
+    A.ensure_measured_facts("default-abc")
+    assert not A.note_reload_rate("default-abc", "compiled", "bfloat16", 1 << 20, 0.01, "m:c"), "too small"
+    assert A.note_reload_rate("default-abc", "compiled", "bfloat16", 2 * 10 ** 9, 2.0, "m:c")
+    assert not A.note_reload_rate("default-abc", "compiled", "bfloat16", 8 * 10 ** 9, 2.0, "m:c"), "written once"
+    assert A.note_reload_rate("default-abc", "triton", "bfloat16", 3 * 10 ** 9, 2.0, "m:c")
+    host = yaml.safe_load((hw / "default-abc.yml").read_text())["host_measured"]
+    assert host["weight_reload_gbps"] == {"compiled": {"BF16": 1.0}, "triton": {"BF16": 1.5}}
+    assert abs(T.reload_bps(T.host_facts(host), "compiled", "bfloat16") - 1e9) < 1
+    _profile(hw, "c4140-something", DEV)
+    assert not A.note_reload_rate("c4140-something", "compiled", "bfloat16", 2 * 10 ** 9, 2.0, "m:c")
