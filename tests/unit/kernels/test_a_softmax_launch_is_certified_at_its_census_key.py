@@ -23,10 +23,19 @@ def test_a_row_past_the_fused_kernel_forms_the_looped_kernel_s_key():
     assert kernel == LK.SOFTMAX_LOOPED and key[1] == 2 * LK.SOFTMAX_FUSED_MAX_FEAT
 
 
-def test_the_looped_candidates_stay_under_the_cap_and_the_row():
+def test_the_looped_candidates_stay_under_the_cap_and_the_row(monkeypatch):
+    # the rule, on a cap the cell states (a 32 768 reduce tile, the V100's): the machine's own cap is the next cell's
+    from nbxtensor.backend import capabilities
+    monkeypatch.setattr(capabilities, "reduce_tile_max", lambda: 32768)
     keep = S._prune_looped_softmax(S._looped_softmax_configs(), {"feat_dim": 20000})
     assert keep and all(c.kwargs["TILE_FEAT"] <= 32768 for c in keep)
     assert any(c.kwargs["TILE_FEAT"] == 4096 and c.num_warps == 4 for c in keep)   # the tile it ran before
+
+
+def test_the_looped_candidates_hold_this_machines_cap():
+    from nbxtensor.backend.capabilities import reduce_tile_max
+    keep = S._prune_looped_softmax(S._looped_softmax_configs(), {"feat_dim": 20000})
+    assert keep and all(c.kwargs["TILE_FEAT"] <= reduce_tile_max() for c in keep)
 
 
 def test_the_candidates_hold_at_most_one_longest_row_and_never_more_rows_than_exist():

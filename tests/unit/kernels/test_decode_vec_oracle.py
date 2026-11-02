@@ -176,12 +176,17 @@ def test_decode_vec_routing_three_states(needs_device, declared_profile) -> None
     bmm+softmax chain, vec bypassed). Counted, never assumed."""
     if not _has_gpu():
         pytest.skip("no GPU")
-    calls = {"n": 0}
+    calls = {"n": 0, "math": 0}
     orig = _nbx_attention_wrappers._decode_attn_vec
+    orig_math = _nbx_attention_wrappers._math_attention
 
     def counting(*a, **k):
         calls["n"] += 1
         return orig(*a, **k)
+
+    def counting_math(*a, **k):
+        calls["math"] += 1
+        return orig_math(*a, **k)
 
     def one_call():
         rng = np.random.default_rng(0)
@@ -192,14 +197,18 @@ def test_decode_vec_routing_three_states(needs_device, declared_profile) -> None
             q, k, v, attn_mask=None, is_causal=False, scale=0.088)
 
     _nbx_attention_wrappers._decode_attn_vec = counting
+    _nbx_attention_wrappers._math_attention = counting_math
     try:
         _run(1, 32, 8, 256, 128)     # arms "1"
         assert calls["n"] == 1, "armed flag did not reach the vec kernel"
 
-        n0 = calls["n"]
-        one_call()                   # default (unset): routes via math
-        assert calls["n"] == n0 + 1, (
-            "default (unset) did not route Tq=1 to the vec kernel")
+        n0, m0 = calls["n"], calls["math"]
+        one_call()                   # default (unset): the vec kernel ON THE MATH ROUTE
+        # the vec kernel is the default INSIDE the math route (`launch_keys.sdpa_route`): a profile that routes this
+        # decode to flash (no `sdpa_math_max_scores_bytes` in its vendor file — Apple, Ampere+, R23) takes neither;
+        # what must never happen is the math chain at Tq=1 without the vec kernel
+        assert calls["n"] == n0 + 1 or calls["math"] == m0, (
+            "default (unset) ran the math chain at Tq=1 without routing it to the vec kernel")
 
         n0 = calls["n"]
         _os.environ["NBX_DECODE_VEC"] = "0"
@@ -220,6 +229,7 @@ def test_decode_vec_routing_three_states(needs_device, declared_profile) -> None
             "chain — the vec kernel fired under it")
     finally:
         _nbx_attention_wrappers._decode_attn_vec = orig
+        _nbx_attention_wrappers._math_attention = orig_math
 
 
 def test_masked_tail_contributes_nothing() -> None:
