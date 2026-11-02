@@ -9,10 +9,11 @@ import bisect
 import ctypes
 import os
 import sys
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from nbxtensor.backend import runtime as _rt
-from nbxtensor.memory.pool import SegmentPool
+from nbxtensor.memory.pool import (SegmentPool, LARGE, range_add, range_extend, range_unmapped, range_reclaimable,
+                                   unmap_over_cap)
 
 
 
@@ -613,7 +614,10 @@ class DeviceAllocator:
         DeviceAllocator._maybe_init_pool()
         if not DeviceAllocator._pool_enabled:
             return 0
-        return DeviceAllocator._pool_flush()
+        out = 0
+        for dev in [d for d, rs in DeviceAllocator._POOL.ranges.items() if rs]:
+            out += DeviceAllocator._range_reclaim(dev) - 0    # its free chunks unmapped (and its segments flushed)
+        return out + DeviceAllocator._pool_flush()
 
     @staticmethod
     def new_allocation_epoch() -> int:
@@ -684,6 +688,148 @@ class DeviceAllocator:
             return rc
         held = DeviceAllocator._cuda_live_bytes.get(dev, 0) + DeviceAllocator._host_pinned_live_bytes
         return dm.ALLOC_REFUSED if held + int(nbytes) > int(cap) else None
+
+    #: device -> its VMM (`memory.vmm.Vmm`, with the profile's chunk) when the large class grows in an expandable
+    #: range; False: the device keeps driver segments (no VMM, or the profile measured none: vmm_chunk_bytes 0)
+    _VMM: Dict[int, Any] = {}
+
+    @staticmethod
+    def _vmm_chunk_fact(dev: int) -> int:
+        """The expandable pool's chunk on `dev`: the hardware profile's measured `vmm_chunk_bytes` (first launch,
+        `facts_probe.vmm_chunk_bytes`; 0 = the device has no VMM). No profile installed (a tool, a test): 0. A profile
+        whose device states no measurement: refused by name — never a chunk the code chose."""
+        from nbxtensor.ops.wrappers import get_hardware_profile
+        prof = get_hardware_profile()
+        if prof is None or not getattr(prof, "devices", None):
+            return 0
+        spec = next((d for d in prof.devices if getattr(d, "index", None) == dev), None)
+        measured = (getattr(spec, "measured", None) or {}) if spec is not None else {}
+        if "vmm_chunk_bytes" not in measured:
+            raise RuntimeError(
+                f"ZERO FALLBACK: the hardware profile states no measured `vmm_chunk_bytes` for device {dev} — the "
+                f"expandable pool's chunk is measured at the first launch on this machine (facts_probe."
+                f"vmm_chunk_bytes, written into the generated profile); a committed profile records it from that tool")
+        return int(measured["vmm_chunk_bytes"] or 0)
+
+    @staticmethod
+    def _range_vmm(dev: int):
+        """The device's VMM when its large class grows in an expandable range, else None (resolved once)."""
+        v = DeviceAllocator._VMM.get(dev)
+        if v is None:
+            v = False
+            chunk = DeviceAllocator._vmm_chunk_fact(dev)
+            libs = _rt.backend_table().get("driver_libs")
+            if chunk and libs:
+                from nbxtensor.memory.vmm import Vmm
+                lib = Vmm.load(libs)
+                if lib is not None:
+                    vv = Vmm(lib, dev)
+                    if vv.supported():
+                        vv.chunk = chunk
+                        v = vv
+            DeviceAllocator._VMM[dev] = v
+        return v or None
+
+    @staticmethod
+    def _range_reserve(dev: int, v) -> None:
+        """Reserve one more address range for `dev`'s large class: the card's memory as the hardware profile declares
+        it (rule 1), whole chunks; registered as device memory for the pointer checks (`holds`)."""
+        from nbxtensor.ops.wrappers import get_hardware_profile
+        prof = get_hardware_profile()
+        spec = next((d for d in (getattr(prof, "devices", None) or []) if getattr(d, "index", None) == dev), None)
+        mb = int(getattr(spec, "memory_mb", 0) or 0)
+        if mb <= 0:
+            raise RuntimeError(f"ZERO FALLBACK: the hardware profile declares no memory for device {dev}: its "
+                               f"expandable range has no size")
+        size = -(-(mb << 20) // v.chunk) * v.chunk
+        rc, base = v.reserve(size)
+        if rc != 0:
+            raise RuntimeError(f"cuMemAddressReserve of {size} bytes on device {dev} failed: CUresult={rc}")
+        r = range_add(DeviceAllocator._POOL, dev, base, size, v.chunk)
+        r.handles = {}
+        DeviceAllocator._range_add(base, size)
+
+    @staticmethod
+    def _range_alloc(dev: int, nbytes: int) -> Optional[int]:
+        """A large block from `dev`'s expandable range: the best free block, else the range extended at its top (a
+        new range when the last is full); every chunk it touches mapped. None when the card refuses the mapping even
+        after the reclaim (the block goes back to the pool)."""
+        pool = DeviceAllocator._POOL
+        v = DeviceAllocator._range_vmm(dev)
+        ptr = pool.take(dev, nbytes)
+        if ptr is None:
+            if range_extend(pool, dev, pool.grow_size(nbytes)) is None:
+                DeviceAllocator._range_reserve(dev, v)
+                if range_extend(pool, dev, pool.grow_size(nbytes)) is None:
+                    raise RuntimeError(f"a request of {nbytes} bytes exceeds device {dev}'s whole expandable range")
+            ptr = pool.take(dev, nbytes)
+        actual = pool.alloc_size.pop(ptr, nbytes)
+        if not DeviceAllocator._range_map(dev, v, range_unmapped(pool, dev, ptr, actual)):
+            pool.park(dev, pool.release(ptr))
+            return None
+        DeviceAllocator._cuda_ptr_size[ptr] = actual
+        DeviceAllocator._cuda_ptr_device[ptr] = dev
+        DeviceAllocator._cuda_ptr_epoch[ptr] = DeviceAllocator._alloc_epoch
+        if _MALLOC_TRACE_FILE is not None:
+            _record_malloc_site(ptr, actual, dev)
+        return ptr
+
+    @staticmethod
+    def _range_map(dev: int, v, pairs) -> bool:
+        """Map the (range, chunk) pairs: a physical chunk created and mapped for each, counted live. A card that
+        refuses (the imposed rung, the device budget, the driver) gets ONE reclaim — a synchronisation, then every
+        mapped chunk lying whole inside a free block unmapped and released, and the driver segments flushed — and the
+        mapping is retried; False when it still refuses."""
+        reclaimed = False
+        dm = _rt.device_memory()
+        for r, i in pairs:
+            while True:
+                rc = 2
+                limit = DeviceAllocator._rung_limit(dev)
+                if not (limit is not None and DeviceAllocator._cuda_live_bytes.get(dev, 0) + r.chunk > limit) \
+                        and DeviceAllocator._past_budget(dm, dev, r.chunk) is None:
+                    rc, h = v.create(r.chunk)
+                    if rc == 0:
+                        rc = v.map(r.chunk_va(i), r.chunk, h)
+                        if rc != 0:
+                            v.release(h)
+                if rc == 0:
+                    break
+                if reclaimed:
+                    DeviceAllocator.clear_last_error()
+                    return False
+                DeviceAllocator._range_reclaim(dev)
+                reclaimed = True
+            r.mapped.add(i)
+            r.handles[i] = h
+            live = DeviceAllocator._cuda_live_bytes.get(dev, 0) + r.chunk
+            DeviceAllocator._cuda_live_bytes[dev] = live
+            if live > DeviceAllocator._cuda_peak_bytes.get(dev, 0):
+                DeviceAllocator._cuda_peak_bytes[dev] = live
+            for _t, _p in (DeviceAllocator._windows.get(dev) or {}).items():
+                if live > _p:
+                    DeviceAllocator._windows[dev][_t] = live
+        return True
+
+    @staticmethod
+    def _range_unmap(dev: int, r, i: int) -> None:
+        v = DeviceAllocator._VMM.get(dev)
+        v.unmap(r.chunk_va(i), r.chunk)
+        v.release(r.handles.pop(i))
+        DeviceAllocator._cuda_live_bytes[dev] = max(0, DeviceAllocator._cuda_live_bytes.get(dev, 0) - r.chunk)
+
+    @staticmethod
+    def _range_reclaim(dev: int) -> int:
+        """ONE synchronisation of `dev`, then every mapped chunk lying whole inside a free block of its ranges unmapped
+        and released (nothing a kernel may still read: the work is drained), and its driver segments flushed. The bytes
+        given back."""
+        DeviceAllocator.device_synchronize(dev)
+        out = 0
+        for r, i in range_reclaimable(DeviceAllocator._POOL, dev):
+            DeviceAllocator._range_unmap(dev, r, i)
+            r.mapped.discard(i)
+            out += r.chunk
+        return out + DeviceAllocator._pool_flush(dev)
 
     @staticmethod
     def _oom(dev: int, nbytes: int, ret: int, dm) -> "DeviceOOMError":
@@ -795,6 +941,16 @@ class DeviceAllocator:
             return 0
         DeviceAllocator._maybe_init_pool()
         dev = dev_idx if dev_idx is not None else DeviceAllocator.get_device()
+
+        # The large class in the device's expandable range (R16, `memory.vmm`): blocks of one reserved address range,
+        # chunks mapped as it grows, whole free chunks unmapped at a refusal — no driver segment, so no remainder a
+        # live neighbour pins keeps its pages (Wan2.1-I2V triton 16g, 2026-11-01).
+        if DeviceAllocator._pool_enabled and pooled and DeviceAllocator._POOL.cls(nbytes) == LARGE \
+                and DeviceAllocator._range_vmm(dev) is not None:
+            ptr = DeviceAllocator._range_alloc(dev, nbytes)
+            if ptr is None:
+                raise DeviceAllocator._oom(dev, nbytes, 2, _rt.device_memory())
+            return ptr
 
         # Pool fast path
         if DeviceAllocator._pool_enabled and pooled:
@@ -955,6 +1111,12 @@ class DeviceAllocator:
             cap = DeviceAllocator._pool_parked_cap(dev)
             if cap and cached > cap:
                 DeviceAllocator._POOL.evict(dev, cached - cap, DeviceAllocator._segment_to_driver)
+                if DeviceAllocator._POOL.ranges.get(dev):
+                    # a range's mapped free chunks over the cap are unmapped (after a sync: a kernel may still read a
+                    # block freed this instant), as a wholly free segment over the cap returns to the driver
+                    DeviceAllocator.device_synchronize(dev)
+                    unmap_over_cap(DeviceAllocator._POOL, dev, cap,
+                                   lambda r, i: DeviceAllocator._range_unmap(dev, r, i))
             if _MALLOC_TRACE_FILE is not None:
                 _record_free_site(ptr, nbytes)
             return

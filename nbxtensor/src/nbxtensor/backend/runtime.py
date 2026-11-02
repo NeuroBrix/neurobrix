@@ -51,6 +51,8 @@ _GPU_BACKENDS = {
     "cuda": {
         "rt_libs": _environment_runtime_libs("nvidia.cuda_runtime", ["libcudart.so.12"])
                    + ["libcudart.so", "libcudart.so.12", "libcudart.so.11.0"],
+        # the driver API's library: the virtual memory primitives of the expandable pool (`memory.vmm`, R16)
+        "driver_libs": ["libcuda.so.1", "libcuda.so"],
         "malloc": "cudaMalloc", "free": "cudaFree",
         "memcpy": "cudaMemcpy", "memset": "cudaMemset",
         "set_device": "cudaSetDevice",

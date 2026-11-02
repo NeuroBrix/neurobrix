@@ -12,6 +12,9 @@ supervisor's S2, 2026-10-27 22:20).
   host_memory_gbps        a copy of an array in host memory, (read + write) bytes / time
   storage_read_gbps       a sequential read of a named file, its pages dropped first
   gemv_gbps               a decode step's matrix-vector product on each engine, the weight bytes it streams / time
+  vmm_chunk_bytes         the expandable pool's chunk (R16): the device's allocation granularity x k, k the smallest whose
+                          map + unmap costs no more than an ordinary allocation of the same bytes (its median plus its
+                          spread) — the supervisor's criterion of 2026-11-02 06:40; absent when the device has no VMM
   weight_load_gbps        the ENGINE'S OWN LOADER on a component's first block weights: bytes landed / time, per engine,
                           per stored dtype, to the card ("device") and to host memory ("host": the host-held path),
                           cold (the shards' pages dropped first) and warm (the same load again)
@@ -310,3 +313,55 @@ def weight_load_gbps(root: Path, comp: str, gb: float, engines: Sequence[str] = 
             warm = timed(make(where == "host", set(keys)))
             out[engine][where] = {"cold": cold, "warm": warm}
     return out
+
+
+def vmm_chunk_bytes(device: int, reps: int, ks: Sequence[int]) -> Optional[int]:
+    """The expandable pool's chunk on `device`, measured (R16): for chunk = granularity x k, k in `ks` ascending, the
+    median cost of creating + mapping + opening + unmapping + releasing one chunk against the median and spread
+    (max - median) of an ordinary allocation + free of the same bytes, `reps` each; the first k whose chunk costs no
+    more than the ordinary allocation's median plus its spread. None when the device has no VMM (the pool keeps its
+    driver segments there). Measured 2026-11-02 on V100-SXM2 (vmm/measure_k.py): k = 1, 358 us against 373 +- 109 us."""
+    import statistics
+    from nbxtensor.backend import runtime as _rt
+    from nbxtensor.memory.vmm import Vmm
+    lib = Vmm.load(_rt.backend_table().get("driver_libs"))
+    if lib is None:
+        return None
+    v = Vmm(lib, device)
+    if not v.supported():
+        return None
+    rc, gran = v.granularity()
+    if rc != 0 or gran <= 0:
+        return None
+    dm = _rt.device_memory()
+    for k in sorted(ks):
+        size = gran * int(k)
+        ordinary, mapped = [], []
+        for _ in range(reps):
+            t0 = time.perf_counter()
+            rc, ptr = dm.malloc(size)
+            if rc != 0:
+                return None
+            dm.free(ptr)
+            ordinary.append(time.perf_counter() - t0)
+        rc, va = v.reserve(size)
+        if rc != 0:
+            return None
+        try:
+            for _ in range(reps):
+                t0 = time.perf_counter()
+                rc, h = v.create(size)
+                if rc != 0:
+                    return None
+                if v.map(va, size, h) != 0:
+                    v.release(h)
+                    return None
+                v.unmap(va, size)
+                v.release(h)
+                mapped.append(time.perf_counter() - t0)
+        finally:
+            v.unreserve(va, size)
+        med = statistics.median(ordinary)
+        if statistics.median(mapped) <= med + (max(ordinary) - med):
+            return size
+    return None
