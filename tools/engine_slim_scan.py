@@ -41,7 +41,9 @@ ENGINE = REPO / "src" / "neurobrix"
 LIBRARY = REPO / "nbxtensor" / "src" / "nbxtensor"
 #: the code whose references prove a definition is used (tests excluded, by the order); the library's own code counts:
 #: a library that calls an engine definition back is a use the scan must not call dead
-USAGE_ROOTS = ("src", "nbxtensor/src", "tools")
+#: and the benchmark harness outside the library (benchmarks/) is a reader: 81641a40 deleted classification.is_triton_op,
+#: which only the harness called, before benchmarks/ was a root
+USAGE_ROOTS = ("src", "nbxtensor/src", "tools", "benchmarks")
 #: non-Python files a name is reached from (entry points, registries written as data)
 DATA_GLOBS = ("pyproject.toml", "src/**/*.yml", "src/**/*.yaml", "src/**/*.json", "src/**/*.toml",
               "nbxtensor/pyproject.toml")

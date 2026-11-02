@@ -34,6 +34,15 @@ sys.path.insert(0, str(REPO / "tools"))
 MODE = "triton"
 
 
+
+def _runs_a_triton_kernel(CL, op_name: str) -> bool:
+    """Whether the op runs a Triton kernel (the classification's TRITON class), an op it does not know being no."""
+    try:
+        return CL.get_execution_type(op_name) == CL.OpExecution.TRITON
+    except KeyError:
+        return False
+
+
 def bind_profile(hardware: str):
     """The device the instances are derived for, bound as the census binds it (`derived_census.derive`): the
     profile, the vendor's key ladders, the wrappers' profile."""
@@ -122,7 +131,7 @@ def instances_of(model: str, ops_wanted: set, has_native_bf16: bool):
             continue
         rg = DC.runtime_graph(model, comp)
         for uid, op in rg["ops"].items():
-            if uid not in ops_wanted or not CL.is_triton_op(op["op_type"].split("::")[-1].split(".")[0]):
+            if uid not in ops_wanted or not _runs_a_triton_kernel(CL, op["op_type"].split("::")[-1].split(".")[0]):
                 continue
             ins = op.get("input_tensor_ids") or []
             try:
