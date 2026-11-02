@@ -137,7 +137,7 @@ class TensorResolver:
         if "constant" in tensor_id.lower():
             shape = tensor_data.get("shape", [])
             dtype_str = tensor_data.get("dtype", "float32")
-            target_dtype = self.parse_dtype(dtype_str) or torch.float32
+            target_dtype = _parse_dtype(dtype_str) or torch.float32
 
             # Create empty tensor with the right shape
             const_tensor = torch.empty(shape, dtype=target_dtype, device=self._ctx.device)
@@ -231,7 +231,7 @@ class TensorResolver:
                     tensor_info = self._ctx.tensors_metadata.get(tensor_id, {})
                     graph_dtype_str = tensor_info.get("dtype")
                     if graph_dtype_str:
-                        target_dtype = self.parse_dtype(graph_dtype_str)
+                        target_dtype = _parse_dtype(graph_dtype_str)
                         if target_dtype and target_dtype in (torch.float16, torch.bfloat16):
                             tensor = tensor.to(prism_dtype)
                         elif target_dtype and target_dtype != tensor.dtype:
@@ -371,7 +371,7 @@ class TensorResolver:
                     return None
                 dtype_str = tensor_info.get("dtype")
                 if dtype_str:
-                    graph_dtype = self.parse_dtype(dtype_str)
+                    graph_dtype = _parse_dtype(dtype_str)
                     if graph_dtype is not None:
                         # A floating input traced at or below the compute dtype's width enters at the
                         # compute dtype (Prism's); one traced WIDER enters at its traced width — the
@@ -390,20 +390,6 @@ class TensorResolver:
                         # Non-floating (int64, bool): the graph's own
                         return graph_dtype
         return None
-
-    def parse_dtype(self, dtype_str: str) -> Optional[torch.dtype]:
-        """
-        Parse dtype string to torch.dtype.
-
-        Delegates to neurobrix.core.dtype.config.parse_dtype (single source of truth).
-
-        Args:
-            dtype_str: Dtype string (e.g., "float16", "float32")
-
-        Returns:
-            torch.dtype (defaults to float32 if unknown)
-        """
-        return _parse_dtype(dtype_str)
 
     def _resolve_arg_info(
         self,

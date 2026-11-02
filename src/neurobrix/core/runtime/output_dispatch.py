@@ -204,15 +204,14 @@ def resolve_output_path(
     model_name: str,
     family: str,
     mode: Optional[str] = None,
-    strict_extension: bool = True,
 ) -> str:
     """
     Resolve final output path with auto-extension and strict mismatch check.
 
     - If `user_output` is None: auto-name `output_<model>.<ext>`.
     - If `user_output` has the right extension: keep as-is.
-    - If `user_output` has a different extension and `strict_extension`:
-      raise RuntimeError with a clear message (Q1 doctrine).
+    - If `user_output` has a different extension: raise RuntimeError with a
+      clear message (Q1 doctrine).
     """
     expected_ext = default_extension_for_mode(family, mode)
     if user_output is None:
@@ -226,13 +225,11 @@ def resolve_output_path(
     p = Path(user_output)
     actual_ext = p.suffix.lower()
     if actual_ext and actual_ext != expected_ext.lower():
-        if strict_extension:
-            raise RuntimeError(
-                f"ZERO FALLBACK: output extension '{actual_ext}' incompatible "
-                f"with family '{family}' mode '{mode or 'default'}'. "
-                f"Expected '{expected_ext}' (or omit --output for auto extension)."
-            )
-        return str(p.with_suffix(expected_ext))
+        raise RuntimeError(
+            f"ZERO FALLBACK: output extension '{actual_ext}' incompatible "
+            f"with family '{family}' mode '{mode or 'default'}'. "
+            f"Expected '{expected_ext}' (or omit --output for auto extension)."
+        )
     if not actual_ext:
         return str(p) + expected_ext
     return user_output

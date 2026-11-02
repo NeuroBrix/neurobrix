@@ -572,22 +572,18 @@ class GraphExecutor:
             follow(interceptors, groups=groups, planned=planned)
 
 
-    def execute(self, inputs: Dict[str, Any],
-                skip_kills: Optional[bool] = None) -> Dict[str, Any]:
+    def execute(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Execute the graph with given inputs.
-
-        Alias for run() to satisfy interface requirements.
+        Execute the graph with given inputs: run() with its defaults, under the
+        executor interface's name (serving, the strategies).
 
         Args:
             inputs: Input tensors
-            skip_kills: Optional explicit control of triton kill_slots.
-                Defaults to None (run() treats None as False).
 
         Returns:
             Output tensors
         """
-        return self.run(inputs, skip_kills=skip_kills)
+        return self.run(inputs)
 
     def _setup_executors(self) -> None:
         """
@@ -2068,7 +2064,7 @@ class GraphExecutor:
         return self.consumed_in_loader_space(consumed, keys, params, encodes,
                                              self._flow_reads_weights)
 
-    def load_flow_read_weights(self, nbx_path, component, shard_map=None, keys=None) -> int:
+    def load_flow_read_weights(self, nbx_path, component, keys=None) -> int:
         """Load the component's NON-BLOCK weights onto this executor, and nothing else.
 
         For a `layer_streaming` base executor: its pieces hold the weights their ops read, and
@@ -2087,9 +2083,9 @@ class GraphExecutor:
         if not keys:
             return 0
         if self.mode in ("triton", "triton_sequential"):
-            self._load_weights_triton(nbx_path, component, shard_map, only=keys)
+            self._load_weights_triton(nbx_path, component, None, only=keys)   # one device: no shard map
         else:
-            self._load_weights_native(nbx_path, component, shard_map, only=keys)
+            self._load_weights_native(nbx_path, component, None, only=keys)
         return len(keys)
 
     @staticmethod

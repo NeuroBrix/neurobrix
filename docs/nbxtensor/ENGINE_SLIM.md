@@ -79,6 +79,16 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 
 | kind | path | symbol | why it stays |
 |---|---|---|---|
+| fact | src/neurobrix/core/runtime/graph/compiled_sequence.py | _parse_dtype | returns a torch.dtype with the sequence's Prism remap (compute_dtype); nbxtensor's parse_dtype returns an NBXDtype — two types |
+| fact | src/neurobrix/core/runtime/precision_contract.py | kind | a different function under the same name: the precision class of an op (precision / casting / passthrough), not a dtype's kind |
+| wrapper | src/neurobrix/core/runtime/graph/device_attention.py | _plain | the plain-SDPA entry of the attention dispatch table, called positionally like its other entries |
+| wrapper | src/neurobrix/core/runtime/graph/kv_cache_wrapper.py | intercept_attention(enable_gqa) | the graph's own SDPA kwarg, handed in by the op dispatch from the traced op's kwargs (chatterbox t3) — the scan sees no Python caller |
+| wrapper | src/neurobrix/core/runtime/graph/moe_fusion.py | detect_and_fuse_moe(refusals) | the tests read the refusals it collects (tests/unit/runtime/test_a_stacked_expert_block_routed_softmax_first_is_fused) |
+| wrapper | src/neurobrix/core/runtime/graph_executor.py | _resolve_fp16_activation_policy | the executor's door to its precision contract, called at two compile points and by tests/unit/dtype/test_precision_contract |
+| wrapper | src/neurobrix/core/runtime/graph_executor.py | execute | the executor interface's name (serving, strategies); run() takes a pre-op callback second, so it is not an alias of run |
+| wrapper | src/neurobrix/core/runtime/lm_facts.py | decode_sequences(resolved) | the run's resolved values (a CLI cfg_scale) — the tests pass it (tests/unit/prism/test_the_plan_prices_every_cache_its_decoder_opens) |
+| wrapper | src/neurobrix/core/runtime/phase_trace.py | first | the ledger's read door: _FIRST is the module's private state |
+| wrapper | src/neurobrix/core/runtime/tensor_compat.py | aten | a named question (is torch loaded?) asked by the shared orchestration code, never importing it |
 | wrapper | src/neurobrix/core/paths.py | PathNotConfigured | a named refusal: a caller tells a missing configured location from an ordinary directory it may create (tests/unit/core/test_one_door_for_the_machines_paths catches it by name) |
 | wrapper | src/neurobrix/core/paths.py | BackendOnClearedStorage | a named refusal caught by name in cli run and cli autotune, beside the backend-not-installed errors, to refuse with its own sentence |
 | wrapper | src/neurobrix/core/paths.py | installation_refusals(search_root) | the tests point it at a fake installation tree (tests/unit/triton/test_a_backend_built_on_ephemeral_storage_is_refused); the engine looks the package up on sys.path |

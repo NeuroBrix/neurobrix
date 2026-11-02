@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union, TYPE_CHECKING
 
 from neurobrix.core.module.temporal_stream_runner import STATE_OUT_PREFIX
+from neurobrix.core.runtime.sequence_steps import SequenceSteps   # the steps both sequences share
 import copy
 import os
 import re
@@ -310,7 +311,7 @@ class CompiledOp:
 # COMPILED SEQUENCE WITH CLOSURE-BASED RESOLUTION
 # ============================================================================
 
-class CompiledSequence:
+class CompiledSequence(SequenceSteps):
     """
     Pre-compiled execution sequence with zero runtime isinstance() checks.
 
@@ -531,7 +532,6 @@ class CompiledSequence:
               If called after compile(), call recompile() to pick up changes.
         """
         self._op_interceptors[op_type] = interceptor
-
 
     def update_op_interceptors(self, interceptors: Dict[str, Callable]) -> None:
         """
@@ -899,36 +899,6 @@ class CompiledSequence:
         if removed:
             print(f"[Optim] alias lowering (compiled): {removed} ops left "
                   f"the hot sequence")
-
-    def _extract_const_fold_partition(
-        self,
-        tensors: Dict[str, Any],
-        execution_order: List[str],
-    ) -> None:
-        """Take the const_fold partition out of the hot sequence.
-
-        The engine-neutral planner (core/optim/passes/const_fold.py)
-        annotated dag["_optim_const_fold"] = {op_uids, frontier_tids,
-        releasable_tids} at the load hook. Here: partition ops leave
-        execution_order, and every frontier tensor is stamped
-        `folded_const` so slot categorization treats it as a weight
-        (its producer no longer runs — the value arrives at bind time
-        from _execute_const_fold). Idempotent on recompile: the stamps
-        and the plan survive in the shared DAG, removal is a no-op the
-        second time (same contract as the pretranspose stamps).
-        """
-        plan = self.dag.get("_optim_const_fold")
-        if not plan:
-            return
-        self._const_fold_plan = plan
-        for tid in plan["frontier_tids"]:
-            meta = tensors.setdefault(tid, {})
-            meta["folded_const"] = True
-        uids = set(plan["op_uids"])
-        new_order = [u for u in execution_order if u not in uids]
-        if len(new_order) != len(execution_order):
-            execution_order.clear()
-            execution_order.extend(new_order)
 
     def _execute_const_fold(self, weights: Dict[str, torch.Tensor]) -> None:
         """Run the const_fold partition ONCE and fill the frontier slots.
@@ -2371,10 +2341,6 @@ class CompiledSequence:
         def kwargs_resolver(_arena: TensorArena) -> Dict[str, Any]:
             return {}
 
-        # The func wrapper unpacks arena from args
-        def func_wrapper(arena: TensorArena) -> torch.Tensor:
-            return moe_fused_dispatch(arena)
-
         # All input slots: routing + hidden_states + all expert weights
         _routing_slots = ([topk_indices_slot, topk_weights_slot]
                           if gate_scores_slot is None else [gate_scores_slot])
@@ -2383,7 +2349,7 @@ class CompiledSequence:
         return CompiledOp(
             op_uid=op_uid,
             op_type="custom::moe_fused",
-            func=func_wrapper,
+            func=moe_fused_dispatch,   # takes the arena itself
             args_resolver=args_resolver,
             kwargs_resolver=kwargs_resolver,
             output_slots=tuple(output_slots),
@@ -2576,10 +2542,6 @@ class CompiledSequence:
     def _compile_args(self, args: List[Any], tensors: Dict[str, Any]) -> Tuple[Any, ...]:
         """Pre-compile positional arguments to typed objects."""
         return tuple(self._compile_arg(arg, tensors) for arg in args)
-
-    def _compile_kwargs(self, kwargs: Dict[str, Any], tensors: Dict[str, Any]) -> Dict[str, Any]:
-        """Pre-compile keyword arguments to typed objects."""
-        return {k: self._compile_arg(v, tensors) for k, v in kwargs.items()}
 
     def _compile_arg(self, arg: Any, tensors: Dict[str, Any]) -> Any:
         """Pre-compile a single argument to a typed object."""
@@ -3302,7 +3264,6 @@ class CompiledSequence:
         """
         self._shape_resolver = resolver
 
-
     def run(
         self,
         debug: bool = False,
@@ -3366,7 +3327,6 @@ class CompiledSequence:
             if census is not None:
                 census.pass_done()
 
-
     def _dump_planned_ops(self) -> None:
         """Write the ops this sequence will ACTUALLY run to `NBX_DUMP_PLANNED_OPS`.
 
@@ -3400,7 +3360,6 @@ class CompiledSequence:
         except Exception as exc:                # a diagnostic never breaks a run
             print(f"[planned-ops] not dumped ({type(exc).__name__}: {exc})",
                   flush=True)
-
 
     def _maybe_dump_tid_native(self, op, out_slot: int, tensor) -> None:
         """TEMP diagnostic: mirror of TritonSequence._maybe_dump_tid.
@@ -4306,7 +4265,6 @@ class CompiledSequence:
     def num_ops(self) -> int:
         """Number of compiled ops."""
         return len(self._ops)
-
 
     @property
     def arena(self) -> TensorArena:

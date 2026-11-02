@@ -14,6 +14,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from neurobrix.core.runtime import symexpr as _symexpr
 from neurobrix.core.runtime import liveness as _liveness
+from neurobrix.core.runtime.sequence_steps import SequenceSteps   # the steps both sequences share
 from neurobrix.kernels.classification import kernel_for as _kernel_for
 # When the cause is the allocator refusing, say what would have made it fit.
 # "Out of memory" alone costs the reader the whole diagnosis, and the numbers
@@ -430,7 +431,7 @@ def _fingerprint(t):
         return f"<{type(e).__name__}>"
 
 
-class TritonSequence:
+class TritonSequence(SequenceSteps):
     """Compiled execution sequence for triton mode.
 
     Ported from CompiledSequence. Same two-phase design:
@@ -929,32 +930,6 @@ class TritonSequence:
         """Drop the kept invariant state (the end of a request)."""
         if getattr(self, "_invariant", None) is not None:
             self._invariant.release()
-
-    def _extract_const_fold_partition(
-        self,
-        tensors: Dict[str, Any],
-        execution_order: List[str],
-    ) -> None:
-        """Take the const_fold partition out of the hot sequence.
-
-        R30 mirror of CompiledSequence._extract_const_fold_partition:
-        partition ops leave execution_order, frontier tensors are
-        stamped `folded_const` (categorized as weights — their value
-        arrives at bind time from _execute_const_fold). Idempotent on
-        recompile: stamps and plan survive in the shared DAG.
-        """
-        plan = self.dag.get("_optim_const_fold")
-        if not plan:
-            return
-        self._const_fold_plan = plan
-        for tid in plan["frontier_tids"]:
-            meta = tensors.setdefault(tid, {})
-            meta["folded_const"] = True
-        uids = set(plan["op_uids"])
-        new_order = [u for u in execution_order if u not in uids]
-        if len(new_order) != len(execution_order):
-            execution_order.clear()
-            execution_order.extend(new_order)
 
     def _execute_const_fold(self, weights: Dict[str, "NBXTensor"]) -> None:
         """Run the const_fold partition ONCE and fill the frontier slots.
@@ -1916,7 +1891,6 @@ class TritonSequence:
     # SYMBOLIC PROMOTION — ported from compiled_sequence
     # ========================================================================
 
-
     def _categorize_and_assign_slots(self, tensors: dict, ops_meta: dict,
                                      graph_output_ids: set):
         """Categorize tensors by prefix and assign arena slots.
@@ -2749,9 +2723,6 @@ class TritonSequence:
 
     def _compile_args(self, args: list, tensors: dict) -> Tuple[Any, ...]:
         return tuple(self._compile_arg(arg, tensors) for arg in args)
-
-    def _compile_kwargs(self, kwargs: dict, tensors: dict) -> Dict[str, Any]:
-        return {k: self._compile_arg(v, tensors) for k, v in kwargs.items()}
 
     def _compile_arg(self, arg: Any, tensors: dict) -> Any:
         """Pre-compile a single argument to a typed object.
@@ -4824,7 +4795,6 @@ class TritonSequence:
                   f"({_drain_stats[1]} cliff/count, {_drain_stats[2]} pressure)",
                   flush=True)
 
-
     @staticmethod
     def _find_cuda_arg(args) -> 'Optional[int]':
         """Return the device_idx of the first CUDA NBXTensor in args (scanning
@@ -4898,7 +4868,6 @@ class TritonSequence:
             else:
                 new_kw[k] = v
         return new_kw
-
 
     def gather_outputs(self, output_ids: Optional[List[str]] = None) -> Dict[str, Any]:
         """Read output tensors from arena."""
