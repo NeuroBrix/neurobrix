@@ -29,6 +29,7 @@ def hw(tmp_path, monkeypatch):
                         {"memory_gbps": 500.0, "h2d_gbps": 10.0, "d2h_gbps": 9.0, "h2d_pageable_gbps": 5.0})
     monkeypatch.setattr(P, "host_matmul_gflops", lambda *a, **k: CALLS.append(("hmm",)) or 300.0)
     monkeypatch.setattr(P, "host_memory_gbps", lambda *a, **k: CALLS.append(("hmem",)) or 20.0)
+    monkeypatch.setattr(P, "vmm_chunk_bytes", lambda *a, **k: CALLS.append(("vmm",)) or 2 << 20)
     return tmp_path
 
 
@@ -41,11 +42,12 @@ DEV = {"brand": "nvidia", "model": "Unknown-Card", "architecture": "unknownarch"
 
 def test_a_generated_profile_without_facts_is_probed_once_and_written(hw):
     _profile(hw, "default-abc", DEV)
-    assert set(A.ensure_measured_facts("default-abc")) == {"measured", "host_measured"}
+    assert set(A.ensure_measured_facts("default-abc")) == {"measured", "host_measured", "vmm_chunk_bytes"}
     data = yaml.safe_load((hw / "default-abc.yml").read_text())
     for d in data["devices"]:
         assert d["measured"]["matmul_tflops"] == {"float16": 10.0, "float32": 10.0} and d["measured"]["h2d_gbps"] == 10.0
         assert "first launch" in d["measured"]["source"] and "weight_load_gbps" not in d["measured"]
+        assert d["measured"]["vmm_chunk_bytes"] == 2 << 20
     assert data["host_measured"]["host_memory_gbps"] == 20
     CALLS.clear()
     assert A.ensure_measured_facts("default-abc") == {} and CALLS == []
@@ -63,7 +65,8 @@ def test_what_the_vendor_file_states_is_not_probed_again(hw):
     """A V100 (volta.yml states the device facts): only the host facts, which volta.yml does not state, are probed."""
     _profile(hw, "default-v100", {"brand": "nvidia", "model": "Tesla V100-SXM2-16GB", "architecture": "volta",
                                   "compute_capability": "7.0", "supports_dtypes": ["float16", "float32"]})
-    assert set(A.ensure_measured_facts("default-v100")) == {"host_measured"}
+    # the expandable pool's chunk is the machine's measure, never the vendor file's (R16)
+    assert set(A.ensure_measured_facts("default-v100")) == {"host_measured", "vmm_chunk_bytes"}
     assert not any(c[0] in ("mm", "copies") for c in CALLS), CALLS
 
 
