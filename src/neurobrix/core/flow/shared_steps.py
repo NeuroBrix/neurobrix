@@ -119,6 +119,38 @@ _JOINT_KEYS = {normalize_tensor_name_strict(vendor): role for vendor, role in (
     ("joint_net.2.weight", "out_weight"), ("joint_net.2.bias", "out_bias"))}
 
 
+class AudioLLMSteps:
+    """The steps the compiled `AudioLLMEngine` and the Triton `TritonAudioLLMEngine` ran alike (core/flow/audio_llm.py,
+    triton/flow/audio_llm.py)."""
+
+    def _get_embed_weight(self, comp_name: str):
+        """The token-embedding weight [vocab, hidden] (each branch's tensor), from the LLM or its embed_tokens component."""
+        # 1. Check inside the LLM component
+        executor = self.ctx.executors.get(comp_name)
+        if executor is not None:
+            for key in executor._weights:
+                if "embed_tokens" in key or "token_embed" in key:
+                    return executor._weights[key]
+        # 2. Check separate embed_tokens component
+        embed_executor = self.ctx.executors.get("embed_tokens")
+        if embed_executor is not None:
+            self._ensure_weights_loaded("embed_tokens")
+            for key in embed_executor._weights:
+                if key == "weight" or "embed" in key:
+                    w = embed_executor._weights[key]
+                    if w.ndim == 2 and w.shape[0] > w.shape[1]:
+                        return w
+        return None
+
+    def _get_last_forward_output(self, forward_stages: List[Dict]):
+        """Get output from the last forward stage (projector output)."""
+        for s in reversed(forward_stages):
+            output = self._get_component_output(s["component"])
+            if output is not None:
+                return output
+        return None
+
+
 class RNNTSteps:
     """The steps the compiled `RNNTEngine` and the Triton `TritonRNNTEngine` ran alike (core/flow/rnnt.py, triton/flow/rnnt.py)."""
 

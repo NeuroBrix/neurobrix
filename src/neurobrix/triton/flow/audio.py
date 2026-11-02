@@ -13,7 +13,7 @@ No torch imports in this file.
 import time
 import numpy as np
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List
 
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype
@@ -418,36 +418,6 @@ def _torch_to_nbx(tensor) -> NBXTensor:
         return tensor
     arr = tensor.detach().cpu().numpy()
     return NBXTensor.from_numpy(arr)
-
-
-def _get_component_input_shape(ctx, comp_name) -> Optional[Tuple[int, ...]]:
-    """Read first input tensor shape from component's graph (DATA-DRIVEN)."""
-    if comp_name is None:
-        return None
-    executor = ctx.executors.get(comp_name)
-    if executor is None:
-        return None
-    dag = getattr(executor, '_dag', None)
-    if dag is None:
-        return None
-    for tid, spec in dag.get("tensors", {}).items():
-        is_input = (
-            spec.get("type") == "input"
-            or spec.get("input_name") is not None
-            or tid.startswith("input::")
-        )
-        if is_input:
-            shape = spec.get("shape", [])
-            resolved = []
-            for dim in shape:
-                if isinstance(dim, dict):
-                    resolved.append(dim.get("trace_value", dim.get("trace", 0)))
-                elif isinstance(dim, int):
-                    resolved.append(dim)
-                else:
-                    resolved.append(0)
-            return tuple(resolved)
-    return None
 
 
 def _find_model_config_path(ctx) -> Path:

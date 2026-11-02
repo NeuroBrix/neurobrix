@@ -19,6 +19,7 @@ from .base import ComponentFlowHandler, register_flow
 from .table_gather import gather_rows
 from neurobrix.core.memory.manager import release_flow_memory
 from neurobrix.core.flow.shared_steps import effective_sampling as _effective_sampling   # both branches read the sampling alike
+from neurobrix.core.flow.shared_steps import AudioLLMSteps   # the steps both branches share
 
 
 # A token table and the context it feeds may live on different devices: under a
@@ -37,7 +38,7 @@ def project_on_table(hidden: torch.Tensor, table: torch.Tensor) -> torch.Tensor:
 
 
 @register_flow("audio_llm")
-class AudioLLMEngine(ComponentFlowHandler):
+class AudioLLMEngine(AudioLLMSteps, ComponentFlowHandler):
     """
     Audio-conditioned LLM: encode audio → project → LLM autoregressive decode.
 
@@ -283,32 +284,6 @@ class AudioLLMEngine(ComponentFlowHandler):
         return self.ctx.variable_resolver.resolve_all()
 
     # ─── Helpers ──────────────────────────────────────────────────────────────
-
-    def _get_last_forward_output(self, forward_stages: List[Dict]) -> Optional[torch.Tensor]:
-        """Get output from the last forward stage (projector output)."""
-        for s in reversed(forward_stages):
-            output = self._get_component_output(s["component"])
-            if output is not None:
-                return output
-        return None
-
-    def _get_embed_weight(self, comp_name: str) -> Optional[torch.Tensor]:
-        # 1. Check inside the LLM component
-        executor = self.ctx.executors.get(comp_name)
-        if executor is not None:
-            for key in executor._weights:
-                if "embed_tokens" in key or "token_embed" in key:
-                    return executor._weights[key]
-        # 2. Check separate embed_tokens component
-        embed_executor = self.ctx.executors.get("embed_tokens")
-        if embed_executor is not None:
-            self._ensure_weights_loaded("embed_tokens")
-            for key in embed_executor._weights:
-                if key == "weight" or "embed" in key:
-                    w = embed_executor._weights[key]
-                    if w.ndim == 2 and w.shape[0] > w.shape[1]:
-                        return w
-        return None
 
     def _compute_logits(
         self, hidden_states: torch.Tensor, embed_weight: Optional[torch.Tensor],

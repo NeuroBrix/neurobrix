@@ -17,11 +17,12 @@ ZERO HARDCODE: All parameters from NBX container.
 import time
 import torch
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List
 
 from .base import ComponentFlowHandler, register_flow
 from neurobrix.core.memory.manager import release_flow_memory
 from neurobrix.core.flow.shared_steps import AudioSteps   # the steps both branches share
+from neurobrix.core.flow.audio_utils import get_component_input_shape
 
 
 #: The stage executions the audio flow runs. Every execution a container of this flow declares
@@ -124,7 +125,7 @@ class AudioEngine(AudioSteps, ComponentFlowHandler):
 
         # Read expected input shape from first stage's graph (DATA-DRIVEN)
         first_comp = stages[0]["component"] if stages else None
-        input_shape = self._get_component_input_shape(first_comp)
+        input_shape = get_component_input_shape(self.ctx, first_comp)
 
         # Auto-correct preprocessing type from graph input shape when topology is wrong
         # [1, mel_bins, frames] with mel_bins in {40,64,80,128} -> mel_spectrogram
@@ -671,34 +672,4 @@ class AudioEngine(AudioSteps, ComponentFlowHandler):
             "with the current builder which embeds these directories."
         )
 
-    def _get_component_input_shape(self, comp_name: Optional[str]) -> Optional[Tuple[int, ...]]:
-        """Read first input tensor shape from component's graph.json (DATA-DRIVEN)."""
-        if comp_name is None:
-            return None
-        executor = self.ctx.executors.get(comp_name)
-        if executor is None:
-            return None
-        dag = getattr(executor, '_dag', None)
-        if dag is None:
-            return None
-        for tid, spec in dag.get("tensors", {}).items():
-            # Match input tensors by: type field, input_name field, or tensor ID prefix
-            is_input = (
-                spec.get("type") == "input"
-                or spec.get("input_name") is not None
-                or tid.startswith("input::")
-            )
-            if is_input:
-                shape = spec.get("shape", [])
-                # Resolve any symbolic dims to trace_value for shape hint
-                resolved = []
-                for dim in shape:
-                    if isinstance(dim, dict):
-                        resolved.append(dim.get("trace_value", dim.get("trace", 0)))
-                    elif isinstance(dim, int):
-                        resolved.append(dim)
-                    else:
-                        resolved.append(0)
-                return tuple(resolved)
-        return None
 

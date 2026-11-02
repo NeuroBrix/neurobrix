@@ -38,37 +38,17 @@ from neurobrix.core.module.audio.mel_dsp import (  # noqa: F401
     _raw_waveform,
     extract_features_np,
 )
+from neurobrix.core.flow.audio_utils import (   # torch-free: the compiled flow's own readers, the same
+    get_component_input_shape, postprocess_text_output as postprocess_text_output_np)
 
 
 # ---------------------------------------------------------------------------
 # binding — zero-torch mirror of audio_utils.preprocess_audio_input
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
-# torch-free helpers (duplicated from core/flow/audio_utils.py — deliberate
-# two-modes duplication so the triton path imports nothing that pulls torch)
+# torch-free helpers (core/flow/audio_utils imports no torch either: the readers
+# identical there — input shape, text decode — are imported from it above)
 # ---------------------------------------------------------------------------
-def _component_input_shape(ctx, comp_name):
-    if comp_name is None:
-        return None
-    executor = ctx.executors.get(comp_name)
-    if executor is None:
-        return None
-    dag = getattr(executor, "_dag", None)
-    if dag is None:
-        return None
-    for tid, spec in dag.get("tensors", {}).items():
-        if (spec.get("type") == "input" or spec.get("input_name") is not None
-                or tid.startswith("input::")):
-            resolved = []
-            for dim in spec.get("shape", []):
-                if isinstance(dim, dict):
-                    resolved.append(dim.get("trace_value", dim.get("trace", 0)))
-                elif isinstance(dim, int):
-                    resolved.append(dim)
-                else:
-                    resolved.append(0)
-            return tuple(resolved)
-    return None
 
 
 def _model_config_path(ctx) -> Path:
@@ -219,21 +199,6 @@ def preprocess_phonemizer_input_np(engine, prompt: str, phoneme_vocab: Dict) -> 
     _load_voicepack_np(engine, actual_len)
 
 
-def postprocess_text_output_np(ctx) -> None:
-    """Decode generated token IDs to text (torch-free mirror of audio_utils)."""
-    generated_ids = ctx.variable_resolver.resolved.get("global.generated_token_ids")
-    if generated_ids is None:
-        return
-    tokenizer = ctx.modules.get("tokenizer")
-    if tokenizer is not None:
-        from neurobrix.core.module.audio.output_processor import AudioOutputProcessor
-        text = AudioOutputProcessor.decode_tokens(generated_ids, tokenizer)
-    else:
-        text = str(generated_ids)
-    ctx.variable_resolver.resolved["global.transcription"] = text
-    print(f"   [Output] Transcription: {text[:100]}{'...' if len(text) > 100 else ''}")
-
-
 def resolve_preprocessing(preprocessing: str, input_shape) -> str:
     """The feature extractor the first stage's graph shape asks for (mirror of the torch path):
     a raw-waveform declaration on a graph that takes [B, mels, frames] is a mel spectrogram, one on
@@ -265,7 +230,6 @@ def fit_features(feats: np.ndarray, input_shape) -> np.ndarray:
 
 def preprocess_audio_input_np(ctx, audio_config: Dict, stages: List[Dict]) -> None:
     """Load audio + extract features in numpy, bind as NBXTensor (no torch)."""
-    get_component_input_shape = _component_input_shape
     find_model_config_path = _model_config_path
 
     input_config = audio_config.get("input", {})

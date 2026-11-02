@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional
 
 from neurobrix import decode_progress, decode_stop
 from neurobrix.core.flow.shared_steps import effective_sampling as _effective_sampling   # both branches read the sampling alike
+from neurobrix.core.flow.shared_steps import AudioLLMSteps   # the steps both branches share
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype
@@ -97,7 +98,7 @@ def _sample_token_nbx(
     return int(nxt.item())
 
 
-class TritonAudioLLMEngine(ComponentFlowHandler):
+class TritonAudioLLMEngine(AudioLLMSteps, ComponentFlowHandler):
     """Audio-conditioned LLM (R33): encode audio → project → LLM
     autoregressive decode with audio embeddings. Mirror of
     core/flow/audio_llm.py AudioLLMEngine."""
@@ -351,30 +352,6 @@ class TritonAudioLLMEngine(ComponentFlowHandler):
             v = resolved.get(key)
             if isinstance(v, NBXTensor):
                 return v
-        return None
-
-    def _get_last_forward_output(
-            self, forward_stages: List[Dict]) -> Optional[NBXTensor]:
-        for s in reversed(forward_stages):
-            out = self._get_component_output(s["component"])
-            if out is not None:
-                return out
-        return None
-
-    def _get_embed_weight(self, comp_name: str) -> Optional[NBXTensor]:
-        executor = self.ctx.executors.get(comp_name)
-        if executor is not None:
-            for key in executor._weights:
-                if "embed_tokens" in key or "token_embed" in key:
-                    return executor._weights[key]
-        embed_executor = self.ctx.executors.get("embed_tokens")
-        if embed_executor is not None:
-            self._ensure_weights_loaded("embed_tokens")
-            for key in embed_executor._weights:
-                if key == "weight" or "embed" in key:
-                    wt = embed_executor._weights[key]
-                    if wt.ndim == 2 and wt.shape[0] > wt.shape[1]:
-                        return wt
         return None
 
     def _compute_logits(
