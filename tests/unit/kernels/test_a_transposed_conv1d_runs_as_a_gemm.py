@@ -81,5 +81,8 @@ def test_the_census_derives_the_gemm_s_key():
     from nbxtensor.dtype.nbx_dtype import NBXDtype
     h = NBXDtype.float16
     got = LK.conv_launches([1, 32, 50], [32, 1, 3], [4], [2], [1], True, 1, h, h, None, 1 << 32, native_bf16=False)
-    assert got == LK.mm_launches(3, 32, 50, h, h, False)          # M = C_out * K = 3: below the unit, keyed
+    assert got == LK.mm_launches(50, 32, 3, h, h, False)          # the length on M (classed), N = C_out * K
+    # the key classes the length: two lengths of one bucket form one key (on N each length was its own key)
+    a = LK.conv_launches([1, 32, 49], [32, 1, 3], [4], [2], [1], True, 1, h, h, None, 1 << 32, native_bf16=False)
+    assert LK.bucket_of("M", 49) != LK.bucket_of("M", 50) or a == got
     assert LK.conv_launches([1, 32, 50], [32, 1, 3], [4], [2], [1], True, 32, h, h, None, 1 << 32, native_bf16=False) == []

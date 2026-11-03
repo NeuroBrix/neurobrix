@@ -317,9 +317,10 @@ def conv_transpose_wrapper(
 
 
 def _conv_transpose1d_gemm(x, weight, bias, stride, padding):
-    """A 1-D transposed convolution (groups 1, dilation 1) as a GEMM and an overlap-add: Y = W^T [C_out * K, C_in] @
-    x [C_in, L_in] through `mm` (the matrix unit where the profile declares one), then `col2im1d_kernel` gathers each
-    output position's ceil(K / stride) taps. The scatter kernel looped over every input channel and tap per output
+    """A 1-D transposed convolution (groups 1, dilation 1) as a GEMM and an overlap-add: Y = x^T [L_in, C_in] @
+    W [C_in, C_out * K] through `mm` (the matrix unit where the profile declares one) — the length on the GEMM's rows,
+    the dimension its key classes (the length on its columns gave one key per length: 6 135 on chatterbox, the Mac
+    2026-11-03) — then `col2im1d_kernel` gathers each output position's ceil(K / stride) taps. The scatter kernel looped over every input channel and tap per output
     element: the vocoders' upsamplers on a V100 ran 20-307x slower than this (768 -> 384 channels, K 16, stride 8:
     103 ms against 0.34 ms; torch eager 0.21 ms — the kernel-level benchmark, 2026-11-03). Same narrowing and output
     dtype as `conv_transpose_wrapper`; `launch_keys.conv_launches` derives the GEMM's keys."""
@@ -337,12 +338,12 @@ def _conv_transpose1d_gemm(x, weight, bias, stride, padding):
     L_out = (L_in - 1) * stride - 2 * padding + K
     out_dtype = _core._NBX_COMPUTE_DTYPE if _core._NBX_COMPUTE_DTYPE is not None else x.dtype
     output = NBXTensor.empty((N, C_out, L_out), device=x.device, dtype=out_dtype)
-    w_t = weight.contiguous().reshape(C_in, C_out * K).t()          # [C_out * K, C_in]
+    w_2d = weight.contiguous().reshape(C_in, C_out * K)             # [C_in, C_out * K]
     x_c = x.contiguous()
     taps = -(-K // stride)
     meta = _ew_meta(C_out * L_out)          # a gather of TAPS loads per element: the element-wise class's certified tile
     for n in range(N):
-        y = mm(w_t, x_c[n]).contiguous()                                # [C_out * K, L_in]
+        y = mm(x_c[n].t().contiguous(), w_2d)                           # [L_in, C_out * K]
         set_device(y)
         col2im1d_kernel[(C_out, triton.cdiv(L_out, meta['BLOCK_SIZE']))](
             y, output[n], C_out, K, L_in, L_out, stride, padding, TAPS=taps, **meta)
