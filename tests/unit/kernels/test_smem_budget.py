@@ -222,7 +222,7 @@ _MAY_OMIT_PREFIX = {
 _MAY_OMIT.update({f"matrix_unit.{k}": (
     "optional by contract (kernels/ops/_configs.matrix_unit): only an arch whose matrix unit Triton does "
     "not lower `tl.dot` onto declares one (Volta, triton-lang/triton#5066); absent, every kernel keeps tl.dot")
-    for k in ("shape", "operand_dtype", "accumulator_dtype", "flash", "mm", "fp32_split.operands", "fp32_split.mm", "fp32_split.flash")})
+    for k in ("shape", "operand_dtype", "accumulator_dtype", "flash", "mm", "fp32_split.operands", "fp32_split.mm", "fp32_split.flash", "fp32_split.conv")})
 
 
 def _flatten(d, prefix=""):

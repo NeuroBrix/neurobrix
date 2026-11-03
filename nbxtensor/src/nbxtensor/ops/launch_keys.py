@@ -188,10 +188,22 @@ def gemm_row_representative(m_bucket: int, a: NBXDtype, b: NBXDtype) -> Optional
     return None
 
 
-def matrix_unit_native(a: NBXDtype, b: NBXDtype, M: int, unit: Optional[dict] = None) -> bool:
-    """Both operands are the unit's operand dtype in memory: what the convolution's implicit GEMM
-    (ops/conv2d_m8n8k4.py) carries until it takes the split representation too."""
-    return matrix_unit_operands(a, b, M, unit) == ("native", "native")
+def matrix_unit_conv_operands(x: NBXDtype, w: NBXDtype, M: int, N: int, kh: int, kw: int,
+                              unit: Optional[dict] = None):
+    """(the operands' representations, the tile rows) of a convolution's implicit GEMM on the profile's matrix unit
+    (M output positions, N output channels per group, a kh x kw window), or None: the GEMM's own rule
+    (`matrix_unit_operands`) and, for a split operand, a `matrix_unit.fp32_split.conv` row for that window whose tile
+    the GEMM fills (M >= block_m, N >= block_n) — the split was measured faster than the FMA path only there (a 3x3 is
+    slower at every tile: volta.yml). Native operands take the `mm` rows (rows None). The wrappers, their cost and the
+    census ask this one function."""
+    from nbxtensor.ops._configs import matrix_unit
+    reps = matrix_unit_operands(x, w, M, unit)
+    if reps is None or "split" not in reps:
+        return None if reps is None else (reps, None)
+    mu = matrix_unit() if unit is None else unit
+    rows = [r for r in ((mu.get("fp32_split") or {}).get("conv") or [])
+            if [int(v) for v in r["kernel"]] == [int(kh), int(kw)] and M >= int(r["block_m"]) and N >= int(r["block_n"])]
+    return (reps, rows) if rows else None
 
 
 def mv_launches(N: int, K: int, mat: NBXDtype, vec: NBXDtype, native_bf16: bool,
@@ -716,7 +728,7 @@ def conv2d_band_rows(N: int, out_c: int, out_h: int, out_w: int, out_bytes: int,
 def conv2d_launches(N: int, in_c: int, in_h: int, in_w: int, out_c: int, kh: int, kw: int,
                     sh: int, sw: int, ph: int, pw: int, dh: int, dw: int, groups: int,
                     x: NBXDtype, w: NBXDtype, compute: Optional[NBXDtype], band_bytes: int,
-                    depthwise_enabled: bool = True) -> List[Launch]:
+                    depthwise_enabled: bool = True, unit: Optional[dict] = None) -> List[Launch]:
     """`conv2d_wrapper` on a 4-D weight: narrowing; the depthwise stencil when groups == in_c ==
     out_c at dilation 1; band streaming (per-band recursion at the original padding) when the
     output, sized at the INPUT's dtype, exceeds `band_bytes`; otherwise one `conv2d_forward_kernel`
@@ -745,11 +757,11 @@ def conv2d_launches(N: int, in_c: int, in_h: int, in_w: int, out_c: int, kh: int
             if ih1 <= ih0:
                 continue
             for l in conv2d_launches(N, in_c, ih1 - ih0, in_w, out_c, kh, kw, sh, sw, ph, pw, dh, dw,
-                                     groups, x, w, compute, band_bytes, depthwise_enabled):
+                                     groups, x, w, compute, band_bytes, depthwise_enabled, unit):
                 if l not in out_launches:
                     out_launches.append(l)
         return out_launches
-    if matrix_unit_native(x, w, N * out_h * out_w):  # the implicit GEMM on the profile's matrix unit: no key
+    if matrix_unit_conv_operands(x, w, N * out_h * out_w, out_c // max(1, groups), kh, kw, unit) is not None:  # on the matrix unit: no key
         return []
     iw_k, ow_k = conv_width_key(in_h, out_h, in_w, out_w, kw, sw, pw, dw)
     return [(CONV2D, (N, in_c, in_h, iw_k, out_c, out_h, ow_k, kh, kw, sh, sw, ph, pw, dh, dw, groups,

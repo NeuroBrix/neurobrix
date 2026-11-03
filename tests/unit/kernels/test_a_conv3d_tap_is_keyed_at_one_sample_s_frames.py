@@ -5,6 +5,9 @@
 Other temporal strides stack every sample's frames: B*T_out. And `aten::_safe_softmax` runs the softmax wrapper
 (`kernels/dispatch.py`), so the census derives its key (Ming-Lite's vision softmax missed the same gate).
 
+The taps here are 3x3: an fp32 1x1 tap runs on the matrix unit through the split where the profile measured it
+faster (volta.yml `fp32_split.conv`) and forms no key, and this cell is about the key's batch.
+
 Injection (seen red, then restored green, 2026-10-22): the 5-D batch back to B*T_out -> the first cell red; `_safe_softmax`
 out of the census's softmax kinds -> the last cell red."""
 from __future__ import annotations
@@ -24,13 +27,13 @@ def _batch(launches):
 
 
 def test_a_stride_one_conv3d_keys_one_sample_s_frames():
-    L = LK.conv_launches([2, 128, 11, 21, 42], [2240, 128, 1, 1, 1], [1, 1, 1], [0, 0, 0], [1, 1, 1], False, 1,
+    L = LK.conv_launches([2, 128, 11, 21, 42], [2240, 128, 1, 3, 3], [1, 1, 1], [0, 1, 1], [1, 1, 1], False, 1,
                          F32, F32, F32, 1 << 40)
     assert _batch(L) == {11}, L
 
 
 def test_a_strided_conv3d_stacks_every_sample_s_frames():
-    L = LK.conv_launches([2, 128, 11, 21, 42], [2240, 128, 1, 1, 1], [2, 1, 1], [0, 0, 0], [1, 1, 1], False, 1,
+    L = LK.conv_launches([2, 128, 11, 21, 42], [2240, 128, 1, 3, 3], [2, 1, 1], [0, 1, 1], [1, 1, 1], False, 1,
                          F32, F32, F32, 1 << 40)
     assert _batch(L) == {2 * 6}, L
 

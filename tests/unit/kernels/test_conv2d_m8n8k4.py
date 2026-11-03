@@ -3,8 +3,9 @@
 Where the hardware profile declares `matrix_unit` with `mm` tiles (volta.yml), a convolution whose input and weight
 are both the unit's operand dtype in memory runs the implicit GEMM `kernels/ops/conv2d_m8n8k4.py`. Each clause is
 proven against an fp64 oracle computed in-test with the route asserted TAKEN: padding, stride, dilation, groups,
-every M/N/K tail, a strided (non-contiguous) input, the fused bias, the output dtype. An fp32 operand must NOT take
-the route, and the derived census lists no key where it runs. Skipped where the profile declares no matrix unit.
+every M/N/K tail, a strided (non-contiguous) input, the fused bias, the output dtype. An fp32 operand takes it only
+through the profile's `fp32_split` (tests/unit/kernels/test_conv2d_fp32_split.py), never rounded to fp16 without it,
+and the derived census lists no key where it runs. Skipped where the profile declares no matrix unit.
 
   PYTHONPATH=src python3 -m pytest tests/unit/kernels/test_conv2d_m8n8k4.py -v
 """
@@ -110,12 +111,20 @@ def test_a_strided_input_is_read_through_its_strides(taken):
     assert rel < max(float(np.finfo(out.dtype).eps), 1e-5), f"rel {rel:.2e}"
 
 
-def test_an_fp32_operand_keeps_the_exact_path(taken):
+def test_without_the_split_an_fp32_operand_keeps_the_exact_path(taken, monkeypatch):
+    """The representation is the profile's decision: with `fp32_split` withheld, an fp32 operand never reaches the
+    unit (rounding it to fp16 would be wrong)."""
+    import importlib
+    from nbxtensor.ops import _configs as C
+    mu = {k: v for k, v in C.matrix_unit().items() if k != "fp32_split"}
+    monkeypatch.setattr(C, "matrix_unit", lambda: mu)
+    for _m in (W, *(importlib.import_module(f"nbxtensor.ops.{f}") for f in W._FAMILY_MODULES)):
+        monkeypatch.setattr(_m, "_matrix_unit", lambda: mu)
     rng = np.random.default_rng(3)
     x = rng.standard_normal((1, 8, 12, 12)).astype(np.float32) * 70000.0     # beyond fp16
     w = rng.standard_normal((8, 8, 3, 3)).astype(np.float32)
     got = _nbx_conv_wrappers.conv2d_wrapper(_nb(x), _nb(w), None, stride=[1, 1], padding=[1, 1], dilation=[1, 1], groups=1).numpy()
-    assert not taken, "an fp32 operand took the fp16 matrix unit"
+    assert not taken, "an fp32 operand took the fp16 matrix unit without the split"
     assert np.isfinite(got).all()
 
 
@@ -125,4 +134,5 @@ def test_the_census_derives_no_key_where_the_unit_runs():
     h, f = NBXDtype.float16, NBXDtype.float32
     args = (1, 64, 32, 32, 128, 3, 3, 1, 1, 1, 1, 1, 1, 1)
     assert LK.conv2d_launches(*args, h, h, None, 1 << 32) == []
-    assert LK.conv2d_launches(*args, f, f, None, 1 << 32) != []
+    mu = {k: v for k, v in W._matrix_unit().items() if k != "fp32_split"}
+    assert LK.conv2d_launches(*args, f, f, None, 1 << 32, unit=mu) != []

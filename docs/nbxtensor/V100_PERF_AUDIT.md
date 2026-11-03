@@ -92,9 +92,30 @@ path, on the census's own fp32 shapes:
 
 Other tiles measured: 64 × 64 × 32 (2 × 2), 64 × 32 × 32 (2 × 1), 32 × 64 × 32 (1 × 2), 64 × 128 × 32 (2 × 2),
 64 × 64 × 16 (2 × 2), all slower than 128 × 64 × 32 on the 3 × 3 shapes. On Volta, three MMAs plus the hi/lo staging of
-the gathered input tile cost as much as the FMA path's fp32 convolution, already at half the fp32 peak. Only the
-1 × 1 convolution gains. The routing is therefore not enabled; the choice (1 × 1 only, a better split kernel, or
-nothing) is the owner's.
+the gathered input tile cost as much as the FMA path's fp32 convolution, already at half the fp32 peak.
+
+The owner's decision (2026-11-03 10:32): route the 1 × 1 convolutions only, by a measured row. On the census's fp32
+1 × 1 classes, at the best row (128 × 64 × 16, 4 × 1 warps):
+
+| shape (N, C, H, W → O) | FMA | split | ratio |
+|---|---|---|---|
+| 1, 384, 60 × 104 → 1152 | 1.50 ms | 0.77 ms | 1.95 |
+| 1, 384, 60 × 104 → 384 | 0.71 ms | 0.45 ms | 1.58 |
+| 2, 384, 120 × 208 → 768 | 4.05 ms | 2.76 ms | 1.47 |
+| 12, 512, 160² → 256 | 10.29 ms | 6.72 ms | 1.53 |
+| 12, 256, 160² → 256 | 8.92 ms | 5.17 ms | 1.72 |
+| 24, 128, 320² → 128 | 10.65 ms | 8.47 ms | 1.26 |
+| 2, 192, 120 × 208 → 384 | 1.27 ms | 1.25 ms | 1.01 |
+| 1, 32, 60 × 104 → 32 | 0.29 ms | 0.27 ms | 1.07 |
+| 1, 16, 60 × 104 → 16 | 0.40 ms | 1.10 ms | 0.36 |
+
+The profile carries the row (`matrix_unit.fp32_split.conv`, kernel 1 × 1); a split convolution takes the unit only
+where a row exists for its window and its tile fills (M ≥ block_m, output channels per group ≥ block_n — the 16-channel
+case keeps the FMA path), one function deciding for the wrapper, its cost and the census
+(`launch_keys.matrix_unit_conv_operands`). The 3 × 3 convolutions keep the FMA path. On CogVideoX-2b (32 GB, the gate
+request, through the entry point) the time to output went from 137.3 / 135.4 s to 135.8 / 130.7 s, the video the same
+to the eye (PSNR 54.4 dB between the two). Whether cuDNN's own fp32 3 × 3 beats this FMA path is read from the
+kernel-level benchmark: if it does, the 3 × 3 is a loss to audit and a better split kernel returns to the plan.
 
 ## 6. Open
 

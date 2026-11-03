@@ -56,6 +56,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **nbxtensor's `addmm` refuses a per-row bias `[M, N]` above four rows instead of computing it wrong**: its kernel adds one bias row to every output row, so such a bias was applied with its first row only. It is now refused by name (a bias `[N]` or `[1, N]`, which every catalogue model uses, is unchanged; a per-row bias at up to four rows is still served).
 
 ### Changed
+- **An fp32 1 x 1 convolution runs on the V100's matrix unit**: the convolution's implicit GEMM carries fp32 operands as hi + lo through three MMAs (as the GEMM already did), but only where the hardware profile declares a measured row for the kernel window and the tile fills — on a V100 the 1 x 1 window (1.26-1.95 times faster on the video VAEs' shapes); a 3 x 3 measured slower than the FMA path at every tile and keeps it. The census forms no autotune key where the unit runs.
 - **`neurobrix import` names itself to the hub**: the download request carries `X-NeuroBrix-Client:
   neurobrix-cli/<version>` beside the licence acceptance, so the hub serves the engine's command line (where the
   licence is accepted at the terminal) without a website account.

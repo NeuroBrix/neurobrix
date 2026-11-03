@@ -714,8 +714,8 @@ def matrix_unit_takes(a: NBXDtype, b: NBXDtype, M: int)
     # The profile's matrix unit runs this GEMM (`matrix_unit_operands`).
 def gemm_row_representative(m_bucket: int, a: NBXDtype, b: NBXDtype)
     # The largest row count M whose GEMM launch forms the autotune key of M bucket `m_bucket`
-def matrix_unit_native(a: NBXDtype, b: NBXDtype, M: int, unit: Optional[dict]=None)
-    # Both operands are the unit's operand dtype in memory
+def matrix_unit_conv_operands(x: NBXDtype, w: NBXDtype, M: int, N: int, kh: int, kw: int, unit: Optional[dict]=None)
+    # (the operands' representations, the tile rows) of a convolution's implicit GEMM on the matrix unit, or None
 def mv_launches(N: int, K: int, mat: NBXDtype, vec: NBXDtype, native_bf16: bool, force_accum: bool=False, contract_half: bool=False)
     # `mv_wrapper` on a [N, K] matrix and a [K] vector
 def addmv_launches(N: int, K: int, mat: NBXDtype, vec: NBXDtype, bias: NBXDtype, native_bf16: bool, force_accum: bool=False, contract_half: bool=False)
@@ -789,7 +789,7 @@ def conv2d_route(N: int, in_c: int, out_c: int, out_h: int, out_w: int, dh: int,
     # "depthwise" (groups == in_c == out_c at dilation 1), "band" (the output, sized at the input's dtype, over `band_bytes`) or "plain" — the order the wrapper tests them in.
 class ConvRowOverBand(ValueError)
     # A convolution whose single output row is over the band budget
-def conv2d_launches(N: int, in_c: int, in_h: int, in_w: int, out_c: int, kh: int, kw: int, sh: int, sw: int, ph: int, pw: int, dh: int, dw: int, groups: int, x: NBXDtype, w: NBXDtype, compute: Optional[NBXDtype], band_bytes: int, depthwise_enabled: bool=True)
+def conv2d_launches(N: int, in_c: int, in_h: int, in_w: int, out_c: int, kh: int, kw: int, sh: int, sw: int, ph: int, pw: int, dh: int, dw: int, groups: int, x: NBXDtype, w: NBXDtype, compute: Optional[NBXDtype], band_bytes: int, depthwise_enabled: bool=True, unit: Optional[dict]=None)
     # `conv2d_wrapper` on a 4-D weight
 def tiled_conv2d_launches(N: int, in_c: int, IH: int, IW: int, out_c: int, kh: int, kw: int, sh: int, sw: int, ph: int, pw: int, dh: int, dw: int, groups: int, x: NBXDtype, w: NBXDtype, compute: Optional[NBXDtype], band_bytes: int, tile_factor: int)
     # The launches of an op-level tiled conv

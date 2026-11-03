@@ -4,12 +4,18 @@ An implicit GEMM over the operands in place: per group g, C[m, n] = sum_k A[m, k
 m = (batch, oh, ow), n = the group's output channel and k = (c, r, s) flattened in the weight's own order, so a
 contiguous weight [OC, IC/g, KH, KW] is a k-contiguous B read in place (no copy, no im2col buffer) and A is gathered
 from the input through its four strides (padding, stride and dilation are masks and index arithmetic). Same contract
-as `conv2d_forward_kernel` (ops/conv2d.py) for operands that are both the unit's operand dtype in memory: fp32
+as `conv2d_forward_kernel` (ops/conv2d.py): fp32
 accumulation (one K tile in the unit, which rounds toward zero, the tiles summed on the FMA units with round to
 nearest — ops/matmul_m8n8k4.py), int64 offsets, every tail masked, the output cast to C's dtype; the bias, when given, is added to the
 fp32 accumulator before that single rounding (the product of two fp16 values is exact in fp32, so the sums are the
 tl.dot kernel's in another order). The tile is the profile's (`matrix_unit.mm`), never tuned at run time: no
 autotune key, nothing to certify.
+
+An operand the DtypeEngine carries SPLIT (SPLIT_A / SPLIT_B: `nbxtensor/dtype/operands.matrix_unit_representation`, the
+profile's `matrix_unit.fp32_split` — the video VAEs' fp32 convolutions) is staged as the GEMM stages it
+(ops/matmul_m8n8k4.py `_stage_split`): hi + lo of the unit's operand dtype under a power-of-two scale per row of A
+(an output position) or column of B (an output channel) of each K tile, three MMAs into two accumulators, the tile's
+sum rescaled and added to the fp32 accumulator on the FMA units.
 
 A is loaded with consecutive lanes on consecutive output rows (consecutive `ow`: coalesced at stride 1), each lane
 holding 4 consecutive k — one 8-byte store into the [k-step x rows, 4] staging of ops/mma_m8n8k4.py.
@@ -21,7 +27,7 @@ from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 
 from .mma_m8n8k4 import acc_rows_cols, mma_k4, stage_k_inner
-from .matmul_m8n8k4 import mm_layouts
+from .matmul_m8n8k4 import _bcast_cols, _bcast_rows, _stage_split, mm_layouts
 
 
 @gluon.jit
@@ -34,6 +40,7 @@ def conv2d_m8n8k4_kernel(
     KH: gl.constexpr, KW: gl.constexpr, SH_: gl.constexpr, SW_: gl.constexpr, PH: gl.constexpr,
     PW: gl.constexpr, DH: gl.constexpr, DW: gl.constexpr,
     HAS_BIAS: gl.constexpr,
+    SPLIT_A: gl.constexpr, SPLIT_B: gl.constexpr, HI_EXP: gl.constexpr, LO_SHIFT: gl.constexpr,
     MB: gl.constexpr, NB: gl.constexpr, BK: gl.constexpr, GROUP_M: gl.constexpr,
     L: gl.constexpr, LA: gl.constexpr, LB: gl.constexpr, GA: gl.constexpr, GB: gl.constexpr,
 ):
@@ -60,6 +67,10 @@ def conv2d_m8n8k4_kernel(
 
     sa = gl.allocate_shared_memory(gl.float16, [J * BM, 4], SH)
     sb = gl.allocate_shared_memory(gl.float16, [J * BN, 4], SH)
+    if SPLIT_A:
+        sal = gl.allocate_shared_memory(gl.float16, [J * BM, 4], SH)
+    if SPLIT_B:
+        sbl = gl.allocate_shared_memory(gl.float16, [J * BN, 4], SH)
 
     # A rows: (batch, oh, ow) once per tile; the k columns are decoded per K tile against constexpr divisors.
     ma1 = m0 + gl.arange(0, BM, layout=gl.SliceLayout(1, GA))
@@ -82,17 +93,39 @@ def conv2d_m8n8k4_kernel(
     tb = gl.load(pb, mask=mb_ & (kb < K), other=0.0)
     for k0 in range(0, K, BK):
         gl.barrier()                                       # every warp is done reading the previous tile
-        stage_k_inner(sa, ta, BM, BK)
-        stage_k_inner(sb, tb, BN, BK)
+        if SPLIT_A:
+            inv_a = _stage_split(sa, sal, ta, True, BM, BK, HI_EXP, LO_SHIFT)
+        else:
+            stage_k_inner(sa, ta, BM, BK)
+        if SPLIT_B:
+            inv_b = _stage_split(sb, sbl, tb, True, BN, BK, HI_EXP, LO_SHIFT)
+        else:
+            stage_k_inner(sb, tb, BN, BK)
         gl.barrier()
         if k0 + BK < K:                                    # the next tile loads while the HMMAs run
             ta = _gather(X, xrow, ih0, iw0, ma, ka1, k0 + BK, K, IH, IW, stride_xc, stride_xh, stride_xw, KHW, KW,
                          DH, DW)
             tb = gl.load(pb + (k0 + BK), mask=mb_ & (kb + k0 + BK < K), other=0.0)
-        t = gl.zeros([MB, 2, 8, NB, 2, 2, 4], gl.float32, layout=L)
-        for j in gl.static_range(J):
-            t = mma_k4(sa, j * BM, sb, j * BN, t, MB, NB, LA, LB, L)
-        acc = acc + t                                      # across tiles on the FMA units, round to nearest
+        if SPLIT_A or SPLIT_B:
+            t_hh = gl.zeros([MB, 2, 8, NB, 2, 2, 4], gl.float32, layout=L)
+            t_lo = gl.zeros([MB, 2, 8, NB, 2, 2, 4], gl.float32, layout=L)
+            for j in gl.static_range(J):
+                t_hh = mma_k4(sa, j * BM, sb, j * BN, t_hh, MB, NB, LA, LB, L)
+                if SPLIT_A:
+                    t_lo = mma_k4(sal, j * BM, sb, j * BN, t_lo, MB, NB, LA, LB, L)
+                if SPLIT_B:
+                    t_lo = mma_k4(sa, j * BM, sbl, j * BN, t_lo, MB, NB, LA, LB, L)
+            t = t_hh + t_lo * (1.0 / (1 << LO_SHIFT))
+            if SPLIT_A:
+                t = t * _bcast_rows(gl.reshape(inv_a, [MB, 2, 8]), L)
+            if SPLIT_B:
+                t = t * _bcast_cols(gl.reshape(inv_b, [NB, 2, 2, 4]), L)
+            acc = acc + t
+        else:
+            t = gl.zeros([MB, 2, 8, NB, 2, 2, 4], gl.float32, layout=L)
+            for j in gl.static_range(J):
+                t = mma_k4(sa, j * BM, sb, j * BN, t, MB, NB, LA, LB, L)
+            acc = acc + t                                  # across tiles on the FMA units, round to nearest
 
     rows, cols = acc_rows_cols(L, MB, NB)
     rows = m0 + rows

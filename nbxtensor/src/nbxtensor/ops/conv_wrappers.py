@@ -711,15 +711,19 @@ def conv2d_wrapper(
     else:
         output = NBXTensor.empty((N, out_c, out_h, out_w), device=x.device, dtype=out_dtype)
 
-    if _lk.matrix_unit_native(x_c.nbx_dtype, w_c.nbx_dtype, N * out_h * out_w):
-        # The implicit GEMM on the profile's matrix unit (ops/conv2d_m8n8k4.py), bias fused; no autotune key.
+    unit_route = _lk.matrix_unit_conv_operands(x_c.nbx_dtype, w_c.nbx_dtype, N * out_h * out_w, out_c // groups, kh, kw)
+    if unit_route is not None:
+        reps, split_rows = unit_route
+        # The implicit GEMM on the profile's matrix unit (ops/conv2d_m8n8k4.py), bias fused; no autotune key. An
+        # operand the DtypeEngine carries split (fp32 on Volta, `matrix_unit.fp32_split`) runs as hi + lo, as the GEMM.
         x_c = x_c.contiguous()
         # The matrix-unit kernel writes a contiguous result: a caller's strided view (a conv3d tap's frames in their
         # [B, C, T, H, W] layout) receives it by one copy. Refused instead, every CUDA video model whose conv3d runs
         # its taps through here failed at its first convolution (6 gate cells, 2026-10-22).
         dest = output if out is None else NBXTensor.empty((N, out_c, out_h, out_w), device=x.device, dtype=out_dtype)
         _conv2d_m8n8k4(x_c, w_c, bias, dest, N, in_c, in_h, in_w, out_c, out_h, out_w, kh, kw,
-                       stride_h, stride_w, pad_h, pad_w, dil_h, dil_w, groups)
+                       stride_h, stride_w, pad_h, pad_w, dil_h, dil_w, groups,
+                       split=(reps[0] == "split", reps[1] == "split"), split_rows=split_rows)
         if out is not None:
             out.copy_(dest)
         return output
@@ -761,12 +765,18 @@ def conv2d_wrapper(
 
 
 def _conv2d_m8n8k4(x, w, bias, out, N, in_c, in_h, in_w, out_c, out_h, out_w, kh, kw, sh, sw, ph, pw, dh, dw,
-                   groups):
+                   groups, split=(False, False), split_rows=None):
     """conv2d as an implicit GEMM on the m8n8k4 matrix unit: M = N*OH*OW, N = OC/groups, K = (IC/groups)*KH*KW in
-    the contiguous weight's own order (read in place); groups on grid axis 1; the profile's `mm` tile."""
+    the contiguous weight's own order (read in place); groups on grid axis 1; the profile's `mm` tile, or, when
+    `split` (input, weight) carries an operand as hi + lo, the `fp32_split.conv` row of its window (`split_rows`,
+    `launch_keys.matrix_unit_conv_operands`)."""
     from nbxtensor.ops.conv2d_m8n8k4 import conv2d_m8n8k4_kernel, conv_layouts
+    from nbxtensor.dtype.operands import matrix_unit_split_scale
     M, OG, CG = N * out_h * out_w, out_c // groups, in_c // groups
-    tile = _matrix_unit_mm_tile(M, OG, _matrix_unit())
+    mu = _matrix_unit()
+    tile = _matrix_unit_mm_tile(M, OG, {"mm": [{k: v for k, v in r.items() if k != "kernel"} for r in split_rows]}
+                                if any(split) else mu)
+    hi_exp, lo_shift = matrix_unit_split_scale(mu)
     MB, NB = tile["block_m"] // 16, tile["block_n"] // 16
     lay = conv_layouts(MB, NB, tile["warps_m"], tile["warps_n"], tile["block_k"])
     set_device(x)
@@ -777,6 +787,7 @@ def _conv2d_m8n8k4(x, w, bias, out, N, in_c, in_h, in_w, out_c, out_h, out_w, kh
         *x.stride(), w.stride(0), out.stride(0), out.stride(1), out.stride(2), out.stride(3),
         CG, OG,
         KH=kh, KW=kw, SH_=sh, SW_=sw, PH=ph, PW=pw, DH=dh, DW=dw, HAS_BIAS=bias is not None,
+        SPLIT_A=bool(split[0]), SPLIT_B=bool(split[1]), HI_EXP=hi_exp, LO_SHIFT=lo_shift,
         MB=MB, NB=NB, BK=tile["block_k"], GROUP_M=tile["group_m"],
         num_warps=tile["warps_m"] * tile["warps_n"], **lay)
 
@@ -1258,7 +1269,7 @@ def im2col_wrapper(x, kernel_size, dilation, padding, stride):
 
 # ---------------------------------------------------------------------------
 # The cost each convolution path declares (M3, docs/nbxtensor/COST.md): what it allocates, in its order, read from the
-# same decisions the wrappers take (`launch_keys.conv_dtypes`, `conv2d_route`, `matrix_unit_native`, the strided read
+# same decisions the wrappers take (`launch_keys.conv_dtypes`, `conv2d_route`, `matrix_unit_conv_operands`, the strided read
 # rule) — a planner prices the convolution by it instead of re-deriving it. Operands are `_cost.Spec`s; a returned
 # buffer is the op's output.
 # ---------------------------------------------------------------------------
@@ -1336,7 +1347,8 @@ def conv2d_cost(x, w, stride=1, padding=0, dilation=1, groups=1, bias=False, out
         return st.done(2 * N * out_c * out_h * out_w * kh * kw * (in_c // max(1, groups)))
     if not out_given:
         st.alloc("output", out_bytes, returned=True)
-    if _lk.matrix_unit_native(NBXDtype[x.dtype], NBXDtype[w.dtype], N * out_h * out_w, unit):
+    if _lk.matrix_unit_conv_operands(NBXDtype[x.dtype], NBXDtype[w.dtype], N * out_h * out_w, out_c // max(1, groups),
+                                     kh, kw, unit) is not None:
         if not is_contiguous(x.shape, x.strides):
             i = st.alloc("input made contiguous (matrix unit)", x.nbytes)
         if out_given:

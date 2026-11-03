@@ -144,6 +144,19 @@ matrix_unit:
         warps_m: 2
         warps_n: 2
         group_m: 8
+    conv:                # an fp32 convolution's implicit GEMM through the split, per kernel window, where it was MEASURED
+      # faster than the FMA path (2026-11-03, V100-SXM2-32GB card 2, the census's fp32 conv2d classes, certified FMA
+      # baseline): 1x1 at 128x64x16 w4x1 x1.26-1.95 (384->1152 0.77 vs 1.50 ms, 256->256 at 12x160x160 5.17 vs 8.92 ms,
+      # 512->256 6.72 vs 10.29 ms), even at 192->384 (1.01); a 3x3 is SLOWER at every tile (best 128x64x32 w4x1:
+      # x0.90-0.99) and has no row — it keeps the FMA path. A row is taken only where its tile fills: M >= block_m and
+      # the output channels per group >= block_n (16 channels in a 64-column tile: x0.36).
+      - kernel: [1, 1]
+        block_m: 128
+        block_n: 64
+        block_k: 16
+        warps_m: 4
+        warps_n: 1
+        group_m: 8
     flash:               # an fp32 attention (Q, K, V, P as hi + lo); block_k: head-dim columns of S the unit sums
       # before each round-to-nearest add (ops/flash_attention_m8n8k4.py, SPLIT). 2026-10-12, V100-SXM2-16GB, B1 H24 L79200
       # D96 fp32: 128x32 w8 4.39 s (13.2 TFLOP/s) where 64x32 w4 gave 6.93, 64x64 w4 6.52, 128x32 w4 9.99; block_k 64

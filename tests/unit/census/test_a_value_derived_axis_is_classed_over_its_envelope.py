@@ -202,7 +202,7 @@ def test_the_matrix_unit_places_the_gemms_keyless_and_the_derivation_says_so(syn
     """The V100 profile as committed (its m8n8k4 unit, fp32 split): the fp32 bmm runs on the unit with no
     autotune key. The derivation forms none for it and records it as PLACED (`KEYLESS aten::bmm`), never as
     unhandled: a model of such ops alone is proven keyless, not refused. The fp32 convolution keeps its key
-    (the unit's implicit GEMM takes native operands only, `launch_keys.matrix_unit_native`)."""
+    (its window has no measured `fp32_split.conv` row: `launch_keys.matrix_unit_conv_operands`)."""
     synthetic(graph())
     u = collections.Counter()
     got = {uid for uid, _q, _k in _derive(94, u)}
