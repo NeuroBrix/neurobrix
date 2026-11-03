@@ -126,6 +126,48 @@ kernel-level benchmark: if it does, the 3 × 3 is a loss to audit and a better s
 - The small-M addmm's per-row weight copy (112 µs a row) was the benchmark's own: the graph passes the weight as a
   transposed view. The benchmark now carries each input's strides.
 
+## 2. The kernel-level benchmark, measured (2026-11-03)
+
+`benchmarks/nbxtensor_vs_torch` (tool 637e781b), every compute op of the census at the plan's extents, each instance
+run alone on its card: nbxtensor through the engine's sequential dispatcher (`TritonSequentialDispatcher`, the op's own
+compute dtype and precision contract, certified-only), torch in eager and in `torch.compile` default mode, the result
+judged against a float64 reference before any time is compared. `torch.compile` max-autotune was measured for the first
+instances and then stopped (its autotune ran for hours on the large video convolutions, the owner's decision of 15:30):
+for the rest the column says it was not run. The tables are in the register (`nbxtensor_vs_torch.v100-*.summary.md`).
+
+| class | judged | won | lost | refused: key outside the census | refused: memory | not finished |
+|---|---|---|---|---|---|---|
+| V100 16 GB | 1 422 | 35 | 1 387 | 113 | 32 | 0 |
+| V100 32 GB | 1 432 | 39 | 1 393 | 113 | 3 | 0 |
+
+Where nbxtensor loses (16 GB; ratio = nbxtensor's median over the best right torch contender's):
+
+| family | instances | won | median ratio | 90th percentile |
+|---|---|---|---|---|
+| convolution | 511 | 6 | 2.99 | 8.49 |
+| group_norm | 154 | 3 | 1.65 | 3.28 |
+| mm / addmm | 269 | 15 | 4.1–4.8 | 8.5–10.7 |
+| rms_norm / layer_norm | 214 | 0 | 2.6–5.1 | 5.7–11.7 |
+| sum / mean / softmax | 113 | 0 | 3.5–5.9 | 8.6–10 |
+| scaled_dot_product_attention | 25 | 0 | 12.2 | 17.0 |
+| weight_norm | 16 | 0 | 30.4 | 36.4 |
+
+Read with what it measures:
+
+- **A per-call cost dominates the small instances.** nbxtensor's fastest instance takes 0.10 ms and its tenth percentile
+  0.27 ms, where torch eager's are 0.033 and 0.054 ms: the sequential dispatcher's Python and launch path costs
+  0.1–0.25 ms per op (the 2 x 2304 addmm, profiled: 0.68 ms of host time around 0.02 ms of kernel). That cost is the
+  bench's path, the one `--triton-sequential` runs; the engine's `--triton` mode runs a compiled sequence whose decode
+  steps replay their launches. Most of the 2–5x ratios on norms, reductions and small GEMMs are this cost, not the
+  kernels.
+- **Kernels that lose on their own**, read here and audited one by one: the transposed 1-D convolutions of the vocoders
+  (up to 500x: `[1, 768, 184]` upsampled by 8, 103 ms against 0.21 ms), weight_norm (a 1.6 ms floor), the attention at
+  12x, and the depthwise convolutions — fixed since (section 7, 2a2d69a4; these tables predate it).
+- **Two instances are judged wrong**, both classes: an fp16 `mul` by -3.39e38 (float32's lowest, a masking constant —
+  -inf in fp16, which torch produces too, against a finite float64 reference: the comparison's, not a defect), and an
+  fp32 attention of GLM-4.1V's and MiniCPM-o's language models under a contract that narrows it to fp16 (relative error
+  1.4e-2 against fp32's tolerance 2e-3): whether the tolerance or the kernel is wrong is open, with the tool's author.
+
 ## 7. Operations no matrix unit accelerates (first entries)
 
 - **depthwise_conv2d** (2026-11-03): x8 behind torch on SANA-Video's 11 200-channel 3 × 3 (3.07 against 0.38 ms in the
