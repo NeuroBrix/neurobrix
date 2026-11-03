@@ -249,6 +249,13 @@ def _vendor_block(d_data: dict, block: str) -> Optional[dict]:
         return None
 
 
+def _over(under, over):
+    """`over`'s facts over `under`'s, key by key, into nested tables (weight_reload_gbps: {engine: {stored: ...}})."""
+    if not (isinstance(under, dict) and isinstance(over, dict)):
+        return over if over is not None else under
+    return {**under, **{k: _over(under.get(k), v) for k, v in over.items()}}
+
+
 def load_profile(hardware_id: str) -> PrismProfile:
     """
     Load hardware profile from YAML file.
@@ -325,8 +332,10 @@ def load_profile(hardware_id: str) -> PrismProfile:
         topology=topology,
         cpu=cpu_config,
         preferred_dtype=data.get("preferred_dtype", None),
-        host_measured=data.get("host_measured") or next((_vendor_block(d, "host_measured") for d in data.get("devices", [])
-                                                          if _vendor_block(d, "host_measured")), None),
+        # the vendor's block (the architecture's facts) under the profile's (this machine's, measured by the engine), key by
+        # key, into its tables (weight_reload_gbps: {engine: {stored}}) — the Dell's 1.12 rule, 2026-11-03 22:54
+        host_measured=_over(next((_vendor_block(d, "host_measured") for d in data.get("devices", [])
+                                  if _vendor_block(d, "host_measured")), None), data.get("host_measured")) or None,
         nodes=nodes,
         node_links=node_links,
     )

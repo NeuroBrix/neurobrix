@@ -24,7 +24,6 @@ import os
 from typing import Any, Callable, Dict, List, Optional
 
 from neurobrix.core.runtime.graph_executor import output_key
-import time
 from neurobrix.core.strategies.base import ExecutionStrategy
 
 
@@ -548,7 +547,6 @@ class LayerStreamingStrategy(ExecutionStrategy):
         # The pieces Prism holds between the component's runs (`layer_stream_resident`): loaded at the first run, kept
         # loaded until the component is released (`uninstall_for_executor`); the others load and unload around each run.
         held = (getattr(self.context, "layer_resident", None) or {}).get(component_name) or frozenset()
-        reloaded = [0, 0.0]                  # bytes, seconds: the streamed pieces this run loaded AGAIN
         for i, (seg_exec, produced) in enumerate(zip(pieces, produced_by)):
             sub = seg_exec._dag
             needed = sub.get("segment_input_names") or []
@@ -578,13 +576,8 @@ class LayerStreamingStrategy(ExecutionStrategy):
             # This piece's weights, and only this piece's: the executor asks its own dag
             # what it consumes.
             if i not in held or not getattr(seg_exec, "_weights_loaded", False):
-                again = seg_exec.__dict__.get("_streamed_loads", 0) > 0
-                _t_load = time.perf_counter()
+                # (the reload a token pays is measured once, at the machine's first launch: arena_probe.reloads)
                 seg_exec.load_weights(nbx_path, component_name)
-                seg_exec._streamed_loads = seg_exec.__dict__.get("_streamed_loads", 0) + 1
-                if again:          # a RELOAD: what a token pays for a streamed piece (the engine's own measure)
-                    reloaded[0] += _weights_bytes(seg_exec)
-                    reloaded[1] += time.perf_counter() - _t_load
             _reset_segment_peak(seg_exec)
             try:
                 out = seg_exec.run(feed, *args, **kwargs) or {}
@@ -630,8 +623,6 @@ class LayerStreamingStrategy(ExecutionStrategy):
             for n in [n for n, j in last_read.items() if j == i and n in values and n not in final]:
                 del values[n]
 
-        if reloaded[0]:
-            _note_reload(pieces[0], nbx_path, component_name, reloaded[0], reloaded[1])
         # The component's declared outputs, keyed as a whole run keys them (`output_name`,
         # else the tid) — not the last piece's dict, which holds only what the last piece
         # produced and, in the triton engine, the protected tids beside them.
