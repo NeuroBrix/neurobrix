@@ -59,7 +59,7 @@ def test_the_estimate_decides_inside_a_rank_never_across():
     est = {"block_scatter": 15.3, "pipeline_parallel": 9.0, "lazy_sequential": 15.3, "zero3": 754.1}
     order = S.order_candidates([(796.0, "block_scatter"), (700.0, "pipeline_parallel"), (301.0, "lazy_sequential"), (401.0, "zero3")], est)
     assert [n for _, n in order] == ["pipeline_parallel", "block_scatter", "lazy_sequential", "zero3"]   # Qwen3-30B on one card: lazy, not zero3
-    # a tie within 1 % keeps today's order (the score): DeepSeek on four cards, pipeline_parallel 5.1 s = block_scatter 5.1 s
+    # an equal estimate keeps today's order (the score): DeepSeek on four cards, pipeline_parallel 5.1 s = block_scatter 5.1 s
     tie = S.order_candidates([(817.0, "pipeline_parallel"), (802.0, "block_scatter")], {"pipeline_parallel": 5.1, "block_scatter": 5.1})
     assert [n for _, n in tie] == ["pipeline_parallel", "block_scatter"]
     # not estimated: after the estimated ones of its rank, never out of its rank

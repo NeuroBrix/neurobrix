@@ -151,27 +151,24 @@ def test_it_declines_when_the_weights_alone_exceed_the_card():
     assert out is None
 
 
-def test_it_declines_when_the_weights_FIT_but_are_not_what_overflows():
-    """The case the coarse check does NOT catch, and the one the guard is for.
-
-    Weights 8000 MB on a 15872 MB budget: they fit, so the total-weights check
-    passes. Activations 9000 MB then overflow the 7872 MB left. But 9000 against
-    8000 is not activation-DOMINANCE — this is a model whose weights are most of
-    its footprint, and cutting its ops would shave a third off a problem that is
-    two thirds weights. It belongs on a sharding or offload rung.
-
-    The first version of this cell used 20000 MB of weights, which the coarse
-    check catches first, so the dominance guard was never reached and removing the
-    guard left the cell GREEN. Measured: with `dominated_by_activations` deleted,
-    seven of seven still passed.
-    """
+def test_weights_that_fit_reach_the_detector_whatever_their_share():
+    """Weights 8000 MB on a 15872 MB budget fit; activations 9000 MB overflow the 7872 MB left. Tiling cuts
+    activations, so the rung carries the component to the detector — the share of weights in the footprint is not a
+    class the profile or the graph states (the former 4x activation-dominance ratio was a constant no source gave,
+    the slim list of 2026-11-03); whether a cheaper rung serves it is the cascade's ranking, not this rung's refusal."""
     s = _solver()
+    seen = {}
+
+    def _detector(container, components, allocations, profile, input_config, dtype):
+        seen["called"] = True
+        return {}
+
+    s._detect_op_level_tiling_pairs = _detector
     s._neural_components = [object()]
     s._input_config = None
     s._target_dtype_str = "float16"
-    s._detect_op_level_tiling_pairs = lambda *a, **k: {"m": object()}
-    out = s._try_op_level_tiling([("m", _Mem(8000, 9000))], {}, [_Dev(16384)], {}, None, None)
-    assert out is None, "a weights-heavy model was sent down the tiling rung"
+    s._try_op_level_tiling([("m", _Mem(8000, 9000))], {}, [_Dev(16384)], {}, None, None)
+    assert seen.get("called"), "a component whose weights fit was refused before the detector"
 
 
 def test_it_declines_when_the_detector_can_tile_nothing():
@@ -197,9 +194,6 @@ def test_the_apple_shape_reaches_the_detector_rather_than_being_screened_out():
     as far as the detector — whether the detector can then tile it is the
     detector's answer, and the cell above covers the case where it cannot.
     """
-    from neurobrix.core.prism import plan_advice as pa
-    assert pa.dominated_by_activations(32 * _MB, int(16.4 * 1024 * _MB))
-
     s = _solver()
     seen = {}
 

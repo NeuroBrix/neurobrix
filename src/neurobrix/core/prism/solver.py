@@ -822,23 +822,16 @@ RANK_BASE = {1: 1000.0, 2: 800.0, 3: 600.0, 4: 400.0, 5: 200.0, 6: 10.0}   # ran
 RANK_FLOOR_SPAN = 99.0
 
 
-def order_candidates(candidates, estimates, tie: float = 0.01):
-    """`candidates`: (score, name, ...) tuples. Grouped by physical rank; inside a rank the estimated time decides,
-    and estimates within `tie` of the rank's best keep today's score order (a tie is today's choice, never a change);
-    an unestimated candidate follows the estimated ones of its rank."""
+def order_candidates(candidates, estimates):
+    """`candidates`: (score, name, ...) tuples. Grouped by physical rank; inside a rank the estimated time decides, and
+    equal estimates keep today's score order (the sort is stable); an unestimated candidate follows the estimated ones
+    of its rank."""
     by_score = sorted(candidates, key=lambda c: -float(c[0]))
     out = []
     for rank in sorted({STRATEGY_RANK.get(c[1], 9) for c in by_score}):
         group = [c for c in by_score if STRATEGY_RANK.get(c[1], 9) == rank]
         ests = {c[1]: (estimates or {}).get(c[1]) for c in group}
-        known = [v for v in ests.values() if isinstance(v, float)]
-        if not known:
-            out.extend(group)
-            continue
-        best = min(known)
-        out.extend(sorted(group, key=lambda c: (0 if isinstance(ests[c[1]], float) and ests[c[1]] <= best * (1 + tie)
-                                                else 1 if isinstance(ests[c[1]], float) else 2,
-                                                ests[c[1]] if isinstance(ests[c[1]], float) and ests[c[1]] > best * (1 + tie) else 0.0)))
+        out.extend(sorted(group, key=lambda c: (0, ests[c[1]]) if isinstance(ests[c[1]], float) else (1, 0.0)))
     return out
 
 
@@ -7906,10 +7899,20 @@ class PrismSolver:
         for _cn, _p in (getattr(self, "_layer_stream_partitions", None) or {}).items():
             if _p.resident and _p.total_weight_bytes:
                 held[_cn] = sum(_p.segments[i].weight_bytes for i in _p.resident) / _p.total_weight_bytes
+        # a strategy that loads on demand loads a component once per run of consecutive flow phases holding it (it is
+        # released when the next phase does not hold it): the flow's own phases, 1 where the flow declares none
+        loads_per_run = {}
+        for _comp in works:
+            _held, _n = False, 0
+            for _ph in (self._flow_phases(container) or [set(works)]):
+                _n += int(_comp in _ph and not _held)
+                _held = _comp in _ph
+            loads_per_run[_comp] = max(_n, 1)
         for _s, name, allocs, _d in ranked:
             try:
                 from neurobrix.core.prism.host_footprint import engine_of
                 out[name] = float(TE.plan_seconds(name, allocs, works, runs, devices, host, str(dtype), prompt=prompt,
+                                                  phases=loads_per_run,
                                                   links=links, engine=engine_of(getattr(self, "_mode", "compiled")),
                                                   stored=self._stored_dtype_major(container),
                                                   held=held if name == "layer_streaming" else None))
@@ -8430,8 +8433,6 @@ class PrismSolver:
         than weights (weights are paid in full by every tile, so no tile count
         reaches them), and unless the detector returns a plan.
         """
-        from neurobrix.core.prism import plan_advice as _pa
-
         if not devices:
             return self._decline("op_level_tiling", "no device")
         largest = devices[0]
@@ -8474,9 +8475,6 @@ class PrismSolver:
         blocking = [(n, m) for n, m in sorted_comps if m.activation_mb > room_of(n)]
         if not blocking:
             return self._decline("op_level_tiling", "no component's activation overflows the room it runs in: a whole-component rung serves it")
-        for _n, _m in blocking:
-            if not _pa.dominated_by_activations(_m.weight_bytes, _m.activation_bytes):
-                return self._decline("op_level_tiling", f"{_n}: its weights ({_m.weight_mb:.0f} MB), not its activations ({_m.activation_mb:.0f} MB), overflow: tiling cannot help")
         # A tile cuts an op's own output and workspace; what earlier ops hold when it begins stays whole. Where that
         # alone is over the room, no band count fits the component (`_compute_memory` records it, tiling-aware):
         # HAT-S at 2048 px on 16 GB was claimed with 143 convolutions in bands and 126 787 MB of activations, the
@@ -10018,7 +10016,7 @@ class PrismSolver:
                 _pa.assess(_n, _m.weight_bytes, _m.activation_bytes,
                            _m.overhead_bytes, int(_largest))
                 for _n, _m in sorted_comps
-                if _pa.dominated_by_activations(_m.weight_bytes, _m.activation_bytes)
+                if _m.weight_bytes < _largest     # tiling cuts activations: offered where the weights fit the card
             ]
             _lines = _pa.what_would_have_fit(_verdicts, spatial=True, tiled=_tiled_said,
                                              untileable=_untileable)

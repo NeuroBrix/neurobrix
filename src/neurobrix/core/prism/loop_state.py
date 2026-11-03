@@ -70,16 +70,19 @@ def mismatches(graph: Dict[str, Any], state_input: str, env: Dict[str, int]) -> 
     return out
 
 
-def kept_neighbours(graph: Dict[str, Any], state_input: str, env: Dict[str, int], sym: str,
-                    span: int = 64) -> Tuple[Optional[int], Optional[int]]:
+def kept_neighbours(graph: Dict[str, Any], state_input: str, env: Dict[str, int],
+                    sym: str) -> Tuple[Optional[int], Optional[int]]:
     """The nearest extents of `sym` below and above its value at which the loop keeps the state (every other symbol
-    as bound)."""
+    as bound): searched down to the symbol's own minimum and up to its maximum, or to twice its value where the trace
+    declares none — a loop keeps a stride's multiples, and a stride is never larger than the extent it divides."""
     def kept(v):
         e = dict(env, **{sym: v})
         return not any(s == sym for _ax, s, _a, _b in mismatches(graph, state_input, e))
     v0 = env[sym]
-    below = next((v for v in range(v0 - 1, max(v0 - span, 0), -1) if kept(v)), None)
-    above = next((v for v in range(v0 + 1, v0 + span) if kept(v)), None)
+    bounds = ((((graph.get("symbolic_context") or {}).get("symbols") or {}).get(sym) or {}).get("constraints") or {})
+    low, high = int(bounds.get("min", 1)), int(bounds.get("max", 2 * v0))
+    below = next((v for v in range(v0 - 1, low - 1, -1) if kept(v)), None)
+    above = next((v for v in range(v0 + 1, high + 1) if kept(v)), None)
     return below, above
 
 

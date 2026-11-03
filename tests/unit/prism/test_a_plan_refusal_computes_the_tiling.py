@@ -87,15 +87,6 @@ def test_a_component_that_already_fits_says_nothing():
     assert pa.what_would_have_fit([v]) == []
 
 
-def test_tiling_is_only_offered_where_activations_are_the_overflow():
-    """A model whose WEIGHTS do not fit needs another rung, not this one."""
-    assert pa.dominated_by_activations(APPLE_WEIGHTS, APPLE_ACTIVATIONS)
-    assert not pa.dominated_by_activations(20 * _GB, 1 * _GB)
-    # And the boundary is a class separation, not a tuned number: the Apple case
-    # sits at a ratio of about 500 against a threshold of 4.
-    assert APPLE_ACTIVATIONS / APPLE_WEIGHTS > 100
-
-
 def test_the_side_scale_is_the_square_root_and_says_so():
     """Four tiles is each side at half — the figure the Mac's hand-run used."""
     assert pa.side_scale_for(4) == pytest.approx(0.5)

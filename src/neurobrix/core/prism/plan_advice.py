@@ -113,19 +113,6 @@ def assess(component: str, weight_bytes: int, activation_bytes: int,
         component, weight_bytes, activation_bytes, overhead_bytes, budget, bands)
 
 
-def dominated_by_activations(weight_bytes: int, activation_bytes: int,
-                             ratio: float = 4.0) -> bool:
-    """True when activations are what overflows, so tiling is the right rung.
-
-    A model whose WEIGHTS do not fit needs a different rung entirely — sharding,
-    offload, a bigger card — and tiling its activations would be answering a
-    question nobody asked. The Mac's reproducer is 16.4 GB of activations against
-    32 MB of weights, a ratio of about 500; the default of 4 is far below that and
-    is meant to separate classes, not to be tuned.
-    """
-    return activation_bytes > ratio * max(1, weight_bytes)
-
-
 def side_scale_for(bands: int) -> float:
     """The factor each SPATIAL SIDE would shrink by to cut activations `bands` times.
 
