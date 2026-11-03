@@ -125,3 +125,16 @@ kernel-level benchmark: if it does, the 3 × 3 is a loss to audit and a better s
   benchmark's derivation does is read on a real launch next.
 - The small-M addmm's per-row weight copy (112 µs a row) was the benchmark's own: the graph passes the weight as a
   transposed view. The benchmark now carries each input's strides.
+
+## 7. Operations no matrix unit accelerates (first entries)
+
+- **depthwise_conv2d** (2026-11-03): x8 behind torch on SANA-Video's 11 200-channel 3 × 3 (3.07 against 0.38 ms in the
+  kernel-level benchmark). Cause read in the kernel: its tile put the channels on the fastest axis, H × W elements apart
+  in NCHW memory — no load coalesced. The (channels × rows × columns) tile with the width fastest: 2.63 → 0.33 ms
+  (529 GB/s), 41.2 → 6.4 ms, 18.9 → 4.2 ms on the giant shapes; one-row tiles for the vocoders' conv1d depthwise
+  (the census's majority) 1.6–2.4×. Parity against fp64 at the fp32 level; the 5 reference outputs byte-identical
+  (Kokoro-82M and PixArt-Sigma use it); orpheus-3b byte-identical, its first audio 3.68 → 1.85 s; SANA-Video's 2-step
+  video the same to the eye (PSNR 43.1 dB between the two). Every depthwise key (323 per class) re-certified.
+- **The expert cache's policy** (2026-11-03): online LFU measured against LRU through the entry point — DeepSeek-Coder-V2-Lite
+  16 GB −10 % per token, Qwen3-30B-A3B 32 GB a loss (two runs at 246 and 323 ms where LRU never passed 195): LRU stays.
+  A frequency carried from another prompt lost to LRU in simulation (routing does not carry across prompts).

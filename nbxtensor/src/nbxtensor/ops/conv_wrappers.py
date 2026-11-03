@@ -807,9 +807,9 @@ def _depthwise_conv2d_dispatch(
     fp16 = x_nbx_dt == NBXDtype.float16
 
     grid = lambda META: (
-        N,
-        triton.cdiv(C, META['BLOCK_C']),
-        triton.cdiv(out_h * out_w, META['BLOCK_HW']),
+        N * triton.cdiv(C, META['BC']),
+        triton.cdiv(out_h, META['TH']),
+        triton.cdiv(out_w, META['TW']),
     )
     set_device(x_c)
     _iw_key, _ow_key = _conv_width_key(IH, out_h, IW, out_w, kw, stride_w, pad_w, 1)

@@ -83,9 +83,8 @@ def is_conv2d_pinned(c):
 
 
 def is_depthwise_conv2d_pinned(c):
-    """Match depthwise conv2d Volta-safe target — depthwise uses
-    different config field names (BLOCK_C, BLOCK_HW). Pick a balanced
-    mid-range default if no explicit pin matches.
+    """Match depthwise conv2d's pinned config — its fields are the 2-D tile's (BC channels x TH x TW): 2 x 8 x 64,
+    the best measured on SANA-Video's 11200- and 13440-channel 3x3 (V100-SXM2, 2026-11-03).
     """
     kw = c.kwargs
-    return kw.get('BLOCK_C') == 32 and kw.get('BLOCK_HW') == 64
+    return kw.get('BC') == 2 and kw.get('TH') == 8 and kw.get('TW') == 64
