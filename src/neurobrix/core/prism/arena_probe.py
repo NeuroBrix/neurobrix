@@ -86,7 +86,40 @@ def measure(container_dir: str, component: str, hardware_id: str, scale: int = 1
             "walked_bytes": walked}
 
 
-def child(container_dir: str, component: str, hardware_id: str, scale: int) -> Dict[str, Any]:
+def reloads(container_dir: str, component: str, hardware_id: str, engine: str, n: int = 4) -> Dict[str, Any]:
+    """The reload a streamed run times (`layer_streaming`: `load_weights` after `unload_weights`), on `component` n times
+    after its first load, each handed to that run's own writer (`_note_reload`: three steady reloads, their median)."""
+    import time
+    from neurobrix.nbx.container import NBXContainer
+    from neurobrix.core.prism import autodetect as AD
+    from neurobrix.core.prism.loader import load_profile
+    from neurobrix.core.prism.solver import PrismSolver, ComponentAllocation
+    from neurobrix.core.runtime.factory import ExecutorFactory
+    from neurobrix.core.strategies import layer_streaming as LS
+    container, profile, AD.ACTIVE_HARDWARE_ID = NBXContainer.load(container_dir), load_profile(hardware_id), hardware_id
+    if engine == "triton":
+        from neurobrix.triton.dtype import declare_hardware_profile
+        declare_hardware_profile(profile)
+    solver, dev = PrismSolver(), profile.devices[0]
+    solver._mode = engine
+    dtype = solver._resolve_component_dtypes(container.get_neural_components(), profile, container)[component]
+    alloc = ComponentAllocation(name=component, devices=["cuda:0" if engine == "triton" else dev.get_device_string()],
+                                dtype=dtype, memory_mb=0.0, architecture=dev.architecture,
+                                vendor=getattr(dev.brand, "value", dev.brand))
+    dag = json.loads((Path(container_dir) / "components" / component / "graph.json").read_text())
+    executor = ExecutorFactory.create(component, alloc, str(container_dir), dag, mode=engine)
+    executor.load_weights(container_dir, component)
+    draws = []
+    for _ in range(n):
+        executor.unload_weights()
+        t0 = time.perf_counter()
+        executor.load_weights(container_dir, component)
+        draws.append((LS._weights_bytes(executor), time.perf_counter() - t0))
+        LS._note_reload(executor, container_dir, component, *draws[-1])
+    return {"container": Path(container_dir).name, "component": component, "draws": draws}
+
+
+def child(container_dir: str, component: str, hardware_id: str, scale) -> Dict[str, Any]:
     """One probe in its own process (a clean allocator)."""
     r = subprocess.run([sys.executable, "-m", __name__, container_dir, component, hardware_id, str(scale)],
                        capture_output=True, text=True, env=dict(os.environ))
@@ -111,4 +144,7 @@ def factor_on_card(usable_bytes: int, weight_bytes: int, run, reps: int, steady:
 
 
 if __name__ == "__main__":
-    print(MARK + json.dumps(measure(sys.argv[1], sys.argv[2], sys.argv[3], *(int(a) for a in sys.argv[4:5]))), flush=True)
+    if sys.argv[4:5] and sys.argv[4] in ("triton", "compiled"):     # the reload probe: `<dir> <component> <hw> <engine>`
+        print(MARK + json.dumps(reloads(*sys.argv[1:5])), flush=True)
+    else:
+        print(MARK + json.dumps(measure(sys.argv[1], sys.argv[2], sys.argv[3], *(int(a) for a in sys.argv[4:5]))), flush=True)

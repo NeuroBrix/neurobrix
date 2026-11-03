@@ -125,3 +125,55 @@ def test_the_reload_rate_is_written_only_from_three_steady_runs(hw, monkeypatch)
     for b, s in ((10 ** 9, 1.0), (10 ** 9, 1.02), (10 ** 9, 0.99)):      # steady around 1 GB/s
         LS._note_reload(ex, "/x", "lm", b, s)
     assert written() is not None and abs(written() - 0.98) < 0.03, written()
+
+
+def test_a_profile_s_host_facts_lie_over_its_vendor_s_key_by_key():
+    """The Dell's 1.12 rule (2026-11-03 22:54): the vendor's host_measured (the architecture's) under the profile's (this
+    machine's, measured by the engine), key by key into its tables. What this would do if the profile's block replaced the
+    vendor's (the rule before): the vendor's host_slab_gbps and its triton reload rate lost — RED."""
+    from neurobrix.core.prism.loader import _over
+    vendor = {"host_slab_gbps": 3.0, "host_matmul_gflops": 100, "weight_reload_gbps": {"triton": {"BF16": 2.1}}}
+    prof = {"host_matmul_gflops": 300, "weight_reload_gbps": {"compiled": {"BF16": 1.0}, "triton": {"F32": 0.5}}}
+    assert _over(vendor, prof) == {"host_slab_gbps": 3.0, "host_matmul_gflops": 300,
+                                   "weight_reload_gbps": {"triton": {"BF16": 2.1, "F32": 0.5}, "compiled": {"BF16": 1.0}}}
+    assert _over(None, prof) == prof and _over(vendor, None) == vendor
+
+
+def _container(root, name, comp, dtype, nbytes):
+    c = root / name / "components" / comp
+    c.mkdir(parents=True)
+    (root / name / "manifest.json").write_text("{}")
+    (c / "graph.json").write_text("{}")
+    (c / "weights_index.json").write_text(json.dumps({"tensors": {"w": {"dtype": dtype, "size_bytes": nbytes}}}))
+    with open(c / "w.safetensors", "wb") as f:
+        f.truncate(nbytes)                       # sparse: the size is what the probe reads
+
+
+def test_the_first_launch_reloads_the_smallest_component_of_each_unstated_stored_dtype(hw, tmp_path, monkeypatch):
+    """The supervisor 2026-11-03 22:50: the per-piece reload rate is measured by the engine at the first launch, per
+    stored dtype of the cache neither block states, on the smallest component stored so (at least the loader-rate floor)
+    — before, only a streamed run measured it and Prism refused to plan one without it. What this would do if the code
+    were wrong: no probe (the fact never measured), a component under the floor or not the smallest, or a stated rate
+    measured again — RED."""
+    from neurobrix.core.prism import arena_probe as AP
+    import neurobrix.core.paths as paths
+    cache = tmp_path / "cache"
+    floor = A.LOADER_RATE_MIN_BYTES
+    _container(cache, "big", "lm", "bfloat16", 4 * floor)
+    _container(cache, "small", "lm", "bfloat16", 2 * floor)
+    _container(cache, "tiny", "lm", "bfloat16", floor // 2)
+    _container(cache, "f32", "net", "float32", 3 * floor)
+    monkeypatch.setattr(paths, "cache_dir", lambda: cache)
+    monkeypatch.setattr(P, "gemv_gbps", lambda *a, **k: 100.0)          # the other first-launch probes: not this test's
+    probed = []
+    monkeypatch.setattr(AP, "child", lambda d, c, h, e: probed.append((d.rsplit("/", 1)[1], c, e)) or
+                        {"container": d, "component": c, "draws": []})
+    _profile(hw, "default-abc", DEV)
+    A.ensure_measured_facts("default-abc", "compiled")
+    assert sorted(probed) == [("f32", "net", "compiled"), ("small", "lm", "compiled")], probed
+    data = yaml.safe_load((hw / "default-abc.yml").read_text())
+    data["host_measured"]["weight_reload_gbps"] = {"compiled": {"BF16": 2.0, "F32": 1.0}}
+    (hw / "default-abc.yml").write_text(yaml.safe_dump(data))
+    probed.clear()
+    A.ensure_measured_facts("default-abc", "compiled")
+    assert probed == [], "a stated rate is not measured again"

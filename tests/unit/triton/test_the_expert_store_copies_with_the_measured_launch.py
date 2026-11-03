@@ -44,6 +44,7 @@ def test_the_first_triton_launch_measures_the_copy_only_where_the_profile_has_no
     from neurobrix.core.prism import autodetect as AD
     import yaml
     monkeypatch.setattr(AD, "HARDWARE_DIR", tmp_path)
+    monkeypatch.setattr("neurobrix.core.paths.cache_dir", lambda: tmp_path / "no-cache")   # no reload probe here
     monkeypatch.setattr("neurobrix.core.config.loader.vendor_config_for_device",
                         lambda *a, **k: {"memory": {"triton_arena_activation_factor": 1.35}})
     probed = []
@@ -70,6 +71,7 @@ def test_a_unified_device_is_not_probed(monkeypatch, tmp_path):
     from neurobrix.core.prism import autodetect as AD
     import yaml
     monkeypatch.setattr(AD, "HARDWARE_DIR", tmp_path)
+    monkeypatch.setattr("neurobrix.core.paths.cache_dir", lambda: tmp_path / "no-cache")   # no reload probe here
     monkeypatch.setattr("neurobrix.core.config.loader.vendor_config_for_device",
                         lambda *a, **k: {"memory": {"triton_arena_activation_factor": 1.19}})
     probed = []

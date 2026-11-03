@@ -2560,6 +2560,24 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None) -> dic
     devices = data.get("devices") or []
     if not devices:
         return {}
+    if engine is not None:
+        # the per-piece reload rate a streamed plan is priced with, per stored dtype of the cache that neither block
+        # states (the supervisor 2026-11-03 22:50): until now only a streamed run measured it, and Prism refused to plan one
+        # without it. The cache's smallest component stored so, reloaded in its own process (arena_probe.reloads).
+        from neurobrix.core.prism import arena_probe as A
+        from neurobrix.core.paths import cache_dir
+        held = (data.get("host_measured"), _vendor_block(devices[0], "host_measured"))
+        for name, st in _STORED.items():
+            if not any((((b or {}).get("weight_reload_gbps") or {}).get(engine) or {}).get(st) for b in held):
+                comps = [(sum(f.stat().st_size for f in c.rglob("*.safetensors")), str(c.parent.parent), c.name)
+                         for c in Path(cache_dir()).glob("*/components/*") if stored_major(c.parent.parent, c.name) == name]
+                comps = sorted(x for x in comps if x[0] >= LOADER_RATE_MIN_BYTES)
+                if comps:
+                    r = A.child(comps[0][1], comps[0][2], hardware_id, engine)
+                    print(f"   [Auto-detect] {engine} {st} reloads of {r['container']}:{r['component']}: "
+                          f"{[round(b / s / 1e9, 3) for b, s in r['draws']]} GB/s (written when three agree)")
+        data = yaml.safe_load(path.read_text()) or {}          # what the probe's process wrote
+        devices = data.get("devices") or []
     stamp = _time.strftime("%Y-%m-%d %H:%M:%S %Z")
     added: Dict[str, Any] = {}
     q = FIRST_LAUNCH
@@ -2606,10 +2624,11 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None) -> dic
                                                                    q["expert_copy_blocks"], q["expert_copy_warps"],
                                                                    q["expert_copy_experts"]).items() if k != "grid"}
         added["expert_copy"] = first["expert_copy"]
-    if not (data.get("host_measured") or _vendor_block(devices[0], "host_measured")):
-        data["host_measured"] = {"source": f"measured {stamp} at the first launch on this machine (autodetect, quick)",
+    # the profile's block over the vendor's, key by key (loader.load_profile): only what neither states is measured
+    if "host_matmul_gflops" not in {**(_vendor_block(devices[0], "host_measured") or {}), **(data.get("host_measured") or {})}:
+        data.setdefault("host_measured", {}).update({"source": f"measured {stamp} at the first launch on this machine (autodetect, quick)",
                                  "host_matmul_gflops": round(P.host_matmul_gflops(q["host_gemm_n"])),
-                                 "host_memory_gbps": round(P.host_memory_gbps(q["host_copy_bytes"]))}
+                                 "host_memory_gbps": round(P.host_memory_gbps(q["host_copy_bytes"]))})
         added["host_measured"] = ["host_matmul_gflops", "host_memory_gbps"]
     if not added:
         return {}
@@ -2667,8 +2686,7 @@ def note_reload_rate(hardware_id: Optional[str], engine: str, stored: str, reloa
     for block in (host, vendor):
         if (((block or {}).get("weight_reload_gbps") or {}).get(engine) or {}).get(st) is not None:
             return False
-    if not isinstance(host, dict):
-        return False                         # the first launch writes host_measured; never a block made here
+    host = data.setdefault("host_measured", {})           # over the vendor's block key by key (loader.load_profile)
     gbps = round(reloaded_bytes / seconds / 1e9, 3)
     host.setdefault("weight_reload_gbps", {}).setdefault(engine, {})[st] = gbps
     host.setdefault("weight_reload_source", []).append(

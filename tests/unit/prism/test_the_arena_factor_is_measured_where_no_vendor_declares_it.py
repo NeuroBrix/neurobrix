@@ -77,6 +77,7 @@ def test_the_first_launch_probes_only_where_no_vendor_declares(monkeypatch, tmp_
                                             "runtime_total_mb": 16151, "runtime_context_mb": 306}],
             "host_measured": {"host_matmul_gflops": 1}}
     monkeypatch.setattr(AD, "HARDWARE_DIR", tmp_path)
+    monkeypatch.setattr("neurobrix.core.paths.cache_dir", lambda: tmp_path / "no-cache")   # no reload probe here
     (tmp_path / "default-x.yml").write_text(yaml.safe_dump(spec))
     probed = []
     monkeypatch.setattr(AD, "_measure_arena_factor", lambda hw, d: probed.append(hw) or 1.5)
