@@ -111,6 +111,8 @@ def _problem(tokens, seed):
 def _run(h, logits, g, u, d, store=None, key=""):
     from nbxtensor.tensor import NBXTensor
     from neurobrix.triton.moe import execute_moe_fused
+    from neurobrix.kernels.autotune_certify import _bind_hardware_profile
+    _bind_hardware_profile()      # the card's profile, as a run binds it: the kernels' bounds are its facts
     mk = _host if store is not None else NBXTensor.from_numpy
     out = execute_moe_fused(NBXTensor.from_numpy(logits), NBXTensor.from_numpy(h),
                             [mk(x) for x in g], [mk(x) for x in u], [mk(x) for x in d],
