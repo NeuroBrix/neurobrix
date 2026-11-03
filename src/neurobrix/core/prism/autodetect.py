@@ -2510,7 +2510,10 @@ FIRST_LAUNCH = {"gemm_sizes": (4096,), "gemm_warmup": 10, "gemm_rep": 30, "copy_
                 # ascending, and the repetitions of each timing
                 "vmm_ks": (1, 2, 4, 8, 16, 32, 64), "vmm_reps": 3,
                 # one decode step's linear (a 7B model's MLP: x[1, 4096] @ W[14336, 4096]^T), timed over 50 launches
-                "gemv_kn": (4096, 14336), "gemv_reps": 50}
+                "gemv_kn": (4096, 14336), "gemv_reps": 50,
+                # the expert store's miss copy (facts_probe.expert_copy): copy_bytes as 8 experts, each (block, warps)
+                "expert_copy_blocks": (1024, 2048, 4096, 8192, 16384), "expert_copy_warps": (2, 4, 8, 16),
+                "expert_copy_reps": 5}
 #: a load smaller than this is not a loader rate (its fixed costs dominate)
 LOADER_RATE_MIN_BYTES = 256 << 20
 #: the hardware profile this process runs under (set by the run once it resolved it): the one its loaders write into
@@ -2590,6 +2593,12 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None) -> dic
                                      model=d0.get("model")).get("memory") or {}).get("triton_arena_activation_factor") is None:
             first["triton_arena_activation_factor"] = _measure_arena_factor(hardware_id, d0)
             added["triton_arena_activation_factor"] = first["triton_arena_activation_factor"]
+    if engine == "triton" and "expert_copy" not in first:
+        # the expert store's miss copy on this card (the supervisor 2026-11-03 10:32: 75-93 % of a MoE decode's GPU time)
+        first["expert_copy"] = {k: v for k, v in P.expert_copy(q["copy_bytes"], q["expert_copy_reps"],
+                                                               q["expert_copy_blocks"], q["expert_copy_warps"]).items()
+                                if k != "grid"}
+        added["expert_copy"] = first["expert_copy"]
     if not (data.get("host_measured") or _vendor_block(devices[0], "host_measured")):
         data["host_measured"] = {"source": f"measured {stamp} at the first launch on this machine (autodetect, quick)",
                                  "host_matmul_gflops": round(P.host_matmul_gflops(q["host_gemm_n"])),

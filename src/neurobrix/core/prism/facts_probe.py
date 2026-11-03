@@ -15,6 +15,9 @@ supervisor's S2, 2026-10-27 22:20).
   vmm_chunk_bytes         the expandable pool's chunk (R16): the device's allocation granularity x k, k the smallest whose
                           map + unmap costs no more than an ordinary allocation of the same bytes (its median plus its
                           spread) — the supervisor's criterion of 2026-11-02 06:40; absent when the device has no VMM
+  expert_copy             the expert store's miss copy (`moe_device_residency.expert_miss_copy_kernel`: the card reads the
+                          missed experts from page-locked host memory) at each candidate (block, warps): the fastest, with
+                          its rate — the launch `NBXExpertStore.decode_on_card` takes on this machine
   weight_load_gbps        the ENGINE'S OWN LOADER on a component's first block weights: bytes landed / time, per engine,
                           per stored dtype, to the card ("device") and to host memory ("host": the host-held path),
                           cold (the shards' pages dropped first) and warm (the same load again)
@@ -338,3 +341,42 @@ def vmm_chunk_bytes(device: int, reps: int, ks: Sequence[int]) -> Optional[int]:
         return None
     chunk, _times = trace_replay.chunk_by_replay(device, gran, ks, reps)
     return chunk
+
+
+def expert_copy(nbytes: int, reps: int, blocks: Sequence[int], warps: Sequence[int], experts: int = 8) -> dict:
+    """The expert store's miss copy on this device (`nbxtensor.ops.moe_device_residency.expert_miss_copy_kernel`,
+    launched as `NBXExpertStore.decode_on_card` launches it): `nbytes` in page-locked host memory as `experts`
+    missed experts of three projections each, copied into device slots at every candidate (block, warps), `reps`
+    launches each after one; {"block", "warps", "gbps"} of the fastest, every candidate's rate in "grid". On the
+    V100-SXM2 (2026-11-03, a quiet machine): 3.3-4.1 GB/s over the grid where the fixed 4096 x 4 the store launched gave
+    3.35, the link's DMA 5.6-5.9 GB/s."""
+    import numpy as np
+    import triton
+    from nbxtensor.memory.allocator import DeviceAllocator as DA
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
+    from nbxtensor.ops.moe_device_residency import expert_miss_copy_kernel
+    n = int(nbytes) // (2 * 3 * experts)                     # fp16 elements per projection
+    host = [[NBXTensor.empty_cpu((n,), NBXDtype.float16, pinned=True) for _ in range(3)] for _ in range(experts)]
+    slots = [[NBXTensor.empty((n,), dtype=NBXDtype.float16, device="cuda:0") for _ in range(3)] for _ in range(experts)]
+    dev = lambda a: NBXTensor.from_numpy(np.asarray(a, dtype=np.int64)).to("cuda:0")          # noqa: E731
+    host_tabs = [dev([host[e][p].data_ptr() for e in range(experts)]) for p in range(3)]
+    slot_tabs = [dev([slots[e][p].data_ptr() for e in range(experts)]) for p in range(3)]
+    miss = dev(list(range(experts)))
+    moved = experts * 3 * n * 2
+    grid = {}
+    for block in blocks:
+        for w in warps:
+            def launch(block=block, w=w):
+                expert_miss_copy_kernel[(experts, 3, triton.cdiv(n, block))](
+                    miss, miss, *host_tabs, *slot_tabs, 0, n, n, n, BLOCK=block, W_BF16=False, num_warps=w)
+            launch()
+            DA.device_synchronize(0)
+            t0 = time.perf_counter()
+            for _ in range(reps):
+                launch()
+            DA.device_synchronize(0)
+            grid[f"{block}x{w}"] = round(moved * reps / (time.perf_counter() - t0) / 1e9, 2)
+    best = max(grid, key=grid.get)
+    block, w = (int(v) for v in best.split("x"))
+    return {"block": block, "warps": w, "gbps": grid[best], "grid": grid}

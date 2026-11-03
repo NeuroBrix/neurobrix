@@ -115,6 +115,7 @@ class NBXExpertStore:
         self._dev_valid = False       # the card's map reflects the slots' contents
         self._host_dirty = False      # the card's residency moved the slots since the host's last call
         self.device_decode = True
+        self._copy = None             # the miss copy's (block, warps), read once from the profile (`_copy_launch`)
 
     def _host_tables_for(self, layer, host: Callable[[int], Tuple]) -> None:
         if layer in self._host_layers:
@@ -191,10 +192,10 @@ class NBXExpertStore:
                                         base, S, TOP_K=top_k, BLOCK_S=_tr.next_power_of_2(S), num_warps=4)
         n = [numel(sh) for sh, _d in self._shape]
         bf16 = self._shape[0][1] == NBXDtype.bfloat16
-        CH = 4096
-        expert_miss_copy_kernel[(top_k, 3, _tr.cdiv(max(n), CH))](
-            miss, slot_ids, *self._host_tabs, *self._slot_tabs, base, n[0], n[1], n[2], BLOCK=CH, W_BF16=bf16,
-            num_warps=4)
+        block, warps = self._copy_launch()
+        expert_miss_copy_kernel[(top_k, 3, _tr.cdiv(max(n), block))](
+            miss, slot_ids, *self._host_tabs, *self._slot_tabs, base, n[0], n[1], n[2], BLOCK=block, W_BF16=bf16,
+            num_warps=warps)
         s0 = self.slots[0]
         tables = SimpleNamespace(
             gate_ptrs={dev: self._slot_tabs[0]}, up_ptrs={dev: self._slot_tabs[1]}, down_ptrs={dev: self._slot_tabs[2]},
@@ -202,6 +203,25 @@ class NBXExpertStore:
             down_stride_bk={dev: s0[2].stride(1)}, down_stride_bn={dev: s0[2].stride(0)})
         self._host_dirty = True
         return _moe_decode_vec_half_pass(hidden, tables, dev, slot_ids, flat_scores, top_k, K, N_gate, bf16)
+
+    def _copy_launch(self):
+        """(block, warps) of the miss copy on this store's card: the profile's measured `expert_copy` (measured at the
+        first launch by `core/prism/facts_probe.expert_copy`, autodetect.ensure_measured_facts) — refused by name when
+        the profile does not carry it, never a launch carried from another card."""
+        if self._copy is None:
+            from nbxtensor.ops.wrappers import get_hardware_profile
+            prof = get_hardware_profile()
+            devs = list(getattr(prof, "devices", None) or [])
+            dev = next((d for d in devs if getattr(d, "index", None) == self.device_idx), None)
+            fact = (getattr(dev, "measured", None) or {}).get("expert_copy") if dev is not None else None
+            if not fact or "block" not in fact or "warps" not in fact:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: the expert store copies its misses with the launch measured on its card "
+                    f"(the profile's measured.expert_copy: core/prism/facts_probe.expert_copy, written at the first "
+                    f"Triton launch by autodetect.ensure_measured_facts), and the profile "
+                    f"{getattr(prof, 'id', None)!r} carries none for device {self.device_idx}")
+            self._copy = (int(fact["block"]), int(fact["warps"]))
+        return self._copy
 
     @property
     def slot_bytes(self) -> int:

@@ -72,7 +72,8 @@ def test_the_first_launch_probes_only_where_no_vendor_declares(monkeypatch, tmp_
     from neurobrix.core.prism import facts_probe as P
     import yaml
     spec = {"id": "default-x", "devices": [{"index": 0, "brand": "nvidia", "architecture": "volta", "model": "V100",
-                                            "measured": {"source": "s", "vmm_chunk_bytes": 1, "gemv_gbps": {"triton": {}}},
+                                            "measured": {"source": "s", "vmm_chunk_bytes": 1, "gemv_gbps": {"triton": {}},
+                                                         "expert_copy": {"block": 4096, "warps": 4, "gbps": 3.4}},
                                             "runtime_total_mb": 16151, "runtime_context_mb": 306}],
             "host_measured": {"host_matmul_gflops": 1}}
     monkeypatch.setattr(AD, "HARDWARE_DIR", tmp_path)
