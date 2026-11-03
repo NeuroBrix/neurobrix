@@ -40,6 +40,9 @@ RMS_NORM = "nbxtensor.ops.rmsnorm.rms_norm_forward_kernel"
 GEMV_VEC = "nbxtensor.ops.gemv_vec.gemv_vec_kernel"
 ADDMV = "nbxtensor.ops.addmv_op.addmv_kernel"
 FUSED_MOE = "nbxtensor.ops.fused_moe.fused_moe_kernel"
+MOE_GATEUP_HALF = "nbxtensor.ops.moe_decode_vec.moe_gateup_vec_half_kernel"
+MOE_DOWN_HALF = "nbxtensor.ops.moe_decode_vec.moe_down_split_vec_half_kernel"
+MOE_PART_REDUCE = "nbxtensor.ops.moe_decode_vec.moe_part_reduce_kernel"
 
 F32, BF16, F16 = NBXDtype.float32, NBXDtype.bfloat16, NBXDtype.float16
 _HALF = (F16, BF16)
@@ -964,4 +967,18 @@ def fused_moe_launches(tokens: int, top_k: int, experts: int, hidden: int, inter
     dts = (t, i64, t, t, i64, i64, i64)        # a, expert_ptrs, c, topk_weights, sorted ids, expert ids, padded count
     return [(FUSED_MOE, (int(inter), int(hidden), nv, int(experts), False, True) + dts),
             (FUSED_MOE, (int(hidden), int(inter), nv, int(experts), True, False) + dts)]
+
+
+def moe_decode_vec_half_launches(top_k: int, hidden: int, inter: int, w: NBXDtype) -> List[Launch]:
+    """A one-token MoE layer on half-precision experts held on one card (`triton/moe._moe_decode_vec_half_pass`): the
+    gateup with SwiGLU [hidden -> inter], the down projection's router-weighted partials [inter -> hidden], their
+    fixed-order sum. The routed expert ids int64, the tables int64, the partials fp32; the activation and the router
+    weights in the experts' dtype `w`."""
+    if w not in (NBXDtype.float16, NBXDtype.bfloat16):
+        return []
+    t, i64, f32 = tag(w), tag(NBXDtype.int64), tag(F32)
+    bf = w == NBXDtype.bfloat16
+    return [(MOE_GATEUP_HALF, (int(hidden), int(inter), int(top_k), bf, t, i64, i64, i64, f32)),
+            (MOE_DOWN_HALF, (int(inter), int(hidden), int(top_k), bf, f32, i64, t, i64, f32)),
+            (MOE_PART_REDUCE, (int(hidden), int(top_k), f32, f32))]
 

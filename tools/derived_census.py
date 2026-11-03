@@ -1261,6 +1261,9 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
             # layer's experts are not one card's half-precision set (the vector band's condition, decided at the run)
             inter = int(shape(a_["expert_gate_weight_ids"][0])[0])
             launches += LK.fused_moe_launches(M_, top_k, len(a_["expert_gate_weight_ids"]), K_, inter, w_dt)
+            if M_ == 1:
+                # a decode token on one card's half-precision experts takes the vector band instead
+                launches += LK.moe_decode_vec_half_launches(top_k, K_, inter, w_dt)
         elif kind in ("aten::native_group_norm", "aten::group_norm"):
             # `wrappers.group_norm_wrapper` (`native_group_norm_wrapper` forwards to it): N and C the input's first two
             # dims, every other its spatial extent; the groups and the weight and bias by their argument positions
