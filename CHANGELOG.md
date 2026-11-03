@@ -65,6 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   library's device files (nbxtensor's changelog), split by `tools/split_vendor_files.py` with the proof that the two
   halves merge back exactly; every reader takes the device whole (`loader.vendor_file`), the certifier's pipelining
   depths included.
+- **`neurobrix autotune certify` measures the matrix unit beside the FMA kernel**: a GEMM key the V100's m8n8k4 unit can take is certified with the unit's tiles timed against the same oracle as the FMA configurations, and its entry names the faster route (nbxtensor's changelog: the matrix product's route).
 - **The planner keeps no tuning constant no source gives**: strategies whose estimated times are equal keep their score order instead of a 1 % tie window; the op-level tiling rung offers itself wherever a component's weights fit the room and its activations do not, instead of only beyond a 4x activation-to-weight ratio; a request the denoising loop cannot keep names the nearest sizes it keeps within the size's own declared range. Every plan of the 49 catalogue models on both V100 profiles is unchanged.
 - **`neurobrix import` names itself to the hub**: the download request carries `X-NeuroBrix-Client:
   neurobrix-cli/<version>` beside the licence acceptance, so the hub serves the engine's command line (where the

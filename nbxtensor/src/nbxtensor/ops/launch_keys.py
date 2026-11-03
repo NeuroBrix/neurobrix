@@ -167,22 +167,24 @@ def matrix_unit_operands(a: NBXDtype, b: NBXDtype, M: int, unit: Optional[dict] 
 
 
 def matrix_unit_takes(a: NBXDtype, b: NBXDtype, M: int) -> bool:
-    """The profile's matrix unit runs this GEMM (`matrix_unit_operands`). Its tile is the profile's, so it has NO
-    autotune key: every `*_launches` below returns [] where it holds."""
+    """The profile's matrix unit can run this GEMM (`matrix_unit_operands`). A batched product on it has NO autotune
+    key (`bmm_launches`, `baddbmm_launches` return []); `mm` and `addmm` keep their FMA key, whose certificate chose
+    between the two routes."""
     return matrix_unit_operands(a, b, M) is not None
 
 
-def gemm_row_representative(m_bucket: int, a: NBXDtype, b: NBXDtype) -> Optional[int]:
+def gemm_row_representative(m_bucket: int, a: NBXDtype, b: NBXDtype, unit_keyed: bool = False) -> Optional[int]:
     """The largest row count M whose GEMM launch forms the autotune key of M bucket `m_bucket`: its bucket is
     `m_bucket` (`bucket_of`) and the matrix unit does not take it (`matrix_unit_takes`). A bucket's top is not always
     one: on Volta the class 57..64 of an fp32 GEMM keys M_BUCKET 64, and at 64 itself the split matrix unit takes the
     GEMM (no key) — a certification synthesising M=64 never reached the autotuner (2026-10-19, 172 keys). Every row
     count down to one is a candidate: a batched GEMM keys its rows however few (`bmm_launches`, no GEMV below five rows
     as `mm` has) — stopping at five refused every bmm key of buckets 1-4 as a census defect (80 attention keys on the
-    Mac, 2026-10-20). None: no row count forms the key."""
+    Mac, 2026-10-20). `unit_keyed`: a GEMM whose key the unit's route keeps (mm, addmm: `mm_launches`) — every row
+    count of the bucket forms it. None: no row count forms the key."""
     m = int(m_bucket)
     while m >= 1 and bucket_of("M", m) == m_bucket:
-        if not matrix_unit_takes(a, b, m):
+        if unit_keyed or not matrix_unit_takes(a, b, m):
             return m
         m -= 1
     return None
@@ -225,13 +227,13 @@ def addmv_launches(N: int, K: int, mat: NBXDtype, vec: NBXDtype, bias: NBXDtype,
 def mm_launches(M: int, K: int, N: int, a: NBXDtype, b: NBXDtype, native_bf16: bool,
                 force_accum: bool = False, contract_half: bool = False) -> List[Launch]:
     """`mm` (and `mm_epilogue`): M <= 4 runs one GEMV per row on the operands as `mm_dtypes` casts them (the weight
-    transposed to [N, K], each activation row the vector) — one key; otherwise one key — row bands above 2^31 output
-    elements keep the whole shape's M bucket."""
+    transposed to [N, K], each activation row the vector) — one key; otherwise one key, matrix unit or not — row bands
+    above 2^31 output elements keep the whole shape's M bucket."""
     a, b, promote_a, promote_b = mm_dtypes(a, b, native_bf16, force_accum)
     if M <= 4:
         return mv_launches(N, K, b, a, native_bf16, force_accum, contract_half)
-    if matrix_unit_takes(a, b, M):
-        return []
+    # where the matrix unit can take it too, the key is the FMA launch's: its certificate measured both routes and
+    # names the faster (`linalg_wrappers._gemm_route`), the unit's tile included
     out = matmul_out_dtype(a, M, promote_a, native_bf16, force_accum, contract_half)
     ieee = (not native_bf16) and out == F32
     return [(MATMUL, (bucket_of("M", M), N, K, ieee, promote_b, tag(a), tag(b), tag(out)))]
@@ -240,13 +242,12 @@ def mm_launches(M: int, K: int, N: int, a: NBXDtype, b: NBXDtype, native_bf16: b
 def addmm_launches(M: int, K: int, N: int, a: NBXDtype, b: NBXDtype, bias: NBXDtype,
                    native_bf16: bool, force_accum: bool = False, contract_half: bool = False, bias_row: bool = True) -> List[Launch]:
     """`addmm` on a 2-D activation (an N-D one is flattened to (numel/K, K) first): M <= 4 runs
-    per-row addmv; a [N] / [1, N] bias (`bias_row`) on the matrix unit has no key; otherwise one key."""
+    per-row addmv; otherwise one key, whose certificate decides the matrix unit or the FMA kernel where a [N] / [1, N]
+    bias (`bias_row`) lets the unit take it."""
     a, b, bias, promote_a, promote_b, _ = addmm_dtypes(a, b, bias, native_bf16, force_accum)
     if M <= 4:
         # one addmv per row on the operands as cast, the weight transposed to [N, K], the bias its row or the shared one
         return addmv_launches(N, K, b, a, bias, native_bf16, force_accum, contract_half)
-    if bias_row and matrix_unit_takes(a, b, M):
-        return []
     out = matmul_out_dtype(a, M, promote_a, native_bf16, force_accum, contract_half)
     ieee = (not native_bf16) and out == F32
     return [(ADDMM, (bucket_of("M", M), N, K, ieee, promote_b, tag(a), tag(b), tag(bias), tag(out)))]

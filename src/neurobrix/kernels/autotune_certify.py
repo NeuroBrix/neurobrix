@@ -462,7 +462,7 @@ def _refuse_unified(qual: str, tuner, key: tuple, card_bytes) -> None:
 # ---------------------------------------------------------------------------
 # the price of a key: what a certification holds at each of its phases
 # ---------------------------------------------------------------------------
-def _gemm_rows(key: tuple, dts) -> int:
+def _gemm_rows(key: tuple, dts, unit_keyed: bool = False) -> int:
     """The row count a GEMM key is priced and synthesised at: the largest one whose launch forms the key
     (`launch_keys.gemm_row_representative`), not the bucket's top — at the top the matrix unit may take the GEMM and
     the wrapper never reaches the autotuner. A key no row count forms is refused by name: a census defect."""
@@ -471,7 +471,7 @@ def _gemm_rows(key: tuple, dts) -> int:
     nbx = {"fp16": NBXDtype.float16, "bf16": NBXDtype.bfloat16, "fp32": NBXDtype.float32}
     a = nbx.get(dts[0], NBXDtype.float16) if dts else NBXDtype.float16
     b = nbx.get(dts[1], a) if len(dts) > 1 else a
-    m = LK.gemm_row_representative(int(key[0]), a, b)
+    m = LK.gemm_row_representative(int(key[0]), a, b, unit_keyed)
     if m is None:
         raise ValueError(f"no row count forms the GEMM key {key}: the matrix unit takes every M of bucket {key[0]} "
                          f"— a census defect, the key should not exist")
@@ -487,7 +487,7 @@ def _key_operands(qual: str, tuner, key: tuple) -> Optional[Dict[str, Any]]:
     out_dt = C.output_dtype(tuner, key)
     d = lambda i, default="fp16": (dts[i] if len(dts) > i else default)   # noqa: E731
     if short in ("matmul_kernel", "addmm_kernel"):
-        M, N, K = _gemm_rows(key, dts), int(key[1]), int(key[2])
+        M, N, K = _gemm_rows(key, dts, unit_keyed=True), int(key[1]), int(key[2])
         ins = [("a", (M, K), d(0)), ("b", (K, N), d(1))]
         if short == "addmm_kernel":
             ins.append(("bias", (N,), d(2)))
@@ -1131,7 +1131,7 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         _refuse_unified(qual, tuner, key, card_bytes)
         card_bytes = None                       # the phase price is the bound on a unified device
     if short in ("matmul_kernel", "addmm_kernel"):
-        M, N, K = _gemm_rows(key, dts), int(key[1]), int(key[2])
+        M, N, K = _gemm_rows(key, dts, unit_keyed=True), int(key[1]), int(key[2])
         _refuse_oversize(card_bytes, [((M, K), dts[0] if dts else "fp16"),
                                       ((K, N), dts[1] if len(dts) > 1 else "fp16"),
                                       ((N,), dts[2] if len(dts) > 2 and short == "addmm_kernel" else out_dt),
@@ -2072,6 +2072,30 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
                            key=lambda t: t[2])
         state["t_bench"] = round(time.time() - t_bench, 3)
         best, dev, ms = timed[0]
+        # THE MATRIX UNIT, a candidate beside the FMA configurations (the list of what remains 1.8, the owner's rule
+        # 2026-11-03 17:48): a GEMM the unit can take is run at each of the profile's unit tiles, proven against the
+        # same oracle and timed with the same bench; the faster route is the one the runtime serves.
+        units = []
+        from nbxtensor.ops.linalg_wrappers import matrix_unit_runs
+        for tile, run_unit in matrix_unit_runs(tuner, args, kwargs):
+            poison()
+            try:
+                run_unit()
+                DeviceAllocator.stream_synchronize(0)
+                udev = deviation_against(out_tensor, oracle)
+            except Exception as exc:                 # a tile the backend refuses: counted, never trusted
+                unrun.append({"unit_tile": tile, "error": str(exc)[:200]})
+                continue
+            if not (udev <= tolerance):
+                excluded.append({"unit_tile": tile, "deviation": udev, "tolerance": tolerance})
+                continue
+            units.append((tile, udev, float(bench(run_unit))))
+        if units:
+            utile, udev, ums = min(units, key=lambda t: t[2])
+            state["unit_measured"] = {"tiles": [{"tile": t, "deviation": d, "ms": m} for t, d, m in units],
+                                      "fma_best_ms": ms, "chosen": "unit" if ums < ms else "fma"}
+            if ums < ms:
+                state["unit"] = {"tile": utile, "deviation": udev, "best_ms": ums, "fma_best_ms": ms}
         state.update({"config": atc._config_to_dict(best), "deviation": dev, "best_ms": ms,
                       "second_ms": timed[1][2] if len(timed) > 1 else None,
                       "candidates": len(configs), "accepted": len(results), "benched": len(contenders),
@@ -2096,6 +2120,7 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
     _nbx = {"fp16": NBXDtype.float16, "bf16": NBXDtype.bfloat16, "fp32": NBXDtype.float32}.get(_out_dt)
     tuner.run = certifying_run
     fell_back = []
+    C.certifying(True)          # a GEMM the matrix unit could take runs its FMA kernel here: its sweep is the point
     try:
         if _nbx is not None:
             W.set_compute_dtype(_nbx)
@@ -2133,6 +2158,7 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
                 if _contract or "config" in state:
                     raise
     finally:
+        C.certifying(False)
         W.set_compute_dtype(_prev_dt)
         try:
             W.set_activations_fp16_safe(_prev_safe)
@@ -2157,13 +2183,16 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
              # whenever a protocol was declared; `proof_records_regime` reads
              # either, and an entry with neither is not served.
              "stability_witness": state.get("stability_witness"),
+             **({"unit_measured": state["unit_measured"]} if state.get("unit_measured") else {}),
              **({"reproven_from": reproven_from} if reproven_from else {}),
              "built": {"gpu": not fell_back,
                        "how": "no backend compilation fallback was raised during "
                               "the certifying run",
                        "fallback": fell_back or None}}
     return {"config": state["config"], "proof": proof, "excluded": state["excluded"],
-            "could_not_run": state["unrun"], "timings": state["timings"]}
+            "could_not_run": state["unrun"], "timings": state["timings"],
+            **({"unit": state["unit"]} if state.get("unit") else {})}
+
 
 
 def _bind_hardware_profile() -> str:
