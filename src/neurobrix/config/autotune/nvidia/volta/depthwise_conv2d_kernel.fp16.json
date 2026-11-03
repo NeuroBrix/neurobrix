@@ -38081,8 +38081,9 @@
     "32g": {
      "config": {
       "kwargs": {
-       "BLOCK_HW": 32,
-       "BLOCK_C": 64
+       "BC": 4,
+       "TH": 1,
+       "TW": 128
       },
       "num_warps": 4,
       "num_stages": 2,
@@ -38090,7 +38091,7 @@
       "maxnreg": null
      },
      "proof": {
-      "date": "2026-09-22T10:27:51+00:00",
+      "date": "2026-11-03T13:33:40+00:00",
       "engine_version": "0.5.4",
       "backend": {
        "triton": "3.8.0",
@@ -38113,12 +38114,17 @@
        "fp16",
        "fp16"
       ],
-      "deviation": 0.0003383239322963705,
+      "launches": 1,
+      "fp16_contract": false,
+      "launch_deviations": [
+       0.00021358810963352891
+      ],
+      "deviation": 0.00021358810963352891,
       "tolerance": 0.02,
       "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
       "machine": {
        "hostname": "metatron",
-       "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+       "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
        "python": "3.10.12",
        "hardware_profile": "auto-v100-32gb-32g",
        "has_native_bf16": false,
@@ -38127,7 +38133,8 @@
         "ordinal": 0,
         "visible_devices": "2",
         "name": "Tesla V100-SXM2-32GB",
-        "memory_mb": 32768
+        "memory_mb": 32768,
+        "unified": false
        },
        "clocks_mhz": {
         "0": {
@@ -38148,16 +38155,16 @@
         }
        }
       },
-      "best_ms": 0.026614483248539354,
-      "second_ms": 0.028737260958295156,
-      "candidates": 7,
-      "accepted": 7,
-      "benched": 7,
+      "best_ms": 0.020587081975135646,
+      "second_ms": 0.021132267656420598,
+      "candidates": 14,
+      "accepted": 14,
+      "benched": 14,
       "could_not_run": 0,
       "seconds": {
-       "oracle": 0.002,
-       "runs": 0.009,
-       "bench": 1.474
+       "oracle": 0.003,
+       "runs": 0.027,
+       "bench": 2.695
       },
       "stability_witness": null,
       "built": {
