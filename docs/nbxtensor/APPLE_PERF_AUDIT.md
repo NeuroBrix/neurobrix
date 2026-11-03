@@ -293,6 +293,48 @@ The first Apple kernel run's nbxtensor column did not dispatch every op the way 
 - **Conclusion.** Neither cross-cutting cause is triton-ext's; both are in NeuroBrix's driver.
   The offset binding is the one upstream addition they need.
 
+## What the V100 audit changes for Apple
+
+The Dell's V100 audit (`V100_PERF_AUDIT.md`, 2026-11-03) found four things about the matrix unit and memory. Each was
+checked here without running the GPU: by compiling for the served Metal target and by reading the routing code. The
+compile driver and its outputs are in `campagnes/2026_11_02_m4_apple/audit/v100_questions/`.
+
+**1. The matrix unit is reached by `tl.dot` itself.** On sm_70, Triton compiles an fp16 `tl.dot` to scalar `fma`
+instructions, so nbxtensor carries its own `mma.m8n8k4` kernels for the V100. On the M4 Pro, a `tl.dot` of
+`[64, 32] x [32, 64]` compiled for the served target (`GPUTarget('mps', 'apple_m', 32)`) becomes simdgroup matrix
+operations and no scalar `fma` in its MSL, for each operand dtype:
+
+| operands | MSL matrix types |
+|---|---|
+| bf16 | `simdgroup_bfloat8x8` operands, `simdgroup_float8x8` accumulator |
+| fp16 | `simdgroup_half8x8` operands, `simdgroup_float8x8` accumulator |
+| fp32 | `simdgroup_float8x8` throughout |
+
+No hand-written matrix-unit kernel is needed on Apple: every nbxtensor kernel that calls `tl.dot` uses the unit.
+
+**2. fp32 has a matrix path here.** The V100's video VAEs spend 51–63 % of a request in fp32 convolutions on the FMA
+units, because its matrix unit takes fp16 operands only, and the fp32 split (three MMAs) does not pay on 3×3 kernels.
+Apple's simdgroup matrices take fp32 operands natively (point 1). An fp32 convolution that reaches `tl.dot` uses the
+unit at fp32. The V100's fp32 problem has no counterpart here, and no split is needed.
+
+**3. Small M is on the unit down to M = 5.** The Apple device files declare no `matrix_unit` rows, so
+`launch_keys.matrix_unit_operands` returns None and every GEMM takes the autotuned generic kernels, which use
+`tl.dot`. The V100 keeps M < 64 off its unit by its rows; here, M from 5 up is on the unit. M ≤ 4 takes the per-row
+GEMV loop (the addmm section above). That boundary is a literal `4` in `linalg_wrappers` (`matmul`, `addmm`), not a
+device fact. It is owed to the device files (zero hardcode), with the single-kernel small-M path of fix 4.
+
+**4. The MoE expert copy moves bytes within one memory.** The V100's MoE decode is bound by `expert_miss_copy`
+(75–93 % of its GPU time): an expert the card does not hold crosses the host link at every miss. On a unified
+device, the planner's Strategy 2.5 already loads no routed expert. It maps them from the container's files and copies
+a missed expert into a cache slot (`core/prism/solver.py`, `core/runtime/expert_files.py`). On this machine that copy
+reads and writes the same memory. Its real cost is the first page-in from the mapped file, which the copy does not
+avoid.
+
+Proposed fix: bind a routed expert in place. Wrap its mapped pages once and point the pointer table at them, with no
+cache slot and no copy. triton-ext reads wrapped `mmap` memory through address tables in its own tests. This removes
+the slots' memory and the copies; the page-in stays. It is to be measured on a MoE decode before it is proposed for
+landing.
+
 ## Order proposed
 
 | # | fix | families | estimated gain on these instances | cost | who |
@@ -303,6 +345,7 @@ The first Apple kernel run's nbxtensor column did not dispatch every op the way 
 | 4 | small-M addmm in one kernel (and the bench's instance strides) | addmm | ~1.2 → ~0.3 ms per call (estimate); decode-wide | ~1 d + census | Mac |
 | 5 | no host wait after each launch (queues ordered on the GPU) | all, decode most | 0.1–0.4 ms per launch | 1–2 d | Mac |
 | 6 | small-C conv implicit GEMM, re-sweep of the key | conv | 7.2 → ≤ 3 ms (target) | ~1 d | Mac |
+| 7 | MoE experts bound in place on unified memory (no slot, no copy) | MoE decode | to be measured | ~1 d | Mac |
 
 ## Sources
 
