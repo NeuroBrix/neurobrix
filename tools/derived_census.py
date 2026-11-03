@@ -1154,6 +1154,7 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
                 q_round = kd if qd != kd else None
                 mask_n = mask_n if mask_n == Tk else None
             qd, kd, vd, _qr = LK.sdpa_operand_dtypes(qd, kd, vd, q_round)
+            q_vec = qd            # the vector kernel reads Q as it arrives and rounds it on load
             if _qr is not None:
                 qd = _qr          # every route but the vector kernel casts Q once to the cache dtype
             route, rows = LK.sdpa_route(B, H, Tq, Tk, D, Dv, sdpa_budget_bytes, sdpa_min_rows, sdpa_max_chunks,
@@ -1176,7 +1177,8 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
                 launches = LK.chunked_math_attention_launches(B, H, Hk, Tq, Tk, D, Dv, qd, kd, vd,
                                                              has_native_bf16, rows, contract_half=contract.safe)
             elif Tq == 1 and LK.decode_vec_takes(D, Dv, mask_n, Tk):
-                launches = []                     # the vector decode kernel: no autotuned key
+                launches = LK.decode_vec_launches(H, Hk, Tk, D, Dv, q_vec, kd, vd,
+                                                  dt(ins[3]) if mask_n is not None and len(ins) > 3 else None)
             else:
                 launches = LK.math_attention_launches(B, H, Hk, Tq, Tk, D, Dv, qd, kd, vd, has_native_bf16, contract_half=contract.safe)
         elif kind in ("aten::native_layer_norm", "aten::layer_norm"):
