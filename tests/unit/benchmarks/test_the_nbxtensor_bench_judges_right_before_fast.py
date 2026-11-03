@@ -327,3 +327,38 @@ def test_an_op_whose_output_outgrows_its_operands_is_counted_by_its_output():
 def test_an_instance_without_output_shapes_is_refused_by_name():
     with pytest.raises(KeyError, match="output_shapes"):
         K.instance_bytes({"key": "x", "shapes": [[2, 2]], "dtypes": ["float32"]})
+
+
+@pytest.mark.parametrize("nd, stride, padding, dilation", [(2, 1, 1, 1), (2, 2, 1, 1), (3, 1, 1, 1), (3, 1, 2, 2)])
+def test_a_convolution_s_reference_in_bands_is_the_whole_reference(nd, stride, padding, dilation):
+    # the float64 CPU reference unfolds its input (34 GB for a video VAE conv3d, 03/11 12:10): computed in bands of its
+    # first spatial output axis it is the same reference
+    torch = pytest.importorskip("torch")
+    g = torch.Generator().manual_seed(0)
+    sp = [9] * nd
+    x = torch.randn(1, 4, *sp, dtype=torch.float64, generator=g)
+    w = torch.randn(6, 4, *([3] * nd), dtype=torch.float64, generator=g)
+    b = torch.randn(6, dtype=torch.float64, generator=g)
+    whole = torch.ops.aten.convolution(x, w, b, [stride] * nd, [padding] * nd, [dilation] * nd, False, [0] * nd, 1)
+    inst = {"op_type": "aten::convolution", "shapes": [list(x.shape), list(w.shape), list(b.shape)],
+            "output_shapes": [list(whole.shape)]}
+    row = K.conv_reference_row_bytes(inst)
+    assert row == 4 * 3 ** nd * K._elems(whole.shape[3:]) * 8
+    inst["ref_band_bytes"] = 2 * row                       # two output rows per band
+    got = K._banded_convolution(inst, [x, w, b, stride, padding, dilation, False, 0, 1])
+    # the same sums, reordered by the band's shape (torch picks its float64 conv2d algorithm per shape): within a few
+    # float64 epsilons of the whole — measured 1-2 ulps (2.4e-16, 2.9e-16) — far below any judged tolerance (2e-3)
+    assert got is not None and float((got - whole).abs().max() / whole.abs().max()) <= 16 * torch.finfo(torch.float64).eps
+    inst["ref_band_bytes"] = row * whole.shape[2]          # fits whole: no banding
+    assert K._banded_convolution(inst, [x, w, b, stride, padding, dilation, False, 0, 1]) is None
+
+
+def test_the_guard_counts_a_convolution_s_reference_unfold_row():
+    inst = {"key": "c", "op_type": "aten::convolution", "shapes": [[1, 256, 26, 160, 160], [256, 256, 3, 3, 3], [256]],
+            "dtypes": ["float32", "bfloat16", "bfloat16"], "output_shapes": [[1, 256, 24, 160, 160]]}
+    row = 256 * 27 * 160 * 160 * 8
+    assert K.conv_reference_row_bytes(inst) == row
+    base = {**inst, "op_type": "aten::other"}
+    assert K.instance_bytes(inst) - K.instance_bytes(base) == row + 1 * 256 * 26 * 160 * 160 * 8
+    # this instance swapped the Mac whole (~34 GB of unfold); banded it fits the 18 GB device's op budget
+    assert K.instance_bytes(inst) < K.device_budget_bytes({"devices": [{"memory_mb": 18186}]})

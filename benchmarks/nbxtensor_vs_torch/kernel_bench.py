@@ -235,7 +235,38 @@ def reference(inst, arrays, attrs_resolver):
     apply_prelude(inst, store, lambda raw, st: attrs_resolver.args(raw, st, syms, attrs_),
                   lambda p, args, at: disp.dispatch(p["op_type"], args, at))
     args = attrs_resolver.args(inst["args"], store, syms, attrs_)
+    banded = _banded_convolution(inst, args)
+    if banded is not None:
+        return banded
     return disp.dispatch(inst["op_type"], args, {**inst["attributes"], "args": inst["args"]})
+
+
+def _banded_convolution(inst, args):
+    """A convolution's float64 reference in bands of its first spatial output axis, when its whole unfold workspace
+    (`conv_reference_row_bytes` x rows) exceeds the bytes the guard left it (`ref_band_bytes`, set by the coordinator):
+    the input padded once, each band reading its rows and halo, computed with no padding by the same ATen convolution
+    — the same reference, band by band. None when the op is not a forward convolution or fits whole."""
+    import torch
+    row, room = conv_reference_row_bytes(inst), inst.get("ref_band_bytes")
+    if not row or room is None or len(args) < 9 or args[6]:
+        return None
+    x, w, b, stride, padding, dilation, _t, _op, groups = args[:9]
+    nd = x.dim() - 2
+    as_list = lambda v: [int(v)] * nd if isinstance(v, int) else [int(e) for e in v]      # noqa: E731
+    stride, padding, dilation = as_list(stride), as_list(padding), as_list(dilation)
+    rows_out = int(inst["output_shapes"][0][2])
+    rows = max(1, int(room) // row)
+    if rows >= rows_out:
+        return None
+    xp = torch.nn.functional.pad(x, [p for i in reversed(range(nd)) for p in (padding[i], padding[i])])
+    k0 = int(w.shape[2])
+    parts = []
+    for o0 in range(0, rows_out, rows):
+        o1 = min(o0 + rows, rows_out)
+        i0, i1 = o0 * stride[0], (o1 - 1) * stride[0] + dilation[0] * (k0 - 1) + 1
+        parts.append(torch.ops.aten.convolution(xp[:, :, i0:i1], w, b, stride, [0] * nd, dilation, False, [0] * nd,
+                                                int(groups)))
+    return torch.cat(parts, dim=2)
 
 
 class _NativeAttrs:
@@ -383,6 +414,20 @@ def _elems(shape) -> int:
     return n
 
 
+def conv_reference_row_bytes(inst) -> int:
+    """The float64 CPU reference's unfold workspace for ONE row of a convolution's first spatial output axis: torch's
+    CPU convolution in float64 unfolds its input (im2col / vol2col) into (C_in / groups) x prod(kernel) x the output's
+    positions — 34 GB for a video VAE's [1, 256, 26, 160, 160] 3x3x3 convolution, which swapped this Mac to a full
+    disk (2026-11-03 12:10; the growth measured on three small conv3d within 5 % of this formula). 0 for any other op.
+    Read from the shapes the instance carries: the weight [C_out, C_in / groups, k...], the output [N, C_out, rows...]."""
+    if inst.get("op_type") != "aten::convolution" or len(inst["shapes"]) < 2 or not inst.get("output_shapes"):
+        return 0
+    w, out = inst["shapes"][1], inst["output_shapes"][0]
+    if len(w) < 3 or len(out) != len(w):
+        return 0
+    return int(out[0]) * int(w[1]) * _elems(w[2:]) * _elems(out[3:]) * 8
+
+
 def instance_bytes(inst) -> int:
     """What the torch worker holds at once for an instance — the larger of the two workers, which never overlap (the
     library's releases its pool and arrays before the torch side starts): per input element the host array (float32,
@@ -399,7 +444,10 @@ def instance_bytes(inst) -> int:
     inputs = sum(e * (4 + 8 + _ITEMSIZE.get(d, 8)) for e, d in zip(els, inst["dtypes"]))
     widest = max((_ITEMSIZE.get(d, 8) for d in inst["dtypes"]), default=8)
     outs = [_elems(s) for s in inst["output_shapes"]]
-    return inputs + sum(outs) * (8 + widest + 4)
+    # a convolution's reference also holds its padded float64 input and the unfold workspace of one band of rows
+    # (`conv_reference_row_bytes`; the reference bands its rows to what the budget leaves, `reference`)
+    conv = conv_reference_row_bytes(inst)
+    return inputs + sum(outs) * (8 + widest + 4) + (els[0] * 8 + conv if conv else 0)
 
 
 def device_budget_bytes(profile) -> int:
@@ -739,6 +787,8 @@ def main(argv=None) -> int:
                           flush=True)
                     break
                 need = instance_bytes(inst)
+                if conv_reference_row_bytes(inst):
+                    inst = {**inst, "ref_band_bytes": budget - need + conv_reference_row_bytes(inst)}
                 if need > budget:
                     rows = [out_of_class_row(inst, need, budget, census_cut_keys(inst, census_rows))]
                 else:
