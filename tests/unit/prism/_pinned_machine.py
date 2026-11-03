@@ -93,10 +93,18 @@ def profile(spec: dict):
 # ─────────────────────────────── the readings ───────────────────────────────
 
 def pin_host(monkeypatch, total_mb: int, available_mb: int, why: str) -> None:
-    """The host's memory reading, as the scenario measured it."""
+    """The host's memory reading, as the scenario measured it — the planning process's own footprint with it.
+
+    The scenario's available figure was read with the planning process already inside it, so what that process
+    holds is part of the injected reading: nothing beyond it (`host_footprint.process_footprint_now`, the resident
+    term of the plan's host footprint). Left live, it is whatever the suite ran before: mochi-1-preview on the calm
+    Mac streamed its VAE alone (56 MB resident) and sliced it after DeepSeek-Coder-V2-Lite's fused graphs had been
+    normalized in the same process (3 400 MB resident, 2026-11-03)."""
+    from neurobrix.core.prism import host_footprint
     st = MemoryState(total_mb=total_mb, available_mb=available_mb, source=f"injected: {why}")
     monkeypatch.setattr(solver_mod, "memory_state", lambda: st)
     monkeypatch.setattr(host_memory, "memory_state", lambda: st)
+    monkeypatch.setattr(host_footprint, "process_footprint_now", lambda: 0)
 
 
 def pin_reload(monkeypatch, engine: str, stored: str, gbps: float, why: str) -> None:
