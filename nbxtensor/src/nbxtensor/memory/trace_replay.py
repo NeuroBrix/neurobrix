@@ -104,6 +104,14 @@ def chunk_by_replay(device: int, granularity: int, ks: Sequence[int], reps: int,
             raise RuntimeError(f"ZERO FALLBACK: the library carries {len(carried)} allocation traces "
                                f"({', '.join(p.name for p in carried)}): the chunk probe names the one it replays")
         trace = str(carried[0])
+    # every replay runs in a child sized at the recorded card: what THIS process caches on the device is given back
+    # first, or the child finds the card short by it (a test process's pools after the kernels suite: 16 GB, the
+    # replay out of memory at chunk 0 — order-dependent, 2026-11-03)
+    from nbxtensor.memory.allocator import DeviceAllocator as DA
+    DA.device_synchronize(device)
+    if DA._range_vmm(device) is not None:
+        DA._range_reclaim(device, None)
+    DA._pool_flush(device)
     times: Dict[int, List[float]] = {0: [_child(trace, device, 0)["seconds"] for _ in range(reps)]}
     off = times[0]
     bound = statistics.median(off) + (max(off) - statistics.median(off))
