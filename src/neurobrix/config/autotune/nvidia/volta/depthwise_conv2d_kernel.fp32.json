@@ -20921,16 +20921,17 @@
   "(4096, 96, 160, 96, 160, 3, 3, 1, 1, 1, 1, False, 'fp32', 'fp32', 'fp32')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 1,
+     "TH": 32,
+     "TW": 64
     },
-    "num_warps": 4,
+    "num_warps": 8,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T20:54:58+00:00",
+    "date": "2026-11-03T14:33:17+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -20954,15 +20955,16 @@
      "fp32"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     1.7478575640714688e-07
+     1.380303375809295e-07
     ],
-    "deviation": 1.7478575640714688e-07,
+    "deviation": 1.380303375809295e-07,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -20993,16 +20995,16 @@
       }
      }
     },
-    "best_ms": 1.658657379772352,
-    "second_ms": 1.6839457491169805,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 6,
+    "best_ms": 0.8619047240777449,
+    "second_ms": 0.8826641773068628,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 4.337,
-     "runs": 14.899,
-     "bench": 0.431
+     "oracle": 3.407,
+     "runs": 31.028,
+     "bench": 0.944
     },
     "stability_witness": null,
     "built": {
@@ -21582,16 +21584,17 @@
     "16g": {
      "config": {
       "kwargs": {
-       "BLOCK_HW": 32,
-       "BLOCK_C": 32
+       "BC": 1,
+       "TH": 16,
+       "TW": 64
       },
-      "num_warps": 2,
+      "num_warps": 4,
       "num_stages": 2,
       "num_ctas": 1,
       "maxnreg": null
      },
      "proof": {
-      "date": "2026-10-21T12:35:50+00:00",
+      "date": "2026-11-03T14:41:49+00:00",
       "engine_version": "0.5.4",
       "backend": {
        "triton": "3.8.0",
@@ -21615,10 +21618,11 @@
        "fp32"
       ],
       "launches": 1,
+      "fp16_contract": false,
       "launch_deviations": [
-       1.517235304672206e-07
+       1.4966039467804998e-07
       ],
-      "deviation": 1.517235304672206e-07,
+      "deviation": 1.4966039467804998e-07,
       "tolerance": 0.0001,
       "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
       "machine": {
@@ -21654,16 +21658,16 @@
         }
        }
       },
-      "best_ms": 14.949887752532959,
-      "second_ms": 15.71123218536377,
-      "candidates": 7,
-      "accepted": 7,
-      "benched": 7,
+      "best_ms": 2.185045282046,
+      "second_ms": 2.2346692225512337,
+      "candidates": 14,
+      "accepted": 14,
+      "benched": 12,
       "could_not_run": 0,
       "seconds": {
-       "oracle": 7.164,
-       "runs": 25.73,
-       "bench": 1.042
+       "oracle": 7.263,
+       "runs": 56.143,
+       "bench": 0.839
       },
       "stability_witness": null,
       "built": {
