@@ -1085,6 +1085,7 @@ _SDPA_KINDS = frozenset({"aten::scaled_dot_product_attention", "aten::_scaled_do
 _KEYED_KINDS = frozenset({
     "aten::native_layer_norm", "aten::layer_norm", "custom::rms_norm", "aten::rms_norm",
     "aten::mm", "aten::bmm", "aten::addmm", "aten::baddbmm", "aten::mv", "aten::addmv", "aten::convolution", "aten::conv1d",
+    "aten::conv_transpose1d", "aten::conv_transpose2d",
     "aten::lstm", "aten::_fft_r2c", "aten::_fft_c2r", "aten::linear", "aten::matmul", "aten::stft",
     "aten::istft", "aten::scaled_dot_product_attention", "aten::_scaled_dot_product_attention",
     "aten::_scaled_dot_product_efficient_attention", "aten::_scaled_dot_product_flash_attention",
@@ -1308,8 +1309,15 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
             launches = LK.addmm_launches(M, K, b_s[-1], dt(ins[1]), dt(ins[2]), dt(ins[0]), has_native_bf16,
                                          bias_row=len(bias_s) == 1 or (len(bias_s) == 2 and bias_s[0] == 1),
                                          contract_half=contract.safe)
-        elif kind in ("aten::convolution", "aten::conv1d"):
+        elif kind in ("aten::convolution", "aten::conv1d", "aten::conv_transpose1d", "aten::conv_transpose2d"):
             at = o.get("attributes") or {}
+            if kind.startswith("aten::conv_transpose"):
+                # aten::conv_transpose{1,2}d(input, weight, bias, stride, padding, output_padding, groups, dilation),
+                # traced positionally: `conv_transpose1d_wrapper` reorders them onto conv_transpose_wrapper
+                nd_ = len(shape(ins[1])) - 2
+                _v = lambda i, d: (_arg(o, i) if _arg(o, i) is not None else d)     # noqa: E731
+                at = {"transposed": True, "stride": _v(3, [1] * nd_), "padding": _v(4, [0] * nd_),
+                      "output_padding": _v(5, [0] * nd_), "groups": _v(6, 1), "dilation": _v(7, [1] * nd_)}
             x_s, w_s = shape(ins[0]), shape(ins[1])
             nd = len(w_s) - 2
             groups_ = int(at.get("groups", 1))
@@ -1358,7 +1366,7 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
             else:
                 launches = LK.conv_launches(x_s, w_s, stride, padding, dilation, transposed, groups,
                                             xd, wd, comp_d, conv_band_bytes, native_bf16=has_native_bf16,
-                                            contract_half=contract.safe)
+                                            contract_half=contract.safe, output_padding=at.get("output_padding", 0))
         elif kind == "aten::lstm":
             # aten::lstm(input, (h0, c0), params, has_biases, num_layers, dropout, train,
             # bidirectional, batch_first) — `lstm_wrapper`'s signature, the args as traced
