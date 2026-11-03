@@ -107,6 +107,7 @@ class NBXExpertStore:
         self._owner = NBXTensor.from_numpy(np.full(S, -1, dtype=np.int32)).to(dev)
         self._stamp = NBXTensor.from_numpy(np.full(S, -1, dtype=np.int64)).to(dev)
         self._clock = NBXTensor.from_numpy(np.zeros(1, dtype=np.int64)).to(dev)
+        self._count = NBXTensor.from_numpy(np.zeros(L * E, dtype=np.int64)).to(dev)
         self._slot_tabs = tuple(NBXTensor.from_numpy(np.array([self.slots[k][i].data_ptr() for k in range(S)],
                                                               dtype=np.int64)).to(dev) for i in range(3))
         self._host_np = np.zeros((3, L * E), dtype=np.int64)
@@ -145,6 +146,11 @@ class NBXExpertStore:
         slot_of = np.full(L * E, -1, dtype=np.int32)
         owner = np.full(S, -1, dtype=np.int32)
         stamp = np.full(S, -1, dtype=np.int64)
+        count = np.zeros(L * E, dtype=np.int64)
+        for (layer, e), c in self.residency.counts.items():
+            li = self.layer_index.get(layer)
+            if li is not None:
+                count[li * E + int(e)] = c
         n = 0
         for (layer, e), slot in self.residency._lru.items():
             li = self.layer_index.get(layer)
@@ -155,7 +161,7 @@ class NBXExpertStore:
             stamp[slot] = n
             n += 1
         DA.set_device(self.device_idx)
-        for dst, src in ((self._slot_of, slot_of), (self._owner, owner), (self._stamp, stamp),
+        for dst, src in ((self._slot_of, slot_of), (self._owner, owner), (self._stamp, stamp), (self._count, count),
                          (self._clock, np.array([n], dtype=np.int64))):
             DA.memcpy(dst.data_ptr(), src.ctypes.data, src.nbytes, 1)
         self._dev_valid = True
@@ -163,15 +169,20 @@ class NBXExpertStore:
     def _host_takes_over(self) -> None:
         """The host residency resumes after the card's: what the card put in the slots is not in the host's map, so
         the host starts from empty slots (its next calls miss and copy), and the card's map is rebuilt from the host's
-        at its next call."""
+        at its next call. The routing counts the card kept come back with it (the request's LFU continues)."""
         if self._host_dirty:
             self.residency.reset()
+            count = self._count.numpy()
+            for layer, li in self.layer_index.items():
+                for e in range(self.n_experts):
+                    if count[li * self.n_experts + e]:
+                        self.residency.counts[(layer, e)] = int(count[li * self.n_experts + e])
             self._host_dirty = False
         self._dev_valid = False
 
     def decode_on_card(self, layer, flat_indices, flat_scores, hidden, host, top_k: int, K: int, N_gate: int):
         """One token through a store-served layer with the residency on the card: assign the routed experts' slots
-        (misses evicting the least recently used), copy the misses from page-locked host memory, run the half decode
+        (misses evicting the expert routed the fewest times in this request, the least recent among those), copy the misses from page-locked host memory, run the half decode
         band through the slots' pointer table. No host decision: every launch is the same at every token."""
         import triton as _tr
         from types import SimpleNamespace
@@ -188,8 +199,9 @@ class NBXExpertStore:
         slot_ids = NBXTensor.empty((top_k,), dtype=NBXDtype.int64, device=f"cuda:{dev}")
         miss = NBXTensor.empty((top_k,), dtype=NBXDtype.int64, device=f"cuda:{dev}")
         ids = flat_indices if flat_indices._dtype == NBXDtype.int64 else flat_indices.to(NBXDtype.int64)
-        expert_slot_assign_kernel[(1,)](ids, self._slot_of, self._owner, self._stamp, self._clock, slot_ids, miss,
-                                        base, S, TOP_K=top_k, BLOCK_S=_tr.next_power_of_2(S), num_warps=4)
+        expert_slot_assign_kernel[(1,)](ids, self._slot_of, self._owner, self._stamp, self._count, self._clock,
+                                        slot_ids, miss, base, S, TOP_K=top_k, BLOCK_S=_tr.next_power_of_2(S),
+                                        num_warps=4)
         n = [numel(sh) for sh, _d in self._shape]
         bf16 = self._shape[0][1] == NBXDtype.bfloat16
         block, warps = self._copy_launch()

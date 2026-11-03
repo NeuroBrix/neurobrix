@@ -5,10 +5,13 @@ An expert store serves the routed layers no card holds whole from a cache of dev
 copies them — a host round trip per layer per token that also keeps the decode step from being replayed (Qwen3-30B-A3B
 on 4 V100: 8 store layers ~32 ms of a ~80 ms token). For one token the same LRU runs here:
 
-  1. `expert_slot_assign_kernel` — ONE program, deterministic: every routed expert already resident is a hit (its stamp
-     refreshed to the clock); every miss takes the free slot or the least recently stamped slot this call does not read
-     (a slot this call reads carries the current clock, so it is never the oldest), evicting its previous owner from
-     the slot map. Writes each routed expert's slot, and for a miss the expert to copy (-1 for a hit). The clock moves.
+  1. `expert_slot_assign_kernel` — ONE program, deterministic: every routed expert counts one more routing; every one
+     already resident is a hit (its stamp refreshed to the clock); every miss takes the free slot or, among the slots
+     this call does not read (stamped with the current clock), the one whose owner was routed the fewest times so far,
+     the least recently stamped among those — online LFU, the host residency's policy (the supervisor 2026-11-03 14:25:
+     on DeepSeek-Coder-V2-Lite's recorded routing, 588 slots, 3-13 % fewer decode misses than LRU) — evicting its
+     previous owner from the slot map. Writes each routed expert's slot, and for a miss the expert to copy (-1 for a
+     hit). The clock moves.
   2. `expert_miss_copy_kernel` — grid (TOP_K, 3 projections, chunks): a miss copies its expert's three projections from
      page-locked host memory (read through its device-visible address) into its slot; a hit returns at once.
 
@@ -26,6 +29,7 @@ def expert_slot_assign_kernel(
     slot_of_ptr,      # [L * E] int32 — slot holding (layer, expert), -1 when none
     owner_ptr,        # [S] int32 — the (layer * E + expert) a slot holds, -1 when free
     stamp_ptr,        # [S] int64 — the clock at a slot's last use, -1 when free
+    count_ptr,        # [L * E] int64 — how many times (layer, expert) was routed so far
     clock_ptr,        # [1] int64
     slot_out_ptr,     # [TOP_K] int64 — the slot of each routed expert
     miss_out_ptr,     # [TOP_K] int64 — the expert to copy into that slot, -1 for a hit
@@ -37,9 +41,11 @@ def expert_slot_assign_kernel(
     clock = tl.load(clock_ptr)
     offs = tl.arange(0, BLOCK_S)
     in_range = offs < S
-    # hits first: their slots carry the current clock before any miss looks for a victim
+    # every routed expert counts one more routing; hits first: their slots carry the current clock before any miss looks
+    # for a victim
     for k in tl.static_range(TOP_K):
         e = tl.load(ids_ptr + k)
+        tl.store(count_ptr + layer_base + e, tl.load(count_ptr + layer_base + e) + 1)
         s = tl.load(slot_of_ptr + layer_base + e)
         if s >= 0:
             tl.store(stamp_ptr + s, clock)
@@ -51,7 +57,13 @@ def expert_slot_assign_kernel(
         s = tl.load(slot_of_ptr + layer_base + e)
         if s < 0:
             stamps = tl.load(stamp_ptr + offs, mask=in_range, other=9223372036854775807)
-            victim = tl.argmin(stamps, axis=0)
+            owners = tl.load(owner_ptr + offs, mask=in_range, other=-1)
+            counts = tl.load(count_ptr + owners, mask=in_range & (owners >= 0), other=0)
+            # a free slot first (-1), then the fewest routings, then the oldest stamp; a slot this call reads (stamped
+            # now) is never a victim
+            rank = tl.where(owners < 0, -1, counts * 1099511627776 + stamps)
+            rank = tl.where(in_range & (stamps != clock), rank, 9223372036854775807)
+            victim = tl.argmin(rank, axis=0)
             old = tl.load(owner_ptr + victim)
             if old >= 0:
                 tl.store(slot_of_ptr + old, -1)

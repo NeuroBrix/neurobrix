@@ -29,20 +29,20 @@ from neurobrix.core.runtime.expert_residency import ExpertResidency, routed_laye
 # --------------------------------------------------------------------------- the policy (no card)
 
 def test_hits_misses_and_least_recent_eviction():
-    r = ExpertResidency(3)
+    r = ExpertResidency(3, 2)
     slots, missed = r.assign("L0", [2, 0])
     assert missed == [0, 2] and slots == {0: 0, 2: 1}
     slots, missed = r.assign("L0", [2])
     assert missed == [] and slots == {2: 1} and (r.hits, r.misses) == (1, 2)
     slots, missed = r.assign("L1", [5])                    # the free slot
     assert missed == [5] and slots == {5: 2}
-    slots, missed = r.assign("L1", [7])                    # evicts (L0, 0), the least recent
+    slots, missed = r.assign("L1", [7])                    # evicts (L0, 0): fewest routings (1), the least recent
     assert missed == [7] and slots == {7: 0} and r.slot_of("L0", 0) is None
     assert r.slot_of("L0", 2) == 1 and r.slot_of("L1", 5) == 2
 
 
 def test_a_calls_own_experts_never_evict_one_another():
-    r = ExpertResidency(2)
+    r = ExpertResidency(2, 2)
     r.assign("L", [0, 1])
     slots, missed = r.assign("L", [1, 3])                  # 0 is the only evictable key
     assert missed == [3] and slots == {1: 1, 3: 0}
@@ -50,11 +50,11 @@ def test_a_calls_own_experts_never_evict_one_another():
 
 
 def test_a_call_wider_than_the_slots_is_refused_by_name():
-    r = ExpertResidency(2)
+    r = ExpertResidency(2, 2)
     with pytest.raises(RuntimeError, match="routes to 3 distinct experts"):
         r.assign("L", [0, 1, 2])
     with pytest.raises(RuntimeError, match="at least one slot"):
-        ExpertResidency(0)
+        ExpertResidency(0, 1)
 
 
 def _fused(uid, ids, stacked=False):
@@ -122,7 +122,7 @@ def _run(h, logits, g, u, d, store=None, key=""):
 def _store(n_slots, d0):
     from neurobrix.triton.expert_store import NBXExpertStore
     like = (_host(np.zeros((F, H), np.float16)), _host(np.zeros((F, H), np.float16)), _host(d0))
-    return NBXExpertStore(ExpertResidency(n_slots), 0, like)
+    return NBXExpertStore(ExpertResidency(n_slots, n_slots), 0, like)
 
 
 @pytest.mark.parametrize("n_slots", [2, 3, 5, 8])
@@ -188,7 +188,7 @@ def test_the_compiled_store_hands_out_the_host_bytes_after_evictions():
     gen = torch.Generator().manual_seed(5)
     host = {e: tuple(torch.randn(s, generator=gen).half().pin_memory() for s in ((F, H), (F, H), (H, F)))
             for e in range(E)}
-    store = TorchExpertStore(ExpertResidency(3), torch.device("cuda:0"), host[0])
+    store = TorchExpertStore(ExpertResidency(3, 2), torch.device("cuda:0"), host[0])
     try:
         for routed in ([0, 1, 2], [2, 5], [6, 7, 1], [0, 3], [5, 6, 7]):
             on_card, events = store.acquire("L", routed, host.__getitem__)
@@ -201,3 +201,18 @@ def test_the_compiled_store_hands_out_the_host_bytes_after_evictions():
     finally:
         store.release()
     assert store.residency.hits > 0 and store.residency.misses > 0
+
+
+def test_a_miss_evicts_the_fewest_routed_and_a_prompt_starts_the_counts_over():
+    """Online LFU (the supervisor 2026-11-03 14:25; 3-13 % fewer decode misses than LRU on DeepSeek-Coder-V2-Lite's
+    recorded routing): a miss evicts the expert routed the fewest times in this request, the least recent among those;
+    a call routing more than top_k experts is a prompt and starts its layer's counts over (a frequency carried from
+    another prompt lost to LRU). What it would do if the code were wrong: LRU evicts (L0, 1), the least recent, where
+    (L0, 0) routed twice outranks it — RED; counts carried across a prompt keep (L0, 0) where the new prompt never
+    routed it — RED."""
+    r = ExpertResidency(2, 1)
+    r.assign("L0", [0]); r.assign("L0", [0]); r.assign("L0", [1])      # (L0,0) routed twice, (L0,1) once, most recent
+    slots, missed = r.assign("L0", [2])
+    assert missed == [2] and r.slot_of("L0", 1) is None and r.slot_of("L0", 0) is not None
+    r.assign("L0", [3, 4])                                              # a prompt (2 > top_k): the counts start over
+    assert r.counts == {("L0", 3): 1, ("L0", 4): 1}

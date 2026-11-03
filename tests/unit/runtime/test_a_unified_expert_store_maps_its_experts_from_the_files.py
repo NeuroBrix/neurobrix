@@ -123,7 +123,7 @@ def test_the_first_load_splits_the_experts_off_and_a_later_load_does_not():
 
 def test_the_torch_store_copies_on_a_device_without_cuda_streams_and_returns_no_events():
     like = tuple(torch.empty(SHAPE, dtype=torch.bfloat16) for _ in range(3))
-    store = TorchExpertStore(ExpertResidency(2), torch.device("cpu"), like)
+    store = TorchExpertStore(ExpertResidency(2, 2), torch.device("cpu"), like)
     tensors = _tensors()
     host = lambda e: tuple(tensors[f"model.layers.0.mlp.experts.{e}.{p}_proj.weight"]
                            for p in ("gate", "up", "down"))

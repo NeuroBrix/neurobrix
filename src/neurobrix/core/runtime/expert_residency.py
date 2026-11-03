@@ -7,9 +7,13 @@ WHICH expert sits in WHICH device slot. It moves no byte and imports no tensor l
 the compiled store (`core/runtime/graph/expert_store.py`, torch) and the triton store
 (`triton/expert_store.py`, NBXTensor) each own their slots and their copies.
 
-The policy is one least-recently-used set over the whole component: a slot is keyed by
-(layer, expert), never partitioned per layer, so a layer whose routing is concentrated lends its
-room to one whose routing is spread. Every expert a call routes to is pinned for that call — the
+The policy is one set over the whole component: a slot is keyed by (layer, expert), never
+partitioned per layer, so a layer whose routing is concentrated lends its room to one whose routing
+is spread. A miss evicts the expert routed the FEWEST times so far in this request, the least
+recently used among those — online LFU (the supervisor 2026-11-03 14:25): on DeepSeek-Coder-V2-Lite's
+recorded routing at 588 slots, 3-13 % fewer decode misses than LRU, where a frequency carried from
+another prompt lost to LRU (routing does not carry across prompts) — so a layer's counts start over
+at its prompt (a call routing more than `top_k` experts). Every expert a call routes to is pinned for that call — the
 call's own misses never evict one another, and a call that routes to more distinct experts than
 there are slots is refused by name (`assign`), never served by a partial set.
 
@@ -36,12 +40,16 @@ FUSED_OP = "custom::moe_fused"
 
 
 class ExpertResidency:
-    """One LRU of `n_slots` device slots keyed by (layer, expert)."""
+    """`n_slots` device slots keyed by (layer, expert), online LFU (ties: least recent)."""
 
-    def __init__(self, n_slots: int):
+    def __init__(self, n_slots: int, top_k: int):
         if int(n_slots) <= 0:
             raise RuntimeError(f"ZERO FALLBACK: an expert store needs at least one slot, got {n_slots}")
+        if int(top_k) <= 0:
+            raise RuntimeError(f"ZERO FALLBACK: an expert store's residency needs the model's top_k, got {top_k}")
         self.n_slots = int(n_slots)
+        self.top_k = int(top_k)
+        self.counts: Dict[Tuple[Hashable, int], int] = {}    # (layer, expert) -> routings in this request
         self._lru: "OrderedDict[Tuple[Hashable, int], int]" = OrderedDict()   # key -> slot, oldest first
         self._free: List[int] = list(range(self.n_slots - 1, -1, -1))         # popped from the end: 0 first
         self.hits = 0
@@ -83,6 +91,11 @@ class ExpertResidency:
                 f"runs of at most n_slots experts")
         self.note(layer)
         self.last_routed[layer] = experts
+        if len(experts) > self.top_k:          # a prompt: this layer's request starts, its counts with it
+            for k in [k for k in self.counts if k[0] == layer]:
+                del self.counts[k]
+        for e in experts:
+            self.counts[(layer, e)] = self.counts.get((layer, e), 0) + 1
         slots, missed = self._place(layer, experts, protect=())
         for e in experts:
             if (layer, e) in self._prefetched:
@@ -95,7 +108,8 @@ class ExpertResidency:
 
     def _place(self, layer: Hashable, experts: List[int], protect) -> Tuple[Dict[int, int], List[int]]:
         """Slots for `experts` at `layer`: hits moved to the recent end, misses given a free slot or the
-        least recent slot outside this set and outside `protect` (keys another call still reads)."""
+        slot outside this set and outside `protect` (keys another call still reads) whose expert was routed the fewest
+        times in this request, the least recent among those."""
         call = {(layer, e) for e in experts}
         keep = call | set(protect)
         slots: Dict[int, int] = {}
@@ -111,7 +125,8 @@ class ExpertResidency:
             if self._free:
                 slot = self._free.pop()
             else:
-                victim = next((k for k in self._lru if k not in keep), None)
+                victim = min((k for k in self._lru if k not in keep), default=None,
+                             key=lambda k, _o={k: i for i, k in enumerate(self._lru)}: (self.counts.get(k, 0), _o[k]))
                 if victim is None:
                     raise RuntimeError(f"ZERO FALLBACK: expert store found no evictable slot for {layer!r}")
                 if victim in self._prefetched:
@@ -173,6 +188,7 @@ class ExpertResidency:
 
     def clear(self) -> None:
         self._lru.clear()
+        self.counts.clear()
         self._free = list(range(self.n_slots - 1, -1, -1))
         self._prefetched.clear()
 

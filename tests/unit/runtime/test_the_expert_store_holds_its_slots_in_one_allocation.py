@@ -74,7 +74,7 @@ def _like():
 
 def _store(driver):
     from neurobrix.triton.expert_store import NBXExpertStore
-    return NBXExpertStore(ExpertResidency(N_SLOTS), 0, _like())
+    return NBXExpertStore(ExpertResidency(N_SLOTS, N_SLOTS), 0, _like())
 
 
 def test_the_slots_live_in_one_allocation(driver):

@@ -104,7 +104,7 @@ def build_expert_store_state(z3: Any, component_name: str, executor: Any, seq: A
             f"{slot_bytes / _MIB:.2f} MB, below the top_k={top_k} experts one token reads — Prism "
             f"selects expert_store only when the routed working set fits")
 
-    residency = ExpertResidency(n_slots)
+    residency = ExpertResidency(n_slots, top_k)
     if is_triton:
         from neurobrix.triton.expert_store import NBXExpertStore
         store = NBXExpertStore(residency, dev_idx, like,

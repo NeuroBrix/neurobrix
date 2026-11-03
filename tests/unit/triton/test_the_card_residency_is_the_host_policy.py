@@ -1,7 +1,9 @@
-"""The expert store's residency on the card (`moe_device_residency`, S3 2026-10-28) is an LRU of the store's slots: over
-a run of tokens across layers, every routed expert lands in a slot holding exactly its bytes, a resident expert is not
-copied again, a miss takes a free slot first and then the least recently used slot the token does not read, and the
-slot map always names what each slot holds. Checked against a Python model of that LRU. Needs a device."""
+"""The expert store's residency on the card (`moe_device_residency`, S3 2026-10-28) is the host residency's policy over
+the store's slots — online LFU since 2026-11-03 (the supervisor 14:25): over a run of tokens across layers, every routed
+expert counts one routing, lands in a slot holding exactly its bytes, a resident expert is not copied again, a miss
+takes a free slot first and then, among the slots the token does not read, the one whose expert was routed the fewest
+times (the least recently used among those), and the slot map always names what each slot holds. Checked against a
+Python model of that policy (the LRU kernel it replaced fails it: its victims ignore the counts). Needs a device."""
 import numpy as np
 import pytest
 
@@ -38,19 +40,23 @@ def test_slots_follow_the_lru_and_hold_the_routed_experts():
     slot_of = NBXTensor.from_numpy(np.full(L * E, -1, dtype=np.int32)).to(dev)
     owner = NBXTensor.from_numpy(np.full(S, -1, dtype=np.int32)).to(dev)
     stamp = i64(np.full(S, -1))
+    count = i64(np.zeros(L * E))
     clock = i64([0])
-    model_owner, model_stamp, clk = [-1] * S, [-1] * S, 0
+    model_owner, model_stamp, model_count, clk = [-1] * S, [-1] * S, [0] * (L * E), 0
     for step in range(40):
         layer = step % L
-        ids = rng.choice(E, size=K, replace=False)
+        ids = rng.choice(E // 2 if step % 2 else E, size=K, replace=False)      # some experts routed more often
         so, mo = NBXTensor.empty((K,), dtype=NBXDtype.int64, device=dev), NBXTensor.empty((K,), dtype=NBXDtype.int64,
                                                                                            device=dev)
-        expert_slot_assign_kernel[(1,)](i64(ids), slot_of, owner, stamp, clock, so, mo, layer * E, S, TOP_K=K,
+        expert_slot_assign_kernel[(1,)](i64(ids), slot_of, owner, stamp, count, clock, so, mo, layer * E, S, TOP_K=K,
                                         BLOCK_S=triton.next_power_of_2(S))
         expert_miss_copy_kernel[(K, 3, triton.cdiv(n, 256))](mo, so, *host_tabs, *slot_tabs, layer * E, n, n, n,
                                                            BLOCK=256, W_BF16=False)
-        # the model: hits stamped, then each miss in order takes the oldest stamp (free = -1 first, lowest index)
+        # the model: every routed expert counted, hits stamped, then each miss in order takes the free slot or the
+        # fewest-routed owner among the slots not stamped now, the oldest stamp among those (lowest index on a tie)
         want_slot, want_miss = [None] * K, [-1] * K
+        for e in ids:
+            model_count[layer * E + int(e)] += 1
         for k, e in enumerate(ids):
             key = layer * E + int(e)
             if key in model_owner:
@@ -59,7 +65,9 @@ def test_slots_follow_the_lru_and_hold_the_routed_experts():
                 want_slot[k] = s
         for k, e in enumerate(ids):
             if want_slot[k] is None:
-                s = int(np.argmin(model_stamp))
+                rank = [(-1 if model_owner[i] < 0 else model_count[model_owner[i]] * (1 << 40) + model_stamp[i])
+                        if model_stamp[i] != clk else (1 << 62) for i in range(S)]
+                s = int(np.argmin(rank))
                 model_owner[s], model_stamp[s] = layer * E + int(e), clk
                 want_slot[k], want_miss[k] = s, int(e)
         clk += 1
@@ -68,7 +76,7 @@ def test_slots_follow_the_lru_and_hold_the_routed_experts():
             for p in range(3):
                 h = np.frombuffer((ctypes.c_uint16 * n).from_address(host[layer][int(e)][p].data_ptr()), dtype=np.float16)
                 assert np.array_equal(slots[want_slot[k]][p].numpy(), h), (step, k, p)
-    assert owner.numpy().tolist() == model_owner
+    assert owner.numpy().tolist() == model_owner and count.numpy().tolist() == model_count
     m = slot_of.numpy()
     assert all((m[o] == s) for s, o in enumerate(model_owner) if o >= 0) and int((m >= 0).sum()) == sum(
         1 for o in model_owner if o >= 0)

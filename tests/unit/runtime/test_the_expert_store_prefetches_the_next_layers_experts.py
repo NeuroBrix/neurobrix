@@ -21,7 +21,7 @@ from neurobrix.core.runtime.expert_residency import ExpertResidency
 
 
 def test_the_order_is_the_calls_and_the_prediction_is_the_last_routing():
-    r = ExpertResidency(8)
+    r = ExpertResidency(8, 2)
     r.assign("L0", [1, 5]); r.assign("L1", [2]); r.assign("L2", [7, 0])
     assert r.order == ["L0", "L1", "L2"] and r.next_layer("L0") == "L1" and r.next_layer("L2") is None
     r.assign("L0", [3])                                   # the next token: the order does not grow
@@ -30,7 +30,7 @@ def test_the_order_is_the_calls_and_the_prediction_is_the_last_routing():
 
 
 def test_a_prefetch_fills_free_slots_never_the_protected_call_and_is_counted():
-    r = ExpertResidency(4)
+    r = ExpertResidency(4, 2)
     r.assign("L0", [0, 1])                                # token 1, layer 0
     r.assign("L1", [6, 7])                                # token 1, layer 1
     slots, missed = r.assign("L0", [2, 3])                # token 2, layer 0: evicts (L0,0) (L0,1)
@@ -51,7 +51,7 @@ def test_a_prefetch_fills_free_slots_never_the_protected_call_and_is_counted():
 
 
 def test_a_prefetch_that_would_not_fit_beside_the_call_is_not_planned():
-    r = ExpertResidency(3)
+    r = ExpertResidency(3, 2)
     r.assign("L0", [0, 1]); r.assign("L1", [5, 6])
     assert r.plan_prefetch("L1", {("L0", 0), ("L0", 1)}) == []       # 2 + 2 > 3
     assert r.prefetch_skipped == {"slots": 1}
@@ -59,7 +59,7 @@ def test_a_prefetch_that_would_not_fit_beside_the_call_is_not_planned():
 
 
 def test_a_prefetched_expert_evicted_before_its_call_is_counted_wasted():
-    r = ExpertResidency(2)
+    r = ExpertResidency(2, 2)
     r.assign("L0", [0]); r.assign("L1", [9])
     r.assign("L0", [1])                                   # evicts (L1, 9)? no: (L0,0) is older
     assert r.reserve("L1", [9], {("L0", 1)}) == {} or True   # resident already or re-placed
@@ -88,7 +88,7 @@ def test_the_compiled_store_serves_a_prefetched_expert_with_the_hosts_bytes(monk
     gen = torch.Generator().manual_seed(7)
     host = {L: {e: tuple(torch.randn(s, generator=gen).half().pin_memory() for s in ((F, H), (F, H), (H, F)))
                 for e in range(E)} for L in ("L0", "L1")}
-    store = TorchExpertStore(ExpertResidency(6), torch.device("cuda:0"), host["L0"][0])
+    store = TorchExpertStore(ExpertResidency(6, 2), torch.device("cuda:0"), host["L0"][0])
     try:
         for L in ("L0", "L1"):
             store.hosts[L] = host[L].__getitem__
@@ -123,7 +123,7 @@ def test_the_triton_store_with_a_two_layer_prefetch_is_byte_for_byte_the_residen
     from neurobrix.triton.moe import execute_moe_fused
     probs = {L: _problem(tokens=1, seed=s) for L, s in (("L0", 21), ("L1", 22))}
     like = (_host(np.zeros((TF, TH), np.float16)), _host(np.zeros((TF, TH), np.float16)), _host(np.zeros((TH, TF), np.float16)))
-    store = NBXExpertStore(ExpertResidency(2 * TOP_K + 2), 0, like)
+    store = NBXExpertStore(ExpertResidency(2 * TOP_K + 2, TOP_K), 0, like)
 
     def run(L, store_, key):
         h, logits, g, u, d = probs[L]
@@ -158,7 +158,7 @@ def test_the_triton_store_serves_a_prefetched_expert_with_the_hosts_bytes(monkey
     host = {L: {e: tuple(_host((rng.standard_normal(sh) * 0.1).astype(np.float16)) for sh in ((TF, TH), (TF, TH), (TH, TF)))
                 for e in range(8)} for L in ("L0", "L1")}
     like = tuple(_host(np.zeros(sh, np.float16)) for sh in ((TF, TH), (TF, TH), (TH, TF)))
-    store = NBXExpertStore(ExpertResidency(4), 0, like)
+    store = NBXExpertStore(ExpertResidency(4, 2), 0, like)
     try:
         for L in ("L0", "L1"):
             store.hosts[L] = host[L].__getitem__

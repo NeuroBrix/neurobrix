@@ -37,7 +37,7 @@ def _triple(seed):
 
 
 def test_a_missed_expert_is_copied_through_one_staging_buffer_per_projection():
-    store = TorchExpertStore(ExpertResidency(2), torch.device("cpu"), _triple(0))
+    store = TorchExpertStore(ExpertResidency(2, 2), torch.device("cpu"), _triple(0))
     hosts = {0: _triple(1), 1: _triple(2), 2: _triple(3)}
     on_card, _ = store.acquire("L", [0, 1], lambda e: hosts[e])
     first = store._staging
@@ -53,7 +53,7 @@ def test_a_missed_expert_is_copied_through_one_staging_buffer_per_projection():
 
 def test_each_copied_view_is_handed_to_the_release_callback():
     released = []
-    store = TorchExpertStore(ExpertResidency(1), torch.device("cpu"), _triple(0), release=released.append)
+    store = TorchExpertStore(ExpertResidency(1, 2), torch.device("cpu"), _triple(0), release=released.append)
     hosts = {0: _triple(1), 1: _triple(2)}
     store.acquire("L", [0], lambda e: hosts[e])
     store.acquire("L", [1], lambda e: hosts[e])
