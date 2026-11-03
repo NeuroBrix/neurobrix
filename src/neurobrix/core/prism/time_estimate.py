@@ -46,6 +46,12 @@ class DeviceFacts:
     #: the weight bandwidth a decode step's matrix-vector product reaches on each ENGINE (`gemv_gbps`,
     #: core/prism/facts_probe.py): {engine: {dtype: GB/s}}; None: not measured
     gemv_rates: Optional[Mapping[str, Any]] = None
+    #: the Triton expert store's miss copy, bytes/s — a kernel reading page-locked host memory over the link, measured at
+    #: the first Triton launch (`measured.expert_copy.gbps`, `moe_device_residency.measure_miss_copy`); the compiled
+    #: store copies with the DMA (`h2d_bps`). None: not measured
+    expert_copy_bps: Optional[float] = None
+    #: the device shares one memory pool with the host (Apple): an expert store maps its experts in place, nothing copied
+    unified: bool = False
 
 
 @dataclass(frozen=True)
@@ -74,7 +80,9 @@ def device_facts(measured: Optional[Mapping[str, Any]], where: str) -> DeviceFac
         return DeviceFacts(matmul_flops={k: float(v) * 1e12 for k, v in measured["matmul_tflops"].items()},
                            memory_bps=float(measured["memory_gbps"]) * 1e9, h2d_bps=float(measured["h2d_gbps"]) * 1e9,
                            h2d_pageable_bps=float(pageable) * 1e9 if pageable is not None else None,
-                           load_rates=measured.get("weight_load_gbps"), gemv_rates=measured.get("gemv_gbps"))
+                           load_rates=measured.get("weight_load_gbps"), gemv_rates=measured.get("gemv_gbps"),
+                           expert_copy_bps=(float(measured["expert_copy"]["gbps"]) * 1e9
+                                            if (measured.get("expert_copy") or {}).get("gbps") else None))
     except KeyError as exc:
         raise MissingFact(f"{where}: the measured facts lack {exc.args[0]!r}") from exc
 
@@ -228,6 +236,21 @@ def _link(links: Mapping[tuple, float], a: str, b: str) -> float:
     return float(bps)
 
 
+def _miss_bps(f: DeviceFacts, engine: Optional[str], comp: str) -> Optional[float]:
+    """The rate an expert store's miss crosses the host link at, bytes/s, or None when nothing crosses it (a unified
+    device maps its experts in place): the Triton store's copy kernel at its measured rate (`expert_copy_bps`, 5.5 GB/s
+    on a V100 where the DMA moves 8.1 — priced at the DMA, a DeepSeek decode's misses were under-priced by a third,
+    2026-11-03), the compiled store's DMA (`h2d_bps`); refused by name when the Triton rate is not measured."""
+    if f.unified:
+        return None
+    if engine == "triton":
+        if f.expert_copy_bps is None:
+            raise MissingFact(f"{comp}: the Triton expert store's miss copy is not measured (`measured.expert_copy`, "
+                              f"measured at the first Triton launch)")
+        return f.expert_copy_bps
+    return f.h2d_bps
+
+
 def plan_seconds(strategy: str, allocations: Mapping[str, Any], works: Mapping[str, Work], uses: Mapping[str, int],
                  devices: Mapping[str, DeviceFacts], host: Optional[HostFacts], dtype: str,
                  phases: Optional[Mapping[str, int]] = None, prompt: Optional[Mapping[str, Work]] = None,
@@ -301,12 +324,14 @@ def plan_seconds(strategy: str, allocations: Mapping[str, Any], works: Mapping[s
         else:
             total += w.weight_bytes / _loader_bps(f, engine, st, "device", "cold", dev) + \
                 (loads - 1) * w.weight_bytes / _loader_bps(f, engine, st, "device", "warm", dev)
-        if strategy not in RESIDENT_STRATEGIES:
+        if strategy not in RESIDENT_STRATEGIES and (w.expert_bytes_per_use or (first and first.expert_bytes_per_use)):
             # an expert store: the routed experts a use reads cross the host link at every use (per token for a
             # generating component, the prompt's set once) — unpriced, Qwen3-30B estimated 15 s against 174 s measured
-            total += n * w.expert_bytes_per_use / f.h2d_bps
-            if first is not None:
-                total += first.expert_bytes_per_use / f.h2d_bps
+            bps = _miss_bps(f, engine, comp)
+            if bps:
+                total += n * w.expert_bytes_per_use / bps
+                if first is not None:
+                    total += first.expert_bytes_per_use / bps
     if links is not None:
         total += link_seconds(strategy, allocations, works, uses, links)
     return total

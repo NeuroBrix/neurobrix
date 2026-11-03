@@ -7834,11 +7834,13 @@ class PrismSolver:
             return {}
         plan_devices = devices          # the planner's device objects (the residency's), before the facts below
         devices = {}
+        import dataclasses as _dc
         for d in profile.devices:
             if getattr(d, "measured", None):
                 f = TE.device_facts(d.measured, f"device {d.index}")
                 for prefix in ("cuda", "mps", "hip", "xpu"):
-                    devices[f"{prefix}:{d.index}"] = f
+                    devices[f"{prefix}:{d.index}"] = (_dc.replace(f, unified=True)
+                                                      if _device_is_unified(f"{prefix}:{d.index}", profile) else f)
         try:
             host = TE.host_facts(getattr(profile, "host_measured", None))
         except TE.MissingFact:

@@ -144,10 +144,20 @@ def test_a_lazy_plan_s_host_held_component_lands_in_host_memory_then_streams():
     held = T.plan_seconds("lazy_sequential", {"model": ("zero3:cuda:0", {})}, *args, engine="triton", stored=ST)
     assert abs(plain - use - 8e9 / 2e9) < 1e-6
     assert abs(held - use - (8e9 / 0.5e9 + 2 * 8e9 / 8e9)) < 1e-6
+    # the routed experts cross at the store's own copy: the Triton store's kernel (`expert_copy`, measured at the first
+    # launch — 5.5 GB/s on a V100 where the DMA moves 8.1), refused by name unmeasured; nothing on a unified device
     store = {"model": Work(flops=0.0, weight_bytes=8e9, activation_bytes=0.0, expert_bytes_per_use=int(1e9))}
-    routed = T.plan_seconds("lazy_sequential", {"model": ("zero3:cuda:0", {})}, store, {"model": 2}, {"cuda:0": facts},
+    import dataclasses as _dc
+    copy = _dc.replace(facts, expert_copy_bps=5e9)
+    routed = T.plan_seconds("lazy_sequential", {"model": ("zero3:cuda:0", {})}, store, {"model": 2}, {"cuda:0": copy},
                             None, "float16", engine="triton", stored=ST)
-    assert abs(routed - use - (8e9 / 0.5e9 + 2 * 1e9 / 8e9)) < 1e-6
+    assert abs(routed - use - (8e9 / 0.5e9 + 2 * 1e9 / 5e9)) < 1e-6
+    with pytest.raises(T.MissingFact, match="miss copy is not measured"):
+        T.plan_seconds("lazy_sequential", {"model": ("zero3:cuda:0", {})}, store, {"model": 2}, {"cuda:0": facts},
+                       None, "float16", engine="triton", stored=ST)
+    unified = T.plan_seconds("lazy_sequential", {"model": ("zero3:cuda:0", {})}, store, {"model": 2},
+                             {"cuda:0": _dc.replace(copy, unified=True)}, None, "float16", engine="triton", stored=ST)
+    assert abs(unified - use - 8e9 / 0.5e9) < 1e-6          # mapped in place: the misses cost no copy
 
 
 def test_a_generated_token_streams_its_weights_at_the_engine_s_decode_bandwidth():

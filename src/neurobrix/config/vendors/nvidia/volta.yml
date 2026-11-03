@@ -181,6 +181,10 @@ measured:
   h2d_gbps: 8.1
   d2h_gbps: 3.7
   h2d_pageable_gbps: 4.6
+  # the Triton expert store's miss copy, a kernel reading page-locked host memory over the link — measured 2026-11-03 at
+  # the first Triton launch on the rack's V100-SXM2-16GB (nbxtensor moe_device_residency.measure_miss_copy, the launch
+  # grid's fastest): 1024 elements x 16 warps, 5.5 GB/s where the DMA copy moves 8.1
+  expert_copy: {block: 1024, warps: 16, gbps: 5.5}
   # a decode step's matrix-vector product, GB/s of weights streamed — measured 2026-10-27 23:4x CET on the rack, card 0, alone (core/prism/facts_probe.gemv_gbps: x[1,4096] @ W[14336,4096]^T, 50 launches; W's bytes / time)
   gemv_gbps:
     triton: {float16: 763.2, float32: 822.4}

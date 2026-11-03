@@ -40,7 +40,7 @@ def _solver(tmp_path, flow):
 
 
 def _profile(measured):
-    return NS(devices=[NS(index=0, measured=measured)], host_measured=None)
+    return NS(devices=[NS(index=0, measured=measured, has_unified_memory=False)], host_measured=None)
 
 
 def test_nothing_is_estimated_on_a_profile_without_measured_facts(tmp_path):
