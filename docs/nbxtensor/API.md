@@ -1052,13 +1052,6 @@ def clamp_forward_kernel(input_ptr, output_ptr, n_elements, min_val, max_val, ha
 def clamp_min_forward_kernel(input_ptr, output_ptr, n_elements, min_val, BLOCK_SIZE: tl.constexpr)
 ```
 
-`nbxtensor.ops.conv1d`
-
-```python
-def conv1d_forward_kernel(input_pointer, weight_pointer, output_pointer, bias_pointer, in_n, input_length, out_c, out_length, input_n_stride, input_c_stride, input_l_stride, weight_n_stride, weight_c_stride, weight_l_stride, output_n_stride, output_c_stride, output_l_stride, weight_c: tl.constexpr, weight_k: tl.constexpr, stride_l: tl.constexpr, padding_l: tl.constexpr, dilation_l: tl.constexpr, groups: tl.constexpr, BLOCK_NI_LO: tl.constexpr, BLOCK_CI: tl.constexpr, BLOCK_CO: tl.constexpr)
-    # Conv1D forward
-```
-
 `nbxtensor.ops.conv2d`
 
 ```python
@@ -1336,7 +1329,6 @@ def flash_layout(name, MB, NS, DA, DB, WM)
 `nbxtensor.ops.flash_decode`
 
 ```python
-def flash_decode_split_kernel(q_ptr, k_ptr, v_ptr, bias_ptr, opart_ptr, mpart_ptr, lpart_ptr, T_k, seg_len, sm_scale, stride_qh, stride_qg, stride_kh, stride_kn, stride_oh, stride_os, stride_og, stride_mh, stride_ms, GROUPS: tl.constexpr, BLOCK_G: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_D: tl.constexpr, D: tl.constexpr, HAS_BIAS: tl.constexpr)
 def flash_decode_reduce_kernel(opart_ptr, mpart_ptr, lpart_ptr, out_ptr, stride_oh, stride_os, stride_og, stride_mh, stride_ms, stride_outh, stride_outg, SPLIT: tl.constexpr, GROUPS: tl.constexpr, BLOCK_G: tl.constexpr, BLOCK_D: tl.constexpr, D: tl.constexpr)
     # Combine the split partials via log-sum-exp correction.
 ```

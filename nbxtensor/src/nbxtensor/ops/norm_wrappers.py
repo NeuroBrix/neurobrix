@@ -115,7 +115,6 @@ from nbxtensor.ops.bitwise_not import bitwise_not_forward_kernel
 from nbxtensor.ops.logical_and import logical_and_forward_kernel
 from nbxtensor.ops.logical_or import logical_or_forward_kernel
 from nbxtensor.ops.logical_not import logical_not_forward_kernel
-from nbxtensor.ops.conv1d import conv1d_forward_kernel
 from nbxtensor.ops.lerp import lerp_tensor_forward_kernel, lerp_scalar_head_kernel, lerp_scalar_tail_kernel
 from nbxtensor.ops.dot_op import dot_kernel_small, dot_kernel_partial, dot_kernel_reduce
 from nbxtensor.ops.flip_op import flip_1d_kernel, flip_strided_kernel

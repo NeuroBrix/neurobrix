@@ -115,7 +115,6 @@ from nbxtensor.ops.bitwise_not import bitwise_not_forward_kernel
 from nbxtensor.ops.logical_and import logical_and_forward_kernel
 from nbxtensor.ops.logical_or import logical_or_forward_kernel
 from nbxtensor.ops.logical_not import logical_not_forward_kernel
-from nbxtensor.ops.conv1d import conv1d_forward_kernel
 from nbxtensor.ops.lerp import lerp_tensor_forward_kernel, lerp_scalar_head_kernel, lerp_scalar_tail_kernel
 from nbxtensor.ops.dot_op import dot_kernel_small, dot_kernel_partial, dot_kernel_reduce
 from nbxtensor.ops.flip_op import flip_1d_kernel, flip_strided_kernel
@@ -804,90 +803,6 @@ def _decode_attn_vec(q, k, v, bias, softmax_scale,
     return out.reshape(batch, nheads, 1, D_v)
 
 
-def _flash_decode(q, k, v, bias, softmax_scale,
-                  batch, nheads, nheads_k, seqlen_k, headdim):
-    """Split-KV flash-decoding launch pair. See ops/flash_decode.py.
-
-    q [B, H, 1, D] fp16 · k/v [B, H_kv, T_k, D] fp16 (native cache
-    layout) · bias flat [T_k] additive fp32/fp16 or None.
-
-    GQA by grouping Q inside each KV head: [B, H, 1, D] viewed as
-    [B*H_kv, GROUPS, D] is a pure view (flat order b, h_kv, g, d).
-
-    The split count targets SM occupancy: enough programs that
-    B*H_kv*SPLIT covers the 80 SMs, capped so each split still has a
-    few BLOCK_N chunks to amortise its prologue.
-    """
-    import os as _os_fd2
-    from nbxtensor.ops.flash_decode import (flash_decode_split_kernel,
-                                   flash_decode_reduce_kernel)
-    groups = nheads // nheads_k
-    BH = batch * nheads_k
-    # Same capability as the prefill path: a decode step at one query row
-    # still forms a `tl.dot` whose tile dimension must be one the backend
-    # computes correctly. `seqlen_q=1, headdim=64` reached the refusal here
-    # after the prefill floor was already raised -- the small dimension was
-    # BLOCK_G, not BLOCK_M, and the refusal names neither.
-    BLOCK_G = max(triton.next_power_of_2(groups), _fa_min_tile())
-    BLOCK_D = max(triton.next_power_of_2(headdim), _fa_min_tile())
-    # K and V tiles are [BLOCK_N, BLOCK_D] fp16, double-buffered by the
-    # pipeliner: BLOCK_N * BLOCK_D * 2 B * ~4 buffers must fit Volta's
-    # 96 KB. At BLOCK_D<=128, BLOCK_N=128 uses ~
-    # 128*128*2*4 = 128 KB requested pre-pipelining but measured to fit;
-    # at BLOCK_D=256 the same BLOCK_N requests 147 KB and refuses to
-    # launch (caught by the day-one oracle at D=129). Halve until it
-    # fits the 96 KB budget.
-    # Defaults = the measured best of the 2026-08-23 10-config sweep
-    # (BN=64/SEG=512: 0.47 ms/call at T_k=4,352 vs 2.0 ms at the former
-    # BN=128 default, whose 128x128 double-buffered tile chokes Volta
-    # smem/occupancy). The kernel remains opt-in and remains SLOWER
-    # than the math path on the row even at this config (see the flag
-    # site) — but whoever arms it gets its best self.
-    BLOCK_N = int(_os_fd2.environ.get("NBX_FD_BLOCK_N", "64")) \
-        if BLOCK_D <= 128 else (32 if BLOCK_D <= 256 else 16)
-    split = max(1, min(int(triton.cdiv(
-        seqlen_k, int(_os_fd2.environ.get("NBX_FD_SEG", "512")))), 64))
-    seg_len = int(triton.cdiv(seqlen_k, split))
-
-    qg = q.reshape(BH, groups, headdim)
-    kf = k.reshape(BH, seqlen_k, headdim)
-    vf = v.reshape(BH, seqlen_k, headdim)
-
-    dev = f"cuda:{q._device_idx}"
-    opart = NBXTensor.empty((BH, split, groups, headdim),
-                            dtype=NBXDtype.float32, device=dev)
-    mpart = NBXTensor.empty((BH, split, groups), dtype=NBXDtype.float32,
-                            device=dev)
-    lpart = NBXTensor.empty((BH, split, groups), dtype=NBXDtype.float32,
-                            device=dev)
-    out = NBXTensor.empty((BH, groups, headdim), dtype=q.nbx_dtype,
-                          device=dev)
-
-    set_device(q)
-    flash_decode_split_kernel[(BH, split)](
-        qg, kf, vf,
-        bias if bias is not None else qg,   # dead pointer when HAS_BIAS=0
-        opart, mpart, lpart,
-        seqlen_k, seg_len, float(softmax_scale),
-        qg.stride(0), qg.stride(1),
-        kf.stride(0), kf.stride(1),
-        opart.stride(0), opart.stride(1), opart.stride(2),
-        mpart.stride(0), mpart.stride(1),
-        GROUPS=groups, BLOCK_G=BLOCK_G, BLOCK_N=BLOCK_N,
-        BLOCK_D=BLOCK_D, D=headdim,
-        HAS_BIAS=bias is not None,
-        num_warps=4, num_stages=2)
-    flash_decode_reduce_kernel[(BH,)](
-        opart, mpart, lpart, out,
-        opart.stride(0), opart.stride(1), opart.stride(2),
-        mpart.stride(0), mpart.stride(1),
-        out.stride(0), out.stride(1),
-        SPLIT=split, GROUPS=groups, BLOCK_G=BLOCK_G,
-        BLOCK_D=BLOCK_D, D=headdim,
-        num_warps=4)
-    return out.reshape(batch, nheads, 1, headdim)
-
-
 def _flash_m8n8k4(q, k, v, bias, softmax_scale, gqa_groups, tile, has_bias, split=False):
     """Flash forward on the m8n8k4 matrix unit (ops/flash_attention_m8n8k4.py); `bias` is the wrapper's
     memory-resident [B, H, Sq, Sk] bias view (unit stride on the key axis), not read when `has_bias` is False (the
@@ -1109,21 +1024,6 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
                                   headdim, q_round=q_round)
         if _dv_out is not None:
             return _dv_out
-    if (seqlen_q == 1 and q._device != "cpu"
-            and _os_fd.environ.get("NBX_FLASH_DECODE", "0") == "1"
-            and headdim == v.shape[3]):
-        _fd_bias = None
-        _fd_ok = True
-        if attn_mask is not None:
-            if attn_mask.numel() == seqlen_k:
-                _fd_bias = attn_mask.reshape(seqlen_k)
-            else:
-                _fd_ok = False
-        if _fd_ok:
-            # This opt-in path keeps its measured behavior: flat layout.
-            return _flash_decode(_q_cast(q), k.contiguous(), v.contiguous(),
-                                 _fd_bias, softmax_scale,
-                                 batch, nheads, nheads_k, seqlen_k, headdim)
 
     # The kernels require matching operand dtypes; the fp32-stored GEMMs (Volta's store policy,
     # M<=4 decode) can leave q/k/v mixed (Sana: fp32 Q vs fp16 K; Allegro: fp32 V). If they
