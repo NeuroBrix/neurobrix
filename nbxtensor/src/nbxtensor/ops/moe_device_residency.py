@@ -102,3 +102,40 @@ def expert_miss_copy_kernel(
     offs = c * BLOCK + tl.arange(0, BLOCK)
     m = (offs < n) & miss
     tl.store(dst + offs, tl.load(src + offs, mask=m), mask=m)
+
+
+def measure_miss_copy(nbytes: int, reps: int, blocks, warps, experts: int) -> dict:
+    """`expert_miss_copy_kernel` on this device, launched as the engine's expert store launches it: `nbytes` in
+    page-locked host memory as `experts` missed experts of three projections each, copied into device slots at every
+    candidate (block, warps), `reps` launches each after one; {"block", "warps", "gbps"} of the fastest, every
+    candidate's rate in "grid". On a V100-SXM2 (2026-11-03): 1024 x 16 at 5.4-5.5 GB/s, where a fixed 4096 x 4 gave
+    3.35."""
+    import time
+    import numpy as np
+    from nbxtensor.memory.allocator import DeviceAllocator as DA
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
+    n = int(nbytes) // (2 * 3 * int(experts))                 # fp16 elements per projection
+    host = [[NBXTensor.empty_cpu((n,), NBXDtype.float16, pinned=True) for _ in range(3)] for _ in range(experts)]
+    slots = [[NBXTensor.empty((n,), dtype=NBXDtype.float16, device="cuda:0") for _ in range(3)] for _ in range(experts)]
+    dev = lambda a: NBXTensor.from_numpy(np.asarray(a, dtype=np.int64)).to("cuda:0")          # noqa: E731
+    host_tabs = [dev([host[e][p].data_ptr() for e in range(experts)]) for p in range(3)]
+    slot_tabs = [dev([slots[e][p].data_ptr() for e in range(experts)]) for p in range(3)]
+    miss = dev(list(range(experts)))
+    moved = experts * 3 * n * 2
+    grid = {}
+    for block in blocks:
+        for w in warps:
+            def launch(block=block, w=w):
+                expert_miss_copy_kernel[(experts, 3, triton.cdiv(n, block))](
+                    miss, miss, *host_tabs, *slot_tabs, 0, n, n, n, BLOCK=block, W_BF16=False, num_warps=w)
+            launch()
+            DA.device_synchronize(0)
+            t0 = time.perf_counter()
+            for _ in range(reps):
+                launch()
+            DA.device_synchronize(0)
+            grid[f"{block}x{w}"] = round(moved * reps / (time.perf_counter() - t0) / 1e9, 2)
+    best = max(grid, key=grid.get)
+    block, w = (int(v) for v in best.split("x"))
+    return {"block": block, "warps": w, "gbps": grid[best], "grid": grid}

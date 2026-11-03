@@ -206,7 +206,7 @@ class NBXExpertStore:
 
     def _copy_launch(self):
         """(block, warps) of the miss copy on this store's card: the profile's measured `expert_copy` (measured at the
-        first launch by `core/prism/facts_probe.expert_copy`, autodetect.ensure_measured_facts) — refused by name when
+        first launch by `nbxtensor.ops.moe_device_residency.measure_miss_copy`, autodetect.ensure_measured_facts) — refused by name when
         the profile does not carry it, never a launch carried from another card."""
         if self._copy is None:
             from nbxtensor.ops.wrappers import get_hardware_profile
@@ -217,7 +217,7 @@ class NBXExpertStore:
             if not fact or "block" not in fact or "warps" not in fact:
                 raise RuntimeError(
                     f"ZERO FALLBACK: the expert store copies its misses with the launch measured on its card "
-                    f"(the profile's measured.expert_copy: core/prism/facts_probe.expert_copy, written at the first "
+                    f"(the profile's measured.expert_copy: nbxtensor.ops.moe_device_residency.measure_miss_copy, written at the first "
                     f"Triton launch by autodetect.ensure_measured_facts), and the profile "
                     f"{getattr(prof, 'id', None)!r} carries none for device {self.device_idx}")
             self._copy = (int(fact["block"]), int(fact["warps"]))

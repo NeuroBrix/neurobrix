@@ -1745,6 +1745,8 @@ def moe_down_split_vec_half_kernel(h_ptr, topk_ids_ptr, topk_w_ptr, down_tab, pa
 ```python
 def expert_slot_assign_kernel(ids_ptr, slot_of_ptr, owner_ptr, stamp_ptr, clock_ptr, slot_out_ptr, miss_out_ptr, layer_base, S, TOP_K: tl.constexpr, BLOCK_S: tl.constexpr)
 def expert_miss_copy_kernel(miss_ptr, slot_ptr, host_g, host_u, host_d, slot_g, slot_u, slot_d, layer_base, n_g, n_u, n_d, BLOCK: tl.constexpr, W_BF16: tl.constexpr)
+def measure_miss_copy(nbytes: int, reps: int, blocks, warps, experts: int)
+    # `expert_miss_copy_kernel` on this device, launched as the engine's expert store launches it
 ```
 
 `nbxtensor.ops.moe_wrappers`

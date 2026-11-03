@@ -81,6 +81,7 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 |---|---|---|
 | 2026-10-30 | `traced_output_dtype_name` (triton/dtype.py), `traced_output_is_complex` and `amp_fp32_output_dtype` (twins in core/dtype/engine.py and triton/dtype.py, held equal by tests) | `nbxtensor.dtype.outputs` — one definition both engines import |
 | 2026-11-02 | the strategies' duplicates live once in `shared_steps` (`execute_whole_component`, `unload_sharded_weights` with each branch's `_release_device_cache`, `_load_sharded_weights`); 8 findings closed. The RATCHET RAISED by the remainder, +66 lines: the Triton arena factor became a fact the engine measures at its first launch on a card no vendor file declares (`core/prism/arena_probe`, the owner 2026-11-02 15:01, a 0.0.1 criterion) — 178 lines added, 112 taken back here | -112 / +178 |
+| 2026-11-03 | the expert store's miss-copy measurement, first written as `core/prism/facts_probe.expert_copy`, lives next to its kernel (`expert_miss_copy_kernel`). The RATCHET RAISED by the remainder, +38 lines: the store reads the launch measured on the machine and the first Triton launch measures it where the profile carries none (the supervisor 2026-11-03 10:32, the first item: the copy is 75-93 % of a MoE decode's GPU time on the V100s), replacing a launch written in the code | `nbxtensor.ops.moe_device_residency.measure_miss_copy` |
 
 ## Kept in the engine
 

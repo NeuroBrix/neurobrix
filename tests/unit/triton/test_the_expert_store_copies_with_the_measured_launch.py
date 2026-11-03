@@ -1,6 +1,6 @@
 """The expert store's miss copy launches as this machine measured it (the supervisor 2026-11-03 10:32: the copy is 75-93 %
 of a mixture-of-experts decode's GPU time on the V100s): the profile's `measured.expert_copy` (block, warps), written at
-the first Triton launch by `facts_probe.expert_copy` where the profile carries none — the fixed 4096 x 4 the store
+the first Triton launch by `nbxtensor.ops.moe_device_residency.measure_miss_copy` where the profile carries none — the fixed 4096 x 4 the store
 launched gave 3.35 GB/s where the grid's best gave 3.98-4.09 on a quiet V100 (2026-11-03). What this test would do if
 the code were wrong: a launch that ignores the profile (a constant in the store) — RED; a profile without the fact
 served anyway — RED (no refusal); a first launch that measures again what the profile carries, or never measures — RED.
@@ -42,13 +42,12 @@ def test_a_card_the_profile_does_not_list_is_refused(monkeypatch):
 
 def test_the_first_triton_launch_measures_the_copy_only_where_the_profile_has_none(monkeypatch, tmp_path):
     from neurobrix.core.prism import autodetect as AD
-    from neurobrix.core.prism import facts_probe as P
     import yaml
     monkeypatch.setattr(AD, "HARDWARE_DIR", tmp_path)
     monkeypatch.setattr("neurobrix.core.config.loader.vendor_config_for_device",
                         lambda *a, **k: {"memory": {"triton_arena_activation_factor": 1.35}})
     probed = []
-    monkeypatch.setattr(P, "expert_copy", lambda *a, **k: probed.append(a) or {"block": 8192, "warps": 2, "gbps": 3.6,
+    monkeypatch.setattr("nbxtensor.ops.moe_device_residency.measure_miss_copy", lambda *a, **k: probed.append(a) or {"block": 8192, "warps": 2, "gbps": 3.6,
                                                                                 "grid": {"8192x2": 3.6}})
     for carried, expect in (({"block": 4096, "warps": 4}, 0), (None, 1)):
         measured = {"source": "s", "vmm_chunk_bytes": 1, "gemv_gbps": {"triton": {}}}
@@ -69,13 +68,12 @@ def test_a_unified_device_is_not_probed(monkeypatch, tmp_path):
     """On a unified device the experts are mapped in place (Strategy 2.5): the first launch measures no card-side copy
     (whose Triton launch does not bind on Metal, the Mac 2026-11-03 10:43) and writes none."""
     from neurobrix.core.prism import autodetect as AD
-    from neurobrix.core.prism import facts_probe as P
     import yaml
     monkeypatch.setattr(AD, "HARDWARE_DIR", tmp_path)
     monkeypatch.setattr("neurobrix.core.config.loader.vendor_config_for_device",
                         lambda *a, **k: {"memory": {"triton_arena_activation_factor": 1.19}})
     probed = []
-    monkeypatch.setattr(P, "expert_copy", lambda *a, **k: probed.append(a) or {"block": 1, "warps": 1, "gbps": 1})
+    monkeypatch.setattr("nbxtensor.ops.moe_device_residency.measure_miss_copy", lambda *a, **k: probed.append(a) or {"block": 1, "warps": 1, "gbps": 1})
     spec = {"id": "default-m", "devices": [{"index": 0, "brand": "apple", "architecture": "apple_silicon", "model": "M4",
                                             "unified_memory": True,
                                             "measured": {"source": "s", "vmm_chunk_bytes": 0, "gemv_gbps": {"triton": {}}}}],
