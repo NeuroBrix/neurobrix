@@ -3062,7 +3062,9 @@ def table(a) -> int:
             for line in refused[:30]:
                 print(f"   {line}")
             continue
-        removed, _ = T.replace_model(path, model, rows, keyless_ops=0 if rows else max(keyless, len(unrunnable)))
+        from container_renames import RENAMED
+        removed, _ = T.replace_model(path, model, rows, keyless_ops=0 if rows else max(keyless, len(unrunnable)),
+                                     former=[old for old, now in RENAMED.items() if now == model])
         units, files = CI.units_and_files(CI.merge(measured + [CI.take()]))
         T.replace_inputs(path, model, {"model": model, "container": container, "jobs": plans, "units": units,
                                        "files": files, "roots": CI.recorded_roots(),

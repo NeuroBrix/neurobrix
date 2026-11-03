@@ -138,3 +138,14 @@ def test_an_old_schema_table_is_refused_by_name_and_migrated_once(tmp_path):
     assert got == [("A", "(19,", ["aten.mm::7", "aten.mm::9"], [8192, 16384]),
                    ("A", "(64,", [None], [16384]),
                    ("B", "(19,", ["aten.mm::7"], [16384])]
+
+
+def test_a_census_replaces_the_rows_under_the_container_s_former_name(tmp_path):
+    """A census of a renamed container replaces its rows under the names it held before (tools/container_renames):
+    a table holds today's names only. What it would do if the code were wrong: the former name's rows kept beside
+    the new ones — one model under two names (SANA-Video_2B_720p, 76 / 112 rows on the V100 tables, 2026-11-03) — RED."""
+    p = tmp_path / "16g.jsonl"
+    T.write(p, [_row("Old-Diffusers", K1), _row("New", K1), _row("B", K2)])
+    removed, written = T.replace_model(p, "New", [_row("New", K2)], former=["Old-Diffusers"])
+    assert (removed, written) == (2, 1)
+    assert {(r["model"], r["key"]) for r in T.read(p)} == {("New", K2), ("B", K2)}

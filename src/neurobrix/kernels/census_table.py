@@ -148,9 +148,9 @@ def locked(path: Path):
             fcntl.flock(lk, fcntl.LOCK_UN)
 
 
-def replace_model(path: Path, model: str, rows: Iterable[Dict], keyless_ops: int = 0) -> Tuple[int, int]:
+def replace_model(path: Path, model: str, rows: Iterable[Dict], keyless_ops: int = 0, former=()) -> Tuple[int, int]:
     """The model's rows replaced by `rows` (a new census of that container), every other model's kept:
-    a retrace replaces, never adds. Returns (rows removed, rows written for the model).
+    a retrace replaces, never adds, and `former` names (container_renames) too. Returns (removed, written).
 
     `keyless_ops` is the derivation's PROOF that a model forms no key: the count of kernel-bearing ops it
     placed whose launcher key function returned no key (a profile's matrix unit carries its tile in the
@@ -172,7 +172,7 @@ def replace_model(path: Path, model: str, rows: Iterable[Dict], keyless_ops: int
                           f"are kept")
     with locked(path):
         old = read(path)
-        kept = [r for r in old if r["model"] != model]
+        kept = [r for r in old if r["model"] not in {model, *former}]
         write(path, kept + rows)
     return len(old) - len(kept), len(rows)
 
