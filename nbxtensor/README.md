@@ -49,9 +49,11 @@ reference first. nbxtensor ran each op through its per-op (sequential) dispatch 
 | V100 16 GB | 1 422 | 35 | 1 387 | 113 / 32 |
 | V100 32 GB | 1 432 | 39 | 1 393 | 113 / 3 |
 
-Torch is faster on most single ops today: by 2–5x at the median for norms, reductions and GEMMs, where nbxtensor's
-per-op dispatch costs 0.1–0.25 ms against torch eager's ~0.05 ms, and by much more on a few kernels (transposed 1-D
-convolutions, weight_norm, attention) that are being rewritten one by one. The audit, with every family and its cause, is
+**What this table measures, and what it does not.** Most of the losses are on small ops, and there the time measured is
+the benchmark's own per-op dispatch path (0.1–0.25 ms a call, against torch eager's ~0.05 ms), not the kernel and not
+the engine, which replays its compiled sequence without that per-op cost. A corrected table, with the kernel time and
+the dispatch time in separate columns for both libraries, will replace this one. The kernels that lose on their own
+(transposed 1-D convolutions, weight_norm, attention) are being rewritten one by one. The audit, with every family and its cause, is
 `docs/nbxtensor/V100_PERF_AUDIT.md` in the NeuroBrix repository.
 
 ## Installation

@@ -152,7 +152,9 @@ Where nbxtensor loses (16 GB; ratio = nbxtensor's median over the best right tor
 | scaled_dot_product_attention | 25 | 0 | 12.2 | 17.0 |
 | weight_norm | 16 | 0 | 30.4 | 36.4 |
 
-Read with what it measures:
+Read with what it measures — **these tables compare torch with the benchmark's per-op dispatch path, not with the
+engine** (which replays its compiled sequence without that per-op cost): a tool defect, to be replaced by a table with
+the kernel time and the dispatch time in separate columns for both libraries (the supervisor 2026-11-03 17:25).
 
 - **A per-call cost dominates the small instances.** nbxtensor's fastest instance takes 0.10 ms and its tenth percentile
   0.27 ms, where torch eager's are 0.033 and 0.054 ms: the sequential dispatcher's Python and launch path costs
