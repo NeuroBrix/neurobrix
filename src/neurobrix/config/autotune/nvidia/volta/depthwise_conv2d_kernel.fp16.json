@@ -22722,8 +22722,9 @@
   "(11200, 128, 128, 128, 128, 3, 3, 1, 1, 1, 1, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 128,
-     "BLOCK_C": 32
+     "BC": 1,
+     "TH": 4,
+     "TW": 128
     },
     "num_warps": 4,
     "num_stages": 2,
@@ -22731,8 +22732,8 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-17T02:50:02+00:00",
-    "engine_version": "0.5.3",
+    "date": "2026-11-03T14:12:55+00:00",
+    "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
      "name": "cuda"
@@ -22754,21 +22755,27 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00023748693282019413,
+    "launches": 1,
+    "fp16_contract": false,
+    "launch_deviations": [
+     0.0002777363235665526
+    ],
+    "deviation": 0.0002777363235665526,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
      "device": {
       "ordinal": 0,
-      "visible_devices": "1",
+      "visible_devices": "0",
       "name": "Tesla V100-SXM2-16GB",
-      "memory_mb": 16384
+      "memory_mb": 16384,
+      "unified": false
      },
      "clocks_mhz": {
       "0": {
@@ -22789,17 +22796,18 @@
       }
      }
     },
-    "best_ms": 2.5627988974253335,
-    "second_ms": 2.9710965890150804,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 1.3497732466664807,
+    "second_ms": 1.43310695665854,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 13,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 10.283,
-     "runs": 37.25,
-     "bench": 0.507
+     "oracle": 11.021,
+     "runs": 75.624,
+     "bench": 0.886
     },
+    "stability_witness": null,
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -22910,16 +22918,17 @@
   "(11200, 24, 40, 24, 40, 3, 3, 1, 1, 1, 1, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 32,
-     "BLOCK_C": 32
+     "BC": 2,
+     "TH": 8,
+     "TW": 64
     },
-    "num_warps": 2,
+    "num_warps": 4,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T20:54:19+00:00",
+    "date": "2026-11-03T14:13:01+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -22943,15 +22952,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.000268303893697016
+     0.0002561850328544146
     ],
-    "deviation": 0.000268303893697016,
+    "deviation": 0.0002561850328544146,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -22982,16 +22992,16 @@
       }
      }
     },
-    "best_ms": 1.3310902885028295,
-    "second_ms": 1.3686491421290807,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 6,
+    "best_ms": 0.14987596672060144,
+    "second_ms": 0.17150062870334934,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 12,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.819,
-     "runs": 9.784,
-     "bench": 0.401
+     "oracle": 0.652,
+     "runs": 4.236,
+     "bench": 1.146
     },
     "stability_witness": null,
     "built": {
@@ -23484,17 +23494,18 @@
   "(11200, 32, 32, 32, 32, 3, 3, 1, 1, 1, 1, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 8,
+     "TW": 32
     },
     "num_warps": 4,
-    "num_stages": 3,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-17T02:47:42+00:00",
-    "engine_version": "0.5.3",
+    "date": "2026-11-03T14:13:09+00:00",
+    "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
      "name": "cuda"
@@ -23516,21 +23527,27 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.000275580387832929,
+    "launches": 1,
+    "fp16_contract": false,
+    "launch_deviations": [
+     0.0002620393716918503
+    ],
+    "deviation": 0.0002620393716918503,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
      "device": {
       "ordinal": 0,
-      "visible_devices": "1",
+      "visible_devices": "0",
       "name": "Tesla V100-SXM2-16GB",
-      "memory_mb": 16384
+      "memory_mb": 16384,
+      "unified": false
      },
      "clocks_mhz": {
       "0": {
@@ -23551,17 +23568,18 @@
       }
      }
     },
-    "best_ms": 0.15402358680449682,
-    "second_ms": 0.15491794156625804,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.12818478207503045,
+    "second_ms": 0.12862674608381827,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.721,
-     "runs": 2.256,
-     "bench": 0.799
+     "oracle": 0.712,
+     "runs": 4.627,
+     "bench": 1.704
     },
+    "stability_witness": null,
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -24054,16 +24072,17 @@
   "(128, 1, 1024, 1, 1024, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 32,
-     "BLOCK_C": 32
+     "BC": 16,
+     "TH": 4,
+     "TW": 32
     },
-    "num_warps": 2,
+    "num_warps": 8,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:34:46+00:00",
+    "date": "2026-11-03T14:13:12+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -24087,15 +24106,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.00033354666753737455
+     0.00036476670500260066
     ],
-    "deviation": 0.00033354666753737455,
+    "deviation": 0.00036476670500260066,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -24126,16 +24146,16 @@
       }
      }
     },
-    "best_ms": 0.01819027293769381,
-    "second_ms": 0.018211784936140514,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 6,
+    "best_ms": 0.01928829268403423,
+    "second_ms": 0.01928933588883926,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.003,
-     "runs": 0.111,
-     "bench": 1.292
+     "runs": 0.053,
+     "bench": 2.742
     },
     "stability_witness": null,
     "built": {
@@ -24248,16 +24268,17 @@
   "(128, 1, 10240, 1, 10240, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 16,
+     "TH": 1,
+     "TW": 64
     },
-    "num_warps": 4,
-    "num_stages": 3,
+    "num_warps": 8,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:34:48+00:00",
+    "date": "2026-11-03T14:13:15+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -24281,15 +24302,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.0003322054916896745
+     0.00031545201199398266
     ],
-    "deviation": 0.0003322054916896745,
+    "deviation": 0.00031545201199398266,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -24320,16 +24342,16 @@
       }
      }
     },
-    "best_ms": 0.02914730275237779,
-    "second_ms": 0.029279821999854856,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.025957096983949022,
+    "second_ms": 0.025969894074511772,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.033,
-     "runs": 0.162,
-     "bench": 1.55
+     "oracle": 0.029,
+     "runs": 0.299,
+     "bench": 2.561
     },
     "stability_witness": null,
     "built": {
@@ -24442,8 +24464,9 @@
   "(128, 1, 114688, 1, 114688, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
     "num_stages": 2,
@@ -24451,7 +24474,7 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:34:53+00:00",
+    "date": "2026-11-03T14:13:23+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -24475,15 +24498,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.0003504063281135634
+     0.0002910525304477885
     ],
-    "deviation": 0.0003504063281135634,
+    "deviation": 0.0002910525304477885,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -24514,16 +24538,16 @@
       }
      }
     },
-    "best_ms": 0.15544140430396064,
-    "second_ms": 0.15563017606996654,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.1194605721959046,
+    "second_ms": 0.12914643983237992,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 8,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.626,
-     "runs": 3.057,
-     "bench": 0.771
+     "oracle": 0.615,
+     "runs": 5.958,
+     "bench": 0.919
     },
     "stability_witness": null,
     "built": {
@@ -24636,16 +24660,17 @@
   "(128, 1, 12288, 1, 12288, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 16,
+     "TH": 1,
+     "TW": 64
     },
-    "num_warps": 4,
+    "num_warps": 8,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:34:55+00:00",
+    "date": "2026-11-03T14:13:26+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -24669,15 +24694,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.00024920130602505724
+     0.0002755881674794162
     ],
-    "deviation": 0.00024920130602505724,
+    "deviation": 0.0002755881674794162,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -24708,16 +24734,16 @@
       }
      }
     },
-    "best_ms": 0.031303908838801964,
-    "second_ms": 0.032045536070016395,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.027937770559591183,
+    "second_ms": 0.02852411746635846,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.036,
-     "runs": 0.204,
-     "bench": 1.48
+     "oracle": 0.044,
+     "runs": 0.415,
+     "bench": 2.451
     },
     "stability_witness": null,
     "built": {
@@ -24830,8 +24856,9 @@
   "(128, 1, 131072, 1, 131072, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
     "num_stages": 2,
@@ -24839,7 +24866,7 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:35:00+00:00",
+    "date": "2026-11-03T14:13:36+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -24863,15 +24890,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.0002690230253326352
+     0.00029138309450980264
     ],
-    "deviation": 0.0002690230253326352,
+    "deviation": 0.00029138309450980264,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -24902,16 +24930,16 @@
       }
      }
     },
-    "best_ms": 0.16937251261907732,
-    "second_ms": 0.16964558511972427,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.13108464477643852,
+    "second_ms": 0.14075992982024732,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 8,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.721,
-     "runs": 3.45,
-     "bench": 0.741
+     "oracle": 0.744,
+     "runs": 7.778,
+     "bench": 0.851
     },
     "stability_witness": null,
     "built": {
@@ -25024,8 +25052,9 @@
   "(128, 1, 14336, 1, 14336, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
     "num_stages": 2,
@@ -25033,7 +25062,7 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:35:02+00:00",
+    "date": "2026-11-03T14:13:39+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -25057,15 +25086,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.00031259522240495186
+     0.00031466654821317913
     ],
-    "deviation": 0.00031259522240495186,
+    "deviation": 0.00031466654821317913,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -25096,16 +25126,16 @@
       }
      }
     },
-    "best_ms": 0.03319235924175199,
-    "second_ms": 0.033702759729164054,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.031185147794060022,
+    "second_ms": 0.03243189545132269,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 13,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.048,
-     "runs": 0.234,
-     "bench": 1.356
+     "oracle": 0.073,
+     "runs": 0.556,
+     "bench": 2.333
     },
     "stability_witness": null,
     "built": {
@@ -25218,16 +25248,17 @@
   "(128, 1, 16384, 1, 16384, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 8,
+     "TH": 1,
+     "TW": 64
     },
     "num_warps": 4,
-    "num_stages": 3,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:35:04+00:00",
+    "date": "2026-11-03T14:13:42+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -25251,15 +25282,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.00031544021197644204
+     0.00035289561721289173
     ],
-    "deviation": 0.00031544021197644204,
+    "deviation": 0.00035289561721289173,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -25290,16 +25322,16 @@
       }
      }
     },
-    "best_ms": 0.033606953965499994,
-    "second_ms": 0.03472183244436187,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.033066880472004415,
+    "second_ms": 0.03307052725244002,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 13,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.051,
-     "runs": 0.281,
-     "bench": 1.37
+     "oracle": 0.057,
+     "runs": 0.501,
+     "bench": 2.317
     },
     "stability_witness": null,
     "built": {
@@ -25412,16 +25444,17 @@
   "(128, 1, 163840, 1, 163840, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
-    "num_stages": 3,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:35:10+00:00",
+    "date": "2026-11-03T14:13:53+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -25445,15 +25478,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.0003037244143099387
+     0.00027356302243291907
     ],
-    "deviation": 0.0003037244143099387,
+    "deviation": 0.00027356302243291907,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -25484,16 +25518,16 @@
       }
      }
     },
-    "best_ms": 0.21773944217147248,
-    "second_ms": 0.21831059428778563,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.16262311864336695,
+    "second_ms": 0.17811516805155442,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 8,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.934,
-     "runs": 4.307,
-     "bench": 0.663
+     "oracle": 0.852,
+     "runs": 8.617,
+     "bench": 0.797
     },
     "stability_witness": null,
     "built": {
@@ -25786,16 +25820,17 @@
   "(128, 1, 196608, 1, 196608, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
-    "num_stages": 3,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:35:18+00:00",
+    "date": "2026-11-03T14:14:05+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -25819,15 +25854,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.0002935820498262183
+     0.0003154875389021515
     ],
-    "deviation": 0.0002935820498262183,
+    "deviation": 0.0003154875389021515,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -25858,16 +25894,16 @@
       }
      }
     },
-    "best_ms": 0.25618235552555896,
-    "second_ms": 0.2563200007296271,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.1942807284268466,
+    "second_ms": 0.20942545453594488,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 8,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 1.113,
-     "runs": 5.175,
-     "bench": 0.623
+     "oracle": 1.02,
+     "runs": 10.208,
+     "bench": 0.71
     },
     "stability_witness": null,
     "built": {
@@ -25980,8 +26016,9 @@
   "(128, 1, 2048, 1, 2048, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 128,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
     "num_stages": 2,
@@ -25989,7 +26026,7 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:35:19+00:00",
+    "date": "2026-11-03T14:14:09+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -26013,15 +26050,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.0003854588989254116
+     0.00035430219436543447
     ],
-    "deviation": 0.0003854588989254116,
+    "deviation": 0.00035430219436543447,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -26052,16 +26090,16 @@
       }
      }
     },
-    "best_ms": 0.01895324194245713,
-    "second_ms": 0.01908523533732959,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.019078424495274495,
+    "second_ms": 0.01929781228682259,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.005,
-     "runs": 0.028,
-     "bench": 1.472
+     "runs": 0.05,
+     "bench": 2.801
     },
     "stability_witness": null,
     "built": {
@@ -26174,17 +26212,18 @@
   "(128, 1, 20480, 1, 20480, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
-    "num_stages": 3,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-17T02:47:36+00:00",
-    "engine_version": "0.5.3",
+    "date": "2026-11-03T14:14:12+00:00",
+    "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
      "name": "cuda"
@@ -26206,21 +26245,27 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00030229277494606745,
+    "launches": 1,
+    "fp16_contract": false,
+    "launch_deviations": [
+     0.0003069182477964838
+    ],
+    "deviation": 0.0003069182477964838,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
      "device": {
       "ordinal": 0,
-      "visible_devices": "1",
+      "visible_devices": "0",
       "name": "Tesla V100-SXM2-16GB",
-      "memory_mb": 16384
+      "memory_mb": 16384,
+      "unified": false
      },
      "clocks_mhz": {
       "0": {
@@ -26241,17 +26286,18 @@
       }
      }
     },
-    "best_ms": 0.0394172084875704,
-    "second_ms": 0.04231057537686801,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.034468612325958034,
+    "second_ms": 0.036842887771540676,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 13,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.059,
-     "runs": 0.321,
-     "bench": 1.4
+     "oracle": 0.066,
+     "runs": 0.669,
+     "bench": 2.226
     },
+    "stability_witness": null,
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -26362,16 +26408,17 @@
   "(128, 1, 24576, 1, 24576, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
-    "num_stages": 3,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:35:22+00:00",
+    "date": "2026-11-03T14:14:15+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -26395,15 +26442,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.0003455262691637386
+     0.00031380265164527535
     ],
-    "deviation": 0.0003455262691637386,
+    "deviation": 0.00031380265164527535,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -26434,16 +26482,16 @@
       }
      }
     },
-    "best_ms": 0.0451854338258687,
-    "second_ms": 0.04594744803609362,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.04021835321103342,
+    "second_ms": 0.04230648687524542,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 13,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.117,
-     "runs": 0.46,
-     "bench": 1.476
+     "oracle": 0.091,
+     "runs": 0.801,
+     "bench": 2.012
     },
     "stability_witness": null,
     "built": {
@@ -26556,16 +26604,17 @@
   "(128, 1, 28672, 1, 28672, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
-    "num_stages": 3,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:35:24+00:00",
+    "date": "2026-11-03T14:14:19+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -26589,15 +26638,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.0003486674453344214
+     0.0003285102776027275
     ],
-    "deviation": 0.0003486674453344214,
+    "deviation": 0.0003285102776027275,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -26628,16 +26678,16 @@
       }
      }
     },
-    "best_ms": 0.05059906774046231,
-    "second_ms": 0.0517379691093301,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.042788064842893124,
+    "second_ms": 0.04702867446312429,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 13,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.113,
-     "runs": 0.508,
-     "bench": 1.321
+     "oracle": 0.138,
+     "runs": 1.292,
+     "bench": 1.995
     },
     "stability_witness": null,
     "built": {
@@ -26750,8 +26800,9 @@
   "(128, 1, 3072, 1, 3072, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
     "num_stages": 2,
@@ -26759,7 +26810,7 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:35:25+00:00",
+    "date": "2026-11-03T14:14:22+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -26783,15 +26834,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.00034192922999197787
+     0.0003269922321061416
     ],
-    "deviation": 0.00034192922999197787,
+    "deviation": 0.0003269922321061416,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -26822,16 +26874,16 @@
       }
      }
     },
-    "best_ms": 0.018403757898427478,
-    "second_ms": 0.018672642584740547,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.01924145891598623,
+    "second_ms": 0.020590640822044325,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.007,
-     "runs": 0.042,
-     "bench": 1.411
+     "oracle": 0.012,
+     "runs": 0.077,
+     "bench": 2.747
     },
     "stability_witness": null,
     "built": {
@@ -26944,8 +26996,9 @@
   "(128, 1, 32768, 1, 32768, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 8,
+     "TH": 1,
+     "TW": 64
     },
     "num_warps": 4,
     "num_stages": 2,
@@ -26953,7 +27006,7 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:35:28+00:00",
+    "date": "2026-11-03T14:14:25+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -26977,15 +27030,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.00031252700324198356
+     0.0003146114842547969
     ],
-    "deviation": 0.00031252700324198356,
+    "deviation": 0.0003146114842547969,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -27016,16 +27070,16 @@
       }
      }
     },
-    "best_ms": 0.055421995478255104,
-    "second_ms": 0.05552550230798948,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.047826758455271005,
+    "second_ms": 0.047997422716361565,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 12,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.176,
-     "runs": 0.817,
-     "bench": 1.268
+     "oracle": 0.152,
+     "runs": 1.555,
+     "bench": 1.91
     },
     "stability_witness": null,
     "built": {
@@ -27138,16 +27192,17 @@
   "(128, 1, 4096, 1, 4096, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
-    "num_stages": 3,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:35:29+00:00",
+    "date": "2026-11-03T14:14:28+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -27171,15 +27226,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.0003132171307497031
+     0.0002832098675271466
     ],
-    "deviation": 0.0003132171307497031,
+    "deviation": 0.0002832098675271466,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -27210,16 +27266,16 @@
       }
      }
     },
-    "best_ms": 0.021737618000351986,
-    "second_ms": 0.022185941946520966,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.024880240372082852,
+    "second_ms": 0.02508809211952933,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.011,
-     "runs": 0.059,
-     "bench": 1.442
+     "oracle": 0.01,
+     "runs": 0.105,
+     "bench": 2.352
     },
     "stability_witness": null,
     "built": {
@@ -27332,16 +27388,17 @@
   "(128, 1, 40960, 1, 40960, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
-    "num_stages": 3,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:35:32+00:00",
+    "date": "2026-11-03T14:14:33+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -27365,15 +27422,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.00032413810753936957
+     0.00034356697110982223
     ],
-    "deviation": 0.00032413810753936957,
+    "deviation": 0.00034356697110982223,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -27404,16 +27462,16 @@
       }
      }
     },
-    "best_ms": 0.06649444639584087,
-    "second_ms": 0.06700053900623551,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.054253198154923,
+    "second_ms": 0.05699730922722004,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 12,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.223,
-     "runs": 1.078,
-     "bench": 1.214
+     "runs": 2.049,
+     "bench": 1.792
     },
     "stability_witness": null,
     "built": {
@@ -27526,8 +27584,9 @@
   "(128, 1, 49152, 1, 49152, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
     "num_stages": 2,
@@ -27535,7 +27594,7 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:35:35+00:00",
+    "date": "2026-11-03T14:14:37+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -27559,15 +27618,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.00031458629515687117
+     0.0002804491578591573
     ],
-    "deviation": 0.00031458629515687117,
+    "deviation": 0.0002804491578591573,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -27598,16 +27658,16 @@
       }
      }
     },
-    "best_ms": 0.0756001187630309,
-    "second_ms": 0.0764122831663399,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.06539272044785321,
+    "second_ms": 0.06548792127482962,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 12,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.276,
-     "runs": 1.249,
-     "bench": 1.114
+     "oracle": 0.256,
+     "runs": 2.484,
+     "bench": 1.664
     },
     "stability_witness": null,
     "built": {
@@ -27720,8 +27780,9 @@
   "(128, 1, 5120, 1, 5120, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
     "num_stages": 2,
@@ -27729,7 +27790,7 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:35:37+00:00",
+    "date": "2026-11-03T14:14:41+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -27753,15 +27814,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.0003313769188064822
+     0.0003346711643542841
     ],
-    "deviation": 0.0003313769188064822,
+    "deviation": 0.0003346711643542841,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -27792,16 +27854,16 @@
       }
      }
     },
-    "best_ms": 0.02245756633730845,
-    "second_ms": 0.022484864439480504,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.022625555120687063,
+    "second_ms": 0.02297885391323967,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.018,
-     "runs": 0.084,
-     "bench": 1.415
+     "oracle": 0.015,
+     "runs": 0.159,
+     "bench": 2.77
     },
     "stability_witness": null,
     "built": {
@@ -27914,8 +27976,9 @@
   "(128, 1, 57344, 1, 57344, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
     "num_stages": 2,
@@ -27923,7 +27986,7 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:35:40+00:00",
+    "date": "2026-11-03T14:14:46+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -27947,15 +28010,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.0003143931339740483
+     0.0002762672701942086
     ],
-    "deviation": 0.0003143931339740483,
+    "deviation": 0.0002762672701942086,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -27986,16 +28050,16 @@
       }
      }
     },
-    "best_ms": 0.0841610041198306,
-    "second_ms": 0.08486309653291335,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.06920782653063628,
+    "second_ms": 0.07281170622690727,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 12,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.294,
-     "runs": 1.493,
-     "bench": 1.237
+     "oracle": 0.276,
+     "runs": 2.779,
+     "bench": 1.48
     },
     "stability_witness": null,
     "built": {
@@ -28108,16 +28172,17 @@
   "(128, 1, 6144, 1, 6144, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 16,
+     "TH": 1,
+     "TW": 64
     },
-    "num_warps": 4,
-    "num_stages": 3,
+    "num_warps": 8,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:35:42+00:00",
+    "date": "2026-11-03T14:14:49+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -28141,15 +28206,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.00034754073808774877
+     0.0003616406303764366
     ],
-    "deviation": 0.00034754073808774877,
+    "deviation": 0.0003616406303764366,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -28180,16 +28246,16 @@
       }
      }
     },
-    "best_ms": 0.02466833087636676,
-    "second_ms": 0.024743389224802907,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.02455022751294464,
+    "second_ms": 0.024751120320921517,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 12,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.018,
-     "runs": 0.091,
-     "bench": 1.429
+     "oracle": 0.109,
+     "runs": 0.261,
+     "bench": 2.277
     },
     "stability_witness": null,
     "built": {
@@ -28302,17 +28368,18 @@
   "(128, 1, 65536, 1, 65536, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
-    "num_stages": 3,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-17T02:48:14+00:00",
-    "engine_version": "0.5.3",
+    "date": "2026-11-03T14:14:54+00:00",
+    "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
      "name": "cuda"
@@ -28334,21 +28401,27 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00030899765511220736,
+    "launches": 1,
+    "fp16_contract": false,
+    "launch_deviations": [
+     0.000289029691505364
+    ],
+    "deviation": 0.000289029691505364,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
      "device": {
       "ordinal": 0,
-      "visible_devices": "1",
+      "visible_devices": "0",
       "name": "Tesla V100-SXM2-16GB",
-      "memory_mb": 16384
+      "memory_mb": 16384,
+      "unified": false
      },
      "clocks_mhz": {
       "0": {
@@ -28369,17 +28442,18 @@
       }
      }
     },
-    "best_ms": 0.09012340383799695,
-    "second_ms": 0.09030468862063142,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.07446696991388946,
+    "second_ms": 0.07886161465389618,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 11,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.313,
-     "runs": 1.57,
-     "bench": 1.034
+     "oracle": 0.333,
+     "runs": 3.22,
+     "bench": 1.435
     },
+    "stability_witness": null,
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -28490,16 +28564,17 @@
   "(128, 1, 7168, 1, 7168, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 16,
+     "TH": 1,
+     "TW": 32
     },
     "num_warps": 4,
-    "num_stages": 3,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:35:43+00:00",
+    "date": "2026-11-03T14:14:57+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -28523,15 +28598,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.00029423263617761543
+     0.0003076786228972462
     ],
-    "deviation": 0.00029423263617761543,
+    "deviation": 0.0003076786228972462,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -28562,16 +28638,16 @@
       }
      }
     },
-    "best_ms": 0.025437137289768895,
-    "second_ms": 0.025735097586481796,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.026017579426626105,
+    "second_ms": 0.026077386648561136,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.022,
-     "runs": 0.107,
-     "bench": 1.422
+     "oracle": 0.026,
+     "runs": 0.199,
+     "bench": 2.426
     },
     "stability_witness": null,
     "built": {
@@ -28864,16 +28940,17 @@
   "(128, 1, 8192, 1, 8192, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
-    "num_stages": 3,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:35:45+00:00",
+    "date": "2026-11-03T14:15:00+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -28897,15 +28974,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.00026744060112413926
+     0.0003362787369177101
     ],
-    "deviation": 0.00026744060112413926,
+    "deviation": 0.0003362787369177101,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -28936,16 +29014,16 @@
       }
      }
     },
-    "best_ms": 0.025900500115110643,
-    "second_ms": 0.026765041629660806,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.024048197635070042,
+    "second_ms": 0.02456407000862279,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.025,
-     "runs": 0.148,
-     "bench": 1.472
+     "oracle": 0.019,
+     "runs": 0.219,
+     "bench": 2.445
     },
     "stability_witness": null,
     "built": {
@@ -29058,8 +29136,9 @@
   "(128, 1, 81920, 1, 81920, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
     "num_stages": 2,
@@ -29067,7 +29146,7 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:35:49+00:00",
+    "date": "2026-11-03T14:15:05+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -29091,15 +29170,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.000291222227098864
+     0.0002883214714109705
     ],
-    "deviation": 0.000291222227098864,
+    "deviation": 0.0002883214714109705,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -29130,16 +29210,16 @@
       }
      }
     },
-    "best_ms": 0.11689544786218953,
-    "second_ms": 0.11762192494728986,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.09137436085047815,
+    "second_ms": 0.09872094374754437,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 8,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.463,
-     "runs": 2.095,
-     "bench": 0.891
+     "oracle": 0.401,
+     "runs": 3.997,
+     "bench": 1.075
     },
     "stability_witness": null,
     "built": {
@@ -29252,16 +29332,17 @@
   "(128, 1, 832, 1, 826, 1, 7, 1, 1, 0, 0, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 32,
+     "TH": 1,
+     "TW": 32
     },
-    "num_warps": 4,
+    "num_warps": 8,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-22T06:22:28+00:00",
+    "date": "2026-11-03T14:15:07+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -29284,12 +29365,17 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00033083314998097214,
+    "launches": 1,
+    "fp16_contract": false,
+    "launch_deviations": [
+     0.00036253681037977517
+    ],
+    "deviation": 0.00036253681037977517,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -29298,7 +29384,8 @@
       "ordinal": 0,
       "visible_devices": "0",
       "name": "Tesla V100-SXM2-16GB",
-      "memory_mb": 16384
+      "memory_mb": 16384,
+      "unified": false
      },
      "clocks_mhz": {
       "0": {
@@ -29319,16 +29406,16 @@
       }
      }
     },
-    "best_ms": 0.029189781115873017,
-    "second_ms": 0.02936980837624367,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.019435659172658874,
+    "second_ms": 0.019827494791565176,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 6,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.002,
-     "runs": 0.009,
-     "bench": 1.464
+     "oracle": 0.006,
+     "runs": 0.066,
+     "bench": 1.112
     },
     "stability_witness": null,
     "built": {
@@ -29441,8 +29528,9 @@
   "(128, 1, 98304, 1, 98304, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
     "num_stages": 2,
@@ -29450,7 +29538,7 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:35:53+00:00",
+    "date": "2026-11-03T14:15:14+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -29474,15 +29562,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.00032362599523389033
+     0.000320370188647598
     ],
-    "deviation": 0.00032362599523389033,
+    "deviation": 0.000320370188647598,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -29513,16 +29602,16 @@
       }
      }
     },
-    "best_ms": 0.13494436699768592,
-    "second_ms": 0.13500737162197338,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.10628672101246282,
+    "second_ms": 0.11393616056422459,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 8,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.53,
-     "runs": 2.649,
-     "bench": 0.969
+     "oracle": 0.531,
+     "runs": 5.139,
+     "bench": 0.984
     },
     "stability_witness": null,
     "built": {
@@ -29635,8 +29724,9 @@
   "(2048, 1, 7, 1, 1, 1, 7, 1, 1, 0, 0, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 32,
-     "BLOCK_C": 64
+     "BC": 1,
+     "TH": 4,
+     "TW": 128
     },
     "num_warps": 4,
     "num_stages": 2,
@@ -29644,8 +29734,8 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-17T02:47:43+00:00",
-    "engine_version": "0.5.3",
+    "date": "2026-11-03T14:17:59+00:00",
+    "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
      "name": "cuda"
@@ -29667,21 +29757,27 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00024085701110283423,
+    "launches": 1,
+    "fp16_contract": false,
+    "launch_deviations": [
+     0.00026750501114545085
+    ],
+    "deviation": 0.00026750501114545085,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
      "device": {
       "ordinal": 0,
-      "visible_devices": "1",
+      "visible_devices": "0",
       "name": "Tesla V100-SXM2-16GB",
-      "memory_mb": 16384
+      "memory_mb": 16384,
+      "unified": false
      },
      "clocks_mhz": {
       "0": {
@@ -29702,17 +29798,18 @@
       }
      }
     },
-    "best_ms": 0.013945480268970828,
-    "second_ms": 0.014217414880538879,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 4,
+    "best_ms": 0.018485161010175943,
+    "second_ms": 0.01853016109204035,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.0,
-     "runs": 0.019,
-     "bench": 0.853
+     "runs": 0.023,
+     "bench": 2.728
     },
+    "stability_witness": null,
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -30003,16 +30100,17 @@
   "(2048, 1, 736, 1, 722, 1, 15, 1, 1, 0, 0, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 32,
-     "BLOCK_C": 32
+     "BC": 16,
+     "TH": 4,
+     "TW": 32
     },
-    "num_warps": 2,
+    "num_warps": 8,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-22T06:22:09+00:00",
+    "date": "2026-11-03T14:18:02+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -30035,12 +30133,17 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.000255517682622035,
+    "launches": 1,
+    "fp16_contract": false,
+    "launch_deviations": [
+     0.00022788742822098858
+    ],
+    "deviation": 0.00022788742822098858,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -30049,7 +30152,8 @@
       "ordinal": 0,
       "visible_devices": "0",
       "name": "Tesla V100-SXM2-16GB",
-      "memory_mb": 16384
+      "memory_mb": 16384,
+      "unified": false
      },
      "clocks_mhz": {
       "0": {
@@ -30070,16 +30174,16 @@
       }
      }
     },
-    "best_ms": 0.21434247886842014,
-    "second_ms": 0.21894591636286526,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 4,
+    "best_ms": 0.06129762983915431,
+    "second_ms": 0.061766261045915496,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 8,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.066,
-     "runs": 10.178,
-     "bench": 0.413
+     "oracle": 0.081,
+     "runs": 0.736,
+     "bench": 1.187
     },
     "stability_witness": null,
     "built": {
@@ -30192,16 +30296,17 @@
   "(256, 1, 1024, 1, 1024, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 32,
+     "TH": 1,
+     "TW": 32
     },
-    "num_warps": 4,
+    "num_warps": 8,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:35:55+00:00",
+    "date": "2026-11-03T14:18:05+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -30225,15 +30330,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.00033691280779758547
+     0.000376126580631194
     ],
-    "deviation": 0.00033691280779758547,
+    "deviation": 0.000376126580631194,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -30264,16 +30370,16 @@
       }
      }
     },
-    "best_ms": 0.01800192003223029,
-    "second_ms": 0.01818347059580607,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.019961493279158297,
+    "second_ms": 0.019976191768422722,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.005,
-     "runs": 0.027,
-     "bench": 1.468
+     "runs": 0.05,
+     "bench": 2.777
     },
     "stability_witness": null,
     "built": {
@@ -30386,16 +30492,17 @@
   "(256, 1, 10240, 1, 10240, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
-    "num_stages": 3,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:35:57+00:00",
+    "date": "2026-11-03T14:18:09+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -30419,15 +30526,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.00031104919201528245
+     0.00031325436832214606
     ],
-    "deviation": 0.00031104919201528245,
+    "deviation": 0.00031325436832214606,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -30458,16 +30566,16 @@
       }
      }
     },
-    "best_ms": 0.041906388518390965,
-    "second_ms": 0.04253884523358804,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.03595221949533474,
+    "second_ms": 0.037437840793396064,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 13,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.076,
-     "runs": 0.326,
-     "bench": 1.362
+     "oracle": 0.064,
+     "runs": 0.608,
+     "bench": 2.251
     },
     "stability_witness": null,
     "built": {
@@ -30580,16 +30688,17 @@
   "(256, 1, 12288, 1, 12288, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 16,
+     "TH": 1,
+     "TW": 64
     },
-    "num_warps": 4,
+    "num_warps": 8,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:35:59+00:00",
+    "date": "2026-11-03T14:18:12+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -30613,15 +30722,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.00031045998294527115
+     0.000289671794360706
     ],
-    "deviation": 0.00031045998294527115,
+    "deviation": 0.000289671794360706,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -30652,16 +30762,16 @@
       }
      }
     },
-    "best_ms": 0.04418644620767556,
-    "second_ms": 0.045077288655805785,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.04087095676610867,
+    "second_ms": 0.04091017739650821,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 13,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.107,
-     "runs": 0.402,
-     "bench": 1.317
+     "oracle": 0.089,
+     "runs": 0.749,
+     "bench": 2.146
     },
     "stability_witness": null,
     "built": {
@@ -30774,8 +30884,9 @@
   "(256, 1, 1280, 1, 1280, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 128,
-     "BLOCK_C": 32
+     "BC": 8,
+     "TH": 1,
+     "TW": 64
     },
     "num_warps": 4,
     "num_stages": 2,
@@ -30783,7 +30894,7 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:36:00+00:00",
+    "date": "2026-11-03T14:18:15+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -30807,15 +30918,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.00034339596545990866
+     0.0003224687472591506
     ],
-    "deviation": 0.00034339596545990866,
+    "deviation": 0.0003224687472591506,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -30846,16 +30958,16 @@
       }
      }
     },
-    "best_ms": 0.018237178394933024,
-    "second_ms": 0.01907646250184796,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.020119665775662862,
+    "second_ms": 0.02013332290079865,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.006,
-     "runs": 0.036,
-     "bench": 1.51
+     "oracle": 0.009,
+     "runs": 0.06,
+     "bench": 2.76
     },
     "stability_witness": null,
     "built": {
@@ -30968,8 +31080,9 @@
   "(256, 1, 14336, 1, 14336, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
     "num_stages": 2,
@@ -30977,7 +31090,7 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:36:03+00:00",
+    "date": "2026-11-03T14:18:19+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -31001,15 +31114,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.00031925760785260054
+     0.00033632583790234213
     ],
-    "deviation": 0.00031925760785260054,
+    "deviation": 0.00033632583790234213,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -31040,16 +31154,16 @@
       }
      }
     },
-    "best_ms": 0.051385143083058485,
-    "second_ms": 0.052058620223832446,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.0465653223487047,
+    "second_ms": 0.04790703089095422,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 13,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.122,
-     "runs": 0.551,
-     "bench": 1.386
+     "oracle": 0.102,
+     "runs": 0.867,
+     "bench": 2.091
     },
     "stability_witness": null,
     "built": {
@@ -31162,16 +31276,17 @@
   "(256, 1, 1536, 1, 1536, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 8,
+     "TH": 1,
+     "TW": 64
     },
     "num_warps": 4,
-    "num_stages": 3,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:36:04+00:00",
+    "date": "2026-11-03T14:18:22+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -31195,15 +31310,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.00032453958933058015
+     0.00036801693912228507
     ],
-    "deviation": 0.00032453958933058015,
+    "deviation": 0.00036801693912228507,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -31234,16 +31350,16 @@
       }
      }
     },
-    "best_ms": 0.0191190589342595,
-    "second_ms": 0.01985600014515924,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.02003952556327128,
+    "second_ms": 0.020295207536987308,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.008,
-     "runs": 0.041,
-     "bench": 1.488
+     "oracle": 0.013,
+     "runs": 0.077,
+     "bench": 2.769
     },
     "stability_witness": null,
     "built": {
@@ -31356,17 +31472,18 @@
   "(256, 1, 16384, 1, 16384, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
-    "num_stages": 3,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-17T02:48:07+00:00",
-    "engine_version": "0.5.3",
+    "date": "2026-11-03T14:18:27+00:00",
+    "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
      "name": "cuda"
@@ -31388,21 +31505,27 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0003004081737129533,
+    "launches": 1,
+    "fp16_contract": false,
+    "launch_deviations": [
+     0.0003068768395710139
+    ],
+    "deviation": 0.0003068768395710139,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
      "device": {
       "ordinal": 0,
-      "visible_devices": "1",
+      "visible_devices": "0",
       "name": "Tesla V100-SXM2-16GB",
-      "memory_mb": 16384
+      "memory_mb": 16384,
+      "unified": false
      },
      "clocks_mhz": {
       "0": {
@@ -31423,17 +31546,18 @@
       }
      }
     },
-    "best_ms": 0.05433063393416824,
-    "second_ms": 0.05707363004403154,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.05250648267824074,
+    "second_ms": 0.053961007324633777,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 11,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.146,
-     "runs": 0.766,
-     "bench": 1.326
+     "oracle": 0.157,
+     "runs": 3.065,
+     "bench": 0.895
     },
+    "stability_witness": null,
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -31544,16 +31668,17 @@
   "(256, 1, 1792, 1, 1792, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 16,
+     "TH": 1,
+     "TW": 64
     },
-    "num_warps": 4,
-    "num_stages": 3,
+    "num_warps": 8,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:36:06+00:00",
+    "date": "2026-11-03T14:18:32+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -31577,15 +31702,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.00031585953672084966
+     0.00040132717790348203
     ],
-    "deviation": 0.00031585953672084966,
+    "deviation": 0.00040132717790348203,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -31616,16 +31742,16 @@
       }
      }
     },
-    "best_ms": 0.018211587818901965,
-    "second_ms": 0.01882235471865968,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.02752202005122488,
+    "second_ms": 0.027550071074977412,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.009,
-     "runs": 0.053,
-     "bench": 1.457
+     "oracle": 0.093,
+     "runs": 0.585,
+     "bench": 1.955
     },
     "stability_witness": null,
     "built": {
@@ -31738,16 +31864,17 @@
   "(256, 1, 2048, 1, 2048, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 16,
+     "TH": 1,
+     "TW": 64
     },
-    "num_warps": 4,
-    "num_stages": 3,
+    "num_warps": 8,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:36:08+00:00",
+    "date": "2026-11-03T14:18:36+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -31771,15 +31898,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.00033499442432088043
+     0.0003103757546731163
     ],
-    "deviation": 0.00033499442432088043,
+    "deviation": 0.0003103757546731163,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -31810,16 +31938,16 @@
       }
      }
     },
-    "best_ms": 0.021742312991144982,
-    "second_ms": 0.021785011035911336,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.02764781408531721,
+    "second_ms": 0.03475283386325312,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 2,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.01,
-     "runs": 0.058,
-     "bench": 1.417
+     "oracle": 0.086,
+     "runs": 0.584,
+     "bench": 0.283
     },
     "stability_witness": null,
     "built": {
@@ -31932,8 +32060,9 @@
   "(256, 1, 20480, 1, 20480, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
     "num_stages": 2,
@@ -31941,7 +32070,7 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:36:10+00:00",
+    "date": "2026-11-03T14:18:43+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -31965,15 +32094,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.00033160966867692537
+     0.0003018500501556471
     ],
-    "deviation": 0.00033160966867692537,
+    "deviation": 0.0003018500501556471,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -32004,16 +32134,16 @@
       }
      }
     },
-    "best_ms": 0.0669607244836529,
-    "second_ms": 0.06704765428409218,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.05443708422793963,
+    "second_ms": 0.05871040014283998,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 11,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.205,
-     "runs": 1.029,
-     "bench": 1.205
+     "oracle": 0.38,
+     "runs": 2.123,
+     "bench": 1.552
     },
     "stability_witness": null,
     "built": {
@@ -32306,16 +32436,17 @@
   "(256, 1, 208, 1, 202, 1, 7, 1, 1, 0, 0, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 32,
+     "TH": 1,
+     "TW": 32
     },
-    "num_warps": 4,
-    "num_stages": 3,
+    "num_warps": 8,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-22T06:22:30+00:00",
+    "date": "2026-11-03T14:18:47+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -32338,12 +32469,17 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0003228889788957504,
+    "launches": 1,
+    "fp16_contract": false,
+    "launch_deviations": [
+     0.0003796323843522708
+    ],
+    "deviation": 0.0003796323843522708,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -32352,7 +32488,8 @@
       "ordinal": 0,
       "visible_devices": "0",
       "name": "Tesla V100-SXM2-16GB",
-      "memory_mb": 16384
+      "memory_mb": 16384,
+      "unified": false
      },
      "clocks_mhz": {
       "0": {
@@ -32373,16 +32510,16 @@
       }
      }
     },
-    "best_ms": 0.021337003617357183,
-    "second_ms": 0.021563742141357454,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.019883189944584677,
+    "second_ms": 0.020057611930548804,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.001,
-     "runs": 0.005,
-     "bench": 1.421
+     "runs": 0.011,
+     "bench": 2.864
     },
     "stability_witness": null,
     "built": {
@@ -32495,16 +32632,17 @@
   "(256, 1, 2304, 1, 2304, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 16,
+     "TH": 1,
+     "TW": 64
     },
-    "num_warps": 4,
-    "num_stages": 3,
+    "num_warps": 8,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:36:12+00:00",
+    "date": "2026-11-03T14:18:50+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -32528,15 +32666,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.0003619749718582441
+     0.0003310334851875252
     ],
-    "deviation": 0.0003619749718582441,
+    "deviation": 0.0003310334851875252,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -32567,16 +32706,16 @@
       }
      }
     },
-    "best_ms": 0.02166886605682228,
-    "second_ms": 0.02172860512879654,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.02174056427465687,
+    "second_ms": 0.022672451109324386,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.012,
-     "runs": 0.065,
-     "bench": 1.43
+     "oracle": 0.016,
+     "runs": 0.136,
+     "bench": 2.655
     },
     "stability_witness": null,
     "built": {
@@ -32689,8 +32828,9 @@
   "(256, 1, 24576, 1, 24576, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
     "num_stages": 2,
@@ -32698,7 +32838,7 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:36:15+00:00",
+    "date": "2026-11-03T14:18:55+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -32722,15 +32862,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.0003370852885065131
+     0.00031537729109178375
     ],
-    "deviation": 0.0003370852885065131,
+    "deviation": 0.00031537729109178375,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -32761,16 +32902,16 @@
       }
      }
     },
-    "best_ms": 0.07452444539625863,
-    "second_ms": 0.07499475152960124,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.0628662857714863,
+    "second_ms": 0.0657465424231976,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 12,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.269,
-     "runs": 1.251,
-     "bench": 1.119
+     "oracle": 0.259,
+     "runs": 2.382,
+     "bench": 1.69
     },
     "stability_witness": null,
     "built": {
@@ -32883,16 +33024,17 @@
   "(256, 1, 256, 1, 256, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 32,
-     "BLOCK_C": 64
+     "BC": 16,
+     "TH": 1,
+     "TW": 64
     },
-    "num_warps": 4,
+    "num_warps": 8,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:36:16+00:00",
+    "date": "2026-11-03T14:18:58+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -32916,15 +33058,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.0003441843173521911
+     0.00041335344588455073
     ],
-    "deviation": 0.0003441843173521911,
+    "deviation": 0.00041335344588455073,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -32955,16 +33098,16 @@
       }
      }
     },
-    "best_ms": 0.016365235212587696,
-    "second_ms": 0.016656780461310198,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.020096256274483606,
+    "second_ms": 0.02012782033672121,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.002,
-     "runs": 0.007,
-     "bench": 1.472
+     "oracle": 0.001,
+     "runs": 0.012,
+     "bench": 2.852
     },
     "stability_witness": null,
     "built": {
@@ -33077,8 +33220,9 @@
   "(256, 1, 2560, 1, 2560, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
     "num_stages": 2,
@@ -33086,7 +33230,7 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:36:18+00:00",
+    "date": "2026-11-03T14:19:02+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -33110,15 +33254,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.00033317421897110166
+     0.0003343958297153248
     ],
-    "deviation": 0.00033317421897110166,
+    "deviation": 0.0003343958297153248,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -33149,16 +33294,16 @@
       }
      }
     },
-    "best_ms": 0.021919342269685782,
-    "second_ms": 0.022775375618353542,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.023695969119711075,
+    "second_ms": 0.024161189778137464,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.014,
-     "runs": 0.074,
-     "bench": 1.449
+     "oracle": 0.015,
+     "runs": 0.122,
+     "bench": 2.823
     },
     "stability_witness": null,
     "built": {
@@ -33271,8 +33416,9 @@
   "(256, 1, 2816, 1, 2816, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
     "num_stages": 2,
@@ -33280,7 +33426,7 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:36:20+00:00",
+    "date": "2026-11-03T14:19:05+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -33304,15 +33450,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.0003189988973815593
+     0.00037329089674498027
     ],
-    "deviation": 0.0003189988973815593,
+    "deviation": 0.00037329089674498027,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -33343,16 +33490,16 @@
       }
      }
     },
-    "best_ms": 0.022714011460922955,
-    "second_ms": 0.02280523319889728,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.02495377050850113,
+    "second_ms": 0.025013010113998646,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.015,
-     "runs": 0.079,
-     "bench": 1.399
+     "oracle": 0.014,
+     "runs": 0.135,
+     "bench": 2.72
     },
     "stability_witness": null,
     "built": {
@@ -33465,16 +33612,17 @@
   "(256, 1, 28672, 1, 28672, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
-    "num_stages": 3,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:36:23+00:00",
+    "date": "2026-11-03T14:19:10+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -33498,15 +33646,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.0002943006796927579
+     0.0003056978707343136
     ],
-    "deviation": 0.0002943006796927579,
+    "deviation": 0.0003056978707343136,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -33537,16 +33686,16 @@
       }
      }
     },
-    "best_ms": 0.08535163440109897,
-    "second_ms": 0.08623651159313134,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.06954949857640605,
+    "second_ms": 0.07321624491874337,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 12,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.313,
-     "runs": 1.448,
-     "bench": 1.054
+     "oracle": 0.279,
+     "runs": 2.812,
+     "bench": 1.644
     },
     "stability_witness": null,
     "built": {
@@ -33659,16 +33808,17 @@
   "(256, 1, 3072, 1, 3072, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
-    "num_stages": 3,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:36:25+00:00",
+    "date": "2026-11-03T14:19:14+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -33692,15 +33842,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.00034185636300223827
+     0.00033208068864068306
     ],
-    "deviation": 0.00034185636300223827,
+    "deviation": 0.00033208068864068306,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -33731,16 +33882,16 @@
       }
      }
     },
-    "best_ms": 0.022573284239497903,
-    "second_ms": 0.022771285333362597,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.025377205066445235,
+    "second_ms": 0.025860246796613542,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.018,
-     "runs": 0.089,
-     "bench": 1.485
+     "oracle": 0.019,
+     "runs": 0.191,
+     "bench": 2.758
     },
     "stability_witness": null,
     "built": {
@@ -33853,8 +34004,9 @@
   "(256, 1, 32768, 1, 32768, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
     "num_stages": 2,
@@ -33862,7 +34014,7 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:36:28+00:00",
+    "date": "2026-11-03T14:19:20+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -33886,15 +34038,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.0002843946706223384
+     0.0002605009517879048
     ],
-    "deviation": 0.0002843946706223384,
+    "deviation": 0.0002605009517879048,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -33925,16 +34078,16 @@
       }
      }
     },
-    "best_ms": 0.09386073104713274,
-    "second_ms": 0.09393721745467522,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.07751740072735674,
+    "second_ms": 0.0794092108956491,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 12,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.349,
-     "runs": 1.663,
-     "bench": 1.001
+     "oracle": 0.346,
+     "runs": 3.269,
+     "bench": 1.551
     },
     "stability_witness": null,
     "built": {
@@ -34047,8 +34200,9 @@
   "(256, 1, 3328, 1, 3328, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
     "num_stages": 2,
@@ -34056,7 +34210,7 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:36:30+00:00",
+    "date": "2026-11-03T14:19:23+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -34080,15 +34234,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.00030669072336594763
+     0.00032203533691263096
     ],
-    "deviation": 0.00030669072336594763,
+    "deviation": 0.00032203533691263096,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -34119,16 +34274,16 @@
       }
      }
     },
-    "best_ms": 0.024180104170119232,
-    "second_ms": 0.024524381363364024,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.02513556591191784,
+    "second_ms": 0.026396932446264794,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.021,
-     "runs": 0.104,
-     "bench": 1.515
+     "oracle": 0.023,
+     "runs": 0.167,
+     "bench": 2.719
     },
     "stability_witness": null,
     "built": {
@@ -34241,8 +34396,9 @@
   "(256, 1, 3584, 1, 3584, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
     "num_stages": 2,
@@ -34250,7 +34406,7 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:36:31+00:00",
+    "date": "2026-11-03T14:19:26+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -34274,15 +34430,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.00035965310422794196
+     0.00032565387243018427
     ],
-    "deviation": 0.00035965310422794196,
+    "deviation": 0.00032565387243018427,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -34313,16 +34470,16 @@
       }
      }
     },
-    "best_ms": 0.024509069198202865,
-    "second_ms": 0.025907915261410792,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.026294939923118876,
+    "second_ms": 0.026575337441480135,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.028,
-     "runs": 0.103,
-     "bench": 1.417
+     "oracle": 0.019,
+     "runs": 0.187,
+     "bench": 2.692
     },
     "stability_witness": null,
     "built": {
@@ -34435,8 +34592,9 @@
   "(256, 1, 3840, 1, 3840, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
     "num_stages": 2,
@@ -34444,7 +34602,7 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:36:33+00:00",
+    "date": "2026-11-03T14:19:30+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -34468,15 +34626,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.0003203247514933002
+     0.00037258482663665325
     ],
-    "deviation": 0.0003203247514933002,
+    "deviation": 0.00037258482663665325,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -34507,16 +34666,16 @@
       }
      }
     },
-    "best_ms": 0.02549360590531443,
-    "second_ms": 0.02619517697458448,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.026285875152098015,
+    "second_ms": 0.02634937227887572,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.026,
-     "runs": 0.117,
-     "bench": 1.457
+     "oracle": 0.021,
+     "runs": 0.208,
+     "bench": 2.725
     },
     "stability_witness": null,
     "built": {
@@ -34629,16 +34788,17 @@
   "(256, 1, 4096, 1, 4096, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
-    "num_stages": 3,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:36:35+00:00",
+    "date": "2026-11-03T14:19:33+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -34662,15 +34822,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.00031993884069991016
+     0.0003089935290797366
     ],
-    "deviation": 0.00031993884069991016,
+    "deviation": 0.0003089935290797366,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -34701,16 +34862,16 @@
       }
      }
     },
-    "best_ms": 0.025002043847212174,
-    "second_ms": 0.026186472820964726,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.025445745279832697,
+    "second_ms": 0.026335751598031774,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.025,
-     "runs": 0.123,
-     "bench": 1.429
+     "oracle": 0.021,
+     "runs": 0.218,
+     "bench": 2.623
     },
     "stability_witness": null,
     "built": {
@@ -34823,16 +34984,17 @@
   "(256, 1, 40960, 1, 40960, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
-    "num_stages": 3,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:36:39+00:00",
+    "date": "2026-11-03T14:19:39+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -34856,15 +35018,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.0002827461090594655
+     0.00031072696909802475
     ],
-    "deviation": 0.0002827461090594655,
+    "deviation": 0.00031072696909802475,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -34895,16 +35058,16 @@
       }
      }
     },
-    "best_ms": 0.11773511234463917,
-    "second_ms": 0.11789569471563612,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.09254293698931004,
+    "second_ms": 0.10125061162576383,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 11,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.445,
-     "runs": 2.112,
-     "bench": 0.891
+     "oracle": 0.408,
+     "runs": 4.11,
+     "bench": 1.256
     },
     "stability_witness": null,
     "built": {
@@ -35197,16 +35360,17 @@
   "(256, 1, 4608, 1, 4608, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 16,
+     "TH": 1,
+     "TW": 64
     },
-    "num_warps": 4,
-    "num_stages": 3,
+    "num_warps": 8,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:36:40+00:00",
+    "date": "2026-11-03T14:19:44+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -35230,15 +35394,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.000334377724422641
+     0.0003334346848490543
     ],
-    "deviation": 0.000334377724422641,
+    "deviation": 0.0003334346848490543,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -35269,16 +35434,16 @@
       }
      }
     },
-    "best_ms": 0.027376184727136904,
-    "second_ms": 0.02794063086785611,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.026562898023222682,
+    "second_ms": 0.026942990290430877,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.031,
-     "runs": 0.142,
-     "bench": 1.498
+     "oracle": 0.041,
+     "runs": 0.297,
+     "bench": 2.639
     },
     "stability_witness": null,
     "built": {
@@ -35391,8 +35556,9 @@
   "(256, 1, 49152, 1, 49152, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
     "num_stages": 2,
@@ -35400,7 +35566,7 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:36:45+00:00",
+    "date": "2026-11-03T14:19:51+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -35424,15 +35590,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.0002885114209175589
+     0.00024853933360061196
     ],
-    "deviation": 0.0002885114209175589,
+    "deviation": 0.00024853933360061196,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -35463,16 +35630,16 @@
       }
      }
     },
-    "best_ms": 0.13539150038349954,
-    "second_ms": 0.13692513485131097,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.10502181914937754,
+    "second_ms": 0.11378111885954635,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 11,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.535,
-     "runs": 2.716,
-     "bench": 0.866
+     "oracle": 0.528,
+     "runs": 5.045,
+     "bench": 1.241
     },
     "stability_witness": null,
     "built": {
@@ -35585,16 +35752,17 @@
   "(256, 1, 512, 1, 512, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 128,
-     "BLOCK_C": 32
+     "BC": 16,
+     "TH": 1,
+     "TW": 64
     },
-    "num_warps": 4,
+    "num_warps": 8,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:36:46+00:00",
+    "date": "2026-11-03T14:19:55+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -35618,15 +35786,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.00040094504786568943
+     0.0003308111809297797
     ],
-    "deviation": 0.00040094504786568943,
+    "deviation": 0.0003308111809297797,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -35657,16 +35826,16 @@
       }
      }
     },
-    "best_ms": 0.017851741017988153,
-    "second_ms": 0.01800071252962416,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.019482475954906216,
+    "second_ms": 0.0198518854716704,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.003,
-     "runs": 0.015,
-     "bench": 1.438
+     "runs": 0.026,
+     "bench": 2.874
     },
     "stability_witness": null,
     "built": {
@@ -35779,8 +35948,9 @@
   "(256, 1, 5120, 1, 5120, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
     "num_stages": 2,
@@ -35788,8 +35958,8 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-17T02:47:35+00:00",
-    "engine_version": "0.5.3",
+    "date": "2026-11-03T14:19:58+00:00",
+    "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
      "name": "cuda"
@@ -35811,21 +35981,27 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0003277146928210331,
+    "launches": 1,
+    "fp16_contract": false,
+    "launch_deviations": [
+     0.0002997190145063123
+    ],
+    "deviation": 0.0002997190145063123,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
      "device": {
       "ordinal": 0,
-      "visible_devices": "1",
+      "visible_devices": "0",
       "name": "Tesla V100-SXM2-16GB",
-      "memory_mb": 16384
+      "memory_mb": 16384,
+      "unified": false
      },
      "clocks_mhz": {
       "0": {
@@ -35846,17 +36022,18 @@
       }
      }
     },
-    "best_ms": 0.026831235091983704,
-    "second_ms": 0.02762358818846919,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.027695141878992434,
+    "second_ms": 0.028884480258538608,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.037,
-     "runs": 0.145,
-     "bench": 1.453
+     "oracle": 0.036,
+     "runs": 0.299,
+     "bench": 2.656
     },
+    "stability_witness": null,
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -35967,8 +36144,9 @@
   "(256, 1, 5632, 1, 5632, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
     "num_stages": 2,
@@ -35976,7 +36154,7 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:36:48+00:00",
+    "date": "2026-11-03T14:20:02+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -36000,15 +36178,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.0003052099476917134
+     0.00031356959332671527
     ],
-    "deviation": 0.0003052099476917134,
+    "deviation": 0.00031356959332671527,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -36039,16 +36218,16 @@
       }
      }
     },
-    "best_ms": 0.02967091735200326,
-    "second_ms": 0.029999970370326503,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.028836487383475162,
+    "second_ms": 0.029214117969377444,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.045,
-     "runs": 0.181,
-     "bench": 1.374
+     "oracle": 0.033,
+     "runs": 0.334,
+     "bench": 2.659
     },
     "stability_witness": null,
     "built": {
@@ -36161,8 +36340,9 @@
   "(256, 1, 6144, 1, 6144, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
     "num_stages": 2,
@@ -36170,7 +36350,7 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:36:50+00:00",
+    "date": "2026-11-03T14:20:05+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -36194,15 +36374,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.00035028352568058766
+     0.00032064756568574713
     ],
-    "deviation": 0.00035028352568058766,
+    "deviation": 0.00032064756568574713,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -36233,16 +36414,16 @@
       }
      }
     },
-    "best_ms": 0.0303466667150661,
-    "second_ms": 0.031120845497587656,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.026788903908961412,
+    "second_ms": 0.027643518856598197,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.042,
-     "runs": 0.195,
-     "bench": 1.39
+     "oracle": 0.039,
+     "runs": 0.367,
+     "bench": 2.479
     },
     "stability_witness": null,
     "built": {
@@ -36355,16 +36536,17 @@
   "(256, 1, 6656, 1, 6656, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 8,
+     "TH": 1,
+     "TW": 64
     },
     "num_warps": 4,
-    "num_stages": 3,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:36:52+00:00",
+    "date": "2026-11-03T14:20:08+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -36388,15 +36570,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.0002744464066160782
+     0.000281018756806724
     ],
-    "deviation": 0.0002744464066160782,
+    "deviation": 0.000281018756806724,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -36427,16 +36610,16 @@
       }
      }
     },
-    "best_ms": 0.0325349851601771,
-    "second_ms": 0.03367235881891864,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.029028559599985862,
+    "second_ms": 0.029159809706643933,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.052,
-     "runs": 0.227,
-     "bench": 1.384
+     "oracle": 0.043,
+     "runs": 0.4,
+     "bench": 2.406
     },
     "stability_witness": null,
     "built": {
@@ -36549,8 +36732,9 @@
   "(256, 1, 7168, 1, 7168, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
     "num_stages": 2,
@@ -36558,7 +36742,7 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:36:53+00:00",
+    "date": "2026-11-03T14:20:12+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -36582,15 +36766,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.0003384314572535047
+     0.0002905296179948357
     ],
-    "deviation": 0.0003384314572535047,
+    "deviation": 0.0002905296179948357,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -36621,16 +36806,16 @@
       }
      }
     },
-    "best_ms": 0.03364193751622224,
-    "second_ms": 0.034322705862851924,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.03070189430943758,
+    "second_ms": 0.032726780116810635,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.056,
-     "runs": 0.252,
-     "bench": 1.405
+     "oracle": 0.059,
+     "runs": 0.448,
+     "bench": 2.496
     },
     "stability_witness": null,
     "built": {
@@ -36743,16 +36928,17 @@
   "(256, 1, 768, 1, 768, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 32,
-     "BLOCK_C": 32
+     "BC": 32,
+     "TH": 1,
+     "TW": 32
     },
-    "num_warps": 2,
+    "num_warps": 8,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:36:55+00:00",
+    "date": "2026-11-03T14:20:15+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -36776,15 +36962,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.00036373646482301084
+     0.0002727668980566148
     ],
-    "deviation": 0.00036373646482301084,
+    "deviation": 0.0002727668980566148,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -36815,16 +37002,16 @@
       }
      }
     },
-    "best_ms": 0.017962278801985462,
-    "second_ms": 0.018023839094412176,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.019775874012521302,
+    "second_ms": 0.02007697969600259,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.004,
-     "runs": 0.02,
-     "bench": 1.457
+     "oracle": 0.005,
+     "runs": 0.038,
+     "bench": 2.806
     },
     "stability_witness": null,
     "built": {
@@ -36937,8 +37124,9 @@
   "(256, 1, 7680, 1, 7680, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 8,
+     "TH": 1,
+     "TW": 64
     },
     "num_warps": 4,
     "num_stages": 2,
@@ -36946,7 +37134,7 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:36:57+00:00",
+    "date": "2026-11-03T14:20:19+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -36970,15 +37158,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.000321185960721913
+     0.0003263951946973249
     ],
-    "deviation": 0.000321185960721913,
+    "deviation": 0.0003263951946973249,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -37009,16 +37198,16 @@
       }
      }
     },
-    "best_ms": 0.03484039614622546,
-    "second_ms": 0.0353450960025862,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.033235499402013806,
+    "second_ms": 0.03337239390468133,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 13,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.064,
-     "runs": 0.27,
-     "bench": 1.45
+     "oracle": 0.062,
+     "runs": 0.466,
+     "bench": 2.387
     },
     "stability_witness": null,
     "built": {
@@ -37131,16 +37320,17 @@
   "(256, 1, 8192, 1, 8192, 1, 7, 1, 1, 0, 3, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 1,
+     "TW": 128
     },
     "num_warps": 4,
-    "num_stages": 3,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-28T22:36:59+00:00",
+    "date": "2026-11-03T14:20:22+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -37164,15 +37354,16 @@
      "fp16"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     0.0003236040443890876
+     0.00032798335068613124
     ],
-    "deviation": 0.0003236040443890876,
+    "deviation": 0.00032798335068613124,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
@@ -37203,16 +37394,16 @@
       }
      }
     },
-    "best_ms": 0.03356341045513096,
-    "second_ms": 0.033959932840515336,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.03361274407569246,
+    "second_ms": 0.03361293522543029,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 13,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.055,
-     "runs": 0.291,
-     "bench": 1.334
+     "oracle": 0.066,
+     "runs": 0.567,
+     "bench": 2.325
     },
     "stability_witness": null,
     "built": {
@@ -37325,17 +37516,18 @@
   "(256, 1500, 40, 750, 20, 3, 3, 2, 2, 1, 1, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 32,
-     "BLOCK_C": 32
+     "BC": 16,
+     "TH": 1,
+     "TW": 32
     },
-    "num_warps": 2,
+    "num_warps": 4,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-17T02:47:54+00:00",
-    "engine_version": "0.5.3",
+    "date": "2026-11-03T14:20:26+00:00",
+    "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
      "name": "cuda"
@@ -37357,21 +37549,27 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0004587254961393783,
+    "launches": 1,
+    "fp16_contract": false,
+    "launch_deviations": [
+     0.0002799855381355255
+    ],
+    "deviation": 0.0002799855381355255,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
      "device": {
       "ordinal": 0,
-      "visible_devices": "1",
+      "visible_devices": "0",
       "name": "Tesla V100-SXM2-16GB",
-      "memory_mb": 16384
+      "memory_mb": 16384,
+      "unified": false
      },
      "clocks_mhz": {
       "0": {
@@ -37392,17 +37590,18 @@
       }
      }
     },
-    "best_ms": 0.39352533376465243,
-    "second_ms": 0.40915806262116683,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.10525556966333359,
+    "second_ms": 0.10754309298054686,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.314,
-     "runs": 0.587,
-     "bench": 0.565
+     "oracle": 0.311,
+     "runs": 1.22,
+     "bench": 1.751
     },
+    "stability_witness": null,
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -37513,17 +37712,18 @@
   "(256, 1500, 64, 750, 32, 3, 3, 2, 2, 1, 1, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 32,
-     "BLOCK_C": 32
+     "BC": 1,
+     "TH": 8,
+     "TW": 64
     },
-    "num_warps": 2,
+    "num_warps": 4,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-17T02:48:09+00:00",
-    "engine_version": "0.5.3",
+    "date": "2026-11-03T14:20:32+00:00",
+    "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
      "name": "cuda"
@@ -37545,21 +37745,27 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0002728272836377464,
+    "launches": 1,
+    "fp16_contract": false,
+    "launch_deviations": [
+     0.0002909798816108613
+    ],
+    "deviation": 0.0002909798816108613,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
      "device": {
       "ordinal": 0,
-      "visible_devices": "1",
+      "visible_devices": "0",
       "name": "Tesla V100-SXM2-16GB",
-      "memory_mb": 16384
+      "memory_mb": 16384,
+      "unified": false
      },
      "clocks_mhz": {
       "0": {
@@ -37580,17 +37786,18 @@
       }
      }
     },
-    "best_ms": 0.6039974623256259,
-    "second_ms": 0.6059479382303026,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.12480237913840765,
+    "second_ms": 0.12524971477687358,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.564,
-     "runs": 1.155,
-     "bench": 0.506
+     "oracle": 0.599,
+     "runs": 2.372,
+     "bench": 1.693
     },
+    "stability_witness": null,
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -37701,17 +37908,18 @@
   "(256, 750, 20, 375, 10, 3, 3, 2, 2, 1, 1, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 32,
-     "BLOCK_C": 32
+     "BC": 16,
+     "TH": 1,
+     "TW": 32
     },
-    "num_warps": 2,
+    "num_warps": 4,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-17T02:47:55+00:00",
-    "engine_version": "0.5.3",
+    "date": "2026-11-03T14:20:35+00:00",
+    "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
      "name": "cuda"
@@ -37733,21 +37941,27 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0003038743029301539,
+    "launches": 1,
+    "fp16_contract": false,
+    "launch_deviations": [
+     0.00030699895733060303
+    ],
+    "deviation": 0.00030699895733060303,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
      "device": {
       "ordinal": 0,
-      "visible_devices": "1",
+      "visible_devices": "0",
       "name": "Tesla V100-SXM2-16GB",
-      "memory_mb": 16384
+      "memory_mb": 16384,
+      "unified": false
      },
      "clocks_mhz": {
       "0": {
@@ -37768,17 +37982,18 @@
       }
      }
     },
-    "best_ms": 0.10055746244188266,
-    "second_ms": 0.10143559578726416,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.054413084027783894,
+    "second_ms": 0.05491384330810765,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.075,
-     "runs": 0.126,
-     "bench": 0.984
+     "oracle": 0.077,
+     "runs": 0.238,
+     "bench": 2.293
     },
+    "stability_witness": null,
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
@@ -37889,17 +38104,18 @@
   "(256, 750, 32, 375, 16, 3, 3, 2, 2, 1, 1, True, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 16,
+     "TH": 1,
+     "TW": 32
     },
     "num_warps": 4,
-    "num_stages": 3,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-17T02:48:11+00:00",
-    "engine_version": "0.5.3",
+    "date": "2026-11-03T14:20:38+00:00",
+    "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
      "name": "cuda"
@@ -37921,21 +38137,27 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0003273293954518021,
+    "launches": 1,
+    "fp16_contract": false,
+    "launch_deviations": [
+     0.0003068457750425734
+    ],
+    "deviation": 0.0003068457750425734,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "metatron",
-     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
      "python": "3.10.12",
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
      "device": {
       "ordinal": 0,
-      "visible_devices": "1",
+      "visible_devices": "0",
       "name": "Tesla V100-SXM2-16GB",
-      "memory_mb": 16384
+      "memory_mb": 16384,
+      "unified": false
      },
      "clocks_mhz": {
       "0": {
@@ -37956,17 +38178,18 @@
       }
      }
     },
-    "best_ms": 0.1672292965958376,
-    "second_ms": 0.1672503077013548,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.06432401862775171,
+    "second_ms": 0.06518743583715401,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.114,
-     "runs": 0.17,
-     "bench": 0.824
+     "oracle": 0.124,
+     "runs": 0.379,
+     "bench": 2.279
     },
+    "stability_witness": null,
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
