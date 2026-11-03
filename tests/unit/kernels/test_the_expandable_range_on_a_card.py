@@ -14,7 +14,11 @@ import nbxtensor.ops.wrappers as _wrappers
 from nbxtensor.memory.allocator import DeviceAllocator as DA
 from nbxtensor.memory.vmm import Vmm
 
-pytestmark = pytest.mark.usefixtures("needs_device")
+pytestmark = [pytest.mark.usefixtures("needs_device"),
+              # the expandable range speaks the CUDA driver's VMM calls only (`memory.vmm`): a backend whose table names no
+              # driver library (Metal, HIP) keeps its driver segments — said, not an error in a None library
+              pytest.mark.skipif(not _rt.backend_table().get("driver_libs"),
+                                 reason="this backend declares no VMM driver library (the expandable range is CUDA's)")]
 MB = 1 << 20
 
 

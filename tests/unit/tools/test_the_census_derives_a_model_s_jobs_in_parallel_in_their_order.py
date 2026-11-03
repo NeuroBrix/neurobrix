@@ -145,7 +145,7 @@ def test_a_running_gate_cell_is_not_counted_twice(monkeypatch, tmp_path):
     import types
     from nbxtensor.backend import host_memory as HM
     from neurobrix.core.prism import memory_budget as MB
-    monkeypatch.setattr(DC.os, "cpu_count", lambda: 64)
+    monkeypatch.setattr(DC, "_machine_cores", lambda: 64)            # the profile's cores (f9121b8b), never the host's
     monkeypatch.setattr(DC.os, "getloadavg", lambda: (0.0, 0.0, 0.0))
     monkeypatch.setattr(MB, "memory_ladder_mb", lambda: [65536, 98304, 131072])
     monkeypatch.setattr(HM, "memory_state", lambda: types.SimpleNamespace(available_mb=100_000, total_mb=257_000))
@@ -163,7 +163,7 @@ def test_the_room_keeps_the_scheduler_s_headroom(monkeypatch, tmp_path):
     import types
     from nbxtensor.backend import host_memory as HM
     from neurobrix.core.prism import memory_budget as MB
-    monkeypatch.setattr(DC.os, "cpu_count", lambda: 128)
+    monkeypatch.setattr(DC, "_machine_cores", lambda: 128)           # the profile's cores (f9121b8b), never the host's
     monkeypatch.setattr(DC.os, "getloadavg", lambda: (0.0, 0.0, 0.0))
     monkeypatch.setattr(MB, "memory_ladder_mb", lambda: [65536, 131072, 196608])
     monkeypatch.setattr(HM, "memory_state", lambda: types.SimpleNamespace(available_mb=204_800, total_mb=262_144))
