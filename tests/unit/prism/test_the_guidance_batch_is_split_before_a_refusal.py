@@ -57,7 +57,16 @@ MODES = ["triton", "triton_sequential", "compiled"]
 FLAG = {"triton": "--triton", "triton_sequential": "--triton-sequential", "compiled": "--compiled"}
 
 
+#: the calibration records the rack's planner read (Allegro's transformer: its fp16 contract keeps the compiled plan's
+#: transformer resident at the guidance batch): pinned, so the plans are the rack's on any machine — read from the
+#: machine's own store, a machine without that record planned Allegro-compiled conservatively and split (the Mac,
+#: 2026-11-03); the container does not carry the record (`calibration.load_embedded_record`)
+PINNED_CALIBRATION = Path(__file__).resolve().parent / "_pinned_calibration"
+
+
 def _plan(monkeypatch, model, mode):
+    import neurobrix.core.dtype.calibration as _cal
+    monkeypatch.setattr(_cal, "STORE_ROOT", PINNED_CALIBRATION)
     pin_host(monkeypatch, 257530, 200000, "an idle rack host")
     pin_dedicated_card(monkeypatch, 16151, 306, "the rack's V100-16GB card 0 as measured")
     impose_rung(monkeypatch, 16384)
