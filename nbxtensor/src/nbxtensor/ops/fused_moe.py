@@ -10,7 +10,23 @@ silu_and_mul_kernel: Fused SwiGLU activation.
 import triton
 import triton.language as tl
 
+from nbxtensor.ops._configs import nbx_autotune
 
+# The tile of a fused MoE launch beyond its row block: BLOCK_SIZE_M is the alignment's block (`moe_align_block_size`,
+# the caller's), every other parameter a candidate the certification measures per key — the former fixed tile
+# (64 x 32, 4 warps, 2 stages: the best of a nine-tile grid on DeepSeek and Qwen3 prefills, 2026-11-03) among them.
+# BLOCK_SIZE_K divides the int4 kernel's quantisation group (128), so a K tile never straddles two groups.
+_FUSED_MOE_CONFIGS = [
+    triton.Config({'BLOCK_SIZE_N': bn, 'BLOCK_SIZE_K': bk, 'GROUP_SIZE_M': 8}, num_warps=w, num_stages=st)
+    for bn in (32, 64, 128) for bk in (32, 64) for w in (4, 8) for st in (2, 3)
+]
+#: the autotune key of a fused MoE launch: the GEMM's dims, the valid (token, expert) pairs' bucket — the prefill's
+#: length class, the same for the gate/up and the down launch of a layer — the experts the pointer table holds (how
+#: many rows each expert's blocks get), and the epilogue flags
+_FUSED_MOE_KEY = ['N', 'K', 'NV_BUCKET', 'NUM_EXPERTS', 'MUL_ROUTED_WEIGHT', 'TOPK_DIVIDE']
+
+
+@nbx_autotune(configs=_FUSED_MOE_CONFIGS, key=_FUSED_MOE_KEY, cache_results=True)
 @triton.jit
 def fused_moe_kernel(
     # Pointers to matrices
@@ -26,19 +42,21 @@ def fused_moe_kernel(
     K,                              # input feature dim (reduction)
     EM,                             # total sorted entries (with padding)
     num_valid_tokens,               # M * top_k (before padding)
+    NV_BUCKET,                      # num_valid_tokens' bucket: the autotune key's length class (unused in the body)
+    NUM_EXPERTS,                    # the pointer table's experts: the autotune key's (unused in the body)
     # Strides (shared across all experts — same shape)
     stride_am, stride_ak,
     stride_bk, stride_bn,
     stride_cm, stride_cn,
     # Meta-parameters
     BLOCK_SIZE_M: tl.constexpr,
-    BLOCK_SIZE_N: tl.constexpr,
-    BLOCK_SIZE_K: tl.constexpr,
-    GROUP_SIZE_M: tl.constexpr,
     MUL_ROUTED_WEIGHT: tl.constexpr,
     top_k: tl.constexpr,
     compute_type: tl.constexpr,
     TOPK_DIVIDE: tl.constexpr = True,
+    BLOCK_SIZE_N: tl.constexpr = 64,
+    BLOCK_SIZE_K: tl.constexpr = 32,
+    GROUP_SIZE_M: tl.constexpr = 8,
 ):
     """Grouped GEMM with absolute expert pointer table.
 

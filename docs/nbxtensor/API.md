@@ -812,6 +812,8 @@ def group_norm_launches(N: int, C: int, HxW: int, groups: int, has_weight: bool,
     # `wrappers.group_norm_wrapper` (one program per batch x group, the group's channel x spatial extent walked in chunks)
 def row_reduce_launches(kind: str, rows: int, feat: int, x: NBXDtype)
     # `wrappers.mean_wrapper` / `sum_wrapper` / `amax_wrapper` over rows of `feat` (the reduced elements
+def fused_moe_launches(tokens: int, top_k: int, experts: int, hidden: int, inter: int, w: NBXDtype)
+    # a fused MoE layer's grouped GEMMs: gate/up and down, keyed by the valid (token, expert) pairs' bucket and the experts
 ```
 
 ### `nbxtensor.ops` — the kernel modules and the remaining wrappers (each module's public kernels, launchers and helpers)
@@ -1366,7 +1368,7 @@ def full_kernel(output_ptr, fill_value, n_elements, BLOCK_SIZE: tl.constexpr)
 `nbxtensor.ops.fused_moe`
 
 ```python
-def fused_moe_kernel(a_ptr, expert_ptrs_ptr, c_ptr, topk_weights_ptr, sorted_token_ids_ptr, expert_ids_ptr, num_tokens_post_padded_ptr, N, K, EM, num_valid_tokens, stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn, BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr, MUL_ROUTED_WEIGHT: tl.constexpr, top_k: tl.constexpr, compute_type: tl.constexpr, TOPK_DIVIDE: tl.constexpr=True)
+def fused_moe_kernel(a_ptr, expert_ptrs_ptr, c_ptr, topk_weights_ptr, sorted_token_ids_ptr, expert_ids_ptr, num_tokens_post_padded_ptr, N, K, EM, num_valid_tokens, NV_BUCKET, NUM_EXPERTS, stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn, BLOCK_SIZE_M: tl.constexpr, MUL_ROUTED_WEIGHT: tl.constexpr, top_k: tl.constexpr, compute_type: tl.constexpr, TOPK_DIVIDE: tl.constexpr=True, BLOCK_SIZE_N: tl.constexpr=64, BLOCK_SIZE_K: tl.constexpr=32, GROUP_SIZE_M: tl.constexpr=8)
     # Grouped GEMM with absolute expert pointer table.
 def fused_moe_wna16_kernel(a_ptr, qw_ptrs_ptr, sc_ptrs_ptr, mn_ptrs_ptr, c_ptr, topk_weights_ptr, sorted_token_ids_ptr, expert_ids_ptr, num_tokens_post_padded_ptr, N, K, EM, num_valid_tokens, stride_am, stride_ak, stride_qk, stride_qn, stride_sg, stride_sn, stride_cm, stride_cn, BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr, MUL_ROUTED_WEIGHT: tl.constexpr, top_k: tl.constexpr, compute_type: tl.constexpr, QGROUP: tl.constexpr, QPACK: tl.constexpr, TOPK_DIVIDE: tl.constexpr=True)
     # Grouped GEMM over int4-g128-asym experts — in-register dequant.

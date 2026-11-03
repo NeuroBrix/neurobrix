@@ -137,8 +137,8 @@ def capture_fused_moe(rng, out):
                                      o.stride(0), o.stride(1), **common)
         out[f"moe_fp32b_{tag}"] = _host(o, np.float16).view(np.uint16)
         o = NBXTensor.empty((n_valid, N), dtype=NBXDtype.float16, device="cuda")
-        fused_moe_kernel[grid](a, _ptr_table(halves), o, topk_w, sorted_ids, expert_ids, num_post, N, K, EM,
-                               n_valid, a.stride(0), a.stride(1), halves[0].stride(0), halves[0].stride(1),
+        fused_moe_kernel.fn[grid](a, _ptr_table(halves), o, topk_w, sorted_ids, expert_ids, num_post, N, K, EM,
+                                  n_valid, n_valid, E, a.stride(0), a.stride(1), halves[0].stride(0), halves[0].stride(1),
                                o.stride(0), o.stride(1), TOPK_DIVIDE=True, **common)
         out[f"moe_fp16_{tag}"] = _host(o, np.float16).view(np.uint16)
 

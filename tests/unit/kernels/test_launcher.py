@@ -133,15 +133,16 @@ def test_our_binder_returns_triton_s_triple_on_a_real_kernel():
     from nbxtensor.ops.fused_moe import fused_moe_kernel
     import triton.language as tl
     backend = make_backend(target())
-    theirs_fn = create_function_from_signature(fused_moe_kernel.signature, fused_moe_kernel.params, backend)
+    jit = fused_moe_kernel.fn                         # the JIT function behind its autotuner
+    theirs_fn = create_function_from_signature(jit.signature, jit.params, backend)
     a = _nbx(np.zeros((16, 64), dtype=np.float16)); p = _nbx(np.zeros(4, dtype=np.int64))
     o = _nbx(np.zeros((32, 64), dtype=np.float16)); w = _nbx(np.zeros(32, dtype=np.float32))
     s = _nbx(np.zeros(64, dtype=np.int32)); e = _nbx(np.zeros(4, dtype=np.int32)); n = _nbx(np.zeros(1, dtype=np.int32))
-    args = (a, p, o, w, s, e, n, 64, 64, 64, 32, 64, 1, 64, 1, 64, 1)
+    args = (a, p, o, w, s, e, n, 64, 64, 64, 32, 32, 4, 64, 1, 64, 1, 64, 1)
     kw = dict(BLOCK_SIZE_M=16, BLOCK_SIZE_N=64, BLOCK_SIZE_K=32, GROUP_SIZE_M=8, MUL_ROUTED_WEIGHT=False,
               top_k=2, compute_type=tl.float16, TOPK_DIVIDE=True, num_warps=4, num_stages=2)
     b1, s1, o1 = theirs_fn(*args, **kw)
-    b2, s2, o2 = nbx_binder(fused_moe_kernel, args, kw)
+    b2, s2, o2 = nbx_binder(jit, args, kw)
     assert list(b1.keys()) == list(b2.keys()) and all(b1[k] is b2[k] or b1[k] == b2[k] for k in b1)
     assert [tuple(x) for x in s1] == [tuple(x) for x in s2], (s1, s2)
     assert o1 == o2

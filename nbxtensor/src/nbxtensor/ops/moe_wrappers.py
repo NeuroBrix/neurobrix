@@ -224,24 +224,23 @@ def invoke_fused_moe(
     if M < _MOE_BM:
         EM = min(EM, M * top_k * _MOE_BM)
 
-    grid = (triton.cdiv(EM, _MOE_BM) * triton.cdiv(N, _MOE_BN),)
+    # the tile beyond the alignment's row block is the key's certified configuration (`fused_moe._FUSED_MOE_CONFIGS`)
+    grid = lambda META: (triton.cdiv(EM, _MOE_BM) * triton.cdiv(N, META['BLOCK_SIZE_N']),)    # noqa: E731
     set_device(hidden_states)
 
     fused_moe_kernel[grid](
         hidden_states, expert_ptrs, output,
         topk_weights,
         sorted_token_ids, expert_ids, num_tokens_post_padded,
-        N, K, EM, num_valid_tokens,
+        N, K, EM, num_valid_tokens, _lk.bucket_of("M", num_valid_tokens), expert_ptrs.numel(),
         hidden_states.stride(0), hidden_states.stride(1),
         stride_bk, stride_bn,
         output.stride(0), output.stride(1),
-        BLOCK_SIZE_M=_MOE_BM, BLOCK_SIZE_N=_MOE_BN, BLOCK_SIZE_K=_MOE_BK,
-        GROUP_SIZE_M=_MOE_GROUP,
+        BLOCK_SIZE_M=_MOE_BM,
         MUL_ROUTED_WEIGHT=mul_routed_weight,
         top_k=top_k,
         compute_type=hidden_states.dtype,
         TOPK_DIVIDE=topk_divide,
-        num_warps=4, num_stages=2,
     )
 
 

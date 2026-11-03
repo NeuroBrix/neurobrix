@@ -207,6 +207,7 @@ EXTENT_POSITIONS: Dict[str, tuple] = {
     "conv2d_forward_kernel": (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 13, 14, 15),
     # C, H_in, W_in, H_out, W_out, kh, kw, stride_h, stride_w, (pad_h, pad_w may be 0)
     "depthwise_conv2d_kernel": (0, 1, 2, 3, 4, 5, 6, 7, 8),
+    "fused_moe_kernel": (0, 1, 2, 3),                 # N, K, NV_BUCKET, NUM_EXPERTS
 }
 
 
