@@ -232,14 +232,17 @@ def plan_seconds(strategy: str, allocations: Mapping[str, Any], works: Mapping[s
                  devices: Mapping[str, DeviceFacts], host: Optional[HostFacts], dtype: str,
                  phases: Optional[Mapping[str, int]] = None, prompt: Optional[Mapping[str, Work]] = None,
                  links: Optional[Mapping[tuple, float]] = None, engine: Optional[str] = None,
-                 stored: Optional[Mapping[str, str]] = None, held: Optional[Mapping[str, float]] = None) -> float:
+                 stored: Optional[Mapping[str, str]] = None, held: Optional[Mapping[str, float]] = None,
+                 resident: Optional[Mapping[str, float]] = None) -> float:
     """The plan's estimated seconds for the request. `devices`: {device string ("cuda:0"): its facts}; `uses`: {component:
     runs per request}; `phases`: {component: phases that load it} for the strategies that load per phase (1 when
     absent); `prompt`: {component: the work of its one prompt pass} for a generating component whose `works` entry is
     the work of ONE token — the prompt pass runs once more, over the same loaded weights; `stored`: {component: the
     dtype most of its weights are stored in} (the weights index), which the loader rate is read for; `held`: {component:
     the fraction of its weights a streaming strategy keeps loaded between uses} (`LayerPartitioner.hybrid`) — loaded
-    once, only the rest reloaded at every later use."""
+    once, only the rest reloaded at every later use; `resident`: {component: the MB of a host-held component's weights
+    its card keeps between uses} (the plan's zero3 grant, `PrismSolver._zero3_resident_budgets`) where the allocation
+    does not carry it."""
     total = 0.0
     for comp, alloc in allocations.items():
         if comp not in works:
@@ -285,8 +288,8 @@ def plan_seconds(strategy: str, allocations: Mapping[str, Any], works: Mapping[s
             # keeps at every pass, an expert store only the routed experts a use reads (priced per use below)
             total += w.weight_bytes / _loader_bps(f, engine, st, "host", "cold", dev)
             if not w.expert_bytes_per_use:
-                resident = float(getattr(alloc, "resident_weight_mb", 0.0) or 0.0) * 2 ** 20
-                total += passes * max(0.0, w.weight_bytes - resident) / f.h2d_bps
+                kept_b = float((resident or {}).get(comp, getattr(alloc, "resident_weight_mb", 0.0)) or 0.0) * 2 ** 20
+                total += passes * max(0.0, w.weight_bytes - kept_b) / f.h2d_bps
         elif strategy in STREAM_EVERY_USE:
             # a piece reloaded from the container at every use after the first (layer_streaming): at the engine's
             # measured reload rate (`weight_reload_gbps`), refused by name without it (the supervisor 2026-11-02 06:40)

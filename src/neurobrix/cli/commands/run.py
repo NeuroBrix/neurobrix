@@ -356,6 +356,9 @@ def request_input_config(args, manifest: dict, family, cache_path):
         width=width,
         seq_len=seq_len,
         max_tokens=request_decode_bound(args, cached_defaults),
+        # an image flow decodes its declared image tokens whatever --max-tokens says (`request_decode_bound`)
+        decode_tokens=(None if (cached_defaults or {}).get("type") == "autoregressive_image"
+                       else getattr(args, "max_tokens", None)),
         steps=(getattr(args, "steps", None) or cached_defaults.get("num_inference_steps")),
         flow=_flow,
         guidance_passes=guidance_passes,

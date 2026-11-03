@@ -346,7 +346,7 @@ class LayerPartitioner:
 
     def hybrid(self, budget_bytes: int, max_arena_bytes: Optional[int] = None,
                parked_cap_bytes: Optional[float] = None,
-               pool_fit_slack: Optional[float] = None, max_pieces: int = 64) -> Partition:
+               pool_fit_slack: Optional[float] = None) -> Partition:
         """The cut for a component the flow RE-ENTERS (a language model per token, a denoiser per step): the pieces the
         budget holds beside the streaming window stay loaded between runs (`Partition.resident`), and only the rest is
         reloaded at every run. Of the cuts `_greedy` takes at the plain cut's budget and at each halving of its weight
@@ -368,7 +368,7 @@ class LayerPartitioner:
             if cut < floor:
                 break
             part = self._greedy(cut, max_arena_bytes)
-            if not part.fits or part.chunks or part.swapped or len(part.segments) > max_pieces:
+            if not part.fits or part.chunks or part.swapped:
                 break
             held, peak = self._held_pieces(part, budget_bytes, parked_cap_bytes, pool_fit_slack)
             streamed = part.total_weight_bytes - sum(part.segments[i].weight_bytes for i in held)

@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   step's replay signature gained its segment part (2026-10-28), the growth of the paged pool looked for the cache's
   contribution one place too far and retired none of the previous generation's plans, which could then replay against
   the old addresses. The place is named once beside the signature and checked where the signature is built.
+- **Prism's time estimate prices a host-streamed component with the weights its plan keeps on the card, and counts the tokens the request decodes**: a candidate that streams a component from host memory was estimated as re-reading every block at every token (Janus-Pro-7B native on a 16 GB card: lazy_sequential estimated 1 062 s, measured 223 s — now 195 s), and a request with an audio or image input was estimated at the package's token ceiling instead of its `--max-tokens` (granite-speech: 448 tokens instead of 32). With the estimate right, the layer partition no longer needs its 64-piece bound. Every plan of the 49 catalogue models on both V100 profiles is unchanged.
 - **The Apple M4 Pro's Triton arena factor is measured by the engine, not stated by hand**: `apple_m4_pro.yml` no
   longer carries it (it was 1.19, from one hand-run measurement); the first Triton launch on the machine measures it
   and writes it into the generated profile (1.477 on the M4 Pro 18 GB), as on a card no vendor file describes.

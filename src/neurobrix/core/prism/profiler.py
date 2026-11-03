@@ -52,6 +52,11 @@ class InputConfig:
     # The tokens the request asks the decoder for (`--max-tokens`): a run's KV floor and pre-sizing estimate are this
     # request's, not the package's declared ceiling (runtime/defaults.json max_tokens). None: the package's.
     max_tokens: Optional[int] = None
+    # The tokens the request decodes at most (`--max-tokens` as given), whatever the flow and its inputs: what Prism's
+    # time estimate counts generated tokens by (`max_tokens` above prices a cache floor and is None for a request with
+    # an image, video or audio input — granite-speech's 32 tokens were estimated as the package's 448, 2026-11-03).
+    # None: not stated, the package's max_tokens.
+    decode_tokens: Optional[int] = None
     # The request's denoising steps (`--steps`, else the container's `num_inference_steps`): how many times a flow's
     # loop runs its components, read by Prism's time estimate (core/prism/time_estimate.py). None: not stated.
     steps: Optional[int] = None

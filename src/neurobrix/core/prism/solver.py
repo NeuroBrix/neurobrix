@@ -2864,7 +2864,8 @@ class PrismSolver:
         # Sort candidates by rank (the physical order), then by the measured time inside the rank (the estimate,
         # when the profile carries measured facts), then by score — docs/design/prism-fastest-plan-that-fits.md §2b.
         ranked = order_candidates(candidates, {})
-        self._time_estimates = self._estimate_times(ranked, container, input_config, profile, target_dtype_str)
+        self._time_estimates = self._estimate_times(ranked, container, input_config, profile, target_dtype_str,
+                                                    component_memory=component_memory, devices=devices)
         if self._time_estimates:
             ranked = order_candidates(candidates, self._time_estimates)
         else:
@@ -7821,7 +7822,8 @@ class PrismSolver:
 
     def _estimate_times(self, ranked, container, input_config, profile, dtype: str,
                         held_blocks: Optional[Dict[str, set]] = None,
-                        store_cache_mb: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
+                        store_cache_mb: Optional[Dict[str, float]] = None,
+                        component_memory: Optional[Dict[str, Any]] = None, devices=None) -> Dict[str, Any]:
         """{strategy: estimated seconds for the request, or why it cannot be estimated} for every ranked candidate
         (`core/prism/time_estimate.py`); {} when no device of the profile carries measured facts. `held_blocks`:
         {routed component: the blocks whose experts a card holds whole} (`_spread_experts`) — those blocks' experts
@@ -7830,6 +7832,7 @@ class PrismSolver:
         from neurobrix.core.prism.work import component_work
         if not any(getattr(d, "measured", None) for d in profile.devices):
             return {}
+        plan_devices = devices          # the planner's device objects (the residency's), before the facts below
         devices = {}
         for d in profile.devices:
             if getattr(d, "measured", None):
@@ -7844,7 +7847,8 @@ class PrismSolver:
         out: Dict[str, Any] = {}
         # the request's token bound when it states one; else the package's declared max_tokens (runtime/defaults.json) —
         # the same source that sizes the cache (an image, video or audio request carries no text bound by construction)
-        tokens = getattr(input_config, "max_tokens", None) or (self._read_defaults(container) or {}).get("max_tokens")
+        tokens = (getattr(input_config, "decode_tokens", None) or getattr(input_config, "max_tokens", None)
+                  or (self._read_defaults(container) or {}).get("max_tokens"))
         try:
             uses = TE.uses_per_request(flow, getattr(input_config, "steps", None), tokens,
                                        components=[c.name for c in (getattr(self, "_neural_components", []) or [])])
@@ -7911,16 +7915,40 @@ class PrismSolver:
         for _s, name, allocs, _d in ranked:
             try:
                 from neurobrix.core.prism.host_footprint import engine_of
+                resident = self._residency_priced(container, name, allocs, component_memory, plan_devices, profile)
                 out[name] = float(TE.plan_seconds(name, allocs, works, runs, devices, host, str(dtype), prompt=prompt,
+                                                  resident=resident,
                                                   phases=loads_per_run,
                                                   links=links, engine=engine_of(getattr(self, "_mode", "compiled")),
                                                   stored=self._stored_dtype_major(container),
                                                   held=held if name == "layer_streaming" else None))
                 if name == "layer_streaming":
                     out[name] += self._sliced_stretch_seconds(allocs, runs, devices, host, str(dtype))
-            except TE.MissingFact as exc:
+            except (TE.MissingFact, RuntimeError) as exc:
                 out[name] = f"not estimated: {exc}"
         return out
+
+    def _residency_priced(self, container, strategy: str, allocs, component_memory, devices, profile) -> Dict[str, float]:
+        """{component: MB of its weights the card keeps resident} for each component the candidate streams from host
+        memory (`zero3:`), as its plan would be granted them — the one arithmetic the plan is built with
+        (`_build_plan` then `_zero3_resident_budgets`, on a provisional plan) — for its time estimate. Priced with no
+        resident weights, a zero3 component re-reads every block at every use: Janus-Pro-7B native on the 16 GB
+        profile, its language model in zero3, was estimated at 1 062 s by lazy_sequential and ran 223 s with 11 605 MB
+        of its 12 380 kept on the card (2026-11-03). Empty when the candidate streams nothing from the host."""
+        zero3 = [n for n, a in allocs.items() if isinstance(a, tuple) and str(a[0]).startswith("zero3:")]
+        if not zero3 or not component_memory or not devices:
+            return {}
+        kept = {k: copy.copy(self.__dict__[k]) for k in ("_zero3_residency", "_expert_mult") if k in self.__dict__}
+        try:
+            plan = self._build_plan(allocs, component_memory, devices, getattr(self, "_component_dtypes", None) or {},
+                                    profile, strategy)
+            self._zero3_resident_budgets(container, plan, devices, profile)
+        finally:
+            for k in ("_zero3_residency", "_expert_mult"):
+                self.__dict__.pop(k, None)
+            self.__dict__.update(kept)
+        return {n: float(plan.components[n].resident_weight_mb) for n in zero3
+                if plan.components[n].strategy == "zero3"}
 
     def _sliced_stretch_seconds(self, allocs, runs, devices, host, dtype: str) -> float:
         """What running stretches in slices adds to a layer-streaming plan (`Partition.chunks`), per use of each component
