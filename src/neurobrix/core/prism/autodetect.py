@@ -2593,7 +2593,13 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None) -> dic
                                      model=d0.get("model")).get("memory") or {}).get("triton_arena_activation_factor") is None:
             first["triton_arena_activation_factor"] = _measure_arena_factor(hardware_id, d0)
             added["triton_arena_activation_factor"] = first["triton_arena_activation_factor"]
-    if engine == "triton" and "expert_copy" not in first:
+    if engine == "triton" and "expert_copy" not in first and devices[0].get("unified_memory"):
+        # a unified device maps the host's experts in place (Prism's Strategy 2.5, core/runtime/expert_files.py): the
+        # card-side miss copy is not its path, and its launch (Triton's own, host addresses in the tables) does not bind
+        # on Metal (the Mac, 2026-11-03 10:43) — not measured, said; the store refuses by name if it is ever reached
+        print("   [Auto-detect] expert_copy not measured: a unified device maps its experts (Strategy 2.5), the "
+              "card-side miss copy is not its path")
+    elif engine == "triton" and "expert_copy" not in first:
         # the expert store's miss copy on this card (the supervisor 2026-11-03 10:32: 75-93 % of a MoE decode's GPU time)
         first["expert_copy"] = {k: v for k, v in P.expert_copy(q["copy_bytes"], q["expert_copy_reps"],
                                                                q["expert_copy_blocks"], q["expert_copy_warps"]).items()
