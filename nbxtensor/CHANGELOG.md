@@ -1,0 +1,37 @@
+# Changelog
+
+All notable changes to nbxtensor are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+The first release, 0.0.1, is in preparation.
+
+### Added
+- **nbxtensor names the device in force publicly**: `nbxtensor.backend.device_files.in_force()`, `for_arch(arch)` and `forget()`, and `nbxtensor.backend.launcher.bind_target(target)` for a derivation that launches nothing; the engine's key census and paged KV cache read them instead of the library's private configuration module.
+
+### Changed
+- **A 1-D transposed convolution runs as a GEMM and an overlap-add** (`conv_transpose_wrapper`, groups 1, dilation 1, no output padding): `W^T [C_out*K, C_in] @ x` through `mm` — the matrix unit where the hardware profile declares one — then `col2im1d_kernel` gathers each output position's taps. The scatter kernel looped over every input channel and tap per output element; the vocoders' upsamplers ran 20-307x slower on a V100. Same output dtype; the waveform of a chatterbox sentence agrees with the scatter kernel's at 49.5 dB SNR, its transcription exact.
+- **Depthwise convolutions read their input coalesced**: the depthwise kernel's tile put the channels on its fastest axis, H*W elements apart in memory, so no load coalesced; it now computes a (channels x rows x columns) output tile with the width fastest. On a V100: SANA-Video's 11200-channel 3x3 4.5-8 times faster (2.63 -> 0.33 ms, at or past torch's 0.38 ms), the vocoders' one-row depthwise 1.6-2.4 times faster (orpheus-3b's first audio 3.68 -> 1.85 s); every depthwise key re-certified on both memory classes.
+- **An fp32 1 x 1 convolution runs on the V100's matrix unit**: the convolution's implicit GEMM carries fp32 operands as hi + lo through three MMAs (as the GEMM already did), but only where the hardware profile declares a measured row for the kernel window and the tile fills — on a V100 the 1 x 1 window (1.26-1.95 times faster on the video VAEs' shapes); a 3 x 3 measured slower than the FMA path at every tile and keeps it. The census forms no autotune key where the unit runs.
+- **The matrix product and the linear layer declare what they allocate** (`nbxtensor.ops.linalg_wrappers.mm_cost` / `addmm_cost`, beside `bmm_cost`): the casts, the decode rows' GEMV and the weight copy a row-major weight costs there, the bias made contiguous, the output at its store dtype, an epilogue's output; each equal to the allocator's measured peak on the device, over the dtypes, the decode and tiled row counts, both weight layouts and the bias forms.
+
+### Fixed
+- **A certified-only launch whose key cannot be formed is refused by name**: the key builder raising left the key empty, which skipped the certified lookup and let Triton's autotuner sweep inside a run promised to serve the certified directory only; it is now a `KeyNotCertified` naming the kernel and the exception.
+- **The Triton allocator's expandable range maps in chunks the engine measures on a real run, and a refusal remaps the
+  memory it takes back**: the chunk was measured per mapping call (2 MiB on a V100), and a refusal released the chunks
+  it reclaimed and created them again — SANA-Video_2B_720p on a V100-16GB mapped 89 GB over a run and was 33-44 % slower
+  than without the range. The first launch now replays a real run's allocation trace, which the library carries, with
+  the range off and at each candidate chunk, and keeps the smallest within the off replay's noise (32 MiB on the V100
+  16 GB, 64 MiB on the 32 GB); a reclaim maps its chunks again where they are needed. SANA-Video 16g runs at the off figure, and on
+  a 32 GB card the range holds 8 GB less at its peak.
+- **The Triton allocator's large class grows in an expandable range on a CUDA device with virtual memory management**: one reserved address range per device, physical chunks mapped into it as the pool grows, and at a refusal one synchronisation, then every mapped chunk lying whole inside a free block unmapped and mapped again where the request needs it — a free remainder beside a live tensor no longer pins its pages (Wan2.1-I2V triton on a V100-16GB was refused a 731 MB attention product with 1.1 GB of 48 MB remainders pinned in driver segments). The method of PyTorch's `expandable_segments`; the chunk is a measured fact of the generated profile (`vmm_chunk_bytes`: the smallest multiple of the granularity whose map costs no more than an ordinary allocation, 2 MiB on V100), refused by name when absent; a device without VMM keeps its driver segments. The small class and the weight arenas are unchanged; `memory.pool.simulate` replays the same rules.
+- **A refused small allocation is retried at the size of the segment the pool records**: a small request grows the device by a 2 MiB segment the pool then carves later small blocks from, but the retries after a refusal (the pool's flush, the idle slabs' release, the opt-in collection) asked the driver for the request's bytes — a 1 KiB driver allocation the pool treated as 2 MiB. Found while reading the allocator for the expandable segments (2026-11-02), on the path a full card takes; a test pins it.
+- **The Triton allocator's pool no longer lets a scalar pin a multi-gigabyte block**: a request took "the smallest free block that holds it" in one class, so a 17 KB scalar carved a freed 2.5 GB block and pinned its remainder alive, a 632 MB request the next — Allegro triton on a V100-16GB (gate of 2026-11-01) was refused a 2.5 GB gelu output with 4.4 GB of free blocks in pinned segments (Allegro-TI2V, CogVideoX-5b-I2V, Wan2.1/2.2-I2V, MiniCPM-o the same). The pool now has two size classes (a request of at most 1 MiB is carved from 2 MiB small segments, torch's caching allocator's kSmallSize / kSmallBuffer) and the half rule (a large block is split only when what is left is at most the request); its wholly free segments stay parked across a growth and return to the driver at a refusal, as before 164e89dc, whose flush before every growth — which emptied the small free segments the scalars then carved large blocks for — is withdrawn. The real trace replayed through the pool's own rules (`memory.pool.simulate`, M3's replay) completes with the least held of every pooled rule tried, on Allegro 16g, mochi-1-preview 32g and Kokoro alike.
+- **nbxtensor's `addmm` refuses a per-row bias `[M, N]` above four rows instead of computing it wrong**: its kernel adds one bias row to every output row, so such a bias was applied with its first row only. It is now refused by name (a bias `[N]` or `[1, N]`, which every catalogue model uses, is unchanged; a per-row bias at up to four rows is still served).
+
+### Removed
+- **`flash_decode_split_kernel` and its route**: armed only by an environment switch (`NBX_FLASH_DECODE`, with `NBX_FD_BLOCK_N` and `NBX_FD_SEG`) and measured slower than the vector decode kernels; `flash_decode.py` keeps the fixed-order reduce they share.
+- **`conv1d_forward_kernel`**: launched by no route (a 1-D convolution runs through `conv2d`).

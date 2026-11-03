@@ -38,6 +38,8 @@ the NeuroBrix repository. This README documents what is in the library TODAY; ev
 | `nbxtensor.tensor`, `memory`, `backend`, `ops`, `quant` | yes | the tensor class, the allocators, the device backends, the Triton kernels and their cost declarations |
 | `nbxtensor.host` | yes | the services still passed by an application while the boundary is cleaned (below; API.md section 11) |
 
+What changed from one version to the next — added, changed, fixed, removed — is in [`CHANGELOG.md`](CHANGELOG.md).
+
 ## Installation
 
 nbxtensor never needs torch: it is not a dependency, not even an optional one, and the library and its kernels run in
