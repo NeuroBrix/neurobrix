@@ -814,6 +814,8 @@ def row_reduce_launches(kind: str, rows: int, feat: int, x: NBXDtype)
     # `wrappers.mean_wrapper` / `sum_wrapper` / `amax_wrapper` over rows of `feat` (the reduced elements
 def fused_moe_launches(tokens: int, top_k: int, experts: int, hidden: int, inter: int, w: NBXDtype)
     # a fused MoE layer's grouped GEMMs: gate/up and down, keyed by the valid (token, expert) pairs' bucket and the experts
+def moe_decode_vec_half_launches(top_k: int, hidden: int, inter: int, w: NBXDtype)
+    # a one-token MoE layer on one card's half-precision experts: gateup, the down partials, their fixed-order sum
 ```
 
 ### `nbxtensor.ops` — the kernel modules and the remaining wrappers (each module's public kernels, launchers and helpers)
@@ -1735,8 +1737,8 @@ def moe_down_split_vec_kernel(h_ptr, topk_ids_ptr, topk_w_ptr, down_qw_tab, down
     # ADOPTED second pass (2026-08-25)
 def moe_part_reduce_kernel(part_ptr, out_ptr, N, TOP_K: tl.constexpr, BLOCK_N: tl.constexpr)
     # Fixed-order sum of the TOP_K weighted partials — deterministic (the same contract as flash_decode_reduce
-def moe_gateup_vec_half_kernel(x_ptr, topk_ids_ptr, gate_tab, up_tab, h_ptr, K, N, stride_wk, stride_wn, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, W_BF16: tl.constexpr)
-def moe_down_split_vec_half_kernel(h_ptr, topk_ids_ptr, topk_w_ptr, down_tab, part_ptr, Kd, N, stride_wk, stride_wn, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, W_BF16: tl.constexpr)
+def moe_gateup_vec_half_kernel(x_ptr, topk_ids_ptr, gate_tab, up_tab, h_ptr, K, N, stride_wk, stride_wn, TOP_K, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, W_BF16: tl.constexpr)
+def moe_down_split_vec_half_kernel(h_ptr, topk_ids_ptr, topk_w_ptr, down_tab, part_ptr, Kd, N, stride_wk, stride_wn, TOP_K, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, W_BF16: tl.constexpr)
 ```
 
 `nbxtensor.ops.moe_device_residency`

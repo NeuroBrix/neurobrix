@@ -65,6 +65,15 @@ established idiom).
 import triton
 import triton.language as tl
 
+from nbxtensor.ops._configs import nbx_autotune
+
+# The half-precision band's tiles, candidates the certification measures per key: the ladder the band was first
+# measured over (BLOCK_N {16, 32, 64} x BLOCK_K {64, 128, 256} x warps {2, 4, 8}, Qwen3-30B-A3B's experts on a V100,
+# 2026-10-28: 193-240 us a call, the leading group around 32 / 128 / 4), and the partials' fixed-order sum's.
+_HALF_VEC_CONFIGS = [triton.Config({'BLOCK_N': bn, 'BLOCK_K': bk}, num_warps=w)
+                     for bn in (16, 32, 64) for bk in (64, 128, 256) for w in (2, 4, 8)]
+_PART_REDUCE_CONFIGS = [triton.Config({'BLOCK_N': bn}, num_warps=w) for bn in (128, 256, 512, 1024) for w in (1, 2, 4)]
+
 
 @triton.jit
 def moe_gateup_vec_kernel(
@@ -253,6 +262,7 @@ def moe_down_split_vec_kernel(
     tl.store(part_ptr + pid_e * N + offs_n, we * acc, mask=mask_n)
 
 
+@nbx_autotune(configs=_PART_REDUCE_CONFIGS, key=['N', 'TOP_K'], cache_results=True)
 @triton.jit
 def moe_part_reduce_kernel(
     part_ptr, out_ptr, N,
@@ -284,6 +294,7 @@ def moe_part_reduce_kernel(
 # ---------------------------------------------------------------------------
 
 
+@nbx_autotune(configs=_HALF_VEC_CONFIGS, key=['K', 'N', 'TOP_K', 'W_BF16'], cache_results=True)
 @triton.jit
 def moe_gateup_vec_half_kernel(
     x_ptr,            # [K] activation
@@ -292,6 +303,7 @@ def moe_gateup_vec_half_kernel(
     h_ptr,            # [TOP_K, N] fp32 out — silu(gate) * up
     K, N,
     stride_wk, stride_wn,
+    TOP_K,            # the routed experts (the grid's first axis): the autotune key's, unused in the body
     BLOCK_N: tl.constexpr,
     BLOCK_K: tl.constexpr,
     W_BF16: tl.constexpr,
@@ -320,6 +332,7 @@ def moe_gateup_vec_half_kernel(
     tl.store(h_ptr + pid_e * N + offs_n, h, mask=mask_n)
 
 
+@nbx_autotune(configs=_HALF_VEC_CONFIGS, key=['Kd', 'N', 'TOP_K', 'W_BF16'], cache_results=True)
 @triton.jit
 def moe_down_split_vec_half_kernel(
     h_ptr,            # [TOP_K, Kd] fp32 — the gateup output
@@ -328,6 +341,7 @@ def moe_down_split_vec_half_kernel(
     part_ptr,         # [TOP_K, N] fp32 — router-weighted per-expert partials
     Kd, N,
     stride_wk, stride_wn,
+    TOP_K,            # the routed experts (the grid's first axis): the autotune key's, unused in the body
     BLOCK_N: tl.constexpr,
     BLOCK_K: tl.constexpr,
     W_BF16: tl.constexpr,

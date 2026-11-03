@@ -776,8 +776,7 @@ def _moe_decode_vec_pass(hidden_states, tables, dev, flat_indices,
             dsg, dsn,
             BLOCK_N=BND, BLOCK_K=BK, GROUP=128, PACK=8,
             num_warps=WD, num_stages=ST)
-        moe_part_reduce_kernel[(_tr.cdiv(K, 256),)](
-            part, out32, K, TOP_K=top_k, BLOCK_N=256, num_warps=2)
+        moe_part_reduce_kernel[lambda META: (_tr.cdiv(K, META['BLOCK_N']),)](part, out32, K, TOP_K=top_k)
         return out32.to(dt).reshape(1, K)
     moe_down_combine_vec_kernel[(_tr.cdiv(K, BND),)](
         h, flat_indices, flat_scores,
@@ -790,12 +789,6 @@ def _moe_decode_vec_pass(hidden_states, tables, dev, flat_indices,
     return out32.to(dt).reshape(1, K)
 
 
-#: The half band's launch shapes on sm_70, measured on the rack (V100-SXM2 card 1, Qwen3-30B-A3B's 2048 x 768 fp16
-#: experts, top 8 of 128, synthetic weights, `do_bench` of the whole routed call, 2026-10-28): the ladder BLOCK_N
-#: {16,32,64} x BLOCK_K {64,128,256} x warps {2,4,8} spans 193-240 us a call (~10 us run-to-run noise); 32/128/4 sits in
-#: the leading group (193-212 us, ~375-390 GB/s of expert weights) — the grouped GEMM it replaces took ~1.2 ms.
-_HALF_VEC = {"gateup": {"BLOCK_N": 32, "BLOCK_K": 128, "num_warps": 4},
-             "down": {"BLOCK_N": 32, "BLOCK_K": 128, "num_warps": 4}}
 
 
 def _moe_decode_vec_half_pass(hidden_states, tables, dev, flat_indices, flat_scores, top_k, K, N_gate, bf16):
@@ -812,17 +805,15 @@ def _moe_decode_vec_half_pass(hidden_states, tables, dev, flat_indices, flat_sco
     h = NBXTensor.empty((top_k, N_gate), dtype=NBXDtype.float32, device=f"cuda:{dev}")
     part = NBXTensor.empty((top_k, K), dtype=NBXDtype.float32, device=f"cuda:{dev}")
     out32 = NBXTensor.empty((K,), dtype=NBXDtype.float32, device=f"cuda:{dev}")
-    gu, dn = _HALF_VEC["gateup"], _HALF_VEC["down"]
     set_device(h)
-    moe_gateup_vec_half_kernel[(top_k, _tr.cdiv(N_gate, gu["BLOCK_N"]))](
+    # the tiles are each key's certified configuration (`moe_decode_vec._HALF_VEC_CONFIGS`, `_PART_REDUCE_CONFIGS`)
+    moe_gateup_vec_half_kernel[lambda META: (top_k, _tr.cdiv(N_gate, META["BLOCK_N"]))](
         x, flat_indices, tables.gate_ptrs[dev], tables.up_ptrs[dev], h, K, N_gate,
-        tables.gate_stride_bk[dev], tables.gate_stride_bn[dev],
-        BLOCK_N=gu["BLOCK_N"], BLOCK_K=gu["BLOCK_K"], W_BF16=bool(bf16), num_warps=gu["num_warps"])
-    moe_down_split_vec_half_kernel[(top_k, _tr.cdiv(K, dn["BLOCK_N"]))](
+        tables.gate_stride_bk[dev], tables.gate_stride_bn[dev], top_k, W_BF16=bool(bf16))
+    moe_down_split_vec_half_kernel[lambda META: (top_k, _tr.cdiv(K, META["BLOCK_N"]))](
         h, flat_indices, flat_scores, tables.down_ptrs[dev], part, N_gate, K,
-        tables.down_stride_bk[dev], tables.down_stride_bn[dev],
-        BLOCK_N=dn["BLOCK_N"], BLOCK_K=dn["BLOCK_K"], W_BF16=bool(bf16), num_warps=dn["num_warps"])
-    moe_part_reduce_kernel[(_tr.cdiv(K, 256),)](part, out32, K, TOP_K=top_k, BLOCK_N=256, num_warps=2)
+        tables.down_stride_bk[dev], tables.down_stride_bn[dev], top_k, W_BF16=bool(bf16))
+    moe_part_reduce_kernel[lambda META: (_tr.cdiv(K, META["BLOCK_N"]),)](part, out32, K, TOP_K=top_k)
     return out32.to(dt).reshape(1, K)
 
 

@@ -1254,6 +1254,51 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
                     y[rows] = xs[rows] @ _f64(ws[e]).T
             return y * sc[:, None] if mul else y
         return run, (oracle if values else None), "c_ptr"
+    if short in ("moe_gateup_vec_half_kernel", "moe_down_split_vec_half_kernel", "moe_part_reduce_kernel"):
+        # the one-token MoE band (`triton/moe._moe_decode_vec_half_pass`), each launch on its own: TOP_K experts (a
+        # permutation of as many) of [N, K] half weights, the routed rows fp32; the fp64 oracle per expert row
+        from nbxtensor.ops import moe_decode_vec as _mv
+        import triton as _tr
+        f32 = NBXDtype.float32
+        if short == "moe_part_reduce_kernel":
+            n_out, top_k = int(key[0]), int(key[1])
+            part = arr(rng, (top_k, n_out), "fp32")
+            def run():
+                out = NBXTensor.empty((n_out,), dtype=f32)
+                _mv.moe_part_reduce_kernel[lambda META: (_tr.cdiv(n_out, META["BLOCK_N"]),)](to(part), out, n_out,
+                                                                                            TOP_K=top_k)
+                return out
+            return run, ((lambda: _f64(part).sum(axis=0)) if values else None), "out_ptr"
+        k_in, n_out, top_k, bf = int(key[0]), int(key[1]), int(key[2]), bool(key[3])
+        w_dt = "bf16" if bf else "fp16"
+        gate = short == "moe_gateup_vec_half_kernel"
+        _refuse_oversize(card_bytes, [((top_k * (2 if gate else 1) * n_out, k_in), w_dt), ((top_k, n_out), "fp32")], short)
+        ids = rng.permutation(top_k).astype(np.int64)
+        x = arr(rng, (k_in,) if gate else (top_k, k_in), w_dt if gate else "fp32")
+        rw = arr(rng, (top_k,), w_dt)
+        ws = [[arr(rng, (n_out, k_in), w_dt) for _ in range(top_k)] for _ in range(2 if gate else 1)]
+        def run():
+            wt = [[to(w) for w in proj] for proj in ws]
+            tabs = [NBXTensor.from_numpy(np.array([t.data_ptr() for t in proj], dtype=np.int64)) for proj in wt]
+            out = NBXTensor.empty((top_k, n_out), dtype=f32)
+            grid = lambda META: (top_k, _tr.cdiv(n_out, META["BLOCK_N"]))     # noqa: E731
+            if gate:
+                _mv.moe_gateup_vec_half_kernel[grid](to(x), to(ids), tabs[0], tabs[1], out, k_in, n_out, 1, k_in,
+                                                     top_k, W_BF16=bf)
+            else:
+                _mv.moe_down_split_vec_half_kernel[grid](to(x), to(ids), to(rw), tabs[0], out, k_in, n_out, 1, k_in,
+                                                         top_k, W_BF16=bf)
+            return out
+        def oracle():
+            y = np.empty((top_k, n_out), dtype=np.float64)
+            for p_, e in enumerate(ids):
+                if gate:
+                    g, u = _f64(x) @ _f64(ws[0][e]).T, _f64(x) @ _f64(ws[1][e]).T
+                    y[p_] = g / (1.0 + np.exp(-g)) * u
+                else:
+                    y[p_] = (_f64(x)[p_] @ _f64(ws[0][e]).T) * _f64(rw)[p_]
+            return y
+        return run, (oracle if values else None), ("h_ptr" if gate else "part_ptr")
     if short == "group_norm_forward_kernel":
         # through the wrapper (`group_norm_wrapper`, eps its default): N = 1, one channel per group, the groups the
         # programs' bucket, the group's extent the padded class (at its top where the card holds it, else at the
