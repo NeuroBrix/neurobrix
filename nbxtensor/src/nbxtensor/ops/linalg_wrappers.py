@@ -370,6 +370,54 @@ def _gemm_unit_tile(a, b, M: int, N: int):
     return tile
 
 
+def _gemm_route(tuner, args, kwargs, unit_tile):
+    """The tile a GEMM the matrix unit can take (`unit_tile`, `_gemm_unit_tile`) runs at on the unit, or None for its
+    FMA kernel: the certificate of the FMA launch's key decides, which measured both routes on this card's class and
+    keeps the faster (`autotune_certified.unit_choice`) — never a threshold. A census shadow and the certifier's sweep
+    take the FMA kernel (its key is recorded, its configurations measured, the unit's tiles beside them); a
+    confirmation run with no certificate takes it too, and the launch refuses the missing key by name; any other run
+    with no certificate takes the unit at the profile's tile, as the vendor file declares it."""
+    if unit_tile is None:
+        return None
+    from nbxtensor.ops import autotune_certified as _cert
+    from nbxtensor.ops.launch_observer import launch_observer
+    if launch_observer().active() or _cert.certifying():
+        return None
+    chosen = _cert.unit_choice(tuner, args, kwargs)
+    if chosen is None:
+        return None if _cert.certified_only() else unit_tile
+    kind, tile = chosen
+    if kind == "fma":
+        return None
+    return {**tile, "split_a": unit_tile["split_a"], "split_b": unit_tile["split_b"]}
+
+
+def matrix_unit_runs(tuner, args, kwargs):
+    """(tile, run) for each matrix-unit tile the hardware profile declares for this `matmul_kernel` / `addmm_kernel`
+    launch (its arguments as the autotuner receives them), where the unit can take the GEMM
+    (`launch_keys.matrix_unit_operands`): the rows of `matrix_unit.mm`, or of `fp32_split.mm` for an operand carried
+    as hi + lo. Each run writes the launch's own output on the unit, so a certifier can prove it against the launch's
+    oracle and time it beside the FMA configurations (the certificate then names the faster). Empty otherwise."""
+    from nbxtensor.ops import autotune_certified as _cert
+    if getattr(getattr(tuner, "base_fn", None), "__name__", None) not in ("matmul_kernel", "addmm_kernel"):
+        return []
+    named = dict(zip(tuner.arg_names, args))
+    a, b, c = named["a_ptr"], named["b_ptr"], named["c_ptr"]
+    reps = _lk.matrix_unit_operands(a.nbx_dtype, b.nbx_dtype, int(named["M"]))
+    if reps is None:
+        return []
+    mu = _matrix_unit()
+    bias = named.get("bias_ptr")
+    alpha, beta = float(named.get("alpha", 1.0)), float(named.get("beta", 0.0))
+    promote_bias, epilogue = bool(kwargs.get("PROMOTE_BIAS", False)), int(kwargs.get("EPILOGUE", 0))
+    out = []
+    for row in (mu["fp32_split"] if "split" in reps else mu)["mm"]:
+        tile = {f: int(row[f]) for f in _cert._UNIT_TILE_FIELDS}
+        run_tile = {**tile, "split_a": reps[0] == "split", "split_b": reps[1] == "split"}
+        out.append((tile, (lambda t=run_tile: _gemm_m8n8k4(a, b, bias, c, alpha, beta, promote_bias, epilogue, t))))
+    return out
+
+
 def _gemm_m8n8k4(a, b, bias, c, alpha, beta, promote_bias, epilogue, tile, bias_strides=None):
     """C = A @ B (+ beta * bias, alpha scaling) on the m8n8k4 matrix unit (ops/matmul_m8n8k4.py). 2-D or batched
     3-D operands: `a` row-major per batch, `b` walked by its strides, `bias` None or broadcast by `bias_strides`
@@ -569,21 +617,15 @@ def mm(a, b, _epilogue: int = 0) :
         rows = r1 - r0
         a_b = a[r0:r1] if len(bands) > 1 else a
         c_b = c[r0:r1] if len(bands) > 1 else c
-        if _mu_tile is not None:
-            _gemm_m8n8k4(a_b, b, None, c_b, 1.0, 0.0, False, _epilogue, _mu_tile)
+        args = (a_b, b, c_b, rows, N, K, m_bucket, a_b.stride(0), a_b.stride(1), b.stride(0), b.stride(1),
+                c_b.stride(0), c_b.stride(1))
+        kwargs = dict(IEEE_PRECISION=ieee, PROMOTE_B=promote_b, PROMOTE_A=promote_a, EPILOGUE=_epilogue)
+        tile = _gemm_route(matmul_kernel, args, kwargs, _mu_tile)
+        if tile is not None:
+            _gemm_m8n8k4(a_b, b, None, c_b, 1.0, 0.0, False, _epilogue, tile)
             continue
         grid = (lambda META, _m=rows: (triton.cdiv(_m, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']),))
-        _core._autotune_headroom_guard(matmul_kernel[grid])(
-            a_b, b, c_b,
-            rows, N, K, m_bucket,
-            a_b.stride(0), a_b.stride(1),
-            b.stride(0), b.stride(1),
-            c_b.stride(0), c_b.stride(1),
-            IEEE_PRECISION=ieee,
-            PROMOTE_B=promote_b,
-            PROMOTE_A=promote_a,
-            EPILOGUE=_epilogue,
-        )
+        _core._autotune_headroom_guard(matmul_kernel[grid])(*args, **kwargs)
     return c
 
 
@@ -859,23 +901,16 @@ def addmm(bias, a, b,
         rows = r1 - r0
         a_b = a[r0:r1] if len(bands) > 1 else a
         c_b = c[r0:r1] if len(bands) > 1 else c
-        if _mu_tile is not None:
-            _gemm_m8n8k4(a_b, b, bias, c_b, alpha, beta, promote_bias, _epilogue, _mu_tile)
+        args = (a_b, b, bias, c_b, rows, N, K, m_bucket, a_b.stride(0), a_b.stride(1), b.stride(0), b.stride(1),
+                c_b.stride(0), c_b.stride(1), alpha, beta)
+        kwargs = dict(IEEE_PRECISION=ieee, PROMOTE_B=promote_b, PROMOTE_A=promote_a, PROMOTE_BIAS=promote_bias,
+                      EPILOGUE=_epilogue)
+        tile = _gemm_route(addmm_kernel, args, kwargs, _mu_tile)
+        if tile is not None:
+            _gemm_m8n8k4(a_b, b, bias, c_b, alpha, beta, promote_bias, _epilogue, tile)
             continue
         grid = (lambda META, _m=rows: (triton.cdiv(_m, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']),))
-        _core._autotune_headroom_guard(addmm_kernel[grid])(
-            a_b, b, bias, c_b,
-            rows, N, K, m_bucket,
-            a_b.stride(0), a_b.stride(1),
-            b.stride(0), b.stride(1),
-            c_b.stride(0), c_b.stride(1),
-            alpha, beta,
-            IEEE_PRECISION=ieee,
-            PROMOTE_B=promote_b,
-            PROMOTE_A=promote_a,
-            PROMOTE_BIAS=promote_bias,
-            EPILOGUE=_epilogue,
-        )
+        _core._autotune_headroom_guard(addmm_kernel[grid])(*args, **kwargs)
     return c
 
 

@@ -625,6 +625,8 @@ def file_certification(entries: Dict[str, Dict[str, Any]], ktext: str, cert: Dic
         raise ValueError("the certification's proof does not say which card's memory it was made on "
                          "(no machine.device.memory_mb): refused — an entry without a memory class is served to no card")
     body = {"config": cert["config"], "proof": cert["proof"], "excluded": cert.get("excluded") or []}
+    if cert.get("unit"):
+        body["unit"] = cert["unit"]          # the matrix unit's tile, measured faster than `config` on this class
     cur = entries.get(ktext)
     if cur is None or proof_memory_gb(cur.get("proof")) in (cls, None):
         variants = (cur or {}).get("variants")
@@ -634,6 +636,43 @@ def file_certification(entries: Dict[str, Dict[str, Any]], ktext: str, cert: Dic
             del entries[ktext]["variants"]
         return
     cur.setdefault("variants", {})[_variant_slot(cls)] = body
+
+
+#: the fields of a matrix-unit tile (`matrix_unit.mm` rows of the vendor file) a certificate's choice carries
+_UNIT_TILE_FIELDS = ("block_m", "block_n", "block_k", "warps_m", "warps_n", "group_m")
+
+_CERTIFYING = [False]
+_UNIT_QUALS: Dict[int, Optional[str]] = {}
+
+
+def certifying(on: Optional[bool] = None) -> bool:
+    """True while the certifier sweeps a key: a GEMM the matrix unit could take then runs its FMA kernel, whose
+    configurations the sweep measures (the unit's tiles are measured beside them, `autotune_certify`). `on` sets it."""
+    if on is not None:
+        _CERTIFYING[0] = bool(on)
+    return _CERTIFYING[0]
+
+
+def unit_choice(tuner, args, kwargs) -> Optional[Tuple[str, Optional[Dict[str, int]]]]:
+    """What the certificate of this FMA launch chose on the executing card's class: ("unit", tile) when the matrix
+    unit was measured faster, ("fma", None) when the FMA kernel was, None when no certificate serves the key — read at
+    the key the door forms (`autotune_cache.key_of`), and at its computed twin as the door does."""
+    from nbxtensor.ops import autotune_cache as _atc
+    qual = _UNIT_QUALS.get(id(tuner))
+    if qual is None:
+        qual = _UNIT_QUALS[id(tuner)] = _atc._qual_of(tuner)     # once per kernel: a GEMM asks at every launch
+    if qual is None:
+        return None
+    key = _atc.key_of(tuner, args, kwargs)
+    mcls = executing_memory_gb(args)
+    cert = lookup(qual, tuner, key, memory_gb=mcls)
+    if cert is None:
+        twin = computed_key(tuner, key, kwargs)
+        cert = lookup(qual, tuner, twin, memory_gb=mcls) if twin is not None else None
+    if cert is None:
+        return None
+    unit = cert.get("unit")
+    return ("unit", {f: int(unit["tile"][f]) for f in _UNIT_TILE_FIELDS}) if unit else ("fma", None)
 
 
 def executing_memory_gb(args=None, device_idx: Optional[int] = None) -> Optional[int]:
@@ -687,6 +726,21 @@ def _validate_certification(where: str, entry: Any, fmt: str, expected_tol, key,
         _dt.datetime.fromisoformat(str(proof["date"]).replace("Z", "+00:00"))
     except ValueError:
         problems.append(f"{where}: the date does not parse")
+    unit = entry.get("unit")
+    if unit is not None:
+        tile = unit.get("tile") if isinstance(unit, dict) else None
+        if not isinstance(tile, dict) or not all(isinstance(tile.get(f), int) for f in _UNIT_TILE_FIELDS):
+            problems.append(f"{where}: a matrix-unit choice without its tile ({', '.join(_UNIT_TILE_FIELDS)})")
+        else:
+            try:
+                udev, ums, fms = float(unit["deviation"]), float(unit["best_ms"]), float(unit["fma_best_ms"])
+            except (KeyError, TypeError, ValueError):
+                problems.append(f"{where}: a matrix-unit choice without its deviation and both timings")
+            else:
+                if not (udev == udev) or udev < 0 or udev > tol:
+                    problems.append(f"{where}: the matrix unit's deviation {udev:.3e} exceeds the tolerance {tol:.1e}")
+                if not ums < fms:
+                    problems.append(f"{where}: the matrix unit chosen at {ums:.4f} ms against the FMA kernel's {fms:.4f}")
     for ex in entry.get("excluded") or []:
         try:
             if float(ex.get("deviation")) <= tol:
