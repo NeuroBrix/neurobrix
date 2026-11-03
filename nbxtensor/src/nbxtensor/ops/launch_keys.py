@@ -39,6 +39,7 @@ LAYER_NORM = "nbxtensor.ops.layernorm.layer_norm_forward_kernel"
 RMS_NORM = "nbxtensor.ops.rmsnorm.rms_norm_forward_kernel"
 GEMV_VEC = "nbxtensor.ops.gemv_vec.gemv_vec_kernel"
 ADDMV = "nbxtensor.ops.addmv_op.addmv_kernel"
+FUSED_MOE = "nbxtensor.ops.fused_moe.fused_moe_kernel"
 
 F32, BF16, F16 = NBXDtype.float32, NBXDtype.bfloat16, NBXDtype.float16
 _HALF = (F16, BF16)
@@ -947,3 +948,20 @@ def row_reduce_launches(kind: str, rows: int, feat: int, x: NBXDtype) -> List[La
         return []
     out = x if kind == "amax" else F32
     return [(ROW_REDUCE[kind], (bucket_of("M", rows), softmax_feat_bucket(feat), tag(x), tag(out)))]
+
+
+def fused_moe_launches(tokens: int, top_k: int, experts: int, hidden: int, inter: int, w: NBXDtype) -> List[Launch]:
+    """A fused MoE layer's three grouped GEMMs (`moe_wrappers.invoke_fused_moe`, `triton/moe._fused_moe_pass` and its
+    multi-card and expert-store forms): gate and up [hidden -> inter], down [inter -> hidden] with the routing weight
+    and no top-k division. Every float operand is in the experts' dtype `w` (the layer casts the hidden states and the
+    scores to it), the routing tables int64. The key's length class is the valid (token, expert) pairs' bucket,
+    `tokens * top_k` — the same for every launch of the layer, whatever the routing (the padded extent is not keyed) —
+    and `experts` the pointer table's size (the layer's experts)."""
+    if tokens < 1:
+        return []
+    nv = bucket_of("M", int(tokens) * int(top_k))
+    t, i64 = tag(w), tag(NBXDtype.int64)
+    dts = (t, i64, t, t, i64, i64, i64)        # a, expert_ptrs, c, topk_weights, sorted ids, expert ids, padded count
+    return [(FUSED_MOE, (int(inter), int(hidden), nv, int(experts), False, True) + dts),
+            (FUSED_MOE, (int(hidden), int(inter), nv, int(experts), True, False) + dts)]
+

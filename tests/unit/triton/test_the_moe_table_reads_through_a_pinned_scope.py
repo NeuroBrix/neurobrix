@@ -94,8 +94,8 @@ def test_the_grouped_moe_kernel_matches_fp64_through_a_pinned_table():
         c = NBXTensor.from_numpy(_bf16(np.zeros((TOP_K, N))),
                                  dtype=NBXDtype.bfloat16)
         grid = (triton.cdiv(EM, BM) * triton.cdiv(N, BN),)
-        launch(fused_moe_kernel, grid, a, tab, c, t_w, t_sid, t_eid, t_np,
-               N, K, EM, TOP_K, K, 1, N, 1, N, 1,
+        launch(fused_moe_kernel.fn, grid, a, tab, c, t_w, t_sid, t_eid, t_np,
+               N, K, EM, TOP_K, TOP_K, E, K, 1, N, 1, N, 1,
                BLOCK_SIZE_M=BM, BLOCK_SIZE_N=BN, BLOCK_SIZE_K=BK,
                GROUP_SIZE_M=1, MUL_ROUTED_WEIGHT=True, top_k=TOP_K,
                compute_type=tl.bfloat16)

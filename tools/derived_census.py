@@ -1255,7 +1255,12 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
             launches = []
             if a_.get("norm_topk_prob") and "topk_weights_tid" not in a_:
                 launches += LK.row_reduce_launches("sum", M_, top_k, NBXDtype.float32)
-            launches += LK.row_reduce_launches("sum", M_ * K_, top_k, (loaded_dt or dt)(a_["expert_gate_weight_ids"][0]))
+            w_dt = (loaded_dt or dt)(a_["expert_gate_weight_ids"][0])
+            launches += LK.row_reduce_launches("sum", M_ * K_, top_k, w_dt)
+            # the grouped GEMMs (`fused_moe_launches`), at every token count: a decode token takes them too where the
+            # layer's experts are not one card's half-precision set (the vector band's condition, decided at the run)
+            inter = int(shape(a_["expert_gate_weight_ids"][0])[0])
+            launches += LK.fused_moe_launches(M_, top_k, len(a_["expert_gate_weight_ids"]), K_, inter, w_dt)
         elif kind in ("aten::native_group_norm", "aten::group_norm"):
             # `wrappers.group_norm_wrapper` (`native_group_norm_wrapper` forwards to it): N and C the input's first two
             # dims, every other its spatial extent; the groups and the weight and bias by their argument positions

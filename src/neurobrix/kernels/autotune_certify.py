@@ -1220,6 +1220,40 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         red = short.split("_")[0]
         fn = {"mean": _nbx_reduction_wrappers.mean_wrapper, "sum": _nbx_reduction_wrappers.sum_wrapper, "amax": _nbx_reduction_wrappers.amax_wrapper}[red]
         return (lambda: fn(to(x), -1)), (_row_reduce_oracle_fn(x, red) if values else None), "output_ptr"
+    if short == "fused_moe_kernel":
+        # (N, K, NV_BUCKET, NUM_EXPERTS, MUL_ROUTED_WEIGHT, TOPK_DIVIDE, dtypes): the bucket's valid (token, expert)
+        # pairs at its top, one expert per token (top_k 1: the key does not name it), the key's experts of [N, K] weights
+        # routed uniformly at random and aligned by the engine's own `moe_align_block_size`, through `invoke_fused_moe`;
+        # the fp64 oracle per pair
+        from nbxtensor.ops import moe_wrappers as _nbx_moe_wrappers
+        from neurobrix.triton.moe import moe_align_block_size, _BLOCK_SIZE_M
+        N, K, nv, n_exp, mul, divide = int(key[0]), int(key[1]), int(key[2]), int(key[3]), bool(key[4]), bool(key[5])
+        w_dt = dts[0] if dts else "fp16"
+        _refuse_oversize(card_bytes, [((nv, K), w_dt), ((n_exp * N, K), w_dt), ((nv, N), w_dt)], short)
+        x = arr(rng, (nv, K), w_dt)
+        ws = [arr(rng, (N, K), w_dt) for _ in range(n_exp)]
+        score = arr(rng, (nv,), w_dt)
+        route = rng.integers(0, n_exp, size=nv).astype(np.int64)
+        def run():
+            from nbxtensor.memory.allocator import DeviceAllocator
+            wt = [to(w) for w in ws]
+            ptrs = NBXTensor.from_numpy(np.array([t.data_ptr() for t in wt], dtype=np.int64))
+            sids, eids, npad = moe_align_block_size(NBXTensor.from_numpy(route), _BLOCK_SIZE_M, n_exp,
+                                                    DeviceAllocator.get_device())
+            out = NBXTensor.zeros((nv, N), dtype={"fp16": NBXDtype.float16, "bf16": NBXDtype.bfloat16,
+                                                  "fp32": NBXDtype.float32}[w_dt])
+            _nbx_moe_wrappers.invoke_fused_moe(to(x), ptrs, out, to(score), sids, eids, npad, N, K, 1, K, 1,
+                                               mul_routed_weight=mul, topk_divide=divide)
+            return out
+        def oracle():
+            xs, sc = _f64(x), _f64(score)
+            y = np.empty((nv, N), dtype=np.float64)
+            for e in range(n_exp):
+                rows = np.nonzero(route == e)[0]
+                if rows.size:
+                    y[rows] = xs[rows] @ _f64(ws[e]).T
+            return y * sc[:, None] if mul else y
+        return run, (oracle if values else None), "c_ptr"
     if short == "group_norm_forward_kernel":
         # through the wrapper (`group_norm_wrapper`, eps its default): N = 1, one channel per group, the groups the
         # programs' bucket, the group's extent the padded class (at its top where the card holds it, else at the
