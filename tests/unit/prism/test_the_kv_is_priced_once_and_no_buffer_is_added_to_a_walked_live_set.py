@@ -71,11 +71,12 @@ def test_a_walked_live_set_carries_no_added_buffer(monkeypatch):
 # ───────── the arena factor itself (supervisor 19:05 §3): a measured fact per engine and device, refused when absent ─────────
 
 def test_the_arena_factor_is_the_planned_devices_measured_fact(monkeypatch):
-    """The M4 Pro's own measurement (HAT-L x4 triton through the entry point after S4a/S4b, the allocator's live peak
-    over the walk: 1.19), the V100's (1.35, before S4a/S4b) — never one default for every device."""
+    """The M4 Pro's own measurement, carried by its profile (HAT-L x4 triton through the entry point after S4a/S4b, the
+    allocator's live peak over the walk: 1.19), the V100's (1.35, before S4a/S4b) — never one default for every device."""
     from neurobrix.core.prism.attention_scratch import vendor_memory_of
     from tests.unit.prism._pinned_machine import APPLE_M4_PRO
-    assert vendor_memory_of("apple", "apple_m4_pro")["triton_arena_activation_factor"] == pytest.approx(1.19)
+    # the vendor file serves no arena factor: the engine measures it into each machine's profile (2026-11-03)
+    assert vendor_memory_of("apple", "apple_m4_pro")["triton_arena_activation_factor"] is None
     from neurobrix.core.config.system import get_prism_defaults
     assert "triton_arena_activation_factor" not in get_prism_defaults()
     s = PrismSolver()

@@ -50,7 +50,11 @@ memory:
   # aten._softmax::6 = weights 157 + live tensors 3 882 + the pool's parked blocks 3 540, for a walk of 6 215 MB:
   # (7 579 - 157) / 6 215 = 1.19. The live tensors alone are 0.62x the walk: the excess is the pool's parking.
   # Output bit-equal to the judged artefact (7ab1111f). Native on the same request: 10 113 MB (sampled MPS driver).
-  triton_arena_activation_factor: 1.19
+  # Since 2026-11-03 (the owner 17:22, the supervisor 17:35 7c): MEASURED BY THE ENGINE at each machine's first Triton
+  # launch (autodetect._measure_arena_factor, core/prism/arena_probe) into its generated profile — the hand-run
+  # measurement above (1.19) is kept as the reference a first launch is compared with, never served from here. The
+  # first such launch on this M4 Pro (TinyLlama triton, 2026-11-03 20:02, output = its reference sha) wrote 1.477.
+  triton_arena_activation_factor: null
   # What the DRIVER holds for a temporal-stream chunk on the compiled engine, as a multiple of the chunk's PRICE (the
   # profiler's figure), per component family (the container's component name): MPS's heaps kept across the chunk's
   # ops and its other allocations are inside it, so the chunk is checked against the device limit less the engine's
@@ -342,6 +346,9 @@ host_measured:
   # decode, bf16->fp16 conversion, upload), measured on Janus-Pro-7B triton 2026-10-27 19:0x on stable f8def0b9: the
   # language model's 2 segments (13.8 GB together, fp16) re-read 716 times in 2 348 s -> 3.28 s per 6.9 GB segment
   # per engine and stored dtype (the estimator's key, time_estimate.reload_bps): this one is the triton loader on BF16
+  # Kept here (2026-11-03): the engine writes this fact only DURING a streamed run (autodetect.note_reload_rate), and
+  # Prism refuses to price a streamed plan without it — removed, no streamed Apple plan could ever run to measure it.
+  # It was measured by the engine itself (the Janus run above); a first-launch measure of it is owed before it leaves.
   weight_reload_gbps: {triton: {BF16: 2.1}}
   # what a sliced stretch whose inputs wait on the host moves through host memory per second (its slices cut from the
   # host tensors + its outputs assembled), measured IN SITU by the Mac 2026-10-28 05:12-05:16 on stable 58b39d7e

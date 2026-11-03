@@ -49,6 +49,14 @@ def container_root(model: str) -> Path:
 # Each is the profile as it was generated on the machine the scenario was measured on, reduced to
 # the fields the loader reads. Named by what they are, not by a machine-local id.
 
+def _vendor_measured(vendor: str) -> dict:
+    """The `measured:` block of a tracked vendor file, as the generated profile of that machine carries it."""
+    import yaml
+    from pathlib import Path
+    f = Path(__file__).resolve().parents[3] / "src" / "neurobrix" / "config" / "vendors" / f"{vendor}.yml"
+    return dict((yaml.safe_load(f.read_text()) or {}).get("measured") or {})
+
+
 APPLE_M4_PRO = {        # the Mac's `default-9f169c79`, 2026-09-24; its engine base as remeasured 2026-10-29 01:47
     "id": "scenario-apple-m4-pro-18g", "vendor": "apple", "preferred_dtype": "bfloat16",
     "cpu": {"io_workers": 8, "model": "Apple M4 Pro", "cores": 12, "threads": 12, "ram_mb": 24576,
@@ -61,7 +69,11 @@ APPLE_M4_PRO = {        # the Mac's `default-9f169c79`, 2026-09-24; its engine b
     "devices": [{"index": 0, "brand": "apple", "model": "Apple M4 Pro", "memory_mb": 18186,
                  "compute_capability": "0.0", "supports_dtypes": ["float32", "float16", "bfloat16"],
                  "architecture": "apple_silicon", "pcie_version": "N/A", "unified_memory": True,
-                 "host_memory_mb": 24576}],
+                 "host_memory_mb": 24576,
+                 # the Mac's generated profile holds its device's measured facts WHOLE (a profile's block replaces the
+                 # vendor file's), with the arena factor the engine measures there since 2026-11-03 (HAT-L x4 triton,
+                 # the allocator's live peak over the walk, 2026-10-28)
+                 "measured": {**_vendor_measured("apple/apple_m4_pro"), "triton_arena_activation_factor": 1.19}}],
     "interconnect": {"groups": []},
     "pcie_fallback": {"version": "N/A", "lanes": 16, "bandwidth_gbps": 32},
 }

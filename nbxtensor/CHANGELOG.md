@@ -19,6 +19,10 @@ The first release, 0.0.1, is in preparation.
 - **The matrix product and the linear layer declare what they allocate** (`nbxtensor.ops.linalg_wrappers.mm_cost` / `addmm_cost`, beside `bmm_cost`): the casts, the decode rows' GEMV and the weight copy a row-major weight costs there, the bias made contiguous, the output at its store dtype, an epilogue's output; each equal to the allocator's measured peak on the device, over the dtypes, the decode and tiled row counts, both weight layouts and the bias forms.
 
 ### Fixed
+- **A certified entry naming parameters its kernel lacks is no longer served**: the directory's check compared a
+  key's arity and dtype with the kernel, never the configuration's parameter names, so the depthwise convolution's
+  entries from its former tile (`BLOCK_HW`, `BLOCK_C`) were served to the new one (`BC`, `TH`, `TW`). Such a file is now
+  refused by name; the Apple and V100 depthwise entries were certified again in the new space (1aa40649, f78b9c4b).
 - **A certified-only launch whose key cannot be formed is refused by name**: the key builder raising left the key empty, which skipped the certified lookup and let Triton's autotuner sweep inside a run promised to serve the certified directory only; it is now a `KeyNotCertified` naming the kernel and the exception.
 - **The Triton allocator's expandable range maps in chunks the engine measures on a real run, and a refusal remaps the
   memory it takes back**: the chunk was measured per mapping call (2 MiB on a V100), and a refusal released the chunks
