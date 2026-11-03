@@ -38,24 +38,6 @@ the NeuroBrix repository. This README documents what is in the library TODAY; ev
 | `nbxtensor.tensor`, `memory`, `backend`, `ops`, `quant` | yes | the tensor class, the allocators, the device backends, the Triton kernels and their cost declarations |
 | `nbxtensor.host` | yes | the services still passed by an application while the boundary is cleaned (below; API.md section 11) |
 
-## Performance on a V100 (kernel level)
-
-Measured 2026-11-03 on a Tesla V100-SXM2 (16 GB and 32 GB), every compute op the NeuroBrix catalogue's models run, at the
-sizes their plans use, against torch 2.14 (eager and `torch.compile` default), each result checked against a float64
-reference first. nbxtensor ran each op through its per-op (sequential) dispatch path.
-
-| card | ops judged | nbxtensor as fast or faster | slower | refused (outside the certified set / memory) |
-|---|---|---|---|---|
-| V100 16 GB | 1 422 | 35 | 1 387 | 113 / 32 |
-| V100 32 GB | 1 432 | 39 | 1 393 | 113 / 3 |
-
-**What this table measures, and what it does not.** Most of the losses are on small ops, and there the time measured is
-the benchmark's own per-op dispatch path (0.1–0.25 ms a call, against torch eager's ~0.05 ms), not the kernel and not
-the engine, which replays its compiled sequence without that per-op cost. A corrected table, with the kernel time and
-the dispatch time in separate columns for both libraries, will replace this one. The kernels that lose on their own
-(transposed 1-D convolutions, weight_norm, attention) are being rewritten one by one. The audit, with every family and its cause, is
-`docs/nbxtensor/V100_PERF_AUDIT.md` in the NeuroBrix repository.
-
 ## Installation
 
 nbxtensor never needs torch: it is not a dependency, not even an optional one, and the library and its kernels run in
