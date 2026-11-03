@@ -8,16 +8,17 @@
   "(1, 1, 160, 1, 80, 1, 2, 1, 2, 0, 0, False, 'fp32', 'fp32', 'fp32')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 4,
+     "TH": 8,
+     "TW": 64
     },
-    "num_warps": 4,
+    "num_warps": 8,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-25T14:40:24+00:00",
+    "date": "2026-11-03T13:08:22+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -41,10 +42,11 @@
      "fp32"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     3.481303870399954e-08
+     6.828561351994816e-08
     ],
-    "deviation": 3.481303870399954e-08,
+    "deviation": 6.828561351994816e-08,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -80,16 +82,16 @@
       }
      }
     },
-    "best_ms": 0.013408299013275966,
-    "second_ms": 0.013903817452292026,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 6,
+    "best_ms": 0.018998424880074586,
+    "second_ms": 0.019044250634763515,
+    "candidates": 9,
+    "accepted": 9,
+    "benched": 9,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.0,
-     "runs": 3.317,
-     "bench": 1.077
+     "runs": 1.39,
+     "bench": 1.731
     },
     "stability_witness": null,
     "built": {
@@ -200,16 +202,17 @@
   "(1, 1, 60, 1, 30, 1, 2, 1, 2, 0, 0, False, 'fp32', 'fp32', 'fp32')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 32,
-     "BLOCK_C": 32
+     "BC": 1,
+     "TH": 32,
+     "TW": 64
     },
-    "num_warps": 2,
+    "num_warps": 8,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-25T14:40:30+00:00",
+    "date": "2026-11-03T13:08:31+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -233,10 +236,11 @@
      "fp32"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     5.1328572648972085e-08
+     5.620108999425734e-08
     ],
-    "deviation": 5.1328572648972085e-08,
+    "deviation": 5.620108999425734e-08,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -272,16 +276,16 @@
       }
      }
     },
-    "best_ms": 0.013574564060189458,
-    "second_ms": 0.013662937020726658,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 4,
+    "best_ms": 0.01858118807227866,
+    "second_ms": 0.018722034389644805,
+    "candidates": 9,
+    "accepted": 9,
+    "benched": 9,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.0,
-     "runs": 3.141,
-     "bench": 0.83
+     "runs": 1.386,
+     "bench": 1.734
     },
     "stability_witness": null,
     "built": {
@@ -392,8 +396,9 @@
   "(1, 1, 96, 1, 48, 1, 2, 1, 2, 0, 0, False, 'fp32', 'fp32', 'fp32')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 64,
-     "BLOCK_C": 32
+     "BC": 1,
+     "TH": 16,
+     "TW": 64
     },
     "num_warps": 4,
     "num_stages": 2,
@@ -401,7 +406,7 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-25T14:40:26+00:00",
+    "date": "2026-11-03T13:08:38+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -425,10 +430,11 @@
      "fp32"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     4.0100583490345427e-08
+     5.903321724296919e-08
     ],
-    "deviation": 4.0100583490345427e-08,
+    "deviation": 5.903321724296919e-08,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -464,16 +470,16 @@
       }
      }
     },
-    "best_ms": 0.013672888818998925,
-    "second_ms": 0.013675585171446755,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 0.018930100082531282,
+    "second_ms": 0.019000314680243453,
+    "candidates": 9,
+    "accepted": 9,
+    "benched": 9,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.0,
      "runs": 0.002,
-     "bench": 1.451
+     "bench": 1.852
     },
     "stability_witness": null,
     "built": {
