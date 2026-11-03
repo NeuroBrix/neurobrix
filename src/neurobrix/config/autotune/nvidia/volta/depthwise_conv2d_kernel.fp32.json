@@ -19574,17 +19574,18 @@
     "32g": {
      "config": {
       "kwargs": {
-       "BLOCK_HW": 64,
-       "BLOCK_C": 32
+       "BC": 1,
+       "TH": 32,
+       "TW": 64
       },
-      "num_warps": 4,
+      "num_warps": 8,
       "num_stages": 2,
       "num_ctas": 1,
       "maxnreg": null
      },
      "proof": {
-      "date": "2026-09-17T02:52:00+00:00",
-      "engine_version": "0.5.3",
+      "date": "2026-11-03T13:42:59+00:00",
+      "engine_version": "0.5.4",
       "backend": {
        "triton": "3.8.0",
        "name": "cuda"
@@ -19606,21 +19607,27 @@
        "fp32",
        "fp32"
       ],
-      "deviation": 1.7896509257990385e-07,
+      "launches": 1,
+      "fp16_contract": false,
+      "launch_deviations": [
+       1.6330313204839498e-07
+      ],
+      "deviation": 1.6330313204839498e-07,
       "tolerance": 0.0001,
       "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-134 cols 0-134; batch 0 rows 189-323 cols 189-323; batch 0 rows 378-512 cols 378-512) of 1x512x512",
       "machine": {
        "hostname": "metatron",
-       "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+       "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
        "python": "3.10.12",
        "hardware_profile": "auto-v100-32gb-32g",
        "has_native_bf16": false,
        "target": "cuda-70",
        "device": {
         "ordinal": 0,
-        "visible_devices": "3",
+        "visible_devices": "2",
         "name": "Tesla V100-SXM2-32GB",
-        "memory_mb": 32768
+        "memory_mb": 32768,
+        "unified": false
        },
        "clocks_mhz": {
         "0": {
@@ -19641,17 +19648,18 @@
         }
        }
       },
-      "best_ms": 33.47455978393555,
-      "second_ms": 33.490943908691406,
-      "candidates": 7,
-      "accepted": 7,
-      "benched": 7,
+      "best_ms": 14.500864028930664,
+      "second_ms": 14.711296081542969,
+      "candidates": 14,
+      "accepted": 14,
+      "benched": 14,
       "could_not_run": 0,
       "seconds": {
-       "oracle": 13.037,
-       "runs": 70.771,
-       "bench": 2.325
+       "oracle": 12.72,
+       "runs": 102.833,
+       "bench": 2.432
       },
+      "stability_witness": null,
       "built": {
        "gpu": true,
        "how": "no backend compilation fallback was raised during the certifying run",
@@ -20813,16 +20821,17 @@
     "32g": {
      "config": {
       "kwargs": {
-       "BLOCK_HW": 64,
-       "BLOCK_C": 32
+       "BC": 1,
+       "TH": 32,
+       "TW": 64
       },
-      "num_warps": 4,
-      "num_stages": 3,
+      "num_warps": 8,
+      "num_stages": 2,
       "num_ctas": 1,
       "maxnreg": null
      },
      "proof": {
-      "date": "2026-09-28T23:33:12+00:00",
+      "date": "2026-11-03T13:43:33+00:00",
       "engine_version": "0.5.4",
       "backend": {
        "triton": "3.8.0",
@@ -20846,15 +20855,16 @@
        "fp32"
       ],
       "launches": 1,
+      "fp16_contract": false,
       "launch_deviations": [
-       1.4425623953497797e-07
+       1.380303375809295e-07
       ],
-      "deviation": 1.4425623953497797e-07,
+      "deviation": 1.380303375809295e-07,
       "tolerance": 0.0001,
       "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
       "machine": {
        "hostname": "metatron",
-       "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+       "platform": "Linux-5.15.0-198-generic-x86_64-with-glibc2.35",
        "python": "3.10.12",
        "hardware_profile": "auto-v100-32gb-32g",
        "has_native_bf16": false,
@@ -20885,16 +20895,16 @@
         }
        }
       },
-      "best_ms": 1.8548540841965449,
-      "second_ms": 1.855439237185887,
-      "candidates": 7,
-      "accepted": 7,
-      "benched": 7,
+      "best_ms": 0.9209904812631153,
+      "second_ms": 0.9350368802140399,
+      "candidates": 14,
+      "accepted": 14,
+      "benched": 14,
       "could_not_run": 0,
       "seconds": {
-       "oracle": 3.494,
-       "runs": 12.682,
-       "bench": 0.472
+       "oracle": 5.172,
+       "runs": 26.674,
+       "bench": 0.946
       },
       "stability_witness": null,
       "built": {
@@ -21280,16 +21290,17 @@
   "(8192, 104, 152, 104, 152, 3, 3, 1, 1, 1, 1, False, 'fp32', 'fp32', 'fp32')": {
    "config": {
     "kwargs": {
-     "BLOCK_HW": 32,
-     "BLOCK_C": 32
+     "BC": 1,
+     "TH": 32,
+     "TW": 64
     },
-    "num_warps": 2,
+    "num_warps": 8,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-17T20:31:55+00:00",
+    "date": "2026-11-03T13:52:02+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0",
@@ -21313,10 +21324,11 @@
      "fp32"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
-     1.6488323961888335e-07
+     1.4966039467804998e-07
     ],
-    "deviation": 1.6488323961888335e-07,
+    "deviation": 1.4966039467804998e-07,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -21352,16 +21364,16 @@
       }
      }
     },
-    "best_ms": 15.039487838745117,
-    "second_ms": 15.910911560058594,
-    "candidates": 7,
-    "accepted": 7,
-    "benched": 7,
+    "best_ms": 2.341565951704979,
+    "second_ms": 2.5922239780426026,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 12,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 7.263,
-     "runs": 29.693,
-     "bench": 1.146
+     "oracle": 7.415,
+     "runs": 53.915,
+     "bench": 0.861
     },
     "stability_witness": null,
     "built": {
