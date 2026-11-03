@@ -24,6 +24,52 @@ def _f(x):
         return None
 
 
+#: A refusal the bench did not cause and nbxtensor's kernels did not lose: the key is outside the census (a confirmation
+#: run never sweeps: `KeyNotCertified`), or the instance is beyond the device memory's op budget.
+_KEY_OUTSIDE = ("KeyNotCertified", "CERTIFIED-ONLY")
+_MEMORY = ("out_of_class", "out of memory", "OutOfMemory", "ImpossibleExtentError")
+
+
+def refusal_kind(r) -> str | None:
+    """'key' (key outside the census), 'memory' (beyond the device's memory), or None (any other outcome)."""
+    text = f"{r.get('status', '')} {r.get('note', '')}"
+    if r.get("status") == "out_of_class" or (r.get("status") == "refused" and any(m in text for m in _MEMORY)):
+        return "memory"
+    if r.get("status") == "refused" and any(m in text for m in _KEY_OUTSIDE):
+        return "key"
+    return None
+
+
+def kernel_counts(rows) -> dict:
+    """The kernel level in separate columns (the supervision, 2026-11-03 07:35), before any 'lost on N': lost
+    (nbxtensor wrong, refused for another reason, or slower than the best right torch contender), refused because its
+    key is outside the census, refused for memory, not finished in the run, won."""
+    by = collections.defaultdict(dict)
+    for r in rows:
+        by[r["key"]][r["contender"]] = r
+    out = collections.Counter()
+    for key, c in by.items():
+        star = c.get("*")
+        if star is not None and refusal_kind(star) == "memory":
+            out["refused_memory"] += 1
+            continue
+        nbx = c.get("nbxtensor")
+        if nbx is None:
+            continue
+        kind = refusal_kind(nbx)
+        if kind == "key":
+            out["refused_key"] += 1
+        elif kind == "memory":
+            out["refused_memory"] += 1
+        elif nbx.get("status") == "not_finished":
+            out["not_finished"] += 1
+        else:
+            out["judged"] += 1
+    lost, won, _total = kernel_losses(rows)
+    out["lost"], out["won"] = len(lost), won
+    return dict(out)
+
+
 def kernel_losses(rows):
     by = collections.defaultdict(dict)
     for r in rows:
@@ -33,6 +79,8 @@ def kernel_losses(rows):
         nbx = c.get("nbxtensor")
         if nbx is None:
             continue
+        if refusal_kind(nbx) is not None or nbx.get("status") == "not_finished":
+            continue                     # counted apart (`kernel_counts`): neither a loss nor a win
         total += 1
         torch_ok = [r for n, r in c.items() if n != "nbxtensor" and r.get("status") == "ok" and _f(r.get("median_ms"))]
         best = min(torch_ok, key=lambda r: _f(r["median_ms"])) if torch_ok else None
@@ -54,9 +102,14 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     rows = list(csv.DictReader(open(a.kernel), delimiter="\t"))
     lost, won, total = kernel_losses(rows)
+    n = kernel_counts(rows)
     md = [f"# nbxtensor vs torch — {a.device}", "",
-          f"Kernel level: {total} instances; nbxtensor right and at least as fast as the best right torch contender "
-          f"on {won}; lost on {len(lost)}.", "",
+          "| judged | won | lost | refused (key outside the census) | refused (memory) | not finished in the run |",
+          "|---|---|---|---|---|---|",
+          f"| {total} | {won} | {len(lost)} | {n.get('refused_key', 0)} | {n.get('refused_memory', 0)} | "
+          f"{n.get('not_finished', 0)} |", "",
+          f"Kernel level: of {total} judged instances, nbxtensor right and at least as fast as the best right torch "
+          f"contender on {won}; lost on {len(lost)}.", "",
           "| op | shapes | dtypes | sites | nbxtensor | best torch | ratio | why |",
           "|---|---|---|---|---|---|---|---|"]
     for ratio, nbx, best, why in lost:

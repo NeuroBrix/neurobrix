@@ -85,8 +85,24 @@ def _symbols(binding: dict):
     return res
 
 
+def feeds(inst: dict) -> list:
+    """[(tensor id, shape, dtype)] the contenders materialise: the op's inputs, or — when the graph forms an input as a
+    strided view — the root of its view chain, the chain then replayed (`apply_prelude`)."""
+    if inst.get("roots") is not None:
+        return [(r["id"], r["shape"], r["dtype"]) for r in inst["roots"]]
+    return list(zip(inst.get("inputs") or [None] * len(inst["shapes"]), inst["shapes"], inst["dtypes"]))
+
+
+def apply_prelude(inst: dict, store: dict, resolve, dispatch) -> None:
+    """The metadata ops (views) the graph applies between the roots and the op's inputs, untimed, each through the
+    contender's own dispatcher: the op then reads the tensor the engine hands it — a transposed weight as a view."""
+    for p in inst.get("prelude") or []:
+        args = resolve(p["args"], store)
+        store[p["output"]] = dispatch(p, args, {**p["attributes"], "args": p["args"]})
+
+
 def host_inputs(inst: dict, seed: int = 0) -> list:
-    """One numpy array per input, deterministic: floats ~ N(0, 1) scaled by 1/sqrt(last dim) (a GEMM's K, so half
+    """One numpy array per feed (`feeds`), deterministic: floats ~ N(0, 1) scaled by 1/sqrt(last dim) (a GEMM's K, so half
     outputs stay in range); integers below the SMALLEST dim of the op's first floating input — in range for whichever
     axis they index (an embedding's table rows: [10, 32] x [1, 36000] drew up to 32 for 10 rows on 02/11, a device
     assert on both engines that poisoned the CUDA context of every later instance); booleans fair."""
@@ -94,7 +110,7 @@ def host_inputs(inst: dict, seed: int = 0) -> list:
     out = []
     first = next((s for s, d in zip(inst["shapes"], inst["dtypes"]) if "float" in d), None)
     float_extent = min((int(x) for x in first), default=2) if first else 2
-    for shape, dt in zip(inst["shapes"], inst["dtypes"]):
+    for _tid, shape, dt in feeds(inst):
         if "float" in dt:
             k = shape[-1] if shape else 1
             out.append(np.asarray(rng.standard_normal(shape) / np.sqrt(max(k, 1)), dtype=np.float32).reshape(shape))
@@ -210,12 +226,15 @@ def reference(inst, arrays, attrs_resolver):
     from neurobrix.core.runtime.graph.sequential_dispatcher import NativeATenDispatcher
     disp = NativeATenDispatcher(device="cpu", compute_dtype=torch.float64)
     store = {}
-    for tid, a, d in zip(inst["inputs"], arrays, inst["dtypes"]):
+    for (tid, _s, d), a in zip(feeds(inst), arrays):
         t = torch.from_numpy(a)
         # the inputs the contenders read, rounded to their dtype, then widened: the error measured is the
         # computation's, never the rounding of the inputs both contenders share
         store[tid] = t.to(_torch_dtype(d)).double() if t.is_floating_point() else t
-    args = attrs_resolver.args(inst["args"], store, _symbols(inst["symbols"]), _NativeAttrs(disp))
+    syms, attrs_ = _symbols(inst["symbols"]), _NativeAttrs(disp)
+    apply_prelude(inst, store, lambda raw, st: attrs_resolver.args(raw, st, syms, attrs_),
+                  lambda p, args, at: disp.dispatch(p["op_type"], args, at))
+    args = attrs_resolver.args(inst["args"], store, syms, attrs_)
     return disp.dispatch(inst["op_type"], args, {**inst["attributes"], "args": inst["args"]})
 
 
@@ -235,8 +254,11 @@ def run_torch(inst, arrays, dev, res, warmup, reps, compile_mode=None):
     floats = [d for d in inst["dtypes"] if "float" in d]
     widest = max(floats, key=lambda d: {"float16": 0, "bfloat16": 0, "float32": 1, "float64": 2}[d]) if floats else None
     store = {tid: torch.from_numpy(a).to(dev.name, dtype=_torch_dtype(widest if "float" in d else d))
-             for tid, a, d in zip(inst["inputs"], arrays, inst["dtypes"])}
-    args = res.args(inst["args"], store, _symbols(inst["symbols"]), _NativeAttrs(disp))
+             for (tid, _s, d), a in zip(feeds(inst), arrays)}
+    syms, attrs_ = _symbols(inst["symbols"]), _NativeAttrs(disp)
+    apply_prelude(inst, store, lambda raw, st: res.args(raw, st, syms, attrs_),
+                  lambda p, args, at: disp.dispatch(p["op_type"], args, at))
+    args = res.args(inst["args"], store, syms, attrs_)
     attrs = {**inst["attributes"], "args": inst["args"]}
 
     def eager():
@@ -312,10 +334,12 @@ def run_nbx(inst, arrays, dev, res, warmup, reps):
     disp, facts = engine_dispatcher(inst, _stores_fp64())
     disp.symbol_resolver = _symbols(inst["symbols"])
     store = {}
-    for tid, arr, d in zip(inst["inputs"], arrays, inst["dtypes"]):
+    for (tid, _s, d), arr in zip(feeds(inst), arrays):
         t = NBXTensor.from_numpy(np.ascontiguousarray(arr))      # the host array in its own container
         store[tid] = t.to(_nbx_dtype(d)) if "float" in d and d != "float32" else t
     with disp:
+        apply_prelude(inst, store, lambda raw, st: res.args(raw, st, disp.symbol_resolver, disp),
+                      lambda p, args, at: disp.dispatch(p["op_type"], args, at, op_uid=p["op_uid"]))
         args = res.args(inst["args"], store, disp.symbol_resolver, disp)
         attrs = {**inst["attributes"], "args": inst["args"]}
         record = {"output_dtypes": inst.get("output_dtypes"), "op_type": inst["op_type"]}
@@ -474,19 +498,33 @@ def nbx_work(inst, dev, res, warmup, reps, scratch: Path) -> dict:
     return {"first": first, "times": times, "peak": peak, "how": how, "od": od, "file": str(f)}
 
 
-def torch_work(inst, dev, res, warmup, reps, compile_modes, nbx: dict | None) -> list:
-    """The torch side of one instance: the float64 reference in memory, torch eager and each compile mode (compile
-    time apart), every contender — the nbxtensor output read by memory map — compared tile by tile; the scratch file
-    removed; torch.compile's caches released."""
+def torch_work(inst, dev, res, warmup, reps, compile_modes, nbx: dict | None):
+    """The torch side of one instance, as a stream of messages: the float64 reference in memory; FIRST the nbxtensor
+    output judged against it (read by memory map, the scratch file removed), then torch eager and each compile mode
+    (compile time apart), each announced (`{"start": name}`) before it runs and its row sent (`{"row": ...}`) as soon
+    as it is judged; torch.compile's caches released after each. A worker that dies or is stopped in a contender has
+    already handed every row before it — the nbxtensor row among them (the V100 run, 2026-11-03 04:23: a restart lost
+    the nbxtensor row already measured)."""
     arrays = host_inputs(inst)
-    rows = []
     try:
         ref = _to_numpy(reference(inst, arrays, res)).reshape(-1)
         ref_note = ""
     except Exception as e:
         ref, ref_note = None, f"no float64 reference: {type(e).__name__}: {e}"
+    if nbx is not None:
+        row = _row(inst, "nbxtensor")
+        f = Path(nbx["file"])
+        try:
+            got = np.load(f, mmap_mode="r")
+            errs = None if ref is None else compare_tiles(got, ref)
+            del got
+            yield {"row": judge_row(row, inst, nbx["od"], nbx["first"], nbx["times"], nbx["peak"], nbx["how"],
+                                    errs, ref_note)}
+        finally:
+            f.unlink(missing_ok=True)
     contenders = [("torch_eager", None)] + [(f"torch_compile[{m}]", m) for m in compile_modes]
     for name, mode in contenders:
+        yield {"start": name}
         row = _row(inst, name)
         try:
             out, first, times, peak, how = run_torch(inst, arrays, dev, res, warmup, reps, mode)
@@ -495,26 +533,14 @@ def torch_work(inst, dev, res, warmup, reps, compile_modes, nbx: dict | None) ->
             del out
             med = _stats(times)[0]
             # a compiled call's first launch carries the compilation: its time apart from the execution's
-            rows.append(judge_row(row, inst, od, first, times, peak, how, errs, ref_note,
-                                  compile_ms=(first - med) if mode is not None else None))
+            row = judge_row(row, inst, od, first, times, peak, how, errs, ref_note,
+                            compile_ms=(first - med) if mode is not None else None)
         except Exception as e:
             row.update(status="refused", note=f"{type(e).__name__}: {str(e)[:300]}")
-            rows.append(row)
         release_compile_caches(dev)
-    if nbx is not None:
-        row = _row(inst, "nbxtensor")
-        f = Path(nbx["file"])
-        try:
-            got = np.load(f, mmap_mode="r")
-            errs = None if ref is None else compare_tiles(got, ref)
-            del got
-            rows.append(judge_row(row, inst, nbx["od"], nbx["first"], nbx["times"], nbx["peak"], nbx["how"],
-                                  errs, ref_note))
-        finally:
-            f.unlink(missing_ok=True)
+        yield {"row": row}
     del ref
     release_compile_caches(dev)
-    return rows
 
 
 def worker(side: str, hardware: str, warmup: int, reps: int, compile_modes, scratch: Path) -> int:
@@ -530,18 +556,26 @@ def worker(side: str, hardware: str, warmup: int, reps: int, compile_modes, scra
     res = _ArgResolver()
     real_out = sys.stdout
     sys.stdout = sys.stderr                     # the engine's prints never corrupt the answer channel
+    def send(msg):
+        real_out.write(json.dumps(msg) + "\n")
+        real_out.flush()
+
     for line in sys.stdin:
         req = json.loads(line)
         try:
             if side == "nbxtensor":
-                ans = {"ok": nbx_work(req["inst"], dev, res, warmup, reps, scratch)}
+                send({"ok": nbx_work(req["inst"], dev, res, warmup, reps, scratch)})
             else:
-                ans = {"ok": torch_work(req["inst"], dev, res, warmup, reps, compile_modes, req.get("nbx"))}
+                for msg in torch_work(req["inst"], dev, res, warmup, reps, compile_modes, req.get("nbx")):
+                    send(msg)
+                send({"done": True})
         except Exception:
-            ans = {"error": traceback.format_exc().replace("\n", " | ")[-600:]}
-        real_out.write(json.dumps(ans) + "\n")
-        real_out.flush()
+            send({"error": traceback.format_exc().replace("\n", " | ")[-600:]})
     return 0
+
+
+class RunEnded(Exception):
+    """The run's end (`--until`, set by the chain that launched the run) passed while a contender was still running."""
 
 
 class _Worker:
@@ -549,16 +583,39 @@ class _Worker:
         import subprocess
         cmd = [python, __file__, "--worker", side, "--hardware", a.hardware, "--warmup", str(a.warmup),
                "--reps", str(a.reps), "--compile-modes", a.compile_modes, "--scratch", a.scratch]
-        self.p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
+        self.p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                   stderr=open(Path(a.out).with_suffix(f".{side}.log"), "a"))
+        self._buf = b""
 
-    def ask(self, req: dict) -> dict:
-        self.p.stdin.write(json.dumps(req) + "\n")
+    def send(self, req: dict) -> None:
+        self.p.stdin.write((json.dumps(req) + "\n").encode())
         self.p.stdin.flush()
-        line = self.p.stdout.readline()
-        if not line:
-            raise RuntimeError(f"the worker ended (rc {self.p.poll()}): see its log")
+
+    def read(self, until: float | None = None) -> dict:
+        """The worker's next message; RunEnded when the run's end passes first."""
+        import os as _os
+        import select
+        while b"\n" not in self._buf:
+            wait = None if until is None else until - time.time()
+            if wait is not None and wait <= 0:
+                raise RunEnded()
+            ready, _, _ = select.select([self.p.stdout], [], [], wait)
+            if not ready:
+                raise RunEnded()
+            chunk = _os.read(self.p.stdout.fileno(), 1 << 16)
+            if not chunk:
+                raise RuntimeError(f"the worker ended (rc {self.p.poll()}): see its log")
+            self._buf += chunk
+        line, self._buf = self._buf.split(b"\n", 1)
         return json.loads(line)
+
+    def ask(self, req: dict, until: float | None = None) -> dict:
+        self.send(req)
+        return self.read(until)
+
+    def kill(self):
+        self.p.kill()
+        self.p.wait()
 
     def close(self):
         try:
@@ -568,12 +625,48 @@ class _Worker:
             self.p.kill()
 
 
-def _ask_or_restart(wk, req: dict) -> dict:
-    """The worker's answer, or the named error of a worker that died on this instance (the caller restarts it)."""
+def _ask_or_restart(wk, req: dict, until: float | None = None) -> dict:
+    """The worker's answer, or the named error of a worker that died on this instance (the caller restarts it).
+    RunEnded passes through."""
     try:
-        return wk.ask(req)
+        return wk.ask(req, until)
+    except RunEnded:
+        raise
     except Exception as e:
         return {"error": f"the worker ended on this instance: {type(e).__name__}: {e}"}
+
+
+def torch_rows(wk, inst: dict, nbx: dict | None, until: float | None):
+    """(rows, ended, error) of the torch worker on one instance, read message by message: every row it sent is
+    kept whatever happens next. `ended`: the run's end passed in a contender — that contender's row says
+    'not finished in the run' with its elapsed time, neither a loss nor a win, never a hand-written bound (the
+    supervision, 2026-11-03 07:35: a compilation the run's own end stops is reported as such). `error`: the worker
+    died — the contender it was in is refused with the error, the rows before it stand."""
+    rows, current, t0 = [], "torch_eager", time.time()
+    try:
+        wk.send({"inst": inst, "nbx": nbx})
+        while True:
+            msg = wk.read(until)
+            if "start" in msg:
+                current, t0 = msg["start"], time.time()
+            elif "row" in msg:
+                rows.append(msg["row"])
+            elif "done" in msg:
+                return rows, False, None
+            else:                                       # the worker's own error, outside any contender
+                r = _row(inst, current); r.update(status="refused", note=msg.get("error", "")[:600])
+                rows.append(r)
+                return rows, False, msg.get("error")
+    except RunEnded:
+        r = _row(inst, current)
+        r.update(status="not_finished",
+                 note=f"not finished in the run: the run's end (--until) passed {time.time() - t0:.0f} s into it")
+        rows.append(r)
+        return rows, True, None
+    except Exception as e:
+        r = _row(inst, current); r.update(status="refused", note=f"the worker ended in this contender: {e}")
+        rows.append(r)
+        return rows, False, str(e)
 
 
 def _restart(wk, python: str, side: str, a):
@@ -599,6 +692,9 @@ def main(argv=None) -> int:
     ap.add_argument("--compile-modes", default="default,max-autotune")
     ap.add_argument("--ops", default=None, help="comma-separated op types to keep")
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--until", type=float, default=None,
+                    help="the run's end, epoch seconds, set by the chain that launches the run: a contender still "
+                         "running then is reported 'not finished in the run' and the run stops (resumable)")
     a = ap.parse_args(argv)
     modes = [m for m in a.compile_modes.split(",") if m]
     scratch = Path(a.scratch)
@@ -629,26 +725,40 @@ def main(argv=None) -> int:
             w = csv.DictWriter(f, fieldnames=FIELDS, delimiter="\t")
             if new:
                 w.writeheader()
+            ended = False
             for k, inst in enumerate(insts, 1):
+                if a.until is not None and time.time() >= a.until:
+                    print(f"[kernel] the run's end (--until) passed: stopped before {k}/{len(insts)} (resumable)",
+                          flush=True)
+                    break
                 need = instance_bytes(inst)
                 if need > budget:
                     rows = [out_of_class_row(inst, need, budget, census_cut_keys(inst, census_rows))]
                 else:
                     nbx_w = nbx_w or _Worker(a.python_nbxtensor, "nbxtensor", a)
                     torch_w = torch_w or _Worker(a.python_torch, "torch", a)
-                    nb = _ask_or_restart(nbx_w, {"inst": inst})
                     rows = []
+                    t0 = time.time()
+                    try:
+                        nb = _ask_or_restart(nbx_w, {"inst": inst}, a.until)
+                    except RunEnded:
+                        nbx_w.kill(); nbx_w = None
+                        r = _row(inst, "nbxtensor")
+                        r.update(status="not_finished", note=f"not finished in the run: the run's end (--until) "
+                                                             f"passed {time.time() - t0:.0f} s into it")
+                        rows.append(r); ended = True
+                        nb = {}
                     if "error" in nb:
                         r = _row(inst, "nbxtensor"); r.update(status="refused", note=nb["error"]); rows.append(r)
                         nbx_w = _restart(nbx_w, a.python_nbxtensor, "nbxtensor", a)
-                    tr = _ask_or_restart(torch_w, {"inst": inst, "nbx": nb.get("ok")})
-                    if "error" in tr:
-                        r = _row(inst, "torch_eager"); r.update(status="refused", note=tr["error"]); rows.append(r)
-                        torch_w = _restart(torch_w, a.python_torch, "torch", a)
-                    else:
-                        rows += tr["ok"]
-                        if any(r.get("status") == "refused" for r in tr["ok"]):
-                            # a refused contender may leave a sticky device error: the next instance starts clean
+                    if not ended:
+                        tr, ended, err = torch_rows(torch_w, inst, nb.get("ok"), a.until)
+                        rows += tr
+                        if ended:
+                            torch_w.kill(); torch_w = None
+                        elif err is not None or any(r.get("status") == "refused" for r in tr):
+                            # a dead worker, or a refused contender that may leave a sticky device error: the next
+                            # instance starts clean
                             torch_w = _restart(torch_w, a.python_torch, "torch", a)
                 for r in rows:
                     w.writerow(r)
@@ -656,6 +766,9 @@ def main(argv=None) -> int:
                 f.flush()
                 print(f"[kernel] {k}/{len(insts)} {inst['op_type']} {inst['shapes']}: "
                       + " ".join(f"{r['contender']}={r.get('median_ms') or r['status']}" for r in rows), flush=True)
+                if ended:
+                    print(f"[kernel] the run's end (--until) passed in {k}/{len(insts)}: stopped (resumable)", flush=True)
+                    break
     finally:
         for wk in (nbx_w, torch_w):
             if wk is not None:

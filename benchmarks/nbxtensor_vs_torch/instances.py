@@ -97,7 +97,43 @@ def plan_dtypes(model: str, request: list, hardware: str) -> dict:
     KeyNotCertified on 16 of 25 nbxtensor instances, 2026-11-03)."""
     import derived_census as DC
     plan = DC.plan_record(model, request, MODE, hardware, None)
+    _PLANS[(model, hardware)] = plan
     return {c["name"]: str(c["dtype"]).replace("torch.", "") for c in plan["components"]}
+
+
+#: {(model, hardware): the plan record `plan_dtypes` read} — the same plan gives the extents and cuts the engine runs
+#: each component at (`instances_of`), read once.
+_PLANS: dict = {}
+
+#: The metadata ops whose output is a view with OTHER strides than a contiguous input's (a transposed weight: the
+#: graph's `aten.t(W)` that every linear reads). A chain of reshapes keeps a contiguous base contiguous and needs no
+#: replay; a `contiguous`/`clone` ends the chain (its output is materialised by the engine as it is by the bench).
+STRIDED_VIEWS = frozenset({"t", "transpose", "permute", "expand", "slice", "select", "narrow", "as_strided",
+                           "diagonal", "unfold", "movedim", "swapaxes", "numpy_T"})
+_CHAIN_ENDS = frozenset({"contiguous", "clone"})
+
+
+def _metadata(CL, name: str) -> bool:
+    try:
+        return CL.get_execution_type(name) == CL.OpExecution.METADATA
+    except KeyError:
+        return False
+
+
+def input_chain(rg: dict, producers: dict, tid: str, CL):
+    """(root tensor id, [metadata ops from the root to `tid`]) — the views the graph forms on the way to an op's
+    input. Followed while the producer is a metadata op of ONE tensor input; a `contiguous`/`clone` ends it."""
+    steps, cur = [], tid
+    while cur in producers:
+        uid = producers[cur]
+        op = rg["ops"][uid]
+        name = op["op_type"].split("::")[-1].split(".")[0]
+        ins = op.get("input_tensor_ids") or []
+        if name in _CHAIN_ENDS or not _metadata(CL, name) or len(ins) != 1:
+            break
+        steps.append(uid)
+        cur = ins[0]
+    return cur, list(reversed(steps))
 
 
 def _component_bindings(model: str, hardware: str):
@@ -152,53 +188,119 @@ def _component_bindings(model: str, hardware: str):
 
 
 def instances_of(model: str, ops_wanted: set, has_native_bf16: bool, hardware: str):
-    """{instance key: instance} for one model, and its skipped components."""
+    """{instance key: instance} for one model, and its skipped components and ops.
+
+    Each component at the extents the engine's PLAN runs it at, as the census derives it (`derive_keys`): its
+    temporal stream's chunks and its vendor's or the engine's tiles (`derived_census.cut_bindings`), the stretches it
+    runs in slices of a token axis at each slice's length (`sliced_bindings`). An op the plan cuts at op level
+    (`plan_tiling`) launches at its tiles' shapes, which no binding gives: it is skipped by name, never benchmarked
+    at the whole extent (the Dell's V100 run, 2026-11-03 01:23: whole-clip video VAE keys the plan never forms,
+    refused KeyNotCertified). Each input that the graph forms as a strided view (a transposed weight) carries the
+    chain of metadata ops from its root, replayed untimed by both contenders (01:58: the bench gave every M <= 4
+    GEMM a contiguous [K, N] weight and its addmv paid a copy the engine never makes)."""
     import derived_census as DC
     from neurobrix.kernels import classification as CL
-    out, skipped = {}, {}
+    out = {}
     bound, skipped = _component_bindings(model, hardware)
+    plan = _PLANS.get((model, hardware)) or {}
     for comp, g, syms, cdtype in bound:
-        dtypes: dict = {}
         unhandled = collections.Counter()
         try:
-            DC.derive_component(model, comp, cdtype, MODE, syms, has_native_bf16, 0, 1, 1, unhandled,
-                                out_dtypes=dtypes)
-            shape = DC._shape_fn(DC.runtime_graph(model, comp), comp, syms, {}, {})
+            cuts = DC.cut_bindings(model, comp, g, syms, plan)
         except Exception as e:                       # said, per component, never silent
-            skipped[comp] = f"derivation refused: {type(e).__name__}: {e}"
+            skipped[comp] = f"plan cut refused: {type(e).__name__}: {e}"
             continue
-        rg = DC.runtime_graph(model, comp)
-        # the dtype facts the engine's dispatcher runs the op under, as the census derived its key: the component's
-        # compute dtype, the graph's traced dtype (the AMP cast-back floor) and the precision contract's role for the op
-        contract = DC._contract(model, comp, rg, cdtype)
-        gdtype = str(rg.get("torch_dtype") or g.get("torch_dtype") or "").replace("torch.", "") or None
-        for uid, op in rg["ops"].items():
-            if uid not in ops_wanted or not _runs_a_triton_kernel(CL, op["op_type"].split("::")[-1].split(".")[0]):
-                continue
-            ins = op.get("input_tensor_ids") or []
+        for comp_v, b in cuts:
+            whole = DC.VARIANT not in comp_v
+            view, tiled_tf = DC.plan_tiling(plan if whole else {}, comp)
             try:
-                shapes = [list(shape(t)) for t in ins]
+                sliced = DC.sliced_bindings(model, comp, b, plan, unhandled) if whole else []
             except Exception as e:
-                skipped[f"{comp}/{uid}"] = f"shape refused: {e}"
+                skipped[comp_v] = f"sliced stretches refused: {type(e).__name__}: {e}"
                 continue
-            dts = [str(dtypes.get(t, rg["tensors"].get(t, {}).get("dtype", "?"))) for t in ins]
-            attrs = op.get("attributes") or {}
-            spec = {"op_type": op["op_type"], "inputs": ins, "shapes": shapes, "dtypes": dts,
-                    "args": attrs.get("args"), "kwargs": attrs.get("kwargs") or {},
-                    "attributes": {k: v for k, v in attrs.items() if k != "args"},
-                    "symbols": syms, "output_dtypes": op.get("output_dtypes"), "op_uid": uid,
-                    "compute_dtype": cdtype, "graph_dtype": gdtype,
-                    "contract": {"safe": bool(contract.safe),
-                                 "island": ("fp32" if uid in contract.fp32_op_uids
-                                            else "narrow" if uid in contract.narrow_op_uids else None)}}
-            # two sites run one instance only when the engine runs them alike: the dtype facts are part of the key
-            key = hashlib.sha256(json.dumps([spec["op_type"], shapes, dts, _literal(attrs.get("args")),
-                                             spec["attributes"], cdtype, gdtype, spec["contract"],
-                                             op.get("output_dtypes")],
-                                            sort_keys=True, default=str).encode()).hexdigest()[:16]
-            inst = out.setdefault(key, {"key": key, **spec, "sites": []})
-            inst["sites"].append(f"{model}/{comp}/{uid}")
+            in_slices = set().union(*(set(o) for o, _b in sliced)) if sliced else set()
+            for uid in sorted(set(tiled_tf) & ops_wanted):
+                skipped[f"{comp_v}/{uid}"] = ("the plan runs this op in tiles (op_level_tiling_ops): its launches are "
+                                              "the tiles' shapes, not instanced")
+            passes = [(b, None, frozenset(set(tiled_tf) | in_slices), frozenset())]
+            passes += [(b_, frozenset(o) - frozenset(tiled_tf), frozenset(),
+                        frozenset(u for u, pin in o.items() if pin)) for o, b_ in sliced]
+            for binding, only, exclude, pins in passes:
+                _instances_at(DC, CL, model, comp, comp_v, g, binding, cdtype, has_native_bf16, ops_wanted, view,
+                              tiled_tf, only, exclude, pins, out, skipped)
+        if unhandled:
+            skipped[f"{comp}/unhandled"] = "; ".join(f"{k} x{n}" for k, n in unhandled.items())
     return out, skipped
+
+
+def _instances_at(DC, CL, model, comp, comp_v, g, syms, cdtype, has_native_bf16, ops_wanted, view, tiled_tf, only,
+                  exclude, pins, out, skipped):
+    """The instances of one component graph at one binding (`only`: the ops to take, `exclude`: the ops not to)."""
+    dtypes: dict = {}
+    unhandled = collections.Counter()
+    try:
+        DC.derive_component(model, comp_v, cdtype, MODE, syms, has_native_bf16, 0, 1, 1, unhandled,
+                            tiling=view, tiled_tf=tiled_tf, pins=pins, out_dtypes=dtypes)
+        rg = DC.runtime_graph(model, comp_v)
+        shape = DC._shape_fn(rg, comp_v, syms, {}, {})
+    except Exception as e:                       # said, per component, never silent
+        skipped[f"{comp_v}@{sorted(syms.items())}"] = f"derivation refused: {type(e).__name__}: {e}"
+        return
+    # the dtype facts the engine's dispatcher runs the op under, as the census derived its key: the component's
+    # compute dtype, the graph's traced dtype (the AMP cast-back floor) and the precision contract's role for the op
+    contract = DC._contract(model, comp_v, rg, cdtype)
+    gdtype = str(rg.get("torch_dtype") or g.get("torch_dtype") or "").replace("torch.", "") or None
+    producers = {t: u for u, o in rg["ops"].items() for t in (o.get("output_tensor_ids") or [])}
+
+    def dt(t):
+        return str(dtypes.get(t, rg["tensors"].get(t, {}).get("dtype", "?")))
+
+    for uid, op in rg["ops"].items():
+        if uid not in ops_wanted or uid in exclude or (only is not None and uid not in only) \
+                or not _runs_a_triton_kernel(CL, op["op_type"].split("::")[-1].split(".")[0]):
+            continue
+        ins = op.get("input_tensor_ids") or []
+        prelude, roots = [], []
+        try:
+            shapes = [list(shape(t)) for t in ins]
+            for t in ins:
+                root, chain = input_chain(rg, producers, t, CL)
+                names = {rg["ops"][u]["op_type"].split("::")[-1].split(".")[0] for u in chain}
+                if not names & STRIDED_VIEWS:
+                    roots.append({"id": t, "shape": list(shape(t)), "dtype": dt(t)})
+                    continue
+                roots.append({"id": root, "shape": list(shape(root)), "dtype": dt(root)})
+                for u in chain:
+                    o = rg["ops"][u]
+                    a_ = o.get("attributes") or {}
+                    prelude.append({"op_uid": u, "op_type": o["op_type"], "args": a_.get("args"),
+                                    "attributes": {k: v for k, v in a_.items() if k != "args"},
+                                    "inputs": o.get("input_tensor_ids") or [],
+                                    "output": (o.get("output_tensor_ids") or [None])[0]})
+        except Exception as e:
+            skipped[f"{comp_v}/{uid}"] = f"shape refused: {e}"
+            continue
+        dts = [dt(t) for t in ins]
+        attrs = op.get("attributes") or {}
+        spec = {"op_type": op["op_type"], "inputs": ins, "shapes": shapes, "dtypes": dts,
+                "args": attrs.get("args"), "kwargs": attrs.get("kwargs") or {},
+                "attributes": {k: v for k, v in attrs.items() if k != "args"},
+                "symbols": syms, "output_dtypes": op.get("output_dtypes"), "op_uid": uid,
+                "compute_dtype": cdtype, "graph_dtype": gdtype,
+                "contract": {"safe": bool(contract.safe),
+                             "island": ("fp32" if uid in contract.fp32_op_uids
+                                        else "narrow" if uid in contract.narrow_op_uids else None)},
+                "roots": roots, "prelude": prelude}
+        # two sites run one instance only when the engine runs them alike: the dtype facts and the views the op
+        # reads are part of the key
+        views = [[p["op_type"], _literal(p["args"]), p["attributes"]] for p in prelude]
+        # (an op that reads no view keeps the key it had before views were recorded: rows already measured stand)
+        key = hashlib.sha256(json.dumps([spec["op_type"], shapes, dts, _literal(attrs.get("args")),
+                                         spec["attributes"], cdtype, gdtype, spec["contract"],
+                                         op.get("output_dtypes")] + ([views] if views else []),
+                                        sort_keys=True, default=str).encode()).hexdigest()[:16]
+        inst = out.setdefault(key, {"key": key, **spec, "sites": []})
+        inst["sites"].append(f"{model}/{comp_v}/{uid}")
 
 
 def _literal(args):

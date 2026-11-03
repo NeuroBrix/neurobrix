@@ -122,7 +122,10 @@ def test_the_torch_side_keeps_nothing_but_the_rows(tmp_path, monkeypatch):
     monkeypatch.setattr(K, "run_torch", lambda *a, **k: (_Host(out), 3.0, [0.5, 0.6], 0.0, "test"))
     monkeypatch.setattr(K, "release_compile_caches", lambda dev: None)
     nbx = {"first": 1.0, "times": [0.4, 0.5], "peak": 0.0, "how": "test", "od": "float32", "file": str(nbx_file)}
-    rows = K.torch_work(inst, None, None, 0, 2, ["default"], nbx)
+    msgs = list(K.torch_work(inst, None, None, 0, 2, ["default"], nbx))
+    rows = [m["row"] for m in msgs if "row" in m]
+    # the nbxtensor row comes FIRST: a worker that dies later in a contender has already handed it
+    assert rows[0]["contender"] == "nbxtensor" and msgs[1] == {"start": "torch_eager"}
     by = {r["contender"]: r for r in rows}
     assert by["torch_eager"]["status"] == "ok" and by["torch_eager"]["compile_ms"] == ""
     assert by["torch_compile[default]"]["compile_ms"] != ""          # the compile time, apart from the execution
@@ -184,3 +187,127 @@ def test_an_instance_computes_at_the_plan_s_dtype_never_the_stored_one(monkeypat
     bound, _skipped = I._component_bindings("TinyLlama-1.1B-Chat-v1.0", "scenario-v100")
     assert asked == [("TinyLlama-1.1B-Chat-v1.0", "triton", "scenario-v100", None)]
     assert bound and {d for _c, _g, _s, d in bound} == {"float16"}
+
+
+class _Stream:
+    """A torch worker as the coordinator reads it: the messages it sends, then `end` (an exception) instead of more."""
+
+    def __init__(self, msgs, end):
+        self.msgs, self.end, self.sent = list(msgs), end, []
+
+    def send(self, req):
+        self.sent.append(req)
+
+    def read(self, until=None):
+        if self.msgs:
+            return self.msgs.pop(0)
+        raise self.end
+
+
+_INST = {"key": "d1", "op_type": "aten::convolution", "shapes": [[2, 11200, 24, 40], [11200, 1, 3, 3]],
+         "dtypes": ["float16", "float16"], "sites": ["m/c/op"]}
+
+
+def test_a_worker_that_dies_in_a_contender_keeps_every_row_before_it():
+    # the V100 run, 2026-11-03 04:23: a torch worker ended in max-autotune and the instance kept only
+    # "torch_eager refused, the worker ended" — the nbxtensor row measured before it was lost. RED on 5e1301ad
+    # (one answer per instance, none of it written when the worker died).
+    nbx = {"row": {**K._row(_INST, "nbxtensor"), "status": "ok", "median_ms": "1.0"}}
+    eager = {"row": {**K._row(_INST, "torch_eager"), "status": "ok", "median_ms": "2.0"}}
+    wk = _Stream([nbx, {"start": "torch_eager"}, eager, {"start": "torch_compile[max-autotune]"}],
+                 RuntimeError("the worker ended (rc -9)"))
+    rows, ended, err = K.torch_rows(wk, _INST, {"file": "x"}, None)
+    by = {r["contender"]: r for r in rows}
+    assert not ended and err is not None
+    assert by["nbxtensor"]["status"] == "ok" and by["torch_eager"]["median_ms"] == "2.0"
+    assert by["torch_compile[max-autotune]"]["status"] == "refused"
+    assert "worker ended" in by["torch_compile[max-autotune]"]["note"]
+
+
+def test_a_compilation_the_run_s_end_stops_is_not_finished_never_a_loss():
+    # the supervision, 2026-11-03 07:35: no hand-written bound — the run's own end; the contender it stops is "not
+    # finished in the run" with its elapsed time, neither a loss nor a win, and the rows before it stand
+    eager = {"row": {**K._row(_INST, "torch_eager"), "status": "ok", "median_ms": "2.0"}}
+    wk = _Stream([{"start": "torch_eager"}, eager, {"start": "torch_compile[max-autotune]"}], K.RunEnded())
+    rows, ended, err = K.torch_rows(wk, _INST, None, 0.0)
+    by = {r["contender"]: r for r in rows}
+    assert ended and err is None
+    assert by["torch_eager"]["status"] == "ok"
+    assert by["torch_compile[max-autotune]"]["status"] == "not_finished"
+    assert "not finished in the run" in by["torch_compile[max-autotune]"]["note"]
+    nbx = {**K._row(_INST, "nbxtensor"), "status": "ok", "median_ms": "1.0"}
+    lost, won, total = S.kernel_losses([nbx, *rows])
+    assert (len(lost), won, total) == (0, 1, 1)            # judged against the contenders that finished
+
+
+def test_the_summary_counts_refusals_apart_from_losses():
+    # the supervision, 2026-11-03 07:35: lost / refused (key outside the census) / refused (memory), apart, before
+    # any "lost on N". RED on 5e1301ad: a KeyNotCertified refusal counted as a loss.
+    def inst(key):
+        return {"key": key, "op_type": "aten::mm", "shapes": "[[2, 2]]", "dtypes": "float16", "sites": 1}
+    rows = [
+        {**inst("a"), "contender": "nbxtensor", "status": "refused",
+         "note": "KeyNotCertified: CERTIFIED-ONLY: no certified setting for conv2d_forward_kernel fp32"},
+        {**inst("a"), "contender": "torch_eager", "status": "ok", "median_ms": "1.0"},
+        {**inst("b"), "contender": "*", "status": "out_of_class", "note": "operands > the op budget"},
+        {**inst("c"), "contender": "nbxtensor", "status": "ok", "median_ms": "3.0"},
+        {**inst("c"), "contender": "torch_eager", "status": "ok", "median_ms": "1.0"},
+        {**inst("d"), "contender": "nbxtensor", "status": "wrong", "median_ms": "0.1"},
+        {**inst("d"), "contender": "torch_eager", "status": "ok", "median_ms": "1.0"},
+    ]
+    n = S.kernel_counts(rows)
+    assert (n["lost"], n["won"], n["refused_key"], n["refused_memory"]) == (2, 0, 1, 1)
+
+
+def test_an_input_the_graph_forms_as_a_view_reaches_the_op_as_that_view():
+    # the Dell's V100 reading, 2026-11-03 01:58, verified on Allegro's graph: a linear's weight is aten.t(W), a
+    # transposed VIEW; the bench gave a contiguous [K, N] array and addmv paid a copy per row the engine never makes.
+    # The instance names the root and the view; both contenders replay it before the op. RED on 5e1301ad (no prelude).
+    torch = pytest.importorskip("torch")
+    from neurobrix.core.runtime.graph.sequential_dispatcher import NativeATenDispatcher
+    inst = {"key": "v1", "op_type": "aten::addmm", "inputs": ["bias", "x", "aten.t::1::out_0"],
+            "shapes": [[3], [2, 4], [4, 3]], "dtypes": ["float32"] * 3, "symbols": {}, "attributes": {},
+            "args": [{"type": "tensor", "tensor_id": "bias"}, {"type": "tensor", "tensor_id": "x"},
+                     {"type": "tensor", "tensor_id": "aten.t::1::out_0"}],
+            "roots": [{"id": "bias", "shape": [3], "dtype": "float32"}, {"id": "x", "shape": [2, 4], "dtype": "float32"},
+                      {"id": "W", "shape": [3, 4], "dtype": "float32"}],
+            "prelude": [{"op_uid": "aten.t::1", "op_type": "aten::t", "args": [{"type": "tensor", "tensor_id": "W"}],
+                         "attributes": {}, "inputs": ["W"], "output": "aten.t::1::out_0"}]}
+    assert [s for _t, s, _d in K.feeds(inst)] == [[3], [2, 4], [3, 4]]
+    arrays = K.host_inputs(inst)
+    disp = NativeATenDispatcher(device="cpu", compute_dtype=torch.float64)
+    res = K._ArgResolver()
+    store = {tid: torch.from_numpy(a).double() for (tid, _s, _d), a in zip(K.feeds(inst), arrays)}
+    attrs = K._NativeAttrs(disp)
+    K.apply_prelude(inst, store, lambda raw, st: res.args(raw, st, K._symbols({}), attrs),
+                    lambda p, args, at: disp.dispatch(p["op_type"], args, at))
+    b = store["aten.t::1::out_0"]
+    assert tuple(b.shape) == (4, 3) and not b.is_contiguous()      # the view the engine hands the op
+    got = K.reference(inst, arrays, res).numpy()
+    want = arrays[0] + arrays[1].astype(np.float64) @ arrays[2].astype(np.float64).T
+    assert np.allclose(got, want)
+
+
+def test_an_op_the_plan_cuts_at_op_level_is_named_never_instanced_whole(monkeypatch):
+    # the Dell's V100 run, 2026-11-03 01:23: whole-clip video VAE keys refused KeyNotCertified — the plan runs those
+    # components in temporal chunks and their ops in tiles. The instances follow the plan's cuts
+    # (`derived_census.cut_bindings`) and an op the plan tiles is skipped by name. RED on 5e1301ad (every op of the
+    # component instanced at the request's extent).
+    from tests.conftest import installed_container
+    import derived_census as DC
+    root = installed_container("TinyLlama-1.1B-Chat-v1.0")
+    comps = sorted(p.name for p in (root / "components").iterdir() if (p / "graph.json").exists())
+    monkeypatch.setattr(DC, "plan_record", lambda model, request, mode, hardware, rung: {
+        "components": [{"name": c, "dtype": "float16"} for c in comps]})
+    rg = DC.runtime_graph("TinyLlama-1.1B-Chat-v1.0", "model")
+    mms = [u for u, o in rg["ops"].items() if o["op_type"] in ("aten::mm", "aten::addmm")][:2]
+    assert len(mms) == 2
+    real_tiling = DC.plan_tiling
+    monkeypatch.setattr(DC, "plan_tiling", lambda plan, comp: (real_tiling({}, comp)[0], {mms[0]: 2})
+                        if comp == "model" else real_tiling({}, comp))
+    I.bind_profile("v100-16g")                     # a committed profile: the derivation reads the device's facts
+    found, skipped = I.instances_of("TinyLlama-1.1B-Chat-v1.0", set(mms), False, "v100-16g")
+    sites = {s for i in found.values() for s in i["sites"]}
+    assert f"TinyLlama-1.1B-Chat-v1.0/model/{mms[1]}" in sites
+    assert f"TinyLlama-1.1B-Chat-v1.0/model/{mms[0]}" not in sites
+    assert "tiles" in skipped[f"model/{mms[0]}"]
