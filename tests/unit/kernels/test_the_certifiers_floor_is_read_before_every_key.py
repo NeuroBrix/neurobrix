@@ -25,6 +25,8 @@ def test_each_key_is_priced_over_the_footprint_read_just_before_it(tmp_path, mon
     monkeypatch.setattr(C, "describe_key", lambda tuner, key: str(key))
     monkeypatch.setattr(CF, "_tolerance", lambda *a: 1e-3)
     monkeypatch.setattr(CF, "_num_stages_space", lambda *a: [1])
+    # the generator's identity is read from the driver; this test prices floors, on no card
+    monkeypatch.setattr(CF, "_backend", lambda: {"triton": "3.8.0", "name": "cuda"})
     floors = []
 
     def fake_certify_key(qual, tuner, key, tol, rng, **kw):
