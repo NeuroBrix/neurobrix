@@ -808,14 +808,14 @@ def conv_launches(x_shape, w_shape, stride, padding, dilation, transposed: bool,
         v = list(v) if isinstance(v, (list, tuple)) else [v]
         return v + [v[-1]] * (n - len(v)) if len(v) < n else v[:n]
     if transposed:
-        # a 1-D transposed conv of groups 1, dilation 1, no output padding runs a GEMM W^T [C_out * K, C_in] @ x [C_in, L]
+        # a 1-D transposed conv of groups 1, dilation 1, no output padding runs a GEMM x^T [L, C_in] @ W [C_in, C_out * K]
         # per batch sample (`conv_wrappers._conv_transpose1d_gemm`) and an overlap-add with no key; any other keeps the
         # scatter kernel, which has no key
         if len(w_shape) == 3 and groups == 1 and _n(dilation, 1)[0] == 1 and _n(output_padding, 1)[0] == 0:
             if native_bf16 is None:
                 raise ValueError("ZERO FALLBACK: conv_launches of a 1-D transposed conv needs native_bf16 (its GEMM's key)")
             narrowest = next(d for d in (F16, NBXDtype.bfloat16, F32) if d in (x, w)) if x != w else x
-            return mm_launches(int(w_shape[1]) * int(w_shape[2]), int(w_shape[0]), int(x_shape[2]), narrowest, narrowest,
+            return mm_launches(int(x_shape[2]), int(w_shape[0]), int(w_shape[1]) * int(w_shape[2]), narrowest, narrowest,
                                native_bf16, contract_half=contract_half)
         return []
     if len(w_shape) == 3:

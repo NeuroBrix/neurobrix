@@ -131,7 +131,7 @@ def conv_transpose2d_kernel(
 def col2im1d_kernel(y_ptr, out_ptr, C_out, K, L_in, L_out, stride, pad,
                     BLOCK_SIZE: tl.constexpr, TAPS: tl.constexpr):
     """The overlap-add of a 1-D transposed convolution computed as a GEMM (`conv_wrappers._conv_transpose1d_gemm`):
-    Y [C_out * K, L_in] holds, for every output channel and tap k, the input positions' products; output position o of
+    Y [L_in, C_out * K] holds, for every input position, each output channel and tap k's products; output position o of
     channel c gathers the TAPS = ceil(K / stride) taps k = (o + pad) mod stride + j * stride whose input position
     i = (o + pad - k) / stride exists — no atomics, fp32 accumulation, one rounding to the output dtype."""
     c = tl.program_id(0).to(tl.int64)
@@ -144,5 +144,5 @@ def col2im1d_kernel(y_ptr, out_ptr, C_out, K, L_in, L_out, stride, pad,
         num = o + pad - k
         i = num // stride
         m = o_ok & (k < K) & (num >= 0) & (i < L_in)
-        acc += tl.load(y_ptr + (c * K + k) * L_in + i, mask=m, other=0.0).to(tl.float32)
+        acc += tl.load(y_ptr + i * (C_out * K) + c * K + k, mask=m, other=0.0).to(tl.float32)
     tl.store(out_ptr + c * L_out + o, acc.to(out_ptr.dtype.element_ty), mask=o_ok)
