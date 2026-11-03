@@ -85,3 +85,18 @@ def test_the_first_launch_probes_only_where_no_vendor_declares(monkeypatch, tmp_
         probed.clear()
         AD.ensure_measured_facts("default-x", "triton")
         assert probed == expect
+
+
+def test_the_probe_sizes_a_unified_device_by_its_memory_and_a_card_by_its_runtime(monkeypatch, tmp_path):
+    # a unified device (Apple) carries no CUDA runtime total / context: the planner reads its memory_mb (the census
+    # shadow's capacity), and so does the probe — it was refused by name on every Apple machine (03/11)
+    from neurobrix.core.prism import autodetect as AD, arena_probe as A
+    (tmp_path / "components" / "c").mkdir(parents=True)
+    monkeypatch.setattr(A, "smallest_container", lambda cache: (tmp_path, "c"))
+    seen = []
+    monkeypatch.setattr(A, "factor_on_card", lambda usable, w, run, reps, steady: seen.append(usable) or (1.2, []))
+    AD._measure_arena_factor("hw", {"unified_memory": True, "memory_mb": 18186})
+    AD._measure_arena_factor("hw", {"runtime_total_mb": 16151, "runtime_context_mb": 306})
+    assert seen == [18186 << 20, 15845 << 20]
+    with pytest.raises(RuntimeError, match="memory_mb on a unified device"):
+        AD._measure_arena_factor("hw", {"memory_mb": 16384})

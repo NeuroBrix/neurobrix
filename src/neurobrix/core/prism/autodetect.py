@@ -2612,15 +2612,15 @@ def _measure_arena_factor(hardware_id: str, device: dict) -> float:
     from neurobrix.core.paths import cache_dir
     from neurobrix.core.prism import arena_probe as A
     total, ctx = device.get("runtime_total_mb"), device.get("runtime_context_mb")
-    if total is None or ctx is None:
-        raise RuntimeError("ZERO FALLBACK: the arena probe sizes its runs on the card as a run reads it, and the "
-                           "profile states no runtime_total_mb / runtime_context_mb")
+    unified = device.get("memory_mb") if device.get("unified_memory") else None   # the card as the planner reads it
+    if unified is None and (total is None or ctx is None):
+        raise RuntimeError("ZERO FALLBACK: no runtime_total_mb / runtime_context_mb (nor memory_mb on a unified device)")
     import inspect
     from nbxtensor.io import read_rate
     steady = inspect.signature(read_rate.measure).parameters["within"].default   # the storage measure's steadiness
     root, comp = A.smallest_container(cache_dir())
     weights = sum(f.stat().st_size for f in (root / "components" / comp).rglob("*.safetensors"))
-    factor, runs = A.factor_on_card((int(total) - int(ctx)) << 20, weights,
+    factor, runs = A.factor_on_card(int(unified or int(total) - int(ctx)) << 20, weights,
                                     lambda k: A.child(str(root), comp, hardware_id, k), 3, steady)
     if factor is None:
         raise RuntimeError(f"ZERO FALLBACK: the arena probe's runs on {root.name}:{comp} disagree "
