@@ -318,3 +318,39 @@ def test_the_two_are_counted_apart_and_only_one_is_fatal():
     assert (0 if not summary["failed"] else 1) == 1
     assert (0 if not (summary["failed"] - 1) else 1) == 0, (
         "with the real break removed, 2 unreachable keys must still exit 0")
+
+
+# A certified entry whose configuration names parameters the kernel does not have is not servable (the Apple static
+# check, 2026-11-03: the depthwise tile became (BC, TH, TW) in 2a2d69a4, the Apple directory still held 440 entries of
+# the old (BLOCK_HW, BLOCK_C) space, and `validate` — the key's arity and dtype against the tuner, never the
+# configuration's parameter names — passed the file, so `lookup` served them).
+class _Cfg:
+    def __init__(self, **kw):
+        self.kwargs = kw
+
+
+class _TunerWithSpace(_Tuner):
+    configs = [_Cfg(BLOCK_M=64, BLOCK_N=128, BLOCK_K=32, GROUP_M=8), _Cfg(BLOCK_M=128, BLOCK_N=64, BLOCK_K=32, GROUP_M=8)]
+
+
+def test_an_entry_in_the_kernels_parameter_space_re_reads(root):
+    path = _write(root, {C.key_repr(KEY): _entry()})
+    assert C.validate(json.loads(path.read_text()), path, _TunerWithSpace()) == []
+
+
+def test_an_entry_naming_parameters_the_kernel_lacks_is_refused_by_name(root):
+    stale = _entry()
+    stale["config"]["kwargs"] = {"BLOCK_HW": 64, "BLOCK_C": 32}
+    path = _write(root, {C.key_repr(KEY): stale})
+    problems = C.validate(json.loads(path.read_text()), path, _TunerWithSpace())
+    assert any("BLOCK_HW" in p and "not the kernel's" in p for p in problems), problems
+    assert C.lookup(KERNEL, _TunerWithSpace(), KEY, memory_gb=16) is None
+
+
+def test_a_variant_naming_parameters_the_kernel_lacks_is_refused_by_name(root):
+    var = _entry()
+    var["config"]["kwargs"] = {"BLOCK_HW": 64, "BLOCK_C": 32}
+    var["proof"]["machine"]["device"]["memory_mb"] = 32768
+    path = _write(root, {C.key_repr(KEY): _entry(variants={"32g": var})})
+    problems = C.validate(json.loads(path.read_text()), path, _TunerWithSpace())
+    assert any("variant" in p and "not the kernel's" in p for p in problems), problems

@@ -722,6 +722,9 @@ def validate(doc: Any, path: Path, tuner=None) -> List[str]:
         problems.append("no entries")
         return problems
     expected_tol = _tolerance_for(vendor, profile, stem_dtype)
+    # the kernel's parameter spaces: an entry naming parameters no config of the kernel has is not servable (the Apple
+    # depthwise entries of the old BLOCK_HW/BLOCK_C tile passed this gate against the BC/TH/TW kernel, 2026-11-03)
+    spaces = {frozenset(c.kwargs) for c in getattr(tuner, "configs", None) or []}
     for ktext, entry in entries.items():
         where = f"entry {ktext[:80]}"
         key = parse_key(ktext)
@@ -735,6 +738,7 @@ def validate(doc: Any, path: Path, tuner=None) -> List[str]:
             if output_dtype(tuner, key) != stem_dtype:
                 problems.append(f"{where}: the key's output dtype is {output_dtype(tuner, key)}, the file's is {stem_dtype}")
         _validate_certification(where, entry, fmt, expected_tol, key, stem_dtype, problems)
+        _validate_parameter_names(where, entry, spaces, problems)
         if not isinstance(entry, dict):
             continue
         variants = entry.get("variants")
@@ -746,12 +750,20 @@ def validate(doc: Any, path: Path, tuner=None) -> List[str]:
         for slot, var in variants.items():
             vwhere = f"{where} variant {slot}"
             _validate_certification(vwhere, var, fmt, expected_tol, key, stem_dtype, problems)
+            _validate_parameter_names(vwhere, var, spaces, problems)
             vcls = proof_memory_gb(var.get("proof")) if isinstance(var, dict) else None
             if vcls is None:
                 problems.append(f"{vwhere}: its proof does not say which card's memory it was made on")
             elif _variant_slot(vcls) != str(slot):
                 problems.append(f"{vwhere}: filed under {slot}, its proof was made on a {vcls} GB card")
     return problems
+
+
+def _validate_parameter_names(where: str, cert: Any, spaces: set, problems: List[str]) -> None:
+    names = frozenset(((cert.get("config") or {}).get("kwargs") or {})) if isinstance(cert, dict) else None
+    if spaces and names is not None and names not in spaces:
+        problems.append(f"{where}: its config parameters {sorted(names)} are not the kernel's "
+                        f"{' or '.join(str(sorted(s)) for s in sorted(spaces, key=sorted))}")
 
 
 def files(root: Optional[Path] = None) -> Iterator[Path]:
