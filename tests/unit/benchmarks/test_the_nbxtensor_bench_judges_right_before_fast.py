@@ -82,7 +82,8 @@ def test_a_video_instance_too_large_for_the_device_is_out_of_class_never_run():
     # a video VAE convolution at its whole request shape (Allegro, [1, 512, 22, 180, 320]): its operands and float64
     # reference exceed the op budget an 18 GB device grants — the row says so with its numbers, nothing runs
     inst = {"key": "v1", "op_type": "aten::convolution", "shapes": [[1, 512, 22, 180, 320], [512, 512, 3, 3, 3], [512]],
-            "dtypes": ["bfloat16", "bfloat16", "bfloat16"], "sites": ["Allegro/vae/aten.convolution::3"]}
+            "dtypes": ["bfloat16", "bfloat16", "bfloat16"], "sites": ["Allegro/vae/aten.convolution::3"],
+            "output_shapes": [[1, 512, 20, 178, 318]]}
     profile = {"devices": [{"memory_mb": 18186}]}
     budget = K.device_budget_bytes(profile)
     assert 0 < budget < 18186 * 2**20                     # a share of the device, from the library's op budget fraction
@@ -94,7 +95,7 @@ def test_a_video_instance_too_large_for_the_device_is_out_of_class_never_run():
               {"model": None, "ops": ["x"], "kernel": "k", "key": "()"}]
     row = K.out_of_class_row(inst, need, budget, K.census_cut_keys(inst, census))
     assert row["status"] == "out_of_class" and "op budget" in row["note"] and "conv3d_kernel" in row["note"]
-    small = {**inst, "shapes": [[1, 64, 2, 16, 16], [64, 64, 3, 3, 3], [64]]}
+    small = {**inst, "shapes": [[1, 64, 2, 16, 16], [64, 64, 3, 3, 3], [64]], "output_shapes": [[1, 64, 1, 14, 14]]}
     assert K.instance_bytes(small) < budget             # an instance that fits is run whole
 
 
@@ -311,3 +312,18 @@ def test_an_op_the_plan_cuts_at_op_level_is_named_never_instanced_whole(monkeypa
     assert f"TinyLlama-1.1B-Chat-v1.0/model/{mms[1]}" in sites
     assert f"TinyLlama-1.1B-Chat-v1.0/model/{mms[0]}" not in sites
     assert "tiles" in skipped[f"model/{mms[0]}"]
+
+
+def test_an_op_whose_output_outgrows_its_operands_is_counted_by_its_output():
+    # a 1x1x1 convolution widening 16 -> 128 channels on a video clip (03/11: the guard counted the largest OPERAND
+    # for the output, ~15 GB of a ~37 GB footprint, and the Mac swapped until its disk was full)
+    inst = {"key": "w1", "op_type": "aten::convolution", "shapes": [[1, 16, 49, 480, 720], [128, 16, 1, 1, 1], [128]],
+            "dtypes": ["bfloat16", "bfloat16", "bfloat16"], "output_shapes": [[1, 128, 49, 480, 720]]}
+    out_elems = 128 * 49 * 480 * 720
+    assert K.instance_bytes(inst) >= out_elems * (8 + 2 + 4)      # the output's float64, device and host copies
+    assert K.instance_bytes(inst) > K.device_budget_bytes({"devices": [{"memory_mb": 18186}]})   # out of class
+
+
+def test_an_instance_without_output_shapes_is_refused_by_name():
+    with pytest.raises(KeyError, match="output_shapes"):
+        K.instance_bytes({"key": "x", "shapes": [[2, 2]], "dtypes": ["float32"]})

@@ -263,6 +263,7 @@ def _instances_at(DC, CL, model, comp, comp_v, g, syms, cdtype, has_native_bf16,
         prelude, roots = [], []
         try:
             shapes = [list(shape(t)) for t in ins]
+            out_shapes = [list(shape(t)) for t in (op.get("output_tensor_ids") or [])]
             for t in ins:
                 root, chain = input_chain(rg, producers, t, CL)
                 names = {rg["ops"][u]["op_type"].split("::")[-1].split(".")[0] for u in chain}
@@ -285,7 +286,7 @@ def _instances_at(DC, CL, model, comp, comp_v, g, syms, cdtype, has_native_bf16,
         spec = {"op_type": op["op_type"], "inputs": ins, "shapes": shapes, "dtypes": dts,
                 "args": attrs.get("args"), "kwargs": attrs.get("kwargs") or {},
                 "attributes": {k: v for k, v in attrs.items() if k != "args"},
-                "symbols": syms, "output_dtypes": op.get("output_dtypes"), "op_uid": uid,
+                "symbols": syms, "output_dtypes": op.get("output_dtypes"), "output_shapes": out_shapes, "op_uid": uid,
                 "compute_dtype": cdtype, "graph_dtype": gdtype,
                 "contract": {"safe": bool(contract.safe),
                              "island": ("fp32" if uid in contract.fp32_op_uids

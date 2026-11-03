@@ -386,13 +386,20 @@ def _elems(shape) -> int:
 def instance_bytes(inst) -> int:
     """What the torch worker holds at once for an instance — the larger of the two workers, which never overlap (the
     library's releases its pool and arrays before the torch side starts): per input element the host array (float32,
-    `host_inputs`), its float64 copy (the reference) and its device copy at its width; per output element (no wider
-    than the largest operand, for every op of the catalogue: an elementwise, a reduction, a GEMM or a convolution at
-    the request's shapes) the float64 result, the device output at its width and the host copy compared (float32)."""
+    `host_inputs`), its float64 copy (the reference) and its device copy at its width; per OUTPUT element — counted
+    from the graph's own output shapes, bound like the inputs (`instances.py`) — the float64 result, the device output
+    at its width and the host copy compared (float32). Until 2026-11-03 the outputs were assumed no larger than the
+    largest operand: a 1x1x1 convolution widening 16 -> 128 channels (a video VAE, [1, 16, 49, 480, 720]) has 4x its
+    input's elements, the guard counted ~15 GB of a ~37 GB footprint, and the Mac swapped until its disk was full. An
+    instance without its output shapes is refused by name, never guessed."""
+    if "output_shapes" not in inst:
+        raise KeyError(f"instance {inst.get('key')!r} carries no output_shapes: derive the instances again "
+                       f"(instances.py writes them) — the guard does not guess an output's size")
     els = [_elems(s) for s in inst["shapes"]]
     inputs = sum(e * (4 + 8 + _ITEMSIZE.get(d, 8)) for e, d in zip(els, inst["dtypes"]))
     widest = max((_ITEMSIZE.get(d, 8) for d in inst["dtypes"]), default=8)
-    return inputs + (max(els) if els else 0) * (8 + widest + 4)
+    outs = [_elems(s) for s in inst["output_shapes"]]
+    return inputs + sum(outs) * (8 + widest + 4)
 
 
 def device_budget_bytes(profile) -> int:
