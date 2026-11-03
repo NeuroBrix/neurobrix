@@ -31,8 +31,6 @@ from typing import Any, Sequence, Tuple
 # protocol of 2026-08-23: seg 256 / BLOCK_N 32 / 4 warps won at all three contexts, ops/decode_attn_vec.py,
 # kernels/wrappers.py `_decode_attn_vec`); 16 and 64 are its neighbours, the range the certified directory chooses in.
 PAGED_DECODE_TILE_CANDIDATES = (16, 32, 64)
-# The tile the read runs at until the certified directory chooses among the candidates: the judged one.
-PAGED_DECODE_JUDGED_TILE = 32
 
 def _value(*path: str) -> Any:
     """One value of nbxtensor/ops/tiling.yml, refused by name when absent."""

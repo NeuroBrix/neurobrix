@@ -1334,6 +1334,45 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
                 out[:, s_] = p_ @ vs[lo:hi]
             return out
         return run, (oracle if values else None), "opart_ptr"
+    if short == "paged_decode_attn_split_kernel":
+        # (LEN_BUCKET, page_tokens, D, D_V, GQA_GROUPS, q, pools, tables, partials): one sequence of the bucket's top over
+        # shuffled pages, one KV head and its group, through `paged_decode_attention`; the fp64 oracle is each split's
+        # unnormalised partial output, the split the kernel cuts (whole PAGED_DECODE_SPLIT_ALIGN positions)
+        from nbxtensor.ops import attention_wrappers as AW
+        from nbxtensor.ops import paged_decode_attn as PD
+        import math as _m
+        T, pt, D, Dv, G = (int(x) for x in key[:5])
+        q_dt, kv_dt = (dts + ["fp16"] * 2)[:2]
+        pages = -(-T // pt)
+        _refuse_oversize(card_bytes, [((pages * pt, D), kv_dt), ((pages * pt, Dv), kv_dt)], short)
+        q = arr(rng, (1, G, 1, D), q_dt)
+        kp, vp = arr(rng, (pages, 1, pt, D), kv_dt), arr(rng, (pages, 1, pt, Dv), kv_dt)
+        order = rng.permutation(pages).astype(np.int32)
+        scale = 1.0 / _m.sqrt(D)
+        nbx = {"fp16": NBXDtype.float16, "bf16": NBXDtype.bfloat16, "fp32": NBXDtype.float32}
+        run = lambda: AW.paged_decode_attention(to(q), to(kp), to(vp), NBXTensor.from_numpy(order.reshape(1, pages)),  # noqa: E731
+                                                NBXTensor.from_numpy(np.array([T], dtype=np.int32)), scale, T,
+                                                q_round=nbx[kv_dt])
+        def oracle():
+            split = max(1, min(-(-T // PD.PAGED_DECODE_SPLIT_POSITIONS), PD.PAGED_DECODE_MAX_SPLITS))
+            seg = -(-(-(-T // split)) // PD.PAGED_DECODE_SPLIT_ALIGN) * PD.PAGED_DECODE_SPLIT_ALIGN
+            ks = np.concatenate([_f64(kp)[order[i], 0] for i in range(pages)])[:T]
+            vs = np.concatenate([_f64(vp)[order[i], 0] for i in range(pages)])[:T]
+            qs = _f64(q).reshape(G, D)
+            if q_dt != kv_dt:                        # Q rounded to the cache's dtype on load, as the kernel does
+                qs = (qs.astype(np.float16).astype(np.float64) if kv_dt == "fp16" else
+                      bf16_bits_to_f32(f32_to_bf16_bits(qs.astype(np.float32))).astype(np.float64) if kv_dt == "bf16"
+                      else qs.astype(np.float32).astype(np.float64))
+            sc = qs @ ks.T * scale
+            out = np.zeros((G, split, Dv), dtype=np.float64)
+            for s_ in range(split):
+                lo, hi = s_ * seg, min((s_ + 1) * seg, T)
+                if lo >= hi:
+                    continue
+                blk = sc[:, lo:hi]
+                out[:, s_] = np.exp(blk - blk.max(axis=1, keepdims=True)) @ vs[lo:hi]
+            return out
+        return run, (oracle if values else None), "opart_ptr"
     if short == "group_norm_forward_kernel":
         # through the wrapper (`group_norm_wrapper`, eps its default): N = 1, one channel per group, the groups the
         # programs' bucket, the group's extent the padded class (at its top where the card holds it, else at the

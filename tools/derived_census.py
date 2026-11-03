@@ -1157,6 +1157,15 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
             q_vec = qd            # the vector kernel reads Q as it arrives and rounds it on load
             if _qr is not None:
                 qd = _qr          # every route but the vector kernel casts Q once to the cache dtype
+            if decode_kv is not None and not decode_kv.get("prefill") and Tq == 1:
+                # a cached decode step: the interceptor reads the paged cache (`kv_cache.intercept` ->
+                # `paged_kv_cache.decode`), its page derived as the session derives it (core/state/price)
+                from neurobrix.core.state.price import paged_cache_params
+                from nbxtensor.backend.device_files import in_force as _in_force
+                from nbxtensor.ops.tiling_sizes import PAGED_DECODE_TILE_CANDIDATES as _tiles
+                _pt, _ = paged_cache_params(int(Hk), int(D), int(Dv), kd.name, (_in_force() or {}).get("memory"),
+                                            1 << 62, _tiles)       # the cache's bytes bound only a refusal
+                return LK.paged_decode_launches(H, Hk, Tk, D, Dv, q_vec, kd, _pt)
             route, rows = LK.sdpa_route(B, H, Tq, Tk, D, Dv, sdpa_budget_bytes, sdpa_min_rows, sdpa_max_chunks,
                                         unit_flash=LK.unit_flash_takes(D, qd, kd, vd))
             if route == "flash" and LK.flash_headdim_detour(D) != D:

@@ -96,11 +96,11 @@ def _paged(lens, h_kv, d, page_tokens, seed):
     return kpool, vpool, table, ks, vs
 
 
-def _read(lens, h, h_kv, d, page_tokens, block_n, seed=0):
+def _read(lens, h, h_kv, d, page_tokens, seed=0):
     kpool, vpool, table, ks, vs = _paged(lens, h_kv, d, page_tokens, seed)
     q = np.random.default_rng(seed + 1).standard_normal((len(lens), h, d)).astype(np.float16)
     out = _nbx_attention_wrappers.paged_decode_attention(_t(q.reshape(len(lens), h, 1, d)), _t(kpool), _t(vpool), _t(table),
-                                   _t(np.asarray(lens, dtype=np.int32)), 1.0 / np.sqrt(d), max(lens), block_n)
+                                   _t(np.asarray(lens, dtype=np.int32)), 1.0 / np.sqrt(d), max(lens))
     got = _d2h(out).astype(np.float64).reshape(len(lens), h, d)
     ref = _ref(q, ks, vs, 1.0 / np.sqrt(d))
     return got, ref
@@ -114,27 +114,26 @@ def _read(lens, h, h_kv, d, page_tokens, block_n, seed=0):
     ([513], 32, 8, 127, 64),             # odd head dim
 ])
 def test_the_paged_read_is_the_attention_over_the_sequences_own_positions(lens, h, h_kv, d, page_tokens):
-    for block_n in PAGED_DECODE_TILE_CANDIDATES:
-        if page_tokens % block_n:
-            continue
-        got, ref = _read(lens, h, h_kv, d, page_tokens, block_n)
-        assert np.isfinite(got).all(), f"tile {block_n}: a NaN page or position was read"
-        err = float(np.abs(got - ref).max() / np.abs(ref).max())
-        assert err < BOUND, f"tile {block_n}: relative error {err:.2e} against float64"
+    # every candidate tile is swept (no certificate in a test run) and the one served is checked; each tile is proven
+    # against the oracle by the certification itself
+    got, ref = _read(lens, h, h_kv, d, page_tokens)
+    assert np.isfinite(got).all(), "a NaN page or position was read"
+    err = float(np.abs(got - ref).max() / np.abs(ref).max())
+    assert err < BOUND, f"relative error {err:.2e} against float64"
 
 
-def test_a_tile_that_does_not_divide_the_page_is_refused_before_any_launch():
+def test_a_page_the_largest_tile_does_not_divide_is_refused_before_any_launch():
     kpool, vpool, table, _, _ = _paged([40], 8, 64, 48, 0)
     q = _t(np.zeros((1, 8, 1, 64), dtype=np.float16))
     with pytest.raises(ValueError, match="straddle two pages"):
         _nbx_attention_wrappers.paged_decode_attention(q, _t(kpool), _t(vpool), _t(table), _t(np.asarray([40], dtype=np.int32)),
-                                 0.125, 40, 32)
+                                 0.125, 40)
 
 
 def test_three_identical_reads_give_identical_bytes():
     kpool, vpool, table, _, _ = _paged([2000, 77], 8, 128, 64, 3)
     q = _t(np.random.default_rng(9).standard_normal((2, 32, 1, 128)).astype(np.float16))
-    args = (_t(kpool), _t(vpool), _t(table), _t(np.asarray([2000, 77], dtype=np.int32)), 0.088, 2000, 32)
+    args = (_t(kpool), _t(vpool), _t(table), _t(np.asarray([2000, 77], dtype=np.int32)), 0.088, 2000)
     outs = [_d2h(_nbx_attention_wrappers.paged_decode_attention(q, *args)).tobytes() for _ in range(3)]
     assert outs[0] == outs[1] == outs[2]
 
@@ -162,9 +161,10 @@ def test_a_launch_sized_at_an_earlier_length_still_reads_every_position():
     PAGED_DECODE_SPLIT_POSITIONS positions, so the read must size its splits from the device lengths — sized from the
     stale figure, the newest positions fell past the last split and a replayed TinyLlama stopped attending to them
     (2026-10-28). Red on a kernel that takes the split length from the host."""
-    from nbxtensor.ops.paged_decode_attn import PAGED_DECODE_SPLIT_POSITIONS, PAGED_DECODE_MAX_SPLITS
+    from nbxtensor.ops.paged_decode_attn import (PAGED_DECODE_SPLIT_POSITIONS, PAGED_DECODE_MAX_SPLITS,
+                                                 PAGED_DECODE_SPLIT_ALIGN as block_n)
     import math
-    block_n, page_tokens, h, h_kv, d = 64, 64, 8, 2, 64
+    page_tokens, h, h_kv, d = 64, 8, 2, 64
 
     def split_of(n):
         return max(1, min(math.ceil(max(n, 1) / PAGED_DECODE_SPLIT_POSITIONS), PAGED_DECODE_MAX_SPLITS))
@@ -178,7 +178,7 @@ def test_a_launch_sized_at_an_earlier_length_still_reads_every_position():
     kpool, vpool, table, ks, vs = _paged([T], h_kv, d, page_tokens, 3)
     q = np.random.default_rng(4).standard_normal((1, h, d)).astype(np.float16)
     out = _nbx_attention_wrappers.paged_decode_attention(_t(q.reshape(1, h, 1, d)), _t(kpool), _t(vpool), _t(table),
-                                   _t(np.asarray([T], dtype=np.int32)), 1.0 / np.sqrt(d), stale, block_n)
+                                   _t(np.asarray([T], dtype=np.int32)), 1.0 / np.sqrt(d), stale)
     got = _d2h(out).astype(np.float64).reshape(1, h, d)
     ref = _ref(q, ks, vs, 1.0 / np.sqrt(d))
     err = float(np.abs(got - ref).max() / np.abs(ref).max())

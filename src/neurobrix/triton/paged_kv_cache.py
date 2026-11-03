@@ -244,7 +244,7 @@ class PagedTritonKVCache:
         if layer_idx == self.num_layers - 1:
             self.length = start + t
 
-    def decode(self, layer_idx: int, q, k, v, scale: float, block_n: int, q_round=None):
+    def decode(self, layer_idx: int, q, k, v, scale: float, q_round=None):
         """One decode step of one layer: append its new K / V `[B, H_kv, 1, D]` at the device length, advance it, and
         attend `q [B, H, 1, D]` over the sequence's pages. Returns `[B, H, 1, D_v]`."""
         import triton
@@ -271,8 +271,7 @@ class PagedTritonKVCache:
             BLOCK_D=max(triton.next_power_of_2(max(self.k_head_dim, self.v_head_dim)), 16),
             D_K=self.k_head_dim, D_V=self.v_head_dim, num_warps=1)
         paged_lens_advance_kernel[(self.batch,)](lens, 1)
-        out = _nbx_attention_wrappers.paged_decode_attention(q, kp, vp, bt, lens, scale, new_len, block_n,
-                                       q_round=q_round)
+        out = _nbx_attention_wrappers.paged_decode_attention(q, kp, vp, bt, lens, scale, new_len, q_round=q_round)
         if layer_idx == self.num_layers - 1:
             self.length = new_len
         return out

@@ -31,6 +31,5 @@ def test_the_compiled_paged_cache_params_import_no_triton():
 
 def test_the_kernel_module_reads_the_same_tiles():
     from nbxtensor.ops import tiling_sizes
-    from nbxtensor.ops.paged_decode_attn import PAGED_DECODE_JUDGED_TILE, PAGED_DECODE_TILE_CANDIDATES
+    from nbxtensor.ops.paged_decode_attn import PAGED_DECODE_TILE_CANDIDATES
     assert PAGED_DECODE_TILE_CANDIDATES is tiling_sizes.PAGED_DECODE_TILE_CANDIDATES
-    assert PAGED_DECODE_JUDGED_TILE == tiling_sizes.PAGED_DECODE_JUDGED_TILE

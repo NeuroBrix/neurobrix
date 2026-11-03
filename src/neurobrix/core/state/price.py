@@ -103,7 +103,7 @@ def page_tokens(token_bytes_per_layer: int, tile_candidates, granule_bytes: int,
     Every input is named and sourced, no constant inside:
     - `tile_candidates`: the position tiles the paged attention read declares (a kernel fact, one source for every
       backend). The page starts at the largest, so every candidate divides it and a tile never straddles two pages; the
-      tile is then chosen among candidates that divide the page, never autotuned against it.
+      tile is then the read's certified configuration among them.
     - `granule_bytes`: the backend's allocation granule (a cited vendor fact per backend).
     - `token_bytes_per_layer`: kv_heads x (k_dim + v_dim) x itemsize of the declared KV, one layer's position.
     The page is that largest tile doubled until one layer's page reaches the granule; refused by name when one page of

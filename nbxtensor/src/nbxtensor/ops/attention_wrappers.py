@@ -635,27 +635,26 @@ def paged_kv_append(new, pool, slot_mapping):
     return pool
 
 
-def paged_decode_attention(q, k_pool, v_pool, block_table, seq_lens, softmax_scale, max_seq_len, block_n,
-                           q_round=None):
+def paged_decode_attention(q, k_pool, v_pool, block_table, seq_lens, softmax_scale, max_seq_len, q_round=None):
     """Decode attention (one query position) read through the page table — the vector split-KV kernel of
     ops/decode_attn_vec.py on paged K / V, merged by the fixed-order `flash_decode_reduce_kernel`.
 
     q [B, H, 1, D] contiguous · k_pool / v_pool [num_pages, H_kv, page_tokens, D] · block_table [B, max_pages] int32
     (-1 past each sequence) · seq_lens [B] int32 · max_seq_len: the longest of seq_lens (sizes the splits; read by the
-    caller from its page tables, never from the device) · block_n: the position tile, one of
+    caller from its page tables, never from the device) — the position tile is the key's certified configuration among
     PAGED_DECODE_TILE_CANDIDATES dividing page_tokens · q_round: the dtype Q is read in (the cache's), rounded on load
     as `_decode_attn_vec` does; the output is written in it. Output [B, H, 1, D_v] in q_round, else q's dtype."""
     from nbxtensor.ops.paged_decode_attn import (paged_decode_attn_split_kernel, PAGED_DECODE_TILE_CANDIDATES,
-                                        PAGED_DECODE_SPLIT_POSITIONS, PAGED_DECODE_MAX_SPLITS)
+                                        PAGED_DECODE_SPLIT_POSITIONS, PAGED_DECODE_MAX_SPLITS, PAGED_DECODE_SPLIT_ALIGN)
     from nbxtensor.ops.flash_decode import flash_decode_reduce_kernel
     batch, nheads, tq, headdim = (int(x) for x in q.shape)
     num_pages, nheads_k, page_tokens, d_k = (int(x) for x in k_pool.shape)
     d_v = int(v_pool.shape[3])
     if tq != 1 or d_k != headdim or nheads % nheads_k:
         raise ValueError(f"paged_decode_attention: q {list(q.shape)} against the pool {list(k_pool.shape)}")
-    if block_n not in PAGED_DECODE_TILE_CANDIDATES or page_tokens % block_n:
-        raise ValueError(f"ZERO FALLBACK: tile {block_n} is not a declared candidate {PAGED_DECODE_TILE_CANDIDATES} "
-                         f"dividing the page of {page_tokens} positions — a tile would straddle two pages")
+    if page_tokens % PAGED_DECODE_SPLIT_ALIGN:
+        raise ValueError(f"ZERO FALLBACK: the page of {page_tokens} positions is not a whole number of the largest tile "
+                         f"{PAGED_DECODE_SPLIT_ALIGN} ({PAGED_DECODE_TILE_CANDIDATES}) — a tile would straddle two pages")
     for name, t in (("block_table", block_table), ("seq_lens", seq_lens)):
         if t.nbx_dtype != NBXDtype.int32:
             raise ValueError(f"paged_decode_attention: {name} must be int32, got {t.nbx_dtype}")
@@ -684,16 +683,15 @@ def paged_decode_attention(q, k_pool, v_pool, block_table, seq_lens, softmax_sca
     paged_decode_attn_split_kernel[(bhq, split)](
         q2, k_pool, v_pool, block_table, seq_lens,
         opart, mpart, lpart,
-        batch, page_tokens, float(softmax_scale), nheads,
+        batch, page_tokens, _lk.bucket_of("N", longest), float(softmax_scale), nheads,
         q2.stride(0),
         k_pool.stride(0), k_pool.stride(1), k_pool.stride(2),
         v_pool.stride(0), v_pool.stride(1), v_pool.stride(2),
         block_table.stride(0),
         opart.stride(0), opart.stride(1),
         mpart.stride(0),
-        GQA_GROUPS=groups, BLOCK_N=block_n, BLOCK_D=BLOCK_D, D=headdim, D_V=d_v,
-        Q_TO=q_to, Q_SATURATE=q_saturate,
-        num_warps=4, num_stages=1)
+        GQA_GROUPS=groups, BLOCK_D=BLOCK_D, D=headdim, D_V=d_v, SPLIT_ALIGN=PAGED_DECODE_SPLIT_ALIGN,
+        Q_TO=q_to, Q_SATURATE=q_saturate)
     flash_decode_reduce_kernel[(bhq,)](
         opart, mpart, lpart, out,
         opart.stride(0), opart.stride(1), d_v,

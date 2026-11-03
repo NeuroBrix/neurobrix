@@ -72,7 +72,7 @@ def _request(cache, rng, b, h, h_kv, d, prompt, steps, layers):
             q = rng.standard_normal((b, h, 1, d)).astype(np.float16)
             ks[li] = np.concatenate([ks[li], kn], axis=2)
             vs[li] = np.concatenate([vs[li], vn], axis=2)
-            out = cache.decode(li, _t(q), _t(kn), _t(vn), scale, 32)
+            out = cache.decode(li, _t(q), _t(kn), _t(vn), scale)
             got = _d2h(out).astype(np.float64).reshape(b, h, d)
             ref = _oracle(q[:, :, 0], ks[li], vs[li], scale)
             assert np.isfinite(got).all()
@@ -161,7 +161,7 @@ def test_a_decoder_spread_over_two_cards_decodes_each_layer_on_its_own(prompt, s
             q = rng.standard_normal((b, h, 1, d)).astype(np.float16)
             ks[li] = np.concatenate([ks[li], kn], axis=2)
             vs[li] = np.concatenate([vs[li], vn], axis=2)
-            out = cache.decode(li, on(li, q), on(li, kn), on(li, vn), scale, 32)
+            out = cache.decode(li, on(li, q), on(li, kn), on(li, vn), scale)
             assert out._device_idx == li
             got = _d2h(out).astype(np.float64).reshape(b, h, d)
             worst = max(worst, float(np.abs(got - _oracle(q[:, :, 0], ks[li], vs[li], scale)).max()

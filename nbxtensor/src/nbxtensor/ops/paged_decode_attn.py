@@ -25,7 +25,8 @@ from nbxtensor.ops.decode_attn_vec import _round_q
 
 # The page tiles are sizes: nbxtensor.ops.tiling_sizes owns them (torch- and triton-free — the compiled branch sizes
 # its paged cache with them in an environment without triton).
-from nbxtensor.ops.tiling_sizes import PAGED_DECODE_JUDGED_TILE, PAGED_DECODE_TILE_CANDIDATES  # noqa: F401
+from nbxtensor.ops.tiling_sizes import PAGED_DECODE_TILE_CANDIDATES  # noqa: F401
+from nbxtensor.ops._configs import nbx_autotune
 
 # The split shape: positions per split and the most splits one launch makes — the vector decode kernel's judged config
 # (its locked protocol of 2026-08-23, the defaults of `_decode_attn_vec`'s NBX_DV_SEG and its 64-split cap), so the
@@ -59,6 +60,22 @@ def paged_kv_append_kernel(
              x.to(pool_ptr.dtype.element_ty), mask=mask_d)
 
 
+#: the position tiles the paged read is certified over (each dividing the page, `_tiles_in_the_page`), and the warps
+_PAGED_DECODE_CONFIGS = [triton.Config({'BLOCK_N': bn}, num_warps=w, num_stages=1)
+                         for bn in PAGED_DECODE_TILE_CANDIDATES for w in (2, 4, 8)]
+#: a split's positions are a whole number of the LARGEST tile, so every candidate tile cuts the splits the same way:
+#: the partials, and the oracle a certification proves them against, are the split's, not the tile's
+PAGED_DECODE_SPLIT_ALIGN = max(PAGED_DECODE_TILE_CANDIDATES)
+
+
+def _tiles_in_the_page(configs, named_args, **kwargs):
+    """The candidates whose tile divides the page (a tile never straddles two pages)."""
+    pt = int(named_args["page_tokens"])
+    return [c for c in configs if pt % int(c.kwargs["BLOCK_N"]) == 0]
+
+
+@nbx_autotune(configs=_PAGED_DECODE_CONFIGS, key=['LEN_BUCKET', 'page_tokens', 'D', 'D_V', 'GQA_GROUPS'],
+              prune_configs_by={'early_config_prune': _tiles_in_the_page}, cache_results=True)
 @triton.jit
 def paged_decode_attn_split_kernel(
     q_ptr,           # [B*H_q, D] one query row per program
@@ -71,6 +88,7 @@ def paged_decode_attn_split_kernel(
     lpart_ptr,       # [B*H_q, SPLIT] fp32 sum-of-exp per split
     n_seqs,          # B: the split's length is read from the device's lengths, never passed (see below)
     page_tokens,     # positions per page, a multiple of BLOCK_N
+    LEN_BUCKET,      # the longest sequence's bucket: the autotune key's length class (unused in the body)
     sm_scale,
     H_Q,
     stride_qh,
@@ -80,12 +98,13 @@ def paged_decode_attn_split_kernel(
     stride_oh, stride_os,
     stride_mh,
     GQA_GROUPS: tl.constexpr,   # H_q // H_kv
-    BLOCK_N: tl.constexpr,
     BLOCK_D: tl.constexpr,
     D: tl.constexpr,
     D_V: tl.constexpr,
+    SPLIT_ALIGN: tl.constexpr,        # a split's positions: a whole number of these (PAGED_DECODE_SPLIT_ALIGN)
     Q_TO: tl.constexpr = None,        # a dtype: Q is rounded to it on load (the cache's), as the contiguous read does
     Q_SATURATE: tl.constexpr = False,
+    BLOCK_N: tl.constexpr = 32,
 ):
     pid_q = tl.program_id(0).to(tl.int64)        # b * H_q + h_q
     pid_s = tl.program_id(1).to(tl.int64)        # split index
@@ -107,7 +126,7 @@ def paged_decode_attn_split_kernel(
         longest = tl.maximum(longest, tl.load(seq_lens_ptr + i).to(tl.int32))
     longest = tl.maximum(longest, 1)
     n_split = tl.num_programs(1)
-    seg_len = tl.cdiv(tl.cdiv(longest, n_split), BLOCK_N) * BLOCK_N
+    seg_len = tl.cdiv(tl.cdiv(longest, n_split), SPLIT_ALIGN) * SPLIT_ALIGN
     seg_start = (pid_s * seg_len).to(tl.int32)   # 32-bit loop bounds (the Metal lowering refuses a 64-bit scf.for bound)
     seg_end = tl.minimum(seg_start + seg_len, T_b).to(tl.int32)
 

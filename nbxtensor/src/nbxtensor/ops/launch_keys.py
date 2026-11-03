@@ -44,6 +44,7 @@ MOE_GATEUP_HALF = "nbxtensor.ops.moe_decode_vec.moe_gateup_vec_half_kernel"
 MOE_DOWN_HALF = "nbxtensor.ops.moe_decode_vec.moe_down_split_vec_half_kernel"
 MOE_PART_REDUCE = "nbxtensor.ops.moe_decode_vec.moe_part_reduce_kernel"
 DECODE_VEC = "nbxtensor.ops.decode_attn_vec.decode_attn_vec_split_kernel"
+PAGED_DECODE = "nbxtensor.ops.paged_decode_attn.paged_decode_attn_split_kernel"
 
 F32, BF16, F16 = NBXDtype.float32, NBXDtype.bfloat16, NBXDtype.float16
 _HALF = (F16, BF16)
@@ -992,4 +993,15 @@ def decode_vec_launches(H: int, Hk: int, Tk: int, D: int, Dv: int, q: NBXDtype, 
     f32 = tag(F32)
     return [(DECODE_VEC, (bucket_of("N", Tk), int(D), int(Dv), int(H) // max(1, int(Hk)), bias is not None,
                           tag(q), tag(k), tag(v), tag(bias if bias is not None else q), f32, f32, f32))]
+
+
+def paged_decode_launches(H: int, Hk: int, Tk: int, D: int, Dv: int, q: NBXDtype, kv: NBXDtype,
+                          page_tokens: int) -> List[Launch]:
+    """`attention_wrappers.paged_decode_attention`'s split launch (a decode step through the paged KV cache, the Triton
+    engine's every cached decode): keyed by the longest sequence's bucket, the page, the head dims and the GQA group;
+    Q as it arrives (rounded to the cache's dtype on load), the pools in the cache's, the tables int32, the partials
+    fp32. (The fixed-order reduce after it is the shared `flash_decode_reduce_kernel`.)"""
+    f32, i32, c = tag(F32), tag(NBXDtype.int32), tag(kv)
+    return [(PAGED_DECODE, (bucket_of("N", Tk), int(page_tokens), int(D), int(Dv), int(H) // max(1, int(Hk)),
+                            tag(q), c, c, i32, i32, f32, f32, f32))]
 
