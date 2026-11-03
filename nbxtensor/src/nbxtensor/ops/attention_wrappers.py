@@ -705,6 +705,11 @@ def paged_decode_attention(q, k_pool, v_pool, block_table, seq_lens, softmax_sca
     return out.reshape(batch, nheads, 1, d_v)
 
 
+#: the vector decode's split (see `_decode_attn_vec`): keys per program, and the most programs a query row gets
+_DECODE_VEC_SEG = 256
+_DECODE_VEC_MAX_SPLIT = 64
+
+
 def _decode_attn_vec(q, k, v, bias, softmax_scale,
                      batch, nheads, nheads_k, seqlen_k, headdim, q_round=None):
     """Vector (SIMT) decode attention launch pair — see
@@ -718,7 +723,6 @@ def _decode_attn_vec(q, k, v, bias, softmax_scale,
     prefix-slice views flow in unmaterialised — the strided-KV lot's
     contract) · bias flat [T_k] or None.
     """
-    import os as _os_dv
     from nbxtensor.ops.decode_attn_vec import decode_attn_vec_split_kernel
     from nbxtensor.ops.flash_decode import flash_decode_reduce_kernel
     groups = nheads // nheads_k
@@ -728,13 +732,11 @@ def _decode_attn_vec(q, k, v, bias, softmax_scale,
     # attention lowering refuses is not a tile this path can use. Inert on
     # cuda and hip, where it reads 16.
     BLOCK_D = max(triton.next_power_of_2(max(headdim, D_v)), _fa_min_tile())
-    # Defaults = the judged config (locked pinned protocol, 2026-08-23:
-    # seg 256 / BN 32 / 4 warps won the row at all three contexts).
-    BLOCK_N = int(_os_dv.environ.get("NBX_DV_BLOCK_N", "32"))
-    seg = int(_os_dv.environ.get("NBX_DV_SEG", "256"))
-    split = max(1, min(int(triton.cdiv(seqlen_k, seg)), 64))
+    # The split: one program per _DECODE_VEC_SEG keys (the judged split, locked pinned protocol, 2026-08-23: 256 won
+    # the row at all three contexts), at most _DECODE_VEC_MAX_SPLIT — it defines the partials, so it is the
+    # algorithm's, not a tile; the key block and the warps are each key's certified configuration.
+    split = max(1, min(int(triton.cdiv(seqlen_k, _DECODE_VEC_SEG)), _DECODE_VEC_MAX_SPLIT))
     seg_len = int(triton.cdiv(seqlen_k, split))
-    warps = int(_os_dv.environ.get("NBX_DV_WARPS", "4"))
 
     q2 = q.reshape(BHq, headdim)   # contiguous -> pure view
     # `q_round`: the dtype the caller asked Q to be read in (the KV cache's);
@@ -755,41 +757,20 @@ def _decode_attn_vec(q, k, v, bias, softmax_scale,
     out = NBXTensor.empty((BHq, 1, D_v), dtype=out_dtype, device=dev)
 
     set_device(q)
-    if _os_dv.environ.get("NBX_DV_GROUPED", "0") == "1":
-        # One KV head per program: K/V loaded once, reused across the
-        # GQA group from registers (see the grouped kernel's docstring).
-        from nbxtensor.ops.decode_attn_vec import decode_attn_vec_grouped_kernel
-        decode_attn_vec_grouped_kernel[(batch * nheads_k, split)](
-            q2, k, v,
-            bias if bias is not None else q2,
-            opart, mpart, lpart,
-            seqlen_k, seg_len, float(softmax_scale),
-            q2.stride(0),
-            k.stride(1), k.stride(2),
-            v.stride(1), v.stride(2),
-            opart.stride(0), opart.stride(1),
-            mpart.stride(0),
-            GQA_GROUPS=groups, BLOCK_N=BLOCK_N, BLOCK_D=BLOCK_D,
-            D=headdim, D_V=D_v,
-            HAS_BIAS=bias is not None,
-            Q_TO=q_to, Q_SATURATE=q_saturate,
-            num_warps=warps, num_stages=1)
-    else:
-        decode_attn_vec_split_kernel[(BHq, split)](
-            q2, k, v,
-            bias if bias is not None else q2,   # dead pointer when HAS_BIAS=0
-            opart, mpart, lpart,
-            seqlen_k, seg_len, float(softmax_scale),
-            q2.stride(0),
-            k.stride(1), k.stride(2),
-            v.stride(1), v.stride(2),
-            opart.stride(0), opart.stride(1),
-            mpart.stride(0),
-            GQA_GROUPS=groups, BLOCK_N=BLOCK_N, BLOCK_D=BLOCK_D,
-            D=headdim, D_V=D_v,
-            HAS_BIAS=bias is not None,
-            Q_TO=q_to, Q_SATURATE=q_saturate,
-            num_warps=warps, num_stages=1)
+    decode_attn_vec_split_kernel[(BHq, split)](
+        q2, k, v,
+        bias if bias is not None else q2,   # dead pointer when HAS_BIAS=0
+        opart, mpart, lpart,
+        seqlen_k, seg_len, _lk.bucket_of("N", seqlen_k), float(softmax_scale),
+        q2.stride(0),
+        k.stride(1), k.stride(2),
+        v.stride(1), v.stride(2),
+        opart.stride(0), opart.stride(1),
+        mpart.stride(0),
+        GQA_GROUPS=groups, BLOCK_D=BLOCK_D,
+        D=headdim, D_V=D_v,
+        HAS_BIAS=bias is not None,
+        Q_TO=q_to, Q_SATURATE=q_saturate)
     # Fixed-order deterministic combine — the EXISTING flash_decode
     # reduce kernel viewed at GROUPS=1 (partials [BHq, split, 1, D_v]).
     flash_decode_reduce_kernel[(BHq,)](

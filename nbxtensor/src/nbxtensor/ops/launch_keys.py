@@ -43,6 +43,7 @@ FUSED_MOE = "nbxtensor.ops.fused_moe.fused_moe_kernel"
 MOE_GATEUP_HALF = "nbxtensor.ops.moe_decode_vec.moe_gateup_vec_half_kernel"
 MOE_DOWN_HALF = "nbxtensor.ops.moe_decode_vec.moe_down_split_vec_half_kernel"
 MOE_PART_REDUCE = "nbxtensor.ops.moe_decode_vec.moe_part_reduce_kernel"
+DECODE_VEC = "nbxtensor.ops.decode_attn_vec.decode_attn_vec_split_kernel"
 
 F32, BF16, F16 = NBXDtype.float32, NBXDtype.bfloat16, NBXDtype.float16
 _HALF = (F16, BF16)
@@ -451,8 +452,8 @@ def sdpa_operand_dtypes(q: NBXDtype, k: NBXDtype, v: NBXDtype,
 
 
 def decode_vec_takes(headdim: int, headdim_v: int, mask_numel: Optional[int], seqlen_k: int) -> bool:
-    """Whether a single-query attention on the math route runs the vector decode kernel (no
-    autotuned key) — `_try_decode_vec`'s contract: equal head dims, and a mask that is one bias
+    """Whether a single-query attention on the math route runs the vector decode kernel
+    (`decode_vec_launches`) — `_try_decode_vec`'s contract: equal head dims, and a mask that is one bias
     per key (or none). Outside it, the math route's two bmm launches."""
     if headdim != headdim_v:
         return False
@@ -981,4 +982,14 @@ def moe_decode_vec_half_launches(top_k: int, hidden: int, inter: int, w: NBXDtyp
     return [(MOE_GATEUP_HALF, (int(hidden), int(inter), int(top_k), bf, t, i64, i64, i64, f32)),
             (MOE_DOWN_HALF, (int(inter), int(hidden), int(top_k), bf, f32, i64, t, i64, f32)),
             (MOE_PART_REDUCE, (int(hidden), int(top_k), f32, f32))]
+
+
+def decode_vec_launches(H: int, Hk: int, Tk: int, D: int, Dv: int, q: NBXDtype, k: NBXDtype, v: NBXDtype,
+                        bias: Optional[NBXDtype]) -> List[Launch]:
+    """`attention_wrappers._decode_attn_vec`'s split launch: one query row per program, keyed by the keys' bucket, the
+    head dims, the GQA group and the bias; Q as it arrives (the kernel rounds it to the cache's dtype on load), the
+    partials fp32. (The fixed-order reduce after it is the shared `flash_decode_reduce_kernel`.)"""
+    f32 = tag(F32)
+    return [(DECODE_VEC, (bucket_of("N", Tk), int(D), int(Dv), int(H) // max(1, int(Hk)), bias is not None,
+                          tag(q), tag(k), tag(v), tag(bias if bias is not None else q), f32, f32, f32))]
 

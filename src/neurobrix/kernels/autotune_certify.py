@@ -1299,6 +1299,41 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
                     y[p_] = (_f64(x)[p_] @ _f64(ws[0][e]).T) * _f64(rw)[p_]
             return y
         return run, (oracle if values else None), ("h_ptr" if gate else "part_ptr")
+    if short == "decode_attn_vec_split_kernel":
+        # (T_BUCKET, D, D_V, GQA_GROUPS, HAS_BIAS, q, k, v, bias, partials): one KV head and its GQA group of query rows
+        # over the bucket's top of keys, through `_decode_attn_vec` (its split, the reduce after); the fp64 oracle is
+        # each split's unnormalised partial output (`opart`), the split the wrapper computes
+        from nbxtensor.ops import attention_wrappers as AW
+        import math as _m
+        T, D, Dv, G, has_b = int(key[0]), int(key[1]), int(key[2]), int(key[3]), bool(key[4])
+        q_dt, k_dt, v_dt = (dts + ["fp16"] * 3)[:3]
+        b_dt = dts[3] if has_b and len(dts) > 3 else None
+        _refuse_oversize(card_bytes, [((T, D), k_dt), ((T, Dv), v_dt)], short)
+        q, k, v = arr(rng, (1, G, 1, D), q_dt), arr(rng, (1, 1, T, D), k_dt), arr(rng, (1, 1, T, Dv), v_dt)
+        b = arr(rng, (T,), b_dt) if has_b else None
+        scale = 1.0 / _m.sqrt(D)
+        q_round = None if q_dt == k_dt else {"fp16": NBXDtype.float16, "bf16": NBXDtype.bfloat16, "fp32": NBXDtype.float32}[k_dt]
+        run = lambda: AW._decode_attn_vec(to(q), to(k), to(v), to(b) if has_b else None, scale, 1, G, 1, T, D,  # noqa: E731
+                                          q_round=q_round)
+        def oracle():
+            split = max(1, min(-(-T // AW._DECODE_VEC_SEG), AW._DECODE_VEC_MAX_SPLIT))
+            seg = -(-T // split)
+            qs, ks, vs = _f64(q).reshape(G, D), _f64(k).reshape(T, D), _f64(v).reshape(T, Dv)
+            if q_round is not None:                  # Q rounded to the cache's dtype on load, as the kernel does
+                qs = (qs.astype(np.float16).astype(np.float64) if k_dt == "fp16" else
+                      bf16_bits_to_f32(f32_to_bf16_bits(qs.astype(np.float32))).astype(np.float64) if k_dt == "bf16"
+                      else qs.astype(np.float32).astype(np.float64))
+            sc = qs @ ks.T * scale + (_f64(b)[None, :] if has_b else 0.0)
+            out = np.zeros((G, split, Dv), dtype=np.float64)
+            for s_ in range(split):
+                lo, hi = s_ * seg, min((s_ + 1) * seg, T)
+                if lo >= hi:
+                    continue
+                blk = sc[:, lo:hi]
+                p_ = np.exp(blk - blk.max(axis=1, keepdims=True))
+                out[:, s_] = p_ @ vs[lo:hi]
+            return out
+        return run, (oracle if values else None), "opart_ptr"
     if short == "group_norm_forward_kernel":
         # through the wrapper (`group_norm_wrapper`, eps its default): N = 1, one channel per group, the groups the
         # programs' bucket, the group's extent the padded class (at its top where the card holds it, else at the

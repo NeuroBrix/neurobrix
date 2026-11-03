@@ -755,6 +755,8 @@ def sdpa_operand_dtypes(q: NBXDtype, k: NBXDtype, v: NBXDtype, q_round: Optional
     # The (q, k, v, q_round) dtypes `scaled_dot_product_attention_wrapper` computes attention with
 def decode_vec_takes(headdim: int, headdim_v: int, mask_numel: Optional[int], seqlen_k: int)
     # Whether a single-query attention on the math route runs the vector decode kernel (no autotuned key) — `_try_decode_vec`'s contract
+def decode_vec_launches(H: int, Hk: int, Tk: int, D: int, Dv: int, q: NBXDtype, k: NBXDtype, v: NBXDtype, bias: Optional[NBXDtype])
+    # the vector decode's split launch: keyed by the keys' bucket, the head dims, the GQA group and the bias
 def flash_any_head_dim()
     # The arch's profile MEASURED the tl.dot flash kernel correct at every head dim (`flash.any_head_dim_correct`)
 def flash_tiles_certified()
@@ -1166,9 +1168,8 @@ def reduce_then_scan_block_scan_kernel_row(in_ptr, previous_sum_ptr, out_ptr, N,
 `nbxtensor.ops.decode_attn_vec`
 
 ```python
-def decode_attn_vec_split_kernel(q_ptr, k_ptr, v_ptr, bias_ptr, opart_ptr, mpart_ptr, lpart_ptr, T_k, seg_len, sm_scale, stride_qh, stride_kh, stride_kn, stride_vh, stride_vn, stride_oh, stride_os, stride_mh, GQA_GROUPS: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_D: tl.constexpr, D: tl.constexpr, D_V: tl.constexpr, HAS_BIAS: tl.constexpr, Q_TO: tl.constexpr=None, Q_SATURATE: tl.constexpr=False)
-def decode_attn_vec_grouped_kernel(q_ptr, k_ptr, v_ptr, bias_ptr, opart_ptr, mpart_ptr, lpart_ptr, T_k, seg_len, sm_scale, stride_qh, stride_kh, stride_kn, stride_vh, stride_vn, stride_oh, stride_os, stride_mh, GQA_GROUPS: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_D: tl.constexpr, D: tl.constexpr, D_V: tl.constexpr, HAS_BIAS: tl.constexpr, Q_TO: tl.constexpr=None, Q_SATURATE: tl.constexpr=False)
-    # One KV HEAD per program (grid = (B*H_kv, split))
+def decode_attn_vec_split_kernel(q_ptr, k_ptr, v_ptr, bias_ptr, opart_ptr, mpart_ptr, lpart_ptr, T_k, seg_len, T_BUCKET, sm_scale, stride_qh, stride_kh, stride_kn, stride_vh, stride_vn, stride_oh, stride_os, stride_mh, GQA_GROUPS: tl.constexpr, BLOCK_D: tl.constexpr, D: tl.constexpr, D_V: tl.constexpr, HAS_BIAS: tl.constexpr, Q_TO: tl.constexpr=None, Q_SATURATE: tl.constexpr=False, BLOCK_N: tl.constexpr=32)
+    # One query row per program and split of the keys (grid = (B*H_q, split)): the split-KV partials
 ```
 
 `nbxtensor.ops.depthwise_conv2d`
