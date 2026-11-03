@@ -1082,6 +1082,8 @@ def conv_depthwise2d_bias_kernel(input_ptr, weight_ptr, bias_ptr, output_ptr, N,
 ```python
 def conv_transpose2d_kernel(input_ptr, weight_ptr, output_ptr, N, C_in, IH, IW, C_out, KH, KW, OH, OW, stride_h, stride_w, pad_h, pad_w, dil_h, dil_w, C_in_per_g, C_out_per_g, BLOCK_SIZE: tl.constexpr)
     # Scatter-based transposed convolution kernel (groups + dilation aware).
+def col2im1d_kernel(y_ptr, out_ptr, C_out, K, L_in, L_out, stride, pad, BLOCK_SIZE: tl.constexpr, TAPS: tl.constexpr)
+    # The overlap-add of a 1-D transposed convolution computed as a GEMM: each output position gathers its taps.
 ```
 
 `nbxtensor.ops.copy`

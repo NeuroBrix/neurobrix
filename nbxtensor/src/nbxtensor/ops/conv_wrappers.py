@@ -257,6 +257,9 @@ def conv_transpose_wrapper(
     transposed=True (which it previously dropped when delegating 1D convs).
     """
     is_1d = (weight.ndim == 3)
+    _d = lambda v: v[0] if isinstance(v, (list, tuple)) else v        # noqa: E731
+    if is_1d and groups == 1 and _d(dilation) == 1 and _d(output_padding) == 0:
+        return _conv_transpose1d_gemm(x, weight, bias, _d(stride), _d(padding))
     if is_1d:
         x = x.unsqueeze(2)            # [N, C_in, 1, L]
         weight = weight.unsqueeze(2)  # [C_in, C_out/g, 1, K]
@@ -310,6 +313,41 @@ def conv_transpose_wrapper(
         output = _conv_bias_inplace(output, bias)
     if is_1d:
         output = output.squeeze(2)
+    return output
+
+
+def _conv_transpose1d_gemm(x, weight, bias, stride, padding):
+    """A 1-D transposed convolution (groups 1, dilation 1) as a GEMM and an overlap-add: Y = W^T [C_out * K, C_in] @
+    x [C_in, L_in] through `mm` (the matrix unit where the profile declares one), then `col2im1d_kernel` gathers each
+    output position's ceil(K / stride) taps. The scatter kernel looped over every input channel and tap per output
+    element: the vocoders' upsamplers on a V100 ran 20-307x slower than this (768 -> 384 channels, K 16, stride 8:
+    103 ms against 0.34 ms; torch eager 0.21 ms — the kernel-level benchmark, 2026-11-03). Same narrowing and output
+    dtype as `conv_transpose_wrapper`; `launch_keys.conv_launches` derives the GEMM's keys."""
+    from nbxtensor.ops.linalg_wrappers import mm
+    from nbxtensor.ops.conv_transpose2d import col2im1d_kernel
+    x_nbx = x.nbx_dtype if hasattr(x, 'nbx_dtype') else x.dtype
+    w_nbx = weight.nbx_dtype if hasattr(weight, 'nbx_dtype') else weight.dtype
+    if x_nbx != w_nbx:
+        _order = (NBXDtype.float16, NBXDtype.bfloat16, NBXDtype.float32)
+        narrowest = next(d for d in _order if d in (x_nbx, w_nbx))
+        x = x.to(narrowest) if x_nbx != narrowest else x
+        weight = weight.to(narrowest) if w_nbx != narrowest else weight
+    N, C_in, L_in = x.shape
+    _, C_out, K = weight.shape
+    L_out = (L_in - 1) * stride - 2 * padding + K
+    out_dtype = _core._NBX_COMPUTE_DTYPE if _core._NBX_COMPUTE_DTYPE is not None else x.dtype
+    output = NBXTensor.empty((N, C_out, L_out), device=x.device, dtype=out_dtype)
+    w_t = weight.contiguous().reshape(C_in, C_out * K).t()          # [C_out * K, C_in]
+    x_c = x.contiguous()
+    taps = -(-K // stride)
+    meta = _ew_meta(C_out * L_out)          # a gather of TAPS loads per element: the element-wise class's certified tile
+    for n in range(N):
+        y = mm(w_t, x_c[n]).contiguous()                                # [C_out * K, L_in]
+        set_device(y)
+        col2im1d_kernel[(C_out, triton.cdiv(L_out, meta['BLOCK_SIZE']))](
+            y, output[n], C_out, K, L_in, L_out, stride, padding, TAPS=taps, **meta)
+    if bias is not None:
+        output = _conv_bias_inplace(output.unsqueeze(2), bias).squeeze(2)
     return output
 
 

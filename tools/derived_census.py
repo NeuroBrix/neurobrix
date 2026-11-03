@@ -1357,7 +1357,8 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
                     tile_factor)
             else:
                 launches = LK.conv_launches(x_s, w_s, stride, padding, dilation, transposed, groups,
-                                            xd, wd, comp_d, conv_band_bytes)
+                                            xd, wd, comp_d, conv_band_bytes, native_bf16=has_native_bf16,
+                                            contract_half=contract.safe)
         elif kind == "aten::lstm":
             # aten::lstm(input, (h0, c0), params, has_biases, num_layers, dropout, train,
             # bidirectional, batch_first) — `lstm_wrapper`'s signature, the args as traced
