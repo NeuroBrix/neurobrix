@@ -157,7 +157,14 @@ def _announce_first_sweep(tuned):
         # cache, never in the directory.
         try:
             key = _atc.key_of(tuned, args, kwargs)
-        except Exception:
+        except Exception as exc:
+            # A key that cannot be formed cannot be looked up: in a confirmation run that is a refusal,
+            # never the autotuner's sweep behind a skipped lookup (the certified-only door, 2026-11-03)
+            if _confirm:
+                from nbxtensor.ops import autotune_certified as _cert
+                qual = _atc._qual_of(tuned) or getattr(getattr(tuned, "base_fn", None), "__name__", "?")
+                raise _cert.KeyNotCertified(f"CERTIFIED-ONLY: the launch key of {qual} cannot be formed "
+                                            f"({type(exc).__name__}: {exc}) — nothing to look up, never a sweep") from exc
             key = None
         # THE KEY RECORD (2026-09-21, the census doctrine): every key this call forms — served
         # from the directory, swept, or replayed — written as the certifier reads it, one door
