@@ -26,6 +26,7 @@ import argparse
 import json
 import subprocess
 import sys
+from pathlib import Path
 
 
 def _norm(t: str) -> list:
@@ -47,12 +48,27 @@ def wer(expected: str, got: str) -> dict:
             "wer": d[len(a)][len(b)] / max(1, len(a)), "expected": " ".join(a), "got": " ".join(b)}
 
 
+def _whisper_snapshot(model: str) -> str:
+    """The faster-whisper model's snapshot in the configured snapshots root — read there, never fetched: a bare model
+    name handed to WhisperModel downloads it into the Hugging Face cache (5.5 GB of faster-whisper found there,
+    tests/unit/workshop/test_the_hugging_face_cache_stays_empty.py, 2026-11-03). Refused by name when absent."""
+    root = Path(_atelier.root("hf_snapshots"))
+    for org in ("Systran", "mobiuslabsgmbh"):
+        snaps = sorted((root / f"models--{org}--faster-whisper-{model}" / "snapshots").glob("*"))
+        if snaps:
+            return str(snaps[-1])
+    raise SystemExit(f"ZERO FALLBACK: faster-whisper '{model}' is not in the snapshots root {root} — download it there "
+                     f"once (huggingface-cli download --cache-dir {root} Systran/faster-whisper-{model}), never into the "
+                     f"Hugging Face cache")
+
+
 def stt(path: str, language=None, model="base") -> dict:
-    """faster-whisper, in its own interpreter — nothing of this engine is loaded."""
+    """faster-whisper, in its own interpreter — nothing of this engine is loaded; the model read from the snapshots
+    root (`_whisper_snapshot`)."""
     code = (
         "import json,sys\n"
         "from faster_whisper import WhisperModel\n"
-        f"m=WhisperModel({model!r}, device='cpu', compute_type='int8')\n"
+        f"m=WhisperModel({_whisper_snapshot(model)!r}, device='cpu', compute_type='int8')\n"
         f"segs,info=m.transcribe({path!r}, language={language!r}, beam_size=5)\n"
         "t=' '.join(s.text.strip() for s in segs)\n"
         "print(json.dumps({'text':t,'language':info.language,'duration':info.duration}))\n"
