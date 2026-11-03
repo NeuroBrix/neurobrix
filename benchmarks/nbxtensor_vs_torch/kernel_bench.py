@@ -489,9 +489,15 @@ def out_of_class_row(inst, need: int, budget: int, cut_keys) -> dict:
     return row
 
 
-def compare_tiles(got_flat, ref_flat):
+def compare_tiles(got_flat, ref_flat, od: str | None = None):
     """(max |got - ref| / max |ref|, mean |got - ref| / max |ref|) over the two flat arrays, read TILE elements at a
-    time in float64 — `got_flat` may be a memory map: neither side is ever held whole in float64."""
+    time in float64 — `got_flat` may be a memory map: neither side is ever held whole in float64. The reference is
+    first ROUNDED to the output dtype `od` (the dtype's own range is part of the result: an fp16 product by -3.39e38 is
+    -inf in every fp16 implementation, its float64 reference finite — judged infinitely wrong before, the Dell's V100
+    run 2026-11-03), and elements equal there count as exact (matching infinities and NaNs included); the scale is the
+    largest FINITE reference value."""
+    import torch
+    rd = {"float16": torch.float16, "bfloat16": torch.bfloat16, "float32": torch.float32}.get(od or "")
     n = int(ref_flat.shape[0])
     if int(got_flat.shape[0]) != n:
         return float("inf"), float("inf")
@@ -499,12 +505,27 @@ def compare_tiles(got_flat, ref_flat):
     for a in range(0, n, TILE):
         g = np.asarray(got_flat[a:a + TILE], dtype=np.float64)
         r = np.asarray(ref_flat[a:a + TILE], dtype=np.float64)
-        d = np.abs(g - r)
+        if rd is not None:
+            r = torch.from_numpy(r).to(rd).double().numpy()
+        same = (g == r) | (np.isnan(g) & np.isnan(r))
+        d = np.where(same, 0.0, np.abs(g - r))
         mx = max(mx, float(d.max()) if d.size else 0.0)
         sm += float(d.sum())
-        rmax = max(rmax, float(np.abs(r).max()) if r.size else 0.0)
+        fin = np.abs(r[np.isfinite(r)])
+        rmax = max(rmax, float(fin.max()) if fin.size else 0.0)
     denom = max(rmax, 1e-30)
     return mx / denom, (sm / max(n, 1)) / denom
+
+
+def computed_dtypes(inst) -> list:
+    """The dtype the engine COMPUTES the op in, when the precision contract narrows it below what it reads and writes
+    (`contract.island == "narrow"`, or the contract `safe` on an op that is no fp32 island): an fp32 SDPA the contract
+    narrows to the fp16 compute dtype is bounded by fp16's rounding, never judged at fp32's tolerance (the Dell's V100
+    run, 2026-11-03: GLM-4.1V / MiniCPM-o, 1.4e-2 against 2e-3). [] otherwise."""
+    c = inst.get("contract") or {}
+    if c.get("island") == "narrow" or (c.get("safe") and c.get("island") != "fp32"):
+        return [str(inst["compute_dtype"])] if inst.get("compute_dtype") else []
+    return []
 
 
 def judge_row(row, inst, od: str, first, times, peak, how, errs, ref_note, compile_ms=None) -> dict:
@@ -513,7 +534,7 @@ def judge_row(row, inst, od: str, first, times, peak, how, errs, ref_note, compi
     med, p10, p90 = _stats(times)
     # the narrowest of what the op reads, writes, and what the container records it writes (the precision
     # contract rounds an output to the traced dtype: an fp32 island's result handed back in bf16)
-    tol = _bound(inst["dtypes"] + [od] + [str(d) for d in (inst.get("output_dtypes") or [])])
+    tol = _bound(inst["dtypes"] + [od] + [str(d) for d in (inst.get("output_dtypes") or [])] + computed_dtypes(inst))
     status, err, mean = "ok", None, None
     if errs is not None:
         err, mean = errs
@@ -571,7 +592,7 @@ def torch_work(inst, dev, res, warmup, reps, compile_modes, nbx: dict | None):
         f = Path(nbx["file"])
         try:
             got = np.load(f, mmap_mode="r")
-            errs = None if ref is None else compare_tiles(got, ref)
+            errs = None if ref is None else compare_tiles(got, ref, nbx["od"])
             del got
             yield {"row": judge_row(row, inst, nbx["od"], nbx["first"], nbx["times"], nbx["peak"], nbx["how"],
                                     errs, ref_note)}
@@ -583,8 +604,8 @@ def torch_work(inst, dev, res, warmup, reps, compile_modes, nbx: dict | None):
         row = _row(inst, name)
         try:
             out, first, times, peak, how = run_torch(inst, arrays, dev, res, warmup, reps, mode)
-            errs = None if ref is None else compare_tiles(_host_flat(out), ref)
             od = _dtype_of(out)
+            errs = None if ref is None else compare_tiles(_host_flat(out), ref, od)
             del out
             med = _stats(times)[0]
             # a compiled call's first launch carries the compilation: its time apart from the execution's

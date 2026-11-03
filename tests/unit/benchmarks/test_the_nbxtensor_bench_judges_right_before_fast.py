@@ -362,3 +362,30 @@ def test_the_guard_counts_a_convolution_s_reference_unfold_row():
     assert K.instance_bytes(inst) - K.instance_bytes(base) == row + 1 * 256 * 26 * 160 * 160 * 8
     # this instance swapped the Mac whole (~34 GB of unfold); banded it fits the 18 GB device's op budget
     assert K.instance_bytes(inst) < K.device_budget_bytes({"devices": [{"memory_mb": 18186}]})
+
+
+def test_an_overflow_the_output_dtype_makes_is_judged_against_the_rounded_reference():
+    # granite-speech's projector (the Dell's V100 run, 03/11): an fp16 product by -3.39e38 is -inf in every fp16
+    # implementation; its float64 reference is finite — the judge compares with the reference rounded to fp16
+    pytest.importorskip("torch")
+    ref = np.array([-3.39e38 * 2.0, 1.5, -2.25], dtype=np.float64)
+    got = np.array([-np.inf, 1.5, -2.25], dtype=np.float64)
+    err, mean = K.compare_tiles(got, ref, "float16")
+    assert err == 0.0 and mean == 0.0
+    err, _ = K.compare_tiles(np.array([-np.inf, 1.5, -2.0]), ref, "float16")
+    assert 0 < err < float("inf")                          # a real difference beside it is still measured
+    assert K.compare_tiles(got, ref)[0] != 0.0              # unrounded (no output dtype), the overflow stays a difference
+
+
+def test_an_op_the_contract_narrows_is_bounded_by_the_dtype_it_is_computed_in():
+    # an fp32 SDPA the precision contract narrows to the fp16 compute dtype (GLM-4.1V, MiniCPM-o: 1.4e-2 vs 2e-3)
+    inst = {"dtypes": ["float32", "float32", "float32", "float32"], "output_dtypes": ["float32"],
+            "compute_dtype": "float16", "contract": {"safe": True, "island": "narrow"}}
+    assert K.computed_dtypes(inst) == ["float16"]
+    row = K.judge_row({}, inst, "float32", 1.0, [1.0], 0.0, "x", (1.4e-2, 1e-3), "")
+    assert row["status"] == "ok" and row["tolerance"] == K.TOLERANCE["float16"]
+    kept = {**inst, "contract": {"safe": True, "island": "fp32"}}        # an fp32 island stays judged at fp32
+    assert K.computed_dtypes(kept) == []
+    assert K.judge_row({}, kept, "float32", 1.0, [1.0], 0.0, "x", (1.4e-2, 1e-3), "")["status"] == "wrong"
+    unsafe = {**inst, "contract": {"safe": False, "island": None}}       # no narrowing: the op's own dtypes
+    assert K.computed_dtypes(unsafe) == []
