@@ -42,3 +42,17 @@ def test_a_census_shadow_writes_no_curve(tmp_path, monkeypatch):
     assert RR.record("m", "model", {"L0": [[0, 1]]}, 2, 4, "a shadow") is None
     assert not RR.path("m", "model").exists()
 
+
+
+def test_the_record_carries_every_call_s_routing_and_its_frequency(tmp_path, monkeypatch):
+    """The record an expert cache's policy is chosen on (the supervisor 2026-11-03 12:25): every call of the run in
+    order — a prompt's routed set included, which fills the slots before the decode — and each layer's routing count
+    per expert; the curve stays the decode's. What it would do if the code were wrong: a sequence without the prompt
+    (the policy simulated from empty slots, as the decode-only curve misled 2026-11-03 12:12), or no frequency — RED."""
+    monkeypatch.setattr(RR, "_root", lambda: tmp_path)
+    t = RR.ExpertTrace("m", "model", top_k=2, n_experts=4)
+    t.note("L0", [0, 1, 2]); t.note("L0", [0, 1]); t.note("L0", [1, 3])          # a prompt, then two decode tokens
+    data = json.loads(t.write("test").read_text())
+    assert data["sequence"] == {"L0": [[0, 1, 2], [0, 1], [1, 3]]}
+    assert data["frequency"] == {"L0": [2, 3, 1, 1]}
+    assert data["tokens"] == 2 and data["curve"]["2"] == 0.25

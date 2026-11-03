@@ -70,10 +70,19 @@ def load(model: str, component: str) -> Optional[Dict[str, object]]:
     return data
 
 
+def frequency(sequence: Dict[str, List[List[int]]], n_experts: int) -> Dict[str, List[int]]:
+    """{layer: [how many calls routed expert e, for e in 0..n_experts-1]} over every call of `sequence`."""
+    counted = {str(layer): collections.Counter(int(e) for routed in calls for e in routed) for layer, calls in sequence.items()}
+    return {layer: [c[e] for e in range(int(n_experts))] for layer, c in counted.items()}
+
+
 def record(model: str, component: str, traces: Dict[str, List[List[int]]], top_k: int, n_experts: int,
-           source: str) -> Optional[Path]:
-    """Write the curve of `traces` for `model`/`component` unless one is recorded already; returns the path written.
-    Under the census shadow nothing is written: its routing is read from values the shadow invents."""
+           source: str, sequence: Optional[Dict[str, List[List[int]]]] = None) -> Optional[Path]:
+    """Write the curve of `traces` (the decode calls) for `model`/`component` unless one is recorded already, with,
+    when `sequence` is given (every call of the run in order, a prompt's routed set included), each layer's routing
+    `frequency` per expert and the `sequence` itself — what an expert cache's policy is chosen on (the supervisor
+    2026-11-03 12:25: one record, no new mechanism); returns the path written. Under the census shadow nothing is
+    written: its routing is read from values the shadow invents."""
     from neurobrix.kernels import census
     if census.active():
         return None
@@ -83,6 +92,9 @@ def record(model: str, component: str, traces: Dict[str, List[List[int]]], top_k
     tokens = max((len(c) for c in traces.values()), default=0)
     data = {"curve": {str(k): v for k, v in curve(traces, top_k, n_experts).items()}, "tokens": tokens,
             "layers": sum(1 for c in traces.values() if c), "top_k": top_k, "n_experts": n_experts, "source": source}
+    if sequence:
+        data["frequency"] = frequency(sequence, n_experts)
+        data["sequence"] = {str(k): v for k, v in sequence.items()}
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, indent=1, sort_keys=True))
@@ -91,23 +103,27 @@ def record(model: str, component: str, traces: Dict[str, List[List[int]]], top_k
 
 
 class ExpertTrace:
-    """Each decode call's routed set per layer, noted by an expert store (`acquire`), written as the curve when the
-    store is released. A call routing more than `top_k` experts (a prefill) is not a decode token and is not noted."""
+    """Each call's routed set per layer, noted by an expert store (`acquire`), written when the store is released: the
+    curve from the decode calls (a call routing more than `top_k` experts is a prefill, not a decode token), the
+    frequency and the sequence from every call."""
 
     def __init__(self, model: str, component: str, top_k: int, n_experts: int):
         self.model, self.component, self.top_k, self.n_experts = model, component, int(top_k), int(n_experts)
         self.calls: Dict[str, List[List[int]]] = {}
+        self.sequence: Dict[str, List[List[int]]] = {}     # every call, a prompt's included, in order
         self.written = False
         # a generation's store is not released before the process ends: the decode it saw is written then
         import atexit
         atexit.register(self.write, "recorded by an expert store's decode (written at the process's end)")
 
     def note(self, layer, routed) -> None:
+        r = sorted(int(e) for e in routed)
+        self.sequence.setdefault(str(layer), []).append(r)
         if len(routed) <= self.top_k:
-            self.calls.setdefault(str(layer), []).append(sorted(int(e) for e in routed))
+            self.calls.setdefault(str(layer), []).append(r)
 
     def write(self, source: str) -> Optional[Path]:
         if self.written or not any(self.calls.values()):
             return None
         self.written = True
-        return record(self.model, self.component, self.calls, self.top_k, self.n_experts, source)
+        return record(self.model, self.component, self.calls, self.top_k, self.n_experts, source, self.sequence)
