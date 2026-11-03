@@ -2230,7 +2230,7 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
         # same oracle and timed with the same bench; the faster route is the one the runtime serves.
         units = []
         from nbxtensor.ops.linalg_wrappers import matrix_unit_runs
-        for tile, run_unit in matrix_unit_runs(tuner, args, kwargs):
+        for tile, run_unit in matrix_unit_runs(tuner, args, kwargs) + _fused_moe_unit_runs(tuner, args, kwargs):
             poison()
             try:
                 run_unit()
@@ -2346,6 +2346,41 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
             "could_not_run": state["unrun"], "timings": state["timings"],
             **({"unit": state["unit"]} if state.get("unit") else {})}
 
+
+
+def _fused_moe_unit_runs(tuner, args, kwargs) -> List[Tuple[Dict[str, Any], Any]]:
+    """(tile, run) for each `matrix_unit.mm` tile of the profile for a `fused_moe_kernel` launch on experts of the
+    unit's operand dtype: the routing the launch's alignment holds, read back and aligned again at the tile's rows by
+    the engine's own `moe_align_block_size`, each run writing the launch's output through `invoke_fused_moe_m8n8k4`
+    (the route `_fused_moe_pass` takes when the certificate names the unit). Empty for any other launch."""
+    if getattr(getattr(tuner, "base_fn", None), "__name__", None) != "fused_moe_kernel":
+        return []
+    from nbxtensor.ops import moe_wrappers as MW
+    from nbxtensor.tensor import NBXTensor
+    from neurobrix.triton.moe import moe_align_block_size, _BLOCK_SIZE_M
+    from nbxtensor.memory.allocator import DeviceAllocator
+    named = dict(zip(tuner.arg_names, args))
+    a = named["a_ptr"]
+    tiles = MW.fused_moe_unit_tiles(a)
+    if not tiles:
+        return []
+    nv, n_exp = int(named["num_valid_tokens"]), int(named["NUM_EXPERTS"])
+    sids = np.asarray(named["sorted_token_ids_ptr"].numpy()).ravel()
+    eids = np.asarray(named["expert_ids_ptr"].numpy()).ravel()
+    npad = int(np.asarray(named["num_tokens_post_padded_ptr"].numpy()).ravel()[0])
+    route = np.zeros(nv, dtype=np.int64)
+    for b in range(npad // _BLOCK_SIZE_M):
+        pairs = sids[b * _BLOCK_SIZE_M:(b + 1) * _BLOCK_SIZE_M]
+        route[pairs[pairs < nv]] = int(eids[b])
+    route_t = NBXTensor.from_numpy(route)
+    out = []
+    for tile in tiles:
+        s_, e_, n_ = moe_align_block_size(route_t, tile["block_m"], n_exp, DeviceAllocator.get_device())
+        out.append((tile, (lambda t=tile, s_=s_, e_=e_, n_=n_: MW.invoke_fused_moe_m8n8k4(
+            a, named["expert_ptrs_ptr"], named["c_ptr"], named["topk_weights_ptr"], s_, e_, n_, int(named["N"]),
+            int(named["K"]), int(named["stride_bk"]), int(named["stride_bn"]), int(kwargs["top_k"]), t,
+            mul_routed_weight=bool(kwargs["MUL_ROUTED_WEIGHT"]), topk_divide=bool(kwargs.get("TOPK_DIVIDE", True))))))
+    return out
 
 
 def _bind_hardware_profile() -> str:

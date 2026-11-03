@@ -1385,6 +1385,14 @@ def silu_mul_split_kernel(gate_ptr, up_ptr, output_ptr, M, N, stride_gm, stride_
     # Fused SwiGLU with split gate/up tensors
 ```
 
+`nbxtensor.ops.fused_moe_m8n8k4`
+
+```python
+def fused_moe_m8n8k4_kernel(A, expert_ptrs, C, topk_w, sorted_ids, expert_ids, num_post_padded, N, K, EM, num_valid, stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn, MUL_ROUTED_WEIGHT: gl.constexpr, TOP_K: gl.constexpr, TOPK_DIVIDE: gl.constexpr, B_K_CONTIG: gl.constexpr, MB: gl.constexpr, NB: gl.constexpr, BK: gl.constexpr, GROUP_M: gl.constexpr, L: gl.constexpr, LA: gl.constexpr, LB: gl.constexpr, GA: gl.constexpr, GB: gl.constexpr)
+    # the fused MoE grouped GEMM on the m8n8k4 matrix unit: fused_moe_kernel's contract, fp16 experts
+```
+
+
 `nbxtensor.ops.fused_upsample_conv`
 
 ```python
@@ -1758,6 +1766,12 @@ def measure_miss_copy(nbytes: int, reps: int, blocks, warps, experts: int)
 ```python
 def invoke_fused_moe(hidden_states, expert_ptrs, output, topk_weights, sorted_token_ids, expert_ids, num_tokens_post_padded, N, K, stride_bk, stride_bn, top_k, mul_routed_weight=False, topk_divide=True)
     # Launch fused MoE grouped GEMM kernel (absolute pointer table).
+def fused_moe_unit_tiles(hidden_states)
+    # the matrix-unit tiles a fused MoE launch on these activations can run at (fp16 only): its certification's candidates
+def fused_moe_unit_tile(hidden_states, expert_ptrs, output, topk_weights, sorted_token_ids, expert_ids, num_tokens_post_padded, N, K, stride_bk, stride_bn, top_k, mul_routed_weight=False, topk_divide=True)
+    # the matrix unit's tile a fused MoE launch runs at when its certificate measured the unit faster, else None
+def invoke_fused_moe_m8n8k4(hidden_states, expert_ptrs, output, topk_weights, sorted_token_ids, expert_ids, num_tokens_post_padded, N, K, stride_bk, stride_bn, top_k, tile, mul_routed_weight=False, topk_divide=True)
+    # invoke_fused_moe on the m8n8k4 matrix unit at `tile`, the routing aligned at the tile's rows
 def invoke_fused_moe_wna16(hidden_states, qw_ptrs, sc_ptrs, mn_ptrs, output, topk_weights, sorted_token_ids, expert_ids, num_tokens_post_padded, N, K, stride_qk, stride_qn, stride_sg, stride_sn, top_k, mul_routed_weight=False, topk_divide=True)
     # Launch the W4 fused MoE grouped GEMM (int4-g128-asym experts, in-register dequant — byte-gated vs fused_moe_fp32b_kernel).
 ```

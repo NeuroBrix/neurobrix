@@ -14,6 +14,7 @@ The first release, 0.0.1, is in preparation.
   `backend/devices/amd/` (CDNA, CDNA2, CDNA3) hold the facts its kernels read — tiles, shared memory, registers,
   warp size, the matrix unit, the autotune ladders and screen, the attention thresholds — as Apple's did; an
   application's vendor file only adds its own keys beside them (a key in both is refused).
+- **The fused mixture-of-experts GEMM runs on the V100's matrix unit** (`fused_moe_m8n8k4_kernel`, `moe_wrappers.invoke_fused_moe_m8n8k4`): the FMA kernel's contract — the alignment's blocks, the expert pointer table, the top-k division, the routed weight — on the m8n8k4 unit at the profile's tiles, the routing aligned at the tile's rows. Its certificate decides per key against the FMA kernel (`fused_moe_unit_tile`); on a V100 the unit measured 2.5-5x faster on every prefill projection timed (DeepSeek-Coder-V2-Lite's 20-token gate 2.49 -> 0.96 ms, Qwen3-30B-A3B's 512-token gate 7.24 -> 1.40 ms).
 - **nbxtensor names the device in force publicly**: `nbxtensor.backend.device_files.in_force()`, `for_arch(arch)` and `forget()`, and `nbxtensor.backend.launcher.bind_target(target)` for a derivation that launches nothing; the engine's key census and paged KV cache read them instead of the library's private configuration module.
 
 ### Changed

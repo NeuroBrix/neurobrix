@@ -65,6 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   library's device files (nbxtensor's changelog), split by `tools/split_vendor_files.py` with the proof that the two
   halves merge back exactly; every reader takes the device whole (`loader.vendor_file`), the certifier's pipelining
   depths included.
+- **A mixture-of-experts layer's prefill runs its expert projections on the V100's matrix unit where certified faster** (2.5-5x per projection measured; nbxtensor's changelog: the fused MoE on the matrix unit); `neurobrix autotune certify` measures the unit beside the FMA kernel for every fused MoE key.
 - **`neurobrix autotune certify` certifies the paged decode attention**: the Triton engine's cached decode steps' keys are derived from the plan's KV cache and the page the session derives (nbxtensor's changelog: the paged decode).
 - **`neurobrix autotune certify` measures the matrix unit beside the FMA kernel**: a GEMM key the V100's m8n8k4 unit can take is certified with the unit's tiles timed against the same oracle as the FMA configurations, and its entry names the faster route (nbxtensor's changelog: the matrix product's route).
 - **`neurobrix autotune certify` certifies the vector decode attention**: its keys are derived at every decode step of an attention on the math route (nbxtensor's changelog: the vector decode).

@@ -602,6 +602,7 @@ def execute_moe_fused(
             sorted_token_ids, expert_ids, num_tokens_post_padded,
             top_k, M, K, N_gate,
             _diag_dump=_dump if _moe_diag else None,
+            flat_indices=flat_indices if dev == act_dev else _xfer(flat_indices, dev), num_experts=num_experts,
         )
 
         if dev != act_dev:
@@ -825,9 +826,11 @@ def _fused_moe_pass(
     hidden_states, tables, dev, flat_scores,
     sorted_token_ids, expert_ids, num_tokens_post_padded,
     top_k, M, K, N_gate,
-    _diag_dump=None,
+    _diag_dump=None, flat_indices=None, num_experts=None,
 ):
-    """Three fused GEMM passes + silu activation."""
+    """Three fused GEMM passes + silu activation. A projection whose certificate chose the matrix unit
+    (`moe_wrappers.fused_moe_unit_tile`) runs there, the routing aligned again at the unit tile's rows (`flat_indices`,
+    `num_experts`); the others on the FMA kernel at the alignment given."""
     dt = hidden_states._dtype
     total_tokens = M * top_k
     padded = sorted_token_ids.shape[0]
@@ -847,6 +850,8 @@ def _fused_moe_pass(
               f"expert_ids.numel={expert_ids.numel()} M={M} top_k={top_k} "
               f"N_gate={N_gate} K={K}", file=_sys.stderr, flush=True)
 
+    unit_aligned = {}                    # the routing aligned at a unit tile's rows, once per block size
+
     def _proj(name, x, out, N_p, K_p, mul_routed, topk_div=True):
         """One grouped-GEMM pass — dense or W4 per the tables."""
         if tables.quantized:
@@ -862,14 +867,22 @@ def _fused_moe_pass(
                 top_k, mul_routed_weight=mul_routed, topk_divide=topk_div,
             )
         else:
-            _nbx_moe_wrappers.invoke_fused_moe(
-                x, getattr(tables, f"{name}_ptrs")[dev], out, flat_scores,
-                sorted_token_ids, expert_ids, num_tokens_post_padded,
-                N_p, K_p,
-                getattr(tables, f"{name}_stride_bk")[dev],
-                getattr(tables, f"{name}_stride_bn")[dev],
-                top_k, mul_routed_weight=mul_routed, topk_divide=topk_div,
-            )
+            launch = (x, getattr(tables, f"{name}_ptrs")[dev], out, flat_scores,
+                      sorted_token_ids, expert_ids, num_tokens_post_padded,
+                      N_p, K_p, getattr(tables, f"{name}_stride_bk")[dev], getattr(tables, f"{name}_stride_bn")[dev],
+                      top_k)
+            tile = (_nbx_moe_wrappers.fused_moe_unit_tile(*launch, mul_routed_weight=mul_routed, topk_divide=topk_div)
+                    if flat_indices is not None else None)
+            if tile is None:
+                _nbx_moe_wrappers.invoke_fused_moe(*launch, mul_routed_weight=mul_routed, topk_divide=topk_div)
+                return
+            bm = int(tile["block_m"])
+            if bm not in unit_aligned:
+                unit_aligned[bm] = moe_align_block_size(flat_indices, bm, num_experts, dev)
+            sids, eids, npad = unit_aligned[bm]
+            _nbx_moe_wrappers.invoke_fused_moe_m8n8k4(
+                x, launch[1], out, flat_scores, sids, eids, npad, N_p, K_p, launch[9], launch[10], top_k, tile,
+                mul_routed_weight=mul_routed, topk_divide=topk_div)
 
     gate_out = NBXTensor.zeros((padded, N_gate), dtype=dt, device=f"cuda:{dev}")
     _proj("gate", hidden_states, gate_out, N_gate, K, False)

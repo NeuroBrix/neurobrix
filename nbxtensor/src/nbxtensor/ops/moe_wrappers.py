@@ -218,30 +218,83 @@ def invoke_fused_moe(
     # (immune to every sync barrier, hidden under CUDA_LAUNCH_BLOCKING
     # because the heap layout — not timing — decided whether the OOB
     # page was mapped).
+    grid, args, kwargs = _fused_moe_launch(hidden_states, expert_ptrs, output, topk_weights, sorted_token_ids,
+                                           expert_ids, num_tokens_post_padded, N, K, stride_bk, stride_bn, top_k,
+                                           mul_routed_weight, topk_divide)
+    set_device(hidden_states)
+    fused_moe_kernel[grid](*args, **kwargs)
+
+
+def _fused_moe_launch(hidden_states, expert_ptrs, output, topk_weights, sorted_token_ids, expert_ids,
+                      num_tokens_post_padded, N, K, stride_bk, stride_bn, top_k, mul_routed_weight, topk_divide):
+    """(grid, args, kwargs) of `fused_moe_kernel` for this launch — one definition for the launch and for the key its
+    route reads (`fused_moe_unit_tile`)."""
+    M = hidden_states.shape[0]
     num_valid_tokens = topk_weights.shape[0]
     EM = sorted_token_ids.shape[0]
-
     if M < _MOE_BM:
         EM = min(EM, M * top_k * _MOE_BM)
-
     # the tile beyond the alignment's row block is the key's certified configuration (`fused_moe._FUSED_MOE_CONFIGS`)
     grid = lambda META: (triton.cdiv(EM, _MOE_BM) * triton.cdiv(N, META['BLOCK_SIZE_N']),)    # noqa: E731
-    set_device(hidden_states)
+    args = (hidden_states, expert_ptrs, output, topk_weights, sorted_token_ids, expert_ids, num_tokens_post_padded,
+            N, K, EM, num_valid_tokens, _lk.bucket_of("M", num_valid_tokens), expert_ptrs.numel(),
+            hidden_states.stride(0), hidden_states.stride(1), stride_bk, stride_bn, output.stride(0), output.stride(1))
+    kwargs = dict(BLOCK_SIZE_M=_MOE_BM, MUL_ROUTED_WEIGHT=mul_routed_weight, top_k=top_k,
+                  compute_type=hidden_states.dtype, TOPK_DIVIDE=topk_divide)
+    return grid, args, kwargs
 
-    fused_moe_kernel[grid](
-        hidden_states, expert_ptrs, output,
-        topk_weights,
-        sorted_token_ids, expert_ids, num_tokens_post_padded,
-        N, K, EM, num_valid_tokens, _lk.bucket_of("M", num_valid_tokens), expert_ptrs.numel(),
-        hidden_states.stride(0), hidden_states.stride(1),
-        stride_bk, stride_bn,
-        output.stride(0), output.stride(1),
-        BLOCK_SIZE_M=_MOE_BM,
-        MUL_ROUTED_WEIGHT=mul_routed_weight,
-        top_k=top_k,
-        compute_type=hidden_states.dtype,
-        TOPK_DIVIDE=topk_divide,
-    )
+
+def fused_moe_unit_tile(hidden_states, expert_ptrs, output, topk_weights, sorted_token_ids, expert_ids,
+                        num_tokens_post_padded, N, K, stride_bk, stride_bn, top_k, mul_routed_weight=False,
+                        topk_divide=True):
+    """The matrix unit's tile (a `matrix_unit.mm` row) a fused MoE launch runs at when its certificate measured the
+    unit faster than the FMA kernel (`autotune_certified.unit_choice`, the FMA launch's key), else None. The unit takes
+    experts of its operand dtype only (no split), and a launch with no certificate keeps the FMA kernel; a census
+    shadow and the certifier's sweep take the FMA kernel (the unit's tiles are measured beside it,
+    `matrix_unit_runs`). The arguments are `invoke_fused_moe`'s at the FMA alignment."""
+    from nbxtensor.ops._configs import matrix_unit
+    from nbxtensor.ops import autotune_certified as _cert
+    from nbxtensor.ops.launch_observer import launch_observer
+    if hidden_states.nbx_dtype != NBXDtype.float16 or not (matrix_unit() or {}).get("mm"):
+        return None
+    if launch_observer().active() or _cert.certifying():
+        return None
+    _grid, args, kwargs = _fused_moe_launch(hidden_states, expert_ptrs, output, topk_weights, sorted_token_ids,
+                                            expert_ids, num_tokens_post_padded, N, K, stride_bk, stride_bn, top_k,
+                                            mul_routed_weight, topk_divide)
+    chosen = _cert.unit_choice(fused_moe_kernel, args, kwargs)
+    return chosen[1] if chosen is not None and chosen[0] == "unit" else None
+
+
+def fused_moe_unit_tiles(hidden_states):
+    """The matrix-unit tiles a fused MoE launch on these activations can run at (`matrix_unit.mm` of the profile in
+    force, the unit's operand dtype only): the candidates its certification measures beside the FMA kernel."""
+    from nbxtensor.ops._configs import matrix_unit
+    from nbxtensor.ops.autotune_certified import _UNIT_TILE_FIELDS
+    if hidden_states.nbx_dtype != NBXDtype.float16:
+        return []
+    return [{f: int(row[f]) for f in _UNIT_TILE_FIELDS} for row in ((matrix_unit() or {}).get("mm") or [])]
+
+
+def invoke_fused_moe_m8n8k4(hidden_states, expert_ptrs, output, topk_weights, sorted_token_ids, expert_ids,
+                            num_tokens_post_padded, N, K, stride_bk, stride_bn, top_k, tile, mul_routed_weight=False,
+                            topk_divide=True):
+    """`invoke_fused_moe` on the m8n8k4 matrix unit (`fused_moe_m8n8k4_kernel`) at `tile`; the routing aligned at the
+    tile's rows (`moe_align_block_size(..., tile["block_m"], ...)`)."""
+    from nbxtensor.ops.fused_moe_m8n8k4 import fused_moe_m8n8k4_kernel
+    from nbxtensor.ops.matmul_m8n8k4 import mm_layouts
+    BM, BN, BK = int(tile["block_m"]), int(tile["block_n"]), int(tile["block_k"])
+    WM, WN = int(tile["warps_m"]), int(tile["warps_n"])
+    EM = sorted_token_ids.shape[0]
+    b_k_contig = stride_bk == 1 and N > 1
+    set_device(hidden_states)
+    fused_moe_m8n8k4_kernel[(triton.cdiv(EM, BM) * triton.cdiv(N, BN),)](
+        hidden_states, expert_ptrs, output, topk_weights, sorted_token_ids, expert_ids, num_tokens_post_padded,
+        N, K, EM, topk_weights.shape[0],
+        hidden_states.stride(0), hidden_states.stride(1), stride_bk, stride_bn, output.stride(0), output.stride(1),
+        MUL_ROUTED_WEIGHT=bool(mul_routed_weight), TOP_K=int(top_k), TOPK_DIVIDE=bool(topk_divide),
+        B_K_CONTIG=b_k_contig, MB=BM // 16, NB=BN // 16, BK=BK, GROUP_M=int(tile["group_m"]),
+        num_warps=WM * WN, **mm_layouts(BM // 16, BN // 16, WM, WN, BK, b_k_contig))
 
 
 def invoke_fused_moe_wna16(
