@@ -76,6 +76,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 ### Changed
+- **The tiling bricks refuse what they cannot place instead of falling back**: a chunked 3-D convolution of the
+  Triton engine whose wrapper cannot be imported raises instead of running PyTorch's; an in-place add whose target
+  is neither engine's tensor raises instead of computing a plain sum; the S5 memory audit stays on the PyTorch
+  engine. One NBXTensor test and one zeros helper serve both tiling bricks.
 - **The NVIDIA and AMD vendor files keep only the engine's keys**: the facts nbxtensor's kernels read moved to the
   library's device files (nbxtensor's changelog), split by `tools/split_vendor_files.py` with the proof that the two
   halves merge back exactly; every reader takes the device whole (`loader.vendor_file`), the certifier's pipelining

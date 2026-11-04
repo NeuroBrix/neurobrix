@@ -28,8 +28,7 @@ from typing import Any, Callable, Dict, List, Sequence
 import numpy as np
 
 
-def _is_nbx(t: Any) -> bool:
-    return hasattr(t, "to_cuda") and hasattr(t, "_device")
+from neurobrix.core.runtime.tensor_compat import is_nbx_tensor as _is_nbx  # noqa: E402 — the one NBXTensor test
 
 
 def _zeros(ref: Any, shape: Sequence[int]) -> Any:

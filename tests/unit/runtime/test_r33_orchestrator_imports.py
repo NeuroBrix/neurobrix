@@ -62,6 +62,7 @@ ORCHESTRATOR_MODULES = [
     "neurobrix.core.runtime.resolution.input_synthesizer",
     "neurobrix.core.runtime.resolution.output_extractor",
     "neurobrix.core.module.tiling_engine",
+    "neurobrix.core.module.vendor_tiling",
     "neurobrix.core.runtime.graph_executor",
     "neurobrix.core.runtime.factory",
     "neurobrix.core.runtime.executor",

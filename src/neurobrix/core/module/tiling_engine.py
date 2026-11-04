@@ -38,11 +38,9 @@ from nbxtensor.ops import tiling_sizes as _tsz
 logger = logging.getLogger(__name__)
 
 
-def _is_nbx_tensor(t: Any) -> bool:
-    """Duck-typed NBXTensor check (no torch/NBX import needed here). The
-    triton path feeds NBXTensors; the compiled path feeds torch.Tensors.
-    Lets the tiling brick stay mode-polymorphic without a hard dependency."""
-    return hasattr(t, "to_cuda") and hasattr(t, "_device")
+# The one NBXTensor test both engines' bricks share (core/runtime/tensor_compat: no torch import): the Triton path feeds
+# NBXTensors, the compiled path torch tensors; this file's own duck-typed copy is gone.
+from neurobrix.core.runtime.tensor_compat import is_nbx_tensor as _is_nbx_tensor  # noqa: E402
 
 
 def _collect_arg_tids(arg, out_set) -> None:
@@ -480,18 +478,11 @@ class TilingEngine:
         # transformer on cuda:0, VAE on cuda:2), so allocating on
         # input_tensor.device then mixed cuda:0 + cuda:2 in the accumulate add.
         # For single-device placement the two devices coincide -> no-op.
-        if _is_nbx_tensor(input_tensor):
-            from nbxtensor.tensor import NBXTensor
-            dev = (f"cuda:{getattr(first_result, '_device_idx', 0)}"
-                   if first_result._device == "cuda" else first_result._device)
-            output = NBXTensor.zeros(out_shape, dtype=first_result.dtype, device=dev)
-            weight = NBXTensor.zeros(weight_shape, dtype=first_result.dtype, device=dev)
-        else:
-            import torch
-            output = torch.zeros(
-                *out_shape, device=first_result.device, dtype=first_result.dtype)
-            weight = torch.zeros(
-                *weight_shape, device=first_result.device, dtype=first_result.dtype)
+        # One engine's zeros, decided from the tile's own result (the feather weights below read the same tensor),
+        # one helper for this brick and the vendor tilings (`vendor_tiling._zeros`).
+        from neurobrix.core.module.vendor_tiling import _zeros as _zeros_like
+        output = _zeros_like(first_result, out_shape)
+        weight = _zeros_like(first_result, weight_shape)
 
         if down:
             rh = ts // sf
@@ -621,7 +612,7 @@ class TilingEngine:
                 return
             try:
                 from nbxtensor.memory.allocator import DeviceAllocator as _DA
-                live = sum(_DA._cuda_live_bytes.values())
+                live = _DA.memory_allocated()
                 pooled = sum(_DA._POOL.cached.values())
             except Exception:
                 live = pooled = -1
@@ -811,15 +802,11 @@ def conv3d_chunked(input_tensor, weight, bias=None, stride=1, padding=0, dilatio
     engine: NBXTensor -> `wrappers.conv3d_chunked_wrapper` (the kt-conv2d chunked path); a torch
     tensor -> F.conv3d over the same temporal output chunks, each chunk's input the frames its
     receptive field reads. Chunks of `tiling_sizes.chunk_frames(frame bytes)` output frames."""
-    try:
-        from nbxtensor.tensor import NBXTensor
-        if isinstance(input_tensor, NBXTensor):
-            from nbxtensor.ops import wrappers as _w
-            from nbxtensor.ops import conv_wrappers as _nbx_conv_wrappers  # the family the moved names live in (M2 split)
-            return _nbx_conv_wrappers.conv3d_chunked_wrapper(input_tensor, weight, bias, stride, padding, dilation,
-                                             transposed, output_padding, groups)
-    except ImportError:
-        pass
+    if _is_nbx_tensor(input_tensor):
+        # an import that fails here is an error, never a drop to the torch path below (it was `except ImportError: pass`)
+        from nbxtensor.ops import conv_wrappers as _nbx_conv_wrappers  # the family the moved names live in (M2 split)
+        return _nbx_conv_wrappers.conv3d_chunked_wrapper(input_tensor, weight, bias, stride, padding, dilation,
+                                                         transposed, output_padding, groups)
     import torch
     import torch.nn.functional as F
 
@@ -1635,33 +1622,23 @@ class OpLevelTilingEngine:
                     if isinstance(target, NBXTensor):
                         return add_inplace_nbx(target, other,
                                                alpha=float(alpha))
-                    # Torch path (compiled / sequential modes).
+                    if not is_torch_tensor(target):
+                        # neither engine's tensor: a named error, never a plain `+` (R33: torch is not imported
+                        # before the type says it is the compiled engine's)
+                        raise TypeError(
+                            f"ZERO FALLBACK: an in-place add met a {type(target).__name__} as its target: neither "
+                            f"an NBXTensor nor a torch tensor")
+                    # Torch path (compiled / sequential modes): `other` cast to the target's dtype where the
+                    # promotion keeps the target's (the NBX wrapper's rule); a wider result is the op's own
+                    # `torch.add` in a new buffer, never written into the narrower target.
                     import torch
-                    if is_torch_tensor(target):
-                        # Cast `other` to target's dtype if needed (mirror
-                        # the NBX wrapper's behaviour). If target is the
-                        # narrower precision, fall back to non-in-place
-                        # `torch.add` so the upcast happens in the new
-                        # buffer instead of corrupting target.
-                        if hasattr(other, 'dtype') and other.dtype != target.dtype:
-                            try:
-                                # Wider-or-equal dtype check via a tiny
-                                # promotion: if torch's promotion picks
-                                # target's dtype, in-place is safe.
-                                promo = torch.promote_types(target.dtype,
-                                                            other.dtype)
-                                if promo == target.dtype:
-                                    other = other.to(target.dtype)
-                                else:
-                                    return torch.add(target, other,
-                                                     alpha=float(alpha))
-                            except Exception:
-                                return torch.add(target, other,
-                                                 alpha=float(alpha))
-                        target.add_(other, alpha=float(alpha))
-                        return target
-                    # Unknown backend — fall back to plain `+`.
-                    return target + other * float(alpha)
+                    if hasattr(other, 'dtype') and other.dtype != target.dtype:
+                        if torch.promote_types(target.dtype, other.dtype) == target.dtype:
+                            other = other.to(target.dtype)
+                        else:
+                            return torch.add(target, other, alpha=float(alpha))
+                    target.add_(other, alpha=float(alpha))
+                    return target
                 _inplace_add.self_manages_dtype = True
                 return _inplace_add
 
@@ -1674,8 +1651,6 @@ class OpLevelTilingEngine:
         if _os_iadd.environ.get("NBX_DISABLE_INPLACE_UNARY", "0") == "1":
             self.plan.inplace_unary = []
         if self.plan.inplace_unary:
-            from nbxtensor.ops import wrappers as _w
-            from nbxtensor.tensor import NBXTensor as _NBXT
 
             # `tiling_sizes.inplace_min_bytes()`, the same figure the in-place adds
             # use (NBX_INPLACE_MIN_BYTES overrides it for a diagnosis). Read at call
@@ -1934,7 +1909,9 @@ class OpLevelTilingEngine:
                     # analyzed factually.
                     import os as _os_aud
                     _aud = _os_aud.environ.get("NBX_S5_BASELINE_AUDIT", "")
-                    if _aud and _node_roles["forks"]:
+                    # the audit reads the compiled engine's torch allocator and arena: never on the Triton engine
+                    # (R33 — it imported torch there, whatever the mode)
+                    if _aud and _node_roles["forks"] and not _is_triton_mode:
                         for fs in _node_roles["forks"]:
                             if fs["fork_uid"] == _aud:
                                 try:
@@ -2047,8 +2024,7 @@ class OpLevelTilingEngine:
                                     if _is_triton_mode:
                                         from nbxtensor.memory.allocator import DeviceAllocator as _DA_pre
                                         _pre = (
-                                            _DA_pre._cuda_live_bytes.get(
-                                                _DA_pre.get_device(), 0)
+                                            _DA_pre.memory_allocated(_DA_pre.get_device())
                                             / 1024**2
                                         )
                                     else:
@@ -2127,8 +2103,7 @@ class OpLevelTilingEngine:
                                     if _is_triton_mode:
                                         from nbxtensor.memory.allocator import DeviceAllocator as _DA_post
                                         _post = (
-                                            _DA_post._cuda_live_bytes.get(
-                                                _DA_post.get_device(), 0)
+                                            _DA_post.memory_allocated(_DA_post.get_device())
                                             / 1024**2
                                         )
                                     else:
