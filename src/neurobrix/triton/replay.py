@@ -375,6 +375,26 @@ def _drop_plan(plans: dict, sig) -> None:
 _CONTRIB_AT = -3
 
 
+def recording_room(dev: int) -> int:
+    """The bytes a recording may take on device `dev`: the device's free memory — and on a device that draws from the
+    host's memory (unified: Apple's GPU), no more than the machine has available. The device's own answer there is a
+    BUDGET's headroom (Metal: the recommended working set less what this process allocated), not memory the machine
+    can give: a 6.6 GB slab fitted that headroom, was frozen, and its replay died at its 23rd launch, the command
+    buffer refused for insufficient memory (Allegro-TI2V's encoder on an M4 Pro, the Mac's RUN 29, 2026-11-04) — the
+    memory law Prism plans by (a shared pool at its free reading). A unified machine whose free memory cannot be read
+    is refused by name: a recording sized by a guess is the out-of-memory this door exists to prevent."""
+    from nbxtensor.backend.device_facts import host_shares_memory_with_device
+    free, _ = DeviceAllocator.mem_get_info(dev)
+    if not host_shares_memory_with_device():
+        return int(free)
+    from nbxtensor.backend.host_memory import memory_state
+    st = memory_state()
+    if st.available_mb is None:
+        raise RuntimeError(f"ZERO FALLBACK: device {dev} shares the host's memory and the machine's available memory "
+                           f"cannot be read ({st.source}): a recording cannot be sized against what the machine gives")
+    return min(int(free), int(st.available_mb) << 20)
+
+
 def _contributions(sig):
     if isinstance(sig, tuple) and len(sig) >= -_CONTRIB_AT and isinstance(sig[_CONTRIB_AT], tuple):
         return sig[_CONTRIB_AT]
@@ -1356,7 +1376,7 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
         DeviceAllocator._range_reclaim(_dev, None)
     DeviceAllocator._pool_flush(_dev)
     _verify = int((seq.__dict__.get("_replay_live_peak") or {}).get(sig, slab_bytes))
-    _free, _ = DeviceAllocator.mem_get_info(_dev)
+    _free = recording_room(_dev)
     if slab_bytes + _verify > _free:
         comp = str((getattr(seq, "dag", None) or {}).get("component_name", "?"))
         print(f"[Replay] {comp}: not recorded — its slab ({slab_bytes / 2**20:.0f} MB) and the verify pass beside it "
