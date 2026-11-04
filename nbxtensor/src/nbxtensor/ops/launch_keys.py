@@ -974,10 +974,13 @@ def fused_moe_launches(tokens: int, top_k: int, experts: int, hidden: int, inter
 
 
 def moe_align_classes(experts: int, pairs: int) -> Tuple[int, int]:
-    """The MoE alignment's padded expert count (a power of two, at least 16) and its key's length class: the bucket
-    of the layer's (token, expert) pairs, as the grouped GEMMs key them (`fused_moe_launches`)."""
+    """The MoE alignment's padded expert count (a power of two, at least 16) and its key's length class: the layer's
+    (token, expert) pairs in the profile's `elements` ladder — the alignment is integer bookkeeping over a few
+    thousand ids, launch-dominated as an element-wise launch is (the ladder's own measurement: at or under 65 536
+    elements the launch dominates whatever the tile), so its classes are those few, certified at their floor
+    (`autotune_bucket.class_floor`); the GEMM's row ladder made ~300 classes of it a memory class."""
     from triton import next_power_of_2
-    return max(next_power_of_2(int(experts)), 16), bucket_of("M", int(pairs))
+    return max(next_power_of_2(int(experts)), 16), bucket_of("elements", int(pairs))
 
 
 def moe_align_launches(tokens: int, top_k: int, experts: int, w: NBXDtype) -> List[Launch]:

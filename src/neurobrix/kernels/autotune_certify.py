@@ -1319,13 +1319,15 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         fn = {"mean": _nbx_reduction_wrappers.mean_wrapper, "sum": _nbx_reduction_wrappers.sum_wrapper, "amax": _nbx_reduction_wrappers.amax_wrapper}[red]
         return (lambda: fn(to(x), -1)), (_row_reduce_oracle_fn(x, red) if values else None), "output_ptr"
     if short in ("moe_align_stage1_kernel", "moe_align_stage2_kernel", "moe_align_stage3_kernel"):
-        # ((BS, BE,) E, N_BUCKET, ids/tables): the bucket's (token, expert) pairs at its top, routed uniformly at random
+        # ((BS, BE,) E, N_BUCKET, ids/tables): the class's (token, expert) pairs at its floor, routed uniformly at random
         # over the key's experts, through the engine's own `moe_align_block_size` (stage 3, whose key names no block,
         # at the FMA kernel's block); the oracle is the host sort it replaced, compared EXACTLY (integers: one wrong
         # index is a wrong routing, never a small deviation)
         from neurobrix.triton.moe import moe_align_block_size, _BLOCK_SIZE_M
+        from nbxtensor.ops.autotune_bucket import class_floor
         stage = int(short[len("moe_align_stage")])
         bs, n_exp, nb = (_BLOCK_SIZE_M, int(key[0]), int(key[1])) if stage == 3 else (int(key[0]), int(key[2]), int(key[3]))
+        nb = class_floor("elements", nb)                       # the class is certified at its floor, as an element-wise's
         route = rng.integers(0, n_exp, size=nb).astype(np.int64)
         def run():
             from nbxtensor.memory.allocator import DeviceAllocator

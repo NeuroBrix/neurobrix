@@ -80,7 +80,7 @@ def moe_align_stage1_kernel(
     padded_ptr,          # [E] int64 out — per-expert padded count
     num_post_pad_ptr,    # [1] int64 out — total padded entries
     n,
-    N_BUCKET,            # the layer's (token, expert) pairs' bucket: the autotune key's length class (unused in the body)
+    N_BUCKET,            # the layer's (token, expert) pairs' class (`launch_keys.moe_align_classes`): the key's (unused here)
     BS: tl.constexpr,    # block size (fused kernel BLOCK_SIZE_M)
     BE: tl.constexpr,    # padded expert count (pow2 >= E)
     E: tl.constexpr,     # true expert count
