@@ -53,13 +53,24 @@ def _price(monkeypatch):
     return s, c, seen["language_model"]
 
 
-def test_the_arena_factor_never_multiplies_the_kv_cache(monkeypatch):
+def test_a_whole_component_is_priced_at_the_allocators_replay_and_the_kv_once(monkeypatch):
+    """What the Triton arena holds while the component runs whole is the allocator's own replay of its walk
+    (`held_peak_bytes`, M3, 2026-11-01) less the weight arena beside it, plus the KV cache (one allocation outside
+    the walk) — not the profiled peak times a factor, and the KV never multiplied."""
     s, c, lm = _price(monkeypatch)
     kv = s._estimate_kv_cache_bytes(c, s._target_dtype_str)
     assert kv > 0 and lm.kv_bytes == kv, (lm.kv_bytes, kv)
-    factor = s._triton_arena_factor()
-    want = ((lm.activation_bytes - kv) * factor + kv) / MB
+    assert lm.held_peak_bytes is not None and lm.held_peak_bytes > 0
+    want = (lm.held_peak_bytes - (lm.arena_bytes or 0) + kv) / MB
     assert s._live_activation_mb(lm) == pytest.approx(want), (s._live_activation_mb(lm), want)
+
+
+def test_a_component_with_no_replay_is_refused_under_triton_never_priced_by_a_factor(monkeypatch):
+    from dataclasses import replace
+    from neurobrix.core.prism.solver import PlanNotComputable
+    s, c, lm = _price(monkeypatch)
+    with pytest.raises(PlanNotComputable, match="no replay of its walk"):
+        s._live_activation_mb(replace(lm, held_peak_bytes=None))
 
 
 def test_a_walked_live_set_carries_no_added_buffer(monkeypatch):
