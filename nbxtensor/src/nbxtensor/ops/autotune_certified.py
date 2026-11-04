@@ -104,6 +104,7 @@ def restamp(path: Path) -> Optional[str]:
 
 
 _LOADED: Dict[Tuple[str, str, str, str], Optional[Dict[str, Dict]]] = {}   # (vendor, profile, kernel, dtype) -> entries
+_UNIT_CHOICES: Dict[Tuple[str, tuple, Optional[int]], Any] = {}   # (kernel, key, memory class) -> `unit_choice`'s answer
 _REFUSED: Dict[str, str] = {}                                                # file -> reason (said once)
 _ANNOUNCED: set = set()                                                       # (kernel, key) already said missing
 _SERVED: Dict[str, int] = {"certified": 0, "swept": 0, "local": 0}     # local = keys seeded from the machine's replay cache
@@ -666,14 +667,20 @@ def unit_choice(tuner, args, kwargs) -> Optional[Tuple[str, Optional[Dict[str, i
         return None
     key = _atc.key_of(tuner, args, kwargs)
     mcls = executing_memory_gb(args)
+    memo = (qual, key, mcls)
+    if memo in _UNIT_CHOICES:          # a GEMM asks at every launch: the directory's answer, read once per key and class
+        return _UNIT_CHOICES[memo]
     cert = lookup(qual, tuner, key, memory_gb=mcls)
     if cert is None:
         twin = computed_key(tuner, key, kwargs)
         cert = lookup(qual, tuner, twin, memory_gb=mcls) if twin is not None else None
     if cert is None:
-        return None
-    unit = cert.get("unit")
-    return ("unit", {f: int(unit["tile"][f]) for f in _UNIT_TILE_FIELDS}) if unit else ("fma", None)
+        choice = None
+    else:
+        unit = cert.get("unit")
+        choice = ("unit", {f: int(unit["tile"][f]) for f in _UNIT_TILE_FIELDS}) if unit else ("fma", None)
+    _UNIT_CHOICES[memo] = choice
+    return choice
 
 
 def executing_memory_gb(args=None, device_idx: Optional[int] = None) -> Optional[int]:
@@ -1151,7 +1158,7 @@ def note_local(n: int) -> None:
 
 
 def reset() -> None:
-    _LOADED.clear(); _REFUSED.clear(); _ANNOUNCED.clear(); _EVICTED.clear()
+    _LOADED.clear(); _REFUSED.clear(); _ANNOUNCED.clear(); _EVICTED.clear(); _UNIT_CHOICES.clear()
     _SERVED.update({"certified": 0, "swept": 0, "local": 0})
 
 

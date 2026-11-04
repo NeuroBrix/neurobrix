@@ -157,3 +157,24 @@ def test_a_unit_gemm_key_is_certified_with_both_routes_measured(monkeypatch):
         assert cert["unit"]["best_ms"] == best_unit and set(C._UNIT_TILE_FIELDS) <= set(cert["unit"]["tile"])
     else:
         assert "unit" not in cert
+
+
+def test_the_certificate_is_read_once_per_key_and_class(monkeypatch):
+    """A GEMM asks its route at every launch; the directory is read once per (kernel, key, memory class) — read at every
+    launch it cost 0.1 ms a GEMM on the host and slowed a non-replayed diffusion model (Sana 1600M, 2026-11-04: 9.1 s
+    against 7.5 s). Red if every call reads the directory again, or if `reset` keeps a stale answer."""
+    from nbxtensor.ops import autotune_certified as C
+    from nbxtensor.ops import autotune_cache as atc
+    reads = []
+    tuner = object()
+    monkeypatch.setattr(C, "_UNIT_QUALS", {id(tuner): "nbxtensor.ops.matmul.matmul_kernel"})
+    monkeypatch.setattr(atc, "key_of", lambda t, a, k: (128, 256, 256))
+    monkeypatch.setattr(C, "executing_memory_gb", lambda args=None, device_idx=None: 16)
+    monkeypatch.setattr(C, "lookup", lambda q, t, k, memory_gb=None: (reads.append(k), {"unit": None})[1])
+    C.reset()
+    assert C.unit_choice(tuner, (), {}) == ("fma", None)
+    assert C.unit_choice(tuner, (), {}) == ("fma", None)
+    assert len(reads) == 1, reads
+    C.reset()
+    C.unit_choice(tuner, (), {})
+    assert len(reads) == 2, reads
