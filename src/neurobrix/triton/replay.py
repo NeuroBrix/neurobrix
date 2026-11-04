@@ -333,7 +333,7 @@ STATE = _State()
 # invalidation on growth"): a plan that survived the swap would replay
 # kernel tuples, memcpys and captured graphs against freed or re-served
 # memory. The signature LAYOUT is owned here (`signature()`): the owner
-# contributions sit in one tuple at `sig[-2]`; callers match on a
+# contributions sit in one tuple at `sig[_CONTRIB_AT]`; callers match on a
 # contribution, never on a position of the full key.
 import weakref as _weakref
 _PLAN_SEQS: "_weakref.WeakSet" = _weakref.WeakSet()
@@ -364,9 +364,15 @@ def _drop_plan(plans: dict, sig) -> None:
                 plan.graph = None
 
 
+# where `signature` places the registered owners' contributions: two parts follow them (the fp16-safe flag, the
+# segment). 33db72ee appended the segment after the flag and this read stayed at -2 — the flag, never a tuple — so a
+# KV pool's growth retired none of its previous generation's plans (test_kv_prompt_aware_sizing, red since)
+_CONTRIB_AT = -3
+
+
 def _contributions(sig):
-    if isinstance(sig, tuple) and len(sig) >= 2 and isinstance(sig[-2], tuple):
-        return sig[-2]
+    if isinstance(sig, tuple) and len(sig) >= -_CONTRIB_AT and isinstance(sig[_CONTRIB_AT], tuple):
+        return sig[_CONTRIB_AT]
     return ()
 
 
@@ -964,6 +970,7 @@ def signature(seq) -> Optional[tuple]:
     # a decode step replayed in segments (`TritonSequence._expert_segments`): one plan per segment
     parts.append(getattr(seq, "_replay_segment", None))
     sig = tuple(parts)
+    assert sig[_CONTRIB_AT] is parts[-3], "the contributions' place (_CONTRIB_AT) and the signature's layout disagree"
     if os.environ.get("NBX_REPLAY_SIG_DIAG") == "1":
         prev = seq.__dict__.get("_sig_diag_prev")
         if prev is not None and prev != sig and len(prev) == len(sig):

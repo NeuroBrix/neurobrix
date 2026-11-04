@@ -165,7 +165,7 @@ def test_warm_pools_grow_for_a_longer_request() -> None:
 @pytest.mark.skipif(not _gpu(), reason="needs a CUDA device for the layer buffers")
 def test_replacement_retires_the_old_generation_replay_plans() -> None:
     """The plans dict is keyed by the FULL `replay.signature()` tuple (the
-    owner contributions sit nested at sig[-2]); a buffer replacement bumps
+    owner contributions sit nested at sig[R._CONTRIB_AT]); a buffer replacement bumps
     the cache generation once per request and retires every plan a
     sequence recorded under the previous generation — frozen plans AND
     pending VERIFY plans (slab retired, captured graph destroyed, entry
@@ -207,7 +207,9 @@ def test_replacement_retires_the_old_generation_replay_plans() -> None:
                    max_cache_len=4096, dtype=NBXDtype.float16, initial_cache_len=64)
     seq = _Seq(_Owner(c))
     sig_mine = R.signature(seq)
-    assert sig_mine is not None and ("kv_decode_paged", 1, 1, c._uid, 0) in sig_mine[-2]
+    assert sig_mine is not None
+    # the registered owners' part, wherever the signature places it (parts were appended after it since)
+    at = next(i for i, p in enumerate(sig_mine) if p == (("kv_decode_paged", 1, 1, c._uid, 0),))
     sig_theirs = R.signature(_Seq(_Owner(other)))
     frozen = R.FrozenPlan.__new__(R.FrozenPlan)
     frozen.slab, frozen.graph = _Slab(), _Graph()
@@ -216,7 +218,7 @@ def test_replacement_retires_the_old_generation_replay_plans() -> None:
     theirs = R.FrozenPlan.__new__(R.FrozenPlan)
     theirs.slab, theirs.graph = _Slab(), None
     # a second bucket of MINE, still pending its verify pass
-    sig_mine_512 = tuple(list(sig_mine[:-2]) + [(("kv_decode_paged", 2, 1, c._uid, 0),), sig_mine[-1]])
+    sig_mine_512 = sig_mine[:at] + ((("kv_decode_paged", 2, 1, c._uid, 0),),) + sig_mine[at + 1:]
     seq.__dict__["_replay_plans"] = {sig_mine: frozen, sig_mine_512: ("VERIFY", pending),
                                      sig_theirs: theirs}
     R._PLAN_SEQS.add(seq)
@@ -236,7 +238,7 @@ def test_replacement_retires_the_old_generation_replay_plans() -> None:
     assert pending.slab.retired                                  # the VERIFY plan's slab too
     assert sig_theirs in plans and not theirs.slab.retired       # another cache: untouched
     # the new generation signs differently: no stale key can match
-    assert ("kv_decode_paged", 1, 1, c._uid, 1) in R.signature(seq)[-2]
+    assert ("kv_decode_paged", 1, 1, c._uid, 1) in R._contributions(R.signature(seq))
 
 
 def test_sequence_teardown_retires_all_plans() -> None:

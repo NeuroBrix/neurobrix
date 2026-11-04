@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   three times, the median of
   three steady reloads), and a generated profile's measured host facts lie over its vendor file's key by key instead of
   replacing them; `apple_m4_pro.yml` no longer states the rate by hand.
+- **A longer request on a warm KV cache retires the replay plans recorded against the old cache**: since the decode
+  step's replay signature gained its segment part (2026-10-28), the growth of the paged pool looked for the cache's
+  contribution one place too far and retired none of the previous generation's plans, which could then replay against
+  the old addresses. The place is named once beside the signature and checked where the signature is built.
 - **The Apple M4 Pro's Triton arena factor is measured by the engine, not stated by hand**: `apple_m4_pro.yml` no
   longer carries it (it was 1.19, from one hand-run measurement); the first Triton launch on the machine measures it
   and writes it into the generated profile (1.477 on the M4 Pro 18 GB), as on a card no vendor file describes.
