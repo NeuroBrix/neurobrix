@@ -173,6 +173,12 @@ def device_allocator_figures(device: Optional[str]) -> Dict[str, float]:
     return {}
 
 
+def device_allocated_bytes(device: Optional[str]) -> int:
+    """What the ATen branch's allocator on `device` reports allocated, in bytes (MPS: its live tensors AND the buffers
+    freed whose command buffers have not completed); 0 where the device has no torch allocator."""
+    return int(device_allocator_figures(device).get("allocated_mb", 0.0) * 1024 * 1024)
+
+
 def device_cached_bytes(device: Optional[str]) -> int:
     """What the ATen branch's allocator on `device` holds BEYOND its live tensors, in bytes: MPS `driver_allocated -
     current_allocated` (its retained heaps), CUDA `reserved - allocated` (its cached blocks); 0 where the device has no

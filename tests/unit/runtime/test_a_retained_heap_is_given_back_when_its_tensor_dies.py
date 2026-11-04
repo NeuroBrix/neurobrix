@@ -18,21 +18,23 @@ from neurobrix.core.prism.attention_scratch import vendor_memory_of  # noqa: E40
 
 
 def _seq(release_from, drain_cliff=None):
-    from types import SimpleNamespace
     s = CompiledSequence.__new__(CompiledSequence)
     s._release_from = release_from
     s._drain_cliff = drain_cliff
-    s._in_flight = 0
+    s._sync_base = 0
     s.device = torch.device("cpu")
-    s.op_resolver = SimpleNamespace(dtype_engine=SimpleNamespace(copy_meter=[0] if drain_cliff is not None else None))
     return s
 
 
-def _calls(monkeypatch, cached=0):
+def _calls(monkeypatch, cached=0, allocated=(0,)):
+    """The device's waits and cache empties recorded; the allocator's readings pinned: `allocated` is read in turn
+    (its last value repeated)."""
     seen = []
+    reads = list(allocated)
     monkeypatch.setattr(DU, "device_sync", lambda d=None: seen.append(("sync", d)))
     monkeypatch.setattr(DU, "device_empty_cache", lambda d=None: seen.append(("empty", d)))
     monkeypatch.setattr(DU, "device_cached_bytes", lambda d=None: cached)
+    monkeypatch.setattr(DU, "device_allocated_bytes", lambda d=None: reads.pop(0) if len(reads) > 1 else reads[0])
     return seen
 
 
@@ -74,54 +76,38 @@ def test_a_stream_boundary_on_a_reusing_allocator_or_another_op_releases_nothing
 
 # Such an allocator also frees a buffer only once the device has run the work that read it: a sequence that never waits
 # holds every tensor it freed since. mochi-1-preview's VAE on MPS held ~5.7 GB of them at its 33rd convolution and ran
-# out of memory on a plan that fitted; a wait after every op ran it at 11 136 MB (the Mac, 2026-11-04 20:05). The
-# sequence waits once the bytes it freed since its last wait reach the drain cliff — no cache emptied, the count reset.
-# Injection: `_kill` without the cliff -> no sync, red; the count never reset -> a sync at every later free, red.
-def test_the_freed_bytes_wait_for_the_device_at_the_cliff(monkeypatch):
-    seen = _calls(monkeypatch)
+# out of memory on a plan that fitted; a wait after every op ran it at 11 136 MB (the Mac, 2026-11-04 20:05). The frees
+# are read on the allocator, which sees them all (a count of the arena's alone missed ~3.3 GB, the Mac's RUN 33d): grown
+# by the cliff since the last wait, the device is waited for and the base is read again; a cache then above the cliff is
+# emptied (RUN 33b: 4.70 GiB of heaps MPS kept). Injection: no wait at the cliff -> red; the base never read again -> a
+# wait at every later kill, red; no empty above the cliff -> red; an empty under it -> red.
+def test_the_allocators_growth_waits_at_the_cliff(monkeypatch):
+    seen = _calls(monkeypatch, allocated=(900, 1200, 300, 900, 1250))
     s = _seq(1 << 20, drain_cliff=1000)
-    for _ in range(3):
-        s._kill([torch.empty(300, dtype=torch.uint8)], (0,))
-    assert seen == []                                          # 900 bytes in flight: under the cliff
-    s._kill([torch.empty(300, dtype=torch.uint8)], (0,))
-    assert [k for k, _ in seen] == ["sync"] and s._in_flight == 0
-    s._kill([torch.empty(300, dtype=torch.uint8)], (0,))
-    assert [k for k, _ in seen] == ["sync"]                    # counted from the wait, not from the start
+    s._kill([torch.empty(16, dtype=torch.uint8)], (0,))       # 900 since the base 0: under the cliff
+    assert seen == []
+    s._kill([torch.empty(16, dtype=torch.uint8)], (0,))       # 1200: a wait, the base read again (300)
+    assert [k for k, _ in seen] == ["sync"] and s._sync_base == 300
+    s._kill([torch.empty(16, dtype=torch.uint8)], (0,))       # 900 - 300: under the cliff from the new base
+    assert [k for k, _ in seen] == ["sync"]
+    s._kill([torch.empty(16, dtype=torch.uint8)], (0,))       # 1250 - 300: under still
+    assert [k for k, _ in seen] == ["sync"]
 
 
-def test_a_heap_release_resets_the_count(monkeypatch):
-    seen = _calls(monkeypatch)
-    s = _seq(1 << 20, drain_cliff=1 << 22)
-    s._kill([torch.empty(300, dtype=torch.uint8)], (0,))
-    s._kill([torch.empty(1 << 20, dtype=torch.uint8)], (0,))  # a dedicated heap: sync + empty, the queue drained
-    assert [k for k, _ in seen] == ["sync", "empty"] and s._in_flight == 0
-
-
-# The DtypeEngine's own copies (an operand cast, a wider result stored narrower) die inside their op, out of the arena:
-# they are in flight too. The Mac's RUN 33 (2026-11-04 20:27): the drain counted the arena alone, never fired on mochi's
-# VAE (816 MB and 1 216 MB of casts a block), and the run died where a wait after every op had held it.
-# Injection: the meter not read at the kill -> no sync, red.
-def test_the_engines_copies_count_toward_the_cliff(monkeypatch):
-    seen = _calls(monkeypatch)
-    s = _seq(1 << 20, drain_cliff=1000)
-    s.op_resolver.dtype_engine.copy_meter[0] = 900          # a cast the op made and dropped
-    s._kill([torch.empty(200, dtype=torch.uint8)], (0,))
-    assert [k for k, _ in seen] == ["sync"] and s.op_resolver.dtype_engine.copy_meter == [0]
-
-
-# A wait returns the frees to the allocator's CACHE, not to the device: MPS kept 4.70 GiB of heaps cached beside 12.56 GiB
-# live (under the price) after 1 210 waits on mochi's VAE, and the run died (the Mac's RUN 33b, 2026-11-04 21:23). At the
-# cliff, a cache above the priced queue is emptied too; one under it is kept (emptying costs every later allocation).
-# Injection: no empty at the cliff -> the first test red; an empty whatever the cache -> the second red.
-def test_a_cache_above_the_queue_is_emptied_at_the_cliff(monkeypatch):
-    seen = _calls(monkeypatch, cached=5000)
-    s = _seq(1 << 20, drain_cliff=1000)
-    s._kill([torch.empty(1200, dtype=torch.uint8)], (0,))
+def test_a_cache_above_the_cliff_is_emptied_at_the_wait(monkeypatch):
+    seen = _calls(monkeypatch, cached=5000, allocated=(1200, 100))
+    _seq(1 << 20, drain_cliff=1000)._kill([torch.empty(16, dtype=torch.uint8)], (0,))
     assert [k for k, _ in seen] == ["sync", "empty"]
 
 
-def test_a_cache_under_the_queue_is_kept(monkeypatch):
-    seen = _calls(monkeypatch, cached=500)
-    s = _seq(1 << 20, drain_cliff=1000)
-    s._kill([torch.empty(1200, dtype=torch.uint8)], (0,))
+def test_a_cache_under_the_cliff_is_kept(monkeypatch):
+    seen = _calls(monkeypatch, cached=500, allocated=(1200, 100))
+    _seq(1 << 20, drain_cliff=1000)._kill([torch.empty(16, dtype=torch.uint8)], (0,))
     assert [k for k, _ in seen] == ["sync"]
+
+
+def test_a_heap_release_reads_the_base_again(monkeypatch):
+    seen = _calls(monkeypatch, allocated=(700,))
+    s = _seq(1 << 20, drain_cliff=1 << 22)
+    s._kill([torch.empty(1 << 20, dtype=torch.uint8)], (0,))  # a dedicated heap: sync + empty, the base read
+    assert [k for k, _ in seen] == ["sync", "empty"] and s._sync_base == 700

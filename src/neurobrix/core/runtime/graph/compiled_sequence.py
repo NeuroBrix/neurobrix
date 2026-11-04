@@ -339,7 +339,7 @@ class CompiledSequence(SequenceSteps):
 
     __slots__ = (
         'dag', 'op_resolver', 'device', 'dtype',
-        '_ops', '_arena', '_release_from', '_drain_cliff', '_in_flight',
+        '_ops', '_arena', '_release_from', '_drain_cliff', '_sync_base',
         '_tensor_id_to_slot', '_slot_to_tensor_id',
         '_weight_tensor_ids', '_input_tensor_ids', '_output_tensor_ids',
         '_num_weights', '_num_inputs', '_num_intermediates',
@@ -431,7 +431,7 @@ class CompiledSequence(SequenceSteps):
         # freed memory for any request (CUDA's), or no device named (the executor's tests).
         self._release_from: Optional[int] = None
         self._drain_cliff: Optional[int] = None
-        self._in_flight = 0
+        self._sync_base = 0
         if hardware is not None and device.type != "cpu":
             from neurobrix.core.prism.attention_scratch import vendor_memory_of
             _mem = vendor_memory_of(*hardware)
@@ -446,17 +446,16 @@ class CompiledSequence(SequenceSteps):
                 # buffer is returned when its command buffers complete): a sequence that never waits holds every
                 # tensor it freed since its last wait. mochi-1-preview's VAE on MPS held ~5.7 GB of them at its 33rd
                 # convolution and ran out of memory on a plan that fitted; a wait after every op ran it at 11 136 MB
-                # (the Mac, 2026-11-04 20:05). The sequence waits for the device once the bytes it freed since its
-                # last wait reach the deferred-drain cliff — the PLAN's (`drain_cliff_bytes`, the component's
+                # (the Mac, 2026-11-04 20:05). The frees are read on the ALLOCATOR, which sees them all — the arena's,
+                # the DtypeEngine's operand casts, an op's own intermediates (a count of the arena's alone missed ~3.3 GB,
+                # the Mac's RUN 33d, 23:10): the sequence waits for the device once what the allocator holds has grown
+                # since its last wait by the deferred-drain cliff — the PLAN's (`drain_cliff_bytes`, the component's
                 # `ComponentAllocation.deferred_drain_cliff_bytes`, what Prism budgeted this device against), else the
                 # profile's ceiling (a sequence built without a plan) — the Triton hot loop's own rule.
                 from neurobrix.core.prism.memory_budget import deferred_drain_retained_bytes
                 self._drain_cliff = (int(drain_cliff_bytes) if drain_cliff_bytes is not None
                                      else int(deferred_drain_retained_bytes(_mem)))
-                # the DtypeEngine's own copies (an operand cast, a wider result stored narrower) die inside their op,
-                # out of the arena: counted on its meter, read at every kill (the Mac, 2026-11-04 20:27: 816 MB and
-                # 1 216 MB a block on mochi's VAE, uncounted, and the drain never fired)
-                self.op_resolver.dtype_engine.copy_meter = [0]
+
 
         # Compilation outputs
         self._ops: List[CompiledOp] = []
@@ -4148,8 +4147,8 @@ class CompiledSequence(SequenceSteps):
 
     def _kill(self, arena, slots, op_uid: Optional[str] = None) -> None:
         """Free an op's dead tensors; where the device's allocator keeps the heaps it frees (`self._release_from`), the
-        device is also waited for once the bytes freed since its last wait reach the drain cliff (`self._drain_cliff`:
-        such an allocator frees a buffer only when the work that read it has run); a
+        device is also waited for once what its allocator holds has grown by the drain cliff since the last wait
+        (`self._drain_cliff`: such an allocator frees a buffer only when the work that read it has run); a
         freed tensor that held a heap of its own gives it back to the device — and so does a temporal stream's own
         boundary (a state output, `temporal_stream_runner.STATE_OUT_PREFIX`), whatever the size of what died: the
         stream frees many mid-size slices whose heaps the allocator keeps part-occupied, under the dedicated-heap
@@ -4158,34 +4157,31 @@ class CompiledSequence(SequenceSteps):
         release = False
         if self._release_from is not None and op_uid is not None and op_uid.startswith(STATE_OUT_PREFIX):
             release = True
-        if self._release_from is not None:
-            meter = self.op_resolver.dtype_engine.copy_meter if self._drain_cliff is not None else None
-            if meter is not None:
-                self._in_flight += meter[0]
-                meter[0] = 0
+        if self._release_from is not None and not release:
             for s in slots:
                 t = arena[s]
-                if isinstance(t, torch.Tensor):
-                    nbytes = t.untyped_storage().nbytes()
-                    self._in_flight += nbytes
-                    if nbytes >= self._release_from:
-                        release = True
+                if isinstance(t, torch.Tensor) and t.untyped_storage().nbytes() >= self._release_from:
+                    release = True
+                    break
         for s in slots:
             arena[s] = None
         if release:
-            from neurobrix.core.device_utils import device_sync, device_empty_cache
+            from neurobrix.core.device_utils import device_sync, device_empty_cache, device_allocated_bytes
             device_sync(str(self.device))
             device_empty_cache(str(self.device))
-            self._in_flight = 0
-        elif self._drain_cliff is not None and self._in_flight >= self._drain_cliff:
-            # the wait returns the frees to the allocator's cache, not to the device: where the cache then holds more
-            # than the queue the plan priced, it is emptied too (the Mac's RUN 33b, 2026-11-04 21:23: 1 210 waits fired
-            # on mochi's VAE, 12.56 GiB live under the price, and 4.70 GiB of heaps MPS kept cached killed it)
-            from neurobrix.core.device_utils import device_sync, device_cached_bytes, device_empty_cache
-            device_sync(str(self.device))
-            if device_cached_bytes(str(self.device)) > self._drain_cliff:
-                device_empty_cache(str(self.device))
-            self._in_flight = 0
+            if self._drain_cliff is not None:
+                self._sync_base = device_allocated_bytes(str(self.device))
+        elif self._drain_cliff is not None:
+            # what the allocator holds counts the live tensors AND the frees still in flight: grown by the cliff since
+            # the last wait, the device is waited for; the wait returns the frees to the allocator's CACHE, emptied
+            # where it then holds more than the cliff (the Mac's RUN 33b, 2026-11-04 21:23: 4.70 GiB of heaps kept)
+            from neurobrix.core.device_utils import (device_sync, device_cached_bytes, device_empty_cache,
+                                                     device_allocated_bytes)
+            if device_allocated_bytes(str(self.device)) - self._sync_base >= self._drain_cliff:
+                device_sync(str(self.device))
+                if device_cached_bytes(str(self.device)) > self._drain_cliff:
+                    device_empty_cache(str(self.device))
+                self._sync_base = device_allocated_bytes(str(self.device))
 
     def gather_outputs(self, output_ids: Optional[List[str]] = None) -> Dict[str, torch.Tensor]:
         """Gather output tensors from the arena."""
