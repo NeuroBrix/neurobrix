@@ -19,6 +19,10 @@ The first release, 0.0.1, is in preparation.
 - **The matrix product and the linear layer declare what they allocate** (`nbxtensor.ops.linalg_wrappers.mm_cost` / `addmm_cost`, beside `bmm_cost`): the casts, the decode rows' GEMV and the weight copy a row-major weight costs there, the bias made contiguous, the output at its store dtype, an epilogue's output; each equal to the allocator's measured peak on the device, over the dtypes, the decode and tiled row counts, both weight layouts and the bias forms.
 
 ### Fixed
+- **A request larger than a card's whole expandable range is refused as the out-of-memory it is**: on a device whose
+  large blocks grow in an expandable (VMM) range, such a request raised a plain error without its figures; it now
+  raises `DeviceOOMError` with the requested, live, pool-cached and driver-free bytes, as the driver path does, so a
+  caller that reshapes the work on a refusal catches it.
 - **A certified entry naming parameters its kernel lacks is no longer served**: the directory's check compared a
   key's arity and dtype with the kernel, never the configuration's parameter names, so the depthwise convolution's
   entries from its former tile (`BLOCK_HW`, `BLOCK_C`) were served to the new one (`BC`, `TH`, `TW`). Such a file is now

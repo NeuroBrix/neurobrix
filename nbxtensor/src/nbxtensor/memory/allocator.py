@@ -790,7 +790,9 @@ class DeviceAllocator:
             if range_extend(pool, dev, pool.grow_size(nbytes)) is None:
                 DeviceAllocator._range_reserve(dev, v)
                 if range_extend(pool, dev, pool.grow_size(nbytes)) is None:
-                    raise RuntimeError(f"a request of {nbytes} bytes exceeds device {dev}'s whole expandable range")
+                    # larger than a whole range: the card's refusal, typed and carrying its figures as the driver
+                    # path's (a plain RuntimeError here escaped every caller that reshapes the work on a refusal)
+                    raise DeviceAllocator._oom(dev, nbytes, 2, _rt.device_memory())
             ptr = pool.take(dev, nbytes)
         actual = pool.alloc_size.pop(ptr, nbytes)
         if not DeviceAllocator._range_map(dev, v, range_unmapped(pool, dev, ptr, actual)):

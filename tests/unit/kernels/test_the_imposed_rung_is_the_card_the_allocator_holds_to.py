@@ -44,7 +44,7 @@ def rt(monkeypatch):
     for name, value in (("_pool_enabled", True), ("_POOL", SegmentPool(on_block=DA._block_reported)),
                         ("_cuda_ptr_size", {}), ("_cuda_ptr_device", {}),
                         ("_cuda_ptr_epoch", {}), ("_cuda_live_bytes", {}), ("_cuda_peak_bytes", {}),
-                        ("_range_size", {}), ("_range_bases", []), ("_pool_cap_bytes", {0: 1 << 40}),
+                        ("_range_size", {}), ("_range_bases", []), ("_VMM", {}), ("_pool_cap_bytes", {0: 1 << 40}),
                         ("_rung_limit_bytes", {}), ("_limit_bytes", {})):
         monkeypatch.setattr(DA, name, value)
     monkeypatch.setattr(DA, "get_device", staticmethod(lambda: 0))

@@ -54,7 +54,8 @@ class _PoolState:
 
     FIELDS = ("_POOL", "_pool_enabled", "_cuda_ptr_size", "_cuda_ptr_device",
               "_cuda_live_bytes", "_cuda_peak_bytes", "_pool_cap_bytes",
-              "_range_size", "_range_bases", "_cuda_ptr_epoch")
+              "_range_size", "_range_bases", "_cuda_ptr_epoch",
+              "_VMM")    # a card test before this one leaves its expandable range here (2026-11-04: 3 red in order)
 
     def __enter__(self):
         self.saved = {f: getattr(DeviceAllocator, f) for f in self.FIELDS}
