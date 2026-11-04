@@ -163,12 +163,13 @@ def test_the_first_launch_reloads_the_smallest_component_of_each_unstated_stored
     _container(cache, "small", "lm", "bfloat16", 2 * floor)
     _container(cache, "tiny", "lm", "bfloat16", floor // 2)
     _container(cache, "f32", "net", "float32", 3 * floor)
+    _container(cache, "huge", "lm", "float16", 64 << 30)        # larger than the card: never reloaded whole
     monkeypatch.setattr(paths, "cache_dir", lambda: cache)
     monkeypatch.setattr(P, "gemv_gbps", lambda *a, **k: 100.0)          # the other first-launch probes: not this test's
     probed = []
     monkeypatch.setattr(AP, "child", lambda d, c, h, e: probed.append((d.rsplit("/", 1)[1], c, e)) or
                         {"container": d, "component": c, "draws": []})
-    _profile(hw, "default-abc", DEV)
+    _profile(hw, "default-abc", {**DEV, "memory_mb": 16384})
     A.ensure_measured_facts("default-abc", "compiled")
     assert sorted(probed) == [("f32", "net", "compiled"), ("small", "lm", "compiled")], probed
     data = yaml.safe_load((hw / "default-abc.yml").read_text())

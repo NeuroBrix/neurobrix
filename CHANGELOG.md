@@ -15,7 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on an NBXTensor, and raised `TypeError` (Flex.1-alpha on Triton, layer_streaming); it reads the tensor's own count.
 - **A machine whose vendor file states no reload rate can stream**: the per-piece reload rate Prism prices a streamed
   plan with was written only during a streamed run, and Prism refused to plan one without it. The first launch now
-  measures it for each stored dtype of the cache (the smallest component stored so, reloaded three times, the median of
+  measures it for each stored dtype of the cache (the smallest component stored so that the card holds whole, reloaded
+  three times, the median of
   three steady reloads), and a generated profile's measured host facts lie over its vendor file's key by key instead of
   replacing them; `apple_m4_pro.yml` no longer states the rate by hand.
 - **The Apple M4 Pro's Triton arena factor is measured by the engine, not stated by hand**: `apple_m4_pro.yml` no

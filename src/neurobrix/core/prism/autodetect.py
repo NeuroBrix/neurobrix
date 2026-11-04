@@ -2571,7 +2571,7 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None) -> dic
             if not any((((b or {}).get("weight_reload_gbps") or {}).get(engine) or {}).get(st) for b in held):
                 comps = [(sum(f.stat().st_size for f in c.rglob("*.safetensors")), str(c.parent.parent), c.name)
                          for c in Path(cache_dir()).glob("*/components/*") if stored_major(c.parent.parent, c.name) == name]
-                comps = sorted(x for x in comps if x[0] >= LOADER_RATE_MIN_BYTES)
+                comps = sorted(x for x in comps if LOADER_RATE_MIN_BYTES <= x[0] <= int(devices[0].get("memory_mb") or 0) << 20)
                 if comps:
                     r = A.child(comps[0][1], comps[0][2], hardware_id, engine)
                     print(f"   [Auto-detect] {engine} {st} reloads of {r['container']}:{r['component']}: "
