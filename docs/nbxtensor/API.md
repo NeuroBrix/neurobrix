@@ -759,6 +759,10 @@ def sdpa_operand_dtypes(q: NBXDtype, k: NBXDtype, v: NBXDtype, q_round: Optional
     # The (q, k, v, q_round) dtypes `scaled_dot_product_attention_wrapper` computes attention with
 def decode_vec_takes(headdim: int, headdim_v: int, mask_numel: Optional[int], seqlen_k: int)
     # Whether a single-query attention on the math route runs the vector decode kernel (no autotuned key) — `_try_decode_vec`'s contract
+def moe_align_classes(experts: int, pairs: int) -> Tuple[int, int]
+    # the MoE alignment's padded expert count and its key's length class (the layer's pairs' bucket)
+def moe_align_launches(tokens: int, top_k: int, experts: int, w: NBXDtype) -> List[Launch]
+    # the three alignment stages of a fused MoE layer, at the FMA block and every unit tile's rows
 def decode_reduce_launch(splits: int, Dv: int, out: NBXDtype) -> Launch
     # the fixed-order combine after both split decodes: keyed by the splits, GROUPS 1 and the value head dim
 def decode_vec_launches(H: int, Hk: int, Tk: int, D: int, Dv: int, q: NBXDtype, k: NBXDtype, v: NBXDtype, bias: Optional[NBXDtype], q_round: Optional[NBXDtype]=None)

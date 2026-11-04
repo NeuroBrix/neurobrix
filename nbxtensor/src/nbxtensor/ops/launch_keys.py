@@ -46,6 +46,7 @@ MOE_PART_REDUCE = "nbxtensor.ops.moe_decode_vec.moe_part_reduce_kernel"
 DECODE_VEC = "nbxtensor.ops.decode_attn_vec.decode_attn_vec_split_kernel"
 PAGED_DECODE = "nbxtensor.ops.paged_decode_attn.paged_decode_attn_split_kernel"
 DECODE_REDUCE = "nbxtensor.ops.flash_decode.flash_decode_reduce_kernel"
+MOE_ALIGN = tuple(f"nbxtensor.ops.moe_align.moe_align_stage{i}_kernel" for i in (1, 2, 3))
 
 F32, BF16, F16 = NBXDtype.float32, NBXDtype.bfloat16, NBXDtype.float16
 _HALF = (F16, BF16)
@@ -970,6 +971,34 @@ def fused_moe_launches(tokens: int, top_k: int, experts: int, hidden: int, inter
     dts = (t, i64, t, t, i64, i64, i64)        # a, expert_ptrs, c, topk_weights, sorted ids, expert ids, padded count
     return [(FUSED_MOE, (int(inter), int(hidden), nv, int(experts), False, True) + dts),
             (FUSED_MOE, (int(hidden), int(inter), nv, int(experts), True, False) + dts)]
+
+
+def moe_align_classes(experts: int, pairs: int) -> Tuple[int, int]:
+    """The MoE alignment's padded expert count (a power of two, at least 16) and its key's length class: the bucket
+    of the layer's (token, expert) pairs, as the grouped GEMMs key them (`fused_moe_launches`)."""
+    from triton import next_power_of_2
+    return max(next_power_of_2(int(experts)), 16), bucket_of("M", int(pairs))
+
+
+def moe_align_launches(tokens: int, top_k: int, experts: int, w: NBXDtype) -> List[Launch]:
+    """The three alignment stages a fused MoE layer launches (`triton/moe.moe_align_block_size`), the routing ids
+    int64: at the FMA kernel's block (`moe_wrappers._MOE_BM`) and, on a matrix unit that takes the experts' dtype,
+    at every unit tile's rows (`fused_moe_unit_tiles` — the layer aligns again at the tile its certificate chose,
+    one of these)."""
+    if tokens < 1:
+        return []
+    from nbxtensor.ops.moe_wrappers import _MOE_BM
+    from nbxtensor.ops._configs import matrix_unit
+    be, nb = moe_align_classes(experts, int(tokens) * int(top_k))
+    e, i64 = int(experts), tag(NBXDtype.int64)
+    blocks = [_MOE_BM]
+    if w == F16:
+        blocks += sorted({int(r["block_m"]) for r in ((matrix_unit() or {}).get("mm") or [])} - {_MOE_BM})
+    out: List[Launch] = []
+    for bs in blocks:
+        out += [(MOE_ALIGN[0], (bs, be, e, nb, i64, i64, i64, i64)),
+                (MOE_ALIGN[1], (bs, be, e, nb, i64, i64, i64, i64))]
+    return out + [(MOE_ALIGN[2], (e, nb, i64, i64, i64))]
 
 
 def moe_decode_vec_half_launches(top_k: int, hidden: int, inter: int, w: NBXDtype) -> List[Launch]:

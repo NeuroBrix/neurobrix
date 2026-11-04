@@ -263,6 +263,21 @@ def values(a) -> np.ndarray:
     return np.asarray(a)
 
 
+class _Exact:
+    """An oracle of integers, met exactly: the deviation is 0 where every value equals, else inf (`oracle_deviation`
+    reads its `slices`)."""
+    describe = "exact integers"
+
+    def __init__(self, ref):
+        self.ref = np.asarray(ref, dtype=np.int64).reshape(-1)
+
+    def slices(self, out):
+        got = np.asarray(out).astype(np.int64).reshape(-1)
+        if got.shape != self.ref.shape:
+            return [(np.ones(1), np.zeros(1))]
+        return [((got != self.ref).astype(np.float64), np.zeros(got.shape))]
+
+
 def _f64(a) -> np.ndarray:
     return values(a).astype(np.float64)
 
@@ -1303,6 +1318,37 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         red = short.split("_")[0]
         fn = {"mean": _nbx_reduction_wrappers.mean_wrapper, "sum": _nbx_reduction_wrappers.sum_wrapper, "amax": _nbx_reduction_wrappers.amax_wrapper}[red]
         return (lambda: fn(to(x), -1)), (_row_reduce_oracle_fn(x, red) if values else None), "output_ptr"
+    if short in ("moe_align_stage1_kernel", "moe_align_stage2_kernel", "moe_align_stage3_kernel"):
+        # ((BS, BE,) E, N_BUCKET, ids/tables): the bucket's (token, expert) pairs at its top, routed uniformly at random
+        # over the key's experts, through the engine's own `moe_align_block_size` (stage 3, whose key names no block,
+        # at the FMA kernel's block); the oracle is the host sort it replaced, compared EXACTLY (integers: one wrong
+        # index is a wrong routing, never a small deviation)
+        from neurobrix.triton.moe import moe_align_block_size, _BLOCK_SIZE_M
+        stage = int(short[len("moe_align_stage")])
+        bs, n_exp, nb = (_BLOCK_SIZE_M, int(key[0]), int(key[1])) if stage == 3 else (int(key[0]), int(key[2]), int(key[3]))
+        route = rng.integers(0, n_exp, size=nb).astype(np.int64)
+        def run():
+            from nbxtensor.memory.allocator import DeviceAllocator
+            sids, eids, _npad = moe_align_block_size(NBXTensor.from_numpy(route), bs, n_exp, DeviceAllocator.get_device())
+            return eids if stage == 2 else sids
+        def oracle():
+            counts = np.bincount(route, minlength=n_exp)
+            padded = -(-counts // bs) * bs
+            offsets = np.concatenate([[0], np.cumsum(padded)[:-1]])
+            if stage == 1:
+                return _Exact(offsets)
+            bound = min(nb * bs, nb + n_exp * (bs - 1))
+            max_total = -(-bound // bs) * bs
+            if stage == 2:
+                starts = np.arange(max_total // bs) * bs
+                own = (starts[:, None] >= offsets[None, :]) & (starts[:, None] < (offsets + padded)[None, :])
+                return _Exact(np.where(own.any(axis=1), own.argmax(axis=1), -1))
+            ref = np.full(max_total, -1, dtype=np.int64)          # stage 3 writes the routed slots only (the poison)
+            for e in range(n_exp):
+                tok = np.nonzero(route == e)[0]
+                ref[offsets[e]:offsets[e] + tok.size] = tok
+            return _Exact(ref)
+        return run, (oracle if values else None), {1: "offsets_ptr", 2: "expert_ids_ptr", 3: "sorted_ids_ptr"}[stage]
     if short == "fused_moe_kernel":
         # (N, K, NV_BUCKET, NUM_EXPERTS, MUL_ROUTED_WEIGHT, TOPK_DIVIDE, dtypes): the bucket's valid (token, expert)
         # pairs at its top, one expert per token (top_k 1: the key does not name it), the key's experts of [N, K] weights

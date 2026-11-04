@@ -32,7 +32,53 @@ class by construction.
 import triton
 import triton.language as tl
 
+from nbxtensor.ops._configs import nbx_autotune
 
+# The chunk widths and warps of the three stages, candidates the certification measures per key; the launch before
+# 2026-11-04 (BT 128, BF the experts' padded count, BLK 128 positions, BLKT = BN = 128, 4 warps — 32 and 64 wide on
+# Metal) is among them. Every candidate computes the same integers: the choice is speed only.
+_STAGE1_CONFIGS = [triton.Config({'BT': bt, 'BF': bf}, num_warps=w, num_stages=1)
+                   for bt in (32, 64, 128, 256) for bf in (16, 32, 64, 128, 256) for w in (2, 4, 8)]
+_STAGE2_CONFIGS = [triton.Config({'BLK': blk, 'BF': bf}, num_warps=w, num_stages=1)
+                   for blk in (64, 128, 256) for bf in (16, 32, 64, 128, 256) for w in (2, 4, 8)]
+_STAGE3_CONFIGS = [triton.Config({'BLKT': t, 'BN': bn}, num_warps=w, num_stages=1)
+                   for t in (32, 64, 128) for bn in (32, 64, 128) for w in (2, 4, 8)]
+
+
+def _fits(blocks) -> bool:
+    """Whether the stage's widest int32 block fits the device's shared memory per block (`memory.
+    max_shared_memory_per_block` of the profile in force): a cross-warp reduction stages its block there (Metal,
+    32 KB: a [128, 128] block asked 65 536 bytes, Qwen3-30B-A3B)."""
+    from nbxtensor.ops._configs import arch_smem_budget
+    budget = arch_smem_budget()
+    if budget is None:
+        raise RuntimeError("ZERO FALLBACK: the MoE alignment sizes its blocks by memory.max_shared_memory_per_block, "
+                           "which the hardware profile in force does not declare")
+    return 4 * max(a * b for a, b in blocks) <= int(budget)
+
+
+def _prune_stage1(configs, named_args, **kwargs):
+    """An expert chunk dividing the experts' padded count (both powers of two: no wider than it), blocks that fit."""
+    be = int({**named_args, **kwargs}['BE'])        # a constexpr arrives among the launch's keywords
+    return [c for c in configs if c.kwargs['BF'] <= be
+            and _fits(((c.kwargs['BF'], c.kwargs['BT']), (be, c.kwargs['BF'])))]
+
+
+def _prune_stage2(configs, named_args, **kwargs):
+    """Positions per program a whole number of blocks, an expert chunk dividing the padded count, blocks that fit."""
+    a = {**named_args, **kwargs}
+    be, bs = int(a['BE']), int(a['BS'])
+    return [c for c in configs if c.kwargs['BF'] <= be and c.kwargs['BLK'] % bs == 0
+            and _fits(((c.kwargs['BLK'], c.kwargs['BF']),))]
+
+
+def _prune_stage3(configs, named_args, **kwargs):
+    """The rank matrix [BLKT, BN] fits."""
+    return [c for c in configs if _fits(((c.kwargs['BLKT'], c.kwargs['BN']),))]
+
+
+@nbx_autotune(configs=_STAGE1_CONFIGS, key=['BS', 'BE', 'E', 'N_BUCKET'],
+              prune_configs_by={'early_config_prune': _prune_stage1}, cache_results=True)
 @triton.jit
 def moe_align_stage1_kernel(
     topk_ids_ptr,        # [n] int64 — flat expert index per (token, k)
@@ -40,6 +86,7 @@ def moe_align_stage1_kernel(
     padded_ptr,          # [E] int64 out — per-expert padded count
     num_post_pad_ptr,    # [1] int64 out — total padded entries
     n,
+    N_BUCKET,            # the layer's (token, expert) pairs' bucket: the autotune key's length class (unused in the body)
     BS: tl.constexpr,    # block size (fused kernel BLOCK_SIZE_M)
     BE: tl.constexpr,    # padded expert count (pow2 >= E)
     E: tl.constexpr,     # true expert count
@@ -50,8 +97,8 @@ def moe_align_stage1_kernel(
     prefix offsets (masked triangular sum — no tl.cumsum dependency).
     Worked over expert chunks of BF: each chunk's padded counts go to the
     prefix sum as a [BE, BF] block, so no [BE, BE] or [BE, BT] matrix is
-    held; the host sizes BT and BF to the backend's threadgroup memory
-    (Metal 32 KB: 128 experts at BT = BF = 128 asked 64 KB, Qwen3-30B-A3B)."""
+    held; BT and BF are the key's certified configuration, among the widths
+    whose blocks fit the device's shared memory (`_prune_stage1`)."""
     e = tl.arange(0, BE)
     excl = tl.zeros((BE,), dtype=tl.int32)
     total = tl.sum(tl.zeros((BF,), dtype=tl.int32), axis=0)
@@ -73,6 +120,8 @@ def moe_align_stage1_kernel(
     tl.store(num_post_pad_ptr, total.to(tl.int64))
 
 
+@nbx_autotune(configs=_STAGE2_CONFIGS, key=['BS', 'BE', 'E', 'N_BUCKET'],
+              prune_configs_by={'early_config_prune': _prune_stage2}, cache_results=True)
 @triton.jit
 def moe_align_stage2_kernel(
     offsets_ptr,         # [E] int64
@@ -81,6 +130,7 @@ def moe_align_stage2_kernel(
     expert_ids_ptr,      # [max_blocks] int64 out — expert per block, -1 pad
     n,
     max_total,
+    N_BUCKET,            # the autotune key's length class (unused in the body)
     BS: tl.constexpr,
     BE: tl.constexpr,
     E: tl.constexpr,
@@ -91,8 +141,8 @@ def moe_align_stage2_kernel(
     each block's owning expert (offsets[e] <= block_start < offsets[e]
     + padded[e]); blocks past the true total get -1 and are skipped by
     the fused kernels' num_tokens_post_padded early-exit anyway. The
-    experts are read in chunks of BF ([BLK, BF] blocks, sized by the host
-    to the backend's threadgroup memory, as stage 1)."""
+    experts are read in chunks of BF ([BLK, BF] blocks, the key's certified
+    configuration among those that fit, as stage 1)."""
     pid = tl.program_id(0).to(tl.int64)
     p = pid * BLK + tl.arange(0, BLK)
     in_p = p < max_total
@@ -116,12 +166,15 @@ def moe_align_stage2_kernel(
     tl.store(expert_ids_ptr + b, eid.to(tl.int64), mask=write_b)
 
 
+@nbx_autotune(configs=_STAGE3_CONFIGS, key=['E', 'N_BUCKET'],
+              prune_configs_by={'early_config_prune': _prune_stage3}, cache_results=True)
 @triton.jit
 def moe_align_stage3_kernel(
     topk_ids_ptr,        # [n] int64
     offsets_ptr,         # [E] int64
     sorted_ids_ptr,      # [max_total] int64 — scatter over the sentinels
     n,
+    N_BUCKET,            # the autotune key's length class (unused in the body)
     E: tl.constexpr,     # true expert count (out-of-range ids skipped,
                          # mirroring the host scatter's bounds check)
     BLKT: tl.constexpr,  # tokens per program

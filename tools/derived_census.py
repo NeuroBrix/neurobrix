@@ -1273,6 +1273,7 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
             # layer's experts are not one card's half-precision set (the vector band's condition, decided at the run)
             inter = int(shape(a_["expert_gate_weight_ids"][0])[0])
             launches += LK.fused_moe_launches(M_, top_k, len(a_["expert_gate_weight_ids"]), K_, inter, w_dt)
+            launches += LK.moe_align_launches(M_, top_k, len(a_["expert_gate_weight_ids"]), w_dt)   # their routing
             if M_ == 1:
                 # a decode token on one card's half-precision experts takes the vector band instead
                 launches += LK.moe_decode_vec_half_launches(top_k, K_, inter, w_dt)

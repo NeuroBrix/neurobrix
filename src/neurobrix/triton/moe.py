@@ -32,7 +32,6 @@ from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype, dtype_size
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.backend.capabilities import backend_loads_pointers_from_memory
-from nbxtensor.backend.runtime import gpu_backend
 from nbxtensor.memory import pointer_tables as _pt
 
 # NBX_MOE_DIAG gate, hoisted to import time (C1 hygiene: never read the
@@ -50,7 +49,7 @@ _BLOCK_SIZE_M = 16
 # MOE ALIGN BLOCK SIZE — device-side token-by-expert sort (3 Triton kernels)
 # ============================================================================
 
-def moe_align_block_size(topk_ids_flat, block_size, num_experts, device_idx):
+def moe_align_block_size(topk_ids_flat, block_size, num_experts, device_idx, pairs=None):
     """Sort tokens by expert, pad to block_size alignment — ON DEVICE.
 
     Three constant-tuple Triton kernels (kernels/ops/moe_align.py)
@@ -73,6 +72,9 @@ def moe_align_block_size(topk_ids_flat, block_size, num_experts, device_idx):
         block_size: BLOCK_SIZE_M for the fused kernel
         num_experts: total number of experts
         device_idx: GPU device for output tensors
+        pairs: the layer's (token, expert) pairs, the key's length class
+            (`launch_keys.moe_align_launches`) — the ids' count unless this
+            is one card's share of a layer split across cards
 
     Returns:
         sorted_token_ids: NBXTensor [max_total] — token indices sorted
@@ -106,30 +108,19 @@ def moe_align_block_size(topk_ids_flat, block_size, num_experts, device_idx):
 
     ids = topk_ids_flat.contiguous()
     set_device(sorted_ids)
-    BE = max(_tr.next_power_of_2(num_experts), 16)
-    BLK = ((128 + bs - 1) // bs) * bs  # positions/program, multiple of bs
-    # stages 1 and 2 hold [BF, BT], [BE, BF] and [BLK, BF] blocks: on Metal (32 KB of
-    # threadgroup memory) each is kept to 16 KB, so 128 experts work in
-    # chunks of 32 (BT = BF = 128 asked 64 KB: Qwen3-30B-A3B triton,
-    # "Required: 65536, Hardware limit: 32768"); a chunk never exceeds BE
-    # (8 experts with BF 128 asked the same 64 KB); elsewhere one chunk.
-    _w = max(16, min(128, 4096 // BE))
-    _bt, _bf = (_w, min(BE, _w)) if gpu_backend() == "metal" else (128, BE)
+    # the chunk widths and warps of each stage are its key's certified configuration (ops/moe_align.py), keyed by
+    # the layer's pairs (`launch_keys.moe_align_launches`)
+    from nbxtensor.ops.launch_keys import moe_align_classes
+    BE, nb = moe_align_classes(num_experts, n if pairs is None else pairs)
     moe_align_stage1_kernel[(1,)](
-        ids, offsets_ws, padded_ws, num_post_pad, n,
-        BS=bs, BE=BE, E=num_experts, BT=_bt, BF=_bf, num_warps=4)
-    moe_align_stage2_kernel[(_tr.cdiv(max_total, BLK),)](
-        offsets_ws, padded_ws, sorted_ids, expert_ids, n, max_total,
-        BS=bs, BE=BE, E=num_experts, BLK=BLK, BF=_bf, num_warps=4)
-    # stage 3's rank matrix is [BLKT, BN] int32 in threadgroup memory:
-    # 128x128 = 64 KB fits CUDA's budget but is twice Metal's 32 KB limit
-    # (measured: granite triton, "Required: 65536, Hardware limit: 32768").
-    # The rank is a sum over j-chunks, so the chunk width changes nothing
-    # but the launch shape — 64x64 = 16 KB everywhere Metal runs.
-    _blkt, _bn = (64, 64) if gpu_backend() == "metal" else (128, 128)
-    moe_align_stage3_kernel[(_tr.cdiv(n, _blkt),)](
-        ids, offsets_ws, sorted_ids, n,
-        E=num_experts, BLKT=_blkt, BN=_bn, num_warps=4)
+        ids, offsets_ws, padded_ws, num_post_pad, n, nb,
+        BS=bs, BE=BE, E=num_experts)
+    moe_align_stage2_kernel[lambda META: (_tr.cdiv(max_total, META["BLK"]),)](
+        offsets_ws, padded_ws, sorted_ids, expert_ids, n, max_total, nb,
+        BS=bs, BE=BE, E=num_experts)
+    moe_align_stage3_kernel[lambda META: (_tr.cdiv(n, META["BLKT"]),)](
+        ids, offsets_ws, sorted_ids, n, nb,
+        E=num_experts)
 
     return sorted_ids, expert_ids, num_post_pad
 
@@ -978,7 +969,7 @@ def _multi_device_fused_moe(
 
         # Align tokens for local experts — using GLOBAL expert IDs
         sorted_tids, exp_ids, num_post_pad = \
-            moe_align_block_size(local_expert_ids_gpu, _BLOCK_SIZE_M, _num_experts, dev)
+            moe_align_block_size(local_expert_ids_gpu, _BLOCK_SIZE_M, _num_experts, dev, pairs=M * top_k)
 
         # FIX #1: Remap sorted_tids from local positions back to GLOBAL flat positions
         # sorted_tids contains indices into [0..n_local). We need indices into [0..M*top_k).
