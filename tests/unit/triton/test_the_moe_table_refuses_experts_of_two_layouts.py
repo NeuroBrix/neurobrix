@@ -33,7 +33,6 @@ def test_a_projection_mixing_layouts_is_refused_by_name(monkeypatch):
     from neurobrix.triton import moe as M
     import nbxtensor.memory.pointer_tables as PT  # the MoE pointer tables (M2)
     from nbxtensor.memory.pointer_tables import build_ptr_tables
-    monkeypatch.setattr(M, "gpu_backend", lambda: "cuda")
     monkeypatch.setattr(M.DeviceAllocator, "set_device", staticmethod(_past_the_door))
     F, H = 4, 6
     linear = [_W((F, H), (H, 1)) for _ in range(3)]               # (out x in), k contiguous
