@@ -4,7 +4,8 @@ cache emptied — so what the device holds is the live set the plan priced (Open
 3.8 GB live, the Mac, 2026-10-23). A device whose allocator reuses freed memory (CUDA: null) is never synchronised.
 
 What this test would do if the code were wrong: no release on a large free — red at the call count; a release on a
-small one, or on CUDA — red at the zero counts; a vendor file stating nothing — red if it is not refused by name."""
+small one, or on CUDA — red at the zero counts; a vendor file stating nothing — red if it is not refused by name; the
+freed bytes never waited for, or counted from the start — red at the cliff tests."""
 from __future__ import annotations
 
 import pytest
@@ -16,9 +17,11 @@ from neurobrix.core.runtime.graph.compiled_sequence import CompiledSequence  # n
 from neurobrix.core.prism.attention_scratch import vendor_memory_of  # noqa: E402
 
 
-def _seq(release_from):
+def _seq(release_from, drain_cliff=None):
     s = CompiledSequence.__new__(CompiledSequence)
     s._release_from = release_from
+    s._drain_cliff = drain_cliff
+    s._in_flight = 0
     s.device = torch.device("cpu")
     return s
 
@@ -64,3 +67,28 @@ def test_a_stream_boundary_on_a_reusing_allocator_or_another_op_releases_nothing
     _seq(None)._kill([torch.empty(16, dtype=torch.uint8)], (0,), "stream.state_out::3")
     _seq(1 << 20)._kill([torch.empty(16, dtype=torch.uint8)], (0,), "aten.convolution::31")
     assert seen == []
+
+
+# Such an allocator also frees a buffer only once the device has run the work that read it: a sequence that never waits
+# holds every tensor it freed since. mochi-1-preview's VAE on MPS held ~5.7 GB of them at its 33rd convolution and ran
+# out of memory on a plan that fitted; a wait after every op ran it at 11 136 MB (the Mac, 2026-11-04 20:05). The
+# sequence waits once the bytes it freed since its last wait reach the drain cliff — no cache emptied, the count reset.
+# Injection: `_kill` without the cliff -> no sync, red; the count never reset -> a sync at every later free, red.
+def test_the_freed_bytes_wait_for_the_device_at_the_cliff(monkeypatch):
+    seen = _calls(monkeypatch)
+    s = _seq(1 << 20, drain_cliff=1000)
+    for _ in range(3):
+        s._kill([torch.empty(300, dtype=torch.uint8)], (0,))
+    assert seen == []                                          # 900 bytes in flight: under the cliff
+    s._kill([torch.empty(300, dtype=torch.uint8)], (0,))
+    assert [k for k, _ in seen] == ["sync"] and s._in_flight == 0
+    s._kill([torch.empty(300, dtype=torch.uint8)], (0,))
+    assert [k for k, _ in seen] == ["sync"]                    # counted from the wait, not from the start
+
+
+def test_a_heap_release_resets_the_count(monkeypatch):
+    seen = _calls(monkeypatch)
+    s = _seq(1 << 20, drain_cliff=1 << 22)
+    s._kill([torch.empty(300, dtype=torch.uint8)], (0,))
+    s._kill([torch.empty(1 << 20, dtype=torch.uint8)], (0,))  # a dedicated heap: sync + empty, the queue drained
+    assert [k for k, _ in seen] == ["sync", "empty"] and s._in_flight == 0

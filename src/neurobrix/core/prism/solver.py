@@ -1121,7 +1121,7 @@ class PrismSolver:
 
     def _assign_drain_cliffs(self, container, plan, devices) -> None:
         """The deferred-drain cliff of every accelerator the plan uses, set on each component held
-        there (`ComponentAllocation.deferred_drain_cliff_bytes`) — the figure the Triton hot loop
+        there (`ComponentAllocation.deferred_drain_cliff_bytes`) — the figure the engine's hot loop
         drains at instead of the profile's:
 
             cliff(dev) = min(profile cliff, room),
@@ -1133,10 +1133,9 @@ class PrismSolver:
         were budgeted against `_usable_mb`, the profile's cliff set aside, and bound nothing. Every
         whole placement read `_whole_usable_mb`, so the room is at least the profile's floor; a
         room under it (a forced strategy) is still the cliff the run gets — the plan's figure,
-        stated in the plan, never a silent profile default. Compiled plans and host devices: None."""
-        from neurobrix.core.prism.host_footprint import engine_of
-        if engine_of(getattr(self, "_mode", "compiled")) != "triton":
-            return
+        stated in the plan, never a silent profile default. The compiled engine's queue where its allocator frees
+        only once the device has run the work (`_drain_profile_memory`, MPS) is assigned the same way
+        (`CompiledSequence` drains at it); devices that keep no queue and host devices: None."""
         from neurobrix.core.prism.memory_budget import planned_drain_cliff_bytes
         mib = 1024 * 1024
         by_name = {d.device_string: d for d in (devices or [])}
@@ -1806,36 +1805,46 @@ class PrismSolver:
         This is the CEILING: a device whose plan holds a component whole drains at the room that
         component leaves, never more than this (`_whole_usable_mb`, `_assign_drain_cliffs`).
 
-        0 under the compiled engine (torch frees at the kill point; there is no queue) and on a host
-        device (its queue is host memory, priced by the host ledger). A card whose profile states no
-        cliff is refused by name: an unstated queue is not an empty one."""
+        Under the compiled engine: the same cliff where its allocator frees a buffer only once the device has
+        run the work that read it (MPS; `CompiledSequence._kill` waits for the device there), 0 where it frees
+        at the kill point (CUDA's caching allocator); 0 on a host device (its queue is host memory, priced by
+        the host ledger). A card whose profile states no cliff is refused by name: an unstated queue is not an
+        empty one."""
         from neurobrix.core.prism.memory_budget import deferred_drain_retained_bytes
         return self._read_drain(dev, deferred_drain_retained_bytes)
 
     def _deferred_drain_floor_mb(self, dev: "DeviceState") -> float:
         """The smallest queue the plan may leave the Triton hot loop on `dev`, in MB: the profile's
         `deferred_drain_floor_bytes` (`memory_budget.planned_drain_floor_bytes`; the door pins it to
-        its cliff). 0 under compiled and on a host, as the drain itself."""
+        its cliff). 0 where the engine keeps no queue (`_drain_profile_memory`) and on a host."""
         from neurobrix.core.prism.memory_budget import planned_drain_floor_bytes
         return self._read_drain(dev, planned_drain_floor_bytes)
 
     def _drain_profile_memory(self, dev: "DeviceState") -> Optional[dict]:
-        """`dev`'s vendor profile `memory:` section when the Triton engine runs on an accelerator,
-        None otherwise (the compiled engine has no queue; a host device's queue is host memory)."""
+        """`dev`'s vendor profile `memory:` section when the engine keeps a deferred-free queue on an accelerator:
+        the Triton engine always; the compiled engine where its allocator frees only once the device has run the
+        work (`memory.compiled_allocator_retention`, MPS) — None otherwise (CUDA's caching allocator; a host
+        device's queue is host memory)."""
         from neurobrix.core.prism.host_footprint import engine_of
-        if engine_of(getattr(self, "_mode", "compiled")) != "triton":
-            return None
         if str(getattr(dev, "device_string", "")).startswith("cpu"):
             return None
         spec = getattr(dev, "spec", None)
         if spec is None:
             raise PlanNotComputable(
                 f"{dev.device_string} carries no device spec, so its vendor profile cannot be read "
-                f"and the Triton engine's deferred-drain queue cannot be priced on it")
+                f"and the deferred-drain queue cannot be priced on it")
         from neurobrix.core.config.loader import get_vendor_config
         brand = getattr(spec, "brand", None)
-        return (get_vendor_config(getattr(brand, "value", brand), spec.architecture)
-                .get("memory", {}) or {})
+        memory = get_vendor_config(getattr(brand, "value", brand), spec.architecture).get("memory", {}) or {}
+        if engine_of(getattr(self, "_mode", "compiled")) == "triton":
+            return memory
+        # The compiled engine holds a queue only where its allocator frees a buffer once the device has run the work
+        # that read it (`memory.compiled_allocator_retention`, MPS): `CompiledSequence` then waits at the same cliff.
+        if "compiled_allocator_retention" not in memory:
+            raise PlanNotComputable(
+                f"{dev.device_string} ({spec.architecture}): the vendor file states no "
+                f"memory.compiled_allocator_retention — whether the compiled engine's frees wait for the device")
+        return memory if memory["compiled_allocator_retention"] else None
 
     def _runtime_growth(self, spec) -> Tuple[float, str]:
         """(MB, words) taken off the budget for the runtime's growth during a run (`_runtime_growth_fact`); a device whose

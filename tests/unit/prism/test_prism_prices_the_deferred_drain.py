@@ -184,3 +184,19 @@ def test_no_declared_profile_is_refused_by_name_not_a_silent_cliff(monkeypatch):
     monkeypatch.setattr(W, "_NBX_HW_PROFILE", None)
     with pytest.raises(RuntimeError, match="no profile with a device was declared"):
         deferred_drain_policy()
+
+
+def test_the_compiled_engine_prices_its_queue_where_its_frees_wait_for_the_device(monkeypatch):
+    """MPS frees a buffer only once the device has run the work that read it (`memory.compiled_allocator_retention`):
+    the compiled sequence waits at the drain cliff (`CompiledSequence._kill`), so the plan prices that queue as the
+    Triton engine's — mochi-1-preview's VAE on the Mac held ~5.7 GB of unpriced frees at its 33rd convolution (the
+    Mac, 2026-11-04 20:05). CUDA's caching allocator frees at the kill point: no queue (the test above).
+    Injection: the compiled engine back at 0 everywhere -> red."""
+    from tests.unit.prism._pinned_machine import APPLE_M4_PRO, pin_host
+    pin_host(monkeypatch, 24576, 17582, "the calm Mac (its measured system share)")
+    monkeypatch.delenv("NBX_DEFERRED_DRAIN_BYTES", raising=False)
+    s = PrismSolver()
+    s._mode = "compiled"
+    dev = s._prepare_devices(profile(APPLE_M4_PRO))[0]
+    assert get_vendor_config("apple", dev.spec.architecture)["memory"]["compiled_allocator_retention"]
+    assert s._deferred_drain_mb(dev) == pytest.approx(_cliff_mb(dev))

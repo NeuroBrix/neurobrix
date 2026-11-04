@@ -1798,6 +1798,7 @@ class GraphExecutor:
             narrow_op_uids=self._dtype_engine.narrow_op_uids,
             hardware=self._dtype_engine.hardware,
             attention_budget=self._attention_scores_budget_bytes,
+            drain_cliff_bytes=self._deferred_drain_cliff_bytes,
         )
 
         # Register any op interceptors BEFORE compilation (Phase 2.2: KV cache support)

@@ -72,7 +72,9 @@ def test_pixart_at_2048x1024_batch_2_on_the_pinned_mac_slices_its_vae_from_its_g
     Mac's 3,768 MB rung. The exact two-pass tiled norm (step 2, the supervisor's decision 2026-10-27 11:15: statistics
     over the whole input, each slice normalised with them) makes a group norm a stretch's FIRST op: the VAE's stretches
     from its norms now run in slices along the image's axes, the mid-block attention whole. Both engines plan it; a
-    stretch that started anywhere but a norm or ran through one would be a wrong cut (`layer_partition`'s grow rule)."""
+    stretch that runs through a norm without starting at it would be a wrong cut (`layer_partition`'s grow rule) — a
+    stretch of local ops alone (an upsample and its convolution, under the room the compiled engine's own deferred-free
+    queue leaves on MPS since 2026-11-04) holds no norm and is exact."""
     pin_host(monkeypatch, 24576, 11198, "the Mac's reading")
     impose_rung(monkeypatch, 4096)
     monkeypatch.delenv("NBX_FORCE_STRATEGY", raising=False)
@@ -81,7 +83,9 @@ def test_pixart_at_2048x1024_batch_2_on_the_pinned_mac_slices_its_vae_from_its_g
     assert p.strategy == "layer_streaming", p.strategy
     stretches = (getattr(p, "layer_stream_chunks", None) or {}).get("vae") or []
     assert stretches, "the VAE runs whole: its activations do not fit the rung"
-    assert all(str(s["first_op"]).startswith("aten.native_group_norm::") for s in stretches), stretches
+    assert all(str(s["first_op"]).startswith("aten.native_group_norm::") or not s["norm_inputs"]
+               for s in stretches), stretches
+    assert any(s["norm_inputs"] for s in stretches), "no stretch starts at a norm: the two-pass norm was not taken"
 
 
 def test_a_forced_streaming_refusal_says_why_it_declined(monkeypatch):
