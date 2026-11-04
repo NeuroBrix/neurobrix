@@ -1358,13 +1358,17 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
             return out
         return run, (oracle if values else None), "opart_ptr"
     if short == "paged_decode_attn_split_kernel":
-        # (LEN_BUCKET, page_tokens, D, D_V, GQA_GROUPS, q, pools, tables, partials): one sequence of the bucket's top over
-        # shuffled pages, one KV head and its group, through `paged_decode_attention`; the fp64 oracle is each split's
-        # unnormalised partial output, the split the kernel cuts (whole PAGED_DECODE_SPLIT_ALIGN positions)
+        # (SPLITS, page_tokens, D, D_V, GQA_GROUPS, q, pools, tables, partials): one sequence of the class's top (its
+        # splits' positions, the most work a split of the class does) over shuffled pages, one KV head and its group,
+        # through `paged_decode_attention`; the fp64 oracle is each split's unnormalised partial output, the split the
+        # kernel cuts (whole PAGED_DECODE_SPLIT_ALIGN positions)
         from nbxtensor.ops import attention_wrappers as AW
         from nbxtensor.ops import paged_decode_attn as PD
         import math as _m
-        T, pt, D, Dv, G = (int(x) for x in key[:5])
+        splits, pt, D, Dv, G = (int(x) for x in key[:5])
+        T = splits * PD.PAGED_DECODE_SPLIT_POSITIONS
+        if PD.paged_decode_splits(T) != splits:
+            raise ValueError(f"no length forms the paged decode key {key}: {splits} splits is not a split count")
         q_dt, kv_dt = (dts + ["fp16"] * 2)[:2]
         pages = -(-T // pt)
         _refuse_oversize(card_bytes, [((pages * pt, D), kv_dt), ((pages * pt, Dv), kv_dt)], short)
@@ -1377,7 +1381,7 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
                                                 NBXTensor.from_numpy(np.array([T], dtype=np.int32)), scale, T,
                                                 q_round=nbx[kv_dt])
         def oracle():
-            split = max(1, min(-(-T // PD.PAGED_DECODE_SPLIT_POSITIONS), PD.PAGED_DECODE_MAX_SPLITS))
+            split = PD.paged_decode_splits(T)
             seg = -(-(-(-T // split)) // PD.PAGED_DECODE_SPLIT_ALIGN) * PD.PAGED_DECODE_SPLIT_ALIGN
             ks = np.concatenate([_f64(kp)[order[i], 0] for i in range(pages)])[:T]
             vs = np.concatenate([_f64(vp)[order[i], 0] for i in range(pages)])[:T]

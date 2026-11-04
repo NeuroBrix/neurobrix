@@ -998,10 +998,12 @@ def decode_vec_launches(H: int, Hk: int, Tk: int, D: int, Dv: int, q: NBXDtype, 
 def paged_decode_launches(H: int, Hk: int, Tk: int, D: int, Dv: int, q: NBXDtype, kv: NBXDtype,
                           page_tokens: int) -> List[Launch]:
     """`attention_wrappers.paged_decode_attention`'s split launch (a decode step through the paged KV cache, the Triton
-    engine's every cached decode): keyed by the longest sequence's bucket, the page, the head dims and the GQA group;
+    engine's every cached decode): keyed by the splits the longest sequence makes (`paged_decode_splits`, the replayed
+    decode's bucket too), the page, the head dims and the GQA group;
     Q as it arrives (rounded to the cache's dtype on load), the pools in the cache's, the tables int32, the partials
     fp32. (The fixed-order reduce after it is the shared `flash_decode_reduce_kernel`.)"""
     f32, i32, c = tag(F32), tag(NBXDtype.int32), tag(kv)
-    return [(PAGED_DECODE, (bucket_of("N", Tk), int(page_tokens), int(D), int(Dv), int(H) // max(1, int(Hk)),
+    from nbxtensor.ops.paged_decode_attn import paged_decode_splits
+    return [(PAGED_DECODE, (paged_decode_splits(Tk), int(page_tokens), int(D), int(Dv), int(H) // max(1, int(Hk)),
                             tag(q), c, c, i32, i32, f32, f32, f32))]
 

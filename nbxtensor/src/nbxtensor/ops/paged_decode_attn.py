@@ -35,6 +35,15 @@ PAGED_DECODE_SPLIT_POSITIONS = 256
 PAGED_DECODE_MAX_SPLITS = 64
 
 
+def paged_decode_splits(longest: int) -> int:
+    """The splits one decode launch makes for its longest sequence — the read's grid, the autotune key's length class
+    (what a split's work depends on) and the replayed decode's bucket (`PagedTritonKVCache.replay_key`): one rule, so
+    a replayed step never meets a launch the certificate keys differently. Keyed on the length's own bucket instead,
+    which moves at every token below 64, a replay recorded at one step was verified against another step's
+    configuration, and the bytes differed: TinyLlama's decode stopped replaying (25 -> 135 ms a token, 2026-11-04)."""
+    return max(1, min(-(-max(int(longest), 1) // PAGED_DECODE_SPLIT_POSITIONS), PAGED_DECODE_MAX_SPLITS))
+
+
 @triton.jit
 def paged_kv_append_kernel(
     new_ptr,         # [N_tok, H_kv, D] the new positions' K (or V), any float dtype
@@ -74,7 +83,7 @@ def _tiles_in_the_page(configs, named_args, **kwargs):
     return [c for c in configs if pt % int(c.kwargs["BLOCK_N"]) == 0]
 
 
-@nbx_autotune(configs=_PAGED_DECODE_CONFIGS, key=['LEN_BUCKET', 'page_tokens', 'D', 'D_V', 'GQA_GROUPS'],
+@nbx_autotune(configs=_PAGED_DECODE_CONFIGS, key=['SPLITS', 'page_tokens', 'D', 'D_V', 'GQA_GROUPS'],
               prune_configs_by={'early_config_prune': _tiles_in_the_page}, cache_results=True)
 @triton.jit
 def paged_decode_attn_split_kernel(
@@ -88,7 +97,7 @@ def paged_decode_attn_split_kernel(
     lpart_ptr,       # [B*H_q, SPLIT] fp32 sum-of-exp per split
     n_seqs,          # B: the split's length is read from the device's lengths, never passed (see below)
     page_tokens,     # positions per page, a multiple of BLOCK_N
-    LEN_BUCKET,      # the longest sequence's bucket: the autotune key's length class (unused in the body)
+    SPLITS,          # the grid's splits (`paged_decode_splits`): the autotune key's length class (unused in the body)
     sm_scale,
     H_Q,
     stride_qh,

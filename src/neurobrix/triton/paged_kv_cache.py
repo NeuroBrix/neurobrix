@@ -297,14 +297,13 @@ class PagedTritonKVCache:
         position must lie in a page already reserved (a replayed step runs no host code, so it grants no page). The key
         carries the split count (the read's grid) and the pools' identity (uid, generation): a growth reallocates them
         and retires every plan recorded against the old addresses."""
-        from nbxtensor.ops.paged_decode_attn import PAGED_DECODE_SPLIT_POSITIONS, PAGED_DECODE_MAX_SPLITS
+        from nbxtensor.ops.paged_decode_attn import paged_decode_splits
         if self.pool is None or not self.tables:
             return None
         nxt = self.length + 1
         if nxt > len(self.tables[0].pages) * self.page_tokens:
             return None
-        split = max(1, min(-(-nxt // PAGED_DECODE_SPLIT_POSITIONS), PAGED_DECODE_MAX_SPLITS))
-        return ("kv_decode_paged", split, self.batch, self._uid, self.generation)
+        return ("kv_decode_paged", paged_decode_splits(nxt), self.batch, self._uid, self.generation)
 
     def replay_advance(self) -> None:
         """The replayed launches appended one position per layer and advanced every device length: mirror it."""

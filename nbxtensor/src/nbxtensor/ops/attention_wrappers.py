@@ -645,7 +645,7 @@ def paged_decode_attention(q, k_pool, v_pool, block_table, seq_lens, softmax_sca
     PAGED_DECODE_TILE_CANDIDATES dividing page_tokens · q_round: the dtype Q is read in (the cache's), rounded on load
     as `_decode_attn_vec` does; the output is written in it. Output [B, H, 1, D_v] in q_round, else q's dtype."""
     from nbxtensor.ops.paged_decode_attn import (paged_decode_attn_split_kernel, PAGED_DECODE_TILE_CANDIDATES,
-                                        PAGED_DECODE_SPLIT_POSITIONS, PAGED_DECODE_MAX_SPLITS, PAGED_DECODE_SPLIT_ALIGN)
+                                                 paged_decode_splits, PAGED_DECODE_SPLIT_ALIGN)
     from nbxtensor.ops.flash_decode import flash_decode_reduce_kernel
     batch, nheads, tq, headdim = (int(x) for x in q.shape)
     num_pages, nheads_k, page_tokens, d_k = (int(x) for x in k_pool.shape)
@@ -667,7 +667,7 @@ def paged_decode_attention(q, k_pool, v_pool, block_table, seq_lens, softmax_sca
     # The vector decode kernel's split shape (ops/paged_decode_attn.py), each split a whole number of tiles so a split
     # never starts inside a tile.
     longest = max(int(max_seq_len), 1)
-    split = max(1, min(int(triton.cdiv(longest, PAGED_DECODE_SPLIT_POSITIONS)), PAGED_DECODE_MAX_SPLITS))
+    split = paged_decode_splits(longest)
 
     q2 = q.reshape(bhq, headdim)
     dev = f"cuda:{q._device_idx}"
@@ -683,7 +683,7 @@ def paged_decode_attention(q, k_pool, v_pool, block_table, seq_lens, softmax_sca
     paged_decode_attn_split_kernel[(bhq, split)](
         q2, k_pool, v_pool, block_table, seq_lens,
         opart, mpart, lpart,
-        batch, page_tokens, _lk.bucket_of("N", longest), float(softmax_scale), nheads,
+        batch, page_tokens, split, float(softmax_scale), nheads,
         q2.stride(0),
         k_pool.stride(0), k_pool.stride(1), k_pool.stride(2),
         v_pool.stride(0), v_pool.stride(1), v_pool.stride(2),
