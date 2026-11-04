@@ -596,6 +596,11 @@ def _key_operands(qual: str, tuner, key: tuple) -> Optional[Dict[str, Any]]:
             ins.append(("bias", (N,), d(2)))
         return {"family": "gemv", "inputs": ins, "out": ((N,), out_dt), "mnk": (1, N, K), "batch": 1,
                 "row_windowed_launch": False}
+    if short == "fused_moe_kernel":
+        N, K, nv, n_exp = int(key[0]), int(key[1]), int(key[2]), int(key[3])
+        return {"family": "moe", "inputs": [("x", (nv, K), d(0)), ("w", (n_exp * N, K), d(0)), ("score", (nv,), d(0)),
+                                            ("route", (nv,), "int64")],
+                "out": ((nv, N), d(0)), "mnk": (nv, N, K), "experts": n_exp}
     if short == "conv2d_forward_kernel":
         (n, ci, h, w, co, oh, ow, kh, kw, sh, sw, ph, pw, dh, dw, groups) = [int(v) for v in key[:16]]
         ci_g = ci // max(groups, 1)
@@ -726,6 +731,19 @@ def price_key(qual: str, tuner, key: tuple) -> Optional[Dict[str, int]]:
         rows = tq if wins is None else wins[0][1] - wins[0][0]
         kept = bh * tq * hd * 8
         oracle = kept + bh * (rows * hd + 2 * tk * hd + 3 * rows * tk) * 8
+        deviation = kept + kept // 8 * (4 + 8)
+        return {"draws": draws, "device": device, "oracle": oracle, "deviation": deviation,
+                "peak": draws + device + max(oracle, deviation)}
+    if ops["family"] == "moe":
+        # `_moe_oracle_fn`: per row window of the pairs (whole under the cap), the window's activations in float64 and
+        # their gather per expert, one expert's weights in float64 at a time, the window's product and its result kept;
+        # the device beside it also holds the alignment's tables (the padded worst case, int64)
+        nv, N, K = ops["mnk"]
+        device += 8 * 2 * (nv + ops["experts"] * 16)
+        wins = _row_windows(nv, N, K) or [(0, nv)]
+        rows = wins[0][1] - wins[0][0]
+        kept = len(wins) * rows * N * 8
+        oracle = kept + rows * K * 8 * 2 + N * K * 8 + rows * N * 8
         deviation = kept + kept // 8 * (4 + 8)
         return {"draws": draws, "device": device, "oracle": oracle, "deviation": deviation,
                 "peak": draws + device + max(oracle, deviation)}
@@ -962,6 +980,30 @@ def _flash_batch_heads(tq: int, tk: int, hd: int, q, k, v) -> Tuple[int, int]:
         if h > (1 << 16):
             raise ValueError(f"no head count takes the flash route at ({tq}, {tk}, {hd}) — a census defect")
     return 1, h
+
+
+def _moe_oracle_fn(x, ws, score, route, mul):
+    """The fp64 oracle of a grouped MoE product (`fused_moe_kernel`): each pair's row times its expert's weights (times
+    its routed weight on the down projection), on row windows of the pairs above the cap (`_row_windows`, as a matmul's;
+    `RowWindowedOracle`) — whole, a 327 680-pair key held ~25 GB of float64 on the host (the Mac's unified pool, RUN 24,
+    2026-11-04). Per window: its activations in float64, gathered per expert, one expert's weights at a time."""
+    nv, K = int(x.shape[0]), int(x.shape[1])
+    N = int(ws[0].shape[0])
+
+    def window(r0, r1):
+        xs, rt = _f64(x[r0:r1]), route[r0:r1]
+        y = np.empty((r1 - r0, N), dtype=np.float64)
+        for e in np.unique(rt):
+            idx = np.nonzero(rt == e)[0]
+            y[idx] = xs[idx] @ _f64(ws[int(e)]).T
+        return y * _f64(score[r0:r1])[:, None] if mul else y
+
+    def build():
+        wins = _row_windows(nv, N, K)
+        if wins is None:
+            return window(0, nv)
+        return RowWindowedOracle([((r0, r1), window(r0, r1)) for r0, r1 in wins], nv)
+    return build
 
 
 def _attention_oracle_fn(q, k, v, mask, scale):
@@ -1286,15 +1328,7 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
             _nbx_moe_wrappers.invoke_fused_moe(to(x), ptrs, out, to(score), sids, eids, npad, N, K, 1, K, 1,
                                                mul_routed_weight=mul, topk_divide=divide)
             return out
-        def oracle():
-            xs, sc = _f64(x), _f64(score)
-            y = np.empty((nv, N), dtype=np.float64)
-            for e in range(n_exp):
-                rows = np.nonzero(route == e)[0]
-                if rows.size:
-                    y[rows] = xs[rows] @ _f64(ws[e]).T
-            return y * sc[:, None] if mul else y
-        return run, (oracle if values else None), "c_ptr"
+        return run, (_moe_oracle_fn(x, ws, score, route, mul) if values else None), "c_ptr"
     if short in ("moe_gateup_vec_half_kernel", "moe_down_split_vec_half_kernel", "moe_part_reduce_kernel"):
         # the one-token MoE band (`triton/moe._moe_decode_vec_half_pass`), each launch on its own: TOP_K experts (a
         # permutation of as many) of [N, K] half weights, the routed rows fp32; the fp64 oracle per expert row
