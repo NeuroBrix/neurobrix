@@ -273,6 +273,8 @@ def shadow_range(addr: int)
 `nbxtensor.memory.slab`
 
 ```python
+def first_fit_extent(events: List[Tuple[int, int, int]]) -> int
+    # The slab a run needs: the highest offset the slab's first fit reaches over the run's allocations and frees
 class StepSlab(SlabAllocator)
     # Per-sequence slab RECYCLED at every decode step (P-REPLAY-KV- DECODE B1).
 class SlabInterceptor(AllocatorInterceptor)

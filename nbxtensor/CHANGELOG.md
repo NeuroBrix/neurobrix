@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The first release, 0.0.1, is in preparation.
 
 ### Added
+- **`nbxtensor.memory.slab.first_fit_extent`**: the slab a run needs, the highest offset the slab's own first fit
+  reaches over the run's allocations and frees — between its live peak and the sum of its blocks.
 - **nbxtensor describes the NVIDIA and AMD devices itself**: `backend/devices/nvidia/` (Volta, Ampere, Hopper) and
   `backend/devices/amd/` (CDNA, CDNA2, CDNA3) hold the facts its kernels read — tiles, shared memory, registers,
   warp size, the matrix unit, the autotune ladders and screen, the attention thresholds — as Apple's did; an

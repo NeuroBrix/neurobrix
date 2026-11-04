@@ -113,9 +113,14 @@ def _size_cache_path(seq) -> str:
     return os.path.join(_SIZE_CACHE_DIR, f"{comp}.json")
 
 
+# the rule a stored slab size was computed by: a size from another rule is not this one's (2026-11-04: sizes measured as
+# the live peak, then grown by a shortfall retry to 31.7 GB, survived every process and kept a 32 GB card full)
+_SIZE_RULE = "first-fit-extent/1"
+
+
 def _sig_hash(sig: tuple) -> str:
     import hashlib
-    return hashlib.sha256(repr(sig).encode()).hexdigest()[:16]
+    return hashlib.sha256(repr((_SIZE_RULE, sig)).encode()).hexdigest()[:16]
 
 
 def _load_slab_size(seq, sig: tuple) -> Optional[int]:
@@ -1302,21 +1307,47 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
         STATE.high_water = 0
         STATE.measured = {}
         STATE.live_by_dev, STATE.high_water_by_dev = {}, {}
+        STATE.events_by_dev, STATE._key_of_ptr = {}, {}
         try:
             seq._run_single_device(skip_kills, None)
         finally:
             STATE.measuring = False
-        plans[sig] = ("MEASURED", STATE.high_water, 1)
+        # the slab is what the recording's first fit reaches over the measured run's allocations and frees
+        # (`first_fit_extent`) — never less than the live peak, and never the sum the shortfall retry used to add
+        from nbxtensor.memory.slab import first_fit_extent
+        extent = {d: first_fit_extent(ev) for d, ev in STATE.events_by_dev.items()}
+        own = max(STATE.high_water, extent.get(seq.device_idx, 0))
+        plans[sig] = ("MEASURED", own, 1)
+        seq.__dict__.setdefault("_replay_live_peak", {})[sig] = int(STATE.high_water)   # what the verify pass holds
         # every OTHER card the run allocated on gets its own slab at recording (a held expert's card, S3): served from
         # the sequence's card's slab, its tensors had addresses on the wrong card (an illegal access at replay)
         seq.__dict__.setdefault("_replay_dev_hw", {})[sig] = {
-            d: b for d, b in STATE.high_water_by_dev.items() if d != seq.device_idx and b > 0}
+            d: max(b, extent.get(d, 0)) for d, b in STATE.high_water_by_dev.items() if d != seq.device_idx and b > 0}
         _mem_diag("post-measure")
         return True
 
     # ("MEASURED", slab_bytes, attempt) — record this execution.
     _, slab_bytes, attempt = state
     if slab_bytes <= 0:
+        plans[sig] = "UNREPLAYABLE"
+        return False
+    # The slab is the recording's whole memory: the blocks the measured run left in the pool (and the expandable
+    # range's free chunks) go back to the driver first, and the recording is made only where its slab AND the verify
+    # pass that runs the normal path beside it fit what the card has free — a plan that cannot is the normal path's,
+    # never an out-of-memory (Allegro-TI2V's encoder tile, 2026-11-04: the measured run's 9.9 GB stayed cached under a
+    # 12.7 GB slab, and the verify pass beside them, with the pipeline's resident weights, overran a 32 GB card).
+    _dev = seq.device_idx if seq.device_idx is not None else DeviceAllocator.get_device()
+    DeviceAllocator.device_synchronize(_dev)
+    if DeviceAllocator._range_vmm(_dev) is not None:
+        DeviceAllocator._range_reclaim(_dev, None)
+    DeviceAllocator._pool_flush(_dev)
+    _verify = int((seq.__dict__.get("_replay_live_peak") or {}).get(sig, slab_bytes))
+    _free, _ = DeviceAllocator.mem_get_info(_dev)
+    if slab_bytes + _verify > _free:
+        comp = str((getattr(seq, "dag", None) or {}).get("component_name", "?"))
+        print(f"[Replay] {comp}: not recorded — its slab ({slab_bytes / 2**20:.0f} MB) and the verify pass beside it "
+              f"({_verify / 2**20:.0f} MB) need more than the {_free / 2**20:.0f} MB free on device {_dev}; the normal "
+              f"path keeps this graph", flush=True)
         plans[sig] = "UNREPLAYABLE"
         return False
     try:

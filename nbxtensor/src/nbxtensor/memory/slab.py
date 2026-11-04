@@ -22,6 +22,51 @@ ALIGN = 512       # matches typical device allocation granularity
 ACTIVE_SLABS: List["SlabAllocator"] = []
 
 
+def _carve(free_list: List[Tuple[int, int]], need: int) -> Optional[int]:
+    """First fit: the offset of the first free range holding `need` aligned bytes, the range shrunk; None if none."""
+    for i, (off, sz) in enumerate(free_list):
+        if sz >= need:
+            if sz == need:
+                free_list.pop(i)
+            else:
+                free_list[i] = (off + need, sz - need)
+            return off
+    return None
+
+
+def _give_back(free_list: List[Tuple[int, int]], off: int, sz: int) -> List[Tuple[int, int]]:
+    """The free list with [off, off + sz) returned, sorted and its neighbours merged."""
+    free_list.append((off, sz))
+    free_list.sort()
+    merged: List[Tuple[int, int]] = []
+    for o, s_ in free_list:
+        if merged and merged[-1][0] + merged[-1][1] == o:
+            merged[-1] = (merged[-1][0], merged[-1][1] + s_)
+        else:
+            merged.append((o, s_))
+    return merged
+
+
+def first_fit_extent(events: List[Tuple[int, int, int]]) -> int:
+    """The slab a run needs: the highest offset `SlabAllocator`'s first fit reaches when it serves `events` — the run's
+    pooled allocations and frees in order, (+1, key, aligned bytes) and (-1, key, 0) — from a slab without end. It is
+    at least the live peak and at most the sum: a first fit leaves holes a later, larger block cannot use. Sized from
+    the live peak alone, Allegro-TI2V's encoder tile (9.0 GB live) was short by 22.6 GB at its recording, the retry
+    then took 31.7 GB of a 32 GB card for a run that never holds more than 8.6 GB (2026-11-04)."""
+    end = 1 << 62
+    free_list: List[Tuple[int, int]] = [(0, end)]
+    at: Dict[int, Tuple[int, int]] = {}
+    top = 0
+    for sign, key, need in events:
+        if sign > 0:
+            off = _carve(free_list, need)
+            at[key] = (off, need)
+            top = max(top, off + need)
+        elif key in at:
+            free_list = _give_back(free_list, *at.pop(key))
+    return top
+
+
 class SlabAllocator:
     """First-fit free-list allocator over ONE device slab.
 
@@ -50,15 +95,11 @@ class SlabAllocator:
 
     def malloc(self, nbytes: int) -> int:
         need = (int(nbytes) + ALIGN - 1) // ALIGN * ALIGN
-        for i, (off, sz) in enumerate(self.free_list):
-            if sz >= need:
-                if sz == need:
-                    self.free_list.pop(i)
-                else:
-                    self.free_list[i] = (off + need, sz - need)
-                ptr = self.base + off
-                self.allocs[ptr] = (off, need)
-                return ptr
+        off = _carve(self.free_list, need)
+        if off is not None:
+            ptr = self.base + off
+            self.allocs[ptr] = (off, need)
+            return ptr
         self.shortfall += need
         return 0
 
@@ -66,16 +107,7 @@ class SlabAllocator:
         entry = self.allocs.pop(ptr, None)
         if entry is None:
             return False
-        off, sz = entry
-        self.free_list.append((off, sz))
-        self.free_list.sort()
-        merged: List[Tuple[int, int]] = []
-        for o, s in self.free_list:
-            if merged and merged[-1][0] + merged[-1][1] == o:
-                merged[-1] = (merged[-1][0], merged[-1][1] + s)
-            else:
-                merged.append((o, s))
-        self.free_list = merged
+        self.free_list = _give_back(self.free_list, *entry)
         if self.retired and not self.allocs:
             self._release_now()
         return True
@@ -180,6 +212,10 @@ class SlabInterceptor(AllocatorInterceptor):
         self.high_water = 0
         self.measured: Dict[int, int] = {}  # ptr -> aligned size
         self.total_measured = 0             # cumulative (never decremented)
+        # the run's pooled allocations and frees in order, per device (`first_fit_extent`: the slab they need)
+        self.events_by_dev: Dict[int, List[Tuple[int, int, int]]] = {}
+        self._seq = 0
+        self._key_of_ptr: Dict[int, int] = {}
 
     def slab_refused(self, reason: str) -> None:
         """A recording the slabs cannot serve: the owner decides (a replayer abandons the plan, by name)."""
@@ -213,6 +249,9 @@ class SlabInterceptor(AllocatorInterceptor):
                 self.high_water = self.live
             _d = dev_idx if dev_idx is not None else DeviceAllocator.get_device()
             self.measured_dev[ptr] = _d
+            self._seq += 1                    # a key per allocation: a pointer the allocator reuses is a new block
+            self._key_of_ptr[ptr] = self._seq
+            self.events_by_dev.setdefault(_d, []).append((1, self._seq, need))
             self.live_by_dev[_d] = self.live_by_dev.get(_d, 0) + need
             if self.live_by_dev[_d] > self.high_water_by_dev.get(_d, 0):
                 self.high_water_by_dev[_d] = self.live_by_dev[_d]
@@ -228,4 +267,7 @@ class SlabInterceptor(AllocatorInterceptor):
             _d = self.measured_dev.pop(ptr, None)
             if _d is not None:
                 self.live_by_dev[_d] = self.live_by_dev.get(_d, 0) - need
+                _k = self._key_of_ptr.pop(ptr, None)
+                if _k is not None:
+                    self.events_by_dev.setdefault(_d, []).append((-1, _k, 0))
         return direct(ptr)
