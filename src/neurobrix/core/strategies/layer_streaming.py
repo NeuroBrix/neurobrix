@@ -89,7 +89,9 @@ def _weights_bytes(executor) -> int:
     n = 0
     for t in (getattr(executor, "_weights", None) or {}).values():
         if t is not None:
-            n += int(getattr(t, "nbytes", None) or getattr(t, "_nbytes", 0) or 0)
+            # NBXTensor's nbytes is a METHOD (ATen's API), torch's an int: the NBXTensor's own count first (Flex.1-alpha
+            # triton died on int(method) at its first streamed reload, 2026-11-04)
+            n += int(getattr(t, "_nbytes", None) or getattr(t, "nbytes", 0) or 0)
     return n
 
 

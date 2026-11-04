@@ -177,3 +177,13 @@ def test_the_first_launch_reloads_the_smallest_component_of_each_unstated_stored
     probed.clear()
     A.ensure_measured_facts("default-abc", "compiled")
     assert probed == [], "a stated rate is not measured again"
+
+
+def test_the_reload_counts_an_nbxtensor_s_bytes():
+    """Flex.1-alpha triton, 2026-11-04: `_weights_bytes` took `nbytes` first, a METHOD on NBXTensor (ATen's API), and died
+    on int(method) at the first streamed reload. What this would do if the order came back: TypeError — RED."""
+    from neurobrix.core.strategies import layer_streaming as LS
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.dtype.nbx_dtype import parse_dtype
+    ex = type("E", (), {"_weights": {"w": NBXTensor.zeros((4, 8), parse_dtype("float32"), "cpu"), "none": None}})()
+    assert LS._weights_bytes(ex) == 4 * 8 * 4
