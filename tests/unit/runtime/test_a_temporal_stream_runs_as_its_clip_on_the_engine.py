@@ -41,6 +41,16 @@ CASES = [
 BOUND = 1e-4      # float32 convolutions over different time extents: the engine's own noise
 
 
+@pytest.fixture(autouse=True, scope="module")
+def _machine_profile():
+    """The machine's hardware profile in force, as the CLI declares it before a request: the loaders read its facts
+    (`cpu.io_workers`), the Triton hot loop its vendor file, and both refuse without them."""
+    from neurobrix.core.prism import load_profile
+    from neurobrix.core.prism.autodetect import get_or_create_default_profile
+    from neurobrix.triton.dtype import declare_hardware_profile
+    declare_hardware_profile(load_profile(get_or_create_default_profile()))
+
+
 def _case(model, comp):
     c = cache_dir() / model
     if not (c / "components" / comp / "graph.json").exists():

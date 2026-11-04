@@ -8,6 +8,15 @@ import torch
 from neurobrix.core.runtime.graph import compiled_ops as CO
 
 
+def _hardware():
+    """(vendor, architecture) of the machine's profile — the attention reads from its vendor file whether its device
+    writes its full scores, and refuses without it."""
+    from neurobrix.core.prism import load_profile
+    from neurobrix.core.prism.autodetect import get_or_create_default_profile
+    d = load_profile(get_or_create_default_profile()).devices[0]
+    return (getattr(d.brand, "value", d.brand), d.architecture)
+
+
 def test_philox_and_lse_placeholders_are_shared_across_calls():
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     a = CO._placeholder_philox(dev); b = CO._placeholder_philox(dev)
@@ -21,7 +30,7 @@ def test_philox_and_lse_placeholders_are_shared_across_calls():
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU: counts host-to-device copies")
 def test_efficient_attention_variant_issues_no_host_copy_per_call():
     from torch.profiler import profile, ProfilerActivity
-    resolver = CO.CompiledOpResolver(torch.device("cuda"), torch.float16)
+    resolver = CO.CompiledOpResolver(torch.device("cuda"), torch.float16, hardware=_hardware())
     fn = resolver.get_op_func("_scaled_dot_product_efficient_attention",
                               {"args": [], "kwargs": {}})
     q = torch.randn(2, 4, 64, 32, device="cuda", dtype=torch.float16)
@@ -39,7 +48,7 @@ def test_efficient_attention_variant_issues_no_host_copy_per_call():
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU kernel equality")
 def test_efficient_attention_accepts_transposed_views_without_copy():
     from torch.profiler import profile, ProfilerActivity
-    resolver = CO.CompiledOpResolver(torch.device("cuda"), torch.float16)
+    resolver = CO.CompiledOpResolver(torch.device("cuda"), torch.float16, hardware=_hardware())
     fn = resolver.get_op_func("_scaled_dot_product_efficient_attention", {"args": [], "kwargs": {}})
     x = torch.randn(2, 256, 8, 40, device="cuda", dtype=torch.float16)
     q, k, v = (x.transpose(1, 2) for _ in range(3))          # [B, H, S, D] strided views
