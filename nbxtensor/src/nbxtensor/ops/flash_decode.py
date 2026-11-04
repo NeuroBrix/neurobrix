@@ -16,7 +16,14 @@ environment switch and measured slower than the vector kernels; it was removed w
 import triton
 import triton.language as tl
 
+from nbxtensor.ops._configs import nbx_autotune
 
+# The warps of the reduce, candidates the certification measures per key (the launch fixed 4 before 2026-11-04); one
+# stage — the loop reads each split's partials once.
+_REDUCE_CONFIGS = [triton.Config({}, num_warps=w, num_stages=1) for w in (1, 2, 4, 8)]
+
+
+@nbx_autotune(configs=_REDUCE_CONFIGS, key=['SPLIT', 'GROUPS', 'D'], cache_results=True)
 @triton.jit
 def flash_decode_reduce_kernel(
     opart_ptr, mpart_ptr, lpart_ptr,

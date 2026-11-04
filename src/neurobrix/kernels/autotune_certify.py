@@ -1391,7 +1391,8 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         run = lambda: AW._decode_attn_vec(to(q), to(k), to(v), to(b) if has_b else None, scale, 1, G, 1, T, D,  # noqa: E731
                                           q_round=q_round)
         def oracle():
-            split = max(1, min(-(-T // AW._DECODE_VEC_SEG), AW._DECODE_VEC_MAX_SPLIT))
+            from nbxtensor.ops.decode_attn_vec import decode_vec_splits
+            split = decode_vec_splits(T)
             seg = -(-T // split)
             qs, ks, vs = _f64(q).reshape(G, D), _f64(k).reshape(T, D), _f64(v).reshape(T, Dv)
             if q_round is not None:                  # Q rounded to the cache's dtype on load, as the kernel does
@@ -1409,6 +1410,35 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
                 out[:, s_] = p_ @ vs[lo:hi]
             return out
         return run, (oracle if values else None), "opart_ptr"
+    if short == "flash_decode_reduce_kernel":
+        # (SPLIT, GROUPS, D, partials, out): the combine after both split decodes, through `decode_reduce` — a batch of
+        # query rows, each split's partial output, running max and sum of exponentials drawn (a split's max may be
+        # -inf with a sum of 0, a split that saw only masked keys); the fp64 oracle is the log-sum-exp combine
+        from nbxtensor.ops import attention_wrappers as AW
+        split, groups, dv = int(key[0]), int(key[1]), int(key[2])
+        if groups != 1:
+            raise ValueError(f"no launch forms the reduce key {key}: every decode views its partials at GROUPS 1")
+        out_dt = dts[3] if len(dts) > 3 else "fp16"
+        rows = 64
+        opart, mpart, lpart = arr(rng, (rows, split, dv), "fp32"), arr(rng, (rows, split), "fp32"), arr(rng, (rows, split), "fp32")
+        if values:
+            mpart, lpart = np.array(mpart, dtype=np.float32) * 10.0, np.abs(np.array(lpart, dtype=np.float32)) * 10.0 + 0.5
+            dead = rng.random((rows, split)) < (0.1 if split > 1 else 0.0)
+            mpart[dead], lpart[dead] = -np.inf, 0.0
+        nbx = {"fp16": NBXDtype.float16, "bf16": NBXDtype.bfloat16, "fp32": NBXDtype.float32}
+        def run():
+            out = NBXTensor.empty((rows, 1, dv), dtype=nbx[out_dt])
+            AW.decode_reduce(to(opart), to(mpart), to(lpart), out)
+            return out
+        def oracle():
+            o, m, l_ = _f64(opart), _f64(mpart), _f64(lpart)
+            top = np.max(np.where(np.isfinite(m), m, -np.inf), axis=1, keepdims=True)
+            top = np.where(np.isfinite(top), top, 0.0)
+            c = np.where(np.isfinite(m), np.exp(m - top), 0.0)
+            den = (l_ * c).sum(axis=1)
+            num = (o * c[:, :, None]).sum(axis=1)
+            return (num / np.where(den == 0.0, 1.0, den)[:, None]).reshape(rows, 1, dv)
+        return run, (oracle if values else None), "out_ptr"
     if short == "paged_decode_attn_split_kernel":
         # (SPLITS, page_tokens, D, D_V, GQA_GROUPS, q, pools, tables, partials): one sequence of the class's top (its
         # splits' positions, the most work a split of the class does) over shuffled pages, one KV head and its group,

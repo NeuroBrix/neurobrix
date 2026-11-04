@@ -759,8 +759,10 @@ def sdpa_operand_dtypes(q: NBXDtype, k: NBXDtype, v: NBXDtype, q_round: Optional
     # The (q, k, v, q_round) dtypes `scaled_dot_product_attention_wrapper` computes attention with
 def decode_vec_takes(headdim: int, headdim_v: int, mask_numel: Optional[int], seqlen_k: int)
     # Whether a single-query attention on the math route runs the vector decode kernel (no autotuned key) — `_try_decode_vec`'s contract
-def decode_vec_launches(H: int, Hk: int, Tk: int, D: int, Dv: int, q: NBXDtype, k: NBXDtype, v: NBXDtype, bias: Optional[NBXDtype])
-    # the vector decode's split launch: keyed by the keys' bucket, the head dims, the GQA group and the bias
+def decode_reduce_launch(splits: int, Dv: int, out: NBXDtype) -> Launch
+    # the fixed-order combine after both split decodes: keyed by the splits, GROUPS 1 and the value head dim
+def decode_vec_launches(H: int, Hk: int, Tk: int, D: int, Dv: int, q: NBXDtype, k: NBXDtype, v: NBXDtype, bias: Optional[NBXDtype], q_round: Optional[NBXDtype]=None)
+    # the vector decode's split launch: keyed by the keys' bucket, the head dims, the GQA group and the bias; then the shared reduce
 def paged_decode_launches(H: int, Hk: int, Tk: int, D: int, Dv: int, q: NBXDtype, kv: NBXDtype, page_tokens: int)
     # a cached decode step's paged read: keyed by the longest sequence's bucket, the page, the head dims, the GQA group
 def flash_any_head_dim()
@@ -951,6 +953,8 @@ def paged_kv_append(new, pool, slot_mapping)
     # Write new positions into a layer's paged pool (state engine step 2, ops/paged_decode_attn.py).
 def paged_decode_attention(q, k_pool, v_pool, block_table, seq_lens, softmax_scale, max_seq_len, q_round=None)
     # Decode attention (one query position) read through the page table — the vector split-KV kernel of ops/decode_attn_vec.py on paged K / V, merged by the fixed-order `flash_decode_reduce_kernel`.
+def decode_reduce(opart, mpart, lpart, out)
+    # The fixed-order combine of a split decode (`flash_decode_reduce_kernel`), one program per query row; its warps are the key's certified configuration
 def math_attention_cost(q, k, v, mask=None, is_causal=False, native_bf16=None, force_accum=None, contract_half=None, unit=None)
     # `_math_attention` on q [B, H, Tq, D], k [B, Hk, Tk, D], v [B, Hk, Tk, Dv] and an optional additive `mask` (`_cost.Spec`s
 def chunked_math_attention_cost(q, k, v, chunk_rows: int, mask=None, is_causal=False, native_bf16=None, force_accum=None, contract_half=None, unit=None)
@@ -1174,6 +1178,8 @@ def reduce_then_scan_block_scan_kernel_row(in_ptr, previous_sum_ptr, out_ptr, N,
 `nbxtensor.ops.decode_attn_vec`
 
 ```python
+def decode_vec_splits(seqlen_k: int) -> int
+    # The splits the vector decode cuts its keys into: its grid and the shared reduce's autotune key
 def decode_attn_vec_split_kernel(q_ptr, k_ptr, v_ptr, bias_ptr, opart_ptr, mpart_ptr, lpart_ptr, T_k, seg_len, T_BUCKET, sm_scale, stride_qh, stride_kh, stride_kn, stride_vh, stride_vn, stride_oh, stride_os, stride_mh, GQA_GROUPS: tl.constexpr, BLOCK_D: tl.constexpr, D: tl.constexpr, D_V: tl.constexpr, HAS_BIAS: tl.constexpr, Q_TO: tl.constexpr=None, Q_SATURATE: tl.constexpr=False, BLOCK_N: tl.constexpr=32)
     # One query row per program and split of the keys (grid = (B*H_q, split)): the split-KV partials
 ```

@@ -1187,7 +1187,8 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
                                                              has_native_bf16, rows, contract_half=contract.safe)
             elif Tq == 1 and LK.decode_vec_takes(D, Dv, mask_n, Tk):
                 launches = LK.decode_vec_launches(H, Hk, Tk, D, Dv, q_vec, kd, vd,
-                                                  dt(ins[3]) if mask_n is not None and len(ins) > 3 else None)
+                                                  dt(ins[3]) if mask_n is not None and len(ins) > 3 else None,
+                                                  q_round=_qr)
             else:
                 launches = LK.math_attention_launches(B, H, Hk, Tq, Tk, D, Dv, qd, kd, vd, has_native_bf16, contract_half=contract.safe)
         elif kind in ("aten::native_layer_norm", "aten::layer_norm"):

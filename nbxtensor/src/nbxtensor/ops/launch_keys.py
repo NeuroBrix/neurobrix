@@ -45,6 +45,7 @@ MOE_DOWN_HALF = "nbxtensor.ops.moe_decode_vec.moe_down_split_vec_half_kernel"
 MOE_PART_REDUCE = "nbxtensor.ops.moe_decode_vec.moe_part_reduce_kernel"
 DECODE_VEC = "nbxtensor.ops.decode_attn_vec.decode_attn_vec_split_kernel"
 PAGED_DECODE = "nbxtensor.ops.paged_decode_attn.paged_decode_attn_split_kernel"
+DECODE_REDUCE = "nbxtensor.ops.flash_decode.flash_decode_reduce_kernel"
 
 F32, BF16, F16 = NBXDtype.float32, NBXDtype.bfloat16, NBXDtype.float16
 _HALF = (F16, BF16)
@@ -985,14 +986,24 @@ def moe_decode_vec_half_launches(top_k: int, hidden: int, inter: int, w: NBXDtyp
             (MOE_PART_REDUCE, (int(hidden), int(top_k), f32, f32))]
 
 
+def decode_reduce_launch(splits: int, Dv: int, out: NBXDtype) -> Launch:
+    """`attention_wrappers.decode_reduce`'s launch, the fixed-order combine after both split decodes: keyed by the
+    splits, one row per program (GROUPS 1) and the value head dim; the partials fp32, the output in `out`."""
+    f32 = tag(F32)
+    return (DECODE_REDUCE, (int(splits), 1, int(Dv), f32, f32, f32, tag(out)))
+
+
 def decode_vec_launches(H: int, Hk: int, Tk: int, D: int, Dv: int, q: NBXDtype, k: NBXDtype, v: NBXDtype,
-                        bias: Optional[NBXDtype]) -> List[Launch]:
+                        bias: Optional[NBXDtype], q_round: Optional[NBXDtype] = None) -> List[Launch]:
     """`attention_wrappers._decode_attn_vec`'s split launch: one query row per program, keyed by the keys' bucket, the
-    head dims, the GQA group and the bias; Q as it arrives (the kernel rounds it to the cache's dtype on load), the
-    partials fp32. (The fixed-order reduce after it is the shared `flash_decode_reduce_kernel`.)"""
+    head dims, the GQA group and the bias; Q as it arrives (the kernel rounds it to `q_round`, the cache's dtype, on
+    load), the partials fp32; then the shared reduce over its splits (`decode_vec_splits`), written in `q_round`, else
+    in Q's dtype."""
+    from nbxtensor.ops.decode_attn_vec import decode_vec_splits
     f32 = tag(F32)
     return [(DECODE_VEC, (bucket_of("N", Tk), int(D), int(Dv), int(H) // max(1, int(Hk)), bias is not None,
-                          tag(q), tag(k), tag(v), tag(bias if bias is not None else q), f32, f32, f32))]
+                          tag(q), tag(k), tag(v), tag(bias if bias is not None else q), f32, f32, f32)),
+            decode_reduce_launch(decode_vec_splits(Tk), Dv, q_round if q_round is not None else q)]
 
 
 def paged_decode_launches(H: int, Hk: int, Tk: int, D: int, Dv: int, q: NBXDtype, kv: NBXDtype,
@@ -1001,9 +1012,11 @@ def paged_decode_launches(H: int, Hk: int, Tk: int, D: int, Dv: int, q: NBXDtype
     engine's every cached decode): keyed by the splits the longest sequence makes (`paged_decode_splits`, the replayed
     decode's bucket too), the page, the head dims and the GQA group;
     Q as it arrives (rounded to the cache's dtype on load), the pools in the cache's, the tables int32, the partials
-    fp32. (The fixed-order reduce after it is the shared `flash_decode_reduce_kernel`.)"""
+    fp32; then the shared reduce over those splits, written in the cache's dtype (the cache's decode rounds Q to it,
+    `kv_cache.intercept`)."""
     f32, i32, c = tag(F32), tag(NBXDtype.int32), tag(kv)
     from nbxtensor.ops.paged_decode_attn import paged_decode_splits
     return [(PAGED_DECODE, (paged_decode_splits(Tk), int(page_tokens), int(D), int(Dv), int(H) // max(1, int(Hk)),
-                            tag(q), c, c, i32, i32, f32, f32, f32))]
+                            tag(q), c, c, i32, i32, f32, f32, f32)),
+            decode_reduce_launch(paged_decode_splits(Tk), Dv, kv)]
 

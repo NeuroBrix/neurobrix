@@ -18,7 +18,7 @@ from nbxtensor.ops.paged_decode_attn import PAGED_DECODE_MAX_SPLITS, PAGED_DECOD
 
 
 def _key(tk):
-    (_q, key), = LK.paged_decode_launches(32, 4, tk, 64, 64, D.float16, D.float16, 64)
+    (_q, key), _reduce = LK.paged_decode_launches(32, 4, tk, 64, 64, D.float16, D.float16, 64)
     return key
 
 

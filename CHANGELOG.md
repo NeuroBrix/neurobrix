@@ -82,6 +82,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 ### Changed
+- **The split decode's reduce is certified and censused like every other kernel**: the key census derives its key after each vector and paged decode step, and the certifier proves it against a float64 log-sum-exp combine.
 - **The MoE layer and the kernel certifier build their expert pointer tables through nbxtensor's public `build_ptr_tables`** (no private name of the library is reached).
 - **The tiling bricks refuse what they cannot place instead of falling back**: a chunked 3-D convolution of the
   Triton engine whose wrapper cannot be imported raises instead of running PyTorch's; an in-place add whose target

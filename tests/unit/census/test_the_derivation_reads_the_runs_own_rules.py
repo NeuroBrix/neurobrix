@@ -324,7 +324,8 @@ def test_a_prefill_through_the_kv_interceptor_sees_no_mask():
     graph = [l[0] for l in D._op_launches(*args, None, None)]           # the graph's mask: the math route
     assert "nbxtensor.ops.softmax.softmax_forward_kernel" in graph, graph
     through = [l[0] for l in D._op_launches(*args, None, {"prefill": True})]
-    assert through == ["nbxtensor.ops.decode_attn_vec.decode_attn_vec_split_kernel"], through   # the vector kernel
+    assert through == ["nbxtensor.ops.decode_attn_vec.decode_attn_vec_split_kernel",            # the vector kernel
+                       "nbxtensor.ops.flash_decode.flash_decode_reduce_kernel"], through        # and its reduce
 
 
 def test_an_image_ar_generation_is_keyed_by_the_strategys_own_rules():

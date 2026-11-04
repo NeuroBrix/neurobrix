@@ -646,7 +646,6 @@ def paged_decode_attention(q, k_pool, v_pool, block_table, seq_lens, softmax_sca
     as `_decode_attn_vec` does; the output is written in it. Output [B, H, 1, D_v] in q_round, else q's dtype."""
     from nbxtensor.ops.paged_decode_attn import (paged_decode_attn_split_kernel, PAGED_DECODE_TILE_CANDIDATES,
                                                  paged_decode_splits, PAGED_DECODE_SPLIT_ALIGN)
-    from nbxtensor.ops.flash_decode import flash_decode_reduce_kernel
     batch, nheads, tq, headdim = (int(x) for x in q.shape)
     num_pages, nheads_k, page_tokens, d_k = (int(x) for x in k_pool.shape)
     d_v = int(v_pool.shape[3])
@@ -692,20 +691,23 @@ def paged_decode_attention(q, k_pool, v_pool, block_table, seq_lens, softmax_sca
         mpart.stride(0),
         GQA_GROUPS=groups, BLOCK_D=BLOCK_D, D=headdim, D_V=d_v, SPLIT_ALIGN=PAGED_DECODE_SPLIT_ALIGN,
         Q_TO=q_to, Q_SATURATE=q_saturate)
-    flash_decode_reduce_kernel[(bhq,)](
+    decode_reduce(opart, mpart, lpart, out)
+    return out.reshape(batch, nheads, 1, d_v)
+
+
+def decode_reduce(opart, mpart, lpart, out):
+    """The fixed-order combine of a split decode (`flash_decode_reduce_kernel`), one program per query row viewed at
+    GROUPS=1: partials opart [rows, split, D_v] / mpart, lpart [rows, split] fp32 into out [rows, 1, D_v]; the warps
+    are the key's certified configuration (`launch_keys.decode_reduce_launch`)."""
+    from nbxtensor.ops.flash_decode import flash_decode_reduce_kernel
+    rows, split, d_v = (int(x) for x in opart.shape)
+    flash_decode_reduce_kernel[(rows,)](
         opart, mpart, lpart, out,
         opart.stride(0), opart.stride(1), d_v,
         mpart.stride(0), mpart.stride(1),
         out.stride(0), out.stride(1),
         SPLIT=split, GROUPS=1, BLOCK_G=max(16, _fa_min_tile()),
-        BLOCK_D=BLOCK_D, D=d_v,
-        num_warps=4)
-    return out.reshape(batch, nheads, 1, d_v)
-
-
-#: the vector decode's split (see `_decode_attn_vec`): keys per program, and the most programs a query row gets
-_DECODE_VEC_SEG = 256
-_DECODE_VEC_MAX_SPLIT = 64
+        BLOCK_D=max(triton.next_power_of_2(d_v), _fa_min_tile()), D=d_v)
 
 
 def _decode_attn_vec(q, k, v, bias, softmax_scale,
@@ -721,8 +723,7 @@ def _decode_attn_vec(q, k, v, bias, softmax_scale,
     prefix-slice views flow in unmaterialised — the strided-KV lot's
     contract) · bias flat [T_k] or None.
     """
-    from nbxtensor.ops.decode_attn_vec import decode_attn_vec_split_kernel
-    from nbxtensor.ops.flash_decode import flash_decode_reduce_kernel
+    from nbxtensor.ops.decode_attn_vec import decode_attn_vec_split_kernel, decode_vec_splits
     groups = nheads // nheads_k
     BHq = batch * nheads
     D_v = v.shape[3]
@@ -730,10 +731,9 @@ def _decode_attn_vec(q, k, v, bias, softmax_scale,
     # attention lowering refuses is not a tile this path can use. Inert on
     # cuda and hip, where it reads 16.
     BLOCK_D = max(triton.next_power_of_2(max(headdim, D_v)), _fa_min_tile())
-    # The split: one program per _DECODE_VEC_SEG keys (the judged split, locked pinned protocol, 2026-08-23: 256 won
-    # the row at all three contexts), at most _DECODE_VEC_MAX_SPLIT — it defines the partials, so it is the
-    # algorithm's, not a tile; the key block and the warps are each key's certified configuration.
-    split = max(1, min(int(triton.cdiv(seqlen_k, _DECODE_VEC_SEG)), _DECODE_VEC_MAX_SPLIT))
+    # The split (`decode_vec_splits`) is the algorithm's; the key block and the warps are each key's certified
+    # configuration.
+    split = decode_vec_splits(seqlen_k)
     seg_len = int(triton.cdiv(seqlen_k, split))
 
     q2 = q.reshape(BHq, headdim)   # contiguous -> pure view
@@ -771,14 +771,7 @@ def _decode_attn_vec(q, k, v, bias, softmax_scale,
         Q_TO=q_to, Q_SATURATE=q_saturate)
     # Fixed-order deterministic combine — the EXISTING flash_decode
     # reduce kernel viewed at GROUPS=1 (partials [BHq, split, 1, D_v]).
-    flash_decode_reduce_kernel[(BHq,)](
-        opart, mpart, lpart, out,
-        opart.stride(0), opart.stride(1), D_v,
-        mpart.stride(0), mpart.stride(1),
-        out.stride(0), out.stride(1),
-        SPLIT=split, GROUPS=1, BLOCK_G=max(16, _fa_min_tile()),
-        BLOCK_D=BLOCK_D, D=D_v,
-        num_warps=4)
+    decode_reduce(opart, mpart, lpart, out)
     return out.reshape(batch, nheads, 1, D_v)
 
 

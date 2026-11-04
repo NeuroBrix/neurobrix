@@ -58,6 +58,19 @@ def _round_q(q, Q_TO: tl.constexpr, Q_SATURATE: tl.constexpr):
     return q.to(tl.float32)
 
 
+#: the split: one program per DECODE_VEC_SEG keys (the judged split, locked pinned protocol, 2026-08-23: 256 won the
+#: row at all three contexts), at most DECODE_VEC_MAX_SPLIT — it defines the partials, so it is the algorithm's, not a
+#: tile
+DECODE_VEC_SEG = 256
+DECODE_VEC_MAX_SPLIT = 64
+
+
+def decode_vec_splits(seqlen_k: int) -> int:
+    """The splits the vector decode cuts `seqlen_k` keys into — its grid, and the shared reduce's autotune key (one
+    rule for the wrapper, the census and the certifier)."""
+    return max(1, min(-(-int(seqlen_k) // DECODE_VEC_SEG), DECODE_VEC_MAX_SPLIT))
+
+
 # The key block and warps of the vector decode, candidates the certification measures per key (the judged row,
 # 2026-08-23: 32 keys a step, 4 warps, among them); one stage — the loop streams K and V once.
 _DECODE_VEC_CONFIGS = [triton.Config({'BLOCK_N': bn}, num_warps=w, num_stages=1)
