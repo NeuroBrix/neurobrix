@@ -19,13 +19,14 @@ def _volta_profile():
 def test_a_thousand_per_op_reads_parse_the_vendor_file_once(monkeypatch):
     parses = []
     real = yaml.safe_load
-    monkeypatch.setattr(loader.yaml, "safe_load", lambda f: (parses.append(1), real(f))[1])
+    monkeypatch.setattr(loader.yaml, "safe_load", lambda f: (parses.append(getattr(f, "name", "?")), real(f))[1])
     if hasattr(loader, "_parsed_vendor_file"):
         loader._parsed_vendor_file.cache_clear()
     monkeypatch.setattr(w, "get_hardware_profile", _volta_profile)
     values = {w._arch_memory_param("sdpa_math_max_chunks", None) for _ in range(1000)}
     assert len(values) == 1 and None not in values, values          # the file's value, read, not the default
-    assert len(parses) <= 1, f"{len(parses)} parses for 1000 reads"
+    # the device is two halves (the library's device file and the engine's vendor file, 2026-11-04): each parsed once
+    assert len(parses) == len(set(parses)) <= 2, f"{len(parses)} parses for 1000 reads: {parses}"
 
 
 def test_what_a_caller_is_handed_cannot_alter_what_the_next_reads():

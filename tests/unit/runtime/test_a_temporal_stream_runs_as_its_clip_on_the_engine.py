@@ -48,7 +48,9 @@ def _machine_profile():
     from neurobrix.core.prism import load_profile
     from neurobrix.core.prism.autodetect import get_or_create_default_profile
     from neurobrix.triton.dtype import declare_hardware_profile
-    declare_hardware_profile(load_profile(get_or_create_default_profile()))
+    prof = load_profile(get_or_create_default_profile())
+    if getattr(prof, "devices", None):        # a host with no card has no device to declare: its cases are the CPU's
+        declare_hardware_profile(prof)
 
 
 def _case(model, comp):
