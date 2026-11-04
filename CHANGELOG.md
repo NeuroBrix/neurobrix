@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of an 88-frame Allegro-TI2V request needed 12.7 GB, was given 9.0, then 31.7 by the retry); the measured run's
   cached blocks go back to the card before the slab is taken, and a recording whose slab and verify pass do not fit
   what the card has free is not made — the component runs its normal path.
+- **A released component gives its device memory back before the next one plans**: Python cycles still holding device
+  memory were collected only at the end of a flow stage, and on Apple silicon mochi-1-preview's VAE met 1-2 GB of them
+  after the transformer; the heap is now collected once per released component (never per streamed segment).
 - **A streamed Triton plan no longer dies at its first reload**: the reload's byte count read `nbytes` first, a method
   on an NBXTensor, and raised `TypeError` (Flex.1-alpha on Triton, layer_streaming); it reads the tensor's own count.
 - **A machine whose vendor file states no reload rate can stream**: the per-piece reload rate Prism prices a streamed

@@ -1622,6 +1622,13 @@ class RuntimeExecutor:
             # honored on the multi-device path).
             if hasattr(executor, '_devices_computed'):
                 executor._devices_computed = False
+            # ONE collect per released component (the Dell 2026-11-04 08:14; never per segment, 4d1187f9): cycles still
+            # holding device memory leave before the next component (mochi's VAE met 1-2 GB of them on Metal)
+            if engine_of(self.mode) == "compiled":
+                from neurobrix.core.memory.manager import release_flow_memory
+            else:                                         # the Triton branch's own (R33: no torch imported there)
+                from nbxtensor.memory.memory_pool import release_flow_memory
+            release_flow_memory(getattr(executor, "device", None))
 
     # ========== UTILITY METHODS ==========
 
