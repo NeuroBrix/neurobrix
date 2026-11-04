@@ -155,19 +155,20 @@ def test_an_fp32_operand_is_never_rounded_to_the_operand_dtype(monkeypatch):
     assert _rel(got, ref) < 1e-5, f"rel {_rel(got, ref):.2e}"
 
 
-def test_the_census_derives_no_key_where_the_unit_runs():
-    """The recorded key IS the launcher's key: a GEMM the matrix unit takes has no autotune key, so the derived
-    census (launch_keys, the same predicate as the wrappers) lists none, fp32 operands (split) included; a GEMM
-    below the unit's smallest tile keeps its key."""
+def test_the_census_derives_the_key_whose_certificate_chooses_the_unit():
+    """The recorded key IS the launcher's key: an mm / addmm the matrix unit can take keeps its FMA key (its
+    certificate measured both routes and names the faster, `_gemm_route`), fp32 operands (split) included; a batched
+    GEMM on the unit has none (its dtypes differ from one route to the other); a GEMM below the unit's smallest tile
+    keeps its key. Injection: the unit predicate put back in mm_launches -> the first asserts RED."""
     from nbxtensor.ops import launch_keys as LK
     from nbxtensor.dtype.nbx_dtype import NBXDtype
     h, f = NBXDtype.float16, NBXDtype.float32
-    assert LK.mm_launches(512, 512, 512, h, h, False) == []
-    assert LK.addmm_launches(512, 512, 512, h, h, h, False) == []
+    assert [k for k, _ in LK.mm_launches(512, 512, 512, h, h, False)] == [LK.MATMUL]
+    assert [k for k, _ in LK.addmm_launches(512, 512, 512, h, h, h, False)] == [LK.ADDMM]
     assert LK.addmm_launches(512, 512, 512, h, h, h, False, bias_row=False) != []    # a full bias keeps the kernel
     assert LK.bmm_launches(512, 512, 512, h, h, False) == []
     assert LK.baddbmm_launches(512, 512, 512, h, h, h) == []
     assert LK.bmm_launches(1, 512, 512, h, h, False) != []                           # decode keeps the batched kernel
-    assert LK.mm_launches(512, 512, 512, f, h, False) == []                          # fp32: the hi + lo split
+    assert [k for k, _ in LK.mm_launches(512, 512, 512, f, h, False)] == [LK.MATMUL]  # fp32: the hi + lo split
     assert LK.baddbmm_launches(512, 512, 512, f, f, f) == []
     assert LK.mm_launches(16, 512, 512, f, h, False) != []                          # below the unit's smallest tile

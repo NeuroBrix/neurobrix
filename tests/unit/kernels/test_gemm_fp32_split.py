@@ -62,7 +62,11 @@ def _per_row(got, ref):
 
 
 def _both(run, monkeypatch):
-    """(split result, its tile's split flags), FMA-path result — the second with the unit withheld."""
+    """(split result, its tile's split flags), FMA-path result — the second with the unit withheld. The first runs
+    with no certificate read (the unit at the profile's tile): which route a key takes is its certificate's choice
+    (1.8, `_gemm_route`), judged elsewhere; here the split's numerics are."""
+    from nbxtensor.ops import autotune_certified as _cert
+    monkeypatch.setattr(_cert, "unit_choice", lambda *a, **k: None)
     calls = []
     real = _nbx_linalg_wrappers._gemm_m8n8k4
     monkeypatch.setattr(_nbx_linalg_wrappers, "_gemm_m8n8k4", lambda *a, **kw: (calls.append(a[8]), real(*a, **kw))[1])
