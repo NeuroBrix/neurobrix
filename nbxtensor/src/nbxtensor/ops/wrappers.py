@@ -752,10 +752,10 @@ import math
 
 
 def _arch_param(section: str, key: str, default):
-    """One `<section>.<key>` value from config/vendors/<vendor>/<arch>.yml
-    of the executing hardware profile; `default` when there is no profile,
-    no key, or the loader fails (R23: hardware params come from the yml,
-    never from code, and never from a driver query in a hot path).
+    """One `<section>.<key>` value of the executing device's description — its device file merged with the
+    application's half (`device_files.param`) under the application's hardware profile, the device file of the
+    launch target alone without one; `default` when no description holds the key, or the loader fails (R23: hardware
+    params come from the yml, never from code, and never from a driver query in a hot path).
 
     Shared reader for every per-architecture knob — the memory policy
     (`memory.sdpa_math_min_chunk_rows`, `memory.alloc_pool_parked_cap_fraction`,
@@ -763,6 +763,13 @@ def _arch_param(section: str, key: str, default):
     prof = get_hardware_profile()
     devices = getattr(prof, "devices", None) if prof is not None else None
     if not devices:
+        # the library alone, no application profile: the device the launch target names, read from its device file
+        # (`device_files.in_force`) — the facts the kernels read are the library's own (the supervisor 2026-11-04 06:00:
+        # an application's profile only lies over them); the conformance suite's reductions were refused here on CUDA
+        from nbxtensor.backend.device_files import in_force
+        sec = in_force().get(section)
+        if isinstance(sec, dict) and key in sec:
+            return sec[key]
         return default
     try:
         from nbxtensor.backend.device_files import param as vendor_param   # one key of the device, both halves

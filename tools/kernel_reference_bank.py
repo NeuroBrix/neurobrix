@@ -40,8 +40,8 @@ os.environ["NBX_LAUNCH_TRACE"] = TRACE      # read once by the launcher at impor
 # ---------------------------------------------------------------------------
 
 def tiles() -> dict:
-    import yaml
-    cfg = yaml.safe_load((REPO / "src/neurobrix/config/vendors/nvidia/volta.yml").read_text(encoding="utf-8"))
+    from neurobrix.core.config.loader import vendor_file      # the device whole: the library's half and the engine's
+    cfg = vendor_file(REPO / "src/neurobrix/config/vendors/nvidia/volta.yml")
     bs = cfg.get("block_sizes") or {}
     return {"gemm": bs.get("gemm", {}), "bmm": bs.get("bmm", {}), "conv2d": bs.get("conv2d", {}),
             "default": int(bs.get("default", 1024)), "softmax_cap": int(bs.get("softmax_cap", 8192)),

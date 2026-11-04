@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The first release, 0.0.1, is in preparation.
 
 ### Added
+- **nbxtensor describes the NVIDIA and AMD devices itself**: `backend/devices/nvidia/` (Volta, Ampere, Hopper) and
+  `backend/devices/amd/` (CDNA, CDNA2, CDNA3) hold the facts its kernels read — tiles, shared memory, registers,
+  warp size, the matrix unit, the autotune ladders and screen, the attention thresholds — as Apple's did; an
+  application's vendor file only adds its own keys beside them (a key in both is refused).
 - **nbxtensor names the device in force publicly**: `nbxtensor.backend.device_files.in_force()`, `for_arch(arch)` and `forget()`, and `nbxtensor.backend.launcher.bind_target(target)` for a derivation that launches nothing; the engine's key census and paged KV cache read them instead of the library's private configuration module.
 
 ### Changed
@@ -19,6 +23,10 @@ The first release, 0.0.1, is in preparation.
 - **The matrix product and the linear layer declare what they allocate** (`nbxtensor.ops.linalg_wrappers.mm_cost` / `addmm_cost`, beside `bmm_cost`): the casts, the decode rows' GEMV and the weight copy a row-major weight costs there, the bias made contiguous, the output at its store dtype, an epilogue's output; each equal to the allocator's measured peak on the device, over the dtypes, the decode and tiled row counts, both weight layouts and the bias forms.
 
 ### Fixed
+- **The library alone autotunes on NVIDIA**: without an application's hardware profile, a kernel's device facts
+  (`memory.max_registers_per_block` and the like) were read through the profile and found absent, so a reduction or
+  a softmax without a certified configuration was refused; they are now read from the device file of the card the
+  launch targets. The backend conformance suite passes on CUDA with nbxtensor alone.
 - **A request larger than a card's whole expandable range is refused as the out-of-memory it is**: on a device whose
   large blocks grow in an expandable (VMM) range, such a request raised a plain error without its figures; it now
   raises `DeviceOOMError` with the requested, live, pool-cached and driver-free bytes, as the driver path does, so a

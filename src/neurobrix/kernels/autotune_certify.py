@@ -2198,13 +2198,11 @@ def _engine_version() -> str:
 def _num_stages_space(vendor: str, profile: str) -> Optional[Tuple[int, ...]]:
     """The software-pipelining depths the profile allows certification to try
     (`autotune.certify_num_stages`), or None when it declares none (every depth the kernel's
-    configurations carry, as before). Read from the profile file itself, like the tolerance."""
-    try:
-        import yaml
-        path = Path(__file__).resolve().parents[1] / "config" / "vendors" / vendor / f"{profile}.yml"
-        cfg = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except Exception:
-        return None
+    configurations carry, as before). Read from the device whole (the library's device file merged with the engine's
+    vendor file, `loader.vendor_file`): `autotune` is the library's half — read from the engine's file alone it would
+    vanish and every depth be tried (and a missing or unreadable file is a refusal, not a space of every depth)."""
+    from neurobrix.core.config.loader import vendor_file
+    cfg = vendor_file(Path(__file__).resolve().parents[1] / "config" / "vendors" / vendor / f"{profile}.yml")
     space = (cfg.get("autotune") or {}).get("certify_num_stages")
     if space is None:
         return None

@@ -13,17 +13,11 @@
 #   own inline provenance comments and were not re-audited this
 #   workstream.
 
-architecture: volta
-compute_capability: "7.0"
-
 # Device string mapping - maps vendor to torch device prefix
 device_prefix: "cuda"
 
 # Kernel block sizes - architecture-optimized values
 block_sizes:
-  # Default block size for simple kernels
-  default: 1024
-
   # GEMM (General Matrix Multiply) configuration
   gemm:
     block_m: 64          # Tile size in M dimension
@@ -31,19 +25,6 @@ block_sizes:
     block_k: 32          # Tile size in K dimension
     num_warps: 4         # Number of warps per block
     num_stages: 2        # Pipeline stages
-
-  # Batched Matrix Multiply configuration
-  bmm:
-    block_m: 64
-    block_n: 64
-    block_k: 32
-    num_warps: 4
-
-  # Convolution configuration
-  conv2d:
-    block_h: 16          # Tile height
-    block_w: 16          # Tile width
-    num_warps: 4
 
   # Resize/interpolation block size
   resize: 256
@@ -56,166 +37,6 @@ block_sizes:
 
   # GroupNorm maximum elements per group
   groupnorm_cap: 65536
-
-  # Generic reduction block size
-  reduction: 1024
-
-  # M=1 dequant-GEMV occupancy rule (2026-08-25). The tier's pinned
-  # parity BLOCK_N (64) under-fills the device at small N — the MoE
-  # router mv (N=128) ran a 2-program grid on 80 SMs (~38 us/call for
-  # ~131 KB of weights, ~3.4 GB/s: latency-bound, not bandwidth). The
-  # wrapper halves BLOCK_N (pow2, floor 1) until the grid reaches
-  # min_programs; the parity oracle runs the SAME adapted config
-  # (fused == dequant->ref by construction at every BLOCK_N). Large-N
-  # calls (grid already >= min_programs) are untouched — zero drift on
-  # the proven big-mv path. 160 = 2 waves x 80 SMs (V100). Key absent
-  # or 0 -> no adaptation (prior behavior).
-  dequant_gemv:
-    min_programs: 160
-
-# Scaled Dot-Product Attention block size thresholds.
-#
-# Schema: each entry is a (BLOCK_M, BLOCK_N) selection rule. Optional
-# constraints — first entry whose constraints all match AND whose
-# footprint fits the SMEM budget wins. Decode entries (seqlen_q ≤ 16)
-# come first so they take precedence over prefill entries on the
-# autoregressive hot path.
-#
-# Volta values are bit-perfect with the table that produced the
-# regression-harness golden text on TinyLlama-1.1B / Qwen3-30B since
-# Layer 5 (commit 06d26c2). Reordering or resizing any of these
-# entries will drift the LLM logits → drift greedy argmax → break
-# golden match. Keep the legacy values until a future calibration
-# campaign re-validates.
-# The flash kernel at a power-of-two head dim >= 128, MEASURED on this arch and stack: the zero-pad
-# detour (launch_keys.flash_headdim_detour) was built for wrong answers at D 128/256 on an older Triton
-# (headdim 128 -> 4.2e-01 against float64). On Triton 3.8 the 33-case attention correctness oracle
-# (tests/unit/kernels/test_numeric_correctness_oracle.py) passes with NBX_D128_DETOUR=0 on a V100, and
-# the chunked kernel at D 128 matches float64 as the detour does (1.46e-05) at 65 ms instead of 2 196
-# (2026-10-03). Absent on an arch = the detour stays.
-flash:
-  pow2_head_dim_correct: true
-
-# The matrix unit this arch HAS and Triton 3.8 does not generate: below sm_80 `tl.dot` lowers to scalar FMA
-# (triton-lang/triton#5066). Declared here, the kernels built for that unit run instead
-# (kernels/ops/mma_m8n8k4.py; method in docs/reference/tensor-cores-through-linear-layouts.md):
-# mma.sync.aligned.m8n8k4.row.col.f32.f16.f16.f32 (PTX ISA, sm_70; fragment from CUTLASS mma_traits_sm70.hpp).
-# The flash tiles are MEASURED on V100-SXM2 at 1290 MHz, per head dim, the best of six (64|128 query rows x 32|64
-# keys per step x 4|8 warps) at T 79 200 D 96, T 32 760 D 128, T 16 384 D 64 (2026-10-07, flash_tiles4): D 64 at
-# 128 x 64 / 4 warps 45.7 TFLOP/s, D 96 at 128 x 32 / 4 warps 48.2, D 128 at 64 x 32 / 4 warps 42.9 — against
-# 2.46 for the FMA flash at D 96 (tools/tensor_cores_m8n8k4/step3_scan1.txt).
-# Absent on an arch = the unit is not declared and every kernel keeps tl.dot.
-matrix_unit:
-  shape: m8n8k4
-  operand_dtype: float16
-  accumulator_dtype: float32
-  flash:                 # the first row whose head_dim_le holds; up to 256 (the O accumulator's registers), beyond tl.dot
-    - head_dim_le: 64
-      block_m: 128
-      block_n: 64
-      warps_m: 4
-    - head_dim_le: 96
-      block_m: 128
-      block_n: 32
-      warps_m: 4
-    - head_dim_le: 256
-      block_m: 64
-      block_n: 32
-      warps_m: 4
-  mm:                    # GEMM tiles, largest first: the first whose block fits inside the M x N output
-    - block_m: 128       # 2026-10-08, fp16 x fp16: 23-39 TFLOP/s mm, 13.1-13.7 conv 3x3, where 128x128 w2x2 gave 8-9
-      block_n: 64        # (two 128-register accumulators per thread: the tile sum and the RN one)
-      block_k: 32
-      warps_m: 4
-      warps_n: 1
-      group_m: 8
-    - block_m: 64
-      block_n: 64
-      block_k: 32
-      warps_m: 2
-      warps_n: 2
-      group_m: 8
-  fp32_split:            # an fp32 operand as hi + lo fp16, three MMAs, fp32 accumulation (owner, 2026-10-07 S1 = B):
-    operands: [float32, bfloat16]   # the vendor's fp32 arithmetic on the unit (triton/dtype.matrix_unit_representation)
-    mm:                  # three accumulators per thread: the tile is smaller than the native one
-      - block_m: 64
-        block_n: 64
-        block_k: 32
-        warps_m: 2
-        warps_n: 2
-        group_m: 8
-    conv:                # an fp32 convolution's implicit GEMM through the split, per kernel window, where it was MEASURED
-      # faster than the FMA path (2026-11-03, V100-SXM2-32GB card 2, the census's fp32 conv2d classes, certified FMA
-      # baseline): 1x1 at 128x64x16 w4x1 x1.26-1.95 (384->1152 0.77 vs 1.50 ms, 256->256 at 12x160x160 5.17 vs 8.92 ms,
-      # 512->256 6.72 vs 10.29 ms), even at 192->384 (1.01); a 3x3 is SLOWER at every tile (best 128x64x32 w4x1:
-      # x0.90-0.99) and has no row — it keeps the FMA path. A row is taken only where its tile fills: M >= block_m and
-      # the output channels per group >= block_n (16 channels in a 64-column tile: x0.36).
-      - kernel: [1, 1]
-        block_m: 128
-        block_n: 64
-        block_k: 16
-        warps_m: 4
-        warps_n: 1
-        group_m: 8
-    flash:               # an fp32 attention (Q, K, V, P as hi + lo); block_k: head-dim columns of S the unit sums
-      # before each round-to-nearest add (ops/flash_attention_m8n8k4.py, SPLIT). 2026-10-12, V100-SXM2-16GB, B1 H24 L79200
-      # D96 fp32: 128x32 w8 4.39 s (13.2 TFLOP/s) where 64x32 w4 gave 6.93, 64x64 w4 6.52, 128x32 w4 9.99; block_k 64
-      # 4.38 (noise), 16 4.96; the FMA flash took 22.1 s. Wider rows than below exceed the shared memory (refused at
-      # launch, measured per head dim). Rows past 96 timed 2026-10-12 on V100-SXM2-32GB (card 2), B1 H8 L16384, 5 iters,
-      # every tile that loads, error vs the FMA flash <= 1.3e-5 (splitfix/bench.json): D160 64x16 w4 0.231 s 5.9 TFLOP/s
-      # (64x32 w4 0.329, 32x16 w2 0.307, 32x32 w2 0.388; FMA 1.616 s: x7.0); D192 64x16 w4 0.375 s 4.4 TFLOP/s (32x16 w2
-      # 0.528, 32x32 w2 0.543; every 64x32 refused, shared memory beyond the opt-in; FMA 1.125 s: x3.0); D256 32x16 w2
-      # 1.523 s 1.4 TFLOP/s, the only tile that loads (FMA 1.699 s: x1.1 — the split's gain there is accuracy parity on
-      # the unit, not speed).
-      - head_dim_le: 96
-        block_m: 128
-        block_n: 32
-        warps_m: 8
-        block_k: 32
-      - head_dim_le: 160
-        block_m: 64
-        block_n: 16
-        warps_m: 4
-        block_k: 32
-      # No row past 160 (2026-10-30): the tiles the certifier proves per key (unit_flash_configs: 64 or 128 query rows,
-      # 32 or 64 keys a step) do not fit this card's 96 KB of shared memory at head dim 192 or 256 in the split — once
-      # COMPILED, the one tile the staged-bytes prune keeps asks 102 400 bytes at 192 and 135 168 at 256 against the
-      # card's 98 304 (V100-SXM2, the launcher's compiled figure). The smaller tiles that loaded there on 2026-10-12
-      # (64x16, 32x16) left with the hand table; a fp32 attention at those head dims runs the FMA flash.
-
-sdpa_thresholds:
-  # ── Decode path (seqlen_q ≤ 16) ────────────────────────────────
-  - seqlen_q_le: 16
-    head_dim_ge: 256
-    block_m: 16
-    block_n: 32
-    num_warps: 4
-  - seqlen_q_le: 16        # head_dim < 256 decode
-    block_m: 16
-    block_n: 64
-    num_warps: 4
-  # ── Prefill / spatial-attention path (seqlen_q > 16) ───────────
-  - head_dim_ge: 256
-    block_m: 32
-    block_n: 32
-    num_warps: 4
-  # Prefill below head_dim 256: the FMA-path tile. Triton >= 3.3 lowers tl.dot to scalar fp32 FMA
-  # below sm_80 (triton-lang/triton#5066; release/3.8.x AccelerateMatmul.cpp: "falls back to the FMA
-  # path"; the compiled flash PTX here: 0 mma.sync, 8 192 fma.rn.f32 per loop body). Holding a 64-row
-  # Q tile and a 64-column K tile in registers ran 0.18 TFLOP/s at D 64/96/128 and T 4 096-14 080;
-  # a 64x32 tile at 8 warps with the QK^T contraction in 32-wide head-dim chunks ran 2.4-3.6 TFLOP/s
-  # (T 4 096, D 64/96/128; nbx/campaigns/2026_10_03_resume/flash_variant*.txt, 2026-10-03). The
-  # vendor's tensor-core kernel stays ~4x ahead: no Triton route to Volta MMA exists on 3.8.
-  - head_dim_ge: 128
-    block_m: 64
-    block_n: 32
-    num_warps: 8
-    qk_chunk: 32
-  - head_dim_lt: 128
-    block_m: 64
-    block_n: 32
-    num_warps: 8
-    qk_chunk: 32
 
 # Memory constraints.
 #
@@ -239,104 +60,6 @@ sdpa_thresholds:
 # Absent on a profile = the extent as computed (unmeasured there).
 tiling:
   extent_lattice: 16
-
-# The bucket ladder of a request-dependent autotune-key dimension (kernels/autotune_bucket.py):
-# measured 2026-09-21 on both memory classes (tools/bucket_loss.py, owed-proofs): exact under
-# 64, then 16-step to 256, 32-step to 1024, 128-step to 8192, 512-step beyond — 0.0 % median
-# and maximum loss against the per-size optimum on matmul M and the SDPA scores' batched
-# GEMM, where powers of two lost up to 26.9 % and a 16-step ladder under 64 up to 16.7 %.
-# `default` serves every dimension that has no row of its own.
-autotune:
-  buckets:
-    # M — the rows of a GEMM (a prefill's token count; the SDPA scores' batched GEMM): classes of EIGHT below the
-    # matrix unit's 64-row tile, where the ladder measured on 2026-09-21 keyed every row exactly. Decision
-    # 2026-10-19 02:32 (the supervisor for Hocine; the census gap of 02:04): under certified-only every prompt
-    # length is a key, and an exact row count made ~60 classes per decoder (TinyLlama, 16 GB: 838 census rows
-    # where there were 14) — eight classes instead, one re-certification of the keys below 64. The GEMV bound
-    # (M <= 4) and the unit's take-over at 64 are the launcher's and unchanged; the rows above 64 are `default`'s.
-    # OWED: the loss of the 8-step against the per-row optimum (tools/bucket_loss.py, both classes) — recorded in
-    # owed-proofs when measured; the padded class is proven exact by identity first (M=31 keyed 32 vs 31).
-    M:
-      - {up_to: 64, step: 8}
-      - {up_to: 256, step: 16}
-      - {up_to: 1024, step: 32}
-      - {up_to: 8192, step: 128}
-      - {up_to: 16384, step: 512}
-      - {up_to: 32768, step: 1024}
-      - {up_to: 65536, step: 2048}
-      - {up_to: 131072, step: 16384}
-      - {up_to: 262144, step: 32768}
-      - {up_to: 524288, step: 65536}
-      - {up_to: 1048576, step: 131072}
-      - {up_to: 2097152, step: 262144}
-      - {up_to: null, step: 524288}
-    # elements — an element-wise launch's element count (`kernels/ops/elementwise_launch.py`): FOUR classes. Measured
-    # 2026-10-23 on V100-SXM2 (campaigns/2026_10_12_mq25_gate/stable/c1rest/ew_bench.json, 8 operations x fp32/fp16 x
-    # 15 tiles x warps): at or under 65 536 elements the launch dominates (13 us whatever the tile); at 1 M the
-    # copy's best is within 2.4 % (mean) of each operation's own; at 16 M within 0.3 % (max 1.4 %). The class is
-    # certified at its floor (`autotune_bucket.class_floor`): 1, 65 537, 1 048 577 and 16 777 217 elements.
-    elements:
-      - {up_to: 65536, step: 65536}
-      - {up_to: 1048576, step: 1048576}
-      - {up_to: 16777216, step: 16777216}
-      - {up_to: null, step: 68719476736}
-    default:
-      - {up_to: 64, step: 1}
-      - {up_to: 256, step: 16}
-      - {up_to: 1024, step: 32}
-      - {up_to: 8192, step: 128}
-      # Above 8 192 a QUARTER-OCTAVE, not a 512-step. The 512 tail was decided by a sweep
-      # that ran to about 4 096 and never met a request-scale dimension: a vocoder's batched
-      # GEMM keys on the WAVEFORM and reaches 1 963 520, which a 512-step cuts into some four
-      # thousand buckets — 1 400 of one model's 1 522 distinct M values sat above 8 192.
-      # Measured 2026-09-22 on both classes, two shapes (the vocoder's B=1,N=1,K=9 and a
-      # GEMM at N=K=512), each octave bucket carrying three or four measured values with its
-      # TOP as representative: 0.0 % median loss, 0.2 % max at ONE octave bucket. The rows
-      # below are finer than the octave that was measured, so they cost no more than it did.
-      # The first three octaves above the knee keep a NARROW step. Measured directly on the
-      # rows as shipped (the upscalers' N=360, K=180; three sizes inside each bucket with
-      # its TOP among them, 2026-09-22): a quarter-octave there cost 0.0 % median but
-      # **5.2 %** at the 10 240 bucket and 1.2 % at 16 384 — the loss lives just above the
-      # knee, where a quarter of an OCTAVE is still a quarter of the VALUE. Beyond 65 536
-      # the same sweep measured 0.0 % median and at most 0.6 %, so the quarter-octave stands.
-      # The convolution-width ladder below keeps its quarter-octave: its own sweep measured
-      # 0.0 % median AND max there, on both classes and two channel counts.
-      - {up_to: 16384, step: 512}
-      - {up_to: 32768, step: 1024}
-      - {up_to: 65536, step: 2048}
-      - {up_to: 131072, step: 16384}
-      - {up_to: 262144, step: 32768}
-      - {up_to: 524288, step: 65536}
-      - {up_to: 1048576, step: 131072}
-      - {up_to: 2097152, step: 262144}
-      - {up_to: null, step: 524288}
-    # The width of a ONE-ROW convolution (a 1-D convolution over a sequence: a vocoder's
-    # samples, a mel spectrogram's frames) is the request's length, unbounded by any
-    # resolution — chatterbox's vocoder reaches 444 721 samples for 18 s of speech. Above the
-    # GEMM ladder it steps by a quarter-octave (≤ 25 % of the value), so a census meets every
-    # class of a speech length in ~100 runs instead of ~1 000; the loss of that step is owed a
-    # measurement on both classes (bucket_loss.py) before the ladder is called final.
-    W:
-      - {up_to: 64, step: 1}
-      - {up_to: 256, step: 16}
-      - {up_to: 1024, step: 32}
-      # 1 024-8 192 by an EIGHTH of an octave (2026-09-28, both classes, cards 0 and 2): the fine
-      # 128-step was never measured coarser there, and an audio codec's widths spend ~95 % of their
-      # classes in it. W8 (these rows) against the 128-step and a quarter-octave, 38 widths across the
-      # buckets, 1x1 and 1x7 one-row convs at 128 and 512 channels: W8 equal to the 128-step on every
-      # shape (median 0.0 %, max identical), the quarter-octave up to +15.6 % (512 ch, 1x1) and
-      # +11.4 % (512 ch, 1x7, 32 GB) — above the run-to-run spread (p95 3.1 %, max 8.6 %). 24 classes
-      # instead of 56. The measurement: docs/reference/owed-proofs.md, 2026-09-28.
-      - {up_to: 2048, step: 128}
-      - {up_to: 4096, step: 256}
-      - {up_to: 8192, step: 512}
-      - {up_to: 16384, step: 2048}
-      - {up_to: 32768, step: 4096}
-      - {up_to: 65536, step: 8192}
-      - {up_to: 131072, step: 16384}
-      - {up_to: 262144, step: 32768}
-      - {up_to: 524288, step: 65536}
-      - {up_to: null, step: 131072}
 
 memory:
   compiled_stream_driver_over_price: null   # not measured on this device (C1, 2026-10-27): a stream chunk is priced at its tensors
@@ -369,42 +92,6 @@ memory:
   # amd/cdna.yml); Apple's MPS allocator has no such setting. An operator's PYTORCH_ALLOC_CONF wins
   # and is logged.
   compiled_allocator_settings: "expandable_segments:True"
-  max_shared_memory_per_block: 98304    # 96 KB (Volta opt-in)
-  max_registers_per_block: 65536
-  # NVIDIA CUDA C++ Programming Guide, Technical Specifications per Compute Capability: "Maximum number of 32-bit
-  # registers per thread: 255" (7.x, 8.x, 9.x). Bounds a program's elements per thread (the row programs' prune).
-  max_registers_per_thread: 255
-  warp_size: 32
-  # SDPA deterministic-routing budget (P-TRITON-MOE-DETERMINISM-RESIDUAL).
-  # The Dao-AILab flash Triton kernel is non-deterministic on pre-Ampere
-  # SIMT. The deterministic _math_attention path is routed for pow2
-  # head_dim only when its [B*H,Tq,Tk] scores tensor is within this
-  # budget (non-pow2 head_dim is routed unconditionally — preserved
-  # PixArt/Sana path).
-  #
-  # 2026-07-27 (D6 root cause): the sm_70 flash race is not just
-  # nondeterministic NOISE — it is STRUCTURALLY BIASED. Measured on
-  # Wan2.1-T2V-1.3B block-0 self-attention ([2,12,4096,128], scores
-  # 1.61 GiB): bit-equal-input microtest flash-vs-math shows rel 9.4%
-  # concentrated 374x on tokens ≡ 9-15 (mod 32) — a tile-aligned
-  # corruption window that CFG (x5 on a 0.26-cancellation guided term)
-  # and short-schedule iteration amplify into the recorded vertical
-  # pixel band (cols 127-269) at 13f/10s. NBX_FORCE_MATH_ATTENTION=1
-  # kills the band (R29) and runs FASTER on that config. Budget raised
-  # 128 MiB -> 2 GiB so V100-32G-feasible diffusion self-attention
-  # (Wan-class 4096-token video DiT included) takes the deterministic
-  # math path; video-native token counts (Allegro 79200² ~ 1.2 TB,
-  # CogVideoX-class >> 2 GiB) stay on flash — no OOM regression. LLM
-  # prefill between the old and new bound (seqlen ~1152-4600 @ 32
-  # heads) moves to math: deterministic, and on sm_70 the flash kernel
-  # holds no perf advantage (structural ~10% cuBLAS ceiling; the Wan
-  # math run was faster end-to-end). Gate: attention-change diffusion
-  # regression battery per doctrine.
-  sdpa_math_max_scores_bytes: 2147483648  # 2 GiB (was 128 MiB pre-D6)
-  # Row block (alignment and floor) of the chunked deterministic
-  # math prefill; the chunk-halving retry on a refused allocation
-  # never goes below it.
-  sdpa_math_min_chunk_rows: 128
   # THE COMPILED ENGINE'S ATTENTION: PyTorch dispatches scaled_dot_product_attention on this device to its flash or
   # memory-efficient kernels, which never write the full scores (PyTorch SDPA tutorial; the Prism estimate prices
   # the memory-efficient workspace, core/prism/memory_estimator.py). Nothing to chunk.
@@ -433,12 +120,6 @@ memory:
   # written only after the reads already issued against it (CUDA Programming Guide, "Streams": operations in a stream
   # execute in order). core/state/pages.PagePool(async_release=...).
   async_release: false
-  # Allocator pool: bytes the free-list may keep PARKED per device as a
-  # fraction of that device's memory (2026-09-02, pool default-on gate).
-  # Beyond it the largest parked blocks go back to the driver, bounding
-  # the pool's contribution to the driver watermark (measured +3.4 GB on
-  # the xlong int4 row unbounded). 0 = unbounded.
-  alloc_pool_parked_cap_fraction: 0.50
   # Allocator pool: the most a smallest-fit hit may hand out BEYOND its request, as a fraction of the
   # request (kernels/nbx_tensor.DeviceAllocator._pool_fit_slack). The surplus stays held, unusable, while
   # the tensor lives, and no plan prices it. At the former fixed 2x, HAT-S at 2048 px on a 16 GB card gave
@@ -446,31 +127,6 @@ memory:
   # only: PixArt-Sigma 1024 triton measured the same (30 s wall, driver peak 11 799 MB) at 0.25 and at 0.0,
   # its 455 fits at 0.25 becoming exact hits at 0.0 (NBX_ALLOC_STATS, 2026-10-22).
   alloc_pool_fit_slack_fraction: 0.0
-  # Per-DEVICE cap: budget = min(bytes above, fraction x device memory_mb
-  # from the Prism profile). The auto profile (config/hardware/default.yml,
-  # generated from nvidia-smi memory.total) records memory_mb 16384 for
-  # V100-16G rows and 32768 for V100-32G rows — verified 2026-09-01
-  # against the file the runtime loads. 0.066 x 32768 MiB =
-  # 2,267,742,732 bytes > 2 GiB -> min() keeps the 32G budget at the
-  # 2 GiB base (zero route change there); 0.066 x 16384 MiB =
-  # 1,133,871,366 bytes (~1.06 GiB) caps 16G cards so the 1.90 GiB xlong
-  # scores chunk shrinks to fit instead of OOMing (2026-08-31
-  # heterogeneous-rig finding, block_scatter model->cuda:0).
-  sdpa_math_scores_device_fraction: 0.066
-
-  # P-NONDET-LONG-ROW (2026-08-23): shapes whose fp32 scores exceed the
-  # budget above routed to flash, whose Volta masked-load specialisation
-  # (where the exact D>=128 pad-by-one detour lands) is
-  # NON-DETERMINISTIC (kernel-level: 3 distinct outputs in 5 identical
-  # calls at the 4,164-token prefill shape). CHUNKED math splits the
-  # query rows so every chunk's scores fit the budget — deterministic
-  # by construction — bounded by this chunk-count ceiling. 16 covers
-  # LLM-class prefills to ~16k context (4k ctx -> 2 chunks); video-
-  # scale shapes (30-500+ chunks, prohibitive) keep their existing
-  # path and are the REGISTERED residual non-deterministic class on
-  # this hardware (defect register, trigger measured).
-  sdpa_math_max_chunks: 16
-
   # Triton deferred-free queue policy (audit #2 F1, P-TRITON-LIVE-SET).
   # PRESSURE-SENSITIVE: the queue always drains at `cliff` (throughput
   # ceiling — identical to the historical 2 GB behavior when the device has
@@ -498,10 +154,6 @@ sdpa_smem_safety: 0.7
 
 # FP16 capabilities
 precision:
-  # Attention operands that disagree in dtype (an fp16 GEMM stored fp32 feeding V) all take the
-  # narrowest of the three, the compiled engine's alignment: the half attention stays on the matrix
-  # unit (V100, 2026-10-08: 1.16 s/op aligned narrowest vs 22.0 s/op on the scalar flash aligned widest).
-  attention_operands: narrowest
   supports_fp16: true
   supports_bf16: false   # Volta does not support BF16
   supports_tf32: true   # Volta does not support TF32
@@ -509,15 +161,6 @@ precision:
   # IEEE-754 binary64 in hardware on every CUDA device (CUDA C++ Programming Guide, arithmetic instructions); torch.float64 is native on cuda. Read by the DtypeEngine (`device_supports_fp64`):
   # false narrows float64/complex128 to float32/complex64 as the vendor's own code does on MPS.
   supports_fp64: true
-  # Whether each engine branch's OWN kernels compute float64 / complex128 elements, read with
-  # supports_fp64 (both must hold) -- a CAPABILITY: `compiled` is ATen's, which carries both wherever
-  # the device does; `triton` is the NeuroBrix Triton kernels' (cuda/hip lower double; Metal's
-  # lowering narrows it in silence, measured 2026-09-28 on the Sana 4K positional embedding). Read
-  # by the DtypeEngine (`config.device_supports_fp64`) and by the Triton wrappers' binding
-  # (`triton.dtype.triton_has_fp64` -> `nbx_tensor.set_backend_has_fp64`).
-  kernels_carry_fp64:
-    compiled: true
-    triton: true
   # Whether each engine branch HOLDS float64 / complex128 tensors at that width where its kernels can
   # -- a DtypeEngine POLICY, not a capability: the Triton branch is fp32-max (its elementwise and
   # index kernels read at fp32 stride) and narrows them to float32 / complex64. Read by
@@ -525,52 +168,6 @@ precision:
   stores_fp64:
     compiled: true
     triton: false
-
-# Software-pipelining budget for autotuned Triton kernels (R23/R24: a
-# hardware capability is read here, never queried from the driver in
-# code). `max_num_stages` caps the num_stages of every autotune config.
-# Volta (sm_70) has NO cp.async: Triton's pipelining with num_stages > 2
-# emits async-copy instructions that fault with
-# CUDA_ERROR_MISALIGNED_ADDRESS in any kernel using tl.dot. 2 is measured,
-# not conservative.
-pipelining:
-  max_num_stages: 2
-
-# Autotune correctness screen. The engine runs every candidate config once and
-# compares its result against a reference config's before timing any of them,
-# because an autotuner that ranks on speed alone selects whichever WRONG
-# kernel is fastest — a kernel that writes half its output does half the
-# stores and wins. Measured on Apple 2026-09-07: fp16 mm [64,32]@[32,64] chose
-# a config that left half the columns zero.
-#
-# These are the tolerances that separate "a different but valid summation
-# order" from "a different answer". Two configs with different block sizes
-# reduce in a different order, so their results differ in the last bits; a
-# config that drops output differs by the scale of the output itself. The
-# gap between those two is several orders of magnitude, and these sit in it.
-#
-# Relative to the reference's own magnitude: max|a - b| / max|b|. Integer
-# and boolean results are compared BIT-IDENTICALLY and ignore this table —
-# there is no valid reordering that changes an integer.
-autotune_screen_rtol:
-  float16: 2.0e-2
-  bfloat16: 4.0e-2
-  float32: 1.0e-4
-  float64: 1.0e-8
-
-# Above this many bytes of buffer, the autotune correctness screen does not
-# run. Screening copies every argument out and back once per candidate, so a
-# very large tensor turns a tuning step into hundreds of megabytes of traffic
-# — and on unified memory that pressure is the machine's, not a card's.
-# MEASURED 2026-09-07: unbounded screening of a 151936-wide softmax perturbed
-# six unrelated tests in the same process. A skipped screen is announced, not
-# silent.
-autotune_screen_max_bytes: 33554432
-
-# Convolution weight storage order (launch_keys.conv_weight_layout): KCRS, the container's own,
-# until this arch measures KRSC (the M4 Pro measured +46-63 % on its 3x3 keys, 2026-10-07).
-conv:
-  weight_layout: KCRS
 
 # The measured facts of a V100-SXM2 card, for a hardware profile that carries none (an auto-generated one-card profile
 # `default-<tag>`): the time estimate's roofline (core/prism/time_estimate.py) reads them through the loader's vendor
