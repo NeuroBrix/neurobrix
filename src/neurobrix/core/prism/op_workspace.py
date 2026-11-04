@@ -2,22 +2,29 @@
 
 `memory.compiled_conv3d_workspace_input_fraction`: the compiled engine's 3-D convolution, its workspace as a fraction of
 its input's bytes. MPS's conv3d takes about its input's size on top (measured on an M4 Pro, 2026-10-17); cuDNN takes
-what the allocator can give and no more (0). A vendor file that does not state it is refused by name, at the first
+what the allocator can give and no more (0). `memory.compiled_conv3d_workspace_floor_bytes`: the bytes a conv3d takes
+whatever its size — MPS's heap, under which nothing runs (measured on an M4 Pro, 2026-11-05: the workspace is
+max(floor, fraction x input)); 0 on cuDNN. A vendor file that does not state either is refused by name, at the first
 conv3d priced on it — no default. Torch-free: Prism reads it, the Triton branch may import it (R33)."""
 from __future__ import annotations
 
 from typing import Any, Dict
 
 
-def conv3d_workspace_fraction(memory: Dict[str, Any]) -> float:
-    if "compiled_conv3d_workspace_input_fraction" not in memory:
-        raise KeyError("ZERO FALLBACK: the vendor file states no memory.compiled_conv3d_workspace_input_fraction — the "
-                       "workspace its compiled conv3d takes beside its input and output; a plan holding a 3-D "
+def _stated(memory: Dict[str, Any], key: str, what: str) -> float:
+    if key not in memory:
+        raise KeyError(f"ZERO FALLBACK: the vendor file states no memory.{key} — {what}; a plan holding a 3-D "
                        "convolution cannot be priced on it")
-    f = float(memory["compiled_conv3d_workspace_input_fraction"])
-    if f < 0:
-        raise ValueError(f"ZERO FALLBACK: memory.compiled_conv3d_workspace_input_fraction is {f}; a workspace is >= 0")
-    return f
+    v = float(memory[key])
+    if v < 0:
+        raise ValueError(f"ZERO FALLBACK: memory.{key} is {v}; a workspace is >= 0")
+    return v
+
+
+def conv3d_workspace_bytes(memory: Dict[str, Any], input_bytes: int) -> int:
+    floor = _stated(memory, "compiled_conv3d_workspace_floor_bytes", "what its compiled conv3d takes whatever its size")
+    return int(max(floor, input_bytes * _stated(memory, "compiled_conv3d_workspace_input_fraction", "the workspace its "
+                                                 "compiled conv3d takes beside its input and output, a fraction of it")))
 
 
 def op_workspace_fractions(memory: Dict[str, Any]) -> Dict[str, Any]:

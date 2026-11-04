@@ -1606,12 +1606,7 @@ class PrismSolver:
 
         def vendor_table(op_type, x_shape, x_width, out_width):
             f = op_workspace_fraction(table, op_type, name)
-            if f == 0.0:
-                return 0
-            n = 1
-            for d in x_shape:
-                n *= int(d)
-            return int(n * int(x_width) * f)
+            return int(math.prod(int(d) for d in x_shape) * int(x_width) * f) if f else 0
         return vendor_table
 
     def _conv3d_workspace(self, profile, dtype: Optional[str] = None):
@@ -1652,14 +1647,11 @@ class PrismSolver:
                 return worst
             return triton_declared
         from neurobrix.core.prism.attention_scratch import vendor_memory
-        from neurobrix.core.prism.op_workspace import conv3d_workspace_fraction
+        from neurobrix.core.prism.op_workspace import conv3d_workspace_bytes
         memory = vendor_memory(min(profile.devices, key=lambda d: d.memory_mb))
 
         def cudnn(x_shape, w_shape, attrs, x_width, out_width):
-            n = 1
-            for d in x_shape:
-                n *= int(d)
-            return int(n * int(x_width) * conv3d_workspace_fraction(memory))
+            return conv3d_workspace_bytes(memory, math.prod(int(d) for d in x_shape) * int(x_width))
         return cudnn
 
     def _assign_attention_budgets(self, plan, profile) -> None:

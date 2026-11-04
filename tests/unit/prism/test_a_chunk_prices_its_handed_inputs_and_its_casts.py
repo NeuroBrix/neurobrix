@@ -167,8 +167,9 @@ def test_the_triton_conv3d_is_priced_with_its_folds():
 def test_a_vendor_that_states_no_conv3d_workspace_is_refused_by_name():
     import pytest
     from neurobrix.core.prism.attention_scratch import vendor_memory_of
-    from neurobrix.core.prism.op_workspace import conv3d_workspace_fraction
-    assert conv3d_workspace_fraction(vendor_memory_of("nvidia", "volta")) == 0.0
-    assert conv3d_workspace_fraction(vendor_memory_of("apple", "apple_m4_pro")) == 1.6     # re-measured 2026-11-05 (run 37b)
+    from neurobrix.core.prism.op_workspace import conv3d_workspace_bytes
+    big = 10 << 30                                                       # above the M4 Pro's floor: the fraction decides
+    assert conv3d_workspace_bytes(vendor_memory_of("nvidia", "volta"), big) == 0
+    assert conv3d_workspace_bytes(vendor_memory_of("apple", "apple_m4_pro"), big) == int(big * 1.6)     # re-measured 2026-11-05 (run 37b)
     with pytest.raises(KeyError, match="compiled_conv3d_workspace_input_fraction"):
-        conv3d_workspace_fraction({})
+        conv3d_workspace_bytes({"compiled_conv3d_workspace_floor_bytes": 0}, 1)

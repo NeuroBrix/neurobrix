@@ -195,8 +195,9 @@ _MAY_OMIT.update({
     "memory.async_release": "same contract, read with the page granule (core/state/price.py)",
     "memory.compiled_conv3d_workspace_input_fraction":
         "the compiled engine's 3-D convolution workspace, measured per convolution library (cuDNN on NVIDIA, MPS on "
-        "Apple): optional by contract — core/prism/op_workspace.conv3d_workspace_fraction refuses by name a plan that "
+        "Apple): optional by contract — core/prism/op_workspace.conv3d_workspace_bytes refuses by name a plan that "
         "prices a compiled conv3d on a device that states none (AMD's MIOpen: not measured, so refused, never borrowed)",
+    "memory.compiled_conv3d_workspace_floor_bytes": "the same workspace's floor, the same contract (op_workspace.conv3d_workspace_bytes)",
     "autotune.buckets.M":
         "optional by contract (nbxtensor ops/autotune_bucket.ladder_for): absent, M keys on the file's own `default` "
         "dimension ladder, and a file without one is refused by name; a dedicated M ladder is adopted on measurement "
