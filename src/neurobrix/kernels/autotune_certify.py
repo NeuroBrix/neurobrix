@@ -478,6 +478,29 @@ def _gemm_rows(key: tuple, dts, unit_keyed: bool = False) -> int:
     return m
 
 
+def unit_owed(qual: str, key: tuple, stored: Optional[Dict[str, Any]]) -> bool:
+    """A served FMA certificate of an `mm` / `addmm` key the matrix unit can take, made before the unit was a
+    candidate beside the FMA configurations (1.8): its proof names no unit measurement, so the runtime serves the FMA
+    kernel where, until 1.8, the unit ran keyless by threshold (2026-11-04: ~880 keys a class, 41 models). The unit's
+    tiles are owed — measured beside the stored configuration, kept (the owner's rule 2026-11-03 17:48: only the new
+    candidate is measured, the certificate stays). Read at the operands `synthesize` draws (`_gemm_rows`)."""
+    if not stored or not stored.get("config") or "unit_measured" in (stored.get("proof") or {}):
+        return False
+    if C.kernel_short(qual) not in ("matmul_kernel", "addmm_kernel"):
+        return False
+    from nbxtensor.ops import launch_keys as LK
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
+    nbx = {"fp16": NBXDtype.float16, "bf16": NBXDtype.bfloat16, "fp32": NBXDtype.float32}
+    dts = C.key_dtypes(key)
+    if len(dts) < 2 or dts[0] not in nbx or dts[1] not in nbx:
+        return False
+    try:
+        m = _gemm_rows(key, dts, unit_keyed=True)
+    except ValueError:
+        return False
+    return LK.matrix_unit_operands(nbx[dts[0]], nbx[dts[1]], m) is not None
+
+
 def _key_operands(qual: str, tuner, key: tuple) -> Optional[Dict[str, Any]]:
     """The operands `synthesize` draws for `key` — (shape, dtype) of each input and of the
     output, plus the geometry its oracle is windowed on — read from the same key fields, so the
@@ -2852,11 +2875,16 @@ def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, re
                 _e = C.entry_for_memory_gb(entries.get(ktext), certifying_class)
                 if _e and str(_e.get("proof", {}).get("date", "")) >= skip_proven_since:
                     continue
+            owed = None
             if C.coverage_asked(entries, ktext, certifying_class, only_missing, reprove_unclocked, reprove_generator,
                                 C.proof_backend({"backend": _backend()})):
-                continue                      # certified FOR THIS CARD's memory class already, under the running
-                                              # code generator (the one the runtime serves; --only-missing asks it
-                                              # too), and, with --reprove-unclocked, at a recorded clock
+                # certified FOR THIS CARD's memory class already, under the running code generator (the one the
+                # runtime serves; --only-missing asks it too), and, with --reprove-unclocked, at a recorded clock —
+                # unless the matrix unit's measurement is still owed to it (`unit_owed`): then the stored
+                # configuration is kept, proven and timed once, and the unit's tiles are measured beside it
+                owed = C.entry_for_memory_gb(entries.get(ktext), certifying_class) if only_missing else None
+                if not unit_owed(qual, key, owed):
+                    continue
             _r = refused.get((qual, ktext))
             if only_missing and _r is not None and int(_r.get("usable_bytes", -1)) == usable_now:
                 summary["refused_known"] = summary.get("refused_known", 0) + 1
@@ -2881,7 +2909,12 @@ def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, re
                               unified=bool(certifying_device.get("unified")),
                               num_stages=_num_stages_space(vendor, profile),
                               budget_bytes=budget_bytes, floor_bytes=floor_bytes, bench=bench)
-                if reprove:
+                if owed is not None:
+                    entry = certify_key(qual, tuner, key, tol, rng, only_config=owed["config"],
+                                        reproven_from=f"the unit measured beside the FMA configuration proven "
+                                                      f"{owed.get('proof', {}).get('date', '?')}", **common)
+                    summary["unit_owed"] = summary.get("unit_owed", 0) + 1
+                elif reprove:
                     try:
                         entry = certify_key(qual, tuner, key, tol, rng, only_config=stored["config"],
                                             reproven_from=stored_label, **common)
