@@ -169,6 +169,6 @@ def test_a_vendor_that_states_no_conv3d_workspace_is_refused_by_name():
     from neurobrix.core.prism.attention_scratch import vendor_memory_of
     from neurobrix.core.prism.op_workspace import conv3d_workspace_fraction
     assert conv3d_workspace_fraction(vendor_memory_of("nvidia", "volta")) == 0.0
-    assert conv3d_workspace_fraction(vendor_memory_of("apple", "apple_m4_pro")) == 1.0
+    assert conv3d_workspace_fraction(vendor_memory_of("apple", "apple_m4_pro")) == 1.6     # re-measured 2026-11-05 (run 37b)
     with pytest.raises(KeyError, match="compiled_conv3d_workspace_input_fraction"):
         conv3d_workspace_fraction({})

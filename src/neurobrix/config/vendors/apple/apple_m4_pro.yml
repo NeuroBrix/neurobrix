@@ -77,7 +77,14 @@ memory:
   # (_agents/archives/mac.conv3d_mps_mem_probe.py, bf16 3x3x3 96->96): input (2,96,26,512,512), in+out 4 782 MB -> 2 514 MB
   # extra; (2,96,26,256,256) -> 633 MB; (2,96,6,512,512) -> 643 MB. Wan2.1-VACE's encoder chunk ran 19.3 GB against
   # 10.9 GB priced without it.
-  compiled_conv3d_workspace_input_fraction: 1.0
+  # RE-MEASURED 2026-11-05 by the Mac (campagnes/2026_11_02_m4_apple/conv3d_ws/law.jsonl, run 37b): one bf16 3x3x3 C->C conv3d
+  # alone per process, the workspace read as the smallest MPS watermark cap it runs under, less its input, weight and output;
+  # 36 shapes (channels 64-512, frames 3/5/8, 122x214 / 242x426 / 482x850). Below a 1 GB cap nothing runs: the MPS heap is the
+  # floor (floor_bytes). For inputs >= ~800 MB the workspace is 1.08-1.60 x the input (800 MB -> 896, 1 000 -> 1 087,
+  # 1 200 -> 1 920, 1 600 -> 1 728, 2 000 -> 3 136, 3 201 -> 4 416 MB): the fraction is the largest measured, 1.6.
+  compiled_conv3d_workspace_input_fraction: 1.6
+  compiled_conv3d_workspace_floor_bytes: 1073741824
+  compiled_conv3d_workspace_source: "measured 2026-11-05, M4 Pro 24 GB, MPS watermark bisection of one conv3d per process, 36 shapes; campagnes/2026_11_02_m4_apple/conv3d_ws/law.jsonl (run 37b)"
   # What the compiled engine's other ops hold beside input, output and operand copies while they run, per op type, as a
   # fraction of the op's first input's bytes (core/prism/op_workspace.py). MPS decomposes aten::linalg_vector_norm into
   # full-size intermediates before the fp32 copy the wrapper makes: VACE's 52-frame encoder chunk held 9.95 GiB at that op
