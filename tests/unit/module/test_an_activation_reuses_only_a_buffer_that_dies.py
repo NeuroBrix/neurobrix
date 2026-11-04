@@ -143,23 +143,24 @@ def test_the_interceptor_is_registered_for_the_admitted_op():
     assert fn is not None, "liveness was proved but no interceptor was installed"
 
 
-def test_the_interceptor_decides_size_at_call_time():
+def test_the_interceptor_decides_size_at_call_time(monkeypatch):
     """Small tensors take the ordinary path; large ones write in place.
 
     This is the half the DAG cannot answer, so it is the half worth pinning.
     Driven with a real NBXTensor when a card is present -- the threshold is
-    lowered by the environment variable rather than allocating a gigabyte.
+    lowered through `tiling_sizes.inplace_min_bytes` rather than allocating a gigabyte.
     """
     pytest.importorskip("nbxtensor.tensor")
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.memory.allocator import DeviceAllocator
     if DeviceAllocator.device_count() == 0:
         pytest.skip("needs a CUDA device")
-    import numpy as np, os
+    import numpy as np
 
     x = np.linspace(-2, 2, 4096).astype(np.float32)
 
-    os.environ["NBX_INPLACE_MIN_BYTES"] = str(10 ** 12)     # nothing qualifies
+    from nbxtensor.ops import tiling_sizes as _tsz
+    monkeypatch.setattr(_tsz, "inplace_min_bytes", lambda: 10 ** 12)     # nothing qualifies
     fn, _ = _interceptor_for(_dag())
     t = NBXTensor.from_numpy(x.copy())
     out = fn(t)
@@ -167,14 +168,13 @@ def test_the_interceptor_decides_size_at_call_time():
     assert out.data_ptr() != t.data_ptr(), (
         "above the threshold-as-configured nothing should be written in place")
 
-    os.environ["NBX_INPLACE_MIN_BYTES"] = "0"               # everything qualifies
+    monkeypatch.setattr(_tsz, "inplace_min_bytes", lambda: 0)            # everything qualifies
     fn, _ = _interceptor_for(_dag())
     t2 = NBXTensor.from_numpy(x.copy())
     out2 = fn(t2)
     DeviceAllocator.sync_device()
     assert out2.data_ptr() == t2.data_ptr(), (
         "below the threshold-as-configured the input buffer should carry it")
-    os.environ.pop("NBX_INPLACE_MIN_BYTES", None)
 
 
 def test_every_op_in_the_map_names_a_real_wrapper():

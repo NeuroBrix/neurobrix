@@ -5,8 +5,7 @@ pairs, standalone tiled ops, rank-5 conv chunks, residual chains). `register_int
 used to hand the executor only the planned ops it had wired (`planned=[u for u in planned if u in
 interceptors]`) and to log a tiled op of a type it had no implementation for at debug level: the
 op then ran whole — the allocation the plan was cut to avoid — and nothing said so. A residual
-chain left inactive (a mode without the chain wrapper, the NBX_TRITON_CHAIN_WRAPPER=0 kill
-switch) vanished the same way.
+chain left inactive (a mode without the chain wrapper) vanished the same way.
 
 Injections (seen red, then restored green — STATE.md of the op_tiler campaign, 2026-10-05):
   A. the `unwired` refusal removed -> the residual-chain test red (nothing raised).
@@ -57,12 +56,12 @@ def test_a_planned_op_of_a_type_without_a_tiled_implementation_is_refused_by_nam
         OpLevelTilingEngine(plan).register_into_graph_executor(_Executor("compiled"))
 
 
-def test_a_planned_residual_chain_the_mode_does_not_run_is_refused_by_name(monkeypatch):
-    monkeypatch.setenv("NBX_TRITON_CHAIN_WRAPPER", "0")
+def test_a_planned_residual_chain_the_mode_does_not_run_is_refused_by_name():
     plan = OpLevelTilingPlan("vae")
     plan.inplace_adds = []  # Prism's decision: none at this request
     plan.residual_chains = [{"fork_uid": "conv", "merge_uid": "conv2", "chain_uids": []}]
-    ex = _Executor("triton")
-    with pytest.raises(RuntimeError, match=r"2 op\(s\) no interceptor runs in mode 'triton'.*conv.*residual chains"):
+    ex = _Executor("a_mode_without_the_chain_wrapper")      # every engine's mode runs the chain wrapper
+    with pytest.raises(RuntimeError, match=r"2 op\(s\) no interceptor runs in mode "
+                                           r"'a_mode_without_the_chain_wrapper'.*conv.*residual chains"):
         OpLevelTilingEngine(plan).register_into_graph_executor(ex)
     assert ex.registered is None

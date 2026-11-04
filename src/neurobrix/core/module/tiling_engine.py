@@ -28,8 +28,6 @@ if TYPE_CHECKING:  # R33: the ATen branch imports it; shared code only annotates
 from neurobrix.core.runtime.tensor_compat import is_torch_tensor
 import json
 import logging
-import os
-import sys
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from pathlib import Path
 
@@ -598,34 +596,7 @@ class TilingEngine:
             output[osl] = output[osl] + res[rsl] * w
             weight[osl] = weight[osl] + w
 
-        # NBX_TILE_CENSUS=1: one line per tile boundary — tracked live bytes,
-        # pool-parked bytes, machine available. The three growth shapes name
-        # the three suspects for an in-process footprint: live growing
-        # linearly with tile count names the blend accumulator; pool bytes
-        # climbing in steps that never return names the arena; neither
-        # moving while the machine figure still falls names transient
-        # buffers (or something outside this accounting).
-        _census = os.environ.get("NBX_TILE_CENSUS") == "1"
-
-        def _census_line(n, phase: str = "boundary") -> None:
-            if not _census:
-                return
-            try:
-                from nbxtensor.memory.allocator import DeviceAllocator as _DA
-                live = _DA.memory_allocated()
-                pooled = sum(_DA._POOL.cached.values())
-            except Exception:
-                live = pooled = -1
-            # the host through the engine's one reader (nbxtensor.backend.host_memory): no undeclared import here
-            from nbxtensor.backend.host_memory import memory_state
-            _st = memory_state()
-            avail = (_st.available_mb << 20) if _st.available_mb is not None else -1
-            print(f"[TileCensus] tile={n} phase={phase} live_mb={live // (1 << 20)} "
-                  f"pool_mb={pooled // (1 << 20)} avail_mb={avail // (1 << 20)}",
-                  file=sys.stderr, flush=True)
-
         _accumulate(first_result, first_h, first_w, first_t)
-        _census_line(1)
 
         # Process remaining tiles
         tile_count = 1
@@ -635,12 +606,9 @@ class TilingEngine:
                     if t == first_t and y == first_h and x == first_w:
                         continue  # Already processed
                     tile = self._extract_tile(input_tensor, y, x, t)
-                    _census_line(tile_count + 1, "pre-exec")
                     result = execute_fn(tile)
-                    _census_line(tile_count + 1, "post-exec")
                     _accumulate(result, y, x, t)
                     tile_count += 1
-                    _census_line(tile_count, "post-accum")
 
         logger.debug(f"[TilingEngine] Processed {tile_count} tiles, output shape {output.shape}")
 
@@ -1606,11 +1574,6 @@ class OpLevelTilingEngine:
         # compiled mode keeps its perf path AND benefits from in-place
         # semantics — torch CachingAllocator already handles the alloc
         # pattern efficiently but in-place still saves a transient).
-        # NBX_DISABLE_INPLACE_ADD=1 skips registration to bisect whether
-        # in-place add is the source of an unidentified leak.
-        import os as _os_iadd
-        if _os_iadd.environ.get("NBX_DISABLE_INPLACE_ADD", "0") == "1":
-            self.plan.inplace_adds = []
         if self.plan.inplace_adds:
             from nbxtensor.ops.elementwise_wrappers import add_inplace_nbx
             from nbxtensor.tensor import NBXTensor
@@ -1646,18 +1609,12 @@ class OpLevelTilingEngine:
                 interceptors[op_uid] = make_inplace_add_interceptor(reuse_index)
 
         # Element-wise unary activations writing into the buffer they consume.
-        # NBX_DISABLE_INPLACE_UNARY=1 skips registration, to bisect whether
-        # this is the source of an unidentified numerical difference.
-        if _os_iadd.environ.get("NBX_DISABLE_INPLACE_UNARY", "0") == "1":
-            self.plan.inplace_unary = []
         if self.plan.inplace_unary:
 
             # `tiling_sizes.inplace_min_bytes()`, the same figure the in-place adds
-            # use (NBX_INPLACE_MIN_BYTES overrides it for a diagnosis). Read at call
-            # time from the tensor, never from the DAG -- see the detector's
-            # docstring for what happens when it is read from the DAG.
-            _MIN_INPLACE_BYTES = int(_os_iadd.environ.get(
-                "NBX_INPLACE_MIN_BYTES", _tsz.inplace_min_bytes()))
+            # use. Read at call time from the tensor, never from the DAG -- see the
+            # detector's docstring for what happens when it is read from the DAG.
+            _MIN_INPLACE_BYTES = int(_tsz.inplace_min_bytes())
 
             def make_inplace_unary_interceptor(_op_type):
                 return OpLevelTilingEngine.build_inplace_unary_interceptor(
@@ -1790,23 +1747,12 @@ class OpLevelTilingEngine:
         # 2026-05-15 P-TRITON-CHAIN-CPU-POINTER C3d closure: with the
         # NBXTensor.__getitem__ negative-slice fix (commit 8a6daf2),
         # 9/9 chains succeed on 32g triton AND on 16g triton with
-        # coherent red apple PNGs in 79-659 s. The previous
-        # NBX_TRITON_CHAIN_WRAPPER opt-in gate is no longer necessary
-        # — chain wrapper is now structurally correct on all triton
-        # modes. Kept as a runtime kill-switch via env var (set =0 to
-        # force the old skip path) for emergency rollback only.
-        import os as _os_chain
-        _triton_chain_enabled = (
-            _os_chain.environ.get("NBX_TRITON_CHAIN_WRAPPER", "1") != "0"
-        )
+        # coherent red apple PNGs in 79-659 s: the chain wrapper runs in every mode
+        # (its environment kill-switch removed 2026-11-04, zero host setting).
         _mode = getattr(graph_executor, "mode", None)
-        _triton_chain_modes = (
-            ("triton", "triton_sequential")
-            if _triton_chain_enabled else ()
-        )
         _residual_chains_active = (
             self.plan.residual_chains
-            and _mode in ("compiled", "sequential") + _triton_chain_modes
+            and _mode in ("compiled", "sequential", "triton", "triton_sequential")
         )
         if _residual_chains_active:
             from nbxtensor.ops.residual_chain import ChainSentinel, resolve_chain_weights, band_streamed_chain_nbx
@@ -1901,71 +1847,6 @@ class OpLevelTilingEngine:
                 # deferred-compute pattern work.
 
                 def _node(*args, **kwargs):
-                    # S5 pre-chain baseline audit (fires on fork entry
-                    # when env var set). NBX_S5_BASELINE_AUDIT="<fork_uid>"
-                    # logs torch.cuda.memory_allocated() + reserved +
-                    # the largest live tensors in the compiled-sequence
-                    # arena so the baseline retention gap can be
-                    # analyzed factually.
-                    import os as _os_aud
-                    _aud = _os_aud.environ.get("NBX_S5_BASELINE_AUDIT", "")
-                    # the audit reads the compiled engine's torch allocator and arena: never on the Triton engine
-                    # (R33 — it imported torch there, whatever the mode)
-                    if _aud and _node_roles["forks"] and not _is_triton_mode:
-                        for fs in _node_roles["forks"]:
-                            if fs["fork_uid"] == _aud:
-                                try:
-                                    import torch as _t
-                                    _alloc = _t.cuda.memory_allocated() / 1024**2
-                                    _peak = _t.cuda.max_memory_allocated() / 1024**2
-                                    _reserved = _t.cuda.memory_reserved() / 1024**2
-                                    print(f"[S5_BASELINE_AUDIT "
-                                          f"fork={fs['fork_uid']}] "
-                                          f"alloc={_alloc:.0f} MB "
-                                          f"reserved={_reserved:.0f} MB "
-                                          f"peak={_peak:.0f} MB",
-                                          flush=True)
-                                    # Top live tensors via compiled
-                                    # sequence arena (where compiled
-                                    # mode stores op outputs).
-                                    cseq = getattr(_executor_ref,
-                                                   '_compiled_seq', None)
-                                    arena = (getattr(cseq, '_arena', None)
-                                             if cseq is not None else None)
-                                    if arena is not None:
-                                        entries = []
-                                        for slot, t in enumerate(arena):
-                                            if t is None:
-                                                continue
-                                            if isinstance(t, _t.Tensor):
-                                                sz = t.numel() * t.element_size()
-                                                entries.append((slot, sz,
-                                                               tuple(t.shape),
-                                                               str(t.dtype)))
-                                            elif hasattr(t, '_nbytes'):
-                                                entries.append((slot,
-                                                               getattr(t, '_nbytes', 0),
-                                                               getattr(t, 'shape',
-                                                                       None),
-                                                               str(getattr(t, 'dtype',
-                                                                           '?'))))
-                                        entries.sort(key=lambda kv: -kv[1])
-                                        print(f"  Arena: {len(entries)} non-None "
-                                              f"slots, total "
-                                              f"{sum(e[1] for e in entries)/1024**2:.0f} MB",
-                                              flush=True)
-                                        print("  Top 20 live tensors:",
-                                              flush=True)
-                                        for slot, sz, sh, dt in entries[:20]:
-                                            print(f"    slot={slot:<5} "
-                                                  f"{sz/1024**2:>8.0f} MB  "
-                                                  f"shape={sh} dtype={dt}",
-                                                  flush=True)
-                                except Exception as e:
-                                    print(f"[S5_BASELINE_AUDIT] error: {e}",
-                                          flush=True)
-                                break
-
                     # Step 1: drain a chain whose merge ends here.
                     value = None
                     for merge_spec in _node_roles["merges"]:
@@ -2034,65 +1915,6 @@ class OpLevelTilingEngine:
                                             / 1024**2
                                         )
                                     # P-TRITON-CHAIN-CPU-POINTER C1
-                                    # 2026-05-14: per-chain device-state
-                                    # log gated by NBX_CHAIN_DIAG=1.
-                                    # On 16g+32g triton, chain 1 runs OK
-                                    # then chain N (N≥2) fails with
-                                    # "Pointer argument cannot be
-                                    # accessed from Triton (cpu tensor?)".
-                                    # Log t_base_pending and each chain
-                                    # weight: device_idx, data_ptr (raw),
-                                    # is_contiguous, _nbytes. Diff
-                                    # between chain 1 (OK) and chain N
-                                    # (FAIL) gives the dispositive
-                                    # device-state mismatch.
-                                    import os as _os_cd
-                                    if (_is_triton_mode and
-                                            _os_cd.environ.get(
-                                                "NBX_CHAIN_DIAG", "0")
-                                            == "1"):
-                                        try:
-                                            _tbp = t_base_pending
-                                            _tbp_d = getattr(
-                                                _tbp, "_device_idx", "?")
-                                            _tbp_p = getattr(
-                                                _tbp, "_data_ptr", "?")
-                                            _tbp_ct = (
-                                                _tbp.is_contiguous()
-                                                if hasattr(_tbp,
-                                                           'is_contiguous')
-                                                else "?")
-                                            print(
-                                                f"[CHAIN_DIAG cid={cid}] "
-                                                f"t_base dev={_tbp_d} "
-                                                f"ptr={_tbp_p} "
-                                                f"contig={_tbp_ct} "
-                                                f"shape={tuple(_tbp.shape)}",
-                                                flush=True)
-                                            for _wk, _wv in cw.items():
-                                                _d = getattr(
-                                                    _wv, "_device_idx",
-                                                    None)
-                                                if _d is None:
-                                                    continue
-                                                _p = getattr(
-                                                    _wv, "_data_ptr", "?")
-                                                _ct = (
-                                                    _wv.is_contiguous()
-                                                    if hasattr(_wv,
-                                                               'is_contiguous')
-                                                    else "?")
-                                                print(
-                                                    f"  weight[{_wk}]: "
-                                                    f"dev={_d} ptr={_p} "
-                                                    f"contig={_ct} "
-                                                    f"shape={tuple(_wv.shape)}",
-                                                    flush=True)
-                                        except Exception as _de:
-                                            print(
-                                                f"[CHAIN_DIAG cid={cid}] "
-                                                f"error: {_de}",
-                                                flush=True)
                                     merge_out = _band_streamed_chain(
                                         t_base_pending, cw,
                                         # Both are the plan's: the detector writes the halo,
@@ -2254,7 +2076,7 @@ class OpLevelTilingEngine:
             raise RuntimeError(
                 f"[OpLevelTilingEngine] '{self.plan.component_name}': the plan tiles "
                 f"{len(unwired)} op(s) no interceptor runs in mode {_mode!r} — {unwired[:5]}"
-                f"{' (residual chains: NBX_TRITON_CHAIN_WRAPPER=0 or a mode without the chain wrapper)' if chains and not _residual_chains_active else ''}")
+                f"{' (residual chains: a mode without the chain wrapper)' if chains and not _residual_chains_active else ''}")
         if not interceptors:
             return 0
         partial = [g for g in groups if not all(u in interceptors for u in g)]
