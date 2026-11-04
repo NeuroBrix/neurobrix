@@ -56,7 +56,7 @@ def test_the_executors_brick_uninstalls_the_strategy_before_the_executor_unloads
     executor = SimpleNamespace(_weights_loaded=True, unload_weights=lambda: order.append("unload"),
                                _devices_computed=True)
     strategy = SimpleNamespace(uninstall_for_executor=lambda name, ex: order.append(f"uninstall {name}"))
-    engine = SimpleNamespace(executors={"transformer": executor}, strategy=strategy)
+    engine = SimpleNamespace(executors={"transformer": executor}, strategy=strategy, mode="compiled")
     RuntimeExecutor._unload_component_weights(engine, "transformer")
     assert order == ["uninstall transformer", "unload"]
     assert executor._weights_loaded is False and executor._devices_computed is False
