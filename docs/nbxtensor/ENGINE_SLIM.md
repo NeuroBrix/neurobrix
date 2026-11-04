@@ -171,7 +171,6 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | wrapper | src/neurobrix/nbx/atomic_install.py | InstallHeldByAnother | a named refusal: its type says what was refused, to the reader and to a caller that catches it |
 | wrapper | src/neurobrix/nbx/weight_presence.py | AbsentWeightError | a named refusal: its type says what was refused, to the reader and to a caller that catches it |
 | dead | src/neurobrix/cli/commands/registry.py | installing_path | a test seam: read by tests/unit/cli/test_import_speaks_ndjson.py, nothing else |
-| dead | src/neurobrix/core/config/loader.py | vendor_file | a test seam: read by tests/unit/config/test_apple_profiles_agree_with_the_device.py and the Apple tile-lattice test, nothing else |
 | dead | src/neurobrix/core/module/autoregressive/generator.py | AutoregressiveGenerator.num_generated | a test seam: read by tests/unit/serving/test_both_engines_read_the_stop_at_their_token_seam.py, nothing else |
 | dead | src/neurobrix/core/module/tiling_engine.py | OpLevelTilingPlan.add_inplace_unary | a test seam: read by tests/unit/prism/test_the_tiling_rung_s_reason_reaches_a_reader.py, nothing else |
 | dead | src/neurobrix/core/optim/passes/normalize.py | boundaries_present | a test seam: read by tests/unit/prism/test_a_segment_boundary_names_an_op_the_executor_still_has.py (the invariant a gate asserts), nothing else |
