@@ -74,6 +74,9 @@ APPLE_M4_PRO = {        # the Mac's `default-9f169c79`, 2026-09-24; its engine b
                  # vendor file's), with the arena factor the engine measures there since 2026-11-03 (HAT-L x4 triton,
                  # the allocator's live peak over the walk, 2026-10-28)
                  "measured": {**_vendor_measured("apple/apple_m4_pro"), "triton_arena_activation_factor": 1.19}}],
+    # the per-piece reload the engine measures at the first launch since 1604166f (no longer in the vendor file): the
+    # triton BF16 rate it measured on Janus-Pro-7B's segments (2.1 GB/s, 2026-10-27), over the vendor's host facts
+    "host_measured": {"weight_reload_gbps": {"triton": {"BF16": 2.1}}},
     "interconnect": {"groups": []},
     "pcie_fallback": {"version": "N/A", "lanes": 16, "bandwidth_gbps": 32},
 }
