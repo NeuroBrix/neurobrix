@@ -130,14 +130,21 @@ def _card():
 
 
 @pytest.mark.skipif(not _card(), reason="needs a device to run the kernels")
-def test_a_unit_gemm_key_is_certified_with_both_routes_measured():
+def test_a_unit_gemm_key_is_certified_with_both_routes_measured(monkeypatch):
     import numpy as np
     from nbxtensor.ops import launch_keys as LK
     from nbxtensor.ops import autotune_certified as C
+    from nbxtensor.ops import wrappers as W
+    from nbxtensor.ops import _configs as CF
     from nbxtensor.ops.matmul import matmul_kernel
     from neurobrix.kernels import autotune_certify as A
     from nbxtensor.dtype.nbx_dtype import NBXDtype as D
-    A._bind_hardware_profile()                      # the card's own profile, as the CLI binds it
+    # the card's own profile, as the CLI binds it — for this test only: left bound, it changed the allocator tests
+    # that follow in the directory (their pool read the card's profile, 16 red, 2026-11-04)
+    monkeypatch.setattr(W, "_NBX_HW_PROFILE", W._NBX_HW_PROFILE)
+    monkeypatch.setattr(W, "_NBX_HAS_NATIVE_BF16", W._NBX_HAS_NATIVE_BF16)
+    monkeypatch.setattr(CF, "_ACTIVE_PROFILE", {})      # resolved again for the card bound here
+    A._bind_hardware_profile()
     if not LK.matrix_unit_takes(D.float16, D.float16, 128):
         pytest.skip("this card's profile declares no matrix unit")
     (_q, key), = LK.mm_launches(128, 256, 256, D.float16, D.float16, native_bf16=False)
