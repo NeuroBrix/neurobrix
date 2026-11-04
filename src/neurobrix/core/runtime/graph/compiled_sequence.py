@@ -4178,8 +4178,13 @@ class CompiledSequence(SequenceSteps):
             device_empty_cache(str(self.device))
             self._in_flight = 0
         elif self._drain_cliff is not None and self._in_flight >= self._drain_cliff:
-            from neurobrix.core.device_utils import device_sync
+            # the wait returns the frees to the allocator's cache, not to the device: where the cache then holds more
+            # than the queue the plan priced, it is emptied too (the Mac's RUN 33b, 2026-11-04 21:23: 1 210 waits fired
+            # on mochi's VAE, 12.56 GiB live under the price, and 4.70 GiB of heaps MPS kept cached killed it)
+            from neurobrix.core.device_utils import device_sync, device_cached_bytes, device_empty_cache
             device_sync(str(self.device))
+            if device_cached_bytes(str(self.device)) > self._drain_cliff:
+                device_empty_cache(str(self.device))
             self._in_flight = 0
 
     def gather_outputs(self, output_ids: Optional[List[str]] = None) -> Dict[str, torch.Tensor]:

@@ -173,6 +173,17 @@ def device_allocator_figures(device: Optional[str]) -> Dict[str, float]:
     return {}
 
 
+def device_cached_bytes(device: Optional[str]) -> int:
+    """What the ATen branch's allocator on `device` holds BEYOND its live tensors, in bytes: MPS `driver_allocated -
+    current_allocated` (its retained heaps), CUDA `reserved - allocated` (its cached blocks); 0 where the device has no
+    torch allocator (the CPU, a process without torch)."""
+    f = device_allocator_figures(device)
+    held = f.get("driver_mb", f.get("reserved_mb"))
+    if held is None:
+        return 0
+    return max(0, int((held - f.get("allocated_mb", 0.0)) * 1024 * 1024))
+
+
 def device_reset_peak(device: Optional[str]) -> Optional[Tuple[int, int]]:
     """Restart the ATen allocator's peak counters on `device`: (device index, the reserved peak in bytes before the
     restart), or None where the allocator keeps no peak (MPS, the CPU, a process without torch)."""

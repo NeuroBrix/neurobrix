@@ -28,10 +28,11 @@ def _seq(release_from, drain_cliff=None):
     return s
 
 
-def _calls(monkeypatch):
+def _calls(monkeypatch, cached=0):
     seen = []
     monkeypatch.setattr(DU, "device_sync", lambda d=None: seen.append(("sync", d)))
     monkeypatch.setattr(DU, "device_empty_cache", lambda d=None: seen.append(("empty", d)))
+    monkeypatch.setattr(DU, "device_cached_bytes", lambda d=None: cached)
     return seen
 
 
@@ -106,3 +107,21 @@ def test_the_engines_copies_count_toward_the_cliff(monkeypatch):
     s.op_resolver.dtype_engine.copy_meter[0] = 900          # a cast the op made and dropped
     s._kill([torch.empty(200, dtype=torch.uint8)], (0,))
     assert [k for k, _ in seen] == ["sync"] and s.op_resolver.dtype_engine.copy_meter == [0]
+
+
+# A wait returns the frees to the allocator's CACHE, not to the device: MPS kept 4.70 GiB of heaps cached beside 12.56 GiB
+# live (under the price) after 1 210 waits on mochi's VAE, and the run died (the Mac's RUN 33b, 2026-11-04 21:23). At the
+# cliff, a cache above the priced queue is emptied too; one under it is kept (emptying costs every later allocation).
+# Injection: no empty at the cliff -> the first test red; an empty whatever the cache -> the second red.
+def test_a_cache_above_the_queue_is_emptied_at_the_cliff(monkeypatch):
+    seen = _calls(monkeypatch, cached=5000)
+    s = _seq(1 << 20, drain_cliff=1000)
+    s._kill([torch.empty(1200, dtype=torch.uint8)], (0,))
+    assert [k for k, _ in seen] == ["sync", "empty"]
+
+
+def test_a_cache_under_the_queue_is_kept(monkeypatch):
+    seen = _calls(monkeypatch, cached=500)
+    s = _seq(1 << 20, drain_cliff=1000)
+    s._kill([torch.empty(1200, dtype=torch.uint8)], (0,))
+    assert [k for k, _ in seen] == ["sync"]
