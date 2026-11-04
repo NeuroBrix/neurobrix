@@ -65,7 +65,7 @@ established idiom).
 import triton
 import triton.language as tl
 
-from nbxtensor.ops._configs import nbx_autotune
+from nbxtensor.ops._configs import fits_shared_memory, nbx_autotune
 
 # The half-precision band's tiles, candidates the certification measures per key: the ladder the band was first
 # measured over (BLOCK_N {16, 32, 64} x BLOCK_K {64, 128, 256} x warps {2, 4, 8}, Qwen3-30B-A3B's experts on a V100,
@@ -73,6 +73,12 @@ from nbxtensor.ops._configs import nbx_autotune
 _HALF_VEC_CONFIGS = [triton.Config({'BLOCK_N': bn, 'BLOCK_K': bk}, num_warps=w)
                      for bn in (16, 32, 64) for bk in (64, 128, 256) for w in (2, 4, 8)]
 _PART_REDUCE_CONFIGS = [triton.Config({'BLOCK_N': bn}, num_warps=w) for bn in (128, 256, 512, 1024) for w in (1, 2, 4)]
+
+
+def _prune_half_vec(configs, named_args, **kwargs):
+    """The [BLOCK_K, BLOCK_N] fp32 product block each step reduces across its warps fits the device's shared memory
+    (Metal, 32 KB: 256 x 64 asked 65 536 bytes and its emitter aborted the certifier, the Mac's RUN 24d, 2026-11-04)."""
+    return [c for c in configs if fits_shared_memory(4 * c.kwargs['BLOCK_K'] * c.kwargs['BLOCK_N'])]
 
 
 @triton.jit
@@ -294,7 +300,8 @@ def moe_part_reduce_kernel(
 # ---------------------------------------------------------------------------
 
 
-@nbx_autotune(configs=_HALF_VEC_CONFIGS, key=['K', 'N', 'TOP_K', 'W_BF16'], cache_results=True)
+@nbx_autotune(configs=_HALF_VEC_CONFIGS, key=['K', 'N', 'TOP_K', 'W_BF16'],
+              prune_configs_by={'early_config_prune': _prune_half_vec}, cache_results=True)
 @triton.jit
 def moe_gateup_vec_half_kernel(
     x_ptr,            # [K] activation
@@ -332,7 +339,8 @@ def moe_gateup_vec_half_kernel(
     tl.store(h_ptr + pid_e * N + offs_n, h, mask=mask_n)
 
 
-@nbx_autotune(configs=_HALF_VEC_CONFIGS, key=['Kd', 'N', 'TOP_K', 'W_BF16'], cache_results=True)
+@nbx_autotune(configs=_HALF_VEC_CONFIGS, key=['Kd', 'N', 'TOP_K', 'W_BF16'],
+              prune_configs_by={'early_config_prune': _prune_half_vec}, cache_results=True)
 @triton.jit
 def moe_down_split_vec_half_kernel(
     h_ptr,            # [TOP_K, Kd] fp32 — the gateup output

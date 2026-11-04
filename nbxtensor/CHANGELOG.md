@@ -33,6 +33,7 @@ The first release, 0.0.1, is in preparation.
 - **The matrix product and the linear layer declare what they allocate** (`nbxtensor.ops.linalg_wrappers.mm_cost` / `addmm_cost`, beside `bmm_cost`): the casts, the decode rows' GEMV and the weight copy a row-major weight costs there, the bias made contiguous, the output at its store dtype, an epilogue's output; each equal to the allocator's measured peak on the device, over the dtypes, the decode and tiled row counts, both weight layouts and the bias forms.
 
 ### Fixed
+- **The half-precision MoE decode band no longer tries configs past the device's shared memory**: `moe_gateup_vec_half_kernel` and `moe_down_split_vec_half_kernel` prune their tiles to the [BLOCK_K, BLOCK_N] fp32 blocks `memory.max_shared_memory_per_block` holds before any compile (on Apple's 32 KB a 256 x 64 block aborted the Metal emitter); the door is `_configs.fits_shared_memory`.
 - **The library alone autotunes on NVIDIA**: without an application's hardware profile, a kernel's device facts
   (`memory.max_registers_per_block` and the like) were read through the profile and found absent, so a reduction or
   a softmax without a certified configuration was refused; they are now read from the device file of the card the

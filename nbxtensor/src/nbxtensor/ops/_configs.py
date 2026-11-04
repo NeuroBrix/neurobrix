@@ -435,6 +435,19 @@ def vendor_profile_for_arch(arch) -> dict:
     return dict(_ACTIVE_PROFILE)
 
 
+def fits_shared_memory(nbytes: int) -> bool:
+    """Whether a block of `nbytes` a kernel stages in shared (threadgroup) memory fits the device's
+    `memory.max_shared_memory_per_block` (the profile in force): the prune of a config space whose widest block a
+    cross-warp reduction stages there. A config past it is not only slower: Metal's emitter aborts the process
+    ("threadgroup memory past the hardware limit", 2026-11-04), so it is pruned before any compile. A profile that
+    declares no budget is refused by name."""
+    budget = arch_smem_budget()
+    if budget is None:
+        raise RuntimeError("ZERO FALLBACK: a config space is pruned by memory.max_shared_memory_per_block, which the "
+                           "hardware profile in force does not declare")
+    return int(nbytes) <= int(budget)
+
+
 def arch_smem_budget() -> Optional[int]:
     """`memory.max_shared_memory_per_block` for the executing hardware.
 
