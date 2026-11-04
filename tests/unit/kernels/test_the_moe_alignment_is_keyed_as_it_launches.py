@@ -96,3 +96,19 @@ def test_the_certifier_certifies_every_stage(stage, tokens, top_k, experts):
                         bench=lambda fn: (fn(), 1.0)[1])
     assert entry["excluded"] == [] and entry["proof"]["accepted"] >= 1, entry
     assert entry["proof"]["deviation"] == 0.0 and entry["proof"]["shape"] == list(key)
+
+
+def test_every_device_states_the_integer_tolerance_the_alignment_is_certified_at():
+    """The certifier takes a key's tolerance from its device's `autotune_screen_rtol` by output dtype and invents
+    none: the alignment's int64 tables went unproven on every key (lot-cert 18:41, 14 failed a card: "declares no
+    autotune_screen_rtol for int64"). Every device that states tolerances states int64 at 0 — met exactly."""
+    import yaml
+    from pathlib import Path
+    import nbxtensor
+    root = Path(nbxtensor.__file__).resolve().parent / "backend" / "devices"
+    files = sorted(root.glob("*/*.yml"))
+    assert files
+    for f in files:
+        rtol = (yaml.safe_load(f.read_text()) or {}).get("autotune_screen_rtol")
+        if rtol is not None:
+            assert rtol.get("int64") == 0.0, f"{f.name}: autotune_screen_rtol.int64 = {rtol.get('int64')!r}"
