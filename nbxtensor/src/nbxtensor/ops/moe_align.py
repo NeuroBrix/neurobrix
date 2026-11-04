@@ -32,7 +32,7 @@ class by construction.
 import triton
 import triton.language as tl
 
-from nbxtensor.ops._configs import nbx_autotune
+from nbxtensor.ops._configs import fits_shared_memory, nbx_autotune
 
 # The chunk widths and warps of the three stages, candidates the certification measures per key; the launch before
 # 2026-11-04 (BT 128, BF the experts' padded count, BLK 128 positions, BLKT = BN = 128, 4 warps — 32 and 64 wide on
@@ -46,15 +46,9 @@ _STAGE3_CONFIGS = [triton.Config({'BLKT': t, 'BN': bn}, num_warps=w, num_stages=
 
 
 def _fits(blocks) -> bool:
-    """Whether the stage's widest int32 block fits the device's shared memory per block (`memory.
-    max_shared_memory_per_block` of the profile in force): a cross-warp reduction stages its block there (Metal,
-    32 KB: a [128, 128] block asked 65 536 bytes, Qwen3-30B-A3B)."""
-    from nbxtensor.ops._configs import arch_smem_budget
-    budget = arch_smem_budget()
-    if budget is None:
-        raise RuntimeError("ZERO FALLBACK: the MoE alignment sizes its blocks by memory.max_shared_memory_per_block, "
-                           "which the hardware profile in force does not declare")
-    return 4 * max(a * b for a, b in blocks) <= int(budget)
+    """Whether the stage's widest int32 block fits the device's shared memory per block (a cross-warp reduction stages
+    its block there; Metal, 32 KB: a [128, 128] block asked 65 536 bytes, Qwen3-30B-A3B)."""
+    return fits_shared_memory(4 * max(a * b for a, b in blocks))
 
 
 def _prune_stage1(configs, named_args, **kwargs):

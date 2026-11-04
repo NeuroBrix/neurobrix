@@ -1,4 +1,4 @@
-"""The MoE decode band's config spaces are pruned to the blocks the device's shared memory holds (`_configs.
+"""The MoE decode band's and alignment's config spaces are pruned to the blocks the device's shared memory holds (`_configs.
 fits_shared_memory`, `memory.max_shared_memory_per_block` of the profile in force) BEFORE any compile: on Metal (32 KB)
 the half-precision decode band's 256 x 64 fp32 block asked 65 536 bytes and the MSL emitter aborted the whole certifier
 (the Mac's RUN 24d, 2026-11-04 14:59) — an abort no candidate exclusion can catch.
@@ -28,6 +28,13 @@ def test_the_half_band_keeps_only_what_fits(monkeypatch, name):
     assert metal and all(4 * c.kwargs["BLOCK_K"] * c.kwargs["BLOCK_N"] <= 32768 for c in metal)
     assert len(metal) == sum(4 * c.kwargs["BLOCK_K"] * c.kwargs["BLOCK_N"] <= 32768 for c in every) < len(every)
     assert len(_pruned(tuner, 98304, monkeypatch)) == len(every)          # the V100: every candidate fits
+
+
+def test_the_alignment_keeps_only_what_fits(monkeypatch):
+    from nbxtensor.ops import moe_align as MA
+    kept = _pruned(MA.moe_align_stage3_kernel, 32768, monkeypatch)
+    assert kept and all(4 * c.kwargs["BLKT"] * c.kwargs["BN"] <= 32768 for c in kept)
+    assert len(kept) < len(MA.moe_align_stage3_kernel.configs)
 
 
 def test_a_profile_without_a_budget_is_refused(monkeypatch):
