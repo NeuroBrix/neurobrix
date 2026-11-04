@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **The kernel certifier prices a mixture-of-experts key and windows its reference**: a fused MoE key ran unpriced and computed its float64 reference over every (token, expert) pair at once — about 25 GB for the largest prefill key on Apple's unified memory; it is now priced before its draw, refused by name past the working-set budget, and its reference computed on row windows of the pairs as a matrix product's is.
+- **An image-to-video conditioning image is fitted as its vendor fits it**: Allegro-TI2V's first frame was the input image stretched to the request's 16:9; a container may now declare the vendor's own fit (`condition_image_fit` on its image encoder: a centred window at the request's aspect, then an antialiased linear resample), which the engine reproduces in numpy, matched against the vendor's own resample to 2e-6.
 - **A replayed component whose output is a permuted or transposed view returns its values in order**: the replay
   handed such an output over by copying its storage into a contiguous tensor of its shape — the values scrambled —
   and its verify pass hashed storage bytes, so the scrambled copy was taken for the right one. Allegro-TI2V's

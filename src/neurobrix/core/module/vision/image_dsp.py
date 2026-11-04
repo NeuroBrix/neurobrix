@@ -16,7 +16,9 @@ arithmetic beyond resampling (scale, normalize, transpose, pad) is numpy.
 Preprocessing types implemented here:
   i2v_vae_condition — the video I2V conditioning contract (vendor
       VideoProcessor.preprocess semantics): resize to the run
-      height/width, normalize to [-1, 1], single conditioning frame
+      height/width (or the vendor's declared fit: a centre crop and an
+      antialiased linear resample, in numpy — `condition_image_fit`),
+      normalize to [-1, 1], single conditioning frame
       [1, 3, 1, H, W]; optionally zero-padded to [1, 3, T, H, W] for
       temporal-VAE denoisers (Wan-I2V class).
   clip_centercrop — the CLIP preprocessor contract, data-driven from the
@@ -49,23 +51,77 @@ def _load_rgb(image_path: str):
     return Image.open(image_path).convert("RGB")
 
 
+def _center_crop_box(h: int, w: int, th: int, tw: int):
+    """The window of an h x w image at the target's aspect th / tw, centred (rhymes-ai Allegro
+    `data_process.center_crop_th_tw`: the long side cut, the offsets rounded as Python rounds)."""
+    tr = th / tw
+    nh, nw = (int(w * tr), w) if h / w > tr else (h, int(h / tr))
+    i, j = int(round((h - nh) / 2.0)), int(round((w - nw) / 2.0))
+    return i, j, nh, nw
+
+
+def _linear_weights(n_in: int, n_out: int, align_corners: bool) -> np.ndarray:
+    """[n_out, n_in] weights of a separable linear resample with antialiasing — a triangle filter
+    widened by the downscale factor, each row normalised (the antialiased bilinear of
+    `torch.nn.functional.interpolate(..., antialias=True)`; `align_corners` scales by
+    (n_in - 1) / (n_out - 1))."""
+    scale = (n_in - 1) / (n_out - 1) if align_corners and n_out > 1 else n_in / n_out
+    support, inv = (scale, 1.0 / scale) if scale >= 1.0 else (1.0, 1.0)
+    out = np.zeros((n_out, n_in), dtype=np.float64)
+    for i in range(n_out):
+        c = scale * (i + 0.5)
+        lo, hi = max(int(c - support + 0.5), 0), min(int(c + support + 0.5), n_in)
+        wgt = np.maximum(0.0, 1.0 - np.abs((np.arange(lo, hi) - c + 0.5) * inv))
+        out[i, lo:hi] = wgt / wgt.sum()
+    return out
+
+
+#: what a `condition_image_fit` declaration may say (the vae_encoder's container flag)
+_FIT_KEYS = {"crop": ("center",), "resample": ("linear",), "antialias": (True,), "align_corners": (True, False)}
+
+
+def _fit_condition(img, h: int, w: int, fit: dict) -> np.ndarray:
+    """The conditioning image cut to the request's aspect and resampled as the vendor's own
+    preprocessing declares (`fit`, the container's `condition_image_fit`), HWC float64 in [0, 255]."""
+    for k, v in fit.items():
+        if k != "source" and (k not in _FIT_KEYS or v not in _FIT_KEYS[k]):
+            raise RuntimeError(f"ZERO FALLBACK: condition_image_fit.{k} = {v!r} is not a fit this engine "
+                               f"reproduces ({_FIT_KEYS})")
+    missing = sorted(set(_FIT_KEYS) - set(fit))
+    if missing:
+        raise RuntimeError(f"ZERO FALLBACK: condition_image_fit declares no {missing}")
+    a = np.asarray(img, dtype=np.float64)
+    i, j, nh, nw = _center_crop_box(a.shape[0], a.shape[1], h, w)
+    a = a[i:i + nh, j:j + nw]
+    ac = bool(fit["align_corners"])
+    return np.einsum("oh,hwc->owc", _linear_weights(nh, h, ac), np.einsum("pw,hwc->hpc", _linear_weights(nw, w, ac), a))
+
+
 def i2v_vae_condition_np(
     image_path: str,
     height: Optional[int] = None,
     width: Optional[int] = None,
     pad_to_num_frames: int = 0,
+    fit: Optional[dict] = None,
 ) -> np.ndarray:
     """I2V VAE-conditioning clip. [1,3,1,H,W] float32 in [-1,1]; when
     `pad_to_num_frames` > 1, zero-padded on the temporal axis to
     [1,3,T,H,W] (frame0 = image, rest = zeros — Wan-I2V temporal-VAE
-    contract, data-driven via the caller's registry flag)."""
+    contract, data-driven via the caller's registry flag). The image is
+    resized to the request (diffusers' VaeImageProcessor: a LANCZOS stretch)
+    unless the container declares the vendor's own fit (`fit`, the
+    vae_encoder's `condition_image_fit`: Allegro-TI2V centre-crops to the
+    request's aspect, then an antialiased linear resample)."""
     from PIL import Image
     img = _load_rgb(image_path)
     h = int(height) if height else img.height
     w = int(width) if width else img.width
-    if (img.width, img.height) != (w, h):
-        img = img.resize((w, h), Image.LANCZOS)
-    arr = np.asarray(img, dtype=np.float32) / 127.5 - 1.0        # HWC
+    if fit is not None:
+        arr = (_fit_condition(img, h, w, fit) / 127.5 - 1.0).astype(np.float32)   # HWC
+    else:
+        if (img.width, img.height) != (w, h):
+            img = img.resize((w, h), Image.LANCZOS)
+        arr = np.asarray(img, dtype=np.float32) / 127.5 - 1.0        # HWC
     clip = np.ascontiguousarray(
         arr.transpose(2, 0, 1))[np.newaxis, :, np.newaxis]       # 1,3,1,H,W
     t = int(pad_to_num_frames or 0)

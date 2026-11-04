@@ -34,6 +34,7 @@ RUNTIME_COMPONENT_FLAGS = (
     "fp16_conv_cascade_safe",
     "sigma_schedule",          # the pipeline's sigma schedule (scheduler component)
     "dynamic_shift_length",    # the length the pipeline's dynamic shift reads (scheduler component)
+    "condition_image_fit",     # the vendor's own fit of an I2V conditioning image (vae_encoder component)
 )
 
 _ABSENT = object()

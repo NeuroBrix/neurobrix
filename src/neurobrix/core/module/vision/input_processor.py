@@ -49,6 +49,7 @@ class ImageInputProcessor:
         pad_to_num_frames: int = 0,
         preprocessor_config: Optional[dict] = None,
         fps: Optional[float] = None,
+        fit: Optional[dict] = None,
     ):
         """Preprocess an image file into model input tensor(s).
 
@@ -117,7 +118,7 @@ class ImageInputProcessor:
         if preprocessing_type == "i2v_vae_condition":
             arr = image_dsp.i2v_vae_condition_np(
                 str(image_path), height=height, width=width,
-                pad_to_num_frames=pad_to_num_frames)
+                pad_to_num_frames=pad_to_num_frames, fit=fit)
         else:  # clip_centercrop
             if not isinstance(preprocessor_config, dict):
                 raise RuntimeError(
@@ -290,9 +291,12 @@ def prepare_image_inputs(topology: dict, model_name: Optional[str],
         if get_component_flag(model_name, "vae_encoder",
                               "pad_image_to_num_frames", default=False):
             pad_nf = int(num_frames or 0)
+        # the vendor's own fit of the conditioning image where its container declares one (a centre crop and an
+        # antialiased linear resample: Allegro-TI2V), else the request's size by a LANCZOS stretch
+        fit = get_component_flag(model_name, "vae_encoder", "condition_image_fit", default=None)
         inputs["global.image"] = ImageInputProcessor.process(
             "i2v_vae_condition", image_path,
-            height=height, width=width, pad_to_num_frames=pad_nf)
+            height=height, width=width, pad_to_num_frames=pad_nf, fit=fit)
         proc_cfg = (cache_path / "modules" / "image_processor"
                     / "preprocessor_config.json")
         if proc_cfg.exists():
