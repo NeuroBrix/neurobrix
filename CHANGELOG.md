@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The engine slims now that it imports nbxtensor**: code nothing reached is deleted, with no change of behaviour — the vendored third-party reference kernels (never imported, never packaged) and the compiled branch's unmapped op handlers, the planner's, the runtime's and the flows' uncalled helpers, the PyTorch branch's copies of nbxtensor's dtype table reader and tiling sizes, Prism's compatibility aliases, the Triton loader's bind-time fp16 -> fp32 weight upcast (no caller ever enabled it; precision is the DtypeEngine's), the memory manager's module-level forwarders nothing imported (`unload_weights`, `cleanup_tensors`) with the method only one of them called, and a layered validation pipeline nothing imported (`core/validators`: what stays is `neurobrix validate`'s container check and the compiled branch's tensor checks). The engine's Python code went from 409 025 to 138 306 lines (262 132 of them the vendored reference tree; the engine's own cleaning, tracked from here, 146 646 -> 138 306), and its Triton branch reaches the library through its public names; `tools/engine_slim_scan.py` lists what remains to remove, move into nbxtensor or justify (`docs/nbxtensor/ENGINE_SLIM.md`), and a guard lets the engine only shrink.
 
 ### Fixed
+- **A replayed component whose output is a permuted or transposed view returns its values in order**: the replay
+  handed such an output over by copying its storage into a contiguous tensor of its shape — the values scrambled —
+  and its verify pass hashed storage bytes, so the scrambled copy was taken for the right one. Allegro-TI2V's
+  image conditioning (its encoder ends on a permute to frames-first) came back scrambled tile after tile, the
+  video a mosaic. The hand-overs copy the logical values and the verify compares them.
 - **A long video's image encoding no longer runs the card out of memory at its replay**: a replayed component's
   recording is sized by what its allocations reach in the slab's first fit, not by its live peak (the encoder tile
   of an 88-frame Allegro-TI2V request needed 12.7 GB, was given 9.0, then 31.7 by the retry); the measured run's

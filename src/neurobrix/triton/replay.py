@@ -671,8 +671,7 @@ class FrozenPlan:
                     "— the bucket signature should have caught this")
             _scan_copied += 1
             try:
-                DeviceAllocator.memcpy(frozen.data_ptr(), new.data_ptr(),
-                                       frozen._nbytes, 3)
+                _copy_into(frozen, new)
             except Exception as e:
                 raise RuntimeError(
                     f"replay input-copy failed at slot {slot}: shape "
@@ -693,10 +692,7 @@ class FrozenPlan:
                     f"{tuple(frozen.shape)}/{frozen.nbx_dtype} — the bucket signature should have caught this")
             _scan_copied += 1
             DeviceAllocator.set_device(frozen._device_idx)
-            if new.is_contiguous() and frozen.is_contiguous():
-                DeviceAllocator.memcpy(frozen.data_ptr(), new.data_ptr(), frozen._nbytes, 3)
-            else:
-                frozen.copy_(new)       # a view on either side: copied element by element, its layout kept
+            _copy_into(frozen, new)
         if os.environ.get("NBX_REPLAY_GRAPH_DUMP") == "1":
             import ctypes as _cs
             vals = []
@@ -801,10 +797,7 @@ class FrozenPlan:
             frozen = self.arena_snapshot[slot]
             if frozen is None:
                 continue
-            fresh = NBXTensor.empty_like(frozen)
-            DeviceAllocator.memcpy(fresh.data_ptr(), frozen.data_ptr(),
-                                   frozen._nbytes, 3)
-            arena[slot] = fresh
+            arena[slot] = _heap_copy(frozen)
 
     def crosses_cards(self) -> bool:
         """The recorded actions switch to a card other than the plan's own (`_SETDEV`)."""
@@ -867,8 +860,9 @@ def _input_slot_range(seq) -> range:
 
 
 def _output_hashes(seq) -> Dict[str, str]:
-    """sha256 of every graph-output tensor's device bytes (D2H once —
-    verify runs once per bucket per process)."""
+    """sha256 of every graph-output tensor's LOGICAL values (its shape, then its elements in order; D2H once — verify
+    runs once per bucket per process). Hashed from the storage, a view's bytes matched a scrambled copy of them, and a
+    plan whose permuted output came back in the wrong order was VERIFIED (Allegro-TI2V's encoder, 2026-11-04)."""
     import ctypes
     import hashlib
     out: Dict[str, str] = {}
@@ -880,10 +874,11 @@ def _output_hashes(seq) -> Dict[str, str]:
         if t is None:
             out[tid] = "none"
             continue
+        t = t.contiguous()
         buf = (ctypes.c_char * t._nbytes)()
         DeviceAllocator.memcpy(ctypes.addressof(buf), t.data_ptr(),
                                t._nbytes, 2)
-        out[tid] = hashlib.sha256(bytes(buf)).hexdigest()
+        out[tid] = hashlib.sha256(repr(tuple(t.shape)).encode() + bytes(buf)).hexdigest()
     return out
 
 
@@ -1118,6 +1113,27 @@ def would_replay(seq, pre_op_callback) -> bool:
     return isinstance(state, FrozenPlan)
 
 
+def _heap_copy(t: NBXTensor) -> NBXTensor:
+    """A fresh heap tensor holding `t`'s LOGICAL values, contiguous. A graph output can be a view (a permute, a
+    transpose): copying its storage bytes into a contiguous tensor of its shape scrambled it — Allegro-TI2V's encoder
+    ends on a permute to frames-first, and every replayed tile of the I2V conditioning came back in the wrong order,
+    the video a mosaic of tiles (2026-11-04)."""
+    if t.is_contiguous():
+        fresh = NBXTensor.empty_like(t)
+        DeviceAllocator.memcpy(fresh.data_ptr(), t.data_ptr(), t._nbytes, 3)
+        return fresh
+    return t.contiguous()                          # a strided copy kernel: the values in their logical order
+
+
+def _copy_into(frozen: NBXTensor, new: NBXTensor) -> None:
+    """`new`'s values into the recorded `frozen` buffer, whatever either's layout (a view on either side is copied
+    element by element, the recorded layout kept)."""
+    if new.is_contiguous() and frozen.is_contiguous():
+        DeviceAllocator.memcpy(frozen.data_ptr(), new.data_ptr(), frozen._nbytes, 3)
+    else:
+        frozen.copy_(new)
+
+
 def _outputs_off_the_slab(seq, slab) -> int:
     """Every graph output of `seq` carved from `slab` replaced in the arena by a heap copy; the count. A retired slab is
     freed only once nothing carved from it lives, and the caller keeps a run's outputs."""
@@ -1127,9 +1143,7 @@ def _outputs_off_the_slab(seq, slab) -> int:
         t = seq._arena[slot] if slot is not None else None
         if t is None or not (lo <= t.data_ptr() < hi):
             continue
-        fresh = NBXTensor.empty_like(t)
-        DeviceAllocator.memcpy(fresh.data_ptr(), t.data_ptr(), t._nbytes, 3)
-        seq._arena[slot] = fresh
+        seq._arena[slot] = _heap_copy(t)
         n += 1
     return n
 
@@ -1441,10 +1455,7 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
         frozen = plan.arena_snapshot[slot]
         if frozen is None:
             continue
-        fresh = NBXTensor.empty_like(frozen)
-        DeviceAllocator.memcpy(fresh.data_ptr(), frozen.data_ptr(),
-                               frozen._nbytes, 3)
-        seq._arena[slot] = fresh
+        seq._arena[slot] = _heap_copy(frozen)
     _store_slab_size(seq, sig, slab.size)
     # E2-full: the recording pass just warmed the sanctioned autotuners
     # for every shape in this graph — persist the selected configs into
