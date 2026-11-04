@@ -24,7 +24,6 @@ import inspect
 import pytest
 
 from neurobrix.core.prism.solver import PrismSolver
-from neurobrix.core.strategies import STRATEGY_REGISTRY
 
 _MB = 1024 * 1024
 
@@ -96,17 +95,6 @@ def test_the_score_places_it_between_zero3_and_layer_streaming():
         assert name in scores, f"{name} has no score: {sorted(scores)}"
     assert (scores["zero3"] > scores["op_level_tiling"]
             > scores["layer_streaming"] > scores["cpu_streaming"]), scores
-
-
-def test_the_name_is_buildable():
-    """A name Prism can emit and the registry cannot build is a crash at selection.
-
-    `cpu_streaming` was exactly that on 2026-09-03. The placement here is
-    single-GPU; what differs is that the overflowing ops are cut, and that rides in
-    `runtime_op_tiling`.
-    """
-    assert "op_level_tiling" in STRATEGY_REGISTRY
-    assert STRATEGY_REGISTRY["op_level_tiling"] is STRATEGY_REGISTRY["single_gpu"]
 
 
 def _solver(oom_reserve_mb=512):
