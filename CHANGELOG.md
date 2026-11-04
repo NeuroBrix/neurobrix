@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and its verify pass hashed storage bytes, so the scrambled copy was taken for the right one. Allegro-TI2V's
   image conditioning (its encoder ends on a permute to frames-first) came back scrambled tile after tile, the
   video a mosaic. The hand-overs copy the logical values and the verify compares them.
+- **`neurobrix autotune certify` certifies the fused MoE kernels on Apple Silicon**: the certifier built the expert
+  address tables by hand from each buffer's address, which a Metal shader cannot dereference — every key failed its
+  oracle; they are built by the runtime's own table builder, as a model's run builds them.
 - **A long video's image encoding no longer runs the card out of memory at its replay**: a replayed component's
   recording is sized by what its allocations reach in the slab's first fit, not by its live peak (the encoder tile
   of an 88-frame Allegro-TI2V request needed 12.7 GB, was given 9.0, then 31.7 by the retry); the measured run's

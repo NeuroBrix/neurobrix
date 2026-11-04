@@ -95,6 +95,7 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | 2026-11-04 | (no move) The RATCHET RAISED by the kernels lot, +321 lines over origin bd029dca: the certifier measures the matrix unit beside the FMA configurations and where a certificate made before the unit owes it (`autotune_certify.unit_owed`), the fused MoE and the decode attentions' synthesis for certification (their kernels in nbxtensor), Prism's residency-priced estimate (`solver._residency_priced`), the expert store's miss rate (`time_estimate`), the census' paged and MoE launches. |
 | 2026-11-04 | (no move) The RATCHET RAISED by +31 lines: a replay records only where its slab — sized by the slab's own first fit over the measured run (`nbxtensor.memory.slab.first_fit_extent`) — and the verify pass beside it fit what the card has free, after the measured run's pool is returned (Allegro-TI2V's encoder tile overran a 32 GB card). |
 | 2026-11-04 | (no move) The RATCHET RAISED by +11 lines: the replay hands a view output over by its values and verifies values, not storage bytes (`replay._heap_copy`, `_copy_into`; Allegro-TI2V's permuted encoder output came back scrambled). |
+| 2026-11-04 | (no move) The RATCHET RAISED by +18 lines: the certifier's MoE synthesis builds its expert-address tables with the runtime's builder and releases their Metal pins (`autotune_certify._expert_table`). |
 
 ## Kept in the engine
 
