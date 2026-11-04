@@ -309,7 +309,8 @@ def test_the_decode_cache_is_the_sessions_own_choice():
 def test_a_prefill_through_the_kv_interceptor_sees_no_mask():
     """The interceptor's prefill drops the graph's mask for `is_causal`; a one-token prefill (the
     CFG negative context) then takes the vector kernel, whatever a frozen mask says (VibeVoice's
-    causal mask is annotated [23, 23]). Injection: the prefill rule removed -> launches, RED."""
+    causal mask is annotated [23, 23]), keyed since it is autotuned. Injection: the prefill rule
+    removed -> the math route's launches, RED."""
     import collections
     import sys
     from pathlib import Path
@@ -320,8 +321,10 @@ def test_a_prefill_through_the_kv_interceptor_sees_no_mask():
     args = ("aten::scaled_dot_product_attention", "u", o, list("qkvm"), shapes.__getitem__,
             lambda _t: F16, LK, _empty_contract(), "float16", False, 1 << 40, 16, 64, 0,
             collections.Counter())
-    assert D._op_launches(*args, None, None)                     # the graph's mask: the math route
-    assert not D._op_launches(*args, None, {"prefill": True})    # through the interceptor: none
+    graph = [l[0] for l in D._op_launches(*args, None, None)]           # the graph's mask: the math route
+    assert "nbxtensor.ops.softmax.softmax_forward_kernel" in graph, graph
+    through = [l[0] for l in D._op_launches(*args, None, {"prefill": True})]
+    assert through == ["nbxtensor.ops.decode_attn_vec.decode_attn_vec_split_kernel"], through   # the vector kernel
 
 
 def test_an_image_ar_generation_is_keyed_by_the_strategys_own_rules():
