@@ -1889,7 +1889,9 @@ def replication_pad_nd_kernel(x_ptr, output_ptr, total, in0, in1, in2, in3, in4,
 ```python
 def paged_kv_append_kernel(new_ptr, pool_ptr, slot_ptr, page_tokens, stride_nt, stride_nh, stride_pp, stride_ph, stride_ps, BLOCK_D: tl.constexpr, D: tl.constexpr)
     # One program per (new token, KV head)
-def paged_decode_attn_split_kernel(q_ptr, k_pool_ptr, v_pool_ptr, block_table_ptr, seq_lens_ptr, opart_ptr, mpart_ptr, lpart_ptr, n_seqs, page_tokens, LEN_BUCKET, sm_scale, H_Q, stride_qh, stride_kp, stride_kh, stride_ks, stride_vp, stride_vh, stride_vs, stride_bt, stride_oh, stride_os, stride_mh, GQA_GROUPS: tl.constexpr, BLOCK_D: tl.constexpr, D: tl.constexpr, D_V: tl.constexpr, SPLIT_ALIGN: tl.constexpr, Q_TO: tl.constexpr=None, Q_SATURATE: tl.constexpr=False, BLOCK_N: tl.constexpr=32)
+def paged_decode_splits(longest: int) -> int
+    # The splits one decode launch makes for its longest sequence: the grid, the autotune key's length class, a replayed step's bucket
+def paged_decode_attn_split_kernel(q_ptr, k_pool_ptr, v_pool_ptr, block_table_ptr, seq_lens_ptr, opart_ptr, mpart_ptr, lpart_ptr, n_seqs, page_tokens, SPLITS, sm_scale, H_Q, stride_qh, stride_kp, stride_kh, stride_ks, stride_vp, stride_vh, stride_vs, stride_bt, stride_oh, stride_os, stride_mh, GQA_GROUPS: tl.constexpr, BLOCK_D: tl.constexpr, D: tl.constexpr, D_V: tl.constexpr, SPLIT_ALIGN: tl.constexpr, Q_TO: tl.constexpr=None, Q_SATURATE: tl.constexpr=False, BLOCK_N: tl.constexpr=32)
 def paged_kv_append_step_kernel(k_new_ptr, v_new_ptr, k_pool_ptr, v_pool_ptr, block_table_ptr, lens_ptr, page_tokens, stride_kb, stride_kh, stride_vb, stride_vh, stride_kp, stride_kph, stride_ks, stride_vp, stride_vph, stride_vs, stride_bt, BLOCK_D: tl.constexpr, D_K: tl.constexpr, D_V: tl.constexpr)
     # A decode step's append with no host input
 def paged_lens_advance_kernel(lens_ptr, n)
