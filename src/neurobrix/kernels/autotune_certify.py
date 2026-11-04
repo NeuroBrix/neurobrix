@@ -503,13 +503,13 @@ def unit_owed(qual: str, key: tuple, stored: Optional[Dict[str, Any]]) -> bool:
 
 def _expert_table(experts: List[Any]) -> Any:
     """The device-address table of `experts` the MoE kernels read their weights through, built as the runtime builds
-    it (`nbxtensor.memory.pointer_tables._build_ptr_tables`): on Metal a shader dereferences captured addresses held
+    it (`nbxtensor.memory.pointer_tables.build_ptr_tables`): on Metal a shader dereferences captured addresses held
     under a pinned scope, never a buffer's `data_ptr()` — written by hand, every fused MoE key of the Apple census failed
     its oracle with a relative error of exactly 1, the experts never read (the Mac, 2026-11-04 11:34). The table
     object keeps the pins for as long as the run that reads it holds the returned tensor (`_EXPERT_TABLES`)."""
-    from nbxtensor.memory.pointer_tables import _build_ptr_tables
+    from nbxtensor.memory.pointer_tables import build_ptr_tables
     from nbxtensor.memory.allocator import DeviceAllocator
-    tables = _build_ptr_tables(experts, experts, experts)
+    tables = build_ptr_tables(experts, experts, experts)
     _EXPERT_TABLES.append(tables)
     while len(_EXPERT_TABLES) > 8:              # the last few keys' tables: a key's runs are done when the next draws
         _EXPERT_TABLES.pop(0).release_pins()     # Metal: the pins go with the table (CUDA: none)

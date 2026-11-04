@@ -146,7 +146,7 @@ def _addr_capture_kernel(src_ptr, table_ptr, idx):
     tl.store(table_ptr + idx, tl.cast(src_ptr, tl.int64, bitcast=True))
 
 
-def _build_ptr_tables(gate_weights, up_weights, down_weights):
+def build_ptr_tables(gate_weights, up_weights, down_weights):
     """Build per-projection absolute pointer tables.
 
     Stores each expert's data_ptr() as int64 in a GPU tensor. No offset math.
@@ -309,14 +309,14 @@ def _tables_for_call(gate_weights, up_weights, down_weights, num_experts: int,
     and a later allocation reusing them would meet a stale entry. Resident
     weights go through the fingerprinted LRU cache."""
     if per_call:
-        tables = _build_ptr_tables(gate_weights, up_weights, down_weights)
+        tables = build_ptr_tables(gate_weights, up_weights, down_weights)
         DeviceAllocator.set_device(act_dev)
         DeviceAllocator.ensure_triton_device(act_dev)
         return tables
     fp = _ptr_cache_fingerprint(gate_weights, up_weights, down_weights, num_experts)
     tables = _ptr_cache_get(fp)
     if tables is None:
-        tables = _build_ptr_tables(gate_weights, up_weights, down_weights)
+        tables = build_ptr_tables(gate_weights, up_weights, down_weights)
         _ptr_cache_put(fp, tables)
         DeviceAllocator.set_device(act_dev)
         DeviceAllocator.ensure_triton_device(act_dev)

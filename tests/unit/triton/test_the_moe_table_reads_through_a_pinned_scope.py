@@ -6,7 +6,7 @@ the lift (granite-3.1-1b-a400m: 32 experts, 8 per token, hidden 1024, bf16),
 judged against a numpy fp64 oracle — an instrument outside the engine.
 
 Only the POSITIVE arm is asserted. The two failing arms — a data_ptr table
-(today's `_build_ptr_tables` law) and the same captured table after its scope
+(today's `build_ptr_tables` law) and the same captured table after its scope
 died — are measured in `demo_moe_table_pinned.py` (zeros, nothing raised, both)
 and are not asserted here for the reason `pinned_addresses`' own tests state:
 outside the scope the read is an ACCIDENT, and a test on an accident is a coin.

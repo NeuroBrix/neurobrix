@@ -8,7 +8,7 @@ first MoE layer on
     record it, so its length is unknown and it cannot be wrapped as a Metal buffer
 
 because the census shadow (`nbxtensor.memory.shadow.malloc`) hands out addresses the allocator never records, and
-`pinned_addresses` (moe._build_ptr_tables) sizes its whole-allocation wrap from the allocator.
+`pinned_addresses` (moe.build_ptr_tables) sizes its whole-allocation wrap from the allocator.
 
 The repair is deliberately NOT "skip the pin in a census". A path that exists only in the census
 would one day let a real, unrecorded address through in silence. Instead the census records its

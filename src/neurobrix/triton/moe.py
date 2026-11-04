@@ -244,7 +244,7 @@ def execute_moe_fused(
         raise RuntimeError("MoE fused: hidden_states is None")
 
     # EVERY path below reaches an expert's weights through the [E] int64
-    # pointer table built by _build_ptr_tables: the SIMT decode band at STEP 2b
+    # pointer table built by build_ptr_tables: the SIMT decode band at STEP 2b
     # (moe_decode_vec.py:94) and the grouped GEMM at STEP 4 (fused_moe.py:74)
     # both load an address and bitcast it to a pointer. A backend that cannot
     # read through such a pointer returns ZEROS with no exception and no
@@ -291,7 +291,7 @@ def execute_moe_fused(
         gate_scores = _xfer(gate_scores, act_dev)
 
     # Zero3 CPU offload: expert weights may be on pinned host memory.
-    # They MUST be on act_dev before _build_ptr_tables runs because the
+    # They MUST be on act_dev before build_ptr_tables runs because the
     # pointer table caches raw data_ptrs — a CPU ptr in a GPU int64
     # table dereferenced inside the kernel would crash or corrupt.
     # This promotion re-creates GPU NBXTensors via to_cuda() which
@@ -693,7 +693,7 @@ def _expert_store_grouped_pass(hidden_states, flat_indices, flat_scores, store, 
     down_out = NBXTensor.zeros((padded, K), dtype=dt, device=f"cuda:{dev}")
     for lo, hi, experts in groups:
         g, u, d = store.acquire(layer, experts, num_experts, host)
-        tables = _pt._build_ptr_tables(g, u, d)
+        tables = _pt.build_ptr_tables(g, u, d)
         DeviceAllocator.set_device(dev)
         DeviceAllocator.ensure_triton_device(dev)
         s_g = sorted_ids.narrow(0, lo * bm, (hi - lo) * bm)

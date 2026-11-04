@@ -1,5 +1,5 @@
 """The grouped GEMM reads every expert of a projection through ONE stride pair,
-taken from expert 0 (`_build_ptr_tables`). Stacked-slab views share it by
+taken from expert 0 (`build_ptr_tables`). Stacked-slab views share it by
 construction; a list mixing layouts — a per-expert [F, H] matrix beside a
 transposed view of a slab — would be read through the wrong strides in silence.
 The table builder refuses it by name before any table is built.
@@ -32,14 +32,14 @@ def _past_the_door(*_a, **_k):
 def test_a_projection_mixing_layouts_is_refused_by_name(monkeypatch):
     from neurobrix.triton import moe as M
     import nbxtensor.memory.pointer_tables as PT  # the MoE pointer tables (M2)
-    from nbxtensor.memory.pointer_tables import _build_ptr_tables
+    from nbxtensor.memory.pointer_tables import build_ptr_tables
     monkeypatch.setattr(M, "gpu_backend", lambda: "cuda")
     monkeypatch.setattr(M.DeviceAllocator, "set_device", staticmethod(_past_the_door))
     F, H = 4, 6
     linear = [_W((F, H), (H, 1)) for _ in range(3)]               # (out x in), k contiguous
     mixed = linear[:2] + [_W((F, H), (1, 2 * F))]                  # a transposed slab view
     with pytest.raises(RuntimeError, match=r"'up' expert 2 has \(shape, strides\)"):
-        _build_ptr_tables(linear, mixed, linear)
+        build_ptr_tables(linear, mixed, linear)
 
 
 _PROMOTE = r"""
@@ -93,7 +93,7 @@ print("PROMOTED OK")
 
 # 2. the table rule: per-call weights never enter (nor read) the pointer-table cache
 built = []
-PT._build_ptr_tables = lambda *a: built.append(1) or object()
+PT.build_ptr_tables = lambda *a: built.append(1) or object()
 ws = [NBXTensor.empty((F, H), "float16", 0) for _ in range(E)]
 fp = PT._ptr_cache_fingerprint(ws, ws, ws, E)
 t1 = PT._tables_for_call(ws, ws, ws, E, True, 0)

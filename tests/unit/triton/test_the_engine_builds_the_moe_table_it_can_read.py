@@ -2,7 +2,7 @@
 
 The kernel-level proof (test_the_moe_table_reads_through_a_pinned_scope) pinned
 and captured by hand. This test asserts the engine now does the same thing
-itself: `_build_ptr_tables` on Metal must produce tables a shader can read
+itself: `build_ptr_tables` on Metal must produce tables a shader can read
 (device capture under a pin whose lifetime is the table's), and
 `_nbx_moe_wrappers.invoke_fused_moe` — the exact launch the model path takes — must match the
 fp64 oracle through them. Same granite geometry, same instrument.
@@ -58,7 +58,7 @@ def test_the_engine_table_matches_fp64_through_the_wrapper():
     a = NBXTensor.from_numpy(a_bits, dtype=NBXDtype.bfloat16)
 
     # Engine convention: experts carry torch Linear layout [N, K] (out, in);
-    # _build_ptr_tables hands the kernel stride_bk=stride(1)=1,
+    # build_ptr_tables hands the kernel stride_bk=stride(1)=1,
     # stride_bn=stride(0)=K for exactly that layout.
     def _experts():
         nbx, f64 = [], []
@@ -70,7 +70,7 @@ def test_the_engine_table_matches_fp64_through_the_wrapper():
 
     gate_w, gate64 = _experts()
 
-    tables = PT._build_ptr_tables(gate_w, gate_w, gate_w)
+    tables = PT.build_ptr_tables(gate_w, gate_w, gate_w)
 
     # The pin half of the contract: held now, for the table's lifetime.
     assert tables.pins, "metal tables built without a pin are an accident"
@@ -110,7 +110,7 @@ def test_the_engine_table_matches_fp64_through_the_wrapper():
     live = int((np.abs(got) > 0).sum())
     assert live == TOP_K * N, (
         f"only {live}/{TOP_K * N} outputs nonzero: the ENGINE's table did not "
-        f"resolve — the silent-zeros defect through _build_ptr_tables")
+        f"resolve — the silent-zeros defect through build_ptr_tables")
     rel = np.abs(got - oracle) / np.maximum(np.abs(oracle), 1e-3)
     assert float(rel.max()) < 5e-2, (
         f"engine table diverges from fp64 oracle: max rel {rel.max():.3e}")

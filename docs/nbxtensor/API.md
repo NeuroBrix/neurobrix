@@ -205,6 +205,8 @@ def annotate(message: str, cause, shape: Optional[Sequence]=None)
 `nbxtensor.memory.pointer_tables`
 
 ```python
+def build_ptr_tables(gate_weights, up_weights, down_weights)
+    # Build per-projection absolute pointer tables (on Metal by device capture under a pinned scope)
 def release_pinned_tables()
     # Drop every cached table that PINS (Metal), releasing its pins
 class PtrTables

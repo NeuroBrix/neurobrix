@@ -79,6 +79,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 ### Changed
+- **The MoE layer and the kernel certifier build their expert pointer tables through nbxtensor's public `build_ptr_tables`** (no private name of the library is reached).
 - **The tiling bricks refuse what they cannot place instead of falling back**: a chunked 3-D convolution of the
   Triton engine whose wrapper cannot be imported raises instead of running PyTorch's; an in-place add whose target
   is neither engine's tensor raises instead of computing a plain sum; the S5 memory audit stays on the PyTorch

@@ -1,5 +1,5 @@
 """The certifier's MoE synthesis builds its expert-address tables with the runtime's own builder
-(`pointer_tables._build_ptr_tables`), never from `data_ptr()` by hand: on Metal a shader dereferences captured addresses
+(`pointer_tables.build_ptr_tables`), never from `data_ptr()` by hand: on Metal a shader dereferences captured addresses
 under a pinned scope, and a hand-written table made every fused MoE key of the Apple census fail its oracle with a
 relative error of exactly 1 — the experts never read (the Mac, 2026-11-04 11:34).
 
@@ -21,8 +21,8 @@ def test_a_moe_key_is_synthesised_through_the_runtimes_table_builder(qual, key, 
     A._bind_hardware_profile()
     tuner = getattr(importlib.import_module(qual.rsplit(".", 1)[0]), qual.rsplit(".", 1)[1])
     built = []
-    real = PT._build_ptr_tables
-    monkeypatch.setattr(PT, "_build_ptr_tables", lambda g, u, d: (built.append(len(g)), real(g, u, d))[1])
+    real = PT.build_ptr_tables
+    monkeypatch.setattr(PT, "build_ptr_tables", lambda g, u, d: (built.append(len(g)), real(g, u, d))[1])
     run, oracle, _out = A.synthesize(qual, tuner, key, np.random.default_rng(0))
     got = run().numpy().astype(np.float64)
     want = oracle()
