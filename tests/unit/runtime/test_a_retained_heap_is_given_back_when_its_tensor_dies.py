@@ -18,11 +18,13 @@ from neurobrix.core.prism.attention_scratch import vendor_memory_of  # noqa: E40
 
 
 def _seq(release_from, drain_cliff=None):
+    from types import SimpleNamespace
     s = CompiledSequence.__new__(CompiledSequence)
     s._release_from = release_from
     s._drain_cliff = drain_cliff
     s._in_flight = 0
     s.device = torch.device("cpu")
+    s.op_resolver = SimpleNamespace(dtype_engine=SimpleNamespace(copy_meter=[0] if drain_cliff is not None else None))
     return s
 
 
@@ -92,3 +94,15 @@ def test_a_heap_release_resets_the_count(monkeypatch):
     s._kill([torch.empty(300, dtype=torch.uint8)], (0,))
     s._kill([torch.empty(1 << 20, dtype=torch.uint8)], (0,))  # a dedicated heap: sync + empty, the queue drained
     assert [k for k, _ in seen] == ["sync", "empty"] and s._in_flight == 0
+
+
+# The DtypeEngine's own copies (an operand cast, a wider result stored narrower) die inside their op, out of the arena:
+# they are in flight too. The Mac's RUN 33 (2026-11-04 20:27): the drain counted the arena alone, never fired on mochi's
+# VAE (816 MB and 1 216 MB of casts a block), and the run died where a wait after every op had held it.
+# Injection: the meter not read at the kill -> no sync, red.
+def test_the_engines_copies_count_toward_the_cliff(monkeypatch):
+    seen = _calls(monkeypatch)
+    s = _seq(1 << 20, drain_cliff=1000)
+    s.op_resolver.dtype_engine.copy_meter[0] = 900          # a cast the op made and dropped
+    s._kill([torch.empty(200, dtype=torch.uint8)], (0,))
+    assert [k for k, _ in seen] == ["sync"] and s.op_resolver.dtype_engine.copy_meter == [0]

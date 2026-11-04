@@ -453,6 +453,10 @@ class CompiledSequence(SequenceSteps):
                 from neurobrix.core.prism.memory_budget import deferred_drain_retained_bytes
                 self._drain_cliff = (int(drain_cliff_bytes) if drain_cliff_bytes is not None
                                      else int(deferred_drain_retained_bytes(_mem)))
+                # the DtypeEngine's own copies (an operand cast, a wider result stored narrower) die inside their op,
+                # out of the arena: counted on its meter, read at every kill (the Mac, 2026-11-04 20:27: 816 MB and
+                # 1 216 MB a block on mochi's VAE, uncounted, and the drain never fired)
+                self.op_resolver.dtype_engine.copy_meter = [0]
 
         # Compilation outputs
         self._ops: List[CompiledOp] = []
@@ -4155,6 +4159,10 @@ class CompiledSequence(SequenceSteps):
         if self._release_from is not None and op_uid is not None and op_uid.startswith(STATE_OUT_PREFIX):
             release = True
         if self._release_from is not None:
+            meter = self.op_resolver.dtype_engine.copy_meter if self._drain_cliff is not None else None
+            if meter is not None:
+                self._in_flight += meter[0]
+                meter[0] = 0
             for s in slots:
                 t = arena[s]
                 if isinstance(t, torch.Tensor):

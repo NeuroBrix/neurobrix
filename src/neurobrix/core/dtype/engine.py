@@ -20,7 +20,7 @@ import os
 import torch
 
 from neurobrix.core.dtype.traced_island import is_traced_fp32_island
-from typing import Callable, Optional, Dict, Any, FrozenSet
+from typing import Callable, Optional, Dict, Any, FrozenSet, List
 
 from neurobrix.core.dtype.config import device_supports_fp64, parse_dtype, strip_aten_prefix
 from nbxtensor.dtype import itemsize as _itemsize
@@ -535,6 +535,12 @@ class DtypeEngine:
                  hardware: Optional[tuple] = None, device: Optional[str] = None):
         self.compute_dtype = compute_dtype
         self.graph_dtype = graph_dtype
+        # The bytes of the copies this engine's wrappers make and drop inside an op (an operand cast, an fp32 result
+        # stored narrower), counted while a `CompiledSequence` on a device whose allocator frees only once the device
+        # has run the work sets it to [0]: those frees are in flight too, and the sequence waits for the device at its
+        # drain cliff counting them (mochi-1-preview's VAE on MPS: 816 MB and 1 216 MB casts a block, the Mac,
+        # 2026-11-04 20:27). None: nothing counted (CUDA's allocator frees at once).
+        self.copy_meter: Optional[List[int]] = None
         # (vendor, architecture) of the profile the plan placed this engine on: the hardware
         # profile carries the preferences the engine decides with (`precision.attention_operands`).
         self.hardware: Optional[tuple] = tuple(hardware) if hardware else None
@@ -789,6 +795,13 @@ class DtypeEngine:
             return func(*args, **kwargs)
         return guarded
 
+    def _copied(self, t):
+        """`t`, a copy a wrapper made and drops inside its op, counted on the copy meter (see `copy_meter`)."""
+        m = self.copy_meter
+        if m is not None and isinstance(t, torch.Tensor):
+            m[0] += t.untyped_storage().nbytes()
+        return t
+
     def _make_safe_softmax(self, func: Callable) -> Callable:
         """
         Safe wrapper for _softmax/_log_softmax.
@@ -807,7 +820,7 @@ class DtypeEngine:
                 return func(inp, dim, False)
             if inp.dtype in (torch.float16, torch.bfloat16) and not half_to_float:
                 # Half-precision input without auto-conversion — upcast manually
-                return func(inp.float(), dim, False)
+                return func(self._copied(inp.float()), dim, False)
             # Standard path: fp16 input with half_to_float=True
             return func(inp, dim, half_to_float)
         return safe_softmax
@@ -864,9 +877,9 @@ class DtypeEngine:
         """
         def fp32_func(*args, **kwargs):
             new_args = tuple(
-                a.float().contiguous() if isinstance(a, torch.Tensor) and a.is_floating_point()
+                self._copied(a.float().contiguous()) if isinstance(a, torch.Tensor) and a.is_floating_point()
                     and a.dtype != torch.float32
-                else (a.contiguous() if isinstance(a, torch.Tensor) and not a.is_contiguous() else a)
+                else (self._copied(a.contiguous()) if isinstance(a, torch.Tensor) and not a.is_contiguous() else a)
                 for a in args
             )
             return func(*new_args, **kwargs)
@@ -915,15 +928,15 @@ class DtypeEngine:
         """
         def mul_safe(a, b, *args, **kwargs):
             if a is b and isinstance(a, torch.Tensor) and a.dtype == torch.float16:
-                return func(a.float(), b.float(), *args, **kwargs)
+                return func(self._copied(a.float()), self._copied(b.float()), *args, **kwargs)
             # A complex scalar beside a bf16 tensor: promote the tensor, not
             # the scalar. Narrow enough that nothing else changes shape or
             # dtype, and it only fires where the call would otherwise raise.
             if isinstance(a, complex) or isinstance(b, complex):
                 if isinstance(a, torch.Tensor) and a.dtype == torch.bfloat16:
-                    a = a.float()
+                    a = self._copied(a.float())
                 if isinstance(b, torch.Tensor) and b.dtype == torch.bfloat16:
-                    b = b.float()
+                    b = self._copied(b.float())
             return func(a, b, *args, **kwargs)
         return mul_safe
 
@@ -940,7 +953,7 @@ class DtypeEngine:
 
         def _cast(a):
             if isinstance(a, torch.Tensor):
-                return a.to(compute) if a.is_floating_point() and a.dtype != compute else a
+                return self._copied(a.to(compute)) if a.is_floating_point() and a.dtype != compute else a
             # RNN ops pass hx/params as lists of tensors (and linalg_multi_dot
             # takes a tensor list) — recurse so every nested float tensor is
             # cast, keeping input/hx/params at one dtype for cuDNN.
@@ -971,7 +984,7 @@ class DtypeEngine:
 
             if max_dtype is not None and max_size > 2:
                 new_args = tuple(
-                    a.to(max_dtype) if isinstance(a, torch.Tensor) and a.is_floating_point()
+                    self._copied(a.to(max_dtype)) if isinstance(a, torch.Tensor) and a.is_floating_point()
                         and a.dtype != max_dtype
                     else a
                     for a in args
@@ -1280,7 +1293,10 @@ class DtypeEngine:
     def _to_compute_dtype(self, out: Any) -> Any:
         cd = self.compute_dtype
         if isinstance(out, torch.Tensor):
-            return out.to(cd) if out.is_floating_point() and out.dtype != cd else out
+            if out.is_floating_point() and out.dtype != cd:
+                self._copied(out)               # the wider result, dropped once stored narrower (`copy_meter`)
+                return out.to(cd)
+            return out
         if isinstance(out, (tuple, list)):
             return type(out)(self._to_compute_dtype(o) for o in out)
         return out
