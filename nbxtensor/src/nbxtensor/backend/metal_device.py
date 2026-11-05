@@ -117,6 +117,17 @@ def _deref(arg):
     raise TypeError(f"not an out-parameter: {type(arg).__name__}")
 
 
+def _declared_dispatch_fact(key: str) -> int:
+    """A `dispatch.<key>` the device file must state, positive — refused by name otherwise (ZERO FALLBACK: it was 32 / 512
+    written here under a bare `except`, the Dell's reading 2026-11-05 01:20; every Apple device file declares both)."""
+    from nbxtensor.ops.wrappers import _arch_dispatch_param
+    value = _arch_dispatch_param(key, None)
+    if value is None or int(value) <= 0:
+        raise RuntimeError(f"ZERO FALLBACK: the device file states no positive dispatch.{key} ({value!r}) — the Metal runtime "
+                           f"does not invent one; declare it in nbxtensor/backend/devices/apple/<arch>.yml")
+    return int(value)
+
+
 def _as_int(value) -> int:
     """A Python int from a ctypes scalar or a plain int."""
     return int(getattr(value, "value", value) or 0)
@@ -630,14 +641,7 @@ class MetalRuntime:
         ours and visible.
         """
         if self._pending_cap is None:
-            cap = 0
-            try:
-                from nbxtensor.ops.wrappers import _arch_dispatch_param
-                cap = int(_arch_dispatch_param(
-                    "max_command_buffers_in_flight", 0) or 0)
-            except Exception:
-                cap = 0
-            self._pending_cap = cap if cap > 0 else 32
+            self._pending_cap = _declared_dispatch_fact("max_command_buffers_in_flight")
         return self._pending_cap
 
     def track_committed(self, queue_handle: int, command_buffer) -> None:
@@ -663,14 +667,7 @@ class MetalRuntime:
         hardware profile. It bounds latency and how much work a single
         failure takes down with it; it is not a correctness knob."""
         if self._dispatch_cap is None:
-            cap = 0
-            try:
-                from nbxtensor.ops.wrappers import _arch_dispatch_param
-                cap = int(_arch_dispatch_param(
-                    "max_dispatches_per_command_buffer", 0) or 0)
-            except Exception:
-                cap = 0
-            self._dispatch_cap = cap if cap > 0 else 512
+            self._dispatch_cap = _declared_dispatch_fact("max_dispatches_per_command_buffer")
         return self._dispatch_cap
 
     def encoder_for(self, stream: int, kind: str = "compute"):
