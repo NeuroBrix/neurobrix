@@ -223,3 +223,26 @@ is rewritten on disk, not repeated in the conversation; anything not visible in 
 3. No GPU on a known defect: every container whose state dtype differs from its components' header dtypes is found by
    reading the manifests and headers (zero execution), corrected by Forge (metadata rewrite, no retrace when the graph is
    right), then its dated proof is replayed at the CLI. The Mac's reading of 2026-10-13 flagged 20 of 49 containers.
+
+## 2026-11-05 22:55 — NBXTENSOR 0.0.1 IS PUBLISHED (the owner's GO 22:55, confirmed 23:51, via the supervisor)
+
+1. **The tree published** is the final gate's, `f1292590a`, plus the five files of `nbxtensor/` changed since, each through
+   the lot suites (no card and on a card) and the clean-machine test: `CHANGELOG.md`, `pyproject.toml` (the dependency on
+   `nvidia-cuda-runtime-cu12` on Linux, without which a clean machine finds no GPU runtime), `backend/metal_device.py`
+   (the Metal dispatch limits declared or refused), `tests/test_readme.py` and its test — then the version commit
+   `4a80d4da1` (the changelog dated, the project URLs, six comments that named a person now carrying their reason).
+2. **The gate's proofs**: 196 of 196 cells green, 49 models x {PyTorch, Triton} x {16 GB, 32 GB V100}, every output
+   judged by eye (`registres/benchmarks/gate_times.tsv`, campaign `2026_11_04_porte_finale`); no cell over 1.5 times its
+   previous gate measured alone; the torch-free proof on card 3 (library 225 passed, five reference models with the base's
+   output shas, an uncertified sweep of 22 keys, zero attempts to import torch).
+3. **The clean-machine test**: the sdist and wheel built from the version commit pass `twine check`; installed in a
+   fresh container (torch absent) and in a fresh venv, TinyLlama-1.1B-Chat-v1.0 through `neurobrix run --triton` gives
+   the gate's judged output (sha256 `6f0f9704…`).
+4. **Not in 0.0.1**: the replay's extents (Metal replay, landed after as 0.0.2's first lot); the Triton environment
+   switches that choose a route or a tile (3.13, 0.0.2).
+5. **Where it is**: PyPI `nbxtensor` 0.0.1 (wheel sha256 `1fd17d29…`, sdist `bc7f890f…`, the artefacts of point 3),
+   `pip install nbxtensor` with no version installing it on a clean machine; GitHub `NeuroBrix/nbxtensor`, public, tag
+   `v0.0.1` on the export of the version commit, its release marked Latest (a stable release, not a pre-release); GitLab
+   `neurobrix/nbxtensor`, public, the same export, tag and release; the engine repository's tag `nbxtensor-v0.0.1` on
+   `4a80d4da1`. The tag is never moved: what the published README gets wrong (its install line, a CPU backend named in
+   the package description, references to documents the library's repository does not hold) is corrected in 0.0.2.

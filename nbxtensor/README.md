@@ -1,30 +1,74 @@
-# nbxtensor
+<p align="center"><img src="https://raw.githubusercontent.com/NeuroBrix/nbxtensor/main/assets/logo.png" alt="NeuroBrix" width="240"></p>
 
-An inference-first tensor library, torch-free.
+# nbxtensor — the torch-free tensor library for inference
 
-PyTorch is a general framework built for research and training in eager mode: dynamic graphs, autograd, a generic
-dispatcher, a caching allocator that discovers memory as the program runs. Inference is a narrower problem, and a
-better-informed one: the graph and the shapes are known before the first run. nbxtensor is built for that case.
+Run AI models without PyTorch, on any GPU Triton supports: tensors, Triton kernels, planned memory and certified tuning.
 
-- **Memory is planned, not discovered.** Allocators per device behind one interface, and a static planner that
-  assigns every buffer before the first run.
-- **Every kernel declares its cost.** Outputs, workspace and scratch with their lifetimes, bytes moved, flops. A
-  planner prices a model from these declarations instead of guessing what the allocator will do.
-- **Capture and replay are first-class.** A repeated sequence of launches is recorded, verified byte-equal and
-  replayed.
-- **One table of facts.** One dtype table, one view rule, one conversion per pair of dtypes, one capability table per
-  backend — declared, never guessed.
-- **Backends:** NVIDIA CUDA, Apple Metal (through triton-ext), CPU.
-- **No torch, ever.** nbxtensor never imports torch, not even optionally. Exchange with any tensor library goes
-  through the DLPack protocol (`__dlpack__`, `from_dlpack`), so a torch user writes `torch.from_dlpack(t)` on their
-  side.
+Inference first; training is not in this release. Tested on NVIDIA (V100) and Apple Silicon (M4 Pro); NVIDIA
+Ampere/Hopper, AMD and Intel are described and expected to work wherever Triton runs, not yet tested.
 
-nbxtensor is extracted from NeuroBrix, the universal inference engine whose Triton engine is its first client. It
-lives in `nbxtensor/` of the NeuroBrix repository until the extraction is complete, then in its own repository.
+[![PyPI](https://img.shields.io/pypi/v/nbxtensor)](https://pypi.org/project/nbxtensor/)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](https://github.com/NeuroBrix/nbxtensor/blob/main/LICENSE)
+[![Python](https://img.shields.io/pypi/pyversions/nbxtensor)](https://pypi.org/project/nbxtensor/)
+![torch-free](https://img.shields.io/badge/torch-free-success)
+![Triton](https://img.shields.io/badge/kernels-Triton-orange)
+
+```
+pip install nbxtensor
+```
+
+<!-- needs-gpu -->
+```python
+import numpy as np
+from nbxtensor.tensor import NBXTensor
+from nbxtensor.ops.linalg_wrappers import mm
+
+rng = np.random.default_rng(0)
+a = rng.standard_normal((256, 512)).astype(np.float16)
+b = rng.standard_normal((512, 128)).astype(np.float16)
+c = mm(NBXTensor.from_numpy(a), NBXTensor.from_numpy(b))      # a Triton kernel on the GPU, no torch
+ref = a.astype(np.float32) @ b.astype(np.float32)
+assert c.shape == (256, 128) and np.allclose(c.numpy().astype(np.float32), ref, rtol=2e-2, atol=2e-1)
+```
+
+## Why nbxtensor
+
+- **No PyTorch.** nbxtensor never imports torch, not even optionally; its tests, kernels and NeuroBrix's models run in
+  an environment where torch is not installed. Exchange with any tensor library goes through DLPack (`__dlpack__`,
+  `from_dlpack`), so a torch user writes `torch.from_dlpack(t)` on their side.
+- **Any GPU Triton supports.** The kernels are Triton; a device is described by a file of facts (tiles, shared memory,
+  the matrix unit, the autotune ladders), never by code.
+- **Tensor cores back on Volta.** Still running V100s? Triton leaves their tensor cores idle (`tl.dot` compiles to FMA
+  on sm_70); nbxtensor turns them back on with its own `mma.m8n8k4` kernels (matrix products, convolutions, flash
+  attention, the fused mixture-of-experts GEMM), chosen by the certificate only where they measured faster — an
+  80 x 4096 x 4096 fp16 product 0.404 -> 0.191 ms, the fused MoE prefill 2.49 -> 0.96 ms (DeepSeek, 20 tokens) and
+  7.24 -> 1.40 ms (Qwen3, 512 tokens), fp32 1 x 1 convolutions 1.26-1.95 times faster (V100, the measures recorded in
+  [the 0.0.1 changelog](https://github.com/NeuroBrix/nbxtensor/blob/main/CHANGELOG.md#001---2026-11-05)).
+- **Memory is planned, not discovered.** Allocators per device behind one interface, a static planner that assigns every
+  buffer before the first run, and every kernel declares its cost (outputs, workspace, scratch, bytes moved, flops) so a
+  planner prices a model before running it. Capture and replay of a repeated sequence of launches, verified byte-equal.
+- **Tuning certified per key.** Every autotuned kernel setting is proven against a float64 oracle once per launch key
+  and device class, then served from a store of proven settings.
+- **One table of facts.** One dtype table, one view rule, one conversion per pair of dtypes — declared, never guessed.
+
+## Hardware
+
+| tested | expected (described, not yet tested) |
+|---|---|
+| NVIDIA V100 (Volta, CUDA) | NVIDIA Ampere, Hopper (CUDA) |
+| Apple M4 Pro (Metal through triton-ext) | the other Apple silicon chips (Metal) |
+| | AMD Instinct (HIP), Intel GPUs (Level Zero): interfaces written, launch drivers to write |
+
+Host work (loading, conversions) runs on every CPU core; there is no CPU kernel backend.
+
+**Links:** [API reference](https://github.com/NeuroBrix/neurobrix/blob/main/docs/nbxtensor/API.md) ·
+[release notes](https://github.com/NeuroBrix/nbxtensor/blob/main/CHANGELOG.md) ·
+[NeuroBrix](https://github.com/NeuroBrix/neurobrix), the inference engine whose Triton engine is nbxtensor's first
+client; nbxtensor's source lives in its `nbxtensor/` directory and is exported here.
 
 ## Status
 
-Every area below is in the library, and every public name is documented in `docs/nbxtensor/API.md` (the list of
+Every area below is in the library, and every public name is documented in [`docs/nbxtensor/API.md`](https://github.com/NeuroBrix/neurobrix/blob/main/docs/nbxtensor/API.md) (the list of
 undocumented names is empty and a test keeps it so). This README documents what is in the library TODAY; every example below is executed by
 `nbxtensor/tests/test_readme.py`, so an example that stops working fails a test. The target API is
 `docs/nbxtensor/API.md`.
@@ -47,10 +91,13 @@ attempt to import torch, caught ones included, and recorded none). Python 3.10 o
 pyyaml and Triton.
 
 ```
-pip install -e nbxtensor          # from the NeuroBrix repository
+pip install nbxtensor
 ```
 
-**Linux, NVIDIA (CUDA).** Triton comes from PyPI with the install above.
+**Linux, NVIDIA (CUDA).** Triton and the CUDA runtime library come from PyPI with the install above; the NVIDIA driver
+is the only other requirement.
+
+**From the NeuroBrix repository** (contributors): `pip install -e nbxtensor`.
 
 **macOS, Apple silicon (Metal).** PyPI publishes no Triton for macOS, so Triton and its Metal backend are built from
 source, then nbxtensor is installed into that environment:
@@ -330,7 +377,7 @@ The host conversions of a weight at load are split the same way, across the load
 
 ## Backends
 
-CUDA (NVIDIA) and Apple Metal through triton-ext; what a new backend provides is `docs/nbxtensor/BACKENDS.md`, and
+CUDA (NVIDIA) and Apple Metal through triton-ext; what a new backend provides is [`docs/nbxtensor/BACKENDS.md`](https://github.com/NeuroBrix/neurobrix/blob/main/docs/nbxtensor/BACKENDS.md), and
 `tests/nbxtensor_backend_conformance` is what it must pass. The backend in force is public API:
 `nbxtensor.backend.runtime.gpu_backend()` names it ("cuda", "hip", "metal"), `gpu_runtime()` is its runtime,
 `backend_table()` its entry points, `device_memory()` its memory primitives, and `set_device(tensor)` binds the
