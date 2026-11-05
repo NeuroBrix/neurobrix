@@ -925,9 +925,12 @@ _RECORDER = None
 
 
 def set_launch_recorder(fn) -> None:
-    """Record every launch this launcher issues: `fn(prepared, grid, params)`, with the
-    launch as the DRIVER will take it — the resolved kernel, three extents, and the
-    parameters already packed. `None` stops recording."""
+    """Record every launch this launcher issues: `fn(prepared, grid, params, extents)`, with the
+    launch as the DRIVER will take it — the resolved kernel, three grid extents, the
+    parameters already packed, and the byte extent of each pointer's tensor when the driver
+    binds by extent (`wants_extents`, else None): a replay that drops them makes the Metal
+    driver wrap every interior pointer to the end of its allocation (the Mac's RUN 40). `None`
+    stops recording."""
     global _RECORDER
     _RECORDER = fn
 
@@ -962,8 +965,6 @@ def launch(kernel, grid, *args, **kwargs):
     if drv.wants_scratch_params:
         params.append(("ptr", 0))    # global scratch (Triton ≥ 3.6 ABI)
         params.append(("ptr", 0))    # profile scratch
-    if _RECORDER is not None:
-        _RECORDER(prep, grid, params)
     # The Triton TYPE of every runtime parameter, in the same order. A backend
     # that packs its scalars into one buffer computes the field offsets from
     # these; our `(kind, value)` pairs have already lost the distinction between
@@ -974,6 +975,8 @@ def launch(kernel, grid, *args, **kwargs):
         extents = [_addressable_extent(bound_args[name]) if str(ty).startswith("*") else None
                    for name, ty in runtime]
         extra["extents"] = extents + [None] * (len(params) - len(extents))
+    if _RECORDER is not None:
+        _RECORDER(prep, grid, params, extra.get("extents"))
     drv.launch(prep.function, grid, prep.block, prep.shared, _stream(), params,
                names=names, types=[ty for _name, ty in runtime],
                trailing=prep.trailing, **extra)

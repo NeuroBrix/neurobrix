@@ -463,12 +463,13 @@ _INSTALLED = False
 class _NBXLaunch:
     """One prepared kernel, called the way `CompiledKernel.run` is called."""
 
-    __slots__ = ("prep", "kinds", "name", "function", "packed_metadata",
-                 "names", "types")
+    __slots__ = ("prep", "kinds", "name", "function", "packed_metadata", "names", "types", "extra")
 
-    def __init__(self, prep, kinds):
+    def __init__(self, prep, kinds, extents=None):
         self.prep = prep
         self.kinds = kinds
+        # the pointers' extents for a by-extent driver: dropped, Metal wrapped each to the slab's end (RUN 40, 20.9 GB)
+        self.extra = {} if extents is None else {"extents": list(extents)}
         self.name = prep.name
         self.function = prep.function
         self.packed_metadata = None
@@ -500,25 +501,24 @@ class _NBXLaunch:
                                self.prep.shared, stream,
                                list(zip(self.kinds, vals)),
                                names=self.names, types=self.types,
-                               trailing=self.prep.trailing)
+                               trailing=self.prep.trailing, **self.extra)
 
 
-_NBX_ADAPTERS: Dict[int, "_NBXLaunch"] = {}
+_NBX_ADAPTERS: Dict[tuple, "_NBXLaunch"] = {}
 
 
-def _nbx_record(prep, grid, params) -> None:
-    """The launcher's recorder seam (`launcher.set_launch_recorder`), armed for the
-    same window the Triton property covers."""
+def _nbx_record(prep, grid, params, extents=None) -> None:
+    """The launcher's recorder seam (`launcher.set_launch_recorder`), armed for the Triton property's window."""
     flat = tuple(v for _kind, v in params)
     if STATE.census_current is not None and not STATE.recording:
         STATE.census_current.append((prep.name, grid[0], grid[1], grid[2], flat))
         return
     if not STATE.recording:
         return
-    adapter = _NBX_ADAPTERS.get(id(prep))
+    key = (id(prep), None if extents is None else tuple(extents))
+    adapter = _NBX_ADAPTERS.get(key)
     if adapter is None or len(adapter.kinds) != len(params):
-        adapter = _NBX_ADAPTERS[id(prep)] = _NBXLaunch(
-            prep, tuple(k for k, _v in params))
+        adapter = _NBX_ADAPTERS[key] = _NBXLaunch(prep, tuple(k for k, _v in params), key[1])
     STATE.note_device()
     # The recorded stream is never read back (the replay and the capture each supply
     # their own), and this launcher's is the legacy one: it is stored as 0 for shape.
