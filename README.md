@@ -59,45 +59,53 @@ ready-made containers from the hub.
 
 ## Install and first run
 
-NeuroBrix needs Python 3.10 or newer and PyTorch 2.1 or newer. The current release is
-**0.5.4** ([release notes](https://github.com/NeuroBrix/neurobrix/releases/tag/v0.5.4)),
-which supports **NVIDIA GPUs (CUDA) and CPU**.
+NeuroBrix needs Python 3.10 or newer. The current release is
+**0.5.4** ([release notes](https://github.com/NeuroBrix/neurobrix/releases/tag/v0.5.4)).
 
-Install PyTorch first, from the index that matches your hardware, then NeuroBrix.
-`pip install neurobrix` on its own pulls the default PyTorch wheel from PyPI, which may be
-built for a CUDA version your driver or GPU cannot use; you would then get an engine that
-silently runs on CPU.
+It has two engines. The **Triton engine** (`--triton`) runs on
+[nbxtensor](https://github.com/NeuroBrix/nbxtensor) and Triton and needs no PyTorch. The
+**PyTorch engine** (the default) needs PyTorch, installed from the index that matches your
+hardware.
 
-**NVIDIA GPU (Linux).** Install the NVIDIA driver, then the PyTorch CUDA build that your
-driver supports (see the selector on [pytorch.org](https://pytorch.org/get-started/locally/)):
+**Triton engine, NVIDIA GPU (Linux).** Install the NVIDIA driver, then:
 
 ```bash
-pip install torch --index-url https://download.pytorch.org/whl/<cuda-build>   # e.g. cu126
 pip install neurobrix
+neurobrix doctor
+```
+
+and run with `--triton`. The CUDA runtime library comes with nbxtensor; nothing else is
+needed.
+
+**PyTorch engine, NVIDIA GPU (Linux).** Install the PyTorch CUDA build that your driver
+supports (see the selector on [pytorch.org](https://pytorch.org/get-started/locally/)), then
+NeuroBrix with its `pytorch` extra. `pip install torch` on its own pulls the default PyTorch
+wheel from PyPI, which may be built for a CUDA version your driver or GPU cannot use; you would
+then get an engine that silently runs on CPU.
+
+```bash
+pip install typing-extensions      # from PyPI first: the PyTorch index carries only its source
+pip install torch --index-url https://download.pytorch.org/whl/<cuda-build>   # e.g. cu126
+pip install "neurobrix[pytorch]"
 neurobrix doctor
 ```
 
 **NVIDIA V100 (Volta).** Current CUDA 13 builds of PyTorch no longer support Volta. Use a
-`cu126` build. `torch 2.10.0+cu126` and `torch 2.14.0+cu126` were checked on the project's
-V100 machines. The default PyPI `torch` and the cu128, cu129, cu130 and cu132 builds were not
-usable there.
+`cu126` build. `torch 2.10.0+cu126`, `torch 2.14.0+cu126` and `torch 2.14.1+cu126` were checked
+on the project's V100 machines. The default PyPI `torch` and the cu128, cu129, cu130 and cu132
+builds were not usable there.
 
-```bash
-pip install torch --index-url https://download.pytorch.org/whl/cu126
-pip install neurobrix
-neurobrix doctor
-```
-
-**CPU only.**
+**CPU only** (the PyTorch engine).
 
 ```bash
 pip install torch --index-url https://download.pytorch.org/whl/cpu
-pip install neurobrix
+pip install "neurobrix[pytorch]"
 ```
 
-`neurobrix doctor` checks that the `neurobrix` command is on your PATH, which PyTorch build
-is installed, and whether PyTorch can see the GPUs your driver reports. It exits non-zero
-when it finds a problem that will block a run.
+`neurobrix doctor` checks that the `neurobrix` command is on your PATH, whether the Triton
+engine can run (nbxtensor, Triton and a GPU runtime), which PyTorch build is installed if any,
+and whether it can see the GPUs your driver reports. It exits non-zero when neither engine can
+run.
 
 ### First run
 
