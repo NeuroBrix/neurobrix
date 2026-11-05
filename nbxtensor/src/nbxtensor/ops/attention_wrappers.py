@@ -1162,13 +1162,8 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     # works if the scores are materialised first, which is the math path.
     # The condition is `launch_keys.flash_headdim_detour` — the function the derived census
     # re-routes the padded call with, so the keys it derives are this detour's.
-    _hd_broken = _lk.flash_headdim_detour(
-        headdim, _os_fd.environ.get("NBX_D128_DETOUR", "1") != "0") != headdim
-    # NBX_D128_DETOUR=0 disables the zero-pad detour — DIAGNOSTIC ONLY:
-    # it re-exposes the wrong kernel. Exists to measure the detour's true
-    # cost (TTFT at long prefill) and for the day the upstream codegen
-    # defect is fixed, when the correctness oracle's _KNOWN_BROKEN
-    # mechanism will demand this whole block be removed.
+    # an arch that MEASURED the flash kernel correct at these dims states it (`flash.pow2_head_dim_correct`)
+    _hd_broken = _lk.flash_headdim_detour(headdim) != headdim
     if _hd_broken:
         _pad = _lk.flash_headdim_detour(headdim) - headdim
         def _pad_hd(t):
@@ -1386,8 +1381,7 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
 
     # Launch meta (num_warps / num_stages). Triton auto-selects when not
     # given; on Volta the auto-pick for a small Q tile under-parallelises the
-    # softmax reduction (the BLOCK_M=32 wrongness probe). NBX_FLASH_NUM_WARPS
-    # / NBX_FLASH_NUM_STAGES let us pin them for diagnosis / per-arch tuning.
+    # softmax reduction (the BLOCK_M=32 wrongness probe): the device file's flash row states them.
     _flash_launch_meta = {}
     # The arch profile's row for this shape: its stated warps (a row without them is an error), and on an FMA-path row (Volta/Turing
     # under Triton >= 3.3) the head-dim chunk the QK^T contraction is done in. No chunk: held Q.
@@ -1395,12 +1389,6 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     QK_CHUNK = min(_fa_meta["qk_chunk"], BLOCK_HEADDIM) if "qk_chunk" in _fa_meta else 0
     if _fa_meta:
         _flash_launch_meta["num_warps"] = _fa_meta["num_warps"]
-    _fnw = os.environ.get("NBX_FLASH_NUM_WARPS")
-    if _fnw:
-        _flash_launch_meta["num_warps"] = int(_fnw)
-    _fns = os.environ.get("NBX_FLASH_NUM_STAGES")
-    if _fns:
-        _flash_launch_meta["num_stages"] = int(_fns)
 
     # Ensure CUDA runtime is on the correct device before kernel launch
     set_device(q)

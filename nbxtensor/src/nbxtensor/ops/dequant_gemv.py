@@ -46,8 +46,8 @@ PACK: int = 8  # nibbles per int32
 # is the tier contract (fused == dequant->ref byte-for-byte).
 # BLOCK_K and NUM_WARPS stay pinned. BLOCK_N adapts at runtime for
 # small-N grids (wrappers._dequant_gemv_block_n, 2026-08-25: halved
-# pow2 until the grid reaches the vendor-yml occupancy target,
-# NBX_DGEMV_ADAPT=0 kill) — legitimate because BLOCK_N only
+# pow2 until the grid reaches the vendor-yml occupancy target; absent: no
+# adaptation) — legitimate because BLOCK_N only
 # partitions OUTPUT columns while each column's K-reduction tree is
 # BLOCK_K-fixed; the parity microtest proves fused == oracle
 # byte-for-byte at the adapted widths (1/8) as well as the pinned 64.

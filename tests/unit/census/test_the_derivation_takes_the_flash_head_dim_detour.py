@@ -45,7 +45,6 @@ def unmeasured_arch(monkeypatch):
 def test_the_detour_is_the_power_of_two_head_dims_from_128(unmeasured_arch):
     assert [LK.flash_headdim_detour(d) for d in (64, 72, 127, 128, 129, 256, 512)] == \
         [64, 72, 127, 129, 129, 257, 513]
-    assert LK.flash_headdim_detour(512, enabled=False) == 512
 
 
 def test_an_arch_that_measured_the_kernel_correct_takes_no_detour(monkeypatch):

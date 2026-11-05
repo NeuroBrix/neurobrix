@@ -1078,18 +1078,6 @@ class DeviceAllocator:
                 ret, _p = dm.malloc(grown)           # the runtime's malloc itself, as before (no rung check here)
                 ptr_obj.value = _p or None
 
-        # Pre-allocation OOM-recovery (independent of pool): trigger a
-        # cycle-collecting gc.collect() then retry. Sana 4Kpx triton
-        # showed ~25 GB of NBXTensor instances pinned alive at conv::62
-        # OOM by Python frame-args lists from recursive conv2d_wrapper
-        # band loops; gc.collect() picks them up if they form a cycle.
-        # Gated by NBX_GC_ON_OOM=1 (opt-in until validated cross-model).
-        if ret != 0 and os.environ.get("NBX_GC_ON_OOM", "0") == "1":
-            DeviceAllocator.clear_last_error()   # a refused call must not poison the next one
-            import gc as _gc_oom
-            _gc_oom.collect()
-            ret = DeviceAllocator._driver_malloc(ptr_obj, grown, dev)
-
         if ret != 0:
             raise DeviceAllocator._oom(dev, nbytes, ret, dm)
         p = ptr_obj.value or 0

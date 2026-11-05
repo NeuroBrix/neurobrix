@@ -505,12 +505,12 @@ def sdpa_chunk_rows(bound: int, batch: int, nheads: int, Tq: int, Tk: int,
     return _ts.sdpa_chunk_rows(bound, batch, nheads, Tq, Tk, min_chunk_rows, max_chunks)
 
 
-def flash_headdim_detour(D: int, enabled: bool = True) -> int:
+def flash_headdim_detour(D: int) -> int:
     """The head dim the flash route runs at: a power of two >= 128 is zero-padded by one
     (`scaled_dot_product_attention_wrapper`'s detour around the flash kernel's wrong answers at
     those dims), and the padded call re-enters the wrapper — routed afresh at D + 1 (and V's head
-    dim + 1). `enabled` False is the wrapper's diagnostic `NBX_D128_DETOUR=0`."""
-    if not (enabled and D >= 128 and (D & (D - 1)) == 0):
+    dim + 1)."""
+    if not (D >= 128 and (D & (D - 1)) == 0):
         return D
     # An arch whose profile MEASURED the flash kernel correct at these dims on its stack runs them
     # as they are: the defect was a code-generation one of an older Triton (P-FLASH-D128-CORRECTNESS,
