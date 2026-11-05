@@ -44,9 +44,10 @@ dependencies = [
     # `pytorch` extra below; asking for that branch without it is refused by
     # name (core/runtime/engines.py). NO vendor model/tokenizer/codec/DSP
     # library is a runtime dependency (those moved to the `adapter` extra below).
-    # The tensor library the Triton engine is built on (nbxtensor/, this repository): a path dependency until it
-    # is published on its own (docs/nbxtensor/MIGRATION.md, M6)
-    "nbxtensor @ {root:uri}/nbxtensor",
+    # The tensor library the Triton engine is built on (nbxtensor/ in this repository, its own package): a version, never a
+    # path — a path is baked into the wheel as the building machine's file:// URL, which no other machine can install and
+    # PyPI refuses. From the repository: `pip install -e nbxtensor -e .`; from wheels: both in one wheelhouse.
+    "nbxtensor==0.0.1",
     # Core compute. macOS has no triton wheel on PyPI: Apple Metal runs a triton built from source with its Metal
     # backend (the Mac's install), which this line must not try to resolve.
     "triton; platform_system != 'Darwin'",
@@ -103,9 +104,6 @@ Changelog = "https://github.com/NeuroBrix/neurobrix/blob/main/CHANGELOG.md"
 
 [project.scripts]
 neurobrix = "neurobrix.cli:main"
-
-[tool.hatch.metadata]
-allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/neurobrix"]
