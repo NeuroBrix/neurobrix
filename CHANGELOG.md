@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+The release that moves NeuroBrix's Triton engine onto nbxtensor (its 0.0.1). On 2026-11-05 the final gate ran the 49
+catalogue models through the entry point in both engines on both V100 card classes (196 runs, every output judged by
+eye, every time in the gate register, none more than 1.5 times slower than the previous gate). In short:
+
+- **The Triton engine imports nbxtensor, not PyTorch**: `--triton` runs on nbxtensor, Triton and NumPy, and PyTorch is
+  no longer a required dependency; the engine, the library and five reference models run in an environment where torch
+  is not installed, with no attempt to import it.
+- **Every kernel setting is certified per launch key and per card class**: the keys a model forms are derived from its
+  graph without running it, certified once against a float64 oracle, and served certified-only — a missing key is an
+  error naming its census row, never a sweep in the middle of a run.
+- **The V100's tensor cores (m8n8k4) carry the matrix products where certified faster**: GEMMs, the mixture-of-experts
+  prefill projections, fp32 1 x 1 convolutions and transposed 1-D convolutions.
+- **A replayed component returns its views in order**, a long video's encoding no longer runs the card out of memory at
+  its replay, and a replay plan recorded against an old KV cache is retired.
+- **The TilingEngine cuts only where the graph proves the cut exact**, refuses what it cannot place instead of falling
+  back, and no longer reads host switches.
+- **Prism plans from the machine's facts**: the hardware profile and vendor files carry what it prices (measured
+  reserves, reload rates, workspaces), a busy machine is re-planned on the memory really free with a clear warning, and
+  a model is refused from one place only when no plan fits.
+
 ### Removed
 - **The tiling engine's host switches and diagnostic prints**: `NBX_DISABLE_INPLACE_ADD`, `NBX_DISABLE_INPLACE_UNARY`, `NBX_INPLACE_MIN_BYTES`, `NBX_TRITON_CHAIN_WRAPPER`, `NBX_S5_BASELINE_AUDIT`, `NBX_TILE_CENSUS` and `NBX_CHAIN_DIAG` are no longer read: the in-place adds and activations follow Prism's plan and the profile's threshold, the residual-chain wrapper runs in every mode.
 - **The engine slims now that it imports nbxtensor**: code nothing reached is deleted, with no change of behaviour — the vendored third-party reference kernels (never imported, never packaged) and the compiled branch's unmapped op handlers, the planner's, the runtime's and the flows' uncalled helpers, the PyTorch branch's copies of nbxtensor's dtype table reader and tiling sizes, Prism's compatibility aliases, the Triton loader's bind-time fp16 -> fp32 weight upcast (no caller ever enabled it; precision is the DtypeEngine's), the memory manager's module-level forwarders nothing imported (`unload_weights`, `cleanup_tensors`) with the method only one of them called, and a layered validation pipeline nothing imported (`core/validators`: what stays is `neurobrix validate`'s container check and the compiled branch's tensor checks). The engine's Python code went from 409 025 to 138 306 lines (262 132 of them the vendored reference tree; the engine's own cleaning, tracked from here, 146 646 -> 138 306), and its Triton branch reaches the library through its public names; `tools/engine_slim_scan.py` lists what remains to remove, move into nbxtensor or justify (`docs/nbxtensor/ENGINE_SLIM.md`), and a guard lets the engine only shrink.
