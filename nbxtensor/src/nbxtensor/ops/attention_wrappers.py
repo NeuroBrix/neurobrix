@@ -1214,8 +1214,7 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
         # Turing sm_75: 96 KB SMEM, fewer registers) a 128-row Q tile spills
         # registers and serialises — arch-gate to a smaller tile. Data-driven
         # via the hardware capability flag (same single source of truth as
-        # the dtype-protection path); Ampere+ keeps 128. NBX_FLASH_BLOCK_M_VOLTA
-        # overrides the Volta value (diagnostic / per-arch tuning).
+        # the dtype-protection path); Ampere+ keeps 128.
         if not _core._NBX_HAS_NATIVE_BF16:
             # Measured on V100 (sm_70), seq=8192 hd=64: BLOCK_M 128 -> 9.2 s,
             # 64 -> 6.1 s, 32 -> 0.42 s. The 128-row Q tile spills registers to
@@ -1224,9 +1223,8 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
             # ~14x faster but WRONG — it diverges (max|diff| 0.035 vs torch
             # SDPA, vs 0.0002 at 64/128) and the error compounds across the
             # diffusion loop into pure noise. So 64 is the floor of
-            # correctness on Volta. NBX_FLASH_BLOCK_M_VOLTA overrides (do not
-            # set below 64 for accuracy-sensitive / iterative models).
-            BLOCK_M = int(os.environ.get("NBX_FLASH_BLOCK_M_VOLTA", "64"))
+            # correctness on Volta.
+            BLOCK_M = 64
         else:
             BLOCK_M = 128
         BLOCK_N = 64
