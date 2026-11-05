@@ -203,7 +203,7 @@ def test_a_recorder_sees_every_launch_and_its_record_replays():
     a_r, a_i = _nbx(r0), _nbx(i0)
     grid = ((n + 1023) // 1024,)
     seen = []
-    set_launch_recorder(lambda prep, g, params: seen.append((prep, g, list(params))))
+    set_launch_recorder(lambda prep, g, params, extents: seen.append((prep, g, list(params))))
     try:
         launch(scale_kernel, grid, a_r, a_i, n, 0.5, BLOCK_SIZE=1024)
     finally:
