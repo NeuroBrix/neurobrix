@@ -714,8 +714,7 @@ def conv2d_wrapper(
     # Sana 4Kpx VAE: ~4.8 s per call vs cuDNN dedicated path ~2.6 ms,
     # ~1800x gap. Route to the dedicated stencil kernel instead.
     _route = _lk.conv2d_route(N, in_c, out_c, out_h, out_w, dil_h, dil_w, groups, out_nbx_dtype,
-                              _ts.conv2d_band_bytes(),
-                              depthwise_enabled=os.environ.get("NBX_DEPTHWISE_DISABLE", "0") != "1")
+                              _ts.conv2d_band_bytes())
     if out is not None and _route in ("depthwise", "band"):
         raise RuntimeError(f"conv2d out=: the {_route} route writes its own result — refused")
     if _route == "depthwise":

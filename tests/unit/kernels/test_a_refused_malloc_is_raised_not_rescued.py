@@ -56,7 +56,6 @@ def test_a_refused_malloc_raises_and_never_drains_the_deferred_queue(monkeypatch
         "mem_get_info": "cudaMemGetInfo"})
     monkeypatch.setattr(DeviceAllocator, "_pool_enabled", False, raising=False)
     monkeypatch.setattr(DeviceAllocator, "_pool_enabled_init", True, raising=False)
-    monkeypatch.delenv("NBX_GC_ON_OOM", raising=False)
 
     drained = []
 

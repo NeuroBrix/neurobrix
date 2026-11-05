@@ -775,7 +775,7 @@ def flash_tiles_certified()
     # The tl.dot flash's tile is certified per key (workstream 1) where the profile declares no hand table of tiles (`sdpa_thresholds`)
 def flash_launches(Tq: int, Tk: int, D: int, q: NBXDtype, k: NBXDtype, v: NBXDtype, bias: Optional[NBXDtype]=None)
     # The tl.dot flash where its tile is certified (`flash_tiles_certified`)
-def flash_headdim_detour(D: int, enabled: bool=True)
+def flash_headdim_detour(D: int)
     # The head dim the flash route runs at
 def conv_weight_layout()
     # The order a convolution weight is stored in on this arch

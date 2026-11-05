@@ -244,15 +244,6 @@ def test_occupancy_rule_resolves_vendor_config():
         _nbx_linalg_wrappers._DEQUANT_GEMV_MIN_PROGRAMS = None
         assert _nbx_linalg_wrappers._dequant_gemv_block_n(128) == 64, \
             "no-profile fallback lost the pinned width"
-        import os as _osl
-        W._NBX_HW_PROFILE = _Prof()
-        _nbx_linalg_wrappers._DEQUANT_GEMV_MIN_PROGRAMS = None
-        _osl.environ["NBX_DGEMV_ADAPT"] = "0"
-        try:
-            assert _nbx_linalg_wrappers._dequant_gemv_block_n(128) == 64, \
-                "kill switch '0' did not restore the pinned width"
-        finally:
-            _osl.environ.pop("NBX_DGEMV_ADAPT", None)
     finally:
         W._NBX_HW_PROFILE = saved_prof
         _nbx_linalg_wrappers._DEQUANT_GEMV_MIN_PROGRAMS = saved_cache

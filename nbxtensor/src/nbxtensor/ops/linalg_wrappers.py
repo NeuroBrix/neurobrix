@@ -270,11 +270,6 @@ def _dequant_gemv_block_n(N: int) -> int:
     global _DEQUANT_GEMV_MIN_PROGRAMS
     if _DEQUANT_GEMV_MIN_PROGRAMS is None:
         target = 0
-        if os.environ.get("NBX_DGEMV_ADAPT", "1") == "0":
-            # Kill switch: pinned width everywhere (pre-adaptation
-            # behavior). Cached like the resolved target.
-            _DEQUANT_GEMV_MIN_PROGRAMS = 0
-            return BLOCK_N
         try:
             prof = _core.get_hardware_profile()
             devices = getattr(prof, "devices", None) if prof else None

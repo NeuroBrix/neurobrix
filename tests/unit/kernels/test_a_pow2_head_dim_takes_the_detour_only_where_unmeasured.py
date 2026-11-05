@@ -28,7 +28,6 @@ def test_an_unmeasured_arch_keeps_the_detour(monkeypatch):
     for prof in ({}, {"flash": {}}, {"flash": {"pow2_head_dim_correct": "yes"}}):
         monkeypatch.setattr(K, "active_vendor_profile", lambda prof=prof: prof)
         assert [LK.flash_headdim_detour(d) for d in (96, 128, 256)] == [96, 129, 257]
-    assert LK.flash_headdim_detour(128, enabled=False) == 128
 
 
 def test_the_measured_archs_state_it_and_every_other_arch_declares_it_unmeasured():
