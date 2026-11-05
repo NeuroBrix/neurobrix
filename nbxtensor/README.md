@@ -25,8 +25,7 @@ lives in `nbxtensor/` of the NeuroBrix repository until the extraction is comple
 ## Status
 
 Every area below is in the library, and every public name is documented in `docs/nbxtensor/API.md` (the list of
-undocumented names is empty and a test keeps it so). What remains before 0.0.1 is in `docs/nbxtensor/MIGRATION.md` of
-the NeuroBrix repository. This README documents what is in the library TODAY; every example below is executed by
+undocumented names is empty and a test keeps it so). This README documents what is in the library TODAY; every example below is executed by
 `nbxtensor/tests/test_readme.py`, so an example that stops working fails a test. The target API is
 `docs/nbxtensor/API.md`.
 
@@ -38,7 +37,7 @@ the NeuroBrix repository. This README documents what is in the library TODAY; ev
 | `nbxtensor.tensor`, `memory`, `backend`, `ops`, `quant` | yes | the tensor class, the allocators, the device backends, the Triton kernels and their cost declarations |
 | `nbxtensor.host` | yes | the services still passed by an application while the boundary is cleaned (below; API.md section 11) |
 
-What changed from one version to the next — added, changed, fixed, removed — is in [`CHANGELOG.md`](CHANGELOG.md).
+What changed from one version to the next — added, changed, fixed, removed — is in [`CHANGELOG.md`](https://github.com/NeuroBrix/nbxtensor/blob/main/CHANGELOG.md).
 
 ## Installation
 

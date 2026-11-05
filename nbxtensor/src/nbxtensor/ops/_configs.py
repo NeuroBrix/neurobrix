@@ -831,7 +831,7 @@ def reduction_feat_tile(args: Dict) -> int:
 
 def row_program_configs() -> List[triton.Config]:
     """The candidates the certifier proves for a row kernel holding its whole padded row (softmax, layer norm, RMS
-    norm — workstream 1, Hocine 2026-10-19 18:55): rows per program x warps. The configuration such a kernel ran before
+    norm — certified per key since 2026-10-19 instead of a hand table): rows per program x warps. The configuration such a kernel ran before
     it was certified is among them (`batch_block_heuristic`: 1 row for a row of 64 or more, up to 128 rows for a short
     one; 4 warps) — a certified winner equal to it changes no bit. Rows per program partition independent rows and
     change no bit; the warps split a row's reduction and can."""

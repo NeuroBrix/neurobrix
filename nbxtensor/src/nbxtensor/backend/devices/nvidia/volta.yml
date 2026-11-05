@@ -192,7 +192,7 @@ autotune:
   buckets:
     # M — the rows of a GEMM (a prefill's token count; the SDPA scores' batched GEMM): classes of EIGHT below the
     # matrix unit's 64-row tile, where the ladder measured on 2026-09-21 keyed every row exactly. Decision
-    # 2026-10-19 02:32 (the supervisor for Hocine; the census gap of 02:04): under certified-only every prompt
+    # 2026-10-19 (a census gap: prompt lengths with no certified key): under certified-only every prompt
     # length is a key, and an exact row count made ~60 classes per decoder (TinyLlama, 16 GB: 838 census rows
     # where there were 14) — eight classes instead, one re-certification of the keys below 64. The GEMV bound
     # (M <= 4) and the unit's take-over at 64 are the launcher's and unchanged; the rows above 64 are `default`'s.

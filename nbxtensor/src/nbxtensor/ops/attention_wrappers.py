@@ -1006,7 +1006,7 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
         q, k, v = q.to(_qd), k.to(_kd), v.to(_vd)
 
     # Deterministic-attention routing (P-TRITON-MOE-DETERMINISM-RESIDUAL,
-    # Hocine scope decision = option B: hardware + memory-budget, ZERO
+    # decided on hardware and memory budget alone (option B), ZERO
     # model/family knowledge — R34 strict; the SDPA wrapper is a
     # universal runtime primitive).
     #

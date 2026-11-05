@@ -1,4 +1,4 @@
-"""The CPU uses every core it is given (Hocine 2026-10-29 18:11): one thread pool, and a loop that cuts a large array
+"""The CPU uses every core it is given (host work left on one core idled the rest of the machine): one thread pool, and a loop that cuts a large array
 into contiguous pieces run in parallel, on the model of ggml.
 
 numpy's element-wise ops, reductions and conversions run on one core; their inner loops release the GIL. So an op over

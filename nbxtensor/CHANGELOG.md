@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.0.1] - YYYY-MM-DD
+## [0.0.1] - 2026-11-05
 
 The first release of nbxtensor: an inference-first tensor library whose kernels are written in Triton and which never
 imports torch. NeuroBrix's Triton engine is its first client: on 2026-11-05 the engine's final gate ran its 49 catalogue

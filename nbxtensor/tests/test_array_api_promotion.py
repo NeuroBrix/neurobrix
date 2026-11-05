@@ -1,4 +1,4 @@
-"""Type promotion follows the Array API standard (Hocine 16:37, point 2): the tables of
+"""Type promotion follows the Array API standard (one promotion rule, the standard's, not a house one): the tables of
 https://data-apis.org/array-api/draft/API_specification/type_promotion.html, every pair of dtypes the library's table
 holds, both operand orders. What the standard leaves unspecified (mixed kinds; float16 and bfloat16, which it does not
 define) follows PyTorch, the engine's oracle — written in the README's Array API section."""

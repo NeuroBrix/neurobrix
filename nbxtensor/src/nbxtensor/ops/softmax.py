@@ -8,7 +8,7 @@ from nbxtensor.ops._configs import nbx_autotune
 
 
 def _softmax_configs():
-    """The candidates the certifier proves (workstream 1, Hocine 2026-10-19 18:55): rows per program x warps. The
+    """The candidates the certifier proves (certified per key since 2026-10-19 instead of a hand table): rows per program x warps. The
     one the kernel ran before certification is among them (1 row, 4 warps for a row of 64 or more; up to 128 rows for
     a short row) — a certified winner equal to it changes no bit. Rows per program partition independent rows and change
     no bit; the warps split a row's reduction and can (V100, 4096 columns: 0.001 % of the elements)."""
