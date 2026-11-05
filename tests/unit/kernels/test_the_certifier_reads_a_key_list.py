@@ -21,3 +21,18 @@ def test_an_empty_or_malformed_list_is_refused_by_name(tmp_path, text):
     f.write_text(text)
     with pytest.raises(RuntimeError, match="--keys"):
         keys_file(str(f))
+
+
+def test_the_machines_sweep_store_is_a_key_list(tmp_path):
+    """A contributor certifies the keys their card formed: the local sweep store (`autotune_configs_<arch>.json`, keyed
+    "<qualname>::<key repr>") is read as the list (README, Certify your own hardware). Red if the store is refused or
+    its values read as keys."""
+    import json
+    f = tmp_path / "autotune_configs_cuda-70-triton_3.8.0.json"
+    f.write_text(json.dumps({"a.b.ew_launch_kernel::(65536, 'fp32', 'fp32')": {"kwargs": {"BLOCK_SIZE": 256}},
+                             "a.b.gemv_vec_kernel::(256, 2048, 'fp16', 'fp32', 'fp32')": {"kwargs": {}}}))
+    assert keys_file(str(f)) == {"a.b.ew_launch_kernel": [(65536, "fp32", "fp32")],
+                                 "a.b.gemv_vec_kernel": [(256, 2048, "fp16", "fp32", "fp32")]}
+    (tmp_path / "empty.json").write_text("{}")
+    with pytest.raises(RuntimeError, match="names no key"):
+        keys_file(str(tmp_path / "empty.json"))

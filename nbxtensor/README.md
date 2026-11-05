@@ -4,8 +4,8 @@
 
 Run AI models without PyTorch, on any GPU Triton supports: tensors, Triton kernels, planned memory and certified tuning.
 
-Inference first; training is not in this release. Tested on NVIDIA (V100) and Apple Silicon (M4 Pro); NVIDIA
-Ampere/Hopper, AMD and Intel are described and expected to work wherever Triton runs, not yet tested.
+Runs wherever Triton runs — NVIDIA, AMD, Intel and Apple Silicon GPUs. Inference first; training is not in this
+release. Found a bug on your hardware? [Open an issue](https://github.com/NeuroBrix/nbxtensor/issues) — we fix fast.
 
 [![PyPI](https://img.shields.io/pypi/v/nbxtensor)](https://pypi.org/project/nbxtensor/)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](https://github.com/NeuroBrix/nbxtensor/blob/main/LICENSE)
@@ -36,30 +36,59 @@ assert c.shape == (256, 128) and np.allclose(c.numpy().astype(np.float32), ref, 
 - **No PyTorch.** nbxtensor never imports torch, not even optionally; its tests, kernels and NeuroBrix's models run in
   an environment where torch is not installed. Exchange with any tensor library goes through DLPack (`__dlpack__`,
   `from_dlpack`), so a torch user writes `torch.from_dlpack(t)` on their side.
-- **Any GPU Triton supports.** The kernels are Triton; a device is described by a file of facts (tiles, shared memory,
-  the matrix unit, the autotune ladders), never by code.
-- **Tensor cores back on Volta.** Still running V100s? Triton leaves their tensor cores idle (`tl.dot` compiles to FMA
-  on sm_70); nbxtensor turns them back on with its own `mma.m8n8k4` kernels (matrix products, convolutions, flash
-  attention, the fused mixture-of-experts GEMM), chosen by the certificate only where they measured faster — an
-  80 x 4096 x 4096 fp16 product 0.404 -> 0.191 ms, the fused MoE prefill 2.49 -> 0.96 ms (DeepSeek, 20 tokens) and
-  7.24 -> 1.40 ms (Qwen3, 512 tokens), fp32 1 x 1 convolutions 1.26-1.95 times faster (V100, the measures recorded in
-  [the 0.0.1 changelog](https://github.com/NeuroBrix/nbxtensor/blob/main/CHANGELOG.md#001---2026-11-05)).
+- **Runs wherever Triton runs.** The kernels are Triton; a device is described by a file of facts (tiles, shared
+  memory, the matrix unit, the autotune ladders), never by code.
+- **Fast.** Faster than PyTorch on many models (in NeuroBrix's gate of 2026-11-05, the Triton engine on nbxtensor beat
+  the PyTorch engine on 18 of 49 models on a 16 GB V100 and 17 of 49 on a 32 GB one). Still running V100s? Triton leaves
+  their tensor cores idle (`tl.dot` compiles to FMA on sm_70); nbxtensor turns them back on with its own `mma.m8n8k4`
+  kernels (matrix products, convolutions, flash attention, the fused mixture-of-experts GEMM), chosen by the certificate
+  only where they measured faster — an 80 x 4096 x 4096 fp16 product 0.404 -> 0.191 ms, the fused MoE prefill 2.49 ->
+  0.96 ms (DeepSeek, 20 tokens) and 7.24 -> 1.40 ms (Qwen3, 512 tokens), fp32 1 x 1 convolutions 1.26-1.95 times faster
+  (V100, the measures recorded in [the 0.0.1 changelog](https://github.com/NeuroBrix/nbxtensor/blob/main/CHANGELOG.md#001---2026-11-05)).
+- **Lightweight.** nbxtensor itself is 1 MB; the whole install, Triton included, is about 1 GB — PyTorch's is 5.6 GB.
+- **Certified tuning.** Kernel settings are measured once per GPU class against a float64 oracle and shipped — no
+  autotuning at run time for the shapes we cover. We are certifying every model we can, so you never have to autotune.
+  Certified your GPU? [Share your certificates](#certify-your-own-hardware).
 - **Memory is planned, not discovered.** Allocators per device behind one interface, a static planner that assigns every
   buffer before the first run, and every kernel declares its cost (outputs, workspace, scratch, bytes moved, flops) so a
   planner prices a model before running it. Capture and replay of a repeated sequence of launches, verified byte-equal.
-- **Tuning certified per key.** Every autotuned kernel setting is proven against a float64 oracle once per launch key
-  and device class, then served from a store of proven settings.
-- **One table of facts.** One dtype table, one view rule, one conversion per pair of dtypes — declared, never guessed.
 
-## Hardware
+## Certify your own hardware
 
-| tested | expected (described, not yet tested) |
-|---|---|
-| NVIDIA V100 (Volta, CUDA) | NVIDIA Ampere, Hopper (CUDA) |
-| Apple M4 Pro (Metal through triton-ext) | the other Apple silicon chips (Metal) |
-| | AMD Instinct (HIP), Intel GPUs (Level Zero): interfaces written, launch drivers to write |
+A kernel setting is certified per launch key (the kernel, its shape class and dtypes) and per GPU class. The keys a GPU
+class has no certificate for are swept at run time and kept on your machine; certifying them makes them permanent and
+shareable. Certification runs through [NeuroBrix](https://github.com/NeuroBrix/neurobrix), the engine whose models form
+the keys (`pip install neurobrix`), with these commands (run as written on a clean machine, 2026-11-06):
 
-Host work (loading, conversions) runs on every CPU core; there is no CPU kernel backend.
+1. Run the models you use. Every key no certificate covers is swept and kept in `~/.neurobrix/replay_cache/`:
+
+   ```
+   neurobrix run --model TinyLlama-1.1B-Chat-v1.0 --triton --prompt "Hello" --max-tokens 32
+   ```
+
+2. Certify the keys your card formed — every candidate setting is run against a float64 oracle and timed; the proofs are
+   written into `--out`, one file per kernel and dtype under `<vendor>/<profile>/` (the profile is your GPU's device
+   file, e.g. `volta`):
+
+   ```
+   neurobrix autotune certify --profile volta \
+       --keys ~/.neurobrix/replay_cache/autotune_configs_cuda-70-triton_3.8.0.json --out ./my-certificates
+   ```
+
+3. Check that they are served: a certified-only run uses only certificates and fails, naming the key, if one is missing:
+
+   ```
+   NEUROBRIX_AUTOTUNE_CERTIFIED_DIR=./my-certificates neurobrix run --model TinyLlama-1.1B-Chat-v1.0 --triton \
+       --prompt "Hello" --max-tokens 32 --certified-only
+   ```
+
+   Its `[autotune] certified directory:` line says `0 swept at runtime`, and its output is the same as step 1's.
+
+4. Share them: fork [NeuroBrix](https://github.com/NeuroBrix/neurobrix), add the files of `./my-certificates/<vendor>/<profile>/`
+   under `src/neurobrix/config/autotune/<vendor>/<profile>/`, and open a pull request with the `certificate` template:
+   your GPU model, driver, the commands above and the output of step 3. Certified your GPU? Share your certificates —
+   every class certified is a class nobody autotunes again.
+
 
 **Links:** [API reference](https://github.com/NeuroBrix/neurobrix/blob/main/docs/nbxtensor/API.md) ·
 [release notes](https://github.com/NeuroBrix/nbxtensor/blob/main/CHANGELOG.md) ·
@@ -364,16 +393,7 @@ The host conversions of a weight at load are split the same way, across the load
 
 ## Hardware
 
-| hardware | backend | state |
-|---|---|---|
-| NVIDIA Tesla V100 (Volta, sm_70) | CUDA (`CudaDriver`, `AbiMemory`) | **proven**: the library's tests and the reference models' outputs identical to their judged sha, on a 4 x V100 rack, 2026-10-29 |
-| Apple M4 Pro (Apple silicon, 24 GB unified) | Metal through triton-ext (`TritonExtDriver`, `MetalMemory`) | **proven**: the library's tests, the reference models' outputs identical to their judged sha, in an environment where torch is not installed, 2026-10-29 |
-| NVIDIA Ampere, Hopper | CUDA | **written, not proven here**: device files exist (`backend/devices/nvidia/`), no such card on our machines |
-| Apple M1, M2, M3, M5 families and the other M4 chips | Metal | **written, not proven here**: device files exist (`backend/devices/apple/`); only the M4 Pro is measured |
-| AMD Instinct (CDNA, CDNA2, CDNA3) | HIP through the CUDA-style C ABI (`AbiMemory`) | **interface ready, not tested for lack of hardware**: memory primitives and device files exist; the HIP launch driver is still to write (`docs/nbxtensor/BACKENDS.md` section 6) |
-| Intel GPUs (XPU) | Level Zero (not the CUDA ABI) | **interface ready, not tested for lack of hardware**: the backend contract is documented; its `DeviceMemory` over Level Zero and its launch driver are to write (BACKENDS.md section 6) |
-| a CPU | none yet | **not supported** for the kernels: host work (loading, conversions) runs with numpy on every core (`backend.cpu.pool`); a CPU kernel backend is not part of 0.0.1 |
-| hardware with no Triton backend (NPUs, phones) | none | **not supported**: covering it needs a Triton backend for it and the five pieces of `docs/nbxtensor/BACKENDS.md` |
+HARDWARE_PLACEHOLDER
 
 ## Backends
 

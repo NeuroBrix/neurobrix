@@ -70,3 +70,18 @@ def test_the_refusal_names_the_tool_and_its_deliberate_opening(monkeypatch):
 def test_the_opening_is_an_opening(monkeypatch):
     monkeypatch.setattr("neurobrix.cli.commands.autotune._checkpointer_holds", lambda _r: False)
     assert _refuse_without_a_checkpointer(True) == ""
+
+
+def test_a_contributors_draft_needs_no_checkpointer(monkeypatch, tmp_path, capsys):
+    """`--out` writes a draft outside the engine directory (a contributor on an installed package, no repository to
+    checkpoint): the refusal does not apply there — on a clean machine it refused every `certify --out` (2026-11-06).
+    Red if the draft is refused; the engine directory itself stays refused (the test above)."""
+    import argparse
+    from neurobrix.cli.commands import autotune as A
+    import neurobrix.kernels.autotune_certify as C
+    monkeypatch.setattr(A, "_checkpointer_holds", lambda _r: False)
+    monkeypatch.setattr(C, "certify", lambda *a, **k: {"certified": 0, "directory": str(tmp_path), "excluded_configs": 0, "failed": 0})
+    args = argparse.Namespace(action="certify", profile="volta", vendor=None, census=None, out=str(tmp_path), kernels=None,
+                              limit=None, only_missing=False, allow_uncheckpointed=False, keys=None)
+    assert A.cmd_autotune(args) == 0
+    assert "REFUSED" not in capsys.readouterr().out

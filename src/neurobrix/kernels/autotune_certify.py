@@ -135,13 +135,14 @@ def witnessed_bench(contenders, time_one, witness_ms, spec: Dict[str, Any], labe
 # the census: which shapes
 # ---------------------------------------------------------------------------
 def keys_file(path: str) -> Dict[str, List[tuple]]:
-    """{kernel qualname: [key, ...]} from a file of "<qualname>::<key repr>" lines — the keys a coverage check found
-    missing or a launch record formed (`kernels/census.record`'s format): certified exactly, no census table read
-    (the supervisor, 2026-10-26 12:35: the coverage check's list suffices). An empty file, a malformed line or a
+    """{kernel qualname: [key, ...]} from a file of "<qualname>::<key repr>" lines or the local sweep store (its keys)
+    — the keys a coverage check found missing, a launch record formed: certified exactly, no census table read (the
+    supervisor, 2026-10-26 12:35: the coverage check's list suffices). An empty file, a malformed line or a
     kernel the certifier has no tuner for is refused by name: a list that certified nothing must not read green."""
     import ast
     out: Dict[str, List[tuple]] = {}
-    lines = [l.strip() for l in open(path) if l.strip()]
+    lines = ([str(k) for k in json.loads(Path(path).read_text())] if str(path).endswith(".json")   # the sweep store
+             else [l.strip() for l in open(path) if l.strip()])
     if not lines:
         raise RuntimeError(f"--keys {path}: the file names no key — nothing would be certified")
     for n, line in enumerate(lines, 1):
