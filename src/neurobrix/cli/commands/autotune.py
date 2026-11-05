@@ -113,7 +113,7 @@ def cmd_autotune(args) -> int:
         if not getattr(args, "profile", None):
             print("ERROR: --profile is required: a certification names the profile it was measured on.")
             return 2
-        refusal = _refuse_without_a_checkpointer(getattr(args, "allow_uncheckpointed", False))
+        refusal = "" if args.out else _refuse_without_a_checkpointer(getattr(args, "allow_uncheckpointed", False))  # --out: a draft
         if refusal:
             print(refusal)
             return 3
