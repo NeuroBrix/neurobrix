@@ -7,7 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-The first release, 0.0.1, is in preparation.
+## [0.0.1] - YYYY-MM-DD
+
+The first release of nbxtensor: an inference-first tensor library whose kernels are written in Triton and which never
+imports torch. NeuroBrix's Triton engine is its first client: on 2026-11-05 the engine's final gate ran its 49 catalogue
+models through the library on four V100 cards (both card classes, every output judged by eye), and the library's tests,
+five reference models and an uncertified autotune sweep ran in an environment where torch is not installed, with no
+attempt to import it.
+
+**What the library holds**
+- **A tensor without torch**: `nbxtensor.Tensor` with its dtype table (`dtypes.yml`: every width, safetensors code and
+  key spelling in one place), strides counted in elements, ATen's view rule, broadcasting, Array API type promotion with
+  weak Python scalars, seeded random streams, quantized weights (grouped int4 with scales and minima), and DLPack for
+  exchange (`__dlpack__`, `from_dlpack`): a torch user writes `torch.from_dlpack(t)` on their side.
+- **Triton kernels for the operators of inference graphs**, each declaring its cost (outputs, workspace and scratch with
+  their lifetimes, bytes moved, flops) so a planner prices a model before running it: elementwise and comparison ops,
+  reductions, softmax, layer, group, RMS and batch norms, matrix products and matrix-vector products (on the V100's
+  m8n8k4 matrix unit where certified faster), 1-D, 2-D and 3-D convolutions and transposed convolutions, pooling and
+  resampling, rotary embeddings, attention (flash, split decode, paged decode, vector decode), mixture-of-experts (the
+  fused GEMM, the one-token band, the routing alignment), FFT, sorting, top-k, gathers and scatters.
+- **Memory that is planned**: allocators per device behind one interface (a pool that splits and merges freed blocks; on
+  CUDA with virtual memory management an expandable range), a slab planner (`memory.slab`), and the capture and replay
+  of a repeated sequence of launches, verified byte-equal (CUDA graphs on NVIDIA).
+- **Kernel settings proven once, per device class**: every autotuned kernel is certified per launch key against a
+  float64 oracle and served from a store of proven settings; the library sweeps a key it has no setting for at first
+  use, and an application may require certified settings only (a missing key is then an error naming it).
+- **Every core of the host**: host work over large arrays (weight conversions at load) runs on a thread pool sized to
+  the machine's compute cores, with the BLAS held to the same cores.
+
+**Hardware**: NVIDIA V100 (CUDA) and Apple M4 Pro (Metal through triton-ext) are proven; NVIDIA Ampere and Hopper and
+the other Apple silicon chips have device files and are not proven on our machines; AMD Instinct (HIP) and Intel GPUs
+(Level Zero) have their interfaces written and are not tested for lack of hardware; there is no CPU kernel backend.
+
+**Named refusals**: a missing fact is an error that names it, never a default — a dtype absent from the table, a
+device fact absent from its device file, a strided slice, a signed integer promoted with `uint64`, a Python integer
+outside an integer array's range, a pointer Metal declines to bind in place, a per-row bias of more than four rows in
+`addmm`, an uncertified key where certified settings are required.
+
+**Known limitations**: inference only (no autograd); slicing has step 1; no array namespace (`__array_namespace__`)
+yet; `conv_transpose2d` runs on the FMA kernel only (no matrix-unit path; no catalogue model forms it); on Apple silicon,
+two of NeuroBrix's video models do not complete on the M4 Pro yet — mochi-1-preview (the PyTorch engine's memory at its
+decoder's temporal stream) and Allegro / Allegro-TI2V on the Triton engine with its replay (a Metal command buffer out of
+memory; the fix is in test).
 
 ### Added
 - **`nbxtensor.memory.slab.first_fit_extent`**: the slab a run needs, the highest offset the slab's own first fit
@@ -72,3 +113,6 @@ The first release, 0.0.1, is in preparation.
 - **`decode_attn_vec_grouped_kernel` and the environment switches of the vector decode** (`NBX_DV_GROUPED`, `NBX_DV_SEG`, `NBX_DV_BLOCK_N`, `NBX_DV_WARPS`): the grouped variant ran only behind its switch.
 - **`flash_decode_split_kernel` and its route**: armed only by an environment switch (`NBX_FLASH_DECODE`, with `NBX_FD_BLOCK_N` and `NBX_FD_SEG`) and measured slower than the vector decode kernels; `flash_decode.py` keeps the fixed-order reduce they share.
 - **`conv1d_forward_kernel`**: launched by no route (a 1-D convolution runs through `conv2d`).
+
+[Unreleased]: https://github.com/NeuroBrix/nbxtensor/compare/v0.0.1...HEAD
+[0.0.1]: https://github.com/NeuroBrix/nbxtensor/releases/tag/v0.0.1
