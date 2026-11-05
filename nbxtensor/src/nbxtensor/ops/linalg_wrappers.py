@@ -939,7 +939,7 @@ def addmm_epilogue_wrapper(bias, a, b, beta: float = 1.0,
 #: A matmul launch whose OUTPUT holds more than this many elements is split along M. The
 #: boundary is 2^31 because that is where an int32 element offset wraps; the margin below it
 #: is deliberate, so a tile that straddles the boundary is never the last one.
-_NBX_MM_MAX_OUTPUT_ELEMS = int(os.environ.get("NBX_MM_MAX_OUTPUT_ELEMS", str(2 ** 31 - 2 ** 20)))
+_NBX_MM_MAX_OUTPUT_ELEMS = 2 ** 31 - 2 ** 20
 
 
 # ---------------------------------------------------------------------------

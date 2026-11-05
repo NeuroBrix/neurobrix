@@ -192,8 +192,7 @@ _POOL_BH, _POOL_BW = 4, 16                # avg_pool2d / max_pool2d
 # configs) keep the EXACT prior code path — no relocated free, byte- and
 # timing-identical. Numerics are unchanged (frees sooner only). 1 GiB default
 # fires only on the multi-GB video-VAE convs.
-_NBX_CONV3D_EAGER_FREE_BYTES = int(
-    os.environ.get("NBX_CONV3D_EAGER_FREE_BYTES", str(1 * 1024 * 1024 * 1024)))
+_NBX_CONV3D_EAGER_FREE_BYTES = 1 << 30
 
 # Conv3d temporal chunk-streaming — kernel-level tiling INSIDE the wrapper,
 # same lever as the conv2d band-streaming above (P-SANA-4KPX Step 1 class).
