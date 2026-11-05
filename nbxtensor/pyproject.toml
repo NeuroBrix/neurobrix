@@ -10,10 +10,13 @@ readme = "README.md"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.10"
 authors = [{ name = "NeuroBrix" }]
-# numpy, triton and pyyaml (the dtype table is a YAML file) only. torch is never a dependency, not even an optional one:
+# numpy, triton, pyyaml (the dtype table is a YAML file) and, on Linux, the CUDA runtime. torch is never a dependency, not even an optional one:
 # nbxtensor never imports torch (R-NBXT 6). Exchange with any other tensor
 # library goes through DLPack, which the OTHER library imports.
-dependencies = ["numpy", "triton", "pyyaml"]
+# On Linux the CUDA runtime library its CUDA backend opens (libcudart.so.12), which the NVIDIA driver does not ship: a clean
+# machine with only the driver found no GPU runtime and the engine read the card as CPU-only (the stable's install test,
+# 2026-11-05). On a machine without an NVIDIA card it is a library nothing opens.
+dependencies = ["numpy", "triton", "pyyaml", "nvidia-cuda-runtime-cu12; platform_system == 'Linux'"]
 
 [project.urls]
 Homepage = "https://neurobrix.es"

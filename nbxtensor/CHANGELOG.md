@@ -77,6 +77,7 @@ memory; the fix is in test).
 - **The matrix product and the linear layer declare what they allocate** (`nbxtensor.ops.linalg_wrappers.mm_cost` / `addmm_cost`, beside `bmm_cost`): the casts, the decode rows' GEMV and the weight copy a row-major weight costs there, the bias made contiguous, the output at its store dtype, an epilogue's output; each equal to the allocator's measured peak on the device, over the dtypes, the decode and tiled row counts, both weight layouts and the bias forms.
 
 ### Fixed
+- **nbxtensor finds the NVIDIA card on a machine that has only the driver**: its CUDA backend opens the CUDA runtime library (`libcudart.so.12`), which the driver does not ship; on a clean Linux machine no GPU runtime was found and the card was read as a CPU. nbxtensor now depends on `nvidia-cuda-runtime-cu12` on Linux.
 - **The README's examples run in their own interpreter**: the suite ran them in its own process, and the settings
   example's `set_store(None)` reset the certified store every later test of that process read (a test of the live
   directory found it empty in the suite and green alone).

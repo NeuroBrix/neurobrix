@@ -2560,24 +2560,6 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None) -> dic
     devices = data.get("devices") or []
     if not devices:
         return {}
-    if engine is not None:
-        # the per-piece reload rate a streamed plan is priced with, per stored dtype of the cache that neither block
-        # states (the supervisor 2026-11-03 22:50): until now only a streamed run measured it, and Prism refused to plan one
-        # without it. The cache's smallest component stored so, reloaded in its own process (arena_probe.reloads).
-        from neurobrix.core.prism import arena_probe as A
-        from neurobrix.core.paths import cache_dir
-        held = (data.get("host_measured"), _vendor_block(devices[0], "host_measured"))
-        for name, st in _STORED.items():
-            if not any((((b or {}).get("weight_reload_gbps") or {}).get(engine) or {}).get(st) for b in held):
-                comps = [(sum(f.stat().st_size for f in c.rglob("*.safetensors")), str(c.parent.parent), c.name)
-                         for c in Path(cache_dir()).glob("*/components/*") if stored_major(c.parent.parent, c.name) == name]
-                comps = sorted(x for x in comps if LOADER_RATE_MIN_BYTES <= x[0] <= int(devices[0].get("memory_mb") or 0) << 20)
-                if comps:
-                    r = A.child(comps[0][1], comps[0][2], hardware_id, engine)
-                    print(f"   [Auto-detect] {engine} {st} reloads of {r['container']}:{r['component']}: "
-                          f"{[round(b / s / 1e9, 3) for b, s in r['draws']]} GB/s (written when three agree)")
-        data = yaml.safe_load(path.read_text()) or {}          # what the probe's process wrote
-        devices = data.get("devices") or []
     stamp = _time.strftime("%Y-%m-%d %H:%M:%S %Z")
     added: Dict[str, Any] = {}
     q = FIRST_LAUNCH
@@ -2602,6 +2584,35 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None) -> dic
         # the expandable pool's chunk on this machine's card (R16; 0: the device has no VMM, the pool keeps segments)
         first["vmm_chunk_bytes"] = int(P.vmm_chunk_bytes(0, q["vmm_reps"], q["vmm_ks"]) or 0)
         added["vmm_chunk_bytes"] = first["vmm_chunk_bytes"]
+    # the host's block over the vendor's, key by key (loader.load_profile): only what neither states is measured
+    if "host_matmul_gflops" not in {**(_vendor_block(devices[0], "host_measured") or {}), **(data.get("host_measured") or {})}:
+        data.setdefault("host_measured", {}).update({"source": f"measured {stamp} at the first launch on this machine (autodetect, quick)",
+                                 "host_matmul_gflops": round(P.host_matmul_gflops(q["host_gemm_n"])),
+                                 "host_memory_gbps": round(P.host_memory_gbps(q["host_copy_bytes"]))})
+        added["host_measured"] = ["host_matmul_gflops", "host_memory_gbps"]
+    # written BEFORE any child probe reads the profile: on a clean machine the first child refused the vmm_chunk_bytes
+    # measured above and not yet written (the stable's install test, 2026-11-05)
+    if added:
+        _write_first(path, data, devices, first)
+    if engine is not None:
+        # the per-piece reload rate a streamed plan is priced with, per stored dtype of the cache that neither block
+        # states (the supervisor 2026-11-03 22:50): until now only a streamed run measured it, and Prism refused to plan one
+        # without it. The cache's smallest component stored so, reloaded in its own process (arena_probe.reloads).
+        from neurobrix.core.prism import arena_probe as A
+        from neurobrix.core.paths import cache_dir
+        held = (data.get("host_measured"), _vendor_block(devices[0], "host_measured"))
+        for name, st in _STORED.items():
+            if not any((((b or {}).get("weight_reload_gbps") or {}).get(engine) or {}).get(st) for b in held):
+                comps = [(sum(f.stat().st_size for f in c.rglob("*.safetensors")), str(c.parent.parent), c.name)
+                         for c in Path(cache_dir()).glob("*/components/*") if stored_major(c.parent.parent, c.name) == name]
+                comps = sorted(x for x in comps if LOADER_RATE_MIN_BYTES <= x[0] <= int(devices[0].get("memory_mb") or 0) << 20)
+                if comps:
+                    r = A.child(comps[0][1], comps[0][2], hardware_id, engine)
+                    print(f"   [Auto-detect] {engine} {st} reloads of {r['container']}:{r['component']}: "
+                          f"{[round(b / s / 1e9, 3) for b, s in r['draws']]} GB/s (written when three agree)")
+        data = yaml.safe_load(path.read_text()) or {}          # what the probe's process wrote
+        devices = data.get("devices") or []
+        first = {**measured_of(devices[0]), **first}
     if engine == "triton" and "triton_arena_activation_factor" not in first:
         # the Triton arena's hold over a large walk, on a card its vendor file does not declare (the owner 2026-11-02
         # 15:01): measured by core/prism/arena_probe, written when three runs agree within the reload's steadiness
@@ -2624,21 +2635,18 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None) -> dic
                                                                    q["expert_copy_blocks"], q["expert_copy_warps"],
                                                                    q["expert_copy_experts"]).items() if k != "grid"}
         added["expert_copy"] = first["expert_copy"]
-    # the profile's block over the vendor's, key by key (loader.load_profile): only what neither states is measured
-    if "host_matmul_gflops" not in {**(_vendor_block(devices[0], "host_measured") or {}), **(data.get("host_measured") or {})}:
-        data.setdefault("host_measured", {}).update({"source": f"measured {stamp} at the first launch on this machine (autodetect, quick)",
-                                 "host_matmul_gflops": round(P.host_matmul_gflops(q["host_gemm_n"])),
-                                 "host_memory_gbps": round(P.host_memory_gbps(q["host_copy_bytes"]))})
-        added["host_measured"] = ["host_matmul_gflops", "host_memory_gbps"]
     if not added:
         return {}
-    same = devices[0].get("model")
-    for d in devices:                                 # the cards of the same model share what card 0 measured
-        if d.get("model") == same:
-            d["measured"] = dict(first)
-    _write_profile_atomically(path, data)
+    _write_first(path, data, devices, first)
     print(f"   [Auto-detect] measured on this machine and written into {path.name}: {added}")
     return added
+
+
+def _write_first(path, data, devices, first) -> None:
+    """The first launch's device facts onto every card of card 0's model (they share what card 0 measured), written."""
+    for d in (d for d in devices if d.get("model") == devices[0].get("model")):
+        d["measured"] = dict(first)
+    _write_profile_atomically(path, data)
 
 
 def _measure_arena_factor(hardware_id: str, device: dict) -> float:

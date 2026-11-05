@@ -101,19 +101,34 @@ def test_no_gpu_at_all_is_reported_but_is_not_a_torch_bug(monkeypatch):
     assert doctor.check_compute_environment() == []
 
 
-def test_missing_torch_is_reported(monkeypatch):
-    import builtins
-    real_import = builtins.__import__
+def test_missing_torch_is_no_problem_where_the_triton_engine_runs(monkeypatch, capsys):
+    """The Triton engine runs on nbxtensor without PyTorch: a clean `pip install neurobrix` has no torch, and doctor
+    said "PyTorch is not installed: pip install neurobrix" — a blocking problem and a command that installs no torch
+    (the stable's install test, 2026-11-05). Red if a missing torch is a problem while the Triton engine is ready."""
+    monkeypatch.setattr(doctor, "_torch_present", lambda: False)
+    monkeypatch.setattr(doctor, "_triton_engine", lambda: (True, "ready on cuda"))
+    monkeypatch.setattr(doctor, "_nvidia_smi_gpus", lambda: [("Tesla V100-SXM2-16GB", "7.0")])
+    assert doctor.check_compute_environment() == []
+    out = capsys.readouterr().out
+    assert "Triton engine:  ready on cuda" in out and "PyTorch engine: not installed" in out and "neurobrix[pytorch]" in out
 
-    def no_torch(name, *args, **kwargs):
-        if name == "torch":
-            raise ImportError("No module named 'torch'")
-        return real_import(name, *args, **kwargs)
 
-    monkeypatch.setattr(builtins, "__import__", no_torch)
-    monkeypatch.delitem(__import__("sys").modules, "torch", raising=False)
+def test_no_engine_that_can_run_is_a_blocking_problem(monkeypatch):
+    monkeypatch.setattr(doctor, "_torch_present", lambda: False)
+    monkeypatch.setattr(doctor, "_triton_engine", lambda: (False, "no GPU runtime"))
+    monkeypatch.setattr(doctor, "_nvidia_smi_gpus", lambda: [])
     problems = doctor.check_compute_environment()
-    assert problems and "PyTorch is not installed" in problems[0]
+    assert len(problems) == 1 and "Neither engine can run" in problems[0] and "no GPU runtime" in problems[0]
+
+
+def test_a_gpu_without_its_runtime_library_is_named(monkeypatch):
+    """The driver sees a card but nbxtensor opens no CUDA runtime: on a clean machine the engine read the card as
+    CPU-only and told the user to build triton-cpu (2026-11-05)."""
+    import nbxtensor.backend.runtime as RT
+    monkeypatch.setattr(RT, "gpu_backend", lambda: (_ for _ in ()).throw(RuntimeError("No GPU runtime found")))
+    monkeypatch.setattr(doctor, "_nvidia_smi_gpus", lambda: [("Tesla V100-SXM2-16GB", "7.0")])
+    ready, says = doctor._triton_engine()
+    assert not ready and "the driver sees a GPU" in says and "No GPU runtime found" in says
 
 
 def test_volta_is_sent_to_the_served_stack():

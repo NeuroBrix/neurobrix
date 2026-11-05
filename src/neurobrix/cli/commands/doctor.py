@@ -1,24 +1,7 @@
-"""`neurobrix doctor` — diagnose an installation before it wastes the user's time.
-
-Until 2026-09-03 this command checked only whether the `neurobrix` script
-was on PATH, and printed "No action needed" whenever it was. On a machine
-with a GPU the engine cannot use, that is a false all-clear: the user is
-told everything is fine, then meets an obscure failure on their first real
-run and leaves. A diagnostic that cannot see the most common installation
-fault is worse than no diagnostic.
-
-The most common fault is not exotic. `pip install neurobrix` resolves
-`torch` from the default index, which ships whatever CUDA build is current
-— today that is CUDA 13, which requires a recent driver and **dropped
-Volta (sm_70) entirely**. A user on a V100, or on any machine whose driver
-predates the wheel's CUDA version, ends up with a torch that reports no
-GPU at all. Nothing in the installation says so.
-
-So this command answers three questions in the user's own terms: is the
-engine installed, can it see your GPU, and if not, exactly which command
-fixes it. It exits non-zero when it finds something that will block a real
-run, so it is usable in a script.
-"""
+"""`neurobrix doctor` — diagnose an installation before it wastes the user's time: is the engine installed, can each of
+its two engines (Triton on nbxtensor; PyTorch, optional) see the GPU, and if not, exactly which command fixes it. A false
+all-clear is the fault it exists to prevent (until 2026-09-03 it checked PATH only, on machines whose torch build could
+not see the card); it exits non-zero when nothing can run, so it is usable in a script."""
 
 from __future__ import annotations
 
@@ -27,12 +10,8 @@ import subprocess
 
 
 def _nvidia_smi_gpus() -> list[tuple[str, str]]:
-    """(name, compute capability) per physical GPU, straight from the driver.
-
-    Asked independently of torch on purpose: when torch reports no CUDA, the
-    whole question is whether a GPU is physically present, and torch cannot
-    answer that once it has given up.
-    """
+    """(name, compute capability) per physical GPU, straight from the driver — asked of neither engine: when one sees
+    no CUDA, the question is whether a GPU is physically present."""
     if not shutil.which("nvidia-smi"):
         return []
     try:
@@ -63,8 +42,7 @@ def _driver_version() -> str | None:
 
 
 def _torch_wheels() -> dict:
-    """The wheel table, `config/torch_wheels.yml`: one measured build per
-    architecture, each with its source. Read every time — doctor runs once."""
+    """The wheel table, `config/torch_wheels.yml`: one measured build per architecture, each with its source."""
     import yaml
     from neurobrix.core.config.loader import CONFIG_ROOT
     with open(CONFIG_ROOT / "torch_wheels.yml") as f:
@@ -72,13 +50,8 @@ def _torch_wheels() -> dict:
 
 
 def _torch_install_hint(cap: str | None) -> str:
-    """The command that fixes a mismatched torch on this GPU, read from the
-    wheel table by the GPU's architecture.
-
-    An architecture the table does not list has no measured build, and the
-    hint says so and sends the user to PyTorch's selector instead of naming
-    a build nobody ran on it.
-    """
+    """The command that installs the torch build measured on this GPU's architecture (the wheel table); an
+    architecture the table does not list is sent to PyTorch's selector, never given a build nobody ran on it."""
     from neurobrix.core.prism.autodetect import _nvidia_cc_to_arch
     table = _torch_wheels()
     index_url = table["index_url"]
@@ -101,30 +74,54 @@ def _cpu_install_hint() -> str:
             f"{table['index_url']}{table['cpu_only']['build']}")
 
 
+def _triton_engine() -> tuple[bool, str]:
+    """(ready, what to say) for the Triton engine (`--triton`): nbxtensor and Triton import, and nbxtensor finds a GPU
+    runtime. Torch-free: PyTorch is not this engine's dependency, and its absence is not this engine's fault."""
+    try:
+        import nbxtensor  # noqa: F401
+        import triton
+    except ImportError as exc:
+        return False, f"not installed ({exc}): pip install neurobrix"
+    try:
+        from nbxtensor.backend.runtime import gpu_backend
+        return True, f"ready on {gpu_backend()} (nbxtensor {nbxtensor.__version__}, Triton {triton.__version__})"
+    except RuntimeError as exc:
+        if _nvidia_smi_gpus():
+            return False, (f"the driver sees a GPU but nbxtensor found no GPU runtime ({exc}); the CUDA runtime library "
+                           f"comes with nbxtensor on Linux: pip install --force-reinstall nbxtensor")
+        return False, f"no GPU ({exc}); on a CPU --triton needs the upstream triton-cpu package"
+
+
+def _torch_present() -> bool:
+    """Whether PyTorch is installed, asked without importing it (the Triton engine's environment has none)."""
+    import importlib.util
+    import sys
+    return "torch" in sys.modules or importlib.util.find_spec("torch") is not None
+
+
 def check_compute_environment() -> list[str]:
-    """Return a list of blocking problems, printing the diagnosis as it goes."""
+    """Return a list of blocking problems, printing the diagnosis as it goes. Two engines: the Triton engine
+    (`--triton`, nbxtensor, no PyTorch) and the PyTorch engine (the default, `neurobrix[pytorch]`). A machine where
+    one of them can run has no blocking problem; the other is said, with how to add it."""
     problems: list[str] = []
     print("Compute environment")
     print("-" * 60)
+    triton_ready, triton_says = _triton_engine()
+    print(f"  Triton engine:  {triton_says}")
 
-    try:
-        import torch
-    except ImportError as exc:
-        print(f"  PyTorch:        NOT INSTALLED ({exc})")
-        problems.append("PyTorch is not installed: pip install neurobrix")
+    if not _torch_present():
+        print("  PyTorch engine: not installed (optional; the Triton engine runs without it: --triton). To add it: "
+              f"{_torch_install_hint(_nvidia_smi_gpus()[0][1] if _nvidia_smi_gpus() else None)}, then "
+              "pip install 'neurobrix[pytorch]'")
+        if not triton_ready:
+            problems.append(f"Neither engine can run: the Triton engine is {triton_says}; PyTorch is not installed")
         return problems
+    import torch
 
     cuda_build = getattr(torch.version, "cuda", None)
     hip_build = getattr(torch.version, "hip", None)
     print(f"  PyTorch:        {torch.__version__}")
     print(f"  built for:      {'ROCm ' + hip_build if hip_build else 'CUDA ' + str(cuda_build)}")
-
-    try:
-        import triton
-        print(f"  Triton:         {triton.__version__}  (--triton mode available)")
-    except ImportError:
-        print("  Triton:         not installed  (--triton mode unavailable; "
-              "the default compiled engine still works)")
 
     gpus = _nvidia_smi_gpus()
     driver = _driver_version()
@@ -157,13 +154,8 @@ def check_compute_environment() -> list[str]:
               "CPU profile and")
         print("    small models run without any configuration.")
         if cuda_build:
-            # Not a problem — it runs — but worth saying, because the CUDA
-            # wheels are ~5 GB on a machine that will never use them, and the
-            # smallest models in the catalogue are 59-376 MB. A pip EXTRA
-            # cannot fix this: PEP 508 dependency specifiers carry no index
-            # URL, so `neurobrix[cpu]` could not pull the CPU wheel. The
-            # recipe is the only honest answer, so print it here where it is
-            # actually diagnosed.
+            # not a problem, but several GB of CUDA wheels nothing uses; an extra cannot pull the CPU wheel (PEP 508
+            # carries no index URL), so the recipe is printed where it is diagnosed
             print()
             print("    Note: PyTorch is installed with CUDA support "
                   f"(CUDA {cuda_build}) on a machine with no")

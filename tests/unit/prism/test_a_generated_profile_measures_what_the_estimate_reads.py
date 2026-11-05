@@ -188,3 +188,28 @@ def test_the_reload_counts_an_nbxtensor_s_bytes():
     from nbxtensor.dtype.nbx_dtype import parse_dtype
     ex = type("E", (), {"_weights": {"w": NBXTensor.zeros((4, 8), parse_dtype("float32"), "cpu"), "none": None}})()
     assert LS._weights_bytes(ex) == 4 * 8 * 4
+
+
+def test_a_probe_in_a_child_reads_the_facts_measured_before_it(hw, monkeypatch, tmp_path):
+    """A child probe (the reload rate, the arena factor) reads the profile from disk, and the engine it starts refuses by
+    name a fact the profile lacks: on a clean machine (the stable's install test, 2026-11-05) the first child's Triton
+    pool refused the vmm_chunk_bytes measured in the parent and not yet written. Red if a child is started before the
+    in-process facts are on disk."""
+    from neurobrix.core.prism import arena_probe as AP
+    from neurobrix.core import paths
+    cache = tmp_path / "cache"
+    comp = cache / "M" / "components" / "c"
+    comp.mkdir(parents=True)
+    (comp / "w.safetensors").write_bytes(b"\0" * (A.LOADER_RATE_MIN_BYTES + 1))
+    monkeypatch.setattr(paths, "cache_dir", lambda: cache)
+    monkeypatch.setattr(A, "stored_major", lambda root, name: next(iter(A._STORED)))
+    monkeypatch.setattr(P, "gemv_gbps", lambda *a, **k: 100.0)
+    seen = []
+
+    def child(root, component, hardware_id, engine):
+        seen.append(yaml.safe_load((hw / f"{hardware_id}.yml").read_text())["devices"][0].get("measured", {}))
+        return {"container": "M", "component": "c", "draws": [(1, 1.0)]}
+    monkeypatch.setattr(AP, "child", child)
+    _profile(hw, "default-abc", {**DEV, "memory_mb": 16384})
+    A.ensure_measured_facts("default-abc", "compiled")
+    assert seen and all(m.get("vmm_chunk_bytes") == 2 << 20 for m in seen), seen
