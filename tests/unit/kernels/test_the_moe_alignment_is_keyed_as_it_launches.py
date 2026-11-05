@@ -60,7 +60,10 @@ def test_every_stage_is_its_key(monkeypatch, tokens, top_k, experts):
     _bind_hardware_profile()
     want = LK.moe_align_launches(tokens, top_k, experts, NBXDtype.float16)
     blocks = sorted({k[0] for q, k in want if q != LK.MOE_ALIGN[2]})
-    assert _BLOCK_SIZE_M in blocks and len(blocks) > 1, blocks        # the V100 profile declares the unit
+    from nbxtensor.ops._configs import matrix_unit
+    # the unit tile's rows join the FMA block only where the device declares a unit (the V100; not Apple's GPUs: the
+    # test asserted the V100's two blocks everywhere and was red on the M4 Pro from f1292590, the Mac's RUN 41a)
+    assert _BLOCK_SIZE_M in blocks and (len(blocks) > 1) == bool(matrix_unit()), blocks
     for bs in blocks:                     # the FMA block and every unit tile's rows the census names
         seen = _record(monkeypatch)
         moe_align_block_size(_ids(tokens * top_k, experts), bs, experts, DeviceAllocator.get_device())
