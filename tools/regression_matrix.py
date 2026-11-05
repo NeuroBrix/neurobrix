@@ -636,6 +636,27 @@ def cell_argv(model: str, mode: str, art, req: list = None) -> list:
     return ["run", "--model", model, *req, *MODES[mode], *hw, "--certified-only", "--output", str(art)]
 
 
+def keep_superseded(d: Path, mode: str) -> list:
+    """A cell run again (`--rerun`, a retry) keeps the files of the run it replaces: its log and artefact move to
+    `<model>/superseded/<their UTC time>/`, never overwritten — the row it supersedes is kept (2026-09-27 02:57) and
+    cites them. The final gate's Wan2.2-I2V native 32g (2026-11-04) took another plan under host contention, and its
+    rerun alone overwrote the log that held why. Returns the kept paths."""
+    olds = [f for f in sorted(d.glob(f"{mode}.*")) if f.is_file()]
+    if not olds:
+        return []
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(max(f.stat().st_mtime for f in olds)))
+    dest = d / "superseded" / stamp
+    dest.mkdir(parents=True, exist_ok=True)
+    kept = []
+    for f in olds:
+        target = dest / f.name
+        if target.exists():
+            raise FileExistsError(f"the superseded {f.name} of {d.name} would overwrite {target} — two runs, one second")
+        f.rename(target)
+        kept.append(str(target))
+    return kept
+
+
 def _run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Path) -> dict:
     family = Z.family_of(model)
     req = cell_request(model)
@@ -645,8 +666,7 @@ def _run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Pat
     d.mkdir(parents=True, exist_ok=True)
     art = d / f"{mode}{ext}"
     log = d / f"{mode}.log"
-    if art.exists():
-        art.unlink()
+    kept = keep_superseded(d, mode)
     env = {**os.environ, "CUDA_VISIBLE_DEVICES": str(gpu), "PYTHONPATH": str(src),
            "NEUROBRIX_REPLAY_CACHE": str(out / f"replay_card{gpu}"), "PYTHONNOUSERSITE": "1"}
     # The cell runs under the interpreter the matrix was launched with (the pinned engine
@@ -677,6 +697,8 @@ def _run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Pat
            "first_missing_key": missing_key_text(misses[0]) if misses else None,
            # the run's own [Timings] line: load, time to first output, per-token, tok/s
            **timings_of(log)}
+    if kept:
+        row["superseded_files"] = kept
     if art.exists() and rc == 0:
         row.update(artefact=str(art), sha256=sha256(art), bytes=art.stat().st_size,
                    mechanical=mechanical(art, family, size))
