@@ -216,8 +216,24 @@ class TritonAttentionInterceptor:
         decode. R33-pure: an NBXTensor narrow (a view)."""
         if self._is_prefill or self._position_offset <= 0 or end is None:
             return table.narrow(int(dim), int(start), int(end - start) if end is not None else table.shape[int(dim)] - int(start))
+        pos = self._device_positions(int(start), int(end))
+        if pos is not None:         # the rows gathered at the device's own length: a replayed step reads the live one
+            from nbxtensor.ops import index_wrappers as _iw
+            return _iw.index_select_wrapper(table, int(dim), pos)
         cache_len = self._position_offset
         return table.narrow(int(dim), cache_len + int(start), int(end - start))
+
+    def _device_positions(self, start: int, end: int):
+        """[len + start, len + end) on the device, `len` the cache's device length of its first layer (before this step
+        appends), or None without one: a launch reads the position instead of baking it, so a replayed step is exact."""
+        lens = getattr(self.cache, "lens", None)
+        if not lens or lens[0] is None or getattr(self.cache, "batch", 1) != 1:
+            return None
+        from nbxtensor.ops.dispatch import dispatch
+        from nbxtensor.ops import elementwise_wrappers as _ew
+        from nbxtensor.dtype.nbx_dtype import NBXDtype
+        ar = dispatch("arange")(start, end, dtype=NBXDtype.int64)
+        return _ew.add(ar, lens[0].to(NBXDtype.int64))
 
     def intercept_position_cumsum(self, x, dim=0, dtype=None):
         """Mirror of core kv_cache_wrapper.intercept_position_cumsum: the positions a decoder counts
@@ -229,6 +245,9 @@ class TritonAttentionInterceptor:
         out = _nbx_reduction_wrappers.cumsum_wrapper(x, int(dim), dtype)
         if self._is_prefill or self._position_offset <= 0:
             return out
+        lens = getattr(self.cache, "lens", None)
+        if lens and lens[0] is not None and getattr(self.cache, "batch", 1) == 1:
+            return _nbx_elementwise_wrappers.add(out, lens[0].to(out.dtype))   # the device length, read by the launch
         return _nbx_elementwise_wrappers.add(out, self._position_offset)
 
     def intercept_arange(self, *args, **kwargs):
@@ -252,6 +271,12 @@ class TritonAttentionInterceptor:
         if self._is_prefill:
             return _create_arange(*args, **kwargs)
         cache_len = self._position_offset
+        if (cache_len > 0 and args and all(isinstance(a, int) for a in args[:2])
+                and len(args) <= 2 and not kwargs.get("step")):
+            pos = self._device_positions(0, args[0]) if len(args) == 1 else self._device_positions(args[0], args[1])
+            if pos is not None:
+                dt = kwargs.get("dtype")
+                return pos if dt is None or dt == pos.dtype else pos.to(dt)
         if cache_len > 0 and args and isinstance(args[0], (int, float)):
             # arange(end)        → [cache_len, cache_len+end)
             # arange(start, end) → [cache_len+start, cache_len+end)
@@ -288,18 +313,18 @@ class TritonAttentionInterceptor:
 
         Eligible = decode mode, B3 bucketed path active, every layer on
         the constant-tuple append kernel (batch 1, device counter and
-        mask live). The arange interceptor (position_ids-less models)
-        bakes a per-step position scalar into its launch tuple — a
-        recorded step would replay stale positions forever, so its
-        registration refuses the whole sequence (that model class needs
-        the device-side arange increment first, a named extension)."""
+        mask live). The position interceptors (arange, table slice, count) read the cache's device length
+        (`_device_positions`), so a replayed step is at its true position; a cache without a device length bakes the
+        host scalar and refuses (whisper-large's decoder: its table slice baked one step's rows, the plan was rejected at
+        verify; read on the device it replays, 216 -> 57 ms a token on a V100, the same transcript, 2026-11-06)."""
         import os
-        for f in registered_funcs:
-            if getattr(f, "__func__", None) is \
-                    TritonAttentionInterceptor.intercept_arange:
-                return None
+        position_funcs = (TritonAttentionInterceptor.intercept_arange, TritonAttentionInterceptor.intercept_position_slice,
+                          TritonAttentionInterceptor.intercept_position_cumsum)
         if self._is_prefill:
             return None
+        if any(getattr(f, "__func__", None) in position_funcs for f in registered_funcs) and \
+                self._device_positions(0, 1) is None:
+            return None       # positions only on the host: a recorded step would bake one
         return self.cache.replay_key(int(os.environ.get("NBX_KV_BUCKET", "256")))
 
     def skip_positions(self, n: int) -> None:

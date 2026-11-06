@@ -3334,15 +3334,8 @@ class TritonSequence(SequenceSteps):
             # normal paths untouched. Contract + design: scoping doc
             # "Phase 4a".
             _parked = self.__dict__.pop("_deferred_weight_bind", None)
-            _inv = getattr(self, "_invariant", None)
-            if _replay.ENABLED and _inv is not None:
-                # A recorded plan replays raw pointers; the kept invariant state is refilled from new tensors at every
-                # request, which a frozen plan cannot see. Declined by name, once — the normal path runs.
-                if not getattr(self, "_inv_replay_noted", False):
-                    self._inv_replay_noted = True
-                    print(f"[Replay] declined for {self.dag.get('component_name')}: it keeps an invariant state "
-                          f"(state engine step 4), which a frozen launch plan cannot refill", flush=True)
-            elif _replay.ENABLED and getattr(self, "_deferred_at", None):
+            _inv = getattr(self, "_invariant", None)    # a kept one enters the replay's signature by address (`replay.signature`)
+            if _replay.ENABLED and getattr(self, "_deferred_at", None):
                 pass        # a parked input binds at its first reader; a frozen plan launches with every input bound
             elif (_replay.ENABLED
                   and getattr(self, "_expert_store", None) is not None and self._is_multi_device
@@ -3822,31 +3815,6 @@ class TritonSequence(SequenceSteps):
         _gc_env = os.environ.get("NBX_FORCE_GC", "0")
         _gc_int = int(_gc_env) if _gc_env != "0" else 0
 
-        # ===== TEMP PROFILING INSTRUMENTATION =====
-        import time as _time
-        _PROF = os.environ.get("NBX_TRITON_PROF") == "1"
-        if _PROF:
-            _MATMUL = {"aten::mm", "aten::bmm", "aten::addmm"}
-            _SDPA = {"aten::scaled_dot_product_attention"}
-            _META = {"aten::view", "aten::reshape", "aten::_unsafe_view",
-                     "aten::transpose", "aten::t", "aten::permute",
-                     "aten::unsqueeze", "aten::expand", "aten::contiguous",
-                     "aten::slice", "aten::select", "aten::cat", "aten::split",
-                     "aten::unbind", "aten::narrow", "aten::flatten",
-                     "aten::squeeze"}
-            _EMBED = {"aten::embedding", "aten::index"}
-            _timings = {"matmul": 0.0, "sdpa": 0.0, "elem": 0.0,
-                        "meta": 0.0, "embed": 0.0, "other": 0.0}
-            _counts = {"matmul": 0, "sdpa": 0, "elem": 0,
-                       "meta": 0, "embed": 0, "other": 0}
-            # Per-op_type breakdown inside the `elem` bucket — lets us rank
-            # fusion targets ("what dominates element-wise time?").
-            _elem_timings: Dict[str, float] = {}
-            _elem_counts: Dict[str, int] = {}
-            if not hasattr(self, "_prof_call_idx"):
-                self._prof_call_idx = 0
-            self._prof_call_idx += 1
-        # ===========================================
 
         import os as _os_vd
         _vdump = int(_os_vd.environ.get("NBX_VALUE_DUMP_EVERY", "0") or "0")
@@ -3890,9 +3858,6 @@ class TritonSequence(SequenceSteps):
                     old = None  # noqa: F841
                     continue
             else:
-                if _PROF:
-                    DeviceAllocator.sync_device()
-                    _t0 = _time.perf_counter()
                 # Periodic live tracking — every NBX_LIVE_DUMP_EVERY ops,
                 # log the NBX live_tracked counter so we can scrub a log to
                 # find when leakage begins. Cheap: just a counter read.
@@ -4291,26 +4256,6 @@ class TritonSequence(SequenceSteps):
                         next((tuple(getattr(a, "_shape", ())) for a in args
                               if isinstance(a, NBXTensor)), None))
                     raise RuntimeError(_msg) from e
-                if _PROF:
-                    DeviceAllocator.sync_device()
-                    _dt = _time.perf_counter() - _t0
-                    if op.op_type in _MATMUL:
-                        _cat = "matmul"
-                    elif op.op_type in _SDPA:
-                        _cat = "sdpa"
-                    elif op.op_type in _META:
-                        _cat = "meta"
-                    elif op.op_type in _EMBED:
-                        _cat = "embed"
-                    elif "::" in op.op_type:
-                        _cat = "elem"
-                    else:
-                        _cat = "other"
-                    _timings[_cat] += _dt
-                    _counts[_cat] += 1
-                    if _cat == "elem":
-                        _elem_timings[op.op_type] = _elem_timings.get(op.op_type, 0.0) + _dt
-                        _elem_counts[op.op_type] = _elem_counts.get(op.op_type, 0) + 1
             # Defer old slot tensors before overwriting — cudaFree is
             # synchronous so immediate release while a kernel may still
             # be reading the memory would UAF. The deferred list is
@@ -4517,31 +4462,6 @@ class TritonSequence(SequenceSteps):
                   f"({_drain_stats[1]} cliff/count, {_drain_stats[2]} pressure)",
                   flush=True)
 
-        # ===== TEMP PROFILING REPORT =====
-        if _PROF:
-            _total = sum(_timings.values())
-            print(f"\n[NBX_TRITON_PROF] call #{self._prof_call_idx} "
-                  f"(skip_kills={skip_kills})")
-            for _cat in ["matmul", "sdpa", "meta", "elem", "embed", "other"]:
-                _pct = 100 * _timings[_cat] / _total if _total > 0 else 0
-                _avg = (1000 * _timings[_cat] / _counts[_cat]
-                        if _counts[_cat] > 0 else 0)
-                print(f"  {_cat:8s}: {_timings[_cat]*1000:8.1f}ms  "
-                      f"({_counts[_cat]:4d} ops, {_avg:.3f}ms/op, "
-                      f"{_pct:5.1f}%)")
-            print(f"  TOTAL:    {_total*1000:.1f}ms")
-            if _elem_timings:
-                _elem_total = sum(_elem_timings.values())
-                _sorted = sorted(_elem_timings.items(), key=lambda kv: kv[1], reverse=True)
-                print(f"  [elem breakdown — {len(_sorted)} distinct op_types, "
-                      f"{sum(_elem_counts.values())} total ops]")
-                for _op_type, _ms in _sorted[:20]:
-                    _n = _elem_counts[_op_type]
-                    _p = 100 * _ms / _elem_total if _elem_total > 0 else 0
-                    _avg = 1000 * _ms / _n if _n > 0 else 0
-                    print(f"    {_op_type:40s} {_ms*1000:7.2f}ms  "
-                          f"({_n:4d} ops, {_avg:.3f}ms/op, {_p:5.1f}% of elem)")
-        # ==================================
 
     def _run_multi_device(self, skip_kills: bool = False,
                             pre_op_callback: Optional[Callable[[int, 'CompiledOp'], None]] = None):

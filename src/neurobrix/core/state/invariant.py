@@ -94,6 +94,18 @@ class InvariantState:
         self._kept_live = {s: (v, self._address(v)) for s, v in zip(self.input_slots, input_values)}
         self.evaluations += 1
 
+    def replay_identity(self, arena) -> Optional[tuple]:
+        """The addresses of the kept frontier and of its inputs when the next run reuses it on the fast path, else None:
+        a replayed plan reads the frontier by address, valid exactly while this identity holds."""
+        if self._kept_frontier is None or self._kept_live is None:
+            return None
+        for s in self.input_slots:
+            v = arena[s]
+            if v is None or v is not self._kept_live[s][0] or self._address(v) != self._kept_live[s][1]:
+                return None
+        return (tuple(self._address(self._kept_frontier[s]) for s in self.frontier_slots),
+                tuple(self._kept_live[s][1] for s in self.input_slots))
+
     def release(self) -> None:
         """Drop the kept state (the end of a request, or a miss)."""
         self._kept_inputs = self._kept_frontier = self._pending = self._kept_live = None

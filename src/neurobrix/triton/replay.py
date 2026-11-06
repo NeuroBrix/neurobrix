@@ -927,6 +927,13 @@ def signature(seq) -> Optional[tuple]:
             contrib.append(s)
             owners.append(owner)
     seq.__dict__["_replay_state_owners"] = owners
+    # a kept invariant state (state engine step 4) enters the bucket by its addresses; a run evaluating it is not replayed
+    inv = getattr(seq, "_invariant", None)
+    if inv is not None:
+        ident = inv.replay_identity(seq._arena)
+        if ident is None:
+            return _decline(seq, "its invariant state is evaluated at this run (kept for the next)")
+        contrib.append(("invariant",) + ident)
     # v1 eligibility: in-graph RNG ops draw fresh values per step from
     # host-advanced generator state baked into launch scalars — a
     # recorded draw would replay ONE step's noise forever (battery
