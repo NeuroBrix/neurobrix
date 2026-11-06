@@ -141,6 +141,19 @@ _GPU_BACKENDS = {
 }
 
 
+#: the GPU vendor whose card each runtime-library backend drives (PCI vendor names, `backend.install_help`)
+_BACKEND_VENDOR = {"cuda": "nvidia", "hip": "amd"}
+
+
+def _on_this_machine(backends):
+    """The runtime-library backends whose vendor has a card on this machine's PCI bus, in table order — all of them
+    where the bus cannot be read (no sysfs). A runtime library loads without its card: the CUDA runtime wheel nbxtensor
+    depends on on Linux loaded on an AMD or Intel machine, named "cuda", and HIP / Level Zero were never tried."""
+    from nbxtensor.backend.install_help import pci_gpus
+    vendors = {v for v, _vid, _dev in pci_gpus()}
+    return [(n, b) for n, b in backends if not vendors or _BACKEND_VENDOR[n] in vendors]
+
+
 #: the backends found by asking for a DEVICE rather than by loading a runtime library, in order: (name, the probe's
 #: dotted path). Their runtime tables are not rows of `_GPU_BACKENDS` (another API than one C ABI): `_NATIVE_TABLES`.
 _DEVICE_PROBES = (("metal", "nbxtensor.backend.metal_device.metal_device_available"),
@@ -314,7 +327,7 @@ def gpu_backend() -> str:
         return _pin_triton_backend(forced)
     # The backend TABLE decides: the first vendor runtime the process can
     # load names the backend — adding a backend is adding a table entry.
-    for name, backend in _GPU_BACKENDS.items():
+    for name, backend in _on_this_machine(_GPU_BACKENDS.items()):
         for lib in backend["rt_libs"]:
             try:
                 ctypes.cdll.LoadLibrary(lib)

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The backend is the one whose card is on the machine**: nbxtensor depends on the CUDA runtime wheel on Linux, and a runtime library loads without its card — on an AMD or Intel machine 0.0.2 named the CUDA backend and never tried HIP or Level Zero. Detection now tries only the runtime libraries of the GPU vendors present on the PCI bus (all of them where the bus cannot be read). The CUDA runtime wheel stays a Linux dependency: without an NVIDIA card it is not used.
+- **The package summary says where it runs**: wherever Triton runs — NVIDIA, AMD, Intel and Apple GPUs (it still named NVIDIA and Apple only).
+
 ## [0.0.2] - 2026-11-06
 
 ### Added
