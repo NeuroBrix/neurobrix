@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **A HIP launch driver for AMD GPUs** (`backend.launcher.HipDriver`, chosen when the runtime detects HIP): the HIP module API through the system's libamdhip64, the launch Triton's own AMD launcher performs (hsaco binaries, `hipModuleLaunchKernel`, the kernel's arguments then the scratch pointers), shared memory above the per-block default opted in with `hipFuncSetAttribute`, every missing library or symbol refused by name. It is proven against a fake HIP library only: no AMD card has run it yet.
+
 ## [0.0.1] - 2026-11-05
 
 The first release of nbxtensor: an inference-first tensor library whose kernels are written in Triton and which never
