@@ -2900,6 +2900,7 @@ class MemoryState   # One reading of the machine, at one instant.
 
 ```python
 class BackendSelectionRefused   # This seam refused to choose a Metal backend, and said why.
+class TritonMetalBindingMissingError   # Raised when Triton for Metal is installed but pyobjc's Metal binding, through which the device is opened, is
 class TritonMetalNotInstalledError   # Raised when `--triton` is invoked on an Apple GPU and no Metal Triton
 class TritonMetalShaderCompilerMissingError   # Raised when the Metal backend IS installed but Apple's offline shader
 def backend_compiler_class()   # The selected backend's Triton backend class — the object a driver patches.
@@ -2911,6 +2912,7 @@ def ensure_metal_toolchain_selected() -> None   # Work around Xcode 26/27's brok
 def ensure_triton_metal_or_raise() -> None   # Verify a Metal Triton backend is present before the triton path starts.
 def is_apple_silicon() -> bool   # True on an Apple-Silicon Mac.
 def is_backend_refusal(exc: BaseException) -> bool   # True when `exc` is a Metal backend saying it cannot compile this config —
+def metal_binding_available() -> bool   # pyobjc's Metal binding, through which the device is opened, is installed (asked without importing it).
 def metal_shader_compiler_available() -> bool   # True when Apple's offline shader compiler (`xcrun metal`) can be run.
 def metal_target()   # The Triton target for this machine, without activating a driver.
 def nbx_driver_module() -> str   # The library's launcher driver module implementing the SELECTED backend's
@@ -3071,6 +3073,18 @@ def diagnose(root=...) -> list    # per vendor found: what is missing (runtime l
 def report(root=...) -> str       # the diagnosis as text (python -m nbxtensor doctor prints it)
 def no_runtime_message(root=...) -> str   # the refusal when no runtime answers, with the steps for a GPU on the bus
 def main() -> int                 # python -m nbxtensor.backend.install_help
+```
+
+### `nbxtensor.backend.install_metal` — Triton for the Apple GPU (`python -m nbxtensor install-metal`)
+
+```python
+RELEASES                          # the only place the wheels come from: github.com/NeuroBrix/triton-ext's releases
+METAL_WHEELS                      # {CPython tag: ((release asset URL, sha256), ...)}, Triton first, then nbx-triton-apple
+class InstallMetalRefused         # not an Apple-silicon Mac, or a Python the table does not cover
+def wheels(version: str) -> list  # [(url, sha256)] this machine installs, or InstallMetalRefused
+def pip_command(requirements: str) -> list   # pip --no-deps --require-hashes --no-index -r <requirements>
+def requirements_text(entries) -> str        # one "<url> --hash=sha256:<sha>" line per wheel
+def main(version: str, dry_run: bool = False) -> int   # install (or print, --dry-run) the wheels; 1 on a refusal
 ```
 
 ### `nbxtensor.backend.runtime` — the backend in force

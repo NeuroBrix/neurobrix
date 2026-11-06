@@ -135,9 +135,11 @@ install commands when one is not.
 
 **From the NeuroBrix repository** (contributors): `pip install -e nbxtensor`.
 
-**macOS, Apple silicon (Metal).** PyPI publishes no Triton for macOS; nbxtensor's release carries it — Triton built
-with `TRITON_EXT_ENABLED=1` and the AppleGPU backend of [triton-ext](https://github.com/triton-lang/triton-ext) — and
-installs it, each wheel checked against the sha256 written in the library:
+**macOS, Apple silicon (Metal).** PyPI publishes no Triton for macOS. `install-metal` installs it from the releases of
+the project's fork of triton-ext, [NeuroBrix/triton-ext](https://github.com/NeuroBrix/triton-ext): Triton built with
+`TRITON_EXT_ENABLED=1`, and the AppleGPU backend (the `nbx-triton-apple` wheel) written by imperatormk
+([triton-lang/triton-ext#126](https://github.com/triton-lang/triton-ext/pull/126)); each wheel is checked against the
+sha256 written in the library:
 
 ```
 pip install nbxtensor

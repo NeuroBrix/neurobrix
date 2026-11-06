@@ -1,5 +1,6 @@
 """`python -m nbxtensor install-metal`: install Triton for the Apple GPU — the project's own wheels (Triton built with
-TRITON_EXT_ENABLED=1, and triton-ext's AppleGPU backend), downloaded from this version's GitHub release.
+TRITON_EXT_ENABLED=1, and triton-ext's AppleGPU backend as `nbx-triton-apple`), downloaded from the release of the
+project's fork, github.com/NeuroBrix/triton-ext. The AppleGPU backend is imperatormk's (triton-lang/triton-ext#126).
 
 PyPI publishes no Triton for macOS, so a Mac has no Triton after `pip install nbxtensor`. The wheels are fetched from
 the URLs written below, each checked against the sha256 written beside it (`pip --require-hashes`), with `--no-deps`:
@@ -16,11 +17,11 @@ import sys
 import tempfile
 from typing import List, Tuple
 
-#: where this version's release keeps its assets
-RELEASE = "https://github.com/NeuroBrix/nbxtensor/releases/download/v{version}/"
+#: the only place the wheels are fetched from: the releases of the project's fork of triton-ext
+RELEASES = "https://github.com/NeuroBrix/triton-ext/releases/download/"
 
-#: the Metal wheels per CPython tag: (wheel file name, sha256 of the file), Triton first. Filled from the wheels the Mac
-#: builds and the release carries; a tag absent here is refused by name.
+#: the Metal wheels per CPython tag: (URL of the release asset, sha256 of the file), Triton first. Filled from the
+#: release the fork publishes; a tag absent here is refused by name.
 METAL_WHEELS: dict = {}
 
 
@@ -44,8 +45,7 @@ def wheels(version: str) -> List[Tuple[str, str]]:
         raise InstallMetalRefused(
             f"nbxtensor {version} carries no Metal wheels for Python {sys.version_info.major}.{sys.version_info.minor} "
             f"({tag}); covered: {covered}.")
-    base = RELEASE.format(version=version)
-    return [(base + name, sha) for name, sha in METAL_WHEELS[tag]]
+    return list(METAL_WHEELS[tag])
 
 
 def pip_command(requirements: str) -> List[str]:

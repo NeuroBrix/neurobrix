@@ -91,9 +91,24 @@ def test_apple_with_backend_and_compiler_passes(monkeypatch):
     """
     monkeypatch.setattr(metal_backend, "is_apple_silicon", lambda: True)
     monkeypatch.setattr(metal_backend, "triton_metal_available", lambda: True)
+    monkeypatch.setattr(metal_backend, "metal_binding_available", lambda: True)
     monkeypatch.setattr(metal_backend, "metal_shader_compiler_available",
                         lambda: True)
     metal_backend.ensure_triton_metal_or_raise()   # must not raise
+
+
+# --- pyobjc's Metal binding --------------------------------------------------
+
+def test_triton_for_metal_without_the_metal_binding_refuses_by_name(monkeypatch):
+    """The Mac's clean venv (2026-11-07 00:51): Triton for Metal installed, pyobjc's Metal binding not — the device
+    could not be opened, the run fell to a CPU profile and was refused for triton-cpu, with not a word about Metal."""
+    monkeypatch.setattr(metal_backend, "is_apple_silicon", lambda: True)
+    monkeypatch.setattr(metal_backend, "triton_metal_available", lambda: True)
+    monkeypatch.setattr(metal_backend, "metal_binding_available", lambda: False)
+    monkeypatch.setattr(metal_backend, "metal_shader_compiler_available", lambda: True)
+    with pytest.raises(metal_backend.TritonMetalBindingMissingError, match="pip install pyobjc-framework-Metal"):
+        metal_backend.ensure_triton_metal_or_raise()
+    assert issubclass(metal_backend.TritonMetalBindingMissingError, metal_backend.TritonMetalNotInstalledError)
 
 
 # --- the offline shader compiler -------------------------------------------
@@ -107,6 +122,7 @@ def test_backend_installed_without_shader_compiler_refuses(monkeypatch):
     """
     monkeypatch.setattr(metal_backend, "is_apple_silicon", lambda: True)
     monkeypatch.setattr(metal_backend, "triton_metal_available", lambda: True)
+    monkeypatch.setattr(metal_backend, "metal_binding_available", lambda: True)
     monkeypatch.setattr(metal_backend, "metal_shader_compiler_available",
                         lambda: False)
 

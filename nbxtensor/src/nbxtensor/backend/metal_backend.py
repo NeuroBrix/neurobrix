@@ -139,6 +139,16 @@ class TritonMetalShaderCompilerMissingError(TritonMetalNotInstalledError):
     """
 
 
+class TritonMetalBindingMissingError(TritonMetalNotInstalledError):
+    """Raised when Triton for Metal is installed but pyobjc's Metal binding, through which the device is opened, is
+    not: the device cannot be opened, and the run would otherwise fall to a CPU profile."""
+
+
+def metal_binding_available() -> bool:
+    """pyobjc's Metal binding, through which the device is opened, is installed (asked without importing it)."""
+    return importlib.util.find_spec("Metal") is not None
+
+
 def is_apple_silicon() -> bool:
     """True on an Apple-Silicon Mac."""
     return platform.system() == "Darwin" and platform.machine() == "arm64"
@@ -584,6 +594,13 @@ def ensure_triton_metal_or_raise() -> None:
             "Alternative: the PyTorch engine (--compiled) runs on the Apple GPU "
             "through MPS (pip install torch \"neurobrix[pytorch]\")."
         )
+
+    if not metal_binding_available():
+        # the device is opened through pyobjc's Metal binding: without it the run found no device and fell to a CPU
+        # profile, refused there for triton-cpu with not a word about Metal (the Mac's clean venv, 2026-11-07 00:51)
+        raise TritonMetalBindingMissingError(
+            "The --triton engine opens the Apple GPU through pyobjc's Metal binding, and it is not installed:\n"
+            "    pip install pyobjc-framework-Metal")
 
     if not metal_shader_compiler_available():
         raise TritonMetalShaderCompilerMissingError(

@@ -1,5 +1,5 @@
-"""`python -m nbxtensor install-metal` installs Triton for the Apple GPU from this version's GitHub release, each wheel by
-the URL and sha256 written in the code, through pip with --no-deps --require-hashes --no-index — never an extra index,
+"""`python -m nbxtensor install-metal` installs Triton for the Apple GPU from the release of the project's fork
+(github.com/NeuroBrix/triton-ext), each wheel by the URL and sha256 written in the code, through pip with --no-deps --require-hashes --no-index — never an extra index,
 never a package name pip would resolve on PyPI (anyone can publish "triton-apple-backend" there: dependency
 confusion). Off an Apple-silicon Mac, or on a Python the table does not cover, it refuses by name. `python -m nbxtensor
 doctor` on a Mac without Triton names the command (the owner via the supervisor, 2026-11-07 00:45).
@@ -29,11 +29,13 @@ def test_the_table_is_the_published_one():
     assert M.METAL_WHEELS == EXPECTED_METAL_WHEELS
 
 
-def test_every_entry_is_a_release_url_with_a_sha256():
+def test_every_entry_is_a_release_url_of_the_fork_with_a_sha256():
     for tag, entries in M.METAL_WHEELS.items():
         assert re.fullmatch(r"cp3\d+", tag), tag
-        assert [n.split("-")[0] for n, _ in entries][0] == "triton", entries      # Triton first, then its backend
-        for name, sha in entries:
+        names = [url.rsplit("/", 1)[1] for url, _ in entries]
+        assert [n.split("-")[0] for n in names] == ["triton", "nbx_triton_apple"], names   # Triton first, then the backend
+        for (url, sha), name in zip(entries, names):
+            assert url.startswith(M.RELEASES) and url.count("/") == M.RELEASES.count("/") + 1, url
             assert re.fullmatch(r"[A-Za-z0-9_.]+-[^-]+-%s-%s-macosx_\d+_\d+_arm64\.whl" % (tag, tag), name), name
             assert re.fullmatch(r"[0-9a-f]{64}", sha), (name, sha)
 
@@ -59,8 +61,9 @@ def test_a_python_the_table_does_not_cover_is_refused_by_name(monkeypatch):
 def test_a_covered_python_installs_by_url_and_hash_only(monkeypatch):
     _mac(monkeypatch)
     tag = f"cp{sys.version_info.major}{sys.version_info.minor}"
-    t = f"triton-3.8.0-{tag}-{tag}-macosx_15_0_arm64.whl"
-    b = f"triton_apple_backend-0.1.0-{tag}-{tag}-macosx_15_0_arm64.whl"
+    base = M.RELEASES + "apple-v0.1.0+triton3.8.0/"
+    t = f"{base}triton-3.8.0-{tag}-{tag}-macosx_15_0_arm64.whl"
+    b = f"{base}nbx_triton_apple-0.1.0-{tag}-{tag}-macosx_15_0_arm64.whl"
     monkeypatch.setattr(M, "METAL_WHEELS", {tag: ((t, "a" * 64), (b, "b" * 64))})
     seen = {}
 
@@ -70,8 +73,7 @@ def test_a_covered_python_installs_by_url_and_hash_only(monkeypatch):
         return 0
     monkeypatch.setattr(M.subprocess, "call", call)
     assert M.main("0.0.4") == 0
-    base = "https://github.com/NeuroBrix/nbxtensor/releases/download/v0.0.4/"
-    assert seen["req"] == f"{base}{t} --hash=sha256:{'a' * 64}\n{base}{b} --hash=sha256:{'b' * 64}\n"
+    assert seen["req"] == f"{t} --hash=sha256:{'a' * 64}\n{b} --hash=sha256:{'b' * 64}\n"
     cmd = seen["cmd"]
     assert cmd[:4] == [sys.executable, "-m", "pip", "install"]
     assert {"--no-deps", "--require-hashes", "--no-index"} <= set(cmd), cmd
