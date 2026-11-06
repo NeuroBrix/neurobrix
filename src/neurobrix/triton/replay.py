@@ -56,11 +56,20 @@ from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.memory.slab import SlabAllocator, SlabInterceptor, StepSlab
 
 # THE ENGINE REPLAYS BY DEFAULT (the supervisor's order 2026-10-28 08:20, S3): a sequence that runs again with the same
-# signature is measured, recorded, VERIFIED byte-equal against the normal path, and only then replayed; every sequence it
-# cannot vouch for is refused BY NAME once (`_decline`) and keeps the normal path. No environment switch: what decides is
-# the sequence's own eligibility and the verification. Measured on the rack (V100, 2026-10-28): TinyLlama-1.1B triton 120
+# signature is measured, recorded, compared byte for byte against the normal path on one step, and only then replayed;
+# every sequence it cannot vouch for is refused BY NAME once (`_decline`) and keeps the normal path. No environment switch:
+# what decides is the sequence's own eligibility and that comparison. Measured on the rack (V100, 2026-10-28): TinyLlama-1.1B triton 120
 # tokens at a ~600-word prompt 96.6 -> 17.2 ms a token, Qwen3-30B-A3B on 4 cards 383 -> 278 ms, texts byte-identical.
 ENABLED = True
+
+# THE COMPARISON IS A DIVERGENCE GUARD, NOT A PROOF (the supervisor's decision 2026-11-06 21:30). The verify step replays
+# the plan, then runs the normal path on the same inputs and compares the graph outputs: it catches a plan that departs
+# from the normal path (it refused whisper-large's noinv plan and Qwen3-30B-A3B's expert tail). It CANNOT see an error both
+# passes share — a stale value both read, a wrong input both receive: on 2026-11-06 it matched 237 times on a wrong text.
+# Its line therefore says what it observed and no more; no report, register or gate cites it as proof that an output is
+# right — that proof is the entry point's run and its output looked at.
+PLAN_MATCHED_LINE = ("[Replay] plan matches the normal path on this step (not a proof of the output) "
+                     "({launches} launches) — replaying this bucket")
 
 # A RECORDED PLAN DOES NOT OUTLIVE ITS PROCESS: plans live on the sequence object (`seq.__dict__["_replay_plans"]`),
 # reused across the steps of one generation and discarded with the sequence (`retire_sequence_plans`). The only thing
@@ -862,7 +871,7 @@ def _input_slot_range(seq) -> range:
 def _output_hashes(seq) -> Dict[str, str]:
     """sha256 of every graph-output tensor's LOGICAL values (its shape, then its elements in order; D2H once — verify
     runs once per bucket per process). Hashed from the storage, a view's bytes matched a scrambled copy of them, and a
-    plan whose permuted output came back in the wrong order was VERIFIED (Allegro-TI2V's encoder, 2026-11-04)."""
+    plan whose permuted output came back in the wrong order matched (Allegro-TI2V's encoder, 2026-11-04)."""
     import ctypes
     import hashlib
     out: Dict[str, str] = {}
@@ -1255,14 +1264,16 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
                       f"host_len={got[1]}", flush=True)
         return True
     if isinstance(state, tuple) and state[0] == "VERIFY":
-        # verify-first-replay (universal guard, battery adjudication
+        # verify-first-replay (a divergence guard, battery adjudication
         # 2026-08-13: a vibevoice stage-handler bucket carried
         # per-step state none of the static guards see). Replay, hash
         # the graph outputs, then run the NORMAL path on the same
-        # inputs and compare: equal -> plan confirmed; different ->
-        # plan discarded loudly. Either way this run's results come
-        # from the NORMAL path (correct by construction). One doubled
-        # step per bucket per process.
+        # inputs and compare: equal -> the plan is kept (it matches the
+        # normal path on this step, nothing more: an error common to
+        # both passes is invisible here, see PLAN_MATCHED_LINE);
+        # different -> plan discarded loudly. Either way this step's
+        # results come from the NORMAL path. One doubled step per
+        # bucket per process.
         plan = state[1]
         # a tail's boundary slots (the head's outputs it reads) die inside the tail: kept here, put back for the normal
         # re-run below, which reads them as the replay did
@@ -1293,8 +1304,7 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
         normal = _output_hashes(seq)
         if replayed == normal:
             plans[sig] = plan
-            print(f"[Replay] plan VERIFIED byte-equal "
-                  f"({plan.launches} launches) — replaying this bucket")
+            print(PLAN_MATCHED_LINE.format(launches=plan.launches))
             _mem_diag("post-verify")
         else:
             plan.slab.retire()

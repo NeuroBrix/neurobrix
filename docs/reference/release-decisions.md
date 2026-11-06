@@ -262,3 +262,16 @@ twine check passed, read: no machine path, no personal name, no Forge); GitHub `
 `neurobrix/nbxtensor`, the export `081204ef`, tag `v0.0.2`, release with both files; the engine repository's GitLab
 release `nbxtensor-v0.0.2`. Checked on a clean `python:3.10-slim` container: `pip install nbxtensor==0.0.2` from PyPI
 (numpy, triton 3.8.0, no torch), `python -m nbxtensor doctor` ready on the card, the README's GPU example correct.
+
+## 2026-11-06 20:35 — NBXTENSOR 0.0.3 IS PUBLISHED (the owner's GO covers the 0.0.x series)
+
+Two defects of 0.0.2 read by the supervisor in its published metadata (18:25): nbxtensor depends on the CUDA runtime wheel
+on Linux and a runtime library loads without its card, so on an AMD or Intel machine 0.0.2 named the CUDA backend and
+never tried HIP or Level Zero; and the package summary still named NVIDIA and Apple only. Detection now tries only the
+runtime libraries of the GPU vendors present on the PCI bus (all of them where the bus cannot be read), and the summary
+says it runs wherever Triton runs — NVIDIA, AMD, Intel and Apple GPUs. Proofs on the version commit `cd3ee0367` (the
+engine's tag `nbxtensor-v0.0.3`): the card-less suite rc 0, the device suite 0 failed, the torch-free proof PASS.
+Published: PyPI `nbxtensor` 0.0.3 (sdist + wheel, twine check passed, content read clean); GitHub `NeuroBrix/nbxtensor`
+and GitLab `neurobrix/nbxtensor`, the export `425a9508`, tag `v0.0.3`, release with both files; the engine repository's
+GitLab release `nbxtensor-v0.0.3`. Checked on a clean `python:3.10-slim` container: `pip install nbxtensor==0.0.3` (no
+torch), `python -m nbxtensor doctor` ready on the card, the README's GPU example correct.

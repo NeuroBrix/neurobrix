@@ -39,5 +39,5 @@ echo "rc=$?"
 echo "== StepCache evidence:"
 grep -rh "StepCache" benchmarks/results/2026_08_15_unlock_cache*/server_*.log 2>/dev/null | sort | uniq -c
 echo "== Replay evidence:"
-grep -rh "plan frozen\|VERIFIED byte-equal\|UNREPLAYABLE" benchmarks/results/2026_08_15_unlock_replay/server_*.log 2>/dev/null | sort | uniq -c | head
+grep -rh "plan frozen\|plan matches the normal path\|UNREPLAYABLE" benchmarks/results/2026_08_15_unlock_replay/server_*.log 2>/dev/null | sort | uniq -c | head
 echo "CAMPAIGN DONE $(date -Is)"
