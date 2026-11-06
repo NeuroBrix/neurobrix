@@ -65,10 +65,13 @@ def test_nothing_outlives_an_mps_load_so_eager_takes_the_largest():
     assert _price("mps:0", "eager")["transient_bytes"] == _price("mps:0", "lazy")["transient_bytes"]
 
 
-def test_the_cuda_rule_is_unchanged():
-    # read whole + pinned at the plan's width, summed under eager (the caching host allocator).
-    te = 1600 * MB + 800 * MB
-    tr = 300 * MB + 300 * MB
+def test_the_cuda_rule_is_per_tensor_with_its_uploads_in_flight():
+    # Since 2026-10-10 the CUDA load is per tensor too, at most workers x (1 + 4 uploads in flight) tensors, each as read,
+    # converted and pinned, beside the file pages of the shards its workers hold open (2026-11-06: no longer the
+    # component read and pinned whole). te: the 10 largest (250, 200, 100, 7 x 50 = 900 MB) x 2 (fp32 read, a bf16
+    # conversion and its pinned copy) + 2 shards of 400 MB open; tr: 180 + 120 as read and pinned + its 300 MB shard.
+    te = 2 * 900 * MB + 800 * MB
+    tr = 2 * 300 * MB + 300 * MB
     assert _price("cuda:0")["transient_bytes"] == te + tr
 
 

@@ -165,10 +165,10 @@ def host_footprint(plan, key_sizes: Mapping[str, Mapping[str, int]],
                 pinned = stored_bytes * dtype_bytes[str(alloc.dtype)] // min(widths)
             return stored_bytes + pinned
         def _pins(name):
-            # The loader's own test (core/io/weight_loader.py `_load_weight_file`: `is_cuda`); a component held on
-            # the host loads to the host (zero3 / expert store), unpinned per tensor.
-            alloc = plan.components[name]
-            return str(alloc.device).startswith(("cuda", "hip")) and not any(map(_on_host, (alloc.shard_map or {}).values()))
+            # The loader's own test (core/io/weight_loader.py `_load_weight_file`: `is_cuda`).
+            if any(map(_on_host, (plan.components[name].shard_map or {}).values())):
+                return False                       # held on the host: loaded there unpinned (zero3 / expert store)
+            return str(plan.components[name].device).startswith(("cuda", "hip"))
         def _streams_through(name, loads, among=None):
             # `among`: the keys the loader reads (a unified store's file-backed experts are never read).
             keys = key_sizes.get(name) or {}
