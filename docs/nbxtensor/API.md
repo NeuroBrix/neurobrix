@@ -2792,6 +2792,7 @@ def read(path: Path) -> Optional[IndexedEntries]                 # None when abs
 
 ```python
 # serving a run
+def enabled() -> bool   # False under NBX_AUTOTUNE_CERTIFIED=off: every key sweeps at run time (the proof's runtime-sweep arm)
 def active_profile() -> Optional[Tuple[str, str]]   # (vendor, profile) in force, from the profile files themselves
 def certified_only() -> bool
     # a CONFIRMATION run (--certified-only, NBX_AUTOTUNE_CERTIFIED_ONLY=1): every key served from the directory or
