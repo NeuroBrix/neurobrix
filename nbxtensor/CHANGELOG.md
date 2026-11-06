@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.3] - 2026-11-06
+
 ### Fixed
 - **The backend is the one whose card is on the machine**: nbxtensor depends on the CUDA runtime wheel on Linux, and a runtime library loads without its card — on an AMD or Intel machine 0.0.2 named the CUDA backend and never tried HIP or Level Zero. Detection now tries only the runtime libraries of the GPU vendors present on the PCI bus (all of them where the bus cannot be read). The CUDA runtime wheel stays a Linux dependency: without an NVIDIA card it is not used.
 - **The package summary says where it runs**: wherever Triton runs — NVIDIA, AMD, Intel and Apple GPUs (it still named NVIDIA and Apple only).
@@ -141,6 +143,7 @@ memory; the fix is in test).
 - **`flash_decode_split_kernel` and its route**: armed only by an environment switch (`NBX_FLASH_DECODE`, with `NBX_FD_BLOCK_N` and `NBX_FD_SEG`) and measured slower than the vector decode kernels; `flash_decode.py` keeps the fixed-order reduce they share.
 - **`conv1d_forward_kernel`**: launched by no route (a 1-D convolution runs through `conv2d`).
 
-[Unreleased]: https://github.com/NeuroBrix/nbxtensor/compare/v0.0.2...HEAD
+[Unreleased]: https://github.com/NeuroBrix/nbxtensor/compare/v0.0.3...HEAD
+[0.0.3]: https://github.com/NeuroBrix/nbxtensor/compare/v0.0.2...v0.0.3
 [0.0.2]: https://github.com/NeuroBrix/nbxtensor/compare/v0.0.1...v0.0.2
 [0.0.1]: https://github.com/NeuroBrix/nbxtensor/releases/tag/v0.0.1
