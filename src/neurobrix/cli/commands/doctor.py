@@ -74,9 +74,8 @@ def _cpu_install_hint() -> str:
             f"{table['index_url']}{table['cpu_only']['build']}")
 
 
-#: what a Mac needs for the Triton engine: PyPI publishes no Triton for macOS, so `pip install` cannot bring it
-_MAC_TRITON = ("PyPI publishes no Triton for macOS: build Triton with TRITON_EXT_ENABLED=1 and triton-ext's AppleGPU "
-               "backend (https://github.com/NeuroBrix/nbxtensor#installation); the PyTorch engine runs on MPS without it")
+#: what a Mac needs for the Triton engine: PyPI publishes no Triton for macOS; nbxtensor's release carries it
+_MAC_TRITON = "Triton for Metal not installed — run: python -m nbxtensor install-metal"
 
 
 def _apple_silicon() -> bool:

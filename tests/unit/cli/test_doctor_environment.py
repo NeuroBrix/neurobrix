@@ -202,7 +202,7 @@ def test_on_a_mac_the_mps_gpu_is_seen_and_the_triton_engine_is_sent_to_its_sourc
     assert "GPU visible:    yes (Apple GPU, mps)" in out and "Apple MPS (Metal)" in out, out
     assert "GPU visible:    NO" not in out and "CUDA None" not in out, out
     assert "PCI bus" not in out and "Apple GPU (Metal)" in out, out
-    assert "PyPI publishes no Triton for macOS" in out and "pip install neurobrix" not in out, out
+    assert "run: python -m nbxtensor install-metal" in out and "pip install neurobrix" not in out, out
 
 
 def test_the_scripts_dir_is_the_running_interpreters_first(monkeypatch, tmp_path):
