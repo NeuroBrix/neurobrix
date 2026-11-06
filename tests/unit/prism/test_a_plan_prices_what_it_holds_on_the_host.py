@@ -37,8 +37,8 @@ def test_compiled_host_compute_holds_fp32_weights_and_activations():
 def test_compiled_zero3_holds_the_share_of_weights_on_host_shards():
     plan = _plan(lm=("cuda:0", "float16", {"s0": "cpu", "s1": "cpu", "s2": "cuda:0", "s3": "cuda:0"},
                      400 * MB, 50 * MB, 10 * MB))
-    f = H.host_footprint(plan, {"lm": {}}, {"lm": {f"s{i}": 100 * MB for i in range(4)}}, "compiled",
-                         None, DT, _block)
+    f = H.host_footprint(plan, {"lm": {f"w{i}": 100 * MB for i in range(4)}}, {"lm": {f"s{i}": 100 * MB for i in range(4)}},
+                         "compiled", None, DT, _block, load_workers=1, pinned_in_flight=1)
     assert f["steady"]["lm"] == 200 * MB
 
 
@@ -59,23 +59,27 @@ def test_triton_pins_only_block_weights_and_loads_a_tensor_at_a_time():
     assert f["transient_bytes"] == H.TRITON_COPIES_PER_TENSOR * 80 * MB
 
 
-def test_the_compiled_transient_is_the_component_as_read_and_as_pinned_whatever_the_workers():
-    # The caching host allocator keeps every pinned block, so the whole component is held once at its
-    # stored width and once at the plan's; the worker count paces the load and prices nothing.
-    plan = _plan(lm=("cuda:0", "float16", {}, 0, 0, 0), te=("cuda:0", "float32", {}, 0, 0, 0))
-    shards = {"lm": {f"s{i}": (i + 1) * MB for i in range(20)}, "te": {"s0": 50 * MB}}
+def test_a_compiled_whole_load_is_priced_per_tensor_and_a_host_held_component_unpinned():
+    # Every compiled load reads one tensor at a time per worker, at most `pinned_in_flight` uploads outstanding, and
+    # empties the pinned host cache when the component ends (core/io/weight_loader.py); a component HELD on the host
+    # loads there unpinned and is copied, one weight at a time, into one block registered once filled
+    # (core/strategies/pinned_block.py). What this does if the price were wrong: the whole component read and pinned
+    # (2 x its bytes: Qwen3-Coder-30B priced 115 GB of loading for 57.6 GB of weights, measured 62.5 GB peak) — red.
+    keys = {"lm": {f"w{i}": (i + 1) * MB for i in range(20)}}
+    shards = {"lm": {f"s{i}": 21 * MB for i in range(10)}}
     lm = sum(range(1, 21)) * MB
-    same = H.host_footprint(plan, {"lm": {}, "te": {}}, shards, "compiled", None, DT, _block,
-                            {"lm": {"float16"}, "te": {"float32"}})
-    assert same["transient_bytes"] == 2 * lm and same["steady_bytes"] == 0
-    wider = H.host_footprint(plan, {"lm": {}, "te": {}}, shards, "compiled", None, DT, _block,
-                             {"lm": {"float32"}, "te": {"float32"}})
-    assert wider["transient_bytes"] == lm + lm // 2
-    assert H.host_footprint(plan, {"lm": {}, "te": {}}, {"te": {"s0": 500 * MB}}, "compiled", None, DT, _block,
-                            {"te": {"bfloat16"}})["transient_bytes"] == 500 * MB + 1000 * MB
-    eager = _plan("eager", lm=("cuda:0", "float16", {}, 0, 0, 0), te=("cuda:0", "float32", {}, 0, 0, 0))
-    assert H.host_footprint(eager, {"lm": {}, "te": {}}, shards, "compiled", None, DT, _block,
-                            {"lm": {"float16"}, "te": {"float32"}})["transient_bytes"] == 2 * lm + 2 * 50 * MB
+    on_card = _plan(lm=("cuda:0", "float16", {}, 0, 0, 0))
+    f = H.host_footprint(on_card, keys, shards, "compiled", None, DT, _block, {"lm": {"float16"}},
+                         load_workers=2, pinned_in_flight=1)
+    # 2 workers x (1 + 1 upload) = 4 tensors in flight (20, 19, 18, 17 MB), each as read and as pinned, beside the
+    # file pages of the 2 shards the workers hold open
+    assert f["transient_bytes"] == 2 * 21 * MB + 2 * (20 + 19 + 18 + 17) * MB < 2 * lm
+    held = _plan(lm=("cuda:0", "float16", {f"s{i}": "cpu" for i in range(10)}, lm, 0, 0))
+    g = H.host_footprint(held, keys, shards, "compiled", None, DT, _block, {"lm": {"float16"}},
+                         load_workers=2, pinned_in_flight=1)
+    # unpinned per tensor: one tensor per worker, as read (no conversion: stored at the plan's width); file pages
+    # are reclaimable and not priced where the loader does not pin (the streamed rule's)
+    assert g["transient_bytes"] == (20 + 19) * MB and g["steady"]["lm"] == lm
 
 
 def test_the_base_is_the_profiles_measurement_or_is_said_to_be_missing():

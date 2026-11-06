@@ -21,13 +21,12 @@ where the rule lives, so a change there is a change to price here:
         them from the container's files and copies a missed expert into a cache slot on the device
         (`file_backed`: their keys). Their file pages are the page cache's, reclaimable, and the slots
         are the device plan's (the `device` term);
-    compiled: the component passes through the host whole — read at its stored width, and pinned at
-        the plan's width for the non-blocking upload (core/io/weight_loader.py `_load_with_pinned_dma`:
-        load_file to cpu, `_convert_weights_dtype`, `_transfer_with_pinned_memory`). The pinned copies
-        are not given back: PyTorch's caching host allocator keeps a freed pinned block on its free
-        list and never calls cudaFreeHost (pytorch#134332; PyTorch DevLog 2026-08-09, "Pinned memory:
-        what it is for, and why nobody gives it back"), so the worker count bounds the pace, not the
-        bytes;
+    compiled, every load — whole or streamed: one tensor at a time per worker (core/io/weight_loader.py
+        `_load_with_pinned_dma`), the pinned host cache emptied when the component's load ends (`load_component`,
+        `load_component_with_shard_map`); a component HELD on the host (shards on "cpu": zero3, an expert store) is
+        loaded to the host unpinned and then copied, one weight at a time, into ONE block registered once filled
+        (core/strategies/pinned_block.py) — its weights once, its steady term; Qwen3-Coder-30B native, 2026-11-06:
+        anonymous peak 62.5 GB for 57.6 GB held, where the whole-component rule priced 115 GB of loading;
     compiled, a component the plan STREAMS (layer_streaming): the loader reads one tensor at a time per
         worker and keeps at most `io.pinned_uploads_in_flight` uploads outstanding, then empties the
         pinned host cache after each load (core/io/weight_loader.py `_load_with_pinned_dma`). What a
@@ -166,8 +165,10 @@ def host_footprint(plan, key_sizes: Mapping[str, Mapping[str, int]],
                 pinned = stored_bytes * dtype_bytes[str(alloc.dtype)] // min(widths)
             return stored_bytes + pinned
         def _pins(name):
-            # The loader's own test (core/io/weight_loader.py `_load_weight_file`: `is_cuda`).
-            return str(plan.components[name].device).startswith(("cuda", "hip"))
+            # The loader's own test (core/io/weight_loader.py `_load_weight_file`: `is_cuda`); a component held on
+            # the host loads to the host (zero3 / expert store), unpinned per tensor.
+            alloc = plan.components[name]
+            return str(alloc.device).startswith(("cuda", "hip")) and not any(map(_on_host, (alloc.shard_map or {}).values()))
         def _streams_through(name, loads, among=None):
             # `among`: the keys the loader reads (a unified store's file-backed experts are never read).
             keys = key_sizes.get(name) or {}
@@ -175,7 +176,7 @@ def host_footprint(plan, key_sizes: Mapping[str, Mapping[str, int]],
                 keys = {k: n for k, n in keys.items() if k in among}
             if not keys:
                 raise ValueError(f"ZERO FALLBACK: {name} is streamed and the weights index sizes none of its keys")
-            pins = _pins(name)
+            pins = name in plan.components and _pins(name)
             if load_workers < 1 or (pins and pinned_in_flight < 1):
                 raise ValueError(f"ZERO FALLBACK: {name} is loaded per tensor and no loader workers / uploads in "
                                  f"flight were given ({load_workers}, {pinned_in_flight})")
@@ -239,11 +240,10 @@ def host_footprint(plan, key_sizes: Mapping[str, Mapping[str, int]],
             if name in (streamed_loads or {}):
                 passes = _streams_through(name, streamed_loads[name])
                 (kept if name in plan.components and _pins(name) else held).append(passes)
-            elif name in plan.components and not _pins(name):
+            else:                                  # the whole component as one load, one tensor at a time
                 read = _whole(name)
-                held.append(_streams_through(name, [read], among=read))
-            else:
-                kept.append(_passes_through(name, _loaded(name, sum(sh.values()))))
+                (kept if name in plan.components and _pins(name) else held).append(
+                    _streams_through(name, [read], among=read))
         # What a pinning load leaves in the caching host allocator adds up under eager, beneath any later
         # load; a per-tensor load gives everything back when it ends.
         if plan.loading_mode == "eager":

@@ -26,6 +26,9 @@ eye, every time in the gate register, none more than 1.5 times slower than the p
 - **Prism plans from the machine's facts**: the hardware profile and vendor files carry what it prices (measured
   reserves, reload rates, workspaces), a busy machine is re-planned on the memory really free with a clear warning, and
   a model is refused from one place only when no plan fits.
+- **Prism prices a PyTorch-engine load as the loader performs it**: one tensor at a time per worker, the pinned host
+  cache emptied after each component, a host-held component loaded unpinned then copied into one registered block —
+  where it priced every component read and pinned whole (Qwen3-Coder-30B: 115 GB of loading priced, 62.5 GB measured).
 
 ### Removed
 - **The tiling engine's host switches and diagnostic prints**: `NBX_DISABLE_INPLACE_ADD`, `NBX_DISABLE_INPLACE_UNARY`, `NBX_INPLACE_MIN_BYTES`, `NBX_TRITON_CHAIN_WRAPPER`, `NBX_S5_BASELINE_AUDIT`, `NBX_TILE_CENSUS` and `NBX_CHAIN_DIAG` are no longer read: the in-place adds and activations follow Prism's plan and the profile's threshold, the residual-chain wrapper runs in every mode.
