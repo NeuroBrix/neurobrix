@@ -246,3 +246,19 @@ is rewritten on disk, not repeated in the conversation; anything not visible in 
    `neurobrix/nbxtensor`, public, the same export, tag and release; the engine repository's tag `nbxtensor-v0.0.1` on
    `4a80d4da1`. The tag is never moved: what the published README gets wrong (its install line, a CPU backend named in
    the package description, references to documents the library's repository does not hold) is corrected in 0.0.2.
+
+## 2026-11-06 18:10 — NBXTENSOR 0.0.2 IS PUBLISHED (the owner's GO covers the 0.0.x series, the supervisor 2026-11-06 10:25)
+
+The owner's decision of 10:22: nbxtensor supports what Triton supports, and its README keeps "Runs wherever Triton runs —
+NVIDIA, AMD, Intel and Apple Silicon GPUs"; the AMD and Intel code ships in 0.0.2, untested on a card (no such card in the
+lab), written to the level of the NVIDIA and Apple drivers. Content: the HIP launch driver, Intel's Level Zero runtime and
+launch driver, the install help (`python -m nbxtensor doctor`), the AMD/Intel device files, the README showcase and
+CONTRIBUTING, nine environment switches removed, the replay's launch extents, the certified directory's compiled index.
+Proofs on the version commit `587325db3` (the engine's tag `nbxtensor-v0.0.2`): the card-less suite rc 0, the device
+suite 0 failed, the torch-free proof (the library's tests, five Triton models at their gate request, their shas equal to
+the recorded ones, no torch import attempted) PASS; the Mac's Apple suites green (2 112 passed, the one red a test that
+read a data key of the Metal table as an entry point, fixed: 64/64). Published: PyPI `nbxtensor` 0.0.2 (sdist + wheel,
+twine check passed, read: no machine path, no personal name, no Forge); GitHub `NeuroBrix/nbxtensor` and GitLab
+`neurobrix/nbxtensor`, the export `081204ef`, tag `v0.0.2`, release with both files; the engine repository's GitLab
+release `nbxtensor-v0.0.2`. Checked on a clean `python:3.10-slim` container: `pip install nbxtensor==0.0.2` from PyPI
+(numpy, triton 3.8.0, no torch), `python -m nbxtensor doctor` ready on the card, the README's GPU example correct.
