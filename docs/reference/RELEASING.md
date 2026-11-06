@@ -31,8 +31,9 @@ Both changelogs follow [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.
    library, the engine's dependency (`nbxtensor==X.Y.Z` in `pyproject.toml`) follows it in the same commit. One commit,
    landed like any other. — the Dell.
 4. The tag (`vX.Y.Z` or `nbxtensor-vX.Y.Z`) is made on that commit and pushed to both remotes, read back. — the Dell.
-5. The GitHub Release of the tag is created with the version's changelog section as its body; the GitLab release
-   mirrors it. — the Dell.
+5. The GitHub Release of the tag is created with the version's changelog section as its body — or, where the section
+   exceeds GitHub's 125 000 characters (the engine's 0.6.0: 246 267), its summary, the install lines and a link to the
+   section; the GitLab release mirrors it. — the Dell.
 6. The package is built from the tag and uploaded to PyPI; its `[project.urls] Changelog` points at the changelog, and
    its README links it. — the Dell.
 7. The two installables are installed on a clean machine from PyPI and run through the entry point (the stable's

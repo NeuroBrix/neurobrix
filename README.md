@@ -60,7 +60,7 @@ ready-made containers from the hub.
 ## Install and first run
 
 NeuroBrix needs Python 3.10 or newer. The current release is
-**0.5.4** ([release notes](https://github.com/NeuroBrix/neurobrix/releases/tag/v0.5.4)).
+**0.6.0** ([release notes](https://github.com/NeuroBrix/neurobrix/releases/tag/v0.6.0)).
 
 It has two engines. The **Triton engine** (`--triton`) runs on
 [nbxtensor](https://github.com/NeuroBrix/nbxtensor) and Triton and needs no PyTorch. The
@@ -100,6 +100,22 @@ builds were not usable there.
 the packages take in `site-packages`): `pip install neurobrix`, the Triton engine alone, 1.48 GiB
 (nbxtensor, Triton, NumPy and the engine); with the PyTorch engine (`torch 2.14.1+cu126` from the
 PyTorch index, then `neurobrix[pytorch]`) 6.82 GiB.
+
+**Apple Silicon (macOS).** The Triton engine runs on the Apple GPU through Metal. PyPI publishes
+no Triton for macOS: `install-metal` installs it from the releases of the project's fork
+[NeuroBrix/triton-ext](https://github.com/NeuroBrix/triton-ext) — Triton built with triton-ext,
+and the AppleGPU backend written by imperatormk
+([triton-lang/triton-ext#126](https://github.com/triton-lang/triton-ext/pull/126)) — each wheel
+checked against the sha256 written in nbxtensor:
+
+```bash
+pip install neurobrix
+python -m nbxtensor install-metal
+neurobrix doctor
+```
+
+Xcode's Metal toolchain is the other requirement (`neurobrix doctor` says when it is missing).
+The PyTorch engine also runs on the Apple GPU, through MPS: `pip install torch "neurobrix[pytorch]"`.
 
 **CPU only** (the PyTorch engine).
 
@@ -145,15 +161,15 @@ neurobrix stop                       # stop the daemon and free GPU memory
 
 | Hardware | Status |
 |---|---|
-| NVIDIA GPUs, Linux (CUDA) | Released in 0.5.4. Both compute branches. The project's own test machines are V100s. |
-| CPU (x86-64) | Released in 0.5.4. |
-| Apple Silicon (Metal) | **Not in a release.** Triton execution on Apple GPUs (through the Triton AppleGPU backend of `triton-lang/triton-ext`) is being integrated on `main` and is planned for 0.5.5. No install procedure is published for it yet. |
-| AMD GPUs (ROCm) | Code paths exist but have never run on AMD hardware. Not supported. |
+| NVIDIA GPUs, Linux (CUDA) | Released in 0.6.0. Both compute branches. The project's own test machines are V100s. |
+| CPU (x86-64) | Released in 0.6.0 (the PyTorch engine). |
+| Apple Silicon (Metal) | In 0.6.0. Both engines: the Triton engine through Metal (Triton and triton-ext's AppleGPU backend, installed by `python -m nbxtensor install-metal`), the PyTorch engine on MPS. Install: [Install and first run](#install-and-first-run), Apple Silicon. |
+| AMD and Intel GPUs | nbxtensor's HIP and Level Zero drivers (the Triton engine) are written but have never run on AMD or Intel hardware. Not supported yet. |
 | Windows | Not tested by the project. |
 
 Several GPUs in one machine are used automatically when a model does not fit on one.
 Known limitations of the current release are listed in its
-[release notes](https://github.com/NeuroBrix/neurobrix/releases/tag/v0.5.4). Read them before
+[release notes](https://github.com/NeuroBrix/neurobrix/releases/tag/v0.6.0). Read them before
 filing a bug.
 
 ### Models on the hub
