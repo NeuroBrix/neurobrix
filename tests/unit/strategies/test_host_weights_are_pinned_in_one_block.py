@@ -46,3 +46,25 @@ def test_the_block_is_unregistered_when_its_holder_goes(monkeypatch):
     monkeypatch.setattr(torch.cuda, "cudart", lambda: _Rt())
     del holder
     assert seen == [ptr]
+
+
+def test_the_block_is_registered_once_filled(monkeypatch):
+    # Registering pins every page at once: a block registered empty held the weights twice until the copies dropped
+    # the originals (Qwen3-Coder-30B native: 118 GB anonymous for 57.6 GB of weights, 2026-11-06). Wrong code (the
+    # register before the copies) finds the block's bytes not yet the weights' — red.
+    import ctypes
+    from neurobrix.core.strategies import pinned_block as PB
+    w = {"a": torch.full((1 << 12,), 7.0)}
+    real, seen = torch.cuda.cudart(), []
+
+    class _Rt:
+        def __getattr__(self, n):
+            return getattr(real, n)
+
+        def cudaHostRegister(self, p, n, f):
+            seen.append(ctypes.c_float.from_address(p).value)
+            return real.cudaHostRegister(p, n, f)
+    monkeypatch.setattr(torch.cuda, "cudart", lambda: _Rt())
+    holder = PB.pin_in_one_block(w)
+    assert seen == [7.0] and w["a"].is_pinned()
+    del holder
