@@ -896,6 +896,11 @@ def signature(seq) -> Optional[tuple]:
     # behind the capability gate until the residual is root-caused.
     if getattr(seq, "_replay_ineligible", False):
         return _decline(seq, "a stage-driven sequence (outside the standard flow contract)")
+    # A run that frees inputs its caller hands over (a layer-streamed piece's `_consumed_input_tids`) frees their memory
+    # at their last use: a frozen plan can neither keep the buffer its launches read nor refill it. granite-speech-3.3-8b
+    # triton on the M4 Pro: replayed, its pieces read a freed input (bmm::0 None), then, kept, a stale one (2026-11-06).
+    if getattr(seq, "_consumed_input_tids", None):
+        return _decline(seq, "it frees the inputs its caller hands over at their last use (a layer-streamed piece)")
     # STATEFUL interceptors (KV-cache attention class) advance internal
     # state per call while the sequence's input signature stays
     # constant — a recorded step would bake one cache length and replay

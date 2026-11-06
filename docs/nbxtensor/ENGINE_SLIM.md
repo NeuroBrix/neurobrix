@@ -97,6 +97,7 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | 2026-11-04 | (no move) The RATCHET RAISED by +11 lines: the replay hands a view output over by its values and verifies values, not storage bytes (`replay._heap_copy`, `_copy_into`; Allegro-TI2V's permuted encoder output came back scrambled). |
 | 2026-11-04 | (no move) The RATCHET RAISED by +7 lines: a released component collects the heap once, through each engine's own flow release (`RuntimeExecutor._unload_component_weights`; the Dell 2026-11-04 08:14) — mochi-1-preview native on Metal met 1-2 GB of device memory held by Python cycles after its transformer, since the per-segment collect left `MemoryManager.unload_weights` (4d1187f9) | — |
 | 2026-11-04 | (no move) The RATCHET RAISED by +18 lines: the certifier's MoE synthesis builds its expert-address tables with the runtime's builder and releases their Metal pins (`autotune_certify._expert_table`). |
+| 2026-11-06 | (no move) The RATCHET RAISED by +5 lines: a run that frees the inputs its caller hands over (a layer-streamed piece, `_consumed_input_tids`) is not replayed (`replay.signature`) — granite-speech-3.3-8b triton on the M4 Pro read a freed input at the verify's re-run, then a stale one in a plan that kept it (the Mac's Metal gate, 2026-11-06). |
 
 ## Kept in the engine
 
