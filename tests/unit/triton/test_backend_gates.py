@@ -73,10 +73,10 @@ def test_apple_without_backend_refuses_with_an_actionable_message(monkeypatch):
         metal_backend.ensure_triton_metal_or_raise()
 
     message = str(excinfo.value)
-    assert "pip install triton-msl" in message, "a refusal without the install command is half a refusal"
+    assert "python -m nbxtensor install-metal" in message, "a refusal without the install command is half a refusal"
     assert "--triton" in message
     assert "compiled" in message, "must name the path that works today"
-    assert "does not install it for you" in message, "we never auto-fetch"
+    assert "does not install it for you" in message, "a run never auto-fetches"
 
 
 def test_apple_with_backend_and_compiler_passes(monkeypatch):

@@ -117,7 +117,7 @@ What changed from one version to the next — added, changed, fixed, removed —
 nbxtensor never needs torch: it is not a dependency, not even an optional one, and the library and its kernels run in
 an environment where torch is not installed (proven on Metal, 2026-10-29: `tools/torch_free_proof.py` records every
 attempt to import torch, caught ones included, and recorded none). Python 3.10 or later; its dependencies are numpy,
-pyyaml and Triton.
+pyyaml and Triton (on a Mac, `pyobjc-framework-Metal` and the Triton `install-metal` brings).
 
 ```
 pip install nbxtensor
@@ -135,14 +135,19 @@ install commands when one is not.
 
 **From the NeuroBrix repository** (contributors): `pip install -e nbxtensor`.
 
-**macOS, Apple silicon (Metal).** PyPI publishes no Triton for macOS, so Triton and its Metal backend are built from
-source, then nbxtensor is installed into that environment:
+**macOS, Apple silicon (Metal).** PyPI publishes no Triton for macOS; nbxtensor's release carries it — Triton built
+with `TRITON_EXT_ENABLED=1` and the AppleGPU backend of [triton-ext](https://github.com/triton-lang/triton-ext) — and
+installs it, each wheel checked against the sha256 written in the library:
 
-1. Triton (github.com/triton-lang/triton) built with `TRITON_EXT_ENABLED=1`, which lets out-of-tree backends plug in;
-2. the AppleGPU backend of triton-ext (github.com/triton-lang/triton-ext, `backend/AppleGPU`), installed into the same
-   environment;
-3. `pyobjc-framework-Metal` (the library opens the Metal device through it);
-4. Xcode's Metal toolchain (`xcrun metal` must find the real compiler, not Xcode's placeholder: `TOOLCHAINS=Metal`).
+```
+pip install nbxtensor
+python -m nbxtensor install-metal
+```
+
+Xcode's Metal toolchain is the other requirement (`xcrun metal` must find the real compiler, not Xcode's placeholder:
+`TOOLCHAINS=Metal`); `python -m nbxtensor doctor` says what is missing. To build Triton and its Metal backend yourself
+instead: Triton (github.com/triton-lang/triton) built with `TRITON_EXT_ENABLED=1`, then triton-ext's `backend/AppleGPU`
+installed into the same environment.
 
 `nbxtensor.dtype` and `nbxtensor.shape` need neither a device nor Triton.
 

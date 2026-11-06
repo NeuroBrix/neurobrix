@@ -573,25 +573,16 @@ def ensure_triton_metal_or_raise() -> None:
 
     if not triton_metal_available():
         raise TritonMetalNotInstalledError(
-            "The --triton engine needs a Triton backend that targets Metal, and "
-            "none is installed.\n"
+            "The --triton engine needs Triton for the Apple GPU (Triton with "
+            "triton-ext's AppleGPU backend), and none is installed. PyPI publishes "
+            "no Triton for macOS; nbxtensor's release carries it:\n"
+            "    python -m nbxtensor install-metal\n"
             "\n"
-            "Upstream Triton has no Apple GPU target. An out-of-tree backend "
-            "exists:\n"
-            "    pip install triton-msl        (MIT; needs Triton 3.7+ built "
-            "with TRITON_EXT_ENABLED=1)\n"
+            "A run does not install it for you: a download at run time is a "
+            "supply-chain surface you did not consent to.\n"
             "\n"
-            "NeuroBrix does not install it for you: fetching a wheel at runtime "
-            "is a\n"
-            "supply-chain surface you did not consent to, and it fails "
-            "confusingly on\n"
-            "air-gapped machines.\n"
-            "\n"
-            "Working alternative today: drop --triton. The default compiled "
-            "engine runs\n"
-            "on Apple GPUs through PyTorch MPS with no extra install.\n"
-            "\n"
-            "Status and known gaps: docs/internal/metal_adoption_plan_2026_09_03.md"
+            "Alternative: the PyTorch engine (--compiled) runs on the Apple GPU "
+            "through MPS (pip install torch \"neurobrix[pytorch]\")."
         )
 
     if not metal_shader_compiler_available():

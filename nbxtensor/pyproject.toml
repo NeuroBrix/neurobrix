@@ -18,7 +18,9 @@ authors = [{ name = "NeuroBrix" }]
 # 2026-11-05). On a machine without an NVIDIA card it is a library nothing opens.
 # Triton on every platform PyPI publishes it for; macOS has none (the Metal Triton is built from source, with triton-ext's
 # AppleGPU backend — the README's install), so a plain "triton" made the library uninstallable on a Mac (2026-11-06).
-dependencies = ["numpy", "triton; platform_system != 'Darwin'", "pyyaml", "nvidia-cuda-runtime-cu12; platform_system == 'Linux'"]
+# On a Mac the Metal device is opened through pyobjc's Metal framework; Triton for Metal comes from `install-metal`.
+dependencies = ["numpy", "triton; platform_system != 'Darwin'", "pyyaml", "nvidia-cuda-runtime-cu12; platform_system == 'Linux'",
+                "pyobjc-framework-Metal; platform_system == 'Darwin'"]
 
 [project.urls]
 Homepage = "https://github.com/NeuroBrix/nbxtensor"
