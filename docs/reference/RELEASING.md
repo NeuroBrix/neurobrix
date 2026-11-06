@@ -27,8 +27,9 @@ Both changelogs follow [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.
 2. The tree to publish is the one the final gate ran on, frozen; its proofs are cited in the release decision
    (`docs/reference/release-decisions.md`). — the Dell.
 3. In the product's changelog, `[Unreleased]` becomes `[X.Y.Z] - YYYY-MM-DD` and a new empty `[Unreleased]` opens above
-   it; the comparison links at the bottom gain the new version. The product's version field is set to X.Y.Z. One
-   commit, landed like any other. — the Dell.
+   it; the comparison links at the bottom gain the new version. The product's version field is set to X.Y.Z; for the
+   library, the engine's dependency (`nbxtensor==X.Y.Z` in `pyproject.toml`) follows it in the same commit. One commit,
+   landed like any other. — the Dell.
 4. The tag (`vX.Y.Z` or `nbxtensor-vX.Y.Z`) is made on that commit and pushed to both remotes, read back. — the Dell.
 5. The GitHub Release of the tag is created with the version's changelog section as its body; the GitLab release
    mirrors it. — the Dell.

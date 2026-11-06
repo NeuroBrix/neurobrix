@@ -467,12 +467,19 @@ def cmd_run(args):
     ]
     if sum(bool(f) for f in _mode_flags) > 1:
         print("\nERROR: Only one execution mode flag can be passed at a time.")
-        print("       Choose one of: --compiled (default), --sequential, --triton, --triton-sequential")
+        print("       Choose one of: --compiled, --sequential, --triton, --triton-sequential")
         return 1
+    # No mode flag: the PyTorch engine where torch is installed, the Triton engine where it is not — said here
+    _default_triton = False
+    if not any(bool(f) for f in _mode_flags):
+        from neurobrix.core.runtime.engines import default_mode
+        _default, _said = default_mode()
+        print(f"[Engine] {_said}")
+        _default_triton = _default == "triton"
 
     if args.sequential:
         execution_mode = "sequential"
-    elif args.triton or getattr(args, 'triton_sequential', False):
+    elif args.triton or getattr(args, 'triton_sequential', False) or _default_triton:
         # Triton mode: the backend for this hardware must actually be present.
         # Both gates below REFUSE with an install command instead of letting
         # the run die later inside the Triton driver — and neither of them
@@ -506,7 +513,7 @@ def cmd_run(args):
         from nbxtensor.backend.launcher import prewarm_compiler
         prewarm_compiler()          # Triton's 1.3 s cache key, computed while the model loads
     else:
-        # default OR --compiled explicit
+        # --compiled, or no flag with torch installed
         execution_mode = "compiled"
     # The PyTorch branch without torch installed: refused by name before anything is loaded (core/runtime/engines.py).
     from neurobrix.core.runtime.engines import PyTorchBranchNotInstalledError, require_engine

@@ -46,8 +46,9 @@ dependencies = [
     # library is a runtime dependency (those moved to the `adapter` extra below).
     # The tensor library the Triton engine is built on (nbxtensor/ in this repository, its own package): a version, never a
     # path — a path is baked into the wheel as the building machine's file:// URL, which no other machine can install and
-    # PyPI refuses. From the repository: `pip install -e nbxtensor -e .`; from wheels: both in one wheelhouse.
-    "nbxtensor==0.0.1",
+    # PyPI refuses. From the repository: `pip install -e nbxtensor -e .`; from wheels: both in one wheelhouse. The version
+    # is the one nbxtensor/pyproject.toml holds, raised with it (tests/unit/packaging).
+    "nbxtensor==0.0.3",
     # Core compute. macOS has no triton wheel on PyPI: Apple Metal runs a triton built from source with its Metal
     # backend (the Mac's install), which this line must not try to resolve.
     "triton; platform_system != 'Darwin'",
@@ -68,7 +69,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# The PyTorch branch (--compiled, the default when no mode flag is given, and --sequential): torch + the
+# The PyTorch branch (--compiled, the default when no mode flag is given and torch is installed, and --sequential): torch + the
 # cuDNN/cuBLAS/cuFFT it bridges. The Triton branch (--triton, --triton-sequential) runs without it.
 pytorch = ["torch>=2.1.0"]
 # psutil: the gate harness (tools/regression_matrix.py) reads a cell's process tree with it, and its tests

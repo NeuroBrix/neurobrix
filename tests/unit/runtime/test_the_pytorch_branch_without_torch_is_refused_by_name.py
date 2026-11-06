@@ -8,7 +8,8 @@ package gives, without building one (the torchless environment of the landing pr
 real).
 
 What this test would do if the code were wrong: a run that reaches the container load under --compiled with no torch
-(red: the sentinel load is reached), a refusal that does not name the branch and its install line (red), a Triton
+(red: the sentinel load is reached), a run with no mode flag and no torch refused instead of taken to the Triton engine
+with its launch line (red), a refusal that does not name the branch and its install line (red), a Triton
 mode refused for want of torch (red), base dependencies that still carry torch (red)."""
 from __future__ import annotations
 
@@ -55,7 +56,7 @@ def _run(*flags):
     return out.stdout + out.stderr
 
 
-@pytest.mark.parametrize("flags", [(), ("--compiled",), ("--sequential",)])
+@pytest.mark.parametrize("flags", [("--compiled",), ("--sequential",)])
 def test_the_pytorch_branch_without_torch_stops_before_the_load(flags):
     text = _run(*flags)
     assert "RC 1" in text, text[-3000:]
@@ -63,6 +64,27 @@ def test_the_pytorch_branch_without_torch_stops_before_the_load(flags):
     assert "PyTorch engine" in text and 'neurobrix[pytorch]' in text and "--triton" in text, text[-3000:]
     assert "https://pytorch.org/get-started/locally/" in text, "the message does not say where the wheel is chosen"
     assert "Traceback" not in text, text[-3000:]
+
+
+def test_with_no_mode_flag_and_no_torch_the_run_takes_the_triton_engine_and_says_so():
+    # the light install (`pip install neurobrix`) met a refusal at its first `neurobrix run` (the owner via the
+    # supervisor, 2026-11-06 22:10): with no flag and no torch the run goes on, on the Triton engine, said on its line
+    text = _run()
+    assert "[Engine] engine: triton (torch not installed)" in text, text[-3000:]
+    # the Triton branch's own gates then answer for this card-less child (triton-cpu, else the container load)
+    assert "neurobrix[pytorch]" not in text and "Traceback" not in text, text[-3000:]
+    assert "REACHED" in text or "triton-cpu" in text, text[-3000:]
+
+
+def test_with_no_mode_flag_and_torch_installed_the_run_takes_the_pytorch_engine_and_says_so(monkeypatch, capsys):
+    from neurobrix.core.runtime import engines
+    import importlib.util as U
+    real = U.find_spec
+    monkeypatch.setattr(engines.importlib.util, "find_spec",
+                        lambda name, *a: object() if name == "torch" else real(name, *a))
+    assert engines.default_mode() == ("compiled", "engine: compiled (PyTorch installed; --triton runs the Triton engine)")
+    monkeypatch.setattr(engines.importlib.util, "find_spec", lambda name, *a: None if name == "torch" else real(name, *a))
+    assert engines.default_mode() == ("triton", "engine: triton (torch not installed)")
 
 
 _MAIN = _DRIVER.replace(

@@ -64,8 +64,9 @@ NeuroBrix needs Python 3.10 or newer. The current release is
 
 It has two engines. The **Triton engine** (`--triton`) runs on
 [nbxtensor](https://github.com/NeuroBrix/nbxtensor) and Triton and needs no PyTorch. The
-**PyTorch engine** (the default) needs PyTorch, installed from the index that matches your
-hardware.
+**PyTorch engine** (`--compiled`) needs PyTorch, installed from the index that matches your
+hardware. With no mode flag, a run takes the PyTorch engine where PyTorch is installed and the
+Triton engine where it is not, and its launch line says which.
 
 **Triton engine, NVIDIA GPU (Linux).** Install the NVIDIA driver, then:
 
@@ -74,8 +75,8 @@ pip install neurobrix
 neurobrix doctor
 ```
 
-and run with `--triton`. The CUDA runtime library comes with nbxtensor; nothing else is
-needed.
+and run; without PyTorch the run takes the Triton engine (`engine: triton (torch not installed)`).
+The CUDA runtime library comes with nbxtensor; nothing else is needed.
 
 **PyTorch engine, NVIDIA GPU (Linux).** Install the PyTorch CUDA build that your driver
 supports (see the selector on [pytorch.org](https://pytorch.org/get-started/locally/)), then
@@ -218,8 +219,8 @@ neurobrix upscale --model Real-ESRGAN-RealESRGAN_x4plus --input photo.png --outp
 
 | Flag | Branch | Use |
 |---|---|---|
-| `--compiled` (default) | PyTorch | Normal use. |
-| `--triton` | Triton | The engine's own Triton kernels instead of PyTorch's operator library. |
+| `--compiled` | PyTorch | Normal use; the default where PyTorch is installed. |
+| `--triton` | Triton | The engine's own Triton kernels instead of PyTorch's operator library; the default where PyTorch is not installed. |
 | `--sequential` | PyTorch, one operation at a time | Debugging. |
 | `--triton-sequential` | Triton, one operation at a time | Debugging. |
 
@@ -243,6 +244,28 @@ Downloaded archives are kept in `~/.neurobrix/store/` and extracted models in
 `~/.neurobrix/cache/`. `--no-keep` deletes the archive once it is extracted. Read commands
 (`info`, `list`, `hub`, `inspect`, `doctor`, `run --explain-plan`) accept `--json` for
 scripting.
+
+### Certify your GPU and share it
+
+The Triton engine's kernel settings are certified per launch key (the kernel, its shape class
+and dtypes) and per GPU class, against a float64 oracle, and shipped. A key your GPU class has
+no certificate for is swept at run time and kept on your machine; certifying it makes it
+permanent, and sharing it means nobody with your GPU sweeps it again. The four steps, with the
+commands, are in nbxtensor's README,
+[Certify your own hardware](https://github.com/NeuroBrix/nbxtensor#certify-your-own-hardware):
+
+1. Run the models you use with `--triton`; the keys no certificate covers are swept and kept in
+   `~/.neurobrix/replay_cache/`.
+2. Certify them: `neurobrix autotune certify --profile <your device file> --keys <the kept keys> --out ./my-certificates`.
+3. Check that they are served: the same run with `NEUROBRIX_AUTOTUNE_CERTIFIED_DIR=./my-certificates`
+   and `--certified-only` says `0 swept at runtime` and gives the same output.
+4. Share them: add the files under `src/neurobrix/config/autotune/<vendor>/<profile>/` and open
+   a pull request with the
+   [certificate template](./.github/PULL_REQUEST_TEMPLATE/certificate.md) (`?template=certificate.md`):
+   your GPU, driver, the commands and the output of step 3.
+
+Certified your GPU? Share your certificates — every class certified is a class nobody autotunes
+again.
 
 ---
 

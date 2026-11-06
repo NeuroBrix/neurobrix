@@ -161,6 +161,8 @@ neurobrix validate <model.nbx> --level deep --strict
 ### 4. Submit the PR
 
 - Fill out the pull request template completely
+- Certificates for a GPU class (the README's "Certify your GPU and share it") use the `certificate`
+  template: open the pull request with `?template=certificate.md` in its URL
 - Reference any related issues
 - Describe what changed and why
 - Include test results or benchmarks if applicable

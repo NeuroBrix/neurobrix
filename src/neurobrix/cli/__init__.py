@@ -48,12 +48,14 @@ def _add_run_arguments(p):
     p.add_argument('--set', action='append', metavar='KEY=VALUE',
                             help='Set arbitrary runtime variable (e.g., --set global.cfg=7.5)')
     # Execution modes (mutually exclusive). When no flag is passed the
-    # default is --compiled. See CLAUDE.md "Execution Modes" section.
+    # default is --compiled where torch is installed, --triton where it is
+    # not (core/runtime/engines.default_mode), said on the launch line.
     p.add_argument('--compiled', action='store_true',
-                            help='Default mode: PyTorch fused graph + cuDNN/cuBLAS '
+                            help='PyTorch fused graph + cuDNN/cuBLAS '
                                  '(CompiledSequence). Production PyTorch performance. '
-                                 'Used when no execution flag is passed; this flag '
-                                 'makes the choice explicit.')
+                                 'Used when no execution flag is passed and PyTorch is '
+                                 'installed (without it, --triton); this flag makes the '
+                                 'choice explicit.')
     p.add_argument('--sequential', action='store_true',
                             help='PyTorch eager op-by-op (no fusion, ATen dispatcher). '
                                  'Useful for debugging individual ATen ops. '
@@ -439,10 +441,10 @@ Examples:
                               help='A file the ready record (one JSON line) is written to, whole, once '
                                    'the daemon accepts (the Windows launcher reads it there)')
     # Execution modes (mutually exclusive). When no flag is passed the
-    # default is --compiled. Mirror of run_parser; see CLAUDE.md
-    # "Execution Modes" section for the contract.
+    # default is --compiled where torch is installed, --triton where it is
+    # not. Mirror of run_parser.
     serve_parser.add_argument('--compiled', action='store_true',
-                              help='Default mode: PyTorch fused graph + cuDNN/cuBLAS')
+                              help='PyTorch fused graph + cuDNN/cuBLAS (the default where PyTorch is installed)')
     serve_parser.add_argument('--sequential', action='store_true',
                               help='PyTorch eager op-by-op (no fusion, debug)')
     serve_parser.add_argument('--triton', action='store_true',

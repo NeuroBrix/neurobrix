@@ -37,3 +37,12 @@ def test_the_packages_ship_no_empty_file():
              for p in base.rglob("*") if p.is_file() and p.stat().st_size == 0
              and p.name not in ("__init__.py", "py.typed") and "__pycache__" not in p.parts]
     assert not empty, empty
+
+
+def test_the_engine_depends_on_the_library_version_of_its_own_tree():
+    # 0.0.3 published, the engine still asked for nbxtensor==0.0.1 — which names CUDA on an AMD or Intel machine (the
+    # supervisor 2026-11-06 22:10): the engine's pin is the library version its own tree holds, raised with it
+    lib = tomllib.loads((ROOT / "nbxtensor" / "pyproject.toml").read_text())["project"]["version"]
+    deps = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["dependencies"]
+    pins = [d.replace(" ", "") for d in deps if re.match(r"nbxtensor\b", d)]
+    assert pins == [f"nbxtensor=={lib}"], (pins, lib)

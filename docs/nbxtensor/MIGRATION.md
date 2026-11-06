@@ -67,7 +67,9 @@ named; the losses become the optimisation queue (rule 14).
 **Status (2026-11-02):** the harness is written and proven card-less (`benchmarks/nbxtensor_vs_torch/`, README:
 two sides in two environments — torch in the oracle environment, nbxtensor in the library's torch-free one —
 every row into the dated registry); the Apple instances build card-less (54 models); no device run yet, so no
-figure. It runs alone on each machine after the day's landings.
+figure. It runs alone on each machine after the day's landings. Its per-operation summary of 2026-11-03 measured the
+wrong thing (the supervisor, 2026-11-03 17:22) and is cited nowhere; the engine's benchmark is the final gate's time per
+model through the entry point.
 
 ## M5 — final gate S7 on the extracted engine
 One gate, scope = everything (the move touches every Triton cell), times =

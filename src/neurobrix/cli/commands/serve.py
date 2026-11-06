@@ -43,8 +43,13 @@ def cmd_serve(args):
         mode = "triton_sequential"
     elif getattr(args, 'triton', False):
         mode = "triton"
-    else:
+    elif getattr(args, 'compiled', False):
         mode = "compiled"
+    else:
+        # no mode flag: the PyTorch engine where torch is installed, the Triton engine where it is not — said here
+        from neurobrix.core.runtime.engines import default_mode
+        mode, _said = default_mode()
+        print(f"[Serve] {_said}")
     # The PyTorch branch without torch installed: refused by name before the daemon starts (core/runtime/engines.py).
     from neurobrix.core.runtime.engines import PyTorchBranchNotInstalledError, require_engine
     try:
