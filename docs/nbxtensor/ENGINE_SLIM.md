@@ -103,6 +103,7 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | 2026-11-06 | (no move) The RATCHET RAISED by +10 lines: the replay's verify step says what its comparison observed and no more (`replay.PLAN_MATCHED_LINE`, the supervisor's decision 21:30) — a divergence guard that cannot see an error both passes share, never cited as proof; the lines are its statement in the module and the comment of the verify branch |
 | 2026-11-06 | (no move) The RATCHET RAISED by +9 lines: the width model stores a GEMM under native bf16 by the launcher's rule on its operands at C (`runtime_widths._lower_precision` -> `mm_store`, a bmm's M its batch rows: a decode row fp32) where it returned C — the Apple census keyed orpheus-3b's decode query bf16 where the run reads fp32 (the Mac's Metal gate, 2026-11-06). |
 | 2026-11-06 | (no move) The RATCHET RAISED by +24 lines: a run with no mode flag takes the engine that is installed and says it (`engines.default_mode`, read by `run` and `serve`; the owner via the supervisor 22:10: the light install was refused at its first run) — the function, its two callers and the help texts that name the default |
+| 2026-11-06 | (no move) The RATCHET RAISED by +5 lines: a batched product's M is read through the census memo's signature (`runtime_widths._Rules.batch_rows`, `binding_signature` carries it): the width model's bmm read it beside the signature, which the memo's door refused |
 
 ## Kept in the engine
 

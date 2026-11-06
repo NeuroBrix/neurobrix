@@ -221,7 +221,8 @@ def plan_time_contract(cache_path, component_name: str, dag: Optional[Dict[str, 
 
 def binding_signature(shape) -> Tuple:
     """What the width rules read of a tensor's shape at a binding, and nothing more: `_Rules.rows` feeds only
-    `mm_store`'s "M <= 4" (no M for a tensor without dims), `_Rules.first_nonempty` only whether an extent is 0.
+    `mm_store`'s "M <= 4" (no M for a tensor without dims), `_Rules.batch_rows` the same for a batched product's M (its
+    second-to-last extent), `_Rules.first_nonempty` only whether an extent is 0.
     Two bindings whose every queried tensor has the same signature give the same widths — the census memoises the
     pass on it across the hundreds of extent probes of one derivation (tools/derived_census.py `_widths_at`;
     the pass was 76 % of a Qwen3-Coder job, py-spy 2026-10-23). A rule that reads more of a shape extends this."""
@@ -231,7 +232,7 @@ def binding_signature(shape) -> Tuple:
     m = 1
     for d in sh[:-1]:
         m *= d
-    return (m <= 4, any(d == 0 for d in sh))
+    return (m <= 4, any(d == 0 for d in sh), len(sh) >= 2 and sh[-2] <= 4)
 
 
 @dataclass(frozen=True)
@@ -601,6 +602,11 @@ class _Rules:
             m *= int(d)
         return m
 
+    def batch_rows(self, tid: str) -> Optional[int]:
+        """A batched product's M: the rows of one batch, the second-to-last extent (`linalg_wrappers.bmm`)."""
+        sh = self.shape_of(tid)
+        return int(sh[-2]) if len(sh) >= 2 else None
+
     def fused_input(self, uid: str) -> Optional[str]:
         """The upsample of a fused conv: the plan's pair when a plan is known, else the
         structural candidate (priced at the wider of fused and unfused by the caller)."""
@@ -875,8 +881,7 @@ class _TritonRules(_Rules):
         if name in ("addmm", "addmm_epilogue"):
             return self.mm_store(c, c, self.rows(ins[1]) if len(ins) > 1 else None)
         if name == "bmm":
-            sh = self.shape_of(ins[0]) if ins else None             # bmm's M is a batch's rows (linalg_wrappers.bmm)
-            return self.mm_store(c, c, int(sh[-2]) if sh and len(sh) >= 2 else None, force=True)
+            return self.mm_store(c, c, self.batch_rows(ins[0]) if ins else None, force=True)
         if name in _MATMUL_OTHER:
             return "float32"
         return c

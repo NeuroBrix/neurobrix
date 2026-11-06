@@ -99,9 +99,17 @@ def test_a_binding_that_reads_differently_is_derived_again(monkeypatch):
 
 
 def test_the_width_rules_read_a_binding_only_where_the_signature_says():
-    """A door on the memo's premise: the width rules read `shape_of` at two places (rows -> mm_store's M, and
-    first_nonempty's zero extent). A rule that reads more turns this red before the memo can serve a wrong width."""
+    """A door on the memo's premise: the width rules read `shape_of` at three places (rows -> mm_store's M,
+    batch_rows -> a batched product's M, and first_nonempty's zero extent), each in `binding_signature`. A rule that
+    reads more turns this red before the memo can serve a wrong width."""
     src = (Path(__file__).resolve().parents[3] / "src/neurobrix/core/prism/runtime_widths.py").read_text()
-    assert src.count("self.shape_of(") == 2, src.count("self.shape_of(")
+    assert src.count("self.shape_of(") == 3, src.count("self.shape_of(")
     rows_uses = [ln for ln in src.splitlines() if "self.rows(" in ln and "def rows" not in ln]
     assert rows_uses and all("self.mm_store(" in ln for ln in rows_uses), rows_uses
+
+
+def test_two_bindings_that_differ_only_in_a_batched_products_rows_have_two_signatures():
+    # a bmm's M is its batch's rows: [8, 1, 64] is a decode row (fp32 store on bf16 hardware), [8, 64, 64] is not, and
+    # their row products (8 and 512) both exceed 4 — one signature for both would let the memo serve the decode width
+    from neurobrix.core.prism.runtime_widths import binding_signature
+    assert binding_signature([8, 1, 64]) != binding_signature([8, 64, 64])
