@@ -73,7 +73,7 @@ def test_every_declared_entry_point_exists_on_the_runtime():
         pytest.skip("needs an Apple GPU")
     runtime = metal_device.runtime()
     for key, name in metal_device.METAL_BACKEND.items():
-        if key == "rt_libs":
+        if key in ("rt_libs", "malloc_host_flags"):     # data of the table, not entry points: the libraries, the flags word
             continue
         assert callable(getattr(runtime, name, None)), (
             f"{key!r} names {name!r}, which the runtime does not provide")
