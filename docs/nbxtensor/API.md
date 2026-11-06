@@ -3027,6 +3027,7 @@ def forget() -> None                                  # the next reader resolves
 ```python
 def arch() -> int                                     # the target's arch as an int (70 for sm_70): target().arch
 def bind_target(compile_target) -> None               # the target stated without a driver (a derivation that launches nothing)
+def prewarm_compiler() -> None                          # Triton's cache key (triton_key, ~1.3 s) computed in a daemon thread while the caller loads
 ```
 
 ### `nbxtensor.backend.runtime` — the backend in force

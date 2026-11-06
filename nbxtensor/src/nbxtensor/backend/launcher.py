@@ -35,6 +35,16 @@ from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 _TARGET = None          # triton.backends.compiler.GPUTarget, resolved once
 
 
+def prewarm_compiler() -> None:
+    """Start, in a daemon thread, what the first compile of a process pays before it can read Triton's disk cache:
+    `triton_key()`, the sha256 of libtriton and of Triton's sources (1.3 s on the V100 rack, 2026-11-06, the largest fixed
+    cost of a small model's Triton run). An application calls it at start, while it loads weights; the first compile then
+    finds the key computed (`functools.lru_cache`). Nothing is computed differently."""
+    import threading
+    from triton.runtime.cache import triton_key
+    threading.Thread(target=triton_key, name="nbxtensor-triton-key", daemon=True).start()
+
+
 def _compute_capability() -> int:
     """Compute capability as an int (70 for sm_70): the hardware profile the
     process was given (`kernels.wrappers.set_hardware_profile`), else one

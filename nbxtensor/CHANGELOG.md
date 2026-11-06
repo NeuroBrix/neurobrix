@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`backend.launcher.prewarm_compiler()`**: computes Triton's cache key (`triton_key`, the sha256 of libtriton and of Triton's sources, about 1.3 s on a V100 host) in a daemon thread, so a process's first kernel compile no longer waits for it; an application calls it at start, while it loads weights.
+
 ## [0.0.1] - 2026-11-05
 
 The first release of nbxtensor: an inference-first tensor library whose kernels are written in Triton and which never

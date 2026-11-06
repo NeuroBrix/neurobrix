@@ -502,10 +502,9 @@ def cmd_run(args):
         except (TritonMetalNotInstalledError, TritonCPUNotInstalledError, _BackendOnClearedStorage) as exc:
             print(f"\n[ERROR] {exc}")
             return 1
-        if getattr(args, 'triton_sequential', False):
-            execution_mode = "triton_sequential"
-        else:
-            execution_mode = "triton"
+        execution_mode = "triton_sequential" if getattr(args, 'triton_sequential', False) else "triton"
+        from nbxtensor.backend.launcher import prewarm_compiler
+        prewarm_compiler()          # Triton's 1.3 s cache key, computed while the model loads
     else:
         # default OR --compiled explicit
         execution_mode = "compiled"
