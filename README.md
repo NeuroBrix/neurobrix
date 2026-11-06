@@ -96,6 +96,11 @@ neurobrix doctor
 on the project's V100 machines. The default PyPI `torch` and the cu128, cu129, cu130 and cu132
 builds were not usable there.
 
+**Installed size**, measured on a clean `python:3.10-slim` container on 2026-11-06 (the space
+the packages take in `site-packages`): `pip install neurobrix`, the Triton engine alone, 1.48 GiB
+(nbxtensor, Triton, NumPy and the engine); with the PyTorch engine (`torch 2.14.1+cu126` from the
+PyTorch index, then `neurobrix[pytorch]`) 6.82 GiB.
+
 **CPU only** (the PyTorch engine).
 
 ```bash
