@@ -223,12 +223,16 @@ class TritonAttentionInterceptor:
         cache_len = self._position_offset
         return table.narrow(int(dim), cache_len + int(start), int(end - start))
 
+    def _device_len(self) -> bool:
+        lens = getattr(self.cache, "lens", None)
+        return bool(lens) and lens[0] is not None and getattr(self.cache, "batch", 1) == 1
+
     def _device_positions(self, start: int, end: int):
         """[len + start, len + end) on the device, `len` the cache's device length of its first layer (before this step
         appends), or None without one: a launch reads the position instead of baking it, so a replayed step is exact."""
-        lens = getattr(self.cache, "lens", None)
-        if not lens or lens[0] is None or getattr(self.cache, "batch", 1) != 1:
+        if not self._device_len():
             return None
+        lens = self.cache.lens
         from nbxtensor.ops.dispatch import dispatch
         from nbxtensor.ops import elementwise_wrappers as _ew
         from nbxtensor.dtype.nbx_dtype import NBXDtype
@@ -245,9 +249,8 @@ class TritonAttentionInterceptor:
         out = _nbx_reduction_wrappers.cumsum_wrapper(x, int(dim), dtype)
         if self._is_prefill or self._position_offset <= 0:
             return out
-        lens = getattr(self.cache, "lens", None)
-        if lens and lens[0] is not None and getattr(self.cache, "batch", 1) == 1:
-            return _nbx_elementwise_wrappers.add(out, lens[0].to(out.dtype))   # the device length, read by the launch
+        if self._device_len():
+            return _nbx_elementwise_wrappers.add(out, self.cache.lens[0].to(out.dtype))   # the device length, read by the launch
         return _nbx_elementwise_wrappers.add(out, self._position_offset)
 
     def intercept_arange(self, *args, **kwargs):
@@ -322,8 +325,7 @@ class TritonAttentionInterceptor:
                           TritonAttentionInterceptor.intercept_position_cumsum)
         if self._is_prefill:
             return None
-        if any(getattr(f, "__func__", None) in position_funcs for f in registered_funcs) and \
-                self._device_positions(0, 1) is None:
+        if any(getattr(f, "__func__", None) in position_funcs for f in registered_funcs) and not self._device_len():
             return None       # positions only on the host: a recorded step would bake one
         return self.cache.replay_key(int(os.environ.get("NBX_KV_BUCKET", "256")))
 
