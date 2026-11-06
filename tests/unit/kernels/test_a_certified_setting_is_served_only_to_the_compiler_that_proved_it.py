@@ -134,7 +134,7 @@ def test_the_directory_on_disk_is_all_one_generator_and_it_is_named():
     assert len(c) == 1, f"the NVIDIA directory mixes generators: {dict(c)}"
 
 
-def test_lookup_itself_refuses_the_mismatched_entry(monkeypatch, capsys):
+def test_lookup_itself_refuses_the_mismatched_entry(monkeypatch, capsys, tmp_path):
     """End to end through `lookup`, which is what the launch site calls.
 
     `entry_for_generator` being right is necessary and not sufficient: the
@@ -167,12 +167,17 @@ def test_lookup_itself_refuses_the_mismatched_entry(monkeypatch, capsys):
     def _entries(version):
         return {C.key_repr(key): _entry(version)}
 
-    # (a) the matching generator is served
+    # (a) the matching generator is served — each arm validates its own entries: a fresh process's memo and a compiled
+    # index of its own (`ops.certified_index`, beside a replay cache of the arm's), as a launch on a changed file would
+    C.reset()
+    monkeypatch.setenv("NEUROBRIX_REPLAY_CACHE", str(tmp_path / "a"))
     monkeypatch.setattr(C, "_load", lambda *a, **k: _entries(ver))
     assert C.lookup("matmul_kernel", _Tuner(), key, memory_gb=16) is not None
 
     # (b) the mismatched one is NOT, and the engine says so
+    C.reset()
     C._GEN_REFUSED.clear()
+    monkeypatch.setenv("NEUROBRIX_REPLAY_CACHE", str(tmp_path / "b"))
     monkeypatch.setattr(C, "_load", lambda *a, **k: _entries(other))
     assert C.lookup("matmul_kernel", _Tuner(), key, memory_gb=16) is None, (
         "lookup served a setting proven under another compiler")
