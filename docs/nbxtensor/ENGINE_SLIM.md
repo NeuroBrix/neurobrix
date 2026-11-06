@@ -99,6 +99,7 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | 2026-11-04 | (no move) The RATCHET RAISED by +18 lines: the certifier's MoE synthesis builds its expert-address tables with the runtime's builder and releases their Metal pins (`autotune_certify._expert_table`). |
 | 2026-11-06 | (no move) The RATCHET RAISED by +5 lines: a run that frees the inputs its caller hands over (a layer-streamed piece, `_consumed_input_tids`) is not replayed (`replay.signature`) — granite-speech-3.3-8b triton on the M4 Pro read a freed input at the verify's re-run, then a stale one in a plan that kept it (the Mac's Metal gate, 2026-11-06). |
 | 2026-11-06 | (no move) The RATCHET RAISED by +4 lines: the layer partition's op curves price the operand casts an op's precision wrapper makes (`ExecutedWidths.casts`, at the partitioner's own symbols, a pass at its slice) and the solver keeps them in the widths it hands it — Sana_1600M_4Kpx native on the M4 Pro died at the VAE's conv::62 asking a 4.00 GiB cast the sliced stretch had not priced (the Mac's Metal gate, 2026-11-06). |
+| 2026-11-06 | (no move) The RATCHET RAISED by +4 lines: the strategy lets go of a value handed to a piece only where that piece is the last reader of the pieces as they run (`_run_pieces`): a stretch run in slices replaces its segment after the hand-over was decided — MiniCPM-o-4_5 triton on the M4 Pro found a value popped before its stretch read it (the Mac's Metal gate, 2026-11-06). |
 
 ## Kept in the engine
 

@@ -74,3 +74,20 @@ def test_a_received_value_is_freed_at_its_last_use_inside_the_piece(monkeypatch)
     out = _Strategy(ctx, "layer_streaming")._run_pieces("comp", base, pieces, {"x": _Tensor("x")})
     assert alive == {"h": False, "mask": False, "g": False}, f"a handed value outlived its last use: {alive}"
     assert set(out) == {"z"}
+
+
+def test_a_value_handed_to_a_piece_a_later_piece_reads_stays_for_it(monkeypatch):
+    # A stretch run in slices replaces its segment after the hand-over was decided on the segments: a piece may be handed
+    # a value the stretch after it reads. MiniCPM-o-4_5 triton on the M4 Pro (2026-11-06): "segment 3 of 'llm.model'
+    # needs ['aten.mul::16::out_0'] and nothing before it produced them". Red if the strategy pops it from `values`.
+    import neurobrix.core.strategies.layer_streaming as LS
+    monkeypatch.setattr(LS, "_segment_memory_line", lambda seg: "")
+    monkeypatch.setattr(LS, "_reset_segment_peak", lambda seg: None)
+    alive = {}
+    pieces = [_Piece(0, ["x"], ["h"], [], alive), _Piece(1, ["h"], ["g"], ["h"], alive),      # piece 1 handed "h"
+              _Piece(2, ["h", "g"], ["z"], ["g"], alive)]                                    # yet piece 2 reads it
+    base = SimpleNamespace(_dag={"tensors": {}, "output_tensor_ids": ["z"]}, _persistent_tensor_ids=set())
+    ctx = SimpleNamespace(component_executors={}, layer_segments={}, layer_graphs={}, layer_moe={},
+                          layer_chunks={}, layer_swapped=frozenset())
+    out = _Strategy(ctx, "layer_streaming")._run_pieces("comp", base, pieces, {"x": _Tensor("x")})
+    assert set(out) == {"z"}

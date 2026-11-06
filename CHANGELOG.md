@@ -39,6 +39,9 @@ eye, every time in the gate register, none more than 1.5 times slower than the p
 - **The engine slims now that it imports nbxtensor**: code nothing reached is deleted, with no change of behaviour — the vendored third-party reference kernels (never imported, never packaged) and the compiled branch's unmapped op handlers, the planner's, the runtime's and the flows' uncalled helpers, the PyTorch branch's copies of nbxtensor's dtype table reader and tiling sizes, Prism's compatibility aliases, the Triton loader's bind-time fp16 -> fp32 weight upcast (no caller ever enabled it; precision is the DtypeEngine's), the memory manager's module-level forwarders nothing imported (`unload_weights`, `cleanup_tensors`) with the method only one of them called, and a layered validation pipeline nothing imported (`core/validators`: what stays is `neurobrix validate`'s container check and the compiled branch's tensor checks). The engine's Python code went from 409 025 to 138 306 lines (262 132 of them the vendored reference tree; the engine's own cleaning, tracked from here, 146 646 -> 138 306), and its Triton branch reaches the library through its public names; `tools/engine_slim_scan.py` lists what remains to remove, move into nbxtensor or justify (`docs/nbxtensor/ENGINE_SLIM.md`), and a guard lets the engine only shrink.
 
 ### Fixed
+- **A layer-streamed component keeps a value for the stretch that reads it**: a value handed to a piece was dropped by
+  the strategy even when a later stretch run in slices still read it (MiniCPM-o-4_5 on an Apple GPU: "segment 3 needs
+  … and nothing before it produced them").
 - **A layer-streamed piece that frees its inputs is not replayed**: a piece frees the inputs its caller hands over at
   their last use, and a recorded plan can neither keep nor refill that memory — granite-speech-3.3-8b on an Apple GPU
   failed at its first replayed decode step; it now runs those pieces on the normal path, as with the replay off.

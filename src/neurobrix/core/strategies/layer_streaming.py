@@ -571,8 +571,12 @@ class LayerStreamingStrategy(ExecutionStrategy):
                     f"nothing before it produced them")
             # what this piece takes over leaves `values` now: the piece holds the only reference and frees it at its
             # last use (`_build_segment_executors`)
+            # — only where it IS the last reader of the pieces as they run: a stretch run in slices replaces its segment
+            # after the hand-over was decided on the segments (`_slice_stretches`), and may read a value a segment before it
+            # was handed (MiniCPM-o-4_5 triton on the M4 Pro: segment 3 of llm.model found aten.mul::16 popped, 2026-11-06)
             for tid in getattr(seg_exec, "_consumed_input_tids", None) or ():
-                values.pop(tid[len("input::"):], None)
+                if last_read.get(tid[len("input::"):]) == i:
+                    values.pop(tid[len("input::"):], None)
             for tid in protected & produced:
                 seg_exec.protect_tensor_id(tid)
             # This piece's weights, and only this piece's: the executor asks its own dag
