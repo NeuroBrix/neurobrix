@@ -16,7 +16,9 @@ authors = [{ name = "NeuroBrix" }]
 # On Linux the CUDA runtime library its CUDA backend opens (libcudart.so.12), which the NVIDIA driver does not ship: a clean
 # machine with only the driver found no GPU runtime and the engine read the card as CPU-only (the stable's install test,
 # 2026-11-05). On a machine without an NVIDIA card it is a library nothing opens.
-dependencies = ["numpy", "triton", "pyyaml", "nvidia-cuda-runtime-cu12; platform_system == 'Linux'"]
+# Triton on every platform PyPI publishes it for; macOS has none (the Metal Triton is built from source, with triton-ext's
+# AppleGPU backend — the README's install), so a plain "triton" made the library uninstallable on a Mac (2026-11-06).
+dependencies = ["numpy", "triton; platform_system != 'Darwin'", "pyyaml", "nvidia-cuda-runtime-cu12; platform_system == 'Linux'"]
 
 [project.urls]
 Homepage = "https://github.com/NeuroBrix/nbxtensor"

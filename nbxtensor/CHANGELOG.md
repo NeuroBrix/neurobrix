@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **nbxtensor installs on a Mac**: it depended on `triton` on every platform, and PyPI publishes no Triton for macOS, so
+  `pip install nbxtensor` — and with it the NeuroBrix engine, even its PyTorch engine on MPS — could not resolve on a
+  clean macOS environment. Triton is now a dependency where PyPI has it; on a Mac it is built from source with its Metal
+  backend (the README's install), and the library says by name what to build when it is absent.
+
 ## [0.0.3] - 2026-11-06
 
 ### Fixed
