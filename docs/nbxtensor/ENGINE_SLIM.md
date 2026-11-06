@@ -98,6 +98,7 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | 2026-11-04 | (no move) The RATCHET RAISED by +7 lines: a released component collects the heap once, through each engine's own flow release (`RuntimeExecutor._unload_component_weights`; the Dell 2026-11-04 08:14) — mochi-1-preview native on Metal met 1-2 GB of device memory held by Python cycles after its transformer, since the per-segment collect left `MemoryManager.unload_weights` (4d1187f9) | — |
 | 2026-11-04 | (no move) The RATCHET RAISED by +18 lines: the certifier's MoE synthesis builds its expert-address tables with the runtime's builder and releases their Metal pins (`autotune_certify._expert_table`). |
 | 2026-11-06 | (no move) The RATCHET RAISED by +5 lines: a run that frees the inputs its caller hands over (a layer-streamed piece, `_consumed_input_tids`) is not replayed (`replay.signature`) — granite-speech-3.3-8b triton on the M4 Pro read a freed input at the verify's re-run, then a stale one in a plan that kept it (the Mac's Metal gate, 2026-11-06). |
+| 2026-11-06 | (no move) The RATCHET RAISED by +4 lines: the layer partition's op curves price the operand casts an op's precision wrapper makes (`ExecutedWidths.casts`, at the partitioner's own symbols, a pass at its slice) and the solver keeps them in the widths it hands it — Sana_1600M_4Kpx native on the M4 Pro died at the VAE's conv::62 asking a 4.00 GiB cast the sliced stretch had not priced (the Mac's Metal gate, 2026-11-06). |
 
 ## Kept in the engine
 

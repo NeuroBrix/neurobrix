@@ -42,6 +42,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
 
 from nbxtensor.dtype import itemsize as _itemsize
+from nbxtensor.shape import numel as _numel
 
 
 def tensor_bytes(tensor: Dict[str, Any]) -> Optional[int]:
@@ -168,18 +169,21 @@ class LayerPartitioner:
         # graph's own shape/dtype otherwise. The index wins because it
         # records what is STORED, which is what a load actually costs.
         self.weight_sizes = weight_sizes or {}
+        # an op's operand casts (`ExecutedWidths.casts`), at THIS partitioner's symbols: a pass's sub-partitioner sizes
+        # them at its slice. Sana_1600M_4Kpx native, M4 Pro, 2026-11-06: conv::62's fp32 input cast asked 4.00 GiB the
+        # sliced stretch had not priced (12.9 GB priced, ~19 GiB held), and the run died there.
+        casts = (getattr(self._widths, "casts", None) if self._resolver is not None else None) or {}
+        for uid, pairs in casts.items():
+            self._op_extra[uid] = self._op_extra.get(uid, 0) + sum(
+                _numel(self._resolver._resolve_shape(self.tensors.get(t) or {}, symbol_map)) * int(w) for t, w in pairs)
 
     def _activation_bytes(self, tid: str, t: Dict[str, Any]) -> int:
         if self._resolver is None:
             return tensor_bytes(t) or 0
-        shape = self._resolver._resolve_shape(t, self._symbol_map)
         # the width by the tensor's id in the graph — its key, which an entry need not repeat inside it
         if tid in self._widths:
-            numel = 1
-            for d in shape:
-                numel *= int(d)
-            return numel * int(self._widths[tid])
-        return self._resolver._compute_size(shape, t)
+            return _numel(self._resolver._resolve_shape(t, self._symbol_map)) * int(self._widths[tid])
+        return self._resolver._compute_size(self._resolver._resolve_shape(t, self._symbol_map), t)
 
     # -- dataflow ---------------------------------------------------------
 

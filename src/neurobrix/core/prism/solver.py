@@ -4365,7 +4365,7 @@ class PrismSolver:
                     # every other place that sizes this component's activations (the layer
                     # partitioner): one resolver, one request, one width rule.
                     self.__dict__.setdefault("_request_sizing", {})[comp.name] = (
-                        dict(ap.symbol_map or {}), int(dtype_bytes), dict(widths or {}))
+                        dict(ap.symbol_map or {}), int(dtype_bytes), widths or {})   # its operand casts kept
                     # Second pass (tiling-aware) only when first pass found
                     # overflow_ops AND we have a real budget to reason about.
                     # this request's decision only: a component priced again starts with no tiled conv
