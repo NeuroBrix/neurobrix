@@ -96,11 +96,11 @@ dtype_policy:
     # are not at this overflow site (bf16 covers the magnitude; native fp16
     # components were already designed to fit).
     require_graph_dtype: "float32"
-    # Only fire on fp16-preferring hardware. On bf16-capable hardware
-    # (A100/H100, RTX 30xx/40xx, ROCm CDNA) the conv output saturation
-    # does not occur because bf16 has fp32 exponent range. Pinning to
-    # fp32 there would waste VRAM with no numeric benefit.
-    skip_when_hw_supports_bf16: true
+    # Fire on bf16-preferring hardware too (the supervisor's decision 2026-11-06 06:40): bf16 has fp32's
+    # exponent range, so no saturation there, but 8 mantissa bits through a deep conv cascade lose PRECISION —
+    # measured by the Mac's RUN 51 on an M4 Pro: Allegro-TI2V's fp32-stored VAE encoder computed in bf16 put
+    # the conditioning latent 7.5 % off its fp32 value (Volta), every later op exact to its own input.
+    skip_when_hw_supports_bf16: false
     # Conv-cascade-dominance gate. Selects VAE-class encoders/decoders;
     # excludes the DiT patch-embed transformer (1 conv2d) and hybrid
     # linear-attention transformers (Sana DiT: 61 conv2d but 20 sdpa

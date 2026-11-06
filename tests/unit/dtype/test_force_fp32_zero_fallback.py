@@ -99,6 +99,10 @@ def test_broken_profile_propagates(monkeypatch):
     # so the gate is actually consulted.
     c = _StubContainer({"family": "image"}, [_comp()])
     monkeypatch.delenv("NBX_DISABLE_AUTO_FP32", raising=False)
+    # a family that still gates on bf16 hardware (the shipped image/video families no longer do, 2026-11-06)
+    import neurobrix.core.config.loader as _L
+    monkeypatch.setattr(_L, "get_family_config", lambda fam: {"dtype_policy": {"auto_fp32_on_overflow_risk": {
+        "enabled": True, "skip_when_hw_supports_bf16": True}}})
     with pytest.raises(OSError, match="profile query failed"):
         PrismSolver()._components_force_fp32(c, _BrokenProfile(False))
 

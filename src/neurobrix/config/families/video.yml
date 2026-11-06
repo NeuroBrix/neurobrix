@@ -60,7 +60,8 @@ dtype_policy:
   auto_fp32_on_overflow_risk:
     enabled: true
     require_graph_dtype: "float32"
-    skip_when_hw_supports_bf16: true
+    # bf16-preferring hardware too: precision, not saturation (image.yml's note; the Mac's RUN 51, 2026-11-06)
+    skip_when_hw_supports_bf16: false
     min_conv2d_count: 20
     conv2d_to_sdpa_ratio_min: 10
 

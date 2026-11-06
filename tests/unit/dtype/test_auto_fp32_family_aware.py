@@ -133,16 +133,17 @@ def test_auto_detect_on_empirical_matrix(family, comp, gdtype, conv,
     )
 
 
-def test_hw_gate_skips_on_bf16_hardware():
-    """A100/H100-class hw (bf16 native): conv saturation impossible
-    because bf16 exponent = fp32. Auto-detect must not fire."""
+def test_bf16_hardware_keeps_a_vae_cascade_fp32_too():
+    """bf16-preferring hardware (Apple, A100/H100): bf16 has fp32's exponent, so no saturation, but its 8 mantissa
+    bits through a deep conv cascade lose precision — Allegro-TI2V's fp32-stored VAE encoder in bf16 put the
+    conditioning latent 7.5 % off on an M4 Pro (the Mac's RUN 51, 2026-11-06; the supervisor's decision 06:40: the
+    same rule on bf16 hardware). Red if the family policy skips bf16 hardware again."""
     c = _StubContainer("image", [
         _StubComponent("vae", _graph("float32", conv2d=36, sdpa=1)),
     ])
-    auto = PrismSolver()._auto_fp32_components(c, _BF16_HW, "image")
-    assert auto == set(), (
-        f"bf16 hw must skip auto-detect; got {auto}"
-    )
+    assert PrismSolver()._auto_fp32_components(c, _BF16_HW, "image") == {"vae"}
+    v = _StubContainer("video", [_StubComponent("vae_encoder", _graph("float32", conv2d=36, sdpa=0))])
+    assert PrismSolver()._auto_fp32_components(v, _BF16_HW, "video") == {"vae_encoder"}
 
 
 def test_family_gate_omitted_means_disabled():
