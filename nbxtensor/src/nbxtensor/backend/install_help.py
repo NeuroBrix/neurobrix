@@ -11,6 +11,7 @@ on PyPI carries the NVIDIA and AMD backends (its entry points: `amd`, `nvidia`).
 from __future__ import annotations
 
 import ctypes
+import functools
 import glob
 import os
 from typing import Dict, List, Tuple
@@ -21,33 +22,12 @@ _PCI_VENDORS = {0x10DE: "nvidia", 0x1002: "amd", 0x8086: "intel"}
 #: the backend's runtime libraries (the backend tables'), and the Triton backend that compiles for it
 _NEEDS = {"amd": ("hip", "amd"), "intel": ("xpu", "intel"), "nvidia": ("cuda", "nvidia")}
 
-INSTALL_PAGE = "https://github.com/NeuroBrix/nbxtensor#install-on-amd--intel-gpus"
-
-_STEPS = {
-    "amd": ("the ROCm HIP runtime", [
-        "wget https://repo.radeon.com/amdgpu-install/6.4.3/ubuntu/noble/amdgpu-install_6.4.60403-1_all.deb",
-        "sudo apt install ./amdgpu-install_6.4.60403-1_all.deb",
-        "sudo apt update && sudo apt install rocm",
-        "sudo usermod -a -G render,video $LOGNAME     # then log out and in (or reboot)",
-    ], "https://rocm.docs.amd.com/projects/install-on-linux/en/latest/install/quick-start.html"),
-    "intel": ("the Level Zero loader and Intel GPU driver", [
-        "sudo add-apt-repository -y ppa:kobuk-team/intel-graphics",
-        "sudo apt-get install -y libze-intel-gpu1 libze1 intel-opencl-icd clinfo intel-gsc",
-        "sudo usermod -a -G render $LOGNAME            # then log out and in",
-    ], "https://dgpu-docs.intel.com/installation-guides/installing-packages-from-the-intel-ppa.html"),
-    "nvidia": ("the NVIDIA driver and the CUDA runtime", [
-        "sudo ubuntu-drivers install                   # the recommended NVIDIA driver",
-        "pip install nvidia-cuda-runtime-cu12          # the CUDA runtime, if the toolkit is not installed",
-    ], "https://docs.nvidia.com/cuda/cuda-installation-guide-linux/"),
-}
-
-_TRITON = {
-    "amd": ("pip install triton", "the Triton wheel on PyPI carries the AMD backend"),
-    "intel": ("pip install triton-xpu --index-url https://download.pytorch.org/whl/xpu",
-              "Intel's Triton build (intel-xpu-backend-for-triton); the PyPI wheel has no Intel backend"),
-    "nvidia": ("pip install triton", "the Triton wheel on PyPI carries the NVIDIA backend"),
-}
-
+@functools.lru_cache(maxsize=1)
+def _steps() -> dict:
+    """The vendors' install steps (`install_steps.yml`, beside this module, each with its source)."""
+    import yaml
+    with open(os.path.join(os.path.dirname(__file__), "install_steps.yml")) as f:
+        return yaml.safe_load(f)
 
 def pci_gpus(root: str = "/sys/bus/pci/devices") -> List[Tuple[str, int, int]]:
     """[(vendor name, vendor id, device id)] of the display controllers (PCI class 0x03) of the vendors in `_PCI_VENDORS`,
@@ -103,15 +83,16 @@ def diagnose(root: str = "/sys/bus/pci/devices") -> List[Dict[str, object]]:
     registered = _triton_backends()
     for vendor, devices in sorted(found.items()):
         backend, triton_name = _NEEDS[vendor]
-        what, steps, page = _STEPS[vendor]
+        row = _steps()["vendors"][vendor]
+        what, steps, page = row["runtime"], row["steps"], row["guide"]
         missing = []
         if not _loads(_runtime_libs(backend)):
             missing.append(what)
         if triton_name not in registered:
-            missing.append(f"a Triton build with the {triton_name!r} backend ({_TRITON[vendor][1]})")
+            missing.append(f"a Triton build with the {triton_name!r} backend ({row['triton_note']})")
         out.append({"vendor": vendor, "devices": [f"{d:#06x}" for d in devices], "backend": backend,
                     "missing": missing, "steps": (steps if len(missing) and what in missing else [])
-                    + ([_TRITON[vendor][0]] if triton_name not in registered else []), "page": page})
+                    + ([row["triton_step"]] if triton_name not in registered else []), "page": page})
     return out
 
 
@@ -127,7 +108,7 @@ def report(root: str = "/sys/bus/pci/devices") -> str:
         lines.append("  install with:")
         lines.extend(f"    {s}" for s in d["steps"])
         lines.append(f"  vendor guide: {d['page']}")
-        lines.append(f"  nbxtensor's install page: {INSTALL_PAGE}")
+        lines.append(f"  nbxtensor's install page: {_steps()['install_page']}")
     return "\n".join(lines) if lines else "no NVIDIA, AMD or Intel GPU found on the PCI bus"
 
 

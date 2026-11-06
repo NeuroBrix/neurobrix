@@ -85,14 +85,55 @@ def test_a_launch_passes_upstreams_order(held):
     assert d.artifact_kind == "hsaco" and d.wants_scratch_params is True
 
 
-def test_a_large_shared_memory_ask_opts_in_and_one_past_the_device_is_refused(held, monkeypatch):
-    lib = FakeHip(attrs={74: 32768, 75: 65536, 87: 64})
+def test_shared_memory_past_the_devices_block_maximum_is_refused_never_opted_in(held):
+    # a module function takes its LDS at launch up to attribute 74; hipFuncSetAttribute takes a host stub and Triton's
+    # AMD launcher calls none — past the maximum the config cannot run (OutOfResources, an autotune scores it inf)
+    lib = FakeHip(attrs={74: 65536, 75: 65536, 87: 64})
     d = L.HipDriver(lib=lib)
-    d.load(b"hsaco", "k", 49152)
-    assert ("hipFuncSetAttribute", 8, 49152) in lib.calls       # hipFuncAttributeMaxDynamicSharedMemorySize
+    d.load(b"hsaco", "k", 65536)
+    assert not [c for c in lib.calls if c[0] == "hipFuncSetAttribute"]
     from triton.runtime.errors import OutOfResources
     with pytest.raises(OutOfResources):
         d.load(b"hsaco", "k", 65537)
+
+
+def test_the_block_is_the_code_objects_wavefront_never_a_default():
+    import types
+    d = L.HipDriver(lib=FakeHip())
+    assert d.block_for(types.SimpleNamespace(warp_size=32, num_warps=4)) == (128, 1, 1)
+    with pytest.raises(AttributeError):
+        d.block_for(types.SimpleNamespace(num_warps=4))
+
+
+def test_hidden_arguments_of_the_runtime_are_not_counted():
+    meta = {"amdhsa.kernels": [{".name": "k", ".args": [{".value_kind": "global_buffer"}, {".value_kind": "by_value"},
+                                                        {".value_kind": "hidden_block_count_x"}]}]}
+
+    def pack(v):                                     # a minimal MessagePack writer for the test's map
+        if isinstance(v, dict):
+            return bytes([0x80 | len(v)]) + b"".join(pack(k) + pack(x) for k, x in v.items())
+        if isinstance(v, list):
+            return bytes([0x90 | len(v)]) + b"".join(pack(x) for x in v)
+        e = v.encode()
+        return bytes([0xA0 | len(e)]) + e if len(e) < 32 else bytes([0xD9, len(e)]) + e
+    import struct
+    desc = pack(meta)
+    note = struct.pack("<III", 7, len(desc), 32) + b"AMDGPU\0\0" + desc + b"\0" * (-len(desc) % 4)
+    shoff = 64 + len(note)
+    elf = bytearray(b"\x7fELF" + b"\0" * 60) + note
+    struct.pack_into("<Q", elf, 0x28, shoff)
+    struct.pack_into("<HH", elf, 0x3A, 64, 2)
+    elf += b"\0" * 64 + struct.pack("<IIQQQQ", 0, 7, 0, 0, 64, len(note)) + b"\0" * 16
+    assert L._hsaco_param_count(bytes(elf), "k") == 2
+
+
+def test_the_wavefront_of_the_target_is_the_device_files(monkeypatch):
+    d = L.HipDriver(lib=FakeHip(attrs={87: 64}))     # the device would say 64: the RDNA3 file says 32 and wins
+    monkeypatch.setattr(L, "_profile_arch", lambda: "gfx1100")
+    assert d.target().warp_size == 32
+    monkeypatch.setattr(L, "_profile_arch", lambda: "gfx9999")
+    with pytest.raises(RuntimeError, match="warp_size"):
+        d.target()
 
 
 def test_an_error_carries_hips_own_string(held):
@@ -108,7 +149,7 @@ def test_the_target_is_the_profiles_gfx_arch_and_the_devices_warp(monkeypatch):
     d = L.HipDriver(lib=lib)
     monkeypatch.setattr(L, "_profile_arch", lambda: "gfx90a")
     t = d.target()
-    assert (t.backend, t.arch, t.warp_size) == ("hip", "gfx90a", 64)
+    assert (t.backend, t.arch, t.warp_size) == ("hip", "gfx90a", 64)        # CDNA2's device file: wave64
     monkeypatch.setattr(L, "_profile_arch", lambda: "")
     with pytest.raises(RuntimeError, match="gfx"):
         d.target()

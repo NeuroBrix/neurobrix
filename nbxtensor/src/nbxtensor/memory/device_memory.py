@@ -110,7 +110,7 @@ class AbiMemory(DeviceMemory):
 
     def host_alloc(self, nbytes):
         p = ctypes.c_void_p()
-        flags = self._table.get("malloc_host_flags")      # HIP's call takes a flags word CUDA's has not: passed, never left
+        flags = self._table["malloc_host_flags"]          # HIP's call takes a flags word CUDA's has not: every table says
         args = (ctypes.byref(p), ctypes.c_size_t(int(nbytes))) + (() if flags is None else (ctypes.c_uint(int(flags)),))
         rc = self._fn("malloc_host")(*args)
         return rc, (p.value or 0)

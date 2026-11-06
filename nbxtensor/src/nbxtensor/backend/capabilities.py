@@ -97,7 +97,7 @@ def backend_has_fp64() -> bool:
 # Sixteen wastes half a Q tile at seqlen_q=1. A refusal wastes the model.
 #
 # This is a capability, not a vendor test — adding a backend is adding a row.
-_BACKEND_FA_MIN_TILE = {"cuda": 16, "hip": 16, "xpu": 16, "metal": 32}   # xpu: the DPAS tile's 16
+_BACKEND_FA_MIN_TILE = {"cuda": 16, "hip": 16, "xpu": 16, "metal": 32}   # xpu: analytical, owed (owed-proofs 2026-11-06)
 
 
 def fa_min_tile() -> int:
@@ -116,7 +116,7 @@ def fa_min_tile() -> int:
 # identity and nothing moves there.
 #
 # A capability, not a vendor test -- adding a backend is adding a row.
-_BACKEND_REDUCE_TILE_MAX = {"cuda": 1 << 20, "hip": 1 << 20, "xpu": 1 << 20, "metal": 1024}
+_BACKEND_REDUCE_TILE_MAX = {"cuda": 1 << 20, "hip": 1 << 20, "xpu": 1 << 20, "metal": 1024}   # xpu: analytical, owed
 
 
 def reduce_tile_max() -> int:
@@ -132,8 +132,8 @@ def reduce_tile_max() -> int:
 # (tests/unit/config/test_apple_profiles_agree_with_the_device.py held those tiles in the profile until the certifier
 # chose them; the rule is the kernels' prune now, `ops/_configs.prune_gemv_vec` / `prune_addmv`). cuda/hip reduce many
 # elements per thread in registers.
-_BACKEND_REDUCE_PER_THREAD = {"cuda": False, "hip": False, "xpu": False, "metal": True}
-_BACKEND_THREADS_PER_WARP = {"cuda": 32, "hip": 64, "xpu": 32, "metal": 32}   # xpu: Intel Triton's default threads_per_warp
+_BACKEND_REDUCE_PER_THREAD = {"cuda": False, "hip": False, "xpu": False, "metal": True}   # xpu: analytical, owed
+_BACKEND_THREADS_PER_WARP = {"cuda": 32, "hip": 64, "xpu": 32, "metal": 32}   # xpu: Intel Triton's default, owed
 
 
 def reduced_extent_max(num_warps: int) -> Optional[int]:

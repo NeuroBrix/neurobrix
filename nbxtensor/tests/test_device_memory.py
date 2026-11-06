@@ -9,7 +9,7 @@ import pytest
 from nbxtensor.memory.device_memory import AbiMemory
 
 TABLE = {"malloc": "xMalloc", "free": "xFree", "mem_get_info": "xMemGetInfo", "memset": "xMemset",
-         "memcpy": "xMemcpy", "malloc_host": "xMallocHost", "free_host": "xFreeHost", "set_device": "xSetDevice",
+         "memcpy": "xMemcpy", "malloc_host": "xMallocHost", "free_host": "xFreeHost", "malloc_host_flags": None, "set_device": "xSetDevice",
          "get_device": "xGetDevice", "device_count": "xGetDeviceCount"}
 
 

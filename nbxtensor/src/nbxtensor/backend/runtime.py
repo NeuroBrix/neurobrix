@@ -143,8 +143,9 @@ _GPU_BACKENDS = {
 
 #: the backends found by asking for a DEVICE rather than by loading a runtime library, in order: (name, the probe's
 #: dotted path). Their runtime tables are not rows of `_GPU_BACKENDS` (another API than one C ABI): `_NATIVE_TABLES`.
-_DEVICE_PROBES = (("xpu", "nbxtensor.backend.level_zero.level_zero_device_available"),
-                  ("metal", "nbxtensor.backend.metal_device.metal_device_available"))
+_DEVICE_PROBES = (("metal", "nbxtensor.backend.metal_device.metal_device_available"),
+                  ("xpu", "nbxtensor.backend.level_zero.level_zero_device_available"))   # Metal first: an Apple
+#: process probes exactly what it probed before Level Zero existed
 
 
 # ============================================================================

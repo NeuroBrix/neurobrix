@@ -4851,3 +4851,20 @@ measurement of its own: nvidia/ampere, nvidia/hopper, amd/cdna, cdna2, cdna3, an
 m4_pro. Owed, per architecture, by the first machine that holds one: the shared copy's configs at counts 4 096 to
 268 M (3 points per octave), each class's config certified at its floor against each count's best; the ladder moves
 where a class loses more than the device's noise band.
+
+## 2026-11-06 — owed by whoever first holds an AMD or an Intel card: the drivers' first light
+
+nbxtensor 0.0.2 carries the HIP driver (`backend.launcher.HipDriver`) and the Level Zero runtime and driver
+(`backend.level_zero`, `backend.level_zero_driver`), proven against stand-ins of the vendors' libraries only (the
+owner's order, 2026-11-06 10:22). Owed at first light, per vendor, in this order:
+1. `tests/nbxtensor_backend_conformance` on the card, then the library's own tests.
+2. **Intel, R33**: a subprocess with Intel's Triton build (`triton-xpu`) installed and no torch in the environment,
+   compiling and launching one kernel, `sys.modules` read for torch after it — Intel's backend discovery and compiler
+   (`triton/backends/intel`) have never been imported here.
+3. **Intel, the capability rows** written analytically in `backend/capabilities.py`: `_BACKEND_FA_MIN_TILE` 16,
+   `_BACKEND_REDUCE_TILE_MAX` 1 << 20, `_BACKEND_REDUCE_PER_THREAD` False, `_BACKEND_THREADS_PER_WARP` 32 (Triton's
+   common GPU lowering, Intel's default threads_per_warp), and the two refused until measured (`TRAPS_ON_DEVICE_ASSERT`,
+   `LOADS_POINTERS_FROM_MEMORY`, False): each measured with the probe that set its CUDA and Metal rows.
+4. **Both**: the device files' tiles, thresholds and screens (CDNA3's rows copied, `validation_status: analytical`)
+   certified on the card; Intel's free-memory answer (`ze_device_usablemem_size_ext_properties_t`) read against the
+   card's allocations; AMD's hidden kernel arguments (code object v5) counted out of a real Triton code object.

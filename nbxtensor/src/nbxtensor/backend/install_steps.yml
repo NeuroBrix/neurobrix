@@ -1,0 +1,36 @@
+# What to install for each GPU vendor when its runtime library or its Triton backend is missing — read by
+# backend/install_help.py. The vendors' own commands, read 2026-11-06 (Ubuntu 24.04):
+#   amd: ROCm quick start, rocm.docs.amd.com (amdgpu-install from repo.radeon.com); the PyPI Triton carries the AMD
+#        backend (its entry points: amd, nvidia)
+#   intel: Intel's client GPU packages, dgpu-docs.intel.com (the kobuk-team/intel-graphics PPA); Intel's Triton build
+#          (triton-xpu, download.pytorch.org/whl/xpu; intel/intel-xpu-backend-for-triton)
+#   nvidia: the NVIDIA driver (ubuntu-drivers) and the CUDA runtime wheel
+install_page: https://github.com/NeuroBrix/nbxtensor#install-on-amd--intel-gpus
+vendors:
+  amd:
+    runtime: the ROCm HIP runtime
+    steps:
+    - wget https://repo.radeon.com/amdgpu-install/6.4.3/ubuntu/noble/amdgpu-install_6.4.60403-1_all.deb
+    - sudo apt install ./amdgpu-install_6.4.60403-1_all.deb
+    - sudo apt update && sudo apt install rocm
+    - 'sudo usermod -a -G render,video $LOGNAME     # then log out and in (or reboot)'
+    guide: https://rocm.docs.amd.com/projects/install-on-linux/en/latest/install/quick-start.html
+    triton_step: pip install triton
+    triton_note: the Triton wheel on PyPI carries the AMD backend
+  intel:
+    runtime: the Level Zero loader and Intel GPU driver
+    steps:
+    - sudo add-apt-repository -y ppa:kobuk-team/intel-graphics
+    - sudo apt-get install -y libze-intel-gpu1 libze1 intel-opencl-icd clinfo intel-gsc
+    - 'sudo usermod -a -G render $LOGNAME            # then log out and in'
+    guide: https://dgpu-docs.intel.com/installation-guides/installing-packages-from-the-intel-ppa.html
+    triton_step: pip install triton-xpu --index-url https://download.pytorch.org/whl/xpu
+    triton_note: Intel's Triton build (intel-xpu-backend-for-triton); the PyPI wheel has no Intel backend
+  nvidia:
+    runtime: the NVIDIA driver and the CUDA runtime
+    steps:
+    - 'sudo ubuntu-drivers install                   # the recommended NVIDIA driver'
+    - 'pip install nvidia-cuda-runtime-cu12          # the CUDA runtime, if the toolkit is not installed'
+    guide: https://docs.nvidia.com/cuda/cuda-installation-guide-linux/
+    triton_step: pip install triton
+    triton_note: the Triton wheel on PyPI carries the NVIDIA backend

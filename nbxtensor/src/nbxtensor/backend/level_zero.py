@@ -183,14 +183,16 @@ def _gpu_devices(lib) -> list:
     if lib.zeDriverGet(ctypes.byref(n), None) != 0 or n.value == 0:
         return []
     drivers = (ctypes.c_void_p * n.value)()
-    lib.zeDriverGet(ctypes.byref(n), drivers)
+    if lib.zeDriverGet(ctypes.byref(n), drivers) != 0:
+        return []
     out = []
     for drv in drivers:
         m = ctypes.c_uint32(0)
         if lib.zeDeviceGet(ctypes.c_void_p(drv), ctypes.byref(m), None) != 0 or m.value == 0:
             continue
         devs = (ctypes.c_void_p * m.value)()
-        lib.zeDeviceGet(ctypes.c_void_p(drv), ctypes.byref(m), devs)
+        if lib.zeDeviceGet(ctypes.c_void_p(drv), ctypes.byref(m), devs) != 0:
+            continue
         for dev in devs:
             props = _DeviceProps(stype=_ST_DEVICE_PROPERTIES_1_2)
             if lib.zeDeviceGetProperties(ctypes.c_void_p(dev), ctypes.byref(props)) == 0 \
@@ -215,7 +217,7 @@ XPU_BACKEND = {
     "malloc": "malloc", "free": "free", "memcpy": "memcpy", "memset": "memset",
     "set_device": "set_device", "get_device": "get_device", "device_count": "device_count",
     "mem_get_info": "mem_get_info", "sync": "sync",
-    "malloc_host": "malloc_host", "free_host": "free_host",
+    "malloc_host": "malloc_host", "free_host": "free_host", "malloc_host_flags": None,
     "stream_create": "stream_create", "stream_destroy": "stream_destroy", "stream_sync": "stream_sync",
     "event_create": "event_create", "event_create_flags": "event_create_flags", "event_destroy": "event_destroy",
     "event_record": "event_record", "event_sync": "event_sync", "event_elapsed": "event_elapsed",
@@ -239,13 +241,17 @@ class LevelZeroRuntime:
         self._lock = threading.RLock()
         self._devices = [dev for _drv, dev in pairs]
         self._drivers = [drv for drv, _dev in pairs]
-        self._contexts: Dict[int, ctypes.c_void_p] = {}
-        self._current = 0
+        self._contexts: Dict[int, ctypes.c_void_p] = {}     # driver handle -> its context (one per driver)
+        self._thread = threading.local()                    # the current device is per thread, as cudaSetDevice's
         self._default_lists: Dict[int, int] = {}        # device index -> its default in-order immediate list
         self._lists: Dict[int, int] = {}                # every list this runtime made -> its device index
         self._sizes: Dict[int, int] = {}                # live allocation -> bytes
         self._events: Dict[int, dict] = {}              # event handle -> its pool and timestamp slot
         self._timer_hz: Dict[int, Tuple[int, int]] = {}
+
+    @property
+    def _current(self) -> int:
+        return getattr(self._thread, "index", 0)
 
     # -- handles ---------------------------------------------------------------
     def _check(self, rc: int, what: str) -> None:
@@ -253,14 +259,16 @@ class LevelZeroRuntime:
             raise RuntimeError(f"nbxtensor Level Zero: {what} failed ({result_name(rc)})")
 
     def context(self, index: Optional[int] = None) -> ctypes.c_void_p:
-        i = self._current if index is None else index
-        ctx = self._contexts.get(i)
-        if ctx is None:
-            ctx = ctypes.c_void_p()
-            desc = _Desc(stype=_ST_CONTEXT_DESC)
-            self._check(self.lib.zeContextCreate(ctypes.c_void_p(self._drivers[i]), ctypes.byref(desc),
-                                                 ctypes.byref(ctx)), "zeContextCreate")
-            self._contexts[i] = ctx
+        """The context of the driver the device belongs to: one per driver, shared by its devices."""
+        drv = self._drivers[self._current if index is None else index]
+        with self._lock:
+            ctx = self._contexts.get(drv)
+            if ctx is None:
+                ctx = ctypes.c_void_p()
+                desc = _Desc(stype=_ST_CONTEXT_DESC)
+                self._check(self.lib.zeContextCreate(ctypes.c_void_p(drv), ctypes.byref(desc), ctypes.byref(ctx)),
+                            "zeContextCreate")
+                self._contexts[drv] = ctx
         return ctx
 
     def device(self, index: Optional[int] = None) -> ctypes.c_void_p:
@@ -278,14 +286,21 @@ class LevelZeroRuntime:
                 return ordinal
         raise RuntimeError("nbxtensor Level Zero: the device has no compute command-queue group")
 
-    def _new_list(self, index: int) -> int:
+    def _try_new_list(self, index: int) -> Tuple[int, int]:
+        """(handle, ze_result) of a new in-order immediate command list on the device's compute group."""
         lst = ctypes.c_void_p()
         desc = _QueueDesc(stype=_ST_QUEUE_DESC, ordinal=self._compute_ordinal(index), index=0,
                           flags=_QUEUE_FLAG_IN_ORDER, mode=0, priority=0)
-        self._check(self.lib.zeCommandListCreateImmediate(self.context(index), self.device(index), ctypes.byref(desc),
-                                                          ctypes.byref(lst)), "zeCommandListCreateImmediate")
-        self._lists[int(lst.value)] = index
-        return int(lst.value)
+        rc = self.lib.zeCommandListCreateImmediate(self.context(index), self.device(index), ctypes.byref(desc),
+                                                   ctypes.byref(lst))
+        if rc == 0:
+            self._lists[int(lst.value)] = index
+        return int(lst.value or 0), rc
+
+    def _new_list(self, index: int) -> int:
+        lst, rc = self._try_new_list(index)
+        self._check(rc, "zeCommandListCreateImmediate")
+        return lst
 
     def command_list(self, stream: int = 0) -> ctypes.c_void_p:
         """The in-order immediate command list of `stream` (0: the current device's default one)."""
@@ -307,7 +322,7 @@ class LevelZeroRuntime:
         i = _as_int(index)
         if not 0 <= i < len(self._devices):
             return _ERR_INVALID_ARGUMENT
-        self._current = i
+        self._thread.index = i
         return 0
 
     def get_device(self, out_index) -> int:
@@ -325,12 +340,25 @@ class LevelZeroRuntime:
                     "zeDeviceGetComputeProperties")
         return props
 
-    def driver_version(self, index: Optional[int] = None) -> int:
+    def driver_version(self, index: Optional[int] = None) -> str:
+        """The driver version as SYCL's Level Zero adapter states it (intel/llvm, unified-runtime level_zero
+        common/platform.cpp): Intel's version string (zeIntelGetDriverVersionString) when the driver exports it, else
+        driverVersion read as | 31-24 major | 23-16 minor | 15-0 build | — what Intel's compiler parses (is_lts)."""
+        drv = ctypes.c_void_p(self._drivers[self._current if index is None else index])
+        fn = ctypes.c_void_p()
+        if self.lib.zeDriverGetExtensionFunctionAddress(drv, b"zeIntelGetDriverVersionString", ctypes.byref(fn)) == 0 \
+                and fn.value:
+            call = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_char_p,
+                                    ctypes.POINTER(ctypes.c_size_t))(fn.value)
+            n = ctypes.c_size_t(0)
+            call(drv, None, ctypes.byref(n))
+            buf = ctypes.create_string_buffer(n.value or 1)
+            self._check(call(drv, buf, ctypes.byref(n)), "zeIntelGetDriverVersionString")
+            return buf.value.decode(errors="replace")
         props = _DriverProps(stype=_ST_DRIVER_PROPERTIES)
-        i = self._current if index is None else index
-        self._check(self.lib.zeDriverGetProperties(ctypes.c_void_p(self._drivers[i]), ctypes.byref(props)),
-                    "zeDriverGetProperties")
-        return int(props.driverVersion)
+        self._check(self.lib.zeDriverGetProperties(drv, ctypes.byref(props)), "zeDriverGetProperties")
+        v = int(props.driverVersion)
+        return f"{(v >> 24) & 0xFF}.{(v >> 16) & 0xFF}.{v & 0xFFFF}"
 
     def mem_get_info(self, out_free, out_total) -> int:
         """Total: the device's memory heaps (zeDeviceGetMemoryProperties). Free: the memory the device can still
@@ -364,7 +392,7 @@ class LevelZeroRuntime:
                                        self.device(), ctypes.byref(p))
         slot.value = p.value if rc == 0 else 0
         if rc == 0 and p.value:
-            self._sizes[int(p.value)] = n
+            self._sizes[int(p.value)] = (n, self.context())
         return rc
 
     def malloc_host(self, out_ptr, size) -> int:
@@ -374,15 +402,17 @@ class LevelZeroRuntime:
                                      ctypes.byref(p))
         slot.value = p.value if rc == 0 else 0
         if rc == 0 and p.value:
-            self._sizes[int(p.value)] = n
+            self._sizes[int(p.value)] = (n, self.context())
         return rc
 
     def free(self, ptr) -> int:
         p = _as_int(ptr)
         if not p:
             return 0
-        self._sizes.pop(p, None)
-        return self.lib.zeMemFree(self.context(), ctypes.c_void_p(p))
+        held = self._sizes.pop(p, None)
+        if held is None:
+            return _ERR_INVALID_ARGUMENT                     # not an allocation of this runtime: refused, never freed
+        return self.lib.zeMemFree(held[1], ctypes.c_void_p(p))   # in the context that allocated it
 
     free_host = free
 
@@ -413,11 +443,10 @@ class LevelZeroRuntime:
         return 0
 
     def stream_create(self, out_handle) -> int:
-        try:
-            _deref(out_handle, ctypes.c_void_p).value = self._new_list(self._current)
-        except RuntimeError:
-            return _ERR_DEVICE_LOST
-        return 0
+        lst, rc = self._try_new_list(self._current)
+        if rc == 0:
+            _deref(out_handle, ctypes.c_void_p).value = lst
+        return rc
 
     def stream_destroy(self, handle) -> int:
         h = _as_int(handle)
@@ -465,10 +494,9 @@ class LevelZeroRuntime:
         e = self._events.pop(_as_int(handle), None)
         if e is None:
             return _ERR_INVALID_ARGUMENT
-        if e["slot"]:
-            self.free(e["slot"])
-        self.lib.zeEventDestroy(ctypes.c_void_p(_as_int(handle)))
-        return self.lib.zeEventPoolDestroy(e["pool"])
+        rc = self.free(e["slot"]) if e["slot"] else 0
+        rc = rc or self.lib.zeEventDestroy(ctypes.c_void_p(_as_int(handle)))
+        return rc or self.lib.zeEventPoolDestroy(e["pool"])
 
     def event_record(self, handle, stream=None) -> int:
         h = _as_int(handle)
@@ -560,16 +588,19 @@ def device_extensions(device_id: int, lib=None) -> list:
         raise RuntimeError(f"nbxtensor: the OpenCL ICD loader is not installed (tried {OPENCL_LIBS}); Intel's "
                            f"compiler needs the device's extensions — install ocl-icd-libopencl1 and intel-opencl-icd")
     n = ctypes.c_uint32(0)
-    lib.clGetPlatformIDs(ctypes.c_uint32(0), None, ctypes.byref(n))
+    rc = lib.clGetPlatformIDs(ctypes.c_uint32(0), None, ctypes.byref(n))
     platforms = (ctypes.c_void_p * n.value)()
-    lib.clGetPlatformIDs(n, platforms, None)
+    if rc != 0 or lib.clGetPlatformIDs(n, platforms, None) != 0:
+        raise RuntimeError(f"nbxtensor: the OpenCL ICD lists no platform (clGetPlatformIDs {rc}) — install "
+                           f"intel-opencl-icd (the device's extensions are what Intel's compiler is told)")
     for plat in platforms:
         m = ctypes.c_uint32(0)
         if lib.clGetDeviceIDs(ctypes.c_void_p(plat), ctypes.c_uint64(_CL_DEVICE_TYPE_GPU), ctypes.c_uint32(0), None,
                               ctypes.byref(m)) != 0 or not m.value:
             continue
         devs = (ctypes.c_void_p * m.value)()
-        lib.clGetDeviceIDs(ctypes.c_void_p(plat), ctypes.c_uint64(_CL_DEVICE_TYPE_GPU), m, devs, None)
+        if lib.clGetDeviceIDs(ctypes.c_void_p(plat), ctypes.c_uint64(_CL_DEVICE_TYPE_GPU), m, devs, None) != 0:
+            continue
         for dev in devs:
             vendor, did = ctypes.c_uint32(0), ctypes.c_uint32(0)
             lib.clGetDeviceInfo(ctypes.c_void_p(dev), ctypes.c_uint32(_CL_DEVICE_VENDOR_ID), ctypes.c_size_t(4),

@@ -251,8 +251,9 @@ def _hsaco_param_count(hsaco: bytes, name: str) -> Optional[int]:
                 if owner == b"AMDGPU" and ntype == 32:
                     meta, _ = _msgpack(hsaco[desc:desc + descsz])
                     for k in meta.get("amdhsa.kernels", []):
-                        if k.get(".name") == name:
-                            return len(k.get(".args", []))
+                        if k.get(".name") == name:      # the runtime's own hidden_* arguments are not the caller's
+                            return sum(1 for a in k.get(".args", [])
+                                       if not str(a.get(".value_kind", "")).startswith("hidden_"))
                 p = desc + ((descsz + 3) & ~3)
         return None
     except Exception:
@@ -400,7 +401,7 @@ class _ModuleDriver(Driver):
                 _msg = str(_warn.message)
                 if any(_m in _msg for _m in _markers):
                     raise RuntimeError(
-                        f"the Metal backend could not emit {kernel.__name__} for "
+                        f"the Metal backend could not emit {jit_fn.__name__} for "
                         f"this device and fell back to the CPU. Refusing the "
                         f"result: it would be an answer from hardware the caller "
                         f"did not ask for, and it is indistinguishable from a "
@@ -647,25 +648,39 @@ def _profile_arch() -> str:
     return str(getattr(devs[0], "compute_capability", "") or "") if devs else ""
 
 
+def _amd_device_file(arch: str) -> dict:
+    """The AMD device file stating `arch`: its `compute_capability`, else one of its `compute_capability_matches`
+    prefixes (a family's other gfx targets); {} when none does."""
+    from nbxtensor.backend import device_files
+    found = {}
+    for vendor, name, _path in device_files.names():
+        if vendor != "amd":
+            continue
+        desc = device_files.describe(vendor, name)
+        if str(desc.get("compute_capability", "")).lower() == arch:
+            return desc
+        if any(arch.startswith(str(m).lower()) for m in desc.get("compute_capability_matches") or []):
+            found = desc
+    return found
+
+
 class HipDriver(_ModuleDriver):
-    """libamdhip64 through ctypes: the HIP module API, modelled on `CudaDriver`. PREPARED, not yet run on an AMD card.
+    """The HIP runtime's module API through ctypes, modelled on `CudaDriver`; no AMD card has run it yet.
 
     Read from Triton 3.8's own AMD backend (site-packages/triton/backends/amd/): the binary is `hsaco` (compiler.py,
-    `make_hsaco`); the target `GPUTarget("hip", <gfx arch>, <warp size>)` (driver.py, `get_current_target`); the launch
+    `make_hsaco`); the target `GPUTarget("hip", <gfx arch>, <wavefront>)` (driver.py, `get_current_target`); the launch
     `hipModuleLaunchKernel(function, gridX, gridY, gridZ, warp_size * num_warps, 1, 1, shared_memory, stream, params, 0)`
     with the kernel's arguments then the global- and profile-scratch pointers (driver.c, `_launch` and the argument
-    extraction). The attribute numbers are hip_runtime_api.h's (the copy Triton ships in backends/amd/include):
-    hipDeviceAttributeMaxSharedMemoryPerBlock 74, hipDeviceAttributeSharedMemPerBlockOptin 75, hipDeviceAttributeWarpSize
-    87, hipFuncAttributeMaxDynamicSharedMemorySize 8. The arch is the hardware profile's (`compute_capability`), never a
-    device-property struct whose layout moves between ROCm releases; a profile without one is refused by name."""
+    extraction). hipDeviceAttributeMaxSharedMemoryPerBlock is 74 in hip_runtime_api.h (the copy Triton ships in
+    backends/amd/include). The arch and the wavefront are the hardware profile's and the device file's
+    (`compute_capability`, `memory.warp_size`), each refused by name when absent."""
 
     _inst: Optional["HipDriver"] = None
     artifact_kind = "hsaco"
     backend = "hip"
-    ATTR_MAX_SHARED_PER_BLOCK, ATTR_SHARED_PER_BLOCK_OPTIN, ATTR_WARP_SIZE = 74, 75, 87
-    FUNC_ATTR_MAX_DYNAMIC_SHARED = 8
-    _SYMBOLS = ("hipModuleLoadData", "hipModuleGetFunction", "hipModuleLaunchKernel", "hipFuncSetAttribute",
-                "hipDeviceGetAttribute", "hipGetErrorString")
+    ATTR_MAX_SHARED_PER_BLOCK = 74
+    _SYMBOLS = ("hipModuleLoadData", "hipModuleGetFunction", "hipModuleLaunchKernel", "hipDeviceGetAttribute",
+                "hipGetErrorString")
 
     @classmethod
     def instance(cls) -> "HipDriver":
@@ -712,13 +727,20 @@ class HipDriver(_ModuleDriver):
         if not arch.startswith("gfx"):
             raise RuntimeError("NeuroBrix launcher: the hardware profile states no gfx arch for this AMD device "
                                "(compute_capability, e.g. \"gfx90a\") — a HIP target is not guessed")
-        return GPUTarget("hip", arch.split(":")[0], self._attribute(self.ATTR_WARP_SIZE))
+        # the wavefront is the device file's fact (`memory.warp_size`, rule 1: the profile's facts, not the machine's)
+        warp = (_amd_device_file(arch.split(":")[0]).get("memory") or {}).get("warp_size")
+        if not warp:
+            raise RuntimeError(f"NeuroBrix launcher: no AMD device file states memory.warp_size for {arch!r} "
+                               f"(backend/devices/amd) — a wavefront is not guessed")
+        return GPUTarget("hip", arch.split(":")[0], int(warp))
 
     def block_for(self, metadata):
-        return (int(getattr(metadata, "warp_size", 64)) * int(metadata.num_warps), 1, 1)
+        """The wavefront size the code object was compiled for (`metadata.warp_size`: 64 on CDNA, 32 on RDNA) times
+        its warps — read, never defaulted: a wave32 kernel launched as wave64 runs twice its threads."""
+        return (int(metadata.warp_size) * int(metadata.num_warps), 1, 1)
 
     def max_shared_memory_per_block(self) -> int:
-        return self._attribute(self.ATTR_SHARED_PER_BLOCK_OPTIN)
+        return self._attribute(self.ATTR_MAX_SHARED_PER_BLOCK)
 
     def load(self, binary: bytes, name: str, shared: int):
         from nbxtensor.memory.allocator import DeviceAllocator
@@ -733,13 +755,13 @@ class HipDriver(_ModuleDriver):
         self._check(self.lib.hipModuleGetFunction(ctypes.byref(function), module, name.encode()),
                     f"hipModuleGetFunction({name})")
         self._param_counts[int(function.value)] = _hsaco_param_count(binary, name)
-        if shared > self._attribute(self.ATTR_MAX_SHARED_PER_BLOCK):
-            limit = self._attribute(self.ATTR_SHARED_PER_BLOCK_OPTIN)
-            if shared > limit:
-                from triton.runtime.errors import OutOfResources
-                raise OutOfResources(shared, limit, "shared memory")
-            self._check(self.lib.hipFuncSetAttribute(function, self.FUNC_ATTR_MAX_DYNAMIC_SHARED, ctypes.c_int(shared)),
-                        "hipFuncSetAttribute")
+        # A module function takes its dynamic LDS at launch up to the device's per-block maximum; there is no opt-in
+        # above it (hipFuncSetAttribute takes a host stub, not a module function, and Triton's AMD launcher calls none):
+        # past it the config cannot run here, as Triton's own launcher says (OutOfResources, scored inf by an autotune).
+        limit = self._attribute(self.ATTR_MAX_SHARED_PER_BLOCK)
+        if shared > limit:
+            from triton.runtime.errors import OutOfResources
+            raise OutOfResources(shared, limit, "shared memory")
         return function
 
     def launch(self, function, grid, block, shared: int, stream: int, params,

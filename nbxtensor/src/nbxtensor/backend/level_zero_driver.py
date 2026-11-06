@@ -34,6 +34,8 @@ class LevelZeroDriver(_ModuleDriver):
     def __init__(self, rt: LevelZeroRuntime) -> None:  # noqa: D107
         self.rt = rt
         self._modules: Dict[Tuple[int, bytes, str], ctypes.c_void_p] = {}
+        self._loaded: Dict[tuple, ctypes.c_void_p] = {}  # ((device, binary, flags), name) -> its kernel, created once
+        self._arg_buffers: Dict[Tuple[int, tuple], list] = {}   # (kernel, argument kinds) -> the C cells reused
         self._kernels: Dict[int, dict] = {}              # kernel handle -> its argument count, SLM, name
         self._launch_lock = threading.Lock()             # a kernel's arguments are state of its handle (the spec)
         self._target = None
@@ -51,6 +53,10 @@ class LevelZeroDriver(_ModuleDriver):
         if self._target is None:
             from triton import knobs
             from triton.backends.compiler import GPUTarget
+            if not hasattr(knobs, "intel"):
+                from nbxtensor.backend.install_help import report
+                raise RuntimeError("nbxtensor: this Triton has no Intel backend — Intel GPUs compile with Intel's "
+                                   "Triton build (triton-xpu).\n" + report())
             p, c = self.rt.properties(), self.rt.compute_properties()
             name, desc = device_file_for(p.deviceId)
             arch = str(desc.get("compute_capability") or "")
@@ -61,8 +67,11 @@ class LevelZeroDriver(_ModuleDriver):
             sizes = [int(c.subGroupSizes[i]) for i in range(c.numSubGroupSizes)]
             props = {fact: ext in exts for fact, ext in EXTENSION_FACTS.items()}
             props.update({
+                # name, vendor, driver_version and max_num_sub_groups as SYCL's Level Zero adapter states them
+                # (intel/llvm unified-runtime level_zero common/device.cpp: the vendor literal "Intel(R) Corporation",
+                # Level Zero giving only the id; MAX_NUM_SUB_GROUPS = maxTotalGroupSize / min(subGroupSizes))
                 "name": p.name.decode(errors="replace"), "vendor": "Intel(R) Corporation",
-                "device_id": int(p.deviceId), "driver_version": str(self.rt.driver_version()), "arch": arch,
+                "device_id": int(p.deviceId), "driver_version": self.rt.driver_version(), "arch": arch,
                 "gpu_eu_count": int(p.numSlices * p.numSubslicesPerSlice * p.numEUsPerSubslice),
                 "gpu_subslice_count": int(p.numSlices * p.numSubslicesPerSlice),
                 "max_work_group_size": int(c.maxTotalGroupSize),
@@ -70,10 +79,6 @@ class LevelZeroDriver(_ModuleDriver):
                 "sub_group_sizes": sizes, "local_mem_size": int(c.maxSharedLocalMemory),
                 "core_clock_rate": int(p.coreClockRate), "__intel_already_queried_extensions__": True,
             })
-            if not hasattr(knobs, "intel"):
-                from nbxtensor.backend.install_help import report
-                raise RuntimeError("nbxtensor: this Triton has no Intel backend — Intel GPUs compile with Intel's "
-                                   "Triton build (triton-xpu).\n" + report())
             knobs.intel.device_arch = arch
             self._target = GPUTarget("xpu", props, 32)
         return self._target
@@ -82,7 +87,7 @@ class LevelZeroDriver(_ModuleDriver):
         return (int(metadata.threads_per_warp) * int(metadata.num_warps), 1, 1)
 
     def load_options(self, metadata):
-        return {"build_flags": str(getattr(metadata, "build_flags", "") or "")}
+        return {"build_flags": str(metadata.build_flags)}     # Intel's compiler always records it ("" for none)
 
     def max_shared_memory_per_block(self) -> int:
         return int(self.rt.compute_properties().maxSharedLocalMemory)
@@ -120,7 +125,10 @@ class LevelZeroDriver(_ModuleDriver):
         per thread when the build fails or the kernel spills past 1000 bytes and no register mode was chosen —
         Intel's own driver does the same (driver.c)."""
         key = (self.rt._current, binary, build_flags)
-        mod = self._modules.get(key)
+        loaded = self._loaded.get((key, name))
+        if loaded is not None:
+            return loaded
+        mod, k = self._modules.get(key), None
         if mod is None:
             rc, mod, text = self._module(binary, build_flags)
             grf_chosen = "GRF" in build_flags
@@ -132,18 +140,20 @@ class LevelZeroDriver(_ModuleDriver):
                                    f"{text.strip()[:600]}")
             k, props = self._kernel(mod, name)
             if props.spillMemSize > _SPILL_RETRY_BYTES and not grf_chosen:
-                self.rt.lib.zeKernelDestroy(k)
                 rc, mod2, text = self._module(binary, f"{build_flags} {_GRF_RETRY_FLAG}".strip())
-                if rc == 0:
-                    self.rt.lib.zeModuleDestroy(mod)
-                    mod = mod2
+                if rc == 0:                       # the rebuilt module replaces the spilling one, its kernel with it
+                    self._check(self.rt.lib.zeKernelDestroy(k), "zeKernelDestroy")
+                    self._check(self.rt.lib.zeModuleDestroy(mod), "zeModuleDestroy")
+                    mod, k = mod2, None
             self._modules[key] = mod
-        k, props = self._kernel(mod, name)
+        if k is None:
+            k, props = self._kernel(mod, name)
         limit = int(self.rt.compute_properties().maxSharedLocalMemory)
         if shared > limit:
             from triton.runtime.errors import OutOfResources
             raise OutOfResources(shared, limit, "shared memory")
         self._kernels[int(k.value)] = {"args": int(props.numKernelArgs), "shared": int(shared), "name": name}
+        self._loaded[(key, name)] = k
         return k
 
     def launch(self, function, grid, block, shared: int, stream: int, params,
@@ -172,8 +182,11 @@ class LevelZeroDriver(_ModuleDriver):
             return
         lib, k = self.rt.lib, ctypes.c_void_p(h)
         with self._launch_lock:
-            for i, (kind, value) in enumerate(params):
-                cell = _ctypes_slot(kind)
+            kinds = tuple(kind for kind, _v in params)
+            cells = self._arg_buffers.get((h, kinds))
+            if cells is None:             # one C cell per argument, built once per (kernel, kinds) as CudaDriver's
+                cells = self._arg_buffers[(h, kinds)] = [_ctypes_slot(kind) for kind in kinds]
+            for i, (cell, (_kind, value)) in enumerate(zip(cells, params)):
                 cell.value = value
                 self._check(lib.zeKernelSetArgumentValue(k, ctypes.c_uint32(i), ctypes.c_size_t(ctypes.sizeof(cell)),
                                                          ctypes.byref(cell)), f"zeKernelSetArgumentValue({i})")

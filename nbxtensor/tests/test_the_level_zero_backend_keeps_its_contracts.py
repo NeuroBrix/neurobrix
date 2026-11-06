@@ -81,6 +81,9 @@ class FakeZe:
             arr[0].totalSize = self.total
         return 0
 
+    def zeDriverGetExtensionFunctionAddress(self, drv, name, out):
+        return Z._ERR_UNSUPPORTED_FEATURE             # no Intel version-string extension: the encoded version
+
     def zeDriverGetProperties(self, drv, props):
         _obj(props).driverVersion = 0x01060000
         return 0
@@ -193,7 +196,8 @@ def test_a_loader_without_a_gpu_does_not_name_the_backend():
     assert Z._gpu_devices(FakeZe(gpu=False)) == []
     assert Z._gpu_devices(FakeZe(devices=0)) == []
     assert Z._gpu_devices(FakeZe()) == [(0xD0, 0xE0)]
-    assert ("xpu", "nbxtensor.backend.level_zero.level_zero_device_available") == R._DEVICE_PROBES[0]
+    assert R._DEVICE_PROBES == (("metal", "nbxtensor.backend.metal_device.metal_device_available"),
+                                ("xpu", "nbxtensor.backend.level_zero.level_zero_device_available"))
     assert R._TRITON_BACKEND_BY_RUNTIME["xpu"] == "intel"
 
 
@@ -318,6 +322,7 @@ def test_the_target_is_asked_of_the_device_and_its_file_never_guessed(drv, monke
     assert (t.backend, t.warp_size, t.arch["arch"]) == ("xpu", 32, "pvc") and triton.knobs.intel.device_arch == "pvc"
     assert t.arch["has_fp64"] and t.arch["has_2d_block_io"] and t.arch["has_subgroup_matrix_multiply_accumulate"]
     assert t.arch["has_bfloat16_conversion"] is False and t.arch["sub_group_sizes"] == [16, 32]
+    assert t.arch["driver_version"] == "1.6.0"                        # | major | minor | build |, as SYCL reads it
     assert t.arch["gpu_eu_count"] == 448 and t.arch["max_num_sub_groups"] == 64 and t.arch["local_mem_size"] == 131072
     from nbxtensor.backend.launcher import arch_name
     assert arch_name(t) == "pvc"
@@ -347,9 +352,52 @@ def test_install_help_names_what_a_present_gpu_lacks(tmp_path, monkeypatch):
     assert "AMD GPU (0x744c)" in text and "repo.radeon.com/amdgpu-install" in text and "sudo apt install rocm" in text
     assert "INTEL GPU (0xe20b)" in text and "libze-intel-gpu1" in text and "pip install triton-xpu" in text
     assert "pip install triton\n" not in text                         # the AMD backend is there: no Triton step
-    assert H.INSTALL_PAGE in text
+    assert H._steps()["install_page"] in text
     msg = H.no_runtime_message(str(tmp_path))
     assert msg.startswith("No GPU runtime found") and "sudo apt install rocm" in msg
     empty = tmp_path / "none"
     empty.mkdir()
     assert H.no_runtime_message(str(empty)) == "No GPU runtime found (tried CUDA, ROCm/HIP, Level Zero and Metal)."
+
+
+def test_the_current_device_is_per_thread_and_a_free_uses_the_allocating_context(ze):
+    import threading
+    lib, rt = ze
+    lib.devices = 2
+    rt2 = Z.LevelZeroRuntime(lib)
+    assert rt2.set_device(1) == 0
+    seen = []
+    t = threading.Thread(target=lambda: seen.append(rt2._current))
+    t.start()
+    t.join()
+    assert seen == [0] and rt2._current == 1                          # another thread keeps its own device
+    p = ctypes.c_void_p()
+    assert rt2.malloc(ctypes.byref(p), 64) == 0
+    ctx = rt2._sizes[p.value][1]
+    rt2.set_device(0)
+    freed = []
+    lib.zeMemFree = lambda c, q: (freed.append(c.value), 0)[1]
+    assert rt2.free(p.value) == 0 and freed == [ctx.value]
+    assert rt2.free(0xDEAD) == Z._ERR_INVALID_ARGUMENT                 # not ours: refused, never freed
+
+
+def test_a_kernel_is_created_once_per_module_and_name(drv):
+    lib, d = drv
+    k1 = d.load(b"spv", "k", 0)
+    k2 = d.load(b"spv", "k", 0)
+    assert k1 is k2 and len([c for c in lib.calls if c[0] == "kernel"]) == 1
+
+
+def test_the_structures_are_the_published_bindings_layouts():
+    # sizes and the offset of the last field, as the loader's own ctypes bindings lay them out (oneapi-src/level-zero
+    # include/ze.py, v1.20-r1.20.41, compared field by field on 2026-11-06) — independent of the stand-ins above,
+    # which share this module's assumptions. A field added, dropped or retyped here moves one of these numbers.
+    published = {'_Desc': (24, 16), '_QueueDesc': (40, 32), '_QueueGroupProps': (40, 32),
+                 '_DeviceMemAllocDesc': (24, 20), '_UsableMem': (24, 16), '_DeviceProps': (368, 112),
+                 '_ComputeProps': (88, 52), '_MemoryProps': (296, 40), '_DriverProps': (40, 32),
+                 '_ModuleDesc': (56, 48), '_KernelDesc': (32, 24), '_KernelProps': (96, 76), '_GroupCount': (12, 8),
+                 '_EventPoolDesc': (24, 20), '_EventDesc': (32, 24)}       # read from ze.py itself, not written by hand
+    for name, (size, last) in published.items():
+        cls = getattr(Z, name)
+        assert (ctypes.sizeof(cls), getattr(cls, cls._fields_[-1][0]).offset) == (size, last), name
+    assert (Z._ST_DEVICE_PROPERTIES_1_2, Z._ST_USABLE_MEM, Z._ST_KERNEL_PROPS) == (0x00020006, 0x00020041, 0x1E)

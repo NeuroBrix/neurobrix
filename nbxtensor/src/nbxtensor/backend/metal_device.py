@@ -1118,6 +1118,7 @@ METAL_BACKEND = {
     "mem_get_info": "mem_get_info",
     "sync": "sync",
     "malloc_host": "malloc_host", "free_host": "free_host",
+    "malloc_host_flags": None,  # malloc_host(&ptr, size), no flags word
     "stream_create": "stream_create",
     "stream_destroy": "stream_destroy",
     "stream_sync": "stream_sync",

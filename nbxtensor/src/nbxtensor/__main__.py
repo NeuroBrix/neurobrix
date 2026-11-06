@@ -7,10 +7,13 @@ import sys
 def doctor() -> int:
     from nbxtensor.backend import install_help, runtime
     try:
-        print(f"backend in force: {runtime.gpu_backend()}")
+        backend = runtime.gpu_backend()
+        print(f"backend in force: {backend}" + (" (the Apple GPU, through Metal)" if backend == "metal" else ""))
     except RuntimeError as exc:
+        backend = None
         print(f"backend in force: none — {str(exc).splitlines()[0]}")
-    print(install_help.report())
+    if backend != "metal" or install_help.pci_gpus():     # a Mac has no PCI GPU to report: nothing to install there
+        print(install_help.report())
     return 0
 
 
