@@ -6,6 +6,7 @@ from nbxtensor.memory import allocator as _alloc
 
 import ctypes
 import functools
+import importlib
 import os
 import threading
 from typing import Optional
@@ -140,6 +141,12 @@ _GPU_BACKENDS = {
 }
 
 
+#: the backends found by asking for a DEVICE rather than by loading a runtime library, in order: (name, the probe's
+#: dotted path). Their runtime tables are not rows of `_GPU_BACKENDS` (another API than one C ABI): `_NATIVE_TABLES`.
+_DEVICE_PROBES = (("xpu", "nbxtensor.backend.level_zero.level_zero_device_available"),
+                  ("metal", "nbxtensor.backend.metal_device.metal_device_available"))
+
+
 # ============================================================================
 # CURRENT-DEVICE CACHE (P-KERNEL-LAUNCH-HYGIENE C2)
 # ============================================================================
@@ -209,7 +216,7 @@ def set_device(t):
 #: `metal`); Triton names its own for the vendor's COMPILER target, which is the
 #: directory under `triton/backends/`. The two vocabularies are not the same and
 #: the mapping between them belongs here, once.
-_TRITON_BACKEND_BY_RUNTIME = {"cuda": "nvidia", "hip": "amd", "metal": "metal"}
+_TRITON_BACKEND_BY_RUNTIME = {"cuda": "nvidia", "hip": "amd", "xpu": "intel", "metal": "metal"}
 
 
 def _pin_triton_backend(name: str) -> str:
@@ -300,9 +307,9 @@ def gpu_backend() -> str:
     """
     forced = os.environ.get("NBX_GPU_BACKEND")
     if forced:
-        if forced not in _GPU_BACKENDS and forced != "metal":
+        if forced not in _GPU_BACKENDS and forced not in dict(_DEVICE_PROBES):
             raise RuntimeError(f"NBX_GPU_BACKEND={forced!r} is not a known backend "
-                               f"({sorted(_GPU_BACKENDS) + ['metal']})")
+                               f"({sorted(_GPU_BACKENDS) + [n for n, _p in _DEVICE_PROBES]})")
         return _pin_triton_backend(forced)
     # The backend TABLE decides: the first vendor runtime the process can
     # load names the backend — adding a backend is adding a table entry.
@@ -313,13 +320,16 @@ def gpu_backend() -> str:
                 return _pin_triton_backend(name)
             except OSError:
                 continue
-    # Apple GPUs. Not a "fallback" in the sense the loop above is: there is
-    # no library to dlopen, so the probe opens the device itself and answers
-    # only when a usable one came back.
-    from nbxtensor.backend.metal_device import metal_device_available
-    if metal_device_available():
-        return _pin_triton_backend("metal")
-    raise RuntimeError("No GPU runtime found (tried CUDA, ROCm/HIP and Metal)")
+    # Intel GPUs (Level Zero) and Apple GPUs. Not a "fallback" in the sense the
+    # loop above is: a Level Zero loader is installed on machines without an
+    # Intel GPU, and Metal has no library to dlopen, so each probe asks for a
+    # usable DEVICE and answers only when one came back.
+    for name, probe in _DEVICE_PROBES:
+        module, function = probe.rsplit(".", 1)
+        if getattr(importlib.import_module(module), function)():
+            return _pin_triton_backend(name)
+    from nbxtensor.backend.install_help import no_runtime_message
+    raise RuntimeError(no_runtime_message())
 
 
 def device_label(tensor) -> str:
@@ -361,8 +371,8 @@ def backend_table() -> dict:
     behind this seam that the seam's own docstring describes.
     """
     name = gpu_backend()
-    if name == "metal":
-        return _metal_backend_table()
+    if name in _NATIVE_TABLES:
+        return _NATIVE_TABLES[name]()
     return _GPU_BACKENDS[name]
 
 
@@ -383,6 +393,17 @@ def _metal_backend_table() -> dict:
 
 
 @functools.lru_cache(maxsize=1)
+def _xpu_backend_table() -> dict:
+    """The Level Zero entry-point table (`backend.level_zero.XPU_BACKEND`), imported once, as Metal's."""
+    from nbxtensor.backend.level_zero import XPU_BACKEND
+    return XPU_BACKEND
+
+
+#: backend -> its table, for the backends whose runtime is not a C ABI of `_GPU_BACKENDS`'s kind
+_NATIVE_TABLES = {"metal": _metal_backend_table, "xpu": _xpu_backend_table}
+
+
+@functools.lru_cache(maxsize=1)
 def gpu_runtime():
     """The runtime of the GPU backend in force: the Metal runtime object on Metal, else the vendor's runtime library
     (CUDA, HIP) loaded through its C ABI, the first of the backend table's libraries that loads."""
@@ -390,6 +411,9 @@ def gpu_runtime():
     if name == "metal":
         from nbxtensor.backend.metal_device import runtime
         return runtime()          # itself cached; see _metal_backend_table
+    if name == "xpu":
+        from nbxtensor.backend.level_zero import runtime as level_zero_runtime
+        return level_zero_runtime()   # the C ABI of a CUDA-style runtime, emulated over Level Zero
     backend = backend_table()
     for lib in backend["rt_libs"]:
         try:

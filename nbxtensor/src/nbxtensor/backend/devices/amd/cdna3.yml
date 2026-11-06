@@ -34,8 +34,7 @@ block_sizes:
 
 # Scaled Dot-Product Attention block size thresholds.
 # Schema documented in volta.yml. Decode entries first.
-# Values inherited from CDNA1/2 (conservative for 64 KB). MI300's
-# 160 KB LDS allows larger tiles — unmeasured, see the memory note.
+# Values inherited from CDNA1/2, sized for CDNA3's 64 KB of LDS per workgroup.
 sdpa_thresholds:
   # Decode path (seqlen_q ≤ 16)
   - seqlen_q_le: 16
@@ -62,7 +61,7 @@ sdpa_thresholds:
     num_warps: 4
 
 memory:
-  max_shared_memory_per_block: 163840   # 160 KB LDS per CU (CDNA3)
+  max_shared_memory_per_block: 65536   # 64 KB LDS per workgroup (CDNA3: Triton v3.8.0 TargetFeatures.cpp; 160 KB is CDNA4)
   max_registers_per_block: 65536
   # AMD schedules in 64-wide WAVEFRONTS where NVIDIA uses 32-wide warps.
   # Named `warp_size` for schema uniformity, the same convention

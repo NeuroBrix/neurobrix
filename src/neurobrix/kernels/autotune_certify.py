@@ -1681,9 +1681,9 @@ def _machine() -> Dict[str, Any]:
     except Exception:
         pass
     try:
-        from nbxtensor.backend.launcher import target
+        from nbxtensor.backend.launcher import arch_name, target
         t = target()
-        info["target"] = f"{t.backend}-{t.arch}"
+        info["target"] = f"{t.backend}-{arch_name(t)}"
     except Exception:
         pass
     try:

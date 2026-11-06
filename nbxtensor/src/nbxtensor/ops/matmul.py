@@ -140,8 +140,8 @@ def _detect_arch_configs():
     matching profile the space is returned untouched.
     """
     try:
-        from nbxtensor.backend.launcher import target as _nbx_target  # engine data, no driver probe (R33)
-        arch = _nbx_target().arch
+        from nbxtensor.backend.launcher import arch_name as _nbx_arch  # engine data, no driver probe (R33)
+        arch = _nbx_arch()
     except Exception:
         return _MATMUL_AUTOTUNE_VOLTA
 

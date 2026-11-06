@@ -295,8 +295,8 @@ def _safe_num_stages(n: int) -> int:
     # question is answerable from the Triton runtime, which is the documented
     # bootstrap mechanism already used by `matmul._detect_arch_configs`.
     try:
-        from nbxtensor.backend.launcher import target as _nbx_target  # engine data, no driver probe (R33)
-        arch = _nbx_target().arch
+        from nbxtensor.backend.launcher import arch_name as _nbx_arch  # engine data, no driver probe (R33)
+        arch = _nbx_arch()
     except Exception:
         return n                       # no runtime to ask: change nothing
     if isinstance(arch, int):
@@ -478,8 +478,8 @@ def arch_smem_budget() -> Optional[int]:
         return None
 
     try:
-        from nbxtensor.backend.launcher import target as _nbx_target  # engine data, no driver probe (R33)
-        arch = _nbx_target().arch
+        from nbxtensor.backend.launcher import arch_name as _nbx_arch  # engine data, no driver probe (R33)
+        arch = _nbx_arch()
     except Exception as exc:
         # A machine with no Triton target has no profile, and None says so.
         # But a DELIBERATE refusal is not that, and swallowing it here is how a

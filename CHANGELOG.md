@@ -29,6 +29,10 @@ eye, every time in the gate register, none more than 1.5 times slower than the p
 - **Prism prices a PyTorch-engine load as the loader performs it**: one tensor at a time per worker, the pinned host
   cache emptied after each component, a host-held component loaded unpinned then copied into one registered block —
   where it priced every component read and pinned whole (Qwen3-Coder-30B: 115 GB of loading priced, 62.5 GB measured).
+- **AMD and Intel GPUs in the Triton engine** (nbxtensor's HIP and Level Zero drivers, written, not yet run on a card):
+  vendor files for AMD CDNA4, RDNA3 and RDNA4 and Intel Data Center GPU Max, Arc A and B and Lunar Lake, and
+  `neurobrix doctor` names, for every GPU on the PCI bus, the runtime library and Triton backend it lacks and the
+  vendor's commands that install them.
 
 ### Removed
 - **The tiling engine's host switches and diagnostic prints**: `NBX_DISABLE_INPLACE_ADD`, `NBX_DISABLE_INPLACE_UNARY`, `NBX_INPLACE_MIN_BYTES`, `NBX_TRITON_CHAIN_WRAPPER`, `NBX_S5_BASELINE_AUDIT`, `NBX_TILE_CENSUS` and `NBX_CHAIN_DIAG` are no longer read: the in-place adds and activations follow Prism's plan and the profile's threshold, the residual-chain wrapper runs in every mode.

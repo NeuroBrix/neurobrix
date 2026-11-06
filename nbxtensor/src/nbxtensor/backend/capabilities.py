@@ -25,7 +25,8 @@ from nbxtensor.backend import runtime as _rt
 # a 24-float tensor; `embedding` read past the end of the weight).
 #
 # This is a capability, not a vendor test — adding a backend is adding a row.
-_BACKEND_TRAPS_ON_DEVICE_ASSERT = {"cuda": True, "hip": True, "metal": False}
+# xpu (Intel, Level Zero): not measured on a card — False until a launch proves an assert stops the kernel.
+_BACKEND_TRAPS_ON_DEVICE_ASSERT = {"cuda": True, "hip": True, "xpu": False, "metal": False}
 
 # Whether a kernel can load a device ADDRESS out of a tensor and then read
 # through it — the [E] int64 pointer table that lets one launch reach every
@@ -49,7 +50,8 @@ _BACKEND_TRAPS_ON_DEVICE_ASSERT = {"cuda": True, "hip": True, "metal": False}
 # band that cannot address its experts has to refuse by name, and a refusal
 # needs a fact to stand on. This is a capability, not a vendor test — adding a
 # backend is adding a row.
-_BACKEND_LOADS_POINTERS_FROM_MEMORY = {"cuda": True, "hip": True, "metal": False}
+# xpu: not measured on a card — False (the band refuses by name) until a launch reads through a loaded address.
+_BACKEND_LOADS_POINTERS_FROM_MEMORY = {"cuda": True, "hip": True, "xpu": False, "metal": False}
 # Whether the backend's kernels can read and write a float64 (or complex128) element. Metal
 # has no double: its lowering NARROWS f64 to float in silence (`triton/metal_backend.py`,
 # `TRITON_METAL_FP64_UNAVAILABLE`), so a kernel over a float64 buffer reads eight-byte
@@ -95,7 +97,7 @@ def backend_has_fp64() -> bool:
 # Sixteen wastes half a Q tile at seqlen_q=1. A refusal wastes the model.
 #
 # This is a capability, not a vendor test — adding a backend is adding a row.
-_BACKEND_FA_MIN_TILE = {"cuda": 16, "hip": 16, "metal": 32}
+_BACKEND_FA_MIN_TILE = {"cuda": 16, "hip": 16, "xpu": 16, "metal": 32}   # xpu: the DPAS tile's 16
 
 
 def fa_min_tile() -> int:
@@ -114,7 +116,7 @@ def fa_min_tile() -> int:
 # identity and nothing moves there.
 #
 # A capability, not a vendor test -- adding a backend is adding a row.
-_BACKEND_REDUCE_TILE_MAX = {"cuda": 1 << 20, "hip": 1 << 20, "metal": 1024}
+_BACKEND_REDUCE_TILE_MAX = {"cuda": 1 << 20, "hip": 1 << 20, "xpu": 1 << 20, "metal": 1024}
 
 
 def reduce_tile_max() -> int:
@@ -130,8 +132,8 @@ def reduce_tile_max() -> int:
 # (tests/unit/config/test_apple_profiles_agree_with_the_device.py held those tiles in the profile until the certifier
 # chose them; the rule is the kernels' prune now, `ops/_configs.prune_gemv_vec` / `prune_addmv`). cuda/hip reduce many
 # elements per thread in registers.
-_BACKEND_REDUCE_PER_THREAD = {"cuda": False, "hip": False, "metal": True}
-_BACKEND_THREADS_PER_WARP = {"cuda": 32, "hip": 64, "metal": 32}
+_BACKEND_REDUCE_PER_THREAD = {"cuda": False, "hip": False, "xpu": False, "metal": True}
+_BACKEND_THREADS_PER_WARP = {"cuda": 32, "hip": 64, "xpu": 32, "metal": 32}   # xpu: Intel Triton's default threads_per_warp
 
 
 def reduced_extent_max(num_warps: int) -> Optional[int]:

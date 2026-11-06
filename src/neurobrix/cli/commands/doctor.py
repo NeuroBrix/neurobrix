@@ -85,11 +85,8 @@ def _triton_engine() -> tuple[bool, str]:
     try:
         from nbxtensor.backend.runtime import gpu_backend
         return True, f"ready on {gpu_backend()} (nbxtensor {nbxtensor.__version__}, Triton {triton.__version__})"
-    except RuntimeError as exc:
-        if _nvidia_smi_gpus():
-            return False, (f"the driver sees a GPU but nbxtensor found no GPU runtime ({exc}); the CUDA runtime library "
-                           f"comes with nbxtensor on Linux: pip install --force-reinstall nbxtensor")
-        return False, f"no GPU ({exc}); on a CPU --triton needs the upstream triton-cpu package"
+    except RuntimeError as exc:    # names what to install for a GPU on the bus (nbxtensor.backend.install_help)
+        return False, f"no GPU runtime: {exc}"
 
 
 def _torch_present() -> bool:
@@ -108,6 +105,8 @@ def check_compute_environment() -> list[str]:
     print("-" * 60)
     triton_ready, triton_says = _triton_engine()
     print(f"  Triton engine:  {triton_says}")
+    from nbxtensor.backend.install_help import report
+    print("  GPU drivers:    " + report().replace("\n", "\n                  "))
 
     if not _torch_present():
         print("  PyTorch engine: not installed (optional; the Triton engine runs without it: --triton). To add it: "

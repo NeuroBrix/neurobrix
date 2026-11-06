@@ -116,6 +116,14 @@ def target():
     return _TARGET
 
 
+def arch_name(compile_target=None) -> str:
+    """The name a target's device files and certified settings are keyed on: the capability (70) or arch string
+    ("gfx90a", "apple-m4-pro") as it is, and for Intel — whose target carries a dict of device properties (Intel's
+    driver.py `get_current_target`) — that dict's `arch` ("pvc", "bmg")."""
+    a = (compile_target if compile_target is not None else target()).arch
+    return a["arch"] if isinstance(a, dict) else a
+
+
 def arch() -> int:
     """Compute capability as an int (70 for sm_70) — `target().arch`."""
     return int(target().arch)
@@ -320,6 +328,11 @@ class Driver:
     def target(self):  # pragma: no cover - interface
         raise NotImplementedError
 
+    def load_options(self, metadata) -> dict:
+        """What `load` needs of the compile metadata beyond the binary, name and shared memory: nothing on CUDA, HIP
+        and Metal; the module build flags Intel's compiler records (`build_flags`) on Level Zero."""
+        return {}
+
     def max_shared_memory_per_block(self):  # pragma: no cover - interface
         """The device's per-block shared-memory ceiling, in bytes.
 
@@ -400,7 +413,7 @@ class _ModuleDriver(Driver):
             raise RuntimeError(f"NeuroBrix launcher: {jit_fn.__name__} needs clusters or scratch memory the "
                                f"{self.backend.upper()} client does not provide yet")
         cubin = compiled.asm[self.artifact_kind]
-        function = self.load(cubin, md.name, md.shared)
+        function = self.load(cubin, md.name, md.shared, **self.load_options(md))
         binding = []
         ordered = {}
         for kp in params:
@@ -813,10 +826,13 @@ def _resolve_driver() -> Driver:
         return CudaDriver.instance()
     if name == "hip":
         return HipDriver.instance()
+    if name == "xpu":
+        from nbxtensor.backend.level_zero_driver import LevelZeroDriver
+        return LevelZeroDriver.instance()
     # Any other backend has no launch driver here yet: refused by name, never handed the CUDA one (an AMD card failed
     # inside libcuda at its first launch, 2026-10-30). A new backend implements the driver interface (BACKENDS.md).
     raise RuntimeError(f"nbxtensor launcher: no launch driver for the {name!r} backend — the library launches on cuda, "
-                       f"hip and metal; a backend implements the launcher's Driver interface (docs/nbxtensor/BACKENDS.md)")
+                       f"hip, xpu and metal; a backend implements the launcher's Driver interface (docs/nbxtensor/BACKENDS.md)")
 
 
 def _unsupported(kind):
@@ -1123,7 +1139,7 @@ def prepare(kernel, args, kwargs) -> Tuple[_Prepared, Dict[str, Any]]:
                 f"NeuroBrix launcher: {kernel.__name__} compiled to "
                 f"{sorted(compiled.asm)} but {drv.__class__.__name__} takes "
                 f"{drv.artifact_kind!r}")
-        function = drv.load(artifact, md.name, md.shared)
+        function = drv.load(artifact, md.name, md.shared, **drv.load_options(md))
         prep = _Prepared(function, signature, md.shared, md.num_warps, md.name,
                          drv.block_for(md), trailing=drv.trailing_buffers(md))
         kernel_cache[key] = prep

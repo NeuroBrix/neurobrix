@@ -35,11 +35,8 @@ block_sizes:
   # GroupNorm maximum elements per group
   groupnorm_cap: 65536
 
-# Memory constraints — CDNA3 (MI300) exposes 160 KB LDS per CU, 2.5x
-# CDNA1/2. The sdpa_thresholds below are deliberately left at the
-# CDNA1/2 tile sizes: larger tiles are the obvious use of that budget,
-# but choosing them without hardware would be a guess presented as a
-# value. Revisit at first light (docs/internal/amd_first_light.md).
+# Memory constraints — CDNA3 (MI300) has 64 KB of LDS per workgroup, as CDNA1/2 (Triton v3.8.0
+# TargetFeatures.cpp; the 160 KB once written here is CDNA4's, gfx950). Revisit at first light.
 memory:
   # the Triton arena's hold over the walked activations, while a component runs whole: not measured on this device —
   # a Triton plan here is refused by name (`PrismSolver._live_activation_mb`)

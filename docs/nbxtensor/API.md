@@ -2695,7 +2695,7 @@ the guard `tests/unit/nbxtensor_boundary/test_every_public_name_is_in_the_api.py
 ```python
 class Driver                   # what a backend implements: load a binary, launch it, name the compile target it wants
 class CudaDriver(Driver)       # libcuda through ctypes
-class HipDriver(Driver)        # libamdhip64 through ctypes (the HIP module API, hsaco; prepared, not yet run on an AMD card)
+class HipDriver(Driver)        # the HIP runtime's module API (hsaco code objects; proven against a stand-in, no AMD card has run it)
 class CudaCompiledKernel       # the result of compiling once, launched many times (contract object)
 def register_driver(driver: Optional[Driver]) -> None   # install the driver this process launches through
 def active_driver() -> Driver  # the driver in force, resolved once from the detected backend
@@ -3040,14 +3040,43 @@ def forget() -> None                                  # the next reader resolves
 
 ```python
 def arch() -> int                                     # the target's arch as an int (70 for sm_70): target().arch
+def arch_name(compile_target=None) -> str             # what device files key on: the capability or arch string, Intel's dict["arch"]
 def bind_target(compile_target) -> None               # the target stated without a driver (a derivation that launches nothing)
 def prewarm_compiler() -> None                          # Triton's cache key (triton_key, ~1.3 s) computed in a daemon thread while the caller loads
+```
+
+### `nbxtensor.backend.level_zero` — Intel GPUs: the runtime over Level Zero (torch- and SYCL-free)
+
+```python
+class LevelZeroRuntime            # the C ABI of a CUDA-style runtime (malloc, memcpy, streams, events) served over Level Zero
+def level_zero_device_available() -> bool   # the loader opens and reports a GPU: the backend probe
+def load_library()                # the Level Zero loader (libze_loader), or None
+def device_extensions(device_id: int, lib=None) -> list   # the GPU's OpenCL extensions (what Intel's compiler is told)
+def device_file_for(device_id: int)          # (name, description) of the Intel device file listing this PCI id, or refused
+def result_name(rc: int) -> str   # a ze_result_t's name
+def runtime() -> LevelZeroRuntime # the process-wide runtime
+```
+
+### `nbxtensor.backend.level_zero_driver` — Intel GPUs: the launch driver
+
+```python
+class LevelZeroDriver(Driver)     # SPIR-V modules from Intel's Triton, Intel's argument ABI, an in-order immediate list as stream
+```
+
+### `nbxtensor.backend.install_help` — what to install when a GPU is present and unusable
+
+```python
+def pci_gpus(root=...) -> list    # [(vendor, vendor id, device id)] of the NVIDIA, AMD and Intel display devices on the PCI bus
+def diagnose(root=...) -> list    # per vendor found: what is missing (runtime library, Triton backend) and the steps
+def report(root=...) -> str       # the diagnosis as text (python -m nbxtensor doctor prints it)
+def no_runtime_message(root=...) -> str   # the refusal when no runtime answers, with the steps for a GPU on the bus
+def main() -> int                 # python -m nbxtensor.backend.install_help
 ```
 
 ### `nbxtensor.backend.runtime` — the backend in force
 
 ```python
-def gpu_backend() -> str          # "cuda", "hip" or "metal": the vendor runtime this process can load (or NBX_GPU_BACKEND)
+def gpu_backend() -> str          # "cuda", "hip", "xpu" or "metal": the vendor runtime this process can load (or NBX_GPU_BACKEND)
 def gpu_runtime()                 # that backend's runtime: Metal's runtime object, or the vendor library through its C ABI
 def backend_table() -> dict       # the backend's entry-point name table (CUDA and HIP share one C ABI; Metal has its own)
 def set_device(tensor) -> None    # bind the driver's current device to the tensor's before a launch

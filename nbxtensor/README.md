@@ -126,6 +126,13 @@ pip install nbxtensor
 **Linux, NVIDIA (CUDA).** Triton and the CUDA runtime library come from PyPI with the install above; the NVIDIA driver
 is the only other requirement.
 
+**Linux, AMD (ROCm) and Intel (Level Zero).** The system's GPU runtime and a Triton that compiles for the card are
+needed: see [Install on AMD / Intel GPUs](#install-on-amd--intel-gpus).
+
+**Which GPU, and what is missing.** `python -m nbxtensor doctor` names the backend in force and, for every NVIDIA, AMD
+or Intel GPU on the PCI bus, whether its runtime library and its Triton backend are installed — with the vendor's
+install commands when one is not.
+
 **From the NeuroBrix repository** (contributors): `pip install -e nbxtensor`.
 
 **macOS, Apple silicon (Metal).** PyPI publishes no Triton for macOS, so Triton and its Metal backend are built from
@@ -138,6 +145,46 @@ source, then nbxtensor is installed into that environment:
 4. Xcode's Metal toolchain (`xcrun metal` must find the real compiler, not Xcode's placeholder: `TOOLCHAINS=Metal`).
 
 `nbxtensor.dtype` and `nbxtensor.shape` need neither a device nor Triton.
+
+## Install on AMD / Intel GPUs
+
+The library speaks to the card through the vendor's own runtime library, loaded at run time, and compiles its kernels
+with the Triton backend for that card. When a card is present and either is missing, the library refuses with the
+steps below (the same text `python -m nbxtensor doctor` prints). The commands are the vendors' (Ubuntu 24.04).
+
+**AMD (ROCm, HIP).** The ROCm runtime, from AMD's
+[quick start](https://rocm.docs.amd.com/projects/install-on-linux/en/latest/install/quick-start.html):
+
+```
+wget https://repo.radeon.com/amdgpu-install/6.4.3/ubuntu/noble/amdgpu-install_6.4.60403-1_all.deb
+sudo apt install ./amdgpu-install_6.4.60403-1_all.deb
+sudo apt update && sudo apt install rocm
+sudo usermod -a -G render,video $LOGNAME     # then log out and in (or reboot)
+pip install nbxtensor                        # the Triton wheel on PyPI carries the AMD backend
+```
+
+Targets: CDNA (gfx908, gfx90a, gfx942, gfx950) and RDNA 3 / 4 (gfx11xx, gfx120x); the hardware profile states the
+card's gfx arch. Triton 3.8 compiles the library's kernels for these targets on a machine without the card (the
+library's tests do it).
+
+**Intel (Level Zero).** Intel's GPU driver, from Intel's
+[package guide](https://dgpu-docs.intel.com/installation-guides/installing-packages-from-the-intel-ppa.html), then
+Intel's Triton build (the PyPI Triton has no Intel backend):
+
+```
+sudo add-apt-repository -y ppa:kobuk-team/intel-graphics
+sudo apt-get install -y libze-intel-gpu1 libze1 intel-opencl-icd clinfo intel-gsc
+sudo usermod -a -G render $LOGNAME           # then log out and in
+pip install triton-xpu --index-url https://download.pytorch.org/whl/xpu
+pip install nbxtensor
+```
+
+Devices: Data Center GPU Max (Ponte Vecchio), Arc A-series and Data Center GPU Flex (Alchemist), Arc B-series
+(Battlemage), Core Ultra 200V graphics (Lunar Lake); the card's PCI id selects its device file.
+
+**Status.** The AMD and Intel drivers are written to the level of the NVIDIA and Apple ones and proven against
+stand-ins of the vendors' libraries; no AMD or Intel card has run them yet. [Open an
+issue](https://github.com/NeuroBrix/nbxtensor/issues) with what your card does — we fix fast.
 
 ## Concepts
 
@@ -393,13 +440,21 @@ The host conversions of a weight at load are split the same way, across the load
 
 ## Hardware
 
-HARDWARE_PLACEHOLDER
+| vendor | backend | devices | state |
+|---|---|---|---|
+| NVIDIA | `cuda` (the CUDA driver and runtime) | Volta to Hopper (sm_70 to sm_90) | V100 16 GB and 32 GB: every release's gate |
+| Apple | `metal` (Metal through triton-ext) | M1 to M5 | M4 Pro: every release's gate |
+| AMD | `hip` (ROCm's HIP runtime) | CDNA 1 to 4, RDNA 3 and 4 | written and proven against a stand-in; no card has run it |
+| Intel | `xpu` (Level Zero) | Data Center GPU Max, Arc A and B, Lunar Lake | written and proven against a stand-in; no card has run it |
+
+Each device has a device file (`nbxtensor/backend/devices/<vendor>/*.yml`): its shared memory, warp size, tiles and
+tuning screens, every value with its source.
 
 ## Backends
 
-CUDA (NVIDIA) and Apple Metal through triton-ext; what a new backend provides is [`docs/nbxtensor/BACKENDS.md`](https://github.com/NeuroBrix/neurobrix/blob/main/docs/nbxtensor/BACKENDS.md), and
+CUDA (NVIDIA), HIP (AMD), Level Zero (Intel) and Apple Metal through triton-ext; what a new backend provides is [`docs/nbxtensor/BACKENDS.md`](https://github.com/NeuroBrix/neurobrix/blob/main/docs/nbxtensor/BACKENDS.md), and
 `tests/nbxtensor_backend_conformance` is what it must pass. The backend in force is public API:
-`nbxtensor.backend.runtime.gpu_backend()` names it ("cuda", "hip", "metal"), `gpu_runtime()` is its runtime,
+`nbxtensor.backend.runtime.gpu_backend()` names it ("cuda", "hip", "xpu", "metal"), `gpu_runtime()` is its runtime,
 `backend_table()` its entry points, `device_memory()` its memory primitives, and `set_device(tensor)` binds the
 driver to a tensor's device before a launch.
 

@@ -128,23 +128,34 @@ accepts (`ops/autotune_certified.py`, `ops/screen_oracle.py`). Settings proven o
 name, with the code generator they were proven under. A new backend starts with an empty store: its first runs sweep,
 and what they prove is kept.
 
-## 6. AMD and Intel: what is ready, what is not
+## 6. AMD and Intel: written, not yet run on a card
 
-Neither has run here: no AMD or Intel card on the machines this library is proven on. What a port finds ready, and
-what it still has to write:
+Both are written to the level of the CUDA and Metal drivers (2026-11-06, the owner's order for 0.0.2) and proven
+against stand-ins of the vendors' libraries; no AMD or Intel card has run them. What a port with a card checks first is
+the conformance suite (`tests/nbxtensor_backend_conformance`).
 
-- **AMD (HIP, ROCm).** Triton has a HIP backend. The memory primitives are ready: `AbiMemory` serves HIP through the
-  same C ABI as CUDA (the `hip` row of the backend table, `backend.runtime.backend_table()`), and the capability rows
-  hold a `hip` column (64 threads per warp). Device files exist for CDNA, CDNA2, CDNA3 (the engine's half; the
-  library's half is split from them on `docs/nbxtensor/device_keys.txt`). To write: the launch driver (`load` /
-  `launch` of an hsaco through `hipModuleLoadData` / `hipModuleLaunchKernel`, `artifact_kind = "hsaco"`), then the
-  conformance suite on a card. Today the launcher resolves no HIP driver: on `hip` it hands out the CUDA driver
-  (`backend/launcher._resolve_driver`), which a HIP card would fail at its first launch — the driver above is the
-  missing piece.
-- **Intel (XPU).** Intel's Triton backend runs on Level Zero, which is NOT the CUDA C ABI: `AbiMemory` does not serve
-  it. To write: a `DeviceMemory` over Level Zero (`zeMemAllocDevice`, `zeMemFree`, a command list for copies, the
-  device's memory budget), a launch driver for its SPIR-V artifacts, a capability column, the device files, then the
-  conformance suite.
+- **AMD (HIP, ROCm)** — `backend.launcher.HipDriver`. The HIP module API through the HIP runtime library the runtime
+  seam loaded (`hipModuleLoadData`, `hipModuleGetFunction`, `hipModuleLaunchKernel`, `hipFuncSetAttribute` above the
+  per-block shared memory), the launch Triton's own AMD launcher performs (the kernel's arguments then the two scratch
+  pointers, a block of the device's wavefront times the kernel's warps), the argument count read from the code
+  object's NT_AMDGPU_METADATA note, the target `GPUTarget("hip", <gfx arch of the hardware profile>, <wavefront>)`.
+  Memory: `AbiMemory` over the `hip` row of the backend table (`hipHostMalloc` with its flags word). Device files:
+  CDNA 1-4, RDNA 3-4. The tests compile real kernels for gfx90a, gfx942, gfx950, gfx1100 and gfx1201 with Triton 3.8
+  on a machine without the card and launch them through a stand-in libamdhip64.
+- **Intel (Level Zero)** — `backend.level_zero` (the runtime) and `backend.level_zero_driver` (the launch). Level Zero
+  is not the CUDA C ABI, so its runtime emulates that ABI for the allocator, as Metal's does: device memory
+  (`zeMemAllocDevice`), page-locked host memory (`zeMemAllocHost`), an in-order immediate command list per stream,
+  events with the device's global timestamps, the free memory the usable-memory extension states (refused when the
+  driver does not). The launch is Intel's Triton ABI (intel-xpu-backend-for-triton v3.8.0, driver.c) on Level Zero:
+  SPIR-V modules built with the compile's flags and rebuilt once with 256 registers per thread, the kernel's arguments
+  then the scratch pointers then the shared local memory as an argument of its size and no value, a work-group of
+  `threads_per_warp x num_warps`. The target is built without torch or SYCL: counts from Level Zero, extensions from
+  the OpenCL ICD (`cl_khr_fp64`, `cl_intel_subgroup_2d_block_io`, ...), the architecture name from the device file
+  its PCI id selects (pvc, dg2, bmg, lnl), handed to Intel's compiler through `knobs.intel.device_arch`. It needs
+  Intel's Triton build (`triton-xpu`): the PyPI Triton has no Intel backend, and the driver says so by name.
+
+When a card is present and its runtime or Triton backend is missing, the refusal names what to install, with the
+vendor's commands (`backend.install_help`; `python -m nbxtensor doctor` prints the same).
 
 A new device starts from `docs/nbxtensor/device_file_template.yml`: every key the library reads, empty, each to be
 filled from the device's own source.
