@@ -106,15 +106,10 @@ class LazySequentialStrategy(LazySequentialSteps, ExecutionStrategy):
         if holds_expert_files(self.context.allocations, component_name):
             return
 
-        pinned = 0
-        total_mb = 0.0
-        for name, tensor in list(weights.items()):
-            if isinstance(tensor, torch.Tensor) and tensor.device.type == "cpu":
-                size_mb = tensor.numel() * tensor.element_size() / (1024 * 1024)
-                total_mb += size_mb
-                if not tensor.is_pinned():
-                    weights[name] = tensor.contiguous().pin_memory()
-                    pinned += 1
+        from .pinned_block import pin_in_one_block
+        if (block := pin_in_one_block(weights)) is not None:
+            executor._pinned_host_block = block
+        pinned, total_mb = int(block is not None), (block.nbytes / 2**20 if block is not None else 0.0)
 
         if pinned > 0:
             logger.info(

@@ -290,6 +290,7 @@ class ExecutionStrategy(ABC):
             weights_loaded = hasattr(executor, '_weights') and bool(executor._weights)
             if weights_loaded:
                 executor.unload_weights()
+                executor.__dict__.pop("_pinned_host_block", None)   # the registered block goes with its weights
                 if self.context._active_component == component_name:
                     self.context._active_component = None
 

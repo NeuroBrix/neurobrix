@@ -175,11 +175,7 @@ class Zero3Strategy(ExecutionStrategy):
     def _pin_cpu_weights(self, component_name: str, executor: Any) -> None:
         """Pin CPU weights in-place for non_blocking DMA.
 
-        Polymorphic on tensor type so both native (torch.Tensor) and
-        triton (NBXTensor) paths get pinned host memory — native uses
-        tensor.pin_memory(), triton uses NBXTensor.pin_host() which
-        wraps cudaMallocHost via DeviceAllocator. Zero torch imports
-        on the triton branch.
+        Native: one registered block (pinned_block.py); triton: NBXTensor.pin_host(). Zero torch on the triton branch.
 
         In the triton path, the weight_loader already allocates CPU
         shards as pinned NBXTensors (see triton/weight_loader.py
@@ -232,12 +228,15 @@ class Zero3Strategy(ExecutionStrategy):
             return
 
         pinned = 0
-        for name, tensor in list(weights.items()):
-            if is_torch_tensor(tensor) and tensor.device.type == "cpu":
-                if not tensor.is_pinned():
-                    weights[name] = tensor.contiguous().pin_memory()
-                    pinned += 1
-            elif hasattr(tensor, '_device') and getattr(tensor, '_device', None) == 'cpu':
+        if any(is_torch_tensor(t) for t in weights.values()):
+            from .pinned_block import pin_in_one_block           # the PyTorch engine: one registered block, in place
+            block = pin_in_one_block(weights)
+            if block is not None:
+                executor._pinned_host_block = block
+                pinned += 1
+        for name in list(weights):
+            tensor = weights[name]
+            if hasattr(tensor, '_device') and getattr(tensor, '_device', None) == 'cpu':
                 if not getattr(tensor, '_pinned', False):
                     weights[name] = tensor.pin_host()
                     pinned += 1
