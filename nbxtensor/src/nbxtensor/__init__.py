@@ -13,5 +13,5 @@ first publication is 0.0.1, each fix after it increments, the Rust rewrite is
 """
 
 #: the one version number; `pyproject.toml` states the same (tests/test_version.py)
-__version__ = "0.0.1"
+__version__ = "0.0.2"
 __all__: list = []

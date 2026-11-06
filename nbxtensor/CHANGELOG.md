@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.2] - 2026-11-06
+
 ### Added
 - **`backend.launcher.prewarm_compiler()`**: computes Triton's cache key (`triton_key`, the sha256 of libtriton and of Triton's sources, about 1.3 s on a V100 host) in a daemon thread, so a process's first kernel compile no longer waits for it; an application calls it at start, while it loads weights.
 - **Intel GPUs through Level Zero** (`backend.level_zero`, `backend.level_zero_driver`; the `xpu` backend, chosen when the system's Level Zero loader reports a GPU): a runtime over Level Zero that serves the allocator (device and page-locked host memory, in-order command lists as streams, timed events), and a launch driver for the SPIR-V kernels Intel's Triton build compiles, with Intel's own argument ABI; the compile target is built without torch or SYCL (Level Zero's counts, the OpenCL ICD's extensions, the device file's architecture name). Proven against stand-ins of libze_loader and the OpenCL ICD: no Intel card has run it yet.
@@ -135,5 +137,6 @@ memory; the fix is in test).
 - **`flash_decode_split_kernel` and its route**: armed only by an environment switch (`NBX_FLASH_DECODE`, with `NBX_FD_BLOCK_N` and `NBX_FD_SEG`) and measured slower than the vector decode kernels; `flash_decode.py` keeps the fixed-order reduce they share.
 - **`conv1d_forward_kernel`**: launched by no route (a 1-D convolution runs through `conv2d`).
 
-[Unreleased]: https://github.com/NeuroBrix/nbxtensor/compare/v0.0.1...HEAD
+[Unreleased]: https://github.com/NeuroBrix/nbxtensor/compare/v0.0.2...HEAD
+[0.0.2]: https://github.com/NeuroBrix/nbxtensor/compare/v0.0.1...v0.0.2
 [0.0.1]: https://github.com/NeuroBrix/nbxtensor/releases/tag/v0.0.1
