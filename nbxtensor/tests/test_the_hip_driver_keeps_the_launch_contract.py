@@ -60,16 +60,11 @@ def held(monkeypatch):
     monkeypatch.setattr(DeviceAllocator, "get_device", staticmethod(lambda: 0))
 
 
-def test_the_library_is_opened_by_the_runtime_tables_names(monkeypatch):
-    tried = []
-
-    def cdll(name):
-        tried.append(name)
-        raise OSError(name)
-    monkeypatch.setattr(L.ctypes, "CDLL", cdll)
-    with pytest.raises(RuntimeError, match="libamdhip64"):
-        L.HipDriver()
-    assert tried == list(R._GPU_BACKENDS["hip"]["rt_libs"])
+def test_the_library_is_the_runtime_seams_own(monkeypatch):
+    # the module API is in the HIP runtime library the seam loaded for the allocator: no second load by name
+    lib = FakeHip()
+    monkeypatch.setattr(R, "gpu_runtime", lambda: lib)
+    assert L.HipDriver().lib is lib
 
 
 def test_a_missing_symbol_is_refused_by_name():
@@ -117,3 +112,22 @@ def test_the_target_is_the_profiles_gfx_arch_and_the_devices_warp(monkeypatch):
     monkeypatch.setattr(L, "_profile_arch", lambda: "")
     with pytest.raises(RuntimeError, match="gfx"):
         d.target()
+
+
+def test_hip_page_locked_host_memory_is_asked_with_its_flags_word():
+    # hipHostMalloc(ptr, size, flags) takes a flags word cudaMallocHost(ptr, size) has not: left out, the runtime reads
+    # whatever the register holds as flags. What this does if the code were wrong: two arguments on HIP, three on CUDA.
+    from nbxtensor.memory.device_memory import AbiMemory
+    seen = {}
+
+    class Rt:
+        def hipHostMalloc(self, *a):
+            seen["hip"] = len(a)
+            return 0
+
+        def cudaMallocHost(self, *a):
+            seen["cuda"] = len(a)
+            return 0
+    AbiMemory(Rt(), R._GPU_BACKENDS["hip"]).host_alloc(4096)
+    AbiMemory(Rt(), R._GPU_BACKENDS["cuda"]).host_alloc(4096)
+    assert seen == {"hip": 3, "cuda": 2}

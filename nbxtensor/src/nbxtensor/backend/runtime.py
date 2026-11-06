@@ -64,6 +64,7 @@ _GPU_BACKENDS = {
         "mem_get_info": "cudaMemGetInfo",
         "sync": "cudaDeviceSynchronize",
         "malloc_host": "cudaMallocHost", "free_host": "cudaFreeHost",
+        "malloc_host_flags": None,          # cudaMallocHost(ptr, size): no flags argument
         "host_register": "cudaHostRegister", "host_unregister": "cudaHostUnregister",
         # Stream-ordered memory allocator (CUDA 11.2+). The driver
         # handles kernel-lifetime correctness per-stream, so freeing a
@@ -114,6 +115,7 @@ _GPU_BACKENDS = {
         "mem_get_info": "hipMemGetInfo",
         "sync": "hipDeviceSynchronize",
         "malloc_host": "hipHostMalloc", "free_host": "hipHostFree",
+        "malloc_host_flags": 0,             # hipHostMalloc(ptr, size, flags): hipHostMallocDefault (hip_runtime_api.h)
         "host_register": "hipHostRegister", "host_unregister": "hipHostUnregister",
         # ROCm 4.3+ exposes the same stream-ordered API under hip*
         # names. Not tested in this pass (investigation was V100-only),

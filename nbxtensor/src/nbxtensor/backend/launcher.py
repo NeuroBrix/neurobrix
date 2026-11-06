@@ -178,6 +178,79 @@ def _cubin_param_count(cubin: bytes, name: str) -> Optional[int]:
         return None
 
 
+def _msgpack(data: bytes, p: int = 0):
+    """(value, next offset) of the MessagePack value at `p` — the subset the AMDGPU code-object metadata uses (maps,
+    arrays, strings, binaries, integers, floats, booleans, nil; msgpack.org spec). Raises on any other byte."""
+    b = data[p]
+    if b <= 0x7F:
+        return b, p + 1
+    if b >= 0xE0:
+        return b - 0x100, p + 1
+    if 0x80 <= b <= 0x9F:                                   # fixmap / fixarray
+        n, p, is_map = b & 0x0F, p + 1, b <= 0x8F
+    elif 0xA0 <= b <= 0xBF:                                 # fixstr
+        n = b & 0x1F
+        return data[p + 1:p + 1 + n].decode(), p + 1 + n
+    elif b in (0xC0, 0xC2, 0xC3):
+        return {0xC0: None, 0xC2: False, 0xC3: True}[b], p + 1
+    elif b in (0xC4, 0xC5, 0xC6, 0xD9, 0xDA, 0xDB):         # bin 8/16/32, str 8/16/32
+        w = {0xC4: 1, 0xC5: 2, 0xC6: 4, 0xD9: 1, 0xDA: 2, 0xDB: 4}[b]
+        n = int.from_bytes(data[p + 1:p + 1 + w], "big")
+        raw = data[p + 1 + w:p + 1 + w + n]
+        return (raw.decode() if b >= 0xD9 else bytes(raw)), p + 1 + w + n
+    elif b in (0xCA, 0xCB):
+        w = 4 if b == 0xCA else 8
+        return struct.unpack(">f" if w == 4 else ">d", data[p + 1:p + 1 + w])[0], p + 1 + w
+    elif 0xCC <= b <= 0xD3:                                 # uint / int 8..64
+        w = 1 << ((b - 0xCC) % 4)
+        return int.from_bytes(data[p + 1:p + 1 + w], "big", signed=b >= 0xD0), p + 1 + w
+    elif b in (0xDC, 0xDD, 0xDE, 0xDF):                     # array / map 16/32
+        w = 2 if b in (0xDC, 0xDE) else 4
+        n, p, is_map = int.from_bytes(data[p + 1:p + 1 + w], "big"), p + 1 + w, b >= 0xDE
+    else:
+        raise ValueError(f"msgpack byte {b:#x} at {p} is outside the code-object metadata's subset")
+    out_map, out_list = {}, []
+    for _ in range(n):
+        if is_map:
+            k, p = _msgpack(data, p)
+            out_map[k], p = _msgpack(data, p)
+        else:
+            v, p = _msgpack(data, p)
+            out_list.append(v)
+    return (out_map if is_map else out_list), p
+
+
+def _hsaco_param_count(hsaco: bytes, name: str) -> Optional[int]:
+    """The number of kernel arguments an AMD code object declares for `name` — the `.args` of its kernel in the
+    NT_AMDGPU_METADATA note (type 32, owner "AMDGPU", a MessagePack map, code-object v3+: llvm.org/docs/AMDGPUUsage.html
+    "Code Object V3 Metadata"). Triton 3.8's own kernels declare their arguments then the two scratch pointers (an
+    `add` of three pointers and a size: six, read 2026-11-06). The HIP counterpart of `_cubin_param_count`: the launch
+    refuses an argument list of another length. None when the binary carries no such note."""
+    try:
+        if hsaco[:4] != b"\x7fELF":
+            return None
+        e_shoff = struct.unpack_from("<Q", hsaco, 0x28)[0]
+        e_shentsize, e_shnum = struct.unpack_from("<HH", hsaco, 0x3A)
+        for i in range(e_shnum):
+            _n, sh_type, _f, _a, off, size = struct.unpack_from("<IIQQQQ", hsaco, e_shoff + i * e_shentsize)
+            if sh_type != 7:                                # SHT_NOTE
+                continue
+            p, end = off, off + size
+            while p + 12 <= end:
+                namesz, descsz, ntype = struct.unpack_from("<III", hsaco, p)
+                owner = hsaco[p + 12:p + 12 + namesz].rstrip(b"\0")
+                desc = p + 12 + ((namesz + 3) & ~3)
+                if owner == b"AMDGPU" and ntype == 32:
+                    meta, _ = _msgpack(hsaco[desc:desc + descsz])
+                    for k in meta.get("amdhsa.kernels", []):
+                        if k.get(".name") == name:
+                            return len(k.get(".args", []))
+                p = desc + ((descsz + 3) & ~3)
+        return None
+    except Exception:
+        return None
+
+
 class Driver:
     """What a backend implements: load a binary, launch it, and name the
     compile target it wants.
@@ -255,11 +328,130 @@ class Driver:
         raise NotImplementedError
 
 
-class CudaDriver(Driver):
+class _ModuleDriver(Driver):
+    """The launcher contract's surface (`backend/launcher_contract.py`) shared by the drivers that load a vendor binary
+    as a module and launch it by function handle — CUDA (cubin) and HIP (hsaco): compile once, launch many times;
+    streams and events are the allocator's. The same checker that gates the Metal driver gates both."""
+
+    # -- the contract surface (`triton/launcher_contract.py`): compile once,
+    # launch many times; streams and events are the allocator's. The same
+    # checker that gates the Metal driver gates this object, unchanged.
+    def compile(self, jit_fn, signature, constexprs, num_warps: int = 4,
+                specialization=None, num_stages=None):
+        from triton.compiler import compile as triton_compile
+        from nbxtensor.backend.launcher_contract import ArgSlot
+        specialization = dict(specialization or {})
+        params = list(jit_fn.params)
+        names = [kp.name for kp in params]
+        unknown = set(signature) - set(names)
+        if unknown:
+            raise ValueError(f"NeuroBrix launcher: signature names {sorted(unknown)} are not parameters of {jit_fn.__name__}")
+        spec = []
+        bound = {}
+        for kp in params:
+            kind = signature.get(kp.name)
+            if kp.is_constexpr or kind == "constexpr":
+                if kp.name not in constexprs:
+                    raise ValueError(f"NeuroBrix launcher: constexpr {kp.name!r} has no value")
+                bound[kp.name] = constexprs[kp.name]
+                spec.append(("constexpr", constexprs[kp.name]))
+                continue
+            if kind is None:
+                raise ValueError(f"NeuroBrix launcher: parameter {kp.name!r} is missing from the signature")
+            bound[kp.name] = 0
+            spec.append((kind, specialization.get(kp.name)))   # None: no marker; "" / "D": Triton's own spellings
+        _, _, backend = _binder(jit_fn)
+        options = {"num_warps": int(num_warps)}
+        if num_stages is not None:
+            options["num_stages"] = int(num_stages)
+        _forward_debug(jit_fn, options)
+        # `_pack_args` builds the compile options from its KWARGS argument (the
+        # `options` one only feeds the cache key), so the same dict goes in both.
+        options, sig, cexprs, attrs = jit_fn._pack_args(backend, options, bound, spec, options)
+        src = _source(jit_fn, sig, cexprs, attrs)
+        # A backend that cannot emit for the device may WARN and compute on the
+        # CPU instead. Numbers come back, nothing raises, and the caller has an
+        # answer from hardware it did not ask for. Correct-or-refuse applies to
+        # the compile as much as to the launch.
+        import warnings as _warnings
+        with _warnings.catch_warnings(record=True) as _w:
+            _warnings.simplefilter("always")
+            compiled = triton_compile(src, target=target(), options=options.__dict__)
+        try:
+            from nbxtensor.backend.metal_backend import backend_fallback_markers
+            _markers = backend_fallback_markers()
+        except Exception:                              # noqa: BLE001
+            _markers = ()
+        if _markers:
+            for _warn in _w:
+                _msg = str(_warn.message)
+                if any(_m in _msg for _m in _markers):
+                    raise RuntimeError(
+                        f"the Metal backend could not emit {kernel.__name__} for "
+                        f"this device and fell back to the CPU. Refusing the "
+                        f"result: it would be an answer from hardware the caller "
+                        f"did not ask for, and it is indistinguishable from a "
+                        f"correct one. The backend said: {_msg.strip()[:400]}")
+        for _warn in _w:                               # keep every other warning visible
+            _warnings.warn_explicit(_warn.message, _warn.category,
+                                    _warn.filename, _warn.lineno)
+        md = compiled.metadata
+        if getattr(md, "num_ctas", 1) != 1 or getattr(md, "global_scratch_size", 0) or getattr(md, "profile_scratch_size", 0):
+            raise RuntimeError(f"NeuroBrix launcher: {jit_fn.__name__} needs clusters or scratch memory the "
+                               f"{self.backend.upper()} client does not provide yet")
+        cubin = compiled.asm[self.artifact_kind]
+        function = self.load(cubin, md.name, md.shared)
+        binding = []
+        ordered = {}
+        for kp in params:
+            kind = signature.get(kp.name)
+            if kp.is_constexpr or kind == "constexpr":
+                continue
+            ordered[kp.name] = kind
+            binding.append(ArgSlot(index=len(binding), name=kp.name, is_pointer=kind.startswith("*"),
+                                   dtype=kind if not kind.startswith("*") else kind[1:]))
+        return CudaCompiledKernel(md.name, bytes(cubin), self.block_for(md)[0], int(md.shared), constexprs,
+                                  specialization, binding, ordered, function, driver=self)
+
+    @staticmethod
+    def _allocator():
+        from nbxtensor.memory.allocator import DeviceAllocator
+        return DeviceAllocator
+
+    def create_stream(self) -> int:
+        return self._allocator().create_stream()
+
+    def destroy_stream(self, stream: int) -> None:
+        self._allocator().destroy_stream(stream)
+
+    def synchronize_stream(self, stream: int) -> None:
+        self._allocator().stream_synchronize(stream)
+
+    def create_event(self, timing: bool = False) -> int:
+        return self._allocator().create_event(timing=timing)
+
+    def destroy_event(self, event: int) -> None:
+        self._allocator().destroy_event(event)
+
+    def record_event(self, event: int, stream: int = 0) -> None:
+        self._allocator().record_event(event, stream)
+
+    def synchronize_event(self, event: int) -> None:
+        self._allocator().event_synchronize(event)
+
+    def wait_event(self, stream: int, event: int) -> None:
+        self._allocator().stream_wait_event(stream, event)
+
+    def elapsed_ms(self, start: int, end: int) -> float:
+        return self._allocator().event_elapsed_ms(start, end)
+
+
+class CudaDriver(_ModuleDriver):
     """libcuda through ctypes. The context is the primary context of the
     allocator's current device, already alive through the runtime API."""
 
     _inst: Optional["CudaDriver"] = None
+    backend = "cuda"
     CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES = 8
     CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR = 75
     CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR = 76
@@ -433,119 +625,6 @@ class CudaDriver(Driver):
             self._check(rc, "cuLaunchKernel")
 
 
-    # -- the contract surface (`triton/launcher_contract.py`): compile once,
-    # launch many times; streams and events are the allocator's. The same
-    # checker that gates the Metal driver gates this object, unchanged.
-    backend = "cuda"
-
-    def compile(self, jit_fn, signature, constexprs, num_warps: int = 4,
-                specialization=None, num_stages=None):
-        from triton.compiler import compile as triton_compile
-        from nbxtensor.backend.launcher_contract import ArgSlot
-        specialization = dict(specialization or {})
-        params = list(jit_fn.params)
-        names = [kp.name for kp in params]
-        unknown = set(signature) - set(names)
-        if unknown:
-            raise ValueError(f"NeuroBrix launcher: signature names {sorted(unknown)} are not parameters of {jit_fn.__name__}")
-        spec = []
-        bound = {}
-        for kp in params:
-            kind = signature.get(kp.name)
-            if kp.is_constexpr or kind == "constexpr":
-                if kp.name not in constexprs:
-                    raise ValueError(f"NeuroBrix launcher: constexpr {kp.name!r} has no value")
-                bound[kp.name] = constexprs[kp.name]
-                spec.append(("constexpr", constexprs[kp.name]))
-                continue
-            if kind is None:
-                raise ValueError(f"NeuroBrix launcher: parameter {kp.name!r} is missing from the signature")
-            bound[kp.name] = 0
-            spec.append((kind, specialization.get(kp.name)))   # None: no marker; "" / "D": Triton's own spellings
-        _, _, backend = _binder(jit_fn)
-        options = {"num_warps": int(num_warps)}
-        if num_stages is not None:
-            options["num_stages"] = int(num_stages)
-        _forward_debug(jit_fn, options)
-        # `_pack_args` builds the compile options from its KWARGS argument (the
-        # `options` one only feeds the cache key), so the same dict goes in both.
-        options, sig, cexprs, attrs = jit_fn._pack_args(backend, options, bound, spec, options)
-        src = _source(jit_fn, sig, cexprs, attrs)
-        # A backend that cannot emit for the device may WARN and compute on the
-        # CPU instead. Numbers come back, nothing raises, and the caller has an
-        # answer from hardware it did not ask for. Correct-or-refuse applies to
-        # the compile as much as to the launch.
-        import warnings as _warnings
-        with _warnings.catch_warnings(record=True) as _w:
-            _warnings.simplefilter("always")
-            compiled = triton_compile(src, target=target(), options=options.__dict__)
-        try:
-            from nbxtensor.backend.metal_backend import backend_fallback_markers
-            _markers = backend_fallback_markers()
-        except Exception:                              # noqa: BLE001
-            _markers = ()
-        if _markers:
-            for _warn in _w:
-                _msg = str(_warn.message)
-                if any(_m in _msg for _m in _markers):
-                    raise RuntimeError(
-                        f"the Metal backend could not emit {kernel.__name__} for "
-                        f"this device and fell back to the CPU. Refusing the "
-                        f"result: it would be an answer from hardware the caller "
-                        f"did not ask for, and it is indistinguishable from a "
-                        f"correct one. The backend said: {_msg.strip()[:400]}")
-        for _warn in _w:                               # keep every other warning visible
-            _warnings.warn_explicit(_warn.message, _warn.category,
-                                    _warn.filename, _warn.lineno)
-        md = compiled.metadata
-        if getattr(md, "num_ctas", 1) != 1 or getattr(md, "global_scratch_size", 0) or getattr(md, "profile_scratch_size", 0):
-            raise RuntimeError(f"NeuroBrix launcher: {jit_fn.__name__} needs clusters or scratch memory the CUDA client does not provide yet")
-        cubin = compiled.asm["cubin"]
-        function = CudaDriver.instance().load(cubin, md.name, md.shared)
-        binding = []
-        ordered = {}
-        for kp in params:
-            kind = signature.get(kp.name)
-            if kp.is_constexpr or kind == "constexpr":
-                continue
-            ordered[kp.name] = kind
-            binding.append(ArgSlot(index=len(binding), name=kp.name, is_pointer=kind.startswith("*"),
-                                   dtype=kind if not kind.startswith("*") else kind[1:]))
-        return CudaCompiledKernel(md.name, bytes(cubin), 32 * int(md.num_warps), int(md.shared), constexprs,
-                                  specialization, binding, ordered, function)
-
-    @staticmethod
-    def _allocator():
-        from nbxtensor.memory.allocator import DeviceAllocator
-        return DeviceAllocator
-
-    def create_stream(self) -> int:
-        return self._allocator().create_stream()
-
-    def destroy_stream(self, stream: int) -> None:
-        self._allocator().destroy_stream(stream)
-
-    def synchronize_stream(self, stream: int) -> None:
-        self._allocator().stream_synchronize(stream)
-
-    def create_event(self, timing: bool = False) -> int:
-        return self._allocator().create_event(timing=timing)
-
-    def destroy_event(self, event: int) -> None:
-        self._allocator().destroy_event(event)
-
-    def record_event(self, event: int, stream: int = 0) -> None:
-        self._allocator().record_event(event, stream)
-
-    def synchronize_event(self, event: int) -> None:
-        self._allocator().event_synchronize(event)
-
-    def wait_event(self, stream: int, event: int) -> None:
-        self._allocator().stream_wait_event(stream, event)
-
-    def elapsed_ms(self, start: int, end: int) -> float:
-        return self._allocator().event_elapsed_ms(start, end)
-
 def _profile_arch() -> str:
     """The gfx arch the hardware profile states for device 0 (`compute_capability: "gfx90a"` in the AMD device files),
     or "" when it states none."""
@@ -555,7 +634,7 @@ def _profile_arch() -> str:
     return str(getattr(devs[0], "compute_capability", "") or "") if devs else ""
 
 
-class HipDriver(Driver):
+class HipDriver(_ModuleDriver):
     """libamdhip64 through ctypes: the HIP module API, modelled on `CudaDriver`. PREPARED, not yet run on an AMD card.
 
     Read from Triton 3.8's own AMD backend (site-packages/triton/backends/amd/): the binary is `hsaco` (compiler.py,
@@ -583,25 +662,21 @@ class HipDriver(Driver):
 
     def __init__(self, lib=None) -> None:
         if lib is None:
-            from nbxtensor.backend.runtime import _GPU_BACKENDS
-            names = list(_GPU_BACKENDS["hip"]["rt_libs"])
-            for name in names:
-                try:
-                    lib = ctypes.CDLL(name)
-                    break
-                except OSError:
-                    continue
-            if lib is None:
-                raise RuntimeError(f"NeuroBrix launcher: libamdhip64 not found (tried {names})")
+            # The module API lives in the HIP runtime library itself: the one the runtime seam loaded for the
+            # allocator (`backend.runtime.gpu_runtime`), never a second load by name here.
+            from nbxtensor.backend.runtime import gpu_runtime
+            lib = gpu_runtime()
+        missing = [s for s in self._SYMBOLS if getattr(lib, s, None) is None]
+        if missing:
+            raise RuntimeError(f"NeuroBrix launcher: the HIP library lacks {missing} — refused, not launched")
+        if isinstance(lib, ctypes.CDLL):   # the C library's signatures, declared once (a test's stand-in has its own)
             lib.hipGetErrorString.restype = ctypes.c_char_p
             lib.hipModuleLaunchKernel.restype = ctypes.c_int
             lib.hipModuleLaunchKernel.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint, ctypes.c_uint,
                                                   ctypes.c_uint, ctypes.c_uint, ctypes.c_uint, ctypes.c_uint,
                                                   ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p]
-        missing = [s for s in self._SYMBOLS if getattr(lib, s, None) is None]
-        if missing:
-            raise RuntimeError(f"NeuroBrix launcher: the HIP library lacks {missing} — refused, not launched")
         self.lib = lib
+        self._modules: Dict[Tuple[int, bytes], ctypes.c_void_p] = {}   # (device, binary) -> module, loaded once
         self._param_counts: Dict[int, Optional[int]] = {}
         self._arg_buffers: Dict[Tuple[int, tuple], tuple] = {}
 
@@ -633,12 +708,18 @@ class HipDriver(Driver):
         return self._attribute(self.ATTR_SHARED_PER_BLOCK_OPTIN)
 
     def load(self, binary: bytes, name: str, shared: int):
-        module = ctypes.c_void_p()
-        buf = ctypes.create_string_buffer(binary, len(binary))
-        self._check(self.lib.hipModuleLoadData(ctypes.byref(module), buf), "hipModuleLoadData")
+        from nbxtensor.memory.allocator import DeviceAllocator
+        key = (int(DeviceAllocator.get_device()), binary)
+        module = self._modules.get(key)
+        if module is None:                 # one module per device and binary, as CUDA's: a reload per compile leaked
+            module = ctypes.c_void_p()
+            buf = ctypes.create_string_buffer(binary, len(binary))
+            self._check(self.lib.hipModuleLoadData(ctypes.byref(module), buf), "hipModuleLoadData")
+            self._modules[key] = module
         function = ctypes.c_void_p()
         self._check(self.lib.hipModuleGetFunction(ctypes.byref(function), module, name.encode()),
                     f"hipModuleGetFunction({name})")
+        self._param_counts[int(function.value)] = _hsaco_param_count(binary, name)
         if shared > self._attribute(self.ATTR_MAX_SHARED_PER_BLOCK):
             limit = self._attribute(self.ATTR_SHARED_PER_BLOCK_OPTIN)
             if shared > limit:
@@ -653,6 +734,10 @@ class HipDriver(Driver):
         if trailing is not None:
             raise RuntimeError(f"NeuroBrix launcher: trailing buffers ({trailing!r}) were computed for a kernel the "
                                f"HIP driver cannot bind them for — a driver/metadata mismatch, not launched")
+        expected = self._param_counts.get(int(function.value))
+        if expected is not None and len(params) != expected:
+            raise TypeError(f"NeuroBrix launcher: the kernel declares {expected} parameters, "
+                            f"{len(params)} given — refused, not launched")
         from nbxtensor.memory.allocator import DeviceAllocator
         for i, (kind, value) in enumerate(params):
             if kind == "ptr" and value and not DeviceAllocator.holds(int(value)):
@@ -2463,7 +2548,8 @@ class CudaCompiledKernel:
 
     binary_kind = "cubin"
 
-    def __init__(self, name, binary, block_size, shared_memory, constexprs, specialization, binding, signature, function):
+    def __init__(self, name, binary, block_size, shared_memory, constexprs, specialization, binding, signature, function,
+                 driver=None):
         self.name = name
         self.binary = binary
         self.block_size = block_size
@@ -2473,6 +2559,8 @@ class CudaCompiledKernel:
         self.binding = tuple(binding)
         self._signature = signature          # name -> triton type, non-constexpr, in binding order
         self._function = function
+        self._driver = driver if driver is not None else CudaDriver.instance()   # the driver that compiled it
+        self.binary_kind = self._driver.artifact_kind
 
     def launch(self, grid, args, stream: int = 0) -> None:
         args = list(args)
@@ -2487,7 +2575,7 @@ class CudaCompiledKernel:
         params.append(("ptr", 0))    # global scratch (Triton >= 3.6 ABI)
         params.append(("ptr", 0))    # profile scratch
         g = tuple(int(x) for x in grid) + (1,) * (3 - len(grid))
-        CudaDriver.instance().launch(self._function, g, (self.block_size, 1, 1), self.shared_memory, int(stream), params)
+        self._driver.launch(self._function, g, (self.block_size, 1, 1), self.shared_memory, int(stream), params)
 
 
 def driver() -> Driver:
