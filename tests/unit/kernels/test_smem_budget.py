@@ -184,6 +184,9 @@ _MAY_OMIT = {
         "a vendor file that states nothing)",
 }
 _MAY_OMIT.update({
+    "block_sizes.dequant_gemv.min_programs":
+        "optional by contract (nvidia/volta.yml: key absent or 0 -> no width adaptation): two waves of the device's "
+        "compute units, stated where those units are counted on a card (AMD CDNA4/RDNA, Intel: owed at first light)",
     "memory.triton_runtime_growth_mb":
         "a MEASURED fact of a device (the runtime's growth during a run, outside every allocator): optional by contract "
         "(core/prism/solver._runtime_growth_fact — unmeasured, not priced, and the plan says so); a device states it once "

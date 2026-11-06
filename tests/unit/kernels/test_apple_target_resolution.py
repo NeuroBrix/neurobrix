@@ -83,7 +83,9 @@ _BUDGETS_THAT_MUST_NOT_MOVE = {
     90: 232448,         # H100, exact on "9.0"
     "gfx908": 65536,    # CDNA1
     "gfx90a": 65536,    # CDNA2, exact
-    "gfx942": 163840,   # CDNA3
+    "gfx942": 65536,    # CDNA3: 64 KB per workgroup (Triton v3.8.0 TargetFeatures.cpp; 160 KB was CDNA4's, fixed 2026-11-06)
+    "gfx950": 163840,   # CDNA4, exact
+    "gfx1101": 65536,   # RDNA3 by its family's prefix
     "apple9": 32768,    # the declared family, still exact-matched
     "unknown": None,    # no profile -> no filtering, untouched
 }
@@ -125,6 +127,10 @@ def test_only_apple_profiles_declare_matches_and_the_family_one_is_the_fallback(
         if cfg.get("compute_capability_matches"):
             declaring[f"{path.parent.name}/{path.stem}"] = [
                 str(m).strip().lower() for m in cfg["compute_capability_matches"]]
+    # AMD's RDNA files declare their family's other gfx targets (2026-11-06): gfx prefixes, exact gfx targets first
+    amd = {k: ms for k, ms in declaring.items() if k.startswith("amd/")}
+    assert all(m.startswith("gfx") for ms in amd.values() for m in ms), amd
+    declaring = {k: ms for k, ms in declaring.items() if not k.startswith("amd/")}
     assert declaring and all(k.startswith("apple/") for k in declaring), declaring
     assert declaring["apple/apple_silicon"] == ["apple-m"], "the family profile is the fallback"
     claimed = [m for k, ms in declaring.items() if k != "apple/apple_silicon" for m in ms]

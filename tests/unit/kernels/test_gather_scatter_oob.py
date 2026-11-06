@@ -122,7 +122,8 @@ def test_every_backend_says_whether_it_honours_a_device_assert():
     assert table["metal"] is False, (
         "Metal computes the assert predicate and discards it — measured "
         "2026-09-10; a True here would disarm the only channel that works there")
-    assert set(table) == set(_nbx_runtime._GPU_BACKENDS) | {"metal"}, (
+    assert table["xpu"] is False, "Intel: not measured on a card — refused until a launch proves the assert stops"
+    assert set(table) == set(_nbx_runtime._GPU_BACKENDS) | {n for n, _p in _nbx_runtime._DEVICE_PROBES}, (
         "a backend without a row would be guessed at, not asked")
 
 

@@ -66,6 +66,10 @@ memory:
   # occupancy"): 128 KB of SLM per Xe-core; a work-group's ceiling is 64 KB on this family. The driver states the
   # exact ceiling (zeDeviceGetComputeProperties maxSharedLocalMemory) and the launch refuses past it.
   max_shared_memory_per_block: 65536
+  # fp32 registers one work-group may hold (analytical, owed at first light): 128 GRFs of 32 bytes per hardware
+  # thread (Intel oneAPI GPU optimization guide, "Intel Xe GPU architecture": 32-byte GRFs on this family) over its
+  # 16 lanes, times the 1024-lane work-group ceiling.
+  max_registers_per_block: 65536
   # Triton's Intel target is built with warp_size 32 (driver.py `_construct_target`); a kernel's own subgroup size is
   # its compile metadata's `threads_per_warp`.
   warp_size: 32

@@ -61,7 +61,7 @@ def test_the_refusal_stays_catchable_as_before():
     including `_arch_param`, which swallows loader failures by contract."""
     assert issubclass(UnsupportedArchitectureError, FileNotFoundError)
     with pytest.raises(FileNotFoundError):
-        get_vendor_config("amd", "rdna3")
+        get_vendor_config("amd", "rdna2")
 
 
 def test_the_refusal_is_actionable():

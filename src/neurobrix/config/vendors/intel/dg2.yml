@@ -44,7 +44,7 @@ memory:
   # and reads the same setting (PYTORCH_ALLOC_CONF / PYTORCH_HIP_ALLOC_CONF:
   # https://github.com/pytorch/pytorch/blob/v2.14.0/c10/core/AllocatorConfig.cpp). Below ROCm 7.0
   # torch warns "expandable_segments not supported on this platform" and keeps fixed segments.
-  compiled_allocator_settings: "expandable_segments:True"
+  # compiled_allocator_settings: none — the XPU allocator of PyTorch reads no caching-allocator setting proven here
   # THE COMPILED ENGINE'S ATTENTION: PyTorch dispatches scaled_dot_product_attention on this device to its flash or
   # memory-efficient kernels, which never write the full scores (PyTorch SDPA tutorial; the Prism estimate prices
   # the memory-efficient workspace, core/prism/memory_estimator.py). Nothing to chunk.

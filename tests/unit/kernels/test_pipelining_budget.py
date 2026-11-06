@@ -87,10 +87,10 @@ def test_amd_architectures_resolve_at_all():
 
 
 def test_cdna_generations_are_distinct():
-    """The three CDNA files must not be copies: MI300 has 2.5x the LDS and
-    is the only one with FP8."""
+    """The three CDNA files must not be copies: MI300 is the only one of the three with FP8 (its LDS is 64 KB per
+    workgroup as CDNA1/2's — Triton v3.8.0 TargetFeatures.cpp; the 160 KB once written here is CDNA4's)."""
     c1, c2, c3 = (get_vendor_config("amd", a) for a in ("cdna", "cdna2", "cdna3"))
-    assert c3["memory"]["max_shared_memory_per_block"] == 163840
+    assert c3["memory"]["max_shared_memory_per_block"] == 65536
     assert c1["memory"]["max_shared_memory_per_block"] == 65536
     assert c2["memory"]["max_shared_memory_per_block"] == 65536
     assert c3["precision"]["supports_fp8"] is True
