@@ -868,6 +868,10 @@ class _TritonRules(_Rules):
             # every batched form -> bmm (force_fp32): the one store rule, which stores fp16 under the fp16 contract
             # (2026-10-26: a hard "float32" here priced chatterbox's cond_enc attention operands wider than the run)
             return self.mm_store(c, c, None, force=True)
+        if name in ("mm", "mm_epilogue", "addmm", "addmm_epilogue", "bmm"):
+            # stored by the launcher's rule on its operands at C (a decode row fp32): orpheus's q_proj on the M4 Pro was
+            # keyed bf16 where the run stored fp32, its paged decode a key the census never derived (2026-11-06)
+            return self._self_managed(uid, op, name, fl, ins)
         if name in _MATMUL_OTHER:
             return "float32"
         return c
