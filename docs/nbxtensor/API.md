@@ -2776,6 +2776,18 @@ def class_floor(dim: str, top: int, profile: Optional[Dict[str, Any]] = None) ->
     # the fewest `dim` that form the class whose top is `top`: bucket_of's inverse floor
 ```
 
+### `nbxtensor.ops.certified_index` — a certified file's compiled index, per memory class
+
+```python
+MAGIC: bytes                      # the index's first eight bytes
+class IndexedEntries(Mapping)     # {key text: certification} from an index: keys at open, a certification parsed when asked
+def fingerprint(source: bytes, tolerance, tuner) -> str   # what validating a file reads: its bytes, the validator, tolerance, spaces
+def directory() -> Path           # where indexes live: beside the machine's replay cache
+def path_for(source: Path, memory_gb: int, fp: str) -> Path   # the index of one file, class and fingerprint
+def write(path: Path, memory_gb: int, entries) -> None          # length-prefixed keys and JSON certifications, a SHA-256 trailer
+def read(path: Path) -> Optional[IndexedEntries]                 # None when absent; refused by name when corrupt
+```
+
 ### `nbxtensor.ops.autotune_certified` — the certified directory: serve, refuse, prove, file
 
 ```python

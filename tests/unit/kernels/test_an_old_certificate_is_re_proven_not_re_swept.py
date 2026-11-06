@@ -26,6 +26,7 @@ pytestmark = [pytest.mark.skipif(not _cuda_available(), reason="a card is needed
 def root(tmp_path, monkeypatch):
     Z._bind_hardware_profile()
     monkeypatch.setenv("NEUROBRIX_AUTOTUNE_CERTIFIED_DIR", str(tmp_path))
+    monkeypatch.setenv("NEUROBRIX_REPLAY_CACHE", str(tmp_path / "replay"))   # its compiled indexes too
     monkeypatch.setenv("NEUROBRIX_REPLAY_CACHE", str(tmp_path / "replay"))
     C.reset()
     yield tmp_path

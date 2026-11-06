@@ -199,6 +199,7 @@ def two_class_rig(tmp_path, monkeypatch):
     from nbxtensor.backend import device_facts as DF
     monkeypatch.setattr(DF, "_DECLARED_MEMORY", {0: 16384 << 20, 1: 32768 << 20})   # as the application declares them
     monkeypatch.setenv("NEUROBRIX_AUTOTUNE_CERTIFIED_DIR", str(tmp_path))
+    monkeypatch.setenv("NEUROBRIX_REPLAY_CACHE", str(tmp_path / "replay"))   # its compiled indexes too
     monkeypatch.setattr(C, "active_profile", lambda: ("nvidia", "volta"))
     root = tmp_path / "nvidia" / "volta"; root.mkdir(parents=True)
     e = _entry({"BLOCK_M": 64, "BLOCK_N": 128, "BLOCK_K": 32, "GROUP_M": 8}, memory_mb=16384)

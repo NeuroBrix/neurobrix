@@ -30,7 +30,7 @@ import datetime as _dt
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Tuple
 
 FORMAT = "nbx-autotune-certified/2"
 
@@ -864,6 +864,30 @@ def _load(vendor: str, profile: str, kernel_qual: str, dtype: str, tuner=None) -
     return entries
 
 
+_LOADED_CLASS: Dict[tuple, Optional[Mapping[str, Dict]]] = {}   # (vendor, profile, kernel, dtype, class) -> served
+
+
+def _load_class(vendor: str, profile: str, kernel_qual: str, dtype: str, tuner, memory_gb: int):
+    """{key text: the certification this memory class is served} of one certified file, read from its compiled index
+    (`ops.certified_index`) when one matches the file's fingerprint; else the file is parsed and validated once
+    (`_load`) and the index written. None when the file is absent or refused."""
+    from nbxtensor.ops import certified_index as CI
+    ident = (vendor, profile, kernel_qual, dtype, memory_gb)
+    if ident in _LOADED_CLASS:
+        return _LOADED_CLASS[ident]
+    path = file_for(vendor, profile, kernel_qual, dtype)
+    served = None
+    if path.exists():
+        where = CI.path_for(path, memory_gb, CI.fingerprint(path.read_bytes(), _tolerance_for(vendor, profile, dtype),
+                                                           tuner))
+        served = CI.read(where)
+        if served is None and (entries := _load(vendor, profile, kernel_qual, dtype, tuner)) is not None:
+            served = {k: c for k, e in entries.items() if (c := entry_for_memory_gb(e, memory_gb)) is not None}
+            CI.write(where, memory_gb, served)
+    _LOADED_CLASS[ident] = served
+    return served
+
+
 def lookup(kernel_qual: str, tuner, key: tuple, ignore_switch: bool = False,
            memory_gb: Optional[int] = None, any_class: bool = False) -> Optional[Dict[str, Any]]:
     """The certification for this profile, kernel, dtype, shape AND the memory
@@ -879,13 +903,13 @@ def lookup(kernel_qual: str, tuner, key: tuple, ignore_switch: bool = False,
     ident = active_profile()
     if ident is None:
         return None
-    entries = _load(ident[0], ident[1], kernel_qual, output_dtype(tuner, key), tuner)
-    if not entries:
+    if any_class:                          # a report naming what exists: the source itself, every class
+        entries = _load(ident[0], ident[1], kernel_qual, output_dtype(tuner, key), tuner)
+        return entries.get(key_repr(key)) if entries else None
+    if memory_gb is None:
         return None
-    entry = entries.get(key_repr(key))
-    if any_class:
-        return entry
-    cert = entry_for_memory_gb(entry, memory_gb)
+    served = _load_class(ident[0], ident[1], kernel_qual, output_dtype(tuner, key), tuner, memory_gb)
+    cert = served.get(key_repr(key)) if served else None
     if cert is None:
         return None
     # THE GENERATOR, asked here for the same reason the memory class is: a
@@ -1158,7 +1182,7 @@ def note_local(n: int) -> None:
 
 
 def reset() -> None:
-    _LOADED.clear(); _REFUSED.clear(); _ANNOUNCED.clear(); _EVICTED.clear(); _UNIT_CHOICES.clear()
+    _LOADED.clear(); _LOADED_CLASS.clear(); _REFUSED.clear(); _ANNOUNCED.clear(); _EVICTED.clear(); _UNIT_CHOICES.clear()
     _SERVED.update({"certified": 0, "swept": 0, "local": 0})
 
 

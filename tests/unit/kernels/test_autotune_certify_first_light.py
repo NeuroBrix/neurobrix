@@ -54,6 +54,7 @@ def _recorded_key(tuner, call):
 def root(tmp_path, monkeypatch):
     Z._bind_hardware_profile()                      # the wrappers' dtype policy, as before a request
     monkeypatch.setenv("NEUROBRIX_AUTOTUNE_CERTIFIED_DIR", str(tmp_path))
+    monkeypatch.setenv("NEUROBRIX_REPLAY_CACHE", str(tmp_path / "replay"))   # its compiled indexes too
     monkeypatch.setenv("NEUROBRIX_REPLAY_CACHE", str(tmp_path / "replay"))
     C.reset()
     yield tmp_path

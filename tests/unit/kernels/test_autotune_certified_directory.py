@@ -85,6 +85,7 @@ def _write(root: Path, entries, vendor="nvidia", profile="volta", dtype="fp32", 
 @pytest.fixture
 def root(tmp_path, monkeypatch):
     monkeypatch.setenv("NEUROBRIX_AUTOTUNE_CERTIFIED_DIR", str(tmp_path))
+    monkeypatch.setenv("NEUROBRIX_REPLAY_CACHE", str(tmp_path / "replay"))   # its compiled indexes too
     monkeypatch.setattr(C, "active_profile", lambda: ("nvidia", "volta"))
     monkeypatch.setattr(C, "_tolerance_for", lambda v, p, d: 1.0e-4)
     C.reset()
@@ -354,3 +355,31 @@ def test_a_variant_naming_parameters_the_kernel_lacks_is_refused_by_name(root):
     path = _write(root, {C.key_repr(KEY): _entry(variants={"32g": var})})
     problems = C.validate(json.loads(path.read_text()), path, _TunerWithSpace())
     assert any("variant" in p and "not the kernel's" in p for p in problems), problems
+
+
+def test_the_validated_file_is_read_from_its_compiled_index_until_its_sources_change(root, monkeypatch):
+    # The supervisor's decision (2026-11-06 10:46): JSON stays the source; the first launch after a change validates once
+    # and writes a binary index per memory class keyed by the fingerprint of what it read; later launches read the index.
+    # What this does if the index were wrong: a second parse of the source, an index served after its source changed,
+    # another class's entry served, a corrupt index read — red.
+    from nbxtensor.ops import certified_index as CI
+    path = _write(root, {C.key_repr(KEY): _entry()})
+    assert C.lookup(KERNEL, _Tuner(), KEY, memory_gb=16) is not None
+    built = sorted(CI.directory().rglob("*.idx"))
+    assert len(built) == 1 and ".16g." in built[0].name
+    C.reset()
+    parsed = []
+    real = C._load
+    monkeypatch.setattr(C, "_load", lambda *a, **k: (parsed.append(a), real(*a, **k))[1])
+    assert C.lookup(KERNEL, _Tuner(), KEY, memory_gb=16)["config"]["num_warps"] == 4
+    assert parsed == []                                              # read from the index, the JSON not parsed
+    assert C.lookup(KERNEL, _Tuner(), KEY, memory_gb=32) is None     # the 32 GB class has no entry: its own index
+    C.reset()
+    _write(root, {C.key_repr(KEY): _entry(config={"kwargs": {"BLOCK_M": 32, "BLOCK_N": 64, "BLOCK_K": 32, "GROUP_M": 8},
+                                                  "num_warps": 2, "num_stages": 2, "num_ctas": 1, "maxnreg": None})})
+    assert C.lookup(KERNEL, _Tuner(), KEY, memory_gb=16)["config"]["num_warps"] == 2   # a changed source: re-validated
+    C.reset()
+    for idx in CI.directory().rglob("*.16g.*.idx"):
+        idx.write_bytes(idx.read_bytes()[:-1] + b"\0")
+    with pytest.raises(RuntimeError, match="corrupt"):
+        C.lookup(KERNEL, _Tuner(), KEY, memory_gb=16)
