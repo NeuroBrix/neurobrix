@@ -546,6 +546,138 @@ class CudaDriver(Driver):
     def elapsed_ms(self, start: int, end: int) -> float:
         return self._allocator().event_elapsed_ms(start, end)
 
+def _profile_arch() -> str:
+    """The gfx arch the hardware profile states for device 0 (`compute_capability: "gfx90a"` in the AMD device files),
+    or "" when it states none."""
+    import sys as _sys
+    prof = getattr(_sys.modules.get("nbxtensor.ops.wrappers"), "_HARDWARE_PROFILE", None)
+    devs = getattr(prof, "devices", None) if prof is not None else None
+    return str(getattr(devs[0], "compute_capability", "") or "") if devs else ""
+
+
+class HipDriver(Driver):
+    """libamdhip64 through ctypes: the HIP module API, modelled on `CudaDriver`. PREPARED, not yet run on an AMD card.
+
+    Read from Triton 3.8's own AMD backend (site-packages/triton/backends/amd/): the binary is `hsaco` (compiler.py,
+    `make_hsaco`); the target `GPUTarget("hip", <gfx arch>, <warp size>)` (driver.py, `get_current_target`); the launch
+    `hipModuleLaunchKernel(function, gridX, gridY, gridZ, warp_size * num_warps, 1, 1, shared_memory, stream, params, 0)`
+    with the kernel's arguments then the global- and profile-scratch pointers (driver.c, `_launch` and the argument
+    extraction). The attribute numbers are hip_runtime_api.h's (the copy Triton ships in backends/amd/include):
+    hipDeviceAttributeMaxSharedMemoryPerBlock 74, hipDeviceAttributeSharedMemPerBlockOptin 75, hipDeviceAttributeWarpSize
+    87, hipFuncAttributeMaxDynamicSharedMemorySize 8. The arch is the hardware profile's (`compute_capability`), never a
+    device-property struct whose layout moves between ROCm releases; a profile without one is refused by name."""
+
+    _inst: Optional["HipDriver"] = None
+    artifact_kind = "hsaco"
+    backend = "hip"
+    ATTR_MAX_SHARED_PER_BLOCK, ATTR_SHARED_PER_BLOCK_OPTIN, ATTR_WARP_SIZE = 74, 75, 87
+    FUNC_ATTR_MAX_DYNAMIC_SHARED = 8
+    _SYMBOLS = ("hipModuleLoadData", "hipModuleGetFunction", "hipModuleLaunchKernel", "hipFuncSetAttribute",
+                "hipDeviceGetAttribute", "hipGetErrorString")
+
+    @classmethod
+    def instance(cls) -> "HipDriver":
+        if cls._inst is None:
+            cls._inst = cls()
+        return cls._inst
+
+    def __init__(self, lib=None) -> None:
+        if lib is None:
+            from nbxtensor.backend.runtime import _GPU_BACKENDS
+            names = list(_GPU_BACKENDS["hip"]["rt_libs"])
+            for name in names:
+                try:
+                    lib = ctypes.CDLL(name)
+                    break
+                except OSError:
+                    continue
+            if lib is None:
+                raise RuntimeError(f"NeuroBrix launcher: libamdhip64 not found (tried {names})")
+            lib.hipGetErrorString.restype = ctypes.c_char_p
+            lib.hipModuleLaunchKernel.restype = ctypes.c_int
+            lib.hipModuleLaunchKernel.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint, ctypes.c_uint,
+                                                  ctypes.c_uint, ctypes.c_uint, ctypes.c_uint, ctypes.c_uint,
+                                                  ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p]
+        missing = [s for s in self._SYMBOLS if getattr(lib, s, None) is None]
+        if missing:
+            raise RuntimeError(f"NeuroBrix launcher: the HIP library lacks {missing} — refused, not launched")
+        self.lib = lib
+        self._param_counts: Dict[int, Optional[int]] = {}
+        self._arg_buffers: Dict[Tuple[int, tuple], tuple] = {}
+
+    def _check(self, ret: int, what: str) -> None:
+        if ret != 0:
+            msg = self.lib.hipGetErrorString(ret)
+            raise RuntimeError(f"NeuroBrix launcher: {what} failed ({ret}: "
+                               f"{(msg or b'?').decode() if isinstance(msg, bytes) else msg})")
+
+    def _attribute(self, attr: int) -> int:
+        from nbxtensor.memory.allocator import DeviceAllocator
+        out = ctypes.c_int()
+        self._check(self.lib.hipDeviceGetAttribute(ctypes.byref(out), attr, ctypes.c_int(int(DeviceAllocator.get_device()))),
+                    "hipDeviceGetAttribute")
+        return int(out.value)
+
+    def target(self):
+        from triton.backends.compiler import GPUTarget
+        arch = _profile_arch()
+        if not arch.startswith("gfx"):
+            raise RuntimeError("NeuroBrix launcher: the hardware profile states no gfx arch for this AMD device "
+                               "(compute_capability, e.g. \"gfx90a\") — a HIP target is not guessed")
+        return GPUTarget("hip", arch.split(":")[0], self._attribute(self.ATTR_WARP_SIZE))
+
+    def block_for(self, metadata):
+        return (int(getattr(metadata, "warp_size", 64)) * int(metadata.num_warps), 1, 1)
+
+    def max_shared_memory_per_block(self) -> int:
+        return self._attribute(self.ATTR_SHARED_PER_BLOCK_OPTIN)
+
+    def load(self, binary: bytes, name: str, shared: int):
+        module = ctypes.c_void_p()
+        buf = ctypes.create_string_buffer(binary, len(binary))
+        self._check(self.lib.hipModuleLoadData(ctypes.byref(module), buf), "hipModuleLoadData")
+        function = ctypes.c_void_p()
+        self._check(self.lib.hipModuleGetFunction(ctypes.byref(function), module, name.encode()),
+                    f"hipModuleGetFunction({name})")
+        if shared > self._attribute(self.ATTR_MAX_SHARED_PER_BLOCK):
+            limit = self._attribute(self.ATTR_SHARED_PER_BLOCK_OPTIN)
+            if shared > limit:
+                from triton.runtime.errors import OutOfResources
+                raise OutOfResources(shared, limit, "shared memory")
+            self._check(self.lib.hipFuncSetAttribute(function, self.FUNC_ATTR_MAX_DYNAMIC_SHARED, ctypes.c_int(shared)),
+                        "hipFuncSetAttribute")
+        return function
+
+    def launch(self, function, grid, block, shared: int, stream: int, params,
+               names=None, types=None, trailing=None) -> None:
+        if trailing is not None:
+            raise RuntimeError(f"NeuroBrix launcher: trailing buffers ({trailing!r}) were computed for a kernel the "
+                               f"HIP driver cannot bind them for — a driver/metadata mismatch, not launched")
+        from nbxtensor.memory.allocator import DeviceAllocator
+        for i, (kind, value) in enumerate(params):
+            if kind == "ptr" and value and not DeviceAllocator.holds(int(value)):
+                what = f"parameter '{names[i]}'" if names and i < len(names) else f"parameter #{i}"
+                raise ValueError(f"NeuroBrix launcher: device address {int(value):#x} ({what}) was not "
+                                 f"handed out by the allocator — refused, not launched")
+        gx, gy, gz = (tuple(int(g) for g in grid) + (1, 1, 1))[:3]
+        bx, by, bz = (tuple(int(b) for b in block) + (1, 1, 1))[:3]
+        if gx * gy * gz <= 0:
+            return
+        kinds = tuple(k for k, _ in params)
+        cache_key = (int(function.value), kinds)
+        slot = self._arg_buffers.get(cache_key)
+        if slot is None:
+            storage = [_ctypes_slot(kind) for kind in kinds]
+            arr = (ctypes.c_void_p * len(storage))(*[ctypes.addressof(c) for c in storage])
+            slot = self._arg_buffers[cache_key] = (storage, arr)
+        storage, arr = slot
+        for cell, (_kind, v) in zip(storage, params):
+            cell.value = v
+        rc = self.lib.hipModuleLaunchKernel(function, gx, gy, gz, bx, by, bz, shared, stream, arr, None)
+        if rc != 0:
+            self._check(rc, "hipModuleLaunchKernel")
+
+
 # ---------------------------------------------------------------------------
 # Which driver this process launches through — the one place a backend is named
 # ---------------------------------------------------------------------------
@@ -594,10 +726,12 @@ def _resolve_driver() -> Driver:
         return import_module(nbx_driver_module()).driver()
     if name == "cuda":
         return CudaDriver.instance()
+    if name == "hip":
+        return HipDriver.instance()
     # Any other backend has no launch driver here yet: refused by name, never handed the CUDA one (an AMD card failed
     # inside libcuda at its first launch, 2026-10-30). A new backend implements the driver interface (BACKENDS.md).
-    raise RuntimeError(f"nbxtensor launcher: no launch driver for the {name!r} backend — the library launches on cuda "
-                       f"and metal; a backend implements the launcher's Driver interface (docs/nbxtensor/BACKENDS.md)")
+    raise RuntimeError(f"nbxtensor launcher: no launch driver for the {name!r} backend — the library launches on cuda, "
+                       f"hip and metal; a backend implements the launcher's Driver interface (docs/nbxtensor/BACKENDS.md)")
 
 
 def _unsupported(kind):

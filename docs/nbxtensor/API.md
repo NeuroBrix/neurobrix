@@ -2695,6 +2695,7 @@ the guard `tests/unit/nbxtensor_boundary/test_every_public_name_is_in_the_api.py
 ```python
 class Driver                   # what a backend implements: load a binary, launch it, name the compile target it wants
 class CudaDriver(Driver)       # libcuda through ctypes
+class HipDriver(Driver)        # libamdhip64 through ctypes (the HIP module API, hsaco; prepared, not yet run on an AMD card)
 class CudaCompiledKernel       # the result of compiling once, launched many times (contract object)
 def register_driver(driver: Optional[Driver]) -> None   # install the driver this process launches through
 def active_driver() -> Driver  # the driver in force, resolved once from the detected backend
