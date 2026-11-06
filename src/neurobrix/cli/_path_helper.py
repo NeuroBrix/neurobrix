@@ -8,13 +8,16 @@ import sysconfig
 
 def get_scripts_dir() -> str:
     """Return the directory where pip installs console_scripts."""
+    # The running interpreter's own directory first: in a virtual environment the scripts sit beside its python
+    # (on a Mac the user-site directory came first and doctor named ~/Library/Python/3.12/bin from inside a venv)
+    own_scripts = os.path.dirname(sys.executable)
     # User installs (pip install --user)
     user_scripts = sysconfig.get_path("scripts", f"{os.name}_user")
     # Global/venv installs
     global_scripts = sysconfig.get_path("scripts")
 
     # Check which one actually has neurobrix
-    for d in (user_scripts, global_scripts):
+    for d in (own_scripts, global_scripts, user_scripts):
         if d and os.path.isfile(os.path.join(d, "neurobrix")):
             return d
 
@@ -35,7 +38,13 @@ def check_cli_on_path() -> None:
     print("  neurobrix is installed but not on your PATH.")
     print(f"  Script location: {scripts_dir}")
     print()
-    _print_path_fix(scripts_dir)
+    if sys.prefix != sys.base_prefix:
+        # a virtual environment that is not activated: its activation puts its scripts on PATH, no shell file to edit
+        act = (os.path.join(sys.prefix, "Scripts", "activate") if os.name == "nt"
+               else "source " + os.path.join(sys.prefix, "bin", "activate"))
+        print(f"  To fix, activate the environment: {act}")
+    else:
+        _print_path_fix(scripts_dir)
     print()
     print("  Or run directly with: python -m neurobrix <command>")
     print("\033[0m")  # reset

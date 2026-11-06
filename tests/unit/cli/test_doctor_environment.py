@@ -171,3 +171,42 @@ def test_doctor_carries_no_build_literal():
     src = Path(doctor.__file__).read_text()
     found = re.findall(r"\bcu\d{3}\b|download\.pytorch\.org", src)
     assert not found, f"doctor.py carries {found}; it belongs in config/torch_wheels.yml"
+
+
+# ---- a Mac (the M4 Pro, 2026-11-07 00:13: doctor read the user-site scripts dir from inside a venv, sent a Mac to
+# `pip install neurobrix` for a Triton PyPI does not publish for macOS, and said "no GPU / GPU visible: NO" while the
+# run itself used mps:0)
+
+def _mac(monkeypatch, mps_available=True):
+    fake = types.SimpleNamespace(
+        __version__="2.15.0", version=types.SimpleNamespace(cuda=None, hip=None),
+        cuda=_FakeCuda(False), backends=types.SimpleNamespace(mps=types.SimpleNamespace(is_available=lambda: mps_available)))
+    monkeypatch.setitem(__import__("sys").modules, "torch", fake)
+    monkeypatch.setattr(doctor, "_apple_silicon", lambda: True)
+    monkeypatch.setattr(doctor, "_nvidia_smi_gpus", lambda: [])
+    monkeypatch.setattr(doctor, "_driver_version", lambda: None)
+    import builtins
+    real = builtins.__import__
+    def no_triton(name, *a, **k):
+        if name == "triton" or name.startswith("triton."):
+            raise ImportError("No module named 'triton'")
+        return real(name, *a, **k)
+    monkeypatch.setattr(builtins, "__import__", no_triton)
+
+
+def test_on_a_mac_the_mps_gpu_is_seen_and_the_triton_engine_is_sent_to_its_source_build(monkeypatch, capsys):
+    _mac(monkeypatch)
+    problems = doctor.check_compute_environment()
+    out = capsys.readouterr().out
+    assert problems == [], problems
+    assert "GPU visible:    yes (Apple GPU, mps)" in out and "Apple MPS (Metal)" in out, out
+    assert "GPU visible:    NO" not in out and "CUDA None" not in out, out
+    assert "PCI bus" not in out and "Apple GPU (Metal)" in out, out
+    assert "PyPI publishes no Triton for macOS" in out and "pip install neurobrix" not in out, out
+
+
+def test_the_scripts_dir_is_the_running_interpreters_first(monkeypatch, tmp_path):
+    from neurobrix.cli import _path_helper as H
+    (tmp_path / "neurobrix").write_text("")
+    monkeypatch.setattr(H.sys, "executable", str(tmp_path / "python"))
+    assert H.get_scripts_dir() == str(tmp_path)

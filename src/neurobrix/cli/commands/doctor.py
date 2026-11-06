@@ -74,6 +74,16 @@ def _cpu_install_hint() -> str:
             f"{table['index_url']}{table['cpu_only']['build']}")
 
 
+#: what a Mac needs for the Triton engine: PyPI publishes no Triton for macOS, so `pip install` cannot bring it
+_MAC_TRITON = ("PyPI publishes no Triton for macOS: build Triton with TRITON_EXT_ENABLED=1 and triton-ext's AppleGPU "
+               "backend (https://github.com/NeuroBrix/nbxtensor#installation); the PyTorch engine runs on MPS without it")
+
+
+def _apple_silicon() -> bool:
+    from nbxtensor.backend.metal_backend import is_apple_silicon
+    return is_apple_silicon()
+
+
 def _triton_engine() -> tuple[bool, str]:
     """(ready, what to say) for the Triton engine (`--triton`): nbxtensor and Triton import, and nbxtensor finds a GPU
     runtime. Torch-free: PyTorch is not this engine's dependency, and its absence is not this engine's fault."""
@@ -81,6 +91,8 @@ def _triton_engine() -> tuple[bool, str]:
         import nbxtensor  # noqa: F401
         import triton
     except ImportError as exc:
+        if _apple_silicon():
+            return False, f"not installed ({exc}): {_MAC_TRITON}"
         return False, f"not installed ({exc}): pip install neurobrix"
     try:
         from nbxtensor.backend.runtime import gpu_backend
@@ -105,8 +117,12 @@ def check_compute_environment() -> list[str]:
     print("-" * 60)
     triton_ready, triton_says = _triton_engine()
     print(f"  Triton engine:  {triton_says}")
-    from nbxtensor.backend.install_help import report
-    print("  GPU drivers:    " + report().replace("\n", "\n                  "))
+    if _apple_silicon():
+        # an Apple GPU sits on no PCI bus nbxtensor reads: said as what it is, never "no GPU found"
+        print("  GPU drivers:    Apple GPU (Metal), part of macOS")
+    else:
+        from nbxtensor.backend.install_help import report
+        print("  GPU drivers:    " + report().replace("\n", "\n                  "))
 
     if not _torch_present():
         print("  PyTorch engine: not installed (optional; the Triton engine runs without it: --triton). To add it: "
@@ -120,7 +136,11 @@ def check_compute_environment() -> list[str]:
     cuda_build = getattr(torch.version, "cuda", None)
     hip_build = getattr(torch.version, "hip", None)
     print(f"  PyTorch:        {torch.__version__}")
-    print(f"  built for:      {'ROCm ' + hip_build if hip_build else 'CUDA ' + str(cuda_build)}")
+    mps = getattr(getattr(torch, "backends", None), "mps", None)
+    on_mps = mps is not None and mps.is_available()
+    built = ("ROCm " + hip_build if hip_build else "CUDA " + cuda_build if cuda_build else
+             "Apple MPS (Metal)" if on_mps else "CPU only")
+    print(f"  built for:      {built}")
 
     gpus = _nvidia_smi_gpus()
     driver = _driver_version()
@@ -142,6 +162,10 @@ def check_compute_environment() -> list[str]:
                     f"(it has: {', '.join(arch_list)}).\n"
                     f"      Fix: {_torch_install_hint(f'{major}.{minor}')}"
                 )
+        return problems
+
+    if on_mps:
+        print("  GPU visible:    yes (Apple GPU, mps)")
         return problems
 
     # No CUDA. Distinguish "no GPU" from "GPU present, torch cannot use it" —
