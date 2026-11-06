@@ -686,3 +686,14 @@ def test_a_decode_attention_reads_its_keys_and_values_at_the_cache_dtype():
                           operand_reads={"sdpa::0": {"k": "float16", "v": "float16"}})
     assert read["o"] == "float16" and read["x"] == "float16"
     assert read["k"] == "float32"            # the projection still writes fp32: the cache is what the attention reads
+
+
+def test_a_gemm_under_native_bf16_stores_a_decode_row_fp32():
+    # `_wrap_lower_precision` hands a self-managed GEMM its operands at C and the wrapper stores by the launcher's rule
+    # (`launch_keys.matmul_out_dtype`): a decode row (M <= 4) fp32 on every hardware, more rows at C. Returned at C,
+    # orpheus-3b's q_proj on the M4 Pro (bf16, its graph stored fp32) was keyed bf16 where the run stored fp32, and its
+    # paged decode asked a key the census never derived (the Mac's Metal gate, 2026-11-06). Red if mm returns C.
+    for rows, want in ((1, "float32"), (4, "float32"), (5, "bfloat16")):
+        T = {"input::x": _t([rows, 64], dtype="float32", is_input=True), "param::w": _t([64, 32]), "y": _t([rows, 32])}
+        dag = _dag(T, [_op("mm::0", "aten::mm", ["input::x", "param::w"], ["y"])], ["input::x"], ["y"])
+        assert _w(dag, c="bfloat16", bf16=True)["y"] == want, rows
