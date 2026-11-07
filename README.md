@@ -3,8 +3,8 @@
 NeuroBrix is an open-source inference engine that runs AI models (language models,
 vision-language and omni models, speech recognition, speech synthesis, image and video
 generation, and image upscaling) from one container format and one command-line tool.
-It is for developers who want to run these models on their own GPUs or CPUs without
-writing or maintaining a separate pipeline for each model family. NeuroBrix does not
+It is for developers who want to run these models on their own GPUs or CPUs, on Linux,
+Windows and macOS, without writing or maintaining a separate pipeline for each model family. NeuroBrix does not
 train models. It runs published models that have been packaged as `.nbx` containers and
 distributed through the [NeuroBrix Hub](https://neurobrix.es/models).
 
@@ -102,10 +102,9 @@ the packages take in `site-packages`): `pip install neurobrix`, the Triton engin
 PyTorch index, then `neurobrix[pytorch]`) 6.82 GiB.
 
 **Apple Silicon (macOS).** The Triton engine runs on the Apple GPU through Metal. PyPI publishes
-no Triton for macOS: `install-metal` installs it from the releases of the project's fork
-[NeuroBrix/triton-ext](https://github.com/NeuroBrix/triton-ext) — Triton built with triton-ext,
-and the AppleGPU backend written by imperatormk
-([triton-lang/triton-ext#126](https://github.com/triton-lang/triton-ext/pull/126)) — each wheel
+no Triton for macOS: `install-metal` installs NeuroBrix's Triton build for Apple GPUs
+([NeuroBrix/triton-ext](https://github.com/NeuroBrix/triton-ext); upstream:
+[triton-lang/triton-ext#126](https://github.com/triton-lang/triton-ext/pull/126)), each wheel
 checked against the sha256 written in nbxtensor:
 
 ```bash
@@ -134,7 +133,7 @@ run.
 ```bash
 # Browse the hub and download a small language model
 neurobrix hub --category LLM
-neurobrix import TinyLlama/TinyLlama-1.1B-Chat-v1.0
+neurobrix import TinyLlama/TinyLlama-1.1B-Chat-v1.0 --accept-license
 
 # Run it once (hardware is detected automatically)
 neurobrix run --model TinyLlama-1.1B-Chat-v1.0 \
@@ -163,7 +162,7 @@ neurobrix stop                       # stop the daemon and free GPU memory
 |---|---|
 | NVIDIA GPUs, Linux (CUDA) | Released in 0.6.0. Both compute branches. The project's own test machines are V100s. |
 | CPU (x86-64) | Released in 0.6.0 (the PyTorch engine). |
-| Apple Silicon (Metal) | In 0.6.0. Both engines: the Triton engine through Metal (Triton and triton-ext's AppleGPU backend, installed by `python -m nbxtensor install-metal`), the PyTorch engine on MPS. Install: [Install and first run](#install-and-first-run), Apple Silicon. |
+| Apple Silicon (Metal) | In 0.6.0. Both engines: the Triton engine through Metal (NeuroBrix's Triton build for Apple GPUs, installed by `python -m nbxtensor install-metal`), the PyTorch engine on MPS. Install: [Install and first run](#install-and-first-run), Apple Silicon. |
 | AMD and Intel GPUs | nbxtensor's HIP and Level Zero drivers (the Triton engine) are written but have never run on AMD or Intel hardware. Not supported yet. |
 | Windows | Not tested by the project. |
 

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **The README and the documentation say where it runs and how to start**: Linux, Windows and macOS; on a Mac,
+  NeuroBrix's Triton build for Apple GPUs (NeuroBrix/triton-ext); every `neurobrix import` example carries
+  `--accept-license`, which the import asks of a model with a license (the README's first run stopped there).
+
 ### Fixed
 - **The package names none of the project's machines**: the snapshots root it shipped was a path of the project's own
   machine (wrong on every other machine) and is now `~/hf_snapshots`

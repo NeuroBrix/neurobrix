@@ -4,7 +4,7 @@
 
 Run AI models without PyTorch, on any GPU Triton supports: tensors, Triton kernels, planned memory and certified tuning.
 
-Runs wherever Triton runs — NVIDIA, AMD, Intel and Apple Silicon GPUs. Inference first; training is not in this
+Runs wherever Triton runs — NVIDIA, AMD, Intel and Apple Silicon GPUs, on Linux, Windows and macOS. Inference first; training is not in this
 release. Found a bug on your hardware? [Open an issue](https://github.com/NeuroBrix/nbxtensor/issues) — we fix fast.
 
 [![PyPI](https://img.shields.io/pypi/v/nbxtensor)](https://pypi.org/project/nbxtensor/)
@@ -135,10 +135,10 @@ install commands when one is not.
 
 **From the NeuroBrix repository** (contributors): `pip install -e nbxtensor`.
 
-**macOS, Apple silicon (Metal).** PyPI publishes no Triton for macOS. `install-metal` installs it from the releases of
-the project's fork of triton-ext, [NeuroBrix/triton-ext](https://github.com/NeuroBrix/triton-ext): Triton built with
-`TRITON_EXT_ENABLED=1`, and the AppleGPU backend (the `nbx-triton-apple` wheel) written by imperatormk
-([triton-lang/triton-ext#126](https://github.com/triton-lang/triton-ext/pull/126)); each wheel is checked against the
+**macOS, Apple silicon (Metal).** PyPI publishes no Triton for macOS. `install-metal` installs NeuroBrix's Triton
+build for Apple GPUs, [NeuroBrix/triton-ext](https://github.com/NeuroBrix/triton-ext) (Triton built with
+`TRITON_EXT_ENABLED=1` and the `nbx-triton-apple` backend; upstream:
+[triton-lang/triton-ext#126](https://github.com/triton-lang/triton-ext/pull/126)); each wheel is checked against the
 sha256 written in the library (Python 3.12, macOS 15 or later):
 
 ```

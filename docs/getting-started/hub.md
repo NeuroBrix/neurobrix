@@ -136,7 +136,7 @@ neurobrix import <org>/<model>
 Example:
 
 ```bash
-neurobrix import TinyLlama/TinyLlama-1.1B-Chat-v1.0
+neurobrix import TinyLlama/TinyLlama-1.1B-Chat-v1.0 --accept-license
 ```
 
 The model is downloaded and extracted to `~/.neurobrix/cache/<name>`; `--model` takes that `<name>`.
