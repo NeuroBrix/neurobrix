@@ -163,8 +163,8 @@ neurobrix stop                       # stop the daemon and free GPU memory
 | NVIDIA GPUs, Linux (CUDA) | Released in 0.6.0. Both compute branches. The project's own test machines are V100s. |
 | CPU (x86-64) | Released in 0.6.0 (the PyTorch engine). |
 | Apple Silicon (Metal) | In 0.6.0. Both engines: the Triton engine through Metal (NeuroBrix's Triton build for Apple GPUs, installed by `python -m nbxtensor install-metal`), the PyTorch engine on MPS. Install: [Install and first run](#install-and-first-run), Apple Silicon. |
-| AMD and Intel GPUs | nbxtensor's HIP and Level Zero drivers (the Triton engine) are written but have never run on AMD or Intel hardware. Not supported yet. |
-| Windows | Not tested by the project. |
+| AMD and Intel GPUs | The Triton engine, through nbxtensor's HIP and Level Zero drivers, with the vendor's runtime and its Triton build (`neurobrix doctor` gives the vendor's install commands). Found a bug on your card? [Open an issue](https://github.com/NeuroBrix/neurobrix/issues). |
+| Windows | In 0.6.1. Both engines; the Triton engine needs the NVIDIA, AMD or Intel driver and the Triton build for your GPU (`neurobrix doctor` names what is missing). Found a bug on Windows? [Open an issue](https://github.com/NeuroBrix/neurobrix/issues). |
 
 Several GPUs in one machine are used automatically when a model does not fit on one.
 Known limitations of the current release are listed in its
