@@ -1194,7 +1194,11 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         # THE PRICE BEFORE ANY DRAW (supervisor, 2026-09-28 05:41): what this key's certification
         # will hold at its peak phase, over the process's measured floor, against the budget the
         # run is gated on — the same figure its guard kills at. Refused by name, with the phases.
-        _refuse_unpriced(qual, tuner, key, budget_bytes, floor_bytes)
+        # the key DRAWN, not the key filed: on a unified device a padded-row or element-wise class is drawn at the size
+        # its phase price fits (`_unified_padded_row`); priced at its filed top, the open element class (its label,
+        # 68 719 476 736 elements) asked 2.2 TB of an 18 GB Mac and was refused at every re-proof (2026-11-07)
+        drawn = _unified_padded_row(qual, tuner, key, card_bytes, C.kernel_short(qual)) if unified else key
+        _refuse_unpriced(qual, tuner, drawn, budget_bytes, floor_bytes)
 
     def to(a):
         """The NBXTensor the kernel must receive, with the dtype the key names.

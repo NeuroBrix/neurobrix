@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The kernel certifier prices the size it draws**: on a unified-memory device (Apple) a key is drawn at the size its
+  phase price fits, but the door before any draw priced it at its recorded top — the open element-wise class (its label,
+  68 719 476 736 elements) asked 2.2 TB of an 18 GB Mac and was refused at every re-proof, so a new Mac tuned it once at
+  its first Sana run.
+
 ## [0.6.1] - 2026-11-07
 
 A first run never ends in a Traceback, the package names none of the project's machines, and the documentation says

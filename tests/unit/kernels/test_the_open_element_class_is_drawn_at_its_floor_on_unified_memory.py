@@ -34,3 +34,22 @@ def test_the_open_class_is_drawn_and_priced_at_its_floor(profile):
     drawn = A._unified_padded_row(EW, None, key, UNIFIED, "ew_launch_kernel")
     assert drawn == (class_floor("elements", 68719476736),) + key[1:] and drawn[0] == 16777217, drawn
     A._refuse_unified(EW, None, drawn, UNIFIED)
+
+
+def test_the_price_door_prices_the_key_drawn_not_the_key_filed(profile, monkeypatch):
+    # the re-proof under the published Metal wheels (the Mac's RUN 73, 2026-11-07): the door before any draw priced the
+    # open class at its label — 2.2 TB of an 18 GB Mac — and refused it, though the key drawn is its floor
+    seen = []
+
+    class Stop(Exception):
+        pass
+
+    def door(qual, tuner, key, budget, floor):
+        seen.append(key)
+        raise Stop
+    monkeypatch.setattr(A, "_refuse_unpriced", door)
+    key = (68719476736, "fp32", "fp32")
+    with pytest.raises(Stop):
+        A.synthesize(EW, None, key, None, card_bytes=UNIFIED, unified=True, values=False, budget_bytes=UNIFIED,
+                     floor_bytes=0)
+    assert seen == [(16777217, "fp32", "fp32")], seen
