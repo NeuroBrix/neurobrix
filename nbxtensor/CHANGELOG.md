@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A certified setting that is not served says why**: where the directory holds a key proven under another code
+  generator than the running one, the line named a memory class that matched ("certified for 18 GB, this card is
+  18 GB, not served"); it now names both generators and the re-proof command. A setting proven on another memory class
+  is still said as such.
+
 ## [0.0.4] - 2026-11-07
 
 ### Added

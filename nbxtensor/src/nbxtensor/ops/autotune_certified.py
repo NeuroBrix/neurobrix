@@ -1115,6 +1115,20 @@ def _explain_miss(kernel_qual: str, key: tuple, memory_gb: Optional[int]) -> str
         return f" (the application's explanation of the miss failed: {type(exc).__name__}: {exc})."
 
 
+def _not_served_because(raw: Dict[str, Any], here: Optional[int]) -> str:
+    """Why an entry the directory holds for this key is not served here: proven under another code generator than the
+    running one (for this card's memory class), or on another memory class (register 56). The Mac's new-user run on the
+    published Metal wheels (2026-11-07): every Apple entry carried the dev environment's generator and the line said
+    "certified for 18 GB, this card is 18 GB, not served" — a memory class that matched, the cause unnamed."""
+    covered = sorted(covered_memory_gbs(raw))
+    gens, gen = sorted(proof_backends(raw)), running_generator()
+    if here is not None and here in covered and gen is not None and gen not in gens:
+        return (f"certified for this card's {here} GB under {', '.join(gens) or 'no named generator'}, and this machine "
+                f"runs {gen}: not served — re-proven under it by `neurobrix autotune certify --reprove-generator`")
+    return (f"certified for {', '.join(f'{c} GB' for c in covered) or 'no known memory class'}, this card is "
+            f"{f'{here} GB' if here is not None else 'of unknown memory'}, not served (register 56)")
+
+
 def refuse_missing(kernel_qual: str, tuner, key: tuple) -> None:
     """The certified-only answer to a miss: raised before any bench, naming the key, the profile,
     why a directory entry (if any) is not served, and what the census says."""
@@ -1129,9 +1143,7 @@ def refuse_missing(kernel_qual: str, tuner, key: tuple) -> None:
     try:
         raw = lookup(kernel_qual, tuner, key, ignore_switch=True, any_class=True)
         if raw is not None:
-            covered = sorted(covered_memory_gbs(raw))
-            why = (f"; the directory certifies it for {', '.join(f'{c} GB' for c in covered) or 'no known memory class'} "
-                   f"and this card is {f'{here} GB' if here is not None else 'of unknown memory'} (register 56)")
+            why = f"; the directory holds it: {_not_served_because(raw, here)}"
     except Exception as exc:  # noqa: BLE001 — the reason failed to compute: said, the refusal stands
         why = f"; (could not read what the directory holds for it: {exc})"
     raise KeyNotCertified(
@@ -1159,10 +1171,8 @@ def announce_missing(kernel_qual: str, tuner, key: tuple) -> None:
     try:
         raw = lookup(kernel_qual, tuner, key, ignore_switch=True, any_class=True)
         if raw is not None:
-            covered = sorted(covered_memory_gbs(raw))
             here = executing_memory_gb(list((getattr(tuner, "nargs", None) or {}).values()) or None)
-            why = (f" — certified for {', '.join(f'{c} GB' for c in covered) or 'no known memory class'}, "
-                   f"this card is {f'{here} GB' if here is not None else 'of unknown memory'}, not served (register 56)")
+            why = f" — {_not_served_because(raw, here)}"
     except Exception as exc:                # the reason failed to compute: say that, never an empty reason
         why = f" — (could not read what the directory holds for it: {exc})"
     print(f"[autotune] no certified setting for {kernel_short(kernel_qual)} {output_dtype(tuner, key)} "
