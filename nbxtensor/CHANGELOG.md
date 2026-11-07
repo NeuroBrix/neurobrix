@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.0.5] - 2026-11-07
 
 ### Fixed
+- **`python -m nbxtensor doctor` on a Mac without Triton exits 1**: it named the fix and exited 0, so a script could
+  not tell that nothing could run yet.
 - **The library imports on Windows**: its page size came from `os.sysconf`, which Windows does not have; and the code
   generator's identity now reads a backend's files as `/` paths with its `.pyd` and `.dll` binaries, so the same code
   has the same identity on every system.

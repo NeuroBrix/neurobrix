@@ -94,7 +94,7 @@ def test_doctor_on_a_mac_without_triton_names_the_command(monkeypatch, capsys):
     from nbxtensor.backend import metal_backend
     monkeypatch.setattr(metal_backend, "is_apple_silicon", lambda: True)
     monkeypatch.setattr(metal_backend, "triton_metal_available", lambda: False)
-    assert main_mod.main(["doctor"]) == 0
+    assert main_mod.main(["doctor"]) == 1        # nothing can run yet: said by the exit status too (the Mac, 04:21)
     assert capsys.readouterr().out.strip() == (
         "Apple GPU found; Triton for Metal not installed — run: python -m nbxtensor install-metal")
 

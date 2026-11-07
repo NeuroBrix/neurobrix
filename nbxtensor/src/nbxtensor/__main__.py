@@ -11,7 +11,7 @@ def doctor() -> int:
     from nbxtensor.backend.metal_backend import is_apple_silicon, triton_metal_available
     if is_apple_silicon() and not triton_metal_available():
         print("Apple GPU found; Triton for Metal not installed — run: python -m nbxtensor install-metal")
-        return 0
+        return 1                     # nothing can run yet: a script reads it from the exit status
     try:
         backend = runtime.gpu_backend()
         print(f"backend in force: {backend}" + (" (the Apple GPU, through Metal)" if backend == "metal" else ""))
