@@ -9,8 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.6.2] - 2026-11-07
 
-The Apple certified directory complete under the published Triton build for Apple GPUs: the settings 0.6.1 left to a
-first-run tuning are certified, and the arena probe never tunes a kernel.
+The Apple certified directory is complete under the published Triton build for Apple GPUs: 18 552 kernel settings are
+certified, among them the settings 0.6.1 left to a first-run tuning, and the arena probe never tunes a kernel. The
+kernels that compute a model on NVIDIA are 0.6.1's.
+
+Eight Apple kernel settings stay refused by size on an 18 GB Mac (the certifier's synthetic draw and its oracle do not
+fit beside each other there): Real-ESRGAN x8's fp32 convolution at 8192 x 8192, Sana 4K's VAE convolutions, an RMS norm
+of 16M x 128 rows, softmaxes of 25M x 1024 and 25M x 256 rows, and one bf16 convolution (48, 192, 480, 832). A model that
+launches one of them tunes it once at its first run and keeps the setting; of the models the release trial runs, Sana 4K is the one
+that does.
+
+The Triton arena factor stays declared per hardware family (`vendors/family_facts.yml`): a measure on a user's machine
+holds a fixed part and a part proportional to the activations, which one factor does not describe, so no measured
+factor is written into a profile.
 
 ### Fixed
 - **The kernel certifier prices the size it draws**: on a unified-memory device (Apple) a key is drawn at the size its
@@ -21,6 +32,10 @@ first-run tuning are certified, and the arena probe never tunes a kernel.
   norm) reads three windows of rows, but the certifier kept the whole host draw for it and uploaded it again at every
   call; on a unified-memory Mac the draw and its device copy share one pool, and the largest keys of HAT-L, HAT-S and
   mochi were refused (20-33 GB asked of 18). The draw is now uploaded once and only its windows' rows stay on the host.
+- **The Apple certified directory holds every setting the reference models launch on an 18 GB Mac but eight**: the 22
+  settings the certifier's price refused at its re-proof under the published Triton build for Apple GPUs (0.6.1 tuned
+  them once at a first run) and the second pass's are certified, 18 552 in all, with two of chatterbox's attention
+  settings the census listed in fp32 where its run launches them in bf16.
 - **The arena probe never tunes a kernel**: run as a tool, it reads only certified kernel settings; a request that would
   need a setting the directory does not serve is the measure's bound, never a tuning at run time.
 
