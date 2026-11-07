@@ -231,6 +231,9 @@ class ComponentAllocation:
     sharded: bool = False
     shard_map: Dict[str, str] = field(default_factory=dict)
     strategy: str = "single_gpu"
+    # Triton engine, a component run whole: the activations Prism priced for it at this request, KV cache apart — what
+    # the run's arena hold is compared with to observe the arena factor (core/prism/arena_observation, 0.6.2)
+    priced_walk_bytes: Optional[int] = None
     # zero3 only: the MB of this component's weights its card keeps resident across passes, the room
     # the plan leaves beside everything it holds with the component (`_zero3_resident_budgets`). The
     # ratchet streams only the blocks beyond it. 0 streams every block on every pass.
@@ -2114,6 +2117,10 @@ class PrismSolver:
         # generated profile is not read: measured on whatever the user had imported, it came out between 1.4 and 28
         value, why = declared_arena_factor(brand, dev.architecture, getattr(dev, "compute_capability", None),
                                            model=getattr(dev, "name", None))
+        observed = (getattr(dev, "measured", None) or {}).get("triton_arena_activation_factor_observed")
+        if observed is not None and not str(why).startswith("vendors/"):
+            # observed on this machine's own runs, three agreeing (core/prism/arena_observation): before the family
+            value = float(observed)
         if value is None:
             raise PlanNotComputable(
                 f"{brand}/{dev.architecture}: no memory.triton_arena_activation_factor (what the Triton arena holds over "
@@ -9854,6 +9861,8 @@ class PrismSolver:
                 sharded=len(device_list) > 1,
                 shard_map=shard_map,
                 strategy=comp_strategy,
+                priced_walk_bytes=(int(mem.activation_bytes) - int(getattr(mem, "kv_bytes", 0) or 0)
+                                   if comp_strategy == "single_gpu" else None),
             )
             total_mb += memory_mb
 

@@ -3402,7 +3402,13 @@ class GraphExecutor:
         parked = None
 
         effective_skip_kills = bool(skip_kills) if skip_kills is not None else False
+        # the arena factor observed on the user's own first run of this component, whole (core/prism/arena_observation):
+        # one allocator window around its first run only — the run's own shapes, certified, nothing run in addition
+        from neurobrix.core.prism import arena_observation as _AO
+        walk = getattr(self, "_priced_walk_bytes", None)
+        token = _AO.open_first(self, walk, device_idx)
         self._triton_seq.run(skip_kills=effective_skip_kills, pre_op_callback=cb)
+        _AO.close_first(self, token, walk, device_idx)
         return self._triton_seq.gather_outputs(), self._triton_seq.num_ops
 
     def _run_triton_sequential(self, input_map: dict, device_idx: int,

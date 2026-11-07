@@ -410,6 +410,8 @@ class ExecutorFactory:
             dtype=dtype,
             mode=mode,
         )
+        # the walk Prism priced for this component run whole (Triton): its first run observes the arena's hold over it
+        executor._priced_walk_bytes = getattr(allocation, "priced_walk_bytes", None)
 
         # POINT 2bis — the cache_path rides on the executor so that
         # graph_executor.py can resolve the model name for registry-flag
