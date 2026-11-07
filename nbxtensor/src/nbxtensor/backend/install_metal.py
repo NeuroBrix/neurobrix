@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import platform
+import re
 import subprocess
 import sys
 import tempfile
@@ -20,9 +21,18 @@ from typing import List, Tuple
 #: the only place the wheels are fetched from: the releases of the project's fork of triton-ext
 RELEASES = "https://github.com/NeuroBrix/triton-ext/releases/download/"
 
-#: the Metal wheels per CPython tag: (URL of the release asset, sha256 of the file), Triton first. Filled from the
-#: release the fork publishes; a tag absent here is refused by name.
-METAL_WHEELS: dict = {}
+#: the Metal wheels per CPython tag: (URL of the release asset, sha256 of the file), Triton first; a tag absent here is
+#: refused by name. The fork's release apple-v0.1.0+triton3.8.0 (2026-11-07): Triton 3.8.0 (git 4a15f415) built with
+#: TRITON_EXT_ENABLED=1 and nbx-triton-apple 0.1.0, both macOS 15.0 arm64 (the prebuilt LLVM Triton links is minos 15.0);
+#: sha256 read on the downloaded assets.
+METAL_WHEELS: dict = {
+    "cp312": (
+        (RELEASES + "apple-v0.1.0%2Btriton3.8.0/triton-3.8.0%2Bgit4a15f415.nbx1-cp312-cp312-macosx_15_0_arm64.whl",
+         "b9084dc93ae7f1468062a03e713d49c9add9a1c9a609fae753a7b32a13b7a223"),
+        (RELEASES + "apple-v0.1.0%2Btriton3.8.0/nbx_triton_apple-0.1.0-cp312-cp312-macosx_15_0_arm64.whl",
+         "b9ed95c983b220b1fbf1300481b1e2f52a0435c10ee618ef7ccf60a132fe263c"),
+    ),
+}
 
 
 class InstallMetalRefused(RuntimeError):
@@ -45,7 +55,27 @@ def wheels(version: str) -> List[Tuple[str, str]]:
         raise InstallMetalRefused(
             f"nbxtensor {version} carries no Metal wheels for Python {sys.version_info.major}.{sys.version_info.minor} "
             f"({tag}); covered: {covered}.")
-    return list(METAL_WHEELS[tag])
+    entries = list(METAL_WHEELS[tag])
+    need = max(_min_macos(url) for url, _sha in entries)
+    have = _macos_version()
+    if have < need:
+        raise InstallMetalRefused(
+            f"macOS {'.'.join(map(str, need))} required for now: the Metal wheels of nbxtensor {version} are built for "
+            f"macOS {'.'.join(map(str, need))} and later (this Mac: macOS {'.'.join(map(str, have))}).")
+    return entries
+
+
+def _min_macos(url: str) -> Tuple[int, int]:
+    """The lowest macOS a wheel installs on, read from its platform tag (`macosx_15_0_arm64` -> (15, 0))."""
+    m = re.search(r"-macosx_(\d+)_(\d+)_arm64\.whl$", url)
+    if m is None:
+        raise InstallMetalRefused(f"not a macOS arm64 wheel: {url}")
+    return int(m.group(1)), int(m.group(2))
+
+
+def _macos_version() -> Tuple[int, int]:
+    parts = [int(p) for p in (platform.mac_ver()[0] or "0").split(".")[:2]]
+    return (parts + [0])[0], (parts + [0])[1]
 
 
 def pip_command(requirements: str) -> List[str]:

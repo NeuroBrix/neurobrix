@@ -17,12 +17,21 @@ import pytest
 from nbxtensor.backend import install_metal as M
 
 #: the table as published — this file changes with it, by hand, from the files the release carries
-EXPECTED_METAL_WHEELS: dict = {}
+_R = "https://github.com/NeuroBrix/triton-ext/releases/download/apple-v0.1.0%2Btriton3.8.0/"
+EXPECTED_METAL_WHEELS: dict = {
+    "cp312": (
+        (_R + "triton-3.8.0%2Bgit4a15f415.nbx1-cp312-cp312-macosx_15_0_arm64.whl",
+         "b9084dc93ae7f1468062a03e713d49c9add9a1c9a609fae753a7b32a13b7a223"),
+        (_R + "nbx_triton_apple-0.1.0-cp312-cp312-macosx_15_0_arm64.whl",
+         "b9ed95c983b220b1fbf1300481b1e2f52a0435c10ee618ef7ccf60a132fe263c"),
+    ),
+}
 
 
-def _mac(monkeypatch):
+def _mac(monkeypatch, macos="15.4"):
     monkeypatch.setattr(M.platform, "system", lambda: "Darwin")
     monkeypatch.setattr(M.platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(M.platform, "mac_ver", lambda: (macos, ("", "", ""), "arm64"))
 
 
 def test_the_table_is_the_published_one():
@@ -94,3 +103,15 @@ def test_the_command_line_names_install_metal(capsys):
     import nbxtensor.__main__ as main_mod
     assert main_mod.main(["nothing"]) == 2
     assert "install-metal" in capsys.readouterr().err
+
+
+def test_a_mac_older_than_the_wheels_tag_is_refused_by_name(monkeypatch):
+    # the fork's first wheels were built for macOS 27 (macosx_27_0): pip refuses them on macOS 14-26 with no word of why
+    _mac(monkeypatch, macos="15.4")
+    tag = f"cp{sys.version_info.major}{sys.version_info.minor}"
+    url = f"{M.RELEASES}apple-v0.1.0+triton3.8.0/triton-3.8.0-{tag}-{tag}-macosx_27_0_arm64.whl"
+    monkeypatch.setattr(M, "METAL_WHEELS", {tag: ((url, "a" * 64),)})
+    with pytest.raises(M.InstallMetalRefused, match=r"macOS 27\.0 required for now.*this Mac: macOS 15\.4"):
+        M.wheels("0.0.4")
+    _mac(monkeypatch, macos="27.1")
+    assert M.wheels("0.0.4") == [(url, "a" * 64)]

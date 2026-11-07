@@ -13,8 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Triton for the Apple GPU in one command**: `python -m nbxtensor install-metal` installs the Metal wheels of the
   project's fork NeuroBrix/triton-ext (Triton built with triton-ext, and imperatormk's AppleGPU backend as
   `nbx-triton-apple`, triton-lang/triton-ext#126), each by the release URL and sha256 written in the library,
-  through pip with `--no-deps --require-hashes --no-index` — never an extra index nor a package name resolved on PyPI. It
-  refuses by name off an Apple-silicon Mac or on a Python its table does not cover. `python -m nbxtensor doctor` on a Mac
+  through pip with `--no-deps --require-hashes --no-index` — never an extra index nor a package name resolved on PyPI. The
+  wheels are for Python 3.12 and macOS 15 or later (release apple-v0.1.0+triton3.8.0); it refuses by name off an
+  Apple-silicon Mac, on another Python, or below the macOS the wheels are built for. `python -m nbxtensor doctor` on a Mac
   without it says so and names the command; the Metal backend's refusal names it too. On a Mac, nbxtensor depends on
   `pyobjc-framework-Metal`, through which it opens the Metal device; without it the run fell to a CPU profile and was
   refused for triton-cpu, it is now refused by name with its install line.

@@ -139,7 +139,7 @@ install commands when one is not.
 the project's fork of triton-ext, [NeuroBrix/triton-ext](https://github.com/NeuroBrix/triton-ext): Triton built with
 `TRITON_EXT_ENABLED=1`, and the AppleGPU backend (the `nbx-triton-apple` wheel) written by imperatormk
 ([triton-lang/triton-ext#126](https://github.com/triton-lang/triton-ext/pull/126)); each wheel is checked against the
-sha256 written in the library:
+sha256 written in the library (Python 3.12, macOS 15 or later):
 
 ```
 pip install nbxtensor
