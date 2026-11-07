@@ -13,6 +13,7 @@ from __future__ import annotations
 import types
 
 import pytest
+from pathlib import Path
 
 from neurobrix.core.prism import solver as S
 
@@ -94,9 +95,10 @@ def test_the_probe_sizes_a_unified_device_by_its_memory_and_a_card_by_its_runtim
     # shadow's capacity), and so does the probe — it was refused by name on every Apple machine (03/11)
     from neurobrix.core.prism import autodetect as AD, arena_probe as A
     (tmp_path / "components" / "c").mkdir(parents=True)
+    (tmp_path / "components" / "c" / "graph.json").write_text('{"symbolic_context": {"symbols": {}}}')
     monkeypatch.setattr(A, "smallest_container", lambda cache: (tmp_path, "c"))
     seen = []
-    monkeypatch.setattr(A, "factor_on_card", lambda usable, w, run, reps, steady: seen.append(usable) or (1.2, []))
+    monkeypatch.setattr(A, "factor_on_card", lambda usable, w, run, reps, steady, grows: seen.append(usable) or (1.2, []))
     AD._measure_arena_factor("hw", {"unified_memory": True, "memory_mb": 18186})
     AD._measure_arena_factor("hw", {"runtime_total_mb": 16151, "runtime_context_mb": 306})
     assert seen == [18186 << 20, 15845 << 20]
@@ -137,3 +139,71 @@ def test_the_child_says_its_own_error(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError, match="KeyError: 'x'") as e:
         A.child(str(tmp_path), "c", "hw", 1)
     assert not isinstance(e.value, A.ProbeOutOfMemory)
+
+
+def _graph(inputs, symbols):
+    return {"input_tensor_ids": list(inputs), "tensors": inputs,
+            "symbolic_context": {"symbols": symbols}}
+
+
+def test_the_probe_scales_only_what_the_priced_request_scales():
+    # a fresh Mac home measured whisper-large-v3-turbo's decoder at 28.27 (the lab: 1.477): every input's two last axes
+    # were scaled — the batch and the hidden width — while the request Prism priced kept them at x1
+    from neurobrix.core.prism import arena_probe as A
+    dec = _graph({"input::input_ids": {"shape": [1, 7], "symbolic_shape": {"dims": [{"type": "symbol", "id": "s0"},
+                                                                                     {"type": "symbol", "id": "s1"}]}},
+                  "input::encoder_hidden_states": {"shape": [1, 1500, 1280], "symbolic_shape": {"dims": [
+                      {"type": "symbol", "id": "s2"}, {"type": "symbol", "id": "s3"}, 1280]}}},
+                 {"s0": {"name": "batch", "trace_value": 1, "source": "input::input_ids::dim_0"},
+                  "s1": {"name": "seq_len", "trace_value": 7, "source": "input::input_ids::dim_1"},
+                  "s2": {"name": "batch", "trace_value": 1, "source": "input::encoder_hidden_states::dim_0"},
+                  "s3": {"name": "seq_len", "trace_value": 1500, "source": "input::encoder_hidden_states::dim_1"}})
+    assert A.scaled_names(dec) == ()             # two sequence lengths, one priced: nothing scaled, the probe stays x1
+    img = _graph({"input::x": {"shape": [1, 3, 64, 64], "symbolic_shape": {"dims": [
+                      {"type": "symbol", "id": "s0"}, 3, {"type": "symbol", "id": "s1"}, {"type": "symbol", "id": "s2"}]}}},
+                 {"s0": {"name": "batch", "trace_value": 1, "source": "input::x::dim_0"},
+                  "s1": {"name": "height", "trace_value": 64, "source": "input::x::dim_2"},
+                  "s2": {"name": "width", "trace_value": 64, "source": "input::x::dim_3"}})
+    assert A.scaled_names(img) == ("height", "width")
+    llm = _graph({"input::input_ids": {"shape": [1, 23], "symbolic_shape": {"dims": [
+                      {"type": "symbol", "id": "s0"}, {"type": "symbol", "id": "s1"}]}}},
+                 {"s0": {"name": "batch", "trace_value": 1, "source": "input::input_ids::dim_0"},
+                  "s1": {"name": "seq_len", "trace_value": 23, "source": "input::input_ids::dim_1"}})
+    assert A.scaled_names(llm) == ("seq_len",)
+
+
+def test_a_graph_with_nothing_to_scale_is_probed_at_its_traced_extents():
+    from neurobrix.core.prism import arena_probe as A
+    calls = []
+
+    def run(k):
+        calls.append(k)
+        return {"hold_bytes": 1.0, "walked_bytes": 1.0}
+    factor, _ = A.factor_on_card(1 << 40, 0, run, 3, 0.05, grows=False)
+    assert calls == [1, 1, 1] and factor == 1.0
+
+
+def test_the_probe_is_taken_on_a_spatial_component_else_on_a_models_whole_walk(monkeypatch, tmp_path):
+    import json
+    from neurobrix.core.prism import arena_probe as A
+    from neurobrix.nbx import container as NC
+
+    def model(name, comps):     # comps: {component: (weight bytes, graph)}
+        d = tmp_path / name
+        (d / "components").mkdir(parents=True)
+        (d / "manifest.json").write_text("{}")
+        for c, (n, g) in comps.items():
+            (d / "components" / c / "weights").mkdir(parents=True)
+            (d / "components" / c / "weights" / "w.safetensors").write_bytes(b"x" * n)
+            (d / "components" / c / "graph.json").write_text(json.dumps(g))
+        return d
+    seq = lambda nops: {"symbolic_context": {"symbols": {"s1": {"name": "seq_len", "trace_value": 7,
+                                                                "source": "input::ids::dim_1"}}},
+                        "ops": {f"op{i}": {} for i in range(nops)}}
+    spatial = {"symbolic_context": {"symbols": {"s1": {"name": "height", "trace_value": 64, "source": "input::x::dim_2"}}}}
+    llm = model("llm", {"lm_head": (10, seq(1)), "model": (100, seq(500))})
+    monkeypatch.setattr(NC.NBXContainer, "load", staticmethod(lambda p: type("C", (), {"get_neural_components": lambda self: [
+        type("N", (), {"name": c.name})() for c in sorted((Path(p) / "components").iterdir())]})()))
+    assert A.smallest_container(tmp_path) == (llm, "model")          # the whole decoder, not the lone projection
+    up = model("upscaler", {"model": (1000, spatial)})
+    assert A.smallest_container(tmp_path) == (up, "model")           # a spatial component wins wherever it is

@@ -2675,8 +2675,10 @@ def _measure_arena_factor(hardware_id: str, device: dict) -> float:
     steady = inspect.signature(read_rate.measure).parameters["within"].default   # the storage measure's steadiness
     root, comp = A.smallest_container(cache_dir())
     weights = sum(f.stat().st_size for f in (root / "components" / comp).rglob("*.safetensors"))
+    import json as _json
+    grows = bool(A.scaled_names(_json.loads((root / "components" / comp / "graph.json").read_text())))
     factor, runs = A.factor_on_card(int(unified or int(total) - int(ctx)) << 20, weights,
-                                    lambda k: A.child(str(root), comp, hardware_id, k), 3, steady)
+                                    lambda k: A.child(str(root), comp, hardware_id, k), 3, steady, grows)
     if factor is None:
         raise RuntimeError(f"ZERO FALLBACK: the arena probe's runs on {root.name}:{comp} disagree "
                            f"({[round(r['hold_bytes'] / r['walked_bytes'], 3) for r in runs]}): no factor written")

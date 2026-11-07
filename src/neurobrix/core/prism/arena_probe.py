@@ -22,28 +22,75 @@ class ProbeOutOfMemory(RuntimeError):
     """The probe's request did not fit the device: the measure's own upper bound, not a failure of the measure."""
 
 
+_SPATIAL = ("height", "width")
+
+
+def scaled_names(dag: Dict[str, Any]) -> Tuple[str, ...]:
+    """The symbols a probe of this graph scales — in its inputs AND in the request Prism prices, the same ones, so the
+    hold and the priced walk grow together: the spatial symbols when its inputs carry them; else its sequence when it
+    has ONE (one seq_len trace: the request names one length); else none (the probe runs at its traced extents only).
+    Scaling the two last axes of every input instead grew a decoder's batch and hidden width while its priced walk
+    stayed at x1: a fresh Mac home measured whisper-large-v3-turbo's decoder at 28.27 where the lab's 1.477 holds."""
+    syms = [v for v in ((dag.get("symbolic_context") or {}).get("symbols") or {}).values()
+            if str(v.get("source", "")).startswith("input::")]
+    if any(v.get("name") in _SPATIAL for v in syms):
+        return _SPATIAL
+    if len({v.get("trace_value") for v in syms if v.get("name") == "seq_len"}) == 1:
+        return ("seq_len",)
+    return ()
+
+
+def _component_bytes(root: Path, component: str) -> int:
+    return sum(f.stat().st_size for f in (root / "components" / component).rglob("*.safetensors"))
+
+
 def smallest_container(cache: Path) -> Tuple[Path, str]:
-    """(the cache's smallest container by weight bytes, its first neural component) — never a model named in code."""
-    sizes = {d: sum(f.stat().st_size for f in (d / "components").rglob("*.safetensors"))
-             for d in sorted(Path(cache).iterdir()) if (d / "manifest.json").is_file() and (d / "components").is_dir()}
-    sizes = {d: n for d, n in sizes.items() if n > 0}
-    if not sizes:
+    """(container, neural component) the factor is measured on — never a model named in code: the smallest component
+    by weight bytes whose inputs carry spatial symbols (the probe's request then grows the walk it prices); else, in
+    the smallest container that has a component with one sequence length, its component of the most ops (a model's
+    walk — a lone projection such as an lm_head holds about its output, 0.99 on a V100 where the decoder holds 1.38);
+    else the cache's smallest component, probed at its traced extents."""
+    from neurobrix.nbx.container import NBXContainer
+    pairs = []
+    for d in sorted(Path(cache).iterdir()):
+        if not ((d / "manifest.json").is_file() and (d / "components").is_dir()):
+            continue
+        comps = [(c.name, _component_bytes(d, c.name)) for c in NBXContainer.load(str(d)).get_neural_components()]
+        total = sum(n for _c, n in comps)
+        pairs += [(n, total, d, c) for c, n in comps if n > 0 and (d / "components" / c / "graph.json").is_file()]
+    if not pairs:
         raise RuntimeError(f"ZERO FALLBACK: the arena factor is measured on a container of the cache and {cache} holds "
                            f"none: import one model first (neurobrix import <org>/<name>)")
-    from neurobrix.nbx.container import NBXContainer
-    root = min(sizes, key=sizes.get)
-    return root, NBXContainer.load(str(root)).get_neural_components()[0].name
+    pairs.sort(key=lambda t: (t[0], str(t[2]), t[3]))
+    sequence = []
+    for n, total, d, c in pairs:                # smallest first: a graph is read only until a spatial one is found
+        dag = json.loads((d / "components" / c / "graph.json").read_text())
+        names = scaled_names(dag)
+        if names == _SPATIAL:
+            return d, c
+        if names:
+            sequence.append((total, -len(dag.get("ops") or {}), str(d), c, d))
+    if sequence:
+        best = min(sequence)
+        return best[4], best[3]
+    return pairs[0][2], pairs[0][3]
 
 
 def _inputs(dag: Dict[str, Any], scale: int) -> Dict[str, Any]:
-    """Every graph input at its traced extent (its two last axes x `scale`) and dtype, zero (an index of any table)."""
+    """Every graph input at its traced extent and dtype, zero (an index of any table), each dimension bound to a symbol
+    of `scaled_names` x `scale` — the dimensions the request Prism prices scales, and no other."""
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.dtype.nbx_dtype import parse_dtype
+    syms = (dag.get("symbolic_context") or {}).get("symbols") or {}
+    grow = set(scaled_names(dag))
     out = {}
     for tid in dag.get("input_tensor_ids") or []:
         meta = dag["tensors"][tid]
         dims = [int(x) for x in meta["shape"]]
-        dims[-2:] = [d * scale for d in dims[-2:]] if len(dims) >= 2 else dims[-2:]
+        sym_dims = ((meta.get("symbolic_shape") or {}).get("dims") or [])
+        for i, sd in enumerate(sym_dims[:len(dims)]):
+            if isinstance(sd, dict) and (syms.get(sd.get("id")) or {}).get("name") in grow:
+                dims[i] *= scale
         out[str(tid).split("::", 1)[1]] = NBXTensor.zeros(tuple(dims), parse_dtype(meta["dtype"]), "cuda:0")
     return out
 
@@ -62,7 +109,8 @@ def measure(container_dir: str, component: str, hardware_id: str, scale: int = 1
     declare_hardware_profile(profile)
     dag = json.loads((Path(container_dir) / "components" / component / "graph.json").read_text())
     field = {"height": "height", "width": "width", "time": "chunk_frames", "seq_len": "seq_len", "batch": "batch_size"}
-    req = {field[i["name"]]: i["trace_value"] * (scale if i["name"] in ("height", "width") else 1)
+    grow = set(scaled_names(dag))
+    req = {field[i["name"]]: i["trace_value"] * (scale if i["name"] in grow else 1)
            for i in ((dag.get("symbolic_context") or {}).get("symbols") or {}).values()
            if i.get("name") in field and isinstance(i.get("trace_value"), int)}
     solver, dev = PrismSolver(), profile.devices[0]
@@ -141,13 +189,14 @@ def child(container_dir: str, component: str, hardware_id: str, scale) -> Dict[s
     return got
 
 
-def factor_on_card(usable_bytes: int, weight_bytes: int, run, reps: int, steady: float) -> Tuple[Optional[float], list]:
+def factor_on_card(usable_bytes: int, weight_bytes: int, run, reps: int, steady: float,
+                   grows: bool = True) -> Tuple[Optional[float], list]:
     """The arena's factor over a LARGE walk: the request doubled while the next (its walk four-fold: two axes doubled)
     still fits `usable_bytes` with the weights at the ratio just measured, then `reps` runs at the largest, their
     median kept when they agree within `steady` (HAT-S on a V100-16GB: 3.50 at x1, 2.39 at x2, 1.48 at x4 — a fixed
     hold a small walk over-weights); (None, runs) when they disagree. `run(scale)` -> {hold_bytes, walked_bytes}."""
     scale, last = 1, run(1)
-    while weight_bytes + 4 * last["hold_bytes"] <= usable_bytes:
+    while grows and weight_bytes + 4 * last["hold_bytes"] <= usable_bytes:     # a graph with nothing to scale stays x1
         try:
             nxt = run(scale * 2)
         except ProbeOutOfMemory:

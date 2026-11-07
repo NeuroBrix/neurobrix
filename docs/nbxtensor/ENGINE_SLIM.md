@@ -110,6 +110,7 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | 2026-11-07 | (no move) The RATCHET RAISED by +19 lines: the simple half of the Windows audit (`cli._utf8_streams`; the install lock's liveness asked of the kernel on Windows in `nbx.atomic_install`; a debug dump's file name sanitized; text files in UTF-8) |
 | 2026-11-07 | (no move) The RATCHET RAISED by +19 lines: the plan's resident term on Windows (`host_footprint.process_footprint_now` reads the working set through psapi; the supervisor 04:50, the audit's defect 3) |
 | 2026-11-07 | (no move) The RATCHET RAISED by +21 lines: a first launch's arena probe that the device cannot hold bounds the measure instead of ending the run (`arena_probe.ProbeOutOfMemory`, the child's error said by name; the Mac's trial M of 0.6.1) |
+| 2026-11-07 | (no move) The RATCHET RAISED by +51 lines: the arena probe scales only what the priced request scales and is taken on a spatial component, else a model's whole sequence walk (`arena_probe.scaled_names`, `smallest_container`; a fresh Mac measured 28.27 where its factor is about 1.5) |
 
 ## Kept in the engine
 
