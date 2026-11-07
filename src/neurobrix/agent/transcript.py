@@ -23,8 +23,8 @@ class Transcript:
     ):
         self.dir = Path(directory)
         self.dir.mkdir(parents=True, exist_ok=True)
-        self._jsonl = (self.dir / "transcript.jsonl").open("a")
-        self._md = (self.dir / "transcript.md").open("a")
+        self._jsonl = (self.dir / "transcript.jsonl").open("a", encoding="utf-8")
+        self._md = (self.dir / "transcript.md").open("a", encoding="utf-8")
         self._echo = echo
         self._t0 = time.monotonic()
         if meta:

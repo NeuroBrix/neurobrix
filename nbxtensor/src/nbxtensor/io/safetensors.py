@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ctypes
 import math
+import mmap
 import os
 from typing import Optional
 
@@ -23,7 +24,7 @@ from nbxtensor.dtype.convert import bf16_bits_to_f16, f32_to_bf16_bits
 from nbxtensor.shape import contiguous_strides
 from nbxtensor.memory.memory_pool import ComponentArena, HostPinnedArena
 
-PAGE = os.sysconf("SC_PAGE_SIZE")
+PAGE = mmap.PAGESIZE      # os.sysconf does not exist on Windows (its import stopped every plan there)
 
 
 def spans(n: int, unit: int, align: int, workers: int):

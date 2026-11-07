@@ -41,6 +41,7 @@ import mmap
 import time
 
 import os
+import re
 from pathlib import Path
 from typing import Callable, Dict, List, Any, Optional, Sequence, Union, TYPE_CHECKING
 
@@ -175,7 +176,7 @@ def _save_inputs_if_asked(component: str, inputs: Dict[str, Any], mode: str) -> 
     os.makedirs(out, exist_ok=True)
     for name, t in (inputs or {}).items():
         try:
-            safe = str(name).replace("/", "_").replace(".", "_")
+            safe = re.sub(r'[\\/.:<>"|?*]', "_", str(name))      # no character a file name refuses on any OS
             if is_torch_tensor(t):
                 arr = t.detach().cpu()
                 if str(arr.dtype) == "torch.bfloat16":

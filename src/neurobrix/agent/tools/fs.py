@@ -22,7 +22,7 @@ def register_fs_tools(registry: ToolRegistry, sandbox: Sandbox) -> None:
         target = sandbox.resolve(path)
         if not target.is_file():
             return f"ERROR: not a file: {path}"
-        lines = target.read_text(errors="replace").splitlines()
+        lines = target.read_text(encoding="utf-8", errors="replace").splitlines()
         offset, limit = max(int(offset), 0), max(int(limit), 1)
         window = lines[offset : offset + limit]
         if not window:
@@ -41,7 +41,7 @@ def register_fs_tools(registry: ToolRegistry, sandbox: Sandbox) -> None:
         target = sandbox.resolve(path)
         sandbox.approve("write_file", str(target))
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content)
+        target.write_text(content, encoding="utf-8")
         return f"wrote {len(content.encode())} bytes to {target.relative_to(sandbox.workdir)}"
 
     def edit_file(path: str, old_string: str, new_string: str) -> str:
@@ -49,13 +49,13 @@ def register_fs_tools(registry: ToolRegistry, sandbox: Sandbox) -> None:
         sandbox.approve("edit_file", str(target))
         if not target.is_file():
             return f"ERROR: not a file: {path}"
-        text = target.read_text(errors="replace")
+        text = target.read_text(encoding="utf-8", errors="replace")
         count = text.count(old_string)
         if count == 0:
             return "ERROR: old_string not found — read the file and match exactly"
         if count > 1:
             return f"ERROR: old_string matches {count} times — provide a unique match"
-        target.write_text(text.replace(old_string, new_string, 1))
+        target.write_text(text.replace(old_string, new_string, 1), encoding="utf-8")
         return f"edited {target.relative_to(sandbox.workdir)}"
 
     def list_dir(pattern: str = "**/*") -> str:
@@ -93,7 +93,7 @@ def register_fs_tools(registry: ToolRegistry, sandbox: Sandbox) -> None:
             rel = resolved.relative_to(sandbox.workdir)
             try:
                 for lineno, line in enumerate(
-                    resolved.read_text(errors="replace").splitlines(), 1
+                    resolved.read_text(encoding="utf-8", errors="replace").splitlines(), 1
                 ):
                     if needle.search(line):
                         hits.append(f"{rel}:{lineno}: {line.strip()}")

@@ -249,10 +249,10 @@ def save_text(
         )
     if output_path.endswith(".json"):
         import json
-        with open(output_path, "w") as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             json.dump({"text": text}, f, ensure_ascii=False, indent=2)
     else:
-        with open(output_path, "w") as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             f.write(text)
     return output_path
 

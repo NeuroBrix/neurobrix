@@ -19,6 +19,11 @@ five reference models through the entry point give the same outputs.
   `--accept-license`, which the import asks of a model with a license (the README's first run stopped there).
 
 ### Fixed
+- **Text in UTF-8 on every platform**: a generated text written to a file, the vendor tokenizer files read at load, the
+  agent's file edits and transcript, and the console output now use UTF-8 where the platform's default code page is
+  another (Windows' cp1252: a wrong vocabulary read silently, or a run ended by UnicodeEncodeError); a debug dump's file
+  name drops every character a file name refuses on some system; a stale install lock is asked of the kernel on Windows
+  instead of signalling the process (signal 0 is Ctrl+C there).
 - **The engine depends on nbxtensor 0.0.5**: a certified setting the library does not serve says why (another code
   generator, or another memory class).
 - **A configured home is followed everywhere**: with `NEUROBRIX_HOME` set, the replay cache, the license acceptances,

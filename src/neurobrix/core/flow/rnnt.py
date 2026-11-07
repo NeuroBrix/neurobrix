@@ -557,7 +557,7 @@ class RNNTEngine(RNNTSteps, ComponentFlowHandler):
         if cache_path is not None:
             vocab_paths = list(cache_path.rglob("*vocab.txt"))
             if vocab_paths:
-                with open(vocab_paths[0]) as f:
+                with open(vocab_paths[0], encoding="utf-8") as f:
                     vocab = [line.strip() for line in f]
                 chars = [vocab[t] if t < len(vocab) else f"<{t}>" for t in tokens]
                 return "".join(chars).replace("▁", " ").strip()

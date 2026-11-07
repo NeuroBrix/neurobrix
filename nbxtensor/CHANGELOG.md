@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.0.5] - 2026-11-07
 
 ### Fixed
+- **The library imports on Windows**: its page size came from `os.sysconf`, which Windows does not have; and the code
+  generator's identity now reads a backend's files as `/` paths with its `.pyd` and `.dll` binaries, so the same code
+  has the same identity on every system.
 - **A certified setting that is not served says why**: where the directory holds a key proven under another code
   generator than the running one, the line named a memory class that matched ("certified for 18 GB, this card is
   18 GB, not served"); it now names both generators and the re-proof command. A setting proven on another memory class

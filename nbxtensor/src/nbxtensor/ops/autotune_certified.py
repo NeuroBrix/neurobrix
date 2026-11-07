@@ -444,13 +444,13 @@ def _backend_content_hash(backend) -> str:
     h = hashlib.sha256()
     for name in getattr(type(backend), "CODEGEN_ENV", ()) or ():
         h.update(f"{name}={name in os.environ}:{os.environ.get(name, '')}".encode())
-    files = sorted(f for f in pkg.rglob("*") if f.is_file() and f.suffix in (".py", ".so", ".dylib")
+    files = sorted(f for f in pkg.rglob("*") if f.is_file() and f.suffix in (".py", ".so", ".dylib", ".pyd", ".dll")
                    and "__pycache__" not in f.parts) if pkg.is_dir() else []
     plugin = getattr(mod, "PLUGIN_LIBRARY", None)
     if plugin is not None and Path(plugin).is_file() and Path(plugin) not in files:
         files.append(Path(plugin))
     for f in files:
-        h.update(str(f.relative_to(pkg) if pkg in f.parents else f.name).encode())
+        h.update((f.relative_to(pkg).as_posix() if pkg in f.parents else f.name).encode())   # "/" on every OS
         h.update(hashlib.sha256(f.read_bytes()).digest())
     return f"content-{h.hexdigest()[:16]}"
 

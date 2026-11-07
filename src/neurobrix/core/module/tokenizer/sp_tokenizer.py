@@ -1190,7 +1190,7 @@ class TiktokenTokenizer:
         special_tokens = {}
         st_path = tokenizer_dir / "special_tokens.json"
         if st_path.exists():
-            with open(st_path) as f:
+            with open(st_path, encoding="utf-8") as f:
                 special_tokens = json.load(f)
 
         # R34 (Zero Outsider): pure-Python tiktoken BPE — no `tiktoken` lib.
@@ -1278,7 +1278,7 @@ class TekkenTokenizer:
         self._inner = PyTekken.from_file(str(tekken_path))
 
         # Extract special token IDs from tekken.json
-        with open(tekken_path) as f:
+        with open(tekken_path, encoding="utf-8") as f:
             tekken_data = json.load(f)
         self._special_tokens = {}
         for st in tekken_data.get("special_tokens", []):
@@ -1343,7 +1343,7 @@ def load_tokenizer_from_path(
     config = {}
     config_path = tokenizer_dir / "tokenizer_config.json"
     if config_path.exists():
-        with open(config_path) as f:
+        with open(config_path, encoding="utf-8") as f:
             config = json.load(f)
 
     # Override max_length if provided
@@ -1386,11 +1386,11 @@ def load_tokenizer_from_path(
     if merges_path.exists() and vocab_path.exists():
 
         # Load vocab
-        with open(vocab_path) as f:
+        with open(vocab_path, encoding="utf-8") as f:
             vocab = json.load(f)
 
         # Load merges (skip version header)
-        with open(merges_path) as f:
+        with open(merges_path, encoding="utf-8") as f:
             lines = f.read().split("\n")
             merges = [line for line in lines if line and not line.startswith("#")]
 

@@ -107,6 +107,7 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | 2026-11-07 | (no move) The RATCHET RAISED by +33 lines: `neurobrix doctor` on a Mac (the M4 Pro, 00:13): the running interpreter's scripts directory first and an inactive environment told to activate itself (`cli/_path_helper`), the Triton engine's macOS route and the Apple GPU said as what it is, PyTorch's MPS read (`cli/commands/doctor`) |
 | 2026-11-07 | (no move) The RATCHET RAISED by +26 lines: a first run on a busy storage reads serially and says so instead of ending in a Traceback (`workspace.declare_unmeasured_io_workers`, `autodetect._measure_io_workers` returns None and the profile keeps no count; the supervisor 02:45) |
 | 2026-11-07 | (no move) The RATCHET RAISED by +28 lines: every directory under the engine's home follows a configured NEUROBRIX_HOME (`core.paths.engine_home`, read by the module constants of the replay cache, the license acceptances, the hardware profiles, the calibration store, the render checkpoints, the daemon, drift and the certifier's rig protocol; the library's replay cache told at import) and doctor's PyTorch line on a Mac (the Mac's new-user run 2026-11-07) |
+| 2026-11-07 | (no move) The RATCHET RAISED by +19 lines: the simple half of the Windows audit (`cli._utf8_streams`; the install lock's liveness asked of the kernel on Windows in `nbx.atomic_install`; a debug dump's file name sanitized; text files in UTF-8) |
 
 ## Kept in the engine
 

@@ -581,8 +581,17 @@ Validation levels:
     return parser
 
 
+def _utf8_streams(*streams) -> None:
+    """stdout and stderr in UTF-8 wherever the platform's default is another code page (Windows' cp1252 when piped or
+    redirected): a generated character outside it ended the run in UnicodeEncodeError."""
+    for stream in streams:
+        if (getattr(stream, "encoding", "") or "").lower().replace("-", "") != "utf8" and hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+
+
 def main():
     """Main entry point."""
+    _utf8_streams(sys.stdout, sys.stderr)
     parser = create_parser()
     args = parser.parse_args()
     import os as _os_census

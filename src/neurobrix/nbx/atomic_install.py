@@ -122,6 +122,15 @@ def _is_our_dead_lock(owner: dict) -> bool:
     pid = owner.get("pid")
     if not isinstance(pid, int):
         return False
+    if os.name == "nt":
+        # os.kill(pid, 0) sends CTRL_C_EVENT on Windows: the process is asked of the kernel instead
+        import ctypes
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        handle = kernel32.OpenProcess(0x1000, False, pid)      # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return kernel32.GetLastError() == 87               # ERROR_INVALID_PARAMETER: no such process
+        kernel32.CloseHandle(handle)
+        return False
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
