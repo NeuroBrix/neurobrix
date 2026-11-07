@@ -13,6 +13,9 @@ A first run never ends in a Traceback, the package names none of the project's m
 where NeuroBrix runs and how to start. The engine's code that runs a model is 0.6.0's: its final gate is carried, and
 five reference models through the entry point give the same outputs.
 
+The Apple certified directory is proven again under the published Triton build for Apple GPUs (18 352 kernel settings);
+a few Apple kernel settings for some models are certified in 0.6.2; until then they are tuned once at first run and kept.
+
 ### Changed
 - **The README and the documentation say where it runs and how to start**: Linux, Windows and macOS; on a Mac,
   NeuroBrix's Triton build for Apple GPUs (NeuroBrix/triton-ext); every `neurobrix import` example carries
