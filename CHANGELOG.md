@@ -10,8 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.6.1] - 2026-11-07
 
 A first run never ends in a Traceback, the package names none of the project's machines, and the documentation says
-where NeuroBrix runs and how to start. The engine's code that runs a model is 0.6.0's: its final gate is carried, and
-five reference models through the entry point give the same outputs.
+where NeuroBrix runs and how to start. The kernels that compute a model are 0.6.0's: its final gate is carried, and five
+reference models through the entry point give the same outputs; what changed is how a new machine starts (its first-run
+measures, its arena factor, its home), what the packages carry, and Windows.
 
 The Apple certified directory is proven again under the published Triton build for Apple GPUs (18 352 kernel settings);
 a few Apple kernel settings for some models are certified in 0.6.2; until then they are tuned once at first run and kept.
