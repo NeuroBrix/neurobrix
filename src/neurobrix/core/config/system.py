@@ -45,7 +45,7 @@ PRISM_DEFAULTS = {
     # history. It is data here so the next measurement has one place to land, not a claim that
     # 0.92 is right.
     "whole_component_fraction": 0.92,
-    # The commercial memory ladder (Hocine's memory doctrine, 2026-09-21): the rungs a FREE
+    # The commercial memory ladder (Hocine Benkelaya's memory doctrine, 2026-09-21): the rungs a FREE
     # reading rounds DOWN onto on a shared pool, and the nominal rung of a dedicated card. Data,
     # 4 GB to 512 GB, read by `core/prism/memory_budget.py`; never a literal in the solver.
     "memory_ladder_gb": [4, 6, 8, 11, 12, 16, 20, 24, 32, 40, 48, 64, 80, 96, 128, 192, 256, 384, 512],

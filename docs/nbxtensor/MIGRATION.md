@@ -1,6 +1,6 @@
 # nbxtensor — migration plan (before the stable)
 
-Order decided by the supervisor on 28/10/2026 20:45 after Hocine's decision of
+Order decided by the supervisor on 28/10/2026 20:45 after Hocine Benkelaya's decision of
 20:18. Each phase ends on proofs, never on a report. The representative set
 for "identical outputs" (sha against the judged artifacts, Triton engine,
 entry point, the machine's profile): TinyLlama, Qwen3-30B-A3B (4 cards),
@@ -74,8 +74,8 @@ model through the entry point.
 ## M5 — final gate S7 on the extracted engine
 One gate, scope = everything (the move touches every Triton cell), times =
 benchmark, plus the R33 runtime audit (torch_provenance) per architecture,
-plus the Metal pass. Then model-status, then the stable on Hocine's GO.
+plus the Metal pass. Then model-status, then the stable on Hocine Benkelaya's GO.
 
-## M6 — publication (Hocine's GO only)
+## M6 — publication (Hocine Benkelaya's GO only)
 `NeuroBrix/nbxtensor` repository with history, README, API docs, the benchmark
 table; PyPI later.

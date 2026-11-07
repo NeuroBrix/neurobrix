@@ -1,4 +1,4 @@
-"""`tools/engine_slim_scan.py` finds each of its four kinds, and nothing that is in use (Hocine 2026-10-29 22:39: the
+"""`tools/engine_slim_scan.py` finds each of its four kinds, and nothing that is in use (Hocine Benkelaya 2026-10-29 22:39: the
 engine imports nbxtensor and keeps only its own job). Proven on a repository written here, one case per rule.
 
 What would this file do if the scan were wrong? A rule that stopped matching drops its finding (RED); a definition

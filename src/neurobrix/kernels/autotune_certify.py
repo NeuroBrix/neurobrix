@@ -24,7 +24,6 @@ import os
 import warnings
 import platform
 import re
-import socket
 import subprocess
 import time
 from pathlib import Path
@@ -908,7 +907,7 @@ class RowWindowedOracle:
     """The float64 oracle on row windows of a matrix product's output (matmul, addmm, batched
     matmul); the deviation is measured on those rows only, and the proof names them.
 
-    Why (measured 2026-09-21 23:32 on metatron): the certifier computed the whole fp64 oracle on
+    Why (measured 2026-09-21 23:32 on the project's V100 machine): the certifier computed the whole fp64 oracle on
     the HOST — a 44 544 x 3 072 x 8 192 product in numpy, 2.2 TFLOP of fp64 through OpenBLAS's
     thread pool — so four certifiers saturated eighty cores (load 74, swap full, 155 GB of host
     RSS in one of them) while their cards read 0 %. A window of rows carries the same per-element
@@ -1670,8 +1669,9 @@ def oracle_deviation(out: np.ndarray, oracle) -> float:
 # one key: every config against the oracle, the survivors against the clock
 # ---------------------------------------------------------------------------
 def _machine() -> Dict[str, Any]:
-    info: Dict[str, Any] = {"hostname": socket.gethostname(), "platform": platform.platform(),
-                            "python": platform.python_version()}
+    # no host name: a committed proof never names the machine that made it (the owner, 2026-11-07); the device, the
+    # target and the clocks are what a certificate proves on
+    info: Dict[str, Any] = {"platform": platform.platform(), "python": platform.python_version()}
     try:
         from nbxtensor.ops import wrappers as W
         hw = W.get_hardware_profile()

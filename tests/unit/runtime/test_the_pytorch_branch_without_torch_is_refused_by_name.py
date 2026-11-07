@@ -1,5 +1,5 @@
 """The PyTorch branch asked for where torch is not installed is refused by name, before anything is loaded; the
-Triton branch is not asked for torch at all (Hocine, 2026-10-29 15:52: torch an optional dependency of the PyTorch
+Triton branch is not asked for torch at all (Hocine Benkelaya, 2026-10-29 15:52: torch an optional dependency of the PyTorch
 branch, the Triton engine on nbxtensor + triton + numpy).
 
 "Not installed" is made in a child process the way the import system itself reads it: `sys.modules["torch"] = None`

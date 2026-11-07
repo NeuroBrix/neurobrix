@@ -1,6 +1,6 @@
 """The rung imposed on a process (`NBX_PRISM_BUDGET_MB`: the census, the rung proofs, the gate's class cells) is the
 engine's; the library knows only a generic limit (`nbxtensor.memory.set_limit`), which the engine applies when it starts
-(Hocine 2026-10-29 16:28: nbxtensor holds nothing of NeuroBrix; `imposed_rung_mb` leaves nbxtensor.host).
+(Hocine Benkelaya 2026-10-29 16:28: nbxtensor holds nothing of NeuroBrix; `imposed_rung_mb` leaves nbxtensor.host).
 
 What this test would do if the code were wrong: an engine started under a rung that leaves the allocator at the
 physical card (red); a library that still reads NeuroBrix's variable or asks the host for the rung (red); a limit that

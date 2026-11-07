@@ -1,4 +1,4 @@
-"""Hocine's memory doctrine, as one law in `core/prism/memory_budget.py` (the owner, 2026-09-21):
+"""Hocine Benkelaya's memory doctrine, as one law in `core/prism/memory_budget.py` (the owner, 2026-09-21):
 
 * a SHARED pool — unified memory, a display on the device, memory another process holds, a
   reading that could not be taken, host RAM — is budgeted at its FREE reading rounded DOWN onto

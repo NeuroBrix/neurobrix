@@ -54,7 +54,7 @@ def _spec(budget_mb):
     from neurobrix.core.prism.profiler import InputConfig
     s._input_config = InputConfig(batch_size=1, height=1024, width=1024)
     mem = ComponentMemory("model", 32 * MB, 16384 * MB, 821 * MB)
-    # the tile derives from the RUNG (Hocine's tiling standard): a reading is rounded first
+    # the tile derives from the RUNG (Hocine Benkelaya's tiling standard): a reading is rounded first
     return s._spatial_component_tiling(
         _Container(root), "model", mem, rung_down_mb(budget_mb))
 

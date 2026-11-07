@@ -3,7 +3,7 @@
 # journals). Every path from the machine's atelier.json (docs/internal/_atelier.md §1, §4) through tools/atelier.py: the
 # engine python, the local container cache, the NAS cache (its mount, its host and its remote path), the peer channel; the
 # chain's own output OUT must lie under a writable root (refused by name otherwise). A model whose plan does not fit now goes
-# to a replay queue replayed smallest container first; a correctness cell is never withheld for host memory (Hocine
+# to a replay queue replayed smallest container first; a correctness cell is never withheld for host memory (Hocine Benkelaya
 # 2026-10-12 22:45); a local copy is checked against the NAS manifest and removed after the model's cells.
 # usage: [HT=<harness tree>] zero_miss_chain.sh <tree> <label> <out> <marker regex> <marker file> <model[:modes]...>
 W=$1; LABEL=$2; OUT=$3; MARK=$4; MARKFILE=$5; shift 5
@@ -72,7 +72,7 @@ for ((i=0; i<N; i++)); do
   root=$LC
   if [ "$pre_model" != "$m" ]; then
     precheck "$m" "$modes"; pc=$?
-    # v12 (Hocine 2026-10-12 22:45): a CORRECTNESS cell is never withheld for host memory; it runs at the plan Prism
+    # v12 (Hocine Benkelaya 2026-10-12 22:45): a CORRECTNESS cell is never withheld for host memory; it runs at the plan Prism
     # chooses, and a cell that cannot run with the memory there is a Prism/Tiling defect named at the source.
     if [ $pc = 2 ]; then echo "MEMORY-LOW $m $(date +%T): above the memory available now — run anyway at Prism's plan (correctness cell)" >> $S; pc=0; fi
     if [ $pc != 0 ]; then echo "WITHHELD $m $(date +%T): keys missing under the running generator or no plan (above) — no copy" >> $S; echo "${specs[$i]}" >> $OUT/withheld_keys; continue; fi

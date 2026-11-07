@@ -177,7 +177,7 @@ def test_the_remaining_refusal_names_the_blocking_component(solver):
 
 
 def test_the_one_refusal_names_the_card_and_the_host_memory():
-    """Hocine, 2026-10-16 18:42: NeuroBrix refuses only when even the last resort cannot run the model, and then says
+    """Hocine Benkelaya, 2026-10-16 18:42: NeuroBrix refuses only when even the last resort cannot run the model, and then says
     so with the memory required and available — the host's too, which the last rung (execution on the CPU) uses."""
     solver = PrismSolver()
     comps = [("enormous", ComponentMemory(component_name="enormous", weight_bytes=90000 * 1024 * 1024,

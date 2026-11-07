@@ -1,4 +1,4 @@
-"""The iterative process's steps both engine branches run alike — written once (Hocine 2026-10-29 22:39: no duplication).
+"""The iterative process's steps both engine branches run alike — written once (Hocine Benkelaya 2026-10-29 22:39: no duplication).
 
 The compiled handler (`core/flow/iterative_process.IterativeProcessHandler`) and the Triton one
 (`triton/flow/iterative_process.TritonIterativeProcessHandler`) carried these eight methods twice, body for body. They

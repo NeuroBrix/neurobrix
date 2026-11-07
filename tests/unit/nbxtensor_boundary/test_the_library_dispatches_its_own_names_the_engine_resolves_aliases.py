@@ -1,4 +1,4 @@
-"""A traced graph's ATen aliases are the engine's knowledge, not the library's (Hocine 2026-10-29 16:28: nbxtensor holds
+"""A traced graph's ATen aliases are the engine's knowledge, not the library's (Hocine Benkelaya 2026-10-29 16:28: nbxtensor holds
 nothing of NeuroBrix; `canonical_aten` returns to the engine). The library's `dispatch` maps its own op names as given
 and asks the application for nothing; the engine resolves an alias first (`neurobrix.kernels.classification.kernel_for`).
 

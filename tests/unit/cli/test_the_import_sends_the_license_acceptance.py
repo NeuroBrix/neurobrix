@@ -1,5 +1,5 @@
 """`neurobrix import` asks the hub for a download with the licence acceptance when the model carries a licence (the hub
-answers 401 without it, 2026-11-01), and without any header when the model is free (Hocine 2026-11-01 21:26: no licence
+answers 401 without it, 2026-11-01), and without any header when the model is free (Hocine Benkelaya 2026-11-01 21:26: no licence
 = free). What this test would do if the code were wrong: the header dropped (a licensed import refused by the hub) or
 sent for a free model (an acceptance nobody gave, recorded by the hub), or the engine client not named — RED."""
 from __future__ import annotations

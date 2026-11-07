@@ -1,6 +1,6 @@
 """The memory budget — one law for every device kind, every machine.
 
-Hocine's memory doctrine (the owner, 2026-09-21), as it stands for a Mac, this rack, Windows, a
+Hocine Benkelaya's memory doctrine (the owner, 2026-09-21), as it stands for a Mac, this rack, Windows, a
 CPU-only host, all of them:
 
 * On a SHARED device — unified memory, a GPU driving a display, or a card part of whose memory
@@ -25,7 +25,7 @@ idle V100-16GB reading ~15.7 GB free was budgeted at 12 GB and an idle V100-32GB
 quarter of each card never used, the margin stacked on a rounding that already was the
 headroom; and host RAM budgeted as 0.7 × the installed figure, never through the ladder.
 
-The tile a plan cuts is derived from the RUNG (Hocine's tiling standard): on a dedicated card
+The tile a plan cuts is derived from the RUNG (Hocine Benkelaya's tiling standard): on a dedicated card
 the card's own nominal rung, on a shared device the rung of the free reading — so the tile is a
 pure function of (component, rung), the input size creates no extra shapes, and a census can
 enumerate every rung up to a card's capacity.

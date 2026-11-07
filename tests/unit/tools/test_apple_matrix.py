@@ -2,7 +2,7 @@
 shape disagreement is a CAUSE, never a soft pass.
 
 The classifier is the core the 47x3 matrix rests on; a cell that mis-scores is
-a wrong row in the table Hocine reads. Both directions on each verdict.
+a wrong row in the table Hocine Benkelaya reads. Both directions on each verdict.
 
 Runnable: PYTHONPATH=src python3 -m pytest tests/unit/tools/test_apple_matrix.py -v
 """

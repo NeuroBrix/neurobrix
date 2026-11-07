@@ -27,7 +27,7 @@ So the derivation lives here and both tools import it:
   smallest request where the vendor's own pipeline gives a correct output — Allegro's vendor is
   blank at the video family's 4 steps and recognisable at 10. The model carries its value; no
   model is named here.
-* `gate_request(model, family)` — the request a GATE cell runs (the validation regime, Hocine 2026-10-13 14:20,
+* `gate_request(model, family)` — the request a GATE cell runs (the validation regime, Hocine Benkelaya 2026-10-13 14:20,
   rule 2): the derived request with the model's gate values (`model_gate`: the container's own
   `extracted_values["_global"]["gate"]`, written by the build from the registry with its source) over it —
   the fewest steps, frames and pixels that still exercise the path, a gate run lasting at most ten minutes.
@@ -119,7 +119,7 @@ def model_gate(family: str, topology: dict) -> dict:
                          f"{family} family's request values")
     # the family's gate values (config/families/<family>.yml `gate:`), the container's own over them: a video cell
     # ran its judging request (40-50 steps, hours a cell) where the gate proves rc 0, zero miss and the agreement
-    # (Hocine 2026-10-21 02:47: a gate run lasts at most ten minutes, quality is judged once per model)
+    # (Hocine Benkelaya 2026-10-21 02:47: a gate run lasts at most ten minutes, quality is judged once per model)
     from neurobrix.core.config import get_family_config
     values = {k: v for k, v in (get_family_config(family).get("gate") or {}).items() if v is not None}
     values.update({k: v for k, v in (own or {}).items() if k != SOURCE})

@@ -1,4 +1,4 @@
-"""The published library names nothing of NeuroBrix (Hocine 2026-10-29 16:28; API.md section 11).
+"""The published library names nothing of NeuroBrix (Hocine Benkelaya 2026-10-29 16:28; API.md section 11).
 
 nbxtensor is the alternative to torch and only that. A NeuroBrix notion in its public API — a vendor file, a memory
 rung, the certification census, a NeuroBrix hardware profile, a memory class — is either generic in the library (a

@@ -146,7 +146,7 @@ def snapshots_root() -> Path:
                 f"`paths.snapshots`. There is deliberately no default — a "
                 f"default here downloads model data onto whichever disk the "
                 f"process happens to run on.")
-        _root = Path(declared)
+        _root = Path(declared).expanduser()      # `~/...`: the shipped value names no machine's home
     return _root
 
 

@@ -2,7 +2,7 @@
 
 The 2026-09-22 census left 33 of 59 models open on this Mac. Twelve were mine to answer. This
 is what each one is now, what was fixed, what was named, and the four decisions that are
-Hocine's rather than mine.
+Hocine Benkelaya's rather than mine.
 
 Everything below is measured. Where a number is quoted, the command that produced it is in
 `campagnes/2026_09_22_apple/`.
@@ -175,7 +175,7 @@ PixArt containers, in `--compiled` as well as the triton modes.
 
 ---
 
-## The four decisions that are Hocine's
+## The four decisions that are Hocine Benkelaya's
 
 1. **Sana_1600M_1024px_MultiLing.** I stopped after three fixes. In that container 32 is at
    once the latent side, the head dim, the VAE channel count and the input channel count, so
@@ -249,7 +249,7 @@ The `8192 → 11264` step is **3 072 MB**, the widest in the low range, so a rea
 that span is quantised down to 8192 and up to 3 GB of usable memory is discarded.
 
 **Corrected 2026-09-24 afternoon.** This passage first filed the refusal as "the measured cost
-of a deliberate choice", said the artefact needed a reading above 11 264 MB, and asked Hocine
+of a deliberate choice", said the artefact needed a reading above 11 264 MB, and asked Hocine Benkelaya
 to free memory. That was wrong on both counts. **It is a Prism doctrine defect: the engine
 never refuses, and a component larger than its rung is streamed.** The Dell owns the fix. It
 is uncommitted on metatron at `d2e48a60` (`core/prism/solver.py`, `core/prism/memory_budget.py`,
@@ -257,6 +257,6 @@ is uncommitted on metatron at `d2e48a60` (`core/prism/solver.py`, `core/prism/me
 was never the way out. The engine's own reading at 12:51 was 10 407 MB available, with
 `prl_vm_app` holding 8 400 MB resident. Swap (2 885 MB) is not part of that reading. With the
 0.95 margin the capacity is 9 887 MB, which is the 8 192 rung, so a reboot with the same working
-set refuses again. There is no fifth decision for Hocine. The artefact waits on the Dell's push,
+set refuses again. There is no fifth decision for Hocine Benkelaya. The artefact waits on the Dell's push,
 and it is then taken at whatever reading the machine gives and judged by looking at the image.
 Full entry in `owed-proofs.md`.

@@ -173,7 +173,7 @@ def test_the_room_keeps_the_scheduler_s_headroom(monkeypatch, tmp_path):
 
 
 def test_the_census_writes_its_progress_end_and_failure(tmp_path, monkeypatch):
-    """Red line of work 2 (Hocine 2026-10-23): a census writes its progress to its record at most every 10 min, each
+    """Red line of work 2 (Hocine Benkelaya 2026-10-23): a census writes its progress to its record at most every 10 min, each
     model written, its end and a failure. Red if a forced note is not written, a non-forced one is written inside the
     interval, or the record is not the file named."""
     rec = tmp_path / "RUN.md"

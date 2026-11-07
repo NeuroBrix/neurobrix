@@ -124,4 +124,4 @@ recipes, two library generations, and offload for anything ≥ 14B on
 Findings ledger: D-VACE-IMGCOND-DIV62 (new), D1 ×2 compiled
 co-location data points, D7 cpu-pointer case, D-ALLEGRO-TI2V-ADD5 /
 D-SANAVIDEO-COMPILED-ADD11 / D-OPENSORA-TRITON-SDPA (deprecations),
-allegro 6-step unconvergence note. Hocine validation: TODO.
+allegro 6-step unconvergence note. Hocine Benkelaya validation: TODO.

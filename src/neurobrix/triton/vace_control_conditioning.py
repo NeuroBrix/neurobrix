@@ -3,7 +3,7 @@
 TRITON-side mirror of the compiled brick
 `core/runtime/resolution/vace_control_conditioning.py`. Same SEMANTICS, but it
 lives entirely in the triton branch and computes end-to-end with NBXTensor — no
-torch, no `F.*`, no reach into `core/` compute (Hocine's architecture invariant:
+torch, no `F.*`, no reach into `core/` compute (Hocine Benkelaya's architecture invariant:
 the two branches are separate; this is the R30 mirror).
 
 WanVACE feeds the denoiser two extra inputs each step:

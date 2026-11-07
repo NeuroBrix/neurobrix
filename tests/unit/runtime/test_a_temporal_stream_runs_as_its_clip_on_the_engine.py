@@ -244,7 +244,7 @@ def test_a_handed_state_is_freed_at_its_last_use(mode, device):
 @pytest.mark.parametrize("mode,device", MODES)
 @pytest.mark.parametrize("model,comp,shape,schedule", CASES, ids=[f"{m}/{c}" for m, c, _, _ in CASES])
 def test_the_engine_runs_the_parked_stream_as_the_clip(model, comp, shape, schedule, mode, device):
-    """States PARKED on the host between chunks (strategy D, Hocine 2026-10-27 11:01; the plan's `park_states`): each
+    """States PARKED on the host between chunks (strategy D, Hocine Benkelaya 2026-10-27 11:01; the plan's `park_states`): each
     state is copied to the host by the op that makes it (`park_state`) and comes back to the card right before the
     first op of the next chunk that reads it (`ParkedTensor`, the sequences' `defer_inputs`). The stream must still
     be the clip. Red if a parked state is bound to the wrong tensor, never bound (the run reads nothing there), or

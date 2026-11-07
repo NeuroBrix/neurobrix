@@ -143,7 +143,7 @@ length for the same reason). Until it lands, the registry keeps the Kokoro
 predictor/text_encoder on the native handler (the predictor variable-length
 capability is committed but not wired for Kokoro) so Kokoro runs via the
 existing fixed-length path; marked debt, not a solution.
-**Decision (2026-05-28, Hocine)**: predictor variable-length is the milestone
+**Decision (2026-05-28, Hocine Benkelaya)**: predictor variable-length is the milestone
 (it fixes the real "phoneme stretching" babbling — the native handler scaled
 every utterance to a fixed ~128 frames). The decoder iSTFT frame-flexibility
 is the named follow-on: a VibeVoice-pattern handler that decodes at the
@@ -351,7 +351,7 @@ forward (which runs the fast transformer) was bypassed. `codebook_embeddings` IS
 consumed 10× on the slow input side, proving the key normalization works.
 **Site**: build-side trace stimulus for `dual_ar` model (slow-only forward).
 **Fix = build-side re-trace** → [[P-BUILD-OPENAUDIO-DUALAR-TRACE]]. Runtime
-hand-roll REJECTED (would re-implement vendored, traceable compute). Hocine
+hand-roll REJECTED (would re-implement vendored, traceable compute). Hocine Benkelaya
 confirmed the build route.
 **Repro**: `neurobrix run --model openaudio-s1-mini --prompt "Hello world." --audio test_speech_ref.wav`.
 **R29**: `validation_outputs/p_audio_p0b_openaudio/` + diagnosis

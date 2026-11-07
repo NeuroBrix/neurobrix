@@ -3,7 +3,7 @@
 A kernel instance is LOST when nbxtensor is wrong or refused, or when its median is above the best torch contender's
 that is right (`ok`); the ratio is nbxtensor's median over that best. A model cell is lost when the Triton run failed,
 its output disagrees with the eager one beyond identity, or its wall time is above the eager run's. The losses are the
-optimisation queue (Hocine's rule 14: Triton must do better than PyTorch).
+optimisation queue (Hocine Benkelaya's rule 14: Triton must do better than PyTorch).
 
     python benchmarks/nbxtensor_vs_torch/summary.py --device apple_m4_pro \\
         --kernel <campaign>/kernel.tsv> [--model <campaign>/model.tsv>] --out <summary.md>

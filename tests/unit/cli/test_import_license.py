@@ -118,7 +118,7 @@ def _isolated_state(monkeypatch, tmp_path):
     monkeypatch.delenv("NBX_ACCEPT_LICENSE", raising=False)
 
 
-# ── Every model is accepted under its license at import (Hocine 2026-11-01) ──
+# ── Every model is accepted under its license at import (Hocine Benkelaya 2026-11-01) ──
 
 
 def test_an_ungated_model_is_accepted_under_its_license_too(monkeypatch, capsys):
@@ -135,7 +135,7 @@ def test_an_ungated_model_is_accepted_under_its_license_too(monkeypatch, capsys)
 
 
 def test_a_model_without_a_license_is_free_no_question(monkeypatch, capsys):
-    """No license on the record = free: downloaded with no acceptance asked, nothing recorded (Hocine 2026-11-01
+    """No license on the record = free: downloaded with no acceptance asked, nothing recorded (Hocine Benkelaya 2026-11-01
     21:26). If the code were wrong it would block or prompt before the download step (red)."""
     info = {"model": {k: v for k, v in MODEL_INFO["model"].items() if k not in ("license", "licenseName", "licenseUrl")}}
     _install_registry_api(monkeypatch, _gate_passed, model_info=info)

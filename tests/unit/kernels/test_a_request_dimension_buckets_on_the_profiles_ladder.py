@@ -27,7 +27,7 @@ def test_the_volta_profile_declares_the_measured_ladder():
     import neurobrix
     p = Path(neurobrix.__file__).parent / "config" / "vendors" / "nvidia" / "volta.yml"
     prof = vendor_file(p)
-    # M below the matrix unit's 64-row tile: classes of EIGHT (decision 2026-10-19 02:32, the supervisor for Hocine —
+    # M below the matrix unit's 64-row tile: classes of EIGHT (decision 2026-10-19 02:32, the supervisor for Hocine Benkelaya —
     # an exact row count made ~60 classes per decoder under certified-only; volta.yml's comment, 7d4048a2). This
     # assertion still said exact (57 -> 57) and stood red from 7d4048a2 to 2026-10-29. The 8-step's loss against the
     # per-row optimum is OWED (tools/bucket_loss.py, both classes).

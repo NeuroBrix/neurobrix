@@ -2,7 +2,7 @@
 
 A library that imports `neurobrix` cannot be published on its own, and one
 that imports torch is not a replacement for torch. No exception, not even an
-optional interop module (Hocine, 28/10/2026 20:33): exchange goes through
+optional interop module (Hocine Benkelaya, 28/10/2026 20:33): exchange goes through
 DLPack, imported by the other side. The torch comparison harness lives
 outside the library, in benchmarks/nbxtensor_vs_torch/.
 

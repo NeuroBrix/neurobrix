@@ -128,7 +128,7 @@ def _decide(tmp_path, mid_op, activation_bytes=80 * GB):
 
 
 def test_a_coupled_encoder_past_the_card_is_not_tiled_and_prism_descends(tmp_path):
-    """Hocine, 2026-10-16 18:40 / 18:42: Prism chooses only exact cuts, and refuses only at the bottom of the ladder.
+    """Hocine Benkelaya, 2026-10-16 18:40 / 18:42: Prism chooses only exact cuts, and refuses only at the bottom of the ladder.
     A coupled encoder whose untiled activations exceed the card gets no tile — never a cut into another function —
     and no refusal here: the plan descends the exact strategies (the refusal is `_fail_error`'s alone)."""
     s, spec = _decide(tmp_path, "attention")

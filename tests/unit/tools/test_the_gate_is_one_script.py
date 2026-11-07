@@ -1,4 +1,4 @@
-"""The gate is ONE committed script (the validation regime, Hocine 2026-10-14 14:20 / 18:05): the computed scope,
+"""The gate is ONE committed script (the validation regime, Hocine Benkelaya 2026-10-14 14:20 / 18:05): the computed scope,
 one class, two scheduler instances (the any-card instance recording under the gate's class), the tally reading the
 committed records — judgments included.
 

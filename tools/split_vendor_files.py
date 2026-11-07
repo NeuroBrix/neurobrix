@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Split a vendor's files into the LIBRARY's device files and the ENGINE's vendor files, on one key list
-(`docs/nbxtensor/device_keys.txt`, the device-key census) — Hocine 2026-10-29 16:28, API.md section 11.
+(`docs/nbxtensor/device_keys.txt`, the device-key census) — Hocine Benkelaya 2026-10-29 16:28, API.md section 11.
 
 nbxtensor reads the kernel-relevant description of a device (tiles, shared memory, registers, warp size, the matrix
 unit, the dispatch limits, the identification a profile is matched by); NeuroBrix reads the rest (Prism's measured

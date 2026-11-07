@@ -3,7 +3,7 @@
 This is the TRITON-side brick. It mirrors the SEMANTICS of the compiled brick
 `core/runtime/resolution/i2v_conditioning.py` but lives entirely in the triton
 branch and computes end-to-end with NBXTensor — no torch, no `F.*`, no reach
-into `core/` compute. The two branches stay separate (Hocine's architecture
+into `core/` compute. The two branches stay separate (Hocine Benkelaya's architecture
 invariant); this file is the R30 mirror of the core conditioning.
 
 Wan-I2V is the motivating case: hidden_states = cat([noise(16), mask(4),

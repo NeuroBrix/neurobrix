@@ -231,7 +231,7 @@ def _commit_blobs(repo: str, blobs: Dict[str, bytes], message: str) -> subproces
             os.unlink(idx)
 
 
-#: The cumulative kernel-time registry each checkpoint appends to (tools/kernel_times.py), or None (Hocine 2026-11-01:
+#: The cumulative kernel-time registry each checkpoint appends to (tools/kernel_times.py), or None (Hocine Benkelaya 2026-11-01:
 #: the registry is fed at every certification, not by hand).
 _KERNEL_TIMES: Optional[str] = None
 

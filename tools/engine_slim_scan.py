@@ -1,6 +1,6 @@
 """The engine's slimming scan: what the engine carries that it should not, now that it imports nbxtensor.
 
-Hocine's decision (2026-10-29 22:39): the engine imports nbxtensor and keeps only its own job — no duplication, no dead
+Hocine Benkelaya's decision (2026-10-29 22:39): the engine imports nbxtensor and keeps only its own job — no duplication, no dead
 function, no adaptation layer. This scan lists, in `src/neurobrix` (both branches), four kinds of finding:
 
   dead        a definition nothing in the repository refers to (tests are not proof of use): a module-level function or

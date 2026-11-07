@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The time of every certified kernel key, in ONE dated, cumulative registry (Hocine 2026-11-01 21:51: the figure that
+"""The time of every certified kernel key, in ONE dated, cumulative registry (Hocine Benkelaya 2026-11-01 21:51: the figure that
 says whether the rewrite wins or loses is read at every gate, not at the end).
 
     python tools/kernel_times.py --dir src/neurobrix/config/autotune/apple/apple_m4_pro --out <registres>/benchmarks/kernel_times.tsv

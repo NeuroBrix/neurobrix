@@ -160,7 +160,7 @@ def split_frozen(rows: list) -> tuple:
 
 
 def rungs_for(hardware: str) -> list:
-    """Every rung of the commercial ladder up to the profile's card capacity (Hocine's tiling
+    """Every rung of the commercial ladder up to the profile's card capacity (Hocine Benkelaya's tiling
     standard, 2026-09-21), the capacity itself when the ladder does not name it, then None — THE
     PROFILE'S OWN BUDGET, the plan with no door: the tile is a function of the rung, so a census that
     runs at every rung records every conv key family a user of this card model can meet, whatever the
@@ -279,7 +279,7 @@ def tiling_probe_spec(model: str, fam: str):
     extracted_values["_global"]["tiling_probe"] — the largest request the vendor documents, declared
     per model in the build's registry with its source and written by the build or the in-place
     pass; the owner's method, 2026-09-29 13:45), else the family profile's `census.tiling_probe`
-    (Hocine's tiling standard, 2026-09-21), else ({}, None). No size lives in this tool's code."""
+    (Hocine Benkelaya's tiling standard, 2026-09-21), else ({}, None). No size lives in this tool's code."""
     topo = CACHE / model / "topology.json"
     if topo.exists():
         g = (json.loads(topo.read_text()).get("extracted_values") or {}).get("_global") or {}

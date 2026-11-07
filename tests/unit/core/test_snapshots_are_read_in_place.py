@@ -30,7 +30,14 @@ OUTPUT_PROCESSOR = REPO / "src" / "neurobrix" / "core" / "module" / "audio" / "o
 def test_the_root_comes_from_the_engine_configuration():
     import yaml
     cfg = yaml.safe_load((REPO / "src" / "neurobrix" / "config" / "system.yml").read_text())
-    assert str(snapshots_root()) == cfg["paths"]["snapshots"]
+    assert snapshots_root() == Path(cfg["paths"]["snapshots"]).expanduser()
+
+
+def test_the_shipped_root_names_no_machine():
+    # the wheel shipped "/home/mlops/hf_snapshots", a path of the project's own machine (the owner, 2026-11-07)
+    import yaml
+    declared = yaml.safe_load((REPO / "src" / "neurobrix" / "config" / "system.yml").read_text())["paths"]["snapshots"]
+    assert declared.startswith("~/"), declared
 
 
 def test_an_explicit_environment_variable_overrides(monkeypatch, tmp_path):

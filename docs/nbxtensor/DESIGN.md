@@ -1,6 +1,6 @@
 # nbxtensor — design
 
-Decided by Hocine on 28/10/2026 at 20:18: NBXTensor is NeuroBrix's master
+Decided by Hocine Benkelaya on 28/10/2026 at 20:18: NBXTensor is NeuroBrix's master
 piece and a library of its own, published as open source (Apache 2.0) under
 the name **nbxtensor**. Its extraction happens **before** the stable release,
 because the stable must not ship tensor semantics scattered across the engine.
@@ -47,7 +47,7 @@ Apple MLX, tinygrad, Hugging Face candle. (vLLM did not: it is built on torch.)
    facts the library needs (allocator envelope, runtime growth, bandwidths)
    are MEASURED by the library and refused by name when absent.
 6. **Zero torch, everywhere in the library.** nbxtensor never imports or
-   uses torch, not even as an optional dependency (Hocine, 28/10 20:33).
+   uses torch, not even as an optional dependency (Hocine Benkelaya, 28/10 20:33).
    Exchange with other tensor libraries goes through DLPack: nbxtensor
    implements `__dlpack__` / `__dlpack_device__` and `from_dlpack(any
    producer)`; the other side imports itself. The engine's current hand-off
@@ -66,7 +66,7 @@ Apple MLX, tinygrad, Hugging Face candle. (vLLM did not: it is built on torch.)
     is `_private`. A new export comes with its docstring and its test. The
     README is written for developers who will use nbxtensor, and every code
     example in it is executed by a test, so the README cannot lie.
-11. **An API a Rust core can implement later** (Hocine, 28/10 20:53). Version 1
+11. **An API a Rust core can implement later** (Hocine Benkelaya, 28/10 20:53). Version 1
     is Python; version 2 will be a Rust core behind the SAME Python API
     (PyO3 + maturin wheels, as tokenizers, safetensors, polars and
     pydantic-core did), usable from Rust and C as well. So the v1 API uses
@@ -75,7 +75,7 @@ Apple MLX, tinygrad, Hugging Face candle. (vLLM did not: it is built on torch.)
     core could not reproduce: no monkey-patching, no duck-typed inputs, no
     dynamic attributes, no state hidden in module globals. Triton kernels stay
     Triton in v2; Rust would launch them precompiled.
-12. **Precision by policy** (Hocine, 29/10 16:37). The dtype an op computes in is
+12. **Precision by policy** (Hocine Benkelaya, 29/10 16:37). The dtype an op computes in is
     decided by a `Policy` (`nbxtensor.dtype.policy`): the dtypes of the
     parameters, of the computation and of the output, and the op classes —
     ops that compute in float32 whatever the policy, ops that compute in its
@@ -87,7 +87,7 @@ Apple MLX, tinygrad, Hugging Face candle. (vLLM did not: it is built on torch.)
     builds its own policy from what it knows (NeuroBrix: its DtypeEngine, from
     the hardware profile and the container) and passes it. The library knows
     no model and no profile.
-13. **Array API** (Hocine, 29/10 16:37). Type promotion follows the Array API
+13. **Array API** (Hocine Benkelaya, 29/10 16:37). Type promotion follows the Array API
     standard (data-apis.org/array-api, "Type Promotion Rules"): within a kind
     the wider, a signed with an unsigned integer the signed integer wide
     enough for both, a real float with a complex the complex of the wider
@@ -96,7 +96,7 @@ Apple MLX, tinygrad, Hugging Face candle. (vLLM did not: it is built on torch.)
     the standard leaves open is decided once and written in the README:
     arrays across kinds and two half floats as PyTorch does, scalars as NEP 50
     does. Conformance is measured by a test over the standard's tables.
-14. **The CPU uses every core it is given** (Hocine, 29/10 18:11). Host work
+14. **The CPU uses every core it is given** (Hocine Benkelaya, 29/10 18:11). Host work
     over a large array is cut into contiguous pieces run on one thread pool
     (`nbxtensor.backend.cpu.pool`), each piece a numpy call that releases the
     GIL in its inner loop, as ggml does. The pool's size is the library's
@@ -148,7 +148,7 @@ The exact names are fixed in M2 by the agents and reviewed by the supervisor.
 
 ## 5. Version 2 in Rust (after the stable)
 
-Decided by Hocine on 28/10 20:53: v1 is Python and is finished first
+Decided by Hocine Benkelaya on 28/10 20:53: v1 is Python and is finished first
 (grouped, tested, published, the engine on it, the stable released). The Rust
 rewrite of the core is the following project. Expected gain, to be measured by
 the M4 benchmark before anything is ported: the host cost of each launch
@@ -163,11 +163,11 @@ confirm: tensor metadata, allocators and the memory planner, the launcher.
 Developed in `nbxtensor/` of the NeuroBrix repository on branch `nbxtensor`,
 installed by the engine as a path dependency. Extracted to its own repository
 (`NeuroBrix/nbxtensor`, history kept with git filter-repo) and published on
-Hocine's GO only. No code or detail of the container build toolchain enters it.
+Hocine Benkelaya's GO only. No code or detail of the container build toolchain enters it.
 
 ## 7. Versions
 
-Decided by Hocine on 29/10 15:52. The first publication of nbxtensor is **0.0.1**: no alpha, beta or release-candidate
+Decided by Hocine Benkelaya on 29/10 15:52. The first publication of nbxtensor is **0.0.1**: no alpha, beta or release-candidate
 label, ever. Every fix published after it increments the version (0.0.2, 0.0.3, …); the Rust rewrite of section 5 is
 **2.0.0**. The one number lives in `nbxtensor/pyproject.toml` and `nbxtensor.__version__`, and a test holds them equal
 (`nbxtensor/tests/test_version.py`).

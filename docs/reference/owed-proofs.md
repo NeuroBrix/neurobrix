@@ -1394,7 +1394,7 @@ schedule, not of a stage that diverges. Ten of the seventeen dB were the noise c
 is not a noise); the remaining gap accumulates smoothly. Under the drift-origin rule the
 origin class is KERNEL/SCALE, not policy or discrete: no single op to name. Both artefacts
 are coherent apples. What would close the item as a judged replacement: this table and the
-two artefacts beside the deprecated container's on the hub — the publish decision is Hocine's.
+two artefacts beside the deprecated container's on the hub — the publish decision is Hocine Benkelaya's.
 
 ### The convolution's width, swept (card 0, 16 GB): the ladder costs 37 % in two buckets of thirty
 
@@ -2008,7 +2008,7 @@ The reader now waits 5/15/45/120/120 s and puts half a second between chunks of 
 refused (e73779c0). If your own hub reads ever report errors in bulk, read the reason before
 the count.
 
-## 2026-09-22 11:05 — why the store refuses writes: it is not a rate, it is seconds per write (for Hocine)
+## 2026-09-22 11:05 — why the store refuses writes: it is not a rate, it is seconds per write (for Hocine Benkelaya)
 
 The refusal has been called "the store's 503 SlowDownWrite" and left there. Measured with the
 tool's own probe path (a registry upload slot, then the presigned PUT, slot deleted after):
@@ -2038,7 +2038,7 @@ stays at nine milliseconds.
 metrics endpoints answer 403, and `ssh 10.0.0.36` is refused (publickey, password). So the
 drive state itself cannot be read from here.
 
-**The one action, for Hocine, on 10.0.0.36** — read the drive state and say which drive is
+**The one action, for Hocine Benkelaya, on 10.0.0.36** — read the drive state and say which drive is
 stalling:
 
 ```
@@ -4406,7 +4406,7 @@ through upstream's API shows `useResource` to be necessary. The suite 2 are
 correct: it holds the wrap, and a transient wrap is exactly what fails. The explanation in its
 comments ("residency") is narrower than what was measured. The explanation needs correcting;
 the code does not. **Consequence upstream:** Draft A section 1 is not posted as written. Whether
-the patch is offered, and on what ground, is Hocine's call.
+the patch is offered, and on what ground, is Hocine Benkelaya's call.
 
 ### 2026-09-24 — what the merged solver exposes: layer_streaming is chosen where streamed execution is not ready (the Dell's)
 
@@ -4482,7 +4482,7 @@ that returns rank 1.
 
 ### 2026-09-24 — the reshape report at vendor-sourced sizes: what the default input hid
 
-Hocine's rule 1 says a census at the default request proves nothing about symbolic shapes. So the
+Hocine Benkelaya's rule 1 says a census at the default request proves nothing about symbolic shapes. So the
 report-only pass was rerun on the 19 image and video containers at the vendor's own sizes: a
 small size and the largest documented one, plus two frame counts for video. The sources are in
 `vendor-sizes-2026-09-24.md`: raw vendor files, each URL pinned to a commit. Where the vendor

@@ -1,4 +1,4 @@
-"""Strategy steps the compiled and the Triton strategies ran alike, body for body — written once (Hocine 2026-10-29).
+"""Strategy steps the compiled and the Triton strategies ran alike, body for body — written once (Hocine Benkelaya 2026-10-29).
 
 One mixin per strategy, inherited first by both of its classes. Torch-free at import (the Triton strategies inherit
 them: R33); the tensors they move are each branch's own, through the strategy's own transfer methods.

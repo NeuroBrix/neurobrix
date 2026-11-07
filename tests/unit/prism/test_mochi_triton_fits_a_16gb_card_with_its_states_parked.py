@@ -1,4 +1,4 @@
-"""A temporal stream's states parked on the host between chunks (strategy D, Hocine 2026-10-27 11:01).
+"""A temporal stream's states parked on the host between chunks (strategy D, Hocine Benkelaya 2026-10-27 11:01).
 
 mochi-1-preview triton on ONE V100-16GB: its VAE in chunks of one frame peaked at 11 281 MB (Prism) / 16 103 MiB
 (measured, f53ca7e2) — the 38 causal states (5 043 MB) live through the whole chunk, the ones it makes (graph

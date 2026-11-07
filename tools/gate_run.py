@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""gate_run.py — THE gate, one script, one wake (the validation regime, Hocine 2026-10-14 14:20 / 18:05).
+"""gate_run.py — THE gate, one script, one wake (the validation regime, Hocine Benkelaya 2026-10-14 14:20 / 18:05).
 
     computed scope (CPU)  →  ONE class (the card's real VRAM)  →  two scheduler instances  →  the tally.
 

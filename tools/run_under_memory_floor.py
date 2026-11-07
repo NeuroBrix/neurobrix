@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run a job and STOP IT at a memory floor, instead of letting the OS kill it.
 
-This machine is Hocine's working Mac and the Parallels VM runs permanently; both
+This machine is Hocine Benkelaya's working Mac and the Parallels VM runs permanently; both
 are normal conditions and no measurement may assume otherwise. On 2026-09-17 a
 hat-s-x4 attempt was allowed to run until available memory reached 127 MB and
 the OS killed it — three times. A footprint is measured UNDER a ceiling, never

@@ -1,4 +1,4 @@
-"""The engine's Triton branch reaches a device only through nbxtensor (Hocine 2026-10-29 22:39): on Metal as anywhere,
+"""The engine's Triton branch reaches a device only through nbxtensor (Hocine Benkelaya 2026-10-29 22:39): on Metal as anywhere,
 memory, launches, device files, costs and precision go through the library — the branch imports no Metal module, no
 Objective-C bridge and no native binding of a backend itself, and it calls the library's PUBLIC API only.
 

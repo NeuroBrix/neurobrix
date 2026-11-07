@@ -141,11 +141,12 @@ def _unit_sha(node) -> str:
 
 
 def _rel(path: Path) -> str:
-    """A path as the record writes it: relative to the repository (`repo:`) or to the catalogue (`cache:`),
-    absolute otherwise."""
-    from neurobrix.core.paths import cache_dir
+    """A path as the record writes it: relative to the repository (`repo:`), to the catalogue (`cache:`) or to the
+    engine's home (`home:`, the calibration records and hardware profiles of ~/.neurobrix), absolute otherwise — a
+    committed record never names a machine's home directory (the owner, 2026-11-07)."""
+    from neurobrix.core.paths import cache_dir, neurobrix_home
     rp = path.resolve()
-    for tag, root in (("repo", REPO), ("cache", Path(cache_dir()).resolve())):
+    for tag, root in (("repo", REPO), ("cache", Path(cache_dir()).resolve()), ("home", Path(neurobrix_home()).resolve())):
         if rp.is_relative_to(root):
             return f"{tag}:{rp.relative_to(root)}"
     return str(rp)
@@ -158,6 +159,9 @@ def _abs(name: str, repo: Path = REPO) -> Path:
         return repo / rest
     if tag == "cache":
         return Path(cache_dir()) / rest
+    if tag == "home":
+        from neurobrix.core.paths import neurobrix_home
+        return Path(neurobrix_home()) / rest
     return Path(name)
 
 

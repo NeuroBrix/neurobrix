@@ -1,6 +1,6 @@
 """A gate cell runs at the model's floor; the model is judged at its judging request (the validation regime, rule 2).
 
-Hocine, 2026-10-13 14:20: a gate run lasts at most ten minutes — it proves rc 0, zero certified miss and the arms'
+Hocine Benkelaya, 2026-10-13 14:20: a gate run lasts at most ten minutes — it proves rc 0, zero certified miss and the arms'
 agreement, not quality; a video model's gate request is the smallest that exercises the path (steps, frames,
 resolution at the model's floor). Quality is judged once per model and branch at the real request. On the mq25
 landing gate Allegro-TI2V took 1.2-1.6 h per run; fourteen cells above ten minutes have been carried by record since.
@@ -82,7 +82,7 @@ def test_the_gate_request_carries_the_models_floor(cache):
 
 
 def test_a_model_stating_no_gate_is_gated_at_its_family_s_gate_values(cache):
-    """A video container states no gate value: its cell runs the family's (config/families/video.yml `gate:`, Hocine
+    """A video container states no gate value: its cell runs the family's (config/families/video.yml `gate:`, Hocine Benkelaya
     2026-10-21 02:47), never its judging request — 40-50 steps, hours a cell."""
     cache(_topo(conf={"steps": 10, "source": ["judging"]}))
     gate, judging = T.gate_request(MODEL, "video"), T.derived_request(MODEL, "video")

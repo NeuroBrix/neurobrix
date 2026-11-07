@@ -1,6 +1,6 @@
 """NBXTensor is ONE library, and the engine's scatter of tensor semantics can only shrink.
 
-Hocine's rule (28/10/2026): NBXTensor is NeuroBrix's master piece, a library of
+Hocine Benkelaya's rule (28/10/2026): NBXTensor is NeuroBrix's master piece, a library of
 its own that the engine imports. On 28/10 it was not: the dtype size had four
 readers, bf16 conversions lived in three files, a second allocator lived in
 replay.py, the view rule lived in the dispatcher, and Prism re-derived the

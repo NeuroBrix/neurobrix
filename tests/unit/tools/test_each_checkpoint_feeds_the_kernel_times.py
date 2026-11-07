@@ -1,4 +1,4 @@
-"""tools/certified_checkpoint.py feeds the cumulative kernel-time registry at every checkpoint (Hocine 2026-11-01: the
+"""tools/certified_checkpoint.py feeds the cumulative kernel-time registry at every checkpoint (Hocine Benkelaya 2026-11-01: the
 registry is fed at every certification, never by hand): each <vendor>/<profile> store's newly certified keys are
 appended once, with their proof's best time."""
 import csv

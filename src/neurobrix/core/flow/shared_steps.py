@@ -1,4 +1,4 @@
-"""Flow steps the compiled and the Triton handlers ran alike, body for body — written once (Hocine 2026-10-29 22:39).
+"""Flow steps the compiled and the Triton handlers ran alike, body for body — written once (Hocine Benkelaya 2026-10-29 22:39).
 
 One mixin per flow (VLM, audio, RNN-T, static graph), inherited by both of its handlers. Torch-free at import (the
 Triton branch inherits them: R33); the tensors they touch are each branch's own.

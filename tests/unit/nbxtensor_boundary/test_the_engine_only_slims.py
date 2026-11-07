@@ -1,4 +1,4 @@
-"""The engine only slims (Hocine 2026-10-29 22:39): its Python lines and its open slimming findings may only go down.
+"""The engine only slims (Hocine Benkelaya 2026-10-29 22:39): its Python lines and its open slimming findings may only go down.
 
 `tools/engine_slim_scan.py` lists what the engine carries that nbxtensor makes unnecessary; every finding is either
 open in `docs/nbxtensor/engine_slim_list.tsv` or kept, with its reason, in `docs/nbxtensor/ENGINE_SLIM.md`. The same

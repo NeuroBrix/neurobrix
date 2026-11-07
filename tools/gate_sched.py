@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """gate_sched.py — THE gate scheduler, committed: the dynamic card queue of the validation regime.
 
-One scheduler, two instances per gate (the validation regime, Hocine 2026-10-14 14:20, rule 1 and rule 4):
+One scheduler, two instances per gate (the validation regime, Hocine Benkelaya 2026-10-14 14:20, rule 1 and rule 4):
   * the CLASS instance places the gate's cells on the cards of the gate's class (the card's real VRAM, 32g);
   * the ANY-CARD instance (`--out-class <cls>`) places the cells of the models whose Prism plan is IDENTICAL under
     both profiles (tools/plan_listing.py) on the cards of the other class and RECORDS them under the gate's class
     — the row names the card it ran on. A card at 0 % outside loading is a noted fault; the scheduler never waits.
 Every path is an argument: nothing of a campaign is written in this file.
 
-The dynamic card queue (supervisor inbox 2026-10-07 20:54, Q4, validated by Hocine).
+The dynamic card queue (supervisor inbox 2026-10-07 20:54, Q4, validated by Hocine Benkelaya).
 
 Each time a card is free it takes, at once, the FIRST ADMISSIBLE task: a gate cell of the card's memory class whose
 host need fits now (and, if heavy, no other heavy cell is running), else the next one in the queue (a blocked head

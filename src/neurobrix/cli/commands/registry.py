@@ -307,7 +307,7 @@ def _import_body(args):
     category = model_data.get("category", "unknown")
     description = model_data.get("description", "")
     # A model whose record carries NO license is free: downloaded and used with no acceptance asked; one that carries
-    # a license has it shown and accepted at import, by everyone (Hocine 2026-11-01 21:26, via the supervisor 21:35).
+    # a license has it shown and accepted at import, by everyone (Hocine Benkelaya 2026-11-01 21:26, via the supervisor 21:35).
     license_id = model_data.get("license") or None
     license_name = model_data.get("licenseName", license_id or "none (free)")
     license_url = model_data.get("licenseUrl", "")
@@ -338,7 +338,7 @@ def _import_body(args):
         print(f"   Disk: {format_size(_need)} needed at peak, "
               f"{format_size(_free)} free")
 
-    # License acceptance — hub is the source of truth; every model WITH a license is accepted at import (Hocine
+    # License acceptance — hub is the source of truth; every model WITH a license is accepted at import (Hocine Benkelaya
     # 2026-11-01), gated or not: the hub's `gated` flag only says whether the hub itself asks a login first. A model
     # without one is free: no question.
     if license_id and not _is_license_accepted(org, name):

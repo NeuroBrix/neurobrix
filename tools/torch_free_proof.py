@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The torch-free proof: the Triton branch of NeuroBrix and the nbxtensor library run in an environment where torch
-is NOT INSTALLED (not masked), and not one import of torch (torchvision, torchaudio, functorch) is even attempted (Hocine's order, 2026-10-29 15:52).
+is NOT INSTALLED (not masked), and not one import of torch (torchvision, torchaudio, functorch) is even attempted (Hocine Benkelaya's order, 2026-10-29 15:52).
 
 WHY AN ENVIRONMENT, AND WHY A RECORDER
 A blocker in sys.meta_path (tools/r33_import_without_torch.py) proves the modules it is handed import without torch.

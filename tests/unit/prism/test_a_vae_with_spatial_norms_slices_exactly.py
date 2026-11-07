@@ -1,5 +1,5 @@
 """A component whose group norms read the whole image is sliced in space EXACTLY (the supervisor's decision 2026-10-27
-11:15, Hocine 11:01: mochi must pass on 16 GB and 8 GB). Each group norm over the sliced axis is a synchronisation point:
+11:15, Hocine Benkelaya 11:01: mochi must pass on 16 GB and 8 GB). Each group norm over the sliced axis is a synchronisation point:
 its statistics over the WHOLE input (fp32, a fixed order), then each slice normalised with them; a padding eaten by its
 valid convolution is one stencil with its halo. Before: mochi-1-preview's VAE mixed the axis at every norm and every
 padding (272 of 407 ops), refused at an 8 GB rung ("activations alone peak at 15 345 MB")."""

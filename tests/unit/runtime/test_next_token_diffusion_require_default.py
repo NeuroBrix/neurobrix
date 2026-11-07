@@ -10,7 +10,7 @@ when the .nbx defaults.json omits them, where the sibling
 encoder_decoder flow does exemplary ZERO FALLBACK.
 
 Both engines read the keys through ONE `_require_default`
-(core/flow/shared_steps, torch-free — Hocine 2026-10-29 22:39: no
+(core/flow/shared_steps, torch-free — Hocine Benkelaya 2026-10-29 22:39: no
 duplication; it replaced the R30 per-engine copies); this test pins it
 through both engines' modules.
 

@@ -2643,7 +2643,7 @@ the engine and is passed in.
 3. **Dependency on the launcher (still open, 2026-11-02).** The `.dtype` change (section 4) needs the launcher to stop
    reading the Triton dtype off the argument (`backend/launcher.py` reads `arg.dtype` to bind and to key).
 
-## 11. The boundary: every host service is generic in the library or goes back to the engine (Hocine 29/10 16:28)
+## 11. The boundary: every host service is generic in the library or goes back to the engine (Hocine Benkelaya 29/10 16:28)
 
 nbxtensor is the alternative to torch, and only that: the published library holds nothing of NeuroBrix. M1 passed
 every fact the library did not hold yet through `nbxtensor.host`: the application provided a service by name and the

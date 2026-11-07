@@ -6380,7 +6380,7 @@ class PrismSolver:
                 raise RuntimeError(f"ZERO FALLBACK: {comp_name}'s state {moved[0][0]} enters the next chunk as "
                                    f"{moved[0][1]} and leaves it as {moved[0][2]}: its chunks do not carry one dtype")
         peaks: Dict[tuple, int] = {}
-        # Parked (strategy D, Hocine 2026-10-27 11:01): between two chunks each state waits in host memory and comes
+        # Parked (strategy D, Hocine Benkelaya 2026-10-27 11:01): between two chunks each state waits in host memory and comes
         # back right before the op that first reads it (`GraphExecutor` ParkedTensor) — live on the card from that
         # op, never the whole chunk; and copied out to the host, it no longer exists twice beside the chunk's output.
         parked_inputs = frozenset(f"input::{s['name']}" for s in decl["states"])
@@ -6595,7 +6595,7 @@ class PrismSolver:
         (owner, 2026-10-16 18:40: Prism chooses only exact cuts, exactness read from the graph, never from a model list).
 
         The record goes into the plan (`ExecutionPlan.tiling_exactness`). A coupled component is never tiled: Prism
-        descends the ladder of EXACT strategies for it (Hocine, 2026-10-16 18:42) and refuses only at its bottom
+        descends the ladder of EXACT strategies for it (Hocine Benkelaya, 2026-10-16 18:42) and refuses only at its bottom
         (`machine_cannot_run`)."""
         from neurobrix.core.prism.profiler import spatial_coupling
         declared = self._vendor_tiling_declaration(comp_name)
@@ -9942,7 +9942,7 @@ class PrismSolver:
         return ExecutionPlan({}, "float32", 0.0, "empty", {}, "lazy")
 
     def _fail_error(self, sorted_comps, devices, host_mb: Optional[float] = None):
-        """THE one refusal of a plan for capacity (Hocine, 2026-10-16 18:42): reached only when every exact strategy,
+        """THE one refusal of a plan for capacity (Hocine Benkelaya, 2026-10-16 18:42): reached only when every exact strategy,
         down to the last resort on the CPU, cannot run the model; it says so — "This model cannot run on this machine"
         — with the memory required and the memory available, card and host."""
         total_req = sum(m.total_mb for _, m in sorted_comps)

@@ -245,7 +245,7 @@ def declare_hardware_profile(profile) -> None:
     set_hardware_profile(profile)
     set_backend_has_fp64(profile_triton_has_fp64(profile))
     # the library's CPU pool (host work: conversions, pre-processing, the parallel loop) is sized by the profile's
-    # compute threads — the performance cores of a hybrid CPU, else the physical ones (Hocine 2026-10-29 18:11, rule 1)
+    # compute threads — the performance cores of a hybrid CPU, else the physical ones (Hocine Benkelaya 2026-10-29 18:11, rule 1)
     cpu = getattr(profile, "cpu", None)
     if cpu is None:
         raise ValueError("declare_hardware_profile: the hardware profile declares no cpu: section — the library's CPU "

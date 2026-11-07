@@ -71,7 +71,7 @@ materialize_state.self_manages_dtype = True        # a copy keeps its source's d
 
 
 class ParkedTensor:
-    """A tensor waiting in host memory between two runs (strategy D, Hocine 2026-10-27 11:01): a temporal stream's
+    """A tensor waiting in host memory between two runs (strategy D, Hocine Benkelaya 2026-10-27 11:01): a temporal stream's
     state, copied to pinned host memory by the op that makes it and handed to the next chunk, whose engine binds it
     right before the first op that reads it (`GraphExecutor`, the sequences' `defer_inputs`) — on the card from that
     op only, as the plan prices it (`ActivationProfiler.estimate_peak_memory` parked_outputs / deferred_inputs).

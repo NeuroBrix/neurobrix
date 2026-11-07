@@ -1,4 +1,4 @@
-"""The library's CPU pool is sized by the hardware profile the engine declares (Hocine 2026-10-29 18:11, rule 1: the
+"""The library's CPU pool is sized by the hardware profile the engine declares (Hocine Benkelaya 2026-10-29 18:11, rule 1: the
 profile is the machine's identity card — its compute threads, never a count read off the machine).
 
 What would this file do if the engine did not hand the profile's count to the pool? The pool keeps the library's own
