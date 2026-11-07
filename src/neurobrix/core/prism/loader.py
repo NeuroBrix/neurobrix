@@ -30,7 +30,8 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 HARDWARE_DIR = PROJECT_ROOT / "config" / "hardware"
 #: The machine's GENERATED profiles (`default`, `default-<tag>`), ONE place per machine beside the measured-facts store,
 #: never inside a source tree, where each tree kept its own copy (the team's review, 2026-11-02).
-GENERATED_DIR = Path(os.path.expanduser("~")) / ".neurobrix" / "hardware"
+from neurobrix.core.paths import engine_home as _engine_home
+GENERATED_DIR = _engine_home() / "hardware"
 
 
 def is_generated(hardware_id: str) -> bool:

@@ -98,6 +98,20 @@ def neurobrix_home() -> Path:
     return _resolve("home", Path.home() / ".neurobrix", create=True)
 
 
+def engine_home() -> Path:
+    """The engine's home as configured ($NEUROBRIX_HOME, else ~/.neurobrix/paths.json's `home`, else ~/.neurobrix),
+    neither created nor checked: what a module's directory constant is computed from at import. A constant written
+    `Path.home() / ".neurobrix" / ...` ignored a configured home (the Mac's new-user run, 2026-11-07: the replay cache,
+    the license acceptances and the hardware profiles went to ~/.neurobrix while NEUROBRIX_HOME pointed elsewhere)."""
+    env = os.environ.get(_ENV["home"])
+    if env:
+        return Path(env).expanduser()
+    cfg = _configured().get("home")
+    if cfg:
+        return Path(str(cfg)).expanduser()
+    return Path.home() / ".neurobrix"
+
+
 def cache_dir() -> Path:
     """Extracted models, read at every run."""
     return _resolve("cache", neurobrix_home() / "cache", create=True)

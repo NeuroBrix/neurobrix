@@ -56,7 +56,8 @@ from neurobrix.core.runtime.tensor_compat import is_torch_tensor
 from neurobrix.kernels.classification import is_metadata_op
 
 FORMAT = "nbx-precision-calibration/1"
-STORE_ROOT = Path(os.path.expanduser("~")) / ".neurobrix" / "calibration"
+from neurobrix.core.paths import engine_home as _engine_home
+STORE_ROOT = _engine_home() / "calibration"
 
 
 # ---------------------------------------------------------------------------

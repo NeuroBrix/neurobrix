@@ -23,6 +23,8 @@ import json
 import os
 import warnings
 import platform
+
+from neurobrix.core.paths import engine_home as _engine_home
 import re
 import subprocess
 import time
@@ -1889,7 +1891,7 @@ def _protocol_file() -> Optional[Path]:
             cand = parent / "tools" / name
             if cand.is_file():
                 return cand
-        cand = Path.home() / ".neurobrix" / name
+        cand = _engine_home() / name
         if cand.is_file():
             return cand
     # A legacy un-suffixed file counts only if it names THIS backend.
@@ -1897,7 +1899,7 @@ def _protocol_file() -> Optional[Path]:
         cand = parent / "tools" / "rig_protocol.json"
         if cand.is_file() and _protocol_backend(cand) == backend:
             return cand
-    cand = Path.home() / ".neurobrix" / "rig_protocol.json"
+    cand = _engine_home() / "rig_protocol.json"
     if cand.is_file() and _protocol_backend(cand) == backend:
         return cand
     return None

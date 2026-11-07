@@ -23,6 +23,11 @@ else:
 # process of another tree that loaded it ran its engine against a different library: the R33 guard on d9fc8747, 2026-10-29).
 # Installed from a wheel, there is no sibling and the installed dependency is used. A library already imported from
 # elsewhere is refused by name: the engine never runs against a foreign one.
+# The library's replay cache follows the engine's home: nbxtensor reads NEUROBRIX_REPLAY_CACHE, else ~/.neurobrix; a
+# configured NEUROBRIX_HOME is told to it before it is imported (the Mac's new-user run, 2026-11-07)
+import os as _os
+if _os.environ.get("NEUROBRIX_HOME") and not _os.environ.get("NEUROBRIX_REPLAY_CACHE"):
+    _os.environ["NEUROBRIX_REPLAY_CACHE"] = _os.path.join(_os.path.expanduser(_os.environ["NEUROBRIX_HOME"]), "replay_cache")
 import sys as _sys
 _sibling = _Path(__file__).absolute().parents[2] / "nbxtensor" / "src"   # the tree it was imported from (links kept)
 if (_sibling / "nbxtensor" / "__init__.py").is_file():

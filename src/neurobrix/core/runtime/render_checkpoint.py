@@ -100,7 +100,8 @@ _ENV_EVERY = "NBX_RENDER_CHECKPOINT_EVERY"
 _ENV_SECONDS = "NBX_RENDER_CHECKPOINT_SECONDS"
 # A render that finishes inside this never writes a checkpoint at all.
 _DEFAULT_SECONDS = 60.0
-_DEFAULT_DIR = Path.home() / ".neurobrix" / "checkpoints"
+from neurobrix.core.paths import engine_home as _engine_home
+_DEFAULT_DIR = _engine_home() / "checkpoints"
 
 
 def _fingerprint(parts: dict[str, Any]) -> str:

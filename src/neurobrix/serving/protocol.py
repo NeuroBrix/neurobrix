@@ -24,7 +24,8 @@ from pathlib import Path
 IS_WINDOWS = sys.platform == "win32"
 
 # Daemon file locations
-DAEMON_DIR = Path.home() / ".neurobrix"
+from neurobrix.core.paths import engine_home as _engine_home
+DAEMON_DIR = _engine_home()
 
 #: The fixed loopback port of the DEFAULT Windows instance (no `NBX_SOCKET_PATH`):
 #: the historical transport, kept byte-for-byte for the instance that never

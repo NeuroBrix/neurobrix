@@ -113,8 +113,8 @@ MULTIDEV_PROOF = os.environ.get("NBX_REPLAY_MULTIDEV") == "1"
 # full E2 artifact (configs keyed by OUR fingerprint, seeded into the
 # Autotuner caches, immune to source-hash invalidation) is the named
 # next increment.
-_SIZE_CACHE_DIR = os.path.join(
-    os.path.expanduser("~"), ".neurobrix", "replay_cache")
+from neurobrix.core.paths import engine_home as _engine_home
+_SIZE_CACHE_DIR = os.path.join(str(_engine_home()), "replay_cache")
 
 
 def _size_cache_path(seq) -> str:

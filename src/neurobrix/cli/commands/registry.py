@@ -1039,7 +1039,8 @@ def _cmd_hub(args):
 from pathlib import Path
 from datetime import datetime, timezone
 
-_ACCEPTANCES_FILE = Path.home() / ".neurobrix" / "license_acceptances.json"
+from neurobrix.core.paths import engine_home as _engine_home
+_ACCEPTANCES_FILE = _engine_home() / "license_acceptances.json"
 
 
 def _print_noninteractive_license_help(model_ref: str, license_name: str, full_url: str) -> None:

@@ -12,6 +12,8 @@ import shlex
 import json
 import os
 import subprocess
+
+from neurobrix.core.paths import engine_home as _engine_home
 import sys
 from pathlib import Path
 
@@ -42,7 +44,7 @@ def cmd_drift(args) -> int:
     if args.model is None:
         print("ERROR: --model is required for drift.")
         return 2
-    out = Path(args.out or (Path.home() / ".neurobrix" / "drift" / args.model))
+    out = Path(args.out or (_engine_home() / "drift" / args.model))
     out.mkdir(parents=True, exist_ok=True)
     request = _passthrough(args, {"--out", "--bound", "--top", "--oracle", "--sequential", "--triton",
                                   "--triton-sequential", "--compiled", "--output", "--sweep"})

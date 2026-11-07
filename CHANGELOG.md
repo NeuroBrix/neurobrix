@@ -19,6 +19,11 @@ five reference models through the entry point give the same outputs.
   `--accept-license`, which the import asks of a model with a license (the README's first run stopped there).
 
 ### Fixed
+- **A configured home is followed everywhere**: with `NEUROBRIX_HOME` set, the replay cache, the license acceptances,
+  the hardware profiles, the calibration records, the render checkpoints and the serving daemon's files still went to
+  `~/.neurobrix`; they now follow the configured home.
+- **`neurobrix doctor` on a Mac without PyTorch** told the user to pick a CUDA build of PyTorch; it now says
+  `pip install torch`, PyTorch's own macOS wheel.
 - **The package names none of the project's machines**: the snapshots root it shipped was a path of the project's own
   machine (wrong on every other machine) and is now `~/hf_snapshots`
   (`NEUROBRIX_HF_SNAPSHOTS` overrides it); the census input records name the files they read relative to the engine's

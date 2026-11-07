@@ -210,3 +210,16 @@ def test_the_scripts_dir_is_the_running_interpreters_first(monkeypatch, tmp_path
     (tmp_path / "neurobrix").write_text("")
     monkeypatch.setattr(H.sys, "executable", str(tmp_path / "python"))
     assert H.get_scripts_dir() == str(tmp_path)
+
+
+def test_on_a_mac_without_torch_the_pytorch_engine_is_added_with_pytorchs_own_wheel(monkeypatch, capsys):
+    # the Mac's new-user run (2026-11-07): doctor sent a Mac to "pick the CUDA build your driver supports"
+    monkeypatch.setitem(__import__("sys").modules, "torch", None)
+    monkeypatch.setattr(doctor, "_torch_present", lambda: False)
+    monkeypatch.setattr(doctor, "_apple_silicon", lambda: True)
+    monkeypatch.setattr(doctor, "_triton_engine", lambda: (True, "ready on metal"))
+    monkeypatch.setattr(doctor, "_nvidia_smi_gpus", lambda: [])
+    doctor.check_compute_environment()
+    out = capsys.readouterr().out
+    assert "To add it: pip install torch, then pip install 'neurobrix[pytorch]'" in out, out
+    assert "CUDA" not in out and "cuda-build" not in out, out

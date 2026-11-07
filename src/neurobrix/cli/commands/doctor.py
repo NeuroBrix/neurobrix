@@ -125,7 +125,7 @@ def check_compute_environment() -> list[str]:
 
     if not _torch_present():
         print("  PyTorch engine: not installed (optional; the Triton engine runs without it: --triton). To add it: "
-              f"{_torch_install_hint(_nvidia_smi_gpus()[0][1] if _nvidia_smi_gpus() else None)}, then "
+              f"{'pip install torch' if _apple_silicon() else _torch_install_hint(_nvidia_smi_gpus()[0][1] if _nvidia_smi_gpus() else None)}, then "
               "pip install 'neurobrix[pytorch]'")
         if not triton_ready:
             problems.append(f"Neither engine can run: the Triton engine is {triton_says}; PyTorch is not installed")
