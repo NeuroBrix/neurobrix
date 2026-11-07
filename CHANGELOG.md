@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-07
+
+A first run never ends in a Traceback, the package names none of the project's machines, and the documentation says
+where NeuroBrix runs and how to start. The engine's code that runs a model is 0.6.0's: its final gate is carried, and
+five reference models through the entry point give the same outputs.
+
 ### Changed
 - **The README and the documentation say where it runs and how to start**: Linux, Windows and macOS; on a Mac,
   NeuroBrix's Triton build for Apple GPUs (NeuroBrix/triton-ext); every `neurobrix import` example carries
@@ -6143,7 +6149,8 @@ First stable release of NeuroBrix — universal deep learning inference engine.
 - Zip-slip path traversal validation in registry import
 - Safe arithmetic parser replacing `eval()` in shape resolver
 
-[Unreleased]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.0...main
+[Unreleased]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.1...main
+[0.6.1]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/NeuroBrix/neurobrix/compare/v0.5.4...v0.6.0
 [0.5.4]: https://github.com/NeuroBrix/neurobrix/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/NeuroBrix/neurobrix/compare/v0.5.2...v0.5.3
