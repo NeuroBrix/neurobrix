@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.5] - 2026-11-07
+
 ### Fixed
 - **A certified setting that is not served says why**: where the directory holds a key proven under another code
   generator than the running one, the line named a memory class that matched ("certified for 18 GB, this card is
@@ -168,7 +170,8 @@ memory; the fix is in test).
 - **`flash_decode_split_kernel` and its route**: armed only by an environment switch (`NBX_FLASH_DECODE`, with `NBX_FD_BLOCK_N` and `NBX_FD_SEG`) and measured slower than the vector decode kernels; `flash_decode.py` keeps the fixed-order reduce they share.
 - **`conv1d_forward_kernel`**: launched by no route (a 1-D convolution runs through `conv2d`).
 
-[Unreleased]: https://github.com/NeuroBrix/nbxtensor/compare/v0.0.4...HEAD
+[Unreleased]: https://github.com/NeuroBrix/nbxtensor/compare/v0.0.5...HEAD
+[0.0.5]: https://github.com/NeuroBrix/nbxtensor/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/NeuroBrix/nbxtensor/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/NeuroBrix/nbxtensor/compare/v0.0.2...v0.0.3
 [0.0.2]: https://github.com/NeuroBrix/nbxtensor/compare/v0.0.1...v0.0.2

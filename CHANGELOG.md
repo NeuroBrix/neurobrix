@@ -19,6 +19,8 @@ five reference models through the entry point give the same outputs.
   `--accept-license`, which the import asks of a model with a license (the README's first run stopped there).
 
 ### Fixed
+- **The engine depends on nbxtensor 0.0.5**: a certified setting the library does not serve says why (another code
+  generator, or another memory class).
 - **A configured home is followed everywhere**: with `NEUROBRIX_HOME` set, the replay cache, the license acceptances,
   the hardware profiles, the calibration records, the render checkpoints and the serving daemon's files still went to
   `~/.neurobrix`; they now follow the configured home.

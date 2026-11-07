@@ -479,7 +479,7 @@ with the tensor class (API.md §4).
 
 ## Versions
 
-The first publication was **0.0.1**; this is **0.0.4**. Each fix published after it increments the number (0.0.5,
+The first publication was **0.0.1**; this is **0.0.5**. Each fix published after it increments the number (0.0.6,
 …), with no alpha or beta label. The rewrite of the core in Rust will be **2.0.0**. `nbxtensor.__version__` is the
 installed version.
 
