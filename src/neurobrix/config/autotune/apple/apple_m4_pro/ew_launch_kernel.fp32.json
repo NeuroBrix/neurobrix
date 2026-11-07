@@ -283,12 +283,12 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-10-24T11:45:26+00:00",
-    "engine_version": "0.5.4",
+    "date": "2026-11-07T14:53:45+00:00",
+    "engine_version": "0.6.1",
     "backend": {
-     "triton": "3.8.0+git4a15f415",
+     "triton": "3.8.0+git4a15f415.nbx1",
      "name": "mps",
-     "backend_hash": "content-724cc9e3cf5258b0"
+     "backend_hash": "content-5690465c0ebd3362"
     },
     "shape": [
      68719476736,
@@ -296,6 +296,7 @@
      "fp32"
     ],
     "launches": 1,
+    "fp16_contract": false,
     "launch_deviations": [
      0.0
     ],
@@ -317,21 +318,21 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 1.8365476188205538,
-    "second_ms": 1.8645852974482946,
-    "candidates": 30,
-    "accepted": 30,
-    "benched": 30,
+    "best_ms": 2.03079166537837,
+    "second_ms": null,
+    "candidates": 1,
+    "accepted": 1,
+    "benched": 1,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.007,
-     "runs": 4.446,
-     "bench": 4.671
+     "runs": 1.209,
+     "bench": 0.316
     },
     "stability_witness": {
-     "open_ms": 3.3368,
-     "close_ms": 3.3263,
-     "drift": 0.0031,
+     "open_ms": 3.4082,
+     "close_ms": 3.4501,
+     "drift": 0.0123,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
@@ -342,79 +343,16 @@
      "chunk": 4,
      "brackets": [
       {
-       "what": "chunk 1 of 8",
-       "open_ms": 3.3604,
-       "close_ms": 3.4125,
-       "drift": 0.0155,
+       "what": "chunk 1 of 1",
+       "open_ms": 3.4082,
+       "close_ms": 3.4501,
+       "drift": 0.0123,
        "attempt": 1,
-       "contenders": 4
-      },
-      {
-       "what": "chunk 2 of 8",
-       "open_ms": 3.3369,
-       "close_ms": 3.3763,
-       "drift": 0.0118,
-       "attempt": 1,
-       "contenders": 4
-      },
-      {
-       "what": "chunk 3 of 8",
-       "open_ms": 3.3121,
-       "close_ms": 3.3561,
-       "drift": 0.0133,
-       "attempt": 1,
-       "contenders": 4
-      },
-      {
-       "what": "chunk 4 of 8",
-       "open_ms": 3.3399,
-       "close_ms": 3.4073,
-       "drift": 0.0202,
-       "attempt": 1,
-       "contenders": 4
-      },
-      {
-       "what": "chunk 5 of 8",
-       "open_ms": 3.3658,
-       "close_ms": 3.3517,
-       "drift": 0.0042,
-       "attempt": 1,
-       "contenders": 4
-      },
-      {
-       "what": "chunk 6 of 8",
-       "open_ms": 3.3004,
-       "close_ms": 3.3804,
-       "drift": 0.0243,
-       "attempt": 1,
-       "contenders": 4
-      },
-      {
-       "what": "chunk 7 of 8",
-       "open_ms": 3.3423,
-       "close_ms": 3.4294,
-       "drift": 0.0261,
-       "attempt": 1,
-       "contenders": 4
-      },
-      {
-       "what": "chunk 8 of 8",
-       "open_ms": 3.3622,
-       "close_ms": 3.3326,
-       "drift": 0.0088,
-       "attempt": 1,
-       "contenders": 2
-      },
-      {
-       "what": "the final two",
-       "open_ms": 3.3368,
-       "close_ms": 3.3263,
-       "drift": 0.0031,
-       "attempt": 1,
-       "contenders": 2
+       "contenders": 1
       }
      ]
     },
+    "reproven_from": "triton 3.8.0+git4a15f415 mps content-724c",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
