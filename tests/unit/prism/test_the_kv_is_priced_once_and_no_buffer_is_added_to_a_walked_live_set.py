@@ -71,8 +71,8 @@ def test_a_walked_live_set_carries_no_added_buffer(monkeypatch):
 # ───────── the arena factor itself (supervisor 19:05 §3): a measured fact per engine and device, refused when absent ─────────
 
 def test_the_arena_factor_is_the_planned_devices_measured_fact(monkeypatch):
-    """The M4 Pro's own measurement, carried by its profile (HAT-L x4 triton through the entry point after S4a/S4b, the
-    allocator's live peak over the walk: 1.19), the V100's (1.35, before S4a/S4b) — never one default for every device."""
+    """The M4 Pro's factor from the Apple family's declaration (1.477, measured on the M4 Pro; a value its profile carries
+    is not read since 2026-11-07 — first launches wrote 1.4 to 28 there), the V100's from its own vendor file (1.35)."""
     from neurobrix.core.prism.attention_scratch import vendor_memory_of
     from tests.unit.prism._pinned_machine import APPLE_M4_PRO
     # the vendor file serves no arena factor: the engine measures it into each machine's profile (2026-11-03)
@@ -82,12 +82,12 @@ def test_the_arena_factor_is_the_planned_devices_measured_fact(monkeypatch):
     s = PrismSolver()
     s._mode = "triton"
     s._planned_profile = profile(APPLE_M4_PRO)
-    assert s._triton_arena_factor() == pytest.approx(1.19)
+    assert s._triton_arena_factor() == pytest.approx(1.477)
     s._planned_profile = profile(V100_16GB)
     assert s._triton_arena_factor() == pytest.approx(1.35)
 
 
-def test_a_device_that_never_measured_the_arena_refuses_a_triton_plan_by_name(monkeypatch):
+def test_a_device_whose_file_declares_none_reads_its_family(monkeypatch):
     from neurobrix.core.prism.solver import PlanNotComputable
     import neurobrix.core.config.loader as L
     real = L.vendor_config_for_device
@@ -100,5 +100,6 @@ def test_a_device_that_never_measured_the_arena_refuses_a_triton_plan_by_name(mo
     s = PrismSolver()
     s._mode = "triton"
     s._planned_profile = profile(V100_16GB)
-    with pytest.raises(PlanNotComputable, match="triton_arena_activation_factor"):
-        s._triton_arena_factor()
+    assert s._triton_arena_factor() == pytest.approx(1.35)          # the nvidia family's (measured on Volta)
+    # a family that declares none either is refused by name (test_the_arena_factor_is_measured_where_no_vendor_declares_it)
+    assert PlanNotComputable
