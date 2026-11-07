@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A first run on a busy storage is never a Traceback**: at its first launch the engine measures how many parallel reads
+  the machine's model cache serves best; where no stable read rate was found (a storage another reader was using — a
+  clean container whose cache was a network mount), the run ended in "UNEXPECTED ERROR: ZERO FALLBACK: no stable
+  read-rate measure" and a Traceback. The run now reads serially, its launch line says so ("io workers: 1 for this
+  run — ...; measured again at the next run"), and the profile keeps no count, so the next run measures again.
+
 ## [0.6.0] - 2026-11-07
 
 The release that moves NeuroBrix's Triton engine onto nbxtensor (0.0.4). Its final gate ran the 49 catalogue models

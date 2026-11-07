@@ -288,7 +288,9 @@ def _complete_measured_fields(path: Path) -> None:
     if "runtime_base_mb" not in cpu:
         added["runtime_base_mb"] = _measure_runtime_base_mb()
     if "io_workers" not in cpu:
-        added["io_workers"] = _measure_io_workers()
+        n = _measure_io_workers()
+        if n is not None:                  # unmeasured this time: left out, measured again at the next run
+            added["io_workers"] = n
     # a hybrid CPU's core classes (2026-10-26: the profile is the one source of the host's threads)
     if "performance_cores" not in cpu and platform.system() == "Darwin" and cpu.get("architecture") == "arm64":
         added.update({k: v for k, v in _detect_cpu_darwin().items() if k in ("performance_cores", "efficiency_cores")})
@@ -410,10 +412,18 @@ _BASE_PROBES = {
 _PEAK_MB = "print(_mb('peak'))\n"
 
 
-def _measure_io_workers() -> int:
+def _measure_io_workers() -> Optional[int]:
+    """The loaders' parallel reads, measured on this machine's cache; None when no stable read rate was found this
+    time — a first `neurobrix run` on a busy storage ended in a Traceback (a clean container whose model cache was a
+    network mount, 2026-11-07): the run then reads serially, says so, and the next run measures again."""
     from neurobrix.core.paths import cache_dir, neurobrix_home
+    from neurobrix.core.workspace import declare_unmeasured_io_workers
     from nbxtensor.io.read_rate import workers_for
-    m = workers_for(cache_dir(), witness_dir=neurobrix_home() / "tmp")     # refused by name when nothing is stable
+    try:
+        m = workers_for(cache_dir(), witness_dir=neurobrix_home() / "tmp")
+    except RuntimeError as exc:            # workers_for's named refusal: no stable measure up to everything it can read
+        declare_unmeasured_io_workers(str(exc).split(": ", 1)[-1].split(" (")[0])
+        return None
     print(f"   [Auto-detect] io_workers {m['workers']}, measured on {m['storage']} ({m['read']})")
     return int(m["workers"])
 
@@ -452,7 +462,9 @@ def detect_hardware() -> Dict[str, Any]:
     cpu = _detect_cpu(os_type)
     # The runtime's own base, measured here per engine: the base of Prism's host estimate.
     cpu["runtime_base_mb"] = _measure_runtime_base_mb()
-    cpu["io_workers"] = _measure_io_workers()   # the loaders' parallel reads on this machine's cache, measured
+    n = _measure_io_workers()   # the loaders' parallel reads on this machine's cache, measured
+    if n is not None:           # unmeasured this time: the profile holds no count and the next run measures again
+        cpu["io_workers"] = n
 
     # --- GPUs (OS-specific cascade) ---
     devices, brand = detect_devices()

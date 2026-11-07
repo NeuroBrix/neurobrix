@@ -23,6 +23,19 @@ _root: Optional[Path] = None
 
 
 _IO_WORKERS: Optional[int] = None
+#: why this run's profile holds no measured count: its first-launch measure found no stable read rate (a busy storage)
+_IO_UNMEASURED: Optional[str] = None
+#: the parallel reads a run takes when its count could not be measured: one — the loaders read serially and Prism prices
+#: one shard in flight, the least host memory; the profile keeps no count and the next run measures again
+UNMEASURED_IO_WORKERS = 1
+
+
+def declare_unmeasured_io_workers(why: str) -> None:
+    """The first-launch measure found no stable read rate this time (`core.prism.autodetect._measure_io_workers`):
+    this run reads with `UNMEASURED_IO_WORKERS`, says so on its launch line, and the next run measures again."""
+    global _IO_UNMEASURED
+    _IO_UNMEASURED = why
+    print(f"[Engine] io workers: {UNMEASURED_IO_WORKERS} for this run — {why}; measured again at the next run")
 
 
 def declare_io_workers(n: Optional[int]) -> None:
@@ -35,6 +48,8 @@ def io_workers() -> int:
     """The shard reads the loaders keep in flight AND Prism's host estimate counts (a shard held per read): the
     profile's measured `cpu.io_workers` (rule 1; until 2026-10-30 a hand-written 8 in system.yml), refused if absent."""
     if not isinstance(_IO_WORKERS, int) or _IO_WORKERS < 1:
+        if _IO_UNMEASURED is not None:
+            return UNMEASURED_IO_WORKERS
         raise RuntimeError(
             f"ZERO FALLBACK: no I/O worker count: the hardware profile in force declares no cpu.io_workers "
             f"(got {_IO_WORKERS!r}) — a profile made on this machine measures it at its first launch; an older one: "
