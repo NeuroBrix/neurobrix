@@ -1,7 +1,7 @@
 """The engine's package installs on a machine other than the one that built it.
 
 The stable's first reading (2026-11-05, wheels built from 30383f54): neurobrix's METADATA said
-`Requires-Dist: nbxtensor @ file:///home/mlops/nbx/worktrees/release-notes/nbxtensor` — pyproject's
+`Requires-Dist: nbxtensor @ file://~/nbx/worktrees/release-notes/nbxtensor` — pyproject's
 `nbxtensor @ {root:uri}/nbxtensor` bakes the building machine's path into the wheel, so no other machine can install
 it, and PyPI refuses a direct-URL dependency. The same wheel carried 45 files of 0 bytes (kernels/cache/) no code read.
 

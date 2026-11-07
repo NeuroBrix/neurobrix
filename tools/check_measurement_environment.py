@@ -114,7 +114,7 @@ def check_on_the_measurement_network() -> list[str]:
     """A campaign that starts off the lab network reads nothing and refuses.
 
     This cost a whole model on 2026-09-10: the machine had joined
-    192.168.1.0/24 instead of the lab's 10.0.0.0/24, so traffic to the file
+    198.51.100.0/24 instead of the lab's 192.0.2.0/24, so traffic to the file
     server went to the internet gateway and a 12 GB stage died at 2 GB. It was
     not an export failure and not NFS — it was the machine on the wrong
     network, and it was found AFTER the copy, from its corpse. A machine that

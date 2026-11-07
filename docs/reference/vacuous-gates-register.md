@@ -780,7 +780,7 @@ is not a function call.
 Two from one evening, recorded together because they are the same shape.
 
 **The listing.** With the public name blocked, the hub's internal entry point
-was probed: `http://10.0.0.39:3000/api/models` answered 200 with **12 models**
+was probed: `http://192.0.2.39:3000/api/models` answered 200 with **12 models**
 and no `CogVideoX-5b-I2V`. For several minutes that read as a *different
 instance* — a staging copy — and publishing to it would have been silent and
 wrong. It was the page size. `?limit=200` returned 47 with the same record ids
@@ -2047,7 +2047,7 @@ torch 2.14.0+cu126, Triton 3.8.0 — running the model zoo, and the switch case 
 it ("the candidate stack runs the V100s: 79 passed").
 
 **What was measured.** `ps` during the 09-20 run: the pytest process was the candidate's
-interpreter; its child was `/home/mlops/ml/venv/bin/python -u -m neurobrix run ...` — the
+interpreter; its child was `~/ml/venv/bin/python -u -m neurobrix run ...` — the
 PRODUCTION interpreter, torch 2.5.1+cu121, Triton 3.6.0. `_runtime_python()` returns
 `NEUROBRIX_PYTHON` or `sys.executable`; the conftest hook, written so a system-python pytest
 would find a working venv, sets `NEUROBRIX_PYTHON = $VIRTUAL_ENV/bin/python` whenever that
@@ -2141,7 +2141,7 @@ program id.
 ### 81 — a census test green with its only seam removed, because the shadow recorded on a second path
 
 **Where.** `tests/unit/kernels/test_the_census_shadow_records_the_launchers_key.py`, 2026-09-21,
-metatron, main (the census's first hour).
+v100-rack, main (the census's first hour).
 
 **What it did.** The test drove one matmul through the census shadow and asserted the key
 record held its key. It passed. The record seam under test — the `record` call in
@@ -2186,7 +2186,7 @@ raises.
 
 ### 83 — the damage check that looked where the damage was not
 
-**Where.** This rack (Dell, metatron), 2026-09-22, during the catalogue census relaunch.
+**Where.** This rack (Dell, v100-rack), 2026-09-22, during the catalogue census relaunch.
 
 **What it did.** A `git merge` escaped into the live working tree for about thirty seconds
 because a compound command chained a `cd` into a worktree that had failed to be created with
@@ -3798,7 +3798,7 @@ before it measures the event; prove the count non-zero once on a case that must 
 planner change is judged by the plan each cell receives (old tree against new tree), but only on the
 listed fields. `kv_cache`, `deferred_drain_cliffs`, `layer_stream_chunks`, `expert_working_set` and
 `cpu_ram_mb` were absent from that list, though `core/prism/solver.plan_record` emits all five. The views
-it caches (`/home/mlops/nbx/tmp/gate_scope/plans`) were keyed by tree and command, not by the field
+it caches (`~/nbx/tmp/gate_scope/plans`) were keyed by tree and command, not by the field
 list, so adding a field would have reused the old views without it.
 
 **What the gate said about the defect**: 0 cells. Found 2026-10-16 on the rack: the state engine's

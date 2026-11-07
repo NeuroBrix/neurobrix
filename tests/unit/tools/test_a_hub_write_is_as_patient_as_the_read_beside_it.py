@@ -6,7 +6,7 @@ refusal. The WRITER beside it waited not at all: one `subprocess.TimeoutExpired`
 container. Both read a temporary refusal as a failure.
 
 The owner's decision (2026-09-22): the store is accepted as it is — nothing is flashed,
-replaced or restarted. Its cause is known: the zvol behind 10.0.0.36 sits on four Micron 5200
+replaced or restarted. Its cause is known: the zvol behind 192.0.2.36 sits on four Micron 5200
 drives with multi-second latency and takes its drive offline for 10 to 30 seconds at a time.
 So the writes must be as patient as the reads: wait and retry through refusals, space the
 writes, read back to verify, and never count a temporary refusal as a failure.

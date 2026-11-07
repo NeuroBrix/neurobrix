@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **The package names none of the project's machines**: the snapshots root it shipped was a path of the project's own
-  machine (`/home/mlops/hf_snapshots`, wrong on every other machine) and is now `~/hf_snapshots`
+  machine (wrong on every other machine) and is now `~/hf_snapshots`
   (`NEUROBRIX_HF_SNAPSHOTS` overrides it); the census input records name the files they read relative to the engine's
   home (`home:`) instead of a user's home directory; the certified directory's proofs no longer record the host name
   of the machine that certified them (85 723 removed, and the certifier no longer writes it).

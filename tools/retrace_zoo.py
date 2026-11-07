@@ -29,7 +29,7 @@ Steps per model (state in <out>/<model>/state.json, each idempotent):
                model waits in READY_FOR_UPLOAD
 
     python tools/retrace_zoo.py --models a,b --gpu 0 --src /path/to/src \
-        [--out validation_outputs/retrace_2026_09_07] [--models-root /home/mlops/nbx_builds]
+        [--out validation_outputs/retrace_2026_09_07] [--models-root ~/nbx_builds]
 """
 from __future__ import annotations
 
@@ -141,9 +141,9 @@ def scrub_provenance(node):
 #: The toolchain's registry key when it differs from the installed container's name (the hub's name).
 REGISTRY_ALIAS = {"Sana-1600M-MultiLing": "Sana_1600M_1024px_MultiLing"}
 # The hub's entry point, read through the door every chain on this rack declares (nbx/env.sh:
-# NEUROBRIX_REGISTRY=http://10.0.0.39:3000). The public name is Cloudflare's shared address, which
+# NEUROBRIX_REGISTRY=http://192.0.2.39:3000). The public name is Cloudflare's shared address, which
 # Spanish ISPs block on LaLiga match days under a court order — 2026-09-20 was one: three gated
-# uploads read "503 SlowDownWrite" from the public name while the store at 10.0.0.36 held write
+# uploads read "503 SlowDownWrite" from the public name while the store at 192.0.2.36 held write
 # quorum all evening. A publish path that dies every football weekend is a defect; this constant
 # was it.
 REGISTRY = os.environ.get("NEUROBRIX_REGISTRY") or "https://neurobrix.es"
@@ -721,7 +721,7 @@ def witnessed_arg_changes(old_op: dict, new_op: dict, tensors_new: dict, tensors
     return sites
 
 
-HUB_STORE_HEALTH = "http://10.0.0.36:9000/minio/health/cluster"
+HUB_STORE_HEALTH = "http://192.0.2.36:9000/minio/health/cluster"
 
 
 def export_readers(cmdlines=None) -> list:
@@ -853,7 +853,7 @@ def stream_under_probe(url: str, dest: Path, mbps: float, logfile: Path, probe_e
 
 
 # The exports whose storage the hub's object store shares, as mounted on this machine. A path
-# the probe cannot see is a probe failure, never a green: `/home/mlops/models` was listed here
+# the probe cannot see is a probe failure, never a green: `~/models` was listed here
 # until 06:30 UTC on 2026-09-07 and does not exist — the models export mounts under the repo.
 SHARED_STORAGE_EXPORTS = (str(REPO / "models"), str(_atelier.root("cache")), str(_atelier.root("hf_snapshots")))
 

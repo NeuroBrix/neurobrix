@@ -141,8 +141,8 @@ cells:
     model: PixArt-XL-2-1024-MS
     vendor:
       kind: diffusers
-      ref: "/home/mlops/hf_snapshots/PixArt-XL-2-1024-MS"
-      venv: /home/mlops/bench_venvs/diffusers
+      ref: "~/hf_snapshots/PixArt-XL-2-1024-MS"
+      venv: ~/bench_venvs/diffusers
       precision: "float16"
     request:
       prompt: "a red apple on a wooden table"
@@ -185,8 +185,8 @@ cells:
       # video venv carries diffusers 0.38.0 and WanPipeline, the image one
       # 0.35.2 and AutoPipelineForText2Image.
       kind: diffusers_video
-      ref: "/home/mlops/hf_snapshots/Wan2.1-T2V-1.3B-Diffusers"
-      venv: /home/mlops/bench_venvs/diffusers_video
+      ref: "~/hf_snapshots/Wan2.1-T2V-1.3B-Diffusers"
+      venv: ~/bench_venvs/diffusers_video
       precision: "float16 transformer, float32 VAE — the model card keeps the VAE in fp32"
     request:
       prompt: "a red apple rolling slowly across a wooden table"
@@ -264,8 +264,8 @@ cells:
       # CTranslate2 conversion. Declaring `transformers` here named a stack that
       # does not exist and the cell reported NOT-RUN for a reason that was ours.
       kind: faster_whisper
-      ref: "/home/mlops/hf_snapshots/models--mobiuslabsgmbh--faster-whisper-large-v3-turbo"
-      venv: /home/mlops/venvs/fwhisper
+      ref: "~/hf_snapshots/models--mobiuslabsgmbh--faster-whisper-large-v3-turbo"
+      venv: ~/venvs/fwhisper
       precision: "float16 (CTranslate2), same precision as ours"
     request:
       audio: tests/assets/test_speech_ref.wav

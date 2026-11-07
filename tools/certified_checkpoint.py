@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """The certified directory is committed and pushed WHILE it is being written.
 
-    tools/certified_checkpoint.py --repo /home/mlops/NeuroBrix_System \\
+    tools/certified_checkpoint.py --repo ~/NeuroBrix_System \\
         --dir src/neurobrix/config/autotune --producer-pid 1234 --producer-pid 1235 \\
-        --interval 600 --record /home/mlops/nbx/campaigns/<date>_<name>/RUN.md
+        --interval 600 --record ~/nbx/campaigns/<date>_<name>/RUN.md
 
 Three mains cuts in three days (2026-09-11, 09-12, 09-13) each found hundreds
 of certified entries on disk and nowhere else — 971 on the Friday, 1 222 on

@@ -45,7 +45,7 @@ identical, and names the difference. That is a door, not a warning: a
 cross-population comparison cannot be made honest by a footnote.
 
 Usage:
-    python tools/campaign_table.py /home/mlops/nbx/campaigns/<dated dir>
+    python tools/campaign_table.py ~/nbx/campaigns/<dated dir>
     python tools/campaign_table.py <dir> --compare <other dir>
     python tools/campaign_table.py <dir> --markdown
 """

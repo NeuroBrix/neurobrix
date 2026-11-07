@@ -34,7 +34,7 @@ def test_the_root_comes_from_the_engine_configuration():
 
 
 def test_the_shipped_root_names_no_machine():
-    # the wheel shipped "/home/mlops/hf_snapshots", a path of the project's own machine (the owner, 2026-11-07)
+    # the wheel shipped "~/hf_snapshots", a path of the project's own machine (the owner, 2026-11-07)
     import yaml
     declared = yaml.safe_load((REPO / "src" / "neurobrix" / "config" / "system.yml").read_text())["paths"]["snapshots"]
     assert declared.startswith("~/"), declared

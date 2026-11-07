@@ -6,7 +6,7 @@
 # Artifacts land in the R29 media tree via the bench harness; the
 # cache arms' PNGs/frames are the eye's evidence (INDEX built after).
 set -uo pipefail
-cd /home/mlops/NeuroBrix_System
+cd ~/NeuroBrix_System
 RB="python3 benchmarks/harness/run_bench.py --repetitions 5 --gpu 2"
 
 run_row () {  # $1 row  $2 config flag (e.g. "--config machine" or "")

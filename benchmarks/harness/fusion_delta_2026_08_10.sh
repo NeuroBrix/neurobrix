@@ -12,7 +12,7 @@
 # Idempotent: run_bench skips cells with an existing ok JSON; a
 # power-loss resume re-runs this script verbatim (flightrec wraps it).
 set -uo pipefail
-cd /home/mlops/NeuroBrix_System
+cd ~/NeuroBrix_System
 RB="python3 benchmarks/harness/run_bench.py --repetitions 5"
 OFF=2026_08_10_fusion_off
 ON=2026_08_10_fusion_on

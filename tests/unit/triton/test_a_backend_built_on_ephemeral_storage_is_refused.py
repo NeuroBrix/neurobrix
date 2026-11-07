@@ -40,7 +40,7 @@ def test_a_durable_path_is_not_refused(tmp_path_factory):
 def test_a_name_that_merely_contains_tmp_is_not_ephemeral():
     # `/Users/x/tmpwork` is NOT under a temp root; matching on the substring
     # would refuse a durable directory and teach everyone to disable the guard.
-    assert ephemeral_reason("/Users/hocine/Workspace/tmpwork/pkg") is None
+    assert ephemeral_reason("~/Workspace/tmpwork/pkg") is None
 
 
 def test_every_leg_is_reported_not_just_the_first(monkeypatch, tmp_path):

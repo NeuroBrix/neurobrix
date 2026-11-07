@@ -13,7 +13,7 @@ What each test would do if the code were wrong:
   * a mask ramp on the wrong end, a tile placed at the input stride instead of the output's, the output not zero where
     no tile reaches: red.
 
-Needs the vendor oracle's diffusers (`/home/mlops/venvs/vendor_oracle`, docs/internal/environments.md): skipped by
+Needs the vendor oracle's diffusers (`~/venvs/vendor_oracle`, docs/internal/environments.md): skipped by
 name elsewhere. A vendor import here is a TEST's, never the engine's (R34).
 """
 from __future__ import annotations

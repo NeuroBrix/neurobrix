@@ -230,7 +230,7 @@ rows:
     # fails the quality gate (PSNR 9.8 dB vs cache-off; one skip already 17.5 dB),
     # and the diffusers arm never carried it. validation_outputs/image_fp16_2026_09_04.
     checkpoint: PixArt/PixArt-XL-1024
-    diffusers_checkpoint: /home/mlops/hf_snapshots/PixArt-XL-2-1024-MS
+    diffusers_checkpoint: ~/hf_snapshots/PixArt-XL-2-1024-MS
     neurobrix_model: PixArt-XL-2-1024-MS
     prompt: "a red apple on a wooden table"
     steps: 20
@@ -248,7 +248,7 @@ rows:
     # fails the quality gate (PSNR 9.8 dB vs cache-off; one skip already 17.5 dB),
     # and the diffusers arm never carried it. validation_outputs/image_fp16_2026_09_04.
     checkpoint: PixArt/PixArt-Sigma-XL-1024
-    diffusers_checkpoint: /home/mlops/hf_snapshots/PixArt-Sigma-XL-2-1024-MS
+    diffusers_checkpoint: ~/hf_snapshots/PixArt-Sigma-XL-2-1024-MS
     neurobrix_model: PixArt-Sigma-XL-2-1024-MS
     prompt: "a red apple on a wooden table"
     steps: 20
@@ -580,7 +580,7 @@ rows:
     scale: 4
     upscaler_stack: realesrgan
     upscaler_venv: realesrgan
-    upscaler_weights: /home/mlops/hf_snapshots/upscaler_weights/RealESRGAN_x4plus.pth
+    upscaler_weights: ~/hf_snapshots/upscaler_weights/RealESRGAN_x4plus.pth
     # Vendor default on CUDA is half=True -> fp16 class, matches nbx.
     columns: [vendor_upscaler, neurobrix_pytorch, neurobrix_triton]
 
@@ -613,7 +613,7 @@ rows:
     # classical checkpoint and the host sits at 97% disk, so a
     # from_pretrained download is not free here. The snapshot is
     # complete (config + preprocessor_config + pytorch_model.bin).
-    swin2sr_checkpoint: /home/mlops/hf_snapshots/swin2SR-realworld-sr-x4-64-bsrgan-psnr
+    swin2sr_checkpoint: ~/hf_snapshots/swin2SR-realworld-sr-x4-64-bsrgan-psnr
     # Vendor default precision fp32, same class labelling as the
     # classical row.
     columns: [vendor_upscaler, neurobrix_pytorch, neurobrix_triton]
@@ -628,7 +628,7 @@ rows:
     scale: 4
     upscaler_stack: swinir
     upscaler_venv: realesrgan
-    upscaler_weights: /home/mlops/hf_snapshots/upscaler_weights/001_classicalSR_DIV2K_s48w8_SwinIR-M_x4.pth
+    upscaler_weights: ~/hf_snapshots/upscaler_weights/001_classicalSR_DIV2K_s48w8_SwinIR-M_x4.pth
     columns: [vendor_upscaler, neurobrix_pytorch, neurobrix_triton]
 
   - id: upscale_swinir_x2
@@ -641,7 +641,7 @@ rows:
     scale: 2
     upscaler_stack: swinir
     upscaler_venv: realesrgan
-    upscaler_weights: /home/mlops/hf_snapshots/upscaler_weights/001_classicalSR_DIV2K_s48w8_SwinIR-M_x2.pth
+    upscaler_weights: ~/hf_snapshots/upscaler_weights/001_classicalSR_DIV2K_s48w8_SwinIR-M_x2.pth
     columns: [vendor_upscaler, neurobrix_pytorch, neurobrix_triton]
 
   - id: upscale_hat_l_x4
@@ -654,7 +654,7 @@ rows:
     scale: 4
     upscaler_stack: hat
     upscaler_venv: hat
-    upscaler_weights: /home/mlops/hf_snapshots/upscaler_weights/HAT-L_SRx4_ImageNet-pretrain.pth
+    upscaler_weights: ~/hf_snapshots/upscaler_weights/HAT-L_SRx4_ImageNet-pretrain.pth
     columns: [vendor_upscaler, neurobrix_pytorch, neurobrix_triton]
 
   - id: image_diffusion_flex1

@@ -6,7 +6,7 @@ The engine resolves its cache through one door, `neurobrix.core.paths.cache_dir(
 would have found elsewhere while the cells it launches DO read the door. On the Mac, 2026-10-04 08:55: a 57 GiB
 container that does not fit the local disk was to run in place from the NAS mount (`NEUROBRIX_CACHE` set to the
 mount for that cell), and the harness answered in 5 s "REFUSED: --models: Qwen3-Coder-30B-A3B-Instruct — no
-container of that name in the cache /Users/hocine/.neurobrix/cache".
+container of that name in the cache ~/.neurobrix/cache".
 """
 from __future__ import annotations
 

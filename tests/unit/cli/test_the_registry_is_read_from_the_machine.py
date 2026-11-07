@@ -35,8 +35,8 @@ def test_the_public_name_is_the_default(monkeypatch):
 
 
 def test_the_machine_declaration_wins(monkeypatch):
-    assert (_fresh_utils(monkeypatch, "http://10.0.0.39:3000").REGISTRY_URL
-            == "http://10.0.0.39:3000")
+    assert (_fresh_utils(monkeypatch, "http://192.0.2.39:3000").REGISTRY_URL
+            == "http://192.0.2.39:3000")
 
 
 def test_an_empty_declaration_is_not_a_registry(monkeypatch):

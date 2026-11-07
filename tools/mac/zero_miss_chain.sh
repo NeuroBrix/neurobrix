@@ -15,7 +15,7 @@ export TOOLCHAINS=Metal PYTHONUNBUFFERED=1
 HT=${HT:-$W}; DEFER_S=${DEFER_S:-1800}; REPLAY_MAX_S=${REPLAY_MAX_S:-7200}; Q=$OUT/replay_queue.$$
 free_gb() { df -g "$LC" | tail -1 | awk '{print $4}'; }
 local_gb() { local k=$(du -sk "$LC/$1" 2>/dev/null | cut -f1); echo $(( ${k:-0} / 1048576 )); }
-size_gb() { $SSHO "du -sb $RC/$1" | awk '{printf "%d", $1/1073741824 + 1}'; }   # bytes, GNU du on optimus
+size_gb() { $SSHO "du -sb $RC/$1" | awk '{printf "%d", $1/1073741824 + 1}'; }   # bytes, GNU du on nas
 precheck() { NEUROBRIX_CACHE=$NAS $V $HERE/mac/precheck_keys.py $W "$1" "$2" >> $S 2>&1; }
 reader_sync() {   # the reader file lists what $RD holds now; no file when it holds nothing
   if [ -n "$(ls $RD 2>/dev/null)" ]; then
@@ -36,7 +36,7 @@ copy() { local t0=$(date +%s) b0=$(du -sk "$LC/$1" 2>/dev/null | cut -f1); b0=${
   reader_off $1
   if [ "$a" != "$b" ] || [ "$fa" != "$fb" ]; then echo "COPY $1 REFUSED $(date +%T): manifest $a vs $b, files $fa vs $fb" >> $S; return 1; fi
   local t1=$(date +%s) b1=$(du -sk "$LC/$1" | cut -f1)
-  echo "COPY $1 OK $(date '+%F %T') over SSH from optimus, manifest $a files $fa, $(( (b1-b0)/1024 )) MiB in $((t1-t0)) s ($(( (b1-b0)/1024/(t1-t0+1) )) MiB/s), disk $(free_gb)G free" >> $S; }
+  echo "COPY $1 OK $(date '+%F %T') over SSH from nas, manifest $a files $fa, $(( (b1-b0)/1024 )) MiB in $((t1-t0)) s ($(( (b1-b0)/1024/(t1-t0+1) )) MiB/s), disk $(free_gb)G free" >> $S; }
 harness_run() {   # $1 model $2 modes(csv) $3 cache root — the shared harness under the guard
   echo "HARNESS $1 [$2] START $(date '+%F %T') cache $3" >> $S
   ( cd $W && NEUROBRIX_CACHE=$3 $V $HT/tools/regression_matrix.py run --models "$1" --modes "$2" --gpu 0 --out $OUT/harness --timeout ${CELL_TIMEOUT_S:-2400} --src $W/src --defer-after $DEFER_S >> $OUT/harness/run.log 2>&1 ) & local cp=$!

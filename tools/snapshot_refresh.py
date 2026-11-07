@@ -13,7 +13,7 @@ write pressure beside the batteries (2026-09-02 and twice on 09-07) and
 recovers by draining. A supervisor resumes the remaining repositories after a
 pause; partial files resume where they stopped.
 
-    python tools/snapshot_refresh.py --repos org/name,org/name [--dest /home/mlops/hf_snapshots] [--log DIR]
+    python tools/snapshot_refresh.py --repos org/name,org/name [--dest ~/hf_snapshots] [--log DIR]
 """
 from __future__ import annotations
 

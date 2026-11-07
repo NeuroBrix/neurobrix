@@ -48,7 +48,7 @@ from neurobrix.core.prism.memory_budget import rung_down_mb
 
 MB = 1024 * 1024
 # The engine's own door, not a literal: this file carried the Dell's absolute
-# path (/home/mlops/...) and its two unguarded cells failed on the first Apple
+# path (~/...) and its two unguarded cells failed on the first Apple
 # run with FileNotFoundError — and, worse, the no-extents cell failed for the
 # WRONG reason (an unreadable container returns None before the extents guard
 # can raise). `core.paths.cache_dir()` is the door 7f340b02 built for exactly

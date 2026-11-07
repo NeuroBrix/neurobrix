@@ -24,7 +24,7 @@ What would these do if the code were wrong? Dropping the dtype dimension (the ce
 their graphs hold) leaves a29261aa's differing points with no holder: the selected set loses the bool models
 and the a29261aa backtest goes red — proved clean -> injected -> restored (see the commit).
 
-Runnable: PYTHONNOUSERSITE=1 /home/mlops/venvs/nbx_t214/bin/python -m pytest \
+Runnable: PYTHONNOUSERSITE=1 ~/venvs/nbx_t214/bin/python -m pytest \
     tests/unit/tools/test_a_gate_replays_only_the_cells_its_diff_reaches.py -v
 """
 from __future__ import annotations
@@ -44,7 +44,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 import gate_scope as G               # noqa: E402
 import gate_scope_code as C          # noqa: E402
 
-MQ24 = Path("/home/mlops/nbx/campaigns/2026_10_10_mq24")
+MQ24 = Path("~/nbx/campaigns/2026_10_10_mq24")
 
 
 def _fn(src: str):

@@ -775,7 +775,7 @@ Run at its head `de00c129` against `main` as the baseline, on this rack.
 
 **The ten skips are not a coverage loss.** They are `test_workshop_layout.py` looking for the
 workshop root relative to its own tree: from a worktree at
-`/home/mlops/nbx/worktrees/mac_e3d240ea` it computes `/home/mlops/nbx/worktrees/nbx`, which
+`~/nbx/worktrees/mac_e3d240ea` it computes `~/nbx/worktrees/nbx`, which
 does not exist, and says so — *"no workshop root at ... — discipline not installed here"*. The
 same class as a frozen worktree missing its ignored pointers, and a property of where the tree
 sits rather than of what it contains. Everything that runs, passes.
@@ -786,9 +786,9 @@ measurement protocol".
 
 **Item 6 — `core/paths.py`.** It resolves the rig's real locations and creates nothing:
 
-    cache_dir()      -> /home/mlops/.neurobrix/cache    exists=True
-    store_dir()      -> /home/mlops/.neurobrix/store    exists=True
-    neurobrix_home() -> /home/mlops/.neurobrix          exists=True
+    cache_dir()      -> ~/.neurobrix/cache    exists=True
+    store_dir()      -> ~/.neurobrix/store    exists=True
+    neurobrix_home() -> ~/.neurobrix          exists=True
     describe()       -> says which source each came from ('said_by': 'default')
 
 `describe()` naming the source of each path is what makes this checkable rather than
@@ -2035,10 +2035,10 @@ stalling every write costs seconds; a READ is served from whichever drives answe
 stays at nine milliseconds.
 
 **What I could not do**: there is no MinIO credential on this rack (`.env` holds none), the
-metrics endpoints answer 403, and `ssh 10.0.0.36` is refused (publickey, password). So the
+metrics endpoints answer 403, and `ssh 192.0.2.36` is refused (publickey, password). So the
 drive state itself cannot be read from here.
 
-**The one action, for Hocine Benkelaya, on 10.0.0.36** — read the drive state and say which drive is
+**The one action, for Hocine Benkelaya, on 192.0.2.36** — read the drive state and say which drive is
 stalling:
 
 ```
@@ -2702,7 +2702,7 @@ CACHE = Path(os.path.expanduser("~")) / ".neurobrix" / "cache"
 
 so census pass B — whose environment named the shared NFS catalogue in `NEUROBRIX_CACHE` —
 read an **empty local directory** and died on the first model:
-`FileNotFoundError: /Users/hocine/.neurobrix/cache/Janus-Pro-7B/topology.json`. Pass A
+`FileNotFoundError: ~/.neurobrix/cache/Janus-Pro-7B/topology.json`. Pass A
 survived only because the upscaler path never reached `request_args`. Zero keys from 29
 models, ~30 minutes of shadow time spent on nothing.
 
@@ -3037,7 +3037,7 @@ taken.
 
 ## 2026-09-22 — the 2.000× was the FP32 FALLBACK, not the estimator. My framing was wrong; the rack's reading was right.
 
-The export hypothesis is dead — both machines mount the same directory on optimus over two
+The export hypothesis is dead — both machines mount the same directory on nas over two
 links, Flex's transformer is the same 15 044 MB of bf16 there. So it was code, and
 instrumenting `compute_dtype_factor`'s call site (`solver.py:1948`, behind a default-off
 `NBX_DTYPE_RESOLVE_DIAG`) named the line in one run.
@@ -4261,7 +4261,7 @@ deliberate choice, not a bug", and put the artefact behind freeing memory. Both 
   value off the ladder, so a plan is not a function of a volatile reading). What breaks the
   doctrine is refusing a component over its rung instead of streaming it. Whether the low range
   wants another rung is a separate question, and it does not decide this one.
-* **Owner: the Dell.** On metatron, `HEAD` is still `d2e48a60` (read over ssh at 12:5x), with
+* **Owner: the Dell.** On v100-rack, `HEAD` is still `d2e48a60` (read over ssh at 12:5x), with
   uncommitted changes to `src/neurobrix/core/prism/solver.py`,
   `src/neurobrix/core/prism/memory_budget.py` and `src/neurobrix/core/config/system.py`, and
   three new tests in `tests/unit/prism/`:

@@ -1,5 +1,5 @@
 """The certifier's fp64 oracle for the matmul family is computed on ROW WINDOWS above the MAC
-cap, never whole on the host. Measured 2026-09-21 23:32 on metatron: a 44 544 x 3 072 x 8 192
+cap, never whole on the host. Measured 2026-09-21 23:32 on v100-rack: a 44 544 x 3 072 x 8 192
 product's whole fp64 oracle in numpy (2.2 TFLOP through OpenBLAS's pool) held one certifier at
 155 GB of host RSS with its card at 0 % while four of them drove the load to 74 on 80 cores.
 

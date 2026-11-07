@@ -3,7 +3,7 @@
 by the owner 2026-09-16): bytes identical between two arms of this engine prove
 the two arms agree, not that either is right. What is outside the engine:
 
-* `stt`     — faster-whisper (a third-party ASR, /home/mlops/venvs/fwhisper)
+* `stt`     — faster-whisper (a third-party ASR, ~/venvs/fwhisper)
               transcribes a WAV. Used two ways: as the control for our own
               transcription, and as the reader of what our TTS synthesised.
 * `wer`     — word error rate between a text and a text known in advance.

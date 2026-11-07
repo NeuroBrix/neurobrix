@@ -158,7 +158,7 @@ def test_a_weight_with_no_symbolic_shape_at_all_is_NOT_flagged():
 def test_the_retrace_that_avoids_the_collision_produces_a_LITERAL(): 
     """Both mochi builds exist on this rack and differ exactly here. This is the fix, measured:
     trace spatial values whose sum cannot equal the head dim, and the head dim stays a literal."""
-    good = Path("/home/mlops/nbx/builds/scratch_cache/mochi-1-preview/components/transformer/graph.json")
+    good = Path("~/nbx/builds/scratch_cache/mochi-1-preview/components/transformer/graph.json")
     bad = CACHE / "mochi-1-preview" / "components" / "transformer" / "graph.json"
     if not (good.exists() and bad.exists()):
         pytest.skip("both mochi builds are needed for this comparison")

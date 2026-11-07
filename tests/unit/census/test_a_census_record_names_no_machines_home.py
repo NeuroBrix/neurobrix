@@ -1,6 +1,6 @@
 """A census input record names the files it read relative to the engine's home (`home:`), the catalogue (`cache:`) or
 the repository (`repo:`), never by a machine's home directory: the committed records held 266 paths under
-/home/mlops/.neurobrix and 49 under /Users/hocine/.neurobrix, shipped in the wheel (the owner, 2026-11-07). The reader
+~/.neurobrix and 49 under ~/.neurobrix, shipped in the wheel (the owner, 2026-11-07). The reader
 resolves `home:` against this machine's engine home, so a record moves only where a file did.
 
 What this test would do if the code were wrong: a file under ~/.neurobrix recorded absolute (red), `home:` not resolved

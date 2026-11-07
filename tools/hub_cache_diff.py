@@ -497,7 +497,7 @@ PUBLISH_SPACING_S = 20.0          # between objects: the store takes its drive o
 PUBLISH_TIMEOUT_S = 7200
 
 #: What a TEMPORARY refusal looks like coming back from the store. The owner's decision
-#: (2026-09-22): the store is accepted as it is — the zvol behind 10.0.0.36 sits on four
+#: (2026-09-22): the store is accepted as it is — the zvol behind 192.0.2.36 sits on four
 #: Micron 5200s with multi-second latency and takes its drive offline for 10 to 30 s at a
 #: time. None of these is a failure of the object or of this pass; they are the store
 #: breathing, and counting one as a failure is what made a healthy container read as unpublished.

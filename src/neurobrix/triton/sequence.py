@@ -85,8 +85,8 @@ from . import replay as _replay
 # INTRA-run. PixArt-Sigma/Alpha triton crash further along with an
 # independent arena-state bug between runs (cross-run slot corruption
 # — a tensor retained by `_base` chain across the first run's final
-# drain has a dangling data_ptr on run 3). Tracked in
-# docs/follow-ups/pixart_triton_arena_inter_run_bug.md.
+# drain has a dangling data_ptr on run 3). Tracked in the project's
+# follow-up notes (not published).
 # ----------------------------------------------------------------------------
 
 def _parse_env_int(name: str, default: int) -> int:

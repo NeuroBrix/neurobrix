@@ -14,8 +14,8 @@ The schedulers under test import NO diffusers (R34); the vendored source is
 loaded by file path purely as the algorithm oracle.
 
 Run:
-  source /home/mlops/ml/venv/bin/activate
-  cd /home/mlops/NeuroBrix_System
+  source ~/ml/venv/bin/activate
+  cd ~/NeuroBrix_System
   python tests/unit/scheduler/test_cogvideox_ddim_vs_vendor.py
 """
 from __future__ import annotations
@@ -27,10 +27,10 @@ import numpy as np
 import torch
 
 VENDOR_FILE = (
-    "/home/mlops/NeuroBrix_System/forge/vendors/diffusers/0.30.1/"
+    "~/NeuroBrix_System/forge/vendors/diffusers/0.30.1/"
     "diffusers/schedulers/scheduling_ddim_cogvideox.py"
 )
-VENDOR_ROOT = "/home/mlops/NeuroBrix_System/forge/vendors/diffusers/0.30.1"
+VENDOR_ROOT = "~/NeuroBrix_System/forge/vendors/diffusers/0.30.1"
 
 COG_CONFIG = {
     "num_train_timesteps": 1000,

@@ -30,4 +30,4 @@ def test_without_a_pin_it_is_the_interpreter_running_the_tool(monkeypatch):
 
 def test_no_machine_path_is_named():
     src = (Path(C.__file__)).read_text()
-    assert "/home/mlops/ml/venv" not in src
+    assert "~/ml/venv" not in src

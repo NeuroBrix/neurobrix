@@ -64,7 +64,7 @@ def test_the_loader_passes_a_complete_container_through_the_door(tmp_path):
 
 
 CACHE = Path.home() / ".neurobrix" / ("ca" + "che") / "chatterbox"
-STAGE = Path("/home/mlops/nbx/stage/neurotax/chatterbox")
+STAGE = Path("~/nbx/stage/neurotax/chatterbox")
 
 
 @pytest.mark.skipif(not CACHE.exists() or json.loads((CACHE / "manifest.json").read_text()).get(

@@ -13,7 +13,7 @@ filesystem.
 ## The root holds three kinds of thing, and nothing else
 
 ```
-/home/mlops/
+~/
 ├── NeuroBrix_System/     the repository — the only clone
 ├── ml/  venvs/  bench_venvs/     the virtualenvs
 ├── (the NFS mounts) and the tool caches
@@ -57,7 +57,7 @@ quoted in a report — is written under `nbx/` or into the repository, never und
 
 ## The NAS is where closed work goes
 
-`/mnt/nvme_ai_work` (1.6 TB) holds archived campaigns and artefacts. Anything
+`~/scratch` (1.6 TB) holds archived campaigns and artefacts. Anything
 moved there goes with its checksums, and the inventory that authorised the move
 is written before the move, not after.
 
@@ -95,7 +95,7 @@ also could not do is keep taking the road the court watches.
 
 - **The rack declares its own entry point** in `nbx/env.sh`, sourced by
   `~/.profile` (not only `~/.bashrc`, which returns before the end for a
-  non-interactive shell) and by every chain: `NEUROBRIX_REGISTRY=http://10.0.0.39:3000`.
+  non-interactive shell) and by every chain: `NEUROBRIX_REGISTRY=http://192.0.2.39:3000`.
   Both the engine (`neurobrix hub`, `neurobrix import`) and the build toolchain
   read it; the public name is what remains when nothing is declared, because a
   user anywhere else reaches the hub through it.
@@ -106,10 +106,10 @@ also could not do is keep taking the road the court watches.
   registry for its listing at entry and refuses one that does not answer in the
   hub's shape: the case that catches is an address answering HTTP 200 with
   *something*.
-- **The object store was already internal** (`10.0.0.36:9000`): the API hands
+- **The object store was already internal** (`192.0.2.36:9000`): the API hands
   out presigned URLs on the LAN. Only the API calls were leaving the building.
 - **Stated, not hidden: the internal entry point is plain HTTP on port 3000.**
-  The admin token travels in clear between `10.0.0.40` and `10.0.0.39` on this
+  The admin token travels in clear between `192.0.2.40` and `192.0.2.39` on this
   LAN. The owner chose this path knowing it. A certificate on the internal
   listener would remove the caveat and nothing here would need to change.
 
@@ -121,11 +121,11 @@ layers of wrapping.
 ## One pool carries everything — and the rule that was inferred from it, withdrawn
 
 **Established 2026-09-12, on the host, by the owner.** There is no separate
-storage box. `192.168.100.1` is the hypervisor's own 100 Gbps link (a Mellanox
+storage box. `203.0.113.1` is the hypervisor's own 100 Gbps link (a Mellanox
 card — the OUI `b8:59:9f` is the card's maker, not a machine). Everything this
 rack writes sits on **one ZFS pool, `data`**: the `hf_snapshots` and `models`
 exports, **and the zvols of every VM**, including the object store at
-`10.0.0.36` and the hub at `10.0.0.39`. The pool is rotational, at 74% capacity
+`192.0.2.36` and the hub at `192.0.2.39`. The pool is rotational, at 74% capacity
 and 40% fragmentation. That topology is a fact and it stays.
 
 **The rule "one pool writer at a time" is WITHDRAWN (owner, 2026-09-12 22:49),
@@ -178,7 +178,7 @@ entry 43.
 
 ### When the store says `SlowDownWrite` on every write
 
-Read `http://10.0.0.36:9000/minio/health/cluster` before anything else. `/live`
+Read `http://192.0.2.36:9000/minio/health/cluster` before anything else. `/live`
 and `/ready` answer 200 while the process is alive; **`/cluster` answers 503 when
 MinIO has marked its drive as hung**, and from then on every write returns
 `SlowDownWrite: Resource requested is unwritable` until the drive recovers or the
@@ -186,8 +186,8 @@ service restarts. Measured 2026-09-12: the network was 10 GbE to the store and
 200 GbE to the pool with 0.45 ms RTT, `eno1` was emitting 7 kB/s, and the upload
 crawled at 398 kB/s — the link was never the bottleneck, the store was refusing.
 
-The store is **VM 230 `storage-MNIO`** on the hypervisor `optimus`
-(`192.168.100.1` on the private link), disk `vm-storage:vm-230-disk-1`, 4 TB.
+The store is **VM 230 `storage-MNIO`** on the hypervisor `nas`
+(`203.0.113.1` on the private link), disk `vm-storage:vm-230-disk-1`, 4 TB.
 The hub is **VM 101 `NeuroBrix`**. When the guest is wedged in I/O its SSH port
 gives no banner and `qm guest cmd 230 ping` does not answer; a `qm stop` then
 needs SIGKILL and a `qm start` right after can fail with *"timeout waiting on

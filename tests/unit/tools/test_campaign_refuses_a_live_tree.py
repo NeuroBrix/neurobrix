@@ -2,7 +2,7 @@
 
 Written after paying for it. On 2026-09-10 a campaign was launched WITHOUT
 `--src`, which I read as "the tree measured is the trunk". It is not: the engine
-is installed editable and imports `/home/mlops/NeuroBrix_System/src/neurobrix/`,
+is installed editable and imports `~/NeuroBrix_System/src/neurobrix/`,
 so without `--src` a campaign measures the **live, mutable** repository. Three
 branch merges landed six minutes into its second cell, and every later cell
 would have measured a different tree from the first. Fourteen cells of card time
