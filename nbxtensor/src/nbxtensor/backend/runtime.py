@@ -39,23 +39,26 @@ def _environment_runtime_libs(package: str, names) -> list:
         return []
     import os
     root = list(spec.submodule_search_locations)[0]
+    from nbxtensor.backend.libnames import CUDA_RUNTIME_IN_WHEEL, WINDOWS
     out = []
     for n in names:
-        cand = os.path.join(root, "lib", n)
+        cand = os.path.join(root, CUDA_RUNTIME_IN_WHEEL[0], n)
         if os.path.exists(cand):
             out.append(cand)
+            if WINDOWS:                   # the DLL's own directory searched for what it loads
+                os.add_dll_directory(os.path.dirname(cand))
     return out
 
 
 # Runtime API mapping per backend
+from nbxtensor.backend import libnames as _LIB    # noqa: E402  the libraries as this system names them
 _GPU_BACKENDS = {
     "cuda": {
-        "rt_libs": _environment_runtime_libs("nvidia.cuda_runtime", ["libcudart.so.12"])
-                   + ["libcudart.so", "libcudart.so.12", "libcudart.so.11.0"],
+        "rt_libs": _environment_runtime_libs("nvidia.cuda_runtime", [_LIB.CUDA_RUNTIME_IN_WHEEL[1]]) + _LIB.CUDA_RUNTIME,
         # the driver API's library: the virtual memory primitives of the expandable pool (`memory.vmm`, R16)
-        "driver_libs": ["libcuda.so.1", "libcuda.so"],
+        "driver_libs": _LIB.CUDA_DRIVER,
         # the management library: what the driver attributes to THIS process on a device (`backend.process_memory`)
-        "management_libs": ["libnvidia-ml.so.1", "libnvidia-ml.so"],
+        "management_libs": _LIB.NVML,
         "pci_bus_id": "cudaDeviceGetPCIBusId",
         "malloc": "cudaMalloc", "free": "cudaFree",
         "memcpy": "cudaMemcpy", "memset": "cudaMemset",
@@ -100,7 +103,7 @@ _GPU_BACKENDS = {
         "device_enable_peer_access": "cudaDeviceEnablePeerAccess",
     },
     "hip": {
-        "rt_libs": ["libamdhip64.so", "libamdhip64.so.5"],
+        "rt_libs": _LIB.HIP_RUNTIME,
         # the same three facts as cuda's, declared ABSENT: the expandable pool speaks the CUDA driver's VMM calls only
         # (`memory.vmm`; HIP's hipMemCreate family is not wired), so a HIP device keeps its driver segments; and no
         # per-process accounting is read on ROCm (`backend.process_memory` answers None, the runtime's growth is not

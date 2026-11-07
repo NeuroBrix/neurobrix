@@ -19,6 +19,10 @@ five reference models through the entry point give the same outputs.
   `--accept-license`, which the import asks of a model with a license (the README's first run stopped there).
 
 ### Fixed
+- **A run starts on Windows**: the plan's resident term is read from the process's working set (GetProcessMemoryInfo)
+  where it needed /proc or libproc, and a first-launch read-rate measure Windows cannot make (no way to read past its
+  page cache) is declared unmeasured and the run reads serially, said on its launch line. Written and tested with Windows
+  simulated: the project has no Windows machine yet.
 - **Text in UTF-8 on every platform**: a generated text written to a file, the vendor tokenizer files read at load, the
   agent's file edits and transcript, and the console output now use UTF-8 where the platform's default code page is
   another (Windows' cp1252: a wrong vocabulary read silently, or a run ended by UnicodeEncodeError); a debug dump's file

@@ -70,7 +70,8 @@ class _CudaGraphAPI:
     _inst = None
 
     def __init__(self) -> None:
-        lib = ctypes.CDLL("libcuda.so.1")
+        from nbxtensor.backend.libnames import CUDA_DRIVER
+        lib = ctypes.CDLL(CUDA_DRIVER[0])
 
         def bind(name, argtypes):
             fn = getattr(lib, name)

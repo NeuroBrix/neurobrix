@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.0.5] - 2026-11-07
 
 ### Fixed
+- **The library runs on Windows**: weights are read at their offset without `os.preadv` (Windows' `ReadFile` with an
+  OVERLAPPED offset), the BLAS's thread control is found beside numpy (`numpy.libs`) instead of through /proc, and the
+  GPU libraries are opened by their Windows names (nvcuda.dll, cudart64_12.dll from the runtime wheel's `bin`, nvml.dll,
+  amdhip64_6.dll, ze_loader.dll, OpenCL.dll). Written and tested with Windows simulated: the project has no Windows
+  machine yet.
 - **`python -m nbxtensor doctor` on a Mac without Triton exits 1**: it named the fix and exited 0, so a script could
   not tell that nothing could run yet.
 - **The library imports on Windows**: its page size came from `os.sysconf`, which Windows does not have; and the code

@@ -278,7 +278,8 @@ def process_footprint_now() -> int:
     (`proc_pid_rusage`, `ri_phys_footprint` — what `footprint -f` reports and what a unified-memory
     guard kills on), never `ru_maxrss`, a high-water mark: the certifier read it ONCE at its start
     (425 MiB on the Mac, 2026-10-03) while the process sat at 1.1-1.7 GB between keys, so the door
-    admitted up to ~1 GB more than its budget. Anywhere else: refused by name (ZERO FALLBACK)."""
+    admitted up to ~1 GB more than its budget. Windows: the working set (psapi GetProcessMemoryInfo). Anywhere else:
+    refused by name (ZERO FALLBACK)."""
     import os
     import sys
     if sys.platform.startswith("linux"):
@@ -302,6 +303,24 @@ def process_footprint_now() -> int:
         if rc != 0:
             raise RuntimeError(f"ZERO FALLBACK: proc_pid_rusage returned {rc}")
         return int(info.ri_phys_footprint)
+    if sys.platform == "win32":
+        # the process's working set (psapi GetProcessMemoryInfo, through ctypes: psutil is no dependency) — the physical
+        # memory the process holds, the analogue of VmRSS
+        import ctypes
+        from ctypes import wintypes
+
+        class _Counters(ctypes.Structure):                          # <psapi.h>, PROCESS_MEMORY_COUNTERS
+            _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
+                        ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
+                        ("QuotaPeakPagedPoolUsage", ctypes.c_size_t), ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                        ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t), ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                        ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t)]
+        c = _Counters()
+        c.cb = ctypes.sizeof(_Counters)
+        process = ctypes.windll.kernel32.GetCurrentProcess()
+        if not ctypes.windll.psapi.GetProcessMemoryInfo(process, ctypes.byref(c), c.cb):
+            raise RuntimeError(f"ZERO FALLBACK: GetProcessMemoryInfo failed ({ctypes.windll.kernel32.GetLastError()})")
+        return int(c.WorkingSetSize)
     raise RuntimeError(f"ZERO FALLBACK: no reader of a process's footprint on {sys.platform}")
 
 

@@ -11,7 +11,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Sequence
 
-__all__ = ["PIECE", "WITNESS_BYTES", "START_BYTES", "mount_of", "pieces", "trial", "choose", "measure", "workers_for"]
+__all__ = ["PIECE", "WITNESS_BYTES", "START_BYTES", "mount_of", "pieces", "trial", "choose", "measure", "workers_for",
+           "can_bypass_the_cache"]
 
 PIECE = 16 << 20                       # the loaders' read piece
 
@@ -63,14 +64,21 @@ def pieces(files, max_bytes: int):
     return out, total
 
 
+def can_bypass_the_cache() -> bool:
+    """Whether this system lets a measure read past its page cache (macOS F_NOCACHE + msync, Linux posix_fadvise);
+    Windows offers neither through Python, and a rate read from the cache is not the storage's."""
+    return sys.platform == "darwin" or hasattr(os, "posix_fadvise")
+
+
 def trial(pieces, workers: int) -> float:
     """Bytes per second reading `pieces` with `workers` threads, the cache bypassed."""
+    from nbxtensor.io.safetensors import _read_at
     for path in {p for p, _, _ in pieces}:
         _evict(path, os.path.getsize(path))
     fds = {}
     for path, _, _ in pieces:
         if path not in fds:
-            fd = os.open(path, os.O_RDONLY)
+            fd = os.open(path, os.O_RDONLY | getattr(os, "O_BINARY", 0))
             _no_cache(fd)
             fds[path] = fd
     bufs = [bytearray(PIECE) for _ in range(workers)]
@@ -80,7 +88,7 @@ def trial(pieces, workers: int) -> float:
         buf = memoryview(bufs[i % workers])[:n]
         got = 0
         while got < n:
-            got += os.preadv(fds[path], [buf[got:]], off + got)
+            got += _read_at(fds[path], buf[got:], off + got)
         return n
 
     t = time.perf_counter()
@@ -146,6 +154,9 @@ def workers_for(directory, witness_dir=None, max_workers: Optional[int] = None,
     up to everything the files hold. When no size gives a stable measure, refused by name: never a silent None, never
     a default."""
     from pathlib import Path
+    if not can_bypass_the_cache():
+        raise RuntimeError(f"ZERO FALLBACK: no uncached read-rate measure on this system ({sys.platform}: no way to "
+                           f"read past the page cache) — no worker count is assumed")
     root = Path(directory)
     max_workers = max_workers or os.cpu_count() or 1
     files = [str(p) for p in sorted(root.glob(pattern), key=lambda p: -p.stat().st_size)[:4]]

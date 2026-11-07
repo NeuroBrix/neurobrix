@@ -488,14 +488,15 @@ class CudaDriver(_ModuleDriver):
 
     def __init__(self) -> None:
         lib = None
-        for name in ("libcuda.so.1", "libcuda.so"):
+        from nbxtensor.backend.libnames import CUDA_DRIVER
+        for name in CUDA_DRIVER:
             try:
                 lib = ctypes.CDLL(name)
                 break
             except OSError:
                 continue
         if lib is None:
-            raise RuntimeError("NeuroBrix launcher: libcuda not found")
+            raise RuntimeError(f"NeuroBrix launcher: the CUDA driver library not found (tried {CUDA_DRIVER})")
         self.lib = lib
         self._check(lib.cuInit(0), "cuInit")
         # ctypes infers the type of every argument at every call unless the signature is

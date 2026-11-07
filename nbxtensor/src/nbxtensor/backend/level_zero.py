@@ -27,7 +27,7 @@ import threading
 from typing import Dict, Optional, Tuple
 
 #: the Level Zero loader (`libze1` on Ubuntu), tried in order
-LIBS = ["libze_loader.so.1", "libze_loader.so"]
+from nbxtensor.backend.libnames import LEVEL_ZERO as LIBS   # noqa: E402
 
 # ZE_STRUCTURE_TYPE_* (ze.py)
 _ST_DRIVER_PROPERTIES, _ST_DEVICE_COMPUTE, _ST_QUEUE_GROUP, _ST_DEVICE_MEMORY = 0x1, 0x4, 0x6, 0x7
@@ -558,7 +558,7 @@ def runtime() -> LevelZeroRuntime:
 
 
 #: the OpenCL ICD loader (`ocl-icd-libopencl1`; Intel's runtime registers itself in it with intel-opencl-icd)
-OPENCL_LIBS = ["libOpenCL.so.1", "libOpenCL.so"]
+from nbxtensor.backend.libnames import OPENCL as OPENCL_LIBS   # noqa: E402
 _CL_DEVICE_TYPE_GPU, _CL_DEVICE_VENDOR_ID, _CL_DEVICE_EXTENSIONS, _CL_DEVICE_ID_INTEL = 4, 0x1001, 0x1030, 0x4251
 
 #: target facts Intel's compiler reads (intel/backend/compiler.py `parse_target`) -> the OpenCL extension that states

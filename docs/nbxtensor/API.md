@@ -2394,6 +2394,7 @@ def assemble_quantized(weights: dict)
 PIECE = 16 << 20                                   # the loaders' read piece
 def pieces(files, max_bytes) -> (list, int)        # (path, offset, bytes) pieces over `files`, and their total
 def trial(pieces, workers) -> float                # bytes/s reading them with `workers` threads, the cache evicted first
+def can_bypass_the_cache() -> bool                 # the system lets a measure read past its page cache (macOS, Linux; not Windows)
 def choose(rates, within) -> int                   # the smallest count within `within` of the best rate
 def measure(files, max_bytes, max_workers, within=0.05) -> dict
     # {'rates': {1: .., 2: .., 4: ..}, 'workers': choose(...), 'steady': bool, 'bytes': .., 'last_one_worker': ..}

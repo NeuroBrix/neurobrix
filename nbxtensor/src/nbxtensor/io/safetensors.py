@@ -37,6 +37,38 @@ def spans(n: int, unit: int, align: int, workers: int):
     return [(a, min(a + step, n)) for a in range(0, n, step)]
 
 
+def _read_at(fd: int, view: memoryview, offset: int) -> int:
+    """Read into `view` from the file's byte `offset`, at that offset and never through a shared file position (the
+    workers read one file at once): `os.preadv` where the system has it (Linux, macOS); on Windows, which has neither
+    preadv nor pread, `ReadFile` with an OVERLAPPED offset on the descriptor's handle — a positioned read. Returns the
+    bytes read (0 at the end of the file)."""
+    if hasattr(os, "preadv"):
+        return os.preadv(fd, [view], offset)
+    if hasattr(os, "pread"):
+        data = os.pread(fd, len(view), offset)
+        view[:len(data)] = data
+        return len(data)
+    import msvcrt
+    from ctypes import wintypes
+
+    class _Overlapped(ctypes.Structure):
+        _fields_ = [("Internal", ctypes.c_void_p), ("InternalHigh", ctypes.c_void_p), ("Offset", wintypes.DWORD),
+                    ("OffsetHigh", wintypes.DWORD), ("hEvent", wintypes.HANDLE)]
+
+    n = min(len(view), 0x7FFFFFFF)                   # one ReadFile reads at most a DWORD's worth
+    ov = _Overlapped(0, 0, offset & 0xFFFFFFFF, offset >> 32, None)
+    got = wintypes.DWORD(0)
+    buf = (ctypes.c_char * n).from_buffer(view)
+    ok = ctypes.windll.kernel32.ReadFile(wintypes.HANDLE(msvcrt.get_osfhandle(fd)), buf, n, ctypes.byref(got),
+                                         ctypes.byref(ov))
+    if not ok:
+        err = ctypes.windll.kernel32.GetLastError()
+        if err == 38:                                # ERROR_HANDLE_EOF: a read at or past the end
+            return 0
+        raise OSError(err, f"ReadFile at offset {offset} of fd {fd}")
+    return int(got.value)
+
+
 def read_bytes(fd: int, offset: int, nbytes: int, io) -> np.ndarray:
     """nbytes of the file at offset, read by the loader's workers into one buffer (page-aligned
     spans; `preadv` may return short, so each span reads until it is full)."""
@@ -46,7 +78,7 @@ def read_bytes(fd: int, offset: int, nbytes: int, io) -> np.ndarray:
     def _one(span):
         a, b = span
         while a < b:
-            got = os.preadv(fd, [view[a:b]], offset + a)
+            got = _read_at(fd, view[a:b], offset + a)
             if got <= 0:
                 raise RuntimeError(f"weight read: {nbytes} bytes at offset {offset} of fd {fd} ended "
                                    f"{b - a} bytes short (file truncated?)")

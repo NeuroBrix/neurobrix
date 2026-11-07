@@ -20,6 +20,7 @@ from __future__ import annotations
 import ctypes
 import functools
 import platform
+import sys
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -33,6 +34,16 @@ _OPENBLAS_GET = ("scipy_openblas_get_num_threads64_", "scipy_openblas_get_num_th
 
 
 def _loaded_openblas() -> Optional[str]:
+    if sys.platform == "win32":
+        # no /proc on Windows: numpy's wheel ships its OpenBLAS beside the package (`numpy.libs`, older wheels
+        # `numpy/.libs`), loaded with numpy; ctypes opening the same path returns the module already in the process
+        import numpy
+        root = Path(numpy.__file__).resolve().parent
+        for d in (root.parent / "numpy.libs", root / ".libs"):
+            hits = sorted(d.glob("*openblas*.dll")) if d.is_dir() else []
+            if hits:
+                return str(hits[0])
+        return None
     maps = Path("/proc/self/maps")
     if not maps.is_file():
         return None
