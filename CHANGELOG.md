@@ -22,6 +22,12 @@ a few Apple kernel settings for some models are certified in 0.6.2; until then t
   `--accept-license`, which the import asks of a model with a license (the README's first run stopped there).
 
 ### Fixed
+- **A first run on a new machine never ends in a Traceback because its arena probe ran out of memory**: the first launch
+  measures the Triton arena's hold on the cache's smallest model by doubling its request while a prediction says the
+  next fits; on an Apple GPU the prediction let a request through that the device could not hold, the probe's process
+  ran out of memory, and its error came back as the interpreter's shutdown noise ("UNEXPECTED ERROR" at the first
+  `neurobrix run`). The device's refusal is now the measure's bound (the largest request that fitted is kept), and the
+  probe's own error is said by name.
 - **A run starts on Windows**: the plan's resident term is read from the process's working set (GetProcessMemoryInfo)
   where it needed /proc or libproc, and a first-launch read-rate measure Windows cannot make (no way to read past its
   page cache) is declared unmeasured and the run reads serially, said on its launch line. Written and tested with Windows

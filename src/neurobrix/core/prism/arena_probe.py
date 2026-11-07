@@ -14,6 +14,12 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 MARK = "NBX-ARENA-PROBE "
+#: the allocator's refusal, word for word (nbxtensor.memory.allocator: "the message is unchanged to the byte")
+_OOM_TEXT = "GPU malloc failed"
+
+
+class ProbeOutOfMemory(RuntimeError):
+    """The probe's request did not fit the device: the measure's own upper bound, not a failure of the measure."""
 
 
 def smallest_container(cache: Path) -> Tuple[Path, str]:
@@ -120,14 +126,19 @@ def reloads(container_dir: str, component: str, hardware_id: str, engine: str, n
 
 
 def child(container_dir: str, component: str, hardware_id: str, scale) -> Dict[str, Any]:
-    """One probe in its own process (a clean allocator)."""
+    """One probe in its own process (a clean allocator). Its own exception comes back by name: a device that cannot
+    hold the request raises `ProbeOutOfMemory`, anything else a RuntimeError carrying the child's error — never the
+    tail of its stderr (the interpreter's shutdown noise hid the cause on a fresh Mac home, 2026-11-07)."""
     r = subprocess.run([sys.executable, "-m", __name__, container_dir, component, hardware_id, str(scale)],
                        capture_output=True, text=True, env=dict(os.environ))
     line = next((l for l in r.stdout.splitlines() if l.startswith(MARK)), None)
-    if r.returncode != 0 or line is None:
-        raise RuntimeError(f"the arena probe of {Path(container_dir).name}:{component} x{scale} failed: "
-                           f"{(r.stderr or r.stdout)[-400:]}")
-    return json.loads(line[len(MARK):])
+    got = json.loads(line[len(MARK):]) if line is not None else None
+    where = f"the arena probe of {Path(container_dir).name}:{component} x{scale}"
+    if got is not None and "error" in got:
+        raise (ProbeOutOfMemory if got.get("oom") else RuntimeError)(f"{where} failed: {got['error']}")
+    if r.returncode != 0 or got is None:
+        raise RuntimeError(f"{where} failed: {(r.stderr or r.stdout)[-400:]}")
+    return got
 
 
 def factor_on_card(usable_bytes: int, weight_bytes: int, run, reps: int, steady: float) -> Tuple[Optional[float], list]:
@@ -137,7 +148,11 @@ def factor_on_card(usable_bytes: int, weight_bytes: int, run, reps: int, steady:
     hold a small walk over-weights); (None, runs) when they disagree. `run(scale)` -> {hold_bytes, walked_bytes}."""
     scale, last = 1, run(1)
     while weight_bytes + 4 * last["hold_bytes"] <= usable_bytes:
-        scale, last = scale * 2, run(scale * 2)
+        try:
+            nxt = run(scale * 2)
+        except ProbeOutOfMemory:
+            break               # the device's own bound (the 4x prediction under-sized it): the largest that fitted
+        scale, last = scale * 2, nxt
     runs = [last] + [run(scale) for _ in range(reps - 1)]
     ratios = sorted(r["hold_bytes"] / r["walked_bytes"] for r in runs)
     return (ratios[len(ratios) // 2] if ratios[-1] <= ratios[0] * (1 + steady) else None), runs
@@ -147,4 +162,10 @@ if __name__ == "__main__":
     if sys.argv[4:5] and sys.argv[4] in ("triton", "compiled"):     # the reload probe: `<dir> <component> <hw> <engine>`
         print(MARK + json.dumps(reloads(*sys.argv[1:5])), flush=True)
     else:
-        print(MARK + json.dumps(measure(sys.argv[1], sys.argv[2], sys.argv[3], *(int(a) for a in sys.argv[4:5]))), flush=True)
+        try:
+            out = measure(sys.argv[1], sys.argv[2], sys.argv[3], *(int(a) for a in sys.argv[4:5]))
+        except Exception as exc:          # said to the parent by name: the cause, and whether the device was too small
+            print(MARK + json.dumps({"error": f"{type(exc).__name__}: {str(exc)[:600]}", "oom": _OOM_TEXT in str(exc)}),
+                  flush=True)
+            sys.exit(3)
+        print(MARK + json.dumps(out), flush=True)

@@ -109,6 +109,7 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | 2026-11-07 | (no move) The RATCHET RAISED by +28 lines: every directory under the engine's home follows a configured NEUROBRIX_HOME (`core.paths.engine_home`, read by the module constants of the replay cache, the license acceptances, the hardware profiles, the calibration store, the render checkpoints, the daemon, drift and the certifier's rig protocol; the library's replay cache told at import) and doctor's PyTorch line on a Mac (the Mac's new-user run 2026-11-07) |
 | 2026-11-07 | (no move) The RATCHET RAISED by +19 lines: the simple half of the Windows audit (`cli._utf8_streams`; the install lock's liveness asked of the kernel on Windows in `nbx.atomic_install`; a debug dump's file name sanitized; text files in UTF-8) |
 | 2026-11-07 | (no move) The RATCHET RAISED by +19 lines: the plan's resident term on Windows (`host_footprint.process_footprint_now` reads the working set through psapi; the supervisor 04:50, the audit's defect 3) |
+| 2026-11-07 | (no move) The RATCHET RAISED by +21 lines: a first launch's arena probe that the device cannot hold bounds the measure instead of ending the run (`arena_probe.ProbeOutOfMemory`, the child's error said by name; the Mac's trial M of 0.6.1) |
 
 ## Kept in the engine
 
@@ -120,6 +121,7 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | wrapper | src/neurobrix/core/strategies/base.py | synchronize_device | polymorphic: both branches' bases define it (the Triton one through DeviceAllocator), and the shared steps call it on self (2026-11-02) |
 | wrapper | src/neurobrix/core/strategies/shared_steps.py | cleanup | polymorphic: the flows call `cleanup()` on every strategy, this one empties the loaded set (2026-11-02) |
 | wrapper | src/neurobrix/core/strategies/layer_streaming.py | _nbx_path | a test seam: six streaming tests stub it to run card-less (2026-11-02) |
+| wrapper | src/neurobrix/core/prism/arena_probe.py | ProbeOutOfMemory | the arena probe's child process says by name that the device could not hold its request — the measure's bound, crossing a process boundary as text; the library's DeviceOOMError is raised in the child, its figures do not travel (2026-11-07) |
 | duplicate | src/neurobrix/core/optim/passes/algebraic.py | _scalar | nbxtensor's twin is a function local to its residual-chain reader: the library exposes nothing to import, and the library never imports the engine |
 | wrapper | src/neurobrix/core/cfg/engine.py | execute_component_with_cfg | the CFG engine's public entry, called by both iterative handlers; the Triton engine's converts its inputs at the boundary first, so the two are not one |
 | wrapper | src/neurobrix/_nbxtensor_host.py | active | a host service registered into nbxtensor.host: it imports its engine module when the library first calls it, not at registration (no engine import, no torch, at nbxtensor's load) |

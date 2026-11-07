@@ -102,3 +102,38 @@ def test_the_probe_sizes_a_unified_device_by_its_memory_and_a_card_by_its_runtim
     assert seen == [18186 << 20, 15845 << 20]
     with pytest.raises(RuntimeError, match="memory_mb on a unified device"):
         AD._measure_arena_factor("hw", {"memory_mb": 16384})
+
+
+def test_a_probe_the_device_cannot_hold_bounds_the_measure(monkeypatch):
+    # a fresh Mac home (2026-11-07): the 4x prediction let x32 run, the child ran out of memory and the first
+    # `neurobrix run` ended in a Traceback — the device's refusal is the measure's bound: the runs stay at x16
+    from neurobrix.core.prism import arena_probe as A
+    GB = 1 << 30
+    calls = []
+
+    def run(k):
+        calls.append(k)
+        if k >= 32:
+            raise A.ProbeOutOfMemory("the arena probe of m:c x32 failed: DeviceOOMError: GPU malloc failed (error 2)")
+        return {"hold_bytes": 0.01 * GB * k, "walked_bytes": 0.008 * GB * k}
+    factor, runs = A.factor_on_card(18 * GB, 0, run, 3, 0.05)
+    assert calls == [1, 2, 4, 8, 16, 32, 16, 16] and factor == pytest.approx(0.01 / 0.008)
+
+
+def test_the_child_says_its_own_error(monkeypatch, tmp_path):
+    from neurobrix.core.prism import arena_probe as A
+    import json
+    import subprocess
+
+    def fake(args, **k):
+        payload = {"error": "DeviceOOMError: GPU malloc failed (error 2) for 3932160000 bytes", "oom": True}
+        return subprocess.CompletedProcess(args, 3, stdout=A.MARK + json.dumps(payload) + "\n",
+                                           stderr="Exception ignored in: <function NBXTensor.__del__> sys.meta_path is None")
+    monkeypatch.setattr(A.subprocess, "run", fake)
+    with pytest.raises(A.ProbeOutOfMemory, match="GPU malloc failed .* 3932160000 bytes"):
+        A.child(str(tmp_path), "c", "hw", 32)
+    monkeypatch.setattr(A.subprocess, "run", lambda args, **k: subprocess.CompletedProcess(
+        args, 3, stdout=A.MARK + json.dumps({"error": "KeyError: 'x'", "oom": False}) + "\n", stderr="noise"))
+    with pytest.raises(RuntimeError, match="KeyError: 'x'") as e:
+        A.child(str(tmp_path), "c", "hw", 1)
+    assert not isinstance(e.value, A.ProbeOutOfMemory)
