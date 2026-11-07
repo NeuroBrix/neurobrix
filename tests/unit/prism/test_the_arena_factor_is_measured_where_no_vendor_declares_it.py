@@ -227,3 +227,31 @@ def test_the_probe_is_taken_on_a_spatial_component_else_on_a_models_whole_walk(m
     assert A.smallest_container(tmp_path) == (llm, "model")          # the whole decoder, not the lone projection
     up = model("upscaler", {"model": (1000, spatial)})
     assert A.smallest_container(tmp_path) == (up, "model")           # a spatial component wins wherever it is
+
+
+def test_the_probe_never_sweeps_a_missing_key_bounds_it(monkeypatch, tmp_path):
+    # 0.6.2: a probe that swept took a fresh Mac's first run to 42 minutes (148 uncertified keys, 2026-11-07): the child
+    # runs certified-only, and a key it cannot be served bounds the measure like the device's own refusal
+    from neurobrix.core.prism import arena_probe as A
+    import json
+    import subprocess
+    envs = []
+
+    def fake(args, **k):
+        envs.append(k["env"].get("NBX_AUTOTUNE_CERTIFIED_ONLY"))
+        payload = {"error": "KeyNotCertified: CERTIFIED-ONLY: no certified setting for conv2d", "oom": False,
+                   "uncertified": True}
+        return subprocess.CompletedProcess(args, 3, stdout=A.MARK + json.dumps(payload) + "\n", stderr="")
+    monkeypatch.setattr(A.subprocess, "run", fake)
+    with pytest.raises(A.ProbeUncertified, match="CERTIFIED-ONLY"):
+        A.child(str(tmp_path), "c", "hw", 4)
+    assert envs == ["1"]
+    calls = []
+
+    def run(k):
+        calls.append(k)
+        if k >= 8:
+            raise A.ProbeUncertified("x8: KeyNotCertified")
+        return {"hold_bytes": 1.4 * k, "walked_bytes": 1.0 * k}
+    factor, _ = A.factor_on_card(1 << 40, 0, run, 3, 0.05)
+    assert calls == [1, 2, 4, 8, 4, 4] and factor == pytest.approx(1.4)

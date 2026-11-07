@@ -113,6 +113,7 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | 2026-11-07 | (no move) The RATCHET RAISED by +51 lines: the arena probe scales only what the priced request scales and is taken on a spatial component, else a model's whole sequence walk (`arena_probe.scaled_names`, `smallest_container`; a fresh Mac measured 28.27 where its factor is about 1.5) |
 | 2026-11-07 | (no move) The RATCHET RAISED by +11 lines: the arena factor declared by the device's vendor file, else its family (`core/config/loader.declared_arena_factor`, `vendors/family_facts.yml`), never probed at a user's first run (the supervisor 12:00) |
 | 2026-11-07 | (no move) The RATCHET RAISED by +4 lines: the certifier's price door prices the key drawn on a unified device, not the key filed (`autotune_certify.synthesize`; the open element class refused at 2.2 TB on the Mac's re-proof) |
+| 2026-11-07 | (no move) The RATCHET RAISED by +9 lines: the arena probe runs certified-only and a missing key bounds it (`arena_probe.ProbeUncertified`): a probe never sweeps |
 
 ## Kept in the engine
 
@@ -125,6 +126,7 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | wrapper | src/neurobrix/core/strategies/shared_steps.py | cleanup | polymorphic: the flows call `cleanup()` on every strategy, this one empties the loaded set (2026-11-02) |
 | wrapper | src/neurobrix/core/strategies/layer_streaming.py | _nbx_path | a test seam: six streaming tests stub it to run card-less (2026-11-02) |
 | wrapper | src/neurobrix/core/prism/arena_probe.py | ProbeOutOfMemory | the arena probe's child process says by name that the device could not hold its request — the measure's bound, crossing a process boundary as text; the library's DeviceOOMError is raised in the child, its figures do not travel (2026-11-07) |
+| wrapper | src/neurobrix/core/prism/arena_probe.py | ProbeUncertified | the arena probe's child says by name that its request formed a key the certified directory does not serve — the measure's bound, crossing a process boundary as text; the library's KeyNotCertified is raised in the child (2026-11-07) |
 | duplicate | src/neurobrix/core/optim/passes/algebraic.py | _scalar | nbxtensor's twin is a function local to its residual-chain reader: the library exposes nothing to import, and the library never imports the engine |
 | wrapper | src/neurobrix/core/cfg/engine.py | execute_component_with_cfg | the CFG engine's public entry, called by both iterative handlers; the Triton engine's converts its inputs at the boundary first, so the two are not one |
 | wrapper | src/neurobrix/_nbxtensor_host.py | active | a host service registered into nbxtensor.host: it imports its engine module when the library first calls it, not at registration (no engine import, no torch, at nbxtensor's load) |

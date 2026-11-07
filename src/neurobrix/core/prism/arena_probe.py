@@ -22,6 +22,12 @@ class ProbeOutOfMemory(RuntimeError):
     """The probe's request did not fit the device: the measure's own upper bound, not a failure of the measure."""
 
 
+class ProbeUncertified(ProbeOutOfMemory):
+    """The probe's request formed a kernel key the certified directory does not serve: the probe runs certified-only
+    and never sweeps (a probe that swept took a fresh Mac's first run to 42 minutes, 2026-11-07), so the largest
+    request whose keys are all certified is its bound — the same bound as the device's own refusal."""
+
+
 _SPATIAL = ("height", "width")
 
 
@@ -177,13 +183,15 @@ def child(container_dir: str, component: str, hardware_id: str, scale) -> Dict[s
     """One probe in its own process (a clean allocator). Its own exception comes back by name: a device that cannot
     hold the request raises `ProbeOutOfMemory`, anything else a RuntimeError carrying the child's error — never the
     tail of its stderr (the interpreter's shutdown noise hid the cause on a fresh Mac home, 2026-11-07)."""
+    env = dict(os.environ, NBX_AUTOTUNE_CERTIFIED_ONLY="1")        # never a sweep: a missing key bounds the measure
     r = subprocess.run([sys.executable, "-m", __name__, container_dir, component, hardware_id, str(scale)],
-                       capture_output=True, text=True, env=dict(os.environ))
+                       capture_output=True, text=True, env=env)
     line = next((l for l in r.stdout.splitlines() if l.startswith(MARK)), None)
     got = json.loads(line[len(MARK):]) if line is not None else None
     where = f"the arena probe of {Path(container_dir).name}:{component} x{scale}"
     if got is not None and "error" in got:
-        raise (ProbeOutOfMemory if got.get("oom") else RuntimeError)(f"{where} failed: {got['error']}")
+        kind = ProbeUncertified if got.get("uncertified") else ProbeOutOfMemory if got.get("oom") else RuntimeError
+        raise kind(f"{where} failed: {got['error']}")
     if r.returncode != 0 or got is None:
         raise RuntimeError(f"{where} failed: {(r.stderr or r.stdout)[-400:]}")
     return got
@@ -214,7 +222,8 @@ if __name__ == "__main__":
         try:
             out = measure(sys.argv[1], sys.argv[2], sys.argv[3], *(int(a) for a in sys.argv[4:5]))
         except Exception as exc:          # said to the parent by name: the cause, and whether the device was too small
-            print(MARK + json.dumps({"error": f"{type(exc).__name__}: {str(exc)[:600]}", "oom": _OOM_TEXT in str(exc)}),
-                  flush=True)
+            print(MARK + json.dumps({"error": f"{type(exc).__name__}: {str(exc)[:600]}", "oom": _OOM_TEXT in str(exc),
+                                     "uncertified": type(exc).__name__ == "KeyNotCertified"
+                                     or "CERTIFIED-ONLY" in str(exc)}), flush=True)
             sys.exit(3)
         print(MARK + json.dumps(out), flush=True)
