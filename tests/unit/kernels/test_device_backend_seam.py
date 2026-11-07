@@ -37,9 +37,10 @@ import nbxtensor.memory.allocator as _nbx_allocator
 # table, its resolution, the runtime library's loader). Each is read on its own and checked against its own spans.
 import nbxtensor.backend.capabilities as _nbx_capabilities
 import nbxtensor.backend.faults as _nbx_faults
+import nbxtensor.backend.libnames as _nbx_libnames     # the seam's table of the vendor libraries' names per system
 SEAM_FILES = (Path(inspect.getfile(nbx_tensor)), Path(inspect.getfile(_nbx_allocator)),
               Path(inspect.getfile(_nbx_runtime)), Path(inspect.getfile(_nbx_capabilities)),
-              Path(inspect.getfile(_nbx_faults)))
+              Path(inspect.getfile(_nbx_faults)), Path(inspect.getfile(_nbx_libnames)))
 SOURCE = Path(inspect.getfile(nbx_tensor)).read_text()
 
 # Names that reach the device runtime. Anything calling these is coupled to
