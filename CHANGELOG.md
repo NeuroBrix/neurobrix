@@ -7,11 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-11-07
+
+The Apple certified directory complete under the published Triton build for Apple GPUs: the settings 0.6.1 left to a
+first-run tuning are certified, and the arena probe never tunes a kernel.
+
 ### Fixed
 - **The kernel certifier prices the size it draws**: on a unified-memory device (Apple) a key is drawn at the size its
   phase price fits, but the door before any draw priced it at its recorded top — the open element-wise class (its label,
   68 719 476 736 elements) asked 2.2 TB of an 18 GB Mac and was refused at every re-proof, so a new Mac tuned it once at
   its first Sana run.
+- **The arena probe never tunes a kernel**: run as a tool, it reads only certified kernel settings; a request that would
+  need a setting the directory does not serve is the measure's bound, never a tuning at run time.
 
 ## [0.6.1] - 2026-11-07
 
@@ -6189,7 +6196,8 @@ First stable release of NeuroBrix — universal deep learning inference engine.
 - Zip-slip path traversal validation in registry import
 - Safe arithmetic parser replacing `eval()` in shape resolver
 
-[Unreleased]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.1...main
+[Unreleased]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.2...main
+[0.6.2]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/NeuroBrix/neurobrix/compare/v0.5.4...v0.6.0
 [0.5.4]: https://github.com/NeuroBrix/neurobrix/compare/v0.5.3...v0.5.4
