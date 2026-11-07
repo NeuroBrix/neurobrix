@@ -1,6 +1,7 @@
 """The Triton arena's factor is a measured fact (the owner, 2026-11-02 15:01): a vendor file's declared measurement
-stands; a card the vendor files do not know measures itself at its first launch (core/prism/arena_probe) and Prism
-reads that; with neither the plan is refused naming the probe. The probe doubles its request while the component still
+stands; else its family's (vendors/family_facts.yml, each with its source — the supervisor 2026-11-07 12:00: a first
+launch never probes it any more, a probe on whatever a user imported gave 1.4 to 28 and swept uncertified kernels);
+with neither the plan is refused by name. The probe (a tool now; bounded to census shapes in 0.6.2) doubles its request while the component still
 fits the card and keeps the ratio at the largest that fits, three runs within the storage measure's steadiness (on a
 V100-16GB, HAT-S_SRx4: 3.50 at x1, 2.39 at x2, 1.48 at x4 — a fixed hold a small walk over-weights).
 
@@ -33,13 +34,31 @@ def test_a_vendor_declaration_stands_over_a_measured_fact(monkeypatch):
     assert _factor(monkeypatch, 1.35, {"triton_arena_activation_factor": 1.476}) == 1.35
 
 
-def test_an_unknown_card_reads_its_measured_fact(monkeypatch):
-    assert _factor(monkeypatch, None, {"triton_arena_activation_factor": 1.476}) == 1.476
+def test_an_undeclared_card_reads_its_family_never_a_first_launch_measure(monkeypatch):
+    # the supervisor 2026-11-07 12:00: a measure taken at a user's first run on whatever was imported came out 1.4 to
+    # 28 (a fresh Mac: 28.27, then 2.37) — the family's declaration (vendors/family_facts.yml) is read instead
+    assert _factor(monkeypatch, None, {"triton_arena_activation_factor": 28.266}) == 1.35      # nvidia: Volta's
 
 
-def test_with_neither_the_plan_is_refused_naming_the_probe(monkeypatch):
-    with pytest.raises(S.PlanNotComputable, match="arena_probe"):
-        _factor(monkeypatch, None, {})
+def test_a_family_nobody_declares_is_refused_by_name(monkeypatch):
+    monkeypatch.setattr("neurobrix.core.config.loader.vendor_config_for_device",
+                        lambda *a, **k: {"memory": {"triton_arena_activation_factor": None}})
+    dev = types.SimpleNamespace(brand="unknownvendor", architecture="x", compute_capability="0.0", name="X",
+                                measured={"triton_arena_activation_factor": 1.4}, memory_mb=1, device_string="cuda:0")
+    with pytest.raises(S.PlanNotComputable, match="nor the unknownvendor family declares it"):
+        S.PrismSolver()._triton_arena_factor(types.SimpleNamespace(spec=dev))
+
+
+@pytest.mark.parametrize("brand, arch, cc, model, expect", [
+    ("apple", "apple-m2", "0.0", "Apple M2", 1.477),            # an Apple chip whose file declares none: the family
+    ("nvidia", "ampere", "8.6", "NVIDIA RTX A6000", 1.35),
+    ("amd", "rdna3", "0.0", "AMD Radeon RX 7900", 1.35),
+    ("nvidia", "volta", "7.0", "Tesla V100-SXM2-32GB", 1.35),   # Volta's own file
+])
+def test_every_family_has_a_declared_factor(brand, arch, cc, model, expect):
+    from neurobrix.core.config.loader import declared_arena_factor
+    value, why = declared_arena_factor(brand, arch, cc, model=model)
+    assert value == expect, why
 
 
 def _runs(hold_walk):
@@ -68,7 +87,8 @@ def test_disagreeing_runs_write_nothing():
     assert factor is None
 
 
-def test_the_first_launch_probes_only_where_no_vendor_declares(monkeypatch, tmp_path):
+def test_a_first_launch_never_probes_the_arena(monkeypatch, tmp_path):
+    # 0.6.1: no probe at a user's first run, declared or not (the bounded probe on census shapes is 0.6.2's)
     from neurobrix.core.prism import autodetect as AD
     from neurobrix.core.prism import facts_probe as P
     import yaml
@@ -82,7 +102,7 @@ def test_the_first_launch_probes_only_where_no_vendor_declares(monkeypatch, tmp_
     (tmp_path / "default-x.yml").write_text(yaml.safe_dump(spec))
     probed = []
     monkeypatch.setattr(AD, "_measure_arena_factor", lambda hw, d: probed.append(hw) or 1.5)
-    for declared, expect in ((1.35, []), (None, ["default-x"])):
+    for declared, expect in ((1.35, []), (None, [])):
         monkeypatch.setattr("neurobrix.core.config.loader.vendor_config_for_device",
                             lambda *a, _v=declared, **k: {"memory": {"triton_arena_activation_factor": _v}})
         probed.clear()

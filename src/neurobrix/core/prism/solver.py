@@ -2099,7 +2099,7 @@ class PrismSolver:
         device it is judged on measured it (`memory.triton_arena_activation_factor`): `on`'s, else the planned
         profile's smallest device (the one a whole component is judged on first). Unmeasured (null or absent): the
         plan is refused by name — a factor carried from another device is a guess wearing a number."""
-        from neurobrix.core.config.loader import vendor_config_for_device
+        from neurobrix.core.config.loader import declared_arena_factor
         dev = getattr(on, "spec", None)
         if dev is None:
             profile = getattr(self, "_planned_profile", None)
@@ -2110,17 +2110,14 @@ class PrismSolver:
                                         "component is judged on, and this plan names no accelerator")
             dev = min(devices, key=lambda d: d.memory_mb)
         brand = getattr(getattr(dev, "brand", None), "value", getattr(dev, "brand", None))
-        value = ((vendor_config_for_device(brand, dev.architecture, getattr(dev, "compute_capability", None),
-                                           model=getattr(dev, "name", None)).get("memory") or {})
-                 .get("triton_arena_activation_factor"))
-        if value is None:       # a card the vendor files do not know measures itself at its first launch
-            value = (getattr(dev, "measured", None) or {}).get("triton_arena_activation_factor")
+        # the device's vendor file, else its family's (vendors/family_facts.yml); a factor a first launch measured into a
+        # generated profile is not read: measured on whatever the user had imported, it came out between 1.4 and 28
+        value, why = declared_arena_factor(brand, dev.architecture, getattr(dev, "compute_capability", None),
+                                           model=getattr(dev, "name", None))
         if value is None:
             raise PlanNotComputable(
-                f"{getattr(getattr(dev, 'brand', None), 'value', getattr(dev, 'brand', '?'))}/{dev.architecture}: no "
-                f"measured memory.triton_arena_activation_factor (what the Triton arena holds over the walked activations "
-                f"while a component runs whole) in its vendor file nor in the generated profile, so no Triton plan is "
-                f"priced on it: a launch without --hardware measures it (core/prism/arena_probe)")
+                f"{brand}/{dev.architecture}: no memory.triton_arena_activation_factor (what the Triton arena holds over "
+                f"the walked activations while a component runs whole): {why}, so no Triton plan is priced on it")
         return float(value)
 
     def _phase_peak_carried_mb(self, container, costs: Dict[str, int]) -> float:

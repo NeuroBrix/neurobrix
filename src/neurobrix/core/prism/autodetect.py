@@ -2625,15 +2625,9 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None) -> dic
         data = yaml.safe_load(path.read_text()) or {}          # what the probe's process wrote
         devices = data.get("devices") or []
         first = {**measured_of(devices[0]), **first}
-    if engine == "triton" and "triton_arena_activation_factor" not in first:
-        # the Triton arena's hold over a large walk, on a card its vendor file does not declare (the owner 2026-11-02
-        # 15:01): measured by core/prism/arena_probe, written when three runs agree within the reload's steadiness
-        from neurobrix.core.config.loader import vendor_config_for_device
-        d0 = devices[0]
-        if (vendor_config_for_device(d0.get("brand"), d0.get("architecture"), d0.get("compute_capability"),
-                                     model=d0.get("model")).get("memory") or {}).get("triton_arena_activation_factor") is None:
-            first["triton_arena_activation_factor"] = _measure_arena_factor(hardware_id, d0)
-            added["triton_arena_activation_factor"] = first["triton_arena_activation_factor"]
+    # the Triton arena's factor is never measured at a user's first run (the supervisor 2026-11-07 12:00): its vendor
+    # file or its family declares it (core/config/loader.declared_arena_factor); a probe on whatever the user imported
+    # measured 1.4 to 28 and swept uncertified kernels for 40 minutes. The bounded probe (census shapes) is 0.6.2's.
     if engine == "triton" and "expert_copy" not in first and devices[0].get("unified_memory"):
         # a unified device maps the host's experts in place (Prism's Strategy 2.5, core/runtime/expert_files.py): the
         # card-side miss copy is not its path, and its launch (Triton's own, host addresses in the tables) does not bind

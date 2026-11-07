@@ -1,0 +1,16 @@
+# The facts of a vendor FAMILY, read where the device's own vendor file (its architecture or chip) declares none; an
+# architecture's value always comes first. Each value with its source (the supervisor's decision 2026-11-07 12:00: a
+# first `neurobrix run` never measures these — a probe on whatever the user imported gave unstable values and swept kernels).
+triton_arena_activation_factor:    # what the Triton arena holds over the walked activations while a component runs whole
+  apple:
+    value: 1.477
+    source: "measured on the Apple M4 Pro (core/prism/arena_probe, the first launch of TinyLlama triton), 2026-11-03"
+  nvidia:
+    value: 1.35
+    source: "measured on Volta (vendors/nvidia/volta.yml)"
+  amd:
+    value: 1.35
+    source: "family default, not measured: the NVIDIA value until an AMD card measures its own"
+  intel:
+    value: 1.35
+    source: "family default, not measured: the NVIDIA value until an Intel card measures its own"

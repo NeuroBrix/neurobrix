@@ -28,12 +28,14 @@ a few Apple kernel settings for some models are certified in 0.6.2; until then t
   ran out of memory, and its error came back as the interpreter's shutdown noise ("UNEXPECTED ERROR" at the first
   `neurobrix run`). The device's refusal is now the measure's bound (the largest request that fitted is kept), and the
   probe's own error is said by name.
-- **A new machine's arena factor is measured as Prism prices it**: the first launch's probe scaled the two last axes of
-  every input of the cache's smallest model while the request Prism prices scaled only its height and width — on a
-  decoder (whisper's, the smallest model of a fresh Mac's cache) the batch and the hidden width grew and the factor came
-  out at 28 where the machine's is about 1.5, so Prism reserved some 19 times the activation memory on every new Mac.
-  The probe now scales only the dimensions the priced request scales, on the cache's smallest spatial component, else
-  on a model's whole sequence walk (TinyLlama's decoder: 1.38 on a V100, HAT-S: 1.37, the declared Volta factor 1.35).
+- **A new machine's first run does not measure the Triton arena**: the first launch probed what the Triton arena holds
+  over a component's activations on the cache's smallest model, and that probe scaled its inputs unlike the request
+  Prism prices: on a fresh Mac it measured 28 where the machine's value is about 1.5, so Prism reserved some 19 times the
+  activation memory, and once corrected it still depended on the model imported (2.4 on a VAE) and swept uncertified
+  kernels for 40 minutes. The factor is now declared — by the device's vendor file, else by its family (Apple 1.477,
+  measured on an M4 Pro; NVIDIA 1.35, measured on Volta; AMD and Intel the NVIDIA value until measured) — and a first
+  run never probes it; a value an earlier first launch wrote into a profile is no longer read. The probe scales only what
+  the priced request scales (a tool, until it is bounded to certified shapes).
 - **A run starts on Windows**: the plan's resident term is read from the process's working set (GetProcessMemoryInfo)
   where it needed /proc or libproc, and a first-launch read-rate measure Windows cannot make (no way to read past its
   page cache) is declared unmeasured and the run reads serially, said on its launch line. Written and tested with Windows

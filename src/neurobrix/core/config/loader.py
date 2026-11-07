@@ -16,7 +16,7 @@ import copy
 import os
 import yaml
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 from functools import lru_cache
 
 
@@ -119,6 +119,26 @@ def vendor_config_for_device(vendor: str, architecture: Optional[str], compute_c
     if not architecture:
         raise UnsupportedArchitectureError(f"no vendor file describes {vendor!r} (compute capability {wanted or '?'}) and the device names no architecture")
     return get_vendor_config(vendor, str(architecture))
+
+
+def declared_arena_factor(vendor: str, architecture: Optional[str], compute_capability: Optional[str],
+                          model: Optional[str] = None) -> Tuple[Optional[float], str]:
+    """(the Triton arena's activation factor of a device, where it comes from): its vendor file's
+    `memory.triton_arena_activation_factor` (the architecture or chip), else its family's (`vendors/family_facts.yml`),
+    else (None, why). Never measured at a user's first run (the supervisor 2026-11-07 12:00)."""
+    import yaml
+    try:
+        own = (vendor_config_for_device(vendor, architecture, compute_capability, model=model).get("memory") or {})
+        value = own.get("triton_arena_activation_factor")
+    except UnsupportedArchitectureError:
+        value = None
+    if value is not None:
+        return float(value), f"vendors/{vendor}/{architecture}"
+    fam = ((yaml.safe_load((CONFIG_ROOT / "vendors" / "family_facts.yml").read_text()) or {})
+           .get("triton_arena_activation_factor") or {}).get(str(vendor))
+    if fam and fam.get("value") is not None:
+        return float(fam["value"]), f"the {vendor} family: {fam.get('source')}"
+    return None, f"neither the vendor file of {vendor}/{architecture} nor the {vendor} family declares it"
 
 
 def get_vendor_config(vendor: str, architecture: str) -> Dict[str, Any]:
