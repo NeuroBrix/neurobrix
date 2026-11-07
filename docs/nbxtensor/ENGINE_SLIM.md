@@ -114,6 +114,7 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | 2026-11-07 | (no move) The RATCHET RAISED by +11 lines: the arena factor declared by the device's vendor file, else its family (`core/config/loader.declared_arena_factor`, `vendors/family_facts.yml`), never probed at a user's first run (the supervisor 12:00) |
 | 2026-11-07 | (no move) The RATCHET RAISED by +4 lines: the certifier's price door prices the key drawn on a unified device, not the key filed (`autotune_certify.synthesize`; the open element class refused at 2.2 TB on the Mac's re-proof) |
 | 2026-11-07 | (no move) The RATCHET RAISED by +9 lines: the arena probe runs certified-only and a missing key bounds it (`arena_probe.ProbeUncertified`): a probe never sweeps |
+| 2026-11-07 | (no move) The RATCHET RAISED by +34 lines: the certifier uploads a row-windowed key's draw once and keeps only the oracle's windows on the host (`autotune_certify._HostWindows`, `_oracle_rows`; price_key counts the windows): HAT-L/S and mochi keys refused at 20-33 GB of an 18 GB Mac |
 
 ## Kept in the engine
 

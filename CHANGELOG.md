@@ -17,6 +17,10 @@ first-run tuning are certified, and the arena probe never tunes a kernel.
   phase price fits, but the door before any draw priced it at its recorded top — the open element-wise class (its label,
   68 719 476 736 elements) asked 2.2 TB of an 18 GB Mac and was refused at every re-proof, so a new Mac tuned it once at
   its first Sana run.
+- **The kernel certifier holds only what its oracle reads**: a row-windowed oracle (softmax, layer and RMS norms, group
+  norm) reads three windows of rows, but the certifier kept the whole host draw for it and uploaded it again at every
+  call; on a unified-memory Mac the draw and its device copy share one pool, and the largest keys of HAT-L, HAT-S and
+  mochi were refused (20-33 GB asked of 18). The draw is now uploaded once and only its windows' rows stay on the host.
 - **The arena probe never tunes a kernel**: run as a tool, it reads only certified kernel settings; a request that would
   need a setting the directory does not serve is the measure's bound, never a tuning at run time.
 

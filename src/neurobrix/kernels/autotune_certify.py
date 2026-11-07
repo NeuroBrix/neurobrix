@@ -732,6 +732,10 @@ def price_key(qual: str, tuner, key: tuple) -> Optional[Dict[str, int]]:
         wins = _row_windows(m, n, _SOFTMAX_ORACLE_F64_ARRAYS * 8)          # the oracle's own windows (bytes)
         rows = m if wins is None else wins[0][1] - wins[0][0]
         kept = (m if wins is None else len(wins) * rows) * n * 8           # the windows' fp64 results (whole: all)
+        if wins is not None:
+            # the draw is on the device once and the host keeps only the windows' rows (`_oracle_rows`), as numbers
+            _, xs, xdt = ops["inputs"][0]
+            draws += len(wins) * rows * n * (4 if xdt == "bf16" else _draw_bytes(xdt)) - E(xs) * _draw_bytes(xdt)
         oracle = kept + rows * n * 8 * (1 + _SOFTMAX_ORACLE_F64_ARRAYS)
         deviation = kept + kept // 8 * (4 + 8)                             # the windows' readback and cast
         return {"draws": draws, "device": device, "oracle": oracle, "deviation": deviation,
@@ -1090,6 +1094,29 @@ def _gemv_oracle_fn(mat, vec, bias=None):
             out[r0:r0 + rows] = _f64(mat[r0:r0 + rows]) @ v
         return out if bias is None else out + _f64(bias)
     return run
+
+
+class _HostWindows:
+    """The rows of a host draw a row-windowed oracle reads, and nothing else: on a unified-memory device the host draw
+    and its device copy live in one pool, and the draw was held whole for the oracle's closures though the oracle reads
+    only its three windows (softmax 2 621 440 x 1 024 fp32: 10 GB of draw for 3 windows' rows; the Mac's re-proof,
+    2026-11-07). Built from the draw before it is dropped; read as `x[r0:r1, :]` like the draw, as its numbers."""
+
+    def __init__(self, x, wins):
+        self.shape = tuple(x.shape)
+        self._rows = {(int(r0), int(r1)): np.array(values(x[r0:r1])) for r0, r1 in wins}
+
+    def __getitem__(self, idx):
+        rs = idx[0] if isinstance(idx, tuple) else idx
+        return self._rows[(int(rs.start), int(rs.stop))]
+
+
+def _oracle_rows(x):
+    """What a row-windowed oracle keeps of a host draw: the draw itself when it reads it whole (under the cap), else
+    only the rows of its windows (`_HostWindows`) — the caller drops the draw once it is on the device."""
+    m, n = x.shape[-2], x.shape[-1]
+    wins = _row_windows(m, n, _SOFTMAX_ORACLE_F64_ARRAYS * 8)
+    return x if wins is None else _HostWindows(x, wins)
 
 
 def _rownorm_oracle_fn(x, w, b, layer: bool):
@@ -1548,9 +1575,11 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         x = arr(rng, (rows, feat), x_dt)
         w = arr(rng, (rows,), dts[2]) if has_w else None
         b = arr(rng, (rows,), dts[3]) if has_b else None
-        run = lambda: _nbx_norm_wrappers.group_norm_wrapper(to(x).view(1, rows, feat), rows, to(w) if has_w else None,
+        xd, oracle = to(x), (_groupnorm_oracle_fn(_oracle_rows(x), w, b) if values else None)
+        del x                                      # the host keeps only the rows the oracle reads (`_oracle_rows`)
+        run = lambda: _nbx_norm_wrappers.group_norm_wrapper(xd.view(1, rows, feat), rows, to(w) if has_w else None,
                                            to(b) if has_b else None)[0].view(rows, feat)
-        return run, (_groupnorm_oracle_fn(x, w, b) if values else None), "Y"
+        return run, oracle, "Y"
     if short in ("layer_norm_forward_kernel", "rms_norm_forward_kernel"):
         # the row norms through their wrappers (`native_layer_norm`, `rms_norm`), the padded row at its top, eps the
         # wrappers' own default; the fp64 oracle per row (row-windowed above the oracle's cap, as a softmax's)
@@ -1562,11 +1591,13 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         x = arr(rng, (rows, feat), x_dt)
         w = arr(rng, (feat,), dts[1]) if has_w else None
         b = arr(rng, (feat,), dts[2]) if has_b else None
+        xd, oracle = to(x), (_rownorm_oracle_fn(_oracle_rows(x), w, b, ln) if values else None)
+        del x                                      # the host keeps only the rows the oracle reads (`_oracle_rows`)
         if ln:
-            run = lambda: _nbx_norm_wrappers.native_layer_norm(to(x), [feat], to(w) if has_w else None, to(b) if has_b else None)[0]
+            run = lambda: _nbx_norm_wrappers.native_layer_norm(xd, [feat], to(w) if has_w else None, to(b) if has_b else None)[0]
         else:
-            run = lambda: _nbx_norm_wrappers.rms_norm(to(x), to(w) if has_w else None)
-        return run, (_rownorm_oracle_fn(x, w, b, ln) if values else None), "output_ptr"
+            run = lambda: _nbx_norm_wrappers.rms_norm(xd, to(w) if has_w else None)
+        return run, oracle, "output_ptr"
     if short in ("softmax_forward_kernel", "softmax_forward_looped_kernel"):
         # (BATCH_BUCKET, FEAT_BUCKET, log, x, out): the bucket's rows of the padded row length (a length of the class), through the wrapper itself; the
         # fp64 oracle per row (row-windowed above the oracle's cap, as a product's)
@@ -1575,7 +1606,10 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         _refuse_oversize(card_bytes, [((rows, feat), dts[0] if dts else "fp32"), ((rows, feat), out_dt)], short)
         x = arr(rng, (rows, feat), dts[0] if dts else "fp32")
         fn = _nbx_attention_wrappers.log_softmax if log else _nbx_attention_wrappers.softmax
-        return (lambda: fn(to(x), -1)), (_softmax_oracle_fn(x, log) if values else None), "output_ptr"
+        # on the device once; the host keeps only the rows the oracle reads (`_oracle_rows`)
+        xd, oracle = to(x), (_softmax_oracle_fn(_oracle_rows(x), log) if values else None)
+        del x
+        return (lambda: fn(xd, -1)), oracle, "output_ptr"
     if short == "conv2d_forward_kernel":
         (n, ci, h, w, co, _oh, _ow, kh, kw, sh, sw, ph, pw, dh, dw, groups) = [int(v) for v in key[:16]]
         _refuse_oversize(card_bytes, [((n, ci, h, w), dts[0] if dts else "fp16"),

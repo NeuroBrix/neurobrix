@@ -53,3 +53,21 @@ def test_the_price_door_prices_the_key_drawn_not_the_key_filed(profile, monkeypa
         A.synthesize(EW, None, key, None, card_bytes=UNIFIED, unified=True, values=False, budget_bytes=UNIFIED,
                      floor_bytes=0)
     assert seen == [(16777217, "fp32", "fp32")], seen
+
+
+def test_a_windowed_oracle_keeps_only_its_windows_rows_on_the_host():
+    # the Mac's re-proof (2026-11-07): softmax 2 621 440 x 1 024 fp32 held its 10 GB host draw whole for an oracle that
+    # reads three windows; the price counts the windows' rows, and the oracle computes the same numbers from them
+    import numpy as np
+    SM = "nbxtensor.ops.attention_wrappers.softmax_forward_kernel"
+    key = (2621440, 1024, False, "fp32", "fp32")
+    pr = A.price_key(SM, None, key)
+    whole = 2621440 * 1024 * 4
+    assert pr["draws"] < whole // 10, pr                 # windows, not the draw
+    rng = np.random.default_rng(0)
+    x = rng.standard_normal((4096, 64)).astype(np.float32)
+    wins = [(0, 7), (2000, 2007), (4089, 4096)]
+    hw = A._HostWindows(x, wins)
+    for r0, r1 in wins:
+        assert np.array_equal(hw[r0:r1, :], x[r0:r1, :])
+    assert hw.shape == x.shape

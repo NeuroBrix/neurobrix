@@ -48,10 +48,11 @@ def test_on_unified_memory_a_key_whose_top_fits_is_drawn_at_its_top(fp32_out):
 
 
 def test_on_unified_memory_a_key_over_the_card_is_drawn_at_the_shortest_row(fp32_out):
-    key = (1572864, 1024, False, "fp32", "fp32")
+    # 2 621 440 rows (since the host keeps only the oracle's windows, 1 572 864 x 1 024 holds at its top: 2026-11-07)
+    key = (2621440, 1024, False, "fp32", "fp32")
     assert A.price_key(SOFTMAX, None, key)["peak"] > UNIFIED                       # its top: over the card
     drawn = A._unified_padded_row(SOFTMAX, None, key, UNIFIED, "softmax_forward_kernel")
-    assert drawn[0] == 1572864 and drawn[1] == 513 and softmax_feat_bucket(drawn[1]) == 1024, drawn
+    assert drawn[0] == 2621440 and drawn[1] == 513 and softmax_feat_bucket(drawn[1]) == 1024, drawn
     A._refuse_unified(SOFTMAX, None, drawn, UNIFIED)                               # the shortest row: held
 
 
