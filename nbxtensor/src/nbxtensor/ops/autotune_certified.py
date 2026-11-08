@@ -1248,6 +1248,27 @@ def lookup(kernel_qual: str, tuner, key: tuple, ignore_switch: bool = False,
     return None
 
 
+def served_certification(vendor: str, profile: str, kernel_qual: str, dtype: str, key_text: str,
+                         memory_gb: Optional[int]) -> Optional[Dict[str, Any]]:
+    """The certification the directory serves one key on a memory class — what `lookup` serves a launch — read by a
+    PLANNER that holds no kernel tuner (a prefill chunk priced from the certified times, before any kernel is
+    loaded): the file `<kernel>.<dtype>.json` of `vendor/profile`, validated as the engine validates it, the class's
+    certification, the generator's own entry. None when the key is not served there (an unknown class: none)."""
+    if memory_gb is None:
+        return None
+    served = _load_class(vendor, profile, kernel_qual, dtype, None, int(memory_gb))
+    cert = served.get(key_text) if served else None
+    if cert is None:
+        return None
+    gen = running_generator()
+    if gen is None or os.environ.get("NBX_AUTOTUNE_ANY_GENERATOR") == "1":
+        return cert
+    matched = entry_for_generator(cert, gen)
+    if matched is not None:
+        return matched
+    return cert if proof_backend(cert.get("proof")) is None else None
+
+
 # A promotion flag that widens a pointer's tile on load: the kernel computes
 # that operand in fp32 whatever its memory dtype, so the key that names the
 # COMPUTATION carries fp32 for it — the directory's entries were certified

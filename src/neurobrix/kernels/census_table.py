@@ -184,6 +184,69 @@ def inputs_path(path: Path) -> Path:
     return path.with_name(path.name[:-len(".jsonl")] + ".inputs.jsonl")
 
 
+def container_sha(cache_dir: Path) -> str:
+    """The census's container hash (its `container` column): sha256 over every component's graph.json, the file name
+    then its bytes, in sorted path order, 16 hex digits — a retrace changes it. One function: the derived census
+    writes it, Prism reads a model's chunk record against it."""
+    import hashlib
+    h = hashlib.sha256()
+    for gp in sorted((Path(cache_dir) / "components").glob("*/graph.json")):
+        h.update(gp.name.encode())
+        h.update(gp.read_bytes())
+    return h.hexdigest()[:16]
+
+
+def chunks_path(path: Path) -> Path:
+    """The table's prefill-chunk record beside it (`<cls>g.chunks.jsonl`): one line per (model, mode), the keys one
+    session prefill chunk forms at every candidate size (`core/state/price.prefill_chunk_candidates`) — its graph at
+    the chunk's rows and its attention over the cache at every whole-page key length — each with the certified file
+    dtype it is served from and its op count. Derived by tools/derived_census.py; Prism prices the candidates from it
+    (`core/prism/prefill_chunk.py`)."""
+    return path.with_name(path.name[:-len(".jsonl")] + ".chunks.jsonl")
+
+
+def read_chunks(path: Path) -> Dict[Tuple[str, str], Dict]:
+    """{(model, mode): its chunk record} of the table at `path`; a missing file is none."""
+    cp = chunks_path(path)
+    if not cp.exists():
+        return {}
+    out = {}
+    for n, line in enumerate(cp.read_text(encoding="utf-8").splitlines(), 1):
+        if line.strip():
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{cp}:{n}: not a chunk record ({exc})") from exc
+            out[(rec["model"], rec["mode"])] = rec
+    return out
+
+
+def replace_chunks(path: Path, model: str, records: Iterable[Dict]) -> None:
+    """The model's chunk records (one per mode) replaced, every other model's kept, under the TABLE's lock,
+    atomically."""
+    records = list(records)
+    if any(r.get("model") != model for r in records):
+        raise ValueError(f"replace_chunks({model!r}) was handed another model's record")
+    cp = chunks_path(path)
+    with locked(path):
+        recs = {k: v for k, v in read_chunks(path).items() if k[0] != model}
+        for r in records:
+            recs[(model, r["mode"])] = r
+        fd, tmp = tempfile.mkstemp(dir=str(cp.parent), prefix=cp.name, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                for k in sorted(recs):
+                    fh.write(json.dumps(recs[k], sort_keys=True) + "\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, cp)
+        except BaseException:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+            raise
+
+
 def read_inputs(path: Path) -> Dict[str, Dict]:
     """{model: its input record} of the table at `path`; a missing record file is none."""
     ip = inputs_path(path)

@@ -337,9 +337,13 @@ class KVCachePlan:
     # The rows of one prefill chunk (docs/design/prism_kv.md §5bis): a request's prefill split into chunks of exactly
     # this many rows, a multiple of the cache page, the last chunk completed with masked rows the next chunk or the
     # decode overwrites — so every chunk meets the same kernel keys and a turn served from a session's cache gives the
-    # bytes of the same turns prefilled together. None: one chunk of the request's own rows (Prism chooses no C yet; it
-    # will from the certified times of the split run, never a constant).
+    # bytes of the same turns prefilled together. Chosen by Prism from the certified times of each candidate's census
+    # keys (core/prism/prefill_chunk.py), never a constant; None: one chunk of the turn's own rows, the reason stated.
+    # A serving session's turns read it; a one-shot request prefills in one pass.
     prefill_chunk: Optional[int] = None
+    # Why prefill_chunk is what it is (core/prism/prefill_chunk.py): the candidates' certified costs, or why none was
+    # eligible — stated, never silent.
+    prefill_chunk_reason: str = ""
 
     @property
     def head_dim(self) -> int:
@@ -639,6 +643,7 @@ class ExecutionPlan:
                 "initial_cache_len": int(self.kv_cache_plan.initial_cache_len),
                 "session_reach": self.kv_cache_plan.session_reach,
                 "prefill_chunk": self.kv_cache_plan.prefill_chunk,
+                "prefill_chunk_reason": self.kv_cache_plan.prefill_chunk_reason,
             } if self.kv_cache_plan else None,
         }
 
@@ -713,6 +718,7 @@ class ExecutionPlan:
                 session_reach=kv_data.get("session_reach"),
                 # a plan saved before the field planned one chunk: None is that plan's meaning
                 prefill_chunk=kv_data.get("prefill_chunk"),
+                prefill_chunk_reason=kv_data.get("prefill_chunk_reason", ""),
             )
 
         return cls(
@@ -3072,7 +3078,8 @@ class PrismSolver:
                 try:
                     # `target_dtype_str`, the dtype after the fp32 fallback if it fired — the
                     # pre-fallback `target_dtype` sized an fp32 plan's cache at 2 bytes.
-                    kv_plan = self._compute_kv_cache_plan(container, target_dtype_str, remaining)
+                    kv_plan = self._compute_kv_cache_plan(container, target_dtype_str, remaining, profile=profile,
+                                                          kv_devices=self._kv_devices(strat_allocs, profile))
                 except RuntimeError as exc:
                     # The whole-precision cache does not fit this rung: the state engine's policies are scored
                     # (step 5, core/state/policy.py). An output-changing policy is taken only with a measured cost;
@@ -5067,7 +5074,7 @@ class PrismSolver:
         return choose_policy(cands, int(room_bytes))
 
     def _compute_kv_cache_plan(
-        self, container, target_dtype: str, remaining_vram_bytes: int
+        self, container, target_dtype: str, remaining_vram_bytes: int, profile=None, kv_devices=None
     ) -> Optional[KVCachePlan]:
         """The decode cache, sized from the container's declared KV state (core/state/price.py) within the remaining
         budget: as many positions as it affords, bounded by the request (run) or the declared window (serve), never
@@ -5094,7 +5101,7 @@ class PrismSolver:
                                                   remaining_vram_bytes)["max_cache_len"])
             except (RuntimeError, StateUndeclared):
                 session_reach = None
-        return KVCachePlan(
+        plan = KVCachePlan(
             max_cache_len=size["max_cache_len"],
             num_layers=int(entry["layers"]),
             num_kv_heads=int(entry["kv_heads"]),
@@ -5106,6 +5113,45 @@ class PrismSolver:
             initial_cache_len=size["initial_cache_len"],
             session_reach=session_reach,
         )
+        plan.prefill_chunk, plan.prefill_chunk_reason = self._prefill_chunk(container, plan, defaults, profile,
+                                                                            kv_devices)
+        return plan
+
+    def _prefill_chunk(self, container, kv: "KVCachePlan", defaults, profile, kv_devices) -> Tuple[Optional[int], str]:
+        """A serving session's prefill chunk C and its reason (core/prism/prefill_chunk.py): the candidates
+        (`price.prefill_chunk_candidates`, whole pages of the session cache up to the prefill rows the plan prices a
+        session at), each priced from the certified times of its derived census keys on the decoder's card class."""
+        from neurobrix.core.prism import prefill_chunk as PC
+        from neurobrix.core.prism.runtime_widths import TRITON_ENGINES
+        from neurobrix.core.state import price as P
+        if kv.session_reach is None:
+            return None, "no serving session is planned (no session reach): one chunk per request"
+        if self._mode not in TRITON_ENGINES:
+            return None, (f"one chunk per turn: the {self._mode} engine keeps no certified kernel times to price a "
+                          f"chunk from")
+        if profile is None or not kv_devices or getattr(container, "cache_path", None) is None:
+            return None, "one chunk per turn: the plan names no decoder card to price a chunk on"
+        cards = set()
+        for d in kv_devices:
+            if not str(d).startswith("cuda") and ":" not in str(d):
+                return None, f"one chunk per turn: the decoder's cache lives on {d}, which certifies no kernel time"
+            idx = int(str(d).rsplit(":", 1)[1])
+            spec = next((x for x in profile.devices if int(x.index) == idx), None)
+            if spec is None:
+                return None, f"one chunk per turn: the profile states no device {d}"
+            cards.add((spec.brand.value, spec.architecture, spec.memory_class_gb))
+        if len(cards) != 1 or None in next(iter(cards)):
+            return None, f"one chunk per turn: the decoder's cards are of several classes {sorted(map(str, cards))}"
+        vendor, arch, cls = cards.pop()
+        from neurobrix.core.config.loader import get_vendor_config
+        from nbxtensor.ops.tiling_sizes import PAGED_DECODE_TILE_CANDIDATES
+        page, _ = P.paged_cache_params(kv.num_kv_heads, kv.k_head_dim, kv.v_head_dim, str(kv.dtype),
+                                       get_vendor_config(vendor, arch).get("memory"), int(kv.memory_bytes),
+                                       PAGED_DECODE_TILE_CANDIDATES)
+        rows = P.session_prefill_rows(defaults)
+        record = PC.chunk_record(Path(str(container.cache_path)), vendor, arch, cls,
+                                 "triton" if self._mode == "triton" else "triton-sequential")
+        return PC.choose(record, P.prefill_chunk_candidates(page, rows), rows, PC.certified_times(vendor, arch, cls))
 
     def _apply_attention_correction(
         self, comp, activation_bytes: int, manifest: dict, dtype_str: str, profiled: bool
@@ -10223,7 +10269,8 @@ def plan_record(plan: "ExecutionPlan") -> dict:
                            "k_head_dim": getattr(kv, "k_head_dim", None),
                            "v_head_dim": getattr(kv, "v_head_dim", None),
                            "session_reach": getattr(kv, "session_reach", None),
-                           "prefill_chunk": getattr(kv, "prefill_chunk", None)}
+                           "prefill_chunk": getattr(kv, "prefill_chunk", None),
+                           "prefill_chunk_reason": getattr(kv, "prefill_chunk_reason", "")}
     if plan.cfg_split_components:
         rec["cfg_split_components"] = list(plan.cfg_split_components)
     if getattr(plan, "batch_split_components", None):
@@ -10324,7 +10371,8 @@ def explain_plan(plan: "ExecutionPlan") -> str:
         kv = plan.kv_cache_plan
         lines.append(f"kv cache        up to {kv.max_cache_len} tokens, {kv.memory_bytes / 2**20:.0f} MB, {kv.dtype}")
         lines.append(f"kv session      reach {kv.session_reach if kv.session_reach is not None else 'none stated'}, "
-                     f"prefill chunk {kv.prefill_chunk if kv.prefill_chunk else 'one per request (no C planned)'}")
+                     f"prefill chunk {kv.prefill_chunk if kv.prefill_chunk else 'one per turn'} — "
+                     f"{kv.prefill_chunk_reason or 'no reason recorded'}")
     for _dev, _cliff in sorted((getattr(plan, "deferred_drain_cliffs", None) or {}).items()):
         lines.append(f"drain cliff     {_dev}: the Triton hot loop drains its dead tensors at "
                      f"{_cliff / 2**20:.0f} MB queued")

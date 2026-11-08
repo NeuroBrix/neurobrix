@@ -26,6 +26,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`--json` prints its record on one line** (it was indented over about 120 lines); the content is unchanged.
 - **`python -m nbxtensor install-metal` downloads nothing when the pinned Metal wheels are already installed**, and
   says so in one line (it re-downloaded 131 MB on every call).
+- **Prism chooses a chat session's prefill chunk**: a session's turns can prefill in chunks of a fixed size, so a turn
+  served from its cache gives the same bytes as the same conversation prefilled together. Prism picks the size from
+  the certified kernel times of each candidate (whole cache pages, up to the prefill a session's plan prices), the
+  cheapest whose kernels are all certified; with none certified a turn prefills in one chunk, and `--explain-plan`
+  says why (`prefill_chunk_reason`). A one-shot `run` still prefills in one pass.
+
+### Changed
 - **A chat turn prefills only its new tokens**: the KV cache now belongs to the chat session (`serve` + `chat`,
   `complete`), on both engines. Each turn matches the conversation's token IDs against what the cache already holds
   and prefills only the rest (TinyLlama, a 421-token second turn: 158 rows prefilled instead of 421). A continued

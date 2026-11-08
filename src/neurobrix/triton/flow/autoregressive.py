@@ -220,7 +220,9 @@ class TritonAutoregressiveHandler:
         # Prefill: a serving session's cache already holds the positions its ids match (core/state/kv_session.py);
         # only the rest is prefilled, in the plan's chunks when it plans one (KVCachePlan.prefill_chunk)
         kv_plan = getattr(self.ctx.plan, "kv_cache_plan", None)
-        chunk = getattr(kv_plan, "prefill_chunk", None)
+        # the plan's chunk is a SESSION's (its turns' bytes must not depend on where a turn ended); a one-shot request
+        # prefills in one pass
+        chunk = getattr(kv_plan, "prefill_chunk", None) if kv_session is not None else None
         start = kv_session.match(prompt_ids) if kv_session is not None else 0
         hidden = session.prefill(input_ids, batch_size, start=start, chunk=chunk,
                                  ids=prompt_ids if (start or chunk) else None)

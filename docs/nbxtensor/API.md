@@ -2816,6 +2816,8 @@ def certified_only() -> bool
 def apply(kernel_qual: str, tuner, key: tuple, lookup_key: Optional[tuple] = None,
           memory_gb: Optional[int] = None) -> bool
     # put the certified config in the tuner's cache for `key`: no sweep, no screen
+def served_certification(vendor: str, profile: str, kernel_qual: str, dtype: str, key_text: str, memory_gb: Optional[int]) -> Optional[Dict[str, Any]]
+    # the certification served one key on a memory class, read by a planner holding no tuner (Prism's prefill chunk)
 def computed_key(tuner, key: tuple, kwargs: Optional[Dict[str, Any]] = None) -> Optional[tuple]
     # the key with every pointer a set promotion flag widens on load tagged fp32 (the dtype it is computed in)
 def override_seeded(tuners=None) -> int

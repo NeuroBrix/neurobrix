@@ -741,7 +741,10 @@ class AutoregressiveHandler(FlowHandler):
 
         # A serving session's cache already holds the positions its ids match (core/state/kv_session.py); only the
         # rest is prefilled, in the plan's chunks when it plans one (KVCachePlan.prefill_chunk)
-        chunk = getattr(getattr(self.ctx.plan, "kv_cache_plan", None), "prefill_chunk", None)
+        # the plan's chunk is a SESSION's (its turns' bytes must not depend on where a turn ended); a one-shot request
+        # prefills in one pass
+        chunk = getattr(getattr(self.ctx.plan, "kv_cache_plan", None), "prefill_chunk", None) \
+            if kv_session is not None else None
         start = kv_session.match(prompt_ids) if kv_session is not None else 0
 
         with torch.inference_mode():

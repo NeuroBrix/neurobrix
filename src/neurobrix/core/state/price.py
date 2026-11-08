@@ -11,7 +11,7 @@ decoder; its graph reads a 448-row position table).
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Mapping, Optional, Tuple
+from typing import List, Any, Dict, Mapping, Optional, Tuple
 
 from nbxtensor.dtype import itemsize as _itemsize
 
@@ -140,3 +140,20 @@ def paged_cache_params(num_kv_heads: int, k_head_dim: int, v_head_dim: int, dtyp
     token_bytes = int(num_kv_heads) * (int(k_head_dim) + int(v_head_dim)) * _itemsize.itemsize(dtype)
     tokens = page_tokens(token_bytes, tile_candidates, int(memory["state_page_granule_bytes"]), int(cache_bytes))
     return tokens, bool(memory["async_release"])
+
+
+def prefill_chunk_candidates(page: int, priced_rows: int) -> List[int]:
+    """The prefill chunk sizes a serving session may run (docs/design/prism_kv.md §5bis), in rows: whole pages (a chunk
+    ends on a page, so the next attends over whole pages and a turn's bytes do not depend on where it ended), at most
+    the prefill rows the plan prices a session's activations at (`priced_rows`: its prompt margin) rounded down to
+    pages — a chunk never asks activations the plan did not price — and at least one page. Prism and the derived
+    census both read this one list."""
+    if int(page) <= 0 or int(priced_rows) <= 0:
+        raise ValueError(f"prefill_chunk_candidates: page {page}, priced rows {priced_rows}")
+    return [int(page) * k for k in range(1, max(1, int(priced_rows) // int(page)) + 1)]
+
+
+def session_prefill_rows(defaults: Mapping[str, Any]) -> int:
+    """The prefill rows the plan prices a serving session's activations at: the container's prompt margin, the state
+    engine's prompt budget (`flow_bindings.FlowBindings.prompt_prefill_length` when the request states no prompt)."""
+    return int(defaults.get("prompt_margin", DEFAULT_PROMPT_MARGIN))
