@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.6] - unreleased (the Apple lot)
+
+### Added
+- **`pointer_tables.TablePins` and `end_call_pins`**: a holder for the pins of per-call pointer tables built for a cache
+  of experts that outlives the call. The cache ends them before it lets the pages they cover go, and at its release; a
+  table over wraps already held ends its pins at once.
+
+### Fixed
+- **A mapped mixture-of-experts store no longer keeps every decoded expert resident on Apple GPUs**: a per-call
+  table's pins ended at the call (re-wrapping the store's arena at a new address while it could still be read) or not at
+  all (the decode path: a wrap left over every expert the store had let go). Held by `TablePins`, they end when the
+  store says.
+
 ## [0.0.5] - 2026-11-07
 
 ### Fixed

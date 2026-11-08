@@ -55,10 +55,8 @@ class NBXExpertStore:
         # 2026-10-20: 27 GB of experts bound in the prefill, swap +6.7 GB in 13 s).
         from collections import OrderedDict
         self._bound = OrderedDict()
-        # the pins of the per-call pointer tables built over bound experts (`hold_table_pins`): ended before the
-        # pages they cover are unbound, so no wrap outlives its binding
-        self._table_pins = []
-        self._held_bases = set()
+        from nbxtensor.memory.pointer_tables import TablePins
+        self.table_pins = TablePins()     # its calls' table pins, ended before an unbind and at release
         for t in like:
             if not isinstance(t, NBXTensor):
                 raise RuntimeError(
@@ -319,38 +317,14 @@ class NBXExpertStore:
         return ([t[0] for t in triples], [t[1] for t in triples], [t[2] for t in triples])
 
     def _evict_bound(self, keep) -> None:
-        """Unbind the least recently routed experts past the slot count, never one this call reads. The cached
-        pointer tables pin what they address, so they are dropped first (rebuilt by the next call)."""
+        """Unbind the least recently routed experts past the slot count (never one this call reads), pins ended first."""
         cap = max(int(self.residency.n_slots), len(keep))
         if len(self._bound) <= cap:
             return
-        from nbxtensor.memory.pointer_tables import release_pinned_tables
-        release_pinned_tables()
-        self._end_table_pins()
+        self.table_pins.end(cached=True)
         for key in [k for k in self._bound if k not in keep][:len(self._bound) - cap]:
             for ptr in self._bound.pop(key)[0]:
                 DA.unbind_mapped(ptr)
-
-    def hold_table_pins(self, tables) -> None:
-        """Take a per-call pointer table's pins (Metal; `moe._end_call_pins`) and hold them until the store's release —
-        an in-place store also ends them before it unbinds the pages they cover (`_evict_bound`): a wrap left behind
-        keeps an unbound expert's pages resident, outside the grant Prism priced. A pin whose wraps the store already
-        holds ends at once: the held pin keeps the refcount, so the wraps live on and the held list stays one pin per
-        new set of wraps, not one per call."""
-        for pin in tables.pins:
-            bases = {b for b in getattr(pin, "_resident_bases", ()) if b is not None}
-            if bases <= self._held_bases:
-                pin.__exit__(None, None, None)
-            else:
-                self._table_pins.append(pin)
-                self._held_bases |= bases
-        tables.pins = []
-
-    def _end_table_pins(self) -> None:
-        for pin in self._table_pins:
-            pin.__exit__(None, None, None)
-        self._table_pins = []
-        self._held_bases = set()
 
     # ── step 3: the prefetch of the next layer's predicted experts (mirror of the compiled store) ──
     def prefetch_next(self, layer, routed) -> int:
@@ -418,7 +392,7 @@ class NBXExpertStore:
         for ev in self._inflight.values():
             DA.destroy_event(ev)
         self._inflight.clear()
-        self._end_table_pins()
+        self.table_pins.end()
         DA.set_device(self.device_idx)
         if self._stream:
             DA.stream_synchronize(self._stream)
