@@ -529,8 +529,8 @@ def execute_moe_fused(
                 DeviceAllocator.ensure_triton_device(act_dev)
             if len(orig_shape) == 3:
                 output = output.reshape(orig_shape)
-            if per_call and getattr(expert_store, "in_place", False):
-                expert_store.hold_table_pins(tables)     # see STEP 2c
+            if per_call:
+                _end_call_pins(tables, expert_store, sync=True)     # see STEP 2c
             DeviceAllocator.set_device(act_dev)
             DeviceAllocator.ensure_triton_device(act_dev)
             return output
@@ -553,15 +553,13 @@ def execute_moe_fused(
             output = _xfer(output, act_dev)
         if len(orig_shape) == 3:
             output = output.reshape(orig_shape)
-        if per_call and getattr(expert_store, "in_place", False):
-            # This band returns before the per-call release at the end of this function, so on unified memory every
-            # expert a decoded token routed to kept a pinned wrap (a second Metal buffer over its file pages) after the
-            # in-place store unbound it: DeepSeek-Coder-V2-Lite triton on the M4 Pro wired 2.7 -> 16.2 GB in 46 s with
-            # 2 370 such wraps, past its 614-slot grant, and swapped until stopped (2026-11-08). The store takes the
-            # table's pins and ends them before it unbinds the pages they cover. Ending them here instead (with or
-            # without a device sync) turned the copying store's later byte-equality calls to NaN
-            # (test_the_expert_store_serves_routed_experts[5,8]): a re-pin of a released base is owed its own proof.
-            expert_store.hold_table_pins(tables)
+        if per_call:
+            # This band returns before the per-call release at the end of this function, and returned without ending its
+            # table's pins since it landed (1d5da7cfd, 2026-10-28): on unified memory every expert a decoded token routed
+            # to kept a pinned wrap (a second Metal buffer over its file pages) after the in-place store unbound it —
+            # DeepSeek-Coder-V2-Lite triton on the M4 Pro wired 2.7 -> 16.2 GB in 46 s with 2 370 such wraps, past its
+            # 614-slot grant, and swapped until stopped (2026-11-08). `_end_call_pins` says who ends them.
+            _end_call_pins(tables, expert_store, sync=True)
         DeviceAllocator.set_device(act_dev)
         DeviceAllocator.ensure_triton_device(act_dev)
         return output
@@ -640,7 +638,7 @@ def execute_moe_fused(
         # A per-call table's pins (Metal) end with the call too: dropping the table does not exit them, and
         # the driver then keeps the wrap of every allocation promoted for this call (24 kept after one call
         # of the 8-expert probe, 2026-10-04). Every launch of this call has synchronised.
-        tables.release_pins()
+        _end_call_pins(tables, expert_store)
         del gate_weights, up_weights, down_weights
         del tables
 
@@ -659,6 +657,21 @@ def execute_moe_fused(
         expert_store.prefetch_next(expert_layer, _prefetch_routed)
 
     return output
+
+
+def _end_call_pins(tables, store, sync: bool = False) -> None:
+    """End a per-call pointer table's pins (Metal; a CUDA table pins nothing). With an expert store, the STORE takes them
+    (`hold_table_pins`) and ends them at its release — and an in-place store before it unbinds the pages they cover —
+    so one wrap per arena or bound range lives as long as the store: ending them at the call's return dropped the last
+    pin of the copying store's arena, the next call re-wrapped it at a new GPU address while the store's stream could
+    still read through the old one, and the store's byte-equality tests turned to NaN (2026-11-08). Without a store
+    (promoted per-call weights) the call ends them itself; `sync` first for a band whose launches were not drained."""
+    if store is not None:
+        store.hold_table_pins(tables)
+        return
+    if sync and tables.pins:
+        DeviceAllocator.sync_device()
+    tables.release_pins()
 
 
 def _expert_store_grouped_pass(hidden_states, flat_indices, flat_scores, store, layer, host,
@@ -711,7 +724,7 @@ def _expert_store_grouped_pass(hidden_states, flat_indices, flat_scores, store, 
             activated, tables.down_ptrs[dev], down_out, flat_scores, s_g, e_g, n_g,
             K, N_gate, tables.down_stride_bk[dev], tables.down_stride_bn[dev], top_k,
             mul_routed_weight=True, topk_divide=False)
-        tables.release_pins()
+        _end_call_pins(tables, store)
         del tables, g, u, d
     result = down_out.narrow(0, 0, M * top_k).reshape(M, top_k, K)
     return _nbx_reduction_wrappers.sum_wrapper(result, dim=1)
