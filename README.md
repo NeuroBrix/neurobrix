@@ -311,6 +311,7 @@ not filed as public issues.
   [GitLab](https://gitlab.com/neurobrix/neurobrix)
 - Model hub: [neurobrix.es/models](https://neurobrix.es/models)
 - Documentation: [docs.neurobrix.es](https://docs.neurobrix.es) and the [docs/](./docs) directory
+- Building applications and coding agents: [docs/BUILD_WITH_AGENTS.md](./docs/BUILD_WITH_AGENTS.md)
 - Roadmap: [docs/roadmap.md](./docs/roadmap.md)
 - Changes: [CHANGELOG.md](./CHANGELOG.md)
 
