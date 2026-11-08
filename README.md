@@ -60,7 +60,7 @@ ready-made containers from the hub.
 ## Install and first run
 
 NeuroBrix needs Python 3.10 or newer. The current release is
-**0.6.2** ([release notes](https://github.com/NeuroBrix/neurobrix/releases/tag/v0.6.2)).
+**0.6.3** ([release notes](https://github.com/NeuroBrix/neurobrix/releases/tag/v0.6.3)).
 
 It has two engines. The **Triton engine** (`--triton`) runs on
 [nbxtensor](https://github.com/NeuroBrix/nbxtensor) and Triton and needs no PyTorch. The
@@ -140,8 +140,11 @@ neurobrix run --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
     --prompt "Write a Python function that reverses a string." --max-tokens 256
 ```
 
-`neurobrix import <org>/<name>` installs the model under `~/.neurobrix/cache/<name>`, and
-`--model` takes that `<name>`.
+**One name per model.** A model is named by its hub name, `<org>/<name>` (its Hugging Face or vendor repository's).
+`neurobrix import` records that name beside the installed model, and `--model` (`run`, `serve`, `upscale`), `remove`,
+`neurobrix list` and the HTTP API all use it; there is no second, short name. A model installed before 0.6.3 keeps its
+directory name until `neurobrix import <org>/<name>` is run once for it (nothing is downloaded again), and `list` and
+every use say so in one line.
 
 A run prints its result on stdout (the generated text, the transcript, or `SAVED: <path>` for a file) and a few
 status lines on stderr: the engine in use and the run time, and on the very first run a line saying the machine is
@@ -152,7 +155,7 @@ environment both.
 ### Serve and chat
 
 `neurobrix serve` keeps a model loaded in a background daemon between requests; `chat` talks to a language model
-through it, and `run` uses it when it serves the same model:
+through it, `run` uses it when it serves the same model, and `stop` unloads it:
 
 ```bash
 neurobrix serve --model TinyLlama/TinyLlama-1.1B-Chat-v1.0
@@ -162,7 +165,67 @@ neurobrix stop                       # stop the daemon and free GPU memory
 ```
 
 Whether the weights stay on the device between requests (warm) depends on the plan Prism chooses for the machine;
-`serve` says which. Details, including how a conversation and its KV cache behave today: [Serving and chat](docs/serving.md).
+`serve` says which. Details: [Serving and chat](docs/serving.md).
+
+### The conversation cache
+
+The KV cache belongs to the chat session, on both engines. Each turn matches the conversation's token IDs against what
+the cache already holds and prefills only the new ones (TinyLlama, a 421-token second turn: 158 positions prefilled
+instead of 421). Prism chooses the session's prefill chunk from the certified kernel times (`--explain-plan` says
+which, or why none); with that chunk, a turn served from the cache gives the same bytes as the same conversation
+prefilled together.
+
+A conversation has a ceiling, the plan's: how many positions a session can hold on this device, within the model's
+window (`run --explain-plan` shows it as `session_reach`). A turn that would pass it is refused with that ceiling;
+older turns are never summarised or dropped. `/context` in `chat` shows the conversation's exact token count, the
+ceiling and the tokens the cache holds; `/new` starts again.
+
+`run --turns` plays a JSON list of user messages as one session, through the same code the daemon runs, and prints
+each answer with the tokens its turn matched and prefilled:
+
+```bash
+echo '["Name three primary colours.", "Which of them is the warmest?"]' > turns.json
+neurobrix run --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --turns turns.json --max-tokens 64
+```
+
+### OpenAI-compatible API
+
+`neurobrix serve --http` opens an HTTP server that speaks the OpenAI API on the same daemon: the same loaded model,
+the same queue and the same inference thread as `chat` and `run`, so they share the warm weights.
+
+```bash
+neurobrix serve --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --http      # http://127.0.0.1:8765/v1
+```
+
+The address is `127.0.0.1:8765` unless `--http-host` / `--http-port` say otherwise; an address other than loopback
+is refused without `--api-key-file <file>`, and every request then sends `Authorization: Bearer <key>`. The endpoints
+served are those the loaded model's family has: `/v1/models`, `/v1/chat/completions` (streamed as Server-Sent Events,
+tool calls parsed from the format the model's chat template declares, a thinking model's reasoning in
+`reasoning_content`), `/v1/completions`, `/v1/images/generations`, `/v1/audio/speech` and
+`/v1/audio/transcriptions`. The `model` field is the model's one name.
+
+```bash
+curl -s http://127.0.0.1:8765/v1/chat/completions -H 'Content-Type: application/json' -d '{
+  "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+  "messages": [{"role": "user", "content": "What is a KV cache?"}], "max_tokens": 128}'
+```
+
+With the OpenAI Python client (`pip install openai` on the client side; the engine does not need it):
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://127.0.0.1:8765/v1", api_key="unused")   # the key file's content when the server has one
+model = client.models.list().data[0].id
+
+for chunk in client.chat.completions.create(model=model, stream=True,
+                                            messages=[{"role": "user", "content": "Tell me a story."}]):
+    if chunk.choices and chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="", flush=True)
+```
+
+A parameter the engine does not honour (`stop`, `logprobs`, `n` > 1, a forced `tool_choice`, ...) is refused by name
+in the OpenAI error object, never ignored. Every endpoint, parameter and setting: [Serving and chat](docs/serving.md).
 
 ---
 
@@ -176,18 +239,36 @@ Whether the weights stay on the device between requests (warm) depends on the pl
 | CPU (x86-64) | Released in 0.6.0 (the PyTorch engine). |
 | Apple Silicon (Metal) | In 0.6.0. Both engines: the Triton engine through Metal (NeuroBrix's Triton build for Apple GPUs, installed by `python -m nbxtensor install-metal`), the PyTorch engine on MPS. Install: [Install and first run](#install-and-first-run), Apple Silicon. |
 | AMD and Intel GPUs | The Triton engine, through nbxtensor's HIP and Level Zero drivers, with the vendor's runtime and its Triton build (`neurobrix doctor` gives the vendor's install commands). Found a bug on your card? [Open an issue](https://github.com/NeuroBrix/neurobrix/issues). |
+| Integrated GPUs | In 0.6.3. An integrated GPU a backend drives (Intel Lunar Lake, Meteor Lake, Arrow Lake and Panther Lake through Level Zero; an AMD APU such as a Radeon 780M, Strix Point or Strix Halo through HIP) is planned as one memory pool with the host, as Apple chips are. An integrated GPU no backend drives (Intel Tiger Lake, Alder Lake, Raptor Lake, or any GPU whose driver is not installed) is named with the reason, and the model runs on the CPU with every core of the machine's profile. |
 | Windows | In 0.6.1. Both engines; the Triton engine needs the NVIDIA, AMD or Intel driver and the Triton build for your GPU (`neurobrix doctor` names what is missing). Found a bug on Windows? [Open an issue](https://github.com/NeuroBrix/neurobrix/issues). |
 
-Several GPUs in one machine are used automatically when a model does not fit on one.
-Known limitations of the current release are listed in its
-[release notes](https://github.com/NeuroBrix/neurobrix/releases/tag/v0.6.2). Read them before
-filing a bug.
+Several GPUs in one machine are used automatically when a model does not fit on one. The first launch names each GPU
+from what the operating system ships (the PCI bus on Linux, Win32_VideoController on Windows), with its platform and
+whether it is integrated. When a run meets a device out-of-memory in one of its components, it re-plans that
+component with the memory it measured and goes on, once, keeping the components already finished.
+
+**Known limits of 0.6.3:**
+
+- On an Intel Mac the integrated GPU is named from system_profiler without its platform; it is not driven, and the
+  engine runs on the CPU.
+- On a laptop with an NVIDIA card and an integrated GPU, only the NVIDIA card is detected; the integrated GPU is not
+  named.
+- The performance and efficiency cores of a hybrid CPU are told apart on macOS only, not yet on Linux or Windows.
+- A request served by `neurobrix serve` (socket or HTTP) does not re-plan after a device out-of-memory as `run` does:
+  it answers with the named refusal and the daemon stays loaded.
+- The HTTP API serves no `/v1/embeddings` (no family declares an embedding output yet) and does no constrained
+  decoding (`tool_choice: "required"` or a named function is refused).
+- A daemon holds one model and one conversation; the conversation cache stays on the device (no host or disk tier,
+  no sharing between sessions).
+
+The full list is in the [release notes](https://github.com/NeuroBrix/neurobrix/releases/tag/v0.6.3). Read them
+before filing a bug.
 
 ### Models on the hub
 
 The hub listed 45 public models in 10 categories on 2026-10-12. The hub itself is the live
 list (`neurobrix hub`, or [neurobrix.es/models](https://neurobrix.es/models)). Each
-identifier below is what you pass to `neurobrix import`.
+identifier below is what you pass to `neurobrix import`, and then to `--model`.
 
 | Category | Models |
 |---|---|
@@ -209,8 +290,8 @@ works on every hardware and in every execution mode; the release notes say which
 
 ## Usage by family
 
-The family is read from the container, so `run` takes the inputs that family needs. Run
-`neurobrix run --help` for every flag.
+The family is read from the container, so `run` takes the inputs that family needs. Every command and flag:
+the [CLI reference](docs/reference/cli.md) (`neurobrix run --help` prints the same).
 
 ```bash
 # Language model
@@ -264,8 +345,8 @@ The same flags apply to `neurobrix serve`. `neurobrix upscale` takes them as
 ```bash
 neurobrix hub [--category CATEGORY] [--search TERM]   # browse the hub
 neurobrix import <org>/<name> [--no-keep] [--force]   # download and install
-neurobrix list [--store]                              # installed models / downloaded archives
-neurobrix remove <name> [--all]                       # remove from the cache (and the store)
+neurobrix list [--store]                              # installed models by name / downloaded archives
+neurobrix remove <org>/<name> [--all]                 # remove from the cache (and the store)
 neurobrix clean --all -y                              # remove everything
 neurobrix info --models --hardware --system           # what is installed and detected
 neurobrix inspect <name or model.nbx>                 # look inside a container
