@@ -8027,9 +8027,9 @@ class PrismSolver:
                 "at a time: this WILL run, and it will be slow (expect minutes "
                 "to hours rather than seconds)")
         elif chosen == "cpu_execution":
+            threads = getattr(getattr(profile, "cpu", None), "compute_threads", None)
             parts.append("— no GPU strategy fitted; running on CPU"
-                         + (f" ({profile.cpu.compute_threads} compute threads of the profile's {profile.cpu.cores} "
-                            f"cores)" if profile.cpu else ""))
+                         + (f" ({threads} compute threads of the profile's {profile.cpu.cores} cores)" if threads else ""))
         if chosen.startswith("cpu_") and getattr(profile, "refused_devices", None):
             parts.append("— refused by name (device refused): " + ", ".join(
                 f"{d['model']} ({d.get('pci_id') or d.get('brand')})" for d in profile.refused_devices))
