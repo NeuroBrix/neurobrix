@@ -195,4 +195,4 @@ Issues: [GitHub](https://github.com/NeuroBrix/neurobrix/issues) | [GitLab](https
 
 ---
 
-NeuroBrix is developed and maintained by **WizWorks OÜ**, a property of **Neural Networks Holding LTD**.
+Developed by Hocine Benkelaya · Supported and funded by [Neural Network Holding Ltd](https://neuralnetworkholding.com) · Commercial distribution by [WizWorks OÜ](https://wizworks.io).

@@ -486,3 +486,7 @@ installed version.
 ## License
 
 Apache 2.0.
+
+© 2025–2026 Hocine Benkelaya. NeuroBrix engine released under the Apache License 2.0.
+
+Developed by Hocine Benkelaya · Supported and funded by [Neural Network Holding Ltd](https://neuralnetworkholding.com) · Commercial distribution by [WizWorks OÜ](https://wizworks.io).

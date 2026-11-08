@@ -2,7 +2,7 @@
 
 Thank you for your interest in contributing to NeuroBrix — the universal AI runtime engine.
 
-NeuroBrix is developed and maintained by **WizWorks OÜ**, a property of **Neural Networks Holding LTD**, and released under the [Apache 2.0 License](LICENSE).
+Developed by Hocine Benkelaya · Supported and funded by [Neural Network Holding Ltd](https://neuralnetworkholding.com) · Commercial distribution by [WizWorks OÜ](https://wizworks.io). It is released under the [Apache 2.0 License](LICENSE).
 
 ---
 
@@ -226,4 +226,4 @@ Use an existing file in `src/neurobrix/config/hardware/` as the template, and se
 
 By contributing to NeuroBrix, you agree that your contributions will be licensed under the [Apache License 2.0](LICENSE).
 
-All contributions remain the intellectual property of Neural Networks Holding LTD.
+Your contributions are licensed under the Apache License 2.0 (its section 5); NeuroBrix itself is the work of its author, Hocine Benkelaya.
