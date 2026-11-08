@@ -12,7 +12,8 @@ def test_the_matched_line_says_it_is_not_a_proof():
         "this bucket")
 
 
-def test_the_verify_step_prints_that_line_and_never_verified():
+def test_the_verify_step_logs_that_line_and_never_verified():
+    # the verify step says it through the engine's logger (the clean-terminal lot: a developer line, -v / NBX_LOG=debug)
     src = inspect.getsource(replay)
     assert "VERIFIED" not in src
-    assert "print(PLAN_MATCHED_LINE.format(launches=plan.launches))" in inspect.getsource(replay.maybe_run)
+    assert '_log.debug("%s", PLAN_MATCHED_LINE.format(launches=plan.launches))' in inspect.getsource(replay.maybe_run)
