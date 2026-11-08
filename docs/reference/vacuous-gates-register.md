@@ -3838,3 +3838,25 @@ both paths to import the door. On the old code it fails naming `core/runtime/gra
 
 **The lesson, in one line.** A test of a helper proves the helper; prove that the callers use it, or the door
 is a drawing of a door.
+
+### 124 — the arena instrument measured the pool's reuse, not the component's need
+
+**Instrument**: the allocator window around a component's first Triton run (branch `arena-observation`,
+`core/prism/arena_observation.py`, written 2026-11-07 for "voie B": observe the arena factor on the user's own runs):
+the hold is the window's peak minus its start, compared with the walk Prism priced for the component. It was the
+measurement a price law "hold = a + b x walk" was to be fitted from.
+
+**What it said**: ratios from 0.16 to 70 on the same machine (2026-11-08, V100 32 GB, entry point, certified-only):
+TinyLlama's hold rose 102 -> 652 MB for walks 2.4 -> 97 MB with slopes 1.7 / 9.7 / 5.1 between neighbours; Real-ESRGAN's
+hold flattened near 2.4 GB; Flex.1's transformer "held" 68 MB for a 414 MB walk. A fit would have produced numbers.
+
+**Why it is blind**: the window opens on a pool that the components run before it already grew and freed. A later
+component reuses that memory and its window sees almost nothing; an early one pays the pool's growth for everyone. The
+figure is a property of the run's ORDER, not of the component — so a law fitted on it would have been a law of the
+order the measurement happened to take.
+
+**Repair.** No price law on this instrument. The measurement is redone against a fresh pool per component (its own
+process or a reset pool), each component alone, before any fit (the supervisor, 2026-11-08 10:30).
+
+**The lesson, in one line.** A delta inside a shared pool measures the neighbours as much as the subject; isolate the
+subject before you fit it.
