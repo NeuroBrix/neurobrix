@@ -388,6 +388,23 @@ def request_input_config(args, manifest: dict, family, cache_path):
     return input_config
 
 
+def _record_compiled_growth(sampler, cache_path, hw_profile) -> None:
+    """Record the MPS allocator's cache growth of this compiled run (`SampledDevicePeak.cache_peak` less `cache_start`)
+    for Prism (core/runtime/runtime_growth.py, its compiled method) — after a failed run too: the cache an out-of-memory
+    met is the figure the next plan must hold. Nothing without an MPS sampler (CUDA keeps its own counters)."""
+    if sampler is None or sampler.cache_start is None or not getattr(hw_profile, "devices", None):
+        return
+    sampler.stop()
+    from neurobrix.core.runtime import runtime_growth as _rg
+    from neurobrix.core.runtime.precision_contract import registry_model_name as _rmn
+    mb = 1024 * 1024
+    grown = _rg.record(_rmn(cache_path), "compiled", hw_profile.devices[0].architecture,
+                       {0: sampler.cache_start / mb}, {0: sampler.cache_peak / mb})
+    if grown is not None:
+        print(f"[RuntimeGrowth] the MPS allocator's cache grew {grown:.0f} MB during this run (recorded for Prism)",
+              flush=True)
+
+
 def cmd_run(args):
     """Generate output using NeuroBrix Runtime."""
     from neurobrix.nbx import NBXContainer
@@ -979,6 +996,7 @@ def cmd_run(args):
         print(f"\n[ERROR] Pipeline failed: {e}")
         import traceback
         traceback.print_exc()
+        _record_compiled_growth(_sampled_peak, cache_path, hw_profile)
         sys.exit(1)
 
     # 6a. Print timing summary
@@ -996,6 +1014,7 @@ def cmd_run(args):
         from nbxtensor.memory.allocator import DeviceAllocator
         _peak = DeviceAllocator.peak_device_bytes()
     print(run_timings.format_peak(None if _peak is None else _peak / 2**20), flush=True)
+    _record_compiled_growth(_sampled_peak, cache_path, hw_profile)
     if _growth is not None:
         from neurobrix.core.runtime.precision_contract import registry_model_name as _rmn
         _rg, _gdevs, _before = _growth
