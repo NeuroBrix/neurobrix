@@ -27,6 +27,7 @@ def _room(monkeypatch, mb):
     from nbxtensor.backend import host_memory as HM
     from neurobrix.core.prism import memory_budget as MB
     monkeypatch.setattr(DC.os, "cpu_count", lambda: 64)
+    monkeypatch.setattr(DC, "_machine_cores", lambda hw: 64)                # the given profile's cores
     monkeypatch.setattr(DC.os, "getloadavg", lambda: (0.0, 0.0, 0.0))
     monkeypatch.setattr(MB, "memory_ladder_mb", lambda: [1024 * k for k in range(1, 257)])
     monkeypatch.setattr(HM, "memory_state", lambda: types.SimpleNamespace(available_mb=mb[0], total_mb=None))
@@ -35,9 +36,9 @@ def _room(monkeypatch, mb):
 def test_running_workers_are_counted_before_more_start(monkeypatch):
     mb = [10_240]                                                      # 10 GiB, workers of 2 GiB
     _room(monkeypatch, mb)
-    assert DC._workers_memory_holds(20, 2 << 30) == 5
-    assert DC._workers_memory_holds(20, 2 << 30, running=5) == 0       # the room is theirs: none more
-    assert DC._workers_memory_holds(20, 2 << 30, running=2) == 3
+    assert DC._workers_memory_holds(20, 2 << 30, "hw") == 5
+    assert DC._workers_memory_holds(20, 2 << 30, "hw", running=5) == 0       # the room is theirs: none more
+    assert DC._workers_memory_holds(20, 2 << 30, "hw", running=2) == 3
 
 
 def _slow_job(args):
@@ -54,10 +55,10 @@ def test_a_room_that_frees_mid_model_is_used(monkeypatch, tmp_path):
     alive, starts = [], []
     real = DC._workers_memory_holds
 
-    def watched(n, wb, running=0):
+    def watched(n, wb, hw, running=0):
         if len(alive) == 2:
             mb[0] = 32_768                                             # the gate ended: 32 GiB
-        more = real(n, wb, running)
+        more = real(n, wb, hw, running)
         alive.append(running + more)                                   # workers alive once these start
         return more
 

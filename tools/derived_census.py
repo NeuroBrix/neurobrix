@@ -2697,7 +2697,7 @@ def _plan_digests(model, hw, jobs) -> list:
     first = _plan_job(args[0])
     peak = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
     peak = int(peak) if sys.platform == "darwin" else int(peak) * 1024
-    workers = _workers_memory_holds(len(args) - 1, peak)
+    workers = _workers_memory_holds(len(args) - 1, peak, hw)
     with _host_hold(HOLDS, max(1, workers) * peak), ThreadPoolExecutor(max(1, workers)) as ex:
         return [first] + list(ex.map(_plan_job, args[1:]))
 
@@ -2802,20 +2802,23 @@ class _host_hold:
         return False
 
 
-def _machine_cores() -> int:
-    """The compute threads of the machine the workers run on, as its hardware profile declares them
+def _machine_cores(hw: str) -> int:
+    """The compute threads of the machine the workers run on, as the census's hardware profile `hw` declares them
     (`cpu.compute_threads`: the performance cores of a hybrid CPU, else the physical cores — rule 1, the profile is the
     machine's identity card): never `os.cpu_count()`, which counts the hyper-threads (80 on the rack's 40 cores).
-    A profile without its CPU is refused by name."""
-    from neurobrix.core.prism.autodetect import load_default_profile
-    cpu = getattr(load_default_profile(), "cpu", None)
+    A profile without its CPU is refused by name. Read from the profile the census was GIVEN, never detected: the
+    detection behind `load_default_profile` opens a driver context on every visible card, and a derivation, cardless
+    by construction, held 306 MiB on each of the rack's four cards for over an hour (2026-11-08 16:37, two Qwen3-30B
+    tables: the device suite refused every card as busy)."""
+    from neurobrix.core.prism.loader import load_profile
+    cpu = getattr(load_profile(hw), "cpu", None)
     if cpu is None:
         raise RuntimeError("derived census: this machine's hardware profile declares no cpu: section, so the workers "
                            "have no core count — regenerate the profile (rule 1: no count read from the machine)")
     return int(cpu.compute_threads)
 
 
-def _workers_memory_holds(n_jobs: int, worker_bytes: int, running: int = 0) -> int:
+def _workers_memory_holds(n_jobs: int, worker_bytes: int, hw: str, running: int = 0) -> int:
     """How many derivation workers the machine holds at once: the cores (`_machine_cores`, the profile's), and the free host
     memory read as Prism reads it (`nbxtensor.backend.host_memory`, rounded DOWN to the memory ladder's rung,
     `memory_budget.rung_down_mb`) over what one worker measured it takes (`worker_bytes`). A derivation holds a whole
@@ -2835,7 +2838,7 @@ def _workers_memory_holds(n_jobs: int, worker_bytes: int, running: int = 0) -> i
     for hours after the gate had ended (2026-10-23 21:34 -> 23:10)."""
     from nbxtensor.backend.host_memory import memory_state
     from neurobrix.core.prism.memory_budget import rung_down_mb
-    cores = max(0 if running else 1, _machine_cores() - int(os.getloadavg()[0]))
+    cores = max(0 if running else 1, _machine_cores(hw) - int(os.getloadavg()[0]))
     state = memory_state()
     free = state.available_mb
     if free is None or worker_bytes <= 0:
@@ -2934,7 +2937,7 @@ def _derive_jobs(model, hw, jobs, start_method=None):
         with _host_hold(HOLDS, 0) as hold:
             while nxt < len(rest) or running:
                 # the room asked again before every start, and at least every ROOM_EVERY_S while workers run
-                more = _workers_memory_holds(len(rest) - nxt, worker_bytes, running=len(running)) if nxt < len(rest) else 0
+                more = _workers_memory_holds(len(rest) - nxt, worker_bytes, hw, running=len(running)) if nxt < len(rest) else 0
                 for _ in range(more):
                     parent, child = ctx.Pipe(duplex=False)
                     proc = ctx.Process(target=_fresh_child, args=(child, _derive_job, rest[nxt]))

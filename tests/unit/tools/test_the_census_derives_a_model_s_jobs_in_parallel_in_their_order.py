@@ -31,6 +31,7 @@ def _fake_derive_keys(model, hw, mode, rung, req):
 
 def test_the_parallel_results_are_the_serial_results_in_the_jobs_order(monkeypatch):
     monkeypatch.setattr(DC, "derive_keys", _fake_derive_keys)
+    monkeypatch.setattr(DC, "_machine_cores", lambda hw: 4)
     jobs = [(mode, 0, ["--prompt", "x"], rung) for mode in ("triton", "triton_sequential") for rung in range(1, 8)]
     # fork: the monkeypatched derive_keys reaches forked workers only — a spawned worker re-imports the real one
     # (the platform default on macOS; red there before this line, KeyError on the fake mode)
@@ -49,19 +50,19 @@ def test_the_workers_are_what_the_free_memory_holds_not_the_cores(monkeypatch):
     import types
     from nbxtensor.backend import host_memory as HM
     from neurobrix.core.prism import memory_budget as MB
-    monkeypatch.setattr(DC, "_machine_cores", lambda: 12)
+    monkeypatch.setattr(DC, "_machine_cores", lambda hw: 12)
     monkeypatch.setattr(DC.os, "getloadavg", lambda: (0.0, 0.0, 0.0))
     monkeypatch.setattr(MB, "memory_ladder_mb", lambda: [4096, 8192, 16384])
     def free(mb):
         monkeypatch.setattr(HM, "memory_state", lambda: types.SimpleNamespace(available_mb=mb))
     free(10_000)                                       # rung 8 GiB; a worker of 2 GiB -> 4 at once
-    assert DC._workers_memory_holds(20, 2 << 30) == 4
+    assert DC._workers_memory_holds(20, 2 << 30, "hw") == 4
     free(3_000)                                        # under the lowest rung: one at a time
-    assert DC._workers_memory_holds(20, 2 << 30) == 1
+    assert DC._workers_memory_holds(20, 2 << 30, "hw") == 1
     free(100_000)                                      # memory to spare: the cores, then the jobs
-    assert DC._workers_memory_holds(20, 1 << 20) == 12 and DC._workers_memory_holds(3, 1 << 20) == 3
+    assert DC._workers_memory_holds(20, 1 << 20, "hw") == 12 and DC._workers_memory_holds(3, 1 << 20, "hw") == 3
     free(None)
-    assert DC._workers_memory_holds(20, 1 << 20) == 1
+    assert DC._workers_memory_holds(20, 1 << 20, "hw") == 1
 
 
 def test_the_workers_are_the_cores_the_machine_is_not_running_on(monkeypatch):
@@ -69,12 +70,12 @@ def test_the_workers_are_the_cores_the_machine_is_not_running_on(monkeypatch):
     explanation's timeout (2026-10-22). Red if the cores alone decide, whatever the machine already runs."""
     import types
     from nbxtensor.backend import host_memory as HM
-    monkeypatch.setattr(DC, "_machine_cores", lambda: 12)
+    monkeypatch.setattr(DC, "_machine_cores", lambda hw: 12)
     monkeypatch.setattr(HM, "memory_state", lambda: types.SimpleNamespace(available_mb=1_000_000))
     monkeypatch.setattr(DC.os, "getloadavg", lambda: (9.6, 9.0, 8.0))
-    assert DC._workers_memory_holds(20, 1 << 20) == 3
+    assert DC._workers_memory_holds(20, 1 << 20, "hw") == 3
     monkeypatch.setattr(DC.os, "getloadavg", lambda: (40.0, 40.0, 40.0))
-    assert DC._workers_memory_holds(20, 1 << 20) == 1
+    assert DC._workers_memory_holds(20, 1 << 20, "hw") == 1
 
 
 def test_the_cores_are_the_profiles_not_the_machines_threads(monkeypatch):
@@ -82,16 +83,16 @@ def test_the_cores_are_the_profiles_not_the_machines_threads(monkeypatch):
     workers are the profile's cores (rule 1). Red with the count read from the machine."""
     import types
     from nbxtensor.backend import host_memory as HM
-    from neurobrix.core.prism import autodetect as AD
+    from neurobrix.core.prism import loader as LO
     monkeypatch.setattr(DC.os, "cpu_count", lambda: 80)
     monkeypatch.setattr(DC.os, "getloadavg", lambda: (0.0, 0.0, 0.0))
     monkeypatch.setattr(HM, "memory_state", lambda: types.SimpleNamespace(available_mb=1_000_000))
-    monkeypatch.setattr(AD, "load_default_profile", lambda: types.SimpleNamespace(
+    monkeypatch.setattr(LO, "load_profile", lambda hw: types.SimpleNamespace(
         cpu=types.SimpleNamespace(compute_threads=40)))
-    assert DC._workers_memory_holds(100, 1 << 20) == 40
-    monkeypatch.setattr(AD, "load_default_profile", lambda: types.SimpleNamespace(cpu=None))
+    assert DC._workers_memory_holds(100, 1 << 20, "hw") == 40
+    monkeypatch.setattr(LO, "load_profile", lambda hw: types.SimpleNamespace(cpu=None))
     with pytest.raises(RuntimeError, match="declares no cpu"):
-        DC._workers_memory_holds(100, 1 << 20)
+        DC._workers_memory_holds(100, 1 << 20, "hw")
 
 
 def test_the_workers_leave_what_the_gate_cells_reserved_and_say_their_own(monkeypatch, tmp_path):
@@ -105,7 +106,7 @@ def test_the_workers_leave_what_the_gate_cells_reserved_and_say_their_own(monkey
     import types
     from nbxtensor.backend import host_memory as HM
     from neurobrix.core.prism import memory_budget as MB
-    monkeypatch.setattr(DC, "_machine_cores", lambda: 12)
+    monkeypatch.setattr(DC, "_machine_cores", lambda hw: 12)
     monkeypatch.setattr(DC.os, "getloadavg", lambda: (0.0, 0.0, 0.0))
     monkeypatch.setattr(MB, "memory_ladder_mb", lambda: [4096, 8192, 16384])
     monkeypatch.setattr(HM, "memory_state", lambda: types.SimpleNamespace(available_mb=20_000, total_mb=20_000))
@@ -113,9 +114,9 @@ def test_the_workers_leave_what_the_gate_cells_reserved_and_say_their_own(monkey
     (tmp_path / "hold_c1").write_text("c1gemv-final 4242\n")                   # a certifier's card: no bytes
     (tmp_path / "hold_host_999999").write_text(f"999999 {64 << 30}\n")       # another census: in the free memory already
     monkeypatch.setattr(DC, "HOLDS", None)
-    assert DC._workers_memory_holds(20, 2 << 30) == 7                          # no ledger: 0.8 x 19.5 GiB / 2 GiB
+    assert DC._workers_memory_holds(20, 2 << 30, "hw") == 7                          # no ledger: 0.8 x 19.5 GiB / 2 GiB
     monkeypatch.setattr(DC, "HOLDS", tmp_path)
-    assert DC._workers_memory_holds(20, 2 << 30) == 1                          # min(16, 0.8 x 19.5 - 12) GiB / 2 GiB
+    assert DC._workers_memory_holds(20, 2 << 30, "hw") == 1                          # min(16, 0.8 x 19.5 - 12) GiB / 2 GiB
     mine = tmp_path / f"hold_host_{os.getpid()}"
     with DC._host_hold(tmp_path, 4 << 30):
         assert mine.read_text().split() == [str(os.getpid()), str(4 << 30)]
@@ -145,13 +146,13 @@ def test_a_running_gate_cell_is_not_counted_twice(monkeypatch, tmp_path):
     import types
     from nbxtensor.backend import host_memory as HM
     from neurobrix.core.prism import memory_budget as MB
-    monkeypatch.setattr(DC, "_machine_cores", lambda: 64)            # the profile's cores (f9121b8b), never the host's
+    monkeypatch.setattr(DC, "_machine_cores", lambda hw: 64)            # the profile's cores (f9121b8b), never the host's
     monkeypatch.setattr(DC.os, "getloadavg", lambda: (0.0, 0.0, 0.0))
     monkeypatch.setattr(MB, "memory_ladder_mb", lambda: [65536, 98304, 131072])
     monkeypatch.setattr(HM, "memory_state", lambda: types.SimpleNamespace(available_mb=100_000, total_mb=257_000))
     (tmp_path / "hold_c3").write_text(f"{os.getppid()} {132 << 30}\n")
     monkeypatch.setattr(DC, "HOLDS", tmp_path)
-    assert DC._workers_memory_holds(60, 2 << 30) == 34                        # (0.8 x 251 - 132) GiB / 2 GiB
+    assert DC._workers_memory_holds(60, 2 << 30, "hw") == 34                        # (0.8 x 251 - 132) GiB / 2 GiB
 
 
 def test_the_room_keeps_the_scheduler_s_headroom(monkeypatch, tmp_path):
@@ -163,13 +164,13 @@ def test_the_room_keeps_the_scheduler_s_headroom(monkeypatch, tmp_path):
     import types
     from nbxtensor.backend import host_memory as HM
     from neurobrix.core.prism import memory_budget as MB
-    monkeypatch.setattr(DC, "_machine_cores", lambda: 128)           # the profile's cores (f9121b8b), never the host's
+    monkeypatch.setattr(DC, "_machine_cores", lambda hw: 128)           # the profile's cores (f9121b8b), never the host's
     monkeypatch.setattr(DC.os, "getloadavg", lambda: (0.0, 0.0, 0.0))
     monkeypatch.setattr(MB, "memory_ladder_mb", lambda: [65536, 131072, 196608])
     monkeypatch.setattr(HM, "memory_state", lambda: types.SimpleNamespace(available_mb=204_800, total_mb=262_144))
     (tmp_path / "hold_c2").write_text(f"{os.getppid()} {133 << 30}\n")
     monkeypatch.setattr(DC, "HOLDS", tmp_path)
-    assert DC._workers_memory_holds(100, 2 << 30) == 35
+    assert DC._workers_memory_holds(100, 2 << 30, "hw") == 35
 
 
 def test_the_census_writes_its_progress_end_and_failure(tmp_path, monkeypatch):
