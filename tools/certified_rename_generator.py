@@ -13,6 +13,10 @@ usage: certified_rename_generator.py --dir <vendor/profile dir> --from H1,H2 --t
 import argparse, json, sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+import neurobrix  # noqa: E402,F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
+from nbxtensor.ops import autotune_certified as C  # noqa: E402
+
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
@@ -30,8 +34,7 @@ def main(argv=None) -> int:
         doc = json.loads(f.read_text())
         n = 0
         for key, e in doc.get("entries", {}).items():
-            for proof in [e.get("proof")] + [v.get("proof") for v in (e.get("variants") or {}).values()
-                                             if isinstance(v, dict)]:
+            for proof in C.entry_proofs(e):           # every class, every alternate, every generator's proof
                 b = (proof or {}).get("backend") or {}
                 if b.get("backend_hash") in old:
                     b["backend_hash_was"] = b["backend_hash"]

@@ -35,7 +35,7 @@ def class_proof(entry: dict, cls: int):
     cert = C.entry_for_memory_gb(entry, cls)
     if cert is None:
         return None
-    return {k: v for k, v in cert.items() if k in ("config", "proof", "excluded")}
+    return {k: v for k, v in cert.items() if k in ("config", "proof", "excluded", "unit", C.ALSO_PROVEN, C.ALTERNATES)}
 
 
 def generator_of(proof: dict) -> tuple:

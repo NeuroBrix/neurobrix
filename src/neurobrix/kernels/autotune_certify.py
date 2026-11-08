@@ -3047,8 +3047,7 @@ def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, re
             if skip_proven_since is not None:
                 # resume a sweep: a key this card's class re-proved at or after the given time (ISO, UTC like the
                 # proofs) is done — a stopped re-sweep restarts where it was instead of from the first key
-                _e = C.entry_for_memory_gb(entries.get(ktext), certifying_class)
-                if _e and str(_e.get("proof", {}).get("date", "")) >= skip_proven_since:
+                if C.class_proven_since(C.entry_for_memory_gb(entries.get(ktext), certifying_class), skip_proven_since):
                     continue
             owed = None
             if C.coverage_asked(entries, ktext, certifying_class, only_missing, reprove_unclocked, reprove_generator,
@@ -3057,7 +3056,8 @@ def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, re
                 # runtime serves; --only-missing asks it too), and, with --reprove-unclocked, at a recorded clock —
                 # unless the matrix unit's measurement is still owed to it (`unit_owed`): then the stored
                 # configuration is kept, proven and timed once, and the unit's tiles are measured beside it
-                owed = C.entry_for_memory_gb(entries.get(ktext), certifying_class) if only_missing else None
+                owed = (C.certification_for_generator(C.entry_for_memory_gb(entries.get(ktext), certifying_class),
+                                                      C.proof_backend({"backend": _backend()})) if only_missing else None)
                 if not unit_owed(qual, key, owed):
                     continue
             _r = refused.get((qual, ktext))
@@ -3068,10 +3068,10 @@ def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, re
             # another code generator keeps its configuration — proven again here by the oracle and one
             # timing under the witness. A sweep only where that configuration fails the oracle, or where
             # there is no entry at all; the summary says how many of each and why.
+            # The class head's configuration is re-proven; its proof is ADDED beside the other generators' (`file_certification`).
             stored = C.entry_for_memory_gb(entries.get(ktext), certifying_class) if reprove_generator else None
-            stored_label = C.proof_backend(stored.get("proof")) if stored else None
-            reprove = bool(stored and stored.get("config") and stored_label
-                           and stored_label != C.proof_backend({"backend": _backend()}))
+            stored_label = C.reproof_source(stored, C.proof_backend({"backend": _backend()}))
+            reprove = stored_label is not None
             attempts += 1
             t0 = time.time()
             if budget_bytes is not None:

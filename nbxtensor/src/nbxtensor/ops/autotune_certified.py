@@ -83,9 +83,11 @@ def format_for(entries: Dict[str, Dict]) -> str:
     gate refuse the whole file (three files, 6 344 entries, 2026-09-13 22:40):
     the stamp is a claim about every entry, and the claim was false."""
     for entry in (entries or {}).values():
-        certs = [entry] + list((entry.get("variants") or {}).values()) if isinstance(entry, dict) else [entry]
+        certs = entry_certifications(entry) if isinstance(entry, dict) else [entry]
         for c in certs:
             if not isinstance(c, dict) or "built" not in (c.get("proof") or {}):
+                return "nbx-autotune-certified/1"
+            if any("built" not in p for p in certification_proofs(c)):
                 return "nbx-autotune-certified/1"
     return FORMAT
 
@@ -321,17 +323,85 @@ def proof_backend(proof: Optional[Dict[str, Any]]) -> Optional[str]:
     return label
 
 
+# ---------------------------------------------------------------------------
+# one certification, one or more proofs (one per code generator)
+# ---------------------------------------------------------------------------
+# A certification (an entry's primary, or a class variant) is a configuration and its PROOF. Two generators whose
+# compiled kernels are byte-identical (the macOS 14 and 15 Metal wheels, 2026-11-08: .ttir/.ttgir/.msl/.metallib
+# identical on 235-236 kernels x 4 builds) must BOTH be served, so a certification carries its first proof in `proof`
+# and the proofs of the SAME configuration under other generators in `also_proven` — one per generator. A generator
+# under which the stored configuration failed the oracle, and whose sweep chose another, files that other
+# certification of the same memory class in the head's `alternates` (a list of certifications, each with its own
+# `proof` and `also_proven`), so the generators still served by the head keep their configuration. Both fields are
+# additive: a reader that knows only `proof` reads the file as before and serves the head proof's generator.
+ALSO_PROVEN = "also_proven"
+ALTERNATES = "alternates"
+
+
+def certification_proofs(cert: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Every proof one certification carries: its `proof` first, then `also_proven`, in order."""
+    if not isinstance(cert, dict):
+        return []
+    head = cert.get("proof")
+    return ([head] if isinstance(head, dict) else []) + [p for p in (cert.get(ALSO_PROVEN) or []) if isinstance(p, dict)]
+
+
+def class_certifications(cert: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Every certification of one memory class: the class's head (an entry's primary or a variant) and its
+    `alternates`, the head first."""
+    if not isinstance(cert, dict):
+        return []
+    return [cert] + [a for a in (cert.get(ALTERNATES) or []) if isinstance(a, dict)]
+
+
+def entry_certifications(entry: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Every certification an entry carries: each memory class's head (the primary, then the variants) and its
+    alternates. A count of entries counts entries; this is for the questions asked of every proof."""
+    if not isinstance(entry, dict):
+        return []
+    heads = [entry] + [v for v in (entry.get("variants") or {}).values() if isinstance(v, dict)]
+    return [c for h in heads for c in class_certifications(h)]
+
+
+def entry_proofs(entry: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Every proof an entry carries, over every class and every certification (the rename and migration tools)."""
+    return [p for c in entry_certifications(entry) for p in certification_proofs(c)]
+
+
+def certification_for_generator(cert: Optional[Dict[str, Any]], gen: Optional[str]) -> Optional[Dict[str, Any]]:
+    """The certification of ONE memory class (`cert` is that class's head, as `entry_for_memory_gb` answers it) that a
+    proof under `gen` names — the head or one of its alternates — or None. When the naming proof is not the
+    certification's own `proof`, the answer is a view whose `proof` is that generator's (its date, timings and
+    witness are the ones the running generator measured); the configuration is the certification's."""
+    if cert is None or gen is None:
+        return None
+    for c in class_certifications(cert):
+        for i, p in enumerate(certification_proofs(c)):
+            if proof_backend(p) == gen:
+                return c if i == 0 else {**c, "proof": p}
+    return None
+
+
+def class_proven_since(cert: Optional[Dict[str, Any]], since: str) -> bool:
+    """True when any proof of this memory class (`cert` its head) is dated at or after `since` (ISO, UTC like the
+    proofs): the certifier's resume of a stopped sweep (`--skip-proven-since`)."""
+    return any(str(p.get("date", "")) >= since for c in class_certifications(cert) for p in certification_proofs(c))
+
+
+def reproof_source(cert: Optional[Dict[str, Any]], gen: Optional[str]) -> Optional[str]:
+    """What `--reprove-generator` re-proves this class's head FROM: the generators its proofs name, as one label, when
+    the head has a configuration, at least one of its proofs names a generator, and none names `gen` (the running
+    one); None otherwise (nothing to re-prove: absent, unnamed, or already proven under `gen`)."""
+    labels = [lab for p in certification_proofs(cert) if (lab := proof_backend(p))]
+    if not (cert and cert.get("config") and labels) or gen in labels:
+        return None
+    return ", ".join(labels)
+
+
 def proof_backends(entry: Dict[str, Any]) -> set:
-    """Every generator label this entry carries a proof from (primary and variants)."""
-    out = set()
-    lab = proof_backend(entry.get("proof"))
-    if lab:
-        out.add(lab)
-    for slot, var in (entry.get("variants") or {}).items():
-        lab = proof_backend((var or {}).get("proof"))
-        if lab:
-            out.add(lab)
-    return out
+    """Every generator label this entry carries a proof from (primary, variants, their alternates and every proof of
+    each)."""
+    return {lab for p in entry_proofs(entry) if (lab := proof_backend(p))}
 
 
 def covered_memory_gbs(entry: Dict[str, Any]) -> set:
@@ -542,11 +612,10 @@ def entry_for_generator(entry: Optional[Dict[str, Any]],
     """
     if entry is None or gen is None:
         return None
-    if proof_backend(entry.get("proof")) == gen:
-        return entry
-    for var in (entry.get("variants") or {}).values():
-        if proof_backend((var or {}).get("proof")) == gen:
-            return var
+    for head in [entry] + [v for v in (entry.get("variants") or {}).values() if isinstance(v, dict)]:
+        got = certification_for_generator(head, gen)
+        if got is not None:
+            return got
     return None
 
 
@@ -602,9 +671,11 @@ def entry_covers(entries: Dict[str, Dict[str, Any]], ktext: str, cls: Optional[i
     cert = entry_for_memory_gb(entries.get(ktext), cls)
     if cert is None:
         return False
+    if need_generator is not None:
+        cert = certification_for_generator(cert, need_generator)   # any proof of the class naming it
+        if cert is None:
+            return False
     if need_clock and not proof_records_clock(cert.get("proof")):
-        return False
-    if need_generator is not None and proof_backend(cert.get("proof")) != need_generator:
         return False
     return True
 
@@ -629,7 +700,13 @@ def file_certification(entries: Dict[str, Dict[str, Any]], ktext: str, cert: Dic
     entry no card is ever served is not worth writing. A legacy primary whose
     class is unknown (a rig-wide proof) is REPLACED by the fresh one: it served
     no card, and its config, deviation and timings leave with it — said here
-    because a discarded measurement should be discarded on purpose."""
+    because a discarded measurement should be discarded on purpose.
+
+    Within a class already held, the fresh certification is placed per code
+    generator (`_merge_into_class`): a proof of another generator is never
+    replaced — the same configuration gains the fresh proof in `also_proven`,
+    another configuration becomes an alternate of the class — and a proof of
+    the same generator is replaced."""
     cls = proof_memory_gb(cert.get("proof"))
     if cls is None:
         raise ValueError("the certification's proof does not say which card's memory it was made on "
@@ -638,14 +715,77 @@ def file_certification(entries: Dict[str, Dict[str, Any]], ktext: str, cert: Dic
     if cert.get("unit"):
         body["unit"] = cert["unit"]          # the matrix unit's tile, measured faster than `config` on this class
     cur = entries.get(ktext)
-    if cur is None or proof_memory_gb(cur.get("proof")) in (cls, None):
+    if cur is None or proof_memory_gb(cur.get("proof")) is None:
         variants = (cur or {}).get("variants")
         entries[ktext] = body if not variants else {**body, "variants": variants}
         entries[ktext].get("variants", {}).pop(_variant_slot(cls), None)
         if "variants" in entries[ktext] and not entries[ktext]["variants"]:
             del entries[ktext]["variants"]
         return
-    cur.setdefault("variants", {})[_variant_slot(cls)] = body
+    if proof_memory_gb(cur.get("proof")) == cls:
+        variants = cur.get("variants")
+        head = _merge_into_class({k: v for k, v in cur.items() if k != "variants"}, body)
+        entries[ktext] = head if not variants else {**head, "variants": variants}
+        entries[ktext].get("variants", {}).pop(_variant_slot(cls), None)
+        if "variants" in entries[ktext] and not entries[ktext]["variants"]:
+            del entries[ktext]["variants"]
+        return
+    slot = _variant_slot(cls)
+    var = (cur.get("variants") or {}).get(slot)
+    if isinstance(var, dict) and proof_memory_gb(var.get("proof")) == cls:
+        cur["variants"][slot] = _merge_into_class(var, body)
+        return
+    cur.setdefault("variants", {})[slot] = body
+
+
+def _with_proofs(cert: Dict[str, Any], proofs: List[Dict[str, Any]]) -> Dict[str, Any]:
+    out = {k: v for k, v in cert.items() if k not in ("proof", ALSO_PROVEN, ALTERNATES)}
+    out["proof"] = proofs[0]
+    if len(proofs) > 1:
+        out[ALSO_PROVEN] = list(proofs[1:])
+    return out
+
+
+def _merge_into_class(head: Dict[str, Any], body: Dict[str, Any]) -> Dict[str, Any]:
+    """One memory class's certifications with a fresh one placed in it; the new head (alternates inside).
+
+    The rule, per generator: the fresh proof names generator G. Every earlier proof of G in the class — and every
+    proof naming no generator, which no gate can tell from G — leaves (a re-proof of G replaces G's proof); the proofs
+    of every OTHER generator stay. The fresh proof then joins the certification of the same configuration and matrix
+    unit choice when the class has one (a re-proof of the stored configuration under a new generator ADDS its proof
+    beside the others); otherwise it is a certification of its own — in the place of the one that lost its last
+    proof to it, else after the others (an alternate), so the head the published readers serve stays where it was
+    for every generator that still holds it. A certification left without a proof leaves."""
+    gen = proof_backend(body["proof"])
+    certs: List[Optional[Dict[str, Any]]] = []
+    where: List[Optional[int]] = []          # per certification: the place its first replaced proof held
+    emptied: Optional[int] = None
+    for c in class_certifications(head):
+        proofs = certification_proofs(c)
+        gone = [i for i, q in enumerate(proofs) if gen is None or proof_backend(q) in (gen, None)]
+        kept = [q for i, q in enumerate(proofs) if i not in gone]
+        where.append(gone[0] if gone else None)
+        if kept:
+            certs.append(_with_proofs(c, kept))
+        else:
+            if emptied is None:
+                emptied = len(certs)
+            certs.append(None)
+    same = next((i for i, c in enumerate(certs) if c is not None and c.get("config") == body["config"]
+                 and c.get("unit") == body.get("unit")), None)
+    if same is not None:
+        proofs = certification_proofs(certs[same])
+        at = where[same] if where[same] is not None else len(proofs)     # a replaced proof keeps its place
+        certs[same] = _with_proofs(certs[same], proofs[:at] + [body["proof"]] + proofs[at:])
+    elif emptied is not None:
+        certs[emptied] = dict(body)
+    else:
+        certs.append(dict(body))
+    certs = [c for c in certs if c is not None]
+    out = dict(certs[0])
+    if len(certs) > 1:
+        out[ALTERNATES] = certs[1:]
+    return out
 
 
 #: the fields of a matrix-unit tile (`matrix_unit.mm` rows of the vendor file) a certificate's choice carries
@@ -711,6 +851,58 @@ def executing_memory_gb(args=None, device_idx: Optional[int] = None) -> Optional
     return None
 
 
+def _validate_proof(where: str, proof: Dict[str, Any], fmt: str, expected_tol, key, stem_dtype,
+                    problems: List[str]) -> Optional[float]:
+    """The checks of one proof (a certification's `proof` or one of its `also_proven`); its tolerance, or None when
+    the proof is too incomplete to go on."""
+    missing = [f for f in _REQUIRED[fmt] if f not in proof]
+    if missing:
+        problems.append(f"{where}: proof without {', '.join(missing)}")
+        return None
+    try:
+        dev, tol = float(proof["deviation"]), float(proof["tolerance"])
+    except (TypeError, ValueError):
+        problems.append(f"{where}: deviation/tolerance are not numbers")
+        return None
+    if not (dev == dev) or dev < 0 or dev > tol:
+        problems.append(f"{where}: the proof's deviation {dev:.3e} exceeds its tolerance {tol:.1e}")
+    if expected_tol is not None and abs(tol - expected_tol) > 1e-15:
+        problems.append(f"{where}: tolerance {tol:.1e} is not the profile's {expected_tol:.1e} for {stem_dtype}")
+    if list(proof.get("shape") or []) != list(key):
+        problems.append(f"{where}: the proof's shape is not the entry's key")
+    try:
+        _dt.datetime.fromisoformat(str(proof["date"]).replace("Z", "+00:00"))
+    except ValueError:
+        problems.append(f"{where}: the date does not parse")
+    return tol
+
+
+def _validate_class(where: str, head: Dict[str, Any], fmt: str, expected_tol, key, stem_dtype, spaces: set,
+                    problems: List[str]) -> None:
+    """A memory class's alternates (each a certification of the head's class, none nesting further), and that no two
+    proofs of the class name one generator — the server would have two answers for it."""
+    alts = head.get(ALTERNATES)
+    if alts is not None:
+        if not isinstance(alts, list) or not all(isinstance(a, dict) for a in alts):
+            problems.append(f"{where}: {ALTERNATES} is not a list of certifications")
+            return
+        cls = proof_memory_gb(head.get("proof"))
+        for i, a in enumerate(alts):
+            awhere = f"{where} {ALTERNATES}[{i}]"
+            _validate_certification(awhere, a, fmt, expected_tol, key, stem_dtype, problems)
+            _validate_parameter_names(awhere, a, spaces, problems)
+            if ALTERNATES in a or "variants" in a:
+                problems.append(f"{awhere}: an alternate carries its own {ALTERNATES} or variants")
+            if proof_memory_gb(a.get("proof")) != cls:
+                problems.append(f"{awhere}: made on a {proof_memory_gb(a.get('proof'))} GB card, its class's head on {cls} GB")
+            if proof_backend(a.get("proof")) is None:
+                problems.append(f"{awhere}: names no code generator (an alternate exists only for one)")
+    labels = [proof_backend(p) for c in class_certifications(head) for p in certification_proofs(c)]
+    named = [lab for lab in labels if lab]
+    for lab in sorted({lab for lab in named if named.count(lab) > 1}):
+        problems.append(f"{where}: two proofs of one memory class name the generator {lab}")
+
+
 def _validate_certification(where: str, entry: Any, fmt: str, expected_tol, key, stem_dtype, problems: List[str]) -> None:
     """The per-certification checks, shared by an entry's primary and its variants."""
     if not isinstance(entry, dict):
@@ -723,25 +915,22 @@ def _validate_certification(where: str, entry: Any, fmt: str, expected_tol, key,
     if not isinstance(proof, dict):
         problems.append(f"{where}: no proof")
         return
-    missing = [f for f in _REQUIRED[fmt] if f not in proof]
-    if missing:
-        problems.append(f"{where}: proof without {', '.join(missing)}")
+    tol = _validate_proof(where, proof, fmt, expected_tol, key, stem_dtype, problems)
+    if tol is None:
         return
-    try:
-        dev, tol = float(proof["deviation"]), float(proof["tolerance"])
-    except (TypeError, ValueError):
-        problems.append(f"{where}: deviation/tolerance are not numbers")
-        return
-    if not (dev == dev) or dev < 0 or dev > tol:
-        problems.append(f"{where}: the proof's deviation {dev:.3e} exceeds its tolerance {tol:.1e}")
-    if expected_tol is not None and abs(tol - expected_tol) > 1e-15:
-        problems.append(f"{where}: tolerance {tol:.1e} is not the profile's {expected_tol:.1e} for {stem_dtype}")
-    if list(proof.get("shape") or []) != list(key):
-        problems.append(f"{where}: the proof's shape is not the entry's key")
-    try:
-        _dt.datetime.fromisoformat(str(proof["date"]).replace("Z", "+00:00"))
-    except ValueError:
-        problems.append(f"{where}: the date does not parse")
+    also = entry.get(ALSO_PROVEN)
+    if also is not None:
+        if not isinstance(also, list) or not all(isinstance(q, dict) for q in also):
+            problems.append(f"{where}: {ALSO_PROVEN} is not a list of proofs")
+        else:
+            cls = proof_memory_gb(proof)
+            for i, q in enumerate(also):
+                qwhere = f"{where} {ALSO_PROVEN}[{i}]"
+                _validate_proof(qwhere, q, fmt, expected_tol, key, stem_dtype, problems)
+                if proof_memory_gb(q) != cls:
+                    problems.append(f"{qwhere}: made on a {proof_memory_gb(q)} GB card, the certification's on {cls} GB")
+                if proof_backend(q) is None:
+                    problems.append(f"{qwhere}: names no code generator (a further proof exists only for one)")
     unit = entry.get("unit")
     if unit is not None:
         tile = unit.get("tile") if isinstance(unit, dict) else None
@@ -811,6 +1000,7 @@ def validate(doc: Any, path: Path, tuner=None) -> List[str]:
         _validate_parameter_names(where, entry, spaces, problems)
         if not isinstance(entry, dict):
             continue
+        _validate_class(where, entry, fmt, expected_tol, key, stem_dtype, spaces, problems)
         variants = entry.get("variants")
         if variants is None:
             continue
@@ -821,6 +1011,8 @@ def validate(doc: Any, path: Path, tuner=None) -> List[str]:
             vwhere = f"{where} variant {slot}"
             _validate_certification(vwhere, var, fmt, expected_tol, key, stem_dtype, problems)
             _validate_parameter_names(vwhere, var, spaces, problems)
+            if isinstance(var, dict):
+                _validate_class(vwhere, var, fmt, expected_tol, key, stem_dtype, spaces, problems)
             vcls = proof_memory_gb(var.get("proof")) if isinstance(var, dict) else None
             if vcls is None:
                 problems.append(f"{vwhere}: its proof does not say which card's memory it was made on")
@@ -932,12 +1124,13 @@ def lookup(kernel_qual: str, tuner, key: tuple, ignore_switch: bool = False,
     gen = running_generator()
     if gen is None:
         return cert                       # cannot ask: do not refuse
-    matched = entry_for_generator(cert, gen)
+    matched = certification_for_generator(cert, gen)   # this class's certifications only, never another class's
     if matched is not None:
         return matched
-    was = proof_backend(cert.get("proof"))
-    if was is None:
-        return cert                       # the proof does not say: not a mismatch
+    named = sorted({lab for c in class_certifications(cert) for p in certification_proofs(c) if (lab := proof_backend(p))})
+    if not named:
+        return cert                       # no proof of this class says: not a mismatch
+    was = ", ".join(named)
     n = _GEN_REFUSED.get(kernel_qual, 0) + 1
     _GEN_REFUSED[kernel_qual] = n
     if n == 1:                            # once per kernel, not once per shape

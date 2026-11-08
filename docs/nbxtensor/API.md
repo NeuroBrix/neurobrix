@@ -2848,7 +2848,8 @@ def format_for(entries: Dict[str, Dict]) -> str
     # the format a file may claim: /2 only when EVERY certification in it carries `built`, /1 otherwise
 def restamp(path: Path) -> Optional[str]       # repair a file's format claim to what its entries satisfy
 def file_certification(entries: Dict[str, Dict[str, Any]], ktext: str, cert: Dict[str, Any]) -> None
-    # place a fresh certification in a file's entries by the memory class its proof names
+    # place a fresh certification in a file's entries by the memory class its proof names, then by its generator:
+    # another generator's proof is never replaced (same configuration: added to `also_proven`; another: an alternate)
 def entry_covers(entries: Dict[str, Dict[str, Any]], ktext: str, cls: Optional[int], need_clock: bool = False,
                  need_generator: Optional[str] = None) -> bool
     # --only-missing's question, per memory class
@@ -2856,12 +2857,26 @@ def coverage_asked(entries: Dict[str, Dict[str, Any]], ktext: str, cls: Optional
                    reprove_unclocked: bool, reprove_generator: bool, running_generator: Optional[str]) -> bool
     # the certifier's one question: is this key to be (re)certified on this run?
 def entry_for_generator(entry: Optional[Dict[str, Any]], gen: Optional[str]) -> Optional[Dict[str, Any]]
-    # the certification proven under THIS generator: the entry, a variant that names it, or None
+    # the certification proven under THIS generator, over every class: the primary's, a variant's, or None
 def generator_identity() -> Dict[str, Any]     # the compiler's identity, one door for the stamp writer and the gate
 def running_generator() -> Optional[str]       # the code generator about to run, as a proof's `backend` records it
 def proof_backend(proof: Optional[Dict[str, Any]]) -> Optional[str]
     # the generator a proof was made with, as one label (triton <version>, plus the backend when not cuda)
 def proof_backends(entry: Dict[str, Any]) -> set   # every generator label an entry carries a proof from
+# one certification, one proof per generator: `proof`, then `also_proven` (the same configuration under other
+# generators); `alternates` (another configuration of the same class, for a generator the head's failed under)
+ALSO_PROVEN = "also_proven"
+ALTERNATES = "alternates"
+def certification_proofs(cert: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]   # `proof` first, then `also_proven`
+def class_certifications(cert: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]   # a class's head, then its alternates
+def entry_certifications(entry: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]
+    # every certification of an entry: each class's head (primary, variants) and its alternates
+def entry_proofs(entry: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]   # every proof of an entry, every class
+def certification_for_generator(cert: Optional[Dict[str, Any]], gen: Optional[str]) -> Optional[Dict[str, Any]]
+    # within ONE class (`cert` its head): the certification a proof under `gen` names, its `proof` that one; or None
+def class_proven_since(cert: Optional[Dict[str, Any]], since: str) -> bool   # any proof of the class dated >= since
+def reproof_source(cert: Optional[Dict[str, Any]], gen: Optional[str]) -> Optional[str]
+    # the generators a class head is re-proven FROM under `gen`, or None when there is nothing to re-prove
 def proof_records_regime(proof: Optional[Dict[str, Any]]) -> bool
     # True when the proof records the stability regime its timings were measured under (a clock lock or a witness)
 ```

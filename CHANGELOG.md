@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whole budget instead of a fixed 92 % of it. Devices without the fact are planned as before.
 
 ### Fixed
+- **`neurobrix autotune certify --reprove-generator` no longer un-serves the build it re-proves from**: re-proving a
+  certified directory under a new code generator replaced each entry's one proof, so the published build lost every
+  key (54 of 54 on one Apple kernel). The new proof is now added beside the others and each generator is served its
+  own certification. `tools/certified_rename_generator.py`, `tools/migrate_conv_fp16_key.py`,
+  `tools/merge_certified_class.py` and `tools/reproof_coverage.py` read every proof of an entry.
 - **A mixture-of-experts model on an Apple GPU is no longer planned on a free expert miss**: Prism priced a routed
   expert the store's cache missed as costing nothing on unified memory, so it chose an expert store estimated at 18 s for
   DeepSeek-Coder-V2-Lite where the run took more than 40 minutes. A miss is now priced as the page-in it is, at the
