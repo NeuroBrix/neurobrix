@@ -209,29 +209,42 @@ class SampledDevicePeak:
     every Metal run read "na" (rule 3: every gate cell writes its peak). A thread reads the driver every `period_s`
     between `start()` and `stop()`; the peak is the largest reading — what the driver held for this process, caches
     included, the same quantity the Triton allocator reports for its own driver (`DeviceAllocator.peak_device_bytes`).
-    A runtime that keeps a counter (CUDA's max_memory_reserved) is read directly, never sampled."""
+    A runtime that keeps a counter (CUDA's max_memory_reserved) is read directly, never sampled.
 
-    def __init__(self, read, period_s: float = 0.002):
+    `cache_read`, when given, is sampled beside it: what the driver holds beyond the allocator's live bytes (MPS: driver
+    less current), kept as `cache_start` (read at `start()`, before the executor) and `cache_peak` (the largest over the
+    span) — the compiled engine's runtime growth on MPS (`core/runtime/runtime_growth.py`)."""
+
+    def __init__(self, read, period_s: float = 0.002, cache_read=None):
         import threading
-        self._read, self._period = read, float(period_s)
+        self._read, self._period, self._cache_read = read, float(period_s), cache_read
         self.peak = 0
+        self.cache_start = self.cache_peak = None
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._loop, name="nbx-device-peak", daemon=True)
 
     def _loop(self) -> None:
         while not self._stop.is_set():
-            self.peak = max(self.peak, int(self._read()))
+            self._sample()
             self._stop.wait(self._period)
+
+    def _sample(self) -> None:
+        self.peak = max(self.peak, int(self._read()))
+        if self._cache_read is not None:
+            self.cache_peak = max(self.cache_peak, int(self._cache_read()))
 
     def start(self) -> "SampledDevicePeak":
         self.peak = int(self._read())
+        if self._cache_read is not None:
+            self.cache_start = self.cache_peak = int(self._cache_read())
         self._thread.start()
         return self
 
     def stop(self) -> int:
-        self._stop.set()
-        self._thread.join()
-        self.peak = max(self.peak, int(self._read()))
+        if not self._stop.is_set():
+            self._stop.set()
+            self._thread.join()
+            self._sample()
         return self.peak
 
 
@@ -240,4 +253,5 @@ def sampled_device_peak() -> Optional[SampledDevicePeak]:
     import torch
     if torch.cuda.is_available() or not (hasattr(torch, "mps") and torch.backends.mps.is_available()):
         return None
-    return SampledDevicePeak(torch.mps.driver_allocated_memory).start()
+    return SampledDevicePeak(torch.mps.driver_allocated_memory, cache_read=lambda: (
+        torch.mps.driver_allocated_memory() - torch.mps.current_allocated_memory())).start()
