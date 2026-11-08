@@ -37,7 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Level Zero) is described as the device states it; an integrated one as unified memory, planned as one pool with the
   host the way Apple chips are. A GPU no backend drives (Tiger Lake, Alder Lake, Raptor Lake: Intel's Triton has no
   target for them; any GPU whose driver is not installed) is refused by name with its reason, and the plan says so and
-  runs on the CPU with every core of the profile. On Windows the machine's memory is read through PowerShell when
+  runs on the CPU with every core of the profile; nbxtensor's Level Zero runtime no longer counts such a GPU among its
+  devices either. On Windows the machine's memory is read through PowerShell when
   `wmic` is absent (Windows 11 24H2), where an invented 8 GB was written.
 - **A mixture-of-experts model on an Apple GPU is no longer planned on a free expert miss**: Prism priced a routed
   expert the store's cache missed as costing nothing on unified memory, so it chose an expert store estimated at 18 s for

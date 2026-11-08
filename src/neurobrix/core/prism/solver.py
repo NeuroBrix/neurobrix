@@ -10201,7 +10201,7 @@ def plan_record(plan: "ExecutionPlan") -> dict:
         rec["layer_stream_resident"] = {k: list(v) for k, v in plan.layer_stream_resident.items()}
     if plan.host_footprint:
         rec["host_footprint"] = dict(plan.host_footprint)
-    if plan.refused_devices:
+    if getattr(plan, "refused_devices", None):
         rec["refused_devices"] = [dict(d) for d in plan.refused_devices]
     if plan.unified_rungs_tried:
         rec["unified_rungs_tried"] = [list(t) for t in plan.unified_rungs_tried]
@@ -10230,7 +10230,7 @@ def explain_plan(plan: "ExecutionPlan") -> str:
         lines.append("candidates      none recorded")
     for name, sc, why in plan.rejected:
         lines.append(f"refused         {name} (scored {sc:.0f}): {why}")
-    for d in plan.refused_devices:
+    for d in getattr(plan, "refused_devices", None) or []:
         lines.append(f"device refused  {d['model']} ({d.get('pci_id') or d.get('brand')}"
                      + (f", {d['platform']}" if d.get("platform") else "")
                      + (", integrated" if d.get("integrated") else "") + f"): {d['refused']}")
