@@ -73,7 +73,7 @@ neurobrix run --model Qwen/Qwen3-30B-A3B-Thinking-2507 \
 | `--prompt` | yes | Input text |
 | `--system` | no | System message (chat mode) |
 | `--chat` / `--no-chat` | no | Force chat template on/off |
-| `--temperature`, `--top-k`, `--top-p`, `--repetition-penalty`, `--max-tokens` | no | Sampling params (order and defaults: [CLI reference, Sampling](reference/cli.md#sampling)) |
+| `--temperature`, `--top-k`, `--top-p`, `--repetition-penalty`, `--max-tokens` | no | Sampling params (order and defaults: [Sampling](#sampling)) |
 
 Output: `.txt` (or `.json` if `--output result.json`).
 
@@ -309,6 +309,59 @@ For each invocation:
 - If the extension does not match the resolved mode: error clearly,
   never silently write wrong content.
 - If `--output result` (no extension): append the auto-extension.
+
+## Sampling
+
+Every text, vlm and audio_llm decode samples the same way, on both engines (`--compiled` and `--triton`): one sampler
+applies the repetition penalty, the temperature, top-k and top-p, then draws (or takes the most likely token when the
+temperature is 0). Each of the four values is taken from the first source that sets it:
+
+1. the request: the flag (`--temperature`, `--top-k`, `--top-p`, `--repetition-penalty`), or the same key in a `serve` request (the warm path forwards all four and
+   `--max-tokens`);
+2. the model's container: its `runtime/defaults.json`, the vendor's generation config as the container was built with
+   it;
+3. the family's documented defaults, in `config/families/<family>.yml` under `defaults:`. For `llm`, `vlm`,
+   `audio_llm` and `multimodal`: temperature 0.7, top-k 50, top-p 0.9, repetition penalty 1.0.
+
+A value the container leaves empty (`null`) lets the family's value through. A value no source sets stops the run with
+an error naming it; the engine never substitutes one. The repetition penalty counts the prompt's tokens and the
+generated ones for a text decode, and the generated ones for a decode fed with image or audio embeddings.
+
+## What a command prints
+
+stdout carries the command's result only: the generated text, the transcript, `SAVED: <path>` for a file, a table,
+or — with `--json` — one JSON record on one line. stderr carries a few status lines (the engine in use, the run
+time, a first launch measuring the machine, a warning, an error with its remedy) and stays empty under `--json`
+unless something is wrong.
+
+| Option / variable | Effect |
+|----------|--------|
+| `-v`, `--verbose` (before or after the command) | Adds the engine's developer lines on stderr — the plan (strategy, devices, memory), the loaders, the replay, the kernel directory, the `[Timings]` / `[Peak]` lines; `neurobrix --help -v` also lists the developer commands (`calibrate`, `autotune`, `drift`, `coverage`) |
+| `-vv` | The developer lines and the traceback of an error |
+| `NBX_LOG=debug\|info\|warning\|error` | The level from the environment (`debug` = `-vv`): the knob for scripts, daemons and the gate harness, which parse the developer lines. A serving daemon's log (`daemon.log` in the engine's home) always holds every line. Every `NBX_*` diagnostic variable below logs at the debug level |
+
+## Storage layout
+
+```
+~/.neurobrix/
+├── store/              Downloaded .nbx archives (transport format)
+│   └── model-name.nbx
+└── cache/              Extracted models (runtime reads from here)
+    └── model-name/
+        ├── manifest.json
+        ├── topology.json
+        ├── defaults.json
+        └── ...
+```
+
+## Debug environment variables
+
+| Variable | Effect |
+|----------|--------|
+| `NBX_DEBUG=1` | Expensive per-op statistics (forces GPU sync, ~2x slower), shown with `-v` / `NBX_LOG=debug` |
+| `NBX_TRACE_ZEROS=1` | Find first op producing all-zeros from non-zero input |
+| `NBX_TRACE_NAN=1` | Trace NaN/Inf in first few ops |
+| `NBX_NAN_GUARD=1` | Replace NaN with 0 in every op (expensive) |
 
 ## Adding a new family
 

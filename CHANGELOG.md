@@ -43,6 +43,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are shown with `-v` / `--verbose`, an error's traceback with `-vv`, both with `NBX_LOG=debug`; `import neurobrix`
   and `import nbxtensor` stay silent and install no logging handler. A serving daemon's log keeps every line.
 - **`--json` prints its record on one line** (it was indented over about 120 lines); the content is unchanged.
+- **The CLI reference is generated from the command-line parser**: `docs/reference/cli.md` (hand-kept, last updated
+  for 0.3.0) is written by `tools/cli_reference.py` from `neurobrix`'s own parser — every command, the developer ones
+  marked, every flag with its default and help — and a test fails when the page and the parser differ. The sampling
+  order, what a command prints, the storage layout and the debug variables moved to `docs/cli_usage.md`.
 - **`python -m nbxtensor install-metal` downloads nothing when the pinned Metal wheels are already installed**, and
   says so in one line (it re-downloaded 131 MB on every call).
 - **The engine requires nbxtensor 0.0.8**: the paged KV cache, its page bookkeeping, a chat session's cache record and

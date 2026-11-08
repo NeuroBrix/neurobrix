@@ -135,7 +135,7 @@ def resolve_sampling(resolver, container_defaults, site: str) -> dict:
          `--repetition-penalty`) or a serving request;
       2. the container — its `runtime/defaults.json` (the vendor's generation_config as the build embedded it);
       3. the family file — `config/families/<family>.yml` `defaults:` (and its generation-type block), the documented
-         defaults (docs/reference/cli.md, "Sampling").
+         defaults (docs/cli_usage.md, "Sampling").
     A null is no value: a container that declares `top_k: null` leaves the family's value in force. A key that no
     source carries is refused by name — never a literal in the code. (The executor's injected `global.*` defaults are
     the container's over the family's: the order holds.)
