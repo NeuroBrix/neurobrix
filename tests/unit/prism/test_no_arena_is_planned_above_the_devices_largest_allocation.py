@@ -96,12 +96,13 @@ def _changes(segments, parked_cap: float) -> int:
 
 def test_the_profile_carries_the_bound_and_only_the_triton_engine_reads_it():
     assert profile(APPLE_CAPPED).devices[0].max_allocation_mb == MAX_ALLOCATION_MB
-    assert profile(APPLE_M4_PRO).devices[0].max_allocation_mb is None
+    # every Apple profile carries the device's own figure since 2026-11-08 (a silent one is refused by the loader)
+    assert profile(APPLE_M4_PRO).devices[0].max_allocation_mb == 13639
     s = PrismSolver()
     s._mode = "triton"
     capped = s._prepare_devices(profile(APPLE_CAPPED))[0]
     plain = s._prepare_devices(profile(APPLE_M4_PRO))[0]
-    assert s._max_allocation_mb(capped) == MAX_ALLOCATION_MB and s._max_allocation_mb(plain) is None
+    assert s._max_allocation_mb(capped) == MAX_ALLOCATION_MB and s._max_allocation_mb(plain) == 13639
     # the parked cap: a quarter of the unified device's memory (apple_silicon yml), none on a discrete card
     assert s._parked_cap_mb(plain, profile(APPLE_M4_PRO)) == 0.25 * 18186
     v100 = s._prepare_devices(profile(V100_16GB))[0]

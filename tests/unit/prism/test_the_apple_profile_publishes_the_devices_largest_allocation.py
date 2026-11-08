@@ -50,9 +50,9 @@ def test_the_detected_apple_device_carries_it():
         assert 0 < d["max_allocation_mb"] <= d["host_memory_mb"]
 
 
-def test_the_loader_carries_it_to_the_device_and_a_silent_profile_says_no_limit():
+def test_the_loader_carries_it_to_the_device_and_a_silent_cuda_profile_says_no_limit():
+    # a SILENT Apple profile is refused since 2026-11-08 (test_an_apple_profile_without_its_largest_allocation_is_refused)
     said = copy.deepcopy(APPLE_M4_PRO)
     said["devices"][0]["max_allocation_mb"] = 13639          # this M4 Pro's maxBufferLength, 2026-10-04
     assert profile(said).devices[0].max_allocation_mb == 13639
-    assert profile(APPLE_M4_PRO).devices[0].max_allocation_mb is None
     assert profile(V100_16GB).devices[0].max_allocation_mb is None
