@@ -236,13 +236,17 @@ def _link(links: Mapping[tuple, float], a: str, b: str) -> float:
     return float(bps)
 
 
-def _miss_bps(f: DeviceFacts, engine: Optional[str], comp: str) -> Optional[float]:
-    """The rate an expert store's miss crosses the host link at, bytes/s, or None when nothing crosses it (a unified
-    device maps its experts in place): the Triton store's copy kernel at its measured rate (`expert_copy_bps`, 5.5 GB/s
-    on a V100 where the DMA moves 8.1 — priced at the DMA, a DeepSeek decode's misses were under-priced by a third,
-    2026-11-03), the compiled store's DMA (`h2d_bps`); refused by name when the Triton rate is not measured."""
+def _miss_bps(f: DeviceFacts, engine: Optional[str], comp: str, stored: Optional[str] = None,
+              dev: Optional[str] = None) -> Optional[float]:
+    """The rate an expert store's miss is served at, bytes/s: on a unified device the store reads the expert IN PLACE in
+    the container's mapped file, so a miss is a page-in from storage at the engine's measured COLD device load rate of
+    the stored dtype (`weight_load_gbps`) — priced as free until 2026-11-08, DeepSeek-Coder-V2-Lite's Triton expert
+    store was estimated at 18 s and chosen over layer_streaming (79-90 s) for a run of more than 2 400 s on the M4 Pro;
+    on a discrete card the Triton store's copy kernel at its measured rate (`expert_copy_bps`, 5.5 GB/s on a V100 where
+    the DMA moves 8.1 — priced at the DMA, a DeepSeek decode's misses were under-priced by a third, 2026-11-03), the
+    compiled store's DMA (`h2d_bps`); refused by name when the rate is not measured."""
     if f.unified:
-        return None
+        return _loader_bps(f, engine, stored, "device", "cold", dev)
     if engine == "triton":
         if f.expert_copy_bps is None:
             raise MissingFact(f"{comp}: the Triton expert store's miss copy is not measured (`measured.expert_copy`, "
@@ -327,7 +331,7 @@ def plan_seconds(strategy: str, allocations: Mapping[str, Any], works: Mapping[s
         if strategy not in RESIDENT_STRATEGIES and (w.expert_bytes_per_use or (first and first.expert_bytes_per_use)):
             # an expert store: the routed experts a use reads cross the host link at every use (per token for a
             # generating component, the prompt's set once) — unpriced, Qwen3-30B estimated 15 s against 174 s measured
-            bps = _miss_bps(f, engine, comp)
+            bps = _miss_bps(f, engine, comp, st, dev)
             if bps:
                 total += n * w.expert_bytes_per_use / bps
                 if first is not None:
