@@ -211,6 +211,10 @@ def release_pinned_tables()
     # Drop every cached table that PINS (Metal), releasing its pins
 class PtrTables
     # Per-projection absolute pointer tables for zero-copy expert access.
+class TablePins
+    # The holder of per-call pointer tables' pins for a cache of experts that outlives the call (an expert store): held until the holder ends them (`end`), one pin per new set of wraps
+def end_call_pins(tables: "PtrTables", holder: "TablePins" = None, sync: bool = False) -> None
+    # End a per-call table's pins: the holder takes them when there is one; otherwise the call ends them, after a device sync when `sync`
 ```
 
 `nbxtensor.memory.pool`
