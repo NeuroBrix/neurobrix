@@ -45,6 +45,15 @@ from neurobrix.core.runtime.torch_allocator import (configure_torch_allocator, c
 from neurobrix.core.runtime.phase_trace import load_span
 
 
+def _release_device_memory(mode: str, device) -> None:
+    """Each engine's own release of `device`: sync, collect, the allocator's cache returned to the driver."""
+    if engine_of(mode) == "compiled":
+        from neurobrix.core.memory.manager import release_flow_memory
+    else:                                         # the Triton branch's own (R33: no torch imported there)
+        from nbxtensor.memory.memory_pool import release_flow_memory
+    release_flow_memory(device)
+
+
 class RuntimeExecutor:
     """
     NeuroBrix Runtime Executor - Orchestrator Only
@@ -114,6 +123,9 @@ class RuntimeExecutor:
         # Persistent mode: when True, FlowContext propagates _persistent to GraphExecutors
         # so cleanup() preserves weights in VRAM. Set by serving layer for warm strategies.
         self._persistent_mode = False
+
+        # the recovery from a device out-of-memory at a component (core/runtime/replan.py), armed by the entry point
+        self.replan, self._completed, self._replanned, self._flow_ctx = None, set(), set(), None
 
     def _get_loop_id(self) -> str:
         """Get loop_id from variables.json contract. ZERO HARDCODE."""
@@ -396,6 +408,8 @@ class RuntimeExecutor:
         )
 
         self._arm_random_streams(inputs, merged_defaults)
+        self._flow_ctx = ctx
+        self._completed, self._replanned = set(), set()
         # Get and execute flow handler
         handler = self._create_flow_handler(flow_type, ctx)
         try:
@@ -583,6 +597,13 @@ class RuntimeExecutor:
                 except (FileNotFoundError, ValueError) as e:
                     logger.debug(f"Tiling not available for {comp_name}: {e}")
             self._tiling_autodetect_cache = cache
+        self._apply_plan_tiling()
+
+        # Note: CFGEngine is created in _create_flow_handler where FlowContext is available
+
+    def _apply_plan_tiling(self, components=None) -> None:
+        """The plan's tiling over the auto-detected one, and its op-level interceptors on the executors of
+        `components` (every one when None): at each request, and after a re-plan for the rebuilt executors."""
         self._component_tiling = dict(self._tiling_autodetect_cache)
 
         # Prism-driven component-level tiling — overrides the auto-detect above.
@@ -628,6 +649,8 @@ class RuntimeExecutor:
         if op_tiling_plans:
             from neurobrix.core.module.tiling_engine import OpLevelTilingEngine
             for comp_name, op_plan in op_tiling_plans.items():
+                if components is not None and comp_name not in components:
+                    continue
                 comp_executor = self.executors.get(comp_name)
                 if comp_executor is None:
                     logger.debug(f"Op-level tiling skipped: no executor for '{comp_name}'")
@@ -647,8 +670,6 @@ class RuntimeExecutor:
                     f"[OpLevelTiling] {comp_name}: registered {count} op_uid "
                     f"interceptors ({len(op_plan.fusion_pairs)} fusion pairs)"
                 )
-
-        # Note: CFGEngine is created in _create_flow_handler where FlowContext is available
 
     def _create_flow_handler(self, flow_type: str, ctx: FlowContext):
         """Create appropriate flow handler based on flow type."""
@@ -1032,41 +1053,45 @@ class RuntimeExecutor:
             if comp_name in self.modules:
                 continue
 
-            allocation = self._get_allocation(comp_name)
-            if allocation is None:
-                raise RuntimeError(
-                    f"ZERO FALLBACK: No allocation for component '{comp_name}'.\n"
-                    f"Prism plan must provide allocation for all neural components."
-                )
+            self.executors[comp_name] = self._build_executor(comp_name)
 
-            dag = self._load_graph(comp_name)
-            # what the tiling auto-detect reads of the graph (its inputs and outputs), kept before the graph is
-            # handed over and fused, so the graph is not parsed again for it (`TilingEngine.from_graph`)
-            io_ids = list(dag.get("input_tensor_ids", [])) + list(dag.get("output_tensor_ids", []))
-            self._graph_io[comp_name] = {
-                "input_tensor_ids": list(dag.get("input_tensor_ids", [])),
-                "output_tensor_ids": list(dag.get("output_tensor_ids", [])),
-                "tensors": {str(t): copy.deepcopy(dag["tensors"][str(t)])
-                            for t in io_ids if str(t) in (dag.get("tensors") or {})}}
-            executor = ExecutorFactory.create(
-                component=comp_name,
-                allocation=allocation,
-                nbx_path=self._nbx_path_str,
-                dag=dag,
-                mode=self.mode
+    def _build_executor(self, comp_name: str):
+        """The executor of `comp_name` under the plan's allocation (setup, and a re-plan that moves it)."""
+        allocation = self._get_allocation(comp_name)
+        if allocation is None:
+            raise RuntimeError(
+                f"ZERO FALLBACK: No allocation for component '{comp_name}'.\n"
+                f"Prism plan must provide allocation for all neural components."
             )
-            # Warm-serving contract: propagate persistent mode to the
-            # GraphExecutor so its cleanup() keeps weights in VRAM between
-            # requests. The serving engine sets _persistent_mode BEFORE
-            # setup() precisely so this creation site can forward it —
-            # without the forward, GraphExecutor._persistent stays False,
-            # end-of-generation cleanup silently UNLOADS the full weight
-            # set, and the next request re-loads it mid-flight (57 GB churn
-            # on Qwen3-30B block_scatter: stale ptr-table fingerprints +
-            # concurrent deferred-free drains → layout-dependent illegal
-            # access at the first cross-device fused-MoE; D9 layer 2).
-            executor._persistent = self._persistent_mode
-            self.executors[comp_name] = executor
+
+        dag = self._load_graph(comp_name)
+        # what the tiling auto-detect reads of the graph (its inputs and outputs), kept before the graph is
+        # handed over and fused, so the graph is not parsed again for it (`TilingEngine.from_graph`)
+        io_ids = list(dag.get("input_tensor_ids", [])) + list(dag.get("output_tensor_ids", []))
+        self._graph_io[comp_name] = {
+            "input_tensor_ids": list(dag.get("input_tensor_ids", [])),
+            "output_tensor_ids": list(dag.get("output_tensor_ids", [])),
+            "tensors": {str(t): copy.deepcopy(dag["tensors"][str(t)])
+                        for t in io_ids if str(t) in (dag.get("tensors") or {})}}
+        executor = ExecutorFactory.create(
+            component=comp_name,
+            allocation=allocation,
+            nbx_path=self._nbx_path_str,
+            dag=dag,
+            mode=self.mode
+        )
+        # Warm-serving contract: propagate persistent mode to the
+        # GraphExecutor so its cleanup() keeps weights in VRAM between
+        # requests. The serving engine sets _persistent_mode BEFORE
+        # setup() precisely so this creation site can forward it —
+        # without the forward, GraphExecutor._persistent stays False,
+        # end-of-generation cleanup silently UNLOADS the full weight
+        # set, and the next request re-loads it mid-flight (57 GB churn
+        # on Qwen3-30B block_scatter: stale ptr-table fingerprints +
+        # concurrent deferred-free drains → layout-dependent illegal
+        # access at the first cross-device fused-MoE; D9 layer 2).
+        executor._persistent = self._persistent_mode
+        return executor
 
     def _get_allocation(self, comp_name: str) -> Optional[Any]:
         """Get allocation from Prism plan."""
@@ -1166,7 +1191,73 @@ class RuntimeExecutor:
         phase: str = "default",
         loop_timestep: Optional[torch.Tensor] = None
     ) -> Optional[Any]:
-        """Execute a single component. ZERO HARDCODE."""
+        """Execute a single component, the one component boundary of both engines' flows: a device out-of-memory there,
+        the recovery armed (`self.replan`), re-plans once and calls it again from this frame, finished outputs kept."""
+        while True:
+            try:
+                output = self._execute_component_call(comp_name, phase, loop_timestep)
+                break
+            except Exception as exc:
+                if self.replan is None or not self.replan.is_device_oom(exc):
+                    raise
+                failure = (str(exc).splitlines() or [type(exc).__name__])[0]
+                if comp_name in self._replanned:
+                    raise RuntimeError(
+                        f"{comp_name} ran out of device memory again after its one re-plan in this run ({failure}); "
+                        f"a component is re-planned once, never in a loop: this model cannot run on this machine "
+                        f"under the plan Prism gives it now") from exc
+            # out of the except block: the failed call's frames and their tensors are gone before anything is released
+            self._replan_after_oom(comp_name, failure)
+        self._completed.add(comp_name)
+        return output
+
+    def _replan_after_oom(self, comp_name: str, failure: str) -> None:
+        """Growth recorded, every component unloaded and the cache released, Prism asked again; its plan applied where it
+        changes a component left, else (or on Prism's refusal) the run's named refusal."""
+        from neurobrix.core.runtime.replan import held_state, signature
+        self._replanned.add(comp_name)
+        grown = self.replan.record_growth()
+        said = (f"{comp_name} ran out of device memory ({failure}); the growth this run measured "
+                + (f"({grown:.0f} MB) is recorded" if grown is not None else "is not measured on this engine and device"))
+        held = {c: held_state(e, self.plan, c) for c, e in self.executors.items() if held_state(e, self.plan, c)}
+        if comp_name in held:
+            raise RuntimeError(f"{said}; {comp_name} holds state between its calls ({', '.join(held[comp_name])}), so "
+                               f"its failed call cannot be run again in this run: the next run plans with the record")
+        loaded = [c for c, e in self.executors.items() if getattr(e, "_weights_loaded", False) and c != comp_name]
+        for name, ex in list(self.executors.items()):
+            self._unload_component_weights(name)
+            getattr(ex, "release_invariant_state", lambda: None)()
+        _release_device_memory(self.mode, self._get_primary_device())
+        try:
+            new_plan = self.replan.solve()
+        except RuntimeError as refusal:
+            raise RuntimeError(f"{said}; re-planned with it, Prism refuses:\n{refusal}") from refusal
+        left = [c for c in self.executors if c == comp_name or c not in self._completed]
+        changed = [c for c in self.executors if signature(self.plan, c) != signature(new_plan, c)]
+        if not any(c in changed for c in left):
+            raise RuntimeError(
+                f"{said}; re-planned with it, Prism gives the same plan ({new_plan.strategy}) for the components left "
+                f"({', '.join(left)}): nothing else to try in this run — this model cannot run on this machine as planned")
+        if any(c in held for c in changed):
+            raise RuntimeError(f"{said}; re-planned with it, Prism moves {', '.join(c for c in changed if c in held)}, "
+                               f"which holds state between its calls: not rebuilt mid-run — the next run plans with it")
+        old_strategy, self.plan, self._strategy_name = self.plan.strategy, new_plan, new_plan.strategy
+        for c in changed:
+            self.executors[c] = self._build_executor(c)
+            self.__dict__.get("_stream_runtime", {}).pop(c, None)      # its stream pieces borrowed the old executor
+        self._init_strategy()
+        self._flow_ctx.plan, self._flow_ctx.strategy = self.plan, self.strategy
+        self._input_synthesizer.plan = self.plan
+        self._apply_plan_tiling(components=set(changed))
+        for c in loaded:            # what the flow had loaded is loaded again, under the new plan (flows may run it directly)
+            self._ensure_weights_loaded(c)
+        note = (f"[Prism] re-planned after a device out-of-memory: {said}; plan {old_strategy} -> {new_plan.strategy}, "
+                f"re-placed {', '.join(changed)}; the flow re-enters at {comp_name}, the outputs of "
+                f"{', '.join(sorted(self._completed - {comp_name})) or 'no finished component'} kept")
+        logger.warning(note)                # a fact the user must know: shown whatever the level (nbxtensor.terminal)
+
+    def _execute_component_call(self, comp_name: str, phase: str, loop_timestep) -> Optional[Any]:
+        """One call of a single component. ZERO HARDCODE."""
         assert self._input_resolver is not None, "input_resolver must be initialized"
         assert self._input_synthesizer is not None, "input_synthesizer must be initialized"
         assert self._output_extractor is not None, "output_extractor must be initialized"
@@ -1623,11 +1714,7 @@ class RuntimeExecutor:
                 executor._devices_computed = False
             # ONE collect per released component (the Dell 2026-11-04 08:14; never per segment, 4d1187f9): cycles still
             # holding device memory leave before the next component (mochi's VAE met 1-2 GB of them on Metal)
-            if engine_of(self.mode) == "compiled":
-                from neurobrix.core.memory.manager import release_flow_memory
-            else:                                         # the Triton branch's own (R33: no torch imported there)
-                from nbxtensor.memory.memory_pool import release_flow_memory
-            release_flow_memory(getattr(executor, "device", None))
+            _release_device_memory(self.mode, getattr(executor, "device", None))
 
     # ========== UTILITY METHODS ==========
 

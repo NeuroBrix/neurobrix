@@ -28,6 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   says so in one line (it re-downloaded 131 MB on every call).
 
 ### Fixed
+- **A run that runs out of device memory in a component re-plans and goes on instead of failing**: when a
+  component meets a device out-of-memory (`python -m neurobrix run`, both engines), the run records the memory growth it
+  measured, releases the device's cache, asks Prism for a plan again with that measure in force and runs the component
+  again, keeping the outputs of the components that already finished (a video model's latents before its VAE); one
+  warning line says what failed and which plan replaces which. A component is re-planned once; when the new plan is the
+  same or Prism refuses, the run stops with that refusal named. Before, the first run on a new machine (mochi-1-preview
+  on an M4 Pro) failed at its VAE and only a second run succeeded.
 - **A mixture-of-experts model on an Apple GPU is no longer planned on a free expert miss**: Prism priced a routed
   expert the store's cache missed as costing nothing on unified memory, so it chose an expert store estimated at 18 s for
   DeepSeek-Coder-V2-Lite where the run took more than 40 minutes. A miss is now priced as the page-in it is, at the
