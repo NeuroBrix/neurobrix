@@ -9,12 +9,16 @@ THE DISPATCHER (Studio requests 3-4; doctrine: docs/reference/studio-engine-requ
   * One thread per connection; the accept loop only accepts. A connection that
     is running a work request is the WORK channel of that request; any other
     connection is a CONTROL channel and is answered while the work runs.
-  * One inference at a time: the work methods (`generate`, `chat`, `complete`)
-    and the session mutation `new_chat` take ONE inference lock. `status`,
-    `cancel`, `template` and `shutdown` never wait on it while a generation
-    runs (`shutdown` takes it only after the running work has stopped, to
-    unload). `new_chat` takes it although the 2026-09-16 shape listed it as
-    control: it clears the conversation a running `chat` reads and appends to.
+  * One inference at a time, on ONE thread: every engine call — the load, the
+    work methods (`generate`, `chat`, `complete`), the device sync, the session
+    mutation `new_chat`, the unload — runs on the daemon's inference worker
+    (serving/worker.py), FIFO, whichever door (socket or HTTP) and connection
+    sent it. A connection thread parses, submits, waits, and sends back the
+    stream events and the reply. `status`, `cancel`, `template` and `shutdown`
+    are answered on the connection thread while a generation runs (`shutdown`
+    queues the unload behind the running work once it stopped). `new_chat` is a
+    worker job although the 2026-09-16 shape listed it as control: it clears the
+    conversation a running `chat` reads and appends to.
   * Every work request is an operation with an id (`op_id`, the client's or
     the daemon's), echoed by its reply, its errors and its stream events. The
     operations live in a table under its OWN lock (serving/operations.py).
@@ -47,6 +51,7 @@ limits and timeouts from config/system.yml `serving:`.
 
 import json
 import os
+import queue
 import sys
 import select
 import signal
@@ -60,6 +65,7 @@ from typing import Any, Dict, Optional
 from neurobrix import decode_progress, decode_stop
 from neurobrix.serving.engine import InferenceEngine
 from neurobrix.serving.operations import OperationTable, Operation, serving_settings
+from neurobrix.serving.worker import InferenceWorker
 from neurobrix.serving.protocol import (
     SOCKET_PATH, PID_PATH, LOG_PATH, DAEMON_DIR,
     IPC_FAMILY, IPC_ADDRESS, IS_WINDOWS, INSTANCE,
@@ -87,7 +93,10 @@ def stream_listener(conn: socket.socket, engine, op_id: Optional[str] = None,
 
     `on_send_failure(exc)`, when given, is called instead of raising when the
     client is gone: the dispatcher stops the generation at the next seam (an
-    orphan, see the module docstring) and no further event is sent."""
+    orphan, see the module docstring) and no further event is sent.
+
+    The daemon calls it on the CONNECTION thread, fed from the operation's
+    event queue: the text decode never runs on the inference worker."""
     decoder = None
     if _answers_in_text(engine):
         tokenizer = engine.tokenizer
@@ -149,7 +158,8 @@ class ServingDaemon:
         self._ready_file = None
         self._settings = serving_settings()
         self._ops = OperationTable(self._settings["operations_retained"])
-        self._inference_lock = threading.Lock()
+        # The one thread every engine call runs on (serving/worker.py).
+        self._worker = InferenceWorker()
         # Open connections and their threads, under their own lock.
         self._conn_lock = threading.Lock()
         self._connections: Dict[socket.socket, threading.Thread] = {}
@@ -354,8 +364,9 @@ class ServingDaemon:
         PID_PATH.write_text(str(os.getpid()))
 
         try:
-            # Load model (weights to VRAM)
-            self._engine.load()
+            # Load model (weights to VRAM) — on the inference worker, the thread
+            # every later engine call of this daemon runs on.
+            self._worker.call(self._engine.load, "load")
 
             # Bind socket — platform-adaptive
             server_socket = socket.socket(IPC_FAMILY, socket.SOCK_STREAM)
@@ -435,10 +446,8 @@ class ServingDaemon:
         the replies of the work they stopped, then close every connection."""
         self._ops.stop_all("shutdown")
         deadline = time.monotonic() + self._settings["drain_timeout_s"]
-        if not self._inference_lock.acquire(timeout=self._settings["drain_timeout_s"]):
+        if not self._worker.wait_idle(self._settings["drain_timeout_s"]):
             _log.debug("[Daemon] A generation did not stop within drain_timeout_s — exiting beside it")
-        else:
-            self._inference_lock.release()
         with self._conn_lock:
             items = list(self._connections.items())
         for conn, _ in items:
@@ -531,8 +540,7 @@ class ServingDaemon:
                 return make_response({"text": self._engine.chat_template_text()})
 
             elif method == "new_chat":
-                with self._inference_lock:
-                    self._engine.new_conversation()
+                self._worker.call(self._engine.new_conversation, "new_chat")
                 return make_response({"status": "ok"})
 
             elif method == "shutdown":
@@ -548,57 +556,83 @@ class ServingDaemon:
     # -- work -------------------------------------------------------------
     def _run_work(self, method: str, params: Dict[str, Any], requested_id,
                   conn: socket.socket) -> Dict[str, Any]:
+        """One work request of the socket door: an operation run on the worker,
+        its stream events sent on `conn` as they come, then its reply."""
+        stream = method == "generate" and bool(params.pop("stream", False))
+        deliver = None
         try:
             op = self._ops.open(method, requested_id)
         except ValueError as e:
             return make_response(error=f"refused: {e}")
-
-        stream = method == "generate" and bool(params.pop("stream", False))
+        if stream:
+            deliver = stream_listener(conn, self._engine, op.op_id,
+                                      on_send_failure=lambda e: self._orphan(op, e))
         watcher = threading.Thread(target=self._watch_client, args=(conn, op),
                                    name=f"nbx-watch-{op.op_id}", daemon=True)
         watcher.start()
-
-        with self._inference_lock:
-            if not self._ops.start(op):
-                # Stopped while it waited for the lock: no native work began.
-                return self._work_reply(op, None, None)
-            listener = self._step_listener(conn, op, stream)
-            decode_progress.set_listener(listener)
-            decode_stop.bind(op.stop_event)
-            result, error = None, None
-            try:
-                result = self._call_engine(method, params)
-            except Exception as e:
-                traceback.print_exc()
-                error = str(e)
-            finally:
-                honoured = decode_stop.honoured_at()
-                decode_stop.unbind()
-                decode_progress.clear_listener()
-            # The devices are synced BEFORE the operation is finished: a cancel
-            # waiting on `op.done` is acknowledged only after this returns.
-            try:
-                self._engine.sync_devices()
-            except Exception as e:
-                traceback.print_exc()
-                error = f"{error}; device sync failed: {e}" if error else f"device sync failed: {e}"
-                honoured = None   # an unsynced device is never an acknowledged stop
-            state = self._ops.finish(op, honoured, error)
+        state, result = self.run_operation(op, lambda: self._call_engine(method, params),
+                                           deliver)
         return self._work_reply(op, state, result)
 
-    def _step_listener(self, conn, op: Operation, stream: bool):
-        """Counts the operation's steps for `status` and `cancel`; streams the
-        event to the client when the request asked for it."""
-        sender = (stream_listener(conn, self._engine, op.op_id,
-                                  on_send_failure=lambda e: self._orphan(op, e))
-                  if stream else None)
+    def run_operation(self, op: Operation, work, deliver=None):
+        """Run `work` (a zero-argument engine call) for the open operation `op`
+        on the inference worker, behind every job queued before it; returns
+        `(state, result)` — state None when the operation was stopped while it
+        waited and never ran. Shared by both doors.
 
-        def _on_token(step: int, n: int, token_id: int, done: bool) -> None:
-            self._ops.step(op, n)
-            if sender is not None:
-                sender(step, n, token_id, done)
+        `deliver(step, n, token_id, done)`, when given, is called on THIS
+        (the connection's) thread for every per-token event, in order, while
+        the work runs: the worker only queues the event, it never blocks on a
+        client. The stop seam (`decode_stop`) and the step listener
+        (`decode_progress`) are thread-local: they are bound on the worker,
+        around the call."""
+        events: "queue.Queue" = queue.Queue()
+        end = object()
 
-        return _on_token
+        def _body():
+            try:
+                if not self._ops.start(op):
+                    # Stopped while it waited behind other work: nothing ran.
+                    return None, None
+
+                def _on_token(step: int, n: int, token_id: int, done: bool) -> None:
+                    self._ops.step(op, n)
+                    if deliver is not None:
+                        events.put((step, n, token_id, done))
+
+                decode_progress.set_listener(_on_token)
+                decode_stop.bind(op.stop_event)
+                result, error = None, None
+                try:
+                    result = work()
+                except Exception as e:
+                    traceback.print_exc()
+                    error = str(e)
+                finally:
+                    honoured = decode_stop.honoured_at()
+                    decode_stop.unbind()
+                    decode_progress.clear_listener()
+                # The devices are synced BEFORE the operation is finished: a cancel
+                # waiting on `op.done` is acknowledged only after this returns.
+                try:
+                    self._engine.sync_devices()
+                except Exception as e:
+                    traceback.print_exc()
+                    error = f"{error}; device sync failed: {e}" if error else f"device sync failed: {e}"
+                    honoured = None   # an unsynced device is never an acknowledged stop
+                state = self._ops.finish(op, honoured, error)
+                return state, result
+            finally:
+                events.put(end)
+
+        job = self._worker.submit(_body, name=op.op_id)
+        while True:
+            item = events.get()
+            if item is end:
+                break
+            deliver(*item)
+        job.wait()
+        return job.outcome()
 
     def _watch_client(self, conn: socket.socket, op: Operation) -> None:
         """While `op` runs, notice a client that vanished (its connection
@@ -720,14 +754,12 @@ class ServingDaemon:
         self._running = False
         for op in self._ops.stop_all("shutdown"):
             op.done.wait(self._settings["cancel_ack_timeout_s"])
-        if not self._inference_lock.acquire(timeout=self._settings["cancel_ack_timeout_s"]):
+        job = self._worker.submit(self._engine.unload, "unload")
+        if not job.wait(self._settings["cancel_ack_timeout_s"]):
             self._close_listener()
             return make_response(error="shutdown: the running generation did not stop within "
                                        "serving.cancel_ack_timeout_s; the daemon exits without unloading")
-        try:
-            self._engine.unload()
-        finally:
-            self._inference_lock.release()
+        job.outcome()
         return make_response({"status": "ok"})
 
     def _close_listener(self) -> None:
@@ -774,6 +806,7 @@ class ServingDaemon:
                 except OSError as e:
                     _log.debug(f"[Daemon] Could not remove {f}: {e}")
 
+        self._worker.stop()
         _log.debug("[Daemon] Cleaned up")
 
 
