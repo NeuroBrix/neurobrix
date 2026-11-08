@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **`neurobrix serve` works on Linux without `--hardware`**: the daemon read the GPU before it forked, so the serving
+  process started with a broken driver state, saw its card as full, planned CPU execution and answered every chat turn
+  with "CUDA error: initialization error". The hardware is now detected in the serving process itself.
+
+### Fixed
 - **A language model's prompt is priced at its own length**: Prism planned a text request's prefill at the cache's
   prompt margin (128 tokens) whatever the prompt, so a long prompt was under-priced (TinyLlama: ~0.01 GiB planned for
   a 400-token prompt where the run held 652 MB) and a short one over-priced. The prompt is now counted by the flow's

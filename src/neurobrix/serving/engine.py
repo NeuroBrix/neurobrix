@@ -86,7 +86,7 @@ class InferenceEngine:
     For image/audio/video: each generate() call is independent.
     """
 
-    def __init__(self, model_name: str, hardware_id: str, mode: str = "compiled"):
+    def __init__(self, model_name: str, hardware_id: Optional[str], mode: str = "compiled"):
         self.model_name = model_name
         self.hardware_id = hardware_id
         self.mode = mode
@@ -126,7 +126,11 @@ class InferenceEngine:
         self._family = manifest.get("family")
         neural_components = self._container.get_neural_components()
 
-        # 3. Solve Prism allocation
+        # 3. Solve Prism allocation — the profile resolved HERE when none was named: this runs in the serving process,
+        # after the daemon's fork, so the device is first read where it is used (`cli/commands/serve.py`)
+        if not self.hardware_id:
+            from neurobrix.core.prism.autodetect import get_or_create_default_profile
+            self.hardware_id = get_or_create_default_profile()
         hw_profile = load_profile(self.hardware_id)
 
         cache_path = self._container._cache_path

@@ -61,22 +61,11 @@ def cmd_serve(args):
     timeout = getattr(args, 'timeout', 1800) or 1800
     foreground = getattr(args, 'foreground', False)
 
-    # Resolve hardware: explicit profile or auto-detect
-    hardware_id = args.hardware
-    if not hardware_id:
-        # CRITICAL: Cannot import neurobrix.core.prism before os.fork() —
-        # prism/__init__.py imports the solver which initializes the CUDA driver,
-        # making fork() + CUDA impossible in the child daemon process.
-        # Load autodetect.py directly, bypassing the prism package __init__.
-        import importlib.util
-        _spec = importlib.util.spec_from_file_location(
-            "autodetect",
-            str(__import__("pathlib").Path(__file__).parent.parent.parent
-                / "core" / "prism" / "autodetect.py"),
-        )
-        _mod = importlib.util.module_from_spec(_spec)
-        _spec.loader.exec_module(_mod)
-        hardware_id = _mod.get_or_create_default_profile()  # the profile of THIS environment's visible GPUs
+    # The hardware profile: the one named, else NONE here — the daemon resolves it AFTER the fork, in the process that
+    # serves (`InferenceEngine.load`). Reading the device in this parent initialised the CUDA driver before os.fork():
+    # the child then saw its card as "busy: 32501 MB taken, 0 MB free", planned cpu_execution, and every chat turn failed
+    # with "CUDA error: initialization error" (the clean-terminal inventory, 2026-11-08, python:3.10-slim + PyPI 0.6.2).
+    hardware_id = args.hardware or None
 
     print(f"[Serve] Starting NeuroBrix Serving Daemon")
     print(f"[Serve] Model: {args.model}")

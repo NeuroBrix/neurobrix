@@ -130,7 +130,7 @@ class ServingDaemon:
     def __init__(
         self,
         model_name: str,
-        hardware_id: str,
+        hardware_id: Optional[str],
         mode: str = "compiled",
         idle_timeout: float = 1800.0,
         engine=None,
@@ -241,9 +241,9 @@ class ServingDaemon:
         hardware profile, execution mode and idle timeout the parent was asked
         for (the mode flag is the mode's name, `--triton-sequential` for
         `triton_sequential`)."""
+        hw = ["--hardware", self._engine.hardware_id] if self._engine.hardware_id else []   # none named: the child detects
         return [sys.executable, "-m", "neurobrix", "serve",
-                "--model", self._engine.model_name,
-                "--hardware", self._engine.hardware_id,
+                "--model", self._engine.model_name, *hw,
                 f"--{self._engine.mode.replace('_', '-')}",
                 "--timeout", str(int(self._idle_timeout)),
                 "--foreground"]
