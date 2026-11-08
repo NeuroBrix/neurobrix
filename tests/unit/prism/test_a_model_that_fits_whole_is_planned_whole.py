@@ -267,13 +267,14 @@ def test_the_phases_are_the_release_order_the_handlers_have():
         "triton: the handler now unloads the decoder when the request ends — a served plan may take "
         "the two phases too (core/flow/base.py _autoregressive_phases)")
     compiled = inspect.getsource(AutoregressiveHandler.execute)
-    assert (compiled.index("strategy.process_output(") < compiled.index("session.cleanup()")
+    # `session.cleanup(` with or without `keep_cache=` (a serving session keeps its cache, core/state/kv_session.py)
+    assert (compiled.index("strategy.process_output(") < compiled.index("session.cleanup(")
             < compiled.index("self._unload_non_lm_weights(")), (
         "compiled: the decoder no longer runs beside the loaded language model — one phase is no "
         "longer what this handler does")
     # a text decode: the codec stage precedes the session's release in both
-    assert triton.index("self._run_snac_codec_decoder(") < triton.rindex("session.cleanup()")
-    assert compiled.index("self._run_snac_codec_decoder(") < compiled.index("session.cleanup()")
+    assert triton.index("self._run_snac_codec_decoder(") < triton.rindex("session.cleanup(")
+    assert compiled.index("self._run_snac_codec_decoder(") < compiled.index("session.cleanup(")
 
 
 def test_a_text_decode_declares_no_phases():
