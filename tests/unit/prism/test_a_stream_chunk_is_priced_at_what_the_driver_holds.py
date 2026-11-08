@@ -10,13 +10,14 @@ Before: the chunk was priced at its tensors against the rung, and mochi native o
 no ratio for a family (NVIDIA: null) is priced as before — asserted on the V100-16GB profile. No card."""
 import pytest
 
-from tests.unit.prism._pinned_machine import pin_host
+from tests.unit.prism._pinned_machine import pin_host, pin_no_calibration
 from tests.unit.prism.test_a_component_over_the_rung_streams_inside_itself import _plan, no_door
 
 
 def test_mochi_native_on_a_calm_mac_streams_its_vae_one_frame_at_a_time(monkeypatch):
     no_door(monkeypatch)
     pin_host(monkeypatch, 24576, 17582, "the calm Mac (its measured system share)")
+    pin_no_calibration(monkeypatch)    # the engine store holds measured runtime growth too (a Mac's mochi record: 10 033 MB)
     p, _ = _plan("mochi-1-preview", "compiled")
     sched = (p.component_stream or {}).get("vae", {}).get("schedule")
     assert sched == [1, 1, 1, 1, 1], sched
