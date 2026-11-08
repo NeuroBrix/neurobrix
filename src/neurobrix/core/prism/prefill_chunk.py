@@ -78,9 +78,10 @@ def choose(record: Optional[Dict], candidates: List[int], turn_rows: int, served
 def certified_times(vendor: str, profile: str, memory_gb: Optional[int]) -> Served:
     """The certified best time (ms) of a key on this memory class, or None when the directory does not serve it."""
     from nbxtensor.ops import autotune_certified as AC
+    generator = AC.running_generator()      # asked once: a plan prices thousands of keys
 
     def served(kernel: str, dtype: str, key: str) -> Optional[float]:
-        cert = AC.served_certification(vendor, profile, kernel, dtype, key, memory_gb)
+        cert = AC.served_certification(vendor, profile, kernel, dtype, key, memory_gb, generator=generator)
         if cert is None:
             return None
         ms = (cert.get("proof") or {}).get("best_ms")

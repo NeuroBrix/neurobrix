@@ -54,7 +54,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`paged_kv_gather`** (`paged_kv_gather_kernel`): a layer's K or V of every sequence as whole pages, contiguous,
   heads re-expanded to the query heads, widened exactly to the output dtype.
 - **`autotune_certified.served_certification`**: the certification served one key on a memory class, read by a planner
-  that holds no kernel tuner.
+  that holds no kernel tuner; `generator=` takes the running generator a caller pricing many keys asked once (on a
+  process with no card visible, each ask probes the driver again).
 
 ## [0.0.7] - unreleased (terminal lot)
 

@@ -39,7 +39,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   served from its cache gives the same bytes as the same conversation prefilled together. Prism picks the size from
   the certified kernel times of each candidate (whole cache pages, up to the prefill a session's plan prices), the
   cheapest whose kernels are all certified; with none certified a turn prefills in one chunk, and `--explain-plan`
-  says why (`prefill_chunk_reason`). A one-shot `run` still prefills in one pass.
+  says why (`prefill_chunk_reason`). A one-shot `run` still prefills in one pass. The pricing asks the code generator
+  once per plan (asked per key, a plan made with no card visible probed the driver thousands of times).
 - **A chat turn prefills only its new tokens**: the KV cache now belongs to the chat session (`serve` + `chat`,
   `complete`), on both engines. Each turn matches the conversation's token IDs against what the cache already holds
   and prefills only the rest (TinyLlama, a 421-token second turn: 158 rows prefilled instead of 421). A continued

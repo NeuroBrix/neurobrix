@@ -1248,19 +1248,24 @@ def lookup(kernel_qual: str, tuner, key: tuple, ignore_switch: bool = False,
     return None
 
 
+_ASK = object()
+
+
 def served_certification(vendor: str, profile: str, kernel_qual: str, dtype: str, key_text: str,
-                         memory_gb: Optional[int]) -> Optional[Dict[str, Any]]:
+                         memory_gb: Optional[int], generator: Any = _ASK) -> Optional[Dict[str, Any]]:
     """The certification the directory serves one key on a memory class — what `lookup` serves a launch — read by a
     PLANNER that holds no kernel tuner (a prefill chunk priced from the certified times, before any kernel is
     loaded): the file `<kernel>.<dtype>.json` of `vendor/profile`, validated as the engine validates it, the class's
-    certification, the generator's own entry. None when the key is not served there (an unknown class: none)."""
+    certification, the generator's own entry. None when the key is not served there (an unknown class: none).
+    `generator`: the running generator (`running_generator()`) when the caller prices many keys and has asked it
+    once — on a process with no card visible every ask probes the driver again (cuInit), thousands of times a plan."""
     if memory_gb is None:
         return None
     served = _load_class(vendor, profile, kernel_qual, dtype, None, int(memory_gb))
     cert = served.get(key_text) if served else None
     if cert is None:
         return None
-    gen = running_generator()
+    gen = running_generator() if generator is _ASK else generator
     if gen is None or os.environ.get("NBX_AUTOTUNE_ANY_GENERATOR") == "1":
         return cert
     matched = entry_for_generator(cert, gen)

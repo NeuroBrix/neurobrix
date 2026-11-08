@@ -30,9 +30,9 @@ moved into nbxtensor 0.0.8: the paged KV cache (`memory.paged_kv`, from triton/p
 bookkeeping (`memory.pages`, from core/state/pages.py, -181), the session record and the chunk row plan
 (`memory.kv_session`), the whole-page gather kernel and the chunk's masked attention (`memory.paged_kv.chunk_attention`,
 `ops.attention_wrappers.paged_kv_gather`). The serving session lost its summarisation (-79, -16, -4, -1). What stays,
-one row per file, is POLICY, and the header rose by exactly these lines, measured: +777 kept - 658 moved or deleted
+one row per file, is POLICY, and the header rose by exactly these lines, measured: +778 kept - 658 moved or deleted
 + 46 of the gate's three fixes (a reloaded component's fp32 constants, a lazy plan's release, a recompile keeping the
-first compile's precision contract) = +165, 137 968 (main 6d72eef5) to 138 133.
+first compile's precision contract) = +166, 137 968 (main 6d72eef5) to 138 134.
 
 | file | lines | the policy it holds |
 |---|---|---|
@@ -43,7 +43,7 @@ first compile's precision contract) = +165, 137 968 (main 6d72eef5) to 138 133.
 | core/runtime/graph/paged_kv_cache.py | +32 | the compiled engine's torch cache: truncate and the whole-page read, on torch tensors (R33) |
 | triton/kv_cache.py | +60 | the interceptor's routing: which prefill takes the whole-page path (`begin_chunk`), the chunk's positions for the positional ops, the request's end |
 | core/state/kv_session.py | +17 | `session_turn`: the flow decides that a request is a session's turn |
-| core/prism/prefill_chunk.py | +98 | Prism decides the session's prefill chunk from the certified times of its candidates |
+| core/prism/prefill_chunk.py | +99 | Prism decides the session's prefill chunk from the certified times of its candidates |
 | core/prism/solver.py | +85 | Prism states the chunk and its reason in the plan, its record and `--explain-plan` |
 | core/state/price.py | +17 | the candidates Prism and the census share (whole pages up to the prefill a session is priced at) |
 | kernels/census_table.py | +42 | the chunk record Prism reads (`read_chunks`) and the container hash it matches it with; the table's lock taken on its directory, no sidecar file left in the package |
