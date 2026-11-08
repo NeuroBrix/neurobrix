@@ -329,7 +329,8 @@ def _import_body(args):
     # "already installed", asked on every name the record gives the container BEFORE any byte is fetched: on the slug
     # alone (`..._diffusers`), a second import of Sana downloaded 9 GB to learn it (2026-11-08)
     if not args.force:
-        _file_stem = Path(str(model_data.get("fileUrl") or "")).stem
+        # the file's stem without its build stamp: the cache entry never carries one (`_strip_build_stamp`)
+        _file_stem = _strip_build_stamp(Path(str(model_data.get("fileUrl") or "")).stem)
         for _as in dict.fromkeys(n for n in (name, model_data.get("name"), _file_stem) if n):
             _there = CACHE_DIR / _as
             if _there.exists() and (_there / "manifest.json").exists():

@@ -122,7 +122,8 @@ def test_every_schema_is_versioned_and_named():
 
 @pytest.mark.skipif(not (CACHE / "TinyLlama-1.1B-Chat-v1.0" / "manifest.json").exists(), reason="TinyLlama not installed")
 def test_explain_plan_speaks_one_record():
-    rec, _, _ = _record(["run", "--model", "TinyLlama-1.1B-Chat-v1.0", "--prompt", "Hello", "--max-tokens", "4",
+    from neurobrix.nbx.names import name_of          # the model's one name (its hub name once recorded)
+    rec, _, _ = _record(["run", "--model", name_of(CACHE, "TinyLlama-1.1B-Chat-v1.0"), "--prompt", "Hello", "--max-tokens", "4",
                          "--explain-plan", "--json"], "explain-plan")
     assert rec["strategy"] and isinstance(rec["components"], list) and rec["components"]
     assert {"name", "devices", "dtype"} <= set(rec["components"][0])

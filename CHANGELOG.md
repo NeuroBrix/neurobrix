@@ -114,6 +114,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   APU (rocminfo "Memory Properties: APU": a Radeon 780M, a Strix Point or Strix Halo GPU) is now described as unified
   memory, planned as one pool with the host like an integrated Intel GPU or an Apple chip; a GPU whose memory nothing
   states is refused by name instead of being given a figure.
+- **`neurobrix import` of an installed model whose hub file carries a build stamp no longer downloads it again**: the
+  check compared the installed model with the file's name stamp included, which no installed model carries, and
+  re-downloaded the whole container (28 GB for Wan2.2-I2V-A14B) to learn it was there.
 - **A mixture-of-experts model on an Apple GPU is no longer planned on a free expert miss**: Prism priced a routed
   expert the store's cache missed as costing nothing on unified memory, so it chose an expert store estimated at 18 s for
   DeepSeek-Coder-V2-Lite where the run took more than 40 minutes. A miss is now priced as the page-in it is, at the

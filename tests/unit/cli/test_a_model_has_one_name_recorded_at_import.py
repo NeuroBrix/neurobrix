@@ -110,3 +110,25 @@ def test_the_api_model_id_is_the_recorded_name(cache, monkeypatch):
     assert ServingDaemon("x", "none", engine=engine).served_name() == "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
     engine.model_name = "Kokoro-82M"
     assert ServingDaemon("x", "none", engine=engine).served_name() == "Kokoro-82M"
+
+
+def test_an_entry_named_by_the_stamped_file_of_its_hub_record_is_found_installed(cache, monkeypatch, capsys):
+    """The hub record's file carries a build stamp (`<name>.<YYYYMMDDTHHMMSS>.nbx`), the cache entry does not: the
+    stem is compared without it, so the installed entry is found and nothing is downloaded (Wan2.2-I2V-A14B on the
+    rack, 2026-11-08)."""
+    import requests
+    from neurobrix.cli.commands import registry
+    monkeypatch.setattr(registry, "CACHE_DIR", cache)
+    (cache / "Wan2.2-I2V-A14B").mkdir()
+    (cache / "Wan2.2-I2V-A14B" / "manifest.json").write_text("{}")
+    asked = []
+
+    def get(url, **kw):
+        asked.append(url)
+        return _Resp({"model": {"slug": "Wan-AI/Wan2.2-I2V-A14B-Diffusers", "name": "Wan2.2-I2V-A14B-Diffusers",
+                                "fileUrl": "models/Wan-AI/Wan2.2-I2V-A14B.20260912T223015.nbx"}})
+    monkeypatch.setattr(requests, "get", get)
+    with pytest.raises(SystemExit) as e:
+        registry._import_body(_import_args("Wan-AI/Wan2.2-I2V-A14B-Diffusers"))
+    assert e.value.code == 0 and len(asked) == 1, asked
+    assert names.recorded_name(cache / "Wan2.2-I2V-A14B") == "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
