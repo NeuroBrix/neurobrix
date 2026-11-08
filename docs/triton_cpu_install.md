@@ -81,7 +81,7 @@ After install, run:
 
 ```bash
 CUDA_VISIBLE_DEVICES="" neurobrix run \
-    --model TinyLlama-1.1B-Chat-v1.0 \
+    --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
     --prompt "Hello" --max-tokens 5 \
     --triton --hardware cpu-only-x86
 ```

@@ -12,6 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from apple_matrix import MODES, REFERENCE_MODE, Verdict, classify_image, classify_text
 from apple_matrix_run import run_model, _read  # reuse the 3-mode runner + classifier
+from one_name import cli_name  # noqa: E402  (the one name a command line passes; tools/one_name.py)
 
 def available_mb():
     from nbxtensor.backend.host_memory import memory_state
@@ -21,7 +22,7 @@ def prism_need_mb(model, in_flag, in_val):
     """Prism's planned memory for this model, MB — the cell's estimated need."""
     env = dict(os.environ); env["PYTHONPATH"] = "src"
     try:
-        r = subprocess.run([sys.executable, "-m", "neurobrix", "run", "--model", model,
+        r = subprocess.run([sys.executable, "-m", "neurobrix", "run", "--model", cli_name(model),
                             in_flag, in_val, "--explain-plan"],
                            capture_output=True, text=True, timeout=120, env=env)
         m = re.search(r"planned memory\s+([0-9]+)\s*MB", r.stdout)

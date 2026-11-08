@@ -14,7 +14,7 @@ NeuroBrix auto-detects your hardware. To target a specific profile, add `--hardw
 
 ```bash
 neurobrix run \
-  --model PixArt-Sigma-XL-2-1024-MS \
+  --model PixArt-alpha/PixArt-Sigma-XL-2-1024-MS \
   --prompt "A cyberpunk city at night" \
   --steps 20
 ```
@@ -37,14 +37,14 @@ Text-to-video by default; passing `--input-image` switches to image-to-video aut
 ```bash
 # Text-to-video
 neurobrix run \
-  --model SANA-Video_2B_720p \
+  --model Efficient-Large-Model/SANA-Video_2B_720p_diffusers \
   --prompt "ocean waves at sunset" \
   --num-frames 81 --seed 42 \
   --output waves.mp4
 
 # Image-to-video
 neurobrix run \
-  --model Wan2.2-I2V-A14B \
+  --model Wan-AI/Wan2.2-I2V-A14B-Diffusers \
   --input-image first_frame.png \
   --prompt "camera pans left" \
   --num-frames 49 --output clip.mp4
@@ -69,7 +69,7 @@ Video models run at their native resolution and clip length; large spatio-tempor
 
 ```bash
 neurobrix run \
-  --model deepseek-moe-16b-chat \
+  --model deepseek-ai/deepseek-moe-16b-chat \
   --prompt "Explain quantum computing in simple terms"
 ```
 

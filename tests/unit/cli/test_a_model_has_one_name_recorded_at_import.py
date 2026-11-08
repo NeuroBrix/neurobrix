@@ -132,3 +132,21 @@ def test_an_entry_named_by_the_stamped_file_of_its_hub_record_is_found_installed
         registry._import_body(_import_args("Wan-AI/Wan2.2-I2V-A14B-Diffusers"))
     assert e.value.code == 0 and len(asked) == 1, asked
     assert names.recorded_name(cache / "Wan2.2-I2V-A14B") == "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
+
+
+def test_the_command_line_refuses_the_entry_name_of_a_recorded_model_in_one_line(cache, tmp_path):
+    """`run --model <entry>` for an entry whose hub name is recorded: exit 1, one line naming the hub name."""
+    import os
+    import subprocess
+    import sys
+    home = tmp_path / "home"
+    shutil.copytree(cache, home / "cache")
+    names.record_name(home / "cache" / "Kokoro-82M", "hexgrad/Kokoro-82M")
+    repo = Path(__file__).resolve().parents[3]
+    env = {**os.environ, "NEUROBRIX_HOME": str(home), "CUDA_VISIBLE_DEVICES": "", "PYTHONNOUSERSITE": "1",
+           "PYTHONPATH": os.pathsep.join([str(repo / "src"), str(repo / "nbxtensor" / "src")])}
+    p = subprocess.run([sys.executable, "-m", "neurobrix", "run", "--model", "Kokoro-82M", "--prompt", "hi"],
+                       capture_output=True, text=True, env=env, timeout=120)
+    assert p.returncode == 1, p.stderr
+    assert p.stderr.strip().splitlines() == [
+        "Error: the model installed as Kokoro-82M is named hexgrad/Kokoro-82M: use --model hexgrad/Kokoro-82M"], p.stderr

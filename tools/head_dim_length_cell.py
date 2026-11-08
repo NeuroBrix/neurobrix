@@ -56,6 +56,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from one_name import cli_name  # noqa: E402  (the one name a command line passes; tools/one_name.py)
 
 REPO = Path(__file__).resolve().parents[1]
 CACHE = _atelier.root("cache")
@@ -231,7 +232,7 @@ def run_arm(model: str, ids: list, arm: str, max_tokens: int,
     env["NBX_LOG"] = "debug"          # developer lines in the tails it reads (nbxtensor/terminal.py)
     env.setdefault("TOKENIZERS_PARALLELISM", "false")
     cmd = [sys.executable, "-u", "-m", "neurobrix", "run",
-           "--model", model,
+           "--model", cli_name(model),
            "--prompt", "x",                       # unused: ids win (Priority 0)
            "--set", f"global.input_token_ids={json.dumps(ids)}",
            "--max-tokens", str(max_tokens),

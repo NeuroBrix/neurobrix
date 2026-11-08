@@ -38,6 +38,7 @@ import collections
 import sys
 import traceback
 from pathlib import Path
+from one_name import cli_name  # noqa: E402  (the one name a command line passes; tools/one_name.py)
 
 REPO = Path(__file__).resolve().parent.parent
 # Frames in these modules are the SOURCE of a torch call for our purposes.
@@ -121,7 +122,7 @@ def main() -> int:
         sys.argv = ["neurobrix", *passthrough]
     else:
         args = ap.parse_args()
-        sys.argv = ["neurobrix", "run", "--model", args.model,
+        sys.argv = ["neurobrix", "run", "--model", cli_name(args.model),
                     "--max-tokens", str(args.max_tokens)]
         if args.audio:
             sys.argv += ["--audio", args.audio]

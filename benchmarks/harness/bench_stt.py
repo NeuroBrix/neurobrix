@@ -50,6 +50,7 @@ import sys as _sys_atelier
 from pathlib import Path as _Path_atelier
 _sys_atelier.path.insert(0, str(_Path_atelier(__file__).resolve().parents[2] / "tools"))
 import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
+from one_name import cli_name  # noqa: E402  (the one name a command line passes; tools/one_name.py)
 import argparse
 import json
 import os
@@ -148,7 +149,7 @@ def run_once_nbx(args, arm_env: dict, tag: str, outdir: Path) -> dict:
     # top_k/top_p on paths that don't implement them, even under
     # greedy, and greedy argmax is invariant to both anyway.
     cmd = ["python3", "-u", "-m", "neurobrix", "run",
-           "--hardware", args.hardware, "--model", args.model,
+           "--hardware", args.hardware, "--model", cli_name(args.model),
            "--audio", args.audio, "--temperature", args.temperature,
            *(["--prompt", arm_env["ARM_PROMPT"]]
              if arm_env.get("ARM_PROMPT") else []),

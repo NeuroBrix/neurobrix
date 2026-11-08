@@ -38,6 +38,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Optional
+from one_name import cli_name  # noqa: E402  (the one name a command line passes; tools/one_name.py)
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -387,7 +388,7 @@ def _transcribe(path: Path) -> str:
     env = {**os.environ}
     env.pop("NBX_ACTIVATIONS_FP16_SAFE", None)
     env["CUDA_VISIBLE_DEVICES"] = gate_card()   # never the condemned card, and never outside a pin
-    r = subprocess.run([*NBX_CMD, "run", "--model", "whisper-large-v3-turbo", "--audio", str(path), "--output", str(out)],
+    r = subprocess.run([*NBX_CMD, "run", "--model", cli_name("whisper-large-v3-turbo"), "--audio", str(path), "--output", str(out)],
                        env=env, capture_output=True, text=True, timeout=900)
     if r.returncode != 0 or not out.exists():
         raise RuntimeError(f"whisper exit {r.returncode}: {r.stdout[-200:]} {r.stderr[-200:]}")
@@ -509,7 +510,7 @@ def one_model(model: str, gpu, out: Path, extra: list, timeout: int) -> dict:
             outp = d / f"{arm}{ext}"
             if rep == 1:
                 outp = d / f"{arm}.run1{ext}"
-            rc, wall = run([*NBX_CMD, "run", "--model", model] + req + ["--output", str(outp)], env,
+            rc, wall = run([*NBX_CMD, "run", "--model", cli_name(model)] + req + ["--output", str(outp)], env,
                            d / f"{arm}.run{rep}.log", timeout)
             e = exec_time(d / f"{arm}.run{rep}.log")
             prev = res.get(arm)
@@ -558,7 +559,7 @@ def launcher_ab(model: str, gpu, out: Path, extra: list, timeout: int) -> dict:
            "config": "machine" if gpu is None else f"pinned:{gpu}", "request": req, "lever": "launcher"}
     for arm, env in (("A", {**base_env, "NBX_LAUNCHER": "triton"}), ("B", {**base_env, "NBX_LAUNCHER": "nbx"})):
         outp = d / f"{arm}{ext}"
-        rc, wall = run([*NBX_CMD, "run", "--model", model] + req + ["--output", str(outp)], env, d / f"{arm}.log", timeout)
+        rc, wall = run([*NBX_CMD, "run", "--model", cli_name(model)] + req + ["--output", str(outp)], env, d / f"{arm}.log", timeout)
         res[arm] = {"rc": rc, "wall_s": wall, "exec_s": exec_time(d / f"{arm}.log"), "output": str(outp)}
     a, b = d / f"A{ext}", d / f"B{ext}"
     same = a.exists() and b.exists() and a.read_bytes() == b.read_bytes()
@@ -702,7 +703,7 @@ def tree_ab(model: str, gpu, out: Path, extra: list, timeout: int, trees: list, 
         seen = subprocess.run([PY, "-c", "import neurobrix, sys; sys.stdout.write(neurobrix.__file__)"],
                               env=env, capture_output=True, text=True).stdout.strip()
         outp = d / f"{label}{ext}"
-        rc, wall = run([PY, "-c", entry, "run", "--model", model] + req + ["--output", str(outp)],
+        rc, wall = run([PY, "-c", entry, "run", "--model", cli_name(model)] + req + ["--output", str(outp)],
                        env, d / f"{label}.log", timeout)
         res["arms"][label] = {"rc": rc, "wall_s": wall, "exec_s": exec_time(d / f"{label}.log"),
                               "output": str(outp), "package_seen": seen,
@@ -786,7 +787,7 @@ def _oracle_run(d: Path, model: str, fam: str, extra: list, ext: str, env: dict,
     oreq = request_args(model, fam, extra)
     oreq = [a for a in oreq if a != "--triton"] + ["--sequential"]
     outp = d / f"oracle{ext}"
-    rc, wall = run([PY, "-c", "import sys; from neurobrix.cli import main; sys.exit(main())", "run", "--model", model]
+    rc, wall = run([PY, "-c", "import sys; from neurobrix.cli import main; sys.exit(main())", "run", "--model", cli_name(model)]
                    + oreq + ["--output", str(outp)], env, d / "oracle.log", timeout)
     return {"rc": rc, "wall_s": wall, "output": str(outp),
             "sha": hashlib.sha256(outp.read_bytes()).hexdigest()[:12] if outp.exists() else None}
@@ -819,7 +820,7 @@ def sweep_one(model: str, gpu, out: Path, extra: list, timeout: int) -> dict:
     else:
         env["CUDA_VISIBLE_DEVICES"] = visible_card(gpu)
     outp = d / f"sweep{ext}"
-    rc, wall = run([*NBX_CMD, "run", "--model", model] + req + ["--output", str(outp)], env, d / "sweep.log", timeout)
+    rc, wall = run([*NBX_CMD, "run", "--model", cli_name(model)] + req + ["--output", str(outp)], env, d / "sweep.log", timeout)
     text = (d / "sweep.log").read_text(errors="replace")
     m = re.search(r"\[autotune\] \S+: sweep artifact written (\S+) \((\d+) measured shape", text)
     res = {"model": model, "family": fam, "weight_gb": round(weight_gb(model), 2),
@@ -1043,9 +1044,9 @@ def env_ab(model: str, gpu, out: Path, extra: list, timeout: int, env_b: dict, l
                 env = {**env, "NEUROBRIX_REPLAY_CACHE": str(_rd)}
             if src is not None:                          # the request runs the given tree's package
                 env = {**env, "PYTHONPATH": str(Path(src).resolve())}
-                cmd = [PY, "-c", "import sys; from neurobrix.cli import main; sys.exit(main())", "run", "--model", model]
+                cmd = [PY, "-c", "import sys; from neurobrix.cli import main; sys.exit(main())", "run", "--model", cli_name(model)]
             else:
-                cmd = [*NBX_CMD, "run", "--model", model]
+                cmd = [*NBX_CMD, "run", "--model", cli_name(model)]
             # One log per REPETITION. It used to be one per arm, opened "w"
             # each time, so only the LAST repetition survived on disk — and the
             # repetition that actually measured left no trace. That is what made
@@ -1151,7 +1152,7 @@ def r33_probe(model: str, gpu, out: Path, extra: list, timeout: int, src: Path =
     probe = str((src.parent if src else REPO) / "tools" / "r33_sys_modules_probe.py")
     if not Path(probe).exists():
         probe = str(REPO / "tools" / "r33_sys_modules_probe.py")
-    rc, wall = run([PY, probe, "--triton", "--model", model] + req + ["--output", str(outp)], env, log, timeout)
+    rc, wall = run([PY, probe, "--triton", "--model", cli_name(model)] + req + ["--output", str(outp)], env, log, timeout)
     text = log.read_text(errors="replace")
     m = re.search(r"torch in sys\.modules at exit: (True|False)", text)
     torch_at_exit = None if m is None else (m.group(1) == "True")

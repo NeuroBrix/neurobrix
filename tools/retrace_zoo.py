@@ -49,6 +49,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "tools"))
 import precision_zoo_campaign as C  # noqa: E402
 import repo_env  # noqa: E402  — the repository's .env, loaded the way the build toolchain loads its own
+from one_name import cli_name  # noqa: E402  (the one name a command line passes; tools/one_name.py)
 
 repo_env.load()
 
@@ -1317,7 +1318,7 @@ class Model:
             if outp.exists() and (self.dir / f"{tag}_{arm}.log").exists() and sha(outp):
                 res[arm] = {"rc": 0, "sha": sha(outp), "output": str(outp), "cached": True}
                 continue
-            cmd = [ENGINE_PY, "-c", "import sys; from neurobrix.cli import main; sys.exit(main())", "run", "--model", name] + req + flag + ["--output", str(outp)]
+            cmd = [ENGINE_PY, "-c", "import sys; from neurobrix.cli import main; sys.exit(main())", "run", "--model", cli_name(name)] + req + flag + ["--output", str(outp)]
             t0 = time.time()
             # One precision policy on both arms (POLICY above).
             env = self.env(); env.update(POLICY_ENV)

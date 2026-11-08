@@ -1716,6 +1716,8 @@ class Judge:
 def explain_plan(tree: Tree, hw: str, argv: list, cfg: dict) -> dict:
     """The tree's `--explain-plan --json` for one cell's argv on one class's profile (no card; cached)."""
     argv = [a for i, a in enumerate(argv) if a != "--output" and (i == 0 or argv[i - 1] != "--output")]
+    from one_name import argv_for_tree          # the tree's own name for the model (a base tree knows the entry)
+    argv = argv_for_tree(argv, tree.path / "src")
     cmd = ["-m", cfg["package"], *argv, "--hardware", hw, "--explain-plan", "--json"]
     # the cached view holds only the compared fields: a change to that list is a different view, never a reuse
     key = hashlib.sha256(json.dumps([tree.sha, cmd, cfg["planner"]["plan_fields"]]).encode()).hexdigest()[:24]

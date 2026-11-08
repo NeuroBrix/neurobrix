@@ -34,6 +34,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from one_name import cli_name  # noqa: E402  (the one name a command line passes; tools/one_name.py)
 
 REPO = Path(__file__).resolve().parent.parent
 OUT = _atelier.root("campaigns") / "render_resume_stepdiff"
@@ -114,7 +115,7 @@ def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
     records = _install(args.tag)
 
-    sys.argv = ["neurobrix", "run", "--model", args.model,
+    sys.argv = ["neurobrix", "run", "--model", cli_name(args.model),
                 "--prompt", args.prompt, "--steps", str(args.steps),
                 "--seed", str(args.seed),
                 "--output", str(OUT / f"{args.tag}.png")]

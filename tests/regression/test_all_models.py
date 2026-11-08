@@ -105,6 +105,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from conftest import (  # noqa: E402
     discover_models, discover_target_matrix, KNOWN_FAILURES, SLOW_FAMILIES,
 )
+from one_name import cli_name  # noqa: E402  (the one name a command line passes; tools/one_name.py)
 
 
 def _marks_for(name: str, mode: str, family: str,
@@ -354,7 +355,7 @@ def _run_neurobrix(model: str, mode: str, family: str, flow: str,
             out_path.unlink()
         cmd = [
             _runtime_python(), "-u", "-m", "neurobrix", "upscale",
-            "--model", model,
+            "--model", cli_name(model),
             "--input", str(IMAGE_REF),
             "--output", str(out_path),
             "--mode", "triton" if mode == "triton" else "compiled",
@@ -362,7 +363,7 @@ def _run_neurobrix(model: str, mode: str, family: str, flow: str,
     else:
         cmd = [
             _runtime_python(), "-u", "-m", "neurobrix", "run",
-            "--model", model,
+            "--model", cli_name(model),
             "--temperature", "0",
         ]
         # For families with a *file* output (image/video/audio binary),
@@ -566,7 +567,7 @@ def test_upscaler_runs_with_no_gpu() -> None:
     started = time.time()
     proc = subprocess.run(
         [_runtime_python(), "-u", "-m", "neurobrix", "upscale",
-         "--model", model, "--input", str(IMAGE_REF), "--output", str(out_path)],
+         "--model", cli_name(model), "--input", str(IMAGE_REF), "--output", str(out_path)],
         capture_output=True, timeout=900, env=env,
     )
     elapsed = time.time() - started

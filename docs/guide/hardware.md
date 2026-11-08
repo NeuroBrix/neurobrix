@@ -29,7 +29,7 @@ The `--hardware` flag lets you target a **specific subset** of your hardware ins
 neurobrix serve --model 1600m-1024 --hardware v100-32g
 
 # Use a multi-GPU profile for large models
-neurobrix serve --model deepseek-moe-16b-chat --hardware c4140-4xv100-custom-nvlink
+neurobrix serve --model deepseek-ai/deepseek-moe-16b-chat --hardware c4140-4xv100-custom-nvlink
 ```
 
 This is useful when you want to:
@@ -44,7 +44,7 @@ NeuroBrix runs on machines without any GPU. Auto-detection creates a valid CPU-o
 
 ```bash
 # Works on a laptop or VM with no GPU
-neurobrix serve --model TinyLlama-1.1B-Chat-v1.0
+neurobrix serve --model TinyLlama/TinyLlama-1.1B-Chat-v1.0
 neurobrix chat
 ```
 

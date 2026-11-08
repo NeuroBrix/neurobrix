@@ -30,6 +30,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from one_name import cli_name  # noqa: E402  (the one name a command line passes; tools/one_name.py)
 
 MOUNT = _atelier.root("cache")
 CACHE = _atelier.root("cache")
@@ -227,7 +228,7 @@ def run_arm(model: str, arm: str, family: str, prompt: str, max_tokens: int,
     clear_caches()
     ext = family_output_ext(family)
     out = outdir / f"out_{model}_{arm}{ext}" if ext else None
-    cmd = ([sys.executable, "-u", "-m", "neurobrix", "run", "--model", model]
+    cmd = ([sys.executable, "-u", "-m", "neurobrix", "run", "--model", cli_name(model)]
            + family_inputs(family, prompt)
            + declared_choices(model)
            + ["--max-tokens", str(max_tokens), "--temperature", "0"]

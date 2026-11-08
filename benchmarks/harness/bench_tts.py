@@ -24,6 +24,7 @@ import sys as _sys_atelier
 from pathlib import Path as _Path_atelier
 _sys_atelier.path.insert(0, str(_Path_atelier(__file__).resolve().parents[2] / "tools"))
 import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
+from one_name import cli_name  # noqa: E402  (the one name a command line passes; tools/one_name.py)
 import argparse, json, os, statistics, subprocess, sys, time
 from pathlib import Path
 
@@ -37,7 +38,7 @@ REPO = Path(__file__).resolve().parents[2]
 def run_once_nbx(args, arm_env, tag, outdir):
     wav = outdir / f"tts_{tag}.wav"
     cmd = [sys.executable, "-u", "-m", "neurobrix", "run",
-           "--model", args.model, "--prompt", args.sentence_text,
+           "--model", cli_name(args.model), "--prompt", args.sentence_text,
            "--output", str(wav), "--hardware", args.hardware,
            "--temperature", "0", "--top-k", "0", "--top-p", "1"]
     if arm_env.get("ARM_ENGINE") == "":
@@ -135,7 +136,7 @@ def stt_probe(args, wav_path: str, outdir, tag) -> dict:
     """Independent STT content probe: nbx whisper-turbo compiled."""
     txt = outdir / f"probe_{tag}.txt"
     cmd = [sys.executable, "-u", "-m", "neurobrix", "run",
-           "--model", "whisper-large-v3-turbo", "--audio", wav_path,
+           "--model", cli_name("whisper-large-v3-turbo"), "--audio", wav_path,
            "--output", str(txt), "--hardware", args.hardware]
     env = dict(os.environ)
     env["CUDA_VISIBLE_DEVICES"] = args.gpu

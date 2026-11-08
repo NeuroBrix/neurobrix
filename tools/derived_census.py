@@ -36,6 +36,7 @@ sys.path.insert(0, str(REPO / "tools"))
 # The engine's own answer (NEUROBRIX_CACHE, then the configured home, then the default) — the
 # catalogue the run reads is the catalogue the derivation reads (the Mac's NAS catalogue, 03:52).
 from neurobrix.core.paths import cache_dir as _cache_dir  # noqa: E402
+from one_name import cli_name  # noqa: E402  (the one name a command line passes; tools/one_name.py)
 
 CACHE = _cache_dir()
 MODE_FLAGS = {"triton": "--triton", "triton-sequential": "--triton-sequential"}
@@ -59,7 +60,7 @@ def shadow_env(src, rung=None) -> dict:
 def plan_record(model: str, request: list, mode: str, hardware: str, rung: int) -> dict:
     """The plan the runtime would receive, from the engine's own `--explain-plan --json`."""
     env = shadow_env(REPO / "src", rung)
-    r = subprocess.run([sys.executable, "-m", "neurobrix", "run", "--model", model, *request,
+    r = subprocess.run([sys.executable, "-m", "neurobrix", "run", "--model", cli_name(model), *request,
                         MODE_FLAGS[mode], "--hardware", hardware, "--explain-plan", "--json"],
                        env=env, capture_output=True, text=True, timeout=600, cwd=str(REPO))
     if r.returncode != 0:

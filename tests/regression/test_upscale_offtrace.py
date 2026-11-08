@@ -47,6 +47,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from one_name import cli_name  # noqa: E402  (the one name a command line passes; tools/one_name.py)
 
 # The mask guard that stood here (2026-08-29 → 2026-09-20) is gone with its
 # premise: measured on 2026-09-20, `nbx upscale` under CUDA_VISIBLE_DEVICES=1 and
@@ -147,7 +148,7 @@ def test_upscale_two_sizes(model: str, size: str, mode: str,
     src = _make_input(hw, tmp_path / f"in_{model}_{size}.png")
     out = tmp_path / f"out_{model}_{size}_{mode}.png"
     cmd = [sys.executable, "-u", "-m", "neurobrix", "upscale",
-           "--model", model, "--input", str(src), "--output", str(out)]
+           "--model", cli_name(model), "--input", str(src), "--output", str(out)]
     if mode != "compiled":
         cmd += ["--mode", mode]
     env = {**os.environ, "PYTHONPATH": str(REPO / "src"),
@@ -274,7 +275,7 @@ def test_upscale_tone_fidelity(model: str, mode: str, size: str,
 
     out = tmp_path / f"tone_{model}_{mode}_{size}.png"
     cmd = [sys.executable, "-u", "-m", "neurobrix", "upscale",
-           "--model", model, "--input", str(src), "--output", str(out)]
+           "--model", cli_name(model), "--input", str(src), "--output", str(out)]
     if mode != "compiled":
         cmd += ["--mode", mode]
     env = {**os.environ, "PYTHONPATH": str(REPO / "src"),

@@ -33,6 +33,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from one_name import cli_name  # noqa: E402  (the one name a command line passes; tools/one_name.py)
 
 REPO = Path(__file__).resolve().parents[2]
 SHORT = "Transcribe the audio."
@@ -64,7 +65,7 @@ def _tokens(model, args, prompt, engine, out: Path, streamed: bool):
     if streamed:
         env.update(NBX_PRISM_BUDGET_MB="8192", NBX_FORCE_STRATEGY="layer_streaming")
     proc = subprocess.run(
-        [os.environ["NEUROBRIX_PYTHON"], "-m", "neurobrix", "run", "--model", model, *_ENGINE_FLAG[engine],
+        [os.environ["NEUROBRIX_PYTHON"], "-m", "neurobrix", "run", "--model", cli_name(model), *_ENGINE_FLAG[engine],
          *args, "--prompt", prompt, "--max-tokens", "8", "--temperature", "0", "--seed", "1"],
         cwd=REPO, env=env, capture_output=True, text=True, timeout=3600)
     assert proc.returncode == 0, (("streamed" if streamed else "whole"), proc.stdout[-2500:],

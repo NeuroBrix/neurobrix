@@ -82,6 +82,7 @@ import where_the_symbol_chain_breaks as _chain              # noqa: E402  (analy
 # weights — not only what sits in the default ~/.neurobrix/cache. _zoo.CACHE
 # is hardcoded to the default and does not see the env.
 from neurobrix.core.paths import cache_dir as _cache_dir
+from one_name import cli_name  # noqa: E402  (the one name a command line passes; tools/one_name.py)
 CACHE = _cache_dir()
 FORMAT = "nbx-census/1"
 #: The engine modes that hand keys to the Triton launcher — the served modes a census covers.
@@ -237,7 +238,7 @@ def shadow(model: str, request: list, mode: str, hardware: str, n_dev: int, time
         env["NBX_PRISM_BUDGET_MB"] = str(int(rung_mb))
     if walk_extents:
         env["NBX_CENSUS_EXTENTS"] = "1"
-    cmd = [sys.executable, "-m", "neurobrix", "run", "--model", model, *request, *MODES[mode], "--hardware", hardware]
+    cmd = [sys.executable, "-m", "neurobrix", "run", "--model", cli_name(model), *request, *MODES[mode], "--hardware", hardware]
     t0 = time.time()
     with open(log, "w") as fh:
         rc = _zoo.run_group(cmd, env, fh, timeout, cwd=str(REPO))

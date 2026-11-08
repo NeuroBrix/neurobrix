@@ -34,6 +34,7 @@ import sys
 import time
 import urllib.request
 from typing import Any, Dict, List, Optional
+from one_name import cli_name  # noqa: E402  (the one name a command line passes; tools/one_name.py)
 
 # Rendered length under the container's own chat template (bos + "User: " +
 # content + "\n\n" + "Assistant:"), measured with the tokenizer embedded in the
@@ -67,7 +68,7 @@ def run_engine(model: str, prompt: str, mode: str, max_tokens: int,
         env["NBX_MOE_DIAG"] = "1"
     cmd = [sys.executable, "-c",
            "import sys; from neurobrix.cli import main; sys.exit(main())",
-           "run", "--model", model, "--prompt", prompt,
+           "run", "--model", cli_name(model), "--prompt", prompt,
            "--temperature", "0", "--seed", str(seed),
            "--max-tokens", str(max_tokens)]
     if mode == "triton":

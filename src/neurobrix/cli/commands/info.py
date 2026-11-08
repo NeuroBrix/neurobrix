@@ -125,9 +125,9 @@ def cmd_inspect(args):
         # hint that a path was wanted (hub walkthrough, 2026-09-03). Resolve a
         # name against the installed models before giving up.
         try:
-            from neurobrix.cli.utils import find_model
+            from neurobrix.cli.utils import find_model, resolve_model_arg
 
-            nbx_path = Path(find_model(args.nbx_path))
+            nbx_path = Path(find_model(resolve_model_arg(args.nbx_path)))
         except FileNotFoundError as exc:
             print(f"ERROR: '{args.nbx_path}' is neither a file nor an "
                   f"installed model.")

@@ -320,7 +320,7 @@ After creating a profile, test it:
 neurobrix info --hardware
 
 # Test with a model
-neurobrix serve --model TinyLlama-1.1B-Chat-v1.0 --hardware my-custom
+neurobrix serve --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --hardware my-custom
 ```
 
 If the profile has errors, NeuroBrix will crash with an explicit message (ZERO FALLBACK — no silent defaults).

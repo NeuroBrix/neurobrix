@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from one_name import cli_name  # noqa: E402  (the one name a command line passes; tools/one_name.py)
 
 
 def speaker_for(model: str) -> str:
@@ -94,7 +95,7 @@ def compile_census(model: str, arm: str, inspect, extra_argv=None) -> dict:
     tc.compile = wrapped
     try:
         from neurobrix.cli import main as cli_main
-        argv = ["neurobrix", "run", "--model", model]
+        argv = ["neurobrix", "run", "--model", cli_name(model)]
         argv += list(extra_argv or ["--prompt", "a red apple on a wooden table",
                                     "--max-tokens", "8"])
         voice = speaker_for(model)

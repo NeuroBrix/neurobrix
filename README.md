@@ -136,7 +136,7 @@ neurobrix hub --category LLM
 neurobrix import TinyLlama/TinyLlama-1.1B-Chat-v1.0 --accept-license
 
 # Run it once (hardware is detected automatically)
-neurobrix run --model TinyLlama-1.1B-Chat-v1.0 \
+neurobrix run --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
     --prompt "Write a Python function that reverses a string." --max-tokens 256
 ```
 
@@ -155,7 +155,7 @@ environment both.
 through it, and `run` uses it when it serves the same model:
 
 ```bash
-neurobrix serve --model TinyLlama-1.1B-Chat-v1.0
+neurobrix serve --model TinyLlama/TinyLlama-1.1B-Chat-v1.0
 neurobrix chat                       # interactive multi-turn chat (/new, /context, /status, /quit)
 neurobrix run --prompt "Hello"       # --model can be omitted while a daemon is running
 neurobrix stop                       # stop the daemon and free GPU memory
@@ -214,37 +214,37 @@ The family is read from the container, so `run` takes the inputs that family nee
 
 ```bash
 # Language model
-neurobrix run --model TinyLlama-1.1B-Chat-v1.0 --prompt "Explain recursion." \
+neurobrix run --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --prompt "Explain recursion." \
     --temperature 0.7 --max-tokens 512 --output answer.txt
 
 # Speech-to-text: audio in, text out
-neurobrix run --model whisper-large-v3-turbo --audio recording.wav
+neurobrix run --model openai/whisper-large-v3-turbo --audio recording.wav
 
 # Speech understanding: audio plus an instruction
-neurobrix run --model Voxtral-Mini-3B-2507 --audio meeting.wav \
+neurobrix run --model mistralai/Voxtral-Mini-3B-2507 --audio meeting.wav \
     --prompt "Summarize this call."
 
 # Text-to-speech
-neurobrix run --model Kokoro-82M --prompt "Hello from NeuroBrix." --output speech.wav
+neurobrix run --model hexgrad/Kokoro-82M --prompt "Hello from NeuroBrix." --output speech.wav
 
 # Vision-language: image plus a question
-neurobrix run --model GLM-4.1V-9B-Thinking --input-image photo.jpg \
+neurobrix run --model zai-org/GLM-4.1V-9B-Thinking --input-image photo.jpg \
     --prompt "What is in this image?"
 
 # Multimodal models take --mode (text or image)
-neurobrix run --model Janus-Pro-7B --mode text --input-image photo.jpg --prompt "Describe this image."
-neurobrix run --model Janus-Pro-7B --mode image --prompt "a red apple on a wooden table"
+neurobrix run --model deepseek-ai/Janus-Pro-7B --mode text --input-image photo.jpg --prompt "Describe this image."
+neurobrix run --model deepseek-ai/Janus-Pro-7B --mode image --prompt "a red apple on a wooden table"
 
 # Image generation
-neurobrix run --model Flex.1-alpha --prompt "a lighthouse at dusk" \
+neurobrix run --model ostris/Flex.1-alpha --prompt "a lighthouse at dusk" \
     --steps 20 --seed 42 --output lighthouse.png
 
 # Video generation; --input-image switches an image-to-video model to its first frame
-neurobrix run --model CogVideoX-2b --prompt "a hot air balloon over mountains" \
+neurobrix run --model zai-org/CogVideoX-2b --prompt "a hot air balloon over mountains" \
     --num-frames 17 --seed 42 --output balloon.mp4
 
 # Upscaling
-neurobrix upscale --model Real-ESRGAN-RealESRGAN_x4plus --input photo.png --output photo_x4.png
+neurobrix upscale --model xinntao/Real-ESRGAN-RealESRGAN_x4plus --input photo.png --output photo_x4.png
 ```
 
 ### Execution modes

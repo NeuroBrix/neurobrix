@@ -20,6 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from bench_stt import (_locked, _norm_words, _run_capped, check_exclusive,
                        gpu_state, lock_clocks, unlock_clocks)
+from one_name import cli_name  # noqa: E402  (the one name a command line passes; tools/one_name.py)
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -29,7 +30,7 @@ def run_once_nbx(args, arm_env, tag, outdir):
                     else f"out_{tag}.wav" if args.mode == "audio"
                     else f"out_{tag}.txt")
     cmd = [sys.executable, "-u", "-m", "neurobrix", "run",
-           "--model", args.model, "--hardware", args.hardware,
+           "--model", cli_name(args.model), "--hardware", args.hardware,
            "--output", str(out),
            "--temperature", "0", "--top-k", "0", "--top-p", "1"]
     if args.prompt:

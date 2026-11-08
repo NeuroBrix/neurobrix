@@ -61,6 +61,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "tools"))
 from container_renames import current_name  # noqa: E402
+from one_name import cli_name  # noqa: E402  (the one name a command line passes; tools/one_name.py)
 CACHE = Path(os.environ.get("NEUROBRIX_CACHE") or _atelier.root("cache"))
 PY = os.environ.get("NBX_PYTHON") or _atelier.interpreter("forge")
 
@@ -433,7 +434,7 @@ def main() -> int:
                            "reason": f"{type(exc).__name__}: {exc}"})
             continue
         cmd = [str(PY), "-c", "import sys; from neurobrix.cli import main; sys.exit(main())",
-               "run", "--model", r["container"], *req]
+               "run", "--model", cli_name(r["container"]), *req]
         env = {**os.environ, "PYTHONPATH": str(args.src),
                "NBX_AUTOTUNE_CERTIFIED": "off"}
         record_family = family

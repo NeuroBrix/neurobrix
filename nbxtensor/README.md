@@ -63,7 +63,7 @@ the keys (`pip install neurobrix`), with these commands (run as written on a cle
 1. Run the models you use. Every key no certificate covers is swept and kept in `~/.neurobrix/replay_cache/`:
 
    ```
-   neurobrix run --model TinyLlama-1.1B-Chat-v1.0 --triton --prompt "Hello" --max-tokens 32
+   neurobrix run --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --triton --prompt "Hello" --max-tokens 32
    ```
 
 2. Certify the keys your card formed — every candidate setting is run against a float64 oracle and timed; the proofs are
@@ -78,7 +78,7 @@ the keys (`pip install neurobrix`), with these commands (run as written on a cle
 3. Check that they are served: a certified-only run uses only certificates and fails, naming the key, if one is missing:
 
    ```
-   NEUROBRIX_AUTOTUNE_CERTIFIED_DIR=./my-certificates neurobrix run --model TinyLlama-1.1B-Chat-v1.0 --triton \
+   NEUROBRIX_AUTOTUNE_CERTIFIED_DIR=./my-certificates neurobrix run --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --triton \
        --prompt "Hello" --max-tokens 32 --certified-only
    ```
 

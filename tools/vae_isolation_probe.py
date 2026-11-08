@@ -38,6 +38,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from one_name import cli_name  # noqa: E402  (the one name a command line passes; tools/one_name.py)
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT_DIR = _atelier.root("campaigns") / "p_sana_4kpx_runtime/audit_spaghetti_2026_05_05"
@@ -88,7 +89,7 @@ def _patched(self, comp_name, phase="default", loop_timestep=None):
 RuntimeExecutor._execute_component = _patched
 
 from neurobrix.cli import main as run_main
-sys.argv = ["neurobrix", "run", "--model", "{model_name}",
+sys.argv = ["neurobrix", "run", "--model", "{cli_name(model_name)}",
             "--sequential", "--prompt", "a red apple",
             "--steps", "12", "--output", "{output_png}"]
 run_main()

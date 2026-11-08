@@ -47,7 +47,8 @@ def test_a_model_whose_components_fit_alone_but_not_together_is_streamed(tmp_pat
     import yaml
     from tests.unit.prism._pinned_machine import APPLE_M4_PRO
     (tmp_path / f"{APPLE_M4_PRO['id']}.yml").write_text(yaml.safe_dump(APPLE_M4_PRO))
-    r = subprocess.run([sys.executable, "-c", DRIVER, str(tmp_path), MODEL, APPLE_M4_PRO["id"]],
+    from one_name import cli_name                 # the --model the command line takes (tools/one_name.py)
+    r = subprocess.run([sys.executable, "-c", DRIVER, str(tmp_path), cli_name(MODEL), APPLE_M4_PRO["id"]],
                        env=env, capture_output=True, text=True, timeout=600, cwd=str(REPO))
     t = r.stdout
     assert "{" in t, (r.stderr or t)[-1500:]

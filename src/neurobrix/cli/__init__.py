@@ -153,7 +153,7 @@ def create_parser(show_dev: bool = False):
 Examples:
   neurobrix hub                                        # the models on the registry
   neurobrix import TinyLlama/TinyLlama-1.1B-Chat-v1.0  # download one
-  neurobrix run --model TinyLlama-1.1B-Chat-v1.0 --prompt "What is the capital of France?"
+  neurobrix run --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --prompt "What is the capital of France?"
 
 -v shows the engine's developer lines, -vv an error's traceback too (NBX_LOG=debug: both).
 For more information: https://neurobrix.es"""
@@ -430,8 +430,8 @@ Examples:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  neurobrix serve --model TinyLlama-1.1B-Chat-v1.0 --hardware v100-32g
-  neurobrix serve --model TinyLlama-1.1B-Chat-v1.0 --hardware v100-32g --timeout 3600
+  neurobrix serve --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --hardware v100-32g
+  neurobrix serve --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --hardware v100-32g --timeout 3600
         """
     )
     serve_parser.add_argument('--model', required=True, help='Model name')

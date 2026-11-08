@@ -83,6 +83,7 @@ MODES = {"native": [], "triton": ["--triton"], "triton-sequential": ["--triton-s
 #: container the engine finds elsewhere (a NAS mount, for one that does not fit the local disk) was refused as
 #: absent before its cell could run (the Mac, 2026-10-04: Qwen3-Coder-30B in place from the mount).
 from neurobrix.core import paths as _engine_paths  # noqa: E402
+from one_name import argv_for_tree, cli_name  # noqa: E402  (the one name a command line passes; tools/one_name.py)
 
 CACHE = _engine_paths.cache_dir()
 #: The certified reference a cell reads, under the `--src` tree: the directory and the census tables.
@@ -555,8 +556,9 @@ def plan_host_need(model: str, mode: str, gpu: str, src: Path):
         return _none(str(e))
     env = {**os.environ, "CUDA_VISIBLE_DEVICES": "", "NBX_CENSUS": "1", "NBX_CENSUS_DEVICES": "1",
            "NBX_PRISM_BUDGET_MB": str(hw[1]), "PYTHONPATH": str(src), "PYTHONNOUSERSITE": "1"}
-    cmd = [sys.executable, "-m", "neurobrix", "run", "--model", model, *cell_request(model), *MODES[mode],
-           "--hardware", hw[0], "--explain-plan", "--json"]
+    cmd = [sys.executable, "-m", "neurobrix", *argv_for_tree(["run", "--model", cli_name(model), *cell_request(model),
+                                                              *MODES[mode], "--hardware", hw[0], "--explain-plan",
+                                                              "--json"], src)]
     try:
         p = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=900)
     except subprocess.TimeoutExpired:
@@ -633,7 +635,7 @@ def cell_argv(model: str, mode: str, art, req: list = None) -> list:
     the computed gate scope (tools/gate_scope.py) parses with the engine's own parser."""
     req = cell_request(model) if req is None else req
     hw = ["--hardware", HARDWARE] if HARDWARE else []
-    return ["run", "--model", model, *req, *MODES[mode], *hw, "--certified-only", "--output", str(art)]
+    return ["run", "--model", cli_name(model), *req, *MODES[mode], *hw, "--certified-only", "--output", str(art)]
 
 
 def keep_superseded(d: Path, mode: str) -> list:
@@ -673,7 +675,7 @@ def _run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Pat
     # python), written in the row: a matrix measures ONE stack, and the stack is part of the cell.
     # Every cell is a CONFIRMATION run (the owner's method, 2026-09-28 20:06): served entirely from
     # the certified directory, a missing key an error naming its census row — never a runtime sweep.
-    cmd = [sys.executable, "-m", "neurobrix", *cell_argv(model, mode, art, req)]
+    cmd = [sys.executable, "-m", "neurobrix", *argv_for_tree(cell_argv(model, mode, art, req), src)]
     rc, wall = Z.run(cmd, env, log, timeout, stack_at_timeout=True)
     tree = src.parent
     misses = missing_keys(log)

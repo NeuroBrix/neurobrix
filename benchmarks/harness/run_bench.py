@@ -19,6 +19,7 @@ import sys as _sys_atelier
 from pathlib import Path as _Path_atelier
 _sys_atelier.path.insert(0, str(_Path_atelier(__file__).resolve().parents[2] / "tools"))
 import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
+from one_name import cli_name  # noqa: E402  (the one name a command line passes; tools/one_name.py)
 import argparse
 import json
 import os
@@ -298,7 +299,7 @@ def _neurobrix_daemon(row: dict, gpu: int | None, triton: bool,
     # An empty pin means "unset" (StepCache reads presence, not truthiness).
     env = {k: v for k, v in env.items() if v != ""}
     cmd = [sys.executable, "-m", "neurobrix", "serve",
-           "--model", row["neurobrix_model"], "--foreground"]
+           "--model", cli_name(row["neurobrix_model"]), "--foreground"]
     if gpu is not None:
         cmd += ["--hardware", hardware]
     if triton:

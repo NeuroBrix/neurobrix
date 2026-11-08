@@ -30,6 +30,7 @@ import sys as _sys_atelier
 from pathlib import Path as _Path_atelier
 _sys_atelier.path.insert(0, str(_Path_atelier(__file__).resolve().parents[2] / "tools"))
 import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
+from one_name import cli_name  # noqa: E402  (the one name a command line passes; tools/one_name.py)
 import argparse
 import hashlib
 import json
@@ -96,7 +97,7 @@ def measure_ppl(model_name: str, gpu: str, hardware: str,
         if gpu:
             env["CUDA_VISIBLE_DEVICES"] = gpu
         cmd = [sys.executable, "-m", "neurobrix", "run",
-               "--model", model_name, "--prompt", wtext,
+               "--model", cli_name(model_name), "--prompt", wtext,
                "--max-tokens", "1", "--triton",
                "--set", "global.score_mode=1", "--output", str(out)]
         if hardware:
@@ -131,7 +132,7 @@ def greedy_shas(model_name: str, gpu: str, hardware: str,
         if gpu:
             env["CUDA_VISIBLE_DEVICES"] = gpu
         cmd = [sys.executable, "-m", "neurobrix", "run",
-               "--model", model_name, "--prompt", prompt,
+               "--model", cli_name(model_name), "--prompt", prompt,
                "--max-tokens", "48", "--triton", "--output", str(out)]
         if hardware:
             cmd[4:4] = ["--hardware", hardware]

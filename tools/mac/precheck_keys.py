@@ -28,6 +28,7 @@ vendor, profile = C.active_profile()
 rows = T.read(T.table_path(vendor, profile, klass, root=tree / "src" / "neurobrix" / "config" / "census"))
 import ast
 from nbxtensor.ops import autotune_cache as atc
+from one_name import cli_name  # noqa: E402  (the one name a command line passes; tools/one_name.py)
 tuners = dict(atc._autotuners())
 per = {}
 def covered(r):
@@ -61,7 +62,7 @@ if rc:
 import regression_matrix as R
 need_mb = 0
 for mode in modes:
-    cmd = [sys.executable, "-m", "neurobrix", "run", "--model", model, *R.cell_request(model), *R.MODES[mode],
+    cmd = [sys.executable, "-m", "neurobrix", "run", "--model", cli_name(model), *R.cell_request(model), *R.MODES[mode],
            "--explain-plan", "--json"]
     env = {**os.environ, "PYTHONPATH": str(tree / "src"), "NEUROBRIX_CACHE": str(Path.home() / "Mounts/Super-NeuroBrix-Cache")}
     p = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=900)

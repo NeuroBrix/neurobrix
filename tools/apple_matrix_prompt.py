@@ -7,6 +7,7 @@ a TTS wav is judged by passing it back through an STT; an LLM text is read.
 import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import json, os, re, subprocess, sys, time
 from pathlib import Path
+from one_name import cli_name  # noqa: E402  (the one name a command line passes; tools/one_name.py)
 
 MODES = ("compiled", "triton", "triton-sequential")
 _FLAG = {"compiled": [], "triton": ["--triton"], "triton-sequential": ["--triton-sequential"]}
@@ -33,7 +34,7 @@ def available_mb():
 def prism_need_mb(model, prompt):
     env = dict(os.environ); env["PYTHONPATH"] = "src"
     try:
-        r = subprocess.run([sys.executable, "-m", "neurobrix", "run", "--model", model,
+        r = subprocess.run([sys.executable, "-m", "neurobrix", "run", "--model", cli_name(model),
                             "--prompt", prompt, "--explain-plan"],
                            capture_output=True, text=True, timeout=180, env=env)
         m = re.search(r"planned memory\s+([0-9]+)\s*MB", r.stdout)
@@ -45,7 +46,7 @@ def prism_need_mb(model, prompt):
 def run_one(model, prompt, ext, mode, out_dir, timeout=1200):
     out = out_dir / f"{model}_{mode}.{ext}"
     env = dict(os.environ); env["PYTHONPATH"] = "src"
-    cmd = [sys.executable, "-m", "neurobrix", "run", "--model", model,
+    cmd = [sys.executable, "-m", "neurobrix", "run", "--model", cli_name(model),
            "--prompt", prompt, *_FLAG[mode], "--output", str(out)]
     try:
         r = subprocess.run(cmd, env=env, timeout=timeout, capture_output=True, text=True)

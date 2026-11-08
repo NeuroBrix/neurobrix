@@ -5,7 +5,7 @@ that loads one model once and answers requests over a local socket until it is s
 `neurobrix chat` is an interactive client of that daemon for language models, and `neurobrix stop` ends it.
 
 ```bash
-neurobrix serve --model TinyLlama-1.1B-Chat-v1.0     # load once; returns when the model is loaded
+neurobrix serve --model TinyLlama/TinyLlama-1.1B-Chat-v1.0     # load once; returns when the model is loaded
 neurobrix chat                                      # multi-turn chat with the loaded model
 neurobrix run --prompt "Hello"                      # answered by the daemon (same model)
 neurobrix stop                                      # unload and exit
@@ -371,7 +371,7 @@ the same queue and the same inference thread as the socket, so an OpenAI client,
 share the warm weights and wait for each other.
 
 ```bash
-neurobrix serve --model TinyLlama-1.1B-Chat-v1.0 --http          # http://127.0.0.1:8765/v1
+neurobrix serve --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --http          # http://127.0.0.1:8765/v1
 ```
 
 It listens on `serving.http_host:serving.http_port` of `config/system.yml` (`127.0.0.1:8765`) unless `--http-host` /
@@ -438,21 +438,21 @@ still change it or while it could be the start of a marker: a token or a few, ne
 curl -s http://127.0.0.1:8765/v1/models
 
 curl -s http://127.0.0.1:8765/v1/chat/completions -H 'Content-Type: application/json' -d '{
-  "model": "TinyLlama-1.1B-Chat-v1.0",
+  "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
   "messages": [{"role": "user", "content": "What is a KV cache?"}], "max_tokens": 128}'
 
 curl -sN http://127.0.0.1:8765/v1/chat/completions -H 'Content-Type: application/json' -d '{
-  "model": "TinyLlama-1.1B-Chat-v1.0", "stream": true,
+  "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0", "stream": true,
   "messages": [{"role": "user", "content": "Count to five."}]}'
 
 curl -s http://127.0.0.1:8765/v1/images/generations -H 'Content-Type: application/json' \
-  -d '{"model": "PixArt-Sigma-XL-2-1024-MS", "prompt": "a lighthouse at dusk"}' \
+  -d '{"model": "PixArt-alpha/PixArt-Sigma-XL-2-1024-MS", "prompt": "a lighthouse at dusk"}' \
   | python3 -c 'import sys, json, base64; open("out.png", "wb").write(base64.b64decode(json.load(sys.stdin)["data"][0]["b64_json"]))'
 
-curl -s http://127.0.0.1:8765/v1/audio/transcriptions -F model=whisper-large-v3-turbo -F file=@speech.wav
+curl -s http://127.0.0.1:8765/v1/audio/transcriptions -F model=openai/whisper-large-v3-turbo -F file=@speech.wav
 
 curl -s http://127.0.0.1:8765/v1/audio/speech -H 'Content-Type: application/json' \
-  -d '{"model": "Kokoro-82M", "input": "Hello from NeuroBrix."}' -o hello.wav
+  -d '{"model": "hexgrad/Kokoro-82M", "input": "Hello from NeuroBrix."}' -o hello.wav
 ```
 
 With the OpenAI Python client (`pip install openai`, on the client side; the engine does not need it):
@@ -497,7 +497,7 @@ does not fit the memory left answers 500 with the named refusal, and the daemon 
 A warm language model, a few turns, then stop:
 
 ```bash
-neurobrix serve --model TinyLlama-1.1B-Chat-v1.0 --timeout 3600
+neurobrix serve --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --timeout 3600
 neurobrix chat --max-tokens 256 --temperature 0.7
 #   You: What is a KV cache?
 #   You: /context
@@ -509,14 +509,14 @@ neurobrix stop
 The Triton engine and an explicit hardware profile:
 
 ```bash
-neurobrix serve --model TinyLlama-1.1B-Chat-v1.0 --hardware v100-32g --triton
+neurobrix serve --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --hardware v100-32g --triton
 ```
 
 Two daemons side by side (one model each):
 
 ```bash
-NBX_SOCKET_PATH=/path/to/llm.sock   neurobrix serve --model TinyLlama-1.1B-Chat-v1.0
-NBX_SOCKET_PATH=/path/to/image.sock neurobrix serve --model PixArt-Sigma-XL-2-1024-MS
+NBX_SOCKET_PATH=/path/to/llm.sock   neurobrix serve --model TinyLlama/TinyLlama-1.1B-Chat-v1.0
+NBX_SOCKET_PATH=/path/to/image.sock neurobrix serve --model PixArt-alpha/PixArt-Sigma-XL-2-1024-MS
 NBX_SOCKET_PATH=/path/to/llm.sock   neurobrix chat
 NBX_SOCKET_PATH=/path/to/image.sock neurobrix run --prompt "a lighthouse at dusk" --output lighthouse.png
 NBX_SOCKET_PATH=/path/to/llm.sock   neurobrix stop

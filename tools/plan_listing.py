@@ -60,7 +60,9 @@ def _explain(argv: List[str], src: Path, python: str, timeout: int) -> Tuple[Opt
     """The explanation under the census shadow (`derived_census.shadow_env`): at the profile, never at
     the room, no device visible — the derivation's own way."""
     from derived_census import shadow_env
-    p = subprocess.run([python, "-m", "neurobrix", *argv], capture_output=True, text=True, env=shadow_env(src),
+    from one_name import argv_for_tree          # the tree's own name for the model (a base tree knows the entry)
+    p = subprocess.run([python, "-m", "neurobrix", *argv_for_tree(argv, src)], capture_output=True, text=True,
+                       env=shadow_env(src),
                        timeout=timeout, cwd=str(src.parent))
     out = p.stdout
     i = out.find("{")

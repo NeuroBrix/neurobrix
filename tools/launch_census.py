@@ -46,6 +46,7 @@ import sys
 import time
 import traceback
 from pathlib import Path
+from one_name import cli_name  # noqa: E402  (the one name a command line passes; tools/one_name.py)
 
 REPO = Path(__file__).resolve().parent.parent
 OURS = "src/neurobrix/"
@@ -203,7 +204,7 @@ def main() -> int:
                 shutil.rmtree(cache, ignore_errors=True)
                 print(f"[cold] cleared {cache}")
 
-    sys.argv = ["neurobrix", "run", "--model", args.model,
+    sys.argv = ["neurobrix", "run", "--model", cli_name(args.model),
                 "--max-tokens", str(args.max_tokens)]
     if args.audio:
         sys.argv += ["--audio", args.audio]

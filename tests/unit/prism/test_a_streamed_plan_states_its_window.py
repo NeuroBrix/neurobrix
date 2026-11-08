@@ -20,13 +20,7 @@ from tests.conftest import installed_container
 
 REPO = Path(__file__).resolve().parents[3]
 MODEL = "TinyLlama-1.1B-Chat-v1.0"
-
-
-def _one_name(entry):
-    """The --model a user types: the entry's one name (its recorded hub name; nbx/names.py)."""
-    from neurobrix.core.paths import cache_dir
-    from neurobrix.nbx.names import name_of
-    return name_of(cache_dir(), entry)
+from one_name import cli_name  # noqa: E402  (the one name a command line passes; tools/one_name.py)
 
 
 def test_a_streamed_plan_states_a_window_inside_its_rung():
@@ -37,7 +31,7 @@ def test_a_streamed_plan_states_a_window_inside_its_rung():
     env = {**os.environ, "CUDA_VISIBLE_DEVICES": "", "NBX_CENSUS": "1", "NBX_CENSUS_DEVICES": "1",
            "NBX_FORCE_STRATEGY": "layer_streaming", "NBX_PRISM_BUDGET_MB": "2048",
            "PYTHONPATH": str(REPO / "src"), "PYTHONNOUSERSITE": "1"}
-    r = subprocess.run([sys.executable, "-m", "neurobrix", "run", "--model", _one_name(MODEL), "--prompt", "hi",
+    r = subprocess.run([sys.executable, "-m", "neurobrix", "run", "--model", cli_name(MODEL), "--prompt", "hi",
                         "--max-tokens", "4", "--triton", "--hardware", "v100-16g",
                         "--explain-plan", "--json"], env=env, capture_output=True, text=True,
                        timeout=600, cwd=str(REPO))

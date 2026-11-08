@@ -41,6 +41,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from one_name import cli_name  # noqa: E402  (the one name a command line passes; tools/one_name.py)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CACHES = [_p for _p in [
@@ -85,7 +86,7 @@ def cmd_capture(args) -> int:
     _clear_caches()
     gate_txt = out / f"{args.label}_gate.txt"
     cmd = [sys.executable, "-u", "-m", "neurobrix", "run",
-           "--model", args.model, "--prompt", args.prompt,
+           "--model", cli_name(args.model), "--prompt", args.prompt,
            "--max-tokens", str(args.max_tokens),
            "--temperature", "0", "--output", str(gate_txt), f"--{args.arm}"]
     p1 = _run(cmd, base_env)
@@ -101,7 +102,7 @@ def cmd_capture(args) -> int:
     env["NBX_DUMP_LASTROW"] = str(lastrow)
     one_txt = out / f"{args.label}_one.txt"
     cmd2 = [sys.executable, "-u", "-m", "neurobrix", "run",
-            "--model", args.model, "--prompt", args.prompt,
+            "--model", cli_name(args.model), "--prompt", args.prompt,
             "--max-tokens", "1", "--temperature", "0",
             "--output", str(one_txt), f"--{args.arm}"]
     p2 = _run(cmd2, env)

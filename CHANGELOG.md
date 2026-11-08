@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whose name is recorded (it is refused, naming the hub name); there is no second name. A model installed before
   0.6.3 keeps its directory name until `neurobrix import <org>/<name>` is run once for it, and `list` and every use
   say so in one line. `list --json` is schema 2: `name` is the one name, `entry` the directory.
+  `calibrate`, `drift` and `inspect` take the one name too, and the documentation's examples use it.
 - **Attribution**: author, maintainer and copyright holder Hocine Benkelaya (contact@neurobrix.es); a NOTICE file
   ships beside the LICENSE (supported and funded by Neural Network Holding Ltd, commercial distribution by WizWorks OÜ).
 - **The PyTorch engine's memory reserve on a device whose runtime growth is measured is that measure**: where the

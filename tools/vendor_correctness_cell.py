@@ -35,6 +35,7 @@ import yaml
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness_contract import require_key   # noqa: E402  (path set just above)
+from one_name import cli_name  # noqa: E402  (the one name a command line passes; tools/one_name.py)
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -316,7 +317,7 @@ def run_ours(cell: Dict[str, Any], defaults: Dict[str, Any], mode: str,
         env["NBX_DUMP_INIT_LATENT"] = latent_dir
     cmd = [sys.executable, "-c",
            "import sys; from neurobrix.cli import main; sys.exit(main())",
-           "run", "--model", cell["model"], "--seed", str(defaults.get("seed", 42))]
+           "run", "--model", cli_name(cell["model"]), "--seed", str(defaults.get("seed", 42))]
     if "prompt" in req:
         cmd += ["--prompt", req["prompt"]]
     if req.get("audio"):

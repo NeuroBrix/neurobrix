@@ -16,7 +16,7 @@ Install PyTorch for your hardware first; see [Installation](getting-started/inst
 neurobrix import TinyLlama/TinyLlama-1.1B-Chat-v1.0 --accept-license
 
 # Run it (hardware is detected automatically)
-neurobrix run --model TinyLlama-1.1B-Chat-v1.0 --prompt "Explain recursion."
+neurobrix run --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --prompt "Explain recursion."
 ```
 
 ## Key features

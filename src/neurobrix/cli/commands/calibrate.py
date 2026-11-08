@@ -89,6 +89,8 @@ def cmd_calibrate(args) -> int:
     if args.model is None:
         print("ERROR: --model is required for calibrate.")
         return 2
+    from neurobrix.cli.utils import resolve_model_arg
+    args.model = resolve_model_arg(args.model)      # the one name -> its cache entry (nbx/names.py)
     if DaemonClient.is_running():
         print("ERROR: a serving daemon is running — the census must run in this process. "
               "Stop it first (neurobrix stop).")

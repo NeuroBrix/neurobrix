@@ -86,7 +86,8 @@ def test_doctor_speaks_one_record_and_keeps_its_diagnosis_on_stderr():
 @pytest.mark.skipif(not CACHE.exists() or not any(CACHE.glob("*/manifest.json")), reason="no installed container")
 def test_inspect_and_coverage_speak_records():
     model = sorted(p.parent.name for p in CACHE.glob("*/manifest.json"))[0]
-    rec, _, _ = _record(["inspect", model, "--json"], "inspect")
+    from one_name import cli_name                    # the entry's one name (tools/one_name.py)
+    rec, _, _ = _record(["inspect", cli_name(model), "--json"], "inspect")
     assert rec["path"] and isinstance(rec["components"], list)
     rec, _, _ = _record(["coverage", "--json"], "coverage")
     assert rec["mode"] == "index" and rec["distinct_ops"] > 0
@@ -122,8 +123,8 @@ def test_every_schema_is_versioned_and_named():
 
 @pytest.mark.skipif(not (CACHE / "TinyLlama-1.1B-Chat-v1.0" / "manifest.json").exists(), reason="TinyLlama not installed")
 def test_explain_plan_speaks_one_record():
-    from neurobrix.nbx.names import name_of          # the model's one name (its hub name once recorded)
-    rec, _, _ = _record(["run", "--model", name_of(CACHE, "TinyLlama-1.1B-Chat-v1.0"), "--prompt", "Hello", "--max-tokens", "4",
+    from one_name import cli_name                    # the model's one name (tools/one_name.py)
+    rec, _, _ = _record(["run", "--model", cli_name("TinyLlama-1.1B-Chat-v1.0"), "--prompt", "Hello", "--max-tokens", "4",
                          "--explain-plan", "--json"], "explain-plan")
     assert rec["strategy"] and isinstance(rec["components"], list) and rec["components"]
     assert {"name", "devices", "dtype"} <= set(rec["components"][0])

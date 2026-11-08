@@ -45,6 +45,8 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
+from one_name import cli_name  # noqa: E402  (the one name a command line passes; tools/one_name.py)
 
 HARNESS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HARNESS_DIR, "..", ".."))
@@ -136,7 +138,7 @@ def run_nbx_arm(args, env_spec: dict, outdir: Path) -> list:
     env["CUDA_VISIBLE_DEVICES"] = env_spec.get("NBX_SERVE_GPUS", args.gpu).replace(":", ",")  # "0:1:2:3" (the arm spec is comma-separated)
     model = env_spec.get("NBX_SERVE_MODEL", args.model)
     hardware = env_spec.get("NBX_SERVE_HARDWARE", args.hardware)
-    cmd = ["python3", "-u", "-m", "neurobrix", "serve", "--model", model]
+    cmd = ["python3", "-u", "-m", "neurobrix", "serve", "--model", cli_name(model)]
     if hardware and hardware != "auto":
         cmd += ["--hardware", hardware]
     cmd += [flag, "--foreground"]

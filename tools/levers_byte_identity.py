@@ -47,6 +47,7 @@ REPO = Path(__file__).resolve().parents[1]
 # whole census pass to an empty ~/.neurobrix/cache while the canonical catalogue sat on
 # the shared mount the env var named, and every model died on a missing manifest.
 from neurobrix.core.paths import cache_dir as _cache_dir
+from one_name import cli_name  # noqa: E402  (the one name a command line passes; tools/one_name.py)
 CACHE = _cache_dir()
 ARMS = ("compiled", "sequential", "triton", "triton-sequential")
 
@@ -127,7 +128,7 @@ def run_one(tree: Path, model: str, prompt: str, max_tokens: int, arm: str,
     env["NBX_LOG"] = "debug"          # developer lines in the error tails it keeps (nbxtensor/terminal.py)
     env.setdefault("TOKENIZERS_PARALLELISM", "false")
     cmd = [sys.executable, "-u", "-m", "neurobrix", "run",
-           "--model", model, "--prompt", prompt,
+           "--model", cli_name(model), "--prompt", prompt,
            "--max-tokens", str(max_tokens), "--temperature", "0",
            "--output", str(out_path), f"--{arm}"]
     clear_caches()

@@ -76,10 +76,10 @@ several daemons can run side by side.
 Examples:
 ```bash
 # Auto-detect hardware
-neurobrix serve --model TinyLlama-1.1B-Chat-v1.0
+neurobrix serve --model TinyLlama/TinyLlama-1.1B-Chat-v1.0
 
 # Target a specific hardware profile and the Triton engine, one hour of idle time
-neurobrix serve --model TinyLlama-1.1B-Chat-v1.0 --hardware v100-32g --triton --timeout 3600
+neurobrix serve --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --hardware v100-32g --triton --timeout 3600
 ```
 
 ### chat
@@ -171,11 +171,11 @@ Family-specific input flags (`--audio`, `--input-image`, `--mask-image`, `--refe
 Examples:
 ```bash
 # Image generation (auto-detect hardware)
-neurobrix run --model PixArt-Sigma-XL-2-1024-MS \
+neurobrix run --model PixArt-alpha/PixArt-Sigma-XL-2-1024-MS \
     --prompt "a sunset over mountains" --steps 20
 
 # Text generation with specific hardware
-neurobrix run --model deepseek-moe-16b-chat --hardware c4140-4xv100-custom-nvlink \
+neurobrix run --model deepseek-ai/deepseek-moe-16b-chat --hardware c4140-4xv100-custom-nvlink \
     --prompt "Explain quantum computing" --temperature 0.7
 
 # Override runtime variables

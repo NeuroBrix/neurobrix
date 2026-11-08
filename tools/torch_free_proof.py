@@ -43,6 +43,7 @@ RECORDER = '''\
 """Recorder of torch import attempts (tools/torch_free_proof.py): every `import torch` / `torch.*` attempted in this
 process is appended to $NBX_TORCH_ATTEMPTS with its call site, then left to fail as it would."""
 import importlib.abc, json, os, sys, traceback
+from one_name import cli_name  # noqa: E402  (the one name a command line passes; tools/one_name.py)
 
 
 class _TorchAttempts(importlib.abc.MetaPathFinder):
@@ -104,7 +105,7 @@ def _model_run(py, tree, out, model, label, extra_env=None):
     dest = out / f"{label}.{model}.{_ext(model)}"
     log = out / f"{label}.{model}.log"
     t = time.time()
-    rc = _run([py, "-m", "neurobrix", "run", "--model", model, *req, "--triton", "--output", str(dest)],
+    rc = _run([py, "-m", "neurobrix", "run", "--model", cli_name(model), *req, "--triton", "--output", str(dest)],
               tree, _env(tree, out, extra_env), log)
     if dest.exists():
         sha = _sha16(dest)

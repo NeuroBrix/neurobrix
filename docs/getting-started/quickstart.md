@@ -21,14 +21,14 @@ This downloads the `.nbx` container from the NeuroBrix Hub and extracts it to
 ## 2. Single-shot run
 
 ```bash
-neurobrix run --model TinyLlama-1.1B-Chat-v1.0 --prompt "Explain recursion." --max-tokens 256
+neurobrix run --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --prompt "Explain recursion." --max-tokens 256
 ```
 
 Hardware is detected automatically. To see where each component will run without loading
 anything:
 
 ```bash
-neurobrix run --model TinyLlama-1.1B-Chat-v1.0 --prompt "Explain recursion." --explain-plan
+neurobrix run --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --prompt "Explain recursion." --explain-plan
 ```
 
 !!! note
@@ -40,7 +40,7 @@ neurobrix run --model TinyLlama-1.1B-Chat-v1.0 --prompt "Explain recursion." --e
 Serve mode loads the weights once and keeps them resident:
 
 ```bash
-neurobrix serve --model TinyLlama-1.1B-Chat-v1.0
+neurobrix serve --model TinyLlama/TinyLlama-1.1B-Chat-v1.0
 neurobrix chat                          # interactive multi-turn chat (language models)
 neurobrix run --prompt "Hello"          # --model can be omitted while a daemon runs
 neurobrix stop                          # stop the daemon and free memory
@@ -55,16 +55,16 @@ neurobrix stop                          # stop the daemon and free memory
 ```bash
 # Speech-to-text
 neurobrix import openai/whisper-large-v3-turbo --accept-license
-neurobrix run --model whisper-large-v3-turbo --audio recording.wav
+neurobrix run --model openai/whisper-large-v3-turbo --audio recording.wav
 
 # Video; --input-image switches an image-to-video model to its first frame
 neurobrix import zai-org/CogVideoX-2b --accept-license
-neurobrix run --model CogVideoX-2b --prompt "a hot air balloon over mountains" \
+neurobrix run --model zai-org/CogVideoX-2b --prompt "a hot air balloon over mountains" \
     --num-frames 17 --seed 42 --output balloon.mp4
 
 # Upscaling
 neurobrix import xinntao/Real-ESRGAN-RealESRGAN_x4plus --accept-license
-neurobrix upscale --model Real-ESRGAN-RealESRGAN_x4plus --input photo.png --output photo_x4.png
+neurobrix upscale --model xinntao/Real-ESRGAN-RealESRGAN_x4plus --input photo.png --output photo_x4.png
 ```
 
 ## What happened?

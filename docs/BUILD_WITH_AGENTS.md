@@ -42,14 +42,14 @@ The family is read from the model, so `run` takes the inputs that family needs a
 
 | task | command | output |
 |---|---|---|
-| text generation, chat, code | `neurobrix run --model TinyLlama-1.1B-Chat-v1.0 --prompt "..." --max-tokens 256 --output answer.txt` | text file |
-| speech-to-text | `neurobrix run --model whisper-large-v3-turbo --audio meeting.wav --output transcript.txt` | text file |
-| speech understanding | `neurobrix run --model Voxtral-Mini-3B-2507 --audio meeting.wav --prompt "Summarize this call." --output answer.txt` | text file |
-| text-to-speech | `neurobrix run --model Kokoro-82M --prompt "Hello." --output speech.wav` | WAV |
-| vision-language | `neurobrix run --model GLM-4.1V-9B-Thinking --input-image photo.jpg --prompt "What is in this image?" --output answer.txt` | text file |
-| image generation | `neurobrix run --model Flex.1-alpha --prompt "a lighthouse at dusk" --steps 20 --seed 42 --output image.png` | PNG |
-| video generation | `neurobrix run --model CogVideoX-2b --prompt "..." --num-frames 17 --seed 42 --output clip.mp4` | MP4 |
-| upscaling | `neurobrix upscale --model Real-ESRGAN-RealESRGAN_x4plus --input photo.png --output photo_x4.png` | PNG |
+| text generation, chat, code | `neurobrix run --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --prompt "..." --max-tokens 256 --output answer.txt` | text file |
+| speech-to-text | `neurobrix run --model openai/whisper-large-v3-turbo --audio meeting.wav --output transcript.txt` | text file |
+| speech understanding | `neurobrix run --model mistralai/Voxtral-Mini-3B-2507 --audio meeting.wav --prompt "Summarize this call." --output answer.txt` | text file |
+| text-to-speech | `neurobrix run --model hexgrad/Kokoro-82M --prompt "Hello." --output speech.wav` | WAV |
+| vision-language | `neurobrix run --model zai-org/GLM-4.1V-9B-Thinking --input-image photo.jpg --prompt "What is in this image?" --output answer.txt` | text file |
+| image generation | `neurobrix run --model ostris/Flex.1-alpha --prompt "a lighthouse at dusk" --steps 20 --seed 42 --output image.png` | PNG |
+| video generation | `neurobrix run --model zai-org/CogVideoX-2b --prompt "..." --num-frames 17 --seed 42 --output clip.mp4` | MP4 |
+| upscaling | `neurobrix upscale --model xinntao/Real-ESRGAN-RealESRGAN_x4plus --input photo.png --output photo_x4.png` | PNG |
 
 `neurobrix run --help` lists every option (`--seed`, `--temperature`, `--steps`, `--height`, `--width`, `--system`, ...).
 The exit code is 0 on success and non-zero on failure, with the reason on the terminal.
@@ -60,7 +60,7 @@ Each `run` loads the model, runs it and exits. For an application that calls the
 loaded in a background daemon:
 
 ```bash
-neurobrix serve --model TinyLlama-1.1B-Chat-v1.0     # returns once the model is loaded; exit code 1 on failure
+neurobrix serve --model TinyLlama/TinyLlama-1.1B-Chat-v1.0     # returns once the model is loaded; exit code 1 on failure
 neurobrix run --prompt "..."                        # answered by the daemon: --model may be omitted
 neurobrix chat                                      # interactive multi-turn chat (llm family)
 neurobrix stop                                      # unload it and free the memory

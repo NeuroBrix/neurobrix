@@ -55,6 +55,7 @@ import sys as _sys_atelier
 from pathlib import Path as _Path_atelier
 _sys_atelier.path.insert(0, str(_Path_atelier(__file__).resolve().parents[2] / "tools"))
 import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
+from one_name import cli_name  # noqa: E402  (the one name a command line passes; tools/one_name.py)
 import argparse
 import json
 import os
@@ -196,7 +197,7 @@ def run_once(args, arm_env: dict, tag: str, outdir: Path) -> dict:
     # PyTorch/compiled branch (no --triton flag); default stays the
     # triton branch. Mirrors the existing ARM_ENGINE=ollama pattern.
     cmd = ["python3", "-u", "-m", "neurobrix", "run",
-           "--hardware", args.hardware, "--model", args.model,
+           "--hardware", args.hardware, "--model", cli_name(args.model),
            # A family that listens takes its audio beside the prompt: the decode rate of an
            # audio_llm row is a text rate like any other, and the harness could not measure one
            # (2026-09-08). The file is the caller's; nothing is assumed from the family.

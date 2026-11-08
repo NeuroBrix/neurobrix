@@ -34,6 +34,7 @@ from .test_all_models import REPO, _cli_inputs_for, _run_out_path, _runtime_pyth
 
 sys.path.insert(0, str(REPO / "tools"))
 import rng_census as RC  # noqa: E402
+from one_name import cli_name  # noqa: E402  (the one name a command line passes; tools/one_name.py)
 
 MODES = ["native", "triton"]
 SPEECH_MAX_TOKENS = "32"        # the bounded decode of the voice bench row (benchmarks/config/rows.yml)
@@ -64,7 +65,7 @@ def _request(name: str, comps: dict, mode: str):
             args += ["--mode", "audio"]
         args += ["--max-tokens", SPEECH_MAX_TOKENS]
         out = out.with_suffix(".wav")
-    cmd = [_runtime_python(), "-u", "-m", "neurobrix", "run", "--model", name, "--seed", "42",
+    cmd = [_runtime_python(), "-u", "-m", "neurobrix", "run", "--model", cli_name(name), "--seed", "42",
            "--output", str(out), *args]
     if mode == "triton":
         cmd.append("--triton")

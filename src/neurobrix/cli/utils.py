@@ -63,6 +63,7 @@ def resolve_model_arg(asked: str) -> str:
     entry installed before 0.6.3, with no record — its directory name, said with the one-line migration note. A
     recorded entry asked by its directory name is refused naming its hub name (exit 1)."""
     import logging
+    import sys
     from neurobrix.nbx.names import NameRefused, resolve
     try:
         entry, note = resolve(CACHE_DIR, asked)

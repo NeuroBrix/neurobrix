@@ -13,7 +13,7 @@ NeuroBrix auto-detects your hardware. To target a specific profile, add `--hardw
 Example:
 
 ```bash
-neurobrix serve --model PixArt-Sigma-XL-2-1024-MS
+neurobrix serve --model PixArt-alpha/PixArt-Sigma-XL-2-1024-MS
 ```
 
 The daemon starts in the background. Weights are loaded into GPU memory and stay resident.
@@ -35,7 +35,7 @@ neurobrix run --prompt "A portrait" --steps 30 --height 1024 --width 1024
 For language models:
 
 ```bash
-neurobrix serve --model deepseek-moe-16b-chat
+neurobrix serve --model deepseek-ai/deepseek-moe-16b-chat
 neurobrix chat --temperature 0.7
 ```
 
@@ -75,7 +75,7 @@ By default, serve uses your full machine. To use a specific GPU profile:
 neurobrix serve --model 1600m-1024 --hardware v100-32g
 
 # Multi-GPU profile for large models
-neurobrix serve --model deepseek-moe-16b-chat --hardware c4140-4xv100-custom-nvlink
+neurobrix serve --model deepseek-ai/deepseek-moe-16b-chat --hardware c4140-4xv100-custom-nvlink
 ```
 
 See [Hardware Profiles](hardware.md) for available profiles and [Writing Hardware Profiles](hardware-profiles.md) for creating custom ones.

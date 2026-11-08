@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from apple_matrix import (MODES, REFERENCE_MODE, Verdict,          # noqa: E402
                           classify_image, classify_text, not_measured)
 from check_measurement_environment import owned_cache_env          # noqa: E402
+from one_name import cli_name  # noqa: E402  (the one name a command line passes; tools/one_name.py)
 
 _FLAG = {"compiled": [], "triton": ["--triton"],
          "triton-sequential": ["--triton-sequential"]}
@@ -34,7 +35,7 @@ def _run(model: str, mode: str, in_arg: list[str], out: Path, timeout: int) -> i
     env = owned_cache_env(cache)
     import os
     e = {**os.environ, **env, "PYTHONPATH": "src"}
-    cmd = [sys.executable, "-m", "neurobrix", "run", "--model", model,
+    cmd = [sys.executable, "-m", "neurobrix", "run", "--model", cli_name(model),
            *in_arg, *_FLAG[mode], "--output", str(out)]
     try:
         r = subprocess.run(cmd, env=e, timeout=timeout,

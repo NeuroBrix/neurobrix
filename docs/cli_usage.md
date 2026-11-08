@@ -58,11 +58,11 @@ References: TinyLlama, DeepSeek-MoE, Qwen3 (Alibaba), Llama, Mistral.
 
 ```bash
 # Basic completion
-neurobrix run --model TinyLlama-1.1B-Chat-v1.0 \
+neurobrix run --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
     --prompt "What is 2+2?" --max-tokens 30
 
 # Chat with system prompt
-neurobrix run --model Qwen3-30B-A3B-Thinking-2507 \
+neurobrix run --model Qwen/Qwen3-30B-A3B-Thinking-2507 \
     --system "You are a careful math tutor." \
     --prompt "Explain 7×8 to a child" \
     --max-tokens 200 --chat
@@ -103,18 +103,18 @@ Reference: DeepSeek Janus-Pro (`multimodal_understanding` ↔ `generate`).
 
 ```bash
 # Image generation (requires Janus build traced for image AR)
-neurobrix run --model Janus-Pro-7B \
+neurobrix run --model deepseek-ai/Janus-Pro-7B \
     --mode image --prompt "a red cat sitting on a couch"
 
 # Text understanding (requires Janus build traced for text AR)
-neurobrix run --model Janus-Pro-7B \
+neurobrix run --model deepseek-ai/Janus-Pro-7B \
     --mode text --input-image cat.jpg --prompt "describe this image"
 
 # Omni understanding builds (Qwen3-Omni, MiniCPM-o, Ming-Lite-Omni,
 # Qwen3-VL): --mode text over any mix of image / audio / video inputs
-neurobrix run --model Ming-Lite-Omni-1.5 \
+neurobrix run --model inclusionAI/Ming-Lite-Omni-1.5 \
     --mode text --input-image photo.png --prompt "What fruit is shown?"
-neurobrix run --model Qwen3-Omni-30B-A3B-Instruct \
+neurobrix run --model Qwen/Qwen3-Omni-30B-A3B-Instruct \
     --mode text --audio clip.wav --prompt "What is said in this audio?"
 ```
 
@@ -139,10 +139,10 @@ References: Chatterbox, Orpheus, OpenAudio-S1, Kokoro, VibeVoice.
 
 ```bash
 # Basic
-neurobrix run --model chatterbox --prompt "Hello world"
+neurobrix run --model ResembleAI/chatterbox --prompt "Hello world"
 
 # With voice clone reference
-neurobrix run --model chatterbox \
+neurobrix run --model ResembleAI/chatterbox \
     --reference-audio my_voice.wav \
     --prompt "Hello world" \
     --output greeting.wav
@@ -161,7 +161,7 @@ Output: `.wav` (24 kHz mono unless model overrides).
 References: Whisper (OpenAI), Canary-Qwen (NVIDIA), Parakeet RNN-T.
 
 ```bash
-neurobrix run --model whisper-large-v3-turbo \
+neurobrix run --model openai/whisper-large-v3-turbo \
     --audio interview.wav \
     --output transcript.txt
 ```
@@ -178,7 +178,7 @@ Output: `.txt`.
 References: Voxtral (Mistral), Qwen2-Audio, Qwen3-Omni (Alibaba) audio mode.
 
 ```bash
-neurobrix run --model Voxtral-Mini-3B-2507 \
+neurobrix run --model mistralai/Voxtral-Mini-3B-2507 \
     --audio meeting.wav \
     --prompt "summarize the discussion" \
     --max-tokens 200
@@ -200,16 +200,16 @@ inputs.
 
 ```bash
 # Text-to-image (default)
-neurobrix run --model PixArt-XL-2-1024-MS \
+neurobrix run --model PixArt-alpha/PixArt-XL-2-1024-MS \
     --prompt "a red apple on a white plate" --steps 20
 
 # Image-to-image (auto: --input-image present)
-neurobrix run --model Sana_1600M_1024px_MultiLing \
+neurobrix run --model Efficient-Large-Model/Sana_1600M_1024px_MultiLing_diffusers \
     --input-image base.png \
     --prompt "make it stylized cyberpunk"
 
 # Inpainting (auto: --input-image + --mask-image present)
-neurobrix run --model PixArt-XL-2-1024-MS \
+neurobrix run --model PixArt-alpha/PixArt-XL-2-1024-MS \
     --input-image scene.png --mask-image mask.png \
     --prompt "replace the sky with aurora"
 ```
@@ -233,7 +233,7 @@ Dedicated subcommand:
 
 ```bash
 neurobrix upscale \
-    --model swin2SR-realworld-sr-x4-64-bsrgan-psnr \
+    --model caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr \
     --input low_res.png \
     --output upscaled.png \
     --mode compiled
@@ -267,16 +267,16 @@ Supports `t2v` (default), `i2v`, `v2v` — auto-deduced.
 
 ```bash
 # Text-to-video
-neurobrix run --model SANA-Video_2B_720p \
+neurobrix run --model Efficient-Large-Model/SANA-Video_2B_720p_diffusers \
     --prompt "ocean waves at sunset" --num-frames 24
 
 # Image-to-video (auto: --input-image present)
-neurobrix run --model Wan2.2-I2V-A14B \
+neurobrix run --model Wan-AI/Wan2.2-I2V-A14B-Diffusers \
     --input-image first_frame.png \
     --prompt "camera pans left" --num-frames 32
 
 # Video-to-video (auto: --video present)
-neurobrix run --model Wan2.1-VACE-1.3B \
+neurobrix run --model Wan-AI/Wan2.1-VACE-1.3B-diffusers \
     --video source.mp4 --prompt "same scene at night"
 ```
 

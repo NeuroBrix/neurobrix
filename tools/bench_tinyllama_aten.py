@@ -50,6 +50,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from one_name import cli_name  # noqa: E402  (the one name a command line passes; tools/one_name.py)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -86,7 +87,7 @@ def run_once_nbx(args, arm: str, tag: str, outdir: Path) -> dict:
 
     out_path = outdir / f"out_{tag}.txt"
     cmd = [sys.executable, "-u", "-m", "neurobrix", "run",
-           "--model", args.model, "--prompt", args.prompt,
+           "--model", cli_name(args.model), "--prompt", args.prompt,
            "--max-tokens", str(args.max_tokens),
            "--temperature", args.temperature,
            "--output", str(out_path), f"--{arm}"]

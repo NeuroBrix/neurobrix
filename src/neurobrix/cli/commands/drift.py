@@ -44,6 +44,10 @@ def cmd_drift(args) -> int:
     if args.model is None:
         print("ERROR: --model is required for drift.")
         return 2
+    from neurobrix.cli.utils import CACHE_DIR, resolve_model_arg
+    from neurobrix.nbx.names import name_of
+    args.model = resolve_model_arg(args.model)      # the one name -> its cache entry (nbx/names.py)
+    one_name = name_of(CACHE_DIR, args.model)       # what its two `run` arms are given
     out = Path(args.out or (_engine_home() / "drift" / args.model))
     out.mkdir(parents=True, exist_ok=True)
     request = _passthrough(args, {"--out", "--bound", "--top", "--oracle", "--sequential", "--triton",
@@ -65,7 +69,7 @@ def cmd_drift(args) -> int:
         # steps) is compared pass by pass on both arms (`core.dtype.drift.load_dump`)
         env = {**os.environ, "NBX_DUMP_TIDS": str(dump), "NBX_DUMP_TIDS_PASS": os.environ.get("NBX_DUMP_TIDS_PASS", "all")}
         output = out / f"{name}_output"
-        cmd = nbx + ["run", "--model", args.model] + request + flags + ["--output", str(output)]
+        cmd = nbx + ["run", "--model", one_name] + request + flags + ["--output", str(output)]
         log = out / f"{name}.log"
         with open(log, "w") as fh:
             fh.write("$ " + shlex.join(cmd) + "\n")
