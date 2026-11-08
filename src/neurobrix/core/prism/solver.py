@@ -329,6 +329,11 @@ class KVCachePlan:
     memory_bytes: int           # Total KV cache memory budget (at max_cache_len)
     per_token_bytes: int        # Memory per cached token (for runtime info)
     initial_cache_len: int = 0  # Initial buffer size (0 = allocate at max_cache_len)
+    # The positions a SERVING session would hold on this plan's device: the remaining room this cache was sized from, in
+    # the declared window (`kv_cache_size(serve=True)`) — the longest context a user's request can reach on this memory
+    # class, which the derived census keys a decoder's prompt lengths up to. None: the decoder's state declares no window
+    # (no session is planned for it) or its floor does not fit the room.
+    session_reach: Optional[int] = None
 
     @property
     def head_dim(self) -> int:
@@ -623,6 +628,10 @@ class ExecutionPlan:
                 "dtype": self.kv_cache_plan.dtype,
                 "memory_mb": self.kv_cache_plan.memory_mb,
                 "per_token_bytes": self.kv_cache_plan.per_token_bytes,
+                # exact, never through the float MB above (a restored plan lost them: the defect A's step 0 names)
+                "memory_bytes": int(self.kv_cache_plan.memory_bytes),
+                "initial_cache_len": int(self.kv_cache_plan.initial_cache_len),
+                "session_reach": self.kv_cache_plan.session_reach,
             } if self.kv_cache_plan else None,
         }
 
@@ -691,8 +700,10 @@ class ExecutionPlan:
                 k_head_dim=kv_data.get("k_head_dim") or kv_data["head_dim"],
                 v_head_dim=kv_data.get("v_head_dim") or kv_data["head_dim"],
                 dtype=kv_data["dtype"],   # required, like num_layers above
-                memory_bytes=int(kv_data.get("memory_mb", 0) * 1024 * 1024),
+                memory_bytes=int(kv_data["memory_bytes"]),
                 per_token_bytes=kv_data.get("per_token_bytes", 0),
+                initial_cache_len=int(kv_data["initial_cache_len"]),
+                session_reach=kv_data.get("session_reach"),
             )
 
         return cls(
@@ -5062,6 +5073,18 @@ class PrismSolver:
         size = kv_cache_size(entry, per_token_bytes, defaults.get("max_tokens") or 0, defaults.get("prompt_margin", DEFAULT_PROMPT_MARGIN),
                              bool(getattr(self, "_serve_mode", False)), remaining_vram_bytes,
                              floor_max_tokens=self._request_max_tokens(defaults))
+        # what a serving session would hold in the same room, bounded by the declared window: the context a request can
+        # reach on this class (the derived census keys a prompt up to it). No window, or no session floor in the room:
+        # None, stated by the record, never a guess.
+        session_reach = None
+        if entry.get("window"):
+            from neurobrix.core.state.price import StateUndeclared
+            try:
+                session_reach = int(kv_cache_size(entry, per_token_bytes, defaults.get("max_tokens") or 0,
+                                                  defaults.get("prompt_margin", DEFAULT_PROMPT_MARGIN), True,
+                                                  remaining_vram_bytes)["max_cache_len"])
+            except (RuntimeError, StateUndeclared):
+                session_reach = None
         return KVCachePlan(
             max_cache_len=size["max_cache_len"],
             num_layers=int(entry["layers"]),
@@ -5072,6 +5095,7 @@ class PrismSolver:
             memory_bytes=size["memory_bytes"],
             per_token_bytes=per_token_bytes,
             initial_cache_len=size["initial_cache_len"],
+            session_reach=session_reach,
         )
 
     def _apply_attention_correction(
@@ -10188,7 +10212,8 @@ def plan_record(plan: "ExecutionPlan") -> dict:
                            "num_layers": getattr(kv, "num_layers", None),
                            "num_kv_heads": getattr(kv, "num_kv_heads", None),
                            "k_head_dim": getattr(kv, "k_head_dim", None),
-                           "v_head_dim": getattr(kv, "v_head_dim", None)}
+                           "v_head_dim": getattr(kv, "v_head_dim", None),
+                           "session_reach": getattr(kv, "session_reach", None)}
     if plan.cfg_split_components:
         rec["cfg_split_components"] = list(plan.cfg_split_components)
     if getattr(plan, "batch_split_components", None):
