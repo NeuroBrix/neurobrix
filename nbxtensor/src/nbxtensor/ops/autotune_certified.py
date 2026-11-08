@@ -501,11 +501,12 @@ def _out_of_tree_backend_hash() -> Optional[str]:
     return result
 
 
-#: a CPython extension module (`x.cpython-312-darwin.so`, `x.abi3.so`, `x.pyd`): the backend's Python binding, built per
-#: Python, not its code generator. The macOS 14 Metal wheels (2026-11-08): four Pythons, one byte-identical plugin, four
+#: a CPython extension module TAGGED for one Python (`x.cpython-312-darwin.so`, `x.cp312-win_amd64.pyd`): the backend's
+#: Python binding, built per Python, not its code generator. An untagged binary (`driver.pyd`, `x.abi3.so`, the plugin) is
+#: the same file for every Python and stays in the identity. The macOS 14 Metal wheels (2026-11-08): four Pythons, one byte-identical plugin, four
 #: identities through `metal_native.cpython-31x-darwin.so`; 235-236 kernels compiled under each gave byte-identical
 #: .ttir/.ttgir/.msl/.metallib to the published build's (campagnes/2026_11_08_metal_wheels_macos14/proof).
-_CPYTHON_BINDING = re.compile(r"\.(cpython-[^.]+|abi3)\.so$|\.pyd$")
+_CPYTHON_BINDING = re.compile(r"\.cpython-\d+[^.]*\.so$|\.cp\d+-[^.]+\.pyd$")
 
 
 def _backend_content_hash(backend) -> str:
