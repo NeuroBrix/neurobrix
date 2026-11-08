@@ -113,6 +113,10 @@ def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dic
     g = runtime_graph(model, comp)
     args = (model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_bytes, sdpa_min_rows,
             sdpa_max_chunks, unhandled, tiling, tiled_tf, decode_kv, frozenset(pins))
+    if decode_kv is not None and decode_kv.get("continued"):
+        # a session chunk's attention over the cache: only the attention calls change with the cache's length (every
+        # other op of the chunk is the prefill's at the chunk's rows, keyed by the prompt-length site)
+        return _derive_at(*args, only=_sdpa_uids(g), out_dtypes=out_dtypes)
     axes = value_axes(model, comp)
     if not axes:
         return _derive_at(*args, out_dtypes=out_dtypes)
@@ -360,6 +364,18 @@ def traced_island_uids(ops: dict, graph_dtype, cdtype) -> frozenset:
     return frozenset(out)
 
 
+#: {(graph id, compute dtype): (the graph, its traced fp32 island)} — served only to that very graph object
+_TRACED: dict = {}
+#: {graph id: (the graph, its attention op uids)}
+_SDPA_UIDS: dict = {}
+
+
+def _sdpa_uids(g: dict) -> frozenset:
+    if _SDPA_UIDS.get(id(g), (None,))[0] is not g:
+        _SDPA_UIDS[id(g)] = (g, frozenset(u for u, o in g["ops"].items() if o.get("op_type") in _SDPA_KINDS))
+    return _SDPA_UIDS[id(g)][1]
+
+
 def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_bytes, sdpa_min_rows,
                sdpa_max_chunks, unhandled, tiling=None, tiled_tf=None, decode_kv=None, pins=frozenset(),
                skip=(), only=None, axis_values=None, axes=(), out_dtypes=None):
@@ -410,7 +426,12 @@ def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_
                                narrow_op_uids=frozenset(contract.narrow_op_uids) - pins)
     # The trace's own fp32 islands: the same wrap as a contract island, read by the key derivation through the same
     # set (the width pass above already states their widths and casts by the engines' rule; it is not re-run).
-    traced = traced_island_uids(ops, g.get("torch_dtype"), str(cdtype))
+    # one answer per graph and compute dtype (the graph's ops are its own): read again at every binding it was a third of
+    # a session continuation's derivation (DeepSeek-Coder-V2-Lite, 2026-11-08)
+    _tk = (id(g), str(cdtype))
+    if _TRACED.get(_tk, (None,))[0] is not g:
+        _TRACED[_tk] = (g, traced_island_uids(ops, g.get("torch_dtype"), str(cdtype)))
+    traced = _TRACED[_tk][1]
     if traced:
         import dataclasses as _dc
         contract = _dc.replace(contract, fp32_op_uids=frozenset(contract.fp32_op_uids) | traced,
@@ -1130,7 +1151,18 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
             q_round = None
             if decode_kv is not None and "uids" in decode_kv and uid not in decode_kv["uids"]:
                 decode_kv = None      # a cross-attention: K/V the encoder's, never the cache
-            if decode_kv is not None and decode_kv.get("prefill"):
+            bias_dt = None
+            if decode_kv is not None and decode_kv.get("prefill") and decode_kv.get("continued"):
+                # A serving session's prefill chunk over its cache (triton/kv_cache.py `_prefill_over_pages`): the keys
+                # gathered as WHOLE PAGES (`continued`: their count, a whole number of pages) in Q's dtype, the graph's
+                # head count kept (expanded or not, as it handed them), and the explicit fp32 0/-inf mask [Tq, Tk]
+                # (`_chunk_mask`) in place of the graph's — the wrapper's same call with the same mask. The gather
+                # itself (`paged_kv_gather_kernel`) is a fixed-launch copy: it forms no autotune key.
+                Tk = int(decode_kv["continued"])
+                kd = vd = qd
+                mask_n = Tq * Tk
+                bias_dt = NBXDtype.float32
+            elif decode_kv is not None and decode_kv.get("prefill"):
                 # A prefill through the KV interceptor (`intercept`, `_is_prefill`): the graph's
                 # mask is dropped for `is_causal` — the SDPA sees no mask at any length.
                 mask_n = None
@@ -1169,7 +1201,7 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
             if route == "flash":
                 # on the matrix unit: its certified tile's key; else the tl.dot flash's, where its tile is
                 # certified (the profile declares no `sdpa_thresholds`, roadmap C3) — the wrapper's same order
-                _bias_dt = dt(ins[3]) if mask_n is not None and len(ins) > 3 else None
+                _bias_dt = bias_dt or (dt(ins[3]) if mask_n is not None and len(ins) > 3 else None)
                 launches = (LK.unit_flash_launches(Tq, Tk, D, qd, kd, vd, _bias_dt)
                             or LK.flash_launches(Tq, Tk, D, qd, kd, vd, _bias_dt))
             elif route == "chunked":
@@ -1177,7 +1209,8 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
                                                              has_native_bf16, rows, contract_half=contract.safe)
             elif Tq == 1 and LK.decode_vec_takes(D, Dv, mask_n, Tk):
                 launches = LK.decode_vec_launches(H, Hk, Tk, D, Dv, q_vec, kd, vd,
-                                                  dt(ins[3]) if mask_n is not None and len(ins) > 3 else None,
+                                                  bias_dt or (dt(ins[3]) if mask_n is not None and len(ins) > 3
+                                                              else None),
                                                   q_round=_qr)
             else:
                 launches = LK.math_attention_launches(B, H, Hk, Tq, Tk, D, Dv, qd, kd, vd, has_native_bf16, contract_half=contract.safe)
@@ -1788,6 +1821,9 @@ def extent_sites(model: str, topo: dict, defaults: dict, plan: dict, prompt: str
             def prefill(n, lm=lm, feed=_feed):
                 return [(lm, dict(feed(n), __kv_prefill__=True))]
             prefill.row_axis = True
+            # a serving session's turns on this cache (`_session_chunks`): its chunks' graph is this site's at the
+            # chunk's rows, their attention over the cache derived after it
+            prefill.session = {"lm": lm, "feed": _feed, "reach": reach}
             sites.append((f"{lm} prefill (prompt lengths)", 1, max(1, reach - 1), prefill))
         sites.append(("decode KV length", P + 1, max(P + int(mt), reach), decode))
         if image_ar:
@@ -2379,7 +2415,7 @@ def derive_extents(model, mode, topo, defaults, plan, has_native_bf16, sdpa, unh
     found = set()
     for name, lo, hi, chain in extent_sites(model, topo, defaults, plan, prompt, audio_path,
                                             max_tokens_req, image_path, has_native_bf16, sdpa):
-        seen = {}
+        seen, full = {}, {}
 
         def at(n):
             if n not in seen:
@@ -2423,6 +2459,7 @@ def derive_extents(model, mode, topo, defaults, plan, has_native_bf16, sdpa, unh
                     if _fl is not None:
                         keys |= set(_fl(comp, _dts))
                 found.update(keys)
+                full[n] = frozenset(keys)
                 seen[n] = frozenset((q_, k) for _u, q_, k in keys)
             return seen[n]
         # The launcher's own row breakpoints (kernels/launch_keys.row_breakpoints: the GEMV bound, every M bucket, the
@@ -2438,7 +2475,136 @@ def derive_extents(model, mode, topo, defaults, plan, has_native_bf16, sdpa, unh
             at(points[0])
         print(f"[derived] extent {name} {lo}..{hi}: {len(set(seen.values()))} key class(es) "
               f"in {len(seen)} derivation(s)")
+        if getattr(chain, "session", None):
+            keys, record = _session_chunks(model, mode, plan, defaults, chain.session, dtypes[chain.session["lm"]],
+                                           lambda n: (at(n), full[n])[1], has_native_bf16, sdpa, unhandled)
+            found.update(keys)
+            SESSION_CHUNKS[mode] = record
     return found
+
+
+#: the session-chunk record of the derivation that just ran, per mode (`_session_chunks`), read by `_derive_job`
+SESSION_CHUNKS: dict = {}
+
+
+def _continued_at(model, mode, lm, cdtype, feed, n, keys_len, has_native_bf16, sdpa, unhandled):
+    """The launches of a session chunk of `n` rows attending over `keys_len` cached keys gathered as whole pages
+    (`_op_launches`, decode_kv `continued`): the attention calls only, at the chunk's own input shapes."""
+    launches, _ = run_at_inputs(model, lm, cdtype, mode, dict(feed(n)), has_native_bf16, sdpa, unhandled,
+                                decode_kv={"prefill": True, "continued": int(keys_len)})
+    return frozenset(launches)
+
+
+def _session_chunks(model, mode, plan, defaults, session, cdtype, graph_at, has_native_bf16, sdpa, unhandled):
+    """A serving session's prefill chunks on the plan's cache (docs/design/prism_kv.md §5bis): (the keys its turns
+    form, the record Prism prices its chunk candidates from — `kernels/census_table.chunks_path`).
+
+    The page is the session cache's (`core/state/price.paged_cache_params`, the plan's cache geometry and dtype); the
+    keys past a turn's cached prefix are gathered as whole pages, Tk = pages x page, one page up to the session's reach.
+    - The plan's chunk C (`KVCachePlan.prefill_chunk`): every chunk has C rows — its graph is the prompt-length site's
+      at C, its attention keyed at every whole-page Tk from C (an empty cache) to the reach.
+    - No chunk planned: a turn prefills its own rows n, 1 .. Tk - 1, against every whole-page Tk — the continuation
+      keyed over the prompt-length classes too (an outer bisection over Tk, an inner one over n in the row bands).
+    - The record, for every candidate (`price.prefill_chunk_candidates`): the graph's keys at its rows (attention
+      apart) and its attention at every Tk, each with its op count and the certified file dtype it is served from."""
+    from neurobrix.core.state import price as P
+    from neurobrix.kernels import census as _census
+    from neurobrix.kernels.autotune_certify import census_tuners
+    from nbxtensor.backend.device_files import in_force as _in_force
+    from nbxtensor.ops import autotune_certified as AC
+    from nbxtensor.ops import launch_keys as _LK
+    from nbxtensor.ops.tiling_sizes import PAGED_DECODE_TILE_CANDIDATES as _tiles
+    kv = plan["kv_cache"]
+    lm, feed, reach = session["lm"], session["feed"], int(session["reach"])
+    page, _ = P.paged_cache_params(int(kv["num_kv_heads"]), int(kv["k_head_dim"]), int(kv["v_head_dim"]),
+                                   str(kv["dtype"]).replace("torch.", ""), (_in_force() or {}).get("memory"),
+                                   int(kv["memory_bytes"]), _tiles)
+    pages = -(-reach // page)
+    cont = {}
+
+    def cont_at(n, j):
+        if (n, j) not in cont:
+            cont[(n, j)] = _continued_at(model, mode, lm, cdtype, feed, n, j * page, has_native_bf16, sdpa,
+                                         unhandled)
+        return cont[(n, j)]
+
+    def over_pages(n, j_lo):
+        """{j: launches} of a chunk of n rows at every whole-page key length j x page, j_lo .. pages, by the census's
+        bisection (an unevaluated j between two equal evaluated ones has their keys)."""
+        seen = {}
+
+        def at_j(j):
+            if j not in seen:
+                seen[j] = frozenset((q_, k) for _u, q_, k in cont_at(n, j))
+            return seen[j]
+        _census.bisect_extent(j_lo, pages, at_j)
+        done = sorted(seen)
+        return {j: cont_at(n, max(d for d in done if d <= j)) for j in range(j_lo, pages + 1)}
+
+    keys = set()
+    C = kv.get("prefill_chunk")
+    if C:
+        for launches in over_pages(int(C), int(C) // page).values():
+            keys |= set(launches)
+        what = f"C={C}: {pages - int(C) // page + 1} key length(s)"
+    else:
+        def outer(j):
+            found = set()
+            hi = j * page - 1
+            bps = _LK.row_breakpoints(1, hi)
+            pts = sorted({1, hi} | {p for p in bps if 1 < p < hi} | {p - 1 for p in bps if 1 < p - 1 < hi})
+            inner = {}
+            def at_n(n):
+                if n not in inner:
+                    inner[n] = frozenset((q_, k) for _u, q_, k in cont_at(n, j))
+                return inner[n]
+            for a_, b_ in zip(pts, pts[1:]):
+                _census.bisect_extent(a_, b_, at_n)
+            if len(pts) == 1:
+                inner[pts[0]] = frozenset((q_, k) for _u, q_, k in cont_at(pts[0], j))
+            for n in inner:
+                found |= set(cont[(n, j)])
+            keys.update(found)
+            print(f"[derived] session continuation {lm}: key length {j * page} ({j}/{pages} pages): "
+                  f"{len(inner)} row count(s), {len(cont)} attention derivation(s) so far", flush=True)
+            return frozenset((q_, k) for _u, q_, k in found)
+        outer_seen = {}
+
+        def at_outer(j):
+            if j not in outer_seen:
+                outer_seen[j] = outer(j)
+            return outer_seen[j]
+        _census.bisect_extent(1, pages, at_outer)
+        what = f"no chunk planned: {len(outer_seen)} key length(s) x the prompt-length classes"
+    # the record Prism prices the candidates from
+    sdpa_uids = {u for u, o in runtime_graph(model, lm)["ops"].items() if o.get("op_type") in _SDPA_KINDS}
+    tuners = {}
+
+    def file_dtype(q_, key):
+        if q_ not in tuners:
+            tuners.update(census_tuners([q_]))
+        return AC.output_dtype(tuners.get(q_), key)
+
+    def grouped(launches):
+        by = collections.Counter((q_, AC.key_repr(k)) for _u, q_, k in launches)
+        keyof = {(q_, AC.key_repr(k)): k for _u, q_, k in launches}
+        return [[q_, kt, file_dtype(q_, keyof[(q_, kt)]), n] for (q_, kt), n in sorted(by.items())]
+
+    cands = []
+    for c in P.prefill_chunk_candidates(page, P.session_prefill_rows(defaults)):
+        if c > reach:
+            continue
+        graph = [t for t in graph_at(c) if t[0] not in sdpa_uids]
+        attn = []
+        for j, launches in over_pages(c, c // page).items():
+            attn += [[j * page, *row] for row in grouped(launches)]
+        cands.append({"rows": c, "graph": grouped(graph), "attention": attn})
+    print(f"[derived] session chunks {lm}: page {page}, reach {reach}, {what}; {len(cont)} attention derivation(s), "
+          f"{len(cands)} candidate(s) recorded", flush=True)
+    from neurobrix.kernels.census_table import container_sha
+    record = {"model": model, "container": container_sha(CACHE / model), "mode": mode, "page_tokens": page,
+              "reach": reach, "prefill_chunk": C, "candidates": cands}
+    return keys, record
 
 
 def derive_keys(model: str, hardware: str, mode: str, rung, request: list):
@@ -2671,13 +2837,15 @@ def _derive_job(args):
     import census_inputs as CI
     model, hw, mode, rung, req = args
     CI.reset()
+    SESSION_CHUNKS.clear()
     try:
         derived, plan, _P, unhandled = derive_keys(model, hw, mode, rung, req)
     except PlanRefused as e:
         return ("plan_refused", str(e), {"plan": _plan_digest(refused=str(e)), **CI.take()})
     except SystemExit as e:
         return ("system_exit", str(e), {"plan": _plan_digest(refused=str(e)), **CI.take()})
-    return ("ok", (list(derived), collections.Counter(unhandled)), {"plan": _plan_digest(plan), **CI.take()})
+    return ("ok", (list(derived), collections.Counter(unhandled), SESSION_CHUNKS.get(mode)),
+            {"plan": _plan_digest(plan), **CI.take()})
 
 
 def _plan_job(args) -> str:
@@ -3034,6 +3202,7 @@ def table(a) -> int:
             reqs.append(probe)
         container = CC._graph_sha(model)
         rows, refused, notes, keyless = [], [], collections.Counter(), 0
+        chunk_recs = {}                    # mode -> the session-chunk record (`_session_chunks`)
         unrunnable = []                    # (mode, rung): Prism's own refusal — the model does not run there
         # The (mode, request, rung) derivations are independent: each runs in a forked worker (the
         # bound profile and every module state inherited), the results consumed in the loop's own order —
@@ -3062,7 +3231,9 @@ def table(a) -> int:
                             continue          # refused below the top rung, or the probe: no key there
                         refused.append(f"{mode} r{rung} request {ri}: {payload}")
                         continue
-                    derived, unhandled = payload
+                    derived, unhandled, chunk_rec = payload
+                    if chunk_rec is not None and rung == rungs[-1] and not ri:
+                        chunk_recs[mode] = chunk_rec     # the class's top rung, the census's own request
                     # A NOTE is a key derived from the op's own contract (the weight fixes a matmul's
                     # contraction or a convolution's input channels: the op cannot run otherwise) where
                     # the container's annotation disagrees — the key is the run's, the annotation
@@ -3095,6 +3266,7 @@ def table(a) -> int:
         removed, _ = T.replace_model(path, model, rows, keyless_ops=0 if rows else max(keyless, len(unrunnable)),
                                      former=[old for old, now in RENAMED.items() if now == model])
         units, files = CI.units_and_files(CI.merge(measured + [CI.take()]))
+        T.replace_chunks(path, model, [dict(r, tool=f"derived_census {rev}") for r in chunk_recs.values()])
         T.replace_inputs(path, model, {"model": model, "container": container, "jobs": plans, "units": units,
                                        "files": files, "roots": CI.recorded_roots(),
                                        "tool": f"derived_census {rev}"})

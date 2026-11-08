@@ -47,11 +47,8 @@ MODES = ("triton-sequential", "triton")   # longest first: "triton" is a suffix 
 
 def graph_sha(model: str) -> str:
     """The census tool's own container hash (tools/certified_census.py `_graph_sha`)."""
-    h = hashlib.sha256()
-    for gp in sorted((CACHE / model / "components").glob("*/graph.json")):
-        h.update(gp.name.encode())
-        h.update(gp.read_bytes())
-    return h.hexdigest()[:16]
+    from neurobrix.kernels.census_table import container_sha     # the one hash Prism reads too
+    return container_sha(CACHE / model)
 
 
 def parse_keys_name(name: str):

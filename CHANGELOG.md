@@ -26,20 +26,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`--json` prints its record on one line** (it was indented over about 120 lines); the content is unchanged.
 - **`python -m nbxtensor install-metal` downloads nothing when the pinned Metal wheels are already installed**, and
   says so in one line (it re-downloaded 131 MB on every call).
+- **The kernel census keys a chat session's later turns**: a turn after the first attends over the cached
+  conversation, a launch shape the census never derived, so a session's second turn stopped under `--certified-only`
+  naming a missing setting. The census now derives those attention settings at every cached length (in whole cache
+  pages) up to the session's reach, and records for each chunk-size candidate the settings Prism prices it from.
 - **Prism chooses a chat session's prefill chunk**: a session's turns can prefill in chunks of a fixed size, so a turn
   served from its cache gives the same bytes as the same conversation prefilled together. Prism picks the size from
   the certified kernel times of each candidate (whole cache pages, up to the prefill a session's plan prices), the
   cheapest whose kernels are all certified; with none certified a turn prefills in one chunk, and `--explain-plan`
   says why (`prefill_chunk_reason`). A one-shot `run` still prefills in one pass.
-
-### Changed
 - **A chat turn prefills only its new tokens**: the KV cache now belongs to the chat session (`serve` + `chat`,
   `complete`), on both engines. Each turn matches the conversation's token IDs against what the cache already holds
   and prefills only the rest (TinyLlama, a 421-token second turn: 158 rows prefilled instead of 421). A continued
   prefill attends over the cached keys read back as whole cache pages, so with a planned prefill chunk
   (`KVCachePlan.prefill_chunk`) a turn served from the session gives the same bytes as the same turns prefilled
-  together. On the Triton engine under `--certified-only` a continued prefill needs attention kernel settings the
-  census does not derive yet; such a run stops naming the missing setting.
+  together.
 - **A conversation past its ceiling is refused, never summarised**: the session's ceiling is the plan's (its
   `session_reach`, else its KV cache), not the container's `max_length` or 4096. A turn that would pass it is refused
   with the ceiling and the plan fact it comes from; older turns are no longer summarised or dropped, a tokenizer
