@@ -33,7 +33,8 @@ def _every_field_plan():
               rejected=[("zero3", 0.5, "w")], total_memory_mb=1.0, cpu_ram_mb=1, device_window_mb=1.0,
               deferred_drain_cliffs={"cuda:0": 1}, runtime_op_tiling={}, component_tiling={}, kv_cache_plan=kv,
               cfg_split_components=["c"], layer_stream_chunks={"c": [{"a": 1}]}, host_footprint={"total_bytes": 1},
-              unified_rungs_tried=[(1, 2)], expert_working_set={"c": 1})
+              unified_rungs_tried=[(1, 2)], expert_working_set={"c": 1},
+              refused_devices=[{"model": "g", "pci_id": "8086:9a49", "refused": "why"}])
 
 
 def test_every_key_of_the_plan_record_is_compared_or_an_explanation():
