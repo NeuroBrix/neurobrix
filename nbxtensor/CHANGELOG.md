@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **An out-of-tree backend's certificate identity no longer includes its Python binding**: the CPython extension module
+  (`*.cpython-*.so`, `*.abi3.so`, `*.pyd`) is built per Python and generates no code, so the Metal wheels for Python
+  3.10-3.13 share one identity when their code generator is the same bytes. Proven on 235-236 kernels per wheel set: the
+  compiled .ttir, .ttgir, .msl and .metallib are byte-identical. The identity of an installed backend changes once:
+  its certificates are re-labelled or re-proven under the new identity (`neurobrix autotune certify --reprove-generator`).
+
 ## [0.0.7] - unreleased (terminal lot)
 
 ### Added
