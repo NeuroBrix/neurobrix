@@ -2839,6 +2839,7 @@ def generator_refusals() -> Dict[str, int]    # how many keys each kernel was re
 def generator_aliased() -> Dict[str, int]     # how many keys each kernel was served through a generator alias
 GENERATOR_ALIASES = "generator_aliases.json"   # a profile directory's aliases: a build proven to compile the same code
 def generator_aliases(profile_dir: Path) -> Dict[str, str]          # {from label: to label}; a refused file serves nothing
+def say_aliased(kernel_qual: str, frm: str, to: str) -> None      # the alias line, to the DEBUG log (never the terminal)
 def through_generator_alias(cert, gen, profile_dir) -> Optional[Tuple[Dict[str, Any], Tuple[str, str]]]   # ONE hop
 def validate_generator_aliases(doc, profile_dir: Path) -> List[str]  # the gate: identities, evidence, no chain/duplicate
 def reset() -> None                            # forget what this process loaded, refused, announced and served

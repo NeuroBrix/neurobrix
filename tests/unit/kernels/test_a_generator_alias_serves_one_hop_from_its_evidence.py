@@ -80,3 +80,11 @@ def test_the_gate_refuses_a_malformed_alias_file(tmp_path, bad, said):
 def test_the_gate_accepts_a_well_formed_alias_file(tmp_path):
     d, _ = _dir(tmp_path, [_alias()])
     assert C.validate_generator_aliases(json.loads((d / C.GENERATOR_ALIASES).read_text()), d) == []
+
+
+def test_the_alias_line_is_a_debug_line_not_the_users_terminal(capsys, caplog):
+    import logging
+    with caplog.at_level(logging.DEBUG, logger=C.__name__):
+        C.say_aliased("k", _label(MAC14), _label(PUB))
+    assert capsys.readouterr().out == ""                              # nothing on a plain run's terminal
+    assert any("served through the generator alias" in r.getMessage() for r in caplog.records)

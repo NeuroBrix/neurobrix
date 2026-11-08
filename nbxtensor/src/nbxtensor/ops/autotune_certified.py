@@ -1061,6 +1061,13 @@ def _alias_label(ident: Any) -> Optional[str]:
     return proof_backend({"backend": ident})
 
 
+def say_aliased(kernel_qual: str, frm: str, to: str) -> None:
+    """A kernel served through a generator alias, said to the library's DEBUG log (the owner's clean terminal, 2026-11-08:
+    a developer fact, not the user's; `generator_aliased()` counts them for a plan's explanation)."""
+    _log.debug(f"[autotune] {kernel_qual}: served through the generator alias {frm} -> {to} "
+               f"(the same compiled code, proven: {GENERATOR_ALIASES})")
+
+
 def generator_aliases(profile_dir: Path) -> Dict[str, str]:
     """{from label: to label} of this directory's alias file (empty when there is none). A file the gate refuses
     serves nothing (`validate_generator_aliases`)."""
@@ -1223,8 +1230,7 @@ def lookup(kernel_qual: str, tuner, key: tuple, ignore_switch: bool = False,
         n = _GEN_ALIASED.get(kernel_qual, 0) + 1
         _GEN_ALIASED[kernel_qual] = n
         if n == 1:                        # once per kernel: the plan's explanation counts them all (generator_aliased)
-            print(f"[autotune] {kernel_qual}: served through the generator alias {aliased[1][0]} -> {aliased[1][1]} "
-                  f"(the same compiled code, proven: {GENERATOR_ALIASES})", flush=True)
+            say_aliased(kernel_qual, *aliased[1])
         return aliased[0]
     named = sorted({lab for c in class_certifications(cert) for p in certification_proofs(c) if (lab := proof_backend(p))})
     if not named:
