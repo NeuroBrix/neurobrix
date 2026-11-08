@@ -207,7 +207,9 @@ def family_inputs(family: str, prompt: str) -> list:
     if not required:
         required = ["--prompt"]
     argv = []
-    for flag in required:
+    for entry in required:
+        # an entry naming alternatives (["--prompt", "--turns"]: one of them) is served by its first
+        flag = entry[0] if isinstance(entry, (list, tuple)) else entry
         if flag == "--prompt":
             argv += ["--prompt", prompt]
         elif flag in ASSETS:

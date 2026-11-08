@@ -76,6 +76,10 @@ def _add_run_arguments(p):
                                  'replay cache (NBX_AUTOTUNE_CERTIFIED_ONLY=1).')
     p.add_argument('--max-tokens', type=int, default=None, dest='max_tokens',
                             help='Maximum number of tokens to generate (LLM only)')
+    p.add_argument('--turns', default=None, metavar='FILE',
+                            help='A JSON list of user messages played as ONE chat session, turn after turn, through '
+                                 'the session code the daemon runs: the KV cache is kept between turns and each turn '
+                                 'prefills only its new tokens; each answer is printed (LLM only)')
 
     # ── 9-family inputs ──
     p.add_argument('--input-image', default=None, dest='input_image',

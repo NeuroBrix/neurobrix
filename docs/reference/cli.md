@@ -105,13 +105,13 @@ neurobrix chat [options]
 | Command | Description |
 |---------|-------------|
 | `/new` | Start a new conversation (clears the daemon's message history) |
-| `/context` | Messages, estimated tokens and usage (against the container's `max_length`, else 4096) |
+| `/context` | Messages, tokens, usage against the session's ceiling, tokens held by the KV cache |
 | `/status` | Model, family, engine mode and device memory in use |
 | `/quit` (or `/exit`, `/q`) | Exit chat (the daemon keeps running) |
 
-Each answer is printed whole (not streamed). Every turn re-sends the whole conversation to the model (no KV cache is
-kept between turns); when the conversation outgrows the plan's KV cache, older turns are summarized and chat prints
-`[Context compressed — older turns summarized]`. See [Chat and the KV cache](../serving.md#chat-and-the-kv-cache-today).
+Each answer is printed whole (not streamed). The session keeps its KV cache between turns: each turn prefills only its
+new tokens. A turn past the session's ceiling (the plan's) is refused by name; nothing is summarized. See
+[Chat and the KV cache](../serving.md#chat-and-the-kv-cache-today).
 
 ### stop
 
@@ -144,7 +144,8 @@ neurobrix run --model <name> --prompt <text> [--hardware <profile>] [options]
 |------|-------------|
 | `--model` | Model name (required) |
 | `--hardware` | Hardware profile ID (optional — auto-detects if omitted) |
-| `--prompt` | Input text (required) |
+| `--prompt` | Input text (required, except with `--turns`) |
+| `--turns FILE` | LLM: a JSON list of user messages played as one chat session, turn after turn, through the daemon's session code; the KV cache is kept between turns, each answer is printed with the tokens its turn matched and prefilled |
 | `--steps` | Number of inference steps (diffusion) |
 | `--cfg` | Classifier-free guidance scale |
 | `--height` / `--width` | Output resolution in pixels |

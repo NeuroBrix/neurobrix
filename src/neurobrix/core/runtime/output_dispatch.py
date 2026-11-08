@@ -126,21 +126,22 @@ def validate_required_inputs(family: str, args) -> None:
     Validate that all required CLI flags for the family are provided.
 
     Reads `inputs.required` from the family YAML. Each entry is a CLI flag
-    string (e.g. "--audio", "--prompt", "--input-image"). The argparse
-    Namespace `args` is checked: dest is derived from the flag (--input-image
-    → args.input_image), and the value must be non-None and non-empty.
+    string (e.g. "--audio", "--prompt", "--input-image"), or a list of flags
+    of which one must be given (["--prompt", "--turns"]: a single prompt, or a
+    session of turns). The argparse Namespace `args` is checked: dest is
+    derived from the flag (--input-image → args.input_image), and the value
+    must be non-None and non-empty.
 
     Raises:
         RuntimeError: required flag missing
     """
     cfg = get_family_config(family)
     required = cfg.get("inputs", {}).get("required", [])
-    for flag in required:
-        dest = _flag_to_dest(flag)
-        value = getattr(args, dest, None)
-        if value is None or value == "":
+    for entry in required:
+        flags = list(entry) if isinstance(entry, (list, tuple)) else [entry]
+        if not any(getattr(args, _flag_to_dest(f), None) not in (None, "") for f in flags):
             raise RuntimeError(
-                f"ZERO FALLBACK: family '{family}' requires {flag}. "
+                f"ZERO FALLBACK: family '{family}' requires {' or '.join(flags)}. "
                 f"Provide it on the command line."
             )
 

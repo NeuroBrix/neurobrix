@@ -572,7 +572,9 @@ def _suggest_run_command(name: str, cache_path) -> str:
         return f"neurobrix run --model {name}"
 
     parts = [f"neurobrix run --model {name}"]
-    for flag in required:
+    for entry in required:
+        # an entry naming alternatives (["--prompt", "--turns"]) suggests its first
+        flag = entry[0] if isinstance(entry, (list, tuple)) else entry
         # Placeholder derived mechanically from the flag, so a new required
         # input needs no table here: --input-image -> IMAGE, --audio -> AUDIO.
         placeholder = flag.lstrip("-").split("-")[-1].upper()

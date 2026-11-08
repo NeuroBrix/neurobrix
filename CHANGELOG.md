@@ -40,6 +40,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   holds (`tokens`, `cached_tokens`, `last_turn`; `estimated_tokens` is gone). The `chat` reply's `summarized` field is
   always `false`.
 
+### Added
+- **`neurobrix run --turns FILE`**: a JSON list of user messages played as one chat session through the same session
+  code the daemon runs, each answer printed with the tokens its turn matched and prefilled — a multi-turn
+  conversation validated through the entry point.
+
 ### Fixed
 - **`neurobrix autotune certify --reprove-generator` no longer un-serves the build it re-proves from**: re-proving a
   certified directory under a new code generator replaced each entry's one proof, so the published build lost every

@@ -160,6 +160,80 @@ def _try_warm_path(args) -> bool:
     return True
 
 
+def load_turns(args):
+    """The `--turns` file: a JSON list of user messages (strings), or None when the run names none. Anything else is
+    refused by name, as is a --prompt beside it (the turns ARE the prompts)."""
+    path = getattr(args, "turns", None)
+    if path is None:
+        return None
+    if getattr(args, "prompt", None):
+        raise SystemExit("ERROR: --turns plays its own messages; --prompt beside it would be ignored. Give one.")
+    try:
+        with open(path) as f:
+            turns = json.load(f)
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"ERROR: --turns {path!r}: {exc}")
+    if not isinstance(turns, list) or not turns or not all(isinstance(t, str) and t for t in turns):
+        raise SystemExit(f"ERROR: --turns {path!r} must hold a JSON list of non-empty user messages (strings)")
+    return turns
+
+
+def play_turns(args, turns, executor, pkg, execution_plan, inputs, drain) -> int:
+    """`neurobrix run --turns`: the messages played as one session through `serving.session.play_turn` — the turn the
+    daemon's `chat` plays — on this run's executor and plan: the cache is the session's between turns, each turn
+    prefills only its new tokens, every answer is printed with what its turn matched and prefilled."""
+    from neurobrix.serving.session import ConversationSession, play_turn, session_ceiling
+    from neurobrix.core.runtime.output_dispatch import _extract_text
+    from neurobrix.core.runtime_values import resolve as _resolve_runtime
+    from neurobrix.core.runtime import run_timings
+    family = pkg.manifest.get("family")
+    if family != "llm":
+        raise SystemExit(f"ERROR: --turns plays a chat session, which needs an LLM; '{args.model}' is '{family}'")
+    executor.setup()
+    tokenizer = executor.modules.get("tokenizer")
+    if tokenizer is None:
+        raise SystemExit("ERROR: --turns renders the conversation with the model's tokenizer; the run loaded none")
+    ceiling, source = session_ceiling(getattr(execution_plan, "kv_cache_plan", None))
+    session = ConversationSession(tokenizer=tokenizer, ceiling=ceiling, ceiling_source=source)
+    if getattr(args, "system", None):
+        session.messages.append({"role": "system", "content": args.system})
+    max_tokens = int(_resolve_runtime("max_tokens", container=pkg.defaults,
+                                      extra=[("the request", getattr(args, "max_tokens", None))],
+                                      why="It bounds each turn's generation."))
+    base = {k: v for k, v in inputs.items() if k not in ("global.prompt", "global.chat_mode")}
+    print(f"\n[Turns] {len(turns)} turns, one session; ceiling {ceiling} positions ({source})")
+
+    def generate(token_ids, kv_session):
+        run_timings.begin_request()
+        outputs = executor.execute({**base, "global.input_token_ids": token_ids, "global.chat_mode": False},
+                                   kv_session=kv_session)
+        drain()
+        run_timings.end_request()
+        text = _extract_text(outputs, executor)
+        if text is None:
+            raise RuntimeError(f"ZERO FALLBACK: the turn produced no text output ({list(outputs.keys())})")
+        return {"text": text}
+
+    for i, message in enumerate(turns, 1):
+        drain()
+        t0 = time.time()
+        try:
+            result = play_turn(session, message, max_tokens, generate)
+        except Exception as e:
+            print(f"\n[ERROR] turn {i} failed: {e}")
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
+        dt = time.time() - t0
+        kv = result["kv"]
+        print(f"\n[Turn {i}] {kv['prompt']} tokens: {kv['matched']} held by the session's cache, {kv['prefilled']} "
+              f"prefilled ({kv['padded']} padding a planned chunk), {kv['held']} held after; {dt:.2f}s")
+        print(run_timings.format_line(run_timings.measured()), flush=True)
+        print(f"[User {i}] {message}")
+        print(f"[Assistant {i}] {result['text']}", flush=True)
+    sys.exit(0)
+
+
 def request_decode_bound(args, cached_defaults=None):
     """The positions a RUN's cache floor is priced for beyond the package's prompt margin (Prism `InputConfig.max_tokens`):
     the request's --max-tokens plus its prompt's and system prompt's UTF-8 bytes, a bound on its text tokens (a token is at least one byte;
@@ -471,8 +545,11 @@ def cmd_run(args):
         from neurobrix.cli.commands.agent import run_agent_mode
         sys.exit(run_agent_mode(args))
 
-    # Warm path: if daemon is running with same model, use it — never for a confirmation run
-    if not getattr(args, "certified_only", False) and _try_warm_path(args):
+    # A session of turns is played here, through the engine's own session code (never by a daemon's generate)
+    turns = load_turns(args)
+
+    # Warm path: if daemon is running with same model, use it — never for a confirmation run or a session of turns
+    if not getattr(args, "certified_only", False) and turns is None and _try_warm_path(args):
         sys.exit(0)
 
     # GUARD: If daemon is running but warm path failed, refuse cold path.
@@ -994,6 +1071,9 @@ def cmd_run(args):
             from nbxtensor.memory.allocator import DeviceAllocator
             if DeviceAllocator.device_count() > 0:
                 DeviceAllocator.device_synchronize()
+
+    if turns is not None:
+        return play_turns(args, turns, executor, pkg, execution_plan, inputs, _drain_device)
 
     _sampled_peak = None
     if execution_mode in ("compiled", "sequential"):
