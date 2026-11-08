@@ -295,24 +295,6 @@ def _held_line(loaded, device) -> str:
 
 
 
-def _graph_structure_copy(dag: dict) -> dict:
-    """A copy of a graph whose structure can be rewritten without touching the original: its ops whole, its tensor
-    records field by field (an embedded constant's values, `constant_data`, read-only, are shared), every other list
-    or table one level deep; anything else (a value the engine attached) is shared."""
-    import copy
-    out = {}
-    for k, v in (dag or {}).items():
-        if k == "ops":
-            out[k] = copy.deepcopy(v)
-        elif k == "tensors" and isinstance(v, dict):
-            out[k] = {t: ({f: (x if f == "constant_data" else copy.deepcopy(x)) for f, x in e.items()}
-                          if isinstance(e, dict) else e) for t, e in v.items()}
-        elif isinstance(v, (list, dict)):
-            out[k] = type(v)(v)
-        else:
-            out[k] = v
-    return out
-
 class GraphExecutor:
     """
     Execute TensorDAG directly.
@@ -1447,19 +1429,33 @@ class GraphExecutor:
         from neurobrix.core.runtime.precision_contract import registry_model_name
         return registry_model_name(getattr(self, "_cache_path", None))
 
-    def precision_contract(self, compute_dtype, supports_op_pins: bool = True) -> tuple:
+    def precision_contract(self, compute_dtype, supports_op_pins: bool = True, at_compile: bool = False) -> tuple:
         """(activations_fp16_safe, fp32_op_uids, narrow_op_uids): a streamed piece's is its
         component's, resolved through its base on the whole graph at the caller's compute dtype
         (`_contract_from`); anything else resolves its own (`precision_contract.resolve`). The
         ONE entry every engine's resolve site goes through — compiled and sequential at graph
-        load, triton and triton-sequential at compile."""
+        load, triton and triton-sequential at compile.
+
+        `at_compile` (the Triton sequence's compile): the contract its FIRST compile resolved is kept and served to
+        every later one. The compile rewrites the graph in place (its fusions and eliminations, made idempotent over
+        a recompile), so a component compiled again after its release resolved on the rewritten graph, whose
+        signature no calibration record matches: the conservative contract, fp32 activations (DeepSeek-Coder-V2-Lite's
+        second `run --turns` turn stopped on a certified-only miss, 2026-11-08). The plan's own pins, which may grow
+        between two compiles, are merged after."""
         if self._contract_from is not None:
             safe, pins, narrow = self._contract_from.precision_contract(compute_dtype, supports_op_pins)
         else:
             from neurobrix.core.runtime.precision_contract import resolve
-            safe, pins, narrow = resolve(getattr(self, "_cache_path", None), self._component_name,
-                                         getattr(self, "_dag", None), compute_dtype=compute_dtype,
-                                         supports_op_pins=supports_op_pins)
+            kept = self.__dict__.setdefault("_contract_at_first_compile", {}) if at_compile else None
+            key = (str(compute_dtype), bool(supports_op_pins))
+            if kept is not None and key in kept:
+                safe, pins, narrow = kept[key]
+            else:
+                safe, pins, narrow = resolve(getattr(self, "_cache_path", None), self._component_name,
+                                             getattr(self, "_dag", None), compute_dtype=compute_dtype,
+                                             supports_op_pins=supports_op_pins)
+                if kept is not None:
+                    kept[key] = (safe, pins, narrow)
         plan = self._plan_fp32_pins
         if not plan:
             return safe, pins, narrow
@@ -4263,20 +4259,6 @@ class GraphExecutor:
         DeviceAllocator.set_device(device_idx)
         DeviceAllocator.ensure_triton_device(device_idx)
 
-        # The sequence's compile rewrites the graph it is given in place (its fusions, eliminations and promotions:
-        # DeepSeek-Coder-V2-Lite's 2678 ops became 2111). A component whose release dropped its sequence compiles
-        # again, and must compile what the first compile read: the graph is put back as it was before the first one,
-        # so the precision contract resolves on the graph its calibration was measured on and every pass meets the
-        # graph it was written for. Compiled again on the rewritten graph, the record's signature no longer matched
-        # and the component ran the conservative contract (fp32 activations): a certified-only miss on the second
-        # `run --turns` turn of DeepSeek-Coder-V2-Lite, 2026-11-08.
-        if getattr(self, "_dag_before_triton", None) is None:
-            self._dag_before_triton = _graph_structure_copy(self._dag)
-        else:
-            _again = _graph_structure_copy(self._dag_before_triton)
-            self._dag.clear()
-            self._dag.update(_again)
-
         # Persistent tids (e.g., hidden_states for image-AR LLMs where the
         # graph output is text logits) must be added to the dag's declared
         # outputs BEFORE compile(). TritonSequence's liveness analysis uses
@@ -4306,7 +4288,7 @@ class GraphExecutor:
         # narrowable ops exactly as the compiled one (R30;
         # D-PRECISION-CONTRACT-TRITON-PARITY closed 2026-09-06).
         _safe, _pins, _narrow = self.precision_contract(
-            "float16" if str(self.dtype) in ("float16", "torch.float16") else "float32")
+            "float16" if str(self.dtype) in ("float16", "torch.float16") else "float32", at_compile=True)
         self._triton_seq.set_precision_contract(bool(_safe), _pins, _narrow)
 
         self._triton_seq._consumed_input_tids = self._consumed_input_tids

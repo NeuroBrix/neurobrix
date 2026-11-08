@@ -126,8 +126,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the Triton engine compiled the second request on a graph its first compile had already rewritten, so the model's
   calibration record was refused (measured on another graph) and the conservative contract ran it in fp32
   activations: slower, and on DeepSeek-Coder-V2-Lite-Instruct a certified-only run stopped on its second turn on a
-  missing kernel setting. The second compile now reads the graph the first read, and a model whose compile is kept
-  binds again exactly the constants its first load held in fp32.
+  missing kernel setting. A compile after the first now keeps the precision contract the first compile resolved,
+  and a model whose compile is kept binds again exactly the constants its first load held in fp32.
 - **Cold serving / `run --turns`: a lazy plan's second request no longer runs on the first's released memory**: a
   text model whose plan loads it on demand (a lazy or streamed plan) ended each request without releasing it through
   its plan, so the plan kept the previous request's load. Every later request pinned a second copy of the weights
