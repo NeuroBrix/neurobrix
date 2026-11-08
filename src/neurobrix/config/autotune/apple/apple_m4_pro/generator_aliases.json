@@ -1,0 +1,29 @@
+{
+ "aliases": [
+  {
+   "from": {
+    "triton": "3.8.0+git4a15f415.nbx1",
+    "name": "mps",
+    "backend_hash": "content-3a38a05dfda2da61"
+   },
+   "to": {
+    "triton": "3.8.0+git4a15f415.nbx1",
+    "name": "mps",
+    "backend_hash": "content-0c61dc742284af40"
+   },
+   "evidence": {
+    "what": "the same certified-only runs (TinyLlama-1.1B-Chat-v1.0 16 tokens, Sana_1600M_1024px_MultiLing 2 steps, whisper-large-v3-turbo on a spoken memo; neurobrix 0.6.2 + nbxtensor 0.0.5 from PyPI) compiled under the published wheels (triton-3.8.0+git4a15f415.nbx1 + nbx_triton_apple-0.1.0, cp312, macosx_15_0) and under each macOS 14 pair (cp310, cp311, cp312, cp313, macosx_14_0), each with an empty Triton cache; kernels matched by input (source + metadata, install paths normalized)",
+    "wheels": "triton-3.8.0+git4a15f415.nbx1 and nbx_triton_apple-0.1.0, cp310-cp313, macosx_14_0_arm64 (campagnes/2026_11_08_metal_wheels_macos14/out/SHA256SUMS)",
+    "sets": 4,
+    "kernels": 236,
+    "result": "every matched kernel's .ttir, .ttgir, .msl and .metallib byte-identical to the published build's, in all 4 sets (cp311: 235 matched, randn_kernel's input differed only by its seed's divisibility)",
+    "path": "nbx-atelier/campagnes/2026_11_08_metal_wheels_macos14/proof/alias_evidence.tsv",
+    "sha256": "af53ddf20e4bc38216379ff1c1ecd20b2e194438f65e8deebe352a53ffce63f9",
+    "summary_path": "nbx-atelier/campagnes/2026_11_08_metal_wheels_macos14/proof/compare_regen.txt",
+    "summary_sha256": "ada779708e2591c230f57403c3ed6773d0dc9d548964bd0a7f35f2b3444f8e30"
+   },
+   "date": "2026-11-08",
+   "decided_by": "owner 2026-11-08 21:07 via the supervisor; format the Dell + the Mac 21:11"
+  }
+ ]
+}

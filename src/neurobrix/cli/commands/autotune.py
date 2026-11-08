@@ -198,6 +198,19 @@ def cmd_autotune(args) -> int:
             else:
                 _files.append({"path": str(path), "ok": True, "shapes": len(doc.get("entries") or {})})
                 if not _json: print(f"ok      {path} ({len(doc.get('entries') or {})} shape(s))")
+        # each profile directory's generator alias file (nbxtensor.ops.autotune_certified.GENERATOR_ALIASES), its own gate
+        for apath in sorted(root.glob(f"*/*/{C.GENERATOR_ALIASES}")):
+            n += 1
+            try:
+                problems = C.validate_generator_aliases(json.loads(apath.read_text(encoding="utf-8")), apath.parent)
+            except (OSError, ValueError) as exc:
+                problems = [f"unreadable ({exc})"]
+            if problems:
+                bad += 1; _files.append({"path": str(apath), "ok": False, "problems": problems[:10]})
+                if not _json: print(f"REFUSED {apath}: " + "; ".join(problems[:3]))
+            else:
+                _files.append({"path": str(apath), "ok": True})
+                if not _json: print(f"ok      {apath} (generator aliases)")
         if _json:
             from neurobrix.cli.json_out import emit
             emit("autotune.check", {"directory": str(root), "files": _files, "refused": bad})
