@@ -427,11 +427,19 @@ class InferenceEngine:
         The caller owns the conversation — message dicts including
         role="tool" results; the embedded chat template renders it (with
         the tools contract when given) and one decode returns the raw
-        assistant text. The engine keeps the KV cache of the last call
-        (one record for the agent path): the ids its cache holds are matched
-        against the new rendering, so a fixed system prompt and tools
-        contract are prefilled once, and only what changed is prefilled.
+        assistant text, its tool-call dialect's markers kept (a marker that
+        is a special token survives: `complete_turn`). The engine keeps the KV
+        cache of the last call (one record for the agent path): the ids its
+        cache holds are matched against the new rendering, so a fixed system
+        prompt and tools contract are prefilled once, and only what changed is
+        prefilled.
         """
+        return self.complete_turn(messages, tools=tools, **kwargs)["text"]
+
+    def complete_turn(self, messages: list, tools: Optional[list] = None, **kwargs) -> Dict[str, Any]:
+        """`complete`, with what a caller that reads the turn itself needs: `text` (decoded with the special
+        tokens skipped except the template's dialect markers), `token_ids` (the generated ids) and
+        `prompt_tokens` (the rendered prompt's length)."""
         from neurobrix.core.config import get_family_config
         try:
             supported = (get_family_config(self._family or "").get("modes")
@@ -468,7 +476,14 @@ class InferenceEngine:
                 f"{max_tokens} to generate) and a session holds at most {self._agent_kv.ceiling} — "
                 f"{self._agent_kv.source}.")
         result = self._generate_from_token_ids(token_ids, decode, kv_session=self._agent_kv)
-        return result.get("text", "")
+        generated = result.get("token_ids") or []
+        from neurobrix.agent.parsers import select_parser
+        from neurobrix.serving.text_stream import MarkerDecoder
+        parser = select_parser(self.chat_template_text())
+        keep = [parser.start_marker, parser.end_marker or ""] if parser is not None else []
+        text = MarkerDecoder(tokenizer, keep).decode(generated) if keep else result.get("text", "")
+        return {"text": text, "token_ids": list(generated), "prompt_tokens": len(token_ids),
+                "max_tokens": max_tokens}
 
     def chat_template_text(self) -> str:
         """The embedded chat template's text ('' when absent)."""
@@ -613,4 +628,5 @@ class InferenceEngine:
         return {
             "text": text,
             "tokens": len(token_ids),
+            "token_ids": token_ids,
         }

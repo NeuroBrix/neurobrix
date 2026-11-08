@@ -443,6 +443,14 @@ Examples:
     serve_parser.add_argument('--ready-fd', type=int, default=None,
                               help='POSIX: an inherited pipe fd; the ready record (one JSON line) is '
                                    'written there once the daemon accepts, then the fd is closed')
+    serve_parser.add_argument('--http', action='store_true',
+                              help='Also serve the OpenAI-compatible HTTP API (/v1/...) on this daemon '
+                                   '(default address: serving.http_host:http_port in config/system.yml)')
+    serve_parser.add_argument('--http-host', default=None,
+                              help='Address of the HTTP API (with --http); a non-loopback one needs --api-key-file')
+    serve_parser.add_argument('--http-port', type=int, default=None, help='Port of the HTTP API (with --http)')
+    serve_parser.add_argument('--api-key-file', default=None,
+                              help='A file holding the API key the HTTP API requires (Authorization: Bearer)')
     serve_parser.add_argument('--ready-file', default=None,
                               help='A file the ready record (one JSON line) is written to, whole, once '
                                    'the daemon accepts (the Windows launcher reads it there)')

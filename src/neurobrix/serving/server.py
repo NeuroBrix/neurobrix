@@ -145,6 +145,7 @@ class ServingDaemon:
         mode: str = "compiled",
         idle_timeout: float = 1800.0,
         engine=None,
+        http: Optional[Dict[str, Any]] = None,
     ):
         # `engine` is injected only by a test (a fake engine that yields tokens
         # without a model); the daemon builds its InferenceEngine.
@@ -160,6 +161,10 @@ class ServingDaemon:
         self._ops = OperationTable(self._settings["operations_retained"])
         # The one thread every engine call runs on (serving/worker.py).
         self._worker = InferenceWorker()
+        # The OpenAI-compatible HTTP door, when asked (`serve --http`): {host, port, api_key_file}, each None
+        # for the setting's own value (serving/openai_api/door.py). Opened after the load, beside the socket.
+        self._http = http
+        self._door = None
         # Open connections and their threads, under their own lock.
         self._conn_lock = threading.Lock()
         self._connections: Dict[socket.socket, threading.Thread] = {}
@@ -251,15 +256,34 @@ class ServingDaemon:
 
     def _foreground_command(self) -> list:
         """This `serve` again, in the foreground: the child serves the model,
-        hardware profile, execution mode and idle timeout the parent was asked
-        for (the mode flag is the mode's name, `--triton-sequential` for
-        `triton_sequential`)."""
-        return [sys.executable, "-m", "neurobrix", "serve",
-                "--model", self._engine.model_name,
-                "--hardware", self._engine.hardware_id,
-                f"--{self._engine.mode.replace('_', '-')}",
-                "--timeout", str(int(self._idle_timeout)),
-                "--foreground"]
+        hardware profile, execution mode, idle timeout and HTTP door the parent
+        was asked for (the mode flag is the mode's name, `--triton-sequential`
+        for `triton_sequential`)."""
+        cmd = [sys.executable, "-m", "neurobrix", "serve",
+               "--model", self._engine.model_name,
+               "--hardware", self._engine.hardware_id,
+               f"--{self._engine.mode.replace('_', '-')}",
+               "--timeout", str(int(self._idle_timeout)),
+               "--foreground"]
+        if self._http is not None:
+            cmd.append("--http")
+            for key, flag in (("host", "--http-host"), ("port", "--http-port"),
+                              ("api_key_file", "--api-key-file")):
+                if self._http.get(key) is not None:
+                    cmd += [flag, str(self._http[key])]
+        return cmd
+
+    def served_name(self) -> str:
+        """The one name of the model this daemon serves (the API's model id)."""
+        return self._engine.model_name
+
+    def open_http_door(self) -> Dict[str, Any]:
+        """Open the OpenAI-compatible door (serving/openai_api/door.py) on this daemon; its endpoint record."""
+        from neurobrix.serving.openai_api.door import HttpDoor, read_api_key
+        cfg = self._http or {}
+        self._door = HttpDoor(self, host=cfg.get("host"), port=cfg.get("port"),
+                              api_key=read_api_key(cfg.get("api_key_file")))
+        return self._door.open()
 
     def _daemonize_unix(self) -> None:
         """
@@ -320,6 +344,8 @@ class ServingDaemon:
         else:
             rec["family"] = self._engine.family or "unknown"
             rec["serving"] = "warm" if self._engine._warm_serving else "cold"
+            if self._door is not None:
+                rec["http"] = self._door.endpoint()
         return rec
 
     def _signal_ready(self, record: Dict[str, Any]) -> None:
@@ -378,6 +404,8 @@ class ServingDaemon:
             # it where its clients read it (Studio request 8).
             INSTANCE.record_bound_port(server_socket)
             server_socket.listen(self._settings["listen_backlog"])
+            if self._http is not None:
+                self.open_http_door()
 
             self._signal_ready(self._ready_record())
 
@@ -413,6 +441,8 @@ class ServingDaemon:
             except socket.timeout:
                 if self._open_connections():
                     continue   # a client is connected (maybe generating): not idle
+                if self._door is not None and self._door.idle_for() < self._idle_timeout:
+                    continue   # the HTTP door served within the idle timeout: not idle
                 _log.debug(f"[Daemon] Idle timeout ({self._idle_timeout}s) — shutting down")
                 break
             except OSError:
@@ -530,7 +560,8 @@ class ServingDaemon:
 
         try:
             if method == "status":
-                return make_response({**self._engine.get_status(),
+                extra = {"http": self._door.endpoint()} if self._door is not None else {}
+                return make_response({**self._engine.get_status(), **extra,
                                       "operations": self._ops.live()})
 
             elif method == "cancel":
@@ -806,6 +837,11 @@ class ServingDaemon:
                 except OSError as e:
                     _log.debug(f"[Daemon] Could not remove {f}: {e}")
 
+        if self._door is not None:
+            try:
+                self._door.close()
+            except OSError as e:
+                _log.debug(f"[Daemon] HTTP door close: {e}")
         self._worker.stop()
         _log.debug("[Daemon] Cleaned up")
 
@@ -871,4 +907,6 @@ def _announce(record: Dict[str, Any]) -> bool:
         return False
     _log.info(f"Serving {record['model']} ({record['family']}, {record['serving']} serving) — neurobrix chat to talk, "
               f"neurobrix stop to end.")
+    if record.get("http"):
+        _log.info(f"OpenAI-compatible API: {record['http']['base_url']}")
     return True

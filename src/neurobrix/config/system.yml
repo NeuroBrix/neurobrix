@@ -108,3 +108,18 @@ serving:
   # hands a child no inherited fd through subprocess, so the file remains there. A wait ends on
   # the file or on the child's exit, never on a deadline: a long load is not a failure.
   ready_poll_s: 0.5
+  # The OpenAI-compatible HTTP door (`neurobrix serve --http`), docs/serving.md. Read only when the door is
+  # opened; each is then required (a missing value is refused by name).
+  # Where it listens by default: the loopback interface only — a non-loopback address needs an API key.
+  http_host: 127.0.0.1
+  # Its default port. Not 5000 or 7000, which macOS's AirPlay receiver holds (Mac review, 2026-11-08, which
+  # chose 8765). A port already taken is refused at start, naming the process that holds it.
+  http_port: 8765
+  # HTTP work requests allowed to WAIT for the model at once (every door's queued operations counted); one more
+  # is answered 429 `server_busy`. A queued request holds its body (an image, an audio file) in the host memory
+  # Prism planned against, so the queue is bounded; 8 waiting requests of the 64 MiB body bound below stay
+  # within half a GiB.
+  http_max_queued: 8
+  # The largest request body accepted, in MiB (an uploaded audio file or a base64 image). The socket door's
+  # frame bound is the same 64 MiB (serving/protocol.py MAX_MESSAGE_SIZE).
+  http_max_body_mb: 64

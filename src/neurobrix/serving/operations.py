@@ -37,6 +37,10 @@ import yaml
 STOP_REASONS = {"cancel": "cancelled", "orphan": "orphaned", "shutdown": "stopped"}
 TERMINAL = ("completed", "cancelled", "orphaned", "stopped", "failed")
 
+
+class ServerBusy(RuntimeError):
+    """An operation refused because as many as the door allows already wait (`serving.http_max_queued`)."""
+
 #: The keys of system.yml `serving:`, each read by name (no default in code).
 _SETTINGS = {
     "cancel_ack_timeout_s": (int, float),
@@ -103,11 +107,23 @@ class OperationTable:
         self._prefix = f"{os.getpid()}-"
 
     # -- the work path ----------------------------------------------------
-    def open(self, method: str, requested_id: Optional[str]) -> Operation:
+    def open(self, method: str, requested_id: Optional[str],
+             max_queued: Optional[int] = None) -> Operation:
         """Register a new operation. A client-chosen id that names a LIVE
         operation is refused by name (two requests cannot share a stop flag);
-        one that names a finished operation replaces its record."""
+        one that names a finished operation replaces its record.
+
+        `max_queued`, when given, bounds the operations already waiting (state
+        `queued`, from every door): at the bound the new one is refused with
+        `ServerBusy` — counted and registered under one lock, so two requests
+        never both take the last place."""
         with self._lock:
+            if max_queued is not None:
+                waiting = sum(1 for o in self._ops.values() if o.state == "queued")
+                if waiting >= max_queued:
+                    raise ServerBusy(
+                        f"{waiting} requests already wait for the model (serving.http_max_queued = "
+                        f"{max_queued}); retry when one has run")
             if requested_id is not None:
                 if not isinstance(requested_id, str) or not requested_id:
                     raise ValueError(f"op_id must be a non-empty string, got {requested_id!r}")

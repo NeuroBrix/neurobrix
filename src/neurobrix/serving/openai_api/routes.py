@@ -1,0 +1,631 @@
+"""The OpenAI endpoints, each mapped to the loaded family's own flow.
+
+Which endpoint a model serves is read from its FAMILY's declaration (config/families/<family>.yml: `modes.supported`,
+`modes.multimodal_strict`, `inputs.required`, `output.default_extension_per_mode`), never from a model name:
+
+  * /v1/chat/completions — a family declaring the `agent` mode: the caller's messages through the chat template
+    (`complete_turn`), tools included; a family declaring `chat` (or a multimodal family's `text` mode) without
+    `agent`: one user message, its text and the ONE image or audio part the family requires, through `generate`;
+  * /v1/completions — a family declaring `agent`: the raw prompt, no template (`generate`, chat_mode off);
+  * /v1/images/generations — a family with a prompt-only mode whose output is a `.png`;
+  * /v1/audio/speech — a family with a prompt-only mode whose output is a `.wav`;
+  * /v1/audio/transcriptions — a family with a `.txt` mode that requires `--audio`;
+  * /v1/embeddings — a family declaring an `embedding` mode (none in the catalogue today: refused by name).
+
+Every work request is one operation of the daemon (`ServingDaemon.run_operation`), on the one inference worker,
+behind every request of both doors.
+"""
+
+from __future__ import annotations
+
+import base64
+import binascii
+import json
+import shutil
+import time
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+from neurobrix.serving.openai_api import errors
+from neurobrix.serving.openai_api.turn import TurnReader, select_reasoning, typed_arguments
+
+# -- what each endpoint reads -------------------------------------------------------------------------------
+#: Parameters read by each endpoint. A key outside its set is refused by name; a key of `_NEUTRAL` is accepted
+#: only at the value that asks for nothing (what the engine does anyway), refused by name at any other.
+_CHAT_KEYS = {"model", "messages", "stream", "stream_options", "max_tokens", "max_completion_tokens",
+              "temperature", "top_p", "top_k", "repetition_penalty", "seed", "tools", "tool_choice",
+              "parallel_tool_calls", "user"}
+_COMPLETION_KEYS = {"model", "prompt", "stream", "stream_options", "max_tokens", "temperature", "top_p", "top_k",
+                    "repetition_penalty", "seed", "user"}
+_IMAGE_KEYS = {"model", "prompt", "n", "size", "response_format", "user", "seed", "steps", "guidance_scale"}
+_SPEECH_KEYS = {"model", "input", "voice", "response_format", "seed", "temperature"}
+_TRANSCRIPTION_KEYS = {"model", "file", "prompt", "response_format", "temperature"}
+
+_NEUTRAL = {
+    "n": (1,), "logprobs": (False, None), "top_logprobs": (None, 0), "stop": (None,), "echo": (False,),
+    "suffix": (None,), "best_of": (1, None), "frequency_penalty": (0, 0.0, None), "presence_penalty": (0, 0.0, None),
+    "logit_bias": (None,), "speed": (1, 1.0, None), "response_format": (None,), "store": (False, None),
+    "metadata": (None,), "service_tier": (None, "auto"), "reasoning_effort": (None,),
+}
+_WHY = {
+    "n": "one choice per request; send n requests",
+    "logprobs": "the decode does not return log-probabilities",
+    "top_logprobs": "the decode does not return log-probabilities",
+    "stop": "the decode does not stop on caller strings; it stops on the model's own end-of-turn",
+    "echo": "the prompt is not echoed",
+    "suffix": "no insertion mode",
+    "best_of": "one sample per request",
+    "frequency_penalty": "not a sampling control of the engine (it reads repetition_penalty)",
+    "presence_penalty": "not a sampling control of the engine (it reads repetition_penalty)",
+    "logit_bias": "the decode takes no logit bias",
+    "speed": "the speech flow has no speed control",
+    "store": "nothing is stored",
+    "metadata": "nothing is stored",
+    "service_tier": "one tier",
+    "reasoning_effort": "the reasoning length is the model's own",
+}
+
+
+def _is_neutral(key: str, value: Any) -> bool:
+    if key == "response_format" and isinstance(value, dict):
+        return value == {"type": "text"}
+    return any(value is a or (type(value) is type(a) and value == a) for a in _NEUTRAL[key])
+
+
+def _check_keys(body: Dict[str, Any], allowed: set, endpoint: str) -> None:
+    for key, value in body.items():
+        if key in allowed:
+            continue
+        if key in _NEUTRAL and _is_neutral(key, value):
+            continue
+        raise errors.unsupported(key, _WHY.get(key, f"{endpoint} does not read it"))
+
+
+def _number(body, key, kind=float, low=None, high=None):
+    if key not in body or body[key] is None:
+        return None
+    v = body[key]
+    ok = isinstance(v, (int, float)) and not isinstance(v, bool) if kind is float else \
+        isinstance(v, int) and not isinstance(v, bool)
+    if not ok or (low is not None and v < low) or (high is not None and v > high):
+        raise errors.invalid(f"`{key}` must be a {'number' if kind is float else 'integer'}"
+                             f"{f' >= {low}' if low is not None else ''}"
+                             f"{f' <= {high}' if high is not None else ''}, got {v!r}", key)
+    return v
+
+
+def _sampling(body) -> Dict[str, Any]:
+    out = {}
+    for key, kind, low, high in (("temperature", float, 0, None), ("top_p", float, 0, 1),
+                                 ("top_k", int, 0, None), ("repetition_penalty", float, 0, None),
+                                 ("seed", int, None, None)):
+        v = _number(body, key, kind, low, high)
+        if v is not None:
+            out[key] = v
+    return out
+
+
+# -- the family's declaration ---------------------------------------------------------------------------------
+class Served:
+    """What the loaded model's family declares, read once per request (the YAML is cached by the config layer)."""
+
+    def __init__(self, engine) -> None:
+        from neurobrix.core.config import get_family_config
+        self.family = engine.family or ""
+        cfg = get_family_config(self.family)
+        modes = cfg.get("modes") or {}
+        self.supported: List[str] = list(modes.get("supported") or [])
+        self.default_mode = modes.get("default")
+        self.strict = bool(modes.get("multimodal_strict"))
+        self.required: List[str] = list((cfg.get("inputs") or {}).get("required") or [])
+        self.ext: Dict[str, str] = dict((cfg.get("output") or {}).get("default_extension_per_mode") or {})
+
+    def mode_with(self, ext: str, prompt_only: bool) -> Optional[str]:
+        """The mode whose output has `ext` (the default mode first), when the family's required inputs allow a
+        request carrying only a prompt (`prompt_only`); None when the family serves no such mode."""
+        if prompt_only and any(r != "--prompt" for r in self.required):
+            return None
+        modes = [m for m in self.supported if self.ext.get(m) == ext]
+        if not modes:
+            return None
+        return self.default_mode if self.default_mode in modes else modes[0]
+
+    def mode_arg(self, mode: Optional[str]) -> Dict[str, Any]:
+        """The `mode` input of a multimodal-strict family (the others resolve their own)."""
+        return {"mode": mode} if (self.strict and mode is not None) else {}
+
+
+# -- helpers shared by the endpoints ---------------------------------------------------------------------------
+def _model(door, body) -> str:
+    served = door.model_id()
+    if "model" not in body:
+        raise errors.invalid("`model` is required", "model")
+    if body["model"] != served:
+        raise errors.model_not_found(body["model"], served)
+    return served
+
+
+def _run(door, handler, method: str, work, deliver=None) -> Tuple[Any, Dict[str, Any]]:
+    """One operation of the daemon for this HTTP request: admitted under the queue bound, run on the worker,
+    watched for a vanished client; returns (op, the result) or raises the OpenAI error."""
+    daemon = door.daemon
+    from neurobrix.serving.operations import ServerBusy
+    try:
+        op = daemon._ops.open(method, handler.requested_op_id(), max_queued=door.settings["http_max_queued"])
+    except ServerBusy as e:
+        raise errors.busy(str(e))
+    except ValueError as e:
+        raise errors.invalid(str(e), None, "op_id")
+    handler.op_id = op.op_id
+    door.watch(handler, op)
+    state, result = daemon.run_operation(op, work, deliver)
+    snap = daemon._ops.snapshot(op)
+    if snap["state"] == "failed":
+        raise errors.engine_failed(snap.get("detail") or "the request failed")
+    if snap["state"] in ("stopped",):
+        raise errors.ApiError(503, "the daemon is shutting down; the request was stopped", "server_error",
+                              None, "shutting_down")
+    return op, dict(result or {})
+
+
+def _spool(door, op_hint: str) -> Path:
+    path = door.spool_root / op_hint
+    path.mkdir(parents=True, exist_ok=False)
+    return path
+
+
+def _media_part(part: Dict[str, Any], spool: Path) -> Tuple[str, Path]:
+    """An `image_url` (a data URL) or `input_audio` (base64 + format) part, written to the request's spool."""
+    kind = part.get("type")
+    if kind == "image_url":
+        url = (part.get("image_url") or {}).get("url") if isinstance(part.get("image_url"), dict) else None
+        if not isinstance(url, str) or not url.startswith("data:"):
+            raise errors.unsupported("image_url", "only a data URL (data:image/...;base64,...) is read; the "
+                                     "server fetches nothing from the network")
+        head, _, data = url.partition(",")
+        if ";base64" not in head:
+            raise errors.invalid("an image data URL must be base64", "image_url")
+        suffix = "." + head[5:].split(";")[0].split("/")[-1]
+        payload, name = data, "image"
+        flag = "--input-image"
+    elif kind == "input_audio":
+        audio = part.get("input_audio") if isinstance(part.get("input_audio"), dict) else {}
+        payload, fmt = audio.get("data"), audio.get("format")
+        if not isinstance(payload, str) or not isinstance(fmt, str) or not fmt.isalnum():
+            raise errors.invalid("input_audio needs `data` (base64) and `format` (e.g. wav)", "input_audio")
+        suffix, name, flag = "." + fmt, "audio", "--audio"
+    else:
+        raise errors.unsupported(f"content part type {kind!r}", "a part is text, image_url or input_audio")
+    try:
+        raw = base64.b64decode(payload, validate=True)
+    except (binascii.Error, ValueError):
+        raise errors.invalid(f"the {kind} part is not valid base64", kind)
+    path = spool / f"{name}{suffix if suffix[1:].isalnum() else ''}"
+    path.write_bytes(raw)
+    return flag, path
+
+
+def _text_of(content, endpoint_param="messages") -> Tuple[str, List[Dict[str, Any]]]:
+    """A message's text and its non-text parts."""
+    if content is None:
+        return "", []
+    if isinstance(content, str):
+        return content, []
+    if not isinstance(content, list):
+        raise errors.invalid("a message's `content` is a string or a list of parts", endpoint_param)
+    texts, media = [], []
+    for part in content:
+        if not isinstance(part, dict):
+            raise errors.invalid("a content part is an object", endpoint_param)
+        if part.get("type") == "text":
+            texts.append(str(part.get("text", "")))
+        else:
+            media.append(part)
+    return "".join(texts), media
+
+
+def _template_messages(messages) -> List[Dict[str, Any]]:
+    """The caller's OpenAI messages as the chat template reads them (the transformers convention): text content,
+    an assistant's tool calls with their arguments as an object."""
+    if not isinstance(messages, list) or not messages:
+        raise errors.invalid("`messages` must be a non-empty list", "messages")
+    out = []
+    for i, m in enumerate(messages):
+        if not isinstance(m, dict) or m.get("role") not in ("system", "developer", "user", "assistant", "tool"):
+            raise errors.invalid(f"messages[{i}] needs a role among system, developer, user, assistant, tool",
+                                 "messages")
+        text, media = _text_of(m.get("content"))
+        if media:
+            raise errors.unsupported(f"messages[{i}].content", "this model's family reads text only")
+        role = "system" if m["role"] == "developer" else m["role"]
+        msg: Dict[str, Any] = {"role": role, "content": text}
+        if m.get("tool_calls"):
+            calls = []
+            for c in m["tool_calls"]:
+                fn = (c or {}).get("function") or {}
+                args = fn.get("arguments")
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args) if args.strip() else {}
+                    except json.JSONDecodeError:
+                        raise errors.invalid(f"messages[{i}].tool_calls: arguments is not JSON", "messages")
+                calls.append({"id": c.get("id"), "type": "function",
+                              "function": {"name": fn.get("name"), "arguments": args}})
+            msg["tool_calls"] = calls
+        for key in ("tool_call_id", "name"):
+            if key in m:
+                msg[key] = m[key]
+        out.append(msg)
+    return out
+
+
+def _call_record(op_id: str, index: int, call, tools) -> Dict[str, Any]:
+    arguments = typed_arguments(call.arguments, call.name, tools)
+    return {"id": f"call_{op_id}_{index}", "type": "function",
+            "function": {"name": call.name, "arguments": json.dumps(arguments, ensure_ascii=False)}}
+
+
+# -- endpoints ------------------------------------------------------------------------------------------------
+def models(door) -> Dict[str, Any]:
+    return {"object": "list", "data": [model_record(door)]}
+
+
+def model_record(door) -> Dict[str, Any]:
+    engine = door.daemon._engine
+    return {"id": door.model_id(), "object": "model", "created": door.started, "owned_by": "neurobrix",
+            "neurobrix": {"family": engine.family, "warm_serving": bool(getattr(engine, "_warm_serving", False))}}
+
+
+def chat_completions(door, handler, body) -> Optional[Dict[str, Any]]:
+    _check_keys(body, _CHAT_KEYS, "/v1/chat/completions")
+    model = _model(door, body)
+    engine = door.daemon._engine
+    served = Served(engine)
+    stream = bool(body.get("stream"))
+    include_usage = bool((body.get("stream_options") or {}).get("include_usage")) if stream else False
+    max_tokens = _number(body, "max_completion_tokens", int, 1)
+    if max_tokens is None:
+        max_tokens = _number(body, "max_tokens", int, 1)
+    decode = _sampling(body)
+    if max_tokens is not None:
+        decode["max_tokens"] = max_tokens
+    tools = body.get("tools") or None
+    choice = body.get("tool_choice")
+    if tools is not None:
+        if not isinstance(tools, list) or any((t or {}).get("type") != "function" for t in tools):
+            raise errors.invalid("`tools` is a list of {type: function, function: {...}}", "tools")
+    if choice not in (None, "auto", "none"):
+        raise errors.unsupported("tool_choice", "only `auto` and `none`: forcing a call needs constrained decoding, "
+                                 "which the engine does not do")
+    if body.get("parallel_tool_calls") is False:
+        raise errors.unsupported("parallel_tool_calls", "the number of calls a turn makes cannot be constrained")
+
+    tokenizer = engine.tokenizer
+    template = engine.chat_template_text()
+    if "agent" in served.supported:
+        messages = _template_messages(body.get("messages"))
+        parser = None
+        if tools:
+            from neurobrix.agent.parsers import select_parser
+            parser = select_parser(template)
+            if parser is None:
+                raise errors.not_served("/v1/chat/completions with tools", model, served.family,
+                                        "its chat template declares no tool-call format")
+            if choice == "none":
+                parser = None
+        reasoning = select_reasoning(template)
+        opens = False
+        if reasoning is not None:
+            kwargs = {"tools": tools} if tools else {}
+            prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, **kwargs)
+            opens = prompt.rstrip().endswith(reasoning[0])
+        reader = TurnReader(tokenizer, parser=parser, reasoning=reasoning, opens_in_reasoning=opens)
+        work = lambda: engine.complete_turn(messages, tools=tools, **decode)   # noqa: E731
+        spool = None
+    else:
+        mode = "chat" if "chat" in served.supported else ("text" if served.strict and "text" in served.supported
+                                                          else None)
+        if mode is None:
+            raise errors.not_served("/v1/chat/completions", model, served.family,
+                                    "its family declares no chat or text-answer mode")
+        if tools:
+            raise errors.not_served("/v1/chat/completions with tools", model, served.family,
+                                    "its family does not declare the agent mode")
+        messages = body.get("messages")
+        if not isinstance(messages, list) or len(messages) != 1 or (messages[0] or {}).get("role") != "user":
+            raise errors.unsupported("messages", f"a {served.family} model reads ONE user message (its text and "
+                                     "its media); it keeps no history")
+        text, media = _text_of(messages[0].get("content"))
+        spool = _spool(door, f"{int(time.time() * 1e6)}")
+        try:
+            params: Dict[str, Any] = {"prompt": text, **decode, **served.mode_arg(mode)}
+            given = {}
+            for part in media:
+                flag, path = _media_part(part, spool)
+                if flag in given:
+                    raise errors.unsupported("messages", f"one {part.get('type')} part per request")
+                given[flag] = path
+            for flag in ("--input-image", "--audio"):
+                if flag in served.required and flag not in given:
+                    raise errors.invalid(f"a {served.family} model needs a "
+                                         f"{'image_url' if flag == '--input-image' else 'input_audio'} part",
+                                         "messages")
+            for flag, path in given.items():
+                params["image_path" if flag == "--input-image" else "audio_path"] = str(path)
+        except Exception:
+            shutil.rmtree(spool, ignore_errors=True)
+            raise
+        reader = TurnReader(tokenizer) if tokenizer is not None else None
+        work = lambda: door.daemon._call_engine("generate", dict(params))   # noqa: E731
+        tools = None
+
+    created = int(time.time())
+    method = "complete" if "agent" in served.supported else "generate"
+    try:
+        if stream:
+            return _stream_chat(door, handler, method, model, created, reader, work, tools, include_usage)
+        op, result = _run(door, handler, method, work)
+    finally:
+        if spool is not None:
+            shutil.rmtree(spool, ignore_errors=True)
+    ids = result.get("token_ids")
+    if reader is not None and ids is not None:
+        for t in ids:
+            reader.push(t)
+        reader.finish()
+        turn = reader.turn
+        content, reasoning_text, calls = turn.content, turn.reasoning, turn.calls
+    else:
+        content, reasoning_text, calls = result.get("text", ""), "", []
+    message: Dict[str, Any] = {"role": "assistant", "content": content if (content or not calls) else None}
+    if reasoning_text:
+        message["reasoning_content"] = reasoning_text
+    if calls:
+        message["tool_calls"] = [_call_record(op.op_id, i, c, tools) for i, c in enumerate(calls)]
+    out = {"id": f"chatcmpl-{op.op_id}", "object": "chat.completion", "created": created, "model": model,
+           "choices": [{"index": 0, "message": message,
+                        "finish_reason": _finish(result, calls, ids)}]}
+    usage = _usage(result, ids)
+    if usage is not None:
+        out["usage"] = usage
+    return out
+
+
+def _finish(result, calls, ids) -> str:
+    if calls:
+        return "tool_calls"
+    bound = result.get("max_tokens")
+    if bound is not None and ids is not None and len(ids) >= int(bound):
+        return "length"
+    return "stop"
+
+
+def _usage(result, ids) -> Optional[Dict[str, int]]:
+    if result.get("prompt_tokens") is None or ids is None:
+        return None
+    p, c = int(result["prompt_tokens"]), len(ids)
+    return {"prompt_tokens": p, "completion_tokens": c, "total_tokens": p + c}
+
+
+def _stream_chat(door, handler, method, model, created, reader, work, tools, include_usage) -> None:
+    sse = handler.start_sse()
+    state = {"id": None, "calls": 0}
+
+    def chunk(delta, finish=None):
+        return {"id": state["id"], "object": "chat.completion.chunk", "created": created, "model": model,
+                "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
+
+    def send_deltas(deltas):
+        for d in deltas:
+            if d.channel == "content":
+                sse.send(chunk({"content": d.text}))
+            elif d.channel == "reasoning":
+                sse.send(chunk({"reasoning_content": d.text}))
+            else:
+                rec = _call_record(handler.op_id, state["calls"], d.call, tools)
+                sse.send(chunk({"tool_calls": [{"index": state["calls"], **rec}]}))
+                state["calls"] += 1
+
+    def deliver(step, n, token_id, done):
+        if state["id"] is None:
+            state["id"] = f"chatcmpl-{handler.op_id}"
+            sse.send(chunk({"role": "assistant", "content": ""}))
+        if reader is not None:
+            send_deltas(reader.push(token_id))
+
+    try:
+        op, result = _run(door, handler, method, work, deliver=lambda *a: sse.guard(deliver, *a))
+    except errors.ApiError as e:
+        sse.send(e.body())
+        sse.done()
+        return None
+    if state["id"] is None:
+        state["id"] = f"chatcmpl-{op.op_id}"
+        sse.send(chunk({"role": "assistant", "content": ""}))
+    ids = result.get("token_ids")
+    if reader is not None:
+        send_deltas(reader.finish())
+        calls = reader.turn.calls
+    else:
+        text = result.get("text", "")
+        if text:
+            sse.send(chunk({"content": text}))
+        calls = []
+    sse.send(chunk({}, _finish(result, calls, ids)))
+    if include_usage:
+        usage = _usage(result, ids)
+        sse.send({"id": state["id"], "object": "chat.completion.chunk", "created": created, "model": model,
+                  "choices": [], "usage": usage})
+    sse.done()
+    return None
+
+
+def completions(door, handler, body) -> Optional[Dict[str, Any]]:
+    _check_keys(body, _COMPLETION_KEYS, "/v1/completions")
+    model = _model(door, body)
+    engine = door.daemon._engine
+    served = Served(engine)
+    if "agent" not in served.supported:
+        raise errors.not_served("/v1/completions", model, served.family,
+                                "a raw-prompt completion is a language model's (a family declaring `agent`)")
+    prompt = body.get("prompt")
+    if not isinstance(prompt, str):
+        raise errors.unsupported("prompt", "one prompt string per request")
+    decode = _sampling(body)
+    mt = _number(body, "max_tokens", int, 1)
+    if mt is not None:
+        decode["max_tokens"] = mt
+    params = {"prompt": prompt, "chat_mode": False, **decode}
+    work = lambda: door.daemon._call_engine("generate", dict(params))   # noqa: E731
+    created = int(time.time())
+    if body.get("stream"):
+        sse = handler.start_sse()
+        reader = TurnReader(engine.tokenizer)
+
+        def deliver(step, n, token_id, done):
+            for d in reader.push(token_id):
+                sse.send({"id": f"cmpl-{handler.op_id}", "object": "text_completion", "created": created,
+                          "model": model, "choices": [{"index": 0, "text": d.text, "finish_reason": None}]})
+        try:
+            op, result = _run(door, handler, "generate", work, deliver=lambda *a: sse.guard(deliver, *a))
+        except errors.ApiError as e:
+            sse.send(e.body())
+            sse.done()
+            return None
+        tail = "".join(d.text for d in reader.finish())
+        sse.send({"id": f"cmpl-{op.op_id}", "object": "text_completion", "created": created, "model": model,
+                  "choices": [{"index": 0, "text": tail, "finish_reason": "stop"}]})
+        sse.done()
+        return None
+    op, result = _run(door, handler, "generate", work)
+    text = result.get("text", "")
+    return {"id": f"cmpl-{op.op_id}", "object": "text_completion", "created": created, "model": model,
+            "choices": [{"index": 0, "text": text, "finish_reason": "stop", "logprobs": None}]}
+
+
+def _binary(door, handler, endpoint, mode, params, ext) -> bytes:
+    """Run a generate whose output is a file of the family's own format; return its bytes."""
+    spool = _spool(door, f"{int(time.time() * 1e6)}")
+    try:
+        params = dict(params, output_path=str(spool / f"out{ext}"))
+        op, result = _run(door, handler, "generate", lambda: door.daemon._call_engine("generate", params))
+        saved = result.get("output_path")
+        if not saved or not Path(saved).is_file():
+            raise errors.engine_failed(f"{endpoint}: the flow wrote no {ext} file")
+        return Path(saved).read_bytes()
+    finally:
+        shutil.rmtree(spool, ignore_errors=True)
+
+
+def images_generations(door, handler, body) -> Dict[str, Any]:
+    _check_keys(body, _IMAGE_KEYS, "/v1/images/generations")
+    model = _model(door, body)
+    served = Served(door.daemon._engine)
+    mode = served.mode_with(".png", prompt_only=True)
+    if mode is None:
+        raise errors.not_served("/v1/images/generations", model, served.family,
+                                "its family has no prompt-only mode that writes an image")
+    if not isinstance(body.get("prompt"), str) or not body["prompt"]:
+        raise errors.invalid("`prompt` is required", "prompt")
+    fmt = body.get("response_format")
+    if fmt not in (None, "b64_json"):
+        raise errors.unsupported("response_format", "only b64_json: the server hosts no files to link to")
+    n = _number(body, "n", int, 1) or 1
+    params: Dict[str, Any] = {"prompt": body["prompt"], **served.mode_arg(mode)}
+    size = body.get("size")
+    if size not in (None, "auto"):
+        try:
+            w, h = (int(x) for x in str(size).lower().split("x"))
+        except ValueError:
+            raise errors.invalid(f"`size` is WIDTHxHEIGHT, got {size!r}", "size")
+        params["width"], params["height"] = w, h
+    steps = _number(body, "steps", int, 1)
+    if steps is not None:
+        params["steps"] = steps
+    cfg = _number(body, "guidance_scale", float, 0)
+    if cfg is not None:
+        params["cfg"] = cfg
+    seed = _number(body, "seed", int)
+    data = []
+    for i in range(n):
+        one = dict(params)
+        if seed is not None:
+            one["seed"] = seed + i
+        png = _binary(door, handler, "/v1/images/generations", mode, one, ".png")
+        data.append({"b64_json": base64.b64encode(png).decode("ascii")})
+    return {"created": int(time.time()), "data": data}
+
+
+def audio_speech(door, handler, body) -> bytes:
+    _check_keys(body, _SPEECH_KEYS, "/v1/audio/speech")
+    model = _model(door, body)
+    served = Served(door.daemon._engine)
+    mode = served.mode_with(".wav", prompt_only=True)
+    if mode is None:
+        raise errors.not_served("/v1/audio/speech", model, served.family,
+                                "its family has no prompt-only mode that writes audio")
+    if not isinstance(body.get("input"), str) or not body["input"]:
+        raise errors.invalid("`input` is required", "input")
+    if body.get("response_format") not in (None, "wav"):
+        raise errors.unsupported("response_format", "only wav: the engine ships no audio encoder")
+    params: Dict[str, Any] = {"prompt": body["input"], **served.mode_arg(mode)}
+    if body.get("voice") is not None:
+        params["speaker"] = body["voice"]
+    for key, kind in (("seed", int), ("temperature", float)):
+        v = _number(body, key, kind)
+        if v is not None:
+            params[key] = v
+    return _binary(door, handler, "/v1/audio/speech", mode, params, ".wav")
+
+
+def audio_transcriptions(door, handler, form: Dict[str, Any]) -> Any:
+    _check_keys(form, _TRANSCRIPTION_KEYS, "/v1/audio/transcriptions")
+    model = _model(door, form)
+    served = Served(door.daemon._engine)
+    if "--audio" not in served.required or not any(served.ext.get(m) == ".txt" for m in served.supported):
+        raise errors.not_served("/v1/audio/transcriptions", model, served.family,
+                                "its family does not answer an audio input with text")
+    upload = form.get("file")
+    if not isinstance(upload, tuple):
+        raise errors.invalid("`file` (multipart/form-data) is required", "file")
+    filename, raw = upload
+    fmt = form.get("response_format")
+    if fmt not in (None, "json", "text"):
+        raise errors.unsupported("response_format", "json or text: the flow returns no segment timings")
+    params: Dict[str, Any] = {}
+    prompt = form.get("prompt")
+    if "--prompt" in served.required and not prompt:
+        raise errors.invalid(f"a {served.family} model needs a `prompt` (the instruction it applies to the audio)",
+                             "prompt")
+    if prompt:
+        params["prompt"] = prompt
+    if form.get("temperature") not in (None, ""):
+        try:
+            params["temperature"] = float(form["temperature"])
+        except ValueError:
+            raise errors.invalid("`temperature` is a number", "temperature")
+    suffix = Path(filename or "").suffix
+    if not suffix[1:].isalnum():
+        suffix = ""
+    spool = _spool(door, f"{int(time.time() * 1e6)}")
+    try:
+        path = spool / f"audio{suffix}"
+        path.write_bytes(raw)
+        params["audio_path"] = str(path)
+        if served.strict:
+            params["mode"] = "text"
+        op, result = _run(door, handler, "generate", lambda: door.daemon._call_engine("generate", params))
+    finally:
+        shutil.rmtree(spool, ignore_errors=True)
+    text = result.get("transcription") if result.get("transcription") is not None else result.get("text", "")
+    if fmt == "text":
+        return str(text)
+    return {"text": str(text)}
+
+
+def embeddings(door, handler, body) -> Dict[str, Any]:
+    model = _model(door, body)
+    served = Served(door.daemon._engine)
+    why = ("its family declares no embedding output" if "embedding" not in served.supported
+           else "no embedding flow is wired in this engine")
+    raise errors.not_served("/v1/embeddings", model, served.family, why)

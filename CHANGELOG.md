@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **An OpenAI-compatible HTTP API on `neurobrix serve`** (`--http`, default `127.0.0.1:8765`, from
+  `config/system.yml`): `/v1/models`, `/v1/chat/completions` (streamed as Server-Sent Events, with tool calls parsed
+  on the server from the format the model's own chat template declares, and a thinking model's reasoning in
+  `reasoning_content`), `/v1/completions`, `/v1/images/generations`, `/v1/audio/speech` and
+  `/v1/audio/transcriptions`, each served when the loaded model's family has that flow. It is the same daemon as the
+  Unix socket — one model, one queue, one inference thread for both — so an OpenAI client and `neurobrix chat` share
+  the warm weights. A parameter the engine does not honour (`stop`, `logprobs`, `n` > 1, a forced `tool_choice`, ...)
+  is refused by name in the OpenAI error object, never ignored; a request beyond `serving.http_max_queued` waiting
+  ones gets 429; an address other than loopback needs `--api-key-file`; a port already taken is refused naming the
+  process that holds it. `/v1/embeddings` answers that no installed family declares an embedding output.
+- **granite-3.1's tool calls are read** in `chat --agent` and in the API: its template's format (a marker token, then
+  a JSON list) had no parser, and its marker is a special token that the answer's decode dropped.
+
 ### Changed
 - **Attribution**: author, maintainer and copyright holder Hocine Benkelaya (contact@neurobrix.es); a NOTICE file
   ships beside the LICENSE (supported and funded by Neural Network Holding Ltd, commercial distribution by WizWorks OÜ).

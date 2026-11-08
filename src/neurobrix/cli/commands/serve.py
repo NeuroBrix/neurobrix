@@ -83,11 +83,22 @@ def cmd_serve(args):
     log.debug(f"[Serve] {args.model} · hardware {hardware_id if args.hardware else 'auto-detect'} · mode {mode} · "
               f"idle timeout {timeout}s")
 
+    http = None
+    _http_flags = [f for f, v in (("--http-host", getattr(args, 'http_host', None)),
+                                  ("--http-port", getattr(args, 'http_port', None)),
+                                  ("--api-key-file", getattr(args, 'api_key_file', None))) if v is not None]
+    if getattr(args, 'http', False):
+        http = {"host": args.http_host, "port": args.http_port, "api_key_file": args.api_key_file}
+    elif _http_flags:
+        log.error(f"Error: {', '.join(_http_flags)} configure the HTTP API: add --http to open it.")
+        sys.exit(1)
+
     daemon = ServingDaemon(
         model_name=args.model,
         hardware_id=hardware_id,
         mode=mode,
         idle_timeout=float(timeout),
+        http=http,
     )
 
     daemon.start(foreground=foreground, ready_fd=getattr(args, 'ready_fd', None),
