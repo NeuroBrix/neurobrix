@@ -584,7 +584,8 @@ def _bind_target(hardware: Optional[str], profile: Optional[dict]) -> None:
         # every non-CUDA brand. The profile is resolved WITHOUT a target
         # (`vendor_profile_for_arch`), which is why that door exists.
         from nbxtensor.backend.device_names import arch_string
-        model = arch_string(dev.get("model"))
+        # the capability when it NAMES the compile target (Intel: "lnl", its device file's), else the model's arch string
+        model = cc.lower() if cc and not cc.replace(".", "").isdigit() else arch_string(dev.get("model"))
         if not model:
             raise RuntimeError(
                 "census: the hardware profile's device names no model, so no vendor profile "

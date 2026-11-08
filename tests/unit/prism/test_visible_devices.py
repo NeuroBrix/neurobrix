@@ -54,7 +54,7 @@ def four_gpus(monkeypatch):
     # process that could address none of it (caught by the CPU-only cell,
     # 2026-09-03). So the pins go through the cascade.
     monkeypatch.setattr(autodetect, "_parse_nvidia_smi", fake_smi)
-    monkeypatch.setattr(autodetect, "_parse_lspci", lambda: ([], "nvidia"))
+    monkeypatch.setattr(autodetect, "_parse_listed", lambda: ([], "nvidia"))
     return fake_smi
 
 

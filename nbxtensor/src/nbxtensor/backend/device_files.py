@@ -19,7 +19,8 @@ from typing import Any, Dict, Iterator, Optional, Tuple
 
 DEVICES = Path(__file__).resolve().parent / "devices"
 
-__all__ = ["DEVICES", "names", "read", "merge", "merged", "describe", "param", "in_force", "for_arch", "forget"]
+__all__ = ["DEVICES", "names", "read", "merge", "merged", "describe", "param", "in_force", "for_arch", "for_pci_id",
+           "forget"]
 
 
 @functools.lru_cache(maxsize=None)
@@ -121,6 +122,17 @@ def for_arch(arch: str) -> Dict[str, Any]:
     a derivation that binds no device), and recorded as the one in force."""
     from nbxtensor.ops import _configs
     return _configs.vendor_profile_for_arch(arch)
+
+
+def for_pci_id(vendor: str, device_id: int) -> Optional[Tuple[str, Dict[str, Any]]]:
+    """(name, description) of the device file of `vendor` whose `pci_device_ids` hold `device_id` (the PCI device id
+    the operating system or the device's runtime reports), None when no file lists it."""
+    for v, name, _path in names():
+        if v == vendor:
+            desc = describe(v, name)
+            if int(device_id) in [int(str(i), 0) for i in desc.get("pci_device_ids") or []]:
+                return name, desc
+    return None
 
 
 def forget() -> None:

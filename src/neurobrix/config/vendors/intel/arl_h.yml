@@ -1,0 +1,84 @@
+# Intel arl_h — NeuroBrix's half of the device (Prism's budgets and the engine's precision facts); the library's half is
+# nbxtensor/backend/devices/intel/arl_h.yml. Written 2026-11-08 from dg2.yml (first-launch detection of integrated GPUs).
+# validation_status: hand_curated_from_docs — no Intel card here; the memory rows are CDNA3's, not measured on it.
+# The token "cuda" is the engine's name for device memory on every backend (nbxtensor.backend.runtime.device_label).
+# Precision: Intel's oneAPI GPU optimization guide, "Intel Xe GPU architecture" (Xe-LPG with XMX (Intel Core Ultra 200H: Intel Arc graphics with XMX)); a type not listed is
+# declared unsupported (the engine then avoids it), never assumed.
+
+device_prefix: "cuda"
+
+# Kernel block sizes - AMD CDNA-optimized
+block_sizes:
+  # GEMM configuration - Matrix Core optimized
+  gemm:
+    block_m: 64
+    block_n: 64
+    block_k: 16          # Smaller K for AMD
+    num_warps: 4
+    num_stages: 2
+
+  # Resize/interpolation block size
+  resize: 256
+
+  # Softmax maximum reduction width
+  softmax_cap: 8192
+
+  # LayerNorm tile width
+  layernorm_tile: 1024
+
+  # GroupNorm maximum elements per group
+  groupnorm_cap: 65536
+
+# Memory constraints — CDNA3 (MI300) has 64 KB of LDS per workgroup, as CDNA1/2 (Triton v3.8.0
+# TargetFeatures.cpp; the 160 KB once written here is CDNA4's, gfx950). Revisit at first light.
+memory:
+  # the Triton arena's hold over the walked activations, while a component runs whole: not measured on this device —
+  # a Triton plan here is refused by name (`PrismSolver._live_activation_mb`)
+  triton_arena_activation_factor: null
+  compiled_stream_driver_over_price: null   # not measured on this device (C1, 2026-10-27): a stream chunk is priced at its tensors
+  # The compiled engine's torch caching allocator (core/runtime/torch_allocator.py; the measured
+  # case is in nvidia/volta.yml). ROCm's build of that allocator implements expandable segments on
+  # HIP's virtual-memory API (hipMemCreate / hipMemMap: c10/cuda/CUDACachingAllocator.cpp, the
+  # `defined(USE_ROCM)` branch of Note [Expandable Segments], and CUDAAllocatorConfig.h, which
+  # enables it for ROCM_VERSION >= 70000 — https://github.com/pytorch/pytorch/blob/v2.14.0/c10/cuda/CUDAAllocatorConfig.h)
+  # and reads the same setting (PYTORCH_ALLOC_CONF / PYTORCH_HIP_ALLOC_CONF:
+  # https://github.com/pytorch/pytorch/blob/v2.14.0/c10/core/AllocatorConfig.cpp). Below ROCm 7.0
+  # torch warns "expandable_segments not supported on this platform" and keeps fixed segments.
+  # compiled_allocator_settings: none — the XPU allocator of PyTorch reads no caching-allocator setting proven here
+  # THE COMPILED ENGINE'S ATTENTION: PyTorch dispatches scaled_dot_product_attention on this device to its flash or
+  # memory-efficient kernels, which never write the full scores (PyTorch SDPA tutorial; the Prism estimate prices
+  # the memory-efficient workspace, core/prism/memory_estimator.py). Nothing to chunk.
+  compiled_sdpa_full_scores: false
+  # Allocator pool: the most a smallest-fit hit may hand out beyond its request (fraction of the request,
+  # kernels/nbx_tensor.DeviceAllocator._pool_fit_slack): the surplus is held unpriced while the tensor lives.
+  # Exact-size hits only, as measured on Volta (volta.yml, 2026-10-22).
+  alloc_pool_fit_slack_fraction: 0.0
+
+  # Triton deferred-free queue policy (audit #2 F1, P-TRITON-LIVE-SET).
+  # PRESSURE-SENSITIVE: always drain at `cliff` (throughput ceiling — no
+  # runtime regression when the device has headroom), drain EARLY (queue >=
+  # floor) only when a throttled driver-free probe shows the device within
+  # `pressure_reserve` of capacity (avoids OOM; a slower run that fits beats
+  # an OOM). reserve <= 0 or keys absent -> cliff-only (prior behavior).
+  deferred_drain_cliff_bytes: 2000000000          # 2 GB — throughput ceiling
+  deferred_drain_floor_bytes: 268435456           # 256 MiB — pressure floor
+  deferred_drain_pressure_reserve_bytes: 6442450944  # 6 GiB free -> under pressure
+  deferred_drain_freecheck_interval: 8            # min ops between free probes
+
+# SMEM budget safety factor — see volta.yml comment. Same 0.7 across
+# vendors; if AMD wave64 changes the pipeline overhead, recalibrate.
+sdpa_smem_safety: 0.7
+
+# CDNA3 precision support
+precision:
+  supports_fp16: true
+  supports_bf16: true
+  supports_tf32: false
+  supports_fp8: false
+  supports_fp64: false
+  stores_fp64:
+    compiled: true
+    triton: false
+tiling:
+  extent_lattice: 16
+

@@ -5,8 +5,9 @@ An application may still provide its own answer through `nbxtensor.host` (NeuroB
 profile declares); with none provided, the library's reading here is the answer.
 
 - `host_shares_memory_with_device()`: Metal asks the device (`MTLDevice.hasUnifiedMemory`); CUDA asks the runtime
-  (`cudaDeviceGetAttribute(cudaDevAttrIntegrated)`, attribute 18 of the CUDA runtime API's `cudaDeviceAttr`). A
-  backend whose answer is not read here is refused by name.
+  (`cudaDeviceGetAttribute(cudaDevAttrIntegrated)`, attribute 18 of the CUDA runtime API's `cudaDeviceAttr`); Level
+  Zero asks the device (`ZE_DEVICE_PROPERTY_FLAG_INTEGRATED` of zeDeviceGetProperties). A backend whose answer is not
+  read here is refused by name.
 - `kernels_carry_fp64()`: whether the backend's kernels compute float64 — Metal: no (the Metal Shading Language has
   no double type); CUDA and HIP: yes (every NVIDIA and AMD GPU computes it, at whatever rate).
 - `memory_gb(memory_mb)` / `device_memory_gb(device_idx)`: a card's memory rounded to GB, the size a certified kernel
@@ -85,6 +86,9 @@ def host_shares_memory_with_device() -> bool:
             raise RuntimeError(f"ZERO FALLBACK: cudaDeviceGetAttribute(cudaDevAttrIntegrated) failed (error {rc}): "
                                f"whether this device shares the host's memory is not known")
         return bool(value.value)
+    if name == "xpu":
+        from . import level_zero as _ze
+        return bool(_ze.runtime().properties().flags & _ze._DEVICE_FLAG_INTEGRATED)
     raise RuntimeError(f"ZERO FALLBACK: whether a {name!r} device shares the host's memory is not read by nbxtensor; "
                        f"provide it (nbxtensor.host.provide('host_shares_memory_with_device', ...))")
 
