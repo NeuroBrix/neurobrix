@@ -143,14 +143,20 @@ neurobrix run --model TinyLlama-1.1B-Chat-v1.0 \
 `neurobrix import <org>/<name>` installs the model under `~/.neurobrix/cache/<name>`, and
 `--model` takes that `<name>`.
 
-To keep a model loaded between requests, start the serving daemon:
+### Serve and chat
+
+`neurobrix serve` keeps a model loaded in a background daemon between requests; `chat` talks to a language model
+through it, and `run` uses it when it serves the same model:
 
 ```bash
 neurobrix serve --model TinyLlama-1.1B-Chat-v1.0
-neurobrix chat                       # interactive multi-turn chat
+neurobrix chat                       # interactive multi-turn chat (/new, /context, /status, /quit)
 neurobrix run --prompt "Hello"       # --model can be omitted while a daemon is running
 neurobrix stop                       # stop the daemon and free GPU memory
 ```
+
+Whether the weights stay on the device between requests (warm) depends on the plan Prism chooses for the machine;
+`serve` says which. Details, including how a conversation and its KV cache behave today: [Serving and chat](docs/serving.md).
 
 ---
 
