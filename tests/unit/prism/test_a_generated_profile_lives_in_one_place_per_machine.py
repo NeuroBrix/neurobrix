@@ -16,6 +16,7 @@ from neurobrix.core.prism import autodetect as A
 from neurobrix.core.prism import loader as L
 
 
+@pytest.mark.engine_home_layout
 def test_the_generated_profiles_sit_beside_the_measured_facts():
     assert L.GENERATED_DIR.parent == calibration.STORE_ROOT.parent
     assert L.GENERATED_DIR != L.HARDWARE_DIR and L.HARDWARE_DIR.parent.parent == L.PROJECT_ROOT
