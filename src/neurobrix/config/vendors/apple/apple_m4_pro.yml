@@ -43,6 +43,10 @@ block_sizes:
   layernorm_tile: 1024
   groupnorm_cap: 65536
 memory:
+  # The compiled engine's device out-of-memory as MPS raises it: untyped (a plain TORCH_CHECK in MPSAllocator.mm
+  # alloc_buffer_block, read on pytorch main 2026-11-08; CUDA's allocator raises torch.OutOfMemoryError), so a run
+  # recognises it by this message to re-plan after it (core/runtime/replan.py, cli/commands/run.py _arm_replan).
+  compiled_untyped_oom_message: "MPS backend out of memory"
   # What the Triton arena holds while a component runs WHOLE, as a multiple of the walked activation figure (the live set
   # op by op), read by `PrismSolver._live_activation_mb`. MEASURED 2026-10-28 19:03 on this Mac, after S4a (split and
   # coalesce) and S4b (no parked block survives a device growth): HAT-L x4 triton at the judged request through the entry

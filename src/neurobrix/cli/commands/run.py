@@ -379,16 +379,58 @@ def request_input_config(args, manifest: dict, family, cache_path):
     return input_config
 
 
-def _record_compiled_growth(sampler, cache_path, hw_profile) -> None:
+def _record_compiled_growth(sampler, cache_path, hw_profile, stop: bool = True):
     """The MPS allocator's cache growth of a compiled run, for Prism (runtime_growth.COMPILED_MPS_METHOD), failed or not."""
     if sampler is not None and sampler.cache_start is not None and getattr(hw_profile, "devices", None):
         from neurobrix.core.runtime import runtime_growth as _rg
         from neurobrix.core.runtime.precision_contract import registry_model_name as _rmn
-        sampler.stop()
+        if stop:
+            sampler.stop()
         grown = _rg.record(_rmn(cache_path), "compiled", hw_profile.devices[0].architecture,
                            {0: sampler.cache_start / 2**20}, {0: sampler.cache_peak / 2**20})
         if grown is not None:
             log.debug(f"[RuntimeGrowth] the MPS allocator's cache grew {grown:.0f} MB during this run (recorded for Prism)")
+        return grown
+    return None
+
+
+def _record_triton_growth(growth, cache_path, hw_profile):
+    """What the Triton runtime grew to outside its allocator during this run, recorded for Prism (runtime_growth)."""
+    if growth is None:
+        return None
+    from neurobrix.core.runtime.precision_contract import registry_model_name as _rmn
+    _rg, _gdevs, _before = growth
+    grown = _rg.record(_rmn(cache_path), "triton", hw_profile.devices[0].architecture, _before, _rg.untracked_mb(_gdevs))
+    if grown is not None:
+        log.debug(f"[RuntimeGrowth] the triton runtime grew {grown:.0f} MB outside the allocator during this run "
+                  f"(recorded for Prism)")
+    return grown
+
+
+def _arm_replan(executor, execution_mode, container, hw_profile, input_config, cache_path, sampler, growth) -> None:
+    """The run's recovery from a device out-of-memory at a component (core/runtime/replan.py) with its engine's facts: its
+    OOM (compiled: torch's OutOfMemoryError or the vendor file's untyped message; triton: DeviceOOMError), its growth."""
+    from neurobrix.core.prism import PrismSolver
+    from neurobrix.core.runtime.replan import Replan, UNTYPED_OOM_KEY, in_chain
+    if execution_mode in ("compiled", "sequential"):
+        import torch
+        from neurobrix.core.config.loader import get_vendor_config
+        marks = {m for d in (getattr(hw_profile, "devices", None) or []) if not str(d.get_device_string()).startswith("cpu")
+                 for m in [(get_vendor_config(getattr(d.brand, "value", d.brand), d.architecture).get("memory") or {})
+                           .get(UNTYPED_OOM_KEY)] if m}
+        is_oom = lambda x: isinstance(x, torch.OutOfMemoryError) or any(m in str(x) for m in marks)
+        record = lambda: _record_compiled_growth(sampler, cache_path, hw_profile, stop=False)
+    else:
+        from nbxtensor.memory.allocator import DeviceOOMError
+        is_oom = lambda x: isinstance(x, DeviceOOMError)
+        record = lambda: _record_triton_growth(growth, cache_path, hw_profile)
+
+    def solve():
+        plan = PrismSolver().solve_smart(container, hw_profile, input_config, mode=execution_mode)
+        if getattr(plan, "execution_door", None):
+            raise RuntimeError(plan.execution_door)
+        return plan
+    executor.replan = Replan(is_device_oom=lambda e: in_chain(e, is_oom), record_growth=record, solve=solve)
 
 
 def cmd_run(args):
@@ -957,6 +999,7 @@ def cmd_run(args):
     if execution_mode in ("compiled", "sequential"):
         from neurobrix.core.device_utils import sampled_device_peak
         _sampled_peak = sampled_device_peak()      # MPS keeps no peak counter: its driver is read through the run
+    _arm_replan(executor, execution_mode, container, hw_profile, input_config, cache_path, _sampled_peak, _growth)
     try:
         _drain_device()
         t_exec_start = time.time()
@@ -984,14 +1027,7 @@ def cmd_run(args):
         _peak = DeviceAllocator.peak_device_bytes()
     log.debug(run_timings.format_peak(None if _peak is None else _peak / 2**20))
     _record_compiled_growth(_sampled_peak, cache_path, hw_profile)
-    if _growth is not None:
-        from neurobrix.core.runtime.precision_contract import registry_model_name as _rmn
-        _rg, _gdevs, _before = _growth
-        _grown = _rg.record(_rmn(cache_path), "triton", hw_profile.devices[0].architecture, _before,
-                            _rg.untracked_mb(_gdevs))
-        if _grown is not None:
-            log.debug(f"[RuntimeGrowth] the triton runtime grew {_grown:.0f} MB outside the allocator during this run "
-                      f"(recorded for Prism)")
+    _record_triton_growth(_growth, cache_path, hw_profile)
 
     # 7. Save output — DATA-DRIVEN by family YAML output_format
     family = pkg.manifest.get("family")
