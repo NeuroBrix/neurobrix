@@ -135,17 +135,22 @@ def write(path: Path, rows: Iterable[Dict]) -> int:
 
 @contextlib.contextmanager
 def locked(path: Path):
-    """The table's exclusive lock (a sidecar `<table>.lock`): every read-modify-write of a table
-    holds it — `replace_model` and every whole-table rewrite (consolidate, migrate). Readers need
-    none: `write` replaces the file atomically."""
+    """The table's exclusive lock, taken on the table's DIRECTORY (an flock on its descriptor): every
+    read-modify-write of a table holds it — `replace_model` and every whole-table rewrite (consolidate,
+    migrate). No file is created for it: a sidecar `<table>.lock` was left in the package directory by every
+    write and shipped empty (the packaging test, 2026-11-08). Readers need none: `write` replaces the file
+    atomically."""
     import fcntl
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(str(path) + ".lock", "a") as lk:
-        fcntl.flock(lk, fcntl.LOCK_EX)
+    fd = os.open(str(path.parent), os.O_RDONLY)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
         try:
             yield
         finally:
-            fcntl.flock(lk, fcntl.LOCK_UN)
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
 
 
 def replace_model(path: Path, model: str, rows: Iterable[Dict], keyless_ops: int = 0, former=()) -> Tuple[int, int]:

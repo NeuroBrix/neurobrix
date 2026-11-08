@@ -14,8 +14,8 @@ it — and every census-table row the same. Nothing is swept or re-proven.
     python tools/migrate_conv_fp16_key.py --directory src/neurobrix/config/autotune/nvidia/volta \\
         --tables src/neurobrix/config/census/nvidia/volta [--dry-run]
 
-Each file is rewritten under its own lock (the certifier's `.json.lock`, the census table's
-`.jsonl.lock`). Idempotent: a second run finds nothing to migrate. One tool for every vendor
+Each file is rewritten under its own lock (the certifier's `.json.lock`, the census table's lock
+on its directory, `census_table.locked`). Idempotent: a second run finds nothing to migrate. One tool for every vendor
 directory (the same kernel runs on Apple).
 """
 from __future__ import annotations

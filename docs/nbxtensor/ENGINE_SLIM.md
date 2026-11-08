@@ -30,8 +30,8 @@ moved into nbxtensor 0.0.7: the paged KV cache (`memory.paged_kv`, from triton/p
 bookkeeping (`memory.pages`, from core/state/pages.py, -181), the session record and the chunk row plan
 (`memory.kv_session`), the whole-page gather kernel and the chunk's masked attention (`memory.paged_kv.chunk_attention`,
 `ops.attention_wrappers.paged_kv_gather`). The serving session lost its summarisation (-79, -16, -4, -1). What stays,
-one row per file, is POLICY, and the header rose by exactly these lines, measured: 137 853 (main 1826a3da) + 772 kept
-- 658 moved or deleted = 137 967.
+one row per file, is POLICY, and the header rose by exactly these lines, measured: 137 853 (main 1826a3da) + 777 kept
+- 658 moved or deleted = 137 972.
 
 | file | lines | the policy it holds |
 |---|---|---|
@@ -45,7 +45,7 @@ one row per file, is POLICY, and the header rose by exactly these lines, measure
 | core/prism/prefill_chunk.py | +98 | Prism decides the session's prefill chunk from the certified times of its candidates |
 | core/prism/solver.py | +85 | Prism states the chunk and its reason in the plan, its record and `--explain-plan` |
 | core/state/price.py | +17 | the candidates Prism and the census share (whole pages up to the prefill a session is priced at) |
-| kernels/census_table.py | +37 | the chunk record Prism reads (`read_chunks`) and the container hash it matches it with |
+| kernels/census_table.py | +42 | the chunk record Prism reads (`read_chunks`) and the container hash it matches it with; the table's lock taken on its directory, no sidecar file left in the package |
 | core/runtime/executor.py, core/flow/base.py | +6, +4 | the request carries its session to the flow |
 | cli/commands/run.py, cli/__init__.py, cli/commands/registry.py, core/runtime/output_dispatch.py | +80, +4, +2, +1 | the CLI displays a session of turns (`run --turns`) and the family's "one of" requirement |
 

@@ -122,6 +122,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **No Triton warning on a first run**: the masked-fill kernel gave `tl.where` a uint8 condition, and Triton warned
   that this is deprecated at the first compile of a language model; the condition is now a boolean (the compiled code
   is identical).
+- **The kernel census leaves no lock file in the package**: every census table write left an empty
+  `<table>.jsonl.lock` beside the table inside the installed package; the table's write lock is now taken on its
+  directory and creates no file.
 - **A prompt longer than the release gate's no longer tunes kernels at its first run**: the kernel census keyed a
   language model's prompt lengths only up to the cache planned for the gate request (TinyLlama: 640 of its 2 048
   positions), so a longer prompt met kernel settings the certified directory did not hold. The plan now states how far a
