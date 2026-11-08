@@ -7,8 +7,8 @@ cropping the centre. Without the step the engine denoises at the literal request
 asked for 512 renders colour noise: the vendor's own output at native 512 (the Dell's vendor oracle, diffusers
 0.37.0, `use_resolution_binning=False` against `True`, 2026-09-26).
 
-Forge records what the vendor ran, at trace, under `flow.resolution_binning` (NeuroBrix_forge branch
-`resolution-binning-captured`, f8e5866), and nothing here re-codes a vendor table:
+The container build records what the vendor ran, at trace, under `flow.resolution_binning`, and nothing here
+re-codes a vendor table:
 
     {"default": bool,
      "source": "<PipelineClass>.__call__(use_resolution_binning)",
