@@ -91,6 +91,49 @@ def release_pinned_tables() -> int:
     return len(pinned)
 
 
+class TablePins:
+    """The holder of per-call pointer tables' pins (Metal; a CUDA table pins nothing) for a cache of experts that outlives
+    the call — an expert store. Releasing a per-call table's pins at its call's return dropped the last pin of a store's
+    arena: the next call re-wrapped it at a new GPU address while the store's stream could still read through the old
+    one (NaN, 2026-11-08); never releasing them (the SIMT decode bands' return, 2026-10-28) kept a wrap over every
+    expert a mapped store had let go, its pages resident until the machine swapped. Held here, they end when the holder
+    says (`end`: before the pages they cover are unbound, and at the store's release). A table whose wraps are already
+    held ends its own pins at once: the held pin keeps the refcount, so one pin is held per new set of wraps."""
+
+    def __init__(self):
+        self._pins, self._bases = [], set()
+
+    def hold(self, tables: "PtrTables") -> None:
+        for pin in tables.pins:
+            bases = {b for b in getattr(pin, "_resident_bases", ()) if b is not None}
+            if bases <= self._bases:
+                pin.__exit__(None, None, None)
+            else:
+                self._pins.append(pin)
+                self._bases |= bases
+        tables.pins = []
+
+    def end(self, cached: bool = False) -> None:
+        """End every held pin; `cached` also drops the cached tables that pin (`release_pinned_tables`) — before an
+        unbind, so no table outlives the pages it addresses."""
+        if cached:
+            release_pinned_tables()
+        for pin in self._pins:
+            pin.__exit__(None, None, None)
+        self._pins, self._bases = [], set()
+
+
+def end_call_pins(tables: "PtrTables", holder: "TablePins" = None, sync: bool = False) -> None:
+    """End a per-call table's pins: `holder` takes them when there is one (an expert store, `TablePins`); otherwise the
+    call ends them itself, after a device sync when `sync` (a launch path whose work was not drained)."""
+    if holder is not None:
+        holder.hold(tables)
+        return
+    if sync and tables.pins:
+        DeviceAllocator.sync_device()
+    tables.release_pins()
+
+
 class PtrTables:
     """Per-projection absolute pointer tables for zero-copy expert access.
 
