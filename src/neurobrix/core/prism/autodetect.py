@@ -2180,18 +2180,6 @@ def _detect_apple_max_allocation_mb() -> int:
         f"pyobjc-framework-Metal, which this reading needs; then run again to generate the hardware profile.")
 
 
-def _parse_mac_vram(vram_str: str) -> int:
-    """Parse macOS VRAM string like '4 GB' or '1536 MB'."""
-    if not vram_str:
-        return 0
-    m = re.search(r'(\d+)\s*(GB|MB)', str(vram_str), re.IGNORECASE)
-    if m:
-        val = int(m.group(1))
-        unit = m.group(2).upper()
-        return val * 1024 if unit == "GB" else val
-    return 0
-
-
 def _shorten_gpu_name(name: str) -> str:
     """Shorten GPU name for profile ID."""
     name = name.lower()
