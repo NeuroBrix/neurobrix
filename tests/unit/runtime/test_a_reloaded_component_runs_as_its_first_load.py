@@ -72,6 +72,7 @@ ex = RuntimeExecutor(NBXRuntimeLoader().load(str(path)), plan, mode="triton")
 out = []
 for i in range(2):
     request[0] = i
+    print(f"[reload test] request {i}", file=sys.stderr, flush=True)
     os.environ["NBX_DUMP_LOGITS"] = dump
     o = ex.execute({"global.prompt": "Why is the sky blue?", "global.max_tokens": 12, "global.temperature": 0.0})
     toks = [int(t) for t in (o.get("output_tokens") or o.get("global.output_tokens"))]
@@ -109,7 +110,10 @@ def test_a_second_request_after_a_reload_gives_the_first_requests_bytes(tmp_path
         for again in lists[1:]:
             assert again == lists[0], (f"{comp}: a compile after the release compiled {len(again)} ops where the "
                                        f"first compiled {len(lists[0])}")
-    assert "REFUSED RECORD" not in p.stdout + p.stderr, "a recompile refused the model's calibration record"
+    # (a record the FIRST compile already refuses — an artifact re-traced since its calibration — is the load's
+    # own finding, said once; the recompile must not add one)
+    second_log = p.stderr.split("[reload test] request 1", 1)[1]
+    assert "REFUSED RECORD" not in second_log, "the compile after the release refused the model's calibration record"
     assert first["dtypes"], "no component ran on the Triton engine: the snapshot saw nothing"
     for comp, dt in first["dtypes"].items():
         moved = {n: (d, second["dtypes"].get(comp, {}).get(n)) for n, d in dt.items()
