@@ -2836,6 +2836,11 @@ def report_contradictions(tuner, dropped) -> List[Dict[str, Any]]
     # with the configs the screen just excluded: any the directory certifies here is printed as a CONTRADICTION
 def contradictions() -> List[Dict[str, Any]]   # every such contradiction this process saw
 def generator_refusals() -> Dict[str, int]    # how many keys each kernel was refused for, by generator
+def generator_aliased() -> Dict[str, int]     # how many keys each kernel was served through a generator alias
+GENERATOR_ALIASES = "generator_aliases.json"   # a profile directory's aliases: a build proven to compile the same code
+def generator_aliases(profile_dir: Path) -> Dict[str, str]          # {from label: to label}; a refused file serves nothing
+def through_generator_alias(cert, gen, profile_dir) -> Optional[Tuple[Dict[str, Any], Tuple[str, str]]]   # ONE hop
+def validate_generator_aliases(doc, profile_dir: Path) -> List[str]  # the gate: identities, evidence, no chain/duplicate
 def reset() -> None                            # forget what this process loaded, refused, announced and served
 # keys
 def describe_key(tuner, key: tuple) -> str     # "M=1500 N=1280 K=1280 IEEE_PRECISION=True … fp32,fp16,fp32"

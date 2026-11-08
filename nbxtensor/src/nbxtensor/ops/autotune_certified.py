@@ -421,6 +421,12 @@ def covered_memory_gbs(entry: Dict[str, Any]) -> set:
 
 
 _GEN_REFUSED: Dict[str, int] = {}
+_GEN_ALIASED: Dict[str, int] = {}
+
+
+def generator_aliased() -> Dict[str, int]:
+    """How many keys each kernel was served through a generator alias. For a report."""
+    return dict(_GEN_ALIASED)
 
 
 def running_generator() -> Optional[str]:
@@ -1035,7 +1041,89 @@ def files(root: Optional[Path] = None) -> Iterator[Path]:
     base = root or directory()
     if not base.exists():
         return iter(())
-    return iter(sorted(base.glob("*/*/*.json")))
+    return iter(sorted(p for p in base.glob("*/*/*.json") if p.name != GENERATOR_ALIASES))
+
+
+# ---------------------------------------------------------------------------
+# generator aliases: a build proven to produce the SAME compiled code as another is served the other's certifications
+# ---------------------------------------------------------------------------
+#: In a profile's certified directory (its scope, never global): {"aliases": [{"from": <identity>, "to": <identity>,
+#: "evidence": {...}, "date", "decided_by"}]}. The owner, 2026-11-08 21:07: the macOS 14 Metal wheels compiled 235-236
+#: kernels byte-identical (.ttir/.ttgir/.msl/.metallib) to the published macOS 15 build's; they are aliased, not
+#: re-proven key by key. A proof naming the running generator always wins; an alias is one hop, never a chain.
+GENERATOR_ALIASES = "generator_aliases.json"
+_ALIASES: Dict[str, Dict[str, str]] = {}
+
+
+def _alias_label(ident: Any) -> Optional[str]:
+    if not isinstance(ident, dict) or not ident.get("triton") or not ident.get("name") or not ident.get("backend_hash"):
+        return None
+    return proof_backend({"backend": ident})
+
+
+def generator_aliases(profile_dir: Path) -> Dict[str, str]:
+    """{from label: to label} of this directory's alias file (empty when there is none). A file the gate refuses
+    serves nothing (`validate_generator_aliases`)."""
+    key = str(profile_dir)
+    if key not in _ALIASES:
+        path = Path(profile_dir) / GENERATOR_ALIASES
+        out: Dict[str, str] = {}
+        if path.is_file():
+            doc = json.loads(path.read_text(encoding="utf-8"))
+            problems = validate_generator_aliases(doc, Path(profile_dir))
+            if problems:
+                _say_once(f"[autotune] {path}: refused, nothing served through it ({'; '.join(problems[:3])})")
+            else:
+                out = {_alias_label(a["from"]): _alias_label(a["to"]) for a in doc["aliases"]}
+        _ALIASES[key] = out
+    return _ALIASES[key]
+
+
+def through_generator_alias(cert: Optional[Dict[str, Any]], gen: Optional[str],
+                            profile_dir: Path) -> Optional[Tuple[Dict[str, Any], Tuple[str, str]]]:
+    """(the certification, (from, to)) served to `gen` through ONE alias hop of this directory, or None. Asked only
+    when no proof names `gen` itself; the target's own proofs decide, never a further alias."""
+    to = generator_aliases(profile_dir).get(gen) if gen else None
+    if to is None:
+        return None
+    got = certification_for_generator(cert, to)
+    return (got, (gen, to)) if got is not None else None
+
+
+def validate_generator_aliases(doc: Any, profile_dir: Path) -> List[str]:
+    """The gate of an alias file: both identities well-formed, evidence and decision stated, no duplicate `from`, no
+    chain (a `to` that is also a `from`), and every `to` named by at least one proof of this directory."""
+    problems: List[str] = []
+    aliases = (doc or {}).get("aliases") if isinstance(doc, dict) else None
+    if not isinstance(aliases, list) or not aliases:
+        return ["no 'aliases' list"]
+    froms = [_alias_label(a.get("from")) if isinstance(a, dict) else None for a in aliases]
+    tos = [_alias_label(a.get("to")) if isinstance(a, dict) else None for a in aliases]
+    named = set()
+    for f in sorted(Path(profile_dir).glob("*.json")):
+        if f.name == GENERATOR_ALIASES:
+            continue
+        try:
+            for entry in (json.loads(f.read_text(encoding="utf-8")).get("entries") or {}).values():
+                named |= proof_backends(entry)
+        except (OSError, ValueError):
+            continue
+    for i, a in enumerate(aliases):
+        if froms[i] is None or tos[i] is None:
+            problems.append(f"alias {i}: 'from' and 'to' must each be a generator identity (triton, name, backend_hash)")
+            continue
+        ev = a.get("evidence")
+        if not isinstance(ev, dict) or not ev.get("sha256") or not (ev.get("path") or ev.get("files")):
+            problems.append(f"alias {i}: evidence missing (its file path and sha256)")
+        if not a.get("decided_by") or not a.get("date"):
+            problems.append(f"alias {i}: decided_by and date are required")
+        if froms.count(froms[i]) > 1:
+            problems.append(f"alias {i}: duplicate 'from' {froms[i]}")
+        if tos[i] in froms:
+            problems.append(f"alias {i}: chain — its 'to' {tos[i]} is itself aliased (one hop only)")
+        if tos[i] not in named:
+            problems.append(f"alias {i}: no proof in {profile_dir} names its 'to' {tos[i]}")
+    return problems
 
 
 # ---------------------------------------------------------------------------
@@ -1130,6 +1218,14 @@ def lookup(kernel_qual: str, tuner, key: tuple, ignore_switch: bool = False,
     matched = certification_for_generator(cert, gen)   # this class's certifications only, never another class's
     if matched is not None:
         return matched
+    aliased = through_generator_alias(cert, gen, file_for(ident[0], ident[1], kernel_qual, "x").parent)
+    if aliased is not None:
+        n = _GEN_ALIASED.get(kernel_qual, 0) + 1
+        _GEN_ALIASED[kernel_qual] = n
+        if n == 1:                        # once per kernel: the plan's explanation counts them all (generator_aliased)
+            print(f"[autotune] {kernel_qual}: served through the generator alias {aliased[1][0]} -> {aliased[1][1]} "
+                  f"(the same compiled code, proven: {GENERATOR_ALIASES})", flush=True)
+        return aliased[0]
     named = sorted({lab for c in class_certifications(cert) for p in certification_proofs(c) if (lab := proof_backend(p))})
     if not named:
         return cert                       # no proof of this class says: not a mismatch
@@ -1397,6 +1493,7 @@ def note_local(n: int) -> None:
 
 def reset() -> None:
     _LOADED.clear(); _LOADED_CLASS.clear(); _REFUSED.clear(); _ANNOUNCED.clear(); _EVICTED.clear(); _UNIT_CHOICES.clear()
+    _ALIASES.clear(); _GEN_ALIASED.clear()
     _SERVED.update({"certified": 0, "swept": 0, "local": 0})
 
 
