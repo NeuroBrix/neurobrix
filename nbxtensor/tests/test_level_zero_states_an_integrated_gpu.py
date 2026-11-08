@@ -69,6 +69,16 @@ def test_an_integrated_and_a_discrete_gpu_state_their_own_facts():
     assert bmg["integrated"] is False and bmg["memory_bytes"] == 12 * GIB and bmg["max_allocation_bytes"] == 12 * GIB
 
 
+def test_a_gpu_no_device_file_describes_is_no_device_of_the_runtime(monkeypatch):
+    """A Tiger Lake iGPU (0x9A49) beside a Battlemage card: Level Zero reports both, Intel's Triton targets only the card
+    — the iGPU is neither a fact the detection reads nor the runtime's device 0 nor what names the backend."""
+    lib = FakeZe([(0x9A49, 0x1, [12 * GIB], 4 * GIB, b"Intel(R) Iris(R) Xe Graphics"),
+                  (0xE20B, 0x0, [12 * GIB], 12 * GIB, b"Intel(R) Arc(TM) B580 Graphics")])
+    assert [f["pci_device_id"] for f in Z.gpu_facts(lib)] == [0xE20B]
+    assert Z._gpu_devices(lib) == [(0xD0, 0xE1)]
+    assert Z._gpu_devices(FakeZe([(0x9A49, 0x1, [12 * GIB], 4 * GIB, b"Iris Xe")])) == []
+
+
 def test_no_loader_is_no_answer_not_no_gpu(monkeypatch):
     monkeypatch.setattr(Z, "load_library", lambda: None)
     assert Z.gpu_facts() is None

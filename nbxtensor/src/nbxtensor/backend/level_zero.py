@@ -176,7 +176,8 @@ def load_library():
 
 
 def _gpu_devices(lib) -> list:
-    """[(driver, device)] of every GPU the loader reports, after zeInit(GPU only); [] when none or no driver."""
+    """[(driver, device)] of every GPU the loader reports that a device file describes, after zeInit(GPU only); [] when
+    none or no driver."""
     if lib.zeInit(ctypes.c_uint32(1)) != 0:            # ZE_INIT_FLAG_GPU_ONLY
         return []
     n = ctypes.c_uint32(0)
@@ -196,9 +197,16 @@ def _gpu_devices(lib) -> list:
         for dev in devs:
             props = _DeviceProps(stype=_ST_DEVICE_PROPERTIES_1_2)
             if lib.zeDeviceGetProperties(ctypes.c_void_p(dev), ctypes.byref(props)) == 0 \
-                    and props.type == _DEVICE_TYPE_GPU:
+                    and props.type == _DEVICE_TYPE_GPU and _described(props.deviceId):
                 out.append((drv, dev))
     return out
+
+
+def _described(device_id: int) -> bool:
+    """Whether a device file lists the PCI id: a GPU none describes has no compile target (a Tiger Lake iGPU: Intel's
+    Triton names none), so it is no device of this runtime — never the backend's device 0, never its probe's answer."""
+    from nbxtensor.backend import device_files
+    return device_files.for_pci_id("intel", int(device_id)) is not None
 
 
 @functools.lru_cache(maxsize=1)
@@ -215,8 +223,8 @@ _DEVICE_FLAG_INTEGRATED = 1
 
 
 def gpu_facts(lib=None) -> Optional[list]:
-    """What each GPU the Level Zero loader reports states of itself, in the runtime's device order (its index is the
-    runtime's): `pci_device_id`, `name`, `integrated` (ZE_DEVICE_PROPERTY_FLAG_INTEGRATED: the device draws on the
+    """What each GPU the Level Zero loader reports and a device file describes states of itself, in the runtime's device
+    order (its index is the runtime's): `pci_device_id`, `name`, `integrated` (ZE_DEVICE_PROPERTY_FLAG_INTEGRATED: the device draws on the
     host's memory), `memory_bytes` (its memory heaps, zeDeviceGetMemoryProperties: on an integrated GPU, the share of
     the host's memory the driver lets it hold) and `max_allocation_bytes` (maxMemAllocSize: the largest single
     allocation, which this runtime asks without the relaxed-limits extension). None when no loader is installed."""

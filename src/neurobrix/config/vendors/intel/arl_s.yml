@@ -7,13 +7,13 @@
 
 device_prefix: "cuda"
 
-# Kernel block sizes - AMD CDNA-optimized
+# Kernel block sizes — CDNA3's conservative rows, copied (analytical: owed on an Intel device)
 block_sizes:
   # GEMM configuration - Matrix Core optimized
   gemm:
     block_m: 64
     block_n: 64
-    block_k: 16          # Smaller K for AMD
+    block_k: 16
     num_warps: 4
     num_stages: 2
 
@@ -29,8 +29,8 @@ block_sizes:
   # GroupNorm maximum elements per group
   groupnorm_cap: 65536
 
-# Memory constraints — CDNA3 (MI300) has 64 KB of LDS per workgroup, as CDNA1/2 (Triton v3.8.0
-# TargetFeatures.cpp; the 160 KB once written here is CDNA4's, gfx950). Revisit at first light.
+# Memory policy — the rows below are CDNA3's, copied (analytical); the device's shared local memory is the library
+# half's (nbxtensor/backend/devices/intel). Revisit at first light.
 memory:
   # the Triton arena's hold over the walked activations, while a component runs whole: not measured on this device —
   # a Triton plan here is refused by name (`PrismSolver._live_activation_mb`)
@@ -66,10 +66,10 @@ memory:
   deferred_drain_freecheck_interval: 8            # min ops between free probes
 
 # SMEM budget safety factor — see volta.yml comment. Same 0.7 across
-# vendors; if AMD wave64 changes the pipeline overhead, recalibrate.
+# vendors; recalibrate on an Intel device.
 sdpa_smem_safety: 0.7
 
-# CDNA3 precision support
+# Precision support (the header's source)
 precision:
   supports_fp16: true
   supports_bf16: false

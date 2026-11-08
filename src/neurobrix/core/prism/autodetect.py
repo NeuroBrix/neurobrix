@@ -138,15 +138,18 @@ _NVLINK_BW_PER_LINK = {
 }
 
 # ---------------------------------------------------------------------------
-# PCI vendor IDs — for lspci fallback detection
+# PCI vendor IDs — the GPUs the operating system lists, named (`_listed_gpus`, `_refused`). Sources: pciutils'
+# pci.ids (8086 Intel, 10de NVIDIA, 1002 AMD/ATI, 106b Apple, 1ed5 Moore Threads); 1e52 Tenstorrent (the
+# PCI_VENDOR_ID_TENSTORRENT of the linux-pci patch "Add PCI quirk for Tenstorrent Blackhole", 2026-08; this map
+# said 1e52 = moore_threads and 1e56 = tenstorrent before); biren, iluvatar and cambricon as first written, not verified.
 # ---------------------------------------------------------------------------
 _PCI_VENDOR_MAP = {
     "10de": "nvidia",
     "1002": "amd",
     "8086": "intel",
     "106b": "apple",
-    "1e52": "moore_threads",
-    "1e56": "tenstorrent",
+    "1ed5": "moore_threads",
+    "1e52": "tenstorrent",
     "1f36": "biren",
     "d100": "iluvatar",
     "cabc": "cambricon",
@@ -923,11 +926,9 @@ def _detect_gpus_darwin() -> Tuple[List[Dict[str, Any]], str]:
     system_profiler → no device
     """
     devices = _parse_system_profiler()
-    if _driven(devices):
-        brand = _driven(devices)[0].get("brand", "apple")
-        return devices, brand
     if devices:
-        return devices, "none"
+        brand = devices[0].get("brand", "apple")
+        return devices, brand
 
     return _NO_DEVICE
 
