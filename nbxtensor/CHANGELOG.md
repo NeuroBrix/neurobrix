@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Integrated GPUs described from the device**: `backend.level_zero.gpu_facts` reads an Intel GPU's integrated flag,
+  usable memory and largest single allocation (`maxMemAllocSize`) from Level Zero; `backend.device_files.for_pci_id`
+  finds a device file by PCI id; `backend.install_help.pci_display_devices` lists the display controllers on the PCI
+  bus. Device files for Meteor Lake, Arrow Lake (H, S) and Panther Lake (H, U), the compile targets Intel's Triton
+  knows (copied from the closest validated file: unvalidated on hardware, said in each file).
+- **Level Zero lists only the GPUs a device file describes**: a GPU no backend drives is no longer usable as device 0.
+
 ### Changed
 - **A kernel served through a generator alias says so in the debug log, not on the terminal**: the line
   appeared once per kernel at default verbosity (6 to 9 lines on a plain run under a macOS 14 wheel); it is a
