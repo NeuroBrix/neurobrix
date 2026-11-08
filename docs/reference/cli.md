@@ -63,6 +63,10 @@ neurobrix serve --model <name> [--hardware <profile>] [options]
 | `--triton-sequential` | Triton kernels op-by-op (debug) | false |
 | `--ready-fd` | POSIX: inherited pipe fd that receives the ready record (one JSON line), then is closed | — |
 | `--ready-file` | File the ready record is written to, whole, once the daemon accepts | — |
+| `--http` | Also serve the OpenAI-compatible HTTP API (`/v1/...`) on this daemon ([Serving](../serving.md#openai-compatible-http-api)) | off |
+| `--http-host` | Address of the HTTP API (with `--http`); an address other than loopback needs `--api-key-file` | `serving.http_host` (127.0.0.1) |
+| `--http-port` | Port of the HTTP API (with `--http`) | `serving.http_port` (8765) |
+| `--api-key-file` | A file holding the key every HTTP request must send as `Authorization: Bearer <key>` | none |
 
 At most one engine flag. Without `--foreground`, `serve` returns once the model is loaded and prints
 `[Serve] Model loaded — <model> (<family>, warm serving)` (or `cold serving`), or `[Serve] Failed: <error>` with exit

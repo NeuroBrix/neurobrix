@@ -179,7 +179,9 @@ launcher waits for it instead of retrying connections:
 ```
 
 `state` is `ready` or `failed`; a failed daemon exits after saying it. The
-identity fields are those of `neurobrix info --json`. The record is delivered:
+identity fields are those of `neurobrix info --json`. A daemon started with
+`--http` adds `"http": {"host", "port", "base_url", "auth"}` to its ready
+record and to `status` (an addition: the protocol version is unchanged). The record is delivered:
 
 | to | how | for |
 |---|---|---|

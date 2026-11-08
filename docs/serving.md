@@ -210,7 +210,7 @@ for `run`); it is not re-planned between requests.
 | macOS, Linux | Unix domain socket, `daemon.sock` in the engine home (or `NBX_SOCKET_PATH`) |
 | Windows | TCP on `127.0.0.1` only: a fixed port for the default instance, a port chosen by the OS (written to `<stem>.port`) for a named instance |
 
-Nothing listens on a network interface; there is no HTTP layer. Each message is a 4-byte big-endian length followed by
+Nothing listens on a network interface unless `serve --http` opens [the HTTP API](#openai-compatible-http-api). Each message is a 4-byte big-endian length followed by
 one UTF-8 JSON object of at most 64 MiB. Every request carries `protocol` (today `1`), `method` and `params`.
 
 | method | kind | what it does |
@@ -228,8 +228,10 @@ one UTF-8 JSON object of at most 64 MiB. Every request carries `protocol` (today
 the engine does not read is refused by name before anything runs. The full field lists are in
 [Methods](reference/wire-protocol.md#6-methods).
 
-**One inference at a time.** `generate`, `chat`, `complete` and `new_chat` take one lock: a work request that arrives
-while another runs waits (its state is `queued`). `status`, `cancel`, `template` and `shutdown` are answered while a
+**One inference at a time, on one thread.** Every engine call — the load, `generate`, `chat`, `complete`,
+`new_chat`, the unload — runs on one long-lived inference thread of the daemon, in arrival order, whichever door
+(the socket or [the HTTP API](#openai-compatible-http-api)) and connection sent it: a work request that arrives while
+another runs waits (its state is `queued`). `status`, `cancel`, `template` and `shutdown` are answered while a
 generation runs, from any other connection.
 
 **Operations.** Every work request is an operation with an id: the client's (`op_id` in the request) or one the daemon
@@ -359,6 +361,134 @@ start a new conversation (`/new`). The reply's `summarized` field stays in the p
 | `usage_pct` | `tokens / max_context`, in percent |
 | `cached_tokens` | the positions the session's KV cache holds |
 | `last_turn` | the last turn's `prompt`, `matched`, `prefilled`, `padded` and `held` token counts |
+
+---
+
+## OpenAI-compatible HTTP API
+
+`neurobrix serve --http` opens, on the same daemon, an HTTP server that speaks the OpenAI API: the same loaded model,
+the same queue and the same inference thread as the socket, so an OpenAI client, `neurobrix chat` and `neurobrix run`
+share the warm weights and wait for each other.
+
+```bash
+neurobrix serve --model TinyLlama-1.1B-Chat-v1.0 --http          # http://127.0.0.1:8765/v1
+```
+
+It listens on `serving.http_host:serving.http_port` of `config/system.yml` (`127.0.0.1:8765`) unless `--http-host` /
+`--http-port` say otherwise. An address other than loopback is refused without `--api-key-file <file>`; with a key,
+every request sends `Authorization: Bearer <key>` (401 otherwise). A port already taken is refused at start, naming
+the process that holds it. `serve` prints `OpenAI-compatible API: <base_url>`; the ready record and `status` carry
+`http`. A request within the last `--timeout` seconds keeps the daemon from exiting idle.
+
+### Endpoints
+
+Which endpoints a model serves is read from its family's declaration (`config/families/<family>.yml`), not from its
+name. An endpoint the loaded family does not serve answers 409 `model_does_not_serve_endpoint`, naming why.
+
+| endpoint | served for | what runs |
+|---|---|---|
+| `GET /v1/models`, `GET /v1/models/{id}` | every model | the one loaded model |
+| `POST /v1/chat/completions` | a family declaring the `agent` mode (`llm`) | your messages through the model's chat template (the daemon keeps no history for them); `tools` too |
+| | a family declaring `chat` (`vlm`, `audio_llm`) or a multimodal family's `text` mode | ONE user message: its text and the one `image_url` (a `data:` URL) or `input_audio` part the family needs |
+| `POST /v1/completions` | `llm` | the raw prompt, no chat template |
+| `POST /v1/images/generations` | a family with a prompt-only mode that writes an image (`image`, a multimodal family's `image` mode) | `data[].b64_json` (PNG); `size` = `WIDTHxHEIGHT`; `n` images, `seed`, `seed+1`, ...; extensions `steps`, `guidance_scale` |
+| `POST /v1/audio/speech` | a family with a prompt-only mode that writes audio (`tts`) | `input` spoken with `voice` as the speaker; the body is WAV |
+| `POST /v1/audio/transcriptions` | a family that answers an audio input with text (`stt`, `audio_llm`) | the uploaded `file` (multipart); `audio_llm` needs `prompt`, its instruction; `response_format` `json` or `text` |
+| `POST /v1/embeddings` | a family declaring an `embedding` output — none today | refused by name |
+
+Every request names the loaded model in `model`; another name answers 404 `model_not_found`. The response header
+`X-NeuroBrix-Op-Id` carries the request's operation id (a client may choose it by sending the same header): the
+socket's `cancel` stops it, and a client that disconnects stops it at the next token (`orphaned`).
+
+### What is read, what is refused
+
+Chat and completions read `max_tokens` / `max_completion_tokens`, `temperature`, `top_p`, `seed`, `stream`,
+`stream_options.include_usage`, `tools`, `tool_choice` (`auto`, `none`), `user`, and the engine's `top_k` and
+`repetition_penalty`. A parameter the engine does not honour is refused by name (400, `param` names it) — `stop`,
+`logprobs`, `n` > 1, `frequency_penalty` / `presence_penalty` other than 0, `logit_bias`, `response_format` other
+than text, `tool_choice: "required"` or a named function and `parallel_tool_calls: false` (forcing or limiting calls
+needs constrained decoding, which the engine does not do). Their neutral values (`n: 1`, `stop: null`, ...) are
+accepted. A request that finds `serving.http_max_queued` others already waiting gets 429 `server_busy`. An engine
+failure — a device out of memory, a named refusal — answers 500 with its message, and the daemon serves on.
+
+Errors are always the OpenAI error object: `{"error": {"message", "type", "param", "code"}}`.
+
+### Tool calls and reasoning
+
+The server parses the answer. The tool-call format is the one the model's chat template declares, read from the
+template's markers: `<tool_call>{"name", "arguments"}</tool_call>` (JSON), `<tool_call><function=…><parameter=…>`
+(XML; each value is read with its JSON-schema type from your `tools`), and a marker token followed by a JSON list
+(`<|tool_call|>[...]`). A template that declares none refuses `tools` by name. Calls come back as
+`message.tool_calls` with `finish_reason: "tool_calls"`; a block that opened like a call but does not parse is kept in
+`content`, never dropped. When the template declares thinking markers (`<think>` … `</think>`), the reasoning is in
+`reasoning_content` and `content` holds the answer only. Send the history back as OpenAI messages (an assistant's
+`tool_calls`, then `role: "tool"` messages): the template receives the arguments as objects, as it expects.
+
+### Streaming
+
+With `"stream": true` the answer is Server-Sent Events: `data: <chat.completion.chunk>` lines — the first with
+`delta.role`, then `delta.content` / `delta.reasoning_content` as the text becomes final, each tool call whole once
+its block closes (`delta.tool_calls[{index, id, type, function}]`), a last chunk with `finish_reason`, a usage chunk
+when `stream_options.include_usage` is set — then `data: [DONE]`. Text is held back only while the last token may
+still change it or while it could be the start of a marker: a token or a few, never the turn.
+
+### Examples
+
+```bash
+curl -s http://127.0.0.1:8765/v1/models
+
+curl -s http://127.0.0.1:8765/v1/chat/completions -H 'Content-Type: application/json' -d '{
+  "model": "TinyLlama-1.1B-Chat-v1.0",
+  "messages": [{"role": "user", "content": "What is a KV cache?"}], "max_tokens": 128}'
+
+curl -sN http://127.0.0.1:8765/v1/chat/completions -H 'Content-Type: application/json' -d '{
+  "model": "TinyLlama-1.1B-Chat-v1.0", "stream": true,
+  "messages": [{"role": "user", "content": "Count to five."}]}'
+
+curl -s http://127.0.0.1:8765/v1/images/generations -H 'Content-Type: application/json' \
+  -d '{"model": "PixArt-Sigma-XL-2-1024-MS", "prompt": "a lighthouse at dusk"}' \
+  | python3 -c 'import sys, json, base64; open("out.png", "wb").write(base64.b64decode(json.load(sys.stdin)["data"][0]["b64_json"]))'
+
+curl -s http://127.0.0.1:8765/v1/audio/transcriptions -F model=whisper-large-v3-turbo -F file=@speech.wav
+
+curl -s http://127.0.0.1:8765/v1/audio/speech -H 'Content-Type: application/json' \
+  -d '{"model": "Kokoro-82M", "input": "Hello from NeuroBrix."}' -o hello.wav
+```
+
+With the OpenAI Python client (`pip install openai`, on the client side; the engine does not need it):
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://127.0.0.1:8765/v1", api_key="unused")   # the key file's content when the door has one
+model = client.models.list().data[0].id
+
+tools = [{"type": "function", "function": {
+    "name": "get_weather", "description": "Current weather of a city",
+    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}}}]
+reply = client.chat.completions.create(model=model, tools=tools,
+                                       messages=[{"role": "user", "content": "Weather in Paris?"}])
+print(reply.choices[0].finish_reason, reply.choices[0].message.tool_calls)
+
+for chunk in client.chat.completions.create(model=model, stream=True,
+                                            messages=[{"role": "user", "content": "Tell me a story."}]):
+    if chunk.choices and chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="", flush=True)
+```
+
+### Settings
+
+In the `serving:` section of `config/system.yml`, read when the door opens (each is then required):
+
+| key | shipped value | meaning |
+|---|---|---|
+| `http_host` | `127.0.0.1` | default address |
+| `http_port` | 8765 | default port (not 5000 or 7000, which macOS's AirPlay receiver holds) |
+| `http_max_queued` | 8 | HTTP requests allowed to wait at once (both doors' waiting requests counted); one more gets 429 |
+| `http_max_body_mb` | 64 | the largest request body (an upload, a base64 image) |
+
+The in-run re-plan that `neurobrix run` gets on a busy machine is not armed for a served request yet; a request that
+does not fit the memory left answers 500 with the named refusal, and the daemon stays loaded.
 
 ---
 
