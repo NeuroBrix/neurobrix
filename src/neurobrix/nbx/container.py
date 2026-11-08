@@ -440,8 +440,9 @@ class NBXContainer:
             # Skip weights (lazy loaded by executor)
             if ".safetensors" in rel_path:
                 continue
-            # Skip already processed files
-            if rel_path in ("manifest.json", "config.json"):
+            # Skip already processed files, and the machine's name record (nbx/names.py), no container's file
+            from neurobrix.nbx.names import RECORD as _NAME_RECORD
+            if rel_path in ("manifest.json", "config.json", _NAME_RECORD):
                 continue
             # Skip component-level files (handled by _load_components_from_cache)
             if rel_path.startswith("components/"):

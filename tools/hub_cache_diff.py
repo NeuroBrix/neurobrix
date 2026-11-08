@@ -52,6 +52,8 @@ from typing import Dict, List, Optional
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "tools"))
 import repo_env  # noqa: E402
+sys.path.insert(0, str(REPO / "src"))
+from neurobrix.nbx.names import container_files  # noqa: E402  (an entry's files minus the machine's name record)
 
 CACHE = _atelier.root("cache")
 HUB_MAP = _atelier.root("campaigns") / "retrace_2026_09_07" / "hub_map.json"
@@ -299,7 +301,7 @@ def cache_index(cdir: Path) -> dict:
 
 def cache_all_files(cdir: Path) -> Dict[str, str]:
     """Every file of the cache container, sha256 by its arcname — the SOURCE a hub object is verified against."""
-    return {str(p.relative_to(cdir)): sha_bytes(p.read_bytes()) for p in sorted(x for x in cdir.rglob("*") if x.is_file())}
+    return {str(p.relative_to(cdir)): sha_bytes(p.read_bytes()) for p in container_files(cdir)}
 
 
 def verify_members(source: Dict[str, str], hub: Dict[str, str]) -> List[str]:
@@ -463,7 +465,7 @@ def repack_from_cache(cdir: Path, dest: Path) -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(".nbx.part")
     with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as zf:
-        for p in sorted(x for x in cdir.rglob("*") if x.is_file()):
+        for p in container_files(cdir):
             zf.write(p, str(p.relative_to(cdir)))
     os.replace(tmp, dest)
     return dest

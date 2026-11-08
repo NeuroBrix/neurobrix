@@ -89,3 +89,12 @@ def resolve(cache: Path, asked: str) -> Tuple[str, Optional[str]]:
             raise NameRefused(f"the model installed as {asked} is named {rec}: use --model {rec}")
         return asked, migration_note(asked)
     return asked, None
+
+
+def container_files(entry: Path):
+    """The files of a cache entry that belong to its CONTAINER, sorted: every file but the local name record, which
+    this machine's `import` wrote beside the manifest and which no `.nbx` carries. A tool that verifies an entry
+    against its hub object, repacks it, or fingerprints it reads this list, never the raw tree."""
+    entry = Path(entry)
+    record = entry / RECORD
+    return sorted(p for p in entry.rglob("*") if p.is_file() and p != record and not p.name.startswith(f".{RECORD}."))
