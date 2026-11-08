@@ -28,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   says so in one line (it re-downloaded 131 MB on every call).
 
 ### Fixed
+- **`neurobrix autotune certify --reprove-generator` no longer un-serves the build it re-proves from**: re-proving a
+  certified directory under a new code generator replaced each entry's one proof, so the published build lost every
+  key (54 of 54 on one Apple kernel). The new proof is now added beside the others and each generator is served its
+  own certification. `tools/certified_rename_generator.py`, `tools/migrate_conv_fp16_key.py`,
+  `tools/merge_certified_class.py` and `tools/reproof_coverage.py` read every proof of an entry.
+
 - **A run that runs out of device memory in a component re-plans and goes on instead of failing**: when a
   component meets a device out-of-memory (`python -m neurobrix run`, both engines), the run records the memory growth it
   measured, releases the device's cache, asks Prism for a plan again with that measure in force and runs the component

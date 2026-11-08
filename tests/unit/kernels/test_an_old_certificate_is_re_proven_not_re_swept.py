@@ -84,9 +84,13 @@ def test_a_stored_configuration_is_re_proven_under_the_served_generator_with_one
     assert summary.get("reproven", 0) == 1 and summary.get("swept", 0) == 0, summary
     assert len(benches) == 1, f"one configuration is timed once, not the whole space ({len(benches)} benches)"
     assert entry["config"] == first["config"], "the stored configuration is kept, not re-ranked"
-    assert C.proof_backend(entry["proof"]) == C.proof_backend({"backend": Z._backend()}), "served under the running generator"
-    assert entry["proof"].get("reproven_from") == C.proof_backend({"backend": old_backend}), "recorded as re-proven from the retired generator"
-    assert entry["proof"]["candidates"] == 1 and entry["proof"]["accepted"] == 1
+    running = C.proof_backend({"backend": Z._backend()})
+    served = C.certification_for_generator(entry, running)
+    assert served is not None and served["config"] == first["config"], "served under the running generator"
+    assert C.proof_backend(entry["proof"]) == C.proof_backend({"backend": old_backend}), \
+        "the earlier generator's proof stays beside the new one (a certification carries one proof per generator)"
+    assert served["proof"].get("reproven_from") == C.proof_backend({"backend": old_backend}), "recorded as re-proven from the earlier generator"
+    assert served["proof"]["candidates"] == 1 and served["proof"]["accepted"] == 1
 
 
 def test_a_stored_configuration_that_fails_the_oracle_is_swept_and_the_reason_counted(root, monkeypatch):
@@ -123,8 +127,11 @@ def test_a_stored_configuration_that_fails_the_oracle_is_swept_and_the_reason_co
     assert summary.get("reproven", 0) == 0 and summary.get("swept", 0) == 1, summary
     assert summary.get("swept_why", {}).get("stored configuration failed the oracle") == 1, summary.get("swept_why")
     assert len(benches) > 1, "the sweep timed the configuration space, not one configuration"
-    assert entry["config"]["kwargs"].get("BLOCK_K") != 1, "the failing configuration was not served"
-    assert "reproven_from" not in entry["proof"], "a swept key is not recorded as re-proven"
+    served = C.certification_for_generator(entry, C.proof_backend({"backend": Z._backend()}))
+    assert served is not None and served["config"]["kwargs"].get("BLOCK_K") != 1, "the failing configuration was not served"
+    assert "reproven_from" not in served["proof"], "a swept key is not recorded as re-proven"
+    assert entry["config"]["kwargs"].get("BLOCK_K") == 1 and C.proof_backend(entry["proof"]) == C.proof_backend({"backend": old_backend}), \
+        "the earlier generator keeps its own configuration and proof; the swept one is an alternate of the class"
 
 
 def test_a_drift_on_the_single_re_prove_timing_is_a_refusal_for_the_retry_never_a_sweep(root, monkeypatch):

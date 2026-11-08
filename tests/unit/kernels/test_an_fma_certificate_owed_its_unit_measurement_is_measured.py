@@ -37,6 +37,7 @@ def volta(monkeypatch):
 
 def _entry(measured: bool):
     proof = {"date": "2026-10-01T00:00:00+00:00", "best_ms": 1.0,
+             "backend": {"triton": "3.8.0", "name": "cuda"},       # the generator `_loop` runs: a covered key names it
              "machine": {"device": {"memory_mb": 16384}}}
     if measured:
         proof["unit_measured"] = {"tiles": [], "fma_best_ms": 1.0, "chosen": "fma"}

@@ -41,8 +41,8 @@ def migrated(key: tuple):
 
 
 def _rekey_proof(entry: dict, new_key: tuple) -> None:
-    for cert in [entry] + list((entry.get("variants") or {}).values()):
-        proof = cert.get("proof") or {}
+    from nbxtensor.ops import autotune_certified as C
+    for proof in C.entry_proofs(entry):          # every class, every alternate, every generator's proof
         if isinstance(proof.get("shape"), list):
             proof["shape"] = list(new_key)
 

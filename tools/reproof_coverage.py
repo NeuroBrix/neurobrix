@@ -28,19 +28,36 @@ import sys
 from pathlib import Path
 
 
+def class_proofs(head: dict) -> list:
+    """Every proof of ONE memory class: its head's `proof` and `also_proven` (the same configuration proven under
+    other generators) and each alternate's (another configuration, proven under a generator the head's failed
+    under) — `nbxtensor.ops.autotune_certified`'s schema, read here from the JSON alone."""
+    out = []
+    for cert in [head] + [a for a in (head.get("alternates") or []) if isinstance(a, dict)]:
+        out += [cert.get("proof")] + list(cert.get("also_proven") or [])
+    return [p for p in out if isinstance(p, dict)]
+
+
+def class_heads(entry: dict) -> list:
+    """The entry's memory classes: (name, head) of its primary and of each variant."""
+    out = [(None, entry)]
+    out += [(str(name), v) for name, v in (entry.get("variants") or {}).items() if isinstance(v, dict)]
+    return out
+
+
 def generators_of(entry: dict) -> set:
-    """Every code generator this entry's proofs name — its own and its class variants'.
+    """Every code generator this entry's proofs name — its own and its class variants', every proof of each.
 
     A variant is a proof for another memory class, carried in the same entry, and it is proven
     separately: an entry whose primary is re-proven and whose 32 GB variant is not is PARTLY
     done, and saying otherwise would hide half the work.
     """
     out = set()
-    for proof in ([entry.get("proof")] +
-                  [v.get("proof") for v in (entry.get("variants") or {}).values() if v]):
-        v = ((proof or {}).get("backend") or {}).get("triton")
-        if v:
-            out.add(str(v))
+    for _name, head in class_heads(entry):
+        for proof in class_proofs(head):
+            v = ((proof or {}).get("backend") or {}).get("triton")
+            if v:
+                out.add(str(v))
     return out
 
 
@@ -72,26 +89,24 @@ def coverage(directory: Path, under: str) -> dict:
         per = collections.Counter()
         for entry in entries.values():
             e = entry or {}
-            pr = e.get("proof") or {}
-            if ((pr.get("backend") or {}).get("triton")):
-                cls = class_of(pr)
-                per_class[cls]["total"] += 1
-                per_class[cls]["done" if str((pr.get("backend") or {}).get("triton")) == under
-                                else "behind"] += 1
-            for name, var in (e.get("variants") or {}).items():
-                vp = (var or {}).get("proof") or {}
-                v = ((vp.get("backend") or {}).get("triton"))
-                if v:
-                    per_class[str(name)]["total"] += 1
-                    per_class[str(name)]["done" if str(v) == under else "behind"] += 1
+            classes_named = classes_done = 0
+            for name, head in class_heads(e):
+                vers = {str(v) for q in class_proofs(head) if (v := ((q.get("backend") or {}).get("triton")))}
+                if not vers:
+                    continue
+                cls = class_of(head.get("proof") or {}) if name is None else name
+                classes_named += 1
+                per_class[cls]["total"] += 1                    # one class counted once, whatever its proofs
+                per_class[cls]["done" if under in vers else "behind"] += 1
+                classes_done += under in vers
             gens = generators_of(e)
             for g in gens:
                 seen[g] += 1
             if not gens:
                 per["unproven"] += 1
-            elif gens == {under}:
-                per["done"] += 1
-            elif under in gens:
+            elif classes_done == classes_named:
+                per["done"] += 1                            # every class holds a proof under the target
+            elif classes_done:
                 # Some proof of this entry is at the target and some is not — its primary is
                 # re-proven and a memory-class variant is not, or the reverse. Counting it as
                 # done would hide half the work, and counting it as behind would hide the half

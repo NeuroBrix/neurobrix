@@ -14,6 +14,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   compiled .ttir, .ttgir, .msl and .metallib are byte-identical. The identity of an installed backend changes once:
   its certificates are re-labelled or re-proven under the new identity (`neurobrix autotune certify --reprove-generator`).
 
+### Added
+- **A certification carries one proof per code generator**: `autotune_certified` keeps an entry's (or memory-class
+  variant's) `proof` and adds the proofs of the same configuration under other generators in `also_proven`; where the
+  stored configuration failed the oracle under a new generator and a sweep chose another, that certification is filed
+  in the class's `alternates`. A re-proof under a new generator therefore adds its proof and never un-serves another
+  build (macOS 14 and 15 Metal wheels with byte-identical kernels are both served); a re-proof under the same
+  generator replaces that generator's proof only. Serving picks the card's memory class, then the certification one
+  of whose proofs names the running generator, within that class only. Both fields are additive: a reader that knows
+  `proof` alone reads a file as before. New names: `certification_proofs`, `class_certifications`,
+  `entry_certifications`, `entry_proofs`, `certification_for_generator`, `class_proven_since`, `reproof_source`,
+  `ALSO_PROVEN`, `ALTERNATES`.
+
 ## [0.0.7] - unreleased (terminal lot)
 
 ### Added
