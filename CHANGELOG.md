@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **The PyTorch engine's memory reserve on a device whose runtime growth is measured is that measure**: where the
+  compiled engine's growth during a run is a fact (measured for the model, or declared by the device's vendor file), it
+  is the one reserve the plan keeps — the fixed private reserve is not taken a second time, and a component may use the
+  whole budget instead of a fixed 92 % of it. Devices without the fact are planned as before.
+
 ### Fixed
 - **A mixture-of-experts model on an Apple GPU is no longer planned on a free expert miss**: Prism priced a routed
   expert the store's cache missed as costing nothing on unified memory, so it chose an expert store estimated at 18 s for
