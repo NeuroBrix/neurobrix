@@ -38,13 +38,8 @@ def path(model: str) -> Path:
 #: other process as ours (Allegro-TI2V read 7 430 MB with a second run on its card, 654 MB alone; the supervisor 09:50).
 #: A v2 record (the card's reading) is no longer read: re-measured at the next run.
 METHOD = "triton-process-held-less-allocator-live, run end less before the executor, on real devices (v3, 2026-11-02)"
-#: the compiled engine on Apple's MPS (2026-11-08, the Dell + Mac): what the driver holds beyond the MPS allocator's live
-#: bytes — its cache, the "other allocations" of an MPS out-of-memory — sampled through the run
-#: (`device_utils.SampledDevicePeak.cache_peak`), largest less the reading before the executor. mochi-1-preview native
-#: failed at its VAE with "MPS allocated 11.97 GiB + other 4.71 GiB > 17.76 GiB" while Prism held a constant 3 900 MB
-#: for that cache (`compiled_private_reserve_mb`, RUN 78).
+#: the compiled engine on MPS: its allocator's cache (driver less live), sampled through the run (`SampledDevicePeak`)
 COMPILED_MPS_METHOD = "mps-driver-less-current-allocated, largest sampled over the run less before the executor (v1, 2026-11-08)"
-#: the one method `load` reads per engine
 METHODS = {"triton": METHOD, "compiled": COMPILED_MPS_METHOD}
 
 
@@ -99,9 +94,9 @@ def record(model: Optional[str], engine: str, architecture: str, before: Dict[in
     prior_mb = (float(prior["mb"]) if isinstance(prior, dict) and prior.get("method") == method else None)
     if prior_mb is None or grown > prior_mb:
         per[str(architecture)] = {"mb": grown, "method": method}
-        data["source"] = ("the engine's own reading of a run, what the driver holds for this process beyond its "
-                          "allocator's live bytes, less the same reading before the executor; each record states its "
-                          "method (core/runtime/runtime_growth.py METHODS)")
+        data["source"] = ("the engine's own reading at the end of a run, what the driver attributes to this process less "
+                          "its allocator's live bytes, less the same reading before the executor "
+                          "(core/runtime/runtime_growth.py)")
         p.parent.mkdir(parents=True, exist_ok=True)
         tmp = p.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, indent=1, sort_keys=True))
