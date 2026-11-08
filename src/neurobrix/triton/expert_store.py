@@ -58,6 +58,7 @@ class NBXExpertStore:
         # the pins of the per-call pointer tables built over bound experts (`hold_table_pins`): ended before the
         # pages they cover are unbound, so no wrap outlives its binding
         self._table_pins = []
+        self._held_bases = set()
         for t in like:
             if not isinstance(t, NBXTensor):
                 raise RuntimeError(
@@ -331,18 +332,25 @@ class NBXExpertStore:
                 DA.unbind_mapped(ptr)
 
     def hold_table_pins(self, tables) -> None:
-        """Keep a per-call pointer table's pins (Metal) until the store unbinds what they cover: a table built over
-        bound experts pins a wrap of each, and a wrap left behind keeps the expert's pages resident after `_evict_bound`
-        unbinds them — outside the grant Prism priced."""
-        if tables.pins:
-            self._table_pins.append(tables.pins)
-            tables.pins = []
+        """Take a per-call pointer table's pins (Metal; `moe._end_call_pins`) and hold them until the store's release —
+        an in-place store also ends them before it unbinds the pages they cover (`_evict_bound`): a wrap left behind
+        keeps an unbound expert's pages resident, outside the grant Prism priced. A pin whose wraps the store already
+        holds ends at once: the held pin keeps the refcount, so the wraps live on and the held list stays one pin per
+        new set of wraps, not one per call."""
+        for pin in tables.pins:
+            bases = {b for b in getattr(pin, "_resident_bases", ()) if b is not None}
+            if bases <= self._held_bases:
+                pin.__exit__(None, None, None)
+            else:
+                self._table_pins.append(pin)
+                self._held_bases |= bases
+        tables.pins = []
 
     def _end_table_pins(self) -> None:
-        for pins in self._table_pins:
-            for pin in pins:
-                pin.__exit__(None, None, None)
+        for pin in self._table_pins:
+            pin.__exit__(None, None, None)
         self._table_pins = []
+        self._held_bases = set()
 
     # ── step 3: the prefetch of the next layer's predicted experts (mirror of the compiled store) ──
     def prefetch_next(self, layer, routed) -> int:

@@ -10,7 +10,8 @@ Why: DeepSeek-Coder-V2-Lite triton on the M4 Pro (2026-11-08, RUN 81) wired 2.7 
 tables stay inside the grant at the op level, on real mapped pages, through the engine's own MoE call.
 
 What this test does if the code is wrong: red when a pinned wrap survives the unbinding of its range, when the bound set
-exceeds the slot count, or when the bytes held by bindings and pins together exceed n_slots experts. Seen red on main
+exceeds the slot count, when the bytes held by bindings and pins together exceed n_slots experts, or when a pin over the
+store's pages outlives the store's release. Seen red on main
 caafe74c8 at the third decode call: "6 pinned wrap(s) over pages no binding holds any more (18 pins, 12 bindings, 0 cached
 tables)" — the half-precision SIMT decode band (`execute_moe_fused` STEP 2c, 1d5da7cfd 2026-10-28) returned without
 exiting its per-call table's pins, so every routed expert kept a wrap after the store unbound it.
@@ -117,6 +118,9 @@ def test_bindings_and_pinned_tables_together_stay_inside_the_grant(tmp_path):
                 worst = (held, call)
             assert held <= grant, (f"call {call}: bindings + pins hold {held} bytes, the grant is {grant} "
                                    f"({N_SLOTS} slots x 3 projections)")
+        store.release()
+        _bound, pinned = _held(spans)
+        assert not pinned, f"{len(pinned)} pinned wrap(s) over the store's pages outlive its release"
     finally:
         pt.release_pinned_tables()
         for key in list(store._bound):
