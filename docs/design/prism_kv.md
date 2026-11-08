@@ -423,6 +423,45 @@ The models: one per declared KV kind, on both engines:
 
 ---
 
+## 5bis. Exactness by construction (the owner's option C, scope A; measured 2026-11-08)
+
+Option C (the owner, 2026-11-08): **A** first — the cache belongs to the session and turn n prefills only its new
+tokens, on both engines, for serve, chat and complete; no tier below the device, no sharing between sessions; past the
+ceiling a named refusal replaces the summary of old turns. The question section 5 left open — does a turn served from
+the cache give the bytes a full prefill gives without proving row invariance — was answered by experiment on the
+Triton engine, TinyLlama-1.1B (dense) and Qwen3-30B-A3B (MoE), through the entry point, certified kernels only, no
+kernel changed (the experiment's record: the campaign `2026_11_08_chunked_prefill/RESULT.md` in the workshop).
+
+- **The per-row kernels are not the obstacle.** At a fixed number of new rows C, layer 0's K/V are bit-identical between
+  "A then B" and "A+B", the GEMMs, norms and the MoE kernel give the same rows, and inside the attention the scores
+  product, the scaling, the mask and P@V are bit-identical whatever the key length.
+- **The attention's softmax is.** Its bits move with the key length Tk: a Tk that is not a multiple of 16 compiles another
+  variant, and two Tk whose certified settings split a row differently between threads (TinyLlama's (4096, 512) at 4
+  warps against (4096, 1024) at 2) reduce in another order. "A then B" and "A+B" put a query at the same position
+  against different Tk whenever len(A) is not aligned.
+- **Gathering the session's keys as WHOLE PAGES closes it.** With Tk a multiple of the page (64 positions on this
+  rack's derived page) and the keys past the true end masked with the same 0 / -inf the causal mask adds, "A then B"
+  and "A+B" are bit-identical in every layer's KV, in the logits of every step and in the tokens — TinyLlama at
+  C = 320, Qwen3-30B-A3B at C = 256 (dense and MoE alike: the MoE kernel's key depends only on C, a row's sum not on
+  the rows that share its expert tile). A chunk size that lands two Tk on settings with different thread splits
+  (TinyLlama C = 128) needs one fixed Tk per chunk as well.
+
+**Consequences for A.**
+1. The prefill of a turn gathers the session's pages at Tk = whole pages, the extra keys masked, and runs the
+   existing attention (whose causal bias already aligns bottom-right: `elementwise_wrappers` offset = Tk - Tq). One
+   gather kernel is written and certified; no existing kernel changes.
+2. C is chosen by Prism from the certified times of the split run (padding included), a multiple of the page, never a
+   constant; the last chunk of a turn is completed with masked rows whose K/V the next chunk or the decode overwrites.
+3. The contract "same bytes as a full prefill" holds BY CONSTRUCTION for A — no row-invariance proof, dense and MoE —
+   so step 1 of section 9 (certify row and boundary invariance, 4 days) leaves A's path; the exact mode B (a plain
+   prefill at the full context for every turn) is not needed for 0.6.3.
+4. **A's gate**, beside the replayed session: the sha of every layer's KV and of the logits of "A then B" equal to
+   "A+B" in chunks of C, for the four models of this design's gate rows, on both engines.
+5. Out of A's scope, said: the chunked prefill is never bit-identical to the engine's unchunked prefill (other GEMM
+   keys; the keys read from the half-precision cache, not the forward pass's fp32) — logits within 0.006 (TinyLlama)
+   and 0.152 (Qwen3) of it, the same greedy tokens. The reference of A is its own chunked replay, as the owner's gate
+   reference states (the session replayed gives the same sha from one repetition to the next).
+
 ## 6. The runtime manager, separate from the plan
 
 | | the plan (Prism) | the manager (execution) |
