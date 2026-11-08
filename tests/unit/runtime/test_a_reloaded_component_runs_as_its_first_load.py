@@ -52,6 +52,14 @@ def _snap(self, *a, **k):
         by[comp] = {str(n): str(getattr(w, "nbx_dtype", type(w).__name__)) for n, w in (self._weights or {}).items()}
     return _real(self, *a, **k)
 GraphExecutor._run_triton_compiled = _snap
+from neurobrix.triton.sequence import TritonSequence
+compiles = []                  # every compile of a sequence: its component and the ops it compiled, in order
+_compile = TritonSequence.compile
+def _record_compile(self, *a, **k):
+    r = _compile(self, *a, **k)
+    compiles.append([str((self.dag or {}).get("component_name")), [f"{o.op_uid}|{o.op_type}" for o in self._ops]])
+    return r
+TritonSequence.compile = _record_compile
 hw = load_profile(get_or_create_default_profile())
 declare_hardware_profile(hw)
 path = find_model(model)
@@ -70,7 +78,7 @@ for i in range(2):
     logits = json.load(open(dump))["logits"]
     out.append({"tokens": toks, "logits": hashlib.sha256(json.dumps(logits).encode()).hexdigest(),
                 "dtypes": seen.get(i, {})})
-print("RESULT " + json.dumps(out))
+print("RESULT " + json.dumps({"requests": out, "compiles": compiles}))
 '''
 
 
@@ -87,7 +95,21 @@ def test_a_second_request_after_a_reload_gives_the_first_requests_bytes(tmp_path
     p = subprocess.run([sys.executable, "-c", CHILD, model, str(tmp_path / "logits.json")], env=env,
                        capture_output=True, text=True, timeout=1200, cwd=str(tmp_path))
     assert p.returncode == 0, (p.stdout[-3000:], p.stderr[-3000:])
-    first, second = json.loads(p.stdout.split("RESULT ", 1)[1].splitlines()[0])
+    res = json.loads(p.stdout.split("RESULT ", 1)[1].splitlines()[0])
+    first, second = res["requests"]
+    # The release drops the compiled sequence, so the second request compiles again — on the graph the first compile
+    # rewrote in place. That compile must compile the same ops, and resolve the same precision contract: no
+    # calibration record refused on a graph that differs from the one it was measured on, on any stream.
+    by_comp: dict = {}
+    for comp, ops in res["compiles"]:
+        by_comp.setdefault(comp, []).append(ops)
+    assert any(len(v) > 1 for v in by_comp.values()), \
+        f"no component compiled twice: the release kept its sequence, the recompile is not exercised ({ {c: len(v) for c, v in by_comp.items()} })"
+    for comp, lists in by_comp.items():
+        for again in lists[1:]:
+            assert again == lists[0], (f"{comp}: a compile after the release compiled {len(again)} ops where the "
+                                       f"first compiled {len(lists[0])}")
+    assert "REFUSED RECORD" not in p.stdout + p.stderr, "a recompile refused the model's calibration record"
     assert first["dtypes"], "no component ran on the Triton engine: the snapshot saw nothing"
     for comp, dt in first["dtypes"].items():
         moved = {n: (d, second["dtypes"].get(comp, {}).get(n)) for n, d in dt.items()
