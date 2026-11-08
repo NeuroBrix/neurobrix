@@ -257,21 +257,23 @@ def _over(under, over):
     return {**under, **{k: _over(under.get(k), v) for k, v in over.items()}}
 
 
-def _refuse_unified_without_largest_allocation(d_data: dict, path) -> None:
+def _refuse_unified_without_largest_allocation(spec: DeviceSpec, path) -> None:
     """A unified device's profile carries `max_allocation_mb` (the largest single allocation its backend grants, asked
     of the device at generation: Metal's MTLDevice.maxBufferLength, Level Zero's maxMemAllocSize), or the profile is
     refused by name. Silence would read as "no limit below memory_mb" — true of a CUDA card, false of the unified
     devices this engine drives, whose single buffer is capped below their working set (13 639 of 18 186 MB on an
     M4 Pro). The Mac, 2026-11-08: a profile regenerated without the key let a 13 912.6 MiB arena through to
-    Open-Sora-v2's Triton cell, which failed at weight loading. Keyed on the device's own unified fact, never a brand."""
-    if not d_data.get("unified_memory") or d_data.get("max_allocation_mb"):
+    Open-Sora-v2's Triton cell, which failed at weight loading. Keyed on the device's own answer
+    (`DeviceSpec.has_unified_memory`: its `unified_memory` fact, else its architecture's), never a brand — a profile
+    unified only through its architecture (an older hand-written `apple_silicon` one) is asked the same."""
+    if not spec.has_unified_memory or spec.max_allocation_mb:
         return
     raise ValueError(
-        f"ZERO FALLBACK: {path} describes the unified GPU '{d_data.get('model', '?')}' without max_allocation_mb (its "
-        f"largest single allocation: Metal's MTLDevice.maxBufferLength, Level Zero's maxMemAllocSize): Prism would plan "
-        f"arenas the device refuses. Remove this generated profile and run again: it is regenerated from the device, "
-        f"which is asked for the fact (on a Mac, `python -m nbxtensor install-metal` first if pyobjc-framework-Metal "
-        f"is missing).")
+        f"ZERO FALLBACK: {path} describes the unified GPU '{spec.name}' without max_allocation_mb (its largest single "
+        f"allocation: Metal's MTLDevice.maxBufferLength, Level Zero's maxMemAllocSize): Prism would plan arenas the "
+        f"device refuses. Remove this generated profile and run again: it is regenerated from the device, which is "
+        f"asked for the fact (on a Mac, `python -m nbxtensor install-metal` first if pyobjc-framework-Metal is "
+        f"missing).")
 
 
 def load_profile(hardware_id: str) -> PrismProfile:
@@ -305,7 +307,6 @@ def load_profile(hardware_id: str) -> PrismProfile:
     # Parse Devices
     devices = []
     for d_data in data.get("devices", []):
-        _refuse_unified_without_largest_allocation(d_data, path)
         devices.append(DeviceSpec(
             index=d_data.get("index", len(devices)),
             name=d_data.get("model", d_data.get("name", "Unknown GPU")),
@@ -323,6 +324,7 @@ def load_profile(hardware_id: str) -> PrismProfile:
             runtime_context_mb=d_data.get("runtime_context_mb"),
             measured=d_data.get("measured") or _vendor_block(d_data, "measured"),
         ))
+        _refuse_unified_without_largest_allocation(devices[-1], path)
 
     # Parse Interconnect Topology
     topology = _parse_interconnect(data)
