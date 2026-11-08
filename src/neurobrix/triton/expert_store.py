@@ -55,6 +55,9 @@ class NBXExpertStore:
         # 2026-10-20: 27 GB of experts bound in the prefill, swap +6.7 GB in 13 s).
         from collections import OrderedDict
         self._bound = OrderedDict()
+        # the pins of the per-call pointer tables built over bound experts (`hold_table_pins`): ended before the
+        # pages they cover are unbound, so no wrap outlives its binding
+        self._table_pins = []
         for t in like:
             if not isinstance(t, NBXTensor):
                 raise RuntimeError(
@@ -322,9 +325,24 @@ class NBXExpertStore:
             return
         from nbxtensor.memory.pointer_tables import release_pinned_tables
         release_pinned_tables()
+        self._end_table_pins()
         for key in [k for k in self._bound if k not in keep][:len(self._bound) - cap]:
             for ptr in self._bound.pop(key)[0]:
                 DA.unbind_mapped(ptr)
+
+    def hold_table_pins(self, tables) -> None:
+        """Keep a per-call pointer table's pins (Metal) until the store unbinds what they cover: a table built over
+        bound experts pins a wrap of each, and a wrap left behind keeps the expert's pages resident after `_evict_bound`
+        unbinds them — outside the grant Prism priced."""
+        if tables.pins:
+            self._table_pins.append(tables.pins)
+            tables.pins = []
+
+    def _end_table_pins(self) -> None:
+        for pins in self._table_pins:
+            for pin in pins:
+                pin.__exit__(None, None, None)
+        self._table_pins = []
 
     # ── step 3: the prefetch of the next layer's predicted experts (mirror of the compiled store) ──
     def prefetch_next(self, layer, routed) -> int:
@@ -392,6 +410,7 @@ class NBXExpertStore:
         for ev in self._inflight.values():
             DA.destroy_event(ev)
         self._inflight.clear()
+        self._end_table_pins()
         DA.set_device(self.device_idx)
         if self._stream:
             DA.stream_synchronize(self._stream)
