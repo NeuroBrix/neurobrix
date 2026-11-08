@@ -74,7 +74,7 @@ class TurnReader:
         self._reasoning = reasoning
         keep = []
         if parser is not None:
-            keep += [parser.start_marker, parser.end_marker or ""]
+            keep += [*parser.openings(), parser.end_marker or ""]
         if reasoning is not None:
             keep += list(reasoning)
         self._decoder = MarkerDecoder(tokenizer, keep)
@@ -164,15 +164,15 @@ class TurnReader:
                     self._emit(out, "content", self._pending)
                     self._pending = ""
                     break
-                start = self._parser.start_marker
-                i = self._pending.find(start)
-                if i >= 0:
+                hits = [(self._pending.find(m), m) for m in self._parser.openings() if m in self._pending]
+                if hits:
+                    i, start = min(hits)
                     self._emit(out, "content", self._pending[:i])
                     self._block = start
                     self._pending = self._pending[i + len(start):]
                     self._state = "tool"
                     continue
-                hold = 0 if final else _partial_suffix(self._pending, start)
+                hold = 0 if final else max(_partial_suffix(self._pending, m) for m in self._parser.openings())
                 self._emit(out, "content", self._pending[:len(self._pending) - hold])
                 self._pending = self._pending[len(self._pending) - hold:]
                 break

@@ -41,7 +41,12 @@ class ToolCallParser:
     #: The text that opens a tool-call block, and the one that closes it (None: the block runs to the end of
     #: the turn). A streaming reader holds back from the prose any suffix that could begin `start_marker`.
     start_marker: str = ""
+    #: Every text that opens a block (a dialect whose model writes its marker two ways); `start_marker` first.
+    start_markers: tuple = ()
     end_marker = None
+
+    def openings(self) -> tuple:
+        return tuple(self.start_markers) or (self.start_marker,)
 
     def parse(self, text: str) -> ParseResult:
         raise NotImplementedError

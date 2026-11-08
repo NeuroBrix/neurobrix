@@ -260,8 +260,8 @@ class ServingDaemon:
         was asked for (the mode flag is the mode's name, `--triton-sequential`
         for `triton_sequential`)."""
         cmd = [sys.executable, "-m", "neurobrix", "serve",
-               "--model", self._engine.model_name,
-               "--hardware", self._engine.hardware_id,
+               "--model", self.served_name(),
+               *(["--hardware", self._engine.hardware_id] if self._engine.hardware_id else []),
                f"--{self._engine.mode.replace('_', '-')}",
                "--timeout", str(int(self._idle_timeout)),
                "--foreground"]
@@ -272,6 +272,15 @@ class ServingDaemon:
                 if self._http.get(key) is not None:
                     cmd += [flag, str(self._http[key])]
         return cmd
+
+    def _resolve_hardware(self) -> None:
+        """No `--hardware`: the default profile of the devices this process sees, resolved in the daemon's own
+        process — never in the launcher before the fork, whose detection would leave a CUDA context the forked child
+        cannot use (cudaErrorInitializationError)."""
+        if self._engine.hardware_id:
+            return
+        from neurobrix.core.prism.autodetect import get_or_create_default_profile
+        self._engine.hardware_id = get_or_create_default_profile()
 
     def served_name(self) -> str:
         """The one name of the model this daemon serves (the API's model id): the hub name `import` recorded
@@ -393,6 +402,8 @@ class ServingDaemon:
         PID_PATH.write_text(str(os.getpid()))
 
         try:
+            # The profile of this process's visible devices, resolved HERE (after a fork): see _resolve_hardware.
+            self._resolve_hardware()
             # Load model (weights to VRAM) — on the inference worker, the thread
             # every later engine call of this daemon runs on.
             self._worker.call(self._engine.load, "load")

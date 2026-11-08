@@ -5,9 +5,9 @@ Loads model weights into VRAM once, keeps them warm.
 Runs in background by default — terminal returns immediately after model loads.
 
 Usage:
-    neurobrix serve --model TinyLlama-1.1B-Chat-v1.0 --hardware v100-32g
-    neurobrix serve --model deepseek-moe-16b-chat --hardware c4140-4xv100-custom-nvlink
-    neurobrix serve --model TinyLlama-1.1B-Chat-v1.0 --hardware v100-32g --foreground
+    neurobrix serve --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --hardware v100-32g
+    neurobrix serve --model deepseek-ai/deepseek-moe-16b-chat --hardware c4140-4xv100-custom-nvlink
+    neurobrix serve --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --hardware v100-32g --foreground
 """
 
 import logging
@@ -67,21 +67,11 @@ def cmd_serve(args):
     foreground = getattr(args, 'foreground', False)
 
     # Resolve hardware: explicit profile or auto-detect
-    hardware_id = args.hardware
-    if not hardware_id:
-        # CRITICAL: Cannot import neurobrix.core.prism before os.fork() —
-        # prism/__init__.py imports the solver which initializes the CUDA driver,
-        # making fork() + CUDA impossible in the child daemon process.
-        # Load autodetect.py directly, bypassing the prism package __init__.
-        import importlib.util
-        _spec = importlib.util.spec_from_file_location(
-            "autodetect",
-            str(__import__("pathlib").Path(__file__).parent.parent.parent
-                / "core" / "prism" / "autodetect.py"),
-        )
-        _mod = importlib.util.module_from_spec(_spec)
-        _spec.loader.exec_module(_mod)
-        hardware_id = _mod.get_or_create_default_profile()  # the profile of THIS environment's visible GPUs
+    # The default profile is resolved by the DAEMON, in its own process (ServingDaemon._resolve_hardware): its
+    # detection initialises the CUDA driver, and a CUDA context created before the fork of a background daemon is
+    # unusable in the child (CUDA error: initialization error; the plan then fell to cpu_execution, measured
+    # 2026-11-08 on card 0). Same profile, resolved where it is used.
+    hardware_id = args.hardware or None
 
     log.debug(f"[Serve] {args.model} · hardware {hardware_id if args.hardware else 'auto-detect'} · mode {mode} · "
               f"idle timeout {timeout}s")

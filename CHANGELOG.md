@@ -114,6 +114,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   APU (rocminfo "Memory Properties: APU": a Radeon 780M, a Strix Point or Strix Halo GPU) is now described as unified
   memory, planned as one pool with the host like an integrated Intel GPU or an Apple chip; a GPU whose memory nothing
   states is refused by name instead of being given a figure.
+- **`neurobrix serve` without `--hardware` serves on the GPU again when it goes to the background on Linux**: the
+  launcher detected the machine's profile before forking the daemon, which left a CUDA context the daemon could not
+  use (`CUDA error: initialization error`), and the model was planned on the CPU. The daemon now resolves the profile
+  in its own process.
 - **`neurobrix import` of an installed model whose hub file carries a build stamp no longer downloads it again**: the
   check compared the installed model with the file's name stamp included, which no installed model carries, and
   re-downloaded the whole container (28 GB for Wan2.2-I2V-A14B) to learn it was there.

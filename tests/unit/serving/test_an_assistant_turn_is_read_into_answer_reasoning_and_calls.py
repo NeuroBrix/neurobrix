@@ -124,3 +124,13 @@ def test_the_template_text_selects_the_dialects():
     assert isinstance(select_parser("... respond with <|tool_call|> followed by a JSON list ..."), JsonListToolCallParser)
     assert select_reasoning("{{ '<think>' }} ... </think>") == ("<think>", "</think>")
     assert select_reasoning("no thinking here") is None
+
+
+def test_the_json_list_dialect_opened_by_the_plain_text_marker_yields_its_call():
+    """granite-3.1 writes its marker as text too (`<tool_call>[...]`, measured through the entry point 2026-11-08),
+    as the vendor's parser accepts (vLLM granite: bot_token and bot_string)."""
+    pieces = ["<tool", "_call>", '[{"arguments": {"city": "Paris"}, "name": "get_weather"}]']
+    reader = TurnReader(PieceTokenizer(pieces), parser=JsonListToolCallParser())
+    deltas = _run(reader, range(3))
+    assert [(d.call.name, d.call.arguments) for d in deltas if d.channel == "tool_call"] == [("get_weather", {"city": "Paris"})]
+    assert reader.turn.content == ""

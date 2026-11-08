@@ -480,7 +480,7 @@ class InferenceEngine:
         from neurobrix.agent.parsers import select_parser
         from neurobrix.serving.text_stream import MarkerDecoder
         parser = select_parser(self.chat_template_text())
-        keep = [parser.start_marker, parser.end_marker or ""] if parser is not None else []
+        keep = [*parser.openings(), parser.end_marker or ""] if parser is not None else []
         text = MarkerDecoder(tokenizer, keep).decode(generated) if keep else result.get("text", "")
         return {"text": text, "token_ids": list(generated), "prompt_tokens": len(token_ids),
                 "max_tokens": max_tokens}
