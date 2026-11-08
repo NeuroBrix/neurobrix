@@ -115,7 +115,8 @@ _AMD_GFX_MAP = {
     "gfx1030": "rdna2",     # RX 6900 XT
     "gfx1100": "rdna3",     # RX 7900 XTX
     "gfx1101": "rdna3",     # RX 7900 XT
-    "gfx1150": "rdna4",     # RX 9070 (projected)
+    # gfx1150 is no RDNA4 card: it is the Strix Point APU's GPU (rocminfo "AMD Radeon Graphics", Memory Properties APU,
+    # ollama/ollama#9999), a gfx11 target (LLVM AMDGPUUsage: GFX11.5) — the gfx11 prefix below reads it as rdna3.
     "gfx1200": "rdna4",     # RX 9070
 }
 
@@ -1065,7 +1066,13 @@ def _parse_rocm() -> List[Dict[str, Any]]:
 
 
 def _parse_rocminfo() -> List[Dict[str, Any]]:
-    """Detect AMD GPUs via rocminfo (best for architecture detection)."""
+    """AMD GPUs from rocminfo's agents (ROCm/rocminfo rocminfo.cc, amd-staging): each GPU agent's `Name` (its gfx target),
+    `Marketing Name`, `Memory Properties` ("APU" when HSA_AMD_MEMORY_PROPERTY_AGENT_IS_APU is set: the GPU draws on the
+    host's memory) and its pools, whose `Size` rocminfo prints in KB (`pool_size / 1024` then "KB" — this parser read
+    them as bytes, so no pool ever passed its 1e9 test and every card got an invented 16 384 MB). The device's memory is
+    its first GLOBAL coarse-grained pool (the VRAM of a discrete card, 24 GiB on an RX 7900 XTX; on an APU what the
+    driver lets the GPU hold of the host's memory, 28 GiB of a Radeon 780M's laptop). A GPU agent with no such pool is
+    refused by name, never given a figure."""
     try:
         result = subprocess.run(
             ["rocminfo"], capture_output=True, text=True, timeout=10,
@@ -1075,58 +1082,35 @@ def _parse_rocminfo() -> List[Dict[str, Any]]:
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return []
 
-    devices = []
-    current: Dict[str, str] = {}
-    idx = 0
-
-    for line in result.stdout.split("\n"):
-        line = line.strip()
-
-        if line.startswith("Name:") and "gfx" in line:
-            gfx_id = line.split(":")[-1].strip()
-            current["gfx_id"] = gfx_id
-
-        elif line.startswith("Marketing Name:") and current:
-            current["name"] = line.split(":", 1)[-1].strip()
-
-        elif line.startswith("Device Type:") and "GPU" in line:
-            current["is_gpu"] = "true"
-
-        elif line.startswith("Size:") and current.get("is_gpu"):
-            size_str = line.split(":")[-1].strip().split("(")[0].strip()
-            try:
-                mem_bytes = int(size_str)
-                if mem_bytes > 1_000_000_000:
-                    current["memory_bytes"] = str(mem_bytes)
-            except ValueError:
-                pass
-
-        elif line == "" and current.get("is_gpu") and current.get("gfx_id"):
-            gfx_id = current["gfx_id"]
-            name = current.get("name", f"AMD GPU ({gfx_id})")
-            mem_bytes = int(current.get("memory_bytes", "0"))
-            mem_mb = mem_bytes // (1024 * 1024) if mem_bytes > 0 else 0
-
-            if "hygon" in name.lower():
-                current = {}
-                continue
-
-            arch = _AMD_GFX_MAP.get(gfx_id, _amd_gfx_to_arch(gfx_id))
-            dtypes = _AMD_DTYPE_MAP.get(arch, ["float32", "float16"])
-
-            devices.append({
-                "index": idx,
-                "brand": "amd",
-                "model": name,
-                "memory_mb": mem_mb if mem_mb > 0 else 16384,
-                "compute_capability": gfx_id,
-                "supports_dtypes": dtypes,
-                "architecture": arch,
-                "pcie_version": "4.0",
-            })
-            idx += 1
-            current = {}
-
+    devices: List[Dict[str, Any]] = []
+    for block in re.split(r'^\s*Agent \d+\s*$', result.stdout, flags=re.M)[1:]:
+        fields = dict(re.findall(r'^  (\S[^:\n]*?):[ \t]*(.*?)[ \t]*$', block, flags=re.M))   # the agent's own lines
+        gfx_id, name = fields.get("Name", ""), fields.get("Marketing Name") or fields.get("Name", "")
+        if fields.get("Device Type") != "GPU" or not gfx_id.startswith("gfx") or "hygon" in name.lower():
+            continue
+        pool = re.search(r'Segment:\s*GLOBAL; FLAGS: COARSE GRAINED\s*\n\s*Size:\s*(\d+)\([0-9a-fx]+\)\s*KB', block)
+        if pool is None:
+            devices.append({"model": name, "brand": "amd", "refused": f"rocminfo states no GLOBAL coarse-grained pool "
+                                                                      f"for this {gfx_id} agent: its memory is unknown"})
+            continue
+        mem_mb = int(pool.group(1)) // 1024
+        arch = _AMD_GFX_MAP.get(gfx_id, _amd_gfx_to_arch(gfx_id))
+        dev: Dict[str, Any] = {
+            "index": len(_driven(devices)),
+            "brand": "amd",
+            "model": name,
+            "memory_mb": mem_mb,
+            "compute_capability": gfx_id,
+            "supports_dtypes": _AMD_DTYPE_MAP.get(arch, ["float32", "float16"]),
+            "architecture": arch,
+            "pcie_version": "4.0",
+        }
+        if "APU" in fields.get("Memory Properties", ""):
+            # One pool with the host. Its largest single allocation: ROCr states no per-allocation cap below the pool's
+            # (hsa_ext_amd.h HSA_AMD_MEMORY_POOL_INFO_ALLOC_MAX_SIZE is "Maximum aggregate allocation size"), so the
+            # pool's own size bounds one arena — stated, not left silent (the loader refuses a unified device without it).
+            dev.update(unified_memory=True, max_allocation_mb=mem_mb, pcie_version="N/A")
+        devices.append(dev)
     return devices
 
 
@@ -1151,6 +1135,10 @@ def _parse_rocmsmi() -> List[Dict[str, Any]]:
         gpu_idx = int(match.group(1))
         name = match.group(2).strip()
         mem_mb = _amd_get_vram_mb(gpu_idx)
+        if mem_mb is None:
+            devices.append({"model": name, "brand": "amd", "refused": "neither sysfs (mem_info_vram_total) nor rocm-smi "
+                                                                      "states this GPU's memory: it is unknown"})
+            continue
         arch = _amd_name_to_arch(name)
         dtypes = _AMD_DTYPE_MAP.get(arch, ["float32", "float16"])
 
@@ -2006,7 +1994,7 @@ def _amd_name_to_arch(name: str) -> str:
     return "rdna"
 
 
-def _amd_get_vram_mb(gpu_idx: int) -> int:
+def _amd_get_vram_mb(gpu_idx: int) -> Optional[int]:
     """Get AMD GPU VRAM via sysfs or rocm-smi."""
     for card in sorted(Path("/sys/class/drm/").glob("card*")):
         vram_path = card / "device" / "mem_info_vram_total"
@@ -2034,7 +2022,7 @@ def _amd_get_vram_mb(gpu_idx: int) -> int:
     except Exception:
         pass
 
-    return 16384
+    return None                  # unknown: the GPU is refused by name, never given a figure
 
 
 def _detect_pcie_version_sysfs(pci_addr: str) -> str:

@@ -250,3 +250,17 @@ def test_a_machine_whose_vendor_tool_answers_never_reads_the_bus(monkeypatch):
     monkeypatch.setattr(autodetect, "_parse_nvidia_smi", lambda: [dict(card)])
     monkeypatch.setattr(autodetect, "_listed_gpus", lambda: (_ for _ in ()).throw(AssertionError("bus read")))
     assert autodetect._detect_gpus("Linux") == ([card], "nvidia")
+
+
+def test_a_profile_unified_only_through_its_architecture_is_asked_the_same():
+    """An older hand-written Apple profile states no `unified_memory`: it is unified through its architecture
+    (`DeviceSpec.has_unified_memory`, the table of structure.py). The loader's door asks the device's answer, not the
+    key (the Mac's review, 2026-11-08 21:20)."""
+    import copy
+    from tests.unit.prism._pinned_machine import APPLE_M4_PRO, profile
+    old = copy.deepcopy(APPLE_M4_PRO)
+    old["devices"][0].pop("unified_memory", None)
+    old["devices"][0].pop("max_allocation_mb", None)
+    assert old["devices"][0]["architecture"] == "apple_silicon"
+    with pytest.raises(ValueError, match="max_allocation_mb"):
+        profile(old)

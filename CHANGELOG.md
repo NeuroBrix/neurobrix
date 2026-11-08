@@ -52,7 +52,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   target for them; any GPU whose driver is not installed) is refused by name with its reason, and the plan says so and
   runs on the CPU with every core of the profile; nbxtensor's Level Zero runtime no longer counts such a GPU among its
   devices either. On Windows the machine's memory is read through PowerShell when
-  `wmic` is absent (Windows 11 24H2), where an invented 8 GB was written.
+  `wmic` is absent (Windows 11 24H2), where an invented 8 GB was written. Known limits of this release: on a laptop
+  with an NVIDIA card and an integrated GPU, only the NVIDIA card is detected and the integrated GPU is not named; the
+  performance and efficiency cores of a hybrid CPU are told apart on macOS only, not yet on Linux or Windows.
+- **Every AMD GPU gets its real memory**: rocminfo states its memory pools in KB and the detection read them as bytes,
+  so every AMD card — a 24 GB Radeon RX 7900 XTX as a 192 GB Instinct MI300X — was given an invented 16 GB. An AMD
+  APU (rocminfo "Memory Properties: APU": a Radeon 780M, a Strix Point or Strix Halo GPU) is now described as unified
+  memory, planned as one pool with the host like an integrated Intel GPU or an Apple chip; a GPU whose memory nothing
+  states is refused by name instead of being given a figure.
 - **A mixture-of-experts model on an Apple GPU is no longer planned on a free expert miss**: Prism priced a routed
   expert the store's cache missed as costing nothing on unified memory, so it chose an expert store estimated at 18 s for
   DeepSeek-Coder-V2-Lite where the run took more than 40 minutes. A miss is now priced as the page-in it is, at the
