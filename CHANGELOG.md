@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **A mixture-of-experts model on an Apple GPU is no longer planned on a free expert miss**: Prism priced a routed
+  expert the store's cache missed as costing nothing on unified memory, so it chose an expert store estimated at 18 s for
+  DeepSeek-Coder-V2-Lite where the run took more than 40 minutes. A miss is now priced as the page-in it is, at the
+  device's measured cold load rate.
+
+### Fixed
 - **A language model's prompt is priced at its own length**: Prism planned a text request's prefill at the cache's
   prompt margin (128 tokens) whatever the prompt, so a long prompt was under-priced (TinyLlama: ~0.01 GiB planned for
   a 400-token prompt where the run held 652 MB) and a short one over-priced. The prompt is now counted by the flow's
