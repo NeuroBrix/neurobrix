@@ -2274,8 +2274,8 @@ def _detect_apple_memory_mb() -> int:
     return _detect_apple_host_memory_mb()
 
 
-def _detect_apple_max_allocation_mb() -> Optional[int]:
-    """The largest SINGLE allocation the Metal device grants, or None when it cannot be asked.
+def _detect_apple_max_allocation_mb() -> int:
+    """The largest SINGLE allocation the Metal device grants, in MB; a named refusal when it cannot be asked.
 
     `memory_mb` is how much the GPU may hold in all (`recommendedMaxWorkingSetSize`); one buffer has its own,
     smaller ceiling, `MTLDevice.maxBufferLength`, and the device refuses a larger one however much is free.
@@ -2285,17 +2285,25 @@ def _detect_apple_max_allocation_mb() -> Optional[int]:
     malloc failed (error 1) … driver_free=17785MB"), where 4 segments of ~10 GB allocate. Published as the
     device's `max_allocation_mb` for the solver to cut against. The device is asked, never a table; a profile
     that does not carry the key says "no limit below the device's memory", which is what a CUDA card gives.
+
+    The Mac, 2026-11-08: a profile regenerated without the key let a 13 912.6 MiB arena through and Open-Sora-v2's Triton
+    cell failed at weight loading; this function had swallowed its own failure. A device that cannot be asked is now a
+    named refusal: a profile is never written without the fact (rule 1, ZERO FALLBACK).
     """
+    why = None
     try:
         import Metal                                    # vendor layer: allowed here
         device = Metal.MTLCreateSystemDefaultDevice()
-        if device is not None:
-            largest = int(device.maxBufferLength())
-            if largest > 0:
-                return largest // (1024 * 1024)
-    except Exception:
-        pass
-    return None
+        largest = int(device.maxBufferLength()) if device is not None else 0
+        if largest > 0:
+            return largest // (1024 * 1024)
+        why = "MTLCreateSystemDefaultDevice() returned no device" if device is None else f"maxBufferLength() = {largest}"
+    except Exception as exc:                            # said, never swallowed
+        why = f"{type(exc).__name__}: {exc}"
+    raise RuntimeError(
+        f"ZERO FALLBACK: the Apple GPU's largest single allocation (MTLDevice.maxBufferLength) cannot be read ({why}). "
+        f"Without it Prism would plan arenas the device refuses. On a Mac, `python -m nbxtensor install-metal` installs "
+        f"pyobjc-framework-Metal, which this reading needs; then run again to generate the hardware profile.")
 
 
 def _parse_mac_vram(vram_str: str) -> int:
