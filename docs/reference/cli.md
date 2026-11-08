@@ -80,6 +80,7 @@ neurobrix run [options]
 | `--triton-sequential` | off | Triton-pure eager mode: Triton kernels op-by-op (no fusion, TritonSequentialDispatcher). Equivalent of --sequential but for the Triton backend. Useful for debugging individual Triton kernels. |
 | `--certified-only` | off | Confirmation run: every autotuned kernel is served from the certified directory, or the run fails naming the missing key and its census row — never a runtime sweep, never the local replay cache (NBX_AUTOTUNE_CERTIFIED_ONLY=1). |
 | `--max-tokens` `MAX_TOKENS` | — | Maximum number of tokens to generate (LLM only) |
+| `--turns` `FILE` | — | A JSON list of user messages played as ONE chat session, turn after turn, through the session code the daemon runs: the KV cache is kept between turns and each turn prefills only its new tokens; each answer is printed (LLM only) |
 | `--input-image` `INPUT_IMAGE` | — | Input image path (vlm, img2img, inpainting, upscaler, multimodal) |
 | `--input-video` `INPUT_VIDEO` | — | Input video path for understanding (vlm/multimodal) |
 | `--mask-image` `MASK_IMAGE` | — | Inpainting mask image path (image inpainting mode) |
@@ -431,6 +432,7 @@ neurobrix calibrate [options]
 | `--triton-sequential` | off | Triton-pure eager mode: Triton kernels op-by-op (no fusion, TritonSequentialDispatcher). Equivalent of --sequential but for the Triton backend. Useful for debugging individual Triton kernels. |
 | `--certified-only` | off | Confirmation run: every autotuned kernel is served from the certified directory, or the run fails naming the missing key and its census row — never a runtime sweep, never the local replay cache (NBX_AUTOTUNE_CERTIFIED_ONLY=1). |
 | `--max-tokens` `MAX_TOKENS` | — | Maximum number of tokens to generate (LLM only) |
+| `--turns` `FILE` | — | A JSON list of user messages played as ONE chat session, turn after turn, through the session code the daemon runs: the KV cache is kept between turns and each turn prefills only its new tokens; each answer is printed (LLM only) |
 | `--input-image` `INPUT_IMAGE` | — | Input image path (vlm, img2img, inpainting, upscaler, multimodal) |
 | `--input-video` `INPUT_VIDEO` | — | Input video path for understanding (vlm/multimodal) |
 | `--mask-image` `MASK_IMAGE` | — | Inpainting mask image path (image inpainting mode) |
@@ -567,6 +569,7 @@ neurobrix drift [options]
 | `--triton-sequential` | off | Triton-pure eager mode: Triton kernels op-by-op (no fusion, TritonSequentialDispatcher). Equivalent of --sequential but for the Triton backend. Useful for debugging individual Triton kernels. |
 | `--certified-only` | off | Confirmation run: every autotuned kernel is served from the certified directory, or the run fails naming the missing key and its census row — never a runtime sweep, never the local replay cache (NBX_AUTOTUNE_CERTIFIED_ONLY=1). |
 | `--max-tokens` `MAX_TOKENS` | — | Maximum number of tokens to generate (LLM only) |
+| `--turns` `FILE` | — | A JSON list of user messages played as ONE chat session, turn after turn, through the session code the daemon runs: the KV cache is kept between turns and each turn prefills only its new tokens; each answer is printed (LLM only) |
 | `--input-image` `INPUT_IMAGE` | — | Input image path (vlm, img2img, inpainting, upscaler, multimodal) |
 | `--input-video` `INPUT_VIDEO` | — | Input video path for understanding (vlm/multimodal) |
 | `--mask-image` `MASK_IMAGE` | — | Inpainting mask image path (image inpainting mode) |
