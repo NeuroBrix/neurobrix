@@ -389,20 +389,15 @@ def request_input_config(args, manifest: dict, family, cache_path):
 
 
 def _record_compiled_growth(sampler, cache_path, hw_profile) -> None:
-    """Record the MPS allocator's cache growth of this compiled run (`SampledDevicePeak.cache_peak` less `cache_start`)
-    for Prism (core/runtime/runtime_growth.py, its compiled method) — after a failed run too: the cache an out-of-memory
-    met is the figure the next plan must hold. Nothing without an MPS sampler (CUDA keeps its own counters)."""
-    if sampler is None or sampler.cache_start is None or not getattr(hw_profile, "devices", None):
-        return
-    sampler.stop()
-    from neurobrix.core.runtime import runtime_growth as _rg
-    from neurobrix.core.runtime.precision_contract import registry_model_name as _rmn
-    mb = 1024 * 1024
-    grown = _rg.record(_rmn(cache_path), "compiled", hw_profile.devices[0].architecture,
-                       {0: sampler.cache_start / mb}, {0: sampler.cache_peak / mb})
-    if grown is not None:
-        print(f"[RuntimeGrowth] the MPS allocator's cache grew {grown:.0f} MB during this run (recorded for Prism)",
-              flush=True)
+    """The MPS allocator's cache growth of a compiled run, for Prism (runtime_growth.COMPILED_MPS_METHOD), failed or not."""
+    if sampler is not None and sampler.cache_start is not None and getattr(hw_profile, "devices", None):
+        from neurobrix.core.runtime import runtime_growth as _rg
+        from neurobrix.core.runtime.precision_contract import registry_model_name as _rmn
+        sampler.stop()
+        grown = _rg.record(_rmn(cache_path), "compiled", hw_profile.devices[0].architecture,
+                           {0: sampler.cache_start / 2**20}, {0: sampler.cache_peak / 2**20})
+        if grown is not None:
+            print(f"[RuntimeGrowth] the MPS allocator's cache grew {grown:.0f} MB during this run (recorded for Prism)")
 
 
 def cmd_run(args):
