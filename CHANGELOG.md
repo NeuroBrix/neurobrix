@@ -53,7 +53,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   runs on the CPU with every core of the profile; nbxtensor's Level Zero runtime no longer counts such a GPU among its
   devices either. On Windows the machine's memory is read through PowerShell when `wmic` is absent (Windows 11 24H2),
   where an invented 8 GB was written. Known limits of this release: On an Intel Mac the integrated GPU is named from
-  system_profiler without its platform; it is not driven, and the engine runs on the CPU. On a laptop with an NVIDIA
+  system_profiler without its platform; it is not driven, and the engine runs on the CPU (a Radeon of an Intel Mac is
+  refused by name the same way: no backend of this engine drives an AMD GPU under macOS). On a laptop with an NVIDIA
   card and an integrated GPU, only the NVIDIA card is detected and the integrated GPU is not named. The performance
   and efficiency cores of a hybrid CPU are told apart on macOS only, not yet on Linux or Windows.
 - **Every AMD GPU gets its real memory**: rocminfo states its memory pools in KB and the detection read them as bytes,

@@ -1479,13 +1479,13 @@ def _parse_system_profiler() -> List[Dict[str, Any]]:
                 dtypes.append("bfloat16")
             pcie_ver = "N/A"
         elif "amd" in vendor_str or "ati" in vendor_str:
-            brand = "amd"
-            arch = _amd_name_to_arch(name)
-            # VRAM from system_profiler
-            vram_str = gpu.get("spdisplays_vram", gpu.get("spdisplays_vram_shared", "0"))
-            mem_mb = _parse_mac_vram(vram_str)
-            dtypes = ["float32", "float16"]
-            pcie_ver = "3.0"
+            # An Intel Mac's Radeon: no backend of this engine drives an AMD GPU under macOS (ROCm does not exist
+            # there; the Metal device files describe Apple silicon). Refused by name, the Mac planned on its CPU — it
+            # was written as a DRIVEN AMD device before, a plan on a GPU nothing could run (the Mac's review, 2026-11-08).
+            devices.append({"model": name, "brand": "amd",
+                            "refused": "no backend of this engine drives an AMD GPU under macOS (ROCm does not exist "
+                                       "there; the Metal device files describe Apple silicon)"})
+            continue
         elif "intel" in vendor_str:
             # An Intel Mac's integrated GPU: no backend of this engine drives it under macOS (Level Zero does not exist
             # there; the Metal device files describe Apple silicon), and system_profiler names no platform for it.

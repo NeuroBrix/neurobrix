@@ -279,3 +279,18 @@ def test_an_intel_macs_integrated_gpu_is_refused_by_name_and_the_mac_plans_on_it
     (refused,) = devices
     assert brand == "none" and refused["model"] == "Intel UHD Graphics 630" and "macOS" in refused["refused"]
     assert autodetect._driven(devices) == []
+
+
+def test_an_intel_mac_with_a_radeon_refuses_both_gpus_and_plans_on_its_cpu(monkeypatch):
+    """An Intel Mac with a Radeon (MacBook Pro 15/16-inch 2016-2020, iMac 2015-2020, iMac Pro, Mac Pro 2019): no
+    backend of this engine drives an AMD GPU under macOS either (ROCm does not exist there), so both GPUs are refused
+    by name and the Mac plans on its CPU (the Mac's review, 2026-11-08). The Radeon was written as a DRIVEN AMD device
+    before. Same keys-only record as above (the Radeon Pro 555X of the same 2018 MacBook Pro, the forum thread above)."""
+    record = {"SPDisplaysDataType": [{"sppci_model": "AMD Radeon Pro 555X", "spdisplays_vendor": "AMD (0x1002)"},
+                                     {"sppci_model": "Intel UHD Graphics 630", "spdisplays_vendor": "Intel"}]}
+    monkeypatch.setattr(autodetect.subprocess, "run",
+                        lambda cmd, *a, **k: subprocess.CompletedProcess(cmd, 0, json.dumps(record), ""))
+    devices, brand = autodetect._detect_gpus("Darwin")
+    assert brand == "none" and autodetect._driven(devices) == []
+    assert sorted(d["model"] for d in devices) == ["AMD Radeon Pro 555X", "Intel UHD Graphics 630"]
+    assert all("macOS" in d["refused"] for d in devices)
