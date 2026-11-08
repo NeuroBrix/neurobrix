@@ -14,7 +14,7 @@ Supports:
   CPU        — x86_64 (AVX2/AVX512/AMX), ARM64 (NEON), RISC-V
   NVIDIA     — nvidia-smi
   AMD        — rocm-smi / rocminfo
-  Intel      — xpu-smi / sycl-ls
+  Intel      — the PCI bus (sysfs / Win32_VideoController) + Level Zero
   Apple      — system_profiler / MPS
   Tenstorrent — tt-smi
   Moore Threads — mtsmi
@@ -26,6 +26,8 @@ Supports:
 Called when --hardware is omitted. Creates ~/.neurobrix/hardware/default.yml once (core/prism/loader.GENERATED_DIR).
 """
 
+import functools
+import json
 import platform
 import re
 import os
@@ -90,9 +92,6 @@ _PREFERRED_DTYPE = {
     # AMD
     "cdna": "float16", "cdna2": "float16", "cdna3": "bfloat16",
     "rdna2": "float16", "rdna3": "float16", "rdna4": "float16",
-    # Intel
-    "ponte_vecchio": "bfloat16", "flex": "float16",
-    "alchemist": "float16", "battlemage": "float16", "xe": "float16",
     # Apple (M1=fp16, M2+=bf16 — refined below by chip generation)
     "apple_silicon": "float16",
     # Others
@@ -183,8 +182,9 @@ def detect_devices() -> Tuple[List[Dict[str, Any]], str]:
     probes of this host — the one detection every reader shares: the
     hardware profile below, the per-environment profile tag, and `neurobrix
     info` (Studio's start-up discovery), which must answer without loading a
-    compute branch."""
-    return _detect_gpus(platform.system())
+    compute branch. The GPUs found and refused by name are not among them (`detect_hardware` writes them)."""
+    devices, brand = _detect_gpus(platform.system())
+    return _driven(devices), brand
 
 
 def _visible_set_tag() -> Optional[str]:
@@ -491,8 +491,12 @@ def detect_hardware() -> Dict[str, Any]:
     if n is not None:           # unmeasured this time: the profile holds no count and the next run measures again
         cpu["io_workers"] = n
 
-    # --- GPUs (OS-specific cascade) ---
-    devices, brand = detect_devices()
+    # --- GPUs (OS-specific cascade): the driven ones, and the ones no backend drives, refused by name ---
+    found, brand = _detect_gpus(os_type)
+    devices, refused = _driven(found), _refusals(found)
+    for d in devices:
+        if d.get("unified_memory") and "host_memory_mb" not in d:
+            d["host_memory_mb"] = cpu["ram_mb"]      # one pool: what the machine has, beside what the GPU may hold
 
     # --- System vendor ---
     vendor = _detect_system_vendor(os_type)
@@ -556,7 +560,7 @@ def detect_hardware() -> Dict[str, Any]:
     }
 
     # --- Notes ---
-    notes = _build_notes(cpu, devices, brand, vendor, interconnect)
+    notes = _build_notes(cpu, devices, brand, vendor, interconnect, refused)
 
     profile: Dict[str, Any] = {
         "id": profile_id,
@@ -569,6 +573,9 @@ def detect_hardware() -> Dict[str, Any]:
         "pcie_fallback": pcie_fallback,
         "notes": notes,
     }
+    if refused:
+        # Read by Prism, which plans without them and says so in the plan (`ExecutionPlan.refused_devices`).
+        profile["refused_devices"] = refused
 
     return profile
 
@@ -756,7 +763,6 @@ def _detect_cpu_windows() -> Dict[str, Any]:
     model = "Unknown CPU"
     cores = 1
     threads = 1
-    ram_mb = 8192
     arch = platform.machine()
     features: List[str] = []
 
@@ -802,23 +808,21 @@ def _detect_cpu_windows() -> Dict[str, Any]:
         except Exception:
             pass
 
-    # --- wmic RAM ---
+    # --- RAM: Win32_OperatingSystem.TotalVisibleMemorySize (KB), through PowerShell's CIM — wmic, which this read
+    # first, is disabled by default from Windows 11 24H2, and its absence wrote an invented 8192 MB into the profile ---
     try:
         result = subprocess.run(
-            ["wmic", "OS", "get", "TotalVisibleMemorySize", "/format:csv"],
-            capture_output=True, text=True, timeout=10,
+            ["powershell", "-NoProfile", "-Command",
+             "(Get-CimInstance Win32_OperatingSystem).TotalVisibleMemorySize"],
+            capture_output=True, text=True, timeout=30,
         )
-        if result.returncode == 0:
-            for line in result.stdout.strip().split("\n"):
-                parts = [p.strip() for p in line.split(",")]
-                if len(parts) >= 2:
-                    try:
-                        ram_kb = int(parts[-1])
-                        ram_mb = ram_kb // 1024
-                    except ValueError:
-                        pass
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
+        ram_mb = int(result.stdout.strip()) // 1024 if result.returncode == 0 else None
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError, ValueError):
+        ram_mb = None
+    if not ram_mb:
+        raise RuntimeError("ZERO FALLBACK: Windows did not state this machine's memory (PowerShell's Get-CimInstance "
+                           "Win32_OperatingSystem answered no TotalVisibleMemorySize): the hardware profile is never "
+                           "written with an invented figure")
 
     # Infer features from model name (best-effort on Windows)
     model_lower = model.lower()
@@ -876,7 +880,11 @@ def _detect_gpus(os_type: str) -> Tuple[List[Dict[str, Any]], str]:
 def _detect_gpus_linux() -> Tuple[List[Dict[str, Any]], str]:
     """
     Linux GPU detection cascade:
-    nvidia-smi → rocm → xpu-smi → tt-smi → chinese SMI → lspci → no device
+    nvidia-smi → rocm → Intel (the PCI bus + Level Zero) → tt-smi → chinese SMI → the PCI bus → no device.
+
+    A detector's answer stands when it drives one device; the GPUs it found and could not drive ride with it, refused
+    by name (`_refused`). When none drives anything, every GPU the PCI bus lists is refused by name and the machine
+    plans on its CPU: a GPU no backend drives never makes the whole machine refused.
     """
     # An explicitly EMPTY CUDA_VISIBLE_DEVICES means "no GPU", conclusively.
     # Checked before the cascade: filtering only the nvidia-smi result made
@@ -898,11 +906,11 @@ def _detect_gpus_linux() -> Tuple[List[Dict[str, Any]], str]:
         (_parse_cambricon, "cambricon"),
     ]:
         devices = detector()
-        if devices:
-            return _apply_visible_filter(devices), brand
+        if _driven(devices):
+            return _apply_visible_filter(_driven(devices)) + _refusals(devices), brand
 
-    # lspci fallback (Linux only)
-    devices, brand = _parse_lspci()
+    # no backend drives a GPU here: what the PCI bus lists, each refused by name
+    devices, brand = _parse_listed()
     if devices:
         return devices, brand
 
@@ -915,9 +923,11 @@ def _detect_gpus_darwin() -> Tuple[List[Dict[str, Any]], str]:
     system_profiler → no device
     """
     devices = _parse_system_profiler()
-    if devices:
-        brand = devices[0].get("brand", "apple")
+    if _driven(devices):
+        brand = _driven(devices)[0].get("brand", "apple")
         return devices, brand
+    if devices:
+        return devices, "none"
 
     return _NO_DEVICE
 
@@ -925,7 +935,7 @@ def _detect_gpus_darwin() -> Tuple[List[Dict[str, Any]], str]:
 def _detect_gpus_windows() -> Tuple[List[Dict[str, Any]], str]:
     """
     Windows GPU detection cascade:
-    nvidia-smi → rocm-smi → xpu-smi → WMI/PowerShell → no device
+    nvidia-smi → rocm-smi → Intel (Win32_VideoController + Level Zero) → Win32_VideoController → no device
     """
     for detector, brand in [
         (_parse_nvidia_smi, "nvidia"),
@@ -933,11 +943,11 @@ def _detect_gpus_windows() -> Tuple[List[Dict[str, Any]], str]:
         (_parse_xpu, "intel"),
     ]:
         devices = detector()
-        if devices:
+        if _driven(devices):
             return devices, brand
 
-    # WMI fallback (Windows only)
-    devices, brand = _parse_wmi()
+    # no backend drives a GPU here: what Windows lists, each refused by name
+    devices, brand = _parse_listed()
     if devices:
         return devices, brand
 
@@ -1158,120 +1168,159 @@ def _parse_rocmsmi() -> List[Dict[str, Any]]:
     return devices
 
 
+def _driven(devices: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The devices a backend drives (a detection's list also carries the GPUs it refused by name)."""
+    return [d for d in devices if "refused" not in d]
+
+
+def _refusals(devices: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The GPUs a detection found and no backend drives, each with its reason."""
+    return [d for d in devices if "refused" in d]
+
+
+@functools.lru_cache(maxsize=1)
+def _pci_platforms() -> Dict[int, Dict[str, Any]]:
+    """{vendor id: {device id: platform row}} of `config/vendors/pci_platforms.yml` (the kernel's PCI id tables, each
+    row with its source), with each vendor's `no_target` reasons resolved into the rows."""
+    from neurobrix.core.config.loader import CONFIG_ROOT
+    data = yaml.safe_load((CONFIG_ROOT / "vendors" / "pci_platforms.yml").read_text()) or {}
+    out: Dict[int, Dict[str, Any]] = {}
+    for vendor in data.values():
+        reasons = vendor.get("no_target") or {}
+        rows = out.setdefault(int(vendor["vendor_id"]), {})
+        for row in vendor.get("platforms") or []:
+            row = dict(row, no_target=reasons[row["no_target"]] if row.get("no_target") else None)
+            rows.update({int(i): row for i in row["ids"]})
+    return out
+
+
+def _refused(gpu: Dict[str, Any], why: str) -> Dict[str, Any]:
+    """A GPU the operating system lists and no backend drives, named — its PCI id, its platform and whether it is
+    integrated when the platform table knows it — with the reason. Prism plans without it and says so."""
+    vendor = _PCI_VENDOR_MAP[f"{gpu['vendor_id']:04x}"]
+    row = _pci_platforms().get(gpu["vendor_id"], {}).get(gpu["device_id"])
+    out = {"model": gpu.get("name") or f"{vendor} GPU", "brand": vendor,
+           "pci_id": f"{gpu['vendor_id']:04x}:{gpu['device_id']:04x}", "bus": gpu.get("bus")}
+    if row:
+        out.update(platform=row["platform"], integrated=bool(row["integrated"]))
+    out["refused"] = why
+    return out
+
+
 def _parse_xpu() -> List[Dict[str, Any]]:
-    """Detect Intel GPUs via xpu-smi or sycl-ls."""
-    devices = _parse_xpusmi()
-    if devices:
-        return devices
-    return _parse_sycl()
+    """The Intel GPUs the operating system lists (`_listed_gpus`), each driven or refused by name. One is DRIVEN when a
+    device file lists its PCI id (nbxtensor/backend/devices/intel, `pci_device_ids`: the architecture Intel's compiler
+    targets) and the Level Zero loader reports it; its facts are then the device's own (`level_zero.gpu_facts`): its
+    integration with the host, the memory it may hold and its largest single allocation. No oneAPI tool is asked
+    (xpu-smi and sycl-ls are absent from an ordinary machine: they made every Intel laptop a GPU of architecture
+    "unknown", whose plan was refused)."""
+    intel = [g for g in _listed_gpus() if _PCI_VENDOR_MAP.get(f"{g['vendor_id']:04x}") == "intel"]
+    if not intel:
+        return []
+    from nbxtensor.backend import device_files, level_zero
+    facts = level_zero.gpu_facts()
+    taken: set = set()
+    out = []
+    for gpu in intel:
+        row = _pci_platforms().get(gpu["vendor_id"], {}).get(gpu["device_id"]) or {}
+        found = device_files.for_pci_id("intel", gpu["device_id"])
+        if found is None:
+            out.append(_refused(gpu, row.get("no_target") or "no device file lists its PCI id (nbxtensor/backend/"
+                                                              "devices/intel/*.yml, pci_device_ids)"))
+            continue
+        if facts is None:
+            out.append(_refused(gpu, f"the Level Zero loader ({', '.join(level_zero.LIBS)}), through which Intel GPUs "
+                                     f"are driven, is not installed — `neurobrix doctor` names the packages; then "
+                                     f"delete the generated hardware profile to detect the machine again"))
+            continue
+        index = next((i for i, f in enumerate(facts) if f["pci_device_id"] == gpu["device_id"] and i not in taken),
+                     None)
+        if index is None:
+            out.append(_refused(gpu, "the Level Zero loader reports no such GPU (the Intel compute runtime is not "
+                                     "installed for it) — `neurobrix doctor` names the packages"))
+            continue
+        taken.add(index)
+        out.append(_intel_device(index, facts[index], found, gpu))
+    return out
 
 
-def _parse_xpusmi() -> List[Dict[str, Any]]:
-    """Detect Intel GPUs via xpu-smi discovery."""
+def _intel_device(index: int, fact: Dict[str, Any], found: Tuple[str, Dict[str, Any]],
+                  gpu: Dict[str, Any]) -> Dict[str, Any]:
+    """The profile's device of an Intel GPU Level Zero reports: its architecture is its device file's (the compiler's
+    target), its precision the engine's half of that file, its memory the device's. An integrated GPU draws on the
+    host's memory: it is described as unified (`memory_mb` what the driver lets it hold, `host_memory_mb` the machine's,
+    `max_allocation_mb` its largest single allocation) and Prism plans it as one pool with the host."""
+    name, desc = found
+    from neurobrix.core.config.loader import get_vendor_config
+    precision = get_vendor_config("intel", name).get("precision") or {}
+    dtypes = ["float32"] + [d for d, key in (("float16", "supports_fp16"), ("bfloat16", "supports_bf16"))
+                            if precision.get(key)]
+    dev: Dict[str, Any] = {
+        "index": index, "brand": "intel", "model": fact["name"], "memory_mb": fact["memory_bytes"] >> 20,
+        "compute_capability": str(desc["compute_capability"]), "supports_dtypes": dtypes, "architecture": name,
+        "pcie_version": "N/A" if fact["integrated"] else _detect_pcie_version_sysfs(gpu.get("bus") or ""),
+        "pci_id": f"{gpu['vendor_id']:04x}:{gpu['device_id']:04x}",
+        "max_allocation_mb": fact["max_allocation_bytes"] >> 20,
+    }
+    if fact["integrated"]:
+        dev["unified_memory"] = True
+    return dev
+
+
+def _listed_gpus() -> List[Dict[str, Any]]:
+    """[{vendor_id, device_id, bus, name}] of the GPUs the operating system lists, with no vendor tool: Linux, the PCI
+    bus in sysfs (named by `lspci` when pciutils is installed); Windows, Win32_VideoController."""
+    if platform.system() == "Windows":
+        return _listed_gpus_windows()
+    if platform.system() != "Linux":
+        return []
+    from nbxtensor.backend.install_help import pci_display_devices
+    names = _lspci_names()
+    return [{"vendor_id": v, "device_id": d, "bus": bus, "name": names.get(bus)}
+            for v, d, bus in pci_display_devices()]
+
+
+def _lspci_names() -> Dict[str, str]:
+    """{PCI address: name} from pciutils' PCI id database (`lspci -Dnn`: "0000:00:02.0 VGA compatible controller [0300]:
+    Intel Corporation TigerLake-LP GT2 [Iris Xe Graphics] [8086:9a49] (rev 01)"); {} when lspci is not installed — the
+    device is then named by its PCI id and its platform."""
+    try:
+        result = subprocess.run(["lspci", "-Dnn"], capture_output=True, text=True, timeout=10)
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return {}
+    out = {}
+    for line in result.stdout.splitlines() if result.returncode == 0 else []:
+        m = re.match(r'(\S+)\s+[^:]+:\s*(.+?)\s*\[[0-9a-fA-F]{4}:[0-9a-fA-F]{4}\]', line.strip())
+        if m:
+            out[m.group(1).lower()] = m.group(2)
+    return out
+
+
+def _listed_gpus_windows() -> List[Dict[str, Any]]:
+    """The GPUs on the PCI bus as Windows lists them: Win32_VideoController's Name and the ids of its PNPDeviceID
+    ("PCI\\VEN_8086&DEV_4692&SUBSYS_D0001458&REV_0C\\3&11583659&0&10"), through PowerShell's CIM, which ships with
+    Windows 10 and 11 (wmic is disabled by default from Windows 11 24H2). A controller with no PCI id (the Microsoft
+    Basic Display Adapter, a software renderer) is no GPU. AdapterRAM is not read: a uint32, and on an integrated GPU a
+    figure that is not its memory (Microsoft, Win32_VideoController; 1 GiB on a UHD 730)."""
     try:
         result = subprocess.run(
-            ["xpu-smi", "discovery", "--json"],
-            capture_output=True, text=True, timeout=10,
-        )
-        if result.returncode != 0:
-            result = subprocess.run(
-                ["xpu-smi", "discovery"],
-                capture_output=True, text=True, timeout=10,
-            )
-            if result.returncode != 0:
-                return []
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+            ["powershell", "-NoProfile", "-Command",
+             "Get-CimInstance Win32_VideoController | Select-Object Name,PNPDeviceID | ConvertTo-Json"],
+            capture_output=True, text=True, timeout=30)
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return []
-
-    devices = []
-    idx = 0
-
-    # Try JSON
     try:
-        import json
-        data = json.loads(result.stdout)
-        for dev in data if isinstance(data, list) else []:
-            name = dev.get("device_name", "Intel GPU")
-            mem_mb = dev.get("memory_physical_size_byte", 0) // (1024 * 1024)
-            pci_addr = dev.get("pci_bdf_address", "")
-            pcie_ver = _detect_pcie_version_sysfs(pci_addr) if pci_addr else "4.0"
-            arch = _intel_name_to_arch(name)
-
-            devices.append({
-                "index": idx,
-                "brand": "intel",
-                "model": name,
-                "memory_mb": mem_mb if mem_mb > 0 else 16384,
-                "compute_capability": "0.0",
-                "supports_dtypes": ["float32", "float16"],
-                "architecture": arch,
-                "pcie_version": pcie_ver,
-            })
-            idx += 1
-        if devices:
-            return devices
-    except Exception:
-        pass
-
-    # Text parse fallback
-    for line in result.stdout.split("\n"):
-        line = line.strip()
-        if "Device Name" in line and ":" in line:
-            name = line.split(":", 1)[-1].strip()
-            arch = _intel_name_to_arch(name)
-            devices.append({
-                "index": idx,
-                "brand": "intel",
-                "model": name,
-                "memory_mb": 16384,
-                "compute_capability": "0.0",
-                "supports_dtypes": ["float32", "float16"],
-                "architecture": arch,
-                "pcie_version": "4.0",
-            })
-            idx += 1
-
-    return devices
-
-
-def _parse_sycl() -> List[Dict[str, Any]]:
-    """Detect Intel GPUs via sycl-ls."""
-    try:
-        result = subprocess.run(
-            ["sycl-ls"], capture_output=True, text=True, timeout=10,
-        )
-        if result.returncode != 0:
-            return []
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+        data = json.loads(result.stdout) if result.returncode == 0 and result.stdout.strip() else []
+    except ValueError:
         return []
-
-    devices = []
-    idx = 0
-    seen: set[str] = set()
-    for line in result.stdout.split("\n"):
-        if "gpu" in line.lower() and ("intel" in line.lower() or "arc" in line.lower()):
-            name = "Intel GPU"
-            match = re.search(r'\]\s+(.+)', line)
-            if match:
-                name = match.group(1).strip()
-                if name in seen:
-                    continue
-                seen.add(name)
-
-            arch = _intel_name_to_arch(name)
-            devices.append({
-                "index": idx,
-                "brand": "intel",
-                "model": name,
-                "memory_mb": 16384,
-                "compute_capability": "0.0",
-                "supports_dtypes": ["float32", "float16"],
-                "architecture": arch,
-                "pcie_version": "4.0",
-            })
-            idx += 1
-
-    return devices
+    out = []
+    for gpu in data if isinstance(data, list) else [data]:
+        pnp = str(gpu.get("PNPDeviceID") or "")
+        m = re.search(r'PCI\\VEN_([0-9A-Fa-f]{4})&DEV_([0-9A-Fa-f]{4})', pnp)
+        if m:
+            out.append({"vendor_id": int(m.group(1), 16), "device_id": int(m.group(2), 16), "bus": pnp,
+                        "name": gpu.get("Name")})
+    return out
 
 
 def _parse_tenstorrent() -> List[Dict[str, Any]]:
@@ -1495,200 +1544,24 @@ def _parse_system_profiler() -> List[Dict[str, Any]]:
 
 
 # ============================================================================
-# WINDOWS-ONLY: WMI / PowerShell
+# NO BACKEND DROVE A GPU: WHAT THE OPERATING SYSTEM LISTS, REFUSED BY NAME
 # ============================================================================
 
-def _parse_wmi() -> Tuple[List[Dict[str, Any]], str]:
-    """Detect GPUs on Windows via WMI (Win32_VideoController)."""
-    try:
-        result = subprocess.run(
-            ["wmic", "path", "Win32_VideoController", "get",
-             "Name,AdapterRAM,PNPDeviceID", "/format:csv"],
-            capture_output=True, text=True, timeout=10,
-        )
-        if result.returncode != 0:
-            return _parse_powershell_gpu()
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return _parse_powershell_gpu()
+def _parse_listed() -> Tuple[List[Dict[str, Any]], str]:
+    """Every GPU the operating system lists, when no backend's detection drove one: each refused by name (an Intel GPU
+    with its own reason, `_parse_xpu`), so the profile says what the machine has and Prism plans on its CPU."""
+    intel = {(d["pci_id"], d.get("bus")): d for d in _parse_xpu()}
+    out = []
+    for gpu in _listed_gpus():
+        vendor = _PCI_VENDOR_MAP.get(f"{gpu['vendor_id']:04x}")
+        if vendor is None:
+            continue                 # no GPU vendor this engine knows: a server's management display, not a compute device
+        own = intel.get((f"{gpu['vendor_id']:04x}:{gpu['device_id']:04x}", gpu.get("bus")))
+        out.append(own if own is not None and "refused" in own else _refused(
+            gpu, f"no {vendor} runtime answered on this machine (its driver or compute runtime is not installed) — "
+                 f"`neurobrix doctor` names the packages"))
+    return out, "none"
 
-    devices = []
-    brand = "unknown"
-    idx = 0
-
-    for line in result.stdout.strip().split("\n"):
-        parts = [p.strip() for p in line.split(",")]
-        if len(parts) < 4:
-            continue
-        # CSV: Node,AdapterRAM,Name,PNPDeviceID
-        adapter_ram = parts[1]
-        name = parts[2]
-        pnp_id = parts[3] if len(parts) > 3 else ""
-
-        if not name or name == "Name":
-            continue
-
-        # Skip Microsoft Basic Display Adapter (software renderer)
-        if "microsoft" in name.lower() and "basic" in name.lower():
-            continue
-
-        # Detect brand from PNPDeviceID (contains VEN_XXXX)
-        ven_match = re.search(r'VEN_([0-9A-Fa-f]{4})', pnp_id)
-        if ven_match:
-            ven_id = ven_match.group(1).lower()
-            detected_brand = _PCI_VENDOR_MAP.get(ven_id, "unknown")
-            if detected_brand != "unknown":
-                brand = detected_brand
-
-        # Memory
-        try:
-            mem_bytes = int(adapter_ram)
-            mem_mb = mem_bytes // (1024 * 1024) if mem_bytes > 0 else 0
-        except (ValueError, TypeError):
-            mem_mb = 0
-
-        # WMI AdapterRAM is capped at 4GB (32-bit field) — unreliable for modern GPUs
-        if mem_mb > 0 and mem_mb <= 4096 and "rtx" in name.lower():
-            mem_mb = 0  # Will use fallback
-
-        devices.append({
-            "index": idx,
-            "brand": brand if brand != "unknown" else _infer_brand_from_name(name),
-            "model": name,
-            "memory_mb": mem_mb if mem_mb > 0 else 8192,
-            "compute_capability": "0.0",
-            "supports_dtypes": ["float32", "float16"],
-            "architecture": "unknown",
-            "pcie_version": "3.0",
-        })
-        idx += 1
-
-    return devices, brand
-
-
-def _parse_powershell_gpu() -> Tuple[List[Dict[str, Any]], str]:
-    """Detect GPUs on Windows via PowerShell Get-CimInstance."""
-    try:
-        result = subprocess.run(
-            ["powershell", "-Command",
-             "Get-CimInstance Win32_VideoController | "
-             "Select-Object Name,AdapterRAM,PNPDeviceID | ConvertTo-Json"],
-            capture_output=True, text=True, timeout=10,
-        )
-        if result.returncode != 0:
-            return [], "unknown"
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return [], "unknown"
-
-    try:
-        import json
-        data = json.loads(result.stdout)
-        if not isinstance(data, list):
-            data = [data]
-    except Exception:
-        return [], "unknown"
-
-    devices = []
-    brand = "unknown"
-    idx = 0
-
-    for gpu in data:
-        name = gpu.get("Name", "Unknown GPU")
-        if "microsoft" in name.lower() and "basic" in name.lower():
-            continue
-
-        pnp_id = gpu.get("PNPDeviceID", "")
-        ven_match = re.search(r'VEN_([0-9A-Fa-f]{4})', pnp_id)
-        if ven_match:
-            ven_id = ven_match.group(1).lower()
-            detected = _PCI_VENDOR_MAP.get(ven_id, "unknown")
-            if detected != "unknown":
-                brand = detected
-
-        adapter_ram = gpu.get("AdapterRAM", 0)
-        mem_mb = int(adapter_ram) // (1024 * 1024) if adapter_ram else 0
-
-        devices.append({
-            "index": idx,
-            "brand": brand if brand != "unknown" else _infer_brand_from_name(name),
-            "model": name,
-            "memory_mb": mem_mb if mem_mb > 0 else 8192,
-            "compute_capability": "0.0",
-            "supports_dtypes": ["float32", "float16"],
-            "architecture": "unknown",
-            "pcie_version": "3.0",
-        })
-        idx += 1
-
-    return devices, brand
-
-
-# ============================================================================
-# LINUX-ONLY: lspci FALLBACK
-# ============================================================================
-
-def _parse_lspci() -> Tuple[List[Dict[str, Any]], str]:
-    """Detect GPUs via lspci PCI vendor IDs + sysfs (Linux only)."""
-    try:
-        result = subprocess.run(
-            ["lspci", "-Dnn"],
-            capture_output=True, text=True, timeout=10,
-        )
-        if result.returncode != 0:
-            return [], "unknown"
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return [], "unknown"
-
-    devices = []
-    brand = "unknown"
-    idx = 0
-
-    for line in result.stdout.split("\n"):
-        if not any(cls in line for cls in ["VGA", "3D controller", "Processing accelerator"]):
-            continue
-
-        vid_match = re.search(r'\[([0-9a-f]{4}):([0-9a-f]{4})\]', line)
-        if not vid_match:
-            continue
-        vendor_id = vid_match.group(1)
-        detected_brand = _PCI_VENDOR_MAP.get(vendor_id)
-        if not detected_brand:
-            continue
-
-        if devices and brand != detected_brand:
-            continue
-
-        brand = detected_brand
-
-        pci_addr_match = re.match(r'([0-9a-f:.]+)', line)
-        pci_addr = pci_addr_match.group(1) if pci_addr_match else ""
-
-        name_match = re.search(r'\]:\s*(.+?)\s*\[', line)
-        name = name_match.group(1).strip() if name_match else f"{brand} GPU"
-
-        pcie_ver = _detect_pcie_version_sysfs(pci_addr) if pci_addr else "4.0"
-
-        mem_mb = 0
-        if brand == "amd":
-            sysfs_mem = Path(f"/sys/bus/pci/devices/{pci_addr}/mem_info_vram_total")
-            if sysfs_mem.exists():
-                try:
-                    mem_mb = int(sysfs_mem.read_text().strip()) // (1024 * 1024)
-                except (ValueError, PermissionError):
-                    pass
-
-        devices.append({
-            "index": idx,
-            "brand": brand,
-            "model": name,
-            "memory_mb": mem_mb if mem_mb > 0 else 16384,
-            "compute_capability": "0.0",
-            "supports_dtypes": ["float32", "float16"],
-            "architecture": "unknown",
-            "pcie_version": pcie_ver,
-        })
-        idx += 1
-
-    return devices, brand
 
 
 # ============================================================================
@@ -2163,20 +2036,6 @@ def _amd_get_vram_mb(gpu_idx: int) -> int:
     return 16384
 
 
-def _intel_name_to_arch(name: str) -> str:
-    """Infer Intel GPU architecture from name."""
-    n = name.lower()
-    if any(x in n for x in ["b580", "b570", "battlemage"]):
-        return "battlemage"
-    elif any(x in n for x in ["a770", "a750", "a580", "a380", "alchemist"]):
-        return "alchemist"
-    elif "max" in n or "ponte" in n or "pvc" in n:
-        return "ponte_vecchio"
-    elif "flex" in n:
-        return "flex"
-    return "xe"
-
-
 def _detect_pcie_version_sysfs(pci_addr: str) -> str:
     """Detect PCIe version from Linux sysfs for any vendor."""
     if not pci_addr or pci_addr == "N/A":
@@ -2343,18 +2202,6 @@ def _parse_mac_vram(vram_str: str) -> int:
     return 0
 
 
-def _infer_brand_from_name(name: str) -> str:
-    """Infer GPU brand from device name string."""
-    n = name.lower()
-    if any(x in n for x in ["nvidia", "geforce", "rtx", "gtx", "quadro", "tesla"]):
-        return "nvidia"
-    elif any(x in n for x in ["radeon", "amd", "instinct"]):
-        return "amd"
-    elif any(x in n for x in ["intel", "arc", "iris"]):
-        return "intel"
-    return "unknown"
-
-
 def _shorten_gpu_name(name: str) -> str:
     """Shorten GPU name for profile ID."""
     name = name.lower()
@@ -2415,6 +2262,7 @@ def _build_notes(
     brand: str,
     vendor: str,
     interconnect: Dict[str, Any],
+    refused: List[Dict[str, Any]],
 ) -> str:
     """Build human-readable notes string."""
     lines = []
@@ -2428,7 +2276,7 @@ def _build_notes(
         features = cpu.get("features", [])
         if features:
             lines.append(f"CPU features: {', '.join(features)}")
-        lines.append("No GPU detected. Models run on CPU.")
+        lines.append("No GPU detected. Models run on CPU." if not refused else "No GPU driven. Models run on CPU.")
     else:
         if num_gpus == 1:
             lines.append(f"1 x {devices[0].get('model', 'GPU')}")
@@ -2456,6 +2304,8 @@ def _build_notes(
                 bw = g.get("bandwidth_gbps", 0)
                 lines.append(f"Interconnect: {tech} ({bw} GB/s)")
 
+    for d in refused:
+        lines.append(f"GPU refused: {d['model']} ({d.get('pci_id') or d['brand']}) - {d['refused']}")
     if vendor != "custom":
         lines.append(f"System vendor: {vendor}")
 

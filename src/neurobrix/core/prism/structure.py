@@ -467,6 +467,8 @@ class PrismProfile:
     # Step 6: the machines and the links between them. Empty = ONE node with every device and `cpu` (__post_init__).
     nodes: List[ClusterNode] = field(default_factory=list)
     node_links: List[NodeLink] = field(default_factory=list)
+    # The GPUs the machine has and no backend drives, each named with its reason (autodetect): planned without, said.
+    refused_devices: List[Dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self):
         if not self.nodes:
