@@ -27,6 +27,8 @@ import os
 import numpy as np
 import struct
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple
+import logging
+_log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # The target: from the engine's hardware profile, never from a driver probe
@@ -1471,17 +1473,17 @@ def _screen_on_windows(tuner, kernel_name, _rk, configs, args, meta, buffers, bu
             kept = [(c, blob) for c, blob in shots
                     if configs_agreeing_with_oracle([(c, blob)], ref_bytes, dtype_name)]
         else:
-            print(f"[AUTOTUNE_SCREEN_WINDOWED] {kernel_name}: the windowed oracle returned "
-                  f"nothing for a window of this key"
-                  + (f" ({_so.last_refusal()})" if _so.last_refusal() else "")
-                  + "; falling back to consensus on the same windows.", flush=True)
+            _log.warning("%s", f"[AUTOTUNE_SCREEN_WINDOWED] {kernel_name}: the windowed oracle returned "
+                               f"nothing for a window of this key"
+                               + (f" ({_so.last_refusal()})" if _so.last_refusal() else "")
+                               + "; falling back to consensus on the same windows.")
     except Exception as exc:                            # noqa: BLE001
         # SAY why. An `except: pass` here is the exact shape this session spent a day
         # removing elsewhere: it turns "the oracle could not be computed" into "no oracle
         # covers this kernel", which is a different and false statement.
-        print(f"[AUTOTUNE_SCREEN_WINDOWED] {kernel_name}: the windowed oracle raised "
-              f"({type(exc).__name__}: {str(exc)[:160]}); falling back to consensus on the "
-              f"same windows.", flush=True)
+        _log.warning(f"[AUTOTUNE_SCREEN_WINDOWED] {kernel_name}: the windowed oracle raised "
+                     f"({type(exc).__name__}: {str(exc)[:160]}); falling back to consensus on the "
+                     f"same windows.")
         kept = None
     if kept is not None:
         if not kept:
@@ -1490,11 +1492,11 @@ def _screen_on_windows(tuner, kernel_name, _rk, configs, args, meta, buffers, bu
                 f"contradicts EVERY candidate on {where}. Screened on windows because the "
                 f"arguments ({total} bytes) exceed the screening budget; a window that "
                 f"disagrees is a disagreement. Refusing to seat any of them.")
-        print(f"[AUTOTUNE_SCREEN_WINDOWED] {kernel_name} at key {_rk}: arguments total "
-              f"{total} bytes, over the screening budget {budget}. Screened against the fp64 "
-              f"oracle on {where} — {len(kept)} of {len(shots)} candidates kept. VERIFIED ON "
-              f"THOSE WINDOWS ONLY; the rest of the output and the input buffers were not "
-              f"compared.", flush=True)
+        _log.debug(f"[AUTOTUNE_SCREEN_WINDOWED] {kernel_name} at key {_rk}: arguments total "
+                   f"{total} bytes, over the screening budget {budget}. Screened against the fp64 "
+                   f"oracle on {where} — {len(kept)} of {len(shots)} candidates kept. VERIFIED ON "
+                   f"THOSE WINDOWS ONLY; the rest of the output and the input buffers were not "
+                   f"compared.")
         _record_screen_windows(_rk, where, "fp64 oracle", len(kept), len(shots))
         return [c for c, _ in kept]
 
@@ -1507,9 +1509,9 @@ def _screen_on_windows(tuner, kernel_name, _rk, configs, args, meta, buffers, bu
     refused = _so.last_refusal()
     why = (f"the row-windowed oracle REFUSED this key ({refused})" if refused
            else "no row-windowed oracle covers this kernel")
-    print(f"[AUTOTUNE_SCREEN_WINDOWED] {kernel_name} at key {_rk}: arguments total {total} "
-          f"bytes, over the screening budget {budget}, and {why}. Screened by CONSENSUS on "
-          f"{where} — {len(best)} of {len(shots)} agree. No oracle adjudicated this key.", flush=True)
+    _log.debug(f"[AUTOTUNE_SCREEN_WINDOWED] {kernel_name} at key {_rk}: arguments total {total} "
+               f"bytes, over the screening budget {budget}, and {why}. Screened by CONSENSUS on "
+               f"{where} — {len(best)} of {len(shots)} agree. No oracle adjudicated this key.")
     _record_screen_windows(_rk, where,
                            f"consensus (windowed oracle refused: {refused})" if refused
                            else "consensus (no windowed oracle)", len(best), len(shots))
@@ -1537,10 +1539,10 @@ def _seat_unscreened(kernel: str, key, configs, candidates: int, reason: str):
     What it may no longer do is produce a line that reads as a validation.
     """
     _UNSCREENED.append(Unscreened(kernel, key, candidates, reason))
-    print(f"[AUTOTUNE_UNSCREENED] {kernel} at key {key}: {reason}. The "
-          f"configuration seated here is the FASTEST AMONG {candidates} "
-          f"CANDIDATES THAT NOTHING VERIFIED — it is not a validated setting "
-          f"and it is never written to the certified directory.", flush=True)
+    _log.debug(f"[AUTOTUNE_UNSCREENED] {kernel} at key {key}: {reason}. The "
+               f"configuration seated here is the FASTEST AMONG {candidates} "
+               f"CANDIDATES THAT NOTHING VERIFIED — it is not a validated setting "
+               f"and it is never written to the certified directory.")
     return configs
 
 
@@ -1995,9 +1997,9 @@ def bench_would_swap(total_bytes: int):
                      f"{_n} live pointers")
         except Exception as _e:
             _acct = f" | allocator accounting unavailable: {type(_e).__name__}"
-        print(f"[BENCH_DOOR] args {total_bytes} + flush {_BENCH_FLUSH_BYTES} "
-              f"= {need} bytes vs {avail_mb} MB available -> "
-              f"{'REFUSE' if need > avail_mb * 2 ** 20 else 'allow'}{_acct}", flush=True)
+        _log.debug(f"[BENCH_DOOR] args {total_bytes} + flush {_BENCH_FLUSH_BYTES} "
+                   f"= {need} bytes vs {avail_mb} MB available -> "
+                   f"{'REFUSE' if need > avail_mb * 2 ** 20 else 'allow'}{_acct}")
     return need > avail_mb * 2 ** 20, avail_mb
 
 
@@ -2147,13 +2149,12 @@ def _screen_configs(tuner, configs, key, meta=None, record_key=None):
         # outlive the pressure that forced it.
         _swaps, _avail_mb = bench_would_swap(total)
         if _swaps:
-            print(f"[AUTOTUNE_BENCH] "
-                  f"{getattr(tuner.base_fn, '__name__', tuner)}: arguments "
-                  f"total {total} bytes against {_avail_mb} MB available -- "
-                  f"timing candidates would measure the swap, not the "
-                  f"kernels. Taking the first declared config WITHOUT "
-                  f"measurement; the choice will not be persisted.",
-                  flush=True)
+            _log.debug(f"[AUTOTUNE_BENCH] "
+                       f"{getattr(tuner.base_fn, '__name__', tuner)}: arguments "
+                       f"total {total} bytes against {_avail_mb} MB available -- "
+                       f"timing candidates would measure the swap, not the "
+                       f"kernels. Taking the first declared config WITHOUT "
+                       f"measurement; the choice will not be persisted.")
             from nbxtensor.ops import autotune_cache as _atc
             _atc.mark_unmeasured(tuner, key)
             return _seat_unscreened(
@@ -2200,9 +2201,9 @@ def _screen_configs(tuner, configs, key, meta=None, record_key=None):
     _restore(buffers, before)
 
     if unrun:
-        print(f"[AUTOTUNE_SCREEN] {kernel_name}: {len(unrun)} of "
-              f"{len(configs)} configs could not be run for screening at key "
-              f"{key}; they go to the timer unchecked", flush=True)
+        _log.debug(f"[AUTOTUNE_SCREEN] {kernel_name}: {len(unrun)} of "
+                   f"{len(configs)} configs could not be run for screening at key "
+                   f"{key}; they go to the timer unchecked")
     if len(results) < 2:
         return _seat_unscreened(kernel_name, _rk, configs, len(results),
                                 "fewer than two candidates ran, so there is "
@@ -2239,9 +2240,9 @@ def _screen_configs(tuner, configs, key, meta=None, record_key=None):
             _clear_refusal(None)
             oracle = _call_screen_oracle(_SCREEN_ORACLE, tuner, key, buffers, meta)
         except Exception as exc:      # an oracle that fails is not a launch failure
-            print(f"[AUTOTUNE_ORACLE] {kernel_name}: the oracle provider raised "
-                  f"({type(exc).__name__}: {exc}); falling back to the consensus "
-                  f"at key {key}", flush=True)
+            _log.warning(f"[AUTOTUNE_ORACLE] {kernel_name}: the oracle provider raised "
+                         f"({type(exc).__name__}: {exc}); falling back to the consensus "
+                         f"at key {key}")
     if oracle is not None:
         kept = _oracle_keeps(results, oracle, buffers)
         refused = [c for c, _ in results if c not in [k for k, _ in kept]]
@@ -2252,19 +2253,18 @@ def _screen_configs(tuner, configs, key, meta=None, record_key=None):
                 f"{len(results)}). A consensus would have returned the whole "
                 f"space and said nothing. Refusing to seat any of them.")
         if len(kept) < len(results):
-            print(f"[AUTOTUNE_ORACLE] {kernel_name}: the oracle refused "
-                  f"{len(refused)} of {len(results)} configs at key {key}; "
-                  f"{len(kept)} kept. The vote is NOT consulted for this key.",
-                  flush=True)
+            _log.debug(f"[AUTOTUNE_ORACLE] {kernel_name}: the oracle refused "
+                       f"{len(refused)} of {len(results)} configs at key {key}; "
+                       f"{len(kept)} kept. The vote is NOT consulted for this key.")
             # Was the vote about to seat one of them? That is the finding.
             majority = _largest_agreement(results, buffers)
             wrong_majority = [c for c, _ in majority if c in refused]
             if wrong_majority:
-                print(f"[AUTOTUNE_ORACLE] FINDING — {kernel_name} at key {key}: "
-                      f"{len(wrong_majority)} config(s) the CONSENSUS would have "
-                      f"seated are contradicted by the oracle. The majority was "
-                      f"wrong in the same way. This is the failure mode the "
-                      f"screen cannot see on its own.", flush=True)
+                _log.debug(f"[AUTOTUNE_ORACLE] FINDING — {kernel_name} at key {key}: "
+                           f"{len(wrong_majority)} config(s) the CONSENSUS would have "
+                           f"seated are contradicted by the oracle. The majority was "
+                           f"wrong in the same way. This is the failure mode the "
+                           f"screen cannot see on its own.")
         # The oracle adjudicated this key: the record says so, with the name of
         # what adjudicated it — the converse of the unscreened mention.
         _ADJUDICATED[(kernel_name, repr(_rk))] = "fp64 oracle"
@@ -2305,13 +2305,12 @@ def _screen_configs(tuner, configs, key, meta=None, record_key=None):
         from nbxtensor.ops.autotune_certified import report_contradictions
         report_contradictions(tuner, dropped)
     except Exception as exc:                        # the report must not turn into a launch failure
-        print(f"[AUTOTUNE_SCREEN] could not check the certified directory: {exc}", flush=True)
+        _log.debug(f"[AUTOTUNE_SCREEN] could not check the certified directory: {exc}")
     for entry in dropped:
-        print(f"[AUTOTUNE_SCREEN] {entry.kernel}: config excluded before "
-              f"timing — it disagrees with the {len(clusters[0])}-config "
-              f"consensus by {entry.deviation:.3e} ({entry.dtype}, tolerance "
-              f"{entry.tolerance:.1e}) at key {entry.key}: {entry.config}",
-              flush=True)
+        _log.debug(f"[AUTOTUNE_SCREEN] {entry.kernel}: config excluded before "
+                   f"timing — it disagrees with the {len(clusters[0])}-config "
+                   f"consensus by {entry.deviation:.3e} ({entry.dtype}, tolerance "
+                   f"{entry.tolerance:.1e}) at key {entry.key}: {entry.config}")
     _record_screen_exclusions(dropped)
 
     return _seat_unscreened(
@@ -2334,8 +2333,7 @@ def _record_screen_exclusions(dropped) -> None:
     try:
         record([e._asdict() for e in dropped])
     except Exception as exc:                            # pragma: no cover
-        print(f"[AUTOTUNE_SCREEN] could not persist exclusions: {exc}",
-              flush=True)
+        _log.debug(f"[AUTOTUNE_SCREEN] could not persist exclusions: {exc}")
 
 # ---------------------------------------------------------------------------
 # The seam: route every `kernel[grid](...)` of the process through `launch`
@@ -2455,9 +2453,9 @@ def install(force: Optional[bool] = None) -> bool:
             from nbxtensor.ops.screen_oracle import install as _install_oracle
             _install_oracle()
         except Exception as exc:                       # never block a launch
-            print(f"[AUTOTUNE_ORACLE] the oracle provider could not be "
-                  f"installed ({type(exc).__name__}: {exc}); the screen runs "
-                  f"on the consensus alone", flush=True)
+            _log.debug(f"[AUTOTUNE_ORACLE] the oracle provider could not be "
+                       f"installed ({type(exc).__name__}: {exc}); the screen runs "
+                       f"on the consensus alone")
 
     # A backend refusal for ONE candidate config costs that config, not the
     # run. Triton's `_bench` already scores `OutOfResources` and friends `inf`
@@ -2468,13 +2466,13 @@ def install(force: Optional[bool] = None) -> bool:
     try:
         from nbxtensor.ops.autotune_refusals import install as _install_refusals
         if not _install_refusals():
-            print("[AUTOTUNE_REFUSED] the autotuner is not importable; a "
-                  "refused config will end the sweep instead of being "
-                  "excluded", flush=True)
+            _log.warning("[AUTOTUNE_REFUSED] the autotuner is not importable; a "
+                         "refused config will end the sweep instead of being "
+                         "excluded")
     except Exception as exc:                           # never block a launch
-        print(f"[AUTOTUNE_REFUSED] the refusal policy could not be installed "
-              f"({type(exc).__name__}: {exc}); a refused config will end the "
-              f"sweep", flush=True)
+        _log.warning(f"[AUTOTUNE_REFUSED] the refusal policy could not be installed "
+                     f"({type(exc).__name__}: {exc}); a refused config will end the "
+                     f"sweep")
 
     _installed = True
     return True

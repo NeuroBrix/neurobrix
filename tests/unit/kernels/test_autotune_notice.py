@@ -42,27 +42,27 @@ def _reset_announced():
     _configs._SWEEP_ANNOUNCED[0] = False
 
 
-def test_a_cache_miss_is_announced(capsys):
+def test_a_cache_miss_is_announced(engine_log):
     tuned = _configs._announce_first_sweep(_FakeAutotuner())
     tuned.run("shape-a", miss=True)
-    assert "measuring kernel configurations" in capsys.readouterr().err
+    assert "measuring kernel configurations" in engine_log()
 
 
-def test_a_cache_hit_says_nothing(capsys):
+def test_a_cache_hit_says_nothing(engine_log):
     """The warm path is the overwhelming majority of launches. A notice there
     would be noise on every single run."""
     tuned = _configs._announce_first_sweep(_FakeAutotuner())
     tuned.run("shape-a", miss=False)
-    assert capsys.readouterr().err == ""
+    assert engine_log() == ""
 
 
-def test_it_is_said_once_not_once_per_kernel(capsys):
+def test_it_is_said_once_not_once_per_kernel(engine_log):
     """There are hundreds of autotuned kernels. One notice, not hundreds."""
     first, second = (_configs._announce_first_sweep(_FakeAutotuner())
                      for _ in range(2))
     first.run("a", miss=True)
     second.run("b", miss=True)
-    err = capsys.readouterr().err
+    err = engine_log()
     assert err.count("measuring kernel configurations") == 1
 
 
@@ -81,16 +81,16 @@ def test_the_wrapper_stays_and_announces_once():
     assert "run" in tuned.__dict__, "the override persists the sweeps; it must stay"
 
 
-def test_the_notice_names_the_cost_and_where_it_goes(capsys):
+def test_the_notice_names_the_cost_and_where_it_goes(engine_log):
     """A message that says 'please wait' without saying how long, whether it
     recurs, or where the result is kept, does not answer the question the user
     actually has."""
     tuned = _configs._announce_first_sweep(_FakeAutotuner())
     tuned.run("a", miss=True)
-    err = capsys.readouterr().err
-    assert "ONCE" in err, "must say it does not recur"
-    assert "~/.neurobrix/replay_cache" in err, "must say where the result is kept (the engine's artifact)"
-    assert "254.9" in err and "7.9" in err, "must carry the measured figures"
+    err = engine_log()
+    assert len(err.splitlines()) == 1, "one line, not a page"
+    assert "once" in err, "must say it does not recur"
+    assert "kept for later runs, which skip it" in err, "must say the result is kept and later runs skip it"
 
 
 def test_a_non_autotuner_is_returned_untouched():

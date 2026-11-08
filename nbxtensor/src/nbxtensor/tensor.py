@@ -36,6 +36,8 @@ from nbxtensor.dtype.nbx_dtype import (NBXDtype, _COMPLEX_DTYPES, _DTYPE_FROM_ST
 from nbxtensor.memory.allocator import DeviceAllocator, DeviceOOMError, ImpossibleExtentError  # noqa: F401
 from nbxtensor.memory import allocator as _alloc
 from nbxtensor.backend import runtime as _rt, capabilities as _caps, faults as _faults  # noqa: F401
+import logging
+_log = logging.getLogger(__name__)
 
 
 # NBX_TRACE_DEL_BIG_MB=N (default off): NBXTensor.__del__ logs every
@@ -470,9 +472,8 @@ class NBXTensor:
             if (_TRACE_DEL_BIG_THRESH is not None and self._owns_data
                     and self._data_ptr
                     and self._nbytes >= _TRACE_DEL_BIG_THRESH):
-                print(f"[NBX_DEL data_ptr={self._data_ptr} "
-                      f"shape={self._shape} nbytes={self._nbytes/1024/1024:.0f}MB]",
-                      flush=True)
+                _log.debug(f"[NBX_DEL data_ptr={self._data_ptr} "
+                           f"shape={self._shape} nbytes={self._nbytes/1024/1024:.0f}MB]")
         except Exception:
             pass
 

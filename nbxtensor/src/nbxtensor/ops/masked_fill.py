@@ -17,5 +17,8 @@ def masked_fill_forward_kernel(
 
     x = tl.load(input_ptr + offset, mask=mask)
     m = tl.load(mask_ptr + offset, mask=mask)
-    out = tl.where(m, fill_value, x)
+    # the condition as int1: a uint8 mask (the causal bias's) made Triton warn "tl.where with a non-boolean condition
+    # is deprecated" on every first compile; `.to(tl.int1)` is the `!= 0` tl.where already applied (ops/where.py),
+    # the TTIR is identical (2026-11-08, both pointer types)
+    out = tl.where(m.to(tl.int1), fill_value, x)
     tl.store(output_ptr + offset, out, mask=mask)

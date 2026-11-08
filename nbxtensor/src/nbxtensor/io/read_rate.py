@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import sys
 import time
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Sequence
 
@@ -121,6 +122,13 @@ def measure(files: Sequence[str], max_bytes: int, max_workers: int, within: floa
     last = trial(ps, 1)
     steady = abs(last - rates[1]) <= within * max(last, rates[1])
     return {"bytes": total, "rates": rates, "workers": choose(rates, within), "steady": steady, "last_one_worker": last}
+
+
+def read_seconds(directory, nbytes: int, sample: int = 256 << 20) -> float:
+    """Seconds this storage takes to read `nbytes`, at the rate one read of up to `sample` bytes of the weight files
+    under `directory` measures now (one worker, the page cache bypassed)."""
+    ps, _total = pieces(sorted(str(f) for f in Path(directory).rglob("*.safetensors")), sample)
+    return nbytes / trial(ps, 1)
 
 
 WITNESS_BYTES = 1 << 30                # the witness file written when the storage holds no weight file yet

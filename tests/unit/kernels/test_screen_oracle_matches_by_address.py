@@ -77,24 +77,24 @@ def test_the_oracle_lands_on_the_output_not_on_a_same_sized_input():
         a.numpy()), "an input buffer was given the oracle"
 
 
-def test_an_unknown_kernel_has_no_oracle_and_says_so(capsys):
+def test_an_unknown_kernel_has_no_oracle_and_says_so(engine_log):
     SO._ANNOUNCED.clear()
     tuner = _Tuner("some_kernel_we_cannot_oracle", {"x": 1})
     assert SO.provider(tuner, ("k",), []) is None
-    said = capsys.readouterr().out
+    said = engine_log()
     assert "CONSENSUS ALONE" in said and "some_kernel_we_cannot_oracle" in said
 
 
-def test_the_announcement_is_made_once_per_key(capsys):
+def test_the_announcement_is_made_once_per_key(engine_log):
     SO._ANNOUNCED.clear()
     tuner = _Tuner("unknown_kernel", {"x": 1})
     for _ in range(5):
         SO.provider(tuner, ("same-key",), [])
-    assert capsys.readouterr().out.count("CONSENSUS ALONE") == 1, (
+    assert engine_log().count("CONSENSUS ALONE") == 1, (
         "a warning repeated per launch is a warning nobody reads")
 
 
-def test_a_size_disagreement_refuses_instead_of_guessing(capsys):
+def test_a_size_disagreement_refuses_instead_of_guessing(engine_log):
     """If the reference and the output buffer disagree on length, something is
     wrong with the mapping and guessing is how the first version failed."""
     SO._ANNOUNCED.clear()
@@ -105,7 +105,7 @@ def test_a_size_disagreement_refuses_instead_of_guessing(capsys):
     # a buffer claiming c's address but the wrong length
     bad = [(c.data_ptr(), c._nbytes + 4, "fp32")]
     assert SO.provider(tuner, ("k",), bad) is None
-    assert "bytes" in capsys.readouterr().out
+    assert "bytes" in engine_log()
 
 
 def test_every_registered_kernel_names_its_output_argument():

@@ -175,6 +175,8 @@ import math
 from nbxtensor.ops import elementwise_wrappers as _ew
 from nbxtensor.ops import linalg_wrappers as _la
 from nbxtensor.ops import wrappers as _core
+import logging
+_log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -1084,13 +1086,13 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
             _seen.add(_diag_idx)
             _pr = _core.get_hardware_profile()
             _dv = getattr(_pr, "devices", None) if _pr is not None else None
-            print(f"[NBX_SDPA_ROUTE_DIAG] hd={headdim} hdv={headdim_v} pow2={_ew._is_power_of_2(headdim)} "
-                  f"B={batch} H={nheads} Tq={seqlen_q} Tk={seqlen_k} "
-                  f"scores_bytes={batch*nheads*seqlen_q*seqlen_k*4} "
-                  f"dev_idx={_diag_idx} qtype={type(q).__name__} "
-                  f"budget={_sdpa_math_scores_budget_bytes_for(_diag_idx)} "
-                  f"profile={'None' if _pr is None else getattr(_pr,'vendor','?')+'/'+(getattr(_dv[0],'architecture','?') if _dv else '?')} "
-                  f"use_math={_use_math}", flush=True)
+            _log.debug(f"[NBX_SDPA_ROUTE_DIAG] hd={headdim} hdv={headdim_v} pow2={_ew._is_power_of_2(headdim)} "
+                       f"B={batch} H={nheads} Tq={seqlen_q} Tk={seqlen_k} "
+                       f"scores_bytes={batch*nheads*seqlen_q*seqlen_k*4} "
+                       f"dev_idx={_diag_idx} qtype={type(q).__name__} "
+                       f"budget={_sdpa_math_scores_budget_bytes_for(_diag_idx)} "
+                       f"profile={'None' if _pr is None else getattr(_pr,'vendor','?')+'/'+(getattr(_dv[0],'architecture','?') if _dv else '?')} "
+                       f"use_math={_use_math}")
     if _use_math == "chunked":
         return _math_attention_chunked(_q_cast(q), k, v, attn_mask, is_causal,
                                        softmax_scale, _chunk_rows)
@@ -1453,13 +1455,13 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
         except Exception as _e:
             # A probe that cannot run changes nothing — but it SAYS SO. A guard
             # that degrades in silence is the defect this whole change is about.
-            print(f"[flash] shared-memory probe unavailable ({type(_e).__name__}: "
-                  f"{_e}); the tile is not checked against the device", flush=True)
+            _log.debug(f"[flash] shared-memory probe unavailable ({type(_e).__name__}: "
+                       f"{_e}); the tile is not checked against the device")
             _sel = (BLOCK_M, BLOCK_N)
         if _sel != (BLOCK_M, BLOCK_N):
-            print(f"[flash] tile {(BLOCK_M, BLOCK_N)} needs "
-                  f"{_tile_cost((BLOCK_M, BLOCK_N))} bytes of shared memory and this "
-                  f"device declares {_smem_budget} — using {_sel}", flush=True)
+            _log.debug(f"[flash] tile {(BLOCK_M, BLOCK_N)} needs "
+                       f"{_tile_cost((BLOCK_M, BLOCK_N))} bytes of shared memory and this "
+                       f"device declares {_smem_budget} — using {_sel}")
             BLOCK_M, BLOCK_N = _sel
             # Everything downstream that was derived from the proposed tile.
             seqlen_q_rounded = math.ceil(seqlen_q / BLOCK_M) * BLOCK_M

@@ -36,6 +36,8 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 import numpy as np
+import logging
+_log = logging.getLogger(__name__)
 
 #: Keys already announced as running without an oracle. Once per process: a
 #: warning repeated per launch is a warning nobody reads.
@@ -466,11 +468,11 @@ def announce_no_oracle(kernel_name: str, key, why: str = "no oracle is registere
     if token in _ANNOUNCED:
         return
     _ANNOUNCED.add(token)
-    print(f"[AUTOTUNE_ORACLE] {kernel_name}: screening at key {key} on the "
-          f"CONSENSUS ALONE — {why}. A consensus cannot see a defect that is "
-          f"in the backend's emission, because every candidate then shares it "
-          f"and the vote is unanimous (measured: addmm wrong by 1e9 with a "
-          f"unanimous vote, 2026-09-11).", flush=True)
+    _log.debug(f"[AUTOTUNE_ORACLE] {kernel_name}: screening at key {key} on the "
+               f"CONSENSUS ALONE — {why}. A consensus cannot see a defect that is "
+               f"in the backend's emission, because every candidate then shares it "
+               f"and the vote is unanimous (measured: addmm wrong by 1e9 with a "
+               f"unanimous vote, 2026-09-11).")
 
 
 def install() -> None:

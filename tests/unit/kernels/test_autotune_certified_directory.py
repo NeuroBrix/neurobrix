@@ -139,12 +139,12 @@ def test_a_certified_setting_is_applied_without_a_sweep(root):
     assert C.served()["certified"] == 1 and C.served()["swept"] == 0
 
 
-def test_a_missing_setting_is_said_once_and_swept(root, capsys):
+def test_a_missing_setting_is_said_once_and_swept(root, engine_log):
     t = _Tuner()
     assert C.apply(KERNEL, t, KEY) is False
     C.announce_missing(KERNEL, t, KEY)
     C.announce_missing(KERNEL, t, KEY)
-    out = capsys.readouterr().out
+    out = engine_log()
     assert out.count("no certified setting for matmul_kernel fp32") == 1
     assert "sweeping at runtime with the consensus screen" in out and "never in the engine's directory" in out
     assert C.served()["swept"] == 1
@@ -156,7 +156,7 @@ def test_off_switch_sweeps_everything(root, monkeypatch):
     assert C.apply(KERNEL, _Tuner(), KEY) is False
 
 
-def test_a_runtime_exclusion_that_contradicts_a_certification_is_reported(root, capsys, monkeypatch):
+def test_a_runtime_exclusion_that_contradicts_a_certification_is_reported(root, engine_log, monkeypatch):
     """The runtime screen excludes the very config the directory certifies:
     printed as a CONTRADICTION, recorded, never silent."""
     from nbxtensor.ops import autotune_cache as atc
@@ -172,14 +172,14 @@ def test_a_runtime_exclusion_that_contradicts_a_certification_is_reported(root, 
         config = "BLOCK_M: 64, BLOCK_N: 128, BLOCK_K: 32, GROUP_M: 8, num_warps: 4, num_ctas: 1, num_stages: 2"
         dtype = "fp32"; deviation = 0.3; tolerance = 1.0e-4
     found = C.report_contradictions(t, [Ex()])
-    out = capsys.readouterr().out
+    out = engine_log()
     assert len(found) == 1 and found[0]["contradiction"] is True
     assert "CONTRADICTION" in out and "certified on 2026-09-07" in out
     assert recorded and recorded[0]["contradiction"] is True
     assert C.contradictions()[0]["runtime"]["deviation"] == 0.3
 
 
-def test_a_config_the_directory_did_not_certify_is_no_contradiction(root, monkeypatch, capsys):
+def test_a_config_the_directory_did_not_certify_is_no_contradiction(root, monkeypatch, engine_log):
     from nbxtensor.ops import autotune_cache as atc
     _write(root, {C.key_repr(KEY): _entry()})
     monkeypatch.setattr(atc, "_qual_of", lambda tuner: KERNEL)
@@ -189,7 +189,7 @@ def test_a_config_the_directory_did_not_certify_is_no_contradiction(root, monkey
         kernel = "matmul_kernel"; key = ("x",); config = "BLOCK_M: 128, BLOCK_N: 128, BLOCK_K: 64, GROUP_M: 8, num_warps: 8, num_ctas: 1, num_stages: 3"
         dtype = "fp32"; deviation = 0.5; tolerance = 1.0e-4
     assert C.report_contradictions(_Tuner(), [Ex()]) == []
-    assert "CONTRADICTION" not in capsys.readouterr().out
+    assert "CONTRADICTION" not in engine_log()
 
 
 def test_the_engines_own_directory_passes_the_gate():
@@ -199,7 +199,7 @@ def test_the_engines_own_directory_passes_the_gate():
         assert C.validate(doc, path) == [], path
 
 
-def test_a_contradiction_is_reported_even_with_the_apply_switch_off(root, capsys, monkeypatch):
+def test_a_contradiction_is_reported_even_with_the_apply_switch_off(root, engine_log, monkeypatch):
     """NBX_AUTOTUNE_CERTIFIED=off is the proof's runtime-sweep arm — exactly where
     the screen and a certification can disagree. The switch stops applying,
     never reporting."""
@@ -216,7 +216,7 @@ def test_a_contradiction_is_reported_even_with_the_apply_switch_off(root, capsys
         dtype = "fp32"; deviation = 0.3; tolerance = 1.0e-4
     assert C.apply(KERNEL, _Tuner(), KEY) is False, "the switch stops applying"
     assert len(C.report_contradictions(_Tuner(), [Ex()])) == 1, "but never reporting"
-    assert "CONTRADICTION" in capsys.readouterr().out
+    assert "CONTRADICTION" in engine_log()
 
 
 def test_a_certified_setting_overrides_what_the_local_cache_seeded(root):

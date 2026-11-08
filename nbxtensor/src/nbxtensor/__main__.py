@@ -23,8 +23,17 @@ def doctor() -> int:
     return 0
 
 
+def _configure_terminal() -> None:
+    """The one handler of nbxtensor's command line (the library installs none): `nbxtensor.terminal`'s rule."""
+    from nbxtensor import terminal
+    try:
+        terminal.configure(*terminal.resolve(terminal.verbosity(sys.argv[1:])))
+    except terminal.LogLevelRefused as exc:
+        raise SystemExit(f"Error: {exc}")
+
+
 def main(argv=None) -> int:
-    argv = sys.argv[1:] if argv is None else argv
+    argv = [a for a in (sys.argv[1:] if argv is None else argv) if a != "--verbose" and not (a[:2] == "-v" and set(a[1:]) == {"v"})]
     if argv[:1] == ["doctor"]:
         return doctor()
     if argv[:1] == ["install-metal"] and set(argv[1:]) <= {"--dry-run"}:
@@ -36,4 +45,5 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
+    _configure_terminal()
     raise SystemExit(main())

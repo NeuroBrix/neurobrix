@@ -103,3 +103,20 @@ def installed_container(name: str) -> Path:
 # The engine provides its tensor library with what the library does not own (src/neurobrix/_nbxtensor_host.py): a test
 # that imports nbxtensor alone runs under the engine all the same, whatever test ran before it.
 import neurobrix  # noqa: E402,F401
+
+
+@pytest.fixture
+def engine_log(caplog):
+    """The engine's lines as a test reads them: `engine_log()` returns the text of every record the `neurobrix.*` and
+    `nbxtensor.*` loggers emitted since the last call (every level — what `-v` / NBX_LOG=debug prints), and consumes
+    them, as `capsys.readouterr()` does. The engine logs; it does not print (nbxtensor/terminal.py): a test that read its
+    lines from stdout reads them here."""
+    import logging
+    caplog.set_level(logging.DEBUG, logger="neurobrix")
+    caplog.set_level(logging.DEBUG, logger="nbxtensor")
+
+    def text() -> str:
+        out = "\n".join(r.getMessage() for r in caplog.records)
+        caplog.clear()
+        return out
+    return text

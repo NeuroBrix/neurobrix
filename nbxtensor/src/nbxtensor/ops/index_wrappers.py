@@ -175,6 +175,8 @@ import math
 from nbxtensor.ops import elementwise_wrappers as _ew
 from nbxtensor.ops import reduction_wrappers as _red
 from nbxtensor.ops import wrappers as _core
+import logging
+_log = logging.getLogger(__name__)
 
 
 def where_wrapper(cond, x, y) :
@@ -343,8 +345,8 @@ def index_select_wrapper(x, dim: int, index) :
         _unwritten = int(_np.isnan(_o).sum()) if _o.dtype.kind == "f" else int((_o == -7777).sum())
         if _unwritten:
             _ix = index.numpy()
-            print(f"[INDEX_SELECT_SENTINEL] {_unwritten}/{_o.size} output elements UNWRITTEN "
-                  f"(index dtype {index.dtype} len {index_len} min {int(_ix.min())} max {int(_ix.max())} N={N} M={M})", flush=True)
+            _log.debug(f"[INDEX_SELECT_SENTINEL] {_unwritten}/{_o.size} output elements UNWRITTEN "
+                       f"(index dtype {index.dtype} len {index_len} min {int(_ix.min())} max {int(_ix.max())} N={N} M={M})")
 
     return out
 

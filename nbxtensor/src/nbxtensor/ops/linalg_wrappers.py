@@ -174,6 +174,8 @@ from nbxtensor.ops import tiling_sizes as _ts
 import math
 from nbxtensor.ops import elementwise_wrappers as _ew
 from nbxtensor.ops import wrappers as _core
+import logging
+_log = logging.getLogger(__name__)
 
 # gridDim.z architectural bound — 65535 on both CUDA and HIP (an API
 # limit shared by every supported arch, not a tunable hardware param).
@@ -547,11 +549,11 @@ def mm(a, b, _epilogue: int = 0) :
 
             def _dump_shapes():
                 rec = mm.__dict__["_rec"]
-                print("\n[NBX_MM_SHAPES] unique (M,N,K) × count:")
+                _log.debug("[NBX_MM_SHAPES] unique (M,N,K) × count:")
                 for (m_, n_, k_), c in sorted(rec.items(),
                                               key=lambda x: -x[1]):
-                    print(f"  M={m_:5d} N={n_:5d} K={k_:5d}  × {c}")
-                print(f"[NBX_MM_SHAPES] total calls: {sum(rec.values())}")
+                    _log.debug(f"  M={m_:5d} N={n_:5d} K={k_:5d}  × {c}")
+                _log.debug(f"[NBX_MM_SHAPES] total calls: {sum(rec.values())}")
             atexit.register(_dump_shapes)
         mm.__dict__["_rec"][(M, N, K)] += 1
     # ================================================

@@ -33,6 +33,8 @@ S5 P-PRISM-NEVER-REFUSE v2 2026-05-13.
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
+import logging
+_log = logging.getLogger(__name__)
 
 
 
@@ -270,8 +272,8 @@ def band_streamed_chain_nbx(
     # diag CHAIN_STEP shows (e.g. 1030 = 1024 + 6 implies halo=6 not 2).
     import os as _os_cd3
     if _os_cd3.environ.get("NBX_CHAIN_DIAG", "0") == "1":
-        print(f"  [CHAIN_GEOM H={H} band_h={band_h} halo={halo} "
-              f"tile_factor={tile_factor}]", flush=True)
+        _log.debug(f"  [CHAIN_GEOM H={H} band_h={band_h} halo={halo} "
+                   f"tile_factor={tile_factor}]")
 
     halo_carry = None  # type: Optional[NBXTensor]
 
@@ -308,11 +310,10 @@ def band_streamed_chain_nbx(
             _bd = getattr(band, "_device_idx", "?")
             _bc = band.is_contiguous() if hasattr(
                 band, 'is_contiguous') else "?"
-            print(f"  [CHAIN_STEP i={i} h_start={h_start} h_end={h_end} "
-                  f"h_in_start={h_in_start} h_in_end={h_in_end} "
-                  f"conv1_pre band ptr={_bp} dev={_bd} "
-                  f"contig={_bc} shape={tuple(band.shape)}]",
-                  flush=True)
+            _log.debug(f"  [CHAIN_STEP i={i} h_start={h_start} h_end={h_end} "
+                       f"h_in_start={h_in_start} h_in_end={h_in_end} "
+                       f"conv1_pre band ptr={_bp} dev={_bd} "
+                       f"contig={_bc} shape={tuple(band.shape)}]")
         band = conv2d_wrapper(
             band, w1, b1,
             stride=tuple(chain_weights["conv1_stride"]),

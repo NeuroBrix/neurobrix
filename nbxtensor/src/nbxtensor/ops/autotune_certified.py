@@ -31,6 +31,8 @@ import json
 import os
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Mapping, Optional, Tuple
+import logging
+_log = logging.getLogger(__name__)
 
 FORMAT = "nbx-autotune-certified/2"
 
@@ -374,10 +376,10 @@ _OUT_OF_TREE_HASH: Dict[str, Optional[str]] = {}
 _SAID: set = set()
 
 
-def _say_once(msg: str) -> None:
+def say_once(msg: str) -> None:
     if msg not in _SAID:
         _SAID.add(msg)
-        print(msg, flush=True)
+        _log.debug("%s", msg)
 
 
 def _out_of_tree_backend_hash() -> Optional[str]:
@@ -414,7 +416,7 @@ def _out_of_tree_backend_hash() -> Optional[str]:
         # generator gate is built on. It is said once rather than swallowed, because
         # an out-of-tree backend that silently lost its hash would serve entries to a
         # generator that had moved, which is the defect this hash exists to stop.
-        _say_once(f"[autotune] no device to name the code generator ({exc.__class__.__name__}): "
+        say_once(f"[autotune] no device to name the code generator ({exc.__class__.__name__}): "
                   f"an out-of-tree backend hash cannot be read, so no entry is refused for one")
         return None
     if tgt is None:
@@ -855,9 +857,9 @@ def _load(vendor: str, profile: str, kernel_qual: str, dtype: str, tuner=None) -
         if problems:
             if str(path) not in _REFUSED:
                 _REFUSED[str(path)] = problems[0]
-                print(f"[autotune] certified file REFUSED {path}: {problems[0]}"
-                      + (f" (+{len(problems) - 1} more)" if len(problems) > 1 else "")
-                      + " — its keys sweep at runtime", flush=True)
+                _log.warning("%s", f"[autotune] certified file REFUSED {path}: {problems[0]}"
+                                   + (f" (+{len(problems) - 1} more)" if len(problems) > 1 else "")
+                                   + " — its keys sweep at runtime")
         elif isinstance(doc, dict):
             entries = dict(doc["entries"])
     _LOADED[ident] = entries
@@ -933,12 +935,12 @@ def lookup(kernel_qual: str, tuner, key: tuple, ignore_switch: bool = False,
     n = _GEN_REFUSED.get(kernel_qual, 0) + 1
     _GEN_REFUSED[kernel_qual] = n
     if n == 1:                            # once per kernel, not once per shape
-        print(f"[autotune] {kernel_qual}: the directory's settings were certified "
-              f"under {was} and this engine runs {gen}. They are not served: a "
-              f"configuration is a property of the compiler that produced it. "
-              f"These shapes sweep at runtime and land in the local replay cache. "
-              f"`neurobrix autotune certify --profile <p>` re-proves them; "
-              f"NBX_AUTOTUNE_ANY_GENERATOR=1 serves them anyway.", flush=True)
+        _log.warning(f"[autotune] {kernel_qual}: the directory's settings were certified "
+                   f"under {was} and this engine runs {gen}. They are not served: a "
+                   f"configuration is a property of the compiler that produced it. "
+                   f"These shapes sweep at runtime and land in the local replay cache. "
+                   f"`neurobrix autotune certify --profile <p>` re-proves them; "
+                   f"NBX_AUTOTUNE_ANY_GENERATOR=1 serves them anyway.")
     return None
 
 
@@ -1175,10 +1177,10 @@ def announce_missing(kernel_qual: str, tuner, key: tuple) -> None:
             why = f" — {_not_served_because(raw, here)}"
     except Exception as exc:                # the reason failed to compute: say that, never an empty reason
         why = f" — (could not read what the directory holds for it: {exc})"
-    print(f"[autotune] no certified setting for {kernel_short(kernel_qual)} {output_dtype(tuner, key)} "
-          f"({describe_key(tuner, key)}) on {where}{why}: sweeping at runtime with the consensus screen; the result is "
-          f"kept in {_local}, never in the engine's directory — `neurobrix autotune certify --profile "
-          f"{prof[1] if prof else '<profile>'}` certifies it", flush=True)
+    _log.debug(f"[autotune] no certified setting for {kernel_short(kernel_qual)} {output_dtype(tuner, key)} "
+               f"({describe_key(tuner, key)}) on {where}{why}: sweeping at runtime with the consensus screen; the result is "
+               f"kept in {_local}, never in the engine's directory — `neurobrix autotune certify --profile "
+               f"{prof[1] if prof else '<profile>'}` certifies it")
 
 
 def served() -> Dict[str, int]:
@@ -1266,10 +1268,10 @@ def report_contradictions(tuner, dropped) -> List[Dict[str, Any]]:
         if raw is not None and mcls is None:
             # a certification exists and this card's class is unknown: neither a
             # contradiction nor a clean pass — said, never dropped
-            print(f"[AUTOTUNE_SCREEN] UNADJUDICATED — {kernel_short(qual)} {output_dtype(tuner, key)} "
-                  f"({describe_key(tuner, key)}): the directory certifies this shape for "
-                  f"{', '.join(f'{c} GB' for c in sorted(covered_memory_gbs(raw))) or 'no known memory class'} and the "
-                  f"executing card's memory class is unknown, so the runtime exclusion cannot be read against it.", flush=True)
+            _log.debug(f"[AUTOTUNE_SCREEN] UNADJUDICATED — {kernel_short(qual)} {output_dtype(tuner, key)} "
+                       f"({describe_key(tuner, key)}): the directory certifies this shape for "
+                       f"{', '.join(f'{c} GB' for c in sorted(covered_memory_gbs(raw))) or 'no known memory class'} and the "
+                       f"executing card's memory class is unknown, so the runtime exclusion cannot be read against it.")
         return []
     found = []
     for ex in dropped:
@@ -1283,10 +1285,10 @@ def report_contradictions(tuner, dropped) -> List[Dict[str, Any]]:
                "contradiction": True}
         found.append(rec)
         _CONTRADICTIONS.append(rec)
-        print(f"[AUTOTUNE_SCREEN] CONTRADICTION — {kernel_short(qual)} {rec['dtype']} ({describe_key(tuner, key)}): the "
-              f"setting certified on {proof.get('date')} (deviation {proof.get('deviation')} vs the fp64 oracle, tolerance "
-              f"{proof.get('tolerance')}) is excluded by the runtime consensus (deviation {rec['runtime']['deviation']}). "
-              f"A finding to report: the certification and this run disagree.", flush=True)
+        _log.warning(f"[AUTOTUNE_SCREEN] CONTRADICTION — {kernel_short(qual)} {rec['dtype']} ({describe_key(tuner, key)}): the "
+                   f"setting certified on {proof.get('date')} (deviation {proof.get('deviation')} vs the fp64 oracle, tolerance "
+                   f"{proof.get('tolerance')}) is excluded by the runtime consensus (deviation {rec['runtime']['deviation']}). "
+                   f"A finding to report: the certification and this run disagree.")
     if found:
         try:
             from nbxtensor.ops.autotune_cache import record_screen_exclusions

@@ -47,11 +47,11 @@ def test_the_provenance_is_recorded_with_its_reason():
     assert "covers no oracle" in entry.reason
 
 
-def test_the_announcement_does_not_read_as_a_validation(capsys):
+def test_the_announcement_does_not_read_as_a_validation(engine_log):
     """The words are the point: this line is read by someone deciding whether a
     number can be quoted."""
     launcher._seat_unscreened("matmul_kernel", (8,), ["a"], 4, "no oracle provider")
-    out = capsys.readouterr().out
+    out = engine_log()
     assert "UNSCREENED" in out
     assert "not a validated setting" in out.lower()
     assert "nothing verified" in out.lower()

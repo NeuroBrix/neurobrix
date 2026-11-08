@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.7] - unreleased (terminal lot)
+
+### Added
+- **`nbxtensor.terminal`, the one terminal rule of a command line built on the library** (`python -m nbxtensor`,
+  `neurobrix`): one stderr handler, INFO by default, `-v` the developer lines, `-vv` an error's traceback too, and
+  `NBX_LOG=debug|info|warning|error` from the environment (a name that is no level is refused by name).
+- **`backend.install_help.compiler_missing`**: names a machine without the C (or C++) compiler Triton builds a kernel
+  with, read from the frame Triton raises in (`triton/runtime/build.py`, `_find_compiler`), never from the text.
+- **`io.read_rate.read_seconds`** (how long this storage takes to read so many bytes, measured now) and
+  **`memory.trace_replay.first_replay` / `vmm_granularity`** (the chunk probe's first replay made ahead, its cost
+  pricing the others).
+
+### Changed
+- **The library logs; it does not print**: every line goes through `logging`, one logger per module, and importing it
+  installs no handler. Its developer lines are DEBUG; warnings and errors reach a command line's terminal.
+- **`python -m nbxtensor doctor` lists the GPUs the process sees**: it listed every display controller on the host's
+  PCI bus (four in a container given one); the others are counted as not visible here.
+- **`python -m nbxtensor install-metal` downloads nothing when the pinned wheels are already installed**, and says so in
+  one line (it re-downloaded 131 MB on every call); pip's own lines only with `NBX_LOG=debug`.
+
+### Fixed
+- **No Triton warning at the first compile of `masked_fill`**: a uint8 mask reached `tl.where` as its condition, which
+  Triton calls deprecated; the condition is cast to a boolean, the compiled code identical.
+
 ## [0.0.6] - unreleased (the Apple lot)
 
 ### Added

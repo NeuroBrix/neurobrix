@@ -32,6 +32,50 @@ def _steps() -> dict:
 def pci_gpus(root: str = "/sys/bus/pci/devices") -> List[Tuple[str, int, int]]:
     """[(vendor name, vendor id, device id)] of the display controllers (PCI class 0x03) of the vendors in `_PCI_VENDORS`,
     read from sysfs; [] where there is none (not Linux)."""
+    return [(v, vid, dev) for v, vid, dev, _bus in _pci_gpus_at(root)]
+
+
+def _bus_key(bus: str):
+    """(domain, bus, device, function) of a PCI address, however its domain is padded ("0000:1A:00.0" from the
+    runtime, "0000:1a:00.0" in sysfs, "00000000:1A:00.0" from NVML); None when it is no PCI address."""
+    try:
+        dom, b, rest = str(bus).strip().split(":")
+        dev, fn = rest.split(".")
+        return int(dom, 16), int(b, 16), int(dev, 16), int(fn, 16)
+    except ValueError:
+        return None
+
+
+def _visible_bus_ids(count=None, bus_of=None):
+    """{PCI address key} of the GPUs THIS process sees (the backend runtime's devices: `CUDA_VISIBLE_DEVICES`, a
+    container's `--gpus`), with the backend whose runtime answered; None where no runtime answers or it cannot name its
+    devices' bus. sysfs lists every display controller of the host: a container given one card of four listed the four
+    (the terminal-noise inventory, 2026-11-08). `count`/`bus_of(i)` are injected by the tests."""
+    try:
+        from nbxtensor.backend import runtime as _rt
+        backend = _rt.gpu_backend()
+        if count is None:
+            table = _rt.backend_table()
+            fn = table.get("pci_bus_id")
+            if not fn:
+                return None
+            lib = _rt.gpu_runtime()
+            n = ctypes.c_int(0)
+            if getattr(lib, table["device_count"])(ctypes.byref(n)) != 0:
+                return None
+            count = n.value
+
+            def bus_of(i):
+                buf = ctypes.create_string_buffer(64)
+                return buf.value.decode() if getattr(lib, fn)(buf, 64, int(i)) == 0 else None
+    except Exception:                      # noqa: BLE001 — no runtime: the bus is all this module can read
+        return None
+    keys = {_bus_key(bus_of(i)) for i in range(int(count))}
+    return None if None in keys else (backend, keys)
+
+
+def _pci_gpus_at(root: str) -> List[Tuple[str, int, int, str]]:
+    """`pci_gpus` with each device's PCI address (its sysfs directory's name)."""
     out = []
     for dev in sorted(glob.glob(os.path.join(root, "*"))):
         try:
@@ -44,7 +88,7 @@ def pci_gpus(root: str = "/sys/bus/pci/devices") -> List[Tuple[str, int, int]]:
         except (OSError, ValueError):
             continue
         if (cls >> 16) == 0x03 and vendor in _PCI_VENDORS:
-            out.append((_PCI_VENDORS[vendor], vendor, device))
+            out.append((_PCI_VENDORS[vendor], vendor, device, os.path.basename(dev)))
     return out
 
 
@@ -74,12 +118,19 @@ def _triton_backends() -> List[str]:
         return []
 
 
-def diagnose(root: str = "/sys/bus/pci/devices") -> List[Dict[str, object]]:
+def diagnose(root: str = "/sys/bus/pci/devices", visible=None) -> List[Dict[str, object]]:
     """One entry per GPU vendor found on the PCI bus: what is missing to use it (`missing`: the runtime library,
-    the Triton backend) and the steps that install it."""
-    found, out = {}, []
-    for vendor, _vid, device in pci_gpus(root):
+    the Triton backend) and the steps that install it. Where a runtime answers (`_visible_bus_ids`), its vendor's
+    devices are the ones this process sees; `hidden` counts that vendor's others on the bus."""
+    found, hidden, out = {}, {}, []
+    seen = _visible_bus_ids() if visible is None else visible
+    for vendor, _vid, device, bus in _pci_gpus_at(root):
+        if seen and _NEEDS[vendor][0] == seen[0] and _bus_key(bus) not in seen[1]:
+            hidden[vendor] = hidden.get(vendor, 0) + 1
+            continue
         found.setdefault(vendor, []).append(device)
+    for vendor in hidden:
+        found.setdefault(vendor, [])
     registered = _triton_backends()
     for vendor, devices in sorted(found.items()):
         backend, triton_name = _NEEDS[vendor]
@@ -90,17 +141,21 @@ def diagnose(root: str = "/sys/bus/pci/devices") -> List[Dict[str, object]]:
             missing.append(what)
         if triton_name not in registered:
             missing.append(f"a Triton build with the {triton_name!r} backend ({row['triton_note']})")
-        out.append({"vendor": vendor, "devices": [f"{d:#06x}" for d in devices], "backend": backend,
+        out.append({"vendor": vendor, "devices": [f"{d:#06x}" for d in devices], "hidden": hidden.get(vendor, 0),
+                    "backend": backend,
                     "missing": missing, "steps": (steps if len(missing) and what in missing else [])
                     + ([row["triton_step"]] if triton_name not in registered else []), "page": page})
     return out
 
 
-def report(root: str = "/sys/bus/pci/devices") -> str:
+def report(root: str = "/sys/bus/pci/devices", visible=None) -> str:
     """The diagnosis as text: per vendor, ready or what to install and how."""
     lines = []
-    for d in diagnose(root):
-        head = f"{d['vendor'].upper()} GPU ({', '.join(d['devices'])}), backend {d['backend']!r}: "
+    for d in diagnose(root, visible):
+        seen = ", ".join(d["devices"]) or "none visible to this process"
+        head = (f"{d['vendor'].upper()} GPU ({seen}"
+                + (f"; {d['hidden']} more on the host, not visible here" if d["hidden"] else "")
+                + f"), backend {d['backend']!r}: ")
         if not d["missing"]:
             lines.append(head + "ready (runtime library and Triton backend found)")
             continue
@@ -119,6 +174,32 @@ def no_runtime_message(root: str = "/sys/bus/pci/devices") -> str:
     if not pci_gpus(root):
         return head
     return f"{head}\n{report(root)}"
+
+
+def compiler_missing(exc: BaseException):
+    """The one line to say when `exc` came from a machine with no C (or C++) compiler for Triton to build a kernel with;
+    None for any other failure. torch compiles some of its kernels with Triton at their first use (torch 2.14.1 sends
+    `aten::bmm` to its Triton kernel), and Triton builds each one with the machine's compiler: `triton/runtime/build.py`,
+    `_find_compiler`, raises RuntimeError("Failed to find C compiler ...") where none is found — read here from a frame of
+    that function in the failure's chain, never from the message's text (a `python:3.10-slim` container has none)."""
+    seen, stack = set(), [exc]
+    while stack:
+        e = stack.pop()
+        if e is None or id(e) in seen:
+            continue
+        seen.add(id(e))
+        tb = e.__traceback__
+        while tb is not None:
+            code = tb.tb_frame.f_code
+            if code.co_name == "_find_compiler" and code.co_filename.replace("\\", "/").endswith("triton/runtime/build.py"):
+                which = "C++" if tb.tb_frame.f_locals.get("language") == "c++" else "C"
+                return (f"the PyTorch engine needs a {which} compiler and this machine has none: torch compiles some "
+                        f"of its kernels with Triton at their first use, and Triton builds them with one. Install a "
+                        f"{which} compiler (e.g. apt install {'g++' if which == 'C++' else 'gcc'}), or run the Triton "
+                        f"engine, which needs none: add --triton.")
+            tb = tb.tb_next
+        stack.extend([e.__cause__, e.__context__])
+    return None
 
 
 def main() -> int:

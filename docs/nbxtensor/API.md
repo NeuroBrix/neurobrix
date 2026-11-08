@@ -249,8 +249,12 @@ def load_trace(path) -> Tuple[Dict[str, str], List[Tuple[str, int, int]]]
     # (the trace's header facts, its events (kind M/A/F, id, nbytes)); a trace without card_mb or events is refused.
 def replay_trace(events, device: int, chunk: int, limit_bytes: int) -> Dict[str, float]
     # Replay the events through this process's allocator under limit_bytes, the large class in an expandable range of chunk bytes (0: the driver segments): seconds, map_seconds, reclaims, peak_bytes
-def chunk_by_replay(device: int, granularity: int, ks: Sequence[int], reps: int, trace: Optional[str]=None) -> Tuple[Optional[int], Dict[int, List[float]]]
-    # The expandable range's chunk: the smallest granularity x k (ascending) whose median replay is within R16 OFF's median plus its spread, each replay in its own process; None when none is
+def chunk_by_replay(device: int, granularity: int, ks: Sequence[int], reps: int, trace: Optional[str]=None, off_first: Optional[float]=None) -> Tuple[Optional[int], Dict[int, List[float]]]
+    # The expandable range's chunk: the smallest granularity x k (ascending) whose median replay is within R16 OFF's median plus its spread, each replay in its own process; None when none is; off_first: the first OFF replay, made ahead
+def vmm_granularity(device: int) -> Optional[int]
+    # The device's VMM granularity (the chunk probe's unit), None when it has no VMM.
+def first_replay(device: int, trace: Optional[str]=None) -> Tuple[float, float]
+    # The chunk probe's first (OFF) replay made ahead: (its replay seconds, for off_first; its child's whole wall seconds)
 ```
 
 `nbxtensor.memory.vmm`
@@ -2398,6 +2402,7 @@ def assemble_quantized(weights: dict)
 PIECE = 16 << 20                                   # the loaders' read piece
 def pieces(files, max_bytes) -> (list, int)        # (path, offset, bytes) pieces over `files`, and their total
 def trial(pieces, workers) -> float                # bytes/s reading them with `workers` threads, the cache evicted first
+def read_seconds(directory, nbytes, sample=256 << 20) -> float   # seconds to read nbytes at one worker's rate on the weight files under directory, measured now
 def can_bypass_the_cache() -> bool                 # the system lets a measure read past its page cache (macOS, Linux; not Windows)
 def choose(rates, within) -> int                   # the smallest count within `within` of the best rate
 def measure(files, max_bytes, max_workers, within=0.05) -> dict
@@ -2797,6 +2802,7 @@ def read(path: Path) -> Optional[IndexedEntries]                 # None when abs
 ### `nbxtensor.ops.autotune_certified` — the certified directory: serve, refuse, prove, file
 
 ```python
+def say_once(msg: str) -> None   # a DEBUG line said once a process (a refusal or a notice repeated per launch)
 # serving a run
 def enabled() -> bool   # False under NBX_AUTOTUNE_CERTIFIED=off: every key sweeps at run time (the proof's runtime-sweep arm)
 def active_profile() -> Optional[Tuple[str, str]]   # (vendor, profile) in force, from the profile files themselves
@@ -3070,6 +3076,21 @@ def runtime() -> LevelZeroRuntime # the process-wide runtime
 class LevelZeroDriver(Driver)     # SPIR-V modules from Intel's Triton, Intel's argument ABI, an in-order immediate list as stream
 ```
 
+### `nbxtensor.terminal` — the terminal rule of a command line built on the library (`python -m nbxtensor`, `neurobrix`)
+
+```python
+ENV = "NBX_LOG"; LEVELS = {"debug", "info", "warning", "error" -> logging levels}
+class LogLevelRefused(ValueError)            # NBX_LOG names no level
+def env_level(environ=None) -> Optional[int] # the level NBX_LOG asks for, None when unset
+def verbosity(argv) -> int                   # how many -v (-v, -vv, --verbose) a command line holds
+def resolve(verbose=0, environ=None, quiet_default=False) -> (int, bool)   # (level, tracebacks): -v DEBUG, -vv + tracebacks, else NBX_LOG, else INFO (WARNING under --json)
+def configure(level, tracebacks=False, roots=("nbxtensor",), stream=None)  # the one stderr handler, `roots` at `level`
+def set_level(level, roots, tracebacks=None) -> None
+def tracebacks() -> bool                     # an error's traceback is printed
+```
+
+The library installs no handler at import; its modules log on their own loggers (`nbxtensor.*`).
+
 ### `nbxtensor.backend.install_help` — what to install when a GPU is present and unusable
 
 ```python
@@ -3077,7 +3098,9 @@ def pci_gpus(root=...) -> list    # [(vendor, vendor id, device id)] of the NVID
 def diagnose(root=...) -> list    # per vendor found: what is missing (runtime library, Triton backend) and the steps
 def report(root=...) -> str       # the diagnosis as text (python -m nbxtensor doctor prints it)
 def no_runtime_message(root=...) -> str   # the refusal when no runtime answers, with the steps for a GPU on the bus
+def compiler_missing(exc) -> Optional[str]   # the one line for a failure whose chain passes through Triton's _find_compiler (no C/C++ compiler), else None
 def main() -> int                 # python -m nbxtensor.backend.install_help
+# diagnose/report list only the devices this process's runtime sees (by PCI bus id); the host's others are counted
 ```
 
 ### `nbxtensor.backend.install_metal` — Triton for the Apple GPU (`python -m nbxtensor install-metal`)

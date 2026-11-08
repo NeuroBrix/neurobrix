@@ -24,7 +24,7 @@ def _reset(monkeypatch):
     yield
 
 
-def test_broken_delegation_is_selected_and_announced_once(monkeypatch, capsys):
+def test_broken_delegation_is_selected_and_announced_once(monkeypatch, engine_log):
     # Bare metal fails; TOOLCHAINS=Metal makes it run — the delegation defect.
     def runs(env_extra=None):
         return bool(env_extra) and env_extra.get("TOOLCHAINS") == "Metal"
@@ -33,20 +33,20 @@ def test_broken_delegation_is_selected_and_announced_once(monkeypatch, capsys):
     MB.ensure_metal_toolchain_selected()
     import os
     assert os.environ.get("TOOLCHAINS") == "Metal"
-    out = capsys.readouterr().out
+    out = engine_log()
     assert "does not delegate" in out
 
     # Announced ONCE: a second call is silent (and a no-op — TOOLCHAINS is set).
     MB.ensure_metal_toolchain_selected()
-    assert "does not delegate" not in capsys.readouterr().out
+    assert "does not delegate" not in engine_log()
 
 
-def test_a_working_delegation_is_left_alone(monkeypatch, capsys):
+def test_a_working_delegation_is_left_alone(monkeypatch, engine_log):
     monkeypatch.setattr(MB, "_metal_runs", lambda env_extra=None: True)   # bare runs
     MB.ensure_metal_toolchain_selected()
     import os
     assert os.environ.get("TOOLCHAINS") is None       # nothing forced
-    assert capsys.readouterr().out == ""              # nothing announced
+    assert engine_log() == ""              # nothing announced
 
 
 def test_an_explicit_toolchain_is_respected(monkeypatch):
@@ -58,9 +58,9 @@ def test_an_explicit_toolchain_is_respected(monkeypatch):
     assert os.environ["TOOLCHAINS"] == "Something"    # the caller's choice stands
 
 
-def test_a_genuinely_absent_compiler_is_not_masked(monkeypatch, capsys):
+def test_a_genuinely_absent_compiler_is_not_masked(monkeypatch, engine_log):
     monkeypatch.setattr(MB, "_metal_runs", lambda env_extra=None: False)   # nothing runs
     MB.ensure_metal_toolchain_selected()
     import os
     assert os.environ.get("TOOLCHAINS") is None       # not set to a lie
-    assert capsys.readouterr().out == ""              # no false "fixed" claim
+    assert engine_log() == ""              # no false "fixed" claim

@@ -10,6 +10,7 @@ table does not cover, is refused by name.
 """
 from __future__ import annotations
 
+import logging
 import os
 import platform
 import re
@@ -83,6 +84,23 @@ def pip_command(requirements: str) -> List[str]:
     return [sys.executable, "-m", "pip", "install", "--no-deps", "--require-hashes", "--no-index", "-r", requirements]
 
 
+def _wheel_identity(url: str) -> Tuple[str, str]:
+    """(distribution, version) a wheel installs, read from its file name (PEP 427: `{name}-{version}-...whl`, the
+    version's `+` URL-quoted in a release asset)."""
+    from urllib.parse import unquote
+    name, version = unquote(url.rsplit("/", 1)[1]).split("-")[:2]
+    return name.replace("_", "-"), version
+
+
+def _installed_version(dist: str):
+    """The version of `dist` installed in this interpreter, or None."""
+    from importlib import metadata
+    try:
+        return metadata.version(dist)
+    except metadata.PackageNotFoundError:
+        return None
+
+
 def requirements_text(entries: List[Tuple[str, str]]) -> str:
     return "".join(f"{url} --hash=sha256:{sha}\n" for url, sha in entries)
 
@@ -93,6 +111,11 @@ def main(version: str, dry_run: bool = False) -> int:
     except InstallMetalRefused as exc:
         print(f"install-metal: {exc}", file=sys.stderr)
         return 1
+    wanted = [_wheel_identity(url) for url, _sha in entries]
+    if all(_installed_version(d) == v for d, v in wanted):
+        # the pinned wheels are this interpreter's already: nothing is downloaded (131 MB on every call before)
+        print(f"Triton for Metal already installed ({', '.join(f'{d} {v}' for d, v in wanted)}).")
+        return 0
     text = requirements_text(entries)
     if dry_run:
         print(text, end="")
@@ -102,6 +125,11 @@ def main(version: str, dry_run: bool = False) -> int:
     try:
         with os.fdopen(fd, "w") as f:
             f.write(text)
-        return subprocess.call(pip_command(path))
+        print(f"Installing Triton for Metal ({', '.join(f'{d} {v}' for d, v in wanted)})...")
+        # pip's own Collecting/Downloading lines only with NBX_LOG=debug; its progress bar stays
+        quiet = [] if logging.getLogger(__name__).isEnabledFor(logging.DEBUG) else ["-q"]
+        cmd = pip_command(path)
+        cmd[4:4] = quiet                    # after `pip install`, the requirements file last
+        return subprocess.call(cmd)
     finally:
         os.unlink(path)

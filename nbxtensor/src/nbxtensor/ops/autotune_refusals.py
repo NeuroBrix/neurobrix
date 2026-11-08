@@ -35,6 +35,8 @@ narrowing:
 from __future__ import annotations
 
 from typing import Callable, Dict, Iterable, List
+import logging
+_log = logging.getLogger(__name__)
 
 #: Reasons already announced this process, so a sweep of eighteen configs
 #: prints one line rather than eighteen identical ones.
@@ -79,7 +81,7 @@ def exclude_refused_configs(bench: Callable, say: Callable[[str], None] | None =
         if say is not None:
             say(line)
         else:
-            print(line, flush=True)
+            _log.debug("%s", line)
 
     def _run(*args, **kwargs):
         try:
@@ -205,7 +207,7 @@ def mark_sweep_unmeasured(at, key, grew_mb: int, say=None) -> None:
         line = (f"[AUTOTUNE_SWAP] the swap grew by {grew_mb} MB during this "
                 f"sweep: its timings measured the swap, not the kernels. The "
                 f"choice stands for this run and will NOT be persisted.")
-        (say or (lambda l: print(l, flush=True)))(line)
+        (say or (lambda l: _log.warning("%s", l)))(line)
 
 
 def current_budget_ms():
@@ -251,7 +253,7 @@ def exclude_slow_candidates(bench, say=None):
     out for time without its time is a silent narrowing.
     """
     def _say(line):
-        (say or (lambda l: print(l, flush=True)))(line)
+        (say or (lambda l: _log.debug("%s", l)))(line)
 
     def _run(*args, **kwargs):
         from nbxtensor.backend.launcher import CandidateOverTimeBudget
@@ -322,7 +324,7 @@ def exclude_over_footprint(bench, arg_bytes, config_scratch_bytes=0, say=None):
     """Wrap a per-config bench so an over-footprint config scores `inf` without
     running -- excluded BEFORE the spend, and SAID with its numbers."""
     def _say(line):
-        (say or (lambda l: print(l, flush=True)))(line)
+        (say or (lambda l: _log.debug("%s", l)))(line)
 
     def _run(*args, **kwargs):
         fits, avail, fp_mb = config_footprint_fits(arg_bytes, config_scratch_bytes)

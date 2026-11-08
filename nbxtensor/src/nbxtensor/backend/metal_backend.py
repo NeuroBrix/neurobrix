@@ -43,6 +43,8 @@ import os
 import platform
 import shutil
 import subprocess
+import logging
+_log = logging.getLogger(__name__)
 
 
 # --- Known coverage gaps of the Metal backend -------------------------------
@@ -544,10 +546,9 @@ def ensure_metal_toolchain_selected() -> None:
         _os.environ["TOOLCHAINS"] = "Metal"
         if not _DELEGATION_ANNOUNCED:
             _DELEGATION_ANNOUNCED = True
-            print("[metal] Xcode's default toolchain does not delegate to the "
-                  "installed Metal compiler (a known Apple defect since Xcode "
-                  "26); selecting it with TOOLCHAINS=Metal for this process.",
-                  flush=True)
+            _log.debug("[metal] Xcode's default toolchain does not delegate to the "
+                       "installed Metal compiler (a known Apple defect since Xcode "
+                       "26); selecting it with TOOLCHAINS=Metal for this process.")
 
 
 def ensure_triton_metal_or_raise() -> None:

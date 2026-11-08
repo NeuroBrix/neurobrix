@@ -51,6 +51,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
+import logging
+_log = logging.getLogger(__name__)
 
 #: Scalar kinds a launcher may be asked to pack. A driver must accept every
 #: one of these spellings, because they are Triton's own signature spellings
@@ -391,11 +393,10 @@ def verify_driver_contract(driver, jit_fn, signature, constexprs,
                      "destroy_event", "destroy_stream", "elapsed_ms")
     _absent = [m for m in _ordering_api if not hasattr(driver, m)]
     if _absent:
-        print(f"  note: {driver.__class__.__name__} implements the LAUNCH half "
-              f"of this contract and not the ordering half "
-              f"({', '.join(_absent)}); on this backend streams and events "
-              f"belong to the allocator. Not certified here, not a failure.",
-              flush=True)
+        _log.debug(f"  note: {driver.__class__.__name__} implements the LAUNCH half "
+                   f"of this contract and not the ordering half "
+                   f"({', '.join(_absent)}); on this backend streams and events "
+                   f"belong to the allocator. Not certified here, not a failure.")
         return failures
 
     ordering = driver.create_event(timing=False)

@@ -6,7 +6,6 @@ emits async copy instructions that cause CUDA_ERROR_MISALIGNED_ADDRESS on Volta.
 """
 
 import inspect
-import sys
 import warnings
 from typing import Dict, List, Optional
 
@@ -14,6 +13,8 @@ from pathlib import Path
 
 import triton
 from triton import next_power_of_2
+import logging
+_log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -91,12 +92,8 @@ _SWEEP_ANNOUNCED = [False]
 _SEEDED = [False]
 
 _SWEEP_NOTICE = (
-    "[neurobrix] First run for these tensor shapes on this machine: measuring "
-    "kernel configurations.\n"
-    "[neurobrix] This happens ONCE per shape per machine and is kept in the engine's "
-    "artifact (~/.neurobrix/replay_cache/autotune_configs_<arch>.json).\n"
-    "[neurobrix] Later runs skip it entirely — measured 254.9 s -> 7.9 s on "
-    "whisper-large-v3-turbo, 15.5 s -> 7.4 s on TinyLlama-1.1B.\n"
+    "First run for these tensor shapes on this machine: measuring kernel configurations once "
+    "(kept for later runs, which skip it)."
 )
 
 
@@ -188,7 +185,7 @@ def _announce_first_sweep(tuned):
                 if _confirm:                    # except in a confirmation run, where it is the only source
                     raise _cert.KeyNotCertified(f"CERTIFIED-ONLY: the certified lookup failed for {qual} "
                                                 f"at {key}: {exc}") from exc
-                print(f"[autotune] certified lookup failed for {qual}: {exc}", flush=True)
+                _log.warning(f"[autotune] certified lookup failed for {qual}: {exc}")
                 applied = False
             if applied:
                 _cert.served_evicted(qual, key)  # a seed evicted at seed time, now served certified for this card
@@ -223,7 +220,7 @@ def _announce_first_sweep(tuned):
                     pass
             if not _SWEEP_ANNOUNCED[0]:
                 _SWEEP_ANNOUNCED[0] = True
-                print(_SWEEP_NOTICE, file=sys.stderr, end="")
+                _log.info(_SWEEP_NOTICE)
             try:
                 _atc.capture()
             except Exception:
@@ -524,17 +521,16 @@ def _announce_family_fallback(wanted: str) -> None:
     difference shows up as performance nobody can explain later. It is said
     here rather than left to be inferred from a number.
     """
-    import sys
 
     profile = _ACTIVE_PROFILE.get("_profile")
     key = (wanted, profile)
     if profile is None or key in _FALLBACK_ANNOUNCED:
         return
     _FALLBACK_ANNOUNCED.add(key)
-    print(f"[PROFILE] {wanted!r} has no profile of its own; falling back to "
-          f"{profile!r}, which declares a prefix that covers it. The engine "
-          f"will run correctly, not optimally — a per-variant profile is what "
-          f"makes it optimal.", file=sys.stderr, flush=True)
+    _log.warning(f"[PROFILE] {wanted!r} has no profile of its own; falling back to "
+                 f"{profile!r}, which declares a prefix that covers it. The engine "
+                 f"will run correctly, not optimally — a per-variant profile is what "
+                 f"makes it optimal.")
 
 
 #: The vendor profile the last `arch_smem_budget()` resolution matched, by

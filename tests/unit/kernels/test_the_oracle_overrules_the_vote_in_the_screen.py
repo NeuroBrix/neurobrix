@@ -103,12 +103,12 @@ def screen(monkeypatch):
     return go
 
 
-def test_a_majority_wrong_in_the_same_way_is_overruled(screen, capsys):
+def test_a_majority_wrong_in_the_same_way_is_overruled(screen, engine_log):
     produces = {"m0": WRONG, "m1": WRONG, "m2": WRONG, "ok0": RIGHT, "ok1": RIGHT}
     kept = screen(produces, [RIGHT])
     assert {c.name for c in kept} == {"ok0", "ok1"}, (
         "the vote's majority (3 wrong the same way) was seated over the oracle")
-    out = capsys.readouterr().out
+    out = engine_log()
     assert "FINDING" in out and "wrong in the same way" in out, (
         "the overrule must SAY the vote was about to be wrong; silently "
         "correcting it hides the only evidence that this hardware needs looking at")
@@ -120,15 +120,15 @@ def test_a_unanimous_wrong_space_seats_nothing_and_says_why(screen):
         screen(produces, [RIGHT])
 
 
-def test_a_healthy_space_is_untouched_by_the_overrule(screen, capsys):
+def test_a_healthy_space_is_untouched_by_the_overrule(screen, engine_log):
     """The control: a guard that empties a correct space is worse than none."""
     produces = {"a": RIGHT, "b": RIGHT, "c": RIGHT}
     kept = screen(produces, [RIGHT])
     assert {c.name for c in kept} == {"a", "b", "c"}
-    assert "FINDING" not in capsys.readouterr().out
+    assert "FINDING" not in engine_log()
 
 
-def test_without_a_provider_the_consensus_decides_exactly_as_before(screen, capsys):
+def test_without_a_provider_the_consensus_decides_exactly_as_before(screen, engine_log):
     """The hot path pays one `is None`. With no oracle the majority wins — the
     behaviour the engine has shipped since 2026-09-07, unchanged."""
     produces = {"m0": WRONG, "m1": WRONG, "m2": WRONG, "ok0": RIGHT, "ok1": RIGHT}
@@ -139,11 +139,11 @@ def test_without_a_provider_the_consensus_decides_exactly_as_before(screen, caps
     # The CHOICE is unchanged; what changed on 2026-09-13 (merge of the other
     # machine's branch) is that a vote-only decision now SAYS it had no oracle,
     # which the ruling of 2026-09-12 requires. Silence here would be the defect.
-    out = capsys.readouterr().out
+    out = engine_log()
     assert "CONSENSUS ALONE" in out and "no oracle provider is installed" in out
 
 
-def test_a_provider_that_raises_falls_back_loudly(screen, capsys, monkeypatch):
+def test_a_provider_that_raises_falls_back_loudly(screen, engine_log, monkeypatch):
     produces = {"a": RIGHT, "b": RIGHT}
     state_tuner = _Tuner({"out": RIGHT}, produces)
     L.set_screen_oracle(lambda t, k, b: (_ for _ in ()).throw(ValueError("no oracle here")))
@@ -160,7 +160,7 @@ def test_a_provider_that_raises_falls_back_loudly(screen, capsys, monkeypatch):
         L.screen_configs(state_tuner, cfgs, key=(7,))
     finally:
         L.set_screen_oracle(None)
-    out = capsys.readouterr().out
+    out = engine_log()
     assert "oracle provider raised" in out, (
         "an oracle that fails must be announced, never swallowed into the "
         "consensus as if none had been asked for")

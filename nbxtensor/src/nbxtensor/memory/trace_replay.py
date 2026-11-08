@@ -93,17 +93,17 @@ def _child(trace: str, device: int, chunk: int) -> Dict[str, float]:
     return json.loads(line[len(_MARK):])
 
 
-def chunk_by_replay(device: int, granularity: int, ks: Sequence[int], reps: int,
-                    trace: Optional[str] = None) -> Tuple[Optional[int], Dict[int, List[float]]]:
-    """(the chunk, every candidate's replay seconds — 0 is R16 OFF). The smallest granularity x k whose median replay
-    costs no more than OFF's median plus OFF's spread; None when none does. `trace`: one of `traces()` (the only one
-    the library carries when it carries one; several = the caller names it)."""
+def _the_trace(trace: Optional[str]) -> str:
     if trace is None:
         carried = traces()
         if len(carried) != 1:
             raise RuntimeError(f"ZERO FALLBACK: the library carries {len(carried)} allocation traces "
                                f"({', '.join(p.name for p in carried)}): the chunk probe names the one it replays")
         trace = str(carried[0])
+    return trace
+
+
+def _give_back(device: int) -> None:
     # every replay runs in a child sized at the recorded card: what THIS process caches on the device is given back
     # first, or the child finds the card short by it (a test process's pools after the kernels suite: 16 GB, the
     # replay out of memory at chunk 0 — order-dependent, 2026-11-03)
@@ -112,7 +112,40 @@ def chunk_by_replay(device: int, granularity: int, ks: Sequence[int], reps: int,
     if DA._range_vmm(device) is not None:
         DA._range_reclaim(device, None)
     DA._pool_flush(device)
-    times: Dict[int, List[float]] = {0: [_child(trace, device, 0)["seconds"] for _ in range(reps)]}
+
+
+def vmm_granularity(device: int) -> Optional[int]:
+    """The device's VMM granularity (the chunk probe's unit), or None when it has no VMM: nothing to replay."""
+    from nbxtensor.backend import runtime as _rt
+    from nbxtensor.memory.vmm import Vmm
+    lib = Vmm.load(_rt.backend_table().get("driver_libs"))
+    v = Vmm(lib, device) if lib is not None else None
+    rc, gran = v.granularity() if v is not None and v.supported() else (1, 0)
+    return gran if rc == 0 and gran > 0 else None
+
+
+def first_replay(device: int, trace: Optional[str] = None) -> Tuple[float, float]:
+    """The first replay `chunk_by_replay` makes (R16 OFF), made ahead: (its replay seconds, to hand to
+    `chunk_by_replay(off_first=)`, and the child's whole wall seconds — what one candidate costs on this machine,
+    process start included)."""
+    _give_back(device)
+    t0 = time.perf_counter()
+    seconds = _child(_the_trace(trace), device, 0)["seconds"]
+    return seconds, time.perf_counter() - t0
+
+
+def chunk_by_replay(device: int, granularity: int, ks: Sequence[int], reps: int,
+                    trace: Optional[str] = None, off_first: Optional[float] = None
+                    ) -> Tuple[Optional[int], Dict[int, List[float]]]:
+    """(the chunk, every candidate's replay seconds — 0 is R16 OFF). The smallest granularity x k whose median replay
+    costs no more than OFF's median plus OFF's spread; None when none does. `trace`: one of `traces()` (the only one
+    the library carries when it carries one; several = the caller names it). `off_first`: the first OFF replay, made
+    ahead by `first_replay`."""
+    trace = _the_trace(trace)
+    _give_back(device)
+    times: Dict[int, List[float]] = {0: ([off_first] if off_first is not None else [])
+                                        + [_child(trace, device, 0)["seconds"]
+                                           for _ in range(reps - (off_first is not None))]}
     off = times[0]
     bound = statistics.median(off) + (max(off) - statistics.median(off))
     for chunk in [granularity * int(k) for k in sorted(ks)]:     # ascending: the first within OFF's noise is the chunk

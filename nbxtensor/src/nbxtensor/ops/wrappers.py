@@ -50,6 +50,8 @@ from nbxtensor.backend import launcher as _nbx_launcher
 # differential arm is unaffected. The launch sites live in this module; the
 # routing of those sites belongs with them.
 from nbxtensor.backend.launcher import install as _install_launcher
+import logging
+_log = logging.getLogger(__name__)
 
 _install_launcher()
 
@@ -68,11 +70,11 @@ def _announce_floor_over_ceiling(clamped, taken, floor) -> None:
     if token in _FLOOR_CONFLICTS_SAID:
         return
     _FLOOR_CONFLICTS_SAID.add(token)
-    print(f"[SDPA_TILE] the profile ceiling proposed {clamped} but this "
-          f"backend's attention lowering refuses tile dimensions under "
-          f"{floor}; using {taken}. The profile row promises a tile the "
-          f"backend will not lower — the row should be raised or scoped to "
-          f"the template path that measured it.", flush=True)
+    _log.debug(f"[SDPA_TILE] the profile ceiling proposed {clamped} but this "
+               f"backend's attention lowering refuses tile dimensions under "
+               f"{floor}; using {taken}. The profile row promises a tile the "
+               f"backend will not lower — the row should be raised or scoped to "
+               f"the template path that measured it.")
 
 
 def _autotune_headroom_guard(launch):
@@ -104,11 +106,10 @@ def _autotune_headroom_guard(launch):
                 try:
                     reclaimed += int(hook(dev, 0) or 0)
                 except Exception as hook_err:
-                    print(f"[AUTOTUNE_HEADROOM] reclaim hook error: {hook_err}", flush=True)
-            print(f"[AUTOTUNE_HEADROOM] the autotune benchmark buffer was refused "
-                  f"({str(exc).splitlines()[0][:90]}); pool flushed {freed / 2**20:.0f}MB, "
-                  f"reclaimers freed {reclaimed / 2**20:.0f}MB — retrying the launch once",
-                  flush=True)
+                    _log.warning(f"[AUTOTUNE_HEADROOM] reclaim hook error: {hook_err}")
+            _log.warning(f"[AUTOTUNE_HEADROOM] the autotune benchmark buffer was refused "
+                       f"({str(exc).splitlines()[0][:90]}); pool flushed {freed / 2**20:.0f}MB, "
+                       f"reclaimers freed {reclaimed / 2**20:.0f}MB — retrying the launch once")
             return launch(*args, **kwargs)
     return _run
 
@@ -434,8 +435,8 @@ def _to_scalar(x):
             site = next((f"{_f.name}@{_f.lineno}" for _f in
                          reversed(_tb.extract_stack()[:-1])
                          if "wrappers.py" in _f.filename), "?")
-            print(f"[SCALAR_DIAG] device-0d .item() via {site} "
-                  f"dtype={getattr(x, 'nbx_dtype', '?')}")
+            _log.debug(f"[SCALAR_DIAG] device-0d .item() via {site} "
+                       f"dtype={getattr(x, 'nbx_dtype', '?')}")
         return x.item()
     if hasattr(x, 'numel') and x.numel() == 1:
         if os.environ.get("NBX_SCALAR_DIAG") == "1":
@@ -443,8 +444,8 @@ def _to_scalar(x):
             site = next((f"{_f.name}@{_f.lineno}" for _f in
                          reversed(_tb.extract_stack()[:-1])
                          if "wrappers.py" in _f.filename), "?")
-            print(f"[SCALAR_DIAG] device-1el .item() via {site} "
-                  f"shape={getattr(x, 'shape', '?')}")
+            _log.debug(f"[SCALAR_DIAG] device-1el .item() via {site} "
+                       f"shape={getattr(x, 'shape', '?')}")
         return x.item()
     return x
 

@@ -24,6 +24,8 @@ import ast
 import json
 import os
 from typing import Dict, Iterator, Optional, Tuple
+import logging
+_log = logging.getLogger(__name__)
 
 # The machine's replay cache (the producer's accumulation across models, and
 # the correctness screen's exclusions). NEUROBRIX_REPLAY_CACHE relocates it —
@@ -310,8 +312,8 @@ def capture() -> int:
                     f"the output and the input buffers were NOT compared")
             entries[f"{qual}::{key!r}"] = rec
     if skipped_unmeasured:
-        print(f"[AUTOTUNE_CACHE] {skipped_unmeasured} choice(s) made without "
-              f"measurement were NOT persisted", flush=True)
+        _log.debug(f"[AUTOTUNE_CACHE] {skipped_unmeasured} choice(s) made without "
+                   f"measurement were NOT persisted")
     if not entries:
         return 0
     try:

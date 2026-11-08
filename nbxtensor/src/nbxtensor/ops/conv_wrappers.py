@@ -176,6 +176,8 @@ from nbxtensor.ops import elementwise_wrappers as _ew
 from nbxtensor.ops import index_wrappers as _idx
 from nbxtensor.ops import shape_wrappers as _shp
 from nbxtensor.ops import wrappers as _core
+import logging
+_log = logging.getLogger(__name__)
 _POOL_BH, _POOL_BW = 4, 16                # avg_pool2d / max_pool2d
 
 # P-TRITON-LIVE-SET-AUDIT (#37) — conv3d-via-conv2d eager-free threshold.
@@ -704,8 +706,8 @@ def conv2d_wrapper(
     out_dtype_bytes = dtype_size(out_nbx_dtype)
     if _NBX_CONV2D_TRACE:
         out_mb = N * out_c * out_h * out_w * out_dtype_bytes / 1024 / 1024
-        print(f"[CONV2D] in=({N},{in_c},{in_h},{in_w}) out=({N},{out_c},{out_h},{out_w}) "
-              f"k=({kh},{kw}) g={groups} out={out_mb:.1f}MB", flush=True)
+        _log.debug(f"[CONV2D] in=({N},{in_c},{in_h},{in_w}) out=({N},{out_c},{out_h},{out_w}) "
+                   f"k=({kh},{kw}) g={groups} out={out_mb:.1f}MB")
 
     # P-SANA-4KPX-RUNTIME Step 3 — depthwise specialization. The generic
     # im2col conv2d_forward_kernel is structurally inefficient for the
@@ -718,7 +720,7 @@ def conv2d_wrapper(
         raise RuntimeError(f"conv2d out=: the {_route} route writes its own result — refused")
     if _route == "depthwise":
         if _NBX_CONV2D_TRACE:
-            print(f"[CONV2D] DEPTHWISE path (g={groups})", flush=True)
+            _log.debug(f"[CONV2D] DEPTHWISE path (g={groups})")
         return _depthwise_conv2d_dispatch(
             x_c.contiguous(), w_c, bias,
             N, in_c, in_h, in_w, out_h, out_w,
@@ -728,7 +730,7 @@ def conv2d_wrapper(
 
     if _route == "band":
         if _NBX_CONV2D_TRACE:
-            print(f"[CONV2D] BAND-STREAM triggered (out > {_ts.conv2d_band_bytes()/1024/1024/1024:.1f}GiB)", flush=True)
+            _log.debug(f"[CONV2D] BAND-STREAM triggered (out > {_ts.conv2d_band_bytes()/1024/1024/1024:.1f}GiB)")
         return _conv2d_band_streamed(
             x_c.contiguous(), w_c, bias,
             N, in_c, in_h, in_w, out_c, out_h, out_w,

@@ -35,6 +35,8 @@ import struct
 from typing import Any, List, NamedTuple, Optional, Sequence, Tuple
 
 from nbxtensor.backend.launcher import Driver
+import logging
+_log = logging.getLogger(__name__)
 
 
 def _ext():
@@ -60,19 +62,19 @@ if _SYNC_TIMING:                                       # pragma: no cover
         d, s_, y, n = _SYNC_ACC
         if not n:
             return
-        print(f"[sync-timing] launches={n}  drain={d:.3f}s  submit={s_:.3f}s  "
-              f"synchronize={y:.3f}s  (per launch: drain {1000*d/n:.3f}ms  "
-              f"submit {1000*s_/n:.3f}ms  sync {1000*y/n:.3f}ms)", flush=True)
+        _log.debug(f"[sync-timing] launches={n}  drain={d:.3f}s  submit={s_:.3f}s  "
+                   f"synchronize={y:.3f}s  (per launch: drain {1000*d/n:.3f}ms  "
+                   f"submit {1000*s_/n:.3f}ms  sync {1000*y/n:.3f}ms)")
         if not _SYNC_PER_KERNEL:
             return
         rows = sorted(_SYNC_PER_KERNEL.items(), key=lambda kv: -kv[1][1])
         tot = sum(v[1] for v in _SYNC_PER_KERNEL.values()) or 1.0
-        print(f"[sync-timing] per operator, by time inside synchronize:", flush=True)
-        print(f"[sync-timing]   {'kernel':<44} {'calls':>7} {'sync s':>9} "
-              f"{'ms/call':>9} {'share':>7}", flush=True)
+        _log.debug(f"[sync-timing] per operator, by time inside synchronize:")
+        _log.debug(f"[sync-timing]   {'kernel':<44} {'calls':>7} {'sync s':>9} "
+                   f"{'ms/call':>9} {'share':>7}")
         for name, (c, t) in rows[:18]:
-            print(f"[sync-timing]   {name[:44]:<44} {c:>7} {t:>9.3f} "
-                  f"{1000*t/max(c,1):>9.3f} {100*t/tot:>6.1f}%", flush=True)
+            _log.debug(f"[sync-timing]   {name[:44]:<44} {c:>7} {t:>9.3f} "
+                       f"{1000*t/max(c,1):>9.3f} {100*t/tot:>6.1f}%")
 
 
 def _native():
@@ -171,9 +173,9 @@ class TritonExtDriver(Driver):
         fn = module.get_function(name)
         import os as _os
         if _os.environ.get("NBX_EXT_DEBUG"):
-            print(f"[ext] load name={name!r} metallib={len(bytes(binary))}B "
-                  f"fn={fn} max_threads="
-                  f"{getattr(fn, 'max_total_threads_per_threadgroup', None)}", flush=True)
+            _log.debug(f"[ext] load name={name!r} metallib={len(bytes(binary))}B "
+                       f"fn={fn} max_threads="
+                       f"{getattr(fn, 'max_total_threads_per_threadgroup', None)}")
         return fn
 
     # -- launch ------------------------------------------------------------
@@ -280,10 +282,10 @@ class TritonExtDriver(Driver):
         lx, ly, lz = block
         import os as _os
         if _os.environ.get("NBX_EXT_DEBUG"):
-            print(f"[ext] ptrs={len(ptr_args)} scalars={list(zip(scalar_types, scalar_vals))} "
-                  f"packed={(args[-1].hex() if scalar_types else None)} "
-                  f"threads={[gx*lx, gy*ly, gz*lz]} group_size={[lx, ly, lz]} "
-                  f"grid={grid} block={block} shared={shared}", flush=True)
+            _log.debug(f"[ext] ptrs={len(ptr_args)} scalars={list(zip(scalar_types, scalar_vals))} "
+                       f"packed={(args[-1].hex() if scalar_types else None)} "
+                       f"threads={[gx*lx, gy*ly, gz*lz]} group_size={[lx, ly, lz]} "
+                       f"grid={grid} block={block} shared={shared}")
         # The emitter's own trailing parameters, bound LAST and in its order
         # (print, then assert), which is what `planKernelAbi` fixed. Both must
         # start zeroed: each block's head word is a running count the kernel
@@ -350,7 +352,7 @@ class TritonExtDriver(Driver):
             from triton_apple_backend.device_print import format_records
             rt = D._runtime()
             for line in format_records(trailing.print_layout, rt.as_u32(print_buf)):
-                print(line, flush=True)
+                _log.debug("%s", line)
         if assert_buf is not None:
             from triton_apple_backend.device_assert import check as _check_asserts
             rt = D._runtime()
@@ -398,9 +400,8 @@ _STATS = {"exact": 0, "interior": 0, "extent_bound": 0}
 import os as _os_stats
 if _os_stats.environ.get("NBX_EXT_STATS"):
     import atexit as _atexit
-    _atexit.register(lambda: print(
-        f"[ext-stats] pointer bindings: exact={_STATS['exact']} "
-        f"interior={_STATS['interior']}", flush=True))
+    _atexit.register(lambda: _log.debug(f"[ext-stats] pointer bindings: exact={_STATS['exact']} "
+        f"interior={_STATS['interior']}"))
 
 #: Metal's zero-copy wrap requires page-aligned memory; Apple Silicon pages
 #: are 16 KiB.

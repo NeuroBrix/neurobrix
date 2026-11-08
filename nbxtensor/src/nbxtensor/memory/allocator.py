@@ -14,6 +14,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from nbxtensor.backend import runtime as _rt
 from nbxtensor.memory.pool import (SegmentPool, LARGE, range_add, range_extend, range_unmapped, range_reclaimable)
+import logging
+_log = logging.getLogger(__name__)
 
 
 
@@ -531,18 +533,18 @@ class DeviceAllocator:
         st = DeviceAllocator._POOL.stats
         devs = sorted(set(DeviceAllocator._cuda_peak_bytes) | set(DeviceAllocator._POOL.cached_peak))
         for d in devs:
-            print(f"[NBX_ALLOC_STATS] cuda:{d} peak_driver={DeviceAllocator._cuda_peak_bytes.get(d, 0) / 2**20:.0f}MB "
-                  f"pool_peak={DeviceAllocator._POOL.cached_peak.get(d, 0) / 2**20:.0f}MB "
-                  f"pool_now={DeviceAllocator._POOL.cached.get(d, 0) / 2**20:.0f}MB", flush=True)
-        print(f"[NBX_ALLOC_STATS] pool={'on' if DeviceAllocator._pool_enabled else 'off'} "
-              f"hits exact={st['exact']} fit={st['fit']} miss={st['miss']} "
-              f"slack_total={st['slack_total'] / 2**20:.0f}MB slack_max={st['slack_max'] / 2**20:.0f}MB "
-              f"flushes={st['flushes']} flushed={st['flushed_bytes'] / 2**20:.0f}MB "
-              f"evictions={st['evictions']} evicted={st['evicted_bytes'] / 2**20:.0f}MB "
-              f"range maps={st.get('range_maps', 0)} ({st.get('range_map_us', 0) / 1e6:.2f} s) "
-              f"reclaims={st.get('range_reclaims', 0)} unmaps={st.get('range_unmaps', 0)} "
-              f"ranges={ {d: len(rs) for d, rs in DeviceAllocator._POOL.ranges.items()} } "
-              f"cap={ {d: round(c / 2**20) for d, c in DeviceAllocator._pool_cap_bytes.items()} }MB", flush=True)
+            _log.debug(f"[NBX_ALLOC_STATS] cuda:{d} peak_driver={DeviceAllocator._cuda_peak_bytes.get(d, 0) / 2**20:.0f}MB "
+                       f"pool_peak={DeviceAllocator._POOL.cached_peak.get(d, 0) / 2**20:.0f}MB "
+                       f"pool_now={DeviceAllocator._POOL.cached.get(d, 0) / 2**20:.0f}MB")
+        _log.debug(f"[NBX_ALLOC_STATS] pool={'on' if DeviceAllocator._pool_enabled else 'off'} "
+                   f"hits exact={st['exact']} fit={st['fit']} miss={st['miss']} "
+                   f"slack_total={st['slack_total'] / 2**20:.0f}MB slack_max={st['slack_max'] / 2**20:.0f}MB "
+                   f"flushes={st['flushes']} flushed={st['flushed_bytes'] / 2**20:.0f}MB "
+                   f"evictions={st['evictions']} evicted={st['evicted_bytes'] / 2**20:.0f}MB "
+                   f"range maps={st.get('range_maps', 0)} ({st.get('range_map_us', 0) / 1e6:.2f} s) "
+                   f"reclaims={st.get('range_reclaims', 0)} unmaps={st.get('range_unmaps', 0)} "
+                   f"ranges={ {d: len(rs) for d, rs in DeviceAllocator._POOL.ranges.items()} } "
+                   f"cap={ {d: round(c / 2**20) for d, c in DeviceAllocator._pool_cap_bytes.items()} }MB")
 
     @staticmethod
     def _block_reported(ptr: int, size: Optional[int], dev: int) -> None:
@@ -1159,7 +1161,7 @@ class DeviceAllocator:
         # the parked cap returns to the driver. A block of a segment is never handed to the driver alone.
         if DeviceAllocator._pool_enabled and ptr in DeviceAllocator._POOL.blocks:
             if DeviceAllocator._POOL.blocks[ptr][3]:
-                print(f"[NBX-ALLOC-ERROR] free of a block already free: {ptr:#x}", flush=True)
+                _log.error(f"[NBX-ALLOC-ERROR] free of a block already free: {ptr:#x}")
                 return
             dev = DeviceAllocator._POOL.blocks[ptr][4]
             nbytes = DeviceAllocator._POOL.blocks[ptr][0]
@@ -1179,9 +1181,9 @@ class DeviceAllocator:
         if _rc not in (None, 0):
             # Finalizer context — raising here cascades through GC; a
             # LOUD print preserves the sticky-error surfacing site.
-            print(f"[NBX-CUDA-ERROR] cudaFree rc={_rc} ptr={ptr:#x} "
-                  f"dev={alloc_dev} — sticky async error surfaced at "
-                  f"this free; the fault is at or before it.", flush=True)
+            _log.error(f"[NBX-CUDA-ERROR] cudaFree rc={_rc} ptr={ptr:#x} "
+                       f"dev={alloc_dev} — sticky async error surfaced at "
+                       f"this free; the fault is at or before it.")
         nbytes = DeviceAllocator._cuda_ptr_size.pop(ptr, None)
         DeviceAllocator._range_del(ptr)
         if _MALLOC_TRACE_FILE is not None and nbytes is not None:
