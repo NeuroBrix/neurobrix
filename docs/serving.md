@@ -288,6 +288,9 @@ non-positive value is refused by name):
 
 ## Chat and the KV cache today
 
+This is the state in 0.6.2. Prism KV (`docs/design/prism_kv.md`, in design) keeps the cache between
+turns and adds host and disk tiers; it ships in a 0.6.x release.
+
 ### One conversation per daemon
 
 The daemon holds **one** conversation (a list of user and assistant messages), created at the first `chat` request.
