@@ -28,8 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   says so in one line (it re-downloaded 131 MB on every call).
 - **The kernel census keys a chat session's later turns**: a turn after the first attends over the cached
   conversation, a launch shape the census never derived, so a session's second turn stopped under `--certified-only`
-  naming a missing setting. The census now derives those attention settings at every cached length (in whole cache
-  pages) up to the session's reach, and records for each chunk-size candidate the settings Prism prices it from.
+  naming a missing setting. The census now derives those attention settings for the session's chunk (or, before
+  Prism has chosen one, for every chunk-size candidate) at every cached length in whole cache pages up to the
+  session's reach, and records for each candidate the settings Prism prices it from. Until a chunk is chosen, a later
+  turn longer or shorter than a candidate still names its missing setting.
 - **Prism chooses a chat session's prefill chunk**: a session's turns can prefill in chunks of a fixed size, so a turn
   served from its cache gives the same bytes as the same conversation prefilled together. Prism picks the size from
   the certified kernel times of each candidate (whole cache pages, up to the prefill a session's plan prices), the

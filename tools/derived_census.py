@@ -2503,8 +2503,8 @@ def _session_chunks(model, mode, plan, defaults, session, cdtype, graph_at, has_
     keys past a turn's cached prefix are gathered as whole pages, Tk = pages x page, one page up to the session's reach.
     - The plan's chunk C (`KVCachePlan.prefill_chunk`): every chunk has C rows — its graph is the prompt-length site's
       at C, its attention keyed at every whole-page Tk from C (an empty cache) to the reach.
-    - No chunk planned: a turn prefills its own rows n, 1 .. Tk - 1, against every whole-page Tk — the continuation
-      keyed over the prompt-length classes too (an outer bisection over Tk, an inner one over n in the row bands).
+    - No chunk planned: every candidate's chunk at every whole-page Tk — the keys whose certification lets Prism
+      choose C (a turn running its own rows in one chunk crosses every length with every Tk: not derived, said below).
     - The record, for every candidate (`price.prefill_chunk_candidates`): the graph's keys at its rows (attention
       apart) and its attention at every Tk, each with its op count and the certified file dtype it is served from."""
     from neurobrix.core.state import price as P
@@ -2512,7 +2512,6 @@ def _session_chunks(model, mode, plan, defaults, session, cdtype, graph_at, has_
     from neurobrix.kernels.autotune_certify import census_tuners
     from nbxtensor.backend.device_files import in_force as _in_force
     from nbxtensor.ops import autotune_certified as AC
-    from nbxtensor.ops import launch_keys as _LK
     from nbxtensor.ops.tiling_sizes import PAGED_DECODE_TILE_CANDIDATES as _tiles
     kv = plan["kv_cache"]
     lm, feed, reach = session["lm"], session["feed"], int(session["reach"])
@@ -2543,39 +2542,17 @@ def _session_chunks(model, mode, plan, defaults, session, cdtype, graph_at, has_
 
     keys = set()
     C = kv.get("prefill_chunk")
-    if C:
-        for launches in over_pages(int(C), int(C) // page).values():
+    cands_rows = [c for c in P.prefill_chunk_candidates(page, P.session_prefill_rows(defaults)) if c <= reach]
+    # The chunk sizes a session's turns can run: the plan's C, or — none chosen yet — every candidate, the keys whose
+    # certification lets Prism choose one (core/prism/prefill_chunk.py). A turn with no chunk planned runs its own rows
+    # in one chunk: those keys cross every turn length with every whole-page key length (measured 2026-11-08: +841
+    # keys on TinyLlama, +1 169 on deepseek-moe-16b-chat; Qwen3-30B-A3B's ~442 pages x ~400 row classes on each of the
+    # class's rungs did not finish in 50 minutes) — not derived, so such a turn under certified-only names its key.
+    for c in ([int(C)] if C else cands_rows):
+        for launches in over_pages(c, c // page).values():
             keys |= set(launches)
-        what = f"C={C}: {pages - int(C) // page + 1} key length(s)"
-    else:
-        def outer(j):
-            found = set()
-            hi = j * page - 1
-            bps = _LK.row_breakpoints(1, hi)
-            pts = sorted({1, hi} | {p for p in bps if 1 < p < hi} | {p - 1 for p in bps if 1 < p - 1 < hi})
-            inner = {}
-            def at_n(n):
-                if n not in inner:
-                    inner[n] = frozenset((q_, k) for _u, q_, k in cont_at(n, j))
-                return inner[n]
-            for a_, b_ in zip(pts, pts[1:]):
-                _census.bisect_extent(a_, b_, at_n)
-            if len(pts) == 1:
-                inner[pts[0]] = frozenset((q_, k) for _u, q_, k in cont_at(pts[0], j))
-            for n in inner:
-                found |= set(cont[(n, j)])
-            keys.update(found)
-            print(f"[derived] session continuation {lm}: key length {j * page} ({j}/{pages} pages): "
-                  f"{len(inner)} row count(s), {len(cont)} attention derivation(s) so far", flush=True)
-            return frozenset((q_, k) for _u, q_, k in found)
-        outer_seen = {}
-
-        def at_outer(j):
-            if j not in outer_seen:
-                outer_seen[j] = outer(j)
-            return outer_seen[j]
-        _census.bisect_extent(1, pages, at_outer)
-        what = f"no chunk planned: {len(outer_seen)} key length(s) x the prompt-length classes"
+    what = (f"C={C}" if C else f"no chunk planned, the candidates {cands_rows}") + \
+        f": {pages} page(s) of key length"
     # the record Prism prices the candidates from
     sdpa_uids = {u for u, o in runtime_graph(model, lm)["ops"].items() if o.get("op_type") in _SDPA_KINDS}
     tuners = {}
@@ -2591,9 +2568,7 @@ def _session_chunks(model, mode, plan, defaults, session, cdtype, graph_at, has_
         return [[q_, kt, file_dtype(q_, keyof[(q_, kt)]), n] for (q_, kt), n in sorted(by.items())]
 
     cands = []
-    for c in P.prefill_chunk_candidates(page, P.session_prefill_rows(defaults)):
-        if c > reach:
-            continue
+    for c in cands_rows:
         graph = [t for t in graph_at(c) if t[0] not in sdpa_uids]
         attn = []
         for j, launches in over_pages(c, c // page).items():

@@ -8,11 +8,13 @@ Before (2026-11-08): `neurobrix run --turns` on TinyLlama, Triton, certified-onl
 census never formed: it keyed a prefill's attention only where its query rows equal its keys.
 
 What this test does if the code is wrong (TinyLlama, the 16 GB profile, its top rung, derived — nothing runs):
-1. no chunk planned: that turn-2 key is absent from the derived keys, or no chunk record names the candidates
-   (whole pages up to the session's priced prefill rows) with their graph and their attention at every whole-page key
-   length up to the reach — red (red on main: the key is not derived, there is no record);
-2. the plan's chunk C = 128: the continuation is keyed at 128 rows only — the 28-row key absent, the 128-row softmax over
-   192 keys present.
+1. no chunk planned: the candidates' continuation is not derived — a 64-row chunk's softmax over 192 whole-page keys
+   absent — or no chunk record names the candidates (whole pages up to the session's priced prefill rows) with their
+   graph and their attention at every whole-page key length up to the reach — red (red on main: no such key, no
+   record). A turn running its own 28 rows in one chunk is NOT keyed (the crossed grid of every turn length with every
+   key length is not derived): its turn-2 key stays absent, said;
+2. the plan's chunk C = 128: the continuation is keyed at 128 rows only — the 64-row key absent, the 128-row softmax
+   over 192 keys present.
 
 Run: python -m pytest tests/unit/census/test_the_census_keys_a_sessions_continued_prefill.py
 """
@@ -28,6 +30,7 @@ TURN2 = ("nbxtensor.ops.baddbmm_op.baddbmm_kernel", "(32, 192, 64, True, False, 
 # at 128 rows the scores product takes the matrix unit (no autotune key); its softmax over 192 keys (a next power of
 # two of 256 columns, 32 heads x 128 rows) is the keyed launch
 AT128 = ("nbxtensor.ops.softmax.softmax_forward_kernel", "(4096, 256, False, 'fp32', 'fp32')")
+AT64 = ("nbxtensor.ops.softmax.softmax_forward_kernel", "(2048, 256, False, 'fp32', 'fp32')")
 
 
 def _derive(monkeypatch, chunk=None):
@@ -56,9 +59,10 @@ def _derive(monkeypatch, chunk=None):
     return {(q, k) for _u, q, k in derived}, D.SESSION_CHUNKS.get("triton")
 
 
-def test_the_turn_two_key_is_derived_and_the_candidates_recorded(monkeypatch):
+def test_the_candidates_continuation_is_derived_and_recorded(monkeypatch):
     keys, rec = _derive(monkeypatch)
-    assert TURN2 in keys, "the continued prefill's 28-row attention over 192 whole-page keys is not derived"
+    assert AT64 in keys and AT128 in keys, "the candidates' continuation over 192 whole-page keys is not derived"
+    assert TURN2 not in keys, "a 28-row one-chunk turn is keyed: the crossed grid is derived after all"
     assert rec is not None and rec["page_tokens"] == 64 and rec["reach"] == 2048, rec and rec["page_tokens"]
     assert [c["rows"] for c in rec["candidates"]] == [64, 128]
     for c in rec["candidates"]:
@@ -71,5 +75,5 @@ def test_the_turn_two_key_is_derived_and_the_candidates_recorded(monkeypatch):
 
 def test_a_planned_chunk_keys_its_rows_only(monkeypatch):
     keys, rec = _derive(monkeypatch, chunk=128)
-    assert AT128 in keys and TURN2 not in keys
+    assert AT128 in keys and AT64 not in keys and TURN2 not in keys
     assert rec["prefill_chunk"] == 128
