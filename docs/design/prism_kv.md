@@ -310,6 +310,8 @@ strategy's weights move. The rule takes one of three values:
 
 ## 4. Integration with every strategy in `STRATEGY_RANK`
 
+`STRATEGY_RANK` (`core/prism/solver.py:808-818`) holds 13 strategy names; the table below has one row for each.
+
 "Warm" means the KV cache is kept while the weights are re-streamed: turn n+1 finds turn n's pages without
 recomputing them.
 
