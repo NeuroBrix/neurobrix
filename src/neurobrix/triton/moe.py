@@ -529,6 +529,8 @@ def execute_moe_fused(
                 DeviceAllocator.ensure_triton_device(act_dev)
             if len(orig_shape) == 3:
                 output = output.reshape(orig_shape)
+            if per_call and getattr(expert_store, "in_place", False):
+                expert_store.hold_table_pins(tables)     # see STEP 2c
             DeviceAllocator.set_device(act_dev)
             DeviceAllocator.ensure_triton_device(act_dev)
             return output
@@ -551,6 +553,15 @@ def execute_moe_fused(
             output = _xfer(output, act_dev)
         if len(orig_shape) == 3:
             output = output.reshape(orig_shape)
+        if per_call and getattr(expert_store, "in_place", False):
+            # This band returns before the per-call release at the end of this function, so on unified memory every
+            # expert a decoded token routed to kept a pinned wrap (a second Metal buffer over its file pages) after the
+            # in-place store unbound it: DeepSeek-Coder-V2-Lite triton on the M4 Pro wired 2.7 -> 16.2 GB in 46 s with
+            # 2 370 such wraps, past its 614-slot grant, and swapped until stopped (2026-11-08). The store takes the
+            # table's pins and ends them before it unbinds the pages they cover. Ending them here instead (with or
+            # without a device sync) turned the copying store's later byte-equality calls to NaN
+            # (test_the_expert_store_serves_routed_experts[5,8]): a re-pin of a released base is owed its own proof.
+            expert_store.hold_table_pins(tables)
         DeviceAllocator.set_device(act_dev)
         DeviceAllocator.ensure_triton_device(act_dev)
         return output
