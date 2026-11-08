@@ -19,6 +19,7 @@ from nbxtensor.memory.device_transfer import parse_device_idx
 
 from neurobrix.triton.generator import TritonGenerator
 from neurobrix.triton.session import TritonLMSession
+from neurobrix.core.state.kv_session import session_turn   # a serving session's turn (pure Python)
 
 # The rule and its history live in core.runtime_values.
 from neurobrix.core.runtime_values import require_max_tokens
@@ -160,11 +161,17 @@ class TritonAutoregressiveHandler:
         self._output_extractor = output_extractor
         self._active_session = None
 
-    def execute(self) -> Dict[str, Any]:
-        """Execute autoregressive generation — zero torch hot path."""
+    @session_turn
+    def execute(self, kv_session) -> Dict[str, Any]:
+        """Execute autoregressive generation — zero torch hot path. A serving session's request (`ctx.kv_session`,
+        core/state/kv_session.py) that fails leaves the session holding nothing: the cache's contents are no longer
+        known to be its."""
         gen_info = self.ctx.pkg.topology.get("flow", {}).get("generation", {})
         if not gen_info:
             raise RuntimeError("autoregressive_generation requires flow.generation info.")
+        if kv_session is not None and gen_info.get("type") != "autoregressive_text":
+            raise RuntimeError(f"ZERO FALLBACK: a serving session keeps the KV cache of a text decode; this flow "
+                               f"generates '{gen_info.get('type')}'")
 
         # Arm the run-scoped RNG stream for the Triton random wrappers
         # (Gumbel-max multinomial sampling draws one seed per step). Same
@@ -207,10 +214,16 @@ class TritonAutoregressiveHandler:
         batch_size = input_ids.shape[0]
         _phase_mark("flow.tokenized", None, _mem_note)
 
-        generator.set_prompt_ids(self._read_ids_to_list(input_ids))
+        prompt_ids = [int(t) for t in self._read_ids_to_list(input_ids)]
+        generator.set_prompt_ids(prompt_ids)
 
-        # Prefill
-        hidden = session.prefill(input_ids, batch_size)
+        # Prefill: a serving session's cache already holds the positions its ids match (core/state/kv_session.py);
+        # only the rest is prefilled, in the plan's chunks when it plans one (KVCachePlan.prefill_chunk)
+        kv_plan = getattr(self.ctx.plan, "kv_cache_plan", None)
+        chunk = getattr(kv_plan, "prefill_chunk", None)
+        start = kv_session.match(prompt_ids) if kv_session is not None else 0
+        hidden = session.prefill(input_ids, batch_size, start=start, chunk=chunk,
+                                 ids=prompt_ids if (start or chunk) else None)
         _phase_mark("flow.prefill.done", _dev_sync, _mem_note)
 
         # Teacher-forced scoring mode (quant-ppl-scoring, tier row
@@ -220,6 +233,8 @@ class TritonAutoregressiveHandler:
         # text is a JSON record the ppl harness aggregates. R30 mirror:
         # core/flow/autoregressive.py.
         if self.ctx.variable_resolver.resolved.get("global.score_mode"):
+            if kv_session is not None:
+                raise RuntimeError("ZERO FALLBACK: a scoring request (global.score_mode) is not a session turn")
             self._execute_score(strategy, hidden, input_ids)
             rv = self.ctx.variable_resolver.resolved
             session.cleanup()
@@ -332,7 +347,11 @@ class TritonAutoregressiveHandler:
         self._run_snac_codec_decoder(generated_tokens, generator.max_tokens)
 
         if not is_image:
-            session.cleanup()
+            session.cleanup(keep_cache=kv_session is not None)
+        if kv_session is not None:
+            from neurobrix.core.state.kv_session import held_ids
+            kv_session.record(held_ids(prompt_ids, generated_tokens, session.get_cache_len()), start,
+                              len(prompt_ids), session.prefilled_rows, session.padded_rows)
         return self.ctx.variable_resolver.resolve_all()
 
     def _run_snac_codec_decoder(self, generated_tokens, max_tokens: int) -> None:
@@ -639,6 +658,11 @@ class TritonAutoregressiveHandler:
         # same-shape reference, the compiled flow's diagnostic, mirrored.
         import os as _os_kv
         kv_interceptor = None
+        kv_session = getattr(self.ctx, "kv_session", None)
+        if kv_session is not None and not (has_sdpa and self.ctx.mode in ("triton", "triton_sequential")
+                                           and _os_kv.environ.get("NBX_KV_RECOMPUTE") != "1"):
+            raise RuntimeError("ZERO FALLBACK: a serving session keeps the KV cache between turns, and this decode "
+                               "runs without one (no attention in the graph, or NBX_KV_RECOMPUTE=1)")
         if has_sdpa and self.ctx.mode in ("triton", "triton_sequential") \
                 and _os_kv.environ.get("NBX_KV_RECOMPUTE") != "1":
             from neurobrix.triton.kv_cache import TritonAttentionInterceptor
@@ -701,7 +725,14 @@ class TritonAutoregressiveHandler:
                 # 2026-09-03), then the contents reset in place.
                 kv_cache.decode_budget = int(kv_params.get("decode_budget") or 0)
                 kv_cache.window_ceiling = int(kv_params.get("window_ceiling") or 0)
-                kv_cache.clear()
+                # a serving session's positions stay while it holds the cache (core/state/kv_session.py); every
+                # other request starts empty
+                if kv_session is None or kv_session.held(executor) is not kv_cache:
+                    kv_cache.clear()
+            if kv_session is not None:
+                kv_session.bind(executor, kv_cache, kv_cache)
+            else:
+                kv_cache.holder = None
 
             kv_interceptor = TritonAttentionInterceptor(
                 cache=kv_cache, num_heads=num_heads)

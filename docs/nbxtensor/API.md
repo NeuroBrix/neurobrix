@@ -963,6 +963,8 @@ def atan2_kernel(y_ptr, x_ptr, out_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
 ```python
 def paged_kv_append(new, pool, slot_mapping)
     # Write new positions into a layer's paged pool (state engine step 2, ops/paged_decode_attn.py).
+def paged_kv_gather(pool, block_table, positions, heads, dtype)
+    # A layer's K (or V) of every sequence as whole pages, contiguous [B, heads, positions, D] (a prefill chunk over a session's cache reads its keys through it)
 def paged_decode_attention(q, k_pool, v_pool, block_table, seq_lens, softmax_scale, max_seq_len, q_round=None)
     # Decode attention (one query position) read through the page table — the vector split-KV kernel of ops/decode_attn_vec.py on paged K / V, merged by the fixed-order `flash_decode_reduce_kernel`.
 def decode_reduce(opart, mpart, lpart, out)
@@ -1916,6 +1918,8 @@ def paged_decode_splits(longest: int) -> int
 def paged_decode_attn_split_kernel(q_ptr, k_pool_ptr, v_pool_ptr, block_table_ptr, seq_lens_ptr, opart_ptr, mpart_ptr, lpart_ptr, n_seqs, page_tokens, SPLITS, sm_scale, H_Q, stride_qh, stride_kp, stride_kh, stride_ks, stride_vp, stride_vh, stride_vs, stride_bt, stride_oh, stride_os, stride_mh, GQA_GROUPS: tl.constexpr, BLOCK_D: tl.constexpr, D: tl.constexpr, D_V: tl.constexpr, SPLIT_ALIGN: tl.constexpr, Q_TO: tl.constexpr=None, Q_SATURATE: tl.constexpr=False, BLOCK_N: tl.constexpr=32)
 def paged_kv_append_step_kernel(k_new_ptr, v_new_ptr, k_pool_ptr, v_pool_ptr, block_table_ptr, lens_ptr, page_tokens, stride_kb, stride_kh, stride_vb, stride_vh, stride_kp, stride_kph, stride_ks, stride_vp, stride_vph, stride_vs, stride_bt, BLOCK_D: tl.constexpr, D_K: tl.constexpr, D_V: tl.constexpr)
     # A decode step's append with no host input
+def paged_kv_gather_kernel(pool_ptr, table_ptr, out_ptr, page_tokens, T, groups, stride_pp, stride_ph, stride_ps, stride_tb, stride_ob, stride_oh, stride_ot, BLOCK_D: tl.constexpr, D: tl.constexpr)
+    # One program per (sequence and position, output head): the position copied from its page, KV head h // groups
 def paged_lens_advance_kernel(lens_ptr, n)
     # lens[b] += n for every sequence
 ```

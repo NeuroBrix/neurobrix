@@ -1,33 +1,57 @@
 """
-ConversationSession — Multi-turn chat state for LLM models.
+ConversationSession — multi-turn chat state for LLM models, and the KV cache it owns.
 
-V1 Strategy: Re-prefill entire history each turn.
-The full conversation is formatted via chat_template, tokenized,
-and prefilled from scratch each turn. KV cache resets between turns.
+The KV cache belongs to the session (docs/design/prism_kv.md §5bis, scope A): its positions stay between turns, and
+turn n prefills only the tokens the cache does not already hold, on both engines. The conversation is rendered by the
+model's own chat template at every turn and matched against the held ids by the flow (core/state/kv_session.py), so
+nothing assumes the rendering of earlier turns is stable.
 
-Context overflow protection: when conversation approaches KV cache limit,
-old turns are summarized using the loaded LLM. Truncation fallback if
-summarization fails.
+The ceiling is the plan's: the positions a session may hold on this device (`session_ceiling`). A turn whose rendered
+conversation and generation budget pass it is refused by name — the conversation is never summarised or truncated
+behind the user's back (the owner's decision, 2026-11-08).
 
-Simple, correct, hardware-agnostic. Incremental prefill is V2 optimization.
+`play_turn` is the one turn both the daemon (`InferenceEngine.chat`) and `neurobrix run --turns` play.
 """
 
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Tuple
+
+from neurobrix.core.state.kv_session import KVSession
+
+
+def session_ceiling(kv_plan) -> Tuple[int, str]:
+    """(positions, the plan fact they come from) a serving session may hold. The plan's session reach — what a serving
+    session holds in the room the cache was sized from, within the declared window — when it states one; otherwise its
+    cache (`max_cache_len`), which a serve plan sizes up to the window itself. A plan without a KV cache is refused."""
+    if kv_plan is None:
+        raise RuntimeError(
+            "ZERO FALLBACK: the plan carries no KV cache for this decode session. Prism plans the cache of every "
+            "flow that decodes (core/runtime/lm_facts); a plan without one did not see this flow.")
+    reach = getattr(kv_plan, "session_reach", None)
+    if reach:
+        return int(reach), "the plan's session reach (KVCachePlan.session_reach)"
+    return int(kv_plan.max_cache_len), ("the plan's KV cache (KVCachePlan.max_cache_len; the plan states no session "
+                                        "reach: the decoder's state declares no window, or a serving floor does not "
+                                        "fit the room)")
 
 
 class ConversationSession:
     """
-    Multi-turn conversation state for LLM models.
+    Multi-turn conversation state for LLM models: the messages, and the KV cache record the flows keep between turns.
 
-    Tracks chat history and builds full prompts via chat_template.
-    ZERO HARDCODE: max_context from model defaults, not hardcoded.
+    ZERO HARDCODE: the ceiling is the plan's (`session_ceiling`), passed in; nothing here knows a model.
     """
 
-    def __init__(self, tokenizer: Any, defaults: Dict[str, Any]):
+    def __init__(self, tokenizer: Any, ceiling: int, ceiling_source: str):
+        if not callable(getattr(tokenizer, "apply_chat_template", None)):
+            raise RuntimeError("ZERO FALLBACK: a chat session renders the conversation with the model's chat "
+                               "template, and this tokenizer has no apply_chat_template()")
         self.messages: List[Dict[str, str]] = []
         self._tokenizer = tokenizer
-        self._max_context = int(defaults.get("max_length", 4096))
-        self._summarization_count = 0
+        self.kv = KVSession(ceiling, ceiling_source)
+
+    @property
+    def ceiling(self) -> int:
+        return self.kv.ceiling
 
     def add_user_message(self, content: str) -> None:
         """Add a user message to the conversation."""
@@ -37,162 +61,59 @@ class ConversationSession:
         """Add an assistant response to the conversation."""
         self.messages.append({"role": "assistant", "content": content})
 
-    def ensure_fits(
-        self,
-        max_cache_len: int,
-        max_tokens: int,
-        generate_fn: Callable,
-    ) -> bool:
-        """
-        Ensure conversation fits in KV cache. Summarize old turns if needed.
-
-        Args:
-            max_cache_len: KV cache capacity in tokens (from Prism plan)
-            max_tokens: per-turn generation budget
-            generate_fn: callable to generate summary (engine.generate)
-
-        Returns:
-            True if summarization/truncation was triggered
-        """
-        budget = max_cache_len - max_tokens  # room for history after reserving generation space
-        current_tokens = self._estimate_token_count()
-
-        if current_tokens <= budget:
-            return False  # fits fine
-
-        # Identify anchored messages (never summarize)
-        # - First system message (if any)
-        # - First user message (core intent)
-        anchor_count = 0
-        if self.messages and self.messages[0]["role"] == "system":
-            anchor_count = 1
-        # First user message after any system message
-        for i in range(anchor_count, len(self.messages)):
-            if self.messages[i]["role"] == "user":
-                anchor_count = i + 1
-                break
-
-        # Find summarizable turn pairs (user+assistant) after anchors
-        # Never break a pair — always summarize complete user+assistant turns
-        # Keep last 2 messages (current turn)
-        summarizable = []
-        i = anchor_count
-        while i + 1 < len(self.messages) - 2:
-            if self.messages[i]["role"] == "user" and self.messages[i + 1]["role"] == "assistant":
-                summarizable.append((i, i + 1))
-                i += 2
-            else:
-                i += 1
-
-        if not summarizable:
-            return False  # nothing to summarize (only anchors + current)
-
-        # Build text of turns to summarize
-        turns_text = []
-        for ui, ai in summarizable:
-            turns_text.append(f"User: {self.messages[ui]['content']}")
-            turns_text.append(f"Assistant: {self.messages[ai]['content']}")
-
-        # Generate summary using the loaded LLM
-        summary_prompt = (
-            "Summarize the following conversation concisely, preserving key facts, "
-            "decisions, and user preferences:\n\n" + "\n".join(turns_text)
-        )
-
-        summary_text = None
-        try:
-            result = generate_fn(prompt=summary_prompt, max_tokens=200, chat_mode=False)
-            summary_text = result.get("text", "").strip()
-        except Exception:
-            pass  # Summarization failed — fall through to truncation
-
-        if not summary_text:
-            # Truncation fallback: drop oldest summarizable turns until it fits
-            while summarizable and self._estimate_token_count() > budget:
-                ui, ai = summarizable.pop(0)
-                self.messages.pop(ui)  # remove user
-                self.messages.pop(ui)  # remove assistant (shifted down)
-                # Re-index remaining summarizable pairs
-                summarizable = [(u - 2, a - 2) for u, a in summarizable]
-            self._summarization_count += 1
-            return True
-
-        # Replace summarizable turns with summary message
-        # Remove old turns (in reverse to preserve indices)
-        indices_to_remove = []
-        for ui, ai in summarizable:
-            indices_to_remove.extend([ui, ai])
-        for idx in sorted(indices_to_remove, reverse=True):
-            self.messages.pop(idx)
-
-        # Insert summary as system message after anchors
-        summary_msg = {
-            "role": "system",
-            "content": f"[Conversation summary: {summary_text}]",
-        }
-        self.messages.insert(anchor_count, summary_msg)
-        self._summarization_count += 1
-
-        return True
-
-
     def build_token_ids(self) -> List[int]:
-        """
-        Build tokenized conversation history via chat_template.
+        """The conversation rendered by the model's chat template, with the generation prompt: the ids of the turn."""
+        from neurobrix.core.runtime.prompt_length import _flatten_tokenizer_output   # the flows' one rule
+        ids = _flatten_tokenizer_output(
+            self._tokenizer.apply_chat_template(self.messages, tokenize=True, add_generation_prompt=True))
+        if not ids:
+            raise RuntimeError("ZERO FALLBACK: the chat template rendered the conversation as no token at all")
+        return [int(t) for t in ids]
 
-        Returns token IDs ready for prefill.
-        """
-        if hasattr(self._tokenizer, 'apply_chat_template'):
-            return self._tokenizer.apply_chat_template(
-                self.messages, tokenize=True, add_generation_prompt=True
-            )
-        # Fallback: encode the basic format
-        prompt = self._format_basic()
-        if hasattr(self._tokenizer, 'encode'):
-            return self._tokenizer.encode(prompt, padding=False, add_special_tokens=True)
-        raise RuntimeError(
-            "ZERO FALLBACK: Tokenizer has no apply_chat_template() or encode()."
-        )
-
-    def _format_basic(self) -> str:
-        """Basic chat format when no chat_template is available."""
-        parts = []
-        for msg in self.messages:
-            role = msg["role"]
-            content = msg["content"]
-            if role == "system":
-                parts.append(f"System: {content}")
-            elif role == "user":
-                parts.append(f"User: {content}")
-            elif role == "assistant":
-                parts.append(f"Assistant: {content}")
-        parts.append("Assistant:")
-        return "\n".join(parts)
+    def check_fits(self, token_ids: List[int], max_tokens: int) -> None:
+        """Refuse by name a turn whose conversation and generation budget pass the session's ceiling."""
+        need = len(token_ids) + int(max_tokens)
+        if need > self.kv.ceiling:
+            raise RuntimeError(
+                f"this conversation needs {need} positions ({len(token_ids)} of conversation + {int(max_tokens)} to "
+                f"generate) and the session holds at most {self.kv.ceiling} — {self.kv.source}. Start a new "
+                f"conversation (/new), or ask for fewer tokens.")
 
     def clear(self) -> None:
-        """Reset conversation history."""
+        """Reset the conversation; the cache's positions are no longer the session's."""
         self.messages.clear()
-        self._summarization_count = 0
+        self.kv.forget()
 
     def get_context_info(self) -> Dict[str, Any]:
-        """Return context usage statistics."""
-        est_tokens = self._estimate_token_count()
+        """Context usage: the conversation's exact token count against the ceiling, and what the cache holds."""
+        tokens = len(self.build_token_ids()) if self.messages else 0
         info = {
             "turns": len(self.messages),
-            "estimated_tokens": est_tokens,
-            "max_context": self._max_context,
-            "usage_pct": round(est_tokens / self._max_context * 100, 1) if self._max_context > 0 else 0,
+            "tokens": tokens,
+            "max_context": self.kv.ceiling,
+            "usage_pct": round(tokens / self.kv.ceiling * 100, 1),
+            "cached_tokens": len(self.kv.token_ids),
         }
-        if self._summarization_count > 0:
-            info["summarizations"] = self._summarization_count
+        last = self.kv.last_turn
+        if last is not None:
+            info["last_turn"] = dict(last)
         return info
 
-    def _estimate_token_count(self) -> int:
-        """Estimate current context size in tokens."""
-        try:
-            ids = self.build_token_ids()
-            return len(ids)
-        except Exception:
-            # Rough estimate: ~4 chars per token
-            total_chars = sum(len(m["content"]) for m in self.messages)
-            return total_chars // 4
+
+def play_turn(session: ConversationSession, message: str, max_tokens: int,
+              generate: Callable[[List[int], KVSession], Dict[str, Any]]) -> Dict[str, Any]:
+    """One chat turn: the user message joins the conversation, the template renders it, the ceiling is checked, and
+    `generate(token_ids, kv_session)` runs it on the session's cache (it returns the engine's result with its "text").
+    A refused or failed turn leaves the conversation as it was. Returns the result, with the turn's ledger."""
+    session.add_user_message(message)
+    try:
+        token_ids = session.build_token_ids()
+        session.check_fits(token_ids, max_tokens)
+        result = generate(token_ids, session.kv)
+    except BaseException:
+        session.messages.pop()
+        raise
+    session.add_assistant_message(result.get("text", ""))
+    result = dict(result)
+    result["kv"] = dict(session.kv.last_turn or {})
+    return result

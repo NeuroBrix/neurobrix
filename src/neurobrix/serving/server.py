@@ -653,17 +653,13 @@ class ServingDaemon:
         if method == "chat":
             message = params.get("message", "")
             kwargs = {k: v for k, v in params.items() if k != "message"}
-            # Track summarization count before call
-            prev_count = 0
-            if self._engine._session is not None:
-                prev_count = self._engine._session._summarization_count
             text = self._engine.chat(message, **kwargs)
             context = {}
-            summarized = False
             if self._engine._session is not None:
                 context = self._engine._session.get_context_info()
-                summarized = self._engine._session._summarization_count > prev_count
-            return {"text": text, "context": context, "summarized": summarized}
+            # `summarized` stays in the reply for the wire protocol's clients: a conversation is never summarised
+            # (past the session's ceiling the turn is refused by name, serving/session.py), so it is always false
+            return {"text": text, "context": context, "summarized": False}
 
         # complete
         messages = params.get("messages") or []

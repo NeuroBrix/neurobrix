@@ -20,7 +20,7 @@ from neurobrix.core.device_utils import device_empty_cache, device_sync, device_
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from neurobrix.serving.session import ConversationSession
+from neurobrix.serving.session import ConversationSession, play_turn, session_ceiling
 import logging
 _log = logging.getLogger(__name__)
 
@@ -99,6 +99,7 @@ class InferenceEngine:
         self._container = None     # NBXContainer
         self._family = None        # "llm", "image", "audio", "video"
         self._session = None       # ConversationSession (LLM only)
+        self._agent_kv = None      # the agent path's KV cache record (complete: one per engine)
         self._is_loaded = False
         self._warm_serving = False  # True if strategy supports persistent weights
         self._device = None        # Primary device string (set during load)
@@ -349,13 +350,14 @@ class InferenceEngine:
         params.refuse_unread()
         return inputs
 
-    def _generate_from_token_ids(self, token_ids: list, decode: Dict[str, Any]) -> Dict[str, Any]:
+    def _generate_from_token_ids(self, token_ids: list, decode: Dict[str, Any], kv_session=None) -> Dict[str, Any]:
         """
         Generate from pre-tokenized token IDs (chat path).
 
         Bypasses TextProcessor entirely — token IDs already include chat template,
         special tokens, and generation prompt. No double-BOS possible.
-        `decode` is what `_decode_inputs` built from the request.
+        `decode` is what `_decode_inputs` built from the request. `kv_session`: the
+        session whose KV cache the request continues (core/state/kv_session.py).
         """
         if not self._is_loaded:
             raise RuntimeError("ZERO FALLBACK: Engine not loaded. Call load() first.")
@@ -377,7 +379,7 @@ class InferenceEngine:
         device_sync(self._device)
         _phase_mark("engine.execute.begin")
 
-        outputs = self._executor.execute(inputs)
+        outputs = self._executor.execute(inputs, kv_session=kv_session)
 
         device_sync(self._device)
         _phase_mark("engine.execute.end")
@@ -387,12 +389,19 @@ class InferenceEngine:
         result.update(self._extract_llm_output(outputs))
         return result
 
+    def _max_tokens(self, decode: Dict[str, Any]) -> int:
+        """A decode bound nobody declared truncates silently; the request wins, then the container, then a refusal."""
+        from neurobrix.core.runtime_values import resolve as _resolve_runtime
+        return int(_resolve_runtime(
+            "max_tokens", container=self._pkg.defaults,
+            extra=[("the request", decode.get("global.max_tokens"))],
+            why="It bounds this generation."))
+
     def chat(self, message: str, **kwargs) -> str:
         """
-        Multi-turn chat for LLM models. Manages conversation session.
-
-        Builds full context from conversation history each turn.
-        Context overflow protection: summarizes old turns if KV cache limit approached.
+        Multi-turn chat for LLM models. The session owns the KV cache: turn n prefills only
+        the tokens its cache does not already hold (serving/session.play_turn). Past the
+        plan's ceiling the turn is refused by name.
         """
         if self._family != "llm":
             raise RuntimeError(
@@ -404,51 +413,24 @@ class InferenceEngine:
             tokenizer = self._executor.modules.get("tokenizer")
             if tokenizer is None:
                 raise RuntimeError("ZERO FALLBACK: No tokenizer module in executor.")
-            self._session = ConversationSession(
-                tokenizer=tokenizer,
-                defaults=self._pkg.defaults,
-            )
+            ceiling, source = session_ceiling(getattr(self._plan, "kv_cache_plan", None))
+            self._session = ConversationSession(tokenizer=tokenizer, ceiling=ceiling, ceiling_source=source)
 
-        # Add user message to history
-        self._session.add_user_message(message)
-
-        # Context overflow protection
-        max_cache_len = self._get_max_cache_len()
-        # A decode bound nobody declared truncates silently; the request wins,
-        # then the container, then a refusal.
-        from neurobrix.core.runtime_values import resolve as _resolve_runtime
-        max_tokens = _resolve_runtime(
-            "max_tokens", container=self._pkg.defaults,
-            extra=[("the request", decode.get("global.max_tokens"))],
-            why="It bounds this generation.")
-        summarized = self._session.ensure_fits(
-            max_cache_len=max_cache_len,
-            max_tokens=max_tokens,
-            generate_fn=self.generate,
-        )
-        if summarized:
-            _log.debug("[Engine] Conversation history compressed — older turns summarized")
-
-        # Build pre-tokenized IDs from conversation history via chat_template.
-        # This avoids double-BOS: the template already includes special tokens,
-        # so we pass token IDs directly to the executor, bypassing TextProcessor.
-        token_ids = self._session.build_token_ids()
-        result = self._generate_from_token_ids(token_ids, decode)
-
-        # Extract response text
-        response_text = result.get("text", "")
-        self._session.add_assistant_message(response_text)
-
-        return response_text
+        result = play_turn(self._session, message, self._max_tokens(decode),
+                           lambda ids, kv: self._generate_from_token_ids(ids, decode, kv_session=kv))
+        return result.get("text", "")
 
     def complete(self, messages: list, tools: Optional[list] = None, **kwargs) -> str:
         """
-        Stateless completion over caller-managed messages (agent path).
+        Completion over caller-managed messages (agent path).
 
         The caller owns the conversation — message dicts including
         role="tool" results; the embedded chat template renders it (with
         the tools contract when given) and one decode returns the raw
-        assistant text. Same V1 re-prefill discipline as chat().
+        assistant text. The engine keeps the KV cache of the last call
+        (one record for the agent path): the ids its cache holds are matched
+        against the new rendering, so a fixed system prompt and tools
+        contract are prefilled once, and only what changed is prefilled.
         """
         from neurobrix.core.config import get_family_config
         try:
@@ -472,8 +454,20 @@ class InferenceEngine:
         }
         if tools:
             template_kwargs["tools"] = tools
-        token_ids = tokenizer.apply_chat_template(messages, **template_kwargs)
-        result = self._generate_from_token_ids(token_ids, decode)
+        from neurobrix.core.runtime.prompt_length import _flatten_tokenizer_output
+        token_ids = [int(t) for t in _flatten_tokenizer_output(
+            tokenizer.apply_chat_template(messages, **template_kwargs))]
+        if self._agent_kv is None:
+            from neurobrix.core.state.kv_session import KVSession
+            ceiling, source = session_ceiling(getattr(self._plan, "kv_cache_plan", None))
+            self._agent_kv = KVSession(ceiling, source)
+        max_tokens = self._max_tokens(decode)
+        if len(token_ids) + max_tokens > self._agent_kv.ceiling:
+            raise RuntimeError(
+                f"these messages need {len(token_ids) + max_tokens} positions ({len(token_ids)} rendered + "
+                f"{max_tokens} to generate) and a session holds at most {self._agent_kv.ceiling} — "
+                f"{self._agent_kv.source}.")
+        result = self._generate_from_token_ids(token_ids, decode, kv_session=self._agent_kv)
         return result.get("text", "")
 
     def chat_template_text(self) -> str:
@@ -487,16 +481,6 @@ class InferenceEngine:
             return text if isinstance(text, str) else ""
         template = getattr(getattr(tokenizer, "_tokenizer", None), "chat_template", None)
         return template if isinstance(template, str) else ""
-
-    def _get_max_cache_len(self) -> int:
-        """Get KV cache capacity from Prism plan."""
-        kv_plan = getattr(self._plan, 'kv_cache_plan', None)
-        if kv_plan is None:
-            raise RuntimeError(
-                "ZERO FALLBACK: the plan carries no KV cache for this decode session. Prism plans "
-                "the cache of every flow that decodes (core/runtime/lm_facts); a plan without one "
-                "did not see this flow.")
-        return kv_plan.max_cache_len
 
     def new_conversation(self) -> None:
         """Start a new conversation, clearing history."""

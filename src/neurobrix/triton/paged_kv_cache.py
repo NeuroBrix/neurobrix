@@ -69,6 +69,7 @@ class PagedTritonKVCache:
         self._uid = next(PagedTritonKVCache._uids)
         self.generation = 0                                                 # moves when the pools are reallocated
         self.regrowths = 0
+        self.holder = None      # the serving session whose positions the cache holds (core/state/kv_session), or None
 
     # -- allocation ---------------------------------------------------------------------------------------------------
     import itertools as _itertools
@@ -224,15 +225,17 @@ class PagedTritonKVCache:
         return need
 
     # -- the steps ----------------------------------------------------------------------------------------------------
-    def prefill(self, layer_idx: int, k, v) -> None:
+    def prefill(self, layer_idx: int, k, v, real: Optional[int] = None) -> None:
         """Append a prompt's K / V `[B, H_kv, T, D]` (positions length .. length+T-1). Layer 0 starts the request's
-        reservation: the prompt and its decode budget."""
+        reservation: the prompt and its decode budget. `real`: the chunk's real rows when its last rows pad a planned
+        chunk (the request's length is the real one; the padding rows still get their slots, overwritten later)."""
         from nbxtensor.ops import wrappers as W
         from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
         self._ensure(layer_idx, k)
         t = int(k.shape[2])
         if layer_idx == 0:
-            self._reserve(self._request_length(self.length + t))
+            real_t = t if real is None else int(real)
+            self._reserve(max(self._request_length(self.length + real_t), self.length + t))
         start = self.length
         DeviceAllocator.set_device(self.layer_device[layer_idx])     # the slots go to the layer's card
         for b in range(self.batch):
@@ -275,6 +278,31 @@ class PagedTritonKVCache:
         if layer_idx == self.num_layers - 1:
             self.length = new_len
         return out
+
+    # -- a session's cache between turns (core/state/kv_session.py) --------------------------------------------------
+    def truncate(self, length: int) -> None:
+        """Keep the first `length` positions (a session's matched prefix, or a padded chunk's real end): the host and
+        every layer's device length move back; the pages stay granted and the dropped slots are overwritten next."""
+        length = int(length)
+        if length < 0 or length > self.length:
+            raise RuntimeError(f"ZERO FALLBACK: truncating the KV cache to {length} positions; it holds {self.length}")
+        if length == self.length:
+            return
+        self.length = length
+        if self.pool is not None:
+            self._write_lens(length)
+
+    def gather_pages(self, layer_idx: int, which: str, positions: int, heads: int, dtype) -> NBXTensor:
+        """Layer `layer_idx`'s K (`which` "k") or V ("v") of every sequence over its first `positions` positions, a
+        whole number of pages, contiguous `[B, heads, positions, D]` in `dtype` (`paged_kv_gather`). The pages must be
+        granted (a prefill reserved them)."""
+        from nbxtensor.ops import attention_wrappers as _aw
+        if positions > len(self.tables[0].pages) * self.page_tokens:
+            raise RuntimeError(f"ZERO FALLBACK: gathering {positions} positions of layer {layer_idx}; the sequence "
+                               f"holds {len(self.tables[0].pages)} pages of {self.page_tokens}")
+        pool = (self.k_pools if which == "k" else self.v_pools)[layer_idx]
+        DeviceAllocator.set_device(self.layer_device[layer_idx])
+        return _aw.paged_kv_gather(pool, self.block_tables[self.layer_device[layer_idx]], positions, heads, dtype)
 
     # -- the interceptor's protocol (triton/kv_cache.py: the cache answers for its own state) -----------------------
     def get_cache_len(self) -> int:

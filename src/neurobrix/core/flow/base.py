@@ -73,6 +73,10 @@ class FlowContext:
     # the decoder. None when the request is not binned.
     binned_request: Any = None
 
+    # A serving session's KV cache record (core/state/kv_session.KVSession): the autoregressive flows keep the
+    # session's positions between its turns and prefill only what they do not hold. None for every other request.
+    kv_session: Any = None
+
     def compute_dtype(self) -> 'torch.dtype':
         """Prism-RESOLVED compute dtype for flow-level tensor synthesis, as a torch.dtype — the
         compiled side's reading of `resolve_compute_dtype` (the one resolution, below)."""

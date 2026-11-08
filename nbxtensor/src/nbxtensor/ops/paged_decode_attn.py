@@ -209,6 +209,34 @@ def paged_kv_append_step_kernel(
 
 
 @triton.jit
+def paged_kv_gather_kernel(
+    pool_ptr,        # [num_pages, H_kv, page_tokens, D] the layer's pool
+    table_ptr,       # [B, max_pages] int32: the sequence's page ids (its block table row)
+    out_ptr,         # [B, H_out, T, D] the gathered positions, T a whole number of pages
+    page_tokens, T, groups,
+    stride_pp, stride_ph, stride_ps,
+    stride_tb,
+    stride_ob, stride_oh, stride_ot,
+    BLOCK_D: tl.constexpr,
+    D: tl.constexpr,
+):
+    """The session's keys (or values) as WHOLE PAGES (docs/design/prism_kv.md §5bis): one program per (sequence and
+    position, output head) copies position t of KV head h // groups from its page (table[b, t // page_tokens]) into the
+    contiguous [B, H_out, T, D] a prefill chunk's attention reads, cast to the output's dtype on store (a widening
+    from the pool's dtype is exact). groups > 1 re-expands grouped KV heads to the query heads the graph handed."""
+    pid = tl.program_id(0).to(tl.int64)
+    h = tl.program_id(1).to(tl.int64)
+    b = pid // T
+    t = pid % T
+    page = tl.load(table_ptr + b * stride_tb + t // page_tokens).to(tl.int64)
+    offs = tl.arange(0, BLOCK_D)
+    m = offs < D
+    x = tl.load(pool_ptr + page * stride_pp + (h // groups) * stride_ph + (t % page_tokens) * stride_ps + offs,
+                mask=m, other=0.0)
+    tl.store(out_ptr + b * stride_ob + h * stride_oh + t * stride_ot + offs, x.to(out_ptr.dtype.element_ty), mask=m)
+
+
+@triton.jit
 def paged_lens_advance_kernel(lens_ptr, n):
     """lens[b] += n for every sequence: one program per sequence, after the step's append (stream order)."""
     b = tl.program_id(0).to(tl.int64)

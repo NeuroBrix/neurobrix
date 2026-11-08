@@ -26,6 +26,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`--json` prints its record on one line** (it was indented over about 120 lines); the content is unchanged.
 - **`python -m nbxtensor install-metal` downloads nothing when the pinned Metal wheels are already installed**, and
   says so in one line (it re-downloaded 131 MB on every call).
+- **A chat turn prefills only its new tokens**: the KV cache now belongs to the chat session (`serve` + `chat`,
+  `complete`), on both engines. Each turn matches the conversation's token IDs against what the cache already holds
+  and prefills only the rest (TinyLlama, a 421-token second turn: 158 rows prefilled instead of 421). A continued
+  prefill attends over the cached keys read back as whole cache pages, so with a planned prefill chunk
+  (`KVCachePlan.prefill_chunk`) a turn served from the session gives the same bytes as the same turns prefilled
+  together. On the Triton engine under `--certified-only` a continued prefill needs attention kernel settings the
+  census does not derive yet; such a run stops naming the missing setting.
+- **A conversation past its ceiling is refused, never summarised**: the session's ceiling is the plan's (its
+  `session_reach`, else its KV cache), not the container's `max_length` or 4096. A turn that would pass it is refused
+  with the ceiling and the plan fact it comes from; older turns are no longer summarised or dropped, a tokenizer
+  without a chat template is refused, and `/context` shows the exact token count, the ceiling and the tokens the cache
+  holds (`tokens`, `cached_tokens`, `last_turn`; `estimated_tokens` is gone). The `chat` reply's `summarized` field is
+  always `false`.
 
 ### Fixed
 - **`neurobrix autotune certify --reprove-generator` no longer un-serves the build it re-proves from**: re-proving a

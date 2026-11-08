@@ -334,6 +334,12 @@ class KVCachePlan:
     # class, which the derived census keys a decoder's prompt lengths up to. None: the decoder's state declares no window
     # (no session is planned for it) or its floor does not fit the room.
     session_reach: Optional[int] = None
+    # The rows of one prefill chunk (docs/design/prism_kv.md §5bis): a request's prefill split into chunks of exactly
+    # this many rows, a multiple of the cache page, the last chunk completed with masked rows the next chunk or the
+    # decode overwrites — so every chunk meets the same kernel keys and a turn served from a session's cache gives the
+    # bytes of the same turns prefilled together. None: one chunk of the request's own rows (Prism chooses no C yet; it
+    # will from the certified times of the split run, never a constant).
+    prefill_chunk: Optional[int] = None
 
     @property
     def head_dim(self) -> int:
@@ -632,6 +638,7 @@ class ExecutionPlan:
                 "memory_bytes": int(self.kv_cache_plan.memory_bytes),
                 "initial_cache_len": int(self.kv_cache_plan.initial_cache_len),
                 "session_reach": self.kv_cache_plan.session_reach,
+                "prefill_chunk": self.kv_cache_plan.prefill_chunk,
             } if self.kv_cache_plan else None,
         }
 
@@ -704,6 +711,8 @@ class ExecutionPlan:
                 per_token_bytes=kv_data.get("per_token_bytes", 0),
                 initial_cache_len=int(kv_data["initial_cache_len"]),
                 session_reach=kv_data.get("session_reach"),
+                # a plan saved before the field planned one chunk: None is that plan's meaning
+                prefill_chunk=kv_data.get("prefill_chunk"),
             )
 
         return cls(
@@ -10213,7 +10222,8 @@ def plan_record(plan: "ExecutionPlan") -> dict:
                            "num_kv_heads": getattr(kv, "num_kv_heads", None),
                            "k_head_dim": getattr(kv, "k_head_dim", None),
                            "v_head_dim": getattr(kv, "v_head_dim", None),
-                           "session_reach": getattr(kv, "session_reach", None)}
+                           "session_reach": getattr(kv, "session_reach", None),
+                           "prefill_chunk": getattr(kv, "prefill_chunk", None)}
     if plan.cfg_split_components:
         rec["cfg_split_components"] = list(plan.cfg_split_components)
     if getattr(plan, "batch_split_components", None):
@@ -10313,6 +10323,8 @@ def explain_plan(plan: "ExecutionPlan") -> str:
     if plan.kv_cache_plan is not None:
         kv = plan.kv_cache_plan
         lines.append(f"kv cache        up to {kv.max_cache_len} tokens, {kv.memory_bytes / 2**20:.0f} MB, {kv.dtype}")
+        lines.append(f"kv session      reach {kv.session_reach if kv.session_reach is not None else 'none stated'}, "
+                     f"prefill chunk {kv.prefill_chunk if kv.prefill_chunk else 'one per request (no C planned)'}")
     for _dev, _cliff in sorted((getattr(plan, "deferred_drain_cliffs", None) or {}).items()):
         lines.append(f"drain cliff     {_dev}: the Triton hot loop drains its dead tensors at "
                      f"{_cliff / 2**20:.0f} MB queued")

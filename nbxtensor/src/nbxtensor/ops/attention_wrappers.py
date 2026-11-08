@@ -637,6 +637,40 @@ def paged_kv_append(new, pool, slot_mapping):
     return pool
 
 
+def paged_kv_gather(pool, block_table, positions, heads, dtype):
+    """A layer's K (or V) of every sequence as WHOLE PAGES, contiguous (docs/design/prism_kv.md §5bis: a prefill chunk
+    over a session's cache attends over keys gathered page by page, its key length a whole number of pages).
+
+    pool [num_pages, H_kv, page_tokens, D] · block_table [B, max_pages] int32 (the cache's own device table; its first
+    positions / page_tokens entries must name granted pages) · positions: a whole number of pages · heads: H_kv, or the
+    query heads (a multiple of H_kv: each KV head repeated for its group, as the graph expanded it) · dtype: the
+    output's (the pool's, or a wider one: the copy is exact). Returns [B, heads, positions, D]."""
+    from nbxtensor.ops.paged_decode_attn import paged_kv_gather_kernel
+    num_pages, h_kv, page_tokens, d = (int(x) for x in pool.shape)
+    positions, heads = int(positions), int(heads)
+    if positions <= 0 or positions % page_tokens:
+        raise ValueError(f"paged_kv_gather: {positions} positions are not a whole number of {page_tokens}-position "
+                         f"pages")
+    if heads % h_kv:
+        raise ValueError(f"paged_kv_gather: {heads} heads are not a multiple of the pool's {h_kv} KV heads")
+    if block_table.nbx_dtype != NBXDtype.int32 or int(block_table.shape[1]) * page_tokens < positions:
+        raise ValueError(f"paged_kv_gather: block_table {block_table.nbx_dtype} {list(block_table.shape)} does not "
+                         f"name the {positions // page_tokens} pages of {positions} positions")
+    if pool.stride(3) != 1:
+        raise ValueError("paged_kv_gather: the pool's head dim must be contiguous")
+    batch = int(block_table.shape[0])
+    out = NBXTensor.empty((batch, heads, positions, d), dtype=dtype, device=f"cuda:{pool._device_idx}")
+    set_device(pool)
+    paged_kv_gather_kernel[(batch * positions, heads)](
+        pool, block_table, out, page_tokens, positions, heads // h_kv,
+        pool.stride(0), pool.stride(1), pool.stride(2),
+        block_table.stride(0),
+        out.stride(0), out.stride(1), out.stride(2),
+        BLOCK_D=max(triton.next_power_of_2(d), _fa_min_tile()), D=d,
+        num_warps=1)
+    return out
+
+
 def paged_decode_attention(q, k_pool, v_pool, block_table, seq_lens, softmax_scale, max_seq_len, q_round=None):
     """Decode attention (one query position) read through the page table — the vector split-KV kernel of
     ops/decode_attn_vec.py on paged K / V, merged by the fixed-order `flash_decode_reduce_kernel`.

@@ -348,9 +348,11 @@ class RuntimeExecutor:
             seed = merged_defaults.get("seed")
         return seed
 
-    def execute(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+    def execute(self, inputs: Dict[str, Any], kv_session: Any = None) -> Dict[str, Any]:
         """
-        Main execution entry point.
+        Main execution entry point. `kv_session`: a serving session's KV cache record
+        (core/state/kv_session.KVSession) — the request is one turn of that session, and only an
+        autoregressive flow takes one.
 
         1. Setup modules & executors (idempotent — skipped if already done)
         2. Initialize variables and helpers
@@ -383,6 +385,9 @@ class RuntimeExecutor:
         # 4. Create FlowContext and dispatch to handler
         flow_type = self._detect_flow_type()
         logger.debug(f"Flow type: {flow_type}")
+        if kv_session is not None and flow_type != "autoregressive_generation":
+            raise RuntimeError(f"ZERO FALLBACK: a serving session's turn needs an autoregressive flow; this "
+                               f"container's flow is '{flow_type}'")
         if self._binned_request is not None and flow_type != "iterative_process":
             raise RuntimeError(
                 f"ZERO FALLBACK: flow.resolution_binning is active but the '{flow_type}' flow does not "
@@ -405,6 +410,7 @@ class RuntimeExecutor:
             primary_device=self._get_primary_device(),
             persistent_mode=self._persistent_mode,
             binned_request=self._binned_request,
+            kv_session=kv_session,
         )
 
         self._arm_random_streams(inputs, merged_defaults)

@@ -80,12 +80,12 @@ user message, and the full answer is printed when it is complete (chat answers a
 | command inside chat | effect |
 |---|---|
 | `/new` | start a new conversation: the daemon's message history is cleared |
-| `/context` | number of messages, estimated tokens and percentage (see [The `/context` figure](#the-context-figure)) |
+| `/context` | number of messages, tokens, percentage of the ceiling and tokens held by the cache (see [The `/context` figure](#the-context-figure)) |
 | `/status` | model, family, engine mode and the device memory in use |
 | `/quit`, `/exit`, `/q` | leave chat (the daemon keeps running) |
 
-End-of-file or Ctrl-C also leaves chat. When the daemon compressed the conversation before answering, chat prints
-`[Context compressed — older turns summarized]`.
+End-of-file or Ctrl-C also leaves chat. A turn past the session's ceiling is refused by name (see
+[When the conversation outgrows the cache](#when-the-conversation-outgrows-the-cache)).
 
 `chat --agent` starts the agent loop over the same daemon instead (each input is a task the model completes with tools
 inside a working-directory jail). Its flags are `--workdir`, `--max-turns`, `--bash-timeout`, `--allow-network`,
@@ -288,30 +288,41 @@ non-positive value is refused by name):
 
 ## Chat and the KV cache today
 
-This is the state in 0.6.2. Prism KV (`docs/design/prism_kv.md`, in design) keeps the cache between
-turns and adds host and disk tiers; it ships in a 0.6.x release.
+This is the state after 0.6.2 (unreleased): the KV cache belongs to the chat session (scope A of
+`docs/design/prism_kv.md`). Host and disk tiers and sharing between sessions are not built.
 
 ### One conversation per daemon
 
 The daemon holds **one** conversation (a list of user and assistant messages), created at the first `chat` request.
 Every client's `chat` reads and extends that same history; `new_chat` (or `/new`) clears it. The `chat` method takes no
-system message. `generate` and `complete` do not touch it.
+system message. `generate` does not touch it.
 
-### Every turn re-prefills the whole conversation
+### A turn prefills only its new tokens
 
-There is no reuse of the KV cache from one turn to the next. For each `chat` request the daemon:
+The session keeps its KV cache between turns. For each `chat` request the daemon:
 
 1. appends the user message to the history;
-2. checks that the history fits (next section);
-3. renders the **whole** history with the model's chat template (with the generation prompt) and tokenizes it; a
-   tokenizer without a chat template gets a plain `System:` / `User:` / `Assistant:` layout;
-4. runs one generation from those token IDs: the full history is prefilled, then the answer is decoded;
+2. renders the **whole** history with the model's chat template (with the generation prompt) and tokenizes it; a
+   tokenizer without a chat template is refused;
+3. checks that the conversation and the turn's `max_tokens` fit the session's ceiling (below);
+4. runs one generation from those token IDs. The cache already holds the token IDs of the previous turns (the
+   prompts and the answers the decode fed back); the new IDs are matched against them, and only the positions after
+   the longest common prefix are prefilled. Whatever the template renders differently in an earlier turn only
+   shortens the match;
 5. appends the answer to the history.
 
-The cache is emptied at the start of each prefill: the PyTorch engine resets it for every new sequence; the Triton
-engine keeps the cache buffers of its first request for the executor's lifetime and clears their contents at each
-request. The prefill of turn *n* therefore covers every earlier turn, and grows with the conversation. `complete` works
-the same way over the message list the caller sends.
+Turn *n* therefore costs a prefill of its own new tokens, not of the conversation. A prefill that continues a cache
+attends over the cached keys read back as whole cache pages, the keys past the true end masked, so the bytes do not
+depend on where a turn ended. With a planned prefill chunk (`KVCachePlan.prefill_chunk`, not chosen by Prism yet) a
+turn served from the session gives the same bytes as the same turns prefilled together in the same chunks, on both
+engines. `complete` keeps one cache record for the agent path the same way: a fixed system prompt and tools contract
+are prefilled once.
+
+Any other request on the same engine (a `generate`, a warmup) that reuses the cache empties it, and the next turn
+then prefills the whole conversation again. A failed turn leaves the session holding nothing.
+
+On the Triton engine under `--certified-only`, a continued prefill needs the kernel settings of attention with fewer
+query rows than keys; the census does not derive them yet, so such a run stops naming the missing setting.
 
 ### The cache Prism plans for serving
 
@@ -330,21 +341,11 @@ For comparison, a single `run` caps the cache at that request's `max_tokens + pr
 
 ### When the conversation outgrows the cache
 
-Before each turn, the history must fit in `max_cache_len − max_tokens` positions, where `max_tokens` is the request's,
-else the container's (a turn with neither is refused). The history is measured by tokenizing it with the chat
-template (if that raises, by its character count divided by 4). When it does not fit:
-
-- **kept**: the first message if it is a system message, the first user message, and the two most recent messages;
-- **summarized**: every complete user + assistant pair between them. The loaded model is asked, with a fixed
-  instruction ("Summarize the following conversation concisely, preserving key facts, decisions, and user
-  preferences"), for a summary of at most 200 tokens; the pairs are replaced by one system message
-  `[Conversation summary: ...]` placed after the kept first messages;
-- **dropped instead**: when the summary fails or comes back empty, the oldest pairs are removed one by one until the
-  history fits;
-- **unchanged**: when there is no complete pair to summarize, the history is left as it is.
-
-The reply then carries `"summarized": true`, and `chat` prints `[Context compressed — older turns summarized]`. The
-summary's own length is not measured again before the turn runs.
+The session's ceiling is the plan's: its `session_reach` (the positions a serving session holds in the room the cache
+was sized from, within the declared window), or its `max_cache_len` when the decoder declares no window. A turn whose
+rendered conversation plus `max_tokens` (the request's, else the container's) passes it is **refused by name**, with
+the ceiling and the plan fact it comes from; the conversation is left as it was. Nothing is summarised or dropped:
+start a new conversation (`/new`). The reply's `summarized` field stays in the protocol and is always `false`.
 
 ### The `/context` figure
 
@@ -352,14 +353,12 @@ summary's own length is not measured again before the turn runs.
 
 | field | content |
 |---|---|
-| `turns` | the number of **messages** in the history (user, assistant and summary messages) |
-| `estimated_tokens` | the history's token count, measured as above |
-| `max_context` | the container's `max_length` default, or **4096** when the container declares none |
-| `usage_pct` | `estimated_tokens / max_context`, in percent |
-| `summarizations` | how many times the history was compressed (present once it happened) |
-
-`max_context` is **not** the plan's `max_cache_len`: the compression above is decided against `max_cache_len`, so the
-percentage `/context` shows is not the distance to that compression.
+| `turns` | the number of **messages** in the history |
+| `tokens` | the conversation's token count, rendered by the chat template |
+| `max_context` | the session's ceiling (above) |
+| `usage_pct` | `tokens / max_context`, in percent |
+| `cached_tokens` | the positions the session's KV cache holds |
+| `last_turn` | the last turn's `prompt`, `matched`, `prefilled`, `padded` and `held` token counts |
 
 ---
 

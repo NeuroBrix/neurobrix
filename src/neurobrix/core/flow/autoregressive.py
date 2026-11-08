@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 from .base import FlowHandler, FlowContext, register_flow
 from .table_gather import gather_rows
 from neurobrix.core.memory.manager import release_flow_memory
+from neurobrix.core.state.kv_session import session_turn   # a serving session's turn (pure Python)
 from neurobrix.core.flow.decoder_cache import _session_dag   # both branches read the session's DAG alike
 import logging
 _log = logging.getLogger(__name__)
@@ -95,6 +96,9 @@ class GraphLMSession:
         # O(n) fallback state (models without SDPA / no KV cache)
         self._accumulated_ids: Optional[torch.Tensor] = None
         self._accumulated_embeds: Optional[torch.Tensor] = None
+        # the last prefill's rows: the request's (prefilled) and the planned chunk's padding (padded)
+        self.prefilled_rows = 0
+        self.padded_rows = 0
 
     def _add_visual_stubs(self, run_inputs: Dict[str, torch.Tensor]) -> None:
         """Fill declared-but-unset visual inputs with empty stubs.
@@ -149,8 +153,92 @@ class GraphLMSession:
             return position_ids.unsqueeze(0).expand(3, -1, -1).contiguous()
         return position_ids
 
-    def prefill(self, input_ids: torch.Tensor, batch_size: int) -> torch.Tensor:
-        """Reset cache → run prefill → switch to decode mode → return hidden_states."""
+    def _graph_device(self):
+        """The device this session feeds its graph from (FGP may have distributed weights): the embedding's."""
+        device = self.executor.device
+        if hasattr(self.executor, '_weights') and self.executor._weights:
+            for weight_key, weight_tensor in self.executor._weights.items():
+                if 'embed' in weight_key:  # NeuroTax: token_embed.weight, embed.weight
+                    return weight_tensor.device
+            return next(iter(self.executor._weights.values())).device
+        return device
+
+    def _prefill_chunks(self, ids: List[int], batch_size: int, start: int, chunk: Optional[int]) -> torch.Tensor:
+        """The prefill of positions [start, len(ids)) in chunks (docs/design/prism_kv.md §5bis; R30 mirror of
+        triton/session.TritonLMSession._prefill_chunks): `chunk` rows each, the last completed with copies of its last
+        real row whose K/V the next chunk or the decode overwrites — or one chunk of the request's own rows. Every
+        chunk attends over the cache's keys gathered as whole pages. Returns the last chunk's real rows."""
+        if self.kv_wrapper is None:
+            raise RuntimeError("ZERO FALLBACK: a prefill from a cached position (or in planned chunks) needs the KV "
+                               "cache path; this session runs without one")
+        if batch_size != 1:
+            raise RuntimeError(f"ZERO FALLBACK: a chunked prefill serves one sequence (batch {batch_size})")
+        total = len(ids)
+        if not 0 <= start < total:
+            raise RuntimeError(f"ZERO FALLBACK: a prefill from position {start} of a {total}-token request")
+        cache = self.kv_wrapper.cache
+        if chunk is not None and (int(chunk) <= 0 or int(chunk) % cache.page_tokens):
+            raise RuntimeError(f"ZERO FALLBACK: the plan's prefill chunk {chunk} is not a whole number of the cache's "
+                               f"{cache.page_tokens}-position pages")
+        if start == 0:
+            self.kv_wrapper.reset_for_new_sequence()
+        else:
+            cache.truncate(start)
+        device = self._graph_device()
+        self.executor.enable_hidden_states_capture()
+        rows_planned = int(chunk) if chunk else total - start
+        s, real, rows_run = start, 0, 0
+        while s < total:
+            real = min(rows_planned, total - s)
+            pad = rows_planned - real
+            chunk_ids = torch.tensor([[int(t) for t in ids[s:s + real]] + [int(ids[s + real - 1])] * pad],
+                                     dtype=torch.long, device=device)
+            if self.uses_absolute_position:
+                pos = list(range(s, s + real)) + [s + real - 1] * pad
+            else:
+                pos = list(range(rows_planned))   # relative rows; the interceptor shifts the in-graph positions by s
+            position_ids = torch.tensor([pos], dtype=torch.long, device=device)
+            if self.uses_embeds:
+                embed_weight = self.executor.get_embed_tokens()
+                if embed_weight is None:
+                    raise RuntimeError("ZERO FALLBACK: Graph expects inputs_embeds but no embedding weight found.")
+                run_inputs = {"inputs_embeds": gather_rows(embed_weight, chunk_ids, device=device)}
+                if 'position_ids' in self.graph_inputs:
+                    run_inputs["position_ids"] = self._shape_positions(position_ids)
+            elif 'position_ids' in self.graph_inputs:
+                run_inputs = {"input_ids": chunk_ids, "position_ids": self._shape_positions(position_ids)}
+            else:
+                run_inputs = {"input_ids": chunk_ids}
+            self._add_visual_stubs(run_inputs)
+            self.kv_wrapper.begin_chunk(s, real, whole_pages=True)
+            self.executor.run(run_inputs)
+            if pad:
+                cache.truncate(s + real)
+            rows_run += rows_planned
+            s += real
+        self.prefilled_rows = total - start
+        self.padded_rows = rows_run - (total - start)
+        self.kv_wrapper.set_decode_mode(actual_seq_len=1)
+        hidden_states = self.executor.get_hidden_states(expected_hidden_dim=self.hidden_dim,
+                                                        expected_batch_size=batch_size)
+        if hidden_states is None:
+            raise RuntimeError("ZERO FALLBACK: Prefill could not extract hidden_states.")
+        while hidden_states.dim() > 3:
+            hidden_states = hidden_states.squeeze(0)
+        if int(hidden_states.shape[1]) != rows_planned:
+            raise RuntimeError(f"ZERO FALLBACK: the last prefill chunk returned {int(hidden_states.shape[1])} rows of "
+                               f"hidden states for a chunk of {rows_planned}")
+        return hidden_states[:, :real, :]
+
+    def prefill(self, input_ids: torch.Tensor, batch_size: int, start: int = 0,
+                chunk: Optional[int] = None) -> torch.Tensor:
+        """Reset cache → run prefill → switch to decode mode → return hidden_states.
+
+        `start` > 0: the cache already holds the request's first `start` positions (a serving session's, matched by
+        ids — core/state/kv_session.py) and only the rest is prefilled. `chunk`: the plan's prefill chunk
+        (KVCachePlan.prefill_chunk). Either one takes the chunked path; neither keeps the one-pass prefill below."""
+        if start or chunk:
+            return self._prefill_chunks([int(t) for t in input_ids[0].tolist()], batch_size, int(start), chunk)
         # Reset KV cache for new sequence
         if self.kv_wrapper is not None:
             self.kv_wrapper.reset_for_new_sequence()
@@ -168,6 +256,7 @@ class GraphLMSession:
 
         input_ids = input_ids.to(device)
         seq_len = input_ids.shape[1]
+        self.prefilled_rows, self.padded_rows = int(seq_len), 0
 
         # Position IDs: absolute [0, 1, 2, ..., seq_len-1]
         position_ids = torch.arange(seq_len, dtype=torch.long, device=device).unsqueeze(0).expand(batch_size, -1)
@@ -321,12 +410,14 @@ class GraphLMSession:
             hidden_states = hidden_states.squeeze(0)
         return hidden_states
 
-    def cleanup(self):
+    def cleanup(self, keep_cache: bool = False):
         """Release per-request resources (KV cache, intermediates).
 
         Respects executor._persistent: when True, executor stays alive
         with weights in VRAM and compiled sequence cached. Only KV cache
-        and per-request intermediates are cleared.
+        and per-request intermediates are cleared. `keep_cache`: the cache's
+        positions belong to a serving session (core/state/kv_session.py) and
+        stay, with the wrapper the session holds.
         """
         is_persistent = getattr(self.executor, '_persistent', False) if self.executor else False
         device = getattr(self.executor, 'device', 'cuda') if self.executor else 'cuda'
@@ -337,7 +428,10 @@ class GraphLMSession:
                 self.executor = None  # Drop reference (executor lives in ctx.executors)
 
         if self.kv_wrapper is not None:
-            self.kv_wrapper.reset_for_new_sequence()
+            if keep_cache:
+                self.kv_wrapper.end_request()
+            else:
+                self.kv_wrapper.reset_for_new_sequence()
             self.kv_wrapper = None
 
         if not is_persistent:
@@ -598,8 +692,10 @@ class AutoregressiveHandler(FlowHandler):
         self._output_extractor = output_extractor
         self._active_session: Optional[GraphLMSession] = None
 
-    def execute(self) -> Dict[str, Any]:
-        """Execute autoregressive_generation flow — universal for all models."""
+    @session_turn
+    def execute(self, kv_session) -> Dict[str, Any]:
+        """Execute autoregressive_generation flow — universal for all models. A serving session's request
+        (`ctx.kv_session`, core/state/kv_session.py) that fails leaves the session holding nothing."""
         # ── SETUP ──────────────────────────────────────────
         gen_info = self.ctx.pkg.topology.get("flow", {}).get("generation", {})
         if not gen_info:
@@ -607,6 +703,9 @@ class AutoregressiveHandler(FlowHandler):
                 "ZERO FALLBACK: autoregressive_generation requires flow.generation info."
             )
         gen_type = gen_info.get("type")
+        if kv_session is not None and gen_type != "autoregressive_text":
+            raise RuntimeError(f"ZERO FALLBACK: a serving session keeps the KV cache of a text decode; this flow "
+                               f"generates '{gen_type}'")
 
         # Serve TTFT reconciliation instrument (NBX_PHASE_TRACE=1): one
         # stamp per phase boundary; the prefill stamp waits for the GPU.
@@ -634,14 +733,20 @@ class AutoregressiveHandler(FlowHandler):
 
         # Pass prompt token IDs to generator for repetition penalty context.
         # HuggingFace penalizes tokens from BOTH prompt and generated text.
-        generator.set_prompt_ids(input_ids[0].tolist())
+        prompt_ids = [int(t) for t in input_ids[0].tolist()]
+        generator.set_prompt_ids(prompt_ids)
 
         if torch.cuda.is_available():
             torch.cuda.synchronize()
 
+        # A serving session's cache already holds the positions its ids match (core/state/kv_session.py); only the
+        # rest is prefilled, in the plan's chunks when it plans one (KVCachePlan.prefill_chunk)
+        chunk = getattr(getattr(self.ctx.plan, "kv_cache_plan", None), "prefill_chunk", None)
+        start = kv_session.match(prompt_ids) if kv_session is not None else 0
+
         with torch.inference_mode():
             # ── PREFILL ────────────────────────────────────
-            hidden = session.prefill(input_ids, batch_size)
+            hidden = session.prefill(input_ids, batch_size, start=start, chunk=chunk)
             _phase_mark("flow.prefill.done", _dev_sync, _mem_note)
 
             # ── DECODE LOOP ────────────────────────────────
@@ -707,7 +812,14 @@ class AutoregressiveHandler(FlowHandler):
         # (no vendor `snac`, no HF download).
         self._run_snac_codec_decoder(generated_tokens)
 
-        session.cleanup()
+        cache_len = session.kv_wrapper.get_cache_len() if session.kv_wrapper is not None else 0
+        session.cleanup(keep_cache=kv_session is not None)
+        if kv_session is not None:
+            from neurobrix.core.state.kv_session import held_ids
+            generated = [int(t) for t in generated_tokens.flatten().tolist()] \
+                if hasattr(generated_tokens, "flatten") else [int(t) for t in generated_tokens]
+            kv_session.record(held_ids(prompt_ids, generated, cache_len), start, len(prompt_ids),
+                              session.prefilled_rows, session.padded_rows)
         self._unload_non_lm_weights(gen_info)
 
         return self.ctx.variable_resolver.resolve_all()
@@ -864,15 +976,24 @@ class AutoregressiveHandler(FlowHandler):
         # both sides (D-TSEQ-ORPHEUS-STEP110: the KV engines dump [1, 1, …]
         # at pass k where triton-sequential dumps [1, k+prompt, …]).
         import os as _os_kv
+        kv_session = getattr(self.ctx, "kv_session", None)
         if not has_sdpa or _os_kv.environ.get("NBX_KV_RECOMPUTE") == "1":
+            if kv_session is not None:
+                raise RuntimeError("ZERO FALLBACK: a serving session keeps the KV cache between turns, and this "
+                                   "decode runs without one (no attention in the graph, or NBX_KV_RECOMPUTE=1)")
             if has_sdpa:
                 _log.debug("   [autoregressive] NBX_KV_RECOMPUTE=1: KV cache OFF, O(n) recompute reference")
             kv_wrapper = None
         else:
             # The KV cache, behind the same gate as the Triton session (R30): a graph without
-            # SDPA, or the recompute reference, never asks for one.
-            kv_wrapper = StateCacheFactory.create(self.ctx, lm_config, device, dtype,
-                                                  hardware=(getattr(executor, 'vendor', None), getattr(executor, 'arch', None)))
+            # SDPA, or the recompute reference, never asks for one. A serving session keeps its
+            # wrapper (and the positions its cache holds) from turn to turn on this executor.
+            kv_wrapper = kv_session.held(executor) if kv_session is not None else None
+            if kv_wrapper is None:
+                kv_wrapper = StateCacheFactory.create(self.ctx, lm_config, device, dtype,
+                                                      hardware=(getattr(executor, 'vendor', None), getattr(executor, 'arch', None)))
+            if kv_session is not None:
+                kv_session.bind(executor, kv_wrapper, kv_wrapper.cache)
             # Register interceptors
             if hasattr(executor, 'register_op_interceptors'):
                 interceptors = kv_wrapper.get_interceptors()

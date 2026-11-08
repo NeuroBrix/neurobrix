@@ -98,11 +98,12 @@ def cmd_chat(args):
                         ctx = st.get("context", {})
                         if ctx:
                             turns = ctx.get("turns", 0)
-                            tokens = ctx.get("estimated_tokens", 0)
+                            tokens = ctx.get("tokens", 0)
                             max_ctx = ctx.get("max_context", 0)
                             usage = ctx.get("usage_pct", 0)
-                            print(f"[Context] {turns} messages, ~{tokens} tokens, "
-                                  f"{usage}% of {max_ctx} max")
+                            cached = ctx.get("cached_tokens", 0)
+                            print(f"[Context] {turns} messages, {tokens} tokens, "
+                                  f"{usage}% of {max_ctx} max, {cached} held in the KV cache")
                         else:
                             print("[Context] No active conversation")
                     except RuntimeError as e:
@@ -128,8 +129,6 @@ def cmd_chat(args):
             # Send chat message
             try:
                 result = client.chat(user_input, **gen_kwargs)
-                if result.get("summarized"):
-                    print("[Context compressed — older turns summarized]")
                 text = result.get("text", "")
                 if text:
                     print(f"Assistant: {text}")

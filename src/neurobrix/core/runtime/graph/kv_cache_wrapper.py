@@ -84,6 +84,11 @@ class KVCacheAttentionWrapper:
     4. Calls attention with full context
     """
 
+    # no prefill chunk under way until `begin_chunk` (an instance built without __init__ reads these)
+    _chunk_start = 0
+    _chunk_real = None
+    _whole_pages = False
+
     def __init__(self, config: KVCacheConfig, num_heads: int = 0):
         """
         Initialize wrapper with distributed cache.
@@ -105,6 +110,50 @@ class KVCacheAttentionWrapper:
         # During decode, K/V may be padded (e.g., [B, heads, 64, dim] instead of [B, heads, 1, dim])
         # This tracks the ACTUAL number of tokens to cache (not the padded length)
         self._decode_actual_seq_len: Optional[int] = None
+        # The prefill chunk under way (`begin_chunk`, R30 mirror of triton/kv_cache.py): its first position, its real
+        # rows, and whether it attends over the cache's keys gathered as whole pages.
+        self._chunk_start = 0
+        self._chunk_real: Optional[int] = None
+        self._whole_pages = False
+        self._chunk_masks: Dict = {}
+
+    def begin_chunk(self, start: int, real: int, whole_pages: bool) -> None:
+        """The next prefill run is one chunk: positions start .. start+rows-1 of which `real` are the request's, the
+        rest pad a planned chunk. `whole_pages`: its attention reads every cached key as whole pages
+        (docs/design/prism_kv.md §5bis). The cache must hold exactly `start` positions."""
+        if self.cache.get_seq_len() != int(start):
+            raise RuntimeError(f"ZERO FALLBACK: a prefill chunk at position {start} over a cache of "
+                               f"{self.cache.get_seq_len()} positions")
+        self._is_prefill = True
+        self._call_count = 0
+        self._position_offset = int(start)
+        self._chunk_start = int(start)
+        self._chunk_real = int(real)
+        self._whole_pages = bool(whole_pages)
+        self._chunk_masks = {}
+        self._decode_actual_seq_len = None
+
+    def end_request(self) -> None:
+        """The request ends and its positions stay in the cache (a serving session's, core/state/kv_session.py): the
+        per-request state resets, the cache is kept."""
+        self._is_prefill = True
+        self._call_count = 0
+        self._position_offset = 0
+        self._decode_actual_seq_len = None
+        self._chunk_start, self._chunk_real, self._whole_pages, self._chunk_masks = 0, None, False, {}
+
+    def _chunk_mask(self, device, dtype, start: int, rows: int, keys: int) -> torch.Tensor:
+        """The chunk's additive mask [rows, keys]: 0 where key j <= start + i (causal, bottom-right at the cached length
+        — torch's `is_causal` aligns top-left when the query is shorter than the keys), -inf elsewhere, which also
+        masks the whole pages' keys past the true end. One per device and chunk."""
+        key = (str(device), dtype)
+        m = self._chunk_masks.get(key)
+        if m is None:
+            allowed = (torch.arange(keys, device=device)[None, :]
+                       <= (start + torch.arange(rows, device=device))[:, None])
+            m = torch.zeros((rows, keys), dtype=dtype, device=device).masked_fill(~allowed, float("-inf"))
+            self._chunk_masks[key] = m
+        return m
 
 
     # ── decode branches (R30 mirror of triton/kv_cache.KVBranch) ─────────
@@ -252,6 +301,9 @@ class KVCacheAttentionWrapper:
             k = k.view(batch, self._num_kv_heads, self._gqa_group_size, seq_len, head_dim)[:, :, 0]
             v = v.view(batch, self._num_kv_heads, self._gqa_group_size, seq_len, v.shape[-1])[:, :, 0]
 
+        if self._is_prefill and self._whole_pages:
+            return self._prefill_over_pages(q, k, v, attn_mask, dropout_p, scale, layer_idx)
+
         # Update cache (lazy allocation on k's device)
         k_full, v_full = self.cache.update(layer_idx, k, v)
 
@@ -332,6 +384,35 @@ class KVCacheAttentionWrapper:
             **({"enable_gqa": True} if k_full.shape[1] != q.shape[1] else {}),
         )
 
+    def _prefill_over_pages(self, q, k, v, attn_mask, dropout_p, scale, layer_idx: int) -> torch.Tensor:
+        """A prefill chunk's attention over the session's keys gathered as WHOLE PAGES (R30 mirror of the Triton
+        interceptor's): the chunk's K/V (its KV heads) appended to the pages, every cached key read back from them in
+        the cache's dtype, the key length rounded up to whole pages, an explicit 0/-inf mask (causal at the cached
+        length, the keys past the true end masked). A graph mask is replaced only when it is the causal pattern."""
+        start = self.cache.lens.get(layer_idx, 0)    # the positions this layer holds before the chunk appends
+        rows = int(q.shape[2])
+        if attn_mask is not None:
+            require_causal_frozen_mask(attn_mask, rows, rows, f"KV interceptor (layer {layer_idx}, prefill chunk)",
+                                       align_lengths=True)
+        self.cache.update(layer_idx, k, v, real=self._chunk_real)
+        tpp = self.cache.page_tokens
+        keys = -(-(start + rows) // tpp) * tpp
+        k_full, v_full = self.cache.whole_pages(layer_idx, keys)
+        if self._gqa_group_size > 1:
+            batch, kv_heads, _, k_dim = k_full.shape
+            k_full = k_full.unsqueeze(2).expand(-1, -1, self._gqa_group_size, -1, -1).reshape(
+                batch, self._num_heads, keys, k_dim)
+            v_dim = v_full.shape[-1]
+            v_full = v_full.unsqueeze(2).expand(-1, -1, self._gqa_group_size, -1, -1).reshape(
+                batch, self._num_heads, keys, v_dim)
+        cache_dtype = k_full.dtype
+        if q.dtype != cache_dtype:
+            q = q.to(cache_dtype)
+        mask = self._chunk_mask(q.device, cache_dtype, start, rows, keys)
+        return F.scaled_dot_product_attention(
+            q, k_full, v_full, attn_mask=mask, dropout_p=dropout_p, is_causal=False, scale=scale,
+            **({"enable_gqa": True} if k_full.shape[1] != q.shape[1] else {}))
+
     def reset_for_new_sequence(self) -> None:
         """Reset cache for a new generation sequence."""
         self.cache.clear()
@@ -339,6 +420,7 @@ class KVCacheAttentionWrapper:
         self._call_count = 0
         self._position_offset = 0
         self._decode_actual_seq_len = None
+        self._chunk_start, self._chunk_real, self._whole_pages, self._chunk_masks = 0, None, False, {}
 
     def set_decode_mode(self, actual_seq_len: Optional[int] = None) -> None:
         """
@@ -352,6 +434,7 @@ class KVCacheAttentionWrapper:
         self._is_prefill = False
         self._position_offset = self.cache.get_seq_len()
         self._decode_actual_seq_len = actual_seq_len
+        self._chunk_start, self._chunk_real, self._whole_pages, self._chunk_masks = 0, None, False, {}
 
     def get_cache_len(self) -> int:
         """Get current cache sequence length."""
@@ -405,7 +488,7 @@ class KVCacheAttentionWrapper:
         only intercepts ops in the decoder component where aranges are positional.
         """
         kwargs = self._sanitize_device_kwarg(kwargs)
-        if self._is_prefill:
+        if self._is_prefill and not self._chunk_start:
             return torch.arange(*args, **kwargs)
 
         cache_len = self._position_offset
@@ -434,7 +517,7 @@ class KVCacheAttentionWrapper:
         position 0 every step (whisper-large, 2026-09-05: the language token
         re-predicted 448 times). Shift the window by the cache length, same
         size, same semantics as intercept_arange."""
-        if self._is_prefill or self._position_offset <= 0 or end is None:
+        if (self._is_prefill and not self._chunk_start) or self._position_offset <= 0 or end is None:
             return torch.ops.aten.slice(table, dim, start, end, step)
         cache_len = self._position_offset
         return torch.ops.aten.slice(table, dim, cache_len + start, cache_len + end, step)
@@ -444,7 +527,7 @@ class KVCacheAttentionWrapper:
         dual-AR decoder's rotary index): at decode the count restarts at 1 for the one token handed
         in, so the cache's length is added — the token's absolute position, the output size kept."""
         out = torch.ops.aten.cumsum(x, dim, dtype=dtype)
-        if self._is_prefill or self._position_offset <= 0:
+        if (self._is_prefill and not self._chunk_start) or self._position_offset <= 0:
             return out
         return out + self._position_offset
 

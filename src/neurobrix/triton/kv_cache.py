@@ -22,6 +22,11 @@ class KVBranch:
 class TritonAttentionInterceptor:
     """Intercepts SDPA for KV cache + calls Triton Flash Attention."""
 
+    # no prefill chunk under way until `begin_chunk` (an instance built without __init__ reads these)
+    _chunk_start = 0
+    _chunk_real = None
+    _whole_pages = False
+
     def __init__(self, cache, num_heads: int = 0):
         self.cache = cache
         self._is_prefill = True
@@ -31,6 +36,95 @@ class TritonAttentionInterceptor:
         self._gqa_group_size = 0
         # Absolute decode position for RoPE arange shifting (see intercept_arange).
         self._position_offset = 0
+        # The prefill chunk under way (`begin_chunk`): its first position, its real rows, and whether it attends over
+        # the cache's keys gathered as whole pages (a session's continuation, or a planned chunk size).
+        self._chunk_start = 0
+        self._chunk_real = None
+        self._whole_pages = False
+        self._chunk_masks = {}
+
+    def begin_chunk(self, start: int, real: int, whole_pages: bool) -> None:
+        """The next prefill run is one chunk: positions start .. start+rows-1 of which `real` are the request's, the
+        rest pad a planned chunk. `whole_pages`: its attention reads every cached key as whole pages
+        (docs/design/prism_kv.md §5bis). The cache must hold exactly `start` positions."""
+        if self.cache.get_cache_len() != int(start):
+            raise RuntimeError(f"ZERO FALLBACK: a prefill chunk at position {start} over a cache of "
+                               f"{self.cache.get_cache_len()} positions")
+        self._is_prefill = True
+        self._call_count = 0
+        self._chunk_start = int(start)
+        self._chunk_real = int(real)
+        self._whole_pages = bool(whole_pages)
+        self._chunk_masks = {}
+
+    def _chunk_mask(self, device_idx: int, start: int, rows: int, keys: int):
+        """The chunk's additive attention mask [rows, keys]: 0 where key j <= start + i (causal, bottom-right at the
+        cached length), -inf elsewhere — the values the causal bias adds — which also masks the whole pages' keys past
+        the true end. One per device and chunk, every layer reads it."""
+        m = self._chunk_masks.get(device_idx)
+        if m is None:
+            import numpy as np
+            from nbxtensor.tensor import NBXTensor
+            from nbxtensor.memory.allocator import DeviceAllocator
+            host = np.where(np.arange(keys)[None, :] <= (start + np.arange(rows))[:, None], 0.0, -np.inf)
+            DeviceAllocator.set_device(device_idx)
+            m = NBXTensor.from_numpy(host.astype(np.float32))
+            self._chunk_masks[device_idx] = m
+        return m
+
+    def _require_causal_graph_mask(self, attn_mask, rows: int, layer_idx: int) -> None:
+        """The graph's own prefill mask is replaced by the chunk's only when it IS the causal pattern over the chunk's
+        rows (R30 mirror of the compiled `require_causal_frozen_mask`): a padding, window or bias mask has no reading
+        over the cached keys, refused by name. Read once per mask buffer and chunk (a host copy of rows x rows)."""
+        if attn_mask is None:
+            return
+        key = ("graph_mask", attn_mask.data_ptr())
+        if key in self._chunk_masks:
+            return
+        import ctypes
+        import numpy as np
+        from nbxtensor.dtype.nbx_dtype import NBXDtype
+        from nbxtensor.memory.allocator import DeviceAllocator
+        m = attn_mask.contiguous()
+        if m._dtype != NBXDtype.bool_:
+            m = m.to(NBXDtype.float32)
+        buf = (ctypes.c_char * m._nbytes)()
+        DeviceAllocator.set_device(m._device_idx)
+        DeviceAllocator.sync_device()
+        DeviceAllocator.memcpy(ctypes.addressof(buf), m.data_ptr(), m._nbytes, 2)
+        host = np.frombuffer(bytes(buf), dtype=(np.bool_ if m._dtype == NBXDtype.bool_ else np.float32))
+        host = host.reshape(tuple(int(x) for x in m.shape))
+        tri = np.tril(np.ones((rows, rows), dtype=bool))
+        ok = host.shape[-2:] == (rows, rows)
+        if ok:
+            flat = host.reshape(-1, rows, rows)
+            ok = bool((flat == tri).all()) if host.dtype == np.bool_ else bool(
+                ((flat == 0) == tri).all() and (np.isneginf(flat) | (flat <= np.finfo(np.float16).min))[:, ~tri].all())
+        if not ok:
+            raise RuntimeError(f"ZERO FALLBACK: a prefill chunk's attention (layer {layer_idx}) carries a graph mask "
+                               f"{tuple(m.shape)} that is not the causal pattern over its {rows} rows; it has no "
+                               f"reading over the cached keys")
+        self._chunk_masks[key] = True
+
+    def _prefill_over_pages(self, q, k, v, k_for_cache, v_for_cache, expanded: bool, layer_idx: int,
+                            dropout_p, scale, attn_mask=None):
+        """A prefill chunk's attention over the session's keys gathered as WHOLE PAGES: the chunk's K/V appended to the
+        pages, every cached key read back from them (the cache's dtype, widened exactly to the query's), the key length
+        rounded up to whole pages, and the explicit 0/-inf mask (causal at the cached length, the keys past the true
+        end masked). The existing attention then runs unchanged."""
+        from nbxtensor.ops.attention_wrappers import scaled_dot_product_attention_wrapper
+        start = self.cache.get_cache_len()          # the host length moves at the chunk's last layer
+        rows = int(q.shape[2])
+        self._require_causal_graph_mask(attn_mask, rows, layer_idx)
+        self.cache.prefill(layer_idx, k_for_cache, v_for_cache, real=self._chunk_real)
+        pt = self.cache.page_tokens
+        keys = -(-(start + rows) // pt) * pt
+        heads = int(q.shape[1]) if expanded else self._num_kv_heads
+        kg = self.cache.gather_pages(layer_idx, "k", keys, heads, q._dtype)
+        vg = self.cache.gather_pages(layer_idx, "v", keys, heads, q._dtype)
+        mask = self._chunk_mask(int(q._device_idx), start, rows, keys)
+        return scaled_dot_product_attention_wrapper(q, kg, vg, attn_mask=mask, dropout_p=dropout_p,
+                                                    is_causal=False, scale=scale, k_pre_transposed=False)
 
     # ── decode branches ─────────────────────────────────────────────────
     # The interceptor is registered once per executor; a flow that keeps
@@ -123,6 +217,10 @@ class TritonAttentionInterceptor:
                 v_for_cache = v.view(batch, self._num_kv_heads, self._gqa_group_size, seq_len, v.shape[-1])
                 v_for_cache = v_for_cache.select(2, 0).contiguous()
 
+            if self._whole_pages:
+                return self._prefill_over_pages(q, k, v, k_for_cache, v_for_cache,
+                                                k_for_cache is not k, layer_idx, dropout_p, scale, attn_mask)
+
             # Store in cache for decode: into the paged cache's pages, granted for the request
             self.cache.prefill(layer_idx, k_for_cache, v_for_cache)
 
@@ -193,6 +291,14 @@ class TritonAttentionInterceptor:
         self.cache.clear()
         self._is_prefill = True
         self._call_count = 0
+        self._chunk_start, self._chunk_real, self._whole_pages, self._chunk_masks = 0, None, False, {}
+
+    def end_request(self) -> None:
+        """The request ends and its positions stay in the cache (a serving session's, core/state/kv_session.py): the
+        per-request state resets, the cache is kept."""
+        self._is_prefill = True
+        self._call_count = 0
+        self._chunk_start, self._chunk_real, self._whole_pages, self._chunk_masks = 0, None, False, {}
 
     def set_decode_mode(self):
         """Mirror of core kv_cache_wrapper.set_decode_mode: the first decode step's positional offset is the
@@ -201,6 +307,7 @@ class TritonAttentionInterceptor:
         self._is_prefill = False
         self._call_count = 0
         self._position_offset = self.get_cache_len()
+        self._chunk_start, self._chunk_real, self._whole_pages, self._chunk_masks = 0, None, False, {}
 
     def update_position_offset(self):
         """Called before each decode step. Resets per-step call counter and
@@ -214,6 +321,9 @@ class TritonAttentionInterceptor:
         """Mirror of core kv_cache_wrapper.intercept_position_slice: the rows
         [0, seq_len) of a positional table, shifted by the cache length at
         decode. R33-pure: an NBXTensor narrow (a view)."""
+        if self._is_prefill and self._chunk_start > 0 and end is not None:
+            # a prefill chunk at a cached length: its rows' positions, read on the host (a prefill is never replayed)
+            return table.narrow(int(dim), self._chunk_start + int(start), int(end - start))
         if self._is_prefill or self._position_offset <= 0 or end is None:
             return table.narrow(int(dim), int(start), int(end - start) if end is not None else table.shape[int(dim)] - int(start))
         pos = self._device_positions(int(start), int(end))
@@ -247,6 +357,8 @@ class TritonAttentionInterceptor:
         from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
         from nbxtensor.ops import reduction_wrappers as _nbx_reduction_wrappers  # the family the moved names live in (M2 split)
         out = _nbx_reduction_wrappers.cumsum_wrapper(x, int(dim), dtype)
+        if self._is_prefill and self._chunk_start > 0:
+            return _nbx_elementwise_wrappers.add(out, self._chunk_start)   # a prefill chunk at a cached length
         if self._is_prefill or self._position_offset <= 0:
             return out
         if self._device_len():
@@ -271,6 +383,12 @@ class TritonAttentionInterceptor:
         """
         from nbxtensor.ops.dispatch import dispatch
         _create_arange = dispatch("arange")
+        if self._is_prefill and self._chunk_start > 0 and args and all(isinstance(a, (int, float)) for a in args[:2]) \
+                and len(args) <= 2:
+            # a prefill chunk at a cached length: the window shifted by it on the host (a prefill is never replayed)
+            c = self._chunk_start
+            return (_create_arange(c, c + args[0], **kwargs) if len(args) == 1
+                    else _create_arange(c + args[0], c + args[1], **kwargs))
         if self._is_prefill:
             return _create_arange(*args, **kwargs)
         cache_len = self._position_offset

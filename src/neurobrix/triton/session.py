@@ -45,6 +45,9 @@ class TritonLMSession:
         # decode inputs are aligned VQ embeddings, NOT text tokens, so the
         # full-context re-run must replay the exact embedding stream).
         self._accumulated_embeds: Optional[NBXTensor] = None
+        # the last prefill's rows: the request's (prefilled) and the planned chunk's padding (padded)
+        self.prefilled_rows = 0
+        self.padded_rows = 0
 
     def _add_visual_stubs(self, run_inputs: Dict[str, NBXTensor]) -> None:
         """R30 mirror of GraphLMSession._add_visual_stubs — numpy build is
@@ -92,12 +95,21 @@ class TritonLMSession:
                 np.broadcast_to(pos_np, (3,) + pos_np.shape))
         return pos_np
 
-    def prefill(self, input_ids: NBXTensor, batch_size: int) -> NBXTensor:
-        """Run prefill pass, switch to decode mode, return hidden states."""
+    def prefill(self, input_ids: NBXTensor, batch_size: int, start: int = 0, chunk: Optional[int] = None,
+                ids: Optional[List[int]] = None) -> NBXTensor:
+        """Run prefill pass, switch to decode mode, return hidden states.
+
+        `start` > 0: the cache already holds the request's first `start` positions (a serving session's, matched by
+        ids — core/state/kv_session.py) and only the rest is prefilled. `chunk`: the plan's prefill chunk
+        (KVCachePlan.prefill_chunk). Either one takes the chunked path (`_prefill_chunks`), which needs the request's
+        host ids `ids`; neither keeps the one-pass prefill below, unchanged."""
+        if start or chunk:
+            return self._prefill_chunks(ids, batch_size, int(start), chunk)
         if self.kv_wrapper is not None:
             self.kv_wrapper.reset()
 
         seq_len = input_ids.shape[1]
+        self.prefilled_rows, self.padded_rows = int(seq_len), 0
 
         # Position IDs: [0, 1, 2, ..., seq_len-1]
         pos_np = np.arange(seq_len, dtype=np.int64).reshape(1, seq_len)
@@ -165,6 +177,80 @@ class TritonLMSession:
             hidden = hidden.squeeze(0)
 
         return hidden
+
+    def _prefill_chunks(self, ids: Optional[List[int]], batch_size: int, start: int,
+                        chunk: Optional[int]) -> NBXTensor:
+        """The prefill of positions [start, len(ids)) in chunks (docs/design/prism_kv.md §5bis): `chunk` rows each, the
+        last completed with copies of its last real row (its token and position) whose K/V the next chunk or the
+        decode overwrites — or, with no chunk planned, one chunk of the request's own rows. Every chunk attends over
+        the cache's keys gathered as whole pages (the interceptor's `begin_chunk`), so the bytes do not depend on where
+        a turn boundary fell. Returns the last chunk's real rows' hidden states."""
+        if self.kv_wrapper is None:
+            raise RuntimeError("ZERO FALLBACK: a prefill from a cached position (or in planned chunks) needs the KV "
+                               "cache path; this session runs without one")
+        if batch_size != 1 or ids is None:
+            raise RuntimeError(f"ZERO FALLBACK: a chunked prefill serves one sequence with its host ids (batch "
+                               f"{batch_size}, ids {'given' if ids is not None else 'absent'})")
+        total = len(ids)
+        if not 0 <= start < total:
+            raise RuntimeError(f"ZERO FALLBACK: a prefill from position {start} of a {total}-token request")
+        cache = self.kv_wrapper.cache
+        if chunk is not None and (int(chunk) <= 0 or int(chunk) % cache.page_tokens):
+            raise RuntimeError(f"ZERO FALLBACK: the plan's prefill chunk {chunk} is not a whole number of the cache's "
+                               f"{cache.page_tokens}-position pages")
+        if start == 0:
+            self.kv_wrapper.reset()
+        else:
+            cache.truncate(start)
+        if hasattr(self.executor, "enable_hidden_states_capture"):
+            self.executor.enable_hidden_states_capture()
+        rows_planned = int(chunk) if chunk else total - start
+        s, outputs, real, rows_run = start, None, 0, 0
+        while s < total:
+            real = min(rows_planned, total - s)
+            pad = rows_planned - real
+            chunk_ids = [int(t) for t in ids[s:s + real]] + [int(ids[s + real - 1])] * pad
+            DeviceAllocator.set_device(self.device_idx)
+            input_ids = NBXTensor.from_numpy(np.asarray([chunk_ids], dtype=np.int64))
+            if self.uses_absolute_position:
+                pos = list(range(s, s + real)) + [s + real - 1] * pad
+            else:
+                pos = list(range(rows_planned))   # relative rows; the interceptor shifts the in-graph positions by s
+            position_ids = NBXTensor.from_numpy(self._lift_positions(np.asarray([pos], dtype=np.int64)))
+            if self.uses_embeds:
+                embed_weight = self.executor.get_embed_tokens()
+                if embed_weight is None:
+                    raise RuntimeError("Graph expects inputs_embeds but no embedding weight found.")
+                run_inputs = {"inputs_embeds": _nbx_index_wrappers.embedding(embed_weight, input_ids)}
+                if "position_ids" in self.graph_inputs:
+                    run_inputs["position_ids"] = position_ids
+            elif "position_ids" in self.graph_inputs:
+                run_inputs = {"input_ids": input_ids, "position_ids": position_ids}
+            else:
+                run_inputs = {"input_ids": input_ids}
+            self._add_visual_stubs(run_inputs)
+            self.kv_wrapper.begin_chunk(s, real, whole_pages=True)
+            outputs = self.executor.run(run_inputs, skip_kills=False)
+            if pad:
+                cache.truncate(s + real)
+            rows_run += rows_planned
+            s += real
+        self.prefilled_rows = total - start
+        self.padded_rows = rows_run - (total - start)
+        self.kv_wrapper.set_decode_mode()
+        hidden = None
+        if hasattr(self.executor, "get_hidden_states"):
+            hidden = self.executor.get_hidden_states(expected_hidden_dim=self.hidden_dim, expected_batch_size=1)
+        if hidden is None:
+            hidden = self._extract_hidden(outputs)
+        if hidden is None:
+            raise RuntimeError("Prefill could not extract hidden_states.")
+        while hidden.ndim > 3:
+            hidden = hidden.squeeze(0)
+        if int(hidden.shape[1]) != rows_planned:
+            raise RuntimeError(f"ZERO FALLBACK: the last prefill chunk returned {int(hidden.shape[1])} rows of hidden "
+                               f"states for a chunk of {rows_planned}")
+        return hidden.narrow(1, 0, real) if real < rows_planned else hidden
 
     def decode_step(self, input_ids: NBXTensor,
                     inputs_embeds: Optional[NBXTensor] = None) -> NBXTensor:
@@ -378,9 +464,13 @@ class TritonLMSession:
             return self.kv_wrapper.get_cache_len()
         return 0
 
-    def cleanup(self):
-        """Release per-request resources."""
+    def cleanup(self, keep_cache: bool = False):
+        """Release per-request resources. `keep_cache`: the cache's positions belong to a serving session and stay
+        (core/state/kv_session.py); only the per-request state resets."""
         if self.kv_wrapper is not None:
-            self.kv_wrapper.reset()
+            if keep_cache:
+                self.kv_wrapper.end_request()
+            else:
+                self.kv_wrapper.reset()
         if self.executor is not None:
             self.executor.cleanup()

@@ -23,7 +23,7 @@ class _Reached(Exception):
 
 
 class _Executor:
-    def execute(self, inputs):
+    def execute(self, inputs, kv_session=None):
         raise _Reached(inputs)
 
 
@@ -57,13 +57,16 @@ def test_every_key_the_engine_reads_is_served():
 
 class _Session:
     def __init__(self):
+        from neurobrix.core.state.kv_session import KVSession
         self.user_messages = []
+        self.messages = self.user_messages
+        self.kv = KVSession(4096, "the stand-in plan")
 
     def add_user_message(self, message):
         self.user_messages.append(message)
 
-    def ensure_fits(self, **_):
-        return False
+    def check_fits(self, token_ids, max_tokens):
+        pass
 
     def build_token_ids(self):
         return [1, 2, 3]
@@ -82,7 +85,8 @@ def _llm_engine(monkeypatch) -> InferenceEngine:
     e._family, e._session = "llm", _Session()
     e._executor.modules = {"tokenizer": _Tokenizer()}
     e._pkg = SimpleNamespace(defaults={"max_tokens": 8})
-    e._get_max_cache_len = lambda: 4096
+    e._plan = SimpleNamespace(kv_cache_plan=SimpleNamespace(session_reach=4096, max_cache_len=4096))
+    e._agent_kv = None
     monkeypatch.setattr(config, "get_family_config", lambda family: {"modes": {"supported": ["agent"]}})
     return e
 

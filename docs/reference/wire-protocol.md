@@ -138,7 +138,7 @@ the field is refused like any other out-of-range version.
 | method | params | result |
 |---|---|---|
 | `generate` | `prompt`; per family: `steps`, `height`, `width`, `num_frames`, `seed`, `cfg`, `max_tokens`, `temperature`, `repetition_penalty`, `speaker`, `mode`, `image_path`, `audio_path`, `chat_mode`; `stream` (bool); `output_path` (image, video and audio families: where to save) | `family`, `timing.total_s`, the family's output (text families: the text), `op_id`, `status` ∈ `completed`/`cancelled`/`orphaned`/`stopped`; when not `completed`, `steps` (tokens produced) and `detail` if any; `output_path` (the saved file) when `output_path` was given for an image, video or audio family. A params key the engine does not read is refused (section 4) |
-| `chat` | `message`, sampling params | `text`, `context` (session window), `summarized` (bool) |
+| `chat` | `message`, sampling params | `text`, `context` (session window), `summarized` (bool, always `false`: a turn past the session's ceiling is refused instead) |
 | `complete` | `messages` (list of role/content), `tools` (optional), sampling params | `text` |
 | `template` | — | `text`: the model's chat template |
 | `new_chat` | — | `{"status": "ok"}` |

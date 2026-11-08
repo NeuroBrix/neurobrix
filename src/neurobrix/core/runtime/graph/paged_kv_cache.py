@@ -36,6 +36,7 @@ class PagedKVCache:
         self.v_pools: Dict[int, torch.Tensor] = {}
         self.lens: Dict[int, int] = {}
         self._seq_len = 0
+        self.holder = None      # the serving session whose positions the cache holds (core/state/kv_session), or None
 
     # -- capacity --------------------------------------------------------------------------------------------------
     def _pages_for(self, positions: int) -> int:
@@ -79,9 +80,11 @@ class PagedKVCache:
         self.k_pools[layer_idx], self.v_pools[layer_idx] = kp, vp
         return kp, vp
 
-    def _reserve(self, length: int) -> None:
-        """Every sequence holds `length` positions; the pool grows by the pages it lacks, up to the ceiling."""
-        if length > self.config.max_cache_len:
+    def _reserve(self, length: int, real: Optional[int] = None) -> None:
+        """Every sequence holds `length` positions; the pool grows by the pages it lacks, up to the ceiling. `real`:
+        the request's own end when the last rows pad a planned chunk (the ceiling bounds the request, not the
+        padding)."""
+        if (length if real is None else real) > self.config.max_cache_len:
             authority = "the model's context window" if getattr(self.config, "ceiling_is_window", False) \
                 else "the plan's cache"
             raise RuntimeError(f"ZERO FALLBACK: {length} positions exceed {authority} ({self.config.max_cache_len})")
@@ -92,9 +95,11 @@ class PagedKVCache:
             t.reserve(length)
 
     # -- the interface the wrapper calls -----------------------------------------------------------------------------
-    def update(self, layer_idx: int, k: torch.Tensor, v: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def update(self, layer_idx: int, k: torch.Tensor, v: torch.Tensor,
+               real: Optional[int] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         """Append k / v `[B, H_kv, T, D]` at the layer's length; return the layer's whole K / V `[B, H_kv, L, D]`
-        gathered through the page tables."""
+        gathered through the page tables. `real`: the rows of a planned chunk that are the request's (the rest pad
+        it; `truncate` drops them after the chunk)."""
         if layer_idx < 0 or layer_idx >= self.config.num_layers:
             raise RuntimeError(f"ZERO FALLBACK: layer_idx {layer_idx} out of range [0, {self.config.num_layers})")
         self._ensure(k)
@@ -102,7 +107,7 @@ class PagedKVCache:
         t = int(k.shape[2])
         end = start + t
         if end > len(self.tables[0].pages) * self.page_tokens:
-            self._reserve(end)
+            self._reserve(end, None if real is None else start + int(real))
         kp, vp = self._layer_pools(layer_idx, k.device)
         tpp = self.page_tokens
         positions = torch.arange(start, end, device=k.device)
@@ -133,6 +138,33 @@ class PagedKVCache:
             pages = torch.tensor(table.pages[:n], device=kp.device, dtype=torch.long)
             ks.append(kp[pages].permute(1, 0, 2, 3).reshape(kp.shape[1], n * tpp, kp.shape[3])[:, :end])
             vs.append(vp[pages].permute(1, 0, 2, 3).reshape(vp.shape[1], n * tpp, vp.shape[3])[:, :end])
+        return torch.stack(ks), torch.stack(vs)
+
+    def truncate(self, length: int) -> None:
+        """Keep the first `length` positions of every layer (a session's matched prefix, or a padded chunk's real end):
+        the pages stay granted and the dropped slots are overwritten next."""
+        length = int(length)
+        if length < 0 or length > self._seq_len:
+            raise RuntimeError(f"ZERO FALLBACK: truncating the KV cache to {length} positions; it holds {self._seq_len}")
+        for layer in list(self.lens):
+            self.lens[layer] = min(self.lens[layer], length)
+        self._seq_len = length
+
+    def whole_pages(self, layer_idx: int, positions: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Layer `layer_idx`'s K / V `[B, H_kv, positions, D]` over its first `positions` positions, a whole number of
+        pages, gathered through the page tables (the positions past the layer's length are whatever the slots hold:
+        the caller masks them)."""
+        tpp = self.page_tokens
+        if positions % tpp or positions > len(self.tables[0].pages) * tpp:
+            raise RuntimeError(f"ZERO FALLBACK: gathering {positions} positions of layer {layer_idx} as whole pages of "
+                               f"{tpp}; the sequence holds {len(self.tables[0].pages)} pages")
+        kp, vp = self.k_pools[layer_idx], self.v_pools[layer_idx]
+        n = positions // tpp
+        ks, vs = [], []
+        for table in self.tables:
+            pages = torch.tensor(table.pages[:n], device=kp.device, dtype=torch.long)
+            ks.append(kp[pages].permute(1, 0, 2, 3).reshape(kp.shape[1], positions, kp.shape[3]))
+            vs.append(vp[pages].permute(1, 0, 2, 3).reshape(vp.shape[1], positions, vp.shape[3]))
         return torch.stack(ks), torch.stack(vs)
 
     def clear(self) -> None:
