@@ -26,7 +26,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`--json` prints its record on one line** (it was indented over about 120 lines); the content is unchanged.
 - **`python -m nbxtensor install-metal` downloads nothing when the pinned Metal wheels are already installed**, and
   says so in one line (it re-downloaded 131 MB on every call).
-- **The engine requires nbxtensor 0.0.7**: the paged KV cache, its page bookkeeping, a chat session's cache record and
 - **The engine requires nbxtensor 0.0.8**: the paged KV cache, its page bookkeeping, a chat session's cache record and
   the prefill chunk's whole-page attention now live in the tensor library; the engine keeps the decisions (when a
   request is a session's turn, which chunk Prism plans).
@@ -145,8 +144,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   session can reach on the device (`--explain-plan`: `session_reach`, within the model's declared window) and the census
   keys every prompt length from one token up to it. A saved plan also keeps its KV cache's exact size and first request
   size when it is read back.
-
-### Fixed
 - **A language model's prompt is priced at its own length**: Prism planned a text request's prefill at the cache's
   prompt margin (128 tokens) whatever the prompt, so a long prompt was under-priced (TinyLlama: ~0.01 GiB planned for
   a 400-token prompt where the run held 652 MB) and a short one over-priced. The prompt is now counted by the flow's
