@@ -11,6 +11,8 @@ Constructed (register 102): the Mac's profile, its reading, the rung imposed, th
 """
 from __future__ import annotations
 
+import copy
+
 import pytest
 
 from neurobrix.core.prism import InputConfig, PrismSolver
@@ -128,9 +130,16 @@ def test_the_kv_refusal_names_every_rejection_after_scoring(monkeypatch):
     engine's deferred drain (2026-10-11) every whole candidate has that much less room, so the rung
     is 15 360 plus the drain read from the device's profile (954 MB on the M4 Pro: 16 314)."""
     pin_host(monkeypatch, 24576, 18186, "the Mac, idle")
+    # The pinned Apple machine carries its device's largest single allocation (13 639 MB) since 2026-11-08; at this cell's
+    # rung that arena bound rejects MiniCPM's whole candidates BEFORE the KV check this cell reads (one rejection left,
+    # the Dell's run of d7659e97). The cell is about how the KV refusal names its rejections, not about the arena bound
+    # (test_no_arena_is_planned_above_the_devices_largest_allocation owns that): it keeps the fact present, at the
+    # device's whole memory, so every whole candidate is still scored and rejected by the KV check.
+    machine = copy.deepcopy(APPLE_M4_PRO)
+    machine["devices"][0]["max_allocation_mb"] = machine["devices"][0]["memory_mb"]
     probe = PrismSolver()
     probe._mode = "triton"
-    drain = probe._deferred_drain_mb(probe._prepare_devices(profile(APPLE_M4_PRO))[0])
+    drain = probe._deferred_drain_mb(probe._prepare_devices(profile(machine))[0])
     impose_rung(monkeypatch, 15360 + int(round(drain)))
     monkeypatch.delenv("NBX_FORCE_STRATEGY", raising=False)
 
@@ -140,7 +149,7 @@ def test_the_kv_refusal_names_every_rejection_after_scoring(monkeypatch):
     monkeypatch.setattr(PrismSolver, "_try_layer_streaming", declines)
     s = PrismSolver()
     with pytest.raises(RuntimeError) as err:
-        s.solve_smart(NBXContainer.load(str(container_root("MiniCPM-o-4_5"))), profile(APPLE_M4_PRO),
+        s.solve_smart(NBXContainer.load(str(container_root("MiniCPM-o-4_5"))), profile(machine),
                       InputConfig(batch_size=1), mode="triton")
     text = str(err.value)
     assert "No strategy can fit model + KV cache" in text, text[:300]
