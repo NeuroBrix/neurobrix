@@ -36,6 +36,8 @@ def _trim_value(raw: str) -> str:
 
 class XmlToolCallParser(ToolCallParser):
     format_name = "xml"
+    start_marker = "<tool_call>"
+    end_marker = "</tool_call>"
 
     def parse(self, text: str) -> ParseResult:
         result = ParseResult()

@@ -19,6 +19,8 @@ _BLOCK_RE = re.compile(r"<tool_call>(.*?)</tool_call>", re.DOTALL)
 
 class JsonToolCallParser(ToolCallParser):
     format_name = "json"
+    start_marker = "<tool_call>"
+    end_marker = "</tool_call>"
 
     def parse(self, text: str) -> ParseResult:
         result = ParseResult()

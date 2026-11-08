@@ -10,6 +10,7 @@ from typing import Optional
 
 from neurobrix.agent.parsers.base import ParseResult, ToolCall, ToolCallParser
 from neurobrix.agent.parsers.jsonfmt import JsonToolCallParser
+from neurobrix.agent.parsers.jsonlist import JsonListToolCallParser
 from neurobrix.agent.parsers.xml import XmlToolCallParser
 
 __all__ = [
@@ -18,6 +19,7 @@ __all__ = [
     "ToolCallParser",
     "XmlToolCallParser",
     "JsonToolCallParser",
+    "JsonListToolCallParser",
     "select_parser",
 ]
 
@@ -34,4 +36,6 @@ def select_parser(template_text: str) -> Optional[ToolCallParser]:
         return XmlToolCallParser()
     if "<tool_call>" in template_text:
         return JsonToolCallParser()
+    if JsonListToolCallParser.start_marker in template_text:
+        return JsonListToolCallParser()
     return None

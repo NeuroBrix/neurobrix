@@ -58,3 +58,49 @@ class TextDeltaDecoder:
         delta = full[common:]
         self._emitted = full
         return {"text": delta, "rewind": rewind}
+
+
+class MarkerDecoder:
+    """Decodes token ids with the special tokens skipped, EXCEPT the ones whose text is a dialect marker.
+
+    A tool-call dialect may open its block with a special token (`<|tool_call|>` is one in its tokenizer):
+    the display decode (`skip_special_tokens=True`) drops it, and the call then reads as prose. This decode keeps
+    exactly the special tokens whose own text is one of `keep`, and skips every other special token as the
+    display decode does. Which ids are special is read from the tokenizer itself, id by id (a special token
+    decodes to nothing when skipped and to its text when not), never from a list.
+    """
+
+    def __init__(self, tokenizer: Any, keep) -> None:
+        if not hasattr(tokenizer, "decode"):
+            raise TypeError("MarkerDecoder needs a tokenizer with `decode`")
+        self._tokenizer = tokenizer
+        self._keep = frozenset(k for k in keep if k)
+        self._kept: Dict[int, Any] = {}
+
+    def _kept_text(self, token_id: int):
+        if token_id not in self._kept:
+            text = None
+            if self._keep and self._tokenizer.decode([token_id], skip_special_tokens=True) == "":
+                surface = self._tokenizer.decode([token_id], skip_special_tokens=False)
+                if surface in self._keep:
+                    text = surface
+            self._kept[token_id] = text
+        return self._kept[token_id]
+
+    def decode(self, ids: List[int]) -> str:
+        if not self._keep:
+            return self._tokenizer.decode(list(ids), skip_special_tokens=True)
+        out: List[str] = []
+        run: List[int] = []
+        for token_id in ids:
+            kept = self._kept_text(int(token_id))
+            if kept is None:
+                run.append(int(token_id))
+                continue
+            if run:
+                out.append(self._tokenizer.decode(run, skip_special_tokens=True))
+                run = []
+            out.append(kept)
+        if run:
+            out.append(self._tokenizer.decode(run, skip_special_tokens=True))
+        return "".join(out)

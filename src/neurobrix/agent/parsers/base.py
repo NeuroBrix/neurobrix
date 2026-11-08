@@ -38,6 +38,10 @@ class ToolCallParser:
     """Dialect contract. Subclasses implement parse()."""
 
     format_name: str = "base"
+    #: The text that opens a tool-call block, and the one that closes it (None: the block runs to the end of
+    #: the turn). A streaming reader holds back from the prose any suffix that could begin `start_marker`.
+    start_marker: str = ""
+    end_marker = None
 
     def parse(self, text: str) -> ParseResult:
         raise NotImplementedError
