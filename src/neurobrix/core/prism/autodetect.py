@@ -928,8 +928,8 @@ def _detect_gpus_darwin() -> Tuple[List[Dict[str, Any]], str]:
     """
     devices = _parse_system_profiler()
     if devices:
-        brand = devices[0].get("brand", "apple")
-        return devices, brand
+        driven = _driven(devices)
+        return devices, driven[0].get("brand", "apple") if driven else "none"
 
     return _NO_DEVICE
 
@@ -1487,12 +1487,13 @@ def _parse_system_profiler() -> List[Dict[str, Any]]:
             dtypes = ["float32", "float16"]
             pcie_ver = "3.0"
         elif "intel" in vendor_str:
-            brand = "intel"
-            arch = "xe"
-            vram_str = gpu.get("spdisplays_vram_shared", gpu.get("spdisplays_vram", "0"))
-            mem_mb = _parse_mac_vram(vram_str)
-            dtypes = ["float32"]
-            pcie_ver = "3.0"
+            # An Intel Mac's integrated GPU: no backend of this engine drives it under macOS (Level Zero does not exist
+            # there; the Metal device files describe Apple silicon), and system_profiler names no platform for it.
+            # Refused by name — written "xe" before, an architecture no vendor file has, which refused the whole Mac.
+            devices.append({"model": name, "brand": "intel",
+                            "refused": "no backend of this engine drives an Intel GPU under macOS (Level Zero does not "
+                                       "exist there; the Metal device files describe Apple silicon)"})
+            continue
         else:
             brand = "apple"
             arch = "apple_silicon"
