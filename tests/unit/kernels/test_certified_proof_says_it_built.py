@@ -78,6 +78,8 @@ def test_an_unknown_format_is_still_refused():
 def test_every_apple_entry_records_that_it_built():
     seen = 0
     for f in sorted(_APPLE.glob("*.json")):
+        if f.name == C.GENERATOR_ALIASES:      # the alias file is no certification (its own gate: autotune check)
+            continue
         doc = json.loads(f.read_text())
         assert doc.get("format") == C.FORMAT, (
             f"{f.name}: written before the field existed; re-measure rather "
@@ -95,4 +97,6 @@ def test_every_apple_entry_records_that_it_built():
 @pytest.mark.skipif(not _APPLE.is_dir(), reason="no Apple certified directory")
 def test_the_whole_directory_re_reads():
     for f in sorted(_APPLE.glob("*.json")):
+        if f.name == C.GENERATOR_ALIASES:      # the alias file is no certification (its own gate: autotune check)
+            continue
         assert C.validate(json.loads(f.read_text()), f) == [], f.name

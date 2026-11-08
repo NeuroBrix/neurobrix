@@ -71,7 +71,8 @@ def test_the_recorder_consults_the_refusal_and_writes_nothing(tmp_path, monkeypa
     monkeypatch.setenv("NBX_KEY_RECORD", str(rec))
     monkeypatch.setattr(census, "key_line", lambda tuned, key: f"{CONV}::{tuple(key)!r}")
     census._RECORDED.clear()
-    census._SAID.clear()
+    from nbxtensor.ops import autotune_certified as _library   # the once-said lines live in the library now
+    _library._SAID.clear()
 
     bad = (1, 64, 1, 0, 64, 1, 0, 1, 3, 1, 1, 0, 1, 1, 1, 1, False, "fp16", "fp16", "fp16")
     census.record(object(), bad)

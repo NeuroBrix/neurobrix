@@ -1072,7 +1072,7 @@ def generator_aliases(profile_dir: Path) -> Dict[str, str]:
             doc = json.loads(path.read_text(encoding="utf-8"))
             problems = validate_generator_aliases(doc, Path(profile_dir))
             if problems:
-                _say_once(f"[autotune] {path}: refused, nothing served through it ({'; '.join(problems[:3])})")
+                say_once(f"[autotune] {path}: refused, nothing served through it ({'; '.join(problems[:3])})")
             else:
                 out = {_alias_label(a["from"]): _alias_label(a["to"]) for a in doc["aliases"]}
         _ALIASES[key] = out
