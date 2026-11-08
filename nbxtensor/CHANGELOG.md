@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.6] - 2026-11-08
+
+### Changed
+- **Attribution metadata**: author, maintainer and copyright holder Hocine Benkelaya (contact@neurobrix.es); a NOTICE
+  file ships beside the LICENSE (supported and funded by Neural Network Holding Ltd, commercial distribution by WizWorks
+  OÜ); the README carries the same attribution. The code is 0.0.5's.
+
 ## [0.0.5] - 2026-11-07
 
 ### Fixed
@@ -180,7 +187,8 @@ memory; the fix is in test).
 - **`flash_decode_split_kernel` and its route**: armed only by an environment switch (`NBX_FLASH_DECODE`, with `NBX_FD_BLOCK_N` and `NBX_FD_SEG`) and measured slower than the vector decode kernels; `flash_decode.py` keeps the fixed-order reduce they share.
 - **`conv1d_forward_kernel`**: launched by no route (a 1-D convolution runs through `conv2d`).
 
-[Unreleased]: https://github.com/NeuroBrix/nbxtensor/compare/v0.0.5...HEAD
+[Unreleased]: https://github.com/NeuroBrix/nbxtensor/compare/v0.0.6...HEAD
+[0.0.6]: https://github.com/NeuroBrix/nbxtensor/compare/v0.0.5...v0.0.6
 [0.0.5]: https://github.com/NeuroBrix/nbxtensor/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/NeuroBrix/nbxtensor/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/NeuroBrix/nbxtensor/compare/v0.0.2...v0.0.3

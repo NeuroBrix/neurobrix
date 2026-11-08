@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when a request states no prompt. A short prompt is now priced below the old margin, so a few plans of
   mixture-of-experts models grant their expert cache about a megabyte more.
 
+## [0.6.2.post1] - 2026-11-08
+
+### Changed
+- **Attribution metadata**: author, maintainer and copyright holder Hocine Benkelaya (contact@neurobrix.es); a NOTICE
+  file ships beside the LICENSE (supported and funded by Neural Network Holding Ltd, commercial distribution by WizWorks
+  OÜ). Requires nbxtensor 0.0.6, which carries the same metadata over 0.0.5's code. The engine's code is 0.6.2's.
+
 ## [0.6.2] - 2026-11-07
 
 The Apple certified directory is complete under the published Triton build for Apple GPUs: 18 552 kernel settings are
@@ -6223,7 +6230,8 @@ First stable release of NeuroBrix — universal deep learning inference engine.
 - Zip-slip path traversal validation in registry import
 - Safe arithmetic parser replacing `eval()` in shape resolver
 
-[Unreleased]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.2...main
+[Unreleased]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.2.post1...main
+[0.6.2.post1]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.2...v0.6.2.post1
 [0.6.2]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/NeuroBrix/neurobrix/compare/v0.5.4...v0.6.0
