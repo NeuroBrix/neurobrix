@@ -30,10 +30,10 @@ _OS_PROBES = {
     "Linux": {"_visible_device_filter": lambda: None, "_parse_nvidia_smi": _EMPTY_LIST, "_parse_rocm": _EMPTY_LIST,
               "_parse_xpu": _EMPTY_LIST, "_parse_tenstorrent": _EMPTY_LIST, "_parse_moore_threads": _EMPTY_LIST,
               "_parse_biren": _EMPTY_LIST, "_parse_iluvatar": _EMPTY_LIST, "_parse_cambricon": _EMPTY_LIST,
-              "_parse_lspci": _EMPTY_PAIR},
+              "_parse_listed": _EMPTY_PAIR},
     "Darwin": {"_parse_system_profiler": _EMPTY_LIST},
     "Windows": {"_parse_nvidia_smi": _EMPTY_LIST, "_parse_rocm": _EMPTY_LIST, "_parse_xpu": _EMPTY_LIST,
-                "_parse_wmi": _EMPTY_PAIR},
+                "_parse_listed": _EMPTY_PAIR},
 }
 
 

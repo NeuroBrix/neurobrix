@@ -209,6 +209,37 @@ def level_zero_device_available() -> bool:
     return lib is not None and bool(_gpu_devices(lib))
 
 
+#: ze_device_property_flag_t ZE_DEVICE_PROPERTY_FLAG_INTEGRATED = ZE_BIT(0): "Device is integrated with the Host"
+#: (ze_api.h v1.20-r1.20.41)
+_DEVICE_FLAG_INTEGRATED = 1
+
+
+def gpu_facts(lib=None) -> Optional[list]:
+    """What each GPU the Level Zero loader reports states of itself, in the runtime's device order (its index is the
+    runtime's): `pci_device_id`, `name`, `integrated` (ZE_DEVICE_PROPERTY_FLAG_INTEGRATED: the device draws on the
+    host's memory), `memory_bytes` (its memory heaps, zeDeviceGetMemoryProperties: on an integrated GPU, the share of
+    the host's memory the driver lets it hold) and `max_allocation_bytes` (maxMemAllocSize: the largest single
+    allocation, which this runtime asks without the relaxed-limits extension). None when no loader is installed."""
+    lib = lib if lib is not None else load_library()
+    if lib is None:
+        return None
+    out = []
+    for _drv, dev in _gpu_devices(lib):
+        props = _DeviceProps(stype=_ST_DEVICE_PROPERTIES_1_2)
+        n = ctypes.c_uint32(0)
+        if lib.zeDeviceGetProperties(ctypes.c_void_p(dev), ctypes.byref(props)) != 0 \
+                or lib.zeDeviceGetMemoryProperties(ctypes.c_void_p(dev), ctypes.byref(n), None) != 0:
+            raise RuntimeError("nbxtensor Level Zero: a GPU the loader reports does not answer its properties")
+        heaps = (_MemoryProps * n.value)(*[_MemoryProps(stype=_ST_DEVICE_MEMORY) for _ in range(n.value)])
+        if lib.zeDeviceGetMemoryProperties(ctypes.c_void_p(dev), ctypes.byref(n), heaps) != 0:
+            raise RuntimeError("nbxtensor Level Zero: a GPU the loader reports does not answer its memory")
+        out.append({"pci_device_id": int(props.deviceId), "name": props.name.decode(errors="replace"),
+                    "integrated": bool(props.flags & _DEVICE_FLAG_INTEGRATED),
+                    "memory_bytes": sum(int(h.totalSize) for h in heaps),
+                    "max_allocation_bytes": int(props.maxMemAllocSize)})
+    return out
+
+
 #: the runtime table of the `xpu` backend: the contract's names, served by `LevelZeroRuntime`'s methods of the same
 #: names (the allocator calls `getattr(runtime, table[key])`, as on Metal). No host registration (Level Zero imports a
 #: host pointer only through an extension), no stream-ordered allocator, no peer access across cards yet.
@@ -624,11 +655,8 @@ def device_file_for(device_id: int):
     """(name, description) of the library's Intel device file whose `pci_device_ids` hold `device_id`; refused by
     name when none does — the facts Level Zero does not answer are never guessed."""
     from nbxtensor.backend import device_files
-    for vendor, name, _path in device_files.names():
-        if vendor != "intel":
-            continue
-        desc = device_files.describe(vendor, name)
-        if int(device_id) in [int(str(i), 0) for i in desc.get("pci_device_ids", [])]:
-            return name, desc
+    found = device_files.for_pci_id("intel", device_id)
+    if found is not None:
+        return found
     raise RuntimeError(f"nbxtensor: no Intel device file lists PCI device {int(device_id):#06x} "
                        f"(backend/devices/intel/*.yml, pci_device_ids) — its target is not guessed")

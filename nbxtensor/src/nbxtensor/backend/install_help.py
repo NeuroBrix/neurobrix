@@ -76,6 +76,13 @@ def _visible_bus_ids(count=None, bus_of=None):
 
 def _pci_gpus_at(root: str) -> List[Tuple[str, int, int, str]]:
     """`pci_gpus` with each device's PCI address (its sysfs directory's name)."""
+    return [(_PCI_VENDORS[v], v, d, bus) for v, d, bus in pci_display_devices(root) if v in _PCI_VENDORS]
+
+
+def pci_display_devices(root: str = "/sys/bus/pci/devices") -> List[Tuple[int, int, str]]:
+    """[(vendor id, device id, PCI address)] of every display controller on the bus, any vendor: PCI base class 0x03
+    (VGA 0x0300, 3D 0x0302, other 0x0380 — the class an Alder Lake-P integrated GPU may report), read from sysfs (the
+    kernel's sysfs-bus-pci ABI: `class`, `vendor`, `device` of each function); [] where there is none (not Linux)."""
     out = []
     for dev in sorted(glob.glob(os.path.join(root, "*"))):
         try:
@@ -87,8 +94,8 @@ def _pci_gpus_at(root: str) -> List[Tuple[str, int, int, str]]:
                 device = int(f.read().strip(), 16)
         except (OSError, ValueError):
             continue
-        if (cls >> 16) == 0x03 and vendor in _PCI_VENDORS:
-            out.append((_PCI_VENDORS[vendor], vendor, device, os.path.basename(dev)))
+        if (cls >> 16) == 0x03:
+            out.append((vendor, device, os.path.basename(dev)))
     return out
 
 

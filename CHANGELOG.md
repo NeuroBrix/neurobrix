@@ -41,6 +41,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   warning line says what failed and which plan replaces which. A component is re-planned once; when the new plan is the
   same or Prism refuses, the run stops with that refusal named. Before, the first run on a new machine (mochi-1-preview
   on an M4 Pro) failed at its VAE and only a second run succeeded.
+- **A laptop whose GPU no backend drives runs on its CPU instead of being refused whole**: on a machine with an
+  integrated Intel GPU and no oneAPI tools (a Tiger Lake laptop with Iris Xe graphics), the first launch wrote a GPU of
+  architecture "unknown" with an invented 16 GB, and every plan was refused with "no hardware profile for
+  intel/unknown". The first launch now reads the machine with what the operating system ships — the PCI bus on Linux,
+  Win32_VideoController on Windows, no vendor tool — and names each GPU with its platform and whether it is integrated.
+  An Intel GPU a backend can drive (Lunar Lake, Meteor Lake, Arrow Lake, Panther Lake, Arc, Data Center Max, through
+  Level Zero) is described as the device states it; an integrated one as unified memory, planned as one pool with the
+  host the way Apple chips are. A GPU no backend drives (Tiger Lake, Alder Lake, Raptor Lake: Intel's Triton has no
+  target for them; any GPU whose driver is not installed) is refused by name with its reason, and the plan says so and
+  runs on the CPU with every core of the profile. On Windows the machine's memory is read through PowerShell when
+  `wmic` is absent (Windows 11 24H2), where an invented 8 GB was written.
 - **A mixture-of-experts model on an Apple GPU is no longer planned on a free expert miss**: Prism priced a routed
   expert the store's cache missed as costing nothing on unified memory, so it chose an expert store estimated at 18 s for
   DeepSeek-Coder-V2-Lite where the run took more than 40 minutes. A miss is now priced as the page-in it is, at the

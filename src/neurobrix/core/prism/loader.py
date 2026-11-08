@@ -257,22 +257,21 @@ def _over(under, over):
     return {**under, **{k: _over(under.get(k), v) for k, v in over.items()}}
 
 
-def _refuse_unified_apple_without_largest_allocation(d_data: dict, path) -> None:
-    """A unified Apple device's profile carries `max_allocation_mb` (Metal's `MTLDevice.maxBufferLength`, written by
-    autodetect at generation), or the profile is refused by name. Silence would read as "no limit below memory_mb" —
-    true of a CUDA card, false of every Metal device, whose single buffer is capped below its working set (13 639 of
-    18 186 MB on an M4 Pro). Scoped to the vendor that declares the fact: a CUDA or ROCm device is never asked it.
-    The Mac, 2026-11-08: a profile regenerated without the key let a 13 912.6 MiB arena through to Open-Sora-v2's
-    Triton cell, which failed at weight loading."""
-    if str(d_data.get("brand", "")).lower() != "apple" or not d_data.get("unified_memory"):
-        return
-    if d_data.get("max_allocation_mb"):
+def _refuse_unified_without_largest_allocation(d_data: dict, path) -> None:
+    """A unified device's profile carries `max_allocation_mb` (the largest single allocation its backend grants, asked
+    of the device at generation: Metal's MTLDevice.maxBufferLength, Level Zero's maxMemAllocSize), or the profile is
+    refused by name. Silence would read as "no limit below memory_mb" — true of a CUDA card, false of the unified
+    devices this engine drives, whose single buffer is capped below their working set (13 639 of 18 186 MB on an
+    M4 Pro). The Mac, 2026-11-08: a profile regenerated without the key let a 13 912.6 MiB arena through to
+    Open-Sora-v2's Triton cell, which failed at weight loading. Keyed on the device's own unified fact, never a brand."""
+    if not d_data.get("unified_memory") or d_data.get("max_allocation_mb"):
         return
     raise ValueError(
-        f"ZERO FALLBACK: {path} describes the unified Apple GPU '{d_data.get('model', '?')}' without max_allocation_mb "
-        f"(its largest single allocation, MTLDevice.maxBufferLength): Prism would plan arenas the device refuses. "
-        f"Remove this generated profile and run again: it is regenerated from the device, which is asked for the fact "
-        f"(`python -m nbxtensor install-metal` first if pyobjc-framework-Metal is missing).")
+        f"ZERO FALLBACK: {path} describes the unified GPU '{d_data.get('model', '?')}' without max_allocation_mb (its "
+        f"largest single allocation: Metal's MTLDevice.maxBufferLength, Level Zero's maxMemAllocSize): Prism would plan "
+        f"arenas the device refuses. Remove this generated profile and run again: it is regenerated from the device, "
+        f"which is asked for the fact (on a Mac, `python -m nbxtensor install-metal` first if pyobjc-framework-Metal "
+        f"is missing).")
 
 
 def load_profile(hardware_id: str) -> PrismProfile:
@@ -306,7 +305,7 @@ def load_profile(hardware_id: str) -> PrismProfile:
     # Parse Devices
     devices = []
     for d_data in data.get("devices", []):
-        _refuse_unified_apple_without_largest_allocation(d_data, path)
+        _refuse_unified_without_largest_allocation(d_data, path)
         devices.append(DeviceSpec(
             index=d_data.get("index", len(devices)),
             name=d_data.get("model", d_data.get("name", "Unknown GPU")),
@@ -358,4 +357,5 @@ def load_profile(hardware_id: str) -> PrismProfile:
                                   if _vendor_block(d, "host_measured")), None), data.get("host_measured")) or None,
         nodes=nodes,
         node_links=node_links,
+        refused_devices=list(data.get("refused_devices") or []),
     )

@@ -498,6 +498,9 @@ class ExecutionPlan:
     #: less than the plan places on it. A dry run (--explain-plan, the census) prints it beside the plan; the run raises it
     #: before loading anything. None when the door is open or no live reading was taken.
     execution_door: Optional[str] = None
+    #: The GPUs the machine has and no backend drives (the profile's `refused_devices`), each named with its reason:
+    #: the plan was made without them, and says so.
+    refused_devices: List[Dict[str, Any]] = field(default_factory=list)
     #: when the machine was busy at planning time and the plan was RE-SOLVED on the memory free now (`solve_smart`):
     #: {"from": the plan the facts gave, "free_now_mb", "held_by_others_mb"}; None when the facts' plan ran
     busy_replan: Optional[Dict[str, Any]] = None
@@ -8024,7 +8027,12 @@ class PrismSolver:
                 "at a time: this WILL run, and it will be slow (expect minutes "
                 "to hours rather than seconds)")
         elif chosen == "cpu_execution":
-            parts.append("— no GPU strategy fitted; running on CPU")
+            parts.append("— no GPU strategy fitted; running on CPU"
+                         + (f" ({profile.cpu.compute_threads} compute threads of the profile's {profile.cpu.cores} "
+                            f"cores)" if profile.cpu else ""))
+        if chosen.startswith("cpu_") and getattr(profile, "refused_devices", None):
+            parts.append("— refused by name (device refused): " + ", ".join(
+                f"{d['model']} ({d.get('pci_id') or d.get('brand')})" for d in profile.refused_devices))
         elif chosen == "zero3":
             parts.append("— weights offloaded to host RAM between uses")
         return " ".join(parts)
@@ -9916,6 +9924,7 @@ class PrismSolver:
                 dict(getattr(self, "_time_estimates", {}) or {}).get(strategy)),
             time_estimates=dict(getattr(self, "_time_estimates", {}) or {}),
             cpu_ram_mb=profile.cpu.ram_mb if profile.cpu else 0,
+            refused_devices=list(getattr(profile, "refused_devices", None) or []),
         )
 
     # =========================================================================
@@ -10192,6 +10201,8 @@ def plan_record(plan: "ExecutionPlan") -> dict:
         rec["layer_stream_resident"] = {k: list(v) for k, v in plan.layer_stream_resident.items()}
     if plan.host_footprint:
         rec["host_footprint"] = dict(plan.host_footprint)
+    if plan.refused_devices:
+        rec["refused_devices"] = [dict(d) for d in plan.refused_devices]
     if plan.unified_rungs_tried:
         rec["unified_rungs_tried"] = [list(t) for t in plan.unified_rungs_tried]
     if getattr(plan, "expert_working_set", None):
@@ -10219,6 +10230,10 @@ def explain_plan(plan: "ExecutionPlan") -> str:
         lines.append("candidates      none recorded")
     for name, sc, why in plan.rejected:
         lines.append(f"refused         {name} (scored {sc:.0f}): {why}")
+    for d in plan.refused_devices:
+        lines.append(f"device refused  {d['model']} ({d.get('pci_id') or d.get('brand')}"
+                     + (f", {d['platform']}" if d.get("platform") else "")
+                     + (", integrated" if d.get("integrated") else "") + f"): {d['refused']}")
     if getattr(plan, "execution_door", None):
         lines.append(f"door            the memory free NOW is below this plan — a run re-plans on it (refused only if "
                      f"no plan fits): {plan.execution_door}")

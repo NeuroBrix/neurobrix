@@ -2678,7 +2678,7 @@ shrinking only.
 | service today | what it answers | fate | the library after | state, owner |
 |---|---|---|---|---|
 | `memory_state` | the host's free memory | (a) fact, measured | `nbxtensor.backend.host_memory` reads the operating system | **landed** (Mac, be3acf2b); the service goes |
-| `host_shares_memory_with_device` | unified memory | (a) fact, measured | `backend.device_facts`: Metal `hasUnifiedMemory`, CUDA `cudaDevAttrIntegrated` | **landed** (Mac); the service goes |
+| `host_shares_memory_with_device` | unified memory | (a) fact, measured | `backend.device_facts`: Metal `hasUnifiedMemory`, CUDA `cudaDevAttrIntegrated`, Level Zero `ZE_DEVICE_PROPERTY_FLAG_INTEGRATED` | **landed** (Mac); the service goes |
 | `profile_triton_has_fp64` | the device computes float64 | (a) fact | `backend.device_facts.kernels_carry_fp64()` — the backend's answer, no profile argument | **landed** (fact: Mac; the last reader, `ops.wrappers.set_hardware_profile`: Dell) — the service is gone; an application that states the capability otherwise declares it with `backend.capabilities.set_backend_has_fp64` (NeuroBrix: `triton.dtype.declare_hardware_profile`, from its vendor files) |
 | `certified_dir` | where proven kernel settings live | (a) setting, default measured | default: the user's cache (`$XDG_CACHE_HOME`/`~/.cache` `/nbxtensor/certified/`), filled by the autotune; `nbxtensor.ops.autotune.set_store(path)` for another | default **landed** (Mac); the setter replaces the service (Mac) |
 | `tiling_policy` | the split sizes the tiling rules read | (a) setting, default | the library's table (`ops/tiling.yml`); `nbxtensor.ops.set_tiling(dict)` to replace values | table **landed** (Mac); the setter replaces the service (Mac) |
@@ -3067,6 +3067,7 @@ def describe(vendor: str, name: str) -> dict          # the device whole, refuse
 def param(vendor, name, section, key, default)        # one key of it (the per-op reader: merged once per process)
 def in_force() -> dict                                # the device the launch target names ({} when none matches)
 def for_arch(arch: str) -> dict                       # the device an arch string names, read without a target
+def for_pci_id(vendor: str, device_id: int)           # (name, description) of the file listing this PCI id, or None
 def forget() -> None                                  # the next reader resolves the device in force again
 ```
 
@@ -3087,6 +3088,9 @@ def level_zero_device_available() -> bool   # the loader opens and reports a GPU
 def load_library()                # the Level Zero loader (libze_loader), or None
 def device_extensions(device_id: int, lib=None) -> list   # the GPU's OpenCL extensions (what Intel's compiler is told)
 def device_file_for(device_id: int)          # (name, description) of the Intel device file listing this PCI id, or refused
+def gpu_facts(lib=None) -> Optional[list]    # per GPU, in the runtime's order: pci_device_id, name, integrated
+                                             # (ZE_DEVICE_PROPERTY_FLAG_INTEGRATED), memory_bytes (its heaps),
+                                             # max_allocation_bytes (maxMemAllocSize); None when no loader is installed
 def result_name(rc: int) -> str   # a ze_result_t's name
 def runtime() -> LevelZeroRuntime # the process-wide runtime
 ```
@@ -3116,6 +3120,7 @@ The library installs no handler at import; its modules log on their own loggers 
 
 ```python
 def pci_gpus(root=...) -> list    # [(vendor, vendor id, device id)] of the NVIDIA, AMD and Intel display devices on the PCI bus
+def pci_display_devices(root=...) -> list   # [(vendor id, device id, PCI address)] of every display controller (class 0x03), any vendor
 def diagnose(root=...) -> list    # per vendor found: what is missing (runtime library, Triton backend) and the steps
 def report(root=...) -> str       # the diagnosis as text (python -m nbxtensor doctor prints it)
 def no_runtime_message(root=...) -> str   # the refusal when no runtime answers, with the steps for a GPU on the bus
