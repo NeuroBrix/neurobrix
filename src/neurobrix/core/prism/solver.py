@@ -1761,10 +1761,11 @@ class PrismSolver:
         Elsewhere — the compiled engine, a device whose growth is not measured — the whole-component fraction (0.92,
         its provenance never recorded) stands, said in the budget's note: it is what holds those terms there."""
         from neurobrix.core.prism.host_footprint import engine_of
-        if engine_of(getattr(self, "_mode", "compiled")) != "triton" or spec is None \
-                or self._runtime_growth_fact(spec) is None:
+        if spec is None or self._runtime_growth_fact(spec) is None:
             return float(rung_mb) * self.whole_component_fraction
-        if not spec.has_unified_memory:
+        if not spec.has_unified_memory or engine_of(getattr(self, "_mode", "compiled")) != "triton":
+            # the compiled engine whose growth is a fact on this device: the budget holds it (`_runtime_growth`), and
+            # its loader's copies are not the Triton loader's (`triton_load_copies_bytes`): the whole rung
             return float(rung_mb)
         if self._load_copies_mb is None:
             raise RuntimeError("ZERO FALLBACK: the part of a unified rung is read outside a solve: the loader's copies "
@@ -5353,7 +5354,12 @@ class PrismSolver:
                 # graphs, kernel temporaries; "other allocations" in its OOM line), a vendor fact
                 # (memory.compiled_private_reserve_mb): never in a component's price, so it is taken off the room before
                 # any schedule is chosen. Absent = none declared (0).
-                if getattr(self, "_mode", None) and not str(self._mode).startswith("triton"):
+                # When the compiled engine's growth during a run is a FACT on this device (measured for this model, or the
+                # vendor's envelope — `_runtime_growth_fact`), that fact IS the reserve and is taken off the budget there:
+                # the private reserve is not taken a second time (mochi-1-preview on the M4 Pro, 2026-11-08: the MPS cache
+                # reached 9.2 GB beyond the live tensors where the declared reserve was 3 900 MB).
+                if getattr(self, "_mode", None) and not str(self._mode).startswith("triton") \
+                        and self._runtime_growth_fact(dev) is None:
                     from neurobrix.core.config.loader import vendor_config_for_device
                     _res = ((vendor_config_for_device(dev.brand.value, dev.architecture, dev.compute_capability,
                                                       model=getattr(dev, "name", None)).get("memory") or {})

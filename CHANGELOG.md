@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **The PyTorch engine's memory reserve on a device whose runtime growth is measured is that measure**: where the
+  compiled engine's growth during a run is a fact (measured for the model, or declared by the device's vendor file), it
+  is the one reserve the plan keeps — the fixed private reserve is not taken a second time, and a component may use the
+  whole budget instead of a fixed 92 % of it. Devices without the fact are planned as before.
+
 ### Fixed
 - **A language model's prompt is priced at its own length**: Prism planned a text request's prefill at the cache's
   prompt margin (128 tokens) whatever the prompt, so a long prompt was under-priced (TinyLlama: ~0.01 GiB planned for
