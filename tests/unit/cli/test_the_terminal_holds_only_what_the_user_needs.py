@@ -163,7 +163,9 @@ def test_import_of_an_installed_model_is_one_line(tmp_path):
                              "--registry", "http://127.0.0.1:9", env=_env(NEUROBRIX_HOME=str(home),
                                                                          CUDA_VISIBLE_DEVICES=""))
     assert p.returncode == 0, err
-    assert out == ["TinyLlama-1.1B-Chat-v1.0 is already installed (--force re-downloads)."] and not err
+    # installed before 0.6.3 (no name record) and the registry unreachable: one line, nothing recorded
+    assert out == ["TinyLlama-1.1B-Chat-v1.0 is already installed; its name is not recorded yet: the registry at "
+                   "http://127.0.0.1:9 is not reachable (import it again once it is)."] and not err
 
 
 def test_list_is_the_table_and_one_summary_line(tmp_path):
@@ -171,10 +173,13 @@ def test_list_is_the_table_and_one_summary_line(tmp_path):
     for n in ("a-model", "another-model-with-a-long-name"):
         _fake_model(home, n)
     (home / "store" / "a-model.nbx").write_bytes(b"x" * 10)
-    p, out, err = _neurobrix("list", env=_env(NEUROBRIX_HOME=str(home), CUDA_VISIBLE_DEVICES=""))
+    p, out, err = _neurobrix("list", env=_env(NEUROBRIX_HOME=str(home), CUDA_VISIBLE_DEVICES="",
+                                              NEUROBRIX_REGISTRY="http://127.0.0.1:9"))
     assert p.returncode == 0 and not err, err
     _no_noise(out, "list")
-    assert len(out) == 1 + 2 + 1, out
+    # header, the two rows, each entry's one-line migration note (installed with no name record), the summary
+    assert len(out) == 1 + 2 + 2 + 1, out
+    assert all("installed before 0.6.3" in line for line in out[3:5]), out
     assert out[-1].startswith("2 model(s) · ") and "neurobrix clean --store" in out[-1]
 
 

@@ -274,8 +274,11 @@ class ServingDaemon:
         return cmd
 
     def served_name(self) -> str:
-        """The one name of the model this daemon serves (the API's model id)."""
-        return self._engine.model_name
+        """The one name of the model this daemon serves (the API's model id): the hub name `import` recorded
+        beside its cache entry, else (an entry installed before 0.6.3) the entry's name (neurobrix/nbx/names.py)."""
+        from neurobrix.core.paths import cache_dir
+        from neurobrix.nbx.names import name_of
+        return name_of(cache_dir(), self._engine.model_name)
 
     def open_http_door(self) -> Dict[str, Any]:
         """Open the OpenAI-compatible door (serving/openai_api/door.py) on this daemon; its endpoint record."""

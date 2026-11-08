@@ -97,7 +97,7 @@ def test_the_lifecycle_is_one_event_per_phase_and_nothing_else_on_stdout(tmp_pat
     assert all(e["schema"] == "neurobrix.import/1" for e in events)
     dl = [e for e in events if e["event"] == "download"]
     assert dl[-1]["bytes"] == dl[-1]["total"] == len(_archive(tmp_path))
-    assert f"Installed {NAME} · run: " in err          # the human lines went to stderr
+    assert f"Installed {ORG}/{NAME} · run: " in err          # the human lines went to stderr
     assert (tmp_path / "cache" / NAME / "manifest.json").exists()
     assert not reg.installing_path(tmp_path / "cache" / NAME).exists()
 

@@ -286,11 +286,14 @@ def _import_body(args):
 
     log.debug(f"Registry: {registry}")
 
-    # Check if already cached
+    # Check if already cached. An entry whose name is recorded answers here, with no network; one installed
+    # before 0.6.3 (no record) goes on to the hub record, which gives the name to record (nbx/names.py).
+    from neurobrix.nbx.names import recorded_name, record_name
     cache_path = CACHE_DIR / name
-    if cache_path.exists() and (cache_path / "manifest.json").exists() and not args.force:
+    if cache_path.exists() and (cache_path / "manifest.json").exists() and not args.force \
+            and recorded_name(cache_path) is not None:
         log.debug(f"Model already installed: {cache_path}")
-        print(f"{name} is already installed (--force re-downloads).")
+        print(f"{recorded_name(cache_path)} is already installed (--force re-downloads).")
         _ev(args, "installed", model=f"{org}/{name}", cache=str(cache_path), already=True)
         _ev(args, "done", model=f"{org}/{name}", cache=str(cache_path))
         sys.exit(0)
@@ -302,6 +305,14 @@ def _import_body(args):
         resp.raise_for_status()
         model_info = resp.json()
     except requests.ConnectionError:
+        if cache_path.exists() and (cache_path / "manifest.json").exists() and not args.force:
+            # Installed before 0.6.3, and the registry that gives its name cannot be asked: nothing is recorded
+            # (the name is the hub's, never guessed from what was typed); the model stays usable as it was.
+            print(f"{name} is already installed; its name is not recorded yet: the registry at {registry} is not "
+                  f"reachable (import it again once it is).")
+            _ev(args, "installed", model=f"{org}/{name}", cache=str(cache_path), already=True)
+            _ev(args, "done", model=f"{org}/{name}", cache=str(cache_path))
+            sys.exit(0)
         _die(args, f"ERROR: Cannot connect to registry at {registry}",
              "Check your network connection or use --registry to specify a different URL.")
     except requests.HTTPError as e:
@@ -312,15 +323,23 @@ def _import_body(args):
         _die(args, f"ERROR: Registry returned {status}: {e}")
 
     model_data = model_info.get("model", model_info)
+    # The model's one name, as the hub record gives it (its own case), recorded beside the entry it installs or
+    # finds installed (nbx/names.py).
+    hub_name = model_data.get("slug") or f"{org}/{name}"
     # "already installed", asked on every name the record gives the container BEFORE any byte is fetched: on the slug
     # alone (`..._diffusers`), a second import of Sana downloaded 9 GB to learn it (2026-11-08)
     if not args.force:
         _file_stem = Path(str(model_data.get("fileUrl") or "")).stem
-        for _as in dict.fromkeys(n for n in (model_data.get("name"), _file_stem) if n and n != name):
+        for _as in dict.fromkeys(n for n in (name, model_data.get("name"), _file_stem) if n):
             _there = CACHE_DIR / _as
             if _there.exists() and (_there / "manifest.json").exists():
                 log.debug(f"Model already installed under its own name: {_there}")
-                print(f"{_as} is already installed (--force re-downloads).")
+                _had = recorded_name(_there)
+                if _had is None:
+                    record_name(_there, hub_name)
+                    print(f"{hub_name} is already installed; its name is now recorded (neurobrix list shows it).")
+                else:
+                    print(f"{_had} is already installed (--force re-downloads).")
                 _ev(args, "installed", model=f"{org}/{name}", installed_as=_as, cache=str(_there), already=True)
                 _ev(args, "done", model=f"{org}/{name}", installed_as=_as, cache=str(_there))
                 sys.exit(0)
@@ -509,7 +528,9 @@ def _import_body(args):
         # keeps its contract: without it nothing installed is swapped over.
         if cache_path.exists() and (cache_path / "manifest.json").exists() and not args.force:
             log.debug(f"Model already installed under its own name: {cache_path}")
-            print(f"{_declared} is already installed (--force re-downloads).")
+            if recorded_name(cache_path) is None:
+                record_name(cache_path, hub_name)
+            print(f"{recorded_name(cache_path)} is already installed (--force re-downloads).")
             _ev(args, "installed", model=f"{org}/{name}", installed_as=_declared, cache=str(cache_path), already=True)
             _ev(args, "done", model=f"{org}/{name}", installed_as=_declared, cache=str(cache_path))
             sys.exit(0)
@@ -522,6 +543,7 @@ def _import_body(args):
     try:
         with installing(cache_path, label=f"import {org}/{name}") as staging:
             extract_container(store_path, staging)
+            record_name(staging, hub_name)   # the name lands with the entry, in the same swap
     except InstallHeldByAnother as e:
         _die(args, f"ERROR: {e}")
     log.debug(f"   Extracted: {cache_path}")
@@ -533,10 +555,8 @@ def _import_body(args):
         log.debug("   Store: deleted (--no-keep)")
     else:
         log.debug(f"   Store: {store_path} (kept — use --no-keep to save {format_size(actual_size)})")
-    if _declared != name:
-        log.debug(f"Installed as: {_declared}  (the hub record is named {name!r}; the container carries "
-                  f"its own name — use it with `run` and `remove`)")
-    print(f"Installed {_declared} · run: {_suggest_run_command(_declared, cache_path)}")
+    log.debug(f"Installed in the cache entry {_declared}, named {hub_name} (recorded beside its manifest)")
+    print(f"Installed {hub_name} · run: {_suggest_run_command(hub_name, cache_path)}")
     log.debug(f"Remove with: neurobrix remove {_declared}")
     _ev(args, "done", model=f"{org}/{name}", installed_as=_declared, cache=str(cache_path),
         store=None if args.no_keep else str(store_path))
@@ -592,6 +612,40 @@ def _strip_build_stamp(stem: str) -> str:
     return re.sub(r"\.\d{8}T\d{6}$", "", stem)
 
 
+def _hub_names_of_unrecorded(entries) -> dict:
+    """For entries installed before 0.6.3 (no name record): their hub names from the registry, matched on the
+    names a hub record gives its container (its `name`, its file's stem), as `import` matches them. Asked only
+    when such an entry exists; an unreachable registry gives none (the note then says `<org>/<entry>`)."""
+    if not entries:
+        return {}
+    import requests
+    try:
+        resp = requests.get(f"{REGISTRY_URL}/api/models?limit=100", timeout=5)
+        resp.raise_for_status()
+        records = resp.json().get("models", [])
+    except (requests.RequestException, ValueError) as e:
+        log.debug(f"[list] registry not reachable for the hub names ({e})")
+        return {}
+    found = {}
+    for rm in records:
+        slug = rm.get("slug")
+        if not slug:
+            continue
+        for n in (rm.get("name"), _strip_build_stamp(Path(str(rm.get("fileUrl") or "")).stem)):
+            if n in entries:
+                found.setdefault(n, slug)
+    return found
+
+
+def _named_entries(model_dirs) -> list:
+    """(entry dir, its one name, the migration note or None) per installed entry (nbx/names.py)."""
+    from neurobrix.nbx.names import migration_note, recorded_name
+    recs = [(d, recorded_name(d)) for d in model_dirs]
+    hub = _hub_names_of_unrecorded({d.name for d, r in recs if r is None})
+    return [(d, r if r is not None else d.name, None if r is not None else migration_note(d.name, hub.get(d.name)))
+            for d, r in recs]
+
+
 def list_record(args) -> dict:
     """The installed models and the store, as one record (the same walk `list` prints)."""
     store_files = {}
@@ -600,18 +654,18 @@ def list_record(args) -> dict:
             store_files[nbx_file.stem] = nbx_file.stat().st_size
     models = []
     if CACHE_DIR.exists():
-        for model_dir in sorted(CACHE_DIR.iterdir()):
-            if not is_installed_model_dir(model_dir):
-                continue
+        for model_dir, one_name, note in _named_entries(
+                [d for d in sorted(CACHE_DIR.iterdir()) if is_installed_model_dir(d)]):
             try:
                 manifest = json.loads((model_dir / "manifest.json").read_text())
             except (json.JSONDecodeError, OSError):
                 manifest = {}
-            models.append({"name": model_dir.name, "family": manifest.get("family", "?"),
+            models.append({"name": one_name, "entry": model_dir.name, "name_recorded": note is None, "note": note,
+                           "family": manifest.get("family", "?"),
                            "size_bytes": sum(f.stat().st_size for f in model_dir.rglob("*") if f.is_file()),
                            "license": manifest.get("license", "") or "",
                            "in_store": any(model_dir.name in stem for stem in store_files)})
-    installed = {m["name"] for m in models}
+    installed = {m["entry"] for m in models}
     store_only = [{"name": stem, "size_bytes": size} for stem, size in sorted(store_files.items())
                   if not any(name in stem for name in installed)]
     return {"models": models, "store_only": store_only,
@@ -648,9 +702,8 @@ def cmd_list(args):
     models = []
 
     if CACHE_DIR.exists():
-        for model_dir in sorted(CACHE_DIR.iterdir()):
-            if not is_installed_model_dir(model_dir):
-                continue
+        for model_dir, one_name, note in _named_entries(
+                [d for d in sorted(CACHE_DIR.iterdir()) if is_installed_model_dir(d)]):
             manifest_path = model_dir / "manifest.json"
             if manifest_path.exists():
                 try:
@@ -670,7 +723,9 @@ def cmd_list(args):
                 has_store = any(model_dir.name in stem for stem in store_files)
 
                 models.append({
-                    "name": model_dir.name,
+                    "name": one_name,
+                    "entry": model_dir.name,
+                    "note": note,
                     "family": family,
                     "size": total_size,
                     "store": has_store,
@@ -685,7 +740,7 @@ def cmd_list(args):
     # HAD just been extracted was listed as installed and as "store only (not
     # extracted)" on the same screen, with an instruction to import it again
     # (hub walkthrough, 2026-09-03). Strip the stamp before comparing.
-    cached_names = {m["name"] for m in models}
+    cached_names = {m["entry"] for m in models}
     store_only = []
     for stem, size in store_files.items():
         if _strip_build_stamp(stem) not in cached_names:
@@ -699,6 +754,9 @@ def cmd_list(args):
         print_table(["MODEL", "FAMILY", "SIZE", "LICENSE", "STORE"],
                     [[m["name"], m["family"], format_size(m["size"]), m.get("license", "") or "-",
                       ".nbx" if m["store"] else "-"] for m in models])
+        for m in models:
+            if m["note"]:
+                print(f"  {m['note']}")
 
     if store_only:
         print("Store only (not extracted):")
@@ -744,7 +802,8 @@ def cmd_remove(args):
 def _remove_body(args, record):
     import shutil
 
-    model_name = args.model_name
+    from neurobrix.cli.utils import resolve_model_arg
+    model_name = resolve_model_arg(args.model_name)   # the one name -> its cache entry
     cache_path = CACHE_DIR / model_name
     do_store = args.store or getattr(args, 'all', False)
     do_cache = not args.store or getattr(args, 'all', False)

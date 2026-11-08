@@ -92,6 +92,8 @@ def cmd_upscale(args):
 
     log.info(f"[Engine] {execution_mode}")
 
+    from neurobrix.cli.utils import resolve_model_arg
+    args.model = resolve_model_arg(args.model)
     nbx_path = find_model(args.model)
 
     log.debug("[1/4] Loading container...")

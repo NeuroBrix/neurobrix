@@ -254,6 +254,12 @@ Example:
 neurobrix import sana/1600m-1024 --no-keep
 ```
 
+`import` records the model's hub name (`<org>/<name>`, as the hub record writes it) beside the installed entry's
+manifest (`name.json`), and records it too when it finds the model already installed (no download). That name is the
+model's one name: `--model` of `run`, `serve` and `upscale`, `remove`, `neurobrix list` and the HTTP API's model id
+use it, and the entry's directory name is not accepted beside it. A model installed before 0.6.3 has no record: it
+keeps its directory name, and each use says `run neurobrix import <org>/<name> once to record its name`.
+
 ### list
 
 Show installed models.
@@ -262,7 +268,9 @@ Show installed models.
 neurobrix list [--store]
 ```
 
-- Default: Shows models in cache (ready to run)
+- Default: Shows models in cache (ready to run), each under its one name; a model installed before 0.6.3 is shown
+  under its directory name with a one-line note naming the `neurobrix import` that records its hub name (read from
+  the registry when it is reachable)
 - `--store`: Shows downloaded .nbx archives
 
 ### remove

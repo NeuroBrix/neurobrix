@@ -211,7 +211,10 @@ def test_an_import_of_a_model_installed_under_its_own_name_downloads_nothing(tmp
         srv.shutdown()
     assert not any(a.endswith("/download") for a in _Hub.asked), f"a download was asked: {_Hub.asked}"
     assert p.returncode == 0, p.stdout + p.stderr
-    assert p.stdout.splitlines() == ["Model_1B is already installed (--force re-downloads)."], p.stdout
+    # installed before 0.6.3: the import records the hub's name for it, in one line, with no download
+    assert p.stdout.splitlines() == ["vendor/Model_1B_diffusers is already installed; its name is now recorded "
+                                     "(neurobrix list shows it)."], p.stdout
+    assert json.loads((home / "cache" / "Model_1B" / "name.json").read_text())["name"] == "vendor/Model_1B_diffusers"
 
 
 # ── (5) a configured home that does not exist ────────────────────────────────────────────────────────────────────

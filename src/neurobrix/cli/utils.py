@@ -58,6 +58,22 @@ IMPORT_EXAMPLES = (
 )
 
 
+def resolve_model_arg(asked: str) -> str:
+    """The cache entry a user's `--model` designates (neurobrix/nbx/names.py): the recorded hub name, or — for an
+    entry installed before 0.6.3, with no record — its directory name, said with the one-line migration note. A
+    recorded entry asked by its directory name is refused naming its hub name (exit 1)."""
+    import logging
+    from neurobrix.nbx.names import NameRefused, resolve
+    try:
+        entry, note = resolve(CACHE_DIR, asked)
+    except NameRefused as e:
+        logging.getLogger("neurobrix.cli").error(f"Error: {e}")
+        sys.exit(1)
+    if note is not None:
+        logging.getLogger("neurobrix.cli").warning(f"Note: {note}")
+    return entry
+
+
 def find_model(model_name: str) -> Path:
     """
     Find a model in ~/.neurobrix/cache/.

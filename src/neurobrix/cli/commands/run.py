@@ -522,6 +522,12 @@ def cmd_run(args):
     if getattr(args, "certified_only", False):
         _os_dbg.environ["NBX_AUTOTUNE_CERTIFIED_ONLY"] = "1"
 
+    # The user's --model is the model's one name (its recorded hub name): resolved to its cache entry here,
+    # once; every later use below is the entry's.
+    if args.model is not None:
+        from neurobrix.cli.utils import resolve_model_arg
+        args.model = resolve_model_arg(args.model)
+
     # Auto-detect model from running daemon if --model omitted
     if args.model is None:
         from neurobrix.serving.client import DaemonClient

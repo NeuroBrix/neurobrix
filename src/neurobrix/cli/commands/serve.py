@@ -22,6 +22,9 @@ def cmd_serve(args):
     from neurobrix.serving.server import ServingDaemon
 
     # Check if already running
+    from neurobrix.cli.utils import resolve_model_arg
+    args.model = resolve_model_arg(args.model)
+
     if DaemonClient.is_running():
         pid = DaemonClient.get_pid()
         log.error(f"Error: a daemon is already running (PID {pid}): neurobrix chat talks to it, neurobrix stop ends it")
