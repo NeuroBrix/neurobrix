@@ -30,6 +30,8 @@ _IO_UNMEASURED: Optional[str] = None
 #: the parallel reads a run takes when its count could not be measured: one — the loaders read serially and Prism prices
 #: one shard in flight, the least host memory; the profile keeps no count and the next run measures again
 UNMEASURED_IO_WORKERS = 1
+#: the parent's "no stable read rate this time", handed to the probe child it spawns (`core/prism/arena_probe.child`)
+UNMEASURED_ENV = "NBX_IO_UNMEASURED"
 
 
 def declare_unmeasured_io_workers(why: str) -> None:

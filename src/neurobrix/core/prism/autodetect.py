@@ -303,16 +303,25 @@ def _complete_measured_fields(path: Path) -> None:
     _log.debug(f"   [Auto-detect] Completed {path.name}: {added}")
 
 
-_FIRST_LAUNCH_SAID = [False]
+_FIRST_LAUNCH_SAID: set = set()
 
 
-def _say_first_launch() -> None:
-    """The one line a user sees while this machine is measured for its profile (detection, then the facts and the
-    reload rates `ensure_measured_facts` measures): minutes of work that printed nothing by default but debug lines,
-    a silence a user cannot tell from a hang (the terminal-noise inventory, 2026-11-08: 570 s). Said once a process."""
-    if not _FIRST_LAUNCH_SAID[0]:
-        _FIRST_LAUNCH_SAID[0] = True
-        _log.info("First launch on this machine: measuring it once for its hardware profile (a few minutes)...")
+def _say_first_launch(phase: str, what: str = "") -> None:
+    """Once a phase, the line a first launch says while it measures this machine (0.6.2: 570 s of silence)."""
+    if phase not in _FIRST_LAUNCH_SAID:
+        _FIRST_LAUNCH_SAID.add(phase)
+        _log.info("First launch on this machine: " + ("detecting its hardware once..." if phase == "detect" else
+                  f"measuring it once for its hardware profile{what}..."))
+
+
+def _work_said(probes, replay, replays: int) -> str:
+    """The time this launch expects, from what this machine measured: `replays` more chunk-probe children at what the
+    first cost (`replay`: replay s, child s), each reload probe at that cost plus its five loads at this storage's rate."""
+    from nbxtensor.io.read_rate import read_seconds
+    child_s = replay[1] if replay else 0.0
+    s = child_s * replays + sum(child_s + read_seconds(Path(r) / "components" / c, 5 * b) for b, r, c, _st in probes)
+    took = f"{s / 60:.0f} min" if s >= 90 else f"{s:.0f} s"
+    return f", up to about {took} (from what one measure took here; first kernel compiles add to it)" if s else ""
 
 
 def get_or_create_default_profile() -> str:
@@ -336,7 +345,7 @@ def get_or_create_default_profile() -> str:
         if DEFAULT_PROFILE_PATH.exists():
             _complete_measured_fields(DEFAULT_PROFILE_PATH)
             return "default"
-        _say_first_launch()
+        _say_first_launch("detect")
         profile_data = detect_hardware()
         _write_profile_atomically(DEFAULT_PROFILE_PATH, profile_data)
         _log.debug(f"   [Auto-detect] Created profile: {DEFAULT_PROFILE_PATH}")
@@ -348,7 +357,7 @@ def get_or_create_default_profile() -> str:
         _complete_measured_fields(path)
         return hardware_id
 
-    _say_first_launch()
+    _say_first_launch("detect")
     _log.debug("   [Auto-detect] No --hardware specified, detecting system hardware...")
     profile_data = detect_hardware()
     _write_profile_atomically(path, profile_data)
@@ -2571,13 +2580,13 @@ def stored_major(cache_path, component: str) -> Optional[str]:
 _STORED = {"bfloat16": "BF16", "float32": "F32", "float16": "F16"}
 
 
-def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None) -> dict:
+def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None, container_dir=None) -> dict:
     """Measure, ONCE, on a GENERATED profile (`default-*`), the device and host facts Prism's time estimate reads that
     neither the profile nor its architecture's tracked vendor file states (the quick probe), and write them with their
     source. The engine's LOADER rate is not probed here: the loader measures itself at its first real load
     (`note_loader_rate`) — until then Prism ranks without an estimate and says so (the supervisor's decision S2,
     2026-10-27 23:00). A committed profile is never written; a census shadow (no card) measures nothing. Returns what
-    was added."""
+    was added; with `container_dir` (the requested model's), only the reload rates of its own stored dtypes."""
     if not str(hardware_id).startswith("default"):
         return {}
     try:
@@ -2604,8 +2613,32 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None) -> dic
         return dict(d.get("measured") or _vendor_block(d, "measured") or {})
 
     first = measured_of(devices[0])
+    probes = []                  # the reload probes this launch owes, decided first: what is said is what is done
+    if engine is not None:
+        from neurobrix.core.paths import cache_dir
+        held = (data.get("host_measured"), _vendor_block(devices[0], "host_measured"))
+        wanted = None if container_dir is None else {
+            stored_major(container_dir, c.name) for c in (Path(container_dir) / "components").glob("*")}
+        bound = int(devices[0].get("memory_mb") or 0) << 20
+        for name, st in _STORED.items():
+            if wanted is not None and name not in wanted:
+                continue
+            if any((((b or {}).get("weight_reload_gbps") or {}).get(engine) or {}).get(st) for b in held):
+                continue
+            # the asked model's own component first; the rate is the machine's: another's when none is large enough
+            for roots in ([Path(container_dir)] if container_dir is not None else [], list(Path(cache_dir()).glob("*"))):
+                comps = sorted((sum(f.stat().st_size for f in c.rglob("*.safetensors")), str(c.parent.parent), c.name)
+                               for root in roots for c in (root / "components").glob("*")
+                               if stored_major(c.parent.parent, c.name) == name)
+                comps = [x for x in comps if LOADER_RATE_MIN_BYTES <= x[0] <= bound]
+                if comps:
+                    probes.append((*comps[0], st))
+                    break
+    replay = P.vmm_first_replay(0) if "vmm_chunk_bytes" not in first else None    # made ahead: it prices the rest
+    if not first or probes or "vmm_chunk_bytes" not in first:
+        _say_first_launch("measure", _work_said(probes, replay,
+                                                q["vmm_reps"] * (1 + len(q["vmm_ks"])) - 1 if replay else 0))
     if not first:
-        _say_first_launch()
         dtypes = [t for t in (devices[0].get("supports_dtypes") or []) if t in ("float16", "float32", "bfloat16")]
         first = {"source": f"measured {stamp} at the first launch on this machine (autodetect, quick: one GEMM size, "
                            f"{q['copy_bytes'] >> 20} MB copies; tools/profile_facts.py measures the full set)",
@@ -2619,7 +2652,8 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None) -> dic
         added["gemv_gbps"] = [engine]
     if "vmm_chunk_bytes" not in first:
         # the expandable pool's chunk on this machine's card (R16; 0: the device has no VMM, the pool keeps segments)
-        first["vmm_chunk_bytes"] = int(P.vmm_chunk_bytes(0, q["vmm_reps"], q["vmm_ks"]) or 0)
+        first["vmm_chunk_bytes"] = int(P.vmm_chunk_bytes(0, q["vmm_reps"], q["vmm_ks"],
+                                                         off_first=replay[0] if replay else None) or 0)
         added["vmm_chunk_bytes"] = first["vmm_chunk_bytes"]
     # the host's block over the vendor's, key by key (loader.load_profile): only what neither states is measured
     if "host_matmul_gflops" not in {**(_vendor_block(devices[0], "host_measured") or {}), **(data.get("host_measured") or {})}:
@@ -2632,22 +2666,15 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None) -> dic
     if added:
         _write_first(path, data, devices, first)
     if engine is not None:
-        # the per-piece reload rate a streamed plan is priced with, per stored dtype of the cache that neither block
-        # states (the supervisor 2026-11-03 22:50): until now only a streamed run measured it, and Prism refused to plan one
-        # without it. The cache's smallest component stored so, reloaded in its own process (arena_probe.reloads).
+        # the per-piece reload rate a streamed plan is priced with, per stored dtype of the requested model (of the
+        # cache without one) that neither block states (the supervisor 2026-11-03 22:50): until now only a streamed run
+        # measured it, and Prism refused to plan one without it. The `probes` chosen above, each reloaded in its own
+        # process (arena_probe.reloads).
         from neurobrix.core.prism import arena_probe as A
-        from neurobrix.core.paths import cache_dir
-        held = (data.get("host_measured"), _vendor_block(devices[0], "host_measured"))
-        for name, st in _STORED.items():
-            if not any((((b or {}).get("weight_reload_gbps") or {}).get(engine) or {}).get(st) for b in held):
-                comps = [(sum(f.stat().st_size for f in c.rglob("*.safetensors")), str(c.parent.parent), c.name)
-                         for c in Path(cache_dir()).glob("*/components/*") if stored_major(c.parent.parent, c.name) == name]
-                comps = sorted(x for x in comps if LOADER_RATE_MIN_BYTES <= x[0] <= int(devices[0].get("memory_mb") or 0) << 20)
-                if comps:
-                    _say_first_launch()
-                    r = A.child(comps[0][1], comps[0][2], hardware_id, engine)
-                    _log.debug(f"   [Auto-detect] {engine} {st} reloads of {r['container']}:{r['component']}: "
-                               f"{[round(b / s / 1e9, 3) for b, s in r['draws']]} GB/s (written when three agree)")
+        for _bytes, root, comp, st in probes:
+            r = A.child(root, comp, hardware_id, engine)
+            _log.debug(f"   [Auto-detect] {engine} {st} reloads of {r['container']}:{r['component']}: "
+                       f"{[round(b / s / 1e9, 3) for b, s in r['draws']]} GB/s (written when three agree)")
         data = yaml.safe_load(path.read_text()) or {}          # what the probe's process wrote
         devices = data.get("devices") or []
         first = {**measured_of(devices[0]), **first}

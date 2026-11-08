@@ -312,6 +312,18 @@ def _import_body(args):
         _die(args, f"ERROR: Registry returned {status}: {e}")
 
     model_data = model_info.get("model", model_info)
+    # "already installed", asked on every name the record gives the container BEFORE any byte is fetched: on the slug
+    # alone (`..._diffusers`), a second import of Sana downloaded 9 GB to learn it (2026-11-08)
+    if not args.force:
+        _file_stem = Path(str(model_data.get("fileUrl") or "")).stem
+        for _as in dict.fromkeys(n for n in (model_data.get("name"), _file_stem) if n and n != name):
+            _there = CACHE_DIR / _as
+            if _there.exists() and (_there / "manifest.json").exists():
+                log.debug(f"Model already installed under its own name: {_there}")
+                print(f"{_as} is already installed (--force re-downloads).")
+                _ev(args, "installed", model=f"{org}/{name}", installed_as=_as, cache=str(_there), already=True)
+                _ev(args, "done", model=f"{org}/{name}", installed_as=_as, cache=str(_there))
+                sys.exit(0)
     file_size = int(model_data.get("fileSize", 0))
     category = model_data.get("category", "unknown")
     description = model_data.get("description", "")

@@ -184,6 +184,9 @@ def child(container_dir: str, component: str, hardware_id: str, scale) -> Dict[s
     hold the request raises `ProbeOutOfMemory`, anything else a RuntimeError carrying the child's error — never the
     tail of its stderr (the interpreter's shutdown noise hid the cause on a fresh Mac home, 2026-11-07)."""
     env = dict(os.environ, NBX_AUTOTUNE_CERTIFIED_ONLY="1")        # never a sweep: a missing key bounds the measure
+    from neurobrix.core import workspace as _ws
+    if _ws._IO_UNMEASURED is not None:          # a busy storage: the child, same profile, reads serially too
+        env[_ws.UNMEASURED_ENV] = _ws._IO_UNMEASURED
     r = subprocess.run([sys.executable, "-m", __name__, container_dir, component, hardware_id, str(scale)],
                        capture_output=True, text=True, env=env)
     line = next((l for l in r.stdout.splitlines() if l.startswith(MARK)), None)
@@ -216,6 +219,9 @@ def factor_on_card(usable_bytes: int, weight_bytes: int, run, reps: int, steady:
 
 
 if __name__ == "__main__":
+    from neurobrix.core import workspace as _ws
+    if os.environ.get(_ws.UNMEASURED_ENV):                # the parent's word (`child`): its launch measured no count
+        _ws.declare_unmeasured_io_workers(os.environ[_ws.UNMEASURED_ENV])
     if sys.argv[4:5] and sys.argv[4] in ("triton", "compiled"):     # the reload probe: `<dir> <component> <hw> <engine>`
         print(MARK + json.dumps(reloads(*sys.argv[1:5])), flush=True)
     else:

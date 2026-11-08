@@ -317,7 +317,13 @@ def weight_load_gbps(root: Path, comp: str, gb: float) -> dict:
     return out
 
 
-def vmm_chunk_bytes(device: int, reps: int, ks: Sequence[int]) -> Optional[int]:
+def vmm_first_replay(device: int):
+    """(replay s, child s) of the chunk probe's first replay, made ahead; None where the device has no VMM."""
+    from nbxtensor.memory import trace_replay as T
+    return None if T.vmm_granularity(device) is None else T.first_replay(device)
+
+
+def vmm_chunk_bytes(device: int, reps: int, ks: Sequence[int], off_first: Optional[float] = None) -> Optional[int]:
     """The expandable pool's chunk on `device`, measured on a REAL run's allocations (R16; the supervisor 2026-11-02
     17:15): the library's recorded allocation trace (`nbxtensor.memory.trace_replay`) replayed through the allocator on
     this device, under the card size it was recorded on, with the range off (the driver segments) and then at each
@@ -326,17 +332,6 @@ def vmm_chunk_bytes(device: int, reps: int, ks: Sequence[int]) -> Optional[int]:
     the segments (the pool keeps them). On the V100 16 GB: OFF 2.16-2.29 s, 16 MiB 2.7 s, 32 MiB 2.0 s -> 32 MiB; the
     run itself, SANA-Video_2B_720p ttft 40.6/41.4 s at 32 MiB against 40.9/39.9 s OFF (vmm_v100.md). A synthetic
     churn of the same bytes was measured and rejected: its cost per call is flat, so it always favours the largest."""
-    from nbxtensor.backend import runtime as _rt
-    from nbxtensor.memory.vmm import Vmm
-    from nbxtensor.memory import trace_replay
-    lib = Vmm.load(_rt.backend_table().get("driver_libs"))
-    if lib is None:
-        return None
-    v = Vmm(lib, device)
-    if not v.supported():
-        return None
-    rc, gran = v.granularity()
-    if rc != 0 or gran <= 0:
-        return None
-    chunk, _times = trace_replay.chunk_by_replay(device, gran, ks, reps)
-    return chunk
+    from nbxtensor.memory import trace_replay as T
+    gran = T.vmm_granularity(device)
+    return None if gran is None else T.chunk_by_replay(device, gran, ks, reps, off_first=off_first)[0]

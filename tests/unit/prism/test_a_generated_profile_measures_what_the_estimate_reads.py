@@ -30,6 +30,7 @@ def hw(tmp_path, monkeypatch):
     monkeypatch.setattr(P, "host_matmul_gflops", lambda *a, **k: CALLS.append(("hmm",)) or 300.0)
     monkeypatch.setattr(P, "host_memory_gbps", lambda *a, **k: CALLS.append(("hmem",)) or 20.0)
     monkeypatch.setattr(P, "vmm_chunk_bytes", lambda *a, **k: CALLS.append(("vmm",)) or 2 << 20)
+    monkeypatch.setattr(P, "vmm_first_replay", lambda *a, **k: None)      # no VMM: nothing replayed ahead
     return tmp_path
 
 

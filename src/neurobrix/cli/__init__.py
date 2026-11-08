@@ -12,7 +12,6 @@ import argparse
 from pathlib import Path
 
 from neurobrix import __version__
-from neurobrix.cli.utils import REGISTRY_URL, IMPORT_EXAMPLES
 
 
 def _add_run_arguments(p):
@@ -140,6 +139,7 @@ def _add_verbose(p, top: bool = False) -> None:
 
 def create_parser(show_dev: bool = False):
     """Create the main argument parser with subcommands. `show_dev`: the developer commands are listed in the help."""
+    from neurobrix.cli.utils import REGISTRY_URL, IMPORT_EXAMPLES     # not at import: it resolves the paths
 
     parser = argparse.ArgumentParser(
         prog='neurobrix',
@@ -605,6 +605,7 @@ def main():
     """Main entry point."""
     _utf8_streams(sys.stdout, sys.stderr)
     from nbxtensor import terminal
+    from neurobrix.core.paths import PathNotConfigured
 
     def _configure(verbose: int, as_json: bool) -> None:
         # ONE terminal handler: developer lines under -v, tracebacks under -vv; --json keeps stderr for what is wrong
@@ -614,7 +615,11 @@ def main():
             print(f"Error: {e}", file=sys.stderr)
             sys.exit(2)
 
-    parser = create_parser(show_dev=terminal.verbosity(sys.argv[1:]) > 0)
+    _configure(terminal.verbosity(sys.argv[1:]), "--json" in sys.argv[1:])   # building the parser reads the paths
+    try:
+        parser = create_parser(show_dev=terminal.verbosity(sys.argv[1:]) > 0)
+    except PathNotConfigured as e:
+        _fail_path(e)
     args = parser.parse_args()
     _configure(getattr(args, "verbose", 0) or 0, bool(getattr(args, "json", False)))
     import os as _os_census
@@ -697,6 +702,8 @@ def main():
     except KeyboardInterrupt:
         print("\nInterrupted by user", file=sys.stderr)
         sys.exit(130)
+    except PathNotConfigured as e:
+        _fail_path(e)
     except FileNotFoundError as e:
         _fail(e, trace=False)
     except ValueError as e:
@@ -714,16 +721,23 @@ def main():
         _fail(e, unexpected=True)
 
 
-def _fail(e, trace: bool = True, unexpected: bool = False, what: str = "") -> None:
-    """An error said once on stderr, `Error: <cause>` (its remedy in the cause's text); the traceback under -vv. Exit 1."""
+def _fail_path(e) -> None:
+    """A configured location that does not exist (`core.paths.PathNotConfigured`): one line and its remedy."""
+    _fail(f"{e} Create or mount that directory, or change the setting that names it.", trace=False, exc=e)
+
+
+def _fail(e, trace: bool = True, unexpected: bool = False, exc=None, what: str = "") -> None:
+    """An error said once on stderr, `Error: <cause>` (its remedy in the cause's text, or a missing compiler named:
+    nbxtensor's install_help); the traceback under -vv. Exit 1."""
     import logging
     from nbxtensor import terminal
+    from nbxtensor.backend.install_help import compiler_missing
     log = logging.getLogger("neurobrix.cli")
-    named = None
+    named = None if isinstance(e, str) else compiler_missing(e)
     kind = f"{type(e).__name__}: " if unexpected and not isinstance(e, str) else ""
     log.error(f"Error: {named or what + kind + str(e)}")
-    if terminal.tracebacks() and not isinstance(e, str):
-        log.debug("Traceback:", exc_info=e)
+    if terminal.tracebacks() and (exc or not isinstance(e, str)):
+        log.debug("Traceback:", exc_info=exc or e)
     elif trace and not named and not isinstance(e, str):
         log.error("(neurobrix -vv ... prints the traceback)")
     sys.exit(1)

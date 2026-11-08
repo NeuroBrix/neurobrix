@@ -32,6 +32,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   expert the store's cache missed as costing nothing on unified memory, so it chose an expert store estimated at 18 s for
   DeepSeek-Coder-V2-Lite where the run took more than 40 minutes. A miss is now priced as the page-in it is, at the
   device's measured cold load rate.
+- **A machine without a C compiler gets one line, not a 71-line traceback**: torch compiles some of its own kernels
+  with Triton at their first use (torch 2.14.1 does it for `aten::bmm`), and Triton needs a C compiler to build them,
+  which a slim container lacks. A run of the PyTorch engine there now ends with one line naming the missing compiler,
+  how to install one (`apt install gcc`), and `--triton`, whose engine needs none.
+- **The first launch measures only what the requested model needs, and says so**: it timed the weight reloads of
+  every stored type of every installed model, whatever was asked (about 10 minutes with three models installed, in
+  silence); it now measures the requested model's own stored types, and says in one line that this is a one-time
+  measurement and how long it expects it to take, priced from what its first measure took on this machine. A first
+  launch on a busy storage no longer fails in its reload probe ("no I/O worker count"): the probe reads serially, as
+  the run does.
+- **`import` of a model already installed downloads nothing**: a hub record whose name differs from the container's
+  (`..._diffusers`) re-downloaded the whole archive (9 GB for Sana) before saying the model was installed; the
+  installed names are checked before any download.
+- **`NEUROBRIX_HOME` (or `NEUROBRIX_CACHE`, `NEUROBRIX_STORE`) naming a directory that does not exist** ended every
+  command, `--help` included, in a Python traceback; it is one line naming the directory and what to do (the
+  traceback with `-vv`).
+- **`doctor` lists the GPUs the process can see**: it listed every GPU on the host's PCI bus (four in a container
+  given one); the others are counted as not visible here.
 - **No Triton warning on a first run**: the masked-fill kernel gave `tl.where` a uint8 condition, and Triton warned
   that this is deprecated at the first compile of a language model; the condition is now a boolean (the compiled code
   is identical).

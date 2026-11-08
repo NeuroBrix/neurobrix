@@ -625,7 +625,7 @@ def cmd_run(args):
     # vendor file states; the loader's rate is measured by the loader itself at its first real load (S2, 2026-10-27)
     from neurobrix.core.prism import autodetect as _autodetect
     from neurobrix.core.prism.host_footprint import engine_of as _engine_of
-    _autodetect.ensure_measured_facts(hardware_id, _engine_of(execution_mode))
+    _autodetect.ensure_measured_facts(hardware_id, _engine_of(execution_mode), container_dir=cache_path)
     _autodetect.ACTIVE_HARDWARE_ID = hardware_id       # the profile this run's loaders measure themselves into
     hw_profile = load_profile(hardware_id)
     log.debug(f"   Profile: {hw_profile.id} ({hw_profile.total_vram_gb:.1f} GB)")

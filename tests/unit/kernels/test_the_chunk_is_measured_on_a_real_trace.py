@@ -72,7 +72,7 @@ def test_the_first_launch_probe_measures_on_the_trace(monkeypatch):
     monkeypatch.setattr(V.Vmm, "supported", lambda self: True)
     monkeypatch.setattr(V.Vmm, "granularity", lambda self: (0, 2 * MB))
     seen = []
-    monkeypatch.setattr(T, "chunk_by_replay", lambda dev, g, ks, reps, trace=None: (seen.append((g, tuple(ks))), (32 * MB, {}))[1])
+    monkeypatch.setattr(T, "chunk_by_replay", lambda dev, g, ks, reps, trace=None, off_first=None: (seen.append((g, tuple(ks))), (32 * MB, {}))[1])
     assert P.vmm_chunk_bytes(0, 3, (1, 16)) == 32 * MB and seen == [(2 * MB, (1, 16))]
 
 
