@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when a request states no prompt. A short prompt is now priced below the old margin, so a few plans of
   mixture-of-experts models grant their expert cache about a megabyte more.
 
+- **Mixture-of-experts models no longer pin every expert they decode on Apple GPUs**: on unified memory the expert
+  store reads a routed expert in place from the model's files, and the one-token decode path left a pinned buffer over
+  each expert it read after the store let the expert go. The pages stayed resident beyond the expert cache Prism
+  planned until the machine swapped (DeepSeek-Coder-V2-Lite on an 18 GB Mac: 16 GB wired within a minute). The store
+  now releases those buffers before it lets the pages go.
+
 ## [0.6.2] - 2026-11-07
 
 The Apple certified directory is complete under the published Triton build for Apple GPUs: 18 552 kernel settings are
