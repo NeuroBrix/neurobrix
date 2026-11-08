@@ -415,5 +415,8 @@ def test_the_output_boundary_prices_what_the_flow_saves(monkeypatch):
     pin_host(monkeypatch, 24576, 18186, "the Mac, idle")
     p, s = _plan("Janus-Pro-7B", "triton")
     assert s._output_elements["gen_vision_model"] == 3 * 384 * 384
-    assert s._output_elements["language_model"] > 100 * s._output_elements["gen_vision_model"]
+    # the language model's logits are priced at the request's own prompt (~75 rows x 102 400 since 2026-11-08, ~17x
+    # the picture; the cache's 128-row margin before): still the larger output, so the boundary that saves the picture
+    # is what this cell checks
+    assert s._output_elements["language_model"] > s._output_elements["gen_vision_model"]
     assert 0 < p.host_footprint["output_bytes"] < 16 * MB, p.host_footprint["output_bytes"] / MB

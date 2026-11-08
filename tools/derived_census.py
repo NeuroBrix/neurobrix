@@ -80,29 +80,19 @@ class PlanRefused(SystemExit):
 
 
 def container_tokenizer(model: str):
-    """The container's tokenizer module, where the executor loads it from."""
-    from neurobrix.core.module.tokenizer.sp_tokenizer import load_tokenizer_from_path
-    root = CACHE / model
-    topo = json.loads((root / "topology.json").read_text())
-    tok = (topo.get("modules") or {}).get("tokenizer")
-    path = ((tok.get("path") if isinstance(tok, dict) else tok) or "modules/tokenizer")   # the executor's default
-    if not (root / str(path).rstrip("/")).exists():
-        raise SystemExit(f"{model}: no tokenizer module at {path}")
-    return load_tokenizer_from_path(root / str(path).rstrip("/"), None)
+    """The container's tokenizer module, where the executor loads it from (`core/runtime/prompt_length`)."""
+    from neurobrix.core.runtime.prompt_length import container_tokenizer as _ct
+    try:
+        return _ct(CACHE / model)
+    except FileNotFoundError as e:
+        raise SystemExit(str(e))
 
 
 def prompt_tokens(model: str, prompt: str) -> int:
-    """The prefill length: the prompt through the container's own tokenizer by the autoregressive
-    flow's own rule (`triton/flow/autoregressive.prompt_token_ids`: SFT format / chat template /
-    basic encode with specials, unpadded)."""
-    from neurobrix.triton.flow.autoregressive import prompt_token_ids
-    root = CACHE / model
-    topo = json.loads((root / "topology.json").read_text())
-    defaults = json.loads((root / "runtime" / "defaults.json").read_text()) if (root / "runtime" / "defaults.json").exists() else {}
-    tokenizer = container_tokenizer(model)
-    gen_type = ((topo.get("flow") or {}).get("generation") or {}).get("type")
-    return len(prompt_token_ids(tokenizer, prompt, defaults, gen_type == "autoregressive_image",
-                                bool(defaults.get("chat_mode", False))))
+    """The prefill length: the prompt through the container's own tokenizer by the autoregressive flow's own rule —
+    the engine's one function (`core/runtime/prompt_length.prompt_tokens`), which the plan reads too."""
+    from neurobrix.core.runtime.prompt_length import prompt_tokens as _pt
+    return _pt(CACHE / model, prompt)
 
 
 def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dict,

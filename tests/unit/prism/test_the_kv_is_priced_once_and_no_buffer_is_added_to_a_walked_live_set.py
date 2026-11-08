@@ -26,7 +26,8 @@ import trace_request as TR  # noqa: E402
 MODEL = "Janus-Pro-7B"
 MB = 1024 * 1024
 
-pytestmark = pytest.mark.skipif(not container_root(MODEL).exists(), reason=f"{MODEL} not in the cache")
+# no module-level mark: container_root() SKIPS by name inside each test when the container is absent (a module-level
+# call raised a collection error instead, the Mac 2026-11-08)
 
 
 def _price(monkeypatch):

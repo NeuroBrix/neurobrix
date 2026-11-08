@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A language model's prompt is priced at its own length**: Prism planned a text request's prefill at the cache's
+  prompt margin (128 tokens) whatever the prompt, so a long prompt was under-priced (TinyLlama: ~0.01 GiB planned for
+  a 400-token prompt where the run held 652 MB) and a short one over-priced. The prompt is now counted by the flow's
+  own rule (chat template, specials) and bound to the language model's sequence; the margin remains the bound only
+  when a request states no prompt. A short prompt is now priced below the old margin, so a few plans of
+  mixture-of-experts models grant their expert cache about a megabyte more.
+
 ## [0.6.2] - 2026-11-07
 
 The Apple certified directory is complete under the published Triton build for Apple GPUs: 18 552 kernel settings are

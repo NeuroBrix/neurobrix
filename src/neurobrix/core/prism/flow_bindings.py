@@ -106,10 +106,13 @@ class FlowBindings:
         return self._graphs[comp]
 
     # -- the rules ------------------------------------------------------------------------------
-    def prompt_prefill_length(self, comp: str) -> Optional[int]:
-        """The longest pass the flow's GENERATING language model runs: its prompt, at most the prompt budget the
-        state engine sizes its cache with (`defaults.prompt_margin`, the same figure `PrismSolver._estimate_kv_cache_bytes`
-        adds to max_tokens) — every later token is a pass of one row. None for any other component. Unbound, the
+    def prompt_prefill_length(self, comp: str, input_config=None) -> Optional[int]:
+        """The longest pass the flow's GENERATING language model runs: its prompt — the request's own token count when
+        the request states it (`InputConfig.seq_len`, counted by the flow's own rule, `core/runtime/prompt_length`), else
+        the prompt budget the state engine sizes its cache with (`defaults.prompt_margin`, the same figure
+        `PrismSolver._estimate_kv_cache_bytes` adds to max_tokens) — every later token is a pass of one row. A 400-token
+        prompt was priced at the margin's 128 rows (TinyLlama ~0.01 GiB, 652 MB held, 2026-11-08). None for any other
+        component. Unbound, the
         language model's sequence axis took its TRACE extent under the placement floor, the whole cache at once:
         Janus-Pro-7B, traced at 704 positions (576 image tokens + 128), priced its text logits over 5 x 704 rows,
         687.5 MB of a 1 375 MB activation figure, where the run held ~300 MB (the Dell's split on a V100, 2026-10-28)."""
@@ -122,6 +125,9 @@ class FlowBindings:
             if (self.cache_path / "components").exists() else []
         if resolve_flow_name(lm, names) != comp:
             return None
+        asked = getattr(input_config, "seq_len", None) if input_config is not None else None
+        if asked:
+            return int(asked)
         defaults_path = self.cache_path / "runtime" / "defaults.json"
         defaults = json.loads(defaults_path.read_text()) if defaults_path.exists() else {}
         from neurobrix.core.state.price import DEFAULT_PROMPT_MARGIN
@@ -345,7 +351,7 @@ class FlowBindings:
             for sid, info in table.items():
                 if info.get("name") == "batch":
                     out[sid] = pair
-        prefill = self.prompt_prefill_length(comp)
+        prefill = self.prompt_prefill_length(comp, input_config)
         if prefill is not None:
             for sid, info in table.items():
                 if info.get("name") in ("seq_len", "sequence_length"):
