@@ -82,6 +82,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   all (the decode path: a wrap left over every expert the store had let go). Held by `TablePins`, they end when the
   store says.
 ## [0.0.7] - unreleased (session KV lot)
+## [0.0.8] - unreleased (session KV lot)
 
 ### Added
 - **Paged KV cache and its session bookkeeping**: `nbxtensor.memory.paged_kv.PagedTritonKVCache` (per-layer page

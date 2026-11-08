@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`python -m nbxtensor install-metal` downloads nothing when the pinned Metal wheels are already installed**, and
   says so in one line (it re-downloaded 131 MB on every call).
 - **The engine requires nbxtensor 0.0.7**: the paged KV cache, its page bookkeeping, a chat session's cache record and
+- **The engine requires nbxtensor 0.0.8**: the paged KV cache, its page bookkeeping, a chat session's cache record and
   the prefill chunk's whole-page attention now live in the tensor library; the engine keeps the decisions (when a
   request is a session's turn, which chunk Prism plans).
 - **The kernel census keys a chat session's later turns**: a turn after the first attends over the cached

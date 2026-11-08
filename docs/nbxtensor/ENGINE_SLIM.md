@@ -26,7 +26,7 @@ Two figures, kept apart (the supervisor, 2026-10-29 23:40):
 
 The owner's rule of 2026-11-08 16:43: every generic mechanism lives in nbxtensor; the engine keeps policy only (Prism
 decides, the flow decides when, the CLI displays); the findings never rise (169 before the lot, 165 after it). Lot A
-moved into nbxtensor 0.0.7: the paged KV cache (`memory.paged_kv`, from triton/paged_kv_cache.py, -377), the page
+moved into nbxtensor 0.0.8: the paged KV cache (`memory.paged_kv`, from triton/paged_kv_cache.py, -377), the page
 bookkeeping (`memory.pages`, from core/state/pages.py, -181), the session record and the chunk row plan
 (`memory.kv_session`), the whole-page gather kernel and the chunk's masked attention (`memory.paged_kv.chunk_attention`,
 `ops.attention_wrappers.paged_kv_gather`). The serving session lost its summarisation (-79, -16, -4, -1). What stays,
