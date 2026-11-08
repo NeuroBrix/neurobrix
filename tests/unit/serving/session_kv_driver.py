@@ -38,7 +38,7 @@ def main() -> int:
     ap.add_argument("--hardware", default=None,
                     help="profile id; default: the machine's own profile for the visible cards (first launch's)")
     ap.add_argument("--mode", required=True, choices=["triton", "compiled"])
-    ap.add_argument("--chunk", type=int, default=0)
+    ap.add_argument("--chunk", default="0", help="rows of the prefill chunk; 0: one chunk; 'plan': the plan's own")
     ap.add_argument("--conv", required=True)
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
@@ -54,7 +54,8 @@ def main() -> int:
     engine = InferenceEngine(a.model, a.hardware or get_or_create_default_profile(), mode=a.mode)
     engine.load()
     kv_plan = engine._plan.kv_cache_plan
-    kv_plan.prefill_chunk = a.chunk or None
+    if a.chunk != "plan":
+        kv_plan.prefill_chunk = int(a.chunk) or None
     conv = json.load(open(a.conv))
     tok = engine.tokenizer
     full = [int(t) for t in _flatten_tokenizer_output(
@@ -120,7 +121,8 @@ def main() -> int:
         return out
 
     ceiling, source = session_ceiling(kv_plan)
-    res = {"model": a.model, "mode": a.mode, "chunk": a.chunk or None, "len_A": la, "len_full": len(full),
+    res = {"model": a.model, "mode": a.mode, "chunk": kv_plan.prefill_chunk,
+           "chunk_reason": getattr(kv_plan, "prefill_chunk_reason", ""), "len_A": la, "len_full": len(full),
            "page_tokens": None}
     split = KVSession(ceiling, source)
     res["split_turn1"] = turn(full[:la], split)
