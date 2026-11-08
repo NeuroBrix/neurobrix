@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **A kernel served through a generator alias says so in the debug log, not on the terminal**: the line
+  appeared once per kernel at default verbosity (6 to 9 lines on a plain run under a macOS 14 wheel); it is a
+  developer line (`-v` / `NBX_LOG=debug`), and the plan's explanation still counts the kernels served that way.
 - **An out-of-tree backend's certificate identity no longer includes its Python binding**: the CPython extension module
   tagged for one Python (`*.cpython-312-*.so`, `*.cp312-*.pyd`) is built per Python and generates no code, so the Metal wheels for Python
   3.10-3.13 share one identity when their code generator is the same bytes. Proven on 235-236 kernels per wheel set: the
