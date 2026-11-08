@@ -206,7 +206,7 @@ def test_after_the_fp32_fallback_the_reserve_and_the_plan_read_fp32(monkeypatch)
     s._try_fp32_fallback = fall_back
     s._estimate_kv_cache_bytes = lambda c, d: (dtypes.append(("estimate", fell["back"], d)), real_est(c, d))[1]
     s._kv_min_bytes = lambda c, d: (dtypes.append(("minimum", fell["back"], d)), real_min(c, d))[1]
-    s._compute_kv_cache_plan = lambda c, d, r: (dtypes.append(("plan", fell["back"], d)), real_plan(c, d, r))[1]
+    s._compute_kv_cache_plan = lambda c, d, r, **k: (dtypes.append(("plan", fell["back"], d)), real_plan(c, d, r, **k))[1]
     s.solve_smart(NBXContainer.load(str(container_root(LLMS[0]))), profile(APPLE_M4_PRO),
                   InputConfig(batch_size=1), mode="triton")
     assert fell["back"], "the fallback was never reached"
