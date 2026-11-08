@@ -29,6 +29,7 @@ import ast
 import datetime as _dt
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Mapping, Optional, Tuple
 
@@ -430,6 +431,13 @@ def _out_of_tree_backend_hash() -> Optional[str]:
     return result
 
 
+#: a CPython extension module (`x.cpython-312-darwin.so`, `x.abi3.so`, `x.pyd`): the backend's Python binding, built per
+#: Python, not its code generator. The macOS 14 Metal wheels (2026-11-08): four Pythons, one byte-identical plugin, four
+#: identities through `metal_native.cpython-31x-darwin.so`; 235-236 kernels compiled under each gave byte-identical
+#: .ttir/.ttgir/.msl/.metallib to the published build's (campagnes/2026_11_08_metal_wheels_macos14/proof).
+_CPYTHON_BINDING = re.compile(r"\.(cpython-[^.]+|abi3)\.so$|\.pyd$")
+
+
 def _backend_content_hash(backend) -> str:
     """The out-of-tree backend's identity from its CONTENT: the bytes of every source file and shared library in its
     package (and of its plugin library, wherever it lies) and the code-generation gates it declares (`CODEGEN_ENV`,
@@ -445,7 +453,7 @@ def _backend_content_hash(backend) -> str:
     for name in getattr(type(backend), "CODEGEN_ENV", ()) or ():
         h.update(f"{name}={name in os.environ}:{os.environ.get(name, '')}".encode())
     files = sorted(f for f in pkg.rglob("*") if f.is_file() and f.suffix in (".py", ".so", ".dylib", ".pyd", ".dll")
-                   and "__pycache__" not in f.parts) if pkg.is_dir() else []
+                   and "__pycache__" not in f.parts and not _CPYTHON_BINDING.search(f.name)) if pkg.is_dir() else []
     plugin = getattr(mod, "PLUGIN_LIBRARY", None)
     if plugin is not None and Path(plugin).is_file() and Path(plugin) not in files:
         files.append(Path(plugin))
