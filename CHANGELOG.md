@@ -122,6 +122,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **No Triton warning on a first run**: the masked-fill kernel gave `tl.where` a uint8 condition, and Triton warned
   that this is deprecated at the first compile of a language model; the condition is now a boolean (the compiled code
   is identical).
+- **Cold serving / `run --turns`: a model released between two requests computes the second as it did the first**:
+  compiled again after its release, a component's Triton graph was the one its first compile had already rewritten,
+  so its measured precision contract no longer applied and it ran in fp32 activations; DeepSeek-Coder-V2-Lite's
+  second `--turns` turn stopped naming a missing certified setting. The second compile now reads the graph the
+  first read, and a kept compile binds again exactly the constants the first load held in fp32.
 - **Cold serving / `run --turns`: a lazy plan's second request no longer runs on the first's released memory**: a
   text model whose plan loads it on demand (a lazy or streamed plan) ended each request without releasing it through
   its plan, so the plan kept the previous request's load. Every later request pinned a second copy of the weights

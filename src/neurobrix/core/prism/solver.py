@@ -5133,7 +5133,7 @@ class PrismSolver:
             return None, "one chunk per turn: the plan names no decoder card to price a chunk on"
         cards = set()
         for d in kv_devices:
-            if not str(d).startswith("cuda") and ":" not in str(d):
+            if ":" not in str(d):
                 return None, f"one chunk per turn: the decoder's cache lives on {d}, which certifies no kernel time"
             idx = int(str(d).rsplit(":", 1)[1])
             spec = next((x for x in profile.devices if int(x.index) == idx), None)

@@ -294,6 +294,25 @@ def _held_line(loaded, device) -> str:
     return f"{n} tensors, {nbytes / 2**20:.0f} MB, {on_host} on the host{alloc}"
 
 
+
+def _graph_structure_copy(dag: dict) -> dict:
+    """A copy of a graph whose structure can be rewritten without touching the original: its ops whole, its tensor
+    records field by field (an embedded constant's values, `constant_data`, read-only, are shared), every other list
+    or table one level deep; anything else (a value the engine attached) is shared."""
+    import copy
+    out = {}
+    for k, v in (dag or {}).items():
+        if k == "ops":
+            out[k] = copy.deepcopy(v)
+        elif k == "tensors" and isinstance(v, dict):
+            out[k] = {t: ({f: (x if f == "constant_data" else copy.deepcopy(x)) for f, x in e.items()}
+                          if isinstance(e, dict) else e) for t, e in v.items()}
+        elif isinstance(v, (list, dict)):
+            out[k] = type(v)(v)
+        else:
+            out[k] = v
+    return out
+
 class GraphExecutor:
     """
     Execute TensorDAG directly.
@@ -2535,7 +2554,7 @@ class GraphExecutor:
         # both native and triton paths run them. See shared post-dispatch
         # block above.
 
-    def _bind_fp32_constants(self, narrow=None, islands=None) -> None:
+    def _bind_fp32_constants(self, narrow=None, islands=None, names=None) -> None:
         """A constant whose every consumer computes in fp32 (an AMP_FP32 op the
         engine wraps fp32-internal, or a contract island; none narrowed) is bound
         in fp32 ONCE here, after the keys are reconciled — the fp32 wrap then
@@ -2551,10 +2570,13 @@ class GraphExecutor:
         from neurobrix.triton.dtype import fp32_constant_names
         from nbxtensor.tensor import NBXTensor
         from nbxtensor.dtype.nbx_dtype import NBXDtype
-        names = fp32_constant_names(
-            self._dag,
-            narrow if narrow is not None else getattr(self, "_narrow_op_uids", ()),
-            islands if islands is not None else getattr(self, "_fp32_op_uids", ()))
+        first = names is None
+        if first:
+            names = fp32_constant_names(
+                self._dag,
+                narrow if narrow is not None else getattr(self, "_narrow_op_uids", ()),
+                islands if islands is not None else getattr(self, "_fp32_op_uids", ()))
+        bound = set()
         # The dict may still carry the loader's keys (the reconcile renames them
         # later, at the one place that always did): a graph name is resolved to
         # its key by exact match, else by the unique key ending with it — the
@@ -2578,6 +2600,9 @@ class GraphExecutor:
                     and getattr(w, "_device", "cuda") == "cuda":
                 self._weights[key] = w.to(NBXDtype.float32)
                 n += 1
+                bound.add(name)
+        if first:
+            self._fp32_bound_names = frozenset(bound)   # a reload binds exactly these again (`_run_triton_compiled`)
         self._fp32_constants_bound = True
         if n:
             _log.debug(f"   [Triton] {n} constant(s) bound in fp32 once: their consumers compute in fp32")
@@ -3355,13 +3380,16 @@ class GraphExecutor:
         """
         self._ensure_triton_compiled(device_idx)
         # A component released and loaded again keeps its compiled sequence (`cleanup`), so the compile above does not
-        # run again: its fp32 constants are bound here, under the compile's own contract — the reload's weights arrive at
-        # the loader's width, and a release-and-reload must give the dtypes the first load had (one plan, one
-        # DtypeEngine decision). Without it every request after the first ran those constants at fp16 (TinyLlama's
-        # block.0.input_norm.weight on a second `run --turns` turn, whose replay plan had frozen the fp32 copy, 2026-11-08).
-        if not self._fp32_constants_bound and getattr(self, "_fp32_bind_contract", None) is not None:
-            _narrow_c, _pins_c = self._fp32_bind_contract
-            self._bind_fp32_constants(narrow=_narrow_c, islands=_pins_c)
+        # run again: the constants the first load bound in fp32 are bound here again, exactly that set — the reload's
+        # weights arrive at the loader's width, and a release-and-reload must give the dtypes the first load had (one
+        # plan, one DtypeEngine decision). Without it every request after the first ran those constants at fp16
+        # (TinyLlama's block.0.input_norm.weight on a second `run --turns` turn, whose replay plan had frozen the fp32
+        # copy); re-derived from the contract instead, the set differed from the first load's (DeepSeek-Coder-V2-Lite's
+        # block.0.input_norm.weight fp32 where the first load ran it fp16: a certified-only miss on turn 2, 2026-11-08).
+        if not self._fp32_constants_bound:
+            _first_bound = getattr(self, "_fp32_bound_names", None)
+            if _first_bound is not None:
+                self._bind_fp32_constants(names=_first_bound)
         # Re-bind weights EVERY run — exact mirror of
         # _execute_compiled_graph, which rebuilds its weight_map and calls
         # bind_weights per execution (R30). The triton bind previously
@@ -4235,6 +4263,20 @@ class GraphExecutor:
         DeviceAllocator.set_device(device_idx)
         DeviceAllocator.ensure_triton_device(device_idx)
 
+        # The sequence's compile rewrites the graph it is given in place (its fusions, eliminations and promotions:
+        # DeepSeek-Coder-V2-Lite's 2678 ops became 2111). A component whose release dropped its sequence compiles
+        # again, and must compile what the first compile read: the graph is put back as it was before the first one,
+        # so the precision contract resolves on the graph its calibration was measured on and every pass meets the
+        # graph it was written for. Compiled again on the rewritten graph, the record's signature no longer matched
+        # and the component ran the conservative contract (fp32 activations): a certified-only miss on the second
+        # `run --turns` turn of DeepSeek-Coder-V2-Lite, 2026-11-08.
+        if getattr(self, "_dag_before_triton", None) is None:
+            self._dag_before_triton = _graph_structure_copy(self._dag)
+        else:
+            _again = _graph_structure_copy(self._dag_before_triton)
+            self._dag.clear()
+            self._dag.update(_again)
+
         # Persistent tids (e.g., hidden_states for image-AR LLMs where the
         # graph output is text logits) must be added to the dag's declared
         # outputs BEFORE compile(). TritonSequence's liveness analysis uses
@@ -4276,7 +4318,6 @@ class GraphExecutor:
         # one place that always did it, renamed the dict under code that still
         # reads it by the loader's keys (Real-ESRGAN's output turned to noise,
         # three rows crashed at their first decode op, 2026-09-08 00:45).
-        self._fp32_bind_contract = (_narrow, _pins)   # every reload binds its constants under the same contract
         self._bind_fp32_constants(narrow=_narrow, islands=_pins)
         self._triton_seq.bind_weights(self._weights)
 

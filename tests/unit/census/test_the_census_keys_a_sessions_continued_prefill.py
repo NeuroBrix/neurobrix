@@ -33,7 +33,10 @@ AT128 = ("nbxtensor.ops.softmax.softmax_forward_kernel", "(4096, 256, False, 'fp
 AT64 = ("nbxtensor.ops.softmax.softmax_forward_kernel", "(2048, 256, False, 'fp32', 'fp32')")
 
 
-def _derive(monkeypatch, chunk=None):
+_UNPLANNED = object()
+
+
+def _derive(monkeypatch, chunk=_UNPLANNED):
     sys.path.insert(0, str(REPO / "tools"))
     import certified_census as CC
     import derived_census as D
@@ -44,7 +47,9 @@ def _derive(monkeypatch, chunk=None):
         load_profile(HW)
     except Exception as e:                  # a machine without this rack's profile
         pytest.skip(f"profile {HW}: {e}")
-    if chunk is not None:
+    # chunk=None: the plan as before Prism chose a chunk (Prism now plans one from the certified times, so the
+    # candidates' case is the plan with its chunk cleared); an int: that chunk planned; unset: Prism's own plan.
+    if chunk is not _UNPLANNED:
         real = D.plan_record
 
         def with_chunk(*a, **k):
@@ -60,7 +65,7 @@ def _derive(monkeypatch, chunk=None):
 
 
 def test_the_candidates_continuation_is_derived_and_recorded(monkeypatch):
-    keys, rec = _derive(monkeypatch)
+    keys, rec = _derive(monkeypatch, chunk=None)
     assert AT64 in keys and AT128 in keys, "the candidates' continuation over 192 whole-page keys is not derived"
     assert TURN2 not in keys, "a 28-row one-chunk turn is keyed: the crossed grid is derived after all"
     assert rec is not None and rec["page_tokens"] == 64 and rec["reach"] == 2048, rec and rec["page_tokens"]
