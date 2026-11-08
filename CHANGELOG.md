@@ -10,14 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **Attribution**: author, maintainer and copyright holder Hocine Benkelaya (contact@neurobrix.es); a NOTICE file
   ships beside the LICENSE (supported and funded by Neural Network Holding Ltd, commercial distribution by WizWorks OÜ).
+- **The PyTorch engine's memory reserve on a device whose runtime growth is measured is that measure**: where the
+  compiled engine's growth during a run is a fact (measured for the model, or declared by the device's vendor file), it
+  is the one reserve the plan keeps — the fixed private reserve is not taken a second time, and a component may use the
+  whole budget instead of a fixed 92 % of it. Devices without the fact are planned as before.
 
 ### Fixed
 - **A mixture-of-experts model on an Apple GPU is no longer planned on a free expert miss**: Prism priced a routed
   expert the store's cache missed as costing nothing on unified memory, so it chose an expert store estimated at 18 s for
   DeepSeek-Coder-V2-Lite where the run took more than 40 minutes. A miss is now priced as the page-in it is, at the
   device's measured cold load rate.
-
-### Fixed
 - **A language model's prompt is priced at its own length**: Prism planned a text request's prefill at the cache's
   prompt margin (128 tokens) whatever the prompt, so a long prompt was under-priced (TinyLlama: ~0.01 GiB planned for
   a 400-token prompt where the run held 652 MB) and a short one over-priced. The prompt is now counted by the flow's
