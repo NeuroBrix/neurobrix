@@ -123,6 +123,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **No Triton warning on a first run**: the masked-fill kernel gave `tl.where` a uint8 condition, and Triton warned
   that this is deprecated at the first compile of a language model; the condition is now a boolean (the compiled code
   is identical).
+- **Cold serving / `run --turns`: the fp32 constants came back in half precision after a reload** (Triton engine). A
+  component whose weights are released after a request and loaded again — every request after the first on a
+  cold-serving plan (a lazy or streamed plan in `neurobrix serve`), each turn after the first of `run --turns`, any
+  second request on one executor — got the constants its plan binds in fp32 (normalisation weights) back in half
+  precision. The engine then cast them to fp32 at every call (the same numbers, measured identical in first-step
+  logits and tokens, but slower), and a replayed decode stopped on "replay slot mismatch" (TinyLlama, the second turn
+  of `run --turns`). A reloaded component now binds them in fp32 again, under the plan's own precision contract.
 - **The kernel census leaves no lock file in the package**: every census table write left an empty
   `<table>.jsonl.lock` beside the table inside the installed package; the table's write lock is now taken on its
   directory and creates no file.

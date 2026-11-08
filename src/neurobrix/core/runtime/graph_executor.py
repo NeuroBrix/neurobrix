@@ -3354,6 +3354,14 @@ class GraphExecutor:
         it at the default.
         """
         self._ensure_triton_compiled(device_idx)
+        # A component released and loaded again keeps its compiled sequence (`cleanup`), so the compile above does not
+        # run again: its fp32 constants are bound here, under the compile's own contract — the reload's weights arrive at
+        # the loader's width, and a release-and-reload must give the dtypes the first load had (one plan, one
+        # DtypeEngine decision). Without it every request after the first ran those constants at fp16 (TinyLlama's
+        # block.0.input_norm.weight on a second `run --turns` turn, whose replay plan had frozen the fp32 copy, 2026-11-08).
+        if not self._fp32_constants_bound and getattr(self, "_fp32_bind_contract", None) is not None:
+            _narrow_c, _pins_c = self._fp32_bind_contract
+            self._bind_fp32_constants(narrow=_narrow_c, islands=_pins_c)
         # Re-bind weights EVERY run — exact mirror of
         # _execute_compiled_graph, which rebuilds its weight_map and calls
         # bind_weights per execution (R30). The triton bind previously
@@ -4268,6 +4276,7 @@ class GraphExecutor:
         # one place that always did it, renamed the dict under code that still
         # reads it by the loader's keys (Real-ESRGAN's output turned to noise,
         # three rows crashed at their first decode op, 2026-09-08 00:45).
+        self._fp32_bind_contract = (_narrow, _pins)   # every reload binds its constants under the same contract
         self._bind_fp32_constants(narrow=_narrow, islands=_pins)
         self._triton_seq.bind_weights(self._weights)
 
