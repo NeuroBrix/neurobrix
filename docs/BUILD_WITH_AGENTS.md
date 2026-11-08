@@ -5,12 +5,13 @@ surface an application should use to put NeuroBrix models inside a product, and 
 
 ## The surface
 
-Today the application surface of NeuroBrix is its **command line**: one command per task, the same for every model family,
-the result written to a file. An application calls it as a subprocess and reads the file. There is no per-model pipeline to
+The application surface of NeuroBrix is its **command line**: one command per task, the same for every model family, the
+result written to a file. An application calls it as a subprocess and reads the file. There is no per-model pipeline to
 write, no PyTorch to install, and no CUDA or framework version to match.
 
-A Python API and a local server with a JSON interface are on the roadmap. Until they exist, use the commands below; they are
-the stable contract.
+Since 0.6.3, a model kept loaded by `neurobrix serve --http` also answers the **OpenAI API** over HTTP (below), so an
+application already written against an OpenAI client can point it at the local daemon. An in-process Python API is on the
+roadmap; until it exists, use the commands and the HTTP API below; they are the stable contract.
 
 ## Setup (once per machine)
 
@@ -29,12 +30,15 @@ and stop on `"ok": false`, showing the user the problems it lists.
 neurobrix hub --json                                # models available on the hub (neurobrix.es/models)
 neurobrix import TinyLlama/TinyLlama-1.1B-Chat-v1.0 # download + unpack; the hub identifier, as listed by `hub`
 neurobrix list --json                               # installed models: name, family, size, license
-neurobrix remove TinyLlama-1.1B-Chat-v1.0           # free the disk
+neurobrix remove TinyLlama/TinyLlama-1.1B-Chat-v1.0 # free the disk
 ```
 
-Two names exist for a model: the **hub identifier** you pass to `import` (`TinyLlama/TinyLlama-1.1B-Chat-v1.0`) and the
-**model name** every other command takes (`TinyLlama-1.1B-Chat-v1.0`, the `name` field of `list --json`). Some models ask
-for their license to be accepted: add `--accept-license` to `import` once the user has agreed to it.
+A model has **one name**, its hub name (`TinyLlama/TinyLlama-1.1B-Chat-v1.0`): `import` records it beside the installed
+model, and `--model`, `remove`, `list` and the HTTP API's `model` field all take it. `list --json` (schema 2) gives it as
+`name`, and the installed directory as `entry`. The short directory name is refused for a model whose name is recorded,
+naming the hub name to use. A model installed before 0.6.3 has no record yet: run `neurobrix import <org>/<name>` once for it
+(it downloads nothing). Some models ask for their license to be accepted: add `--accept-license` to `import` once the user
+has agreed to it.
 
 ## One command per task
 
@@ -51,7 +55,8 @@ The family is read from the model, so `run` takes the inputs that family needs a
 | video generation | `neurobrix run --model zai-org/CogVideoX-2b --prompt "..." --num-frames 17 --seed 42 --output clip.mp4` | MP4 |
 | upscaling | `neurobrix upscale --model xinntao/Real-ESRGAN-RealESRGAN_x4plus --input photo.png --output photo_x4.png` | PNG |
 
-`neurobrix run --help` lists every option (`--seed`, `--temperature`, `--steps`, `--height`, `--width`, `--system`, ...).
+`neurobrix run --help` lists every option (`--seed`, `--temperature`, `--steps`, `--height`, `--width`, `--system`, ...);
+the [CLI reference](reference/cli.md) is generated from the same parser.
 The exit code is 0 on success and non-zero on failure, with the reason on the terminal.
 
 ## Keeping a model warm
@@ -76,11 +81,41 @@ What an agent driving a daemon should know:
 - **Text answers from the daemon are printed, not written to `--output`.** On the daemon path, the daemon writes image,
   video and audio results to `--output`, and `run` prints text on stdout; read stdout there.
 - **One inference at a time.** A request that arrives while another runs waits for it.
-- **The conversation lives in the daemon.** `chat` keeps one shared history per daemon and re-sends all of it to the
-  model at every turn; `/new` (the `new_chat` method) clears it. For stateless calls use `run`.
+- **The conversation lives in the daemon, and so does its KV cache.** `chat` keeps one shared history per daemon; each
+  turn prefills only the tokens the cache does not already hold. A turn that would pass the session's ceiling (the plan's
+  `session_reach`, shown by `run --explain-plan`) is refused by name; nothing is summarised or dropped. `/new` (the
+  `new_chat` method) clears it. For stateless calls use `run`; to test a multi-turn exchange without a daemon,
+  `neurobrix run --turns turns.json` plays a JSON list of user messages as one session.
 - **The idle timeout** (`--timeout`, 1800 s by default) stops a daemon that has no open connection.
 - **Programs can talk to the socket directly** (length-prefixed JSON, with operation ids, streaming and cancellation):
   [the daemon wire protocol](reference/wire-protocol.md).
+
+## The OpenAI-compatible API
+
+```bash
+neurobrix serve --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --http     # http://127.0.0.1:8765/v1
+```
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://127.0.0.1:8765/v1", api_key="unused")
+reply = client.chat.completions.create(model="TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+                                       messages=[{"role": "user", "content": "What is a KV cache?"}])
+print(reply.choices[0].message.content)
+```
+
+- **Same daemon, same queue.** The HTTP API serves the model the daemon loaded, on the same inference thread as `chat` and
+  `run`. The `model` field must be that model's one name (`GET /v1/models` gives it); another name answers 404.
+- **Endpoints follow the family**: `/v1/chat/completions` and `/v1/completions` for language models (tool calls parsed
+  from the model's chat template, a thinking model's reasoning in `reasoning_content`, streaming as Server-Sent Events),
+  `/v1/images/generations`, `/v1/audio/speech`, `/v1/audio/transcriptions`. An endpoint the loaded family does not serve
+  answers 409 naming why.
+- **Unsupported parameters are refused, not ignored**: `stop`, `logprobs`, `n` > 1, a forced `tool_choice`, ... answer 400
+  naming the parameter. Too many waiting requests answer 429. Handle both; do not retry a 400 unchanged.
+- **Loopback by default.** Another address needs `--api-key-file`; requests then send `Authorization: Bearer <key>`.
+
+Every endpoint and setting: [Serving and chat](serving.md#openai-compatible-http-api).
 
 ## Rules for agents
 
@@ -88,6 +123,7 @@ What an agent driving a daemon should know:
    application: one `neurobrix run` per task.
 2. **Run `neurobrix doctor --json` first** and stop on `"ok": false`.
 3. **Use `list --json` and `hub --json` to discover models**; never hard-code a size or a family the engine can report.
+   Name a model by its hub name (`<org>/<name>`) everywhere.
 4. **Read results from `--output`.** Use a temporary directory per call, and check the exit code.
 5. **The first `import` downloads gigabytes.** Tell the user before calling it, and do it once (setup), not per request.
 6. **Same code on Linux, Windows and macOS.** The commands are the same everywhere; only `install-metal` is macOS-specific.
@@ -95,7 +131,7 @@ What an agent driving a daemon should know:
 ## Example: dictate (voice recording → transcript → summary)
 
 A complete application, written by Claude Code from an empty folder with only this repository and PyPI as sources, and run on
-an Apple M4 Pro with NeuroBrix 0.6.2 installed from PyPI:
+an Apple M4 Pro with NeuroBrix 0.6.2 installed from PyPI (its model names written here as 0.6.3's one name, the hub name):
 
 ```python
 #!/usr/bin/env python3
@@ -106,8 +142,8 @@ an Apple M4 Pro with NeuroBrix 0.6.2 installed from PyPI:
 import subprocess, sys, tempfile
 from pathlib import Path
 
-STT_MODEL = "whisper-large-v3-turbo"
-LLM_MODEL = "TinyLlama-1.1B-Chat-v1.0"
+STT_MODEL = "openai/whisper-large-v3-turbo"
+LLM_MODEL = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
 
 
 def neurobrix(*args: str) -> str:
