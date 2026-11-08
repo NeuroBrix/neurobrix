@@ -38,9 +38,14 @@ PYTHONPATH=src python -m neurobrix <command> [options]
 
 ## Model Serving (Recommended Workflow)
 
+A daemon loads one model once and answers requests over a local socket. The full description (lifecycle, warm and
+cold serving per Prism strategy, operations, cancellation, the conversation and its KV cache) is
+[Serving and chat](../serving.md); the wire format is [the daemon wire protocol](wire-protocol.md).
+
 ### serve
 
-Start the serving daemon. Loads model weights into VRAM once and keeps them warm for instant inference.
+Start the serving daemon. It loads the model once and keeps it loaded; on a warm plan the weights stay on the device
+between requests.
 
 ```bash
 neurobrix serve --model <name> [--hardware <profile>] [options]
@@ -49,26 +54,33 @@ neurobrix serve --model <name> [--hardware <profile>] [options]
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--model` | Model name (required) | — |
-| `--hardware` | Hardware profile ID (optional — auto-detects if omitted) | auto-detect |
-| `--timeout` | Idle timeout in seconds | 1800 |
-| `--foreground` | Run in foreground (for debugging) | false |
-| `--compiled` | PyTorch fused graph (explicit default) | true |
+| `--hardware` | Hardware profile ID | this machine's default profile |
+| `--timeout` | Idle timeout in seconds: the daemon exits when no connection is open and none arrives for this long | 1800 |
+| `--foreground` | Serve in this process (blocks the terminal, for debugging) | false |
+| `--compiled` | PyTorch fused graph | default where PyTorch is installed |
 | `--sequential` | PyTorch op-by-op (debug) | false |
-| `--triton` | NeuroBrix Triton kernels (compiled) | false |
+| `--triton` | NeuroBrix Triton kernels (compiled) | default where PyTorch is not installed |
 | `--triton-sequential` | Triton kernels op-by-op (debug) | false |
+| `--ready-fd` | POSIX: inherited pipe fd that receives the ready record (one JSON line), then is closed | — |
+| `--ready-file` | File the ready record is written to, whole, once the daemon accepts | — |
+
+At most one engine flag. Without `--foreground`, `serve` returns once the model is loaded and prints
+`[Serve] Model loaded — <model> (<family>, warm serving)` (or `cold serving`), or `[Serve] Failed: <error>` with exit
+code 1. It refuses to start (exit code 1) when a daemon is already running. `NBX_SOCKET_PATH` names an instance, so
+several daemons can run side by side.
 
 Examples:
 ```bash
 # Auto-detect hardware
-neurobrix serve --model deepseek-moe-16b-chat
+neurobrix serve --model TinyLlama-1.1B-Chat-v1.0
 
-# Target a specific hardware profile
-neurobrix serve --model deepseek-moe-16b-chat --hardware c4140-4xv100-custom-nvlink
+# Target a specific hardware profile and the Triton engine, one hour of idle time
+neurobrix serve --model TinyLlama-1.1B-Chat-v1.0 --hardware v100-32g --triton --timeout 3600
 ```
 
 ### chat
 
-Connect to a running daemon for interactive text generation.
+Connect to a running daemon for interactive multi-turn chat. The daemon's model must be of the `llm` family.
 
 ```bash
 neurobrix chat [options]
@@ -77,27 +89,44 @@ neurobrix chat [options]
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--max-tokens` | Maximum tokens per response | model default |
-| `--temperature` | Sampling temperature (0 = greedy) | model default |
-| `--repetition-penalty` | Repetition penalty (1.0 = none) | 1.0 |
+| `--temperature` | Sampling temperature | model default |
+| `--repetition-penalty` | Repetition penalty (1.0 = none) | model default |
+| `--agent` | Agent REPL: each input is a task the model completes with tools inside the workdir jail | false |
+| `--workdir` | Agent workdir jail | current directory |
+| `--max-turns` | Agent loop turn bound | family default |
+| `--bash-timeout` | Agent bash timeout in seconds | family default |
+| `--allow-network` | Allow network inside the agent sandbox | false |
+| `--approve-all` | Confirm every agent tool execution interactively | false |
+| `--yolo` | No confirmations (jail still enforced) | false |
+| `--transcript-dir` | Agent transcript directory | `<workdir>/.nbx_agent/<ts>` |
 
 **In-session commands:**
 
 | Command | Description |
 |---------|-------------|
-| `/new` | Start a new conversation (clears KV cache) |
-| `/context` | Show token usage and cache state |
-| `/status` | Show engine status and memory |
-| `/quit` (or `/exit`, `/q`) | Exit chat |
+| `/new` | Start a new conversation (clears the daemon's message history) |
+| `/context` | Messages, estimated tokens and usage (against the container's `max_length`, else 4096) |
+| `/status` | Model, family, engine mode and device memory in use |
+| `/quit` (or `/exit`, `/q`) | Exit chat (the daemon keeps running) |
+
+Each answer is printed whole (not streamed). Every turn re-sends the whole conversation to the model (no KV cache is
+kept between turns); when the conversation outgrows the plan's KV cache, older turns are summarized and chat prints
+`[Context compressed — older turns summarized]`. See [Chat and the KV cache](../serving.md#chat-and-the-kv-cache-today).
 
 ### stop
 
-Stop the serving daemon and free GPU memory.
+Stop the serving daemon, unload the weights and free device memory.
 
 ```bash
 neurobrix stop
 ```
 
-Uses a graceful shutdown sequence: socket request → SIGTERM → SIGKILL (escalation with timeouts).
+No flags. Escalates: a `shutdown` request on the socket (then up to 5 s for the exit) → `SIGTERM` (3 s) → `SIGKILL`
+(`taskkill /F` on Windows), then removes the daemon's socket and pid files. With no daemon running it removes leftover
+files and exits 0.
+
+While a daemon runs, `neurobrix run` with the same model (or with `--model` omitted) is answered by the daemon; a
+`run` of another model is refused until the daemon is stopped.
 
 ---
 

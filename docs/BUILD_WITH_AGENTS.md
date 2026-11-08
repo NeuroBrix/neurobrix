@@ -57,13 +57,30 @@ The exit code is 0 on success and non-zero on failure, with the reason on the te
 ## Keeping a model warm
 
 Each `run` loads the model, runs it and exits. For an application that calls the same model many times, `serve` keeps it
-loaded:
+loaded in a background daemon:
 
 ```bash
-neurobrix serve --model TinyLlama-1.1B-Chat-v1.0     # loads the model and keeps it in memory
-neurobrix chat                                      # talk to it
+neurobrix serve --model TinyLlama-1.1B-Chat-v1.0     # returns once the model is loaded; exit code 1 on failure
+neurobrix run --prompt "..."                        # answered by the daemon: --model may be omitted
+neurobrix chat                                      # interactive multi-turn chat (llm family)
 neurobrix stop                                      # unload it and free the memory
 ```
+
+What an agent driving a daemon should know:
+
+- **Check the start line.** `serve` prints `(<family>, warm serving)` or `(<family>, cold serving)`. Warm: the weights
+  stay on the device between requests. Cold: the plan Prism chose for this machine loads them per request, so the
+  daemon saves the setup but not the loading. See [Serving and chat](serving.md#warm-and-cold-serving).
+- **One daemon, one model.** While it runs, a `run` of another model is refused; `neurobrix stop` first, or give each
+  daemon its own instance with `NBX_SOCKET_PATH=<path>` (the same value for `serve` and its clients).
+- **Text answers from the daemon are printed, not written to `--output`.** On the daemon path, the daemon writes image,
+  video and audio results to `--output`, and `run` prints text on stdout; read stdout there.
+- **One inference at a time.** A request that arrives while another runs waits for it.
+- **The conversation lives in the daemon.** `chat` keeps one shared history per daemon and re-sends all of it to the
+  model at every turn; `/new` (the `new_chat` method) clears it. For stateless calls use `run`.
+- **The idle timeout** (`--timeout`, 1800 s by default) stops a daemon that has no open connection.
+- **Programs can talk to the socket directly** (length-prefixed JSON, with operation ids, streaming and cancellation):
+  [the daemon wire protocol](reference/wire-protocol.md).
 
 ## Rules for agents
 
