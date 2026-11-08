@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **A prompt longer than the release gate's no longer tunes kernels at its first run**: the kernel census keyed a
+  language model's prompt lengths only up to the cache planned for the gate request (TinyLlama: 640 of its 2 048
+  positions), so a longer prompt met kernel settings the certified directory did not hold. The plan now states how far a
+  session can reach on the device (`--explain-plan`: `session_reach`, within the model's declared window) and the census
+  keys every prompt length from one token up to it. A saved plan also keeps its KV cache's exact size and first request
+  size when it is read back.
+
+### Fixed
 - **A language model's prompt is priced at its own length**: Prism planned a text request's prefill at the cache's
   prompt margin (128 tokens) whatever the prompt, so a long prompt was under-priced (TinyLlama: ~0.01 GiB planned for
   a 400-token prompt where the run held 652 MB) and a short one over-priced. The prompt is now counted by the flow's

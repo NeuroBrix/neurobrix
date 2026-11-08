@@ -2123,16 +2123,21 @@ def _vlm_sites(model, topo, defaults, plan, image_path, prompt, max_tokens_req, 
 
 
 def _cache_reach(model, lm, plan, L0):
-    """The longest context the planned cache can hold: `max_cache_len` of the plan's KV cache (Prism sized
-    it for this request and this card class: the prompt's room and the decode's); the census keys every
-    prompt length up to it — a request's prompt is any length, not the gate's (the Mac, 2026-10-19 02:04:
-    TinyLlama at a 31-token prompt missed matmul M_BUCKET=31 under certified-only, the census having derived
-    the gate prompt's bucket alone). Never below the gate request's own context `L0`."""
+    """The longest context a request can reach on this class: the plan's `session_reach` — what a serving session
+    holds in the room this plan sized its cache from, within the decoder's declared window (Prism,
+    `_compute_kv_cache_plan`) — and, for a decoder whose state declares no window, the planned run cache
+    (`max_cache_len`), said. The census keys every prompt length up to it: a request's prompt is any length, not
+    the gate's (the Mac, 2026-10-19: TinyLlama at 31 tokens missed M_BUCKET=31; the Dell, 2026-11-08: at ~530 and
+    ~900 tokens it missed M_BUCKET=672 / 1152 — the reach was the gate request's 640-position cache, not the
+    2 048 a session holds). Never below the gate request's own context `L0`."""
     kv = plan.get("kv_cache") or {}
-    reach = int(kv.get("max_cache_len") or 0)
+    reach = int(kv.get("session_reach") or 0) or int(kv.get("max_cache_len") or 0)
     if reach <= 0:
-        raise SystemExit(f"{model}: the plan's KV cache for {lm} names no max_cache_len — the census cannot "
-                         f"bound the prompt lengths it keys")
+        raise SystemExit(f"{model}: the plan's KV cache for {lm} names neither a session reach nor a max_cache_len — "
+                         f"the census cannot bound the prompt lengths it keys")
+    if not kv.get("session_reach"):
+        print(f"[census] {model}: {lm}'s KV state declares no window (no session reach): prompt lengths keyed up to "
+              f"the planned run cache {reach}", file=sys.stderr)
     return max(int(L0), reach)
 
 
@@ -2156,7 +2161,8 @@ def _decoder_sites(model, lm, plan, L0, mt, feed, batch=1):
     def decode(n, lm=lm, kv=kv, batch=batch):
         return [(lm, {"__decode__": {"len": n, "dtype": kv.get("dtype"), "batch": batch,
                                      "heads": kv.get("num_kv_heads")}})]
-    sites = [(f"{lm} prefill (prompt lengths)", L0, max(L0, reach - 1), prefill)]
+    # from ONE token: a prompt shorter than the gate's is a request too (a chat template's shortest turn)
+    sites = [(f"{lm} prefill (prompt lengths)", 1, max(L0, reach - 1), prefill)]
     if reach > L0:
         sites.append((f"{lm} decode KV length", L0 + 1, reach, decode))
     return sites
