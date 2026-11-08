@@ -54,6 +54,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import logging
+_log = logging.getLogger(__name__)
 
 
 # --- scheduler state <-> npz, without pickle --------------------------------
@@ -192,9 +194,9 @@ class RenderCheckpoint:
             with np.load(self.path, allow_pickle=False) as data:
                 stored = str(data["fingerprint"])
                 if stored != self.fingerprint:
-                    print(f"   [Checkpoint] ignoring {self.path.name}: it belongs "
-                          f"to a different run ({stored} != {self.fingerprint}). "
-                          f"Starting from step 0.")
+                    _log.debug(f"   [Checkpoint] ignoring {self.path.name}: it belongs "
+                               f"to a different run ({stored} != {self.fingerprint}). "
+                               f"Starting from step 0.")
                     return None
                 step = int(data["step"])
                 latent = data["latent"]
@@ -208,11 +210,11 @@ class RenderCheckpoint:
             # one that was missed to abort a render that is otherwise fine.
             # (BadZipFile is how it actually failed first; the test found it.)
 
-            print(f"   [Checkpoint] {self.path.name} is unreadable ({exc}); "
-                  f"starting from step 0.")
+            _log.debug(f"   [Checkpoint] {self.path.name} is unreadable ({exc}); "
+                       f"starting from step 0.")
             return None
 
-        print(f"   [Checkpoint] resuming at step {step + 1} from {self.path}")
+        _log.debug(f"   [Checkpoint] resuming at step {step + 1} from {self.path}")
         return step + 1, latent, sched
 
     # --- write --------------------------------------------------------------
@@ -258,7 +260,7 @@ class RenderCheckpoint:
                          sched=np.str_(blob), latent=latent, **arrays)
             os.replace(tmp, self.path)
         except (OSError, ValueError) as exc:
-            print(f"   [Checkpoint] could not write step {step_idx}: {exc}")
+            _log.debug(f"   [Checkpoint] could not write step {step_idx}: {exc}")
             try:
                 tmp.unlink(missing_ok=True)
             except OSError:

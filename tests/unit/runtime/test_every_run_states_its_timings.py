@@ -93,8 +93,8 @@ def _cmd_run_calls():
 
 def test_the_run_command_prints_the_line_after_the_request():
     calls = _cmd_run_calls()
-    printed = [c for c in calls if c.startswith("print(run_timings.format_line(run_timings.measured())")]
-    assert printed, "cmd_run must print the [Timings] line, for every engine, after the request"
+    printed = [c for c in calls if c.startswith("log.debug(run_timings.format_line(run_timings.measured())")]
+    assert printed, "cmd_run must say the [Timings] line (a debug line: the gate runs with NBX_LOG=debug), for every engine, after the request"
     for hook in ("run_timings.open_container()", "run_timings.begin_request()", "run_timings.end_request()"):
         assert hook in calls, f"cmd_run lost the {hook} mark the line is read from"
 

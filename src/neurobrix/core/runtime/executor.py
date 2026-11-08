@@ -413,9 +413,9 @@ class RuntimeExecutor:
                 from nbxtensor.ops import autotune_certified as _cert
                 _served = _cert.served()
                 if _served.get("certified") or _served.get("swept") or _served.get("local"):
-                    print(f"[autotune] certified directory: {_served['certified']} key(s) served without a sweep, "
-                          f"{_served['swept']} swept at runtime (kept locally), {_served.get('local', 0)} from the local "
-                          f"replay cache", flush=True)
+                    logger.debug(f"[autotune] certified directory: {_served['certified']} key(s) served without a sweep, "
+                                 f"{_served['swept']} swept at runtime (kept locally), {_served.get('local', 0)} from the local "
+                                 f"replay cache")
 
     def _prepare_defaults(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         """Prepare merged defaults from family config, pkg defaults, and user inputs."""
@@ -610,7 +610,7 @@ class RuntimeExecutor:
                 downscale=spec.get("downscale", False),
                 t_axis_out=spec.get("t_axis_out", 2),
             )
-            logger.info(
+            logger.debug(
                 f"[TilingEngine] {comp_name}: Prism component-tiling "
                 f"tile_size={spec['tile_size']} scale={spec['scale_factor']}"
                 + (f" t_tile={spec['t_tile']} t_scale={spec['t_scale']}"
@@ -643,7 +643,7 @@ class RuntimeExecutor:
                 if engine is None:
                     continue
                 count = engine.register_into_graph_executor(graph_exec)
-                logger.info(
+                logger.debug(
                     f"[OpLevelTiling] {comp_name}: registered {count} op_uid "
                     f"interceptors ({len(op_plan.fusion_pairs)} fusion pairs)"
                 )
@@ -1582,10 +1582,9 @@ class RuntimeExecutor:
                 install_fn(comp_name, executor)
                 import os as _os_d
                 if _os_d.environ.get("NBX_ZERO3_DIAG") == "1":
-                    print(f"[Z3DIAG] post-install({comp_name}) "
-                          f"exec_id={id(executor) & 0xffffff:06x} cb="
-                          f"{getattr(executor, '_persistent_pre_op_callback', None) is not None}",
-                          flush=True)
+                    logger.debug(f"[Z3DIAG] post-install({comp_name}) "
+                                 f"exec_id={id(executor) & 0xffffff:06x} cb="
+                                 f"{getattr(executor, '_persistent_pre_op_callback', None) is not None}")
 
     def _unload_component_weights(self, comp_name: str) -> None:
         """Unload weights for a component to free GPU memory."""

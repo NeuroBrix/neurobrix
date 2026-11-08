@@ -37,6 +37,8 @@ from .compiled_ops import CompiledOpResolver
 # already carries the free and total figures, and re-deriving them from its prose
 # is exactly the string-parsing this design exists to avoid.
 from nbxtensor.memory.oom_advice import annotate as _oom_annotate
+import logging
+_log = logging.getLogger(__name__)
 
 
 def _live_dump_on_oom(err, arena, tid_of_slot) -> None:
@@ -58,11 +60,10 @@ def _live_dump_on_oom(err, arena, tid_of_slot) -> None:
         if st.nbytes() < 100 * 1024 * 1024:
             continue
         refs = [type(r).__name__ + (f"[len={len(r)}]" if hasattr(r, "__len__") else "") for r in gc.get_referrers(o)][:6]
-        print(f"[LIVE_TORCH] {(slot_ptr.get(st.data_ptr()) or ['ORPHAN'])[0]} shape={tuple(o.shape)} "
-              f"storage={st.nbytes() / 2**20:.0f}MB ptr={st.data_ptr()} referrers={refs}", flush=True)
+        _log.debug(f"[LIVE_TORCH] {(slot_ptr.get(st.data_ptr()) or ['ORPHAN'])[0]} shape={tuple(o.shape)} "
+                   f"storage={st.nbytes() / 2**20:.0f}MB ptr={st.data_ptr()} referrers={refs}")
         seen += 1
-    print(f"[LIVE_TORCH] {seen} tensor(s) of 100 MB or more; allocated {torch.cuda.memory_allocated() / 2**20:.0f} MB",
-          flush=True)
+    _log.debug(f"[LIVE_TORCH] {seen} tensor(s) of 100 MB or more; allocated {torch.cuda.memory_allocated() / 2**20:.0f} MB")
 
 # TEMP diagnostic state for _maybe_dump_tid_native (CompiledSequence has
 # __slots__, so per-instance dump state lives in this module-level dict
@@ -897,8 +898,8 @@ class CompiledSequence(SequenceSteps):
         execution_order.clear()
         execution_order.extend(new_order)
         if removed:
-            print(f"[Optim] alias lowering (compiled): {removed} ops left "
-                  f"the hot sequence")
+            _log.debug(f"[Optim] alias lowering (compiled): {removed} ops left "
+                       f"the hot sequence")
 
     def _execute_const_fold(self, weights: Dict[str, torch.Tensor]) -> None:
         """Run the const_fold partition ONCE and fill the frontier slots.
@@ -2276,8 +2277,8 @@ class CompiledSequence(SequenceSteps):
                     _xi = _hs_host[expert_token_ids.to("cpu")]
                     _eo = ((F.silu(_xi @ _w[0].t()) * (_xi @ _w[1].t())) @ _w[2].t())
                     if not _store.cpu_experts:
-                        print(f"[ExpertStore] decode: experts outside the slots compute on the host "
-                              f"(at most {_store.cpu_decode_tokens} tokens a call)", flush=True)
+                        _log.debug(f"[ExpertStore] decode: experts outside the slots compute on the host "
+                                   f"(at most {_store.cpu_decode_tokens} tokens a call)")
                     _store.cpu_experts += 1
                     if _store._release is not None:
                         for _t in _w:
@@ -3358,8 +3359,7 @@ class CompiledSequence(SequenceSteps):
                                   "op_type": getattr(op, "op_type", None)}, f)
                     f.write("\n")
         except Exception as exc:                # a diagnostic never breaks a run
-            print(f"[planned-ops] not dumped ({type(exc).__name__}: {exc})",
-                  flush=True)
+            _log.debug(f"[planned-ops] not dumped ({type(exc).__name__}: {exc})")
 
     def _maybe_dump_tid_native(self, op, out_slot: int, tensor) -> None:
         """TEMP diagnostic: mirror of TritonSequence._maybe_dump_tid.
@@ -3416,9 +3416,8 @@ class CompiledSequence(SequenceSteps):
                         # A swallowed failure here would leave the site silent
                         # again, which is the exact defect this branch exists to
                         # end. Say it, then leave the record absent honestly.
-                        print(f"[observability] {op.op_uid}: the replacement could "
-                              f"not report itself ({type(_exc).__name__}: {_exc})",
-                              flush=True)
+                        _log.debug(f"[observability] {op.op_uid}: the replacement could "
+                                   f"not report itself ({type(_exc).__name__}: {_exc})")
                         return
                     rec.update({"component": self.dag.get("component_name", "?"),
                                 "pass": state.get("pass", 0), "tid": tid, "op_uid": op.op_uid,
@@ -3490,7 +3489,7 @@ class CompiledSequence(SequenceSteps):
                               "record": new_record}, f)
                 f.write("\n")
         except Exception as e:
-            print(f"[NBX_DUMP_TIDS compiled] failed on {tid}: {e}", flush=True)
+            _log.debug(f"[NBX_DUMP_TIDS compiled] failed on {tid}: {e}")
 
     def _run_inner(
         self,
@@ -3536,11 +3535,10 @@ class CompiledSequence(SequenceSteps):
             except Exception as e:
                 # DEBUG: catch CPU tensor errors in triton mode
                 if "cpu tensor" in str(e).lower() or "Pointer argument" in str(e):
-                    import sys
-                    print(f"[TRITON-DEBUG] CPU tensor at op {op.op_uid} ({op.op_type})", file=sys.stderr)
+                    _log.debug(f"[TRITON-DEBUG] CPU tensor at op {op.op_uid} ({op.op_type})")
                     for ai, a in enumerate(args):
                         if isinstance(a, torch.Tensor):
-                            print(f"  arg[{ai}]: device={a.device} dtype={a.dtype} shape={list(a.shape)}", file=sys.stderr)
+                            _log.debug(f"  arg[{ai}]: device={a.device} dtype={a.dtype} shape={list(a.shape)}")
                     raise
                 # ============================================================
                 # NOP PROPAGATION for dynamic MoE routing
@@ -3595,9 +3593,9 @@ class CompiledSequence(SequenceSteps):
                                     for a in _ra]
                         except Exception as _e_ra:
                             _ras = f"<resolver raised {_e_ra}>"
-                        print(f"[FAIL-CTX] op={op.op_uid} resolver_bound={_rb} "
-                              f"resolver_is={id(self._shape_resolver)} "
-                              f"re-resolved_args={_ras}", flush=True)
+                        _log.debug(f"[FAIL-CTX] op={op.op_uid} resolver_bound={_rb} "
+                                   f"resolver_is={id(self._shape_resolver)} "
+                                   f"re-resolved_args={_ras}")
                     _live_dump_on_oom(e, locals().get('arena'), getattr(self, '_tid_of_slot', None) or {})
                     raise RuntimeError(_oom_annotate(
                         f"Failed at op {op.op_uid} ({op.op_type}): {e}", e)) from e
@@ -3656,22 +3654,22 @@ class CompiledSequence(SequenceSteps):
                             issue.append(f"NaN={nan_count}")
                         if inf_count > 0:
                             issue.append(f"Inf={inf_count}")
-                        print(f"\n[NaN/Inf-GUARD] Op {op_idx}/{len(self._ops)}: {op.op_type} [{marker}]")
-                        print(f"  UID: {op.op_uid}")
-                        print(f"  Output: shape={out_shape}, dtype={out_dtype}, {', '.join(issue)}")
+                        _log.debug(f"[NaN/Inf-GUARD] Op {op_idx}/{len(self._ops)}: {op.op_type} [{marker}]")
+                        _log.debug(f"  UID: {op.op_uid}")
+                        _log.debug(f"  Output: shape={out_shape}, dtype={out_dtype}, {', '.join(issue)}")
                         for i, info in enumerate(input_infos):
                             if info is None:
                                 continue
                             if isinstance(info, dict):
-                                print(f"  Input[{i}]: shape={info['shape']}, dtype={info['dtype']}, "
-                                      f"range=[{info['min']:.4g}, {info['max']:.4g}], "
-                                      f"nan={info['has_nan']}, inf={info['has_inf']}")
+                                _log.debug(f"  Input[{i}]: shape={info['shape']}, dtype={info['dtype']}, "
+                                           f"range=[{info['min']:.4g}, {info['max']:.4g}], "
+                                           f"nan={info['has_nan']}, inf={info['has_inf']}")
                             elif isinstance(info, list):
-                                print(f"  Input[{i}]: list of {len(info)} tensors")
+                                _log.debug(f"  Input[{i}]: list of {len(info)} tensors")
                                 for j, sub in enumerate(info[:2]):
                                     if isinstance(sub, dict):
-                                        print(f"    [{j}]: shape={sub['shape']}, range=[{sub['min']:.4g}, {sub['max']:.4g}], "
-                                              f"nan={sub['has_nan']}, inf={sub['has_inf']}")
+                                        _log.debug(f"    [{j}]: shape={sub['shape']}, range=[{sub['min']:.4g}, {sub['max']:.4g}], "
+                                                   f"nan={sub['has_nan']}, inf={sub['has_inf']}")
 
                     # Track for summary
                     if nan_guard_triggers is not None:
@@ -3750,15 +3748,15 @@ class CompiledSequence(SequenceSteps):
 
                             if nan_guard_verbose:
                                 marker = "★ CREATOR" if is_creator else "propagator"
-                                print(f"\n[NaN-GUARD TUPLE] Op {op_idx}/{len(self._ops)}: {op.op_type} output[{i}] [{marker}]")
-                                print(f"  UID: {op.op_uid}")
-                                print(f"  Output[{i}]: shape={list(item.shape)}, dtype={item.dtype}, NaN={nan_count}")
+                                _log.debug(f"[NaN-GUARD TUPLE] Op {op_idx}/{len(self._ops)}: {op.op_type} output[{i}] [{marker}]")
+                                _log.debug(f"  UID: {op.op_uid}")
+                                _log.debug(f"  Output[{i}]: shape={list(item.shape)}, dtype={item.dtype}, NaN={nan_count}")
                                 # Show input info
                                 for j, a in enumerate(args):
                                     if isinstance(a, torch.Tensor) and a.is_floating_point():
-                                        print(f"  Input[{j}]: shape={list(a.shape)}, "
-                                              f"range=[{a.min().item():.4g}, {a.max().item():.4g}], "
-                                              f"nan={torch.isnan(a).any().item()}, inf={torch.isinf(a).any().item()}")
+                                        _log.debug(f"  Input[{j}]: shape={list(a.shape)}, "
+                                                   f"range=[{a.min().item():.4g}, {a.max().item():.4g}], "
+                                                   f"nan={torch.isnan(a).any().item()}, inf={torch.isinf(a).any().item()}")
 
                             if nan_guard_triggers is not None:
                                 nan_guard_triggers.append({
@@ -3795,15 +3793,15 @@ class CompiledSequence(SequenceSteps):
                     if not inputs_have_bad:
                         # This op CREATED NaN/Inf from clean inputs!
                         issue = "NaN" if has_nan else "Inf"
-                        print(f"\n[{issue} SOURCE] Op {op_idx}/{len(self._ops)}: {op.op_type}")
-                        print(f"  UID: {op.op_uid}")
-                        print(f"  Output: shape={list(result.shape)}, dtype={result.dtype}")
+                        _log.debug(f"[{issue} SOURCE] Op {op_idx}/{len(self._ops)}: {op.op_type}")
+                        _log.debug(f"  UID: {op.op_uid}")
+                        _log.debug(f"  Output: shape={list(result.shape)}, dtype={result.dtype}")
                         if has_nan:
                             nan_count = torch.isnan(result).sum().item()
-                            print(f"  NaN: {nan_count}/{result.numel()} ({100*nan_count/result.numel():.1f}%)")
+                            _log.debug(f"  NaN: {nan_count}/{result.numel()} ({100*nan_count/result.numel():.1f}%)")
                         if has_inf:
                             inf_count = torch.isinf(result).sum().item()
-                            print(f"  Inf: {inf_count}/{result.numel()} ({100*inf_count/result.numel():.1f}%)")
+                            _log.debug(f"  Inf: {inf_count}/{result.numel()} ({100*inf_count/result.numel():.1f}%)")
                         # Show input info
                         def describe_arg(a, depth=0):
                             if isinstance(a, torch.Tensor):
@@ -3818,7 +3816,7 @@ class CompiledSequence(SequenceSteps):
                                 return f"[{', '.join(inner)}]"
                             return f"{type(a).__name__}"
                         for i, arg in enumerate(args):
-                            print(f"  Input[{i}]: {describe_arg(arg)}")
+                            _log.debug(f"  Input[{i}]: {describe_arg(arg)}")
 
             # ZERO-TRACE: Find first op that produces all-zero from non-zero input
             # Enable with NBX_TRACE_ZEROS=1 (one-time diagnostic, expensive)
@@ -3832,22 +3830,22 @@ class CompiledSequence(SequenceSteps):
                                 has_nonzero_input = True
                                 break
                     if has_nonzero_input:
-                        print(f"\n[ZERO-SOURCE] Op {op_idx}/{len(self._ops)}: {op.op_type} ({op.op_uid})")
-                        print(f"  Output: shape={list(result.shape)}, dtype={result.dtype} → ALL ZERO")
+                        _log.debug(f"[ZERO-SOURCE] Op {op_idx}/{len(self._ops)}: {op.op_type} ({op.op_uid})")
+                        _log.debug(f"  Output: shape={list(result.shape)}, dtype={result.dtype} → ALL ZERO")
                         for i, a in enumerate(args):
                             if isinstance(a, torch.Tensor):
-                                print(f"  Input[{i}]: shape={list(a.shape)}, dtype={a.dtype}, "
-                                      f"mean={a.float().mean().item():.6f}, range=[{a.min().item():.6g}, {a.max().item():.6g}]")
+                                _log.debug(f"  Input[{i}]: shape={list(a.shape)}, dtype={a.dtype}, "
+                                           f"mean={a.float().mean().item():.6f}, range=[{a.min().item():.6g}, {a.max().item():.6g}]")
                             else:
-                                print(f"  Input[{i}]: {type(a).__name__} = {a}")
+                                _log.debug(f"  Input[{i}]: {type(a).__name__} = {a}")
                         trace_zeros = False  # Only report first occurrence
                 # Also check for ops that produce non-finite values (may cause downstream zeros)
                 elif result.numel() > 0 and (torch.isinf(result).any().item() or torch.isnan(result).any().item()):
                     nan_ct = torch.isnan(result).sum().item()
                     inf_ct = torch.isinf(result).sum().item()
                     if nan_ct > 0 or inf_ct > result.numel() * 0.5:
-                        print(f"[ZERO-TRACE-WARN] Op {op_idx}: {op.op_type} ({op.op_uid}) "
-                              f"output NaN={nan_ct}, Inf={inf_ct}, numel={result.numel()}")
+                        _log.debug(f"[ZERO-TRACE-WARN] Op {op_idx}: {op.op_type} ({op.op_uid}) "
+                                   f"output NaN={nan_ct}, Inf={inf_ct}, numel={result.numel()}")
 
             # FREE DEAD TENSORS - Critical for memory management
             # These slots are no longer needed after this op
@@ -3860,22 +3858,22 @@ class CompiledSequence(SequenceSteps):
             creators = [t for t in nan_guard_triggers if t.get('is_creator')]
             propagators = [t for t in nan_guard_triggers if not t.get('is_creator')]
 
-            print(f"\n{'='*60}")
-            print(f"[NaN-GUARD SUMMARY]")
-            print(f"  Total ops with NaN: {len(nan_guard_triggers)}")
-            print(f"  ★ CREATORS (from clean inputs): {len(creators)}")
-            print(f"  Propagators: {len(propagators)}")
+            _log.debug(f"{'='*60}")
+            _log.debug(f"[NaN-GUARD SUMMARY]")
+            _log.debug(f"  Total ops with NaN: {len(nan_guard_triggers)}")
+            _log.debug(f"  ★ CREATORS (from clean inputs): {len(creators)}")
+            _log.debug(f"  Propagators: {len(propagators)}")
 
             if creators:
                 creator_types = Counter(t['op_type'] for t in creators)
-                print(f"\n  CREATOR OPS (these are the culprits!):")
+                _log.debug(f"  CREATOR OPS (these are the culprits!):")
                 for c in creators[:10]:
-                    print(f"    Op {c['op_idx']}: {c['op_type']} ({c['op_uid']}) → {c.get('nan_count', '?')} NaN")
-                print(f"  Creator op types: {dict(creator_types)}")
+                    _log.debug(f"    Op {c['op_idx']}: {c['op_type']} ({c['op_uid']}) → {c.get('nan_count', '?')} NaN")
+                _log.debug(f"  Creator op types: {dict(creator_types)}")
 
             total_nans = sum(t.get('nan_count', 0) for t in nan_guard_triggers)
-            print(f"  Total NaN values replaced: {total_nans}")
-            print(f"{'='*60}")
+            _log.debug(f"  Total NaN values replaced: {total_nans}")
+            _log.debug(f"{'='*60}")
 
     def _run_inner_multi_device(
         self,

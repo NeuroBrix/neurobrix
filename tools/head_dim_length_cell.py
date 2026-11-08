@@ -228,6 +228,7 @@ def run_arm(model: str, ids: list, arm: str, max_tokens: int,
     env = dict(os.environ)
     env["PYTHONPATH"] = str((src or REPO) / "src")
     env["NBX_DECODE_PROGRESS"] = str(progress)
+    env["NBX_LOG"] = "debug"          # developer lines in the tails it reads (nbxtensor/terminal.py)
     env.setdefault("TOKENIZERS_PARALLELISM", "false")
     cmd = [sys.executable, "-u", "-m", "neurobrix", "run",
            "--model", model,

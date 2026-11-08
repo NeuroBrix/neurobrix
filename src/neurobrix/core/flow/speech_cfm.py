@@ -43,6 +43,8 @@ import torch
 from nbxtensor.random.seeded_draw import SeededDrawStream, seeded_gaussian
 from neurobrix.core.flow.base import FlowLeg
 from neurobrix.core.flow.shared_steps import require_contract
+import logging
+_log = logging.getLogger(__name__)
 
 
 _require = functools.partial(require_contract, "speech")   # this leg's contract block
@@ -164,8 +166,8 @@ class SpeechCFMLeg(FlowLeg):
                 f"ends at {hi} — hidden rows unavailable.")
         span_ids = full_ids[lo:hi]
         span_hidden = lm_hidden[0, lo:hi].to(device)        # [T, H_llm]
-        print(f"   [speech_cfm] tts span [{lo}:{hi}) — {len(span_ids)} "
-              f"tokens, seed={seed}")
+        _log.debug(f"   [speech_cfm] tts span [{lo}:{hi}) — {len(span_ids)} "
+                   f"tokens, seed={seed}")
 
         # ── 2. condition: additive merge + prefix ────────────────────
         _ids_t = torch.tensor([span_ids], dtype=torch.long, device=device)
@@ -199,8 +201,8 @@ class SpeechCFMLeg(FlowLeg):
         # vendor token2wav replay 2026-08-02). For the last-row read the
         # growing-context forward is exactly the vendor's KV decode.
         context = prefix
-        print(f"   [speech_cfm] codec AR start (min {min_new}, "
-              f"max {max_new})...")
+        _log.debug(f"   [speech_cfm] codec AR start (min {min_new}, "
+                   f"max {max_new})...")
         for t in range(max_new):
             S = int(context.shape[1])
             _pos = torch.arange(S, dtype=torch.long,
@@ -223,7 +225,7 @@ class SpeechCFMLeg(FlowLeg):
         if not codes:
             raise RuntimeError(
                 "ZERO FALLBACK: the codec AR emitted no speech codes.")
-        print(f"   [speech_cfm] {len(codes)} speech codes")
+        _log.debug(f"   [speech_cfm] {len(codes)} speech codes")
 
         # ── 4. token2wav: constants → flow → CFM → vocoder ──────────
         spk_prefix = str(_require(sp, "speaker_constants",
@@ -304,8 +306,8 @@ class SpeechCFMLeg(FlowLeg):
             if stp < n_steps:
                 dt = ts[stp + 1] - t_cur
         mel = x[:, :, mel_len1:]                            # [1, 80, Tg*up]
-        print(f"   [speech_cfm] CFM {n_steps} steps -> mel "
-              f"{list(mel.shape)}")
+        _log.debug(f"   [speech_cfm] CFM {n_steps} steps -> mel "
+                   f"{list(mel.shape)}")
 
         wav = self._run(c_voc, speech_feat=mel.to(dtype))
         if isinstance(wav, (tuple, list)):
@@ -327,10 +329,10 @@ class SpeechCFMLeg(FlowLeg):
                 wav=wav.detach().reshape(-1).float().cpu().numpy(),
                 speaker=np.asarray([req_spk]),
             )
-            print(f"   [speech_cfm] NBX_SPEECH_DUMP -> "
-                  f"{_dump_dir}/speech_leg_dump.npz")
+            _log.debug(f"   [speech_cfm] NBX_SPEECH_DUMP -> "
+                       f"{_dump_dir}/speech_leg_dump.npz")
         self.resolved["global.output_audio"] = wav.reshape(-1).float()
         self.resolved["global.audio_sample_rate"] = sample_rate
         dt_s = time.perf_counter() - t0
-        print(f"   [speech_cfm] waveform {int(wav.numel())} samples "
-              f"@ {sample_rate} Hz in {dt_s:.1f}s")
+        _log.debug(f"   [speech_cfm] waveform {int(wav.numel())} samples "
+                   f"@ {sample_rate} Hz in {dt_s:.1f}s")

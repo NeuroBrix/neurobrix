@@ -29,6 +29,8 @@ from neurobrix.core.runtime.lm_facts import (  # noqa: F401  (re-exported for th
 from neurobrix.core.flow.decoder_cache import _session_dag   # both branches read the session's DAG alike
 # the prompt as the flow tokenizes it: one rule for the flow, the plan and the derived census (pure Python)
 from neurobrix.core.runtime.prompt_length import _flatten_tokenizer_output, prompt_token_ids
+import logging
+_log = logging.getLogger(__name__)
 
 
 def _build_generator_config(defaults: Dict, resolver: Any) -> Dict[str, Any]:
@@ -263,8 +265,7 @@ class TritonAutoregressiveHandler:
                                    "top10": top10,
                                    "argmax": idx_sorted[0],
                                    "logits": vals}, _f)
-                print(f"[NBX_DUMP_LOGITS] triton dumped top10 to {_dump_path}",
-                      flush=True)
+                _log.debug(f"[NBX_DUMP_LOGITS] triton dumped top10 to {_dump_path}")
             # `flow.first_token` is stamped inside the step, at the per-token
             # emit site every decoding flow shares (decode_progress.emit).
             next_token, is_done = generator.step(logits, step_idx)
@@ -297,8 +298,7 @@ class TritonAutoregressiveHandler:
                 _tkf = _tk.to(_NBXdt.float32)
                 _b = (_ctdt.c_float * 1)()
                 _DAdt.memcpy(_ctdt.addressof(_b), _tkf.data_ptr(), 4, kind=2)
-                print(f"  [DBG-TRITON] step={step_idx} token={int(round(_b[0]))}",
-                      flush=True)
+                _log.debug(f"  [DBG-TRITON] step={step_idx} token={int(round(_b[0]))}")
 
             if is_done:
                 break

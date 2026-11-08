@@ -231,7 +231,7 @@ def run_arm(model: str, arm: str, family: str, prompt: str, max_tokens: int,
            + ["--max-tokens", str(max_tokens), "--temperature", "0"]
            + (["--output", str(out)] if out else [])
            + [f"--{arm}"])
-    env = dict(os.environ, PYTHONPATH=str(REPO / "src"))
+    env = dict(os.environ, PYTHONPATH=str(REPO / "src"), NBX_LOG="debug")   # developer lines in the tails it keeps
     t0 = time.time()
     try:
         proc = subprocess.run(cmd, env=env, capture_output=True, text=True,

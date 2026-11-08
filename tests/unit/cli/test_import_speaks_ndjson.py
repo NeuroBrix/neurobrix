@@ -97,7 +97,7 @@ def test_the_lifecycle_is_one_event_per_phase_and_nothing_else_on_stdout(tmp_pat
     assert all(e["schema"] == "neurobrix.import/1" for e in events)
     dl = [e for e in events if e["event"] == "download"]
     assert dl[-1]["bytes"] == dl[-1]["total"] == len(_archive(tmp_path))
-    assert "IMPORT COMPLETE" in err          # the human lines went to stderr
+    assert f"Installed {NAME} · run: " in err          # the human lines went to stderr
     assert (tmp_path / "cache" / NAME / "manifest.json").exists()
     assert not reg.installing_path(tmp_path / "cache" / NAME).exists()
 
@@ -138,13 +138,13 @@ def test_a_failed_extraction_leaves_no_half_model_behind(tmp_path, monkeypatch, 
     assert not final.exists() and not reg.installing_path(final).exists()
 
 
-def test_a_refusal_is_one_error_event_and_exit_1(tmp_path, monkeypatch, capsys):
+def test_a_refusal_is_one_error_event_and_exit_1(tmp_path, monkeypatch, capsys, engine_log):
     _wire(monkeypatch, tmp_path, _archive(tmp_path), status_info=404)
     code, events, err = _run(capsys, _args())
     assert code == 1
     assert [e["event"] for e in events] == ["error"]
     assert "not found on registry" in events[0]["message"]
-    assert "ERROR" in err
+    assert "not found on registry" in engine_log()      # and said to the human, on stderr
 
 
 def test_a_gated_model_under_json_is_refused_by_name_never_prompted(tmp_path, monkeypatch, capsys):
@@ -178,7 +178,7 @@ def test_remove_answers_with_one_record(tmp_path, monkeypatch, capsys):
     assert rec["schema"] == "neurobrix.remove/1" and rec["found"] is True
     assert sorted(r["kind"] for r in rec["removed"]) == ["cache", "store"]
     assert all(r["bytes"] > 0 for r in rec["removed"])
-    assert "Removed cache" in err
+    assert f"Removed {NAME} (" in err
 
 
 def test_the_progress_bar_speaks_ndjson_at_most_once_per_interval_and_at_close(capsys):

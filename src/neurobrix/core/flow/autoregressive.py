@@ -26,6 +26,8 @@ from .base import FlowHandler, FlowContext, register_flow
 from .table_gather import gather_rows
 from neurobrix.core.memory.manager import release_flow_memory
 from neurobrix.core.flow.decoder_cache import _session_dag   # both branches read the session's DAG alike
+import logging
+_log = logging.getLogger(__name__)
 
 _SENTINEL = object()
 
@@ -667,8 +669,8 @@ class AutoregressiveHandler(FlowHandler):
                                        "top10": top10,
                                        "argmax": idx_sorted[0],
                                        "logits": flat}, _f)
-                    print(f"[NBX_DUMP_LOGITS] compiled dumped top10 "
-                          f"to {_dump_path}", flush=True)
+                    _log.debug(f"[NBX_DUMP_LOGITS] compiled dumped top10 "
+                               f"to {_dump_path}")
                 # `flow.first_token` is stamped inside the step, at the per-token
                 # emit site every decoding flow shares (decode_progress.emit).
                 next_token, is_done = generator.step(logits, step_idx)
@@ -679,11 +681,11 @@ class AutoregressiveHandler(FlowHandler):
                     probs = torch.softmax(l_last, dim=-1)
                     top5_p, top5_i = torch.topk(probs, 5)
                     cache_info = session.kv_wrapper.get_cache_info() if session.kv_wrapper else {}
-                    print(f"  [DBG] step={step_idx} token={next_token.item()} "
-                          f"h_norm={h_last.norm():.1f} logit_max={l_last.max():.2f} "
-                          f"top1_prob={top5_p[0]:.4f} top5={top5_i.tolist()} "
-                          f"cache_seq={cache_info.get('seq_len', '?')} "
-                          f"pos_off={cache_info.get('position_offset', '?')}")
+                    _log.debug(f"  [DBG] step={step_idx} token={next_token.item()} "
+                               f"h_norm={h_last.norm():.1f} logit_max={l_last.max():.2f} "
+                               f"top1_prob={top5_p[0]:.4f} top5={top5_i.tolist()} "
+                               f"cache_seq={cache_info.get('seq_len', '?')} "
+                               f"pos_off={cache_info.get('position_offset', '?')}")
 
                 if is_done:
                     break
@@ -864,7 +866,7 @@ class AutoregressiveHandler(FlowHandler):
         import os as _os_kv
         if not has_sdpa or _os_kv.environ.get("NBX_KV_RECOMPUTE") == "1":
             if has_sdpa:
-                print("   [autoregressive] NBX_KV_RECOMPUTE=1: KV cache OFF, O(n) recompute reference", flush=True)
+                _log.debug("   [autoregressive] NBX_KV_RECOMPUTE=1: KV cache OFF, O(n) recompute reference")
             kv_wrapper = None
         else:
             # The KV cache, behind the same gate as the Triton session (R30): a graph without

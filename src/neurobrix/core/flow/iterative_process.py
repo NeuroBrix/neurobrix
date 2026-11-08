@@ -23,6 +23,8 @@ from .base import FlowHandler, FlowContext, register_flow
 from neurobrix.core.runtime.progress import StepProgress
 from neurobrix.core.runtime.resolution.negative_pooled_condition import pooled_text_outputs
 from neurobrix.core.flow.iterative_steps import IterativeSteps, _dump_final_latent   # the steps both branches share
+import logging
+_log = logging.getLogger(__name__)
 
 
 def _gate_component_outputs_finite(resolved: Any, comp_name: str) -> None:
@@ -67,10 +69,10 @@ def _gate_loop_state_finite(state: Any, step_idx: int, timestep: Any,
         # (Wan T2V rendered a field the vendor does not, 2026-09-21).
         _f = state.detach().float()
         _ts = timestep.item() if hasattr(timestep, "item") else timestep
-        print(f"[LoopState] step {step_idx} t={float(_ts):.1f} mean {_f.mean().item():.4f} "
-              f"std {_f.std().item():.4f} absmax {_f.abs().max().item():.3f} "
-              f"ch-mean[:4] {[round(v, 3) for v in _f.mean(dim=[d for d in range(_f.dim()) if d != 1]).tolist()[:4]]} "
-              f"ch-std[:4] {[round(v, 3) for v in _f.std(dim=[d for d in range(_f.dim()) if d != 1]).tolist()[:4]]}", flush=True)
+        _log.debug(f"[LoopState] step {step_idx} t={float(_ts):.1f} mean {_f.mean().item():.4f} "
+                   f"std {_f.std().item():.4f} absmax {_f.abs().max().item():.3f} "
+                   f"ch-mean[:4] {[round(v, 3) for v in _f.mean(dim=[d for d in range(_f.dim()) if d != 1]).tolist()[:4]]} "
+                   f"ch-std[:4] {[round(v, 3) for v in _f.std(dim=[d for d in range(_f.dim()) if d != 1]).tolist()[:4]]}")
 
     if not isinstance(state, torch.Tensor) or not state.is_floating_point():
         return
@@ -241,8 +243,8 @@ class IterativeProcessHandler(IterativeSteps, FlowHandler):
                             if isinstance(_t, torch.Tensor):
                                 _f = _t.detach().float()
                                 _rows = int((_f.abs().sum(dim=-1) > 0).sum().item())
-                                print(f"[CondDiag] {comp_name} {_lbl} shape {tuple(_f.shape)} nonzero rows {_rows} "
-                                      f"mean {_f.mean().item():.4f} std {_f.std().item():.4f} absmax {_f.abs().max().item():.3f}", flush=True)
+                                _log.debug(f"[CondDiag] {comp_name} {_lbl} shape {tuple(_f.shape)} nonzero rows {_rows} "
+                                           f"mean {_f.mean().item():.4f} std {_f.std().item():.4f} absmax {_f.abs().max().item():.3f}")
 
             if DEBUG:
                 for suffix in ("output_0", "last_hidden_state"):
@@ -250,8 +252,8 @@ class IterativeProcessHandler(IterativeSteps, FlowHandler):
                     if key in self.ctx.variable_resolver.resolved:
                         t = self.ctx.variable_resolver.resolved[key]
                         if isinstance(t, torch.Tensor):
-                            print(f"[AUDIT] {key}: shape={list(t.shape)} dtype={t.dtype} "
-                                  f"min={t.min().item():.4f} max={t.max().item():.4f} std={t.float().std().item():.4f}")
+                            _log.debug(f"[AUDIT] {key}: shape={list(t.shape)} dtype={t.dtype} "
+                                       f"min={t.min().item():.4f} max={t.max().item():.4f} std={t.float().std().item():.4f}")
 
             # Unload weights immediately. Pre_loop components run once
             # per request, so force-unload even in eager mode to free
@@ -526,20 +528,20 @@ class IterativeProcessHandler(IterativeSteps, FlowHandler):
                 f"NBX_INIT_LATENTS shape {list(_u.shape)} != state {list(current_state.shape)}"
             current_state = _u
             self.ctx.variable_resolver.set(state_key, current_state)
-            print(f"[InitInject] replaced initial latents from {_inj} "
-                  f"(std={current_state.float().std().item():.4f})", flush=True)
+            _log.debug(f"[InitInject] replaced initial latents from {_inj} "
+                       f"(std={current_state.float().std().item():.4f})")
 
         # Scale initial noise
         if hasattr(driver, "init_noise_sigma"):
             noise_scale = driver.init_noise_sigma
             if DEBUG:
-                print(f"[Executor] current_state std before scaling: {current_state.std().item():.4f}")
+                _log.debug(f"[Executor] current_state std before scaling: {current_state.std().item():.4f}")
             if noise_scale != 1.0:
                 if DEBUG:
-                    print(f"[Executor] Scaling initial state by init_noise_sigma = {noise_scale:.4f}")
+                    _log.debug(f"[Executor] Scaling initial state by init_noise_sigma = {noise_scale:.4f}")
                 current_state = current_state * noise_scale
                 if DEBUG:
-                    print(f"[Executor] current_state std after scaling: {current_state.std().item():.4f}")
+                    _log.debug(f"[Executor] current_state std after scaling: {current_state.std().item():.4f}")
                 self.ctx.variable_resolver.set(state_key, current_state)
 
         # Get iterator
@@ -572,7 +574,7 @@ class IterativeProcessHandler(IterativeSteps, FlowHandler):
                 continue          # already done in the interrupted run
             if DEBUG:
                 ts_val = timestep.item() if isinstance(timestep, torch.Tensor) else timestep
-                print(f"[Loop] Step {step_idx + 1}/{num_steps} (t={ts_val:.1f})")
+                _log.debug(f"[Loop] Step {step_idx + 1}/{num_steps} (t={ts_val:.1f})")
 
             # Store timestep in loop state
             if isinstance(timestep, torch.Tensor) and timestep.dim() == 0:
@@ -722,8 +724,8 @@ class IterativeProcessHandler(IterativeSteps, FlowHandler):
                         if isinstance(_cond, torch.Tensor):
                             _cap["i2v_condition"] = _cond.detach().cpu()
                         torch.save(_cap, _dd)
-                        print(f"[DIT-DUMP] keys={list(_cap.keys())} "
-                              f"velocity std={model_output.float().std().item():.4f} -> {_dd}")
+                        _log.debug(f"[DIT-DUMP] keys={list(_cap.keys())} "
+                                   f"velocity std={model_output.float().std().item():.4f} -> {_dd}")
 
                     # Handle cross-device transfer
                     if self.ctx.strategy is not None and hasattr(self.ctx.strategy, 'transfer_model_output'):
@@ -765,10 +767,10 @@ class IterativeProcessHandler(IterativeSteps, FlowHandler):
                     if _LOOP_STATE_DIAG and isinstance(model_output, torch.Tensor):
                         _mo = model_output.detach().float()
                         _axm = [d for d in range(_mo.dim()) if d != 1]
-                        print(f"[LoopPred] step {step_idx} mean {_mo.mean().item():.4f} std {_mo.std().item():.4f} "
-                              f"absmax {_mo.abs().max().item():.3f} shape {tuple(_mo.shape)} "
-                              f"ch-mean[:4] {[round(v, 3) for v in _mo.mean(dim=_axm).tolist()[:4]]} "
-                              f"ch-std[:4] {[round(v, 3) for v in _mo.std(dim=_axm).tolist()[:4]]}", flush=True)
+                        _log.debug(f"[LoopPred] step {step_idx} mean {_mo.mean().item():.4f} std {_mo.std().item():.4f} "
+                                   f"absmax {_mo.abs().max().item():.3f} shape {tuple(_mo.shape)} "
+                                   f"ch-mean[:4] {[round(v, 3) for v in _mo.mean(dim=_axm).tolist()[:4]]} "
+                                   f"ch-std[:4] {[round(v, 3) for v in _mo.std(dim=_axm).tolist()[:4]]}")
                     step_result = driver.step(
                         model_output, timestep, current_state,
                         generator=self.ctx.variable_resolver.sampling_generator())
@@ -783,9 +785,9 @@ class IterativeProcessHandler(IterativeSteps, FlowHandler):
                     import os as _ost
                     if _ost.environ.get("NBX_TRAJ") == "1":
                         _ts = timestep.item() if hasattr(timestep, "item") else timestep
-                        print(f"[TRAJ] step {step_idx+1:2d} t={float(_ts):.1f} "
-                              f"velocity_std={model_output.float().std().item():.4f} "
-                              f"latent_std={current_state.float().std().item():.4f}", flush=True)
+                        _log.debug(f"[TRAJ] step {step_idx+1:2d} t={float(_ts):.1f} "
+                                   f"velocity_std={model_output.float().std().item():.4f} "
+                                   f"latent_std={current_state.float().std().item():.4f}")
                     # Full per-step latent dump (NBX_DUMP_STEP_LATENTS=<dir>):
                     # step-by-step trajectory diff against a vendor pipeline run
                     # seeded with the IDENTICAL initial latent (callback dump on
@@ -855,7 +857,7 @@ class IterativeProcessHandler(IterativeSteps, FlowHandler):
             return RenderCheckpoint.from_env(
                 model=self._progress_label(), num_steps=num_steps, extra=extra)
         except Exception as exc:                       # noqa: BLE001
-            print(f"   [checkpoint] unavailable ({exc}); render continues")
+            _log.warning(f"   [checkpoint] unavailable ({exc}); render continues")
             return None
 
     def _checkpoint_resume(self, ck, state_key: str, driver):
@@ -879,10 +881,10 @@ class IterativeProcessHandler(IterativeSteps, FlowHandler):
             # Opt in with NBX_RENDER_RESUME=1 if a possibly-different image is
             # acceptable. Tracked as D-RENDER-RESUME-NOT-BIT-IDENTICAL.
             if ck.path.exists():
-                print(f"   [checkpoint] a resume point exists ({ck.path.name}) "
-                      f"but resuming is not yet proven bit-identical, so this "
-                      f"render starts from step 0. Set NBX_RENDER_RESUME=1 to "
-                      f"resume anyway.")
+                _log.debug(f"   [checkpoint] a resume point exists ({ck.path.name}) "
+                           f"but resuming is not yet proven bit-identical, so this "
+                           f"render starts from step 0. Set NBX_RENDER_RESUME=1 to "
+                           f"resume anyway.")
             return 0
         try:
             resumed = ck.load()
@@ -937,7 +939,7 @@ class IterativeProcessHandler(IterativeSteps, FlowHandler):
                 f"finished on inconsistent state. Re-run to render from "
                 f"step 0."
             ) from exc
-        print(f"   [checkpoint] resuming at step {step}")
+        _log.debug(f"   [checkpoint] resuming at step {step}")
         return step
 
     def _checkpoint_save(self, ck, step_idx: int, num_steps: int,
@@ -952,7 +954,7 @@ class IterativeProcessHandler(IterativeSteps, FlowHandler):
                      if hasattr(driver, "checkpoint_state") else None)
             ck.save(step_idx, cur.detach().cpu().numpy(), sched)
         except Exception as exc:                       # noqa: BLE001
-            print(f"   [checkpoint] save skipped ({exc})")
+            _log.warning(f"   [checkpoint] save skipped ({exc})")
 
 
     def _setup_step_cache(self, components, dual, num_steps):
@@ -1167,12 +1169,12 @@ class IterativeProcessHandler(IterativeSteps, FlowHandler):
                 key = f"{prefix}{inp_name}"
                 val = self.ctx.variable_resolver.resolved.get(key)
                 if isinstance(val, torch.Tensor):
-                    print(f"[AUDIT] {comp_name} input '{inp_name}' ({key}): "
-                          f"shape={list(val.shape)} dtype={val.dtype} "
-                          f"min={val.min().item():.4f} max={val.max().item():.4f}")
+                    _log.debug(f"[AUDIT] {comp_name} input '{inp_name}' ({key}): "
+                               f"shape={list(val.shape)} dtype={val.dtype} "
+                               f"min={val.min().item():.4f} max={val.max().item():.4f}")
                     break
                 elif val is not None:
-                    print(f"[AUDIT] {comp_name} input '{inp_name}' ({key}): type={type(val).__name__} val={val}")
+                    _log.debug(f"[AUDIT] {comp_name} input '{inp_name}' ({key}): type={type(val).__name__} val={val}")
                     break
 
     def _print_step_diagnostics(
@@ -1186,9 +1188,9 @@ class IterativeProcessHandler(IterativeSteps, FlowHandler):
         _t_val = timestep.item() if isinstance(timestep, torch.Tensor) else timestep
         _mo_std = model_output.float().std().item()
         _cs_std = current_state.float().std().item()
-        print(f"[STEP {step_idx+1:2d}] t={_t_val:.4f} | output: [{model_output.min().item():.3f}, "
-              f"{model_output.max().item():.3f}] std={_mo_std:.4f} | state: [{current_state.min().item():.3f}, "
-              f"{current_state.max().item():.3f}] std={_cs_std:.4f}")
+        _log.debug(f"[STEP {step_idx+1:2d}] t={_t_val:.4f} | output: [{model_output.min().item():.3f}, "
+                   f"{model_output.max().item():.3f}] std={_mo_std:.4f} | state: [{current_state.min().item():.3f}, "
+                   f"{current_state.max().item():.3f}] std={_cs_std:.4f}")
 
         if step_idx == 0 and model_output.dim() == 3:
             _mo = model_output[0].float()
@@ -1198,14 +1200,14 @@ class IterativeProcessHandler(IterativeSteps, FlowHandler):
                 _mo_grid = _mo.view(_side, _side, -1)
                 _grad_h = (_mo_grid[1:, :, :] - _mo_grid[:-1, :, :]).abs().mean().item()
                 _grad_w = (_mo_grid[:, 1:, :] - _mo_grid[:, :-1, :]).abs().mean().item()
-                print(f"[SPATIAL] velocity grad_h={_grad_h:.6f} grad_w={_grad_w:.6f} "
-                      f"std={_mo_std:.6f} smoothness={_mo_std/_grad_h:.2f}x")
+                _log.debug(f"[SPATIAL] velocity grad_h={_grad_h:.6f} grad_w={_grad_w:.6f} "
+                           f"std={_mo_std:.6f} smoothness={_mo_std/_grad_h:.2f}x")
                 _cs = current_state[0].float()
                 if _cs.shape[0] == _seq_len:
                     _cs_grid = _cs.view(_side, _side, -1)
                     _sg_h = (_cs_grid[1:, :, :] - _cs_grid[:-1, :, :]).abs().mean().item()
-                    print(f"[SPATIAL] state    grad_h={_sg_h:.6f} std={_cs_std:.6f} "
-                          f"smoothness={_cs_std/_sg_h:.2f}x")
+                    _log.debug(f"[SPATIAL] state    grad_h={_sg_h:.6f} std={_cs_std:.6f} "
+                               f"smoothness={_cs_std/_sg_h:.2f}x")
 
     def _detect_packing(self, loop_components: List[str]) -> Optional[Dict[str, int]]:
         """

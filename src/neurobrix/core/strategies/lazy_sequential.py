@@ -68,10 +68,9 @@ class LazySequentialStrategy(LazySequentialSteps, ExecutionStrategy):
 
         import os as _os_d
         if _os_d.environ.get("NBX_ZERO3_DIAG") == "1":
-            print(f"[Z3DIAG] lazy.pre-run({component_name}) "
-                  f"exec_id={id(executor) & 0xffffff:06x} cb="
-                  f"{getattr(executor, '_persistent_pre_op_callback', None) is not None}",
-                  flush=True)
+            logger.debug(f"[Z3DIAG] lazy.pre-run({component_name}) "
+                         f"exec_id={id(executor) & 0xffffff:06x} cb="
+                         f"{getattr(executor, '_persistent_pre_op_callback', None) is not None}")
         return executor.run(inputs or {})
 
     def install_for_executor(self, component_name: str, executor) -> None:
@@ -112,7 +111,7 @@ class LazySequentialStrategy(LazySequentialSteps, ExecutionStrategy):
         pinned, total_mb = int(block is not None), (block.nbytes / 2**20 if block is not None else 0.0)
 
         if pinned > 0:
-            logger.info(
+            logger.debug(
                 f"[LazySeq] {component_name}: pinned {pinned} CPU weights "
                 f"({total_mb:.0f}MB)"
             )

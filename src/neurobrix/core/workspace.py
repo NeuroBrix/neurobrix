@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
+import logging
+_log = logging.getLogger(__name__)
 
 SYSTEM_YML = Path(__file__).resolve().parent.parent / "config" / "system.yml"
 
@@ -35,7 +37,7 @@ def declare_unmeasured_io_workers(why: str) -> None:
     this run reads with `UNMEASURED_IO_WORKERS`, says so on its launch line, and the next run measures again."""
     global _IO_UNMEASURED
     _IO_UNMEASURED = why
-    print(f"[Engine] io workers: {UNMEASURED_IO_WORKERS} for this run — {why}; measured again at the next run")
+    _log.info(f"[Engine] io workers: {UNMEASURED_IO_WORKERS} for this run — {why}; measured again at the next run")
 
 
 def declare_io_workers(n: Optional[int]) -> None:

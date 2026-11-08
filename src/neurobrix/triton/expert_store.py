@@ -36,6 +36,7 @@ from nbxtensor.tensor import NBXTensor
 from nbxtensor.shape import numel
 # every projection starts on the library's arena boundary (memory.layout)
 from nbxtensor.memory.layout import aligned as _aligned
+import logging
 
 
 
@@ -388,7 +389,7 @@ class NBXExpertStore:
             self.trace.write(f"recorded by the triton expert store's decode ({self.residency.summary()})")
             self.trace = None
         if self.residency.hits or self.residency.misses:
-            print(f"   {self.summary()}", flush=True)
+            logging.getLogger(__name__).debug(f"   {self.summary()}")
         for ev in self._inflight.values():
             DA.destroy_event(ev)
         self._inflight.clear()

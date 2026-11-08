@@ -27,6 +27,8 @@ from neurobrix.triton import vace_control_conditioning
 from neurobrix.triton import flux_video_conditioning
 from neurobrix.core.runtime.progress import StepProgress
 from neurobrix.core.runtime.resolution.negative_pooled_condition import pooled_text_outputs
+import logging
+_log = logging.getLogger(__name__)
 
 _FLOAT_NBX_DTYPES = (NBXDtype.float16, NBXDtype.bfloat16,
                      NBXDtype.float32, NBXDtype.float64)
@@ -73,9 +75,9 @@ def _gate_loop_state_finite(state: Any, step_idx: int, timestep: Any,
         _f = _np.asarray(state.numpy(), dtype=_np.float32)
         _ts = timestep.item() if hasattr(timestep, "item") else timestep
         _ax = tuple(d for d in range(_f.ndim) if d != 1)
-        print(f"[LoopState] step {step_idx} t={float(_ts):.1f} mean {_f.mean():.4f} std {_f.std():.4f} "
-              f"absmax {_np.abs(_f).max():.3f} ch-mean[:4] {_np.round(_f.mean(axis=_ax)[:4], 3).tolist()} "
-              f"ch-std[:4] {_np.round(_f.std(axis=_ax)[:4], 3).tolist()}", flush=True)
+        _log.debug(f"[LoopState] step {step_idx} t={float(_ts):.1f} mean {_f.mean():.4f} std {_f.std():.4f} "
+                   f"absmax {_np.abs(_f).max():.3f} ch-mean[:4] {_np.round(_f.mean(axis=_ax)[:4], 3).tolist()} "
+                   f"ch-std[:4] {_np.round(_f.std(axis=_ax)[:4], 3).tolist()}")
 
     if not isinstance(state, NBXTensor) or state.nbx_dtype not in _FLOAT_NBX_DTYPES:
         return
@@ -112,7 +114,7 @@ def _vram_probe(tag: str) -> None:
                 except OSError:
                     continue
             else:
-                print(f"[VRAM_PROBE {tag}] libcudart not found", flush=True)
+                _log.debug(f"[VRAM_PROBE {tag}] libcudart not found")
                 return
         _free = _ct.c_size_t(0)
         _total = _ct.c_size_t(0)
@@ -124,11 +126,10 @@ def _vram_probe(tag: str) -> None:
             _nbx_alloc_gb = DeviceAllocator.memory_allocated() / 1e9
         except Exception:
             _nbx_alloc_gb = -1.0
-        print(f"[VRAM_PROBE {tag}] used={_used_gb:.2f}GB free={_free_gb:.2f}GB "
-              f"total={_total_gb:.2f}GB nbx_alloc={_nbx_alloc_gb:.2f}GB",
-              flush=True)
+        _log.debug(f"[VRAM_PROBE {tag}] used={_used_gb:.2f}GB free={_free_gb:.2f}GB "
+                   f"total={_total_gb:.2f}GB nbx_alloc={_nbx_alloc_gb:.2f}GB")
     except Exception as _e:
-        print(f"[VRAM_PROBE {tag}] failed: {_e}", flush=True)
+        _log.debug(f"[VRAM_PROBE {tag}] failed: {_e}")
 
 
 def _to_nbx(tensor) -> NBXTensor:
@@ -248,9 +249,8 @@ class TritonIterativeProcessHandler(IterativeSteps):
             _pm = bool(getattr(self.ctx, 'persistent_mode', False))
             _strat = getattr(_plan, 'strategy', '?')
             _tdt = getattr(_plan, 'target_dtype', '?')
-            print(f"[UNLOAD_DIAG] strategy={_strat!r} loading_mode={_lm!r} "
-                  f"target_dtype={_tdt!r} persistent_mode={_pm}",
-                  flush=True)
+            _log.debug(f"[UNLOAD_DIAG] strategy={_strat!r} loading_mode={_lm!r} "
+                       f"target_dtype={_tdt!r} persistent_mode={_pm}")
             _cm = getattr(_plan, 'component_memory', {}) or {}
             for _cn, _cmb in _cm.items():
                 _mb = getattr(_cmb, 'total_mb', None)
@@ -261,8 +261,8 @@ class TritonIterativeProcessHandler(IterativeSteps):
                     _cdt = getattr(_a, 'dtype', '?')
                 else:
                     _cdt = '?'
-                print(f"[UNLOAD_DIAG]   comp={_cn!r} device={_dev} "
-                      f"dtype={_cdt} prism_mb={_mb}", flush=True)
+                _log.debug(f"[UNLOAD_DIAG]   comp={_cn!r} device={_dev} "
+                           f"dtype={_cdt} prism_mb={_mb}")
             _vram_probe("entry_to_handler")
 
         flow = self.ctx.pkg.topology.get("flow", {})
@@ -316,7 +316,7 @@ class TritonIterativeProcessHandler(IterativeSteps):
             if _os.environ.get("NBX_DIAG_TRITON_PRELOOP") == "1":
                 _keys = [k for k in self.ctx.variable_resolver.resolved
                          if k.startswith(f"{comp_name}.")]
-                print(f"   [NBX-DIAG-PRELOOP] {comp_name} stored keys: {_keys}", flush=True)
+                _log.debug(f"   [NBX-DIAG-PRELOOP] {comp_name} stored keys: {_keys}")
 
             # PURIFICATION: Finalize POSITIVE embeddings immediately after encoding
             # This handles Sana CHI slicing BEFORE we store the result for CFG
@@ -366,7 +366,7 @@ class TritonIterativeProcessHandler(IterativeSteps):
                         if isinstance(t, NBXTensor):
                             _min = t.float().reshape(-1)[0].item()  # approximate
                             _max = t.float().reshape(-1)[-1].item()
-                            print(f"[AUDIT] {key}: shape={list(t.shape)} dtype={t.dtype}")
+                            _log.debug(f"[AUDIT] {key}: shape={list(t.shape)} dtype={t.dtype}")
 
             # Unload weights immediately. Pre_loop components (e.g. the
             # T5 text_encoder ~9.5 GB fp16 for PixArt) are used exactly
@@ -580,14 +580,13 @@ class TritonIterativeProcessHandler(IterativeSteps):
         import os as _os_fvd
         if _os_fvd.environ.get("NBX_FVD_DEBUG"):
             _vr = self.ctx.variable_resolver
-            print(f"[FVD] flux_video={self._flux_family} packing_info={self._packing_info} "
-                  f"state.dim={current_state.dim() if current_state is not None else None}",
-                  flush=True)
+            _log.debug(f"[FVD] flux_video={self._flux_family} packing_info={self._packing_info} "
+                       f"state.dim={current_state.dim() if current_state is not None else None}")
             for _k in ("global.img", "global.img_ids", "global.txt_ids", "global.cond",
                        "text_encoder.last_hidden_state", "text_encoder_2.pooler_output"):
                 _v = _vr.resolved.get(_k)
-                print(f"[FVD]   {_k} = {type(_v).__name__}"
-                      f"{getattr(_v, 'shape', '') if _v is not None else ' (None)'}", flush=True)
+                _log.debug(f"[FVD]   {_k} = {type(_v).__name__}"
+                           f"{getattr(_v, 'shape', '') if _v is not None else ' (None)'}")
 
         # Initialize driver — pass image_seq_len for dynamic shifting
         if hasattr(driver, "set_timesteps"):
@@ -606,10 +605,10 @@ class TritonIterativeProcessHandler(IterativeSteps):
         if hasattr(driver, "init_noise_sigma"):
             noise_scale = driver.init_noise_sigma
             if DEBUG:
-                print(f"[Executor] current_state std before scaling: (triton mode, skipped)")
+                _log.debug(f"[Executor] current_state std before scaling: (triton mode, skipped)")
             if noise_scale != 1.0:
                 if DEBUG:
-                    print(f"[Executor] Scaling initial state by init_noise_sigma = {noise_scale:.4f}")
+                    _log.debug(f"[Executor] Scaling initial state by init_noise_sigma = {noise_scale:.4f}")
                 current_state = current_state * noise_scale
                 self.ctx.variable_resolver.set(state_key, current_state)
 
@@ -689,7 +688,7 @@ class TritonIterativeProcessHandler(IterativeSteps):
             if DEBUG:
                 # timestep may be NBXTensor or Python scalar
                 ts_val = timestep.item() if isinstance(timestep, NBXTensor) else timestep
-                print(f"[Loop] Step {step_idx + 1}/{num_steps} (t={ts_val:.1f})")
+                _log.debug(f"[Loop] Step {step_idx + 1}/{num_steps} (t={ts_val:.1f})")
 
             # Store timestep in loop state
             if isinstance(timestep, NBXTensor) and timestep.dim() == 0:
@@ -817,7 +816,7 @@ class TritonIterativeProcessHandler(IterativeSteps):
                                     _cap[_in] = _arr
                                     break
                         _np_dit.savez(_dd if _dd.endswith(".npz") else _dd + ".npz", **_cap)
-                        print(f"[DIT-DUMP-TRITON] keys={list(_cap.keys())} -> {_dd}")
+                        _log.debug(f"[DIT-DUMP-TRITON] keys={list(_cap.keys())} -> {_dd}")
 
                     # Handle variance prediction split. Channels are axis 1 for
                     # both 4D image [B,C,H,W] and 5D video [B,C,T,H,W]; only the
@@ -922,7 +921,7 @@ class TritonIterativeProcessHandler(IterativeSteps):
             return RenderCheckpoint.from_env(
                 model=self._progress_label(), num_steps=num_steps, extra=extra)
         except Exception as exc:                       # noqa: BLE001
-            print(f"   [checkpoint] unavailable ({exc}); render continues")
+            _log.warning(f"   [checkpoint] unavailable ({exc}); render continues")
             return None
 
     def _checkpoint_resume(self, ck, state_key: str, driver):
@@ -946,10 +945,10 @@ class TritonIterativeProcessHandler(IterativeSteps):
             # Opt in with NBX_RENDER_RESUME=1 if a possibly-different image is
             # acceptable. Tracked as D-RENDER-RESUME-NOT-BIT-IDENTICAL.
             if ck.path.exists():
-                print(f"   [checkpoint] a resume point exists ({ck.path.name}) "
-                      f"but resuming is not yet proven bit-identical, so this "
-                      f"render starts from step 0. Set NBX_RENDER_RESUME=1 to "
-                      f"resume anyway.")
+                _log.debug(f"   [checkpoint] a resume point exists ({ck.path.name}) "
+                           f"but resuming is not yet proven bit-identical, so this "
+                           f"render starts from step 0. Set NBX_RENDER_RESUME=1 to "
+                           f"resume anyway.")
             return 0
         try:
             resumed = ck.load()
@@ -998,7 +997,7 @@ class TritonIterativeProcessHandler(IterativeSteps):
                 f"finished on inconsistent state. Re-run to render from "
                 f"step 0."
             ) from exc
-        print(f"   [checkpoint] resuming at step {step}")
+        _log.debug(f"   [checkpoint] resuming at step {step}")
         return step
 
     def _checkpoint_save(self, ck, step_idx: int, num_steps: int,
@@ -1013,7 +1012,7 @@ class TritonIterativeProcessHandler(IterativeSteps):
                      if hasattr(driver, "checkpoint_state") else None)
             ck.save(step_idx, cur.numpy(), sched)
         except Exception as exc:                       # noqa: BLE001
-            print(f"   [checkpoint] save skipped ({exc})")
+            _log.warning(f"   [checkpoint] save skipped ({exc})")
 
 
     def _setup_step_cache(self, components, dual, num_steps):
@@ -1072,8 +1071,8 @@ class TritonIterativeProcessHandler(IterativeSteps):
                 pre_live = sum(_DA._cuda_live_bytes.values())
                 self._unload_component(comp_name, force=True)
                 post_live = sum(_DA._cuda_live_bytes.values())
-                print(f"[UNLOAD] {comp_name}: live {pre_live/1024/1024:.0f}MB → {post_live/1024/1024:.0f}MB "
-                      f"(freed {(pre_live-post_live)/1024/1024:.0f}MB)", flush=True)
+                _log.debug(f"[UNLOAD] {comp_name}: live {pre_live/1024/1024:.0f}MB → {post_live/1024/1024:.0f}MB "
+                           f"(freed {(pre_live-post_live)/1024/1024:.0f}MB)")
             else:
                 self._unload_component(comp_name, force=True)
 
@@ -1234,11 +1233,11 @@ class TritonIterativeProcessHandler(IterativeSteps):
                 key = f"{prefix}{inp_name}"
                 val = self.ctx.variable_resolver.resolved.get(key)
                 if isinstance(val, NBXTensor):
-                    print(f"[AUDIT] {comp_name} input '{inp_name}' ({key}): "
-                          f"shape={list(val.shape)} dtype={val.dtype}")
+                    _log.debug(f"[AUDIT] {comp_name} input '{inp_name}' ({key}): "
+                               f"shape={list(val.shape)} dtype={val.dtype}")
                     break
                 elif val is not None:
-                    print(f"[AUDIT] {comp_name} input '{inp_name}' ({key}): type={type(val).__name__} val={val}")
+                    _log.debug(f"[AUDIT] {comp_name} input '{inp_name}' ({key}): type={type(val).__name__} val={val}")
                     break
 
     def _print_step_diagnostics(
@@ -1254,9 +1253,9 @@ class TritonIterativeProcessHandler(IterativeSteps):
         so diagnostics are limited to avoid excessive sync overhead.
         """
         _t_val = timestep.item() if isinstance(timestep, NBXTensor) else timestep
-        print(f"[STEP {step_idx+1:2d}] t={_t_val:.4f} | "
-              f"output shape={list(model_output.shape)} | "
-              f"state shape={list(current_state.shape)}")
+        _log.debug(f"[STEP {step_idx+1:2d}] t={_t_val:.4f} | "
+                   f"output shape={list(model_output.shape)} | "
+                   f"state shape={list(current_state.shape)}")
 
     def _detect_packing(self, loop_components: List[str]) -> Optional[Dict[str, int]]:
         """

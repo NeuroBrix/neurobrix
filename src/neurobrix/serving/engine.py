@@ -21,6 +21,8 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from neurobrix.serving.session import ConversationSession
+import logging
+_log = logging.getLogger(__name__)
 
 
 # Warm serving is now determined by loading_mode from Prism solver.
@@ -223,10 +225,10 @@ class InferenceEngine:
         t_load = time.time() - t_start
         self._is_loaded = True
 
-        print(f"[NeuroBrix] {self.model_name} | {self.hardware_id} | {self._plan.strategy} | Ready in {t_load:.2f}s")
+        _log.debug(f"[NeuroBrix] {self.model_name} | {self.hardware_id} | {self._plan.strategy} | Ready in {t_load:.2f}s")
 
         if not self._warm_serving:
-            print(f"[NeuroBrix] Cold serving — weights reload per request, setup/context persists")
+            _log.debug(f"[NeuroBrix] Cold serving — weights reload per request, setup/context persists")
 
     def generate(self, prompt: str = "", **kwargs) -> Dict[str, Any]:
         """
@@ -425,7 +427,7 @@ class InferenceEngine:
             generate_fn=self.generate,
         )
         if summarized:
-            print("[Engine] Conversation history compressed — older turns summarized")
+            _log.debug("[Engine] Conversation history compressed — older turns summarized")
 
         # Build pre-tokenized IDs from conversation history via chat_template.
         # This avoids double-BOS: the template already includes special tokens,

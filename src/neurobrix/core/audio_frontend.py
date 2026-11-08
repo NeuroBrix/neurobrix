@@ -13,6 +13,8 @@ import torch
 from typing import Dict
 
 from neurobrix.core.flow.audio_utils import requested_voice   # both frontends read the voice alike
+import logging
+_log = logging.getLogger(__name__)
 
 
 def preprocess_phonemizer_input(engine, prompt: str, phoneme_vocab: Dict) -> None:
@@ -52,8 +54,8 @@ def preprocess_phonemizer_input(engine, prompt: str, phoneme_vocab: Dict) -> Non
     # ellipsis a 60-character cut reads as a TRUNCATION OF THE DATA, and one hour
     # of 2026-09-16 was spent looking for a text the engine had never dropped.
     _shown = prompt if len(prompt) <= 60 else prompt[:60] + "…"
-    print(f"   [Phonemizer] '{_shown}' ({len(prompt)} chars) -> {len(phonemes)} phonemes "
-          f"-> {actual_len} IDs (dynamic seq_len)")
+    _log.debug(f"   [Phonemizer] '{_shown}' ({len(prompt)} chars) -> {len(phonemes)} phonemes "
+               f"-> {actual_len} IDs (dynamic seq_len)")
 
     # Bind text length and mask for downstream stages (text_encoder, predictor)
     text_lengths = torch.tensor([actual_len], dtype=torch.long, device=device)
@@ -130,4 +132,4 @@ def _load_voicepack(engine, phoneme_count: int, device) -> None:
     for key in ["global.predictor_style", "predictor_style"]:
         engine.ctx.variable_resolver.resolved[key] = style_pred
 
-    print(f"   [Voicepack] Loaded '{voice_name}' (ref_s={ref_s.shape})")
+    _log.debug(f"   [Voicepack] Loaded '{voice_name}' (ref_s={ref_s.shape})")

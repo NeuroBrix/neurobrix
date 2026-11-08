@@ -11,6 +11,7 @@ variables and component outputs.
 """
 
 from typing import Any, Dict, List, TYPE_CHECKING
+import logging
 
 if TYPE_CHECKING:
     from neurobrix.core.runtime.resolution.variable_resolver import VariableResolver
@@ -152,7 +153,7 @@ class InputResolver:
                     # the datum for an input that reaches the executor at a length the flow
                     # never handed it (Qwen3-Omni's thinker, 2026-09-21: 213 handed, 23 bound).
                     _shape = tuple(getattr(value, "shape", ())) if hasattr(value, "shape") else type(value).__name__
-                    print(f"[InputResolver] {sources} -> {source} {_shape}", flush=True)
+                    logging.getLogger(__name__).debug(f"[InputResolver] {sources} -> {source} {_shape}")
                 return value
             except (RuntimeError, KeyError) as e:
                 last_error = e

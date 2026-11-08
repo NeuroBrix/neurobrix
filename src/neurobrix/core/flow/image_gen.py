@@ -36,6 +36,8 @@ from typing import Any, Dict
 import torch
 from neurobrix.core.flow.base import FlowLeg
 from neurobrix.core.flow.shared_steps import require_contract
+import logging
+_log = logging.getLogger(__name__)
 
 
 _require = functools.partial(require_contract, "image_gen")   # this leg's contract block
@@ -110,8 +112,8 @@ class ImageGenLeg(FlowLeg):
                 "generation.seed into defaults.json; re-import a current "
                 "build or pass --set global.seed.")
         seed = int(_seed_v)
-        print(f"   [image_gen] leg start: {width}x{height} steps={steps} "
-              f"cfg={gscale} seed={seed}")
+        _log.debug(f"   [image_gen] leg start: {width}x{height} steps={steps} "
+                   f"cfg={gscale} seed={seed}")
 
         # ── 1. connector → prompt embeds ─────────────────────────────
         # The condition ENCODER pass lives in the vlm splice branch
@@ -161,7 +163,7 @@ class ImageGenLeg(FlowLeg):
                     guided.float(), t, latents.float(),
                     return_dict=False).to(dtype)
                 if (i + 1) % 5 == 0:
-                    print(f"   [image_gen] step {i + 1}/{steps}")
+                    _log.debug(f"   [image_gen] step {i + 1}/{steps}")
                 continue
             lat_in = torch.cat([latents, latents], dim=0)
             t_in = torch.full((2,), float(t) * ts_scale,
@@ -180,7 +182,7 @@ class ImageGenLeg(FlowLeg):
                 guided.float(), t, latents.float(),
                 return_dict=False).to(dtype)
             if (i + 1) % 5 == 0:
-                print(f"   [image_gen] step {i + 1}/{steps}")
+                _log.debug(f"   [image_gen] step {i + 1}/{steps}")
         if _sc is not None:
             _sc.report()
 
@@ -191,4 +193,4 @@ class ImageGenLeg(FlowLeg):
         image = self._run(c_vae, sample=z.to(dtype))
         self.resolved["global.output_image"] = image
         dt = time.perf_counter() - t0
-        print(f"   [image_gen] image {list(image.shape)} in {dt:.1f}s")
+        _log.debug(f"   [image_gen] image {list(image.shape)} in {dt:.1f}s")

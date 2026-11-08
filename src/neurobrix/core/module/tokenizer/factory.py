@@ -17,6 +17,7 @@ import tempfile
 import shutil
 from typing import Dict, Any, Optional
 from pathlib import Path
+import logging
 
 
 class TokenizerWrapper:
@@ -281,10 +282,10 @@ class TokenizerFactory:
             # stays for missing DATA: no fast serialization → crash.
             if (Path(tokenizer_path) / "tokenizer.json").exists():
                 # Substitution must be LOUD (doctrine): name both sides.
-                print(f"   [Tokenizer] Vendor class '{class_name}' not in "
-                      f"transformers — loading the embedded tokenizer.json "
-                      f"through PreTrainedTokenizerFast (universal fast "
-                      f"runner)")
+                logging.getLogger(__name__).debug(f"   [Tokenizer] Vendor class '{class_name}' not in "
+                           f"transformers — loading the embedded tokenizer.json "
+                           f"through PreTrainedTokenizerFast (universal fast "
+                           f"runner)")
                 tokenizer_cls = transformers.PreTrainedTokenizerFast
             else:
                 raise RuntimeError(

@@ -16,6 +16,7 @@ dual-denoiser) stays in the calling flow.
 
 import os
 from typing import Optional
+import logging
 
 
 class StepCache:
@@ -102,6 +103,6 @@ class StepCache:
 
     def report(self) -> None:
         """F1 rates line (drift-discipline clause 4)."""
-        print(f"[StepCache] skipped {self.skipped}/{self.total} "
-              f"steps (threshold={self.threshold}, "
-              f"max_consecutive={self.max_skips})")
+        logging.getLogger(__name__).debug(f"[StepCache] skipped {self.skipped}/{self.total} "
+                   f"steps (threshold={self.threshold}, "
+                   f"max_consecutive={self.max_skips})")

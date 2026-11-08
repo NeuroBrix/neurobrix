@@ -15,6 +15,8 @@ if TYPE_CHECKING:  # R33: the ATen branch imports it; shared code only annotates
     import torch
 from neurobrix.core.runtime.tensor_compat import is_torch_tensor
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
+import logging
+_log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from neurobrix.core.runtime.resolution.variable_resolver import VariableResolver
@@ -604,9 +606,9 @@ class InputSynthesizer:
                 if needs_slice and seq_dim_idx in self._symbolic_dims(comp_name, input_name):
                     continue
                 if needs_slice:
-                    print(f"[InputSynthesizer] {comp_name}.{input_name}: {actual_shape} cut to the traced "
-                          f"{expected_shape} — the graph carries this extent as a literal (a frozen dimension, "
-                          f"a trace defect to fix at the source)", flush=True)
+                    _log.debug(f"[InputSynthesizer] {comp_name}.{input_name}: {actual_shape} cut to the traced "
+                               f"{expected_shape} — the graph carries this extent as a literal (a frozen dimension, "
+                               f"a trace defect to fix at the source)")
                     # Check for Sana-style complex_human_instruction pattern
                     tokenizer_vals = self._topology.get("extracted_values", {}).get("tokenizer", {})
                     complex_human_instruction = tokenizer_vals.get("complex_human_instruction")

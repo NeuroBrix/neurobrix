@@ -42,6 +42,8 @@ from nbxtensor.random.seeded_draw import SeededDrawStream
 from nbxtensor.memory.device_transfer import needs_move, transfer_tensor
 from neurobrix.core.flow.base import FlowLeg   # the leg's engine, ctx and resolver, both branches
 from neurobrix.core.flow.shared_steps import require_contract
+import logging
+_log = logging.getLogger(__name__)
 
 
 _require = functools.partial(require_contract, "speech")   # this leg's contract block
@@ -156,8 +158,8 @@ class SpeechLeg(FlowLeg):
                                      "talker sampling contract"))
 
         stream = SeededDrawStream(seed)
-        print(f"   [speech:triton] leg start: speaker={req_speaker}"
-              f"({speaker_id}) seed={seed} max_frames={max_frames}")
+        _log.debug(f"   [speech:triton] leg start: speaker={req_speaker}"
+                   f"({speaker_id}) seed={seed} max_frames={max_frames}")
 
         # ── 1. thinker-side sequences ─────────────────────────────────
         input_ids: List[int] = list(state["input_ids"])
@@ -388,15 +390,15 @@ class SpeechLeg(FlowLeg):
                 [talker_context, next_embed.to(dtype)], dim=1)
             gen_step += 1
             if gen_step % 25 == 0:
-                print(f"   [speech:triton] {gen_step} codec frames "
-                      f"({stream.draws} draws)")
+                _log.debug(f"   [speech:triton] {gen_step} codec frames "
+                           f"({stream.draws} draws)")
 
         if not frames:
             raise RuntimeError(
                 "ZERO FALLBACK: talker produced zero codec frames "
                 "(eos at step 0) — inspect the prefill construction.")
-        print(f"   [speech:triton] talker done: {len(frames)} frames, "
-              f"{stream.draws} draws")
+        _log.debug(f"   [speech:triton] talker done: {len(frames)} frames, "
+                   f"{stream.draws} draws")
 
         # ── 5. code2wav chunked decode (vendor 3752) ─────────────────
         chunk = int(_require(voc, "chunk_size", "vocoder windowing"))
@@ -430,5 +432,5 @@ class SpeechLeg(FlowLeg):
         self.resolved["global.output_audio"] = waveform
         dt = time.perf_counter() - t0
         sr = int(_require(voc, "sample_rate", "vocoder contract"))
-        print(f"   [speech:triton] waveform {list(waveform.shape)} "
-              f"({waveform.shape[-1] / sr:.2f}s @ {sr} Hz) in {dt:.1f}s")
+        _log.debug(f"   [speech:triton] waveform {list(waveform.shape)} "
+                   f"({waveform.shape[-1] / sr:.2f}s @ {sr} Hz) in {dt:.1f}s")

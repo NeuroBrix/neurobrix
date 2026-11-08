@@ -374,11 +374,24 @@ NeuroBrix also runs on CPU-only machines — see [Hardware Profiles](../guide/ha
 
 ---
 
+## What a command prints
+
+stdout carries the command's result only: the generated text, the transcript, `SAVED: <path>` for a file, a table,
+or — with `--json` — one JSON record on one line. stderr carries a few status lines (the engine in use, the run
+time, a first launch measuring the machine, a warning, an error with its remedy) and stays empty under `--json`
+unless something is wrong.
+
+| Option / variable | Effect |
+|----------|--------|
+| `-v`, `--verbose` (before or after the command) | Adds the engine's developer lines on stderr — the plan (strategy, devices, memory), the loaders, the replay, the kernel directory, the `[Timings]` / `[Peak]` lines; `neurobrix --help -v` also lists the developer commands (`calibrate`, `autotune`, `drift`, `coverage`) |
+| `-vv` | The developer lines and the traceback of an error |
+| `NBX_LOG=debug\|info\|warning\|error` | The level from the environment (`debug` = `-vv`): the knob for scripts, daemons and the gate harness, which parse the developer lines. A serving daemon's log (`daemon.log` in the engine's home) always holds every line. Every `NBX_*` diagnostic variable below logs at the debug level |
+
 ## Debug Environment Variables
 
 | Variable | Effect |
 |----------|--------|
-| `NBX_DEBUG=1` | Verbose logging (forces GPU sync, ~2x slower) |
+| `NBX_DEBUG=1` | Expensive per-op statistics (forces GPU sync, ~2x slower), shown with `-v` / `NBX_LOG=debug` |
 | `NBX_TRACE_ZEROS=1` | Find first op producing all-zeros from non-zero input |
 | `NBX_TRACE_NAN=1` | Trace NaN/Inf in first few ops |
 | `NBX_NAN_GUARD=1` | Replace NaN with 0 in every op (expensive) |

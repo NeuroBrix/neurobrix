@@ -59,7 +59,7 @@ def test_the_weights_are_read_at_their_offset_without_preadv(monkeypatch, tmp_pa
     assert got.tobytes() == data[1000:301000]
 
 
-def test_a_measure_windows_cannot_make_is_declared_unmeasured(monkeypatch, capsys):
+def test_a_measure_windows_cannot_make_is_declared_unmeasured(monkeypatch, engine_log):
     from nbxtensor.io import read_rate as R
     monkeypatch.setattr(R.sys, "platform", "win32")
     monkeypatch.delattr(os, "posix_fadvise", raising=False)
@@ -70,7 +70,7 @@ def test_a_measure_windows_cannot_make_is_declared_unmeasured(monkeypatch, capsy
     monkeypatch.setattr(W, "_IO_WORKERS", None)
     monkeypatch.setattr(W, "_IO_UNMEASURED", None)
     assert A._measure_io_workers() is None
-    assert "[Engine] io workers: 1 for this run — no uncached read-rate measure on this system" in capsys.readouterr().out
+    assert "[Engine] io workers: 1 for this run — no uncached read-rate measure on this system" in engine_log()
 
 
 def test_the_resident_term_is_the_working_set_on_windows(monkeypatch):

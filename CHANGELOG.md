@@ -14,12 +14,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   compiled engine's growth during a run is a fact (measured for the model, or declared by the device's vendor file), it
   is the one reserve the plan keeps — the fixed private reserve is not taken a second time, and a component may use the
   whole budget instead of a fixed 92 % of it. Devices without the fact are planned as before.
+- **A command prints what its user needs, and nothing else.** stdout carries the result only — the generated text,
+  the transcript, `SAVED: <path>`, the table — and stderr a few status lines: the engine in use, the run time, a
+  first launch measuring the machine once (a line, where the minutes of that measurement printed nothing), a warning,
+  an error in one line with its remedy. A successful `run` printed 45 to 50 lines, of which 2 or 3 were its result;
+  `import`, `hub`, `list`, `doctor`, `serve`, `chat` and `stop` lose their banners, separators and the echo of the
+  request, and `--help` lists the user's commands only (`--help -v` adds the developer ones). The engine's
+  developer lines — the plan, the loaders, the replay, the kernel directory, the `[Timings]` and `[Peak]` lines —
+  are shown with `-v` / `--verbose`, an error's traceback with `-vv`, both with `NBX_LOG=debug`; `import neurobrix`
+  and `import nbxtensor` stay silent and install no logging handler. A serving daemon's log keeps every line.
+- **`--json` prints its record on one line** (it was indented over about 120 lines); the content is unchanged.
+- **`python -m nbxtensor install-metal` downloads nothing when the pinned Metal wheels are already installed**, and
+  says so in one line (it re-downloaded 131 MB on every call).
 
 ### Fixed
 - **A mixture-of-experts model on an Apple GPU is no longer planned on a free expert miss**: Prism priced a routed
   expert the store's cache missed as costing nothing on unified memory, so it chose an expert store estimated at 18 s for
   DeepSeek-Coder-V2-Lite where the run took more than 40 minutes. A miss is now priced as the page-in it is, at the
   device's measured cold load rate.
+- **No Triton warning on a first run**: the masked-fill kernel gave `tl.where` a uint8 condition, and Triton warned
+  that this is deprecated at the first compile of a language model; the condition is now a boolean (the compiled code
+  is identical).
 - **A language model's prompt is priced at its own length**: Prism planned a text request's prefill at the cache's
   prompt margin (128 tokens) whatever the prompt, so a long prompt was under-priced (TinyLlama: ~0.01 GiB planned for
   a 400-token prompt where the run held 652 MB) and a short one over-priced. The prompt is now counted by the flow's

@@ -66,6 +66,7 @@ def _env(tree: Path, out: Path, extra=None) -> dict:
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join([str(out / "recorder"), str(tree / "src"), str(tree / "nbxtensor" / "src")])
     env["NBX_TORCH_ATTEMPTS"] = str(out / "torch_attempts.jsonl")
+    env["NBX_LOG"] = "debug"          # the run's developer lines in its log (nbxtensor/terminal.py)
     env.update(extra or {})
     return env
 

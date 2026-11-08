@@ -29,8 +29,10 @@ REPO = Path(__file__).resolve().parents[3]
 _DRIVER = r"""
 import sys
 sys.modules["torch"] = None
-from neurobrix.cli import create_parser
+from nbxtensor import terminal
+from neurobrix.cli import LOGGERS, create_parser
 from neurobrix.cli.commands import run as R
+terminal.configure(*terminal.resolve(0), roots=LOGGERS)     # the terminal the entry point installs
 import neurobrix.nbx as N
 R.find_model = lambda name: "/nonexistent/" + name
 class _Loaded(Exception):

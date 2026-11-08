@@ -18,6 +18,8 @@ from typing import Any, Dict, Optional
 from pathlib import Path
 
 from neurobrix.core.config import get_family_config, get_output_processing
+import logging
+_log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -442,10 +444,10 @@ def say_frames_delivered(pkg, executor, delivered: int) -> None:
     except (TypeError, ValueError, AttributeError):
         asked = None
     if asked is not None and delivered != asked:
-        print(f"   [Output] {delivered} frames written, {asked} asked for: this model's VAE "
-              f"represents frames on a temporal grid, and {asked} is not on it. The nearest "
-              f"counts below and above are what it can hold; ask for one of those to get "
-              f"exactly what you asked for.", flush=True)
+        _log.warning(f"   [Output] {delivered} frames written, {asked} asked for: this model's VAE "
+                   f"represents frames on a temporal grid, and {asked} is not on it. The nearest "
+                   f"counts below and above are what it can hold; ask for one of those to get "
+                   f"exactly what you asked for.")
 
 
 def save_video(
@@ -661,10 +663,9 @@ def _dump_decoded_frames(frames_uint8, output_path: str) -> None:
             Image.fromarray(fr).save(png)
             written.append(png)
     except Exception as exc:
-        print(f"[decoded-frames] PNGs not written ({exc}); the .npy holds them all",
-              flush=True)
-    print(f"[decoded-frames] {frames_uint8.shape} {frames_uint8.dtype} -> {d} "
-          f"({len(written)} file(s))", flush=True)
+        _log.debug(f"[decoded-frames] PNGs not written ({exc}); the .npy holds them all")
+    _log.debug(f"[decoded-frames] {frames_uint8.shape} {frames_uint8.dtype} -> {d} "
+               f"({len(written)} file(s))")
 
 
 def _write_video_h264(output_path: str, frames_uint8, fps: float) -> None:

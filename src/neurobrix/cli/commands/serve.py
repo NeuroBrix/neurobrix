@@ -10,7 +10,10 @@ Usage:
     neurobrix serve --model TinyLlama-1.1B-Chat-v1.0 --hardware v100-32g --foreground
 """
 
+import logging
 import sys
+
+log = logging.getLogger(__name__)
 
 
 def cmd_serve(args):
@@ -21,8 +24,7 @@ def cmd_serve(args):
     # Check if already running
     if DaemonClient.is_running():
         pid = DaemonClient.get_pid()
-        print(f"[Serve] Daemon already running (PID {pid})")
-        print(f"[Serve] Use 'neurobrix chat' to connect, or 'neurobrix stop' to shutdown.")
+        log.error(f"Error: a daemon is already running (PID {pid}): neurobrix chat talks to it, neurobrix stop ends it")
         sys.exit(1)
 
     # Determine execution mode (mutually exclusive flags;
@@ -34,8 +36,8 @@ def cmd_serve(args):
         getattr(args, 'triton_sequential', False),
     ]
     if sum(bool(f) for f in _mode_flags) > 1:
-        print("[Serve] ERROR: only one execution mode flag may be passed "
-              "(--compiled / --sequential / --triton / --triton-sequential).")
+        log.error("Error: only one execution mode flag may be passed "
+                  "(--compiled / --sequential / --triton / --triton-sequential).")
         sys.exit(1)
     if getattr(args, 'sequential', False):
         mode = "sequential"
@@ -49,13 +51,13 @@ def cmd_serve(args):
         # no mode flag: the PyTorch engine where torch is installed, the Triton engine where it is not — said here
         from neurobrix.core.runtime.engines import default_mode
         mode, _said = default_mode()
-        print(f"[Serve] {_said}")
+        log.info(f"[Serve] {_said}")
     # The PyTorch branch without torch installed: refused by name before the daemon starts (core/runtime/engines.py).
     from neurobrix.core.runtime.engines import PyTorchBranchNotInstalledError, require_engine
     try:
         require_engine(mode)
     except PyTorchBranchNotInstalledError as exc:
-        print(f"[Serve] ERROR: {exc}")
+        log.error(f"Error: {exc}")
         sys.exit(1)
 
     timeout = getattr(args, 'timeout', 1800) or 1800
@@ -78,11 +80,8 @@ def cmd_serve(args):
         _spec.loader.exec_module(_mod)
         hardware_id = _mod.get_or_create_default_profile()  # the profile of THIS environment's visible GPUs
 
-    print(f"[Serve] Starting NeuroBrix Serving Daemon")
-    print(f"[Serve] Model: {args.model}")
-    print(f"[Serve] Hardware: {hardware_id if args.hardware else 'auto-detect'}")
-    print(f"[Serve] Mode: {mode}")
-    print(f"[Serve] Idle timeout: {timeout}s")
+    log.debug(f"[Serve] {args.model} · hardware {hardware_id if args.hardware else 'auto-detect'} · mode {mode} · "
+              f"idle timeout {timeout}s")
 
     daemon = ServingDaemon(
         model_name=args.model,
@@ -104,7 +103,7 @@ def cmd_stop(args):
     from neurobrix.serving.protocol import SOCKET_PATH, PID_PATH, IS_WINDOWS, INSTANCE
 
     if not DaemonClient.is_running():
-        print("[Stop] No daemon running.")
+        print("No daemon is running.")
         # Clean up stale files (socket, pid, and a named Windows instance's port)
         for f in INSTANCE.instance_files():
             if f.exists():
@@ -112,7 +111,7 @@ def cmd_stop(args):
         sys.exit(0)
 
     pid = DaemonClient.get_pid()
-    print(f"[Stop] Sending shutdown to daemon (PID {pid})...")
+    log.debug(f"[Stop] Sending shutdown to daemon (PID {pid})...")
 
     # Step 1: Try clean socket shutdown (3s timeout)
     socket_ok = False
@@ -133,13 +132,13 @@ def cmd_stop(args):
         deadline = time.time() + 5.0
         while time.time() < deadline:
             if not DaemonClient.is_running():
-                print("[Stop] Daemon stopped.")
+                print("Stopped the serving daemon.")
                 return
             time.sleep(0.2)
 
     # Step 2: Graceful termination (3s timeout)
     if pid is not None:
-        print("[Stop] Sending termination signal...")
+        log.debug("[Stop] Sending termination signal...")
         try:
             if IS_WINDOWS:
                 # Windows: SIGTERM via os.kill calls TerminateProcess
@@ -148,20 +147,20 @@ def cmd_stop(args):
                 os.kill(pid, signal.SIGTERM)
         except (ProcessLookupError, OSError):
             _cleanup_daemon_files(SOCKET_PATH, PID_PATH)
-            print("[Stop] Daemon already exited.")
+            print("The serving daemon had already exited.")
             return
 
         deadline = time.time() + 3.0
         while time.time() < deadline:
             if not DaemonClient.is_running():
-                print("[Stop] Daemon stopped.")
+                print("Stopped the serving daemon.")
                 return
             time.sleep(0.2)
 
     # Step 3: Force kill (platform-adaptive)
     if pid is not None and DaemonClient.is_running():
         import subprocess as _sp
-        print("[Stop] Daemon unresponsive — force terminating...")
+        log.warning("Warning: the daemon did not answer; it is killed")
         if IS_WINDOWS:
             try:
                 _sp.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
@@ -181,12 +180,12 @@ def cmd_stop(args):
 
     if DaemonClient.is_running():
         if IS_WINDOWS:
-            print(f"[Stop] WARNING: Daemon still alive. Manual kill required: taskkill /F /PID {pid}")
+            log.error(f"Error: the daemon is still alive; kill it by hand: taskkill /F /PID {pid}")
         else:
-            print(f"[Stop] WARNING: Daemon still alive after SIGKILL. Manual kill required: kill -9 {pid}")
+            log.error(f"Error: the daemon is still alive after SIGKILL; kill it by hand: kill -9 {pid}")
         sys.exit(1)
     else:
-        print("[Stop] Daemon stopped.")
+        print("Stopped the serving daemon.")
 
 
 def _cleanup_daemon_files(socket_path, pid_path):

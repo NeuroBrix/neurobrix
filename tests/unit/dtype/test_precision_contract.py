@@ -303,7 +303,7 @@ def test_a_corrupt_existing_record_raises_instead_of_defaulting(tmp_path, monkey
         cal.load_record("ModelX", "text_encoder")
 
 
-def test_a_stale_record_is_refused_loudly_and_never_applied(tmp_path, monkeypatch, capsys):
+def test_a_stale_record_is_refused_loudly_and_never_applied(tmp_path, monkeypatch, engine_log):
     from neurobrix.core.dtype import calibration as cal
     monkeypatch.setattr(cal, "STORE_ROOT", tmp_path / "store")
     monkeypatch.delenv("NBX_ACTIVATIONS_FP16_SAFE", raising=False)
@@ -315,7 +315,7 @@ def test_a_stale_record_is_refused_loudly_and_never_applied(tmp_path, monkeypatc
                                 ).save(cal.store_path("ModelX", "text_encoder"))
     ex = _executor(tmp_path, "ModelX", "text_encoder", dag)
     assert ex._resolve_fp16_activation_policy(torch.float16) == (False, frozenset(), frozenset())
-    err = capsys.readouterr().err
+    err = engine_log()
     assert "REFUSED RECORD" in err and "neurobrix calibrate --model ModelX" in err
 
 
@@ -362,7 +362,7 @@ def test_the_contract_can_be_set_after_the_engine_exists():
     assert _mm_out_dtype(eng, op_uid="aten.mm::1") == torch.float32
 
 
-def test_a_record_that_observed_nothing_never_switches_the_contract_on(tmp_path, monkeypatch, capsys):
+def test_a_record_that_observed_nothing_never_switches_the_contract_on(tmp_path, monkeypatch, engine_log):
     from neurobrix.core.dtype import calibration as cal
     monkeypatch.setattr(cal, "STORE_ROOT", tmp_path / "store")
     monkeypatch.delenv("NBX_ACTIVATIONS_FP16_SAFE", raising=False)
@@ -371,7 +371,7 @@ def test_a_record_that_observed_nothing_never_switches_the_contract_on(tmp_path,
                                 reference="conservative").save(cal.store_path("ModelX", "text_encoder"))
     ex = _executor(tmp_path, "ModelX", "text_encoder", dag)
     assert ex._resolve_fp16_activation_policy(torch.float16) == (False, frozenset(), frozenset())
-    assert "observed no op" in capsys.readouterr().err
+    assert "observed no op" in engine_log()
 
 
 def test_grid_sampler_2d_promotes_input_and_grid_under_the_contract():

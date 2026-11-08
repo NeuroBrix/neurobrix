@@ -36,6 +36,8 @@ from nbxtensor.dtype.convert import bf16_bits_to_f32, f32_to_bf16_bits
 
 from nbxtensor.ops import autotune_certified as C
 from nbxtensor.dtype import itemsize as _isz
+import logging
+_log = logging.getLogger(__name__)
 
 ORACLE = "fp64: the op in float64 (numpy), the reference bank's definition"
 # The whole oracle of a convolution is computed when it costs at most this many multiply-adds;
@@ -2228,7 +2230,7 @@ def _phase(label: str) -> None:
         now = psutil.Process().memory_info().rss
     except Exception:                                                    # noqa: BLE001
         now = -1
-    print(f"[phase] {_t.strftime('%H:%M:%S')} {label}: rss_now={now/2**20:.0f}MiB peak_rss={peak/2**20:.0f}MiB", flush=True)
+    _log.debug(f"[phase] {_t.strftime('%H:%M:%S')} {label}: rss_now={now/2**20:.0f}MiB peak_rss={peak/2**20:.0f}MiB")
 
 
 def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,

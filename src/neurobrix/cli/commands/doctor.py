@@ -5,8 +5,12 @@ not see the card); it exits non-zero when nothing can run, so it is usable in a 
 
 from __future__ import annotations
 
+import logging
 import shutil
 import subprocess
+
+#: the diagnosis's facts (build, driver, PCI ids) under -v; the verdicts on stdout
+log = logging.getLogger(__name__)
 
 
 def _nvidia_smi_gpus() -> list[tuple[str, str]]:
@@ -112,8 +116,6 @@ def check_compute_environment() -> list[str]:
     (`--triton`, nbxtensor, no PyTorch) and the PyTorch engine (the default, `neurobrix[pytorch]`). A machine where
     one of them can run has no blocking problem; the other is said, with how to add it."""
     problems: list[str] = []
-    print("Compute environment")
-    print("-" * 60)
     triton_ready, triton_says = _triton_engine()
     print(f"  Triton engine:  {triton_says}")
     if _apple_silicon():
@@ -121,7 +123,7 @@ def check_compute_environment() -> list[str]:
         print("  GPU drivers:    Apple GPU (Metal), part of macOS")
     else:
         from nbxtensor.backend.install_help import report
-        print("  GPU drivers:    " + report().replace("\n", "\n                  "))
+        log.debug("  GPU drivers:    " + report().replace("\n", "\n                  "))
 
     if not _torch_present():
         print("  PyTorch engine: not installed (optional; the Triton engine runs without it: --triton). To add it: "
@@ -134,21 +136,21 @@ def check_compute_environment() -> list[str]:
 
     cuda_build = getattr(torch.version, "cuda", None)
     hip_build = getattr(torch.version, "hip", None)
-    print(f"  PyTorch:        {torch.__version__}")
+    log.debug(f"  PyTorch:        {torch.__version__}")
     mps = getattr(getattr(torch, "backends", None), "mps", None)
     on_mps = mps is not None and mps.is_available()
     built = ("ROCm " + hip_build if hip_build else "CUDA " + cuda_build if cuda_build else
              "Apple MPS (Metal)" if on_mps else "CPU only")
-    print(f"  built for:      {built}")
+    log.debug(f"  built for:      {built}")
 
     gpus = _nvidia_smi_gpus()
     driver = _driver_version()
     if driver:
-        print(f"  NVIDIA driver:  {driver}")
+        log.debug(f"  NVIDIA driver:  {driver}")
 
     if torch.cuda.is_available():
         arch_list = torch.cuda.get_arch_list()
-        print(f"  GPU visible:    yes ({torch.cuda.device_count()} device(s))")
+        print(f"  PyTorch engine: {torch.__version__} ({built}), {torch.cuda.device_count()} GPU(s) visible")
         for i in range(torch.cuda.device_count()):
             major, minor = torch.cuda.get_device_capability(i)
             sm = f"sm_{major}{minor}"
@@ -164,27 +166,18 @@ def check_compute_environment() -> list[str]:
         return problems
 
     if on_mps:
-        print("  GPU visible:    yes (Apple GPU, mps)")
+        print(f"  PyTorch engine: {torch.__version__} (Apple GPU, mps)")
         return problems
 
     # No CUDA. Distinguish "no GPU" from "GPU present, torch cannot use it" —
     # they are completely different problems for the user.
     print("  GPU visible:    NO")
     if not gpus:
-        print("    No NVIDIA GPU detected by the driver either — CPU execution.")
-        print("    This is a supported path: hardware auto-detection selects a "
-              "CPU profile and")
-        print("    small models run without any configuration.")
+        print("    No NVIDIA GPU detected by the driver either: CPU execution, a supported path (a CPU profile is detected).")
         if cuda_build:
-            # not a problem, but several GB of CUDA wheels nothing uses; an extra cannot pull the CPU wheel (PEP 508
-            # carries no index URL), so the recipe is printed where it is diagnosed
-            print()
-            print("    Note: PyTorch is installed with CUDA support "
-                  f"(CUDA {cuda_build}) on a machine with no")
-            print("    NVIDIA GPU — that is several GB of unused wheels. For a "
-                  "CPU-only install:")
-            print(f"      {_cpu_install_hint()}")
-            print("      pip install neurobrix")
+            # several GB of CUDA wheels nothing uses; an extra cannot pull the CPU wheel (PEP 508 carries no index URL)
+            print(f"    Note: PyTorch is installed with CUDA {cuda_build} on a machine with no NVIDIA GPU — several GB of "
+                  f"unused wheels. For a CPU-only install: {_cpu_install_hint()}, then pip install neurobrix")
         return problems
 
     caps = ", ".join(f"{n} ({c})" for n, c in gpus)
@@ -218,9 +211,7 @@ def cmd_doctor(args) -> int:
     from neurobrix.cli._path_helper import print_path_diagnostics
 
     print_path_diagnostics()
-    print()
     problems = check_compute_environment()
-    print()
 
     if not problems:
         print("No blocking problem found: the engine is installed and can see "
@@ -230,6 +221,5 @@ def cmd_doctor(args) -> int:
     print(f"{len(problems)} problem(s) that will block a real run:")
     for n, problem in enumerate(problems, 1):
         print(f"  {n}. {problem}")
-    print()
     print("Re-run `neurobrix doctor` after applying the fix.")
     return 1

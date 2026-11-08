@@ -39,7 +39,7 @@ def emit(command: str, record: Dict[str, Any]) -> None:
     doc = {"schema": f"neurobrix.{command}/{version}", "engine": __version__}
     doc.update(record)
     out = _RECORD_STREAM or sys.stdout      # the record reaches the caller's stdout even inside human_lines_to_stderr
-    out.write(json.dumps(doc, indent=1, default=str) + "\n")
+    out.write(json.dumps(doc, default=str, separators=(",", ":")) + "\n")      # ONE line: a record, not a page
     out.flush()
 
 

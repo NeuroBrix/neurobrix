@@ -29,6 +29,8 @@ from nbxtensor.memory.memory_pool import release_flow_memory
 from nbxtensor.memory.device_transfer import parse_device_idx
 from neurobrix.core.flow.shared_steps import RNNTSteps, joint_role   # the steps both branches share
 from neurobrix.core.flow.base import ComponentFlowHandler   # the executor's four component callables, both branches
+import logging
+_log = logging.getLogger(__name__)
 
 # R30 mirror of core/flow/rnnt.py: the joint's linears as NeMo names them, keyed by the parser.
 
@@ -56,7 +58,7 @@ class TritonRNNTEngine(RNNTSteps, ComponentFlowHandler):
         _windows = getattr(self, "_stt_windows", None) or [None]
         _n_win = len(_windows)
         if _n_win > 1:
-            print(f"   [Audio] Long-form: {_n_win} windows")
+            _log.debug(f"   [Audio] Long-form: {_n_win} windows")
 
         tokens: list = []
         for _wi in range(_n_win):
@@ -69,8 +71,8 @@ class TritonRNNTEngine(RNNTSteps, ComponentFlowHandler):
             self._execute_component("encoder", "forward", None)
             enc_output = self._get_component_output("encoder")
             enc_ms = (time.perf_counter() - start) * 1000
-            print(f"   [encoder] Done in {enc_ms:.0f}ms, output shape {enc_output.shape}"
-                  + (f" (window {_wi + 1}/{_n_win})" if _n_win > 1 else ""))
+            _log.debug("%s", f"   [encoder] Done in {enc_ms:.0f}ms, output shape {enc_output.shape}"
+                             + (f" (window {_wi + 1}/{_n_win})" if _n_win > 1 else ""))
 
             # Step 3: RNNT greedy decode (numpy-based for variable shapes)
             start = time.perf_counter()
@@ -91,7 +93,7 @@ class TritonRNNTEngine(RNNTSteps, ComponentFlowHandler):
             tokens.extend(_wtok)
 
             dec_ms = (time.perf_counter() - start) * 1000
-            print(f"   [rnnt_decode] {len(tokens)} tokens in {dec_ms:.0f}ms")
+            _log.debug(f"   [rnnt_decode] {len(tokens)} tokens in {dec_ms:.0f}ms")
 
         if not self.ctx.persistent_mode:
             self._unload_component_weights("encoder")
@@ -104,7 +106,7 @@ class TritonRNNTEngine(RNNTSteps, ComponentFlowHandler):
         text = self._decode_tokens(tokens)
         self.ctx.variable_resolver.resolved["global.transcription"] = text
 
-        print(f"\n[Transcription]\n{text}")
+        _log.debug(f"[Transcription]\n{text}")
         return self.ctx.variable_resolver.resolve_all()
 
     # -----------------------------------------------------------------
@@ -124,7 +126,7 @@ class TritonRNNTEngine(RNNTSteps, ComponentFlowHandler):
         device_idx = parse_device_idx(self.ctx.primary_device)
         DeviceAllocator.set_device(device_idx)
 
-        print(f"   [Audio] Loading: {audio_path}")
+        _log.debug(f"   [Audio] Loading: {audio_path}")
 
         # NeMo mel in PURE NUMPY (zero torch) — bit-close mirror of the
         # torchaudio path (validated vs torch; STT-confirmed). The extractor
@@ -133,7 +135,7 @@ class TritonRNNTEngine(RNNTSteps, ComponentFlowHandler):
         _mp = _model_config_path(self.ctx)   # raises like the compiled mirror
         features_np = _nemo_mel(str(audio_path), _mp, None)   # [1, n_mels, frames]
         actual_frames = features_np.shape[2]
-        print(f"   [Audio] Features: {features_np.shape} (nemo_mel·np, {actual_frames} frames)")
+        _log.debug(f"   [Audio] Features: {features_np.shape} (nemo_mel·np, {actual_frames} frames)")
 
         # Pad/truncate to the encoder's traced frame count (numpy).
         expected_frames = 3000
@@ -174,9 +176,9 @@ class TritonRNNTEngine(RNNTSteps, ComponentFlowHandler):
                 # Same hop/rate the mel was computed with (mirror of the
                 # compiled flow): built-in NeMo values on a legacy build,
                 # announced, never silent (D-PARAKEET-SYMBOLIC-T).
-                print(f"   [Audio] NeMo preprocessor params: built-in values "
-                      f"(no embedded config in this build) — "
-                      f"sr={_mp_params['sr']} hop={_mp_params['hop']}")
+                _log.debug(f"   [Audio] NeMo preprocessor params: built-in values "
+                           f"(no embedded config in this build) — "
+                           f"sr={_mp_params['sr']} hop={_mp_params['hop']}")
             self._stt_overlap_mel = int(round(
                 float(_lf["rnnt_overlap_seconds"]) * _mp_params["sr"] / _mp_params["hop"]))
             wins = []
@@ -258,8 +260,8 @@ class TritonRNNTEngine(RNNTSteps, ComponentFlowHandler):
         durations = defaults.get("tdt_durations")
         if num_tdt_durations > 1 and durations is None:
             durations = list(range(num_tdt_durations))
-            print(f"   [rnnt_decode] TDT durations: built-in consecutive "
-                  f"{durations} (not carried by this build)")
+            _log.debug(f"   [rnnt_decode] TDT durations: built-in consecutive "
+                       f"{durations} (not carried by this build)")
         max_symbols_per_step = int(defaults.get("max_symbols_per_step", 10))
         t = 0
         g = None

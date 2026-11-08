@@ -40,6 +40,8 @@ from typing import Any, Dict, FrozenSet, Optional, Tuple
 
 from neurobrix.core.config.loader import get_precision_calibration_policy
 from neurobrix.core.dtype import calibration as _cal
+import logging
+_log = logging.getLogger(__name__)
 
 FLAG = "activations_fp16_safe"
 FLAG_ENV = "NBX_ACTIVATIONS_FP16_SAFE"
@@ -188,24 +190,21 @@ def load_calibration(cache_path: Optional[str], component_name: str,
         # A record that observed nothing (the component ran on a path the
         # census does not see) carries no information: the contract would
         # switch on blind. Refused loudly; the component stays conservative.
-        import sys
-        print(f"[DtypeEngine] REFUSED RECORD {component_name}: calibration "
-              f"{record.graph_signature} observed no op ({record.passes} pass(es), "
-              f"{len(record.max_abs)} op(s) recorded) — its execution path is not "
-              f"observed by the census. Not applied — conservative path.",
-              file=sys.stderr, flush=True)
+        _log.warning(f"[DtypeEngine] REFUSED RECORD {component_name}: calibration "
+                     f"{record.graph_signature} observed no op ({record.passes} pass(es), "
+                     f"{len(record.max_abs)} op(s) recorded) — its execution path is not "
+                     f"observed by the census. Not applied — conservative path.")
         return None
     if not record.matches(dag):
         # Present-but-inconsistent: said loudly on stderr at every load, and
         # the record is NOT applied. The component runs the conservative
         # path (correct, slower). Whether this must refuse to run instead
         # is the owner's call (doctrine review 2026-09-05).
-        import sys
-        print(f"[DtypeEngine] REFUSED RECORD {component_name}: calibration "
-              f"{record.graph_signature} was measured on another graph than "
-              f"{_cal.graph_signature(dag)} (re-traced artifact or engine "
-              f"rewrite). Not applied — conservative path. Re-measure: "
-              f"`neurobrix calibrate --model {model_name}`", file=sys.stderr, flush=True)
+        _log.warning(f"[DtypeEngine] REFUSED RECORD {component_name}: calibration "
+                     f"{record.graph_signature} was measured on another graph than "
+                     f"{_cal.graph_signature(dag)} (re-traced artifact or engine "
+                     f"rewrite). Not applied — conservative path. Re-measure: "
+                     f"`neurobrix calibrate --model {model_name}`")
         return None
     return record
 
@@ -237,12 +236,12 @@ def resolve(cache_path: Optional[str], component_name: str,
     record = load_calibration(cache_path, component_name, dag)
     if record is None:
         if forced is True:
-            print(f"[DtypeEngine] {component_name}: {FLAG_ENV}=1 — contract forced "
-                  f"with no island (no calibration record)")
+            _log.debug(f"[DtypeEngine] {component_name}: {FLAG_ENV}=1 — contract forced "
+                       f"with no island (no calibration record)")
             return True, frozenset(), narrowable_op_uids(dag)
-        print(f"[DtypeEngine] {component_name}: no calibration record — conservative "
-              f"path (fp32 matmul store); `neurobrix calibrate --model "
-              f"{Path(cache_path).name if cache_path else '<model>'}` measures one")
+        _log.debug(f"[DtypeEngine] {component_name}: no calibration record — conservative "
+                   f"path (fp32 matmul store); `neurobrix calibrate --model "
+                   f"{Path(cache_path).name if cache_path else '<model>'}` measures one")
         return False, frozenset(), frozenset()
     # A measured preference: the calibrate command timed both arms on this
     # hardware profile and found the calibrated arm byte-identical and
@@ -255,9 +254,9 @@ def resolve(cache_path: Optional[str], component_name: str,
         arch = None
     if arch and record.prefer.get(arch) == "conservative" and forced is not True:
         t = record.timing.get(arch) or {}
-        print(f"[DtypeEngine] {component_name}: calibration {record.graph_signature} measured on "
-              f"{arch}: the calibrated arm is byte-identical and slower "
-              f"({t.get('calibrated_s')} s vs {t.get('conservative_s')} s) — conservative path kept")
+        _log.debug(f"[DtypeEngine] {component_name}: calibration {record.graph_signature} measured on "
+                   f"{arch}: the calibrated arm is byte-identical and slower "
+                   f"({t.get('calibrated_s')} s vs {t.get('conservative_s')} s) — conservative path kept")
         return False, frozenset(), frozenset()
     policy = get_precision_calibration_policy()
     # Diagnostic (default off): NBX_PRECISION_HEADROOM_BITS=<n> overrides the
@@ -267,18 +266,18 @@ def resolve(cache_path: Optional[str], component_name: str,
     bound = _cal.island_bound(compute_dtype, int(headroom) if headroom else policy["headroom_bits"])
     pinned = _cal.islands_from_calibration(dag or {}, record.max_abs, bound)
     if pinned and not supports_op_pins:
-        print(f"[DtypeEngine] {component_name}: calibration needs {len(pinned)} fp32 "
-              f"island(s) this engine cannot pin per op — conservative path "
-              f"(D-PRECISION-CONTRACT-TRITON-PARITY)")
+        _log.debug(f"[DtypeEngine] {component_name}: calibration needs {len(pinned)} fp32 "
+                   f"island(s) this engine cannot pin per op — conservative path "
+                   f"(D-PRECISION-CONTRACT-TRITON-PARITY)")
         return False, frozenset(), frozenset()
     narrow = narrowable_op_uids(dag)
     unrecorded = sum(1 for uid, op in ((dag or {}).get("ops") or {}).items()
                      if _cal.pinnable(op.get("op_type", "")) and uid not in record.max_abs)
-    print(f"[DtypeEngine] {component_name}: precision contract from calibration "
-          f"{record.graph_signature} ({record.passes} pass(es), reference "
-          f"{record.reference}): {len(pinned)} op(s) islanded fp32 above "
-          f"{bound:.6g}, {len(narrow)} narrowable, {unrecorded} compute op(s) "
-          f"without an observation (treated as in range)")
+    _log.debug(f"[DtypeEngine] {component_name}: precision contract from calibration "
+               f"{record.graph_signature} ({record.passes} pass(es), reference "
+               f"{record.reference}): {len(pinned)} op(s) islanded fp32 above "
+               f"{bound:.6g}, {len(narrow)} narrowable, {unrecorded} compute op(s) "
+               f"without an observation (treated as in range)")
     _dump_islands(component_name, dag or {}, record, pinned)
     return True, frozenset(pinned), narrow
 

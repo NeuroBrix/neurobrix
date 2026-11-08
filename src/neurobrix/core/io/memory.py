@@ -333,8 +333,7 @@ class PrefetchQueue:
 
             except Exception as e:
                 # Log error but don't crash — prefetch is best-effort
-                import sys
-                print(f"[PrefetchQueue] Error prefetching {item.component_name}: {e}", file=sys.stderr)
+                logger.error(f"[PrefetchQueue] Error prefetching {item.component_name}: {e}")
                 item.tensors = None
 
             finally:

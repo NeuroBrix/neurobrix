@@ -142,6 +142,7 @@ def run_once_nbx(args, arm_env: dict, tag: str, outdir: Path) -> dict:
     env = dict(os.environ)
     env.update(arm_env)
     env["CUDA_VISIBLE_DEVICES"] = args.gpu
+    env["NBX_LOG"] = "debug"          # the stage lines it parses are developer lines (nbxtensor/terminal.py)
     # top-k 0 / top-p 1 neutralize the vendor sampling defaults
     # explicitly: the sampling capability gate refuses defaults-carried
     # top_k/top_p on paths that don't implement them, even under
@@ -249,6 +250,7 @@ def _run_venv_script(args, arm_env, tag, outdir, py, script, argv) -> dict:
     env = dict(os.environ)
     env.update(arm_env)
     env["CUDA_VISIBLE_DEVICES"] = args.gpu
+    env["NBX_LOG"] = "debug"          # the stage lines it parses are developer lines (nbxtensor/terminal.py)
     before = gpu_state(args.gpu)
     t0 = time.time()
     r = _locked(args, lambda: _run_capped(lambda: subprocess.run(
@@ -324,6 +326,7 @@ def run_once_whispercpp(args, arm_env, tag, outdir) -> dict:
     env = dict(os.environ)
     env.update(arm_env)
     env["CUDA_VISIBLE_DEVICES"] = args.gpu
+    env["NBX_LOG"] = "debug"          # the stage lines it parses are developer lines (nbxtensor/terminal.py)
     before = gpu_state(args.gpu)
     t0 = time.time()
     r = _locked(args, lambda: _run_capped(lambda: subprocess.run(

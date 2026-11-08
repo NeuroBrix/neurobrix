@@ -51,6 +51,8 @@ from neurobrix.core.memory.manager import release_flow_memory
 
 # The rule and its history live in core.runtime_values.
 from neurobrix.core.runtime_values import require_max_tokens
+import logging
+_log = logging.getLogger(__name__)
 
 
 @register_flow("next_token_diffusion")
@@ -171,7 +173,7 @@ class NextTokenDiffusionEngine(ComponentFlowHandler):
         prompt_ids += enc(f" Speaker 0: {prompt}\n", add_special=False)
         prompt_ids += enc(" Speech output:\n", add_special=False)
         prompt_ids += [speech_start_id]
-        print(f"   [{self.LM}] prompt tokens ({len(prompt_ids)}): ...{prompt_ids[-12:]}")
+        _log.debug(f"   [{self.LM}] prompt tokens ({len(prompt_ids)}): ...{prompt_ids[-12:]}")
 
         # ── Load LM + the diffusion / tokenizer / connector components ──
         for comp in (self.LM, self.HEAD, self.ACOUSTIC_TOK, self.SEMANTIC_TOK,
@@ -189,15 +191,15 @@ class NextTokenDiffusionEngine(ComponentFlowHandler):
         elapsed = (time.perf_counter() - start) * 1000
         if _vv_dump_path and _vv_latents:
             _np_vv.save(_vv_dump_path, _np_vv.stack(_vv_latents))
-            print(f"   [VV-DIAG] dumped {len(_vv_latents)} first-K latents → {_vv_dump_path}")
-        print(f"   [{self.LM}] {step + 1} steps, {n_diffusion} speech_diffusion tokens "
-              f"in {elapsed:.0f}ms")
-        print(f"   [{self.LM}] first 10 emitted token ids: {emitted_tokens[:10]}")
-        print(f"   [{self.LM}] emitted token id histogram: "
-              f"start={emitted_tokens.count(speech_start_id)} "
-              f"diff={emitted_tokens.count(speech_diffusion_id)} "
-              f"end={emitted_tokens.count(speech_end_id)} "
-              f"eos={emitted_tokens.count(eos_token_id)}")
+            _log.debug(f"   [VV-DIAG] dumped {len(_vv_latents)} first-K latents → {_vv_dump_path}")
+        _log.debug(f"   [{self.LM}] {step + 1} steps, {n_diffusion} speech_diffusion tokens "
+                   f"in {elapsed:.0f}ms")
+        _log.debug(f"   [{self.LM}] first 10 emitted token ids: {emitted_tokens[:10]}")
+        _log.debug(f"   [{self.LM}] emitted token id histogram: "
+                   f"start={emitted_tokens.count(speech_start_id)} "
+                   f"diff={emitted_tokens.count(speech_diffusion_id)} "
+                   f"end={emitted_tokens.count(speech_end_id)} "
+                   f"eos={emitted_tokens.count(eos_token_id)}")
 
         if not audio_chunks:
             raise RuntimeError(
@@ -208,8 +210,8 @@ class NextTokenDiffusionEngine(ComponentFlowHandler):
 
         # ── Final audio = concatenation of per-step 3200-sample chunks (24 kHz) ──
         waveform = torch.cat(audio_chunks, dim=-1)                           # [1, 1, T_total]
-        print(f"   [Output] waveform {list(waveform.shape)} "
-              f"({waveform.shape[-1] / float(defaults.get('sample_rate', 24000)):.2f}s)")
+        _log.debug(f"   [Output] waveform {list(waveform.shape)} "
+                   f"({waveform.shape[-1] / float(defaults.get('sample_rate', 24000)):.2f}s)")
         self.ctx.variable_resolver.resolved["global.output_audio"] = waveform
 
         if not self.ctx.persistent_mode:
@@ -250,8 +252,8 @@ class NextTokenDiffusionEngine(ComponentFlowHandler):
         neg_inputs_embeds = gather_rows(
             embed_weight, [[speech_start_id]], device=device, dtype=dtype)  # [1,1,1536]
 
-        print(f"   [{self.LM}] next-token-diffusion generation "
-              f"(max_steps={max_steps}, ddpm_steps={ddpm_steps}, cfg={cfg_scale})...")
+        _log.debug(f"   [{self.LM}] next-token-diffusion generation "
+                   f"(max_steps={max_steps}, ddpm_steps={ddpm_steps}, cfg={cfg_scale})...")
         start = time.perf_counter()
 
         emitted_tokens: List[int] = []
@@ -293,8 +295,8 @@ class NextTokenDiffusionEngine(ComponentFlowHandler):
                           "start" if next_token == speech_start_id else
                           "end" if next_token == speech_end_id else
                           "diff" if next_token == speech_diffusion_id else str(next_token))
-                print(f"   [{self.LM}] step {step}: tok={_tname} "
-                      f"(diff_so_far={n_diffusion}, seq={inputs_embeds.shape[1]})", flush=True)
+                _log.debug(f"   [{self.LM}] step {step}: tok={_tname} "
+                           f"(diff_so_far={n_diffusion}, seq={inputs_embeds.shape[1]})")
 
             if next_token == eos_token_id:
                 break
@@ -328,12 +330,11 @@ class NextTokenDiffusionEngine(ComponentFlowHandler):
                     # re-forward != oracle KV-cache semantics).
                     if n_diffusion in (1, 6):
                         _d = (pos_cond - neg_cond).float()
-                        print(f"   [CFG diag] diff#{n_diffusion}: "
-                              f"|pos|={pos_cond.float().norm().item():.3f} "
-                              f"|neg|={neg_cond.float().norm().item():.3f} "
-                              f"|pos-neg|={_d.norm().item():.3f} "
-                              f"cos={torch.nn.functional.cosine_similarity(pos_cond.float(), neg_cond.float()).item():.4f}",
-                              flush=True)
+                        _log.debug(f"   [CFG diag] diff#{n_diffusion}: "
+                                   f"|pos|={pos_cond.float().norm().item():.3f} "
+                                   f"|neg|={neg_cond.float().norm().item():.3f} "
+                                   f"|pos-neg|={_d.norm().item():.3f} "
+                                   f"cos={torch.nn.functional.cosine_similarity(pos_cond.float(), neg_cond.float()).item():.4f}")
                 else:
                     neg_cond = pos_cond                                      # cfg=1.0 -> irrelevant
                 speech_latent = self._sample_speech_tokens(
@@ -415,9 +416,9 @@ class NextTokenDiffusionEngine(ComponentFlowHandler):
         use_cfg = cfg_scale != 1.0
         pos_branch = session.branch_state()
         neg_branch = session.new_branch() if use_cfg else None
-        print(f"   [{self.LM}] next-token-diffusion (max_steps={max_steps}, "
-              f"ddpm_steps={ddpm_steps}, cfg={cfg_scale}), KV-cached decoder"
-              f"{' with a negative branch' if use_cfg else ''}...")
+        _log.debug(f"   [{self.LM}] next-token-diffusion (max_steps={max_steps}, "
+                   f"ddpm_steps={ddpm_steps}, cfg={cfg_scale}), KV-cached decoder"
+                   f"{' with a negative branch' if use_cfg else ''}...")
         start = time.perf_counter()
         emitted_tokens: List[int] = []
         audio_chunks: List[torch.Tensor] = []
@@ -450,8 +451,8 @@ class NextTokenDiffusionEngine(ComponentFlowHandler):
                           "start" if next_token == speech_start_id else
                           "end" if next_token == speech_end_id else
                           "diff" if next_token == speech_diffusion_id else str(next_token))
-                print(f"   [{self.LM}] step {step}: tok={_tname} "
-                      f"(diff_so_far={n_diffusion}, seq={seq})", flush=True)
+                _log.debug(f"   [{self.LM}] step {step}: tok={_tname} "
+                           f"(diff_so_far={n_diffusion}, seq={seq})")
             if next_token == eos_token_id:
                 break
             next_embed = gather_rows(

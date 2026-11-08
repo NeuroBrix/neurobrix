@@ -25,6 +25,8 @@ from typing import Any, Callable, Dict, List, Optional
 
 from neurobrix.core.runtime.graph_executor import output_key
 from neurobrix.core.strategies.base import ExecutionStrategy
+import logging
+_log = logging.getLogger(__name__)
 
 
 _ABSENT = object()
@@ -119,8 +121,8 @@ def _note_reload(executor, nbx_path, component: str, reloaded_bytes: int, second
     med = rates[1]
     if rates[-1] - rates[0] > 0.05 * med:
         if len(draws) % 3 == 0:
-            print(f"   [Reload] {component}: per-token reload not steady ({', '.join(f'{r / 1e9:.3f}' for r in rates)}"
-                  f" GB/s over the last three runs): not recorded", flush=True)
+            _log.debug(f"   [Reload] {component}: per-token reload not steady ({', '.join(f'{r / 1e9:.3f}' for r in rates)}"
+                       f" GB/s over the last three runs): not recorded")
         return
     b, sec = sum(x[0] for x in last), sum(x[1] for x in last)
     _ad.note_reload_rate(_ad.ACTIVE_HARDWARE_ID, engine, stored, b, b / med,
@@ -230,8 +232,8 @@ class LayerStreamingStrategy(ExecutionStrategy):
         n = base.load_flow_read_weights(nbx_path, component_name,
                                         keys=self._non_block[component_name])
         if n and os.environ.get("NBX_LAYER_DIAG") == "1":
-            print(f"   [LAYERDIAG] '{component_name}': {n} non-block weights resident on the "
-                  f"base for the flow's by-name reads", flush=True)
+            _log.debug(f"   [LAYERDIAG] '{component_name}': {n} non-block weights resident on the "
+                       f"base for the flow's by-name reads")
 
     def _build_segment_executors(self, component_name: str) -> List[Any]:
         """One executor per segment, each carrying that segment's graph.
@@ -465,10 +467,9 @@ class LayerStreamingStrategy(ExecutionStrategy):
         # reached `int('mps')`.
         import os as _os
         if _os.environ.get("NBX_LAYER_DIAG") == "1":
-            print(f"[LAYERDIAG] execute_component({component_name}) "
-                  f"segments={self._segments_for(component_name)!r} "
-                  f"ctx_keys={list((getattr(self.context,'layer_segments',None) or {}).keys())}",
-                  flush=True)
+            _log.debug(f"[LAYERDIAG] execute_component({component_name}) "
+                       f"segments={self._segments_for(component_name)!r} "
+                       f"ctx_keys={list((getattr(self.context,'layer_segments',None) or {}).keys())}")
         if not self._segments_for(component_name):
             executor = self.context.component_executors.get(component_name)
             if executor is None:
@@ -588,8 +589,8 @@ class LayerStreamingStrategy(ExecutionStrategy):
             try:
                 out = seg_exec.run(feed, *args, **kwargs) or {}
                 capture.update(seg_exec.tensors_of_last_run(kept & produced))
-                print(f"   [{component_name}] segment {sub.get('segment_index')} computed: "
-                      f"{_segment_memory_line(seg_exec)}", flush=True)
+                _log.debug(f"   [{component_name}] segment {sub.get('segment_index')} computed: "
+                           f"{_segment_memory_line(seg_exec)}")
             finally:
                 # Released before the next piece loads — a held piece excepted. This is the residency the plan
                 # was budgeted against.
@@ -608,15 +609,13 @@ class LayerStreamingStrategy(ExecutionStrategy):
                     f"'{component_name}' produced {lost[:3]}, protected on its base, and did "
                     f"not keep it: the base's readers would find nothing")
             if os.environ.get("NBX_LAYER_DIAG") == "1":
-                print(f"   [LAYERDIAG] seg{sub.get('segment_index')} "
-                      f"type={type(out).__name__} repr={repr(out)[:160]}",
-                      flush=True)
-                print(f"   [LAYERDIAG] seg{sub.get('segment_index')} "
-                      f"declares {len(sub.get('output_tensor_ids') or [])} outputs, "
-                      f"returns {len(out)} keys; "
-                      f"returned={sorted(out)[:4]}; "
-                      f"kept={sorted(kept & produced)[:4]}",
-                      flush=True)
+                _log.debug(f"   [LAYERDIAG] seg{sub.get('segment_index')} "
+                           f"type={type(out).__name__} repr={repr(out)[:160]}")
+                _log.debug(f"   [LAYERDIAG] seg{sub.get('segment_index')} "
+                           f"declares {len(sub.get('output_tensor_ids') or [])} outputs, "
+                           f"returns {len(out)} keys; "
+                           f"returned={sorted(out)[:4]}; "
+                           f"kept={sorted(kept & produced)[:4]}")
             values.update(out)
             # `values` is now the only holder of what this piece made: kept bound to the end of the next piece's run,
             # this piece's own result dict held every output on the device beside it, the ones parked on the host
@@ -704,9 +703,8 @@ class LayerStreamingStrategy(ExecutionStrategy):
                 released += 1
                 base_weights.pop(name, None)
         if released and os.environ.get("NBX_LAYER_DIAG") == "1":
-            print(f"   [LAYERDIAG] released {released} base-executor constants of "
-                  f"'{component_name}' — the segment executors carry them",
-                  flush=True)
+            _log.debug(f"   [LAYERDIAG] released {released} base-executor constants of "
+                       f"'{component_name}' — the segment executors carry them")
         # What the flow reads by name from this executor, which it holds like a whole one.
         self._ensure_flow_reads(component_name, executor)
 
@@ -773,8 +771,8 @@ class LayerStreamingStrategy(ExecutionStrategy):
         LayerStreamingStrategy._follow(executor, component_name, triton=register_on_segments,
                                        op=register_op_types_on_segments)
 
-        print(f"   [layer_streaming] '{component_name}': {len(segments)} "
-              f"segments, one resident at a time", flush=True)
+        _log.debug(f"   [layer_streaming] '{component_name}': {len(segments)} "
+                   f"segments, one resident at a time")
         return True
 
     def prepare_inputs(self, component_name: str,

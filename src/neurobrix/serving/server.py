@@ -66,6 +66,8 @@ from neurobrix.serving.protocol import (
     send_message, recv_message, MalformedFrame, version_refusal,
     make_response,
 )
+import logging
+_log = logging.getLogger(__name__)
 
 #: The prefix of the one stdout line that carries the daemon's ready record.
 READY_LINE = "NBX-READY"
@@ -206,6 +208,7 @@ class ServingDaemon:
             "stdout": log_file,
             "stderr": log_file,
             "stdin": subprocess.DEVNULL,
+            "env": {**os.environ, "NBX_LOG": "debug"},       # the daemon's log holds every line
         }
 
         read_fd = None
@@ -227,8 +230,8 @@ class ServingDaemon:
         if read_fd is not None:
             os.close(write_fd)   # only the child holds it: its exit closes the pipe
 
-        print(f"[Serve] Loading model in background (PID {proc.pid})...")
-        print(f"[Serve] Log: {LOG_PATH}")
+        _log.debug(f"[Serve] Loading model in background (PID {proc.pid})...")
+        _log.debug(f"[Serve] Log: {LOG_PATH}")
 
         record = wait_ready(proc, read_fd=read_fd,
                             ready_file=None if read_fd is not None else INSTANCE.ready_path,
@@ -265,8 +268,8 @@ class ServingDaemon:
             os.close(write_fd)
 
             # Wait for child to signal ready (or die)
-            print(f"[Serve] Loading model in background (PID {pid})...")
-            print(f"[Serve] Log: {LOG_PATH}")
+            _log.debug(f"[Serve] Loading model in background (PID {pid})...")
+            _log.debug(f"[Serve] Log: {LOG_PATH}")
 
             record = wait_ready(_ForkedChild(pid), read_fd=read_fd)
             sys.exit(0 if _announce(record) else 1)
@@ -285,6 +288,10 @@ class ServingDaemon:
             os.dup2(log_fd, sys.stdout.fileno())
             os.dup2(log_fd, sys.stderr.fileno())
             os.close(log_fd)
+            import logging                                   # the daemon's log holds every line
+            from nbxtensor import terminal
+            from neurobrix.cli import LOGGERS
+            terminal.set_level(logging.DEBUG, LOGGERS, tracebacks=True)
 
             # Redirect stdin from /dev/null
             devnull = os.open(os.devnull, os.O_RDONLY)
@@ -311,13 +318,13 @@ class ServingDaemon:
         file when it gave one. A record that cannot be delivered is said in
         the log; the daemon serves on (its clients do not need the launcher)."""
         line = json.dumps(record, separators=(",", ":"))
-        print(f"{READY_LINE} {line}", flush=True)
+        print(f"{READY_LINE} {line}", flush=True)      # the launcher's protocol line (stdout), never a log record
         if self._ready_fd is not None:
             fd, self._ready_fd = self._ready_fd, None
             try:
                 os.write(fd, (line + "\n").encode())
             except OSError as e:
-                print(f"[Daemon] ready signal not delivered on fd {fd}: {e}", flush=True)
+                _log.debug(f"[Daemon] ready signal not delivered on fd {fd}: {e}")
             finally:
                 os.close(fd)
         if self._ready_file is not None:
@@ -327,7 +334,7 @@ class ServingDaemon:
                 tmp.write_text(line + "\n")
                 os.replace(tmp, path)   # the launcher never reads half a record
             except OSError as e:
-                print(f"[Daemon] ready signal not delivered to {path}: {e}", flush=True)
+                _log.debug(f"[Daemon] ready signal not delivered to {path}: {e}")
 
     def _start_serving(self) -> None:
         """Load model, bind socket, enter serve loop."""
@@ -363,8 +370,8 @@ class ServingDaemon:
 
             self._signal_ready(self._ready_record())
 
-            print(f"\n[Daemon] Listening on {INSTANCE.endpoint()}")
-            print(f"[Daemon] Idle timeout: {self._idle_timeout}s")
+            _log.debug(f"[Daemon] Listening on {INSTANCE.endpoint()}")
+            _log.debug(f"[Daemon] Idle timeout: {self._idle_timeout}s")
 
             self.serve(server_socket)
 
@@ -395,11 +402,11 @@ class ServingDaemon:
             except socket.timeout:
                 if self._open_connections():
                     continue   # a client is connected (maybe generating): not idle
-                print(f"[Daemon] Idle timeout ({self._idle_timeout}s) — shutting down")
+                _log.debug(f"[Daemon] Idle timeout ({self._idle_timeout}s) — shutting down")
                 break
             except OSError:
                 if self._running:
-                    print("[Daemon] Socket error")
+                    _log.debug("[Daemon] Socket error")
                 break
             if not self._running:
                 conn.close()
@@ -416,7 +423,7 @@ class ServingDaemon:
         try:
             self._server_socket.close()
         except OSError as e:
-            print(f"[Daemon] Listener close: {e}")
+            _log.debug(f"[Daemon] Listener close: {e}")
         self._drain()
 
     def _open_connections(self) -> int:
@@ -429,7 +436,7 @@ class ServingDaemon:
         self._ops.stop_all("shutdown")
         deadline = time.monotonic() + self._settings["drain_timeout_s"]
         if not self._inference_lock.acquire(timeout=self._settings["drain_timeout_s"]):
-            print("[Daemon] A generation did not stop within drain_timeout_s — exiting beside it")
+            _log.debug("[Daemon] A generation did not stop within drain_timeout_s — exiting beside it")
         else:
             self._inference_lock.release()
         with self._conn_lock:
@@ -438,7 +445,7 @@ class ServingDaemon:
             try:
                 conn.shutdown(socket.SHUT_RD)   # unblocks a thread waiting for its next request
             except OSError as e:
-                print(f"[Daemon] Connection already closed at drain: {e}")
+                _log.debug(f"[Daemon] Connection already closed at drain: {e}")
         for _, thread in items:
             thread.join(max(0.0, deadline - time.monotonic()))
 
@@ -450,9 +457,9 @@ class ServingDaemon:
             self._handle_connection(conn)
         except OSError as e:
             # The client went away while we wrote to or read from it.
-            print(f"[Daemon] Connection lost: {e}")
+            _log.debug(f"[Daemon] Connection lost: {e}")
         except Exception as e:
-            print(f"[Daemon] Connection error: {e}")
+            _log.debug(f"[Daemon] Connection error: {e}")
             traceback.print_exc()
         finally:
             with self._conn_lock:
@@ -614,7 +621,7 @@ class ServingDaemon:
     def _orphan(self, op: Operation, why) -> None:
         _, prior = self._ops.request_stop(op.op_id, "orphan")
         if prior is None:
-            print(f"[Daemon] Client of {op.op_id} vanished ({why}) — stopping it at the next token")
+            _log.debug(f"[Daemon] Client of {op.op_id} vanished ({why}) — stopping it at the next token")
 
     def _call_engine(self, method: str, params: Dict[str, Any]) -> Dict[str, Any]:
         if method == "generate":
@@ -745,12 +752,12 @@ class ServingDaemon:
                 wake.settimeout(self._settings["drain_timeout_s"])
                 wake.connect(addr)
         except OSError as e:
-            print(f"[Daemon] Listener already closed or unreachable at wake: {e}")
+            _log.debug(f"[Daemon] Listener already closed or unreachable at wake: {e}")
 
     def _handle_signal(self, signum, frame):
         """Graceful shutdown on SIGTERM/SIGINT."""
         sig_name = signal.Signals(signum).name
-        print(f"\n[Daemon] Received {sig_name} — shutting down")
+        _log.debug(f"[Daemon] Received {sig_name} — shutting down")
         self._ops.stop_all("shutdown")
         # Close server socket to unblock accept()
         self._close_listener()
@@ -761,7 +768,7 @@ class ServingDaemon:
             try:
                 self._server_socket.close()
             except OSError as e:
-                print(f"[Daemon] Listener close: {e}")
+                _log.debug(f"[Daemon] Listener close: {e}")
 
         # The instance's files: socket (Unix), pid, port (named Windows instance)
         for f in INSTANCE.instance_files():
@@ -769,9 +776,9 @@ class ServingDaemon:
                 try:
                     f.unlink()
                 except OSError as e:
-                    print(f"[Daemon] Could not remove {f}: {e}")
+                    _log.debug(f"[Daemon] Could not remove {f}: {e}")
 
-        print("[Daemon] Cleaned up")
+        _log.debug("[Daemon] Cleaned up")
 
 
 class _ForkedChild:
@@ -829,11 +836,10 @@ def wait_ready(proc, read_fd: Optional[int] = None, ready_file=None,
 
 
 def _announce(record: Dict[str, Any]) -> bool:
-    """What `neurobrix serve` prints once its background daemon answered."""
+    """What `neurobrix serve` says once its background daemon answered: one line."""
     if record.get("state") != "ready":
-        print(f"[Serve] Failed: {record.get('error')}")
+        _log.error(f"Error: the daemon did not start: {record.get('error')}")
         return False
-    print(f"[Serve] Model loaded — {record['model']} ({record['family']}, {record['serving']} serving)")
-    print(f"[Serve] Use 'neurobrix chat' to connect")
-    print(f"[Serve] Use 'neurobrix stop' to shutdown")
+    _log.info(f"Serving {record['model']} ({record['family']}, {record['serving']} serving) — neurobrix chat to talk, "
+              f"neurobrix stop to end.")
     return True

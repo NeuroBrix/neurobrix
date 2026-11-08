@@ -29,6 +29,8 @@ from __future__ import annotations
 from typing import Any, Dict, Set
 
 from neurobrix.core.runtime.expert_residency import FUSED_OP, ExpertResidency, routed_layers
+import logging
+_log = logging.getLogger(__name__)
 
 #: The component strategy name, as Prism writes it into the plan.
 EXPERT_STORE = "expert_store"
@@ -155,11 +157,10 @@ def build_expert_store_state(z3: Any, component_name: str, executor: Any, seq: A
     z3._prefetch_block(state, -1, is_triton)
     z3._wait_for_block(state, -1, is_triton)
     z3._install_block_on_arena(state, -1)
-    print(
-        f"[ExpertStore] {component_name}: dense {dense_bytes / _MIB:.0f} MB resident (plan "
+    _log.debug(f"[ExpertStore] {component_name}: dense {dense_bytes / _MIB:.0f} MB resident (plan "
         f"{resident_mb:.0f} MB), {len(layers)} routed layers x {widest} experts on the host, cache "
         f"{n_slots} slots x {slot_bytes / _MIB:.2f} MB = {n_slots * slot_bytes / _MIB:.0f} MB (plan "
-        f"{cache_mb:.0f} MB), path={'triton' if is_triton else 'native'}", flush=True)
+        f"{cache_mb:.0f} MB), path={'triton' if is_triton else 'native'}")
     return state
 
 
@@ -213,9 +214,8 @@ def _hold_experts_on_cards(z3: Any, component_name: str, executor: Any, seq: Any
         holders.append(holder)
         for key in lay:
             held[key] = (card, holder.layers[key])
-        print(f"[ExpertStore] {component_name}: blocks {cards[card]['blocks']} — {len(lay)} routed layers, every "
-              f"expert — held on {card}: {holder.bytes / _MIB:.0f} MB (plan {cards[card]['cache_mb']:.0f} MB)",
-              flush=True)
+        _log.debug(f"[ExpertStore] {component_name}: blocks {cards[card]['blocks']} — {len(lay)} routed layers, every "
+                   f"expert — held on {card}: {holder.bytes / _MIB:.0f} MB (plan {cards[card]['cache_mb']:.0f} MB)")
     seq._expert_cards = executor._expert_cards = held
     return holders
 

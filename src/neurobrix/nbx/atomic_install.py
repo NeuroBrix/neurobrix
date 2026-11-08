@@ -51,6 +51,8 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, Optional
+import logging
+_log = logging.getLogger(__name__)
 
 #: Suffixes an installation leaves beside the final name. Model discovery must skip
 #: every one of them: each can carry a `manifest.json` while being incomplete or
@@ -216,13 +218,13 @@ def installing(cache_path, *, label: str = "install",
     except FileExistsError:
         owner = _read_owner(lock)
         if _is_our_dead_lock(owner):
-            print(f"[install] clearing a lock left by pid {owner.get('pid')} on this "
-                  f"host, whose process is gone: {lock}")
+            _log.debug(f"[install] clearing a lock left by pid {owner.get('pid')} on this "
+                       f"host, whose process is gone: {lock}")
             shutil.rmtree(lock, ignore_errors=True)
             os.mkdir(lock)
         elif allow_break:
-            print(f"[install] breaking the lock held by {_describe(owner)} "
-                  f"(explicitly allowed): {lock}")
+            _log.warning(f"[install] breaking the lock held by {_describe(owner)} "
+                       f"(explicitly allowed): {lock}")
             shutil.rmtree(lock, ignore_errors=True)
             os.mkdir(lock)
         else:

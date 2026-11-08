@@ -13,10 +13,10 @@ ZERO HARDCODE: Defaults cascade from CLI > runtime/defaults.json > family config
 import os as _os_dbg
 import sys
 import json
+import logging
 import time
 from pathlib import Path
 
-from neurobrix import __version__
 from neurobrix.cli.utils import find_model
 
 from neurobrix.core.runtime_values import (MissingRuntimeValue,
@@ -33,6 +33,9 @@ def _rt(name, args, container, family, **kw):
     """
     return _resolve_runtime(name, request=args, container=container,
                             family=family, **kw)
+
+
+log = logging.getLogger(__name__)      # INFO: the engine and the time; DEBUG: the plan, the gate's lines; result: stdout
 
 
 
@@ -55,7 +58,7 @@ def _try_warm_path(args) -> bool:
         client.close()
         return False
 
-    print(f"[Run] Using warm daemon (PID {DaemonClient.get_pid()})")
+    log.info(f"Using the running daemon (PID {DaemonClient.get_pid()})")
 
     kwargs = {}
     if args.steps is not None:
@@ -124,7 +127,7 @@ def _try_warm_path(args) -> bool:
         result = client.generate(prompt=args.prompt or "", **kwargs)
         client.close()
     except RuntimeError as e:
-        print(f"[Run] Daemon error: {e}")
+        log.error(f"Error: the daemon answered: {e}")
         client.close()
         return False
 
@@ -142,31 +145,19 @@ def _try_warm_path(args) -> bool:
         text = result.get("text") or result.get("transcription") or ""
         tokens = result.get("tokens", 0)
         if tokens:
-            print(f"\n[Output] Generated {tokens} tokens in {total_s}s")
+            log.debug(f"[Output] Generated {tokens} tokens in {total_s}s")
         if text:
-            print(f"\n{text}")
+            print(text)
         elif result.get("output_path"):
-            print(f"\nSAVED: {result['output_path']}")
+            print(f"SAVED: {result['output_path']}")
     else:
         saved_path = result.get("output_path")
         if saved_path:
-            print(f"\n{'='*70}")
             print(f"SAVED: {saved_path}")
-            print(f"{'='*70}")
         else:
-            print(f"\n[Output] Generation complete in {total_s}s")
+            log.info(f"Generation complete in {total_s}s")
 
     return True
-
-
-def run_entry(args):
-    """The dispatcher's entry: under `--explain-plan --json` the plan is the only
-    thing on stdout, every human line of the run's preamble goes to stderr
-    (`json_out`). `cmd_run` below is the run itself, unchanged and read as such
-    by the tests that inspect its source."""
-    from neurobrix.cli.json_out import human_lines_to_stderr
-    with human_lines_to_stderr(bool(getattr(args, "json", False) and getattr(args, "explain_plan", False))):
-        return cmd_run(args)
 
 
 def request_decode_bound(args, cached_defaults=None):
@@ -397,7 +388,7 @@ def _record_compiled_growth(sampler, cache_path, hw_profile) -> None:
         grown = _rg.record(_rmn(cache_path), "compiled", hw_profile.devices[0].architecture,
                            {0: sampler.cache_start / 2**20}, {0: sampler.cache_peak / 2**20})
         if grown is not None:
-            print(f"[RuntimeGrowth] the MPS allocator's cache grew {grown:.0f} MB during this run (recorded for Prism)")
+            log.debug(f"[RuntimeGrowth] the MPS allocator's cache grew {grown:.0f} MB during this run (recorded for Prism)")
 
 
 def cmd_run(args):
@@ -428,7 +419,7 @@ def cmd_run(args):
             except Exception:
                 pass
         if args.model is None:
-            print("ERROR: --model is required when no daemon is running.")
+            log.error("Error: --model is required when no daemon is running.")
             sys.exit(1)
 
     # Agent mode: the orchestration loop above inference has its own
@@ -447,35 +438,21 @@ def cmd_run(args):
     from neurobrix.serving.client import DaemonClient
     if DaemonClient.is_running():
         daemon_pid = DaemonClient.get_pid()
-        print(f"ERROR: A serving daemon is already running (PID {daemon_pid}).")
-        print(f"NeuroBrix runs one task at a time — the daemon is using the GPUs.")
         if getattr(args, "certified_only", False):
-            print("A confirmation run (--certified-only) is never answered by a daemon, whose process "
-                  "keeps its own autotune state. Stop it first:   neurobrix stop")
+            log.error(f"Error: a serving daemon is running (PID {daemon_pid}); a confirmation run (--certified-only) is "
+                      f"never answered by a daemon, whose process keeps its own autotune state. Stop it first: "
+                      f"neurobrix stop")
             sys.exit(1)
-        print(f"Either:")
-        print(f"  1. Use the daemon:  neurobrix run --model {args.model} --prompt '...'")
-        print(f"  2. Stop it first:   neurobrix stop")
+        log.error(f"Error: a serving daemon is running (PID {daemon_pid}) with another model, and NeuroBrix runs one "
+                  f"task at a time. Stop it first (neurobrix stop), or serve {args.model}.")
         sys.exit(1)
 
     # DATA-DRIVEN: Find model by scanning all family directories
     try:
         nbx_path = find_model(args.model)
     except FileNotFoundError as e:
-        print(f"ERROR: {e}")
+        log.error(f"Error: {e}")
         sys.exit(1)
-
-    print("=" * 70)
-    print(f"NeuroBrix Run v{__version__}")
-    print("=" * 70)
-    print(f"Model: {args.model}")
-    print(f"Hardware: {args.hardware or 'auto-detect'}")
-    if args.prompt:
-        prompt_display = f"{args.prompt[:50]}..." if len(args.prompt) > 50 else args.prompt
-        print(f"Prompt: {prompt_display}")
-    if getattr(args, 'audio', None):
-        print(f"Audio: {args.audio}")
-    print("=" * 70)
 
     # Mutually exclusive flags: --compiled / --sequential / --triton /
     # --triton-sequential. Default = compiled when no flag is passed.
@@ -488,15 +465,15 @@ def cmd_run(args):
         getattr(args, 'triton_sequential', False),
     ]
     if sum(bool(f) for f in _mode_flags) > 1:
-        print("\nERROR: Only one execution mode flag can be passed at a time.")
-        print("       Choose one of: --compiled, --sequential, --triton, --triton-sequential")
+        log.error("Error: only one execution mode flag can be passed at a time: one of --compiled, --sequential, "
+                  "--triton, --triton-sequential")
         return 1
     # No mode flag: the PyTorch engine where torch is installed, the Triton engine where it is not — said here
     _default_triton = False
     if not any(bool(f) for f in _mode_flags):
         from neurobrix.core.runtime.engines import default_mode
         _default, _said = default_mode()
-        print(f"[Engine] {_said}")
+        log.info(f"[Engine] {_said}")
         _default_triton = _default == "triton"
 
     if args.sequential:
@@ -529,7 +506,7 @@ def cmd_run(args):
                 # installed, so the run died in the driver a step later.
                 ensure_triton_cpu_or_raise()
         except (TritonMetalNotInstalledError, TritonCPUNotInstalledError, _BackendOnClearedStorage) as exc:
-            print(f"\n[ERROR] {exc}")
+            log.error(f"Error: {exc}")
             return 1
         execution_mode = "triton_sequential" if getattr(args, 'triton_sequential', False) else "triton"
         from nbxtensor.backend.launcher import prewarm_compiler
@@ -537,16 +514,18 @@ def cmd_run(args):
     else:
         # --compiled, or no flag with torch installed
         execution_mode = "compiled"
+    if any(bool(f) for f in _mode_flags):
+        log.info(f"[Engine] engine: {execution_mode}")       # the engine a flag asked for, said like the default
     # The PyTorch branch without torch installed: refused by name before anything is loaded (core/runtime/engines.py).
     from neurobrix.core.runtime.engines import PyTorchBranchNotInstalledError, require_engine
     try:
         require_engine(execution_mode)
     except PyTorchBranchNotInstalledError as exc:
-        print(f"\n[ERROR] {exc}")
+        log.error(f"Error: {exc}")
         return 1
 
     # 1. Load NBX Container
-    print("\n[1/4] Loading NBX container...")
+    log.debug("[1/4] Loading NBX container...")
     from neurobrix.core.runtime import run_timings
     run_timings.open_container()
     container = NBXContainer.load(str(nbx_path))
@@ -563,11 +542,11 @@ def cmd_run(args):
     # run is what makes that impossible to repeat silently.
     _built = manifest.get("created_at")
     if _built:
-        print(f"Container: built {_built}  ({nbx_path})")
+        log.debug(f"Container: built {_built}  ({nbx_path})")
 
     family = manifest.get("family")
     if family is None:
-        print(f"ERROR: 'family' missing in manifest for '{args.model}'.")
+        log.error(f"Error: 'family' missing in manifest for '{args.model}'.")
         sys.exit(1)
 
     from neurobrix.core.runtime.output_dispatch import (
@@ -579,7 +558,7 @@ def cmd_run(args):
         validate_required_inputs(family, args)
         mode = resolve_mode(family, args)
     except RuntimeError as e:
-        print(f"\nERROR: {e}")
+        log.error(f"Error: {e}")
         sys.exit(1)
 
     # Multimodal-strict build/mode coherence: a Janus-style .nbx is traced
@@ -604,8 +583,8 @@ def cmd_run(args):
             _mode_gen_type = None
         if _mode_gen_type and _build_gen_type and _mode_gen_type != _build_gen_type:
             _supported_mode = "image" if _build_gen_type == "autoregressive_image" else "text"
-            print(
-                f"\nERROR: This '{args.model}' build supports only --mode "
+            log.error(
+                f"Error: this '{args.model}' build supports only --mode "
                 f"{_supported_mode} (its trace generation_type is "
                 f"'{_build_gen_type}'). Re-import a build traced for "
                 f"--mode {mode} to use that mode."
@@ -628,8 +607,8 @@ def cmd_run(args):
             # container (topology.flow.speech, emitted from the model's
             # declared registry contract). Builds without it refuse HERE.
             if not _topo.get("flow", {}).get("speech"):
-                print(
-                    f"\nERROR: This '{args.model}' build carries no "
+                log.error(
+                    f"Error: this '{args.model}' build carries no "
                     f"generative-speech contract (topology.flow.speech). "
                     f"--mode audio requires a speech-declaring build "
                     f"(P-OMNI-GEN speech leg)."
@@ -637,10 +616,10 @@ def cmd_run(args):
                 sys.exit(1)
 
     neural_components = container.get_neural_components()
-    print(f"   Components: {[c.name for c in neural_components]}")
+    log.debug(f"   Components: {[c.name for c in neural_components]}")
 
     # 2. Prism Allocation
-    print("\n[2/4] Solving hardware allocation...")
+    log.debug("[2/4] Solving hardware allocation...")
     hardware_id = args.hardware or get_or_create_default_profile()
     # A generated profile measures, once, the device and host facts Prism's time estimate reads and neither it nor its
     # vendor file states; the loader's rate is measured by the loader itself at its first real load (S2, 2026-10-27)
@@ -649,7 +628,7 @@ def cmd_run(args):
     _autodetect.ensure_measured_facts(hardware_id, _engine_of(execution_mode))
     _autodetect.ACTIVE_HARDWARE_ID = hardware_id       # the profile this run's loaders measure themselves into
     hw_profile = load_profile(hardware_id)
-    print(f"   Profile: {hw_profile.id} ({hw_profile.total_vram_gb:.1f} GB)")
+    log.debug(f"   Profile: {hw_profile.id} ({hw_profile.total_vram_gb:.1f} GB)")
 
     # Build InputConfig for activation profiling
     cache_path = container._cache_path
@@ -681,31 +660,31 @@ def cmd_run(args):
             mode=execution_mode,
         )
 
-    print(f"   Strategy: {execution_plan.strategy}")
+    log.debug(f"   Strategy: {execution_plan.strategy}")
     # The choice, said out loud. Prism scores every viable strategy and takes
     # the fastest — invisible unless printed, and an engine that decides
     # without saying so is indistinguishable from one that decides badly.
     if getattr(execution_plan, "selection_reason", ""):
-        print(f"   Why:      {execution_plan.selection_reason}")
+        log.debug(f"   Why:      {execution_plan.selection_reason}")
     _cards = sorted({
         d for a in execution_plan.components.values()
         for d in (getattr(a, "devices", None) or [])
     })
     if _cards:
-        print(f"   Devices:  {', '.join(_cards)}"
-              f"  ({execution_plan.total_memory_mb:.0f} MB planned)")
+        log.debug(f"   Devices:  {', '.join(_cards)}"
+                  f"  ({execution_plan.total_memory_mb:.0f} MB planned)")
     if getattr(execution_plan, "host_footprint", None):
         from neurobrix.core.prism.host_footprint import summary as _host_summary
-        print(f"   Host:     {_host_summary(execution_plan.host_footprint)}")
+        log.debug(f"   Host:     {_host_summary(execution_plan.host_footprint)}")
     for comp_name, alloc in execution_plan.components.items():
-        print(f"   {comp_name} → {alloc.device}")
+        log.debug(f"   {comp_name} → {alloc.device}")
 
     if getattr(args, "explain_plan", False):
         # The plan, and nothing after it: no weights load, no card is touched
         # beyond what the hardware profile read. What is printed is the plan
         # object the runtime would have received.
         from neurobrix.core.prism.solver import explain_plan, plan_record
-        print("\n[plan] --explain-plan: the placement decision, read from the plan the runtime would receive\n")
+        log.debug("[plan] --explain-plan: the placement decision, read from the plan the runtime would receive")
         if getattr(args, "json", False):
             from neurobrix.cli.json_out import emit
             emit("explain-plan", {"model": getattr(args, "model", None), **plan_record(execution_plan)})
@@ -714,12 +693,12 @@ def cmd_run(args):
         return 0
 
     # 3. Load RuntimePackage
-    print("\n[3/4] Loading runtime...")
+    log.debug("[3/4] Loading runtime...")
     loader = NBXRuntimeLoader()
     pkg = loader.load(str(nbx_path))
 
     # 4. Build Universal Inputs Dictionary
-    print("\n[4/4] Preparing inputs...")
+    log.debug("[4/4] Preparing inputs...")
 
     inputs = {}
     upscale_orig_hw = None
@@ -766,8 +745,8 @@ def cmd_run(args):
             num_frames=int(num_frames or 0)))
         if _os_dbg.environ.get("NBX_DEBUG") == "1":
             _img = inputs.get("global.image")
-            print(f"   [Inputs] image clip {tuple(getattr(_img, 'shape', ()))} from num_frames={num_frames!r} "
-                  f"(request {getattr(args, 'num_frames', None)!r}, container {cached_defaults.get('num_frames')!r})", flush=True)
+            log.debug(f"   [Inputs] image clip {tuple(getattr(_img, 'shape', ()))} from num_frames={num_frames!r} "
+                      f"(request {getattr(args, 'num_frames', None)!r}, container {cached_defaults.get('num_frames')!r})")
         # Upscaler metadata, not a runtime input: the image's size before the window pad, handed to the save
         # (`output_dispatch.save_image`, the crop every entry point shares — `nbx upscale` and the server pass it
         # too). Dropped here until 2026-10-21, `run` saved the pad's mirrored rows: HAT-S at 150x100 returned
@@ -820,8 +799,8 @@ def cmd_run(args):
         # Arrays, like every CLI input: the resolver puts them in the engine's container.
         inputs["global.image"] = _pair
         inputs["global.vace_pixel_mask"] = _mask
-        print(f"   VACE control: pair {list(_pair.shape)} ({'image frame kept' if _clip is not None else 'all-generate'}) "
-              f"-> vae_encoder, pixel mask {list(_mask.shape)}")
+        log.debug(f"   VACE control: pair {list(_pair.shape)} ({'image frame kept' if _clip is not None else 'all-generate'}) "
+                  f"-> vae_encoder, pixel mask {list(_mask.shape)}")
 
     if args.cfg is not None:
         inputs["global.guidance_scale"] = args.cfg
@@ -846,7 +825,7 @@ def cmd_run(args):
     if getattr(args, 'speaker', None) is not None:
         inputs["global.speaker"] = args.speaker
 
-    print(f"   CLI inputs: {list(inputs.keys())}")
+    log.debug(f"   CLI inputs: {list(inputs.keys())}")
 
     if args.seed is not None:
         inputs["global.seed"] = args.seed
@@ -857,13 +836,13 @@ def cmd_run(args):
             torch.manual_seed(args.seed)
             if torch.cuda.is_available():
                 torch.cuda.manual_seed_all(args.seed)
-        print(f"   global.seed = {args.seed}")
+        log.debug(f"   global.seed = {args.seed}")
 
     # Universal --set injection
     if args.set:
         for item in args.set:
             if "=" not in item:
-                print(f"   [WARNING] Invalid --set format: {item} (expected key=value)")
+                log.warning(f"Warning: --set {item} ignored: expected key=value")
                 continue
             key, value = item.split("=", 1)
             stripped = value.strip()
@@ -895,14 +874,13 @@ def cmd_run(args):
             inputs[key] = value
             shown = value if not isinstance(value, list) else (
                 f"[{len(value)} values: {value[:4]}...]" if len(value) > 8 else value)
-            print(f"   {key} = {shown}")
+            log.debug(f"   {key} = {shown}")
 
-    print(f"   Total inputs: {len(inputs)}")
+    log.debug(f"   Total inputs: {len(inputs)}")
 
     # 5. Determine Execution Engine Mode
     # 6. Execute (engine resolved before the container gates, above)
-    print("\n[Execute] Running pipeline...")
-    print(f"   Engine: {execution_mode.upper()}")
+    log.debug(f"[Execute] Running pipeline... (engine: {execution_mode})")
 
     # ---- the census shadow's door for mode 1 (2026-09-24) ------------------
     # A shadow enumerates the keys a plan demands and EXECUTES NOTHING. The
@@ -988,17 +966,13 @@ def cmd_run(args):
         run_timings.end_request()
         t_exec_total = time.time() - t_exec_start
     except Exception as e:
-        print(f"\n[ERROR] Pipeline failed: {e}")
-        import traceback
-        traceback.print_exc()
         _record_compiled_growth(_sampled_peak, cache_path, hw_profile)
-        sys.exit(1)
+        from neurobrix.cli import _fail     # one line; the traceback under -vv / NBX_LOG=debug (the gate's row reads it)
+        _fail(e, what="the pipeline failed: ")
 
-    # 6a. Print timing summary
-    print(f"\n[Timing] Total execution: {t_exec_total:.2f}s")
-    # The run's four timings on one parseable line (core/runtime/run_timings.py),
-    # read by the gate harness into each row.
-    print(run_timings.format_line(run_timings.measured()), flush=True)
+    log.info(f"[Timing] Total execution: {t_exec_total:.2f}s")
+    # The run's four timings on one parseable line (core/runtime/run_timings.py), read by the gate (NBX_LOG=debug).
+    log.debug(run_timings.format_line(run_timings.measured()))
     # The run's device peak (rule 3: every gate cell writes it to the register), each engine through its own allocator.
     if execution_mode in ("compiled", "sequential"):
         import torch
@@ -1008,7 +982,7 @@ def cmd_run(args):
     else:
         from nbxtensor.memory.allocator import DeviceAllocator
         _peak = DeviceAllocator.peak_device_bytes()
-    print(run_timings.format_peak(None if _peak is None else _peak / 2**20), flush=True)
+    log.debug(run_timings.format_peak(None if _peak is None else _peak / 2**20))
     _record_compiled_growth(_sampled_peak, cache_path, hw_profile)
     if _growth is not None:
         from neurobrix.core.runtime.precision_contract import registry_model_name as _rmn
@@ -1016,8 +990,8 @@ def cmd_run(args):
         _grown = _rg.record(_rmn(cache_path), "triton", hw_profile.devices[0].architecture, _before,
                             _rg.untracked_mb(_gdevs))
         if _grown is not None:
-            print(f"[RuntimeGrowth] the triton runtime grew {_grown:.0f} MB outside the allocator during this run "
-                  f"(recorded for Prism)", flush=True)
+            log.debug(f"[RuntimeGrowth] the triton runtime grew {_grown:.0f} MB outside the allocator during this run "
+                      f"(recorded for Prism)")
 
     # 7. Save output — DATA-DRIVEN by family YAML output_format
     family = pkg.manifest.get("family")
@@ -1037,7 +1011,7 @@ def cmd_run(args):
     from neurobrix.kernels import census as _census_out
     if _census_out.active():
         # A shadow run has no artefact to write: its product is the key record.
-        print("\n[census] shadow run complete — keys recorded, no output written", flush=True)
+        log.debug("[census] shadow run complete — keys recorded, no output written")
         return 0
     fmt = get_output_format(family)
 
@@ -1046,24 +1020,22 @@ def cmd_run(args):
         from neurobrix.core.runtime.output_dispatch import _extract_text, _extract_token_count
         text = _extract_text(outputs, executor)
         if text is None:
-            print(f"\n[WARNING] No text output found. Available: {list(outputs.keys())}")
+            log.error(f"Error: the run produced no text output (outputs: {list(outputs.keys())})")
             sys.exit(1)
         tokens = _extract_token_count(outputs)
         if tokens:
-            print(f"\n[Output] Generated {tokens} tokens")
+            log.debug(f"[Output] Generated {tokens} tokens")
         if args.output:
             output_path = resolve_output_path(args.output, args.model, family, mode)
             save_output(outputs, output_path, family, executor, pkg, mode=mode)
-            print(f"\n[Success] Output saved to: {output_path}")
+            print(f"SAVED: {output_path}")
         else:
-            print(f"\n{text}")
+            print(text)
         sys.exit(0)
 
     # Binary-output families (image, video, audio-wav, multimodal-image)
     output_path = resolve_output_path(args.output, args.model, family, mode)
     saved = save_output(outputs, output_path, family, executor, pkg, mode=mode, orig_hw=upscale_orig_hw)
 
-    print(f"\n{'='*70}")
     print(f"SAVED: {saved}")
-    print(f"{'='*70}")
     return 0

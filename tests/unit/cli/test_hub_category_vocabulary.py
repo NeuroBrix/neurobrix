@@ -106,7 +106,7 @@ def _http_error(code: int, body: dict) -> urllib.error.HTTPError:
     )
 
 
-def test_an_invalid_category_reports_the_registry_reason(monkeypatch, capsys):
+def test_an_invalid_category_reports_the_registry_reason(monkeypatch, engine_log):
     """It answered, and it answered usefully. Reporting that as 'cannot
     connect' sends someone to check their firewall over a typo."""
     from neurobrix.cli.commands import registry as reg
@@ -128,14 +128,14 @@ def test_an_invalid_category_reports_the_registry_reason(monkeypatch, capsys):
     with pytest.raises(SystemExit) as excinfo:
         reg.cmd_hub(Args())
 
-    out = capsys.readouterr().out
+    out = engine_log()          # the error line (stderr through the CLI's handler)
     assert excinfo.value.code == 2, "a bad request is a usage error, not a transport error"
     assert "unknown category 'AUDIO'" in out, "must print the registry's reason"
     assert "TTS" in out and "AUDIO_LLM" in out, "must print the valid vocabulary"
-    assert "Cannot connect" not in out, "must not blame the network"
+    assert "cannot connect" not in out.lower(), "must not blame the network"
 
 
-def test_a_real_transport_failure_still_says_cannot_connect(monkeypatch, capsys):
+def test_a_real_transport_failure_still_says_cannot_connect(monkeypatch, engine_log):
     """The opposite error must not be swallowed by the new branch."""
     from neurobrix.cli.commands import registry as reg
 
@@ -160,9 +160,9 @@ def test_a_real_transport_failure_still_says_cannot_connect(monkeypatch, capsys)
     with pytest.raises(SystemExit) as excinfo:
         reg.cmd_hub(Args())
 
-    out = capsys.readouterr().out
+    out = engine_log()
     assert excinfo.value.code == 1
-    assert "Cannot connect to registry" in out
+    assert "cannot connect to the registry" in out
 
 
 @pytest.mark.network

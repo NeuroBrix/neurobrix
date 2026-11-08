@@ -121,7 +121,7 @@ def _isolated_state(monkeypatch, tmp_path):
 # ── Every model is accepted under its license at import (Hocine Benkelaya 2026-11-01) ──
 
 
-def test_an_ungated_model_is_accepted_under_its_license_too(monkeypatch, capsys):
+def test_an_ungated_model_is_accepted_under_its_license_too(monkeypatch, capsys, engine_log):
     """The hub's `gated` flag says whether the hub asks a login; the acceptance is asked of every model. What this
     test would do if the gate still keyed on `gated`: reach the download step (red)."""
     info = {"model": dict(MODEL_INFO["model"], gated=False)}
@@ -130,11 +130,11 @@ def test_an_ungated_model_is_accepted_under_its_license_too(monkeypatch, capsys)
     with pytest.raises(SystemExit) as exc:
         reg.cmd_import(_args())
     assert exc.value.code == 1
-    out = capsys.readouterr().out
+    out = capsys.readouterr().out + engine_log()     # the result on stdout, the notice and errors logged
     assert LICENSE_NAME in out and "--accept-license" in out
 
 
-def test_a_model_without_a_license_is_free_no_question(monkeypatch, capsys):
+def test_a_model_without_a_license_is_free_no_question(monkeypatch, capsys, engine_log):
     """No license on the record = free: downloaded with no acceptance asked, nothing recorded (Hocine Benkelaya 2026-11-01
     21:26). If the code were wrong it would block or prompt before the download step (red)."""
     info = {"model": {k: v for k, v in MODEL_INFO["model"].items() if k not in ("license", "licenseName", "licenseUrl")}}
@@ -143,14 +143,14 @@ def test_a_model_without_a_license_is_free_no_question(monkeypatch, capsys):
     monkeypatch.setattr("builtins.input", lambda *a: pytest.fail("a free model was asked a question"))
     with pytest.raises(_GatePassed):
         reg.cmd_import(_args())
-    out = capsys.readouterr().out
+    out = capsys.readouterr().out + engine_log()     # the result on stdout, the notice and errors logged
     assert "LICENSE NOTICE" not in out and not reg._ACCEPTANCES_FILE.exists()
 
 
 # ── Non-interactive terminal without flag/env → guidance, exit 1 ──────
 
 
-def test_noninteractive_without_flag_exits_with_guidance(monkeypatch, capsys):
+def test_noninteractive_without_flag_exits_with_guidance(monkeypatch, capsys, engine_log):
     _install_registry_api(monkeypatch, lambda: pytest.fail("gate must block before download"))
     monkeypatch.setattr(sys, "stdin", _NonTTYStdin())
 
@@ -158,7 +158,7 @@ def test_noninteractive_without_flag_exits_with_guidance(monkeypatch, capsys):
         reg.cmd_import(_args())
     assert exc.value.code == 1
 
-    out = capsys.readouterr().out
+    out = capsys.readouterr().out + engine_log()     # the result on stdout, the notice and errors logged
     assert LICENSE_NAME in out
     assert FULL_LICENSE_URL in out
     assert "--accept-license" in out
@@ -166,7 +166,7 @@ def test_noninteractive_without_flag_exits_with_guidance(monkeypatch, capsys):
     assert "Declined." not in out
 
 
-def test_eof_on_prompt_prints_same_guidance(monkeypatch, capsys):
+def test_eof_on_prompt_prints_same_guidance(monkeypatch, capsys, engine_log):
     """A TTY whose input() dies with EOFError gets the same guidance."""
     _install_registry_api(monkeypatch, lambda: pytest.fail("gate must block before download"))
     monkeypatch.setattr(sys, "stdin", _TTYStdin())
@@ -180,7 +180,7 @@ def test_eof_on_prompt_prints_same_guidance(monkeypatch, capsys):
         reg.cmd_import(_args())
     assert exc.value.code == 1
 
-    out = capsys.readouterr().out
+    out = capsys.readouterr().out + engine_log()     # the result on stdout, the notice and errors logged
     assert "--accept-license" in out
     assert "NBX_ACCEPT_LICENSE=1" in out
     assert "Declined." not in out
@@ -189,14 +189,14 @@ def test_eof_on_prompt_prints_same_guidance(monkeypatch, capsys):
 # ── Flag / env acceptance → record + proceed, no prompt ───────────────
 
 
-def test_accept_license_flag_records_and_proceeds(monkeypatch, capsys):
+def test_accept_license_flag_records_and_proceeds(monkeypatch, capsys, engine_log):
     _install_registry_api(monkeypatch, _gate_passed)
     monkeypatch.setattr(sys, "stdin", _NonTTYStdin())
 
     with pytest.raises(_GatePassed):
         reg.cmd_import(_args(accept_license=True))
 
-    out = capsys.readouterr().out
+    out = capsys.readouterr().out + engine_log()     # the result on stdout, the notice and errors logged
     assert LICENSE_NAME in out
     assert FULL_LICENSE_URL in out
     assert "License accepted via --accept-license." in out
@@ -205,7 +205,7 @@ def test_accept_license_flag_records_and_proceeds(monkeypatch, capsys):
     assert data[MODEL_REF]["license"] == LICENSE_ID
 
 
-def test_env_var_records_and_proceeds(monkeypatch, capsys):
+def test_env_var_records_and_proceeds(monkeypatch, capsys, engine_log):
     _install_registry_api(monkeypatch, _gate_passed)
     monkeypatch.setattr(sys, "stdin", _NonTTYStdin())
     monkeypatch.setenv("NBX_ACCEPT_LICENSE", "1")
@@ -213,7 +213,7 @@ def test_env_var_records_and_proceeds(monkeypatch, capsys):
     with pytest.raises(_GatePassed):
         reg.cmd_import(_args())
 
-    out = capsys.readouterr().out
+    out = capsys.readouterr().out + engine_log()     # the result on stdout, the notice and errors logged
     assert "License accepted via NBX_ACCEPT_LICENSE=1." in out
 
     data = json.loads(reg._ACCEPTANCES_FILE.read_text())
@@ -223,7 +223,7 @@ def test_env_var_records_and_proceeds(monkeypatch, capsys):
 # ── Legacy bare-name cache entries: honored + migrated to org/name ────
 
 
-def test_legacy_bare_name_entry_honored_and_migrated(monkeypatch, capsys):
+def test_legacy_bare_name_entry_honored_and_migrated(monkeypatch, capsys, engine_log):
     reg._ACCEPTANCES_FILE.parent.mkdir(parents=True, exist_ok=True)
     reg._ACCEPTANCES_FILE.write_text(json.dumps(
         {NAME: {"license": LICENSE_ID, "accepted_at": "2026-01-01T00:00:00+00:00"}}
@@ -259,7 +259,7 @@ def test_is_license_accepted_migrates_bare_key_directly():
 # ── Server error relay on the download-URL step ───────────────────────
 
 
-def test_license_login_required_error_is_relayed(monkeypatch, capsys):
+def test_license_login_required_error_is_relayed(monkeypatch, capsys, engine_log):
     reg._record_license_acceptance(ORG, NAME, LICENSE_ID)  # pass the local gate
     server_msg = "Log in and accept the license on the hub."
     _install_registry_api(monkeypatch, lambda: _FakeResponse(
@@ -271,12 +271,12 @@ def test_license_login_required_error_is_relayed(monkeypatch, capsys):
         reg.cmd_import(_args())
     assert exc.value.code == 1
 
-    out = capsys.readouterr().out
+    out = capsys.readouterr().out + engine_log()     # the result on stdout, the notice and errors logged
     assert server_msg in out
     assert "logged-in license acceptance" in out
 
 
-def test_other_structured_error_relayed_with_status(monkeypatch, capsys):
+def test_other_structured_error_relayed_with_status(monkeypatch, capsys, engine_log):
     reg._record_license_acceptance(ORG, NAME, LICENSE_ID)
     _install_registry_api(monkeypatch, lambda: _FakeResponse(
         {"error": "download quota exceeded"},
@@ -287,12 +287,12 @@ def test_other_structured_error_relayed_with_status(monkeypatch, capsys):
         reg.cmd_import(_args())
     assert exc.value.code == 1
 
-    out = capsys.readouterr().out
+    out = capsys.readouterr().out + engine_log()     # the result on stdout, the notice and errors logged
     assert "download quota exceeded" in out
     assert "429" in out
 
 
-def test_non_json_error_body_falls_back_to_raw_print(monkeypatch, capsys):
+def test_non_json_error_body_falls_back_to_raw_print(monkeypatch, capsys, engine_log):
     reg._record_license_acceptance(ORG, NAME, LICENSE_ID)
     _install_registry_api(monkeypatch, lambda: _FakeResponse(
         status_code=500, json_error=True,
@@ -302,7 +302,7 @@ def test_non_json_error_body_falls_back_to_raw_print(monkeypatch, capsys):
         reg.cmd_import(_args())
     assert exc.value.code == 1
 
-    out = capsys.readouterr().out
+    out = capsys.readouterr().out + engine_log()     # the result on stdout, the notice and errors logged
     assert "Failed to get download URL:" in out
 
 

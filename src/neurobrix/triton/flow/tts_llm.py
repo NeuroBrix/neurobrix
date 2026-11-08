@@ -34,6 +34,8 @@ from nbxtensor.memory.device_transfer import parse_device_idx
 from neurobrix.core.runtime_values import require_max_tokens
 from neurobrix.core.flow.base import ComponentFlowHandler   # the executor's four component callables, both branches
 from neurobrix.core.flow.shared_steps import _is_tensor   # dual_ar and tts_llm, the same
+import logging
+_log = logging.getLogger(__name__)
 
 
 # Deterministic sampler seed — shared by both triton modes so triton-seq and
@@ -109,7 +111,7 @@ class TritonTTSLLMEngine(ComponentFlowHandler):
 
         self.ctx.variable_resolver.resolved["global.input_ids"] = input_ids
         self.ctx.variable_resolver.resolved["input_ids"] = input_ids
-        print(f"   [Tokenizer] '{prompt[:50]}...' -> {len(ids)} tokens")
+        _log.debug(f"   [Tokenizer] '{prompt[:50]}...' -> {len(ids)} tokens")
 
         # -- Step 2: Voice encoder (speaker embedding) --
         speaker_emb = None
@@ -118,19 +120,19 @@ class TritonTTSLLMEngine(ComponentFlowHandler):
             if comp_name in self.ctx.executors:
                 ref_audio = self.ctx.variable_resolver.resolved.get("global.ref_audio")
                 if ref_audio is not None and _is_tensor(ref_audio):
-                    print(f"   [{comp_name}] Running voice encoder...")
+                    _log.debug(f"   [{comp_name}] Running voice encoder...")
                     start = time.perf_counter()
                     self._ensure_weights_loaded(comp_name)
                     self.ctx.variable_resolver.resolved["mels"] = ref_audio
                     self._execute_component(comp_name, "forward", None)
                     speaker_emb = _get_component_output(self.ctx, comp_name)
                     elapsed = (time.perf_counter() - start) * 1000
-                    print(f"   [{comp_name}] Done in {elapsed:.0f}ms")
+                    _log.debug(f"   [{comp_name}] Done in {elapsed:.0f}ms")
                     if not self.ctx.persistent_mode:
                         self._unload_component_weights(comp_name)
                         release_flow_memory(self.ctx.primary_device)
                 else:
-                    print(f"   [{comp_name}] Skipped (no reference audio)")
+                    _log.debug(f"   [{comp_name}] Skipped (no reference audio)")
 
         # -- Step 3: Autoregressive speech token generation --
         lm_name = lm_stage["component"]
@@ -153,7 +155,7 @@ class TritonTTSLLMEngine(ComponentFlowHandler):
         if bos_token_id is None:
             raise RuntimeError("ZERO FALLBACK: bos_token_id missing from defaults.json.")
 
-        print(f"   [{lm_name}] Loading weights...")
+        _log.debug(f"   [{lm_name}] Loading weights...")
         self._ensure_weights_loaded(lm_name)
 
         # Load auxiliary weights
@@ -195,8 +197,8 @@ class TritonTTSLLMEngine(ComponentFlowHandler):
         except KeyError:
             do_cfg = False  # no guidance_scale in cascade -> cond-only
         if do_cfg:
-            print(f"   [{lm_name}] CFG enabled via TritonCFGEngine "
-                  f"(guidance_scale={guidance_scale}, sequential)")
+            _log.debug(f"   [{lm_name}] CFG enabled via TritonCFGEngine "
+                       f"(guidance_scale={guidance_scale}, sequential)")
 
         # -- Build conditioning embeddings (DATA-DRIVEN: run the traced cond_enc
         #    GRAPH, NOT a hand-rolled perceiver). R30 mirror of core
@@ -205,7 +207,7 @@ class TritonTTSLLMEngine(ComponentFlowHandler):
         #    default-voice conditioning. --
         cond_embeds_np = self._build_conditioning_via_graph(
             speech_emb_np, speech_pos_emb_np, speaker_emb)
-        print(f"   [{lm_name}] Conditioning: {cond_embeds_np.shape}")
+        _log.debug(f"   [{lm_name}] Conditioning: {cond_embeds_np.shape}")
 
         # -- Build text embeddings (+ CFG uncond = zero TOKEN embedding + learned
         #    POSITION; vendor order text_emb[1].zero_() THEN += text_pos, so the
@@ -220,7 +222,7 @@ class TritonTTSLLMEngine(ComponentFlowHandler):
         else:
             text_embeds_np = text_tok_np
 
-        print(f"   [{lm_name}] Text embeds: {text_embeds_np.shape}")
+        _log.debug(f"   [{lm_name}] Text embeds: {text_embeds_np.shape}")
 
         # -- Initial speech token (BOS) --
         bos_embed_np = speech_emb_np[bos_token_id:bos_token_id + 1]  # [1, dim]
@@ -239,9 +241,9 @@ class TritonTTSLLMEngine(ComponentFlowHandler):
         cond_len = cond_embeds_np.shape[1]
         text_len = text_embeds_np.shape[1]
 
-        print(f"   [{lm_name}] Initial context: {context_np.shape} "
-              f"(cond={cond_len}, text={text_len}, speech=1)")
-        print(f"   [{lm_name}] Generating speech tokens (max={max_tokens})...")
+        _log.debug(f"   [{lm_name}] Initial context: {context_np.shape} "
+                   f"(cond={cond_len}, text={text_len}, speech=1)")
+        _log.debug(f"   [{lm_name}] Generating speech tokens (max={max_tokens})...")
         start = time.perf_counter()
 
         # Deterministic sampler — PER-MODE reproducibility (not cross-mode token
@@ -296,12 +298,12 @@ class TritonTTSLLMEngine(ComponentFlowHandler):
             _forced_seq = [int(t) for t in _j_fsi.load(open(_force_ids))]
             if _t3dump:
                 generated_ids = []  # filled by the teacher-forcing loop below
-                print(f"   [{lm_name}] TEACHER-FORCING {len(_forced_seq)} tokens; "
-                      f"dumping t3 logits -> {_t3dump}")
+                _log.debug(f"   [{lm_name}] TEACHER-FORCING {len(_forced_seq)} tokens; "
+                           f"dumping t3 logits -> {_t3dump}")
             else:
                 generated_ids = list(_forced_seq)
-                print(f"   [{lm_name}] FORCED {len(generated_ids)} speech tokens "
-                      f"from {_force_ids} (decode skipped)")
+                _log.debug(f"   [{lm_name}] FORCED {len(generated_ids)} speech tokens "
+                           f"from {_force_ids} (decode skipped)")
 
         _teacher = bool(_force_ids and _t3dump)
         _nsteps = len(_forced_seq) if _teacher else (0 if _force_ids else max_tokens)
@@ -370,7 +372,7 @@ class TritonTTSLLMEngine(ComponentFlowHandler):
                 break
 
         elapsed = (time.perf_counter() - start) * 1000
-        print(f"   [{lm_name}] Generated {len(generated_ids)} speech tokens in {elapsed:.0f}ms")
+        _log.debug(f"   [{lm_name}] Generated {len(generated_ids)} speech tokens in {elapsed:.0f}ms")
 
         # Filter special tokens for vocoder
         vocoder_vocab_size = defaults.get("vocoder_vocab_size")
@@ -387,14 +389,14 @@ class TritonTTSLLMEngine(ComponentFlowHandler):
 
         speech_ids = [t for t in generated_ids if vocoder_vocab_size is None or t < vocoder_vocab_size]
         if len(speech_ids) < len(generated_ids):
-            print(f"   [{lm_name}] Filtered {len(generated_ids) - len(speech_ids)} special tokens")
+            _log.debug(f"   [{lm_name}] Filtered {len(generated_ids) - len(speech_ids)} special tokens")
 
         if _os_fsi.environ.get("NBX_DUMP_SPEECH_IDS"):
             import json as _jd_si
             with open(_os_fsi.environ["NBX_DUMP_SPEECH_IDS"], "w") as _f_si:
                 _jd_si.dump([int(t) for t in speech_ids], _f_si)
-            print(f"   [{lm_name}] Dumped {len(speech_ids)} speech ids -> "
-                  f"{_os_fsi.environ['NBX_DUMP_SPEECH_IDS']}")
+            _log.debug(f"   [{lm_name}] Dumped {len(speech_ids)} speech ids -> "
+                       f"{_os_fsi.environ['NBX_DUMP_SPEECH_IDS']}")
 
         self.ctx.variable_resolver.resolved["global.generated_token_ids"] = speech_ids
         speech_tokens_np = np.array([speech_ids], dtype=np.int64)
@@ -410,7 +412,7 @@ class TritonTTSLLMEngine(ComponentFlowHandler):
         if vocoder_stage is not None:
             voc_name = vocoder_stage["component"]
             if voc_name in self.ctx.executors:
-                print(f"   [{voc_name}] Running vocoder...")
+                _log.debug(f"   [{voc_name}] Running vocoder...")
                 start = time.perf_counter()
                 self._ensure_weights_loaded(voc_name)
 
@@ -444,7 +446,7 @@ class TritonTTSLLMEngine(ComponentFlowHandler):
                     audio_output = output
 
                 elapsed = (time.perf_counter() - start) * 1000
-                print(f"   [{voc_name}] Done in {elapsed:.0f}ms")
+                _log.debug(f"   [{voc_name}] Done in {elapsed:.0f}ms")
 
                 if audio_output is not None:
                     self.ctx.variable_resolver.resolved["global.output_audio"] = audio_output
@@ -657,9 +659,9 @@ def _load_auxiliary_weights(ctx, comp_name: str, aux_config: Dict) -> Dict:
     loaded = list(result.keys())
     missing = [k for k in aux_config if k not in result]
     if loaded:
-        print(f"   [{comp_name}] Auxiliary weights loaded: {len(loaded)}/{len(aux_config)}")
+        _log.debug(f"   [{comp_name}] Auxiliary weights loaded: {len(loaded)}/{len(aux_config)}")
     if missing:
-        print(f"   [{comp_name}] Auxiliary weights missing: {missing}")
+        _log.warning(f"   [{comp_name}] Auxiliary weights missing: {missing}")
     return result
 
 
@@ -770,7 +772,7 @@ def _save_audio_np(audio_tensor, sample_rate: int) -> None:
             wf.setframerate(sample_rate)
             wf.writeframes(struct.pack(f'<{len(audio_int16)}h', *audio_int16))
 
-    print(f"   [Audio] Saved: {output_path} ({len(audio_np) / sample_rate:.1f}s @ {sample_rate}Hz)")
+    _log.debug(f"   [Audio] Saved: {output_path} ({len(audio_np) / sample_rate:.1f}s @ {sample_rate}Hz)")
 
 
 def _to_numpy(tensor) -> np.ndarray:

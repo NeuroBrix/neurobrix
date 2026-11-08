@@ -30,6 +30,8 @@ from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from neurobrix.core.runtime.resolution.vace_spec import SPEC_KEYS, _vae_latent_stats, conditioning_spec  # noqa: F401
 from neurobrix.triton.i2v_conditioning import _nbx_on, _to_channels_first
+import logging
+_log = logging.getLogger(__name__)
 
 CONTROL_VAR = "global.control_hidden_states"
 SCALE_VAR = "global.control_hidden_states_scale"
@@ -88,10 +90,10 @@ def build_control(ctx: Any, spec: dict) -> Optional[NBXTensor]:
     if _os.environ.get("NBX_DIAG_VACE") == "1":
         _ln = latent.to(NBXDtype.float32) if latent.nbx_dtype != NBXDtype.float32 else latent
         _ln_np = _ln.numpy()
-        print(f"   [NBX-DIAG-VACE-TRITON] vae_latent shape={list(latent.shape)} "
-              f"norm mean={float(_ln_np.mean()):.3f} std={float(_ln_np.std()):.3f} | "
-              f"control shape={list(control.shape)} "
-              f"(expect C={2 * latent_channels + int(spec['mask_channels'])})")
+        _log.debug(f"   [NBX-DIAG-VACE-TRITON] vae_latent shape={list(latent.shape)} "
+                   f"norm mean={float(_ln_np.mean()):.3f} std={float(_ln_np.std()):.3f} | "
+                   f"control shape={list(control.shape)} "
+                   f"(expect C={2 * latent_channels + int(spec['mask_channels'])})")
     return control
 
 
@@ -106,8 +108,8 @@ def build_scale(spec: dict, dev_idx: int) -> NBXTensor:
     # hints / injection; still gray => bug is in the main path's response to
     # the vace inputs (e.g. patch-embedding side effect).
     if _os.environ.get("NBX_VACE_SCALE_ZERO") == "1":
-        print("   [NBX-VACE-SCALE] forced to ZEROS (NBX_VACE_SCALE_ZERO=1) — "
-              "vace injection disabled (pure-T2V differential)", flush=True)
+        _log.debug("   [NBX-VACE-SCALE] forced to ZEROS (NBX_VACE_SCALE_ZERO=1) — "
+                   "vace injection disabled (pure-T2V differential)")
         return _nbx_on(np.zeros((int(spec["vace_layers"]),), dtype=np.float32), dev_idx)
     return _nbx_on(np.ones((int(spec["vace_layers"]),), dtype=np.float32), dev_idx)
 

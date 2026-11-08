@@ -23,6 +23,8 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
+import logging
+_log = logging.getLogger(__name__)
 
 
 class NBXCache:
@@ -196,10 +198,10 @@ class NBXCache:
         if self.is_cached(nbx_path) and not force:
             with open(cache_path / "manifest.json") as f:
                 refuse_misnamed(cache_path, json.load(f))
-            print(f"[Cache] Using cached: {cache_path}")
+            _log.debug(f"[Cache] Using cached: {cache_path}")
             return cache_path
 
-        print(f"[Cache] Extracting {nbx_path.name} -> {cache_path}")
+        _log.info(f"Extracting {nbx_path.name} to {cache_path} (once)...")
 
         # Extraction goes to a private staging tree and is swapped in at the end.
         #
@@ -296,7 +298,7 @@ class NBXCache:
                     progress = int((extracted_bytes[0] / total_bytes) * 100)
                     if progress >= last_progress[0] + 10 or 'safetensors' in member:
                         size_gb = extracted_bytes[0] / 1e9
-                        print(f"[Cache] {progress}% ({size_gb:.2f}GB) - {member[:60]}...")
+                        _log.debug(f"[Cache] {progress}% ({size_gb:.2f}GB) - {member[:60]}...")
                         last_progress[0] = progress
 
             # Use 8 workers (I/O bound, not CPU bound)
@@ -315,7 +317,7 @@ class NBXCache:
                         member_bytes = future.result()
                         update_progress(member, member_bytes)
                     except Exception as e:
-                        print(f"[Cache] ERROR extracting {member}: {e}")
+                        _log.error(f"[Cache] ERROR extracting {member}: {e}")
                         raise
             for _z in _all_zfs:
                 try:
@@ -334,7 +336,7 @@ class NBXCache:
         with open(cache_path / ".cache_meta.json", 'w') as f:
             json.dump(cache_meta, f, indent=2)
 
-        print(f"[Cache] Done: {total} files, {total_bytes/1e9:.2f}GB extracted")
+        _log.debug(f"[Cache] Done: {total} files, {total_bytes/1e9:.2f}GB extracted")
         return final_path
 
     def list_cached(self) -> List[Dict[str, Any]]:

@@ -30,6 +30,8 @@ if TYPE_CHECKING:  # R33: the ATen branch loads through torch; the Triton branch
 from .cache import ensure_extracted
 
 from neurobrix.core.workspace import io_workers as _io_workers
+import logging
+_log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -163,7 +165,7 @@ class FastNBXLoader:
         weight_files = self.find_weight_files(component)
 
         if verbose:
-            print(f"[FastLoader] Loading {len(weight_files)} shards -> {self.device}")
+            _log.debug(f"[FastLoader] Loading {len(weight_files)} shards -> {self.device}")
 
         all_weights = {}
         total_bytes = 0
@@ -181,7 +183,7 @@ class FastNBXLoader:
         if len(weight_files) > 1:
             # PARALLEL LOADING
             if verbose:
-                print(f"[FastLoader] Parallel loading with {_io_workers()} workers...")
+                _log.debug(f"[FastLoader] Parallel loading with {_io_workers()} workers...")
 
             with ThreadPoolExecutor(max_workers=_io_workers()) as executor:
                 futures = {executor.submit(load_shard, wf): wf for wf in weight_files}
@@ -190,7 +192,7 @@ class FastNBXLoader:
                     all_weights.update(shard_weights)
                     total_bytes += shard_bytes
                     if verbose:
-                        print(f"[FastLoader] {shard_name}: {shard_bytes/1e9:.2f}GB")
+                        _log.debug(f"[FastLoader] {shard_name}: {shard_bytes/1e9:.2f}GB")
         else:
             # Single shard - no parallelism needed
             for wf in weight_files:
@@ -205,10 +207,8 @@ class FastNBXLoader:
         )
 
         if verbose:
-            print(
-                f"[FastLoader] Total: {self.stats.weights_size_gb:.2f}GB in "
-                f"{self.stats.weights_time:.2f}s ({self.stats.throughput_gbps:.2f} GB/s)"
-            )
+            _log.debug(f"[FastLoader] Total: {self.stats.weights_size_gb:.2f}GB in "
+                f"{self.stats.weights_time:.2f}s ({self.stats.throughput_gbps:.2f} GB/s)")
 
         return all_weights
 
@@ -223,11 +223,11 @@ class FastNBXLoader:
 
         all_weights = {}
         for comp in neural_components:
-            print(f"\n[FastLoader] === {comp} ===")
+            _log.debug(f"[FastLoader] === {comp} ===")
             try:
                 all_weights[comp] = self.load_weights(comp)
             except FileNotFoundError as e:
-                print(f"[FastLoader] Skipping {comp}: {e}")
+                _log.warning(f"[FastLoader] Skipping {comp}: {e}")
 
         return all_weights
 
@@ -252,13 +252,13 @@ class FastNBXLoader:
 
         self.stats.total_time = time.time() - t_total
 
-        print(f"\n[FastLoader] === LOAD STATS ===")
+        _log.debug(f"[FastLoader] === LOAD STATS ===")
         cached = self.stats.extraction_time < 0.1
-        print(f"  Extraction: {self.stats.extraction_time:.2f}s (cached={cached})")
-        print(f"  Metadata:   {self.stats.metadata_time:.2f}s")
-        print(f"  Weights:    {self.stats.weights_time:.2f}s ({self.stats.weights_size_gb:.2f}GB)")
-        print(f"  Throughput: {self.stats.throughput_gbps:.2f} GB/s")
-        print(f"  TOTAL:      {self.stats.total_time:.2f}s")
+        _log.debug(f"  Extraction: {self.stats.extraction_time:.2f}s (cached={cached})")
+        _log.debug(f"  Metadata:   {self.stats.metadata_time:.2f}s")
+        _log.debug(f"  Weights:    {self.stats.weights_time:.2f}s ({self.stats.weights_size_gb:.2f}GB)")
+        _log.debug(f"  Throughput: {self.stats.throughput_gbps:.2f} GB/s")
+        _log.debug(f"  TOTAL:      {self.stats.total_time:.2f}s")
 
         return {
             "manifest": manifest,

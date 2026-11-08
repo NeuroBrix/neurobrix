@@ -541,9 +541,8 @@ class NativeATenDispatcher:
                 _rest = list(inputs[1:])
                 import os as _os_up
                 if _os_up.environ.get("NBX_DEBUG") == "1":
-                    print(f"[UPSAMPLE-DBG] {base_name} rest="
-                          f"{[type(a).__name__ + ':' + repr(a)[:40] for a in _rest]}",
-                          flush=True)
+                    logger.debug(f"[UPSAMPLE-DBG] {base_name} rest="
+                                 f"{[type(a).__name__ + ':' + repr(a)[:40] for a in _rest]}")
                 _scales = []
                 for _a in _rest[1:]:
                     if isinstance(_a, (list, tuple)):

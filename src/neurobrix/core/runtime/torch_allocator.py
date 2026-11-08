@@ -41,6 +41,7 @@ from __future__ import annotations
 import logging
 import os
 from typing import Any, Optional
+_log = logging.getLogger(__name__)
 
 #: The allocator environment variables torch reads: the unified name and the CUDA and HIP legacy
 #: spellings (https://github.com/pytorch/pytorch/blob/v2.14.0/c10/core/AllocatorConfig.cpp).
@@ -128,8 +129,8 @@ def configure_memory_fraction(plan: Any):
             fn(fraction, device=d)
         else:
             fn(fraction)
-    print(f"   [Allocator] compiled engine: torch pool bounded at {fraction} of the device's memory on "
-          f"{', '.join(devices)} (vendor profile memory.{FRACTION_KEY})")
+    _log.debug(f"   [Allocator] compiled engine: torch pool bounded at {fraction} of the device's memory on "
+               f"{', '.join(devices)} (vendor profile memory.{FRACTION_KEY})")
     return fraction
 
 
@@ -177,8 +178,8 @@ def configure_torch_allocator(plan: Any) -> Optional[str]:
     import torch
     torch._C._accelerator_setAllocatorSettings(value)
     _applied = value
-    print(f"   [Allocator] compiled engine: torch caching allocator {value} "
-          f"(vendor profile memory.{PROFILE_KEY})")
+    _log.debug(f"   [Allocator] compiled engine: torch caching allocator {value} "
+               f"(vendor profile memory.{PROFILE_KEY})")
     return value
 
 
@@ -219,6 +220,6 @@ def bound_to_imposed_rung(plan: Any, declared: Optional[float] = None) -> Option
             fn(fraction, device=d)
         else:
             fn(fraction)
-        print(f"   [Allocator] compiled engine: torch pool bounded at the imposed rung on {dev}: {door} MB less the "
-              f"runtime's {context >> 20} MB context ({fraction:.4f} of the device)")
+        _log.debug(f"   [Allocator] compiled engine: torch pool bounded at the imposed rung on {dev}: {door} MB less the "
+                   f"runtime's {context >> 20} MB context ({fraction:.4f} of the device)")
     return fraction

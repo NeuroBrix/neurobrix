@@ -88,15 +88,17 @@ def _print_path_fix(scripts_dir: str) -> None:
 
 
 def print_path_diagnostics() -> None:
-    """Full diagnostic output for `neurobrix doctor`."""
-    print(f"Python:          {sys.executable}")
-    print(f"Version:         {sys.version.split()[0]}")
-    print(f"Platform:        {sys.platform}")
-    print(f"Scripts dir:     {get_scripts_dir()}")
-    print(f"neurobrix found: {shutil.which('neurobrix') or 'NOT ON PATH'}")
-    print()
-
-    if shutil.which("neurobrix"):
-        print("neurobrix is on PATH. No action needed.")
-    else:
+    """The PATH part of `neurobrix doctor`: one line when all is well (the facts under -v), the fix when it is not."""
+    import logging
+    from neurobrix import __version__
+    log = logging.getLogger(__name__)
+    log.debug(f"Python:          {sys.executable}")
+    log.debug(f"Version:         {sys.version.split()[0]}")
+    log.debug(f"Platform:        {sys.platform}")
+    log.debug(f"Scripts dir:     {get_scripts_dir()}")
+    log.debug(f"neurobrix found: {shutil.which('neurobrix') or 'NOT ON PATH'}")
+    on_path = bool(shutil.which("neurobrix"))
+    print(f"neurobrix {__version__} · Python {sys.version.split()[0]} · "
+          f"{'on PATH' if on_path else 'NOT on PATH'}")
+    if not on_path:
         check_cli_on_path()

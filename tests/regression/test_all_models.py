@@ -5,7 +5,7 @@ captures stdout, and:
 
 - for LLM models (`family == "llm"`):
   * runs with a 5-token greedy generation on a short prompt
-  * parses the "[Output] Generated N tokens\\n\\n<text>" block
+  * reads the generated text: a text run's whole stdout
   * compares <text> to the golden file for (model, mode), if one exists
   * if no golden exists, fails with a clear message suggesting the
     capture command — NOT a silent pass (so CI never accidentally
@@ -391,22 +391,17 @@ def _run_neurobrix(model: str, mode: str, family: str, flow: str,
     # log — the harness has to be able to say WHERE a cell was when its
     # budget expired.
     env = {**os.environ, "PYTHONPATH": str(REPO / "src"),
-           "PYTHONUNBUFFERED": "1"}
+           "PYTHONUNBUFFERED": "1", "NBX_LOG": "debug"}
     return subprocess.run(
         cmd, capture_output=True, text=True,
         timeout=timeout_s, env=env, cwd=str(REPO),
     )
 
 
-_OUTPUT_RE = re.compile(
-    r"\[Output\] Generated \d+ tokens?\s*\n\n(.+?)(?:\Z|\n\n)",
-    re.DOTALL,
-)
-
-
 def _parse_llm_text(stdout: str) -> str | None:
-    m = _OUTPUT_RE.search(stdout)
-    return m.group(1).rstrip() if m else None
+    """A text run's stdout IS its generated text (nbxtensor/terminal.py: every other line is on stderr)."""
+    text = stdout.strip()
+    return text or None
 
 
 def _golden_path(model: str, mode: str) -> Path:
@@ -506,8 +501,7 @@ def test_model_runs(model_meta: Dict[str, str | int], mode: str) -> None:
 
     text = _parse_llm_text(r.stdout)
     assert text is not None, (
-        f"{name} / {mode}: could not parse '[Output] Generated N tokens' "
-        f"block from stdout.\nTail:\n{r.stdout[-800:]}"
+        f"{name} / {mode}: no generated text on stdout.\nstderr tail:\n{r.stderr[-800:]}"
     )
 
     gp = _golden_path(name, mode)

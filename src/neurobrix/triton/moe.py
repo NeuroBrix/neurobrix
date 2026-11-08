@@ -33,6 +33,8 @@ from nbxtensor.dtype.nbx_dtype import NBXDtype, dtype_size
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.backend.capabilities import backend_loads_pointers_from_memory
 from nbxtensor.memory import pointer_tables as _pt
+import logging
+_log = logging.getLogger(__name__)
 
 # NBX_MOE_DIAG gate, hoisted to import time (C1 hygiene: never read the
 # environ on the per-MoE-op hot path). Empty/unset → falsy → zero cost.
@@ -317,9 +319,8 @@ def execute_moe_fused(
     import os as _os_z3
     _Z3_DIAG = _os_z3.environ.get("NBX_Z3_TRITON_DIAG") == "1"
     if _Z3_DIAG and any_cpu_weight:
-        print(f"[Z3_MOE] {cache_key} pre-promote "
-              f"cuda_live={DeviceAllocator.memory_allocated(act_dev)/1e6:.1f}MB",
-              flush=True)
+        _log.debug(f"[Z3_MOE] {cache_key} pre-promote "
+                   f"cuda_live={DeviceAllocator.memory_allocated(act_dev)/1e6:.1f}MB")
     if any_cpu_weight:
         gate_weights = [
             w.to_cuda(act_dev) if getattr(w, '_device', 'cuda') == 'cpu' else w
@@ -331,9 +332,8 @@ def execute_moe_fused(
             w.to_cuda(act_dev) if getattr(w, '_device', 'cuda') == 'cpu' else w
             for w in down_weights]
     if _Z3_DIAG and any_cpu_weight:
-        print(f"[Z3_MOE] {cache_key} post-promote "
-              f"cuda_live={DeviceAllocator.memory_allocated(act_dev)/1e6:.1f}MB",
-              flush=True)
+        _log.debug(f"[Z3_MOE] {cache_key} post-promote "
+                   f"cuda_live={DeviceAllocator.memory_allocated(act_dev)/1e6:.1f}MB")
 
     orig_shape = hidden_states.shape
     if hidden_states.ndim == 3:
@@ -377,13 +377,10 @@ def execute_moe_fused(
             vals = list(buf)
             head = vals[:10]
             norm = (sum(v * v for v in vals)) ** 0.5
-            import sys as _sys
-            print(f"[MOE_DIAG] {label:20s} shape={list(tensor.shape)} "
-                  f"dtype={tensor.dtype} norm={norm:.4f} head10={[round(v,4) for v in head]}",
-                  file=_sys.stderr, flush=True)
+            _log.debug(f"[MOE_DIAG] {label:20s} shape={list(tensor.shape)} "
+                       f"dtype={tensor.dtype} norm={norm:.4f} head10={[round(v,4) for v in head]}")
         except Exception as _e:
-            import sys as _sys
-            print(f"[MOE_DIAG] {label} failed: {_e}", file=_sys.stderr, flush=True)
+            _log.debug(f"[MOE_DIAG] {label} failed: {_e}")
     if not _blended:
         _dump("gate_scores_in", gate_scores)
     _dump("hidden_states_in", hidden_states)
@@ -580,15 +577,14 @@ def execute_moe_fused(
             num_tokens_post_padded = _xfer(num_tokens_post_padded, dev)
 
         if _moe_diag:
-            import sys as _sys_d
-            print(f"[MOE_DIAG] {cache_key} dev={dev} act_dev={act_dev} "
-                  f"h=(d{hidden_states._device_idx},{hidden_states.shape},{hidden_states.data_ptr():#x}) "
-                  f"scores=(d{flat_scores._device_idx},{flat_scores.shape}) "
-                  f"sorted=(d{sorted_token_ids._device_idx},{sorted_token_ids.shape}) "
-                  f"expids=(d{expert_ids._device_idx},{expert_ids.shape}) "
-                  f"npad=(d{num_tokens_post_padded._device_idx}) "
-                  f"tbl_gate=(d{tables.gate_ptrs[dev]._device_idx},{tables.gate_ptrs[dev].shape},{tables.gate_ptrs[dev].data_ptr():#x}) "
-                  f"M={M} topk={top_k}", file=_sys_d.stderr, flush=True)
+            _log.debug(f"[MOE_DIAG] {cache_key} dev={dev} act_dev={act_dev} "
+                       f"h=(d{hidden_states._device_idx},{hidden_states.shape},{hidden_states.data_ptr():#x}) "
+                       f"scores=(d{flat_scores._device_idx},{flat_scores.shape}) "
+                       f"sorted=(d{sorted_token_ids._device_idx},{sorted_token_ids.shape}) "
+                       f"expids=(d{expert_ids._device_idx},{expert_ids.shape}) "
+                       f"npad=(d{num_tokens_post_padded._device_idx}) "
+                       f"tbl_gate=(d{tables.gate_ptrs[dev]._device_idx},{tables.gate_ptrs[dev].shape},{tables.gate_ptrs[dev].data_ptr():#x}) "
+                       f"M={M} topk={top_k}")
 
         result = _fused_moe_pass(
             hidden_states, tables, dev, flat_scores,
@@ -638,9 +634,8 @@ def execute_moe_fused(
     DeviceAllocator.ensure_triton_device(act_dev)
 
     if _Z3_DIAG and any_cpu_weight:
-        print(f"[Z3_MOE] {cache_key} post-return "
-              f"cuda_live={DeviceAllocator.memory_allocated(act_dev)/1e6:.1f}MB",
-              flush=True)
+        _log.debug(f"[Z3_MOE] {cache_key} post-return "
+                   f"cuda_live={DeviceAllocator.memory_allocated(act_dev)/1e6:.1f}MB")
 
     if expert_store is not None and _prefetch_routed is not None:
         # step 3: this layer's kernels are enqueued — copy ahead the experts the previous token routed
@@ -831,16 +826,15 @@ def _fused_moe_pass(
     # projection. DeepSeek 1408/2048 layout vs Qwen3 1536/2048 — a wrong
     # stride_bk/stride_bn swap would explain the 30× magnitude hit.
     if _diag_dump is not None:
-        import sys as _sys
-        print(f"[MOE_DIAG] strides gate: bk={tables.gate_stride_bk[dev]} "
-              f"bn={tables.gate_stride_bn[dev]}", file=_sys.stderr, flush=True)
-        print(f"[MOE_DIAG] strides up:   bk={tables.up_stride_bk[dev]} "
-              f"bn={tables.up_stride_bn[dev]}", file=_sys.stderr, flush=True)
-        print(f"[MOE_DIAG] strides down: bk={tables.down_stride_bk[dev]} "
-              f"bn={tables.down_stride_bn[dev]}", file=_sys.stderr, flush=True)
-        print(f"[MOE_DIAG] sorted_token_ids.numel={sorted_token_ids.numel()} "
-              f"expert_ids.numel={expert_ids.numel()} M={M} top_k={top_k} "
-              f"N_gate={N_gate} K={K}", file=_sys.stderr, flush=True)
+        _log.debug(f"[MOE_DIAG] strides gate: bk={tables.gate_stride_bk[dev]} "
+                   f"bn={tables.gate_stride_bn[dev]}")
+        _log.debug(f"[MOE_DIAG] strides up:   bk={tables.up_stride_bk[dev]} "
+                   f"bn={tables.up_stride_bn[dev]}")
+        _log.debug(f"[MOE_DIAG] strides down: bk={tables.down_stride_bk[dev]} "
+                   f"bn={tables.down_stride_bn[dev]}")
+        _log.debug(f"[MOE_DIAG] sorted_token_ids.numel={sorted_token_ids.numel()} "
+                   f"expert_ids.numel={expert_ids.numel()} M={M} top_k={top_k} "
+                   f"N_gate={N_gate} K={K}")
 
     unit_aligned = {}                    # the routing aligned at a unit tile's rows, once per block size
 

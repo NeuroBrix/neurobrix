@@ -80,7 +80,7 @@ def test_autotune_status_and_check_speak_records():
 def test_doctor_speaks_one_record_and_keeps_its_diagnosis_on_stderr():
     rec, err, _ = _record(["doctor", "--json"], "doctor")
     assert "ok" in rec and isinstance(rec["problems"], list)
-    assert "Compute environment" in err, "the human diagnosis must go to stderr, not vanish"
+    assert "Triton engine:" in err, "the human diagnosis must go to stderr, not vanish"
 
 
 @pytest.mark.skipif(not CACHE.exists() or not any(CACHE.glob("*/manifest.json")), reason="no installed container")

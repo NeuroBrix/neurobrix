@@ -54,6 +54,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.memory.slab import SlabAllocator, SlabInterceptor, StepSlab
+import logging
+_log = logging.getLogger(__name__)
 
 # THE ENGINE REPLAYS BY DEFAULT (the supervisor's order 2026-10-28 08:20, S3): a sequence that runs again with the same
 # signature is measured, recorded, compared byte for byte against the normal path on one step, and only then replayed;
@@ -85,7 +87,7 @@ def _decline(seq, reason: str) -> None:
         return None
     said.add(reason)
     comp = str((getattr(seq, "dag", None) or {}).get("component_name", "?"))
-    print(f"[Replay] {comp}: not replayed — {reason}; the normal path runs", flush=True)
+    _log.debug(f"[Replay] {comp}: not replayed — {reason}; the normal path runs")
     return None
 
 # Multi-device replay is LOCKED by default and this flag is how the lock is
@@ -218,37 +220,36 @@ def _stabilize_tick(seq) -> None:
             pass
         seq.__dict__["_stab_slab"] = StepSlab(need, dev)
         comp = str((seq.dag or {}).get("component_name", "?"))
-        print(f"[StepSlab] {comp}: stabilizing decode allocations "
-              f"({need / 1e6:.0f} MB slab)", flush=True)
+        _log.debug(f"[StepSlab] {comp}: stabilizing decode allocations "
+                   f"({need / 1e6:.0f} MB slab)")
     slab = seq.__dict__.get("_stab_slab")
     if slab is not None:
         if not seq.__dict__.get("_stab_served_printed") and \
                 seq.__dict__["_stab_run"] == 6:
             comp = str((seq.dag or {}).get("component_name", "?"))
             n_ops = len((seq.dag or {}).get("ops", {}))
-            print(f"[StepSlab] {comp} (dag {n_ops} ops, seq id "
-                  f"{id(seq) & 0xffff:04x}): served "
-                  f"{len(slab.allocs) + len(slab.stale)} allocations "
-                  f"last step (live {len(slab.allocs)}, "
-                  f"stale {len(slab.stale)}, shortfall {slab.shortfall})",
-                  flush=True)
+            _log.debug(f"[StepSlab] {comp} (dag {n_ops} ops, seq id "
+                       f"{id(seq) & 0xffff:04x}): served "
+                       f"{len(slab.allocs) + len(slab.stale)} allocations "
+                       f"last step (live {len(slab.allocs)}, "
+                       f"stale {len(slab.stale)}, shortfall {slab.shortfall})")
             a, b = slab.prev_carve or [], slab.carve_sizes
             if a and b:
                 if len(a) != len(b):
-                    print(f"[StepSlab] {comp}: carve COUNT varies "
-                          f"({len(a)} vs {len(b)})", flush=True)
+                    _log.debug(f"[StepSlab] {comp}: carve COUNT varies "
+                               f"({len(a)} vs {len(b)})")
                 else:
                     div = [i for i, (x, y) in enumerate(zip(a, b))
                            if x != y]
                     if div:
                         i = div[0]
-                        print(f"[StepSlab] {comp}: carve sizes diverge "
-                              f"at {len(div)} indices; first at #{i}: "
-                              f"{a[max(0,i-2):i+3]} vs "
-                              f"{b[max(0,i-2):i+3]}", flush=True)
+                        _log.debug(f"[StepSlab] {comp}: carve sizes diverge "
+                                   f"at {len(div)} indices; first at #{i}: "
+                                   f"{a[max(0,i-2):i+3]} vs "
+                                   f"{b[max(0,i-2):i+3]}")
                     else:
-                        print(f"[StepSlab] {comp}: carve size sequence "
-                              f"IDENTICAL ({len(a)} allocs)", flush=True)
+                        _log.debug(f"[StepSlab] {comp}: carve size sequence "
+                                   f"IDENTICAL ({len(a)} allocs)")
             seq.__dict__["_stab_served_printed"] = True
         slab.reset()
     STATE.stab_slab = slab
@@ -428,8 +429,8 @@ def release_idle_slabs(dev: int) -> int:
             _drop_plan(plans, sig)
             freed += now
             comp = str((getattr(seq, "dag", None) or {}).get("component_name", "?"))
-            print(f"[Replay] {comp}: a recorded plan's slab released on device {dev} ({now / 2**20:.0f} MB at once) — "
-                  f"an allocation there needed the room; it records again at its next run", flush=True)
+            _log.debug(f"[Replay] {comp}: a recorded plan's slab released on device {dev} ({now / 2**20:.0f} MB at once) — "
+                       f"an allocation there needed the room; it records again at its next run")
     return freed
 
 
@@ -711,8 +712,8 @@ class FrozenPlan:
                     DeviceAllocator.memcpy(_cs.addressof(b),
                                            ft.data_ptr(), ft._nbytes, 2)
                     vals.append((s, list(b)))
-            print(f"[Replay][SCAN] copied={_scan_copied} "
-                  f"small_inputs={vals}", flush=True)
+            _log.debug(f"[Replay][SCAN] copied={_scan_copied} "
+                       f"small_inputs={vals}")
         # A plan that crosses cards (an expert store's card-held tail) replays one graph per stretch on one card
         # (`replay_graph.SegmentedPlan`), the engine's choice: its direct replay is ~1 850 Python-driven launches a
         # token (Qwen3-30B-A3B on 4 V100, 2026-10-28: ~60 ms of a 184 ms token for a few ms of kernels).
@@ -743,27 +744,27 @@ class FrozenPlan:
                         cnt = _Ctr(t for t, _ in self.records)
                         sizes = sorted({len(r[1]) for t, r in self.records
                                         if t == _H2D})
-                        print(f"[Replay][GRAPH] action tags[:60]={seqd} "
-                              f"counts={dict(cnt)} h2d_sizes={sizes[:8]} "
-                              f"first kernels={names}", flush=True)
+                        _log.debug(f"[Replay][GRAPH] action tags[:60]={seqd} "
+                                   f"counts={dict(cnt)} h2d_sizes={sizes[:8]} "
+                                   f"first kernels={names}")
                         tail = [(t, getattr(r[0], "name", "?")[:24]
                                  if t == _KERNEL else
                                  (r[2] if t in (_MEMCPY,) else len(r[1])
                                   if t == _H2D else r))
                                 for t, r in self.records[-16:]]
-                        print(f"[Replay][GRAPH] tail16={tail}", flush=True)
+                        _log.debug(f"[Replay][GRAPH] tail16={tail}")
                     if _segmented:
                         from nbxtensor.backend.replay_graph import SegmentedPlan
                         self.graph = SegmentedPlan(recs, getattr(self.slab, "dev_idx", None))
-                        print(f"[Replay][GRAPH] bucket captured: {self.graph.launches} launches as "
-                              f"{self.graph.stretches} CUDA graphs, one per stretch on one card")
+                        _log.debug(f"[Replay][GRAPH] bucket captured: {self.graph.launches} launches as "
+                                   f"{self.graph.stretches} CUDA graphs, one per stretch on one card")
                     else:
                         self.graph = CapturedPlan(
                             recs, getattr(self.slab, "dev_idx", None))
-                        print(f"[Replay][GRAPH] bucket captured: "
-                              f"{self.graph.launches} launches as one CUDA "
-                              f"graph ({cut}/{len(self.records)} actions "
-                              f"in-graph)")
+                        _log.debug(f"[Replay][GRAPH] bucket captured: "
+                                   f"{self.graph.launches} launches as one CUDA "
+                                   f"graph ({cut}/{len(self.records)} actions "
+                                   f"in-graph)")
                 self.graph.launch()
             except Exception as e:
                 if getattr(e, "executed", False):
@@ -776,8 +777,8 @@ class FrozenPlan:
                 # Capture / pre-launch failure: nothing executed.
                 # Loud per-bucket refusal — direct replay is the
                 # correct path by construction (llama.cpp guard class).
-                print(f"[Replay][GRAPH] refusal ({e}) — bucket keeps "
-                      f"direct replay")
+                _log.debug(f"[Replay][GRAPH] refusal ({e}) — bucket keeps "
+                           f"direct replay")
                 self.graph_disabled = True
                 if self.graph is not None:
                     try:
@@ -997,12 +998,11 @@ def signature(seq) -> Optional[tuple]:
         if prev is not None and prev != sig and len(prev) == len(sig):
             for i, (a, b) in enumerate(zip(prev, sig)):
                 if a != b:
-                    print(f"[Replay][SIG] part {i} changed: "
-                          f"{repr(a)[:200]} -> {repr(b)[:200]}",
-                          flush=True)
+                    _log.debug(f"[Replay][SIG] part {i} changed: "
+                               f"{repr(a)[:200]} -> {repr(b)[:200]}")
             for o in owners:
-                print(f"[Replay][SIG] owner id={id(o) & 0xffffff:06x} "
-                      f"cache_len={o.get_cache_len()}", flush=True)
+                _log.debug(f"[Replay][SIG] owner id={id(o) & 0xffffff:06x} "
+                           f"cache_len={o.get_cache_len()}")
         seq.__dict__["_sig_diag_prev"] = sig
     return sig
 
@@ -1023,11 +1023,11 @@ def _seed_autotune_once() -> None:
         from nbxtensor.ops.autotune_cache import seed as _at_seed
         n = _at_seed()
         if n:
-            print(f"[Replay] autotune artifact seeded: {n} configs")
+            _log.debug(f"[Replay] autotune artifact seeded: {n} configs")
     except (OSError, ValueError):
         pass  # artifact I/O is an optimization, never a failure source
     except Exception as e:  # API drift must stay observable, once
-        print(f"[Replay] autotune seed unavailable ({type(e).__name__}: {e})")
+        _log.debug(f"[Replay] autotune seed unavailable ({type(e).__name__}: {e})")
 
 
 def _census_tick(seq) -> None:
@@ -1064,9 +1064,8 @@ def _census_report(seq) -> None:
     a, b = prev_runs[-2], prev_runs[-1]
     comp = str((seq.dag or {}).get("component_name", "?"))
     if len(a) != len(b):
-        print(f"[TupleCensus] {comp}: launch COUNT varies "
-              f"({len(a)} vs {len(b)}) — structural per-step change",
-              flush=True)
+        _log.debug(f"[TupleCensus] {comp}: launch COUNT varies "
+                   f"({len(a)} vs {len(b)}) — structural per-step change")
         seq.__dict__["_census_printed"] = True
         return
     varying = []
@@ -1078,13 +1077,13 @@ def _census_report(seq) -> None:
         grid_diff = (g0a, g1a, g2a) != (g0b, g1b, g2b)
         arg_idx = [j for j, (x, y) in enumerate(zip(fa, fb)) if x != y]
         varying.append((i, name_a, grid_diff, arg_idx))
-    print(f"[TupleCensus] {comp}: {len(a)} launches, "
-          f"{len(varying)} vary between consecutive runs", flush=True)
+    _log.debug(f"[TupleCensus] {comp}: {len(a)} launches, "
+               f"{len(varying)} vary between consecutive runs")
     from collections import Counter
     by_kernel = Counter((v[1], v[2], tuple(v[3])) for v in varying)
     for (kname, gdiff, args), cnt in by_kernel.most_common(12):
-        print(f"  {cnt:5d}x {kname}  grid_varies={gdiff}  "
-              f"varying_arg_positions={list(args)}", flush=True)
+        _log.debug(f"  {cnt:5d}x {kname}  grid_varies={gdiff}  "
+                   f"varying_arg_positions={list(args)}")
     seq.__dict__["_census_printed"] = True
 
 
@@ -1094,8 +1093,7 @@ def _mem_diag(tag: str) -> None:
     if os.environ.get("NBX_REPLAY_MEM_DIAG") != "1":
         return
     total = sum(DeviceAllocator._cuda_live_bytes.values())
-    print(f"[Replay][MEM] {tag}: live_tracked={total/1e6:.0f}MB",
-          flush=True)
+    _log.debug(f"[Replay][MEM] {tag}: live_tracked={total/1e6:.0f}MB")
 
 
 def would_replay(seq, pre_op_callback) -> bool:
@@ -1219,9 +1217,9 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
             n = seq.__dict__.setdefault("_replay_occurrence", {})
             n[sig] = n.get(sig, 0) + 1
             if replayed != normal:
-                print(f"[Replay][VERIFY_EVERY] DIVERGENCE at "
-                      f"occurrence {n[sig]} of bucket "
-                      f"({state.launches} launches)")
+                _log.debug(f"[Replay][VERIFY_EVERY] DIVERGENCE at "
+                           f"occurrence {n[sig]} of bucket "
+                           f"({state.launches} launches)")
                 if os.environ.get("NBX_REPLAY_GRAPH_DUMP") == "1":
                     for tid in (seq.dag.get("output_tensor_ids")
                                 or [])[:1]:
@@ -1243,9 +1241,9 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
                                                cur.data_ptr(), nb, 2)
                         nor = _np.frombuffer(bytes(rb2),
                                              dtype=_np.float16)
-                        print(f"[Replay][VERIFY_EVERY] out[:8] "
-                              f"replayed(frozen)={fro[:8].tolist()} "
-                              f"normal={nor[:8].tolist()}", flush=True)
+                        _log.debug(f"[Replay][VERIFY_EVERY] out[:8] "
+                                   f"replayed(frozen)={fro[:8].tolist()} "
+                                   f"normal={nor[:8].tolist()}")
             return True
         state.replay(seq._arena)
         if getattr(seq, "_replay_advances", True):     # a head segment's launches advanced its own layers only
@@ -1260,8 +1258,8 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
                 got = o.cache.replay_position_diag()
                 if got is None:
                     continue
-                print(f"[Replay][GRAPH] post-replay dev_pos={got[0]} "
-                      f"host_len={got[1]}", flush=True)
+                _log.debug(f"[Replay][GRAPH] post-replay dev_pos={got[0]} "
+                           f"host_len={got[1]}")
         return True
     if isinstance(state, tuple) and state[0] == "VERIFY":
         # verify-first-replay (a divergence guard, battery adjudication
@@ -1282,7 +1280,7 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
         if _tail and any(not hasattr(o, "replay_lens_snapshot")
                          or not hasattr(getattr(o, "cache", o), "replay_lens_snapshot") for o in owners):
             plans[sig] = "UNREPLAYABLE"
-            print("[Replay] tail declined: a state owner cannot rewind exactly what the tail advanced", flush=True)
+            _log.debug("[Replay] tail declined: a state owner cannot rewind exactly what the tail advanced")
             seq._run_single_device(skip_kills, None)
             return True
         _snaps = [(o, o.replay_lens_snapshot()) for o in owners] if _tail else []
@@ -1304,7 +1302,7 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
         normal = _output_hashes(seq)
         if replayed == normal:
             plans[sig] = plan
-            print(PLAN_MATCHED_LINE.format(launches=plan.launches))
+            _log.debug("%s", PLAN_MATCHED_LINE.format(launches=plan.launches))
             _mem_diag("post-verify")
         else:
             plan.slab.retire()
@@ -1319,9 +1317,9 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
                 finally:
                     plan.graph = None
             plans[sig] = "UNREPLAYABLE"
-            print("[Replay] plan REJECTED at verify (outputs differ "
-                  "from the normal path) — normal path keeps this "
-                  "graph")
+            _log.debug("[Replay] plan REJECTED at verify (outputs differ "
+                       "from the normal path) — normal path keeps this "
+                       "graph")
         return True
     if state == "UNREPLAYABLE":
         return False
@@ -1381,16 +1379,16 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
     _free, _ = DeviceAllocator.mem_get_info(_dev)
     if slab_bytes + _verify > _free:
         comp = str((getattr(seq, "dag", None) or {}).get("component_name", "?"))
-        print(f"[Replay] {comp}: not recorded — its slab ({slab_bytes / 2**20:.0f} MB) and the verify pass beside it "
-              f"({_verify / 2**20:.0f} MB) need more than the {_free / 2**20:.0f} MB free on device {_dev}; the normal "
-              f"path keeps this graph", flush=True)
+        _log.debug(f"[Replay] {comp}: not recorded — its slab ({slab_bytes / 2**20:.0f} MB) and the verify pass beside it "
+                   f"({_verify / 2**20:.0f} MB) need more than the {_free / 2**20:.0f} MB free on device {_dev}; the normal "
+                   f"path keeps this graph")
         plans[sig] = "UNREPLAYABLE"
         return False
     try:
         slab = SlabAllocator(slab_bytes, seq.device_idx)
     except Exception as e:
-        print(f"[Replay] slab alloc failed ({slab_bytes/1e6:.0f} MB): "
-              f"{e} — bucket keeps the normal path")
+        _log.debug(f"[Replay] slab alloc failed ({slab_bytes/1e6:.0f} MB): "
+                   f"{e} — bucket keeps the normal path")
         plans[sig] = "UNREPLAYABLE"
         return False
 
@@ -1398,7 +1396,7 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
         others = {d: SlabAllocator(int(b), d)
                   for d, b in (seq.__dict__.get("_replay_dev_hw", {}).get(sig) or {}).items()}
     except Exception as e:
-        print(f"[Replay] slab alloc failed on another card: {e} — bucket keeps the normal path")
+        _log.debug(f"[Replay] slab alloc failed on another card: {e} — bucket keeps the normal path")
         slab.retire()
         plans[sig] = "UNREPLAYABLE"
         return False
@@ -1437,12 +1435,12 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
             # Data-driven retry: the failed attempt measured the exact
             # extra bytes needed.
             plans[sig] = ("MEASURED", slab_bytes + shortfall, attempt + 1)
-            print(f"[Replay] slab undersized by {shortfall/1e6:.0f} MB — "
-                  f"will re-record at {(slab_bytes+shortfall)/1e6:.0f} MB")
+            _log.debug(f"[Replay] slab undersized by {shortfall/1e6:.0f} MB — "
+                       f"will re-record at {(slab_bytes+shortfall)/1e6:.0f} MB")
             return True  # the recording run still executed correctly
         plans[sig] = "UNREPLAYABLE"
-        print(f"[Replay] bucket UNREPLAYABLE ({reason}) — normal path "
-              f"keeps this graph")
+        _log.debug(f"[Replay] bucket UNREPLAYABLE ({reason}) — normal path "
+                   f"keeps this graph")
         if failed is not None:
             # The failed partial run may have left the arena mid-state:
             # re-execute normally from the top (ops are deterministic
@@ -1489,12 +1487,12 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
     except (OSError, ValueError):
         pass  # artifact I/O is an optimization, never a failure source
     except Exception as e:  # API drift must stay observable, once
-        print(f"[Replay] autotune capture unavailable "
-              f"({type(e).__name__}: {e})")
+        _log.debug(f"[Replay] autotune capture unavailable "
+                   f"({type(e).__name__}: {e})")
     comp = str((seq.dag or {}).get("component_name", "?"))
-    print(f"[Replay] plan frozen[{comp}]: {plan.launches} launches "
-          f"({plan.actions} actions), slab "
-          f"{slab.size/1e6:.0f} MB, inputs {len(plan.frozen_inputs)}, "
-          f"outputs {len(plan.output_slots)}")
+    _log.debug(f"[Replay] plan frozen[{comp}]: {plan.launches} launches "
+               f"({plan.actions} actions), slab "
+               f"{slab.size/1e6:.0f} MB, inputs {len(plan.frozen_inputs)}, "
+               f"outputs {len(plan.output_slots)}")
     _mem_diag("post-record")
     return True

@@ -29,6 +29,8 @@ from neurobrix.core.runtime.resolution.i2v_conditioning import (
 from neurobrix.core.runtime.resolution.vace_control_conditioning import (
     CONTROL_VAR as _VACE_CONTROL_VAR,
 )
+import logging
+_log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from neurobrix.core.flow.base import FlowContext
@@ -373,14 +375,14 @@ class CFGEngine(CFGSteps):
         if _cfgb:
             torch.save({"noise_pred_batched": noise_pred_batched.detach().cpu()},
                        _cfgb if _cfgb.endswith(".pt") else _cfgb + ".pt")
-            print(f"[CFG-BATCH-DUMP] shape={tuple(noise_pred_batched.shape)} -> {_cfgb}")
+            _log.debug(f"[CFG-BATCH-DUMP] shape={tuple(noise_pred_batched.shape)} -> {_cfgb}")
 
         noise_pred_uncond, noise_pred_cond = noise_pred_batched.chunk(2)
         noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
 
         if DEBUG:
-            print(f"[CFG] guidance={guidance_scale}: uncond={noise_pred_uncond.mean():.4f}, "
-                  f"cond={noise_pred_cond.mean():.4f}, final={noise_pred.mean():.4f}")
+            _log.debug(f"[CFG] guidance={guidance_scale}: uncond={noise_pred_uncond.mean():.4f}, "
+                       f"cond={noise_pred_cond.mean():.4f}, final={noise_pred.mean():.4f}")
 
         # Restore originals
         self._ctx.variable_resolver.set(encoder_key, orig_hidden)

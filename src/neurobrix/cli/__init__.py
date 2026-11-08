@@ -128,8 +128,18 @@ def _add_run_arguments(p):
                             help='Force raw text completion')
 
 
-def create_parser():
-    """Create the main argument parser with subcommands."""
+#: Developer commands: listed by `neurobrix --help -v`, hidden from the user's `--help` (they still run).
+DEV_COMMANDS = ("calibrate", "autotune", "drift", "coverage")
+
+
+def _add_verbose(p, top: bool = False) -> None:
+    """`-v` before or after the command (under one, SUPPRESS: it never overwrites the one given before)."""
+    p.add_argument('-v', '--verbose', action='count', default=0 if top else argparse.SUPPRESS,
+                   help='-v: the engine\'s developer lines; -vv: and the traceback of an error (NBX_LOG=debug: both)')
+
+
+def create_parser(show_dev: bool = False):
+    """Create the main argument parser with subcommands. `show_dev`: the developer commands are listed in the help."""
 
     parser = argparse.ArgumentParser(
         prog='neurobrix',
@@ -137,21 +147,12 @@ def create_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Run inference (family read from manifest - not required!)
-  neurobrix run --model Flex.1-alpha --hardware c4140-v100x4-nvlink \\
-      --prompt "cyberpunk city at night" --steps 4
+  neurobrix hub                                        # the models on the registry
+  neurobrix import TinyLlama/TinyLlama-1.1B-Chat-v1.0  # download one
+  neurobrix run --model TinyLlama-1.1B-Chat-v1.0 --prompt "What is the capital of France?"
 
-  # Show system info
-  neurobrix info --models --hardware
-
-  # Browse registry
-  neurobrix hub
-
-  # Inspect a .nbx file
-  neurobrix inspect ~/.neurobrix/cache/Flex.1-alpha/model.nbx
-
-For more information: https://neurobrix.es
-        """
+-v shows the engine's developer lines, -vv an error's traceback too (NBX_LOG=debug: both).
+For more information: https://neurobrix.es"""
     )
 
     parser.add_argument(
@@ -159,6 +160,7 @@ For more information: https://neurobrix.es
         action='version',
         version=f'NeuroBrix v{__version__}'
     )
+    _add_verbose(parser, top=True)
 
     subparsers = parser.add_subparsers(
         dest='command',
@@ -578,6 +580,12 @@ Validation levels:
                                 help='Hardware profile ID '
                                      '(auto-detected if omitted)')
 
+    for name, sub in subparsers.choices.items():
+        if not any('-v' in a.option_strings for a in sub._actions):    # `validate` keeps its own -v
+            _add_verbose(sub)
+    if not show_dev:
+        subparsers._choices_actions = [a for a in subparsers._choices_actions if a.dest not in DEV_COMMANDS]
+        subparsers.metavar = "{" + ",".join(n for n in subparsers.choices if n not in DEV_COMMANDS) + "}"
     return parser
 
 
@@ -589,11 +597,26 @@ def _utf8_streams(*streams) -> None:
             stream.reconfigure(encoding="utf-8", errors="backslashreplace")
 
 
+#: the loggers the engine's command line owns (nbxtensor/terminal.py configures them)
+LOGGERS = ("neurobrix", "nbxtensor")
+
+
 def main():
     """Main entry point."""
     _utf8_streams(sys.stdout, sys.stderr)
-    parser = create_parser()
+    from nbxtensor import terminal
+
+    def _configure(verbose: int, as_json: bool) -> None:
+        # ONE terminal handler: developer lines under -v, tracebacks under -vv; --json keeps stderr for what is wrong
+        try:
+            terminal.configure(*terminal.resolve(verbose, quiet_default=as_json), roots=LOGGERS)
+        except terminal.LogLevelRefused as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(2)
+
+    parser = create_parser(show_dev=terminal.verbosity(sys.argv[1:]) > 0)
     args = parser.parse_args()
+    _configure(getattr(args, "verbose", 0) or 0, bool(getattr(args, "json", False)))
     import os as _os_census
     if _os_census.environ.get("NBX_CENSUS") == "1":
         # The certification census (kernels/census.py): this process becomes a shadow —
@@ -616,12 +639,12 @@ def main():
             if _rc:
                 sys.exit(int(_rc))
         elif args.command == 'run':
-            from neurobrix.cli.commands.run import cmd_run, run_entry
+            from neurobrix.cli.commands.run import cmd_run
             # cmd_run returns a non-zero status on refusal paths (mode-flag
             # conflict, gate errors) — a loud refusal that exits 0 turns
             # every harness cell into a silent false-green (the tseq
             # `--triton --sequential` no-op class, 2026-09-02).
-            _rc = run_entry(args)
+            _rc = cmd_run(args)     # under --explain-plan --json the record is its only stdout line (the rest logs)
             if _rc:
                 sys.exit(int(_rc))
         elif args.command == 'import':
@@ -672,30 +695,35 @@ def main():
             sys.exit(1)
 
     except KeyboardInterrupt:
-        print("\n\nInterrupted by user")
+        print("\nInterrupted by user", file=sys.stderr)
         sys.exit(130)
     except FileNotFoundError as e:
-        print(f"\nERROR: {e}")
-        sys.exit(1)
+        _fail(e, trace=False)
     except ValueError as e:
-        print(f"\nERROR: {e}")
-        sys.exit(1)
+        _fail(e, trace=False)
     except PyTorchBranchNotInstalledError as e:
         # The PyTorch engine asked for where torch is not installed: the named message, never a trace
-        print(f"\n[ERROR] {e}")
-        sys.exit(1)
+        _fail(e, trace=False)
     except ModuleNotFoundError as e:
         if (e.name or "").split(".")[0] != "torch":
-            print(f"\nUNEXPECTED ERROR: {e}")
-            import traceback
-            traceback.print_exc()
-            sys.exit(1)
+            _fail(e, unexpected=True)
         # a PyTorch-engine path that imports torch before any mode check: the same message, never a trace
         from neurobrix.core.runtime.engines import torch_missing_message
-        print(f"\n[ERROR] {torch_missing_message(f'neurobrix {args.command}')}")
-        sys.exit(1)
+        _fail(torch_missing_message(f'neurobrix {args.command}'), trace=False)
     except Exception as e:
-        print(f"\nUNEXPECTED ERROR: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+        _fail(e, unexpected=True)
+
+
+def _fail(e, trace: bool = True, unexpected: bool = False, what: str = "") -> None:
+    """An error said once on stderr, `Error: <cause>` (its remedy in the cause's text); the traceback under -vv. Exit 1."""
+    import logging
+    from nbxtensor import terminal
+    log = logging.getLogger("neurobrix.cli")
+    named = None
+    kind = f"{type(e).__name__}: " if unexpected and not isinstance(e, str) else ""
+    log.error(f"Error: {named or what + kind + str(e)}")
+    if terminal.tracebacks() and not isinstance(e, str):
+        log.debug("Traceback:", exc_info=e)
+    elif trace and not named and not isinstance(e, str):
+        log.error("(neurobrix -vv ... prints the traceback)")
+    sys.exit(1)

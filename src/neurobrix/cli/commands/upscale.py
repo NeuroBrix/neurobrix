@@ -15,9 +15,12 @@ denormalisation is handled by the shared family-aware
 from __future__ import annotations
 
 import json
+import logging
 import sys
 import time
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 
 def _resolve_execution_mode(args) -> str:
@@ -25,8 +28,8 @@ def _resolve_execution_mode(args) -> str:
     mode = getattr(args, "mode", None) or "compiled"
     valid = {"compiled", "sequential", "triton", "triton-sequential"}
     if mode not in valid:
-        print(
-            f"ERROR: --mode must be one of {sorted(valid)}, got '{mode}'.")
+        log.error(
+            f"Error: --mode must be one of {sorted(valid)}, got '{mode}'.")
         sys.exit(1)
     # Runtime uses an underscore variant for the sequential triton mode.
     return "triton_sequential" if mode == "triton-sequential" else mode
@@ -77,32 +80,27 @@ def cmd_upscale(args):
     from neurobrix.cli.utils import find_model
 
     if not args.model or not args.input or not args.output:
-        print("ERROR: --model, --input and --output are required.")
+        log.error("Error: --model, --input and --output are required.")
         sys.exit(1)
 
     input_path = Path(args.input)
     if not input_path.exists():
-        print(f"ERROR: input image not found: {input_path}")
+        log.error(f"Error: input image not found: {input_path}")
         sys.exit(1)
 
     execution_mode = _resolve_execution_mode(args)
 
-    print("NeuroBrix Upscale")
-    print("=" * 60)
-    print(f"Model: {args.model}")
-    print(f"Input: {args.input}")
-    print(f"Mode: {execution_mode}")
-    print("=" * 60)
+    log.info(f"[Engine] {execution_mode}")
 
     nbx_path = find_model(args.model)
 
-    print("\n[1/4] Loading container...")
+    log.debug("[1/4] Loading container...")
     container = NBXContainer.load(str(nbx_path))
     manifest = container.get_manifest() or {}
     family = manifest.get("family")
     if family != "upscaler":
-        print(
-            f"ERROR: model '{args.model}' is family='{family}', not "
+        log.error(
+            f"Error: model '{args.model}' is family='{family}', not "
             f"'upscaler'. Use `nbx run` for non-upscaler models.")
         sys.exit(1)
 
@@ -112,19 +110,19 @@ def cmd_upscale(args):
         topology = json.load(f)
     input_var = _find_input_variable(topology)
 
-    print("\n[2/4] Solving hardware allocation...")
+    log.debug("[2/4] Solving hardware allocation...")
     if args.hardware:
         hw_profile = load_profile(args.hardware)
     else:
         hw_profile = load_profile(get_or_create_default_profile())
-    print(f"   Profile: {hw_profile.id} ({hw_profile.total_vram_gb:.1f} GB)")
+    log.debug(f"   Profile: {hw_profile.id} ({hw_profile.total_vram_gb:.1f} GB)")
 
-    print("\n[3/4] Preprocessing input image...")
+    log.debug("[3/4] Preprocessing input image...")
     pixel_values, (orig_h, orig_w) = _load_and_preprocess_image(
         args.input, cache_path)
     _, _, in_h, in_w = pixel_values.shape
-    print(f"   Input tensor: {tuple(pixel_values.shape)} "
-          f"(original {orig_h}×{orig_w}, padded {in_h}×{in_w})")
+    log.debug(f"   Input tensor: {tuple(pixel_values.shape)} "
+              f"(original {orig_h}×{orig_w}, padded {in_h}×{in_w})")
 
     input_config = InputConfig(
         batch_size=1, height=in_h, width=in_w, dtype="float32",
@@ -132,22 +130,22 @@ def cmd_upscale(args):
     solver = PrismSolver()
     execution_plan = solver.solve_smart(container, hw_profile, input_config,
                                         mode=locals().get('execution_mode') or 'compiled')
-    print(f"   Strategy: {execution_plan.strategy}")
+    log.debug(f"   Strategy: {execution_plan.strategy}")
     # The choice, said out loud. Prism scores every viable strategy and takes
     # the fastest — invisible unless printed, and an engine that decides
     # without saying so is indistinguishable from one that decides badly.
     if getattr(execution_plan, "selection_reason", ""):
-        print(f"   Why:      {execution_plan.selection_reason}")
+        log.debug(f"   Why:      {execution_plan.selection_reason}")
     _cards = sorted({
         d for a in execution_plan.components.values()
         for d in (getattr(a, "devices", None) or [])
     })
     if _cards:
-        print(f"   Devices:  {', '.join(_cards)}"
-              f"  ({execution_plan.total_memory_mb:.0f} MB planned)")
+        log.debug(f"   Devices:  {', '.join(_cards)}"
+                  f"  ({execution_plan.total_memory_mb:.0f} MB planned)")
     if getattr(execution_plan, "host_footprint", None):
         from neurobrix.core.prism.host_footprint import summary as _host_summary
-        print(f"   Host:     {_host_summary(execution_plan.host_footprint)}")
+        log.debug(f"   Host:     {_host_summary(execution_plan.host_footprint)}")
 
     loader = NBXRuntimeLoader()
     pkg = loader.load(str(nbx_path))
@@ -156,7 +154,7 @@ def cmd_upscale(args):
     declare_hardware_profile(hw_profile)
     executor = RuntimeExecutor(pkg, execution_plan, mode=execution_mode)
 
-    print(f"\n[4/4] Running upscale ({execution_mode})...")
+    log.debug(f"[4/4] Running upscale ({execution_mode})...")
     inputs = {input_var: pixel_values}
     try:
         _drain_device(execution_mode)
@@ -165,12 +163,10 @@ def cmd_upscale(args):
         _drain_device(execution_mode)
         wall = time.time() - t0
     except Exception as e:
-        print(f"\n[ERROR] Upscale failed: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+        from neurobrix.cli import _fail
+        _fail(e, what="the upscale failed: ")
 
-    print(f"\n[Timing] Total execution: {wall:.2f}s")
+    log.info(f"[Timing] Total execution: {wall:.2f}s")
 
     # The contract is input x scale exactly. The scale lookup and the
     # crop live in save_image — ONE point of truth for both entry
@@ -178,7 +174,5 @@ def cmd_upscale(args):
     # original size it owns.
     saved = save_image(outputs, args.output, family, executor, pkg,
                        orig_hw=(orig_h, orig_w))
-    print("\n" + "=" * 60)
     print(f"SAVED: {saved}")
-    print("=" * 60)
     return 0

@@ -26,6 +26,8 @@ from neurobrix.core.dtype.config import device_supports_fp64, parse_dtype, strip
 from nbxtensor.dtype import itemsize as _itemsize
 from nbxtensor.dtype.operands import (  # noqa: E402 — the operand rules both engines read, the library's
     attention_operand_alignment, attention_operand_dtypes, contraction_accumulator_dtype)
+import logging
+_log = logging.getLogger(__name__)
 
 
 def rms_norm_fp32(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
@@ -93,8 +95,8 @@ def _maybe_log_clamp(site: str, inp: torch.Tensor) -> None:
         return
     if max_abs > 65504.0:
         _CLAMP_DIAG_FIRED[site] = True
-        print(f"[NBX_DTYPE_CLAMP_DIAG] site={site} max_abs={max_abs:.2f} "
-              f"src_dtype={inp.dtype} shape={tuple(inp.shape)}")
+        _log.debug(f"[NBX_DTYPE_CLAMP_DIAG] site={site} max_abs={max_abs:.2f} "
+                   f"src_dtype={inp.dtype} shape={tuple(inp.shape)}")
 
 
 
@@ -265,8 +267,8 @@ def cpu_lacks_half_kernel(op_name: str) -> bool:
     try:
         probe()
         lacks = False
-        print(f"[dtype] {op_name}: this torch ({torch.__version__}) HAS a CPU half "
-              f"kernel — the fp32 wrapper is not applied", flush=True)
+        _log.debug(f"[dtype] {op_name}: this torch ({torch.__version__}) HAS a CPU half "
+                   f"kernel — the fp32 wrapper is not applied")
     except (RuntimeError, NotImplementedError):
         lacks = True
     except Exception:

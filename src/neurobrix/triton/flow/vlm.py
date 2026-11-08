@@ -55,6 +55,8 @@ from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family 
 from neurobrix.core.flow.base import requests_speech
 from neurobrix.core.flow.shared_steps import VLMSteps   # the steps both branches share
 from neurobrix.core.flow.base import ComponentFlowHandler   # the executor's four component callables, both branches
+import logging
+_log = logging.getLogger(__name__)
 
 
 def _maybe_log_topk(logits, step: int) -> None:
@@ -276,8 +278,8 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
             # ── Step 2 (text-only→speech): no modality tower runs; the
             # deepstack injection rides the empty-stub form built in
             # the decode loop below. R30 mirror. ──
-            print("   [vlm] text-only\u2192speech form engaged \u2014 "
-                  "no modality input; deepstack rides the empty stubs")
+            _log.debug("   [vlm] text-only\u2192speech form engaged \u2014 "
+                       "no modality input; deepstack rides the empty stubs")
             n_modal = 0
             modal_embeds = None
             span_token_id = None
@@ -289,7 +291,7 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
             # M-RoPE temporal scale differ downstream. R30 mirror. ──
             vis_pixels = pixel_values if has_image else pixel_values_videos
             vis_grid = grid_thw if has_image else video_grid_thw
-            print(f"   [{vision_name}] Running vision forward...")
+            _log.debug(f"   [{vision_name}] Running vision forward...")
             start = time.perf_counter()
             self._ensure_weights_loaded(vision_name)
             resolved[f"{vision_name}.hidden_states"] = vis_pixels
@@ -318,10 +320,10 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
                             f"{len(ds_input_names)} deepstack inputs but vision "
                             f"component '{vision_name}' produced no output_{k}.")
                     deepstack_embeds.append(t.to(dtype))
-            print(f"   [{vision_name}] {n_modal} vision tokens in "
-                  f"{(time.perf_counter() - start) * 1000:.0f}ms"
-                  + (f" (+{len(deepstack_embeds)} deepstack levels)"
-                     if deepstack_embeds else ""))
+            _log.debug("%s", f"   [{vision_name}] {n_modal} vision tokens in "
+                             f"{(time.perf_counter() - start) * 1000:.0f}ms"
+                             + (f" (+{len(deepstack_embeds)} deepstack levels)"
+                                if deepstack_embeds else ""))
             if not self.ctx.persistent_mode:
                 self._unload_component_weights(vision_name)
                 release_flow_memory(self.ctx.primary_device)
@@ -330,7 +332,7 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
             # R30 mirror of the compiled audio branch: the mel DSP is the
             # SHARED numpy core (R34 boundary I/O), features cross into
             # the arena as NBXTensor.
-            print(f"   [{audio_name}] Running audio forward...")
+            _log.debug(f"   [{audio_name}] Running audio forward...")
             start = time.perf_counter()
             self._ensure_weights_loaded(audio_name)
             _aud_graph_path = (Path(self.ctx.pkg.cache_path) / "components"
@@ -392,9 +394,9 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
                     f"ZERO FALLBACK: audio output has "
                     f"{modal_embeds.shape[1]} tokens but aftercnn({L}) "
                     f"expects {n_modal}.")
-            print(f"   [{audio_name}] {n_modal} audio tokens "
-                  f"(L={L} mel frames) in "
-                  f"{(time.perf_counter() - start) * 1000:.0f}ms")
+            _log.debug(f"   [{audio_name}] {n_modal} audio tokens "
+                       f"(L={L} mel frames) in "
+                       f"{(time.perf_counter() - start) * 1000:.0f}ms")
             if not self.ctx.persistent_mode:
                 self._unload_component_weights(audio_name)
                 release_flow_memory(self.ctx.primary_device)
@@ -524,8 +526,8 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
         logits_source = ("lm_head"
                          if (head_name and head_name in self.ctx.executors)
                          else "embed_weight_tied")
-        print(f"   [{lm_name}] Generating (max={max_tokens}, "
-              f"context={context_embeds.shape[1]}, logits={logits_source})...")
+        _log.debug(f"   [{lm_name}] Generating (max={max_tokens}, "
+                   f"context={context_embeds.shape[1]}, logits={logits_source})...")
         start = time.perf_counter()
         generated_ids: List[int] = []
 
@@ -635,8 +637,8 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
                 finally:
                     DeviceAllocator.set_device(_prev_d)
 
-        print(f"   [{lm_name}] Generated {len(generated_ids)} tokens in "
-              f"{(time.perf_counter() - start) * 1000:.0f}ms")
+        _log.debug(f"   [{lm_name}] Generated {len(generated_ids)} tokens in "
+                   f"{(time.perf_counter() - start) * 1000:.0f}ms")
         resolved["global.generated_token_ids"] = generated_ids
 
         # ── Generative-speech leg (P-OMNI-GEN §1) — R30 mirror ──
@@ -761,7 +763,7 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
                 raise RuntimeError(
                     "ZERO FALLBACK: staged vision chain requires "
                     "vision_projection_component in topology.flow.vlm.")
-            print(f"   [{vision_name}] Running vision forward...")
+            _log.debug(f"   [{vision_name}] Running vision forward...")
             start = time.perf_counter()
             self._ensure_weights_loaded(vision_name)
             # CLI host tensors alias into the resolver; the executor's
@@ -796,9 +798,9 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
                     f"produced no output.")
             modal_embeds = proj_out.reshape(
                 -1, proj_out.shape[-1]).to(dtype)
-            print(f"   [{vision_name}->{proj_name}] "
-                  f"{modal_embeds.shape[0]} vision tokens in "
-                  f"{(time.perf_counter() - start) * 1000:.0f}ms")
+            _log.debug(f"   [{vision_name}->{proj_name}] "
+                       f"{modal_embeds.shape[0]} vision tokens in "
+                       f"{(time.perf_counter() - start) * 1000:.0f}ms")
             if not self.ctx.persistent_mode:
                 self._unload_component_weights(proj_name)
                 release_flow_memory(self.ctx.primary_device)
@@ -812,7 +814,7 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
                 raise RuntimeError(
                     "ZERO FALLBACK: audio request needs audio_component + "
                     "audio_projection_component in topology.flow.vlm.")
-            print(f"   [{audio_name}] Running audio forward...")
+            _log.debug(f"   [{audio_name}] Running audio forward...")
             start = time.perf_counter()
             _ptype = {"whisper_mel": "mel_spectrogram"}.get(
                 apre.get("type", "whisper_mel"), apre.get("type"))
@@ -884,9 +886,9 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
                     f"expects {n_expected}.")
             modal_embeds = aproj_out.reshape(
                 -1, aproj_out.shape[-1]).to(dtype)
-            print(f"   [{audio_name}->{aproj_name}] "
-                  f"{modal_embeds.shape[0]} audio tokens (L={L} mel "
-                  f"frames) in {(time.perf_counter() - start) * 1000:.0f}ms")
+            _log.debug(f"   [{audio_name}->{aproj_name}] "
+                       f"{modal_embeds.shape[0]} audio tokens (L={L} mel "
+                       f"frames) in {(time.perf_counter() - start) * 1000:.0f}ms")
             if not self.ctx.persistent_mode:
                 self._unload_component_weights(aproj_name)
                 release_flow_memory(self.ctx.primary_device)
@@ -965,8 +967,8 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
         logits_source = ("lm_head"
                          if (head_name and head_name in self.ctx.executors)
                          else "embed_weight_tied")
-        print(f"   [{lm_name}] Generating (max={max_tokens}, "
-              f"context={context_embeds.shape[1]}, logits={logits_source})...")
+        _log.debug(f"   [{lm_name}] Generating (max={max_tokens}, "
+                   f"context={context_embeds.shape[1]}, logits={logits_source})...")
         start = time.perf_counter()
         generated_ids: List[int] = []
         from neurobrix.triton.flow.decoder_cache import DecodeSteps, open_decoder_cache
@@ -1023,8 +1025,8 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
             context_embeds = NBXTensor.cat([context_embeds, token_embed],
                                            dim=1)
 
-        print(f"   [{lm_name}] Generated {len(generated_ids)} tokens in "
-              f"{(time.perf_counter() - start) * 1000:.0f}ms")
+        _log.debug(f"   [{lm_name}] Generated {len(generated_ids)} tokens in "
+                   f"{(time.perf_counter() - start) * 1000:.0f}ms")
         resolved["global.generated_token_ids"] = generated_ids
 
         # ── Generative-speech leg, CFM class (P-OMNI-GEN model 3/3) ──
@@ -1221,7 +1223,7 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
                     "+ vision_projection_component in topology.flow.vlm.")
             vis_pixels = pixel_values if has_image else pixel_values_videos
             vis_grid = grid_thw if has_image else video_grid_thw
-            print(f"   [{vision_name}] Running vision forward...")
+            _log.debug(f"   [{vision_name}] Running vision forward...")
             start = time.perf_counter()
             self._ensure_weights_loaded(vision_name)
             # CLI host tensors alias into the resolver; the executor's
@@ -1263,8 +1265,8 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
                     f"ZERO FALLBACK: the visual chain produced "
                     f"{int(img_embeds.shape[0])} tokens but grid "
                     f"{t}x{h}x{wg} / merge {merge} expects {expected}.")
-            print(f"   [{vision_name}->{vproj_name}] {expected} vision "
-                  f"tokens in {(time.perf_counter() - start) * 1000:.0f}ms")
+            _log.debug(f"   [{vision_name}->{vproj_name}] {expected} vision "
+                       f"tokens in {(time.perf_counter() - start) * 1000:.0f}ms")
             if not self.ctx.persistent_mode:
                 self._unload_component_weights(vproj_name)
                 release_flow_memory(self.ctx.primary_device)
@@ -1275,7 +1277,7 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
                 raise RuntimeError(
                     "ZERO FALLBACK: audio request needs audio_component + "
                     "audio_projection_component in topology.flow.vlm.")
-            print(f"   [{audio_name}] Running audio forward...")
+            _log.debug(f"   [{audio_name}] Running audio forward...")
             start = time.perf_counter()
             _ptype = {"whisper_mel": "mel_spectrogram"}.get(
                 apre.get("type", "whisper_mel"), apre.get("type"))
@@ -1328,9 +1330,9 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
                     f"{int(aud_embeds.shape[0])} tokens but the vendor "
                     f"length arithmetic on {L} mel frames "
                     f"(({L}-1)//2+1 then k={_k} s={_s}) expects {_l2}.")
-            print(f"   [{audio_name}->{aproj_name}] {_l2} audio tokens "
-                  f"(L={L} mel frames) in "
-                  f"{(time.perf_counter() - start) * 1000:.0f}ms")
+            _log.debug(f"   [{audio_name}->{aproj_name}] {_l2} audio tokens "
+                       f"(L={L} mel frames) in "
+                       f"{(time.perf_counter() - start) * 1000:.0f}ms")
             if not self.ctx.persistent_mode:
                 self._unload_component_weights(aproj_name)
                 release_flow_memory(self.ctx.primary_device)
@@ -1458,8 +1460,8 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
                     ("audio_embeds", aud_src)):
                 resolved[_key] = _value
                 resolved[f"global.{_key}"] = _value
-            print(f"   [{lm_name}] Image-gen ENCODER pass "
-                  f"(S={_S_ig}, gen tokens={len(_gen_pos)})...")
+            _log.debug(f"   [{lm_name}] Image-gen ENCODER pass "
+                       f"(S={_S_ig}, gen tokens={len(_gen_pos)})...")
             self._execute_component(lm_name, "forward", None)
             _lm_out = self._get_component_output(lm_name)
             if _lm_out is None:
@@ -1485,8 +1487,8 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
         logits_source = ("lm_head"
                          if (head_name and head_name in self.ctx.executors)
                          else "embed_weight_tied")
-        print(f"   [{lm_name}] Generating (max={max_tokens}, "
-              f"context={context_embeds.shape[1]}, logits={logits_source})...")
+        _log.debug(f"   [{lm_name}] Generating (max={max_tokens}, "
+                   f"context={context_embeds.shape[1]}, logits={logits_source})...")
         start = time.perf_counter()
         generated_ids: List[int] = []
         from neurobrix.triton.flow.decoder_cache import DecodeSteps, open_decoder_cache
@@ -1548,8 +1550,8 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
             context_embeds = NBXTensor.cat([context_embeds, token_embed],
                                            dim=1)
 
-        print(f"   [{lm_name}] Generated {len(generated_ids)} tokens in "
-              f"{(time.perf_counter() - start) * 1000:.0f}ms")
+        _log.debug(f"   [{lm_name}] Generated {len(generated_ids)} tokens in "
+                   f"{(time.perf_counter() - start) * 1000:.0f}ms")
         resolved["global.generated_token_ids"] = generated_ids
 
         if not self.ctx.persistent_mode:

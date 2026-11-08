@@ -33,6 +33,7 @@ from neurobrix.core.prism.memory_budget import (DeviceReading, budget_mb as _bud
                                                 host_budget_mb as _host_budget_mb_read)
 from neurobrix.core.prism.profiler import ActivationProfiler, InputConfig
 from neurobrix.core.runtime_values import MissingRuntimeValue
+_log = logging.getLogger(__name__)
 
 
 class PlanNotComputable(RuntimeError):
@@ -1359,7 +1360,7 @@ class PrismSolver:
         left_mb = sum(l.n_experts * l.expert_bytes for l in layers) / mib * mult
         alloc.expert_cache_mb = float(int(min(alloc.expert_cache_mb - mb, left_mb))) if layers else 0.0
         plan.total_memory_mb += sum(c["cache_mb"] + reserve_mb for k, c in cards.items() if k != alloc.device)
-        logging.getLogger(__name__).info(
+        logging.getLogger(__name__).debug(
             "Prism: %s holds the routed experts of blocks %s on %s; %s serves the other %d block(s) through a %.0f MB "
             "cache", name, {c: v["blocks"] for c, v in cards.items()}, sorted(cards), alloc.device, len(layers),
             alloc.expert_cache_mb)
@@ -2374,7 +2375,7 @@ class PrismSolver:
             self._host_declined = set(self._host_declined) | {plan.strategy}
             try:
                 plan = self._solve_at_rung(container, profile, input_config, serve_mode=serve_mode, mode=mode)
-                log.info("unified memory: %s's host side (%.0f MB) is over %.0f MB free at rung %s — %s",
+                log.debug("unified memory: %s's host side (%.0f MB) is over %.0f MB free at rung %s — %s",
                          tried[-1][1], need_mb, host.available_mb, int(rung), plan.strategy)
                 continue
             except RuntimeError:
@@ -2395,7 +2396,7 @@ class PrismSolver:
                 self._unified_rung_cap_mb = float(rung)
                 plan = self._solve_at_rung(container, profile, input_config, serve_mode=serve_mode, mode=mode)
                 break
-            log.info("unified memory: rung %s planned a host side of %.0f MB over %.0f MB free — rung %s",
+            log.debug("unified memory: rung %s planned a host side of %.0f MB over %.0f MB free — rung %s",
                      int(rung), need_mb, host.available_mb, lower[-1])
             plan = below
         plan.unified_rungs_tried = tried
@@ -2717,7 +2718,7 @@ class PrismSolver:
                     f"{sorted(n for n, _ in strategies)}"
                 )
             strategies = filtered
-            logging.getLogger(__name__).info(
+            logging.getLogger(__name__).debug(
                 f"[Prism] NBX_FORCE_STRATEGY={forced} — forcing strategy, "
                 f"bypassing score cascade"
             )
@@ -2846,7 +2847,7 @@ class PrismSolver:
                     candidates[i] = (_tiling[0] - 1.0, name, alloc, devs)
                     _demoted.append(f"{name} (sends {', '.join(sent_home)} to the host)")
             if _demoted:
-                logging.getLogger(__name__).info(
+                logging.getLogger(__name__).debug(
                     "Prism: op-level tiling keeps %s on the accelerator, so %s "
                     "no longer outrank it", ", ".join(sorted(_offloaded)),
                     " and ".join(_demoted))
@@ -3357,9 +3358,9 @@ class PrismSolver:
             for _cn in list(plan.runtime_op_tiling.keys()):
                 if _cn in plan.component_tiling:
                     del plan.runtime_op_tiling[_cn]
-                    print(f"   [OpTiling] {_cn}: dropped full-extent op-level "
-                          f"tiling (component-level tiling active — per-tile "
-                          f"extents fit without band streaming)")
+                    _log.debug(f"   [OpTiling] {_cn}: dropped full-extent op-level "
+                               f"tiling (component-level tiling active — per-tile "
+                               f"extents fit without band streaming)")
 
         # The same coherence for a stretch the plan runs in slices of a token axis
         # (`layer_stream_chunks`): its ops run on slices, the partitioner budgeted the SLICE peak
@@ -3384,8 +3385,8 @@ class PrismSolver:
                     _inside.update(_order[_at[_c["first_op"]]:_at[_c["last_op"]] + 1])
                 _dropped = _op_plan.drop_ops(_inside)
                 if _dropped:
-                    print(f"   [OpTiling] {_cn}: dropped op-level tiling of {_dropped} op(s) "
-                          f"inside its sliced stretches (budgeted per slice)")
+                    _log.debug(f"   [OpTiling] {_cn}: dropped op-level tiling of {_dropped} op(s) "
+                               f"inside its sliced stretches (budgeted per slice)")
                 if _op_plan.is_empty():
                     del plan.runtime_op_tiling[_cn]
 
@@ -3866,7 +3867,7 @@ class PrismSolver:
                     f"running {busy.strategy} instead ({_t(getattr(busy, 'estimated_s', None))}); close an application to "
                     f"get the fast plan back")
             logging.getLogger(__name__).warning("Prism: %s", note)
-            print(f"   [Prism] {note}")
+            _log.debug(f"   [Prism] {note}")
             busy.selection_reason = f"{note}; {busy.selection_reason}"
             busy.busy_replan = {"from": first[0], "free_now_mb": free_now, "held_by_others_mb": held}
             return busy
@@ -4241,10 +4242,10 @@ class PrismSolver:
                 # strings that decide the weight multiplier, printed where they are USED.
                 # `compute_dtype_factor` once defaulted a miss to source=2/target=4 (2.0 for ANY
                 # pair); a name config/dtypes.yml does not carry is now refused by name.
-                print(f"[DTYPE_RESOLVE] {comp.name}: source_dtype={source_dtype!r} "
-                      f"comp_dtype_str={comp_dtype_str!r} -> dtype_mult={dtype_mult} "
-                      f"| target_dtype_str={target_dtype_str!r} "
-                      f"| component_dtypes={component_dtypes!r}", flush=True)
+                _log.debug(f"[DTYPE_RESOLVE] {comp.name}: source_dtype={source_dtype!r} "
+                           f"comp_dtype_str={comp_dtype_str!r} -> dtype_mult={dtype_mult} "
+                           f"| target_dtype_str={target_dtype_str!r} "
+                           f"| component_dtypes={component_dtypes!r}")
 
             # Weight memory. Sized by what the ENGINE LOADS, which is the
             # weights this graph consumes — not by the bytes on disk.
@@ -4483,14 +4484,14 @@ class PrismSolver:
                             _smap = profiler.build_symbol_map(input_config, placement_floor=True)
                         except Exception as _e:   # diagnostic only: say it, never hide it
                             _smap = f"<build_symbol_map failed: {type(_e).__name__}: {_e}>"
-                        print(f"[PrismEstimate] {comp.name}: request={input_config} symbols={_smap} dtype_bytes={dtype_bytes} "
-                              f"weights={weight_bytes / 2**20:.0f} MB budget={smallest_gpu_bytes / 2**20:.0f} MB", flush=True)
-                        print(f"[PrismEstimate] {comp.name}: first pass peak={ap.peak_bytes / 2**30:.2f} GiB "
-                              f"at {ap.peak_op_uid} (step {ap.peak_step}); overflow ops={len(ap.overflow_ops or [])}; "
-                              f"retained activation={activation_bytes / 2**30:.2f} GiB at {peak_op_uid}", flush=True)
+                        _log.debug(f"[PrismEstimate] {comp.name}: request={input_config} symbols={_smap} dtype_bytes={dtype_bytes} "
+                                   f"weights={weight_bytes / 2**20:.0f} MB budget={smallest_gpu_bytes / 2**20:.0f} MB")
+                        _log.debug(f"[PrismEstimate] {comp.name}: first pass peak={ap.peak_bytes / 2**30:.2f} GiB "
+                                   f"at {ap.peak_op_uid} (step {ap.peak_step}); overflow ops={len(ap.overflow_ops or [])}; "
+                                   f"retained activation={activation_bytes / 2**30:.2f} GiB at {peak_op_uid}")
                         for _ov in (ap.overflow_ops or [])[:12]:
-                            print(f"[PrismEstimate]   overflow {_ov[0]} ({_ov[1]}) out={_ov[2] / 2**30:.2f} GiB "
-                                  f"ws={_ov[3] / 2**30:.2f} GiB", flush=True)
+                            _log.debug(f"[PrismEstimate]   overflow {_ov[0]} ({_ov[1]}) out={_ov[2] / 2**30:.2f} GiB "
+                                       f"ws={_ov[3] / 2**30:.2f} GiB")
                 except MissingRuntimeValue:
                     raise
                 except Exception as exc:
@@ -4923,7 +4924,7 @@ class PrismSolver:
                 # know is a dimension the estimate silently stops following, and
                 # that silence is how the plan read the same 22 993 MB at 8 and
                 # 9 frames while one ran and the other died.
-                logging.getLogger(__name__).info(
+                logging.getLogger(__name__).debug(
                     "Prism: %s declares symbol %r (trace %s) that no request "
                     "field answers for — the estimate does not follow it",
                     getattr(comp, "name", "?"), name, trace)
@@ -4979,7 +4980,7 @@ class PrismSolver:
         # so the decision changed the plan and left no line behind. An unflushed
         # list is the silence-by-construction family: indistinguishable from not
         # having run at all.
-        logging.getLogger(__name__).info(
+        logging.getLogger(__name__).debug(
             "Prism: %s activations x%.3g to the request (%s)",
             getattr(comp, "name", "?"), ratio, ", ".join(followed))
         return int(activation_bytes * ratio)
@@ -5369,7 +5370,8 @@ class PrismSolver:
                 if getattr(self, "_unified_rung_cap_mb", None):
                     capacity = min(capacity, float(self._unified_rung_cap_mb))
                 if capacity < recommended:
-                    logging.getLogger(__name__).warning(
+                    # the budget's note (every unified run): the busy re-plan is the warning a user reads
+                    logging.getLogger(__name__).debug(
                         "%s: unified memory — planning against %.0f MB actually "
                         "free, not the %.0f MB this device recommends (%s)",
                         dev.get_device_string(), capacity, recommended,
@@ -5388,7 +5390,7 @@ class PrismSolver:
             # (no runtime, a CPU host) → the recommendation alone, as before.
             reading = self._device_reading(dev, capacity, host, profile)
             note = _describe_budget(reading)
-            logging.getLogger(__name__).info("%s: memory budget — %s", dev.get_device_string(), note)
+            logging.getLogger(__name__).debug("%s: memory budget — %s", dev.get_device_string(), note)
             # ONE figure every rung plans against: the law's budget for this device (`memory_budget.budget_mb` —
             # a dedicated card less the runtime's own context, a unified pool's declared figure less the engine's
             # base, the census rung when the door imposes one), never above the capacity. `capacity_mb` and
@@ -5705,7 +5707,7 @@ class PrismSolver:
             d = self._declined = {}
         if strategy not in d:
             d[strategy] = why
-            logging.getLogger(__name__).warning("Prism: %s declined — %s", strategy, why)
+            logging.getLogger(__name__).debug("Prism: %s declined — %s", strategy, why)
         return None
 
     def _try_block_scatter(
@@ -6037,12 +6039,12 @@ class PrismSolver:
 
         import os as _os
         if _os.environ.get("NBX_DIAG_TRITON_PRELOOP") == "1":
-            print(f"   [NBX-DIAG-PRISM] _try_weight_sharding largest_cap={largest_cap:.0f}MB "
-                  f"ndev={len(devices)} devs={[d.device_string for d in devices]}", flush=True)
+            _log.debug(f"   [NBX-DIAG-PRISM] _try_weight_sharding largest_cap={largest_cap:.0f}MB "
+                       f"ndev={len(devices)} devs={[d.device_string for d in devices]}")
             for _n, _m in sorted_comps:
-                print(f"   [NBX-DIAG-PRISM]   {_n}: weight={_m.weight_mb:.0f}MB "
-                      f"act={_m.activation_mb:.0f}MB sum={_m.weight_mb+_m.activation_mb:.0f}MB "
-                      f"needs_tp={_m.weight_mb+_m.activation_mb > largest_cap}", flush=True)
+                _log.debug(f"   [NBX-DIAG-PRISM]   {_n}: weight={_m.weight_mb:.0f}MB "
+                           f"act={_m.activation_mb:.0f}MB sum={_m.weight_mb+_m.activation_mb:.0f}MB "
+                           f"needs_tp={_m.weight_mb+_m.activation_mb > largest_cap}")
 
         if not needs_tp:
             return None
@@ -6212,7 +6214,7 @@ class PrismSolver:
             # (`_usable_mb`, 12 670) declined Janus too and made it 3.7x slower under zero3.
             room = float(dev.budget_mb) - self._deferred_drain_floor_mb(dev)
             if peak_mb > room:
-                logging.getLogger(__name__).info(
+                logging.getLogger(__name__).debug(
                     "Prism: lazy_sequential declined on %s — the flow's dearest phase holds %.0f MB (its components "
                     "as placed, the outputs carried into it) over the card's %.0f MB less the drain floor",
                     dev.device_string, peak_mb, room)
@@ -6413,9 +6415,9 @@ class PrismSolver:
                    for i, n in enumerate(sched)]
             c = held + max(max(p, y + (1 if parked else 2) * states) for p, y in per)
             if os.environ.get("NBX_PRISM_STREAM_DIAG") == "1":
-                print(f"[PRISM-STREAM-DIAG] {comp_name}: schedule {sched}{' parked' if parked else ''} held {held / 2**20:,.0f} MB, states "
-                      f"{states / 2**20:,.0f} MB, chunk peaks {[round(p / 2**20) for p, _ in per]} MB -> "
-                      f"{c / 2**20:,.0f} MB", flush=True)
+                _log.debug(f"[PRISM-STREAM-DIAG] {comp_name}: schedule {sched}{' parked' if parked else ''} held {held / 2**20:,.0f} MB, states "
+                           f"{states / 2**20:,.0f} MB, chunk peaks {[round(p / 2**20) for p, _ in per]} MB -> "
+                           f"{c / 2**20:,.0f} MB")
             return c
 
         fits_cost = (room_bytes if callable(room_bytes) else
@@ -6799,12 +6801,12 @@ class PrismSolver:
         # keeps the feasibility check at the call site — the rung sizes, the truth validates.
         import os as _os_diag
         if _os_diag.environ.get("NBX_PRISM_TILE_DIAG") == "1":
-            print(f"[PRISM-TILE-DIAG] {comp_name}: full_act={full_act/1024**3:.2f}GB "
-                  f"rung={rung_mb}MB "
-                  f"budget={budget_bytes/1024**3:.2f}GB "
-                  f"ic(h={getattr(ic,'height',None)},w={getattr(ic,'width',None)},"
-                  f"nf={getattr(ic,'num_frames',None)},bs={getattr(ic,'batch_size',None)}) "
-                  f"-> {'TILE' if full_act > budget_bytes else 'native'}", flush=True)
+            _log.debug(f"[PRISM-TILE-DIAG] {comp_name}: full_act={full_act/1024**3:.2f}GB "
+                       f"rung={rung_mb}MB "
+                       f"budget={budget_bytes/1024**3:.2f}GB "
+                       f"ic(h={getattr(ic,'height',None)},w={getattr(ic,'width',None)},"
+                       f"nf={getattr(ic,'num_frames',None)},bs={getattr(ic,'batch_size',None)}) "
+                       f"-> {'TILE' if full_act > budget_bytes else 'native'}")
         if full_act <= budget_bytes or full_act <= 0:
             return None  # fits untiled — no tiling needed
         inexact = self._tile_only_if_exact(comp_name, graph, profile_j, full_act, rung_mb)
@@ -7674,7 +7676,7 @@ class PrismSolver:
             self._cfg_split_reason = (
                 f"at the guidance batch the plan {self._CLASS_WORDS[batch_class]}, one branch per "
                 f"pass {self._CLASS_WORDS[self._plan_class(split)]}")
-            logging.getLogger(__name__).info(
+            logging.getLogger(__name__).debug(
                 "Prism: one pass per guidance branch holds %s %s; its %d guidance branches run one "
                 "pass each", ", ".join(self._cfg_split),
                 ("resident on the accelerator" if self._plan_class(split) == 2
@@ -7735,7 +7737,7 @@ class PrismSolver:
                 self._cfg_split = sorted(loop)
                 self._cfg_split_reason = ("no plan held the guidance batch on the accelerator, and "
                                           "the token-axis slices run one branch per pass")
-            logging.getLogger(__name__).info(
+            logging.getLogger(__name__).debug(
                 "Prism: no plan holds the request on the accelerator with cuts between ops%s; "
                 "stretches of a streamed component run in slices of a token axis",
                 " and the guidance branches one pass each" if self._cfg_split else "")
@@ -7771,7 +7773,7 @@ class PrismSolver:
         parked_any = any(getattr(p, "swapped", False)
                          for p in (self.__dict__.get("_layer_stream_partitions") or {}).values())
         if parked_any and any(self._holds_on_accelerator(c) for c in parked):
-            logging.getLogger(__name__).info(
+            logging.getLogger(__name__).debug(
                 "Prism: no plan holds the request on the accelerator otherwise; the values between a streamed "
                 "component's pieces wait on the host")
             return parked

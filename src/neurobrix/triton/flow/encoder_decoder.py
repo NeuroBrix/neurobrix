@@ -22,6 +22,8 @@ from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.memory.memory_pool import release_flow_memory
 from nbxtensor.memory.device_transfer import parse_device_idx
 from neurobrix.core.flow.base import ComponentFlowHandler   # the executor's four component callables, both branches
+import logging
+_log = logging.getLogger(__name__)
 
 
 class TritonEncoderDecoderEngine(ComponentFlowHandler):
@@ -93,8 +95,8 @@ class TritonEncoderDecoderEngine(ComponentFlowHandler):
                     "was built before the toolchain copied it. Rebuild it with "
                     "the current toolchain, or pass audio no longer than one "
                     f"window ({_seek_ctx['chunk_s']:.0f} s).")
-            print(f"   [Audio·np] Long-form: timestamp seek over "
-                  f"{_seek_total / _seek_ctx['sr']:.1f} s")
+            _log.debug(f"   [Audio·np] Long-form: timestamp seek over "
+                       f"{_seek_total / _seek_ctx['sr']:.1f} s")
 
         _n_win = 0
         while True:
@@ -106,14 +108,14 @@ class TritonEncoderDecoderEngine(ComponentFlowHandler):
             _n_win += 1
             _mel_frames = int(self.ctx.variable_resolver.resolved[_feat_var].shape[-1])
 
-            print(f"   [{enc_name}] Running encoder..." +
-                  (f" (window {_n_win} at {_seek / _seek_ctx['sr']:.2f} s)"
-                   if _seek_ctx else ""))
+            _log.debug("%s", f"   [{enc_name}] Running encoder..." +
+                             (f" (window {_n_win} at {_seek / _seek_ctx['sr']:.2f} s)"
+                              if _seek_ctx else ""))
             start = time.perf_counter()
             self._ensure_weights_loaded(enc_name)
             self._execute_component(enc_name, "forward", None)
             enc_elapsed = (time.perf_counter() - start) * 1000
-            print(f"   [{enc_name}] Done in {enc_elapsed:.0f}ms")
+            _log.debug(f"   [{enc_name}] Done in {enc_elapsed:.0f}ms")
 
             # Store encoder output for cross-attention
             encoder_output = _get_component_output(self.ctx, enc_name)
@@ -155,8 +157,8 @@ class TritonEncoderDecoderEngine(ComponentFlowHandler):
         if _n_win > 1:
             text = " ".join(t.strip() for t in _all_texts if t and t.strip())
             self.ctx.variable_resolver.resolved["global.transcription"] = text
-            print(f"   [Output] Transcription ({_n_win} windows): "
-                  f"{text[:100]}{'...' if len(text) > 100 else ''}")
+            _log.debug(f"   [Output] Transcription ({_n_win} windows): "
+                       f"{text[:100]}{'...' if len(text) > 100 else ''}")
         else:
             from neurobrix.triton.audio_frontend import postprocess_text_output_np
             postprocess_text_output_np(self.ctx)
@@ -209,7 +211,7 @@ class TritonEncoderDecoderEngine(ComponentFlowHandler):
         forced_map = whisper_forced_map(defaults, ts_ids, timestamps=seek_ctx is not None)
         begin = whisper_begin_index(forced_map)
 
-        print(f"   [{dec_name}] Generating tokens (max={max_tokens})...")
+        _log.debug(f"   [{dec_name}] Generating tokens (max={max_tokens})...")
         start = time.perf_counter()
         self._ensure_weights_loaded(dec_name)
 
@@ -297,7 +299,7 @@ class TritonEncoderDecoderEngine(ComponentFlowHandler):
                 break
 
         dec_elapsed = (time.perf_counter() - start) * 1000
-        print(f"   [{dec_name}] Generated {len(generated_ids)} tokens in {dec_elapsed:.0f}ms")
+        _log.debug(f"   [{dec_name}] Generated {len(generated_ids)} tokens in {dec_elapsed:.0f}ms")
 
         # Timestamp seek — the vendor's rule (stt_longform.whisper_seek),
         # mirror of the compiled flow: drop the unfinished trailing
@@ -314,10 +316,10 @@ class TritonEncoderDecoderEngine(ComponentFlowHandler):
                 generated_ids = generated_ids[:_keep]
                 advance_samples = whisper_advance_samples(
                     _adv_idx, mel_frames, encoder_frames, seek_ctx["hop"])
-                print(f"   [{dec_name}] seek +{advance_samples / seek_ctx['sr']:.2f} s "
-                      f"(end of the last complete segment)")
+                _log.debug(f"   [{dec_name}] seek +{advance_samples / seek_ctx['sr']:.2f} s "
+                           f"(end of the last complete segment)")
             else:
-                print(f"   [{dec_name}] seek: whole window")
+                _log.debug(f"   [{dec_name}] seek: whole window")
         _all_ids.extend(generated_ids)
         tokenizer = self.ctx.modules.get("tokenizer")
         if tokenizer is not None:

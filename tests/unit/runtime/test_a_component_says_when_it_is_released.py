@@ -32,14 +32,14 @@ def _executor(mode, weights, monkeypatch):
 
 
 @pytest.mark.parametrize("mode,label", [("compiled", "Compiled"), ("triton", "Triton")])
-def test_an_unload_says_which_component_left_and_what_it_released(mode, label, monkeypatch, capsys):
+def test_an_unload_says_which_component_left_and_what_it_released(mode, label, monkeypatch, engine_log):
     _executor(mode, {"a": 1, "b": 2, "c": 3}, monkeypatch).unload_weights()
-    assert f"[{label}] 'transformer': released 3 weights" in capsys.readouterr().out
+    assert f"[{label}] 'transformer': released 3 weights" in engine_log()
 
 
-def test_an_executor_holding_nothing_says_nothing(monkeypatch, capsys):
+def test_an_executor_holding_nothing_says_nothing(monkeypatch, engine_log):
     _executor("compiled", {}, monkeypatch).unload_weights()
-    assert "released" not in capsys.readouterr().out
+    assert "released" not in engine_log()
 
 
 def test_a_load_says_what_it_holds_each_storage_once_and_what_sits_on_the_host():
@@ -71,7 +71,7 @@ def test_a_streamed_segment_says_what_the_device_holds_after_it_computed(monkeyp
     assert _segment_memory_line(NS(device="cpu", mode="compiled")).startswith("no device allocator figures")
 
 
-def test_a_release_says_what_the_device_still_holds(monkeypatch, capsys):
+def test_a_release_says_what_the_device_still_holds(monkeypatch, engine_log):
     """After the release, the device's own figure, read after it drained: what crosses into the next component."""
     import neurobrix.core.device_utils as du
     from nbxtensor.memory.allocator import DeviceAllocator as DA
@@ -80,4 +80,4 @@ def test_a_release_says_what_the_device_still_holds(monkeypatch, capsys):
     ex = _executor("triton", {"a": 1}, monkeypatch)
     ex.device = "cuda:0"
     ex.unload_weights()
-    assert "'transformer': released 1 weights; the device still holds 4096 MB live" in capsys.readouterr().out
+    assert "'transformer': released 1 weights; the device still holds 4096 MB live" in engine_log()

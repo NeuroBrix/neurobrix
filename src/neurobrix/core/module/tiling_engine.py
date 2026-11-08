@@ -314,7 +314,7 @@ class TilingEngine:
         if window_alignment > 1:
             overlap = ((overlap + window_alignment - 1) // window_alignment) * window_alignment
 
-        logger.info(
+        logger.debug(
             f"[TilingEngine] Data-driven init: trace_size={trace_size}, "
             f"scale_factor={scale_factor}, overlap={overlap}, "
             f"window_alignment={window_alignment}"
@@ -1711,7 +1711,7 @@ class OpLevelTilingEngine:
                     post_clone_shape, post_view_shape)
                 interceptors[view_uid] = make_view_proxy_interceptor()
                 interceptors[ps_uid] = make_pixel_shuffle_proxy_interceptor()
-                logger.info(
+                logger.debug(
                     f"[OpLevelTilingEngine] F2 pixel_shuffle broadcast-aware "
                     f"chain wired: {spec['expand_uid']} -> {clone_uid} -> "
                     f"{view_uid} -> {ps_uid} (bcast_dim={bcast_dim} "
@@ -1933,10 +1933,9 @@ class OpLevelTilingEngine:
                                             _t_inst.cuda.memory_allocated()
                                             / 1024**2
                                         )
-                                    print(f"[S5_CHAIN_OK] {cid} "
-                                          f"pre={_pre:.0f}MB "
-                                          f"post={_post:.0f}MB",
-                                          flush=True)
+                                    logger.debug(f"[S5_CHAIN_OK] {cid} "
+                                                 f"pre={_pre:.0f}MB "
+                                                 f"post={_post:.0f}MB")
                                     _registry[cid] = merge_out
                                 except Exception as e:
                                     # ZERO FALLBACK (engine audit #2
@@ -2043,7 +2042,7 @@ class OpLevelTilingEngine:
                 interceptors[uid] = make_unified_node_interceptor(
                     uid, node_roles)
 
-            logger.info(
+            logger.debug(
                 f"[S5] residual chains wired: "
                 f"{len(self.plan.residual_chains)} chains across "
                 f"{len(roles)} op nodes "
@@ -2086,7 +2085,7 @@ class OpLevelTilingEngine:
                 f"{partial[:3]} are wired in part — a proxy would reach an op that cannot read it")
         graph_executor.register_op_uid_interceptors(
             interceptors, groups=groups, planned=list(dict.fromkeys(planned)))
-        logger.info(
+        logger.debug(
             f"[OpLevelTilingEngine] Registered {len(interceptors)} op_uid "
             f"interceptors on component '{self.plan.component_name}': "
             f"fusion_pairs={len(self.plan.fusion_pairs)} "

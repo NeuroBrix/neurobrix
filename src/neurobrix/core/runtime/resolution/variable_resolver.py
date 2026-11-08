@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:  # R33: the ATen branch draws through torch; the Triton flows carry their own stream
     import torch
 from typing import Dict, Any, List, Optional, Union
+import logging
+_log = logging.getLogger(__name__)
 
 def to_engine_container(value: Any, mode: str) -> Any:
     """Arrays (the tokenizer engine's output, the media processors' output)
@@ -49,13 +51,13 @@ def _dump_init_latent(name, tensor_to_numpy):
     try:
         arr = tensor_to_numpy()
     except Exception as exc:                      # a dump must never break a run
-        print(f"[init-latent] {name}: not dumped ({exc})", flush=True)
+        _log.debug(f"[init-latent] {name}: not dumped ({exc})")
         return
     os.makedirs(d, exist_ok=True)
     safe = "".join(c if (c.isalnum() or c in "._-") else "_" for c in str(name))
     path = os.path.join(d, f"{safe}.npy")
     np.save(path, np.ascontiguousarray(arr))
-    print(f"[init-latent] {name} {tuple(arr.shape)} {arr.dtype} -> {path}", flush=True)
+    _log.debug(f"[init-latent] {name} {tuple(arr.shape)} {arr.dtype} -> {path}")
 
 
 class VariableResolver:

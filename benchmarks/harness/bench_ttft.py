@@ -148,6 +148,7 @@ def run_nbx_arm(args, env_spec: dict, outdir: Path) -> list:
     if prefix:
         import shlex
         cmd = shlex.split(prefix) + cmd
+    env["NBX_LOG"] = "debug"          # the daemon log keeps its developer lines (nbxtensor/terminal.py)
     proc = subprocess.Popen(
         cmd, env=env, stdout=open(outdir / f"daemon_{flag.strip('-')}.log", "w"),
         stderr=subprocess.STDOUT, text=True)

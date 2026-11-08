@@ -36,6 +36,8 @@ from nbxtensor.random.seeded_draw import seeded_gaussian
 from neurobrix.triton.flow.speech import SpeechLeg, _from_np_on   # the speech leg's plumbing, the same
 from neurobrix.core.flow.base import FlowLeg   # the leg's engine, ctx and resolver, both branches
 from neurobrix.core.flow.shared_steps import require_contract
+import logging
+_log = logging.getLogger(__name__)
 
 
 _require = functools.partial(require_contract, "image_gen")   # this leg's contract block
@@ -116,8 +118,8 @@ class ImageGenLeg(FlowLeg):
                 "generation.seed into defaults.json; re-import a current "
                 "build or pass --set global.seed.")
         seed = int(_seed_v)
-        print(f"   [image_gen] leg start: {width}x{height} steps={steps} "
-              f"cfg={gscale} seed={seed}")
+        _log.debug(f"   [image_gen] leg start: {width}x{height} steps={steps} "
+                   f"cfg={gscale} seed={seed}")
 
         # ── 1. connector → prompt embeds ─────────────────────────────
         prompt_embeds = self._run(c_conn, hidden_states=gen_hidden)
@@ -161,7 +163,7 @@ class ImageGenLeg(FlowLeg):
                     guided.to("float32"), t_f, latents.to("float32"),
                     return_dict=False)
                 if (i + 1) % 5 == 0:
-                    print(f"   [image_gen] step {i + 1}/{steps}")
+                    _log.debug(f"   [image_gen] step {i + 1}/{steps}")
                 continue
             lat_h = latents.to(dtype)
             lat_in = NBXTensor.cat([lat_h, lat_h], dim=0)
@@ -184,7 +186,7 @@ class ImageGenLeg(FlowLeg):
                 guided.to("float32"), t_f, latents.to("float32"),
                 return_dict=False)
             if (i + 1) % 5 == 0:
-                print(f"   [image_gen] step {i + 1}/{steps}")
+                _log.debug(f"   [image_gen] step {i + 1}/{steps}")
         if _sc is not None:
             _sc.report()
 
@@ -195,4 +197,4 @@ class ImageGenLeg(FlowLeg):
         image = self._run(c_vae, sample=z.to(dtype))
         self.resolved["global.output_image"] = image
         dt = time.perf_counter() - t0
-        print(f"   [image_gen] image {list(image.shape)} in {dt:.1f}s")
+        _log.debug(f"   [image_gen] image {list(image.shape)} in {dt:.1f}s")

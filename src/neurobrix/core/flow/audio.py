@@ -23,6 +23,8 @@ from .base import ComponentFlowHandler, register_flow
 from neurobrix.core.memory.manager import release_flow_memory
 from neurobrix.core.flow.shared_steps import AudioSteps   # the steps both branches share
 from neurobrix.core.flow.audio_utils import get_component_input_shape
+import logging
+_log = logging.getLogger(__name__)
 
 
 #: The stage executions the audio flow runs. Every execution a container of this flow declares
@@ -138,9 +140,9 @@ class AudioEngine(AudioSteps, ComponentFlowHandler):
                 elif dim2 in (40, 64, 80, 128, 160, 256) and dim1 > dim2:
                     preprocessing = "conformer"
 
-        print(f"   [Audio] Loading: {audio_path}")
+        _log.debug(f"   [Audio] Loading: {audio_path}")
         if input_shape:
-            print(f"   [Audio] Expected input shape: {input_shape}")
+            _log.debug(f"   [Audio] Expected input shape: {input_shape}")
 
         from neurobrix.core.module.audio.input_processor import AudioInputProcessor
         features = AudioInputProcessor.process(
@@ -169,7 +171,7 @@ class AudioEngine(AudioSteps, ComponentFlowHandler):
                         pad = torch.zeros(pad_shape, device=features.device, dtype=features.dtype)
                         features = torch.cat([features, pad], dim=dim_idx)
 
-        print(f"   [Audio] Features: {features.shape} ({preprocessing})")
+        _log.debug(f"   [Audio] Features: {features.shape} ({preprocessing})")
 
         # Bind to variable resolver
         self.ctx.variable_resolver.resolved[variable] = features
@@ -308,10 +310,10 @@ class AudioEngine(AudioSteps, ComponentFlowHandler):
                     if has_tensor_input:
                         break
         if not has_tensor_input:
-            print(f"   [{comp_name}] Skipped (no tensor inputs available)")
+            _log.debug(f"   [{comp_name}] Skipped (no tensor inputs available)")
             return
 
-        print(f"   [{comp_name}] Running forward pass...")
+        _log.debug(f"   [{comp_name}] Running forward pass...")
         start = time.perf_counter()
 
         self._ensure_weights_loaded(comp_name)
@@ -322,7 +324,7 @@ class AudioEngine(AudioSteps, ComponentFlowHandler):
             self._execute_component(comp_name, "forward", None)
 
         elapsed = (time.perf_counter() - start) * 1000
-        print(f"   [{comp_name}] Done in {elapsed:.0f}ms")
+        _log.debug(f"   [{comp_name}] Done in {elapsed:.0f}ms")
 
         # Store output for downstream stages
         self._store_stage_output(comp_name)
@@ -373,7 +375,7 @@ class AudioEngine(AudioSteps, ComponentFlowHandler):
                     "Required for SNAC token decoding."
                 )
             audio_count = sum(1 for t in generated_ids if t >= audio_token_start)
-            print(f"   [TTS] Tokens: {len(generated_ids)}, audio: {audio_count}")
+            _log.debug(f"   [TTS] Tokens: {len(generated_ids)}, audio: {audio_count}")
 
             from neurobrix.core.module.audio.output_processor import AudioOutputProcessor
             waveform = AudioOutputProcessor.decode_snac_tokens(
@@ -526,7 +528,7 @@ class AudioEngine(AudioSteps, ComponentFlowHandler):
             aux_inputs[iname2] = (val2, cdim2, glen2)
 
         # Chunk and execute
-        print(f"   [{comp_name}] Chunked: {actual_seq} frames -> {graph_seq_len}-frame blocks")
+        _log.debug(f"   [{comp_name}] Chunked: {actual_seq} frames -> {graph_seq_len}-frame blocks")
         waveform_chunks = []
 
         for chunk_start in range(0, actual_seq, graph_seq_len):
@@ -576,7 +578,7 @@ class AudioEngine(AudioSteps, ComponentFlowHandler):
             # Store as component output
             self.ctx.variable_resolver.resolved[f"{comp_name}.output_0"] = full_output
             self.ctx.variable_resolver.resolved["global.output_audio"] = full_output
-            print(f"   [{comp_name}] Waveform: {list(full_output.shape)}")
+            _log.debug(f"   [{comp_name}] Waveform: {list(full_output.shape)}")
 
         return True
 
@@ -643,7 +645,7 @@ class AudioEngine(AudioSteps, ComponentFlowHandler):
                 if new_T * pool_factor <= T:
                     reshaped = src_tensor[:, :new_T * pool_factor, :].reshape(B, new_T, target_feat)
                     resolved[src_key] = reshaped
-                    print(f"   [Reshape] {comp_name}: [{B}, {T}, {D}] -> [{B}, {new_T}, {target_feat}] (pool={pool_factor})")
+                    _log.debug(f"   [Reshape] {comp_name}: [{B}, {T}, {D}] -> [{B}, {new_T}, {target_feat}] (pool={pool_factor})")
 
     def _store_stage_output(self, comp_name: str) -> None:
         """Store a component's output in the variable resolver for downstream stages."""

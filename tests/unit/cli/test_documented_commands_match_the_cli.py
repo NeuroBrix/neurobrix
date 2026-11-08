@@ -21,7 +21,8 @@ DOC = Path(__file__).resolve().parents[3] / "docs" / "reference" / "cli-commands
 
 
 def _cli_commands():
-    out = subprocess.run([sys.executable, "-m", "neurobrix", "--help"],
+    # `--help -v`: every command, the developer ones `--help` alone leaves out included
+    out = subprocess.run([sys.executable, "-m", "neurobrix", "--help", "-v"],
                          capture_output=True, text=True).stdout
     return {m.group(1) for m in re.finditer(r"^    ([a-z_]+)\s{2,}\S", out, re.M)}
 

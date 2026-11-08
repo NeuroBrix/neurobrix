@@ -128,7 +128,7 @@ def apply_thread_config(cpu: CPUConfig, involves_cpu: bool, mode: str = "compile
     for var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "TRITON_CPU_MAX_THREADS"):
         os.environ[var] = str(intra_threads)
     if mode in ("triton", "triton_sequential"):
-        logger.info(f"[CPU] Threads: {intra_threads} from the profile for the Triton CPU backend — {cpu.model}")
+        logger.debug(f"[CPU] Threads: {intra_threads} from the profile for the Triton CPU backend — {cpu.model}")
         return
     import torch  # the ATen branch's thread pool
     torch.set_num_threads(intra_threads)
@@ -137,7 +137,7 @@ def apply_thread_config(cpu: CPUConfig, involves_cpu: bool, mode: str = "compile
     except RuntimeError:
         # torch refuses a second interop setting once its pool has run (a process that already computed)
         logger.debug(f"torch.set_num_interop_threads({inter_threads}) refused: the interop pool already ran")
-    logger.info(f"[CPU] Threads: intra={intra_threads}, inter={inter_threads} from the profile — {cpu.model}")
+    logger.debug(f"[CPU] Threads: intra={intra_threads}, inter={inter_threads} from the profile — {cpu.model}")
 
 
 def apply_dnnl_isa(cpu: CPUConfig) -> None:
@@ -155,7 +155,7 @@ def apply_dnnl_isa(cpu: CPUConfig) -> None:
     for required_features, isa_name in _ISA_HIERARCHY:
         if any(f in feature_set for f in required_features):
             os.environ["DNNL_MAX_CPU_ISA"] = isa_name
-            logger.info(f"[CPU] DNNL_MAX_CPU_ISA={isa_name}")
+            logger.debug(f"[CPU] DNNL_MAX_CPU_ISA={isa_name}")
             return
 
     logger.debug(f"No recognized ISA features in {cpu.features}, DNNL_MAX_CPU_ISA not set")
@@ -191,7 +191,7 @@ def validate_dtype_isa(cpu: CPUConfig, preferred_dtype: Optional[str]) -> None:
             f"Performance may be severely degraded."
         )
     elif not has_recommended:
-        logger.info(
+        logger.debug(
             f"[CPU] preferred_dtype={preferred_dtype} — works but CPU lacks "
             f"optimal features {requirements['recommended']}"
         )
@@ -208,7 +208,7 @@ def should_pin_memory(cpu: CPUConfig, total_weight_mb: float) -> bool:
         return False
     ram_budget_mb = cpu.ram_mb * 0.4
     if total_weight_mb > ram_budget_mb:
-        logger.info(
+        logger.debug(
             f"[CPU] Skipping pin_memory: weights {total_weight_mb:.0f}MB "
             f"> 40% of RAM ({ram_budget_mb:.0f}MB)"
         )

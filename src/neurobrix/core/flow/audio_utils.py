@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .base import FlowContext
+import logging
+_log = logging.getLogger(__name__)
 
 
 def preprocess_audio_input(
@@ -56,9 +58,9 @@ def preprocess_audio_input(
             elif dim2 in (40, 64, 80, 128, 160, 256) and dim1 > dim2:
                 preprocessing = "conformer"
 
-    print(f"   [Audio] Loading: {audio_path}")
+    _log.debug(f"   [Audio] Loading: {audio_path}")
     if input_shape:
-        print(f"   [Audio] Expected input shape: {input_shape}")
+        _log.debug(f"   [Audio] Expected input shape: {input_shape}")
 
     from neurobrix.core.module.audio.input_processor import AudioInputProcessor
     # Long-form (D-STT-LONGFORM-CHUNKING, 2026-09-02): audio longer than
@@ -137,9 +139,9 @@ def preprocess_audio_input(
     # Pad/truncate to match trace-time dimensions
     features = _fit_to_trace(features)
 
-    print(f"   [Audio] Features: {features.shape} ({preprocessing})"
-          + (" (long-form: timestamp seek)" if ctx._stt_seek else "")
-          + (f" (long-form: {len(ctx._audio_windows)} fixed windows)" if getattr(ctx, "_audio_windows", None) else ""))
+    _log.debug("%s", f"   [Audio] Features: {features.shape} ({preprocessing})"
+                     + (" (long-form: timestamp seek)" if ctx._stt_seek else "")
+                     + (f" (long-form: {len(ctx._audio_windows)} fixed windows)" if getattr(ctx, "_audio_windows", None) else ""))
 
     # Bind to variable resolver
     ctx.variable_resolver.resolved[variable] = features
@@ -221,7 +223,7 @@ def postprocess_text_output(ctx: FlowContext) -> None:
         text = str(generated_ids)
 
     ctx.variable_resolver.resolved["global.transcription"] = text
-    print(f"   [Output] Transcription: {text[:100]}{'...' if len(text) > 100 else ''}")
+    _log.debug(f"   [Output] Transcription: {text[:100]}{'...' if len(text) > 100 else ''}")
 
 
 def apply_tts_template(prompt: str, tts_template: Optional[str]) -> str:
@@ -384,8 +386,8 @@ def crop_waveform_to_content_ratio(waveform, ratio):
     crop_len = max(1, int(waveform.shape[-1] * ratio))
     if crop_len >= waveform.shape[-1]:
         return waveform
-    print(f"   [Output] Cropped to spoken content: {crop_len} samples "
-          f"(ratio={ratio:.3f})")
+    _log.debug(f"   [Output] Cropped to spoken content: {crop_len} samples "
+               f"(ratio={ratio:.3f})")
     return waveform[..., :crop_len]
 
 

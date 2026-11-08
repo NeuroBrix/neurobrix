@@ -21,6 +21,8 @@ from nbxtensor.memory.device_transfer import parse_device_idx
 from neurobrix.core.runtime_values import require_max_tokens
 from neurobrix.core.flow.base import ComponentFlowHandler   # the executor's four component callables, both branches
 from neurobrix.core.flow.shared_steps import _is_tensor   # dual_ar and tts_llm, the same
+import logging
+_log = logging.getLogger(__name__)
 
 
 # Shared default sampler seed (R27/R28). The pytorch dual_ar path
@@ -78,7 +80,7 @@ class TritonDualAREngine(ComponentFlowHandler):
         sampler_rng = np.random.RandomState(int(_seed) if _seed is not None else _DUALAR_SEED)
         eos_token_id = defaults.get("eos_token_id")
 
-        print(f"   [{comp_name}] DualAR generation (max_tokens={max_tokens})...")
+        _log.debug(f"   [{comp_name}] DualAR generation (max_tokens={max_tokens})...")
         start = time.perf_counter()
 
         self._ensure_weights_loaded(comp_name)
@@ -132,7 +134,7 @@ class TritonDualAREngine(ComponentFlowHandler):
         prompt_ids = dual_ar_prompt_ids(np.asarray(input_ids_np).reshape(-1).tolist(),
                                         defaults.get("bos_token_id"), special.get("<|interleave|>"),
                                         self.ctx.modules.get("tokenizer"))
-        print(f"   [{comp_name}] prompt tokens ({len(prompt_ids)}): {prompt_ids[:16]}")
+        _log.debug(f"   [{comp_name}] prompt tokens ({len(prompt_ids)}): {prompt_ids[:16]}")
 
         rep_pen = _ov.get("global.repetition_penalty", defaults.get("repetition_penalty", 1.2))
         rep_window = 32
@@ -149,7 +151,7 @@ class TritonDualAREngine(ComponentFlowHandler):
             # Codec-isolation diagnostic: skip slow+fast AR; codes injected in Step 3.
             # The codec path is then validated independently of the generation (the
             # 4-mode kernel-oracle method — verify each half against its own oracle).
-            print(f"   [{comp_name}] FIXED codes mode — generation skipped (codec isolation).")
+            _log.debug(f"   [{comp_name}] FIXED codes mode — generation skipped (codec isolation).")
         else:
             # The slow decoder decodes on its KV cache (triton/flow/decoder_cache): the whole code
             # grid at the prefill, the one new column afterwards, its position counted by the
@@ -188,7 +190,7 @@ class TritonDualAREngine(ComponentFlowHandler):
                                               generated_ids=slow_history[-rep_window:],
                                               rng=sampler_rng)
                 if _os_dbg.environ.get("NBX_DEBUG_DECODE") == "1" and len(slow_history) < 16:
-                    print(f"  [DBG-DUALAR] step={len(slow_history)} sem_token={int(slow_token)}", flush=True)
+                    _log.debug(f"  [DBG-DUALAR] step={len(slow_history)} sem_token={int(slow_token)}")
                 if im_end_id is not None and slow_token == im_end_id:
                     break
                 slow_history.append(slow_token)
@@ -225,7 +227,7 @@ class TritonDualAREngine(ComponentFlowHandler):
                         break
 
         elapsed = (time.perf_counter() - start) * 1000
-        print(f"   [{comp_name}] Generated {len(acoustic_codes)} positions in {elapsed:.0f}ms")
+        _log.debug(f"   [{comp_name}] Generated {len(acoustic_codes)} positions in {elapsed:.0f}ms")
         if not acoustic_codes and not _fixed_codes_env:
             raise RuntimeError("ZERO FALLBACK: DualAR produced no audio frames.")
 
@@ -244,12 +246,12 @@ class TritonDualAREngine(ComponentFlowHandler):
         _dump_codes = _os_diag.environ.get("NBX_DUALAR_DUMP_CODES", "")
         if _dump_codes:
             np.save(_dump_codes, codes_np)
-            print(f"   [diag] dumped codes {list(codes_np.shape)} -> {_dump_codes}")
+            _log.debug(f"   [diag] dumped codes {list(codes_np.shape)} -> {_dump_codes}")
         _fixed_codes = _os_diag.environ.get("NBX_DUALAR_FIXED_CODES", "")
         if _fixed_codes:
             codes_np = np.load(_fixed_codes).astype(np.int64)
             T = codes_np.shape[2]
-            print(f"   [diag] FIXED codes injected {list(codes_np.shape)} <- {_fixed_codes}")
+            _log.debug(f"   [diag] FIXED codes injected {list(codes_np.shape)} <- {_fixed_codes}")
 
         codec_q = "codec.quantizer"
         if codec_q not in self.ctx.executors:
@@ -277,12 +279,12 @@ class TritonDualAREngine(ComponentFlowHandler):
             z = q_out.get("output") if isinstance(q_out, dict) else q_out
             if z is None:
                 raise RuntimeError("ZERO FALLBACK: codec.quantizer.decode produced no features.")
-            print(f"   [{codec_q}] decode codes {list(codes.shape)} -> features {list(z.shape)}")
+            _log.debug(f"   [{codec_q}] decode codes {list(codes.shape)} -> features {list(z.shape)}")
 
             _dump_z = _os_diag.environ.get("NBX_DUALAR_DUMP_Z", "")
             if _dump_z:
                 np.save(_dump_z, _to_numpy(z).astype(np.float32))
-                print(f"   [diag] dumped z {list(z.shape)} -> {_dump_z}")
+                _log.debug(f"   [diag] dumped z {list(z.shape)} -> {_dump_z}")
 
             # Bind RVQ features to the decoder input (topology connects
             # model.output_0 -> codec.decoder.x; mirror the compiled binding set).
@@ -299,10 +301,10 @@ class TritonDualAREngine(ComponentFlowHandler):
             for stage in stages[1:]:
                 codec_name = stage["component"]
                 if codec_name not in self.ctx.executors:
-                    print(f"   [{codec_name}] Skipped (not in executors)")
+                    _log.debug(f"   [{codec_name}] Skipped (not in executors)")
                     continue
 
-                print(f"   [{codec_name}] Running forward pass...")
+                _log.debug(f"   [{codec_name}] Running forward pass...")
                 codec_start = time.perf_counter()
                 self._ensure_weights_loaded(codec_name)
 
@@ -311,7 +313,7 @@ class TritonDualAREngine(ComponentFlowHandler):
                 self._execute_component(codec_name, "forward", None)
 
                 codec_elapsed = (time.perf_counter() - codec_start) * 1000
-                print(f"   [{codec_name}] Done in {codec_elapsed:.0f}ms")
+                _log.debug(f"   [{codec_name}] Done in {codec_elapsed:.0f}ms")
 
                 if not self.ctx.persistent_mode:
                     self._unload_component_weights(codec_name)
@@ -380,7 +382,7 @@ class TritonDualAREngine(ComponentFlowHandler):
         if actual_seq <= graph_seq_len:
             return False
 
-        print(f"   [{comp_name}] Chunked: {actual_seq} frames -> {graph_seq_len}-frame blocks")
+        _log.debug(f"   [{comp_name}] Chunked: {actual_seq} frames -> {graph_seq_len}-frame blocks")
         waveform_chunks = []
 
         actual_np = _to_numpy(actual_input)
@@ -416,7 +418,7 @@ class TritonDualAREngine(ComponentFlowHandler):
             full_output = NBXTensor.from_numpy(full_output_np.astype(np.float32))
             self.ctx.variable_resolver.resolved[f"{comp_name}.output_0"] = full_output
             self.ctx.variable_resolver.resolved["global.output_audio"] = full_output
-            print(f"   [{comp_name}] Waveform: {list(full_output.shape)}")
+            _log.debug(f"   [{comp_name}] Waveform: {list(full_output.shape)}")
 
         return True
 

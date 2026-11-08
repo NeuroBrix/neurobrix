@@ -18,6 +18,8 @@ from .base import ComponentFlowHandler, register_flow
 
 # The rule and its history live in core.runtime_values.
 from neurobrix.core.runtime_values import require_max_tokens
+import logging
+_log = logging.getLogger(__name__)
 
 
 # Shared default sampler seed (R27/R28) — MUST equal the triton dual_ar literal
@@ -149,9 +151,9 @@ class DualAREngine(ComponentFlowHandler):
         from neurobrix.core.flow.audio_utils import dual_ar_prompt_ids
         prompt_ids = dual_ar_prompt_ids(input_ids.squeeze(0).tolist(), defaults.get("bos_token_id"),
                                         special.get("<|interleave|>"), self.ctx.modules.get("tokenizer"))
-        print(f"   [{comp_name}] prompt tokens ({len(prompt_ids)}): {prompt_ids[:16]}")
+        _log.debug(f"   [{comp_name}] prompt tokens ({len(prompt_ids)}): {prompt_ids[:16]}")
 
-        print(f"   [{comp_name}] DualAR generation (max_tokens={max_tokens}, N={num_codebooks})...")
+        _log.debug(f"   [{comp_name}] DualAR generation (max_tokens={max_tokens}, N={num_codebooks})...")
         start = time.perf_counter()
 
         # Grid columns: each is [semantic, cb_1..cb_N]. Prompt columns carry the
@@ -220,8 +222,7 @@ class DualAREngine(ComponentFlowHandler):
                 rng=sampler_rng)
             import os as _os_dbg
             if _os_dbg.environ.get("NBX_DEBUG_DECODE") == "1" and len(slow_history) < 16:
-                print(f"  [DBG-DUALAR] step={len(slow_history)} sem_token={int(slow_token)}",
-                      flush=True)
+                _log.debug(f"  [DBG-DUALAR] step={len(slow_history)} sem_token={int(slow_token)}")
             if im_end_id is not None and slow_token == im_end_id:
                 break
             slow_history.append(slow_token)
@@ -249,7 +250,7 @@ class DualAREngine(ComponentFlowHandler):
             grid_cols.append([slow_token] + ctx)
 
         elapsed = (time.perf_counter() - start) * 1000
-        print(f"   [{comp_name}] Generated {len(acoustic_codes)} positions in {elapsed:.0f}ms")
+        _log.debug(f"   [{comp_name}] Generated {len(acoustic_codes)} positions in {elapsed:.0f}ms")
         if not acoustic_codes:
             raise RuntimeError("ZERO FALLBACK: DualAR produced no audio frames.")
 
@@ -276,7 +277,7 @@ class DualAREngine(ComponentFlowHandler):
         if _dump_codes:
             import numpy as _np_d
             _np_d.save(_dump_codes, codes.detach().cpu().numpy())
-            print(f"   [diag] dumped codes {list(codes.shape)} -> {_dump_codes}")
+            _log.debug(f"   [diag] dumped codes {list(codes.shape)} -> {_dump_codes}")
         if _fixed_codes:
             import numpy as _np_f
             _arr = _np_f.load(_fixed_codes)
@@ -284,7 +285,7 @@ class DualAREngine(ComponentFlowHandler):
             T = codes.shape[2]
             acoustic_codes = [[int(codes[0, r, t]) for r in range(codes.shape[1])]
                               for t in range(T)]
-            print(f"   [diag] FIXED codes injected {list(codes.shape)} <- {_fixed_codes}")
+            _log.debug(f"   [diag] FIXED codes injected {list(codes.shape)} <- {_fixed_codes}")
 
         self._ensure_weights_loaded("codec.quantizer")
         q_exec = self.ctx.executors["codec.quantizer"]
@@ -295,14 +296,14 @@ class DualAREngine(ComponentFlowHandler):
         # chunking, which would have broken the window_size=128 cross-frame attention.
         z = q_exec.run({"indices": codes})
         z = z.get("output") if isinstance(z, dict) else z
-        print(f"   [codec.quantizer] decode codes {list(codes.shape)} -> features {list(z.shape)}")
+        _log.debug(f"   [codec.quantizer] decode codes {list(codes.shape)} -> features {list(z.shape)}")
         _dump_z = _os_diag.environ.get("NBX_DUALAR_DUMP_Z", "")
         if _dump_z:
             import numpy as _np_z
             _zc = z.detach().float().cpu().numpy()
             _np_z.save(_dump_z, _zc)
-            print(f"   [diag] z stats mean={_zc.mean():.5f} std={_zc.std():.5f} "
-                  f"absmax={abs(_zc).max():.5f} -> {_dump_z}")
+            _log.debug(f"   [diag] z stats mean={_zc.mean():.5f} std={_zc.std():.5f} "
+                       f"absmax={abs(_zc).max():.5f} -> {_dump_z}")
         # Bind features as the decoder input. The topology reconcile wires the
         # decoder input via the connection `model.output_0 -> codec.decoder.x`
         # (the quantizer is inserted by this handler, so the decoder's InputResolver
@@ -326,7 +327,7 @@ class DualAREngine(ComponentFlowHandler):
             if codec_name not in self.ctx.executors:
                 continue
             self._ensure_weights_loaded(codec_name)
-            print(f"   [{codec_name}] Running forward pass...")
+            _log.debug(f"   [{codec_name}] Running forward pass...")
             self._execute_component(codec_name, "forward", None)
             if not self.ctx.persistent_mode:
                 self._unload_component_weights(codec_name)
@@ -389,8 +390,8 @@ class DualAREngine(ComponentFlowHandler):
         if actual_seq <= graph_seq_len:
             return False
 
-        print(f"   [{comp_name}] Chunked: {actual_seq} frames → {graph_seq_len}-frame blocks"
-              f" (actual_input shape={list(actual_input.shape)})")
+        _log.debug(f"   [{comp_name}] Chunked: {actual_seq} frames → {graph_seq_len}-frame blocks"
+                   f" (actual_input shape={list(actual_input.shape)})")
         waveform_chunks = []
 
         for chunk_start in range(0, actual_seq, graph_seq_len):
@@ -401,7 +402,7 @@ class DualAREngine(ComponentFlowHandler):
                 pad_size = graph_seq_len - chunk.shape[2]
                 chunk = torch.nn.functional.pad(chunk, (0, pad_size))
 
-            print(f"     chunk [{chunk_start}:{chunk_end}] shape={list(chunk.shape)} dtype={chunk.dtype}")
+            _log.debug(f"     chunk [{chunk_start}:{chunk_end}] shape={list(chunk.shape)} dtype={chunk.dtype}")
             output = executor.run({graph_input_name: chunk})
 
             if isinstance(output, dict):
@@ -422,6 +423,6 @@ class DualAREngine(ComponentFlowHandler):
             full_output = torch.cat(waveform_chunks, dim=-1)
             self.ctx.variable_resolver.resolved[f"{comp_name}.output_0"] = full_output
             self.ctx.variable_resolver.resolved["global.output_audio"] = full_output
-            print(f"   [{comp_name}] Waveform: {list(full_output.shape)}")
+            _log.debug(f"   [{comp_name}] Waveform: {list(full_output.shape)}")
 
         return True

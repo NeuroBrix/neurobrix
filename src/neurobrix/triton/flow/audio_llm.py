@@ -32,6 +32,8 @@ from nbxtensor.memory.memory_pool import release_flow_memory
 from nbxtensor.ops import index_wrappers as _nbx_index_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
 from neurobrix.core.flow.base import ComponentFlowHandler   # the executor's four component callables, both branches
+import logging
+_log = logging.getLogger(__name__)
 
 
 _DTYPE_STR_TO_NBX = {
@@ -94,18 +96,18 @@ class TritonAudioLLMEngine(AudioLLMSteps, ComponentFlowHandler):
                 for _k in (_audio_variable, _audio_variable.split(".")[-1]):
                     self.ctx.variable_resolver.resolved[_k] = _win
                 if len(_windows) > 1:
-                    print(f"   [Audio] window {_wi + 1}/{len(_windows)}")
+                    _log.debug(f"   [Audio] window {_wi + 1}/{len(_windows)}")
             for stage in forward_stages:
                 comp_name = stage["component"]
                 if comp_name not in self.ctx.executors:
-                    print(f"   [{comp_name}] Skipped (not in executors)")
+                    _log.debug(f"   [{comp_name}] Skipped (not in executors)")
                     continue
-                print(f"   [{comp_name}] Running forward pass...")
+                _log.debug(f"   [{comp_name}] Running forward pass...")
                 start = time.perf_counter()
                 self._ensure_weights_loaded(comp_name)
                 self._execute_component(comp_name, "forward", None)
-                print(f"   [{comp_name}] Done in "
-                      f"{(time.perf_counter() - start) * 1000:.0f}ms")
+                _log.debug(f"   [{comp_name}] Done in "
+                           f"{(time.perf_counter() - start) * 1000:.0f}ms")
                 self._store_output(comp_name)
                 self._reshape_output_for_connections(comp_name)
                 if not self.ctx.persistent_mode and _wi == len(_windows) - 1:
@@ -122,8 +124,8 @@ class TritonAudioLLMEngine(AudioLLMSteps, ComponentFlowHandler):
             _cat = NBXTensor.cat(_window_outputs, dim=1)
             _last = forward_stages[-1]["component"]
             self.ctx.variable_resolver.resolved[f"{_last}.output_0"] = _cat
-            print(f"   [Audio] {len(_window_outputs)} windows → audio embeddings "
-                  f"{tuple(_cat.shape)}")
+            _log.debug(f"   [Audio] {len(_window_outputs)} windows → audio embeddings "
+                       f"{tuple(_cat.shape)}")
 
         # ── Step 3: Autoregressive LLM decode with audio embeddings ──
         lm_name = ar_stage["component"]
@@ -193,8 +195,8 @@ class TritonAudioLLMEngine(AudioLLMSteps, ComponentFlowHandler):
                 f"embed_tokens weight.")
 
         audio_embeds = audio_embeds.to(dtype)
-        print(f"   [{lm_name}] Audio-LLM mode: audio_embeds "
-              f"{tuple(audio_embeds.shape)}")
+        _log.debug(f"   [{lm_name}] Audio-LLM mode: audio_embeds "
+                   f"{tuple(audio_embeds.shape)}")
 
         # Build prompt: prefix_embeds + audio_embeds + suffix_embeds
         prefix_ids = defaults.get("stt_prefix_ids", [1])
@@ -209,7 +211,7 @@ class TritonAudioLLMEngine(AudioLLMSteps, ComponentFlowHandler):
         context_embeds = (NBXTensor.cat(parts, dim=1)
                           if len(parts) > 1 else audio_embeds)
 
-        print(f"   [{lm_name}] Generating tokens (max={max_tokens})...")
+        _log.debug(f"   [{lm_name}] Generating tokens (max={max_tokens})...")
         start = time.perf_counter()
         generated_ids: List[int] = []
 
@@ -256,8 +258,8 @@ class TritonAudioLLMEngine(AudioLLMSteps, ComponentFlowHandler):
             context_embeds = NBXTensor.cat(
                 [context_embeds, token_embed], dim=1)
 
-        print(f"   [{lm_name}] Generated {len(generated_ids)} tokens "
-              f"in {(time.perf_counter() - start) * 1000:.0f}ms")
+        _log.debug(f"   [{lm_name}] Generated {len(generated_ids)} tokens "
+                   f"in {(time.perf_counter() - start) * 1000:.0f}ms")
 
         self.ctx.variable_resolver.resolved[
             "global.generated_token_ids"] = generated_ids
@@ -370,8 +372,8 @@ class TritonAudioLLMEngine(AudioLLMSteps, ComponentFlowHandler):
             new_T = pooled[1]
             reshaped = src[:, :new_T * (target_feat // D), :].reshape(B, new_T, target_feat)
             resolved[src_key] = reshaped
-            print(f"   [Reshape] {comp_name}: [{B}, {T}, {D}] "
-                  f"→ [{B}, {new_T}, {target_feat}]")
+            _log.debug(f"   [Reshape] {comp_name}: [{B}, {T}, {D}] "
+                       f"→ [{B}, {new_T}, {target_feat}]")
 
 
 def pooled_frames_shape(src_shape, target_feat: int):

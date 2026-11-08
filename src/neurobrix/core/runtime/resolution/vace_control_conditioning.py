@@ -36,6 +36,7 @@ import torch
 
 from neurobrix.core.runtime.resolution.vace_spec import SPEC_KEYS, _vae_latent_stats, conditioning_spec  # noqa: F401
 from neurobrix.core.runtime.resolution.i2v_conditioning import _to_channels_first
+import logging
 
 CONTROL_VAR = "global.control_hidden_states"
 SCALE_VAR = "global.control_hidden_states_scale"
@@ -87,10 +88,10 @@ def build_control(ctx: Any, spec: dict) -> Optional[torch.Tensor]:
     import os as _os
     if _os.environ.get("NBX_DIAG_VACE") == "1":
         _lf = latent.float()
-        print(f"   [NBX-DIAG-VACE] vae_latent shape={list(latent.shape)} "
-              f"norm mean={_lf.mean():.3f} std={_lf.std():.3f} | "
-              f"control shape={list(control.shape)} mask mean={float(mask.float().mean()):.3f} "
-              f"(expect C={2 * latent_channels + int(spec['mask_channels'])})")
+        logging.getLogger(__name__).debug(f"   [NBX-DIAG-VACE] vae_latent shape={list(latent.shape)} "
+                   f"norm mean={_lf.mean():.3f} std={_lf.std():.3f} | "
+                   f"control shape={list(control.shape)} mask mean={float(mask.float().mean()):.3f} "
+                   f"(expect C={2 * latent_channels + int(spec['mask_channels'])})")
     return control
 
 

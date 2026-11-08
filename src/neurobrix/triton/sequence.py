@@ -33,6 +33,8 @@ from nbxtensor.memory.arena import Arena
 from .symbols import SymbolResolver, impossible_extent_context
 from .dtype import TritonDtypeEngine
 from . import replay as _replay
+import logging
+_log = logging.getLogger(__name__)
 
 
 # ----------------------------------------------------------------------------
@@ -215,7 +217,7 @@ def _watermark_sample(path: str, op_idx: int, op, arena, deferred_bytes) -> None
         with open(path, "a") as f:
             f.write(_json.dumps(rec) + "\n")
     except Exception as e:                                   # said, never silent
-        print(f"[LIVE_WATERMARK_TRACE error] {e}", flush=True)
+        _log.debug(f"[LIVE_WATERMARK_TRACE error] {e}")
 
 @dataclass(frozen=True)
 
@@ -900,8 +902,8 @@ class TritonSequence(SequenceSteps):
         execution_order.clear()
         execution_order.extend(new_order)
         if removed:
-            print(f"[Optim] alias lowering (triton): {removed} ops left "
-                  f"the hot sequence")
+            _log.debug(f"[Optim] alias lowering (triton): {removed} ops left "
+                       f"the hot sequence")
 
     def _plan_invariant_state(self) -> None:
         """R30 mirror of CompiledSequence._plan_invariant_state: the invariant partition of this sequence
@@ -1562,9 +1564,9 @@ class TritonSequence(SequenceSteps):
         if fused or skipped:
             # Activation evidence for ON-vs-OFF gates (const_fold
             # precedent): a gate run must PROVE the ON arm fused.
-            print(f"[Optim] fusion_vertical[triton]: {fused} "
-                  f"matmul+epilogue fused, {skipped} skipped "
-                  f"(consumed by earlier fusion or reshaped)")
+            _log.debug(f"[Optim] fusion_vertical[triton]: {fused} "
+                       f"matmul+epilogue fused, {skipped} skipped "
+                       f"(consumed by earlier fusion or reshaped)")
 
     def _fuse_rope_ops(
         self,
@@ -1814,9 +1816,8 @@ class TritonSequence(SequenceSteps):
                 # A consumer precedes an input, or no in-order consumer exists —
                 # unfusable as one op; leave the chain unfused (correct, slower).
                 if _RS_DIAG:
-                    print(f"[ROPE_SCHED] UNFUSABLE cos={cos_tid[:24]} "
-                          f"max_in={_max_in} min_con={_min_con} — left unfused",
-                          flush=True)
+                    _log.debug(f"[ROPE_SCHED] UNFUSABLE cos={cos_tid[:24]} "
+                               f"max_in={_max_in} min_con={_min_con} — left unfused")
                 continue
             anchor = execution_order[_min_con]  # insert fused op just before it
             fuse_idx += 1
@@ -2173,16 +2174,14 @@ class TritonSequence(SequenceSteps):
 
         def moe_fused_dispatch(arena):
             if _moe_slot_diag:
-                import sys as _sys_md
                 _g0_slot = _in_slot_c if _in_slot_c is not None else _gw[0]
                 _g0 = arena[_g0_slot]
                 _h0 = arena[_hs_slot]
-                print(f"[MOE_SLOT] {_cache_key} gw0_slot={_g0_slot} "
-                      f"gw0_ptr={0 if _g0 is None else _g0.data_ptr():#x} "
-                      f"gw0_dev={None if _g0 is None else _g0._device_idx} "
-                      f"hs_slot={_hs_slot} "
-                      f"hs_ptr={0 if _h0 is None else _h0.data_ptr():#x}",
-                      file=_sys_md.stderr, flush=True)
+                _log.debug(f"[MOE_SLOT] {_cache_key} gw0_slot={_g0_slot} "
+                           f"gw0_ptr={0 if _g0 is None else _g0.data_ptr():#x} "
+                           f"gw0_dev={None if _g0 is None else _g0._device_idx} "
+                           f"hs_slot={_hs_slot} "
+                           f"hs_ptr={0 if _h0 is None else _h0.data_ptr():#x}")
             _held = _seq._expert_cards.get(_layer_key) if _seq._expert_cards else None
             if _held is not None:
                 # A block whose experts another card holds whole (S3, `expert_store._hold_experts_on_cards`): the
@@ -3124,8 +3123,8 @@ class TritonSequence(SequenceSteps):
                 boundary.update(sl for sl in op.all_input_slots if sl >= base and sl not in produced)
                 produced.update(op.output_slots)
             res = (cut, tuple(sorted(boundary)))
-            print(f"[Replay] {self.dag.get('component_name')}: expert tail from op {cut} of {len(self._ops)} "
-                  f"({sum(1 for i, k in moe if i >= cut)} held MoE ops), {len(res[1])} boundary slots", flush=True)
+            _log.debug(f"[Replay] {self.dag.get('component_name')}: expert tail from op {cut} of {len(self._ops)} "
+                       f"({sum(1 for i, k in moe if i >= cut)} held MoE ops), {len(res[1])} boundary slots")
         self._tail_cut_memo = res
         return res
 
@@ -3170,9 +3169,9 @@ class TritonSequence(SequenceSteps):
                     boundary = tuple(sorted(bnd))
                 res.append((kind, a, b, boundary, [not (a <= i < b) for i in range(n)]))
             res.append(("tail", cut, n, tail_boundary, [i < cut for i in range(n)]))
-            print(f"[Replay] {self.dag.get('component_name')}: the decode step in {len(res)} segments — "
-                  f"{sum(1 for r in res if r[0] == 'direct')} store-served MoE ops direct, "
-                  f"{sum(1 for r in res if r[0] != 'direct')} replayed", flush=True)
+            _log.debug(f"[Replay] {self.dag.get('component_name')}: the decode step in {len(res)} segments — "
+                       f"{sum(1 for r in res if r[0] == 'direct')} store-served MoE ops direct, "
+                       f"{sum(1 for r in res if r[0] != 'direct')} replayed")
         self._segments_memo = res
         return res
 
@@ -3323,9 +3322,9 @@ class TritonSequence(SequenceSteps):
         _live_diag = os.environ.get("NBX_RUN_LIVE_DIAG", "0") == "1"
         if _live_diag:
             self._run_live_n = getattr(self, "_run_live_n", 0) + 1
-            print(f"[NBX_RUN_LIVE] {self.dag.get('component_name')} run#{self._run_live_n} entry "
-                  f"live={DeviceAllocator._cuda_live_bytes.get(self.device_idx, 0) / 2**20:.0f}MB "
-                  f"pool={DeviceAllocator._POOL.cached.get(self.device_idx, 0) / 2**20:.0f}MB", flush=True)
+            _log.debug(f"[NBX_RUN_LIVE] {self.dag.get('component_name')} run#{self._run_live_n} entry "
+                       f"live={DeviceAllocator._cuda_live_bytes.get(self.device_idx, 0) / 2**20:.0f}MB "
+                       f"pool={DeviceAllocator._POOL.cached.get(self.device_idx, 0) / 2**20:.0f}MB")
         try:
             # Phase 4a frozen-plan replay (the engine's default, `replay.ENABLED`):
             # 1st run per bucket = warmup (autotune fires), 2nd =
@@ -3357,8 +3356,8 @@ class TritonSequence(SequenceSteps):
                 # op-by-op path.
                 import os as _os_lb2
                 if _os_lb2.environ.get("NBX_LAZY_BIND_DIAG") == "1":
-                    print("[LazyBind] late-bind fired (replay declined "
-                          "after would_replay said yes)", flush=True)
+                    _log.debug("[LazyBind] late-bind fired (replay declined "
+                               "after would_replay said yes)")
                 self.bind_weights(_parked)
             # The invariant state (state engine step 4): bit-identical invariant inputs skip their ops; any other run
             # evaluates them and keeps the frontier. A calibration observes every op, so it evaluates.
@@ -3395,9 +3394,9 @@ class TritonSequence(SequenceSteps):
             _w.set_compute_dtype(_prev_dt)
             _w.set_activations_fp16_safe(_prev_safe)
             if _live_diag:
-                print(f"[NBX_RUN_LIVE] {self.dag.get('component_name')} run#{self._run_live_n} exit  "
-                      f"live={DeviceAllocator._cuda_live_bytes.get(self.device_idx, 0) / 2**20:.0f}MB "
-                      f"pool={DeviceAllocator._POOL.cached.get(self.device_idx, 0) / 2**20:.0f}MB", flush=True)
+                _log.debug(f"[NBX_RUN_LIVE] {self.dag.get('component_name')} run#{self._run_live_n} exit  "
+                           f"live={DeviceAllocator._cuda_live_bytes.get(self.device_idx, 0) / 2**20:.0f}MB "
+                           f"pool={DeviceAllocator._POOL.cached.get(self.device_idx, 0) / 2**20:.0f}MB")
 
     def _maybe_trace_nan(self, op: 'CompiledOp', arena) -> None:
         """Scan op output(s) for Inf/NaN. Print the first offender on
@@ -3407,7 +3406,6 @@ class TritonSequence(SequenceSteps):
             self._trace_nan_seen = False
         if self._trace_nan_seen:
             return
-        import sys as _sys_tn
         for s in op.output_slots:
             t = arena[s] if arena else None
             if t is None:
@@ -3442,16 +3440,13 @@ class TritonSequence(SequenceSteps):
                         if ti is not None:
                             inp_info.append(
                                 f"in{si}=<{ti.dtype}, shape={list(ti.shape)}>")
-                    print(
-                        f"[NBX_TRITON_TRACE_NAN] FIRST {flag} at "
+                    _log.debug(f"[NBX_TRITON_TRACE_NAN] FIRST {flag} at "
                         f"op_uid={op.op_uid} op_type={op.op_type} "
                         f"out=<{t.dtype}, shape={list(t.shape)}> "
-                        f"{'; '.join(inp_info)}",
-                        file=_sys_tn.stderr, flush=True)
+                        f"{'; '.join(inp_info)}")
                     return
             except Exception as e:
-                print(f"[NBX_TRITON_TRACE_NAN] failed on {op.op_uid}: {e}",
-                      file=_sys_tn.stderr, flush=True)
+                _log.debug(f"[NBX_TRITON_TRACE_NAN] failed on {op.op_uid}: {e}")
                 return
 
     @staticmethod
@@ -3643,7 +3638,7 @@ class TritonSequence(SequenceSteps):
                                   "record": new_record}, f)
                     f.write("\n")
             except Exception as e:
-                print(f"[NBX_DUMP_TIDS] failed on {tid}: {e}", flush=True)
+                _log.debug(f"[NBX_DUMP_TIDS] failed on {tid}: {e}")
 
     @staticmethod
     def nbx_dump_raw(spec: str, component: str, op_uid: str, tids, get) -> None:
@@ -3683,10 +3678,10 @@ class TritonSequence(SequenceSteps):
             try:
                 _host = tensor.numpy()
                 _np_r.save(fn, bf16_bits_to_f32(_host) if tensor.nbx_dtype == NBXDtype.bfloat16 else _host)
-                print(f"[NBX_DUMP_RAW triton] {tid} {list(tensor.shape)} "
-                      f"-> {fn}", flush=True)
+                _log.debug(f"[NBX_DUMP_RAW triton] {tid} {list(tensor.shape)} "
+                           f"-> {fn}")
             except Exception as e:
-                print(f"[NBX_DUMP_RAW triton] failed on {tid}: {e}", flush=True)
+                _log.debug(f"[NBX_DUMP_RAW triton] failed on {tid}: {e}")
 
     def _maybe_dump_raw(self, op: 'CompiledOp') -> None:
         """NBX_DUMP_RAW in the compiled sequence (default-off): the arena's
@@ -3762,8 +3757,7 @@ class TritonSequence(SequenceSteps):
                     _json_f.dump(r, f)
                     f.write("\n")
         except Exception as e:
-            print(f"[NBX_OP_FINGERPRINT] failed at {op.op_uid}: {e}",
-                  flush=True)
+            _log.debug(f"[NBX_OP_FINGERPRINT] failed at {op.op_uid}: {e}")
 
     def _run_single_device(self, skip_kills: bool = False,
                             pre_op_callback: Optional[Callable[[int, 'CompiledOp'], None]] = None):
@@ -3865,8 +3859,7 @@ class TritonSequence(SequenceSteps):
                 if _live_dump_n > 0 and op_idx % _live_dump_n == 0:
                     from nbxtensor.memory.allocator import DeviceAllocator as _DA_p
                     _live = _DA_p._cuda_live_bytes.get(_DA_p.get_device(), 0)
-                    print(f"[LIVE_TRACK op_idx={op_idx} {op.op_uid}] live={_live/1024/1024:.0f}MB",
-                          flush=True)
+                    _log.debug(f"[LIVE_TRACK op_idx={op_idx} {op.op_uid}] live={_live/1024/1024:.0f}MB")
                 # P-TRITON-LIVE-WATERMARK-AUDIT 2026-05-14 L1: extended
                 # periodic trace. NBX_LIVE_WATERMARK_TRACE=path/to/file.jsonl
                 # samples every NBX_LIVE_WATERMARK_EVERY ops (default 50)
@@ -3914,14 +3907,13 @@ class TritonSequence(SequenceSteps):
                                     n_i += 1; b_i += nb
                                 else:
                                     n_m += 1; b_m += nb
-                            print(f"[LIVE_DUMP at {op.op_uid}] arena_size={len(arena)} "
-                                  f"weights={n_w}/{b_w/1024/1024:.0f}MB "
-                                  f"inputs={n_i}/{b_i/1024/1024:.0f}MB "
-                                  f"intermediates={n_m}/{b_m/1024/1024:.0f}MB "
-                                  f"none_slots={n_none} other_slots={n_other} "
-                                  f"types={type_counts} "
-                                  f"deferred_queue={len(_deferred)}/{_deferred_bytes/1024/1024:.0f}MB",
-                                  flush=True)
+                            _log.debug(f"[LIVE_DUMP at {op.op_uid}] arena_size={len(arena)} "
+                                       f"weights={n_w}/{b_w/1024/1024:.0f}MB "
+                                       f"inputs={n_i}/{b_i/1024/1024:.0f}MB "
+                                       f"intermediates={n_m}/{b_m/1024/1024:.0f}MB "
+                                       f"none_slots={n_none} other_slots={n_other} "
+                                       f"types={type_counts} "
+                                       f"deferred_queue={len(_deferred)}/{_deferred_bytes/1024/1024:.0f}MB")
                             # P-TRITON-LIVE-WATERMARK-AUDIT L2: per-intermediate
                             # detail. For every non-None, non-weight, non-input
                             # slot at OOM, log: slot id, nbytes, shape, tid,
@@ -3956,17 +3948,15 @@ class TritonSequence(SequenceSteps):
                                         _s_l, "?")
                                     _lu_l = getattr(
                                         self, '_slot_last_use', {}).get(_s_l, "?")
-                                    print(f"[LIVE_DUMP_SLOT slot={_s_l} "
-                                          f"tid={_tid_l} "
-                                          f"nbytes={_nb_l/1024/1024:.0f}MB "
-                                          f"shape={_sh_l} "
-                                          f"producer={_prod_l} "
-                                          f"last_use={_lu_l} "
-                                          f"current_op_idx={op_idx}]",
-                                          flush=True)
+                                    _log.debug(f"[LIVE_DUMP_SLOT slot={_s_l} "
+                                               f"tid={_tid_l} "
+                                               f"nbytes={_nb_l/1024/1024:.0f}MB "
+                                               f"shape={_sh_l} "
+                                               f"producer={_prod_l} "
+                                               f"last_use={_lu_l} "
+                                               f"current_op_idx={op_idx}]")
                             except Exception as _slot_e:
-                                print(f"[LIVE_DUMP_SLOT error] {_slot_e}",
-                                      flush=True)
+                                _log.debug(f"[LIVE_DUMP_SLOT error] {_slot_e}")
                             # Walk DeviceAllocator._cuda_ptr_size directly
                             # to show ALL live cudaMalloc blocks per device,
                             # bucketed by size. Exposes blocks that NBX
@@ -3985,10 +3975,9 @@ class TritonSequence(SequenceSteps):
                             for _d, _t in sorted(per_dev_total.items()):
                                 buckets = per_dev_buckets.get(_d, _Counter())
                                 top = sorted(buckets.items(), key=lambda x: -x[0]*x[1])[:8]
-                                print(f"[LIVE_BLOCKS dev={_d}] total={_t/1024/1024:.0f}MB "
-                                      f"big_blocks(>=100MB): "
-                                      + " ".join(f"{c}x{sz/1024/1024:.0f}MB" for sz, c in top),
-                                      flush=True)
+                                _log.debug("%s", f"[LIVE_BLOCKS dev={_d}] total={_t/1024/1024:.0f}MB "
+                                                 f"big_blocks(>=100MB): "
+                                                 + " ".join(f"{c}x{sz/1024/1024:.0f}MB" for sz, c in top))
                             # Walk gc.get_objects() to find NBXTensor objects
                             # whose data_ptr matches the >= 1 GB allocations.
                             # Reports the type/repr of OTHER referrers (besides
@@ -4008,9 +3997,8 @@ class TritonSequence(SequenceSteps):
                                 post_collect_big = sum(
                                     1 for p in _DAW._cuda_ptr_size
                                     if _DAW._cuda_ptr_size[p] >= 1024*1024*1024)
-                                print(f"  [GC_COLLECT_TEST] gc.collect() collected {_collected} cycle objects, "
-                                      f"big_blocks(>=1GB) before={pre_collect_big} after={post_collect_big}",
-                                      flush=True)
+                                _log.debug(f"  [GC_COLLECT_TEST] gc.collect() collected {_collected} cycle objects, "
+                                           f"big_blocks(>=1GB) before={pre_collect_big} after={post_collect_big}")
                                 big_ptrs = {p: _DAW._cuda_ptr_size[p]
                                             for p in _DAW._cuda_ptr_size
                                             if _DAW._cuda_ptr_size[p] >= 1024*1024*1024}
@@ -4018,8 +4006,7 @@ class TritonSequence(SequenceSteps):
                                 for o in _gc_h.get_objects():
                                     if isinstance(o, _NBX_H) and getattr(o, '_data_ptr', 0) in big_ptrs:
                                         big_tensors.append(o)
-                                print(f"[BIG_TENSORS] {len(big_tensors)} NBXTensors with data_ptr in big blocks (>=1GB)",
-                                      flush=True)
+                                _log.debug(f"[BIG_TENSORS] {len(big_tensors)} NBXTensors with data_ptr in big blocks (>=1GB)")
                                 # Build reverse arena lookup: data_ptr -> tid
                                 # so each big tensor can be identified by its
                                 # graph tensor_id (or "ORPHAN" if not in arena).
@@ -4075,13 +4062,12 @@ class TritonSequence(SequenceSteps):
                                     import sys as _sys_rc
                                     rc = _sys_rc.getrefcount(t)
                                     is_tracked = _gc_h.is_tracked(t)
-                                    print(f"  tensor#{i} tid={tid} shape={tuple(t._shape)} "
-                                          f"nbytes={t._nbytes/1024/1024:.0f}MB "
-                                          f"owns={t._owns_data} "
-                                          f"data_ptr={t._data_ptr} "
-                                          f"refcount={rc} gc_tracked={is_tracked} "
-                                          f"referrers({len(refs)}): {refs_summary}",
-                                          flush=True)
+                                    _log.debug(f"  tensor#{i} tid={tid} shape={tuple(t._shape)} "
+                                               f"nbytes={t._nbytes/1024/1024:.0f}MB "
+                                               f"owns={t._owns_data} "
+                                               f"data_ptr={t._data_ptr} "
+                                               f"refcount={rc} gc_tracked={is_tracked} "
+                                               f"referrers({len(refs)}): {refs_summary}")
                                     # For ORPHAN tensors specifically, walk one
                                     # level deeper: who holds the list[len=3]
                                     # and tuple(len=2) referrers? That gives the
@@ -4103,8 +4089,7 @@ class TritonSequence(SequenceSteps):
                                                 elif hasattr(gr, '__class__') and gr.__class__.__module__ != 'builtins':
                                                     ginfo = f"<{gr.__class__.__module__}.{grt}>"
                                                 grand_summary.append(f"{grt}{ginfo}")
-                                            print(f"    └─ ref#{j} {type(r).__name__} held by ({len(grand)}): {grand_summary}",
-                                                  flush=True)
+                                            _log.debug(f"    └─ ref#{j} {type(r).__name__} held by ({len(grand)}): {grand_summary}")
                                         # Find any 'cell' referrer and trace it
                                         for r in refs:
                                             if type(r).__name__ != 'cell':
@@ -4116,9 +4101,8 @@ class TritonSequence(SequenceSteps):
                                             except Exception:
                                                 cc_match = False
                                             cell_holders = _gc_h.get_referrers(r)
-                                            print(f"    [CELL_TRACE] cell.cell_contents is t: {cc_match}, "
-                                                  f"cell id={id(r)}, cell holders ({len(cell_holders)}):",
-                                                  flush=True)
+                                            _log.debug(f"    [CELL_TRACE] cell.cell_contents is t: {cc_match}, "
+                                                       f"cell id={id(r)}, cell holders ({len(cell_holders)}):")
                                             for ch in cell_holders[:5]:
                                                 cht = type(ch).__name__
                                                 cinfo = f" id={id(ch)} len={len(ch) if hasattr(ch,'__len__') else '?'}"
@@ -4153,7 +4137,7 @@ class TritonSequence(SequenceSteps):
                                                     else:
                                                         gh_summary.append(ght)
                                                 cinfo += f" holders={gh_summary}"
-                                                print(f"      cell_holder: {cht}{cinfo}", flush=True)
+                                                _log.debug(f"      cell_holder: {cht}{cinfo}")
                                         # EXHAUSTIVE scan: walk ALL gc.get_objects
                                         # to find any object that refers to t via
                                         # any attribute (including __slots__).
@@ -4194,15 +4178,13 @@ class TritonSequence(SequenceSteps):
                                                         pass
                                             except Exception:
                                                 pass
-                                        print(f"    [EXHAUSTIVE] {len(candidate_holders)} non-container holders:",
-                                              flush=True)
+                                        _log.debug(f"    [EXHAUSTIVE] {len(candidate_holders)} non-container holders:")
                                         for mod, cls, where in candidate_holders[:10]:
-                                            print(f"      {mod}.{cls} via {where}", flush=True)
+                                            _log.debug(f"      {mod}.{cls} via {where}")
                                 # Print _seq_constant_originals size for context
                                 try:
                                     sco_size = len(getattr(self, '_seq_constant_originals', {}))
-                                    print(f"  [DIAG] _seq_constant_originals dict size: {sco_size}",
-                                          flush=True)
+                                    _log.debug(f"  [DIAG] _seq_constant_originals dict size: {sco_size}")
                                 except Exception:
                                     pass
                                 # Scan Triton Autotuner instances for nargs leaks
@@ -4223,18 +4205,17 @@ class TritonSequence(SequenceSteps):
                                                 fn_name = getattr(getattr(at_inst, 'base_fn', None),
                                                                   '__name__', '?')
                                                 leaks.append((fn_name, len(nargs), tensor_count))
-                                    print(f"  [AUTOTUNE_LEAK_SCAN] {len(autotuners)} Autotuner instances; "
-                                          f"{len(leaks)} with non-None nargs holding NBXTensors:",
-                                          flush=True)
+                                    _log.debug(f"  [AUTOTUNE_LEAK_SCAN] {len(autotuners)} Autotuner instances; "
+                                               f"{len(leaks)} with non-None nargs holding NBXTensors:")
                                     for fn_name, n_args, n_tensors in leaks:
-                                        print(f"    LEAK: kernel={fn_name} nargs_count={n_args} "
-                                              f"nbxtensor_count={n_tensors}", flush=True)
+                                        _log.debug(f"    LEAK: kernel={fn_name} nargs_count={n_args} "
+                                                   f"nbxtensor_count={n_tensors}")
                                 except Exception as _e:
-                                    print(f"  [AUTOTUNE_LEAK_SCAN failed: {_e}]", flush=True)
+                                    _log.debug(f"  [AUTOTUNE_LEAK_SCAN failed: {_e}]")
                             except Exception as _ge:
-                                print(f"[BIG_TENSORS scan failed: {_ge}]", flush=True)
+                                _log.debug(f"[BIG_TENSORS scan failed: {_ge}]")
                         except Exception as _dump_e:
-                            print(f"[LIVE_DUMP failed: {_dump_e}]", flush=True)
+                            _log.debug(f"[LIVE_DUMP failed: {_dump_e}]")
                     _none_pos = [i for i, a in enumerate(args) if a is None]
                     # Per-arg NBX placement: "cannot be accessed from
                     # Triton" is raised for CPU-resident AND freed/foreign
@@ -4296,10 +4277,10 @@ class TritonSequence(SequenceSteps):
             # so printing there read the PREVIOUS value (or None) and the
             # output half of the trace was useless.
             if _vdump and op.output_slots:
-                print(f"[VALUE_TRACE path=tritonfused op_idx={op_idx} "
-                      f"op_uid={op.op_uid} "
-                      f"samp={_fingerprint(arena[op.output_slots[0]])}"
-                      f"{_in_fp if _vdump >= 2 else ''}]", flush=True)
+                _log.debug(f"[VALUE_TRACE path=tritonfused op_idx={op_idx} "
+                           f"op_uid={op.op_uid} "
+                           f"samp={_fingerprint(arena[op.output_slots[0]])}"
+                           f"{_in_fp if _vdump >= 2 else ''}]")
 
             # === TEMP NBX_TRITON_TRACE_NAN=1 : log first Inf/NaN op ===
             # Gate hoisted to run start (C1).
@@ -4343,13 +4324,12 @@ class TritonSequence(SequenceSteps):
                     if tid in _trace_tids:
                         t = arena[s]
                         if t is not None:
-                            print(f"[TID_TRACE ALLOC op_idx={op_idx} {op.op_uid}] "
-                                  f"tid={tid} slot={s} "
-                                  f"data_ptr={getattr(t, '_data_ptr', '?')} "
-                                  f"refcount={_sys_tt.getrefcount(t)} "
-                                  f"shape={tuple(getattr(t, '_shape', ()))} "
-                                  f"nbytes={getattr(t, '_nbytes', 0)/1024/1024:.0f}MB",
-                                  flush=True)
+                            _log.debug(f"[TID_TRACE ALLOC op_idx={op_idx} {op.op_uid}] "
+                                       f"tid={tid} slot={s} "
+                                       f"data_ptr={getattr(t, '_data_ptr', '?')} "
+                                       f"refcount={_sys_tt.getrefcount(t)} "
+                                       f"shape={tuple(getattr(t, '_shape', ()))} "
+                                       f"nbytes={getattr(t, '_nbytes', 0)/1024/1024:.0f}MB")
 
             if not skip_kills:
                 for s in op.kill_slots:
@@ -4365,12 +4345,11 @@ class TritonSequence(SequenceSteps):
                             tid = self._slot_to_tid.get(s)
                             if tid in _trace_tids:
                                 import sys as _sys_tk
-                                print(f"[TID_TRACE KILL op_idx={op_idx} {op.op_uid}] "
-                                      f"tid={tid} slot={s} "
-                                      f"data_ptr={getattr(old, '_data_ptr', '?')} "
-                                      f"refcount_before_kill={_sys_tk.getrefcount(old)} "
-                                      f"(if >2 = orphan-leak; arena+sys.getrefcount=2)",
-                                      flush=True)
+                                _log.debug(f"[TID_TRACE KILL op_idx={op_idx} {op.op_uid}] "
+                                           f"tid={tid} slot={s} "
+                                           f"data_ptr={getattr(old, '_data_ptr', '?')} "
+                                           f"refcount_before_kill={_sys_tk.getrefcount(old)} "
+                                           f"(if >2 = orphan-leak; arena+sys.getrefcount=2)")
                         _deferred.append(old)
                         _deferred_bytes += old._nbytes
                     arena[s] = None
@@ -4425,11 +4404,10 @@ class TritonSequence(SequenceSteps):
                 if _drain_stats is not None:
                     _drain_stats[0] += 1
                     _drain_stats[2 if _pressure else 1] += 1
-                    print(f"[NBX_DEFERRED_DRAIN] single-dev drain "
-                          f"#{_drain_stats[0]}: {len(_deferred)} tensors, "
-                          f"{_deferred_bytes/1e9:.2f} GB, "
-                          f"trigger={'pressure' if _pressure else 'cliff'}",
-                          flush=True)
+                    _log.debug(f"[NBX_DEFERRED_DRAIN] single-dev drain "
+                               f"#{_drain_stats[0]}: {len(_deferred)} tensors, "
+                               f"{_deferred_bytes/1e9:.2f} GB, "
+                               f"trigger={'pressure' if _pressure else 'cliff'}")
                 # Under the allocator pool the drain is a stream-ordered
                 # hand-back to the free-list, not a cudaFree: a block
                 # re-issued to a later op on the same in-order stream cannot
@@ -4457,10 +4435,9 @@ class TritonSequence(SequenceSteps):
             _deferred_bytes = 0
 
         if _drain_stats is not None and _drain_stats[0] > 0:
-            print(f"[NBX_DEFERRED_DRAIN] single-dev totals: "
-                  f"{_drain_stats[0]} drains "
-                  f"({_drain_stats[1]} cliff/count, {_drain_stats[2]} pressure)",
-                  flush=True)
+            _log.debug(f"[NBX_DEFERRED_DRAIN] single-dev totals: "
+                       f"{_drain_stats[0]} drains "
+                       f"({_drain_stats[1]} cliff/count, {_drain_stats[2]} pressure)")
 
 
     def _run_multi_device(self, skip_kills: bool = False,
@@ -4531,11 +4508,10 @@ class TritonSequence(SequenceSteps):
                 _key_census.set_op(op.op_uid)     # every key this op forms is recorded with it
             if _watch_slot >= 0 and arena[_watch_slot] is not _watch_ref:
                 _new = arena[_watch_slot]
-                print(f"[ARENA_WATCH] slot {_watch_slot} changed BEFORE "
-                      f"op_idx={op_idx} {op.op_uid}: "
-                      f"ptr={0 if _new is None else _new.data_ptr():#x} "
-                      f"dev={None if _new is None else _new._device_idx}",
-                      flush=True)
+                _log.debug(f"[ARENA_WATCH] slot {_watch_slot} changed BEFORE "
+                           f"op_idx={op_idx} {op.op_uid}: "
+                           f"ptr={0 if _new is None else _new.data_ptr():#x} "
+                           f"dev={None if _new is None else _new._device_idx}")
                 _watch_ref = _new
             if pre_op_callback is not None:
                 pre_op_callback(op_idx, op)
@@ -4686,11 +4662,10 @@ class TritonSequence(SequenceSteps):
                 if _drain_stats is not None:
                     _drain_stats[0] += 1
                     _drain_stats[2 if _pressure else 1] += 1
-                    print(f"[NBX_DEFERRED_DRAIN] multi-dev drain "
-                          f"#{_drain_stats[0]}: {len(_deferred)} tensors, "
-                          f"{_deferred_bytes/1e9:.2f} GB, "
-                          f"trigger={'pressure' if _pressure else 'cliff'}",
-                          flush=True)
+                    _log.debug(f"[NBX_DEFERRED_DRAIN] multi-dev drain "
+                               f"#{_drain_stats[0]}: {len(_deferred)} tensors, "
+                               f"{_deferred_bytes/1e9:.2f} GB, "
+                               f"trigger={'pressure' if _pressure else 'cliff'}")
                 _sync_deferred_all_devices(_deferred)
                 _deferred.clear()
                 _deferred_bytes = 0
@@ -4702,10 +4677,9 @@ class TritonSequence(SequenceSteps):
             _deferred_bytes = 0
 
         if _drain_stats is not None and _drain_stats[0] > 0:
-            print(f"[NBX_DEFERRED_DRAIN] multi-dev totals: "
-                  f"{_drain_stats[0]} drains "
-                  f"({_drain_stats[1]} cliff/count, {_drain_stats[2]} pressure)",
-                  flush=True)
+            _log.debug(f"[NBX_DEFERRED_DRAIN] multi-dev totals: "
+                       f"{_drain_stats[0]} drains "
+                       f"({_drain_stats[1]} cliff/count, {_drain_stats[2]} pressure)")
 
     @staticmethod
     def _find_cuda_arg(args) -> 'Optional[int]':

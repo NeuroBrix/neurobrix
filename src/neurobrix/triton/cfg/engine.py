@@ -25,6 +25,8 @@ from neurobrix.core.runtime.resolution.negative_text_mask import negative_mask_f
 from neurobrix.core.runtime.resolution.negative_pooled_condition import negative_swaps as _negative_swaps
 from neurobrix.triton import i2v_conditioning as _i2v
 from neurobrix.triton import vace_control_conditioning as _vace
+import logging
+_log = logging.getLogger(__name__)
 
 
 def _ensure_nbx(tensor) -> NBXTensor:
@@ -406,7 +408,7 @@ class TritonCFGEngine(CFGSteps):
             if _arr is not None:
                 _np_cfgb.savez(_cfgb if _cfgb.endswith(".npz") else _cfgb + ".npz",
                                noise_pred_batched=_arr)
-                print(f"[CFG-BATCH-DUMP-TRITON] shape={tuple(noise_pred_batched.shape)} -> {_cfgb}")
+                _log.debug(f"[CFG-BATCH-DUMP-TRITON] shape={tuple(noise_pred_batched.shape)} -> {_cfgb}")
 
         # Split: chunk(2, dim=0) → narrow(0, 0, half) and narrow(0, half, half)
         half = noise_pred_batched.shape[0] // 2
@@ -417,8 +419,8 @@ class TritonCFGEngine(CFGSteps):
         noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
 
         if DEBUG:
-            print(f"[CFG] guidance={guidance_scale}: uncond mean (triton), "
-                  f"cond mean (triton), final mean (triton)")
+            _log.debug(f"[CFG] guidance={guidance_scale}: uncond mean (triton), "
+                       f"cond mean (triton), final mean (triton)")
 
         # Restore originals
         self._ctx.variable_resolver.set(encoder_key, orig_hidden)

@@ -51,6 +51,7 @@ def run_once_nbx(args, arm_env, tag, outdir):
     env = dict(os.environ)
     env["CUDA_VISIBLE_DEVICES"] = args.gpu
     env["PYTHONPATH"] = str(REPO / "src")
+    env["NBX_LOG"] = "debug"          # the transcription line it gates on is a developer line (nbxtensor/terminal.py)
     t0 = time.time()
     r = _locked(args, lambda: _run_capped(lambda: subprocess.run(
         cmd, env=env, capture_output=True, text=True, timeout=2400)))
@@ -59,7 +60,7 @@ def run_once_nbx(args, arm_env, tag, outdir):
         (outdir / f"err_{tag}.log").write_text(
             (r.stdout or "")[-3000:] + "\n===\n" + (r.stderr or "")[-6000:])
     # speech-to-speech rows gate on the pipeline's own transcription line
-    (outdir / f"log_{tag}.txt").write_text((r.stdout or "")[-8000:])
+    (outdir / f"log_{tag}.txt").write_text(((r.stdout or "") + (r.stderr or ""))[-8000:])
     return {"tag": tag, "rc": r.returncode, "wall_s": round(wall, 2),
             "log": str(outdir / f"log_{tag}.txt"),
             "out": str(out) if out.exists() else None,

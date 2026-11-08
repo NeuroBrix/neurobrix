@@ -113,13 +113,13 @@ def test_a_load_failure_is_a_failed_record_then_the_error(instance, capsys):
     assert _ready_lines(capsys.readouterr().out) == [rec]
 
 
-def test_an_undeliverable_ready_signal_is_said_not_swallowed(instance, capsys):
+def test_an_undeliverable_ready_signal_is_said_not_swallowed(instance, engine_log):
     r, w = os.pipe()
     os.close(r)                                  # the launcher is gone
     d = ServingDaemon("fake", "none", engine=LoadingEngine(), idle_timeout=60)
     d._ready_fd = w
     d._signal_ready(d._ready_record())
-    assert f"ready signal not delivered on fd {w}" in capsys.readouterr().out
+    assert f"ready signal not delivered on fd {w}" in engine_log()
 
 
 def test_the_ready_file_is_written_whole_and_belongs_to_the_instance(instance):

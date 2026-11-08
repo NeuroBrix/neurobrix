@@ -143,6 +143,12 @@ neurobrix run --model TinyLlama-1.1B-Chat-v1.0 \
 `neurobrix import <org>/<name>` installs the model under `~/.neurobrix/cache/<name>`, and
 `--model` takes that `<name>`.
 
+A run prints its result on stdout (the generated text, the transcript, or `SAVED: <path>` for a file) and a few
+status lines on stderr: the engine in use and the run time, and on the very first run a line saying the machine is
+being measured once for its hardware profile, with the time it expects. `-v` adds the engine's developer lines — the
+plan, the loaders, the kernel directory, the timings — `-vv` the traceback of an error, and `NBX_LOG=debug` in the
+environment both.
+
 ### Serve and chat
 
 `neurobrix serve` keeps a model loaded in a background daemon between requests; `chat` talks to a language model

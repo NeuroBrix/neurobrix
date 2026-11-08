@@ -42,6 +42,8 @@ from nbxtensor.random.seeded_draw import SeededDrawStream, seeded_gaussian
 from nbxtensor.memory.device_transfer import needs_move, transfer_tensor
 from neurobrix.core.flow.base import FlowLeg   # the leg's engine, ctx and resolver, both branches
 from neurobrix.triton.flow.speech import _require, _from_np_on
+import logging
+_log = logging.getLogger(__name__)
 
 
 class SpeechCFMLeg(FlowLeg):
@@ -164,8 +166,8 @@ class SpeechCFMLeg(FlowLeg):
                 f"ends at {hi} — hidden rows unavailable.")
         span_ids = full_ids[lo:hi]
         span_hidden = lm_hidden[0, lo:hi].contiguous()      # [T, H_llm]
-        print(f"   [speech_cfm:triton] tts span [{lo}:{hi}) — "
-              f"{len(span_ids)} tokens, seed={seed}")
+        _log.debug(f"   [speech_cfm:triton] tts span [{lo}:{hi}) — "
+                   f"{len(span_ids)} tokens, seed={seed}")
 
         # ── 2. condition: additive merge + prefix ────────────────────
         _ids_t = _from_np_on(
@@ -203,8 +205,8 @@ class SpeechCFMLeg(FlowLeg):
         _rep_win = int(_require(samp, "repetition_window", "sampling"))
         codes: List[int] = []
         context = prefix
-        print(f"   [speech_cfm:triton] codec AR start (min {min_new}, "
-              f"max {max_new})...")
+        _log.debug(f"   [speech_cfm:triton] codec AR start (min {min_new}, "
+                   f"max {max_new})...")
         for t in range(max_new):
             S = int(context.shape[1])
             _pos = _from_np_on(
@@ -231,7 +233,7 @@ class SpeechCFMLeg(FlowLeg):
         if not codes:
             raise RuntimeError(
                 "ZERO FALLBACK: the codec AR emitted no speech codes.")
-        print(f"   [speech_cfm:triton] {len(codes)} speech codes")
+        _log.debug(f"   [speech_cfm:triton] {len(codes)} speech codes")
 
         # ── 4. token2wav: constants → flow → CFM → vocoder ──────────
         spk_prefix = str(_require(sp, "speaker_constants",
@@ -323,8 +325,8 @@ class SpeechCFMLeg(FlowLeg):
             if stp < n_steps:
                 dt = ts[stp + 1] - t_cur
         mel = x[:, :, mel_len1:].contiguous()               # [1, 80, Tg*up]
-        print(f"   [speech_cfm:triton] CFM {n_steps} steps -> mel "
-              f"{list(mel.shape)}")
+        _log.debug(f"   [speech_cfm:triton] CFM {n_steps} steps -> mel "
+                   f"{list(mel.shape)}")
 
         wav = self._run(c_voc, speech_feat=mel.to(dtype))
         if isinstance(wav, (tuple, list)):
@@ -345,10 +347,10 @@ class SpeechCFMLeg(FlowLeg):
                 wav=waveform.numpy(),
                 speaker=np.asarray([req_spk]),
             )
-            print(f"   [speech_cfm:triton] NBX_SPEECH_DUMP -> "
-                  f"{_dump_dir}/speech_leg_dump.npz")
+            _log.debug(f"   [speech_cfm:triton] NBX_SPEECH_DUMP -> "
+                       f"{_dump_dir}/speech_leg_dump.npz")
         self.resolved["global.output_audio"] = waveform
         self.resolved["global.audio_sample_rate"] = sample_rate
         dt_s = time.perf_counter() - t0
-        print(f"   [speech_cfm:triton] waveform {int(waveform.shape[0])} "
-              f"samples @ {sample_rate} Hz in {dt_s:.1f}s")
+        _log.debug(f"   [speech_cfm:triton] waveform {int(waveform.shape[0])} "
+                   f"samples @ {sample_rate} Hz in {dt_s:.1f}s")

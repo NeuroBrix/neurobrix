@@ -22,6 +22,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Dict, Optional
+import logging
+_log = logging.getLogger(__name__)
 
 
 def _root() -> Path:
@@ -78,8 +80,8 @@ def record(model: Optional[str], engine: str, architecture: str, before: Dict[in
     MB. Under the census shadow nothing is measured and nothing is written: its devices are no device."""
     if not model or not before or not after:
         if model and (before is None or after is None):
-            print(f"   [RuntimeGrowth] not measured for {model}: the backend gives no per-process accounting of the "
-                  f"device (the card's free/total would count other processes)", flush=True)
+            _log.debug(f"   [RuntimeGrowth] not measured for {model}: the backend gives no per-process accounting of the "
+                       f"device (the card's free/total would count other processes)")
         return None
     from neurobrix.kernels import census
     if census.active():

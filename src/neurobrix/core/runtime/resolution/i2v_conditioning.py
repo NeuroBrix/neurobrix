@@ -28,6 +28,8 @@ import torch
 
 from neurobrix.core.runtime.resolution.i2v_spec import (  # noqa: F401 — the facts both branches read
     _vae_latent_stats, _vae_temporal_ratio, condition_channel_dim, conditioning_spec)
+import logging
+_log = logging.getLogger(__name__)
 
 CONDITION_VAR = "global.i2v_condition"
 
@@ -111,8 +113,8 @@ def _build_condition_cogvideox(ctx: Any, spec: dict) -> Optional[torch.Tensor]:
     import os as _os
     if _os.environ.get("NBX_DIAG_I2V") == "1":
         _f = img.float()
-        print(f"   [NBX-DIAG-I2V] cogvideox condition shape={list(img.shape)} "
-              f"mean={_f.mean():.3f} std={_f.std():.3f}")
+        _log.debug(f"   [NBX-DIAG-I2V] cogvideox condition shape={list(img.shape)} "
+                   f"mean={_f.mean():.3f} std={_f.std():.3f}")
     # frames-first to match the CogVideoX state layout [B, T, C, H, W]
     return img.permute(0, 2, 1, 3, 4).contiguous()
 
@@ -199,10 +201,10 @@ def _build_condition_state_video_mask(ctx: Any, spec: dict,
     import os as _os
     if _os.environ.get("NBX_DIAG_I2V") == "1":
         _lf = latent.float()
-        print(f"   [NBX-DIAG-I2V] state_video_mask condition "
-              f"shape={list(condition.shape)} video mean={_lf.mean():.3f} "
-              f"std={_lf.std():.3f} | mask zeros={int((mask == 0).sum())} "
-              f"cond_indices={cond_indices} ratio={ratio}")
+        _log.debug(f"   [NBX-DIAG-I2V] state_video_mask condition "
+                   f"shape={list(condition.shape)} video mean={_lf.mean():.3f} "
+                   f"std={_lf.std():.3f} | mask zeros={int((mask == 0).sum())} "
+                   f"cond_indices={cond_indices} ratio={ratio}")
     return condition
 
 
@@ -227,9 +229,9 @@ def _build_condition_wan(ctx: Any, spec: dict, num_frames: int) -> Optional[torc
     _diag = _os.environ.get("NBX_DIAG_I2V") == "1"
     if _diag:
         _lf = latent.float()
-        print(f"   [NBX-DIAG-I2V] RAW vae_latent shape={list(latent.shape)} "
-              f"mean={_lf.mean():.3f} std={_lf.std():.3f} "
-              f"min={_lf.min():.3f} max={_lf.max():.3f}")
+        _log.debug(f"   [NBX-DIAG-I2V] RAW vae_latent shape={list(latent.shape)} "
+                   f"mean={_lf.mean():.3f} std={_lf.std():.3f} "
+                   f"min={_lf.min():.3f} max={_lf.max():.3f}")
 
     # Normalize exactly as the vendor pipeline: (x - mean) * (1/std).
     if mean is not None and std is not None:
@@ -243,10 +245,10 @@ def _build_condition_wan(ctx: Any, spec: dict, num_frames: int) -> Optional[torc
     condition = torch.cat([mask, latent], dim=1)  # [B, mask_ch + C, T, H, W]
     if _diag:
         _nf = latent.float()
-        print(f"   [NBX-DIAG-I2V] NORMALIZED latent mean={_nf.mean():.3f} "
-              f"std={_nf.std():.3f} min={_nf.min():.3f} max={_nf.max():.3f} | "
-              f"condition shape={list(condition.shape)} num_frames={num_frames} | "
-              f"latents_mean[0:3]={mean[:3] if mean else None} latents_std[0:3]={std[:3] if std else None}")
+        _log.debug(f"   [NBX-DIAG-I2V] NORMALIZED latent mean={_nf.mean():.3f} "
+                   f"std={_nf.std():.3f} min={_nf.min():.3f} max={_nf.max():.3f} | "
+                   f"condition shape={list(condition.shape)} num_frames={num_frames} | "
+                   f"latents_mean[0:3]={mean[:3] if mean else None} latents_std[0:3]={std[:3] if std else None}")
     return condition
 
 

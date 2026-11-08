@@ -19,6 +19,8 @@ from typing import Optional
 
 import torch
 import torch.nn.functional as F
+import logging
+_log = logging.getLogger(__name__)
 
 _MEMORY = {}          # (vendor, architecture) -> the vendor file's memory section
 _SAID = set()         # the (shape, budget) cuts already said: one line per distinct cut, never one per call
@@ -82,14 +84,14 @@ def _say(b, h, tq, tk, budget, plan, in_flight=None):
     from nbxtensor.ops.tiling_sizes import sdpa_scores_bytes
     whole = sdpa_scores_bytes(b, h, tq, tk) / 2**20
     if plan is None:
-        print(f"[attention] {b} x {h} heads, {tq} x {tk}: whole, scores {whole:.0f} MB within the plan's budget "
-              f"{budget / 2**20:.0f} MB", flush=True)
+        _log.debug(f"[attention] {b} x {h} heads, {tq} x {tk}: whole, scores {whole:.0f} MB within the plan's budget "
+                   f"{budget / 2**20:.0f} MB")
         return
     group, rows = plan
     n = -(-(b * h) // group) * -(-tq // rows)
-    print(f"[attention] {b} x {h} heads, {tq} x {tk}: {n} chunks of {group} head(s) x {rows} rows, scores "
-          f"{sdpa_scores_bytes(1, group, rows, tk) / 2**20:.0f} MB a chunk, {in_flight} in flight (whole {whole:.0f} MB) "
-          f"within the plan's budget {budget / 2**20:.0f} MB", flush=True)
+    _log.debug(f"[attention] {b} x {h} heads, {tq} x {tk}: {n} chunks of {group} head(s) x {rows} rows, scores "
+               f"{sdpa_scores_bytes(1, group, rows, tk) / 2**20:.0f} MB a chunk, {in_flight} in flight (whole {whole:.0f} MB) "
+               f"within the plan's budget {budget / 2**20:.0f} MB")
 
 
 def _heads(t, bi, h0, h1, b, h):

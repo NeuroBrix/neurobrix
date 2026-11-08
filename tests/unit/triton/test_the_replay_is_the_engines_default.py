@@ -17,25 +17,25 @@ def test_the_replay_is_on_with_no_variable_set():
     assert out.stdout.strip().splitlines()[-1:] == ["True"], (out.stdout[-500:], out.stderr[-500:])
 
 
-def test_an_ineligible_sequence_is_refused_by_name_once(capsys):
+def test_an_ineligible_sequence_is_refused_by_name_once(engine_log):
     from neurobrix.triton import replay
     seq = SimpleNamespace(dag={"component_name": "decoder"}, _is_multi_device=False, _replay_ineligible=False,
                           _op_uid_interceptors={}, _op_interceptors={},
                           _ops=[SimpleNamespace(op_type="aten.randn"), SimpleNamespace(op_type="aten.mm")])
     assert replay.signature(seq) is None
     assert replay.signature(seq) is None
-    said = [l for l in capsys.readouterr().out.splitlines() if l.startswith("[Replay] decoder: not replayed")]
+    said = [l for l in engine_log().splitlines() if l.startswith("[Replay] decoder: not replayed")]
     assert len(said) == 1 and "random" in said[0], said
 
 
-def test_a_per_op_callback_is_refused_by_name(capsys):
+def test_a_per_op_callback_is_refused_by_name(engine_log):
     from neurobrix.triton import replay
     seq = SimpleNamespace(dag={"component_name": "model"})
     assert replay.maybe_run(seq, False, lambda *a: None) is False
-    assert "[Replay] model: not replayed — a per-op callback" in capsys.readouterr().out
+    assert "[Replay] model: not replayed — a per-op callback" in engine_log()
 
 
-def test_an_idle_slab_is_released_when_its_card_needs_the_room(monkeypatch, capsys):
+def test_an_idle_slab_is_released_when_its_card_needs_the_room(monkeypatch, engine_log):
     from nbxtensor.memory.allocator import DeviceAllocator
     from neurobrix.triton import replay
     assert replay.release_idle_slabs in DeviceAllocator._idle_reclaimers
@@ -65,4 +65,4 @@ def test_an_idle_slab_is_released_when_its_card_needs_the_room(monkeypatch, caps
     finally:
         replay._PLAN_SEQS.discard(s)
     assert freed == [(1, 64 << 20)] and list(s._replay_plans) == [("b",)], (freed, s._replay_plans)
-    assert "[Replay] transformer: a recorded plan's slab released on device 1" in capsys.readouterr().out
+    assert "[Replay] transformer: a recorded plan's slab released on device 1" in engine_log()

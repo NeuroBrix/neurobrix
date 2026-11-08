@@ -28,10 +28,10 @@ def fresh(monkeypatch):
     return W
 
 
-def test_an_unstable_measure_gives_one_serial_read_said_on_the_launch_line(fresh, capsys):
+def test_an_unstable_measure_gives_one_serial_read_said_on_the_launch_line(fresh, engine_log):
     from neurobrix.core.prism import autodetect as A
     assert A._measure_io_workers() is None
-    out = capsys.readouterr().out
+    out = engine_log()
     assert "[Engine] io workers: 1 for this run — no stable read-rate measure on /models" in out, out
     assert "measured again at the next run" in out
     assert fresh.io_workers() == 1

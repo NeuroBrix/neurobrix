@@ -46,6 +46,8 @@ from neurobrix import decode_progress, decode_stop
 from neurobrix.core.memory.manager import release_flow_memory
 from neurobrix.core.flow.shared_steps import VLMSteps   # the steps both branches share
 from neurobrix.core.flow.shared_steps import effective_sampling as _effective_sampling   # both branches read the sampling alike
+import logging
+_log = logging.getLogger(__name__)
 
 
 def _maybe_log_topk(logits, step: int) -> None:
@@ -223,8 +225,8 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
             # injection rides the empty-stub form built in the decode
             # loop below (all-False mask + zero-length embeds — the
             # exact audio-request stubs). ──
-            print("   [vlm] text-only\u2192speech form engaged \u2014 "
-                  "no modality input; deepstack rides the empty stubs")
+            _log.debug("   [vlm] text-only\u2192speech form engaged \u2014 "
+                       "no modality input; deepstack rides the empty stubs")
             n_modal = 0
             modal_embeds = None
             span_token_id = None
@@ -236,7 +238,7 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
             # M-RoPE temporal scale differ downstream. ──
             vis_pixels = pixel_values if has_image else pixel_values_videos
             vis_grid = grid_thw if has_image else video_grid_thw
-            print(f"   [{vision_name}] Running vision forward...")
+            _log.debug(f"   [{vision_name}] Running vision forward...")
             start = time.perf_counter()
             self._ensure_weights_loaded(vision_name)
             resolved[f"{vision_name}.hidden_states"] = vis_pixels.to(device=device, dtype=dtype)
@@ -265,9 +267,9 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
                             f"component '{vision_name}' produced no output_{k}.")
                     deepstack_embeds.append(t_ds.to(device=device, dtype=dtype))
             elapsed = (time.perf_counter() - start) * 1000
-            print(f"   [{vision_name}] {n_modal} vision tokens in {elapsed:.0f}ms"
-                  + (f" (+{len(deepstack_embeds)} deepstack levels)"
-                     if deepstack_embeds else ""))
+            _log.debug("%s", f"   [{vision_name}] {n_modal} vision tokens in {elapsed:.0f}ms"
+                             + (f" (+{len(deepstack_embeds)} deepstack levels)"
+                                if deepstack_embeds else ""))
             if not self.ctx.persistent_mode:
                 self._unload_component_weights(vision_name)
                 release_flow_memory(self.ctx.primary_device)
@@ -291,7 +293,7 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
                 span_content_type = "video"
         else:
             # ── Step 2 (audio): mel features → audio tower forward ──
-            print(f"   [{audio_name}] Running audio forward...")
+            _log.debug(f"   [{audio_name}] Running audio forward...")
             start = time.perf_counter()
             self._ensure_weights_loaded(audio_name)
             aud_exec = self.ctx.executors.get(audio_name)
@@ -353,8 +355,8 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
                     f"ZERO FALLBACK: audio output has {modal_embeds.shape[1]} "
                     f"tokens but aftercnn({L}) expects {n_modal}.")
             elapsed = (time.perf_counter() - start) * 1000
-            print(f"   [{audio_name}] {n_modal} audio tokens "
-                  f"(L={L} mel frames) in {elapsed:.0f}ms")
+            _log.debug(f"   [{audio_name}] {n_modal} audio tokens "
+                       f"(L={L} mel frames) in {elapsed:.0f}ms")
             if not self.ctx.persistent_mode:
                 self._unload_component_weights(audio_name)
                 release_flow_memory(self.ctx.primary_device)
@@ -475,8 +477,8 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
 
         logits_source = "lm_head" if (head_name and head_name in self.ctx.executors) \
             else "embed_weight_tied"
-        print(f"   [{lm_name}] Generating (max={max_tokens}, "
-              f"context={context_embeds.shape[1]}, logits={logits_source})...")
+        _log.debug(f"   [{lm_name}] Generating (max={max_tokens}, "
+                   f"context={context_embeds.shape[1]}, logits={logits_source})...")
         start = time.perf_counter()
         generated_ids: List[int] = []
 
@@ -507,8 +509,8 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
             feed_embeds = _steps.feed(context_embeds, context_embeds[:, -1:])
             feed_positions = _steps.feed(position_ids, position_ids[..., -1:])
             if _os_vlm.environ.get("NBX_DEBUG") == "1":
-                print(f"[vlm] handing the LM inputs_embeds {tuple(feed_embeds.shape)} "
-                      f"position_ids {tuple(feed_positions.shape)} (step {step})", flush=True)
+                _log.debug(f"[vlm] handing the LM inputs_embeds {tuple(feed_embeds.shape)} "
+                           f"position_ids {tuple(feed_positions.shape)} (step {step})")
             resolved["global.inputs_embeds"] = feed_embeds
             resolved["inputs_embeds"] = feed_embeds
             resolved["global.position_ids"] = feed_positions
@@ -556,13 +558,13 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
                 _top = torch.topk(_l, 5)
                 _ds_norms = [round(float(t.float().norm()), 3)
                              for t in deepstack_embeds]
-                print(f"   [vlm-diag] context_norm="
-                      f"{float(context_embeds.float().norm()):.4f} "
-                      f"hidden_norm={float(output.float().norm()):.4f} "
-                      f"ds_norms={_ds_norms} "
-                      f"pos_head={position_ids[:, 0, :3].tolist()} "
-                      f"top5_ids={_top.indices.tolist()} "
-                      f"top5_logits={[round(float(x), 3) for x in _top.values]}")
+                _log.debug(f"   [vlm-diag] context_norm="
+                           f"{float(context_embeds.float().norm()):.4f} "
+                           f"hidden_norm={float(output.float().norm()):.4f} "
+                           f"ds_norms={_ds_norms} "
+                           f"pos_head={position_ids[:, 0, :3].tolist()} "
+                           f"top5_ids={_top.indices.tolist()} "
+                           f"top5_logits={[round(float(x), 3) for x in _top.values]}")
             next_token = sample_next_id(sampler, logits, generated_ids)
             generated_ids.append(next_token)
             # In-process per-token event (same site as the autoregressive
@@ -578,7 +580,7 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
                 [context_embeds, _embed([next_token]).to(device=device)], dim=1)
 
         elapsed = (time.perf_counter() - start) * 1000
-        print(f"   [{lm_name}] Generated {len(generated_ids)} tokens in {elapsed:.0f}ms")
+        _log.debug(f"   [{lm_name}] Generated {len(generated_ids)} tokens in {elapsed:.0f}ms")
         resolved["global.generated_token_ids"] = generated_ids
 
         # ── Generative-speech leg (P-OMNI-GEN §1) ──
@@ -712,7 +714,7 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
                 raise RuntimeError(
                     "ZERO FALLBACK: staged vision chain requires "
                     "vision_projection_component in topology.flow.vlm.")
-            print(f"   [{vision_name}] Running vision forward...")
+            _log.debug(f"   [{vision_name}] Running vision forward...")
             start = time.perf_counter()
             self._ensure_weights_loaded(vision_name)
             # Write BOTH the component-scoped and the global slots (the
@@ -750,8 +752,8 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
             modal_embeds = proj_out.reshape(
                 -1, proj_out.shape[-1]).to(device=device, dtype=dtype)
             elapsed = (time.perf_counter() - start) * 1000
-            print(f"   [{vision_name}->{proj_name}] {modal_embeds.shape[0]} "
-                  f"vision tokens in {elapsed:.0f}ms")
+            _log.debug(f"   [{vision_name}->{proj_name}] {modal_embeds.shape[0]} "
+                       f"vision tokens in {elapsed:.0f}ms")
             if not self.ctx.persistent_mode:
                 self._unload_component_weights(proj_name)
                 release_flow_memory(self.ctx.primary_device)
@@ -765,7 +767,7 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
                 raise RuntimeError(
                     "ZERO FALLBACK: audio request needs audio_component + "
                     "audio_projection_component in topology.flow.vlm.")
-            print(f"   [{audio_name}] Running audio forward...")
+            _log.debug(f"   [{audio_name}] Running audio forward...")
             start = time.perf_counter()
             _ptype = {"whisper_mel": "mel_spectrogram"}.get(
                 apre.get("type", "whisper_mel"), apre.get("type"))
@@ -843,8 +845,8 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
             modal_embeds = aproj_out.reshape(
                 -1, aproj_out.shape[-1]).to(device=device, dtype=dtype)
             elapsed = (time.perf_counter() - start) * 1000
-            print(f"   [{audio_name}->{aproj_name}] {modal_embeds.shape[0]} "
-                  f"audio tokens (L={L} mel frames) in {elapsed:.0f}ms")
+            _log.debug(f"   [{audio_name}->{aproj_name}] {modal_embeds.shape[0]} "
+                       f"audio tokens (L={L} mel frames) in {elapsed:.0f}ms")
             if not self.ctx.persistent_mode:
                 self._unload_component_weights(aproj_name)
                 release_flow_memory(self.ctx.primary_device)
@@ -931,8 +933,8 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
         logits_source = ("lm_head"
                          if (head_name and head_name in self.ctx.executors)
                          else "embed_weight_tied")
-        print(f"   [{lm_name}] Generating (max={max_tokens}, "
-              f"context={context_embeds.shape[1]}, logits={logits_source})...")
+        _log.debug(f"   [{lm_name}] Generating (max={max_tokens}, "
+                   f"context={context_embeds.shape[1]}, logits={logits_source})...")
         start = time.perf_counter()
         generated_ids: List[int] = []
         from .decoder_cache import DecodeSteps, open_decoder_cache
@@ -988,8 +990,8 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
                 [context_embeds, _embed([next_token])], dim=1)
 
         elapsed = (time.perf_counter() - start) * 1000
-        print(f"   [{lm_name}] Generated {len(generated_ids)} tokens "
-              f"in {elapsed:.0f}ms")
+        _log.debug(f"   [{lm_name}] Generated {len(generated_ids)} tokens "
+                   f"in {elapsed:.0f}ms")
         resolved["global.generated_token_ids"] = generated_ids
 
         # ── Generative-speech leg, CFM class (P-OMNI-GEN model 3/3) ──
@@ -1227,7 +1229,7 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
                     "+ vision_projection_component in topology.flow.vlm.")
             vis_pixels = pixel_values if has_image else pixel_values_videos
             vis_grid = grid_thw if has_image else video_grid_thw
-            print(f"   [{vision_name}] Running vision forward...")
+            _log.debug(f"   [{vision_name}] Running vision forward...")
             start = time.perf_counter()
             self._ensure_weights_loaded(vision_name)
             _px = vis_pixels.to(device=device, dtype=dtype)
@@ -1271,8 +1273,8 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
                     f"ZERO FALLBACK: the visual chain produced "
                     f"{int(img_embeds.shape[0])} tokens but grid {t}x{h}x{w} "
                     f"/ merge {merge} expects {expected}.")
-            print(f"   [{vision_name}->{vproj_name}] {expected} vision "
-                  f"tokens in {(time.perf_counter() - start) * 1000:.0f}ms")
+            _log.debug(f"   [{vision_name}->{vproj_name}] {expected} vision "
+                       f"tokens in {(time.perf_counter() - start) * 1000:.0f}ms")
             if not self.ctx.persistent_mode:
                 self._unload_component_weights(vproj_name)
                 release_flow_memory(self.ctx.primary_device)
@@ -1283,7 +1285,7 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
                 raise RuntimeError(
                     "ZERO FALLBACK: audio request needs audio_component + "
                     "audio_projection_component in topology.flow.vlm.")
-            print(f"   [{audio_name}] Running audio forward...")
+            _log.debug(f"   [{audio_name}] Running audio forward...")
             start = time.perf_counter()
             _ptype = {"whisper_mel": "mel_spectrogram"}.get(
                 apre.get("type", "whisper_mel"), apre.get("type"))
@@ -1342,9 +1344,9 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
                     f"{int(aud_embeds.shape[0])} tokens but the vendor "
                     f"length arithmetic on {L} mel frames "
                     f"(({L}-1)//2+1 then k={_k} s={_s}) expects {_l2}.")
-            print(f"   [{audio_name}->{aproj_name}] {_l2} audio tokens "
-                  f"(L={L} mel frames) in "
-                  f"{(time.perf_counter() - start) * 1000:.0f}ms")
+            _log.debug(f"   [{audio_name}->{aproj_name}] {_l2} audio tokens "
+                       f"(L={L} mel frames) in "
+                       f"{(time.perf_counter() - start) * 1000:.0f}ms")
             if not self.ctx.persistent_mode:
                 self._unload_component_weights(aproj_name)
                 release_flow_memory(self.ctx.primary_device)
@@ -1483,8 +1485,8 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
                     ("audio_embeds", aud_src)):
                 resolved[_key] = _value
                 resolved[f"global.{_key}"] = _value
-            print(f"   [{lm_name}] Image-gen ENCODER pass "
-                  f"(S={_S_ig}, gen tokens={len(_gen_pos)})...")
+            _log.debug(f"   [{lm_name}] Image-gen ENCODER pass "
+                       f"(S={_S_ig}, gen tokens={len(_gen_pos)})...")
             self._execute_component(lm_name, "forward", None)
             _lm_out = self._get_component_output(lm_name)
             if _lm_out is None:
@@ -1512,8 +1514,8 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
         logits_source = ("lm_head"
                          if (head_name and head_name in self.ctx.executors)
                          else "embed_weight_tied")
-        print(f"   [{lm_name}] Generating (max={max_tokens}, "
-              f"context={context_embeds.shape[1]}, logits={logits_source})...")
+        _log.debug(f"   [{lm_name}] Generating (max={max_tokens}, "
+                   f"context={context_embeds.shape[1]}, logits={logits_source})...")
         start = time.perf_counter()
         generated_ids: List[int] = []
         from .decoder_cache import DecodeSteps, open_decoder_cache
@@ -1575,8 +1577,8 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
             context_embeds = torch.cat(
                 [context_embeds, _embed([next_token])], dim=1)
 
-        print(f"   [{lm_name}] Generated {len(generated_ids)} tokens in "
-              f"{(time.perf_counter() - start) * 1000:.0f}ms")
+        _log.debug(f"   [{lm_name}] Generated {len(generated_ids)} tokens in "
+                   f"{(time.perf_counter() - start) * 1000:.0f}ms")
         resolved["global.generated_token_ids"] = generated_ids
 
         if not self.ctx.persistent_mode:

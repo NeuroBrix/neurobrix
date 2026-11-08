@@ -35,6 +35,8 @@ from .table_gather import gather_rows
 # The rule and its history live in core.runtime_values.
 from neurobrix.core.runtime_values import require_max_tokens
 from neurobrix.core.flow.shared_steps import effective_sampling as _effective_sampling   # both branches read the sampling alike
+import logging
+_log = logging.getLogger(__name__)
 
 
 # Deterministic sampler seed — duplicated identically in triton/flow/tts_llm.py
@@ -213,7 +215,7 @@ class TTSLLMEngine(ComponentFlowHandler):
 
         self.ctx.variable_resolver.resolved["global.input_ids"] = input_ids
         self.ctx.variable_resolver.resolved["input_ids"] = input_ids
-        print(f"   [Tokenizer] '{prompt[:50]}...' → {input_ids.shape[1]} tokens")
+        _log.debug(f"   [Tokenizer] '{prompt[:50]}...' → {input_ids.shape[1]} tokens")
 
         # ── Step 2: Voice encoder (speaker embedding) ──
         speaker_emb = None
@@ -223,19 +225,19 @@ class TTSLLMEngine(ComponentFlowHandler):
                 # Check if we have reference audio for VE
                 ref_audio = self.ctx.variable_resolver.resolved.get("global.ref_audio")
                 if ref_audio is not None and isinstance(ref_audio, torch.Tensor):
-                    print(f"   [{comp_name}] Running voice encoder...")
+                    _log.debug(f"   [{comp_name}] Running voice encoder...")
                     start = time.perf_counter()
                     self._ensure_weights_loaded(comp_name)
                     self.ctx.variable_resolver.resolved["mels"] = ref_audio
                     self._execute_component(comp_name, "forward", None)
                     speaker_emb = self._get_component_output(comp_name)
                     elapsed = (time.perf_counter() - start) * 1000
-                    print(f"   [{comp_name}] Done in {elapsed:.0f}ms, speaker_emb: {speaker_emb.shape if speaker_emb is not None else 'None'}")
+                    _log.debug(f"   [{comp_name}] Done in {elapsed:.0f}ms, speaker_emb: {speaker_emb.shape if speaker_emb is not None else 'None'}")
                     if not self.ctx.persistent_mode:
                         self._unload_component_weights(comp_name)
                         release_flow_memory(self.ctx.primary_device)
                 else:
-                    print(f"   [{comp_name}] Skipped (no reference audio)")
+                    _log.debug(f"   [{comp_name}] Skipped (no reference audio)")
 
         # ── Step 3: Autoregressive speech token generation ──
         lm_name = lm_stage["component"]
@@ -291,9 +293,9 @@ class TTSLLMEngine(ComponentFlowHandler):
         except KeyError:
             do_cfg = False  # no guidance_scale in cascade -> disabled (cond-only)
         if do_cfg:
-            print(f"   [{lm_name}] CFG enabled via CFGEngine (guidance_scale={guidance_scale}, sequential)")
+            _log.debug(f"   [{lm_name}] CFG enabled via CFGEngine (guidance_scale={guidance_scale}, sequential)")
 
-        print(f"   [{lm_name}] Loading weights...")
+        _log.debug(f"   [{lm_name}] Loading weights...")
         self._ensure_weights_loaded(lm_name)
 
         # Load auxiliary weights from the same component's weight shard
@@ -319,7 +321,7 @@ class TTSLLMEngine(ComponentFlowHandler):
         cond_embeds = self._build_conditioning(
             speaker_emb, speech_emb_w, speech_pos_emb_w, device, dtype
         ).to(dtype=dtype)
-        print(f"   [{lm_name}] Conditioning: {cond_embeds.shape}")
+        _log.debug(f"   [{lm_name}] Conditioning: {cond_embeds.shape}")
 
         # ── Build text embeddings ──
         # CFG uncond text = zero TOKEN embedding + learned POSITION (vendor order:
@@ -335,7 +337,7 @@ class TTSLLMEngine(ComponentFlowHandler):
                 text_embeds = text_embeds + text_pos
                 uncond_text_embeds = uncond_text_embeds + text_pos  # zero-token + position
 
-        print(f"   [{lm_name}] Text embeds: {text_embeds.shape}")
+        _log.debug(f"   [{lm_name}] Text embeds: {text_embeds.shape}")
 
         # ── Initial speech token (BOS) ──
         with torch.no_grad():
@@ -355,9 +357,9 @@ class TTSLLMEngine(ComponentFlowHandler):
         cond_len = cond_embeds.shape[1]
         text_len = text_embeds.shape[1]
 
-        print(f"   [{lm_name}] Initial context: {context_embeds.shape} "
-              f"(cond={cond_len}, text={text_len}, speech=1)")
-        print(f"   [{lm_name}] Generating speech tokens (max={max_tokens})...")
+        _log.debug(f"   [{lm_name}] Initial context: {context_embeds.shape} "
+                   f"(cond={cond_len}, text={text_len}, speech=1)")
+        _log.debug(f"   [{lm_name}] Generating speech tokens (max={max_tokens})...")
         start = time.perf_counter()
 
         generated_ids: list = []
@@ -375,12 +377,12 @@ class TTSLLMEngine(ComponentFlowHandler):
             _forced_seq = [int(t) for t in _j_fsi.load(open(_force_ids))]
             if _t3dump:
                 generated_ids = []  # filled by the teacher-forcing loop below
-                print(f"   [{lm_name}] TEACHER-FORCING {len(_forced_seq)} tokens; "
-                      f"dumping t3 logits → {_t3dump}")
+                _log.debug(f"   [{lm_name}] TEACHER-FORCING {len(_forced_seq)} tokens; "
+                           f"dumping t3 logits → {_t3dump}")
             else:
                 generated_ids = list(_forced_seq)
-                print(f"   [{lm_name}] FORCED {len(generated_ids)} speech tokens "
-                      f"from {_force_ids} (decode skipped)")
+                _log.debug(f"   [{lm_name}] FORCED {len(generated_ids)} speech tokens "
+                           f"from {_force_ids} (decode skipped)")
 
         # The speech LM decodes on its KV cache (core/flow/decoder_cache): one sequence per context,
         # the CFG uncond context a second BRANCH of the same cache (Prism prices both,
@@ -483,7 +485,7 @@ class TTSLLMEngine(ComponentFlowHandler):
                 uncond_context = torch.cat([uncond_context, token_embed], dim=1)
 
         elapsed = (time.perf_counter() - start) * 1000
-        print(f"   [{lm_name}] Generated {len(generated_ids)} speech tokens in {elapsed:.0f}ms")
+        _log.debug(f"   [{lm_name}] Generated {len(generated_ids)} speech tokens in {elapsed:.0f}ms")
 
         # Store generated speech tokens, filtering out special tokens (>= vocoder vocab_size)
         # T3 generates tokens in [0, speech_vocab) + special tokens (start/stop speech).
@@ -503,15 +505,15 @@ class TTSLLMEngine(ComponentFlowHandler):
 
         speech_ids = [t for t in generated_ids if vocoder_vocab_size is None or t < vocoder_vocab_size]
         if len(speech_ids) < len(generated_ids):
-            print(f"   [{lm_name}] Filtered {len(generated_ids) - len(speech_ids)} special tokens "
-                  f"(vocab_size={vocoder_vocab_size})")
+            _log.debug(f"   [{lm_name}] Filtered {len(generated_ids) - len(speech_ids)} special tokens "
+                       f"(vocab_size={vocoder_vocab_size})")
 
         if _os_fsi.environ.get("NBX_DUMP_SPEECH_IDS"):
             import json as _jd_si
             with open(_os_fsi.environ["NBX_DUMP_SPEECH_IDS"], "w") as _f_si:
                 _jd_si.dump([int(t) for t in speech_ids], _f_si)
-            print(f"   [{lm_name}] Dumped {len(speech_ids)} speech ids -> "
-                  f"{_os_fsi.environ['NBX_DUMP_SPEECH_IDS']}")
+            _log.debug(f"   [{lm_name}] Dumped {len(speech_ids)} speech ids -> "
+                       f"{_os_fsi.environ['NBX_DUMP_SPEECH_IDS']}")
 
         self.ctx.variable_resolver.resolved["global.generated_token_ids"] = speech_ids
         speech_tokens = torch.tensor([speech_ids], dtype=torch.long, device=device)
@@ -526,7 +528,7 @@ class TTSLLMEngine(ComponentFlowHandler):
         if vocoder_stage is not None:
             voc_name = vocoder_stage["component"]
             if voc_name in self.ctx.executors:
-                print(f"   [{voc_name}] Running vocoder...")
+                _log.debug(f"   [{voc_name}] Running vocoder...")
                 start = time.perf_counter()
                 self._ensure_weights_loaded(voc_name)
 
@@ -567,7 +569,7 @@ class TTSLLMEngine(ComponentFlowHandler):
                 elif isinstance(output, torch.Tensor):
                     audio_output = output
                 elapsed = (time.perf_counter() - start) * 1000
-                print(f"   [{voc_name}] Done in {elapsed:.0f}ms")
+                _log.debug(f"   [{voc_name}] Done in {elapsed:.0f}ms")
 
                 if audio_output is not None:
                     self.ctx.variable_resolver.resolved["global.output_audio"] = audio_output
@@ -622,9 +624,9 @@ class TTSLLMEngine(ComponentFlowHandler):
         loaded = list(result.keys())
         missing = [k for k in aux_config if k not in result]
         if loaded:
-            print(f"   [{comp_name}] Auxiliary weights loaded: {len(loaded)}/{len(aux_config)}")
+            _log.debug(f"   [{comp_name}] Auxiliary weights loaded: {len(loaded)}/{len(aux_config)}")
         if missing:
-            print(f"   [{comp_name}] Auxiliary weights missing: {missing}")
+            _log.warning(f"   [{comp_name}] Auxiliary weights missing: {missing}")
 
         return result
 
@@ -750,4 +752,4 @@ class TTSLLMEngine(ComponentFlowHandler):
                 wf.setframerate(sample_rate)
                 wf.writeframes(struct.pack(f'<{len(audio_int16)}h', *audio_int16))
 
-        print(f"   [Audio] Saved: {output_path} ({len(audio_np)/sample_rate:.1f}s @ {sample_rate}Hz)")
+        _log.debug(f"   [Audio] Saved: {output_path} ({len(audio_np)/sample_rate:.1f}s @ {sample_rate}Hz)")

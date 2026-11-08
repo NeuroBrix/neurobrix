@@ -67,10 +67,7 @@ def cmd_info(args):
     if wants_json(args):
         emit("info", info_record(args))
         return
-    print("=" * 70)
     print(f"NeuroBrix v{__version__}")
-    print("Universal Deep Learning Inference Engine")
-    print("=" * 70)
 
     show_all = not any([args.models, args.hardware, args.system])
 
@@ -155,9 +152,7 @@ def cmd_inspect(args):
                          "nbx_version": manifest.get("nbx_version"), "family": manifest.get("family"),
                          "components": comps})
         return
-    print("=" * 70)
     print(f"NBX Inspect: {nbx_path.name}")
-    print("=" * 70)
 
     container = NBXContainer.load(str(nbx_path))
     manifest = container.get_manifest() or {}

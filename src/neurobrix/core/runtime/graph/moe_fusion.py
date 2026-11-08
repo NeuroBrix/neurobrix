@@ -18,6 +18,8 @@ import re
 import os
 
 from neurobrix.nbx.neurotax import SynonymRegistry as _NeuroTax
+import logging
+_log = logging.getLogger(__name__)
 
 # The expert weights' key tokens, AS THE PARSER NAMES THEM — the neurotaxe has one reader.
 # Spelled here once, a renamed canonical token (the SwiGLU gate's `gate` -> `ffn_gate`,
@@ -134,7 +136,7 @@ def detect_and_fuse_moe(dag: Dict[str, Any], family: str, norm_topk_prob: bool =
                 if refusals is not None:
                     refusals[topk_uid] = result.reason
                 if os.environ.get("NBX_DEBUG") or os.environ.get("NBX_MOE_FUSION_LOG"):
-                    print(f"[MoE Fusion] {topk_uid}: not fused — {result.reason}")
+                    _log.debug(f"[MoE Fusion] {topk_uid}: not fused — {result.reason}")
                 result = None
         if result is not None:
             removed_count, fused_uid, fused_op, dead_outputs_count = result
@@ -174,11 +176,9 @@ def detect_and_fuse_moe(dag: Dict[str, Any], family: str, norm_topk_prob: bool =
     # Criterion (H): log output-sweep count. Expect 0 on dense LLMs (TinyLlama),
     # ~384 × num_blocks on MoE (e.g. Qwen3-30B-A3B: 18432 ± 10%).
     if os.environ.get("NBX_DEBUG") or os.environ.get("NBX_MOE_FUSION_LOG"):
-        print(
-            f"[MoE Fusion] fused_layers={fused_count} "
+        _log.debug(f"[MoE Fusion] fused_layers={fused_count} "
             f"ops_removed={ops_removed_total} "
-            f"output_sweep_removed={dead_outputs_total}"
-        )
+            f"output_sweep_removed={dead_outputs_total}")
 
     return dag
 

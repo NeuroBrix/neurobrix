@@ -40,6 +40,8 @@ from neurobrix.triton.cfg.engine import TritonCFGEngine
 from neurobrix.core.runtime_values import require_max_tokens
 from neurobrix.core.flow.shared_steps import _require_default, encode_nopad   # both branches
 from neurobrix.core.flow.base import ComponentFlowHandler   # the executor's four component callables, both branches
+import logging
+_log = logging.getLogger(__name__)
 
 
 def _to_numpy(t) -> np.ndarray:
@@ -163,7 +165,7 @@ class TritonNextTokenDiffusionEngine(ComponentFlowHandler):
             raise RuntimeError("ZERO FALLBACK: next_token_diffusion requires --prompt text.")
 
         prompt_ids = speaker_prompt_ids(tok, prompt, speech_start_id)
-        print(f"   [{self.LM}] prompt tokens ({len(prompt_ids)}): ...{prompt_ids[-12:]}")
+        _log.debug(f"   [{self.LM}] prompt tokens ({len(prompt_ids)}): ...{prompt_ids[-12:]}")
 
         for comp in (self.LM, self.HEAD, self.ACOUSTIC_TOK, self.SEMANTIC_TOK,
                      self.ACOUSTIC_CONN, self.SEMANTIC_CONN):
@@ -179,11 +181,11 @@ class TritonNextTokenDiffusionEngine(ComponentFlowHandler):
         elapsed = (time.perf_counter() - start) * 1000
         if _vv_dump_path and _vv_latents:
             np.save(_vv_dump_path, np.stack(_vv_latents))
-            print(f"   [VV-DIAG] dumped {len(_vv_latents)} first-K latents → {_vv_dump_path}")
-        print(f"   [{self.LM}] {step + 1} steps, {n_diffusion} speech_diffusion tokens in {elapsed:.0f}ms")
-        print(f"   [{self.LM}] emitted histogram: start={emitted_tokens.count(speech_start_id)} "
-              f"diff={emitted_tokens.count(speech_diffusion_id)} end={emitted_tokens.count(speech_end_id)} "
-              f"eos={emitted_tokens.count(eos_token_id)}")
+            _log.debug(f"   [VV-DIAG] dumped {len(_vv_latents)} first-K latents → {_vv_dump_path}")
+        _log.debug(f"   [{self.LM}] {step + 1} steps, {n_diffusion} speech_diffusion tokens in {elapsed:.0f}ms")
+        _log.debug(f"   [{self.LM}] emitted histogram: start={emitted_tokens.count(speech_start_id)} "
+                   f"diff={emitted_tokens.count(speech_diffusion_id)} end={emitted_tokens.count(speech_end_id)} "
+                   f"eos={emitted_tokens.count(eos_token_id)}")
 
         if not audio_chunks:
             raise RuntimeError(
@@ -192,7 +194,7 @@ class TritonNextTokenDiffusionEngine(ComponentFlowHandler):
 
         waveform = audio_chunks[0] if len(audio_chunks) == 1 else NBXTensor.cat(audio_chunks, -1)  # [1,1,T]
         sr = float(defaults.get("sample_rate", 24000))
-        print(f"   [Output] waveform {list(waveform.shape)} ({waveform.shape[-1] / sr:.2f}s)")
+        _log.debug(f"   [Output] waveform {list(waveform.shape)} ({waveform.shape[-1] / sr:.2f}s)")
         self.ctx.variable_resolver.resolved["global.output_audio"] = waveform
 
         if not self.ctx.persistent_mode:
@@ -220,8 +222,8 @@ class TritonNextTokenDiffusionEngine(ComponentFlowHandler):
         use_cfg = cfg_scale != 1.0
         neg_inputs_embeds_np = embed_np[np.array([speech_start_id], dtype=np.int64)][np.newaxis, :, :]  # [1,1,H]
 
-        print(f"   [{self.LM}] next-token-diffusion (max_steps={max_steps}, "
-              f"ddpm_steps={ddpm_steps}, cfg={cfg_scale})...")
+        _log.debug(f"   [{self.LM}] next-token-diffusion (max_steps={max_steps}, "
+                   f"ddpm_steps={ddpm_steps}, cfg={cfg_scale})...")
         start = time.perf_counter()
 
         emitted_tokens: List[int] = []
@@ -260,8 +262,8 @@ class TritonNextTokenDiffusionEngine(ComponentFlowHandler):
                           "start" if next_token == speech_start_id else
                           "end" if next_token == speech_end_id else
                           "diff" if next_token == speech_diffusion_id else str(next_token))
-                print(f"   [{self.LM}] step {step}: tok={_tname} "
-                      f"(diff_so_far={n_diffusion}, seq={inputs_embeds_np.shape[1]})", flush=True)
+                _log.debug(f"   [{self.LM}] step {step}: tok={_tname} "
+                           f"(diff_so_far={n_diffusion}, seq={inputs_embeds_np.shape[1]})")
 
             if next_token == eos_token_id:
                 break
@@ -358,9 +360,9 @@ class TritonNextTokenDiffusionEngine(ComponentFlowHandler):
         use_cfg = cfg_scale != 1.0
         pos_branch = session.branch_state()
         neg_branch = session.new_branch() if use_cfg else None
-        print(f"   [{self.LM}] next-token-diffusion (max_steps={max_steps}, "
-              f"ddpm_steps={ddpm_steps}, cfg={cfg_scale}), KV-cached decoder"
-              f"{' with a negative branch' if use_cfg else ''}...")
+        _log.debug(f"   [{self.LM}] next-token-diffusion (max_steps={max_steps}, "
+                   f"ddpm_steps={ddpm_steps}, cfg={cfg_scale}), KV-cached decoder"
+                   f"{' with a negative branch' if use_cfg else ''}...")
         start = time.perf_counter()
         emitted_tokens: List[int] = []
         audio_chunks: List[NBXTensor] = []
@@ -391,8 +393,8 @@ class TritonNextTokenDiffusionEngine(ComponentFlowHandler):
                           "start" if next_token == speech_start_id else
                           "end" if next_token == speech_end_id else
                           "diff" if next_token == speech_diffusion_id else str(next_token))
-                print(f"   [{self.LM}] step {step}: tok={_tname} "
-                      f"(diff_so_far={n_diffusion}, seq={seq})", flush=True)
+                _log.debug(f"   [{self.LM}] step {step}: tok={_tname} "
+                           f"(diff_so_far={n_diffusion}, seq={seq})")
             if next_token == eos_token_id:
                 break
             next_embed = _nbx_index_wrappers.embedding(embed_w, ids([next_token]))                              # [1,1,H]

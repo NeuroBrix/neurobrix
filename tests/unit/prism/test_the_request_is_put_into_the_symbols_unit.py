@@ -124,7 +124,7 @@ def test_the_scaling_says_what_it_followed(solver, caplog):
     """It multiplies the number the per-cell memory gate consults. A decision
     that changes a plan and leaves no line behind is indistinguishable from not
     having run — `followed` was built and thrown away."""
-    with caplog.at_level(logging.INFO, logger="neurobrix.core.prism.solver"):
+    with caplog.at_level(logging.DEBUG, logger="neurobrix.core.prism.solver"):
         scale(solver, _comp(("height", 112), ("width", 80)), InputConfig(height=448, width=448))
     assert any("x22.4" in r.getMessage() for r in caplog.records), caplog.text
     said = " ".join(r.getMessage() for r in caplog.records)
@@ -185,7 +185,7 @@ def test_a_symbol_no_request_field_answers_for_is_SAID_not_skipped(solver, caplo
     """A dimension the estimate stops following in silence is how the plan read
     the same number at 8 and 9 frames while one ran and the other died."""
     import logging
-    with caplog.at_level(logging.INFO, logger="neurobrix.core.prism.solver"):
+    with caplog.at_level(logging.DEBUG, logger="neurobrix.core.prism.solver"):
         scale(solver, _comp(("a_dimension_nobody_maps", 7)), InputConfig(num_frames=9))
     said = " ".join(r.getMessage() for r in caplog.records)
     assert "a_dimension_nobody_maps" in said

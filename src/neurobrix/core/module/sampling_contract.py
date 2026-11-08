@@ -28,6 +28,7 @@ all mean "not asked for".
 """
 
 from __future__ import annotations
+import logging
 
 # Value at which each parameter is a no-op, i.e. not actually requested.
 _NEUTRAL = {
@@ -108,12 +109,11 @@ def enforce_sampling_support(site: str, supported, config,
         key = (site, tuple(soft))
         if key not in _WARNED:
             _WARNED.add(key)
-            import sys
-            print(f"[NeuroBrix] sampling: {site} ignores {', '.join(soft)} "
-                  f"inherited from the model registry — that path does not "
-                  f"implement it. Not an error (the value was not requested "
-                  f"for this path), but the divergence is real and is "
-                  f"tracked as {_CHANTIER}.", file=sys.stderr, flush=True)
+            logging.getLogger(__name__).warning(f"[NeuroBrix] sampling: {site} ignores {', '.join(soft)} "
+                         f"inherited from the model registry — that path does not "
+                         f"implement it. Not an error (the value was not requested "
+                         f"for this path), but the divergence is real and is "
+                         f"tracked as {_CHANTIER}.")
 
 
 _WARNED = set()

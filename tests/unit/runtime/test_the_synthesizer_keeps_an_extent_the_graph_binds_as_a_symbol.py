@@ -53,9 +53,9 @@ def test_a_symbolic_sequence_extent_is_handed_to_the_graph_whole():
     assert tuple(out["visual_pos_masks"].shape) == (1, 213, 2048)
 
 
-def test_a_literal_sequence_extent_is_still_cut_to_the_literal_and_said(capsys):
+def test_a_literal_sequence_extent_is_still_cut_to_the_literal_and_said(engine_log):
     synth = _synth(symbolic_seq=False)
     out = synth.apply_shape_transforms("thinker.model", {"inputs_embeds": torch.zeros(1, 213, 2048)})
     assert tuple(out["inputs_embeds"].shape) == (1, 23, 2048)
-    said = capsys.readouterr().out
+    said = engine_log()
     assert "thinker.model" in said and "inputs_embeds" in said and "213" in said and "23" in said

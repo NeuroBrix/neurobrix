@@ -12,7 +12,11 @@ Usage:
     neurobrix chat --temperature 0.7
 """
 
+import logging
 import sys
+
+log = logging.getLogger(__name__)
+
 
 
 def cmd_chat(args):
@@ -27,9 +31,7 @@ def cmd_chat(args):
 
     # Check daemon is running
     if not DaemonClient.is_running():
-        print("[Chat] No daemon running.")
-        print("[Chat] Start one first:")
-        print("  neurobrix serve --model <name>")
+        log.error("Error: no daemon is running; start one first: neurobrix serve --model <name>")
         sys.exit(1)
 
     # Connect
@@ -37,14 +39,14 @@ def cmd_chat(args):
     try:
         client.connect()
     except RuntimeError as e:
-        print(f"[Chat] Connection failed: {e}")
+        log.error(f"Error: cannot connect to the daemon: {(str(e).strip().splitlines() or [''])[0]}")
         sys.exit(1)
 
     # Get status for display
     try:
         status = client.status()
     except RuntimeError as e:
-        print(f"[Chat] Failed to get status: {e}")
+        log.error(f"Error: the daemon gave no status: {(str(e).strip().splitlines() or [''])[0]}")
         client.close()
         sys.exit(1)
 
@@ -52,8 +54,7 @@ def cmd_chat(args):
     family = status.get("family", "unknown")
 
     if family != "llm":
-        print(f"[Chat] Model family is '{family}', not 'llm'.")
-        print(f"[Chat] Use 'neurobrix run' for non-LLM models.")
+        log.error(f"Error: the daemon serves a '{family}' model, not an 'llm'; use neurobrix run for it")
         client.close()
         sys.exit(1)
 
@@ -66,15 +67,14 @@ def cmd_chat(args):
     if getattr(args, 'repetition_penalty', None) is not None:
         gen_kwargs["repetition_penalty"] = args.repetition_penalty
 
-    print(f"\nNeuroBrix Chat — {model_name}")
-    print(f"Commands: /new /context /status /quit")
-    print(f"{'─' * 50}\n")
+    print(f"{model_name} — /new /context /status /quit")
 
     try:
         while True:
             try:
                 user_input = input("You: ").strip()
             except EOFError:
+                print()          # ends the prompt's line
                 break
 
             if not user_input:
@@ -89,7 +89,7 @@ def cmd_chat(args):
 
                 elif cmd == "/new":
                     client.new_chat()
-                    print("[New conversation started]\n")
+                    print("[New conversation started]")
                     continue
 
                 elif cmd == "/context":
@@ -102,11 +102,11 @@ def cmd_chat(args):
                             max_ctx = ctx.get("max_context", 0)
                             usage = ctx.get("usage_pct", 0)
                             print(f"[Context] {turns} messages, ~{tokens} tokens, "
-                                  f"{usage}% of {max_ctx} max\n")
+                                  f"{usage}% of {max_ctx} max")
                         else:
-                            print("[Context] No active conversation\n")
+                            print("[Context] No active conversation")
                     except RuntimeError as e:
-                        print(f"[Error] {e}\n")
+                        log.error(f"Error: {(str(e).strip().splitlines() or [''])[0]}")
                     continue
 
                 elif cmd == "/status":
@@ -115,32 +115,32 @@ def cmd_chat(args):
                         print(f"[Status] Model: {st.get('model')}")
                         print(f"[Status] Family: {st.get('family')}")
                         print(f"[Status] Mode: {st.get('mode')}")
-                        print(f"[Status] VRAM: {st.get('vram_used_gb', '?')} GB\n")
+                        print(f"[Status] VRAM: {st.get('vram_used_gb', '?')} GB")
                     except RuntimeError as e:
-                        print(f"[Error] {e}\n")
+                        log.error(f"Error: {(str(e).strip().splitlines() or [''])[0]}")
                     continue
 
                 else:
                     print(f"[Unknown command: {cmd}]")
-                    print(f"Commands: /new /context /status /quit\n")
+                    print("Commands: /new /context /status /quit")
                     continue
 
             # Send chat message
             try:
                 result = client.chat(user_input, **gen_kwargs)
                 if result.get("summarized"):
-                    print(f"\n[Context compressed — older turns summarized]")
+                    print("[Context compressed — older turns summarized]")
                 text = result.get("text", "")
                 if text:
-                    print(f"\nAssistant: {text}\n")
+                    print(f"Assistant: {text}")
                 else:
-                    print(f"\n[No response generated]\n")
+                    print("[No response generated]")
             except RuntimeError as e:
-                print(f"\n[Error] {e}\n")
+                log.error(f"Error: {(str(e).strip().splitlines() or [''])[0]}")
 
     except KeyboardInterrupt:
-        print("\n")
+        print()
 
     finally:
         client.close()
-        print("[Chat] Disconnected")
+        log.debug("[Chat] Disconnected")

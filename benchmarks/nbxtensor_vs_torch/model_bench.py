@@ -97,7 +97,8 @@ def run_cell(model: str, contender: str, outdir: Path, python: str, label: str =
     name = f"{contender}[{label}]" if label else contender
     out = outdir / f"{model}.{name}.{ext}"
     cmd = [python, "-m", "neurobrix", "run", "--model", model, *request, *ENGINES[contender], "--output", str(out)]
-    env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(REPO / "src"), str(REPO / "nbxtensor" / "src")]))
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(REPO / "src"), str(REPO / "nbxtensor" / "src")]),
+               NBX_LOG="debug")      # [Timings] / [Peak] are developer lines (nbxtensor/terminal.py)
     t0 = time.time()
     p = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=str(REPO))
     wall = time.time() - t0

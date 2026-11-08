@@ -181,7 +181,7 @@ def test_to_copy_no_clamp_when_target_not_fp16():
 # Env-gated NBX_DTYPE_CLAMP_DIAG behavior (Ch7 Commit 2)
 # ─────────────────────────────────────────────────────────────────────
 
-def test_clamp_diag_default_off_silent(capsys):
+def test_clamp_diag_default_off_silent(engine_log):
     """Default-off: zero runtime cost / zero output even when the
     clamp actually fires."""
     # Module-level flag was set at import time from os.environ; force
@@ -195,11 +195,11 @@ def test_clamp_diag_default_off_silent(capsys):
                         {"output_dtypes": ["float16"]})
     fn(torch.tensor([1.0e6], dtype=torch.float32))
 
-    captured = capsys.readouterr()
-    assert "NBX_DTYPE_CLAMP_DIAG" not in captured.out
+    captured = engine_log()
+    assert "NBX_DTYPE_CLAMP_DIAG" not in captured
 
 
-def test_clamp_diag_enabled_fires_one_shot_per_site(capsys):
+def test_clamp_diag_enabled_fires_one_shot_per_site(engine_log):
     engine_module._CLAMP_DIAG_ENABLED = True
     engine_module._CLAMP_DIAG_FIRED.clear()
 
@@ -214,8 +214,8 @@ def test_clamp_diag_enabled_fires_one_shot_per_site(capsys):
     # Third call: source in range → no log either.
     fn(torch.tensor([100.0], dtype=torch.float32))
 
-    captured = capsys.readouterr()
-    lines = [l for l in captured.out.splitlines()
+    captured = engine_log()
+    lines = [l for l in captured.splitlines()
              if "NBX_DTYPE_CLAMP_DIAG" in l]
     assert len(lines) == 1, (
         f"Expected exactly one diag line (one-shot per site), got "
@@ -230,7 +230,7 @@ def test_clamp_diag_enabled_fires_one_shot_per_site(capsys):
     engine_module._CLAMP_DIAG_FIRED.clear()
 
 
-def test_clamp_diag_enabled_silent_when_no_overflow(capsys):
+def test_clamp_diag_enabled_silent_when_no_overflow(engine_log):
     engine_module._CLAMP_DIAG_ENABLED = True
     engine_module._CLAMP_DIAG_FIRED.clear()
 
@@ -239,8 +239,8 @@ def test_clamp_diag_enabled_silent_when_no_overflow(capsys):
                         {"output_dtypes": ["float16"]})
     fn(torch.tensor([100.0, -100.0, 0.0], dtype=torch.float32))
 
-    captured = capsys.readouterr()
-    assert "NBX_DTYPE_CLAMP_DIAG" not in captured.out
+    captured = engine_log()
+    assert "NBX_DTYPE_CLAMP_DIAG" not in captured
 
     engine_module._CLAMP_DIAG_ENABLED = False
     engine_module._CLAMP_DIAG_FIRED.clear()

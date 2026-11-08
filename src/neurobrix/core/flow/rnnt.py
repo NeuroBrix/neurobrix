@@ -28,6 +28,8 @@ from .base import ComponentFlowHandler, register_flow
 
 from .table_gather import gather_rows
 from neurobrix.core.flow.shared_steps import RNNTSteps, joint_role   # the steps both branches share
+import logging
+_log = logging.getLogger(__name__)
 
 
 @register_flow("rnnt")
@@ -54,7 +56,7 @@ class RNNTEngine(RNNTSteps, ComponentFlowHandler):
         _windows = getattr(self, "_stt_windows", None) or [None]
         _n_win = len(_windows)
         if _n_win > 1:
-            print(f"   [Audio] Long-form: {_n_win} windows")
+            _log.debug(f"   [Audio] Long-form: {_n_win} windows")
 
         tokens: list = []
         for _wi in range(_n_win):
@@ -67,8 +69,8 @@ class RNNTEngine(RNNTSteps, ComponentFlowHandler):
             self._execute_component("encoder", "forward", None)
             enc_output = self._get_component_output("encoder")
             enc_ms = (time.perf_counter() - start) * 1000
-            print(f"   [encoder] Done in {enc_ms:.0f}ms, output {enc_output.shape}"
-                  + (f" (window {_wi + 1}/{_n_win})" if _n_win > 1 else ""))
+            _log.debug("%s", f"   [encoder] Done in {enc_ms:.0f}ms, output {enc_output.shape}"
+                             + (f" (window {_wi + 1}/{_n_win})" if _n_win > 1 else ""))
 
             # Step 3: RNNT greedy decode
             start = time.perf_counter()
@@ -90,7 +92,7 @@ class RNNTEngine(RNNTSteps, ComponentFlowHandler):
             tokens.extend(_wtok)
 
             dec_ms = (time.perf_counter() - start) * 1000
-            print(f"   [rnnt_decode] {len(tokens)} tokens in {dec_ms:.0f}ms")
+            _log.debug(f"   [rnnt_decode] {len(tokens)} tokens in {dec_ms:.0f}ms")
 
         if not self.ctx.persistent_mode:
             self._unload_component_weights("encoder")
@@ -103,7 +105,7 @@ class RNNTEngine(RNNTSteps, ComponentFlowHandler):
         text = self._decode_tokens(tokens)
         self.ctx.variable_resolver.resolved["global.transcription"] = text
 
-        print(f"\n[Transcription]\n{text}")
+        _log.debug(f"[Transcription]\n{text}")
         return self.ctx.variable_resolver.resolve_all()
 
     # ─────────────────────────────────────────────────────────
@@ -151,7 +153,7 @@ class RNNTEngine(RNNTSteps, ComponentFlowHandler):
             audio = np.interp(indices, np.arange(len(audio)), audio).astype(np.float32)
             sr = target_sr
 
-        print(f"   [Audio] Loading: {audio_path}")
+        _log.debug(f"   [Audio] Loading: {audio_path}")
 
         waveform = torch.from_numpy(audio).to(device=device, dtype=torch.float32)
 
@@ -197,7 +199,7 @@ class RNNTEngine(RNNTSteps, ComponentFlowHandler):
         features = mel_spec.T.unsqueeze(0)  # [1, n_mels, frames]
 
         actual_frames = features.shape[2]
-        print(f"   [Audio] Features: {features.shape} (nemo_mel, {actual_frames} frames)")
+        _log.debug(f"   [Audio] Features: {features.shape} (nemo_mel, {actual_frames} frames)")
 
         # Pad to match encoder's traced frame count
         expected_frames = 3000
@@ -243,8 +245,8 @@ class RNNTEngine(RNNTSteps, ComponentFlowHandler):
                 # embedded NeMo config runs both on the built-in NeMo
                 # values — said out loud, never silently (the rebuild
                 # that embeds model_config.yaml is D-PARAKEET-SYMBOLIC-T).
-                print(f"   [Audio] NeMo preprocessor params: built-in values "
-                      f"(no embedded config in this build) — sr={sr} hop={hop_length}")
+                _log.debug(f"   [Audio] NeMo preprocessor params: built-in values "
+                           f"(no embedded config in this build) — sr={sr} hop={hop_length}")
             self._stt_overlap_mel = int(round(float(_lf["rnnt_overlap_seconds"]) * sr / hop_length))
             wins = []
             for _start, _valid in rnnt_window_plan(actual_frames, expected_frames,
@@ -347,8 +349,8 @@ class RNNTEngine(RNNTSteps, ComponentFlowHandler):
         durations = defaults.get("tdt_durations")
         if num_tdt_durations > 1 and durations is None:
             durations = list(range(num_tdt_durations))
-            print(f"   [rnnt_decode] TDT durations: built-in consecutive "
-                  f"{durations} (not carried by this build)")
+            _log.debug(f"   [rnnt_decode] TDT durations: built-in consecutive "
+                       f"{durations} (not carried by this build)")
         max_symbols_per_step = int(defaults.get("max_symbols_per_step", 10))
         t = 0
         g = None                      # prediction-network output for (last_token, state)

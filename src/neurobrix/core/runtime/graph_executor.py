@@ -57,6 +57,8 @@ from .graph.execution_context import ExecutionContext
 from .graph.tensor_resolver import TensorResolver
 from .graph.memory_pool import MemoryPool
 from neurobrix.core.memory import MemoryManager
+import logging
+_log = logging.getLogger(__name__)
 
 
 def output_key(meta: Optional[dict], tid: str) -> str:
@@ -195,9 +197,9 @@ def _save_inputs_if_asked(component: str, inputs: Dict[str, Any], mode: str) -> 
                 np.save(os.path.join(out, f"{component}.{mode}.{safe}.npy"), t)
             else:
                 continue
-            print(f"[save-inputs] {component} ({mode}) {name}: {getattr(t, 'shape', '?')} saved under {out}", flush=True)
+            _log.debug(f"[save-inputs] {component} ({mode}) {name}: {getattr(t, 'shape', '?')} saved under {out}")
         except Exception as exc:                                       # noqa: BLE001
-            print(f"[save-inputs] {component} ({mode}) {name}: NOT saved ({type(exc).__name__}: {exc})", flush=True)
+            _log.debug(f"[save-inputs] {component} ({mode}) {name}: NOT saved ({type(exc).__name__}: {exc})")
 
 #: the most each card held (torch's reserved bytes) before a component's reset of the peak counter: the RUN's peak is
 #: the max of these and the counter's last reading (`process_peak_reserved`)
@@ -733,9 +735,9 @@ class GraphExecutor:
         else:
             self._load_weights_native(args["nbx_path"], args["component"],
                                       args["shard_map"], only=missing)
-        print(f"   [{'Triton' if self.mode.startswith('triton') else 'Compiled'}] "
-              f"'{args['component']}': {len(missing)} more weights loaded — the "
-              f"declared MoE fusion reads them", flush=True)
+        _log.debug(f"   [{'Triton' if self.mode.startswith('triton') else 'Compiled'}] "
+                   f"'{args['component']}': {len(missing)} more weights loaded — the "
+                   f"declared MoE fusion reads them")
 
     def set_runtime_resolution(self, height: int, width: int) -> None:
         """
@@ -1267,9 +1269,9 @@ class GraphExecutor:
                 # per-engine lowering to keep in sync.
                 _fh_removed = apply_fusion_horizontal(self._dag, _fh_plan)
                 self._dag[_FH_KEY] = _fh_plan
-                print(f"[Optim] fusion_horizontal: {_fh_plan['n_groups']} "
-                      f"sibling-matmul groups, {_fh_removed} launches "
-                      f"removed ({self._component_name})")
+                _log.debug(f"[Optim] fusion_horizontal: {_fh_plan['n_groups']} "
+                           f"sibling-matmul groups, {_fh_removed} launches "
+                           f"removed ({self._component_name})")
 
         # OptimizationEngine hook (Phase 2, scoping doc D1): THE choke
         # point where passes annotate the ONE in-memory graph all four
@@ -1286,9 +1288,9 @@ class GraphExecutor:
                 self._dag[PLAN_KEY] = _cf_plan
                 # Activation evidence for ON-vs-OFF gates: a gate run
                 # must PROVE the ON arm was on, never assume it.
-                print(f"[Optim] const_fold: {len(_cf_plan['op_uids'])} ops "
-                      f"-> {len(_cf_plan['frontier_tids'])} bind-time "
-                      f"constants ({self._component_name})")
+                _log.debug(f"[Optim] const_fold: {len(_cf_plan['op_uids'])} ops "
+                           f"-> {len(_cf_plan['frontier_tids'])} bind-time "
+                           f"constants ({self._component_name})")
 
         # State engine step 4: the inputs the container declares invariant for this component (topology.json `state`,
         # kind `invariant`), stamped on the dag for both engines' sequences to plan from at compile.
@@ -1305,9 +1307,9 @@ class GraphExecutor:
             _fv_plan = plan_fusion_vertical(self._dag)
             if _fv_plan:
                 self._dag[_FV_KEY] = _fv_plan
-                print(f"[Optim] fusion_vertical: "
-                      f"{len(_fv_plan['groups'])} matmul+epilogue "
-                      f"groups planned ({self._component_name})")
+                _log.debug(f"[Optim] fusion_vertical: "
+                           f"{len(_fv_plan['groups'])} matmul+epilogue "
+                           f"groups planned ({self._component_name})")
 
         # dead_code (Phase 3, rung 4): OPT-IN (NBX_OPTIM_DEAD_CODE=1).
         # The ENGINE-side counterpart of R19's build-side prune, and not
@@ -1325,11 +1327,11 @@ class GraphExecutor:
                 _dc_order = [u for u in self._dag.get("execution_order", [])
                              if u not in set(_dc_plan["dead_uids"])]
                 self._dag["execution_order"] = _dc_order
-                print(f"[Optim] dead_code: {_dc_plan['n_ops']} unreachable "
-                      f"ops left the sequence, retained "
-                      f"{_dc_plan['retained_writes']} in-place writes + "
-                      f"{_dc_plan['retained_rng']} random draws "
-                      f"({self._component_name})")
+                _log.debug(f"[Optim] dead_code: {_dc_plan['n_ops']} unreachable "
+                           f"ops left the sequence, retained "
+                           f"{_dc_plan['retained_writes']} in-place writes + "
+                           f"{_dc_plan['retained_rng']} random draws "
+                           f"({self._component_name})")
 
         # algebraic (Phase 3, rung 3): OPT-IN (NBX_OPTIM_ALGEBRAIC=1)
         # until its full-zoo byte gate passes. Removes operations whose
@@ -1356,11 +1358,11 @@ class GraphExecutor:
             _alg_plan = plan_algebraic(self._dag)
             if _alg_plan:
                 self._dag[_ALG_KEY] = _alg_plan
-                print(f"[Optim] algebraic: {_alg_plan['n_ops']} identity "
-                      f"ops aliased away, "
-                      f"{_alg_plan['floating_identities_seen']} floating "
-                      f"identities left to cancellation "
-                      f"({self._component_name})")
+                _log.debug(f"[Optim] algebraic: {_alg_plan['n_ops']} identity "
+                           f"ops aliased away, "
+                           f"{_alg_plan['floating_identities_seen']} floating "
+                           f"identities left to cancellation "
+                           f"({self._component_name})")
 
         # cse (Phase 3): OPT-IN (NBX_OPTIM_CSE=1) until its full-zoo
         # byte gate passes. Planner only annotates (dag["_optim_cse"]);
@@ -1376,10 +1378,10 @@ class GraphExecutor:
             _cse_plan = plan_cse(self._dag)
             if _cse_plan:
                 self._dag[_CSE_KEY] = _cse_plan
-                print(f"[Optim] cse: {_cse_plan['n_ops']} redundant ops "
-                      f"aliased onto their first computation, "
-                      f"{_cse_plan['barriers']} mutation barriers "
-                      f"({self._component_name})")
+                _log.debug(f"[Optim] cse: {_cse_plan['n_ops']} redundant ops "
+                           f"aliased onto their first computation, "
+                           f"{_cse_plan['barriers']} mutation barriers "
+                           f"({self._component_name})")
 
         self._apply_sequential_spatial_promotion()
 
@@ -1760,7 +1762,7 @@ class GraphExecutor:
 
         if neutralized > 0:
             import logging
-            logging.getLogger(__name__).info(
+            logging.getLogger(__name__).debug(
                 f"[GraphExecutor] Normalized SDPA scaling: neutralized {neutralized * 2} "
                 f"pre-scaling mul ops across {neutralized} attention layers"
             )
@@ -2191,8 +2193,7 @@ class GraphExecutor:
             self._component_handler = src._component_handler
         if os.environ.get("NBX_WEIGHTS_LOAD_TRACE"):
             import traceback as _tb_wl
-            print(f"[WEIGHTS_LOAD] component={component} mode={self.mode}",
-                  flush=True)
+            _log.debug(f"[WEIGHTS_LOAD] component={component} mode={self.mode}")
             _tb_wl.print_stack()
         self._load_args = {"nbx_path": nbx_path, "component": component,
                            "shard_map": shard_map}
@@ -2297,9 +2298,9 @@ class GraphExecutor:
         self._expert_maps = maps
         if self.mode not in ("triton", "triton_sequential"):
             self._expert_pages = pages
-        print(f"   [{'Triton' if self.mode.startswith('triton') else 'Compiled'}] '{component}': "
-              f"{len(views)} routed expert weights mapped from {len(maps)} shard(s), "
-              f"{sum(s.nbytes for s in spans.values()) / 2**20:.0f} MB left in the files", flush=True)
+        _log.debug(f"   [{'Triton' if self.mode.startswith('triton') else 'Compiled'}] '{component}': "
+                   f"{len(views)} routed expert weights mapped from {len(maps)} shard(s), "
+                   f"{sum(s.nbytes for s in spans.values()) / 2**20:.0f} MB left in the files")
         return views
 
     def _release_expert_pages(self, view) -> None:
@@ -2383,12 +2384,12 @@ class GraphExecutor:
             self._weights = loaded
             self._weights.update(_taken)          # borrowed, not loaded: the lender's copy
         if _taken:
-            print(f"   [Compiled] '{component}': {len(_taken)} weights borrowed from the "
-                  f"base, not loaded", flush=True)
+            _log.debug(f"   [Compiled] '{component}': {len(_taken)} weights borrowed from the "
+                       f"base, not loaded")
         if _only is not None:
-            print(f"   [Compiled] '{component}': loading {len(_only)} weights "
-                  f"the graph or the flow reads", flush=True)
-        print(f"   [Compiled] '{component}': holds {_held_line(loaded, self.device)}", flush=True)
+            _log.debug(f"   [Compiled] '{component}': loading {len(_only)} weights "
+                       f"the graph or the flow reads")
+        _log.debug(f"   [Compiled] '{component}': holds {_held_line(loaded, self.device)}")
         _reset_cuda_peak(self.device)        # the release line then says this component's own worst op
 
     def _load_weights_triton(self, nbx_path, component, shard_map, only=None):
@@ -2409,8 +2410,8 @@ class GraphExecutor:
             # Persist the choice so constants and downstream loads follow.
             device_idx = DeviceAllocator.most_free_device()
             self.device = f"cuda:{device_idx}"
-            print(f"   [Triton] CPU-staged '{component}' -> cuda:{device_idx} "
-                  f"(most free VRAM)", flush=True)
+            _log.debug(f"   [Triton] CPU-staged '{component}' -> cuda:{device_idx} "
+                       f"(most free VRAM)")
         compute_dtype = parse_dtype(self.dtype)
 
         DeviceAllocator.set_device(device_idx)
@@ -2474,11 +2475,11 @@ class GraphExecutor:
             self._weights = loaded
             self._weights.update(_taken)          # borrowed, not loaded: the lender's copy
         if _taken:
-            print(f"   [Triton] '{component}': {len(_taken)} weights borrowed from the "
-                  f"base, not loaded", flush=True)
+            _log.debug(f"   [Triton] '{component}': {len(_taken)} weights borrowed from the "
+                       f"base, not loaded")
         if _only is not None:
-            print(f"   [Triton] '{component}': loading {len(_only)} weights "
-                  f"the graph or the flow reads", flush=True)
+            _log.debug(f"   [Triton] '{component}': loading {len(_only)} weights "
+                       f"the graph or the flow reads")
 
         # Weight-storage encoding: fold qweight/scales/qmins triplets
         # into QuantizedTensor handles under the graph keys (compute
@@ -2487,8 +2488,8 @@ class GraphExecutor:
         if any(k.endswith(".qweight") for k in self._weights):
             from nbxtensor.quant.quantized_tensor import assemble_quantized
             n_q = assemble_quantized(self._weights)
-            print(f"   [Triton] '{component}': {n_q} encoded weights "
-                  f"assembled (int4-g128-asym)", flush=True)
+            _log.debug(f"   [Triton] '{component}': {n_q} encoded weights "
+                       f"assembled (int4-g128-asym)")
 
         # Load → forward boundary: return the load phase's temporaries
         # (per-tensor staging, dtype casts, the int4 assembly) from the
@@ -2523,12 +2524,12 @@ class GraphExecutor:
                     _rt.cudaMemGetInfo(_ct.byref(_free), _ct.byref(_total))
                     _used_gb = (_total.value - _free.value) / 1e9
                     _free_gb = _free.value / 1e9
-                    print(f"[VRAM_PROBE after_load_weights_triton[{component}]] "
-                          f"used={_used_gb:.2f}GB free={_free_gb:.2f}GB "
-                          f"cuda:{device_idx}", flush=True)
+                    _log.debug(f"[VRAM_PROBE after_load_weights_triton[{component}]] "
+                               f"used={_used_gb:.2f}GB free={_free_gb:.2f}GB "
+                               f"cuda:{device_idx}")
             except Exception as _e:
-                print(f"[VRAM_PROBE after_load_weights_triton[{component}]] "
-                      f"failed: {_e}", flush=True)
+                _log.debug(f"[VRAM_PROBE after_load_weights_triton[{component}]] "
+                           f"failed: {_e}")
 
         # Computable buffers + handler prep now live in load_weights() so
         # both native and triton paths run them. See shared post-dispatch
@@ -2579,7 +2580,7 @@ class GraphExecutor:
                 n += 1
         self._fp32_constants_bound = True
         if n:
-            print(f"   [Triton] {n} constant(s) bound in fp32 once: their consumers compute in fp32", flush=True)
+            _log.debug(f"   [Triton] {n} constant(s) bound in fp32 once: their consumers compute in fp32")
 
     @staticmethod
     def _join_arenas(held: dict, loaded: dict) -> dict:
@@ -3659,24 +3660,24 @@ class GraphExecutor:
                     _sz for _tid, _sz in _store_entries
                     if _tid not in protected and last_use.get(_tid, -1) < op_idx
                 )
-                print(f"[LIVENESS_AUDIT op_uid={op_uid} op_idx={op_idx}]")
-                print(f"  device_live_tracked = {_live_bytes/1024/1024:.0f} MB")
-                print(f"  store_total = {_total_store_bytes/1024/1024:.0f} MB "
-                      f"({len(store)} tids)")
-                print(f"  expected_live (in store) = "
-                      f"{sum(sz for tid, sz in _store_entries if tid in _expected_live)/1024/1024:.0f} MB "
-                      f"({len(_expected_live)} tids)")
-                print(f"  STALE (in store but last_use passed) = "
-                      f"{_stale_bytes/1024/1024:.0f} MB ({len(_stale)} tids)")
-                print(f"  Top 10 store entries:")
+                _log.debug(f"[LIVENESS_AUDIT op_uid={op_uid} op_idx={op_idx}]")
+                _log.debug(f"  device_live_tracked = {_live_bytes/1024/1024:.0f} MB")
+                _log.debug(f"  store_total = {_total_store_bytes/1024/1024:.0f} MB "
+                           f"({len(store)} tids)")
+                _log.debug(f"  expected_live (in store) = "
+                           f"{sum(sz for tid, sz in _store_entries if tid in _expected_live)/1024/1024:.0f} MB "
+                           f"({len(_expected_live)} tids)")
+                _log.debug(f"  STALE (in store but last_use passed) = "
+                           f"{_stale_bytes/1024/1024:.0f} MB ({len(_stale)} tids)")
+                _log.debug(f"  Top 10 store entries:")
                 for _tid, _sz in _store_entries[:10]:
                     _flag = "PROTECTED" if _tid in protected else (
                         f"alive_until_op_idx={last_use.get(_tid, '?')}")
-                    print(f"    {_tid:<50} {_sz/1024/1024:>8.0f} MB  {_flag}")
+                    _log.debug(f"    {_tid:<50} {_sz/1024/1024:>8.0f} MB  {_flag}")
                 if _stale:
-                    print(f"  Top 10 STALE tids (drain candidates):")
+                    _log.debug(f"  Top 10 STALE tids (drain candidates):")
                     for _tid, _sz in _stale[:10]:
-                        print(f"    {_tid:<50} {_sz/1024/1024:>8.0f} MB  last_use={last_use.get(_tid)}")
+                        _log.debug(f"    {_tid:<50} {_sz/1024/1024:>8.0f} MB  last_use={last_use.get(_tid)}")
                 import sys as _sys
                 _sys.stdout.flush()
 
@@ -3803,12 +3804,12 @@ class GraphExecutor:
                 import os as _os_fail
                 if _os_fail.environ.get("NBX_DEVICE_TRACE"):
                     for _ai, _a in enumerate(resolved_args):
-                        print(f"[DEVTRACE] FAILARG {op_uid} arg{_ai}: "
-                              f"pytype={type(_a).__name__} "
-                              f"device={getattr(_a,'_device',getattr(_a,'device','?'))} "
-                              f"device_idx={getattr(_a,'_device_idx','?')} "
-                              f"dtype={getattr(_a,'dtype','?')} "
-                              f"shape={getattr(_a,'shape','?')}", flush=True)
+                        _log.debug(f"[DEVTRACE] FAILARG {op_uid} arg{_ai}: "
+                                   f"pytype={type(_a).__name__} "
+                                   f"device={getattr(_a,'_device',getattr(_a,'device','?'))} "
+                                   f"device_idx={getattr(_a,'_device_idx','?')} "
+                                   f"dtype={getattr(_a,'dtype','?')} "
+                                   f"shape={getattr(_a,'shape','?')}")
                 from neurobrix.triton.symbols import impossible_extent_context
                 raise RuntimeError(
                     f"[triton-sequential] Failed at {op_uid} ({op_type}): "
@@ -3870,8 +3871,8 @@ class GraphExecutor:
                                            "record": _rec}, _f_td)
                             _f_td.write("\n")
                     except Exception as _e_td:
-                        print(f"[NBX_DUMP_TIDS triton-seq] failed on {_ot}: "
-                              f"{_e_td}", flush=True)
+                        _log.debug(f"[NBX_DUMP_TIDS triton-seq] failed on {_ot}: "
+                                   f"{_e_td}")
 
             # === NBX_DUMP_RAW (raw tensor capture, default-off) ===
             # The Triton engine's brick (R33: NBXTensor -> numpy, no torch);
@@ -3894,23 +3895,22 @@ class GraphExecutor:
                     from nbxtensor.memory.allocator import DeviceAllocator as _DAdt
                     _cur = _DAdt.get_device()
                     if _cur != device_idx:
-                        print(f"[DEVTRACE] CURDRIFT after {op_uid} {op_type}: "
-                              f"cur={_cur} != component {device_idx}", flush=True)
+                        _log.debug(f"[DEVTRACE] CURDRIFT after {op_uid} {op_type}: "
+                                   f"cur={_cur} != component {device_idx}")
                     for _ot in output_tids:
                         _t = store.get(_ot)
                         _di = getattr(_t, "_device_idx", None) if _t is not None else None
                         _dev = getattr(_t, "_device", None) if _t is not None else None
                         if _di is not None and _di != device_idx:
-                            print(f"[DEVTRACE] DRIFT {op_uid} {op_type}: out {_ot} "
-                                  f"device_idx={_di} device={_dev} != component {device_idx}",
-                                  flush=True)
+                            _log.debug(f"[DEVTRACE] DRIFT {op_uid} {op_type}: out {_ot} "
+                                       f"device_idx={_di} device={_dev} != component {device_idx}")
                 except Exception as _e_dt:
                     # Diagnostics must never affect execution. This block only runs
                     # when NBX_DEVICE_TRACE is explicitly set, so surface the
                     # diagnostic's own failure (so it isn't silently useless when
                     # enabled) and continue the op loop unchanged.
-                    print(f"[DEVTRACE] diagnostic failed at {op_uid} "
-                          f"({op_type}): {type(_e_dt).__name__}: {_e_dt}", flush=True)
+                    _log.debug(f"[DEVTRACE] diagnostic failed at {op_uid} "
+                               f"({op_type}): {type(_e_dt).__name__}: {_e_dt}")
 
             # === NBX_OP_FINGERPRINT (sequential path) ===
             # Symmetric mirror of TritonSequence's fingerprint emit
@@ -3965,8 +3965,8 @@ class GraphExecutor:
                             _json_fp_sq.dump(_r, _f_sq)
                             _f_sq.write("\n")
                 except Exception as _e_fp_sq:
-                    print(f"[NBX_OP_FINGERPRINT seq] failed at {op_uid}: "
-                          f"{_e_fp_sq}", flush=True)
+                    _log.debug(f"[NBX_OP_FINGERPRINT seq] failed at {op_uid}: "
+                               f"{_e_fp_sq}")
 
             # Evict tids whose last-use was this op. See the liveness
             # comment before the loop for the motivation.
@@ -3986,13 +3986,11 @@ class GraphExecutor:
                     if output_tids and output_tids[0] in store:
                         _vdt_t = store[output_tids[0]]
                     _fp_t = self._value_fingerprint(_vdt_t)
-                    print(f"[VALUE_TRACE path=tritonseq op_idx={op_idx} "
-                          f"op_uid={op_uid} samp={_fp_t}]",
-                          flush=True)
+                    _log.debug(f"[VALUE_TRACE path=tritonseq op_idx={op_idx} "
+                               f"op_uid={op_uid} samp={_fp_t}]")
                 except Exception as _e_vdt:
-                    print(f"[VALUE_TRACE path=tritonseq op_idx={op_idx} "
-                          f"op_uid={op_uid} ERR={_e_vdt}]",
-                          flush=True)
+                    _log.debug(f"[VALUE_TRACE path=tritonseq op_idx={op_idx} "
+                               f"op_uid={op_uid} ERR={_e_vdt}]")
 
             # Per-op symmetric trace (post-cleanup, before next op runs).
             if _tsq_per > 0 and op_idx % _tsq_per == 0:
@@ -4007,9 +4005,9 @@ class GraphExecutor:
                         _out_ptr = str(getattr(_t, '_data_ptr',
                                                getattr(_t, 'data_ptr',
                                                        lambda: '?')()))
-                    print(f"[OP_TRACE path=tritonseq op_idx={op_idx} "
-                          f"op_uid={op_uid} live_mb={_live:.0f} "
-                          f"out_ptr={_out_ptr}]", flush=True)
+                    _log.debug(f"[OP_TRACE path=tritonseq op_idx={op_idx} "
+                               f"op_uid={op_uid} live_mb={_live:.0f} "
+                               f"out_ptr={_out_ptr}]")
                 except Exception:
                     pass
 
@@ -4921,13 +4919,11 @@ class GraphExecutor:
                         if isinstance(_ol, list) and _ol:
                             _vd_t = _ol[0]
                         _fp = self._value_fingerprint(_vd_t)
-                        print(f"[VALUE_TRACE path=native op_idx={i} "
-                              f"op_uid={op_uid} samp={_fp}]",
-                              flush=True)
+                        _log.debug(f"[VALUE_TRACE path=native op_idx={i} "
+                                   f"op_uid={op_uid} samp={_fp}]")
                     except Exception as _e_vd:
-                        print(f"[VALUE_TRACE path=native op_idx={i} "
-                              f"op_uid={op_uid} ERR={_e_vd}]",
-                              flush=True)
+                        _log.debug(f"[VALUE_TRACE path=native op_idx={i} "
+                                   f"op_uid={op_uid} ERR={_e_vd}]")
 
                 # Clear op_outputs entry after nan/inf check (memory management)
                 if op_uid in self._ctx.op_outputs:
@@ -4962,13 +4958,12 @@ class GraphExecutor:
                                 _out_ptr = str(_o.data_ptr())
                             except Exception:
                                 pass
-                    print(f"[OP_TRACE path=native op_idx={i} "
-                          f"op_uid={op_uid} live_mb={_live:.0f} "
-                          f"out_ptr={_out_ptr}]", flush=True)
+                    _log.debug(f"[OP_TRACE path=native op_idx={i} "
+                               f"op_uid={op_uid} live_mb={_live:.0f} "
+                               f"out_ptr={_out_ptr}]")
                     # Legacy format for backward compat.
-                    print(f"[NATIVE_LIVE_TRACK op_idx={i} {op_uid}] "
-                          f"live={_live:.0f}MB peak={_peak:.0f}MB",
-                          flush=True)
+                    _log.debug(f"[NATIVE_LIVE_TRACK op_idx={i} {op_uid}] "
+                               f"live={_live:.0f}MB peak={_peak:.0f}MB")
                 except Exception:
                     pass
 
@@ -5319,9 +5314,8 @@ class GraphExecutor:
         for tid in op_data.get("input_tensor_ids", []):
             t = self._tensor_store.get(tid) if hasattr(self, "_tensor_store") else None
             live.append(f"{tid}={list(t.shape) if hasattr(t, 'shape') else '?'}")
-        print(f"[OP-FAIL] {op_uid} ({op_type}) op {op_idx + 1}/{total_ops} "
-              f"trace_in={op_data.get('input_shapes')} live_in=[{', '.join(live)}]",
-              flush=True)
+        _log.debug(f"[OP-FAIL] {op_uid} ({op_type}) op {op_idx + 1}/{total_ops} "
+                   f"trace_in={op_data.get('input_shapes')} live_in=[{', '.join(live)}]")
         raise error
 
     def _cleanup_finished_tensors(
@@ -5492,8 +5486,7 @@ class GraphExecutor:
                     if not _os_raw.path.exists(_fn):
                         import torch
                         torch.save(_t.detach().cpu(), _fn)
-                        print(f"[NBX_DUMP_RAW] {_ot} {list(_t.shape)} -> {_fn}",
-                              flush=True)
+                        _log.debug(f"[NBX_DUMP_RAW] {_ot} {list(_t.shape)} -> {_fn}")
 
         # Store outputs
         self._store_op_outputs(op_uid, op_data, result)
@@ -5812,7 +5805,7 @@ class GraphExecutor:
                             "hasym": _hasym}}, _f)
                         _f.write("\n")
                 except Exception as _e_ds:
-                    print(f"[NBX_DUMP_TIDS seq] failed on {tid}: {_e_ds}", flush=True)
+                    _log.debug(f"[NBX_DUMP_TIDS seq] failed on {tid}: {_e_ds}")
 
     # =========================================================================
     # Output Gathering
@@ -6254,11 +6247,10 @@ class GraphExecutor:
         # per-second memory trace is aligned on to read which components a peak held (the Mac's unified
         # overruns peaked at a component load, 2026-10-14; nothing said whether the previous one had left).
         if _released:
-            print(f"   [{'Triton' if str(self.mode).startswith('triton') else 'Compiled'}] "
-                  f"'{getattr(self, '_component_name', '?')}': released {_released} weights"
-                  f"{_cuda_peak_since_load(getattr(self, 'device', ''), self.mode, self.__dict__.pop('_held_window', None))}"
-                  f"{_left_after_release(getattr(self, 'device', ''), self.mode)}",
-                  flush=True)
+            _log.debug(f"   [{'Triton' if str(self.mode).startswith('triton') else 'Compiled'}] "
+                       f"'{getattr(self, '_component_name', '?')}': released {_released} weights"
+                       f"{_cuda_peak_since_load(getattr(self, 'device', ''), self.mode, self.__dict__.pop('_held_window', None))}"
+                       f"{_left_after_release(getattr(self, 'device', ''), self.mode)}")
         # Step 3: the last run's context goes with them. It holds the weight dict the run was
         # built on (`ExecutionContext.weights`), which `_reconcile_weight_keys` had replaced on
         # the executor by the time the step above cleared it — so every weight of the load

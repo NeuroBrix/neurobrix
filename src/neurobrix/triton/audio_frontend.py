@@ -40,6 +40,8 @@ from neurobrix.core.module.audio.mel_dsp import (  # noqa: F401
 )
 from neurobrix.core.flow.audio_utils import (   # torch-free: the compiled flow's own readers, the same
     get_component_input_shape, postprocess_text_output as postprocess_text_output_np, requested_voice)
+import logging
+_log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -142,7 +144,7 @@ def _load_voicepack_np(engine, phoneme_count: int) -> None:
         engine.ctx.variable_resolver.resolved[k] = sd
     for k in ["global.predictor_style", "predictor_style"]:
         engine.ctx.variable_resolver.resolved[k] = sp
-    print(f"   [Voicepack·np] Loaded '{vname}' (ref_s={tuple(ref_s.shape)})")
+    _log.debug(f"   [Voicepack·np] Loaded '{vname}' (ref_s={tuple(ref_s.shape)})")
 
 
 def preprocess_phonemizer_input_np(engine, prompt: str, phoneme_vocab: Dict) -> None:
@@ -162,8 +164,8 @@ def preprocess_phonemizer_input_np(engine, prompt: str, phoneme_vocab: Dict) -> 
     engine.ctx.variable_resolver.resolved["global.input_ids"] = input_ids
     engine.ctx.variable_resolver.resolved["input_ids"] = input_ids
     _shown = prompt if len(prompt) <= 60 else prompt[:60] + "…"
-    print(f"   [Phonemizer·np] '{_shown}' ({len(prompt)} chars) -> {len(phonemes)} phonemes "
-          f"-> {actual_len} IDs")
+    _log.debug(f"   [Phonemizer·np] '{_shown}' ({len(prompt)} chars) -> {len(phonemes)} phonemes "
+               f"-> {actual_len} IDs")
     text_lengths = NBXTensor.from_numpy(np.array([actual_len], dtype=np.int64))
     for k in ["global.text_lengths", "text_lengths", "input_lengths"]:
         engine.ctx.variable_resolver.resolved[k] = text_lengths
@@ -221,7 +223,7 @@ def preprocess_audio_input_np(ctx, audio_config: Dict, stages: List[Dict]) -> No
     input_shape = get_component_input_shape(ctx, first_comp)
     preprocessing = resolve_preprocessing(preprocessing, input_shape)
 
-    print(f"   [Audio·np] Loading: {audio_path}")
+    _log.debug(f"   [Audio·np] Loading: {audio_path}")
 
     def _fit(feats):
         return fit_features(feats, input_shape)
@@ -267,9 +269,9 @@ def preprocess_audio_input_np(ctx, audio_config: Dict, stages: List[Dict]) -> No
     if feats is None:
         feats = _fit(extract_features_np(preprocessing, str(audio_path),
                                          Path(find_model_config_path(ctx)), input_shape))
-    print(f"   [Audio·np] Features: {tuple(feats.shape)} ({preprocessing})"
-          + (" (long-form: timestamp seek)" if ctx._stt_seek else "")
-          + (f" (long-form: {len(ctx._audio_windows)} fixed windows)" if getattr(ctx, "_audio_windows", None) else ""))
+    _log.debug("%s", f"   [Audio·np] Features: {tuple(feats.shape)} ({preprocessing})"
+                     + (" (long-form: timestamp seek)" if ctx._stt_seek else "")
+                     + (f" (long-form: {len(ctx._audio_windows)} fixed windows)" if getattr(ctx, "_audio_windows", None) else ""))
 
     # Place the feature tensor on the encoder's device (NBXTensor.from_numpy uses
     # the CURRENT DeviceAllocator device — without this it lands on cuda:0 while a

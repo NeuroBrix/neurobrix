@@ -221,7 +221,7 @@ class Zero3Strategy(ExecutionStrategy):
             use_pin = should_pin_memory(cpu, total_mb)
 
         if not use_pin:
-            logger.info(
+            logger.debug(
                 f"[Zero3] {component_name}: skip pin_memory "
                 f"(weights={total_mb:.0f}MB, ram={cpu_ram_mb}MB)"
             )
@@ -241,7 +241,7 @@ class Zero3Strategy(ExecutionStrategy):
                     weights[name] = tensor.pin_host()
                     pinned += 1
         if pinned:
-            logger.info(
+            logger.debug(
                 f"[Zero3] {component_name}: pinned {pinned} weights "
                 f"({total_mb:.0f}MB) for DMA to {self.exec_device}"
             )
@@ -260,9 +260,8 @@ class Zero3Strategy(ExecutionStrategy):
         """
         import os as _os_d
         if _os_d.environ.get("NBX_ZERO3_DIAG") == "1":
-            print(f"[Z3DIAG] install_for_executor({component_name}) "
-                  f"already={component_name in self._installed}",
-                  flush=True)
+            logger.debug(f"[Z3DIAG] install_for_executor({component_name}) "
+                         f"already={component_name in self._installed}")
         if component_name in self._installed:
             return
         self._pin_cpu_weights(component_name, executor)
@@ -537,21 +536,17 @@ class Zero3Strategy(ExecutionStrategy):
                 from nbxtensor.memory.allocator import DeviceAllocator as DA
                 peak_mb = DA.peak_memory_allocated(dev_idx) / 1e6
                 live_mb = DA.memory_allocated(dev_idx) / 1e6
-                print(
-                    f"[Zero3] {component_name} pass_end: "
+                logger.debug(f"[Zero3] {component_name} pass_end: "
                     f"peak_vram={peak_mb:.1f}MB live_vram={live_mb:.1f}MB "
-                    f"blocks_cached={len(state['gpu_cache'])}"
-                )
+                    f"blocks_cached={len(state['gpu_cache'])}")
                 DA.reset_peak_memory(dev_idx)
             else:
                 import torch
                 peak_mb = torch.cuda.max_memory_allocated(dev_idx) / 1e6
                 live_mb = torch.cuda.memory_allocated(dev_idx) / 1e6
-                print(
-                    f"[Zero3] {component_name} pass_end: "
+                logger.debug(f"[Zero3] {component_name} pass_end: "
                     f"peak_vram={peak_mb:.1f}MB live_vram={live_mb:.1f}MB "
-                    f"blocks_cached={len(state['gpu_cache'])}"
-                )
+                    f"blocks_cached={len(state['gpu_cache'])}")
                 from neurobrix.core.runtime.graph_executor import _reset_cuda_peak
                 _reset_cuda_peak(f"cuda:{dev_idx}")      # the run's peak kept before the counter restarts
         resident = state['resident']
@@ -588,8 +583,7 @@ class Zero3Strategy(ExecutionStrategy):
         _z3d = _os_d.environ.get("NBX_ZERO3_DIAG") == "1"
         if seq is None:
             if _z3d:
-                print(f"[Z3DIAG] build_state({component_name}): NO SEQ",
-                      flush=True)
+                logger.debug(f"[Z3DIAG] build_state({component_name}): NO SEQ")
             return None
         try:
             blocks = seq.get_op_blocks()
@@ -605,8 +599,8 @@ class Zero3Strategy(ExecutionStrategy):
         if not real_blocks:
             # No transformer blocks — nothing to pipeline, everything to prime.
             if _z3d:
-                print(f"[Z3DIAG] build_state({component_name}): NO REAL "
-                      f"BLOCKS ({len(blocks)} raw) — prime only", flush=True)
+                logger.debug(f"[Z3DIAG] build_state({component_name}): NO REAL "
+                             f"BLOCKS ({len(blocks)} raw) — prime only")
             return self._prime_only_state(component_name, seq, is_triton, executor)
 
         op_to_block = self._build_op_to_block(real_blocks)
@@ -621,9 +615,8 @@ class Zero3Strategy(ExecutionStrategy):
         )
         if not has_cpu_block_weights:
             if _z3d:
-                print(f"[Z3DIAG] build_state({component_name}): NO CPU "
-                      f"BLOCK WEIGHTS ({len(cpu_originals)} originals) — prime only",
-                      flush=True)
+                logger.debug(f"[Z3DIAG] build_state({component_name}): NO CPU "
+                             f"BLOCK WEIGHTS ({len(cpu_originals)} originals) — prime only")
             return self._prime_only_state(component_name, seq, is_triton, executor)
 
         # Stream setup. Transfer stream carries the async H2D; the
@@ -729,16 +722,13 @@ class Zero3Strategy(ExecutionStrategy):
             self._wait_for_block(state, -1, is_triton)
             self._install_block_on_arena(state, -1)
         n_res = len([b for b in resident if b >= 0])
-        print(
-            f"[Zero3] {component_name}: ratchet built — {len(real_blocks)} blocks, "
+        logger.debug(f"[Zero3] {component_name}: ratchet built — {len(real_blocks)} blocks, "
             f"{n_res} resident + {'non-block weights + ' if -1 in resident else ''}"
             f"{resident_bytes / 2**20:.0f} MB kept on the card (plan: "
             f"{self._resident_budget_mb(component_name):.0f} MB), "
             f"{len(state['streamed'])} streamed per pass through a 2-block window, "
             f"path={'triton' if is_triton else 'native'}, "
-            f"stream={'async' if (transfer_stream or transfer_stream_torch) else 'sync'}",
-            flush=True,
-        )
+            f"stream={'async' if (transfer_stream or transfer_stream_torch) else 'sync'}")
         return state
 
     def _resident_budget_mb(self, component_name: str) -> float:
@@ -813,14 +803,14 @@ class Zero3Strategy(ExecutionStrategy):
             n_flipped = seq.mark_cpu_weighted_ops_for_transfer(exec_dev_t)
             seq.override_weightless_op_devices(exec_dev_t)
             path_label = f"compiled/{self.exec_device}"
-        logger.info(
+        logger.debug(
             f"[Zero3] {component_name}: primed {n_flipped} "
             f"non-pipelined CPU-weighted ops on {path_label}"
         )
         import os as _os_d
         if _os_d.environ.get("NBX_ZERO3_DIAG") == "1":
-            print(f"[Z3DIAG] primed({component_name}): flipped="
-                  f"{n_flipped} path={path_label}", flush=True)
+            logger.debug(f"[Z3DIAG] primed({component_name}): flipped="
+                         f"{n_flipped} path={path_label}")
         state['primed'] = True
 
     def _ratchet_on_op(
@@ -886,10 +876,9 @@ class Zero3Strategy(ExecutionStrategy):
 
         def pre_op_cb(op_idx: int, op: Any) -> None:
             if _z3d_cb and op_idx == 0:
-                print(f"[Z3DIAG] pre_op_cb({component_name}) op0 "
-                      f"ratchet_present="
-                      f"{strategy._ratchet.get(component_name) is not None}",
-                      flush=True)
+                logger.debug(f"[Z3DIAG] pre_op_cb({component_name}) op0 "
+                             f"ratchet_present="
+                             f"{strategy._ratchet.get(component_name) is not None}")
             state = strategy._ratchet.get(component_name)
             if state is None:
                 state = strategy._build_ratchet_state(component_name, executor)

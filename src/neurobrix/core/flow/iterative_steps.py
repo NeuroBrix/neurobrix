@@ -10,6 +10,8 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from neurobrix.core.runtime.debug import DEBUG
+import logging
+_log = logging.getLogger(__name__)
 
 
 def _dump_final_latent(tensor, to_numpy):
@@ -35,13 +37,13 @@ def _dump_final_latent(tensor, to_numpy):
     try:
         arr = to_numpy()
     except Exception as exc:                    # a dump must never break a run
-        print(f"[final-latent] not dumped ({exc})", flush=True)
+        _log.debug(f"[final-latent] not dumped ({exc})")
         return
     os.makedirs(d, exist_ok=True)
     path = os.path.join(d, "final_latent.npy")
     np.save(path, np.ascontiguousarray(arr))
-    print(f"[final-latent] {tuple(arr.shape)} {arr.dtype} l2={float(np.linalg.norm(arr)):.4f}"
-          f" -> {path}", flush=True)
+    _log.debug(f"[final-latent] {tuple(arr.shape)} {arr.dtype} l2={float(np.linalg.norm(arr)):.4f}"
+               f" -> {path}")
 
 
 class IterativeSteps:
@@ -116,8 +118,8 @@ class IterativeSteps:
         num_train = float(getattr(driver, "num_train_timesteps", 1000) or 1000)
         boundary = float(br) * num_train
         if DEBUG:
-            print(f"[DualDenoiser] high={high} low={low} "
-                  f"boundary={boundary:.1f} (ratio={br} x {num_train})")
+            _log.debug(f"[DualDenoiser] high={high} low={low} "
+                       f"boundary={boundary:.1f} (ratio={br} x {num_train})")
         return {"high": high, "low": low, "boundary": boundary}
 
     def _get_encoder_dtype(self) -> Any:
@@ -140,7 +142,7 @@ class IterativeSteps:
                     dtype = getattr(plan_components[comp], 'dtype', None)
                     if dtype is not None:
                         if DEBUG:
-                            print(f"[Executor] Encoder dtype from Prism plan: {comp}={dtype}")
+                            _log.debug(f"[Executor] Encoder dtype from Prism plan: {comp}={dtype}")
                         return dtype
 
             # Priority 2: any component's dtype
@@ -148,7 +150,7 @@ class IterativeSteps:
                 dtype = getattr(alloc, 'dtype', None)
                 if dtype is not None:
                     if DEBUG:
-                        print(f"[Executor] Using {comp_name} dtype as encoder_dtype: {dtype}")
+                        _log.debug(f"[Executor] Using {comp_name} dtype as encoder_dtype: {dtype}")
                     return dtype
 
         raise RuntimeError(

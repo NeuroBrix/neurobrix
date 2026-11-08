@@ -40,6 +40,8 @@ from typing import Any, Dict, List, Optional, Tuple
 # ============================================================================
 
 from neurobrix.core.prism.loader import GENERATED_DIR as HARDWARE_DIR   # the generated profiles' one place per machine
+import logging
+_log = logging.getLogger(__name__)
 DEFAULT_PROFILE_PATH = HARDWARE_DIR / "default.yml"
 
 # ---------------------------------------------------------------------------
@@ -298,7 +300,19 @@ def _complete_measured_fields(path: Path) -> None:
         return
     cpu.update(added)
     _write_profile_atomically(path, data)
-    print(f"   [Auto-detect] Completed {path.name}: {added}")
+    _log.debug(f"   [Auto-detect] Completed {path.name}: {added}")
+
+
+_FIRST_LAUNCH_SAID = [False]
+
+
+def _say_first_launch() -> None:
+    """The one line a user sees while this machine is measured for its profile (detection, then the facts and the
+    reload rates `ensure_measured_facts` measures): minutes of work that printed nothing by default but debug lines,
+    a silence a user cannot tell from a hang (the terminal-noise inventory, 2026-11-08: 570 s). Said once a process."""
+    if not _FIRST_LAUNCH_SAID[0]:
+        _FIRST_LAUNCH_SAID[0] = True
+        _log.info("First launch on this machine: measuring it once for its hardware profile (a few minutes)...")
 
 
 def get_or_create_default_profile() -> str:
@@ -322,9 +336,10 @@ def get_or_create_default_profile() -> str:
         if DEFAULT_PROFILE_PATH.exists():
             _complete_measured_fields(DEFAULT_PROFILE_PATH)
             return "default"
+        _say_first_launch()
         profile_data = detect_hardware()
         _write_profile_atomically(DEFAULT_PROFILE_PATH, profile_data)
-        print(f"   [Auto-detect] Created profile: {DEFAULT_PROFILE_PATH}")
+        _log.debug(f"   [Auto-detect] Created profile: {DEFAULT_PROFILE_PATH}")
         return "default"
 
     hardware_id = f"default-{tag}"
@@ -333,7 +348,8 @@ def get_or_create_default_profile() -> str:
         _complete_measured_fields(path)
         return hardware_id
 
-    print("   [Auto-detect] No --hardware specified, detecting system hardware...")
+    _say_first_launch()
+    _log.debug("   [Auto-detect] No --hardware specified, detecting system hardware...")
     profile_data = detect_hardware()
     _write_profile_atomically(path, profile_data)
     if _describes_the_whole_machine(profile_data):
@@ -345,7 +361,7 @@ def get_or_create_default_profile() -> str:
         # every other one. A process pinned to two of four cards then wrote a
         # 2x16GB machine over a 2x16GB+2x32GB rack (2026-09-17).
         _write_profile_atomically(DEFAULT_PROFILE_PATH, profile_data)
-    print(f"   [Auto-detect] Created profile: {path}")
+    _log.debug(f"   [Auto-detect] Created profile: {path}")
     return hardware_id
 
 
@@ -424,7 +440,7 @@ def _measure_io_workers() -> Optional[int]:
     except RuntimeError as exc:            # workers_for's named refusal: no stable measure up to everything it can read
         declare_unmeasured_io_workers(str(exc).split(": ", 1)[-1].split(" (")[0])
         return None
-    print(f"   [Auto-detect] io_workers {m['workers']}, measured on {m['storage']} ({m['read']})")
+    _log.debug(f"   [Auto-detect] io_workers {m['workers']}, measured on {m['storage']} ({m['read']})")
     return int(m["workers"])
 
 
@@ -2589,6 +2605,7 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None) -> dic
 
     first = measured_of(devices[0])
     if not first:
+        _say_first_launch()
         dtypes = [t for t in (devices[0].get("supports_dtypes") or []) if t in ("float16", "float32", "bfloat16")]
         first = {"source": f"measured {stamp} at the first launch on this machine (autodetect, quick: one GEMM size, "
                            f"{q['copy_bytes'] >> 20} MB copies; tools/profile_facts.py measures the full set)",
@@ -2627,9 +2644,10 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None) -> dic
                          for c in Path(cache_dir()).glob("*/components/*") if stored_major(c.parent.parent, c.name) == name]
                 comps = sorted(x for x in comps if LOADER_RATE_MIN_BYTES <= x[0] <= int(devices[0].get("memory_mb") or 0) << 20)
                 if comps:
+                    _say_first_launch()
                     r = A.child(comps[0][1], comps[0][2], hardware_id, engine)
-                    print(f"   [Auto-detect] {engine} {st} reloads of {r['container']}:{r['component']}: "
-                          f"{[round(b / s / 1e9, 3) for b, s in r['draws']]} GB/s (written when three agree)")
+                    _log.debug(f"   [Auto-detect] {engine} {st} reloads of {r['container']}:{r['component']}: "
+                               f"{[round(b / s / 1e9, 3) for b, s in r['draws']]} GB/s (written when three agree)")
         data = yaml.safe_load(path.read_text()) or {}          # what the probe's process wrote
         devices = data.get("devices") or []
         first = {**measured_of(devices[0]), **first}
@@ -2640,8 +2658,8 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None) -> dic
         # a unified device maps the host's experts in place (Prism's Strategy 2.5, core/runtime/expert_files.py): the
         # card-side miss copy is not its path, and its launch (Triton's own, host addresses in the tables) does not bind
         # on Metal (the Mac, 2026-11-03 10:43) — not measured, said; the store refuses by name if it is ever reached
-        print("   [Auto-detect] expert_copy not measured: a unified device maps its experts (Strategy 2.5), the "
-              "card-side miss copy is not its path")
+        _log.debug("   [Auto-detect] expert_copy not measured: a unified device maps its experts (Strategy 2.5), the "
+                   "card-side miss copy is not its path")
     elif engine == "triton" and "expert_copy" not in first:
         # the expert store's miss copy on this card (the supervisor 2026-11-03 10:32: 75-93 % of a MoE decode's GPU time)
         from nbxtensor.ops.moe_device_residency import measure_miss_copy
@@ -2652,7 +2670,7 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None) -> dic
     if not added:
         return {}
     _write_first(path, data, devices, first)
-    print(f"   [Auto-detect] measured on this machine and written into {path.name}: {added}")
+    _log.debug(f"   [Auto-detect] measured on this machine and written into {path.name}: {added}")
     return added
 
 
@@ -2717,8 +2735,8 @@ def note_reload_rate(hardware_id: Optional[str], engine: str, stored: str, reloa
         f"{engine} {st}: {gbps} GB/s measured by the engine itself reloading streamed pieces at a real run "
         f"{_time.strftime('%Y-%m-%d %H:%M:%S %Z')}, {what}, {reloaded_bytes / 1e9:.2f} GB reloaded")
     _write_profile_atomically(path, data)
-    print(f"   [Auto-detect] the {engine} engine measured its per-token reload: {st} {gbps} GB/s, written into "
-          f"{path.name}")
+    _log.debug(f"   [Auto-detect] the {engine} engine measured its per-token reload: {st} {gbps} GB/s, written into "
+               f"{path.name}")
     return True
 
 
@@ -2757,6 +2775,6 @@ def note_loader_rate(hardware_id: Optional[str], engine: str, stored: str, where
         if d.get("model") == same:
             d["measured"] = dict(measured)
     _write_profile_atomically(path, data)
-    print(f"   [Auto-detect] the {engine} loader measured itself: {st} to the {where} ({state}) {gbps} GB/s, "
-          f"written into {path.name}")
+    _log.debug(f"   [Auto-detect] the {engine} loader measured itself: {st} to the {where} ({state}) {gbps} GB/s, "
+               f"written into {path.name}")
     return True

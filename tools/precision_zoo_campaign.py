@@ -206,6 +206,9 @@ def run_group(cmd, env, fh, timeout: int, cwd=None, before_kill=None) -> int:
     group is still alive — the moment its stack can still be read."""
     import os
     import signal
+    # the run's developer lines ([Timings], [Peak], the certified-miss line, tracebacks) are what these tools parse:
+    # a run's default terminal holds none of them (nbxtensor/terminal.py)
+    env = {**(os.environ if env is None else env), "NBX_LOG": "debug"}
     p = subprocess.Popen([str(c) for c in cmd], env=env, stdout=fh, stderr=subprocess.STDOUT, cwd=cwd,
                          start_new_session=True)
     try:

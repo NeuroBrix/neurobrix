@@ -7,12 +7,25 @@ All commands that manage ~/.neurobrix/store/ and ~/.neurobrix/cache/.
 import os
 import sys
 import json
+import logging
 import re
 
 from neurobrix import __version__
 from neurobrix.cli.utils import (
     STORE_DIR, CACHE_DIR, REGISTRY_URL, IMPORT_EXAMPLES, format_size,
 )
+
+
+log = logging.getLogger(__name__)      # status and developer lines; results and tables are printed on stdout
+
+def print_table(headers, rows) -> None:
+    """A table on stdout, each column as wide as its longest cell; a column empty in every row is dropped."""
+    keep = [i for i in range(len(headers)) if any(str(r[i]) for r in rows)]
+    headers = [headers[i] for i in keep]
+    rows = [[str(r[i]) for i in keep] for r in rows]
+    widths = [max([len(str(h))] + [len(r[i]) for r in rows]) for i, h in enumerate(headers)]
+    for line in (headers, *rows):
+        print("  ".join(str(c).ljust(w) for c, w in zip(line, widths)).rstrip())
 
 
 # Headroom kept free after an import, so a disk is never handed back at 100 %.
@@ -242,7 +255,7 @@ def _die(args, *lines: str, code: int = 1):
     carrying the first line, then exit. Every refusal of `import` ends here
     so a client always reads a terminal event."""
     for line in lines:
-        print(line)
+        log.error(line)
     _ev(args, "error", message=lines[0] if lines else "refused")
     sys.exit(code)
 
@@ -271,23 +284,19 @@ def _import_body(args):
 
     org, name = model_ref.split("/", 1)
 
-    print("=" * 70)
-    print("NeuroBrix Import")
-    print("=" * 70)
-    print(f"Model: {org}/{name}")
-    print(f"Registry: {registry}")
+    log.debug(f"Registry: {registry}")
 
     # Check if already cached
     cache_path = CACHE_DIR / name
     if cache_path.exists() and (cache_path / "manifest.json").exists() and not args.force:
-        print(f"\nModel already installed: {cache_path}")
-        print("Use --force to re-download.")
+        log.debug(f"Model already installed: {cache_path}")
+        print(f"{name} is already installed (--force re-downloads).")
         _ev(args, "installed", model=f"{org}/{name}", cache=str(cache_path), already=True)
         _ev(args, "done", model=f"{org}/{name}", cache=str(cache_path))
         sys.exit(0)
 
     # 1. Get model metadata
-    print(f"\n[1/4] Fetching model info...")
+    log.debug("[1/4] Fetching model info...")
     try:
         resp = requests.get(f"{registry}/api/models/{org}/{name}", timeout=10)
         resp.raise_for_status()
@@ -313,12 +322,10 @@ def _import_body(args):
     license_url = model_data.get("licenseUrl", "")
     is_gated = model_data.get("gated", False)
 
-    print(f"   Category: {category}")
+    log.info(" · ".join([f"{org}/{name}", str(category), *([format_size(file_size)] if file_size > 0 else []),
+                         f"license: {license_name}"]))
     if description:
-        print(f"   Description: {description[:80]}")
-    if file_size > 0:
-        print(f"   Size: {format_size(file_size)}")
-    print(f"   License: {license_name}")
+        log.debug(f"   Description: {description}")
     _ev(args, "info", model=f"{org}/{name}", category=category, bytes=file_size,
         license=license_id, license_name=license_name, gated=bool(is_gated))
 
@@ -335,8 +342,8 @@ def _import_body(args):
         if _refusal:
             _die(args, f"ERROR: not enough disk for this import — {_refusal}.",
                  "       Free space, or import to a device that has it.")
-        print(f"   Disk: {format_size(_need)} needed at peak, "
-              f"{format_size(_free)} free")
+        log.debug(f"   Disk: {format_size(_need)} needed at peak, "
+                  f"{format_size(_free)} free")
 
     # License acceptance — hub is the source of truth; every model WITH a license is accepted at import (Hocine Benkelaya
     # 2026-11-01), gated or not: the hub's `gated` flag only says whether the hub itself asks a login first. A model
@@ -346,21 +353,6 @@ def _import_body(args):
         if license_url:
             full_url = license_url if license_url.startswith("http") else f"{registry}{license_url}"
 
-        print(f"\n{'=' * 70}")
-        print("LICENSE NOTICE")
-        print("=" * 70)
-        print(f"   Vendor: {org}")
-        print(f"   License: {license_name}")
-        if full_url:
-            print(f"   Full text: {full_url}")
-        print()
-        print("   This model is distributed under the license above.")
-        print("   NeuroBrix does not modify the original license terms.")
-        print("   You are responsible for complying with the license.")
-        print()
-        print("   THIS LICENSE REQUIRES EXPLICIT ACCEPTANCE.")
-        print("=" * 70)
-
         # Non-interactive acceptance: --accept-license flag or NBX_ACCEPT_LICENSE=1
         accepted_via = None
         if getattr(args, "accept_license", False):
@@ -368,9 +360,21 @@ def _import_body(args):
         elif os.environ.get("NBX_ACCEPT_LICENSE") == "1":
             accepted_via = "NBX_ACCEPT_LICENSE=1"
 
+        # The notice is the question a person answers; accepted by flag, it is a developer line
+        _say = log.debug if accepted_via else print
+        _say("LICENSE NOTICE")
+        _say(f"   Vendor: {org}")
+        _say(f"   License: {license_name}")
+        if full_url:
+            _say(f"   Full text: {full_url}")
+        _say("   This model is distributed under the license above.")
+        _say("   NeuroBrix does not modify the original license terms.")
+        _say("   You are responsible for complying with the license.")
+        _say("   THIS LICENSE REQUIRES EXPLICIT ACCEPTANCE.")
+
         if accepted_via:
             _record_license_acceptance(org, name, license_id)
-            print(f"   License accepted via {accepted_via}.\n")
+            log.debug(f"   License accepted via {accepted_via}.")
             _ev(args, "license", license=license_id, accepted_via=accepted_via)
         else:
             # A client never answers a prompt: under --json the licence is
@@ -397,7 +401,7 @@ def _import_body(args):
             _ev(args, "license", license=license_id, accepted_via="prompt")
 
     # 2. Get signed download URL
-    print(f"\n[2/4] Getting download URL...")
+    log.debug("[2/4] Getting download URL...")
     try:
         # Who asks: the engine's command line, by name and version — the hub serves the engine client without a
         # session (the user accepted at this terminal) and sends a browser without one to its login (the owner,
@@ -443,7 +447,7 @@ def _import_body(args):
              "The model may not have a .nbx file uploaded yet.")
 
     # 3. Download .nbx to store/
-    print(f"\n[3/4] Downloading {file_name}...")
+    log.debug(f"[3/4] Downloading {file_name}...")
     STORE_DIR.mkdir(parents=True, exist_ok=True)
     store_path = STORE_DIR / file_name
 
@@ -451,7 +455,7 @@ def _import_body(args):
         actual_size = download_resumable(download_url, store_path, total_hint=file_size,
                                          desc=file_name, get=requests.get,
                                          progress=NdjsonProgress if wants_json(args) else tqdm)
-        print(f"   Saved: {store_path} ({format_size(actual_size)})")
+        log.debug(f"   Saved: {store_path} ({format_size(actual_size)})")
         _ev(args, "downloaded", file=file_name, store=str(store_path), bytes=actual_size)
 
     except requests.HTTPError as e:
@@ -467,7 +471,7 @@ def _import_body(args):
     # renamed in one motion at the end: a model is visible (to `list`, to
     # `run`, to a client) only after its extraction succeeded, never as a
     # half-written directory that already carries a manifest (Studio request 6).
-    print(f"\n[4/4] Extracting to cache...")
+    log.debug("[4/4] Extracting to cache...")
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     _ev(args, "extracting", store=str(store_path), cache=str(cache_path))
 
@@ -485,15 +489,15 @@ def _import_body(args):
     if not _declared:
         _die(args, "ERROR: the downloaded .nbx declares no model_name in its manifest.")
     if _declared != cache_path.name:
-        print(f"   The container declares model_name {_declared!r}; the hub record is named "
-              f"{cache_path.name!r}. Installing under the container's own name.")
+        log.debug(f"   The container declares model_name {_declared!r}; the hub record is named "
+                  f"{cache_path.name!r}. Installing under the container's own name.")
         cache_path = CACHE_DIR / _declared
         # The "already installed" answer, asked again on the name that will be written — the
         # pre-check above could only ask on the slug, before the archive existed. `--force`
         # keeps its contract: without it nothing installed is swapped over.
         if cache_path.exists() and (cache_path / "manifest.json").exists() and not args.force:
-            print(f"\nModel already installed under its own name: {cache_path}")
-            print("Use --force to re-download.")
+            log.debug(f"Model already installed under its own name: {cache_path}")
+            print(f"{_declared} is already installed (--force re-downloads).")
             _ev(args, "installed", model=f"{org}/{name}", installed_as=_declared, cache=str(cache_path), already=True)
             _ev(args, "done", model=f"{org}/{name}", installed_as=_declared, cache=str(cache_path))
             sys.exit(0)
@@ -508,26 +512,20 @@ def _import_body(args):
             extract_container(store_path, staging)
     except InstallHeldByAnother as e:
         _die(args, f"ERROR: {e}")
-    print(f"   Extracted: {cache_path}")
+    log.debug(f"   Extracted: {cache_path}")
     _ev(args, "installed", model=f"{org}/{name}", installed_as=_declared, cache=str(cache_path), already=False)
 
     # Delete .nbx from store if --no-keep
     if args.no_keep:
         store_path.unlink()
-        print(f"   Store: deleted (--no-keep)")
+        log.debug("   Store: deleted (--no-keep)")
     else:
-        print(f"   Store: {store_path} (kept — use --no-keep to save {format_size(actual_size)})")
-
-    print(f"\n{'=' * 70}")
-    print("IMPORT COMPLETE")
-    print("=" * 70)
-    print(f"Model: {org}/{name}")
+        log.debug(f"   Store: {store_path} (kept — use --no-keep to save {format_size(actual_size)})")
     if _declared != name:
-        print(f"Installed as: {_declared}  (the hub record is named {name!r}; the container carries "
-              f"its own name — use it with `run` and `remove`)")
-    print(f"Cache: {cache_path}")
-    print(f"\nRun with: {_suggest_run_command(_declared, cache_path)}")
-    print(f"Remove with: neurobrix remove {_declared}")
+        log.debug(f"Installed as: {_declared}  (the hub record is named {name!r}; the container carries "
+                  f"its own name — use it with `run` and `remove`)")
+    print(f"Installed {_declared} · run: {_suggest_run_command(_declared, cache_path)}")
+    log.debug(f"Remove with: neurobrix remove {_declared}")
     _ev(args, "done", model=f"{org}/{name}", installed_as=_declared, cache=str(cache_path),
         store=None if args.no_keep else str(store_path))
 
@@ -616,34 +614,16 @@ def cmd_list(args):
 
     # --store: show store contents only
     if args.store:
-        print("=" * 70)
-        print("NeuroBrix Store (~/.neurobrix/store/)")
-        print("=" * 70)
-
         if not STORE_DIR.exists() or not any(STORE_DIR.glob("*.nbx")):
-            print("\nStore is empty.")
-            print("  .nbx files are kept here after import (use --no-keep to skip)")
+            print("The store is empty (.nbx files are kept here after import; --no-keep skips it).")
             return
-
-        print(f"\n{'FILE':<45} {'SIZE':>10}")
-        print("-" * 57)
-        total_size = 0
-        count = 0
-        for nbx_file in sorted(STORE_DIR.glob("*.nbx")):
-            size = nbx_file.stat().st_size
-            total_size += size
-            count += 1
-            print(f"{nbx_file.name:<45} {format_size(size):>10}")
-
-        print(f"\nTotal: {count} file(s), {format_size(total_size)}")
-        print(f"Path:  {STORE_DIR}")
-        print(f"\nFree space: neurobrix clean --store")
+        files = sorted(STORE_DIR.glob("*.nbx"))
+        sizes = [f.stat().st_size for f in files]
+        print_table(["FILE", "SIZE"], [[f.name, format_size(z)] for f, z in zip(files, sizes)])
+        print(f"{len(files)} file(s) · {format_size(sum(sizes))} in {STORE_DIR} (neurobrix clean --store frees it)")
         return
 
     # Default: show cache (installed models) with store indicator
-    print("=" * 70)
-    print("NeuroBrix Models")
-    print("=" * 70)
 
     # Index store .nbx files for cross-reference
     store_files = {}
@@ -698,22 +678,16 @@ def cmd_list(args):
             store_only.append({"name": stem, "size": size})
 
     if not models and not store_only:
-        print("\nNo models installed.")
-        print(f"\n  Install from registry: neurobrix import <org>/<model>")
-        print(f"  Browse hub:            neurobrix hub")
+        print("No models installed. Install one: neurobrix import <org>/<model> (browse them: neurobrix hub)")
         return
 
     if models:
-        print(f"\n{'MODEL':<35} {'FAMILY':<10} {'SIZE':>10} {'LICENSE':>16} {'STORE':>8}")
-        print("-" * 82)
-        for m in models:
-            store_str = ".nbx" if m["store"] else "-"
-            lic = m.get("license", "") or "-"
-            print(f"{m['name']:<35} {m['family']:<10} {format_size(m['size']):>10} {lic:>16} {store_str:>8}")
-        print(f"\nInstalled: {len(models)} model(s)")
+        print_table(["MODEL", "FAMILY", "SIZE", "LICENSE", "STORE"],
+                    [[m["name"], m["family"], format_size(m["size"]), m.get("license", "") or "-",
+                      ".nbx" if m["store"] else "-"] for m in models])
 
     if store_only:
-        print(f"\nStore only (not extracted):")
+        print("Store only (not extracted):")
         for s in store_only:
             print(f"  {s['name']}.nbx  ({format_size(s['size'])})")
         # `<org>` was printed as a literal, so the suggested command could not
@@ -723,11 +697,10 @@ def cmd_list(args):
         print(f"  Find its org:  neurobrix hub --search {_first}")
         print(f"  Then extract:  neurobrix import <org>/{_first} --force")
 
+    summary = [f"{len(models)} model(s)"]
     if store_files:
-        total_store = sum(store_files.values())
-        print(f"\nStore usage: {format_size(total_store)} ({len(store_files)} file(s))")
-        print(f"  View: neurobrix list --store")
-        print(f"  Free: neurobrix clean --store")
+        summary.append(f"{format_size(sum(store_files.values()))} of .nbx in the store (neurobrix clean --store frees it)")
+    print(" · ".join(summary))
 
 
 def _find_store_files(model_name):
@@ -762,17 +735,14 @@ def _remove_body(args, record):
     do_store = args.store or getattr(args, 'all', False)
     do_cache = not args.store or getattr(args, 'all', False)
 
-    print("=" * 70)
-    print("NeuroBrix Remove")
-    print("=" * 70)
-
     removed = False
 
     # Remove from cache
     if do_cache and cache_path.exists():
         total_size = sum(f.stat().st_size for f in cache_path.rglob("*") if f.is_file())
         shutil.rmtree(cache_path)
-        print(f"Removed cache: {cache_path} ({format_size(total_size)} freed)")
+        log.debug(f"Removed cache: {cache_path}")
+        print(f"Removed {model_name} ({format_size(total_size)} freed).")
         record["removed"].append({"kind": "cache", "path": str(cache_path), "bytes": total_size})
         removed = True
     elif do_cache and not cache_path.exists():
@@ -780,10 +750,9 @@ def _remove_body(args, record):
             # Cache-only mode but nothing in cache — check if in store
             store_matches = _find_store_files(model_name)
             if store_matches:
-                print(f"Model '{model_name}' not in cache, but found in store:")
-                for f in store_matches:
-                    print(f"  {f.name} ({format_size(f.stat().st_size)})")
-                print(f"\nTo remove from store: neurobrix remove {model_name} --store")
+                log.error(f"Error: {model_name} is not installed, but its archive is in the store "
+                          f"({', '.join(f'{f.name} ({format_size(f.stat().st_size)})' for f in store_matches)}): "
+                          f"neurobrix remove {model_name} --store removes it")
                 sys.exit(1)
 
     # Remove from store
@@ -792,15 +761,15 @@ def _remove_body(args, record):
         for nbx_file in store_matches:
             size = nbx_file.stat().st_size
             nbx_file.unlink()
-            print(f"Removed store: {nbx_file.name} ({format_size(size)} freed)")
+            log.debug(f"Removed store: {nbx_file}")
+            print(f"Removed {nbx_file.name} from the store ({format_size(size)} freed).")
             record["removed"].append({"kind": "store", "path": str(nbx_file), "bytes": size})
             removed = True
 
         if not store_matches and not removed:
-            print(f"No .nbx file found for '{model_name}' in store.")
+            log.debug(f"No .nbx file found for '{model_name}' in store.")
 
     if not removed:
-        print(f"Model '{model_name}' not found.")
         # Show what's available
         available = []
         if CACHE_DIR.exists():
@@ -808,11 +777,9 @@ def _remove_body(args, record):
                          if is_installed_model_dir(d)]
         for nbx_file in (STORE_DIR.glob("*.nbx") if STORE_DIR.exists() else []):
             available.append(f"{nbx_file.stem} (store)")
-        if available:
-            print(f"Available: {', '.join(available)}")
+        log.error(f"Error: model '{model_name}' not found."
+                  + (f" Installed: {', '.join(available)}" if available else ""))
         sys.exit(1)
-
-    print("\nDone.")
 
 
 def cmd_clean(args):
@@ -823,15 +790,8 @@ def cmd_clean(args):
     do_cache = args.all or args.cache
 
     if not do_store and not do_cache:
-        print("ERROR: Specify --store, --cache, or --all")
-        print("  neurobrix clean --store   # Delete all .nbx files")
-        print("  neurobrix clean --cache   # Delete all extracted models")
-        print("  neurobrix clean --all     # Delete both")
+        log.error("Error: say what to wipe: --store (the .nbx archives), --cache (the installed models) or --all")
         sys.exit(1)
-
-    print("=" * 70)
-    print("NeuroBrix Clean")
-    print("=" * 70)
 
     store_size = 0
     store_count = 0
@@ -859,10 +819,10 @@ def cmd_clean(args):
         return
 
     total_size = (store_size + cache_size) / (1024**3)
-    print(f"\n  Total: {total_size:.2f} GB will be freed")
+    print(f"  Total: {total_size:.2f} GB will be freed")
 
     if not args.yes:
-        reply = input("\nProceed? [y/N] ").strip().lower()
+        reply = input("Proceed? [y/N] ").strip().lower()
         if reply != 'y':
             print("Cancelled.")
             return
@@ -880,7 +840,7 @@ def cmd_clean(args):
                 shutil.rmtree(d)
         print(f"Wiped cache: {cache_count} model(s) removed")
 
-    print(f"\nDone. {(freed + cache_size) / (1024**3):.2f} GB freed.")
+    print(f"{(freed + cache_size) / (1024**3):.2f} GB freed.")
 
 
 def cmd_hub(args):
@@ -920,14 +880,7 @@ def _cmd_hub(args):
 
     url = f"{registry}/api/models?{urllib.parse.urlencode(params)}"
 
-    print("=" * 70)
-    print("NeuroBrix Hub")
-    print("=" * 70)
-    print(f"Registry: {registry}")
-    if args.category:
-        print(f"Category: {args.category.upper()}")
-    if args.search:
-        print(f"Search: {args.search}")
+    log.debug(f"Registry: {registry}")
 
     # Fetch model list (no auth required)
     try:
@@ -950,20 +903,17 @@ def _cmd_hub(args):
         except Exception:
             pass
         if code < 500 and detail:
-            print(f"\nERROR: {detail.get('error', e)}")
             valid = detail.get("validCategories")
-            if valid:
-                print(f"  Valid categories: {', '.join(valid)}")
+            log.error(f"Error: {detail.get('error', e)}" + (f" (valid categories: {', '.join(valid)})" if valid else ""))
             sys.exit(2)
-        print(f"\nERROR: registry returned HTTP {code} for {url}")
-        print(f"  {e}")
+        log.error(f"Error: the registry returned HTTP {code} for {url}: {e}")
         sys.exit(1)
     except requests.RequestException as e:
-        print(f"\nERROR: Cannot connect to registry at {registry}")
-        print(f"  {e}")
+        log.error(f"Error: cannot connect to the registry at {registry} ({e}); check the network, or name "
+                  f"another registry with --registry")
         sys.exit(1)
     except Exception as e:
-        print(f"\nERROR: {e}")
+        log.error(f"Error: {e}")
         sys.exit(1)
 
     remote_models = data.get("models", [])
@@ -985,9 +935,7 @@ def _cmd_hub(args):
                       "total": total_count, "models": rows})
         return
     if not remote_models:
-        print("\nNo models found.")
-        if args.category or args.search:
-            print("Try without filters: neurobrix hub")
+        print("No models found." + (" Try without filters: neurobrix hub" if args.category or args.search else ""))
         sys.exit(0)
 
     # Check which are already installed locally
@@ -997,37 +945,22 @@ def _cmd_hub(args):
             if is_installed_model_dir(d):
                 installed.add(d.name)
 
-    # Display
-    print(f"\n{'MODEL':<30} {'CATEGORY':<10} {'SIZE':>10} {'LICENSE':>16} {'DL':>6}  STATUS")
-    print("-" * 90)
-
+    rows = []
     for rm in remote_models:
         slug = rm.get("slug", f"{rm.get('org', '?')}/{rm.get('name', '?')}")
-        category = rm.get("category", "?")
-        file_size = int(rm.get("fileSize", 0))
-        downloads = rm.get("downloadCount", 0)
-        lic = rm.get("license", "-") or "-"
         name = rm.get("name", slug.split("/")[-1])
         # The visibility badge must reach the user BEFORE the download:
         # a non-public state (DEPRECATED) outranks the local "installed"
         # marker in this column. The stated reason is returned by the
         # download API and shown at import time.
         visibility = (rm.get("visibility") or "PUBLIC").upper()
-        if visibility != "PUBLIC":
-            status = visibility
-        elif name in installed:
-            status = "installed"
-        else:
-            status = ""
-
-        print(f"{slug:<30} {category:<10} {format_size(file_size):>10} {lic:>16} {downloads:>6}  {status}")
-
-    print(f"\nTotal: {total_count} model(s) on registry")
-
-    if installed:
-        print(f"Installed locally: {len(installed)}")
-
-    print(f"\nInstall: neurobrix import <org>/<model>")
+        status = visibility if visibility != "PUBLIC" else ("installed" if name in installed else "")
+        rows.append([slug, rm.get("category", "?"), format_size(int(rm.get("fileSize", 0))),
+                     rm.get("license", "-") or "-", rm.get("downloadCount", 0), status])
+    print_table(["MODEL", "CATEGORY", "SIZE", "LICENSE", "DL", "STATUS"], rows)
+    shown_installed = sum(1 for r in rows if r[-1] == "installed")
+    print(f"{total_count} model(s)" + (f", {shown_installed} installed here" if shown_installed else "")
+          + " · neurobrix import <org>/<model>")
 
 
 # ============================================================================
@@ -1045,16 +978,9 @@ _ACCEPTANCES_FILE = _engine_home() / "license_acceptances.json"
 
 def _print_noninteractive_license_help(model_ref: str, license_name: str, full_url: str) -> None:
     """Explain how to accept a gated-model license without a terminal prompt."""
-    print("\n   ERROR: This model requires explicit license acceptance, but no")
-    print("   interactive terminal is available to prompt for it.")
-    print()
-    print(f"   License: {license_name}")
-    if full_url:
-        print(f"   Full text: {full_url}")
-    print()
-    print("   To accept the license non-interactively, re-run with either:")
-    print(f"     neurobrix import {model_ref} --accept-license")
-    print(f"     NBX_ACCEPT_LICENSE=1 neurobrix import {model_ref}")
+    log.error(f"Error: the license {license_name}" + (f" ({full_url})" if full_url else "")
+              + " needs an explicit acceptance and no terminal can ask it: re-run with "
+              f"neurobrix import {model_ref} --accept-license (or NBX_ACCEPT_LICENSE=1)")
 
 
 def _is_license_accepted(org: str, name: str) -> bool:

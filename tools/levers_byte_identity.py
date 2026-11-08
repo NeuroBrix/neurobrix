@@ -124,6 +124,7 @@ def run_one(tree: Path, model: str, prompt: str, max_tokens: int, arm: str,
     out_path.unlink(missing_ok=True)
     env = dict(os.environ)
     env["PYTHONPATH"] = str(tree / "src")
+    env["NBX_LOG"] = "debug"          # developer lines in the error tails it keeps (nbxtensor/terminal.py)
     env.setdefault("TOKENIZERS_PARALLELISM", "false")
     cmd = [sys.executable, "-u", "-m", "neurobrix", "run",
            "--model", model, "--prompt", prompt,

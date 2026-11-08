@@ -38,6 +38,8 @@ from neurobrix.nbx.weight_presence import (   # noqa: F401 — re-exported for t
     AbsentWeightError, read_weights_index, absent_weights, refuse_absent_weights,
     loader_weight_consumers, refuse_unbound_weights, read_safetensors_header,
 )
+import logging
+_log = logging.getLogger(__name__)
 
 
 # Same pattern as core/runtime/graph/compiled_sequence.py _BLOCK_RE.
@@ -262,8 +264,8 @@ def load_component_weights(
     import os as _os
     if _os.environ.get("NBX_DIAG_TRITON_PRELOOP") == "1":
         _dist = {f"cuda:{d}": f"{b/1e9:.2f}GB" for d, b in sorted(dev_bytes.items())}
-        print(f"   [NBX-DIAG-SHARD] {component}: shard_map_entries={len(shard_map or {})} "
-              f"per-device={_dist}", flush=True)
+        _log.debug(f"   [NBX-DIAG-SHARD] {component}: shard_map_entries={len(shard_map or {})} "
+                   f"per-device={_dist}")
 
     # Phase 2: Create one arena per device
     arenas: Dict[int, ComponentArena] = {}
@@ -288,10 +290,10 @@ def load_component_weights(
 
     if cpu_weights:
         total_cpu_mb = DeviceAllocator.host_pinned_allocated() / (1024 * 1024)
-        print(f"[weight_loader] zero3 CPU partition for {component}: "
-              f"{len(cpu_weights)} block weights on pinned host "
-              f"(~{total_cpu_mb:.0f}MB), "
-              f"non-block on cuda:{device_idx}")
+        _log.debug(f"[weight_loader] zero3 CPU partition for {component}: "
+                   f"{len(cpu_weights)} block weights on pinned host "
+                   f"(~{total_cpu_mb:.0f}MB), "
+                   f"non-block on cuda:{device_idx}")
 
     return weights
 

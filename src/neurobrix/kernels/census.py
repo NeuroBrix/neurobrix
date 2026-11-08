@@ -28,6 +28,8 @@ import os
 import threading
 from typing import List, Any, Dict, Optional, Set
 import nbxtensor.memory.allocator as _nbx_allocator  # the module the moved names live in (M2 cut of tensor.py)
+import logging
+_log = logging.getLogger(__name__)
 
 _RECORD_LOCK = threading.Lock()
 _RECORDED: Set[str] = set()
@@ -62,13 +64,7 @@ def key_line(tuned, key: tuple) -> Optional[str]:
     return f"{qual}::{key_repr(tuple(key))}"
 
 
-_SAID: Set[str] = set()
-
-
-def _say_once(msg: str) -> None:
-    if msg not in _SAID:
-        _SAID.add(msg)
-        print(msg, flush=True)
+from nbxtensor.ops.autotune_certified import say_once as _say_once  # noqa: E402  the library's once-said line
 
 
 def record(tuned, key: tuple) -> None:
@@ -212,9 +208,8 @@ def walk_extent(lo: int, hi: int, run, name: str = ""):
         raise RuntimeError(f"census extent walk {name or ''} {lo}..{hi}: no extent recorded a key "
                            f"in {len(seen)} run(s) — the stage never ran")
     classes = len(keyed)
-    print(f"[census] extent {name or 'walk'} {lo}..{hi}: {classes} key class(es) in {len(seen)} run(s), "
-          f"{_t.perf_counter() - t0:.1f} s" + (f"; refused at {len(refused)} extent(s) up to {refused[-1]}" if refused else ""),
-          flush=True)
+    _log.debug("%s", f"[census] extent {name or 'walk'} {lo}..{hi}: {classes} key class(es) in {len(seen)} run(s), "
+                     f"{_t.perf_counter() - t0:.1f} s" + (f"; refused at {len(refused)} extent(s) up to {refused[-1]}" if refused else ""))
     return last[0]
 
 

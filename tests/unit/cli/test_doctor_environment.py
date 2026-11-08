@@ -194,12 +194,14 @@ def _mac(monkeypatch, mps_available=True):
     monkeypatch.setattr(builtins, "__import__", no_triton)
 
 
-def test_on_a_mac_the_mps_gpu_is_seen_and_the_triton_engine_is_sent_to_its_source_build(monkeypatch, capsys):
+def test_on_a_mac_the_mps_gpu_is_seen_and_the_triton_engine_is_sent_to_its_source_build(monkeypatch, capsys,
+                                                                                         engine_log):
     _mac(monkeypatch)
     problems = doctor.check_compute_environment()
     out = capsys.readouterr().out
     assert problems == [], problems
-    assert "GPU visible:    yes (Apple GPU, mps)" in out and "Apple MPS (Metal)" in out, out
+    # the verdict on stdout, the build it was read from under -v
+    assert "PyTorch engine: 2.15.0 (Apple GPU, mps)" in out and "Apple MPS (Metal)" in engine_log(), out
     assert "GPU visible:    NO" not in out and "CUDA None" not in out, out
     assert "PCI bus" not in out and "Apple GPU (Metal)" in out, out
     assert "run: python -m nbxtensor install-metal" in out and "pip install neurobrix" not in out, out

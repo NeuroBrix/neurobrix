@@ -27,6 +27,7 @@ from typing import Optional, Callable, Dict, List, Tuple
 import torch
 
 from neurobrix.core.runtime.expert_residency import ExpertResidency
+import logging
 
 Triple = Tuple[torch.Tensor, torch.Tensor, torch.Tensor]
 
@@ -152,7 +153,7 @@ class TorchExpertStore:
         if self._stream is not None:
             torch.cuda.current_stream(self.device).wait_stream(self._stream)
         if self.residency.hits or self.residency.misses:
-            print(f"   {self.summary()}", flush=True)
+            logging.getLogger(__name__).debug(f"   {self.summary()}")
         self.slots = []
         self._inflight.clear()
         self.residency.clear()

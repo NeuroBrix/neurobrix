@@ -20,6 +20,8 @@ from typing import Any, Dict, List, Optional
 from .base import ComponentFlowHandler, register_flow
 from neurobrix.core.flow.shared_steps import effective_sampling as _effective_sampling   # both branches read the sampling alike
 from neurobrix.core.flow.shared_steps import _maybe_log_topk   # both branches
+import logging
+_log = logging.getLogger(__name__)
 
 
 @register_flow("encoder_decoder")
@@ -94,8 +96,8 @@ class EncoderDecoderEngine(ComponentFlowHandler):
                     "was built before the toolchain copied it. Rebuild it with "
                     "the current toolchain, or pass audio no longer than one "
                     f"window ({_seek_ctx['chunk_s']:.0f} s).")
-            print(f"   [Audio] Long-form: timestamp seek over "
-                  f"{_seek_total / _seek_ctx['sr']:.1f} s")
+            _log.debug(f"   [Audio] Long-form: timestamp seek over "
+                       f"{_seek_total / _seek_ctx['sr']:.1f} s")
 
         _n_win = 0
         while True:
@@ -107,14 +109,14 @@ class EncoderDecoderEngine(ComponentFlowHandler):
             _n_win += 1
             _mel_frames = int(self.ctx.variable_resolver.resolved[_feat_var].shape[-1])
 
-            print(f"   [{enc_name}] Running encoder..." +
-                  (f" (window {_n_win} at {_seek / _seek_ctx['sr']:.2f} s)"
-                   if _seek_ctx else ""))
+            _log.debug("%s", f"   [{enc_name}] Running encoder..." +
+                             (f" (window {_n_win} at {_seek / _seek_ctx['sr']:.2f} s)"
+                              if _seek_ctx else ""))
             start = time.perf_counter()
             self._ensure_weights_loaded(enc_name)
             self._execute_component(enc_name, "forward", None)
             enc_elapsed = (time.perf_counter() - start) * 1000
-            print(f"   [{enc_name}] Done in {enc_elapsed:.0f}ms")
+            _log.debug(f"   [{enc_name}] Done in {enc_elapsed:.0f}ms")
 
             # Store encoder output for cross-attention
             encoder_output = self._get_component_output(enc_name)
@@ -156,8 +158,8 @@ class EncoderDecoderEngine(ComponentFlowHandler):
         if _n_win > 1:
             text = " ".join(t.strip() for t in _all_texts if t and t.strip())
             self.ctx.variable_resolver.resolved["global.transcription"] = text
-            print(f"   [Output] Transcription ({_n_win} windows): "
-                  f"{text[:100]}{'...' if len(text) > 100 else ''}")
+            _log.debug(f"   [Output] Transcription ({_n_win} windows): "
+                       f"{text[:100]}{'...' if len(text) > 100 else ''}")
         else:
             from .audio_utils import postprocess_text_output
             postprocess_text_output(self.ctx)
@@ -210,7 +212,7 @@ class EncoderDecoderEngine(ComponentFlowHandler):
         forced_map = whisper_forced_map(defaults, ts_ids, timestamps=seek_ctx is not None)
         begin = whisper_begin_index(forced_map)
 
-        print(f"   [{dec_name}] Generating tokens (max={max_tokens})...")
+        _log.debug(f"   [{dec_name}] Generating tokens (max={max_tokens})...")
         start = time.perf_counter()
         self._ensure_weights_loaded(dec_name)
 
@@ -300,7 +302,7 @@ class EncoderDecoderEngine(ComponentFlowHandler):
                 break
 
         dec_elapsed = (time.perf_counter() - start) * 1000
-        print(f"   [{dec_name}] Generated {len(generated_ids)} tokens in {dec_elapsed:.0f}ms")
+        _log.debug(f"   [{dec_name}] Generated {len(generated_ids)} tokens in {dec_elapsed:.0f}ms")
 
         # Timestamp seek — the vendor's rule (stt_longform.whisper_seek):
         # an unfinished trailing segment is dropped and decoded again
@@ -319,10 +321,10 @@ class EncoderDecoderEngine(ComponentFlowHandler):
                 generated_ids = generated_ids[:_keep]
                 advance_samples = whisper_advance_samples(
                     _adv_idx, mel_frames, encoder_frames, seek_ctx["hop"])
-                print(f"   [{dec_name}] seek +{advance_samples / seek_ctx['sr']:.2f} s "
-                      f"(end of the last complete segment)")
+                _log.debug(f"   [{dec_name}] seek +{advance_samples / seek_ctx['sr']:.2f} s "
+                           f"(end of the last complete segment)")
             else:
-                print(f"   [{dec_name}] seek: whole window")
+                _log.debug(f"   [{dec_name}] seek: whole window")
         _all_ids.extend(generated_ids)
         # Per-window text (timestamp tokens stripped by form); joined by
         # the caller. Single-window callers still run the classic

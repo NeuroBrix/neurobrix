@@ -21,6 +21,8 @@ from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.memory.memory_pool import release_flow_memory
 from neurobrix.core.flow.shared_steps import AudioSteps   # the steps both branches share
 from neurobrix.core.flow.base import ComponentFlowHandler   # the executor's four component callables, both branches
+import logging
+_log = logging.getLogger(__name__)
 
 
 #: The stage executions the audio flow runs. Every execution a container of this flow declares
@@ -233,10 +235,10 @@ class TritonAudioEngine(AudioSteps, ComponentFlowHandler):
                     if has_tensor_input:
                         break
         if not has_tensor_input:
-            print(f"   [{comp_name}] Skipped (no tensor inputs available)")
+            _log.debug(f"   [{comp_name}] Skipped (no tensor inputs available)")
             return
 
-        print(f"   [{comp_name}] Running forward pass...")
+        _log.debug(f"   [{comp_name}] Running forward pass...")
         start = time.perf_counter()
 
         self._ensure_weights_loaded(comp_name)
@@ -250,7 +252,7 @@ class TritonAudioEngine(AudioSteps, ComponentFlowHandler):
             self._execute_component(comp_name, "forward", None)
 
         elapsed = (time.perf_counter() - start) * 1000
-        print(f"   [{comp_name}] Done in {elapsed:.0f}ms")
+        _log.debug(f"   [{comp_name}] Done in {elapsed:.0f}ms")
 
         if not self.ctx.persistent_mode:
             self._unload_component_weights(comp_name)
@@ -342,7 +344,7 @@ class TritonAudioEngine(AudioSteps, ComponentFlowHandler):
             z = NBXTensor.zeros(tuple(pad_shape), dtype=t.dtype, device=t.device)
             return NBXTensor.cat([t, z], dim=dim)
 
-        print(f"   [{comp_name}] Chunked: {actual_seq} frames -> {graph_seq_len}-frame blocks")
+        _log.debug(f"   [{comp_name}] Chunked: {actual_seq} frames -> {graph_seq_len}-frame blocks")
         waveform_chunks = []
         for chunk_start in range(0, actual_seq, graph_seq_len):
             chunk_end = min(chunk_start + graph_seq_len, actual_seq)
@@ -384,7 +386,7 @@ class TritonAudioEngine(AudioSteps, ComponentFlowHandler):
                        else NBXTensor.cat(waveform_chunks, dim=last).contiguous())
         resolved[f"{comp_name}.output_0"] = full_output
         resolved["global.output_audio"] = full_output
-        print(f"   [{comp_name}] Waveform: {list(full_output.shape)}")
+        _log.debug(f"   [{comp_name}] Waveform: {list(full_output.shape)}")
         return True
 
     # -----------------------------------------------------------------

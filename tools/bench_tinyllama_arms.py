@@ -115,6 +115,7 @@ def run_once_nbx(args, arm: str, tag: str, outdir: Path) -> dict:
     env = dict(os.environ)
     env.update(BASE_ENV)
     env["NBX_DECODE_PROGRESS"] = str(progress)
+    env["NBX_LOG"] = "debug"          # the engine line it reads, with the run's developer lines (nbxtensor/terminal.py)
     env["PYTHONPATH"] = str(REPO_ROOT / "src")
 
     out_path = outdir / f"out_{tag}.txt"
@@ -131,7 +132,7 @@ def run_once_nbx(args, arm: str, tag: str, outdir: Path) -> dict:
 
     text = out_path.read_text() if out_path.exists() else ""
     engine = ""
-    found = re.search(r"Engine:\s*(\w+)", proc.stdout)
+    found = re.search(r"\[Engine\] engine:\s*(\w+)", proc.stdout + proc.stderr)
     if found:
         engine = found.group(1)
     return {

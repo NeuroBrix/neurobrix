@@ -23,6 +23,8 @@ from ..base import ComponentHandler, ComponentConfig
 from ..registry import register_handler
 from neurobrix.core.module.output_processor import OutputProcessor, VAE_CLAMP_REGISTRY
 from neurobrix.core.runtime.tensor_compat import is_tensor as _is_tensor
+import logging
+_log = logging.getLogger(__name__)
 
 
 @register_handler("vae")
@@ -89,13 +91,13 @@ class VAEComponentHandler(ComponentHandler):
         import os as _os
         _dbg = _os.environ.get("NBX_DEBUG") == "1"
         if _dbg and is_torch_tensor(latent):
-            print(f"[VAE-SEAM] in   key={latent_key} shape={list(latent.shape)} "
-                  f"mean={latent.float().mean().item():.4f} std={latent.float().std().item():.4f}")
+            _log.debug(f"[VAE-SEAM] in   key={latent_key} shape={list(latent.shape)} "
+                       f"mean={latent.float().mean().item():.4f} std={latent.float().std().item():.4f}")
         _dump = _os.environ.get("NBX_DUMP_LATENT")
         if _dump and is_torch_tensor(latent):
             import torch
             torch.save(latent.detach().cpu(), _dump)
-            print(f"[VAE-SEAM] dumped the decoder-space latent (after the flow's affine) -> {_dump}")
+            _log.debug(f"[VAE-SEAM] dumped the decoder-space latent (after the flow's affine) -> {_dump}")
 
         # The per-channel statistics (latents_mean / latents_std) are NOT applied
         # here. They belong to the flow, which maps the loop output into the
@@ -114,9 +116,9 @@ class VAEComponentHandler(ComponentHandler):
             latent = latent / scaling_factor
 
         if _dbg and is_torch_tensor(latent):
-            print(f"[VAE-SEAM] out  shape={list(latent.shape)} "
-                  f"mean={latent.float().mean().item():.4f} std={latent.float().std().item():.4f} "
-                  f"(scaling_factor={self.config.scaling_factor})")
+            _log.debug(f"[VAE-SEAM] out  shape={list(latent.shape)} "
+                       f"mean={latent.float().mean().item():.4f} std={latent.float().std().item():.4f} "
+                       f"(scaling_factor={self.config.scaling_factor})")
 
         inputs[latent_key] = latent
         return inputs

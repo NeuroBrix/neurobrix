@@ -14,9 +14,10 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
+import logging
+_log = logging.getLogger(__name__)
 
 
 def open_decoder_cache(ctx, dec_name: str, max_tokens: int):
@@ -34,9 +35,9 @@ def open_decoder_cache(ctx, dec_name: str, max_tokens: int):
     if plan is None:
         return None
     if not positions_are_offset_by(plan):
-        print(f"[{dec_name}] KV cache REFUSED: the decoder graph takes no position_ids and carries no "
-              f"positional arange, table slice or count the cache could offset — recompute path "
-              f"(D-STT-KV-WHISPER-LARGE)", file=sys.stderr, flush=True)
+        _log.warning(f"[{dec_name}] KV cache REFUSED: the decoder graph takes no position_ids and carries no "
+                     f"positional arange, table slice or count the cache could offset — recompute path "
+                     f"(D-STT-KV-WHISPER-LARGE)")
         return None
     from neurobrix.core.runtime.graph.kv_cache_wrapper import KVCacheAttentionWrapper, KVCacheConfig
     wrapper = getattr(executor, "_decoder_kv_wrapper", None)
@@ -74,9 +75,9 @@ def open_decoder_cache(ctx, dec_name: str, max_tokens: int):
         how = ("positions from the caller" if plan["positions_input"] else
                f"{len(plan['arange_uids'])} arange, {len(plan['position_slice_uids'])} table slice, "
                f"{len(plan['position_cumsum_uids'])} count offset")
-        print(f"   [{dec_name}] KV cache: {plan['num_layers']} self-attention layers cached, "
-              f"{len(plan['cross_attn_uids'])} cross-attentions native, "
-              f"heads={plan['num_heads']} d={plan['head_dim']} max={kv.max_cache_len}, {how}")
+        _log.debug(f"   [{dec_name}] KV cache: {plan['num_layers']} self-attention layers cached, "
+                   f"{len(plan['cross_attn_uids'])} cross-attentions native, "
+                   f"heads={plan['num_heads']} d={plan['head_dim']} max={kv.max_cache_len}, {how}")
     wrapper.reset_for_new_sequence()
     return wrapper
 

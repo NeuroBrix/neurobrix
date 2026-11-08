@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from nbxtensor.tensor import NBXTensor
 from neurobrix.nbx.neurotax import normalize_tensor_name_strict
+import logging
 
 
 class VLMSteps:
@@ -109,7 +110,7 @@ class AudioSteps:
         variable = output_config.get("variable", "global.transcription")
         self.ctx.variable_resolver.resolved[variable] = text
         self.ctx.variable_resolver.resolved["global.transcription"] = text
-        print(f"   [Output] Transcription: {text[:100]}{'...' if len(text) > 100 else ''}")
+        logging.getLogger(__name__).debug(f"   [Output] Transcription: {text[:100]}{'...' if len(text) > 100 else ''}")
 
 
 # The RNN-T joint's weights, NeuroTax name -> role (both branches' joint).

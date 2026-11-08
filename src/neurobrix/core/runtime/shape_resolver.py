@@ -246,8 +246,7 @@ class SymbolicShapeResolver:
         if _SHAPE_DEBUG:
             _shapes = {k: tuple(v.shape) for k, v in inputs.items()
                        if hasattr(v, "shape")}
-            print(f"[SYMBOLS] bound={self._runtime_values} from inputs={_shapes}",
-                  flush=True)
+            logger.debug(f"[SYMBOLS] bound={self._runtime_values} from inputs={_shapes}")
 
     def _bind_symbol(
         self,

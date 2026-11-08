@@ -72,7 +72,7 @@ def test_a_positional_table_slice_is_registered_like_the_arange(monkeypatch):
     assert "aten.slice::1" not in ex.registered
 
 
-def test_a_decoder_with_no_positional_mechanism_refuses_the_cache(monkeypatch, capsys):
+def test_a_decoder_with_no_positional_mechanism_refuses_the_cache(monkeypatch, engine_log):
     """Neither an arange nor a positional-table slice: one token per step
     would sit at position 0 every step (whisper-large, 2026-09-05) — the
     cache is refused loudly and the recompute path keeps the transcript right."""
@@ -81,7 +81,7 @@ def test_a_decoder_with_no_positional_mechanism_refuses_the_cache(monkeypatch, c
     del ex._dag["ops"]["aten.arange::0"]
     assert _handler(ex)._decoder_kv_wrapper("dec", max_tokens=64) is None
     assert ex.registered == {}
-    assert "KV cache REFUSED" in capsys.readouterr().err
+    assert "KV cache REFUSED" in engine_log()
 
 
 def test_a_plan_without_the_decoders_cache_is_refused_by_name(monkeypatch):

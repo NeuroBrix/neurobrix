@@ -44,6 +44,7 @@ def run_once_nbx(args, arm_env, tag, outdir):
         cmd.append("--triton")
     env = dict(os.environ)
     env["CUDA_VISIBLE_DEVICES"] = args.gpu
+    env["NBX_LOG"] = "debug"          # the run's developer lines in its log (nbxtensor/terminal.py)
     env["PYTHONPATH"] = str(REPO / "src")
     t0 = time.time()
     r = _locked(args, lambda: subprocess.run(
@@ -92,6 +93,7 @@ def _run_pip_arm(args, arm_env, tag, outdir, py, script):
     wav = outdir / f"tts_{tag}.wav"
     env = dict(os.environ); env.update(arm_env)
     env["CUDA_VISIBLE_DEVICES"] = args.gpu
+    env["NBX_LOG"] = "debug"          # the run's developer lines in its log (nbxtensor/terminal.py)
     t0 = time.time()
     r = _locked(args, lambda: subprocess.run(
         [py, "-c", script, args.sentence_text, str(wav)],
@@ -137,6 +139,7 @@ def stt_probe(args, wav_path: str, outdir, tag) -> dict:
            "--output", str(txt), "--hardware", args.hardware]
     env = dict(os.environ)
     env["CUDA_VISIBLE_DEVICES"] = args.gpu
+    env["NBX_LOG"] = "debug"          # the run's developer lines in its log (nbxtensor/terminal.py)
     env["PYTHONPATH"] = str(REPO / "src")
     r = subprocess.run(cmd, env=env, capture_output=True, text=True,
                        timeout=900)
