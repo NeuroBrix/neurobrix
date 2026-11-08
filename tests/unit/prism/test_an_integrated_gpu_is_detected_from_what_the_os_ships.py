@@ -264,3 +264,18 @@ def test_a_profile_unified_only_through_its_architecture_is_asked_the_same():
     assert old["devices"][0]["architecture"] == "apple_silicon"
     with pytest.raises(ValueError, match="max_allocation_mb"):
         profile(old)
+
+
+def test_an_intel_macs_integrated_gpu_is_refused_by_name_and_the_mac_plans_on_its_cpu(monkeypatch):
+    """No real Intel-Mac `system_profiler SPDisplaysDataType -json` was found to cite: this record carries only the keys
+    the parser reads (`sppci_model`, `spdisplays_vendor`), with the Intel UHD 630 name a 2018 MacBook Pro reports in
+    the text form of the same command (NVIDIA developer forum, "Will Macbook Pro Radeon Pro 555X or Intel UHD Graphics
+    630 work with CUDA Toolkit"). It was written as architecture "xe", which no vendor file has: the Mac was refused
+    whole."""
+    record = {"SPDisplaysDataType": [{"sppci_model": "Intel UHD Graphics 630", "spdisplays_vendor": "Intel"}]}
+    monkeypatch.setattr(autodetect.subprocess, "run",
+                        lambda cmd, *a, **k: subprocess.CompletedProcess(cmd, 0, json.dumps(record), ""))
+    devices, brand = autodetect._detect_gpus("Darwin")
+    (refused,) = devices
+    assert brand == "none" and refused["model"] == "Intel UHD Graphics 630" and "macOS" in refused["refused"]
+    assert autodetect._driven(devices) == []
