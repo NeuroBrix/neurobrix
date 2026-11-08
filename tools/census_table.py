@@ -51,6 +51,35 @@ def graph_sha(model: str) -> str:
     return container_sha(CACHE / model)
 
 
+def replace_chunks(path: Path, model: str, records) -> None:
+    """The model's prefill-chunk records (one per mode, `kernels/census_table.chunks_path`) replaced, every other model's
+    kept, under the TABLE's lock, atomically — written by the derived census only (Prism reads them)."""
+    records = list(records)
+    if any(r.get("model") != model for r in records):
+        raise ValueError(f"replace_chunks({model!r}) was handed another model's record")
+    from neurobrix.kernels.census_table import chunks_path, locked, read_chunks
+    import os
+    import tempfile
+    cp = chunks_path(path)
+    with locked(path):
+        recs = {k: v for k, v in read_chunks(path).items() if k[0] != model}
+        for r in records:
+            recs[(model, r["mode"])] = r
+        fd, tmp = tempfile.mkstemp(dir=str(cp.parent), prefix=cp.name, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                for k in sorted(recs):
+                    fh.write(json.dumps(recs[k], sort_keys=True) + "\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, cp)
+        except BaseException:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+            raise
+
+
 def parse_keys_name(name: str):
     """'<model>.<mode>[.probe][.r<rung>][.walk].keys' -> (model, mode, rung_mb or None), peeled from the
     right because model names carry dots ('granite-3.1-1b-a400m-instruct')."""

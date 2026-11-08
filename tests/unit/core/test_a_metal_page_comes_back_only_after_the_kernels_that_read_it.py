@@ -19,7 +19,7 @@ import numpy as np
 import pytest
 import yaml
 
-from neurobrix.core.state.pages import PagePool, PageTable
+from nbxtensor.memory.pages import PagePool, PageTable
 import nbxtensor.backend.runtime as _nbx_runtime  # the module the moved names live in (M2 cut of tensor.py)
 
 

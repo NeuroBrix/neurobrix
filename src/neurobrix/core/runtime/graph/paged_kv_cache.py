@@ -1,8 +1,8 @@
 """The compiled engine's paged KV cache (state engine step 2, docs/design/state-engine.md §4.3.1).
 
-Mirror of triton/paged_kv_cache.py with the compiled engine's raw allocation: per layer a K pool and a V pool
+Mirror of nbxtensor/memory/paged_kv.py with the compiled engine's raw allocation: per layer a K pool and a V pool
 `[num_pages, kv_heads, page_tokens, D]` (torch tensors on the device that layer's attention runs on — a model split
-across cards keeps each layer's state on its card), one PagePool and one PageTable per sequence (core/state/pages.py).
+across cards keeps each layer's state on its card), one PagePool and one PageTable per sequence (nbxtensor/memory/pages.py).
 The append writes the step's positions into their slots; the attention reads the sequence's pages GATHERED through the
 table into the K / V it already takes (the design's compiled branch: one gather per layer per step, the attention code
 unchanged). The pool starts at the plan's size and grows by pages toward the ceiling (the model's window when the
@@ -17,7 +17,7 @@ from typing import Dict, List, Optional, Tuple
 import torch
 
 from neurobrix.core.dtype.config import get_torch_dtype
-from neurobrix.core.state.pages import PagePool, PageTable
+from nbxtensor.memory.pages import PagePool, PageTable
 
 
 class PagedKVCache:

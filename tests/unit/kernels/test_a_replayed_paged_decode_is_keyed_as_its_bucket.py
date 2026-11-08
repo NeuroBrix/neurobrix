@@ -30,7 +30,7 @@ def test_the_key_is_constant_inside_a_split_and_moves_at_its_boundary():
 
 
 def test_the_replay_bucket_is_the_keys_split():
-    from neurobrix.triton.paged_kv_cache import PagedTritonKVCache
+    from nbxtensor.memory.paged_kv import PagedTritonKVCache
     for length in (0, 1, 63, 255, 256, 257, 4000, 70000):
         cache = types.SimpleNamespace(pool=object(), tables=[types.SimpleNamespace(pages=[0] * 2000)],
                                       page_tokens=64, length=length, batch=1, _uid=7, generation=0)

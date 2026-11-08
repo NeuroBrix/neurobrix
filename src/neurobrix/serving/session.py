@@ -15,7 +15,7 @@ behind the user's back (the owner's decision, 2026-11-08).
 
 from typing import Any, Callable, Dict, List, Tuple
 
-from neurobrix.core.state.kv_session import KVSession
+from nbxtensor.memory.kv_session import KVSession
 
 
 def session_ceiling(kv_plan) -> Tuple[int, str]:

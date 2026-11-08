@@ -16,7 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from neurobrix.core.state.kv_session import KVSession, held_ids
+from nbxtensor.memory.kv_session import KVSession, held_ids
 from neurobrix.serving.session import ConversationSession, play_turn, session_ceiling
 
 

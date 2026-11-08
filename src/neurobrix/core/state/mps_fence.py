@@ -1,7 +1,7 @@
 """The compiled branch's release fence on MPS (state engine step 2, docs/design/state-engine.md §4.3).
 
 MPS reuses a buffer only once the command buffer that used it completed (§3.1), so a released state page waits in the
-release queue (core/state/pages.py) until the work enqueued before its release has run. Each `record` places a
+release queue (nbxtensor/memory/pages.py) until the work enqueued before its release has run. Each `record` places a
 `torch.mps.Event` on the current stream and numbers it; `completed` queries the events in order without waiting and
 returns the highest number reached (events on one stream complete in order).
 """

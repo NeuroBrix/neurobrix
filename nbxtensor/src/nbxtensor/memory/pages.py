@@ -4,7 +4,8 @@ State is held in fixed-size pages granted as a request grows, never at max_len. 
 engines share: which page holds which position (PageTable), who holds a page (reference counts, copy-on-write for a CFG
 pair's shared prompt and beam prefixes), and when a released page may be granted again (PagePool's release queue).
 The raw allocation behind the pages and the kernels that read through the table are per engine; nothing here touches
-a device or imports torch (R33: the Triton branch imports this too).
+a device or imports torch or triton: pure bookkeeping (the standard library only), so the compiled engine's torch cache
+and the Triton cache read the same tables (tests/unit/nbxtensor_boundary: importing it loads no triton).
 
 Release is a queue event when it has to be (§3.3 point 3). In a fixed pool whose pages are written only by GPU work on
 the same queue that reads them, a page granted again is written after the earlier reads in queue order, and release is

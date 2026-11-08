@@ -1,6 +1,6 @@
 """The Triton engine's KV attention interceptor and decode branches.
 
-The cache it drives is the state engine's paged cache (triton/paged_kv_cache.py, step 2): prefill appends into the
+The cache it drives is the state engine's paged cache (nbxtensor/memory/paged_kv.py, step 2): prefill appends into the
 pages and attends over its own K / V, decode appends at the device length and reads through the block table. The
 interceptor asks the cache for its state through one protocol (get_cache_len, skip_positions, replay_key,
 replay_advance, replay_restore, replay_position_diag). Zero torch dependency.
@@ -57,74 +57,16 @@ class TritonAttentionInterceptor:
         self._whole_pages = bool(whole_pages)
         self._chunk_masks = {}
 
-    def _chunk_mask(self, device_idx: int, start: int, rows: int, keys: int):
-        """The chunk's additive attention mask [rows, keys]: 0 where key j <= start + i (causal, bottom-right at the
-        cached length), -inf elsewhere — the values the causal bias adds — which also masks the whole pages' keys past
-        the true end. One per device and chunk, every layer reads it."""
-        m = self._chunk_masks.get(device_idx)
-        if m is None:
-            import numpy as np
-            from nbxtensor.tensor import NBXTensor
-            from nbxtensor.memory.allocator import DeviceAllocator
-            host = np.where(np.arange(keys)[None, :] <= (start + np.arange(rows))[:, None], 0.0, -np.inf)
-            DeviceAllocator.set_device(device_idx)
-            m = NBXTensor.from_numpy(host.astype(np.float32))
-            self._chunk_masks[device_idx] = m
-        return m
-
-    def _require_causal_graph_mask(self, attn_mask, rows: int, layer_idx: int) -> None:
-        """The graph's own prefill mask is replaced by the chunk's only when it IS the causal pattern over the chunk's
-        rows (R30 mirror of the compiled `require_causal_frozen_mask`): a padding, window or bias mask has no reading
-        over the cached keys, refused by name. Read once per mask buffer and chunk (a host copy of rows x rows)."""
-        if attn_mask is None:
-            return
-        key = ("graph_mask", attn_mask.data_ptr())
-        if key in self._chunk_masks:
-            return
-        import ctypes
-        import numpy as np
-        from nbxtensor.dtype.nbx_dtype import NBXDtype
-        from nbxtensor.memory.allocator import DeviceAllocator
-        m = attn_mask.contiguous()
-        if m._dtype != NBXDtype.bool_:
-            m = m.to(NBXDtype.float32)
-        buf = (ctypes.c_char * m._nbytes)()
-        DeviceAllocator.set_device(m._device_idx)
-        DeviceAllocator.sync_device()
-        DeviceAllocator.memcpy(ctypes.addressof(buf), m.data_ptr(), m._nbytes, 2)
-        host = np.frombuffer(bytes(buf), dtype=(np.bool_ if m._dtype == NBXDtype.bool_ else np.float32))
-        host = host.reshape(tuple(int(x) for x in m.shape))
-        tri = np.tril(np.ones((rows, rows), dtype=bool))
-        ok = host.shape[-2:] == (rows, rows)
-        if ok:
-            flat = host.reshape(-1, rows, rows)
-            ok = bool((flat == tri).all()) if host.dtype == np.bool_ else bool(
-                ((flat == 0) == tri).all() and (np.isneginf(flat) | (flat <= np.finfo(np.float16).min))[:, ~tri].all())
-        if not ok:
-            raise RuntimeError(f"ZERO FALLBACK: a prefill chunk's attention (layer {layer_idx}) carries a graph mask "
-                               f"{tuple(m.shape)} that is not the causal pattern over its {rows} rows; it has no "
-                               f"reading over the cached keys")
-        self._chunk_masks[key] = True
-
     def _prefill_over_pages(self, q, k, v, k_for_cache, v_for_cache, expanded: bool, layer_idx: int,
                             dropout_p, scale, attn_mask=None):
-        """A prefill chunk's attention over the session's keys gathered as WHOLE PAGES: the chunk's K/V appended to the
-        pages, every cached key read back from them (the cache's dtype, widened exactly to the query's), the key length
-        rounded up to whole pages, and the explicit 0/-inf mask (causal at the cached length, the keys past the true
-        end masked). The existing attention then runs unchanged."""
-        from nbxtensor.ops.attention_wrappers import scaled_dot_product_attention_wrapper
+        """A prefill chunk's attention over the session's keys gathered as WHOLE PAGES (`nbxtensor.memory.paged_kv`:
+        the graph's mask checked causal, the chunk's K/V appended, the masked attention over every cached key)."""
+        from nbxtensor.memory import paged_kv as PK
         start = self.cache.get_cache_len()          # the host length moves at the chunk's last layer
-        rows = int(q.shape[2])
-        self._require_causal_graph_mask(attn_mask, rows, layer_idx)
+        PK.require_causal_mask(attn_mask, int(q.shape[2]), self._chunk_masks, f"layer {layer_idx}")
         self.cache.prefill(layer_idx, k_for_cache, v_for_cache, real=self._chunk_real)
-        pt = self.cache.page_tokens
-        keys = -(-(start + rows) // pt) * pt
         heads = int(q.shape[1]) if expanded else self._num_kv_heads
-        kg = self.cache.gather_pages(layer_idx, "k", keys, heads, q._dtype)
-        vg = self.cache.gather_pages(layer_idx, "v", keys, heads, q._dtype)
-        mask = self._chunk_mask(int(q._device_idx), start, rows, keys)
-        return scaled_dot_product_attention_wrapper(q, kg, vg, attn_mask=mask, dropout_p=dropout_p,
-                                                    is_causal=False, scale=scale, k_pre_transposed=False)
+        return PK.chunk_attention(self.cache, layer_idx, q, start, heads, scale, dropout_p, self._chunk_masks)
 
     # ── decode branches ─────────────────────────────────────────────────
     # The interceptor is registered once per executor; a flow that keeps

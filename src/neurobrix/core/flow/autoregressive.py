@@ -186,17 +186,11 @@ class GraphLMSession:
             cache.truncate(start)
         device = self._graph_device()
         self.executor.enable_hidden_states_capture()
+        from nbxtensor.memory.kv_session import chunk_rows
         rows_planned = int(chunk) if chunk else total - start
-        s, real, rows_run = start, 0, 0
-        while s < total:
-            real = min(rows_planned, total - s)
-            pad = rows_planned - real
-            chunk_ids = torch.tensor([[int(t) for t in ids[s:s + real]] + [int(ids[s + real - 1])] * pad],
-                                     dtype=torch.long, device=device)
-            if self.uses_absolute_position:
-                pos = list(range(s, s + real)) + [s + real - 1] * pad
-            else:
-                pos = list(range(rows_planned))   # relative rows; the interceptor shifts the in-graph positions by s
+        plan = chunk_rows(ids, start, rows_planned, self.uses_absolute_position)
+        for s, real, ids_, pos in plan:
+            chunk_ids = torch.tensor([ids_], dtype=torch.long, device=device)
             position_ids = torch.tensor([pos], dtype=torch.long, device=device)
             if self.uses_embeds:
                 embed_weight = self.executor.get_embed_tokens()
@@ -212,10 +206,10 @@ class GraphLMSession:
             self._add_visual_stubs(run_inputs)
             self.kv_wrapper.begin_chunk(s, real, whole_pages=True)
             self.executor.run(run_inputs)
-            if pad:
+            if real < rows_planned:
                 cache.truncate(s + real)
-            rows_run += rows_planned
-            s += real
+        rows_run = rows_planned * len(plan)
+        real = plan[-1][1]
         self.prefilled_rows = total - start
         self.padded_rows = rows_run - (total - start)
         self.kv_wrapper.set_decode_mode(actual_seq_len=1)
@@ -818,7 +812,7 @@ class AutoregressiveHandler(FlowHandler):
         cache_len = session.kv_wrapper.get_cache_len() if session.kv_wrapper is not None else 0
         session.cleanup(keep_cache=kv_session is not None)
         if kv_session is not None:
-            from neurobrix.core.state.kv_session import held_ids
+            from nbxtensor.memory.kv_session import held_ids
             generated = [int(t) for t in generated_tokens.flatten().tolist()] \
                 if hasattr(generated_tokens, "flatten") else [int(t) for t in generated_tokens]
             kv_session.record(held_ids(prompt_ids, generated, cache_len), start, len(prompt_ids),

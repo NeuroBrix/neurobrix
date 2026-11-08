@@ -135,6 +135,43 @@ class AllocatorInterceptor
     # What stands in front of the allocator's five device operations (allocate, free, copy, set, synchronise) while installed.
 ```
 
+`nbxtensor.memory.pages` — pure bookkeeping (standard library only: no tensor, no triton, no torch)
+
+```python
+class StateExhausted(RuntimeError)
+    # a request for more pages than the pool may grant
+class PagePool
+    # fixed pages of `tokens_per_page` positions: grants, reference counts, the fenced release queue
+class PageTable
+    # one sequence's pages in order (fork, copy-on-write `writable`, `reserve`, `slots`, `free`)
+```
+
+`nbxtensor.memory.kv_session` — a serving session's cache between turns (pure bookkeeping)
+
+```python
+class KVSession
+    # the token ids a session's cache holds position by position, matched against a turn's ids; the cache it marks; the per-turn ledger
+def held_ids(prompt_ids, generated, cache_len) -> List[int]
+    # the ids a cache of cache_len positions holds after a request (prompt then the fed generated tokens)
+def forgetting_on_failure(kv_session, run)
+    # run(); a failure leaves the session holding nothing
+def chunk_rows(ids, start, rows, absolute) -> List[Tuple[int, int, List[int], List[int]]]
+    # the chunks of a prefill from `start`: (first position, real rows, ids, positions), the last padded with its last row
+```
+
+`nbxtensor.memory.paged_kv`
+
+```python
+class PagedTritonKVCache
+    # per-layer page pools on each layer's card, the block table, append/decode through it, truncate, gather_pages; on_reallocate(uid, generation)
+def chunk_mask(device_idx, start, rows, keys, memo) -> NBXTensor
+    # a prefill chunk's fp32 0/-inf mask [rows, keys], causal at the cached length, the keys past the end masked
+def require_causal_mask(attn_mask, rows, memo, where) -> None
+    # refuse by name a graph mask that is not the causal pattern over the chunk's rows
+def chunk_attention(cache, layer_idx, q, start, heads, scale, dropout_p, memo)
+    # a prefill chunk attending over the cache's keys gathered as whole pages
+```
+
 `nbxtensor.memory.arena`
 
 ```python

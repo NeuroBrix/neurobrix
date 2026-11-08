@@ -1,4 +1,4 @@
-"""The Triton engine's paged KV cache (triton/paged_kv_cache.py) through a whole request: a prompt's prefill, then decode
+"""The Triton engine's paged KV cache (nbxtensor/memory/paged_kv.py) through a whole request: a prompt's prefill, then decode
 steps whose append takes no host input (the device length and the block table), each step's attention against the
 float64 attention over every position the sequence holds.
 
@@ -20,7 +20,7 @@ import pytest
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.memory.allocator import DeviceAllocator
-from neurobrix.triton.paged_kv_cache import PagedTritonKVCache
+from nbxtensor.memory.paged_kv import PagedTritonKVCache
 
 BOUND = 2e-03
 

@@ -57,7 +57,7 @@ def test_every_key_the_engine_reads_is_served():
 
 class _Session:
     def __init__(self):
-        from neurobrix.core.state.kv_session import KVSession
+        from nbxtensor.memory.kv_session import KVSession
         self.user_messages = []
         self.messages = self.user_messages
         self.kv = KVSession(4096, "the stand-in plan")

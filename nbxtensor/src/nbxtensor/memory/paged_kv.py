@@ -1,8 +1,8 @@
-"""The Triton engine's paged KV cache (state engine step 2, docs/design/state-engine.md §4.3.1).
+"""The paged KV cache on the device (the engine's state engine step 2, docs/design/state-engine.md §4.3.1).
 
 The decoder's K / V live in fixed-size pages of one pool per layer, granted as each sequence grows, never at max_len:
 per layer a K pool and a V pool `[num_pages, kv_heads, page_tokens, D]` (NBXTensor), one PagePool for the cache and one
-PageTable per sequence (core/state/pages.py, shared with the compiled engine and Metal). The kernels are
+PageTable per sequence (memory/pages.py, read by the engine's compiled cache too). The kernels are
 kernels/ops/paged_decode_attn.py.
 
 What a recorded replay needs is kept: every buffer a kernel reads has a fixed address for the cache's lifetime, and a
@@ -24,7 +24,7 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
-from neurobrix.core.state.pages import PagePool, PageTable, block_table as _block_table
+from nbxtensor.memory.pages import PagePool, PageTable, block_table as _block_table
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.memory.allocator import DeviceAllocator
@@ -69,7 +69,10 @@ class PagedTritonKVCache:
         self._uid = next(PagedTritonKVCache._uids)
         self.generation = 0                                                 # moves when the pools are reallocated
         self.regrowths = 0
-        self.holder = None      # the serving session whose positions the cache holds (core/state/kv_session), or None
+        self.holder = None      # the serving session whose positions the cache holds (memory.kv_session), or None
+        # called (uid, the generation that ended) when the pools are reallocated: their addresses moved, and whatever a
+        # caller recorded against them (an engine's replay plans) is retired there; None: nothing is recorded
+        self.on_reallocate = None
 
     # -- allocation ---------------------------------------------------------------------------------------------------
     import itertools as _itertools
@@ -91,7 +94,7 @@ class PagedTritonKVCache:
             if self.length != 0:
                 raise RuntimeError(f"ZERO FALLBACK: the paged KV cache holds {self.batch} sequences mid-request "
                                    f"({self.length} positions), and a step brought {batch}")
-            # A new request of another batch (`neurobrix serve`: one process, requests of any batch): the cache holds
+            # A new request of another batch (a serving process: requests of any batch): the cache holds
             # no position, so it re-pages for the new batch — pools, tables, lengths and block table rebuilt exactly as
             # at a first prefill. Addresses move: the generation moves once and every replay plan recorded under the
             # previous one is retired, as `_grow` does (supervisor 2026-10-21 12:15: never refuse what can run).
@@ -136,10 +139,8 @@ class PagedTritonKVCache:
         self._published_pages = -1
         old_gen, uid = self.generation, self._uid
         self.generation += 1
-        from neurobrix.triton import replay as _replay
-        _replay.drop_plans_by_contribution(
-            lambda c: (isinstance(c, tuple) and len(c) >= 5 and c[0] == "kv_decode_paged"
-                       and c[3] == uid and c[4] == old_gen))
+        if self.on_reallocate is not None:
+            self.on_reallocate(uid, old_gen)
 
     def _new_pools(self, num_pages: int, device: int):
         dev = f"cuda:{device}"
@@ -175,10 +176,8 @@ class PagedTritonKVCache:
         old_gen, uid = self.generation, self._uid
         self.generation += 1
         self.regrowths += 1
-        from neurobrix.triton import replay as _replay
-        _replay.drop_plans_by_contribution(
-            lambda c: (isinstance(c, tuple) and len(c) >= 5 and c[0] == "kv_decode_paged"
-                       and c[3] == uid and c[4] == old_gen))
+        if self.on_reallocate is not None:
+            self.on_reallocate(uid, old_gen)
 
     def _write_in_place(self, dst: NBXTensor, host: np.ndarray) -> None:
         """Rewrite a fixed device buffer's contents (its address never changes: replay tuples point at it)."""
@@ -279,7 +278,7 @@ class PagedTritonKVCache:
             self.length = new_len
         return out
 
-    # -- a session's cache between turns (core/state/kv_session.py) --------------------------------------------------
+    # -- a session's cache between turns (memory/kv_session.py) --------------------------------------------------
     def truncate(self, length: int) -> None:
         """Keep the first `length` positions (a session's matched prefix, or a padded chunk's real end): the host and
         every layer's device length move back; the pages stay granted and the dropped slots are overwritten next."""
@@ -379,9 +378,11 @@ class PagedTritonKVCache:
 
     def clone_empty(self) -> "PagedTritonKVCache":
         """An empty cache of this geometry — a decode branch (a CFG negative context)."""
-        return PagedTritonKVCache(self.num_layers, self.num_kv_heads, self.k_head_dim, self.v_head_dim,
+        twin = PagedTritonKVCache(self.num_layers, self.num_kv_heads, self.k_head_dim, self.v_head_dim,
                                   self.max_cache_len, self.dtype, self.page_tokens, self.async_release,
                                   self.window_ceiling, self.decode_budget, self.initial_cache_len, self.fence)
+        twin.on_reallocate = self.on_reallocate
+        return twin
 
     # -- lifetime -----------------------------------------------------------------------------------------------------
 
@@ -403,3 +404,64 @@ class PagedTritonKVCache:
         per_page = self.num_kv_heads * self.page_tokens * (self.k_head_dim + self.v_head_dim) \
             * self.k_pools[0].element_size()
         return granted * per_page * self.num_layers
+
+
+def chunk_mask(device_idx: int, start: int, rows: int, keys: int, memo: Dict) -> NBXTensor:
+    """A prefill chunk's additive attention mask [rows, keys] (fp32): 0 where key j <= start + i (causal, bottom-right
+    at the cached length), -inf elsewhere — the values the causal bias adds — which also masks the whole pages' keys
+    past the true end. One per device in `memo` (the caller's, per chunk): every layer reads it."""
+    m = memo.get(device_idx)
+    if m is None:
+        host = np.where(np.arange(keys)[None, :] <= (start + np.arange(rows))[:, None], 0.0, -np.inf)
+        DeviceAllocator.set_device(device_idx)
+        m = NBXTensor.from_numpy(host.astype(np.float32))
+        memo[device_idx] = m
+    return m
+
+
+def require_causal_mask(attn_mask, rows: int, memo: Dict, where: str) -> None:
+    """A graph's own prefill mask may be replaced by the chunk's only when it IS the causal pattern over the chunk's
+    rows: a padding, window or bias mask has no reading over the cached keys, refused by name. Read once per mask
+    buffer in `memo` (a host copy of rows x rows)."""
+    if attn_mask is None:
+        return
+    key = ("graph_mask", attn_mask.data_ptr())
+    if key in memo:
+        return
+    import ctypes
+    m = attn_mask.contiguous()
+    if m._dtype != NBXDtype.bool_:
+        m = m.to(NBXDtype.float32)
+    buf = (ctypes.c_char * m._nbytes)()
+    DeviceAllocator.set_device(m._device_idx)
+    DeviceAllocator.sync_device()
+    DeviceAllocator.memcpy(ctypes.addressof(buf), m.data_ptr(), m._nbytes, 2)
+    host = np.frombuffer(bytes(buf), dtype=(np.bool_ if m._dtype == NBXDtype.bool_ else np.float32))
+    host = host.reshape(tuple(int(x) for x in m.shape))
+    tri = np.tril(np.ones((rows, rows), dtype=bool))
+    ok = host.shape[-2:] == (rows, rows)
+    if ok:
+        flat = host.reshape(-1, rows, rows)
+        ok = bool((flat == tri).all()) if host.dtype == np.bool_ else bool(
+            ((flat == 0) == tri).all() and (np.isneginf(flat) | (flat <= np.finfo(np.float16).min))[:, ~tri].all())
+    if not ok:
+        raise RuntimeError(f"ZERO FALLBACK: a prefill chunk's attention ({where}) carries a graph mask "
+                           f"{tuple(m.shape)} that is not the causal pattern over its {rows} rows; it has no reading "
+                           f"over the cached keys")
+    memo[key] = True
+
+
+def chunk_attention(cache: "PagedTritonKVCache", layer_idx: int, q, start: int, heads: int, scale, dropout_p,
+                    memo: Dict):
+    """A prefill chunk of q's rows at cached position `start` (its K/V already appended) attending over the cache's
+    keys gathered as WHOLE PAGES: every key read back from the pages (the cache's dtype, widened exactly to the
+    query's), the key length rounded up to whole pages, the explicit 0/-inf mask (`chunk_mask`) — then the existing
+    attention, unchanged. `heads`: the query heads when the graph handed expanded K/V, else the KV heads."""
+    from nbxtensor.ops.attention_wrappers import scaled_dot_product_attention_wrapper
+    rows = int(q.shape[2])
+    keys = -(-(int(start) + rows) // cache.page_tokens) * cache.page_tokens
+    kg = cache.gather_pages(layer_idx, "k", keys, heads, q._dtype)
+    vg = cache.gather_pages(layer_idx, "v", keys, heads, q._dtype)
+    mask = chunk_mask(int(q._device_idx), int(start), rows, keys, memo)
+    return scaled_dot_product_attention_wrapper(q, kg, vg, attn_mask=mask, dropout_p=dropout_p, is_causal=False,
+                                                scale=scale, k_pre_transposed=False)

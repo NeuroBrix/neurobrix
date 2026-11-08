@@ -1,4 +1,4 @@
-"""Step 2 of the state engine, the shared half (core/state/pages.py, docs/design/state-engine.md §4.3 and §4.5): pages are
+"""Step 2 of the state engine, the shared half (nbxtensor/memory/pages.py, docs/design/state-engine.md §4.3 and §4.5): pages are
 granted as a sequence grows, shared with copy-on-write, and on an asynchronous device a released page returns to the
 free list only after the fence past its last use.
 
@@ -11,7 +11,7 @@ the pool cannot cover takes part of the pages or is not refused by name.
 """
 import pytest
 
-from neurobrix.core.state.pages import PagePool, PageTable, StateExhausted
+from nbxtensor.memory.pages import PagePool, PageTable, StateExhausted
 
 
 def test_a_sequence_takes_only_the_pages_its_positions_need():
@@ -79,7 +79,7 @@ def test_a_grant_the_pool_cannot_cover_takes_nothing_and_is_refused_by_name():
 
 
 def test_the_kernels_read_flat_slots_and_a_padded_block_table():
-    from neurobrix.core.state.pages import block_table
+    from nbxtensor.memory.pages import block_table
     pool = PagePool(num_pages=8, tokens_per_page=4, async_release=False)
     a, b = PageTable(pool), PageTable(pool)
     a.reserve(6)                                     # pages 0, 1

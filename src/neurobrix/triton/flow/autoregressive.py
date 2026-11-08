@@ -127,18 +127,28 @@ def session_kv_params(kv_plan, window: int, decode_budget: int) -> Dict[str, Any
 
 
 def paged_kv_cache(kv_params: Dict[str, Any], kv_plan):
-    """The session's KV cache: the state engine's paged cache (step 2, triton/paged_kv_cache.py) over the plan's cache,
+    """The session's KV cache: the state engine's paged cache (step 2, nbxtensor.memory.paged_kv) over the plan's cache,
     its page size and release rule derived by core/state/price.paged_cache_params from the executing card's vendor
-    file (the derivation the compiled engine takes too)."""
+    file (the derivation the compiled engine takes too); a reallocation of its pools retires the replay plans
+    recorded against the old addresses (`triton/replay`)."""
     from neurobrix.core.state.price import paged_cache_params
     from nbxtensor.backend.device_files import in_force
     from nbxtensor.ops.tiling_sizes import PAGED_DECODE_TILE_CANDIDATES
-    from neurobrix.triton.paged_kv_cache import PagedTritonKVCache
+    from nbxtensor.memory.paged_kv import PagedTritonKVCache
     tokens, async_release = paged_cache_params(
         kv_params["num_kv_heads"], kv_params["k_head_dim"], kv_params["v_head_dim"], kv_params["dtype"].name,
         (in_force() or {}).get("memory"), int(getattr(kv_plan, "memory_bytes", 0) or 0),
         PAGED_DECODE_TILE_CANDIDATES)
-    return PagedTritonKVCache(page_tokens=tokens, async_release=async_release, **kv_params)
+    cache = PagedTritonKVCache(page_tokens=tokens, async_release=async_release, **kv_params)
+    cache.on_reallocate = retire_replay_plans
+    return cache
+
+
+def retire_replay_plans(uid: int, generation: int) -> None:
+    """A paged cache's pools were reallocated: every replay plan recorded against its previous generation retires."""
+    from neurobrix.triton import replay as _replay
+    _replay.drop_plans_by_contribution(lambda c: isinstance(c, tuple) and len(c) >= 5 and c[0] == "kv_decode_paged"
+                                       and c[3] == uid and c[4] == generation)
 
 
 class TritonAutoregressiveHandler:
@@ -351,7 +361,7 @@ class TritonAutoregressiveHandler:
         if not is_image:
             session.cleanup(keep_cache=kv_session is not None)
         if kv_session is not None:
-            from neurobrix.core.state.kv_session import held_ids
+            from nbxtensor.memory.kv_session import held_ids
             kv_session.record(held_ids(prompt_ids, generated_tokens, session.get_cache_len()), start,
                               len(prompt_ids), session.prefilled_rows, session.padded_rows)
         return self.ctx.variable_resolver.resolve_all()

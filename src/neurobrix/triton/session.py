@@ -204,18 +204,13 @@ class TritonLMSession:
             cache.truncate(start)
         if hasattr(self.executor, "enable_hidden_states_capture"):
             self.executor.enable_hidden_states_capture()
+        from nbxtensor.memory.kv_session import chunk_rows
         rows_planned = int(chunk) if chunk else total - start
-        s, outputs, real, rows_run = start, None, 0, 0
-        while s < total:
-            real = min(rows_planned, total - s)
-            pad = rows_planned - real
-            chunk_ids = [int(t) for t in ids[s:s + real]] + [int(ids[s + real - 1])] * pad
+        plan = chunk_rows(ids, start, rows_planned, self.uses_absolute_position)
+        outputs = None
+        for s, real, chunk_ids, pos in plan:
             DeviceAllocator.set_device(self.device_idx)
             input_ids = NBXTensor.from_numpy(np.asarray([chunk_ids], dtype=np.int64))
-            if self.uses_absolute_position:
-                pos = list(range(s, s + real)) + [s + real - 1] * pad
-            else:
-                pos = list(range(rows_planned))   # relative rows; the interceptor shifts the in-graph positions by s
             position_ids = NBXTensor.from_numpy(self._lift_positions(np.asarray([pos], dtype=np.int64)))
             if self.uses_embeds:
                 embed_weight = self.executor.get_embed_tokens()
@@ -231,10 +226,9 @@ class TritonLMSession:
             self._add_visual_stubs(run_inputs)
             self.kv_wrapper.begin_chunk(s, real, whole_pages=True)
             outputs = self.executor.run(run_inputs, skip_kills=False)
-            if pad:
+            if real < rows_planned:
                 cache.truncate(s + real)
-            rows_run += rows_planned
-            s += real
+        rows_run = rows_planned * len(plan)
         self.prefilled_rows = total - start
         self.padded_rows = rows_run - (total - start)
         self.kv_wrapper.set_decode_mode()
@@ -250,6 +244,7 @@ class TritonLMSession:
         if int(hidden.shape[1]) != rows_planned:
             raise RuntimeError(f"ZERO FALLBACK: the last prefill chunk returned {int(hidden.shape[1])} rows of hidden "
                                f"states for a chunk of {rows_planned}")
+        real = plan[-1][1]
         return hidden.narrow(1, 0, real) if real < rows_planned else hidden
 
     def decode_step(self, input_ids: NBXTensor,

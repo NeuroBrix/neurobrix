@@ -46,7 +46,7 @@ def main() -> int:
     import numpy as np
     from neurobrix.serving.engine import InferenceEngine
     from neurobrix.serving.session import session_ceiling
-    from neurobrix.core.state.kv_session import KVSession
+    from nbxtensor.memory.kv_session import KVSession
     from neurobrix.core.runtime.prompt_length import _flatten_tokenizer_output
     from neurobrix.core.runtime.lm_facts import session_lm_name
 

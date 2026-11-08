@@ -3,7 +3,7 @@
 Not in use today: the Apple vendor files declare `memory.async_release: false`, because every launch through nbxtensor
 waits for its kernel (docs/nbxtensor/BACKENDS.md, "Releasing state pages on Metal"), so no kernel is running when a page
 is released. The day launches stop waiting, a released page may be granted again only once every kernel that read it
-has completed (core/state/pages.py, the release queue): the Apple backend then numbers each committed command buffer
+has completed (nbxtensor/memory/pages.py, the release queue): the Apple backend then numbers each committed command buffer
 (`fence()`) and reports the highest completed without waiting (`completed_fence()`), and this class reads them. The
 backend module is handed in by the caller; one without those two calls is refused by name. Torch-free (R33).
 """

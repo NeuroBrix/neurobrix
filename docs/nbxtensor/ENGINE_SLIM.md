@@ -22,6 +22,33 @@ Two figures, kept apart (the supervisor, 2026-10-29 23:40):
   (29), core/prism (13), triton/weight_loader and triton/sequence (the Dell's lots in flight), and the sampling contract
   (`audio_utils.sample_token(top_p)`, assigned to the Dell on 2026-11-02 06:40: one sampling path for both engines).
 
+## Lot A, the session-owned KV cache (2026-11-08): what moved, what stays as policy
+
+The owner's rule of 2026-11-08 16:43: every generic mechanism lives in nbxtensor; the engine keeps policy only (Prism
+decides, the flow decides when, the CLI displays); the findings never rise (169 before the lot, 165 after it). Lot A
+moved into nbxtensor 0.0.7: the paged KV cache (`memory.paged_kv`, from triton/paged_kv_cache.py, -377), the page
+bookkeeping (`memory.pages`, from core/state/pages.py, -181), the session record and the chunk row plan
+(`memory.kv_session`), the whole-page gather kernel and the chunk's masked attention (`memory.paged_kv.chunk_attention`,
+`ops.attention_wrappers.paged_kv_gather`). The serving session lost its summarisation (-79, -16, -4, -1). What stays,
+one row per file, is POLICY, and the header rose by exactly these lines, measured: 137 853 (main 1826a3da) + 772 kept
+- 658 moved or deleted = 137 967.
+
+| file | lines | the policy it holds |
+|---|---|---|
+| core/flow/autoregressive.py | +118 | the compiled flow decides when a request is a session's turn, from which cached position it prefills and in which chunks, and what the session keeps at the end |
+| triton/session.py | +85 | the Triton session's same decisions: prefill from the matched position, run each planned chunk, keep the real rows |
+| triton/flow/autoregressive.py | +43 | the Triton flow's decisions: the session's cache kept or cleared, the chunk only for a session's turn, the ledger; `retire_replay_plans`, the cache's `on_reallocate` hook into the engine's own replay plans |
+| core/runtime/graph/kv_cache_wrapper.py | +83 | the compiled engine's torch attention over its cache (the whole-page path and its mask): torch, which nbxtensor never holds (R33) |
+| core/runtime/graph/paged_kv_cache.py | +32 | the compiled engine's torch cache: truncate and the whole-page read, on torch tensors (R33) |
+| triton/kv_cache.py | +60 | the interceptor's routing: which prefill takes the whole-page path (`begin_chunk`), the chunk's positions for the positional ops, the request's end |
+| core/state/kv_session.py | +17 | `session_turn`: the flow decides that a request is a session's turn |
+| core/prism/prefill_chunk.py | +98 | Prism decides the session's prefill chunk from the certified times of its candidates |
+| core/prism/solver.py | +85 | Prism states the chunk and its reason in the plan, its record and `--explain-plan` |
+| core/state/price.py | +17 | the candidates Prism and the census share (whole pages up to the prefill a session is priced at) |
+| kernels/census_table.py | +37 | the chunk record Prism reads (`read_chunks`) and the container hash it matches it with |
+| core/runtime/executor.py, core/flow/base.py | +6, +4 | the request carries its session to the flow |
+| cli/commands/run.py, cli/__init__.py, cli/commands/registry.py, core/runtime/output_dispatch.py | +80, +4, +2, +1 | the CLI displays a session of turns (`run --turns`) and the family's "one of" requirement |
+
 ## The scan
 
 `tools/engine_slim_scan.py` (standard library, ast) lists four kinds of finding in `src/neurobrix`, both branches:
@@ -142,7 +169,6 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | fact | src/neurobrix/triton/dtype.py | storage_dtype | already reads nbxtensor's itemsize.storage_dtype at this branch's fp64 fact and returns the NBXDtype member: the engine's dtype-engine method over the library's table |
 | wrapper | src/neurobrix/kernels/census.py | install(hardware_profile) | the tests install the census for a profile they name (tests/unit/kernels/test_a_one_row_convolution_keys_its_width_on_the_ladder) |
 | wrapper | src/neurobrix/kernels/census_table.py | rows_for(root) | the tests read a table under a temporary root (tests/unit/kernels/test_the_census_is_one_table) |
-| wrapper | src/neurobrix/core/state/pages.py | writable(fence) | the tests write at a fence (tests/unit/core/test_the_state_pages_grow_share_and_release_on_fences): the copy-on-write rule it pins |
 | wrapper | src/neurobrix/agent/sandbox.py | SandboxViolation | a named refusal: the agent tells a sandbox refusal from a tool's own failure (exported by neurobrix.agent) |
 | wrapper | src/neurobrix/core/workspace.py | SnapshotNotPresent | a named refusal: a missing snapshot, told apart from any other error by its callers |
 | fact | src/neurobrix/core/runtime/graph/compiled_sequence.py | _parse_dtype | returns a torch.dtype with the sequence's Prism remap (compute_dtype); nbxtensor's parse_dtype returns an NBXDtype — two types |
@@ -212,7 +238,6 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | dead | src/neurobrix/core/optim/passes/normalize.py | boundaries_present | a test seam: read by tests/unit/prism/test_a_segment_boundary_names_an_op_the_executor_still_has.py (the invariant a gate asserts), nothing else |
 | dead | src/neurobrix/core/runtime/graph/paged_kv_cache.py | PagedKVCache.held_bytes | a test seam: read by the paged-cache tests of both engines (what was appended is held), nothing else |
 | dead | src/neurobrix/core/state/mps_fence.py | MpsStateFence | a test seam: read by tests/unit/core/test_a_metal_page_comes_back_only_after_the_kernels_that_read_it.py, nothing else |
-| dead | src/neurobrix/core/state/pages.py | PagePool.pending_pages | a test seam: read by the state-page tests (a page released only past its fence), nothing else |
 | dead | src/neurobrix/nbx/container.py | NBXContainer.get_topology | a test seam: read by tests/unit/prism/test_the_plan_prices_every_cache_its_decoder_opens.py, nothing else |
 | duplicate | src/neurobrix/core/runtime/resolution/i2v_conditioning.py | _to_channels_first | the same text over each branch's tensor (torch.Tensor / NBXTensor: `dim`, `permute`, `contiguous` of its own class); one copy per branch, each branch's vace module reads it |
 | duplicate | src/neurobrix/core/runtime/resolution/i2v_conditioning.py | build_condition | the same dispatch, to each branch's own builders (`_build_condition_wan` / `_cogvideox` / `_state_video_mask` of that module): the text is shared, the functions it calls are not |
@@ -247,8 +272,6 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | dead | src/neurobrix/triton/state_fence.py | MetalStateFence | the Metal release fence the day launches stop waiting for their kernel (docs/nbxtensor/BACKENDS.md, 'Releasing state pages on Metal'; decision (b') of 2026-10-29 21:35): today only its refusal test reaches it |
 | fact | src/neurobrix/core/dtype/config.py | parse_dtype | the PyTorch branch's reader: it hands a torch.dtype (the library hands NBXDtype, never torch) and applies the engine's half remap under the compute dtype Prism chose — the remap is the engine's decision |
 | fact | src/neurobrix/core/dtype/engine.py | storage_dtype | the DtypeEngine's torch.dtype face of the library's rule (`nbxtensor.dtype.itemsize.storage_dtype`), with the device's fp64 fact this engine holds: the rule is the library's, the torch dtype is the PyTorch branch's |
-| dead | src/neurobrix/triton/paged_kv_cache.py | PagedTritonKVCache.capacity_for | the engine's prompt-aware sizing policy (S1) stated as one function of the prompt's end: the card-less instrument its tests pin the rule with (tests/unit/runtime/test_kv_prompt_aware_sizing.py), where the real path needs a card |
-| dead | src/neurobrix/triton/paged_kv_cache.py | PagedTritonKVCache.held_bytes | what the paged cache costs now, from its granted pages: the observable the page-release tests read (test_the_paged_kv_cache_decodes_as_its_oracle, test_the_imposed_rung_...) |
 | wrapper | src/neurobrix/core/prism/runtime_widths.py | storage_dtype_name | the compiled rules' half of the storage-ceiling interface the Triton rules implement with their own fp64 fact: which ceiling a branch applies is the engine's decision |
 | wrapper | src/neurobrix/core/prism/chunked_region.py | _Mix | a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `Exception` would name nothing |
 | wrapper | src/neurobrix/core/prism/profiler.py | _Declined | a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `Exception` would name nothing |
@@ -262,7 +285,6 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | wrapper | src/neurobrix/core/runtime/symexpr.py | RealInShapeSlot | a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `ExpressionError` would name nothing |
 | wrapper | src/neurobrix/core/runtime/symexpr.py | UnknownExpression | a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `ExpressionError` would name nothing |
 | wrapper | src/neurobrix/core/runtime_values.py | MissingRuntimeValue | a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `RuntimeError` would name nothing |
-| wrapper | src/neurobrix/core/state/pages.py | StateExhausted | a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `RuntimeError` would name nothing |
 | wrapper | src/neurobrix/core/state/policy.py | StatePolicyRefused | a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `RuntimeError` would name nothing |
 | wrapper | src/neurobrix/core/state/price.py | StateUndeclared | a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `RuntimeError` would name nothing |
 | wrapper | src/neurobrix/kernels/autotune_certify.py | UnreachableCensusKey | a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `RuntimeError` would name nothing |
@@ -294,3 +316,4 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | dead | src/neurobrix/nbx/cache.py | NBXCache.list_cached | used by the build toolchain, which reads the engine's package from its own repository (outside this scan's roots) |
 | dead | src/neurobrix/nbx/neurotax.py | NeuroTaxParser.normalize_parent_module | used by the build toolchain, which reads the engine's package from its own repository (outside this scan's roots) |
 | dead | src/neurobrix/serving/engine.py | InferenceEngine.is_loaded | used by the build toolchain, which reads the engine's package from its own repository (outside this scan's roots) |
+| fact | src/neurobrix/core/runtime/graph/kv_cache_wrapper.py | _chunk_mask | the compiled engine's prefill-chunk mask as a torch tensor in the cache's dtype; nbxtensor's `paged_kv.chunk_mask` builds the same 0/-inf values as an NBXTensor, and nbxtensor never holds torch (R33) (lot A, 2026-11-08) |

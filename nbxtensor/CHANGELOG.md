@@ -81,6 +81,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   table's pins ended at the call (re-wrapping the store's arena at a new address while it could still be read) or not at
   all (the decode path: a wrap left over every expert the store had let go). Held by `TablePins`, they end when the
   store says.
+## [0.0.7] - unreleased (session KV lot)
+
+### Added
+- **Paged KV cache and its session bookkeeping**: `nbxtensor.memory.paged_kv.PagedTritonKVCache` (per-layer page
+  pools on each layer's card, the block table, append and decode through it, `truncate`, `gather_pages`), moved from
+  the engine with an `on_reallocate(uid, generation)` hook in place of its call into the engine's replay plans;
+  `chunk_attention`, `chunk_mask` and `require_causal_mask`: a prefill chunk at a cached length attending over the
+  cache's keys gathered as whole pages, with an explicit 0/-inf mask.
+- **`nbxtensor.memory.pages`** (moved from the engine): the page pool, page tables, reference counts and fenced
+  release. Pure bookkeeping, standard library only: importing it loads no triton and no torch, so the engine's
+  compiled (torch) cache reads the same tables.
+- **`nbxtensor.memory.kv_session`** (moved from the engine): the positions a serving session's cache holds between
+  turns, matched by token ids (`KVSession`, `held_ids`, `forgetting_on_failure`), and `chunk_rows`, the rows of each
+  prefill chunk.
+- **`paged_kv_gather`** (`paged_kv_gather_kernel`): a layer's K or V of every sequence as whole pages, contiguous,
+  heads re-expanded to the query heads, widened exactly to the output dtype.
+- **`autotune_certified.served_certification`**: the certification served one key on a memory class, read by a planner
+  that holds no kernel tuner.
 
 ## [0.0.5] - 2026-11-07
 

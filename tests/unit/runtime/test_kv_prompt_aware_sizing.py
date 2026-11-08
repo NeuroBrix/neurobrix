@@ -22,14 +22,18 @@ from __future__ import annotations
 import pytest
 
 from neurobrix.triton.dtype import NBXDtype
-from neurobrix.triton.paged_kv_cache import PagedTritonKVCache
+from nbxtensor.memory.paged_kv import PagedTritonKVCache
 import nbxtensor.memory.allocator as _nbx_allocator  # the module the moved names live in (M2 cut of tensor.py)
 
 
 def _paged(**kw):
+    """A paged cache as the engine builds one (`paged_kv_cache`): its reallocations retire the replay plans."""
+    from neurobrix.triton.flow.autoregressive import retire_replay_plans
     kw.setdefault("page_tokens", 16)
     kw.setdefault("async_release", False)
-    return PagedTritonKVCache(**kw)
+    cache = PagedTritonKVCache(**kw)
+    cache.on_reallocate = retire_replay_plans
+    return cache
 
 
 def _cache(plan_len=640, window=2048, budget=512):

@@ -221,32 +221,6 @@ def read_chunks(path: Path) -> Dict[Tuple[str, str], Dict]:
     return out
 
 
-def replace_chunks(path: Path, model: str, records: Iterable[Dict]) -> None:
-    """The model's chunk records (one per mode) replaced, every other model's kept, under the TABLE's lock,
-    atomically."""
-    records = list(records)
-    if any(r.get("model") != model for r in records):
-        raise ValueError(f"replace_chunks({model!r}) was handed another model's record")
-    cp = chunks_path(path)
-    with locked(path):
-        recs = {k: v for k, v in read_chunks(path).items() if k[0] != model}
-        for r in records:
-            recs[(model, r["mode"])] = r
-        fd, tmp = tempfile.mkstemp(dir=str(cp.parent), prefix=cp.name, suffix=".tmp")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                for k in sorted(recs):
-                    fh.write(json.dumps(recs[k], sort_keys=True) + "\n")
-                fh.flush()
-                os.fsync(fh.fileno())
-            os.chmod(tmp, 0o644)
-            os.replace(tmp, cp)
-        except BaseException:
-            if os.path.exists(tmp):
-                os.unlink(tmp)
-            raise
-
-
 def read_inputs(path: Path) -> Dict[str, Dict]:
     """{model: its input record} of the table at `path`; a missing record file is none."""
     ip = inputs_path(path)

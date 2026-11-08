@@ -458,7 +458,7 @@ class InferenceEngine:
         token_ids = [int(t) for t in _flatten_tokenizer_output(
             tokenizer.apply_chat_template(messages, **template_kwargs))]
         if self._agent_kv is None:
-            from neurobrix.core.state.kv_session import KVSession
+            from nbxtensor.memory.kv_session import KVSession
             ceiling, source = session_ceiling(getattr(self._plan, "kv_cache_plan", None))
             self._agent_kv = KVSession(ceiling, source)
         max_tokens = self._max_tokens(decode)
