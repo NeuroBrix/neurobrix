@@ -123,6 +123,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **No Triton warning on a first run**: the masked-fill kernel gave `tl.where` a uint8 condition, and Triton warned
   that this is deprecated at the first compile of a language model; the condition is now a boolean (the compiled code
   is identical).
+- **Cold serving / `run --turns`: a lazy plan's second request no longer runs on the first's released memory**: a
+  text model whose plan loads it on demand (a lazy or streamed plan) ended each request without releasing it through
+  its plan, so the plan kept the previous request's load. Every later request pinned a second copy of the weights
+  (deepseek-moe-16b-chat on a 16 GB card: 30 GB, then 60 GB of pinned host memory, killed at the third turn), or
+  replayed into the first load's freed memory (a CUDA error on a 32 GB card). The model is now released through its
+  plan at the end of each request.
 - **Cold serving / `run --turns`: the fp32 constants came back in half precision after a reload** (Triton engine). A
   component whose weights are released after a request and loaded again — every request after the first on a
   cold-serving plan (a lazy or streamed plan in `neurobrix serve`), each turn after the first of `run --turns`, any

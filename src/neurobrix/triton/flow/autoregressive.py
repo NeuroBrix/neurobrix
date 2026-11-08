@@ -359,6 +359,14 @@ class TritonAutoregressiveHandler:
         self._run_snac_codec_decoder(generated_tokens, generator.max_tokens)
 
         if not is_image:
+            if not self.ctx.persistent_mode:
+                # A non-persistent executor (a run, a cold-serving plan) releases its language model at the request's
+                # end through the strategy's own unload (`_unload_component_weights`: the strategy's install — a lazy
+                # plan's zero3 pins and ratchet — uninstalled first, then the weights and their sequence): the
+                # session's bare `cleanup()` released the weight dict and left the strategy holding the old load, so
+                # every later request pinned a second copy (deepseek-moe-16b-chat, `run --turns`: 30 -> 60 GB of
+                # pinned host, killed in turn 3; DeepSeek-Coder-V2-Lite on 32 GB: a device OOM in turn 2, 2026-11-08)
+                self._unload_component_weights(session_lm_name(gen_info, self.ctx.executors))
             session.cleanup(keep_cache=kv_session is not None)
         if kv_session is not None:
             from nbxtensor.memory.kv_session import held_ids

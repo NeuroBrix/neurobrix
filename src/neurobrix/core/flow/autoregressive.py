@@ -810,6 +810,12 @@ class AutoregressiveHandler(FlowHandler):
         self._run_snac_codec_decoder(generated_tokens)
 
         cache_len = session.kv_wrapper.get_cache_len() if session.kv_wrapper is not None else 0
+        if not self.ctx.persistent_mode:
+            # R30 mirror of the Triton flow: a non-persistent executor releases its language model through the
+            # strategy's own unload, its install (a lazy plan's pins and ratchet) uninstalled first — never the bare
+            # weight release that left the strategy holding the previous request's load
+            from neurobrix.core.runtime.lm_facts import session_lm_name as _lm_name
+            self._unload_component_weights(_lm_name(gen_info, self.ctx.executors))
         session.cleanup(keep_cache=kv_session is not None)
         if kv_session is not None:
             from nbxtensor.memory.kv_session import held_ids
