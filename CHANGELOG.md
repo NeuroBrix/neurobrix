@@ -48,6 +48,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`NEUROBRIX_HOME` (or `NEUROBRIX_CACHE`, `NEUROBRIX_STORE`) naming a directory that does not exist** ended every
   command, `--help` included, in a Python traceback; it is one line naming the directory and what to do (the
   traceback with `-vv`).
+- **`doctor` with GPUs hidden by the environment** (`CUDA_VISIBLE_DEVICES=`) said the Triton engine was ready on
+  cuda, then diagnosed a torch build mismatch and exited 1: it now names the variable and how many GPUs the driver
+  sees, says what each engine can run on (the CPU, or nothing), gives no torch advice, and exits non-zero only when
+  neither engine can run (a torch that sees no CUDA beside a running Triton engine is advice, not a blocking problem).
 - **`doctor` lists the GPUs the process can see**: it listed every GPU on the host's PCI bus (four in a container
   given one); the others are counted as not visible here.
 - **No Triton warning on a first run**: the masked-fill kernel gave `tl.where` a uint8 condition, and Triton warned

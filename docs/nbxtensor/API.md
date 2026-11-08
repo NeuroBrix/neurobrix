@@ -2885,6 +2885,7 @@ def reduced_extent_max(num_warps: int) -> Optional[int]   # The largest reduced 
 
 ```python
 class TritonCPUNotInstalledError   # Raised when `--triton` is invoked on a CPU-only profile and the
+def triton_cpu_installed() -> bool   # upstream triton-cpu is installed (asked without importing it)
 def ensure_triton_cpu_or_raise() -> None   # Verify `triton-cpu` is installed when we're on a CPU-only profile.
 def get_install_instructions() -> str   # Return the install instructions string. Useful for CLI `--help`
 def is_cpu_triton_active() -> bool   # True iff triton-cpu has been selected for this process.
@@ -3098,6 +3099,7 @@ def pci_gpus(root=...) -> list    # [(vendor, vendor id, device id)] of the NVID
 def diagnose(root=...) -> list    # per vendor found: what is missing (runtime library, Triton backend) and the steps
 def report(root=...) -> str       # the diagnosis as text (python -m nbxtensor doctor prints it)
 def no_runtime_message(root=...) -> str   # the refusal when no runtime answers, with the steps for a GPU on the bus
+def hidden_gpus(root=...) -> Optional[tuple]   # (variable, value, GPUs on the bus) when the runtime's visibility variable (the backend table's visible_env) hides devices the bus holds
 def compiler_missing(exc) -> Optional[str]   # the one line for a failure whose chain passes through Triton's _find_compiler (no C/C++ compiler), else None
 def main() -> int                 # python -m nbxtensor.backend.install_help
 # diagnose/report list only the devices this process's runtime sees (by PCI bus id); the host's others are counted

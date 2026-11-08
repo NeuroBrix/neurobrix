@@ -60,6 +60,8 @@ _GPU_BACKENDS = {
         # the management library: what the driver attributes to THIS process on a device (`backend.process_memory`)
         "management_libs": _LIB.NVML,
         "pci_bus_id": "cudaDeviceGetPCIBusId",
+        # the environment variables the runtime reads to hide devices (CUDA programming guide, "CUDA Environment Variables")
+        "visible_env": ("CUDA_VISIBLE_DEVICES",),
         "malloc": "cudaMalloc", "free": "cudaFree",
         "memcpy": "cudaMemcpy", "memset": "cudaMemset",
         "set_device": "cudaSetDevice",
@@ -108,6 +110,8 @@ _GPU_BACKENDS = {
         # (`memory.vmm`; HIP's hipMemCreate family is not wired), so a HIP device keeps its driver segments; and no
         # per-process accounting is read on ROCm (`backend.process_memory` answers None, the runtime's growth is not
         # measured there, said) — never a CUDA library tried on an AMD card.
+        # ROCm's (rocm.docs.amd.com, "GPU isolation techniques"): ROCR_ and HIP_VISIBLE_DEVICES, and HIP honours CUDA's
+        "visible_env": ("ROCR_VISIBLE_DEVICES", "HIP_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES"),
         "driver_libs": [],
         "management_libs": [],
         "pci_bus_id": "hipDeviceGetPCIBusId",

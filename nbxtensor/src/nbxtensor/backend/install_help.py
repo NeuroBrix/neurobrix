@@ -176,6 +176,22 @@ def no_runtime_message(root: str = "/sys/bus/pci/devices") -> str:
     return f"{head}\n{report(root)}"
 
 
+def hidden_gpus(root: str = "/sys/bus/pci/devices"):
+    """(variable, its value, the GPUs of the backend's vendor on the PCI bus) when the variable the backend's runtime
+    reads to hide devices (its table's `visible_env`) leaves this process fewer devices than the bus holds; None
+    otherwise — read from the environment and this library's own listings, never from an error's text."""
+    import os
+    from nbxtensor.backend import runtime as _rt
+    from nbxtensor.memory.allocator import DeviceAllocator
+    try:
+        backend, names = _rt.gpu_backend(), _rt.backend_table().get("visible_env") or ()
+    except RuntimeError:
+        return None
+    set_ = [(n, os.environ[n]) for n in names if n in os.environ]
+    on_bus = sum(1 for v, *_ in pci_gpus(root) if _NEEDS[v][0] == backend)
+    return (*set_[0], on_bus) if set_ and on_bus > DeviceAllocator.device_count() else None
+
+
 def compiler_missing(exc: BaseException):
     """The one line to say when `exc` came from a machine with no C (or C++) compiler for Triton to build a kernel with;
     None for any other failure. torch compiles some of its kernels with Triton at their first use (torch 2.14.1 sends

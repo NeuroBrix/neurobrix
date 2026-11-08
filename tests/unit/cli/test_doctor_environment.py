@@ -71,6 +71,10 @@ def test_gpu_present_but_torch_blind_is_a_blocking_problem(monkeypatch, capsys):
     monkeypatch.setattr(doctor, "_nvidia_smi_gpus",
                         lambda: [("Tesla V100-SXM2-32GB", "7.0")])
     monkeypatch.setattr(doctor, "_driver_version", lambda: "535.309.01")
+    # the cards are not hidden by the environment, and the Triton engine cannot run either: blocking
+    from nbxtensor.backend import install_help
+    monkeypatch.setattr(install_help, "hidden_gpus", lambda *a: None)
+    monkeypatch.setattr(doctor, "_triton_engine", lambda: (False, "not installed"))
 
     problems = doctor.check_compute_environment()
     assert len(problems) == 1
@@ -86,6 +90,7 @@ def test_gpu_architecture_missing_from_the_wheel_is_caught(monkeypatch):
     _fake_torch(monkeypatch, available=True,
                 devices=[("Tesla V100-SXM2-32GB", (7, 0))],
                 arch_list=["sm_75", "sm_80", "sm_90"])
+    monkeypatch.setattr(doctor, "_triton_engine", lambda: (False, "not installed"))   # blocking: neither engine runs
     problems = doctor.check_compute_environment()
     assert len(problems) == 1
     assert "sm_70" in problems[0]
@@ -225,3 +230,41 @@ def test_on_a_mac_without_torch_the_pytorch_engine_is_added_with_pytorchs_own_wh
     out = capsys.readouterr().out
     assert "To add it: pip install torch, then pip install 'neurobrix[pytorch]'" in out, out
     assert "CUDA" not in out and "cuda-build" not in out, out
+
+
+def test_gpus_hidden_by_the_environment_are_named_never_a_torch_mismatch():
+    """`CUDA_VISIBLE_DEVICES=` on a machine whose driver sees its cards (measured on e4545655, 2026-11-08: "Triton
+    engine: ready on cuda", then a torch build mismatch, exit 1): the doctor names the variable, gives no torch advice,
+    does not call the Triton engine ready, and exits 0 — the PyTorch engine runs on the CPU, so an engine can run.
+    Through the entry point, the variable set for the child only; needs a GPU on the PCI bus to hide."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+    from nbxtensor.backend.install_help import pci_gpus
+    if not pci_gpus():
+        pytest.skip("no GPU on the PCI bus to hide")
+    pytest.importorskip("torch")
+    repo = Path(__file__).resolve().parents[3]
+    env = dict(os.environ, CUDA_VISIBLE_DEVICES="", PYTHONNOUSERSITE="1",
+               PYTHONPATH=os.pathsep.join([str(repo / "src"), str(repo / "nbxtensor" / "src")]))
+    env.pop("NBX_LOG", None)
+    p = subprocess.run([sys.executable, "-m", "neurobrix", "doctor"], capture_output=True, text=True, env=env,
+                       timeout=300)
+    out = p.stdout
+    assert p.returncode == 0, out + p.stderr
+    assert "GPUs hidden by CUDA_VISIBLE_DEVICES=''" in out and "(the driver sees " in out, out
+    assert "ready on cuda" not in out and "force-reinstall torch" not in out and "mismatch" not in out, out
+
+
+def test_a_blind_torch_is_advice_when_the_triton_engine_runs(monkeypatch, capsys):
+    """Doctor's rule: blocking only when neither engine can run. The Triton engine ready, a torch that sees no CUDA
+    is said with its fix, and no problem is returned (exit 0)."""
+    _fake_torch(monkeypatch, available=False, cuda="13.0")
+    monkeypatch.setattr(doctor, "_nvidia_smi_gpus", lambda: [("Tesla V100-SXM2-32GB", "7.0")])
+    monkeypatch.setattr(doctor, "_driver_version", lambda: "535.309.01")
+    from nbxtensor.backend import install_help
+    monkeypatch.setattr(install_help, "hidden_gpus", lambda *a: None)
+    monkeypatch.setattr(doctor, "_triton_engine", lambda: (True, "ready on cuda"))
+    assert doctor.check_compute_environment() == []
+    assert "index-url" in capsys.readouterr().out

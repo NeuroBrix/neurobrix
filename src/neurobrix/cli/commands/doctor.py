@@ -97,11 +97,25 @@ def _triton_engine() -> tuple[bool, str]:
         if _apple_silicon():
             return False, f"not installed ({exc}): {_MAC_TRITON}"
         return False, f"not installed ({exc}): pip install neurobrix"
+    from nbxtensor.backend.cpu_backend import triton_cpu_installed
+    from nbxtensor.memory.allocator import DeviceAllocator
     try:
         from nbxtensor.backend.runtime import gpu_backend
-        return True, f"ready on {gpu_backend()} (nbxtensor {nbxtensor.__version__}, Triton {triton.__version__})"
+        backend = gpu_backend()
     except RuntimeError as exc:    # names what to install for a GPU on the bus (nbxtensor.backend.install_help)
         return False, f"no GPU runtime: {exc}"
+    if DeviceAllocator.device_count() > 0:
+        return True, f"ready on {backend} (nbxtensor {nbxtensor.__version__}, Triton {triton.__version__})"
+    cpu = triton_cpu_installed()      # no device this process sees: what the engine can run on is the CPU, or nothing
+    return cpu, f"no {backend} device visible{_hidden_said()}; " + ("runs on the CPU (triton-cpu)" if cpu else
+                                                                       "triton-cpu not installed: nothing to run on")
+
+
+def _hidden_said() -> str:
+    """`: GPUs hidden by <variable>='<value>' (the driver sees N)` when the environment hides the devices, else ''."""
+    from nbxtensor.backend.install_help import hidden_gpus
+    hidden = hidden_gpus()
+    return f": GPUs hidden by {hidden[0]}={hidden[1]!r} (the driver sees {hidden[2]})" if hidden else ""
 
 
 def _torch_present() -> bool:
@@ -112,9 +126,9 @@ def _torch_present() -> bool:
 
 
 def check_compute_environment() -> list[str]:
-    """Return a list of blocking problems, printing the diagnosis as it goes. Two engines: the Triton engine
-    (`--triton`, nbxtensor, no PyTorch) and the PyTorch engine (the default, `neurobrix[pytorch]`). A machine where
-    one of them can run has no blocking problem; the other is said, with how to add it."""
+    """Return the blocking problems, printing the diagnosis as it goes. Two engines: the Triton engine (`--triton`,
+    nbxtensor, no PyTorch) and the PyTorch engine (`neurobrix[pytorch]`). Blocking only when neither can run; what the
+    other lacks is said, with how to add it."""
     problems: list[str] = []
     triton_ready, triton_says = _triton_engine()
     print(f"  Triton engine:  {triton_says}")
@@ -158,44 +172,30 @@ def check_compute_environment() -> list[str]:
             mark = "ok" if supported else "NOT SUPPORTED by this PyTorch build"
             print(f"    [{i}] {torch.cuda.get_device_name(i)}  ({sm})  {mark}")
             if not supported:
-                problems.append(
-                    f"GPU {i} is {sm}, which this PyTorch build does not include "
-                    f"(it has: {', '.join(arch_list)}).\n"
-                    f"      Fix: {_torch_install_hint(f'{major}.{minor}')}"
-                )
-        return problems
+                problems.append(f"GPU {i} is {sm}, which this PyTorch build does not include (it has: "
+                                f"{', '.join(arch_list)}). Fix: {_torch_install_hint(f'{major}.{minor}')}")
+        for p in problems if triton_ready else ():      # the Triton engine runs: advice, not a blocking problem
+            print(f"    {p}")
+        return [] if triton_ready else problems
 
     if on_mps:
         print(f"  PyTorch engine: {torch.__version__} (Apple GPU, mps)")
         return problems
 
-    # No CUDA. Distinguish "no GPU" from "GPU present, torch cannot use it" —
-    # they are completely different problems for the user.
-    print("  GPU visible:    NO")
-    if not gpus:
-        print("    No NVIDIA GPU detected by the driver either: CPU execution, a supported path (a CPU profile is detected).")
-        if cuda_build:
+    # No CUDA: no GPU, GPUs the environment hides, or GPUs this torch build cannot use — three different answers
+    print(f"  PyTorch engine: {torch.__version__} ({built}), no GPU visible{_hidden_said()}: it runs on the CPU")
+    if not gpus or _hidden_said():
+        if cuda_build and not gpus:
             # several GB of CUDA wheels nothing uses; an extra cannot pull the CPU wheel (PEP 508 carries no index URL)
             print(f"    Note: PyTorch is installed with CUDA {cuda_build} on a machine with no NVIDIA GPU — several GB of "
                   f"unused wheels. For a CPU-only install: {_cpu_install_hint()}, then pip install neurobrix")
         return problems
 
     caps = ", ".join(f"{n} ({c})" for n, c in gpus)
-    print(f"    But the driver DOES see: {caps}")
-    print("    So PyTorch was installed for a CUDA version this driver or GPU "
-          "cannot serve.")
-    first_cap = gpus[0][1] if gpus else None
-    problems.append(
-        f"A GPU is present ({caps}) but PyTorch reports no CUDA.\n"
-        f"      This is almost always a torch build mismatch: `pip install "
-        f"neurobrix` takes\n"
-        f"      whatever CUDA build the default index currently ships, which "
-        f"may be newer\n"
-        f"      than your driver — and CUDA 13 dropped Volta (sm_70) "
-        f"entirely.\n"
-        f"      Fix: {_torch_install_hint(first_cap)}"
-    )
-    return problems
+    fix = (f"the driver sees {caps} and PyTorch reports no CUDA: almost always a torch build mismatch (the default index's "
+           f"CUDA build may be newer than the driver; CUDA 13 dropped Volta). Fix: {_torch_install_hint(gpus[0][1])}")
+    print(f"    {fix}")
+    return [] if triton_ready else [f"Neither engine can use the GPU: the Triton engine is {triton_says}; {fix}"]
 
 
 def cmd_doctor(args) -> int:
@@ -214,8 +214,7 @@ def cmd_doctor(args) -> int:
     problems = check_compute_environment()
 
     if not problems:
-        print("No blocking problem found: the engine is installed and can see "
-              "your GPU.")
+        print("No blocking problem found: an engine can run here.")
         return 0
 
     print(f"{len(problems)} problem(s) that will block a real run:")

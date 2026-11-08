@@ -97,6 +97,11 @@ def _triton_cpu_available() -> bool:
     return False
 
 
+def triton_cpu_installed() -> bool:
+    """Whether upstream `triton-cpu` is installed (the Triton engine's CPU backend), asked without importing it."""
+    return _triton_cpu_available()
+
+
 def ensure_triton_cpu_or_raise() -> None:
     """Verify `triton-cpu` is installed when we're on a CPU-only profile.
 
