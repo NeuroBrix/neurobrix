@@ -70,6 +70,8 @@ APPLE_M4_PRO = {        # the Mac's `default-9f169c79`, 2026-09-24; its engine b
                  "compute_capability": "0.0", "supports_dtypes": ["float32", "float16", "bfloat16"],
                  "architecture": "apple_silicon", "pcie_version": "N/A", "unified_memory": True,
                  "host_memory_mb": 24576,
+                 # MTLDevice.maxBufferLength, what autodetect writes on every Apple device (13 639 MB, 2026-10-04)
+                 "max_allocation_mb": 13639,
                  # the Mac's generated profile holds its device's measured facts WHOLE (a profile's block replaces the
                  # vendor file's), with the arena factor the engine measures there since 2026-11-03 (HAT-L x4 triton,
                  # the allocator's live peak over the walk, 2026-10-28)
