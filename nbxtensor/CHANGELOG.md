@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   build of CPython 3.12. A Python tag may carry one build per minimum macOS: the Mac installs the newest build its
   macOS satisfies (CPython 3.12 on macOS 15 or later keeps the 15.0 build), and a Mac older than every build is
   refused naming the macOS it needs.
+- **The CPU pool runs on macOS 14**: Accelerate before macOS 15 has no `BLASSetThreading`, and 0.0.8 then knew no BLAS
+  of the process and raised at the pool's setup, so every Triton run stopped at start on macOS 14. That Accelerate is
+  now its own kind (`ACCELERATE_UNCONTROLLED`): its threads are not set (results unchanged; a `parallel_for` piece may
+  use Accelerate's own threads beside the pool's), `python -m nbxtensor doctor` names it, and `VECLIB_MAXIMUM_THREADS=1`
+  set before Python starts stays the user's choice (nbxtensor never sets it).
 
 ## [0.0.8] - 2026-11-09
 

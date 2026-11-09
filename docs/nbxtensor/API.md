@@ -2617,7 +2617,9 @@ def parallel_for(n: int, run: Callable[[int, int], object], kind: str, probe=Non
 `nbxtensor.backend.cpu.blas` — the BLAS numpy calls, held to the pool's cores:
 
 ```python
-def blas() -> Tuple[str, object]               # ("accelerate" | "openblas", the library); refused by name otherwise
+ACCELERATE_UNCONTROLLED = "accelerate_uncontrolled"   # Accelerate before macOS 15: no BLASSetThreading, threads not set
+def blas() -> Tuple[str, object]               # ("accelerate" | ACCELERATE_UNCONTROLLED | "openblas", the library); refused by name otherwise
+def uncontrolled_note() -> str                 # the line doctor prints for ACCELERATE_UNCONTROLLED (VECLIB_MAXIMUM_THREADS: the user's choice)
 def set_blas_threads(n: int) -> None           # OpenBLAS: the process's count; Accelerate: 1 = single-threaded here
 def blas_threads_of_this_thread() -> Optional[int]   # 1 single-threaded, a count (OpenBLAS), None (Accelerate's own)
 ```

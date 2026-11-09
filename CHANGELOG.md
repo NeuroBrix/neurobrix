@@ -10,7 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.6.4] - 2026-11-09
 
 ### Fixed
-- `python -m nbxtensor install-metal` installs the macOS 14 wheels and CPython 3.10-3.13 that 0.6.3 announced (nbxtensor 0.0.9).
+- `python -m nbxtensor install-metal` installs the macOS 14 wheels and CPython 3.10-3.13 that 0.6.3 announced, and the
+  Triton engine runs on macOS 14 (its CPU pool no longer needs Accelerate's macOS 15 thread API) (nbxtensor 0.0.9).
 
 ## [0.6.3] - 2026-11-09
 

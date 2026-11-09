@@ -18,6 +18,13 @@ def doctor() -> int:
     except RuntimeError as exc:
         backend = None
         print(f"backend in force: none — {str(exc).splitlines()[0]}")
+    if sys.platform == "darwin":
+        from nbxtensor.backend.cpu import blas
+        try:
+            if blas.blas()[0] == blas.ACCELERATE_UNCONTROLLED:
+                print(blas.uncontrolled_note())
+        except RuntimeError as exc:                       # a BLAS whose threads nbxtensor cannot set: said, by name
+            print(f"BLAS: {exc}")
     if backend != "metal" or install_help.pci_gpus():     # a Mac has no PCI GPU to report: nothing to install there
         print(install_help.report())
     return 0

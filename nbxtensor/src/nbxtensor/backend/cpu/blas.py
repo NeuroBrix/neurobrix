@@ -10,6 +10,10 @@ Through the BLAS's own symbols, found in the process (no new dependency):
 
 - Apple's Accelerate (`BLASSetThreading`, macOS 15+): a setting PER THREAD, multi-threaded (Accelerate chooses how
   many) or single-threaded — the pool's threads are set single-threaded when they start;
+- Accelerate before macOS 15 (`ACCELERATE_UNCONTROLLED`): no thread control at all (BLASSetThreading is macOS 15.0+;
+  Apple's one lever, `VECLIB_MAXIMUM_THREADS`, is read when Accelerate loads, before any library can set it). The kind
+  is named (doctor, a DEBUG line once), its threads are not set — the results are the same, a `parallel_for` piece may
+  use Accelerate's own threads beside the pool's — and the variable stays the user's choice, never set here;
 - OpenBLAS (numpy's wheels on Linux; `openblas_set_num_threads` / `scipy_openblas_set_num_threads64_`): a count for
   the PROCESS — set to 1 while `parallel_for` runs, the pool's size otherwise.
 
@@ -19,12 +23,18 @@ from __future__ import annotations
 
 import ctypes
 import functools
+import logging
 import platform
 import sys
 from pathlib import Path
 from typing import Optional, Tuple
 
-__all__ = ["blas", "set_blas_threads", "blas_threads_of_this_thread"]
+__all__ = ["blas", "set_blas_threads", "blas_threads_of_this_thread", "ACCELERATE_UNCONTROLLED", "uncontrolled_note"]
+
+_LOG = logging.getLogger(__name__)
+
+#: the kind of Accelerate without BLASSetThreading (macOS < 15)
+ACCELERATE_UNCONTROLLED = "accelerate_uncontrolled"
 
 _ACCELERATE = "/System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/libBLAS.dylib"
 _OPENBLAS_SET = ("scipy_openblas_set_num_threads64_", "scipy_openblas_set_num_threads", "openblas_set_num_threads64_",
@@ -56,8 +66,9 @@ def _loaded_openblas() -> Optional[str]:
 
 @functools.lru_cache(maxsize=1)
 def blas() -> Tuple[str, object]:
-    """(kind, library) of the BLAS numpy runs in this process: ("accelerate", libBLAS) or ("openblas", the loaded
-    library); refused by name otherwise."""
+    """(kind, library) of the BLAS numpy runs in this process: ("accelerate", libBLAS), (ACCELERATE_UNCONTROLLED,
+    libBLAS) on a macOS whose Accelerate has no BLASSetThreading, or ("openblas", the loaded library); refused by name
+    otherwise."""
     import numpy  # noqa: F401 — numpy loads its BLAS; the library is the one already in the process
     if platform.system() == "Darwin":
         # a system library lives in the dyld shared cache, not as a file on disk: it is loaded, never stat-ed
@@ -67,6 +78,9 @@ def blas() -> Tuple[str, object]:
             lib = None
         if lib is not None and hasattr(lib, "BLASSetThreading") and hasattr(lib, "BLASGetThreading"):
             return "accelerate", lib
+        if lib is not None:
+            _LOG.debug(uncontrolled_note())
+            return ACCELERATE_UNCONTROLLED, lib
     path = _loaded_openblas()
     if path is not None:
         lib = ctypes.CDLL(path)
@@ -89,6 +103,8 @@ def set_blas_threads(n: int) -> None:
     if not isinstance(n, int) or n < 1:
         raise ValueError(f"set_blas_threads: {n!r} — one thread or more")
     kind, lib = blas()
+    if kind == ACCELERATE_UNCONTROLLED:
+        return                                    # nothing to set: named by blas() and doctor (uncontrolled_note)
     if kind == "accelerate":
         fn = lib.BLASSetThreading
         fn.argtypes, fn.restype = [ctypes.c_uint], ctypes.c_int
@@ -104,6 +120,8 @@ def blas_threads_of_this_thread() -> Optional[int]:
     """1 when the BLAS runs single-threaded for the calling thread, else its count (OpenBLAS), or None for
     Accelerate's own multi-threading (it states no count)."""
     kind, lib = blas()
+    if kind == ACCELERATE_UNCONTROLLED:
+        return None
     if kind == "accelerate":
         fn = lib.BLASGetThreading
         fn.restype = ctypes.c_uint
@@ -111,3 +129,10 @@ def blas_threads_of_this_thread() -> Optional[int]:
     fn = _symbol(lib, _OPENBLAS_GET)
     fn.restype = ctypes.c_int
     return int(fn())
+
+
+def uncontrolled_note() -> str:
+    """The line doctor prints (and blas() logs once in DEBUG) for Accelerate without thread control."""
+    return ("BLAS: Accelerate without per-thread control (macOS before 15 has no BLASSetThreading): the CPU pool's threads "
+            "may each use Accelerate's own threads; VECLIB_MAXIMUM_THREADS=1, set before Python starts, makes it "
+            "single-threaded (your choice; NeuroBrix does not set it)")
