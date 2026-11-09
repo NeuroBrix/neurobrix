@@ -22,31 +22,78 @@ _H2D, _D2H = 1, 2
 
 
 class HostPages:
-    """`capacity` host pages of `num_layers` layers' K pages of `k_page_bytes` and V pages of `v_page_bytes`."""
+    """Host pages of `num_layers` layers' K pages of `k_page_bytes` and V pages of `v_page_bytes`, allocated in SLICES
+    of `slice_pages` as they are needed (`grow`), never beyond `max_pages`: the budget is a ceiling, what is held is what
+    the tier parked (a whole budget locked at the first park was ~240 GB page-locked on the rack, ~0.6 s/GB: the Dell's
+    review 2026-11-09 21:19). A page lives in one slice; pages of one slice are contiguous (`contiguous`)."""
 
-    def __init__(self, capacity: int, num_layers: int, k_page_bytes: int, v_page_bytes: int, pinned: bool):
-        if capacity <= 0 or num_layers <= 0 or k_page_bytes <= 0 or v_page_bytes <= 0:
-            raise ValueError(f"HostPages: {capacity} pages of {num_layers} layers x ({k_page_bytes} + {v_page_bytes}) B")
-        self.capacity, self.num_layers = int(capacity), int(num_layers)
+    def __init__(self, slice_pages: int, max_pages: int, num_layers: int, k_page_bytes: int, v_page_bytes: int,
+                 pinned: bool):
+        if slice_pages <= 0 or max_pages <= 0 or num_layers <= 0 or k_page_bytes <= 0 or v_page_bytes <= 0:
+            raise ValueError(f"HostPages: slices of {slice_pages} of at most {max_pages} pages of {num_layers} layers "
+                             f"x ({k_page_bytes} + {v_page_bytes}) B")
+        self.slice_pages, self.max_pages, self.num_layers = int(slice_pages), int(max_pages), int(num_layers)
         self.k_page_bytes, self.v_page_bytes = int(k_page_bytes), int(v_page_bytes)
         self.page_bytes = self.num_layers * (self.k_page_bytes + self.v_page_bytes)
-        n = self.capacity * self.page_bytes
-        self._ptr = DeviceAllocator.malloc_host_pinned(n) if pinned else 0
-        self.buf = (np.ctypeslib.as_array((ctypes.c_uint8 * n).from_address(self._ptr)) if pinned
-                    else np.empty(n, dtype=np.uint8))
         self.pinned = bool(pinned)
+        self._slices = []                                   # [(numpy uint8 buffer, pinned pointer or 0, pages)]
 
-    def address(self, host_page: int, layer: int, which: str) -> int:
+    @classmethod
+    def fixed(cls, capacity: int, num_layers: int, k_page_bytes: int, v_page_bytes: int, pinned: bool) -> "HostPages":
+        """`capacity` pages allocated at once, one slice."""
+        host = cls(capacity, capacity, num_layers, k_page_bytes, v_page_bytes, pinned)
+        host.grow()
+        return host
+
+    @property
+    def capacity(self) -> int:
+        """Pages allocated now."""
+        return sum(n for _, _, n in self._slices)
+
+    def grow(self) -> int:
+        """One more slice (the last one cut at `max_pages`); returns the pages added, 0 at the ceiling."""
+        n = min(self.slice_pages, self.max_pages - self.capacity)
+        if n <= 0:
+            return 0
+        nb = n * self.page_bytes
+        ptr = DeviceAllocator.malloc_host_pinned(nb) if self.pinned else 0
+        buf = np.ctypeslib.as_array((ctypes.c_uint8 * nb).from_address(ptr)) if self.pinned else np.empty(nb, np.uint8)
+        self._slices.append((buf, ptr, n))
+        return n
+
+    def shrink(self) -> int:
+        """The last slice freed (the caller knows it holds no parked page); returns the pages removed."""
+        if not self._slices:
+            return 0
+        _, ptr, n = self._slices.pop()
+        if ptr:
+            DeviceAllocator.free_host_pinned(ptr)
+        return n
+
+    def _locate(self, host_page: int):
         if not 0 <= host_page < self.capacity:
             raise IndexError(f"HostPages: host page {host_page} outside 0..{self.capacity - 1}")
-        off = host_page * self.page_bytes + layer * (self.k_page_bytes + self.v_page_bytes)
-        return self.buf.ctypes.data + off + (self.k_page_bytes if which == "v" else 0)
+        for i, (buf, _, n) in enumerate(self._slices):
+            if host_page < n:
+                return i, buf, host_page
+            host_page -= n
+
+    def contiguous(self, a: int, b: int) -> bool:
+        """Host pages `a` and `b` live in one slice (their bytes are one block)."""
+        return self._locate(a)[0] == self._locate(b)[0]
+
+    def page_view(self, host_page: int) -> np.ndarray:
+        _, buf, i = self._locate(host_page)
+        return buf[i * self.page_bytes:(i + 1) * self.page_bytes]
+
+    def address(self, host_page: int, layer: int, which: str) -> int:
+        _, buf, i = self._locate(host_page)
+        off = i * self.page_bytes + layer * (self.k_page_bytes + self.v_page_bytes)
+        return buf.ctypes.data + off + (self.k_page_bytes if which == "v" else 0)
 
     def close(self) -> None:
-        if self._ptr:
-            DeviceAllocator.free_host_pinned(self._ptr)
-            self._ptr = 0
-        self.buf = None
+        while self._slices:
+            self.shrink()
 
 
 def _page_bytes(pool) -> int:
@@ -150,13 +197,14 @@ def _layer_runs(k_pools):
     return runs
 
 
-def _copies(host_pages, runs, num_layers):
+def _copies(host_pages, runs, num_layers, contiguous=lambda a, b: True):
     """The host copies, (first rank, end rank, first layer, end layer, layers before it in a rank's staging slice): one per rank
     and run; consecutive host pages merged into one copy when the card holds every layer (one run (0, num_layers))."""
     if runs == [(0, num_layers)]:
         r0 = 0
         for r in range(1, len(host_pages) + 1):
-            if r == len(host_pages) or host_pages[r] != host_pages[r - 1] + 1:
+            if (r == len(host_pages) or host_pages[r] != host_pages[r - 1] + 1
+                    or not contiguous(host_pages[r - 1], host_pages[r])):
                 yield r0, r, 0, num_layers, 0
                 r0 = r
         return
@@ -227,7 +275,7 @@ def _gathered(k_pools, v_pools, host: HostPages, pages, host_pages, to_host: boo
             seg = len(layers) * (kb + vb)                    # this device's slice of one host page, per run
             if to_host:
                 DeviceAllocator.device_synchronize(dev)
-            for r0, r1, a, b, off in _copies(host_pages, runs, host.num_layers):
+            for r0, r1, a, b, off in _copies(host_pages, runs, host.num_layers, host.contiguous):
                 # host pages r0..r1-1 are consecutive and this card holds every layer: the staging IS their host layout
                 nbytes = (r1 - r0 - 1) * seg + (b - a) * (kb + vb)
                 h_addr = host.address(host_pages[r0], a, "k")

@@ -30,7 +30,7 @@ def test_a_page_round_trips_bit_exact_into_the_same_addresses(pinned):
     k, v = _pools(rng, DK), _pools(rng, DV)
     before_k, before_v = [p.numpy().copy() for p in k], [p.numpy().copy() for p in v]
     addrs = [p.data_ptr() for p in (*k, *v)]
-    host = HostPages(capacity=2, num_layers=LAYERS, k_page_bytes=HEADS * TOKENS * DK * 2,
+    host = HostPages.fixed(capacity=2, num_layers=LAYERS, k_page_bytes=HEADS * TOKENS * DK * 2,
                      v_page_bytes=HEADS * TOKENS * DV * 2, pinned=pinned)
     try:
         offload(k, v, [4, 1], host, [1, 0])
@@ -53,6 +53,30 @@ def test_a_page_size_that_does_not_match_the_pool_is_refused():
     _accelerator()
     rng = np.random.default_rng(1)
     k, v = _pools(rng, DK), _pools(rng, DV)
-    host = HostPages(1, LAYERS, HEADS * TOKENS * DK * 2, HEADS * TOKENS * DK * 2, pinned=False)   # V sized as K
+    host = HostPages.fixed(1, LAYERS, HEADS * TOKENS * DK * 2, HEADS * TOKENS * DK * 2, pinned=False)   # V sized as K
     with pytest.raises(ValueError, match="v page"):
         offload(k, v, [0], host, [0])
+
+
+def test_consecutive_host_pages_in_two_slices_are_never_one_copy():
+    """Host memory grows by slices (HostPages.grow): host pages 1 and 2 below live in two slices, so the gathered copy
+    must not merge them into one block (it would write past the first slice)."""
+    _accelerator()
+    from nbxtensor.memory.kv_host_pages import offload_gathered, restore_scattered
+    rng = np.random.default_rng(5)
+    k, v = _pools(rng, DK), _pools(rng, DV)
+    want_k = [p.numpy().copy() for p in k]
+    host = HostPages(2, 4, LAYERS, HEADS * TOKENS * DK * 2, HEADS * TOKENS * DV * 2, pinned=False)
+    assert host.grow() == 2 and host.grow() == 2 and not host.contiguous(1, 2) and host.contiguous(2, 3)
+    ref = HostPages.fixed(2, LAYERS, HEADS * TOKENS * DK * 2, HEADS * TOKENS * DV * 2, pinned=False)
+    try:
+        offload_gathered(k, v, [3, 4], host, [1, 2])
+        offload(k, v, [3, 4], ref, [0, 1])                     # the per-layer path: the host bytes each page must hold
+        assert np.array_equal(host.page_view(1), ref.page_view(0)) and np.array_equal(host.page_view(2), ref.page_view(1))
+        restore_scattered(k, v, host, [1, 2], [0, 5])
+        DeviceAllocator.device_synchronize(0)
+        for i in range(LAYERS):
+            kn = k[i].numpy()
+            assert np.array_equal(kn[0], want_k[i][3]) and np.array_equal(kn[5], want_k[i][4])
+    finally:
+        host.close()

@@ -165,7 +165,8 @@ def chunk_rows(ids, start, rows, absolute) -> List[Tuple[int, int, List[int], Li
 DEVICE, HOST
     # where an indexed page lives
 class HostPagePool
-    # `capacity` host pages, each one page index of every layer's K and V contiguous: take, give, free_pages
+    # `capacity` host pages, each one page index of every layer's K and V contiguous: take, give, free_pages; grow(n),
+    # shrink(n) (the last n pages, when all are free) as the host memory grows or frees a slice
 def host_tier_pages(budget_bytes, page_bytes_all_layers) -> int
     # the whole host pages a budget holds; 0 (the tier off) below one page
 def sequence_pages(tables, batch) -> List[int]
@@ -179,8 +180,9 @@ class PrefixIndex
 
 ```python
 class HostPages
-    # `capacity` host pages, each [layer][K page, V page] contiguous; page-locked (the device's host allocation) when
-    # asked, pageable otherwise (unified memory: outside the GPU working set); address(host_page, layer, which), close
+    # host pages, each [layer][K page, V page] contiguous, allocated in slices of `slice_pages` up to `max_pages` (the
+    # budget a ceiling): grow, shrink, capacity, contiguous(a, b) (one slice), page_view, address(host_page, layer,
+    # which), close; fixed(capacity, ...) one slice at once; page-locked when asked, pageable otherwise (unified memory)
 def offload(k_pools, v_pools, pages, host, host_pages) -> None
     # each device page (every layer's K and V, `pool[page]`) copied to its host page, after the device's queued work
 def restore(k_pools, v_pools, host, host_pages, pages, fence=None, owner=None) -> None

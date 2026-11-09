@@ -180,8 +180,9 @@ class PagedKVCache:
         return self._seq_len
 
     def _host_rows(self, host, host_pages) -> np.ndarray:
-        return np.stack([host.buf[hp * host.page_bytes:(hp + 1) * host.page_bytes] for hp in host_pages])
+        return np.stack([host.page_view(hp) for hp in host_pages])
 
+    @torch.inference_mode()        # the pools are the compiled flow's inference tensors
     def tier_offload(self, pages, host, host_pages) -> None:
         """Each layer's K and V of `pages` gathered by one index per pool and copied to the host once per pool (a page
         at a time cost a call each: 5 500 copies for 125 TinyLlama pages)."""
@@ -193,8 +194,9 @@ class PagedKVCache:
                 rows[:, off:off + nb] = pool[idx].reshape(len(pages), -1).view(torch.uint8).cpu().numpy()
                 off += nb
         for i, hp in enumerate(host_pages):
-            host.buf[hp * host.page_bytes:(hp + 1) * host.page_bytes] = rows[i]
+            host.page_view(hp)[:] = rows[i]
 
+    @torch.inference_mode()
     def tier_restore(self, host, host_pages, pages) -> None:
         rows = torch.from_numpy(self._host_rows(host, host_pages))
         for layer in range(self.config.num_layers):
@@ -205,6 +207,7 @@ class PagedKVCache:
                     (len(pages),) + tuple(pool.shape[1:])).to(pool.device)
                 off += nb
 
+    @torch.inference_mode()
     def tier_resume(self, length: int) -> None:
         """The sequence holds `length` positions restored from the host: their pages granted (every layer's pool
         extended to them), the lengths moved."""

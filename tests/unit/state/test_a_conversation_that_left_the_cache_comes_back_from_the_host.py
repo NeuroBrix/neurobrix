@@ -52,8 +52,9 @@ class FakeCache:
         return [SimpleNamespace(pages=self.pages)]
 
     def _view(self, host, hp, L, which):
-        off = host.address(hp, L, which) - host.buf.ctypes.data
-        return host.buf[off:off + host.k_page_bytes].view(np.float16).reshape(H, TPP, D)
+        page = host.page_view(hp)
+        off = L * (host.k_page_bytes + host.v_page_bytes) + (host.k_page_bytes if which == "v" else 0)
+        return page[off:off + host.k_page_bytes].view(np.float16).reshape(H, TPP, D)
 
     def tier_offload(self, pages, host, hps):
         for p, hp in zip(pages, hps):
@@ -95,7 +96,7 @@ def _turn(tier, session, cache, ids):
 
 def test_a_conversation_comes_back_from_the_host_with_the_same_bytes():
     cache, s = FakeCache(), Session()
-    tier = KVTier(budget_mb=1, pinned=False, source="test")
+    tier = KVTier(budget_mb=1, pinned=False, source="test", slice_positions=2 * TPP)
     a = list(range(1, 42))                      # 41 ids: 5 whole pages + 1
     b = list(range(500, 530))
     _turn(tier, s, cache, a)
@@ -112,7 +113,7 @@ def test_a_conversation_comes_back_from_the_host_with_the_same_bytes():
 
 def test_the_last_position_is_always_prefilled():
     cache, s = FakeCache(), Session()
-    tier = KVTier(budget_mb=1, pinned=False, source="test")
+    tier = KVTier(budget_mb=1, pinned=False, source="test", slice_positions=2 * TPP)
     a = list(range(1, 17))                       # exactly 2 whole pages
     _turn(tier, s, cache, a)
     _turn(tier, s, cache, list(range(900, 910)))
@@ -123,7 +124,7 @@ def test_the_last_position_is_always_prefilled():
 def test_a_full_tier_drops_the_least_recently_used_conversation():
     cache, s = FakeCache(pages=64), Session()
     page_bytes = LAYERS * 2 * H * TPP * D * 2
-    tier = KVTier(budget_mb=4 * page_bytes / 2 ** 20, pinned=False, source="test")   # 4 host pages
+    tier = KVTier(budget_mb=4 * page_bytes / 2 ** 20, pinned=False, source="test", slice_positions=2 * TPP)   # 4 host pages
     a, b, c = [list(range(k * 100, k * 100 + 17)) for k in (1, 2, 3)]
     for ids in (a, b, c):                         # A parked (2 pages), B parked (2): full; C parks by dropping A
         _turn(tier, s, cache, ids)
@@ -134,7 +135,7 @@ def test_a_full_tier_drops_the_least_recently_used_conversation():
 
 def test_a_budget_below_one_page_leaves_the_tier_off():
     cache, s = FakeCache(), Session()
-    tier = KVTier(budget_mb=1 / 2 ** 20, pinned=False, source="test")
+    tier = KVTier(budget_mb=1 / 2 ** 20, pinned=False, source="test", slice_positions=2 * TPP)
     _turn(tier, s, cache, list(range(1, 42)))
     assert _turn(tier, s, cache, list(range(500, 530))) == (0, 0)
     assert tier.status()["pages"] == 0 and tier.index is None
@@ -145,7 +146,7 @@ def test_parking_a_longer_turn_never_drops_its_own_parked_prefix():
     of the chain it extends (the extension waits), and A's prefix still comes back exact."""
     cache, s = FakeCache(pages=64), Session()
     page_bytes = LAYERS * 2 * H * TPP * D * 2
-    tier = KVTier(budget_mb=2 * page_bytes / 2 ** 20, pinned=False, source="test")   # 2 host pages
+    tier = KVTier(budget_mb=2 * page_bytes / 2 ** 20, pinned=False, source="test", slice_positions=2 * TPP)   # 2 host pages
     a = list(range(1, 18))                        # 2 whole pages + 1
     _turn(tier, s, cache, a)
     _turn(tier, s, cache, [900, 901, 902])        # A parked: the 2 host pages
@@ -167,7 +168,8 @@ def _profile(ram, share, unified):
 
 
 def _plan(host_side_mb, kv=True):
-    return SimpleNamespace(kv_cache_plan=object() if kv else None, host_footprint={"total_bytes": host_side_mb * 2 ** 20})
+    return SimpleNamespace(kv_cache_plan=SimpleNamespace(max_cache_len=2048) if kv else None,
+                           host_footprint={"total_bytes": host_side_mb * 2 ** 20})
 
 
 @pytest.fixture
@@ -197,3 +199,18 @@ def test_the_budget_is_the_host_law_and_the_users_cap(system_yml):
     with pytest.raises(RuntimeError, match="kv_host_tier_mb"):
         kv_tier_for(_plan(3000), _profile(24576, 6994, True))
     assert kv_tier_for(_plan(3000, kv=False), _profile(24576, 6994, True))[0] is None
+
+
+def test_the_budget_is_a_ceiling_a_park_allocates_one_slice_not_the_budget():
+    """The Dell's review (2026-11-09 21:19): the whole budget allocated at the first park was ~240 GB page-locked on the
+    rack. A park of N pages takes one slice (a conversation of the plan), the rest of the budget stays unallocated."""
+    cache, s = FakeCache(pages=64), Session()
+    tier = KVTier(budget_mb=1, pinned=False, source="test", slice_positions=2 * TPP)     # 1 MB: ~170 pages possible
+    _turn(tier, s, cache, list(range(1, 18)))                  # 2 whole pages
+    _turn(tier, s, cache, [900, 901, 902])                     # parked
+    assert tier.parked_pages == 2
+    assert tier.host.capacity == 2 and tier.pool.capacity == 2, (tier.host.capacity, tier.host.max_pages)
+    assert tier.host.max_pages > 100
+    _turn(tier, s, cache, list(range(40, 75)))                 # 4 whole pages
+    _turn(tier, s, cache, [903, 904, 905])                     # parked: two more slices, still far below the ceiling
+    assert tier.host.capacity == 6 and tier.parked_pages == 6

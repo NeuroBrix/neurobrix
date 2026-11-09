@@ -18,8 +18,9 @@ from nbxtensor.memory.kv_host_tier import HostPagePool, PrefixIndex, host_tier_p
 
 
 class KVTier:
-    def __init__(self, budget_mb: float, pinned: bool, source: str):
+    def __init__(self, budget_mb: float, pinned: bool, source: str, slice_positions: int):
         self.budget_bytes = int(budget_mb * 2 ** 20)
+        self.slice_positions = int(slice_positions)     # host memory grows by one conversation of the plan at a time
         self.pinned = bool(pinned)
         self.source = source
         self.index: Optional[PrefixIndex] = None
@@ -29,7 +30,8 @@ class KVTier:
         self.restored_pages = 0
 
     def _ready(self, cache) -> bool:
-        """The host pages sized from the cache's own layout at first use; False when the budget holds no page."""
+        """The host pages' shape from the cache's own layout at first use, NOTHING allocated: the budget is a ceiling and
+        the memory grows by slices as parks need it (`_host_page`). False when the budget holds no page."""
         if self.host is not None:
             return True
         from nbxtensor.memory.kv_host_pages import HostPages
@@ -37,17 +39,23 @@ class KVTier:
         pages = host_tier_pages(self.budget_bytes, layers * (kb + vb))
         if pages == 0:
             return False
-        self.index, self.pool = PrefixIndex(cache.page_tokens), HostPagePool(pages)
-        self.host = HostPages(pages, layers, kb, vb, self.pinned)
+        slice_pages = max(1, -(-self.slice_positions // cache.page_tokens))
+        self.index, self.pool = PrefixIndex(cache.page_tokens), HostPagePool(0)
+        self.host = HostPages(slice_pages, pages, layers, kb, vb, self.pinned)
         return True
 
     def _host_page(self, keep: Sequence) -> Optional[int]:
-        """A free host page, dropping the least recently used parked leaf not in `keep` when none is free."""
+        """A free host page: a new slice while under the ceiling, else the least recently used parked leaf not in `keep`
+        dropped (a trailing slice left empty by drops is freed)."""
         if self.pool.free_pages == 0:
-            for leaf in self.index.host_victims(self.pool.capacity):
-                if leaf not in keep:
-                    self.pool.give(self.index.drop(leaf))
-                    break
+            added = self.host.grow()
+            if added:
+                self.pool.grow(added)
+            else:
+                for leaf in self.index.host_victims(self.pool.capacity):
+                    if leaf not in keep:
+                        self.pool.give(self.index.drop(leaf))
+                        break
         return self.pool.take() if self.pool.free_pages else None
 
     def park(self, ids: Sequence[int], cache) -> int:
@@ -133,5 +141,5 @@ def kv_tier_for(plan, profile) -> "tuple[Optional[KVTier], str]":
     pinned = not any(getattr(d, "has_unified_memory", False) for d in getattr(profile, "devices", []))
     if budget <= 0:
         return None, f"KV host tier: off ({source})"
-    return KVTier(budget, pinned, source), (f"KV host tier: {budget:.0f} MB of {'page-locked' if pinned else 'pageable'}"
+    return KVTier(budget, pinned, source, plan.kv_cache_plan.max_cache_len), (f"KV host tier: {budget:.0f} MB of {'page-locked' if pinned else 'pageable'}"
                                             f" host memory ({source})")

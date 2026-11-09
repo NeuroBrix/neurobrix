@@ -54,7 +54,7 @@ def test_the_paths_agree_bit_exact(pinned, out_fn, in_fn, cards, host_pages):
     k, v = _pools(rng, DK, devices), _pools(rng, DV, devices)
     before_k, before_v = [p.numpy().copy() for p in k], [p.numpy().copy() for p in v]
     addrs = [p.data_ptr() for p in (*k, *v)]
-    host = HostPages(capacity=3, num_layers=LAYERS, k_page_bytes=HEADS * TOKENS * DK * 2,
+    host = HostPages.fixed(capacity=3, num_layers=LAYERS, k_page_bytes=HEADS * TOKENS * DK * 2,
                      v_page_bytes=HEADS * TOKENS * DV * 2, pinned=pinned)
     try:
         out_fn(k, v, [5, 1, 3], host, host_pages)
@@ -95,7 +95,7 @@ def test_every_launch_goes_through_the_launch_contract(monkeypatch, cards):
             return go
     monkeypatch.setattr(runtime, "set_device", lambda t: (seen.append(t._device_idx), real_set(t)))
     monkeypatch.setattr(M, "_kv_page_rows_kernel", _Spy())
-    host = HostPages(2, LAYERS, HEADS * TOKENS * DK * 2, HEADS * TOKENS * DV * 2, pinned=False)
+    host = HostPages.fixed(2, LAYERS, HEADS * TOKENS * DK * 2, HEADS * TOKENS * DV * 2, pinned=False)
     try:
         M.offload_gathered(k, v, [1, 2], host, [0, 1])
         M.restore_scattered(k, v, host, [0, 1], [3, 4])

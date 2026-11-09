@@ -28,16 +28,18 @@ def test_pages_round_trip_bit_exact_through_the_host(device):
                           max_cache_len=64, initial_cache_len=32, ceiling_is_window=False)
     cache = PagedKVCache(cfg, page_tokens=TPP, async_release=False)
     g = torch.Generator().manual_seed(3)
-    for layer in range(LAYERS):                     # a 24-position prefill: 3 whole pages
-        cache.update(layer, torch.randn(1, H, 24, D, generator=g).half().to(device),
-                     torch.randn(1, H, 24, D, generator=g).half().to(device))
+    with torch.inference_mode():                     # the compiled flow prefills in inference mode: its pools are
+        for layer in range(LAYERS):                  # inference tensors, and the tier runs outside it (RUN 92: a 500)
+            cache.update(layer, torch.randn(1, H, 24, D, generator=g).half().to(device),
+                         torch.randn(1, H, 24, D, generator=g).half().to(device))
     want = [tuple(t.clone() for t in cache.get_cache(layer)) for layer in range(LAYERS)]
     layers, kb, vb = cache.tier_layout()
-    host = HostPages(3, layers, kb, vb, pinned=False)
+    host = HostPages.fixed(3, layers, kb, vb, pinned=False)
     cache.tier_offload(sequence_pages(cache.tables, cache.batch), host, [2, 0, 1])
     cache.clear()                                    # another conversation takes the cache
-    for layer in range(LAYERS):
-        cache.update(layer, torch.zeros(1, H, 40, D).half().to(device), torch.zeros(1, H, 40, D).half().to(device))
+    with torch.inference_mode():
+        for layer in range(LAYERS):
+            cache.update(layer, torch.zeros(1, H, 40, D).half().to(device), torch.zeros(1, H, 40, D).half().to(device))
     cache.truncate(0)
     cache.tier_resume(24)
     cache.tier_restore(host, [2, 0, 1], sequence_pages(cache.tables, cache.batch)[:3])

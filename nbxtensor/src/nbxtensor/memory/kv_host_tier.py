@@ -43,6 +43,21 @@ class HostPagePool:
             raise RuntimeError(f"ZERO FALLBACK: the KV host tier's {self.capacity} pages are all held")
         return self._free.pop()
 
+    def grow(self, n: int) -> None:
+        """`n` more pages (ids capacity .. capacity+n-1), free: the host memory grew by a slice."""
+        first = self.capacity
+        self.capacity += int(n)
+        self._free[:0] = list(range(self.capacity - 1, first - 1, -1))
+
+    def shrink(self, n: int) -> bool:
+        """The last `n` pages removed when all are free (their slice is freed); False, nothing removed, otherwise."""
+        tail = set(range(self.capacity - int(n), self.capacity))
+        if n <= 0 or not tail <= set(self._free):
+            return False
+        self._free = [p for p in self._free if p not in tail]
+        self.capacity -= int(n)
+        return True
+
     def give(self, page: int) -> None:
         if not 0 <= page < self.capacity or page in self._free:
             raise RuntimeError(f"HostPagePool.give: host page {page} is not held")

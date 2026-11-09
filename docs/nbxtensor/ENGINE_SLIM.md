@@ -146,12 +146,12 @@ cache in host memory and copies it back when it returns. The mechanism and the b
 and the Triton cache's copies; paged_kv.py: the Triton cache's `tier_*` protocol). What the engine adds is WHEN a
 conversation is parked or restored and HOW MUCH host memory the tier may hold (policy), and the compiled engine's own
 copies over its torch pools (its paged cache is the engine's, torch-side: nbxtensor imports no torch, R33). Measured:
-140 079 (main d4de640f) to 140 282, +203.
+140 079 (main d4de640f) to 140 293, +214.
 
 | file | lines | what it holds |
 |---|---|---|
-| core/state/kv_tier.py | +137 | the tier's policy: park the held conversation before the cache drops it, restore a parked continuation before the prefill, the budget from the profile's host law (installed RAM less the system's share less the plan's host side) and the user's optional cap |
-| core/runtime/graph/paged_kv_cache.py | +47 | the compiled engine's `tier_*` protocol over its torch pools (layout, length, offload, restore, resume): one indexed gather per pool and K/V, never a copy per page |
+| core/state/kv_tier.py | +145 | the tier's policy: park the held conversation before the cache drops it, restore a parked continuation before the prefill, the budget from the profile's host law (installed RAM less the system's share less the plan's host side) and the user's optional cap, a CEILING: host memory grows by one conversation of the plan as parks need it |
+| core/runtime/graph/paged_kv_cache.py | +50 | the compiled engine's `tier_*` protocol over its torch pools (layout, length, offload, restore, resume) in inference mode: one indexed gather per pool and K/V, never a copy per page |
 | triton/flow/autoregressive.py, core/flow/autoregressive.py | +5, +2 | the two hooks: park before a cleared cache, prepare before the match |
 | serving/engine.py, serving/openai_api/routes.py | +4, +3 | the daemon's tier from its plan and profile; `usage.prompt_tokens_details.cached_tokens` |
 | core/flow/base.py, core/runtime/executor.py, config/system.yml | +3, +2, +3 | the tier handed to the flow; `serving.kv_host_tier_mb` (null = the computed budget) |
