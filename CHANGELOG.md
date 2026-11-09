@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `dimensions` only the model's own. No model of the catalogue is an embedding model yet: the route answers every other
   family with a named refusal, and no vector is ever derived from a chat model.
 
+### Changed
+- **The hub's official address is neurobrix.org**: `neurobrix hub` and `neurobrix import` reach `https://neurobrix.org` by default, and the CLI texts, README and project URLs name it. `NEUROBRIX_REGISTRY` still overrides it; the 0.6.x versions already installed keep working, the API under neurobrix.es stays served.
+
 ### Fixed
 - **`neurobrix run` against a daemon ends at the daemon's answer**: after the daemon serving the asked model answered an
   error, the run went on to a cold attempt, refused with "a serving daemon is running with another model" for the very

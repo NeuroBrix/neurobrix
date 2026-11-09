@@ -34,7 +34,7 @@ This security policy covers:
 - The `.nbx` container format parser and validator
 - The NeuroBrix CLI tools
 - The serving daemon and its network-facing components
-- The NeuroBrix Hub API at `neurobrix.es`
+- The NeuroBrix Hub API at `neurobrix.org`
 
 ### Out of Scope
 

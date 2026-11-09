@@ -6,7 +6,7 @@ generation, and image upscaling) from one container format and one command-line 
 It is for developers who want to run these models on their own GPUs or CPUs, on Linux,
 Windows and macOS, without writing or maintaining a separate pipeline for each model family. NeuroBrix does not
 train models. It runs published models that have been packaged as `.nbx` containers and
-distributed through the [NeuroBrix Hub](https://neurobrix.es/models).
+distributed through the [NeuroBrix Hub](https://neurobrix.org/models).
 
 <p align="center">
   <img src="./assets/logo_NeuroBrix.png" alt="NeuroBrix logo" width="160"/>
@@ -16,11 +16,11 @@ distributed through the [NeuroBrix Hub](https://neurobrix.es/models).
   <a href="https://pypi.org/project/neurobrix/"><img src="https://img.shields.io/pypi/v/neurobrix?color=blue" alt="PyPI"/></a>
   <a href="https://pypi.org/project/neurobrix/"><img src="https://img.shields.io/pypi/pyversions/neurobrix" alt="Python versions"/></a>
   <a href="https://github.com/NeuroBrix/neurobrix/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License: Apache 2.0"/></a>
-  <a href="https://neurobrix.es/models"><img src="https://img.shields.io/badge/hub-neurobrix.es-orange" alt="NeuroBrix Hub"/></a>
+  <a href="https://neurobrix.org/models"><img src="https://img.shields.io/badge/hub-neurobrix.org-orange" alt="NeuroBrix Hub"/></a>
 </p>
 
 <p align="center">
-  <a href="https://neurobrix.es/models">Hub</a> &nbsp;|&nbsp;
+  <a href="https://neurobrix.org/models">Hub</a> &nbsp;|&nbsp;
   <a href="https://docs.neurobrix.es">Documentation</a> &nbsp;|&nbsp;
   <a href="https://github.com/NeuroBrix/neurobrix/releases">Releases</a> &nbsp;|&nbsp;
   <a href="https://github.com/NeuroBrix/neurobrix/blob/main/CONTRIBUTING.md">Contributing</a> &nbsp;|&nbsp;
@@ -272,7 +272,7 @@ before filing a bug.
 ### Models on the hub
 
 The hub listed 45 public models in 10 categories on 2026-10-12. The hub itself is the live
-list (`neurobrix hub`, or [neurobrix.es/models](https://neurobrix.es/models)). Each
+list (`neurobrix hub`, or [neurobrix.org/models](https://neurobrix.org/models)). Each
 identifier below is what you pass to `neurobrix import`, and then to `--model`.
 
 | Category | Models |
@@ -407,7 +407,7 @@ not filed as public issues.
 
 - Issues and pull requests: [GitHub](https://github.com/NeuroBrix/neurobrix/issues), mirrored on
   [GitLab](https://gitlab.com/neurobrix/neurobrix)
-- Model hub: [neurobrix.es/models](https://neurobrix.es/models)
+- Model hub: [neurobrix.org/models](https://neurobrix.org/models)
 - Documentation: [docs.neurobrix.es](https://docs.neurobrix.es) and the [docs/](./docs) directory
 - Building applications and coding agents: [docs/BUILD_WITH_AGENTS.md](./docs/BUILD_WITH_AGENTS.md)
 - Roadmap: [docs/roadmap.md](./docs/roadmap.md)

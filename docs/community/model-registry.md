@@ -2,7 +2,7 @@
 
 ## Publish Your Model on NeuroBrix Hub
 
-The [NeuroBrix Hub](https://neurobrix.es/models) is the official model registry for the NeuroBrix runtime. It hosts AI models packaged in the universal `.nbx` container format — ready to run on any supported hardware with zero configuration.
+The [NeuroBrix Hub](https://neurobrix.org/models) is the official model registry for the NeuroBrix runtime. It hosts AI models packaged in the universal `.nbx` container format — ready to run on any supported hardware with zero configuration.
 
 We invite AI model developers, research labs, and organizations to publish their models in the NeuroBrix Hub.
 
@@ -164,7 +164,7 @@ The complete video family (validated in all four execution modes, publishing alo
 | rhymes-ai/Allegro-TI2V | Rhymes AI | Apache 2.0 |
 | Efficient-Large-Model/SANA-Video-2B-720p | NVIDIA | NVIDIA Open Model License |
 
-Browse the full catalog: [neurobrix.es/models](https://neurobrix.es/models)
+Browse the full catalog: [neurobrix.org/models](https://neurobrix.org/models)
 
 ---
 
@@ -180,7 +180,7 @@ Browse the full catalog: [neurobrix.es/models](https://neurobrix.es/models)
 
 3. **Tracing and validation** — We trace the model, validate outputs against reference, and optimize execution.
 
-4. **Hub publication** — Model is listed on [neurobrix.es/models](https://neurobrix.es/models) with documentation and quick-start instructions.
+4. **Hub publication** — Model is listed on [neurobrix.org/models](https://neurobrix.org/models) with documentation and quick-start instructions.
 
 5. **Announcement** — Joint publication announcement (optional).
 
@@ -190,7 +190,7 @@ Browse the full catalog: [neurobrix.es/models](https://neurobrix.es/models)
 
 **Model Registry Program**
 Email: [models@neurobrix.es](mailto:models@neurobrix.es)
-Web: [neurobrix.es/models](https://neurobrix.es/models)
+Web: [neurobrix.org/models](https://neurobrix.org/models)
 Issues: [GitHub](https://github.com/NeuroBrix/neurobrix/issues) | [GitLab](https://gitlab.com/neurobrix/neurobrix/-/issues)
 
 ---

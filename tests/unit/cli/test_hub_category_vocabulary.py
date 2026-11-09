@@ -31,6 +31,8 @@ from io import BytesIO
 
 import pytest
 
+from neurobrix.cli.utils import REGISTRY_URL
+
 
 
 
@@ -101,7 +103,7 @@ def test_lowercase_is_still_accepted():
 def _http_error(code: int, body: dict) -> urllib.error.HTTPError:
     payload = json.dumps(body).encode()
     return urllib.error.HTTPError(
-        url="https://neurobrix.es/api/models", code=code, msg="Bad Request",
+        url="https://neurobrix.org/api/models", code=code, msg="Bad Request",
         hdrs=None, fp=BytesIO(payload),  # type: ignore[arg-type]
     )
 
@@ -174,7 +176,7 @@ def test_the_recorded_vocabulary_still_matches_the_live_registry():
     whole point of the design."""
     try:
         request = urllib.request.Request(
-            "https://neurobrix.es/api/models?category=__invalid__",
+            f"{REGISTRY_URL}/api/models?category=__invalid__",   # the registry the CLI reads (NEUROBRIX_REGISTRY overrides)
             headers={"User-Agent": "neurobrix-tests"},
         )
         urllib.request.urlopen(request, timeout=15)

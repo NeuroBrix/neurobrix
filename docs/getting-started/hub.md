@@ -27,7 +27,7 @@ neurobrix hub --search whisper
 ## Available Models
 
 The hub listed 45 public models on 2026-10-12. The hub is the live list: run
-`neurobrix hub` or see [neurobrix.es/models](https://neurobrix.es/models). Being on the hub means a
+`neurobrix hub` or see [neurobrix.org/models](https://neurobrix.org/models). Being on the hub means a
 container can be downloaded; each release's notes list the models and modes known not to work.
 
 ### Language models (`LLM`)

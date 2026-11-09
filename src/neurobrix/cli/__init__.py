@@ -156,7 +156,7 @@ Examples:
   neurobrix run --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --prompt "What is the capital of France?"
 
 -v shows the engine's developer lines, -vv an error's traceback too (NBX_LOG=debug: both).
-For more information: https://neurobrix.es"""
+For more information: https://neurobrix.org"""
     )
 
     parser.add_argument(
@@ -323,7 +323,7 @@ For more information: https://neurobrix.es"""
     import_parser = subparsers.add_parser(
         'import',
         help='Download model from NeuroBrix registry',
-        description='Download a .nbx model from neurobrix.es and extract to local cache',
+        description='Download a .nbx model from neurobrix.org and extract to local cache',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="Examples:\n"
                + "".join(f"  neurobrix import {ref}\n" for ref in IMPORT_EXAMPLES)
@@ -399,7 +399,7 @@ Examples:
     hub_parser = subparsers.add_parser(
         'hub',
         help='Browse models on the NeuroBrix registry',
-        description='List all models available for download on neurobrix.es',
+        description='List all models available for download on neurobrix.org',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:

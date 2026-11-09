@@ -45,7 +45,7 @@ CACHE_DIR = _cache_dir()               # Extracted models (runtime)
 # device presenting a self-signed certificate, and every publish from this rack
 # failed on certificate verification -- correctly. It returns every weekend.
 import os as _os
-REGISTRY_URL = _os.environ.get("NEUROBRIX_REGISTRY") or "https://neurobrix.es"
+REGISTRY_URL = _os.environ.get("NEUROBRIX_REGISTRY") or "https://neurobrix.org"
 
 # The model references `neurobrix import --help` and its error messages show as
 # examples. Each is a model the hub serves, as recorded in

@@ -31,7 +31,7 @@ def _fresh_utils(monkeypatch, value):
 
 def test_the_public_name_is_the_default(monkeypatch):
     """A user anywhere in the world reaches the hub through it."""
-    assert _fresh_utils(monkeypatch, None).REGISTRY_URL == "https://neurobrix.es"
+    assert _fresh_utils(monkeypatch, None).REGISTRY_URL == "https://neurobrix.org"
 
 
 def test_the_machine_declaration_wins(monkeypatch):
@@ -41,4 +41,4 @@ def test_the_machine_declaration_wins(monkeypatch):
 
 def test_an_empty_declaration_is_not_a_registry(monkeypatch):
     """`NEUROBRIX_REGISTRY=` must not turn the hub into an empty string."""
-    assert _fresh_utils(monkeypatch, "").REGISTRY_URL == "https://neurobrix.es"
+    assert _fresh_utils(monkeypatch, "").REGISTRY_URL == "https://neurobrix.org"

@@ -53,7 +53,7 @@ Output is a PNG at `input × scale`.
 
 The four x4 classical variants — `hat-l-x4`, `Real-ESRGAN-x4`,
 `swinir-classical-x4`, `swin2SR-classical-x4` — are published on
-the NeuroBrix hub (neurobrix.es) and downloadable now. The other
+the NeuroBrix hub (neurobrix.org) and downloadable now. The other
 variants in the catalogue are validated by the engine and are
 being published to the hub progressively. None are distributed
 via third-party model hosts.

@@ -8,7 +8,7 @@ The `.nbx` file is a self-contained archive that holds everything needed to run 
 
 NeuroBrix introduces the NBX format as a **universal standard for AI model packaging**. Rather than each framework defining its own way to store and load models, NBX captures the complete execution blueprint — graph, weights, topology, and metadata — in a single portable archive.
 
-The `.nbx` packages distributed on the [NeuroBrix hub](https://neurobrix.es/models) are produced by the build toolchain; the engine only consumes them.
+The `.nbx` packages distributed on the [NeuroBrix hub](https://neurobrix.org/models) are produced by the build toolchain; the engine only consumes them.
 
 ## Design Goals
 
@@ -101,7 +101,7 @@ Variable resolution contracts. Each variable has a resolver that describes how t
 
 ## How NBX Files Are Created
 
-Models available on the [NeuroBrix Hub](https://neurobrix.es/models) are built using our proprietary tracing technology. We capture the computation graph at a low level using a custom `TorchDispatchMode` mechanism, preserving the exact execution semantics of the original model while making it framework-independent.
+Models available on the [NeuroBrix Hub](https://neurobrix.org/models) are built using our proprietary tracing technology. We capture the computation graph at a low level using a custom `TorchDispatchMode` mechanism, preserving the exact execution semantics of the original model while making it framework-independent.
 
 This process produces a self-describing container that any compatible runtime can execute without needing access to the original model code or its dependencies.
 

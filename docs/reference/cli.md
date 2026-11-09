@@ -143,7 +143,7 @@ neurobrix inspect [options] PATH_OR_MODEL
 
 Download model from NeuroBrix registry.
 
-Download a .nbx model from neurobrix.es and extract to local cache
+Download a .nbx model from neurobrix.org and extract to local cache
 
 ```
 neurobrix import [options] model_ref
@@ -152,7 +152,7 @@ neurobrix import [options] model_ref
 | argument | default | description |
 |---|---|---|
 | `model_ref` | required | Model reference: org/name (e.g., TinyLlama/TinyLlama-1.1B-Chat-v1.0) |
-| `--registry` `REGISTRY` | — | Registry URL (default: https://neurobrix.es) |
+| `--registry` `REGISTRY` | — | Registry URL (default: https://neurobrix.org) |
 | `--force` | off | Re-download even if already cached |
 | `--no-keep` | off | Delete .nbx from store after extraction (saves disk space) |
 | `--container` `FILE.nbx` | — | Install from (or record the name of an entry installed from) a container this machine already holds, verified against the sha256 the hub serves; nothing is downloaded |
@@ -231,7 +231,7 @@ neurobrix clean [options]
 
 Browse models on the NeuroBrix registry.
 
-List all models available for download on neurobrix.es
+List all models available for download on neurobrix.org
 
 ```
 neurobrix hub [options]
@@ -241,7 +241,7 @@ neurobrix hub [options]
 |---|---|---|
 | `--category`, `-c` `CATEGORY` | — | Filter by category. Any category the registry serves is accepted; an invalid value prints the valid ones. |
 | `--search`, `-s` `SEARCH` | — | Search models by name, tag, or description |
-| `--registry` `REGISTRY` | — | Registry URL (default: https://neurobrix.es) |
+| `--registry` `REGISTRY` | — | Registry URL (default: https://neurobrix.org) |
 | `--json` | off | one JSON record on stdout, human lines on stderr (schema in neurobrix/cli/json_out.py) |
 | `-v`, `--verbose` | — | -v: the engine's developer lines; -vv: and the traceback of an error (NBX_LOG=debug: both) |
 

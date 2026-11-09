@@ -43,7 +43,7 @@ from pathlib import Path
 
 REPO = "NeuroBrix/neurobrix"
 PYPI_PACKAGE = "neurobrix"
-HUB = "https://neurobrix.es"
+HUB = "https://neurobrix.org"
 OUT_DIR = Path(__file__).resolve().parent.parent / "docs" / "internal" / "audience"
 SNAPSHOTS = OUT_DIR / "snapshots.jsonl"
 TABLE = OUT_DIR / "AUDIENCE.md"

@@ -36,7 +36,7 @@ import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
 
-REGISTRY = "https://neurobrix.es"
+REGISTRY = "https://neurobrix.org"
 CACHE = _atelier.root("cache")
 REQUIRED_CACHE_ENTRIES = ("manifest.json", "topology.json", "components")
 # A file last written within this long before a boot was in flight close enough

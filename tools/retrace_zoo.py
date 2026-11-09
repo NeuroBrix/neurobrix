@@ -147,7 +147,7 @@ REGISTRY_ALIAS = {"Sana-1600M-MultiLing": "Sana_1600M_1024px_MultiLing"}
 # uploads read "503 SlowDownWrite" from the public name while the store at 192.0.2.36 held write
 # quorum all evening. A publish path that dies every football weekend is a defect; this constant
 # was it.
-REGISTRY = os.environ.get("NEUROBRIX_REGISTRY") or "https://neurobrix.es"
+REGISTRY = os.environ.get("NEUROBRIX_REGISTRY") or "https://neurobrix.org"
 
 # The precision policy BOTH arms of the gate run under. A retraced graph carries a new
 # signature, so the calibration record embedded in the container (measured on the old graph)

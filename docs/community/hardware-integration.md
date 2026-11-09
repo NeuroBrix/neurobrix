@@ -58,7 +58,7 @@ gpu_count: 1
 
 **What you get:**
 - "Verified by NeuroBrix" badge for your hardware
-- Official benchmarks published on [neurobrix.es](https://neurobrix.es)
+- Official benchmarks published on [neurobrix.org](https://neurobrix.org)
 - Priority bug fixes for your platform
 - Listed as a verified partner on the NeuroBrix website
 
@@ -121,7 +121,7 @@ NeuroBrix currently supports NVIDIA GPUs via PyTorch + CUDA + Triton, Apple Sili
 
 **Hardware Integration Program**
 Email: [partners@neurobrix.es](mailto:partners@neurobrix.es)
-Web: [neurobrix.es](https://neurobrix.es)
+Web: [neurobrix.org](https://neurobrix.org)
 Repository: [GitHub](https://github.com/NeuroBrix/neurobrix) | [GitLab](https://gitlab.com/neurobrix/neurobrix)
 
 ---

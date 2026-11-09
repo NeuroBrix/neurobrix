@@ -27,7 +27,7 @@ and stop on `"ok": false`, showing the user the problems it lists.
 ## Finding and installing models
 
 ```bash
-neurobrix hub --json                                # models available on the hub (neurobrix.es/models)
+neurobrix hub --json                                # models available on the hub (neurobrix.org/models)
 neurobrix import TinyLlama/TinyLlama-1.1B-Chat-v1.0 # download + unpack; the hub identifier, as listed by `hub`
 neurobrix list --json                               # installed models: name, family, size, license
 neurobrix remove TinyLlama/TinyLlama-1.1B-Chat-v1.0 # free the disk
