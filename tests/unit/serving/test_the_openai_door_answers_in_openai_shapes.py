@@ -452,3 +452,26 @@ def test_an_engine_failure_is_a_500_with_its_named_refusal_and_the_daemon_serves
     _assert_error(status, body, 500, code="engine_error")
     assert "out of memory" in body["error"]["message"]
     assert _get(base + "/v1/models")[0] == 200
+
+
+def test_a_json_schema_answer_is_compiled_and_handed_to_the_decode(make):
+    """response_format json_schema: the schema compiled by our grammar engine and handed to complete_turn; a construct it
+    cannot enforce answers 400 naming it; json_object refused by name (point 9a)."""
+    pytest.importorskip("nbx_grammar")
+    eng = FakeEngine()
+    srv, base = make(eng)
+    schema = {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
+    status, body, _ = _post(base + "/v1/chat/completions", {
+        "model": "fake-model", "messages": [{"role": "user", "content": "hi"}],
+        "response_format": {"type": "json_schema", "json_schema": {"name": "c", "schema": schema}}})
+    assert status == 200, body
+    kw = [c for c in eng.calls if c[0] == "complete"][-1][3]
+    assert kw.get("grammar") is not None
+    status, body, _ = _post(base + "/v1/chat/completions", {
+        "model": "fake-model", "messages": [{"role": "user", "content": "hi"}],
+        "response_format": {"type": "json_schema", "json_schema": {"schema": {"type": "string", "pattern": "a+"}}}})
+    _assert_error(status, body, 400, param="response_format")
+    assert "pattern" in body["error"]["message"]
+    status, body, _ = _post(base + "/v1/chat/completions", {
+        "model": "fake-model", "messages": [{"role": "user", "content": "hi"}], "response_format": {"type": "json_object"}})
+    assert status == 400 and body["error"]["param"] == "response_format"

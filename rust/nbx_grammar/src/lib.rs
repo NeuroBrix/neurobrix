@@ -4,3 +4,4 @@ pub mod json;
 pub mod schema;
 pub mod matcher;
 pub mod vocab;
+pub mod ffi;

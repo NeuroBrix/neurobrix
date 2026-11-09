@@ -367,7 +367,8 @@ class InferenceEngine:
         params.refuse_unread()
         return inputs
 
-    def _generate_from_token_ids(self, token_ids: list, decode: Dict[str, Any], kv_session=None) -> Dict[str, Any]:
+    def _generate_from_token_ids(self, token_ids: list, decode: Dict[str, Any], kv_session=None,
+                                 constraint=None) -> Dict[str, Any]:
         """
         Generate from pre-tokenized token IDs (chat path).
 
@@ -397,7 +398,8 @@ class InferenceEngine:
         _phase_mark("engine.execute.begin")
 
         try:
-            outputs = self._execute(inputs, kv_session=kv_session)
+            outputs = self._execute(inputs, kv_session=kv_session,
+                                    **({"constraint": constraint} if constraint is not None else {}))
         finally:
             self._release_cold_request()
 
@@ -506,7 +508,7 @@ class InferenceEngine:
         """
         return self.complete_turn(messages, tools=tools, **kwargs)["text"]
 
-    def complete_turn(self, messages: list, tools: Optional[list] = None, **kwargs) -> Dict[str, Any]:
+    def complete_turn(self, messages: list, tools: Optional[list] = None, grammar=None, **kwargs) -> Dict[str, Any]:
         """`complete`, with what a caller that reads the turn itself needs: `text` (decoded with the special
         tokens skipped except the template's dialect markers), `token_ids` (the generated ids) and
         `prompt_tokens` (the rendered prompt's length)."""
@@ -545,7 +547,13 @@ class InferenceEngine:
                 f"these messages need {len(token_ids) + max_tokens} positions ({len(token_ids)} rendered + "
                 f"{max_tokens} to generate) and a session holds at most {self._agent_kv.ceiling} — "
                 f"{self._agent_kv.source}.")
-        result = self._generate_from_token_ids(token_ids, decode, kv_session=self._agent_kv)
+        constraint = None
+        if grammar is not None:            # the request's grammar (core/state/constraint.py), its vocabulary kept
+            from neurobrix.core.state.constraint import GrammarConstraint
+            eos = self._pkg.defaults.get("eos_token_id")
+            constraint = GrammarConstraint(grammar, tokenizer, eos if isinstance(eos, list) else [eos],
+                                           self.__dict__.setdefault("_grammar_vocabs", {}))
+        result = self._generate_from_token_ids(token_ids, decode, kv_session=self._agent_kv, constraint=constraint)
         generated = result.get("token_ids") or []
         from neurobrix.agent.parsers import select_parser
         from neurobrix.serving.text_stream import MarkerDecoder

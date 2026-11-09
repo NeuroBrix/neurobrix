@@ -34,7 +34,7 @@ from neurobrix.serving.openai_api.turn import TurnReader, select_reasoning, type
 # -- what each endpoint reads -------------------------------------------------------------------------------
 #: Parameters read by each endpoint. A key outside its set is refused by name; a key of `_NEUTRAL` is accepted
 #: only at the value that asks for nothing (what the engine does anyway), refused by name at any other.
-_CHAT_KEYS = {"model", "messages", "stream", "stream_options", "max_tokens", "max_completion_tokens",
+_CHAT_KEYS = {"model", "messages", "response_format", "stream", "stream_options", "max_tokens", "max_completion_tokens",
               "temperature", "top_p", "top_k", "repetition_penalty", "seed", "tools", "tool_choice",
               "parallel_tool_calls", "user"}
 _COMPLETION_KEYS = {"model", "prompt", "stream", "stream_options", "max_tokens", "temperature", "top_p", "top_k",
@@ -67,6 +67,24 @@ _WHY = {
     "service_tier": "one tier",
     "reasoning_effort": "the reasoning length is the model's own",
 }
+
+
+def _response_grammar(fmt: Any):
+    """`response_format` of a chat request: None or text -> no grammar; json_schema -> its schema compiled by our grammar
+    engine (a construct it cannot enforce: 400 naming it); anything else refused by name."""
+    if fmt is None or fmt == {"type": "text"}:
+        return None
+    if not isinstance(fmt, dict) or fmt.get("type") != "json_schema":
+        raise errors.unsupported("response_format", "only text or json_schema (json_object has no schema to enforce)")
+    schema = (fmt.get("json_schema") or {}).get("schema")
+    if not isinstance(schema, dict):
+        raise errors.ApiError(400, "response_format.json_schema.schema must be a JSON Schema object",
+                              param="response_format")
+    from neurobrix.core.state.constraint import compile_json_schema
+    try:
+        return compile_json_schema(json.dumps(schema))
+    except ValueError as e:
+        raise errors.ApiError(400, f"response_format: {e}", param="response_format") from e
 
 
 def _is_neutral(key: str, value: Any) -> bool:
@@ -322,7 +340,12 @@ def chat_completions(door, handler, body) -> Optional[Dict[str, Any]]:
             prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, **kwargs)
             opens = prompt.rstrip().endswith(reasoning[0])
         reader = TurnReader(tokenizer, parser=parser, reasoning=reasoning, opens_in_reasoning=opens)
-        work = lambda: engine.complete_turn(messages, tools=tools, **decode)   # noqa: E731
+        grammar = _response_grammar(body.get("response_format"))
+        if grammar is not None and tools:
+            raise errors.unsupported("response_format", "a json_schema answer and tools in one request: the grammar would "
+                                     "also bind the tool calls")
+        extra = {"grammar": grammar} if grammar is not None else {}
+        work = lambda: engine.complete_turn(messages, tools=tools, **extra, **decode)   # noqa: E731
         spool = None
     else:
         mode = "chat" if "chat" in served.supported else ("text" if served.strict and "text" in served.supported
@@ -330,6 +353,9 @@ def chat_completions(door, handler, body) -> Optional[Dict[str, Any]]:
         if mode is None:
             raise errors.not_served("/v1/chat/completions", model, served.family,
                                     "its family declares no chat or text-answer mode")
+        if _response_grammar(body.get("response_format")) is not None:
+            raise errors.not_served("/v1/chat/completions with response_format json_schema", model, served.family,
+                                    "a grammar binds the agent path's decode; this family serves chat without it")
         if tools:
             raise errors.not_served("/v1/chat/completions with tools", model, served.family,
                                     "its family does not declare the agent mode")

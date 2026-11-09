@@ -480,6 +480,8 @@ class PySentencePiece:
 
     def token_bytes(self, idx: int) -> Optional[bytes]:
         """Piece `idx`'s bytes inside a text: a byte piece its byte, "▁" a space; None for a control piece."""
+        if not 0 <= idx < len(self.pieces):
+            return None
         ptype, piece = self.types[idx], self.pieces[idx]
         if ptype == _TYPE_CONTROL:
             return None

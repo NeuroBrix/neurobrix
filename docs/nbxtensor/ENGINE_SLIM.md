@@ -199,6 +199,21 @@ Tekken read their rank tables; the runtime wrappers hand it on (polymorphic, kep
 | core/module/tokenizer/json_bpe.py | +32 | the decoder chain's per-token bytes (ByteLevel, ByteFallback, Replace, Metaspace; stop at Fuse) |
 | core/module/tokenizer/sp_tokenizer.py, sp_proto.py, tekken_bpe.py, tiktoken_bpe.py | +16, +13, +4, +4 | each class's rule and the wrappers' |
 
+## Constrained decoding: the request's grammar (2026-11-09): policy
+
+Point 9a end to end: `response_format: json_schema` on chat completions compiled by our own grammar engine
+(rust/nbx_grammar, std only, outside src/neurobrix: its C ABI loaded by the nbx_grammar package's ctypes loader) and
+enforced at every decode step through the seam above. The engine adds the request-side policy: the schema read and
+refused by name (400 naming the construct; json_object and a schema beside tools refused), the grammar constraint over
+the tokenizer's token_bytes (built once per tokenizer and logits width), handed to the decode. Measured: 140 358 to
+140 430, +72.
+
+| file | lines | what it holds |
+|---|---|---|
+| core/state/constraint.py | +36 | the schema compiled (a refusal by name when the engine is absent), the grammar constraint and its vocabulary cache |
+| serving/openai_api/routes.py | +26 | response_format read on chat completions: json_schema compiled before the request is queued, the refusals |
+| serving/engine.py, core/module/tokenizer/sp_proto.py | +8, +2 | the constraint made per request and handed to the decode; an id past the pieces has no bytes |
+
 ## The scan
 
 `tools/engine_slim_scan.py` (standard library, ast) lists four kinds of finding in `src/neurobrix`, both branches:
