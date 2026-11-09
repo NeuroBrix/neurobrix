@@ -155,6 +155,7 @@ neurobrix import [options] model_ref
 | `--registry` `REGISTRY` | — | Registry URL (default: https://neurobrix.es) |
 | `--force` | off | Re-download even if already cached |
 | `--no-keep` | off | Delete .nbx from store after extraction (saves disk space) |
+| `--container` `FILE.nbx` | — | Install from (or record the name of an entry installed from) a container this machine already holds, verified against the sha256 the hub serves; nothing is downloaded |
 | `--accept-license` | off | Record acceptance of the model license non-interactively (for scripts/CI; equivalent: NBX_ACCEPT_LICENSE=1) |
 | `--json` | off | One NDJSON event per phase on stdout (info, license, download with byte counts, downloaded, extracting, installed, done \| error); human lines on stderr |
 | `-v`, `--verbose` | — | -v: the engine's developer lines; -vv: and the traceback of an error (NBX_LOG=debug: both) |

@@ -288,7 +288,7 @@ def _import_body(args):
 
     # Check if already cached. An entry whose name is recorded answers here, with no network; one installed
     # before 0.6.3 (no record) goes on to the hub record, which gives the name to record (nbx/names.py).
-    from neurobrix.nbx.names import recorded_name, record_name
+    from neurobrix.nbx.names import entry_of_container, recorded_name, record_name
     cache_path = CACHE_DIR / name
     if cache_path.exists() and (cache_path / "manifest.json").exists() and not args.force \
             and recorded_name(cache_path) is not None:
@@ -326,18 +326,21 @@ def _import_body(args):
     # The model's one name, as the hub record gives it (its own case), recorded beside the entry it installs or
     # finds installed (nbx/names.py).
     hub_name = model_data.get("slug") or f"{org}/{name}"
+    hub_sha = model_data.get("sha256") or None       # the container's sha256 as the hub record states it
     # "already installed", asked on every name the record gives the container BEFORE any byte is fetched: on the slug
     # alone (`..._diffusers`), a second import of Sana downloaded 9 GB to learn it (2026-11-08)
     if not args.force:
         # the file's stem without its build stamp: the cache entry never carries one (`_strip_build_stamp`)
         _file_stem = _strip_build_stamp(Path(str(model_data.get("fileUrl") or "")).stem)
-        for _as in dict.fromkeys(n for n in (name, model_data.get("name"), _file_stem) if n):
+        # and the entry whose record names the hub's container sha256 (installed under its manifest's own name)
+        _by_sha = entry_of_container(CACHE_DIR, hub_sha) if hub_sha else None
+        for _as in dict.fromkeys(n for n in (name, model_data.get("name"), _file_stem, _by_sha and _by_sha.name) if n):
             _there = CACHE_DIR / _as
             if _there.exists() and (_there / "manifest.json").exists():
                 log.debug(f"Model already installed under its own name: {_there}")
                 _had = recorded_name(_there)
                 if _had is None:
-                    record_name(_there, hub_name)
+                    record_name(_there, hub_name, container_sha256=hub_sha)
                     print(f"{hub_name} is already installed; its name is now recorded (neurobrix list shows it).")
                 else:
                     print(f"{_had} is already installed (--force re-downloads).")
@@ -364,9 +367,11 @@ def _import_body(args):
     # Before a byte is fetched. A 30.6 GB import died at 98 % on a full disk
     # because nothing looked first; the peak is store + cache, about twice the
     # archive, and --no-keep does not lower it. Both numbers are declared.
+    given = Path(args.container).expanduser() if getattr(args, "container", None) else None
     if file_size > 0:
         import shutil as _shutil
-        _need = import_peak_bytes(file_size, keep=not getattr(args, "no_keep", False))
+        # a container given here is not copied to the store: the extraction alone needs room
+        _need = file_size if given else import_peak_bytes(file_size, keep=not getattr(args, "no_keep", False))
         _free = min(
             _shutil.disk_usage(_p).free
             for _p in {_nearest_existing(STORE_DIR), _nearest_existing(CACHE_DIR)})
@@ -432,72 +437,92 @@ def _import_body(args):
             print("   License accepted.\n")
             _ev(args, "license", license=license_id, accepted_via="prompt")
 
-    # 2. Get signed download URL
-    log.debug("[2/4] Getting download URL...")
-    try:
-        # Who asks: the engine's command line, by name and version — the hub serves the engine client without a
-        # session (the user accepted at this terminal) and sends a browser without one to its login (the owner,
-        # 2026-11-02 15:01); the acceptance itself only when there is a licence, accepted above.
-        from neurobrix import __version__ as _nbx_version
-        headers = {"X-NeuroBrix-Client": f"neurobrix-cli/{_nbx_version}"}
-        if license_id:
-            headers["X-License-Accepted"] = "true"
-        resp = requests.get(f"{registry}/api/models/{org}/{name}/download", headers=headers, timeout=10)
-        resp.raise_for_status()
-        download_info = resp.json()
-    except requests.HTTPError as e:
-        status = e.response.status_code if e.response is not None else 0
-        server_error = None
-        if e.response is not None:
-            try:
-                body = e.response.json()
-                if isinstance(body, dict):
-                    server_error = body
-            except ValueError:
-                server_error = None
+    if given is not None:
+        # a container this machine already holds (a copy of the hub's file): verified against the hub record's sha256,
+        # never downloaded; the steps below install it, or record the name of the entry already installed from it
+        store_path, file_name = given, given.name
+        if not given.is_file():
+            _die(args, f"ERROR: --container {given}: no such file.")
+        if not hub_sha:
+            _die(args, f"ERROR: the registry states no sha256 for {hub_name}: a local container cannot be verified "
+                       f"against it.")
+        import hashlib
+        _h = hashlib.sha256()
+        with open(given, "rb") as _f:
+            for _chunk in iter(lambda: _f.read(1 << 24), b""):
+                _h.update(_chunk)
+        if _h.hexdigest() != hub_sha:
+            _die(args, f"ERROR: --container {given}: its sha256 {_h.hexdigest()} is not the container the hub serves "
+                       f"as {hub_name} ({hub_sha}).")
+        actual_size = given.stat().st_size
+        _ev(args, "downloaded", file=file_name, store=str(store_path), bytes=actual_size, local=True)
+    else:
+        # 2. Get signed download URL
+        log.debug("[2/4] Getting download URL...")
+        try:
+            # Who asks: the engine's command line, by name and version — the hub serves the engine client without a
+            # session (the user accepted at this terminal) and sends a browser without one to its login (the owner,
+            # 2026-11-02 15:01); the acceptance itself only when there is a licence, accepted above.
+            from neurobrix import __version__ as _nbx_version
+            headers = {"X-NeuroBrix-Client": f"neurobrix-cli/{_nbx_version}"}
+            if license_id:
+                headers["X-License-Accepted"] = "true"
+            resp = requests.get(f"{registry}/api/models/{org}/{name}/download", headers=headers, timeout=10)
+            resp.raise_for_status()
+            download_info = resp.json()
+        except requests.HTTPError as e:
+            status = e.response.status_code if e.response is not None else 0
+            server_error = None
+            if e.response is not None:
+                try:
+                    body = e.response.json()
+                    if isinstance(body, dict):
+                        server_error = body
+                except ValueError:
+                    server_error = None
 
-        if server_error is not None:
-            code = server_error.get("code", "")
-            message = server_error.get("message") or server_error.get("error") or ""
-            if code == "LICENSE_LOGIN_REQUIRED":
-                _die(args,
-                     f"ERROR: {message}" if message else
-                     "ERROR: License acceptance on the hub is required for this model.",
-                     "The hub requires a logged-in license acceptance for this model.",
-                     f"Log in on {registry}, accept the license for {org}/{name}, then retry the import.")
-            if code or message:
-                _die(args, f"ERROR: Failed to get download URL ({status}): {message or code}",
-                     *( [f"   Server error code: {code}"] if code and message else [] ))
+            if server_error is not None:
+                code = server_error.get("code", "")
+                message = server_error.get("message") or server_error.get("error") or ""
+                if code == "LICENSE_LOGIN_REQUIRED":
+                    _die(args,
+                         f"ERROR: {message}" if message else
+                         "ERROR: License acceptance on the hub is required for this model.",
+                         "The hub requires a logged-in license acceptance for this model.",
+                         f"Log in on {registry}, accept the license for {org}/{name}, then retry the import.")
+                if code or message:
+                    _die(args, f"ERROR: Failed to get download URL ({status}): {message or code}",
+                         *( [f"   Server error code: {code}"] if code and message else [] ))
 
-        _die(args, f"ERROR: Failed to get download URL: {e}")
+            _die(args, f"ERROR: Failed to get download URL: {e}")
 
-    download_url = download_info.get("url")
-    file_name = download_info.get("fileName", f"{name}.nbx")
+        download_url = download_info.get("url")
+        file_name = download_info.get("fileName", f"{name}.nbx")
 
-    if not download_url:
-        _die(args, "ERROR: Registry did not return a download URL.",
-             "The model may not have a .nbx file uploaded yet.")
+        if not download_url:
+            _die(args, "ERROR: Registry did not return a download URL.",
+                 "The model may not have a .nbx file uploaded yet.")
 
-    # 3. Download .nbx to store/
-    log.debug(f"[3/4] Downloading {file_name}...")
-    STORE_DIR.mkdir(parents=True, exist_ok=True)
-    store_path = STORE_DIR / file_name
+        # 3. Download .nbx to store/
+        log.debug(f"[3/4] Downloading {file_name}...")
+        STORE_DIR.mkdir(parents=True, exist_ok=True)
+        store_path = STORE_DIR / file_name
 
-    try:
-        actual_size = download_resumable(download_url, store_path, total_hint=file_size,
-                                         desc=file_name, get=requests.get,
-                                         progress=NdjsonProgress if wants_json(args) else tqdm)
-        log.debug(f"   Saved: {store_path} ({format_size(actual_size)})")
-        _ev(args, "downloaded", file=file_name, store=str(store_path), bytes=actual_size)
+        try:
+            actual_size = download_resumable(download_url, store_path, total_hint=file_size,
+                                             desc=file_name, get=requests.get,
+                                             progress=NdjsonProgress if wants_json(args) else tqdm)
+            log.debug(f"   Saved: {store_path} ({format_size(actual_size)})")
+            _ev(args, "downloaded", file=file_name, store=str(store_path), bytes=actual_size)
 
-    except requests.HTTPError as e:
-        _die(args, f"ERROR: Download failed: {e}")
-    except (requests.ConnectionError, requests.Timeout, IncompleteDownload) as e:
-        part = partial_path(store_path)
-        have = part.stat().st_size if part.exists() else 0
-        _die(args, f"ERROR: Connection lost during download ({e}).",
-             f"   {format_size(have)} are kept in {part}; re-run the same command to resume "
-             f"from there.")
+        except requests.HTTPError as e:
+            _die(args, f"ERROR: Download failed: {e}")
+        except (requests.ConnectionError, requests.Timeout, IncompleteDownload) as e:
+            part = partial_path(store_path)
+            have = part.stat().st_size if part.exists() else 0
+            _die(args, f"ERROR: Connection lost during download ({e}).",
+                 f"   {format_size(have)} are kept in {part}; re-run the same command to resume "
+                 f"from there.")
 
     # 4. Extract to cache/ — into a staging directory beside the final name,
     # renamed in one motion at the end: a model is visible (to `list`, to
@@ -530,7 +555,7 @@ def _import_body(args):
         if cache_path.exists() and (cache_path / "manifest.json").exists() and not args.force:
             log.debug(f"Model already installed under its own name: {cache_path}")
             if recorded_name(cache_path) is None:
-                record_name(cache_path, hub_name)
+                record_name(cache_path, hub_name, container_sha256=hub_sha)
             print(f"{recorded_name(cache_path)} is already installed (--force re-downloads).")
             _ev(args, "installed", model=f"{org}/{name}", installed_as=_declared, cache=str(cache_path), already=True)
             _ev(args, "done", model=f"{org}/{name}", installed_as=_declared, cache=str(cache_path))
@@ -544,14 +569,14 @@ def _import_body(args):
     try:
         with installing(cache_path, label=f"import {org}/{name}") as staging:
             extract_container(store_path, staging)
-            record_name(staging, hub_name)   # the name lands with the entry, in the same swap
+            record_name(staging, hub_name, container_sha256=hub_sha)   # the name lands with the entry, in the same swap
     except InstallHeldByAnother as e:
         _die(args, f"ERROR: {e}")
     log.debug(f"   Extracted: {cache_path}")
     _ev(args, "installed", model=f"{org}/{name}", installed_as=_declared, cache=str(cache_path), already=False)
 
     # Delete .nbx from store if --no-keep
-    if args.no_keep:
+    if args.no_keep and given is None:                  # a container the user gave is theirs: never deleted
         store_path.unlink()
         log.debug("   Store: deleted (--no-keep)")
     else:

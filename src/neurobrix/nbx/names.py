@@ -51,15 +51,36 @@ def recorded_name(entry: Path) -> Optional[str]:
     return name
 
 
-def record_name(entry: Path, name: str) -> None:
-    """Write the entry's hub name, whole (written beside, then renamed over)."""
+def record_name(entry: Path, name: str, container_sha256: Optional[str] = None) -> None:
+    """Write the entry's hub name, whole (written beside, then renamed over), with the sha256 of the container it was
+    installed from when the hub states it: a later import finds the entry by that sha before any byte is fetched."""
     if not isinstance(name, str) or "/" not in name:
         raise ValueError(f"a hub name is <org>/<name>, got {name!r}")
     from neurobrix import __version__
     entry = Path(entry)
     tmp = entry / f".{RECORD}.{os.getpid()}"
-    tmp.write_text(json.dumps({"name": name, "recorded_by": f"neurobrix {__version__} import"}) + "\n")
+    rec = {"name": name, "recorded_by": f"neurobrix {__version__} import"}
+    if container_sha256:
+        rec["container_sha256"] = container_sha256
+    tmp.write_text(json.dumps(rec) + "\n")
     os.replace(tmp, entry / RECORD)
+
+
+def recorded_container_sha256(entry: Path) -> Optional[str]:
+    """The sha256 of the container the entry was installed from, as its record states it; None when not recorded."""
+    path = Path(entry) / RECORD
+    if not path.exists():
+        return None
+    recorded_name(entry)                             # an unreadable record is refused by name there
+    return json.loads(path.read_text()).get("container_sha256")
+
+
+def entry_of_container(cache: Path, sha256: str) -> Optional[Path]:
+    """The installed entry whose record names the container `sha256`, or None."""
+    for entry in _entries(Path(cache)):
+        if sha256 and recorded_container_sha256(entry) == sha256:
+            return entry
+    return None
 
 
 def _entries(cache: Path) -> Iterator[Path]:

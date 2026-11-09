@@ -335,6 +335,10 @@ For more information: https://neurobrix.es"""
     import_parser.add_argument('--force', action='store_true', help='Re-download even if already cached')
     import_parser.add_argument('--no-keep', action='store_true', dest='no_keep',
                                help='Delete .nbx from store after extraction (saves disk space)')
+    import_parser.add_argument('--container', default=None, metavar='FILE.nbx',
+                               help='Install from (or record the name of an entry installed from) a container this '
+                                    'machine already holds, verified against the sha256 the hub serves; nothing is '
+                                    'downloaded')
     import_parser.add_argument('--accept-license', action='store_true', dest='accept_license',
                                help='Record acceptance of the model license non-interactively '
                                     '(for scripts/CI; equivalent: NBX_ACCEPT_LICENSE=1)')

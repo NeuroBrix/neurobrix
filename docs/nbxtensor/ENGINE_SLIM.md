@@ -103,6 +103,18 @@ No new scan finding. Measured: 140 079 (main d4de640f) to 140 172, +93.
 |---|---|---|
 | core/prism/autodetect.py | +93 | `_beside`: the other vendors' GPUs the OS lists beside the driven cards, each refused by name; `_hybrid_cores` (+ `_hybrid_cores_linux`, `_cpu_list`, `_core_efficiency_classes`, `_hybrid_cores_windows`): a hybrid CPU's performance and efficiency cores as the OS states them, filled into the profile on every OS |
 
+## An installed entry found by its container's sha256 (2026-11-09): policy
+
+Point 13 of reste_apres_064 (agreed with the hub, 19:41): the name record keeps the sha256 of the container an entry was
+installed from, `import` finds an installed entry by it before any byte is fetched, and `--container FILE.nbx` verifies
+a local copy against the hub's sha256 and installs from it or records the name, with no download. The CLI and the name
+record are engine policy; no tensor work. Measured: 140 172 (main 7f4fed4b) to 140 222, +50.
+
+| file | lines | the policy it holds |
+|---|---|---|
+| cli/commands/registry.py, cli/__init__.py | +25, +4 | `import`: the entry found by the hub's sha, `--container` verified and never deleted by `--no-keep`, the sha recorded at install |
+| nbx/names.py | +21 | the record's `container_sha256`; `entry_of_container` |
+
 ## The scan
 
 `tools/engine_slim_scan.py` (standard library, ast) lists four kinds of finding in `src/neurobrix`, both branches:
