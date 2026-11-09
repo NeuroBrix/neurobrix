@@ -94,7 +94,9 @@ def test_the_warm_path_carries_every_sampling_flag(monkeypatch):
         get_pid = staticmethod(lambda: 0)
         def connect(self): pass
         def close(self): pass
-        def status(self): return {"model": "m", "family": None}
+        # a daemon states its family (the ready record, InferenceEngine.get_status); one that states none is refused by
+        # name before any request (cli/commands/run.py, 620c703d) — the stand-in used to state None and so stopped there
+        def status(self): return {"model": "m", "family": "llm"}
         def generate(self, **kw):
             seen.update(kw)
             raise RuntimeError("stop after the request")
@@ -102,10 +104,8 @@ def test_the_warm_path_carries_every_sampling_flag(monkeypatch):
     from neurobrix.cli import create_parser
     args = create_parser().parse_args(["run", "--model", "m", "--prompt", "p", "--top-k", "5", "--top-p", "0.5",
                                       "--max-tokens", "7", "--temperature", "0.2"])
-    try:
+    with pytest.raises(SystemExit):           # the daemon's error answer ends the run (9ea8d314), after the request
         R._try_warm_path(args)
-    except Exception:
-        pass
     assert {k: seen.get(k) for k in ("top_k", "top_p", "max_tokens", "temperature")} == {
         "top_k": 5, "top_p": 0.5, "max_tokens": 7, "temperature": 0.2}, seen
 
