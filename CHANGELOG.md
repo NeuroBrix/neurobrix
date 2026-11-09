@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **A request served by `neurobrix serve` re-plans after a device out-of-memory, as `run` does**: the component that
+  ran out is re-planned once on the memory really free and run again, the finished components' outputs kept, and the
+  daemon then serves under the new plan (said in its log). Before, the same request answered the named refusal.
 - **`neurobrix doctor` names macOS 14's Accelerate without thread control**, as `python -m nbxtensor doctor` does: the
   CPU pool's threads may each use Accelerate's own threads there, and `VECLIB_MAXIMUM_THREADS=1` is the user's choice.
 - **A model whose output format the engine cannot resolve is refused by name on the warm path too**: the daemon and

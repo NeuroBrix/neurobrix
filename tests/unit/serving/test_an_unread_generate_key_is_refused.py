@@ -31,6 +31,12 @@ def _engine() -> InferenceEngine:
     e = InferenceEngine.__new__(InferenceEngine)
     e._is_loaded, e._device, e._executor, e._family = True, "cpu", _Executor(), "image"
     e._warm_serving = True     # a warm daemon's engine: nothing released after a request (_release_cold_request)
+    # what a request needs to run with `run`'s recovery armed (InferenceEngine._execute): the engine, its facts, a plan the
+    # executor shares with the daemon
+    from types import SimpleNamespace
+    e.mode, e.model_name, e._hw_profile, e._input_config, e._growth = "triton", "org/m", None, None, None
+    e._container = SimpleNamespace(_cache_path=None)
+    e._plan = e._executor.plan = SimpleNamespace(strategy="single_gpu", primary_device="cpu", loading_mode="eager")
     return e
 
 
@@ -86,7 +92,8 @@ def _llm_engine(monkeypatch) -> InferenceEngine:
     e._family, e._session = "llm", _Session()
     e._executor.modules = {"tokenizer": _Tokenizer()}
     e._pkg = SimpleNamespace(defaults={"max_tokens": 8})
-    e._plan = SimpleNamespace(kv_cache_plan=SimpleNamespace(session_reach=4096, max_cache_len=4096))
+    e._plan = e._executor.plan = SimpleNamespace(kv_cache_plan=SimpleNamespace(session_reach=4096, max_cache_len=4096),
+                                                 strategy="single_gpu", primary_device="cpu", loading_mode="eager")
     e._agent_kv = None
     monkeypatch.setattr(config, "get_family_config", lambda family: {"modes": {"supported": ["agent"]}})
     return e

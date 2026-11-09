@@ -150,12 +150,12 @@ def test_each_engine_knows_its_device_oom_from_its_own_facts():
     triton: the allocator's DeviceOOMError — anywhere in the chain the sequences raise."""
     import torch
     from nbxtensor.memory.allocator import DeviceOOMError
-    from neurobrix.cli.commands.run import _arm_replan
+    from neurobrix.cli.commands.run import arm_replan
 
     def armed(mode, brand, arch, dev):
         d = types.SimpleNamespace(brand=brand, architecture=arch, get_device_string=lambda: dev)
         ex = types.SimpleNamespace()
-        _arm_replan(ex, mode, None, types.SimpleNamespace(devices=[d]), None, None, None, None)
+        arm_replan(ex, mode, None, types.SimpleNamespace(devices=[d]), None, None, None, None)
         return ex.replan.is_device_oom
 
     def wrapped(inner):
@@ -201,11 +201,11 @@ def test_the_triton_recovery_imports_no_torch():
     import subprocess
     import sys
     code = ("import sys, types; sys.modules['torch'] = None\n"
-            "from neurobrix.cli.commands.run import _arm_replan\n"
+            "from neurobrix.cli.commands.run import arm_replan\n"
             "from neurobrix.core.runtime.executor import RuntimeExecutor\n"
             "from nbxtensor.memory.allocator import DeviceOOMError\n"
             "ex = types.SimpleNamespace()\n"
-            "_arm_replan(ex, 'triton', None, types.SimpleNamespace(devices=[]), None, None, None, None)\n"
+            "arm_replan(ex, 'triton', None, types.SimpleNamespace(devices=[]), None, None, None, None)\n"
             "assert ex.replan.is_device_oom(DeviceOOMError('GPU malloc failed'))\n")
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr[-2000:]

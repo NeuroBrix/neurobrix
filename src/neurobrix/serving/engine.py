@@ -157,7 +157,8 @@ class InferenceEngine:
                                      extra=[("the container's own VAE scale",
                                              _vsf(manifest, cached_defaults, _topo_components))])
 
-        input_config = InputConfig(
+        self._hw_profile = hw_profile
+        input_config = self._input_config = InputConfig(
             batch_size=2,
             height=height,
             width=width,
@@ -201,6 +202,8 @@ class InferenceEngine:
         if self.mode in TRITON_ENGINES:
             from neurobrix.triton.dtype import declare_hardware_profile
             declare_hardware_profile(hw_profile)
+        from neurobrix.cli.commands.run import growth_baseline
+        self._growth = growth_baseline(self.mode, hw_profile)        # read before the executor exists, as `run` does
         self._executor = RuntimeExecutor(self._pkg, self._plan, mode=self.mode)
 
         # Set persistent mode BEFORE setup/execute so GraphExecutors get the flag
@@ -312,7 +315,7 @@ class InferenceEngine:
         _phase_mark("engine.execute.begin")
 
         try:
-            outputs = self._executor.execute(inputs)
+            outputs = self._execute(inputs)
         finally:
             self._release_cold_request()
 
@@ -383,7 +386,7 @@ class InferenceEngine:
         _phase_mark("engine.execute.begin")
 
         try:
-            outputs = self._executor.execute(inputs, kv_session=kv_session)
+            outputs = self._execute(inputs, kv_session=kv_session)
         finally:
             self._release_cold_request()
 
@@ -402,6 +405,29 @@ class InferenceEngine:
             "max_tokens", container=self._pkg.defaults,
             extra=[("the request", decode.get("global.max_tokens"))],
             why="It bounds this generation."))
+
+    def _execute(self, inputs: Dict[str, Any], **kwargs) -> Dict[str, Any]:
+        """One request through the executor with `run`'s recovery armed (cli/commands/run.py arm_replan): a device
+        out-of-memory at a component re-plans once and re-enters there; the daemon then serves under the new plan."""
+        from neurobrix.cli.commands.run import arm_replan, compiled_sampler
+        sampler = compiled_sampler(self.mode)
+        arm_replan(self._executor, self.mode, self._container, self._hw_profile, self._input_config,
+                   self._container._cache_path, sampler, self._growth)
+        try:
+            return self._executor.execute(inputs, **kwargs)
+        finally:
+            if sampler is not None:
+                sampler.stop()
+            if self._executor.plan is not self._plan:
+                self._adopt_plan(self._executor.plan)
+
+    def _adopt_plan(self, plan) -> None:
+        """The plan a request re-planned to becomes the daemon's: its device, warm or cold serving, and its status."""
+        old, self._plan, self._device = self._plan.strategy, plan, plan.primary_device
+        self._warm_serving = getattr(plan, "loading_mode", "lazy") == "eager"
+        self._executor._persistent_mode = self._warm_serving
+        _log.warning(f"[NeuroBrix] the daemon now serves {self.model_name} under the re-planned {plan.strategy} "
+                     f"(was {old}; {'warm' if self._warm_serving else 'cold'} serving)")
 
     def _release_cold_request(self) -> None:
         """Cold serving (a lazy plan: weights reload per request): at the end of a request every component's host

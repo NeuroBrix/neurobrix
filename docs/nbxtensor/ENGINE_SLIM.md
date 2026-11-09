@@ -79,6 +79,18 @@ a never-passed parameter dropped). The header rose by exactly these lines, measu
 | cli/commands/serve.py, cli/__init__.py, run.py, drift.py, calibrate.py, upscale.py | +14, +8, +6, +4, +2, +2 | `serve --http` and its flags, the default profile left to the daemon, a killed daemon named by `stop`; the one name taken by every command |
 | core/runtime/graph_executor.py, nbx/container.py | +8, +1 | the per-request cleanup releases the request's context and pinned block with its weights; the name record skipped as a container file |
 
+## Served requests re-plan after a device OOM (2026-11-09): policy
+
+The next useful version's point 8 (the owner, 2026-11-09 18:58): a request served by `neurobrix serve` meets a device
+out-of-memory the way `run` does. The recovery itself is unchanged (core/runtime/replan.py, the executor's component
+boundary); what is added is WHEN it is armed and what the daemon does with the plan it leaves: serving policy, no tensor
+work. Measured: 140 044 (main 317b9217) to 140079, +35.
+
+| file | lines | the policy it holds |
+|---|---|---|
+| serving/engine.py | +29 | every request runs with `run`'s recovery armed (`_execute`); a re-planned request leaves the daemon on the new plan, its device and its warm or cold serving (`_adopt_plan`) |
+| cli/commands/run.py | +6 | the recovery's arming and the runtime-growth baseline become one function each, called by both entry points (`arm_replan`, `growth_baseline`, `compiled_sampler`) |
+
 ## The scan
 
 `tools/engine_slim_scan.py` (standard library, ast) lists four kinds of finding in `src/neurobrix`, both branches:

@@ -3,7 +3,7 @@ owner's rule 7; the Dell + the Mac, 2026-11-08 18:51): mochi-1-preview's first c
 out-of-memory in its VAE after the streamed transformer, recorded its growth (10 033 MB) and exited 1; only the second
 run, planned with the record, was green. The first run now records, releases the cache, asks Prism again and calls the
 VAE again, the transformer's latents kept (`RuntimeExecutor._execute_component`). The entry point arms it with its
-engine's facts (`cli/commands/run.py` `_arm_replan`); same plan or Prism's refusal: the run's named refusal. No torch (R33).
+engine's facts (`cli/commands/run.py` `arm_replan`); same plan or Prism's refusal: the run's named refusal. No torch (R33).
 """
 from __future__ import annotations
 

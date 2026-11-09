@@ -148,7 +148,7 @@ The coarser moment of addition 3 now exists, one level above the op: a device ou
 (`RuntimeExecutor._execute_component`, the boundary every flow of both engines calls) records the run's measured growth,
 unloads every component and releases the engine's cache (the failed call's frames gone first), asks Prism again with the
 record in force, and calls the component again from the flow's own frame, the finished components' outputs kept
-(`core/runtime/replan.py`, armed by `cli/commands/run.py` `_arm_replan`). One re-plan per component; the same plan for the
+(`core/runtime/replan.py`, armed by `cli/commands/run.py` `arm_replan`). One re-plan per component; the same plan for the
 components left, or Prism's refusal, is the run's named refusal. Its case: mochi-1-preview's first compiled run on an M4
 Pro, whose VAE met an MPS out-of-memory against the vendor's constant reserve and whose second run, planned with the
 recorded growth, was green. The op-level re-entry at the tiling rung above stays the next step.

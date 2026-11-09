@@ -468,7 +468,28 @@ def _record_triton_growth(growth, cache_path, hw_profile):
     return grown
 
 
-def _arm_replan(executor, execution_mode, container, hw_profile, input_config, cache_path, sampler, growth) -> None:
+def growth_baseline(execution_mode, hw_profile):
+    """What the runtime itself grows to outside every allocator (core/runtime/runtime_growth.py), read before the
+    executor exists, on the Triton engine with discrete accelerators; None elsewhere (a census shadow measures nothing)."""
+    from neurobrix.kernels import census as _census_g
+    if execution_mode == "compiled" or _census_g.active() or not getattr(hw_profile, "devices", None) or any(
+            getattr(d, "has_unified_memory", False) for d in hw_profile.devices):
+        return None
+    from nbxtensor.memory.allocator import DeviceAllocator as _DAg
+    from neurobrix.core.runtime import runtime_growth as _rg
+    _gdevs = list(range(_DAg.device_count()))
+    return (_rg, _gdevs, _rg.untracked_mb(_gdevs)) if _gdevs else None
+
+
+def compiled_sampler(execution_mode):
+    """The compiled branch's device-peak sampler where its runtime keeps no peak (MPS), started; None elsewhere."""
+    if execution_mode not in ("compiled", "sequential"):
+        return None
+    from neurobrix.core.device_utils import sampled_device_peak
+    return sampled_device_peak()
+
+
+def arm_replan(executor, execution_mode, container, hw_profile, input_config, cache_path, sampler, growth) -> None:
     """The run's recovery from a device out-of-memory at a component (core/runtime/replan.py) with its engine's facts: its
     OOM (compiled: torch's OutOfMemoryError or the vendor file's untyped message; triton: DeviceOOMError), its growth."""
     from neurobrix.core.prism import PrismSolver
@@ -1040,16 +1061,7 @@ def cmd_run(args):
         declare_hardware_profile(hw_profile)
     # What the runtime itself grows to during the run, outside every allocator (core/runtime/runtime_growth.py): read
     # before the executor exists and at the run's end, on the Triton engine with accelerators; recorded per model.
-    _growth = None
-    from neurobrix.kernels import census as _census_g
-    if execution_mode != "compiled" and not _census_g.active() and getattr(hw_profile, "devices", None) and not any(
-            getattr(d, "has_unified_memory", False) for d in hw_profile.devices):
-        # a census shadow runs no kernel on a card: it measures nothing of the runtime's growth
-        from nbxtensor.memory.allocator import DeviceAllocator as _DAg
-        from neurobrix.core.runtime import runtime_growth as _rg
-        _gdevs = list(range(_DAg.device_count()))
-        if _gdevs:
-            _growth = (_rg, _gdevs, _rg.untracked_mb(_gdevs))
+    _growth = growth_baseline(execution_mode, hw_profile)
     executor = RuntimeExecutor(pkg, execution_plan, mode=execution_mode)
 
     def _drain_device():
@@ -1068,11 +1080,8 @@ def cmd_run(args):
     if turns is not None:
         return play_turns(args, turns, executor, pkg, execution_plan, inputs, _drain_device)
 
-    _sampled_peak = None
-    if execution_mode in ("compiled", "sequential"):
-        from neurobrix.core.device_utils import sampled_device_peak
-        _sampled_peak = sampled_device_peak()      # MPS keeps no peak counter: its driver is read through the run
-    _arm_replan(executor, execution_mode, container, hw_profile, input_config, cache_path, _sampled_peak, _growth)
+    _sampled_peak = compiled_sampler(execution_mode)      # MPS keeps no peak counter: its driver is read through the run
+    arm_replan(executor, execution_mode, container, hw_profile, input_config, cache_path, _sampled_peak, _growth)
     try:
         _drain_device()
         t_exec_start = time.time()
