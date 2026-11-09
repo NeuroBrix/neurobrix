@@ -275,3 +275,30 @@ Published: PyPI `nbxtensor` 0.0.3 (sdist + wheel, twine check passed, content re
 and GitLab `neurobrix/nbxtensor`, the export `425a9508`, tag `v0.0.3`, release with both files; the engine repository's
 GitLab release `nbxtensor-v0.0.3`. Checked on a clean `python:3.10-slim` container: `pip install nbxtensor==0.0.3` (no
 torch), `python -m nbxtensor doctor` ready on the card, the README's GPU example correct.
+
+## 2026-11-09 16:25 — NEUROBRIX 0.6.3 AND NBXTENSOR 0.0.8 ARE PUBLISHED (the owner's GO 16:22, via the supervisor)
+
+Content: serving (`neurobrix serve`, `chat`, the OpenAI-compatible HTTP API), the conversation's KV cache kept between
+turns, one name per model (the hub name), the clean terminal, integrated GPUs, the in-run re-plan after a device OOM.
+Proofs on the tag commit `2c4e37f1` (tags `v0.6.3` and `nbxtensor-v0.0.8`): the gate 196/196 rc 0 (190 same sha, 2
+card-dependent, 6 slow cells gone on back-to-back re-timing), the whole suite, the five shas and the torch-free proof,
+the user trials L (Linux) and M (Mac) on the built wheels. Published: PyPI `nbxtensor` 0.0.8 and `neurobrix` 0.6.3
+(wheel sha256 65a8ee26…, the tested one), GitHub and GitLab releases. Stopped by the supervisor at 16:24: the release
+text claimed the macOS 14 Metal wheels, which `install-metal` 0.6.3 does not install; the text was corrected in place
+(both releases, CHANGELOG known limits and README on main, `028cb917`), the publication then resumed (16:26). The PyPI
+trials: M green; L red on Sana's first launch with the Triton engine (the reload probe on a zero-size constant), fixed
+in 0.6.4.
+
+## 2026-11-09 18:08 — NEUROBRIX 0.6.4 AND NBXTENSOR 0.0.9 ARE PUBLISHED (the owner's permanent GO for this corrective, 16:47)
+
+The last corrective release (the owner, 17:13): from now on fixes accumulate on main and leave grouped in the next
+version useful to users. 0.6.4 keeps two public promises 0.6.3 broke: `install-metal` installs the macOS 14 Metal
+wheels for CPython 3.10-3.13 (and the CPU pool runs on macOS 14's Accelerate, which has no BLASSetThreading), and the
+Triton engine's first launch no longer stops on a zero-size constant (Sana 1024 from PyPI). The GO's three conditions,
+all met on the tag commit `3aa4fb93`: the Mac's trial on the final wheels (dry-run 3.12/3.11, TinyLlama certified-only
+under 3.11, Sana under a simulated macOS 14 Accelerate, outputs equal by sha); the Sana fix understood and proven on the
+user path (a fresh container, Sana first, the text encoder's reload probe run, rc 0, the image equal to 0.6.3's judged
+one); trial L on the local 0.6.4 wheels. The new rule held: every sentence of the CHANGELOG and the release notes read
+against the code and the tests by an agent that did not write it (the Mac: 15 promises, all held). Published: PyPI
+`nbxtensor` 0.0.9 and `neurobrix` 0.6.4 (the tested wheels, read back by sha256), GitHub and GitLab releases. PyPI
+trials L (Linux) and M (Mac, CPython 3.11, the macOS 14 wheels) green.
