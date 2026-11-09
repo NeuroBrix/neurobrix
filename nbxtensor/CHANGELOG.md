@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.8] - 2026-11-09
+
 ### Added
 - **Integrated GPUs described from the device**: `backend.level_zero.gpu_facts` reads an Intel GPU's integrated flag,
   usable memory and largest single allocation (`maxMemAllocSize`) from Level Zero; `backend.device_files.for_pci_id`
@@ -14,18 +16,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bus. Device files for Meteor Lake, Arrow Lake (H, S) and Panther Lake (H, U), the compile targets Intel's Triton
   knows (copied from the closest validated file: unvalidated on hardware, said in each file).
 - **Level Zero lists only the GPUs a device file describes**: a GPU no backend drives is no longer usable as device 0.
-
-### Changed
-- **A kernel served through a generator alias says so in the debug log, not on the terminal**: the line
-  appeared once per kernel at default verbosity (6 to 9 lines on a plain run under a macOS 14 wheel); it is a
-  developer line (`-v` / `NBX_LOG=debug`), and the plan's explanation still counts the kernels served that way.
-- **An out-of-tree backend's certificate identity no longer includes its Python binding**: the CPython extension module
-  tagged for one Python (`*.cpython-312-*.so`, `*.cp312-*.pyd`) is built per Python and generates no code, so the Metal wheels for Python
-  3.10-3.13 share one identity when their code generator is the same bytes. Proven on 235-236 kernels per wheel set: the
-  compiled .ttir, .ttgir, .msl and .metallib are byte-identical. The identity of an installed backend changes once:
-  its certificates are re-labelled or re-proven under the new identity (`neurobrix autotune certify --reprove-generator`).
-
-### Added
 - **A certification carries one proof per code generator**: `autotune_certified` keeps an entry's (or memory-class
   variant's) `proof` and adds the proofs of the same configuration under other generators in `also_proven`; where the
   stored configuration failed the oracle under a new generator and a sweep chose another, that certification is filed
@@ -36,10 +26,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `proof` alone reads a file as before. New names: `certification_proofs`, `class_certifications`,
   `entry_certifications`, `entry_proofs`, `certification_for_generator`, `class_proven_since`, `reproof_source`,
   `ALSO_PROVEN`, `ALTERNATES`.
-
-## [0.0.8] - unreleased (session KV lot)
-
-### Added
 - **Paged KV cache and its session bookkeeping**: `nbxtensor.memory.paged_kv.PagedTritonKVCache` (per-layer page
   pools on each layer's card, the block table, append and decode through it, `truncate`, `gather_pages`), moved from
   the engine with an `on_reallocate(uid, generation)` hook in place of its call into the engine's replay plans;
@@ -56,10 +42,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`autotune_certified.served_certification`**: the certification served one key on a memory class, read by a planner
   that holds no kernel tuner; `generator=` takes the running generator a caller pricing many keys asked once (on a
   process with no card visible, each ask probes the driver again).
-
-## [0.0.7] - unreleased (terminal lot)
-
-### Added
 - **`nbxtensor.terminal`, the one terminal rule of a command line built on the library** (`python -m nbxtensor`,
   `neurobrix`): one stderr handler, INFO by default, `-v` the developer lines, `-vv` an error's traceback too, and
   `NBX_LOG=debug|info|warning|error` from the environment (a name that is no level is refused by name).
@@ -71,36 +53,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`io.read_rate.read_seconds`** (how long this storage takes to read so many bytes, measured now) and
   **`memory.trace_replay.first_replay` / `vmm_granularity`** (the chunk probe's first replay made ahead, its cost
   pricing the others).
+- **`pointer_tables.TablePins` and `end_call_pins`**: a holder for the pins of per-call pointer tables built for a cache
+  of experts that outlives the call. The cache ends them before it lets the pages they cover go, and at its release; a
+  table over wraps already held ends its pins at once.
 
 ### Changed
+- **A kernel served through a generator alias says so in the debug log, not on the terminal**: the line
+  appeared once per kernel at default verbosity (6 to 9 lines on a plain run under a macOS 14 wheel); it is a
+  developer line (`-v` / `NBX_LOG=debug`), and the plan's explanation still counts the kernels served that way.
+- **An out-of-tree backend's certificate identity no longer includes its Python binding**: the CPython extension module
+  tagged for one Python (`*.cpython-312-*.so`, `*.cp312-*.pyd`) is built per Python and generates no code, so the Metal wheels for Python
+  3.10-3.13 share one identity when their code generator is the same bytes. Proven on 235-236 kernels per wheel set: the
+  compiled .ttir, .ttgir, .msl and .metallib are byte-identical. The identity of an installed backend changes once:
+  its certificates are re-labelled or re-proven under the new identity (`neurobrix autotune certify --reprove-generator`).
 - **The library logs; it does not print**: every line goes through `logging`, one logger per module, and importing it
   installs no handler. Its developer lines are DEBUG; warnings and errors reach a command line's terminal.
 - **`python -m nbxtensor doctor` lists the GPUs the process sees**: it listed every display controller on the host's
   PCI bus (four in a container given one); the others are counted as not visible here.
 - **`python -m nbxtensor install-metal` downloads nothing when the pinned wheels are already installed**, and says so in
   one line (it re-downloaded 131 MB on every call); pip's own lines only with `NBX_LOG=debug`.
-
-### Fixed
-- **No Triton warning at the first compile of `masked_fill`**: a uint8 mask reached `tl.where` as its condition, which
-  Triton calls deprecated; the condition is cast to a boolean, the compiled code identical.
-
-## [0.0.6] - unreleased (the Apple lot)
-
-### Added
-- **`pointer_tables.TablePins` and `end_call_pins`**: a holder for the pins of per-call pointer tables built for a cache
-  of experts that outlives the call. The cache ends them before it lets the pages they cover go, and at its release; a
-  table over wraps already held ends its pins at once.
-
-### Changed
 - **Attribution**: author, maintainer and copyright holder Hocine Benkelaya (contact@neurobrix.es); a NOTICE file ships
   beside the LICENSE (supported and funded by Neural Network Holding Ltd, commercial distribution by WizWorks OÜ); the
   README carries the same attribution.
 
 ### Fixed
+- **No Triton warning at the first compile of `masked_fill`**: a uint8 mask reached `tl.where` as its condition, which
+  Triton calls deprecated; the condition is cast to a boolean, the compiled code identical.
 - **A mapped mixture-of-experts store no longer keeps every decoded expert resident on Apple GPUs**: a per-call
   table's pins ended at the call (re-wrapping the store's arena at a new address while it could still be read) or not at
   all (the decode path: a wrap left over every expert the store had let go). Held by `TablePins`, they end when the
   store says.
+
 ## [0.0.5] - 2026-11-07
 
 ### Fixed
@@ -274,7 +257,8 @@ memory; the fix is in test).
 - **`flash_decode_split_kernel` and its route**: armed only by an environment switch (`NBX_FLASH_DECODE`, with `NBX_FD_BLOCK_N` and `NBX_FD_SEG`) and measured slower than the vector decode kernels; `flash_decode.py` keeps the fixed-order reduce they share.
 - **`conv1d_forward_kernel`**: launched by no route (a 1-D convolution runs through `conv2d`).
 
-[Unreleased]: https://github.com/NeuroBrix/nbxtensor/compare/v0.0.5...HEAD
+[Unreleased]: https://github.com/NeuroBrix/nbxtensor/compare/v0.0.8...HEAD
+[0.0.8]: https://github.com/NeuroBrix/nbxtensor/compare/v0.0.5...v0.0.8
 [0.0.5]: https://github.com/NeuroBrix/nbxtensor/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/NeuroBrix/nbxtensor/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/NeuroBrix/nbxtensor/compare/v0.0.2...v0.0.3

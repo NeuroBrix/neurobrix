@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-11-09
+
 ### Added
 - **An OpenAI-compatible HTTP API on `neurobrix serve`** (`--http`, default `127.0.0.1:8765`, from
   `config/system.yml`): `/v1/models`, `/v1/chat/completions` (streamed as Server-Sent Events, with tool calls parsed
@@ -18,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is refused by name in the OpenAI error object, never ignored; a request beyond `serving.http_max_queued` waiting
   ones gets 429; an address other than loopback needs `--api-key-file`; a port already taken is refused naming the
   process that holds it. `/v1/embeddings` answers that no installed family declares an embedding output.
+- **`neurobrix run --turns FILE`**: a JSON list of user messages played as one chat session through the same session
+  code the daemon runs, each answer printed with the tokens its turn matched and prefilled — a multi-turn
+  conversation validated through the entry point.
 
 ### Changed
 - **A model has one name, its hub name** (`<org>/<name>`): `neurobrix import` records it beside the installed model —
@@ -77,11 +82,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   holds (`tokens`, `cached_tokens`, `last_turn`; `estimated_tokens` is gone). The `chat` reply's `summarized` field is
   always `false`.
 
-### Added
-- **`neurobrix run --turns FILE`**: a JSON list of user messages played as one chat session through the same session
-  code the daemon runs, each answer printed with the tokens its turn matched and prefilled — a multi-turn
-  conversation validated through the entry point.
-
 ### Fixed
 - **granite-3.1's tool calls are read** (`chat --agent` refused the model in 0.6.2): its template's format, a marker
   then a JSON list, had no parser; the marker is a special token the answer's text dropped, and the model also writes
@@ -97,7 +97,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   key (54 of 54 on one Apple kernel). The new proof is now added beside the others and each generator is served its
   own certification. `tools/certified_rename_generator.py`, `tools/migrate_conv_fp16_key.py`,
   `tools/merge_certified_class.py` and `tools/reproof_coverage.py` read every proof of an entry.
-
 - **A run that runs out of device memory in a component re-plans and goes on instead of failing**: when a
   component meets a device out-of-memory (`python -m neurobrix run`, both engines), the run records the memory growth it
   measured, releases the device's cache, asks Prism for a plan again with that measure in force and runs the component
@@ -196,12 +195,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own rule (chat template, specials) and bound to the language model's sequence; the margin remains the bound only
   when a request states no prompt. A short prompt is now priced below the old margin, so a few plans of
   mixture-of-experts models grant their expert cache about a megabyte more.
-
 - **Mixture-of-experts models no longer pin every expert they decode on Apple GPUs**: on unified memory the expert
   store reads a routed expert in place from the model's files, and the one-token decode path left a pinned buffer over
   each expert it read after the store let the expert go. The pages stayed resident beyond the expert cache Prism
   planned until the machine swapped (DeepSeek-Coder-V2-Lite on an 18 GB Mac: 16 GB wired within a minute). The store
   now releases those buffers before it lets the pages go.
+
+### Known limits
+- On an Intel Mac the integrated GPU is named from system_profiler without its platform; it is not driven, and the engine runs on the CPU (a Radeon of an Intel Mac is refused by name the same way: no backend of this engine drives an AMD GPU under macOS).
+- On a laptop with an NVIDIA card and an integrated GPU, only the NVIDIA card is detected and the integrated GPU is not named.
+- The performance and efficiency cores of a hybrid CPU are told apart on macOS only, not yet on Linux or Windows.
+- A request served by `neurobrix serve` does not get the in-run re-plan of `run`: one that does not fit the memory left answers with the named refusal, and the daemon stays loaded.
+- The HTTP API does no constrained decoding (`tool_choice: "required"`, a named function and `parallel_tool_calls: false` are refused) and serves no embeddings.
+- A daemon holds one model and one conversation; the session's KV cache has no host or disk tier and is not shared between sessions.
 
 ## [0.6.2] - 2026-11-07
 
@@ -6411,7 +6417,8 @@ First stable release of NeuroBrix — universal deep learning inference engine.
 - Zip-slip path traversal validation in registry import
 - Safe arithmetic parser replacing `eval()` in shape resolver
 
-[Unreleased]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.2...main
+[Unreleased]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.3...main
+[0.6.3]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/NeuroBrix/neurobrix/compare/v0.5.4...v0.6.0

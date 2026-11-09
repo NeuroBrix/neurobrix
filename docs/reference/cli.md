@@ -269,6 +269,10 @@ neurobrix serve [options]
 | `--timeout` `TIMEOUT` | `1800` | Idle timeout in seconds (default: 1800) |
 | `--foreground` | off | Run in foreground (block terminal, for debugging) |
 | `--ready-fd` `READY_FD` | — | POSIX: an inherited pipe fd; the ready record (one JSON line) is written there once the daemon accepts, then the fd is closed |
+| `--http` | off | Also serve the OpenAI-compatible HTTP API (/v1/...) on this daemon (default address: serving.http_host:http_port in config/system.yml) |
+| `--http-host` `HTTP_HOST` | — | Address of the HTTP API (with --http); a non-loopback one needs --api-key-file |
+| `--http-port` `HTTP_PORT` | — | Port of the HTTP API (with --http) |
+| `--api-key-file` `API_KEY_FILE` | — | A file holding the API key the HTTP API requires (Authorization: Bearer) |
 | `--ready-file` `READY_FILE` | — | A file the ready record (one JSON line) is written to, whole, once the daemon accepts (the Windows launcher reads it there) |
 | `--compiled` | off | PyTorch fused graph + cuDNN/cuBLAS (the default where PyTorch is installed) |
 | `--sequential` | off | PyTorch eager op-by-op (no fusion, debug) |
@@ -278,8 +282,8 @@ neurobrix serve [options]
 
 ```text
 Examples:
-  neurobrix serve --model TinyLlama-1.1B-Chat-v1.0 --hardware v100-32g
-  neurobrix serve --model TinyLlama-1.1B-Chat-v1.0 --hardware v100-32g --timeout 3600
+  neurobrix serve --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --hardware v100-32g
+  neurobrix serve --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --hardware v100-32g --timeout 3600
 ```
 
 ## chat
