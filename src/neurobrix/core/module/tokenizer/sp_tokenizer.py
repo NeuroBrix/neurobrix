@@ -280,6 +280,10 @@ class SPTokenizer:
             "attention_mask": attention_mask,
         }
 
+    def token_bytes(self, i: int) -> Optional[bytes]:
+        """Token `i`'s bytes inside a text (constrained decoding's vocabulary); None for a special one."""
+        return self._sp.token_bytes(i)
+
     def decode(self, ids: List[int], skip_special_tokens: bool = True) -> str:
         """
         Decode token IDs to text.
@@ -1063,6 +1067,10 @@ class HFTokenizer:
             "attention_mask": attention_mask,
         }
 
+    def token_bytes(self, i: int) -> Optional[bytes]:
+        """Token `i`'s bytes inside a text (constrained decoding's vocabulary); None for a special one."""
+        return self._tokenizer.token_bytes(i)
+
     def decode(self, ids: List[int], skip_special_tokens: bool = True) -> str:
         """
         Decode token IDs to text.
@@ -1234,6 +1242,10 @@ class TiktokenTokenizer:
             return torch.tensor([ids], dtype=torch.long)
         return ids
 
+    def token_bytes(self, i: int) -> Optional[bytes]:
+        """Token `i`'s bytes inside a text (constrained decoding's vocabulary); None for a special one."""
+        return self._enc.token_bytes(i)
+
     def decode(self, ids: List[int], skip_special_tokens: bool = True) -> str:
         if self._use_tiktoken and self._enc is not None:
             if skip_special_tokens:
@@ -1297,6 +1309,10 @@ class TekkenTokenizer:
             import torch
             return torch.tensor([ids], dtype=torch.long)
         return ids
+
+    def token_bytes(self, i: int) -> Optional[bytes]:
+        """Token `i`'s bytes inside a text (constrained decoding's vocabulary); None for a special one."""
+        return self._inner.token_bytes(i)
 
     def decode(self, ids: List[int], skip_special_tokens: bool = True) -> str:
         if skip_special_tokens:

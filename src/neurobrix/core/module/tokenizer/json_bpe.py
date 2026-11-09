@@ -715,6 +715,29 @@ class _Decoder:
         # Unknown decoder step: identity
         return tokens
 
+    def token_bytes(self, tok: str) -> bytes:
+        """The bytes one token stands for inside a text (constrained decoding's vocabulary): the chain's per-token steps
+        applied, up to `Fuse` — Fuse and the steps after it act on the whole text, and a first token's stripped space
+        (Metaspace's, a Strip after Fuse) is a sequence rule, not the token's."""
+        steps = (self.spec.get("decoders", []) if self.spec and self.spec.get("type") == "Sequence"
+                 else ([self.spec] if self.spec else []))
+        text = tok
+        for st in steps:
+            t = st.get("type")
+            if t == "Fuse":
+                break
+            if t == "ByteLevel":        # as decode: a char outside the byte map is its own UTF-8
+                return b"".join(bytes([_BYTE_DECODER[c]]) if c in _BYTE_DECODER else c.encode("utf-8") for c in text)
+            if t == "ByteFallback" and len(text) == 6 and text.startswith("<0x") and text.endswith(">"):
+                return bytes([int(text[3:5], 16)])
+            if t == "Replace" and "String" in st.get("pattern", {}):
+                text = text.replace(st["pattern"]["String"], st.get("content", ""))
+            elif t == "Metaspace":
+                text = text.replace(st.get("replacement", "▁"), " ")
+            elif t not in ("ByteFallback", "Strip", "Replace"):
+                raise RuntimeError(f"ZERO FALLBACK: token_bytes has no per-token rule for the decoder step {t!r}")
+        return text.encode("utf-8")
+
     @staticmethod
     def _byte_fallback_decode(tokens: List[str]) -> List[str]:
         """Reassemble ``<0xXX>`` runs into UTF-8 text; pass through others."""
@@ -824,6 +847,15 @@ class PyTokenizer:
     def token_to_id(self, tok: str) -> Optional[int]:
         return self._vocab.get(tok)
 
+
+    def token_bytes(self, i: int) -> Optional[bytes]:
+        """Token `i`'s bytes inside a text; None for a special token (an added token marked special)."""
+        if i in self._special_ids:
+            return None
+        tok = self._id_to_tok.get(i)
+        if tok is None:
+            return None
+        return self._decoder.token_bytes(tok)
 
     def get_vocab_size(self) -> int:
         """The vocabulary with its added tokens (every caller's question)."""

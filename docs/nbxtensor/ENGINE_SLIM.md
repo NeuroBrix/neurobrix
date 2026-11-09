@@ -186,6 +186,19 @@ no torch, R33). Measured: 140 537 (main) to 140 626, +89.
 | core/runtime/executor.py | +5 | each component's strategy as it will execute, at -v |
 | core/prism/solver.py (then) | +41 | a served cache sized after the model's residency (`_served_residency_bytes`; decided between the agents 04:37): 140 626 to 140 667 |
 
+## Constrained decoding's vocabulary (2026-11-09): token_bytes per tokenizer class
+
+Point 9a's grammar engine walks the tokenizer's tokens as BYTES. Each tokenizer class of core/module/tokenizer answers
+`token_bytes(id)` by its own rule (the Dell's review 2026-11-09 21:35: by class, never by model): json_bpe applies its
+decoder chain's per-token steps up to Fuse; sp_proto maps "▁" to a space and <0xXX> pieces to their byte; tiktoken and
+Tekken read their rank tables; the runtime wrappers hand it on (polymorphic, kept above). Tokenizers are the engine's
+(core/module), not tensor mechanism. Measured: 140 289 to 140 358, +69.
+
+| file | lines | what it holds |
+|---|---|---|
+| core/module/tokenizer/json_bpe.py | +32 | the decoder chain's per-token bytes (ByteLevel, ByteFallback, Replace, Metaspace; stop at Fuse) |
+| core/module/tokenizer/sp_tokenizer.py, sp_proto.py, tekken_bpe.py, tiktoken_bpe.py | +16, +13, +4, +4 | each class's rule and the wrappers' |
+
 ## The scan
 
 `tools/engine_slim_scan.py` (standard library, ast) lists four kinds of finding in `src/neurobrix`, both branches:
@@ -292,6 +305,8 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | fact | src/neurobrix/core/strategies/base.py | transfer_tensor | the strategy's method takes a DEVICE STRING (cpu, cuda:N, mps:N) and passes a non-tensor value through; the library's function takes a device index and an NBXTensor only — a different contract, not a copy (2026-11-02) |
 | fact | src/neurobrix/core/strategies/triton/base.py | transfer_tensor | the same method on the Triton branch: device strings, cpu, pass-through of non-tensors (2026-11-02) |
 | fact | src/neurobrix/triton/sequence.py | _parse_dtype | parses through the library's parse_dtype, then remaps bf16<->fp16 to the plan's compute dtype (Prism's decision, the engine's) (2026-11-02) |
+| wrapper | src/neurobrix/core/module/tokenizer/sp_tokenizer.py | token_bytes | polymorphic: every runtime tokenizer answers token_bytes (constrained decoding's vocabulary), the grammar engine calls it whatever the class (2026-11-09) |
+| wrapper | src/neurobrix/core/module/tokenizer/tiktoken_bpe.py | token_bytes | polymorphic: the tiktoken class's answer to token_bytes, its rank table read (2026-11-09) |
 | wrapper | src/neurobrix/core/strategies/base.py | synchronize_device | polymorphic: both branches' bases define it (the Triton one through DeviceAllocator), and the shared steps call it on self (2026-11-02) |
 | wrapper | src/neurobrix/core/strategies/shared_steps.py | cleanup | polymorphic: the flows call `cleanup()` on every strategy, this one empties the loaded set (2026-11-02) |
 | wrapper | src/neurobrix/core/strategies/layer_streaming.py | _nbx_path | a test seam: six streaming tests stub it to run card-less (2026-11-02) |

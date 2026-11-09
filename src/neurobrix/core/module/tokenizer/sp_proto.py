@@ -478,6 +478,19 @@ class PySentencePiece:
     def get_piece_size(self) -> int:
         return len(self.pieces)
 
+    def token_bytes(self, idx: int) -> Optional[bytes]:
+        """Piece `idx`'s bytes inside a text: a byte piece its byte, "▁" a space; None for a control piece."""
+        ptype, piece = self.types[idx], self.pieces[idx]
+        if ptype == _TYPE_CONTROL:
+            return None
+        if ptype == _TYPE_BYTE:
+            v = self._byte_piece_value(piece)
+            if v is not None:
+                return bytes([v])
+        if ptype == _TYPE_UNKNOWN:
+            return None
+        return piece.replace(_SPACE_SYMBOL, " ").encode("utf-8")
+
     def piece_to_id(self, piece: str) -> int:
         return self.piece_to_id_map.get(piece, self._unk_id)
 

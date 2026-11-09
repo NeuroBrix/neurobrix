@@ -236,6 +236,10 @@ class PyTekken:
 
     # ----- lookups / metadata ----------------------------------------------
 
+    def token_bytes(self, i: int) -> Optional[bytes]:
+        """Id `i`'s bytes (ids below the special count are special: None)."""
+        return None if i < self._num_special else self._decoder.get(i - self._num_special)
+
     def token_to_id(self, token: bytes) -> Optional[int]:
         """Tekken id (with +num_special offset) for a regular token's bytes."""
         rank = self._ranks.get(token)

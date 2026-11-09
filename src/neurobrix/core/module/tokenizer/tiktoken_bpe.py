@@ -479,6 +479,10 @@ class PyTiktoken:
 
     # ----- lookups / metadata ----------------------------------------------
 
+    def token_bytes(self, i: int) -> Optional[bytes]:
+        """Rank `i`'s bytes; None for a special token."""
+        return self._decoder.get(i)
+
     def token_to_id(self, token: bytes) -> Optional[int]:
         """Rank/id for a regular token's bytes (None if absent)."""
         return self._ranks.get(token)
