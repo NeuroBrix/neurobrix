@@ -21,6 +21,8 @@ _lib.ng_vocab_new.argtypes = [ctypes.c_char_p, ctypes.POINTER(_U32), _U32, ctype
 _lib.ng_vocab_free.argtypes = [_P]
 _lib.ng_grammar_json_schema.restype = _P
 _lib.ng_grammar_json_schema.argtypes = [ctypes.c_char_p, _SZ, ctypes.c_char_p, _SZ]
+_lib.ng_grammar_description.restype = _P
+_lib.ng_grammar_description.argtypes = [ctypes.c_char_p, _SZ, ctypes.c_char_p, _SZ]
 _lib.ng_grammar_free.argtypes = [_P]
 _lib.ng_matcher_new.restype = _P
 _lib.ng_matcher_new.argtypes = [_P]
@@ -61,6 +63,17 @@ class Grammar:
         raw = text.encode("utf-8")
         err = ctypes.create_string_buffer(512)
         h = _lib.ng_grammar_json_schema(raw, len(raw), err, len(err))
+        if not h:
+            raise ValueError(err.value.decode("utf-8", "replace"))
+        return cls(h)
+
+    @classmethod
+    def description(cls, text: str) -> "Grammar":
+        """A grammar description (JSON: lit / schema / seq / choice / repeat / until / token) compiled; ValueError
+        naming what cannot be enforced."""
+        raw = text.encode("utf-8")
+        err = ctypes.create_string_buffer(512)
+        h = _lib.ng_grammar_description(raw, len(raw), err, len(err))
         if not h:
             raise ValueError(err.value.decode("utf-8", "replace"))
         return cls(h)

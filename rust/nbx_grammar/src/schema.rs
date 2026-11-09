@@ -18,6 +18,19 @@ pub enum Node {
     Object { keys: Vec<Vec<u8>>, values: Vec<usize>, required: u64 },
     /// alternatives whose first bytes are disjoint (decided at the first byte, no backtracking)
     AnyOf(Vec<usize>),
+    /// exact text of a description (no surrounding whitespace allowed)
+    Text(Vec<u8>),
+    /// the parts one after the other
+    Seq(Vec<usize>),
+    /// one of `then[i]`, chosen by the literal `prefixes[i]` read first (no prefix is a prefix of another)
+    Choice { prefixes: Vec<Vec<u8>>, then: Vec<usize> },
+    /// `node` repeated `min`..=`max` times, `sep` between two
+    Repeat { node: usize, min: u32, max: u32, sep: Vec<u8> },
+    /// free text (UTF-8, no control byte but newline and tab) ended by the literal `term`, consumed;
+    /// `fail` its KMP failure table
+    Until { term: Vec<u8>, fail: Vec<u16> },
+    /// exactly the token `id` (a template's dialect marker, special or plain): no bytes, the id itself
+    Token(u32),
 }
 
 #[derive(Debug)]
@@ -35,6 +48,26 @@ pub fn compile(schema: &Json) -> Result<Schema, String> {
     Ok(Schema { nodes: c.nodes, root })
 }
 
+/// A grammar DESCRIPTION (JSON): {"lit": text} | {"schema": <JSON Schema>} | {"seq": [part...]} |
+/// {"choice": [{"lit": prefix, "then": part}...]} | {"repeat": part, "min": m, "max": n, "sep": text} |
+/// {"until": terminator}. The tool-call envelopes are written in it by the engine, per template dialect.
+pub fn compile_description(d: &Json) -> Result<Schema, String> {
+    let mut c = Compiler { nodes: Vec::new(), defs: None, depth: 0 };
+    let root = c.part(d)?;
+    Ok(Schema { nodes: c.nodes, root })
+}
+
+fn kmp(t: &[u8]) -> Vec<u16> {
+    let mut f = vec![0u16; t.len()];
+    let mut k = 0usize;
+    for i in 1..t.len() {
+        while k > 0 && t[i] != t[k] { k = f[k - 1] as usize; }
+        if t[i] == t[k] { k += 1; }
+        f[i] = k as u16;
+    }
+    f
+}
+
 struct Compiler {
     nodes: Vec<Node>,
     defs: Option<Json>,
@@ -42,6 +75,66 @@ struct Compiler {
 }
 
 impl Compiler {
+    fn part(&mut self, d: &Json) -> Result<usize, String> {
+        let text = |k: &str| -> Result<Vec<u8>, String> {
+            match d.get(k) { Some(Json::Str(s)) if !s.is_empty() => Ok(s.as_bytes().to_vec()),
+                             _ => Err(format!("description: {k:?} must be a non-empty string")) }
+        };
+        if d.get("lit").is_some() && d.get("then").is_none() {
+            return Ok(self.push(Node::Text(text("lit")?)));
+        }
+        if let Some(s) = d.get("schema") {
+            let saved = self.defs.take();
+            self.defs = s.get("$defs").or(s.get("definitions")).cloned();
+            let r = self.node(s);
+            self.defs = saved;
+            return r;
+        }
+        if let Some(Json::Array(parts)) = d.get("seq") {
+            if parts.is_empty() { return Err("description: an empty seq".into()); }
+            let ids = parts.iter().map(|p| self.part(p)).collect::<Result<Vec<_>, _>>()?;
+            return Ok(self.push(Node::Seq(ids)));
+        }
+        if let Some(Json::Array(alts)) = d.get("choice") {
+            let mut prefixes = Vec::new();
+            let mut then = Vec::new();
+            for a in alts {
+                let p = match a.get("lit") { Some(Json::Str(s)) if !s.is_empty() => s.as_bytes().to_vec(),
+                                             _ => return Err("description: a choice without its literal".into()) };
+                prefixes.push(p);
+                then.push(self.part(a.get("then").ok_or("description: a choice without then")?)?);
+            }
+            for i in 0..prefixes.len() { for j in 0..prefixes.len() {
+                if i != j && prefixes[j].starts_with(&prefixes[i]) {
+                    return Err("description: a choice whose literal is a prefix of another's".into());
+                }
+            }}
+            if prefixes.is_empty() || prefixes.len() > MAX_KEYS { return Err("description: a choice of 1..=64".into()); }
+            return Ok(self.push(Node::Choice { prefixes, then }));
+        }
+        if let Some(r) = d.get("repeat") {
+            let num = |k: &str, dflt: u32| -> Result<u32, String> { match d.get(k) {
+                None => Ok(dflt), Some(Json::Number(n)) => n.parse().map_err(|_| format!("description: {k}")),
+                _ => Err(format!("description: {k}")) } };
+            let (min, max) = (num("min", 0)?, num("max", u32::MAX)?);
+            if min > max || max == 0 { return Err("description: repeat min..=max with max >= 1".into()); }
+            let sep = match d.get("sep") { None => Vec::new(), Some(Json::Str(s)) => s.as_bytes().to_vec(),
+                                           _ => return Err("description: sep".into()) };
+            let node = self.part(r)?;
+            return Ok(self.push(Node::Repeat { node, min, max, sep }));
+        }
+        if let Some(t) = d.get("token") {
+            return match t { Json::Number(n) => Ok(self.push(Node::Token(n.parse().map_err(|_| "description: token id")?))),
+                             _ => Err("description: token must be an id".into()) };
+        }
+        if d.get("until").is_some() {
+            let term = text("until")?;
+            let fail = kmp(&term);
+            return Ok(self.push(Node::Until { term, fail }));
+        }
+        Err("description: a part that is none of lit, schema, seq, choice, repeat, until, token".into())
+    }
+
     fn push(&mut self, n: Node) -> usize {
         self.nodes.push(n);
         self.nodes.len() - 1
@@ -130,6 +223,12 @@ impl Compiler {
             Node::Array { .. } => vec![b'['],
             Node::Object { .. } => vec![b'{'],
             Node::AnyOf(a) => a.iter().flat_map(|&j| self.first_bytes(j)).collect(),
+            Node::Text(t) => vec![t[0]],
+            Node::Seq(parts) => parts.first().map_or(vec![], |&j| self.first_bytes(j)),
+            Node::Choice { prefixes, .. } => { let mut v: Vec<u8> = prefixes.iter().map(|x| x[0]).collect(); v.sort(); v.dedup(); v }
+            Node::Repeat { node, .. } => self.first_bytes(*node),
+            Node::Until { .. } => (0u8..=255).collect(),
+            Node::Token(_) => vec![],
         }
     }
 

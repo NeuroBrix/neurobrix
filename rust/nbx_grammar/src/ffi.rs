@@ -3,7 +3,7 @@
 //! buffer. The caller keeps a grammar alive while matchers made from it live.
 use crate::json::parse;
 use crate::matcher::{Frame, Matcher};
-use crate::schema::{compile, Schema};
+use crate::schema::{compile, compile_description, Schema};
 use crate::vocab::Vocab;
 use std::slice;
 
@@ -56,6 +56,19 @@ pub extern "C" fn ng_grammar_json_schema(text: *const u8, len: usize, err: *mut 
     let text = unsafe { slice::from_raw_parts(text, len) };
     let r = std::str::from_utf8(text).map_err(|_| "the schema is not UTF-8".to_string())
         .and_then(parse).and_then(|j| compile(&j));
+    match r {
+        Ok(s) => Box::into_raw(Box::new(s)),
+        Err(e) => { write_err(&e, err, err_cap); std::ptr::null_mut() }
+    }
+}
+
+/// A grammar description's text (lit / schema / seq / choice / repeat / until / token, as JSON) compiled; null (and the
+/// refusal's message in `err`) when it cannot be enforced.
+#[no_mangle]
+pub extern "C" fn ng_grammar_description(text: *const u8, len: usize, err: *mut u8, err_cap: usize) -> *mut Schema {
+    let text = unsafe { slice::from_raw_parts(text, len) };
+    let r = std::str::from_utf8(text).map_err(|_| "the description is not UTF-8".to_string())
+        .and_then(parse).and_then(|j| compile_description(&j));
     match r {
         Ok(s) => Box::into_raw(Box::new(s)),
         Err(e) => { write_err(&e, err, err_cap); std::ptr::null_mut() }

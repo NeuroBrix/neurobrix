@@ -3,7 +3,7 @@
 //! against its schema (an independent validator, here only).
 use nbx_grammar::json::{parse, Json};
 use nbx_grammar::matcher::Matcher;
-use nbx_grammar::schema::compile;
+use nbx_grammar::schema::{compile, compile_description};
 use nbx_grammar::vocab::Vocab;
 
 struct Rng(u64);
@@ -39,6 +39,7 @@ fn brute(v: &Vocab, m: &Matcher) -> Vec<u32> {
             if !t.is_empty() && m2.feed_all(t) { out[id >> 5] |= 1 << (id & 31); }
         }
     }
+    for t in m.token_steps() { out[(t >> 5) as usize] |= 1 << (t & 31); }
     if m.accepting() { for &e in &v.eos { out[(e >> 5) as usize] |= 1 << (e & 31); } }
     out
 }
@@ -121,4 +122,76 @@ fn the_mask_equals_the_brute_force_and_every_output_validates() {
         }
     }
     assert!(checked > 2000 && completed > 50, "checked {checked} masks, completed {completed} outputs");
+}
+
+
+/// A hermes-style tool-call envelope written as a grammar description: the markers as token steps (ids 600 and 601 here,
+/// tokens without bytes), the function chosen by its name's literal, its arguments by their schema, one or two calls.
+fn hermes(tool_open: u32, tool_close: u32) -> String {
+    let call = |name: &str, params: &str| format!(r#"{{"lit": "\"{name}\"", "then": {{"seq": [{{"lit": ", \"arguments\": "}}, {{"schema": {params}}}, {{"lit": "}}\n"}}, {{"token": {tool_close}}}]}}}}"#);
+    format!(r#"{{"repeat": {{"seq": [{{"token": {tool_open}}}, {{"lit": "\n{{\"name\": "}}, {{"choice": [{}, {}]}}]}}, "min": 1, "max": 2, "sep": "\n"}}"#,
+            call("get_weather", r#"{"type":"object","properties":{"city":{"type":"string"},"unit":{"enum":["c","f"]}},"required":["city"]}"#),
+            call("get_time", r#"{"type":"object","properties":{"tz":{"type":"string"}},"required":["tz"]}"#))
+}
+
+#[test]
+fn an_envelope_with_token_steps_equals_the_brute_force_and_yields_calls_the_parser_reads() {
+    let mut rng = Rng(0xD1B54A32D192ED03);
+    let mut v = vocab(&mut rng);
+    let open = v.tokens.len() as u32;          // two marker tokens without bytes (as a special token)
+    let mut toks = v.tokens.clone();
+    toks.extend([None, None]);
+    for s in ["get_weather", "\"get_", "weather\"", "\"get_time\"", ", \"arguments\": ", "\n{\"name\": ", "\"city\": \"", "}\n"] {
+        toks.push(Some(s.as_bytes().to_vec()));
+    }
+    let eos = toks.len() as u32;
+    toks.push(None);
+    v = Vocab::new(toks, vec![eos]);
+    let desc = parse(&hermes(open, open + 1)).unwrap();
+    let g = compile_description(&desc).unwrap();
+    let mut completed = 0;
+    for _ in 0..60 {
+        let mut m = Matcher::new(&g);
+        let mut out: Vec<u8> = Vec::new();
+        for _ in 0..200 {
+            let mut mask = vec![0u32; v.words()];
+            v.mask(&m, &mut mask);
+            assert_eq!(mask, brute(&v, &m), "after {:?}", String::from_utf8_lossy(&out));
+            let allowed: Vec<u32> = (0..v.tokens.len() as u32).filter(|&t| mask[(t >> 5) as usize] >> (t & 31) & 1 == 1).collect();
+            assert!(!allowed.is_empty(), "a dead end after {:?}", String::from_utf8_lossy(&out));
+            let t = if allowed.contains(&eos) && rng.below(2) == 0 { eos } else {
+                let non: Vec<u32> = allowed.iter().copied().filter(|&t| t != eos).collect();
+                if non.is_empty() { eos } else { non[rng.below(non.len())] }
+            };
+            v.advance(&mut m, t).unwrap();
+            if t == eos { completed += 1; break; }
+            out.extend_from_slice(match t { x if x == open => b"<tool_call>".as_slice(), x if x == open + 1 => b"</tool_call>",
+                                            _ => v.tokens[t as usize].as_ref().unwrap() });
+        }
+        if !m.accepting() { continue; }       // the walk's step cap reached before the end
+        let text = String::from_utf8(out).expect("the output is UTF-8");
+        // every call: <tool_call>\n{"name": NAME, "arguments": ARGS}\n</tool_call>, ARGS valid for NAME
+        let calls: Vec<&str> = text.split("<tool_call>").skip(1).collect();
+        assert!((1..=2).contains(&calls.len()), "{text}");
+        for c in calls {
+            let body = c.trim_end_matches(['\n']).trim_end_matches("</tool_call>").trim();
+            let j = parse(body).unwrap_or_else(|e| panic!("{text}: {e}"));
+            let name = j.get("name").and_then(|n| n.as_str()).unwrap();
+            assert!(name == "get_weather" || name == "get_time", "{text}");
+            let args = j.get("arguments").unwrap();
+            assert!(args.get(if name == "get_weather" { "city" } else { "tz" }).is_some(), "{text}");
+        }
+    }
+    assert!(completed > 20, "completed {completed}");
+}
+
+#[test]
+fn until_reads_free_text_up_to_its_terminator() {
+    let d = parse(r#"{"seq": [{"lit": "<p>"}, {"until": "</p>"}, {"lit": "!"}]}"#).unwrap();
+    let g = compile_description(&d).unwrap();
+    let mut m = Matcher::new(&g);
+    assert!(m.feed_all("<p>a </ b </p".as_bytes()) && !m.accepting());
+    assert!(m.feed_all(b">!") && m.accepting());
+    let mut m2 = Matcher::new(&g);
+    assert!(m2.feed_all(b"<p>x</p>") && !m2.clone().feed(b'?'));
 }

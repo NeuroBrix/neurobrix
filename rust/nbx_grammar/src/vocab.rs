@@ -123,6 +123,9 @@ impl Vocab {
         } else {
             self.all.walk(0, m, out);
         }
+        for t in m.token_steps() {
+            if (t as usize) < self.tokens.len() { out[(t >> 5) as usize] |= 1 << (t & 31); }
+        }
         if m.accepting() {
             for &e in &self.eos { out[(e >> 5) as usize] |= 1 << (e & 31); }
         }
@@ -133,6 +136,10 @@ impl Vocab {
         if self.eos.contains(&token) {
             return if m.accepting() { m.stack.clear(); m.stack.push(Frame::Done); Ok(()) }
                    else { Err(format!("token {token} (end of sequence) before the output may end")) };
+        }
+        if m.token_steps().contains(&token) {
+            let mut m2 = m.clone();
+            return if m2.feed_token(token) { *m = m2; Ok(()) } else { Err(format!("token {token} is not allowed here")) };
         }
         let t = self.tokens.get(token as usize).and_then(|t| t.as_ref())
             .ok_or_else(|| format!("token {token} has no bytes a grammar may emit"))?;
