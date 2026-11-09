@@ -425,6 +425,18 @@ def inplace_min_bytes()
     # The output size from which an add or an element-wise unary writes into its dead input.
 ```
 
+### `nbxtensor.ops.token_bitmask` — a token bitmask applied to a decode step's logits (constrained decoding)
+
+```python
+def apply_token_bitmask(logits, bitmask) -> None
+    # fp32 [rows, vocab] logits: every token whose bit is clear (bit v % 32 of int32 word v // 32, the layout
+    # llguidance and XGrammar fill) set to -inf in place; a mask of another shape, or allowing no token, refused by name
+def bitmask_words(vocab) -> int
+    # ceil(vocab / 32)
+def token_bitmask(allowed, vocab) -> np.ndarray
+    # the [1, ceil(vocab / 32)] int32 mask allowing exactly `allowed`
+```
+
 ### `nbxtensor.ops.fused_upsample_conv` — a convolution streamed in bands of output rows
 
 ```python
