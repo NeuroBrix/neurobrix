@@ -717,6 +717,7 @@ class AutoregressiveHandler(FlowHandler):
         _phase_mark("flow.session.created", _dev_sync, _mem_note)
         strategy = self._create_strategy(gen_info, session)
         generator: Any = strategy.create_generator(self.ctx.pkg.defaults, self.ctx.variable_resolver)
+        generator.constraint = self.ctx.constraint          # the request's decode constraint, or None
 
         device = self._parse_device()
         generator.set_generation_params(device=torch.device(device))

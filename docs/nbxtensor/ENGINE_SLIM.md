@@ -156,6 +156,19 @@ copies over its torch pools (its paged cache is the engine's, torch-side: nbxten
 | triton/flow/autoregressive.py, core/flow/autoregressive.py | +5, +2 | the two hooks: park before a cleared cache, prepare before the match |
 | serving/engine.py, serving/openai_api/routes.py | +4, +3 | the daemon's tier from its plan and profile; `usage.prompt_tokens_details.cached_tokens` |
 | core/flow/base.py, core/runtime/executor.py, config/system.yml | +3, +2, +3 | the tier handed to the flow; `serving.kv_host_tier_mb` (null = the computed budget) |
+## Constrained decoding's seam (2026-11-09): policy, and the compiled engine's own mask
+
+The next useful version's point 9a (the owner 2026-11-09 18:58; our own grammar engine, 21:39): a request's decode
+follows a constraint. The mechanism that touches the logits is nbxtensor's (ops/token_bitmask.py, the Triton branch);
+what the engine adds is the constraint's protocol, where it is handed to the decode (the flow context, the executor,
+both flows) and, in the compiled engine, its own torch twin of the mask from the same words (nbxtensor imports no torch,
+R33; no compute shared between the engines). Measured: 140 246 (main 9ea8d314) to 140 289, +43.
+
+| file | lines | what it holds |
+|---|---|---|
+| core/state/constraint.py | +21 | the constraint's protocol: the mask words before a step, the chosen token after |
+| core/module/autoregressive/generator.py, triton/generator.py | +9, +8 | the mask before the sampler (compiled: masked_fill from the unpacked words; Triton: the nbxtensor kernel), the token reported after |
+| core/flow/base.py, core/runtime/executor.py, both autoregressive flows | +2, +1, +1, +1 | the request's constraint handed to the flow and to its generator |
 
 ## A routed model on two cards, planned and served at speed (2026-11-10): policy and the compiled engine's own loop
 

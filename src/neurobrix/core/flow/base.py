@@ -79,6 +79,8 @@ class FlowContext:
     # The serving daemon's KV host tier (core/state/kv_tier.KVTier), or None: a conversation that leaves the cache is
     # parked in host memory and restored when it comes back
     kv_tier: Any = None
+    # The request's decode constraint (core/state/constraint.Constraint), or None: both generators mask each step by it
+    constraint: Any = None
 
     def compute_dtype(self) -> 'torch.dtype':
         """Prism-RESOLVED compute dtype for flow-level tensor synthesis, as a torch.dtype — the

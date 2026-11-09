@@ -216,6 +216,7 @@ class TritonAutoregressiveHandler:
         strategy = self._create_strategy(gen_info, session)
         generator = strategy.create_generator(
             self.ctx.pkg.defaults, self.ctx.variable_resolver)
+        generator.constraint = self.ctx.constraint          # the request's decode constraint, or None
 
         device_idx = parse_device_idx(self.ctx.primary_device)
         generator.set_generation_params(device_idx=device_idx)

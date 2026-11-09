@@ -81,6 +81,8 @@ class AutoregressiveGenerator:
     DATA-DRIVEN: All parameters from config, no hardcoding.
     VENDOR-LESS: No janus/transformers imports.
     """
+    constraint = None       # the request's decode constraint (core/state/constraint.py), set by the flow
+
 
     # Configuration
     max_tokens: int
@@ -242,10 +244,17 @@ class AutoregressiveGenerator:
 
         # Sample using configured sampler
         # Sampler handles temperature, top-k, top-p, repetition penalty
+        if self.constraint is not None:      # the compiled twin of nbxtensor.ops.token_bitmask: the same words, torch-side
+            import numpy as np
+            words = self.constraint.mask(int(logits.shape[-1])).astype("<i4")
+            allowed = np.unpackbits(words.view(np.uint8), bitorder="little")[:logits.shape[-1]].astype(bool)
+            logits = logits.masked_fill(~torch.from_numpy(allowed).to(logits.device), float("-inf"))
         next_token = self._sampler(logits, input_ids=context_ids)
 
         # Track generated token
         token_id = int(next_token.squeeze().item())
+        if self.constraint is not None:
+            self.constraint.advance(token_id)
         self._state.generated_tokens.append(token_id)
         self._state.step_idx = step_idx
 

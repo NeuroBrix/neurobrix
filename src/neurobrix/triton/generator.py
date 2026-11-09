@@ -33,6 +33,7 @@ class TritonGenerator:
 
     Ported from AutoregressiveGenerator. Same interface, NBXTensor throughout.
     """
+    constraint = None       # the request's decode constraint (core/state/constraint.py), set by the flow
 
     def __init__(self, config: Dict[str, Any]):
         self.config = config
@@ -133,10 +134,17 @@ class TritonGenerator:
                             "margin12": round(_vals[0] - _vals[1], 6)}, _tf)
                 _tf.write("\n")
 
+        if self.constraint is not None:      # the tokens the constraint disallows at -inf before the sampler reads them
+            from nbxtensor.ops.token_bitmask import apply_token_bitmask
+            logits = logits.contiguous()
+            words = self.constraint.mask(int(logits.shape[-1]))
+            apply_token_bitmask(logits, np.broadcast_to(words, (int(logits.shape[0]), words.shape[-1])))
         next_token = self._sampler(logits, input_ids=context_ids)
 
         # Read token ID to CPU (single int)
         token_id = int(next_token.item())
+        if self.constraint is not None:
+            self.constraint.advance(token_id)
         self._state.generated_tokens.append(token_id)
         self._state.step_idx = step_idx
 

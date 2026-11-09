@@ -349,7 +349,7 @@ class RuntimeExecutor:
             seed = merged_defaults.get("seed")
         return seed
 
-    def execute(self, inputs: Dict[str, Any], kv_session: Any = None) -> Dict[str, Any]:
+    def execute(self, inputs: Dict[str, Any], kv_session: Any = None, constraint: Any = None) -> Dict[str, Any]:
         """
         Main execution entry point. `kv_session`: a serving session's KV cache record
         (core/state/kv_session.KVSession) — the request is one turn of that session, and only an
@@ -413,6 +413,7 @@ class RuntimeExecutor:
             binned_request=self._binned_request,
             kv_session=kv_session,
             kv_tier=self.kv_tier,
+            constraint=constraint,
         )
 
         self._arm_random_streams(inputs, merged_defaults)
