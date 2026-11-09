@@ -1,0 +1,18 @@
+[package]
+name = "nbx_grammar"
+version = "0.1.0"
+edition = "2021"
+description = "NeuroBrix's grammar engine for constrained decoding: JSON Schema and tool-call envelopes to per-step token masks (std only)"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"

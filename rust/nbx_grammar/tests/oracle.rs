@@ -1,0 +1,124 @@
+//! The engine against two oracles: (1) the mask equals the brute force (every token's bytes fed to a fresh copy of the
+//! matcher; EOS only where the output may end); (2) every output a random walk completes parses as JSON and validates
+//! against its schema (an independent validator, here only).
+use nbx_grammar::json::{parse, Json};
+use nbx_grammar::matcher::Matcher;
+use nbx_grammar::schema::compile;
+use nbx_grammar::vocab::Vocab;
+
+struct Rng(u64);
+impl Rng {
+    fn next(&mut self) -> u64 { self.0 ^= self.0 << 13; self.0 ^= self.0 >> 7; self.0 ^= self.0 << 17; self.0 }
+    fn below(&mut self, n: usize) -> usize { (self.next() % n as u64) as usize }
+}
+
+fn vocab(rng: &mut Rng) -> Vocab {
+    let mut toks: Vec<Option<Vec<u8>>> = (0u16..256).map(|b| Some(vec![b as u8])).collect();
+    for s in ["{\"", "\":", "\": ", "\",", "\"}", "},", "}", "]", "[", "[\"", "\"]", " \"", "\"name", "name", "tags", "\"tags\":",
+              "true", "false", "null", "nul", "12", "0", "-1", ".5", "e+", "1e3", "é", "日本", "🍎", "\\n", "\\\"", "\\u00e9",
+              "a\"b", "\", \"", ", ", "\n  ", "   ", "\"a\"", "\"b\"", "\"x\"", "\"n\": 1", "\"o\": {", "\"ok\"", "abc"] {
+        toks.push(Some(s.as_bytes().to_vec()));
+    }
+    toks.push(Some(vec![0xE6, 0x97])); // a partial UTF-8 character
+    toks.push(None); // a special token
+    for _ in 0..300 {
+        let n = 1 + rng.below(5);
+        let pool = b"{}[]\":, \nabnxyz01-.e\\";
+        toks.push(Some((0..n).map(|_| pool[rng.below(pool.len())]).collect()));
+    }
+    let eos = toks.len() as u32;
+    toks.push(None);
+    Vocab::new(toks, vec![eos])
+}
+
+fn brute(v: &Vocab, m: &Matcher) -> Vec<u32> {
+    let mut out = vec![0u32; v.words()];
+    for (id, t) in v.tokens.iter().enumerate() {
+        if let Some(t) = t {
+            let mut m2 = m.clone();
+            if !t.is_empty() && m2.feed_all(t) { out[id >> 5] |= 1 << (id & 31); }
+        }
+    }
+    if m.accepting() { for &e in &v.eos { out[(e >> 5) as usize] |= 1 << (e & 31); } }
+    out
+}
+
+fn valid(s: &Json, v: &Json, defs: &Json) -> bool {
+    if let Some(Json::Str(r)) = s.get("$ref") {
+        return valid(defs.get(r.trim_start_matches("#/$defs/")).unwrap(), v, defs);
+    }
+    if let Some(c) = s.get("const") { return c == v; }
+    if let Some(Json::Array(e)) = s.get("enum") { return e.contains(v); }
+    if let Some(Json::Array(a)) = s.get("anyOf") { return a.iter().any(|x| valid(x, v, defs)); }
+    let types: Vec<&str> = match s.get("type") {
+        Some(Json::Str(t)) => vec![t.as_str()],
+        Some(Json::Array(ts)) => ts.iter().map(|t| t.as_str().unwrap()).collect(),
+        _ => return false,
+    };
+    types.iter().any(|t| match (*t, v) {
+        ("null", Json::Null) | ("boolean", Json::Bool(_)) | ("string", Json::Str(_)) => true,
+        ("number", Json::Number(_)) => true,
+        ("integer", Json::Number(n)) => !n.contains(['.', 'e', 'E']),
+        ("array", Json::Array(a)) => {
+            let num = |k| s.get(k).map(|x| if let Json::Number(n) = x { n.parse::<usize>().unwrap() } else { 0 });
+            a.len() >= num("minItems").unwrap_or(0) && a.len() <= num("maxItems").unwrap_or(usize::MAX)
+                && a.iter().all(|x| valid(s.get("items").unwrap(), x, defs))
+        }
+        ("object", Json::Object(kv)) => {
+            let props = s.get("properties");
+            let req_ok = match s.get("required") {
+                Some(Json::Array(r)) => r.iter().all(|n| kv.iter().any(|(k, _)| Some(k.as_str()) == n.as_str())),
+                _ => true,
+            };
+            req_ok && kv.iter().all(|(k, x)| props.and_then(|p| p.get(k)).map_or(false, |ps| valid(ps, x, defs)))
+                && (1..kv.len()).all(|i| kv[..i].iter().all(|(k, _)| *k != kv[i].0))
+        }
+        _ => false,
+    })
+}
+
+const SCHEMAS: &[&str] = &[
+    r#"{"type":"object","properties":{"name":{"type":"string"},"n":{"type":"integer"},"ok":{"type":"boolean"}},"required":["name","n"]}"#,
+    r#"{"type":"array","items":{"enum":["a","b",12,1,null]},"minItems":1,"maxItems":4}"#,
+    r#"{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"}},"x":{"type":["number","null"]},"o":{"type":"object","properties":{"a":{"const":true}},"required":["a"]}},"required":["tags"]}"#,
+    r#"{"type":"number"}"#,
+    r#"{"anyOf":[{"type":"string"},{"type":"array","items":{"type":"integer"},"maxItems":2},{"type":"null"}]}"#,
+];
+
+#[test]
+fn the_mask_equals_the_brute_force_and_every_output_validates() {
+    let mut rng = Rng(0x9E3779B97F4A7C15);
+    let v = vocab(&mut rng);
+    let (mut checked, mut completed) = (0, 0);
+    for src in SCHEMAS {
+        let sj = parse(src).unwrap();
+        let schema = compile(&sj).unwrap();
+        for _ in 0..40 {
+            let mut m = Matcher::new(&schema);
+            let mut out: Vec<u8> = Vec::new();
+            for _step in 0..60 {
+                let mut mask = vec![0u32; v.words()];
+                v.mask(&m, &mut mask);
+                assert_eq!(mask, brute(&v, &m), "schema {src} after {:?}", String::from_utf8_lossy(&out));
+                checked += 1;
+                let allowed: Vec<u32> = (0..v.tokens.len() as u32).filter(|&t| mask[(t >> 5) as usize] >> (t & 31) & 1 == 1).collect();
+                assert!(!allowed.is_empty(), "a dead end after {:?}", String::from_utf8_lossy(&out));
+                let eos = v.eos[0];
+                let t = if allowed.contains(&eos) && rng.below(3) == 0 { eos } else {
+                    let non: Vec<u32> = allowed.iter().copied().filter(|&t| t != eos).collect();
+                    if non.is_empty() { eos } else { non[rng.below(non.len())] }
+                };
+                v.advance(&mut m, t).unwrap();
+                if t == eos {
+                    let text = String::from_utf8(out.clone()).expect("UTF-8");
+                    let val = parse(&text).unwrap_or_else(|e| panic!("{src}: {text:?} is not JSON: {e}"));
+                    assert!(valid(&sj, &val, sj.get("$defs").unwrap_or(&Json::Null)), "{src}: {text} does not validate");
+                    completed += 1;
+                    break;
+                }
+                out.extend_from_slice(v.tokens[t as usize].as_ref().unwrap());
+            }
+        }
+    }
+    assert!(checked > 2000 && completed > 50, "checked {checked} masks, completed {completed} outputs");
+}
