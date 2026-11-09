@@ -397,12 +397,12 @@ class PagedTritonKVCache:
         return self.length
 
     def tier_offload(self, pages, host, host_pages) -> None:
-        from nbxtensor.memory.kv_host_pages import offload
-        offload(self.k_pools, self.v_pools, pages, host, host_pages)
+        from nbxtensor.memory.kv_host_pages import offload_gathered       # faster than per-layer copies on both
+        offload_gathered(self.k_pools, self.v_pools, pages, host, host_pages)   # kinds of card (measured 2026-11-09)
 
     def tier_restore(self, host, host_pages, pages) -> None:
-        from nbxtensor.memory.kv_host_pages import restore
-        restore(self.k_pools, self.v_pools, host, host_pages, pages, self.fence, self)
+        from nbxtensor.memory.kv_host_pages import restore_scattered
+        restore_scattered(self.k_pools, self.v_pools, host, host_pages, pages, self.fence, self)
 
     def tier_resume(self, length: int) -> None:
         """The sequence holds `length` positions restored from the host: their pages granted, the lengths moved."""

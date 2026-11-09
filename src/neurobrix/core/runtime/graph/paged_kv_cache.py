@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple
 
+import numpy as np
 import torch
 
 from neurobrix.core.dtype.config import get_torch_dtype
@@ -178,24 +179,31 @@ class PagedKVCache:
     def tier_length(self) -> int:
         return self._seq_len
 
-    def _host_view(self, host, host_page: int, layer: int, which: str, pool: torch.Tensor) -> torch.Tensor:
-        off = host.address(host_page, layer, which) - host.buf.ctypes.data
-        nb = host.k_page_bytes if which == "k" else host.v_page_bytes
-        return torch.from_numpy(host.buf[off:off + nb]).view(pool.dtype).view(tuple(pool.shape[1:]))
+    def _host_rows(self, host, host_pages) -> np.ndarray:
+        return np.stack([host.buf[hp * host.page_bytes:(hp + 1) * host.page_bytes] for hp in host_pages])
 
     def tier_offload(self, pages, host, host_pages) -> None:
+        """Each layer's K and V of `pages` gathered by one index per pool and copied to the host once per pool (a page
+        at a time cost a call each: 5 500 copies for 125 TinyLlama pages)."""
+        rows = np.empty((len(pages), host.page_bytes), dtype=np.uint8)
         for layer in range(self.config.num_layers):
-            kp, vp = self.k_pools[layer], self.v_pools[layer]
-            for page, hp in zip(pages, host_pages):
-                self._host_view(host, hp, layer, "k", kp).copy_(kp[int(page)])
-                self._host_view(host, hp, layer, "v", vp).copy_(vp[int(page)])
+            off = layer * (host.k_page_bytes + host.v_page_bytes)
+            for pool, nb in ((self.k_pools[layer], host.k_page_bytes), (self.v_pools[layer], host.v_page_bytes)):
+                idx = torch.tensor(list(pages), device=pool.device, dtype=torch.long)
+                rows[:, off:off + nb] = pool[idx].reshape(len(pages), -1).view(torch.uint8).cpu().numpy()
+                off += nb
+        for i, hp in enumerate(host_pages):
+            host.buf[hp * host.page_bytes:(hp + 1) * host.page_bytes] = rows[i]
 
     def tier_restore(self, host, host_pages, pages) -> None:
+        rows = torch.from_numpy(self._host_rows(host, host_pages))
         for layer in range(self.config.num_layers):
-            kp, vp = self.k_pools[layer], self.v_pools[layer]
-            for hp, page in zip(host_pages, pages):
-                kp[int(page)].copy_(self._host_view(host, hp, layer, "k", kp))
-                vp[int(page)].copy_(self._host_view(host, hp, layer, "v", vp))
+            off = layer * (host.k_page_bytes + host.v_page_bytes)
+            for pool, nb in ((self.k_pools[layer], host.k_page_bytes), (self.v_pools[layer], host.v_page_bytes)):
+                idx = torch.tensor(list(pages), device=pool.device, dtype=torch.long)
+                pool[idx] = rows[:, off:off + nb].contiguous().view(pool.dtype).reshape(
+                    (len(pages),) + tuple(pool.shape[1:])).to(pool.device)
+                off += nb
 
     def tier_resume(self, length: int) -> None:
         """The sequence holds `length` positions restored from the host: their pages granted (every layer's pool
