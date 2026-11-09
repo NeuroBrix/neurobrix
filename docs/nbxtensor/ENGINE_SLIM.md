@@ -214,6 +214,19 @@ the tokenizer's token_bytes (built once per tokenizer and logits width), handed 
 | serving/openai_api/routes.py | +26 | response_format read on chat completions: json_schema compiled before the request is queued, the refusals |
 | serving/engine.py, core/module/tokenizer/sp_proto.py | +8, +2 | the constraint made per request and handed to the decode; an id past the pieces has no bytes |
 
+## Constrained decoding: the forced tool calls (2026-11-09): policy
+
+tool_choice required / a named function and parallel_tool_calls false enforced: each template dialect's envelope
+(agent/envelope.py: json, xml, json_list, the format its parser reads back) written as a grammar description our grammar
+engine compiles; a marker the tokenizer writes as one id taken as a token step. Policy (which format, which tools, how
+many calls), no tensor work. Measured: 140 721 to 140 836, +115.
+
+| file | lines | what it holds |
+|---|---|---|
+| agent/envelope.py | +80 | the three dialects' envelopes, the markers as token steps, required / named / parallel |
+| serving/openai_api/routes.py | +25 | tool_choice and parallel_tool_calls read; the envelope compiled before the request is queued (a reasoning prompt closes its thinking first); the refusals |
+| core/state/constraint.py | +10 | a grammar description compiled (a refusal by name when the engine is absent) |
+
 ## The scan
 
 `tools/engine_slim_scan.py` (standard library, ast) lists four kinds of finding in `src/neurobrix`, both branches:

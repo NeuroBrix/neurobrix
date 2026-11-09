@@ -475,3 +475,28 @@ def test_a_json_schema_answer_is_compiled_and_handed_to_the_decode(make):
     status, body, _ = _post(base + "/v1/chat/completions", {
         "model": "fake-model", "messages": [{"role": "user", "content": "hi"}], "response_format": {"type": "json_object"}})
     assert status == 400 and body["error"]["param"] == "response_format"
+
+
+def test_a_forced_tool_call_hands_the_templates_envelope_to_the_decode(make):
+    """tool_choice required / a named function: the template's dialect envelope (agent/envelope.py) compiled by our
+    grammar engine and handed to complete_turn; parallel_tool_calls false accepted with it; a named function not among
+    the tools, or a malformed tool_choice, answers 400 (point 9a)."""
+    pytest.importorskip("nbx_grammar")
+    eng = FakeEngine(template="{% for t in tools %}{{ t }}{% endfor %} <tool_call> </tool_call>")
+    eng.tokenizer.encode = lambda text, add_special_tokens=True: (
+        [900] if text in ("<tool_call>", "</tool_call>") else list(text.encode()))
+    _, base = make(eng)
+    tools = [{"type": "function", "function": {"name": "get_time", "parameters": {
+        "type": "object", "properties": {"tz": {"type": "string"}}, "required": ["tz"]}}}]
+    msg = [{"role": "user", "content": "time?"}]
+    for extra in ({"tool_choice": "required"}, {"tool_choice": "required", "parallel_tool_calls": False},
+                  {"tool_choice": {"type": "function", "function": {"name": "get_time"}}}):
+        status, body, _ = _post(base + "/v1/chat/completions", {"model": "fake-model", "messages": msg, "tools": tools, **extra})
+        assert status == 200, (extra, body)
+        assert [c for c in eng.calls if c[0] == "complete"][-1][3].get("grammar") is not None, extra
+    status, body, _ = _post(base + "/v1/chat/completions", {"model": "fake-model", "messages": msg, "tools": tools,
+                                                            "tool_choice": {"type": "function", "function": {"name": "nope"}}})
+    assert status == 400 and "nope" in body["error"]["message"]
+    status, body, _ = _post(base + "/v1/chat/completions", {"model": "fake-model", "messages": msg, "tools": tools,
+                                                            "tool_choice": "always"})
+    _assert_error(status, body, 400, param="tool_choice")

@@ -31,6 +31,16 @@ def compile_json_schema(text: str):
     return nbx_grammar.Grammar.json_schema(text)
 
 
+def compile_description(text: str):
+    """A grammar description (agent/envelope.py writes the tool-call envelopes in it) compiled by our grammar engine;
+    ValueError naming what it cannot enforce."""
+    try:
+        import nbx_grammar
+    except ImportError as e:
+        raise RuntimeError(f"ZERO FALLBACK: constrained decoding needs the grammar engine nbx_grammar ({e})") from e
+    return nbx_grammar.Grammar.description(text)
+
+
 class GrammarConstraint:
     """A request's grammar as the generators' constraint. The vocabulary (every token's bytes, `token_bytes` by
     tokenizer class) is built once per tokenizer and logits width and kept in `cache` (the serving engine's)."""

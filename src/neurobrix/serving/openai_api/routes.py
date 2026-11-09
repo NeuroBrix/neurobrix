@@ -87,6 +87,20 @@ def _response_grammar(fmt: Any):
         raise errors.ApiError(400, f"response_format: {e}", param="response_format") from e
 
 
+def _tool_grammar(parser, tools, tokenizer, named, parallel, reasoning_end=None):
+    """The forced tool call(s) as the dialect's envelope (agent/envelope.py) compiled by our grammar engine; a tool whose
+    parameters it cannot enforce answers 400 naming it."""
+    from neurobrix.agent.envelope import encoder, envelope
+    from neurobrix.core.state.constraint import compile_description
+    try:
+        env = envelope(parser.format_name, tools, encoder(tokenizer), named, parallel)
+        if reasoning_end:                  # a prompt that opens in the reasoning: it closes first, then the call(s)
+            env = {"seq": [{"until": reasoning_end}, {"lit": "\n\n"}, env]}
+        return compile_description(json.dumps(env))
+    except ValueError as e:
+        raise errors.ApiError(400, f"tools: {e}", param="tools") from e
+
+
 def _is_neutral(key: str, value: Any) -> bool:
     if key == "response_format" and isinstance(value, dict):
         return value == {"type": "text"}
@@ -314,11 +328,17 @@ def chat_completions(door, handler, body) -> Optional[Dict[str, Any]]:
     if tools is not None:
         if not isinstance(tools, list) or any((t or {}).get("type") != "function" for t in tools):
             raise errors.ApiError(400, "`tools` is a list of {type: function, function: {...}}", param="tools")
-    if choice not in (None, "auto", "none"):
-        raise errors.unsupported("tool_choice", "only `auto` and `none`: forcing a call needs constrained decoding, "
-                                 "which the engine does not do")
-    if body.get("parallel_tool_calls") is False:
-        raise errors.unsupported("parallel_tool_calls", "the number of calls a turn makes cannot be constrained")
+    named = (choice.get("function") or {}).get("name") if isinstance(choice, dict) else None
+    if isinstance(choice, dict) and (choice.get("type") != "function" or not isinstance(named, str)):
+        raise errors.ApiError(400, "tool_choice names a function as {type: function, function: {name}}", param="tool_choice")
+    if not isinstance(choice, dict) and choice not in (None, "auto", "none", "required"):
+        raise errors.ApiError(400, f"tool_choice {choice!r}: auto, none, required or a named function", param="tool_choice")
+    forced = choice == "required" or named is not None
+    if forced and not tools:
+        raise errors.ApiError(400, "tool_choice forces a call and the request declares no tools", param="tool_choice")
+    if body.get("parallel_tool_calls") is False and not forced:
+        raise errors.unsupported("parallel_tool_calls", "one call at most is enforced only with tool_choice required "
+                                 "or a named function (with auto the turn may also answer in prose)")
 
     tokenizer = engine.tokenizer
     template = engine.chat_template_text()
@@ -341,7 +361,12 @@ def chat_completions(door, handler, body) -> Optional[Dict[str, Any]]:
             opens = prompt.rstrip().endswith(reasoning[0])
         reader = TurnReader(tokenizer, parser=parser, reasoning=reasoning, opens_in_reasoning=opens)
         grammar = _response_grammar(body.get("response_format"))
-        if grammar is not None and tools:
+        if forced:                         # the template's own envelope, enforced by our grammar engine (point 9a)
+            if grammar is not None:
+                raise errors.unsupported("response_format", "a json_schema answer and a forced tool call in one request")
+            grammar = _tool_grammar(parser, tools, tokenizer, named, body.get("parallel_tool_calls") is not False,
+                                    reasoning[1] if opens else None)
+        elif grammar is not None and tools:
             raise errors.unsupported("response_format", "a json_schema answer and tools in one request: the grammar would "
                                      "also bind the tool calls")
         extra = {"grammar": grammar} if grammar is not None else {}
