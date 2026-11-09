@@ -11,8 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`neurobrix import` finds a model already installed from the same container**, by the container's sha256 the hub
   serves: the name record keeps it at install, and an entry installed under its container's own name is found before
   any byte is fetched. `--container FILE.nbx` installs from a container the machine already holds (or records the name
-  of the entry installed from it), verified against the hub's sha256; nothing is downloaded and `--no-keep` never
-  deletes that file.
+  of the entry installed from it), verified against the hub's sha256 before anything else is answered (a file of
+  other bytes is refused naming both sha256, even when the model is already installed); nothing is downloaded and
+  `--no-keep` never deletes that file.
 - **A laptop with an NVIDIA card names its integrated GPU**: the first backend that drove a card ended the detection, so
   an integrated Intel or AMD GPU beside an NVIDIA card was not named at all; it is now in the profile with its platform
   and the reason it is not planned (Intel's own reason for its chip, else: a plan runs one vendor's backend), and the

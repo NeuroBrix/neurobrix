@@ -290,7 +290,8 @@ def _import_body(args):
     # before 0.6.3 (no record) goes on to the hub record, which gives the name to record (nbx/names.py).
     from neurobrix.nbx.names import entry_of_container, recorded_name, record_name
     cache_path = CACHE_DIR / name
-    if cache_path.exists() and (cache_path / "manifest.json").exists() and not args.force \
+    given = Path(args.container).expanduser() if getattr(args, "container", None) else None
+    if cache_path.exists() and (cache_path / "manifest.json").exists() and not args.force and given is None \
             and recorded_name(cache_path) is not None:
         log.debug(f"Model already installed: {cache_path}")
         print(f"{recorded_name(cache_path)} is already installed (--force re-downloads).")
@@ -327,6 +328,21 @@ def _import_body(args):
     # finds installed (nbx/names.py).
     hub_name = model_data.get("slug") or f"{org}/{name}"
     hub_sha = model_data.get("sha256") or None       # the container's sha256 as the hub record states it
+    if given is not None:
+        # a local copy of the hub's file: verified before anything is answered; installed below, or its entry named
+        if not given.is_file():
+            _die(args, f"ERROR: --container {given}: no such file.")
+        if not hub_sha:
+            _die(args, f"ERROR: the registry states no sha256 for {hub_name}: a local container cannot be verified "
+                       f"against it.")
+        import hashlib
+        _h = hashlib.sha256()
+        with open(given, "rb") as _f:
+            for _chunk in iter(lambda: _f.read(1 << 24), b""):
+                _h.update(_chunk)
+        if _h.hexdigest() != hub_sha:
+            _die(args, f"ERROR: --container {given}: its sha256 {_h.hexdigest()} is not the container the hub serves "
+                       f"as {hub_name} ({hub_sha}).")
     # "already installed", asked on every name the record gives the container BEFORE any byte is fetched: on the slug
     # alone (`..._diffusers`), a second import of Sana downloaded 9 GB to learn it (2026-11-08)
     if not args.force:
@@ -367,7 +383,6 @@ def _import_body(args):
     # Before a byte is fetched. A 30.6 GB import died at 98 % on a full disk
     # because nothing looked first; the peak is store + cache, about twice the
     # archive, and --no-keep does not lower it. Both numbers are declared.
-    given = Path(args.container).expanduser() if getattr(args, "container", None) else None
     if file_size > 0:
         import shutil as _shutil
         # a container given here is not copied to the store: the extraction alone needs room
@@ -437,23 +452,8 @@ def _import_body(args):
             print("   License accepted.\n")
             _ev(args, "license", license=license_id, accepted_via="prompt")
 
-    if given is not None:
-        # a container this machine already holds (a copy of the hub's file): verified against the hub record's sha256,
-        # never downloaded; the steps below install it, or record the name of the entry already installed from it
+    if given is not None:                            # the container verified above stands for the download
         store_path, file_name = given, given.name
-        if not given.is_file():
-            _die(args, f"ERROR: --container {given}: no such file.")
-        if not hub_sha:
-            _die(args, f"ERROR: the registry states no sha256 for {hub_name}: a local container cannot be verified "
-                       f"against it.")
-        import hashlib
-        _h = hashlib.sha256()
-        with open(given, "rb") as _f:
-            for _chunk in iter(lambda: _f.read(1 << 24), b""):
-                _h.update(_chunk)
-        if _h.hexdigest() != hub_sha:
-            _die(args, f"ERROR: --container {given}: its sha256 {_h.hexdigest()} is not the container the hub serves "
-                       f"as {hub_name} ({hub_sha}).")
         actual_size = given.stat().st_size
         _ev(args, "downloaded", file=file_name, store=str(store_path), bytes=actual_size, local=True)
     else:

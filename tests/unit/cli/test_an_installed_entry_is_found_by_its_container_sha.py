@@ -112,3 +112,16 @@ def test_a_local_container_not_installed_is_installed_from_the_file(hub):
 def test_entry_of_container(tmp_path):
     e = _installed(tmp_path, record={"name": "a/b", "container_sha256": "f" * 64})
     assert names.entry_of_container(tmp_path, "f" * 64) == e and names.entry_of_container(tmp_path, "0" * 64) is None
+
+
+def test_a_local_container_of_other_bytes_is_refused_even_when_the_entry_is_named(hub, caplog):
+    """The rack, 2026-11-09 20:15: Wan2.1-VACE's container given for the Wan2.1-T2V slug, its entry already named, was
+    answered "already installed" and the file never checked. A container the user gives is verified first."""
+    nbx, sha, cache = hub
+    _installed(cache, record={"name": f"{ORG}/{NAME}", "container_sha256": sha})
+    (cache.parent / "cache" / NAME).mkdir(parents=True, exist_ok=True)
+    other = nbx.parent / "other.nbx"
+    other.write_bytes(nbx.read_bytes() + b"x")
+    assert _import(container=str(other)) == 1
+    assert sha in caplog.text
+
