@@ -6355,3 +6355,11 @@ class GraphExecutor:
         MemoryManager.cleanup_context(self._ctx)
         MemoryManager.unload_weights(self._weights)
         self._weights_loaded = False  # Allow re-loading on next use
+        # The request's context and the host block go with the weights, as in `unload_weights` (its Step 3): the
+        # context holds the weight dict the run was built on, so every weight outlived this cleanup until the NEXT
+        # run rebuilt it — after that run's load. A cold-served daemon then held two copies at each load (Qwen3-Coder
+        # 30B on lazy_sequential: 118 GB resident during request 2's load, 61 GB between requests; its tools request
+        # died at 22:55-23:02 on a machine already busy, 2026-11-08). The pinned host block (`pinned_block`) is held by
+        # the executor and by those views: both released here.
+        self._ctx = None
+        self.__dict__.pop("_pinned_host_block", None)

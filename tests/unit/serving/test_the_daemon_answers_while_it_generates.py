@@ -51,6 +51,7 @@ class FakeEngine:
     family = "llm"
     tokenizer = None
     model_name = "fake"
+    hardware_id = "fake-profile"       # the engine's resolved profile (serve --hardware, or the daemon's own)
     _warm_serving = True
     _session = None
 

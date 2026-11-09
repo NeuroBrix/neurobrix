@@ -311,7 +311,10 @@ class InferenceEngine:
         device_sync(self._device)
         _phase_mark("engine.execute.begin")
 
-        outputs = self._executor.execute(inputs)
+        try:
+            outputs = self._executor.execute(inputs)
+        finally:
+            self._release_cold_request()
 
         device_sync(self._device)
         _phase_mark("engine.execute.end")
@@ -379,7 +382,10 @@ class InferenceEngine:
         device_sync(self._device)
         _phase_mark("engine.execute.begin")
 
-        outputs = self._executor.execute(inputs, kv_session=kv_session)
+        try:
+            outputs = self._executor.execute(inputs, kv_session=kv_session)
+        finally:
+            self._release_cold_request()
 
         device_sync(self._device)
         _phase_mark("engine.execute.end")
@@ -396,6 +402,33 @@ class InferenceEngine:
             "max_tokens", container=self._pkg.defaults,
             extra=[("the request", decode.get("global.max_tokens"))],
             why="It bounds this generation."))
+
+    def _release_cold_request(self) -> None:
+        """Cold serving (a lazy plan: weights reload per request): at the end of a request every component's host
+        copy leaves, so the daemon holds ONE copy at a time. The flow's per-request cleanup marks a component unloaded
+        but its strategy's install (the zero3 ratchet keeps the host originals, `cpu_originals`) and the pinned host
+        block outlived it, so each request's reload doubled the host footprint until the next request's run replaced
+        them (Qwen3-Coder-30B, lazy_sequential, 2026-11-08: 61 GB resident between requests, 118 GB during each load;
+        the tools request's daemon was killed on a busy host). The strategy's own uninstall (the lifecycle mirror of
+        its install) releases them; a warm daemon keeps everything."""
+        if self._warm_serving or self._executor is None:
+            return
+        strategy = getattr(self._executor, "strategy", None)
+        uninstall = getattr(strategy, "uninstall_for_executor", None)
+        for name, executor in self._executor.executors.items():
+            # The executor's own release, whatever the flow's cleanup marked: the same steps as
+            # RuntimeExecutor._unload_component_weights (uninstall first, then the weights, the context, the arena and
+            # the one-shot device classification), which returns early once the flow marked the weights unloaded.
+            if uninstall is not None:
+                uninstall(name, executor)
+            if hasattr(executor, "unload_weights"):
+                executor.unload_weights()
+            executor._weights_loaded = False
+            if hasattr(executor, "_devices_computed"):
+                executor._devices_computed = False
+            executor.__dict__.pop("_pinned_host_block", None)
+        import gc
+        gc.collect()
 
     def chat(self, message: str, **kwargs) -> str:
         """

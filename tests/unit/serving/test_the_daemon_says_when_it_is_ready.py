@@ -176,3 +176,23 @@ def test_the_windows_launcher_reads_the_instances_file(tmp_path):
 
 def test_the_windows_poll_interval_is_a_setting():
     assert server.serving_settings()["ready_poll_s"] > 0
+
+
+def test_without_a_hardware_flag_the_daemon_resolves_its_profile_in_its_own_process(monkeypatch):
+    """`serve` without --hardware hands the daemon no profile; the daemon resolves it itself, after the fork — a
+    launcher that detects the machine before forking leaves a CUDA context the child cannot use (measured
+    2026-11-08: cudaErrorInitializationError, the plan fell to cpu_execution)."""
+    from neurobrix.core.prism import autodetect
+    calls = []
+    monkeypatch.setattr(autodetect, "get_or_create_default_profile", lambda: calls.append(1) or "default-xyz")
+    engine = LoadingEngine()
+    engine.hardware_id, engine.mode = None, "triton"
+    d = ServingDaemon("fake", None, engine=engine, idle_timeout=60)
+    d._resolve_hardware()
+    assert engine.hardware_id == "default-xyz" and calls == [1]
+    engine.hardware_id = "v100-16g"
+    d._resolve_hardware()
+    assert engine.hardware_id == "v100-16g" and calls == [1]
+    assert "--hardware" in ServingDaemon("fake", None, engine=engine)._foreground_command()
+    engine.hardware_id = None
+    assert "--hardware" not in ServingDaemon("fake", None, engine=engine)._foreground_command()

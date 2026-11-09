@@ -107,7 +107,17 @@ def cmd_stop(args):
     from neurobrix.serving.protocol import SOCKET_PATH, PID_PATH, IS_WINDOWS, INSTANCE
 
     if not DaemonClient.is_running():
-        print("No daemon is running.")
+        dead = DaemonClient.get_pid()
+        if dead is not None:
+            # A daemon removes its pid file on every exit it can run code for (shutdown, a signal it handles, an
+            # exception); one left behind means the process was killed outright — a SIGKILL, which no process can
+            # log (the kernel's out-of-memory killer is the usual sender). Said, with where its last lines are.
+            from neurobrix.serving.protocol import LOG_PATH
+            print(f"No daemon is running: the daemon (PID {dead}) ended without its shutdown — it was killed "
+                  f"(a SIGKILL leaves no line in its log; the kernel's out-of-memory killer is the usual sender). "
+                  f"Its last lines: {LOG_PATH}")
+        else:
+            print("No daemon is running.")
         # Clean up stale files (socket, pid, and a named Windows instance's port)
         for f in INSTANCE.instance_files():
             if f.exists():

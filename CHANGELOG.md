@@ -18,8 +18,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is refused by name in the OpenAI error object, never ignored; a request beyond `serving.http_max_queued` waiting
   ones gets 429; an address other than loopback needs `--api-key-file`; a port already taken is refused naming the
   process that holds it. `/v1/embeddings` answers that no installed family declares an embedding output.
-- **granite-3.1's tool calls are read** in `chat --agent` and in the API: its template's format (a marker token, then
-  a JSON list) had no parser, and its marker is a special token that the answer's decode dropped.
 
 ### Changed
 - **A model has one name, its hub name** (`<org>/<name>`): `neurobrix import` records it beside the installed model —
@@ -81,6 +79,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   conversation validated through the entry point.
 
 ### Fixed
+- **granite-3.1's tool calls are read** (`chat --agent` refused the model in 0.6.2): its template's format, a marker
+  then a JSON list, had no parser; the marker is a special token the answer's text dropped, and the model also writes
+  it as plain `<tool_call>`, both of which are now read.
+- **A daemon serving a model that reloads its weights per request holds one copy of them**: the copy of the previous
+  request stayed on the host until the next request had loaded its own, so each request held the weights twice
+  (Qwen3-Coder-30B: 118 GB of host memory during each load, for 58 GB of weights) and a busy machine killed the daemon in the
+  middle of a request.
+- **A daemon that dies says so**: a crash writes every thread's stack to the daemon's log, and `neurobrix stop` names
+  a daemon that was killed outright (which leaves no line of its own), with where its log is.
 - **`neurobrix autotune certify --reprove-generator` no longer un-serves the build it re-proves from**: re-proving a
   certified directory under a new code generator replaced each entry's one proof, so the published build lost every
   key (54 of 54 on one Apple kernel). The new proof is now added beside the others and each generator is served its

@@ -386,6 +386,11 @@ class ServingDaemon:
 
     def _start_serving(self) -> None:
         """Load model, bind socket, enter serve loop."""
+        # A fatal signal the interpreter can still report (SIGSEGV, SIGABRT, SIGBUS, SIGILL, SIGFPE) writes every
+        # thread's stack to the daemon's log before the process dies: a daemon that dies says where. (A SIGKILL
+        # cannot be reported by its victim: `neurobrix stop` names it from the pid file it leaves.)
+        import faulthandler
+        faulthandler.enable(file=sys.stderr, all_threads=True)
         # Signal handling (SIGINT works on all platforms, SIGTERM on Unix only)
         signal.signal(signal.SIGINT, self._handle_signal)
         if hasattr(signal, 'SIGTERM'):
