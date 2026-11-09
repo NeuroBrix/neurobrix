@@ -135,6 +135,9 @@ def check_compute_environment() -> list[str]:
     if _apple_silicon():
         # an Apple GPU sits on no PCI bus nbxtensor reads: said as what it is, never "no GPU found"
         print("  GPU drivers:    Apple GPU (Metal), part of macOS")
+        from nbxtensor.backend.cpu import blas         # macOS 14's Accelerate: its threads are not controlled, said
+        if blas.blas()[0] == blas.ACCELERATE_UNCONTROLLED:
+            print("  " + blas.uncontrolled_note().replace("BLAS: ", "BLAS:           ", 1))
     else:
         from nbxtensor.backend.install_help import report
         log.debug("  GPU drivers:    " + report().replace("\n", "\n                  "))

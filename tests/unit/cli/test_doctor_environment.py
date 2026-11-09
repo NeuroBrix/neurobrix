@@ -268,3 +268,18 @@ def test_a_blind_torch_is_advice_when_the_triton_engine_runs(monkeypatch, capsys
     monkeypatch.setattr(doctor, "_triton_engine", lambda: (True, "ready on cuda"))
     assert doctor.check_compute_environment() == []
     assert "index-url" in capsys.readouterr().out
+
+
+def test_neurobrix_doctor_names_macos_14_s_uncontrolled_accelerate(monkeypatch, capsys):
+    """On macOS 14 Accelerate has no BLASSetThreading (nbxtensor 0.0.9 names that kind): `neurobrix doctor` says it, as
+    `python -m nbxtensor doctor` does (the Mac 2026-11-09 16:53; reste_apres_064 point 7). Red if the line is missing on
+    that kind, or printed on an Accelerate whose threads are controlled."""
+    from nbxtensor.backend.cpu import blas
+    _fake_torch(monkeypatch, available=False, cuda=None)
+    monkeypatch.setattr(doctor, "_apple_silicon", lambda: True)
+    monkeypatch.setattr(doctor, "_triton_engine", lambda: (True, "ready (Metal)"))
+    for kind, said in ((blas.ACCELERATE_UNCONTROLLED, True), ("accelerate", False)):
+        monkeypatch.setattr(blas, "blas", lambda kind=kind: (kind, None))
+        doctor.check_compute_environment()
+        out = capsys.readouterr().out
+        assert ("BLAS:           Accelerate without per-thread control" in out) is said, out

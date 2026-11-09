@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **`neurobrix doctor` names macOS 14's Accelerate without thread control**, as `python -m nbxtensor doctor` does: the
+  CPU pool's threads may each use Accelerate's own threads there, and `VECLIB_MAXIMUM_THREADS=1` is the user's choice.
 - **A model whose output format the engine cannot resolve is refused by name on the warm path too**: the daemon and
   `neurobrix run` against a running daemon read such a family as text, so an image or audio answer came back as an
   empty text; both now resolve the family's output format as the cold path does, and a daemon that states no family
