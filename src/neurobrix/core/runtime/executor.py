@@ -1553,14 +1553,14 @@ class RuntimeExecutor:
         if input_name not in comp_inputs:
             raise RuntimeError(f"ZERO FALLBACK: '{comp_name}' streams its input {input_name!r} and the run gave "
                                f"{sorted(comp_inputs)}")
-        extra = sorted(set(comp_inputs) - {input_name})
-        if extra:
+        if extra := sorted(set(comp_inputs) - {input_name}):
             raise RuntimeError(f"ZERO FALLBACK: '{comp_name}' streams one input, {input_name!r}; the run also gives "
                                f"{extra}, which no chunk graph reads")
         try:
             return run_stream(decl, list(spec["schedule"]), comp_inputs[input_name], input_name,
                               pieces["first"].run, pieces["next"].run,
-                              release=lambda kind: pieces[kind].release_run_tensors())
+                              release=lambda kind: (pieces[kind].release_run_tensors(),     # + its freed heaps
+                                                    _release_device_memory(self.mode, getattr(executor, "device", None))))
         finally:
             for p in pieces.values():
                 p.unload_weights()
