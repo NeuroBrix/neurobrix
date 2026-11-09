@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`nbxtensor.ops.embedding_pool`**: an embedding model's pooling on the host (`pool_hidden`: mean over the kept
+  positions, cls, or each sequence's last kept position whatever the padding side; `l2_normalize`), numpy and
+  torch-free; refusals by name.
+
 ## [0.0.9] - 2026-11-09
 
 ### Fixed

@@ -729,6 +729,11 @@ class ServingDaemon:
                     orig_hw=result.pop("_upscale_orig_hw", None))
                 result.pop("outputs", None)
                 result["output_path"] = saved
+            elif output_path and fmt == "json":
+                # an embedding answer is already plain data: written as the cold run writes it (save_embeddings' file)
+                Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+                Path(output_path).write_text(json.dumps(result))
+                result["output_path"] = output_path
             elif "outputs" in result:
                 # Can't serialize raw tensors — drop them
                 result.pop("outputs", None)

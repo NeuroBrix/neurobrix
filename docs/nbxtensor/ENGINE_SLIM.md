@@ -127,6 +127,18 @@ AF_UNIX holds is refused by name. Serving policy, no tensor work. Measured: 140 
 | serving/engine.py | +7 | `one_name`, the status's `name` |
 | cli/commands/run.py, cli/commands/chat.py | +1, 0 | the daemon's error is the run's answer; chat's status shows the name |
 
+## The embedding family (2026-11-09): policy
+
+Point 9b, route B (the owner 21:25): a generic `embedding` family whose pooling the CONTAINER declares, and
+`/v1/embeddings`. The pooling math is nbxtensor's (`ops/embedding_pool`); the engine holds which output and mask to pool,
+the refusals, and the OpenAI shapes. Measured: 140 246 (main 9ea8d314) to 140 323, +77.
+
+| file | lines | the policy it holds |
+|---|---|---|
+| core/runtime/output_dispatch.py | +48 | `embedding_declaration` (the container's pooling, refused when absent), `extract_embeddings` / `save_embeddings` (the declared output and mask through the existing `final_as_array`, now with the whole batch), the `json` format |
+| serving/openai_api/routes.py | +24 | `/v1/embeddings`: input a string or strings, float or base64, `dimensions` only the model's, usage |
+| serving/server.py | +5 | a warm `run --output` of an embedding model: the daemon writes the vectors where it was asked |
+
 ## The scan
 
 `tools/engine_slim_scan.py` (standard library, ast) lists four kinds of finding in `src/neurobrix`, both branches:

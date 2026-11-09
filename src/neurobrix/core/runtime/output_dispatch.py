@@ -69,7 +69,7 @@ def host_bytes_per_output_element(family: str) -> int:
     fmt = get_output_format(family)
     bit_depth = int(get_output_processing(family).get("bit_depth", 8))
     image = _SAVE_FLOAT_COPIES * 4 + max(1, bit_depth // 8)
-    per_format = {"txt": 0, "wav": _SAVE_FLOAT_COPIES * 4 + 2, "png": image, "jpg": image, "jpeg": image,
+    per_format = {"txt": 0, "json": 4, "wav": _SAVE_FLOAT_COPIES * 4 + 2, "png": image, "jpg": image, "jpeg": image,
                   "mp4": _SAVE_FLOAT_COPIES * 4 + 1}
     if fmt == "mode_dependent":
         return max(per_format.values())
@@ -317,16 +317,17 @@ def _container_upscale_factor(pkg):
     return None
 
 
-def final_as_array(final, batch_axis: int):
+def final_as_array(final, batch_axis: Optional[int]):
     """The engine's final tensor as a float32 array with the batch axis
-    selected — the output boundary's container: a torch tensor (ATen
-    branch) through .cpu(), an NBXTensor (Triton branch) through its own
-    numpy(), an array as is. Never imports torch on the Triton branch (R33)."""
+    selected (None: the whole batch kept) — the output boundary's container:
+    a torch tensor (ATen branch) through .cpu(), an NBXTensor (Triton branch)
+    through its own numpy(), an array as is. Never imports torch on the Triton
+    branch (R33)."""
     import numpy as np
     from neurobrix.core.runtime.tensor_compat import is_torch_tensor
     if is_torch_tensor(final):
         import torch
-        t = torch.select(final, batch_axis, 0).detach().cpu()
+        t = (final if batch_axis is None else torch.select(final, batch_axis, 0)).detach().cpu()
         if t.dtype == torch.bfloat16:
             t = t.float()
         return np.ascontiguousarray(t.numpy(), dtype=np.float32)
@@ -335,7 +336,7 @@ def final_as_array(final, batch_axis: int):
         arr = final.to(NBXDtype.float32).numpy() if final.nbx_dtype != NBXDtype.float32 else final.numpy()
     else:
         arr = np.asarray(final)
-    return np.ascontiguousarray(np.take(arr, 0, axis=batch_axis), dtype=np.float32)
+    return np.ascontiguousarray(arr if batch_axis is None else np.take(arr, 0, axis=batch_axis), dtype=np.float32)
 
 
 def save_image(
@@ -514,6 +515,8 @@ def save_output(
         ext = default_extension_for_mode(family, mode)
         fmt = ext.lstrip(".")
 
+    if fmt == "json":
+        return save_embeddings(outputs, output_path, executor)
     if fmt == "txt":
         return save_text(outputs, output_path, executor)
     if fmt == "wav":
@@ -579,6 +582,8 @@ def extract_result(
         text = _extract_text(outputs, executor)
         tokens = _extract_token_count(outputs)
         return {"text": text or "", "tokens": tokens}
+    if fmt == "json":
+        return extract_embeddings(outputs, executor)
     if fmt == "wav":
         transcription = outputs.get("global.transcription")
         if transcription:
@@ -589,6 +594,49 @@ def extract_result(
         return {"outputs": outputs}
     # image, video, etc. — raw passthrough, caller saves
     return {"outputs": outputs}
+
+
+EMBEDDING_KEYS = ("output", "pooling", "normalize", "dimension")
+
+
+def embedding_declaration(executor) -> Dict[str, Any]:
+    """The container's own pooling (runtime/defaults.json `embedding`): output, mask (optional), pooling, normalize,
+    dimension. Missing or incomplete: refused by name — the engine never chooses a model's pooling."""
+    decl = (getattr(executor.pkg, "defaults", None) or {}).get("embedding")
+    missing = [k for k in EMBEDDING_KEYS if not isinstance(decl, dict) or k not in decl]
+    if missing:
+        raise RuntimeError(f"ZERO FALLBACK: this embedding container declares no {', '.join(missing)} in "
+                           f"runtime/defaults.json `embedding` — its pooling is the model's, never the engine's")
+    return decl
+
+
+def extract_embeddings(outputs: Dict[str, Any], executor) -> Dict[str, Any]:
+    """{embeddings: [[float] per input], dimension, tokens}: the flow's hidden states pooled as the container declares
+    (nbxtensor ops/embedding_pool, host math, both engines hand their tensor to the host the same way)."""
+    import numpy as np
+    from nbxtensor.ops.embedding_pool import l2_normalize, pool_hidden
+    decl = embedding_declaration(executor)
+    if decl["output"] not in outputs:
+        raise RuntimeError(f"ZERO FALLBACK: the flow left no {decl['output']!r} (the container's embedding output); "
+                           f"it left {sorted(outputs)[:12]}")
+    hidden = final_as_array(outputs[decl["output"]], None)
+    if hidden.ndim != 3 or hidden.shape[-1] != int(decl["dimension"]):
+        raise RuntimeError(f"ZERO FALLBACK: {decl['output']} is {list(hidden.shape)}, not [B, T, "
+                           f"{decl['dimension']}] (the container's dimension)")
+    mask = (final_as_array(outputs[decl["mask"]], None) if decl.get("mask") else np.ones(hidden.shape[:2], dtype=np.float32))
+    vectors = pool_hidden(hidden, mask, decl["pooling"])
+    if decl["normalize"]:
+        vectors = l2_normalize(vectors)
+    return {"embeddings": vectors.tolist(), "dimension": int(decl["dimension"]),
+            "tokens": int(np.asarray(mask).astype(bool).sum())}
+
+
+def save_embeddings(outputs: Dict[str, Any], output_path: str, executor) -> str:
+    import json
+    result = extract_embeddings(outputs, executor)
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(output_path).write_text(json.dumps(result))
+    return output_path
 
 
 # ---------------------------------------------------------------------------

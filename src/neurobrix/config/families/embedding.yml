@@ -1,0 +1,29 @@
+# Family-level constants for EMBEDDING models (point 9b; route B, the owner 2026-11-09 21:25)
+# Pattern: text in, one vector per input out — the model's own pooling over its last hidden state.
+# No catalogue model is of this family yet: /v1/embeddings is announced with the first one traced.
+#
+# Everything model-specific is the CONTAINER's (runtime/defaults.json `embedding`, embedded by the build from the model's
+# own sentence-transformers config): `output` (the flow variable holding the hidden states [B, T, H]), `mask` (the
+# variable holding the attention mask [B, T]; absent = every position kept), `pooling` (mean | cls | last), `normalize`
+# (bool), `dimension` (H). A container of this family without them is refused by name.
+
+output_processing:
+  output_format: "json"
+
+execution:
+  # flow_type from topology.json (forward_pass: tokenize, run flow.order once; both engines)
+  has_kv_cache: false
+  use_graph_executor: true
+  compiled_mode: true
+
+inputs:
+  required: ["--prompt"]
+
+modes:
+  supported: ["embedding"]
+  default: "embedding"
+  multimodal_strict: false
+
+output:
+  default_extension_per_mode:
+    embedding: ".json"

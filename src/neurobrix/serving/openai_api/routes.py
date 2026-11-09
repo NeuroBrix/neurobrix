@@ -10,7 +10,8 @@ Which endpoint a model serves is read from its FAMILY's declaration (config/fami
   * /v1/images/generations — a family with a prompt-only mode whose output is a `.png`;
   * /v1/audio/speech — a family with a prompt-only mode whose output is a `.wav`;
   * /v1/audio/transcriptions — a family with a `.txt` mode that requires `--audio`;
-  * /v1/embeddings — a family declaring an `embedding` mode (none in the catalogue today: refused by name).
+  * /v1/embeddings — a family declaring an `embedding` mode (config/families/embedding.yml; none in the catalogue today:
+    refused by name for every other family), pooled as the container declares.
 
 Every work request is one operation of the daemon (`ServingDaemon.run_operation`), on the one inference worker,
 behind every request of both doors.
@@ -22,6 +23,7 @@ import base64
 import binascii
 import json
 import shutil
+import struct
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -39,6 +41,7 @@ _COMPLETION_KEYS = {"model", "prompt", "stream", "stream_options", "max_tokens",
                     "repetition_penalty", "seed", "user"}
 _IMAGE_KEYS = {"model", "prompt", "n", "size", "response_format", "user", "seed", "steps", "guidance_scale"}
 _SPEECH_KEYS = {"model", "input", "voice", "response_format", "seed", "temperature"}
+_EMBEDDING_KEYS = {"model", "input", "encoding_format", "dimensions", "user"}
 _TRANSCRIPTION_KEYS = {"model", "file", "prompt", "response_format", "temperature"}
 
 _NEUTRAL = {
@@ -621,8 +624,29 @@ def audio_transcriptions(door, handler, form: Dict[str, Any]) -> Any:
 
 
 def embeddings(door, handler, body) -> Dict[str, Any]:
+    """One vector per input, pooled as the loaded embedding model's container declares (output_dispatch.extract_
+    embeddings); a family that declares no embedding mode is refused by name (none in the catalogue today)."""
+    _check_keys(body, _EMBEDDING_KEYS, "/v1/embeddings")
     model = _model(door, body)
     served = Served(door.daemon._engine)
-    why = ("its family declares no embedding output" if "embedding" not in served.supported
-           else "no embedding flow is wired in this engine")
-    raise errors.not_served("/v1/embeddings", model, served.family, why)
+    if "embedding" not in served.supported:
+        raise errors.not_served("/v1/embeddings", model, served.family, "its family declares no embedding output")
+    inputs = [body["input"]] if isinstance(body.get("input"), str) else body.get("input")
+    if not isinstance(inputs, list) or not inputs or not all(isinstance(x, str) and x for x in inputs):
+        raise errors.ApiError(400, "`input` is a non-empty string or a list of non-empty strings (token-id arrays are "
+                                   "not accepted: the model's own tokenizer reads the text)", param="input")
+    fmt = body.get("encoding_format") or "float"
+    if fmt not in ("float", "base64"):
+        raise errors.ApiError(400, f"`encoding_format` is float or base64, got {fmt!r}", param="encoding_format")
+    data, tokens = [], 0
+    for i, text in enumerate(inputs):
+        params = {"prompt": text, **served.mode_arg("embedding")}
+        _op, result = _run(door, handler, "generate", lambda p=params: door.daemon._call_engine("generate", p))
+        if "dimensions" in body and body["dimensions"] != result["dimension"]:
+            raise errors.ApiError(400, f"`dimensions` must be this model's {result['dimension']}: its vectors are not "
+                                       f"truncated", param="dimensions")
+        vec = result["embeddings"][0]
+        tokens += int(result["tokens"])
+        data.append({"object": "embedding", "index": i, "embedding": vec if fmt == "float" else
+                     base64.b64encode(struct.pack(f"<{len(vec)}f", *vec)).decode("ascii")})
+    return {"object": "list", "data": data, "model": model, "usage": {"prompt_tokens": tokens, "total_tokens": tokens}}

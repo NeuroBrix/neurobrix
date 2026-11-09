@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **An `embedding` model family and `/v1/embeddings`**, ready for the first embedding model: the vectors are the
+  model's last hidden states pooled as its container declares (mean over the kept tokens, the first token, or the last
+  token; normalised or not; its dimension); `input` a string or a list of strings, `encoding_format` float or base64,
+  `dimensions` only the model's own. No model of the catalogue is an embedding model yet: the route answers every other
+  family with a named refusal, and no vector is ever derived from a chat model.
+
 ### Fixed
 - **`neurobrix run` against a daemon ends at the daemon's answer**: after the daemon serving the asked model answered an
   error, the run went on to a cold attempt, refused with "a serving daemon is running with another model" for the very

@@ -1323,6 +1323,18 @@ def ew_grid(n_elements: int, meta: dict)
 def elu_forward_kernel(input_ptr, output_ptr, n_elements, alpha, BLOCK_SIZE: tl.constexpr)
 ```
 
+`nbxtensor.ops.embedding_pool` — an embedding model's pooling, on the host (numpy, torch-free; both engines hand it
+the flow's hidden states as an array)
+
+```python
+POOLING_KINDS = ("mean", "cls", "last")
+def pool_hidden(hidden, mask, kind) -> np.ndarray
+    # [B, T, H] and its [B, T] mask -> [B, H] float32: mean over the kept positions, position 0, or each sequence's last
+    # kept position (either padding side); an unknown kind, an empty sequence or shapes that disagree refused by name
+def l2_normalize(x) -> np.ndarray
+    # each row to unit L2 norm; a zero row refused by name
+```
+
 `nbxtensor.ops.embedding`
 
 ```python
