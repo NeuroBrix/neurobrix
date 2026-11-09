@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **A video's VAE streamed in time returns each chunk's freed memory to the device**: the chunks' freed blocks stayed
+  cached by the allocator from one chunk to the next, so a first compiled run on an Apple GPU met an out-of-memory in a
+  plan that fits (mochi-1-preview: re-planned, 331 s; now green on its first plan, 239 s). No output changes.
 - **`neurobrix import` finds a model already installed from the same container**, by the container's sha256 the hub
   serves: the name record keeps it at install, and an entry installed under its container's own name is found before
   any byte is fetched. `--container FILE.nbx` installs from a container the machine already holds (or records the name
