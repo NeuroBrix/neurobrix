@@ -138,6 +138,7 @@ the refusals, and the OpenAI shapes. Measured: 140 246 (main 9ea8d314) to 140 32
 | core/runtime/output_dispatch.py | +48 | `embedding_declaration` (the container's pooling, refused when absent), `extract_embeddings` / `save_embeddings` (the declared output and mask through the existing `final_as_array`, now with the whole batch), the `json` format |
 | serving/openai_api/routes.py | +24 | `/v1/embeddings`: input a string or strings, float or base64, `dimensions` only the model's, usage |
 | serving/server.py | +5 | a warm `run --output` of an embedding model: the daemon writes the vectors where it was asked |
+
 ## The KV cache's host tier (2026-11-09): policy, and the compiled engine's own copies
 
 The next useful version's point 10 (the owner, 2026-11-09 18:58): a serving daemon parks a conversation that leaves the
@@ -146,7 +147,7 @@ cache in host memory and copies it back when it returns. The mechanism and the b
 and the Triton cache's copies; paged_kv.py: the Triton cache's `tier_*` protocol). What the engine adds is WHEN a
 conversation is parked or restored and HOW MUCH host memory the tier may hold (policy), and the compiled engine's own
 copies over its torch pools (its paged cache is the engine's, torch-side: nbxtensor imports no torch, R33). Measured:
-140 079 (main d4de640f) to 140 293, +214.
+140 323 (main 3370ec86, rebased) to 140 537, +214.
 
 | file | lines | what it holds |
 |---|---|---|
