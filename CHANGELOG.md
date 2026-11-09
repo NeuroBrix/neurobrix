@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - `python -m nbxtensor install-metal` installs the macOS 14 wheels and CPython 3.10-3.13 that 0.6.3 announced, and the
   Triton engine runs on macOS 14 (its CPU pool no longer needs Accelerate's macOS 15 thread API) (nbxtensor 0.0.9).
+- The first launch with the Triton engine no longer stops when the reload it times holds a zero-size constant (Sana
+  1024's text encoder on a fresh machine with 0.6.3 from PyPI): that constant's bytes were read through a method instead
+  of its count.
 
 ## [0.6.3] - 2026-11-09
 

@@ -191,6 +191,19 @@ def test_the_reload_counts_an_nbxtensor_s_bytes():
     assert LS._weights_bytes(ex) == 4 * 8 * 4
 
 
+def test_the_reload_counts_a_zero_size_nbxtensor_as_zero():
+    """Sana's text encoder holds zero-size constants (shape (0,), `_nbytes` 0): `_nbytes or nbytes` fell through to the
+    METHOD and 0.6.3's first launch from PyPI died on int(method) in the arena probe's reload (2026-11-09). Red if a
+    count of 0 is read as absent."""
+    from neurobrix.core.strategies import layer_streaming as LS
+    from nbxtensor.tensor import NBXTensor
+    from nbxtensor.dtype.nbx_dtype import parse_dtype
+    f32 = parse_dtype("float32")
+    ex = type("E", (), {"_weights": {"w": NBXTensor.zeros((4, 8), f32, "cpu"), "c": NBXTensor.zeros((0,), f32, "cpu"),
+                                     "_arenas": {0: object()}}})()       # the arenas the weights are views of: not counted
+    assert LS._weights_bytes(ex) == 4 * 8 * 4
+
+
 def test_a_probe_in_a_child_reads_the_facts_measured_before_it(hw, monkeypatch, tmp_path):
     """A child probe (the reload rate, the arena factor) reads the profile from disk, and the engine it starts refuses by
     name a fact the profile lacks: on a clean machine (the stable's install test, 2026-11-05) the first child's Triton

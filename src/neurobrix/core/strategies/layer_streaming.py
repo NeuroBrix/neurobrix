@@ -89,11 +89,15 @@ def _segment_memory_line(seg_exec) -> str:
 def _weights_bytes(executor) -> int:
     """The bytes of the weights an executor holds now (torch or NBXTensor)."""
     n = 0
-    for t in (getattr(executor, "_weights", None) or {}).values():
-        if t is not None:
+    for k, t in (getattr(executor, "_weights", None) or {}).items():
+        # "_arenas" (Triton) holds the arenas the weights are views of, not a weight (the convention of facts_probe and
+        # graph_executor's own counts); the old `or 0` chain counted it 0 by accident
+        if t is not None and k != "_arenas":
             # NBXTensor's nbytes is a METHOD (ATen's API), torch's an int: the NBXTensor's own count first (Flex.1-alpha
-            # triton died on int(method) at its first streamed reload, 2026-11-04)
-            n += int(getattr(t, "_nbytes", None) or getattr(t, "nbytes", 0) or 0)
+            # triton died on int(method) at its first streamed reload, 2026-11-04), a count of 0 included (a zero-size
+            # constant: Sana's text encoder, 0.6.3's first launch from PyPI died on int(method), 2026-11-09)
+            own = getattr(t, "_nbytes", None)
+            n += int(t.nbytes if own is None else own)
     return n
 
 
