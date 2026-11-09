@@ -173,6 +173,18 @@ class PrefixIndex
     # let_go (a running request's pages), device_victims / offloaded / restored, host_victims / drop, forget_device, counts
 ```
 
+`nbxtensor.memory.kv_host_pages` — the KV host tier's raw pages and copies for the Triton paged cache
+
+```python
+class HostPages
+    # `capacity` host pages, each [layer][K page, V page] contiguous; page-locked (the device's host allocation) when
+    # asked, pageable otherwise (unified memory: outside the GPU working set); address(host_page, layer, which), close
+def offload(k_pools, v_pools, pages, host, host_pages) -> None
+    # each device page (every layer's K and V, `pool[page]`) copied to its host page, after the device's queued work
+def restore(k_pools, v_pools, host, host_pages, pages, fence=None, owner=None) -> None
+    # each host page copied back into a device page in place (the pools never move), inside the cache's fence
+```
+
 `nbxtensor.memory.paged_kv`
 
 ```python
