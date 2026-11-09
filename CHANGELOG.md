@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A model whose output format the engine cannot resolve is refused by name on the warm path too**: the daemon and
+  `neurobrix run` against a running daemon read such a family as text, so an image or audio answer came back as an
+  empty text; both now resolve the family's output format as the cold path does, and a daemon that states no family
+  is refused with the command that restarts it.
+
 ## [0.6.4] - 2026-11-09
 
 ### Fixed

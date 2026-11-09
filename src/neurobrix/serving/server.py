@@ -716,10 +716,7 @@ class ServingDaemon:
             # Text families (llm, vlm, multimodal-text, stt, audio_llm) put
             # the answer directly in the JSON response.
             from neurobrix.core.runtime.output_dispatch import get_output_format
-            try:
-                fmt = get_output_format(self._engine.family or "")
-            except RuntimeError:
-                fmt = "txt"
+            fmt = get_output_format(self._engine.family)   # an unknown family is refused by name, never read as text
             if output_path and fmt != "txt" and "outputs" in result:
                 # The request mode rides to save_output — multimodal-
                 # strict families resolve their extension from it.

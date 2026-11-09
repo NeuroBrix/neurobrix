@@ -87,14 +87,15 @@ def _try_warm_path(args) -> bool:
     # resolved mode and speaker travel to the daemon exactly like the
     # cold path ships them to the flow. Mode resolves once, here — the
     # binary-output path block below reuses it.
+    # the family decides the mode and the output, as on the cold path: a daemon that states none is refused by name
     family = status.get("family")
-    mode = None
-    if family:
-        from neurobrix.core.runtime.output_dispatch import resolve_mode
-        try:
-            mode = resolve_mode(family, args)
-        except RuntimeError:
-            mode = getattr(args, "mode", None)
+    if not family or family == "unknown":
+        client.close()
+        raise RuntimeError(f"ZERO FALLBACK: the daemon serving {args.model} states no family; its output format cannot "
+                           f"be resolved. Restart it: neurobrix stop && neurobrix serve --model {args.model}")
+    from neurobrix.core.runtime.output_dispatch import get_output_format, resolve_mode
+    mode = resolve_mode(family, args)
+    fmt = get_output_format(family)
     if mode is not None:
         kwargs["mode"] = mode
     if getattr(args, 'speaker', None) is not None:
@@ -110,18 +111,10 @@ def _try_warm_path(args) -> bool:
     # so daemon saves the file. Text families (llm/vlm/multimodal-text/stt/
     # audio_llm) return text in the JSON response and don't need a server-side
     # save path.
-    if family:
-        from neurobrix.core.runtime.output_dispatch import (
-            get_output_format,
-            resolve_output_path,
-        )
-        try:
-            fmt = get_output_format(family)
-        except RuntimeError:
-            fmt = "txt"
-        if fmt != "txt":
-            output_path = resolve_output_path(args.output, args.model, family, mode)
-            kwargs["output_path"] = str(Path(output_path).resolve())
+    if fmt != "txt":
+        from neurobrix.core.runtime.output_dispatch import resolve_output_path
+        output_path = resolve_output_path(args.output, args.model, family, mode)
+        kwargs["output_path"] = str(Path(output_path).resolve())
 
     try:
         result = client.generate(prompt=args.prompt or "", **kwargs)
@@ -131,15 +124,9 @@ def _try_warm_path(args) -> bool:
         client.close()
         return False
 
-    # Display result — data-driven by family output_format
-    from neurobrix.core.runtime.output_dispatch import get_output_format
+    # Display result — data-driven by family output_format (resolved above)
     timing = result.get("timing", {})
     total_s = timing.get("total_s", 0)
-
-    try:
-        fmt = get_output_format(family) if family else "txt"
-    except RuntimeError:
-        fmt = "txt"
 
     if fmt == "txt":
         text = result.get("text") or result.get("transcription") or ""
