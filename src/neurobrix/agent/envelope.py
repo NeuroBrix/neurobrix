@@ -64,7 +64,8 @@ def envelope(parser, tools: List[Dict[str, Any]], encode: Callable[[str], List[i
     names = [(t.get("function") or {}).get("name") for t in chosen]
     if any(not isinstance(n, str) or not n for n in names):
         raise ValueError("every tool needs a function name")
-    rep = {"min": 1} if parallel else {"min": 1, "max": 1}
+    # a named function is exactly ONE call of it (OpenAI, vLLM); parallel false: one call too
+    rep = {"min": 1} if parallel and only is None else {"min": 1, "max": 1}
     dialect = parser.format_name          # the markers are the parser's own, never retyped here
     if dialect == "json":
         open_, close = marker(parser.start_marker, encode), marker(parser.end_marker, encode)

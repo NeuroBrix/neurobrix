@@ -2,8 +2,10 @@
 //! the trie walk. JSON values (schema nodes) take bounded whitespace before them; description parts never do.
 use crate::schema::{Node, Schema, MAX_NUMBER};
 
-/// whitespace bytes allowed at each place JSON allows them (bounded: an output never runs forever on blanks)
-pub const WS_MAX: u8 = 32;
+/// Whitespace inside a JSON value: at most ONE space at each place JSON allows whitespace, never a newline or a tab
+/// (Outlines' rule: small models loop on wider whitespace - TinyLlama wrote 32 newlines before its object on the rack,
+/// 2026-11-10; vLLM issue #38696); none before the root value and none after it (llguidance's default).
+pub const WS_MAX: u8 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Frame {
@@ -29,7 +31,7 @@ pub struct Matcher<'s> {
 }
 
 fn is_ws(b: u8) -> bool {
-    matches!(b, b' ' | b'\n' | b'\r' | b'\t')
+    b == b' '
 }
 
 fn num_end(phase: u8) -> bool {
@@ -218,7 +220,7 @@ impl<'s> Matcher<'s> {
 
     fn start_value(&mut self, node: u32, ws: u8, b: u8) -> bool {
         let top = self.stack.len() - 1;
-        if is_ws(b) && self.json_value(node) {
+        if is_ws(b) && self.json_value(node) && self.stack.len() > 2 {      // never before the root value
             if ws >= WS_MAX { return false; }
             self.stack[top] = Frame::Value { node, ws: ws + 1 };
             return true;

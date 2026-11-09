@@ -195,3 +195,16 @@ fn until_reads_free_text_up_to_its_terminator() {
     let mut m2 = Matcher::new(&g);
     assert!(m2.feed_all(b"<p>x</p>") && !m2.clone().feed(b'?'));
 }
+
+
+#[test]
+fn whitespace_is_one_space_inside_a_value_and_none_around_the_root() {
+    let g = compile(&parse(r#"{"type":"object","properties":{"a":{"type":"integer"}},"required":["a"]}"#).unwrap()).unwrap();
+    let ok = |t: &str| { let mut m = Matcher::new(&g); m.feed_all(t.as_bytes()) && m.accepting() };
+    assert!(ok(r#"{"a": 1}"#) && ok(r#"{"a":1}"#) && ok(r#"{ "a" : 1 }"#));
+    for bad in ["\n{\"a\": 1}", " {\"a\": 1}", "{\"a\":  1}", "{\n\"a\": 1}", "{\"a\":\t1}"] {
+        assert!(!ok(bad), "{bad:?} accepted");
+    }
+    let mut m = Matcher::new(&g);
+    assert!(m.feed_all(br#"{"a": 1}"#) && !m.clone().feed(b' ') && !m.feed(b'\n'));      // nothing after the root
+}

@@ -30,7 +30,8 @@ def test_the_constraint_allows_only_what_the_schema_lets_follow_at_the_logits_wi
     c = GrammarConstraint(g, tok, [8], cache)
     width = 70                                         # a head wider than the tokenizer: ids 8..69 unknown but EOS
     out = []
-    for expect, pick in (([0, 6], 0), ([1, 6], 1), ([2, 6], 2), ([3, 4, 6], 3), ([5, 6], 5)):
+    for expect, pick in (([0], 0),           # no whitespace before the root value
+                          ([1, 6], 1), ([2, 6], 2), ([3, 4, 6], 3), ([5, 6], 5)):
         allowed = _allowed(c.mask(width), width)
         assert allowed == expect, (out, allowed)
         c.advance(pick)

@@ -94,3 +94,16 @@ def test_an_xml_string_parameter_with_a_constraint_free_text_cannot_enforce_is_r
         "code": {"type": "string", "pattern": "^[A-Z]{3}$"}}, "required": ["code"]}}}]
     with pytest.raises(ValueError, match="pattern"):
         envelope(XmlToolCallParser(), tools, encode)
+
+
+
+@pytest.mark.parametrize("dialect", sorted(CASES))
+def test_a_named_function_is_exactly_one_call(dialect):
+    """tool_choice naming a function = exactly one call of it (OpenAI, vLLM; the rack's granite cell made two)."""
+    parser, _ = CASES[dialect]
+    one = {"json": '<tool_call>\n{"name": "get_time", "arguments": {"tz": "UTC"}}\n</tool_call>',
+           "xml": "<tool_call>\n<function=get_time>\n<parameter=tz>\nUTC\n</parameter>\n</function>\n</tool_call>",
+           "json_list": '<|tool_call|>[{"name": "get_time", "arguments": {"tz": "UTC"}}]'}[dialect]
+    two = one[:-1] + ', {"name": "get_time", "arguments": {"tz": "UTC"}}]' if dialect == "json_list" else one + "\n" + one
+    d = envelope(parser, TOOLS, encode, only="get_time")
+    assert _walk(d, one) and not _walk(d, two)
