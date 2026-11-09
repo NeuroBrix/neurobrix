@@ -105,7 +105,8 @@ PyTorch index, then `neurobrix[pytorch]`) 6.82 GiB.
 no Triton for macOS: `install-metal` installs NeuroBrix's Triton build for Apple GPUs
 ([NeuroBrix/triton-ext](https://github.com/NeuroBrix/triton-ext); upstream:
 [triton-lang/triton-ext#126](https://github.com/triton-lang/triton-ext/pull/126)), each wheel
-checked against the sha256 written in nbxtensor:
+checked against the sha256 written in nbxtensor (in 0.6.3: macOS 15 and CPython 3.12; macOS 14 and
+CPython 3.10-3.13 by hand, see the known limits below):
 
 ```bash
 pip install neurobrix
@@ -260,6 +261,10 @@ component with the memory it measured and goes on, once, keeping the components 
   decoding (`tool_choice: "required"` or a named function is refused).
 - A daemon holds one model and one conversation; the conversation cache stays on the device (no host or disk tier,
   no sharing between sessions).
+- The macOS 14 Metal wheels (CPython 3.10-3.13) are published at
+  [apple-v0.1.0+triton3.8.0-macos14](https://github.com/NeuroBrix/triton-ext/releases/tag/apple-v0.1.0%2Btriton3.8.0-macos14)
+  and install by hand; `python -m nbxtensor install-metal` selects them from nbxtensor 0.0.9 (0.6.4). In 0.6.3
+  `install-metal` installs the macOS 15 / CPython 3.12 build only.
 
 The full list is in the [release notes](https://github.com/NeuroBrix/neurobrix/releases/tag/v0.6.3). Read them
 before filing a bug.

@@ -208,6 +208,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A request served by `neurobrix serve` does not get the in-run re-plan of `run`: one that does not fit the memory left answers with the named refusal, and the daemon stays loaded.
 - The HTTP API does no constrained decoding (`tool_choice: "required"`, a named function and `parallel_tool_calls: false` are refused) and serves no embeddings.
 - A daemon holds one model and one conversation; the session's KV cache has no host or disk tier and is not shared between sessions.
+- The macOS 14 Metal wheels (CPython 3.10-3.13) are published at https://github.com/NeuroBrix/triton-ext/releases/tag/apple-v0.1.0%2Btriton3.8.0-macos14 and install by hand; `python -m nbxtensor install-metal` selects them from nbxtensor 0.0.9 (0.6.4). In 0.6.3 `install-metal` installs the macOS 15 / CPython 3.12 build only.
 
 ## [0.6.2] - 2026-11-07
 
