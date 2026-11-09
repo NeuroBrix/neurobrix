@@ -22,7 +22,11 @@ RECORD = "name.json"
 
 
 class NameRefused(LookupError):
-    """A name that is not the entry's one name (the entry carries a recorded hub name)."""
+    """A name that is not the entry's one name (the entry carries a recorded hub name): says both."""
+
+    def __init__(self, asked: str, recorded: str) -> None:
+        super().__init__(f"the model installed as {asked} is named {recorded}: use --model {recorded}")
+        self.asked, self.recorded = asked, recorded
 
 
 def migration_note(entry_name: str, hub_name: Optional[str] = None) -> str:
@@ -86,7 +90,7 @@ def resolve(cache: Path, asked: str) -> Tuple[str, Optional[str]]:
     if "/" not in asked and entry.is_dir() and (entry / "manifest.json").exists():
         rec = recorded_name(entry)
         if rec is not None:
-            raise NameRefused(f"the model installed as {asked} is named {rec}: use --model {rec}")
+            raise NameRefused(asked, rec)
         return asked, migration_note(asked)
     return asked, None
 

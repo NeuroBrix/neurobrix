@@ -165,8 +165,11 @@ class _Handler(BaseHTTPRequestHandler):
     server_version = "NeuroBrix"
     door: "HttpDoor" = None   # set on the subclass the door builds
 
-    def log_message(self, fmt, *args) -> None:   # the daemon's log, not stderr lines per request
+    def _log_request(self, fmt, *args) -> None:   # the daemon's log, not stderr lines per request
         _log.debug("[HTTP] " + fmt % args)
+
+    # http.server calls these by name: `log_message` for each request line, `do_<VERB>` for each request.
+    log_message = _log_request
 
     # -- plumbing ----------------------------------------------------------------
     def requested_op_id(self) -> Optional[str]:
@@ -224,24 +227,24 @@ class _Handler(BaseHTTPRequestHandler):
         ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip()
         raw = self._body()
         if ctype != "application/json":
-            raise errors.invalid(f"the body must be application/json, got {ctype or 'no Content-Type'}")
+            raise errors.ApiError(400, f"the body must be application/json, got {ctype or 'no Content-Type'}")
         try:
             body = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as e:
-            raise errors.invalid(f"the body is not JSON: {e}")
+            raise errors.ApiError(400, f"the body is not JSON: {e}")
         if not isinstance(body, dict):
-            raise errors.invalid("the body must be a JSON object")
+            raise errors.ApiError(400, "the body must be a JSON object")
         return body
 
     def _form(self) -> Dict[str, Any]:
         ctype = self.headers.get("Content-Type") or ""
         if not ctype.startswith("multipart/form-data"):
-            raise errors.invalid(f"the body must be multipart/form-data, got {ctype or 'no Content-Type'}")
+            raise errors.ApiError(400, f"the body must be multipart/form-data, got {ctype or 'no Content-Type'}")
         raw = self._body()
         msg = BytesParser(policy=_HTTP_POLICY).parsebytes(
             b"Content-Type: " + ctype.encode("latin-1") + b"\r\n\r\n" + raw)
         if not msg.is_multipart():
-            raise errors.invalid("the multipart body has no parts")
+            raise errors.ApiError(400, "the multipart body has no parts")
         form: Dict[str, Any] = {}
         for part in msg.iter_parts():
             name = part.get_param("name", header="content-disposition")
@@ -253,27 +256,22 @@ class _Handler(BaseHTTPRequestHandler):
         return form
 
     # -- verbs --------------------------------------------------------------------
-    def do_GET(self) -> None:
-        self._serve("GET")
-
-    def do_POST(self) -> None:
-        self._serve("POST")
-
-    def _serve(self, verb: str) -> None:
+    def _serve(self) -> None:
+        verb = self.command                     # the request's method, as http.server parsed it
         self.op_id = None
         self._sse = None
         door = self.door
         door.activity(+1)
         try:
             if not self._authorized():
-                raise errors.unauthorized()
+                raise errors.ApiError(401, "Missing or wrong API key: send `Authorization: Bearer <key>`.", code="invalid_api_key")
             path = self.path.split("?", 1)[0].rstrip("/")
             if verb == "GET" and path == "/v1/models":
                 return self._send_json(200, routes.models(door))
             if verb == "GET" and path.startswith("/v1/models/"):
                 asked = path[len("/v1/models/"):]
-                if asked != door.model_id():
-                    raise errors.model_not_found(asked, door.model_id())
+                if asked != door.daemon.served_name():
+                    raise errors.model_not_found(asked, door.daemon.served_name())
                 return self._send_json(200, routes.model_record(door))
             if verb == "POST" and path == "/v1/chat/completions":
                 out = routes.chat_completions(door, self, self._json())
@@ -305,7 +303,7 @@ class _Handler(BaseHTTPRequestHandler):
             self.close_connection = True
         except Exception as e:   # an engine refusal or a defect: said, never a dropped connection
             _log.exception("[HTTP] request failed")
-            err = errors.engine_failed(f"{type(e).__name__}: {e}")
+            err = errors.ApiError(500, f"{type(e).__name__}: {e}", "server_error", code="engine_error")
             if self._sse is not None:
                 self._sse.send(err.body())
                 self._sse.done()
@@ -316,6 +314,8 @@ class _Handler(BaseHTTPRequestHandler):
                     self.close_connection = True
         finally:
             door.activity(-1)
+
+    do_GET = do_POST = _serve
 
 
 class HttpDoor:
@@ -342,9 +342,6 @@ class HttpDoor:
         self._lock = threading.Lock()
 
     # -- what the routes ask ------------------------------------------------------
-    def model_id(self) -> str:
-        return self.daemon.served_name()
-
     def watch(self, handler: _Handler, op) -> None:
         """Notice a client that vanished while its non-streamed request runs: the daemon's own connection watch."""
         t = threading.Thread(target=self.daemon._watch_client, args=(handler.connection, op),

@@ -36,9 +36,6 @@ class Job:
         self.result: Any = None
         self.error: Optional[BaseException] = None
 
-    def wait(self, timeout: Optional[float] = None) -> bool:
-        return self.done.wait(timeout)
-
     def outcome(self) -> Any:
         """The call's return value; its exception re-raised in the caller's thread."""
         if not self.done.is_set():
@@ -59,8 +56,8 @@ class InferenceWorker:
         self._jobs: "queue.Queue[Any]" = queue.Queue()
         self._thread: Optional[threading.Thread] = None
         self._start_lock = threading.Lock()
-        self._idle = threading.Event()
-        self._idle.set()
+        self.idle = threading.Event()        # set while no job is queued or running (a drain waits on it)
+        self.idle.set()
         self._pending = 0
         self._pending_lock = threading.Lock()
 
@@ -82,7 +79,7 @@ class InferenceWorker:
         job = Job(fn, name)
         with self._pending_lock:
             self._pending += 1
-            self._idle.clear()
+            self.idle.clear()
         self._jobs.put(job)
         return job
 
@@ -92,12 +89,8 @@ class InferenceWorker:
         if threading.current_thread() is self._thread:
             return fn()
         job = self.submit(fn, name)
-        job.wait()
+        job.done.wait()
         return job.outcome()
-
-    def wait_idle(self, timeout: float) -> bool:
-        """True once no job is queued or running, within `timeout` seconds."""
-        return self._idle.wait(timeout)
 
     def stop(self) -> None:
         """End the thread after the jobs already queued."""
@@ -118,4 +111,4 @@ class InferenceWorker:
                 with self._pending_lock:
                     self._pending -= 1
                     if self._pending == 0:
-                        self._idle.set()
+                        self.idle.set()

@@ -41,6 +41,11 @@ TERMINAL = ("completed", "cancelled", "orphaned", "stopped", "failed")
 class ServerBusy(RuntimeError):
     """An operation refused because as many as the door allows already wait (`serving.http_max_queued`)."""
 
+    def __init__(self, waiting: int, bound: int) -> None:
+        super().__init__(f"{waiting} requests already wait for the model (serving.http_max_queued = {bound}); "
+                         f"retry when one has run")
+        self.waiting, self.bound = waiting, bound
+
 #: The keys of system.yml `serving:`, each read by name (no default in code).
 _SETTINGS = {
     "cancel_ack_timeout_s": (int, float),
@@ -121,9 +126,7 @@ class OperationTable:
             if max_queued is not None:
                 waiting = sum(1 for o in self._ops.values() if o.state == "queued")
                 if waiting >= max_queued:
-                    raise ServerBusy(
-                        f"{waiting} requests already wait for the model (serving.http_max_queued = "
-                        f"{max_queued}); retry when one has run")
+                    raise ServerBusy(waiting, max_queued)
             if requested_id is not None:
                 if not isinstance(requested_id, str) or not requested_id:
                     raise ValueError(f"op_id must be a non-empty string, got {requested_id!r}")

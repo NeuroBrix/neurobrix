@@ -26,10 +26,6 @@ class ApiError(Exception):
         return {"error": {"message": self.message, "type": self.type, "param": self.param, "code": self.code}}
 
 
-def invalid(message: str, param: Optional[str] = None, code: Optional[str] = None) -> ApiError:
-    return ApiError(400, message, "invalid_request_error", param, code)
-
-
 def unsupported(param: str, why: str) -> ApiError:
     """A parameter (or value) the engine does not honour: refused by name, before anything runs."""
     return ApiError(400, f"`{param}` is not supported by this server: {why}", "invalid_request_error",
@@ -46,15 +42,3 @@ def model_not_found(asked: Any, served: str) -> ApiError:
                          f"model: start another with `neurobrix serve --model {asked}`).",
                     "invalid_request_error", "model", "model_not_found")
 
-
-def busy(message: str) -> ApiError:
-    return ApiError(429, message, "server_busy", None, "server_busy")
-
-
-def unauthorized() -> ApiError:
-    return ApiError(401, "Missing or wrong API key: send `Authorization: Bearer <key>`.",
-                    "invalid_request_error", None, "invalid_api_key")
-
-
-def engine_failed(message: str) -> ApiError:
-    return ApiError(500, message, "server_error", None, "engine_error")

@@ -88,9 +88,9 @@ def _number(body, key, kind=float, low=None, high=None):
     ok = isinstance(v, (int, float)) and not isinstance(v, bool) if kind is float else \
         isinstance(v, int) and not isinstance(v, bool)
     if not ok or (low is not None and v < low) or (high is not None and v > high):
-        raise errors.invalid(f"`{key}` must be a {'number' if kind is float else 'integer'}"
+        raise errors.ApiError(400, f"`{key}` must be a {'number' if kind is float else 'integer'}"
                              f"{f' >= {low}' if low is not None else ''}"
-                             f"{f' <= {high}' if high is not None else ''}, got {v!r}", key)
+                             f"{f' <= {high}' if high is not None else ''}, got {v!r}", param=key)
     return v
 
 
@@ -137,9 +137,9 @@ class Served:
 
 # -- helpers shared by the endpoints ---------------------------------------------------------------------------
 def _model(door, body) -> str:
-    served = door.model_id()
+    served = door.daemon.served_name()
     if "model" not in body:
-        raise errors.invalid("`model` is required", "model")
+        raise errors.ApiError(400, "`model` is required", param="model")
     if body["model"] != served:
         raise errors.model_not_found(body["model"], served)
     return served
@@ -153,15 +153,15 @@ def _run(door, handler, method: str, work, deliver=None) -> Tuple[Any, Dict[str,
     try:
         op = daemon._ops.open(method, handler.requested_op_id(), max_queued=door.settings["http_max_queued"])
     except ServerBusy as e:
-        raise errors.busy(str(e))
+        raise errors.ApiError(429, str(e), "server_busy", code="server_busy")
     except ValueError as e:
-        raise errors.invalid(str(e), None, "op_id")
+        raise errors.ApiError(400, str(e), code="op_id")
     handler.op_id = op.op_id
     door.watch(handler, op)
     state, result = daemon.run_operation(op, work, deliver)
     snap = daemon._ops.snapshot(op)
     if snap["state"] == "failed":
-        raise errors.engine_failed(snap.get("detail") or "the request failed")
+        raise errors.ApiError(500, snap.get("detail") or "the request failed", "server_error", code="engine_error")
     if snap["state"] in ("stopped",):
         raise errors.ApiError(503, "the daemon is shutting down; the request was stopped", "server_error",
                               None, "shutting_down")
@@ -184,7 +184,7 @@ def _media_part(part: Dict[str, Any], spool: Path) -> Tuple[str, Path]:
                                      "server fetches nothing from the network")
         head, _, data = url.partition(",")
         if ";base64" not in head:
-            raise errors.invalid("an image data URL must be base64", "image_url")
+            raise errors.ApiError(400, "an image data URL must be base64", param="image_url")
         suffix = "." + head[5:].split(";")[0].split("/")[-1]
         payload, name = data, "image"
         flag = "--input-image"
@@ -192,31 +192,31 @@ def _media_part(part: Dict[str, Any], spool: Path) -> Tuple[str, Path]:
         audio = part.get("input_audio") if isinstance(part.get("input_audio"), dict) else {}
         payload, fmt = audio.get("data"), audio.get("format")
         if not isinstance(payload, str) or not isinstance(fmt, str) or not fmt.isalnum():
-            raise errors.invalid("input_audio needs `data` (base64) and `format` (e.g. wav)", "input_audio")
+            raise errors.ApiError(400, "input_audio needs `data` (base64) and `format` (e.g. wav)", param="input_audio")
         suffix, name, flag = "." + fmt, "audio", "--audio"
     else:
         raise errors.unsupported(f"content part type {kind!r}", "a part is text, image_url or input_audio")
     try:
         raw = base64.b64decode(payload, validate=True)
     except (binascii.Error, ValueError):
-        raise errors.invalid(f"the {kind} part is not valid base64", kind)
+        raise errors.ApiError(400, f"the {kind} part is not valid base64", param=kind)
     path = spool / f"{name}{suffix if suffix[1:].isalnum() else ''}"
     path.write_bytes(raw)
     return flag, path
 
 
-def _text_of(content, endpoint_param="messages") -> Tuple[str, List[Dict[str, Any]]]:
+def _text_of(content) -> Tuple[str, List[Dict[str, Any]]]:
     """A message's text and its non-text parts."""
     if content is None:
         return "", []
     if isinstance(content, str):
         return content, []
     if not isinstance(content, list):
-        raise errors.invalid("a message's `content` is a string or a list of parts", endpoint_param)
+        raise errors.ApiError(400, "a message's `content` is a string or a list of parts", param="messages")
     texts, media = [], []
     for part in content:
         if not isinstance(part, dict):
-            raise errors.invalid("a content part is an object", endpoint_param)
+            raise errors.ApiError(400, "a content part is an object", param="messages")
         if part.get("type") == "text":
             texts.append(str(part.get("text", "")))
         else:
@@ -228,12 +228,11 @@ def _template_messages(messages) -> List[Dict[str, Any]]:
     """The caller's OpenAI messages as the chat template reads them (the transformers convention): text content,
     an assistant's tool calls with their arguments as an object."""
     if not isinstance(messages, list) or not messages:
-        raise errors.invalid("`messages` must be a non-empty list", "messages")
+        raise errors.ApiError(400, "`messages` must be a non-empty list", param="messages")
     out = []
     for i, m in enumerate(messages):
         if not isinstance(m, dict) or m.get("role") not in ("system", "developer", "user", "assistant", "tool"):
-            raise errors.invalid(f"messages[{i}] needs a role among system, developer, user, assistant, tool",
-                                 "messages")
+            raise errors.ApiError(400, f"messages[{i}] needs a role among system, developer, user, assistant, tool", param="messages")
         text, media = _text_of(m.get("content"))
         if media:
             raise errors.unsupported(f"messages[{i}].content", "this model's family reads text only")
@@ -248,7 +247,7 @@ def _template_messages(messages) -> List[Dict[str, Any]]:
                     try:
                         args = json.loads(args) if args.strip() else {}
                     except json.JSONDecodeError:
-                        raise errors.invalid(f"messages[{i}].tool_calls: arguments is not JSON", "messages")
+                        raise errors.ApiError(400, f"messages[{i}].tool_calls: arguments is not JSON", param="messages")
                 calls.append({"id": c.get("id"), "type": "function",
                               "function": {"name": fn.get("name"), "arguments": args}})
             msg["tool_calls"] = calls
@@ -272,7 +271,7 @@ def models(door) -> Dict[str, Any]:
 
 def model_record(door) -> Dict[str, Any]:
     engine = door.daemon._engine
-    return {"id": door.model_id(), "object": "model", "created": door.started, "owned_by": "neurobrix",
+    return {"id": door.daemon.served_name(), "object": "model", "created": door.started, "owned_by": "neurobrix",
             "neurobrix": {"family": engine.family, "warm_serving": bool(getattr(engine, "_warm_serving", False))}}
 
 
@@ -293,7 +292,7 @@ def chat_completions(door, handler, body) -> Optional[Dict[str, Any]]:
     choice = body.get("tool_choice")
     if tools is not None:
         if not isinstance(tools, list) or any((t or {}).get("type") != "function" for t in tools):
-            raise errors.invalid("`tools` is a list of {type: function, function: {...}}", "tools")
+            raise errors.ApiError(400, "`tools` is a list of {type: function, function: {...}}", param="tools")
     if choice not in (None, "auto", "none"):
         raise errors.unsupported("tool_choice", "only `auto` and `none`: forcing a call needs constrained decoding, "
                                  "which the engine does not do")
@@ -347,9 +346,8 @@ def chat_completions(door, handler, body) -> Optional[Dict[str, Any]]:
                 given[flag] = path
             for flag in ("--input-image", "--audio"):
                 if flag in served.required and flag not in given:
-                    raise errors.invalid(f"a {served.family} model needs a "
-                                         f"{'image_url' if flag == '--input-image' else 'input_audio'} part",
-                                         "messages")
+                    raise errors.ApiError(400, f"a {served.family} model needs a "
+                                         f"{'image_url' if flag == '--input-image' else 'input_audio'} part", param="messages")
             for flag, path in given.items():
                 params["image_path" if flag == "--input-image" else "audio_path"] = str(path)
         except Exception:
@@ -511,7 +509,7 @@ def _binary(door, handler, endpoint, mode, params, ext) -> bytes:
         op, result = _run(door, handler, "generate", lambda: door.daemon._call_engine("generate", params))
         saved = result.get("output_path")
         if not saved or not Path(saved).is_file():
-            raise errors.engine_failed(f"{endpoint}: the flow wrote no {ext} file")
+            raise errors.ApiError(500, f"{endpoint}: the flow wrote no {ext} file", "server_error", code="engine_error")
         return Path(saved).read_bytes()
     finally:
         shutil.rmtree(spool, ignore_errors=True)
@@ -526,7 +524,7 @@ def images_generations(door, handler, body) -> Dict[str, Any]:
         raise errors.not_served("/v1/images/generations", model, served.family,
                                 "its family has no prompt-only mode that writes an image")
     if not isinstance(body.get("prompt"), str) or not body["prompt"]:
-        raise errors.invalid("`prompt` is required", "prompt")
+        raise errors.ApiError(400, "`prompt` is required", param="prompt")
     fmt = body.get("response_format")
     if fmt not in (None, "b64_json"):
         raise errors.unsupported("response_format", "only b64_json: the server hosts no files to link to")
@@ -537,7 +535,7 @@ def images_generations(door, handler, body) -> Dict[str, Any]:
         try:
             w, h = (int(x) for x in str(size).lower().split("x"))
         except ValueError:
-            raise errors.invalid(f"`size` is WIDTHxHEIGHT, got {size!r}", "size")
+            raise errors.ApiError(400, f"`size` is WIDTHxHEIGHT, got {size!r}", param="size")
         params["width"], params["height"] = w, h
     steps = _number(body, "steps", int, 1)
     if steps is not None:
@@ -565,7 +563,7 @@ def audio_speech(door, handler, body) -> bytes:
         raise errors.not_served("/v1/audio/speech", model, served.family,
                                 "its family has no prompt-only mode that writes audio")
     if not isinstance(body.get("input"), str) or not body["input"]:
-        raise errors.invalid("`input` is required", "input")
+        raise errors.ApiError(400, "`input` is required", param="input")
     if body.get("response_format") not in (None, "wav"):
         raise errors.unsupported("response_format", "only wav: the engine ships no audio encoder")
     params: Dict[str, Any] = {"prompt": body["input"], **served.mode_arg(mode)}
@@ -587,7 +585,7 @@ def audio_transcriptions(door, handler, form: Dict[str, Any]) -> Any:
                                 "its family does not answer an audio input with text")
     upload = form.get("file")
     if not isinstance(upload, tuple):
-        raise errors.invalid("`file` (multipart/form-data) is required", "file")
+        raise errors.ApiError(400, "`file` (multipart/form-data) is required", param="file")
     filename, raw = upload
     fmt = form.get("response_format")
     if fmt not in (None, "json", "text"):
@@ -595,15 +593,14 @@ def audio_transcriptions(door, handler, form: Dict[str, Any]) -> Any:
     params: Dict[str, Any] = {}
     prompt = form.get("prompt")
     if "--prompt" in served.required and not prompt:
-        raise errors.invalid(f"a {served.family} model needs a `prompt` (the instruction it applies to the audio)",
-                             "prompt")
+        raise errors.ApiError(400, f"a {served.family} model needs a `prompt` (the instruction it applies to the audio)", param="prompt")
     if prompt:
         params["prompt"] = prompt
     if form.get("temperature") not in (None, ""):
         try:
             params["temperature"] = float(form["temperature"])
         except ValueError:
-            raise errors.invalid("`temperature` is a number", "temperature")
+            raise errors.ApiError(400, "`temperature` is a number", param="temperature")
     suffix = Path(filename or "").suffix
     if not suffix[1:].isalnum():
         suffix = ""

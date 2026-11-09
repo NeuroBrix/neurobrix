@@ -52,6 +52,33 @@ first compile's precision contract) = +166, 137 968 (main 6d72eef5) to 138 134.
 | core/runtime/executor.py, core/flow/base.py | +6, +4 | the request carries its session to the flow |
 | cli/commands/run.py, cli/__init__.py, cli/commands/registry.py, core/runtime/output_dispatch.py | +80, +4, +2, +1 | the CLI displays a session of turns (`run --turns`) and the family's "one of" requirement |
 
+## The OpenAI lot (2026-11-09): what it adds, all policy
+
+The lot of release 0.6.3 adds serving policy and naming, no tensor work: an OpenAI-compatible HTTP door on the same
+daemon, the one inference thread, the reading of an assistant turn, the one name a model is asked by. Serving is
+engine policy (the owner's rule of 2026-11-08 16:43); none of it computes on a tensor, so nothing of it belongs in
+nbxtensor. The scan's findings stay at zero new (the 16 it first raised were removed in code: dead methods deleted or
+named by assignment for http.server, one-line error constructors and waits inlined, the two exceptions given a body,
+a never-passed parameter dropped). The header rose by exactly these lines, measured: 138 134 (main e7260834) to
+140 058, +1 924.
+
+| file | lines | the policy it holds |
+|---|---|---|
+| serving/openai_api/routes.py | +628 | which OpenAI endpoint the loaded family serves, read from its YAML; what each request maps to (`complete_turn`, `generate`); the parameters read and the ones refused by name; the OpenAI response shapes |
+| serving/openai_api/door.py | +388 | the HTTP door: bind, the API key, body and multipart parsing, the SSE stream, a vanished client's operation stopped, the spool of uploads |
+| serving/openai_api/turn.py | +237 | the turn read as it streams: what is answer, reasoning or a tool call, released only once stable (the template's markers) |
+| serving/openai_api/errors.py, serving/openai_api/__init__.py | +44, +5 | the OpenAI error object and the named refusals |
+| serving/worker.py | +114 | the daemon's one inference thread: every engine call of both doors, in order (Metal keeps per-thread state) |
+| serving/server.py | +90 | the dispatcher on that thread for both doors; the HTTP door opened beside the socket; the profile resolved in the daemon's own process; a dying daemon's stack (faulthandler) |
+| serving/engine.py | +49 | `complete_turn` (the turn's ids, prompt length, bound, the dialect's markers kept); a cold daemon releases each request's components |
+| serving/text_stream.py | +46 | `MarkerDecoder`: the special tokens a tool-call dialect writes kept in the decoded text |
+| serving/operations.py | +19 | the HTTP queue's bound (`ServerBusy`), counted under the operation table's lock |
+| agent/parsers/jsonlist.py, base.py, xml.py, jsonfmt.py, __init__.py | +61, +9, +2, +2, +4 | the JSON-list tool-call dialect (granite), every dialect's opening and closing markers |
+| nbx/names.py | +104 | a model's one name: the hub name `import` records beside its entry, resolved for every command; the record never counted as a container file |
+| cli/commands/registry.py, cli/utils.py | +60, +17 | `import` records the name (also on an installed entry), `list` shows it with the migration note; `--model` resolved once |
+| cli/commands/serve.py, cli/__init__.py, run.py, drift.py, calibrate.py, upscale.py | +14, +8, +6, +4, +2, +2 | `serve --http` and its flags, the default profile left to the daemon, a killed daemon named by `stop`; the one name taken by every command |
+| core/runtime/graph_executor.py, nbx/container.py | +8, +1 | the per-request cleanup releases the request's context and pinned block with its weights; the name record skipped as a container file |
+
 ## The scan
 
 `tools/engine_slim_scan.py` (standard library, ast) lists four kinds of finding in `src/neurobrix`, both branches:

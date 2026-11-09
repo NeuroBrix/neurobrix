@@ -495,7 +495,7 @@ class ServingDaemon:
         the replies of the work they stopped, then close every connection."""
         self._ops.stop_all("shutdown")
         deadline = time.monotonic() + self._settings["drain_timeout_s"]
-        if not self._worker.wait_idle(self._settings["drain_timeout_s"]):
+        if not self._worker.idle.wait(self._settings["drain_timeout_s"]):
             _log.debug("[Daemon] A generation did not stop within drain_timeout_s — exiting beside it")
         with self._conn_lock:
             items = list(self._connections.items())
@@ -681,7 +681,7 @@ class ServingDaemon:
             if item is end:
                 break
             deliver(*item)
-        job.wait()
+        job.done.wait()
         return job.outcome()
 
     def _watch_client(self, conn: socket.socket, op: Operation) -> None:
@@ -805,7 +805,7 @@ class ServingDaemon:
         for op in self._ops.stop_all("shutdown"):
             op.done.wait(self._settings["cancel_ack_timeout_s"])
         job = self._worker.submit(self._engine.unload, "unload")
-        if not job.wait(self._settings["cancel_ack_timeout_s"]):
+        if not job.done.wait(self._settings["cancel_ack_timeout_s"]):
             self._close_listener()
             return make_response(error="shutdown: the running generation did not stop within "
                                        "serving.cancel_ack_timeout_s; the daemon exits without unloading")

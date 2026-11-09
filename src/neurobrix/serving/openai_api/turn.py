@@ -115,10 +115,6 @@ class TurnReader:
             self._released = len(full)
         return self._consume(final=True)
 
-    @property
-    def released_text(self) -> str:
-        return self._previous[:self._released]
-
     # -- the state machine ---------------------------------------------------
     def _emit(self, out: List[Delta], channel: str, text: str) -> None:
         if not text:
