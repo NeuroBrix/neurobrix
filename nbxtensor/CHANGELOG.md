@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **A KV cache host tier**: `memory.kv_host_tier` (the prefix index of whole pages, the host page pool, the pages a
+  sequence holds), `memory.kv_host_pages` (host pages laid out [page][layer][K, V], pinned or pageable; per-layer copies,
+  and `offload_gathered` / `restore_scattered`: every layer's page gathered on the device by one kernel per K and V, then
+  one copy per page and run of layers — 43 MB in 21 / 8 ms against 184 / 210 ms per layer on a V100), and the paged
+  cache's `tier_*` protocol (layout, length, offload, restore in place, resume).
 - **`nbxtensor.ops.embedding_pool`**: an embedding model's pooling on the host (`pool_hidden`: mean over the kept
   positions, cls, or each sequence's last kept position whatever the padding side; `l2_normalize`), numpy and
   torch-free; refusals by name.

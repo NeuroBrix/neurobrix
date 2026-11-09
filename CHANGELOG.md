@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **A served conversation that leaves the KV cache comes back from host memory**: when another conversation takes the
+  daemon's cache, the whole pages the first one held are parked in host memory and copied back when it returns, so its
+  next turn prefills only what is new; the answers are the same tier on or off. The host memory it may hold is bounded
+  by what the profile leaves (installed RAM less the system's share less the plan's host side), grown one conversation
+  at a time, page-locked on a discrete card and pageable on unified memory; `serving.kv_host_tier_mb` (system.yml) caps
+  it, 0 turns it off. The OpenAI usage reports the reused positions as `prompt_tokens_details.cached_tokens`.
 - **An `embedding` model family and `/v1/embeddings`**, ready for the first embedding model: the vectors are the
   model's last hidden states pooled as its container declares (mean over the kept tokens, the first token, or the last
   token; normalised or not; its dimension); `input` a string or a list of strings, `encoding_format` float or base64,
