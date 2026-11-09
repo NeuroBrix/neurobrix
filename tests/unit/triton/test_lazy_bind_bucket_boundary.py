@@ -117,6 +117,8 @@ def _run(arm_env: dict, tag: str, outdir: Path) -> tuple[str, str]:
     backend = _backend()
     env = dict(os.environ)
     env.update({
+        # the replay's 'plan frozen' lines are developer lines since the clean-terminal lot: this test reads them
+        "NBX_LOG": "debug",
         "NBX_TRITON_REPLAY": "1",
         "NBX_REPLAY_KV_DECODE": "1",
         "NBX_REPLAY_GRAPH": "1",
@@ -141,7 +143,7 @@ def _run(arm_env: dict, tag: str, outdir: Path) -> tuple[str, str]:
     # anything the test is about.
     r = subprocess.run(
         [sys.executable, "-u", "-m", "neurobrix", "run", *hardware,
-         "--model", "TinyLlama-1.1B-Chat-v1.0",
+         "--model", "TinyLlama/TinyLlama-1.1B-Chat-v1.0",   # the one name import records
          "--prompt", _PROMPT, "--max-tokens", "120",
          "--temperature", "0", "--triton", "--output", str(out)],
         env=env, cwd=str(REPO), capture_output=True, text=True,
@@ -149,7 +151,7 @@ def _run(arm_env: dict, tag: str, outdir: Path) -> tuple[str, str]:
     assert r.returncode == 0, (
         f"{tag} failed rc={r.returncode}:\n{r.stdout[-800:]}\n{r.stderr[-400:]}")
     sha = hashlib.sha256(out.read_bytes()).hexdigest()
-    return sha, r.stdout
+    return sha, r.stdout + r.stderr   # the developer lines go to stderr (the terminal rule)
 
 
 def test_lazy_bind_is_byte_exact_across_a_bucket_boundary() -> None:

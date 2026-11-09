@@ -30,6 +30,8 @@ Run: PYTHONPATH=src python -m pytest tests/unit/kernels/test_a_certified_setting
 """
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from nbxtensor.ops import autotune_certified as C
@@ -134,7 +136,7 @@ def test_the_directory_on_disk_is_all_one_generator_and_it_is_named():
     assert len(c) == 1, f"the NVIDIA directory mixes generators: {dict(c)}"
 
 
-def test_lookup_itself_refuses_the_mismatched_entry(monkeypatch, capsys, tmp_path):
+def test_lookup_itself_refuses_the_mismatched_entry(monkeypatch, caplog, tmp_path):
     """End to end through `lookup`, which is what the launch site calls.
 
     `entry_for_generator` being right is necessary and not sufficient: the
@@ -159,6 +161,7 @@ def test_lookup_itself_refuses_the_mismatched_entry(monkeypatch, capsys, tmp_pat
     # went red — a test that reads the process environment answers for the shell,
     # not for the code. The opening is closed here whatever the shell did.
     monkeypatch.delenv("NBX_AUTOTUNE_ANY_GENERATOR", raising=False)
+    caplog.set_level(logging.WARNING)
     monkeypatch.setattr(C, "enabled", lambda: True)
     monkeypatch.setattr(C, "active_profile", lambda: ("nvidia", "volta"))
     monkeypatch.setattr(C, "output_dtype", lambda tuner, k: "fp32")
@@ -181,14 +184,16 @@ def test_lookup_itself_refuses_the_mismatched_entry(monkeypatch, capsys, tmp_pat
     monkeypatch.setattr(C, "_load", lambda *a, **k: _entries(other))
     assert C.lookup("matmul_kernel", _Tuner(), key, memory_gb=16) is None, (
         "lookup served a setting proven under another compiler")
-    said = capsys.readouterr().out
+    # the library logs, it does not print (the clean-terminal lot): the refusal is a WARNING record, read from the log
+    said = caplog.text
+    caplog.clear()
     assert "certified under" in said and other in said and ver in said, (
         f"the refusal has to be said in clear; got: {said!r}")
 
     # (c) it is said ONCE per kernel, not once per shape: 9,655 entries would
     #     otherwise print 9,655 lines.
     C.lookup("matmul_kernel", _Tuner(), key, memory_gb=16)
-    assert capsys.readouterr().out == "", "the refusal repeated for the same kernel"
+    assert "certified under" not in caplog.text, "the refusal repeated for the same kernel"
 
     # (d) the named opening serves it anyway
     monkeypatch.setenv("NBX_AUTOTUNE_ANY_GENERATOR", "1")

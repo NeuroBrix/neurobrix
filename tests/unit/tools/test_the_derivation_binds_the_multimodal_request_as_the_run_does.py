@@ -92,7 +92,8 @@ def test_the_vlm_request_is_bound_by_its_contract(census_hardware, model, contra
     assert set(by_name) == {"vision tower and projection", f"{lm} prefill (prompt lengths)",
                             f"{lm} decode KV length"}, list(by_name)
     _n, lo, hi, chain = by_name[f"{lm} prefill (prompt lengths)"]
-    assert (lo, hi) == (L0, L0 + 32 - 1)                 # the request's context up to the planned cache's reach
+    # every prompt length a session can ask, from 1 up to the planned cache's reach (census range 1/n, 2026-11-08)
+    assert (lo, hi) == (1, L0 + 32 - 1)
     (comp, feed), = chain(lo)
     assert comp == lm
     feed = {k: v for k, v in feed.items() if not k.startswith("__")}

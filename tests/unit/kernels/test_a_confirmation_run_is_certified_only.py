@@ -31,6 +31,8 @@ from neurobrix.kernels import census_table as T
 SRC = Path(__file__).resolve().parents[3] / "src"
 
 SCRIPT = r'''
+import logging, sys  # the library logs, it does not print: this application shows its developer lines
+logging.basicConfig(stream=sys.stdout, level=logging.DEBUG, format="%(message)s")
 import neurobrix  # the application: nbxtensor's host services
 import nbxtensor.ops.linalg_wrappers as _nbx_linalg_wrappers
 from nbxtensor.tensor import NBXTensor
