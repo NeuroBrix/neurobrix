@@ -162,7 +162,7 @@ The next useful version's point 9a (the owner 2026-11-09 18:58; our own grammar 
 follows a constraint. The mechanism that touches the logits is nbxtensor's (ops/token_bitmask.py, the Triton branch);
 what the engine adds is the constraint's protocol, where it is handed to the decode (the flow context, the executor,
 both flows) and, in the compiled engine, its own torch twin of the mask from the same words (nbxtensor imports no torch,
-R33; no compute shared between the engines). Measured: 140 246 (main 9ea8d314) to 140 289, +43.
+R33; no compute shared between the engines). Measured on main d2a345d8: 140 537 to 140 580, +43.
 
 | file | lines | what it holds |
 |---|---|---|
@@ -192,7 +192,7 @@ Point 9a's grammar engine walks the tokenizer's tokens as BYTES. Each tokenizer 
 `token_bytes(id)` by its own rule (the Dell's review 2026-11-09 21:35: by class, never by model): json_bpe applies its
 decoder chain's per-token steps up to Fuse; sp_proto maps "▁" to a space and <0xXX> pieces to their byte; tiktoken and
 Tekken read their rank tables; the runtime wrappers hand it on (polymorphic, kept above). Tokenizers are the engine's
-(core/module), not tensor mechanism. Measured: 140 289 to 140 358, +69.
+(core/module), not tensor mechanism. Measured: 140 580 to 140 649, +69.
 
 | file | lines | what it holds |
 |---|---|---|
@@ -205,8 +205,8 @@ Point 9a end to end: `response_format: json_schema` on chat completions compiled
 (rust/nbx_grammar, std only, outside src/neurobrix: its C ABI loaded by the nbx_grammar package's ctypes loader) and
 enforced at every decode step through the seam above. The engine adds the request-side policy: the schema read and
 refused by name (400 naming the construct; json_object and a schema beside tools refused), the grammar constraint over
-the tokenizer's token_bytes (built once per tokenizer and logits width), handed to the decode. Measured: 140 358 to
-140 430, +72.
+the tokenizer's token_bytes (built once per tokenizer and logits width), handed to the decode. Measured: 140 649 to
+140 721, +72.
 
 | file | lines | what it holds |
 |---|---|---|
