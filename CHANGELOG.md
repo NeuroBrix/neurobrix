@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **A laptop with an NVIDIA card names its integrated GPU**: the first backend that drove a card ended the detection, so
+  an integrated Intel or AMD GPU beside an NVIDIA card was not named at all; it is now in the profile with its platform
+  and the reason it is not planned (Intel's own reason for its chip, else: a plan runs one vendor's backend), and the
+  NVIDIA card is planned as before.
+- **A hybrid CPU's performance and efficiency cores are told apart on Linux and Windows**, as on macOS: Linux reads the
+  kernel's hybrid PMU lists (`/sys/devices/cpu_core/cpus`, `cpu_atom/cpus`) and counts physical cores, Windows reads each
+  core's efficiency class; the profile carries `performance_cores` and `efficiency_cores`, and the host's compute threads
+  are its performance cores.
 - **A request served by `neurobrix serve` re-plans after a device out-of-memory, as `run` does**: the component that
   ran out is re-planned once on the memory really free and run again, the finished components' outputs kept, and the
   daemon then serves under the new plan (said in its log). Before, the same request answered the named refusal.

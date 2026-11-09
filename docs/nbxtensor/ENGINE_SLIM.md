@@ -91,6 +91,18 @@ work. Measured: 140 044 (main 317b9217) to 140079, +35.
 | serving/engine.py | +29 | every request runs with `run`'s recovery armed (`_execute`); a re-planned request leaves the daemon on the new plan, its device and its warm or cold serving (`_adopt_plan`) |
 | cli/commands/run.py | +6 | the recovery's arming and the runtime-growth baseline become one function each, called by both entry points (`arm_replan`, `growth_baseline`, `compiled_sampler`) |
 
+## The hardware profile reads more of the machine (2026-11-09): policy
+
+Two points of reste_apres_064 (the owner's rule 1: the profile is the machine's identity card): an integrated GPU beside
+an NVIDIA card is named (point 2), and a hybrid CPU's core classes are read on Linux and Windows (point 3). Both are
+Prism's detection of the machine's facts from what the operating system states (sysfs, the PCI bus,
+GetLogicalProcessorInformationEx); no tensor, kernel or device memory is touched, so nothing of it belongs in nbxtensor.
+No new scan finding. Measured: 140 079 (main d4de640f) to 140 172, +93.
+
+| file | lines | the policy it holds |
+|---|---|---|
+| core/prism/autodetect.py | +93 | `_beside`: the other vendors' GPUs the OS lists beside the driven cards, each refused by name; `_hybrid_cores` (+ `_hybrid_cores_linux`, `_cpu_list`, `_core_efficiency_classes`, `_hybrid_cores_windows`): a hybrid CPU's performance and efficiency cores as the OS states them, filled into the profile on every OS |
+
 ## The scan
 
 `tools/engine_slim_scan.py` (standard library, ast) lists four kinds of finding in `src/neurobrix`, both branches:

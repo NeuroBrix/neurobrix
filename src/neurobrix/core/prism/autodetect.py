@@ -297,9 +297,10 @@ def _complete_measured_fields(path: Path) -> None:
         n = _measure_io_workers()
         if n is not None:                  # unmeasured this time: left out, measured again at the next run
             added["io_workers"] = n
-    # a hybrid CPU's core classes (2026-10-26: the profile is the one source of the host's threads)
-    if "performance_cores" not in cpu and platform.system() == "Darwin" and cpu.get("architecture") == "arm64":
-        added.update({k: v for k, v in _detect_cpu_darwin().items() if k in ("performance_cores", "efficiency_cores")})
+    # a hybrid CPU's core classes (2026-10-26: the profile is the one source of the host's threads), on every OS that
+    # states them (macOS perflevels, Linux's hybrid PMU lists, Windows' efficiency classes); a CPU of one class: none
+    if "performance_cores" not in cpu:
+        added.update(_hybrid_cores(platform.system()))
     if not added:
         return
     cpu.update(added)
@@ -497,6 +498,10 @@ def detect_hardware() -> Dict[str, Any]:
 
     # --- GPUs (OS-specific cascade): the driven ones, and the ones no backend drives, refused by name ---
     found, brand = _detect_gpus(os_type)
+    if _driven(found):
+        # the profile names what else the machine has (a laptop's integrated GPU beside its NVIDIA card): read here, where
+        # the profile is written, never on every launch's detection (`detect_devices`: +200 ms of bus reading measured)
+        found = found + _beside(brand)
     devices, refused = _driven(found), _refusals(found)
     for d in devices:
         if d.get("unified_memory") and "host_memory_mb" not in d:
@@ -587,6 +592,77 @@ def detect_hardware() -> Dict[str, Any]:
 # ============================================================================
 # CPU DETECTION (per-OS)
 # ============================================================================
+
+def _hybrid_cores(os_type: str) -> Dict[str, int]:
+    """{performance_cores, efficiency_cores} of a hybrid CPU, physical cores, as its OS states them; {} for a CPU of one
+    core class (or an OS that states no class)."""
+    if os_type == "Darwin":
+        return {k: v for k, v in _detect_cpu_darwin().items() if k in ("performance_cores", "efficiency_cores")}
+    if os_type == "Linux":
+        return _hybrid_cores_linux(Path("/sys"))
+    if os_type == "Windows":
+        return _hybrid_cores_windows()
+    return {}
+
+
+def _cpu_list(text: str) -> List[int]:
+    """The kernel's CPU-list format ("0-7,16,18-19") as CPU numbers; an empty list for an empty file."""
+    out: List[int] = []
+    for part in text.strip().split(","):
+        if part:
+            a, _, b = part.partition("-")
+            out.extend(range(int(a), int(b or a) + 1))
+    return out
+
+
+def _hybrid_cores_linux(sys_root: Path) -> Dict[str, int]:
+    """An Intel hybrid CPU on Linux: the kernel lists its performance and efficiency CPUs as two perf PMUs
+    (`devices/cpu_core/cpus`, `devices/cpu_atom/cpus`; kernel tools/perf/Documentation/intel-hybrid.txt). Hybrid only
+    when BOTH lists hold a CPU (a part without E-cores exposes an empty `cpu_atom`); counted in physical cores, a
+    logical CPU's core being (package, core_id) from its topology."""
+    classes = {}
+    for key, pmu in (("performance_cores", "cpu_core"), ("efficiency_cores", "cpu_atom")):
+        f = sys_root / "devices" / pmu / "cpus"
+        cpus = _cpu_list(f.read_text()) if f.is_file() else []
+        topo = sys_root / "devices" / "system" / "cpu"
+        classes[key] = len({((topo / f"cpu{n}/topology/physical_package_id").read_text().strip(),
+                             (topo / f"cpu{n}/topology/core_id").read_text().strip()) for n in cpus})
+    return classes if all(classes.values()) else {}
+
+
+def _core_efficiency_classes(buf: bytes) -> List[int]:
+    """Each processor core's EfficiencyClass from GetLogicalProcessorInformationEx(RelationProcessorCore)'s buffer:
+    records of {DWORD Relationship, DWORD Size, PROCESSOR_RELATIONSHIP{BYTE Flags, BYTE EfficiencyClass, ...}} (winnt.h;
+    a higher class is a more performant core, all equal on a CPU of one class)."""
+    import struct
+    out, off = [], 0
+    while off + 10 <= len(buf):
+        relationship, size = struct.unpack_from("<II", buf, off)
+        if size <= 0:
+            raise RuntimeError(f"ZERO FALLBACK: a processor record of size {size} at offset {off}")
+        if relationship == 0:                                    # RelationProcessorCore
+            out.append(buf[off + 9])
+        off += size
+    return out
+
+
+def _hybrid_cores_windows() -> Dict[str, int]:
+    """A hybrid CPU on Windows 10+: GetLogicalProcessorInformationEx gives each core's EfficiencyClass; the highest
+    class is the performance cores, every other the efficiency cores."""
+    import ctypes
+    from ctypes import wintypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    n = wintypes.DWORD(0)
+    k32.GetLogicalProcessorInformationEx(0, None, ctypes.byref(n))
+    buf = ctypes.create_string_buffer(n.value)
+    if not k32.GetLogicalProcessorInformationEx(0, buf, ctypes.byref(n)):
+        raise RuntimeError(f"ZERO FALLBACK: GetLogicalProcessorInformationEx failed ({ctypes.get_last_error()})")
+    classes = _core_efficiency_classes(buf.raw[:n.value])
+    if len(set(classes)) < 2:
+        return {}
+    top = max(classes)
+    return {"performance_cores": classes.count(top), "efficiency_cores": len(classes) - classes.count(top)}
+
 
 def _detect_cpu(os_type: str) -> Dict[str, Any]:
     """Detect CPU info. Always succeeds — every machine has a CPU."""
@@ -1536,6 +1612,23 @@ def _parse_system_profiler() -> List[Dict[str, Any]]:
 # ============================================================================
 # NO BACKEND DROVE A GPU: WHAT THE OPERATING SYSTEM LISTS, REFUSED BY NAME
 # ============================================================================
+
+def _beside(brand: str) -> List[Dict[str, Any]]:
+    """The GPUs of OTHER vendors the operating system lists beside the cards `brand`'s backend drives (a laptop's
+    integrated GPU beside its NVIDIA card), each named and refused: an Intel GPU with its own reason when it has one, else
+    because a plan holds one vendor's backend. Before, the first detector that drove a card ended the cascade and the
+    integrated GPU was not named at all (0.6.3 known limit)."""
+    intel = {(d["pci_id"], d.get("bus")): d for d in _parse_xpu()} if brand != "intel" else {}
+    out = []
+    for gpu in _listed_gpus():
+        vendor = _PCI_VENDOR_MAP.get(f"{gpu['vendor_id']:04x}")
+        if vendor is None or vendor == brand:
+            continue                 # no GPU vendor this engine knows, or the driven vendor's own cards (already listed)
+        own = intel.get((f"{gpu['vendor_id']:04x}:{gpu['device_id']:04x}", gpu.get("bus")))
+        out.append(own if own is not None and "refused" in own else _refused(
+            gpu, f"beside the {brand} cards: a plan runs one vendor's backend, so this {vendor} GPU is not planned"))
+    return out
+
 
 def _parse_listed() -> Tuple[List[Dict[str, Any]], str]:
     """Every GPU the operating system lists, when no backend's detection drove one: each refused by name (an Intel GPU
