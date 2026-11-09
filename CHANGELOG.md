@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   1024's text encoder on a fresh machine with 0.6.3 from PyPI): that constant's bytes were read through a method instead
   of its count.
 
+### Known limits
+- No macOS 14 machine has run this release: the evidence is Accelerate's macOS 14 BLAS simulated on a newer macOS
+  (TinyLlama, whisper and Sana outputs equal by sha) and all 238 Metal kernels of those three models compiled for
+  macOS 14's Metal language (Metal 3.1, -mmacosx-version-min=14.0) without an error.
+
 ## [0.6.3] - 2026-11-09
 
 ### Added
