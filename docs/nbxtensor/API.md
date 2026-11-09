@@ -159,6 +159,20 @@ def chunk_rows(ids, start, rows, absolute) -> List[Tuple[int, int, List[int], Li
     # the chunks of a prefill from `start`: (first position, real rows, ids, positions), the last padded with its last row
 ```
 
+`nbxtensor.memory.kv_host_tier` — the KV cache's host tier, the shared half (pure bookkeeping)
+
+```python
+DEVICE, HOST
+    # where an indexed page lives
+class HostPagePool
+    # `capacity` host pages, each one page index of every layer's K and V contiguous: take, give, free_pages
+def host_tier_pages(budget_bytes, page_bytes_all_layers) -> int
+    # the whole host pages a budget holds; 0 (the tier off) below one page
+class PrefixIndex
+    # the whole pages a cache holds as a tree of page-aligned id blocks: match (longest held prefix), insert, hold /
+    # let_go (a running request's pages), device_victims / offloaded / restored, host_victims / drop, forget_device, counts
+```
+
 `nbxtensor.memory.paged_kv`
 
 ```python
