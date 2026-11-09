@@ -103,3 +103,16 @@ def test_every_launch_goes_through_the_launch_contract(monkeypatch, cards):
         host.close()
     assert launches and all(b > a for a, b in zip([0] + launches, launches)), (launches, seen)
     assert set(seen) == set(devices)
+
+
+def test_importing_the_module_installs_the_launcher_seam():
+    """A fresh process that imports kv_host_pages and launches its kernel first: the launch must go through the
+    library's launcher, never Triton's default driver (Metal refused the NBXTensor argument there; CUDA's imports torch).
+    Red if the import leaves the seam uninstalled."""
+    import subprocess
+    import sys
+    out = subprocess.run([sys.executable, "-c", "from nbxtensor.memory import kv_host_pages; "
+                          "import nbxtensor.backend.launcher as L, sys; print(L._installed, 'torch' in sys.modules)"],
+                         capture_output=True, text=True, env={**__import__("os").environ, "NBX_LAUNCHER": "nbx"})
+    assert out.returncode == 0, out.stderr[-2000:]
+    assert out.stdout.split() == ["True", "False"], out.stdout

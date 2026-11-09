@@ -104,6 +104,13 @@ def restore(k_pools: Sequence, v_pools: Sequence, host: HostPages, host_pages: S
 import triton
 import triton.language as tl
 
+from nbxtensor.backend.launcher import install as _install_launcher
+
+# every kernel[grid] of this module goes through the library's launcher (ops/wrappers.py does the same at import): left
+# to Triton's default driver, the first launch of a fresh process met Triton's own Metal driver, which refuses an
+# NBXTensor argument ('Arg 0: expected an MPS tensor', the Mac 2026-11-09 21:20), and on CUDA upstream's torch-importing one
+_install_launcher()
+
 _BITS = {1: tl.int8, 2: tl.int16, 4: tl.int32}        # the element's bits, copied as an integer of its size
 _NBX_BITS = {1: "int8", 2: "int16", 4: "int32"}
 
