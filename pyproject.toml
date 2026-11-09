@@ -9,7 +9,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "neurobrix"
-version = "0.6.3"
+version = "0.6.4"
 description = "Inference engine that runs language, speech, image and video models from one container format"
 dynamic = ["readme"]
 license = "Apache-2.0"
@@ -51,7 +51,7 @@ dependencies = [
     # path — a path is baked into the wheel as the building machine's file:// URL, which no other machine can install and
     # PyPI refuses. From the repository: `pip install -e nbxtensor -e .`; from wheels: both in one wheelhouse. The version
     # is the one nbxtensor/pyproject.toml holds, raised with it (tests/unit/packaging).
-    "nbxtensor==0.0.8",
+    "nbxtensor==0.0.9",
     # Core compute. macOS has no triton wheel on PyPI: Apple Metal runs a triton built from source with its Metal
     # backend (the Mac's install), which this line must not try to resolve.
     "triton; platform_system != 'Darwin'",

@@ -18,12 +18,35 @@ from nbxtensor.backend import install_metal as M
 
 #: the table as published — this file changes with it, by hand, from the files the release carries
 _R = "https://github.com/NeuroBrix/triton-ext/releases/download/apple-v0.1.0%2Btriton3.8.0/"
+_R14 = "https://github.com/NeuroBrix/triton-ext/releases/download/apple-v0.1.0%2Btriton3.8.0-macos14/"
 EXPECTED_METAL_WHEELS: dict = {
+    "cp310": (
+        (_R14 + "triton-3.8.0%2Bgit4a15f415.nbx1-cp310-cp310-macosx_14_0_arm64.whl",
+         "77d9c1e43c77a490264ad810a0a624f15963b120eff96384bf2c921748352f8c"),
+        (_R14 + "nbx_triton_apple-0.1.0-cp310-cp310-macosx_14_0_arm64.whl",
+         "4ac872b376f113e40c15772aa81a3c95b2e83a412f4bbfb12211129cec03b284"),
+    ),
+    "cp311": (
+        (_R14 + "triton-3.8.0%2Bgit4a15f415.nbx1-cp311-cp311-macosx_14_0_arm64.whl",
+         "8af8dbce2acb4d32de26b3e745696bd52fea6f54723fe96cb229c9feee70668c"),
+        (_R14 + "nbx_triton_apple-0.1.0-cp311-cp311-macosx_14_0_arm64.whl",
+         "fd6a9e309d0f37c719d33e921267dc6413edd406920055fed1563ad942062148"),
+    ),
     "cp312": (
         (_R + "triton-3.8.0%2Bgit4a15f415.nbx1-cp312-cp312-macosx_15_0_arm64.whl",
          "b9084dc93ae7f1468062a03e713d49c9add9a1c9a609fae753a7b32a13b7a223"),
         (_R + "nbx_triton_apple-0.1.0-cp312-cp312-macosx_15_0_arm64.whl",
          "b9ed95c983b220b1fbf1300481b1e2f52a0435c10ee618ef7ccf60a132fe263c"),
+        (_R14 + "triton-3.8.0%2Bgit4a15f415.nbx1-cp312-cp312-macosx_14_0_arm64.whl",
+         "daad78ec3e8a8cfe28dc531f9372aaf7d5a16a347b59d2df2759866f78c7c78f"),
+        (_R14 + "nbx_triton_apple-0.1.0-cp312-cp312-macosx_14_0_arm64.whl",
+         "f09c969635255f67350a3ca4f9ef2fa416934193cea3dd5b2b930ff9d78c6bab"),
+    ),
+    "cp313": (
+        (_R14 + "triton-3.8.0%2Bgit4a15f415.nbx1-cp313-cp313-macosx_14_0_arm64.whl",
+         "4099a5199cc4b0114aae75a325a139acdc737b2d7ed56493c27a3ca4e7a5a703"),
+        (_R14 + "nbx_triton_apple-0.1.0-cp313-cp313-macosx_14_0_arm64.whl",
+         "21d96a90e3d74c6bd4a478610de4135a2fb71bed245f10684ba5eab7829528c7"),
     ),
 }
 
@@ -42,7 +65,11 @@ def test_every_entry_is_a_release_url_of_the_fork_with_a_sha256():
     for tag, entries in M.METAL_WHEELS.items():
         assert re.fullmatch(r"cp3\d+", tag), tag
         names = [url.rsplit("/", 1)[1] for url, _ in entries]
-        assert [n.split("-")[0] for n in names] == ["triton", "nbx_triton_apple"], names   # Triton first, then the backend
+        builds: dict = {}
+        for n in names:
+            builds.setdefault(M._min_macos(n), []).append(n.split("-")[0])
+        for build in builds.values():                                                     # Triton first, then the backend
+            assert build == ["triton", "nbx_triton_apple"], names
         for (url, sha), name in zip(entries, names):
             assert url.startswith(M.RELEASES) and url.count("/") == M.RELEASES.count("/") + 1, url
             assert re.fullmatch(r"[A-Za-z0-9_.]+-[^-]+-%s-%s-macosx_\d+_\d+_arm64\.whl" % (tag, tag), name), name
@@ -115,3 +142,45 @@ def test_a_mac_older_than_the_wheels_tag_is_refused_by_name(monkeypatch):
         M.wheels("0.0.4")
     _mac(monkeypatch, macos="27.1")
     assert M.wheels("0.0.4") == [(url, "a" * 64)]
+
+
+def test_a_tag_with_two_builds_installs_the_newest_one_its_macos_satisfies(monkeypatch):
+    """A Python tag carries a macOS 15.0 build and a macOS 14.0 build (the same Triton and backend, built against an LLVM
+    of each minimum; their compiled kernels proven byte-identical, 2026-11-08): a Mac on 15 or later installs the 15.0
+    build, a Mac on 14 the 14.0 build, a Mac on 13 is refused naming 14. Red if the table holds one build per tag only
+    (macOS 14 refused) or if the 14.0 build is chosen on 15 (the published build no longer served where it runs)."""
+    tag = f"cp{sys.version_info.major}{sys.version_info.minor}"
+    t15 = f"triton-3.8.0-{tag}-{tag}-macosx_15_0_arm64.whl"
+    a15 = f"nbx_triton_apple-0.1.0-{tag}-{tag}-macosx_15_0_arm64.whl"
+    t14 = f"triton-3.8.0-{tag}-{tag}-macosx_14_0_arm64.whl"
+    a14 = f"nbx_triton_apple-0.1.0-{tag}-{tag}-macosx_14_0_arm64.whl"
+    monkeypatch.setattr(M.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(M.platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(M, "METAL_WHEELS", {tag: ((t15, "a" * 64), (a15, "b" * 64), (t14, "c" * 64), (a14, "d" * 64))})
+    monkeypatch.setattr(M, "_macos_version", lambda: (15, 1))
+    assert M.wheels("0.0.8") == [(t15, "a" * 64), (a15, "b" * 64)]
+    monkeypatch.setattr(M, "_macos_version", lambda: (14, 6))
+    assert M.wheels("0.0.8") == [(t14, "c" * 64), (a14, "d" * 64)]
+    monkeypatch.setattr(M, "_macos_version", lambda: (13, 5))
+    with pytest.raises(M.InstallMetalRefused, match="macOS 14.0 required"):
+        M.wheels("0.0.8")
+
+
+@pytest.mark.parametrize("tag", ["cp310", "cp311", "cp312", "cp313"])
+def test_the_published_table_resolves_every_tag_on_macos_14_and_15(monkeypatch, tag):
+    """The published table, not a fake one: CPython 3.10-3.13 each resolve on macOS 14 to the -macos14 release's 14.0
+    build; on macOS 15 CPython 3.12 resolves to the 15.0 build and the others stay on the 14.0 build; macOS 13 is refused
+    naming 14. Red if a tag is missing (refused by name), if a tag resolves to a build its macOS cannot install, or if
+    CPython 3.12 on macOS 15 loses the 15.0 build."""
+    monkeypatch.setattr(M, "_python_tag", lambda: tag)
+    _mac(monkeypatch, macos="14.6")
+    on14 = M.wheels("0.0.9")
+    assert [M._min_macos(u) for u, _ in on14] == [(14, 0), (14, 0)]
+    assert [u.rsplit("/", 1)[1].split("-")[0] for u, _ in on14] == ["triton", "nbx_triton_apple"]
+    assert all(u.startswith(M.RELEASES + "apple-v0.1.0%2Btriton3.8.0-macos14/") and f"-{tag}-{tag}-" in u for u, _ in on14)
+    _mac(monkeypatch, macos="15.4")
+    on15 = M.wheels("0.0.9")
+    assert [M._min_macos(u) for u, _ in on15] == ([(15, 0), (15, 0)] if tag == "cp312" else [(14, 0), (14, 0)])
+    _mac(monkeypatch, macos="13.6")
+    with pytest.raises(M.InstallMetalRefused, match=r"macOS 14\.0 required for now.*this Mac: macOS 13\.6"):
+        M.wheels("0.0.9")

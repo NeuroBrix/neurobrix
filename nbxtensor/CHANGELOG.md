@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.9] - 2026-11-09
+
+### Fixed
+- **`python -m nbxtensor install-metal` installs the macOS 14 Metal wheels and CPython 3.10-3.13**: 0.0.8 carried the
+  macOS 15 / CPython 3.12 build only and refused every other Python by name. The table now holds the triton-ext release
+  apple-v0.1.0+triton3.8.0-macos14 (Triton 3.8.0 and nbx-triton-apple 0.1.0, macOS 14.0 arm64, CPython 3.10, 3.11,
+  3.12 and 3.13, each sha256 read on the downloaded file and equal to the release's SHA256SUMS) beside the macOS 15.0
+  build of CPython 3.12. A Python tag may carry one build per minimum macOS: the Mac installs the newest build its
+  macOS satisfies (CPython 3.12 on macOS 15 or later keeps the 15.0 build), and a Mac older than every build is
+  refused naming the macOS it needs.
+
 ## [0.0.8] - 2026-11-09
 
 ### Added
