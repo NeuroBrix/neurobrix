@@ -71,3 +71,35 @@ def test_the_paths_agree_bit_exact(pinned, out_fn, in_fn, cards, host_pages):
         assert [p.data_ptr() for p in (*k, *v)] == addrs
     finally:
         host.close()
+
+
+@pytest.mark.parametrize("cards", [1, 2])
+def test_every_launch_goes_through_the_launch_contract(monkeypatch, cards):
+    """backend/runtime.set_device is called before every Triton launch (it aligns Triton's driver with the tensor's
+    device). The gathered path skipped it: on Metal the FIRST gathered launch of a fresh process failed ("Arg 0: expected
+    an MPS tensor") until another op had run (the Mac, 2026-11-09 21:16). Red if a launch is not preceded by it."""
+    _cards(cards)
+    from nbxtensor.backend import runtime
+    from nbxtensor.memory import kv_host_pages as M
+    devices = [0] * LAYERS if cards == 1 else [0, 0, 1, 1]
+    rng = np.random.default_rng(3)
+    k, v = _pools(rng, DK, devices), _pools(rng, DV, devices)
+    seen, launches = [], []
+    real_set, real_kernel = runtime.set_device, M._kv_page_rows_kernel
+
+    class _Spy:
+        def __getitem__(self, grid):
+            def go(*a, **kw):
+                launches.append(len(seen))                   # how many contract calls preceded this launch
+                return real_kernel[grid](*a, **kw)
+            return go
+    monkeypatch.setattr(runtime, "set_device", lambda t: (seen.append(t._device_idx), real_set(t)))
+    monkeypatch.setattr(M, "_kv_page_rows_kernel", _Spy())
+    host = HostPages(2, LAYERS, HEADS * TOKENS * DK * 2, HEADS * TOKENS * DV * 2, pinned=False)
+    try:
+        M.offload_gathered(k, v, [1, 2], host, [0, 1])
+        M.restore_scattered(k, v, host, [0, 1], [3, 4])
+    finally:
+        host.close()
+    assert launches and all(b > a for a, b in zip([0] + launches, launches)), (launches, seen)
+    assert set(seen) == set(devices)

@@ -177,6 +177,7 @@ def _address_table(pools):
 
 
 def _gathered(k_pools, v_pools, host: HostPages, pages, host_pages, to_host: bool, fence=None, owner=None) -> None:
+    from nbxtensor.backend.runtime import set_device as launch_on     # Triton's driver on the tensor's device
     from nbxtensor.dtype.nbx_dtype import NBXDtype
     from nbxtensor.tensor import NBXTensor as _T
     if len(pages) != len(host_pages):
@@ -213,6 +214,7 @@ def _gathered(k_pools, v_pools, host: HostPages, pages, host_pages, to_host: boo
                 args = (table, page_ids, stage, nb // elem, row_len, len(layers) * (kb + vb) // elem,
                         (kb + vb) // elem, base // elem)
                 if to_host:
+                    launch_on(stage)                         # the launch contract (backend/runtime.set_device)
                     _kv_page_rows_kernel[grid](*args, TO_STAGE=True, ELEM=_BITS[elem],
                                                BLOCK=triton.next_power_of_2(row_len))
             seg = len(layers) * (kb + vb)                    # this device's slice of one host page, per run
@@ -231,6 +233,7 @@ def _gathered(k_pools, v_pools, host: HostPages, pages, host_pages, to_host: boo
                 for (which, pools, nb, base), table in zip((("k", k_pools, kb, 0), ("v", v_pools, vb, kb)), tables):
                     rows = int(np.prod(pools[layers[0]].shape[1:-1]))
                     row_len = int(pools[layers[0]].shape[-1])
+                    launch_on(stage)
                     _kv_page_rows_kernel[(n, len(layers), rows)](
                         table, page_ids, stage, nb // elem, row_len, len(layers) * (kb + vb) // elem,
                         (kb + vb) // elem, base // elem, TO_STAGE=False, ELEM=_BITS[elem],
