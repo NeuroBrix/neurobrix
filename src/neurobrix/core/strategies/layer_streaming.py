@@ -90,14 +90,9 @@ def _weights_bytes(executor) -> int:
     """The bytes of the weights an executor holds now (torch or NBXTensor)."""
     n = 0
     for k, t in (getattr(executor, "_weights", None) or {}).items():
-        # "_arenas" (Triton) holds the arenas the weights are views of, not a weight (the convention of facts_probe and
-        # graph_executor's own counts); the old `or 0` chain counted it 0 by accident
-        if t is not None and k != "_arenas":
-            # NBXTensor's nbytes is a METHOD (ATen's API), torch's an int: the NBXTensor's own count first (Flex.1-alpha
-            # triton died on int(method) at its first streamed reload, 2026-11-04), a count of 0 included (a zero-size
-            # constant: Sana's text encoder, 0.6.3's first launch from PyPI died on int(method), 2026-11-09)
-            own = getattr(t, "_nbytes", None)
-            n += int(t.nbytes if own is None else own)
+        if t is not None and k != "_arenas":           # the arenas the Triton weights are views of: not a weight
+            # NBXTensor's own count (0 included: Sana's zero-size constants, 2026-11-09), torch's nbytes int otherwise
+            n += int(t.nbytes if getattr(t, "_nbytes", None) is None else t._nbytes)
     return n
 
 
