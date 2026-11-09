@@ -233,6 +233,8 @@ class TritonAutoregressiveHandler:
         # the plan's chunk is a SESSION's (its turns' bytes must not depend on where a turn ended); a one-shot request
         # prefills in one pass
         chunk = getattr(kv_plan, "prefill_chunk", None) if kv_session is not None else None
+        if kv_session is not None and self.ctx.kv_tier is not None and hasattr(kv_session.cache, "tier_resume"):
+            self.ctx.kv_tier.prepare(kv_session, kv_session.cache, prompt_ids)   # a parked continuation restored
         start = kv_session.match(prompt_ids) if kv_session is not None else 0
         hidden = session.prefill(input_ids, batch_size, start=start, chunk=chunk,
                                  ids=prompt_ids if (start or chunk) else None)
@@ -748,6 +750,9 @@ class TritonAutoregressiveHandler:
                 # a serving session's positions stay while it holds the cache (core/state/kv_session.py); every
                 # other request starts empty
                 if kv_session is None or kv_session.held(executor) is not kv_cache:
+                    prev = kv_cache.holder           # the conversation the clear drops, parked first when a tier serves
+                    if self.ctx.kv_tier is not None and prev is not None and kv_cache.tier_length():
+                        self.ctx.kv_tier.park(prev.token_ids, kv_cache)
                     kv_cache.clear()
             if kv_session is not None:
                 kv_session.bind(executor, kv_cache, kv_cache)

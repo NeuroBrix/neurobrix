@@ -49,6 +49,13 @@ class HostPagePool:
         self._free.append(page)
 
 
+def sequence_pages(tables, batch: int) -> List[int]:
+    """The device pages of a serving cache's one sequence, in position order (a cache of the tier protocol)."""
+    if batch != 1:
+        raise RuntimeError(f"ZERO FALLBACK: the KV host tier serves one sequence; the cache holds {batch}")
+    return list(tables[0].pages)
+
+
 def host_tier_pages(budget_bytes: int, page_bytes_all_layers: int) -> int:
     """How many host pages a budget holds: whole pages only; 0 (the tier off) below one page."""
     if page_bytes_all_layers <= 0:

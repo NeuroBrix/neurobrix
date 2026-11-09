@@ -91,7 +91,7 @@ class FakeEngine:
     def complete_turn(self, messages, tools=None, **kw):
         self.calls.append(("complete", messages, tools, kw))
         ids = self._decode(kw.get("max_tokens"))
-        return {"text": self.tokenizer.decode(ids), "token_ids": ids, "prompt_tokens": 7,
+        return {"text": self.tokenizer.decode(ids), "token_ids": ids, "prompt_tokens": 7, "cached_tokens": 4,
                 "max_tokens": kw.get("max_tokens") or 64}
 
     def complete(self, messages, tools=None, **kw):
@@ -225,7 +225,8 @@ def test_a_chat_completion_carries_the_answer_its_usage_and_the_op_id(make):
     assert body["object"] == "chat.completion"
     assert body["choices"][0]["message"] == {"role": "assistant", "content": "Hello world."}
     assert body["choices"][0]["finish_reason"] == "stop"
-    assert body["usage"] == {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10}
+    assert body["usage"] == {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10,
+                             "prompt_tokens_details": {"cached_tokens": 4}}     # held on the card or the host tier
     op_id = headers["X-NeuroBrix-Op-Id"]
     assert body["id"] == f"chatcmpl-{op_id}"
     _, messages, _, decode = srv._engine.calls[-1]

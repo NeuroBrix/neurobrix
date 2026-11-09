@@ -205,6 +205,9 @@ class InferenceEngine:
         from neurobrix.cli.commands.run import growth_baseline
         self._growth = growth_baseline(self.mode, hw_profile)        # read before the executor exists, as `run` does
         self._executor = RuntimeExecutor(self._pkg, self._plan, mode=self.mode)
+        from neurobrix.core.state.kv_tier import kv_tier_for
+        self._executor.kv_tier, tier_note = kv_tier_for(self._plan, hw_profile)    # conversations parked off the card
+        _log.debug(f"[NeuroBrix] {tier_note}")
 
         # Set persistent mode BEFORE setup/execute so GraphExecutors get the flag
         if self._warm_serving:
@@ -541,8 +544,9 @@ class InferenceEngine:
         parser = select_parser(self.chat_template_text())
         keep = [*parser.openings(), parser.end_marker or ""] if parser is not None else []
         text = MarkerDecoder(tokenizer, keep).decode(generated) if keep else result.get("text", "")
+        turn = self._agent_kv.last_turn or {}
         return {"text": text, "token_ids": list(generated), "prompt_tokens": len(token_ids),
-                "max_tokens": max_tokens}
+                "cached_tokens": int(turn.get("matched", 0)), "max_tokens": max_tokens}
 
     def chat_template_text(self) -> str:
         """The embedded chat template's text ('' when absent)."""

@@ -739,6 +739,8 @@ class AutoregressiveHandler(FlowHandler):
         # prefills in one pass
         chunk = getattr(getattr(self.ctx.plan, "kv_cache_plan", None), "prefill_chunk", None) \
             if kv_session is not None else None
+        if kv_session is not None and self.ctx.kv_tier is not None and hasattr(kv_session.cache, "tier_resume"):
+            self.ctx.kv_tier.prepare(kv_session, kv_session.cache, prompt_ids)   # a parked continuation restored
         start = kv_session.match(prompt_ids) if kv_session is not None else 0
 
         with torch.inference_mode():

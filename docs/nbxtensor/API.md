@@ -168,6 +168,8 @@ class HostPagePool
     # `capacity` host pages, each one page index of every layer's K and V contiguous: take, give, free_pages
 def host_tier_pages(budget_bytes, page_bytes_all_layers) -> int
     # the whole host pages a budget holds; 0 (the tier off) below one page
+def sequence_pages(tables, batch) -> List[int]
+    # a serving cache's one sequence's device pages in position order (refused for a batch > 1)
 class PrefixIndex
     # the whole pages a cache holds as a tree of page-aligned id blocks: match (longest held prefix), insert, hold /
     # let_go (a running request's pages), device_victims / offloaded / restored, host_victims / drop, forget_device, counts
@@ -195,6 +197,7 @@ def restore_scattered(k_pools, v_pools, host, host_pages, pages, fence=None, own
 ```python
 class PagedTritonKVCache
     # per-layer page pools on each layer's card, the block table, append/decode through it, truncate, gather_pages; on_reallocate(uid, generation)
+    # the host tier's protocol: tier_layout, tier_length, tier_offload, tier_restore, tier_resume
 def chunk_mask(device_idx, start, rows, keys, memo) -> NBXTensor
     # a prefill chunk's fp32 0/-inf mask [rows, keys], causal at the cached length, the keys past the end masked
 def require_causal_mask(attn_mask, rows, memo, where) -> None

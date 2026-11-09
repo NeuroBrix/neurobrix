@@ -55,6 +55,11 @@ class KVSession:
         self._owner, self._handle, self._cache = owner, handle, cache
         cache.holder = self
 
+    @property
+    def cache(self) -> Any:
+        """The cache object this session last bound (carrying its `holder` mark), or None."""
+        return self._cache
+
     # -- the turn -------------------------------------------------------------------------------------------------------
     def match(self, ids: Sequence[int]) -> int:
         """Positions of `ids` the cache already holds: the longest common prefix with the held ids. Never the whole

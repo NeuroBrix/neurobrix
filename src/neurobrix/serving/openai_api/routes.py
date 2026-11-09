@@ -405,7 +405,10 @@ def _usage(result, ids) -> Optional[Dict[str, int]]:
     if result.get("prompt_tokens") is None or ids is None:
         return None
     p, c = int(result["prompt_tokens"]), len(ids)
-    return {"prompt_tokens": p, "completion_tokens": c, "total_tokens": p + c}
+    out = {"prompt_tokens": p, "completion_tokens": c, "total_tokens": p + c}
+    if result.get("cached_tokens") is not None:          # held on the card or restored from the host tier
+        out["prompt_tokens_details"] = {"cached_tokens": int(result["cached_tokens"])}
+    return out
 
 
 def _stream_chat(door, handler, method, model, created, reader, work, tools, include_usage) -> None:

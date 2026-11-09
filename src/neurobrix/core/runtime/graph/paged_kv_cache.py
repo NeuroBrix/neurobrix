@@ -167,6 +167,45 @@ class PagedKVCache:
             vs.append(vp[pages].permute(1, 0, 2, 3).reshape(vp.shape[1], positions, vp.shape[3]))
         return torch.stack(ks), torch.stack(vs)
 
+    # -- the host tier's protocol (nbxtensor.memory.kv_host_tier / kv_host_pages; one sequence: a serving session) ----
+    def tier_layout(self):
+        """(layers, K page bytes, V page bytes) of one page index, once every layer's pools exist."""
+        if len(self.k_pools) != self.config.num_layers:
+            raise RuntimeError("ZERO FALLBACK: the KV host tier read the cache's layout before every layer prefilled")
+        kp, vp = self.k_pools[0], self.v_pools[0]
+        return self.config.num_layers, kp[0].numel() * kp.element_size(), vp[0].numel() * vp.element_size()
+
+    def tier_length(self) -> int:
+        return self._seq_len
+
+    def _host_view(self, host, host_page: int, layer: int, which: str, pool: torch.Tensor) -> torch.Tensor:
+        off = host.address(host_page, layer, which) - host.buf.ctypes.data
+        nb = host.k_page_bytes if which == "k" else host.v_page_bytes
+        return torch.from_numpy(host.buf[off:off + nb]).view(pool.dtype).view(tuple(pool.shape[1:]))
+
+    def tier_offload(self, pages, host, host_pages) -> None:
+        for layer in range(self.config.num_layers):
+            kp, vp = self.k_pools[layer], self.v_pools[layer]
+            for page, hp in zip(pages, host_pages):
+                self._host_view(host, hp, layer, "k", kp).copy_(kp[int(page)])
+                self._host_view(host, hp, layer, "v", vp).copy_(vp[int(page)])
+
+    def tier_restore(self, host, host_pages, pages) -> None:
+        for layer in range(self.config.num_layers):
+            kp, vp = self.k_pools[layer], self.v_pools[layer]
+            for hp, page in zip(host_pages, pages):
+                kp[int(page)].copy_(self._host_view(host, hp, layer, "k", kp))
+                vp[int(page)].copy_(self._host_view(host, hp, layer, "v", vp))
+
+    def tier_resume(self, length: int) -> None:
+        """The sequence holds `length` positions restored from the host: their pages granted (every layer's pool
+        extended to them), the lengths moved."""
+        self._reserve(int(length))
+        for layer in range(self.config.num_layers):
+            self._layer_pools(layer, self.k_pools[layer].device)
+            self.lens[layer] = int(length)
+        self._seq_len = int(length)
+
     def clear(self) -> None:
         for t in self.tables:
             t.free()

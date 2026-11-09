@@ -386,6 +386,30 @@ class PagedTritonKVCache:
 
     # -- lifetime -----------------------------------------------------------------------------------------------------
 
+    # -- the host tier's protocol (memory/kv_host_tier.py, kv_host_pages.py; one sequence: a serving session) ---------
+    def tier_layout(self):
+        """(layers, K page bytes, V page bytes) of one page index, once every layer's pools exist."""
+        if any(p is None for p in self.k_pools):
+            raise RuntimeError("ZERO FALLBACK: the KV host tier read the cache's layout before every layer prefilled")
+        return self.num_layers, *(p.numel() // int(p.shape[0]) * p.element_size() for p in (self.k_pools[0], self.v_pools[0]))
+
+    def tier_length(self) -> int:
+        return self.length
+
+    def tier_offload(self, pages, host, host_pages) -> None:
+        from nbxtensor.memory.kv_host_pages import offload
+        offload(self.k_pools, self.v_pools, pages, host, host_pages)
+
+    def tier_restore(self, host, host_pages, pages) -> None:
+        from nbxtensor.memory.kv_host_pages import restore
+        restore(self.k_pools, self.v_pools, host, host_pages, pages, self.fence, self)
+
+    def tier_resume(self, length: int) -> None:
+        """The sequence holds `length` positions restored from the host: their pages granted, the lengths moved."""
+        self._reserve(int(length))
+        self.length = int(length)
+        self._write_lens(self.length)
+
     def clear(self) -> None:
         """The request ends: its pages back to the pool (at once on CUDA), the lengths to zero. Buffers keep their
         addresses."""

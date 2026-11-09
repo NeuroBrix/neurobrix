@@ -76,6 +76,9 @@ class FlowContext:
     # A serving session's KV cache record (core/state/kv_session.KVSession): the autoregressive flows keep the
     # session's positions between its turns and prefill only what they do not hold. None for every other request.
     kv_session: Any = None
+    # The serving daemon's KV host tier (core/state/kv_tier.KVTier), or None: a conversation that leaves the cache is
+    # parked in host memory and restored when it comes back
+    kv_tier: Any = None
 
     def compute_dtype(self) -> 'torch.dtype':
         """Prism-RESOLVED compute dtype for flow-level tensor synthesis, as a torch.dtype — the

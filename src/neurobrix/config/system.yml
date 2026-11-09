@@ -91,6 +91,9 @@ serving:
   # read once per token, so this bounds ONE decode step plus the flow's own wind-down; chosen
   # far above a token step of a streamed plan (seconds), and below a client's patience.
   cancel_ack_timeout_s: 120
+  # The KV host tier's cap in MB (core/state/kv_tier.py): null = the budget the profile gives (installed RAM less the
+  # system's share less the plan's host side); a number caps it; 0 turns the tier off. The user's choice, never ours.
+  kv_host_tier_mb: null
   # Finished operations the table remembers, so a late `cancel` gets `already_finished` /
   # `already_cancelled` instead of `unknown_op`. The oldest is forgotten first.
   operations_retained: 256

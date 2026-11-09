@@ -64,6 +64,7 @@ class RuntimeExecutor:
     Flow handlers (in flow/) contain the actual execution logic.
     Helper classes handle input resolution, synthesis, output extraction, and CFG.
     """
+    kv_tier = None      # the serving daemon's KV host tier (core/state/kv_tier.py), set by serving per instance
 
     def __init__(self, runtime_package: RuntimePackage, execution_plan: Any, mode: str = "compiled"):
         """
@@ -411,6 +412,7 @@ class RuntimeExecutor:
             persistent_mode=self._persistent_mode,
             binned_request=self._binned_request,
             kv_session=kv_session,
+            kv_tier=self.kv_tier,
         )
 
         self._arm_random_streams(inputs, merged_defaults)
