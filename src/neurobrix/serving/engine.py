@@ -605,6 +605,7 @@ class InferenceEngine:
         """Return engine status info."""
         status = {
             "model": self.model_name,
+            "name": self.one_name(),            # the model's one name, what a user reads (`model`: the cache entry)
             "hardware": self.hardware_id,
             "family": self._family,
             "loaded": self._is_loaded,
@@ -625,6 +626,12 @@ class InferenceEngine:
             status["context"] = self._session.get_context_info()
 
         return status
+
+    def one_name(self) -> str:
+        """The model's one name (its recorded hub name; nbx/names.py), the served cache entry's otherwise."""
+        from neurobrix.core.paths import cache_dir
+        from neurobrix.nbx.names import name_of
+        return name_of(cache_dir(), self.model_name)
 
     @property
     def is_loaded(self) -> bool:

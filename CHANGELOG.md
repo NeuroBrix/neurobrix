@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **`neurobrix run` against a daemon ends at the daemon's answer**: after the daemon serving the asked model answered an
+  error, the run went on to a cold attempt, refused with "a serving daemon is running with another model" for the very
+  model it serves; the daemon's answer is now the run's (exit 1). The daemon shows the model by its one name (`serve`'s
+  line, `chat`'s status), and a socket path longer than the operating system's AF_UNIX addresses hold is refused naming
+  the path and `NEUROBRIX_HOME`, not Python's raw error.
 - **A video's VAE streamed in time returns each chunk's freed memory to the device**: the chunks' freed blocks stayed
   cached by the allocator from one chunk to the next, so a first compiled run on an Apple GPU met an out-of-memory in a
   plan that fits (mochi-1-preview: re-planned, 331 s; now green on its first plan, 239 s). No output changes.

@@ -115,6 +115,18 @@ record are engine policy; no tensor work. Measured: 140 172 (main 7f4fed4b) to 1
 | cli/commands/registry.py, cli/__init__.py | +25, +4 | `import`: the entry found by the hub's sha, `--container` verified and never deleted by `--no-keep`, the sha recorded at install |
 | nbx/names.py | +21 | the record's `container_sha256`; `entry_of_container` |
 
+## The daemon's answers named (2026-11-09): policy
+
+The Mac's findings validating point 8 on MPS (20:34): the daemon's error ends a run (no cold attempt after it), the
+model is shown by its one name where a user reads it (serve's line, chat's status), and a socket path longer than
+AF_UNIX holds is refused by name. Serving policy, no tensor work. Measured: 140 222 (main 931ae432) to 140 246, +24.
+
+| file | lines | the policy it holds |
+|---|---|---|
+| serving/server.py | +16 | `_bind`: the long socket path refused naming the path and NEUROBRIX_HOME; the ready record's `name` |
+| serving/engine.py | +7 | `one_name`, the status's `name` |
+| cli/commands/run.py, cli/commands/chat.py | +1, 0 | the daemon's error is the run's answer; chat's status shows the name |
+
 ## The scan
 
 `tools/engine_slim_scan.py` (standard library, ast) lists four kinds of finding in `src/neurobrix`, both branches:

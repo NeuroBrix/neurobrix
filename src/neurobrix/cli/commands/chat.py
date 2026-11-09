@@ -113,7 +113,7 @@ def cmd_chat(args):
                 elif cmd == "/status":
                     try:
                         st = client.status()
-                        print(f"[Status] Model: {st.get('model')}")
+                        print(f"[Status] Model: {st.get('name')}")
                         print(f"[Status] Family: {st.get('family')}")
                         print(f"[Status] Mode: {st.get('mode')}")
                         print(f"[Status] VRAM: {st.get('vram_used_gb', '?')} GB")

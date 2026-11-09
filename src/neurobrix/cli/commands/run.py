@@ -120,9 +120,10 @@ def _try_warm_path(args) -> bool:
         result = client.generate(prompt=args.prompt or "", **kwargs)
         client.close()
     except RuntimeError as e:
+        # the daemon serving this very model answered: that is the run's answer, never followed by a cold attempt
         log.error(f"Error: the daemon answered: {e}")
         client.close()
-        return False
+        sys.exit(1)
 
     # Display result — data-driven by family output_format (resolved above)
     timing = result.get("timing", {})

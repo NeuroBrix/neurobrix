@@ -354,6 +354,9 @@ class ServingDaemon:
         if error is not None:
             rec["error"] = f"{type(error).__name__}: {error}"
         else:
+            from neurobrix.core.paths import cache_dir
+            from neurobrix.nbx.names import name_of
+            rec["name"] = name_of(cache_dir(), self._engine.model_name)     # the model's one name, what a user reads
             rec["family"] = self._engine.family or "unknown"
             rec["serving"] = "warm" if self._engine._warm_serving else "cold"
             if self._door is not None:
@@ -418,7 +421,7 @@ class ServingDaemon:
             if IS_WINDOWS:
                 # Allow port reuse on Windows (prevents "address already in use" after crash)
                 server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            server_socket.bind(INSTANCE.bind_address())
+            _bind(server_socket, INSTANCE.bind_address())
             # A named Windows instance took the port the OS handed out: record
             # it where its clients read it (Studio request 8).
             INSTANCE.record_bound_port(server_socket)
@@ -862,6 +865,19 @@ class ServingDaemon:
         _log.debug("[Daemon] Cleaned up")
 
 
+def _bind(sock, address) -> None:
+    """Bind the daemon's socket; a Unix socket path longer than the OS's AF_UNIX address holds (sun_path, sys/un.h:
+    104 bytes on macOS, 108 on Linux) is refused naming the path and what to change, not left as Python's raw error."""
+    try:
+        sock.bind(address)
+    except OSError as e:
+        if "path too long" not in str(e):
+            raise
+        raise RuntimeError(f"the daemon's socket path is {len(str(address).encode())} bytes ({address}), longer than "
+                           f"this operating system's AF_UNIX addresses hold ({e}): set NEUROBRIX_HOME to a shorter "
+                           f"directory") from e
+
+
 class _ForkedChild:
     """The `poll()` of a forked child, so `wait_ready` reads its exit code."""
 
@@ -921,7 +937,7 @@ def _announce(record: Dict[str, Any]) -> bool:
     if record.get("state") != "ready":
         _log.error(f"Error: the daemon did not start: {record.get('error')}")
         return False
-    _log.info(f"Serving {record['model']} ({record['family']}, {record['serving']} serving) — neurobrix chat to talk, "
+    _log.info(f"Serving {record['name']} ({record['family']}, {record['serving']} serving) — neurobrix chat to talk, "
               f"neurobrix stop to end.")
     if record.get("http"):
         _log.info(f"OpenAI-compatible API: {record['http']['base_url']}")
