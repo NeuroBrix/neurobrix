@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Constrained decoding on the OpenAI API: `response_format: json_schema`, `tool_choice: required` or a named
+  function, `parallel_tool_calls: false`**: the model can only write what the schema or the template's tool-call format
+  allows, at every token, on both engines. JSON Schema: objects (properties, required; no other properties are
+  generated), arrays (items, minItems, maxItems), strings, numbers, integers, booleans, null, enum, const, anyOf whose
+  alternatives start differently, $ref into $defs; any other keyword is refused by name (400), never ignored. Tool
+  calls follow the format the model's chat template defines (`<tool_call>` JSON, Qwen3-Coder's XML, granite's list).
+  The grammar engine is NeuroBrix's own (rust/nbx_grammar); a machine without it answers these requests 501, by name.
 - **A served conversation that leaves the KV cache comes back from host memory**: when another conversation takes the
   daemon's cache, the whole pages the first one held are parked in host memory and copied back when it returns, so its
   next turn prefills only what is new; the answers are the same tier on or off. The host memory it may hold is bounded

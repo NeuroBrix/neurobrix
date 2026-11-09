@@ -46,6 +46,8 @@ class Vocab:
         self.words = (self.size + 31) // 32
         self._h = _lib.ng_vocab_new(data, lens.ctypes.data_as(ctypes.POINTER(_U32)), self.size,
                                     e.ctypes.data_as(ctypes.POINTER(_U32)), len(e))
+        if not self._h:
+            raise ValueError(f"nbx_grammar: an end-of-sequence id of {list(eos)} lies past the {self.size} tokens")
 
     def __del__(self):
         if getattr(self, "_h", None):

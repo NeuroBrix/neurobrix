@@ -21,6 +21,22 @@ class Constraint(Protocol):
         """The token chosen at this step; refused by name when the mask did not allow it."""
 
 
+def step_mask(constraint, vocab: int) -> np.ndarray:
+    """The constraint's words for the next step, checked once for both engines: ceil(vocab / 32) int32 words, at
+    least one token allowed (an empty mask refused by name, before either engine applies it)."""
+    words = np.ascontiguousarray(constraint.mask(int(vocab)), dtype=np.int32).reshape(-1)
+    if words.shape[0] != -(-int(vocab) // 32):
+        raise RuntimeError(f"ZERO FALLBACK: the constraint gave {words.shape[0]} mask words for {vocab} logits")
+    if not words.any():
+        raise RuntimeError("ZERO FALLBACK: the constraint allows no token at this step (an empty mask)")
+    return words
+
+
+def allowed_tokens(words: np.ndarray, vocab: int) -> np.ndarray:
+    """The words decoded to one bool per token (bit v % 32 of word v // 32) — the compiled engine's mask."""
+    return np.unpackbits(words.astype("<i4").view(np.uint8), bitorder="little")[:int(vocab)].astype(bool)
+
+
 def compile_json_schema(text: str):
     """A JSON schema compiled by our grammar engine (nbx_grammar, rust/); ValueError naming the construct it cannot
     enforce; a refusal by name when the engine is not installed."""
@@ -52,7 +68,7 @@ class GrammarConstraint:
         self._vocab = None
 
     def _vocabulary(self, width: int):
-        key = (id(self._tokenizer), int(width))
+        key = (self._tokenizer, int(width), tuple(self._eos))      # the object itself: an id is reused once freed
         if key not in self._cache:
             import nbx_grammar
             # the logits may be wider than the tokenizer (padded heads): an id it does not know has no bytes

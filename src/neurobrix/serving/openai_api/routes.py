@@ -85,6 +85,13 @@ def _response_grammar(fmt: Any):
         return compile_json_schema(json.dumps(schema))
     except ValueError as e:
         raise errors.ApiError(400, f"response_format: {e}", param="response_format") from e
+    except RuntimeError as e:          # the grammar engine absent on this machine: refused by name, never a 500
+        raise _not_installed("response_format", e) from e
+
+
+def _not_installed(param: str, e: Exception) -> errors.ApiError:
+    return errors.ApiError(501, f"constrained decoding is not installed on this machine ({e})", type_="server_error",
+                           param=param, code="constrained_decoding_not_installed")
 
 
 def _tool_grammar(parser, tools, tokenizer, named, parallel, reasoning_end=None):
@@ -93,12 +100,14 @@ def _tool_grammar(parser, tools, tokenizer, named, parallel, reasoning_end=None)
     from neurobrix.agent.envelope import encoder, envelope
     from neurobrix.core.state.constraint import compile_description
     try:
-        env = envelope(parser.format_name, tools, encoder(tokenizer), named, parallel)
+        env = envelope(parser, tools, encoder(tokenizer), named, parallel)
         if reasoning_end:                  # a prompt that opens in the reasoning: it closes first, then the call(s)
             env = {"seq": [{"until": reasoning_end}, {"lit": "\n\n"}, env]}
         return compile_description(json.dumps(env))
     except ValueError as e:
         raise errors.ApiError(400, f"tools: {e}", param="tools") from e
+    except RuntimeError as e:
+        raise _not_installed("tool_choice", e) from e
 
 
 def _is_neutral(key: str, value: Any) -> bool:

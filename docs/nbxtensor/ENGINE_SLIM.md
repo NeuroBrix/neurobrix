@@ -227,6 +227,20 @@ many calls), no tensor work. Measured: 140 721 to 140 836, +115.
 | serving/openai_api/routes.py | +25 | tool_choice and parallel_tool_calls read; the envelope compiled before the request is queued (a reasoning prompt closes its thinking first); the refusals |
 | core/state/constraint.py | +10 | a grammar description compiled (a refusal by name when the engine is absent) |
 
+## Constrained decoding: the Dell's review (2026-11-09 23:06): refusals instead of silent looseness
+
+What the review asked turned into refusals by name and one shared check: the step mask read and checked once for both
+engines (an empty mask refused before either applies it; the compiled engine decodes the same words), a missing
+eos_token_id refused, the grammar engine absent answered 501 by name, an xml string parameter whose constraints free
+text cannot enforce refused, a decoder step token_bytes has no per-token rule for refused, the markers read from the
+parser. Measured: 140 836 to 140 868, +32.
+
+| file | lines | what it holds |
+|---|---|---|
+| core/state/constraint.py | +16 | step_mask and allowed_tokens (one check, one decode for both engines); the vocabulary keyed by the tokenizer itself and its EOS ids |
+| serving/openai_api/routes.py, serving/engine.py | +9, +3 | the 501 for a machine without the grammar engine; a missing eos_token_id refused |
+| agent/envelope.py, core/module/tokenizer/json_bpe.py, both generators | +3, +1, 0 | the xml string refusal and the parser's markers; a decoder step without a per-token rule refused; the shared step mask |
+
 ## The scan
 
 `tools/engine_slim_scan.py` (standard library, ast) lists four kinds of finding in `src/neurobrix`, both branches:

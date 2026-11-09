@@ -136,8 +136,9 @@ class TritonGenerator:
 
         if self.constraint is not None:      # the tokens the constraint disallows at -inf before the sampler reads them
             from nbxtensor.ops.token_bitmask import apply_token_bitmask
+            from neurobrix.core.state.constraint import step_mask
             logits = logits.contiguous()
-            words = self.constraint.mask(int(logits.shape[-1]))
+            words = step_mask(self.constraint, int(logits.shape[-1]))
             apply_token_bitmask(logits, np.broadcast_to(words, (int(logits.shape[0]), words.shape[-1])))
         next_token = self._sampler(logits, input_ids=context_ids)
 

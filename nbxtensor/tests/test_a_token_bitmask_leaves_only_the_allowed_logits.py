@@ -9,10 +9,9 @@ from nbxtensor.tensor import NBXTensor
 
 
 def _accelerator():
-    try:
-        NBXTensor.zeros((1,), dtype=NBXDtype.float32, device="cuda:0")
-    except Exception as e:
-        pytest.skip(f"no accelerator: {e}")
+    from nbxtensor.memory.allocator import DeviceAllocator
+    if DeviceAllocator.device_count() == 0:          # only a machine without an accelerator skips; any other error fails
+        pytest.skip("no accelerator on this machine")
 
 
 def test_the_bitmask_layout_is_bit_v_mod_32_of_word_v_div_32():
@@ -63,7 +62,5 @@ def test_the_mask_kernel_launches_first_in_a_fresh_process():
         print("torch" in sys.modules)
     ''')
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
-    if "no accelerator" in r.stderr or "libcuda" in r.stderr:
-        pytest.skip("no accelerator")
     assert r.returncode == 0, r.stderr[-800:]
     assert r.stdout.strip() == "False"

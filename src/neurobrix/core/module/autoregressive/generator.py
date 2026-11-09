@@ -245,9 +245,8 @@ class AutoregressiveGenerator:
         # Sample using configured sampler
         # Sampler handles temperature, top-k, top-p, repetition penalty
         if self.constraint is not None:      # the compiled twin of nbxtensor.ops.token_bitmask: the same words, torch-side
-            import numpy as np
-            words = self.constraint.mask(int(logits.shape[-1])).astype("<i4")
-            allowed = np.unpackbits(words.view(np.uint8), bitorder="little")[:logits.shape[-1]].astype(bool)
+            from neurobrix.core.state.constraint import allowed_tokens, step_mask
+            allowed = allowed_tokens(step_mask(self.constraint, logits.shape[-1]), logits.shape[-1])
             logits = logits.masked_fill(~torch.from_numpy(allowed).to(logits.device), float("-inf"))
         next_token = self._sampler(logits, input_ids=context_ids)
 

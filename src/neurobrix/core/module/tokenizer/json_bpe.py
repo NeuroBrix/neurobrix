@@ -734,8 +734,9 @@ class _Decoder:
                 text = text.replace(st["pattern"]["String"], st.get("content", ""))
             elif t == "Metaspace":
                 text = text.replace(st.get("replacement", "▁"), " ")
-            elif t not in ("ByteFallback", "Strip", "Replace"):
-                raise RuntimeError(f"ZERO FALLBACK: token_bytes has no per-token rule for the decoder step {t!r}")
+            elif t != "ByteFallback":       # a regex Replace, a Strip before Fuse, any other step: never skipped silently
+                raise RuntimeError(f"ZERO FALLBACK: token_bytes has no per-token rule for the decoder step {t!r} "
+                                   f"({st}) before Fuse")
         return text.encode("utf-8")
 
     @staticmethod

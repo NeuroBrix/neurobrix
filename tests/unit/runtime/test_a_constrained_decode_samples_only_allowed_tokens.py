@@ -49,10 +49,10 @@ def test_the_compiled_generator_samples_only_allowed_tokens():
 def test_the_triton_generator_samples_only_allowed_tokens():
     from nbxtensor.dtype.nbx_dtype import NBXDtype
     from nbxtensor.tensor import NBXTensor
-    try:
-        NBXTensor.zeros((1,), dtype=NBXDtype.float32, device="cuda:0")
-    except Exception as e:
-        pytest.skip(f"no accelerator: {e}")
+    from nbxtensor.memory.allocator import DeviceAllocator
+    if DeviceAllocator.device_count() == 0:          # only a machine without an accelerator skips; any other error fails
+        pytest.skip("no accelerator on this machine")
+    NBXTensor.zeros((1,), dtype=NBXDtype.float32, device="cuda:0")
     from neurobrix.triton.generator import TritonGenerator
     g = TritonGenerator(_config())
     g.set_generation_params(device_idx=0)

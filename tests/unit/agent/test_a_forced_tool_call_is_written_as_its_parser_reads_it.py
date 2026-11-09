@@ -6,7 +6,9 @@ import json
 
 import pytest
 
-nbx_grammar = pytest.importorskip("nbx_grammar")
+from tests.unit.grammar_engine import load  # noqa: E402
+
+nbx_grammar = load()
 from neurobrix.agent.envelope import envelope  # noqa: E402
 from neurobrix.agent.parsers import JsonListToolCallParser, JsonToolCallParser, XmlToolCallParser  # noqa: E402
 
@@ -63,7 +65,7 @@ CASES = {
 @pytest.mark.parametrize("dialect", sorted(CASES))
 def test_the_canonical_call_is_accepted_and_read_back_by_its_parser(dialect):
     parser, text = CASES[dialect]
-    assert _walk(envelope(dialect, TOOLS, encode), text)
+    assert _walk(envelope(CASES[dialect][0], TOOLS, encode), text)
     calls = parser.parse(text).calls
     assert [c.name for c in calls] == ["get_weather"]
     assert {k: str(v) for k, v in calls[0].arguments.items()} == {"city": "Paris", "days": "2"}
@@ -72,15 +74,23 @@ def test_the_canonical_call_is_accepted_and_read_back_by_its_parser(dialect):
 @pytest.mark.parametrize("dialect", sorted(CASES))
 def test_what_the_envelope_forbids_is_refused(dialect):
     _, text = CASES[dialect]
-    d = envelope(dialect, TOOLS, encode)
+    d = envelope(CASES[dialect][0], TOOLS, encode)
     assert not _walk(d, "Sure! " + text)                                   # prose before the call
     assert not _walk(d, text.replace("get_weather", "get_wether"))          # an undeclared function
-    assert not _walk(envelope(dialect, TOOLS, encode, only="get_time"), text)   # tool_choice named another one
+    assert not _walk(envelope(CASES[dialect][0], TOOLS, encode, only="get_time"), text)   # tool_choice named another one
     if dialect == "json_list":
         two = text[:-1] + ', {"name": "get_time", "arguments": {"tz": "UTC"}}]'
     else:
         two = text + "\n" + text
     assert _walk(d, two)                                                    # parallel calls allowed by default
-    assert not _walk(envelope(dialect, TOOLS, encode, parallel=False), two)  # one call when parallel is off
+    assert not _walk(envelope(CASES[dialect][0], TOOLS, encode, parallel=False), two)  # one call when parallel is off
     missing = text.replace('"city": "Paris", ', "").replace("<parameter=city>\nParis\n</parameter>\n", "")
     assert not _walk(d, missing)                                            # a required argument missing
+
+
+
+def test_an_xml_string_parameter_with_a_constraint_free_text_cannot_enforce_is_refused_by_name():
+    tools = [{"type": "function", "function": {"name": "f", "parameters": {"type": "object", "properties": {
+        "code": {"type": "string", "pattern": "^[A-Z]{3}$"}}, "required": ["code"]}}}]
+    with pytest.raises(ValueError, match="pattern"):
+        envelope(XmlToolCallParser(), tools, encode)

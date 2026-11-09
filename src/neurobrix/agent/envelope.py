@@ -45,6 +45,9 @@ def _xml_call(tool: Dict[str, Any]) -> Dict[str, Any]:
         sch = props[name]
         parts.append({"lit": f"<parameter={name}>\n"})
         if sch.get("type") == "string" and not ({"enum", "const"} & set(sch)):
+            extra = set(sch) - {"type", "description", "title", "examples", "default"}
+            if extra:          # free text cannot enforce them: refused by name, never dropped (the dialect writes it raw)
+                raise ValueError(f"parameter {name!r}: {sorted(extra)} cannot be enforced on a raw xml string value")
             parts.append({"until": "\n</parameter>\n"})
         else:
             parts += [{"schema": sch}, {"lit": "\n</parameter>\n"}]
@@ -52,7 +55,7 @@ def _xml_call(tool: Dict[str, Any]) -> Dict[str, Any]:
     return {"seq": parts}
 
 
-def envelope(dialect: str, tools: List[Dict[str, Any]], encode: Callable[[str], List[int]],
+def envelope(parser, tools: List[Dict[str, Any]], encode: Callable[[str], List[int]],
              only: Optional[str] = None, parallel: bool = True) -> Dict[str, Any]:
     """The grammar description of the tool calls a turn must make (`only`: the one function named by tool_choice)."""
     chosen = [t for t in tools if only is None or (t.get("function") or {}).get("name") == only]
@@ -62,19 +65,19 @@ def envelope(dialect: str, tools: List[Dict[str, Any]], encode: Callable[[str], 
     if any(not isinstance(n, str) or not n for n in names):
         raise ValueError("every tool needs a function name")
     rep = {"min": 1} if parallel else {"min": 1, "max": 1}
+    dialect = parser.format_name          # the markers are the parser's own, never retyped here
     if dialect == "json":
-        open_, close = marker("<tool_call>", encode), marker("</tool_call>", encode)
+        open_, close = marker(parser.start_marker, encode), marker(parser.end_marker, encode)
         choice = [{"lit": json.dumps(n) + ", ", "then": {"seq": [
             {"lit": "\"arguments\": "}, {"schema": _params(t)}, {"lit": "}\n"}, close]}} for n, t in zip(names, chosen)]
         return {"repeat": {"seq": [open_, {"lit": "\n{\"name\": "}, {"choice": choice}]}, **rep, "sep": "\n"}
     if dialect == "xml":
-        open_, close = marker("<tool_call>", encode), marker("</tool_call>", encode)
+        open_, close = marker(parser.start_marker, encode), marker(parser.end_marker, encode)
         choice = [{"lit": f"{n}>", "then": {"seq": [_xml_call(t), close]}} for n, t in zip(names, chosen)]
         return {"repeat": {"seq": [open_, {"lit": "\n<function="}, {"choice": choice}]}, **rep, "sep": "\n"}
     if dialect == "json_list":
-        from neurobrix.agent.parsers.jsonlist import JsonListToolCallParser
         choice = [{"lit": "{\"name\": " + json.dumps(n) + ", ", "then": {"seq": [
             {"lit": "\"arguments\": "}, {"schema": _params(t)}, {"lit": "}"}]}} for n, t in zip(names, chosen)]
-        return {"seq": [marker(JsonListToolCallParser.start_marker, encode), {"lit": "["},
+        return {"seq": [marker(parser.start_marker, encode), {"lit": "["},
                         {"repeat": {"choice": choice}, **rep, "sep": ", "}, {"lit": "]"}]}
     raise ValueError(f"no tool-call envelope for the dialect {dialect!r}")

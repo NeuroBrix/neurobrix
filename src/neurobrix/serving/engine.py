@@ -551,6 +551,9 @@ class InferenceEngine:
         if grammar is not None:            # the request's grammar (core/state/constraint.py), its vocabulary kept
             from neurobrix.core.state.constraint import GrammarConstraint
             eos = self._pkg.defaults.get("eos_token_id")
+            if eos is None or eos == []:
+                raise RuntimeError("ZERO FALLBACK: a constrained decode ends on the model's end of sequence, and this "
+                                   "container's defaults declare no eos_token_id")
             constraint = GrammarConstraint(grammar, tokenizer, eos if isinstance(eos, list) else [eos],
                                            self.__dict__.setdefault("_grammar_vocabs", {}))
         result = self._generate_from_token_ids(token_ids, decode, kv_session=self._agent_kv, constraint=constraint)

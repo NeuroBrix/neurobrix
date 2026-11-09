@@ -457,7 +457,8 @@ def test_an_engine_failure_is_a_500_with_its_named_refusal_and_the_daemon_serves
 def test_a_json_schema_answer_is_compiled_and_handed_to_the_decode(make):
     """response_format json_schema: the schema compiled by our grammar engine and handed to complete_turn; a construct it
     cannot enforce answers 400 naming it; json_object refused by name (point 9a)."""
-    pytest.importorskip("nbx_grammar")
+    from tests.unit.grammar_engine import load
+    load()
     eng = FakeEngine()
     srv, base = make(eng)
     schema = {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
@@ -481,7 +482,8 @@ def test_a_forced_tool_call_hands_the_templates_envelope_to_the_decode(make):
     """tool_choice required / a named function: the template's dialect envelope (agent/envelope.py) compiled by our
     grammar engine and handed to complete_turn; parallel_tool_calls false accepted with it; a named function not among
     the tools, or a malformed tool_choice, answers 400 (point 9a)."""
-    pytest.importorskip("nbx_grammar")
+    from tests.unit.grammar_engine import load
+    load()
     eng = FakeEngine(template="{% for t in tools %}{{ t }}{% endfor %} <tool_call> </tool_call>")
     eng.tokenizer.encode = lambda text, add_special_tokens=True: (
         [900] if text in ("<tool_call>", "</tool_call>") else list(text.encode()))
@@ -500,3 +502,19 @@ def test_a_forced_tool_call_hands_the_templates_envelope_to_the_decode(make):
     status, body, _ = _post(base + "/v1/chat/completions", {"model": "fake-model", "messages": msg, "tools": tools,
                                                             "tool_choice": "always"})
     _assert_error(status, body, 400, param="tool_choice")
+
+
+def test_without_the_grammar_engine_a_constrained_request_is_refused_by_name(make, monkeypatch):
+    """On a machine where nbx_grammar is not installed, response_format json_schema and a forced tool call answer 501
+    naming it (never a generic 500) — the Dell's review 2026-11-09 23:06."""
+    import sys
+    monkeypatch.setitem(sys.modules, "nbx_grammar", None)          # `import nbx_grammar` raises ImportError
+    eng = FakeEngine(template=" <tool_call> </tool_call>")
+    eng.tokenizer.encode = lambda text, add_special_tokens=True: [900] if text.endswith("tool_call>") else list(text.encode())
+    _, base = make(eng)
+    msg = [{"role": "user", "content": "x"}]
+    tools = [{"type": "function", "function": {"name": "f", "parameters": {"type": "object", "properties": {}}}}]
+    for extra in ({"response_format": {"type": "json_schema", "json_schema": {"schema": {"type": "string"}}}},
+                  {"tools": tools, "tool_choice": "required"}):
+        status, body, _ = _post(base + "/v1/chat/completions", {"model": "fake-model", "messages": msg, **extra})
+        assert status == 501 and body["error"]["code"] == "constrained_decoding_not_installed", (extra, status, body)

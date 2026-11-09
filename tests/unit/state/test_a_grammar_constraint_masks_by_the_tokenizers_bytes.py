@@ -6,7 +6,9 @@ import json
 import numpy as np
 import pytest
 
-nbx_grammar = pytest.importorskip("nbx_grammar")
+from tests.unit.grammar_engine import load  # noqa: E402
+
+nbx_grammar = load()
 from neurobrix.core.state.constraint import GrammarConstraint, compile_json_schema  # noqa: E402
 
 TOKS = [b"{", b'"ok"', b":", b"true", b"false", b"}", b" ", None]   # id 7: a special token
@@ -45,3 +47,21 @@ def test_the_constraint_allows_only_what_the_schema_lets_follow_at_the_logits_wi
 def test_a_schema_the_engine_cannot_enforce_is_refused_by_name():
     with pytest.raises(ValueError, match="pattern"):
         compile_json_schema(json.dumps({"type": "string", "pattern": "x"}))
+
+
+def test_an_eos_past_the_logits_and_an_empty_mask_are_refused_by_name():
+    """An end-of-sequence id past the logits' width is refused when the vocabulary is built (never a panic across the
+    ABI, which would kill the daemon); a constraint that allows nothing is refused before either engine applies it."""
+    from neurobrix.core.state.constraint import allowed_tokens, step_mask
+    g = compile_json_schema(json.dumps({"type": "boolean"}))
+    with pytest.raises(ValueError, match="end-of-sequence"):
+        GrammarConstraint(g, Tok(), [500], {}).mask(70)
+
+    class Nothing:
+        def mask(self, vocab):
+            return np.zeros(-(-vocab // 32), dtype=np.int32)
+    with pytest.raises(RuntimeError, match="allows no token"):
+        step_mask(Nothing(), 70)
+    words = np.zeros(3, dtype=np.int32)
+    words[1] = 1 << 4
+    assert np.flatnonzero(allowed_tokens(words, 70)).tolist() == [36]

@@ -156,17 +156,9 @@ impl Compiler {
             Json::Bool(true) => return Err("unsupported: the schema `true` (any value)".into()),
             _ => return Err("unsupported: a schema that is not an object".into()),
         };
-        if let Some(r) = s.get("$ref") {
-            let path = r.as_str().ok_or("unsupported: a non-string $ref")?;
-            let name = path.strip_prefix("#/$defs/").or(path.strip_prefix("#/definitions/"))
-                .ok_or_else(|| format!("unsupported: $ref {path:?} (only #/$defs/<name>)"))?;
-            let target = self.defs.as_ref().and_then(|d| d.get(name)).cloned()
-                .ok_or_else(|| format!("unsupported: $ref {path:?} names no definition"))?;
-            return self.node(&target);
-        }
         for (k, v) in kv {
             let known = matches!(k.as_str(), "type" | "properties" | "required" | "additionalProperties" | "items" |
-                "minItems" | "maxItems" | "enum" | "const" | "anyOf" | "$defs" | "definitions") || IGNORED.contains(&k.as_str());
+                "minItems" | "maxItems" | "enum" | "const" | "anyOf" | "$ref" | "$defs" | "definitions") || IGNORED.contains(&k.as_str());
             if !known {
                 return Err(format!("unsupported: the keyword {k:?}"));
             }
@@ -174,20 +166,59 @@ impl Compiler {
                 return Err("unsupported: additionalProperties other than false".into());
             }
         }
-        if let Some(c) = s.get("const") {
-            return Ok(self.push(Node::Literals(vec![c.to_compact().into_bytes()])));
-        }
-        if let Some(e) = s.get("enum") {
-            let vals = match e { Json::Array(a) if !a.is_empty() => a, _ => return Err("unsupported: an empty or non-array enum".into()) };
-            if vals.len() > MAX_KEYS {
-                return Err(format!("unsupported: an enum of {} values (at most {MAX_KEYS})", vals.len()));
+        // the keywords each branch enforces: one beside it that the branch would not apply is refused, never dropped
+        let enforced: Vec<&str> = kv.iter().map(|(k, _)| k.as_str())
+            .filter(|k| !IGNORED.contains(k) && !matches!(*k, "$defs" | "definitions")).collect();
+        let alone = |key: &str, allowed: &[&str]| -> Result<(), String> {
+            match enforced.iter().find(|k| **k != key && !allowed.contains(k)) {
+                Some(other) => Err(format!("unsupported: the keyword {other:?} beside {key:?} (it would not be applied)")),
+                None => Ok(()),
             }
-            return Ok(self.push(Node::Literals(vals.iter().map(|v| v.to_compact().into_bytes()).collect())));
+        };
+        if let Some(r) = s.get("$ref") {
+            alone("$ref", &[])?;
+            let path = r.as_str().ok_or("unsupported: a non-string $ref")?;
+            let name = path.strip_prefix("#/$defs/").or(path.strip_prefix("#/definitions/"))
+                .ok_or_else(|| format!("unsupported: $ref {path:?} (only #/$defs/<name>)"))?;
+            let target = self.defs.as_ref().and_then(|d| d.get(name)).cloned()
+                .ok_or_else(|| format!("unsupported: $ref {path:?} names no definition"))?;
+            return self.node(&target);
         }
         if let Some(alts) = s.get("anyOf") {
+            alone("anyOf", &[])?;
             let alts = match alts { Json::Array(a) if !a.is_empty() => a, _ => return Err("unsupported: an empty anyOf".into()) };
             let ids = alts.iter().map(|a| self.node(a)).collect::<Result<Vec<_>, _>>()?;
             return self.any_of(ids);
+        }
+        if s.get("const").is_some() || s.get("enum").is_some() {
+            let key = if s.get("const").is_some() { "const" } else { "enum" };
+            alone(key, &["type"])?;
+            let vals: Vec<Json> = match (s.get("const"), s.get("enum")) {
+                (Some(c), _) => vec![c.clone()],
+                (None, Some(Json::Array(a))) if !a.is_empty() => a.clone(),
+                _ => return Err("unsupported: an empty or non-array enum".into()),
+            };
+            if vals.len() > MAX_KEYS {
+                return Err(format!("unsupported: an enum of {} values (at most {MAX_KEYS})", vals.len()));
+            }
+            if let Some(t) = s.get("type") {
+                let types: Vec<&str> = match t {
+                    Json::Str(x) => vec![x.as_str()],
+                    Json::Array(xs) => xs.iter().filter_map(|x| x.as_str()).collect(),
+                    _ => return Err("unsupported: a non-string type".into()),
+                };
+                for v in &vals {
+                    let kind = match v {
+                        Json::Null => "null", Json::Bool(_) => "boolean", Json::Str(_) => "string",
+                        Json::Array(_) => "array", Json::Object(_) => "object",
+                        Json::Number(n) => if n.contains(['.', 'e', 'E']) { "number" } else { "integer" },
+                    };
+                    if !types.iter().any(|t| *t == kind || (*t == "number" && kind == "integer")) {
+                        return Err(format!("unsupported: the {key} value {} is not of the type {t:?}", v.to_compact()));
+                    }
+                }
+            }
+            return Ok(self.push(Node::Literals(vals.iter().map(|v| v.to_compact().into_bytes()).collect())));
         }
         match s.get("type") {
             Some(Json::Str(t)) => self.typed(t, s),
@@ -301,6 +332,11 @@ mod tests {
             (r#"{"oneOf":[{"type":"string"}]}"#, "oneOf"), (r#"{"type":"array"}"#, "without items"),
             (r#"{"anyOf":[{"type":"integer"},{"type":"number"}]}"#, "same byte"), (r#"{"type":"string","maxLength":4}"#, "maxLength"),
             (r##"{"$ref":"#/$defs/n","$defs":{"n":{"type":"object","properties":{"c":{"$ref":"#/$defs/n"}}}}}"##, "deeper"),
+            (r#"{"anyOf":[{"type":"string"},{"type":"null"}],"type":"object","required":["a"]}"#, "beside \"anyOf\""),
+            (r##"{"$ref":"#/$defs/s","maxLength":3,"$defs":{"s":{"type":"string"}}}"##, "maxLength"),
+            (r##"{"$ref":"#/$defs/s","type":"integer","$defs":{"s":{"type":"string"}}}"##, "beside \"$ref\""),
+            (r#"{"type":"string","enum":["a",1]}"#, "not of the type"),
+            (r#"{"const":3,"items":{"type":"string"}}"#, "beside \"const\""),
         ] {
             let e = compile(&parse(s).unwrap()).unwrap_err();
             assert!(e.contains(word), "{s}: {e}");

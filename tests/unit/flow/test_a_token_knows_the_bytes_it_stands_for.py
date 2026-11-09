@@ -37,3 +37,14 @@ def test_tiktoken_and_tekken_tokens_are_their_ranks_bytes():
     tk = PyTekken(ranks, [(0, "<unk>"), (1, "<s>"), (2, "</s>")], r"\S+", num_special_tokens=3, vocab_size=6)
     assert tk.token_bytes(0) is None and tk.token_bytes(2) is None   # the special ids come first
     assert tk.token_bytes(3) == b"a" and tk.token_bytes(4) == b'{"'
+
+
+
+def test_a_decoder_step_without_a_per_token_rule_is_refused_by_name():
+    import pytest
+    for step in ({"type": "Replace", "pattern": {"Regex": " +"}, "content": " "},
+                 {"type": "Strip", "content": " ", "start": 1, "stop": 0}):
+        tk = PyTokenizer({"model": {"type": "BPE", "vocab": {"a": 0}, "merges": []},
+                          "decoder": {"type": "Sequence", "decoders": [step, {"type": "Fuse"}]}})
+        with pytest.raises(RuntimeError, match=step["type"]):
+            tk.token_bytes(0)

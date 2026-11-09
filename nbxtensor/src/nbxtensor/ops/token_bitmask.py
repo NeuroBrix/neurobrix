@@ -18,9 +18,6 @@ from nbxtensor.dtype.nbx_dtype import NBXDtype
 # without it reaches the backend's own driver and refuses the NBXTensor arguments (the gathered KV copies, 2026-11-09)
 _install_launcher()
 
-_BLOCK = 1024
-
-
 @triton.jit
 def _token_bitmask_kernel(logits_ptr, mask_ptr, vocab, words, BLOCK: tl.constexpr):
     row = tl.program_id(0).to(tl.int64)
@@ -39,6 +36,8 @@ def apply_token_bitmask(logits, bitmask: np.ndarray) -> None:
     """`logits` (NBXTensor fp32 [rows, vocab], contiguous): every token whose bit is clear in `bitmask` (int32
     [rows, ceil(vocab / 32)]) set to -inf, in place."""
     from nbxtensor.backend.runtime import set_device as launch_on
+    from nbxtensor.memory.allocator import DeviceAllocator
+    from nbxtensor.ops.elementwise_launch import ew_meta
     from nbxtensor.tensor import NBXTensor
     if logits._dtype != NBXDtype.float32 or logits.ndim != 2:
         raise ValueError(f"apply_token_bitmask: fp32 [rows, vocab] logits, got {logits._dtype} {tuple(logits.shape)}")
@@ -49,9 +48,12 @@ def apply_token_bitmask(logits, bitmask: np.ndarray) -> None:
                          f"{(rows, vocab)} logits, got {bitmask.shape}")
     if not bitmask.any():
         raise RuntimeError("ZERO FALLBACK: the constraint allows no token at this step (an empty bitmask)")
+    DeviceAllocator.set_device(logits._device_idx)      # the mask on the logits' own card (a head on another card)
     mask = NBXTensor.from_numpy(bitmask)
     launch_on(logits)
-    _token_bitmask_kernel[(rows, triton.cdiv(vocab, _BLOCK))](logits, mask, vocab, bitmask.shape[1], BLOCK=_BLOCK)
+    m = ew_meta(vocab)                                    # the element-wise launch's certified tile and warps
+    _token_bitmask_kernel[(rows, triton.cdiv(vocab, m["BLOCK_SIZE"]))](logits, mask, vocab, bitmask.shape[1],
+                                                                       BLOCK=m["BLOCK_SIZE"], num_warps=m["num_warps"])
 
 
 def token_bitmask(allowed, vocab: int) -> np.ndarray:

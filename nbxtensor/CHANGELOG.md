@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The authors' contact address is contact@neurobrix.org** (the package metadata), the project's address being neurobrix.org.
 
 ### Added
+- **`nbxtensor.ops.token_bitmask`**: a token bitmask applied to a decode step's fp32 logits in place (constrained
+  decoding): every token whose bit is clear (bit v % 32 of int32 word v // 32, ceil(vocab / 32) words a row) set to
+  -inf before the sampler; the mask on the logits' own device, the element-wise launch's certified tile; a mask of
+  another shape or allowing no token refused by name. Torch-free.
 - **A KV cache host tier**: `memory.kv_host_tier` (the prefix index of whole pages, the host page pool, the pages a
   sequence holds), `memory.kv_host_pages` (host pages laid out [page][layer][K, V], pinned or pageable; per-layer copies,
   and `offload_gathered` / `restore_scattered`: every layer's page gathered on the device by one kernel per K and V, then

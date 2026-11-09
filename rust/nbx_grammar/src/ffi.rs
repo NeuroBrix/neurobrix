@@ -31,8 +31,13 @@ fn write_err(msg: &str, buf: *mut u8, cap: usize) {
 }
 
 /// The vocabulary: `n` tokens whose bytes follow each other in `data`, `lens[i]` each (u32::MAX: a token no grammar emits).
+/// Null when an end-of-sequence id lies past the `n` tokens (it would index past every mask: refused, never a panic
+/// across the ABI).
 #[no_mangle]
 pub extern "C" fn ng_vocab_new(data: *const u8, lens: *const u32, n: u32, eos: *const u32, n_eos: u32) -> *mut Vocab {
+    if unsafe { slice::from_raw_parts(eos, n_eos as usize) }.iter().any(|&e| e >= n) {
+        return std::ptr::null_mut();
+    }
     let lens = unsafe { slice::from_raw_parts(lens, n as usize) };
     let total: usize = lens.iter().filter(|&&l| l != u32::MAX).map(|&l| l as usize).sum();
     let data = unsafe { slice::from_raw_parts(data, total) };
