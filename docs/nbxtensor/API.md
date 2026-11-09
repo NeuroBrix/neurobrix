@@ -183,6 +183,11 @@ def offload(k_pools, v_pools, pages, host, host_pages) -> None
     # each device page (every layer's K and V, `pool[page]`) copied to its host page, after the device's queued work
 def restore(k_pools, v_pools, host, host_pages, pages, fence=None, owner=None) -> None
     # each host page copied back into a device page in place (the pools never move), inside the cache's fence
+def offload_gathered(k_pools, v_pools, pages, host, host_pages) -> None
+    # `offload` for a discrete card: every layer's page gathered on the device (one kernel per K and V, bits unchanged),
+    # then one copy per page and per run of a device's layers (consecutive host pages: one copy); the same host layout
+def restore_scattered(k_pools, v_pools, host, host_pages, pages, fence=None, owner=None) -> None
+    # `restore` the same way back: copied to the device, scattered into the pools in place, inside the cache's fence
 ```
 
 `nbxtensor.memory.paged_kv`
