@@ -30,6 +30,7 @@ class _Executor:
 def _engine() -> InferenceEngine:
     e = InferenceEngine.__new__(InferenceEngine)
     e._is_loaded, e._device, e._executor, e._family = True, "cpu", _Executor(), "image"
+    e._warm_serving = True     # a warm daemon's engine: nothing released after a request (_release_cold_request)
     return e
 
 
