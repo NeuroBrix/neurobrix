@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.6.5] - 2026-11-10 (not published yet: the grouped publication is the supervisor's)
+## [0.6.5] - 2026-11-10
 ### Added
 - **A served session states its context ceiling and reaches past the card into host memory**: `serve` prints "served context: up to N positions a session (... on the card + ... in host memory ...)" at start; past the card's KV cache the oldest pages move to host memory and decoding goes on (exact); a request longer than the ceiling is refused before it runs with the OpenAI error `400 context_length_exceeded`, naming the ceiling (it used to fail as a 500).
 - **Constrained decoding on the OpenAI API: `response_format: json_schema`, `tool_choice: required` or a named
