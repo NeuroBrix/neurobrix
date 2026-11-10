@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A long served prompt runs in chunks instead of running out of memory**: on the compiled engine a served turn is prefilled in chunks of the rows the plan prices (128 for Qwen3-Coder-30B-A3B), so a prompt of 80 000 tokens no longer asks a 6 GB causal mask in one pass; it reached past the card's cache into host memory and was answered.
+
 ## [0.6.5] - 2026-11-10 (not published yet: the grouped publication is the supervisor's)
 
 ### Added

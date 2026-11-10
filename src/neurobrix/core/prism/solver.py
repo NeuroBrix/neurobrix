@@ -5207,14 +5207,18 @@ class PrismSolver:
         from neurobrix.core.state import price as P
         if kv.session_reach is None:
             return None, "no serving session is planned (no session reach): one chunk per request"
-        if self._mode not in TRITON_ENGINES:
+        untimed = self._mode not in TRITON_ENGINES
+        if untimed and not getattr(self, "_serve_requested", False):
+            # a run prices its prefill at its own request's rows (`InputConfig.seq_len`): its one pass is priced
             return None, (f"one chunk per turn: the {self._mode} engine keeps no certified kernel times to price a "
-                          f"chunk from")
+                          f"chunk from, and a run's prefill is priced at its own rows")
         if profile is None or not kv_devices or getattr(container, "cache_path", None) is None:
             return None, "one chunk per turn: the plan names no decoder card to price a chunk on"
         cards = set()
         for d in kv_devices:
             if ":" not in str(d):
+                if untimed:
+                    continue                # the host side of the cache prices no chunk; the cards' page does
                 return None, f"one chunk per turn: the decoder's cache lives on {d}, which certifies no kernel time"
             idx = int(str(d).rsplit(":", 1)[1])
             spec = next((x for x in profile.devices if int(x.index) == idx), None)
@@ -5230,6 +5234,15 @@ class PrismSolver:
                                        get_vendor_config(vendor, arch).get("memory"), int(kv.memory_bytes),
                                        PAGED_DECODE_TILE_CANDIDATES)
         rows = P.session_prefill_rows(defaults)
+        if untimed:
+            # No certified time to price a chunk on this engine: a served turn runs in chunks of the rows the plan
+            # prices a session's prefill at (whole pages), never as one pass the plan did not price — on the compiled
+            # engine a 79 931-token turn of Qwen3-Coder-30B-A3B served on two V100-32GB asked its 5.95 GiB causal mask
+            # in one pass and ran out of memory (2026-11-10). Decided between the agents 07:51; a chunk sized by memory
+            # beyond the priced rows is the next step.
+            C = P.prefill_chunk_candidates(page, rows)[-1]
+            return C, (f"chunks of {C} rows: the rows the plan prices a served turn's prefill at (whole pages of "
+                       f"{page}); the {self._mode} engine keeps no certified kernel times to choose a larger one")
         record = PC.chunk_record(Path(str(container.cache_path)), vendor, arch, cls,
                                  "triton" if self._mode == "triton" else "triton-sequential")
         return PC.choose(record, P.prefill_chunk_candidates(page, rows), rows, PC.certified_times(vendor, arch, cls))
