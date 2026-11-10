@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.1] - unreleased
 ### Changed
+- **A prefill chunk reads the positions spilled to host memory through the card**: `memory/paged_kv`'s spilled chunk
+  attention hands the spilled K / V back to the card in blocks (`HostSpill.blocks`, at most the card part's own key
+  count each, so a block's scores never exceed the chunk's) and runs the same attention with its log-sum-exp on each,
+  merged in a fixed order. The host partial (`HostSpill.partial`) stays the decode step's one row: for a chunk's
+  32 x 128 query rows over 14 336 positions it cost 85-122 ms a layer on a Xeon Gold 6230 (40 threads), about half of
+  each spilled chunk of a 79 931-token turn (2026-11-10).
+### Changed
 - **A Level Zero failure is a typed refusal**: `backend.level_zero.IntelDeviceError` (a RuntimeError) carries the call, the `ze_result_t` by name and the module's build log, raised by the runtime, the launch driver and a SPIR-V module that does not build. The Intel backend is experimental — not yet validated on hardware by the NeuroBrix lab — and an application decides on this type what a refusal means.
 
 ### Fixed

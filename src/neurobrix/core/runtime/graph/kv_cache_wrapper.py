@@ -419,37 +419,37 @@ class KVCacheAttentionWrapper:
 
     def _prefill_over_spill(self, q, layer_idx: int, start: int, rows: int, scale) -> torch.Tensor:
         """A prefill chunk of a sequence whose first positions spilled to host memory (R30 mirror of nbxtensor
-        memory/paged_kv._chunk_attention_spilled): the card's part over its own pages, causal at the card's start, in
-        torch with its rows' log-sum-exp; the host's over every spilled position (all precede the chunk) by the
-        library's host partial, the chunk's rows as more query rows of each KV head; merged by log-sum-exp — exact."""
+        memory/paged_kv._chunk_attention_spilled): the card's part over its own pages, causal at the card's start, and
+        the spilled positions by the same math ON THE CARD, in the library's blocks of at most the card part's key
+        count; merged by log-sum-exp in a fixed order — exact. (The host partial is the decode step's, one row.)"""
         cache = self.cache
         tpp = cache.page_tokens
         card_start = start - cache.spilled
         keys = -(-(card_start + rows) // tpp) * tpp
         k_card, v_card = cache._whole(layer_idx, keys)                       # [1, H_kv, keys, D]
-        heads, d = int(q.shape[1]), int(q.shape[3])
-        kv_heads = int(k_card.shape[1])
+        heads, d, kv_heads = int(q.shape[1]), int(q.shape[3]), int(k_card.shape[1])
         groups = heads // kv_heads
         sc = float(scale) if scale is not None else d ** -0.5
-        qr = q.to(k_card.dtype).float()                                      # q as the card reads it
-        qg = qr[0].reshape(kv_heads, groups * rows, d)                       # row (h, r) = h * rows + r, head-major
+        qg = q.to(k_card.dtype).float()[0].reshape(kv_heads, groups * rows, d)   # q as the card reads it, head-major
         allowed = torch.arange(keys, device=q.device)[None, :] <= (card_start + torch.arange(rows, device=q.device))[:, None]
         mask = torch.zeros((rows, keys), device=q.device).masked_fill(~allowed, float("-inf")).repeat(groups, 1)
-        s = torch.matmul(qg, k_card[0].float().transpose(1, 2)) * sc + mask  # [H_kv, groups * rows, keys]
-        m = s.amax(dim=2)
-        m0 = torch.where(torch.isneginf(m), torch.zeros_like(m), m)
-        p = torch.exp(s - m0[..., None])
-        acc, l = torch.matmul(p, v_card[0].float()), p.sum(dim=2)
-        h_acc, h_m, h_l = (torch.from_numpy(x).to(q.device) for x in cache.host_spill.partial(
-            layer_idx, qr[0].reshape(heads * rows, d).cpu().numpy(), groups * rows, sc))
-        h_acc, h_m, h_l = (h_acc.reshape(kv_heads, groups * rows, -1), h_m.reshape(kv_heads, groups * rows),
-                           h_l.reshape(kv_heads, groups * rows))
-        mn = torch.maximum(m0, h_m)
-        c1 = torch.where(l > 0, torch.exp(m0 - mn), torch.zeros_like(l))
-        c2 = torch.where(h_l > 0, torch.exp(h_m - mn), torch.zeros_like(h_l))
-        den = l * c1 + h_l * c2
-        out = (acc * c1[..., None] + h_acc * c2[..., None]) / torch.where(den > 0, den, torch.ones_like(den))[..., None]
-        return out.reshape(1, heads, rows, -1).to(k_card.dtype)
+        def part(k, v, bias=0.0):                                           # (acc, m, l) of the rows over k / v
+            s = torch.matmul(qg, k.transpose(1, 2)) * sc + bias              # [H_kv, groups * rows, positions]
+            m = s.amax(dim=2)
+            m = m.masked_fill(torch.isneginf(m), 0.0)                        # a row with no key yet
+            p = torch.exp(s - m[..., None])
+            return torch.matmul(p, v), m, p.sum(dim=2)
+        acc, m, l = part(k_card[0].float(), v_card[0].float(), mask)
+        cache_dtype = k_card.dtype
+        del k_card, v_card, mask
+        for kb, vb in cache.host_spill.blocks(layer_idx, keys):
+            a2, m2, l2 = part(torch.from_numpy(kb).to(q.device), torch.from_numpy(vb).to(q.device))
+            mn = torch.maximum(m, m2)
+            c1 = torch.where(l > 0, torch.exp(m - mn), torch.zeros_like(l))
+            c2 = torch.exp(m2 - mn)
+            acc, l, m = acc * c1[..., None] + a2 * c2[..., None], l * c1 + l2 * c2, mn
+        out = acc / torch.where(l > 0, l, torch.ones_like(l))[..., None]
+        return out.reshape(1, heads, rows, -1).to(cache_dtype)
 
     def _decode_over_spill(self, q, k_card, v_card, attn_mask, scale, layer_idx: int) -> torch.Tensor:
         """A decode step of a sequence whose oldest positions spilled to host memory: the card's partial over its

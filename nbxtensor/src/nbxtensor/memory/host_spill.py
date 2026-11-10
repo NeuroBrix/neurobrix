@@ -78,6 +78,16 @@ class HostSpill:
         return host_decode_partial(q, self.k[layer], self.v[layer], self.held[layer], groups, scale,
                                    scores_bytes=max(0, self.budget_bytes - self.nbytes()))
 
+    def blocks(self, layer: int, positions: int):
+        """This layer's spilled positions in order, as (k, v) float32 views [H_kv, n, D] of at most `positions`
+        positions each — what a prefill chunk hands back to the card block by block (memory/paged_kv.py: many query
+        rows over every spilled position is the card's work; `partial` is the decode step's one row)."""
+        if int(positions) <= 0:
+            raise ValueError(f"HostSpill.blocks: blocks of {positions} positions")
+        for a in range(0, self.held[layer], int(positions)):
+            b = min(a + int(positions), self.held[layer])
+            yield self.k[layer][:, a:b], self.v[layer][:, a:b]
+
     def truncate(self, length: int) -> None:
         """Keep the first `length` spilled positions (a session's matched prefix)."""
         if length > self.length:

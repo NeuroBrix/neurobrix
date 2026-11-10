@@ -120,3 +120,39 @@ def _run_decode(cache, seed, steps):
             q, k, v = (rng.standard_normal(s).astype(np.float16) for s in ((1, H, 1, D), (1, HK, 1, D), (1, HK, 1, D)))
             outs.append(cache.decode(i, _dev(q), _dev(k), _dev(v), D ** -0.5).numpy().astype(np.float32))
     return outs
+
+
+def test_a_chunk_reads_the_spilled_positions_through_the_card_in_blocks_no_larger_than_its_own_keys(monkeypatch):
+    """A prefill chunk's many rows over the spilled positions are the card's work: the host partial (the decode step's
+    one row) is not asked, and every block handed back holds at most the positions the card part itself reads — so a
+    block's scores never exceed the chunk's priced ones (the 79 931-token turn, 2026-11-10: the host partial was half
+    of each spilled chunk's 10.5 s)."""
+    from nbxtensor.memory.paged_kv import chunk_attention
+    prompt, chunk, card_pages = 640, 64, 2
+    rng = np.random.default_rng(7)
+    q = rng.standard_normal((1, H, prompt, D)).astype(np.float16)
+    k = rng.standard_normal((1, HK, prompt, D)).astype(np.float16)
+    v = rng.standard_normal((1, HK, prompt, D)).astype(np.float16)
+    spill, whole = _cache(card_pages), _cache(0)
+
+    def refuse(*a, **kw):
+        raise AssertionError("the host partial was asked for a prefill chunk")
+    monkeypatch.setattr(spill.host_spill, "partial", refuse)
+    seen, real = [], spill.host_spill.blocks
+
+    def blocks(layer, positions):
+        for kb, vb in real(layer, positions):
+            seen.append((int(kb.shape[1]), int(positions), spill.host_spill.held[layer]))
+            yield kb, vb
+    monkeypatch.setattr(spill.host_spill, "blocks", blocks)
+    for a in range(0, prompt, chunk):
+        memo_s, memo_w = {}, {}
+        for layer in range(LAYERS):
+            for cache, memo in ((spill, memo_s), (whole, memo_w)):
+                cache.prefill(layer, _dev(k[:, :, a:a + chunk]), _dev(v[:, :, a:a + chunk]))
+            got = chunk_attention(spill, layer, _dev(q[:, :, a:a + chunk]), a, HK, D ** -0.5, 0.0, memo_s).numpy()
+            want = chunk_attention(whole, layer, _dev(q[:, :, a:a + chunk]), a, HK, D ** -0.5, 0.0, memo_w).numpy()
+            assert np.allclose(got.astype(np.float32), want.astype(np.float32), rtol=0, atol=3e-3), (a, layer)
+    assert spill.spilled > card_pages * PT                                  # more spilled than one block holds
+    assert seen and all(n <= card_pages * PT and n <= positions for n, positions, _ in seen)
+    assert max(held for _, _, held in seen) > card_pages * PT              # several blocks were needed, and merged

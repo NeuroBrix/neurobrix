@@ -101,3 +101,39 @@ def test_a_prompt_past_the_card_prefills_chunk_by_chunk_over_both_parts(device, 
             want = torch.softmax(s.masked_fill(~causal, float("-inf")), -1) @ vv
             assert torch.allclose(got, want, atol=3e-3), (device, a, layer, (got - want).abs().max())
     assert w.cache.spilled > 0
+
+
+def test_a_chunk_reads_the_spilled_positions_on_the_device_in_blocks_no_larger_than_its_own_keys(monkeypatch):
+    """A prefill chunk's rows over the spilled positions are the device's work, block by block (the library's
+    HostSpill.blocks, at most the card part's own key count each): the host partial — the decode step's one row — is
+    not asked (it was half of each spilled chunk's time on the 79 931-token turn, 2026-11-10)."""
+    prompt, chunk, card_pages = 640, 64, 2
+    g = torch.Generator().manual_seed(11)
+    rnd = lambda *s: torch.randn(*s, generator=g).to(torch.float16)                       # noqa: E731
+    w = _wrapper(card_pages, "cpu")
+    q, k, v = rnd(1, H, prompt, D), rnd(1, HK, prompt, D), rnd(1, HK, prompt, D)
+
+    def refuse(*a, **kw):
+        raise AssertionError("the host partial was asked for a prefill chunk")
+    monkeypatch.setattr(w.cache.host_spill, "partial", refuse)
+    seen, real = [], w.cache.host_spill.blocks
+
+    def blocks(layer, positions):
+        for kb, vb in real(layer, positions):
+            seen.append((int(kb.shape[1]), int(positions)))
+            yield kb, vb
+    monkeypatch.setattr(w.cache.host_spill, "blocks", blocks)
+    for a in range(0, prompt, chunk):
+        b = a + chunk
+        for layer in range(LAYERS):
+            w.cache.update(layer, k[:, :, a:b], v[:, :, a:b])
+            if not w.cache.spilled:
+                continue
+            got = w._prefill_over_spill(q[:, :, a:b], layer, a, chunk, D ** -0.5)[0].double()
+            qq, kk, vv = (x.double()[0] for x in (q[:, :, a:b], k[:, :, :b], v[:, :, :b]))
+            kk, vv = kk.repeat_interleave(H // HK, 0), vv.repeat_interleave(H // HK, 0)
+            causal = torch.arange(b)[None, :] <= (a + torch.arange(chunk))[:, None]
+            want = torch.softmax(((qq @ kk.transpose(1, 2)) * D ** -0.5).masked_fill(~causal, float("-inf")), -1) @ vv
+            assert torch.allclose(got, want, atol=3e-3), (a, layer, (got - want).abs().max())
+    assert w.cache.spilled > card_pages * PT                               # more spilled than one block holds
+    assert seen and all(n <= positions <= card_pages * PT for n, positions in seen)

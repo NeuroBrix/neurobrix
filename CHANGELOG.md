@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.6.6] - unreleased
 
 ### Changed
+- **A prompt longer than the GPU's cache is read faster**: the part of a long prompt that no longer fits the card's
+  cache was attended on the CPU for every chunk of the prompt; it now passes back through the GPU block by block (same
+  result). On the 79 931-token turn measured on two V100-32GB that CPU work was about half of each chunk past the
+  card's 65 664 positions.
+
+### Changed
 - **An Intel GPU that refuses at run time is said by name, and the model runs without it** (the Intel backend is
   experimental, not yet validated on hardware by the NeuroBrix lab — reports welcome): when the Level Zero driver says
   the chip cannot do what was asked (a kernel it does not build, an unsupported feature or version), `neurobrix run`

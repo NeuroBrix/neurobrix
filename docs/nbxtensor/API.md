@@ -217,7 +217,9 @@ def chunk_attention(cache, layer_idx, q, start, heads, scale, dropout_p, memo)
 class HostSpill(num_layers, kv_heads, k_dim, v_dim, budget_bytes)
     # per layer K / V float32 [H_kv, positions, D], written once per spilled page (append(layer, k_pages, v_pages)),
     # grown by doubling up to the budget (refused by name past it: reach(), position_bytes()); partial(layer, q,
-    # groups, scale) -> the attention partial over them; truncate(length), clear(), length, nbytes()
+    # groups, scale) -> the attention partial over them (the decode step's one row); blocks(layer, positions) ->
+    # (k, v) views of at most `positions` positions each, in order (a prefill chunk hands them back to the card);
+    # truncate(length), clear(), length, nbytes()
 ```
 
 `nbxtensor.memory.arena`

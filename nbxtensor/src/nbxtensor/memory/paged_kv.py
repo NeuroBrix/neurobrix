@@ -579,35 +579,52 @@ def chunk_attention(cache: "PagedTritonKVCache", layer_idx: int, q, start: int, 
 def _chunk_attention_spilled(cache: "PagedTritonKVCache", layer_idx: int, q, start: int, heads: int, scale, dropout_p,
                              memo: Dict):
     """A prefill chunk of a sequence whose first `cache.spilled` positions live in host memory (memory/host_spill.py):
-    the card's part through the same attention over its own pages, with its rows' log-sum-exp (return_lse); the host's
-    part over every spilled position (all precede the chunk: no mask) by ops/host_decode_partial with the chunk's rows
-    as more query rows of each KV head; the two merged by log-sum-exp — exact. One sequence."""
-    import math
+    the card's part through the same attention over its own pages, with its rows' log-sum-exp (return_lse); the
+    spilled positions (all precede the chunk: no key masked) through the SAME attention on the card, handed back in
+    blocks of at most the card part's own key count — a block's scores never exceed the card part's, so the chunk's
+    priced memory holds — each with its log-sum-exp; the parts merged by log-sum-exp in a fixed order — exact. One
+    sequence. (The spilled part used to be the host partial: 32 x 128 query rows over 14 336 positions cost
+    85-122 ms a layer on a Xeon Gold 6230, 40 threads — half of a 10.5 s chunk of the 79 931-token turn measured
+    2026-11-10; the host partial stays the decode step's, one row.)"""
     from nbxtensor.ops.attention_wrappers import scaled_dot_product_attention_wrapper
     if int(q.shape[0]) != 1:
         raise RuntimeError(f"ZERO FALLBACK: a spilled prefill chunk holds one sequence; this one has {int(q.shape[0])}")
-    rows, nheads, d = int(q.shape[2]), int(q.shape[1]), int(q.shape[3])
+    rows, nheads = int(q.shape[2]), int(q.shape[1])
+    device = f"cuda:{q._device_idx}"
     card_start = int(start) - cache.spilled
     keys = -(-(card_start + rows) // cache.page_tokens) * cache.page_tokens
     kg = cache._gather(layer_idx, "k", keys, heads, q._dtype)
     vg = cache._gather(layer_idx, "v", keys, heads, q._dtype)
     mask = chunk_mask(int(q._device_idx), card_start, rows, keys, memo)
-    out_c, lse_c = scaled_dot_product_attention_wrapper(q, kg, vg, attn_mask=mask, dropout_p=dropout_p, is_causal=False,
-                                                        scale=scale, k_pre_transposed=False, return_lse=True)
-    sc = float(scale) if scale is not None else 1.0 / math.sqrt(d)
-    qh = q.to(NBXDtype.float32).numpy().reshape(nheads * rows, d)        # head-major: row (h, r) is query h*rows + r
-    groups = nheads // cache.num_kv_heads
-    acc, m, l = cache.host_spill.partial(layer_idx, qh, groups * rows, sc)
-    oc = out_c.to(NBXDtype.float32).numpy().reshape(nheads * rows, -1).astype(np.float64)
-    lc = lse_c.numpy().reshape(nheads * rows).astype(np.float64)
-    acc, m, l = (np.asarray(x, np.float64) for x in (acc, m, l))
-    with np.errstate(divide="ignore", invalid="ignore"):
-        lh = np.where(l > 0, m + np.log(l), -np.inf)
-        top = np.maximum(lc, lh)
-        top = np.where(np.isneginf(top), 0.0, top)
-        wc = np.where(np.isneginf(lc), 0.0, np.exp(lc - top))
-        wh = np.where(l > 0, np.exp(m - top), 0.0)                         # host weight: acc already sums exp(s - m)
-        den = wc + l * wh
-        out = np.where(den[:, None] > 0, (oc * wc[:, None] + acc * wh[:, None]) / np.where(den > 0, den, 1.0)[:, None], 0.0)
-    res = NBXTensor.from_numpy(out.astype(np.float32).reshape(1, nheads, rows, -1)).to(device=f"cuda:{q._device_idx}")
+
+    def host(pair):                                                        # (out, lse) of one part, on the host
+        out, lse = pair
+        return (out.to(NBXDtype.float32).numpy().reshape(nheads * rows, -1).astype(np.float64),
+                lse.numpy().reshape(nheads * rows).astype(np.float64))
+    parts = [host(scaled_dot_product_attention_wrapper(q, kg, vg, attn_mask=mask, dropout_p=dropout_p, is_causal=False,
+                                                       scale=scale, k_pre_transposed=False, return_lse=True))]
+    del kg, vg
+    rep = int(heads) // cache.num_kv_heads                                 # the graph's expansion, as the gather's
+    for kb, vb in cache.host_spill.blocks(layer_idx, keys):
+        n = int(kb.shape[1])
+        open_ = memo.get(("spill_block", q._device_idx, n))                # every key of a block is read: zeros,
+        if open_ is None:                                                  # the mask's own form (the same kernel)
+            open_ = memo[("spill_block", q._device_idx, n)] = NBXTensor.from_numpy(
+                np.zeros((rows, n), np.float32)).to(device=device)
+        kd, vd = (NBXTensor.from_numpy(np.ascontiguousarray(np.repeat(x, rep, axis=0) if rep > 1 else x)[None])
+                  .to(device=device).to(q._dtype) for x in (kb, vb))
+        parts.append(host(scaled_dot_product_attention_wrapper(q, kd, vd, attn_mask=open_, dropout_p=dropout_p,
+                                                               is_causal=False, scale=scale, k_pre_transposed=False,
+                                                               return_lse=True)))
+    out, lse = parts[0]
+    with np.errstate(invalid="ignore"):
+        for o2, l2 in parts[1:]:                                           # fixed order: deterministic
+            top = np.maximum(lse, l2)
+            safe = np.where(np.isneginf(top), 0.0, top)
+            w1 = np.where(np.isneginf(lse), 0.0, np.exp(lse - safe))
+            w2 = np.where(np.isneginf(l2), 0.0, np.exp(l2 - safe))
+            den = w1 + w2
+            out = np.where(den[:, None] > 0, (out * w1[:, None] + o2 * w2[:, None]) / np.where(den > 0, den, 1.0)[:, None], 0.0)
+            lse = np.where(den > 0, safe + np.log(np.where(den > 0, den, 1.0)), -np.inf)
+    res = NBXTensor.from_numpy(out.astype(np.float32).reshape(1, nheads, rows, -1)).to(device=device)
     return res.to(q._dtype) if q._dtype != NBXDtype.float32 else res
