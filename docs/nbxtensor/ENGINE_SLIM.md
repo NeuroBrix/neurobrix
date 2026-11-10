@@ -241,6 +241,9 @@ parser. Measured: 140 836 to 140 868, +32.
 | serving/openai_api/routes.py, serving/engine.py | +9, +3 | the 501 for a machine without the grammar engine; a missing eos_token_id refused |
 | agent/envelope.py, core/module/tokenizer/json_bpe.py, both generators | +3, +1, 0 | the xml string refusal and the parser's markers; a decoder step without a per-token rule refused; the shared step mask |
 
+Point 9a's sections above were measured on their own base; on main c957cee3, rebased with the Mac's reasoning-close and
+D4 commits, the engine measures 140 667 to 141 025 (+358): the same files, policy as stated in each section.
+
 ## The scan
 
 `tools/engine_slim_scan.py` (standard library, ast) lists four kinds of finding in `src/neurobrix`, both branches:
