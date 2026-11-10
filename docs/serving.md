@@ -409,7 +409,8 @@ Chat and completions read `max_tokens` / `max_completion_tokens`, `temperature`,
 `stream_options.include_usage`, `tools`, `tool_choice` (`auto`, `none`, `required`, a named function),
 `parallel_tool_calls: false` (with a forced call only; refused by name otherwise), `response_format` `json_schema`,
 `user`, and the engine's `top_k` and `repetition_penalty`. A forced call and a `json_schema` answer are enforced by the
-grammar engine (501 `constrained_decoding_not_installed` where its library is not built). A parameter the engine does
+grammar engine, the `nbxgrammar` package `pip install neurobrix` installs (501 `constrained_decoding_not_installed` on a
+platform it has no wheel for). A parameter the engine does
 not honour is refused by name (400, `param` names it) — `stop`, `logprobs`, `n` > 1, `frequency_penalty` /
 `presence_penalty` other than 0, `logit_bias`, `response_format` `json_object` (no schema to enforce). Their neutral
 values (`n: 1`, `stop: null`, ...) are
