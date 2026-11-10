@@ -13,6 +13,7 @@ Metadata ops: pure Python stride/shape computation
 
 from __future__ import annotations
 
+import re
 import bisect          # module level, NOT inside the range helpers: they run on the
                       # finalizer path, and at interpreter shutdown `sys.meta_path` is
                       # None, so a function-level import raises ImportError AFTER the
@@ -806,8 +807,12 @@ class NBXTensor:
                               device if device else other._device)
 
     @staticmethod
-    def from_numpy(arr, dtype: 'Optional[NBXDtype]' = None) -> 'NBXTensor':
+    def from_numpy(arr, dtype: 'Optional[NBXDtype]' = None, device=None) -> 'NBXTensor':
         """Load numpy array to GPU. For weight loading from safetensors.
+
+        `device` (an index or "cuda:N"; anything else is refused by name): the device the array is placed on —
+        it is SELECTED first. Without it the array lands on the CURRENT device, whatever a call before left
+        current; and `.to("cuda:N")` moves nothing afterwards (it answers "already on device" whatever N).
 
         `dtype` names the NBX dtype the BITS in `arr` already are, for the
         types numpy cannot express — bf16 travels in a uint16 container. It
@@ -848,6 +853,12 @@ class NBXTensor:
         arr_c = np.ascontiguousarray(arr)
         nbytes = arr_c.nbytes
         shape = arr_c.shape
+        if device is not None:
+            named = re.fullmatch(r"cuda:(\d+)", device) if isinstance(device, str) else None
+            if not (named or (isinstance(device, int) and not isinstance(device, bool) and device >= 0)):
+                raise ValueError(f"from_numpy: device {device!r} names no device index (an index, or \"cuda:N\") — "
+                                 f"never read as device 0")
+            DeviceAllocator.set_device(int(named.group(1)) if named else device)
         dev_idx = DeviceAllocator.get_device()
         ptr = DeviceAllocator.malloc_cuda(nbytes)
         # H2D copy

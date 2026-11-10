@@ -576,14 +576,6 @@ def chunk_attention(cache: "PagedTritonKVCache", layer_idx: int, q, start: int, 
                                                 scale=scale, k_pre_transposed=False)
 
 
-def _upload(device_idx: int, array: np.ndarray) -> NBXTensor:
-    """`array` on device `device_idx`: the device is SELECTED, then the array placed. `NBXTensor.from_numpy` lands on
-    the current device and `.to("cuda:N")` moves nothing (it answers "already on device" whatever N): written as
-    `from_numpy(x).to(device=...)`, an upload was right only while the current device happened to be the wanted one."""
-    DeviceAllocator.set_device(int(device_idx))
-    return NBXTensor.from_numpy(array)
-
-
 def _chunk_attention_spilled(cache: "PagedTritonKVCache", layer_idx: int, q, start: int, heads: int, scale, dropout_p,
                              memo: Dict):
     """A prefill chunk of a sequence whose first `cache.spilled` positions live in host memory (memory/host_spill.py):
@@ -616,13 +608,13 @@ def _chunk_attention_spilled(cache: "PagedTritonKVCache", layer_idx: int, q, sta
 
     def up(x):                             # a block [H_kv, n, D] on the card in q's dtype: the KV heads, unexpanded
         if host_dtype is not None:         # (the attention reads its groups itself), cast on the host — the bytes
-            return _upload(dev, np.ascontiguousarray(x[None], dtype=host_dtype))
-        return _upload(dev, np.ascontiguousarray(x[None])).to(q._dtype)   # numpy has no such dtype
+            return NBXTensor.from_numpy(np.ascontiguousarray(x[None], dtype=host_dtype), device=dev)
+        return NBXTensor.from_numpy(np.ascontiguousarray(x[None]), device=dev).to(q._dtype)   # numpy has no such dtype
     for kb, vb in cache.host_spill.blocks(layer_idx, keys):
         n = int(kb.shape[1])
         open_ = memo.get(("spill_block", dev, n))                # every key of a block is read: zeros,
         if open_ is None:                                                  # the mask's own form (the same kernel)
-            open_ = memo[("spill_block", dev, n)] = _upload(dev, np.zeros((rows, n), np.float32))
+            open_ = memo[("spill_block", dev, n)] = NBXTensor.from_numpy(np.zeros((rows, n), np.float32), device=dev)
         kd = up(kb)                        # one after the other: never K and V both in the wider dtype
         vd = up(vb)
         parts.append(host(scaled_dot_product_attention_wrapper(q, kd, vd, attn_mask=open_, dropout_p=dropout_p,
@@ -638,5 +630,5 @@ def _chunk_attention_spilled(cache: "PagedTritonKVCache", layer_idx: int, q, sta
             den = w1 + w2
             out = np.where(den[:, None] > 0, (out * w1[:, None] + o2 * w2[:, None]) / np.where(den > 0, den, 1.0)[:, None], 0.0)
             lse = np.where(den > 0, safe + np.log(np.where(den > 0, den, 1.0)), -np.inf)
-    res = _upload(dev, out.astype(np.float32).reshape(1, nheads, rows, -1))
+    res = NBXTensor.from_numpy(out.astype(np.float32).reshape(1, nheads, rows, -1), device=dev)
     return res.to(q._dtype) if q._dtype != NBXDtype.float32 else res

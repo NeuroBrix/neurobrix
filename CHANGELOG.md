@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.6.6] - unreleased
 
+### Changed
+- Follows nbxtensor; the Triton engine's expert tables name the GPU they are placed on in the call that places
+  them (no change of result).
+
 ### Fixed
 - **`--reference-audio` and `--reference-image` are refused by name instead of being ignored.** `neurobrix run`
   accepted both and no model read them: a request to clone a voice from a recording ran and spoke with the model's

@@ -132,8 +132,7 @@ class NBXExpertStore:
                         f"ZERO FALLBACK: expert {e} of {layer!r} projection {i} is not a contiguous page-locked host "
                         f"expert of {self._shape[i]} — the card reads its misses from page-locked host memory")
                 self._host_np[i, li * self.n_experts + e] = t.data_ptr()
-        DA.set_device(self.device_idx)
-        self._host_tabs = tuple(NBXTensor.from_numpy(self._host_np[i]).to(f"cuda:{self.device_idx}") for i in range(3))
+        self._host_tabs = tuple(NBXTensor.from_numpy(self._host_np[i], device=self.device_idx) for i in range(3))
         self._host_layers.add(layer)
 
     def _sync_device_from_host(self) -> None:

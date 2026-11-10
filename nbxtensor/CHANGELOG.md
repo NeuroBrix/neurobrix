@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ## [0.1.1] - unreleased
+### Added
+- **`NBXTensor.from_numpy(arr, dtype=None, device=None)`**: with `device` (an index or `"cuda:N"`) the device is
+  selected, then the array placed; a device that names no index (`"cuda"`, `"cpu"`, a negative number) is refused by
+  name, never read as device 0.
+
+### Changed
+- The uploads written `NBXTensor.from_numpy(x).to(device=...)` name their device in the call instead (the spilled
+  prefill chunk — its private helper is gone —, the paged decode's host partial, the MoE residency
+  probe). `from_numpy` lands on the CURRENT device and `.to("cuda:N")` moves nothing, so that idiom was right only
+  when the call before it had left the wanted device current. No wrong placement was observed.
 ### Changed
 - **The Intel launch driver goes through its runtime's contract** (no behaviour change; the backend stays
   experimental, not yet validated on hardware): `backend/level_zero.py` is the only module that knows a Level Zero

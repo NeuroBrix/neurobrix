@@ -118,7 +118,7 @@ def measure_miss_copy(nbytes: int, reps: int, blocks, warps, experts: int) -> di
     n = int(nbytes) // (2 * 3 * int(experts))                 # fp16 elements per projection
     host = [[NBXTensor.empty_cpu((n,), NBXDtype.float16, pinned=True) for _ in range(3)] for _ in range(experts)]
     slots = [[NBXTensor.empty((n,), dtype=NBXDtype.float16, device="cuda:0") for _ in range(3)] for _ in range(experts)]
-    dev = lambda a: NBXTensor.from_numpy(np.asarray(a, dtype=np.int64)).to("cuda:0")          # noqa: E731
+    dev = lambda a: NBXTensor.from_numpy(np.asarray(a, dtype=np.int64), device=0)             # noqa: E731
     host_tabs = [dev([host[e][p].data_ptr() for e in range(experts)]) for p in range(3)]
     slot_tabs = [dev([slots[e][p].data_ptr() for e in range(experts)]) for p in range(3)]
     miss = dev(list(range(experts)))

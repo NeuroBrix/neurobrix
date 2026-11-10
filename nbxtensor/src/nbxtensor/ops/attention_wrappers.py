@@ -763,7 +763,7 @@ def paged_decode_attention(q, k_pool, v_pool, block_table, seq_lens, softmax_sca
             raise ValueError(f"paged_decode_attention: host partial {acc.shape} / {m.shape} / {l.shape} for {bhq} rows "
                              f"of {d_v}")
         for part, host in ((opart, acc.reshape(bhq, 1, d_v)), (mpart, m.reshape(bhq, 1)), (lpart, l.reshape(bhq, 1))):
-            part.narrow(1, split, 1).copy_(NBXTensor.from_numpy(host).to(device=dev))
+            part.narrow(1, split, 1).copy_(NBXTensor.from_numpy(host, device=dev))
     decode_reduce(opart, mpart, lpart, out)
     return out.reshape(batch, nheads, 1, d_v)
 

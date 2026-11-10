@@ -175,11 +175,21 @@ def test_every_upload_of_a_spilled_chunk_selects_the_query_s_device_first(monkey
     monkeypatch.setattr(DeviceAllocator, "set_device", staticmethod(lambda d: (log.append(("set", int(d))), real_set(d))[1]))
     spilled_uploads = []
 
-    def from_numpy(arr, *a, **kw):
-        if recording[0]:
+    real_malloc = DeviceAllocator.malloc_cuda
+
+    def malloc(nbytes, *a, **kw):                                          # where an upload's memory is taken
+        if recording[0] and uploading[0]:
             spilled_uploads.append(log[-1] if log else None)
-        return real_from(arr, *a, **kw)
-    recording = [False]
+        return real_malloc(nbytes, *a, **kw)
+
+    def from_numpy(arr, *a, **kw):
+        uploading[0] = True
+        try:
+            return real_from(arr, *a, **kw)
+        finally:
+            uploading[0] = False
+    recording, uploading = [False], [False]
+    monkeypatch.setattr(DeviceAllocator, "malloc_cuda", staticmethod(malloc))
     monkeypatch.setattr(NBXTensor, "from_numpy", staticmethod(from_numpy))
     real_spilled = paged_kv._chunk_attention_spilled
 
