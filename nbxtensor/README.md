@@ -4,7 +4,8 @@
 
 Run AI models without PyTorch, on any GPU Triton supports: tensors, Triton kernels, planned memory and certified tuning.
 
-Runs wherever Triton runs — NVIDIA, AMD, Intel and Apple Silicon GPUs, on Linux, Windows and macOS. Inference first; training is not in this
+Validated on NVIDIA and Apple Silicon GPUs, on Linux, Windows and macOS; AMD and Intel GPUs, through the same Triton
+kernels, are targets not yet validated on a card. Inference first; training is not in this
 release. Found a bug on your hardware? [Open an issue](https://github.com/NeuroBrix/nbxtensor/issues) — we fix fast.
 
 [![PyPI](https://img.shields.io/pypi/v/nbxtensor)](https://pypi.org/project/nbxtensor/)
