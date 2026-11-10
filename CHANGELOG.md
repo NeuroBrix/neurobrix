@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.5] - 2026-11-10 (not published yet: the grouped publication is the supervisor's)
+
 ### Added
 - **Constrained decoding on the OpenAI API: `response_format: json_schema`, `tool_choice: required` or a named
   function, `parallel_tool_calls: false`**: the model can only write what the schema or the template's tool-call format
@@ -6490,7 +6492,7 @@ First stable release of NeuroBrix — universal deep learning inference engine.
 - Zip-slip path traversal validation in registry import
 - Safe arithmetic parser replacing `eval()` in shape resolver
 
-[Unreleased]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.3...main
+[Unreleased]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.4...main
 [0.6.3]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.0...v0.6.1
