@@ -202,7 +202,7 @@ Tekken read their rank tables; the runtime wrappers hand it on (polymorphic, kep
 ## Constrained decoding: the request's grammar (2026-11-09): policy
 
 Point 9a end to end: `response_format: json_schema` on chat completions compiled by our own grammar engine
-(the nbxgrammar package, its crate in rust/nbxgrammar until its own repository exists, std only, outside src/neurobrix: its C ABI loaded by the package's ctypes loader) and
+(the nbxgrammar package, github.com/NeuroBrix/nbxgrammar, Rust std only, outside this repository: its C ABI loaded by the package's ctypes loader) and
 enforced at every decode step through the seam above. The engine adds the request-side policy: the schema read and
 refused by name (400 naming the construct; json_object and a schema beside tools refused), the grammar constraint over
 the tokenizer's token_bytes (built once per tokenizer and logits width), handed to the decode. Measured: 140 649 to

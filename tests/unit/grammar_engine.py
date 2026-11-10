@@ -1,29 +1,14 @@
-"""The grammar engine (nbxgrammar, its own package; its crate in rust/nbxgrammar until its repository exists) for the
-tests that need it: the INSTALLED package when there is one (the wheel the dependency installs), else BUILT from the
-crate (cargo, the pinned toolchain) and loaded from the repository — a test never silently skips because the library was
-not built (the Dell's review 2026-11-09 23:06). Skipped only where neither a wheel nor a Rust toolchain exists, said."""
+"""The grammar engine (nbxgrammar, its own package and repository: github.com/NeuroBrix/nbxgrammar) for the tests that
+need it: the installed package — the wheel neurobrix's own dependency installs on every platform a wheel exists for.
+Skipped BY NAME only where it is not installed (a platform without a wheel, or an environment made without the
+engine's dependencies); the crate no longer lives in this repository, so nothing is built here."""
 import importlib
-import shutil
-import subprocess
-import sys
-from pathlib import Path
 
 import pytest
-
-CRATE = Path(__file__).resolve().parents[2] / "rust" / "nbxgrammar"
 
 
 def load():
     try:
         return importlib.import_module("nbxgrammar")
-    except ImportError:
-        pass
-    if shutil.which("cargo") is None:
-        pytest.skip("neither the nbxgrammar wheel nor a Rust toolchain on this machine: the grammar engine cannot be "
-                    "installed or built here")
-    subprocess.run(["cargo", "build", "--release", "--quiet"], cwd=CRATE, check=True)
-    name = {"darwin": "libnbxgrammar.dylib", "win32": "nbxgrammar.dll"}.get(sys.platform, "libnbxgrammar.so")
-    shutil.copy2(CRATE / "target" / "release" / name, CRATE / "python" / "nbxgrammar" / name)
-    sys.path.insert(0, str(CRATE / "python"))
-    sys.modules.pop("nbxgrammar", None)
-    return importlib.import_module("nbxgrammar")       # fails, never skips, once the crate is built
+    except ImportError as e:
+        pytest.skip(f"nbxgrammar is not installed here (pip install nbxgrammar; no wheel exists for some platforms): {e}")

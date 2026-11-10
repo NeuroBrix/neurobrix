@@ -93,8 +93,6 @@ test-*.txt
 test_*.py
 # nbxtensor's own tests travel with the library (R-NBXT 10: an export ships with its test)
 !nbxtensor/tests/test_*.py
-# the grammar engine's installed-wheel smoke test travels with its crate (its CI runs it on every wheel)
-!rust/nbxgrammar/tests_py/test_*.py
 
 # Stray run/upscale outputs at repo root — the CLI defaults to writing
 # `output_<model>.<ext>` in cwd when `--output` is not provided. The
@@ -311,9 +309,3 @@ src/neurobrix/config/autotune/**/*.json.lock
 src/neurobrix/config/census/**/*.jsonl.lock
 
 # the grammar crate's build output
-rust/nbxgrammar/target/
-rust/nbxgrammar/build/
-rust/nbxgrammar/python/nbxgrammar.egg-info/
-rust/nbxgrammar/python/nbxgrammar/libnbxgrammar.*
-rust/nbxgrammar/python/nbxgrammar/nbxgrammar.dll
-rust/nbxgrammar/python/nbxgrammar/*.so

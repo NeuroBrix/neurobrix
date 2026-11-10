@@ -53,8 +53,7 @@ dependencies = [
     # is the one nbxtensor/pyproject.toml holds, raised with it (tests/unit/packaging).
     "nbxtensor==0.1.0",
     # The grammar engine of constrained decoding (its own package, github.com/NeuroBrix/nbxgrammar): pinned exactly, and
-    # only where a wheel of it is published — exactly the platforms of its CI's wheel list (rust/nbxgrammar/.github/
-    # workflows/wheels.yml, read by tests/unit/packaging). Elsewhere pip installs nothing for it (no Rust build) and a
+    # only where a wheel of that release is published on PyPI (recorded and checked by tests/unit/packaging). Elsewhere pip installs nothing for it (no Rust build) and a
     # constrained request answers 501 constrained_decoding_not_installed, by name.
     # (each platform by == : a marker's `in` on a string is a SUBSTRING test, which would admit "x86" or "64")
     "nbxgrammar==0.1.0; (sys_platform == 'darwin' and (platform_machine == 'arm64' or platform_machine == 'x86_64')) or (sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')) or (sys_platform == 'win32' and platform_machine == 'AMD64')",
