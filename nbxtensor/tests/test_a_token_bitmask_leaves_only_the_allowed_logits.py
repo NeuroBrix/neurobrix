@@ -64,3 +64,22 @@ def test_the_mask_kernel_launches_first_in_a_fresh_process():
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr[-800:]
     assert r.stdout.strip() == "False"
+
+
+def test_logits_on_another_card_than_the_current_one_are_masked_on_their_card():
+    """The head on card 1 while the process's current card is 0 (a split plan): the mask is uploaded on the logits'
+    card, the kernel launched there."""
+    from nbxtensor.memory.allocator import DeviceAllocator
+    if DeviceAllocator.device_count() < 2:
+        pytest.skip("one accelerator: no second card to hold the logits")
+    vocab = 151936
+    x = np.random.default_rng(1).standard_normal((1, vocab)).astype(np.float32)
+    DeviceAllocator.set_device(1)
+    t = NBXTensor.from_numpy(x)
+    assert t._device_idx == 1
+    DeviceAllocator.set_device(0)
+    apply_token_bitmask(t, token_bitmask([5, vocab - 1], vocab))
+    got = t.numpy()[0]
+    keep = np.zeros(vocab, bool)
+    keep[[5, vocab - 1]] = True
+    assert np.array_equal(got[keep], x[0][keep]) and np.all(np.isneginf(got[~keep]))
