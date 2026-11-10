@@ -93,3 +93,20 @@ def test_a_then_b_is_a_plus_b_in_the_same_chunks(mode):
     diff = [i for i, (s, w) in enumerate(zip(r["split_kv"], r["whole_kv"])) if s != w]
     assert len(r["split_kv"]) == len(r["whole_kv"]) and not diff, f"layers whose K/V differ: {diff}"
     assert r["split_turn2"]["logits_sha"] == r["whole"]["logits_sha"], (r["split_turn2"], r["whole"])
+
+
+
+@pytest.mark.parametrize("mode", ["triton", "compiled"])
+def test_a_conversation_restored_from_the_host_tier_is_the_full_prefill(mode):
+    """The KV host tier (core/state/kv_tier.py): a fresh session over a conversation the daemon parked restores its whole
+    pages and prefills only the rest, and gives the same bytes — every layer's K and V and the turn's first-token
+    logits — as the conversation prefilled in full with the tier off, in the plan's chunks (CHANGELOG 0.6.5: "the
+    answers are the same tier on or off"). The full prefill is the reference; a daemon without a tier says so."""
+    r = _result(mode, CHUNK)
+    if not r["tier"]:
+        pytest.skip("this daemon has no KV host tier (its profile's host budget holds no page), or its plan no chunk")
+    assert r["restored_positions"] > 0, "the fresh session restored nothing from the host"
+    assert r["restored"]["rows_run"] < r["len_full"], r["restored"]
+    diff = [i for i, (s, w) in enumerate(zip(r["restored_kv"], r["whole_kv"])) if s != w]
+    assert len(r["restored_kv"]) == len(r["whole_kv"]) and not diff, f"layers whose K/V differ: {diff}"
+    assert r["restored"]["logits_sha"] == r["whole"]["logits_sha"], (r["restored"], r["whole"])

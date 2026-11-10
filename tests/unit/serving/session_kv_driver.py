@@ -128,6 +128,25 @@ def main() -> int:
     res["split_turn1"] = turn(full[:la], split)
     res["split_turn2"] = turn(full, split)
     res["split_kv"] = kv_shas(split, len(full))
+    # the KV host tier (when the daemon has one): a FRESH session over the same conversation parks the split one and
+    # restores its whole pages, prefilling only the rest — its bytes must be the full prefill's. Then the tier is off,
+    # so the reference below is a full prefill, never a restore (the Dell 2026-11-10 11:36: with the tier on, the
+    # reference restored the parked turn and the test compared the tier with itself).
+    # Only on a CHUNKED session: a chunk-less turn's rows cross every length with every key length, which the census
+    # states as not derived (derived_census._session_chunks) — a restore there would meet uncertified keys (the Dell
+    # 11:37); a served plan always chunks.
+    tier = engine._executor.kv_tier
+    res["tier"] = tier is not None and kv_plan.prefill_chunk is not None
+    if tier is not None and kv_plan.prefill_chunk is not None:
+        restored = KVSession(ceiling, source)
+        pages_before = tier.restored_pages
+        res["restored"] = turn(full, restored)
+        res["restored_kv"] = kv_shas(restored, len(full))
+        handle = restored.held(lm)
+        tpp = handle.page_tokens if a.mode == "triton" else handle.cache.page_tokens
+        res["restored_positions"] = (tier.restored_pages - pages_before) * tpp
+    if tier is not None:
+        engine._executor.kv_tier = None
     whole = KVSession(ceiling, source)
     res["whole"] = turn(full, whole)
     res["whole_kv"] = kv_shas(whole, len(full))
