@@ -161,14 +161,28 @@ def describe(r: DeviceReading) -> str:
 # ----------------------------------------------------------------------------- readings
 def read_device_sharing(index: int) -> DeviceReading:
     """The sharing facts of one card, read from the driver's own tool through the vendor's
-    seam (`neurobrix.core.prism.autodetect.device_sharing`): display activity, memory other
-    processes hold, the runtime's own context. When no seam answers, the card is read as
-    shared (`measured=False`) — the plan then rounds the free figure down, the safe side."""
+    seam (`neurobrix.core.prism.autodetect.device_sharing`): its capacity and free memory, display activity, memory
+    other processes hold, the runtime's own context. The tool answers WITHOUT a context on the card: reading a card
+    through the runtime (`DeviceAllocator.free_memory_mb`) creates this process's context there, and a plan that then
+    never names the card kept it — 306 MiB on the second card of a two-card profile for a model planned on the first
+    (2026-11-10). The runtime is asked only when no seam answers; the card is then read as shared
+    (`measured=False`) — the plan rounds the free figure down, the safe side."""
     from neurobrix.core.prism import autodetect
     facts = autodetect.device_sharing(index)
+    if facts is not None and facts.get("total_mb") and facts.get("free_mb") is not None:
+        return DeviceReading(kind="device", capacity_mb=float(facts["total_mb"]), free_mb=float(facts["free_mb"]),
+                             display_active=bool(facts.get("display_active")),
+                             held_by_others_mb=float(facts.get("held_by_others_mb") or 0.0),
+                             own_context_mb=float(facts.get("own_context_mb") or 0.0),
+                             measured=True, source=str(facts.get("source") or ""))
+    return _read_through_the_runtime(index, facts)
+
+
+def _read_through_the_runtime(index: int, facts) -> DeviceReading:
+    """The card's capacity and free memory as the runtime answers (it selects the card: a context), beside whatever
+    sharing facts the seam gave."""
     from nbxtensor.memory.allocator import DeviceAllocator
     free = DeviceAllocator.free_memory_mb(index)
-    total = None
     try:
         total = DeviceAllocator.device_total_bytes(index) / (1024 * 1024)
     except Exception:  # noqa: BLE001 — the profile supplies the capacity when the driver does not

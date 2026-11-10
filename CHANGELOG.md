@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.6.6] - unreleased
 
+### Fixed
+- **NeuroBrix on the PyTorch engine no longer takes memory on GPUs it does not use.** On a machine with several GPUs
+  a model planned on two of them left about 300 MB taken on every other GPU, and a model planned on one GPU of a
+  two-GPU profile left the same on the second one — memory another program then could not use. Three causes: since
+  PyTorch 2.10, the first copy of a tensor from one GPU to another initialises every visible GPU (NeuroBrix now
+  passes what crosses GPUs — a model's intermediate
+  states — through host memory); the memory
+  planner asked each GPU of the profile through the runtime, which initialises it to answer (it now reads the
+  driver's own tool); and the weight loader prepared its uploads on the default GPU instead of the one written.
+  Measured on four V100: a model across GPUs 2 and 3 held all four, now those two; a model on GPU 2 of a two-GPU
+  profile held two, now one. Results unchanged; a long prompt on a model split across two GPUs reads about 8 % slower
+  (45.6 s against 42.3 s for 19 931 tokens), decoding is unchanged.
+
 ### Changed
 - Follows nbxtensor (an internal placement made explicit in the Triton engine's long-prompt path; no change of
   result).

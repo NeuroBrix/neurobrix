@@ -945,9 +945,10 @@ class WeightLoader:
                     # Pinned for the non-blocking DMA; the caller syncs once after every shard.
                     if len(in_flight) >= PINNED_IN_FLIGHT:
                         in_flight.pop(0).synchronize()
-                    t = t.pin_memory().to(device, non_blocking=True)
-                    ev = torch.cuda.Event()
-                    ev.record()
+                    with torch.cuda.device(device):     # the pinned block and the copy's event on the card written:
+                        t = t.pin_memory().to(device, non_blocking=True)    # on the current device (card 0 in a
+                        ev = torch.cuda.Event()                             # fresh process) they made a context
+                        ev.record()                                         # there and the event ordered nothing
                     in_flight.append(ev)
                 elif device != "cpu":
                     # MPS/XPU: direct .to() transfer (no pinned DMA — unified memory)

@@ -352,14 +352,10 @@ class ExecutionStrategy(ABC):
             return tensor.to_cuda(dev_idx)
 
         if is_torch_tensor(tensor):
-            import torch
             if str(tensor.device) == target_device:
                 return tensor
-            target = torch.device(target_device)
-            if async_transfer:
-                return tensor.to(target, non_blocking=True)
-            else:
-                return tensor.to(target)
+            from neurobrix.core.runtime.card_handoff import to_card      # card to card: never torch's own copy
+            return to_card(tensor, target_device, bool(async_transfer))
 
         # Unknown tensor type — return unchanged.
         return tensor

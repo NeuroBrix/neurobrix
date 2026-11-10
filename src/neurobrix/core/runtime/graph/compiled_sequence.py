@@ -28,8 +28,8 @@ import re
 import torch
 
 from neurobrix.core.dtype.config import parse_dtype as _cfg_parse_dtype, DTYPE_MAP as _DTYPE_MAP
-from neurobrix.core.runtime import symexpr as _symexpr
-from neurobrix.core.runtime import liveness as _liveness
+from neurobrix.core.runtime import symexpr as _symexpr, liveness as _liveness
+from neurobrix.core.runtime.card_handoff import to_card
 from .compiled_ops import CompiledOpResolver
 # R30: the same "what would have fit" sentence as the triton sequence. It fires on
 # a DeviceOOMError, which this path raises wherever an NBXTensor allocation sits in
@@ -2177,12 +2177,12 @@ class CompiledSequence(SequenceSteps):
                 _card_dev = _gv[0].device
                 if hidden_states.device != _card_dev:
                     _home = hidden_states.device
-                    hidden_states = hidden_states.to(_card_dev)
+                    hidden_states = to_card(hidden_states, _card_dev)
                     if gate_scores is not None:
-                        gate_scores = gate_scores.to(_card_dev)
+                        gate_scores = to_card(gate_scores, _card_dev)
                     if pre_indices is not None:
-                        pre_indices = pre_indices.to(_card_dev)
-                        pre_scores = pre_scores.to(_card_dev)
+                        pre_indices = to_card(pre_indices, _card_dev)
+                        pre_scores = to_card(pre_scores, _card_dev)
 
             # DTYPE CONTRACT: resolve weight dtype once, cache for all subsequent calls
             w_dtype = _cached_w_dtype[0]
@@ -2203,9 +2203,9 @@ class CompiledSequence(SequenceSteps):
                 indices = pre_indices
                 scores = routing_upcast_fp32(pre_scores)
                 if indices.device != _compute_dev:
-                    indices = indices.to(_compute_dev)
+                    indices = to_card(indices, _compute_dev)
                 if scores.device != _compute_dev:
-                    scores = scores.to(_compute_dev)
+                    scores = to_card(scores, _compute_dev)
                 _dnat("blend_scores", scores)
                 _dnat("blend_indices", indices)
             else:
@@ -2216,7 +2216,7 @@ class CompiledSequence(SequenceSteps):
 
                 # Ensure ALL routing tensors on hidden_states device
                 if gate_scores.device != _compute_dev:
-                    gate_scores = gate_scores.to(_compute_dev)
+                    gate_scores = to_card(gate_scores, _compute_dev)
 
                 # Dynamic routing in fp32 (replaces hardcoded topk+sort+bincount+slice)
                 scores, indices = gate_scores.topk(_top_k, dim=-1)
@@ -2298,7 +2298,7 @@ class CompiledSequence(SequenceSteps):
                         for _t in _w:
                             _store._release(_t)
                     expert_scores = scores.flatten()[perm[start:end]].unsqueeze(-1).to(w_dtype)
-                    output.index_add_(0, expert_token_ids, _eo.to(_compute_dev) * expert_scores)
+                    output.index_add_(0, expert_token_ids, to_card(_eo, _compute_dev) * expert_scores)
                     start = end
                     continue
                 elif _store is not None:
@@ -2316,15 +2316,15 @@ class CompiledSequence(SequenceSteps):
                 # Multi-device alignment: move ALL operands to hidden_states device
                 _dev = hidden_states.device
                 if gate_w.device != _dev:
-                    gate_w = gate_w.to(_dev)
+                    gate_w = to_card(gate_w, _dev)
                 if up_w.device != _dev:
-                    up_w = up_w.to(_dev)
+                    up_w = to_card(up_w, _dev)
                 if down_w.device != _dev:
-                    down_w = down_w.to(_dev)
+                    down_w = to_card(down_w, _dev)
                 if expert_input.device != _dev:
-                    expert_input = expert_input.to(_dev)
+                    expert_input = to_card(expert_input, _dev)
                 if expert_token_ids.device != _dev:
-                    expert_token_ids = expert_token_ids.to(_dev)
+                    expert_token_ids = to_card(expert_token_ids, _dev)
 
                 gate = F.silu(expert_input @ gate_w.t())
                 up = expert_input @ up_w.t()
@@ -2342,7 +2342,7 @@ class CompiledSequence(SequenceSteps):
                 _store.prefetch_next(_layer_key, _routed)
             _dnat("result_final", output)
             if _home is not None:
-                output = output.to(_home)
+                output = to_card(output, _home)
             # Restore original shape if input was 3D
             if len(orig_shape) == 3:
                 output = output.reshape(orig_shape)
@@ -4021,14 +4021,14 @@ class CompiledSequence(SequenceSteps):
                         if isinstance(a, torch.Tensor) and a.device != target:
                             # Pinned CPU→GPU: use non_blocking DMA (~2x faster)
                             nb = a.is_pinned() and target.type == "cuda"
-                            new_args.append(a.to(target, non_blocking=nb))
+                            new_args.append(to_card(a, target, nb))
                         elif isinstance(a, (list, tuple)):
                             moved = []
                             any_moved = False
                             for item in a:
                                 if isinstance(item, torch.Tensor) and item.device != target:
                                     nb = item.is_pinned() and target.type == "cuda"
-                                    moved.append(item.to(target, non_blocking=nb))
+                                    moved.append(to_card(item, target, nb))
                                     any_moved = True
                                 else:
                                     moved.append(item)
@@ -4041,14 +4041,14 @@ class CompiledSequence(SequenceSteps):
                         for k, v in kwargs.items():
                             if isinstance(v, torch.Tensor) and v.device != target:
                                 nb = v.is_pinned() and target.type == "cuda"
-                                new_kwargs[k] = v.to(target, non_blocking=nb)
+                                new_kwargs[k] = to_card(v, target, nb)
                             elif isinstance(v, (list, tuple)):
                                 moved = []
                                 any_moved = False
                                 for item in v:
                                     if isinstance(item, torch.Tensor) and item.device != target:
                                         nb = item.is_pinned() and target.type == "cuda"
-                                        moved.append(item.to(target, non_blocking=nb))
+                                        moved.append(to_card(item, target, nb))
                                         any_moved = True
                                     else:
                                         moved.append(item)
@@ -4101,10 +4101,10 @@ class CompiledSequence(SequenceSteps):
                 if target is not None:
                     if isinstance(result, torch.Tensor):
                         if result.device != target:
-                            result = result.to(target)
+                            result = to_card(result, target)
                     elif isinstance(result, (list, tuple)) and any(
                             isinstance(r, torch.Tensor) and r.device != target for r in result):
-                        result = type(result)(r.to(target) if isinstance(r, torch.Tensor) else r for r in result)
+                        result = type(result)(to_card(r, target) if isinstance(r, torch.Tensor) else r for r in result)
 
             slots = op.output_slots
             # === NBX_OPLOG: every-op execution log (None vs l2) — covers the

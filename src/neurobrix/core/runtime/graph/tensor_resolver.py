@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:  # R33: the ATen branch imports it; shared code only annotates
     import torch
 from neurobrix.core.runtime.tensor_compat import is_torch_tensor
+from neurobrix.core.runtime.card_handoff import to_card
 from typing import Dict, List, Any, Optional, TYPE_CHECKING
 
 from neurobrix.core.dtype.config import parse_dtype as _parse_dtype
@@ -187,7 +188,7 @@ class TensorResolver:
 
         # 1. Ensure on correct CUDA device (cache this)
         if not tensor.is_cuda or str(tensor.device) != str(self._ctx.device):
-            tensor = tensor.to(self._ctx.device)
+            tensor = to_card(tensor, self._ctx.device)
             needs_cache_update = True
 
         # 2. Ensure contiguous (cache this to avoid repeated copies)
@@ -330,7 +331,7 @@ class TensorResolver:
 
             # 1. Ensure on correct CUDA device
             if not t.is_cuda or str(t.device) != str(self._ctx.device):
-                t = t.to(self._ctx.device)
+                t = to_card(t, self._ctx.device)
 
             # Note: Integer tensors (int64) are valid for embedding, gather, index_select
             # Kernels that don't support integers will crash with clear errors

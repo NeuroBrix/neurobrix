@@ -36,5 +36,11 @@ def to_device(value: Any, device: Optional[str]) -> Any:
     if hasattr(value, "to_cuda") and hasattr(value, "is_cuda"):          # NBXTensor
         return value if value.is_cuda else value.to_cuda(_index(device))
     if hasattr(value, "is_cuda") and hasattr(value, "to"):              # torch.Tensor
-        return value if str(getattr(value, "device", "")) == str(device) else value.to(device)
+        if str(getattr(value, "device", "")) == str(device):
+            return value
+        from neurobrix.core.runtime.tensor_compat import is_torch_tensor
+        if not is_torch_tensor(value):
+            return value.to(device)
+        from neurobrix.core.runtime.card_handoff import to_card         # card to card: never torch's own copy
+        return to_card(value, device)
     return value

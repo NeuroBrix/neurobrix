@@ -46,6 +46,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Any, Optional, Sequence, Union, TYPE_CHECKING
 
 from neurobrix.core.device_utils import device_empty_cache
+from neurobrix.core.runtime.card_handoff import to_card
 from neurobrix.core.dtype.config import get_torch_dtype
 from neurobrix.kernels.classification import OpExecution, get_execution_type
 
@@ -4424,11 +4425,11 @@ class GraphExecutor:
                     expected_dtype = self._dtype_engine.storage_dtype(expected_dtype)
                 if expected_dtype is not None and val.dtype != expected_dtype:
                     val = val.to(expected_dtype)
-                ctx.inputs[input_name] = val.to(self.device)
+                ctx.inputs[input_name] = to_card(val, self.device)
             elif isinstance(val, dict):
                 # Handle dictionary inputs (e.g. added_cond_kwargs)
                 ctx.inputs[input_name] = {
-                    k: v.to(self.device) if is_torch_tensor(v) else v
+                    k: to_card(v, self.device) if is_torch_tensor(v) else v
                     for k, v in val.items()
                 }
             else:
@@ -5022,9 +5023,7 @@ class GraphExecutor:
         if expected is not None and value.dtype != expected:
             value = value.to(expected)
         # Move input to executor's device (critical for FGP/multi-device)
-        if str(value.device) != str(self.device):
-            value = value.to(self.device)
-        return value
+        return to_card(value, self.device)      # a tensor already there is returned as it is
 
     def _execute_compiled_graph(self) -> ExecutionStats:
         """
@@ -5627,15 +5626,15 @@ class GraphExecutor:
             indices = pre_indices
             scores = routing_upcast_fp32(pre_scores)
             if indices.device != _compute_dev:
-                indices = indices.to(_compute_dev)
+                indices = to_card(indices, _compute_dev)
             if scores.device != _compute_dev:
-                scores = scores.to(_compute_dev)
+                scores = to_card(scores, _compute_dev)
             _dump_n("blend_indices", indices)
             _dump_n("blend_scores", scores)
         else:
             gate_scores = routing_upcast_fp32(gate_scores)
             if gate_scores.device != _compute_dev:
-                gate_scores = gate_scores.to(_compute_dev)
+                gate_scores = to_card(gate_scores, _compute_dev)
 
             # Dynamic routing (replaces hardcoded topk+sort+bincount+slice)
             scores, indices = gate_scores.topk(top_k, dim=-1)
@@ -5674,15 +5673,15 @@ class GraphExecutor:
             # Multi-device alignment
             _dev = hidden_states.device
             if gate_w.device != _dev:
-                gate_w = gate_w.to(_dev)
+                gate_w = to_card(gate_w, _dev)
             if up_w.device != _dev:
-                up_w = up_w.to(_dev)
+                up_w = to_card(up_w, _dev)
             if down_w.device != _dev:
-                down_w = down_w.to(_dev)
+                down_w = to_card(down_w, _dev)
             if expert_input.device != _dev:
-                expert_input = expert_input.to(_dev)
+                expert_input = to_card(expert_input, _dev)
             if expert_token_ids.device != _dev:
-                expert_token_ids = expert_token_ids.to(_dev)
+                expert_token_ids = to_card(expert_token_ids, _dev)
 
             # SwiGLU FFN
             gate = F.silu(expert_input @ gate_w.t())

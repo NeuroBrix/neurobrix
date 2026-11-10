@@ -27,6 +27,7 @@ from .table_gather import gather_rows
 from neurobrix.core.memory.manager import release_flow_memory
 from neurobrix.core.state.kv_session import session_turn   # a serving session's turn (pure Python)
 from neurobrix.core.flow.decoder_cache import _session_dag   # both branches read the session's DAG alike
+from neurobrix.core.runtime.card_handoff import to_card
 import logging
 _log = logging.getLogger(__name__)
 
@@ -362,7 +363,7 @@ class GraphLMSession:
                 # The new rows join the accumulated context where it lives
                 # (prefill left it on the table's device) — the mirror of
                 # the ids path below.
-                embed_to_add = embed_to_add.to(self._accumulated_embeds.device)
+                embed_to_add = to_card(embed_to_add, self._accumulated_embeds.device)
                 if embed_to_add.shape[0] != self._accumulated_embeds.shape[0]:
                     embed_to_add = embed_to_add.expand(self._accumulated_embeds.shape[0], -1, -1).contiguous()
                 self._accumulated_embeds = torch.cat([self._accumulated_embeds, embed_to_add], dim=1)
@@ -377,7 +378,7 @@ class GraphLMSession:
                 batch_size = self._accumulated_embeds.shape[0]
             else:
                 # Accumulate token IDs (text LLM path)
-                new_tok = input_ids.to(self._accumulated_ids.device)
+                new_tok = to_card(input_ids, self._accumulated_ids.device)
                 if new_tok.dim() == 1:
                     new_tok = new_tok.unsqueeze(0)
                 self._accumulated_ids = torch.cat([self._accumulated_ids, new_tok], dim=1)

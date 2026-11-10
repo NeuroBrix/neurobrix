@@ -45,7 +45,8 @@ def group_norm_apply(x: Any, weight: Any, bias: Any, group: int, mean: Any, rstd
         return _apply(x, weight, bias, int(group), mean, rstd)
     import torch
     n, c = int(x.shape[0]), int(x.shape[1])
-    m, r = mean.to(x.device), rstd.to(x.device)
+    from neurobrix.core.runtime.card_handoff import to_card
+    m, r = to_card(mean, x.device), to_card(rstd, x.device)
     y = x.to(torch.float32).reshape(n, group, -1)
     y = (y - m[:, :, None]) * r[:, :, None]
     y = y.reshape(x.shape)
