@@ -208,7 +208,10 @@ class PagedTritonKVCache:
                 self._spill(movable)
             card = min(int(length) - self.spilled, self.card_pages * self.page_tokens)
         if card > self.capacity:
-            self._grow(card)
+            if -(-card // self.page_tokens) > self.pages_per_sequence:
+                self._grow(card)
+            else:                            # more positions in the pages it has (a spilled card's cap): no new page
+                self.capacity = card
         for t in self.tables:
             t.reserve(card)
         if len(self.tables[0].pages) != self._published_pages:
@@ -251,8 +254,8 @@ class PagedTritonKVCache:
         """Positions up to `end` (exclusive) can be written: on the card after any spill."""
         if self.card_pages and end - self.spilled > self.card_pages * self.page_tokens:
             raise RuntimeError(f"ZERO FALLBACK: writing up to position {end} with {self.spilled} spilled and the card's "
-                               f"{self.card_pages} pages of {self.page_tokens} — a prompt past the card's reach (its "
-                               f"chunks would attend over spilled positions)")
+                               f"{self.card_pages} pages of {self.page_tokens} — a prefill chunk larger than the card's "
+                               f"pages (past the card's reach in one chunk: the plan's chunk must fit them)")
 
     def capacity_for(self, prompt_end: int) -> int:
         """Positions per sequence the pools hold once a request whose prompt ends at `prompt_end` is prefilled: the
@@ -359,10 +362,15 @@ class PagedTritonKVCache:
         """Layer `layer_idx`'s K (`which` "k") or V ("v") of every sequence over its first `positions` positions, a
         whole number of pages, contiguous `[B, heads, positions, D]` in `dtype` (`paged_kv_gather`). The pages must be
         granted (a prefill reserved them)."""
-        from nbxtensor.ops import attention_wrappers as _aw
         if self.spilled:
             raise RuntimeError(f"ZERO FALLBACK: gathering layer {layer_idx}'s pages of a sequence whose first "
-                               f"{self.spilled} positions spilled to the host — a prefill chunk past the card's reach")
+                               f"{self.spilled} positions spilled to the host (chunk_attention reads both parts)")
+        return self._gather(layer_idx, which, positions, heads, dtype)
+
+    def _gather(self, layer_idx: int, which: str, positions: int, heads: int, dtype) -> NBXTensor:
+        """The card's first `positions` positions of layer `layer_idx` as whole pages (after a spill: the card's own,
+        counted from the spill point)."""
+        from nbxtensor.ops import attention_wrappers as _aw
         if positions > len(self.tables[0].pages) * self.page_tokens:
             raise RuntimeError(f"ZERO FALLBACK: gathering {positions} positions of layer {layer_idx}; the sequence "
                                f"holds {len(self.tables[0].pages)} pages of {self.page_tokens}")
@@ -557,6 +565,8 @@ def chunk_attention(cache: "PagedTritonKVCache", layer_idx: int, q, start: int, 
     query's), the key length rounded up to whole pages, the explicit 0/-inf mask (`chunk_mask`) — then the existing
     attention, unchanged. `heads`: the query heads when the graph handed expanded K/V, else the KV heads."""
     from nbxtensor.ops.attention_wrappers import scaled_dot_product_attention_wrapper
+    if cache.spilled:
+        return _chunk_attention_spilled(cache, layer_idx, q, start, heads, scale, dropout_p, memo)
     rows = int(q.shape[2])
     keys = -(-(int(start) + rows) // cache.page_tokens) * cache.page_tokens
     kg = cache.gather_pages(layer_idx, "k", keys, heads, q._dtype)
@@ -564,3 +574,40 @@ def chunk_attention(cache: "PagedTritonKVCache", layer_idx: int, q, start: int, 
     mask = chunk_mask(int(q._device_idx), int(start), rows, keys, memo)
     return scaled_dot_product_attention_wrapper(q, kg, vg, attn_mask=mask, dropout_p=dropout_p, is_causal=False,
                                                 scale=scale, k_pre_transposed=False)
+
+
+def _chunk_attention_spilled(cache: "PagedTritonKVCache", layer_idx: int, q, start: int, heads: int, scale, dropout_p,
+                             memo: Dict):
+    """A prefill chunk of a sequence whose first `cache.spilled` positions live in host memory (memory/host_spill.py):
+    the card's part through the same attention over its own pages, with its rows' log-sum-exp (return_lse); the host's
+    part over every spilled position (all precede the chunk: no mask) by ops/host_decode_partial with the chunk's rows
+    as more query rows of each KV head; the two merged by log-sum-exp — exact. One sequence."""
+    import math
+    from nbxtensor.ops.attention_wrappers import scaled_dot_product_attention_wrapper
+    if int(q.shape[0]) != 1:
+        raise RuntimeError(f"ZERO FALLBACK: a spilled prefill chunk holds one sequence; this one has {int(q.shape[0])}")
+    rows, nheads, d = int(q.shape[2]), int(q.shape[1]), int(q.shape[3])
+    card_start = int(start) - cache.spilled
+    keys = -(-(card_start + rows) // cache.page_tokens) * cache.page_tokens
+    kg = cache._gather(layer_idx, "k", keys, heads, q._dtype)
+    vg = cache._gather(layer_idx, "v", keys, heads, q._dtype)
+    mask = chunk_mask(int(q._device_idx), card_start, rows, keys, memo)
+    out_c, lse_c = scaled_dot_product_attention_wrapper(q, kg, vg, attn_mask=mask, dropout_p=dropout_p, is_causal=False,
+                                                        scale=scale, k_pre_transposed=False, return_lse=True)
+    sc = float(scale) if scale is not None else 1.0 / math.sqrt(d)
+    qh = q.to(NBXDtype.float32).numpy().reshape(nheads * rows, d)        # head-major: row (h, r) is query h*rows + r
+    groups = nheads // cache.num_kv_heads
+    acc, m, l = cache.host_spill.partial(layer_idx, qh, groups * rows, sc)
+    oc = out_c.to(NBXDtype.float32).numpy().reshape(nheads * rows, -1).astype(np.float64)
+    lc = lse_c.numpy().reshape(nheads * rows).astype(np.float64)
+    acc, m, l = (np.asarray(x, np.float64) for x in (acc, m, l))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        lh = np.where(l > 0, m + np.log(l), -np.inf)
+        top = np.maximum(lc, lh)
+        top = np.where(np.isneginf(top), 0.0, top)
+        wc = np.where(np.isneginf(lc), 0.0, np.exp(lc - top))
+        wh = np.where(l > 0, np.exp(m - top), 0.0)                         # host weight: acc already sums exp(s - m)
+        den = wc + l * wh
+        out = np.where(den[:, None] > 0, (oc * wc[:, None] + acc * wh[:, None]) / np.where(den > 0, den, 1.0)[:, None], 0.0)
+    res = NBXTensor.from_numpy(out.astype(np.float32).reshape(1, nheads, rows, -1)).to(device=f"cuda:{q._device_idx}")
+    return res.to(q._dtype) if q._dtype != NBXDtype.float32 else res

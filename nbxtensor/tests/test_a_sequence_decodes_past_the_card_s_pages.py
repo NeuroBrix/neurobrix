@@ -69,7 +69,7 @@ def test_a_truncation_inside_the_spilled_part_keeps_only_the_prefix():
 
 def test_past_the_reach_is_refused_by_name():
     with pytest.raises(RuntimeError, match="past the card's reach"):
-        _run(_cache(1), 3, 130, 1)                                   # a prompt longer than the card's pages
+        _run(_cache(1), 3, 130, 1)                                   # ONE chunk longer than the card.s pages
     with pytest.raises(RuntimeError, match="host budget"):
         _run(_cache(1, budget=LAYERS * HK * 2 * D * 4 * PT), 3, 60, 200)  # one page of host budget
     c = _cache(1)
@@ -83,3 +83,40 @@ def test_a_spilled_step_is_never_replayed():
     c = _cache(1)
     _run(c, 9, 60, 10)
     assert c.spilled > 0 and c.replay_key(0) is None
+
+
+@pytest.mark.parametrize("prompt, chunk, card_pages", [(400, 64, 2), (300, 100, 3), (256, 64, 1)])
+def test_a_prompt_past_the_card_prefills_chunk_by_chunk_as_the_card_that_holds_it_all(prompt, chunk, card_pages):
+    """A prompt longer than the card's pages, prefilled in the plan's chunks: each chunk attends over the card's pages
+    and the spilled ones (memory/paged_kv._chunk_attention_spilled), equal to the same chunk in a cache holding it all;
+    then the decode goes on past it."""
+    from nbxtensor.memory.paged_kv import chunk_attention
+    rng = np.random.default_rng(prompt + chunk)
+    q = rng.standard_normal((1, H, prompt, D)).astype(np.float16)
+    k = rng.standard_normal((1, HK, prompt, D)).astype(np.float16)
+    v = rng.standard_normal((1, HK, prompt, D)).astype(np.float16)
+    outs = {}
+    for name, cache in (("spill", _cache(card_pages)), ("whole", _cache(0))):
+        got = []
+        for a in range(0, prompt, chunk):
+            b = min(a + chunk, prompt)
+            memo = {}
+            for layer in range(LAYERS):
+                cache.prefill(layer, _dev(k[:, :, a:b]), _dev(v[:, :, a:b]))
+                o = chunk_attention(cache, layer, _dev(q[:, :, a:b]), a, HK, D ** -0.5, 0.0, memo)
+                got.append(o.numpy().astype(np.float32))
+        tail = _run_decode(cache, 3, 40)
+        outs[name] = (got, tail, cache)
+    assert outs["spill"][2].spilled > 0
+    for g, w in zip(outs["spill"][0] + outs["spill"][1], outs["whole"][0] + outs["whole"][1]):
+        assert np.allclose(g, w, rtol=0, atol=3e-3), np.abs(g - w).max()
+
+
+def _run_decode(cache, seed, steps):
+    rng = np.random.default_rng(seed)
+    outs = []
+    for _ in range(steps):
+        for i in range(LAYERS):
+            q, k, v = (rng.standard_normal(s).astype(np.float16) for s in ((1, H, 1, D), (1, HK, 1, D), (1, HK, 1, D)))
+            outs.append(cache.decode(i, _dev(q), _dev(k), _dev(v), D ** -0.5).numpy().astype(np.float32))
+    return outs
