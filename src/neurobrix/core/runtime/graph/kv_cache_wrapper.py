@@ -143,20 +143,6 @@ class KVCacheAttentionWrapper:
         self._decode_actual_seq_len = None
         self._chunk_start, self._chunk_real, self._whole_pages, self._chunk_masks = 0, None, False, {}
 
-    def _chunk_mask(self, device, dtype, start: int, rows: int, keys: int) -> torch.Tensor:
-        """The chunk's additive mask [rows, keys]: 0 where key j <= start + i (causal, bottom-right at the cached length
-        — torch's `is_causal` aligns top-left when the query is shorter than the keys), -inf elsewhere, which also
-        masks the whole pages' keys past the true end. One per device and chunk."""
-        key = (str(device), dtype)
-        m = self._chunk_masks.get(key)
-        if m is None:
-            allowed = (torch.arange(keys, device=device)[None, :]
-                       <= (start + torch.arange(rows, device=device))[:, None])
-            m = torch.zeros((rows, keys), dtype=dtype, device=device).masked_fill(~allowed, float("-inf"))
-            self._chunk_masks[key] = m
-        return m
-
-
     # ── decode branches (R30 mirror of triton/kv_cache.KVBranch) ─────────
     def branch_state(self) -> "KVBranch":
         self._sync_branch()
@@ -401,22 +387,37 @@ class KVCacheAttentionWrapper:
         if self.cache.spilled:
             return self._prefill_over_spill(q, layer_idx, start, rows, scale)
         tpp = self.cache.page_tokens
-        keys = -(-(start + rows) // tpp) * tpp
-        k_full, v_full = self.cache.whole_pages(layer_idx, keys)
-        if self._gqa_group_size > 1:
-            batch, kv_heads, _, k_dim = k_full.shape
-            k_full = k_full.unsqueeze(2).expand(-1, -1, self._gqa_group_size, -1, -1).reshape(
-                batch, self._num_heads, keys, k_dim)
-            v_dim = v_full.shape[-1]
-            v_full = v_full.unsqueeze(2).expand(-1, -1, self._gqa_group_size, -1, -1).reshape(
-                batch, self._num_heads, keys, v_dim)
-        cache_dtype = k_full.dtype
-        if q.dtype != cache_dtype:
-            q = q.to(cache_dtype)
-        mask = self._chunk_mask(q.device, cache_dtype, start, rows, keys)
-        return F.scaled_dot_product_attention(
-            q, k_full, v_full, attn_mask=mask, dropout_p=dropout_p, is_causal=False, scale=scale,
-            **({"enable_gqa": True} if k_full.shape[1] != q.shape[1] else {}))
+        k_full, v_full = self.cache.whole_pages(layer_idx, -(-(start + rows) // tpp) * tpp)
+        return self._attend_in_row_blocks(q.to(k_full.dtype), k_full, v_full, start, dropout_p, scale)
+
+    def _attend_in_row_blocks(self, q, k_full, v_full, start: int, dropout_p, scale) -> torch.Tensor:
+        """q [1, H, rows, D] at cached position `start` over k_full / v_full [1, H_kv, keys, D] (the KV heads, never
+        expanded), causal: one page of query rows at a time, each query group of a KV head in its own call, over the
+        keys up to the block's last row. What it never builds: the rows x keys mask (4 096 x 61 440 in fp16 was the
+        480 MiB that ended the 79 931-token turn on a full V100, 2026-11-10) — one [page, keys] buffer of zeros takes
+        each block's triangle in its last columns and gives it back — and the K / V repeated for every query head."""
+        tpp, rows, heads, kv_heads = self.cache.page_tokens, int(q.shape[2]), int(q.shape[1]), int(k_full.shape[1])
+        groups = heads // kv_heads
+        key = (str(q.device), q.dtype)
+        if key not in self._chunk_masks:        # (zeros [page, keys], the triangle a block lends them): one a chunk
+            self._chunk_masks[key] = (
+                torch.zeros((tpp, start + rows), dtype=q.dtype, device=q.device),
+                torch.full((tpp, tpp), float("-inf"), dtype=q.dtype, device=q.device).triu(1))
+        zeros, triangle = self._chunk_masks[key]
+        qg = q.reshape(1, kv_heads, groups, rows, int(q.shape[3]))          # query head h = kv head * groups + g
+        out = None
+        for a in range(0, rows, tpp):
+            r, n = min(tpp, rows - a), start + min(a + tpp, rows)           # the block's rows; the keys it may read
+            zeros[:r, n - r:n] = triangle[:r, :r]                           # row i reads the keys up to its own
+            for g in range(groups):
+                got = F.scaled_dot_product_attention(
+                    qg[:, :, g, a:a + r], k_full[:, :, :n], v_full[:, :, :n], attn_mask=zeros[:r, :n],
+                    dropout_p=dropout_p, is_causal=False, scale=scale)
+                if out is None:
+                    out = got.new_empty((1, kv_heads, groups, rows, int(got.shape[-1])))
+                out[:, :, g, a:a + r] = got
+            zeros[:r, n - r:n] = 0
+        return out.reshape(1, heads, rows, -1)
 
     def _prefill_over_spill(self, q, layer_idx: int, start: int, rows: int, scale) -> torch.Tensor:
         """A prefill chunk of a sequence whose first positions spilled to host memory (R30 mirror of nbxtensor
